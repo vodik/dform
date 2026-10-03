@@ -23,6 +23,8 @@ edition 2026
 input env: enum("dev", "prod") = "dev"
 input region: string = "us-east1"
 input replicas: int = 2 check replicas >= 1
+# The database's machine and availability, per environment (below).
+input database { tier: string, availability: string }
 # release("crud_api", "digest", "sha256:9f2c...")
 # release("crud_api", "schema", 42)
 input release from facts("data/releases.facts")
@@ -40,9 +42,8 @@ provider k8s
 # derived from the deployment's master secret, a secret, the same value on
 # every run and nowhere stored.
 
-settings dev { db = { tier: "db-f1-micro", availability: "ZONAL" } }
-settings prod { db = { tier: "db-custom-2-7680", availability: "REGIONAL" } }
-let cfg = settings[env]
+settings { database.tier = "db-f1-micro", database.availability = "ZONAL" } where env == "dev"
+settings { database.tier = "db-custom-2-7680", database.availability = "REGIONAL" } where env == "prod"
 
 ########################################
 # The release, and what the world runs now
@@ -84,8 +85,8 @@ resource google.sql_database_instance db {
   database_version = "POSTGRES_16"
   deletion_protection = true
   settings = {
-    tier: cfg.db.tier,
-    availability_type: cfg.db.availability,
+    tier: database.tier,
+    availability_type: database.availability,
     backup_configuration: { enabled: true, point_in_time_recovery_enabled: true },
     ip_configuration: { ipv4_enabled: false, private_network: vpc }
   }

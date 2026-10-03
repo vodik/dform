@@ -420,7 +420,7 @@ fn stack_source(
         .map(|(key, v)| {
             let (value, at) = match v {
                 SettingText::Bool(b) => (plain(crate::value::Value::Bool(*b.get_ref())), b.span()),
-                SettingText::Str(v) if matches!(key, "backend" | "approvals" | "config") => {
+                SettingText::Str(v) if matches!(key, "backend" | "approvals") => {
                     // The term starts after the string's opening quote.
                     let raw = &text[v.span()];
                     let quote = if raw.starts_with("'''") || raw.starts_with(r#"""""#) {

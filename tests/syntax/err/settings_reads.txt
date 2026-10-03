@@ -1,0 +1,6 @@
+tests/syntax/err/settings_reads.df:7:11: settings rows are gone (R-38): a setting is an input
+  help: declare it, `input k: T = default`, give it per deployment with `settings { k = v } where env == "prod"`, and read the input by its name
+tests/syntax/err/settings_reads.df:8:16: settings rows are gone (R-38): a setting is an input
+  help: declare it, `input k: T = default`, give it per deployment with `settings { k = v } where env == "prod"`, and read the input by its name, `db.size`
+tests/syntax/err/settings_reads.df:9:14: settings rows are gone (R-38): a setting is an input
+  help: declare it, `input k: T = default`, give it per deployment with `settings { k = v } where env == "prod"`, and read the input by its name

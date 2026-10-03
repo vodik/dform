@@ -4,12 +4,12 @@ edition 2026
 # compiler rejects the one that is not the construct's and names the other.
 input env: string = "dev"
 resource net.vpc main { cidr = "10.0.0.0/16" }
-settings prod { size = 1 }
+# (A settings block gives the inputs, `settings { k = v } where B`.)
 
 # H-5: a contribution with no condition to a block of the same scope is
 # that block's entry; a program's own input takes a default or --set.
 set main.tags = { team: "x" }
-set settings["prod"].size = 2
+# `set k = t where B` gives an input too; with no condition, see below.
 set env = "prod"
 
 # H-7: an output is one statement, its value in it.

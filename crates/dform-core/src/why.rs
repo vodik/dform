@@ -1046,6 +1046,18 @@ impl Compress {
         if head && let Some((place, text, _)) = rule.and_then(|r| s.source_line(r)) {
             self.push(Because::new("rule", Some(place), text));
         }
+        // A contribution a statement makes to an input, a settings block's
+        // or a `set`'s (R-38), is named where it is written, as a stated
+        // one is; `--set` is its flag, below, and the declaration's default
+        // a stated fact.
+        if !head
+            && subject.is_some_and(|t| t.starts_with("input "))
+            && let Some((place, text, _)) = rule.and_then(|r| s.source_line(r))
+            && !text.starts_with("input ")
+            && !text.starts_with("key ")
+        {
+            self.push(Because::new("fact", Some(place), s.fact_text(fact)));
+        }
         for f in facts {
             self.fact(s, f, None, false, None);
         }
@@ -1109,8 +1121,8 @@ fn table_row(c: &Circuit, alts: &[NodeId]) -> Option<String> {
     }
 }
 
-/// The cell an `attr` or `arg` names: `T["A"].p`, a settings row's
-/// `settings["row"].p`, or an input, `let` or output by its name.
+/// The cell an `attr` or `arg` names: `T["A"].p`, or an input, `let` or
+/// output by its name.
 fn cell(t: &str, a: &str, p: &str) -> String {
     match t {
         "input" | "let" | "output" if a.is_empty() => format!("{t} {p}"),

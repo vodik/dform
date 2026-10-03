@@ -5,6 +5,8 @@ edition 2026
 key tier: string = "dev"
 key region: string = "us-east1"
 input relation: string = "an input named relation"
+input store { backup_days: int = 1 }
+input gke { static_ips: any }
 input seen from facts("seen.facts")
 input peers from csv("peers.csv")
 input pinned from yaml(git("ops.git", "main", "pinned.yaml"))
@@ -57,13 +59,15 @@ instance tagging tags
 
 q(1) where env("prod")
 
-settings e @default {
-  db = { backup_days: 3 }
-} where env(e)
+settings {
+  store.backup_days = 3
+} @default where env("prod")
+settings { gke.static_ips = { "pngu-grpc": { type: "INTERNAL" } } }
+settings from yaml("settings.yaml") @override where env("prod")
 
 env("prod")
 p(x_) where q(x_), x_ == 1 + 2 * 3 - -4 / (5 % 2), x_ != 0, x_ >= 1, x_ <= 9, x_ > 0, x_ < 10
-r(v) where v = settings["prod"].gke.static_ips."pngu-grpc".type
+r(v) where v = gke.static_ips."pngu-grpc".type
 s(v) where q(x_), o = { a: { b: x_ } }, v = o.a.b
 t(l) where l = [ x_ | q(x_) ], 1 in l, 2 not in l
 u(a_) where ref(net.vpc, "main::vpc", "id") = a_

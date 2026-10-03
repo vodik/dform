@@ -8,7 +8,7 @@ dform plan dform env=prod       # its own deployment: creates
 dform test dform                # the denies, in every env
 dform dev effects               # per scope: what it reads, writes, offers
 ```
-Features: `key env`, dform.toml's `[stacks.dform]` (`config`, `isolated`),
+Features: `key env`, `settings from` a document per env, dform.toml's `[stacks.dform]` (`isolated`),
 `use database { .. }` (a module with inputs and resources), `instance
 network.vpc main` (a component, network.df's `vpc`), `use baseline` (a
 policy pack), `network.subnets` (another module's type alias), denies

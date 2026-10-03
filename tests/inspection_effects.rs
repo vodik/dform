@@ -5,19 +5,24 @@ mod common;
 mod inspection_common;
 use inspection_common::{dform, golden};
 
-/// The play example: `baseline` writes `(*, tags)`, `(iam.policy,
-/// statements)` and `settings.audit.sinks`; its reads and the other
-/// scopes' are pinned as a golden.
+/// The play example: `baseline` writes `(*, tags)` and `(iam.policy,
+/// statements)`; the stack's settings write the used modules' inputs
+/// (R-38); the reads and the other scopes' are pinned as a golden.
 #[test]
 fn the_demo_pack_writes_the_grants_it_declares() {
     let out = dform("examples/demo/stacks/dform.df", &["effects"]);
-    let baseline = out
-        .split("\n\n")
-        .find(|s| s.starts_with("baseline:"))
-        .unwrap_or(&out);
+    let scope = |name: &str| {
+        out.split("\n\n")
+            .find(|s| s.starts_with(&format!("{name}:")))
+            .unwrap_or(&out)
+            .to_string()
+    };
+    let baseline = scope("baseline");
     assert!(baseline.contains("(*, tags)"), "{out}");
     assert!(baseline.contains("(iam.policy, statements)"), "{out}");
-    assert!(baseline.contains("settings.audit.sinks"), "{out}");
+    let stack = scope("stack");
+    assert!(stack.contains("input database.multi_az"), "{out}");
+    assert!(stack.contains("input baseline.audit"), "{out}");
     // Deterministic: a second run prints the same thing.
     assert_eq!(out, dform("examples/demo/stacks/dform.df", &["effects"]));
     golden("effects_demo", &out);

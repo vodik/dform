@@ -22,9 +22,9 @@
 //! nothing else is. Each row's `at` is where it is, `file:line`
 //! (`repo@commit:file:line` from git).
 //!
-//! A stack's `config = FORMAT(SOURCE)` is the table `stack.config(path,
-//! value)`: every leaf of a mapping (a `path,value` CSV) is a settings
-//! contribution of the deployment.
+//! `settings from FORMAT(SOURCE)` (R-38) is the table `settings(path,
+//! value)`: every leaf of a mapping (a `path,value` CSV) is a contribution
+//! to the input at its path ([`expand_settings`]).
 
 use crate::ast::{Atom, ExternFn, Lit, Program, RuleStmt, Span, Stmt, Term, TypeExpr};
 use crate::externs::{self, Answer};
@@ -39,8 +39,9 @@ use std::path::{Path, PathBuf};
 
 pub const FORMATS: &[&str] = &["csv", "json", "yaml", "toml"];
 
-/// The table a stack's `config` is.
-pub const STACK_CONFIG: &str = "stack.config";
+/// The table a `settings from` document is (`settings` is a keyword: no
+/// relation has its name).
+pub const SETTINGS_DOC: &str = "settings";
 
 const PREFIX: &str = "table.";
 
@@ -54,11 +55,11 @@ fn parse_name(name: &str) -> Option<(&str, &str)> {
     name.strip_prefix(PREFIX)?.split_once('.')
 }
 
-/// What a table extern reads, for messages: `input relation p`, `the
-/// stack's config`.
+/// What a table extern reads, for messages: `input relation p`, `settings`
+/// (`settings from DOC`).
 pub fn describe(name: &str) -> Option<String> {
     Some(match parse_name(name)? {
-        (_, STACK_CONFIG) => "the stack's config".into(),
+        (_, SETTINGS_DOC) => "settings".into(),
         (_, t) => format!("input relation {t}"),
     })
 }
@@ -180,7 +181,7 @@ impl Tables {
             None => format!("{shown}:row {n}"),
         };
         let mut out = Vec::new();
-        if table == STACK_CONFIG {
+        if table == SETTINGS_DOC {
             for (line, path, value) in leaves(format, &text).with_context(|| shown.clone())? {
                 let at = line.map_or(shown.clone(), |l| format!("{shown}:{l}"));
                 let outs = vec![Value::Str(at), Value::Str(path), value];
@@ -418,28 +419,28 @@ pub fn document(format: &str, text: &str) -> Result<Value> {
     }
 }
 
-/// A stack config's leaves: (line, dotted path, value). A mapping's nested
-/// mappings are walked to their leaves, as a settings block's objects are;
-/// a CSV one has the columns `path` and `value`.
+/// A settings document's leaves: (line, dotted path, value). A mapping's
+/// nested mappings are walked to their leaves; a CSV one has the columns
+/// `path` and `value`.
 fn leaves(format: &str, text: &str) -> Result<Vec<(Option<usize>, String, Value)>> {
     let mut out = Vec::new();
     match format {
         "csv" => {
-            for r in rows("csv", STACK_CONFIG, text)? {
+            for r in rows("csv", SETTINGS_DOC, text)? {
                 let mut cells = r.cells;
                 let (Some(Cell::Text(p)), Some(Cell::Text(v)), true) = (
                     cells.remove("path"),
                     cells.remove("value"),
                     cells.is_empty(),
                 ) else {
-                    bail!("a CSV config has the columns path and value");
+                    bail!("a CSV settings document has the columns path and value");
                 };
                 flatten(&mut out, r.line, p, Value::Str(v));
             }
         }
         "json" => {
             let m: BTreeMap<String, &serde_json::value::RawValue> =
-                serde_json::from_str(text).context("a JSON config is an object")?;
+                serde_json::from_str(text).context("a JSON settings document is an object")?;
             for (k, raw) in m {
                 let line = line_of(text, raw.get().as_ptr() as usize - text.as_ptr() as usize);
                 let v: serde_json::Value = serde_json::from_str(raw.get())?;
@@ -449,7 +450,7 @@ fn leaves(format: &str, text: &str) -> Result<Vec<(Option<usize>, String, Value)
         }
         "yaml" => {
             let serde_yaml::Value::Mapping(m) = serde_yaml::from_str(text)? else {
-                bail!("a YAML config is a mapping");
+                bail!("a YAML settings document is a mapping");
             };
             let lines = yaml_key_lines(text);
             for (k, v) in m {
@@ -585,79 +586,127 @@ fn toml_value(v: toml::Value) -> Value {
     }
 }
 
-/// A stack's config, lowered (`transform::lower`): the rule the resolver
-/// wrote, `arg("settings", Row, P, V, normal) :- ..., table.F.stack.config(..,
+/// `settings from DOC`, lowered (`transform::lower`): the rule the
+/// resolver wrote, `arg(input, S, P, V, Rank) :- ..., table.F.settings(..,
 /// At, P, V)`, contributes at a path only a row knows, which would make
-/// every settings cell one partition (`partition`). So it becomes one rule
-/// per settings path the program knows (writes or reads), `P` that path;
-/// and a leaf at any other path is a deny naming it, where the file has it.
-pub fn expand_config(program: Program) -> Program {
-    let is_config = |l: &Lit| matches!(l, Lit::Pos(a) if parse_name(&a.pred).is_some_and(|(f, t)| f != "git" && t == STACK_CONFIG));
-    let (config, mut out): (Vec<Stmt>, Vec<Stmt>) = program
+/// every input cell one partition (`partition`). So it becomes one rule per
+/// input the scope gives, `P` its path and the head its cell (R-38): in the
+/// stack (`S` is `""`) every input it addresses but a key, its own and its used
+/// modules' (`db.backup_days`, `traefik.acme_email`), in a module its own;
+/// a string read as the input's type by its constructor (`inet(V)`). A
+/// leaf at any other path is a deny naming it, where the file has it, and
+/// the inputs there are.
+/// Each of those inputs is one the program gives (`Declared::given`).
+pub fn expand_settings(program: Program, declared: &mut [crate::inputs::Declared]) -> Program {
+    let is_doc = |l: &Lit| matches!(l, Lit::Pos(a) if parse_name(&a.pred).is_some_and(|(f, t)| f != "git" && t == SETTINGS_DOC));
+    let (docs, mut out): (Vec<Stmt>, Vec<Stmt>) = program
         .statements
         .into_iter()
-        .partition(|s| matches!(s, Stmt::Rule(r) if r.body.iter().any(is_config)));
-    if config.is_empty() {
-        return Program { statements: out };
-    }
+        .partition(|s| matches!(s, Stmt::Rule(r) if r.body.iter().any(is_doc)));
+    const KNOWN: &str = "__settings_path";
     let mut known = BTreeSet::new();
-    let mut note = |a: &Atom, pred: &str, path: usize| {
-        if a.pred == pred
-            && matches!(a.args.first(), Some(Term::Val(Value::Str(t))) if t == "settings")
-            && let Some(Term::Val(Value::Str(p))) = a.args.get(path)
-        {
-            known.insert(p.clone());
-        }
-    };
-    for s in &out {
-        let (head, body): (Option<&Atom>, &[Lit]) = match s {
-            Stmt::Fact(a) => (Some(a), &[]),
-            Stmt::Rule(r) => (Some(&r.head), &r.body),
-            _ => continue,
-        };
-        if let Some(h) = head {
-            note(h, "arg", 2);
-        }
-        for l in body {
-            if let Lit::Pos(a) | Lit::Not(a) = l {
-                note(a, "attr", 2);
-            }
-        }
-    }
-    const KNOWN: &str = "__config_path";
-    for s in config {
+    for s in docs {
         let Stmt::Rule(r) = s else { continue };
-        let (Some(Term::Var(p)), Some(Lit::Pos(ext))) =
-            (r.head.args.get(2), r.body.iter().find(|l| is_config(l)))
+        let (
+            Some(Term::Val(Value::Str(scope))),
+            Some(Term::Var(p)),
+            Some(Term::Var(v)),
+            Some(Lit::Pos(ext)),
+        ) = (
+            r.head.args.get(1),
+            r.head.args.get(2),
+            r.head.args.get(3),
+            r.body.iter().find(|l| is_doc(l)),
+        )
         else {
             continue;
         };
+        // (the path the document gives it by, the cell's scope, its leaf).
+        let given = |d: &crate::inputs::Declared| {
+            !d.decl.key
+                && if scope.is_empty() {
+                    d.address.is_some()
+                } else {
+                    &d.scope == scope
+                }
+        };
+        for d in declared.iter_mut().filter(|d| given(d)) {
+            d.given = true;
+        }
+        let inputs: Vec<(&str, &str, &crate::inputs::Declared)> = declared
+            .iter()
+            .filter(|d| given(d))
+            .filter_map(|d| match scope.is_empty() {
+                true => Some((d.address.as_deref()?, d.scope.as_str(), d)),
+                false => Some((d.decl.name.as_str(), scope.as_str(), d)),
+            })
+            .collect();
         let at = ext.args[ext.args.len() - 3].clone();
-        for k in &known {
-            let path = Term::Val(Value::Str(k.clone()));
-            out.push(Stmt::Rule(RuleStmt {
-                head: subst(&r.head, p, &path),
-                body: r
-                    .body
-                    .iter()
-                    .map(|l| match l {
-                        Lit::Pos(a) => Lit::Pos(subst(a, p, &path)),
-                        l => l.clone(),
-                    })
-                    .collect(),
-            }));
+        let s = |x: &str| Term::Val(Value::Str(x.to_string()));
+        for (path, cell, d) in &inputs {
+            let mut head = subst(&r.head, p, &s(path));
+            head.args[1] = s(cell);
+            let mut body: Vec<Lit> = r
+                .body
+                .iter()
+                .map(|l| match l {
+                    Lit::Pos(a) => Lit::Pos(subst(a, p, &s(path))),
+                    l => l.clone(),
+                })
+                .collect();
+            // A document's text read as the leaf's type, by its
+            // constructor: a CIDR, a quantity, a time; and a CSV cell, all
+            // text, as an int too.
+            let csv = parse_name(&ext.pred).is_some_and(|(f, _)| f == "csv");
+            if let TypeExpr::Name(n) = &d.decl.ty
+                && (matches!(
+                    n.as_str(),
+                    "inet" | "ip" | "bytes" | "cpu" | "duration" | "time"
+                ) || (csv && n == "int"))
+            {
+                let parsed = format!("{v}__{n}");
+                body.push(Lit::Eq(
+                    Term::Var(parsed.clone()),
+                    Term::Func {
+                        name: n.clone(),
+                        args: vec![Term::Var(v.clone())],
+                    },
+                ));
+                head.args[3] = Term::Var(parsed);
+            }
+            // The core form's path, as `transform::lower_contributions`
+            // normalizes every other contribution's.
+            let (top, value) = crate::transform::normalize_contribution(
+                crate::modules::INPUT,
+                &d.decl.name,
+                head.args[3].clone(),
+            );
+            head.args[2] = s(&top);
+            head.args[3] = value;
+            out.push(Stmt::Rule(RuleStmt { head, body }));
+            known.insert((scope.clone(), path.to_string()));
         }
         let mut body = r.body.clone();
         body.push(Lit::Not(atom(
             KNOWN,
-            vec![Term::Var(p.clone())],
+            vec![s(scope), Term::Var(p.clone())],
             r.head.span,
         )));
+        let names: Vec<&str> = inputs.iter().map(|(p, _, _)| *p).collect();
         let message = Term::Func {
             name: "format".into(),
             args: vec![
-                Term::Val(Value::Str(
-                    "%s: %s is not a setting the program writes or reads".into(),
+                s(&format!(
+                    "%s: %s is not an input{} ({})",
+                    if scope.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" of {scope}")
+                    },
+                    match names.is_empty() {
+                        true => "it declares none".to_string(),
+                        false => format!("its inputs: {}", names.join(", ")),
+                    }
                 )),
                 at,
                 Term::Var(p.clone()),
@@ -668,10 +717,10 @@ pub fn expand_config(program: Program) -> Program {
             body,
         }));
     }
-    for k in known {
+    for (scope, path) in known {
         out.push(Stmt::Fact(atom(
             KNOWN,
-            vec![Term::Val(Value::Str(k))],
+            vec![Term::Val(Value::Str(scope)), Term::Val(Value::Str(path))],
             Span::default(),
         )));
     }

@@ -475,7 +475,6 @@ pub fn check(
                     pass.public_leaf(&h.args[0], &h.args[1], &h.args[2], &h.args[3], &vars) =>
             {
                 let place = match (s(&h.args[0]), Some(leak.as_str())) {
-                    (Some(crate::transform::SETTINGS), Some(p)) => format!("setting .{p}"),
                     (Some(crate::transform::OUTPUT), Some(p)) => {
                         format!("output {p}, not declared secret(T)")
                     }

@@ -1,7 +1,7 @@
 exit: ok
 -- stdout --
-== examples/demo/stacks/dform.df: 173 nodes, 464 edges (177 negative)
-   STRATIFIED, 15 strata
+== examples/demo/stacks/dform.df: 158 nodes, 408 edges (144 negative)
+   STRATIFIED, 13 strata
    stratum 0:
      (arg, iam.policy, name)
      (arg, iam.role, assume)
@@ -11,7 +11,7 @@ exit: ok
      (want, iam.role)
      (want, iam.role_policy_attachment)
      (want, net.route)
-     __config_path
+     __settings_path
      data
      doc
      identity
@@ -19,7 +19,7 @@ exit: ok
      main::zone_index
      resolve
      resolved
-     table.yaml.stack.config
+     table.yaml.settings
      type_lattice
      vpc_peer_inst
      world_attr
@@ -33,10 +33,14 @@ exit: ok
      (attr, iam.role, name)
      (attr, input, env)
    stratum 2:
-     (arg, let, cfg)
+     (arg, input, baseline::audit)
+     (arg, input, cidrs)
+     (arg, input, database::backup_days)
+     (arg, input, database::multi_az)
+     (arg, input, kubernetes::nodepool_max)
+     (arg, input, kubernetes::nodepool_min)
+     (arg, input, kubernetes::private_api)
      (arg, output, vpc)
-     (arg, settings, audit.enabled)
-     (arg, settings, audit.sinks)
      (attr, iam.policy, id)
      (attr, iam.role, id)
      (attr, iam.role_policy_attachment, id)
@@ -50,59 +54,24 @@ exit: ok
    stratum 3:
      (arg, iam.role_policy_attachment, policy)
      (arg, iam.role_policy_attachment, role)
-     (attr, let, cfg)
-     (attr, output, vpc)
-     (attr, settings, audit.enabled)
-     (attr, settings, audit.sinks)
-   stratum 4:
-     (arg, settings, db.backup_days)
-     (arg, settings, db.multi_az)
-     (arg, settings, k8s.nodepool.max)
-     (arg, settings, k8s.nodepool.min)
-     (arg, settings, k8s.private_api)
-     (arg, settings, network.main.vpc_net)
-     (arg, settings, network.peer.vpc_net)
-     (attr, iam.role_policy_attachment, policy)
-     (attr, iam.role_policy_attachment, role)
-     cfg
-     settings_row
-     vpc_peer
-     vpc_peer_pair
-   stratum 5:
-     (attr, settings, db.backup_days)
-     (attr, settings, db.multi_az)
-     (attr, settings, k8s.nodepool.max)
-     (attr, settings, k8s.nodepool.min)
-     (attr, settings, k8s.private_api)
-     (attr, settings, network.main.vpc_net)
-     (attr, settings, network.peer.vpc_net)
-   stratum 6:
-     (arg, compute.vm, id)
-     (arg, compute.vm, private_ip)
-     (arg, input, database::backup_days)
-     (arg, input, database::multi_az)
-     (arg, input, kubernetes::nodepool_max)
-     (arg, input, kubernetes::nodepool_min)
-     (arg, input, kubernetes::private_api)
-     (arg, input, main::vpc_net)
-     (arg, input, peer::vpc_net)
-     (want, compute.vm)
-   stratum 7:
-     (attr, compute.vm, id)
-     (attr, compute.vm, private_ip)
+     (attr, input, baseline::audit)
+     (attr, input, cidrs)
      (attr, input, database::backup_days)
      (attr, input, database::multi_az)
      (attr, input, kubernetes::nodepool_max)
      (attr, input, kubernetes::nodepool_min)
      (attr, input, kubernetes::private_api)
-     (attr, input, main::vpc_net)
-     (attr, input, peer::vpc_net)
-   stratum 8:
+     (attr, output, vpc)
+   stratum 4:
+     (arg, compute.vm, id)
+     (arg, compute.vm, private_ip)
      (arg, db.postgres, backup_days)
      (arg, db.postgres, endpoint)
      (arg, db.postgres, id)
      (arg, db.postgres, multi_az)
      (arg, db.postgres, public)
+     (arg, input, main::vpc_net)
+     (arg, input, peer::vpc_net)
      (arg, k8s.cluster, api_endpoint)
      (arg, k8s.cluster, ca_cert)
      (arg, k8s.cluster, id)
@@ -111,28 +80,32 @@ exit: ok
      (arg, k8s.nodepool, id)
      (arg, k8s.nodepool, max)
      (arg, k8s.nodepool, min)
-     (arg, net.vpc, cidr)
-     (arg, net.vpc, id)
-     (arg, net.vpc, tags)
-     (arg, net.vpc_peering, id)
+     (attr, iam.role_policy_attachment, policy)
+     (attr, iam.role_policy_attachment, role)
+     (want, compute.vm)
      (want, db.postgres)
      (want, k8s.cluster)
      (want, k8s.nodepool)
-     (want, net.vpc)
-     (want, net.vpc_peering)
+     baseline::__neg_0
+     baseline::audit
+     cidrs
      database::backup_days
      database::multi_az
      kubernetes::nodepool_max
      kubernetes::nodepool_min
      kubernetes::private_api
-     main::vpc_net
-     peer::vpc_net
-   stratum 9:
+     vpc_peer
+     vpc_peer_pair
+   stratum 5:
+     (attr, compute.vm, id)
+     (attr, compute.vm, private_ip)
      (attr, db.postgres, backup_days)
      (attr, db.postgres, endpoint)
      (attr, db.postgres, id)
      (attr, db.postgres, multi_az)
      (attr, db.postgres, public)
+     (attr, input, main::vpc_net)
+     (attr, input, peer::vpc_net)
      (attr, k8s.cluster, api_endpoint)
      (attr, k8s.cluster, ca_cert)
      (attr, k8s.cluster, id)
@@ -141,12 +114,25 @@ exit: ok
      (attr, k8s.nodepool, id)
      (attr, k8s.nodepool, max)
      (attr, k8s.nodepool, min)
+   stratum 6:
+     (arg, k8s.nodepool, cluster)
+     (arg, net.vpc, cidr)
+     (arg, net.vpc, id)
+     (arg, net.vpc, tags)
+     (arg, net.vpc_peering, id)
+     (arg, output, iam_need)
+     (want, net.vpc)
+     (want, net.vpc_peering)
+     main::vpc_net
+     peer::vpc_net
+   stratum 7:
+     (attr, k8s.nodepool, cluster)
      (attr, net.vpc, cidr)
      (attr, net.vpc, id)
      (attr, net.vpc_peering, id)
-   stratum 10:
+     (attr, output, iam_need)
+   stratum 8:
      (arg, *, tags)
-     (arg, k8s.nodepool, cluster)
      (arg, net.subnet, cidr)
      (arg, net.subnet, id)
      (arg, net.subnet, visibility)
@@ -154,14 +140,14 @@ exit: ok
      (arg, net.subnet, zone)
      (arg, net.vpc_peering, accepter_vpc)
      (arg, net.vpc_peering, requester_vpc)
-     (arg, output, iam_need)
      (want, net.subnet)
      __field_read_0
      __field_read_1
      deny
-   stratum 11:
+     iam_need
+   stratum 9:
+     (arg, iam.policy, statements)
      (attr, *, tags)
-     (attr, k8s.nodepool, cluster)
      (attr, net.subnet, cidr)
      (attr, net.subnet, id)
      (attr, net.subnet, visibility)
@@ -170,24 +156,21 @@ exit: ok
      (attr, net.vpc, tags)
      (attr, net.vpc_peering, accepter_vpc)
      (attr, net.vpc_peering, requester_vpc)
-     (attr, output, iam_need)
+     __lc_3
      warn
-   stratum 12:
+   stratum 10:
+     (attr, iam.policy, statements)
      __rows
      database::subnet
-     iam_need
      kubernetes::subnet
      main::private_subnet
      peer::private_subnet
-   stratum 13:
+   stratum 11:
      (arg, db.postgres, subnets)
-     (arg, iam.policy, statements)
      (arg, k8s.cluster, subnets)
      __lc_1
      __lc_2
-     __lc_3
-   stratum 14:
+   stratum 12:
      (attr, db.postgres, subnets)
-     (attr, iam.policy, statements)
      (attr, k8s.cluster, subnets)
 -- stderr --

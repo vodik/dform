@@ -10,19 +10,13 @@ input env: enum("staging", "prod") = "staging"
 # The mock's built-in fake schema.
 provider fake
 
-settings staging {
-  network.vpc_cidr = inet("10.10.0.0/16")
-}
+# network.df's input, per environment.
+settings { network.vpc_net = inet("10.10.0.0/16") } where env == "staging"
+settings { network.vpc_net = inet("10.20.0.0/16") } where env == "prod"
 
-settings prod {
-  network.vpc_cidr = inet("10.20.0.0/16")
-}
-
-# network.df, imported once with its input bound: its VPC is
+# network.df, imported once, its input the settings': its VPC is
 # `network::vpc`.
-use network {
-  vpc_net = settings[env].network.vpc_cidr
-}
+use network
 
 # Adopt the VPC from inventory, but manage it under the local name `network::vpc`.
 adopt(net.vpc["network::vpc"], "existing-prod-vpc") where {

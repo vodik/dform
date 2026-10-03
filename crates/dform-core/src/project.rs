@@ -262,6 +262,7 @@ pub struct Defaults {
     pub approvals: Option<Spanned<String>>,
     pub audit_sink: Option<Spanned<String>>,
     pub isolated: Option<Spanned<bool>>,
+    /// Gone (R-38): read only to say what replaces it.
     pub config: Option<Spanned<String>>,
     /// How long an `s3` backend's lease lasts (`60s`; `500ms`, `2m`).
     pub lease_duration: Option<String>,
@@ -287,20 +288,14 @@ pub struct StackTable {
     pub audit_sink: Option<Spanned<String>>,
     /// Each key value deploys into its own account.
     pub isolated: Option<Spanned<bool>>,
-    /// A document of the deployment's settings: `yaml("config/{env}.yaml")`.
+    /// Gone (R-38): a document of the deployment's settings is the
+    /// stack's `settings from yaml(..)`. Read only to say so.
     pub config: Option<Spanned<String>>,
 }
 
 /// The settings a stack table holds, as text: a term's (`backend`,
-/// `approvals`, `config`), else a plain value's.
-pub const STACK_SETTINGS: &[&str] = &[
-    "backend",
-    "role",
-    "approvals",
-    "audit_sink",
-    "isolated",
-    "config",
-];
+/// `approvals`), else a plain value's.
+pub const STACK_SETTINGS: &[&str] = &["backend", "role", "approvals", "audit_sink", "isolated"];
 
 /// A stack setting's value as the manifest writes it.
 #[derive(Debug, Clone)]
@@ -319,7 +314,6 @@ impl StackTable {
             ("approvals", s(&self.approvals)),
             ("audit_sink", s(&self.audit_sink)),
             ("isolated", self.isolated.clone().map(SettingText::Bool)),
-            ("config", s(&self.config)),
         ]
         .into_iter()
         .filter_map(|(k, v)| Some((k, v?)))
@@ -397,6 +391,16 @@ impl Manifest {
                 .map(|(n, t)| (format!("[stacks.{n}]"), t.clone())),
         );
         for (table, t) in tables {
+            if let Some(c) = &t.config {
+                bail!(
+                    "{} = {:?}: a stack's config is gone (R-38): its settings are the program's \
+                     inputs, given from a document by `settings from {}` in the stack's file, \
+                     `{{k}}` written `${{k}}`",
+                    at(&format!("{table} config")),
+                    c.get_ref(),
+                    c.get_ref().replace('{', "${")
+                );
+            }
             if let Some(b) = &t.backend
                 && let Err(e) =
                     crate::stack::parse_backend(&b.get_ref().replace("{stack}", "stack"))

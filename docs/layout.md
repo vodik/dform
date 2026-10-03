@@ -9,7 +9,7 @@ dform.toml                  the project root (`dform init` writes one)
 stacks/<stack>.df           one stack per file, named after it
 <name>.df, <dir>/<name>.df  modules: `config.df` is the module
                             `config`, `modules/net.df` is `modules.net`
-config/<stack>/<key>.yaml   per-deployment rows: a keyed stack's `config`
+config/<stack>/<key>.yaml   per-deployment settings: `settings from yaml(..)`
 data/<table>.csv            tables (`input p from csv(...)`)
 providers/<name>/           a local provider: a plugin executable, or a
                             schema (and externs) the mock plays
@@ -25,7 +25,7 @@ dform.state/                state: per deployment, audit logs, plan keys,
   version requirement, Cargo's semver syntax; a program's `provider NAME {}`
   takes its source from here), `[stacks.NAME]` (the stack `NAME.df`'s
   operational settings, a closed list: `backend`, `role`,
-  `approvals`, `audit_sink`, `isolated`, `config`; a term is a string,
+  `approvals`, `audit_sink`, `isolated`; a term is a string,
   `{stack}` the stack's name and `{k}` its key `k`'s value), `[defaults]`
   (the same settings for every stack whose table does not say, and an s3
   backend's `lease_duration` and `lease_renewal`), `[discovery]`
@@ -56,16 +56,16 @@ dform.state/                state: per deployment, audit logs, plan keys,
   uses: `use stacks.platform` binds to its deployments, and no program
   instances it. A module named like the standard library's (`str.df`,
   `list.df`) is an error: `std` is in every scope already.
-- A keyed stack's config is one file per deployment under
-  `config/<stack>/`, named by the key's value, `[stacks.dform] config =
-  'yaml("config/dform/{env}.yaml")'`: `config/dform/prod.yaml` is
-  `dform[env=prod]`'s. A key the target leaves out is its input's default,
+- A keyed stack's settings document is one file per deployment under
+  `config/<stack>/`, named by the key's value, `settings from
+  yaml("config/dform/${env}.yaml")` in the stack: `config/dform/prod.yaml`
+  is `dform[env=prod]`'s. A key the target leaves out is its input's default,
   for `plan` and `apply` alike (both print `deployment: dform[env=staging]
   (env from its default)` first); `controller run` names every key. A key
   defaulting to `"prod"` or `"production"` is a warning.
 - Every path a program states resolves from the project root: module
   paths (`use modules.net`), table and config sources
-  (`csv("data/peerings.csv")`, `config = 'yaml("config/dform/{env}.yaml")'`),
+  (`csv("data/peerings.csv")`, `settings from yaml("config/dform/${env}.yaml")`),
   `file.*` externs, input relations from files, a provider's `source` and a
   trust root.
 - `dform.state/` is gitignored: each deployment's plan key (`state.key`,

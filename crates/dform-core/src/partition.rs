@@ -124,13 +124,12 @@ fn const_str(t: &Term) -> Option<String> {
 
 /// A's path normalization, approximated without a schema: a resource
 /// attribute path is normalized to its first segment (the fake provider's
-/// attributes are all top-level keys); a settings/output key is one declared
-/// leaf per full key (E §7.1 declares `db.backup_days`, `audit.sinks` as
-/// separate leaves of `type settings`). `transform::normalize_contribution`
-/// is the same rule applied to a contribution's value.
+/// attributes are all top-level keys); an output key is one declared leaf
+/// per full key. `transform::normalize_contribution` is the same rule
+/// applied to a contribution's value.
 pub fn normalize_path(typ: &Option<String>, path: &str) -> String {
     match typ.as_deref() {
-        Some(transform::SETTINGS) | Some(transform::OUTPUT) => path.to_string(),
+        Some(transform::OUTPUT) => path.to_string(),
         _ => path.split('.').next().unwrap_or(path).to_string(),
     }
 }
@@ -934,7 +933,8 @@ mod tests {
         // cfg` is a cell too (R-3), its contribution and its aggregate two
         // more: 23. The database's and the cluster's subnets are a relation
         // the network exports (R-55), not an output cell read through two
-        // more: 15.
+        // more: 15. The settings are contributions to the inputs (R-38),
+        // read by their names, and `let cfg` is gone: 13.
         let (v, _) = run_file(
             "examples/demo/stacks/dform.df",
             &[root().join("examples/demo/stacks/dform.df")],
@@ -944,7 +944,7 @@ mod tests {
         let Verdict::Stratified { strata } = v else {
             panic!()
         };
-        assert_eq!(strata.values().max().copied().unwrap() + 1, 15);
+        assert_eq!(strata.values().max().copied().unwrap() + 1, 13);
     }
 
     /// The graph `dform dev strata` prints is the one evaluation runs with: a

@@ -877,22 +877,37 @@ impl<'a> Parser<'a> {
                 p.block()?;
                 p.opt_clause()
             }),
+            // `settings { k = v .. } [@rank] [where B]`: contributions to the
+            // inputs, under a condition; `settings from DOC [@rank] [where
+            // B]`: a document's leaves, each to the input at its path (R-38).
             SETTINGS_KW => self.simple(SETTINGS, |p| {
-                if word(p.nth(0)) || p.at(STRING) {
+                if p.at_contextual("from") {
                     p.bump();
-                } else {
-                    let hint = matches!(p.nth(0), DOT | L_BRACKET).then(|| {
-                        "a contribution to a settings row is `set settings[e].path = t`".to_string()
+                    p.term()?;
+                    p.eat(RANK);
+                    return p.opt_where_body();
+                }
+                if !p.at(L_BRACE) {
+                    let hint = (word(p.nth(0)) || p.at(STRING) || p.at(RANK)).then(|| {
+                        if p.at(RANK) {
+                            "the rank follows the block: `settings { .. } @default where ..`"
+                                .to_string()
+                        } else {
+                            "settings rows are gone (R-38): a settings block gives the inputs \
+                             under a condition, `settings { db.multi_az = true } where env == \
+                             \"prod\"`, and a read is the input's name"
+                                .to_string()
+                        }
                     });
                     let msg = format!(
-                        "expected a settings row's name (a name or a string), found {}",
+                        "expected `{{` or `from` after `settings`, found {}",
                         p.found()
                     );
                     p.error_here(msg, hint);
                     return Err(Bail);
                 }
-                p.eat(RANK);
                 p.block()?;
+                p.eat(RANK);
                 p.opt_clause()
             }),
             DENY_KW | WARN_KW => self.simple(CHECK, |p| {

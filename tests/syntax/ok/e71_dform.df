@@ -26,29 +26,29 @@ type settings {
 
 # Base layer at rank @default: every environment. Overrides below are the
 # normal rank and win per leaf. This replaces three copies of the block.
-settings e @default {
+settings {
   network.main.vpc_net = inet("10.90.0.0/16")
   network.peer.vpc_net = inet("10.91.0.0/16")
   db = { backup_days: 3, multi_az: false }
   k8s = { private_api: false, nodepool: { min: 1, max: 3 } }
-} where env_name(e)
+} @default
 
 env_name("dev")
 env_name("staging")
 env_name("prod")
 
-settings staging {
+settings {
   network.main.vpc_net = inet("10.50.0.0/16")
   network.peer.vpc_net = inet("10.60.0.0/16")
-}
+} where env == "staging"
 
-settings prod {
+settings {
   network.main.vpc_net = inet("10.20.0.0/16")
   network.peer.vpc_net = inet("10.21.0.0/16")
   db = { backup_days: 14, multi_az: true }
   k8s = { private_api: true, nodepool: { min: 3, max: 10 } }
   audit.sinks += ["cloudwatch"] # Set path: unions with the policy pack's ["s3"]
-}
+} where env == "prod"
 
 use baseline
 use stdlib_net

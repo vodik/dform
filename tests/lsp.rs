@@ -418,7 +418,7 @@ fn signature_help_of_builtins_and_externs() {
     let help = c.at(
         "textDocument/signatureHelp",
         &stack,
-        find(&stack, "vpc_net), 20)", 9),
+        find(&stack, "cidrs.main), 20)", 12),
     );
     assert_eq!(
         help["signatures"][0]["label"], "inet.host(net: inet, n: int) -> ip?",
@@ -937,7 +937,7 @@ fn quick_fix_derives_a_colliding_name_from_the_key_or_isolates_the_stack() {
         "say `isolated = true` in dform.toml",
     );
     assert!(
-        texts[0].contains("[stacks.dform]\nisolated = true\nconfig = "),
+        texts[0].contains("[stacks.dform]\nisolated = true\n"),
         "{}",
         texts[0]
     );
@@ -1048,7 +1048,7 @@ fn references_of_every_kind_of_name() {
     for want in [
         ("stacks/dform.df".to_string(), 11),
         ("stacks/dform.df".into(), 17),
-        ("stacks/dform.df".into(), 35),
+        ("stacks/dform.df".into(), 60),
         ("stacks/dform.df".into(), 104),
         ("network.df".into(), 17),
         ("baseline.df".into(), 18),
@@ -1069,12 +1069,9 @@ fn references_of_every_kind_of_name() {
         ]
     );
 
-    // A let alias and a type alias.
-    let found = references(&mut c, &root, &stack, find(&stack, "let cfg", 4));
-    assert_eq!(
-        found,
-        at_places("stacks/dform.df", &[35, 54, 59, 65, 66, 71, 72, 73, 100])
-    );
+    // An object input read by its fields (R-38), and a type alias.
+    let found = references(&mut c, &root, &stack, find(&stack, "input cidrs", 6));
+    assert_eq!(found, at_places("stacks/dform.df", &[12, 54, 59, 100]));
     let found = references(&mut c, &root, &stack, find(&stack, "type environment", 5));
     assert_eq!(found, at_places("stacks/dform.df", &[11, 42]));
 
@@ -1091,7 +1088,7 @@ fn references_of_every_kind_of_name() {
     // Its output read in the stack; its resources' addresses from outside
     // are strings (H-16).
     let found = references(&mut c, &root, &stack, find(&stack, "use database", 4));
-    assert_eq!(found, at_places("stacks/dform.df", &[19, 64]));
+    assert_eq!(found, at_places("stacks/dform.df", &[19, 66]));
     let found = references(&mut c, &root, &stack, find(&stack, "use baseline", 6));
     assert_eq!(found, at_places("stacks/dform.df", &[47]));
 
@@ -1246,7 +1243,11 @@ fn prepare_rename_refuses_what_is_not_the_programs() {
     let text = std::fs::read_to_string(&network).unwrap();
     assert!(text.contains("input cidr_block: inet") && text.contains("cidr = cidr_block"));
     let text = std::fs::read_to_string(&stack).unwrap();
-    assert_eq!(text.matches("  cidr_block = inet(cfg").count(), 2, "{text}");
+    assert_eq!(
+        text.matches("  cidr_block = inet(cidrs").count(),
+        2,
+        "{text}"
+    );
     let edit = rename(
         &mut c,
         &stack,

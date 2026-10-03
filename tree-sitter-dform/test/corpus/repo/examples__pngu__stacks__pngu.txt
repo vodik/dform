@@ -22,6 +22,22 @@ edition 2026
 
 # The stack's key, typed: `dform plan pngu env=qa` is an error naming it.
 key env: environment = "dev"
+# The project and its networks, each environment's in a settings block
+# below. A CIDR is text here, made an inet where it is used.
+input gcp {
+  project_id: string
+  project_name: string
+  region: string
+  network_name: string
+  regional_proxy_cidr: string
+}
+input gke {
+  control_plane_cidr: string
+  subnet_cidr: string
+  pods_cidr: string
+  services_cidr: string
+  static_ips: any
+}
 # The rows are data/peerings.csv's, typed column by column as `decl peering`
 # says: a row whose env is not one of these is an error naming its line.
 input peering from csv("data/peerings.csv")
@@ -46,13 +62,13 @@ type environment = enum("dev", "stg", "prod")
 # Settings (branch-as-data)
 ########################################
 
-settings dev {
-  project_id = "renfry-dev-973682"
-  project_name = "renfry-dev"
-  region = "us-east1"
-  network_name = "renfry-dev-network"
+settings {
+  gcp.project_id = "renfry-dev-973682"
+  gcp.project_name = "renfry-dev"
+  gcp.region = "us-east1"
+  gcp.network_name = "renfry-dev-network"
 
-  regional_proxy_cidr = "10.193.0.0/24"
+  gcp.regional_proxy_cidr = "10.193.0.0/24"
 
   gke = {
     control_plane_cidr: "172.16.3.96/28",
@@ -61,15 +77,15 @@ settings dev {
     services_cidr: "10.141.88.0/21",
     static_ips: { "pngu-grpc": { type: "INTERNAL" } }
   }
-}
+} where env == "dev"
 
-settings stg {
-  project_id = "renfry-stg"
-  project_name = "renfry-stg"
-  region = "us-east1"
-  network_name = "renfry-stg-network"
+settings {
+  gcp.project_id = "renfry-stg"
+  gcp.project_name = "renfry-stg"
+  gcp.region = "us-east1"
+  gcp.network_name = "renfry-stg-network"
 
-  regional_proxy_cidr = "10.193.1.0/24"
+  gcp.regional_proxy_cidr = "10.193.1.0/24"
 
   gke = {
     control_plane_cidr: "172.16.3.112/28",
@@ -78,15 +94,15 @@ settings stg {
     services_cidr: "10.141.112.0/21",
     static_ips: { "pngu-grpc": { type: "INTERNAL" } }
   }
-}
+} where env == "stg"
 
-settings prod {
-  project_id = "renfry-prod"
-  project_name = "renfry-prod"
-  region = "us-east1"
-  network_name = "renfry-prod-network"
+settings {
+  gcp.project_id = "renfry-prod"
+  gcp.project_name = "renfry-prod"
+  gcp.region = "us-east1"
+  gcp.network_name = "renfry-prod-network"
 
-  regional_proxy_cidr = "10.193.2.0/24"
+  gcp.regional_proxy_cidr = "10.193.2.0/24"
 
   gke = {
     control_plane_cidr: "172.16.3.128/28",
@@ -95,10 +111,7 @@ settings prod {
     services_cidr: "10.141.136.0/21",
     static_ips: { "pngu-grpc": { type: "INTERNAL" } }
   }
-}
-
-# The selected environment's settings. Every use reads env and one leaf.
-let cfg = settings[env]
+} where env == "prod"
 
 ########################################
 # Provider (configured by the key)
@@ -106,17 +119,17 @@ let cfg = settings[env]
 
 # The gke mock plays the google types (crates/dform-mock/schemas/gke.df:
 # every one mints its id at Apply). Each deployment configures it from its
-# own settings row, and refuses to plan when the account the provider
+# own settings, and refuses to plan when the account the provider
 # reports is not the one this env names: the same shell cannot point
 # prod's plan at dev's project. Against the real provider the credentials
 # would come from the environment, by key, as a secret:
 #   credentials = env.var("GOOGLE_CREDENTIALS_{env}")
 # and the account from the credentials; the mock reports its `account`.
 provider gke {
-  project = cfg.project_id
-  region = cfg.region
-  account = cfg.project_id
-  expect_account = cfg.project_id
+  project = gcp.project_id
+  region = gcp.region
+  account = gcp.project_id
+  expect_account = gcp.project_id
 }
 
 ########################################
@@ -128,7 +141,7 @@ provider gke {
 # Validation
 ########################################
 
-deny "GKE static IPs must be INTERNAL" where cfg.gke.static_ips."pngu-grpc".type != "INTERNAL"
+deny "GKE static IPs must be INTERNAL" where gke.static_ips."pngu-grpc".type != "INTERNAL"
 
 ########################################
 # Resources (renfry module intent)
@@ -136,43 +149,43 @@ deny "GKE static IPs must be INTERNAL" where cfg.gke.static_ips."pngu-grpc".type
 
 # GKE subnet (terraform-google-modules/network/google//modules/subnets)
 resource google.compute_subnetwork gke_subnet {
-  project = cfg.project_id
-  region = cfg.region
-  network = "projects/${cfg.project_id}/global/networks/${cfg.network_name}"
-  name = "${cfg.project_name}-gke-subnet"
-  ip_cidr_range = cfg.gke.subnet_cidr
+  project = gcp.project_id
+  region = gcp.region
+  network = "projects/${gcp.project_id}/global/networks/${gcp.network_name}"
+  name = "${gcp.project_name}-gke-subnet"
+  ip_cidr_range = gke.subnet_cidr
   subnet_private_access = true
   secondary_ranges = [
-    { range_name: "${cfg.project_name}-gke-pods-range", ip_cidr_range: cfg.gke.pods_cidr },
-    { range_name: "${cfg.project_name}-gke-svc-range", ip_cidr_range: cfg.gke.services_cidr }
+    { range_name: "${gcp.project_name}-gke-pods-range", ip_cidr_range: gke.pods_cidr },
+    { range_name: "${gcp.project_name}-gke-svc-range", ip_cidr_range: gke.services_cidr }
   ]
 }
 
 # Regional managed proxy subnet
 resource google.compute_subnetwork regional_proxy {
-  project = cfg.project_id
-  region = cfg.region
-  network = "projects/${cfg.project_id}/global/networks/${cfg.network_name}"
-  name = "${cfg.project_name}-proxy"
+  project = gcp.project_id
+  region = gcp.region
+  network = "projects/${gcp.project_id}/global/networks/${gcp.network_name}"
+  name = "${gcp.project_name}-proxy"
   purpose = "REGIONAL_MANAGED_PROXY"
   role = "ACTIVE"
-  ip_cidr_range = cfg.regional_proxy_cidr
+  ip_cidr_range = gcp.regional_proxy_cidr
 }
 
 # VPC peerings
 resource google.compute_network_peering "peering-${name}" {
-  project = cfg.project_id
+  project = gcp.project_id
   name
-  network = "projects/${cfg.project_id}/global/networks/${cfg.network_name}"
+  network = "projects/${gcp.project_id}/global/networks/${gcp.network_name}"
   peer_network = peer
 } where peering(env: env, name: name, peer_network: peer)
 
 # Static IPs for services
 resource google.compute_address "static-ip-${ip}" {
-  project = cfg.project_id
-  region = cfg.region
+  project = gcp.project_id
+  region = gcp.region
   name = ip
-  address_type = cfg.gke.static_ips."pngu-grpc".type
+  address_type = gke.static_ips."pngu-grpc".type
   subnetwork_id = gke_subnet
 } where ip = "pngu-grpc"
 
@@ -184,14 +197,14 @@ resource google.compute_address "static-ip-${ip}" {
 resource google.container_cluster pngu {
   cluster_type = "autopilot-private"
   env
-  project_id = cfg.project_id
-  project_name = cfg.project_name
-  name = "${cfg.project_name}-gke"
-  network_id = "projects/${cfg.project_id}/global/networks/${cfg.network_name}"
+  project_id = gcp.project_id
+  project_name = gcp.project_name
+  name = "${gcp.project_name}-gke"
+  network_id = "projects/${gcp.project_id}/global/networks/${gcp.network_name}"
   subnetwork_id = gke_subnet
-  master_control_plane_cidr = cfg.gke.control_plane_cidr
-  ip_range_pods = "${cfg.project_name}-gke-pods-range"
-  ip_range_services = "${cfg.project_name}-gke-svc-range"
+  master_control_plane_cidr = gke.control_plane_cidr
+  ip_range_pods = "${gcp.project_name}-gke-pods-range"
+  ip_range_services = "${gcp.project_name}-gke-svc-range"
 
   enable_secret_manager_addon = true
   deletion_protection = false
@@ -203,7 +216,7 @@ resource google.container_cluster pngu {
 
 # The dashboard JSON is a file, read by the file provider.
 resource google.monitoring_dashboard pngu {
-  project = cfg.project_id
+  project = gcp.project_id
   dashboard_json = file.json["files/dashboard-pngu.json"]
 }
 
@@ -219,7 +232,7 @@ type alert_metrics_pack {
 }
 
 resource alert_metrics_pack pngu {
-  project_id = cfg.project_id
+  project_id = gcp.project_id
   notification_channel_type = "slack"
   notification_channel_display_name = "Slack"
   enable_standard_gke_alerts = true
@@ -231,7 +244,7 @@ resource alert_metrics_pack pngu {
 ########################################
 
 output active_env = env
-output project_id = cfg.project_id
+output project_id = gcp.project_id
 
 ---
 
@@ -261,6 +274,74 @@ output project_id = cfg.project_id
         (identifier)))
     (string
       (string_content)))
+  (comment)
+  (comment)
+  (input
+    (identifier)
+    (input_fields
+      (attribute_declaration
+        (block_path
+          (identifier))
+        (type
+          (dotted_name
+            (identifier))))
+      (attribute_declaration
+        (block_path
+          (identifier))
+        (type
+          (dotted_name
+            (identifier))))
+      (attribute_declaration
+        (block_path
+          (identifier))
+        (type
+          (dotted_name
+            (identifier))))
+      (attribute_declaration
+        (block_path
+          (identifier))
+        (type
+          (dotted_name
+            (identifier))))
+      (attribute_declaration
+        (block_path
+          (identifier))
+        (type
+          (dotted_name
+            (identifier))))))
+  (input
+    (identifier)
+    (input_fields
+      (attribute_declaration
+        (block_path
+          (identifier))
+        (type
+          (dotted_name
+            (identifier))))
+      (attribute_declaration
+        (block_path
+          (identifier))
+        (type
+          (dotted_name
+            (identifier))))
+      (attribute_declaration
+        (block_path
+          (identifier))
+        (type
+          (dotted_name
+            (identifier))))
+      (attribute_declaration
+        (block_path
+          (identifier))
+        (type
+          (dotted_name
+            (identifier))))
+      (attribute_declaration
+        (block_path
+          (identifier))
+        (type
+          (dotted_name
+            (identifier))))))
   (comment)
   (comment)
   (input_relation
@@ -314,30 +395,34 @@ output project_id = cfg.project_id
   (comment)
   (comment)
   (settings
-    (identifier)
     (block
       (field
         (block_path
+          (identifier)
           (identifier))
         (string
           (string_content)))
       (field
         (block_path
+          (identifier)
           (identifier))
         (string
           (string_content)))
       (field
         (block_path
+          (identifier)
           (identifier))
         (string
           (string_content)))
       (field
         (block_path
+          (identifier)
           (identifier))
         (string
           (string_content)))
       (field
         (block_path
+          (identifier)
           (identifier))
         (string
           (string_content)))
@@ -371,32 +456,42 @@ output project_id = cfg.project_id
                   (object_field
                     (identifier)
                     (string
-                      (string_content)))))))))))
+                      (string_content))))))))))
+    (clause
+      (body
+        (comparison
+          (identifier)
+          (string
+            (string_content))))))
   (settings
-    (identifier)
     (block
       (field
         (block_path
+          (identifier)
           (identifier))
         (string
           (string_content)))
       (field
         (block_path
+          (identifier)
           (identifier))
         (string
           (string_content)))
       (field
         (block_path
+          (identifier)
           (identifier))
         (string
           (string_content)))
       (field
         (block_path
+          (identifier)
           (identifier))
         (string
           (string_content)))
       (field
         (block_path
+          (identifier)
           (identifier))
         (string
           (string_content)))
@@ -430,32 +525,42 @@ output project_id = cfg.project_id
                   (object_field
                     (identifier)
                     (string
-                      (string_content)))))))))))
+                      (string_content))))))))))
+    (clause
+      (body
+        (comparison
+          (identifier)
+          (string
+            (string_content))))))
   (settings
-    (identifier)
     (block
       (field
         (block_path
+          (identifier)
           (identifier))
         (string
           (string_content)))
       (field
         (block_path
+          (identifier)
           (identifier))
         (string
           (string_content)))
       (field
         (block_path
+          (identifier)
           (identifier))
         (string
           (string_content)))
       (field
         (block_path
+          (identifier)
           (identifier))
         (string
           (string_content)))
       (field
         (block_path
+          (identifier)
           (identifier))
         (string
           (string_content)))
@@ -489,13 +594,13 @@ output project_id = cfg.project_id
                   (object_field
                     (identifier)
                     (string
-                      (string_content)))))))))))
-  (comment)
-  (let
-    (identifier)
-    (index_expression
-      (identifier)
-      (identifier)))
+                      (string_content))))))))))
+    (clause
+      (body
+        (comparison
+          (identifier)
+          (string
+            (string_content))))))
   (comment)
   (comment)
   (comment)
@@ -549,9 +654,7 @@ output project_id = cfg.project_id
         (member_expression
           (member_expression
             (member_expression
-              (member_expression
-                (identifier)
-                (identifier))
+              (identifier)
               (identifier))
             (string
               (string_content)))
@@ -607,9 +710,7 @@ output project_id = cfg.project_id
         (block_path
           (identifier))
         (member_expression
-          (member_expression
-            (identifier)
-            (identifier))
+          (identifier)
           (identifier)))
       (field
         (block_path
@@ -631,9 +732,7 @@ output project_id = cfg.project_id
             (object_field
               (identifier)
               (member_expression
-                (member_expression
-                  (identifier)
-                  (identifier))
+                (identifier)
                 (identifier))))
           (object
             (object_field
@@ -647,9 +746,7 @@ output project_id = cfg.project_id
             (object_field
               (identifier)
               (member_expression
-                (member_expression
-                  (identifier)
-                  (identifier))
+                (identifier)
                 (identifier))))))))
   (comment)
   (resource
@@ -793,9 +890,7 @@ output project_id = cfg.project_id
         (member_expression
           (member_expression
             (member_expression
-              (member_expression
-                (identifier)
-                (identifier))
+              (identifier)
               (identifier))
             (string
               (string_content)))
@@ -871,9 +966,7 @@ output project_id = cfg.project_id
         (block_path
           (identifier))
         (member_expression
-          (member_expression
-            (identifier)
-            (identifier))
+          (identifier)
           (identifier)))
       (field
         (block_path

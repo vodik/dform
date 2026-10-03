@@ -2,11 +2,9 @@ baseline:
   reads:
     db.postgres.public
     iam.policy.name
-    settings.audit.enabled
   writes:
     (*, tags)
     (iam.policy, statements)
-    settings.audit.sinks
   offers:
 
 database:
@@ -89,21 +87,14 @@ stack:
   reads:
     db.postgres.backup_days
     db.postgres.multi_az
-    extern table.yaml.stack.config
+    extern table.yaml.settings
+    input cidrs
     input env
     k8s.cluster.private_api
-    let.cfg
     net.vpc.cidr
     net.vpc.id
     output database.iam_need
     output kubernetes.iam_need
-    settings.db.backup_days
-    settings.db.multi_az
-    settings.k8s.nodepool.max
-    settings.k8s.nodepool.min
-    settings.k8s.private_api
-    settings.network.main.vpc_net
-    settings.network.peer.vpc_net
   writes:
     (compute.vm, id)
     (compute.vm, private_ip)
@@ -116,13 +107,13 @@ stack:
     (k8s.cluster, ca_cert)
     (k8s.cluster, id)
     (k8s.nodepool, id)
-    (let, cfg)
     (net.route, id)
     (net.subnet, id)
     (net.vpc, id)
     (net.vpc_peering, accepter_vpc)
     (net.vpc_peering, id)
     (net.vpc_peering, requester_vpc)
+    input baseline.audit
     input database.backup_days
     input database.multi_az
     input kubernetes.nodepool_max
@@ -130,16 +121,8 @@ stack:
     input kubernetes.private_api
     input main.vpc_net
     input peer.vpc_net
+    input stack.cidrs
     input stack.env
-    settings.audit.enabled
-    settings.audit.sinks
-    settings.db.backup_days
-    settings.db.multi_az
-    settings.k8s.nodepool.max
-    settings.k8s.nodepool.min
-    settings.k8s.private_api
-    settings.network.main.vpc_net
-    settings.network.peer.vpc_net
   offers:
 
 stdlib_net:

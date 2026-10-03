@@ -4,7 +4,7 @@
 //! `[defaults]`: `backend = 'local("dir")'` is the directory its state,
 //! world and lock live in (or a bucket, `store`), and a lock there makes a
 //! second concurrent apply fail cleanly; `role`, `approvals`,
-//! `audit_sink`, `isolated` and `config` are the rest (docs/grammar.md
+//! `audit_sink` and `isolated` are the rest (docs/grammar.md
 //! "Stack settings"). The loader lowers them to one `Stmt::Stack`.
 //!
 //! Keyed stacks: `key env: T` declares an input the target gives (`shop

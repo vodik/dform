@@ -189,3 +189,24 @@ fn the_space_is_every_input_the_stack_gives() {
         .success();
     assert!(r.stdout.contains("test p: 1 combination"), "{}", r.stdout);
 }
+
+/// An input a settings block gives is the program's to decide (R-38): no
+/// axis, and the denies run with the settings applied.
+#[test]
+fn an_input_the_settings_give_is_no_axis() {
+    let s = Scratch::new("test-settings");
+    s.write(
+        "p.df",
+        "edition 2026\ninput env: enum(\"dev\", \"prod\") = \"dev\"\n\
+         input multi_az: bool = false\ninput public: bool = false\nprovider fake\n\
+         settings { multi_az = true } where env == \"prod\"\n\
+         resource db.postgres main {\n  multi_az\n  public\n}\n\
+         deny \"prod is multi_az\" where env == \"prod\", d in db.postgres, not d.multi_az\n",
+    );
+    let r = s.run(&["test", "p.df"]).success();
+    assert!(
+        r.stdout.contains("test p: 4 combinations of env, public\n"),
+        "{}",
+        r.stdout
+    );
+}

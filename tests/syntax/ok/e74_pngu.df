@@ -27,16 +27,16 @@ type settings {
   }
 }
 
-settings e @default {
+settings {
   region = "us-east1"
   gke.static_ips = { "pngu-grpc": { type: "INTERNAL" } }
-} where env_name(e)
+} @default
 
 env_name("dev")
 env_name("stg")
 env_name("prod")
 
-settings dev {
+settings {
   project_id = "renfry-dev-973682"
   project_name = "renfry-dev"
   network_name = "renfry-dev-network"
@@ -47,9 +47,9 @@ settings dev {
     pods_cidr: inet("10.141.80.0/21"),
     services_cidr: inet("10.141.88.0/21")
   }
-}
+} where env == "dev"
 
-settings stg {
+settings {
   project_id = "renfry-stg"
   project_name = "renfry-stg"
   network_name = "renfry-stg-network"
@@ -60,7 +60,7 @@ settings stg {
     pods_cidr: inet("10.141.104.0/21"),
     services_cidr: inet("10.141.112.0/21")
   }
-}
+} where env == "stg"
 
 # prod elided; same shape.
 

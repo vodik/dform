@@ -29,7 +29,7 @@ use super::{SyntaxNode, SyntaxToken};
 use crate::ast::{
     Atom, AttrDecl, BindArg, Config, Decl, Extern, ExternFn, FieldAssign, FieldOp, InputDecl,
     InputRelation, Instance, Lit, Module, OutputDecl, Pending, PendingKind, Program, Rank,
-    Resource, RuleStmt, Settings, Span, Stmt, Term, TypeExpr,
+    Resource, RuleStmt, Span, Stmt, Term, TypeExpr,
 };
 use crate::diag::Diagnostic;
 use crate::value::Value;
@@ -107,9 +107,8 @@ pub struct Setting {
 pub enum SettingValue {
     /// A string or a bool, as it is.
     Plain(Term),
-    /// A term's text (`backend`, `approvals`, `config`) at byte `offset`
-    /// of the manifest's source; `{stack}` is the stack's name, and in
-    /// `config` `{k}` is the key k's value.
+    /// A term's text (`backend`, `approvals`) at byte `offset` of the
+    /// manifest's source; `{stack}` is the stack's name.
     Term { text: String, offset: u32 },
 }
 
@@ -190,8 +189,6 @@ pub fn data_term(src: &str) -> Result<Term, String> {
 /// on it reads through the reference.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum VType {
-    /// A settings row's key: `let cfg = settings[env]`.
-    Settings,
     /// A resource's address, of the type: `let db = db.postgres["main"]`.
     Ref(String),
     /// A live object's name, of the type: `let o = world.net.vpc[n]`.
@@ -207,8 +204,6 @@ struct Scope {
     lets: BTreeMap<String, Vec<SyntaxNode>>,
     /// Resources with a static name: name -> the types declaring it.
     resources: BTreeMap<String, Vec<String>>,
-    /// Settings rows with a static name declared here.
-    settings: BTreeSet<String>,
     /// Instances declared here: name -> its component's path as written,
     /// then, once bound, as resolved (`instances`).
     instances_written: BTreeMap<String, String>,
@@ -563,8 +558,6 @@ enum Res {
         addr: Term,
         path: Vec<Seg>,
     },
-    /// A settings row and a path (always read, by its full key).
-    Settings { addr: Term, path: Vec<Seg> },
     /// An instance output; `typ` when its declared type is a resource
     /// type (it holds that resource's address).
     Output {
@@ -921,11 +914,6 @@ impl<'u> Lowerer<'u> {
                             .push(typ);
                     }
                 }
-                SETTINGS => {
-                    if let Some(name) = self.static_header(&n) {
-                        self.decls.scopes[decl].settings.insert(name);
-                    }
-                }
                 INSTANCE => {
                     let (path, name) = instance_parts(&n);
                     self.decls.scopes[decl].instances_written.insert(name, path);
@@ -1034,7 +1022,7 @@ impl<'u> Lowerer<'u> {
                 DOT => after_dot = true,
                 STRING => return Some(t),
                 k if is_word(k) => {
-                    if n.kind() == SETTINGS || (seen_word && !after_dot) {
+                    if seen_word && !after_dot {
                         return Some(t);
                     }
                     seen_word = true;
@@ -1188,7 +1176,6 @@ impl<'u> Lowerer<'u> {
                 Some(u) => {
                     let show = |v: &Option<VType>| match v {
                         None => "a value".to_string(),
-                        Some(VType::Settings) => "a settings row".to_string(),
                         Some(VType::Ref(t)) => format!("a {t} reference"),
                         Some(VType::World(t)) => format!("a live {t}"),
                     };
@@ -1203,15 +1190,12 @@ impl<'u> Lowerer<'u> {
         Ok(ty.flatten())
     }
 
-    /// The reference a `let` row's term names, if it names one: a settings
-    /// row, a resource (by name in scope or `T[e]`), a live object, or
-    /// another `let` holding one.
+    /// The reference a `let` row's term names, if it names one: a resource
+    /// (by name in scope or `T[e]`), a live object, or another `let`
+    /// holding one.
     fn term_vtype(&self, scope: usize, t: &SyntaxNode, depth: usize) -> Option<VType> {
         let c = Chain::of(t)?;
         let index_then_end = |ops: &[Op]| matches!(ops, [Op::Index(ts, _)] if ts.len() == 1);
-        if c.head_kind == SETTINGS_KW {
-            return index_then_end(&c.ops).then_some(VType::Settings);
-        }
         if c.head == "world" {
             let fields = c.fields();
             let rest = &c.ops[fields.len() - 1..];
@@ -1468,16 +1452,6 @@ impl<'u> Lowerer<'u> {
                 Stmt::Fact(a) => (Some(a), &[]),
                 Stmt::Rule(r) => (Some(&r.head), &r.body),
                 Stmt::Resource(r) => {
-                    for f in r.fields.iter().filter(|f| has(&f.value)) {
-                        bad(
-                            self,
-                            f.span,
-                            format!("`{}` is given `_`, which has no value", f.key),
-                        );
-                    }
-                    (None, r.body.as_deref().unwrap_or_default())
-                }
-                Stmt::Settings(r) => {
                     for f in r.fields.iter().filter(|f| has(&f.value)) {
                         bad(
                             self,
@@ -1756,7 +1730,8 @@ impl<'u> Lowerer<'u> {
             LET => self.let_stmt(n, scope, outer),
             SET => self.set(n, scope, outer),
             INSTANCE => self.instance(n, scope, outer),
-            RESOURCE | SETTINGS => self.block_stmt(n, scope, outer),
+            RESOURCE => self.block_stmt(n, scope, outer),
+            SETTINGS => self.settings(n, scope, outer),
             RULE | FACT => self.rule(n, scope, outer),
             CHECK => self.check(n, scope, outer),
             k => self.error(span, format!("unexpected {k:?}")),
@@ -2211,63 +2186,36 @@ impl<'u> Lowerer<'u> {
     }
 
     /// The stack's settings as dform.toml gives them (R-29): each a
-    /// constant but `config`, lowered where the manifest writes it. One
-    /// `Stmt::Stack` holds the constants; `config` is rules.
+    /// constant, held by one `Stmt::Stack`.
     fn stack_settings(&mut self, st: &StackSource, entries: &[usize]) -> Vec<Stmt> {
         let Some(&first) = entries.first() else {
             return Vec::new();
         };
         let scope = self.decls.files[&self.units[first].file];
-        let keys: Vec<String> = entries
-            .iter()
-            .flat_map(|&e| key_names(&self.units[e].root))
-            .collect();
         let (saved_file, saved_offset) = (self.file, self.offset);
         let mut config = Vec::new();
-        let mut out = Vec::new();
         for s in &st.settings {
-            let text = match &s.value {
+            let (text, offset) = match &s.value {
                 SettingValue::Plain(t) => {
                     config.push((s.key.clone(), t.clone(), s.span));
                     continue;
                 }
-                SettingValue::Term { text, .. } => text.replace("{stack}", &st.name),
-            };
-            let SettingValue::Term { offset, .. } = &s.value else {
-                continue;
+                SettingValue::Term { text, offset } => (text.replace("{stack}", &st.name), *offset),
             };
             self.file = s.span.file;
-            self.offset = *offset;
-            let r = if s.key == "config" {
-                // `{k}` is the key k's value: an interpolation hole.
-                let text = keys.iter().fold(text, |t, k| {
-                    t.replace(&format!("{{{k}}}"), &format!("${{{k}}}"))
-                });
-                self.setting_term(&text, s.span).and_then(|src| {
-                    self.stack_config(&src, s.span, &st.name, &keys, scope, &Rc::default())
-                })
-            } else {
-                self.setting_term(&text, s.span).and_then(|src| {
-                    let mut rc = self.rc(&src, scope, &Rc::default());
-                    self.calls(Calls::Data, |l| l.constant(&mut rc, &src))
-                        .map(|t| config.push((s.key.clone(), t, s.span)))
-                        .map(|()| Vec::new())
-                })
-            };
-            if let Ok(stmts) = r {
-                out.extend(stmts);
-            }
+            self.offset = offset;
+            let _ = self.setting_term(&text, s.span).and_then(|src| {
+                let mut rc = self.rc(&src, scope, &Rc::default());
+                self.calls(Calls::Data, |l| l.constant(&mut rc, &src))
+                    .map(|t| config.push((s.key.clone(), t, s.span)))
+            });
         }
         (self.file, self.offset) = (saved_file, saved_offset);
-        out.insert(
-            0,
-            Stmt::Stack(Config {
-                name: st.name.clone(),
-                config,
-                span: st.span,
-            }),
-        );
-        out
+        vec![Stmt::Stack(Config {
+            name: st.name.clone(),
+            config,
+            span: st.span,
+        })]
     }
 
     /// A setting's value, parsed as a term.
@@ -2286,80 +2234,6 @@ impl<'u> Lowerer<'u> {
             );
         }
         terms(&parse.syntax()).next().ok_or(Skip)
-    }
-
-    /// A stack's `config = FORMAT(SOURCE)` (dform.toml's `[stacks.NAME]`):
-    /// every leaf of the document is a contribution to the settings row of
-    /// the deployment (named by the key's value, several keys' joined by
-    /// `/`):
-    /// `arg("settings", Row, P, V, normal) :- reads, table.FORMAT.stack.config(Path, At, P, V)`.
-    fn stack_config(
-        &mut self,
-        src: &SyntaxNode,
-        span: Span,
-        stack: &str,
-        keys: &[String],
-        scope: usize,
-        outer: &Rc,
-    ) -> L<Vec<Stmt>> {
-        if keys.is_empty() {
-            let d = Diagnostic::error(
-                span,
-                format!("stack {stack} has no key: its config would be every deployment's"),
-            )
-            .with_help(
-                "key it by the inputs that name a deployment, `key env: T` in its file, \
-                 or state the settings in the program",
-            );
-            self.diags.push(d);
-            return Err(Skip);
-        }
-        let mut rc = self.rc(src, scope, outer);
-        let mut body = Vec::new();
-        let mut row = Vec::new();
-        for k in keys {
-            row.push(self.hole(&mut rc, k, 0, &mut body)?);
-        }
-        let row = match row.len() {
-            1 => row.remove(0),
-            n => {
-                let mut args = vec![str_term(&vec!["%s"; n].join("/"))];
-                args.extend(row);
-                func("format", args)
-            }
-        };
-        let (path, value) = (var(&fresh(&mut rc, "Path")), var(&fresh(&mut rc, "Value")));
-        let cols = [("path", "string"), ("value", "any")]
-            .map(|(name, ty)| BindArg {
-                input: false,
-                name: name.into(),
-                ty: Some(TypeExpr::Name(ty.into())),
-            })
-            .to_vec();
-        let mut out = self.table_body(
-            &mut rc,
-            src,
-            crate::tables::STACK_CONFIG,
-            cols,
-            vec![path.clone(), value.clone()],
-            &mut body,
-        )?;
-        self.check_bound(&rc, &body, &[])?;
-        out.push(Stmt::Rule(RuleStmt {
-            head: atom_at(
-                "arg",
-                vec![
-                    str_term("settings"),
-                    row,
-                    path,
-                    value,
-                    str_term(crate::transform::NORMAL),
-                ],
-                span,
-            ),
-            body,
-        }));
-        Ok(out)
     }
 
     /// A table's source, `FORMAT(PATH)` or `FORMAT(git(REPO, REF, PATH))`,
@@ -2992,16 +2866,6 @@ impl<'u> Lowerer<'u> {
                     rc.uses.add(text, self.span_of(header.text_range()));
                     var(v)
                 }
-                _ if text == "_" && n.kind() == SETTINGS => {
-                    // `settings _`: every settings row that exists.
-                    let v = fresh(&mut rc, "Row");
-                    body.push(Lit::Pos(atom_at(
-                        crate::transform::SETTINGS_ROW,
-                        vec![var(&v)],
-                        span,
-                    )));
-                    var(&v)
-                }
                 _ if text == "_" => {
                     return self.error(
                         self.span_of(header.text_range()),
@@ -3010,20 +2874,15 @@ impl<'u> Lowerer<'u> {
                     );
                 }
                 _ if self.is_value(scope, text) => {
-                    let (kind, every) = if n.kind() == SETTINGS {
-                        ("settings row", "`settings _` for every row, or ")
-                    } else {
-                        ("resource", "")
-                    };
                     let d = Diagnostic::error(
                         self.span_of(header.text_range()),
                         format!(
                             "`{text}` is a value in scope, but a header name the clause does not \
-                             bind is the {kind}'s literal name: this is the {kind} \"{text}\""
+                             bind is the resource's literal name: this is the resource \"{text}\""
                         ),
                     )
                     .with_help(format!(
-                        "write {every}`\"{text}\"` for a {kind} named \"{text}\""
+                        "write `\"{text}\"` for a resource named \"{text}\""
                     ));
                     self.diags.push(d);
                     return Err(Skip);
@@ -3039,25 +2898,164 @@ impl<'u> Lowerer<'u> {
         self.check_bound(&rc, &body, &values)?;
         let rank = self.rank_tok(n)?;
         let body = (!body.is_empty()).then_some(body);
-        Ok(vec![if n.kind() == RESOURCE {
-            Stmt::Resource(Resource {
-                typ: str_term(&dotted_text(n, 1)),
-                name,
-                rank,
-                fields,
-                body,
-                reads: reads_at,
-                span,
-            })
+        Ok(vec![Stmt::Resource(Resource {
+            typ: str_term(&dotted_text(n, 1)),
+            name,
+            rank,
+            fields,
+            body,
+            reads: reads_at,
+            span,
+        })])
+    }
+
+    /// `settings { k = v .. } [@rank] [where B]` (R-38): each entry a
+    /// contribution to an input under the clause, at the block's rank
+    /// (normal unless marked): `arg(input, "", k, v, Rank) :- B, reads`. A
+    /// path is an input's (`region`), a leaf or an object of an object
+    /// input (`db.backup_days`, `db`), or a used module's (`traefik.email`,
+    /// its cell `(input, traefik, email)`). `settings from DOC` is
+    /// [`Self::settings_from`].
+    fn settings(&mut self, n: &SyntaxNode, scope: usize, outer: &Rc) -> L<Vec<Stmt>> {
+        let Some(block) = node(n, BLOCK) else {
+            return self.settings_from(n, scope, outer);
+        };
+        let mut rc = self.rc(n, scope, outer);
+        let mut body = self.clauses(&mut rc, n)?;
+        let mut reads = Vec::new();
+        let fields = self.fields(&mut rc, &block, &mut reads)?;
+        body.extend(reads);
+        let values: Vec<&Term> = fields.iter().map(|f| &f.value).collect();
+        self.check_bound(&rc, &body, &values)?;
+        let rank = self.rank_tok(n)?;
+        let mut out = Vec::new();
+        let mut failed = false;
+        for f in fields {
+            let Ok((cell, path)) = self.settings_target(scope, &f) else {
+                failed = true;
+                continue;
+            };
+            let rank = f.rank.or(rank).unwrap_or(Rank::Normal);
+            let head = atom_at(
+                "arg",
+                vec![
+                    str_term(crate::modules::INPUT),
+                    cell,
+                    str_term(&path),
+                    f.value,
+                    str_term(rank.name()),
+                ],
+                f.span,
+            );
+            out.push(if body.is_empty() {
+                Stmt::Fact(head)
+            } else {
+                Stmt::Rule(RuleStmt {
+                    head,
+                    body: body.clone(),
+                })
+            });
+        }
+        if failed { Err(Skip) } else { Ok(out) }
+    }
+
+    /// The input cell a settings entry gives, `(scope, path)`: the scope's
+    /// own input, or a used module's (`m.k`, relative to where the `use`
+    /// is). Whether the path names a field is checked once the inputs are
+    /// known (`modules::expand`).
+    fn settings_target(&mut self, scope: usize, f: &FieldAssign) -> L<(Term, String)> {
+        if matches!(f.op, FieldOp::Add) {
+            return self.error(
+                f.span,
+                "an input is given with `=`: `+=` adds to an attribute",
+            );
+        }
+        if f.key.contains('[') {
+            return self.error(
+                f.span,
+                format!("`{}`: a setting's path is an input's, by its fields", f.key),
+            );
+        }
+        let (head, rest) = match f.key.split_once('.') {
+            Some((h, r)) => (h, Some(r)),
+            None => (f.key.as_str(), None),
+        };
+        let own = self.own_scopes(scope);
+        let input = own.iter().any(|&s| {
+            let sc = &self.decls.scopes[s];
+            sc.values.contains(head) && !sc.lets.contains_key(head)
+        });
+        if input {
+            return Ok((str_term(""), f.key.clone()));
+        }
+        if let (Some(rest), Some(at)) = (
+            rest,
+            self.chain_of(scope)
+                .into_iter()
+                .find(|&s| self.decls.scopes[s].uses.contains_key(head)),
+        ) {
+            return Ok((self.scope_term(scope, at, str_term(head)), rest.to_string()));
+        }
+        let what = if self.find_let(scope, head).is_some() {
+            format!("`{head}` is a `let`, which the program computes")
+        } else if self.instance_in(scope, head).is_some() {
+            format!("`{head}` is a copy: its inputs are its instance block's")
         } else {
-            Stmt::Settings(Settings {
-                env: name,
-                rank,
-                fields,
-                body,
-                span,
+            format!("the program declares no input {head}")
+        };
+        let d = Diagnostic::error(f.span, format!("settings: `{}` is not an input", f.key))
+            .with_note(what)
+            .with_help(
+                "a settings block gives inputs, the program's own (`region = ..`, \
+                 `db.backup_days = ..`) and its used modules' (`traefik.acme_email = ..`)",
+            );
+        self.diags.push(d);
+        Err(Skip)
+    }
+
+    /// `settings from DOC [@rank] [where B]` (R-38): every leaf of the
+    /// document a contribution to the input at its path, `arg(input, "", P,
+    /// V, Rank) :- B, reads, table.FORMAT.settings(Path, At, P, V)`, which
+    /// `tables::expand_settings` makes one rule per input path, and a deny
+    /// for a leaf at a path that is no input's.
+    fn settings_from(&mut self, n: &SyntaxNode, scope: usize, outer: &Rc) -> L<Vec<Stmt>> {
+        let span = self.span(n);
+        let src = terms(n).next().ok_or(Skip)?;
+        let mut rc = self.rc(n, scope, outer);
+        let mut body = self.opt_body(&mut rc, n)?;
+        let rank = self.rank_tok(n)?.unwrap_or(Rank::Normal);
+        let (path, value) = (var(&fresh(&mut rc, "Path")), var(&fresh(&mut rc, "Value")));
+        let cols = [("path", "string"), ("value", "any")]
+            .map(|(name, ty)| BindArg {
+                input: false,
+                name: name.into(),
+                ty: Some(TypeExpr::Name(ty.into())),
             })
-        }])
+            .to_vec();
+        let mut out = self.table_body(
+            &mut rc,
+            &src,
+            crate::tables::SETTINGS_DOC,
+            cols,
+            vec![path.clone(), value.clone()],
+            &mut body,
+        )?;
+        self.check_bound(&rc, &body, &[])?;
+        out.push(Stmt::Rule(RuleStmt {
+            head: atom_at(
+                "arg",
+                vec![
+                    str_term(crate::modules::INPUT),
+                    str_term(""),
+                    path,
+                    value,
+                    str_term(rank.name()),
+                ],
+                span,
+            ),
+            body,
+        }));
+        Ok(out)
     }
 
     fn opt_body(&mut self, rc: &mut Rc, n: &SyntaxNode) -> L<Vec<Lit>> {
@@ -3156,15 +3154,14 @@ impl<'u> Lowerer<'u> {
         }])
     }
 
-    /// A `let`'s value: a reference is its key (a settings row's, a
-    /// resource's address, a live object's name); anything else the term.
+    /// A `let`'s value: a reference is its key (a resource's address, a
+    /// live object's name); anything else the term.
     fn let_value(&mut self, rc: &mut Rc, t: &SyntaxNode, body: &mut Vec<Lit>) -> L<Term> {
         if let Some(c) = Chain::of(t) {
             let mut pre = Vec::new();
             let mut rc2 = rc.clone();
             if let Ok(res) = self.probe(|l| l.resolve(&mut rc2, &c, &mut pre)) {
                 let key = match &res {
-                    Res::Settings { addr, path } if path.is_empty() => Some(addr.clone()),
                     Res::Ref { addr, path, .. } if path.is_empty() => Some(addr.clone()),
                     Res::World { addr, path, .. } if path.is_empty() => Some(addr.clone()),
                     _ => None,
@@ -3210,12 +3207,12 @@ impl<'u> Lowerer<'u> {
                     self.diags.push(d);
                     return Err(Skip);
                 }
-                if add || rank.is_some() {
-                    return self.error(span, "an input is set with `=` and no rank");
+                if add {
+                    return self.error(span, "an input is set with `=`");
                 }
-                // A normal-rank contribution to the input's cell, as `--set`
-                // gives; written to the cell itself, so that its condition
-                // may read another input.
+                // A contribution to the input's cell, normal unless ranked,
+                // as a settings block's (R-38); written to the cell itself,
+                // so that its condition may read another input.
                 let value = self.term(&mut rc, &rhs, Pos::Value, &mut body)?;
                 let head = atom_at(
                     "arg",
@@ -3224,7 +3221,7 @@ impl<'u> Lowerer<'u> {
                         str_term(""),
                         str_term(&k),
                         value,
-                        str_term(crate::transform::NORMAL),
+                        str_term(rank.unwrap_or(Rank::Normal).name()),
                     ],
                     span,
                 );
@@ -3328,12 +3325,10 @@ impl<'u> Lowerer<'u> {
         body.extend(pre);
         let (typ, addr, path) = match res {
             Res::Ref { typ, addr, path } if !path.is_empty() => (typ, addr, path),
-            Res::Settings { addr, path } if !path.is_empty() => (str_term("settings"), addr, path),
             _ => {
                 return self.error(
                     span,
-                    "`set` sets a resource's attribute (`r.tags`, `T[e].p`), a settings row's \
-                     leaf (`settings[e].p`) or an input",
+                    "`set` sets a resource's attribute (`r.tags`, `T[e].p`) or an input",
                 );
             }
         };
@@ -3342,9 +3337,6 @@ impl<'u> Lowerer<'u> {
         };
         let s = &self.decls.scopes[self.decl_scope(scope)];
         let block = match (&typ, &addr) {
-            (Term::Val(Value::Str(t)), Term::Val(Value::Str(a))) if t == "settings" => {
-                s.settings.contains(a).then(|| format!("settings {a}"))
-            }
             (Term::Val(Value::Str(t)), Term::Val(Value::Str(a))) => s
                 .resources
                 .get(a)
@@ -3379,19 +3371,12 @@ impl<'u> Lowerer<'u> {
                 let op = if head.pred == "arg" { "=" } else { "+=" };
                 let (t, p) = (s(0).unwrap(), s(2).unwrap());
                 let target = match t.as_str() {
-                    "settings" => format!("settings[{}]{}", a[1], crate::ir::path_suffix(&p)),
                     crate::modules::INPUT if s(1).as_deref() == Some("") => p.clone(),
                     crate::modules::INPUT => format!("{}.{p}", s(1).unwrap_or_default()),
                     _ => format!("{t}[{}]{}", a[1], crate::ir::path_suffix(&p)),
                 };
                 Some(format!("`set {target} {op} {}{cond}`", a[3]))
             }
-            ("setting", 3) if s(1).is_some() => Some(format!(
-                "`set settings[{}]{} = {}{cond}`",
-                a[0],
-                crate::ir::path_suffix(&s(1).unwrap()),
-                a[2]
-            )),
             ("output", 2) if s(0).is_some() => {
                 Some(format!("`output {} = {}{cond}`", s(0).unwrap(), a[1]))
             }
@@ -3473,15 +3458,6 @@ impl<'u> Lowerer<'u> {
                     s(0).unwrap(),
                     a[1],
                     crate::ir::path_suffix(&s(2).unwrap())
-                ),
-            ),
-            ("setting", 3) if s(1).is_some() => (
-                format!("`{}` is the core's spelling of a read", n.text()),
-                format!(
-                    "write `{} = settings[{}]{}` (H-15)",
-                    a[2],
-                    a[0],
-                    crate::ir::path_suffix(&s(1).unwrap())
                 ),
             ),
             ("output", 3) if s(0).is_some() && s(1).is_some() => (
@@ -3642,10 +3618,7 @@ impl<'u> Lowerer<'u> {
                     // when the walk to it does.
                     None if matches!(
                         res,
-                        Res::Ref { .. }
-                            | Res::Var { .. }
-                            | Res::Value { .. }
-                            | Res::Settings { .. }
+                        Res::Ref { .. } | Res::Var { .. } | Res::Value { .. }
                     ) =>
                     {
                         let t = self.realize(rc, res, Pos::Content, out, span)?;
@@ -3656,8 +3629,8 @@ impl<'u> Lowerer<'u> {
                     None => {
                         return self.error(
                             span,
-                            "`has` takes an attribute of a resource (`has r.p`), a settings \
-                             leaf, a value name or a field of a value",
+                            "`has` takes an attribute of a resource (`has r.p`), a value name \
+                             or a field of a value",
                         );
                     }
                 }
@@ -5039,20 +5012,19 @@ impl<'u> Lowerer<'u> {
                 return self.value(rc, c, pre, span);
             }
             // `settings.x` names a resource called `settings` in scope; a
-            // settings row is only ever `settings[e]`.
+            // settings row, `settings[e]`, is gone (R-38).
             let resource =
                 matches!(c.ops.first(), Some(Op::Field(_))) && self.resource(rc.scope, h).is_some();
             if c.head_kind == SETTINGS_KW && !c.is_bare() && !resource {
-                return self.settings(rc, c, pre, span);
+                return self.settings_read(c, span);
             }
             if h == "world" && !c.ops.is_empty() {
                 return self.world(rc, c, pre, span);
             }
         }
         if c.is_bare() {
-            // `settings` alone is the pseudo-type's name (`type_lattice`).
             if c.head_kind == SETTINGS_KW && !rc.vars.contains_key(h) {
-                return Ok(Res::Type(h.to_string()));
+                return self.settings_read(c, span);
             }
             return self.bare(rc, h, span);
         }
@@ -5149,10 +5121,6 @@ impl<'u> Lowerer<'u> {
             }
         };
         match ty {
-            VType::Settings => {
-                let path = self.segs(rc, &c.ops, pre)?;
-                Ok(Res::Settings { addr: key, path })
-            }
             VType::Ref(typ) => {
                 let path = self.segs(rc, &c.ops, pre)?;
                 Ok(Res::Ref {
@@ -5238,25 +5206,29 @@ impl<'u> Lowerer<'u> {
         Ok(out)
     }
 
-    /// `settings[e].path`: a settings row by its key.
-    fn settings(&mut self, rc: &mut Rc, c: &Chain, pre: &mut Vec<Lit>, span: Span) -> L<Res> {
-        let addr = match c.ops.first() {
-            Some(Op::Index(ts, _)) if ts.len() == 1 => {
-                self.bind(true, |l| l.term(rc, &ts[0], Pos::Content, pre))?
-            }
-            Some(Op::Field(n)) => {
-                let d = Diagnostic::error(
-                    span,
-                    format!("a settings row is named by its key: `settings[\"{n}\"]`"),
-                )
-                .with_help("`.` is static, `[ ]` is a key (H section 5.1)");
-                self.diags.push(d);
-                return Err(Skip);
-            }
-            _ => return self.error(span, "a settings row is read as `settings[e].path`"),
+    /// `settings[e].path`, `settings` alone: the settings rows and their
+    /// pseudo-type are gone (R-38); a setting is an input, read by its name.
+    fn settings_read(&mut self, c: &Chain, span: Span) -> L<Res> {
+        let path: Vec<String> = c
+            .ops
+            .iter()
+            .skip_while(|o| !matches!(o, Op::Field(_)))
+            .filter_map(|o| match o {
+                Op::Field(f) => Some(f.clone()),
+                _ => None,
+            })
+            .collect();
+        let read = match path.is_empty() {
+            true => "the input by its name".to_string(),
+            false => format!("the input by its name, `{}`", path.join(".")),
         };
-        let path = self.segs(rc, &c.ops[1..], pre)?;
-        Ok(Res::Settings { addr, path })
+        let d = Diagnostic::error(span, "settings rows are gone (R-38): a setting is an input")
+            .with_help(format!(
+                "declare it, `input k: T = default`, give it per deployment with `settings {{ k = \
+                 v }} where env == \"prod\"`, and read {read}"
+            ));
+        self.diags.push(d);
+        Err(Skip)
     }
 
     /// `world.T[e].path`: the provider's inventory.
@@ -5778,23 +5750,6 @@ impl<'u> Lowerer<'u> {
                 );
                 self.path_of(rc, v, path[1..].to_vec(), pre, span)
             }
-            Res::Settings { addr, path } => {
-                let (key, rest) = split_fields(&path);
-                if key.is_empty() {
-                    return self.error(span, "a settings row is read by a path: `settings.prod.x`");
-                }
-                let last = key.rsplit('.').next().unwrap_or(&key).to_string();
-                let v = self.read_var(
-                    rc,
-                    "setting",
-                    vec![addr, str_term(&key)],
-                    2,
-                    &last,
-                    pre,
-                    span,
-                );
-                self.path_of(rc, v, rest, pre, span)
-            }
             Res::Output {
                 inst,
                 key,
@@ -5901,11 +5856,6 @@ impl<'u> Lowerer<'u> {
                 )),
                 Seg::I(_) => None,
             },
-            Res::Settings { addr, path } => {
-                let (key, rest) = split_fields(path);
-                (!key.is_empty() && rest.is_empty())
-                    .then(|| atom_at("setting", vec![addr.clone(), str_term(&key), value], span))
-            }
             Res::Output {
                 inst, key, path, ..
             } if path.is_empty() => Some(atom_at(
@@ -6043,20 +5993,6 @@ fn atom_terms(a: &Atom) -> Vec<&Term> {
         .iter()
         .chain(a.record.iter().flat_map(|r| r.values()))
         .collect()
-}
-
-/// The leading fields of a path as a dotted key, and the rest.
-fn split_fields(path: &[Seg]) -> (String, Vec<Seg>) {
-    let n = path.iter().take_while(|s| matches!(s, Seg::F(_))).count();
-    let key = path[..n]
-        .iter()
-        .map(|s| match s {
-            Seg::F(f) => f.as_str(),
-            Seg::I(_) => "",
-        })
-        .collect::<Vec<_>>()
-        .join(".");
-    (key, path[n..].to_vec())
 }
 
 /// A constant path as today's string: `a.b[0].c`.
@@ -6232,16 +6168,6 @@ mod tests {
                             fmt_term(&r.name)
                         )
                     }
-                    Stmt::Settings(st) => {
-                        let fields = st
-                            .fields
-                            .iter()
-                            .map(|f| format!("{} = {}", f.key, fmt_term(&f.value)))
-                            .collect::<Vec<_>>()
-                            .join(", ");
-                        let body = st.body.as_deref().map(lits).unwrap_or_default();
-                        format!("settings {} {{ {fields} }} :- {body}", fmt_term(&st.env))
-                    }
                     Stmt::Instance(i) => {
                         let inputs = i
                             .inputs
@@ -6409,25 +6335,24 @@ mod tests {
         let got = lower(
             "input env: string = \"dev\"\n\
              resource db.pg other { size = 1 }\n\
-             let cfg = settings[env]\n\
-             resource net.vpc v { cidr = cfg.net.cidr, name = \"${cfg.name}-vpc\" }\n\
              let pg = db.pg[\"main\"]\n\
-             deny \"x\" where cfg.x.y != \"z\", pg.size > 3\n",
+             resource net.vpc v { cidr = pg.net.cidr, name = \"${pg.name}-vpc\" }\n\
+             deny \"x\" where pg.size > 3\n",
         );
         assert_eq!(
             &got[1..],
             [
-                "let(\"cfg\", Env, \"normal\") :- env(Env)",
-                "resource \"net.vpc\" \"v\" { cidr = Cidr, name = format(\"%s-vpc\", Name) } :- \
-                 cfg(Cfg), setting(Cfg, \"net.cidr\", Cidr), setting(Cfg, \"name\", Name)",
                 "let(\"pg\", \"main\", \"normal\")",
-                "deny(\"x\") :- cfg(Cfg), setting(Cfg, \"x.y\", Y), Y != \"z\", pg(Pg), \
-                 attr(\"db.pg\", Pg, \"size\", Size), Size > 3",
+                "resource \"net.vpc\" \"v\" { cidr = ref(\"db.pg\", Pg, \"net.cidr\"), name = \
+                 format(\"%s-vpc\", Name) } :- pg(Pg), attr(\"db.pg\", Pg, \"name\", Name)",
+                "deny(\"x\") :- pg(Pg), attr(\"db.pg\", Pg, \"size\", Size), Size > 3",
             ]
         );
-        let e = error("let x = settings[\"a\"]\nlet x = 1 where q(1)\np(x.y) where q(1)\n");
+        let e = error(
+            "resource db.pg a {}\nlet x = db.pg[\"a\"]\nlet x = 1 where q(1)\np(x.y) where q(1)\n",
+        );
         assert!(
-            e.contains("`let x` is a settings row in one row and a value in another"),
+            e.contains("`let x` is a db.pg reference in one row and a value in another"),
             "{e}"
         );
     }

@@ -1,12 +1,12 @@
 edition 2026
 
 # The baseline every stack applies, `use baseline`: a team tag, audit
-# sinks, no public database. `env` is the using stack's.
-
+# sinks, no public database. `env` is the using stack's; its input is the
+# stack's to give, by its path (config/dform/prod.yaml's `baseline.audit`).
+input audit { enabled: bool = false, sinks: list(string) = ["s3"] }
 # Lattices for paths several authors contribute to. Object paths such as
 # `tags` are maps by default; a list is one value unless declared a set.
 type_lattice(iam.policy, "statements", "set")
-type_lattice(settings, "audit.sinks", "set")
 
 # Example: add a shared tag to everything.
 set r.tags = { team: "platform" } where r in resource
@@ -23,12 +23,6 @@ set p.statements = [{ action: "org.read", resource: "org" }] where {
 deny "db must not be public" { resource: pg } where pg in db.postgres, not pg.public == false
 
 #| Prod should enable audit logging.
-warn "prod should enable audit logging" { env: "prod" } where {
-  env == "prod"
-  not settings["prod"].audit.enabled
-}
-
-# Example: policy pack can add a sink without owning the whole list.
-set settings["prod"].audit.sinks = ["s3"]
+warn "prod should enable audit logging" { env: "prod" } where env == "prod", not audit.enabled
 
 # Networking invariants live in `stdlib_net.df`.

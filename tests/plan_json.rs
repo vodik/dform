@@ -66,7 +66,10 @@ fn plan_json_has_every_section() {
         password["after"],
         json!({"sensitive": "google.secret_manager_secret_version[\"db_pw\"].secret_data"})
     );
-    assert_eq!(p["pending_groups"][0]["pattern"], "google.container_node_pool[?]");
+    assert_eq!(
+        p["pending_groups"][0]["pattern"],
+        "google.container_node_pool[?]"
+    );
     assert_eq!(p["undetermined"][0]["kind"], "undetermined");
     assert_eq!(p["undetermined"][0]["after"], 1);
     assert_eq!(p["apply_order"][1]["tick"], 2);
@@ -275,7 +278,7 @@ fn plan_json_why_explains_each_deformation() {
         why[0]["at"]
             .as_str()
             .unwrap()
-            .ends_with("examples/gke/stacks/gke_two_phase.df:38"),
+            .ends_with("examples/gke/stacks/gke_two_phase.df:39"),
         "{}",
         why[0]
     );
@@ -287,9 +290,13 @@ fn plan_json_why_explains_each_deformation() {
         "{}",
         why[0]
     );
+    // The settings block that gives the input it reads, where it is
+    // written (R-38).
     assert!(
         why.iter().any(|b| b["kind"] == "fact"
-            && b["text"] == "settings[\"dev\"].gke.subnet_cidr = 10.141.76.0/22"),
+            && b["at"].as_str().unwrap().ends_with("gke_two_phase.df:30")
+            && b["text"]
+                == "input gke = {control_plane_cidr: 172.16.3.96/28, subnet_cidr: 10.141.76.0/22}"),
         "{subnet}"
     );
     // A pending deformation is explained too.

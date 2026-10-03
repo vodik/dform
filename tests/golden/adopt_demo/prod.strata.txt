@@ -1,11 +1,10 @@
 exit: ok
 -- stdout --
-== examples/adopt/stacks/adopt_demo.df: 80 nodes, 144 edges (54 negative)
+== examples/adopt/stacks/adopt_demo.df: 78 nodes, 143 edges (52 negative)
    STRATIFIED, 9 strata
    stratum 0:
      (arg, input, env)
      (arg, output, vpc)
-     (arg, settings, network.vpc_cidr)
      (want, compute.vm)
      (want, db.postgres)
      (want, iam.policy)
@@ -39,7 +38,6 @@ exit: ok
      (arg, net.vpc_peering, id)
      (attr, input, env)
      (attr, output, vpc)
-     (attr, settings, network.vpc_cidr)
    stratum 2:
      (adopt, net.vpc)
      (arg, input, network::vpc_net)

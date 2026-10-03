@@ -188,7 +188,6 @@ apply-order edge, not its content read now (`docs/grammar.md'
      (instance name: (identifier) @font-lock-function-name-face)
      (provider name: (identifier) @font-lock-function-name-face)
      (resource name: (identifier) @font-lock-function-name-face)
-     (settings name: (identifier) @font-lock-function-name-face)
      (decl name: (dotted_name (identifier) @font-lock-function-name-face))
      (extern name: (dotted_name (identifier) @font-lock-function-name-face))
      (input_relation name: (identifier) @font-lock-function-name-face)
@@ -207,9 +206,9 @@ apply-order edge, not its content read now (`docs/grammar.md'
    "(call
       function: (identifier) @font-lock-builtin-face
       (#match? @font-lock-builtin-face
-        \"^\\(count\\|sum\\|min\\|max\\|any\\|all\\|collect_set\\|collect_list\\|format\\|ref\\|attr\\|want\\|arg\\|setting\\|output\\|input\\|inet\\|inet_subnet\\|inet_host\\|declassify\\|cloud_attr\\|cloud_exists\\)$\"))
+        \"^\\(count\\|sum\\|min\\|max\\|any\\|all\\|collect_set\\|collect_list\\|format\\|ref\\|attr\\|want\\|arg\\|output\\|input\\|inet\\|inet_subnet\\|inet_host\\|declassify\\|cloud_attr\\|cloud_exists\\)$\"))
     ((identifier) @font-lock-builtin-face
-      (#match? @font-lock-builtin-face \"^\\(settings\\|world\\)$\"))
+      (#match? @font-lock-builtin-face \"^world$\"))
     ((identifier) @font-lock-builtin-face
       (#eq? @font-lock-builtin-face \"_\"))"
 

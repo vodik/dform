@@ -16,6 +16,6 @@ resource net.vpc _ {}
 instance m _ {}
 set compute.vm[_].tags = { a: "b" }
 resource net.subnet s { cidr = _ }
-settings env @default { x = 1 }
+# (A settings block has no name, R-38: nothing to write `_` for.)
 resource net.vpc env {}
 instance m env {}

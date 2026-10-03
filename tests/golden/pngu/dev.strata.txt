@@ -1,21 +1,11 @@
 exit: ok
 -- stdout --
-== examples/pngu/stacks/pngu.df: 162 nodes, 439 edges (290 negative)
+== examples/pngu/stacks/pngu.df: 145 nodes, 292 edges (85 negative)
    STRATIFIED, 8 strata
    stratum 0:
      (arg, google.client_config, access_token)
      (arg, google.secret_manager_secret_version, secret_data)
      (arg, input, env)
-     (arg, settings, gke.control_plane_cidr)
-     (arg, settings, gke.pods_cidr)
-     (arg, settings, gke.services_cidr)
-     (arg, settings, gke.static_ips.pngu-grpc.type)
-     (arg, settings, gke.subnet_cidr)
-     (arg, settings, network_name)
-     (arg, settings, project_id)
-     (arg, settings, project_name)
-     (arg, settings, region)
-     (arg, settings, regional_proxy_cidr)
      (want, google.client_config)
      (want, google.container_node_pool)
      (want, google.secret_manager_secret_version)
@@ -41,19 +31,10 @@ exit: ok
      (attr, google.client_config, access_token)
      (attr, google.secret_manager_secret_version, secret_data)
      (attr, input, env)
-     (attr, settings, gke.control_plane_cidr)
-     (attr, settings, gke.pods_cidr)
-     (attr, settings, gke.services_cidr)
-     (attr, settings, gke.static_ips.pngu-grpc.type)
-     (attr, settings, gke.subnet_cidr)
-     (attr, settings, network_name)
-     (attr, settings, project_id)
-     (attr, settings, project_name)
-     (attr, settings, region)
-     (attr, settings, regional_proxy_cidr)
      peering
    stratum 2:
-     (arg, let, cfg)
+     (arg, input, gcp)
+     (arg, input, gke)
      (arg, output, active_env)
      (attr, google.container_node_pool, id)
      (attr, k8s.deployment, id)
@@ -64,7 +45,8 @@ exit: ok
      (attr, k8s.secret, uid)
      env
    stratum 3:
-     (attr, let, cfg)
+     (attr, input, gcp)
+     (attr, input, gke)
      (attr, output, active_env)
    stratum 4:
      (arg, alert_metrics_pack, enable_standard_gke_alerts)
@@ -117,7 +99,8 @@ exit: ok
      (want, google.compute_subnetwork)
      (want, google.container_cluster)
      (want, google.monitoring_dashboard)
-     cfg
+     gcp
+     gke
      provider_config
      provider_expect_account
    stratum 5:

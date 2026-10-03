@@ -14,21 +14,14 @@ examples/advanced/stacks/dform-advanced.df
 
 edition 2026
 input env: enum("staging", "prod") = "staging"
+input tenants: list(string)
+input mesh { vpcs: list(any) }
 
 # The mock's built-in fake schema.
 provider fake
 
-# List-valued settings (human-friendly)
-settings staging {
-  tenants = ["tenant_a", "tenant_b"]
-  mesh.vpcs = [
-    { name: "core_a", net: inet("10.210.0.0/16") },
-    { name: "core_b", net: inet("10.220.0.0/16") },
-    { name: "core_c", net: inet("10.230.0.0/16") }
-  ]
-}
-
-settings prod {
+# List-valued settings (human-friendly), the same in every environment.
+settings {
   tenants = ["tenant_a", "tenant_b"]
   mesh.vpcs = [
     { name: "core_a", net: inet("10.210.0.0/16") },
@@ -41,7 +34,7 @@ settings prod {
 corp_net(inet("10.100.0.0/12"))
 
 # Explode tenant list into a relation (Pattern A), with index.
-tenant(t, i) where t = settings[env].tenants[i]
+tenant(t, i) where t = tenants[i]
 
 # Shared services VPC (always exists)
 resource net.vpc shared {
@@ -121,7 +114,7 @@ decl mesh_allow_direct_route(from, to)
 # We immediately explode it into row facts, then derive edges, then rely on
 # reachability closure to fill in the implied connectivity.
 
-mesh_vpc(name, cidr, i) where settings[env].mesh.vpcs[i] = { name, net: cidr }
+mesh_vpc(name, cidr, i) where mesh.vpcs[i] = { name, net: cidr }
 
 resource net.vpc name {
   cidr
@@ -200,64 +193,31 @@ warn "user is effectively admin (via group nesting)" { user: u } where in_group(
         (string_content)))
     (string
       (string_content)))
+  (input
+    (identifier)
+    (type
+      (dotted_name
+        (identifier))
+      (type
+        (dotted_name
+          (identifier)))))
+  (input
+    (identifier)
+    (input_fields
+      (attribute_declaration
+        (block_path
+          (identifier))
+        (type
+          (dotted_name
+            (identifier))
+          (type
+            (dotted_name
+              (identifier)))))))
   (comment)
   (provider
     (identifier))
   (comment)
   (settings
-    (identifier)
-    (block
-      (field
-        (block_path
-          (identifier))
-        (list
-          (string
-            (string_content))
-          (string
-            (string_content))))
-      (field
-        (block_path
-          (identifier)
-          (identifier))
-        (list
-          (object
-            (object_field
-              (identifier)
-              (string
-                (string_content)))
-            (object_field
-              (identifier)
-              (call
-                (identifier)
-                (arguments
-                  (string
-                    (string_content))))))
-          (object
-            (object_field
-              (identifier)
-              (string
-                (string_content)))
-            (object_field
-              (identifier)
-              (call
-                (identifier)
-                (arguments
-                  (string
-                    (string_content))))))
-          (object
-            (object_field
-              (identifier)
-              (string
-                (string_content)))
-            (object_field
-              (identifier)
-              (call
-                (identifier)
-                (arguments
-                  (string
-                    (string_content))))))))))
-  (settings
-    (identifier)
     (block
       (field
         (block_path
@@ -329,11 +289,7 @@ warn "user is effectively admin (via group nesting)" { user: u } where in_group(
       (comparison
         (identifier)
         (index_expression
-          (member_expression
-            (index_expression
-              (identifier)
-              (identifier))
-            (identifier))
+          (identifier)
           (identifier)))))
   (comment)
   (resource
@@ -696,11 +652,7 @@ warn "user is effectively admin (via group nesting)" { user: u } where in_group(
       (comparison
         (index_expression
           (member_expression
-            (member_expression
-              (index_expression
-                (identifier)
-                (identifier))
-              (identifier))
+            (identifier)
             (identifier))
           (identifier))
         (object

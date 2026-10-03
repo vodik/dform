@@ -33,18 +33,16 @@ pub fn lower(program: &Program) -> Result<Lowered> {
     // For now, keep Import statements in the AST but drop them before eval.
     let crate::modules::Expanded {
         program: expanded,
-        inputs,
+        mut inputs,
         secret_outputs,
     } = crate::modules::expand(&program)?;
     check_mixed(&expanded)?;
-    let expanded = desugar_settings(&expanded)?;
     let (expanded, externs, extern_fns) = drop_metadata(&expanded);
     let expanded = desugar_resources(&expanded)?;
     let expanded = desugar_comprehensions(&expanded)?;
     let mut expanded = declassified(lower_contributions(&expanded)?);
-    // A stack's config contributes per settings path the program knows.
-    expanded = crate::tables::expand_config(expanded);
-    expanded = settings_rows(expanded);
+    // `settings from DOC` contributes per input path (R-38).
+    expanded = crate::tables::expand_settings(expanded, &mut inputs);
     crate::externs::check(&expanded, &extern_fns)?;
     // The cells of secret inputs and outputs, for the Redactor.
     let secret_inputs = inputs
@@ -125,21 +123,14 @@ fn reject_pending(stmts: &[Stmt]) -> Result<()> {
 /// Rank of a contribution in the core form `arg(T, A, P, V, Rank)`.
 pub const NORMAL: &str = "normal";
 
-/// Pseudo-types of the attribute aggregate (E §2.5): settings are addressed
-/// by environment, outputs by component scope ("" for the root program).
-pub const SETTINGS: &str = "settings";
-/// `settings_row(R)`: the settings rows that exist, the rows `settings _`
-/// contributes to.
-pub const SETTINGS_ROW: &str = "settings_row";
+/// A pseudo-type of the attribute aggregate (E §2.5): outputs are
+/// addressed by component scope ("" for the root program).
 pub const OUTPUT: &str = "output";
 
 /// Pseudo-types of the attribute aggregate that are not resources:
-/// settings, outputs, inputs and lets (`modules::INPUT`, `modules::LET`).
+/// outputs, inputs and lets (`modules::INPUT`, `modules::LET`).
 pub fn is_pseudo_type(typ: &str) -> bool {
-    matches!(
-        typ,
-        SETTINGS | OUTPUT | crate::modules::INPUT | crate::modules::LET
-    )
+    matches!(typ, OUTPUT | crate::modules::INPUT | crate::modules::LET)
 }
 
 fn str_term(s: &str) -> Term {
@@ -151,7 +142,6 @@ fn contribution_parts(a: &Atom) -> Option<(Term, Term, Term, Term)> {
     let g = |i: usize| a.args[i].clone();
     match (a.pred.as_str(), a.args.len()) {
         ("arg", 4) | ("arg_add", 4) => Some((g(0), g(1), g(2), g(3))),
-        ("setting", 3) | ("setting_add", 3) => Some((str_term(SETTINGS), g(0), g(1), g(2))),
         ("output", 3) => Some((str_term(OUTPUT), g(0), g(1), g(2))),
         ("output", 2) => Some((str_term(OUTPUT), str_term(""), g(0), g(1))),
         _ => None,
@@ -160,10 +150,10 @@ fn contribution_parts(a: &Atom) -> Option<(Term, Term, Term, Term)> {
 
 /// E §2.5 path normalization at compile time, when the path is a constant: a
 /// resource attribute path `a.b.c` contributes `{b: {c: V}}` to `a` (the fake
-/// provider's attributes are all top-level keys). Settings and outputs keep
-/// their full key: each is its own declared leaf.
+/// provider's attributes are all top-level keys). Outputs keep their full
+/// key: each is its own declared leaf.
 pub fn normalize_contribution(typ: &str, path: &str, value: Term) -> (String, Term) {
-    if typ == SETTINGS || typ == OUTPUT {
+    if typ == OUTPUT {
         return (path.to_string(), value);
     }
     let mut segs = path.split('.');
@@ -220,7 +210,6 @@ fn attr_read(a: Atom) -> Result<Atom> {
         return Ok(a);
     };
     if let (Term::Val(Value::Str(t)), Term::Val(Value::Str(p))) = (&typ, &path)
-        && t != SETTINGS
         && t != OUTPUT
         && p.contains('.')
     {
@@ -252,8 +241,8 @@ fn attr_lits(body: Vec<Lit>) -> Result<Vec<Lit>> {
         .collect()
 }
 
-/// Last lowering pass: every contribution head (`arg`, `arg_add`, `setting`,
-/// `setting_add`, `output`) becomes the core form `arg/5`, and every body
+/// Last lowering pass: every contribution head (`arg`, `arg_add`,
+/// `output`) becomes the core form `arg/5`, and every body
 /// read of one becomes a read of `attr/4`.
 fn lower_contributions(program: &Program) -> Result<Program> {
     let mut out = Vec::new();
@@ -396,14 +385,6 @@ fn apply_decls(program: &Program) -> Result<Program> {
         vec!["type".into(), "name".into(), "path".into(), "value".into()],
     );
     schemas.insert(
-        "setting".to_string(),
-        vec!["env".into(), "key".into(), "value".into()],
-    );
-    schemas.insert(
-        "setting_add".to_string(),
-        vec!["env".into(), "key".into(), "value".into()],
-    );
-    schemas.insert(
         "output".to_string(),
         vec!["scope".into(), "key".into(), "value".into()],
     );
@@ -472,12 +453,6 @@ fn rewrite_stmt_records(stmt: Stmt, schemas: &BTreeMap<String, Vec<String>>) -> 
                 u.clause = Some(rewrite_lits_records(b, schemas)?);
             }
             Stmt::Use(u)
-        }
-        Stmt::Settings(mut s) => {
-            if let Some(b) = s.body {
-                s.body = Some(rewrite_lits_records(b, schemas)?);
-            }
-            Stmt::Settings(s)
         }
         Stmt::Resource(mut r) => {
             if let Some(b) = r.body {
@@ -563,169 +538,6 @@ fn rewrite_atom_records(
     atom.args = args;
     atom.record = None;
     Ok(atom)
-}
-
-/// `settings E [@rank] { [for body] k = v ... }` is one contribution per
-/// leaf to the `settings` pseudo-type: `arg(settings, E, k, v, Rank)`. An
-/// object value is flattened into dotted leaves, each a declared key.
-fn desugar_settings(program: &Program) -> Result<Program> {
-    let mut out = Vec::new();
-    for stmt in &program.statements {
-        match stmt {
-            Stmt::Settings(s) => {
-                let body = s.body.clone().unwrap_or_default();
-                for f in &s.fields {
-                    let rank = f.rank.or(s.rank).unwrap_or(Rank::Normal);
-                    let mut leaves = Vec::new();
-                    flatten_settings(&mut leaves, &f.key, f.value.clone());
-                    for (key, value) in leaves {
-                        let head = Atom {
-                            pred: "arg".to_string(),
-                            args: vec![
-                                str_term(SETTINGS),
-                                s.env.clone(),
-                                str_term(&key),
-                                value,
-                                str_term(rank.name()),
-                            ],
-                            record: None,
-                            span: f.span,
-                        };
-                        out.push(fact_or_rule(head, &body));
-                    }
-                }
-            }
-            _ => out.push(stmt.clone()),
-        }
-    }
-    Ok(Program { statements: out })
-}
-
-fn flatten_settings(out: &mut Vec<(String, Term)>, key: &str, val: Term) {
-    match val {
-        Term::Obj(m) => {
-            for (k, v) in m {
-                let next = if key.is_empty() {
-                    k
-                } else {
-                    format!("{key}.{k}")
-                };
-                flatten_settings(out, &next, v);
-            }
-        }
-        other => out.push((key.to_string(), other)),
-    }
-}
-
-/// `settings _ { .. }` contributes to `settings_row(R)`, every settings row
-/// that exists: one something writes (a named block, `set settings[e]`,
-/// the stack's `config` for the key) or the program reads (`settings[e]`).
-/// A write's row holds where its rule's body holds; a read's where the
-/// literals before the read hold. Literals that read the settings
-/// (directly or through a relation that does) are left out of a row's
-/// body, so the rows never wait on the defaults they receive. Nothing is
-/// added to a program without `settings _`.
-fn settings_rows(mut program: Program) -> Program {
-    let uses = |r: &RuleStmt| {
-        r.body
-            .iter()
-            .any(|l| matches!(l, Lit::Pos(a) if a.pred == SETTINGS_ROW))
-    };
-    if !program
-        .statements
-        .iter()
-        .any(|s| matches!(s, Stmt::Rule(r) if uses(r)))
-    {
-        return program;
-    }
-    let is_settings =
-        |t: Option<&Term>| !matches!(t, Some(Term::Val(Value::Str(s))) if s != SETTINGS);
-    // The relations that read a settings cell, however indirectly (a
-    // variable type may be the settings).
-    let reads = |l: &Lit| match l {
-        Lit::Pos(a) | Lit::Not(a) => {
-            (matches!(a.pred.as_str(), "attr" | "arg" | "arg_add") && is_settings(a.args.first()))
-                || matches!(a.pred.as_str(), "setting" | "setting_add")
-        }
-        _ => false,
-    };
-    let mut tainted: BTreeSet<String> = BTreeSet::new();
-    loop {
-        let before = tainted.len();
-        for st in &program.statements {
-            if let Stmt::Rule(r) = st
-                && r.body.iter().any(|l| {
-                    reads(l) || matches!(l, Lit::Pos(a) | Lit::Not(a) if tainted.contains(&a.pred))
-                })
-            {
-                tainted.insert(r.head.pred.clone());
-            }
-        }
-        if tainted.len() == before {
-            break;
-        }
-    }
-    let row = |key: &Term, prefix: &[Lit]| -> Option<Stmt> {
-        let kept: Vec<Lit> = prefix
-            .iter()
-            .filter(|l| match l {
-                Lit::Pos(a) => !reads(l) && !tainted.contains(&a.pred) && a.pred != SETTINGS_ROW,
-                Lit::Eq(..) => true,
-                _ => false,
-            })
-            .cloned()
-            .collect();
-        let bound = bound_by(&kept.iter().collect::<Vec<_>>());
-        let kept: Vec<Lit> = kept
-            .into_iter()
-            .filter(|l| match l {
-                Lit::Eq(a, b) => [a, b]
-                    .iter()
-                    .all(|t| count_vars_in_term(t).keys().all(|v| bound.contains(v))),
-                _ => true,
-            })
-            .collect();
-        if !count_vars_in_term(key).keys().all(|v| bound.contains(v)) {
-            return None;
-        }
-        let head = Atom {
-            pred: SETTINGS_ROW.to_string(),
-            args: vec![key.clone()],
-            record: None,
-            span: Span::default(),
-        };
-        Some(fact_or_rule(head, &kept))
-    };
-    let mut rows = Vec::new();
-    for st in &program.statements {
-        let (head, body): (&Atom, &[Lit]) = match st {
-            Stmt::Fact(a) => (a, &[]),
-            Stmt::Rule(r) if !uses(r) => (&r.head, &r.body),
-            _ => continue,
-        };
-        if matches!(head.pred.as_str(), "arg" | "arg_add")
-            && matches!(head.args.first(), Some(Term::Val(Value::Str(s))) if s == SETTINGS)
-            && let Some(key) = head.args.get(1)
-        {
-            rows.extend(row(key, body));
-        }
-        for (k, l) in body.iter().enumerate() {
-            if let Lit::Pos(a) | Lit::Not(a) = l
-                && a.pred == "attr"
-                && matches!(a.args.first(), Some(Term::Val(Value::Str(s))) if s == SETTINGS)
-                && let Some(key) = a.args.get(1)
-            {
-                rows.extend(row(key, &body[..k]));
-            }
-        }
-    }
-    let mut seen = BTreeSet::new();
-    for r in rows {
-        if seen.insert(format!("{r:?}")) {
-            program.statements.push(r);
-        }
-    }
-    program
 }
 
 /// A head with no body and no variables is a fact; anything else a rule.
@@ -1133,9 +945,6 @@ fn drop_metadata(program: &Program) -> (Program, BTreeSet<Extern>, Vec<crate::as
             Stmt::Mixed(_) => {
                 // checked by check_mixed
             }
-            Stmt::Settings(_) => {
-                // lowered away by desugar_settings
-            }
             Stmt::Instance(_) | Stmt::Module(_) | Stmt::Use(_) => {
                 // lowered away earlier
             }
@@ -1223,8 +1032,8 @@ pub const UNREAD_FIELD: &str = "a field read found no value: the resource is not
 /// that fails is the one named). `Xs` are the read's variables `Rest`
 /// binds.
 ///
-/// A missing object, an instance input or output with no value, a settings
-/// key an environment does not set: those hold a block back on purpose
+/// A missing object, an instance input or output with no value, an input
+/// no settings block gives in this deployment: those hold a block back on purpose
 /// (a module's resource exists where its inputs are given), and are quiet.
 fn unread_field_reports(r: &Resource, n: &mut usize) -> Vec<Stmt> {
     let Some(body) = &r.body else {

@@ -31,8 +31,8 @@
 //! path.
 
 use crate::ast::{
-    Atom, FieldAssign, InputDecl, Lit, OutputDecl, Program, Resource, RuleStmt, Settings, Span,
-    Stmt, Term, TypeExpr,
+    Atom, FieldAssign, InputDecl, Lit, OutputDecl, Program, Resource, RuleStmt, Span, Stmt, Term,
+    TypeExpr,
 };
 use crate::diag::{self, Diagnostic, Diagnostics};
 use crate::inputs::Declared;
@@ -413,39 +413,84 @@ pub fn expand(program: &Program) -> Result<Expanded> {
         }
     }
 
-    // `set k = t where B` gives an input the stack addresses (R-54): its
-    // own, a field of an object one, a used module's.
+    // `set k = t where B` and a settings block give an input the stack
+    // addresses (R-54, R-38): its own, a field of an object one, a used
+    // module's (its cell `(input, m, k)`).
     let mut paths = BTreeSet::new();
+    let mut flat = BTreeSet::new();
     for d in &cx.declared {
         let Some(a) = &d.address else { continue };
         let base = &a[..a.len() - d.decl.name.len()];
         paths.insert(a.clone());
+        flat.insert(d.scope.clone());
         for (i, _) in d.decl.name.match_indices('.') {
             paths.insert(format!("{base}{}", &d.decl.name[..i]));
         }
     }
     let mut heads = Vec::new();
     for s in &expanded {
-        head_atoms(s, &mut heads);
+        head_rules(s, &mut heads);
     }
-    for h in heads {
-        if let [
+    for (h, body) in heads {
+        let [
             Term::Val(Value::Str(t)),
             Term::Val(Value::Str(scope)),
             Term::Val(Value::Str(k)),
             ..,
         ] = h.args.as_slice()
-            && h.pred == "arg"
-            && t == INPUT
-            && scope.is_empty()
-            && !paths.is_empty()
-            && !paths.contains(k)
-        {
-            let msg = match k.rsplit_once('.').filter(|(o, _)| paths.contains(*o)) {
-                Some((o, f)) => format!("`set {k}`: input {o} has no field {f}"),
-                None => format!("`set {k}`: the program declares no input {k}"),
+        else {
+            continue;
+        };
+        if h.pred != "arg" || t != INPUT || !(scope.is_empty() || flat.contains(scope)) {
+            continue;
+        }
+        // `--set` (`input(k, V)`) is checked where it is given.
+        if matches!(body, [Lit::Pos(a)] if a.pred == INPUT) {
+            continue;
+        }
+        let address = join_scope(scope, k);
+        // A settings entry's span is the entry; a `set`'s the statement.
+        let is_set = diag::source_of(h.span).is_some_and(|(_, text)| {
+            text.get(h.span.start as usize..)
+                .is_some_and(|t| t.starts_with("set "))
+        });
+        let what = match is_set {
+            true => format!("`set {address}`"),
+            false => format!("settings: `{address}`"),
+        };
+        if !paths.is_empty() && !paths.contains(&address) {
+            let msg = match address.rsplit_once('.').filter(|(o, _)| paths.contains(*o)) {
+                Some((o, f)) => format!("{what}: input {o} has no field {f}"),
+                None => format!("{what}: the program declares no input {address}"),
             };
             cx.diags.push(Diagnostic::error(h.span, msg));
+            continue;
+        }
+        let under =
+            |a: &str, b: &str| a == b || a.strip_prefix(b).is_some_and(|r| r.starts_with('.'));
+        for d in cx.declared.iter_mut() {
+            if d.scope != *scope || !(under(&d.decl.name, k) || under(k, &d.decl.name)) {
+                continue;
+            }
+            // The declaration's own default is no giving.
+            let rank = h.args.get(4);
+            if h.span == d.decl.span
+                && matches!(rank, Some(Term::Val(Value::Str(r))) if r == "default")
+            {
+                continue;
+            }
+            if d.decl.key {
+                cx.diags.push(
+                    Diagnostic::error(h.span, format!("{what}: {address} is a key")).with_help(
+                        format!(
+                            "a key is given by the target, `STACK {}=..`, and names the deployment",
+                            d.decl.name
+                        ),
+                    ),
+                );
+                break;
+            }
+            d.given = true;
         }
     }
 
@@ -651,10 +696,6 @@ fn gate(
             Stmt::Resource(mut r) => {
                 r.body.get_or_insert_with(Vec::new).insert(0, on.clone());
                 Stmt::Resource(r)
-            }
-            Stmt::Settings(mut st) => {
-                st.body.get_or_insert_with(Vec::new).insert(0, on.clone());
-                Stmt::Settings(st)
             }
             other => other,
         })
@@ -1156,11 +1197,17 @@ pub fn input_paths(i: &InputDecl) -> Vec<String> {
 }
 
 /// The values the outside gives an input the stack addresses as
-/// `address` (R-54, R-55): `--set k=v`, `set k = t where B`, an
-/// `input(k, V)` fact, is a normal-rank contribution to `k`, or to the
-/// object or leaf inside it the fact names (`input("nodes.count", 2)`).
+/// `address` (R-54, R-55): `--set k=v`, an `input(k, V)` fact, is an
+/// `@override` contribution to `k`, or to the object or leaf inside it the
+/// fact names (`input("nodes.count", 2)`), so it wins over the default and
+/// over every settings block (R-38). A key's value is the target's, the
+/// normal rank: nothing else gives a key.
 fn given_rules(scope: &str, address: &str, i: &InputDecl) -> Vec<Stmt> {
     let leaves = crate::inputs::leaves(i);
+    let rank = match i.key {
+        true => crate::transform::NORMAL,
+        false => crate::ast::Rank::Override.name(),
+    };
     input_paths(i)
         .into_iter()
         .map(|p| {
@@ -1178,7 +1225,7 @@ fn given_rules(scope: &str, address: &str, i: &InputDecl) -> Vec<Stmt> {
                         str_term(scope),
                         str_term(&p),
                         v.clone(),
-                        str_term(crate::transform::NORMAL),
+                        str_term(rank),
                     ],
                     span,
                 ),
@@ -1197,6 +1244,15 @@ fn head_atoms(s: &Stmt, out: &mut Vec<Atom>) {
     match s {
         Stmt::Fact(a) => out.push(a.clone()),
         Stmt::Rule(r) => out.push(r.head.clone()),
+        _ => {}
+    }
+}
+
+/// Every head atom of a fact or a rule, with the rule's body.
+fn head_rules<'s>(s: &'s Stmt, out: &mut Vec<(&'s Atom, &'s [Lit])>) {
+    match s {
+        Stmt::Fact(a) => out.push((a, &[])),
+        Stmt::Rule(r) => out.push((&r.head, &r.body)),
         _ => {}
     }
 }
@@ -1243,10 +1299,6 @@ fn body_atoms(s: &Stmt, out: &mut Vec<Atom>) {
             r.fields.iter().for_each(|f| term(&f.value, out));
             lits(r.body.as_deref().unwrap_or_default(), out);
         }
-        Stmt::Settings(st) => {
-            st.fields.iter().for_each(|f| term(&f.value, out));
-            lits(st.body.as_deref().unwrap_or_default(), out);
-        }
         _ => {}
     }
 }
@@ -1267,11 +1319,6 @@ fn rename_stmt(stmt: Stmt, names: &Names) -> Stmt {
             fields: rename_fields(r.fields, names),
             body: r.body.map(lits),
             ..r
-        }),
-        Stmt::Settings(s) => Stmt::Settings(Settings {
-            fields: rename_fields(s.fields, names),
-            body: s.body.map(lits),
-            ..s
         }),
         Stmt::Mixed(mut e) => {
             if let Some(n) = names.get(&e.pred) {
@@ -1369,13 +1416,6 @@ fn rewrite_stmt(stmt: Stmt, sc: Sc) -> Stmt {
             body: r.body.map(lits),
             ..r
         }),
-        // Settings are addressed by environment, not by scope: only the
-        // values and the body are rewritten.
-        Stmt::Settings(s) => Stmt::Settings(Settings {
-            fields: fields(s.fields),
-            body: s.body.map(lits),
-            ..s
-        }),
         other => other,
     }
 }
@@ -1405,11 +1445,6 @@ fn rewrite_atom(mut atom: Atom, sc: Sc) -> Atom {
             let mut args: Vec<Term> = atom.args.into_iter().map(t).collect();
             args[1] = prefix_scope(sc.name, args[1].clone());
             atom.args = args;
-        }
-        // A settings row is addressed by its environment, never a scope.
-        ("arg" | "attr", 4) | ("arg", 5) | ("arg_add", 4) if matches!(&atom.args[0], Term::Val(Value::Str(s)) if s == crate::transform::SETTINGS) =>
-        {
-            atom.args = atom.args.into_iter().map(t).collect();
         }
         ("want", 2) | ("arg" | "attr", 4) | ("arg", 5) | ("arg_add", 4) => {
             atom.args = atom
@@ -1570,11 +1605,6 @@ fn unmark_stmt(s: Stmt) -> Stmt {
             body: r.body.map(lits),
             ..r
         }),
-        Stmt::Settings(st) => Stmt::Settings(Settings {
-            fields: fields(st.fields),
-            body: st.body.map(lits),
-            ..st
-        }),
         other => other,
     }
 }
@@ -1595,10 +1625,6 @@ pub fn set_origin(stmts: &mut [Stmt], origin: u32) {
             Stmt::Resource(r) => {
                 r.span = r.span.within(origin);
                 fields(&mut r.fields);
-            }
-            Stmt::Settings(st) => {
-                st.span = st.span.within(origin);
-                fields(&mut st.fields);
             }
             _ => {}
         }

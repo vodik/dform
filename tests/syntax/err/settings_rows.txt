@@ -1,0 +1,6 @@
+tests/syntax/err/settings_rows.df:7:10: expected `{` or `from` after `settings`, found `prod`
+  help: settings rows are gone (R-38): a settings block gives the inputs under a condition, `settings { db.multi_az = true } where env == "prod"`, and a read is the input's name
+tests/syntax/err/settings_rows.df:8:10: expected `{` or `from` after `settings`, found `_`
+  help: settings rows are gone (R-38): a settings block gives the inputs under a condition, `settings { db.multi_az = true } where env == "prod"`, and a read is the input's name
+tests/syntax/err/settings_rows.df:9:10: expected `{` or `from` after `settings`, found a rank `@default`
+  help: the rank follows the block: `settings { .. } @default where ..`

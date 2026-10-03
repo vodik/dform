@@ -137,7 +137,6 @@ pub enum Stmt {
     /// an `instance` is one of a component.
     Use(Instance),
     Resource(Resource),
-    Settings(Settings),
     Decl(Decl),
     Extern(Extern),
     /// `decl p(..) mixed`: `p/N` may have both ground facts and rules (E
@@ -350,16 +349,6 @@ pub struct FieldAssign {
     pub value: Term,
     /// `key = value @override`; `None` takes the block's rank.
     pub rank: Option<Rank>,
-    pub span: Span,
-}
-
-#[derive(Debug, Clone)]
-pub struct Settings {
-    pub env: Term,
-    /// `settings E @default { ... }`: the rank of every leaf without its own.
-    pub rank: Option<Rank>,
-    pub fields: Vec<FieldAssign>,
-    pub body: Option<Vec<Lit>>,
     pub span: Span,
 }
 

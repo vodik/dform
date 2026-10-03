@@ -72,10 +72,11 @@ the project's name and the dform versions it takes, each provider's source
 and version (Cargo's semver syntax: `"2.1"` is `^2.1`), each stack's
 operational settings, `[stacks.NAME]` for `stacks/NAME.df` over
 `[defaults]`, and globs discovery skips. A stack's settings are a closed
-list: `backend`, `role`, `approvals`, `audit_sink`,
-`isolated` and `config`; a term is written as a string, `{stack}` the
-stack's name and `{k}` the value of its key `k` (in `backend` and
-`config`), and any other key is an error naming the list. A
+list: `backend`, `role`, `approvals`, `audit_sink` and
+`isolated`; a term is written as a string, `{stack}` the stack's name
+and `{k}` the value of its key `k` (in `backend`), and any other key is
+an error naming the list (`config` is gone: a stack's settings document
+is `settings from` in its file, "Settings"). A
 `[stacks.NAME]` no file is is an error. Policy reads it as facts,
 `project_provider(Name, Constraint)`, `project_default(Key, Value)` and
 `project_stack(Name, Key, Value)`. No inputs and no key values: a
@@ -98,7 +99,6 @@ lease_renewal = "20s"                # how often its holder renews it (the defau
 [stacks.shop]                        # stacks/shop.df
 backend = 's3("acme-state", "shop/{env}")'
 approvals = 'jwks("https://sso.acme.example/keys")'
-config = 'yaml("config/shop/{env}.yaml")'
 isolated = true
 
 [discovery]
@@ -208,7 +208,6 @@ role = "bootstrap"                # optional: it stays batch; see "Bootstrap and
 approvals = 'jwks("https://...")' # optional: who may approve a plan; see "Approvals"
 audit_sink = "logger -t dform"    # optional: each audit entry to a command; see "The audit log"
 isolated = true                   # a keyed stack's deployments do not share names
-config = 'yaml("config/demo/{env}.yaml")'   # a keyed stack's settings per deployment
 ```
 
 Two programs never see each other's resources. `apply` holds the
@@ -334,7 +333,7 @@ The collision lint: in a keyed stack, a resource whose name-like attribute
 `name_like`) has a value no key input flows into gets the same name in
 every deployment, and they collide in a shared account: a warning at the
 field. The value flows through bindings, interpolation,
-calls, lookups (`settings[env].bucket`), module inputs and refs; a read
+calls, lookups (`buckets[env]`), module inputs and refs; a read
 that only gates the resource's block, or feeds another field, does not
 count, and neither does it for `rekey`'s list. `isolated = true` in the
 stack's `[stacks.NAME]` says each key value deploys into its own account
@@ -503,16 +502,16 @@ play. A mock playing several providers on one link (`provider google`
 and `provider k8s` on mock schemas) takes no settings from any of them.
 
 A `provider` block's settings other than `source` configure the provider,
-and read like any rule reads: inputs, settings rows, value names, tables and
-`env.var`. A keyed deployment configures its providers by its key:
+and read like any rule reads: inputs, value names, tables and `env.var`.
+A keyed deployment configures its providers by its key:
 
 ```dform
 provider env
 
 provider google {
-  project = cfg.project_id                                # the env's settings row
+  project = gcp.project_id                                # an input the env's settings give
   credentials = env.var("GOOGLE_CREDENTIALS_${env}")      # a secret, per key
-  expect_account = cfg.project_id
+  expect_account = gcp.project_id
 }
 ```
 
@@ -1295,15 +1294,17 @@ block shows the entry that fired, the rest elided as `..`; a used
 module's statement names its `use`, a copy's its `instance`), then `with` the statement's
 variables as they were bound, by their names in the source, and under them
 each computed term of the statement with its value: an interpolation, a
-function call, a read (`cfg.backup_days = 14`), a lookup
-(`settings[env] = settings["prod"]`), an unknown as its `?` label. Under
+function call, a read (`database.backup_days = 14`), a lookup
+(`zone_index[z] = 1`), an unknown as its `?` label. Under
 that are the facts the firing read, recursively, each spelled as the
 program names it: `net.vpc["main"]` for a resource, `net.vpc["main"].cidr
-= 10.0.0.0/16` for an attribute, `input env = "prod"` and `let cfg =
-"prod"` for a cell, `settings["prod"].backup_days = 14` for a settings
-row, a relation as `zone("us-test-1a", 1)`. An attribute is `merged from N
-contributions`, each with its value, its rank when it is not normal
-(`@default`) and the statement that made it. A fact given to the run says
+= 10.0.0.0/16` for an attribute, `input env = "prod"` and `let n = 3`
+for a cell, a relation as `zone("us-test-1a", 1)`. An attribute or an
+input is `merged from N contributions`, each with its value, its rank when
+it is not normal (`@default`) and the statement that made it: an input's
+default, each settings block that gives it (`stacks/tour.df:148
+settings { database.backup_days = 14 .. } where env == "prod"`, a
+document's leaf by its `file:line`), `--set`. A fact given to the run says
 where it came from: its `file:line`, `--set env=prod`, the provider
 schema, the world, the plan for the facts the planner hands to the policy
 pass. Variables are allowed and every match is printed. A fact derived
@@ -1335,9 +1336,14 @@ cargo run -- -C examples/tour why 'db.postgres["orders"].backup_days' tour env=p
 #   merged from 2 contributions
 #   ├─ type_refine("db.postgres", "backup_days", "range(1, 35)")   provider schema
 #   └─ 14
-#        stacks/tour.df:155  resource db.postgres orders { .. backup_days = cfg.backup_days .. }
-#        with cfg.backup_days = 14
-#        ├─ let cfg = "prod"
+#        stacks/tour.df:156  resource db.postgres orders { .. backup_days = database.backup_days .. }
+#        with database.backup_days = 14
+#        ├─ input database = {backup_days: 14, multi_az: true}
+#        │    merged from 4 contributions
+#        │    ├─ {backup_days: 1} @default   stacks/tour.df:29
+#        │    ├─ {multi_az: false} @default   stacks/tour.df:29
+#        │    ├─ {backup_days: 14}
+#        │    │    stacks/tour.df:148  settings { database.backup_days = 14 .. } where env == "prod"
 #   ...
 ```
 
@@ -1351,10 +1357,10 @@ cargo run -- -C examples/demo dev graph --relation vpc_peer/2        # any binar
 
 `dform dev effects` prints, per scope (the stack, each copy of a
 component, each module used), what it reads
-(inputs by name, settings leaves by path, world types, externs by name,
-another copy's outputs), writes (cells as `(type, path)` partitions,
-`*` for a variable type or path, settings leaves, another copy's input
-cells) and offers (its declared outputs, with their types). Read off the
+(inputs by name, world types, externs by name, another copy's outputs),
+writes (cells as `(type, path)` partitions, `*` for a variable type or
+path, the input cells its settings give, another copy's input cells)
+and offers (its declared outputs, with their types). Read off the
 lowered program's rule heads and bodies and the partition graph; no
 evaluation.
 
@@ -1469,9 +1475,10 @@ for byte, and a file with a syntax error is reported, not rewritten.
     `(i, x) in list` for the index too and `(k, v) in obj` for an
     object's entries; `i in 0..n` (`0..=n` inclusive) once
     per integer.
-  - `let cfg = settings[env]` is a value whose type is the row's
-    reference; `cfg.gke.pods_cidr` reads through it.
-  - settings blocks: `settings prod { db.backup_days = 14 }`.
+  - `let pg = db.postgres["main"]` is a value whose type is the
+    resource's reference; `pg.endpoint` reads through it.
+  - settings blocks: `settings { db.backup_days = 14 } where env ==
+    "prod"`, contributions to the inputs (see "Settings").
   - `output k: T = t where body`: an output in one statement.
   - patterns: `(a, b) = pair`, `{ host, port } = conn` (the named fields,
     the rest ignored), `(repo, tag) = str.split(image, ":", 1)` (it fails
@@ -1496,7 +1503,7 @@ for byte, and a file with a syntax error is reported, not rewritten.
   - A `decl` of a relation no rule defines declares one a provider feeds
     (it may have no rows).
   - `decl pred(a, b) mixed` lets a predicate have both ground facts and rules (E §2.6); without it, one that has both is a compile error naming the rule and the fact.
-  - `_` is a placeholder (matches anything, never binds, never read: `_.p` or `_` as a value is an error); `settings _ @default { .. }` contributes to every settings row that exists. `_x` is an ordinary name.
+  - `_` is a placeholder (matches anything, never binds, never read: `_.p` or `_` as a value is an error). `_x` is an ordinary name.
 
 ## Externs
 
@@ -1656,32 +1663,18 @@ The controller watches what the last run's tables read: a changed file,
 or a ref that names another commit, is an input event (`input pins changed
 (git ops.git env/prod:pins.yaml)`).
 
-A keyed stack's `config` (dform.toml) is a table of its settings, per
-deployment, `{k}` the value of its key `k`:
-
-```toml
-[stacks.dform]
-config = 'yaml("config/dform/{env}.yaml")'
-```
-
-Every leaf of the document (a mapping; a CSV with the columns `path` and
-`value`) is a contribution at the normal rank to the settings row named by
-the key's value (several keys' joined by `/`), at the leaf's dotted path:
-`db: { backup_days: 14 }` in `config/prod.yaml` is `set settings["prod"].db.backup_days =
-14`, and wins over an `@default` layer per leaf. A leaf at a path the program
-neither writes nor reads is a deny naming the file and line (a typo).
-The demo's per-environment settings are `config/dform/{env}.yaml`; its CIDRs
-are strings there, made inets by `inet(...)` where they are used.
+A deployment's settings document, `settings from yaml("config/${env}.yaml")`
+in the stack, is read the same way, a leaf per input (see "Settings").
 
 ## Escape hatches
 
 ### List membership
 
-`x in e` "explodes" a list, a setting's included, into rows (it lowers to the
+`x in e` "explodes" a list, an input's included, into rows (it lowers to the
 built-in `member(List, Item)`):
 
 ```dform
-host_ip(e, ip) where ip in settings[e].vm.ips
+host_ip(ip) where ip in vm.ips
 ```
 
 `i in lo..hi` enumerates the integers from `lo` up to `hi`, and `i in
@@ -1746,13 +1739,14 @@ Inputs and keys are the file's header: after `edition`, before
 the body (`key`, then `input`), so a file says what it
 takes first; one written below the body is an error, and `dform fmt`
 moves it. Each is read as a relation, `env(E)`. An input is a cell of the attribute
-aggregate: the default is an `@default` contribution, `--set replicas=3`
-a normal one that wins (and `why` shows both). A `key` is an input the
+aggregate: the default is an `@default` contribution, a settings block a
+normal one, `--set replicas=3` an `@override` that wins over both (and
+`why` shows each). A `key` is an input the
 target gives instead (`dform plan app env=prod`), and its value names the
 deployment (see "Keyed stacks"); `--set` of one is an error. `--input-file FILE.df`
 (repeatable) gives inputs as facts, one per input, `env(prod).
 allowed_cidrs([inet("10.0.0.0/8")]).`, each a normal contribution stated
-where the file states it; the plan file records each input file's digest.
+where the file states it, like a settings block's; the plan file records each input file's digest.
 
 Types are `int`, `string`, `bool`, `inet`, the quantities `bytes`, `cpu`
 and `duration`, `time`, `enum(a, b, ...)`, `list(T)`, `set(T)` and objects
@@ -1780,8 +1774,9 @@ another module's alias is read through its name, `network.subnets`
 a `string` takes the text) and checked before evaluation: `--set
 replicas=two` is an error naming the input and its type, and so is `--set` of an input
 the program does not declare. A value the program computes (an input of
-a used module or a copy) is checked after evaluation and a wrong type blocks the
-plan. A required input with no value is an error at its declaration. `check
+a used module or a copy, a settings block's) is checked after evaluation and a wrong type blocks the
+plan. A required input with no value is an error at its declaration; one
+a settings block gives, in the deployments none holds in. `check
 R` refines the input (`R` names it by its name; see Refinement types).
 
 An object input is declared by its fields, each with its own default and
@@ -1796,8 +1791,8 @@ input nodes {
 
 `--set nodes.count=2` gives one leaf, read as its type (a path that names
 no field is an error listing the fields); `--set nodes=@nodes.yaml` gives
-each field the document has; `set nodes.count = 3 where env == "prod"`
-is the same contribution from inside; `why nodes.count` shows the leaf's
+each field the document has; `settings { nodes.count = 3 } where env ==
+"prod"` gives it from inside; `why nodes.count` shows the leaf's
 layers. `input nodes: node_pool = { .. }`, an alias and an object
 default, is the same input. A used module's inputs are the stack's too,
 by the module's name: `--set traefik.acme_email=ops@example.com`.
@@ -1805,16 +1800,54 @@ by the module's name: `--set traefik.acme_email=ops@example.com`.
 A program with no `input` declarations reads `--set k=v` as the fact
 `input("k", v)`.
 
+### Settings
+
+Configuration is the inputs (R-38). The declaration gives the default, a
+settings block contributes values under a condition, and `--set` on the
+command line wins over both:
+
+```dform
+settings { db.multi_az = true, db.backup_days = 14 } where env == "prod"
+settings { db.backup_days = 30 } @override where env == "prod", region == "eu-west-1"
+settings { traefik.acme_email = "ops@example.com" }    # a used module's input
+settings from yaml("config/${env}.yaml")
+```
+
+An entry names an input by its path: the program's own, a field of an
+object input, or a used module's (`traefik.acme_email`); anything else is
+an error naming the inputs. A block holds where its clause does: any
+condition, any subset of a composite key. The layers are ranks, never
+specificity: the default (`@default`) < settings (normal unless marked) <
+`--set` (`@override`). Two blocks that both hold and disagree at the
+winning rank are a conflict naming both, so a broad block says `@default`
+and a narrow one that should win says `@override`. The deployment's value
+is the input's name, `db.backup_days`, and `why db.backup_days` shows each
+layer at its `file:line`. `set db.backup_days = 30 where B` is a block of
+one entry.
+
+`settings from DOC [@rank] [where B]` gives every leaf of a document (YAML,
+JSON, TOML; a CSV with the columns `path` and `value`) to the input at its
+dotted path, a string read as the input's type (`inet`, a quantity, a
+time); a leaf at a path that is no input is a deny naming the file, the
+line and the inputs there are. The demo's per-environment settings are
+`config/dform/{env}.yaml`, with an `@default` block in the stack under
+them.
+
+An input a settings block gives is the program's to decide: `dform test`
+does not enumerate it, and a required one is missing only in a
+deployment none of the blocks holds in (a violation, `input k is required
+and has no value`). Settings rows (`settings prod { .. }`,
+`settings[env]`, `settings _`, `let cfg = settings[env]`) and dform.toml's
+`config` are gone; each is an error naming the form to write.
+
 ### Refinement types
 
 A `check` on an input, on an attribute of a `type` block, or a provider
 schema's `type_refine(T, Path, C)` fact refines a value:
 
 ```dform
-type settings {
-  db.backup_days: int check 1 <= db.backup_days <= 35
-  gke: { control_plane_cidr: inet check inet.prefix_len(control_plane_cidr) == 28 }
-}
+input db { backup_days: int = 3 check 1 <= backup_days <= 35 }
+input gke { control_plane_cidr: inet check inet.prefix_len(control_plane_cidr) == 28 }
 type google.container_cluster { zones: list(string) check len(zones) >= 3 }
 ```
 
@@ -1879,7 +1912,7 @@ component vpc {
 
 # stacks/dform.df
 use baseline
-instance network.vpc main { vpc_net = settings[env].network.main.vpc_net }
+instance network.vpc main { vpc_net = inet(cidrs.main) }
 use database {
   backup_days = 14
   subnet(s) where main.private_subnet(s)     # rows of its relation
@@ -1953,16 +1986,9 @@ per key, and a list path several sources contribute to is declared a set:
 type_lattice(iam.policy, "statements", "set")
 ```
 
-Settings are the same aggregate:
-
-```dform
-type_lattice(settings, "audit.sinks", "set")
-set settings["prod"].audit.sinks += ["s3"]
-
-settings prod {
-  audit.sinks += ["cloudwatch"]
-}
-```
+A used module's inputs are the stack's to give, from a settings block
+(`settings { baseline.audit.sinks = ["s3", "cloudwatch"] } where env ==
+"prod"`) or a document (see "Settings").
 
 ## Testing
 
@@ -1977,7 +2003,8 @@ and every used module's input its `use` block leaves to the stack
 `bool` both; a key whose type is not an enum takes each value a
 deployment of the stack was applied with; any other input takes its
 default, and one with none is an error naming it (pin it, or give it an
-enum type). More than 4096 combinations is an error asking to pin some.
+enum type). An input a settings block gives is the program's to decide in
+the deployments it holds in, and no axis (R-38). More than 4096 combinations is an error asking to pin some.
 
 ```dform
 deny "prod keeps 14 days of db backups" where env == "prod", not db.postgres["database.main::db"].backup_days == 14
@@ -2165,7 +2192,7 @@ The highlight query captures a dot in a field-value position as
 `@variable.reference` (a field's value, a head or `output` argument, an
 element of a list or object there, a comprehension's item) and leaves a
 dot anywhere else a plain read, as proposal G (G-6) lowers them. This is
-the syntax's answer: a chain whose head is a `let` of a settings row
+the syntax's answer: a chain whose head is a `let` of a reference
 or an instance output is a read in any position, which only the resolver
 (and a language server) knows.
 
@@ -2287,7 +2314,7 @@ examples/demo an evaluation takes about 30 ms in a release build.
 - *References* of a predicate, an input or value name (a `{ k }` field
   included), a `let` or type alias (bare or read through its module), a
   component, a module a `use` names, an instance, a resource (by its name
-  in scope) or a settings row, across the project's files and unsaved
+  in scope), across the project's files and unsaved
   buffers, read in the resolver's order (docs/grammar.md "Names"); a
   relation a component defines is its own (two components' private
   `helper` are two). On an attribute path (a field of a resource block,

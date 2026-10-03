@@ -699,11 +699,6 @@ fn stmt_terms(s: &Stmt, f: &mut dyn FnMut(&Term, crate::ast::Span)) {
             }
             lits(r.body.as_deref().unwrap_or_default(), r.span, f);
         }
-        Stmt::Settings(x) => {
-            for x in &x.fields {
-                f(&x.value, x.span);
-            }
-        }
         Stmt::Module(m) => m.body.iter().for_each(|s| stmt_terms(s, f)),
         Stmt::Instance(i) | Stmt::Use(i) => i.inputs.iter().for_each(|(_, t, span)| f(t, *span)),
         Stmt::Output(o) => o.value.iter().for_each(|t| f(t, o.span)),

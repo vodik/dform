@@ -10,7 +10,7 @@
 //! scope that wrote it. A rule's body literals carry no origin
 //! of their own (`modules::set_origin` only marks heads and facts), so
 //! they are read structurally instead: a literal of `attr(input, ...)`,
-//! `attr(settings, ...)`, `attr(output, ...)` or `world(...)`, a call to
+//! `attr(output, ...)` or `world(...)`, a call to
 //! an extern, or (by predicate name) a read of the scope's own input.
 
 use crate::ast::{Lit, Program, Span, Stmt, Term};
@@ -125,8 +125,8 @@ fn input_names(declared: &[Declared]) -> BTreeMap<String, BTreeSet<String>> {
     m
 }
 
-/// A write a head atom makes: a resource/world cell `(T, P)`, a settings
-/// leaf `settings.P`, or another (or its own) instance's input cell
+/// A write a head atom makes: a resource/world cell `(T, P)`, or another
+/// (or its own) instance's input cell
 /// `input SCOPE.K`. An output is not a write here: it is an offer
 /// (`collect_offers`), from the declaration, whether or not a rule ever
 /// gives it a value.
@@ -139,10 +139,6 @@ fn classify_write(a: &crate::ast::Atom) -> Option<String> {
                     let target = canon_scope(&const_str(&a.args[1])?);
                     let key = const_str(&a.args[2])?;
                     Some(format!("input {target}.{key}"))
-                }
-                Some(transform::SETTINGS) => {
-                    let path = const_str(&a.args[2])?;
-                    Some(format!("settings.{path}"))
                 }
                 Some(transform::OUTPUT) => None,
                 _ => {
@@ -165,7 +161,7 @@ fn classify_write(a: &crate::ast::Atom) -> Option<String> {
 
 /// A read a body literal makes, attributed to `scope` (the reading
 /// rule's own scope, since a body literal carries no origin of its own):
-/// an input by name, a settings leaf, a world type, an extern, another
+/// an input by name, a world type, an extern, another
 /// instance's output (`output m.i.k`; its own is not "another instance's"
 /// and is left out), or, read like a resource attribute but not one of
 /// those pseudo-types, `type.path` (a resource the scope reads, its own
@@ -185,10 +181,6 @@ fn classify_read(
                     let target = canon_scope(&const_str(&a.args[1])?);
                     let key = const_str(&a.args[2])?;
                     (target == scope).then(|| format!("input {key}"))
-                }
-                Some(transform::SETTINGS) => {
-                    let path = const_str(&a.args[2])?;
-                    Some(format!("settings.{path}"))
                 }
                 Some(transform::OUTPUT) => {
                     let target = canon_scope(&const_str(&a.args[1])?);

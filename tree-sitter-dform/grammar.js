@@ -364,15 +364,26 @@ export default grammar({
       optional($.clause),
     ),
 
-    settings: $ => seq(
-      'settings',
-      field('name', choice($._word, $.string)),
-      optional(field('rank', $.rank)),
-      field('body', $.block),
-      optional($.clause),
+    // `settings { k = v .. } [@rank] [where B]`: contributions to the
+    // inputs; `settings from DOC [@rank] [where B]`: a document's leaves,
+    // each to the input at its path (R-38).
+    settings: $ => choice(
+      seq(
+        'settings',
+        field('body', $.block),
+        optional(field('rank', $.rank)),
+        optional($.clause),
+      ),
+      seq(
+        'settings',
+        'from',
+        field('source', $._term),
+        optional(field('rank', $.rank)),
+        optional(seq('where', field('condition', $._body))),
+      ),
     ),
 
-    // A resource's, settings row's, instance's or provider's entries,
+    // A resource's, settings block's, instance's or provider's entries,
     // separated by a newline or a comma. Its clause follows it.
     block: $ => seq(
       '{',

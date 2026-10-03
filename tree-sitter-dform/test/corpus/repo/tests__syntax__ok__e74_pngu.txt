@@ -31,16 +31,16 @@ type settings {
   }
 }
 
-settings e @default {
+settings {
   region = "us-east1"
   gke.static_ips = { "pngu-grpc": { type: "INTERNAL" } }
-} where env_name(e)
+} @default
 
 env_name("dev")
 env_name("stg")
 env_name("prod")
 
-settings dev {
+settings {
   project_id = "renfry-dev-973682"
   project_name = "renfry-dev"
   network_name = "renfry-dev-network"
@@ -51,9 +51,9 @@ settings dev {
     pods_cidr: inet("10.141.80.0/21"),
     services_cidr: inet("10.141.88.0/21")
   }
-}
+} where env == "dev"
 
-settings stg {
+settings {
   project_id = "renfry-stg"
   project_name = "renfry-stg"
   network_name = "renfry-stg-network"
@@ -64,7 +64,7 @@ settings stg {
     pods_cidr: inet("10.141.104.0/21"),
     services_cidr: inet("10.141.112.0/21")
   }
-}
+} where env == "stg"
 
 # prod elided; same shape.
 
@@ -420,8 +420,6 @@ output("project_id", id) where project(id, _, _, _)
                       (string_content)))))))
           (comment)))))
   (settings
-    (identifier)
-    (rank)
     (block
       (field
         (block_path
@@ -441,33 +439,89 @@ output("project_id", id) where project(id, _, _, _)
                 (identifier)
                 (string
                   (string_content))))))))
+    (rank))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content)))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content)))))
+  (settings
+    (block
+      (field
+        (block_path
+          (identifier))
+        (string
+          (string_content)))
+      (field
+        (block_path
+          (identifier))
+        (string
+          (string_content)))
+      (field
+        (block_path
+          (identifier))
+        (string
+          (string_content)))
+      (field
+        (block_path
+          (identifier))
+        (call
+          (identifier)
+          (arguments
+            (string
+              (string_content)))))
+      (field
+        (block_path
+          (identifier))
+        (object
+          (object_field
+            (identifier)
+            (call
+              (identifier)
+              (arguments
+                (string
+                  (string_content)))))
+          (object_field
+            (identifier)
+            (call
+              (identifier)
+              (arguments
+                (string
+                  (string_content)))))
+          (object_field
+            (identifier)
+            (call
+              (identifier)
+              (arguments
+                (string
+                  (string_content)))))
+          (object_field
+            (identifier)
+            (call
+              (identifier)
+              (arguments
+                (string
+                  (string_content))))))))
     (clause
       (body
-        (atom_literal
-          (call
-            (identifier)
-            (arguments
-              (identifier)))))))
-  (fact
-    (call
-      (identifier)
-      (arguments
-        (string
-          (string_content)))))
-  (fact
-    (call
-      (identifier)
-      (arguments
-        (string
-          (string_content)))))
-  (fact
-    (call
-      (identifier)
-      (arguments
-        (string
-          (string_content)))))
+        (comparison
+          (identifier)
+          (string
+            (string_content))))))
   (settings
-    (identifier)
     (block
       (field
         (block_path
@@ -523,65 +577,13 @@ output("project_id", id) where project(id, _, _, _)
               (identifier)
               (arguments
                 (string
-                  (string_content)))))))))
-  (settings
-    (identifier)
-    (block
-      (field
-        (block_path
-          (identifier))
-        (string
-          (string_content)))
-      (field
-        (block_path
-          (identifier))
-        (string
-          (string_content)))
-      (field
-        (block_path
-          (identifier))
-        (string
-          (string_content)))
-      (field
-        (block_path
-          (identifier))
-        (call
+                  (string_content))))))))
+    (clause
+      (body
+        (comparison
           (identifier)
-          (arguments
-            (string
-              (string_content)))))
-      (field
-        (block_path
-          (identifier))
-        (object
-          (object_field
-            (identifier)
-            (call
-              (identifier)
-              (arguments
-                (string
-                  (string_content)))))
-          (object_field
-            (identifier)
-            (call
-              (identifier)
-              (arguments
-                (string
-                  (string_content)))))
-          (object_field
-            (identifier)
-            (call
-              (identifier)
-              (arguments
-                (string
-                  (string_content)))))
-          (object_field
-            (identifier)
-            (call
-              (identifier)
-              (arguments
-                (string
-                  (string_content)))))))))
+          (string
+            (string_content))))))
   (comment)
   (comment)
   (comment)

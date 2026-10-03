@@ -62,13 +62,14 @@ struct Args {
 /// What a run is given besides its target.
 #[derive(clap::Args, Debug, Clone, Default)]
 struct Inputs {
-    /// A stack input: --set region=us-east1. A key input's value is the
-    /// target's (`dform plan app env=prod`), never --set's.
+    /// A stack input: --set region=us-east1, an `@override` that wins over
+    /// the input's default and every settings block. A key input's value is
+    /// the target's (`dform plan app env=prod`), never --set's.
     #[arg(long = "set", global = true, value_name = "K=V")]
     set: Vec<String>,
 
     /// Stack inputs from a .df file of facts, one `name(value).` per input
-    /// (repeatable). Each is a normal contribution, like --set.
+    /// (repeatable). Each is a normal contribution, like a settings block's.
     #[arg(long = "input-file", global = true)]
     input_files: Vec<PathBuf>,
 

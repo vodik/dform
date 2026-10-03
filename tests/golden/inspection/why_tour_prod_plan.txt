@@ -161,10 +161,10 @@ definite:
   subnets[1] = ?net.subnet["private-us-test-1b"]
   tags.team = "shop"
   by examples/tour/stacks/tour.df:154  resource db.postgres orders { .. }
-  because examples/tour/stacks/tour.df:148  settings["prod"].backup_days = 14
-  because examples/tour/stacks/tour.df:149  settings["prod"].multi_az = true
   because examples/tour/stacks/tour.df:28  input public_db = false
+  because examples/tour/stacks/tour.df:148  input database = {backup_days: 14}
   because --set env=prod
+  because examples/tour/stacks/tour.df:149  input database = {multi_az: true}
 pending groups:
 ? iam.policy[?] x unknown, on ?db.postgres["orders"].endpoint, resolves after tick 1  (builtin format() over a null)
 apply order:

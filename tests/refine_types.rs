@@ -13,7 +13,8 @@ fn plan(s: &Scratch, src: &str) -> Run {
     s.run(&["dev", "--world", "w.json", "plan", "p.df"])
 }
 
-const SETTINGS: &str = "edition 2026\ntype settings {\n  db.backup_days: int check 1 <= db.backup_days <= 35\n}\nsettings prod @default { db = { backup_days: 3 } }\nsettings prod { db = { backup_days: 14 } }\nprovider fake\n";
+/// An input's refinement, its check (R-54), over the settings' layers (R-38).
+const SETTINGS: &str = "edition 2026\ninput db {\n  backup_days: int = 3 check 1 <= backup_days <= 35\n}\nprovider fake\nsettings { db.backup_days = 14 }\n";
 
 /// A constraint is never out-ranked: an `@override` whose value violates
 /// it is a deny naming the refinement's place and both witnesses, and the
@@ -26,28 +27,27 @@ fn an_override_that_violates_a_refinement_is_a_deny() {
         &s,
         &format!(
             "{SETTINGS}days(40)\n\
-             set settings[\"prod\"].db.backup_days = d @override where days(d)\n"
+             set db.backup_days = d @override where days(d)\n"
         ),
     )
     .failure();
     assert!(
-        r.stdout.contains(
-            "conflicts:\n! settings[\"prod\"].db.backup_days: 40 violates range(1, 35)\n"
-        ),
+        r.stdout
+            .contains("conflicts:\n! input[\"\"].db.backup_days: 40 violates range(1, 35)\n"),
         "{}",
         r.stdout
     );
     assert!(
-        r.stdout.contains("    override 40  from arg(")
+        r.stdout.contains("    override {\"backup_days\":40}  from arg(")
             && r.stdout.contains(
-                "    refinement \"range(1, 35)\"  from type_refine(\"settings\", \"db.backup_days\", \"range(1, 35)\") (at p.df:3:3)"
+                "    refinement \"range(1, 35)\"  from attr_refine(\"input\", \"\", \"db.backup_days\", \"range(1, 35)\") (at p.df:3:3)"
             ),
         "{}",
         r.stdout
     );
     assert!(
         r.stderr.contains(
-            "- refinement violated ctx={\"addr\":\"prod\",\"at\":\"p.df:3:3\",\"constraint\":\"range(1, 35)\",\"path\":\"db.backup_days\",\"reason\":\"40 violates range(1, 35)\""
+            "- refinement violated ctx={\"addr\":\"\",\"at\":\"p.df:3:3\",\"constraint\":\"range(1, 35)\",\"path\":\"db.backup_days\",\"reason\":\"40 violates range(1, 35)\""
         ),
         "{}",
         r.stderr
@@ -57,7 +57,7 @@ fn an_override_that_violates_a_refinement_is_a_deny() {
         &s,
         &format!(
             "{SETTINGS}days(40)\n\
-             set settings[\"prod\"].db.backup_days = d @default where days(d)\n"
+             set db.backup_days = d @default where days(d)\n"
         ),
     )
     .success();
@@ -70,14 +70,14 @@ fn a_literal_that_violates_a_refinement_is_a_compile_error() {
     let s = Scratch::new("refine-literal");
     let r = plan(
         &s,
-        "edition 2026\ntype settings {\n  db.backup_days: int check 1 <= db.backup_days <= 35\n}\nsettings prod { db = { backup_days: 40 } }\nprovider fake\n",
+        "edition 2026\ninput db {\n  backup_days: int = 3 check 1 <= backup_days <= 35\n}\nsettings { db = { backup_days: 40 } }\nprovider fake\n",
     )
     .failure();
     assert!(
         r.stderr.contains(
-            "p.df:5:17: 40 violates the refinement range(1, 35) of settings .db.backup_days"
+            "p.df:5:12: 40 violates the refinement range(1, 35) of input .db.backup_days"
         ) && r.stderr.contains("refined here: range(1, 35)")
-            && r.stderr.contains(" 3 │   db.backup_days: int check"),
+            && r.stderr.contains(" 3 │   backup_days: int = 3 check"),
         "{}",
         r.stderr
     );
@@ -111,11 +111,11 @@ fn a_cross_attribute_refinement_lowers_to_a_deny() {
     let src = |min: i64| {
         format!(
             "edition 2026
-type settings {{
+type compute.vm {{
   pool.min: int
   pool.max: int check pool.min <= pool.max
 }}
-settings prod {{ pool = {{ min: {min}, max: 3 }} }}
+resource compute.vm prod {{ pool = {{ min: {min}, max: 3 }} }}
 \nprovider fake\n"
         )
     };
@@ -161,7 +161,7 @@ fn a_refinement_on_a_null_is_deferred_and_fires_after_the_boundary() {
     assert!(
         r.stderr
             .contains("constraint violations after tick 1:\n- refinement violated ctx={\"addr\":\"pngu\",\"at\":\"")
-            && r.stderr.contains("examples/refine/stacks/refine_gke.df:130:3\",\"constraint\":\"len_ge(3)\",\"path\":\"zones\"")
+            && r.stderr.contains("examples/refine/stacks/refine_gke.df:126:3\",\"constraint\":\"len_ge(3)\",\"path\":\"zones\"")
             && r.stderr
                 .contains("apply stopped after tick 1: blocked by constraints"),
         "{}",

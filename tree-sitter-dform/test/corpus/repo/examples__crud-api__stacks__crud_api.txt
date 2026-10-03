@@ -27,6 +27,8 @@ edition 2026
 input env: enum("dev", "prod") = "dev"
 input region: string = "us-east1"
 input replicas: int = 2 check replicas >= 1
+# The database's machine and availability, per environment (below).
+input database { tier: string, availability: string }
 # release("crud_api", "digest", "sha256:9f2c...")
 # release("crud_api", "schema", 42)
 input release from facts("data/releases.facts")
@@ -45,9 +47,8 @@ provider random
 # persist: a generated password, a secret null until the first apply,
 # the same value on every later run (persisted in state, E DR-7).
 
-settings dev { db = { tier: "db-f1-micro", availability: "ZONAL" } }
-settings prod { db = { tier: "db-custom-2-7680", availability: "REGIONAL" } }
-let cfg = settings[env]
+settings { database.tier = "db-f1-micro", database.availability = "ZONAL" } where env == "dev"
+settings { database.tier = "db-custom-2-7680", database.availability = "REGIONAL" } where env == "prod"
 
 ########################################
 # The release, and what the world runs now
@@ -89,8 +90,8 @@ resource google.sql_database_instance db {
   database_version = "POSTGRES_16"
   deletion_protection = true
   settings = {
-    tier: cfg.db.tier,
-    availability_type: cfg.db.availability,
+    tier: database.tier,
+    availability_type: database.availability,
     backup_configuration: { enabled: true, point_in_time_recovery_enabled: true },
     ip_configuration: { ipv4_enabled: false, private_network: vpc }
   }
@@ -434,6 +435,22 @@ auto_reconcile(t, a, p) where drift(t, a, p, _, _), owned_label(l), p == "metada
           (identifier)
           (integer)))))
   (comment)
+  (input
+    (identifier)
+    (input_fields
+      (attribute_declaration
+        (block_path
+          (identifier))
+        (type
+          (dotted_name
+            (identifier))))
+      (attribute_declaration
+        (block_path
+          (identifier))
+        (type
+          (dotted_name
+            (identifier))))))
+  (comment)
   (comment)
   (input_relation
     (identifier)
@@ -479,40 +496,45 @@ auto_reconcile(t, a, p) where drift(t, a, p, _, _), owned_label(l), p == "metada
   (comment)
   (comment)
   (settings
-    (identifier)
     (block
       (field
         (block_path
+          (identifier)
           (identifier))
-        (object
-          (object_field
-            (identifier)
-            (string
-              (string_content)))
-          (object_field
-            (identifier)
-            (string
-              (string_content)))))))
+        (string
+          (string_content)))
+      (field
+        (block_path
+          (identifier)
+          (identifier))
+        (string
+          (string_content))))
+    (clause
+      (body
+        (comparison
+          (identifier)
+          (string
+            (string_content))))))
   (settings
-    (identifier)
     (block
       (field
         (block_path
+          (identifier)
           (identifier))
-        (object
-          (object_field
-            (identifier)
-            (string
-              (string_content)))
-          (object_field
-            (identifier)
-            (string
-              (string_content)))))))
-  (let
-    (identifier)
-    (index_expression
-      (identifier)
-      (identifier)))
+        (string
+          (string_content)))
+      (field
+        (block_path
+          (identifier)
+          (identifier))
+        (string
+          (string_content))))
+    (clause
+      (body
+        (comparison
+          (identifier)
+          (string
+            (string_content))))))
   (comment)
   (comment)
   (comment)
@@ -701,16 +723,12 @@ auto_reconcile(t, a, p) where drift(t, a, p, _, _), owned_label(l), p == "metada
           (object_field
             (identifier)
             (member_expression
-              (member_expression
-                (identifier)
-                (identifier))
+              (identifier)
               (identifier)))
           (object_field
             (identifier)
             (member_expression
-              (member_expression
-                (identifier)
-                (identifier))
+              (identifier)
               (identifier)))
           (object_field
             (identifier)

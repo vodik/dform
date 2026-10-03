@@ -1819,7 +1819,7 @@
     "fields": {
       "body": {
         "multiple": false,
-        "required": true,
+        "required": false,
         "types": [
           {
             "type": "block",
@@ -1827,16 +1827,16 @@
           }
         ]
       },
-      "name": {
+      "condition": {
         "multiple": false,
-        "required": true,
+        "required": false,
         "types": [
           {
-            "type": "identifier",
+            "type": "body",
             "named": true
           },
           {
-            "type": "string",
+            "type": "body_block",
             "named": true
           }
         ]
@@ -1847,6 +1847,16 @@
         "types": [
           {
             "type": "rank",
+            "named": true
+          }
+        ]
+      },
+      "source": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "_term",
             "named": true
           }
         ]

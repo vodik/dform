@@ -1,7 +1,5 @@
 tests/syntax/err/h_spellings.df:11:5: `set main.tags` with no condition is an entry of `resource net.vpc main`, declared in the same scope
   help: write `tags = ...` in the block `resource net.vpc main { .. }`
-tests/syntax/err/h_spellings.df:12:5: `set settings["prod"].size` with no condition is an entry of `settings prod`, declared in the same scope
-  help: write `size = ...` in the block `settings prod { .. }`
 tests/syntax/err/h_spellings.df:13:1: `set env` at the top of the program sets the program's own input
   help: give `input env` a default, or pass `--set env=...` on the command line
 tests/syntax/err/h_spellings.df:16:1: output vpc has no value

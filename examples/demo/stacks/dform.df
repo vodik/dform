@@ -1,4 +1,4 @@
-# dform demo: component-scoped resources + settings tables + IAM policy assembly.
+# dform demo: component-scoped resources + settings + IAM policy assembly.
 #
 # To run it, from this directory: README.md.
 
@@ -9,7 +9,7 @@ edition 2026
 #| names the deployment, and without one the default is the deployment.
 #| owner: platform
 key env: environment = "staging"
-
+input cidrs { main: string = "10.50.0.0/16", peer: string = "10.60.0.0/16" }
 data("zone", "us-test-1a")
 data("zone", "us-test-1b")
 
@@ -19,24 +19,24 @@ iam_need("app", "audit.write", "audit-log") where env == "prod"
 iam_need("app", n.action, n.resource) where n = database.iam_need
 iam_need("app", n.action, n.resource) where n = kubernetes.iam_need
 
-# Settings (branch as data). One @default layer for every settings row that
-# exists; each environment's config/dform/{env}.yaml (the stack's config) wins
-# per leaf at the normal rank. A CIDR is a string there, made an inet where
-# it is used.
-settings _ @default {
-  network.main.vpc_net = "10.50.0.0/16"
-  network.peer.vpc_net = "10.60.0.0/16"
-  db = { backup_days: 3, multi_az: false }
-  k8s = { private_api: false, nodepool: { min: 1, max: 3 } }
-}
+# Settings (branch as data): each environment's config/dform/{env}.yaml
+# gives the inputs it names a leaf at a time (`cidrs.main`,
+# `database.multi_az`), at the normal rank, over the defaults: the inputs'
+# own, and this block's for the inputs of the modules used below. A CIDR
+# is text in the document, made an inet where it is used.
+settings from yaml("config/dform/${env}.yaml")
+settings {
+  database.backup_days = 3
+  database.multi_az = false
+  kubernetes.private_api = false
+  kubernetes.nodepool_min = 1
+  kubernetes.nodepool_max = 3
+} @default
 
-# The settings of the selected environment, by name: every use reads env
-# and one leaf.
-let cfg = settings[env]
+# The provider (the mock's built-in fake schema). The stack's operational
+# settings are dform.toml's [stacks.dform]: isolated, each env in its own
+# account, so identity's fixed names do not collide.
 
-# The provider (the mock's built-in fake schema). The stack's settings are dform.toml's [stacks.dform]:
-# strict, isolated (each env in its own account, so identity's fixed names do not collide) and config
-# (each env's settings are config/dform/{env}.yaml's, a leaf per contribution).
 provider fake
 #| The environments: an alias, the enum wherever it is written.
 type environment = enum("dev", "staging", "prod")
@@ -51,26 +51,26 @@ use stdlib_net
 # per network. Inputs are declared by the component; each `k = v` here is
 # a contribution to one.
 instance network.vpc main {
-  vpc_net = inet(cfg.network.main.vpc_net)
+  vpc_net = inet(cidrs.main)
 }
 
 # Dev is small: one network, no database, no cluster.
 instance network.vpc peer {
-  vpc_net = inet(cfg.network.peer.vpc_net)
+  vpc_net = inet(cidrs.peer)
 } where env != "dev"
 
 # A module is imported once, its inputs bound by its block, rows included
 # (database.df's resources are `database::db`): main's private subnets.
+# Its values are the settings' (`database.backup_days`, `database.multi_az`):
+# the @default block above and, in prod, config/dform/prod.yaml.
 use database {
-  backup_days = cfg.db.backup_days
-  multi_az = cfg.db.multi_az
   subnet(s) where main.private_subnet(s)
 } where env != "dev"
 
+# So are the cluster's, `kubernetes.private_api` and its node pool's
+# bounds; dev has neither, which the `where` says and the settings need
+# not.
 use kubernetes {
-  private_api = cfg.k8s.private_api
-  nodepool_min = cfg.k8s.nodepool.min
-  nodepool_max = cfg.k8s.nodepool.max
   subnet(s) where main.private_subnet(s)
 } where env != "dev"
 
@@ -97,7 +97,7 @@ resource net.vpc_peering "peer-${ia}-${ib}" {
 
 #| Demo: allocate an IP from the main VPC.
 resource compute.vm bastion {
-  private_ip = inet.host(inet(cfg.network.main.vpc_net), 20)
+  private_ip = inet.host(inet(cidrs.main), 20)
 }
 
 # Policy, over every resource of a type (a copy's resources included).

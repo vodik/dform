@@ -915,7 +915,6 @@ fn check_defined(
         defined.contains(p)
             || ops::is_builtin_pred(p)
             || matches!(p, "member" | "enumerate")
-            || p == crate::transform::SETTINGS_ROW
             || crate::loader::is_core_pred(p)
     };
     let text = |k: usize| partition::fmt_rule(&rules[k]);
@@ -3200,14 +3199,14 @@ const REFERENCE: &[Reference] = &[
         "let",
         Kw,
         "let NAME = TERM (where BODY)?",
-        "A value, read by name; one that holds a reference (a settings row, a resource) is read through with a dot.",
-        "let cfg = settings[env]",
+        "A value, read by name; one that holds a reference (a resource) is read through with a dot.",
+        "let db = db.postgres[\"main\"]",
     ),
     r(
         "set",
         Kw,
         "set REFERENCE.PATH (= | +=) TERM @RANK? (where BODY)?",
-        "A contribution to a block declared elsewhere, a settings leaf, or an input (under a `where`).",
+        "A contribution to a block declared elsewhere, or to an input (under a `where`).",
         "set r.tags.team = \"platform\" @default where r in resource",
     ),
     r(
@@ -3241,9 +3240,9 @@ const REFERENCE: &[Reference] = &[
     r(
         "settings",
         Kw,
-        "settings NAME @RANK? { PATH = TERM, ... } (where BODY)?",
-        "A settings row: configuration by name, read as `settings[e].path`.",
-        "settings prod { db.multi_az = true }",
+        "settings { INPUT = TERM, ... } @RANK? (where BODY)? | settings from DOC @RANK? (where BODY)?",
+        "Configuration: contributions to the inputs (the stack's own and its used modules', a leaf by its path) where the clause holds, at the normal rank unless marked; `from` gives a document's every leaf to the input at its path. The deployment's value is the input's name.",
+        "settings { db.multi_az = true } where env == \"prod\"",
     ),
     r(
         "deny",
@@ -3896,22 +3895,6 @@ mod tests {
             .collect()
     }
 
-    /// `settings _` contributes to every row that exists: one the program
-    /// reads (`settings[e]`) or writes, and no other.
-    #[test]
-    fn settings_placeholder_reaches_every_row_read_or_written() {
-        let (r, _) = run("edition 2026\n\
-             input env: string = \"qa\"\n\
-             settings _ @default { x = 1 }\n\
-             settings prod { y = 2 }\n\
-             v(n) where n = settings[env].x\n")
-        .unwrap();
-        assert_eq!(facts_of(&r, "v"), ["v(1)"]);
-        let mut rows = facts_of(&r, "settings_row");
-        rows.sort();
-        assert_eq!(rows, ["settings_row(\"prod\")", "settings_row(\"qa\")"]);
-    }
-
     /// Hover, completion and signature help read `references()`: every
     /// function a program may call (from `std/*.df`), aggregate and
     /// keyword has its entry.
@@ -4236,24 +4219,21 @@ mod tests {
         );
     }
 
-    /// Readers see the collapsed value, never a raw contribution: `setting`
-    /// and `output` are the same aggregate on pseudo-types, `+=` is a plain
-    /// contribution, and a Set path unions every author.
+    /// Readers see the collapsed value, never a raw contribution: an input
+    /// and an output are the same aggregate on pseudo-types, and a settings
+    /// block's contribution wins over the declaration's default (R-38).
     #[test]
-    fn setting_and_output_readers_read_the_collapsed_value() {
-        let (r, violations) = run("type_lattice(\"settings\", \"sinks\", \"set\")
-             settings prod { sinks += [\"cloudwatch\"], days = 14 }
-             setting_add(\"prod\", \"sinks\", [\"s3\"])
+    fn input_and_output_readers_read_the_collapsed_value() {
+        let (r, violations) = run("input days: int = 3
+             input audit: bool = false
+             settings { days = 14 }
              component network {\n output ids: list(string) = [\"a\", \"b\"]\n }
              instance network main
-             got(s, d) where setting(\"prod\", \"sinks\", s), setting(\"prod\", \"days\", d)
+             got(d) where d = days
              ids(l) where output(\"main\", \"ids\", l)
-             deny \"no audit\" where not setting(\"prod\", \"audit\", true)")
+             deny \"no audit\" where not audit")
         .unwrap();
-        assert_eq!(
-            facts_of(&r, "got"),
-            vec!["got([\"cloudwatch\", \"s3\"], 14)".to_string()]
-        );
+        assert_eq!(facts_of(&r, "got"), vec!["got(14)".to_string()]);
         assert_eq!(facts_of(&r, "ids"), vec!["ids([\"a\", \"b\"])".to_string()]);
         assert_eq!(violations, vec!["no audit".to_string()]);
     }
@@ -4356,11 +4336,12 @@ mod tests {
         }
     }
 
-    /// E §2.4 syntax: `@default` / `@override` after a value, and after a
-    /// `resource` or `settings` header for every leaf without its own.
+    /// E §2.4 syntax: `@default` / `@override` after a value, after a
+    /// `resource` header for every leaf without its own, and after a
+    /// settings block's (R-38).
     #[test]
     fn ranks_in_blocks() {
-        let (r, violations) = run("resource net.vpc main @default {\n               cidr = \"10.0.0.0/16\"\n               tags = { env: \"dev\", team: \"net\" }\n               public = true @override\n             }\n             resource net.vpc main {\n               cidr = \"10.1.0.0/16\"\n               tags = { team: \"platform\" }\n               public = false\n             }\n             env_name(\"dev\")\n             env_name(\"prod\")\n             settings e @default {\n               days = 3\n               zones = [\"a\"]\n             } where env_name(e)\n             settings prod { days = 14 }\n             got(e, d, z) where setting(e, \"days\", d), setting(e, \"zones\", z)")
+        let (r, violations) = run("input days: int = 1\n             input zones: list(string)\n             resource net.vpc main @default {\n               cidr = \"10.0.0.0/16\"\n               tags = { env: \"dev\", team: \"net\" }\n               public = true @override\n             }\n             resource net.vpc main {\n               cidr = \"10.1.0.0/16\"\n               tags = { team: \"platform\" }\n               public = false\n             }\n             settings {\n               days = 3\n               zones = [\"a\"]\n             } @default\n             settings { days = 14 }\n             got(d, z) where d = days, z = zones")
         .unwrap();
         assert!(violations.is_empty(), "{violations:?}");
         assert_eq!(
@@ -4375,18 +4356,12 @@ mod tests {
                     .to_string(),
             ]
         );
-        assert_eq!(
-            facts_of(&r, "got"),
-            vec![
-                "got(\"dev\", 3, [\"a\"])".to_string(),
-                "got(\"prod\", 14, [\"a\"])".to_string()
-            ]
-        );
+        assert_eq!(facts_of(&r, "got"), vec!["got(14, [\"a\"])".to_string()]);
     }
 
     /// `eval`, with the tables the program reads (`crate::tables`):
-    /// dform.df's settings are its stack config's. Any other extern has no
-    /// answer, as under `eval`.
+    /// dform.df's settings document. Any other extern has no answer, as
+    /// under `eval`.
     fn eval_tables(program: &Program, extra: &[Atom]) -> Result<(EvalResult, Vec<String>)> {
         let lowered = crate::transform::lower(program)?;
         let tables = crate::tables::Tables::default();
@@ -4397,41 +4372,32 @@ mod tests {
         externs.eval(program, extra)
     }
 
-    /// dform.df's settings are a `@default` layer plus per-environment
-    /// config (E §7.1; `config/dform/{env}.yaml`). Every environment compiles to
-    /// exactly the resources the three copied blocks it replaced did.
+    /// dform.df's settings are a `@default` block plus each environment's
+    /// document, `settings from yaml("config/dform/${env}.yaml")` (R-38).
+    /// Every environment compiles to exactly the resources the settings
+    /// blocks the documents say would.
     #[test]
-    fn dform_df_default_layer_matches_the_copied_blocks() {
+    fn dform_df_settings_from_matches_the_blocks() {
         let root = std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."));
         let src = std::fs::read_to_string(root.join("examples/demo/stacks/dform.df")).unwrap();
-        let start = src.find("settings _ @default").unwrap();
-        let end = src
-            .find("# The settings of the selected environment")
-            .unwrap();
-        let copied = "type_lattice(\"settings\", \"audit.sinks\", \"set\")
-            settings prod {
-              network.main.vpc_net = \"10.20.0.0/16\"
-              network.peer.vpc_net = \"10.21.0.0/16\"
-              db = { backup_days: 14, multi_az: true }
-              k8s = { private_api: true, nodepool: { min: 3, max: 10 } }
-              audit.sinks += [\"cloudwatch\"]
-            }
-            settings staging {
-              network.main.vpc_net = \"10.50.0.0/16\"
-              network.peer.vpc_net = \"10.60.0.0/16\"
-              db = { backup_days: 3, multi_az: false }
-              k8s = { private_api: false, nodepool: { min: 1, max: 3 } }
-            }
-            settings dev {
-              network.main.vpc_net = \"10.90.0.0/16\"
-            }
+        let from = "settings from yaml(\"config/dform/${env}.yaml\")\n";
+        assert!(src.contains(from));
+        let blocks = "settings {
+              cidrs.main = \"10.20.0.0/16\"
+              cidrs.peer = \"10.21.0.0/16\"
+              database.backup_days = 14
+              database.multi_az = true
+              kubernetes.private_api = true
+              kubernetes.nodepool_min = 3
+              kubernetes.nodepool_max = 10
+              baseline.audit.sinks = [\"s3\", \"cloudwatch\"]
+            } where env == \"prod\"
+            settings { cidrs.main = \"10.90.0.0/16\" } where env == \"dev\"
             ";
         let dir = std::env::temp_dir().join(format!("dform-settings-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let old = dir.join("dform.df");
-        let old_src = format!("{}{}{}", &src[..start], copied, &src[end..])
-            .replace(", config = yaml(\"config/dform/${env}.yaml\")", "");
-        std::fs::write(&old, old_src).unwrap();
+        std::fs::write(&old, src.replace(from, blocks)).unwrap();
         // The modules and components it names by path, beside it.
         for f in std::fs::read_dir(root.join("examples/demo")).unwrap() {
             let f = f.unwrap().path();

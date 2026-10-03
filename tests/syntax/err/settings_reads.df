@@ -1,0 +1,9 @@
+edition 2026
+
+# A settings row read, `settings[e]`, and the `let cfg` idiom are gone
+# (R-38): a setting is an input, read by its name.
+input env: string = "dev"
+input db { size: int = 1 }
+let cfg = settings[env]
+p(s) where s = settings["prod"].db.size
+type_lattice(settings, "audit.sinks", "set")

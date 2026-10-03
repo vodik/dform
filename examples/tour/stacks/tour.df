@@ -22,11 +22,11 @@
 edition 2026
 
 # A file begins with what it takes, its header (section 4 says more): the
-# stack is this file, `tour`, and the `key` makes one deployment per value
-# of `env`; an `input` is a value given on the command line.
+# stack is this file, `tour`, the `key` makes one deployment per value of
+# `env`, and an `input` is a value given from outside or by `settings`.
 key env: enum("dev", "prod") = "dev"
 input public_db: bool = false
-
+input database { backup_days: int = 1, multi_az: bool = false }
 provider fake
 
 # 1. One resource
@@ -122,9 +122,9 @@ resource net.subnet "private-${z}" {
 # at the top of the file: each value of `env` is a deployment of its own,
 # with its own state, where Terraform would use a workspace or a directory
 # per environment, and the command names it. `dform plan` plans the
-# default, `dev`. A settings block is one environment's values, and `cfg`
-# is the block of the environment being planned. The database takes its
-# backups and redundancy from it, and its subnets from a list of every
+# default, `dev`. The values that differ per environment are inputs: dev's
+# are `input database`'s defaults, and a settings block gives prod's. The
+# database reads them by name, and its subnets from a list of every
 # private subnet in the program.
 #
 # dev is applied. prod has never been, so for prod the same program is
@@ -139,22 +139,22 @@ resource net.subnet "private-${z}" {
 # The database also reads `public_db`, the `input` at the top: a value to
 # give on the command line. It defaults to false, and section 5 keeps it so.
 
-settings dev {
-  backup_days = 1
-  multi_az = false
-}
+# A block applies where its clause holds, at the normal rank: over the
+# defaults, and under `--set database.backup_days=7` on the command line.
+# Two blocks that both hold and disagree are a conflict naming both, so
+# a block meant as a fallback says `@default`.
 
-settings prod {
-  backup_days = 14
-  multi_az = true
-}
+settings {
+  database.backup_days = 14
+  database.multi_az = true
+} where env == "prod"
 
-let cfg = settings[env]
-
+# The database reads each by its name; `why database.backup_days` shows
+# which layer gave it.
 resource db.postgres orders {
   subnets = [ s | s in net.subnet, s.visibility == "private" ]
-  backup_days = cfg.backup_days
-  multi_az = cfg.multi_az
+  backup_days = database.backup_days
+  multi_az = database.multi_az
   public = public_db
 }
 

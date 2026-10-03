@@ -1,6 +1,6 @@
 exit: ok
 -- stdout --
-== examples/gke/stacks/gke_two_phase.df: 132 nodes, 244 edges (119 negative)
+== examples/gke/stacks/gke_two_phase.df: 123 nodes, 232 edges (95 negative)
    STRATIFIED, 8 strata
    stratum 0:
      (arg, google.client_config, access_token)
@@ -8,12 +8,6 @@ exit: ok
      (arg, input, env)
      (arg, input, zones)
      (arg, k8s.namespace, name)
-     (arg, settings, gke.control_plane_cidr)
-     (arg, settings, gke.subnet_cidr)
-     (arg, settings, network_name)
-     (arg, settings, project_id)
-     (arg, settings, project_name)
-     (arg, settings, region)
      (want, google.client_config)
      (want, google.compute_network_peering)
      (want, google.monitoring_dashboard)
@@ -35,13 +29,9 @@ exit: ok
      (attr, input, env)
      (attr, input, zones)
      (attr, k8s.namespace, name)
-     (attr, settings, gke.control_plane_cidr)
-     (attr, settings, gke.subnet_cidr)
-     (attr, settings, network_name)
-     (attr, settings, project_id)
-     (attr, settings, project_name)
-     (attr, settings, region)
    stratum 2:
+     (arg, input, gcp)
+     (arg, input, gke)
      (arg, k8s.deployment, id)
      (arg, k8s.deployment, image)
      (arg, k8s.deployment, namespace)
@@ -51,7 +41,6 @@ exit: ok
      (arg, k8s.secret, id)
      (arg, k8s.secret, namespace)
      (arg, k8s.secret, uid)
-     (arg, let, cfg)
      (attr, google.compute_network_peering, id)
      (attr, google.monitoring_dashboard, id)
      (attr, k8s.namespace, id)
@@ -62,6 +51,8 @@ exit: ok
      env
      zones
    stratum 3:
+     (attr, input, gcp)
+     (attr, input, gke)
      (attr, k8s.deployment, id)
      (attr, k8s.deployment, image)
      (attr, k8s.deployment, namespace)
@@ -71,7 +62,6 @@ exit: ok
      (attr, k8s.secret, id)
      (attr, k8s.secret, namespace)
      (attr, k8s.secret, uid)
-     (attr, let, cfg)
      __lc_1
    stratum 4:
      (arg, google.compute_address, id)
@@ -98,7 +88,8 @@ exit: ok
      (want, google.compute_address)
      (want, google.compute_subnetwork)
      (want, google.container_cluster)
-     cfg
+     gcp
+     gke
      project
    stratum 5:
      (attr, google.compute_address, id)

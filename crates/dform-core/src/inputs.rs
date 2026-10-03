@@ -32,6 +32,11 @@ pub struct Declared {
     pub address: Option<String>,
     /// A `use` block gives it a value.
     pub bound: bool,
+    /// The program gives it a value in some deployments: a settings block
+    /// or a `set .. where` contributes to it (R-38). It is the program's to
+    /// decide, so it is no axis of `dform test`, and a required one is
+    /// missing only where none of them holds (`violations`).
+    pub given: bool,
     /// The `use` that declares it, for a used module's input.
     pub used_at: Option<Span>,
 }
@@ -44,6 +49,7 @@ impl Declared {
             decl,
             address,
             bound,
+            given: false,
             used_at: None,
         }
     }
@@ -282,9 +288,39 @@ fn shown(v: &Value) -> String {
 /// The type of every `attr(input, Scope, k, V)` of an evaluation: one
 /// violation per value that is not its input's type. An object input's
 /// cell holds its leaves (R-54): each is checked, and a field no leaf
-/// declares is one too.
+/// declares is one too. A required input the program gives (R-38) with no
+/// value in this deployment is one too.
 pub fn violations(facts: &BTreeSet<Atom>, declared: &[Declared]) -> Vec<String> {
     let mut out = Vec::new();
+    for d in declared
+        .iter()
+        .filter(|d| d.given && !d.bound && d.decl.default.is_none())
+    {
+        let Some(address) = &d.address else { continue };
+        let has = facts.iter().any(|a| match a.args.as_slice() {
+            [
+                Term::Val(Value::Str(t)),
+                Term::Val(Value::Str(scope)),
+                Term::Val(Value::Str(k)),
+                Term::Val(v),
+            ] if a.pred == "attr" && t == crate::modules::INPUT && *scope == d.scope => {
+                match d.decl.name.strip_prefix(k.as_str()) {
+                    Some("") => true,
+                    Some(rest) => rest
+                        .strip_prefix('.')
+                        .is_some_and(|rest| at_path(v, rest).is_some()),
+                    None => false,
+                }
+            }
+            _ => false,
+        });
+        if !has {
+            out.push(format!(
+                "input {address} is required and has no value: no settings block gives it in \
+                 this deployment"
+            ));
+        }
+    }
     for a in facts.iter().filter(|a| a.pred == "attr") {
         let [
             Term::Val(Value::Str(t)),
@@ -632,15 +668,17 @@ fn term_leaves(t: &Term, path: &str, out: &mut Vec<String>) {
     }
 }
 
-/// Every required input the stack gives (no default, and no `use` block
-/// gives it) that nothing gives a value: an error at its declaration. An
-/// object given whole gives each of its leaves.
+/// Every required input the stack gives (no default, no `use` block gives
+/// it, and no settings block or `set` of the program) that nothing gives a
+/// value: an error at its declaration. An object given whole gives each of
+/// its leaves. One the program gives is missing only in a deployment none
+/// of its contributions holds in (`violations`).
 pub fn check_required(declared: &[Declared], given: &BTreeSet<String>) -> Result<()> {
     let is_given =
         |a: &str| given.contains(a) || a.match_indices('.').any(|(i, _)| given.contains(&a[..i]));
     let diags: Vec<Diagnostic> = declared
         .iter()
-        .filter(|d| d.decl.default.is_none() && !d.bound)
+        .filter(|d| d.decl.default.is_none() && !d.bound && !d.given)
         .filter_map(|d| Some((d, d.address.as_deref()?)))
         .filter(|(_, a)| !is_given(a))
         .map(|(d, k)| {

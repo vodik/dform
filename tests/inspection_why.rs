@@ -118,8 +118,8 @@ fn why_an_attribute_shows_every_contribution() {
     assert!(out.contains("└─ --set env=prod\n"), "{out}");
     assert!(out.contains("(see above)"), "{out}");
     // The cells merged on the way: the tags, the stack input --set gives,
-    // the instance's input, `let cfg` (R-3) and the settings row it reads.
-    assert_eq!(out.matches("merged from").count(), 5, "{out}");
+    // the instance's input, and the stack input the settings give (R-38).
+    assert_eq!(out.matches("merged from").count(), 4, "{out}");
 }
 
 /// The tour's route: the resource statement as written, the clause's
@@ -153,8 +153,8 @@ fn why_a_route_shows_the_statements_that_fired() {
     golden("why_tour_route", &out);
 }
 
-/// A settings read: the entry that reads `cfg.backup_days`, its value, and
-/// the settings row it came from, spelled as the program names it.
+/// A settings read: the entry that reads `database.backup_days`, its
+/// value, and the input's layers, each where it is written (R-38).
 #[test]
 fn why_a_settings_read_shows_the_read() {
     let out = dform(
@@ -164,17 +164,22 @@ fn why_a_settings_read_shows_the_read() {
     assert!(
         out.contains(
             "examples/tour/stacks/tour.df:156  resource db.postgres orders { .. backup_days = \
-             cfg.backup_days .. }\n"
+             database.backup_days .. }\n"
         ),
         "{out}"
     );
-    assert!(out.contains("with cfg.backup_days = 14\n"), "{out}");
+    assert!(out.contains("with database.backup_days = 14\n"), "{out}");
+    // The input's layers (R-38): its default, and the settings block that
+    // holds in prod, where it is written.
     assert!(
-        out.contains("settings[env] = settings[\"prod\"]\n"),
+        out.contains("{backup_days: 1} @default   examples/tour/stacks/tour.df:29\n"),
         "{out}"
     );
     assert!(
-        out.contains("settings[\"prod\"].backup_days = 14\n"),
+        out.contains(
+            "examples/tour/stacks/tour.df:148  settings { database.backup_days = 14 .. } where \
+             env == \"prod\"\n"
+        ),
         "{out}"
     );
     golden("why_tour_settings_read", &out);

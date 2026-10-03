@@ -2,26 +2,23 @@ db.postgres["orders"].backup_days = 14
   merged from 2 contributions
   ├─ type_refine("db.postgres", "backup_days", "range(1, 35)")   provider schema
   └─ 14
-       examples/tour/stacks/tour.df:156  resource db.postgres orders { .. backup_days = cfg.backup_days .. }
-       with cfg.backup_days = 14
-       ├─ let cfg = "prod"
-       │    merged from 1 contribution
-       │    └─ "prod"
-       │         examples/tour/stacks/tour.df:152  let cfg = settings[env]
-       │         with env = "prod"
-       │              settings[env] = settings["prod"]
-       │         └─ input env = "prod"
-       │              merged from 2 contributions
-       │              ├─ "dev" @default   examples/tour/stacks/tour.df:27
-       │              └─ "prod"
-       │                   examples/tour/stacks/tour.df:27  key env: enum("dev", "prod") = "dev"
-       │                   └─ --set env=prod
-       ├─ settings["prod"].backup_days = 14
-       │    merged from 1 contribution
-       │    └─ 14   examples/tour/stacks/tour.df:148
-       ├─ settings["prod"].multi_az = true
-       │    merged from 1 contribution
-       │    └─ true   examples/tour/stacks/tour.df:149
+       examples/tour/stacks/tour.df:156  resource db.postgres orders { .. backup_days = database.backup_days .. }
+       with database.backup_days = 14
+       ├─ input database = {backup_days: 14, multi_az: true}
+       │    merged from 4 contributions
+       │    ├─ {backup_days: 1} @default   examples/tour/stacks/tour.df:29
+       │    ├─ {multi_az: false} @default   examples/tour/stacks/tour.df:29
+       │    ├─ {backup_days: 14}
+       │    │    examples/tour/stacks/tour.df:148  settings { database.backup_days = 14 .. } where env == "prod"
+       │    │    └─ input env = "prod"
+       │    │         merged from 2 contributions
+       │    │         ├─ "dev" @default   examples/tour/stacks/tour.df:27
+       │    │         └─ "prod"
+       │    │              examples/tour/stacks/tour.df:27  key env: enum("dev", "prod") = "dev"
+       │    │              └─ --set env=prod
+       │    └─ {multi_az: true}
+       │         examples/tour/stacks/tour.df:149  settings { .. database.multi_az = true } where env == "prod"
+       │         └─ input env = "prod"   (see above)
        └─ input public_db = false
             merged from 1 contribution
             └─ false @default   examples/tour/stacks/tour.df:28

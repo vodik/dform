@@ -1,0 +1,9 @@
+edition 2026
+
+# Settings rows are gone (R-38): a settings block gives the inputs under a
+# condition, and a read is the input's name.
+input env: string = "dev"
+input db_size: int = 1
+settings prod { db_size = 2 }
+settings _ @default { db_size = 3 }
+settings @default { db_size = 3 }

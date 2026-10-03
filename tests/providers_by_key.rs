@@ -1,5 +1,5 @@
 //! Provider configuration chosen by the deployment key: a `provider` block
-//! reads the key, settings rows and `env.var`, the provider reports the
+//! reads the key, inputs the settings give and `env.var`, the provider reports the
 //! account its credentials reach, and `expect_account` refuses a plan
 //! that would reach another deployment's.
 
@@ -7,19 +7,19 @@ mod common;
 use common::{Backend, Run, Scratch};
 
 /// The mock (`fake`) configured per env: its account from the
-/// environment, the account each env expects from its settings row.
+/// environment, the account each env expects from its settings block.
 const APP: &str = r#"edition 2026
 key env: environment = "dev"
+input cloud { account: string, region: string }
 type environment = enum("dev", "prod")
 provider env
 provider fake {
   account = env.var("FAKE_ACCOUNT_${env}")
-  region = cfg.region
-  expect_account = cfg.account
+  region = cloud.region
+  expect_account = cloud.account
 }
-settings dev { account = "acct-dev", region = "r-dev" }
-settings prod { account = "acct-prod", region = "r-prod" }
-let cfg = settings[env]
+settings { cloud.account = "acct-dev", cloud.region = "r-dev" } where env == "dev"
+settings { cloud.account = "acct-prod", cloud.region = "r-prod" } where env == "prod"
 resource net.vpc main {
   cidr = "10.0.0.0/16"
 }

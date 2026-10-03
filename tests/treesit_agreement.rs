@@ -280,61 +280,66 @@ fn inside(n: Node, kinds: &[&str]) -> bool {
 }
 
 /// Proposal G, G-6: a dot in a field's value is a reference, in a rule body
-/// or a clause a read. dform.df has both: `backup_days =
-/// cfg.db.backup_days` in a block, `a = network[ia].vpc` in a
-/// rule body.
+/// or a clause a read. tour.df, dform.df and pngu.df have both: `backup_days =
+/// database.backup_days` in a block, `a = network[ia].vpc` in a rule body.
 #[test]
 fn the_reference_capture_is_on_field_values_and_not_on_reads() {
-    let src = std::fs::read_to_string(repo().join("examples/demo/stacks/dform.df")).unwrap();
-    let tree = ts_parse(&src);
-    let refs = captures(&tree, &src, "variable.reference");
-    let text = |n: &Node| src[n.byte_range()].to_string();
-    let texts: Vec<String> = refs.iter().map(text).collect();
-    for want in ["cfg.db.backup_days"] {
-        assert!(
-            texts.iter().any(|t| t == want),
-            "{want} not captured: {texts:?}"
-        );
-    }
-    for n in &refs {
-        assert!(
-            !inside(
-                *n,
-                &[
-                    "body",
-                    "body_block",
-                    "clause",
-                    "interpolation",
-                    "index_expression"
-                ]
-            ),
-            "{} at line {} is a read, captured as a reference",
-            text(n),
-            n.start_position().row + 1
-        );
-    }
-    // Every dotted field value is captured; every dot in a body is not.
-    let mut c = tree.walk();
-    let mut stack = vec![tree.root_node()];
-    let (mut values, mut reads) = (0, 0);
-    while let Some(n) = stack.pop() {
-        stack.extend(n.named_children(&mut c));
-        if n.kind() != "member_expression" {
-            continue;
-        }
-        let parent = n.parent().unwrap();
-        if parent.kind() == "field" && parent.child_by_field_name("value") == Some(n) {
-            values += 1;
+    let (mut values, mut reads, mut all) = (0, 0, Vec::new());
+    for file in [
+        "examples/tour/stacks/tour.df",
+        "examples/demo/stacks/dform.df",
+        "examples/pngu/stacks/pngu.df",
+    ] {
+        let src = std::fs::read_to_string(repo().join(file)).unwrap();
+        let tree = ts_parse(&src);
+        let refs = captures(&tree, &src, "variable.reference");
+        let text = |n: &Node| src[n.byte_range()].to_string();
+        all.extend(refs.iter().map(text));
+        for n in &refs {
             assert!(
-                refs.contains(&n),
-                "field value {} is not captured",
-                text(&n)
+                !inside(
+                    *n,
+                    &[
+                        "body",
+                        "body_block",
+                        "clause",
+                        "interpolation",
+                        "index_expression"
+                    ]
+                ),
+                "{} at {file}:{} is a read, captured as a reference",
+                text(n),
+                n.start_position().row + 1
             );
         }
-        if inside(n, &["body", "body_block"]) {
-            reads += 1;
-            assert!(!refs.contains(&n), "body read {} is captured", text(&n));
+        // Every dotted field value is captured; every dot in a body is not.
+        let mut c = tree.walk();
+        let mut stack = vec![tree.root_node()];
+        while let Some(n) = stack.pop() {
+            stack.extend(n.named_children(&mut c));
+            if n.kind() != "member_expression" {
+                continue;
+            }
+            let parent = n.parent().unwrap();
+            if parent.kind() == "field" && parent.child_by_field_name("value") == Some(n) {
+                values += 1;
+                assert!(
+                    refs.contains(&n),
+                    "field value {} is not captured",
+                    text(&n)
+                );
+            }
+            if inside(n, &["body", "body_block"]) {
+                reads += 1;
+                assert!(!refs.contains(&n), "body read {} is captured", text(&n));
+            }
         }
+    }
+    for want in ["database.backup_days"] {
+        assert!(
+            all.iter().any(|t| t == want),
+            "{want} not captured: {all:?}"
+        );
     }
     assert!(
         values >= 4 && reads >= 4,

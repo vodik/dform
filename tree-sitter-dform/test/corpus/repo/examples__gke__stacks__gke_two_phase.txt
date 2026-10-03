@@ -17,34 +17,35 @@ edition 2026
 input env: enum("dev", "stg", "prod") = "dev"
 # How many zones the cluster is placed in.
 input zones: int = 2 check zones >= 1
+# The project and the cluster's networks, dev's below.
+input gcp { project_id: string, project_name: string, region: string, network_name: string }
+input gke { control_plane_cidr: inet, subnet_cidr: inet }
 
 provider gke
 
 zone_at(1, "us-east1-b")
 zone_at(2, "us-east1-c")
 
-settings dev {
-  project_id = "renfry-dev-973682"
-  project_name = "renfry-dev"
-  region = "us-east1"
-  network_name = "renfry-dev-network"
+settings {
+  gcp.project_id = "renfry-dev-973682"
+  gcp.project_name = "renfry-dev"
+  gcp.region = "us-east1"
+  gcp.network_name = "renfry-dev-network"
   gke = {
     control_plane_cidr: inet("172.16.3.96/28"),
     subnet_cidr: inet("10.141.76.0/22")
   }
-}
+} where env == "dev"
 
-let cfg = settings[env]
-
-project(cfg.project_id, cfg.project_name, cfg.region,
-  "projects/${cfg.project_id}/global/networks/${cfg.network_name}")
+project(gcp.project_id, gcp.project_name, gcp.region,
+  "projects/${gcp.project_id}/global/networks/${gcp.network_name}")
 
 resource google.compute_subnetwork gke_subnet {
   project = id
   region
   network = net_id
   name = "${name}-gke-subnet"
-  ip_cidr_range = cfg.gke.subnet_cidr
+  ip_cidr_range = gke.subnet_cidr
 } where project(id, name, region, net_id)
 
 # Carries a fresh null (subnetwork_id) and is still definite.
@@ -61,7 +62,7 @@ resource google.container_cluster pngu {
   name = "${name}-gke"
   network_id = net_id
   subnetwork_id = gke_subnet
-  master_control_plane_cidr = cfg.gke.control_plane_cidr
+  master_control_plane_cidr = gke.control_plane_cidr
   node_locations = [ z | zone_at(i, z), i <= zones ]
   deletion_protection = true
 } where project(id, name, _, net_id)
@@ -152,6 +153,49 @@ deny "cluster must not be deletable" { cluster: c } where {
         (comparison
           (identifier)
           (integer)))))
+  (comment)
+  (input
+    (identifier)
+    (input_fields
+      (attribute_declaration
+        (block_path
+          (identifier))
+        (type
+          (dotted_name
+            (identifier))))
+      (attribute_declaration
+        (block_path
+          (identifier))
+        (type
+          (dotted_name
+            (identifier))))
+      (attribute_declaration
+        (block_path
+          (identifier))
+        (type
+          (dotted_name
+            (identifier))))
+      (attribute_declaration
+        (block_path
+          (identifier))
+        (type
+          (dotted_name
+            (identifier))))))
+  (input
+    (identifier)
+    (input_fields
+      (attribute_declaration
+        (block_path
+          (identifier))
+        (type
+          (dotted_name
+            (identifier))))
+      (attribute_declaration
+        (block_path
+          (identifier))
+        (type
+          (dotted_name
+            (identifier))))))
   (provider
     (identifier))
   (fact
@@ -169,25 +213,28 @@ deny "cluster must not be deletable" { cluster: c } where {
         (string
           (string_content)))))
   (settings
-    (identifier)
     (block
       (field
         (block_path
+          (identifier)
           (identifier))
         (string
           (string_content)))
       (field
         (block_path
+          (identifier)
           (identifier))
         (string
           (string_content)))
       (field
         (block_path
+          (identifier)
           (identifier))
         (string
           (string_content)))
       (field
         (block_path
+          (identifier)
           (identifier))
         (string
           (string_content)))
@@ -208,12 +255,13 @@ deny "cluster must not be deletable" { cluster: c } where {
               (identifier)
               (arguments
                 (string
-                  (string_content)))))))))
-  (let
-    (identifier)
-    (index_expression
-      (identifier)
-      (identifier)))
+                  (string_content))))))))
+    (clause
+      (body
+        (comparison
+          (identifier)
+          (string
+            (string_content))))))
   (fact
     (call
       (identifier)
@@ -266,9 +314,7 @@ deny "cluster must not be deletable" { cluster: c } where {
         (block_path
           (identifier))
         (member_expression
-          (member_expression
-            (identifier)
-            (identifier))
+          (identifier)
           (identifier))))
     (clause
       (body
@@ -345,9 +391,7 @@ deny "cluster must not be deletable" { cluster: c } where {
         (block_path
           (identifier))
         (member_expression
-          (member_expression
-            (identifier)
-            (identifier))
+          (identifier)
           (identifier)))
       (field
         (block_path

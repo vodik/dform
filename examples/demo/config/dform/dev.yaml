@@ -1,4 +1,4 @@
-# dform[env=dev]'s settings (dev has no @default layer).
-network:
-  main:
-    vpc_net: 10.90.0.0/16
+# dform[env=dev]'s settings: each leaf is a contribution to the input at its
+# path, at the normal rank (dform.df: `settings from`).
+cidrs:
+  main: 10.90.0.0/16

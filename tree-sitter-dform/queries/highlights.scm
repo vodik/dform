@@ -61,24 +61,23 @@
 (instance name: (identifier) @label)
 (provider name: (identifier) @module)
 (resource name: (identifier) @label)
-(settings name: (identifier) @label)
 
 (call
   function: (identifier) @function.builtin
   (#any-of? @function.builtin
     "count" "sum" "min" "max" "any" "all" "collect_set" "collect_list" "format" "ref"
-    "attr" "want" "arg" "setting" "output" "input" "inet"
+    "attr" "want" "arg" "output" "input" "inet"
     "inet_subnet" "inet_host" "declassify" "cloud_attr" "cloud_exists"))
 
 ((identifier) @variable.builtin
-  (#any-of? @variable.builtin "settings" "world"))
+  (#any-of? @variable.builtin "world"))
 
 ; A dot in a field-value position is a reference (proposal G, G-6): the
 ; value is the attribute itself, an apply-order edge, not its content read
 ; now. A field's value, a head or output argument, an element of a list or
 ; object there, and a comprehension's item are whole-value positions;
 ; everywhere else (a body, a clause, a builtin's argument, an index, a
-; hole) a dot reads. `settings[…]`, `world.…` are always reads. Which chains
+; hole) a dot reads. `world.…` is always a read. Which chains
 ; name a resource is the resolver's business (a `let` alias or an instance
 ; output looks the same): this capture is the syntax's answer, and a
 ; language server refines it.

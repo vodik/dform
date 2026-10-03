@@ -217,7 +217,6 @@ impl Lowerer<'_> {
     fn has_aggregate(&self, s: &Stmt) -> bool {
         let body = match s {
             Stmt::Resource(r) => r.body.as_deref(),
-            Stmt::Settings(r) => r.body.as_deref(),
             Stmt::Instance(i) | Stmt::Use(i) => i.body.as_deref(),
             _ => None,
         };
