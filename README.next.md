@@ -175,7 +175,7 @@ resource` is every resource of every type. `@default` means any explicit
 `team` tag wins over this one. Ask for the merged result:
 
 ```
-$ dform query 'aws.vpc["network.main::vpc"].tags'
+$ dform query 'aws.vpc["main/vpc"].tags'
 {component: "network", env: "prod", team: "platform"}
 ```
 
@@ -620,7 +620,7 @@ overlaps independent calls.
 so policy can read them and `why` can explain them:
 
 ```dform
-moved(aws.vpc, "network.main::vpc", core_vpc)       # renamed: state follows, nothing is replaced
+moved(aws.vpc, "main/vpc", core_vpc)       # renamed: state follows, nothing is replaced
 adopt(legacy, "vpc-0a1b2c")                          # exists already: take it over, no create
 lifecycle(orders, "prevent_destroy")                 # a delete or replace is a deny
 lifecycle(nodes, "create_before_destroy")            # a replace builds the new one first
