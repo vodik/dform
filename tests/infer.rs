@@ -243,3 +243,16 @@ fn an_attribute_read_types_its_column() {
     );
     assert!(r.stderr.contains("(net.vpc.cidr)"), "{}", r.stderr);
 }
+
+/// A column filled from a copy's output takes the output's declared type,
+/// and one filled from a `let` the type of its value; not `any`.
+#[test]
+fn outputs_and_lets_type_the_columns_they_reach() {
+    let sigs = signatures(
+        "component network {\n  output cidr: inet = \"10.0.0.0/16\"\n  output n: int = 3\n}\n\
+         instance network main\nlet width = 8\n\
+         p(c, k) where c = main.cidr, k = main.n\nq(w) where w = width\n",
+    );
+    assert!(sigs.contains(&"p(c: inet, k: int)".to_string()), "{sigs:?}");
+    assert!(sigs.contains(&"q(w: int)".to_string()), "{sigs:?}");
+}

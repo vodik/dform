@@ -234,7 +234,7 @@ fn why_with_a_variable_prints_each_match() {
         .success()
         .stdout;
     assert!(
-        out.starts_with("q(1)\n") && out.contains("\n\nq(2)\n"),
+        out.starts_with("decl q(x: int)\nq(1)\n") && out.contains("\n\nq(2)\n"),
         "{out}"
     );
 }
@@ -488,4 +488,21 @@ fn plan_why_prints_a_copy_as_its_instance_statement() {
         "{out}"
     );
     assert!(!out.contains("instance_of("), "{out}");
+}
+
+/// `why` of a relation's facts prints its signature first, its columns as
+/// declared or inferred (R-34), as `decl` writes them.
+#[test]
+fn why_prints_a_relations_signature() {
+    let s = Scratch::new("why-signature");
+    s.write(
+        "p.df",
+        "edition 2026\nprovider fake\naz(\"us-test-1a\", 1)\naz(\"us-test-1b\", 2)\n",
+    );
+    let out = why_in(&s, "p.df", &["az(Z, I)"]);
+    assert!(
+        out.starts_with("decl az(string, int)\naz(\"us-test-1a\", 1)   p.df:3\n"),
+        "{out}"
+    );
+    assert_eq!(out.matches("decl az").count(), 1, "{out}");
 }

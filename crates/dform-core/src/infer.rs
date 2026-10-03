@@ -74,7 +74,12 @@ pub type Signatures = BTreeMap<(String, usize), Signature>;
 /// lowers them away: by relation name, and whether a module declares it
 /// (its relation is then the copy's, `n::p`).
 #[derive(Debug, Clone, Default)]
-pub struct Declared(BTreeMap<String, (Decl, bool)>);
+pub struct Declared(
+    BTreeMap<String, (Decl, bool)>,
+    /// The outputs declared with a type, by (scope, name): the stack's own
+    /// (`""`) and each copy's (`instance` or `use`), its component's.
+    BTreeMap<(String, String), TypeExpr>,
+);
 
 impl Declared {
     pub fn of(program: &Program) -> Declared {
@@ -91,7 +96,12 @@ impl Declared {
         }
         let mut out = BTreeMap::new();
         walk(&program.statements, false, &mut out);
-        Declared(out)
+        Declared(out, outputs(program))
+    }
+
+    /// The declared type of the output `name` of `scope`.
+    fn output(&self, scope: &str, name: &str) -> Option<&TypeExpr> {
+        self.1.get(&(scope.to_string(), name.to_string()))
     }
 
     /// The `decl` of a lowered relation: its own name's, or a module's of
@@ -103,6 +113,45 @@ impl Declared {
         let (_, last) = pred.rsplit_once("::")?;
         self.0.get(last).filter(|(_, m)| *m).map(|(d, _)| d)
     }
+}
+
+/// The typed outputs of `program`, by (scope, name): its own top-level
+/// ones (scope `""`) and each top-level copy's, its component's.
+fn outputs(program: &Program) -> BTreeMap<(String, String), TypeExpr> {
+    let typed = |stmts: &[Stmt]| -> Vec<(String, TypeExpr)> {
+        stmts
+            .iter()
+            .filter_map(|s| match s {
+                Stmt::Output(o) => Some((o.name.clone(), o.ty.clone()?)),
+                _ => None,
+            })
+            .collect()
+    };
+    let mut modules: BTreeMap<&str, &crate::ast::Module> = BTreeMap::new();
+    fn definitions<'a>(stmts: &'a [Stmt], out: &mut BTreeMap<&'a str, &'a crate::ast::Module>) {
+        for s in stmts {
+            if let Stmt::Module(m) = s {
+                out.insert(&m.name, m);
+                definitions(&m.body, out);
+            }
+        }
+    }
+    definitions(&program.statements, &mut modules);
+    let mut out = BTreeMap::new();
+    for (k, t) in typed(&program.statements) {
+        out.insert((String::new(), k), t);
+    }
+    for s in &program.statements {
+        let (Stmt::Instance(u) | Stmt::Use(u)) = s else {
+            continue;
+        };
+        if let Some(m) = modules.get(u.module.as_str()) {
+            for (k, t) in typed(&m.body) {
+                out.insert((u.name.clone(), k), t);
+            }
+        }
+    }
+    out
 }
 
 /// Relations the compiler writes and reads with values of any type: not a
@@ -420,6 +469,38 @@ impl Pass<'_> {
             return;
         }
         match (a.pred.as_str(), a.args.as_slice()) {
+            // An output's or a `let`'s cell: one column, whatever reads it
+            // or contributes to it, typed by the output's declaration and
+            // the values given it (R-34).
+            (
+                "attr" | "arg",
+                [
+                    Term::Val(Value::Str(typ)),
+                    Term::Val(Value::Str(scope)),
+                    Term::Val(Value::Str(p)),
+                    v,
+                    ..,
+                ],
+            ) if typ == crate::transform::OUTPUT || typ == "let" => {
+                let cell = match scope.as_str() {
+                    "" => format!("{typ} {p}"),
+                    s => format!("{typ} {s}.{p}"),
+                };
+                let c = (cell.clone(), 1, 0);
+                if typ == crate::transform::OUTPUT
+                    && let Some(t) = self.declared.output(scope, p)
+                {
+                    let n = self.s.column(&c);
+                    self.s.hard(n, types::of_expr(t), a.span, cell);
+                }
+                // A variable or a literal; a computed value (an attribute
+                // read, `ref(T, A, path)`) is typed where it is read.
+                match v {
+                    Term::Var(_) | Term::Val(_) => self.arg(rule, c, v, a.span),
+                    t => self.calls(rule, t, a.span),
+                }
+                return;
+            }
             ("attr", [Term::Val(Value::Str(typ)), scope, Term::Val(Value::Str(p)), Term::Var(v)]) => {
                 let found = if typ == crate::modules::INPUT {
                     match scope {

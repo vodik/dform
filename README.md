@@ -1338,7 +1338,9 @@ function call, a read (`database.backup_days = 14`), a lookup
 that are the facts the firing read, recursively, each spelled as the
 program names it: `net.vpc["main"]` for a resource, `net.vpc["main"].cidr
 = 10.0.0.0/16` for an attribute, `input env = "prod"` and `let n = 3`
-for a cell, a relation as `zone("us-test-1a", 1)`. An attribute or an
+for a cell, a relation as `zone("us-test-1a", 1)` (its facts after its
+signature, `decl zone(name: string, index: int)`, the columns as declared
+or inferred, when any has a type). An attribute or an
 input is `merged from N contributions`, each with its value, its rank when
 it is not normal (`@default`) and the statement that made it: an input's
 default, each `set` that gives it (`stacks/tour.df:141  set {

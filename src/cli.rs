@@ -1827,7 +1827,14 @@ fn run_with(
                 *json,
                 &cli.table,
             )?,
-            Cmd::Why { pattern, all, core } => why_tree(pattern, *all, *core, &x.res, &x.redact)?,
+            Cmd::Why { pattern, all, core } => why_tree(
+                pattern,
+                *all,
+                *core,
+                &x.res,
+                &x.redact,
+                ev.located.loaded.lowered.as_ref().map(|l| &l.signatures),
+            )?,
             Cmd::Explain { addresses } => {
                 let addresses = addresses
                     .iter()
@@ -2802,6 +2809,7 @@ fn why_tree(
     core: bool,
     res: &engine::EvalResult,
     redact: &query::Redactor,
+    signatures: Option<&crate::infer::Signatures>,
 ) -> Result<()> {
     let matched = match input_cell(pattern, &res.facts)? {
         Some(m) => m,
@@ -2831,12 +2839,26 @@ fn why_tree(
         redact,
         all,
     };
+    // A relation's facts follow its signature, its columns as declared or
+    // inferred (R-34), as `decl` writes them: once, before the first, when
+    // any column has a type.
+    let mut typed = BTreeSet::new();
     for (i, (a, focus)) in matched.iter().enumerate() {
         let Some(id) = res.circuit.fact_id(&engine::circuit_fact(a)) else {
             bail!("internal: no provenance for {}", partition::fmt_atom(a));
         };
         if i > 0 {
             println!();
+        }
+        if !core
+            && let Some(sig) = signatures.and_then(|s| s.get(&(a.pred.clone(), a.args.len())))
+            && sig
+                .columns
+                .iter()
+                .any(|c| c.ty.as_ref().is_some_and(|t| *t != crate::types::Ty::Any))
+            && typed.insert(&a.pred)
+        {
+            println!("decl {sig}");
         }
         if core {
             print!("{}", printer.tree(id, focus.as_ref()));
