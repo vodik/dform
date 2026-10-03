@@ -30,6 +30,26 @@ impl Term {
     pub fn is_var(&self) -> bool {
         matches!(self, Term::Var(_))
     }
+
+    /// A constant term's value: a literal, or a list or object of them
+    /// (a fact's argument, as `--set k=@FILE.df` and an `--input-file`
+    /// give it); none for a term with a variable or a call in it.
+    pub fn ground(&self) -> Option<Value> {
+        match self {
+            Term::Val(v) => Some(v.clone()),
+            Term::List(xs) => xs
+                .iter()
+                .map(Term::ground)
+                .collect::<Option<_>>()
+                .map(Value::List),
+            Term::Obj(m) => m
+                .iter()
+                .map(|(k, x)| Some((k.clone(), x.ground()?)))
+                .collect::<Option<_>>()
+                .map(Value::Obj),
+            _ => None,
+        }
+    }
 }
 
 impl PartialEq for Term {
@@ -433,4 +453,27 @@ pub enum Lit {
     Ge(Term, Term),
     Lt(Term, Term),
     Le(Term, Term),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_term_is_ground_when_no_variable_or_call_is_in_it() {
+        let s = |x: &str| Term::Val(Value::Str(x.into()));
+        let obj = Term::Obj(BTreeMap::from([(
+            "a".to_string(),
+            Term::List(vec![s("x")]),
+        )]));
+        assert_eq!(
+            obj.ground(),
+            Some(Value::Obj(BTreeMap::from([(
+                "a".to_string(),
+                Value::List(vec![Value::Str("x".into())])
+            )])))
+        );
+        let var = Term::List(vec![s("x"), Term::Var("X".into())]);
+        assert_eq!(var.ground(), None);
+    }
 }

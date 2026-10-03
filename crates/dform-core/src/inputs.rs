@@ -259,25 +259,6 @@ pub fn coerce(t: &TypeExpr, v: Value) -> Value {
     }
 }
 
-/// A constant term's value: a fact's argument, as `--set k=@FILE.df` and
-/// an `--input-file` give it.
-pub fn ground(t: &Term) -> Option<Value> {
-    match t {
-        Term::Val(v) => Some(v.clone()),
-        Term::List(xs) => xs
-            .iter()
-            .map(ground)
-            .collect::<Option<_>>()
-            .map(Value::List),
-        Term::Obj(m) => m
-            .iter()
-            .map(|(k, x)| Some((k.clone(), ground(x)?)))
-            .collect::<Option<_>>()
-            .map(Value::Obj),
-        _ => None,
-    }
-}
-
 fn shown(v: &Value) -> String {
     match v {
         Value::Str(s) => s.clone(),

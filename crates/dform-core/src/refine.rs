@@ -72,23 +72,6 @@ impl fmt::Display for Constraint {
     }
 }
 
-fn ground(t: &Term) -> Option<Value> {
-    match t {
-        Term::Val(v) => Some(v.clone()),
-        Term::List(xs) => xs
-            .iter()
-            .map(ground)
-            .collect::<Option<_>>()
-            .map(Value::List),
-        Term::Obj(m) => m
-            .iter()
-            .map(|(k, x)| Some((k.clone(), ground(x)?)))
-            .collect::<Option<_>>()
-            .map(Value::Obj),
-        _ => None,
-    }
-}
-
 /// A constraint term as a schema file or a `type_refine` fact writes it:
 /// `range(1, 35)`, `enum([a, b])`, `regex("^[a-z]+$")`, or its text.
 pub fn from_term(t: &Term) -> Result<Constraint, String> {
@@ -97,7 +80,7 @@ pub fn from_term(t: &Term) -> Result<Constraint, String> {
         Term::Val(Value::Str(s)) => return parse(s),
         _ => return Err(format!("not a refinement: {t:?}")),
     };
-    let int = |i: usize| match args.get(i).and_then(ground) {
+    let int = |i: usize| match args.get(i).and_then(Term::ground) {
         Some(Value::Int(n)) => Ok(n),
         _ => Err(format!("{name}: argument {} must be an integer", i + 1)),
     };
@@ -145,7 +128,7 @@ pub fn from_term(t: &Term) -> Result<Constraint, String> {
         }
         "regex" => {
             arity(1)?;
-            let Some(Value::Str(re)) = args.first().and_then(ground) else {
+            let Some(Value::Str(re)) = args.first().and_then(Term::ground) else {
                 return Err("regex takes a string".into());
             };
             check_regex(&re)?;
@@ -153,7 +136,7 @@ pub fn from_term(t: &Term) -> Result<Constraint, String> {
         }
         "enum" => {
             arity(1)?;
-            let Some(Value::List(vs)) = args.first().and_then(ground) else {
+            let Some(Value::List(vs)) = args.first().and_then(Term::ground) else {
                 return Err("enum takes a list of values".into());
             };
             if vs.is_empty() {
@@ -163,7 +146,7 @@ pub fn from_term(t: &Term) -> Result<Constraint, String> {
         }
         "type" => {
             arity(1)?;
-            match args.first().and_then(ground) {
+            match args.first().and_then(Term::ground) {
                 Some(Value::Str(t)) if t == "int" => Constraint::IsInt,
                 Some(Value::Str(t)) if t == "string" => Constraint::IsStr,
                 Some(Value::Str(t)) if t == "bool" => Constraint::IsBool,
@@ -295,7 +278,7 @@ pub fn split(body: &[Lit], names: &[&str]) -> (Vec<Constraint>, Vec<Lit>) {
             && a.pred == "member"
             && let [list, x] = a.args.as_slice()
             && is_self(x)
-            && let Some(Value::List(vs)) = ground(list)
+            && let Some(Value::List(vs)) = list.ground()
             && !vs.is_empty()
         {
             out.push(Constraint::OneOf(vs.into_iter().collect()));
@@ -315,7 +298,7 @@ pub fn split(body: &[Lit], names: &[&str]) -> (Vec<Constraint>, Vec<Lit>) {
             continue;
         };
         if is_self(&subject) {
-            match (op, int(&c), ground(&c)) {
+            match (op, int(&c), c.ground()) {
                 (Op::Eq, _, Some(v)) if nulls_free(&v) => {
                     out.push(Constraint::OneOf(BTreeSet::from([v])))
                 }
@@ -894,13 +877,13 @@ pub fn check(program: &Program, schema: &Schema) -> Result<()> {
             continue;
         }
         let (Some(Value::Str(typ)), Some(Value::Str(path)), Some(value)) = (
-            ground(&head.args[0]),
-            ground(&head.args[2]),
-            ground(&head.args[3]),
+            head.args[0].ground(),
+            head.args[2].ground(),
+            head.args[3].ground(),
         ) else {
             continue;
         };
-        let addr = ground(&head.args[1]);
+        let addr = head.args[1].ground();
         for r in &refs {
             // A variable address meets only the per-type refinements.
             let applies = match (&r.addr, &addr) {

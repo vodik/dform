@@ -4832,7 +4832,7 @@ fn set_file(k: &str, path: &Path) -> Result<Value> {
             let program = crate::parser::parse_program(&text).with_context(at)?;
             match program.statements.as_slice() {
                 [crate::ast::Stmt::Fact(a)] if a.pred == k => match a.args.as_slice() {
-                    [t] => inputs::ground(t),
+                    [t] => t.ground(),
                     _ => None,
                 }
                 .ok_or_else(|| anyhow::anyhow!("{}: the fact {k}(..) holds one value", at())),

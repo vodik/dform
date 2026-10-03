@@ -54,24 +54,6 @@ fn contains(v: &Value, w: &Value) -> bool {
     }
 }
 
-/// A ground term's value: literals, lists and objects of them.
-fn ground(t: &Term) -> Option<Value> {
-    match t {
-        Term::Val(v) => Some(v.clone()),
-        Term::List(xs) => xs
-            .iter()
-            .map(ground)
-            .collect::<Option<_>>()
-            .map(Value::List),
-        Term::Obj(m) => m
-            .iter()
-            .map(|(k, t)| Some((k.clone(), ground(t)?)))
-            .collect::<Option<BTreeMap<_, _>>>()
-            .map(Value::Obj),
-        _ => None,
-    }
-}
-
 /// The facts `pattern` names, each with the focus it was matched under.
 pub fn find(pattern: &Atom, facts: &BTreeSet<Atom>) -> Result<Vec<(Atom, Option<Focus>)>> {
     let matched = |p: &Atom| -> Result<Vec<Atom>> {
@@ -99,7 +81,7 @@ pub fn find(pattern: &Atom, facts: &BTreeSet<Atom>) -> Result<Vec<(Atom, Option<
     let top = keys.remove(0);
     let value = match &pattern.args[3] {
         Term::Var(_) | Term::Wildcard => None,
-        t => match ground(t) {
+        t => match t.ground() {
             Some(v) => Some(v),
             None => return Ok(vec![]),
         },
