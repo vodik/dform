@@ -107,7 +107,7 @@
 
 [
   "edition" "provider" "key" "input" "from" "output"
-  "extern" "persist" "type" "decl" "mixed" "let" "set"
+  "extern" "type" "decl" "mixed" "let" "set"
   "component" "instance" "use" "as" "resource"
 ] @keyword
 

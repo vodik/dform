@@ -55,7 +55,7 @@ input nodes {
 output zone
 output conn { host = h, port: int = 5432 } where h = "db"
 input relation: string = "an input named relation"
-extern file.json(+path, -value: string) persist
+extern file.json(+path, -value: string)
 decl p(a, b) mixed
 decl project(id: int, name: string)
 type db.pg {

@@ -35,7 +35,7 @@ const TERM_WORDS = ['not', 'in', 'has', 'where', 'if', 'true', 'false'];
 
 // Contextual words: plain names but where their construct is expected.
 const CONTEXTUAL = [
-  'from', 'mixed', 'persist', 'check', 'as',
+  'from', 'mixed', 'check', 'as',
   'required', 'computed', 'id', 'sensitive', 'nullable',
 ];
 
@@ -282,7 +282,6 @@ export default grammar({
       '(',
       commaSep1($.bind_arg),
       ')',
-      optional('persist'),
     ),
 
     bind_arg: $ => seq(

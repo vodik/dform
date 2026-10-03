@@ -1303,12 +1303,40 @@ pub mod random {
 
     thread_local! {
         static MASTER: RefCell<Option<(Vec<u8>, String)>> = const { RefCell::new(None) };
+        /// The secrets this thread derived since its master was set, each
+        /// by the call that derived it (`random.password("db")`): what the
+        /// plan, `query` and `why` label one with.
+        static DERIVED: RefCell<std::collections::BTreeMap<Value, String>> =
+            const { RefCell::new(std::collections::BTreeMap::new()) };
     }
 
     /// Derive this thread's `random.*` from `ikm` for `deployment` until
     /// the next call.
     pub fn set_master(ikm: Vec<u8>, deployment: &str) {
         MASTER.with(|m| *m.borrow_mut() = Some((ikm, deployment.to_string())));
+        DERIVED.with(|d| d.borrow_mut().clear());
+    }
+
+    /// The secrets derived on this thread since its master was set, each
+    /// with its label.
+    pub fn derived() -> Vec<(Value, String)> {
+        DERIVED.with(|d| {
+            d.borrow()
+                .iter()
+                .map(|(v, l)| (v.clone(), l.clone()))
+                .collect()
+        })
+    }
+
+    /// `v`, a secret derived by `random.WHAT(key, ..)`, labelled.
+    fn secret(what: &str, key: &str, v: Option<Value>) -> Option<Value> {
+        let v = v?;
+        DERIVED.with(|d| {
+            d.borrow_mut()
+                .entry(v.clone())
+                .or_insert_with(|| format!("random.{what}({key:?})"));
+        });
+        Some(v)
     }
 
     /// The master's input key material: `RANDOM_MASTER` from the
@@ -1418,7 +1446,11 @@ pub mod random {
         }
         let set = alphabet(name)?;
         let n = length.to_string();
-        chars("password", key, &[&n, name], length as usize, &set).map(Value::Str)
+        secret(
+            "password",
+            key,
+            chars("password", key, &[&n, name], length as usize, &set).map(Value::Str),
+        )
     }
 
     pub fn bytes(a: &[Value]) -> Option<Value> {
@@ -1430,9 +1462,13 @@ pub mod random {
             return None;
         }
         let b = derive("bytes", key, &[&n.to_string()], *n as usize)?;
-        Some(Value::Str(
-            base64::engine::general_purpose::STANDARD.encode(b),
-        ))
+        secret(
+            "bytes",
+            key,
+            Some(Value::Str(
+                base64::engine::general_purpose::STANDARD.encode(b),
+            )),
+        )
     }
 
     pub fn id(a: &[Value]) -> Option<Value> {
@@ -1472,10 +1508,14 @@ pub mod random {
         let [Value::Str(key)] = a else { return None };
         let version = chars("signing_key version", key, &[], 4, &ALNUM[..52])?;
         let seed = derive("signing_key ed25519", key, &[], 32)?;
-        Some(Value::Str(format!(
-            "ed25519 a_{version} {}",
-            base64::engine::general_purpose::STANDARD_NO_PAD.encode(seed)
-        )))
+        secret(
+            "signing_key",
+            key,
+            Some(Value::Str(format!(
+                "ed25519 a_{version} {}",
+                base64::engine::general_purpose::STANDARD_NO_PAD.encode(seed)
+            ))),
+        )
     }
 }
 

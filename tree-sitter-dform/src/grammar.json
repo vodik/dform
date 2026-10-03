@@ -1247,18 +1247,6 @@
         {
           "type": "STRING",
           "value": ")"
-        },
-        {
-          "type": "CHOICE",
-          "members": [
-            {
-              "type": "STRING",
-              "value": "persist"
-            },
-            {
-              "type": "BLANK"
-            }
-          ]
         }
       ]
     },
@@ -3270,10 +3258,6 @@
               },
               {
                 "type": "STRING",
-                "value": "persist"
-              },
-              {
-                "type": "STRING",
                 "value": "check"
               },
               {
@@ -4215,10 +4199,6 @@
                 },
                 {
                   "type": "STRING",
-                  "value": "persist"
-                },
-                {
-                  "type": "STRING",
                   "value": "check"
                 },
                 {
@@ -4337,10 +4317,6 @@
               {
                 "type": "STRING",
                 "value": "mixed"
-              },
-              {
-                "type": "STRING",
-                "value": "persist"
               },
               {
                 "type": "STRING",

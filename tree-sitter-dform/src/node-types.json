@@ -2403,10 +2403,6 @@
     "named": false
   },
   {
-    "type": "persist",
-    "named": false
-  },
-  {
     "type": "provider",
     "named": false
   },

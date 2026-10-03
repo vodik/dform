@@ -420,7 +420,7 @@ fn edge_cases_agree() {
         "module m {\n  input on: bool\n}\n",
         "export type t\n",
         "output k: int = n where q(n)\n",
-        "extern file.json(+path, -value: string) persist\n",
+        "extern file.json(+path, -value: string)\n",
         "decl p(a, b) mixed\ndecl q(a: int, b: list(string))\n",
         "type db.pg {\n  backup_days: int required check 1 <= backup_days\n  net: { cidr: inet, id: string computed id }\n}\n",
         "type zone = enum(\"a\", \"b\")\n",
@@ -459,4 +459,13 @@ fn edge_cases_agree() {
         }
     }
     assert!(bad.is_empty(), "{}", bad.join("\n"));
+}
+
+/// `persist` after an extern is gone (R-60, `memo.first`): the editor
+/// grammar marks it an error. The compiler's parser still reads it, for the
+/// resolver's error naming `memo.first`.
+#[test]
+fn persist_after_an_extern_is_an_editor_error() {
+    let src = "extern file.json(+path, -value: string) persist\n";
+    assert!(!ts_errors(&ts_parse(src)).is_empty());
 }

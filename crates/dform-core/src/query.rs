@@ -200,6 +200,8 @@ const VALUE_PREDS: [&str; 5] = ["arg", "attr", "world_attr", "cloud_attr", "clou
 pub struct Redactor {
     /// Secret value -> label `T/A#P`.
     secrets: BTreeMap<Value, String>,
+    /// A secret `random.*` derived -> the call (`random.password("db")`).
+    derived: BTreeMap<Value, String>,
 }
 
 impl Redactor {
@@ -249,6 +251,11 @@ impl Redactor {
                 r.add(v, &format!("{}/{name}", a.pred));
             }
         }
+        // A secret `random.*` derived this run: by its call.
+        for (v, l) in crate::functions::random::derived() {
+            r.add(&v, &l);
+            r.derived.insert(v, l);
+        }
         // A memo that keeps a secret: its candidate is one too, of the
         // same label (a new master's password, say, not kept).
         for a in facts.iter().filter(|a| a.pred == crate::memo::FIRST) {
@@ -293,6 +300,12 @@ impl Redactor {
             Value::Str(k) if s.contains(k.as_str()) => Some(l.clone()),
             _ => None,
         })
+    }
+
+    /// The call that derived `v`, when it is a secret `random.*` gave
+    /// (`random.password("db")`).
+    pub fn derived(&self, v: &Value) -> Option<&str> {
+        self.derived.get(v).map(String::as_str)
     }
 
     pub fn is_secret(&self, v: &Value) -> bool {

@@ -69,7 +69,11 @@ pub fn shown(v: Option<&Json>, sensitive: bool, schema: &Schema, r: &Redactor) -
             class: null_class(l, schema),
         },
         Some((_, l)) => Shown::Sensitive(Some(crate::ir::label(l))),
-        None if sensitive || has_secret(v) => Shown::Sensitive(None),
+        // At a sensitive path, a derived secret by the call that derived
+        // it (`random.password("db")`), anything else bare.
+        None if sensitive || has_secret(v) => {
+            Shown::Sensitive(r.derived(&json_value(v)).map(str::to_string))
+        }
         None => match secret_in(&r.json(&json_value(v))) {
             Some(l) => Shown::Sensitive(Some(l)),
             None => Shown::Value(v.clone()),
