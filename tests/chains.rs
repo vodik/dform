@@ -52,7 +52,10 @@ fn a_nested_chain_after_a_call() {
     let src = r#"doc("{\"a\": {\"b\": [{\"c\": 1}, {\"c\": 2}]}}")
 second(d, v) where doc(d), v = json.decode(d).a.b[1].c
 "#;
-    assert_eq!(facts(src, "second"), [r#"second("{\"a\": {\"b\": [{\"c\": 1}, {\"c\": 2}]}}", 2)"#]);
+    assert_eq!(
+        facts(src, "second"),
+        [r#"second("{\"a\": {\"b\": [{\"c\": 1}, {\"c\": 2}]}}", 2)"#]
+    );
 }
 
 #[test]
@@ -66,7 +69,10 @@ unpinned(i) where image(i), not has oci.parse(i).digest
         facts(src, "pinned"),
         [r#"pinned("gcr.io/shop/api@sha256:9f2c")"#]
     );
-    assert_eq!(facts(src, "unpinned"), [r#"unpinned("gcr.io/shop/api:v1")"#]);
+    assert_eq!(
+        facts(src, "unpinned"),
+        [r#"unpinned("gcr.io/shop/api:v1")"#]
+    );
     // Under `not` the call is inside what is negated: a text that is no
     // reference has no digest.
     let src = r#"image("Not A Reference")

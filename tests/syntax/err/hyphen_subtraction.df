@@ -2,4 +2,4 @@ edition 2026
 
 # Parses as a subtraction of two names, which is never what was meant.
 region(us-east)
-ok(x) where q(x), y = x - 1, z = x / 2, r(y, z)
+ok(y, z) where q(x), y = x - 1, z = x / 2

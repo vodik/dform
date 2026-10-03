@@ -270,10 +270,11 @@ either side of `==` or `!=` with a resource on the other (R-43). `T[e]`
 and a typed variable are references in the same places.
 
 A variable must have a binding occurrence somewhere in its rule: an
-argument of a relation (a pattern in it included), either side of `=`, the
-left of `in`, a named argument, an index of a read, or the block's clause.
-A name with none was meant as a string: `env == prod` is `unknown name
-prod`. `==`, `!=` and the orders test; they do not bind.
+argument of a relation (a pattern in it included), the side of `=` the
+other literals do not bind, the left of `in`, a named argument, an index
+of a read, or the block's clause ("Bodies"). A name with none was meant as
+a string: `env < prod` is `unknown name prod`. `==`, `!=` and the orders
+test; they do not bind.
 
 ### Types
 
@@ -1213,6 +1214,34 @@ of `=` it is an error that says where a pattern goes, and a list is
 `[a, b]`; a list on the left of `=` is written as a tuple. `why` prints
 the statement with its patterns as written.
 
+### Bodies
+
+What binds a variable (R-10): `x = t` with `x` bound by no other literal
+(a tuple or object pattern on the left binds its names), the left of
+`x in t`, an aggregate (`n = count(x)` binds `n`), a relation atom's free
+variables, and a name alone as an index (`T[e].p`, `xs[i]`: the key of
+the row read). Every other operand, of `==`, `!=`, `<`, `<=`, `>`, `>=`,
+`+`, `-`, `*`, `/`, `%`, a function's argument, an attribute read (`x.p`
+reads `x`), `has` and `not`, needs its variables bound by some other
+literal that does not itself depend on them. The order the literals are
+written in is irrelevant to what they mean: the body is evaluated each
+literal after what binds what it reads, otherwise as written, so `p(x)
+where x < 3, q(x)` is `q(x), x < 3`, and a negation is decided once the
+body binds the names it shares with it.
+
+- An unbound operand is an error at it: "`y` is unbound at this `<`; bind
+  it with `=`, `in`, or a relation first". A name no literal binds is
+  `unknown name y` (a string meant, unquoted).
+- `==` never binds: `image == oci.parse(c.image)` with nothing else
+  binding `image` is "`image` is unbound at this `==`; `=` binds, `==`
+  compares".
+- `=` with both sides bound by the other literals is "both sides are
+  bound; write `==`": `pool = "np-a", node_pool_up(pool)` is
+  `node_pool_up(pool), pool == "np-a"`. So each spelling has one meaning.
+  A tuple or object pattern on the left compares a name that is bound
+  already (`(a, b) = l` with `a` bound tests it), and `(_, _) = e` tests
+  the shape.
+
 ### Reference or read
 
 A dot on a reference means one of two things, decided by position (G-6):
@@ -1530,8 +1559,10 @@ A formatted file prints back byte for byte.
   and the built-in provider schemas; the resolver runs before providers are
   chosen, so a namespace no built-in schema closes may hold a provider's
   type it does not see (see "Types").
-- `=` binds either side; `==` binds neither (G-28 is about how `fmt` prints
-  them; here it decides which one may introduce a variable).
+- `=` binds the side no other literal binds; `==` binds neither (G-28 is
+  about how `fmt` prints them; here it decides which one may introduce a
+  variable). Both sides bound is an error that says to write `==`
+  ("Bodies").
 - An `output` with a body, or whose value reads, is the rule
   `output(k, t') :- B, reads`, in a module or a component too.
 - A module reads its user's names outward, so it lowers only through the

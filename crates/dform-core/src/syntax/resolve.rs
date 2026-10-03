@@ -37,6 +37,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 mod aggregate;
 mod alias;
+mod binding;
 mod heads;
 mod membership;
 mod pattern;
@@ -2748,15 +2749,11 @@ impl<'u> Lowerer<'u> {
 
     /// The clause of a block statement: the `where` body after its block.
     fn clauses(&mut self, rc: &mut Rc, stmt: &SyntaxNode) -> L<Vec<Lit>> {
-        let mut out = Vec::new();
-        let mut failed = false;
+        let mut lits = Vec::new();
         for c in stmt.children().filter(|c| c.kind() == CLAUSE) {
-            match node(&c, BODY).map(|b| self.body(rc, &b)) {
-                Some(Ok(ls)) => out.extend(ls),
-                _ => failed = true,
-            }
+            lits.extend(node(&c, BODY).ok_or(Skip)?.children());
         }
-        if failed { Err(Skip) } else { Ok(out) }
+        self.lits(rc, &lits)
     }
 
     /// The assignments of a block, their reads appended to `reads`.
@@ -3827,10 +3824,46 @@ impl<'u> Lowerer<'u> {
     // --- bodies -------------------------------------------------------------
 
     fn body(&mut self, rc: &mut Rc, n: &SyntaxNode) -> L<Vec<Lit>> {
+        let lits: Vec<SyntaxNode> = n.children().collect();
+        self.lits(rc, &lits)
+    }
+
+    /// A statement's body (its clauses together), checked for what binds
+    /// and lowered in the order its literals hold (R-10): each after what
+    /// binds what it reads, otherwise as written. A body nested in it is
+    /// checked with it.
+    fn lits(&mut self, rc: &mut Rc, lits: &[SyntaxNode]) -> L<Vec<Lit>> {
+        if self.nested > 0 {
+            return self.lits_as_written(rc, lits);
+        }
+        let saved = (
+            rc.clone(),
+            self.helpers.len(),
+            self.negs,
+            self.aggs.len(),
+            self.agg_rules,
+        );
+        let outer = rc.outer.clone();
+        let out = self.lits_as_written(rc, lits)?;
+        let order = self.check_order(rc, lits, &outer_names(rc, &outer))?;
+        if order.iter().enumerate().all(|(i, &j)| i == j) {
+            return Ok(out);
+        }
+        let (rc0, helpers, negs, aggs, agg_rules) = saved;
+        *rc = rc0;
+        self.helpers.truncate(helpers);
+        self.negs = negs;
+        self.aggs.truncate(aggs);
+        self.agg_rules = agg_rules;
+        let lits: Vec<SyntaxNode> = order.iter().map(|&i| lits[i].clone()).collect();
+        self.lits_as_written(rc, &lits)
+    }
+
+    fn lits_as_written(&mut self, rc: &mut Rc, lits: &[SyntaxNode]) -> L<Vec<Lit>> {
         let mut out = Vec::new();
         let mut failed = false;
-        for l in n.children() {
-            if self.lit(rc, &l, &mut out).is_err() {
+        for l in lits {
+            if self.lit(rc, l, &mut out).is_err() {
                 failed = true;
             }
         }
@@ -4234,9 +4267,7 @@ impl<'u> Lowerer<'u> {
         let lhs_node = ts.first().ok_or(Skip)?;
         let any_type = tokens(n).any(|t| t.kind() == RESOURCE_KW);
         let rhs = ts.get(1).and_then(Chain::of);
-        if !any_type
-            && let (Some(c), Some(rhs_node)) = (&rhs, ts.get(1))
-        {
+        if !any_type && let (Some(c), Some(rhs_node)) = (&rhs, ts.get(1)) {
             // `x in T`, `T` an enum type (R-70): each of its values, in
             // order, as a range is enumerated.
             if let Some(e) = self.enum_type(rc, c, rhs_node)? {
@@ -6449,6 +6480,15 @@ fn bound_vars(body: &[Lit]) -> BTreeSet<String> {
         }
     }
     out
+}
+
+/// The source names of the lowered variables in `outer`.
+fn outer_names(rc: &Rc, outer: &BTreeSet<String>) -> BTreeSet<String> {
+    rc.vars
+        .iter()
+        .filter(|(_, low)| outer.contains(*low))
+        .map(|(src, _)| src.clone())
+        .collect()
 }
 
 fn lit_vars(l: &Lit, out: &mut BTreeSet<String>) {

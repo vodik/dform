@@ -1,5 +1,5 @@
-tests/syntax/err/unknown_name.df:8:27: unknown name `prod`
-  help: a variable is bound by a relation or an equality in the body; a string is quoted: "prod"
+tests/syntax/err/unknown_name.df:8:27: `prod` is unbound at this `==`; `=` binds, `==` compares
+  help: bind it with `prod = ..`, `in`, or a relation; a string is quoted: "prod"
 tests/syntax/err/unknown_name.df:9:34: variable `main` shadows the resource `main`: rename the variable, or write `main.path` to read it
 tests/syntax/err/unknown_name.df:10:22: variable `net` shadows the type namespace `net`: rename the variable, or write `net.path` to read it
 tests/syntax/err/unknown_name.df:11:20: unknown name `cfg`

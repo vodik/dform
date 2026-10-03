@@ -47,13 +47,16 @@ resource k8s.namespace dform_system { metadata.name = "dform-system" }
 # comparison is decided the tick after the pool is created.
 node_pool_up(np) where google.container_node_pool[np].instance_group != ""
 
+# The first zone's node pool.
+let first_pool = "np-${renfry.zones[0]}"
+
 # dform in the cluster, running the workload stack: it lands on the first
 # zone's node pool once that pool is up. Until then the rule may derive
 # after the boundary, and the plan holds it as a pending group.
 resource k8s.deployment dform_controller {
   metadata.name = "dform-controller"
   metadata.namespace = dform_system.metadata.name
-  metadata.annotations = { "dform.io/node-pool": google.container_node_pool[pool].instance_group }
+  metadata.annotations = { "dform.io/node-pool": google.container_node_pool[first_pool].instance_group }
   spec.replicas = 1
   spec.selector.matchLabels = { app: "dform-controller" }
   spec.template.metadata.labels = { app: "dform-controller" }
@@ -62,6 +65,6 @@ resource k8s.deployment dform_controller {
     image: "ghcr.io/renfry/dform:0.8",
     args: ["controller", "run", "workload"],
   }]
-} where pool = "np-${renfry.zones[0]}", node_pool_up(pool)
+} where node_pool_up(first_pool)
 
 output endpoint = renfry.endpoint

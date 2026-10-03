@@ -1,0 +1,8 @@
+edition 2026
+
+# What binds (R-10): `=`, `in`, an aggregate, a relation; nothing else.
+q(1, 2)
+cycle(x) where q(x, _), y < x, y = z, z = y + 1
+compare(x) where q(x, _), image == str.upper("a"), not has image.p
+twice(x) where q(x, y), x = y
+constant(x) where q(x, _), x = 1
