@@ -769,12 +769,12 @@ pub const BODIES: &[(&str, Body)] = &[
         _ => None,
     }),
     ("hash.sha256", |a| match a {
-        [Value::Str(s)] => Some(Value::Str(sha256_hex(s))),
+        [Value::Str(s)] => Some(Value::Str(crate::approval::sha256_hex(s.as_bytes()))),
         _ => None,
     }),
     ("hash.short", |a| match a {
         [Value::Str(s), Value::Int(n)] => {
-            let full = sha256_hex(s);
+            let full = crate::approval::sha256_hex(s.as_bytes());
             let n = usize::try_from(*n).ok()?;
             (n <= full.len()).then(|| Value::Str(full[..n].to_string()))
         }
@@ -1160,14 +1160,6 @@ fn is_tag(s: &str) -> bool {
 
 fn is_registry(s: &str) -> bool {
     !s.is_empty() && (s.contains('.') || s.contains(':') || s == "localhost")
-}
-
-/// The text's SHA-256, lower-case hex (`hash.sha256`, `hash.short`).
-fn sha256_hex(s: &str) -> String {
-    use sha2::{Digest, Sha256};
-    let mut h = Sha256::new();
-    h.update(s.as_bytes());
-    h.finalize().iter().map(|b| format!("{b:02x}")).collect()
 }
 
 /// A JSON value read into a dform one (`json.decode`, `yaml.decode`,
