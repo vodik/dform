@@ -248,7 +248,7 @@ fn hover_shows_every_contribution_and_why_prints_the_derivation() {
     assert!(text.contains("winning rank: normal"), "{text}");
     // Every contribution: the module's, and the policy pack's.
     assert!(
-        text.contains("network.df:15:42, instance network.vpc main"),
+        text.contains("network.df:21:42, instance network.vpc main"),
         "{text}"
     );
     assert!(text.contains("baseline.df:12:1, use baseline"), "{text}");
@@ -280,7 +280,7 @@ fn hover_shows_every_contribution_and_why_prints_the_derivation() {
         "{hover}"
     );
     assert!(
-        text.contains("network.df:15:26, instance network.vpc peer"),
+        text.contains("network.df:21:26, instance network.vpc peer"),
         "{hover}"
     );
     c.shutdown();
@@ -891,7 +891,9 @@ fn quick_fix_quotes_an_unknown_name() {
     assert!(texts[0].contains(" name = \"bogus\" }\n"), "{}", texts[0]);
 }
 
-/// A predicate with both facts and rules: `decl p(..) mixed` before them.
+/// A predicate with both facts and rules: `decl p(..) mixed` before them,
+/// then placed in the header with the file's other `decl`s (R-11a) when
+/// the edit is formatted (the file already was).
 #[test]
 fn quick_fix_declares_a_predicate_mixed() {
     let (_s, root) = example("demo");
@@ -906,7 +908,15 @@ fn quick_fix_declares_a_predicate_mixed() {
         "declare it: `decl q(a) mixed`",
     );
     assert!(
-        texts[0].ends_with("\ndecl q(a) mixed\nq(1)\nq(x) where data(\"zone\", x)\n"),
+        texts[0].contains(
+            "input cidrs { main: string = \"10.50.0.0/16\", peer: string = \"10.60.0.0/16\" }\n\
+             decl q(a) mixed\n"
+        ),
+        "{}",
+        texts[0]
+    );
+    assert!(
+        texts[0].ends_with("\nq(1)\nq(x) where data(\"zone\", x)\n"),
         "{}",
         texts[0]
     );
@@ -1066,7 +1076,7 @@ fn references_of_every_kind_of_name() {
         ("stacks/dform.df".into(), 17),
         ("stacks/dform.df".into(), 56),
         ("stacks/dform.df".into(), 98),
-        ("network.df".into(), 15),
+        ("network.df".into(), 21),
         ("baseline.df".into(), 18),
     ] {
         assert!(found.contains(&want), "{want:?} in {found:?}");
@@ -1079,7 +1089,7 @@ fn references_of_every_kind_of_name() {
         found,
         vec![
             ("network.df".into(), 13),
-            ("network.df".into(), 15),
+            ("network.df".into(), 21),
             ("stacks/dform.df".into(), 53),
             ("stacks/dform.df".into(), 56),
         ]
@@ -1115,10 +1125,10 @@ fn references_of_every_kind_of_name() {
     assert_eq!(
         found,
         vec![
-            ("network.df".into(), 15),
+            ("network.df".into(), 16),
             ("network.df".into(), 21),
-            ("network.df".into(), 22),
             ("network.df".into(), 27),
+            ("network.df".into(), 28),
         ]
     );
 
@@ -1137,7 +1147,7 @@ fn references_of_every_kind_of_name() {
     let found = references(&mut c, &root, &network, find(&network, "tags = { env", 1));
     assert_eq!(
         found,
-        vec![("baseline.df".into(), 12), ("network.df".into(), 15),]
+        vec![("baseline.df".into(), 12), ("network.df".into(), 21),]
     );
     c.shutdown();
 }
