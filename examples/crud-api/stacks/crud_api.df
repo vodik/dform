@@ -315,7 +315,8 @@ deny "container requests more memory than its limit" { workload: w, container: c
 
 deny "image not pinned by digest" { workload: w, image: c.image } where {
   container(w, c)
-  len(str.split(c.image, "@sha256:")) != 2
+  image == oci.parse(c.image)
+  not has image.digest
 }
 
 # A secret's value belongs in a Secret (envFrom, valueFrom); a plain

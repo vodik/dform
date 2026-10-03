@@ -1,6 +1,6 @@
 exit: ok
 -- stdout --
-== examples/crud-api/stacks/crud_api.df: 255 nodes, 1519 edges (379 negative)
+== examples/crud-api/stacks/crud_api.df: 256 nodes, 1521 edges (380 negative)
    STRATIFIED, 24 strata
    stratum 0:
      (arg, google.sql_database, instance)
@@ -160,8 +160,8 @@ exit: ok
      (attr, k8s.job, metadata)
      (attr, k8s.job, spec)
      (attr, k8s.job, status)
-     __neg_1
      __neg_2
+     __neg_3
      live_image
      live_schema
    stratum 7:
@@ -250,7 +250,8 @@ exit: ok
      (arg, output, ready_replicas)
      (arg, output, total_replicas)
      __neg_0
-     __neg_3
+     __neg_1
+     __neg_4
      container
    stratum 15:
      (attr, k8s.horizontal_pod_autoscaler, spec)
