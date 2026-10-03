@@ -30,14 +30,8 @@ pub struct Axis {
 fn bounded(t: &TypeExpr) -> Option<Vec<Value>> {
     match t {
         TypeExpr::Name(n) if n == "bool" => Some(vec![Value::Bool(false), Value::Bool(true)]),
-        TypeExpr::Apply(n, args) if n == "enum" => args
-            .iter()
-            .map(|a| match a {
-                TypeExpr::Str(v) | TypeExpr::Name(v) => Some(Value::Str(v.clone())),
-                _ => None,
-            })
-            .collect(),
-        _ => None,
+        // The values `x in T` enumerates (R-70).
+        t => crate::types::members(t).map(|ms| ms.into_iter().map(Value::Str).collect()),
     }
 }
 

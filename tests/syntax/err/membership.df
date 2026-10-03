@@ -1,0 +1,12 @@
+edition 2026
+
+input tier: enum("a", "b") = "a"
+input env: environment = "dev"
+
+# `x in T` ranges over an enum type's values (R-70); a cell is no type,
+# and a list type is no enum.
+type environment = enum("dev", "prod")
+type environments = list(environment)
+t(x) where x in tier
+e(x) where x in env
+l(x) where x in environments

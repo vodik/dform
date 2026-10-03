@@ -347,6 +347,21 @@ pub fn of_expr(t: &TypeExpr) -> Ty {
     }
 }
 
+/// An enum type's values, in declaration order: what `x in T` enumerates
+/// (R-70) and `dform test` takes for an input of the type.
+pub fn members(t: &TypeExpr) -> Option<Vec<String>> {
+    match t {
+        TypeExpr::Apply(n, args) if n == "enum" => args
+            .iter()
+            .map(|a| match a {
+                TypeExpr::Str(v) | TypeExpr::Name(v) => Some(v.clone()),
+                _ => None,
+            })
+            .collect(),
+        _ => None,
+    }
+}
+
 /// A literal where `ty` is expected (R-31): read as that type (a string
 /// is an `inet` or an `ip` where one is expected), or why it cannot be.
 /// What is not a literal is left as it is.

@@ -38,6 +38,7 @@ use std::collections::{BTreeMap, BTreeSet};
 mod aggregate;
 mod alias;
 mod heads;
+mod membership;
 mod pattern;
 mod provider;
 mod singleton;
@@ -200,6 +201,8 @@ struct Scope {
     parent: Option<usize>,
     /// Inputs and `let`s: names read bare.
     values: BTreeSet<String>,
+    /// Each input's declaration, for its type.
+    input_nodes: BTreeMap<String, SyntaxNode>,
     /// A `let`'s rows: the terms it is defined by.
     lets: BTreeMap<String, Vec<SyntaxNode>>,
     /// Resources with a static name: name -> the types declaring it.
@@ -847,7 +850,8 @@ impl<'u> Lowerer<'u> {
             match n.kind() {
                 INPUT => {
                     let name = word_text(&n, 1);
-                    self.decls.scopes[decl].values.insert(name);
+                    self.decls.scopes[decl].values.insert(name.clone());
+                    self.decls.scopes[decl].input_nodes.insert(name, n.clone());
                 }
                 LET => {
                     let name = word_text(&n, 1);
@@ -4207,6 +4211,15 @@ impl<'u> Lowerer<'u> {
         let lhs_node = ts.first().ok_or(Skip)?;
         let any_type = tokens(n).any(|t| t.kind() == RESOURCE_KW);
         let rhs = ts.get(1).and_then(Chain::of);
+        if !any_type
+            && let (Some(c), Some(rhs_node)) = (&rhs, ts.get(1))
+        {
+            // `x in T`, `T` an enum type (R-70): each of its values, in
+            // order, as a range is enumerated.
+            if let Some(e) = self.enum_type(rc, c, rhs_node)? {
+                return self.enum_member(rc, lhs_node, e, out, span);
+            }
+        }
         let typ = if any_type {
             let lhs = Chain::of(lhs_node).map(|c| c.head).unwrap_or_default();
             Some(match rc.types.get(&lhs) {

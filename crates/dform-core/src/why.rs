@@ -526,6 +526,11 @@ impl Surface<'_, '_> {
                 }
                 format!("{} = {}{}", cell(t, a, p), r.surface(v), rank_text(rank))
             }
+            // `x in T` over an enum type (R-70): the type, as declared.
+            ("__enum", [Value::Str(t), Value::List(vs)]) => format!(
+                "type {t} = enum({})",
+                vs.iter().map(|v| r.surface(v)).collect::<Vec<_>>().join(", ")
+            ),
             ("deny" | "warn", [msg @ Value::Str(_), ctx @ ..]) => {
                 let mut out = format!("{} {}", f.pred, r.surface(msg));
                 for c in ctx {

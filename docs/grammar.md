@@ -1079,7 +1079,8 @@ first: `+ -` (left), `* / %` (left), unary `-`. An aggregate (`count(x)`,
 lower to a record pattern.
 
 Membership (H-9): `x in e` for a list, `x in T` for a type, `x in
-resource` for any, `x in world.T` for a live object, `i in lo..hi` for
+resource` for any, `x in E` for each value of an enum type, `x in
+world.T` for a live object, `i in lo..hi` for
 the integers from `lo` up to `hi` (half-open) and `i in lo..=hi` up to
 and including it (R-56); `(i, x) in e` gives each index and element of
 a list, `(k, v) in e` each key and value of an object (R-58,
@@ -1091,6 +1092,16 @@ row per thing (R-55). A range anywhere but after `in` is an error, "a
 range is enumerated with `in`; `[lo..hi]` is not a list", so it never
 becomes a list by accident: `int.range(lo, hi, step)` is the function
 that gives one.
+
+`x in E`, `E` an enum type alias (`type environment = enum("staging",
+"prod")`), binds `x` to each value in the order the type declares them,
+as a range does, and `(i, x) in E` each with its position (R-70): a
+bucket per environment is `resource T "b-${e}" { .. } where e in
+environment`, with no fact restating the values. `why` shows the type as
+the leaf. An input of an enum type holds one value, so `x in env` is an
+error that says to name the type and range over it; an inline
+`enum(..)` has no name, so it says to declare one. `dform test` takes an
+enum input's values from the same type, in the same order.
 
 ### Aggregates
 
@@ -1357,6 +1368,7 @@ as it is.
 | `lifecycle(r, "f")`, `deformation(k, r, _)` (a column that takes a resource) | `r` as `ref(T, A, "")`: a value in a fact or head, taken apart in a body; `r` with no static type is the reference itself |
 | `r == n`, `r != T[e]` (a resource on either side) | `R = ref(T, "n", "")`, `R != ref(T, e', "")`; a typed `r` is `ref(T, R, "")` |
 | `x in T`, `x in resource`, `R in T`       | `want(T, x)`, `want(Type, x)`, `want(T, A)`            |
+| `x in E` (`E` an enum type)               | `__enum("E", L), member(L, X)`, the fact `__enum("E", [values])` at `E`'s declaration |
 | `"n-${e}" in T`                           | `Name = format(..), want(T, Name)`                     |
 | `x in world.T`                            | `cloud_exists(T, x)`                                   |
 | `x in e`                                  | `member(e', x)`                                        |

@@ -162,6 +162,11 @@ impl Lowerer<'_> {
     /// `name` at the type node `at`, expanded if it is an alias in scope
     /// there.
     pub(super) fn alias(&mut self, at: &SyntaxNode, name: &str) -> Option<TypeExpr> {
+        self.alias_def(at, name).map(|(t, _)| t)
+    }
+
+    /// `alias`, and where the alias is declared (its statement).
+    pub(super) fn alias_def(&mut self, at: &SyntaxNode, name: &str) -> Option<(TypeExpr, Span)> {
         if self.aliases.defs.is_empty() {
             return None;
         }
@@ -183,13 +188,14 @@ impl Lowerer<'_> {
         };
         // Two in scope: reported once, by `duplicate_aliases`.
         let &id = ids.iter().next()?;
+        let span = self.aliases.defs[id].span;
         if ids.len() > 1 {
-            return Some(TypeExpr::Name(name.to_string()));
+            return Some((TypeExpr::Name(name.to_string()), span));
         }
-        Some(
-            self.expand_alias(id)
-                .unwrap_or_else(|| TypeExpr::Name(name.to_string())),
-        )
+        let t = self
+            .expand_alias(id)
+            .unwrap_or_else(|| TypeExpr::Name(name.to_string()));
+        Some((t, span))
     }
 
     fn expand_alias(&mut self, id: usize) -> Option<TypeExpr> {
