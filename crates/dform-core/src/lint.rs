@@ -1,6 +1,7 @@
 //! A small lint pass over the lowered program: warn about an
-//! `input(...)` key, from `--set` or a fact, that no rule body reads, and
-//! about a stack key input that defaults to production.
+//! `input(...)` key, from `--set` or a fact, that no rule body reads,
+//! about a stack key input that defaults to production, and about a body
+//! of more than [`LONG_BODY`] literals in the source (R-10).
 //!
 //! Its F13 half is a compile error now: an instance that sets a key its
 //! module does not declare as an input names the key (`modules`).
@@ -419,6 +420,7 @@ pub fn key_named(res: &EvalResult, schema: &Schema, keys: &[String]) -> Vec<Stri
 /// real evaluation will surface them) -- an empty list is returned instead.
 pub fn lint(program: &Program, cli_keys: &[String]) -> Vec<String> {
     let mut out = production_defaults(program);
+    out.extend(long_bodies(program));
     let Ok(lowered) = transform::lower(program) else {
         return out;
     };
@@ -455,6 +457,71 @@ fn production_defaults(program: &Program) -> Vec<String> {
         ));
     }
     out
+}
+
+/// A body of more literals than this is a lint warning (R-10): name the
+/// join. `fmt` breaks one past [`crate::fmt::INLINE_LITERALS`].
+pub const LONG_BODY: usize = 5;
+
+/// Every `where` body of more than [`LONG_BODY`] literals in the files the
+/// program was read from: a join that long reads better as a relation
+/// named for what it finds, as the tour's `network_of`.
+fn long_bodies(program: &Program) -> Vec<String> {
+    use crate::syntax::SyntaxKind::{BODY, COMPREHENSION, LIT_NOT_BLOCK, REFINEMENT};
+    let mut files = BTreeSet::new();
+    source_files(&program.statements, &mut files);
+    let mut out = Vec::new();
+    for file in files {
+        let at = |start: u32| crate::ast::Span {
+            file,
+            start,
+            end: start,
+            origin: 0,
+        };
+        let Some((_, text)) = crate::diag::source_of(at(0)) else {
+            continue;
+        };
+        let tree = crate::syntax::parser::parse(&text).syntax();
+        for b in tree.descendants().filter(|n| n.kind() == BODY) {
+            let parent = b.parent().map(|p| p.kind());
+            if matches!(parent, Some(REFINEMENT | COMPREHENSION | LIT_NOT_BLOCK)) {
+                continue;
+            }
+            let n = b.children().count();
+            if n <= LONG_BODY {
+                continue;
+            }
+            let loc = crate::diag::at(at(b.text_range().start().into()))
+                .map(|a| format!("{a}: "))
+                .unwrap_or_default();
+            out.push(format!(
+                "{loc}a body of {n} literals: name the join, a relation of the literals that \
+                 find one thing (as the tour's `network_of`), and read it here"
+            ));
+        }
+    }
+    out
+}
+
+/// The source files of `stmts`' spans, modules' bodies included.
+fn source_files(stmts: &[Stmt], out: &mut BTreeSet<u32>) {
+    for s in stmts {
+        let span = match s {
+            Stmt::Fact(a) => a.span,
+            Stmt::Rule(r) => r.head.span,
+            Stmt::Resource(r) => r.span,
+            Stmt::Output(o) => o.span,
+            Stmt::Instance(i) | Stmt::Use(i) => i.span,
+            Stmt::Module(m) => {
+                source_files(&m.body, out);
+                m.span
+            }
+            _ => continue,
+        };
+        if !span.is_none() {
+            out.insert(span.file);
+        }
+    }
 }
 
 fn lint_lowered(program: &Program, cli_keys: &[String]) -> Vec<String> {
@@ -550,6 +617,32 @@ mod tests {
                 .iter()
                 .map(|r| (&r.addr.typ, &r.addr.name))
                 .collect::<Vec<_>>()
+        );
+    }
+
+    /// R-10: a body of more than five literals is a warning naming where
+    /// it is; five are not.
+    #[test]
+    fn warns_about_a_long_body() {
+        let lits = |n: usize| {
+            (0..n)
+                .map(|i| format!("q(x, {i})"))
+                .collect::<Vec<_>>()
+                .join("\n  ")
+        };
+        let src = format!(
+            "edition 2026\n\ndecl q(a, b)\nq(1, 2)\np(x) where {{\n  {}\n}}\nr(x) where {{\n  {}\n}}\n",
+            lits(6),
+            lits(5)
+        );
+        let program = crate::parser::parse_file("long.df", &src).expect("parse");
+        let warnings = lint(&program, &[]);
+        let long: Vec<&String> = warnings.iter().filter(|w| w.contains("literals")).collect();
+        assert_eq!(long.len(), 1, "{warnings:?}");
+        assert!(
+            long[0].starts_with("long.df:5:12: a body of 6 literals: name the join"),
+            "{}",
+            long[0]
         );
     }
 
