@@ -160,10 +160,7 @@ pub fn at(a: &Atom) -> Option<String> {
     let ("csv" | "json" | "yaml" | "toml", _) = parse_name(&a.pred)? else {
         return None;
     };
-    let s = |i: usize| match a.args.get(i) {
-        Some(Term::Val(Value::Str(s))) => Some(s.as_str()),
-        _ => None,
-    };
+    let s = |i: usize| a.args.get(i).and_then(Term::as_str);
     let first = s(0)?;
     [s(1), s(3)]
         .into_iter()
@@ -178,13 +175,6 @@ pub struct Tables {
     /// (repository, commit) -> the ref that resolved to it.
     refs: RefCell<BTreeMap<(PathBuf, String), String>>,
     read: RefCell<BTreeMap<(String, Source), String>>,
-}
-
-fn string(v: &Value) -> Option<&str> {
-    match v {
-        Value::Str(s) => Some(s),
-        _ => None,
-    }
 }
 
 /// Paths resolve from the project root of the file the declaration is in
@@ -202,7 +192,7 @@ impl Tables {
         if format == VALUE {
             return Some(self.value_rows(f, table, inputs));
         }
-        let strs: Option<Vec<&str>> = inputs.iter().map(string).collect();
+        let strs: Option<Vec<&str>> = inputs.iter().map(Value::as_str).collect();
         let base = base(f.span);
         Some(match (format, strs.as_deref()) {
             ("git", Some([repo, rev])) => self.resolve(&base, repo, rev),
@@ -262,7 +252,7 @@ impl Tables {
         let (text, shown, source) = read()?;
         let stamp = match &source {
             Source::File(_) => watch::digest(text.as_bytes()),
-            Source::Git { .. } => string(&inputs[1]).unwrap_or_default().to_string(),
+            Source::Git { .. } => inputs[1].as_str().unwrap_or_default().to_string(),
         };
         let (name, selector) = table.split_once('|').unwrap_or((table, ""));
         self.read
@@ -1003,8 +993,8 @@ fn commits(answers: &[Answer]) -> Vec<(&str, &str, &str, &str)> {
             };
             Some((
                 table,
-                string(&a.inputs[0])?,
-                string(&a.inputs[1])?,
+                a.inputs[0].as_str()?,
+                a.inputs[1].as_str()?,
                 c.as_str(),
             ))
         })
