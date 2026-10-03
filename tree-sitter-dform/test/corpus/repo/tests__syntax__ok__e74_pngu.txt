@@ -31,7 +31,7 @@ type settings {
   }
 }
 
-settings {
+set {
   region = "us-east1"
   gke.static_ips = { "pngu-grpc": { type: "INTERNAL" } }
 } @default
@@ -40,7 +40,7 @@ env_name("dev")
 env_name("stg")
 env_name("prod")
 
-settings {
+set {
   project_id = "renfry-dev-973682"
   project_name = "renfry-dev"
   network_name = "renfry-dev-network"
@@ -53,7 +53,7 @@ settings {
   }
 } where env == "dev"
 
-settings {
+set {
   project_id = "renfry-stg"
   project_name = "renfry-stg"
   network_name = "renfry-stg-network"
@@ -419,15 +419,14 @@ output("project_id", id) where project(id, _, _, _)
                     (string
                       (string_content)))))))
           (comment)))))
-  (settings
-    (block
-      (field
-        (block_path
-          (identifier))
+  (set
+    (set_block
+      (set_entry
+        (identifier)
         (string
           (string_content)))
-      (field
-        (block_path
+      (set_entry
+        (member_expression
           (identifier)
           (identifier))
         (object
@@ -458,34 +457,29 @@ output("project_id", id) where project(id, _, _, _)
       (arguments
         (string
           (string_content)))))
-  (settings
-    (block
-      (field
-        (block_path
-          (identifier))
+  (set
+    (set_block
+      (set_entry
+        (identifier)
         (string
           (string_content)))
-      (field
-        (block_path
-          (identifier))
+      (set_entry
+        (identifier)
         (string
           (string_content)))
-      (field
-        (block_path
-          (identifier))
+      (set_entry
+        (identifier)
         (string
           (string_content)))
-      (field
-        (block_path
-          (identifier))
+      (set_entry
+        (identifier)
         (call
           (identifier)
           (arguments
             (string
               (string_content)))))
-      (field
-        (block_path
-          (identifier))
+      (set_entry
+        (identifier)
         (object
           (object_field
             (identifier)
@@ -515,40 +509,34 @@ output("project_id", id) where project(id, _, _, _)
               (arguments
                 (string
                   (string_content))))))))
-    (clause
-      (body
-        (comparison
-          (identifier)
-          (string
-            (string_content))))))
-  (settings
-    (block
-      (field
-        (block_path
-          (identifier))
+    (body
+      (comparison
+        (identifier)
+        (string
+          (string_content)))))
+  (set
+    (set_block
+      (set_entry
+        (identifier)
         (string
           (string_content)))
-      (field
-        (block_path
-          (identifier))
+      (set_entry
+        (identifier)
         (string
           (string_content)))
-      (field
-        (block_path
-          (identifier))
+      (set_entry
+        (identifier)
         (string
           (string_content)))
-      (field
-        (block_path
-          (identifier))
+      (set_entry
+        (identifier)
         (call
           (identifier)
           (arguments
             (string
               (string_content)))))
-      (field
-        (block_path
-          (identifier))
+      (set_entry
+        (identifier)
         (object
           (object_field
             (identifier)
@@ -578,12 +566,11 @@ output("project_id", id) where project(id, _, _, _)
               (arguments
                 (string
                   (string_content))))))))
-    (clause
-      (body
-        (comparison
-          (identifier)
-          (string
-            (string_content))))))
+    (body
+      (comparison
+        (identifier)
+        (string
+          (string_content)))))
   (comment)
   (comment)
   (comment)

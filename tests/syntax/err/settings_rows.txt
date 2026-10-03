@@ -1,6 +1,6 @@
-tests/syntax/err/settings_rows.df:7:10: expected `{` or `from` after `settings`, found `prod`
-  help: settings rows are gone (R-38): a settings block gives the inputs under a condition, `settings { db.multi_az = true } where env == "prod"`, and a read is the input's name
-tests/syntax/err/settings_rows.df:8:10: expected `{` or `from` after `settings`, found `_`
-  help: settings rows are gone (R-38): a settings block gives the inputs under a condition, `settings { db.multi_az = true } where env == "prod"`, and a read is the input's name
-tests/syntax/err/settings_rows.df:9:10: expected `{` or `from` after `settings`, found a rank `@default`
-  help: the rank follows the block: `settings { .. } @default where ..`
+tests/syntax/err/settings_rows.df:7:1: expected a statement, found keyword `settings`
+  help: `settings` is gone (R-38): an input is given by `set`, `set db.size = 2 where env == "prod"`, several under one clause by `set { .. } where ..`, a document's leaves by `set from yaml(..)`
+tests/syntax/err/settings_rows.df:8:1: expected a statement, found keyword `settings`
+  help: `settings` is gone (R-38): an input is given by `set`, `set db.size = 2 where env == "prod"`, several under one clause by `set { .. } where ..`, a document's leaves by `set from yaml(..)`
+tests/syntax/err/settings_rows.df:9:1: expected a statement, found keyword `settings`
+  help: `settings` is gone (R-38): an input is given by `set`, `set db.size = 2 where env == "prod"`, several under one clause by `set { .. } where ..`, a document's leaves by `set from yaml(..)`

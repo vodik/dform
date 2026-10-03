@@ -585,7 +585,7 @@ fn program_paths_resolve_from_the_root() {
     let s = project("root-paths");
     s.write("data/peers.csv", "name\na\nb\n");
     s.write("data/note.txt", "hello");
-    s.write("data/tags.facts", "edition 2026\n\ntag(\"x\")\n");
+    s.write("data/tags.df", "edition 2026\n\ntag(\"x\")\n");
     s.write(
         "providers/cloud/schema.df",
         "type_provider(x.thing, \"fakecloud\")\n",
@@ -594,15 +594,14 @@ fn program_paths_resolve_from_the_root() {
         "stacks/paths.df",
         r#"edition 2026
 input peer from csv("data/peers.csv")
-input tag from facts("data/tags.facts")
+use data.tags
 decl peer(name: string)
-decl tag(t)
 provider cloud { source = "providers/cloud" }
 provider file
 note(v) where v = file.text["data/note.txt"]
 resource x.thing "${n}" {
   label = "${n}-${g}-${v}"
-} where peer(name: n), tag(g), note(v)
+} where peer(name: n), tags.tag(g), note(v)
 "#,
     );
     let r = s.run(&["plan", "paths"]).success();

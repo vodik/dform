@@ -9,7 +9,7 @@ dform.toml                  the project root (`dform init` writes one)
 stacks/<stack>.df           one stack per file, named after it
 <name>.df, <dir>/<name>.df  modules: `config.df` is the module
                             `config`, `modules/net.df` is `modules.net`
-config/<stack>/<key>.yaml   per-deployment settings: `settings from yaml(..)`
+config/<stack>/<key>.yaml   per-deployment settings: `set from yaml(..)`
 data/<table>.csv            tables (`input p from csv(...)`)
 providers/<name>/           a local provider: a plugin executable, or a
                             schema (and externs) the mock plays
@@ -57,7 +57,7 @@ dform.state/                state: per deployment, audit logs, plan keys,
   instances it. A module named like the standard library's (`str.df`,
   `list.df`) is an error: `std` is in every scope already.
 - A keyed stack's settings document is one file per deployment under
-  `config/<stack>/`, named by the key's value, `settings from
+  `config/<stack>/`, named by the key's value, `set from
   yaml("config/dform/${env}.yaml")` in the stack: `config/dform/prod.yaml`
   is `dform[env=prod]`'s. A key the target leaves out is its input's default,
   for `plan` and `apply` alike (both print `deployment: dform[env=staging]
@@ -65,7 +65,7 @@ dform.state/                state: per deployment, audit logs, plan keys,
   defaulting to `"prod"` or `"production"` is a warning.
 - Every path a program states resolves from the project root: module
   paths (`use modules.net`), table and config sources
-  (`csv("data/peerings.csv")`, `settings from yaml("config/dform/${env}.yaml")`),
+  (`csv("data/peerings.csv")`, `set from yaml("config/dform/${env}.yaml")`),
   `file.*` externs, input relations from files, a provider's `source` and a
   trust root.
 - `dform.state/` is gitignored: each deployment's plan key (`state.key`,

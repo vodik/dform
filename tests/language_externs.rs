@@ -1,6 +1,7 @@
 //! Externs with binding patterns: asked on demand once their `+` arguments
-//! are ground, of the `file` provider or the mock (`externs.df`), recorded
-//! in the plan file; nothing keeps them (`memo.first` does: tests/memo.rs).
+//! are ground, of the `file` provider (a loader, `json(p)`, among them) or
+//! the mock (`externs.df`), recorded in the plan file; nothing keeps them
+//! (`memo.first` does: tests/memo.rs).
 
 mod common;
 use common::{Scratch, repo};
@@ -13,7 +14,7 @@ dash("dash.json")
 resource mon.dashboard main {
   json = d
   note = t
-} where dash(p), file.json(p, d), file.text("note.txt", t)
+} where dash(p), d = json(p), file.text("note.txt", t)
 resource db.user app {
   password = pw
   token = tk

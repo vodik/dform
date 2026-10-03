@@ -29,7 +29,7 @@ tests/syntax/err/old_spellings.df:20:1: expected a statement, found `import`
 tests/syntax/err/old_spellings.df:21:1: expected a statement, found `policy`
   help: `policy` is gone (R-65): a policy pack is a module, a file of `set`, `deny` and `warn` statements, applied with `use PATH`
 tests/syntax/err/old_spellings.df:22:7: expected `:` or `(` after the input's name, found `p`
-  help: `input relation p(cols) from ..` is spelled `decl p(cols)` and `input p from ..`, and `from file(..)` is `from facts(..)`
+  help: `input relation p(cols) from ..` is spelled `decl p(cols)` and `input p from ..`
 tests/syntax/err/old_spellings.df:23:12: expected a literal, found `exists`
   help: `exists R` is `R in T` (H-9): a resource named in scope is its address
 tests/syntax/err/old_spellings.df:24:12: expected a literal, found `some`

@@ -1,0 +1,11 @@
+edition 2026
+
+# A `set` gives inputs: the program's own, a field of an object
+# one, or a used module's; at the normal rank unless marked.
+input env: string = "dev"
+input db { size: int = 1 }
+let region = "us-east-1"
+set { db.sz = 2 } where env == "prod"
+set { nope = 1 }
+set { region = "eu-west-1" }
+set { db.size += 1 }

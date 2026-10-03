@@ -1,4 +1,4 @@
-//! A table from git (README "Tables"): the ref is resolved to a commit and
+//! A table from git (README "Documents and tables"): the ref is resolved to a commit and
 //! the plan file pins it, so `apply PLAN` applies what plan saw after the
 //! branch moves; state keeps the commit last applied, and plan says when
 //! the ref moved; the controller takes a moved ref as an input event.

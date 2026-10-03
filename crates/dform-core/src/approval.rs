@@ -8,8 +8,7 @@
 //!   print as its address, `T["A"]` (H-16). No rows, no token needed.
 //! * The plan digest is sha256 over the canonical JSON (sorted keys, no
 //!   whitespace) of the plan file without its `digest` field: the delta,
-//!   the inputs, the pinned git commits of the input relations and the
-//!   extern answers ([`crate::zset::file::PlanFile::digest`]).
+//!   the inputs and the extern answers (a git table's commit among them) ([`crate::zset::file::PlanFile::digest`]).
 //! * A token is a signed [`Statement`]: approver, digest, the stack and its
 //!   key, expiry. Two shapes: a JWT (RS256, ES256 or EdDSA) whose claims
 //!   are the statement's (`sub` for the approver, `exp` for the expiry),

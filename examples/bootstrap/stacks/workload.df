@@ -1,10 +1,10 @@
 # The workload stack of the bootstrap demo (README "Controller mode"): a
 # namespace, a deployment and a service on the mock Kubernetes provider,
-# whose image comes from an input relation. After `dform stack handover`
+# whose image comes from a module of facts. After `dform stack handover`
 # the dform-controller Deployment that bootstrap.df installs runs it.
 # To run it, from this directory: README.md.
 #
-# Edit data/release.facts and the controller deploys it; edit the world and
+# Edit data/releases.df and the controller deploys it; edit the world and
 # the replicas drift is corrected, the image drift is held for approval.
 # In prod a rollout waits for a signed approval of the plan's digest
 # (README "Approvals"): the controller publishes the digest in
@@ -12,22 +12,23 @@
 # example signer, releases it:
 #
 #   cargo run -q -p dform-direct --bin dform-approve -- sign approver.key \
-#     --digest sha256:... --stack workload --approver alice --format fact >> data/approvals.facts
+#     --digest sha256:... --stack workload --approver alice --format fact >> data/approvals.df
 
 edition 2026
 
 input env: enum("dev", "prod") = "dev"
 
-# The release to run, `release(image)`; re-read whenever the file changes.
-input release from facts("data/release.facts")
-# `approve(t, a)`: accept the drift of t.a, correcting it.
-input approve from facts("data/approvals.facts")
-# `approval(token)`: a signed approval of a plan's digest.
-input approval from facts("data/approvals.facts")
+# The release to run, `releases.release(image)`; a change to the file is
+# an input event, as to any program file.
+use data.releases
+# `approve(t, a)`: accept the drift of t.a, correcting it; `approval(token)`:
+# a signed approval of a plan's digest.
+use data.approvals
 
-decl release(image)
 decl approve(type, address)
 decl approval(token)
+approve(t, a) where approvals.approve(t, a)
+approval(t) where approvals.approval(t)
 
 provider k8s
 
@@ -46,7 +47,7 @@ resource k8s.deployment web {
     image,
     ports: [{ containerPort: 8080, protocol: "TCP" }]
   }]
-} where release(image)
+} where releases.release(image)
 
 resource k8s.service web {
   metadata.name = "web"

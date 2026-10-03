@@ -634,24 +634,12 @@ pub mod file {
         /// The extern answers the plan read: apply asks none of these again.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         pub externs: Vec<crate::externs::Answer>,
-        /// The commit each `git` input relation's ref named (but the
-        /// `approval` relation's, which carries tokens, not intent): apply
-        /// refuses when one moved.
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        pub git_commits: Vec<Pinned>,
         /// The policy pass's `requires_approval(D, Reason)` rows.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         pub needs_approval: Vec<NeedsApproval>,
         /// [`PlanFile::digest`], as written: what an approval signs.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub digest: Option<String>,
-    }
-
-    /// A `git` input relation's source and the commit its ref named.
-    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-    pub struct Pinned {
-        pub source: String,
-        pub commit: String,
     }
 
     /// A deformation that needs an approval, and why (`requires_approval`).
@@ -1132,28 +1120,6 @@ pub mod file {
                 m.remove("digest");
             }
             crate::approval::digest_of(&v)
-        }
-
-        /// The pinned git commits that moved since the plan.
-        pub fn commit_differences(&self, now: &[Pinned]) -> Vec<String> {
-            let now: BTreeMap<&str, &str> = now
-                .iter()
-                .map(|p| (p.source.as_str(), p.commit.as_str()))
-                .collect();
-            self.git_commits
-                .iter()
-                .filter_map(|p| match now.get(p.source.as_str()) {
-                    Some(c) if *c == p.commit => None,
-                    Some(c) => Some(format!(
-                        "input relation {}: the plan read commit {}, the ref names {c} now",
-                        p.source, p.commit
-                    )),
-                    None => Some(format!(
-                        "input relation {}: in the plan file, not read now",
-                        p.source
-                    )),
-                })
-                .collect()
         }
 
         pub fn save(&self, path: &Path) -> Result<()> {

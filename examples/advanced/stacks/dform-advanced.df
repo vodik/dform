@@ -10,21 +10,18 @@
 
 edition 2026
 input env: enum("staging", "prod") = "staging"
-input tenants: list(string)
-input mesh { vpcs: list(any) }
-
-# The mock's built-in fake schema.
-provider fake
-
-# List-valued settings (human-friendly), the same in every environment.
-settings {
-  tenants = ["tenant_a", "tenant_b"]
-  mesh.vpcs = [
+# List-valued inputs (human-friendly), the same in every environment.
+input tenants: list(string) = ["tenant_a", "tenant_b"]
+input mesh {
+  vpcs: list(any) = [
     { name: "core_a", net: inet("10.210.0.0/16") },
     { name: "core_b", net: inet("10.220.0.0/16") },
     { name: "core_c", net: inet("10.230.0.0/16") }
   ]
 }
+
+# The mock's built-in fake schema.
+provider fake
 
 # Base IP space for tenants
 corp_net(inet("10.100.0.0/12"))

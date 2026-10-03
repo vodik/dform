@@ -1,6 +1,6 @@
 exit: ok
 -- stdout --
-== examples/crud-api/stacks/crud_api.df: 256 nodes, 1521 edges (380 negative)
+== examples/crud-api/stacks/crud_api.df: 254 nodes, 1512 edges (363 negative)
    STRATIFIED, 24 strata
    stratum 0:
      (arg, google.sql_database, instance)
@@ -12,8 +12,8 @@ exit: ok
      (arg, input, region)
      (arg, input, replicas)
      (arg, let, active)
-     (arg, settings, db.availability)
-     (arg, settings, db.tier)
+     (arg, let, digest)
+     (arg, let, schema)
      (want, google.sql_database)
      (want, google.sql_user)
      (want, k8s.config_map)
@@ -25,6 +25,7 @@ exit: ok
      (want, k8s.secret)
      (want, k8s.service_account)
      (want, k8s.stateful_set)
+     approvals::approve
      auto_reconcile
      cloud_attr
      drift
@@ -32,7 +33,7 @@ exit: ok
      input
      other
      owned_label
-     release
+     releases::release
      resolve
      resolved
      secret_word
@@ -61,8 +62,6 @@ exit: ok
      (arg, k8s.stateful_set, metadata)
      (arg, k8s.stateful_set, spec)
      (arg, k8s.stateful_set, status)
-     (arg, let, digest)
-     (arg, let, schema)
      (attr, google.sql_database, instance)
      (attr, google.sql_database, name)
      (attr, google.sql_user, instance)
@@ -72,14 +71,16 @@ exit: ok
      (attr, input, region)
      (attr, input, replicas)
      (attr, let, active)
-     (attr, settings, db.availability)
-     (attr, settings, db.tier)
+     (attr, let, digest)
+     (attr, let, schema)
+     approve
    stratum 2:
      (arg, google.compute_network, auto_create_subnetworks)
      (arg, google.compute_network, id)
      (arg, google.compute_network, name)
-     (arg, let, cfg)
+     (arg, input, database)
      (arg, let, live)
+     (arg, let, released_image)
      (attr, google.sql_database, id)
      (attr, google.sql_user, id)
      (attr, k8s.config_map, metadata)
@@ -103,25 +104,23 @@ exit: ok
      (attr, k8s.stateful_set, metadata)
      (attr, k8s.stateful_set, spec)
      (attr, k8s.stateful_set, status)
-     (attr, let, digest)
-     (attr, let, schema)
      (want, google.compute_network)
      __refine_replicas
      active
+     digest
      env
      region
      replicas
+     schema
    stratum 3:
      (arg, k8s.secret, metadata)
      (arg, let, next)
-     (arg, let, released_image)
      (attr, google.compute_network, auto_create_subnetworks)
      (attr, google.compute_network, id)
      (attr, google.compute_network, name)
-     (attr, let, cfg)
+     (attr, input, database)
      (attr, let, live)
-     digest
-     schema
+     (attr, let, released_image)
    stratum 4:
      (arg, google.sql_database_instance, database_version)
      (arg, google.sql_database_instance, deletion_protection)
@@ -130,18 +129,19 @@ exit: ok
      (arg, google.sql_database_instance, private_ip_address)
      (arg, google.sql_database_instance, region)
      (arg, google.sql_database_instance, settings)
+     (arg, k8s.job, metadata)
+     (arg, k8s.job, status)
      (arg, let, live_image)
      (arg, let, live_schema)
      (attr, k8s.secret, metadata)
      (attr, let, next)
-     (attr, let, released_image)
      (want, google.sql_database_instance)
-     cfg
+     (want, k8s.job)
+     database
      live
+     released_image
    stratum 5:
-     (arg, k8s.job, metadata)
      (arg, k8s.job, spec)
-     (arg, k8s.job, status)
      (attr, google.sql_database_instance, database_version)
      (attr, google.sql_database_instance, deletion_protection)
      (attr, google.sql_database_instance, id)
@@ -149,25 +149,23 @@ exit: ok
      (attr, google.sql_database_instance, private_ip_address)
      (attr, google.sql_database_instance, region)
      (attr, google.sql_database_instance, settings)
+     (attr, k8s.job, metadata)
+     (attr, k8s.job, status)
      (attr, let, live_image)
      (attr, let, live_schema)
-     (want, k8s.job)
      next
-     released_image
    stratum 6:
      (arg, k8s.secret, stringData)
      (arg, let, rollout)
-     (attr, k8s.job, metadata)
      (attr, k8s.job, spec)
-     (attr, k8s.job, status)
      __neg_2
      __neg_3
      live_image
      live_schema
+     migrated
    stratum 7:
      (attr, k8s.secret, stringData)
      (attr, let, rollout)
-     migrated
    stratum 8:
      (arg, input, blue::color)
      (arg, input, blue::db_secret)

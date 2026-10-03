@@ -13,8 +13,8 @@ fn plan(s: &Scratch, src: &str) -> Run {
     s.run(&["dev", "--world", "w.json", "plan", "p.df"])
 }
 
-/// An input's refinement, its check (R-54), over the settings' layers (R-38).
-const SETTINGS: &str = "edition 2026\ninput db {\n  backup_days: int = 3 check 1 <= backup_days <= 35\n}\nprovider fake\nsettings { db.backup_days = 14 }\n";
+/// An input's refinement, its check (R-54), over the `set` layers (R-38).
+const SETTINGS: &str = "edition 2026\ninput db {\n  backup_days: int = 3 check 1 <= backup_days <= 35\n}\nprovider fake\non(1)\nset db.backup_days = 14 where on(1)\n";
 
 /// A constraint is never out-ranked: an `@override` whose value violates
 /// it is a deny naming the refinement's place and both witnesses, and the
@@ -70,13 +70,13 @@ fn a_literal_that_violates_a_refinement_is_a_compile_error() {
     let s = Scratch::new("refine-literal");
     let r = plan(
         &s,
-        "edition 2026\ninput db {\n  backup_days: int = 3 check 1 <= backup_days <= 35\n}\nsettings { db = { backup_days: 40 } }\nprovider fake\n",
+        "edition 2026\ninput db {\n  backup_days: int = 3 check 1 <= backup_days <= 35\n}\non(1)\nset db = { backup_days: 40 } where on(1)\nprovider fake\n",
     )
     .failure();
     assert!(
-        r.stderr.contains(
-            "p.df:5:12: 40 violates the refinement range(1, 35) of input .db.backup_days"
-        ) && r.stderr.contains("refined here: range(1, 35)")
+        r.stderr
+            .contains("p.df:6:1: 40 violates the refinement range(1, 35) of input .db.backup_days")
+            && r.stderr.contains("refined here: range(1, 35)")
             && r.stderr.contains(" 3 │   backup_days: int = 3 check"),
         "{}",
         r.stderr

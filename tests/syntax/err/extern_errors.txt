@@ -1,11 +1,11 @@
-tests/syntax/err/extern_errors.df:9:1: extern file.json is answered by its provider; the program may not state it
+tests/syntax/err/extern_errors.df:9:1: extern file.text is answered by its provider; the program may not state it
   tests/syntax/err/extern_errors.df:5:1: declared extern here
-tests/syntax/err/extern_errors.df:10:32: extern file.json under `not`
+tests/syntax/err/extern_errors.df:10:32: extern file.text under `not`
   note: an extern answers what exists; its absence is not known, so it cannot be negated
-tests/syntax/err/extern_errors.df:11:16: extern file.json: +path is not bound (P is unbound before it)
+tests/syntax/err/extern_errors.df:11:16: extern file.text: +path is not bound (P is unbound before it)
   help: bind it with a literal before the extern
 tests/syntax/err/extern_errors.df:12:19: extern next.hop: +from is not bound (A is unbound before it)
   help: bind it with a literal before the extern
 tests/syntax/err/extern_errors.df:13:32: extern next.hop in a recursive rule
   note: reach depends on itself through reach; an extern is asked once its inputs are complete
-tests/syntax/err/extern_errors.df:15:26: extern file.json takes 2 arguments, not 3
+tests/syntax/err/extern_errors.df:15:26: extern file.text takes 2 arguments, not 3

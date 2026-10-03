@@ -247,7 +247,7 @@ apply-order edge, not its content read now (`docs/grammar.md'
    '([
       "edition" "provider" "key" "input" "from" "output"
       "extern" "persist" "type" "decl" "mixed" "let" "set"
-      "component" "instance" "use" "as" "resource" "settings"
+      "component" "instance" "use" "as" "resource"
       ] @font-lock-keyword-face
      ["where" "check"] @font-lock-keyword-face
      ["deny" "warn"] @font-lock-keyword-face

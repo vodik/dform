@@ -264,12 +264,12 @@ fn bootstrap_handover_and_the_controller_runs_the_workload() {
     assert_eq!(r.summary(), "stack workload is undeformed");
 
     // A release: deployed.
-    edit(&s, "data/release.facts", "web:1.0", "web:1.1");
+    edit(&s, "data/releases.df", "web:1.0", "web:1.1");
     assert_eq!(
         b.controller(&s),
         [
-            "input release changed (file data/release.facts)",
-            "event input release",
+            "input data.releases changed (file data/releases.df)",
+            "event input data.releases",
             "tick 1: plan: 1 deformation (1 update)",
             "stack workload is undeformed",
         ]

@@ -40,6 +40,15 @@ pub fn load_program_with(
     entry_files: &[PathBuf],
     read: &dyn Fn(&Path) -> std::io::Result<String>,
 ) -> Result<Program> {
+    load_program_files_with(entry_files, read).map(|(p, _)| p)
+}
+
+/// [`load_program_with`], and the files it read, in the order they load:
+/// the sources a controller watches (R-39).
+pub fn load_program_files_with(
+    entry_files: &[PathBuf],
+    read: &dyn Fn(&Path) -> std::io::Result<String>,
+) -> Result<(Program, Vec<PathBuf>)> {
     let loaded = load_units(entry_files, read)?;
     let stack = match entry_files.first() {
         Some(f) => stack_source(f, read)?,
@@ -53,6 +62,7 @@ pub fn load_program_with(
         stack.as_ref(),
         &loaded.deployed,
     )
+    .map(|p| (p, loaded.files.clone()))
     .map_err(|d| diag::Diagnostics(d).into())
 }
 

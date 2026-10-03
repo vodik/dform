@@ -5,7 +5,7 @@
 //! | Head                 | Claimed by                                     |
 //! |----------------------|------------------------------------------------|
 //! | type namespace       | a dotted type (`net` of `net.vpc`)             |
-//! | provider             | its externs (`file` of `file.json`)            |
+//! | provider             | its externs (`file` of `file.text`)            |
 //! | function package     | `std/*.df` (`inet` of `inet.subnet`)           |
 //! | module               | `component network { .. }`, `use config`,      |
 //! |                      | `instance network blue` (`blue.vpc`)           |

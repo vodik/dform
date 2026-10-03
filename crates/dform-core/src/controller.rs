@@ -1,6 +1,7 @@
 //! Controller mode (DESIGN.org "Reactive inputs and controller mode"): the
-//! second executor over the same evaluator. `dform controller run` waits for an
-//! input relation's source or the world to change, then runs what `apply`
+//! second executor over the same evaluator. `dform controller run` waits for a
+//! source it read (a table, a document, a program file) or the world to
+//! change, then runs what `apply`
 //! runs (refresh, evaluate, plan, the policy pass, ticks) with this hook in
 //! it. Nothing in the language changes: the plan is the reconciliation.
 //!
@@ -18,14 +19,14 @@
 //! * The gate, over the policy pass of every tick. A deformation of `T.A` is
 //!   held when the policy derives `hold(T, A, Reason)` (a prod-style hold;
 //!   the program writes when it is released, e.g. `not
-//!   release_approved(...)` over an input relation), and, unless the event
+//!   release_approved(...)` over a table or a module of facts), and, unless the event
 //!   is an input change, when `T.A` has drift that is neither
 //!   `auto_reconcile(T, A, Path)` for each drifted path nor `approve(T, A)`.
 //!   Held drift stays in the baseline, so it is held again at every world
 //!   event until an input change or an approval releases it.
 //! * Approvals (README "Approvals"): a deformation the policy pass says
 //!   `requires_approval(r, Reason)` is held until a token for the plan's
-//!   digest arrives, through the input relation `approval/1` (the token's
+//!   digest arrives, through the relation `approval/1` (the token's
 //!   text) or as an object in the drop directory `approvals/` beside the
 //!   state. While it is held the digest is published: a log line and
 //!   `approval-pending.json` beside the state.
@@ -77,7 +78,7 @@ pub enum Event {
 /// What the controller remembers between runs, beside the stack's state.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 struct Memo {
-    /// Per input relation, the stamp of its source.
+    /// Per source (a table's relation, a program file's module), its stamp.
     inputs: BTreeMap<String, String>,
     /// The world file's stamp.
     world: String,
@@ -94,7 +95,7 @@ struct Memo {
 /// The controller's part of a run (see the module doc).
 #[derive(Default)]
 pub struct Hook {
-    /// The stack's input relations, from the last run, and the sources its
+    /// The stack's program files, from the last run, and the sources its
     /// tables read.
     pub relations: Vec<Relation>,
     /// The relation `input p(..) from ..` declarations of this run.
@@ -182,7 +183,7 @@ fn drops_stamp(store: &dyn Store) -> String {
 }
 
 impl Hook {
-    /// The run has read its input relations: stamp them (before reading, so
+    /// The run has read its program files: stamp them (before reading, so
     /// a change during the run is seen by the next one).
     /// The last run's tables are stamped as their sources are now: a
     /// table whose file changed, or whose ref names another commit, is an
@@ -278,7 +279,15 @@ impl Hook {
                         by_source.entry(&r.source).or_default().push(&r.pred);
                     }
                     for (source, preds) in by_source {
-                        log(format_args!("input {} changed ({source})", preds.join(" ")));
+                        // A file by its path from the project, as the
+                        // program names it.
+                        let shown = match source {
+                            watch::Source::File(p) => {
+                                format!("file {}", relative_to(p, root).display())
+                            }
+                            s => s.to_string(),
+                        };
+                        log(format_args!("input {} changed ({shown})", preds.join(" ")));
                     }
                     Event::Input(changed)
                 } else if m.drops != drops_stamp(store.as_ref()) {

@@ -63,7 +63,7 @@ pub enum Note {
 /// What a caller does at an evaluation's steps. Each defaults to nothing.
 pub trait Observer {
     fn note(&mut self, _note: Note) {}
-    /// The program's input relations, before they are read.
+    /// The program's files, the sources the controller watches.
     fn relations(&mut self, _relations: &[Relation]) {}
     /// The tables read, with their sources as read.
     fn tables(&mut self, _read: &[(Relation, String)]) {}
@@ -100,10 +100,9 @@ pub struct Loaded {
     pub files: Vec<PathBuf>,
     /// The program's project's manifest.
     pub manifest: Option<Manifest>,
-    /// The program, its input relations read, the input files' facts
-    /// added.
+    /// The program, the input files' facts added.
     pub program: Program,
-    /// The input relations, as declared.
+    /// The program's files, as sources.
     pub relations: Vec<Relation>,
     /// The stack's settings (dform.toml's) and its `provider` statements.
     pub cfg: stack::Stack,
@@ -130,11 +129,10 @@ pub fn load(t: &Target, version: &str, read: Reader, obs: &mut dyn Observer) -> 
         Some(root) => Some(Manifest::load(&root.join(project::MANIFEST), version)?),
         None => None,
     };
-    let mut program = loader::load_program_with(&files, read)?;
-    // Input relations: declared, and stated as their sources hold them now.
-    let relations = crate::watch::take(&mut program)?;
+    let (mut program, loaded) = loader::load_program_files_with(&files, read)?;
+    // The program's files, each a source the controller watches (R-39).
+    let relations = crate::watch::program_sources(&loaded);
     obs.relations(&relations);
-    program.statements.extend(crate::watch::read(&relations)?);
     // The stack's settings (the loader's, from the manifest) and its
     // `provider` statements, their sources the manifest's.
     let mut cfg = stack::config(&program)?;

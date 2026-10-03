@@ -59,7 +59,7 @@ term wraps inside its brackets. There is no statement terminator: `p(a).`
 is an error that says so, and so is `:-`.
 
 Two statements on one line are an error ("expected the end of the line").
-A block (`{ }` of a resource, settings, instance or provider) and a
+A block (`{ }` of a resource, `set`, instance or provider) and a
 body block (`where { }`) separate their entries by a newline or a comma.
 
 ## Tokens
@@ -89,8 +89,11 @@ Statement keywords, recognised only as the first token of a statement (18):
 edition  provider  key  type  decl  extern
 input  output  let  set
 component  instance  use
-resource  settings  deny  warn
+resource  deny  warn
 ```
+
+`settings` is reserved: the statement of an earlier surface (R-38), an
+error naming `set`.
 
 Body words: `not in has`. The clause word: `where` (R-1). Literals: `true
 false`. These six, and the reserved `if`, are never a name in a term; `if`
@@ -98,13 +101,13 @@ is an error wherever it stands, which prints the statement with its clause
 spelled `where`. Anywhere a plain name is expected (a
 key, a path segment, a declared name) any keyword is a name, and a keyword
 followed by `(` is an atom or a call (`input("env", v)`). A statement
-keyword may start a chain in a term (`world.T[e]`). Contextual words in
+keyword may start a chain in a term. Contextual words in
 declarations, where the position is fixed: `from`, `check`,
 `mixed`, `as` (in `use`), the attribute flags (`required computed id
 sensitive nullable`). `module`, `policy`, `import` and `export` are
 words of an earlier surface: each is an error that names what to write
 (R-65).
-Roots: `settings`, `world`.
+Roots: `world`.
 
 ### Strings and interpolation
 
@@ -447,13 +450,14 @@ ofields    := "{" (ofield SEP)* "}"
 ofield     := NAME (":" type)? "=" term | NAME ":" ofields
 let        := "let" NAME "=" term RANK? ("where" body)?
 set        := "set" chain ("=" | "+=") term RANK? ("where" body)?
+            | "set" "{" (chain ("=" | "+=") term RANK? SEP)* "}" RANK? ("where" body)?
+            | "set" "from" term selector? RANK? ("where" body)?   ; a document's leaves (R-38)
+selector   := ("." SEG | "[" "*" "]")+                ; a path into a document (R-39)
 use        := "use" path ("as" NAME)? cblock? ("where" body)?
 instance   := "instance" path NAME cblock? ("where" body)?
 component  := "component" NAME stmts             ; an item of a module
 path       := NAME ("." NAME)*                    ; a/b.df from the root; std.x; a package mount
 resource   := "resource" DOTTED hname RANK? block ("where" body)?
-settings   := "settings" block RANK? ("where" body)?   ; contributions to inputs (R-38)
-            | "settings" "from" term RANK? ("where" body)?
 deny, warn := ("deny" | "warn") STRING object? ("where" body)?
 stmts      := "{" (stmt NL)* "}"
 
@@ -476,9 +480,9 @@ DOTTED     := NAME ("." NAME)*                     ; no spaces
 ```
 
 Every statement is `head where body` (R-1): the clause follows its head,
-on the head's line, and a block is a head. A resource, settings block,
+on the head's line, and a block is a head. A resource, `set` block,
 instance or `use` takes at most one clause, after its block's `}` (and a
-settings block's rank): `resource T n { .. } where B`, and a body of
+`set` block's rank): `resource T n { .. } where B`, and a body of
 several lines is `} where {`, one literal per line, closed by its own
 `}`. The clause is a query, and the block is one resource (or set of
 contributions, or copy) per match. A `provider` block takes no
@@ -489,7 +493,7 @@ clause spelled `where`.
 The verb says what a statement gives (R-57): `=` gives a value, `from`
 gives rows. `input x: T = d`, `let x = t` and `output x = t` are values;
 `input p from DOC` and a copy's `p from TERM` are relations, a row per
-element, and `settings from DOC` a document's leaves. A value written with `from`, or rows
+element, and `set from DOC` a document's leaves. A value written with `from`, or rows
 with `=` (`input p = [..]`), is an error that says so; rows written in
 the program are facts, `p("a", 1)`.
 
@@ -503,12 +507,14 @@ is not a name (`a[0]`, `"a-b"`) is an error. A provider's `source` is a
 constant, never a pun.
 
 `set` is the contribution statement (H-5): the chain is a resource's
-attribute, or an input (a stack input, a field of an object one, or a
-copy's, `set blue.cidr = ..`). A `set` with no `where` on a resource or
-copy declared in the same scope is an error that names the block to write
-the entry in; a top-level `set` of the program's own input is an error too
-(give it a default, or pass `--set`). `set k = t [@rank] where B` of an
-input is a settings block of one entry ("Settings"). `scenario` is gone (R-32): the
+attribute, or an input (a stack input, a field of an object one, a used
+module's, `set traefik.acme_email = ..`, or a copy's, `set blue.cidr =
+..`). A `set` with no `where` on a resource, a copy or a used module
+declared in the same scope is an error that names the block to write the
+entry in; a top-level `set` of the program's own input is an error too
+(give it a default, or pass `--set`). `set { a.b = 1, c = 2 } [@rank]
+[where B]` is several under one clause and rank, each entry a `set`'s,
+and `set from DOC` gives the inputs from a document ("Giving inputs"). `scenario` is gone (R-32): the
 program's denies are its tests, and `dform test` runs them over the
 inputs' values; a what-if plan is `plan --set k=v`.
 
@@ -558,9 +564,9 @@ Inputs and outputs are one grammar in both directions and in every scope
 by its fields, or a relation.
 
 **Values.** `input k: T [= d] [check B]` is a cell of the attribute
-aggregate the outside gives: the default contributes `@default`, a
-settings block, `set k = t where B` and an `--input-file`'s `k(v)` at the
-normal rank unless marked, and `--set k=v` at `@override` ("Settings").
+aggregate the outside gives: the default contributes `@default`, `set k
+= t where B` and an `--input-file`'s `k(v)` at the normal rank unless
+marked, and `--set k=v` at `@override` ("Giving inputs").
 `output k [: T] = t [where B]` hands a value out (H-7): read as
 `n.k` from a copy or a used module, `c[t].k` from every copy, and
 `stack[k=v].k` from another stack's deployment.
@@ -585,10 +591,11 @@ layers. A `key` is a scalar and takes no block.
 **Relations.** A relation is declared once, by `decl p(a: T, ..)`; `input`
 and `output` name it and never re-spell its columns:
 
-- `input p from TERM [where B]`, in a stack, gives `p` rows from outside:
-  `facts(PATH)` (a `.df` file of facts, re-read when it changes) or a
-  table, `FORMAT(PATH)` ("Relation inputs and tables"), read with the
-  decl's columns and checked against their types. Several lines are one
+- `input p from TERM [selector] [where B]`, in a stack, gives `p` rows
+  out of a document ("Documents"): a loader's, `csv("data/p.csv")`, a
+  selection into one, `toml("net.toml").peerings`, or any document value,
+  an input or a `let`, read with the decl's columns and checked against
+  their types. Several lines are one
   relation, their rows together, and facts the program states join
   them; a source with no `decl` is an error that names it.
 - `input p`, in a module or a component, is a relation its user gives.
@@ -617,61 +624,66 @@ and `dform test` enumerates them all. A used module's input nothing gives
 is the stack input's error, at the `use`. Only a component's inputs nest:
 its instance block gives them.
 
-### Settings
+### Giving inputs
 
-Configuration is the inputs (R-38). A settings block is contributions to
-them, under a condition:
+Configuration is the inputs (R-38), and a `set` is a contribution to
+one, under a condition:
 
 ```
-settings { db.multi_az = true, db.backup_days = 14 } where env == "prod"
-settings { db.backup_days = 30 } @override where env == "prod", region == "eu-west-1"
-settings { traefik.acme_email = "ops@example.com" }
-settings from yaml("config/${env}.yaml")
+set db.backup_days = 30 @override where env == "prod", region == "eu-west-1"
+set { db.multi_az = true, db.backup_days = 14 } where env == "prod"
+set { traefik.acme_email = "ops@example.com" } where env != "dev"
+set from yaml("config/${env}.yaml")
 ```
 
-Each entry gives the input at its path: the program's own (`region`), a
-field of an object input or the object (`db.backup_days`, `db = { .. }`),
-or a used module's (`traefik.acme_email`, the cell `(input, traefik,
-acme_email)`); a path that is no input is an error naming the inputs or
-the object's fields, a `let` or a copy's input (its instance block's) is
-an error that says so, and a key is the target's. An entry is `=` (an
-input takes no `+=`) and may carry its own rank. The block is one rule per
-entry, `arg(input, "", path, t, Rank) :- B, reads`, so it holds where its
-clause does: any condition, any subset of a composite key.
+A `set`'s target, alone or an entry of a block, is the program's own
+input (`region`), a field of an object input or the object
+(`db.backup_days`, `db = { .. }`), a used module's (`traefik.acme_email`,
+the cell `(input, traefik, acme_email)`), or a copy's (`blue.cidr`); a
+path that names no field is an error naming the object's fields, and a
+key is the target's. A block, `set { a.b = 1, c = 2 } [@rank] [where
+B]`, is several `set`s under one clause and rank, each entry its own
+`set` (any target, an entry's rank its own), one rule per entry:
+`arg(input, "", path, t, Rank) :- B, reads`. A `set` of the program's own
+input, or of a used module's or a copy's declared in the same scope, has
+a clause (H-5); with none it is an error naming the default or the block
+to write.
 
 The layers are ranks, never specificity: the declaration's default
-(`@default`) < settings (normal unless marked) < `--set` (`@override`).
-Two blocks that both hold and give one leaf different values at the
-winning rank are a conflict naming both, so a broad block says
-`@default` and a narrow one that should win says `@override`. `set k = t
-[@rank] where B` is the same contribution as a block of one entry. A read
-is the input's name, `db.backup_days`, and `why db.backup_days` shows the
-layers, each where it is written.
+(`@default`) < a `set` (normal unless marked) < `--set` (`@override`).
+Two `set`s that both hold and give one leaf different values at the
+winning rank are a conflict naming both, so a broad one says `@default`
+and a narrow one that should win says `@override`. A read is the input's
+name, `db.backup_days`, and `why db.backup_days` shows the layers, each
+where it is written.
 
-`settings from DOC [@rank] [where B]` gives every leaf of a document to
-the input at its path, a leaf by its dotted path (`db: {backup_days:
-14}` is `db.backup_days`; a CSV document has the columns `path` and
-`value`); a string is read as the input's type by its constructor (an
-`inet`, a quantity, a time; a CSV cell as an `int` too). A leaf at a path
-that is no input is a deny naming the file and line and the inputs there
-are. The document is the table `settings(path, value)` read by the file
-provider ("Relation inputs and tables"), one rule per input the scope
-gives (`tables::expand_settings`). This replaces dform.toml's `config`.
+`set from DOC [@rank] [where B]` gives every leaf of a document to the
+input at its path, a leaf by its dotted path (`db: {backup_days: 14}` is
+`db.backup_days`; a CSV document has the columns `path` and `value`);
+the document is a loader call, a selection into one, or any document
+value ("Documents"); a string is read as the input's type by its
+constructor (an `inet`, a quantity, a time; a CSV cell as an `int` too).
+A leaf at a path that is no input is a deny naming the file and line and
+the inputs there are. The document is the table `set(path, value)` read
+by the file provider, one rule per input the scope gives
+(`tables::expand_set_from`). This replaces dform.toml's `config`, and
+needs no clause.
 
-An input a settings block gives with no default is required only in the
+An input a `set` gives with no default is required only in the
 deployments none of them holds in: there it is a violation, `input k is
 required and has no value`. `dform test` leaves it to the program: it is
 no axis of the space.
 
-Gone (R-38): settings rows (`settings prod { .. }`, `settings _`), their
-reads (`settings[e].p`, `let cfg = settings[env]`), the `settings`
-pseudo-type (`type settings`, `type_lattice(settings, ..)`), and a
-stack's `config`; each is an error naming the form to write.
+Gone (R-38): the `settings` statement and its rows (`settings prod { ..
+}`, `settings _`), their reads (`settings[e].p`, `let cfg =
+settings[env]`), the `settings` pseudo-type (`type settings`,
+`type_lattice(settings, ..)`), and a stack's `config`; each is an error
+naming the form to write.
 
 **A list or a relation.** A list is a small ordered value handled whole:
 `verbs = ["get", "list"]`, an attribute's value, a document's array. What
 is iterated, joined or keyed is a relation: a row per thing, read a row
-at a time, given by rows (`--set`, settings and `why` address a relation
+at a time, given by rows (`--set`, `set` and `why` address a relation
 by its rows, never its position). An output that is a list of every
 subnet is a table, `output private_subnet`; an attribute that takes a
 list builds it where it is set, `subnets = [ s | subnet(s), s in
@@ -750,8 +762,8 @@ A stack's operational settings are not in the program: they are
 dform.toml's `[stacks.NAME]` for `stacks/NAME.df`, over `[defaults]`. A
 term is written as a string, `{stack}` in it the stack's name and `{k}`
 the value of its key `k` (in `backend`). The list is closed; any other
-key is an error naming it, and `config`, gone (R-38), one naming `settings
-from` ("Settings"):
+key is an error naming it, and `config`, gone (R-38), one naming `set
+from` ("Giving inputs"):
 
 | setting      | value                                                                 |
 |--------------|-----------------------------------------------------------------------|
@@ -792,7 +804,7 @@ like any provider and needing no `dform.toml` source (`externs::BUILTINS`);
 dform answers them itself:
 
 ```
-provider file         file.json(+path, -value: any), file.text(+path, -value: string)
+provider file         file.text(+path, -value: string); the loaders, `yaml(p)` .. ("Documents")
 provider env          env.var(+name, -value: secret(string))
 provider time         time.now(-t: time)
 provider aws          aws.availability_zone(+state, -name: string, -index: int)
@@ -810,7 +822,7 @@ names sorted, unless the API has an order of its own), so a program
 enumerates zones with a column and a plan never reshuffles. The aws mock
 answers it from `crates/dform-mock/schemas/aws-mock.externs.df`.
 
-`extern file.json(..)` in a program is an error naming the `provider`
+`extern file.text(..)` in a program is an error naming the `provider`
 statement to write instead. `env.var(t)` as a term is the lookup
 `env.var[t]`, `time.now()` the lookup `time.now[]`; without the
 `provider` statement either is an error that says to declare it.
@@ -877,20 +889,46 @@ component. Another module's aliases are public, read through the name
 its `use` binds or its path (`config.environment`, `network.node_pool`).
 Two aliases of one name in one scope are an error listing both.
 
-### Relation inputs and tables
+### Documents
 
-`input p from facts(SOURCE)` gives `p` the rows of a `.df` fact file
-(`facts("data/release.facts")`, or `facts(git(REPO, REF, PATH))`), read
-from outside and re-read when they change; `decl p(a, b)` declares its
-columns. `input p from FORMAT(SOURCE) [where B]` is a table: its rows are a
-data file's, read with `decl p(col: type, ..)`'s columns. FORMAT is `csv`, `json`, `yaml` or `toml`; SOURCE is a
-term for the path (a string, holes allowed: a hole is a content position,
-so it reads now) or `git(REPO, REF, PATH)`, each a term. A table's columns
-are typed, with an input's types (`inputs::check_type`), never `secret`.
-Relation inputs are the last of the file's header (see "The header"); a
-copy's tables are its user's block's, `p from FORMAT(SOURCE)`.
+Data that is not code is a document (R-39), loaded by the file
+provider's loaders, spelled bare: `yaml(PATH)`, `toml(PATH)`,
+`json(PATH)` and `csv(PATH)` (a list of objects by its header, every cell
+text), each also over `git(REPO, REF, PATH)`, read at the commit the ref
+names, which the plan file records, so `apply PLAN` reads what plan read
+though the branch moved since. A path is a term (holes allowed: a hole is
+a content position, so it reads now), from the project root. A loader
+call is a value: `let net = toml("data/network.toml")`, then
+`net.region`, `net.az[0].name`. `file.json` is gone; `file.text(PATH)`
+stays, the file's text.
 
-A table lowers to externs (`src/tables.rs`), the source its bound inputs:
+`input p from DOC [selector] [where B]` destructures a document into the
+relation `p`, by the columns of its `decl`:
+
+```
+input az from toml("data/network.toml")                 # its [[az]] tables
+input peering from toml("data/network.toml").peerings    # a selection
+input service from yaml("teams.yaml").teams[*].services  # every team's
+input vlan from vlans                                    # an input, list(vlan)
+```
+
+A list of objects is a row per object, each field a column by name; a
+whole TOML document is its `[[p]]` tables, by the relation's name (the
+document may hold other relations' too). A selector is a path into the
+document, `.name` a field and `[*]` every element of a list, chained; a
+list at its end is its elements. A column a row lacks is the nearest
+enclosing object's that has it; else it is an error naming the row, and
+so is a field no column takes and a cell that is not its column's type
+(read to it as an input's, `inputs::check_type`, never `secret`). Rows
+read from a file carry their place (`net.toml:7`, `teams.yaml:row 2`),
+which `why` prints. A `.df` file of facts is a module (`use
+data.releases`, then `releases.release(app, k, v)`), re-read like any
+program file; `facts(..)` is gone, an error that says so. A copy's
+relation input takes a document the same way, `p from DOC` in its
+`instance` or `use` block.
+
+A loader's table lowers to externs (`src/tables.rs`), the source its bound
+inputs, the selector in the table's name:
 
 ```
 extern table.FORMAT.p(+path, -at, -col: type, ...)
@@ -898,7 +936,7 @@ p(Col, ...) :- B, reads, Path = PATH', table.FORMAT.p(Path, At, Col, ...)
 decl p(..) mixed
 ```
 
-and from git, the ref resolved to a commit first:
+from git, the ref resolved to a commit first:
 
 ```
 extern table.git.p(+repo, +ref, -commit)
@@ -906,10 +944,15 @@ p(Col, ...) :- reads, Repo = .., Ref = .., Path = .., table.git.p(Repo, Ref, Com
                table.FORMAT.p(Repo, Commit, Path, At, Col, ...)
 ```
 
-`settings from FORMAT(SOURCE)` is the table `settings(path: string,
-value: any)`, every leaf of the document a row, read into `arg(input,
-"", Path, Value, Rank)`; `transform` expands that rule into one per input
-the scope gives, and a deny for a leaf at any other path ("Settings").
+any other document value, `table.value.p(+doc, -at, -col, ..)`, answered
+in process; and a loader call as a value, `table.FORMAT.document(Path,
+At, V)`. The controller watches every file and ref a run's tables and
+documents read, and every program file.
+
+`set from DOC` is the table `set(path: string, value: any)`, every leaf
+of the document a row, read into `arg(input, "", Path, Value, Rank)`;
+`transform` expands that rule into one per input the scope gives, and a
+deny for a leaf at any other path ("Giving inputs").
 
 ### Block names
 
@@ -1212,8 +1255,8 @@ as it is.
 | `env.var(t)`                              | `V`, reading `env.var(t', V)`                          |
 | `resource T n { f = t } where B`          | `resource T n { f = t' } :- B, reads`                  |
 | `resource T "a-${e}" { .. }`              | name `Addr`, `Addr = format("a-%s", e')` last          |
-| `settings { k = t } @r where B`           | `arg("input", "", "k", t', r) :- B, reads` per entry (`r` normal by default; `m.k`, a used module's: `arg("input", "m", "k", ..)`) |
-| `settings from F(S) @r where B`           | `arg("input", S, "p", V, r) :- B, reads, Path = S', table.F.settings(Path, At, "p", V)` per input path `p`; a deny for any other ("Settings") |
+| `set { k = t } @r where B`                | each entry a `set`: `arg("input", "", "k", t', r) :- B, reads` (`m.k`, a used module's: `arg("input", "m", "k", ..)`) |
+| `set from F(S) @r where B`                | `arg("input", S, "p", V, r) :- B, reads, Path = S', table.F.set(Path, At, "p", V)` per input path `p`; a deny for any other ("Giving inputs") |
 | `instance c n { k = t } where B`          | `instance c n { k = t' } :- B, reads`; the copy exists while `B` holds |
 | `use m { k = t } where B`                 | the same, of the module `m`, under `m`                 |
 | `set k = v [@r] where B`                  | `arg("input", "", "k", v, r) :- B` (`k` a leaf's path too; `r` normal by default) |
@@ -1230,8 +1273,9 @@ as it is.
 | `output p` (a stack's relation)           | `output p = [ [X, ..] \| p(X, ..) ]`, read by `s[k=v].p(x, ..)` as `member(Rows, [x, ..])` |
 | `input k { f: T = d }` (R-54)             | the leaf `k.f`'s `arg("input", S, "k.f", d, default)`, its check `k.f`'s refinement |
 | `decl p(a: t, b_c: t)`                    | record fields `a`, `b_c`                               |
-| `input p from facts(S)`                   | a relation read from `S`, re-read when it changes      |
-| `input p from F(S) where B`               | `p(C) :- B, reads, Path = S', table.F.p(Path, At, C)` ("Relation inputs and tables") |
+| `yaml(S)` (a loader, as a value)          | `V`, reading `table.yaml.document(S', At, V)`          |
+| `input p from F(S) where B`               | `p(C) :- B, reads, Path = S', table.F.p(Path, At, C)` ("Documents") |
+| `input p from t`                          | `p(C) :- reads, Doc = t', table.value.p(Doc, At, C)`   |
 | `instance c n { p(t) where B }`           | `n::p(t') :- B, reads`, the copy's relation `p`        |
 | `enum("a", "b")` in a type                | `enum(a, b)`                                           |
 | `"a${e}b"`                                | `format("a%sb", e')`                                   |

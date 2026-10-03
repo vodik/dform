@@ -1,5 +1,6 @@
-//! Settings (R-38): a settings block is guarded contributions to the
-//! program's inputs, at the normal rank unless marked; `settings from DOC`
+//! Giving inputs (R-38): `set k = t where B`, and `set { k = t .. } where
+//! B` for several under one clause, are guarded contributions to the
+//! program's inputs, at the normal rank unless marked; `set from DOC`
 //! gives every leaf of a document to the input at its path; `--set` is
 //! `@override`. Overlapping blocks resolve by rank, never by specificity.
 
@@ -13,7 +14,7 @@ key env: enum("dev", "prod") = "dev"
 input db { size: int = 1, zone: string = "a" }
 provider fake
 
-settings from FORMAT("config/${env}.FORMAT")
+set from FORMAT("config/${env}.FORMAT")
 
 resource db.postgres main {
   size = db.size
@@ -71,7 +72,7 @@ fn a_leaf_that_is_no_input_is_a_deny() {
     let r = s.run(&["why", "db.size", "p.df", "env=prod"]).success();
     assert!(
         r.stdout
-            .contains("p.df:7  settings from yaml(\"config/${env}.yaml\")")
+            .contains("p.df:7  set from yaml(\"config/${env}.yaml\")")
             && r.stdout.contains("   config/prod.yaml:2\n"),
         "{}",
         r.stdout
@@ -90,8 +91,8 @@ key region: enum("us", "eu") = "us"
 input db { days: int = 3, multi_az: bool = false }
 provider fake
 
-settings { db.days = 14, db.multi_az = true } where env == "prod"
-settings { db.days = 30 } where env == "prod", region == "eu"
+set { db.days = 14, db.multi_az = true } where env == "prod"
+set { db.days = 30 } where env == "prod", region == "eu"
 
 resource db.postgres main {
   backup_days = db.days
@@ -141,8 +142,9 @@ fn overlapping_blocks_resolve_by_rank() {
     assert!(r.stdout.contains("  backup_days = 7\n"), "{}", r.stdout);
 }
 
-/// A settings entry names an input: the program's own, a field of an
-/// object one, a used module's. Anything else is an error naming it.
+/// A `set` entry names an input: the program's own, a field of an object
+/// one, a used module's. Anything else is an error naming it, and one
+/// with no clause is the H-5 error naming the block to write it in.
 #[test]
 fn an_entry_is_an_inputs_path() {
     let s = scratch("paths");
@@ -150,20 +152,20 @@ fn an_entry_is_an_inputs_path() {
     s.write(
         "p.df",
         "edition 2026\ninput db { size: int = 1 }\nuse m\nprovider fake\n\
-         settings { m.email = \"ops@example.com\" }\n\
-         settings { db.sz = 2 }\n\
+         set { m.email = \"ops@example.com\" } where db.size == 1\n\
+         set { db.sz = 2 } where db.size == 1\n\
          resource db.postgres main { size = db.size, owner = m.email }\n",
     );
     let r = s.run(&["plan", "p.df"]).failure();
     assert!(
-        r.stderr
-            .contains("settings: `db.sz`: input db has no field sz"),
+        r.stderr.contains("`set db.sz`: input db has no field sz"),
         "{}",
         r.stderr
     );
     s.write(
         "p.df",
-        &s.read("p.df").replace("settings { db.sz = 2 }\n", ""),
+        &s.read("p.df")
+            .replace("set { db.sz = 2 } where db.size == 1\n", ""),
     );
     let r = s.run(&["plan", "p.df"]).success();
     assert!(
@@ -171,25 +173,37 @@ fn an_entry_is_an_inputs_path() {
         "{}",
         r.stdout
     );
+    // With no clause it is an entry of the `use` block (H-5).
+    s.write(
+        "p.df",
+        &s.read("p.df").replace(" } where db.size == 1\n", " }\n"),
+    );
+    let r = s.run(&["plan", "p.df"]).failure();
+    assert!(
+        r.stderr
+            .contains("`set m.email` with no condition is an entry of `use m`"),
+        "{}",
+        r.stderr
+    );
 }
 
-/// An input with no default that settings give is required only where
+/// An input with no default that a `set` gives is required only where
 /// none of them holds: a violation of that deployment, not an error of
 /// every one.
 #[test]
-fn a_required_input_the_settings_give_is_missing_only_where_none_holds() {
+fn a_required_input_a_set_gives_is_missing_only_where_none_holds() {
     let s = scratch("required");
     s.write(
         "p.df",
         "edition 2026\nkey env: enum(\"dev\", \"prod\") = \"dev\"\ninput owner: string\n\
-         provider fake\nsettings { owner = \"ops\" } where env == \"prod\"\n\
+         provider fake\nset owner = \"ops\" where env == \"prod\"\n\
          resource db.postgres main { owner }\n",
     );
     s.run(&["plan", "p.df", "env=prod"]).success();
     let r = s.run(&["plan", "p.df"]).failure();
     assert!(
         r.stderr.contains(
-            "input owner is required and has no value: no settings block gives it in this \
+            "input owner is required and has no value: no `set` gives it in this \
              deployment"
         ),
         "{}",
@@ -199,7 +213,7 @@ fn a_required_input_the_settings_give_is_missing_only_where_none_holds() {
 
 /// dform.toml's `config` is gone, and says what replaces it.
 #[test]
-fn a_stack_config_names_settings_from() {
+fn a_stack_config_names_set_from() {
     let s = scratch("no-config");
     s.write(
         "dform.toml",
@@ -209,9 +223,29 @@ fn a_stack_config_names_settings_from() {
     let r = s.run(&["plan", "p.df"]).failure();
     assert!(
         r.stderr.contains("a stack's config is gone (R-38)")
-            && r.stderr
-                .contains("`settings from yaml(\"config/${env}.yaml\")`"),
+            && r.stderr.contains("`set from yaml(\"config/${env}.yaml\")`"),
         "{}",
         r.stderr
     );
+}
+
+/// `set from` takes any document (R-39): a selection into a loaded
+/// one, `toml("cfg.toml").prod`, or a `let` of one.
+#[test]
+fn set_from_a_selection_or_a_let() {
+    let s = scratch("from-select");
+    s.write("cfg.toml", "[prod.db]\nsize = 3\n\n[dev.db]\nsize = 2\n");
+    s.write(
+        "p.df",
+        "edition 2026\nkey env: enum(\"dev\", \"prod\") = \"dev\"\n\
+         input db { size: int = 1, zone: string = \"a\" }\nprovider fake\n\
+         let cfg = toml(\"cfg.toml\")\n\
+         set from toml(\"cfg.toml\").prod where env == \"prod\"\n\
+         set from cfg.dev where env == \"dev\"\n\
+         resource db.postgres main { size = db.size }\n",
+    );
+    let r = s.run(&["plan", "p.df", "env=prod"]).success();
+    assert!(r.stdout.contains("  size = 3\n"), "{}", r.stdout);
+    let r = s.run(&["plan", "p.df"]).success();
+    assert!(r.stdout.contains("  size = 2\n"), "{}", r.stdout);
 }

@@ -22,9 +22,9 @@
 //! nothing else is. Each row's `at` is where it is, `file:line`
 //! (`repo@commit:file:line` from git).
 //!
-//! `settings from FORMAT(SOURCE)` (R-38) is the table `settings(path,
+//! `set from FORMAT(SOURCE)` (R-38) is the table `set(path,
 //! value)`: every leaf of a mapping (a `path,value` CSV) is a contribution
-//! to the input at its path ([`expand_settings`]).
+//! to the input at its path ([`expand_set_from`]).
 
 use crate::ast::{Atom, ExternFn, Lit, Program, RuleStmt, Span, Stmt, Term, TypeExpr};
 use crate::externs::{self, Answer};
@@ -39,9 +39,98 @@ use std::path::{Path, PathBuf};
 
 pub const FORMATS: &[&str] = &["csv", "json", "yaml", "toml"];
 
-/// The table a `settings from` document is (`settings` is a keyword: no
-/// relation has its name).
-pub const SETTINGS_DOC: &str = "settings";
+/// The table a `set from` document is (`set` is a keyword: no relation
+/// has its name).
+pub const SET_DOC: &str = "set";
+
+/// The table a loader call is, `yaml(path)` as a value: one row, the
+/// whole document (`document.git` read at a commit). A keyword too.
+pub const DOCUMENT: &str = "document";
+
+/// The format of a table read from a value (an input, a `let`, a
+/// selection into a document) rather than a file: `table.value.p(+doc,
+/// -at, ..)`.
+pub const VALUE: &str = "value";
+
+/// A table's name with the selector its rows are at: `p|.teams[*].services`.
+pub fn selected(table: &str, selector: &str) -> String {
+    match selector.is_empty() {
+        true => table.to_string(),
+        false => format!("{table}|{selector}"),
+    }
+}
+
+/// One step of a selector (R-39): `.name` a field, `[*]` every element.
+#[derive(Debug, Clone, PartialEq)]
+enum Step {
+    Field(String),
+    Each,
+}
+
+fn steps(selector: &str) -> Result<Vec<Step>> {
+    let mut out = Vec::new();
+    let mut rest = selector;
+    while !rest.is_empty() {
+        if let Some(r) = rest.strip_prefix("[*]") {
+            out.push(Step::Each);
+            rest = r;
+        } else if let Some(r) = rest.strip_prefix('.') {
+            let end = r.find(['.', '[']).unwrap_or(r.len());
+            out.push(Step::Field(r[..end].to_string()));
+            rest = &r[end..];
+        } else {
+            bail!("internal: selector {selector}");
+        }
+    }
+    Ok(out)
+}
+
+/// The rows a selector names in `doc`, each with the objects that enclose
+/// it, innermost last: `.name` takes a field, `[*]` every element, and a
+/// list at the end is its elements (R-39).
+fn select(doc: Value, selector: &str) -> Result<Vec<(Value, Vec<Value>)>> {
+    let mut at: Vec<(Value, Vec<Value>)> = vec![(doc, Vec::new())];
+    let mut path = String::new();
+    for step in steps(selector)? {
+        let mut next = Vec::new();
+        for (v, ctx) in at {
+            match (&step, v) {
+                (Step::Field(f), Value::Obj(mut m)) => {
+                    let Some(x) = m.remove(f) else {
+                        bail!("{} has no field {f}", shown_path(&path));
+                    };
+                    let mut ctx = ctx;
+                    ctx.push(Value::Obj(m));
+                    next.push((x, ctx));
+                }
+                (Step::Each, Value::List(xs)) => {
+                    next.extend(xs.into_iter().map(|x| (x, ctx.clone())));
+                }
+                (Step::Field(f), _) => bail!("{} is no object: no field {f}", shown_path(&path)),
+                (Step::Each, _) => bail!("{} is no list: `[*]` takes a list", shown_path(&path)),
+            }
+        }
+        path.push_str(&match &step {
+            Step::Field(f) => format!(".{f}"),
+            Step::Each => "[*]".to_string(),
+        });
+        at = next;
+    }
+    Ok(at
+        .into_iter()
+        .flat_map(|(v, ctx)| match v {
+            Value::List(xs) => xs.into_iter().map(|x| (x, ctx.clone())).collect(),
+            v => vec![(v, ctx)],
+        })
+        .collect())
+}
+
+fn shown_path(path: &str) -> String {
+    match path.is_empty() {
+        true => "the document".to_string(),
+        false => format!("`{path}`"),
+    }
+}
 
 const PREFIX: &str = "table.";
 
@@ -55,11 +144,11 @@ fn parse_name(name: &str) -> Option<(&str, &str)> {
     name.strip_prefix(PREFIX)?.split_once('.')
 }
 
-/// What a table extern reads, for messages: `input relation p`, `settings`
-/// (`settings from DOC`).
+/// What a table extern reads, for messages: `input relation p`, `set`
+/// (`set from DOC`).
 pub fn describe(name: &str) -> Option<String> {
     Some(match parse_name(name)? {
-        (_, SETTINGS_DOC) => "settings".into(),
+        (_, SET_DOC) => "set".into(),
         (_, t) => format!("input relation {t}"),
     })
 }
@@ -110,6 +199,9 @@ impl Tables {
     /// The answer to a table extern's call; `None` for any other extern.
     pub fn answer(&self, f: &ExternFn, inputs: &[Value]) -> Option<Result<Vec<Vec<Value>>>> {
         let (format, table) = parse_name(&f.name)?;
+        if format == VALUE {
+            return Some(self.value_rows(f, table, inputs));
+        }
         let strs: Option<Vec<&str>> = inputs.iter().map(string).collect();
         let base = base(f.span);
         Some(match (format, strs.as_deref()) {
@@ -172,60 +264,52 @@ impl Tables {
             Source::File(_) => watch::digest(text.as_bytes()),
             Source::Git { .. } => string(&inputs[1]).unwrap_or_default().to_string(),
         };
+        let (name, selector) = table.split_once('|').unwrap_or((table, ""));
         self.read
             .borrow_mut()
-            .insert((table.to_string(), source), stamp);
-        let cols = &f.args[inputs.len() + 1..];
+            .insert((name.to_string(), source), stamp);
         let at = |line: Option<usize>, n: usize| match line {
             Some(l) => format!("{shown}:{l}"),
             None => format!("{shown}:row {n}"),
         };
-        let mut out = Vec::new();
-        if table == SETTINGS_DOC {
-            for (line, path, value) in leaves(format, &text).with_context(|| shown.clone())? {
-                let at = line.map_or(shown.clone(), |l| format!("{shown}:{l}"));
-                let outs = vec![Value::Str(at), Value::Str(path), value];
-                out.push(externs::row(f, inputs, outs));
-            }
-            return Ok(out);
+        // A loader call: the whole document, one row.
+        if name == DOCUMENT || name.starts_with("document.") {
+            let doc = document_of(format, &text).with_context(|| shown.clone())?;
+            let outs = vec![Value::Str(shown.clone()), doc];
+            return Ok(vec![externs::row(f, inputs, outs)]);
         }
-        for (i, r) in rows(format, table, &text)
-            .with_context(|| shown.clone())?
-            .into_iter()
-            .enumerate()
-        {
-            let at = at(r.line, i + 1);
-            let mut cells = r.cells;
-            let mut outs = vec![Value::Str(at.clone())];
-            for c in cols {
-                let Some(cell) = cells.remove(&c.name) else {
-                    bail!("{at}: no column {}", c.name);
-                };
-                let v = typed(c.ty.as_ref(), cell);
-                if let Some(t) = &c.ty
-                    && !has_type(t, &v)
-                {
-                    bail!(
-                        "{at}: column {}: {} is not {}",
-                        c.name,
-                        fmt_value(&v),
-                        type_text(t)
-                    );
+        if name == SET_DOC {
+            let leaves = match selector {
+                "" => leaves(format, &text).with_context(|| shown.clone())?,
+                _ => {
+                    let doc = document_of(format, &text).with_context(|| shown.clone())?;
+                    selected_leaves(doc, selector).with_context(|| shown.clone())?
                 }
-                outs.push(v);
-            }
-            if let Some(extra) = cells.keys().next() {
-                bail!(
-                    "{at}: {extra} is not a column of {table} (its columns: {})",
-                    cols.iter()
-                        .map(|c| c.name.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                );
-            }
-            out.push(externs::row(f, inputs, outs));
+            };
+            return Ok(leaf_rows(f, inputs, &shown, leaves));
         }
-        Ok(out)
+        let rows = match selector {
+            "" => rows(format, name, &text).with_context(|| shown.clone())?,
+            _ => {
+                let doc = document_of(format, &text).with_context(|| shown.clone())?;
+                selected_rows(doc, selector, format == "csv").with_context(|| shown.clone())?
+            }
+        };
+        typed_rows(f, inputs, name, rows, at)
+    }
+
+    /// A table read from a value, `table.value.p(+doc, -at, ..)`: the rows
+    /// its selector names, each at its position.
+    fn value_rows(&self, f: &ExternFn, table: &str, inputs: &[Value]) -> Result<Vec<Vec<Value>>> {
+        let (name, selector) = table.split_once('|').unwrap_or((table, ""));
+        let doc = inputs.first().cloned().unwrap_or(Value::List(Vec::new()));
+        let shown = format!("{name} from a value");
+        if name == SET_DOC {
+            let leaves = selected_leaves(doc, selector)?;
+            return Ok(leaf_rows(f, inputs, &shown, leaves));
+        }
+        let rows = selected_rows(doc, selector, false)?;
+        typed_rows(f, inputs, name, rows, |_, n| format!("{shown}: row {n}"))
     }
 
     /// The sources the run's tables read, stamped as read: for the
@@ -245,6 +329,144 @@ impl Tables {
             })
             .collect()
     }
+}
+
+/// The rows of a document of inputs, `(at, path, value)` each.
+fn leaf_rows(
+    f: &ExternFn,
+    inputs: &[Value],
+    shown: &str,
+    leaves: Vec<(Option<usize>, String, Value)>,
+) -> Vec<Vec<Value>> {
+    leaves
+        .into_iter()
+        .map(|(line, path, value)| {
+            let at = line.map_or(shown.to_string(), |l| format!("{shown}:{l}"));
+            externs::row(f, inputs, vec![Value::Str(at), Value::Str(path), value])
+        })
+        .collect()
+}
+
+/// Each row read by the table's columns, the extern's outputs after `at`:
+/// a cell as its column's type, a column the row lacks from the nearest
+/// enclosing object that has it, and anything else an error naming the
+/// row.
+fn typed_rows(
+    f: &ExternFn,
+    inputs: &[Value],
+    table: &str,
+    rows: Vec<Row>,
+    at: impl Fn(Option<usize>, usize) -> String,
+) -> Result<Vec<Vec<Value>>> {
+    let cols = &f.args[inputs.len() + 1..];
+    let mut out = Vec::new();
+    for (i, r) in rows.into_iter().enumerate() {
+        let at = at(r.line, i + 1);
+        let mut cells = r.cells;
+        let mut outs = vec![Value::Str(at.clone())];
+        for c in cols {
+            let cell = match cells.remove(&c.name) {
+                Some(cell) => cell,
+                None => match r.ctx.iter().rev().find_map(|o| o.get(&c.name)) {
+                    Some(v) => Cell::Value(v.clone()),
+                    None => bail!("{at}: no column {}", c.name),
+                },
+            };
+            let v = typed(c.ty.as_ref(), cell);
+            if let Some(t) = &c.ty
+                && !has_type(t, &v)
+            {
+                bail!(
+                    "{at}: column {}: {} is not {}",
+                    c.name,
+                    fmt_value(&v),
+                    type_text(t)
+                );
+            }
+            outs.push(v);
+        }
+        if let Some(extra) = cells.keys().next() {
+            bail!(
+                "{at}: {extra} is not a column of {table} (its columns: {})",
+                cols.iter()
+                    .map(|c| c.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        }
+        out.push(externs::row(f, inputs, outs));
+    }
+    Ok(out)
+}
+
+/// The rows a selector names in a document: each an object; a CSV
+/// document's cells are text.
+fn selected_rows(doc: Value, selector: &str, text: bool) -> Result<Vec<Row>> {
+    select(doc, selector)?
+        .into_iter()
+        .enumerate()
+        .map(|(i, (v, ctx))| {
+            let Value::Obj(m) = v else {
+                bail!("row {}: a row is an object, not {}", i + 1, fmt_value(&v));
+            };
+            let cells = m
+                .into_iter()
+                .map(|(k, v)| match (text, v) {
+                    (true, Value::Str(s)) => (k, Cell::Text(s)),
+                    (_, v) => (k, Cell::Value(v)),
+                })
+                .collect();
+            let ctx = ctx
+                .into_iter()
+                .filter_map(|o| match o {
+                    Value::Obj(m) => Some(m),
+                    _ => None,
+                })
+                .collect();
+            Ok(Row {
+                line: None,
+                cells,
+                ctx,
+            })
+        })
+        .collect()
+}
+
+/// The leaves under what a selector names in a document, by their paths
+/// from there.
+fn selected_leaves(doc: Value, selector: &str) -> Result<Vec<(Option<usize>, String, Value)>> {
+    let mut out = Vec::new();
+    for (v, _) in select(doc, selector)? {
+        let Value::Obj(m) = v else {
+            bail!("a document of inputs is a mapping, not {}", fmt_value(&v));
+        };
+        for (k, v) in m {
+            flatten(&mut out, None, k, v);
+        }
+    }
+    Ok(out)
+}
+
+/// A whole document as one value (a loader call, `yaml(path)`): a CSV one
+/// is a list of objects by its header, every cell text.
+pub fn document_of(format: &str, text: &str) -> Result<Value> {
+    if format != "csv" {
+        return document(format, text);
+    }
+    let mut r = csv::Reader::from_reader(text.as_bytes());
+    let header = r.headers()?.clone();
+    let mut out = Vec::new();
+    for rec in r.records() {
+        let rec = rec?;
+        out.push(Value::Obj(
+            header
+                .iter()
+                .zip(rec.iter())
+                .map(|(k, v)| (k.to_string(), Value::Str(v.to_string())))
+                .collect(),
+        ));
+    }
+    Ok(Value::List(out))
 }
 
 fn short(commit: &str) -> &str {
@@ -296,10 +518,12 @@ fn typed(ty: Option<&TypeExpr>, cell: Cell) -> Value {
     }
 }
 
-/// One row: its line when the format says, and its cells by column.
+/// One row: its line when the format says, its cells by column, and the
+/// objects that enclose it in its document, innermost last (a selector's).
 struct Row {
     line: Option<usize>,
     cells: BTreeMap<String, Cell>,
+    ctx: Vec<BTreeMap<String, Value>>,
 }
 
 /// The line holding byte `at` of `text`.
@@ -316,6 +540,7 @@ fn rows(format: &str, table: &str, text: &str) -> Result<Vec<Row>> {
             for rec in r.records() {
                 let rec = rec?;
                 out.push(Row {
+                    ctx: Vec::new(),
                     line: rec.position().map(|p| p.line() as usize),
                     cells: header
                         .iter()
@@ -345,6 +570,7 @@ fn rows(format: &str, table: &str, text: &str) -> Result<Vec<Row>> {
                     Ok(Row {
                         line: Some(line),
                         cells,
+                        ctx: Vec::new(),
                     })
                 })
                 .collect()
@@ -375,31 +601,46 @@ fn rows(format: &str, table: &str, text: &str) -> Result<Vec<Row>> {
                         .map(|(k, v)| Ok((yaml_key(&k)?, Cell::Value(yaml(v)?))))
                         .collect::<Result<_>>()
                         .with_context(|| format!("row {}", i + 1))?;
-                    Ok(Row { line, cells })
+                    Ok(Row {
+                        line,
+                        cells,
+                        ctx: Vec::new(),
+                    })
                 })
                 .collect()
         }
         "toml" => {
-            type Rows = BTreeMap<String, Vec<toml::Spanned<toml::Table>>>;
-            let mut doc: Rows = toml::from_str(text).with_context(|| {
-                format!("a TOML table is its rows as `[[{table}]]`, and nothing else")
-            })?;
-            let items = doc.remove(table).unwrap_or_default();
-            if let Some(k) = doc.keys().next() {
-                bail!("{k} is not {table}: a TOML table is its rows as `[[{table}]]`");
-            }
+            // A TOML document's rows of `p` are its `[[p]]` tables; the
+            // document may hold other relations' too (R-39).
+            let mut doc: toml::Table = toml::from_str(text)?;
+            let items = match doc.remove(table) {
+                None => Vec::new(),
+                Some(toml::Value::Array(xs)) => xs,
+                Some(_) => bail!("{table} is not `[[{table}]]`: a TOML table is its rows"),
+            };
+            let header = format!("[[{table}]]");
+            let lines: Vec<usize> = text
+                .lines()
+                .enumerate()
+                .filter(|(_, l)| l.trim() == header)
+                .map(|(i, _)| i + 1)
+                .collect();
+            let lines = (lines.len() == items.len()).then_some(lines);
             items
                 .into_iter()
-                .map(|item| {
-                    let line = line_of(text, item.span().start);
-                    let cells = item
-                        .into_inner()
+                .enumerate()
+                .map(|(i, item)| {
+                    let toml::Value::Table(t) = item else {
+                        bail!("row {}: a row is a table", i + 1);
+                    };
+                    let cells = t
                         .into_iter()
-                        .map(|(k, v)| Ok((k, Cell::Value(toml_value(v)))))
-                        .collect::<Result<_>>()?;
+                        .map(|(k, v)| (k, Cell::Value(toml_value(v))))
+                        .collect();
                     Ok(Row {
-                        line: Some(line),
+                        line: lines.as_ref().map(|ls| ls[i]),
                         cells,
+                        ctx: Vec::new(),
                     })
                 })
                 .collect()
@@ -419,28 +660,28 @@ pub fn document(format: &str, text: &str) -> Result<Value> {
     }
 }
 
-/// A settings document's leaves: (line, dotted path, value). A mapping's
+/// A document of inputs's leaves: (line, dotted path, value). A mapping's
 /// nested mappings are walked to their leaves; a CSV one has the columns
 /// `path` and `value`.
 fn leaves(format: &str, text: &str) -> Result<Vec<(Option<usize>, String, Value)>> {
     let mut out = Vec::new();
     match format {
         "csv" => {
-            for r in rows("csv", SETTINGS_DOC, text)? {
+            for r in rows("csv", SET_DOC, text)? {
                 let mut cells = r.cells;
                 let (Some(Cell::Text(p)), Some(Cell::Text(v)), true) = (
                     cells.remove("path"),
                     cells.remove("value"),
                     cells.is_empty(),
                 ) else {
-                    bail!("a CSV settings document has the columns path and value");
+                    bail!("a CSV document of inputs has the columns path and value");
                 };
                 flatten(&mut out, r.line, p, Value::Str(v));
             }
         }
         "json" => {
             let m: BTreeMap<String, &serde_json::value::RawValue> =
-                serde_json::from_str(text).context("a JSON settings document is an object")?;
+                serde_json::from_str(text).context("a JSON document of inputs is an object")?;
             for (k, raw) in m {
                 let line = line_of(text, raw.get().as_ptr() as usize - text.as_ptr() as usize);
                 let v: serde_json::Value = serde_json::from_str(raw.get())?;
@@ -450,7 +691,7 @@ fn leaves(format: &str, text: &str) -> Result<Vec<(Option<usize>, String, Value)
         }
         "yaml" => {
             let serde_yaml::Value::Mapping(m) = serde_yaml::from_str(text)? else {
-                bail!("a YAML settings document is a mapping");
+                bail!("a YAML document of inputs is a mapping");
             };
             let lines = yaml_key_lines(text);
             for (k, v) in m {
@@ -586,8 +827,8 @@ fn toml_value(v: toml::Value) -> Value {
     }
 }
 
-/// `settings from DOC`, lowered (`transform::lower`): the rule the
-/// resolver wrote, `arg(input, S, P, V, Rank) :- ..., table.F.settings(..,
+/// `set from DOC`, lowered (`transform::lower`): the rule the
+/// resolver wrote, `arg(input, S, P, V, Rank) :- ..., table.F.set(..,
 /// At, P, V)`, contributes at a path only a row knows, which would make
 /// every input cell one partition (`partition`). So it becomes one rule per
 /// input the scope gives, `P` its path and the head its cell (R-38): in the
@@ -597,13 +838,17 @@ fn toml_value(v: toml::Value) -> Value {
 /// leaf at any other path is a deny naming it, where the file has it, and
 /// the inputs there are.
 /// Each of those inputs is one the program gives (`Declared::given`).
-pub fn expand_settings(program: Program, declared: &mut [crate::inputs::Declared]) -> Program {
-    let is_doc = |l: &Lit| matches!(l, Lit::Pos(a) if parse_name(&a.pred).is_some_and(|(f, t)| f != "git" && t == SETTINGS_DOC));
+pub fn expand_set_from(program: Program, declared: &mut [crate::inputs::Declared]) -> Program {
+    let is_doc = |l: &Lit| {
+        matches!(l, Lit::Pos(a) if parse_name(&a.pred).is_some_and(|(f, t)| {
+            f != "git" && t.split('|').next() == Some(SET_DOC)
+        }))
+    };
     let (docs, mut out): (Vec<Stmt>, Vec<Stmt>) = program
         .statements
         .into_iter()
         .partition(|s| matches!(s, Stmt::Rule(r) if r.body.iter().any(is_doc)));
-    const KNOWN: &str = "__settings_path";
+    const KNOWN: &str = "__set_path";
     let mut known = BTreeSet::new();
     for s in docs {
         let Stmt::Rule(r) = s else { continue };

@@ -282,10 +282,10 @@ fn an_edited_plan_file_is_refused() {
     );
 }
 
-/// A git input relation's commit is pinned in the plan file: a ref that
-/// moved since the plan is a stale plan.
+/// A git table's commit is an extern answer the plan file records (R-39):
+/// apply reads what plan read, though the ref moved since.
 #[test]
-fn a_moved_git_commit_is_a_stale_plan() {
+fn a_git_table_is_read_at_the_planned_commit() {
     let s = Scratch::project("approvals-git");
     let git = |dir: &std::path::Path, args: &[&str]| {
         let out = Command::new("git")
@@ -302,31 +302,27 @@ fn a_moved_git_commit_is_a_stale_plan() {
     git(&s.dir, &["init", "-q", "--bare", "ops.git"]);
     git(&s.dir, &["clone", "-q", "ops.git", "work"]);
     let commit = |text: &str| {
-        s.write("work/tags.facts", &format!("edition 2026\n\n{text}\n"));
+        s.write("work/owners.csv", &format!("name\n{text}\n"));
         let w = s.path("work");
-        git(&w, &["add", "tags.facts"]);
+        git(&w, &["add", "owners.csv"]);
         git(&w, &["commit", "-q", "-m", text]);
         git(&w, &["push", "-q", "origin", "HEAD:refs/heads/main"]);
     };
-    commit("owner(\"a\")");
+    commit("a");
     s.write(
         "p.df",
-        "edition 2026\n\ninput owner from facts(git(\"ops.git\", \"main\", \"tags.facts\"))\n\ndecl owner(a)\n\nresource net.vpc main {\ncidr = \"10.0.0.0/16\"\n}\nprovider fake\n",
+        "edition 2026\n\ninput owner from csv(git(\"ops.git\", \"main\", \"owners.csv\"))\n\n\
+         decl owner(name: string)\n\nresource net.vpc main {\ncidr = \"10.0.0.0/16\"\n\
+         tags = { owners: [ n | owner(n) ] }\n}\nprovider fake\n",
     );
     s.run(&["plan", "--out", "plan.json", "p.df"]).success();
-    let file: serde_json::Value = serde_json::from_str(&s.read("plan.json")).unwrap();
-    assert_eq!(
-        file["git_commits"][0]["source"], "git ops.git main:tags.facts",
-        "{file}"
-    );
-    // Another commit whose facts the program does not read differently:
-    // the delta is the same, the pinned commit is not.
-    commit("owner(\"a\")\nowner(\"b\")");
-    let r = s.run(&["apply", "plan.json"]).failure();
+    let file = s.read("plan.json");
+    assert!(file.contains("table.git.owner"), "{file}");
+    commit("a\nb");
+    s.run(&["apply", "plan.json"]).success();
+    let world = s.read("dform.state/p/remote.json");
     assert!(
-        r.stderr
-            .contains("input relation git ops.git main:tags.facts: the plan read commit"),
-        "{}",
-        r.stderr
+        world.contains("\"a\"") && !world.contains("\"b\""),
+        "{world}"
     );
 }

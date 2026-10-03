@@ -339,7 +339,7 @@ impl Ctx<'_> {
                     self.body(&b, &BTreeSet::new());
                 }
             }
-            RESOURCE | SETTINGS | INSTANCE | USE => {
+            RESOURCE | INSTANCE | USE => {
                 if let Some(c) = n.children().find(|c| c.kind() == CLAUSE)
                     && let Some(b) = c.children().find(|x| x.kind() == BODY)
                 {

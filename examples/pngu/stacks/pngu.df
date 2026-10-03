@@ -11,7 +11,7 @@
 # Notes:
 # - This file models the intent/config surface area of the Terraform stack.
 # - External Terraform modules are represented as higher-level resources.
-# - The monitoring dashboard JSON is read with the file provider from a stub,
+# - The monitoring dashboard JSON is read by the loader `json(path)` from a stub,
 #   files/dashboard-pngu.json (see terraform/modules/monitoring/dashboard-pngu.json).
 
 edition 2026
@@ -41,13 +41,6 @@ input peering from csv("data/peerings.csv")
 decl peering(env: environment, name: string, peer_network: string)
 
 ########################################
-# Schema declarations
-########################################
-
-# The file provider answers file.json once its path is known.
-provider file
-
-########################################
 # Environment selection
 ########################################
 
@@ -58,7 +51,7 @@ type environment = enum("dev", "stg", "prod")
 # Settings (branch-as-data)
 ########################################
 
-settings {
+set {
   gcp.project_id = "renfry-dev-973682"
   gcp.project_name = "renfry-dev"
   gcp.region = "us-east1"
@@ -75,7 +68,7 @@ settings {
   }
 } where env == "dev"
 
-settings {
+set {
   gcp.project_id = "renfry-stg"
   gcp.project_name = "renfry-stg"
   gcp.region = "us-east1"
@@ -92,7 +85,7 @@ settings {
   }
 } where env == "stg"
 
-settings {
+set {
   gcp.project_id = "renfry-prod"
   gcp.project_name = "renfry-prod"
   gcp.region = "us-east1"
@@ -210,10 +203,10 @@ resource google.container_cluster pngu {
 # Resources (monitoring module intent)
 ########################################
 
-# The dashboard JSON is a file, read by the file provider.
+# The dashboard JSON is a file, a document `json(path)` reads.
 resource google.monitoring_dashboard pngu {
   project = gcp.project_id
-  dashboard_json = file.json["files/dashboard-pngu.json"]
+  dashboard_json = json("files/dashboard-pngu.json")
 }
 
 # Represents terraform-gcp-alert-metrics module invocation. No provider

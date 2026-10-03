@@ -1,0 +1,2 @@
+tests/syntax/err/facts_gone.df:4:20: `facts(..)` is gone (R-39): a `.df` file of facts is a module
+  help: `use data.releases` reads data/releases.df, its relations `releases.p(..)`; rows from outside are a table, `input p from csv("data/p.csv")`

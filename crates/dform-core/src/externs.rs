@@ -20,11 +20,12 @@
 //! A program does not declare an extern: `provider NAME {}` brings the
 //! provider's into scope (DESIGN.org R-8). `file`, `env` and `time` are
 //! built-in fact providers ([`BUILTINS`]): their externs are the
-//! compiler's own, and dform answers `file.json(+path, -value)`,
-//! `file.text(+path, -value)` (paths from the program's project root,
-//! `project::base_of`), `env.var(+name, -value)` and `time.now(-t)`
-//! itself, with no `dform.toml` source. `memo.first` is in scope with no
-//! `provider` statement. Other externs are asked of the providers over the
+//! compiler's own, and dform answers `file.text(+path, -value)` (paths
+//! from the program's project root, `project::base_of`), `env.var(+name,
+//! -value)` and `time.now(-t)` itself, with no `dform.toml` source; the
+//! loaders, `yaml(path)` and the rest, are its documents (`crate::tables`,
+//! R-39). `memo.first` is in scope with no `provider` statement. Other
+//! externs are asked of the providers over the
 //! plugin protocol (Query; the mock answers from
 //! `providers/<name>/externs.df`).
 
@@ -631,16 +632,10 @@ pub struct Builtin {
 pub const BUILTINS: &[Builtin] = &[
     Builtin {
         name: "file",
-        externs: &[
-            (
-                "file.json",
-                &[(true, "path", "string"), (false, "value", "any")],
-            ),
-            (
-                "file.text",
-                &[(true, "path", "string"), (false, "value", "string")],
-            ),
-        ],
+        externs: &[(
+            "file.text",
+            &[(true, "path", "string"), (false, "value", "string")],
+        )],
         in_process: true,
         always: false,
     },
@@ -747,23 +742,17 @@ pub fn file(
     let kind = f.name.strip_prefix("file.")?;
     let one = |r: Result<Value>| r.map(|v| vec![row(f, inputs, vec![v])]);
     Some(match (kind, inputs) {
-        ("json" | "text", [Value::Str(path)]) if f.args.len() == 2 => {
-            let text =
-                std::fs::read_to_string(base.join(path)).with_context(|| format!("read {path}"));
-            one(text.and_then(|t| {
-                if kind == "text" {
-                    return Ok(Value::Str(t));
-                }
-                let j: serde_json::Value =
-                    serde_json::from_str(&t).with_context(|| format!("parse {path} as JSON"))?;
-                Ok(from_json(&j))
-            }))
+        ("text", [Value::Str(path)]) if f.args.len() == 2 => {
+            one(std::fs::read_to_string(base.join(path))
+                .with_context(|| format!("read {path}"))
+                .map(Value::Str))
         }
-        ("json" | "text", _) => Err(anyhow::anyhow!(
-            "file.{kind} is declared `extern file.{kind}(+path, -value)`"
+        ("text", _) => Err(anyhow::anyhow!(
+            "file.text is declared `extern file.text(+path, -value)`"
         )),
         _ => Err(anyhow::anyhow!(
-            "the file provider answers file.json and file.text, not {}",
+            "the file provider answers file.text, not {} (a document is read by its loader, \
+             `json(path)`, `yaml(path)`, `toml(path)`, `csv(path)`)",
             f.name
         )),
     })

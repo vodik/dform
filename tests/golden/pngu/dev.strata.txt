@@ -12,12 +12,12 @@ exit: ok
      (want, k8s.deployment)
      (want, k8s.namespace)
      (want, k8s.secret)
-     file.json
      identity
      input
      resolve
      resolved
      table.csv.peering
+     table.json.document
      type_refine
      world_attr
    stratum 1:

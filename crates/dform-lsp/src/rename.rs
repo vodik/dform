@@ -112,7 +112,6 @@ fn describe(s: &Symbol) -> String {
         Symbol::Instance(m, _) => format!("an instance of component {m}"),
         Symbol::Resource(Some(m), _) => format!("a resource in component {m}"),
         Symbol::Resource(None, _) => "a resource".into(),
-        Symbol::Settings(_) => "a settings row".into(),
     }
 }
 

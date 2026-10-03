@@ -144,7 +144,7 @@ resource net.subnet "private-${z}" {
 # Two blocks that both hold and disagree are a conflict naming both, so
 # a block meant as a fallback says `@default`.
 
-settings {
+set {
   database.backup_days = 14
   database.multi_az = true
 } where env == "prod"

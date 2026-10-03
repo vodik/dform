@@ -394,7 +394,7 @@ impl Manifest {
             if let Some(c) = &t.config {
                 bail!(
                     "{} = {:?}: a stack's config is gone (R-38): its settings are the program's \
-                     inputs, given from a document by `settings from {}` in the stack's file, \
+                     inputs, given from a document by `set from {}` in the stack's file, \
                      `{{k}}` written `${{k}}`",
                     at(&format!("{table} config")),
                     c.get_ref(),

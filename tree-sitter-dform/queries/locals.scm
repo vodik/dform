@@ -15,7 +15,6 @@
   (output)
   (check)
   (resource)
-  (settings)
   (instance)
 ] @local.scope
 

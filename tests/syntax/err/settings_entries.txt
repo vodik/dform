@@ -1,7 +1,0 @@
-tests/syntax/err/settings_entries.df:9:12: settings: `nope` is not an input
-  note: the program declares no input nope
-  help: a settings block gives inputs, the program's own (`region = ..`, `db.backup_days = ..`) and its used modules' (`traefik.acme_email = ..`)
-tests/syntax/err/settings_entries.df:10:12: settings: `region` is not an input
-  note: `region` is a `let`, which the program computes
-  help: a settings block gives inputs, the program's own (`region = ..`, `db.backup_days = ..`) and its used modules' (`traefik.acme_email = ..`)
-tests/syntax/err/settings_entries.df:11:12: an input is given with `=`: `+=` adds to an attribute

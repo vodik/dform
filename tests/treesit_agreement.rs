@@ -106,10 +106,10 @@ const SAME: &[(SyntaxKind, &[&str])] = &[
     (LET, &["let"]),
     (SET, &["set"]),
     (RESOURCE, &["resource"]),
-    (SETTINGS, &["settings"]),
-    (BLOCK, &["block"]),
+    (BLOCK, &["block", "set_block"]),
     (CLAUSE, &["clause"]),
-    (ASSIGN, &["field"]),
+    (ASSIGN, &["field", "set_entry"]),
+    (SELECTOR, &["selector"]),
     (BLOCK_PATH, &["block_path"]),
     (STMT_BLOCK, &["statement_block"]),
     (CHECK, &["check"]),
@@ -335,12 +335,10 @@ fn the_reference_capture_is_on_field_values_and_not_on_reads() {
             }
         }
     }
-    for want in ["database.backup_days"] {
-        assert!(
-            all.iter().any(|t| t == want),
-            "{want} not captured: {all:?}"
-        );
-    }
+    assert!(
+        all.iter().any(|t| t == "database.backup_days"),
+        "database.backup_days not captured: {all:?}"
+    );
     assert!(
         values >= 4 && reads >= 4,
         "{values} field values, {reads} body reads"

@@ -87,7 +87,7 @@ stack:
   reads:
     db.postgres.backup_days
     db.postgres.multi_az
-    extern table.yaml.settings
+    extern table.yaml.set
     input cidrs
     input env
     k8s.cluster.private_api

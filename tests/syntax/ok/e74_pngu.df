@@ -27,7 +27,7 @@ type settings {
   }
 }
 
-settings {
+set {
   region = "us-east1"
   gke.static_ips = { "pngu-grpc": { type: "INTERNAL" } }
 } @default
@@ -36,7 +36,7 @@ env_name("dev")
 env_name("stg")
 env_name("prod")
 
-settings {
+set {
   project_id = "renfry-dev-973682"
   project_name = "renfry-dev"
   network_name = "renfry-dev-network"
@@ -49,7 +49,7 @@ settings {
   }
 } where env == "dev"
 
-settings {
+set {
   project_id = "renfry-stg"
   project_name = "renfry-stg"
   network_name = "renfry-stg-network"

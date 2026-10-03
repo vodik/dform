@@ -1,4 +1,5 @@
-//! Controller mode (README "Controller mode"): input relations, events,
+//! Controller mode (README "Controller mode"): program files and tables as
+//! sources, events,
 //! drift as facts and the policy gate, driven one event at a time with
 //! `--once`, and the polling loop once with `--max-events`.
 
@@ -13,8 +14,16 @@ const WORLD: &str = "dform.state/workload/remote.json";
 
 fn release(s: &Scratch, image: &str) {
     s.write(
-        "data/release.facts",
+        "data/releases.df",
         &format!("edition 2026\n\nrelease(\"{image}\")\n"),
+    );
+}
+
+/// data/approvals.df, a module of facts (R-39), holding `facts`.
+fn approvals(s: &Scratch, facts: &str) {
+    s.write(
+        "data/approvals.df",
+        &format!("edition 2026\n\ndecl approve(type, address)\ndecl approval(token)\n{facts}"),
     );
 }
 
@@ -23,7 +32,7 @@ fn setup(name: &str) -> Scratch {
     s.write("dform.toml", MANIFEST);
     s.write("stacks/workload.df", WORKLOAD);
     release(&s, "gcr.io/renfry/web:1.0");
-    s.write("data/approvals.facts", "edition 2026\n");
+    approvals(&s, "");
     s
 }
 
@@ -77,8 +86,8 @@ fn input_changes_deploy_and_world_drift_is_gated_by_policy() {
     assert_eq!(
         once(&s, &[]),
         [
-            "input release changed (file data/release.facts)",
-            "event input release",
+            "input data.releases changed (file data/releases.df)",
+            "event input data.releases",
             "tick 1: plan: 1 deformation (1 update)",
             "stack workload is undeformed",
         ]
@@ -122,17 +131,14 @@ fn input_changes_deploy_and_world_drift_is_gated_by_policy() {
 fn approve_lets_a_world_event_correct_drift() {
     let s = setup("ctl-approve");
     once(&s, &[]);
-    // approve(T, A) from its input relation: stated before the drift, so
-    // the drift arrives with a world event, not an input change.
-    s.write(
-        "data/approvals.facts",
-        "edition 2026\n\napprove(\"k8s.deployment\", \"web\")\n",
-    );
+    // approve(T, A) from its module: stated before the drift, so the drift
+    // arrives with a world event, not an input change.
+    approvals(&s, "approve(\"k8s.deployment\", \"web\")\n");
     assert_eq!(
         once(&s, &[]),
         [
-            "input approve approval changed (file data/approvals.facts)",
-            "event input approve approval",
+            "input data.approvals changed (file data/approvals.df)",
+            "event input data.approvals",
             "stack workload is undeformed",
         ]
     );
@@ -232,16 +238,14 @@ fn a_prod_rollout_is_held_until_its_plan_is_approved() {
         ]
     );
     assert!(!s.read(WORLD).contains("k8s.deployment"));
-    // A token for the digest, through the input relation, releases it.
-    s.write(
-        "data/approvals.facts",
-        &format!("edition 2026\n\n{}", approval_fact(&s, &digest)),
-    );
+    // A token for the digest, through the module of facts, releases it.
+    let fact = approval_fact(&s, &digest);
+    approvals(&s, &fact);
     assert_eq!(
         once(&s, &prod),
         [
-            "input approve approval changed (file data/approvals.facts)".to_string(),
-            "event input approve approval".to_string(),
+            "input data.approvals changed (file data/approvals.df)".to_string(),
+            "event input data.approvals".to_string(),
             "tick 1: plan: 1 deformation (1 create)".to_string(),
             format!("tick 1: approved by alice: plan digest {digest}"),
             "stack workload is undeformed".to_string(),
@@ -280,8 +284,10 @@ fn a_prod_rollout_is_held_until_its_plan_is_approved() {
     assert!(s.read(WORLD).contains("web:1.1"));
 }
 
+/// The release is a module of facts, read like any program file; `from
+/// facts(..)` is gone (R-39) and says what replaces it.
 #[test]
-fn plan_reads_an_input_relation_and_rejects_a_stray_fact() {
+fn plan_reads_a_module_of_facts() {
     let s = setup("ctl-plan");
     let r = s.run(&["plan", "stacks/workload.df"]).success();
     assert!(
@@ -291,23 +297,13 @@ fn plan_reads_an_input_relation_and_rejects_a_stray_fact() {
         r.stdout
     );
     s.write(
-        "data/release.facts",
-        "edition 2026\n\nrelease(\"a\")\nrelaese(\"b\")\n",
-    );
-    let r = s.run(&["plan", "stacks/workload.df"]).failure();
-    assert!(
-        r.stderr
-            .contains("relaese/1 is not an input relation declared from file data/release.facts",),
-        "{}",
-        r.stderr
-    );
-    s.write(
         "bad.df",
-        "edition 2026\n\ninput r from facts(url(\"http://x\"))\ndecl r(a)\nq(x) where r(x)\n",
+        "edition 2026\n\ninput r from facts(\"r.facts\")\ndecl r(a)\nq(x) where r(x)\n",
     );
     let r = s.run(&["plan", "bad.df"]).failure();
     assert!(
-        r.stderr.contains("input relation r/1: unknown source"),
+        r.stderr
+            .contains("`facts(..)` is gone (R-39): a `.df` file of facts is a module"),
         "{}",
         r.stderr
     );
@@ -336,22 +332,22 @@ fn a_git_source_is_read_at_its_ref() {
     git(&s.dir, &["init", "-q", "--bare", "releases.git"]);
     git(&s.dir, &["clone", "-q", "releases.git", "work"]);
     let commit = |image: &str| {
-        s.write(
-            "work/web.facts",
-            &format!("edition 2026\n\nrelease(\"{image}\")\n"),
-        );
+        s.write("work/web.csv", &format!("image\n{image}\n"));
         let w = s.path("work");
-        git(&w, &["add", "web.facts"]);
+        git(&w, &["add", "web.csv"]);
         git(&w, &["commit", "-q", "-m", image]);
         git(&w, &["push", "-q", "origin", "HEAD:refs/heads/main"]);
     };
     commit("gcr.io/renfry/web:2.0");
     s.write(
         "stacks/workload.df",
-        &WORKLOAD.replace(
-            "input release from facts(\"data/release.facts\")",
-            "input release from facts(git(\"releases.git\", \"main\", \"web.facts\"))",
-        ),
+        &WORKLOAD
+            .replace(
+                "use data.releases\n",
+                "input release from csv(git(\"releases.git\", \"main\", \"web.csv\"))\n\
+                 decl release(image: string)\n",
+            )
+            .replace("where releases.release(image)", "where release(image)"),
     );
     let got = once(&s, &[]);
     assert_eq!(got.last().unwrap(), "stack workload is undeformed");
@@ -360,7 +356,7 @@ fn a_git_source_is_read_at_its_ref() {
     let got = once(&s, &[]);
     assert_eq!(
         got[0],
-        "input release changed (git releases.git main:web.facts)"
+        "input release changed (git releases.git main:web.csv)"
     );
     assert!(s.read(WORLD).contains("web:2.1"));
 }
@@ -420,8 +416,8 @@ fn the_polling_loop_runs_an_event_per_change() {
             "event start",
             "tick 1: plan: 3 deformations (3 create)",
             "stack workload is undeformed",
-            "input release changed (file data/release.facts)",
-            "event input release",
+            "input data.releases changed (file data/releases.df)",
+            "event input data.releases",
             "tick 1: plan: 1 deformation (1 update)",
             "stack workload is undeformed",
         ]

@@ -1,3 +1,0 @@
-edition 2026
-
-release("gcr.io/renfry/web:1.0")

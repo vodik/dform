@@ -1,6 +1,6 @@
 exit: ok
 -- stdout --
-== examples/demo/stacks/dform.df: 158 nodes, 408 edges (144 negative)
+== examples/demo/stacks/dform.df: 158 nodes, 413 edges (144 negative)
    STRATIFIED, 13 strata
    stratum 0:
      (arg, iam.policy, name)
@@ -11,7 +11,7 @@ exit: ok
      (want, iam.role)
      (want, iam.role_policy_attachment)
      (want, net.route)
-     __settings_path
+     __set_path
      data
      doc
      identity
@@ -19,7 +19,7 @@ exit: ok
      main::zone_index
      resolve
      resolved
-     table.yaml.settings
+     table.yaml.set
      type_lattice
      vpc_peer_inst
      world_attr

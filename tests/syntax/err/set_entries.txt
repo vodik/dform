@@ -1,0 +1,4 @@
+tests/syntax/err/set_entries.df:9:7: `set` sets a resource's attribute (`r.tags`, `T[e].p`) or an input
+tests/syntax/err/set_entries.df:10:7: `set` sets a resource's attribute (`r.tags`, `T[e].p`) or an input
+tests/syntax/err/set_entries.df:11:7: `set db.size` at the top of the program sets the program's own input
+  help: give `input db.size` a default, or pass `--set db.size=...` on the command line

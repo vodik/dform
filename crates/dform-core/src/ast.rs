@@ -118,9 +118,6 @@ pub enum Stmt {
     /// `input k: T [= default] [where refinement]`: a module's or the
     /// stack's typed input.
     Input(InputDecl),
-    /// `input p(cols) from facts("path")`: `p` is fed from outside
-    /// the program and re-read when its source changes (`watch`).
-    InputRelation(InputRelation),
     /// `input p` in a module or a component: the relation `p`'s rows are
     /// its user's to give, in the `use` or `instance` block (R-55).
     RelationInput(Extern),
@@ -289,16 +286,6 @@ pub struct InputDecl {
     /// (R-54), each a declaration named by its field, a nested object's
     /// with fields of its own; empty for every other input.
     pub fields: Vec<InputDecl>,
-    pub span: Span,
-}
-
-/// `input p(a, ..) from facts(SOURCE)`: the source is a call term,
-/// `file("path")` or `git("repo", "ref", "path")`, checked by `watch`.
-#[derive(Debug, Clone)]
-pub struct InputRelation {
-    pub pred: String,
-    pub arity: usize,
-    pub source: Term,
     pub span: Span,
 }
 

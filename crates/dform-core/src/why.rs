@@ -1046,8 +1046,7 @@ impl Compress {
         if head && let Some((place, text, _)) = rule.and_then(|r| s.source_line(r)) {
             self.push(Because::new("rule", Some(place), text));
         }
-        // A contribution a statement makes to an input, a settings block's
-        // or a `set`'s (R-38), is named where it is written, as a stated
+        // A contribution a statement makes to an input, a `set`'s (R-38), is named where it is written, as a stated
         // one is; `--set` is its flag, below, and the declaration's default
         // a stated fact.
         if !head

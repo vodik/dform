@@ -30,7 +30,7 @@ type settings {
 
 # Base layer at rank @default: every environment. Overrides below are the
 # normal rank and win per leaf. This replaces three copies of the block.
-settings {
+set {
   network.main.vpc_net = inet("10.90.0.0/16")
   network.peer.vpc_net = inet("10.91.0.0/16")
   db = { backup_days: 3, multi_az: false }
@@ -41,12 +41,12 @@ env_name("dev")
 env_name("staging")
 env_name("prod")
 
-settings {
+set {
   network.main.vpc_net = inet("10.50.0.0/16")
   network.peer.vpc_net = inet("10.60.0.0/16")
 } where env == "staging"
 
-settings {
+set {
   network.main.vpc_net = inet("10.20.0.0/16")
   network.peer.vpc_net = inet("10.21.0.0/16")
   db = { backup_days: 14, multi_az: true }
@@ -220,31 +220,32 @@ deny("prod_k8s_private_api", "prod k8s must have private api", { cluster: c }) w
               (integer)))))))
   (comment)
   (comment)
-  (settings
-    (block
-      (field
-        (block_path
-          (identifier)
-          (identifier)
+  (set
+    (set_block
+      (set_entry
+        (member_expression
+          (member_expression
+            (identifier)
+            (identifier))
           (identifier))
         (call
           (identifier)
           (arguments
             (string
               (string_content)))))
-      (field
-        (block_path
-          (identifier)
-          (identifier)
+      (set_entry
+        (member_expression
+          (member_expression
+            (identifier)
+            (identifier))
           (identifier))
         (call
           (identifier)
           (arguments
             (string
               (string_content)))))
-      (field
-        (block_path
-          (identifier))
+      (set_entry
+        (identifier)
         (object
           (object_field
             (identifier)
@@ -252,9 +253,8 @@ deny("prod_k8s_private_api", "prod k8s must have private api", { cluster: c }) w
           (object_field
             (identifier)
             (false))))
-      (field
-        (block_path
-          (identifier))
+      (set_entry
+        (identifier)
         (object
           (object_field
             (identifier)
@@ -287,59 +287,61 @@ deny("prod_k8s_private_api", "prod k8s must have private api", { cluster: c }) w
       (arguments
         (string
           (string_content)))))
-  (settings
-    (block
-      (field
-        (block_path
-          (identifier)
-          (identifier)
+  (set
+    (set_block
+      (set_entry
+        (member_expression
+          (member_expression
+            (identifier)
+            (identifier))
           (identifier))
         (call
           (identifier)
           (arguments
             (string
               (string_content)))))
-      (field
-        (block_path
-          (identifier)
-          (identifier)
+      (set_entry
+        (member_expression
+          (member_expression
+            (identifier)
+            (identifier))
           (identifier))
         (call
           (identifier)
           (arguments
             (string
               (string_content))))))
-    (clause
-      (body
-        (comparison
-          (identifier)
-          (string
-            (string_content))))))
-  (settings
-    (block
-      (field
-        (block_path
-          (identifier)
-          (identifier)
+    (body
+      (comparison
+        (identifier)
+        (string
+          (string_content)))))
+  (set
+    (set_block
+      (set_entry
+        (member_expression
+          (member_expression
+            (identifier)
+            (identifier))
           (identifier))
         (call
           (identifier)
           (arguments
             (string
               (string_content)))))
-      (field
-        (block_path
-          (identifier)
-          (identifier)
+      (set_entry
+        (member_expression
+          (member_expression
+            (identifier)
+            (identifier))
           (identifier))
         (call
           (identifier)
           (arguments
             (string
               (string_content)))))
-      (field
-        (block_path
-          (identifier))
+      (set_entry
+        (identifier)
         (object
           (object_field
             (identifier)
@@ -347,9 +349,8 @@ deny("prod_k8s_private_api", "prod k8s must have private api", { cluster: c }) w
           (object_field
             (identifier)
             (true))))
-      (field
-        (block_path
-          (identifier))
+      (set_entry
+        (identifier)
         (object
           (object_field
             (identifier)
@@ -363,20 +364,19 @@ deny("prod_k8s_private_api", "prod k8s must have private api", { cluster: c }) w
               (object_field
                 (identifier)
                 (integer))))))
-      (field
-        (block_path
+      (set_entry
+        (member_expression
           (identifier)
           (identifier))
         (list
           (string
             (string_content))))
       (comment))
-    (clause
-      (body
-        (comparison
-          (identifier)
-          (string
-            (string_content))))))
+    (body
+      (comparison
+        (identifier)
+        (string
+          (string_content)))))
   (use
     (dotted_name
       (identifier)))

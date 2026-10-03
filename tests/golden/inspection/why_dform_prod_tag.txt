@@ -16,7 +16,7 @@ net.vpc["main::vpc"].tags = {component: "network", env: "prod", team: "platform"
   │         │              ├─ {main: "10.50.0.0/16"} @default   examples/demo/stacks/dform.df:12
   │         │              ├─ {peer: "10.60.0.0/16"} @default   examples/demo/stacks/dform.df:12
   │         │              ├─ {main: "10.20.0.0/16"}
-  │         │              │    examples/demo/stacks/dform.df:27  settings from yaml("config/dform/${env}.yaml")
+  │         │              │    examples/demo/stacks/dform.df:27  set from yaml("config/dform/${env}.yaml")
   │         │              │    with "config/dform/${env}.yaml" = "config/dform/prod.yaml"
   │         │              │    ├─ input env = "prod"
   │         │              │    │    merged from 2 contributions
@@ -24,11 +24,11 @@ net.vpc["main::vpc"].tags = {component: "network", env: "prod", team: "platform"
   │         │              │    │    └─ "prod"
   │         │              │    │         examples/demo/stacks/dform.df:11  key env: environment = "staging"
   │         │              │    │         └─ --set env=prod
-  │         │              │    └─ table.yaml.settings("config/dform/prod.yaml", "config/dform/prod.yaml:5", "cidrs.main", "10.20.0.0/16")   config/dform/prod.yaml:5
+  │         │              │    └─ table.yaml.set("config/dform/prod.yaml", "config/dform/prod.yaml:5", "cidrs.main", "10.20.0.0/16")   config/dform/prod.yaml:5
   │         │              └─ {peer: "10.21.0.0/16"}
-  │         │                   examples/demo/stacks/dform.df:27  settings from yaml("config/dform/${env}.yaml")
+  │         │                   examples/demo/stacks/dform.df:27  set from yaml("config/dform/${env}.yaml")
   │         │                   with "config/dform/${env}.yaml" = "config/dform/prod.yaml"
   │         │                   ├─ input env = "prod"   (see above)
-  │         │                   └─ table.yaml.settings("config/dform/prod.yaml", "config/dform/prod.yaml:6", "cidrs.peer", "10.21.0.0/16")   config/dform/prod.yaml:6
+  │         │                   └─ table.yaml.set("config/dform/prod.yaml", "config/dform/prod.yaml:6", "cidrs.peer", "10.21.0.0/16")   config/dform/prod.yaml:6
   │         └─ input env = "prod"   (see above)
   └─ ... 1 other contribution (--all)

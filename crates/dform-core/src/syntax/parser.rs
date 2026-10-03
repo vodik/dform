@@ -652,7 +652,7 @@ impl<'a> Parser<'a> {
                     msg,
                     Some(
                         "`input relation p(cols) from ..` is spelled `decl p(cols)` and `input \
-                         p from ..`, and `from file(..)` is `from facts(..)`"
+                         p from ..`"
                             .to_string(),
                     ),
                 );
@@ -706,7 +706,7 @@ impl<'a> Parser<'a> {
                 p.expect_word()?;
                 if p.at_contextual("from") {
                     p.bump();
-                    p.term()?;
+                    p.source_term()?;
                     return p.opt_where_body();
                 }
                 if matches!(p.nth(0), NEWLINE | EOF | R_BRACE) {
@@ -765,7 +765,21 @@ impl<'a> Parser<'a> {
                 p.eat(RANK);
                 p.opt_where_body()
             }),
+            // `set chain = t`, `set { chain = t .. }` (several under one
+            // clause), `set from DOC` (a document's leaves to the inputs at
+            // their paths): each `[@rank] [where B]` (R-38).
             SET_KW => self.simple(SET, |p| {
+                if p.at_contextual("from") && !matches!(p.raw(1), DOT | EQ | PLUS_EQ | L_BRACKET) {
+                    p.bump();
+                    p.source_term()?;
+                    p.eat(RANK);
+                    return p.opt_where_body();
+                }
+                if p.at(L_BRACE) {
+                    p.set_block()?;
+                    p.eat(RANK);
+                    return p.opt_where_body();
+                }
                 if !term_name(p.nth(0)) {
                     return p.err_expected("what the contribution sets: `r.path`, an input");
                 }
@@ -877,39 +891,20 @@ impl<'a> Parser<'a> {
                 p.block()?;
                 p.opt_clause()
             }),
-            // `settings { k = v .. } [@rank] [where B]`: contributions to the
-            // inputs, under a condition; `settings from DOC [@rank] [where
-            // B]`: a document's leaves, each to the input at its path (R-38).
-            SETTINGS_KW => self.simple(SETTINGS, |p| {
-                if p.at_contextual("from") {
-                    p.bump();
-                    p.term()?;
-                    p.eat(RANK);
-                    return p.opt_where_body();
-                }
-                if !p.at(L_BRACE) {
-                    let hint = (word(p.nth(0)) || p.at(STRING) || p.at(RANK)).then(|| {
-                        if p.at(RANK) {
-                            "the rank follows the block: `settings { .. } @default where ..`"
-                                .to_string()
-                        } else {
-                            "settings rows are gone (R-38): a settings block gives the inputs \
-                             under a condition, `settings { db.multi_az = true } where env == \
-                             \"prod\"`, and a read is the input's name"
-                                .to_string()
-                        }
-                    });
-                    let msg = format!(
-                        "expected `{{` or `from` after `settings`, found {}",
-                        p.found()
-                    );
-                    p.error_here(msg, hint);
-                    return Err(Bail);
-                }
-                p.block()?;
-                p.eat(RANK);
-                p.opt_clause()
-            }),
+            // `settings` is gone (R-38): a contribution to an input is `set`.
+            SETTINGS_KW => {
+                let msg = format!("expected a statement, found {}", self.found());
+                self.error_here(
+                    msg,
+                    Some(
+                        "`settings` is gone (R-38): an input is given by `set`, `set db.size = 2 \
+                         where env == \"prod\"`, several under one clause by `set { .. } where ..`, \
+                         a document's leaves by `set from yaml(..)`"
+                            .to_string(),
+                    ),
+                );
+                Err(Bail)
+            }
             DENY_KW | WARN_KW => self.simple(CHECK, |p| {
                 p.expect(STRING)?;
                 if p.at(L_BRACE) {
@@ -1110,7 +1105,50 @@ impl<'a> Parser<'a> {
         self.err_expected("`,`, a new line or `}`")
     }
 
-    /// `{ entry* }` of a resource, settings, instance or provider:
+    /// `set { chain (=|+=) term [rank] .. }`: the contributions of a `set`
+    /// block, each target a chain as a `set`'s is, separated by a newline
+    /// or a comma.
+    fn set_block(&mut self) -> P {
+        self.start(BLOCK);
+        self.bump();
+        self.with_nl(true, |p| {
+            p.eat_nl();
+            while !p.at(R_BRACE) {
+                if p.at(EOF) {
+                    return p.err_expected("`}`");
+                }
+                if matches!(p.nth(0), IF_KW | WHERE_KW) {
+                    let msg = format!("expected an entry or `}}`, found {}", p.found());
+                    p.error_here(
+                        msg,
+                        Some(
+                            "a block's clause follows the block (R-1): `set { .. } where ..`"
+                                .to_string(),
+                        ),
+                    );
+                    return Err(Bail);
+                }
+                p.start(ASSIGN);
+                if !term_name(p.nth(0)) {
+                    return p.err_expected("what the contribution sets: `r.path`, an input");
+                }
+                p.chain()?;
+                if !(p.eat(EQ) || p.eat(PLUS_EQ)) {
+                    return p.err_expected("`=` or `+=`");
+                }
+                p.term()?;
+                p.eat(RANK);
+                p.finish();
+                p.sep()?;
+            }
+            Ok(())
+        })?;
+        self.bump();
+        self.finish();
+        Ok(())
+    }
+
+    /// `{ entry* }` of a resource, instance or provider:
     /// entries separated by a newline or a comma. Its clause follows it.
     fn block(&mut self) -> P {
         self.block_of(false)
@@ -1155,7 +1193,7 @@ impl<'a> Parser<'a> {
                     p.start(INPUT_RELATION);
                     p.bump();
                     p.bump();
-                    p.term()?;
+                    p.source_term()?;
                     p.opt_where_body()?;
                     p.finish();
                 } else {
@@ -1658,7 +1696,34 @@ impl<'a> Parser<'a> {
         Ok(CHAIN)
     }
 
-    /// `name (.seg | [t, ...])*`.
+    /// The term after `from`, and a path into the document it is (R-39):
+    /// `toml("x").peerings`, `yaml("x")[*].items`, `d.teams[*].services`.
+    fn source_term(&mut self) -> P {
+        self.term()?;
+        if !(self.at(DOT) || (self.at(L_BRACKET) && self.raw(1) == STAR)) {
+            return Ok(());
+        }
+        self.start(SELECTOR);
+        loop {
+            if self.eat(DOT) {
+                if word(self.nth(0)) || self.at(STRING) {
+                    self.bump();
+                } else {
+                    return self.err_expected("a field's name after `.`");
+                }
+            } else if self.at(L_BRACKET) {
+                self.bump();
+                self.expect(STAR)?;
+                self.expect(R_BRACKET)?;
+            } else {
+                break;
+            }
+        }
+        self.finish();
+        Ok(())
+    }
+
+    /// `name (.seg | [t, ...])*`; `[*]` ends it (a selector's, `source_term`).
     fn chain(&mut self) -> P {
         self.start(CHAIN);
         self.bump();
@@ -1670,7 +1735,7 @@ impl<'a> Parser<'a> {
                 } else {
                     return self.err_expected("a name after `.`");
                 }
-            } else if self.at(L_BRACKET) {
+            } else if self.at(L_BRACKET) && self.raw(1) != STAR {
                 self.start(INDEX);
                 self.bump();
                 self.with_nl(false, |p| {

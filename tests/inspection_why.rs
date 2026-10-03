@@ -169,7 +169,7 @@ fn why_a_settings_read_shows_the_read() {
         "{out}"
     );
     assert!(out.contains("with database.backup_days = 14\n"), "{out}");
-    // The input's layers (R-38): its default, and the settings block that
+    // The input's layers (R-38): its default, and the `set` block that
     // holds in prod, where it is written.
     assert!(
         out.contains("{backup_days: 1} @default   examples/tour/stacks/tour.df:29\n"),
@@ -177,7 +177,7 @@ fn why_a_settings_read_shows_the_read() {
     );
     assert!(
         out.contains(
-            "examples/tour/stacks/tour.df:148  settings { database.backup_days = 14 .. } where \
+            "examples/tour/stacks/tour.df:148  set { database.backup_days = 14 .. } where \
              env == \"prod\"\n"
         ),
         "{out}"

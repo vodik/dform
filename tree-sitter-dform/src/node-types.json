@@ -102,10 +102,6 @@
         "named": true
       },
       {
-        "type": "settings",
-        "named": true
-      },
-      {
         "type": "type_alias",
         "named": true
       },
@@ -1122,6 +1118,16 @@
           }
         ]
       },
+      "selector": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "selector",
+            "named": true
+          }
+        ]
+      },
       "source": {
         "multiple": false,
         "required": false,
@@ -1742,9 +1748,38 @@
     }
   },
   {
+    "type": "selector",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "identifier",
+          "named": true
+        },
+        {
+          "type": "string",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
     "type": "set",
     "named": true,
     "fields": {
+      "body": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "set_block",
+            "named": true
+          }
+        ]
+      },
       "condition": {
         "multiple": false,
         "required": false,
@@ -1759,6 +1794,99 @@
           }
         ]
       },
+      "operator": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "+=",
+            "named": false
+          },
+          {
+            "type": "=",
+            "named": false
+          }
+        ]
+      },
+      "rank": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "rank",
+            "named": true
+          }
+        ]
+      },
+      "selector": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "selector",
+            "named": true
+          }
+        ]
+      },
+      "source": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "_term",
+            "named": true
+          }
+        ]
+      },
+      "target": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          },
+          {
+            "type": "index_expression",
+            "named": true
+          },
+          {
+            "type": "member_expression",
+            "named": true
+          }
+        ]
+      },
+      "value": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "_term",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "set_block",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "set_entry",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "set_entry",
+    "named": true,
+    "fields": {
       "operator": {
         "multiple": false,
         "required": true,
@@ -1811,66 +1939,6 @@
           }
         ]
       }
-    }
-  },
-  {
-    "type": "settings",
-    "named": true,
-    "fields": {
-      "body": {
-        "multiple": false,
-        "required": false,
-        "types": [
-          {
-            "type": "block",
-            "named": true
-          }
-        ]
-      },
-      "condition": {
-        "multiple": false,
-        "required": false,
-        "types": [
-          {
-            "type": "body",
-            "named": true
-          },
-          {
-            "type": "body_block",
-            "named": true
-          }
-        ]
-      },
-      "rank": {
-        "multiple": false,
-        "required": false,
-        "types": [
-          {
-            "type": "rank",
-            "named": true
-          }
-        ]
-      },
-      "source": {
-        "multiple": false,
-        "required": false,
-        "types": [
-          {
-            "type": "_term",
-            "named": true
-          }
-        ]
-      }
-    },
-    "children": {
-      "multiple": false,
-      "required": false,
-      "types": [
-        {
-          "type": "clause",
-          "named": true
-        }
-      ]
     }
   },
   {
@@ -2356,10 +2424,6 @@
   },
   {
     "type": "set",
-    "named": false
-  },
-  {
-    "type": "settings",
     "named": false
   },
   {

@@ -127,6 +127,11 @@ fn defined_preds(stmts: &[Stmt], out: &mut BTreeMap<String, (usize, Span)>) {
                 };
                 out.entry(pred).or_insert((arity, a.span));
             }
+            // A `decl` of a relation with no rules: a module of facts may
+            // declare one it has no rows of yet (R-39).
+            Stmt::Extern(e) => {
+                out.entry(e.pred.clone()).or_insert((e.arity, e.span));
+            }
             _ => {}
         }
     }
@@ -413,7 +418,7 @@ pub fn expand(program: &Program) -> Result<Expanded> {
         }
     }
 
-    // `set k = t where B` and a settings block give an input the stack
+    // `set k = t where B`, alone or in a block, gives an input the stack
     // addresses (R-54, R-38): its own, a field of an object one, a used
     // module's (its cell `(input, m, k)`).
     let mut paths = BTreeSet::new();
@@ -449,15 +454,7 @@ pub fn expand(program: &Program) -> Result<Expanded> {
             continue;
         }
         let address = join_scope(scope, k);
-        // A settings entry's span is the entry; a `set`'s the statement.
-        let is_set = diag::source_of(h.span).is_some_and(|(_, text)| {
-            text.get(h.span.start as usize..)
-                .is_some_and(|t| t.starts_with("set "))
-        });
-        let what = match is_set {
-            true => format!("`set {address}`"),
-            false => format!("settings: `{address}`"),
-        };
+        let what = format!("`set {address}`");
         if !paths.is_empty() && !paths.contains(&address) {
             let msg = match address.rsplit_once('.').filter(|(o, _)| paths.contains(*o)) {
                 Some((o, f)) => format!("{what}: input {o} has no field {f}"),
@@ -1200,7 +1197,7 @@ pub fn input_paths(i: &InputDecl) -> Vec<String> {
 /// `address` (R-54, R-55): `--set k=v`, an `input(k, V)` fact, is an
 /// `@override` contribution to `k`, or to the object or leaf inside it the
 /// fact names (`input("nodes.count", 2)`), so it wins over the default and
-/// over every settings block (R-38). A key's value is the target's, the
+/// over every `set` of the program (R-38). A key's value is the target's, the
 /// normal rank: nothing else gives a key.
 fn given_rules(scope: &str, address: &str, i: &InputDecl) -> Vec<Stmt> {
     let leaves = crate::inputs::leaves(i);
@@ -1320,6 +1317,12 @@ fn rename_stmt(stmt: Stmt, names: &Names) -> Stmt {
             body: r.body.map(lits),
             ..r
         }),
+        Stmt::Extern(mut e) => {
+            if let Some(n) = names.get(&e.pred) {
+                e.pred = n.clone();
+            }
+            Stmt::Extern(e)
+        }
         Stmt::Mixed(mut e) => {
             if let Some(n) = names.get(&e.pred) {
                 e.pred = n.clone();

@@ -25,17 +25,17 @@ iam_need("app", n.action, n.resource) where n = kubernetes.iam_need
 
 # Settings (branch as data): each environment's config/dform/{env}.yaml
 # gives the inputs it names a leaf at a time (`cidrs.main`,
-# `database.multi_az`), at the normal rank, over the defaults: the inputs'
-# own, and this block's for the inputs of the modules used below. A CIDR
+# `database.multi_az`), at the normal rank, over the inputs' defaults;
+# the modules used below take theirs from this block but in prod. A CIDR
 # is text in the document, made an inet where it is used.
-settings from yaml("config/dform/${env}.yaml")
-settings {
+set from yaml("config/dform/${env}.yaml")
+set {
   database.backup_days = 3
   database.multi_az = false
   kubernetes.private_api = false
   kubernetes.nodepool_min = 1
   kubernetes.nodepool_max = 3
-} @default
+} where env != "prod"
 
 # The provider (the mock's built-in fake schema). The stack's operational
 # settings are dform.toml's [stacks.dform]: isolated, each env in its own
@@ -65,14 +65,14 @@ instance network.vpc peer {
 
 # A module is imported once, its inputs bound by its block, rows included
 # (database.df's resources are `database::db`): main's private subnets.
-# Its values are the settings' (`database.backup_days`, `database.multi_az`):
-# the @default block above and, in prod, config/dform/prod.yaml.
+# Its inputs are the stack's `set`s (`database.backup_days`, ..): the block
+# above and, in prod, config/dform/prod.yaml.
 use database {
   subnet(s) where main.private_subnet(s)
 } where env != "dev"
 
 # So are the cluster's, `kubernetes.private_api` and its node pool's
-# bounds; dev has neither, which the `where` says and the settings need
+# bounds; dev has neither, which the `where` says and the `set`s need
 # not.
 use kubernetes {
   subnet(s) where main.private_subnet(s)
@@ -232,7 +232,7 @@ deny "dev has no peer network" where env == "dev", "peer::vpc" in net.vpc
   (comment)
   (comment)
   (comment)
-  (settings
+  (set
     (call
       (identifier)
       (arguments
@@ -241,34 +241,38 @@ deny "dev has no peer network" where env == "dev", "peer::vpc" in net.vpc
           (interpolation
             (identifier))
           (string_content)))))
-  (settings
-    (block
-      (field
-        (block_path
+  (set
+    (set_block
+      (set_entry
+        (member_expression
           (identifier)
           (identifier))
         (integer))
-      (field
-        (block_path
+      (set_entry
+        (member_expression
           (identifier)
           (identifier))
         (false))
-      (field
-        (block_path
+      (set_entry
+        (member_expression
           (identifier)
           (identifier))
         (false))
-      (field
-        (block_path
+      (set_entry
+        (member_expression
           (identifier)
           (identifier))
         (integer))
-      (field
-        (block_path
+      (set_entry
+        (member_expression
           (identifier)
           (identifier))
         (integer)))
-    (rank))
+    (body
+      (comparison
+        (identifier)
+        (string
+          (string_content)))))
   (comment)
   (comment)
   (comment)

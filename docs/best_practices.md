@@ -13,20 +13,20 @@ set pg.backup_days = 14 where env == "prod", pg in db.postgres
 set pg.backup_days = 3 where env == "staging", pg in db.postgres
 ```
 
-Prefer an input, its value per environment given by settings:
+Prefer an input, its value per environment given by a `set`:
 
 ```dform
 input backups { days: int = 3 }
 
-settings { backups.days = 14 } where env == "prod"
+set backups.days = 14 where env == "prod"
 
 set pg.backup_days = backups.days where pg in db.postgres
 ```
 
 Why it scales:
-- you change env behavior by editing settings, not duplicating rules
+- you change env behavior by editing values, not duplicating rules
 - rules stay reusable across stacks/components
-- you can move the settings into policy packs later
+- you can move the `set`s into policy packs later
 
 ## Keep Facts Ground (No Variables in Facts)
 
@@ -67,7 +67,7 @@ If humans want to write lists, but your infra wants one resource per item, conve
 ```dform
 input vm { ips: list(string) = [] }
 
-settings { vm.ips = ["10.0.0.10", "10.0.0.11"] } where env == "prod"
+set vm.ips = ["10.0.0.10", "10.0.0.11"] where env == "prod"
 
 vm_ip(ip) where ip in vm.ips
 
@@ -119,22 +119,20 @@ A conflict is a `deny("conflicting attribute contributions", ...)` naming the
 resource, the path, and every contributing rule with its value. It is resolved
 by rank, not by order. `@default` after a value loses to a plain contribution,
 `@override` beats it, and a disagreement at a losing rank is only a warning.
-After a `resource` header, or a settings block, the rank applies to every
+After a `resource` header, or a `set` block, the rank applies to every
 entry without its own. The core form is `arg(T, N, P, V, default|normal|override)`.
 
 ## Layer Environments With `@default`
 
-Write the common settings once, as the inputs' defaults or a block at
-`@default`, and let each environment give only what differs; a normal
-block wins per leaf, and blocks are decided by rank, never by which
-condition is narrower:
+Write the common values once, as the inputs' defaults, and let each
+environment give only what differs; a `set` wins per leaf over the
+default, and two `set`s are decided by rank, never by which condition is
+narrower:
 
 ```dform
-input database { backup_days: int, multi_az: bool }
+input database { backup_days: int = 3, multi_az: bool = false }
 
-settings { database = { backup_days: 3, multi_az: false } } @default
-
-settings { database = { backup_days: 14, multi_az: true } } where env == "prod"
+set { database.backup_days = 14, database.multi_az = true } where env == "prod"
 ```
 
 The same shape gives org-wide defaults from a policy pack without reading the

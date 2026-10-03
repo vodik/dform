@@ -1,0 +1,5 @@
+edition 2026
+
+# `facts(..)` is gone (R-39): a `.df` file of facts is a module.
+input release from facts("data/release.facts")
+decl release(image: string)

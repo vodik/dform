@@ -1,23 +1,18 @@
-//! Input relations (DESIGN.org "Reactive inputs and controller mode"):
-//! `input p(a, b) from facts("path")` or `from facts(git("repo", "ref",
-//! "path"))` declares that the facts of `p/2` come from outside the program.
-//! Every run reads them where they are now: `plan` and `apply` once, the
-//! controller whenever a source's stamp changes (`stamp`), by polling.
-//!
-//! A source is a `.df` file of facts (`edition 2026` first, then `p(...)`)
-//! of the relations declared from it: a file may feed several relations, and a fact of any other predicate is an
-//! error naming it. Paths resolve from the project root (`project::base_of`).
-//! A `git` source is read at the ref (`git show REF:PATH`, so a bare
-//! repository works) and stamped by the commit the ref names.
+//! The sources a run reads from outside its program text (DESIGN.org
+//! "Reactive inputs and controller mode"): the tables and documents it
+//! loads (`crate::tables`) and the program's own files. Every run reads
+//! them where they are now: `plan` and `apply` once, the controller
+//! whenever a source's stamp changes (`stamp`), by polling. A `git` source
+//! is stamped by the commit its ref names. A `.df` file of facts is a
+//! module of the program (R-39): a change to it, as to any program file,
+//! is an input event.
 
-use crate::ast::{Extern, InputRelation, Program, Span, Stmt, Term};
-use crate::diag::{self, Diagnostic, Diagnostics};
-use crate::value::Value;
+use crate::ast::Span;
 use anyhow::{Context, Result, bail};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// Where an input relation's facts are.
+/// Where a source is.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
 pub enum Source {
     File(PathBuf),
@@ -39,113 +34,14 @@ impl std::fmt::Display for Source {
     }
 }
 
-/// One `input relation` declaration, its source resolved.
+/// A source a run read, by the relation or module it is: a table's
+/// `p`, a program file's module (`data.releases`).
 #[derive(Debug, Clone)]
 pub struct Relation {
     pub pred: String,
     pub arity: usize,
     pub source: Source,
     pub span: Span,
-}
-
-fn string(t: &Term) -> Option<&str> {
-    match t {
-        Term::Val(Value::Str(s)) => Some(s),
-        _ => None,
-    }
-}
-
-/// Take the program's `input relation` declarations out of it: each becomes
-/// a declaration of its predicate (`decl p/N`, defined whether or not its
-/// source has facts yet). The facts are stated by `read`.
-pub fn take(program: &mut Program) -> Result<Vec<Relation>> {
-    let mut out = Vec::new();
-    let mut diags = Vec::new();
-    for s in program.statements.iter_mut() {
-        let Stmt::InputRelation(r) = s else {
-            nested(s, &mut diags);
-            continue;
-        };
-        match source(r) {
-            Ok(source) => out.push(Relation {
-                pred: r.pred.clone(),
-                arity: r.arity,
-                source,
-                span: r.span,
-            }),
-            Err(d) => diags.push(*d),
-        }
-        *s = Stmt::Extern(Extern {
-            pred: r.pred.clone(),
-            arity: r.arity,
-            span: r.span,
-        });
-    }
-    if diags.is_empty() {
-        Ok(out)
-    } else {
-        Err(Diagnostics(diags).into())
-    }
-}
-
-/// An `input relation` anywhere but the top of the program is an error.
-fn nested(s: &Stmt, diags: &mut Vec<Diagnostic>) {
-    let body = match s {
-        Stmt::Module(m) => &m.body,
-        _ => return,
-    };
-    for s in body {
-        if let Stmt::InputRelation(r) = s {
-            diags.push(Diagnostic::error(
-                r.span,
-                "an input relation belongs at the top of the program",
-            ));
-        }
-        nested(s, diags);
-    }
-}
-
-fn source(r: &InputRelation) -> Result<Source, Box<Diagnostic>> {
-    // From the project root (`project::base_of`).
-    let base = diag::location(r.span)
-        .map(|(file, _, _)| crate::project::base_of(Path::new(&file)))
-        .unwrap_or_default();
-    let bad = || {
-        Box::new(
-            Diagnostic::error(
-                r.span,
-                format!("input relation {}/{}: unknown source", r.pred, r.arity),
-            )
-            .with_help("the sources are `file(\"path\")` and `git(\"repo\", \"ref\", \"path\")`"),
-        )
-    };
-    let Term::Func { name, args } = &r.source else {
-        return Err(bad());
-    };
-    let args: Option<Vec<&str>> = args.iter().map(string).collect();
-    match (name.as_str(), args.as_deref()) {
-        ("file", Some([p])) => Ok(Source::File(base.join(p))),
-        ("git", Some([repo, rev, path])) => Ok(Source::Git {
-            repo: base.join(repo),
-            rev: rev.to_string(),
-            path: path.to_string(),
-        }),
-        _ => Err(bad()),
-    }
-}
-
-/// The text a source holds now.
-fn contents(s: &Source) -> Result<String> {
-    match s {
-        Source::File(p) => {
-            std::fs::read_to_string(p).with_context(|| format!("input relation: read {s}"))
-        }
-        Source::Git { repo, rev, path } => {
-            let out = git(repo, &["show", &format!("{rev}:{path}")])
-                .with_context(|| format!("input relation: read {s}"))?;
-            Ok(out)
-        }
-    }
 }
 
 fn git(repo: &Path, args: &[&str]) -> Result<String> {
@@ -193,46 +89,31 @@ pub fn digest(bytes: &[u8]) -> String {
     format!("{:016x}", h.finish())
 }
 
-/// The facts every relation's source holds now, stated where the source
-/// states them. A fact of a predicate not declared from that source, or of
-/// the wrong arity, is an error naming it.
-pub fn read(relations: &[Relation]) -> Result<Vec<Stmt>> {
-    let mut sources: Vec<&Source> = relations.iter().map(|r| &r.source).collect();
-    sources.sort();
-    sources.dedup();
-    let mut out = Vec::new();
-    let mut diags = Vec::new();
-    for s in sources {
-        let text = contents(s)?;
-        let name = match s {
-            Source::File(p) => p.display().to_string(),
-            Source::Git { .. } => s.to_string(),
-        };
-        let facts = crate::parser::parse_file(&name, &text)?;
-        for st in facts.statements {
-            let Stmt::Fact(a) = st else {
-                bail!("input relation: {s} holds facts, `p(...).`, and nothing else");
-            };
-            let declared = relations
-                .iter()
-                .any(|r| &r.source == s && r.pred == a.pred && r.arity == a.args.len());
-            if !declared {
-                diags.push(Diagnostic::error(
-                    a.span,
-                    format!(
-                        "{}/{} is not an input relation declared from {s}",
-                        a.pred,
-                        a.args.len()
-                    ),
-                ));
-                continue;
+/// The program's files as sources: each by its module's name, its path
+/// from the project root with dots (`data/releases.df` is
+/// `data.releases`), so that the controller sees a change to one as an
+/// input event.
+pub fn program_sources(files: &[PathBuf]) -> Vec<Relation> {
+    files
+        .iter()
+        .map(|f| {
+            let root = crate::project::manifest_root(f);
+            let rel = root
+                .as_deref()
+                .and_then(|r| f.strip_prefix(r).ok())
+                .unwrap_or(f.file_name().map(Path::new).unwrap_or(f));
+            let name = rel
+                .with_extension("")
+                .components()
+                .map(|c| c.as_os_str().to_string_lossy().into_owned())
+                .collect::<Vec<_>>()
+                .join(".");
+            Relation {
+                pred: name,
+                arity: 0,
+                source: Source::File(f.clone()),
+                span: Span::default(),
             }
-            out.push(Stmt::Fact(a));
-        }
-    }
-    if diags.is_empty() {
-        Ok(out)
-    } else {
-        Err(Diagnostics(diags).into())
-    }
+        })
+        .collect()
 }

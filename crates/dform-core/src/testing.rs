@@ -5,7 +5,7 @@
 //! `enum` input takes each of its values, a `bool` both; a key whose type
 //! is not an enum takes each value a deployment of the stack was applied
 //! with; any other input takes its default, and one with none is an error
-//! naming it. An input a settings block (or a `set .. where`) gives is the
+//! naming it. An input a `set .. where` (or `set from`) gives is the
 //! program's to decide, in the deployments its clause holds in, and no
 //! axis (R-38): the space is what the outside may give. A failure is
 //! printed as the command that reproduces it.
@@ -53,7 +53,7 @@ pub fn space(
     let mut unbounded = Vec::new();
     // The stack's own inputs and every used module's (R-55), each leaf of
     // an object its own axis (R-54); one a `use` block gives is that, and
-    // one a settings block gives is the program's to decide (R-38).
+    // one a `set` gives is the program's to decide (R-38).
     for d in declared.iter().filter(|d| !d.bound && !d.given) {
         let Some(name) = &d.address else { continue };
         let i = &d.decl;

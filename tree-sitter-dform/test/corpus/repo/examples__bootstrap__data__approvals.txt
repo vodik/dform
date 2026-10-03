@@ -1,0 +1,37 @@
+====================================
+examples/bootstrap/data/approvals.df
+====================================
+
+# Accepted drift, `approve(Type, Address)`, and signed approvals of a
+# plan's digest, `approval(Token)`: a module of facts workload.df reads
+# with `use data.approvals`. `dform-approve sign .. --format fact` appends
+# one.
+
+edition 2026
+
+decl approve(type, address)
+decl approval(token)
+
+---
+
+(source_file
+  (comment)
+  (comment)
+  (comment)
+  (comment)
+  (edition
+    (integer))
+  (decl
+    (dotted_name
+      (identifier))
+    (columns
+      (field_declaration
+        (identifier))
+      (field_declaration
+        (identifier))))
+  (decl
+    (dotted_name
+      (identifier))
+    (columns
+      (field_declaration
+        (identifier)))))

@@ -3240,9 +3240,9 @@ const REFERENCE: &[Reference] = &[
     r(
         "settings",
         Kw,
-        "settings { INPUT = TERM, ... } @RANK? (where BODY)? | settings from DOC @RANK? (where BODY)?",
-        "Configuration: contributions to the inputs (the stack's own and its used modules', a leaf by its path) where the clause holds, at the normal rank unless marked; `from` gives a document's every leaf to the input at its path. The deployment's value is the input's name.",
-        "settings { db.multi_az = true } where env == \"prod\"",
+        "set { PATH = TERM, ... } @RANK? (where BODY)?",
+        "Gone (R-38): an input is given by `set`, several under one clause by `set { .. } where ..`, a document's leaves by `set from DOC`.",
+        "set { db.multi_az = true } where env == \"prod\"",
     ),
     r(
         "deny",
@@ -4220,13 +4220,13 @@ mod tests {
     }
 
     /// Readers see the collapsed value, never a raw contribution: an input
-    /// and an output are the same aggregate on pseudo-types, and a settings
+    /// and an output are the same aggregate on pseudo-types, and a `set`'s
     /// block's contribution wins over the declaration's default (R-38).
     #[test]
     fn input_and_output_readers_read_the_collapsed_value() {
         let (r, violations) = run("input days: int = 3
              input audit: bool = false
-             settings { days = 14 }
+             set days = 14 where audit == false
              component network {\n output ids: list(string) = [\"a\", \"b\"]\n }
              instance network main
              got(d) where d = days
@@ -4321,8 +4321,9 @@ mod tests {
             crate::loader::load_program(&[root.join("examples/demo/stacks/dform.df")]).unwrap();
         for env in ["staging", "prod"] {
             let extra = [input("env", Value::Str(env.into()))];
+            // The settings document is a table: answered.
             let attrs = |p: &Program| {
-                let (r, _) = eval(p, &extra).unwrap();
+                let (r, _) = eval_tables(p, &extra).unwrap();
                 facts_of(&r, "attr")
             };
             let base = attrs(&program);
@@ -4338,10 +4339,10 @@ mod tests {
 
     /// E §2.4 syntax: `@default` / `@override` after a value, after a
     /// `resource` header for every leaf without its own, and after a
-    /// settings block's (R-38).
+    /// `set` block's (R-38).
     #[test]
     fn ranks_in_blocks() {
-        let (r, violations) = run("input days: int = 1\n             input zones: list(string)\n             resource net.vpc main @default {\n               cidr = \"10.0.0.0/16\"\n               tags = { env: \"dev\", team: \"net\" }\n               public = true @override\n             }\n             resource net.vpc main {\n               cidr = \"10.1.0.0/16\"\n               tags = { team: \"platform\" }\n               public = false\n             }\n             settings {\n               days = 3\n               zones = [\"a\"]\n             } @default\n             settings { days = 14 }\n             got(d, z) where d = days, z = zones")
+        let (r, violations) = run("input days: int = 1\n             input zones: list(string)\n             resource net.vpc main @default {\n               cidr = \"10.0.0.0/16\"\n               tags = { env: \"dev\", team: \"net\" }\n               public = true @override\n             }\n             resource net.vpc main {\n               cidr = \"10.1.0.0/16\"\n               tags = { team: \"platform\" }\n               public = false\n             }\n             set {\n               days = 3\n               zones = [\"a\"]\n             } @default where on(1)\n             set { days = 14 } where on(1)\n             on(1)\n             got(d, z) where d = days, z = zones")
         .unwrap();
         assert!(violations.is_empty(), "{violations:?}");
         assert_eq!(
@@ -4360,7 +4361,7 @@ mod tests {
     }
 
     /// `eval`, with the tables the program reads (`crate::tables`):
-    /// dform.df's settings document. Any other extern has no answer, as
+    /// dform.df's `set from` document. Any other extern has no answer, as
     /// under `eval`.
     fn eval_tables(program: &Program, extra: &[Atom]) -> Result<(EvalResult, Vec<String>)> {
         let lowered = crate::transform::lower(program)?;
@@ -4372,17 +4373,17 @@ mod tests {
         externs.eval(program, extra)
     }
 
-    /// dform.df's settings are a `@default` block plus each environment's
-    /// document, `settings from yaml("config/dform/${env}.yaml")` (R-38).
-    /// Every environment compiles to exactly the resources the settings
-    /// blocks the documents say would.
+    /// dform.df's inputs are their defaults, a block for the modules', and
+    /// each environment's document, `set from yaml("config/dform/${env}.yaml")`
+    /// (R-38). Every environment compiles to exactly the resources the
+    /// `set` blocks the documents say would.
     #[test]
-    fn dform_df_settings_from_matches_the_blocks() {
+    fn dform_df_set_from_matches_the_blocks() {
         let root = std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."));
         let src = std::fs::read_to_string(root.join("examples/demo/stacks/dform.df")).unwrap();
-        let from = "settings from yaml(\"config/dform/${env}.yaml\")\n";
+        let from = "set from yaml(\"config/dform/${env}.yaml\")\n";
         assert!(src.contains(from));
-        let blocks = "settings {
+        let blocks = "set {
               cidrs.main = \"10.20.0.0/16\"
               cidrs.peer = \"10.21.0.0/16\"
               database.backup_days = 14
@@ -4392,7 +4393,7 @@ mod tests {
               kubernetes.nodepool_max = 10
               baseline.audit.sinks = [\"s3\", \"cloudwatch\"]
             } where env == \"prod\"
-            settings { cidrs.main = \"10.90.0.0/16\" } where env == \"dev\"
+            set { cidrs.main = \"10.90.0.0/16\" } where env == \"dev\"
             ";
         let dir = std::env::temp_dir().join(format!("dform-settings-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();

@@ -1,4 +1,5 @@
 # The crud-api release: the image digest and the schema version it needs.
+# A module of facts (R-39): crud_api.df reads it with `use data.releases`.
 
 edition 2026
 

@@ -41,8 +41,8 @@ pub fn lower(program: &Program) -> Result<Lowered> {
     let expanded = desugar_resources(&expanded)?;
     let expanded = desugar_comprehensions(&expanded)?;
     let mut expanded = declassified(lower_contributions(&expanded)?);
-    // `settings from DOC` contributes per input path (R-38).
-    expanded = crate::tables::expand_settings(expanded, &mut inputs);
+    // `set from DOC` contributes per input path (R-38).
+    expanded = crate::tables::expand_set_from(expanded, &mut inputs);
     crate::externs::check(&expanded, &extern_fns)?;
     // The cells of secret inputs and outputs, for the Redactor.
     let secret_inputs = inputs
@@ -1033,7 +1033,7 @@ pub const UNREAD_FIELD: &str = "a field read found no value: the resource is not
 /// binds.
 ///
 /// A missing object, an instance input or output with no value, an input
-/// no settings block gives in this deployment: those hold a block back on purpose
+/// no `set` gives in this deployment: those hold a block back on purpose
 /// (a module's resource exists where its inputs are given), and are quiet.
 fn unread_field_reports(r: &Resource, n: &mut usize) -> Vec<Stmt> {
     let Some(body) = &r.body else {

@@ -16,12 +16,12 @@ fn plan(s: &Scratch, file: &str) -> common::Run {
 #[test]
 fn sources_and_stated_rows_are_one_relation() {
     let s = Scratch::project("rel-io-union");
-    s.write("a.facts", "edition 2026\n\nr(\"a\")\n");
-    s.write("b.facts", "edition 2026\n\nr(\"b\")\n");
+    s.write("a.csv", "x\na\n");
+    s.write("b.yaml", "rows:\n  - x: b\n");
     s.write(
         "p.df",
-        "edition 2026\ninput r from facts(\"a.facts\")\ninput r from facts(\"b.facts\")\n\
-         decl r(x)\nr(\"c\")\nprovider fake\n",
+        "edition 2026\ninput r from csv(\"a.csv\")\ninput r from yaml(\"b.yaml\").rows\n\
+         decl r(x: string)\nr(\"c\")\nprovider fake\n",
     );
     let r = s.run(&["query", "r(x)", "p.df"]).success();
     for x in ["\"a\"", "\"b\"", "\"c\""] {

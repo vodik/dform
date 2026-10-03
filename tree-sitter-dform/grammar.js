@@ -26,7 +26,7 @@ const IDENT = /[A-Za-z_][A-Za-z0-9_]*/;
 const STATEMENT_KEYWORDS = [
   'edition', 'provider', 'key', 'type', 'decl', 'extern', 'input',
   'output', 'let', 'set', 'component', 'instance', 'use', 'resource',
-  'settings', 'deny', 'warn',
+  'deny', 'warn',
 ];
 
 // The body words, the clause word, the reserved `if` and the literals:
@@ -92,6 +92,8 @@ export default grammar({
 
   conflicts: $ => [
     [$._chain_head, $._word],
+    [$._primary, $.member_expression],
+    [$._primary, $.index_expression],
   ],
 
   rules: {
@@ -119,7 +121,6 @@ export default grammar({
       $.instance,
       $.use,
       $.resource,
-      $.settings,
       $.check,
       $.rule,
       $.fact,
@@ -183,6 +184,7 @@ export default grammar({
       optional(seq(
         'from',
         field('source', $._term),
+        optional(field('selector', $.selector)),
         optional(seq('where', field('condition', $._body))),
       )),
     ),
@@ -232,15 +234,46 @@ export default grammar({
       optional(seq('where', field('condition', $._body))),
     ),
 
-    // `set r.p = t [@rank] [where B]`: a contribution.
+    // `set r.p = t [@rank] [where B]`: a contribution; `set { r.p = t .. }`
+    // several under one clause; `set from DOC` a document's leaves to the
+    // inputs at their paths (R-38).
     set: $ => seq(
       'set',
+      choice(
+        seq(
+          field('target', $._chain),
+          field('operator', choice('=', '+=')),
+          field('value', $._term),
+        ),
+        field('body', $.set_block),
+        seq('from', field('source', $._term), optional(field('selector', $.selector))),
+      ),
+      optional(field('rank', $.rank)),
+      optional(seq('where', field('condition', $._body))),
+    ),
+
+    set_block: $ => seq(
+      '{',
+      repeat($._newline),
+      optional(choice(
+        seq(repeat(seq($.set_entry, $._separator)), $.set_entry),
+        repeat1(seq($.set_entry, $._separator)),
+      )),
+      '}',
+    ),
+
+    set_entry: $ => seq(
       field('target', $._chain),
       field('operator', choice('=', '+=')),
       field('value', $._term),
       optional(field('rank', $.rank)),
-      optional(seq('where', field('condition', $._body))),
     ),
+
+    // `.name` and `[*]` steps into a document after `from` (R-39).
+    selector: $ => repeat1(choice(
+      seq(token.immediate('.'), choice($._word, $.string)),
+      seq(token.immediate('['), '*', ']'),
+    )),
 
     extern: $ => seq(
       'extern',
@@ -344,6 +377,7 @@ export default grammar({
       field('name', $._word),
       'from',
       field('source', $._term),
+      optional(field('selector', $.selector)),
       optional(seq('where', field('condition', $._body))),
     ),
 
@@ -364,26 +398,7 @@ export default grammar({
       optional($.clause),
     ),
 
-    // `settings { k = v .. } [@rank] [where B]`: contributions to the
-    // inputs; `settings from DOC [@rank] [where B]`: a document's leaves,
-    // each to the input at its path (R-38).
-    settings: $ => choice(
-      seq(
-        'settings',
-        field('body', $.block),
-        optional(field('rank', $.rank)),
-        optional($.clause),
-      ),
-      seq(
-        'settings',
-        'from',
-        field('source', $._term),
-        optional(field('rank', $.rank)),
-        optional(seq('where', field('condition', $._body))),
-      ),
-    ),
-
-    // A resource's, settings block's, instance's or provider's entries,
+    // A resource's, instance's or provider's entries,
     // separated by a newline or a comma. Its clause follows it.
     block: $ => seq(
       '{',

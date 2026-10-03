@@ -51,8 +51,8 @@ gitignored `dform.state/`.
 The root is the nearest directory up from the working directory holding a
 `dform.toml`; `dform init [NAME]` makes one (and puts `dform.state/` in the
 nearest `.gitignore`). Every path a program states resolves from the project
-root: module paths, table and config sources, `file.*` externs, input relations,
-provider sources and trust roots. Outside a project, `plan` and the `dev`
+root: module paths, document and table sources, `file.text`, provider
+sources and trust roots. Outside a project, `plan` and the `dev`
 views run on a program file with no state; `apply`, `controller`, `stack`,
 `state` and `log` refuse (a `dev --world` run keeps its state beside the
 world file, and runs anywhere). A stack is a file, named after itself:
@@ -76,7 +76,7 @@ list: `backend`, `role`, `approvals`, `audit_sink` and
 `isolated`; a term is written as a string, `{stack}` the stack's name
 and `{k}` the value of its key `k` (in `backend`), and any other key is
 an error naming the list (`config` is gone: a stack's settings document
-is `settings from` in its file, "Settings"). A
+is `set from` in its file, "Giving inputs"). A
 `[stacks.NAME]` no file is is an error. Policy reads it as facts,
 `project_provider(Name, Constraint)`, `project_default(Key, Value)` and
 `project_stack(Name, Key, Value)`. No inputs and no key values: a
@@ -509,7 +509,7 @@ A keyed deployment configures its providers by its key:
 provider env
 
 provider google {
-  project = gcp.project_id                                # an input the env's settings give
+  project = gcp.project_id                                # an input the env's `set` gives
   credentials = env.var("GOOGLE_CREDENTIALS_${env}")      # a secret, per key
   expect_account = gcp.project_id
 }
@@ -1015,8 +1015,8 @@ waits on and the tick it runs in; the pending groups, each with its head
 pattern, its rule and the null-free bindings of its stuck instance
 (redacted); the nulls round 0
 resolved and the ones the delta still carries; the tick schedule; the
-extern answers the plan read; the commit each `git` input relation's ref
-named; and the plan's digest, with what needs an approval (see
+extern answers the plan read (a git table's or document's commit among
+them); and the plan's digest, with what needs an approval (see
 "Approvals"). `apply PLAN.json` takes its inputs from the
 file (flags given on the command line must match them), refreshes and re-evaluates at
 every tick, and refuses unless the delta it computes is the file's:
@@ -1113,9 +1113,8 @@ writes a file says its digest on stderr, `plan file: PLAN (plan digest:
 sha256:...)`); `plan --json` has them as
 `needs_approval` and `digest`. The digest is sha256 over the canonical JSON
 (sorted keys, no whitespace) of the plan file without its `digest` field:
-the delta, the inputs, the commit each `git` input relation's ref named
-(`git_commits`; `apply PLAN` refuses when one moved) and the extern
-answers, with every secret already the stack's HMAC of it. The plan file
+the delta, the inputs and the extern answers (a git source's commit among
+them, which `apply PLAN` reads again), with every secret already the stack's HMAC of it. The plan file
 records it (`digest`) and the rows (`needs_approval`).
 
 A token is a signed statement: the approver, the plan digest, the stack and
@@ -1154,9 +1153,9 @@ In controller mode a deformation that needs an approval is held (`tick N:
 proceed: held, needs approval (Reason): T["A"]`) and the plan's digest is
 published: a log line, `tick N: approval needed: plan digest sha256:...`,
 and `approval-pending.json` beside the state. A token for that digest
-releases it when it arrives through the input relation `approval/1` (the
-token's text; `input approval from facts("approvals.facts")` and `decl
-approval(token)`) or
+releases it when it arrives through the relation `approval/1` (the
+token's text; `approval(t) where approvals.approval(t)` over a module of
+facts, `use data.approvals`) or
 as a file in the drop directory `approvals/` beside the state (`event
 approval`); `tick N: approved by WHO: plan digest ...`. A token for another
 plan is ignored, one that fails otherwise is logged (`approval refused:
@@ -1302,8 +1301,8 @@ program names it: `net.vpc["main"]` for a resource, `net.vpc["main"].cidr
 for a cell, a relation as `zone("us-test-1a", 1)`. An attribute or an
 input is `merged from N contributions`, each with its value, its rank when
 it is not normal (`@default`) and the statement that made it: an input's
-default, each settings block that gives it (`stacks/tour.df:148
-settings { database.backup_days = 14 .. } where env == "prod"`, a
+default, each `set` that gives it (`stacks/tour.df:148  set {
+database.backup_days = 14 .. } where env == "prod"`, a
 document's leaf by its `file:line`), `--set`. A fact given to the run says
 where it came from: its `file:line`, `--set env=prod`, the provider
 schema, the world, the plan for the facts the planner hands to the policy
@@ -1343,7 +1342,7 @@ cargo run -- -C examples/tour why 'db.postgres["orders"].backup_days' tour env=p
 #        │    ├─ {backup_days: 1} @default   stacks/tour.df:29
 #        │    ├─ {multi_az: false} @default   stacks/tour.df:29
 #        │    ├─ {backup_days: 14}
-#        │    │    stacks/tour.df:148  settings { database.backup_days = 14 .. } where env == "prod"
+#        │    │    stacks/tour.df:148  set { database.backup_days = 14 .. } where env == "prod"
 #   ...
 ```
 
@@ -1359,7 +1358,7 @@ cargo run -- -C examples/demo dev graph --relation vpc_peer/2        # any binar
 component, each module used), what it reads
 (inputs by name, world types, externs by name, another copy's outputs),
 writes (cells as `(type, path)` partitions, `*` for a variable type or
-path, the input cells its settings give, another copy's input cells)
+path, the input cells its `set`s give, another copy's input cells)
 and offers (its declared outputs, with their types). Read off the
 lowered program's rule heads and bodies and the partition graph; no
 evaluation.
@@ -1477,8 +1476,8 @@ for byte, and a file with a syntax error is reported, not rewritten.
     per integer.
   - `let pg = db.postgres["main"]` is a value whose type is the
     resource's reference; `pg.endpoint` reads through it.
-  - settings blocks: `settings { db.backup_days = 14 } where env ==
-    "prod"`, contributions to the inputs (see "Settings").
+  - `set { db.backup_days = 14, db.multi_az = true } where env ==
+    "prod"`: several contributions under one clause (see "Giving inputs").
   - `output k: T = t where body`: an output in one statement.
   - patterns: `(a, b) = pair`, `{ host, port } = conn` (the named fields,
     the rest ignored), `(repo, tag) = str.split(image, ":", 1)` (it fails
@@ -1513,11 +1512,11 @@ declare one: `provider NAME {}` brings the provider's externs into scope,
 with their modes from its schema.
 
 ```dform
-provider file
+provider aws
 
-resource google.monitoring_dashboard pngu {
-  dashboard_json = file.json["files/dashboard-pngu.json"]
-}
+resource aws.subnet "private-${zone}" {
+  availability_zone = zone
+} where aws.availability_zone("available", zone, _)
 ```
 
 A body literal of an extern is asked once the literals before it bind its
@@ -1533,14 +1532,14 @@ provider and needing no `dform.toml` source:
 
 | provider | externs                                                   | answered by |
 |----------|-----------------------------------------------------------|-------------|
-| `file`   | `file.json(+path, -value)`, `file.text(+path, -value: string)`, a path from the program's directory | dform |
+| `file`   | `file.text(+path, -value: string)`, a path from the project root; the loaders, `yaml(path)` .. ("Documents") | dform |
 | `env`    | `env.var(+name, -value: secret(string))`; `env.var(NAME)` as a term reads it | dform |
 | `time`   | `time.now(-t: time)`, the current time in UTC; `time.now()` as a term reads it | dform |
 
 `random` is not a provider: `random.password` and friends are std
 functions (below), and `provider random` is an error saying so.
 
-A program that writes `extern file.json(..)` is told to write `provider
+A program that writes `extern file.text(..)` is told to write `provider
 file {}` instead; `extern` is the schema's word (provider schemas, the
 compiler's tests). Another provider's externs are, for now, still declared
 in the program until its schema is read at compile time (DESIGN.org R-24),
@@ -1608,19 +1607,39 @@ an interrupted apply and the controller's baseline, holds a leaf at a
 `sensitive` path as its keyed digest, `"(sensitive hmac-sha256:..)"`, and
 the resume and the controller compare the world with it the same way.
 
-## Tables
+## Documents and tables
 
-A table is an input relation whose rows are a data file's, typed column by
-column as the relation's `decl` declares them (written once; `input p
-from ..` never re-spells the columns):
+Data that is not code is a document, loaded by the file provider's
+loaders, spelled bare: `yaml(path)`, `toml(path)`, `json(path)`, `csv(path)`
+(a list of objects by its header), each also over `git(repo, ref, path)`
+(R-39). A loader call is a value, `let net = toml("data/network.toml")`,
+read like any (`net.region`). `input p from DOC` destructures a document
+into rows of a relation, typed column by column as the relation's `decl`
+declares them (written once; `input p from ..` never re-spells the
+columns):
 
 ```dform
 input peering from csv("data/peerings.csv")
 input pins from yaml(git("ops.git", "env/${env}", "pins.yaml")) where env != "dev"
+input az from toml("data/network.toml")                  # its [[az]] tables
+input link from toml("data/network.toml").peerings       # a selection
+input service from yaml("teams.yaml").teams[*].services  # every team's
+input vlan from vlans                                    # an input, a list of objects
 
 decl peering(env: enum("dev", "stg", "prod"), name: string, peer_network: string)
 decl pins(app: string, image: string)
 ```
+
+A selector is a path into the document: `.name` a field, `[*]` every
+element of a list, chained; a list at its end is its elements, a row per
+object, and a column a row lacks is taken from the nearest enclosing
+object that has it. A whole TOML document is its `[[p]]` tables by the
+relation's name, so one document holds several relations. `from` takes
+any document value too, an input or a `let`: the outside gives a table by
+giving an input of a list of objects (`--set vlans=@vlans.yaml`). A `.df`
+file of plain facts is a module (`use data.releases`, read
+`releases.release(..)`), re-read like any program file; `facts(..)` is
+gone.
 
 Several `input p from ..` lines are one relation, their rows together,
 and facts the program states join them. A module takes a relation from
@@ -1663,8 +1682,8 @@ The controller watches what the last run's tables read: a changed file,
 or a ref that names another commit, is an input event (`input pins changed
 (git ops.git env/prod:pins.yaml)`).
 
-A deployment's settings document, `settings from yaml("config/${env}.yaml")`
-in the stack, is read the same way, a leaf per input (see "Settings").
+A deployment's settings document, `set from yaml("config/${env}.yaml")`
+in the stack, is read the same way, a leaf per input (see "Giving inputs").
 
 ## Escape hatches
 
@@ -1739,14 +1758,14 @@ Inputs and keys are the file's header: after `edition`, before
 the body (`key`, then `input`), so a file says what it
 takes first; one written below the body is an error, and `dform fmt`
 moves it. Each is read as a relation, `env(E)`. An input is a cell of the attribute
-aggregate: the default is an `@default` contribution, a settings block a
+aggregate: the default is an `@default` contribution, a `set .. where` a
 normal one, `--set replicas=3` an `@override` that wins over both (and
 `why` shows each). A `key` is an input the
 target gives instead (`dform plan app env=prod`), and its value names the
 deployment (see "Keyed stacks"); `--set` of one is an error. `--input-file FILE.df`
 (repeatable) gives inputs as facts, one per input, `env(prod).
 allowed_cidrs([inet("10.0.0.0/8")]).`, each a normal contribution stated
-where the file states it, like a settings block's; the plan file records each input file's digest.
+where the file states it, like a `set`'s; the plan file records each input file's digest.
 
 Types are `int`, `string`, `bool`, `inet`, the quantities `bytes`, `cpu`
 and `duration`, `time`, `enum(a, b, ...)`, `list(T)`, `set(T)` and objects
@@ -1774,9 +1793,9 @@ another module's alias is read through its name, `network.subnets`
 a `string` takes the text) and checked before evaluation: `--set
 replicas=two` is an error naming the input and its type, and so is `--set` of an input
 the program does not declare. A value the program computes (an input of
-a used module or a copy, a settings block's) is checked after evaluation and a wrong type blocks the
+a used module or a copy, a `set`'s) is checked after evaluation and a wrong type blocks the
 plan. A required input with no value is an error at its declaration; one
-a settings block gives, in the deployments none holds in. `check
+a `set` gives, in the deployments none holds in. `check
 R` refines the input (`R` names it by its name; see Refinement types).
 
 An object input is declared by its fields, each with its own default and
@@ -1791,7 +1810,7 @@ input nodes {
 
 `--set nodes.count=2` gives one leaf, read as its type (a path that names
 no field is an error listing the fields); `--set nodes=@nodes.yaml` gives
-each field the document has; `settings { nodes.count = 3 } where env ==
+each field the document has; `set nodes.count = 3 where env ==
 "prod"` gives it from inside; `why nodes.count` shows the leaf's
 layers. `input nodes: node_pool = { .. }`, an alias and an object
 default, is the same input. A used module's inputs are the stack's too,
@@ -1800,45 +1819,45 @@ by the module's name: `--set traefik.acme_email=ops@example.com`.
 A program with no `input` declarations reads `--set k=v` as the fact
 `input("k", v)`.
 
-### Settings
+### Giving inputs
 
 Configuration is the inputs (R-38). The declaration gives the default, a
-settings block contributes values under a condition, and `--set` on the
-command line wins over both:
+`set` contributes a value under a condition, and `--set` on the command
+line wins over both:
 
 ```dform
-settings { db.multi_az = true, db.backup_days = 14 } where env == "prod"
-settings { db.backup_days = 30 } @override where env == "prod", region == "eu-west-1"
-settings { traefik.acme_email = "ops@example.com" }    # a used module's input
-settings from yaml("config/${env}.yaml")
+set db.backup_days = 30 @override where env == "prod", region == "eu-west-1"
+set { db.multi_az = true, db.backup_days = 14 } where env == "prod"
+set { traefik.acme_email = "ops@example.com" } where env != "dev"   # a used module's input
+set from yaml("config/${env}.yaml")
 ```
 
-An entry names an input by its path: the program's own, a field of an
-object input, or a used module's (`traefik.acme_email`); anything else is
-an error naming the inputs. A block holds where its clause does: any
-condition, any subset of a composite key. The layers are ranks, never
-specificity: the default (`@default`) < settings (normal unless marked) <
-`--set` (`@override`). Two blocks that both hold and disagree at the
-winning rank are a conflict naming both, so a broad block says `@default`
-and a narrow one that should win says `@override`. The deployment's value
-is the input's name, `db.backup_days`, and `why db.backup_days` shows each
-layer at its `file:line`. `set db.backup_days = 30 where B` is a block of
-one entry.
+A `set`'s target is an input by its path: the program's own, a field of
+an object input, a used module's (`traefik.acme_email`) or a copy's; a
+path that names no field is an error naming the fields. `set { .. }` is
+several under one clause and rank. A `set` holds where its clause does:
+any condition, any subset of a composite key; one of the program's own
+input with no clause is an error (give it a default). The layers are
+ranks, never specificity: the default (`@default`) < a `set` (normal
+unless marked) < `--set` (`@override`). Two that both hold and disagree
+at the winning rank are a conflict naming both, so a broad one says
+`@default` and a narrow one that should win says `@override`. The
+deployment's value is the input's name, `db.backup_days`, and `why
+db.backup_days` shows each layer at its `file:line`.
 
-`settings from DOC [@rank] [where B]` gives every leaf of a document (YAML,
+`set from DOC [@rank] [where B]` gives every leaf of a document (YAML,
 JSON, TOML; a CSV with the columns `path` and `value`) to the input at its
 dotted path, a string read as the input's type (`inet`, a quantity, a
 time); a leaf at a path that is no input is a deny naming the file, the
 line and the inputs there are. The demo's per-environment settings are
-`config/dform/{env}.yaml`, with an `@default` block in the stack under
-them.
+`config/dform/{env}.yaml`.
 
-An input a settings block gives is the program's to decide: `dform test`
-does not enumerate it, and a required one is missing only in a
-deployment none of the blocks holds in (a violation, `input k is required
-and has no value`). Settings rows (`settings prod { .. }`,
-`settings[env]`, `settings _`, `let cfg = settings[env]`) and dform.toml's
-`config` are gone; each is an error naming the form to write.
+An input a `set` gives is the program's to decide: `dform test` does not
+enumerate it, and a required one is missing only in a deployment none of
+them holds in (a violation, `input k is required and has no value`). The
+`settings` statement, its rows (`settings prod { .. }`, `settings[env]`,
+`settings _`, `let cfg = settings[env]`) and dform.toml's `config` are
+gone; each is an error naming the form to write.
 
 ### Refinement types
 
@@ -1986,9 +2005,9 @@ per key, and a list path several sources contribute to is declared a set:
 type_lattice(iam.policy, "statements", "set")
 ```
 
-A used module's inputs are the stack's to give, from a settings block
-(`settings { baseline.audit.sinks = ["s3", "cloudwatch"] } where env ==
-"prod"`) or a document (see "Settings").
+A used module's inputs are the stack's to give, from a `set`
+(`set baseline.audit.sinks = ["s3", "cloudwatch"] where env ==
+"prod"`) or a document (see "Giving inputs").
 
 ## Testing
 
@@ -2003,7 +2022,7 @@ and every used module's input its `use` block leaves to the stack
 `bool` both; a key whose type is not an enum takes each value a
 deployment of the stack was applied with; any other input takes its
 default, and one with none is an error naming it (pin it, or give it an
-enum type). An input a settings block gives is the program's to decide in
+enum type). An input a `set` gives is the program's to decide in
 the deployments it holds in, and no axis (R-38). More than 4096 combinations is an error asking to pin some.
 
 ```dform
@@ -2035,7 +2054,8 @@ cargo run -- -C examples/demo test dform env=prod
 
 `dform controller run` is the second executor over the same evaluator: the
 plan is the diff a reconciler applies, so nothing in the language changes.
-It waits for an input relation's source or the world file to change, then
+It waits for a source it read (a program file, a table, a document) or the
+world file to change, then
 does what `apply` does (refresh, evaluate, plan, the policy pass, ticks
 until the plan is undeformed or `--max-ticks`), gated by policy, and logs
 one line per event and per tick:
@@ -2044,8 +2064,8 @@ one line per event and per tick:
 04:22:01 event start
 04:22:01 tick 1: plan: 3 deformations (3 create)
 04:22:01 stack workload is undeformed
-04:22:07 input release changed (file release.facts)
-04:22:07 event input release
+04:22:07 input data.releases changed (file data/releases.df)
+04:22:07 event input data.releases
 04:22:07 tick 1: plan: 1 deformation (1 update)
 04:22:07 stack workload is undeformed
 04:22:12 event world dform.state/workload/remote.json changed
@@ -2069,23 +2089,12 @@ resync` when nothing did) and exits; `--max-events N` exits after N events
 controller goes on watching; a failure of the first run ends it. Times are
 UTC. Every run re-reads and re-evaluates the whole program.
 
-Input relations feed facts from outside the program, re-read whenever
-their source changes (a table's too, see "Tables"); `plan` and `apply`
-read them too:
-
-```dform
-input release from facts("release.facts")
-input approve from facts(git("ops.git", "main", "approvals.df"))
-
-decl release(image)
-decl approve(t, a)
-```
-
-A source is a `.df` file of facts (`edition 2026` first) of the
-relations declared from it; a fact of any other predicate is an error
-naming it. Paths are relative to the declaring file. A `git` source is read
-at the ref with `git show REF:PATH` (a bare repository works) and changes
-when the ref names another commit.
+The sources are the program's files, each by its module's name (a `.df`
+file of facts, `use data.releases`, is one: edit it and the controller
+deploys it), and every file and ref the last run's tables and documents
+read (see "Documents and tables"): a change to one is an input event,
+`input NAME changed (SOURCE)`. A `git` source is stamped by the commit its
+ref names.
 
 The controller keeps `controller.json` beside the stack's state (in its
 store: a directory, or the bucket of an s3 stack, as are its `approvals/`
@@ -2147,7 +2156,8 @@ and the `dform-system` namespace (its provider is configured from the
 cluster's endpoint and CA) in tick 2; and the `dform-controller`
 Deployment, whose args name the workload stack, in tick 3, once its node
 pool is up. `stacks/workload.df` (stack `workload`) is a namespace, a
-Deployment whose image is the `release` input relation, and a Service.
+Deployment whose image is the module of facts `data/releases.df`'s
+`release`, and a Service.
 
 `role = "bootstrap"` in a stack's `[stacks.NAME]` marks the stack that creates what the
 controller runs in: it stays batch. `dform controller run` refuses it (by its

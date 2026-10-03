@@ -395,10 +395,9 @@ pub fn hover_at(p: &refs::Project, path: &Path, at: usize) -> Option<String> {
                 _ => documented.map(item_md),
             };
             match sym {
-                Symbol::Predicate(..)
-                | Symbol::Resource(..)
-                | Symbol::Value(..)
-                | Symbol::Settings(..) => joined(own, contributors()),
+                Symbol::Predicate(..) | Symbol::Resource(..) | Symbol::Value(..) => {
+                    joined(own, contributors())
+                }
                 _ => own,
             }
         }
@@ -455,9 +454,9 @@ fn builtin(t: &SyntaxToken) -> Option<&'static Reference> {
 /// The statement a declaration's name token stands in.
 fn statement(t: &SyntaxToken) -> Option<SyntaxNode> {
     use SyntaxKind::*;
-    t.parent()?.ancestors().find(|n| {
-        doc::item(n).is_some() || matches!(n.kind(), INSTANCE | LET | SETTINGS | PROVIDER)
-    })
+    t.parent()?
+        .ancestors()
+        .find(|n| doc::item(n).is_some() || matches!(n.kind(), INSTANCE | LET | PROVIDER))
 }
 
 /// A doc comment's description and pairs.

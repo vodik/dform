@@ -106,7 +106,6 @@ pub enum SyntaxKind {
     /// `use PATH [as NAME] [where B]`.
     USE,
     RESOURCE,
-    SETTINGS,
     /// `{ entry* }` of a resource, settings, instance or provider.
     BLOCK,
     /// `path (=|+=) term [rank]` in a block.
@@ -147,6 +146,8 @@ pub enum SyntaxKind {
     CHAIN,
     /// `[t, ...]` after a chain.
     INDEX,
+    /// `(.name | [*])+` after a `from` term: a path into a document (R-39).
+    SELECTOR,
     /// `where body` after a block: its clause.
     CLAUSE,
     /// `let k = t [where B]`.

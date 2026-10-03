@@ -5,11 +5,11 @@ edition 2026
 provider file {}
 extern next.hop(+from, -to)
 
-paths("a.json")
-file.json("b.json", {})
-missing(p) where paths(p), not file.json(p, _)
-early(v) where file.json(p, v), paths(p)
+paths("a.txt")
+file.text("b.txt", "b")
+missing(p) where paths(p), not file.text(p, _)
+early(v) where file.text(p, v), paths(p)
 reach(a, b) where next.hop(a, b), start(a)
 reach(a, c) where reach(a, b), next.hop(b, c)
 start("x")
-arity(v) where paths(p), file.json(p, v, 1)
+arity(v) where paths(p), file.text(p, v, 1)

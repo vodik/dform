@@ -148,7 +148,7 @@ resource net.subnet "private-${z}" {
 # Two blocks that both hold and disagree are a conflict naming both, so
 # a block meant as a fallback says `@default`.
 
-settings {
+set {
   database.backup_days = 14
   database.multi_az = true
 } where env == "prod"
@@ -605,24 +605,23 @@ resource iam.policy "connect-${host}" {
   (comment)
   (comment)
   (comment)
-  (settings
-    (block
-      (field
-        (block_path
+  (set
+    (set_block
+      (set_entry
+        (member_expression
           (identifier)
           (identifier))
         (integer))
-      (field
-        (block_path
+      (set_entry
+        (member_expression
           (identifier)
           (identifier))
         (true)))
-    (clause
-      (body
-        (comparison
-          (identifier)
-          (string
-            (string_content))))))
+    (body
+      (comparison
+        (identifier)
+        (string
+          (string_content)))))
   (comment)
   (comment)
   (resource

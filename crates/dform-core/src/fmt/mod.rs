@@ -92,11 +92,11 @@ fn space(prev: &SyntaxToken, cur: &SyntaxToken) -> &'static str {
     if matches!(p, DOT | DOT2 | DOT2_EQ) || matches!(c, DOT | DOT2 | DOT2_EQ) {
         return "";
     }
-    if c == L_BRACKET && matches!(cp, Some(INDEX | BLOCK_PATH)) {
+    if c == L_BRACKET && matches!(cp, Some(INDEX | BLOCK_PATH | SELECTOR)) {
         return "";
     }
-    if (p == L_BRACKET && matches!(pp, Some(INDEX | BLOCK_PATH)))
-        || (c == R_BRACKET && matches!(cp, Some(INDEX | BLOCK_PATH)))
+    if (p == L_BRACKET && matches!(pp, Some(INDEX | BLOCK_PATH | SELECTOR)))
+        || (c == R_BRACKET && matches!(cp, Some(INDEX | BLOCK_PATH | SELECTOR)))
     {
         return "";
     }

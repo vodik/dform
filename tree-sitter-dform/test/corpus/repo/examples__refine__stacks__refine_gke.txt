@@ -37,7 +37,7 @@ zone_at(1, "us-east1-b")
 zone_at(2, "us-east1-c")
 zone_at(3, "us-east1-d")
 
-settings {
+set {
   gcp.project_id = "renfry-dev-973682"
   gcp.project_name = "renfry-dev"
   gcp.region = "us-east1"
@@ -262,35 +262,34 @@ type google.container_cluster {
         (integer)
         (string
           (string_content)))))
-  (settings
-    (block
-      (field
-        (block_path
+  (set
+    (set_block
+      (set_entry
+        (member_expression
           (identifier)
           (identifier))
         (string
           (string_content)))
-      (field
-        (block_path
+      (set_entry
+        (member_expression
           (identifier)
           (identifier))
         (string
           (string_content)))
-      (field
-        (block_path
+      (set_entry
+        (member_expression
           (identifier)
           (identifier))
         (string
           (string_content)))
-      (field
-        (block_path
+      (set_entry
+        (member_expression
           (identifier)
           (identifier))
         (string
           (string_content)))
-      (field
-        (block_path
-          (identifier))
+      (set_entry
+        (identifier)
         (object
           (object_field
             (identifier)
@@ -306,12 +305,11 @@ type google.container_cluster {
               (arguments
                 (string
                   (string_content))))))))
-    (clause
-      (body
-        (comparison
-          (identifier)
-          (string
-            (string_content))))))
+    (body
+      (comparison
+        (identifier)
+        (string
+          (string_content)))))
   (fact
     (call
       (identifier)

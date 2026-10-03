@@ -26,7 +26,7 @@ type settings {
 
 # Base layer at rank @default: every environment. Overrides below are the
 # normal rank and win per leaf. This replaces three copies of the block.
-settings {
+set {
   network.main.vpc_net = inet("10.90.0.0/16")
   network.peer.vpc_net = inet("10.91.0.0/16")
   db = { backup_days: 3, multi_az: false }
@@ -37,12 +37,12 @@ env_name("dev")
 env_name("staging")
 env_name("prod")
 
-settings {
+set {
   network.main.vpc_net = inet("10.50.0.0/16")
   network.peer.vpc_net = inet("10.60.0.0/16")
 } where env == "staging"
 
-settings {
+set {
   network.main.vpc_net = inet("10.20.0.0/16")
   network.peer.vpc_net = inet("10.21.0.0/16")
   db = { backup_days: 14, multi_az: true }

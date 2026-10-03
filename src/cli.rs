@@ -360,7 +360,8 @@ enum Run {
 
 #[derive(Subcommand, Debug, Clone)]
 enum ControllerCommand {
-    /// Wait for an input relation's source or the world to change, then
+    /// Wait for a source it read (a table, a document, a program file) or
+    /// the world to change, then
     /// refresh, evaluate, plan, gate on policy and apply, one log line per
     /// event and per tick. Refuses a `role = bootstrap` stack.
     Run {
@@ -1359,8 +1360,8 @@ fn run_with(
     if files.is_empty() {
         bail!("internal: a run with no program");
     }
-    // The program, as `deployment::load` reads it: its input relations
-    // read, the input files' facts added; `stack` and `provider`
+    // The program, as `deployment::load` reads it: the input files'
+    // facts added; `stack` and `provider`
     // statements over the manifest's defaults, `--provider` over the
     // latter.
     let target = deployment::Target {
@@ -1375,8 +1376,6 @@ fn run_with(
         &mut Watch::new(hook.as_deref_mut(), &cli.cmd),
     )?;
     cli.manifest = loaded.manifest.clone();
-    // The commit each git input relation's ref names: a plan file pins them.
-    let pinned = pinned_commits(&loaded.relations);
     // A key's value is the target's, else its input's default.
     check_keys(&cli, &loaded.cfg, &loaded.stack)?;
     // `stack rekey`: the run is of the old deployment (its state, its
@@ -1550,8 +1549,7 @@ fn run_with(
             env: env_inputs(labels, k),
             ..inputs.clone()
         };
-        let mut diff = saved.input_differences(&now);
-        diff.extend(saved.commit_differences(&pinned));
+        let diff = saved.input_differences(&now);
         if !diff.is_empty() {
             eprintln!(
                 "plan file {} is stale: its inputs are not this run's:",
@@ -1859,7 +1857,6 @@ fn run_with(
                 })
                 .collect(),
             externs: externs.recorded(),
-            git_commits: pinned.clone(),
             needs_approval: crate::approval::needs(&res.facts)
                 .into_iter()
                 .map(|(deformation, reason)| zset::file::NeedsApproval {
@@ -2046,7 +2043,6 @@ fn run_with(
                         "digest": file.digest,
                         "file": out.display().to_string(),
                         "inputs": file.inputs,
-                        "git_commits": file.git_commits,
                         "needs_approval": file.needs_approval,
                         "who": crate::audit::who(),
                     }),
@@ -2235,7 +2231,6 @@ fn run_with(
                             "digest": digest,
                             "file": saved.as_ref().map(|(p, _)| p.display().to_string()),
                             "inputs": inputs,
-                            "git_commits": pinned,
                             "needs_approval": needs
                                 .iter()
                                 .map(|(d, r)| serde_json::json!({ "deformation": d, "reason": r }))
@@ -3476,23 +3471,6 @@ fn needs_text(needs: &[zset::file::NeedsApproval]) -> String {
     for n in needs {
         out.push_str(&format!("  {}  ({})\n", n.deformation, n.reason));
     }
-    out
-}
-
-/// The commit each `git` input relation's ref names now, but the
-/// `approval` relation's: its tokens approve a plan, they are not part of
-/// it.
-fn pinned_commits(relations: &[watch::Relation]) -> Vec<zset::file::Pinned> {
-    let mut out: Vec<zset::file::Pinned> = relations
-        .iter()
-        .filter(|r| r.pred != "approval" && matches!(r.source, watch::Source::Git { .. }))
-        .map(|r| zset::file::Pinned {
-            source: r.source.to_string(),
-            commit: watch::stamp(&r.source),
-        })
-        .collect();
-    out.sort_by(|a, b| a.source.cmp(&b.source));
-    out.dedup();
     out
 }
 

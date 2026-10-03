@@ -36,8 +36,6 @@ pub enum Symbol {
     Instance(String, String),
     /// `resource T n`: the component it is declared in, and its name.
     Resource(Option<String>, String),
-    /// `settings n`.
-    Settings(String),
 }
 
 /// What a name token is.
@@ -47,7 +45,7 @@ pub enum What {
     Name(Symbol, bool),
     /// A schema type's name, or a segment of one.
     Type,
-    /// An attribute path: a field of a resource or settings block, a
+    /// An attribute path: a field of a resource block, a
     /// segment after a reference.
     Path,
     /// A provider block's name.
@@ -72,7 +70,6 @@ pub struct Decls {
     aliases: BTreeSet<String>,
     /// Resource headers' and `type` blocks' types.
     types: BTreeSet<String>,
-    settings: BTreeSet<String>,
     instances: BTreeSet<(String, String)>,
 }
 
@@ -108,13 +105,6 @@ impl Decls {
                                     h.typ,
                                 );
                             }
-                        }
-                    }
-                    SyntaxKind::SETTINGS => {
-                        if let Some(h) = header(&n)
-                            && h.is_static
-                        {
-                            d.settings.insert(h.name.text().to_string());
                         }
                     }
                     SyntaxKind::TYPE_DECL => {
@@ -210,7 +200,6 @@ impl Decls {
             Symbol::Module(_) => self.modules.contains(name),
             Symbol::Instance(_, _) => self.instances.iter().any(|(_, i)| *i == n),
             Symbol::Resource(m, _) => self.resources.contains_key(&(m.clone(), n)),
-            Symbol::Settings(_) => self.settings.contains(name),
         }
     }
 }
@@ -281,7 +270,7 @@ fn relation_name(n: &SyntaxNode) -> Option<SyntaxToken> {
     (first.kind() == SyntaxKind::IDENT && next != Some(SyntaxKind::DOT)).then(|| first.clone())
 }
 
-/// A resource or settings header: its type (a resource's), its name's
+/// A resource header: its type (a resource's), its name's
 /// token, and whether that name is static (no clause of the block binds
 /// it).
 pub struct Header {
@@ -321,7 +310,6 @@ pub fn header(n: &SyntaxNode) -> Option<Header> {
 #[derive(Debug)]
 enum Part {
     Name(SyntaxToken),
-    Settings,
     Dot,
     Index,
 }
@@ -333,7 +321,6 @@ fn parts(chain: &SyntaxNode) -> Vec<Part> {
             rowan::NodeOrToken::Node(n) => (n.kind() == SyntaxKind::INDEX).then_some(Part::Index),
             rowan::NodeOrToken::Token(t) => match t.kind() {
                 SyntaxKind::IDENT => Some(Part::Name(t)),
-                SyntaxKind::SETTINGS_KW => Some(Part::Settings),
                 SyntaxKind::DOT => Some(Part::Dot),
                 _ => None,
             },
@@ -383,13 +370,9 @@ pub fn classify(d: &Decls, t: &SyntaxToken) -> What {
                 None => What::Other,
             }
         }
-        SyntaxKind::RESOURCE | SyntaxKind::SETTINGS => match header(&parent) {
+        SyntaxKind::RESOURCE => match header(&parent) {
             Some(h) if &h.name == t && h.is_static => {
-                if parent.kind() == SyntaxKind::RESOURCE {
-                    decl(Symbol::Resource(module_of(&scope), name))
-                } else {
-                    decl(Symbol::Settings(name))
-                }
+                decl(Symbol::Resource(module_of(&scope), name))
             }
             Some(h) if h.type_tokens.contains(t) => What::Type,
             _ => What::Other,
@@ -474,12 +457,8 @@ fn chain(d: &Decls, c: &SyntaxNode, t: &SyntaxToken, scope: &Scope) -> What {
         return What::Name(d.predicate(scope, t.text()), head);
     }
     let path = |start: usize| if k >= start { What::Path } else { What::Other };
-    let Some(first) = ps.first() else {
+    if ps.is_empty() {
         return What::Other;
-    };
-    // `settings[e].p`: a row by its key (H 5.1), then its path.
-    if matches!(first, Part::Settings) {
-        return path(1);
     }
     let Some(name0) = name_at(0) else {
         return What::Other;
@@ -849,7 +828,7 @@ mod tests {
 
     const SRC: &str = r#"edition 2026
 input env: string = "staging"
-let cfg = settings[env]
+let cfg = { a: env }
 component network {
   input vpc_net: inet
   # its interface: an input, a resource and an output

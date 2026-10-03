@@ -1,4 +1,4 @@
-//! Tables (README "Tables"): `input p from FORMAT(SOURCE)` reads rows of
+//! Tables (README "Documents and tables"): `input p from FORMAT(SOURCE)` reads rows of
 //! `decl p(col: type, ...)` from CSV, JSON, YAML and TOML; a row that is
 //! not its columns' types is an error naming its line.
 

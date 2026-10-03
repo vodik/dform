@@ -1088,7 +1088,8 @@ fn references_of_every_kind_of_name() {
     // Its output read in the stack; its resources' addresses from outside
     // are strings (H-16).
     let found = references(&mut c, &root, &stack, find(&stack, "use database", 4));
-    assert_eq!(found, at_places("stacks/dform.df", &[19, 66]));
+    // Its inputs given by the stack's `set` block are its too (R-38).
+    assert_eq!(found, at_places("stacks/dform.df", &[19, 29, 30, 66]));
     let found = references(&mut c, &root, &stack, find(&stack, "use baseline", 6));
     assert_eq!(found, at_places("stacks/dform.df", &[47]));
 

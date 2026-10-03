@@ -33,7 +33,7 @@ zone_at(1, "us-east1-b")
 zone_at(2, "us-east1-c")
 zone_at(3, "us-east1-d")
 
-settings {
+set {
   gcp.project_id = "renfry-dev-973682"
   gcp.project_name = "renfry-dev"
   gcp.region = "us-east1"

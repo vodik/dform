@@ -28,8 +28,8 @@ use super::parser as parse;
 use super::{SyntaxNode, SyntaxToken};
 use crate::ast::{
     Atom, AttrDecl, BindArg, Config, Decl, Extern, ExternFn, FieldAssign, FieldOp, InputDecl,
-    InputRelation, Instance, Lit, Module, OutputDecl, Pending, PendingKind, Program, Rank,
-    Resource, RuleStmt, Span, Stmt, Term, TypeExpr,
+    Instance, Lit, Module, OutputDecl, Pending, PendingKind, Program, Rank, Resource, RuleStmt,
+    Span, Stmt, Term, TypeExpr,
 };
 use crate::diag::Diagnostic;
 use crate::value::Value;
@@ -226,6 +226,8 @@ struct Scope {
     relation_inputs: BTreeSet<String>,
     /// `output p`: the relations a component exports (R-55).
     relation_outputs: BTreeSet<String>,
+    /// Relations this scope's own facts and rules define.
+    heads: BTreeSet<String>,
 }
 
 #[derive(Default)]
@@ -856,6 +858,7 @@ impl<'u> Lowerer<'u> {
                     let name = word_text(&n, 1);
                     self.decls.relations.insert(name.clone());
                     self.decls.heads.insert(name.clone());
+                    self.decls.scopes[decl].heads.insert(name.clone());
                     if terms(&n).next().is_none() {
                         self.decls.scopes[decl].relation_inputs.insert(name);
                     }
@@ -984,6 +987,7 @@ impl<'u> Lowerer<'u> {
                             .or_default()
                             .insert(n_args);
                         self.decls.heads.insert(name.clone());
+                        self.decls.scopes[decl].heads.insert(name.clone());
                         self.decls.relations.insert(name);
                     }
                 }
@@ -1708,7 +1712,7 @@ impl<'u> Lowerer<'u> {
                     span,
                 }))
             }
-            DECL => Ok(self.decl(n, span)),
+            DECL => Ok(self.decl(n, scope, span)),
             COMPONENT => {
                 let start: u32 = n.text_range().start().into();
                 let inner = self.decls.blocks[&(self.file, start)];
@@ -1731,7 +1735,6 @@ impl<'u> Lowerer<'u> {
             SET => self.set(n, scope, outer),
             INSTANCE => self.instance(n, scope, outer),
             RESOURCE => self.block_stmt(n, scope, outer),
-            SETTINGS => self.settings(n, scope, outer),
             RULE | FACT => self.rule(n, scope, outer),
             CHECK => self.check(n, scope, outer),
             k => self.error(span, format!("unexpected {k:?}")),
@@ -1807,7 +1810,7 @@ impl<'u> Lowerer<'u> {
     /// one no rule of the program defines is fed from outside (a provider,
     /// a given fact); `decl p(a, b) mixed` lets it have both facts and
     /// rules. The column names are the named-argument form's.
-    fn decl(&mut self, n: &SyntaxNode, span: Span) -> Vec<Stmt> {
+    fn decl(&mut self, n: &SyntaxNode, scope: usize, span: Span) -> Vec<Stmt> {
         let pred = dotted_text(n, 1);
         let fields: Vec<String> = n
             .children()
@@ -1824,7 +1827,12 @@ impl<'u> Lowerer<'u> {
         let mut out = Vec::new();
         if mixed {
             out.push(Stmt::Mixed(e));
-        } else if !self.decls.heads.contains(&pred) {
+        } else if !self.decls.scopes[self.decl_scope(scope)]
+            .heads
+            .contains(&pred)
+        {
+            // A relation the scope's own statements do not define: one in
+            // another module of the same name is another relation (R-65).
             out.push(Stmt::Extern(e));
         }
         out.push(Stmt::Decl(Decl { pred, fields, span }));
@@ -1873,22 +1881,11 @@ impl<'u> Lowerer<'u> {
             self.diags.push(d);
             return Err(Skip);
         };
-        if source.kind() == CALL && self.callee(&source).as_deref() == Some("facts") {
-            if node(n, BODY).is_some() {
-                return self.error(
-                    span,
-                    format!(
-                        "input {pred} from facts(..) takes no `where`: its rows are the file's"
-                    ),
-                );
-            }
-            let arity = decl.children().filter(|c| c.kind() == BIND_ARG).count();
-            return self.facts_relation(n, &pred, arity, &source, scope, outer);
-        }
+        self.reject_facts(&source)?;
         let cols = self.table_columns(&pred, &decl)?;
         let mut rc = self.rc(n, scope, outer);
         let body = self.opt_body(&mut rc, n)?;
-        let mut out = self.table(&mut rc, &pred, cols, &source, body, span)?;
+        let mut out = self.table(&mut rc, &pred, cols, n, body, span)?;
         out.push(Stmt::Mixed(Extern {
             pred,
             arity: decl.children().filter(|c| c.kind() == BIND_ARG).count(),
@@ -1902,42 +1899,6 @@ impl<'u> Lowerer<'u> {
         self.chain_of(scope)
             .into_iter()
             .find_map(|s| self.decls.scopes[s].decl_nodes.get(pred).cloned())
-    }
-
-    /// `input p from facts(PATH)`: rows read from a dform fact file
-    /// (`facts(git(REPO, REF, PATH))` from git), re-read when it changes.
-    fn facts_relation(
-        &mut self,
-        n: &SyntaxNode,
-        pred: &str,
-        arity: usize,
-        source: &SyntaxNode,
-        scope: usize,
-        outer: &Rc,
-    ) -> L<Vec<Stmt>> {
-        let span = self.span(n);
-        let args: Vec<SyntaxNode> = node(source, ARG_LIST)
-            .map(|l| terms(&l).collect())
-            .unwrap_or_default();
-        let [arg] = args.as_slice() else {
-            return self.error(
-                self.span(source),
-                "facts takes one source: a path, or `git(REPO, REF, PATH)`",
-            );
-        };
-        let mut rc = self.rc(n, scope, outer);
-        let source = self.calls(Calls::Data, |l| l.constant(&mut rc, arg))?;
-        // The core's source: `file(PATH)` or `git(REPO, REF, PATH)`.
-        let source = match source {
-            s @ Term::Func { .. } => s,
-            path => func("file", vec![path]),
-        };
-        Ok(vec![Stmt::InputRelation(InputRelation {
-            pred: pred.to_string(),
-            arity,
-            source,
-            span,
-        })])
     }
 
     fn rank_tok(&mut self, n: &SyntaxNode) -> L<Option<Rank>> {
@@ -2121,16 +2082,17 @@ impl<'u> Lowerer<'u> {
         Ok(t)
     }
 
-    /// `input p from FORMAT(SOURCE) [where B]`: a table (`crate::tables`),
-    /// its columns `cols`. Its rows are the answers of the extern
+    /// `input p from DOC [where B]`: a table (`crate::tables`), its
+    /// columns `cols`. Its rows are the answers of the extern
     /// `table.FORMAT.p`, asked once the source is known: `p(Cols) :- B,
-    /// reads, Path = SOURCE, table.FORMAT.p(Path, At, Cols)`.
+    /// reads, Path = SOURCE, table.FORMAT.p(Path, At, Cols)`; of a
+    /// document value, `table.value.p` (`doc_source`).
     fn table(
         &mut self,
         rc: &mut Rc,
         pred: &str,
         cols: Vec<BindArg>,
-        src: &SyntaxNode,
+        n: &SyntaxNode,
         mut body: Vec<Lit>,
         span: Span,
     ) -> L<Vec<Stmt>> {
@@ -2138,7 +2100,7 @@ impl<'u> Lowerer<'u> {
             .iter()
             .map(|c| var(&fresh(rc, &capitalise(&c.name))))
             .collect();
-        let mut out = self.table_body(rc, src, pred, cols, vars.clone(), &mut body)?;
+        let mut out = self.doc_source(rc, n, pred, cols, vars.clone(), &mut body)?;
         self.check_bound(rc, &body, &[])?;
         out.push(Stmt::Rule(RuleStmt {
             head: atom_at(pred, vars, span),
@@ -2234,6 +2196,134 @@ impl<'u> Lowerer<'u> {
             );
         }
         terms(&parse.syntax()).next().ok_or(Skip)
+    }
+
+    /// The rows of `table` a `from` statement `n` reads (R-39): its term a
+    /// loader call, `FORMAT(PATH)` (`table_body`), or any other document
+    /// value (an input, a `let`, a selection into one), read by the extern
+    /// `table.value.TABLE(+doc, -at, ..)`; and its selector, `.f` and `[*]`
+    /// steps into the document, in the table's name (`tables::selected`).
+    fn doc_source(
+        &mut self,
+        rc: &mut Rc,
+        n: &SyntaxNode,
+        table: &str,
+        cols: Vec<BindArg>,
+        outs: Vec<Term>,
+        body: &mut Vec<Lit>,
+    ) -> L<Vec<Stmt>> {
+        let src = terms(n).next().ok_or(Skip)?;
+        let selector = node(n, SELECTOR)
+            .map(|sel| self.selector(&sel))
+            .transpose()?
+            .unwrap_or_default();
+        let name = crate::tables::selected(table, &selector);
+        self.reject_facts(&src)?;
+        // A loader, or a call that is no function: a table's source (the
+        // error names the formats).
+        let callee = (src.kind() == CALL).then(|| self.callee(&src)).flatten();
+        if callee.is_some_and(|c| {
+            crate::tables::FORMATS.contains(&c.as_str())
+                || crate::functions::registry().get(&c).is_none()
+        }) {
+            return self.table_body(rc, &src, &name, cols, outs, body);
+        }
+        let doc = self.term(rc, &src, Pos::Content, body)?;
+        let d = var(&fresh(rc, "Doc"));
+        body.push(Lit::Eq(d.clone(), doc));
+        let at = var(&fresh(rc, "At"));
+        let mut args = vec![d, at];
+        args.extend(outs);
+        let ext = crate::tables::extern_name(crate::tables::VALUE, &name);
+        let span = self.span(&src);
+        body.push(Lit::Pos(atom_at(&ext, args, span)));
+        let mut ins = vec![
+            BindArg {
+                input: true,
+                name: "doc".into(),
+                ty: None,
+            },
+            BindArg {
+                input: false,
+                name: "at".into(),
+                ty: None,
+            },
+        ];
+        ins.extend(cols);
+        Ok(vec![Stmt::ExternFn(ExternFn {
+            name: ext,
+            args: ins,
+            span,
+        })])
+    }
+
+    /// A loader call as a term (R-39): `yaml(path)`, `toml`, `json`, `csv`
+    /// (a list of objects by its header), each also over `git(REPO, REF,
+    /// PATH)`, is the document, a value: `V` reading the file provider's
+    /// `table.FORMAT.document(Path, At, V)`, whose answer the plan file
+    /// records and the controller watches as a table's. `None` for any
+    /// other call, or a loader a relation of the program shadows.
+    fn loader_call(&mut self, rc: &mut Rc, n: &SyntaxNode, pre: &mut Vec<Lit>) -> Option<L<Term>> {
+        let name = self.callee(n)?;
+        if !crate::tables::FORMATS.contains(&name.as_str()) || self.decls.relations.contains(&name)
+        {
+            return None;
+        }
+        let git = node(n, ARG_LIST)
+            .and_then(|l| terms(&l).next())
+            .is_some_and(|a| a.kind() == CALL && self.callee(&a).as_deref() == Some("git"));
+        let table = match git {
+            true => format!("{}.git", crate::tables::DOCUMENT),
+            false => crate::tables::DOCUMENT.to_string(),
+        };
+        let v = var(&fresh(rc, &capitalise(&name)));
+        let cols = vec![BindArg {
+            input: false,
+            name: "value".into(),
+            ty: Some(TypeExpr::Name("any".into())),
+        }];
+        Some(
+            self.table_body(rc, n, &table, cols, vec![v.clone()], pre)
+                .map(|stmts| {
+                    for st in stmts {
+                        let known = |h: &Stmt| matches!((h, &st), (Stmt::ExternFn(a), Stmt::ExternFn(b)) if a.name == b.name);
+                        if !self.helpers.iter().any(known) {
+                            self.helpers.push(st);
+                        }
+                    }
+                    v
+                }),
+        )
+    }
+
+    /// `from facts(..)` is gone (R-39): an error naming what replaces it.
+    fn reject_facts(&mut self, src: &SyntaxNode) -> L<()> {
+        if src.kind() != CALL || self.callee(src).as_deref() != Some("facts") {
+            return Ok(());
+        }
+        let d = Diagnostic::error(
+            self.span(src),
+            "`facts(..)` is gone (R-39): a `.df` file of facts is a module",
+        )
+        .with_help(
+            "`use data.releases` reads data/releases.df, its relations `releases.p(..)`; rows \
+             from outside are a table, `input p from csv(\"data/p.csv\")`",
+        );
+        self.diags.push(d);
+        Err(Skip)
+    }
+
+    /// A selector's steps as text: `.teams[*].services`.
+    fn selector(&mut self, n: &SyntaxNode) -> L<String> {
+        let mut out = String::new();
+        for t in tokens(n) {
+            match t.kind() {
+                DOT | L_BRACKET | STAR | R_BRACKET => out.push_str(t.text()),
+                STRING => out.push_str(&self.segment(&t)?),
+                _ => out.push_str(t.text()),
+            }
+        }
+        Ok(out)
     }
 
     /// A table's source, `FORMAT(PATH)` or `FORMAT(git(REPO, REF, PATH))`,
@@ -2802,16 +2892,6 @@ impl<'u> Lowerer<'u> {
             }
             let r = match n.kind() {
                 INPUT_RELATION => (|| {
-                    let source = terms(&n).next().ok_or(Skip)?;
-                    if source.kind() == CALL && self.callee(&source).as_deref() == Some("facts") {
-                        return self.error(
-                            span,
-                            format!(
-                                "`{pred} from facts(..)` in a block: a block gives rows, \
-                                 `{pred}(..)`, or a table, `{pred} from csv(..)`"
-                            ),
-                        );
-                    }
                     let Some(decl) = self.decls.scopes[inner].decl_nodes.get(&pred).cloned() else {
                         return self.error(
                             span,
@@ -2824,7 +2904,7 @@ impl<'u> Lowerer<'u> {
                     let cols = self.table_columns(&pred, &decl)?;
                     let mut rc = self.rc(&n, scope, outer);
                     let body = self.opt_body(&mut rc, &n)?;
-                    self.table(&mut rc, &pred, cols, &source, body, span)
+                    self.table(&mut rc, &pred, cols, &n, body, span)
                 })(),
                 _ => self.rule(&n, scope, outer),
             };
@@ -2909,116 +2989,12 @@ impl<'u> Lowerer<'u> {
         })])
     }
 
-    /// `settings { k = v .. } [@rank] [where B]` (R-38): each entry a
-    /// contribution to an input under the clause, at the block's rank
-    /// (normal unless marked): `arg(input, "", k, v, Rank) :- B, reads`. A
-    /// path is an input's (`region`), a leaf or an object of an object
-    /// input (`db.backup_days`, `db`), or a used module's (`traefik.email`,
-    /// its cell `(input, traefik, email)`). `settings from DOC` is
-    /// [`Self::settings_from`].
-    fn settings(&mut self, n: &SyntaxNode, scope: usize, outer: &Rc) -> L<Vec<Stmt>> {
-        let Some(block) = node(n, BLOCK) else {
-            return self.settings_from(n, scope, outer);
-        };
-        let mut rc = self.rc(n, scope, outer);
-        let mut body = self.clauses(&mut rc, n)?;
-        let mut reads = Vec::new();
-        let fields = self.fields(&mut rc, &block, &mut reads)?;
-        body.extend(reads);
-        let values: Vec<&Term> = fields.iter().map(|f| &f.value).collect();
-        self.check_bound(&rc, &body, &values)?;
-        let rank = self.rank_tok(n)?;
-        let mut out = Vec::new();
-        let mut failed = false;
-        for f in fields {
-            let Ok((cell, path)) = self.settings_target(scope, &f) else {
-                failed = true;
-                continue;
-            };
-            let rank = f.rank.or(rank).unwrap_or(Rank::Normal);
-            let head = atom_at(
-                "arg",
-                vec![
-                    str_term(crate::modules::INPUT),
-                    cell,
-                    str_term(&path),
-                    f.value,
-                    str_term(rank.name()),
-                ],
-                f.span,
-            );
-            out.push(if body.is_empty() {
-                Stmt::Fact(head)
-            } else {
-                Stmt::Rule(RuleStmt {
-                    head,
-                    body: body.clone(),
-                })
-            });
-        }
-        if failed { Err(Skip) } else { Ok(out) }
-    }
-
-    /// The input cell a settings entry gives, `(scope, path)`: the scope's
-    /// own input, or a used module's (`m.k`, relative to where the `use`
-    /// is). Whether the path names a field is checked once the inputs are
-    /// known (`modules::expand`).
-    fn settings_target(&mut self, scope: usize, f: &FieldAssign) -> L<(Term, String)> {
-        if matches!(f.op, FieldOp::Add) {
-            return self.error(
-                f.span,
-                "an input is given with `=`: `+=` adds to an attribute",
-            );
-        }
-        if f.key.contains('[') {
-            return self.error(
-                f.span,
-                format!("`{}`: a setting's path is an input's, by its fields", f.key),
-            );
-        }
-        let (head, rest) = match f.key.split_once('.') {
-            Some((h, r)) => (h, Some(r)),
-            None => (f.key.as_str(), None),
-        };
-        let own = self.own_scopes(scope);
-        let input = own.iter().any(|&s| {
-            let sc = &self.decls.scopes[s];
-            sc.values.contains(head) && !sc.lets.contains_key(head)
-        });
-        if input {
-            return Ok((str_term(""), f.key.clone()));
-        }
-        if let (Some(rest), Some(at)) = (
-            rest,
-            self.chain_of(scope)
-                .into_iter()
-                .find(|&s| self.decls.scopes[s].uses.contains_key(head)),
-        ) {
-            return Ok((self.scope_term(scope, at, str_term(head)), rest.to_string()));
-        }
-        let what = if self.find_let(scope, head).is_some() {
-            format!("`{head}` is a `let`, which the program computes")
-        } else if self.instance_in(scope, head).is_some() {
-            format!("`{head}` is a copy: its inputs are its instance block's")
-        } else {
-            format!("the program declares no input {head}")
-        };
-        let d = Diagnostic::error(f.span, format!("settings: `{}` is not an input", f.key))
-            .with_note(what)
-            .with_help(
-                "a settings block gives inputs, the program's own (`region = ..`, \
-                 `db.backup_days = ..`) and its used modules' (`traefik.acme_email = ..`)",
-            );
-        self.diags.push(d);
-        Err(Skip)
-    }
-
-    /// `settings from DOC [@rank] [where B]` (R-38): every leaf of the
-    /// document a contribution to the input at its path, `arg(input, "", P,
-    /// V, Rank) :- B, reads, table.FORMAT.settings(Path, At, P, V)`, which
-    /// `tables::expand_settings` makes one rule per input path, and a deny
+    /// `set from DOC [@rank] [where B]` (R-38): every leaf of the document
+    /// a contribution to the input at its path, `arg(input, "", P, V, Rank)
+    /// :- B, reads, table.FORMAT.set(Path, At, P, V)`, which
+    /// `tables::expand_set_from` makes one rule per input path, and a deny
     /// for a leaf at a path that is no input's.
-    fn settings_from(&mut self, n: &SyntaxNode, scope: usize, outer: &Rc) -> L<Vec<Stmt>> {
+    fn set_from(&mut self, n: &SyntaxNode, scope: usize, outer: &Rc) -> L<Vec<Stmt>> {
         let span = self.span(n);
         let src = terms(n).next().ok_or(Skip)?;
         let mut rc = self.rc(n, scope, outer);
@@ -3032,10 +3008,11 @@ impl<'u> Lowerer<'u> {
                 ty: Some(TypeExpr::Name(ty.into())),
             })
             .to_vec();
-        let mut out = self.table_body(
+        let _ = src;
+        let mut out = self.doc_source(
             &mut rc,
-            &src,
-            crate::tables::SETTINGS_DOC,
+            n,
+            crate::tables::SET_DOC,
             cols,
             vec![path.clone(), value.clone()],
             &mut body,
@@ -3177,22 +3154,68 @@ impl<'u> Lowerer<'u> {
     }
 
     /// `set chain (=|+=) t [@rank] [where B]` (H-5): a contribution to a
-    /// resource's attribute (`arg(T, A, p, t)`), a settings row's leaf, or
-    /// an input (a stack input's `input(k, t)`, a module instance's).
+    /// resource's attribute (`arg(T, A, p, t)`) or an input (the stack's
+    /// own, a field of an object one, a used module's, a copy's), normal
+    /// unless ranked (R-38). `set { chain = t .. } [@rank] [where B]` is
+    /// several under one clause and rank; `set from DOC [@rank] [where B]`
+    /// a document's leaves, each to the input at its path.
     fn set(&mut self, n: &SyntaxNode, scope: usize, outer: &Rc) -> L<Vec<Stmt>> {
-        let span = self.span(n);
+        if tokens(n).nth(1).is_some_and(|t| t.text() == "from")
+            && !tokens(n).any(|t| matches!(t.kind(), EQ | PLUS_EQ))
+        {
+            return self.set_from(n, scope, outer);
+        }
         let mut rc = self.rc(n, scope, outer);
-        let mut body = self.opt_body(&mut rc, n)?;
+        let body = self.opt_body(&mut rc, n)?;
         let has_body = node(n, BODY).is_some();
-        let lhs = n.children().find(|c| c.kind() == CHAIN).ok_or(Skip)?;
-        let rhs = terms(n).find(|t| *t != lhs).ok_or(Skip)?;
-        let c = Chain::of(&lhs).ok_or(Skip)?;
-        let add = tokens(n).any(|t| t.kind() == PLUS_EQ);
         let rank = self.rank_tok(n)?;
+        let Some(block) = node(n, BLOCK) else {
+            let lhs = n.children().find(|c| c.kind() == CHAIN).ok_or(Skip)?;
+            let rhs = terms(n).find(|t| *t != lhs).ok_or(Skip)?;
+            let add = tokens(n).any(|t| t.kind() == PLUS_EQ);
+            let span = self.span(n);
+            let st = self.contribution(&mut rc, &lhs, &rhs, add, rank, body, has_body, span)?;
+            return Ok(vec![st]);
+        };
+        let mut out = Vec::new();
+        let mut failed = false;
+        for a in block.children().filter(|c| c.kind() == ASSIGN) {
+            let r = (|| {
+                let lhs = a.children().find(|c| c.kind() == CHAIN).ok_or(Skip)?;
+                let rhs = terms(&a).find(|t| *t != lhs).ok_or(Skip)?;
+                let add = tokens(&a).any(|t| t.kind() == PLUS_EQ);
+                let rank = self.rank_tok(&a)?.or(rank);
+                let span = self.span(&a);
+                let mut rc = rc.clone();
+                self.contribution(&mut rc, &lhs, &rhs, add, rank, body.clone(), has_body, span)
+            })();
+            match r {
+                Ok(st) => out.push(st),
+                Err(Skip) => failed = true,
+            }
+        }
+        if failed { Err(Skip) } else { Ok(out) }
+    }
+
+    /// One contribution of a `set`: `lhs (=|+=) rhs` under the clause
+    /// `body` (`has_body`: one is written).
+    #[allow(clippy::too_many_arguments)]
+    fn contribution(
+        &mut self,
+        rc: &mut Rc,
+        lhs: &SyntaxNode,
+        rhs: &SyntaxNode,
+        add: bool,
+        rank: Option<Rank>,
+        mut body: Vec<Lit>,
+        has_body: bool,
+        span: Span,
+    ) -> L<Stmt> {
+        let c = Chain::of(lhs).ok_or(Skip)?;
         if add && rank.is_some() {
             return self.error(span, "a rank applies to `=`, not `+=`");
         }
-        let (typ, addr, path, block) = match self.set_target(&mut rc, &c, &mut body, span)? {
+        let (typ, addr, path, block) = match self.set_target(rc, &c, &mut body, span)? {
             Target::Cell(typ, addr, path, block) => (typ, addr, path, block),
             Target::Input(k) => {
                 // A stack input: `input(k, t)`, as `--set k=t` gives it.
@@ -3210,10 +3233,10 @@ impl<'u> Lowerer<'u> {
                 if add {
                     return self.error(span, "an input is set with `=`");
                 }
-                // A contribution to the input's cell, normal unless ranked,
-                // as a settings block's (R-38); written to the cell itself,
-                // so that its condition may read another input.
-                let value = self.term(&mut rc, &rhs, Pos::Value, &mut body)?;
+                // A contribution to the input's cell, normal unless ranked
+                // (R-38); written to the cell itself, so that its condition
+                // may read another input.
+                let value = self.term(rc, rhs, Pos::Value, &mut body)?;
                 let head = atom_at(
                     "arg",
                     vec![
@@ -3225,19 +3248,19 @@ impl<'u> Lowerer<'u> {
                     ],
                     span,
                 );
-                self.check_bound(&rc, &body, &atom_terms(&head))?;
-                return Ok(vec![if body.is_empty() && !has_body {
+                self.check_bound(rc, &body, &atom_terms(&head))?;
+                return Ok(if body.is_empty() && !has_body {
                     Stmt::Fact(head)
                 } else {
                     Stmt::Rule(RuleStmt { head, body })
-                }]);
+                });
             }
         };
         if let Some(block) = block
             && !has_body
         {
             let d = Diagnostic::error(
-                self.span(&lhs),
+                self.span(lhs),
                 format!(
                     "`set {}` with no condition is an entry of `{block}`, declared in the same \
                      scope",
@@ -3250,7 +3273,7 @@ impl<'u> Lowerer<'u> {
             self.diags.push(d);
             return Err(Skip);
         }
-        let value = self.term(&mut rc, &rhs, Pos::Value, &mut body)?;
+        let value = self.term(rc, rhs, Pos::Value, &mut body)?;
         let mut args = vec![typ, addr, str_term(&path), value];
         if let Some(rank) = rank {
             args.push(str_term(rank.name()));
@@ -3261,12 +3284,12 @@ impl<'u> Lowerer<'u> {
             record: None,
             span,
         };
-        self.check_bound(&rc, &body, &atom_terms(&head))?;
-        Ok(vec![if body.is_empty() && !has_body {
+        self.check_bound(rc, &body, &atom_terms(&head))?;
+        Ok(if body.is_empty() && !has_body {
             Stmt::Fact(head)
         } else {
             Stmt::Rule(RuleStmt { head, body })
-        }])
+        })
     }
 
     /// What a `set` sets: a cell `(T, A, path)` and, when the block that
@@ -3281,6 +3304,23 @@ impl<'u> Lowerer<'u> {
             && self.find_let(scope, &c.head).is_none()
         {
             return Ok(Target::Input(c.fields().join(".")));
+        }
+        // A used module's input, `m.k` or a field of an object one,
+        // `m.k.f` (R-55): its cell `(input, m, k)`.
+        if !c.ops.is_empty()
+            && c.ops.iter().all(|o| matches!(o, Op::Field(_)))
+            && let Some(at) = self
+                .chain_of(scope)
+                .into_iter()
+                .find(|&s| self.decls.scopes[s].uses.contains_key(&c.head))
+        {
+            let own = at == self.decl_scope(scope);
+            return Ok(Target::Cell(
+                str_term(crate::modules::INPUT),
+                self.scope_term(scope, at, str_term(&c.head)),
+                c.fields()[1..].join("."),
+                own.then(|| format!("use {}", c.head)),
+            ));
         }
         // An instance's input: `n.k`.
         if let [Op::Field(k)] = c.ops.as_slice()
@@ -4572,6 +4612,9 @@ impl<'u> Lowerer<'u> {
                 if let Some(t) = self.env_var_call(rc, n, pos, pre) {
                     return t;
                 }
+                if let Some(t) = self.loader_call(rc, n, pre) {
+                    return t;
+                }
                 let name = self.callee(n);
                 let Some(name) = name else {
                     return self.error(span, "a function is named by a plain name");
@@ -5224,8 +5267,8 @@ impl<'u> Lowerer<'u> {
         };
         let d = Diagnostic::error(span, "settings rows are gone (R-38): a setting is an input")
             .with_help(format!(
-                "declare it, `input k: T = default`, give it per deployment with `settings {{ k = \
-                 v }} where env == \"prod\"`, and read {read}"
+                "declare it, `input k: T = default`, give it per deployment with `set k = v \
+                 where env == \"prod\"`, and read {read}"
             ));
         self.diags.push(d);
         Err(Skip)

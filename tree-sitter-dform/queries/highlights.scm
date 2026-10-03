@@ -108,7 +108,7 @@
 [
   "edition" "provider" "key" "input" "from" "output"
   "extern" "persist" "type" "decl" "mixed" "let" "set"
-  "component" "instance" "use" "as" "resource" "settings"
+  "component" "instance" "use" "as" "resource"
 ] @keyword
 
 ["where" "check"] @keyword.conditional

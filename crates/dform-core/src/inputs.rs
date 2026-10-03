@@ -32,8 +32,8 @@ pub struct Declared {
     pub address: Option<String>,
     /// A `use` block gives it a value.
     pub bound: bool,
-    /// The program gives it a value in some deployments: a settings block
-    /// or a `set .. where` contributes to it (R-38). It is the program's to
+    /// The program gives it a value in some deployments: a `set .. where`
+    /// or a `set from` contributes to it (R-38). It is the program's to
     /// decide, so it is no axis of `dform test`, and a required one is
     /// missing only where none of them holds (`violations`).
     pub given: bool,
@@ -316,7 +316,7 @@ pub fn violations(facts: &BTreeSet<Atom>, declared: &[Declared]) -> Vec<String> 
         });
         if !has {
             out.push(format!(
-                "input {address} is required and has no value: no settings block gives it in \
+                "input {address} is required and has no value: no `set` gives it in \
                  this deployment"
             ));
         }
@@ -669,7 +669,7 @@ fn term_leaves(t: &Term, path: &str, out: &mut Vec<String>) {
 }
 
 /// Every required input the stack gives (no default, no `use` block gives
-/// it, and no settings block or `set` of the program) that nothing gives a
+/// it, and no `set` of the program) that nothing gives a
 /// value: an error at its declaration. An object given whole gives each of
 /// its leaves. One the program gives is missing only in a deployment none
 /// of its contributions holds in (`violations`).

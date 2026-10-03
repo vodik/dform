@@ -14,8 +14,8 @@ tests/syntax/err/if_is_gone.df:16:16: expected `where` or the end of the line, f
   help: the clause word is `where` (R-1): `warn "m" { z } where zone(z)`
 tests/syntax/err/if_is_gone.df:18:3: expected an entry or `}`, found keyword `if`
   help: a block's clause follows the block (R-1): `resource net.vpc "v-${z}" { .. } where zone(z)`
-tests/syntax/err/if_is_gone.df:21:12: expected an entry or `}`, found keyword `if`
-  help: a block's clause follows the block (R-1): `settings { .. } where ..`
+tests/syntax/err/if_is_gone.df:21:7: expected an entry or `}`, found keyword `if`
+  help: a block's clause follows the block (R-1): `set { .. } where ..`
 tests/syntax/err/if_is_gone.df:23:3: expected an entry or `}`, found keyword `if`
   help: a block's clause follows the block (R-1): `instance m i { .. } where { .. }`
 tests/syntax/err/if_is_gone.df:29:3: expected `where` or the end of the line, found keyword `if`

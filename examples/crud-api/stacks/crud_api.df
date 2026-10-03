@@ -1,6 +1,6 @@
 # crud_api.df: a GitOps blue/green rollout with a gated database migration.
 #
-# The release is a fact file (data/). The serving color is whatever the live
+# The release is a module of facts (data/). The serving color is whatever the live
 # Service selects. When the serving Deployment does not run the released
 # digest, the other color is rolled out: first the schema migration Job,
 # then (once the Job has succeeded) the app for the next color, then (once
@@ -13,8 +13,8 @@
 # reads 2026). It plans against the mock (dform.toml: the built-in k8s
 # schema and this project's providers/google), and
 # applies to a cluster with k8s = "providers/k8s" there. In
-# production the release and the approvals come from git:
-#   input release from facts("data/releases.facts")
+# production the release comes from git, as a table:
+#   input release from csv(git("ops.git", "main", "releases.csv"))
 # The live objects are read through the kubernetes provider's inventory
 # (`world.T[e].p`), named by remote id (`shop/crud-api`).
 
@@ -25,14 +25,14 @@ input region: string = "us-east1"
 input replicas: int = 2 check replicas >= 1
 # The database's machine and availability, per environment (below).
 input database { tier: string, availability: string }
-# release("crud_api", "digest", "sha256:9f2c...")
-# release("crud_api", "schema", 42)
-input release from facts("data/releases.facts")
-# approve(t, a): accept the drift of t.a
-input approve from facts("data/approvals.facts")
 
-decl release(app, key, value)
+# release("crud_api", "digest", "sha256:9f2c..."): data/releases.df.
+use data.releases
+# approve(t, a): accept the drift of t.a, data/approvals.df's.
+use data.approvals
+
 decl approve(type, address)
+approve(t, a) where approvals.approve(t, a)
 
 # Sources and versions are dform.toml's.
 provider google
@@ -42,15 +42,15 @@ provider k8s
 # derived from the deployment's master secret, a secret, the same value on
 # every run and nowhere stored.
 
-settings { database.tier = "db-f1-micro", database.availability = "ZONAL" } where env == "dev"
-settings { database.tier = "db-custom-2-7680", database.availability = "REGIONAL" } where env == "prod"
+set { database.tier = "db-f1-micro", database.availability = "ZONAL" } where env == "dev"
+set { database.tier = "db-custom-2-7680", database.availability = "REGIONAL" } where env == "prod"
 
 ########################################
 # The release, and what the world runs now
 ########################################
 
-let digest = d where release("crud_api", "digest", d)
-let schema = v where release("crud_api", "schema", v)
+let digest = d where releases.release("crud_api", "digest", d)
+let schema = v where releases.release("crud_api", "schema", v)
 let released_image = "gcr.io/shop/crud-api@${digest}"
 
 # The live Service's selector names the serving color; nothing serves yet
