@@ -9,7 +9,7 @@ resource net.vpc main {
 rule_name(x) where a = 1, b = 2
 
 resource net.subnet "s-${z}" {
-  cidr = inet_subnet(main.cidr, 8, n)
+  cidr = inet.subnet(main.cidr, 8, n)
   tags = {
     zone: z
   }

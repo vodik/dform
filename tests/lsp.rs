@@ -1628,7 +1628,7 @@ fn completion_offers_input_fields_and_relation_outputs() {
 /// with it.
 #[test]
 fn hover_on_a_typed_let_shows_its_type() {
-    let s = common::Scratch::project("lsp-typed-let");
+    let s = Scratch::project("lsp-typed-let");
     let file = s.write(
         "stacks/app.df",
         "\nprovider fake\nlet block: inet = \"10.0.0.0/16\"\n\
@@ -1642,4 +1642,89 @@ fn hover_on_a_typed_let_shows_its_type() {
     let text = hover["contents"]["value"].as_str().unwrap_or_default();
     assert!(text.contains("let block: inet = \"10.0.0.0/16\""), "{text}");
     c.shutdown();
+}
+
+/// The editors' builtin names (tree-sitter's highlights and the Emacs
+/// mode) are the registry's: the aggregates, the prelude's functions
+/// (std/prelude.df, no internal one) and the core relations a body reads.
+#[test]
+fn the_editors_builtins_are_the_registrys() {
+    use dform_core::functions::{PRELUDE, registry};
+    let mut want: Vec<String> = dform_core::partition::AGGREGATES
+        .iter()
+        .map(|s| s.to_string())
+        .chain(
+            registry()
+                .functions()
+                .filter(|f| f.package == PRELUDE && !f.internal)
+                .map(|f| f.name.clone()),
+        )
+        .chain(
+            [
+                "attr",
+                "want",
+                "arg",
+                "output",
+                "input",
+                "cloud_attr",
+                "cloud_exists",
+            ]
+            .map(String::from),
+        )
+        .collect();
+    want.sort();
+    // The quoted names between `start` and the first `end` after it.
+    let names = |path: &str, start: &str, end: &str| -> Vec<String> {
+        let text = std::fs::read_to_string(repo().join(path)).unwrap();
+        let from = text
+            .find(start)
+            .unwrap_or_else(|| panic!("{start} in {path}"));
+        let block = &text[from + start.len()..];
+        let block = &block[..block.find(end).unwrap()];
+        let mut got: Vec<String> = block
+            .split('"')
+            .skip(1)
+            .step_by(2)
+            .map(String::from)
+            .collect();
+        got.sort();
+        got
+    };
+    assert_eq!(
+        names(
+            "tree-sitter-dform/queries/highlights.scm",
+            "(#any-of? @function.builtin",
+            "))"
+        ),
+        want
+    );
+    assert_eq!(
+        names("editors/emacs/dform-ts-mode.el", "(rx bos (or", "eos)"),
+        want
+    );
+    // And the two editors' keywords are one list: the lexer's but the
+    // literals, and the contextual words.
+    let mut keywords: Vec<String> = dform_core::lexer::KEYWORDS
+        .iter()
+        .map(|(k, _)| k.to_string())
+        .filter(|k| !matches!(k.as_str(), "true" | "false" | "settings"))
+        .chain(["from", "mixed", "as", "check"].map(String::from))
+        .collect();
+    keywords.sort();
+    assert_eq!(
+        names(
+            "tree-sitter-dform/queries/highlights.scm",
+            "; --- keywords",
+            "; --- operators"
+        ),
+        keywords
+    );
+    assert_eq!(
+        names(
+            "editors/emacs/dform-ts-mode.el",
+            ":feature 'keyword",
+            ":language"
+        ),
+        keywords
+    );
 }

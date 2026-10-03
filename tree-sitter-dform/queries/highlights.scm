@@ -62,12 +62,16 @@
 (provider name: (identifier) @module)
 (resource name: (identifier) @label)
 
+; A bare call of a builtin: the aggregates, the prelude's functions
+; (std/prelude.df, the registry), and the core relations a body reads.
+; tests/lsp.rs checks the list against the registry.
 (call
   function: (identifier) @function.builtin
   (#any-of? @function.builtin
-    "count" "sum" "min" "max" "any" "all" "collect_set" "collect_list" "format" "ref"
-    "attr" "want" "arg" "output" "input" "inet"
-    "inet_subnet" "inet_host" "declassify" "cloud_attr" "cloud_exists"))
+    "count" "sum" "min" "max" "any" "all" "collect_set" "collect_list" "int"
+    "string" "inet" "ip" "bytes" "cpu" "duration" "time" "url" "iprange"
+    "format" "len" "ref" "scoped" "cloud_ref" "declassify" "attr" "want"
+    "arg" "output" "input" "cloud_attr" "cloud_exists"))
 
 ((identifier) @variable.builtin
   (#any-of? @variable.builtin "world"))

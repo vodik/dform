@@ -209,10 +209,12 @@ apply-order edge, not its content read now (`docs/grammar.md'
    `((call
       function: (identifier) @font-lock-builtin-face
       (:match ,(rx bos (or "count" "sum" "min" "max" "any" "all"
-                           "collect_set" "collect_list" "format" "ref"
-                           "attr" "want" "arg" "output" "input" "inet"
-                           "inet_subnet" "inet_host" "declassify"
-                           "cloud_attr" "cloud_exists")
+                           "collect_set" "collect_list" "int" "string"
+                           "inet" "ip" "bytes" "cpu" "duration" "time"
+                           "url" "iprange" "format" "len" "ref"
+                           "scoped" "cloud_ref" "declassify" "attr"
+                           "want" "arg" "output" "input" "cloud_attr"
+                           "cloud_exists")
                    eos)
               @font-lock-builtin-face))
      ((identifier) @font-lock-builtin-face
