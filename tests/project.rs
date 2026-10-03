@@ -577,7 +577,7 @@ fn completion_lists_stacks_keys_and_deployments() {
     let r = s.run(&["__complete", "plan"]).success();
     assert_eq!(r.stdout, "app\napp[env=prod]\nnet\n");
     let r = s.run(&["__complete", "stack"]).success();
-    assert_eq!(r.stdout, "handover\nlist\nrekey\nunlock\n");
+    assert_eq!(r.stdout, "list\nrekey\nunlock\n");
 }
 
 #[test]
