@@ -602,7 +602,7 @@ pub const BODIES: &[(&str, Body)] = &[
                     _ => None,
                 })
                 .collect::<Option<Vec<_>>>()?;
-            keyed.sort_by(|(a, _), (b, _)| a.cmp(b));
+            keyed.sort_by_key(|(a, _)| *a);
             Some(Value::List(keyed.into_iter().map(|(_, x)| x.clone()).collect()))
         }
         _ => None,
