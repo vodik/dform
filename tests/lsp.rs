@@ -1728,3 +1728,32 @@ fn the_editors_builtins_are_the_registrys() {
         keywords
     );
 }
+
+/// After a function package's name and a dot, completion offers the
+/// package's functions the word starts (`inet.su` to `inet.subnet`), each
+/// replacing the whole dotted word, in a value too.
+#[test]
+fn completion_offers_a_packages_functions() {
+    let s = Scratch::project("lsp-package-fns");
+    let file = s.write("stacks/app.df", "\nprovider fake\n");
+    let root = std::fs::canonicalize(&s.dir).unwrap();
+    let file = std::fs::canonicalize(&file).unwrap();
+    let mut c = Client::start(&root, json!({}));
+    c.open(&file);
+    let typed = "\nprovider fake\nlet n = inet.su\nresource net.vpc v {\n  cidr = str.tr\n}\n";
+    c.change(&file, 2, typed);
+    let items = c.at("textDocument/completion", &file, (2, 15));
+    assert_eq!(labels(&items), ["inet.subnet"], "{items}");
+    let edit = &items[0]["textEdit"];
+    assert_eq!(edit["newText"], "inet.subnet", "{items}");
+    assert_eq!(
+        edit["range"],
+        json!({ "start": { "line": 2, "character": 8 }, "end": { "line": 2, "character": 15 } })
+    );
+    let items = c.at("textDocument/completion", &file, (4, 15));
+    let got = labels(&items);
+    assert!(
+        !got.is_empty() && got.iter().all(|l| l.starts_with("str.tr")),
+        "{got:?}"
+    );
+}

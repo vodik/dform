@@ -3,7 +3,8 @@
 //! provider's schema facts; resource types after `resource`; a module
 //! instance's inputs and, after `copy.`, its outputs.
 //! A type's or path's documentation is its `type_doc`. Elsewhere a word
-//! completes to the builtins and keywords it starts (`engine::references`).
+//! completes to the builtins and keywords it starts (`engine::references`),
+//! a package's name and a dot (`inet.su`) to its functions.
 
 use crate::nav;
 use dform_core::ast::{Atom, Term};
@@ -11,7 +12,7 @@ use dform_core::engine::{self, RefKind};
 use dform_core::schema::Schema;
 use dform_core::syntax::{SyntaxKind, SyntaxNode};
 use dform_core::value::Value;
-use lsp_types::{CompletionItem, CompletionItemKind, Documentation};
+use lsp_types::{CompletionItem, CompletionItemKind, CompletionTextEdit, Documentation, TextEdit};
 use std::collections::BTreeMap;
 
 /// One type's attribute as the schema states it.
@@ -200,6 +201,13 @@ pub fn complete(
             .collect();
     }
 
+    // `inet.su`: a function package's functions, wherever a call goes.
+    if let [package, _] = segs.as_slice()
+        && dform_core::functions::registry().is_package(package)
+    {
+        return builtins(&word, Some(crate::text::range(text, at - word.len(), at)));
+    }
+
     let Some(tok) = nav::token_before(root, at) else {
         return Vec::new();
     };
@@ -299,16 +307,31 @@ pub fn complete(
     if word.is_empty() || word.contains('.') {
         return Vec::new();
     }
+    builtins(&word, None)
+}
+
+/// The builtins and keywords `word` starts; with `replaced`, a dotted
+/// word's range, each replaces the whole word (a client's word ends at
+/// the dot).
+fn builtins(word: &str, replaced: Option<lsp_types::Range>) -> Vec<CompletionItem> {
     engine::references()
         .iter()
-        .filter(|r| r.name.starts_with(word.as_str()))
+        .filter(|r| r.name.starts_with(word))
         .map(|r| {
             let kind = match r.kind {
                 RefKind::Keyword => CompletionItemKind::KEYWORD,
                 _ => CompletionItemKind::FUNCTION,
             };
             let doc = format!("{}\n\n{}", r.summary, r.example);
-            item(r.name.to_string(), kind, r.signature.to_string(), Some(doc))
+            let mut i = item(r.name.to_string(), kind, r.signature.to_string(), Some(doc));
+            if let Some(range) = replaced {
+                i.filter_text = Some(r.name.to_string());
+                i.text_edit = Some(CompletionTextEdit::Edit(TextEdit {
+                    range,
+                    new_text: r.name.to_string(),
+                }));
+            }
+            i
         })
         .collect()
 }
