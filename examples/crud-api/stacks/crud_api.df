@@ -315,7 +315,7 @@ deny "container requests more memory than its limit" { workload: w, container: c
 
 deny "image not pinned by digest" { workload: w, image: c.image } where {
   container(w, c)
-  image == oci.parse(c.image)
+  image = oci.parse(c.image)
   not has image.digest
 }
 
