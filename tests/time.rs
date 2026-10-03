@@ -3,15 +3,7 @@
 //! compile-time errors are tests/syntax/err/durations.df's.
 
 mod common;
-use common::Scratch;
-
-fn query(s: &Scratch, goal: &str) -> common::Run {
-    s.run(&common::on(
-        "p.df",
-        &["--world", "w.json"],
-        &["query", goal],
-    ))
-}
+use common::{Scratch, query};
 
 fn one(s: &Scratch, goal: &str) -> String {
     let r = query(s, goal).success();

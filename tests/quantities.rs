@@ -4,15 +4,7 @@
 //! form. The compile-time errors are tests/syntax/err/quantities.df's.
 
 mod common;
-use common::Scratch;
-
-fn query(s: &Scratch, goal: &str) -> common::Run {
-    s.run(&common::on(
-        "p.df",
-        &["--world", "w.json"],
-        &["query", goal],
-    ))
-}
+use common::{Scratch, query};
 
 fn program(body: &str) -> String {
     format!("\n\n{body}\nprovider fake\n")

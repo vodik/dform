@@ -447,6 +447,21 @@ pub fn identities(s: &Scratch) -> Vec<String> {
         .collect()
 }
 
+/// `dform dev --world w.json query GOAL p.df` in `s` ([`mock`]).
+pub fn query(s: &Scratch, goal: &str) -> Run {
+    mock(s, &["query", goal])
+}
+
+/// The controller's log lines without their `HH:MM:SS ` stamps and its
+/// first line (`controller ...`).
+pub fn controller_log(stdout: &str) -> Vec<String> {
+    stdout
+        .lines()
+        .map(|l| l[9..].to_string())
+        .filter(|l| !l.starts_with("controller "))
+        .collect()
+}
+
 /// The repository root, for programs and fixtures the tests read.
 pub fn repo() -> &'static Path {
     Path::new(env!("CARGO_MANIFEST_DIR"))

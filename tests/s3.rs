@@ -12,7 +12,7 @@
 //!   eval "$(crates/dform-s3/minio.sh start)" && cargo test --test s3
 
 mod common;
-use common::{Run, Scratch};
+use common::{Run, Scratch, controller_log};
 use dform_core::store::{LOCK, S3Spec, STATE, Store};
 use dform_s3::S3Store;
 use std::path::Path;
@@ -487,16 +487,6 @@ fn the_server_refuses_a_conditional_write_over_another_version() {
         let o = s.get(STATE).unwrap().unwrap();
         assert_eq!((o.bytes, Some(o.etag)), (b"two".to_vec(), e2), "{}", t.what);
     }
-}
-
-/// The controller's lines without their `HH:MM:SS ` stamps and its first
-/// line.
-fn controller_log(stdout: &str) -> Vec<String> {
-    stdout
-        .lines()
-        .map(|l| l[9..].to_string())
-        .filter(|l| !l.starts_with("controller "))
-        .collect()
 }
 
 /// `controller run` keeps its memo in the bucket beside the state.

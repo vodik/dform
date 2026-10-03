@@ -5,7 +5,7 @@
 //! the fake S3 server), and the controller runs the workload from there.
 
 mod common;
-use common::{Run, Scratch};
+use common::{Run, Scratch, controller_log};
 use dform_core::store::{S3Spec, Store};
 use dform_s3::S3Store;
 
@@ -18,20 +18,11 @@ fn demo(name: &str) -> Scratch {
     s
 }
 
-/// The controller's log without its `HH:MM:SS ` stamps and its first line.
-fn log(stdout: &str) -> Vec<String> {
-    stdout
-        .lines()
-        .map(|l| l[9..].to_string())
-        .filter(|l| !l.starts_with("controller "))
-        .collect()
-}
-
 fn controller(s: &Scratch) -> Vec<String> {
     let r = s
         .run(&["controller", "run", "--once", "workload"])
         .success();
-    log(&r.stdout)
+    controller_log(&r.stdout)
 }
 
 /// Where the handed-over workload's state goes: a fresh prefix of a
@@ -119,7 +110,7 @@ impl Bucket {
         let r = self
             .run(s, &["controller", "run", "--once", "workload"])
             .success();
-        log(&r.stdout)
+        controller_log(&r.stdout)
     }
 }
 
