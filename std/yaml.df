@@ -3,7 +3,8 @@
 # read and write the text of one already in hand.
 package yaml
 
-#| The value the text decodes to; no value for text that is not YAML, or whose numbers are not whole.
+#| The value the text decodes to, read as a document is (a null member absent, a whole float an int);
+#| no value for text that is not YAML, or that has a fraction, a null elsewhere or a tag.
 #| example: let cfg = yaml.decode(body)
 fn decode(text: string) -> any?
 

@@ -270,14 +270,28 @@ impl Registry {
     }
 }
 
+/// How many parentheses and braces of `sig` are open.
+fn open(sig: &str) -> i32 {
+    sig.chars()
+        .map(|c| match c {
+            '(' | '{' => 1,
+            ')' | '}' => -1,
+            _ => 0,
+        })
+        .sum()
+}
+
 /// One signature file: `package NAME`, then `fn` lines, each with the
 /// `#|` lines above it as its documentation (bare lines its summary,
-/// `example:` its example). `#` comments and blank lines are ignored.
+/// `example:` its example). `#` comments and blank lines are ignored. A
+/// signature too long for one line continues on the next lines until its
+/// parentheses and braces close (its parameters wrapped, one a line).
 pub fn parse(file: &str, text: &str) -> Result<Vec<Function>, String> {
     let mut package: Option<String> = None;
     let mut doc: Vec<&str> = Vec::new();
     let mut out = Vec::new();
-    for (i, raw) in text.lines().enumerate() {
+    let mut lines = text.lines().enumerate();
+    while let Some((i, raw)) = lines.next() {
         let line = i + 1;
         let err = |m: String| format!("{file}:{line}: {m}");
         let l = raw.trim();
@@ -311,7 +325,18 @@ pub fn parse(file: &str, text: &str) -> Result<Vec<Function>, String> {
         let Some(package) = &package else {
             return Err(err("a function before `package`".into()));
         };
-        let mut f = function(sig.trim()).map_err(err)?;
+        let mut sig = sig.trim().to_string();
+        while open(&sig) > 0
+            && let Some((_, more)) = lines.next()
+        {
+            if !sig.ends_with(['(', '{']) {
+                sig.push(' ');
+            }
+            sig.push_str(more.trim());
+        }
+        // A wrapped list's last parameter keeps its comma.
+        let sig = sig.replace(", )", ")");
+        let mut f = function(&sig).map_err(err)?;
         f.internal = internal;
         f.name = if package == PRELUDE {
             f.name
@@ -1693,6 +1718,26 @@ mod tests {
                 f.line
             );
         }
+    }
+
+    /// A signature past the width wraps its parameters, one a line, the
+    /// last with its comma; it reads as the one-line form does.
+    #[test]
+    fn a_wrapped_signature_reads_as_one_line() {
+        let wrapped = parse(
+            "t.df",
+            "package t\n#| A thing.\nfn f(\n  a: string,\n  b?: int,\n) -> { x: string, y: int? }?\nfn g() -> int\n",
+        )
+        .unwrap();
+        let line = parse(
+            "t.df",
+            "package t\n#| A thing.\nfn f(a: string, b?: int) -> { x: string, y: int? }?\nfn g() -> int\n",
+        )
+        .unwrap();
+        assert_eq!(wrapped[0].signature, line[0].signature);
+        assert_eq!(wrapped[0].params, line[0].params);
+        assert_eq!((wrapped[0].line, wrapped[1].line), (3, 7));
+        assert_eq!(registry().get("oci.parse").unwrap().params.len(), 1);
     }
 
     /// The reverse: every body is declared somewhere (no orphan).

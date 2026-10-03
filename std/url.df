@@ -5,7 +5,9 @@ package url
 
 #| The url's scheme, host, port (absent: the scheme's default), path, query and fragment, broken out; no value for text that is not a url.
 #| example: let host = url.parse(cfg.public_baseurl).host
-fn parse(text: string) -> { scheme: string, host: string, port: int?, path: string, query: object, fragment: string? }?
+fn parse(
+  text: string,
+) -> { scheme: string, host: string, port: int?, path: string, query: object, fragment: string? }?
 
 #| `base` with `segment` appended as a path component, one `/` between them whatever either side has.
 #| example: let endpoint = url.join(base_url, "v1/status")

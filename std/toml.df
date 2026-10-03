@@ -3,7 +3,8 @@
 # read and write the text of one already in hand.
 package toml
 
-#| The value the text decodes to; no value for text that is not TOML, or whose numbers are not whole.
+#| The value the text decodes to, read as a document is (a null member absent, a whole float an int);
+#| no value for text that is not TOML, or that has a fraction, a null elsewhere or a local datetime.
 #| example: let cfg = toml.decode(body)
 fn decode(text: string) -> any?
 

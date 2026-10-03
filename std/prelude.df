@@ -104,7 +104,13 @@ internal fn mod(a: int, b: int) -> int? forwards
 
 #| The null of an attribute path, its class and type from the schema row.
 #| example: __null(T, A, P, "unknown", "string")
-internal fn __null(type: string, name: string, path: string, class: string, ty: string) -> any forwards nulls
+internal fn __null(
+  type: string,
+  name: string,
+  path: string,
+  class: string,
+  ty: string,
+) -> any forwards nulls
 
 #| The label a null of an attribute path carries.
 #| example: __label(T, A, P)
