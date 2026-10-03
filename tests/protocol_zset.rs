@@ -4,6 +4,7 @@
 //! in, linked in across prost.
 
 mod common;
+use common::repo;
 
 use dform::ast::{Atom, Program, Term};
 use dform::plugin::{Config, Launch, Providers};
@@ -12,10 +13,6 @@ use dform::value::Value;
 use dform::zset::Lifecycle;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
-
-fn root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-}
 
 fn input(k: &str, v: &str) -> Atom {
     Atom {
@@ -103,14 +100,14 @@ fn scratch(name: &str) -> PathBuf {
 
 fn fixture(dir: &Path, edit: impl Fn(&mut serde_json::Value)) -> (PathBuf, PathBuf) {
     let mut w: serde_json::Value = serde_json::from_str(
-        &std::fs::read_to_string(root().join("tests/fixtures/world/dform.json")).unwrap(),
+        &std::fs::read_to_string(repo().join("tests/fixtures/world/dform.json")).unwrap(),
     )
     .unwrap();
     edit(&mut w);
     let world = dir.join("dform.json");
     std::fs::write(&world, serde_json::to_string(&w).unwrap()).unwrap();
     let state = dir.join("dform.state.json");
-    std::fs::copy(root().join("tests/fixtures/world/dform.state.json"), &state).unwrap();
+    std::fs::copy(repo().join("tests/fixtures/world/dform.state.json"), &state).unwrap();
     (world, state)
 }
 
@@ -127,7 +124,7 @@ fn fixture_prod_is_eleven_updates() {
     let dir = scratch("prod");
     let (world, state) = fixture(&dir, |_| {});
     let program =
-        dform::loader::load_program(&[root().join("examples/demo/stacks/dform.df")]).unwrap();
+        dform::loader::load_program(&[repo().join("examples/demo/stacks/dform.df")]).unwrap();
     let p = plan(&program, &[input("env", "prod")], &world, &state);
     // Six of them change a force_new cidr: replacements.
     assert_eq!(count(&p, |k| matches!(k, ActionKind::Update)), 5);
@@ -163,7 +160,7 @@ fn a_fresh_null_against_a_world_constant_is_drift() {
         }
     });
     let program =
-        dform::loader::load_program(&[root().join("examples/demo/stacks/dform.df")]).unwrap();
+        dform::loader::load_program(&[repo().join("examples/demo/stacks/dform.df")]).unwrap();
     let p = plan(&program, &[], &world, &state);
     assert_eq!(count(&p, |k| matches!(k, ActionKind::Drift)), 10, "{p:?}");
     assert_eq!(count(&p, |k| matches!(k, ActionKind::Update)), 0, "{p:?}");

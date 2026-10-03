@@ -2,13 +2,10 @@
 //! facts instead of repeating it (`engine::Resumable`): its result must be
 //! the fresh evaluation's with those facts given.
 
+mod common;
+use common::repo;
 use dform::ast::{Atom, Term};
 use dform::value::Value;
-use std::path::PathBuf;
-
-fn repo() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-}
 
 fn atom(pred: &str, args: Vec<Term>) -> Atom {
     Atom {
