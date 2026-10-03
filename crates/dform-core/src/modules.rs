@@ -1621,3 +1621,25 @@ pub fn set_origin(stmts: &mut [Stmt], origin: u32) {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A name that is already an address (`"m/i/n"`, another copy's
+    /// resource) is left alone; a local one is scoped (After R-42).
+    #[test]
+    fn scoped_term_leaves_an_already_scoped_address_alone() {
+        for vars in [true, false] {
+            let sc = Sc { name: "m", vars };
+            assert_eq!(scoped_term(sc, str_term("m/i/n")), str_term("m/i/n"));
+            assert_eq!(
+                scoped_term(sc, str_term("n")),
+                Term::Func {
+                    name: "scoped".to_string(),
+                    args: vec![str_term("m"), str_term("n")],
+                }
+            );
+        }
+    }
+}
