@@ -379,6 +379,7 @@ impl Printer<'_> {
             rules,
             w: Walk::default(),
             files: BTreeMap::new(),
+            list_keys: Default::default(),
         };
         s.fact(root, "", "", false, focus);
         s.w.out
@@ -391,6 +392,8 @@ struct Surface<'a, 'b> {
     w: Walk,
     /// Each source file a printed rule is in, parsed once.
     files: BTreeMap<String, SyntaxNode>,
+    /// The keyed lists' keys, `type_list_key(T, L, Keys)`, read once.
+    list_keys: std::cell::OnceCell<BTreeMap<(String, String), Vec<String>>>,
 }
 
 impl Surface<'_, '_> {
@@ -518,6 +521,9 @@ impl Surface<'_, '_> {
                 format!("{} = {}", cell(t, a, p), r.surface(v))
             }
             ("arg", [Value::Str(t), Value::Str(a), Value::Str(p), v, rank]) => {
+                if let Some((p, v)) = self.element(t, p, v) {
+                    return format!("{} = {}{}", cell(t, a, &p), r.surface(v), rank_text(rank));
+                }
                 format!("{} = {}{}", cell(t, a, p), r.surface(v), rank_text(rank))
             }
             ("deny" | "warn", [msg @ Value::Str(_), ctx @ ..]) => {
@@ -536,11 +542,58 @@ impl Surface<'_, '_> {
     /// rank (the cell is the aggregate's, printed above).
     fn contribution_text(&self, f: &Fact) -> String {
         match f.args.as_slice() {
+            [Value::Str(t), _, Value::Str(p), v, rank] if f.pred == "arg" => {
+                if let Some((p, v)) = self.element(t, p, v) {
+                    return format!("{p} = {}{}", self.p.redact.surface(v), rank_text(rank));
+                }
+                format!("{}{}", self.p.redact.surface(v), rank_text(rank))
+            }
             [_, _, _, v, rank] if f.pred == "arg" => {
                 format!("{}{}", self.p.redact.surface(v), rank_text(rank))
             }
             _ => self.fact_text(f),
         }
+    }
+
+    /// An element write (`transform::ELEM`) by the element's key, as the
+    /// plan names it: `spec.template.spec.containers[name=api]`, and what
+    /// it writes there.
+    fn element<'v>(&self, t: &str, p: &str, v: &'v Value) -> Option<(String, &'v Value)> {
+        let list = p.strip_suffix(crate::transform::ELEM)?;
+        let Value::List(kv) = v else { return None };
+        let [k, content] = kv.as_slice() else {
+            return None;
+        };
+        let keys = self.list_keys.get_or_init(|| {
+            let mut out = BTreeMap::new();
+            for f in self.p.circuit.facts() {
+                if let ("type_list_key", [Value::Str(t), Value::Str(l), ks]) =
+                    (f.pred.as_str(), f.args.as_slice())
+                {
+                    let ks = match ks {
+                        Value::List(ks) => ks
+                            .iter()
+                            .filter_map(|k| k.as_str())
+                            .map(String::from)
+                            .collect(),
+                        Value::Str(k) => vec![k.clone()],
+                        _ => continue,
+                    };
+                    out.insert((t.clone(), l.clone()), ks);
+                }
+            }
+            out
+        });
+        let label = match (keys.get(&(t.to_string(), list.to_string())), k) {
+            (Some(ks), Value::Obj(m)) => ks
+                .iter()
+                .map(|f| Some(format!("{f}={}", key_text(m.get(f)?))))
+                .collect::<Option<Vec<_>>>()?
+                .join(","),
+            (Some(ks), k) if ks.len() == 1 => format!("{}={}", ks[0], key_text(k)),
+            _ => key_text(k),
+        };
+        Some((format!("{list}[{label}]"), content))
     }
 
     /// A fact the firing found absent, spelled as the program would; its
@@ -836,6 +889,7 @@ impl Printer<'_> {
             rules,
             w: Walk::default(),
             files: BTreeMap::new(),
+            list_keys: Default::default(),
         };
         let mut c = Compress {
             out: Vec::new(),
@@ -895,6 +949,7 @@ impl Printer<'_> {
             rules,
             w: Walk::default(),
             files: BTreeMap::new(),
+            list_keys: Default::default(),
         };
         let c = self.circuit;
         let mut out = Vec::new();
@@ -1131,6 +1186,14 @@ fn cell(t: &str, a: &str, p: &str) -> String {
             name: a.to_string(),
         }
         .attr(p),
+    }
+}
+
+/// A key's value in an element's name: a string bare (`name=api`).
+fn key_text(v: &Value) -> String {
+    match v {
+        Value::Str(s) => s.clone(),
+        v => crate::partition::fmt_value(v),
     }
 }
 

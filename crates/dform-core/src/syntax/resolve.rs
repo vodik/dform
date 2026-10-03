@@ -3217,6 +3217,48 @@ impl<'u> Lowerer<'u> {
         }
         let (typ, addr, path, block) = match self.set_target(rc, &c, &mut body, span)? {
             Target::Cell(typ, addr, path, block) => (typ, addr, path, block),
+            Target::Element(typ, addr, list, key, rest, block) => {
+                if add {
+                    return self.error(
+                        span,
+                        "`+=` adds to a list or a set; an element of a keyed list is written \
+                         with `=`",
+                    );
+                }
+                if let Some(block) = block
+                    && !has_body
+                {
+                    let d = Diagnostic::error(
+                        span,
+                        format!(
+                            "`set {}` with no condition is an entry of `{block}`, declared in \
+                             the same scope",
+                            lhs.text()
+                        ),
+                    )
+                    .with_help(format!("write the element in the block's `{list}`"));
+                    self.diags.push(d);
+                    return Err(Skip);
+                }
+                let value = self.term(&mut rc, &rhs, Pos::Value, &mut body)?;
+                let head = atom_at(
+                    "arg",
+                    vec![
+                        typ,
+                        addr,
+                        str_term(&list),
+                        element_write(key, &rest, value),
+                        str_term(rank.unwrap_or(Rank::Normal).name()),
+                    ],
+                    span,
+                );
+                self.check_bound(&rc, &body, &atom_terms(&head))?;
+                return Ok(vec![if body.is_empty() && !has_body {
+                    Stmt::Fact(head)
+                } else {
+                    Stmt::Rule(RuleStmt { head, body })
+                }]);
+            }
             Target::Input(k) => {
                 // A stack input: `input(k, t)`, as `--set k=t` gives it.
                 if !has_body {
@@ -3372,19 +3414,57 @@ impl<'u> Lowerer<'u> {
                 );
             }
         };
+        // `containers[k]`: the element of a keyed list whose key is `k`, any
+        // term but an integer, which stays the position (R-35, R-69).
+        let keyed = path
+            .iter()
+            .position(|s| matches!(s, Seg::I(t) if !matches!(t, Term::Val(Value::Int(_)))));
+        if let Some(i) = keyed
+            && !matches!(&typ, Term::Val(Value::Str(t)) if t == "settings")
+        {
+            let Seg::I(key) = path[i].clone() else {
+                unreachable!("found above")
+            };
+            let Some(list) = path_string(&path[..i]).filter(|l| !l.is_empty()) else {
+                return self.error(span, "a contribution's path is constant");
+            };
+            let mut rest = Vec::new();
+            for s in &path[i + 1..] {
+                match s {
+                    Seg::F(f) => rest.push(f.clone()),
+                    Seg::I(_) => {
+                        return self.error(
+                            span,
+                            format!(
+                                "one index per written path: below the element of `{list}` \
+                                 the path is fields"
+                            ),
+                        );
+                    }
+                }
+            }
+            let block = self.owning_block(scope, &typ, &addr);
+            return Ok(Target::Element(typ, addr, list, key, rest, block));
+        }
         let Some(path) = path_string(&path) else {
             return self.error(span, "a contribution's path is constant");
         };
+        let block = self.owning_block(scope, &typ, &addr);
+        Ok(Target::Cell(typ, addr, path, block))
+    }
+
+    /// The block that owns the cells of `(T, A)` when it is declared in
+    /// `scope`: `resource T A`.
+    fn owning_block(&self, scope: usize, typ: &Term, addr: &Term) -> Option<String> {
         let s = &self.decls.scopes[self.decl_scope(scope)];
-        let block = match (&typ, &addr) {
+        match (typ, addr) {
             (Term::Val(Value::Str(t)), Term::Val(Value::Str(a))) => s
                 .resources
                 .get(a)
                 .is_some_and(|ts| ts.contains(t))
                 .then(|| format!("resource {t} {a}")),
             _ => None,
-        };
-        Ok(Target::Cell(typ, addr, path, block))
+        }
     }
 
     /// A core relation written where a surface form says it (H-15): an
@@ -5932,6 +6012,9 @@ enum Target {
     /// `(T, A, path)`, and the block that owns the cell when it is
     /// declared in the same scope.
     Cell(Term, Term, String, Option<String>),
+    /// One element of the keyed list at `(T, A, path)` (R-35, R-69): the
+    /// key, the fields below the element, and the owning block.
+    Element(Term, Term, String, Term, Vec<String>, Option<String>),
     /// A stack input.
     Input(String),
 }
@@ -6036,6 +6119,40 @@ fn atom_terms(a: &Atom) -> Vec<&Term> {
         .iter()
         .chain(a.record.iter().flat_map(|r| r.values()))
         .collect()
+}
+
+/// The leading fields of a path as a dotted key, and the rest.
+fn split_fields(path: &[Seg]) -> (String, Vec<Seg>) {
+    let n = path.iter().take_while(|s| matches!(s, Seg::F(_))).count();
+    let key = path[..n]
+        .iter()
+        .map(|s| match s {
+            Seg::F(f) => f.as_str(),
+            Seg::I(_) => "",
+        })
+        .collect::<Vec<_>>()
+        .join(".");
+    (key, path[n..].to_vec())
+}
+
+/// What `set L[k].p.q = v` writes at the list `L`, before the transform
+/// lowers it to the core's element write (`transform::ELEM`): an object
+/// with the key under `transform::ELEM_KEY` beside the element's content,
+/// `{"[key]": k, p: {q: v}}`, so that `types::read` reads a quantity in it
+/// at its schema path (`L.p.q`). Content that is not an object literal is
+/// held whole under `transform::ELEM_VALUE`.
+fn element_write(key: Term, rest: &[String], value: Term) -> Term {
+    let content = rest
+        .iter()
+        .rev()
+        .fold(value, |v, k| Term::Obj(BTreeMap::from([(k.clone(), v)])));
+    let mut m = match content {
+        Term::Obj(m) => m,
+        Term::Val(Value::Obj(m)) => m.into_iter().map(|(k, v)| (k, Term::Val(v))).collect(),
+        v => BTreeMap::from([(crate::transform::ELEM_VALUE.to_string(), v)]),
+    };
+    m.insert(crate::transform::ELEM_KEY.to_string(), key);
+    Term::Obj(m)
 }
 
 /// A constant path as today's string: `a.b[0].c`.

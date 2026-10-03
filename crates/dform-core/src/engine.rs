@@ -166,8 +166,9 @@ fn given_leaf(a: &Atom, externs: &BTreeSet<crate::ast::Extern>, tick: Option<usi
 }
 
 /// Predicates the attribute aggregate derives; no rule may.
-const AGGREGATE_OUTPUTS: [&str; 4] = [
+const AGGREGATE_OUTPUTS: [&str; 5] = [
     "attr",
+    transform::ATTR_BASE,
     "attr_conflict",
     "attr_stuck",
     crate::refine::DEFERRED,
@@ -411,7 +412,7 @@ fn start(
         .iter()
         .filter(|r| partition::is_aggregate_head(&r.head))
         .map(|r| r.head.pred.clone())
-        .chain(["attr".to_string()])
+        .chain(["attr".to_string(), transform::ATTR_BASE.to_string()])
         .collect();
     let attrs = AttrAggregate::new(&strata);
     let stuck_at = strata.get(&Node::plain(partition::STUCK)).copied();
@@ -1014,6 +1015,13 @@ type GroupKey = (String, Value, String);
 /// after path normalization.
 type Contribution = (TupleId, Rank, Value);
 
+/// An element write to a group (R-35): the `arg/5` tuple, its rank, the
+/// keyed list's path, the key and the content.
+type ElemContribution = (TupleId, Rank, String, Value, Value);
+
+/// An element write's list path and key.
+type ElemOf = Option<(String, Value)>;
+
 /// The attribute aggregate of E §2.5 inside the evaluator: `attr/4`,
 /// `attr_conflict/5` and `attr_stuck/4` from the `arg/5` contributions, one
 /// ranked lattice cell per group, collapsed with F's shadow-aware rule
@@ -1036,8 +1044,18 @@ struct AttrAggregate {
     /// `attr_refine` fact but those on a `sensitive` path (the provider's).
     refinements: Option<Vec<(TupleId, crate::refine::Stated)>>,
     pending: HashMap<GroupKey, Vec<Contribution>>,
+    /// The element writes per group, beside its other contributions.
+    elems: HashMap<GroupKey, Vec<ElemContribution>>,
     /// The pending groups by the stratum they are complete at.
     waiting: BTreeMap<usize, BTreeSet<GroupKey>>,
+    /// The groups whose base (`transform::ATTR_BASE`) a rule reads, by the
+    /// stratum the base is complete at: every contribution but the element
+    /// writes.
+    waiting_base: BTreeMap<usize, BTreeSet<GroupKey>>,
+    base_nodes: Vec<Node>,
+    emitted_base: BTreeSet<GroupKey>,
+    /// The lattices declared below a type's top attributes, by path.
+    nested: HashMap<String, std::rc::Rc<BTreeMap<String, Lattice>>>,
     emitted: BTreeSet<GroupKey>,
     /// Groups that gained a contribution after they were collapsed.
     late: BTreeSet<GroupKey>,
@@ -1050,6 +1068,11 @@ impl AttrAggregate {
             .filter(|(n, _)| n.pred == "arg")
             .map(|(n, s)| (n.clone(), *s))
             .collect();
+        let base_nodes = strata
+            .keys()
+            .filter(|n| n.pred == transform::ATTR_BASE)
+            .cloned()
+            .collect();
         AttrAggregate {
             arg_nodes,
             ready: HashMap::new(),
@@ -1057,7 +1080,12 @@ impl AttrAggregate {
             lattices: None,
             refinements: None,
             pending: HashMap::new(),
+            elems: HashMap::new(),
             waiting: BTreeMap::new(),
+            waiting_base: BTreeMap::new(),
+            base_nodes,
+            emitted_base: BTreeSet::new(),
+            nested: HashMap::new(),
             emitted: BTreeSet::new(),
             late: BTreeSet::new(),
         }
@@ -1101,11 +1129,11 @@ impl AttrAggregate {
         let mut new: Vec<TupleId> = store.ids(&rel, w).to_vec();
         new.sort_by(|a, b| store.get(*a).cmp(store.get(*b)));
         for t in new {
-            let (key, rank, value) = contribution(store.get(t))?;
-            if self.emitted.contains(&key) {
+            let (key, rank, value, elem) = contribution(store.get(t))?;
+            if self.emitted.contains(&key) || (elem.is_none() && self.emitted_base.contains(&key)) {
                 self.late.insert(key);
             } else {
-                if !self.pending.contains_key(&key) {
+                if !self.pending.contains_key(&key) && !self.elems.contains_key(&key) {
                     // An input or `let` cell is partitioned by its scope too
                     // (`partition::type_path_node`): a module's input `k` of
                     // the copy `m` is the node `m::k`.
@@ -1117,13 +1145,50 @@ impl AttrAggregate {
                         }
                         _ => key.2.clone(),
                     };
-                    let at = self.ready_at(&key.0, &path);
-                    self.waiting.entry(at).or_default().insert(key.clone());
+                    let base = self.ready_at(&key.0, &path);
+                    let elems = self.ready_at(&key.0, &format!("{path}{}", transform::ELEM));
+                    self.waiting
+                        .entry(base.max(elems))
+                        .or_default()
+                        .insert(key.clone());
+                    let read = Node {
+                        pred: transform::ATTR_BASE.into(),
+                        typ: Some(key.0.clone()),
+                        path: Some(path),
+                    };
+                    if self.base_nodes.iter().any(|n| n.unifies(&read)) {
+                        self.waiting_base
+                            .entry(base)
+                            .or_default()
+                            .insert(key.clone());
+                    }
                 }
-                self.pending.entry(key).or_default().push((t, rank, value));
+                match elem {
+                    Some((list, k)) => {
+                        let v = (t, rank, list, k, value);
+                        self.elems.entry(key).or_default().push(v);
+                    }
+                    None => self.pending.entry(key).or_default().push((t, rank, value)),
+                }
             }
         }
         Ok(())
+    }
+
+    /// The lattices declared below `typ`'s top attributes, by path.
+    fn nested(&mut self, typ: &str) -> std::rc::Rc<BTreeMap<String, Lattice>> {
+        let lattices = self.lattices.as_ref();
+        let n = self.nested.entry(typ.to_string()).or_insert_with(|| {
+            let m = lattices
+                .into_iter()
+                .flat_map(|l| l.range((typ.to_string(), String::new())..))
+                .take_while(|((t, _), _)| t == typ)
+                .filter(|((_, p), _)| p.contains('.'))
+                .map(|((_, p), l)| (p.clone(), l.clone()))
+                .collect();
+            std::rc::Rc::new(m)
+        });
+        n.clone()
     }
 
     /// Collapse every complete group. Rule 3 per key: a group that a stuck
@@ -1146,22 +1211,38 @@ impl AttrAggregate {
         }
         self.group_new(&prov.store)?;
         // The groups complete at this stratum, in group order.
-        let later = match stratum.checked_add(1) {
-            Some(next) => self.waiting.split_off(&next),
-            None => BTreeMap::new(),
+        let next = stratum.checked_add(1);
+        let take = |w: &mut BTreeMap<usize, BTreeSet<GroupKey>>| -> BTreeSet<GroupKey> {
+            let later = next.map(|n| w.split_off(&n)).unwrap_or_default();
+            std::mem::replace(w, later)
+                .into_values()
+                .flatten()
+                .collect()
         };
-        let keys: BTreeSet<GroupKey> = std::mem::replace(&mut self.waiting, later)
-            .into_values()
-            .flatten()
-            .collect();
+        let bases = take(&mut self.waiting_base);
+        let keys = take(&mut self.waiting);
         let mut out = Vec::new();
         let mut stuck_groups = Vec::new();
-        for key in keys {
-            let mut contribs = self.pending.remove(&key).unwrap_or_default();
+        // Bases first: a group's base is complete no later than the group.
+        let groups = bases
+            .into_iter()
+            .map(|k| (k, true))
+            .chain(keys.into_iter().map(|k| (k, false)));
+        for (key, base) in groups {
+            let mut contribs = match base {
+                true => self.pending.get(&key).cloned().unwrap_or_default(),
+                false => self.pending.remove(&key).unwrap_or_default(),
+            };
             contribs.sort_by(|a, b| prov.store.get(a.0).cmp(prov.store.get(b.0)));
+            let mut elems = match base {
+                true => vec![],
+                false => self.elems.remove(&key).unwrap_or_default(),
+            };
+            elems.sort_by(|a, b| prov.store.get(a.0).cmp(prov.store.get(b.0)));
             let (typ, addr, path) = &key;
+            let pred = if base { transform::ATTR_BASE } else { "attr" };
             let read = Atom {
-                pred: "attr".into(),
+                pred: pred.into(),
                 args: vec![
                     str_val(typ),
                     Term::Val(addr.clone()),
@@ -1179,9 +1260,13 @@ impl AttrAggregate {
                 reason,
                 text: format!("attr({typ}, {}, {path}, _)", partition::fmt_value(addr)),
             };
-            if known.any(&read) {
+            let any = Atom {
+                pred: "attr".into(),
+                ..read.clone()
+            };
+            if known.any(&any) {
                 stuck_groups.push(group_stuck(
-                    known.blocking(&read),
+                    known.blocking(&any),
                     "a stuck rule instance may still contribute to this attribute".into(),
                 ));
             } else {
@@ -1191,13 +1276,52 @@ impl AttrAggregate {
                     .and_then(|l| l.get(&(typ.clone(), path.clone())))
                     .cloned()
                     .unwrap_or_else(|| infer_lattice(&contribs));
-                let refs: Vec<&(TupleId, crate::refine::Stated)> = self
-                    .refinements
-                    .iter()
-                    .flatten()
-                    .filter(|(_, r)| r.applies(typ, addr, path))
-                    .collect();
-                let cell = collapse_group(&key, &contribs, &refs, &lat, origins, &prov.store);
+                // An element is written by its key: the list declares one.
+                for (t, _, list, _, _) in &elems {
+                    let keyed = self
+                        .lattices
+                        .as_ref()
+                        .and_then(|l| l.get(&(typ.clone(), list.clone())));
+                    if !matches!(keyed, Some(Lattice::Keyed { .. })) {
+                        let a = prov.store.get(*t);
+                        bail!(
+                            "resource {typ}[{}]: {list} is not a keyed list, so an element of it \
+                             is not written by its key; declare the field that names an element, \
+                             type_list_key({typ}, \"{list}\", [\"FIELD\"]), or write the whole \
+                             list\n  in: {}",
+                            partition::fmt_value(addr),
+                            origins.of(*t, a).join("; ")
+                        );
+                    }
+                }
+                let nested = self.nested(typ);
+                let refs: Vec<&(TupleId, crate::refine::Stated)> = match base {
+                    true => vec![],
+                    false => self
+                        .refinements
+                        .iter()
+                        .flatten()
+                        .filter(|(_, r)| r.applies(typ, addr, path))
+                        .collect(),
+                };
+                let mut cell = collapse_group(
+                    &key,
+                    &contribs,
+                    &elems,
+                    &refs,
+                    &lat,
+                    &nested,
+                    origins,
+                    &prov.store,
+                );
+                if base {
+                    // The base's value, or nothing: its conflicts and
+                    // warnings are the group's, said once.
+                    cell.retain(|a| a.pred == "attr" || a.pred == "attr_stuck");
+                    for a in cell.iter_mut().filter(|a| a.pred == "attr") {
+                        a.pred = transform::ATTR_BASE.into();
+                    }
+                }
                 for a in &cell {
                     if a.pred == "attr_stuck"
                         && let Some(Term::Val(Value::List(ls))) = a.args.get(3)
@@ -1213,13 +1337,20 @@ impl AttrAggregate {
                 // and every refinement joined into it.
                 let children: Vec<NodeId> = std::iter::once(sigma)
                     .chain(contribs.iter().map(|(t, _, _)| prov.id(*t)))
+                    .chain(elems.iter().map(|(t, ..)| prov.id(*t)))
                     .chain(refs.iter().map(|(t, _)| prov.id(*t)))
                     .collect();
-                for a in cell {
+                for a in cell
+                    .into_iter()
+                    .filter(|a| !(base && a.pred == "attr_stuck"))
+                {
                     out.push((a, children.clone()));
                 }
             }
-            self.emitted.insert(key);
+            match base {
+                true => self.emitted_base.insert(key),
+                false => self.emitted.insert(key),
+            };
         }
         for (a, children) in out {
             prov.record(a, children, vec![]);
@@ -1259,8 +1390,10 @@ fn rank_name(r: Rank) -> &'static str {
     }
 }
 
-/// An `arg/5` contribution's group `(T, A, normalized P)`, rank and value.
-fn contribution(a: &Atom) -> Result<(GroupKey, Rank, Value)> {
+/// An `arg/5` contribution's group `(T, A, normalized P)`, rank and value;
+/// for an element write (`transform::ELEM`) its list's path and key, and
+/// the value is the element's content.
+fn contribution(a: &Atom) -> Result<(GroupKey, Rank, Value, ElemOf)> {
     let vals: Vec<&Value> = a
         .args
         .iter()
@@ -1281,9 +1414,20 @@ fn contribution(a: &Atom) -> Result<(GroupKey, Rank, Value)> {
             partition::fmt_atom(a)
         );
     };
+    if let Some(list) = path.strip_suffix(transform::ELEM) {
+        let Value::List(kv) = vals[3] else {
+            bail!("internal: element write {}", partition::fmt_atom(a));
+        };
+        let [k, v] = kv.as_slice() else {
+            bail!("internal: element write {}", partition::fmt_atom(a));
+        };
+        let top = list.split('.').next().unwrap_or(list).to_string();
+        let group = (typ.to_string(), vals[1].clone(), top);
+        return Ok((group, rank, v.clone(), Some((list.to_string(), k.clone()))));
+    }
     let (path, value) = transform::normalize_contribution(typ, path, Term::Val(vals[3].clone()));
     let value = eval_term(&value, &HashMap::new()).ok_or_else(|| anyhow!("internal: normalize"))?;
-    Ok(((typ.to_string(), vals[1].clone(), path), rank, value))
+    Ok(((typ.to_string(), vals[1].clone(), path), rank, value, None))
 }
 
 /// `type_lattice(T, P, flat|map|set)` and `type_list_key(T, P, Keys)` facts.
@@ -1391,11 +1535,14 @@ fn obj(kv: Vec<(&str, Value)>) -> Value {
 /// The collapsed cell as facts: the value, or the conflict with a `deny`
 /// naming every witness, or the stuck disagreement; plus a warning per
 /// shadowed disagreement at a losing rank.
+#[allow(clippy::too_many_arguments)]
 fn collapse_group(
     key: &GroupKey,
     contribs: &[Contribution],
+    elems: &[ElemContribution],
     refs: &[&(TupleId, crate::refine::Stated)],
     lat: &Lattice,
+    nested: &BTreeMap<String, Lattice>,
     origins: &Origins,
     store: &Store,
 ) -> Vec<Atom> {
@@ -1405,17 +1552,30 @@ fn collapse_group(
         .enumerate()
         .map(|(i, (_, r, v))| (i as u32, *r, v.clone()))
         .collect();
-    // A refinement's witness follows the contributions'.
+    // An element write's witness follows the contributions', a
+    // refinement's the element writes'.
+    let writes: Vec<lattice::ElemWrite> = elems
+        .iter()
+        .enumerate()
+        .map(|(i, (_, r, list, k, v))| lattice::ElemWrite {
+            witness: (contribs.len() + i) as u32,
+            rank: *r,
+            list: list.clone(),
+            key: k.clone(),
+            value: v.clone(),
+        })
+        .collect();
+    let first_ref = contribs.len() + elems.len();
     let refinements: Vec<lattice::Refinement> = refs
         .iter()
         .enumerate()
         .map(|(i, (_, r))| lattice::Refinement {
             path: r.path.clone(),
             constraint: r.constraint.clone(),
-            witness: (contribs.len() + i) as u32,
+            witness: (first_ref + i) as u32,
         })
         .collect();
-    let refinement_of = |w: u32| refs.get((w as usize).checked_sub(contribs.len())?);
+    let refinement_of = |w: u32| refs.get((w as usize).checked_sub(first_ref)?);
     let head = |pred: &str, rest: Vec<Value>| Atom {
         pred: pred.into(),
         args: [str_val(typ), Term::Val(addr.clone()), str_val(path)]
@@ -1437,7 +1597,13 @@ fn collapse_group(
                 ),
             ]);
         }
-        let (t, r, v) = &contribs[w as usize];
+        let (t, r, v) = match contribs.get(w as usize) {
+            Some((t, r, v)) => (t, r, v),
+            None => {
+                let (t, r, _, _, v) = &elems[w as usize - contribs.len()];
+                (t, r, v)
+            }
+        };
         obj(vec![
             ("rank", Value::Str(rank_name(*r).into())),
             ("value", v.clone()),
@@ -1470,7 +1636,11 @@ fn collapse_group(
         span: Default::default(),
     };
     let mut out = Vec::new();
-    let shadowed = match lattice::lub_ranked_refined(lat, path, &cells, &refinements) {
+    let below = lattice::Below {
+        lattices: Some(nested),
+        elems: &writes,
+    };
+    let shadowed = match lattice::lub_ranked_refined(lat, path, &cells, &refinements, below) {
         Collapsed::Bottom => vec![],
         Collapsed::Val {
             value,

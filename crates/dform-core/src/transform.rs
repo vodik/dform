@@ -24,6 +24,25 @@ pub struct Lowered {
 /// (`query::Redactor`).
 pub const SECRET_CELL: &str = "secret_cell";
 
+/// An element write's path ends in this (R-35): `arg(T, A, "L[]", [K, V],
+/// R)` writes `V` into the element of the keyed list `L` whose key is `K`
+/// (the key field's value, or an object holding every key field: an
+/// element itself). Its partition is `(arg, T, "P[]")`, `P` the top
+/// attribute: it feeds `P`'s aggregate, and its rule reads `P`'s base.
+pub const ELEM: &str = "[]";
+/// The resolver's spelling of an element write, before `lower` (so that
+/// `types::read` reads the content at its schema path): at the list's
+/// path, an object with the key under `ELEM_KEY` beside the content, or
+/// the content under `ELEM_VALUE` when it is not an object literal.
+pub const ELEM_KEY: &str = "[key]";
+pub const ELEM_VALUE: &str = "[value]";
+/// A keyed list's aggregate without its element writes: what a rule that
+/// writes elements of it reads of the top attribute (`attr_base(T, A, P,
+/// V)`), so `set c.p = v where c in w.L` is not a cycle through the
+/// aggregate it writes. It sees the lists as blocks and whole-list `set`s
+/// give them, not another rule's element writes.
+pub const ATTR_BASE: &str = "attr_base";
+
 pub fn lower(program: &Program) -> Result<Lowered> {
     // `type` blocks: their refinements (`crate::refine`).
     let program = &crate::refine::lower_types(program)?;
@@ -182,8 +201,11 @@ fn contribution_head(a: Atom) -> Result<Atom> {
         }
         None => return Ok(a),
     };
-    let (path, value) = match (&typ, &path) {
-        (Term::Val(Value::Str(t)), Term::Val(Value::Str(p))) => {
+    let (path, value) = match (&typ, &path, element_write(&value)) {
+        (_, Term::Val(Value::Str(p)), Some((k, v))) => {
+            (str_term(&format!("{p}{ELEM}")), Term::List(vec![k, v]))
+        }
+        (Term::Val(Value::Str(t)), Term::Val(Value::Str(p)), None) => {
             let (p, v) = normalize_contribution(t, p, value);
             (str_term(&p), v)
         }
@@ -195,6 +217,106 @@ fn contribution_head(a: Atom) -> Result<Atom> {
         record: None,
         span: a.span,
     })
+}
+
+/// The resolver's element write (`ELEM_KEY`): its key and content.
+fn element_write(value: &Term) -> Option<(Term, Term)> {
+    let m: BTreeMap<String, Term> = match value {
+        Term::Obj(m) => m.clone(),
+        Term::Val(Value::Obj(m)) => m
+            .iter()
+            .map(|(k, v)| (k.clone(), Term::Val(v.clone())))
+            .collect(),
+        _ => return None,
+    };
+    let mut m = m;
+    let key = m.remove(ELEM_KEY)?;
+    let content = m.remove(ELEM_VALUE).unwrap_or(Term::Obj(m));
+    Some((key, content))
+}
+
+/// The `(T, P)` an element write's rule writes: its type and top attribute.
+fn element_target(r: &RuleStmt) -> Option<(Term, String)> {
+    match (r.head.pred.as_str(), r.head.args.as_slice()) {
+        ("arg", [t, _, Term::Val(Value::Str(p)), _, _]) if p.ends_with(ELEM) => Some((
+            t.clone(),
+            p.split(['.', '[']).next().unwrap_or(p).to_string(),
+        )),
+        _ => None,
+    }
+}
+
+/// A rule that writes elements of a keyed list reads its type's top
+/// attribute there as the base, `ATTR_BASE`: the aggregate without element
+/// writes. Its own read of the list is then below its write. So do the
+/// helpers the compiler wrote for its body (`__neg_0` for a `not`), which
+/// belong to it.
+fn base_reads(statements: Vec<Stmt>) -> Vec<Stmt> {
+    let mut targets: BTreeMap<String, (Term, String)> = BTreeMap::new();
+    let helpers = |r: &RuleStmt| -> Vec<String> {
+        r.body
+            .iter()
+            .filter_map(|l| match l {
+                Lit::Pos(a) | Lit::Not(a) if a.pred.starts_with("__") => Some(a.pred.clone()),
+                _ => None,
+            })
+            .collect()
+    };
+    let mut work: Vec<(String, (Term, String))> = Vec::new();
+    for st in &statements {
+        if let Stmt::Rule(r) = st
+            && let Some(t) = element_target(r)
+        {
+            work.extend(helpers(r).into_iter().map(|h| (h, t.clone())));
+        }
+    }
+    while let Some((h, t)) = work.pop() {
+        if targets.insert(h.clone(), t.clone()).is_some() {
+            continue;
+        }
+        for st in &statements {
+            if let Stmt::Rule(r) = st
+                && r.head.pred == h
+            {
+                work.extend(helpers(r).into_iter().map(|h| (h, t.clone())));
+            }
+        }
+    }
+    statements
+        .into_iter()
+        .map(|st| match st {
+            Stmt::Rule(r) => {
+                let t = element_target(&r).or_else(|| targets.get(&r.head.pred).cloned());
+                match t {
+                    Some((typ, top)) => Stmt::Rule(base_body(r, &typ, &top)),
+                    None => Stmt::Rule(r),
+                }
+            }
+            other => other,
+        })
+        .collect()
+}
+
+fn base_body(r: RuleStmt, typ: &Term, top: &str) -> RuleStmt {
+    let base = |a: Atom| match a.args.as_slice() {
+        [t, _, Term::Val(Value::Str(p)), _] if a.pred == "attr" && t == typ && p == top => Atom {
+            pred: ATTR_BASE.into(),
+            ..a
+        },
+        _ => a,
+    };
+    RuleStmt {
+        body: r
+            .body
+            .into_iter()
+            .map(|l| match l {
+                Lit::Pos(a) => Lit::Pos(base(a)),
+                Lit::Not(a) => Lit::Not(base(a)),
+                other => other,
+            })
+            .collect(),
+        ..r
+    }
 }
 
 /// A body read of a contribution predicate is a read of the aggregate:
@@ -256,7 +378,9 @@ fn lower_contributions(program: &Program) -> Result<Program> {
             other => other,
         });
     }
-    Ok(Program { statements: out })
+    Ok(Program {
+        statements: base_reads(out),
+    })
 }
 
 /// E §2.6: a predicate is extensional (ground facts) or intensional

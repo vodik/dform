@@ -847,6 +847,74 @@ mod tests {
         );
     }
 
+    /// Element writes (R-35) join the winning lists' elements leaf by leaf
+    /// at their own ranks, in any order: a `@default` leaf yields to the
+    /// element's own, a write with a new key makes the element, and the
+    /// list is in key order.
+    #[test]
+    fn element_writes_join_the_winning_elements_in_any_order() {
+        let lat = Lattice::Keyed {
+            keys: vec!["name".into()],
+            elem: Box::new(Lattice::Map(Box::new(Lattice::Flat))),
+        };
+        let c = |n: &str, img: &str| obj(&[("name", s(n)), ("image", s(img))]);
+        let lists = vec![
+            (1, Rank::Default, list(&[c("old", "x")])),
+            (2, Rank::Normal, list(&[c("b", "b:1"), c("a", "a:1")])),
+        ];
+        let write = |w: Witness, rank: Rank, key: Value, value: Value| ElemWrite {
+            witness: w,
+            rank,
+            list: "spec.containers".into(),
+            key,
+            value,
+        };
+        let writes = vec![
+            write(
+                3,
+                Rank::Default,
+                s("a"),
+                obj(&[("image", s("a:0")), ("cpu", i(1))]),
+            ),
+            write(
+                4,
+                Rank::Normal,
+                obj(&[("name", s("b")), ("image", s("b:1"))]),
+                obj(&[("cpu", i(2))]),
+            ),
+            write(5, Rank::Default, s("c"), obj(&[("image", s("c:1"))])),
+        ];
+        let want = list(&[
+            obj(&[("name", s("a")), ("image", s("a:1")), ("cpu", i(1))]),
+            obj(&[("name", s("b")), ("image", s("b:1")), ("cpu", i(2))]),
+            obj(&[("name", s("c")), ("image", s("c:1"))]),
+        ]);
+        for ls in permutations(&lists) {
+            for ws in permutations(&writes) {
+                let below = Below {
+                    lattices: None,
+                    elems: &ws,
+                };
+                let got = lub_ranked_refined(&lat, "spec.containers", &ls, &[], below);
+                assert!(
+                    matches!(&got, Collapsed::Val { value, .. } if *value == want),
+                    "{got:?}"
+                );
+            }
+        }
+        // The same leaf at one rank, two values: a conflict at the element.
+        let ws = [write(6, Rank::Normal, s("a"), obj(&[("image", s("a:2"))]))];
+        let below = Below {
+            lattices: None,
+            elems: &ws,
+        };
+        let got = lub_ranked_refined(&lat, "spec.containers", &lists, &[], below);
+        assert!(
+            matches!(&got, Collapsed::Conflict { reason, .. } if reason.ends_with("at spec.containers[name=a]")),
+            "{got:?}"
+        );
+    }
+
     #[test]
     fn ranked_keyed_collapses_to_the_highest_nonempty_shelf() {
         let lat = Lattice::Keyed {
@@ -1656,7 +1724,55 @@ fn max_rank(contribs: &[RankedContribution]) -> Rank {
 /// assembled as one Flat value (which conflicts, or is stuck, on the
 /// non-object).
 pub fn lub_ranked(lat: &Lattice, path: &str, contribs: &[RankedContribution]) -> Collapsed {
-    lub_ranked_refined(lat, path, contribs, &[])
+    lub_ranked_refined(lat, path, contribs, &[], Below::default())
+}
+
+/// One element of a keyed list written by its key (R-35, R-69):
+/// `L[k].p = v`, or `set c.p = v` with `c` an element of `L`. Its content
+/// joins the element whose key is `k`, leaf by leaf at its own rank, and
+/// makes the element when no list has it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ElemWrite {
+    pub witness: Witness,
+    pub rank: Rank,
+    /// The list's path, as the schema spells it: `spec.template.spec.containers`.
+    pub list: String,
+    /// The key: the key field's value, or an object holding every key
+    /// field (an element itself, or `{containerPort: 80, protocol: "TCP"}`).
+    pub key: Value,
+    /// What is written of the element: `{resources: {limits: v}}`.
+    pub value: Value,
+}
+
+/// What assembles the paths below a cell's own: the lattices declared on
+/// them (`type_list_key` on `spec.template.spec.containers`, by the
+/// schema's spelling) and the element writes into keyed lists there.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Below<'a> {
+    pub lattices: Option<&'a BTreeMap<String, Lattice>>,
+    pub elems: &'a [ElemWrite],
+}
+
+impl Below<'_> {
+    fn lattice(&self, path: &str) -> Option<&Lattice> {
+        self.lattices?.get(&schema_path(path))
+    }
+}
+
+/// A path as the schema spells it: no list indices or keys
+/// (`containers[name=api].image` is `containers.image`).
+pub fn schema_path(path: &str) -> String {
+    let mut out = String::new();
+    let mut depth = 0;
+    for c in path.chars() {
+        match c {
+            '[' => depth += 1,
+            ']' => depth -= 1,
+            _ if depth == 0 => out.push(c),
+            _ => {}
+        }
+    }
+    out
 }
 
 /// `lub_ranked` with the cell's checkable refinements (E §2.5, the
@@ -1670,13 +1786,39 @@ pub fn lub_ranked_refined(
     path: &str,
     contribs: &[RankedContribution],
     refinements: &[Refinement],
+    nested: Below,
 ) -> Collapsed {
     let (here, below): (Vec<&Refinement>, Vec<&Refinement>) =
         refinements.iter().partition(|r| r.path == path);
+    let list = schema_path(path);
+    let writes: Vec<&ElemWrite> = nested.elems.iter().filter(|e| e.list == list).collect();
+    if !writes.is_empty() {
+        let c = match lat {
+            Lattice::Keyed { keys, elem } => {
+                keyed_overlay(keys, elem, path, contribs, &writes, nested)
+            }
+            _ => {
+                let w = writes[0];
+                Collapsed::Conflict {
+                    rank: Some(w.rank),
+                    a: (w.value.clone(), Witnesses::from([w.witness])),
+                    b: (Value::Str("<not a keyed list>".into()), Witnesses::new()),
+                    reason: format!(
+                        "{path} is not a keyed list: an element is written by its key once the \
+                         list declares one, type_list_key(T, \"{list}\", [\"name\"])"
+                    ),
+                    witnesses: writes.iter().map(|w| w.witness).collect(),
+                    shadowed: vec![],
+                }
+            }
+        };
+        let all: Vec<&Refinement> = here.iter().chain(&below).copied().collect();
+        return check_below(c, path, &all);
+    }
     let collapsed = match lat {
         Lattice::Map(elem) if contribs.iter().all(|(_, _, v)| matches!(v, Value::Obj(_))) => {
             let below: Vec<Refinement> = below.into_iter().cloned().collect();
-            let c = lub_ranked_map(elem, path, contribs, &below);
+            let c = lub_ranked_map(elem, path, contribs, &below, nested);
             return check_below(c, path, &here);
         }
         Lattice::Map(_) | Lattice::Flat | Lattice::Set | Lattice::Keyed { .. } => {
@@ -1773,8 +1915,22 @@ fn lub_ranked_map(
     path: &str,
     contribs: &[RankedContribution],
     refinements: &[Refinement],
+    nested: Below,
 ) -> Collapsed {
     let mut per_key: BTreeMap<String, Vec<RankedContribution>> = BTreeMap::new();
+    // A key an element write reaches is a key of the map even when no
+    // contribution names it: the write makes the list, and its element.
+    let here = schema_path(path);
+    for e in nested.elems {
+        if let Some(k) = e
+            .list
+            .strip_prefix(&here)
+            .and_then(|r| r.strip_prefix('.'))
+            .and_then(|r| r.split('.').next())
+        {
+            per_key.entry(k.to_string()).or_default();
+        }
+    }
     for (w, r, v) in contribs {
         let Value::Obj(m) = v else {
             unreachable!("checked by the caller")
@@ -1795,13 +1951,15 @@ fn lub_ranked_map(
         // Nested objects merge per key too: a dotted path `a.b.c` is the
         // contribution `{b: {c: V}}` to `a`, so two dotted paths under one
         // attribute meet here and must not conflict on `b`.
-        let nested = Lattice::Map(Box::new(elem.clone()));
-        let lat = if cs.iter().all(|(_, _, v)| matches!(v, Value::Obj(_))) {
-            &nested
+        let key_path = format!("{path}.{k}");
+        let map = Lattice::Map(Box::new(elem.clone()));
+        let lat = if let Some(l) = nested.lattice(&key_path) {
+            l
+        } else if cs.iter().all(|(_, _, v)| matches!(v, Value::Obj(_))) {
+            &map
         } else {
             elem
         };
-        let key_path = format!("{path}.{k}");
         let refs: Vec<Refinement> = refinements
             .iter()
             .filter(|r| {
@@ -1812,7 +1970,7 @@ fn lub_ranked_map(
             })
             .cloned()
             .collect();
-        match lub_ranked_refined(lat, &key_path, &cs, &refs) {
+        match lub_ranked_refined(lat, &key_path, &cs, &refs, nested) {
             Collapsed::Bottom => {}
             Collapsed::Val {
                 value,
@@ -1892,6 +2050,216 @@ fn lub_ranked_map(
         deferred,
         shadowed,
     }
+}
+
+/// A keyed list that element writes reach (R-35): the whole lists collapse
+/// by shelves as they do without them (the highest non-empty rank's lists,
+/// merged by key); each element of the winning lists and each element
+/// write is then a contribution to the element its key names, joined leaf
+/// by leaf at its own rank as a map is. So `set c.resources.limits = ..
+/// @default` gives every container limits but the ones that set their own,
+/// and a write whose key no list has makes that element. The elements are
+/// in key order, as the Keyed normal form puts them.
+fn keyed_overlay(
+    keys: &[String],
+    elem: &Lattice,
+    path: &str,
+    contribs: &[RankedContribution],
+    writes: &[&ElemWrite],
+    nested: Below,
+) -> Collapsed {
+    let lat = Lattice::Keyed {
+        keys: keys.to_vec(),
+        elem: Box::new(elem.clone()),
+    };
+    let cell = contribs.iter().fold(Ranked::default(), |acc, (w, r, v)| {
+        acc.join_in(&lat, &Ranked::at(*r, *w, v.clone()), path)
+    });
+    let conflict = |w: &ElemWrite, b: &str, reason: String| Collapsed::Conflict {
+        rank: Some(w.rank),
+        a: (w.value.clone(), Witnesses::from([w.witness])),
+        b: (Value::Str(b.into()), Witnesses::new()),
+        reason,
+        witnesses: Witnesses::from([w.witness]),
+        shadowed: vec![],
+    };
+    let (top, mut shadowed) = match cell.collapse_at(path) {
+        Collapsed::Bottom => (None, vec![]),
+        Collapsed::Val {
+            value: Value::List(_),
+            rank,
+            shadowed,
+            ..
+        } => (Some(rank), shadowed),
+        // A computed list: which elements it has is unknown until it
+        // resolves, so the writes into it wait.
+        Collapsed::Val {
+            value: v @ Value::Null { .. },
+            rank,
+            shadowed,
+            ..
+        } => {
+            return Collapsed::Stuck {
+                rank,
+                nulls: nulls_in(&v),
+                shadowed,
+            };
+        }
+        other => return other,
+    };
+    let mut groups: Vec<(Vec<Value>, Vec<RankedContribution>)> = Vec::new();
+    let mut add = |k: Vec<Value>, c: RankedContribution| match groups
+        .iter()
+        .position(|(gk, _)| gk.iter().zip(&k).all(|(p, q)| eq3(p, q) == Truth::True))
+    {
+        Some(i) => groups[i].1.push(c),
+        None => groups.push((k, vec![c])),
+    };
+    for (w, r, v) in contribs {
+        let (Some(top), Value::List(xs)) = (top, v) else {
+            continue;
+        };
+        if *r != top {
+            continue;
+        }
+        for x in xs {
+            // The shelf's normal form checked each is an object with its keys.
+            if let Value::Obj(m) = x
+                && let Some(k) = keys.iter().map(|k| m.get(k).cloned()).collect()
+            {
+                add(k, (*w, *r, x.clone()));
+            }
+        }
+    }
+    for w in writes {
+        let k: Option<Vec<Value>> = match &w.key {
+            Value::Obj(m) => keys.iter().map(|k| m.get(k).cloned()).collect(),
+            k if keys.len() == 1 => Some(vec![k.clone()]),
+            _ => None,
+        };
+        let Some(k) = k else {
+            return conflict(
+                w,
+                "<not a key>",
+                format!(
+                    "{path} is keyed by ({}): `{}` does not name one element",
+                    keys.join(", "),
+                    crate::partition::fmt_value(&w.key)
+                ),
+            );
+        };
+        let Value::Obj(mut m) = w.value.clone() else {
+            return conflict(
+                w,
+                "<not an object>",
+                format!("{path}: an element of a keyed list is an object"),
+            );
+        };
+        for (f, kv) in keys.iter().zip(&k) {
+            match m.get(f) {
+                Some(x) if eq3(x, kv) != Truth::True => {
+                    return conflict(
+                        w,
+                        "<another key>",
+                        format!(
+                            "{path}[{}]: the element written there has {f} = {}",
+                            key_label(keys, &k),
+                            crate::partition::fmt_value(x)
+                        ),
+                    );
+                }
+                _ => {
+                    m.insert(f.clone(), kv.clone());
+                }
+            }
+        }
+        add(k, (w.witness, w.rank, Value::Obj(m)));
+    }
+    groups.sort_by(|a, b| a.0.cmp(&b.0));
+    let inner = Below {
+        elems: &[],
+        ..nested
+    };
+    let mut out = Vec::new();
+    let mut witnesses = Witnesses::new();
+    let mut deferred = Vec::new();
+    let mut stuck: Option<(Rank, BTreeSet<String>)> = None;
+    let mut rank = top.unwrap_or(Rank::Default);
+    for (k, cs) in groups {
+        rank = rank.max(max_rank(&cs));
+        let at = format!("{path}[{}]", key_label(keys, &k));
+        match lub_ranked_refined(elem, &at, &cs, &[], inner) {
+            Collapsed::Bottom => {}
+            Collapsed::Val {
+                value,
+                witnesses: w,
+                deferred: d,
+                shadowed: sh,
+                ..
+            } => {
+                out.push(value);
+                witnesses = union(&witnesses, &w);
+                deferred.extend(d);
+                shadowed.extend(sh);
+            }
+            Collapsed::Stuck {
+                rank,
+                nulls,
+                shadowed: sh,
+            } => {
+                shadowed.extend(sh);
+                let st = stuck.get_or_insert((rank, BTreeSet::new()));
+                st.0 = st.0.max(rank);
+                st.1.extend(nulls);
+            }
+            Collapsed::Conflict {
+                rank,
+                a,
+                b,
+                reason,
+                witnesses,
+                shadowed: sh,
+            } => {
+                shadowed.extend(sh);
+                return Collapsed::Conflict {
+                    rank,
+                    a,
+                    b,
+                    reason: format!("{reason} at {at}"),
+                    witnesses,
+                    shadowed,
+                };
+            }
+            v @ Collapsed::Violated { .. } => return v,
+        }
+    }
+    if let Some((rank, nulls)) = stuck {
+        return Collapsed::Stuck {
+            rank,
+            nulls,
+            shadowed,
+        };
+    }
+    Collapsed::Val {
+        value: Value::List(out),
+        rank,
+        witnesses,
+        deferred,
+        shadowed,
+    }
+}
+
+/// An element's key as the plan spells it: `name=api`,
+/// `containerPort=80,protocol=TCP`.
+fn key_label(keys: &[String], k: &[Value]) -> String {
+    keys.iter()
+        .zip(k)
+        .map(|(f, v)| match v {
+            Value::Str(s) => format!("{f}={s}"),
+            v => format!("{f}={}", crate::partition::fmt_value(v)),
+        })
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 #[cfg(test)]

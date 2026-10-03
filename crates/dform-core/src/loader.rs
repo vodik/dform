@@ -582,6 +582,7 @@ pub fn is_core_pred(pred: &str) -> bool {
             | "attr"
             | "attr_conflict"
             | "attr_stuck"
+            | "attr_base"
             | "type_lattice"
             | "type_mint"
             | "ignore_changes"

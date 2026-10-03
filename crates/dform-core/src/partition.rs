@@ -130,6 +130,11 @@ fn const_str(t: &Term) -> Option<String> {
 pub fn normalize_path(typ: &Option<String>, path: &str) -> String {
     match typ.as_deref() {
         Some(transform::OUTPUT) => path.to_string(),
+        // An element write (`transform::ELEM`) is its own node, `P[]`.
+        _ if path.ends_with(transform::ELEM) => {
+            let top = path.split(['.', '[']).next().unwrap_or(path);
+            format!("{top}{}", transform::ELEM)
+        }
         _ => path.split('.').next().unwrap_or(path).to_string(),
     }
 }
@@ -164,7 +169,21 @@ fn contrib_node(atom: &Atom) -> Option<(Node, Node)> {
     if atom.pred != "arg" || atom.args.len() != 5 {
         return None;
     }
-    Some((type_path_node("arg", atom), type_path_node("attr", atom)))
+    let arg = type_path_node("arg", atom);
+    Some((arg.clone(), aggregate_of(&arg)))
+}
+
+/// The `(attr, T, P)` aggregate an `(arg, T, P)` node feeds: an element
+/// write's `P[]` feeds `P`.
+fn aggregate_of(arg: &Node) -> Node {
+    Node {
+        pred: "attr".into(),
+        typ: arg.typ.clone(),
+        path: arg
+            .path
+            .as_ref()
+            .map(|p| p.strip_suffix(transform::ELEM).unwrap_or(p).to_string()),
+    }
 }
 
 /// A read of the aggregate's outputs: `attr/4`, `attr_stuck/4`,
@@ -174,6 +193,7 @@ fn aggregate_read(atom: &Atom) -> Option<Node> {
         ("attr", 4) | ("attr_stuck", 4) | ("attr_conflict", 5) => {
             Some(type_path_node("attr", atom))
         }
+        (transform::ATTR_BASE, 4) => Some(type_path_node(transform::ATTR_BASE, atom)),
         _ => None,
     }
 }
@@ -351,7 +371,18 @@ pub fn build_lowered(
     for r in &rules {
         let h = head_node(&r.head);
         defs.insert(h.clone());
-        if let Some((_, attr)) = contrib_node(&r.head) {
+        if let Some((arg, attr)) = contrib_node(&r.head) {
+            // An element write's rule reads its attribute's base.
+            if arg
+                .path
+                .as_ref()
+                .is_some_and(|p| p.ends_with(transform::ELEM))
+            {
+                defs.insert(Node {
+                    pred: transform::ATTR_BASE.into(),
+                    ..attr.clone()
+                });
+            }
             defs.insert(attr);
         }
     }
@@ -394,12 +425,21 @@ pub fn build_lowered(
     // definition it unifies with, negatively.
     let args: Vec<Node> = unifying(&defs, &Node::plain("arg")).cloned().collect();
     for a in &args {
-        let a_as_attr = Node {
-            pred: "attr".into(),
-            typ: a.typ.clone(),
-            path: a.path.clone(),
-        };
-        for t in unifying(&defs, &a_as_attr) {
+        let a_as_attr = aggregate_of(a);
+        // The base is every contribution but the element writes.
+        let base = (!a
+            .path
+            .as_ref()
+            .is_some_and(|p| p.ends_with(transform::ELEM)))
+        .then(|| Node {
+            pred: transform::ATTR_BASE.into(),
+            ..a_as_attr.clone()
+        });
+        let targets: Vec<Node> = unifying(&defs, &a_as_attr)
+            .chain(base.iter().flat_map(|b| unifying(&defs, b)))
+            .cloned()
+            .collect();
+        for t in &targets {
             edges.push(Edge {
                 from: a.clone(),
                 to: t.clone(),
@@ -434,7 +474,7 @@ pub fn build_lowered(
                 continue;
             }
             let pat = body_pattern(atom);
-            let reads_aggregate = pat.pred == "attr";
+            let reads_aggregate = pat.pred == "attr" || pat.pred == transform::ATTR_BASE;
             let is_extern = opts.externs.contains(&atom.pred);
             let negative = negated || agg_head || reads_aggregate || is_extern;
             let why = if negated {
@@ -490,7 +530,7 @@ pub fn build_lowered(
             .iter()
             .filter(|r| is_aggregate_head(&r.head))
             .map(|r| r.head.pred.clone())
-            .chain(["attr".to_string()])
+            .chain(["attr".to_string(), transform::ATTR_BASE.to_string()])
             .collect();
         for (i, r) in rules.iter().enumerate() {
             if !crate::stuck::can_stick(&r.head, &r.body, &aggregates) {

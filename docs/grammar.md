@@ -518,6 +518,24 @@ and `set from DOC` gives the inputs from a document ("Giving inputs"). `scenario
 program's denies are its tests, and `dform test` runs them over the
 inputs' values; a what-if plan is `plan --set k=v`.
 
+A list the schema keys (`type_list_key(k8s.deployment,
+"spec.template.spec.containers", ["name"])`) is written by element
+(R-35): `set w.spec.template.spec.containers[k].resources.limits = ..`
+writes the element whose key is `k`, any term but an integer (an integer
+stays the position): a variable, a path (`c.name`), a string
+(`containers["api"]`), an object for a list keyed by several fields. Its
+content joins that element leaf by leaf at the write's own rank, so a
+`@default` gives way to the element's own value and two writes of one
+leaf at one rank conflict, named by the element (`containers[name=api]`);
+a key no list has makes the element. Whole lists from several authors
+merge by key too, the highest rank's lists winning as a set's do. A list
+with no key is one value: writing an element of it is an error naming the
+`type_list_key` to declare. One index per written path: below the element
+the path is fields. The rule that writes elements reads its resource's
+attribute without element writes (its base: the blocks' and whole-list
+writes), so it may read the list it writes (`not has c.resources.limits`)
+without a cycle; it does not see another rule's element writes.
+
 `let k = t [@rank] [where B]` is a value (H-6), a cell of the attribute
 aggregate like an input (R-3): each row contributes to the cell `(let,
 SCOPE, k)` (scope `""` for the program's, `n` in the copy or import
@@ -1265,6 +1283,7 @@ as it is.
 | `deny "m" {o} where B`                    | `deny("m", {o}) :- B` (`warn` the same)                |
 | `deny "a ${x}" where B`                   | `deny(M, ..) :- B, M = format("a %s", X)`              |
 | `set R.p = t @r where B` (`+=`: `arg_add`) | `arg(T, A, "p", t', r) :- B, reads`                   |
+| `set R.l[k].p = t @r where B` (`l` keyed) | `arg(T, A, "l[]", [k', {p: t'}], r) :- B, reads`, the body's reads of `R`'s attribute `attr_base(..)` |
 | `output k: T = t` (`T` a resource type)   | `output k: addr`, and its value                        |
 | `output k = t` (no reads)                 | `output k = t'`                                        |
 | `output k = t where B` (reads, or a body) | `output(k, t') :- B, reads`                            |
