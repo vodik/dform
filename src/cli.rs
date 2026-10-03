@@ -185,7 +185,8 @@ enum Command {
         check: bool,
     },
     /// The project's doc comments (`#|` lines above an item) as Markdown on
-    /// stdout: every .df file's, or with a TARGET its program's.
+    /// stdout: every .df file's, or with a TARGET its program's; then the
+    /// standard library's functions.
     Doc {
         #[command(flatten)]
         target: Target,
@@ -4084,7 +4085,8 @@ fn load_schema(providers: &[String]) -> Result<schema::Schema> {
 /// list the files that are not and fail.
 /// `dform doc [TARGET]`: the doc comments of the project's .df files, or
 /// of the target's program (its file and every file it imports), as
-/// Markdown (`syntax::doc::markdown`).
+/// Markdown (`syntax::doc::markdown`), then the standard library's
+/// functions (`syntax::doc::std_markdown`).
 fn doc(files: &[PathBuf]) -> Result<()> {
     let project = crate::project::Project::find(Path::new("."), env!("CARGO_PKG_VERSION"))?;
     let (title, files) = match (files, &project) {
@@ -4110,7 +4112,11 @@ fn doc(files: &[PathBuf]) -> Result<()> {
         }
         trees.push((name, parse.syntax()));
     }
-    print!("{}", crate::syntax::doc::markdown(&title, &trees));
+    print!(
+        "{}{}",
+        crate::syntax::doc::markdown(&title, &trees),
+        crate::syntax::doc::std_markdown()
+    );
     Ok(())
 }
 

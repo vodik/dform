@@ -214,7 +214,8 @@ provider's schema facts. `dform doc` prints the project's doc comments
 file, each documented item's kind and name, its first line, its
 description and its other keys (`owner`, `since`, `deprecated`, ...);
 `dform doc TARGET` only its program's files (the stack's and every file
-it imports). `dform completions zsh > _dform` completes stack
+it imports); either ends with the standard library, each std/*.df
+function's signature, summary and example. `dform completions zsh > _dform` completes stack
 names, key values (from the key inputs' enum types) and deployments with
 state. `dform version` prints dform's version and the release of the time
 zone database built into it (`tzdb 2025b`): a `time`'s zone is read from

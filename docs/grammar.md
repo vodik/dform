@@ -1367,7 +1367,8 @@ to the result uninspected (otherwise a call over a secret is E0301).
 `forwards nulls`: a null argument is not a content position (Rule 2).
 `internal`: the lowering's own, not callable from a program. A `#|` doc
 comment above a signature is its summary, and its `example:` key the
-example hover shows.
+example hover shows; `dform doc` renders every callable function, per
+signature file, after the project's items.
 
 A function is named by its package, the type it is about; the prelude's
 are written bare.

@@ -248,6 +248,38 @@ pub fn markdown(title: &str, files: &[(String, SyntaxNode)]) -> String {
     out
 }
 
+/// The standard library as `dform doc` renders it after a project's
+/// items: per signature file (std/*.df, the prelude first), each callable
+/// function's signature, summary and example, from the registry.
+pub fn std_markdown() -> String {
+    let registry = crate::functions::registry();
+    let mut out = String::new();
+    for (file, _) in crate::functions::SOURCES {
+        let mut fns: Vec<&crate::functions::Function> = registry
+            .functions()
+            .filter(|f| f.file == *file && !f.internal)
+            .collect();
+        if fns.is_empty() {
+            continue;
+        }
+        fns.sort_by_key(|f| f.line);
+        out.push_str(&format!("\n## {file}\n"));
+        for f in fns {
+            out.push_str(&format!(
+                "\n### function `{}`\n\n```dform\nfn {}\n```\n",
+                f.name, f.signature
+            ));
+            if !f.summary.is_empty() {
+                out.push_str(&format!("\n{}\n", f.summary));
+            }
+            if !f.example.is_empty() {
+                out.push_str(&format!("\n```dform\n{}\n```\n", f.example));
+            }
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
