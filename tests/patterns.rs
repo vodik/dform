@@ -80,12 +80,35 @@ untiered(l) where labels(l), not ("tier", _) in l
     assert_eq!(facts(src, "untiered"), [r#"untiered({app: "web"})"#]);
 }
 
-/// `x in obj` is an error that names the pattern; a tuple after `in` has
-/// two parts; a resource type is enumerated by a name.
+/// What lowering a program file reports.
+fn lower_error(src: &str) -> String {
+    let p = parse_file("t.df", &format!("edition 2026\n{src}")).unwrap_or_else(|e| panic!("{e:#}"));
+    match dform_core::transform::lower(&p) {
+        Ok(_) => panic!("lowers: {src}"),
+        Err(e) => format!("{e:#}"),
+    }
+}
+
+/// `x in obj` is an error that names the pattern, at compile time when the
+/// program's objects say so; a tuple after `in` has two parts; a resource
+/// type is enumerated by a name.
 #[test]
 fn an_object_is_entered_by_a_pattern() {
-    let program =
-        parse_program("labels({ app: \"web\" })\nbad(x) where labels(l), x in l\n").unwrap();
+    let e = lower_error("labels({ app: \"web\" })\nbad(x) where labels(l), x in l\n");
+    assert!(
+        e.contains("`x in l`: `l` is an object, and an object's entries are matched by a pattern"),
+        "{e}"
+    );
+    assert!(e.contains("`(k, v) in l` takes each key and value"), "{e}");
+    let e = lower_error("bad(x) where x in { a: 1 }\n");
+    assert!(e.contains("`{..}` is an object"), "{e}");
+    let e = lower_error("bad(x) where o = oci.parse(\"a:b\"), x in o\n");
+    assert!(e.contains("`o` is an object"), "{e}");
+    // A column of lists and objects is decided row by row, as before.
+    let program = parse_program(
+        "labels({ app: \"web\" })\nlabels([\"a\"])\nbad(x) where labels(l), x in l\n",
+    )
+    .unwrap();
     let e = format!("{:#}", engine::eval(&program, &[]).unwrap_err());
     assert!(e.contains("`x in e` over an object, {app: \"web\"}"), "{e}");
     assert!(e.contains("`(key, value) in e`"), "{e}");
@@ -239,4 +262,17 @@ fn why_shows_the_pattern_as_written() {
         "{}",
         r.stdout
     );
+}
+
+/// A partial function with no value fails the pattern's match, as it
+/// fails any literal (docs/grammar.md "Functions").
+#[test]
+fn a_pattern_against_a_call_with_no_value_fails_the_match() {
+    let src = r#"text("[1, 2]")
+text("not json")
+two(a, b) where text(t), (a, b) = json.decode(t)
+one(v) where text(t), v = json.decode(t)
+"#;
+    assert_eq!(facts(src, "two"), ["two(1, 2)"]);
+    assert_eq!(facts(src, "one"), ["one([1, 2])"]);
 }

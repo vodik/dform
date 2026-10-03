@@ -132,6 +132,8 @@ indenting leaves its lines as written."
     (font-lock-ensure)
     (should (eq (dform-ts-mode-test--face-at "any(")
                 (dform-ts-mode-test--face-at "count(")))
+    ;; An aggregate is a builtin, not a function call.
+    (should (eq (dform-ts-mode-test--face-at "count(") 'font-lock-builtin-face))
     (indent-region (point-min) (point-max))
     (should (equal (buffer-string)
                    "edition 2026\np(k, v) where labels(l), (\n  k,\n  v) in l\nq(b) where b = any(x), n = count(x), r(x)\n"))))

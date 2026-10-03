@@ -201,16 +201,24 @@ apply-order edge, not its content read now (`docs/grammar.md'
 
    :language 'dform
    :feature 'builtin
-   ;; Emacs's query engine only supports `eq?', `match?' and
-   ;; `pred?' predicates (no `#any-of?'), so a set of names is a regexp.
-   "(call
+   ;; Over the `function' feature's face: `count(' is an aggregate.
+   :override t
+   ;; Emacs's query engine has no `#any-of?', so a set of names is a
+   ;; regexp; built with `rx' in a query form, as a regexp in a query
+   ;; string loses its backslashes to the string's escapes.
+   `((call
       function: (identifier) @font-lock-builtin-face
-      (#match? @font-lock-builtin-face
-        \"^\\(count\\|sum\\|min\\|max\\|any\\|all\\|collect_set\\|collect_list\\|format\\|ref\\|attr\\|want\\|arg\\|output\\|input\\|inet\\|inet_subnet\\|inet_host\\|declassify\\|cloud_attr\\|cloud_exists\\)$\"))
-    ((identifier) @font-lock-builtin-face
-      (#match? @font-lock-builtin-face \"^world$\"))
-    ((identifier) @font-lock-builtin-face
-      (#eq? @font-lock-builtin-face \"_\"))"
+      (:match ,(rx bos (or "count" "sum" "min" "max" "any" "all"
+                           "collect_set" "collect_list" "format" "ref"
+                           "attr" "want" "arg" "output" "input" "inet"
+                           "inet_subnet" "inet_host" "declassify"
+                           "cloud_attr" "cloud_exists")
+                   eos)
+              @font-lock-builtin-face))
+     ((identifier) @font-lock-builtin-face
+      (:equal "world" @font-lock-builtin-face))
+     ((identifier) @font-lock-builtin-face
+      (:equal "_" @font-lock-builtin-face)))
 
    :language 'dform
    :feature 'property

@@ -828,30 +828,30 @@ impl<'u> Lowerer<'u> {
 
     /// The component a path written in `scope` names, or the error that
     /// says what it names instead.
-    fn component_path(&self, scope: usize, written: &str) -> Result<String, Diagnostic> {
+    fn component_path(&self, scope: usize, written: &str) -> Result<String, Box<Diagnostic>> {
         let full = self.module_path_of(scope, written);
         match self.decls.modules.get(&full) {
             Some(m) if m.component => Ok(full),
-            Some(_) => Err(Diagnostic::error(
+            Some(_) => Err(Box::new(Diagnostic::error(
                 Span::default(),
                 format!("{written} is a module; `use` it"),
             )
             .with_note(
                 "a module, a file, is imported once by `use`; `instance` copies a component, \
                  an item `component NAME { .. }` of a module",
-            )),
-            None if self.decls.deployed.iter().any(|d| d.path == full) => Err(Diagnostic::error(
+            ))),
+            None if self.decls.deployed.iter().any(|d| d.path == full) => Err(Box::new(Diagnostic::error(
                 Span::default(),
                 format!("{written} is deployed by the tool; `use` it"),
             )
             .with_note(
                 "a stack is a module the tool uses, one deployment per key: `use` binds to its \
                  deployments, and `NAME[k=v].output` reads one",
-            )),
-            None => Err(
+            ))),
+            None => Err(Box::new(
                 Diagnostic::error(Span::default(), format!("no component `{written}`"))
                     .with_note("a component is an item of a module, `component NAME { .. }`"),
-            ),
+            )),
         }
     }
 
@@ -2879,7 +2879,7 @@ impl<'u> Lowerer<'u> {
         let module = match self.component_path(scope, &written) {
             Ok(m) => m,
             Err(d) => {
-                self.diags.push(Diagnostic { span, ..d });
+                self.diags.push(Diagnostic { span, ..*d });
                 return Err(Skip);
             }
         };
@@ -6388,20 +6388,6 @@ fn atom_terms(a: &Atom) -> Vec<&Term> {
         .iter()
         .chain(a.record.iter().flat_map(|r| r.values()))
         .collect()
-}
-
-/// The leading fields of a path as a dotted key, and the rest.
-fn split_fields(path: &[Seg]) -> (String, Vec<Seg>) {
-    let n = path.iter().take_while(|s| matches!(s, Seg::F(_))).count();
-    let key = path[..n]
-        .iter()
-        .map(|s| match s {
-            Seg::F(f) => f.as_str(),
-            Seg::I(_) => "",
-        })
-        .collect::<Vec<_>>()
-        .join(".");
-    (key, path[n..].to_vec())
 }
 
 /// What `set L[k].p.q = v` writes at the list `L`, before the transform

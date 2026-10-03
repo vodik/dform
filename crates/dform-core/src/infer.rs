@@ -160,6 +160,9 @@ struct Solver {
     columns: BTreeMap<Col, usize>,
     /// Columns that take anything (`decl p(x: any)`).
     open: std::collections::BTreeSet<Col>,
+    /// What a node holds of the two collections: an object (where one is
+    /// given to it), a list. `x in o` over objects only is an error.
+    shape: Vec<(Option<Span>, bool)>,
 }
 
 impl Solver {
@@ -170,6 +173,7 @@ impl Solver {
         self.lits.push(Vec::new());
         self.cols.push(Vec::new());
         self.col_of.push(None);
+        self.shape.push((None, false));
         n
     }
 
@@ -205,6 +209,16 @@ impl Solver {
         self.lits[lo].extend(l);
         let c = std::mem::take(&mut self.cols[hi]);
         self.cols[lo].extend(c);
+        let (o, l) = self.shape[hi];
+        let mine = &mut self.shape[lo];
+        *mine = (mine.0.or(o), mine.1 || l);
+    }
+
+    /// `n` holds an object (`Some(span)`) or a list.
+    fn holds(&mut self, n: usize, object: Option<Span>, list: bool) {
+        let n = self.find(n);
+        let mine = &mut self.shape[n];
+        *mine = (mine.0.or(object), mine.1 || list);
     }
 
     fn hard(&mut self, n: usize, ty: Ty, span: Span, what: String) {
@@ -232,6 +246,15 @@ struct Check {
     span: Span,
 }
 
+/// `x in l` (`member(L, X)`) over a variable, checked once the program's
+/// objects and lists are known.
+struct Member {
+    rule: usize,
+    list: String,
+    item: Term,
+    span: Span,
+}
+
 /// One rule's variables.
 #[derive(Default)]
 struct Vars(BTreeMap<String, usize>);
@@ -242,6 +265,7 @@ struct Pass<'a> {
     inputs: BTreeMap<(String, String), Ty>,
     schema: Option<&'a crate::schema::Schema>,
     checks: Vec<Check>,
+    members: Vec<Member>,
     /// Each rule's (statement's) variables.
     vars: Vec<Vars>,
     /// A rule head's variable names per column, for the signature.
@@ -271,6 +295,7 @@ impl Pass<'_> {
             }
             Term::Val(v) => self.literal(col, v, span),
             t => {
+                self.shape_of(col, t, span);
                 self.calls(rule, t, span);
                 if let Some((ty, what)) = self.term_type(t) {
                     self.s.hard(col, ty, span, what);
@@ -279,7 +304,30 @@ impl Pass<'_> {
         }
     }
 
+    /// What collection `t` is, given to node `n`: an object or a list
+    /// literal, or a call whose result is declared one.
+    fn shape_of(&mut self, n: usize, t: &Term, span: Span) {
+        match t {
+            Term::Obj(_) | Term::Val(Value::Obj(_)) => self.s.holds(n, Some(span), false),
+            Term::List(_) | Term::Val(Value::List(_)) | Term::ListComp { .. } => {
+                self.s.holds(n, None, true)
+            }
+            Term::Func { name, .. } => {
+                if let Some(f) = function(name) {
+                    let ret = f.ret.trim();
+                    if ret.starts_with('{') {
+                        self.s.holds(n, Some(span), false);
+                    } else if ret.starts_with("list") || ret.starts_with("set") {
+                        self.s.holds(n, None, true);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
     fn literal(&mut self, n: usize, v: &Value, span: Span) {
+        self.shape_of(n, &Term::Val(v.clone()), span);
         if kind(v).is_some() || matches!(v, Value::Str(_)) {
             let n = self.s.find(n);
             self.s.lits[n].push(Literal {
@@ -392,7 +440,13 @@ impl Pass<'_> {
                 }
                 return;
             }
+            ("member", [list, item]) if !matches!(item, Term::Var(_)) => {
+                self.member(rule, list, item, a.span);
+                self.calls(rule, list, a.span);
+                return;
+            }
             ("member", [list, Term::Var(v)]) => {
+                self.member(rule, list, &Term::Var(v.clone()), a.span);
                 let n = self.var(rule, v);
                 match list {
                     Term::Func { name, .. } if name == "int.range" => {
@@ -428,6 +482,26 @@ impl Pass<'_> {
         }
     }
 
+    /// `x in l`: over an object, an error naming the pattern (R-58); over
+    /// a variable, checked in `solve`.
+    fn member(&mut self, rule: usize, list: &Term, item: &Term, span: Span) {
+        match list {
+            Term::Var(v) => self.members.push(Member {
+                rule,
+                list: v.clone(),
+                item: item.clone(),
+                span,
+            }),
+            Term::Obj(_) | Term::Val(Value::Obj(_)) => self.members.push(Member {
+                rule,
+                list: String::new(),
+                item: item.clone(),
+                span,
+            }),
+            _ => {}
+        }
+    }
+
     fn lit(&mut self, rule: usize, l: &Lit, span: Span) {
         match l {
             Lit::Pos(a) | Lit::Not(a) => self.atom(rule, a),
@@ -444,8 +518,9 @@ impl Pass<'_> {
                         self.literal(n, v, span);
                     }
                     (Term::Var(x), t) | (t, Term::Var(x)) => {
+                        let n = self.var(rule, x);
+                        self.shape_of(n, t, span);
                         if let Some((ty, what)) = self.term_type(t) {
-                            let n = self.var(rule, x);
                             self.s.hard(n, ty, span, what);
                         }
                     }
@@ -583,6 +658,7 @@ pub fn infer(
             .collect(),
         schema,
         checks: Vec::new(),
+        members: Vec::new(),
         vars: Vec::new(),
         head_names: BTreeMap::new(),
     };
@@ -767,6 +843,40 @@ impl Pass<'_> {
                     ));
                 }
                 _ => {}
+            }
+        }
+        // `x in o` over an object: its entries are `(k, v) in o` (R-58).
+        let members = std::mem::take(&mut self.members);
+        for m in &members {
+            let object = if m.list.is_empty() {
+                true
+            } else {
+                match self.vars[m.rule].0.get(&m.list).copied() {
+                    Some(n) => {
+                        let r = self.s.find(n);
+                        matches!(self.s.shape[r], (Some(_), false))
+                    }
+                    None => false,
+                }
+            };
+            if object {
+                let x = shown_term(&m.item);
+                let o = match m.list.as_str() {
+                    "" => "{..}".to_string(),
+                    l => shown_var(l),
+                };
+                diags.push(
+                    Diagnostic::error(
+                        m.span,
+                        format!(
+                            "`{x} in {o}`: `{o}` is an object, and an object's entries are \
+                             matched by a pattern"
+                        ),
+                    )
+                    .with_help(format!(
+                        "`(k, v) in {o}` takes each key and value, `(k, _) in {o}` each key (R-58)"
+                    )),
+                );
             }
         }
         if !diags.is_empty() {

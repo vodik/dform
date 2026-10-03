@@ -3057,6 +3057,11 @@ fn eval_eq(
                     return Ok(None);
                 }
                 if let Some((name, args)) = failed_builtin(t, &out) {
+                    // A partial function off its domain has no value: the
+                    // literal fails, a binding and a pattern alike (R-58).
+                    if crate::functions::get(&name).is_some_and(|f| f.partial) {
+                        return Ok(None);
+                    }
                     let args: Vec<String> = args.iter().map(partition::fmt_value).collect();
                     bail!(
                         "{name}({}) is not defined for these arguments",
@@ -4482,9 +4487,8 @@ mod tests {
                 stmts.swap(i, (*seed >> 33) as usize % (i + 1));
             }
             for s in stmts.iter_mut() {
-                match s {
-                    Stmt::Module(c) => shuffle(&mut c.body, seed),
-                    _ => {}
+                if let Stmt::Module(c) = s {
+                    shuffle(&mut c.body, seed);
                 }
             }
         }
