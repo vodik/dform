@@ -166,8 +166,8 @@ pub fn keep(
     Ok(())
 }
 
-/// The time a memo is kept at: `DFORM_TEST_NOW` in tests, else the clock,
-/// to the second.
+/// The time now, RFC 3339 in UTC to the second (what a memo is kept at
+/// and `time.now` answers): `DFORM_TEST_NOW` in tests, else the clock.
 pub fn now() -> String {
     match std::env::var("DFORM_TEST_NOW") {
         Ok(t) => t,

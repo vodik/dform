@@ -1507,7 +1507,6 @@ with their modes from its schema.
 
 ```dform
 provider file
-provider random
 
 resource google.monitoring_dashboard pngu {
   dashboard_json = file.json["files/dashboard-pngu.json"]
@@ -1522,14 +1521,17 @@ nothing before it binds is a compile error. Evaluation is by rounds: every
 call the rules demand is asked once, then the program is evaluated again,
 until no call is new.
 
-`file`, `env` and `random` are built-in fact providers, declared like any
+`file`, `env` and `time` are built-in fact providers, declared like any
 provider and needing no `dform.toml` source:
 
 | provider | externs                                                   | answered by |
 |----------|-----------------------------------------------------------|-------------|
 | `file`   | `file.json(+path, -value)`, `file.text(+path, -value: string)`, a path from the program's directory | dform |
 | `env`    | `env.var(+name, -value: secret(string))`; `env.var(NAME)` as a term reads it | dform |
-| `random` | `random.password(+key, -value: secret(string)) persist`   | the provider the stack configures as `random` (the mock in examples/crud-api), which holds the secret |
+| `time`   | `time.now(-t: time)`, the current time in UTC; `time.now()` as a term reads it | dform |
+
+`random` is not a provider: `random.password` and friends are std
+functions (below), and `provider random` is an error saying so.
 
 A program that writes `extern file.json(..)` is told to write `provider
 file {}` instead; `extern` is the schema's word (provider schemas, the
@@ -1540,29 +1542,59 @@ provider's schema: facts of the extern, the rows whose `+` columns are the
 inputs.
 
 The plan file records the answers the plan read (not a call with a
-`secret(...)` column), and `apply PLAN` asks none of them again. A
-`persist` extern's answers are kept in state and never asked again, so a
-generated password stays the same across runs. `dform state taint STACK EXTERN
-ARGS...` forgets one of them (its input values written as `--set` takes a
-value), so the next plan asks the provider again:
+`secret(...)` column, nor one that carries a secret), and `apply PLAN`
+asks none of them again. Nothing else keeps an answer: every run asks
+again, and `time.now()` is a new time on every plan.
 
-```bash
-dform state taint p random.password app    # the next plan generates a new one
+What must stay the same across runs is kept by `memo.first(+key: string,
++candidate, -value)`, a built-in relation in scope with no `provider`
+statement (docs/grammar.md "Memo"): the first candidate ever given for a
+key is the value on every later run. An apply keeps what it read in the
+deployment's state; a plan keeps nothing. `dform state taint memo KEY
+[TARGET]` forgets one, so the next run gives its candidate again, and
+`why` names a kept value `memo, first kept <when>`:
+
+```dform
+provider time
+let created = memo.first("db-created", time.now())   # observed once
+warn "rotate the database password" where {
+  memo.first("db-created", time.now(), created)
+  time.before(time.add(created, 30d), time.now())
+}
 ```
 
-A `secret(T)` column (`random.password`'s value) never enters dform (E DR-19). The Query names the secret columns
-(`QueryRequest.secret`), and the provider answers each with where it holds
-the value: a SECRET null whose `held` names the provider, the deployment,
-the extern and its inputs, the column, and the value's keyed digest (with a
-key derived from the deployment's plan key, `digest_key` at Configure). The
-run has a secret null, labeled `random.password/crud-api-db#2` (the extern,
-its inputs, the column from 1); a sensitive field it reaches goes to the
-provider in the Apply document as that label and where it is held, and the
-provider reads the value there, inside the call. A persisted answer keeps
-the label, the digest and the reference in state, and a replay hands the
-reference on; a provider that answers a secret column with its value is
-refused. The mock keeps what it answered in its world (`held`), a real
-provider in its own store (a secret manager).
+```bash
+dform state taint memo db-created    # the next apply keeps a new time
+```
+
+Generated secrets are std functions, derived rather than drawn:
+`random.password(key[, length[, alphabet]])` (32 alphanumerics by
+default; `"ascii"`, `"hex"`, `"base64"`), `random.bytes(key, length)`
+(base64 text) and `random.signing_key(key)` (ed25519 in Synapse's format)
+return `secret(string)`; `random.id(key[, length])` and
+`random.uuid(key)` are public. Each is HKDF-SHA256 of the deployment's
+master secret, `RANDOM_MASTER` in the environment or else a key derived
+from the stack's key file (`state.key`, made on first use and moved with
+the state), with the function, the deployment, the key and every knob in
+the derivation: the same on every run, stored nowhere, and a new value
+when a knob, the key or the master changes (rotate with a new key,
+`"db-pw-2"`). A value that must be made once and survive a change of
+master is `memo.first(KEY, random.bytes(KEY, 32))`: a memo of a secret
+candidate is kept sealed with a key derived from the stack's key, never in
+state in the clear, and opened in memory by the run that reads it.
+
+A provider's `secret(T)` column never enters dform (E DR-19). The Query
+names the secret columns (`QueryRequest.secret`), and the provider
+answers each with where it holds the value: a SECRET null whose `held`
+names the provider, the deployment, the extern and its inputs, the
+column, and the value's keyed digest (with a key derived from the
+deployment's plan key, `digest_key` at Configure). The run has a secret
+null, labeled `kv.password/app#2` (the extern, its inputs, the column from
+1); a sensitive field it reaches goes to the provider in the Apply
+document as that label and where it is held, and the provider reads the
+value there, inside the call; a provider that answers a secret column
+with its value is refused. The mock keeps what it answered in its world
+(`held`), a real provider in its own store (a secret manager).
 
 What dform keeps of a world document beyond a run, the in-flight record of
 an interrupted apply and the controller's baseline, holds a leaf at a

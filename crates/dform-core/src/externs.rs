@@ -795,8 +795,8 @@ pub fn env(f: &ExternFn, inputs: &[Value]) -> Option<Result<Vec<Vec<Value>>>> {
     })
 }
 
-/// The built-in `time.now(-t: time)`: the current time, UTC, read again
-/// every run (a plan file records it, so its apply reads the plan's).
+/// The built-in `time.now(-t: time)`: the current time, UTC, to the
+/// second, read again every run (a plan file records it, so its apply reads the plan's).
 /// `DFORM_TEST_NOW` (RFC 3339) stands in for the clock in tests. `None`
 /// for another extern.
 pub fn time(f: &ExternFn) -> Option<Result<Vec<Vec<Value>>>> {
@@ -805,7 +805,7 @@ pub fn time(f: &ExternFn) -> Option<Result<Vec<Vec<Value>>>> {
     }
     let now = match std::env::var("DFORM_TEST_NOW") {
         Ok(t) => t,
-        Err(_) => jiff::Timestamp::now().to_string(),
+        Err(_) => crate::memo::now(),
     };
     Some(
         crate::time::Time::parse(&now)

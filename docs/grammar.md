@@ -99,7 +99,7 @@ spelled `where`. Anywhere a plain name is expected (a
 key, a path segment, a declared name) any keyword is a name, and a keyword
 followed by `(` is an atom or a call (`input("env", v)`). A statement
 keyword may start a chain in a term (`settings[env]`). Contextual words in
-declarations, where the position is fixed: `from`, `check`, `persist`,
+declarations, where the position is fixed: `from`, `check`,
 `mixed`, `as` (in `use`), the attribute flags (`required computed id
 sensitive nullable`). `module`, `policy`, `import` and `export` are
 words of an earlier surface: each is an error that names what to write
@@ -394,8 +394,8 @@ calendar-aware in the time's zone: a month is a calendar month (the 31st
 plus a month is the next month's last day), a day a calendar day across
 a DST change (23 or 25 hours). Zones are the tzdb built into dform
 (`dform version` prints its release), never the host's. There is no
-time literal, and no `now` function: the current time is an extern's
-answer (R-60).
+time literal, and no `now` function: the current time is the `time`
+provider's extern, `time.now()` ("Memo").
 
 A provider takes a quantity or a time in the form its schema gives the
 attribute's type: `bytes(quantity)` (Kubernetes's string, the default),
@@ -427,7 +427,7 @@ stmt       := KEYWORD ...                      ; one production per keyword, bel
 provider   := "provider" NAME block?                ; no block when it has no entries
 type       := "type" NAME "=" type | "type" DOTTED attrs
 decl       := "decl" DOTTED columns "mixed"?
-extern     := "extern" DOTTED "(" bindarg ("," bindarg)* ")" "persist"?
+extern     := "extern" DOTTED "(" bindarg ("," bindarg)* ")"
 bindarg    := ("+" | "-") NAME (":" type)?
 input      := ("input" | "key") NAME ":" type ("=" term)? ("check" body1)?
             | "input" NAME fields                  ; an object input (R-54)
@@ -727,15 +727,21 @@ clause, no `+=` and no rank; a setting given twice is an error.
 
 A `provider` statement also brings the provider's externs into scope, with
 their binding modes (DESIGN.org R-8): a program does not write `extern`
-for them. `file`, `env` and `random` are built-in fact providers, declared
-like any provider and needing no `dform.toml` source (`externs::BUILTINS`):
+for them. `file`, `env` and `time` are built-in fact providers, declared
+like any provider and needing no `dform.toml` source (`externs::BUILTINS`);
+dform answers them itself:
 
 ```
 provider file         file.json(+path, -value: any), file.text(+path, -value: string)
 provider env          env.var(+name, -value: secret(string))
-provider random       random.password(+key, -value: secret(string)) persist
+provider time         time.now(-t: time)
 provider aws          aws.availability_zone(+state, -name: string, -index: int)
 ```
+
+An extern is asked again every run (a plan file records what its plan
+read, and its apply reads that): nothing keeps an answer but `memo.first`
+("Memo"). `random` is not a provider: `provider random` is an error
+naming the std functions `random.password` and friends ("Functions").
 
 A data source (Terraform's `data` block) is such an extern, and a table:
 `aws.availability_zone("available", az, n)` binds each zone's name and its
@@ -746,11 +752,51 @@ answers it from `crates/dform-mock/schemas/aws-mock.externs.df`.
 
 `extern file.json(..)` in a program is an error naming the `provider`
 statement to write instead. `env.var(t)` as a term is the lookup
-`env.var[t]`; without `provider env` it is an error that says to declare
-it. `extern` stays the schema's word: provider schemas and the compiler's
-tests declare externs with it, and so, until the compiler reads a
-provider's schema (DESIGN.org R-24), does a program for a provider that is
-not built in.
+`env.var[t]`, `time.now()` the lookup `time.now[]`; without the
+`provider` statement either is an error that says to declare it.
+`persist` after an extern is an error naming `memo.first`. `extern`
+stays the schema's word: provider schemas and the compiler's tests
+declare externs with it, and so, until the compiler reads a provider's
+schema (DESIGN.org R-24), does a program for a provider that is not
+built in.
+
+### Memo
+
+`memo.first(+key: string, +candidate, -value)` keeps a value across runs
+(R-60): the first candidate ever given for a key is the value on that
+run and every later one, whatever the candidate becomes. It is a built-in
+relation, in scope with no `provider` statement; `memo.first(k, c)` as a
+term is its value. The program says what is kept, where it reads it:
+
+```
+let pw = memo.first("db-pw", random.bytes("db-pw", 32))   # made once, kept
+let created = memo.first("db-created", time.now())        # observed once
+
+# The rotation idiom: a creation time kept, compared with the clock.
+warn "rotate the database password" where {
+  memo.first("db-created", time.now(), created)
+  time.before(time.add(created, 30d), time.now())
+}
+```
+
+Within a run the first call of a key answers every other one, so two
+sites agree. A plan keeps nothing; an apply keeps what it read in the
+deployment's state when it completes a tick. `dform state taint memo KEY
+[TARGET]` forgets a kept value: the next run gives the candidate again,
+and the next apply keeps it. `why` names a kept value's source as
+`memo, first kept <when>`.
+
+A memo whose candidate is a secret (the secrets pass decides, per
+literal) keeps a secret: state holds it sealed with a key derived from
+the stack's key file (`state.key`, which moves with the state), the run
+that reads it opens it in memory, and neither the plan file nor any
+output carries it in the clear. A memo of a public candidate is kept as
+it is, readable in `state show`.
+
+Use a memo for what cannot be produced again: a time observed once, a
+value an API generated, a secret that must survive a change of master.
+A derived secret (`random.password(key)`) needs none: it is the same on
+every run by construction.
 
 ### Type aliases
 
@@ -1057,6 +1103,23 @@ are written bare.
 | `duration`| `duration.parse(s)`, `duration.total(d, unit)`                            |
 | `bytes`   | `bytes.to(q, unit)` (`"Mi"`: a whole number of them, else no value)      |
 | `cpu`     | `cpu.to(q, unit)` (`"m"` or `""` for cores)                               |
+| `random`  | `random.password(key[, length[, alphabet]])`, `random.bytes(key, length)`, `random.signing_key(key)` (secrets); `random.id(key[, length])`, `random.uuid(key)` |
+
+`random.*` are derived, not drawn: each value is HKDF-SHA256 of the
+deployment's master secret (`RANDOM_MASTER` in the environment, else a
+key derived from the stack's key file, made on first use) with the
+function, the deployment, the key and every knob in the derivation, so a
+value is the same on every run, nothing stores it, and changing the
+length, the alphabet (`"alnum"`, the default, `"ascii"`, `"hex"`,
+`"base64"`), the key or the master is a new value: rotation is a new key
+(`"db-pw-2"`) or a new master. `random.password` (32 alphanumerics by
+default), `random.bytes` (base64 text) and `random.signing_key` (an
+ed25519 key in Synapse's format, `ed25519 a_XXXX SEED`) are declared `->
+secret(string)`: a function returning `secret(T)` is a source of the
+secrets pass like a secret input. `random.id` (hex) and `random.uuid` are
+public, so a name may carry one. A value that must be made once and kept
+whatever the master becomes is `memo.first(KEY, random.bytes(KEY, 32))`
+("Memo").
 
 A function to `bool` is also a predicate: `inet.contains(n, a)` as a body
 literal holds when the call is true. Conversions are constructors named
@@ -1162,8 +1225,8 @@ component's private to the copy, a value leaving it through an output),
 an input `k` the cell `n::k(V) :- attr(input, "n", k, V)` with its default
 at `@default`, its resources `n::x`, its writes needing no grant (ranks
 decide); a top-level input also takes `--set`. A copy inside a copy puts
-the outer scope in front (`edge.left::vpc`). `extern p(+a, -b) persist`
-is asked on demand, and `declassify(v, "reason")` lowers a secret's label
+the outer scope in front (`edge.left::vpc`). `extern p(+a, -b)` is asked
+on demand, and `declassify(v, "reason")` lowers a secret's label
 (E DR-19).
 
 A refinement (`check`, R-1) names the attribute or input by its own name,
