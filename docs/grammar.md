@@ -1472,6 +1472,13 @@ header").
 The normal forms:
 
 - `{ a: a }` is `{ a }`, and a block's entry `k = k` is `k`;
+- a resource block's leaves under one parent path are one entry:
+  `metadata.name = "a"` and `metadata.namespace = n` are `metadata = {
+  name: "a", namespace: n }` when the parent has two or more entries, each
+  a leaf (a value that is not an object) set with `=` at one rank, and
+  nothing sets a path below them, in source order at the first one's
+  place; a parent with an object under it (`metadata.labels = { .. }`) or
+  with one leaf (`spec.replicas = 1`) stays dotted;
 - a `provider` or `instance` with no entries has no block: `provider aws`;
 - a header name is bare when it is a name, not a keyword, and not bound by
   the clause; else it is quoted;

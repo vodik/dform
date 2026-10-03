@@ -403,6 +403,74 @@ impl Ctx {
         }
     }
 
+    /// A resource block's leaves under one parent path are one entry
+    /// (R-52, amended): `metadata.name = "a"` and `metadata.namespace = n`
+    /// are `metadata = { name: "a", namespace: n }` when the parent's
+    /// entries are two or more, each a leaf (a value that is not an
+    /// object) written with `=` at one rank, and nothing sets a path below
+    /// them; in source order, at the first one's place. A parent with an
+    /// object under it, or one leaf, stays dotted.
+    fn entry_folds(&mut self, root: &SyntaxNode) {
+        for b in root.descendants().filter(|n| n.kind() == BLOCK) {
+            if b.parent().is_none_or(|p| p.kind() != RESOURCE)
+                || b.descendants_with_tokens().any(|e| e.kind() == COMMENT)
+            {
+                continue;
+            }
+            let entries: Vec<Entry> = b.children().filter_map(|a| Entry::of(&a)).collect();
+            let all = b.children().filter(|c| c.kind() == ASSIGN).count();
+            if entries.len() != all {
+                continue;
+            }
+            let parents: BTreeSet<&[String]> = entries
+                .iter()
+                .filter(|e| e.path.len() > 1)
+                .map(|e| &e.path[..e.path.len() - 1])
+                .collect();
+            for parent in parents {
+                let under = |e: &&Entry| e.path.len() > parent.len() && e.path.starts_with(parent);
+                let kids: Vec<&Entry> = entries.iter().filter(under).collect();
+                let leaves = kids
+                    .iter()
+                    .all(|e| e.path.len() == parent.len() + 1 && e.leaf);
+                let ranks: BTreeSet<&Option<String>> = kids.iter().map(|e| &e.rank).collect();
+                let whole = entries.iter().any(|e| parent.starts_with(&e.path));
+                if kids.len() < 2 || !leaves || ranks.len() != 1 || whole {
+                    continue;
+                }
+                let fields: Vec<String> = kids
+                    .iter()
+                    .map(|e| {
+                        let k = e.path.last().map_or("", String::as_str);
+                        match &e.value {
+                            Some(v) if v != k || !is_name(k) => format!("{}: {v}", key_text(k)),
+                            _ => k.to_string(),
+                        }
+                    })
+                    .collect();
+                let rank = kids[0]
+                    .rank
+                    .as_ref()
+                    .map_or(String::new(), |r| format!(" {r}"));
+                let path: Vec<String> = parent.iter().map(|s| key_text(s)).collect();
+                let folded = format!("{} = {{ {} }}{rank}", path.join("."), fields.join(", "));
+                self.put(&kids[0].node, folded);
+                for e in &kids[1..] {
+                    // From the end of the entry before it: its separator too.
+                    let start = e
+                        .node
+                        .prev_sibling()
+                        .map_or(e.node.text_range().start(), |p| p.text_range().end());
+                    self.edits.push((
+                        start.into(),
+                        e.node.text_range().end().into(),
+                        String::new(),
+                    ));
+                }
+            }
+        }
+    }
+
     fn objects(&mut self, root: &SyntaxNode) {
         for f in root.descendants().filter(|n| n.kind() == OBJECT_FIELD) {
             if f.parent().is_some_and(|p| p.kind() != OBJECT) {
@@ -419,6 +487,66 @@ impl Ctx {
     }
 }
 
+/// A resource block's entry, for [`Ctx::entry_folds`]: `path = value
+/// [rank]`, or the pun `path [rank]` (`value` none).
+struct Entry {
+    node: SyntaxNode,
+    path: Vec<String>,
+    value: Option<String>,
+    /// Not an object.
+    leaf: bool,
+    rank: Option<String>,
+}
+
+impl Entry {
+    /// A block's `=` entry with a path of names and strings; `None` for
+    /// `+=` or a path with an index.
+    fn of(a: &SyntaxNode) -> Option<Entry> {
+        let path = a.children().find(|c| c.kind() == BLOCK_PATH)?;
+        let segs: Vec<SyntaxToken> = toks(&path).filter(|t| t.kind() != DOT).collect();
+        if segs
+            .iter()
+            .any(|t| !is_word(t.kind()) && t.kind() != STRING)
+        {
+            return None;
+        }
+        if toks(a).any(|t| t.kind() == PLUS_EQ) {
+            return None;
+        }
+        let value = a.children().find(|c| c.kind() != BLOCK_PATH);
+        Some(Entry {
+            node: a.clone(),
+            path: segs
+                .iter()
+                .map(|t| t.text().trim_matches('"').to_string())
+                .collect(),
+            leaf: value.as_ref().is_none_or(|v| v.kind() != OBJECT),
+            value: value.map(|v| v.text().to_string().trim().to_string()),
+            rank: toks(a)
+                .find(|t| t.kind() == RANK)
+                .map(|t| t.text().to_string()),
+        })
+    }
+}
+
+/// An object key or a path segment as written: bare when it is a name,
+/// else quoted.
+fn key_text(k: &str) -> String {
+    if is_word_text(k) {
+        k.to_string()
+    } else {
+        format!("{k:?}")
+    }
+}
+
+/// A word a key may be written as bare: a name or a keyword.
+fn is_word_text(s: &str) -> bool {
+    let mut cs = s.chars();
+    cs.next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && cs.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
 /// The source with its normal forms, or `None` when it is in them.
 pub fn normalize(root: &SyntaxNode, src: &str) -> Option<String> {
     let mut c = Ctx {
@@ -431,6 +559,7 @@ pub fn normalize(root: &SyntaxNode, src: &str) -> Option<String> {
     c.objects(root);
     c.empty_blocks(root);
     c.entry_puns(root);
+    c.entry_folds(root);
     apply(src, c.edits)
 }
 

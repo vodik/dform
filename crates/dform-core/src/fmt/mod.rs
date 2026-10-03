@@ -25,11 +25,7 @@ pub fn format_source(name: &str, src: &str) -> anyhow::Result<String> {
 
 /// [`format_source`] for a file of a project, whose typed positions
 /// `typing` knows.
-pub fn format_source_in(
-    name: &str,
-    src: &str,
-    typing: Option<&Typing>,
-) -> anyhow::Result<String> {
+pub fn format_source_in(name: &str, src: &str, typing: Option<&Typing>) -> anyhow::Result<String> {
     if is_signature_file(src) {
         return Ok(format_signature_file(src));
     }
@@ -363,6 +359,35 @@ mod tests {
         assert_eq!(fmt(src), src);
         let src = "provider k8s { # later\n}\np(x) where q(x) # a rule\n# the end\n";
         assert_eq!(fmt(src), src);
+    }
+
+    /// A resource block's leaves under one parent are one entry (R-52,
+    /// amended): two or more leaves, `=` at one rank, nothing below them.
+    #[test]
+    fn leaves_under_one_parent_fold_into_an_object() {
+        assert_eq!(
+            fmt(
+                "resource t n {\n  metadata.name = \"a\"\n  spec.replicas = 1\n  \
+                 metadata.namespace\n  metadata.\"x-y\" = [1]\n}\n"
+            ),
+            "resource t n { metadata = { name: \"a\", namespace, \"x-y\": [1] }, spec.replicas = 1 }\n"
+        );
+        // An object under the parent, a path below it, `+=`, two ranks, one
+        // leaf: dotted.
+        for src in [
+            "resource t n { metadata.name = \"a\", metadata.labels = { a: 1 } }\n",
+            "resource t n { metadata.name = \"a\", metadata.labels.a = 1 }\n",
+            "resource t n { tags.a = 1, tags.b += [2] }\n",
+            "resource t n { tags.a = 1 @default, tags.b = 2 }\n",
+            "resource t n { spec.replicas = 1 }\n",
+            "set { db.size = 1, db.tier = 2 } where env == \"prod\"\n",
+        ] {
+            assert_eq!(fmt(src), src);
+        }
+        assert_eq!(
+            fmt("resource t n { tags.a = 1 @default, tags.b = 2 @default }\n"),
+            "resource t n { tags = { a: 1, b: 2 } @default }\n"
+        );
     }
 
     #[test]
