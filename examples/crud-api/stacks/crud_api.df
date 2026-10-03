@@ -25,13 +25,13 @@ input region: string = "us-east1"
 input replicas: int = 2 check replicas >= 1
 # The database's machine and availability, per environment (below).
 input database { tier: string, availability: string }
+decl approve(type, address)
 
 # release("crud_api", "digest", "sha256:9f2c..."): data/releases.df.
 use data.releases
 # approve(t, a): accept the drift of t.a, data/approvals.df's.
 use data.approvals
 
-decl approve(type, address)
 approve(t, a) where approvals.approve(t, a)
 
 # Sources and versions are dform.toml's.
@@ -202,6 +202,10 @@ component app {
   input namespace: string
   input db_secret: string
   input replicas: int
+  # Only while the instance runs: a color with no run has no Deployment,
+  # and a ref to it would dangle.
+  output ready_replicas: int = n where has color, n = deploy.status.readyReplicas
+  output total_replicas: int = n where has color, n = deploy.status.replicas
 
   let labels = { app: "crud-api", color }
 
@@ -246,11 +250,6 @@ component app {
       ports: [{ port: 8080, protocol: "TCP" }],
     }]
   }
-
-  # Only while the instance runs: a color with no run has no Deployment,
-  # and a ref to it would dangle.
-  output ready_replicas: int = n where has color, n = deploy.status.readyReplicas
-  output total_replicas: int = n where has color, n = deploy.status.replicas
 }
 
 ########################################

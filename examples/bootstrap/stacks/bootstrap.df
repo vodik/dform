@@ -12,6 +12,8 @@
 
 edition 2026
 
+output endpoint = renfry.endpoint
+
 # The mock GCP's schema is the project's own (dform.toml: providers/gcp).
 provider google
 provider k8s
@@ -68,5 +70,3 @@ resource k8s.deployment dform_controller {
     args: ["controller", "run", "workload"],
   }]
 } where node_pool_up(first_pool)
-
-output endpoint = renfry.endpoint

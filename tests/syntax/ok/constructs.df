@@ -10,20 +10,20 @@ input gke { static_ips: any }
 input seen from yaml("seen.yaml")[*].rows
 input peers from csv("peers.csv")
 input pinned from yaml(git("ops.git", "main", "pinned.yaml"))
-
 decl seen(a: string, b: int)
 decl peers(env: enum("dev", "prod"), name: string)
 decl pinned(name: string)
-
 decl provided(a, b)
 decl project(id: int, network_name: string)
+# Patterns (R-58): after `in`, on the left of `=`, as an argument.
+decl labels(l)
+decl images(i)
+decl p(a) mixed
+decl q(a) mixed
 
 project(1, "net-a")
 names(n) where project(network_name: n)
 
-# Patterns (R-58): after `in`, on the left of `=`, as an argument.
-decl labels(l)
-decl images(i)
 label(k, v) where labels(l), (k, v) in l
 host_of(h) where labels(l), { host: h } = l
 tagged(repo, tag) where images(i), (repo, tag) = str.split(i, ":", 1)
@@ -35,6 +35,7 @@ use checks where env("prod")
 
 component m {
   input on: bool
+  output vpc: addr = vpc
 
   resource net.vpc vpc @default {
     cidr = "10.0.0.0/16"
@@ -46,7 +47,6 @@ component m {
 
   on_vpc("vpc") where on == true
   iam_need("app", "net.read", ref(net.vpc, "vpc", "id"))
-  output vpc: addr = vpc
 }
 
 instance m main { on = true }
@@ -84,8 +84,6 @@ ignore_changes(net.vpc["main::vpc"], "tags.owner")
 counts(n_) where n_ = count(x_), q(x_)
 deny "q must not be empty" where not q(1)
 v("input", "output", "settings", "type") where input("env", _), output("k", _)
-decl p(a) mixed
-decl q(a) mixed
 p(5)
 q(2)
 w(v) where v = main.vpc, checks.listed("main")

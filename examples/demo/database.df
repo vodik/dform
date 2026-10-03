@@ -4,8 +4,9 @@ input backup_days: int
 input multi_az: bool
 #| The subnets the database is placed in, one row each.
 input subnet
-
 decl subnet(subnet: net.subnet)
+#| Only when the database exists in this environment.
+output iam_need = { action: "db.connect", resource: db } where has backup_days
 
 #| A PostgreSQL database in the network's private subnets.
 resource db.postgres db {
@@ -14,6 +15,3 @@ resource db.postgres db {
   backup_days
   multi_az
 }
-
-#| Only when the database exists in this environment.
-output iam_need = { action: "db.connect", resource: db } where has backup_days

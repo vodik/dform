@@ -17,6 +17,8 @@
 edition 2026
 
 input env: enum("dev", "prod") = "dev"
+decl approve(type, address)
+decl approval(token)
 
 # The release to run, `releases.release(image)`; a change to the file is
 # an input event, as to any program file.
@@ -25,8 +27,6 @@ use data.releases
 # a signed approval of a plan's digest.
 use data.approvals
 
-decl approve(type, address)
-decl approval(token)
 approve(t, a) where approvals.approve(t, a)
 approval(t) where approvals.approval(t)
 

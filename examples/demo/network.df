@@ -11,6 +11,12 @@ edition 2026
 component vpc {
   #| The VPC's IPv4 range; each zone's subnet is a /20 of it.
   input vpc_net: inet
+  decl private_subnet(subnet: net.subnet)
+  #| The network's VPC, for peering.
+  output vpc: net.vpc = vpc
+  #| The network's private subnets, one row each, for a database or a
+  #| cluster: `main.private_subnet(s)`.
+  output private_subnet
 
   resource net.vpc vpc { cidr = vpc_net, tags = { env, component: "network" } }
 
@@ -23,12 +29,6 @@ component vpc {
     zone = z
     visibility = "private"
   } where data("zone", z)
-  #| The network's VPC, for peering.
-  output vpc: net.vpc = vpc
 
-  decl private_subnet(subnet: net.subnet)
   private_subnet(s) where s in net.subnet, s.visibility == "private"
-  #| The network's private subnets, one row each, for a database or a
-  #| cluster: `main.private_subnet(s)`.
-  output private_subnet
 }

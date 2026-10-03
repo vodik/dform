@@ -5,8 +5,9 @@ input nodepool_min: int
 input nodepool_max: int
 #| The subnets the cluster is placed in, one row each.
 input subnet
-
 decl subnet(subnet: net.subnet)
+#| Only when the cluster exists in this environment.
+output iam_need = { action: "k8s.describe_cluster", resource: cluster } where has private_api
 
 #| A Kubernetes cluster and one node pool in the network's private
 #| subnets.
@@ -17,6 +18,3 @@ resource k8s.cluster cluster {
 }
 
 resource k8s.nodepool default { cluster, min = nodepool_min, max = nodepool_max }
-
-#| Only when the cluster exists in this environment.
-output iam_need = { action: "k8s.describe_cluster", resource: cluster } where has private_api

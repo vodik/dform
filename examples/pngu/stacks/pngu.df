@@ -37,8 +37,9 @@ input gke {
 # The rows are data/peerings.csv's, typed column by column as `decl peering`
 # says: a row whose env is not one of these is an error naming its line.
 input peering from csv("data/peerings.csv")
-
 decl peering(env: environment, name: string, peer_network: string)
+output active_env = env
+output project_id = gcp.project_id
 
 ########################################
 # Environment selection
@@ -231,6 +232,3 @@ resource alert_metrics_pack pngu {
 ########################################
 # Optional outputs (handy for wiring)
 ########################################
-
-output active_env = env
-output project_id = gcp.project_id

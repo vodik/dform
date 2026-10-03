@@ -215,6 +215,7 @@ deny "a database must not be public" { database: pg } where pg in db.postgres, p
 
 component network {
   input cidr: inet
+  output vpc: net.vpc = vpc
 
   resource net.vpc vpc { cidr, tags = { component: "network" } }
 
@@ -223,8 +224,6 @@ component network {
     cidr = inet.subnet(cidr, 8, n)
     zone = z
   } where zone(z, n)
-
-  output vpc: net.vpc = vpc
 }
 
 instance network blue { cidr = "10.1.0.0/16" }

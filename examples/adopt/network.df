@@ -1,6 +1,10 @@
 edition 2026
 
 input vpc_net: inet
+#| The private subnets, one row each.
+decl private_subnet(subnet: net.subnet)
+output vpc: net.vpc = vpc
+output private_subnet
 
 resource net.vpc vpc { cidr = vpc_net, tags = { env, component: "network" } }
 
@@ -14,9 +18,4 @@ resource net.subnet "private-${z}" {
   visibility = "private"
 } where data("zone", z)
 
-output vpc: net.vpc = vpc
-
-#| The private subnets, one row each.
-decl private_subnet(subnet: net.subnet)
 private_subnet(s) where s in net.subnet, s.visibility == "private"
-output private_subnet
