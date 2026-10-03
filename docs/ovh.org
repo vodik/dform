@@ -1,13 +1,22 @@
 #+TITLE: dform on OVH Public Cloud, worked through
 #+STARTUP: overview
 
-A worked example in today's surface syntax (docs/grammar.md, edition
-2026): a private network, OVH Managed Kubernetes (MKS) on it, an app on the
+*History.* This walk-through is in the surface of 2026-10-01, before
+R-65 (modules, components and stacks), R-38 (settings are inputs) and
+R-73 (a deployment's outputs are a keyed read): =stack ovh.infra[env]
+{..}=, =settings dev {..}= rows and =settings[env]=, =module=,
+=stack_output(..)= and =input relation .. from= are gone. It is
+kept for its reasoning about OVH; the example and its rewrite in the
+current syntax, without the bridge, are Phase 10's (DESIGN.org R-46).
+docs/grammar.md is the syntax.
+
+A worked example in the surface syntax of its day (edition 2026): a
+private network, OVH Managed Kubernetes (MKS) on it, an app on the
 cluster, and continuous delivery by the in-cluster controller. The last
 part is the interesting one: changing the cluster while it runs, with the
 controller living on it.
 
-*None of this runs today.* It parses against the grammar as it stands, but
+*None of this runs.* It parsed against the grammar of its day, but
 three pieces do not exist yet, and the text marks every place it leans on
 one of them:
 

@@ -56,8 +56,8 @@ For authoring, prefer:
 - named arguments (`peering(env: env, name: n)`) over positional arguments
 - object/list literals (`{k: v}`, `[a, b]`) over lots of `tags.foo` entries
 - list comprehensions (`[x | ...]`) over hand-written `collect(...)` rules
-- a module `instance` with a `where` clause to gate a group of resources on
-  one guard
+- a component's `instance` with a `where` clause to gate a group of
+  resources on one guard
 - declare a set lattice for list attributes several sources contribute to (`type_lattice(iam.policy, "statements", "set")`)
 
 ## Explode Lists Into Rows With `in`
@@ -202,7 +202,7 @@ Prefer stable resource names and express change via attributes. If you bake lots
 of configuration into the resource name, you create needless replacements.
 
 Good:
-- `net.vpc["network/main/vpc"]` (stable)
+- `net.vpc["main/vpc"]`, the copy `main`'s `vpc` (stable)
 - `cidr` changes across envs
 
 Risky:

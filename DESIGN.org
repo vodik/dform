@@ -10,6 +10,13 @@ Priority A = blocks any real-world use, B = needed for team scale, C = polish.
 Origin: critical review of the prototype, 2026-09-27. Findings verified against
 =src/= and by running probe programs. Lines cite the code as of commit 3e2cf48.
 
+The examples inside the records are history: each is in the surface of the
+day it was written (the prototype's Prolog-style core, =head :- body.=;
+=module=, =policy=, =import=, =export=, the =stack= statement, settings
+rows, =stack_output=), and they are left as written. The surface they
+became is docs/grammar.md (R-65's =use=, =component=, =instance=; R-73's
+keyed read of a deployment; R-72's =/= addresses).
+
 * Direction (decided 2026-09-27)
 The language core follows =proposals/E-synthesis.org= as revised by
 =proposals/F-revision.org=. Read F's section 3 (revised decision records) as
