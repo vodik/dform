@@ -5,49 +5,10 @@
 //! `stacks/main.df` is loaded with the modules its paths name.
 //! Accept a changed `.txt` with `UPDATE_GOLDEN=1 cargo test --test syntax`.
 
+mod common;
+use common::{corpus, df_files, rel, repo};
 use dform::syntax::parser::parse;
 use std::path::{Path, PathBuf};
-
-fn repo() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-}
-
-fn df_files(dir: &Path, recurse: bool, out: &mut Vec<PathBuf>) {
-    let mut entries: Vec<PathBuf> = std::fs::read_dir(dir)
-        .unwrap()
-        .map(|e| e.unwrap().path())
-        .collect();
-    entries.sort();
-    for p in entries {
-        if p.is_dir() {
-            if recurse {
-                df_files(&p, true, out);
-            }
-        } else if p.extension().is_some_and(|e| e == "df") {
-            out.push(p);
-        }
-    }
-}
-
-/// Every `.df` file the repository ships, and the positive corpus.
-fn corpus() -> Vec<PathBuf> {
-    let root = repo();
-    let mut out = Vec::new();
-    df_files(&root, false, &mut out);
-    for d in [
-        "examples",
-        "crates/dform-mock/schemas",
-        "tests/fixtures",
-        "tests/syntax/ok",
-    ] {
-        df_files(&root.join(d), true, &mut out);
-    }
-    out
-}
-
-fn rel(p: &Path) -> String {
-    p.strip_prefix(repo()).unwrap().display().to_string()
-}
 
 #[test]
 fn every_file_parses_and_prints_back() {

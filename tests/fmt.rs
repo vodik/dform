@@ -3,41 +3,9 @@
 //! survives it (R-52), and the CLI rewrites or checks.
 
 mod common;
-use common::{Scratch, repo};
+use common::{Scratch, corpus, rel};
 use dform::syntax::SyntaxKind::{COMMA, WHITESPACE};
 use dform::syntax::parser::parse;
-use std::path::{Path, PathBuf};
-
-fn df_files(dir: &Path, out: &mut Vec<PathBuf>) {
-    let mut entries: Vec<PathBuf> = std::fs::read_dir(dir)
-        .unwrap()
-        .map(|e| e.unwrap().path())
-        .collect();
-    entries.sort();
-    for p in entries {
-        if p.is_dir() {
-            if dir != repo() {
-                df_files(&p, out);
-            }
-        } else if p.extension().is_some_and(|e| e == "df") {
-            out.push(p);
-        }
-    }
-}
-
-fn corpus() -> Vec<PathBuf> {
-    let mut out = Vec::new();
-    df_files(repo(), &mut out);
-    for d in [
-        "examples",
-        "crates/dform-mock/schemas",
-        "tests/fixtures",
-        "tests/syntax/ok",
-    ] {
-        df_files(&repo().join(d), &mut out);
-    }
-    out
-}
 
 fn fmt(src: &str) -> String {
     let p = parse(src);
@@ -69,7 +37,7 @@ fn meaning(src: &str) -> Vec<String> {
 #[test]
 fn the_repository_is_formatted() {
     for f in corpus() {
-        let name = f.strip_prefix(repo()).unwrap().display().to_string();
+        let name = rel(&f);
         if name.starts_with("tests/syntax/ok/e7") {
             continue;
         }
@@ -106,7 +74,7 @@ fn formatting_keeps_every_token_but_commas() {
 fn the_authors_line_breaks_do_not_survive() {
     let mut joins = 0;
     for f in corpus() {
-        let name = f.strip_prefix(repo()).unwrap().display().to_string();
+        let name = rel(&f);
         let src = plain(&std::fs::read_to_string(&f).unwrap());
         let joined = join_lines(&src);
         joins += usize::from(joined != src);

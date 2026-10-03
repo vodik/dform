@@ -366,6 +366,47 @@ pub fn error(src: &str) -> String {
         .to_string()
 }
 
+/// The `.df` files in `dir`, sorted, and with `recurse` those of its
+/// subdirectories.
+pub fn df_files(dir: &Path, recurse: bool, out: &mut Vec<PathBuf>) {
+    let mut entries: Vec<PathBuf> = std::fs::read_dir(dir)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .collect();
+    entries.sort();
+    for p in entries {
+        if p.is_dir() {
+            if recurse {
+                df_files(&p, true, out);
+            }
+        } else if p.extension().is_some_and(|e| e == "df") {
+            out.push(p);
+        }
+    }
+}
+
+/// Every `.df` file the repository ships (its root's, the examples', the
+/// mock's schemas, the fixtures) and the positive corpus `tests/syntax/ok`:
+/// what the parser, the formatter and the editor grammar are tested on.
+pub fn corpus() -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    df_files(repo(), false, &mut out);
+    for d in [
+        "examples",
+        "crates/dform-mock/schemas",
+        "tests/fixtures",
+        "tests/syntax/ok",
+    ] {
+        df_files(&repo().join(d), true, &mut out);
+    }
+    out
+}
+
+/// `p` relative to the repository root, as the tests name a file.
+pub fn rel(p: &Path) -> String {
+    p.strip_prefix(repo()).unwrap().display().to_string()
+}
+
 /// The repository root, for programs and fixtures the tests read.
 pub fn repo() -> &'static Path {
     Path::new(env!("CARGO_MANIFEST_DIR"))

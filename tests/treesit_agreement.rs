@@ -6,52 +6,16 @@
 //! highlight query's reference capture fires on field values, not reads.
 
 mod common;
-use common::repo;
+use common::{corpus, df_files, rel, repo};
 use dform::syntax::SyntaxKind::{self, *};
 use dform::syntax::parser::parse;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use tree_sitter::{Node, Parser, Query, QueryCursor, StreamingIterator, Tree};
-
-fn df_files(dir: &Path, out: &mut Vec<PathBuf>) {
-    let mut entries: Vec<PathBuf> = std::fs::read_dir(dir)
-        .unwrap()
-        .map(|e| e.unwrap().path())
-        .collect();
-    entries.sort();
-    for p in entries {
-        if p.is_dir() {
-            if dir != repo() {
-                df_files(&p, out);
-            }
-        } else if p.extension().is_some_and(|e| e == "df") {
-            out.push(p);
-        }
-    }
-}
-
-/// Every `.df` the repository ships and `tests/syntax/ok` (as tests/fmt.rs).
-fn corpus() -> Vec<PathBuf> {
-    let mut out = Vec::new();
-    df_files(repo(), &mut out);
-    for d in [
-        "examples",
-        "crates/dform-mock/schemas",
-        "tests/fixtures",
-        "tests/syntax/ok",
-    ] {
-        df_files(&repo().join(d), &mut out);
-    }
-    out
-}
 
 fn errs() -> Vec<PathBuf> {
     let mut out = Vec::new();
-    df_files(&repo().join("tests/syntax/err"), &mut out);
+    df_files(&repo().join("tests/syntax/err"), true, &mut out);
     out
-}
-
-fn name(f: &Path) -> String {
-    f.strip_prefix(repo()).unwrap().display().to_string()
 }
 
 fn ts_parse(src: &str) -> Tree {
@@ -180,7 +144,7 @@ fn every_corpus_file_parses_without_error_nodes() {
         let src = std::fs::read_to_string(&f).unwrap();
         let errors = ts_errors(&ts_parse(&src));
         if !errors.is_empty() {
-            bad.push(format!("{}: {}", name(&f), errors.join(", ")));
+            bad.push(format!("{}: {}", rel(&f), errors.join(", ")));
         }
     }
     assert!(bad.is_empty(), "tree-sitter errors:\n{}", bad.join("\n"));
@@ -203,7 +167,7 @@ fn both_parsers_build_the_same_statements_and_literals() {
         let only_ts: Vec<_> = got.iter().filter(|n| !want.contains(n)).map(text).collect();
         bad.push(format!(
             "{}:\n  only the compiler's: {only_rowan:#?}\n  only tree-sitter's: {only_ts:#?}",
-            name(&f)
+            rel(&f)
         ));
     }
     assert!(bad.is_empty(), "{}", bad.join("\n"));
@@ -238,7 +202,7 @@ fn syntax_errors_agree() {
         if want == got.is_empty() {
             bad.push(format!(
                 "{}: the compiler's parser {}, tree-sitter {}",
-                name(&f),
+                rel(&f),
                 if compiler {
                     "rejects it"
                 } else if in_string {
