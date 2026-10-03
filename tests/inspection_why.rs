@@ -66,7 +66,7 @@ fn why_and_query_take_an_address_as_plan_prints_it() {
     let want = dform(at, &["why", r#"net.vpc["main::vpc"]"#]);
     assert!(
         want.starts_with(
-            "net.vpc[\"main::vpc\"]\n  examples/demo/network.df:15  resource \
+            "net.vpc[\"main::vpc\"]\n  examples/demo/network.df:21  resource \
              net.vpc vpc { .. }   (instance network.vpc main)\n"
         ),
         "{want}"
@@ -103,7 +103,7 @@ fn why_an_attribute_shows_every_contribution() {
     assert!(out.contains("  merged from 2 contributions\n"), "{out}");
     assert!(
         out.contains(
-            "examples/demo/network.df:15  resource net.vpc vpc { .. tags = { env, \
+            "examples/demo/network.df:21  resource net.vpc vpc { .. tags = { env, \
              component: \"network\" } }   (instance network.vpc main)\n"
         ),
         "{out}"
@@ -132,12 +132,12 @@ fn why_a_route_shows_the_statements_that_fired() {
         &["why", r#"net.route["blue-to-green"]"#],
     );
     let start = "net.route[\"blue-to-green\"]
-  examples/tour/stacks/tour.df:286  resource net.route \"${a}-to-${b}\" { .. } where reaches(a, b), a != b, network_of(b, v), dest = net.vpc[v].cidr
+  examples/tour/stacks/tour.df:285  resource net.route \"${a}-to-${b}\" { .. } where reaches(a, b), a != b, network_of(b, v), dest = net.vpc[v].cidr
   with a = \"blue\", b = \"green\", v = \"green::vpc\", dest = 10.2.0.0/16
        \"${a}-to-${b}\" = \"blue-to-green\"
        net.vpc[v].cidr = 10.2.0.0/16
   ├─ reaches(\"blue\", \"green\")
-       examples/tour/stacks/tour.df:284  reaches(a, c) where reaches(a, b), link(b, c)
+       examples/tour/stacks/tour.df:283  reaches(a, c) where reaches(a, b), link(b, c)
 ";
     let got: String = out
         .lines()
@@ -146,7 +146,7 @@ fn why_a_route_shows_the_statements_that_fired() {
         .collect();
     assert_eq!(got.replace("  │ ", "    "), start, "{out}");
     assert!(
-        out.contains("├─ spoke(\"green\")   examples/tour/stacks/tour.df:251\n"),
+        out.contains("├─ spoke(\"green\")   examples/tour/stacks/tour.df:250\n"),
         "{out}"
     );
     assert!(out.contains("network[t].vpc = \"green::vpc\"\n"), "{out}");
