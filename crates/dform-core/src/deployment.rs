@@ -182,6 +182,17 @@ pub const NO_PROVIDER: &str = "the program names no provider: add `provider NAME
      (dform.toml names its source) or run under `dev --provider`";
 
 impl Loaded {
+    /// The program names no provider but built-in ones (`file`, `env`,
+    /// `time`) and declares no resource type of its own for the mock to
+    /// play: its run starts no provider, the mock's `fake` included (R-26).
+    pub fn starts_none(&self) -> bool {
+        self.providers.is_empty()
+            && !self.program.statements.iter().any(|s| {
+                matches!(s, Stmt::Pending(p)
+                    if matches!(p.kind, crate::ast::PendingKind::TypeDecl { .. }))
+            })
+    }
+
     /// A run that starts providers needs one: a program with no
     /// `provider` statement, run with no `--provider`, starts none (R-26).
     pub fn require_provider(&self) -> Result<()> {
@@ -652,7 +663,10 @@ impl Located {
         let lowered = l.lowered.as_ref();
         let secret_outputs = stack::secret_outputs(&outputs);
         let held = stack::held(&outputs);
-        let backend = Rc::new(Providers::start_deferred(
+        let backend = Rc::new(if l.starts_none() {
+            Providers::none()
+        } else {
+            Providers::start_deferred(
             opts.launch,
             &l.providers,
             &plugin::Config {
@@ -671,7 +685,8 @@ impl Located {
                     .filter_map(|r| Some((r.name.clone(), r.world.clone()?)))
                     .collect(),
             },
-        )?);
+        )?
+        });
         // Externs are asked on demand: a table's of its file, else of the
         // file provider, else of the providers.
         let tables = Rc::new(tables::Tables::default());

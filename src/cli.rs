@@ -1458,8 +1458,15 @@ fn run_with(
     ) {
         loaded.require_provider()?;
     }
+    // Strata, effects and tests read only the named providers' schemas:
+    // none when the program names only built-in ones.
+    let none = loaded.starts_none();
+    let load_schema = |providers: &[String]| match none {
+        true => Ok(schema::Schema::default()),
+        false => load_schema(providers),
+    };
     if let Cmd::Test = cli.cmd {
-        return run_tests(&loaded.program, &loaded.stack, &providers, &cli, &files);
+        return run_tests(&loaded.program, &loaded.stack, &providers, none, &cli, &files);
     }
     if let Cmd::Strata = cli.cmd {
         return print_strata(
@@ -2479,11 +2486,7 @@ fn run_with(
                         "who": crate::audit::who(),
                         "dform": env!("CARGO_PKG_VERSION"),
                         "commit": commit,
-                        "providers": if providers.is_empty() {
-                            vec!["fake".to_string()]
-                        } else {
-                            providers.clone()
-                        },
+                        "providers": backend.names(),
                         "protocol": crate::plugin::backend::VERSION,
                     });
                     // A dirty tree: the commit is not the program; which
@@ -3245,11 +3248,19 @@ fn run_tests(
     program: &crate::ast::Program,
     stack: &str,
     providers: &[String],
+    none: bool,
     cli: &Cli,
     files: &[PathBuf],
 ) -> Result<()> {
     use std::io::IsTerminal;
-    let backend = Providers::start(launch(), providers, &plugin::Config::default())?;
+    let backend = match none {
+        true => {
+            let p = Providers::none();
+            p.load_schema(None)?;
+            p
+        }
+        false => Providers::start(launch(), providers, &plugin::Config::default())?,
+    };
     let program_dir = crate::project::base_of(&files[0]);
     let lowered = crate::transform::lower(program)?;
     crate::secrets::check(&lowered, backend.schema(), &Default::default())?;
@@ -4105,7 +4116,8 @@ fn stack_list(cli: &Cli) -> Result<()> {
         };
         // Where the stack's deployments are: its backend's, else the state
         // root's.
-        let base = deployment::stack_location(&cli.root, &s.name, stack_backend(s).as_ref());
+        let backend = stack_backend(s);
+        let base = deployment::stack_location(&cli.root, &s.name, backend.as_ref());
         let shown = |l: &store::Location| match l {
             store::Location::S3(spec) => spec.to_string(),
             store::Location::Local(_) => String::new(),
@@ -4119,8 +4131,28 @@ fn stack_list(cli: &Cli) -> Result<()> {
             }
         };
         let mut deployments: Vec<(String, store::Location)> = Vec::new();
+        let keyed = backend.as_ref().and_then(crate::stack::keyed_parent);
         if s.keys.is_empty() {
             deployments.push((s.name.clone(), base.clone()));
+        } else if let (Some(b), Some((parent, rest))) = (&backend, keyed) {
+            // A backend that names the key (`local("state/app-{env}")`):
+            // each place under its directory the template matches.
+            let found = deployment::stack_location(&cli.root, &s.name, Some(&parent))
+                .open(&opener)
+                .and_then(|st| st.list(""))
+                .unwrap_or_default();
+            let mut segs: Vec<String> = found
+                .iter()
+                .filter_map(|k| crate::stack::template_key(&rest, &s.keys, k))
+                .collect();
+            segs.sort();
+            segs.dedup();
+            for seg in segs {
+                deployments.push((
+                    format!("{}[{seg}]", s.name),
+                    deployment::deployment_location(&cli.root, &s.name, Some(b), Some(&seg)),
+                ));
+            }
         } else {
             let mut segs: Vec<&str> = keys
                 .iter()

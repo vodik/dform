@@ -199,6 +199,13 @@ impl Providers {
         Ok(p)
     }
 
+    /// No provider: what a program naming only built-in providers runs
+    /// over (R-26), its schema not loaded yet ([`Providers::load_schema`]:
+    /// empty). Asking it anything else is the no-provider error.
+    pub fn none() -> Providers {
+        Self::deferred(Vec::new())
+    }
+
     /// `start`, without asking for the schema yet: the caller asks with
     /// [`Providers::load_schema`] once it knows the types it names, before
     /// anything reads the schema.
@@ -626,7 +633,7 @@ impl Providers {
         let names: Vec<String> = if !blocks.is_empty() {
             blocks.iter().map(|c| c.name.clone()).collect()
         } else if specs.is_empty() {
-            vec!["fake".to_string()]
+            self.names.clone()
         } else {
             specs.to_vec()
         };
@@ -843,6 +850,14 @@ impl Providers {
         self.notes.take()
     }
 
+    /// The link `i`; none when the run started no provider (a program
+    /// naming only built-in providers, R-26): nothing to ask.
+    fn link(&self, i: usize) -> Result<&RefCell<Link>> {
+        self.links
+            .get(i)
+            .ok_or_else(|| anyhow!(crate::deployment::NO_PROVIDER))
+    }
+
     fn route(&self, typ: &str) -> usize {
         self.loaded()
             .owner
@@ -909,7 +924,7 @@ impl Providers {
             .get(&f.name)
             .copied()
             .unwrap_or(self.fallback);
-        let rows: Vec<pb::Row> = self.links[i].borrow_mut().call(pb::QueryRequest {
+        let rows: Vec<pb::Row> = self.link(i)?.borrow_mut().call(pb::QueryRequest {
             pred: f.name.clone(),
             input: plus,
             inputs: inputs.iter().map(wire::value).collect(),
@@ -1026,7 +1041,7 @@ impl Providers {
         plus: &[bool],
         inputs: &[Value],
     ) -> Result<Vec<Vec<Value>>> {
-        let rows: Vec<pb::Row> = self.links[i].borrow_mut().call(pb::QueryRequest {
+        let rows: Vec<pb::Row> = self.link(i)?.borrow_mut().call(pb::QueryRequest {
             pred: pred.to_string(),
             input: plus.to_vec(),
             inputs: inputs.iter().map(wire::value).collect(),
@@ -1073,7 +1088,14 @@ impl Providers {
 
     /// The provider that owns `typ`, by name, as state records it.
     pub fn provider_of(&self, typ: &str) -> &str {
-        &self.names[self.route(typ)]
+        self.names
+            .get(self.route(typ))
+            .map_or("", String::as_str)
+    }
+
+    /// The providers started, by name, in link order.
+    pub fn names(&self) -> &[String] {
+        &self.names
     }
 
     /// The object an Apply Create or Replace of `addr` with the
@@ -1082,7 +1104,7 @@ impl Providers {
     /// capability): then only a retry with the same key finds out.
     pub fn created(&self, addr: &Address, key: &str) -> Result<Option<String>> {
         let i = self.route(&addr.typ);
-        if !self.links[i].borrow().has("managed") {
+        if !self.link(i)?.borrow().has("managed") {
             return Ok(None);
         }
         let s = |x: &str| Value::Str(x.to_string());
@@ -1122,7 +1144,7 @@ impl Providers {
             remote: remote.to_string(),
             name: addr.name.clone(),
         };
-        let r: pb::ReadResponse = self.links[i].borrow_mut().call(req)?;
+        let r: pb::ReadResponse = self.link(i)?.borrow_mut().call(req)?;
         if !r.found {
             return Ok(None);
         }
@@ -1139,7 +1161,7 @@ impl Providers {
             r#type: typ.to_string(),
             remote: remote.to_string(),
         };
-        let r: pb::ImportResponse = self.links[self.route(typ)].borrow_mut().call(req)?;
+        let r: pb::ImportResponse = self.link(self.route(typ))?.borrow_mut().call(req)?;
         let o = match r.found {
             true => Some(Self::object(r.attrs.as_ref(), r.computed.as_ref())?),
             false => None,
@@ -1268,7 +1290,7 @@ impl Providers {
                 remote,
             };
             let l = self.route(&addr.typ);
-            submitted.push((i, l, self.links[l].borrow_mut().submit(req)));
+            submitted.push((i, l, self.link(l)?.borrow_mut().submit(req)));
         }
         for (i, l, t) in submitted {
             let mut link = self.links[l].borrow_mut();

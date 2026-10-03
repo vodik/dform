@@ -8,6 +8,7 @@ use common::{Scratch, repo};
 
 const P: &str = r#"edition 2026
 provider file
+provider fake
 extern kv.password(+name, -value)
 extern kv.token(+name, -value)
 dash("dash.json")

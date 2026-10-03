@@ -173,6 +173,62 @@ pub fn keyed_backend(b: &Backend, key: &[(String, String)]) -> (Backend, bool) {
     (b, named)
 }
 
+/// A backend that names its keys (`local("state/app-{env}")`), cut at the
+/// directory above its first `{k}`: that directory's backend and the rest
+/// of the template (`app-{env}`), which [`template_key`] matches against
+/// what is found under it. `None` for a backend that names no key.
+pub fn keyed_parent(b: &Backend) -> Option<(Backend, String)> {
+    let template = match b {
+        Backend::Local(dir) => dir.to_string_lossy().into_owned(),
+        Backend::S3(spec) => spec.prefix.clone(),
+    };
+    let hole = template.find('{')?;
+    let cut = template[..hole].rfind('/').map_or(0, |j| j + 1);
+    let (parent, rest) = template.split_at(cut);
+    let parent = match b {
+        Backend::Local(_) if parent.is_empty() => Backend::Local(PathBuf::from(".")),
+        Backend::Local(_) => Backend::Local(PathBuf::from(parent)),
+        Backend::S3(spec) => Backend::S3(S3Spec {
+            prefix: parent.to_string(),
+            ..spec.clone()
+        }),
+    };
+    Some((parent, rest.to_string()))
+}
+
+/// The deployment segment (`env=prod`, keys in `keys`' order) whose place
+/// holds `path`, an object found under [`keyed_parent`]'s directory, when
+/// `rest` (its template) matches the path's leading directories.
+pub fn template_key(rest: &str, keys: &[String], path: &str) -> Option<String> {
+    let mut pattern = String::from("^");
+    let mut names = Vec::new();
+    let mut text = rest;
+    while let Some(open) = text.find('{') {
+        let close = text[open..].find('}')? + open;
+        pattern.push_str(&regex::escape(&text[..open]));
+        let k = &text[open + 1..close];
+        if keys.iter().any(|x| x == k) {
+            pattern.push_str("([^/]+)");
+            names.push(k.to_string());
+        } else {
+            pattern.push_str(&regex::escape(&text[open..=close]));
+        }
+        text = &text[close + 1..];
+    }
+    pattern.push_str(&regex::escape(text));
+    pattern.push('/');
+    let caps = regex::Regex::new(&pattern).ok()?.captures(path)?;
+    let found: BTreeMap<&str, &str> = names
+        .iter()
+        .zip(caps.iter().skip(1))
+        .filter_map(|(k, c)| Some((k.as_str(), c?.as_str())))
+        .collect();
+    keys.iter()
+        .map(|k| found.get(k.as_str()).map(|v| format!("{k}={v}")))
+        .collect::<Option<Vec<_>>>()
+        .map(|kv| kv.join(","))
+}
+
 fn string(t: &Term) -> Option<&str> {
     match t {
         Term::Val(Value::Str(s)) => Some(s),
