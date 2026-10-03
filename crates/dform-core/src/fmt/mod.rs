@@ -183,11 +183,97 @@ struct Open {
 /// Format a file's source; a file with syntax errors is not formatted, but
 /// for a header statement after the body began, which is moved (R-27).
 pub fn format_source(name: &str, src: &str) -> anyhow::Result<String> {
+    if is_signature_file(src) {
+        return Ok(format_signature_file(src));
+    }
     let parse = crate::syntax::parser::parse(src);
     if parse.errors.iter().any(|e| !e.misplaced) {
         return Err(crate::parser::syntax_diagnostics(name, src, &parse).into());
     }
     Ok(format(&parse.syntax()))
+}
+
+/// Whether `src` is a signature file (R-6, R-24: `std/*.df`), read by
+/// `functions::parse` at build time, not a program the normal parser
+/// knows: its first line, comments and blank ones aside, is `package
+/// NAME`.
+fn is_signature_file(src: &str) -> bool {
+    src.lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty() && !l.starts_with('#'))
+        .is_some_and(|l| l.starts_with("package "))
+}
+
+/// A signature file's normal form (the std ticket: until R-24 moves this
+/// format into the program parser, `fmt` reads it itself): comments and
+/// doc comments as written; each `[internal] fn` line's signature with
+/// a space after every comma and around `->`, its flags separated by
+/// `, ` (`functions::function`, the registry reader's own parser).
+fn format_signature_file(src: &str) -> String {
+    let mut out = String::new();
+    let mut blank_run = 0;
+    for line in src.lines() {
+        let trimmed = line.trim_end();
+        if trimmed.trim().is_empty() {
+            blank_run += 1;
+            if blank_run <= 1 {
+                out.push('\n');
+            }
+            continue;
+        }
+        blank_run = 0;
+        let l = trimmed.trim_start();
+        let (prefix, rest) = match l.strip_prefix("internal ") {
+            Some(r) => ("internal ", r),
+            None => ("", l),
+        };
+        if let Some(sig) = rest.strip_prefix("fn ")
+            && let Ok(f) = crate::functions::function(sig.trim())
+        {
+            out.push_str(prefix);
+            out.push_str("fn ");
+            out.push_str(&print_signature(&f));
+            out.push('\n');
+            continue;
+        }
+        out.push_str(trimmed);
+        out.push('\n');
+    }
+    out
+}
+
+/// `name(p: T, p2?: T2, ...) -> T[?] [flags]`, a bare `fn` line's own
+/// normal form (its `package.` not written: the file gives it).
+fn print_signature(f: &crate::functions::Function) -> String {
+    let params: Vec<String> = f
+        .params
+        .iter()
+        .map(|p| {
+            format!(
+                "{}{}: {}",
+                p.name,
+                if p.optional { "?" } else { "" },
+                p.ty
+            )
+        })
+        .chain(f.variadic.then(|| "...".to_string()))
+        .collect();
+    let mut s = format!("{}({}) -> {}", f.name, params.join(", "), f.ret);
+    if f.partial {
+        s.push('?');
+    }
+    let mut flags = Vec::new();
+    if f.forwards {
+        flags.push("forwards");
+    }
+    if f.forwards_nulls {
+        flags.push("forwards nulls");
+    }
+    if !flags.is_empty() {
+        s.push(' ');
+        s.push_str(&flags.join(", "));
+    }
+    s
 }
 
 /// Format a parsed file: its header in order (R-27), its normal forms,
@@ -392,5 +478,21 @@ mod tests {
         let src = "p(x)where {\n  q(x)\n  r(x)\n}\nresource t n { a=1, b=2\n c=3 }\n";
         let once = fmt(src);
         assert_eq!(fmt(&once), once);
+    }
+
+    /// A signature file (R-6, R-24: `package` first) is read by
+    /// `functions::parse`, not the program parser: `fmt` normalises its
+    /// `fn` lines' spacing and leaves its comments as written.
+    #[test]
+    fn a_signature_file_is_formatted_by_its_own_normal_form() {
+        assert!(is_signature_file("package str\nfn len(s: string) -> int\n"));
+        assert!(!is_signature_file("edition 2026\np(x) where q(x)\n"));
+        let src = "package p\n\n#| A doc.\n#| example: f(1)\nfn f(a:int,b?:string,...)->int? forwards,forwards nulls\n";
+        let want = "package p\n\n#| A doc.\n#| example: f(1)\nfn f(a: int, b?: string, ...) -> int? forwards, forwards nulls\n";
+        assert_eq!(format_signature_file(src), want);
+        // Every shipped signature file is already its own normal form.
+        for (file, text) in crate::functions::SOURCES {
+            assert_eq!(&format_signature_file(text), text, "{file}");
+        }
     }
 }
