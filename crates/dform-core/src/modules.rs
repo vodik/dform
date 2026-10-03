@@ -698,8 +698,32 @@ fn gate(
     out
 }
 
-/// A gated copy's own relation (`gate`).
-const GATE: &str = "__instance";
+/// A gated copy's own relation (`gate`): `n::__instance(path)` while the
+/// copy `n` of the component at `path` exists.
+pub const GATE: &str = "__instance";
+
+/// A fact of a predicate private to a copy or an activation (`n::p`,
+/// `n.inner::p`, a name no source can spell) as the program names it: a
+/// gated copy's own relation as the statement that makes it, `instance
+/// PATH n` (`(in USER)` for a copy inside another), anything else by its
+/// name there, `p(..) (in n)`; `fmt` prints that atom and `gap` comes
+/// before the parenthesis. `None` for a predicate of the program's.
+pub fn private_text(a: &Atom, fmt: &dyn Fn(&Atom) -> String, gap: &str) -> Option<String> {
+    let (scope, p) = a.pred.rsplit_once("::")?;
+    if p == GATE
+        && let Some(Term::Val(Value::Str(path))) = a.args.first()
+    {
+        return Some(match scope.rsplit_once('.') {
+            None => format!("instance {path} {scope}"),
+            Some((user, name)) => format!("instance {path} {name}{gap}(in {user})"),
+        });
+    }
+    let own = Atom {
+        pred: p.to_string(),
+        ..a.clone()
+    };
+    Some(format!("{}{gap}(in {scope})", fmt(&own)))
+}
 
 /// The instance's `k = V :- B`, each a normal-rank contribution to its
 /// input cell, with the checks against the component's declared inputs.

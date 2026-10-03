@@ -102,7 +102,9 @@ impl MayDerive {
         } else {
             "which is stuck"
         };
-        format!("reads {}, {what}", fmt_atom(&self.reads))
+        let reads = crate::modules::private_text(&self.reads, &fmt_atom, " ")
+            .unwrap_or_else(|| fmt_atom(&self.reads));
+        format!("reads {reads}, {what}")
     }
 
     /// `may_derive(RuleId, HeadPattern, Nulls)`, as the policy pass reads it.

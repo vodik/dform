@@ -538,7 +538,11 @@ impl Surface<'_, '_> {
                 }
                 out
             }
-            _ => r.surface_atom(&f.atom()),
+            _ => {
+                let a = f.atom();
+                crate::modules::private_text(&a, &|a| r.surface_atom(a), "   ")
+                    .unwrap_or_else(|| r.surface_atom(&a))
+            }
         }
     }
 
