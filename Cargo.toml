@@ -46,6 +46,7 @@ default-run = "dform"
 [dependencies]
 anyhow = "1.0"
 clap = { version = "4.5", features = ["derive"] }
+libc = "0.2"
 serde_json = "1.0"
 dform-core = { path = "crates/dform-core" }
 dform-grpc = { path = "crates/dform-grpc" }

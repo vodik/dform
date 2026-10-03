@@ -304,8 +304,12 @@ fn a_secret_input_never_prints_in_query_why_or_the_plan_file() {
         for out in [&r.stdout, &r.stderr] {
             assert!(!out.contains("HUNTER-TWO"), "{cmd:?}: {out}");
         }
-        if cmd[0] != "plan" {
+        // A result set prints a secret by its size, `why` and `--json`
+        // by its label.
+        if cmd[0] == "why" || cmd.contains(&"--json") {
             assert!(r.stdout.contains("input.pw"), "{cmd:?}: {}", r.stdout);
+        } else if cmd[0] == "query" {
+            assert!(r.stdout.contains("secret(17 B)"), "{cmd:?}: {}", r.stdout);
         }
     }
     let file = s.read("plan.json");

@@ -104,8 +104,14 @@ fn a_run_injects_the_schema_of_the_types_it_names() {
     let s = Scratch::new("k8s-schema-scope");
     real_demo(&s);
     let count = |r: &Run| -> usize {
+        // A result set past five rows ends `(N rows)`.
         let last = r.stdout.lines().last().unwrap_or_default();
-        last.rsplit(' ').next().unwrap().parse().expect(&r.stdout)
+        last.trim_start_matches('(')
+            .split(' ')
+            .next()
+            .unwrap()
+            .parse()
+            .expect(&r.stdout)
     };
     let r = dform(&s, None, &["dev", "eval", "k8s_demo.df"]).success();
     let facts: usize = r.stdout.lines().next().unwrap()["facts: ".len()..]

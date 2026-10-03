@@ -1263,14 +1263,14 @@ authoritative.
 ## Asking the fact store
 
 `dform query` evaluates a pattern, or a conjunction of body literals, against
-the final fact store and prints a table with one column per variable:
+the final fact store and prints a result set, one column per variable (a
+SELECT of the goal's variables):
 
 ```bash
 cargo run -- -C examples/demo query 'attr(net.vpc, n, "cidr", c)' dform env=prod
-# N                    C
+# N            C
 # "main::vpc"  10.20.0.0/16
 # "peer::vpc"  10.21.0.0/16
-# (2 rows)
 cargo run -- -C examples/demo query 'attr(t, a, "cidr", c), want(t, a), t != net.subnet'
 cargo run -- -C examples/demo query 'want(net.vpc, "main::vpc")'    # yes / no
 cargo run -- -C examples/demo query want                                    # every want fact
@@ -1278,13 +1278,22 @@ cargo run -- -C examples/demo query 'net.vpc["main::vpc"]'          # its attrib
 cargo run -- -C examples/demo query 'net.vpc["main::vpc"].cidr'     # one attribute's value
 ```
 
-`query --json` prints one document: `{query, count, facts}` for a predicate
-name, `{query, columns, count, rows}` for a pattern, values spelled as in
-`plan --json`.
+A bare predicate's columns are its `decl`'s fields, a core relation's own
+(`want(type, address)`, `attr(type, address, path, value)`,
+`deformation(kind, resource, before)`, ..), else `a`, `b`, ...
 
-Secrets print as their label, `(sensitive T["A"].p)`: a value at a
-`sensitive` path, and any value equal to it or string containing it, so a
-rule that forwards a secret does not leak it either.
+Every result set in dform (`query`, `output`, `test`, `stack list`,
+`state show`, `dev strata`, `dev effects`) prints the same way, as a terse
+SQL client would: a header line, aligned rows with two-space gutters and
+no borders, `(N rows)` under a table past five rows. A string longer than
+a screen is folded in its cell, its first line and `.. (5.1 KB, 112
+lines)`. `--json` prints the rows as an array of objects keyed by column,
+values spelled as in `plan --json`.
+
+A secret prints as its size, `secret(32 B)` (in `--json`, as its label
+`{"sensitive": "T[\"A\"].p"}`): a value at a `sensitive` path, and any
+value equal to it or string containing it, so a rule that forwards a
+secret does not leak it either.
 
 Rows print values as the program writes them: a reference is the address
 it names, `google.sql_database_instance["db"].name`, an unknown its

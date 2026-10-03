@@ -10,9 +10,12 @@ fn schema_facts_are_queryable_edb() {
     let r = s
         .run(&["query", "type_attr", prog.to_str().unwrap()])
         .success();
-    assert!(r.stdout.contains("matches: 24"), "{}", r.stdout);
+    assert!(r.stdout.starts_with("type "), "{}", r.stdout);
+    assert!(r.stdout.ends_with("(24 rows)\n"), "{}", r.stdout);
     assert!(
-        r.stdout.contains(r#"type_attr("db.postgres", "endpoint""#),
+        r.stdout
+            .lines()
+            .any(|l| l.starts_with(r#""db.postgres""#) && l.contains(r#""endpoint""#)),
         "{}",
         r.stdout
     );
@@ -40,7 +43,7 @@ fn a_schema_file_in_the_working_directory_is_a_provider() {
         ])
         .success();
     assert!(
-        r.stdout.contains("ldap.group") && r.stdout.contains("matches: 1"),
+        r.stdout == "type          provider\n\"ldap.group\"  \"ldap\"\n",
         "{}",
         r.stdout
     );

@@ -134,12 +134,7 @@ fn query_json_lists_the_facts() {
         ])
         .success();
     let q: Value = serde_json::from_str(&r.stdout).unwrap();
-    assert_eq!(q["query"], "want");
-    assert_eq!(q["count"], 1);
-    assert_eq!(
-        q["facts"][0],
-        json!({"pred": "want", "args": ["net.vpc", "main"]})
-    );
+    assert_eq!(q, json!([{"type": "net.vpc", "address": "main"}]));
 }
 
 /// `query --json` spells a secret and a null the way `plan --json` does.
@@ -169,7 +164,7 @@ fn query_json_redacts_like_the_plan() {
     assert!(!r.stdout.contains("VAULT-SECRET"), "{}", r.stdout);
     let q: Value = serde_json::from_str(&r.stdout).unwrap();
     assert_eq!(
-        q["rows"][0]["V"],
+        q[0]["V"],
         json!({"sensitive": "leaky.vault[\"v\"].password"})
     );
     let r = s
@@ -189,7 +184,7 @@ fn query_json_redacts_like_the_plan() {
         .success();
     let q: Value = serde_json::from_str(&r.stdout).unwrap();
     assert_eq!(
-        q["rows"][0]["V"],
+        q[0]["V"],
         json!({"null": "net.vpc[\"main\"]", "class": "fresh"})
     );
 }

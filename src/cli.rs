@@ -31,6 +31,15 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+/// The width of the terminal stdout is, if it is one.
+fn terminal_width() -> Option<usize> {
+    // SAFETY: TIOCGWINSZ writes a `winsize` into the one we pass, and
+    // fails (non-zero) when fd 1 is not a terminal.
+    let mut ws: libc::winsize = unsafe { std::mem::zeroed() };
+    let ok = unsafe { libc::ioctl(libc::STDOUT_FILENO, libc::TIOCGWINSZ, &mut ws) } == 0;
+    (ok && ws.ws_col > 0).then_some(ws.ws_col as usize)
+}
+
 /// How this run reaches its providers (`main`'s `launch`).
 static LAUNCH: std::sync::OnceLock<&'static (dyn plugin::Launch + Sync)> =
     std::sync::OnceLock::new();
@@ -552,6 +561,8 @@ struct Cli {
     audit_sink: Option<String>,
     /// How plan text is painted on stdout (`--color`).
     style: report::Style,
+    /// How a result set prints on stdout: `style`, at the terminal's width.
+    table: report::table::Options,
 }
 
 /// What a run does.
@@ -1003,6 +1014,11 @@ fn resolve(args: Args) -> Result<Cli> {
             use std::io::IsTerminal;
             inputs.color.style(std::io::stdout().is_terminal())
         },
+        table: Default::default(),
+    };
+    cli.table = report::table::Options {
+        width: terminal_width().unwrap_or(report::table::Options::PLAIN.width),
+        style: cli.style,
     };
     if let Cmd::Apply { chaos, .. } = &mut cli.cmd {
         *chaos = mock.chaos;
@@ -1659,7 +1675,14 @@ fn run_with(
     if explains {
         let x = ev.explained();
         match &cli.cmd {
-            Cmd::Query { pattern, json } => print_query(pattern, &x.res.facts, &x.redact, *json)?,
+            Cmd::Query { pattern, json } => print_query(
+                pattern,
+                &ev.located.loaded.program,
+                &x.res.facts,
+                &x.redact,
+                *json,
+                &cli.table,
+            )?,
             Cmd::Why { pattern, all, core } => why_tree(pattern, *all, *core, &x.res, &x.redact)?,
             Cmd::Explain { addresses } => {
                 let addresses = addresses
@@ -3617,52 +3640,60 @@ fn print_effects(program: &crate::ast::Program, schema: &schema::Schema, json: b
     Ok(())
 }
 
-/// `query`'s output, redacted: every fact of a predicate, or a table with
-/// one column per variable; `--json` prints one document either way.
+/// `query`'s output, a result set (R-63): one column per variable of the
+/// goal, or per argument of a bare predicate; `yes` or `no` for a ground
+/// goal. `--json` is the rows as an array of objects keyed by column.
 fn print_query(
     pattern: &str,
+    program: &crate::ast::Program,
     facts: &std::collections::BTreeSet<Atom>,
     redact: &query::Redactor,
     json: bool,
+    o: &report::table::Options,
 ) -> Result<()> {
-    match query::parse(pattern)? {
+    use report::table::{Cell, Table};
+    let tables: Vec<Table> = match query::parse(pattern)? {
         query::Query::Pred(pred) => {
-            let matches: Vec<&Atom> = facts.iter().filter(|a| a.pred == pred).collect();
-            if json {
-                let doc = serde_json::json!({
-                    "query": pattern,
-                    "count": matches.len(),
-                    "facts": matches.iter().map(|a| serde_json::json!({
-                        "pred": a.pred,
-                        "args": a.args.iter().map(|t| match t {
-                            Term::Val(v) => redact.json(v),
-                            t => serde_json::Value::String(partition::fmt_term(t)),
-                        }).collect::<Vec<_>>(),
-                    })).collect::<Vec<_>>(),
-                });
-                println!("{}", serde_json::to_string_pretty(&doc)?);
-                return Ok(());
+            // One table per arity a predicate is used at.
+            let mut by: std::collections::BTreeMap<usize, Table> = Default::default();
+            for a in facts.iter().filter(|a| a.pred == pred) {
+                let t = by
+                    .entry(a.args.len())
+                    .or_insert_with(|| Table::new(query::columns(&pred, a.args.len(), program)));
+                t.push(
+                    a.args
+                        .iter()
+                        .map(|t| match t {
+                            Term::Val(v) => Cell::value(v, redact),
+                            t => Cell::text(partition::fmt_term(t)),
+                        })
+                        .collect(),
+                );
             }
-            for a in &matches {
-                println!("{}", redact.surface_atom(a));
-            }
-            println!("matches: {}", matches.len());
+            by.into_values().collect()
         }
         query::Query::Body { body, vars } => {
             let table = query::table(&body, &vars, facts)?;
-            if json {
-                let doc = serde_json::json!({
-                    "query": pattern,
-                    "columns": table.vars,
-                    "count": table.rows.len(),
-                    "rows": table.json(redact),
-                });
-                println!("{}", serde_json::to_string_pretty(&doc)?);
+            if vars.is_empty() && !json {
+                println!("{}", if table.rows.is_empty() { "no" } else { "yes" });
                 return Ok(());
             }
-            print!("{}", table.render(redact));
+            vec![table.result(redact)]
         }
+    };
+    if json {
+        let rows: Vec<serde_json::Value> = tables
+            .iter()
+            .flat_map(|t| t.json().as_array().cloned().unwrap_or_default())
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&rows)?);
+        return Ok(());
     }
+    if tables.is_empty() {
+        println!("(0 rows)");
+    }
+    let shown: Vec<String> = tables.iter().map(|t| t.render(o)).collect();
+    print!("{}", shown.join("\n"));
     Ok(())
 }
 

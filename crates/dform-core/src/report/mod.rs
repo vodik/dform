@@ -1,5 +1,5 @@
 //! The tool's three printers (R-63); every command prints through one:
-//! a result set (`table`: rows under a header line, `query`, `output`,
+//! a result set ([`table`]: rows under a header line, `query`, `output`,
 //! the listings), a derivation ([`tree`]: what `why` prints), or a report
 //! (this module: `plan`, `apply` and `diff`, which compose the two).
 //!
@@ -32,6 +32,7 @@ use serde_json::{Value as Json, json};
 use std::collections::{BTreeMap, BTreeSet};
 use tree::Because;
 
+pub mod table;
 pub mod tree;
 
 /// One side of a change, after redaction.
@@ -1434,10 +1435,12 @@ fn write_deformation(out: &mut String, d: &Deformation, style: Style) {
         ActionKind::Replace { .. } => "  (replace)",
         _ => "",
     };
+    // The resource as `dform query deformation`'s row spells it (R-63).
+    let addr = Redactor::default().cell(&crate::zset::reference(&d.addr));
     out.push_str(&format!(
         "{} {}{note}\n",
         style.marker(&d.kind),
-        style.paint(Paint::Bold, &d.addr.to_string())
+        style.paint(Paint::Bold, &addr)
     ));
     // Keep plan output readable.
     let max = 40usize;

@@ -27,7 +27,7 @@ fn sources_and_stated_rows_are_one_relation() {
     for x in ["\"a\"", "\"b\"", "\"c\""] {
         assert!(r.stdout.contains(x), "{x}: {}", r.stdout);
     }
-    assert!(r.stdout.contains("(3 rows)"), "{}", r.stdout);
+    assert_eq!(r.stdout.lines().count(), 4, "{}", r.stdout);
 }
 
 const NET: &str = r#"

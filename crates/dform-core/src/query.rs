@@ -1,14 +1,16 @@
-//! `dform query` and the printing `dform why` shares with it: a pattern or a
-//! conjunction over the final fact store, one column per variable, secrets
-//! redacted.
+//! `dform query` and the value spelling every printer shares: a pattern or
+//! a conjunction over the final fact store, one column per variable,
+//! secrets redacted.
 //!
 //! Redaction is by value. A value at a `sensitive` schema path of `arg`,
 //! `attr`, `world_attr`, `cloud_attr` or `cloud_computed`, or of an input or
 //! output declared `secret(T)` (`secret_cell/3`), is a secret, and so is
 //! every scalar inside it; any printed value equal to a secret, or a
-//! string containing a secret string, prints as `(sensitive T["A"].p)`. A
-//! `secret` null prints as its label the same way. So a rule that forwards a
-//! secret into another predicate does not leak it either.
+//! string containing a secret string, prints as `(sensitive T["A"].p)`, or
+//! in a result set's cell as `secret(SIZE)`. A `secret` null prints as its
+//! label the same way. So a rule that forwards a secret into another
+//! predicate does not leak it either. The result set itself is
+//! `report::table`'s.
 
 use crate::ast::{Atom, Lit, Term};
 use crate::engine;
@@ -114,6 +116,45 @@ fn term_vars(t: &Term, out: &mut Vec<String>) {
     }
 }
 
+/// The columns of the core's relations a bare predicate may name.
+const CORE_COLUMNS: &[(&str, &[&str])] = &[
+    ("want", &["type", "address"]),
+    ("input", &["name", "value"]),
+    ("attr", &["type", "address", "path", "value"]),
+    ("arg", &["type", "address", "path", "value", "rank"]),
+    ("world_attr", &["type", "address", "path", "value"]),
+    ("cloud_attr", &["type", "address", "path", "value"]),
+    ("deformation", &["kind", "resource", "before"]),
+    ("world_digest", &["resource", "now"]),
+    ("type_attr", &["type", "path", "ty", "flags"]),
+    ("type_provider", &["type", "provider"]),
+];
+
+/// The columns `dform query PRED` prints `pred`'s facts of `arity` under:
+/// its `decl`'s fields, a core relation's, else `a`, `b`, .. as an
+/// undeclared relation's columns are named (`transform::columns`).
+pub fn columns(pred: &str, arity: usize, program: &crate::ast::Program) -> Vec<String> {
+    let declared = program.statements.iter().find_map(|s| match s {
+        crate::ast::Stmt::Decl(d) if d.pred == pred && d.fields.len() == arity => {
+            Some(d.fields.clone())
+        }
+        _ => None,
+    });
+    let core = || {
+        CORE_COLUMNS
+            .iter()
+            .find(|(p, cs)| *p == pred && cs.len() == arity)
+            .map(|(_, cs)| cs.iter().map(|c| c.to_string()).collect())
+    };
+    declared.or_else(core).unwrap_or_else(|| {
+        crate::transform::columns(arity)
+            .split(", ")
+            .filter(|c| !c.is_empty())
+            .map(String::from)
+            .collect()
+    })
+}
+
 /// One row per distinct binding of the variables, sorted.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Table {
@@ -138,66 +179,15 @@ pub fn table(body: &[Lit], vars: &[String], facts: &BTreeSet<Atom>) -> Result<Ta
 }
 
 impl Table {
-    /// Columns padded to their widest cell; a ground query prints `yes` or
-    /// `no`.
-    pub fn render(&self, r: &Redactor) -> String {
-        if self.vars.is_empty() {
-            return if self.rows.is_empty() {
-                "no\n"
-            } else {
-                "yes\n"
-            }
-            .into();
+    /// The rows as a result set (`report::table`): one column per
+    /// variable, values in surface spelling, secrets redacted.
+    pub fn result(&self, r: &Redactor) -> crate::report::table::Table {
+        use crate::report::table::{Cell, Table};
+        let mut t = Table::new(self.vars.iter().cloned());
+        for row in &self.rows {
+            t.push(row.iter().map(|v| Cell::value(v, r)).collect());
         }
-        let cells: Vec<Vec<String>> = self
-            .rows
-            .iter()
-            .map(|row| row.iter().map(|v| r.surface(v)).collect())
-            .collect();
-        let mut width: Vec<usize> = self.vars.iter().map(|v| v.chars().count()).collect();
-        for row in &cells {
-            for (w, c) in width.iter_mut().zip(row) {
-                *w = (*w).max(c.chars().count());
-            }
-        }
-        let line = |cols: Vec<&str>| {
-            let mut s = String::new();
-            for (i, (c, w)) in cols.iter().zip(&width).enumerate() {
-                if i + 1 == cols.len() {
-                    s.push_str(c);
-                } else {
-                    s.push_str(&format!("{c:<w$}  "));
-                }
-            }
-            s.push('\n');
-            s
-        };
-        let mut out = line(self.vars.iter().map(String::as_str).collect());
-        for row in &cells {
-            out.push_str(&line(row.iter().map(String::as_str).collect()));
-        }
-        let n = self.rows.len();
-        out.push_str(&format!("({n} row{})\n", if n == 1 { "" } else { "s" }));
-        out
-    }
-
-    /// A JSON array of objects keyed by variable, secrets as
-    /// `{"sensitive": label}`, nulls as `{"null": label, "class": c}`.
-    pub fn json(&self, r: &Redactor) -> serde_json::Value {
-        serde_json::Value::Array(
-            self.rows
-                .iter()
-                .map(|row| {
-                    serde_json::Value::Object(
-                        self.vars
-                            .iter()
-                            .zip(row)
-                            .map(|(k, v)| (k.clone(), r.json(v)))
-                            .collect(),
-                    )
-                })
-                .collect(),
-        )
+        t
     }
 }
 
@@ -302,31 +292,44 @@ impl Redactor {
     /// `partition::fmt_value`, with secrets as `(sensitive T["A"].p)` and
     /// nulls as `?T["A"].p` (`ir::label`).
     pub fn fmt(&self, v: &Value) -> String {
-        self.spell(v, false)
+        self.spell(v, Spelling::Core)
     }
 
     /// A value as the program would write it: `fmt`, with a reference as
     /// the address it names, `T["A"]` or `T["A"].p`.
     pub fn surface(&self, v: &Value) -> String {
-        self.spell(v, true)
+        self.spell(v, Spelling::Surface)
     }
 
-    fn spell(&self, v: &Value, surface: bool) -> String {
+    /// A value in a result set's cell (`report::table`): `surface`, with a
+    /// secret as `secret(SIZE)`, its size and never its label or bytes;
+    /// `secret(?)` while its value is unknown.
+    pub fn cell(&self, v: &Value) -> String {
+        self.spell(v, Spelling::Cell)
+    }
+
+    fn spell(&self, v: &Value, how: Spelling) -> String {
         if let Some(l) = self.secret(v) {
-            return format!("(sensitive {})", crate::ir::label(&l));
+            return match (how, v) {
+                (Spelling::Cell, Value::Null { .. }) => "secret(?)".into(),
+                (Spelling::Cell, Value::Str(s)) => format!("secret({})", size(s.len())),
+                (Spelling::Cell, v) => format!("secret({})", size(partition::fmt_value(v).len())),
+                _ => format!("(sensitive {})", crate::ir::label(&l)),
+            };
         }
+        let surface = how != Spelling::Core;
         match v {
             Value::List(xs) => format!(
                 "[{}]",
                 xs.iter()
-                    .map(|x| self.spell(x, surface))
+                    .map(|x| self.spell(x, how))
                     .collect::<Vec<_>>()
                     .join(", ")
             ),
             Value::Obj(m) => format!(
                 "{{{}}}",
                 m.iter()
-                    .map(|(k, x)| format!("{k}: {}", self.spell(x, surface)))
+                    .map(|(k, x)| format!("{k}: {}", self.spell(x, how)))
                     .collect::<Vec<_>>()
                     .join(", ")
             ),
@@ -402,6 +405,23 @@ impl Redactor {
     }
 }
 
+/// How `Redactor::spell` writes a value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Spelling {
+    Core,
+    Surface,
+    Cell,
+}
+
+/// A byte count as a person reads it: `812 B`, `5.1 KB`, `2.0 MB`.
+pub fn size(n: usize) -> String {
+    match n {
+        n if n < 1024 => format!("{n} B"),
+        n if n < 1024 * 1024 => format!("{:.1} KB", n as f64 / 1024.0),
+        n => format!("{:.1} MB", n as f64 / (1024.0 * 1024.0)),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -421,14 +441,11 @@ mod tests {
         let t = table(&body, &vars, &f).unwrap();
         assert_eq!(t.rows, vec![vec![Value::Str("b".into()), Value::Int(2)]]);
         assert_eq!(
-            t.render(&Redactor::default()),
-            "X    N\n\"b\"  2\n(1 row)\n"
+            t.result(&Redactor::default()).render(&Default::default()),
+            "X    N\n\"b\"  2\n"
         );
         assert!(matches!(parse("p").unwrap(), Query::Pred(p) if p == "p"));
-        assert_eq!(
-            table(&body, &[], &f).unwrap().render(&Redactor::default()),
-            "yes\n"
-        );
+        assert_eq!(table(&body, &[], &f).unwrap().rows, vec![Vec::new()]);
     }
 
     #[test]
@@ -438,13 +455,13 @@ mod tests {
             rows: vec![vec![Value::Str("a".into()), Value::Int(1)]],
         };
         assert_eq!(
-            t.json(&Redactor::default()),
+            t.result(&Redactor::default()).json(),
             serde_json::json!([{"N": "a", "C": 1}])
         );
     }
 
     #[test]
-    fn a_secret_prints_as_its_label_wherever_it_is_forwarded() {
+    fn a_secret_prints_as_its_size_wherever_it_is_forwarded() {
         let schema = Schema::from_facts(
             &crate::parser::parse_program("type_attr(\"v\", \"pw\", \"string\", [\"sensitive\"])")
                 .unwrap()
@@ -466,8 +483,12 @@ arg("v", "a", "pw", "hunter22", "normal")
         let Query::Body { body, vars } = parse("leak(S)").unwrap() else {
             panic!()
         };
-        let out = table(&body, &vars, &f).unwrap().render(&r);
-        assert!(!out.contains("hunter22"), "{out}");
-        assert!(out.contains("(sensitive v[\"a\"].pw)"), "{out}");
+        let t = table(&body, &vars, &f).unwrap().result(&r);
+        let out = t.render(&Default::default());
+        assert_eq!(out, "S\nsecret(11 B)\n");
+        assert_eq!(
+            t.json(),
+            serde_json::json!([{"S": {"sensitive": "v[\"a\"].pw"}}])
+        );
     }
 }

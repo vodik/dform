@@ -63,8 +63,9 @@ fn externs_answer_on_demand() {
         assert!(r.stdout.contains(line), "{line}\n{}", r.stdout);
     }
     let q = s.run(&["query", "kv.password", "p.df"]).success();
-    assert!(
-        q.stdout.contains("matches: 1"),
+    assert_eq!(
+        q.stdout.lines().count(),
+        2,
         "only the demanded call: {}",
         q.stdout
     );

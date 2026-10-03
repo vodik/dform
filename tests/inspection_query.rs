@@ -14,7 +14,7 @@ fn a_pattern_prints_one_column_per_variable() {
     );
     assert!(out.starts_with("N "), "{out}");
     assert!(out.contains(r#""main::vpc"  10.20.0.0/16"#), "{out}");
-    assert!(out.ends_with("(2 rows)\n"), "{out}");
+    assert_eq!(out.lines().count(), 3, "{out}");
     golden("query_dform_prod_vpc_cidr", &out);
 }
 
@@ -39,11 +39,15 @@ fn a_conjunction_is_evaluated_against_the_final_fact_store() {
     assert_eq!(ground, "yes\n");
 }
 
-/// A bare predicate name keeps working, printed as facts, not Debug.
+/// A bare predicate name lists its facts as a result set: columns named
+/// by its `decl`, a core relation's names, else `a`, `b`, ..
 #[test]
 fn a_predicate_name_lists_its_facts() {
     let out = dform("examples/demo/stacks/dform.df", &["query", "env"]);
-    assert_eq!(out, "env(\"staging\")\nmatches: 1\n");
+    assert_eq!(out, "a\n\"staging\"\n");
+    let out = dform("examples/demo/stacks/dform.df", &["query", "want"]);
+    assert!(out.starts_with("type "), "{out}");
+    assert!(out.ends_with(" rows)\n"), "{out}");
 }
 
 #[test]
@@ -67,7 +71,7 @@ fn a_query_that_does_not_parse_says_so() {
     );
 }
 
-/// The never-prints claim for query: a secret prints as its label in a
+/// The never-prints claim for query: a secret prints as its size in a
 /// table cell, in a listed fact, and where a rule forwarded it.
 #[test]
 fn query_never_prints_a_labeled_secret() {
@@ -96,10 +100,7 @@ resource leaky.vault v { password = "VAULT-SECRET-DO-NOT-PRINT" }
     for pattern in ["attr(leaky.vault, v, password, P)", "arg", "note(N)"] {
         let out = q(pattern);
         assert!(!out.contains("VAULT-SECRET"), "{pattern}: {out}");
-        assert!(
-            out.contains("(sensitive leaky.vault[\"v\"].password)"),
-            "{pattern}: {out}"
-        );
+        assert!(out.contains("secret("), "{pattern}: {out}");
     }
 }
 
@@ -115,13 +116,14 @@ fn a_row_prints_a_reference_as_its_address() {
             r#"attr("google.sql_database", "crud_db", "instance", V)"#,
         ],
     );
-    assert_eq!(
-        out,
-        "V\ngoogle.sql_database_instance[\"db\"].name\n(1 row)\n"
-    );
+    assert_eq!(out, "V\ngoogle.sql_database_instance[\"db\"].name\n");
     let facts = dform(at, &["query", "arg"]);
     assert!(
-        facts.contains(r#""instance", google.sql_database_instance["db"].name, "normal")"#),
+        facts
+            .lines()
+            .any(|l| l.starts_with(r#""google.sql_database""#)
+                && l.contains(r#""instance""#)
+                && l.contains(r#"  google.sql_database_instance["db"].name  "#)),
         "{facts}"
     );
     assert!(!facts.contains("ref("), "{facts}");

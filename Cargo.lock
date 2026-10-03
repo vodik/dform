@@ -624,6 +624,7 @@ dependencies = [
  "expectrl",
  "k8s-openapi",
  "kube",
+ "libc",
  "rusty-s3",
  "serde_json",
  "tokio",
