@@ -126,7 +126,7 @@ pub fn lower(
 }
 
 /// [`lower`], the program being the stack `stack`: its settings lower to
-/// one `Stmt::Stack` and its `config`'s rules. `deployed` are the stacks
+/// the program's `stack` and its `config`'s rules. `deployed` are the stacks
 /// its `use`s name.
 pub fn lower_stack(
     units: &[Unit],
@@ -152,11 +152,12 @@ pub fn lower_stack(
             statements.extend(l.unit(i, require_edition));
         }
     }
-    if let Some(st) = stack {
-        statements.extend(l.stack_settings(st, entries));
-    }
+    let settings = stack.and_then(|st| l.stack_settings(st, entries));
     if l.diags.is_empty() {
-        Ok(Program { statements })
+        Ok(Program {
+            statements,
+            stack: settings,
+        })
     } else {
         Err(l.diags)
     }
@@ -2266,11 +2267,9 @@ impl<'u> Lowerer<'u> {
     }
 
     /// The stack's settings as dform.toml gives them (R-29): each a
-    /// constant, held by one `Stmt::Stack`.
-    fn stack_settings(&mut self, st: &StackSource, entries: &[usize]) -> Vec<Stmt> {
-        let Some(&first) = entries.first() else {
-            return Vec::new();
-        };
+    /// constant, held by the program's `stack`.
+    fn stack_settings(&mut self, st: &StackSource, entries: &[usize]) -> Option<Config> {
+        let &first = entries.first()?;
         let scope = self.decls.files[&self.units[first].file];
         let (saved_file, saved_offset) = (self.file, self.offset);
         let mut config = Vec::new();
@@ -2291,11 +2290,11 @@ impl<'u> Lowerer<'u> {
             });
         }
         (self.file, self.offset) = (saved_file, saved_offset);
-        vec![Stmt::Stack(Config {
+        Some(Config {
             name: st.name.clone(),
             config,
             span: st.span,
-        })]
+        })
     }
 
     /// A setting's value, parsed as a term.

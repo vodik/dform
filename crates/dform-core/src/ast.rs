@@ -4,9 +4,14 @@ use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::hash::{Hash, Hasher};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Program {
     pub statements: Vec<Stmt>,
+    /// The stack's settings, `[stacks.NAME]` over `[defaults]` in
+    /// dform.toml, as the loader reads them, with their spans: never
+    /// written in a program (`stack::config`). `None` for a program that
+    /// is not a stack's.
+    pub stack: Option<Config>,
 }
 
 #[derive(Debug, Clone)]
@@ -123,10 +128,6 @@ pub enum Stmt {
     RelationInput(Extern),
     /// An output's declaration (`k: T`) or its value (`k = term`).
     Output(OutputDecl),
-    /// The stack's settings, `[stacks.NAME]` over `[defaults]` in
-    /// dform.toml, as the loader reads them: never written in a program
-    /// (`stack`).
-    Stack(Config),
     /// `provider name { ... }`: a provider the program uses (`stack`).
     Provider(Config),
     /// `use PATH [as NAME] [{ k = v }] [where B]`: a module imported into

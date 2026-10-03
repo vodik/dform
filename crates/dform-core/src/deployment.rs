@@ -707,7 +707,7 @@ impl Located {
             },
         ));
         let externs = {
-            let (no_program, no_fns) = (Program { statements: vec![] }, vec![]);
+            let (no_program, no_fns) = (Program::default(), vec![]);
             let program_dir = project::base_of(&l.files[0]);
             let (tables, backend) = (tables.clone(), backend.clone());
             Externs::new(

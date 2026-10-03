@@ -577,6 +577,9 @@ struct Cli {
     style: report::Style,
     /// How a result set prints on stdout: `style`, at the terminal's width.
     table: report::table::Options,
+    /// `apply` with no target in a project of several stacks: every one,
+    /// in dependency order (`run_command`).
+    every_stack: Vec<PathBuf>,
 }
 
 /// What a run does.
@@ -752,15 +755,24 @@ fn run_command(cli: Cli) -> Result<()> {
     let named: Vec<String> = order.iter().map(|d| d.name.clone()).collect();
     let target = named.last().cloned().unwrap_or_default();
     let deps = &named[..named.len() - 1];
-    println!(
-        "apply {target}: {} first, each with its own plan and state: {target} reads {}",
-        deps.join(", then "),
-        if deps.len() == 1 {
-            "its outputs"
-        } else {
-            "their outputs"
-        }
-    );
+    if cli.every_stack.is_empty() {
+        println!(
+            "apply {target}: {} first, each with its own plan and state: {target} reads {}",
+            deps.join(", then "),
+            if deps.len() == 1 {
+                "its outputs"
+            } else {
+                "their outputs"
+            }
+        );
+    } else {
+        println!(
+            "apply: the project's {} stacks in dependency order, each with its own plan, \
+             state and confirmation: {}",
+            named.len(),
+            named.join(", then ")
+        );
+    }
     // A `--set` goes to each stack of the run that declares the input; one
     // none declares stays the target's, which names the error.
     let named_input = |kv: &String| {
@@ -775,6 +787,19 @@ fn run_command(cli: Cli) -> Result<()> {
             .cloned()
             .collect()
     };
+    // The project has no target to name the error: a `--set` no stack
+    // declares is one now.
+    if !cli.every_stack.is_empty()
+        && let Some(kv) = cli
+            .user_set
+            .iter()
+            .find(|kv| !order.iter().any(|d| d.inputs.contains(&named_input(kv))))
+    {
+        bail!(
+            "--set {kv}: no stack of the project declares input {}",
+            named_input(kv)
+        );
+    }
     for d in &order[..order.len() - 1] {
         println!(
             "{}",
@@ -796,6 +821,18 @@ fn run_command(cli: Cli) -> Result<()> {
         cli.style
             .paint(report::Paint::Bold, &format!("== {target}"))
     );
+    if let Some(last) = order.last().filter(|_| !cli.every_stack.is_empty()) {
+        // The project's last stack: run as a dependency is, by its file.
+        let user_set = sets(last);
+        let mut cli = cli;
+        cli.files = vec![last.file.clone()];
+        cli.keys = last.keys.clone();
+        cli.set = user_set.clone();
+        cli.set
+            .extend(last.keys.iter().map(|(k, v)| format!("{k}={v}")));
+        cli.user_set = user_set;
+        return run(cli, None);
+    }
     let mut cli = cli;
     let own = order.last().map(|d| &d.inputs);
     cli.user_set.retain(|kv| {
@@ -829,7 +866,17 @@ fn apply_order(cli: &Cli) -> Result<Vec<Dependency>> {
     else {
         return Ok(Vec::new());
     };
-    if !cli.in_project || cli.world.is_some() || cli.files.len() != 1 {
+    if !cli.in_project || cli.world.is_some() {
+        return Ok(Vec::new());
+    }
+    // The project (`apply` with no target): every stack, each with its
+    // default key; else the target.
+    let roots: Vec<(PathBuf, Vec<(String, String)>)> = match cli.files.as_slice() {
+        [] => cli.every_stack.iter().map(|f| (f.clone(), Vec::new())).collect(),
+        [one] => vec![(one.clone(), cli.keys.clone())],
+        _ => return Ok(Vec::new()),
+    };
+    if roots.is_empty() {
         return Ok(Vec::new());
     }
     let Some(project) = crate::project::Project::find(Path::new("."), env!("CARGO_PKG_VERSION"))?
@@ -928,15 +975,17 @@ fn apply_order(cli: &Cli) -> Result<Vec<Dependency>> {
         order.push(d);
         Ok(())
     }
-    let (name, inputs, _) = reads(&cli.files[0], &cli.keys)?;
-    let target = Dependency {
-        name,
-        file: cli.files[0].clone(),
-        keys: cli.keys.clone(),
-        inputs,
-    };
-    visit(target, &reads, &mut order, &mut path)?;
-    if order.len() == 1 {
+    for (file, keys) in &roots {
+        let (name, inputs, _) = reads(file, keys)?;
+        let target = Dependency {
+            name,
+            file: file.clone(),
+            keys: keys.clone(),
+            inputs,
+        };
+        visit(target, &reads, &mut order, &mut path)?;
+    }
+    if order.len() == 1 && cli.every_stack.is_empty() {
         order.clear();
     }
     Ok(order)
@@ -1055,6 +1104,7 @@ fn resolve(args: Args) -> Result<Cli> {
             inputs.color.style(std::io::stdout().is_terminal())
         },
         table: Default::default(),
+        every_stack: Vec::new(),
     };
     cli.table = report::table::Options {
         width: terminal_width().unwrap_or(report::table::Options::PLAIN.width),
@@ -1078,6 +1128,30 @@ fn resolve(args: Args) -> Result<Cli> {
     let Some(target) = target else {
         return Ok(cli);
     };
+    // `apply` with no target applies the project: every stack under the
+    // working directory, in dependency order, each confirmed on its own.
+    if let (Cmd::Apply { .. }, None, true, Some(p)) = (
+        &cli.cmd,
+        &target.target,
+        target.keys.is_empty(),
+        project.as_ref(),
+    ) {
+        let d = crate::project::discover(p);
+        d.check()?;
+        let here: Vec<PathBuf> = d
+            .stacks
+            .iter()
+            .filter(|s| s.file.is_relative() && !s.file.starts_with(".."))
+            .map(|s| s.file.clone())
+            .collect();
+        if here.len() > 1 {
+            for w in &d.warnings {
+                eprintln!("warning: {w}");
+            }
+            cli.every_stack = here;
+            return Ok(cli);
+        }
+    }
     let (file, keys) = target_of(project.as_ref(), &target)?;
     cli.set.extend(keys.iter().map(|(k, v)| format!("{k}={v}")));
     cli.keys = keys;
@@ -1872,8 +1946,7 @@ fn run_with(
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("internal: no plan key"))?;
         let now = zset::file::delta(plan, sections, &report, schema, &redact, key);
-        let firings = |t: &str, n: &str| zset::file::firings(res, t, n, &redact, key);
-        let diff = saved.stale(&now, tick, &firings);
+        let diff = saved.stale(&now, tick);
         if diff.is_empty() {
             return Ok(());
         }
@@ -3340,6 +3413,34 @@ fn run_tests(
         let redact = query::Redactor::new(&res.facts, backend.schema());
         Ok(violations.iter().map(|v| redact.text(v)).collect())
     };
+    // A deny's doc comment (`#|` above it) is its test's doc, printed
+    // beside it (R-30: with `scenario` gone, the deny is the test).
+    let docs: std::collections::BTreeMap<String, String> = program
+        .statements
+        .iter()
+        .filter_map(|st| match st {
+            crate::ast::Stmt::Fact(a) if a.pred == "doc" => match a.args.as_slice() {
+                [
+                    Term::Val(Value::Str(kind)),
+                    Term::Val(Value::Str(name)),
+                    Term::Val(Value::Str(key)),
+                    Term::Val(Value::Str(text)),
+                ] if kind == "rule" && key == "description" => Some((name.clone(), text.clone())),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect();
+    let documented = |d: &String| -> String {
+        match docs
+            .iter()
+            .filter(|(name, _)| d == *name || d.starts_with(&format!("{name} ")))
+            .max_by_key(|(name, _)| name.len())
+        {
+            Some((_, doc)) => format!("- {d}   #| {doc}"),
+            None => format!("- {d}"),
+        }
+    };
     let n = combinations.len();
     let s = if n == 1 { "" } else { "s" };
     let over = if axes.is_empty() {
@@ -3370,7 +3471,7 @@ fn run_tests(
         let command = crate::testing::reproduce(&target, &on_target, &set);
         let (result, lines) = match run(&pairs) {
             Ok(denied) if denied.is_empty() => ("ok", Vec::new()),
-            Ok(denied) => ("denied", denied.iter().map(|d| format!("- {d}")).collect()),
+            Ok(denied) => ("denied", denied.iter().map(documented).collect()),
             Err(e) => {
                 let text = crate::diag::report(&e, std::io::stdout().is_terminal());
                 ("error", text.lines().map(String::from).collect())

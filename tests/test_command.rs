@@ -221,3 +221,27 @@ fn an_input_a_set_gives_is_no_axis() {
         r.stdout
     );
 }
+
+/// A deny's doc comment is its test's doc: `dform test` prints it beside
+/// the deny that failed (R-30, with `scenario` gone).
+#[test]
+fn a_deny_prints_with_its_doc() {
+    let s = Scratch::new("test-doc");
+    s.write(
+        "p.df",
+        &P.replace(
+            "deny \"a database is never public\"",
+            "#| A public database is one leaked credential from a breach.\n\
+             deny \"a database is never public\"",
+        ),
+    );
+    let r = s.run(&["test", "p.df"]).failure();
+    assert!(
+        r.stdout.contains(
+            "  - a database is never public   #| A public database is one leaked credential \
+             from a breach.\n"
+        ),
+        "{}",
+        r.stdout
+    );
+}

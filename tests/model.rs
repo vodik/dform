@@ -937,7 +937,7 @@ impl Runner<'_> {
                 let now = PlanFile::load(&fresh).expect("plan --out wrote it");
                 Some(
                     !saved
-                        .stale(&now.deformations, 1, &|_, _| Vec::new())
+                        .stale(&now.deformations, 1)
                         .is_empty(),
                 )
             }

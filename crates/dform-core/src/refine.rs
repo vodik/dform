@@ -549,7 +549,10 @@ pub fn lower_types(program: &Program) -> Result<Program> {
         }
     }
     if diags.is_empty() {
-        Ok(Program { statements: out })
+        Ok(Program {
+            statements: out,
+            stack: program.stack.clone(),
+        })
     } else {
         Err(Diagnostics(diags).into())
     }

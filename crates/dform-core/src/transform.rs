@@ -134,9 +134,9 @@ fn reject_pending(stmts: &[Stmt]) -> Result<()> {
                     e.span,
                     "`extern` belongs at the top of the program",
                 )),
-                Stmt::Stack(c) | Stmt::Provider(c) if at != At::Top => diags.push(misplaced(
+                Stmt::Provider(c) if at != At::Top => diags.push(misplaced(
                     c.span,
-                    "`stack` and `provider` belong at the top of the program",
+                    "`provider` belongs at the top of the program",
                 )),
                 _ => {}
             }
@@ -391,6 +391,7 @@ fn lower_contributions(program: &Program) -> Result<Program> {
         });
     }
     Ok(Program {
+        stack: program.stack.clone(),
         statements: base_reads(out),
     })
 }
@@ -546,7 +547,10 @@ fn apply_decls(program: &Program) -> Result<Program> {
         }
         out.push(rewrite_stmt_records(s.clone(), &schemas)?);
     }
-    Ok(Program { statements: out })
+    Ok(Program {
+        statements: out,
+        stack: program.stack.clone(),
+    })
 }
 
 #[derive(Copy, Clone)]
@@ -716,6 +720,7 @@ fn desugar_comprehensions(program: &Program) -> Result<Program> {
         next_stmts.extend(helpers);
         current = Program {
             statements: next_stmts,
+            stack: current.stack.clone(),
         };
 
         if !changed {
@@ -1087,13 +1092,20 @@ fn drop_metadata(program: &Program) -> (Program, BTreeSet<Extern>, Vec<crate::as
             Stmt::Decl(_) => {
                 // lowered away by apply_decls
             }
-            Stmt::Output(_) | Stmt::Stack(_) | Stmt::Provider(_) => {
+            Stmt::Output(_) | Stmt::Provider(_) => {
                 // declarations: the interface and the stack, not rules
             }
             _ => statements.push(s.clone()),
         }
     }
-    (Program { statements }, externs, fns)
+    (
+        Program {
+            statements,
+            stack: program.stack.clone(),
+        },
+        externs,
+        fns,
+    )
 }
 
 fn desugar_resources(program: &Program) -> Result<Program> {
@@ -1112,7 +1124,10 @@ fn desugar_resources(program: &Program) -> Result<Program> {
         }
     }
     out.extend(reports);
-    Ok(Program { statements: out })
+    Ok(Program {
+        statements: out,
+        stack: program.stack.clone(),
+    })
 }
 
 /// `resource T N [@rank] { [for body] k = v [@rank] ... }` is `want(T, N)`

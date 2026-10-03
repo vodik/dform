@@ -270,11 +270,12 @@ provider fake
 "#;
 
 /// The file records the group's head, its rule and the stuck instance's
-/// bound variables; tick 2's policy is admitted only when a firing of that
-/// rule with those bindings derives it. A file whose group names another
-/// database is stale at tick 2, its type notwithstanding.
+/// bound variables. Its apply stops before tick 2, whose policy the file
+/// could not name (R-30's stop rule), whatever group the file records: a
+/// file whose group names another database stops there too, nothing of
+/// tick 2 applied.
 #[test]
-fn a_tick_2_address_outside_the_recorded_group_is_stale() {
+fn a_tick_2_address_the_file_does_not_list_stops_the_apply() {
     let s = Scratch::new("planfile-group");
     s.write("p.df", GROUP);
     s.run(&[
@@ -337,14 +338,11 @@ fn a_tick_2_address_outside_the_recorded_group_is_stale() {
     s.write("plan.json", &now.to_string());
     let r = s.run(&["apply", "plan.json"]).failure();
     assert!(
-        r.stderr.contains(
-            "create iam.policy[\"connect-orders.db.fake\"]: not in the plan file, and no pending \
-             group it records derives it"
-        ),
+        r.stderr
+            .contains("apply stopped after tick 1: tick 2 adds 1 deformation the plan could not name"),
         "{}",
         r.stderr
     );
-    assert!(r.stderr.contains("\"payments\""), "{}", r.stderr);
     let world = s.read("w.json");
     assert!(world.contains("db.postgres"), "{world}");
     assert!(!world.contains("iam.policy"), "{world}");

@@ -162,7 +162,10 @@ the cycle. A `--set` goes to each stack of the run that declares the
 input (one none declares is the target's error); `--input-file` is the
 target's. A plan file,
 a `--world` fixture and a program outside a project apply only
-themselves.
+themselves. `apply` with no target, in a project of several stacks under
+the working directory, applies every one of them (each with its default
+key) in dependency order, each run headed and confirmed on its own; a
+`--set` no stack declares is an error.
 
 | Commands | |
 |---|---|
@@ -2089,8 +2092,9 @@ deny "dev has no database" where env == "dev", _ in db.postgres
 
 It prints a result set, a row per combination: its inputs, then `ok` or
 `denied` (or `error`, for one that does not compile). Each that failed
-follows as the command that plans it with its denies (or its error); it
-exits non-zero if any failed:
+follows as the command that plans it with its denies (or its error),
+each with its doc comment (`#|` above the deny: the test's doc) beside
+it; it exits non-zero if any failed:
 
 ```
 test p: 4 combinations of env, public

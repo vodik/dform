@@ -5,7 +5,7 @@
 //! world and lock live in (or a bucket, `store`), and a lock there makes a
 //! second concurrent apply fail cleanly; `role`, `approvals`,
 //! `audit_sink` and `isolated` are the rest (docs/grammar.md
-//! "Stack settings"). The loader lowers them to one `Stmt::Stack`.
+//! "Stack settings"). The loader lowers them to the program's `stack`.
 //!
 //! Keyed stacks: `key env: T` declares an input the target gives (`shop
 //! env=prod`), never `--set`. Each value of the key, several keys' in
@@ -241,11 +241,10 @@ fn string(t: &Term) -> Option<&str> {
 pub fn config(program: &Program) -> Result<Stack> {
     let mut out = Stack::default();
     let mut diags = Vec::new();
-    let mut settings = None;
+    let settings = program.stack.as_ref();
     for s in &program.statements {
         match s {
             Stmt::Input(i) if i.key => out.keys.push((i.name.clone(), i.span)),
-            Stmt::Stack(c) => settings = settings.or(Some(c)),
             Stmt::Provider(c) => {
                 // A built-in fact provider dform answers itself starts nothing.
                 if crate::externs::builtin(&c.name).is_some_and(|b| b.in_process) {

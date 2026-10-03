@@ -496,6 +496,7 @@ pub fn expand(program: &Program) -> Result<Expanded> {
         Ok(Expanded {
             program: Program {
                 statements: expanded,
+                stack: program.stack.clone(),
             },
             inputs: cx.declared,
             secret_outputs: cx.secret_outputs,

@@ -844,6 +844,7 @@ pub fn expand_set_from(program: Program, declared: &mut [crate::inputs::Declared
             f != "git" && t.split('|').next() == Some(SET_DOC)
         }))
     };
+    let stack = program.stack;
     let (docs, mut out): (Vec<Stmt>, Vec<Stmt>) = program
         .statements
         .into_iter()
@@ -969,7 +970,10 @@ pub fn expand_set_from(program: Program, declared: &mut [crate::inputs::Declared
             Span::default(),
         )));
     }
-    Program { statements: out }
+    Program {
+        statements: out,
+        stack,
+    }
 }
 
 fn atom(pred: &str, args: Vec<Term>, span: Span) -> Atom {

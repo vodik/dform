@@ -720,9 +720,8 @@ pub mod file {
     }
 
     /// A pending group (a stuck resource rule, or one that may derive
-    /// after a boundary) and what bounds it: an address that appears at a
-    /// later tick is the file's only when it is `head` derived by `rule`
-    /// with these bindings ([`Group::admits`]).
+    /// after a boundary): what the plan could not name yet, by its `head`,
+    /// `rule` and bindings.
     #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
     pub struct Group {
         pub pattern: String,
@@ -734,53 +733,6 @@ pub mod file {
         /// The instance's bound, null-free variables, redacted; a
         /// may-derive group has none.
         pub bindings: BTreeMap<String, Json>,
-    }
-
-    /// One firing that derives a resource's `want/2` fact: its rule and its
-    /// null-free bindings, redacted as [`Group::bindings`] are.
-    #[derive(Debug, Clone, PartialEq)]
-    pub struct Firing {
-        pub rule: String,
-        pub bindings: BTreeMap<String, Json>,
-    }
-
-    impl Group {
-        /// Does this group derive the address `typ[name]`, which `firings`
-        /// derive? Its head must unify with the address, and one firing
-        /// must be of its rule, with every binding it recorded.
-        pub fn admits(&self, typ: &str, name: &str, firings: &[Firing]) -> bool {
-            let addr = crate::ir::Address {
-                typ: typ.into(),
-                name: name.into(),
-            };
-            let unifies = self.pattern == format!("{typ}[?]")
-                || self.pattern == addr.to_string()
-                // A head whose type is not a constant.
-                || self.head.starts_with("want(_");
-            unifies
-                && firings.iter().any(|f| {
-                    f.rule == self.rule
-                        && self
-                            .bindings
-                            .iter()
-                            .all(|(k, v)| f.bindings.get(k) == Some(v))
-                })
-        }
-
-        /// The group as an error names it: its pattern, rule and bindings.
-        pub fn describe(&self) -> String {
-            let mut out = format!("{} ({} by {}", self.pattern, self.head, self.rule);
-            if !self.bindings.is_empty() {
-                let b: Vec<String> = self
-                    .bindings
-                    .iter()
-                    .map(|(k, v)| format!("{k} = {v}"))
-                    .collect();
-                out.push_str(&format!(" with {}", b.join(", ")));
-            }
-            out.push(')');
-            out
-        }
     }
 
     #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -922,43 +874,6 @@ pub mod file {
             }
         }
         out
-    }
-
-    /// The firings that derive `want(typ, name)` in `res`, from its
-    /// provenance.
-    pub fn firings(
-        res: &EvalResult,
-        typ: &str,
-        name: &str,
-        r: &Redactor,
-        key: &Key,
-    ) -> Vec<Firing> {
-        use crate::circuit::{Fact, Leaf, View};
-        let want = Fact::new(
-            "want",
-            vec![Value::Str(typ.into()), Value::Str(name.into())],
-        );
-        let Some(id) = res.circuit.fact_id(&want) else {
-            return Vec::new();
-        };
-        let View::Fact { alts, .. } = res.circuit.view(id) else {
-            return Vec::new();
-        };
-        alts.iter()
-            .filter_map(|a| {
-                let View::Times { children, bindings } = res.circuit.view(*a) else {
-                    return None;
-                };
-                let rule = children.iter().find_map(|c| match res.circuit.view(*c) {
-                    View::Leaf(Leaf::Rule { id }) => Some(id.clone()),
-                    _ => None,
-                })?;
-                Some(Firing {
-                    rule,
-                    bindings: redacted(bindings.iter().map(|(k, v)| (k, v)), r, key),
-                })
-            })
-            .collect()
     }
 
     /// Bindings as a group records them: the null-free ones, redacted.
@@ -1129,15 +1044,9 @@ pub mod file {
 
         /// The differences between this file's delta and `current`, the
         /// delta re-evaluated at the start of `tick`; empty when the file's
-        /// delta is reproduced. An address the file does not list is its
-        /// own when a pending group it records derives it: `firings`
-        /// gives what derives an address now.
-        pub fn stale(
-            &self,
-            current: &[Entry],
-            tick: usize,
-            firings: &dyn Fn(&str, &str) -> Vec<Firing>,
-        ) -> Vec<String> {
+        /// delta is reproduced. An address the file does not list is stale
+        /// at tick 1; at a later tick the stop rule stops before it.
+        pub fn stale(&self, current: &[Entry], tick: usize) -> Vec<String> {
             let key = |e: &Entry| (e.typ.clone(), e.name.clone());
             let saved: BTreeMap<(String, String), &Entry> =
                 self.deformations.iter().map(|e| (key(e), e)).collect();
@@ -1160,38 +1069,11 @@ pub mod file {
                     continue;
                 }
                 let Some(s) = saved.get(k) else {
-                    // A dependent of an earlier replace follows its new
-                    // identity.
-                    let follows = c.action == "update"
-                        && self.deformations.iter().any(|e| {
-                            e.tick.is_some_and(|t| t < tick) && e.dependents.contains(&at)
-                        });
-                    if follows {
-                        continue;
-                    }
-                    let derived = firings(&k.0, &k.1);
-                    if self
-                        .pending_groups
-                        .iter()
-                        .any(|g| g.admits(&k.0, &k.1, &derived))
-                    {
-                        continue;
-                    }
-                    let of_type: Vec<String> = self
-                        .pending_groups
-                        .iter()
-                        .filter(|g| g.pattern == format!("{}[?]", k.0))
-                        .map(Group::describe)
-                        .collect();
-                    if of_type.is_empty() {
+                    // An address the file does not list, at a later tick, is
+                    // the stop rule's (R-30): an unattended apply stops
+                    // before the tick that adds it, its state consistent.
+                    if tick == 1 {
                         out.push(format!("{} {at}: not in the plan file", c.action));
-                    } else {
-                        out.push(format!(
-                            "{} {at}: not in the plan file, and no pending group it records \
-                             derives it (it records {})",
-                            c.action,
-                            of_type.join("; ")
-                        ));
                     }
                     continue;
                 };
