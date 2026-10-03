@@ -532,6 +532,13 @@ impl Surface<'_, '_> {
                 "type {t} = enum({})",
                 vs.iter().map(|v| r.surface(v)).collect::<Vec<_>>().join(", ")
             ),
+            // A copy (R-65), as the statement that makes it.
+            (crate::modules::INSTANCE_OF, [Value::Str(path), Value::Str(user), Value::Str(name)]) => {
+                match user.is_empty() {
+                    true => format!("instance {path} {name}"),
+                    false => format!("instance {path} {name}   (in {user})"),
+                }
+            }
             ("deny" | "warn", [msg @ Value::Str(_), ctx @ ..]) => {
                 let mut out = format!("{} {}", f.pred, r.surface(msg));
                 for c in ctx {

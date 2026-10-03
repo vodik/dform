@@ -24,7 +24,7 @@ net.route["blue-to-green"]
   │    with t = "green", v = "green::vpc"
   │         network[t].vpc = "green::vpc"
   │    ├─ spoke("green")   examples/tour/stacks/tour.df:250
-  │    ├─ instance_of("network", "", "green")   examples/tour/stacks/tour.df:231
+  │    ├─ instance network green   examples/tour/stacks/tour.df:231
   │    └─ output green.vpc = "green::vpc"
   │         merged from 1 contribution
   │         └─ "green::vpc"   examples/tour/stacks/tour.df:218   (instance network green)

@@ -477,3 +477,15 @@ fn why_prints_the_statement_of_a_rule_that_reads_nothing() {
     let out = why_in(&s, "p.df", &["ys(N)"]);
     assert_eq!(out, "ys(3)\n  p.df:3  ys(n) where n = 1 + 2\n  with n = 3\n");
 }
+
+/// `plan --why` prints a copy's frame as its statement, `instance network.vpc
+/// main`, not the core's `instance_of(..)` (R-65).
+#[test]
+fn plan_why_prints_a_copy_as_its_instance_statement() {
+    let out = dform("examples/demo/stacks/dform.df", &["plan", "--why"]);
+    assert!(
+        out.contains("  instance network.vpc main\n"),
+        "{out}"
+    );
+    assert!(!out.contains("instance_of("), "{out}");
+}
