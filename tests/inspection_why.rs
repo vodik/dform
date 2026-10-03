@@ -506,3 +506,20 @@ fn why_prints_a_relations_signature() {
     );
     assert_eq!(out.matches("decl az").count(), 1, "{out}");
 }
+
+/// An interpolated reference prints as its address in `why`'s computed
+/// terms, as the evaluation formats it (R-42), typed by `in` or not.
+#[test]
+fn why_interpolates_a_reference_as_its_address() {
+    let s = Scratch::new("why-ref-interp");
+    s.write(
+        "p.df",
+        "edition 2026\nprovider fake\nresource net.vpc main {\n  cidr = \"10.0.0.0/16\"\n}\n\
+         msg(m) where r in net.vpc, m = \"vpc ${r}\"\n",
+    );
+    let out = why_in(&s, "p.df", &["msg(M)"]);
+    assert!(
+        out.contains("       \"vpc ${r}\" = \"vpc net.vpc[\\\"main\\\"]\"\n"),
+        "{out}"
+    );
+}

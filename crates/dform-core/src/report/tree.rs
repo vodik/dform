@@ -1524,10 +1524,27 @@ struct Cx<'a> {
 }
 
 impl Cx<'_> {
-    /// A variable's value; one that ranges over a type's resources
-    /// (`r in T`) as the resource's address.
-    fn show_var(&self, var: &str, v: &Value, redact: &Redactor) -> String {
-        let typ = self.rule.and_then(|r| {
+    /// The address of the resource the source variable `name` ranges
+    /// over (`r in T`), `T["A"]`; `None` for anything else.
+    fn address_of(&self, name: &str) -> Option<String> {
+        let var = capitalise(name);
+        let v = self.env.get(&var)?;
+        let typ = self.want_type(&var)?;
+        match (typ, v) {
+            (Value::Str(t), Value::Str(n)) => Some(
+                Address {
+                    typ: t,
+                    name: n.clone(),
+                }
+                .to_string(),
+            ),
+            _ => None,
+        }
+    }
+
+    /// The type `want(T, var)` in the rule's body gives `var`.
+    fn want_type(&self, var: &str) -> Option<Value> {
+        self.rule.and_then(|r| {
             r.body.iter().find_map(|l| match l {
                 Lit::Pos(a)
                     if a.pred == "want"
@@ -1537,7 +1554,13 @@ impl Cx<'_> {
                 }
                 _ => None,
             })
-        });
+        })
+    }
+
+    /// A variable's value; one that ranges over a type's resources
+    /// (`r in T`) as the resource's address.
+    fn show_var(&self, var: &str, v: &Value, redact: &Redactor) -> String {
+        let typ = self.want_type(var);
         match (typ, v) {
             (Some(Value::Str(t)), Value::Str(name)) if !redact.is_secret(v) => Address {
                 typ: t,
@@ -1660,9 +1683,19 @@ impl Cx<'_> {
                 Piece::Hole(h, _) => {
                     let parse = crate::syntax::parser::parse_term(h);
                     let t = parse.syntax().children().next()?;
+                    // A variable `r in T` binds interpolates as its
+                    // address, as an untyped reference does (R-42).
+                    if let Some(at) = self.address_of(h.trim()) {
+                        out.push_str(&at);
+                        continue;
+                    }
                     match self.eval(&t)? {
                         Value::Str(s) => out.push_str(&s),
                         v if crate::stuck::has_null(&v) => return None,
+                        // A reference interpolates as its address (R-42).
+                        Value::Ref { typ, name, attr } => {
+                            out.push_str(&crate::ir::Address { typ, name }.attr(&attr))
+                        }
                         v => out.push_str(&crate::partition::fmt_value(&v)),
                     }
                 }
