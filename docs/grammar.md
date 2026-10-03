@@ -237,7 +237,7 @@ several, and never an error for a key that is not there.
 |-----------------|-------------------------|-----------------------------------|--------------------------------------|
 | `T[e]`          | resources of type `T`   | address, relative to the scope    | `want(T, A)`, a dot reads `attr`     |
 | `c[e]`          | copies of component `c` | the copy's name                   | `instance_of("c", User, e), output(e, ..)` |
-| `s[k=v]`        | deployments of stack `s` | each key, by name                | `stack_output("s[k=v]", ..)`         |
+| `s[k=v]`        | deployments of stack `s` | each key, by name; a bare name `k` is `k=k` (`s[env]`, `s[env, region="r1"]`) | `stack_output("s[k=v]", ..)`         |
 | `world.T[e]`    | live objects of `T`     | the provider's name               | `cloud_attr(T, e, path, V)`          |
 | `p[a, b]`       | relation or extern `p`  | every column but the last         | `p(a, b, V)`                         |
 | `e[i]`          | a list value            | index (a fresh `i` enumerates)    | `member(e, i, V)`                    |

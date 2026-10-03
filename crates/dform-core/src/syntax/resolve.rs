@@ -317,6 +317,18 @@ fn terms(n: &SyntaxNode) -> impl Iterator<Item = SyntaxNode> + '_ {
     n.children().filter(|c| is_term(c.kind()))
 }
 
+/// The name a term is when it is one word and nothing else: `env`.
+fn bare_name(t: &SyntaxNode) -> Option<String> {
+    let mut ws = t
+        .descendants_with_tokens()
+        .filter_map(|e| e.into_token())
+        .filter(|k| !k.kind().is_trivia());
+    match (ws.next(), ws.next()) {
+        (Some(w), None) if w.kind() == IDENT => Some(w.text().to_string()),
+        _ => None,
+    }
+}
+
 fn is_word(k: SyntaxKind) -> bool {
     k == IDENT || k.is_keyword()
 }
@@ -511,11 +523,19 @@ impl Chain {
         for e in it {
             match e {
                 rowan::NodeOrToken::Node(ix) if ix.kind() == INDEX => {
-                    let named: Vec<(String, SyntaxNode)> = ix
+                    let mut named: Vec<(String, SyntaxNode)> = ix
                         .children()
                         .filter(|c| c.kind() == NAMED_ARG)
                         .filter_map(|a| Some((word_text(&a, 0), terms(&a).next()?)))
                         .collect();
+                    // Beside a `k = v`, a bare name is the pun `k = k`
+                    // (R-33): `platform[env, region = "GRA11"]`.
+                    if !named.is_empty() {
+                        let puns: Vec<(String, SyntaxNode)> = terms(&ix)
+                            .filter_map(|t| Some((bare_name(&t)?, t)))
+                            .collect();
+                        named.extend(puns);
+                    }
                     ops.push(match named.is_empty() {
                         true => Op::Index(terms(&ix).collect(), ix.text_range()),
                         false => Op::Keyed(named, ix.text_range()),
@@ -5810,7 +5830,17 @@ impl<'u> Lowerer<'u> {
             format!("{m}[{}].OUTPUT", ks.join(", "))
         };
         let keys = d.keys.clone();
-        let (name, rest) = match c.ops.first() {
+        // `NAME[env]`, every entry a bare name: the pun `NAME[env = env]`
+        // (R-33), as beside a `k = v`.
+        let punned: Option<Op> = match c.ops.first() {
+            Some(Op::Index(ts, r)) if !keys.is_empty() => ts
+                .iter()
+                .map(|t| Some((bare_name(t)?, t.clone())))
+                .collect::<Option<Vec<_>>>()
+                .map(|entries| Op::Keyed(entries, *r)),
+            _ => None,
+        };
+        let (name, rest) = match punned.as_ref().or(c.ops.first()) {
             Some(Op::Keyed(entries, r)) => {
                 let given: BTreeSet<&str> = entries.iter().map(|(k, _)| k.as_str()).collect();
                 let want: BTreeSet<&str> = keys.iter().map(String::as_str).collect();

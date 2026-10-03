@@ -149,3 +149,38 @@ fn a_set_goes_to_the_stack_that_declares_it() {
         r.stderr
     );
 }
+
+/// The keyed read takes the pun (R-33): a bare name in `[ ]` is `name =
+/// name`, alone or beside a `k = v`.
+#[test]
+fn a_keyed_read_takes_the_pun() {
+    let s = Scratch::project("order-pun");
+    s.write(
+        "stacks/net.df",
+        "edition 2026\nkey env: string = \"dev\"\nkey region: string = \"r1\"\nprovider fake\n\
+         resource net.vpc main { cidr = \"10.0.0.0/16\" }\noutput cidr = main.cidr\n",
+    );
+    let app = |read: &str| {
+        format!(
+            "edition 2026\nkey env: string = \"dev\"\nprovider fake\nuse stacks.net as network\n\
+             resource net.subnet a {{\n  cidr = c\n}} where c = {read}.cidr\n"
+        )
+    };
+    s.write("stacks/app.df", &app("network[env, region = \"r1\"]"));
+    let r = s.run(&["apply", "app", "env=dev"]).success();
+    assert!(
+        r.stdout
+            .contains("+ net.subnet[\"a\"]\n  cidr = \"10.0.0.0/16\"\n"),
+        "{}",
+        r.stdout
+    );
+    // One key, the pun alone.
+    s.write(
+        "stacks/net.df",
+        "edition 2026\nkey env: string = \"dev\"\nprovider fake\n\
+         resource net.vpc main { cidr = \"10.0.0.0/16\" }\noutput cidr = main.cidr\n",
+    );
+    s.write("stacks/app.df", &app("network[env]"));
+    let r = s.run(&["apply", "app", "env=dev"]).success();
+    assert!(r.stdout.starts_with("apply app[env=dev]: net[env=dev] first"), "{}", r.stdout);
+}
