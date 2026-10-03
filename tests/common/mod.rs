@@ -339,6 +339,12 @@ pub fn on(file: &str, mock: &[&str], args: &[&str]) -> Vec<String> {
         .collect()
 }
 
+/// `dform dev --world w.json ARGS p.df` in `s`: a command on the scratch
+/// program `p.df` against the mock's world `w.json` ([`on`]).
+pub fn mock(s: &Scratch, args: &[&str]) -> Run {
+    s.run(&on("p.df", &["--world", "w.json"], args))
+}
+
 /// The repository root, for programs and fixtures the tests read.
 pub fn repo() -> &'static Path {
     Path::new(env!("CARGO_MANIFEST_DIR"))

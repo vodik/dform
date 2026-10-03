@@ -4,11 +4,7 @@
 //! what depends on it has moved.
 
 mod common;
-use common::Scratch;
-
-fn dform(s: &Scratch, args: &[&str]) -> common::Run {
-    s.run(&common::on("p.df", &["--world", "w.json"], args))
-}
+use common::{Scratch, mock};
 
 fn json(s: &Scratch, f: &str) -> serde_json::Value {
     serde_json::from_str(&s.read(f)).unwrap()
@@ -29,7 +25,7 @@ resource compute.vm keep { size = 1 }
 provider fake
 "#,
     );
-    dform(&s, &["apply"]).success();
+    mock(&s, &["apply"]).success();
     assert_eq!(
         json(&s, "w.state.json")["resources"]["net.route::r"]["deps"],
         serde_json::json!(["net.vpc_peering::p"])
@@ -38,7 +34,7 @@ provider fake
         "p.df",
         "\nresource compute.vm keep { size = 1 }\nprovider fake\n",
     );
-    let r = dform(&s, &["apply"]).success();
+    let r = mock(&s, &["apply"]).success();
     let order: Vec<&str> = r.stdout.lines().filter(|l| l.starts_with("- ")).collect();
     assert_eq!(
         order,
@@ -75,9 +71,9 @@ provider fake
 fn a_force_new_change_replaces_destroying_first() {
     let s = Scratch::new("replace");
     s.write("p.df", NET);
-    dform(&s, &["apply"]).success();
+    mock(&s, &["apply"]).success();
     s.write("p.df", &NET.replace("10.0.0.0/16", "10.1.0.0/16"));
-    let r = dform(&s, &["apply"]).success();
+    let r = mock(&s, &["apply"]).success();
     assert_eq!(
         r.stdout,
         "tick 1:\nplan: 1 deformation (1 replace), 1 pending\ndefinite:\n\
@@ -105,14 +101,14 @@ fn a_force_new_change_replaces_destroying_first() {
 fn create_before_destroy_deposes_the_old_object_until_dependents_move() {
     let s = Scratch::new("cbd");
     s.write("p.df", NET);
-    dform(&s, &["apply"]).success();
+    mock(&s, &["apply"]).success();
     let cbd = format!(
         "{}lifecycle(main, \"create_before_destroy\")\n",
         NET.replace("10.0.0.0/16", "10.1.0.0/16")
     );
     s.write("p.df", &cbd);
     // Stop after tick 1: the old object is deposed in state.
-    let r = dform(&s, &["apply", "--max-ticks", "1"]).failure();
+    let r = mock(&s, &["apply", "--max-ticks", "1"]).failure();
     assert!(
         r.stdout.contains("+/- net.vpc[\"main\"]  (replace)"),
         "{}",
@@ -125,7 +121,7 @@ fn create_before_destroy_deposes_the_old_object_until_dependents_move() {
     assert!(w["resources"].get("net.vpc::main").is_some());
     assert!(w["resources"].get("net.vpc::main-2").is_some());
     // The next apply finishes: the dependent first, then the deposed object.
-    let r = dform(&s, &["apply"]).success();
+    let r = mock(&s, &["apply"]).success();
     assert!(
         r.stdout.contains(
             "plan: 2 deformations (1 update, 1 delete)\ndefinite:\n\
@@ -146,7 +142,7 @@ fn create_before_destroy_deposes_the_old_object_until_dependents_move() {
             .collect::<Vec<_>>(),
         ["net.subnet::a", "net.vpc::main-2"]
     );
-    let r = dform(&s, &["plan"]).success();
+    let r = mock(&s, &["plan"]).success();
     assert!(
         r.stdout.ends_with("stack p is undeformed\n"),
         "{}",
@@ -159,7 +155,7 @@ fn create_before_destroy_deposes_the_old_object_until_dependents_move() {
 fn create_before_destroy_in_one_apply_takes_two_ticks() {
     let s = Scratch::new("cbd-one");
     s.write("p.df", NET);
-    dform(&s, &["apply"]).success();
+    mock(&s, &["apply"]).success();
     s.write(
         "p.df",
         &format!(
@@ -167,7 +163,7 @@ fn create_before_destroy_in_one_apply_takes_two_ticks() {
             NET.replace("10.0.0.0/16", "10.1.0.0/16")
         ),
     );
-    let r = dform(&s, &["apply"]).success();
+    let r = mock(&s, &["apply"]).success();
     assert!(
         r.stdout
             .starts_with("tick 1:\nplan: 1 deformation (1 replace), 1 pending\n"),

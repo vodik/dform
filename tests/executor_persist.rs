@@ -2,7 +2,7 @@
 //! leaves the N-1 identities before it in state.
 
 mod common;
-use common::Scratch;
+use common::{Scratch, mock};
 
 const PROG: &str = r#"
 
@@ -16,10 +16,6 @@ fn stack(name: &str) -> Scratch {
     let s = Scratch::new(name);
     s.write("p.df", PROG);
     s
-}
-
-fn dform(s: &Scratch, args: &[&str]) -> common::Run {
-    s.run(&common::on("p.df", &["--world", "w.json"], args))
 }
 
 fn identities(s: &Scratch) -> Vec<String> {
@@ -36,7 +32,7 @@ fn identities(s: &Scratch) -> Vec<String> {
 #[test]
 fn a_failure_at_action_n_leaves_n_minus_one_identities() {
     let s = stack("persist-fail");
-    dform(&s, &["apply", "--chaos", "fail=compute.vm[\"app\"]"]).failure();
+    mock(&s, &["apply", "--chaos", "fail=compute.vm[\"app\"]"]).failure();
     assert_eq!(identities(&s), ["net.subnet::a", "net.vpc::main"]);
 }
 
@@ -45,7 +41,7 @@ fn a_failure_at_action_n_leaves_n_minus_one_identities() {
 #[test]
 fn a_crash_at_action_n_leaves_n_minus_one_identities() {
     let s = stack("persist-crash");
-    let r = dform(&s, &["apply", "--chaos", "crash=compute.vm[\"app\"]"]).failure();
+    let r = mock(&s, &["apply", "--chaos", "crash=compute.vm[\"app\"]"]).failure();
     assert!(
         r.stderr
             .contains("chaos: crash during apply compute.vm[\"app\"]"),
@@ -54,7 +50,7 @@ fn a_crash_at_action_n_leaves_n_minus_one_identities() {
     );
     assert_eq!(identities(&s), ["net.subnet::a", "net.vpc::main"]);
     // The next plan sees two resources through identity and creates one.
-    let r = dform(&s, &["plan"]).success();
+    let r = mock(&s, &["plan"]).success();
     assert_eq!(
         r.summary(),
         "plan: 1 deformation (1 create)",

@@ -3,7 +3,7 @@
 //! and stops.
 
 mod common;
-use common::{BACKENDS, Backend, Scratch};
+use common::{BACKENDS, Backend, Scratch, mock};
 
 const PROG: &str = r#"
 
@@ -12,10 +12,6 @@ resource net.subnet a { vpc_id = ref(net.vpc, "main", "id"), cidr = "10.0.1.0/24
 resource compute.vm app { subnet_id = ref(net.subnet, "a", "id") }
 provider fake
 "#;
-
-fn dform(s: &Scratch, args: &[&str]) -> common::Run {
-    s.run(&common::on("p.df", &["--world", "w.json"], args))
-}
 
 fn dform_on(s: &Scratch, backend: Backend, args: &[&str]) -> common::Run {
     s.run_on(backend, &common::on("p.df", &["--world", "w.json"], args))
@@ -141,9 +137,9 @@ fn apply_after_a_stop_finishes_the_remaining_actions() {
 fn apply_stops_when_the_world_changed_under_a_remaining_action() {
     let s = Scratch::new("resume-changed");
     s.write("p.df", PROG);
-    dform(&s, &["apply"]).success();
+    mock(&s, &["apply"]).success();
     s.write("p.df", &PROG.replace("\" }", "\", tier = \"web\" }"));
-    dform(
+    mock(
         &s,
         &[
             "apply",
@@ -155,7 +151,7 @@ fn apply_stops_when_the_world_changed_under_a_remaining_action() {
     )
     .failure();
     let before = s.read("w.json");
-    let r = dform(&s, &["apply"]).failure();
+    let r = mock(&s, &["apply"]).failure();
     assert!(
         r.stderr.contains(
             "the world changed under a remaining action:\n~ net.subnet[\"a\"]\n  tags.owner: <none> -> \"someone\"\n"
@@ -181,7 +177,7 @@ fn apply_stops_when_the_world_changed_under_a_remaining_action() {
     );
     assert_eq!(s.read("w.json"), before, "no Apply call was made");
     assert!(state(&s).get("in_flight").is_none());
-    let r = dform(&s, &["apply"]).success();
+    let r = mock(&s, &["apply"]).success();
     assert!(
         r.stdout.contains(
             "~ net.subnet[\"a\"]\n  tags.owner: \"someone\" -> <none>\n  tier: <none> -> \"web\"\n"

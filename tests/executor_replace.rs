@@ -4,11 +4,7 @@
 //! Create mints a new id, as a real cloud does).
 
 mod common;
-use common::Scratch;
-
-fn dform(s: &Scratch, args: &[&str]) -> common::Run {
-    s.run(&common::on("p.df", &["--world", "w.json"], args))
-}
+use common::{Scratch, mock};
 
 fn json(s: &Scratch, f: &str) -> serde_json::Value {
     serde_json::from_str(&s.read(f)).unwrap()
@@ -48,12 +44,12 @@ fn ids(s: &Scratch, vpc: &str) -> (String, Vec<String>) {
 fn a_replace_updates_its_dependents_after_the_create() {
     let s = Scratch::new("replace-deps");
     s.write("p.df", NET);
-    dform(&s, &["apply", "--chaos", "fresh-ids"]).success();
+    mock(&s, &["apply", "--chaos", "fresh-ids"]).success();
     let (old, subnets) = ids(&s, "main");
     assert_eq!(subnets, [old.clone(), old.clone()]);
 
     s.write("p.df", &NET.replace("10.0.0.0/16", "10.1.0.0/16"));
-    let r = dform(&s, &["plan"]).success();
+    let r = mock(&s, &["plan"]).success();
     assert!(
         r.stdout.contains(
             "pending on ?net.vpc[\"main\"] (resolves after tick 1):\n\
@@ -62,7 +58,7 @@ fn a_replace_updates_its_dependents_after_the_create() {
         "{}",
         r.stdout
     );
-    let r = dform(&s, &["apply", "--chaos", "fresh-ids"]).success();
+    let r = mock(&s, &["apply", "--chaos", "fresh-ids"]).success();
     assert!(
         r.stdout
             .contains("tick 2:\nplan: 2 deformations (2 update)\n"),
@@ -72,7 +68,7 @@ fn a_replace_updates_its_dependents_after_the_create() {
     let (new, subnets) = ids(&s, "main");
     assert_ne!(new, old);
     assert_eq!(subnets, [new.clone(), new], "{}", r.stdout);
-    let r = dform(&s, &["plan"]).success();
+    let r = mock(&s, &["plan"]).success();
     assert!(
         r.stdout.ends_with("stack p is undeformed\n"),
         "{}",
@@ -86,7 +82,7 @@ fn a_replace_updates_its_dependents_after_the_create() {
 fn create_before_destroy_moves_dependents_before_the_deposed_delete() {
     let s = Scratch::new("replace-deps-cbd");
     s.write("p.df", NET);
-    dform(&s, &["apply", "--chaos", "fresh-ids"]).success();
+    mock(&s, &["apply", "--chaos", "fresh-ids"]).success();
     s.write(
         "p.df",
         &format!(
@@ -94,7 +90,7 @@ fn create_before_destroy_moves_dependents_before_the_deposed_delete() {
             NET.replace("10.0.0.0/16", "10.1.0.0/16")
         ),
     );
-    let r = dform(&s, &["apply", "--chaos", "fresh-ids"]).success();
+    let r = mock(&s, &["apply", "--chaos", "fresh-ids"]).success();
     let tick2 = r.stdout.split("tick 2:\n").nth(1).unwrap_or_default();
     let order: Vec<&str> = tick2
         .lines()
@@ -128,13 +124,13 @@ resource net.subnet a { vpc_id = ref(net.vpc, "main", "id"), note = "x" }
 provider fake
 "#;
     s.write("p.df", net);
-    dform(&s, &["apply"]).success();
+    mock(&s, &["apply"]).success();
     let cbd = format!(
         "{}lifecycle(main, \"create_before_destroy\")\n",
         net.replace("10.0.0.0/16", "10.1.0.0/16")
     );
     s.write("p.df", &cbd);
-    dform(&s, &["apply", "--max-ticks", "1"]).failure();
+    mock(&s, &["apply", "--max-ticks", "1"]).failure();
     assert!(
         json(&s, "w.state.json")["deposed"]
             .get("net.vpc::main")
@@ -148,7 +144,7 @@ provider fake
             cbd.replace("note = \"x\"", "note = d.endpoint")
         ),
     );
-    let r = dform(&s, &["plan"]).success();
+    let r = mock(&s, &["plan"]).success();
     assert!(
         r.stdout.contains(
             "pending on ?db.postgres[\"d\"].endpoint (resolves after tick 1):\n\
@@ -163,14 +159,14 @@ provider fake
         "{}",
         r.stdout
     );
-    dform(&s, &["apply", "--max-ticks", "1"]).failure();
+    mock(&s, &["apply", "--max-ticks", "1"]).failure();
     assert!(
         json(&s, "w.state.json")["deposed"]
             .get("net.vpc::main")
             .is_some(),
         "the deposed vpc was deleted while the subnet still pointed at it"
     );
-    dform(&s, &["apply"]).success();
+    mock(&s, &["apply"]).success();
     assert!(json(&s, "w.state.json").get("deposed").is_none());
     let w = json(&s, "w.json");
     assert_eq!(

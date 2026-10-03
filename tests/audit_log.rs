@@ -5,7 +5,7 @@
 //! every entry and its failure is only a warning.
 
 mod common;
-use common::{Scratch, repo};
+use common::{Scratch, mock, repo};
 
 const PROG: &str = r#"
 
@@ -15,12 +15,8 @@ resource compute.vm app { subnet_id = ref(net.subnet, "a", "id") }
 provider fake
 "#;
 
-fn dform(s: &Scratch, args: &[&str]) -> common::Run {
-    s.run(&common::on("p.df", &["--world", "w.json"], args))
-}
-
 fn entries(s: &Scratch) -> Vec<serde_json::Value> {
-    let r = dform(s, &["log", "--json"]).success();
+    let r = mock(s, &["log", "--json"]).success();
     serde_json::from_str(&r.stdout).unwrap()
 }
 
@@ -34,7 +30,7 @@ fn kinds(es: &[serde_json::Value]) -> Vec<String> {
 fn a_full_apply_is_a_verifiable_chain() {
     let s = Scratch::project("audit-full");
     s.write("p.df", PROG);
-    dform(&s, &["apply"]).success();
+    mock(&s, &["apply"]).success();
     let es = entries(&s);
     assert_eq!(
         kinds(&es),
@@ -78,7 +74,7 @@ fn a_full_apply_is_a_verifiable_chain() {
     for w in es.windows(2) {
         assert_eq!(w[1]["prev"], w[0]["hash"]);
     }
-    let r = dform(&s, &["log", "verify"]).success();
+    let r = mock(&s, &["log", "verify"]).success();
     assert!(
         r.stdout
             .contains("w.state.audit.jsonl: 8 entries, the chain holds"),
@@ -86,7 +82,7 @@ fn a_full_apply_is_a_verifiable_chain() {
         r.stdout
     );
     // The text form, from an entry on.
-    let r = dform(&s, &["log", "--since", "7"]).success();
+    let r = mock(&s, &["log", "--since", "7"]).success();
     let lines: Vec<&str> = r.stdout.lines().collect();
     assert_eq!(lines.len(), 2, "{}", r.stdout);
     assert!(
@@ -101,8 +97,8 @@ fn a_full_apply_is_a_verifiable_chain() {
 fn a_failed_apply_and_its_resume_are_one_chain() {
     let s = Scratch::project("audit-resume");
     s.write("p.df", PROG);
-    dform(&s, &["apply", "--chaos", "fail=compute.vm[\"app\"]"]).failure();
-    dform(&s, &["apply"]).success();
+    mock(&s, &["apply", "--chaos", "fail=compute.vm[\"app\"]"]).failure();
+    mock(&s, &["apply"]).success();
     let es = entries(&s);
     let failed: Vec<&serde_json::Value> = es
         .iter()
@@ -121,14 +117,14 @@ fn a_failed_apply_and_its_resume_are_one_chain() {
     let last_action = es.iter().rev().find(|e| e["kind"] == "action").unwrap();
     assert_eq!(last_action["address"], "compute.vm[\"app\"]");
     assert_eq!(last_action["result"], "ok");
-    dform(&s, &["log", "verify"]).success();
+    mock(&s, &["log", "verify"]).success();
 }
 
 #[test]
 fn an_edited_entry_is_named() {
     let s = Scratch::project("audit-edit");
     s.write("p.df", PROG);
-    dform(&s, &["apply"]).success();
+    mock(&s, &["apply"]).success();
     let log = s.read("w.state.audit.jsonl");
     // The subnet's action (entry 5) claims another remote id.
     let lines: Vec<&str> = log.lines().collect();
@@ -138,7 +134,7 @@ fn an_edited_entry_is_named() {
     let forged = lines[4].replace(&format!("\"remote\":\"{remote}\""), "\"remote\":\"forged\"");
     assert_ne!(forged, lines[4]);
     s.write("w.state.audit.jsonl", &log.replace(lines[4], &forged));
-    let r = dform(&s, &["log", "verify"]).failure();
+    let r = mock(&s, &["log", "verify"]).failure();
     assert!(
         r.stderr
             .contains("entry 5 (action) was altered: its hash does not match its content"),
@@ -153,7 +149,7 @@ fn an_edited_entry_is_named() {
         .map(|(_, l)| *l)
         .collect();
     s.write("w.state.audit.jsonl", &(without.join("\n") + "\n"));
-    let r = dform(&s, &["log", "verify"]).failure();
+    let r = mock(&s, &["log", "verify"]).failure();
     assert!(
         r.stderr
             .contains("entry 5 (action): its prev is not entry 4's hash"),
@@ -192,12 +188,12 @@ fn secrets_never_appear() {
     );
     let schema = repo().join("tests/fixtures/providers/leaky/schema.df");
     let args = ["--provider", schema.to_str().unwrap()];
-    dform(&s, &[&args[..], &["apply"]].concat()).success();
+    mock(&s, &[&args[..], &["apply"]].concat()).success();
     s.write(
         "p.df",
         "\n\nresource leaky.vault v {\n  password = \"ANOTHER-SECRET-DO-NOT-LOG\"\n}\nprovider fake\n",
     );
-    dform(&s, &[&args[..], &["apply"]].concat()).success();
+    mock(&s, &[&args[..], &["apply"]].concat()).success();
     let log = s.read("w.state.audit.jsonl");
     assert!(!log.contains("SECRET-DO-NOT-LOG"), "{log}");
     // The two updates' diffs differ: the secret's digest is keyed.
@@ -215,17 +211,17 @@ fn secrets_never_appear() {
 fn a_sink_gets_every_entry_and_its_failure_is_a_warning() {
     let s = Scratch::project("audit-sink");
     s.write("p.df", PROG);
-    dform(&s, &["--audit-sink", "cat >> sink.jsonl", "apply"]).success();
+    mock(&s, &["--audit-sink", "cat >> sink.jsonl", "apply"]).success();
     assert_eq!(s.read("sink.jsonl"), s.read("w.state.audit.jsonl"));
     s.write("p.df", &PROG.replace("10.0.1.0/24", "10.0.2.0/24"));
-    let r = dform(&s, &["--audit-sink", "exit 3", "apply"]).success();
+    let r = mock(&s, &["--audit-sink", "exit 3", "apply"]).success();
     assert!(
         r.stderr
             .contains("warning: audit sink `exit 3`: it exited with exit status: 3; the local log has the entry"),
         "{}",
         r.stderr
     );
-    dform(&s, &["log", "verify"]).success();
+    mock(&s, &["log", "verify"]).success();
 }
 
 #[test]

@@ -3,7 +3,7 @@
 //! (default 3), each retry logged on stderr.
 
 mod common;
-use common::Scratch;
+use common::{Scratch, mock};
 
 const PROG: &str = r#"
 
@@ -12,16 +12,12 @@ resource net.subnet a { vpc_id = ref(net.vpc, "main", "id"), tier = "web" }
 provider fake
 "#;
 
-fn dform(s: &Scratch, args: &[&str]) -> common::Run {
-    s.run(&common::on("p.df", &["--world", "w.json"], args))
-}
-
 #[test]
 fn a_read_lag_within_the_retry_budget_is_not_drift() {
     let s = Scratch::new("retry-ok");
     s.write("p.df", PROG);
-    dform(&s, &["apply", "--chaos", "read-lag=net.vpc[\"main\"]:2"]).success();
-    let r = dform(&s, &["plan"]).success();
+    mock(&s, &["apply", "--chaos", "read-lag=net.vpc[\"main\"]:2"]).success();
+    let r = mock(&s, &["plan"]).success();
     assert_eq!(
         r.stderr,
         "retry net.vpc[\"main\"] read (2/3)\nretry net.vpc[\"main\"] read (3/3)\n"
@@ -36,7 +32,7 @@ fn type_retry_sets_the_budget_per_type() {
     s.write("p.df", PROG);
     s.write("retry.df", "\ntype_retry(net.vpc, 6)\n");
     let args = ["--provider", "fake", "--provider", "retry.df"];
-    dform(
+    mock(
         &s,
         &[
             &args[..],
@@ -45,7 +41,7 @@ fn type_retry_sets_the_budget_per_type() {
         .concat(),
     )
     .success();
-    let r = dform(&s, &[&args[..], &["plan"]].concat()).success();
+    let r = mock(&s, &[&args[..], &["plan"]].concat()).success();
     assert_eq!(
         r.stderr,
         "retry net.vpc[\"main\"] read (2/6)\nretry net.vpc[\"main\"] read (3/6)\n\
@@ -59,8 +55,8 @@ fn type_retry_sets_the_budget_per_type() {
     // The default budget would have taken it as gone.
     let s = Scratch::new("retry-type-default");
     s.write("p.df", PROG);
-    dform(&s, &["apply", "--chaos", "read-lag=net.vpc[\"main\"]:4"]).success();
-    let r = dform(&s, &["plan"]).success();
+    mock(&s, &["apply", "--chaos", "read-lag=net.vpc[\"main\"]:4"]).success();
+    let r = mock(&s, &["plan"]).success();
     assert!(r.stderr.contains("taken as gone"), "{}", r.stderr);
 }
 
@@ -78,7 +74,7 @@ fn a_boundary_refresh_retries() {
         "p.df",
         "\nresource db.postgres main { size = 1 }\nresource compute.vm app { db_host = ref(db.postgres, \"main\", \"endpoint\") }\nprovider fake\n",
     );
-    let r = dform(
+    let r = mock(
         &s,
         &["apply", "--chaos", "read-lag=db.postgres[\"main\"]:1"],
     )

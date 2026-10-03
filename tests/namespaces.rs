@@ -5,11 +5,7 @@
 //! tests/syntax/err/membership.df.
 
 mod common;
-use common::Scratch;
-
-fn dform(s: &Scratch, args: &[&str]) -> common::Run {
-    s.run(&common::on("p.df", &["--world", "w.json"], args))
-}
+use common::{Scratch, mock};
 
 /// A label on every Kubernetes object, none on the fake cloud's (whose
 /// mock types include a `k8s.cluster` it serves itself, not `k8s`'s).
@@ -26,7 +22,7 @@ fn a_set_over_a_namespace_reaches_its_types_only() {
          set r.metadata.labels.owner = \"ops\" where r in k8s\n\
          every(r) where r in resource\n",
     );
-    let r = dform(&s, &["plan"]).success();
+    let r = mock(&s, &["plan"]).success();
     assert!(
         r.stdout.contains(
             "+ k8s.config_map[\"cfg\"]\n  metadata.labels.owner = \"ops\"\n  metadata.name = \"cfg\"\n"
@@ -51,7 +47,7 @@ fn a_set_over_a_namespace_reaches_its_types_only() {
         .collect();
     assert_eq!(cluster, ["  name = \"c\""], "{}", r.stdout);
     assert_eq!(r.stdout.matches("labels.owner").count(), 2, "{}", r.stdout);
-    let q = dform(&s, &["query", "every(r)"]).success();
+    let q = mock(&s, &["query", "every(r)"]).success();
     assert_eq!(q.stdout.lines().count(), 5, "{}", q.stdout);
 }
 
@@ -66,13 +62,13 @@ fn a_deformation_row_binds_through_the_namespace() {
          resource net.vpc v { cidr = \"10.0.0.0/16\" }\n\
          resource k8s.namespace ns { metadata.name = \"ns\" }\n",
     );
-    dform(&s, &["apply"]).success();
+    mock(&s, &["apply"]).success();
     s.write(
         "p.df",
         "\n\nprovider fake\nprovider k8s\n\n\
          deny \"a k8s delete: ${r}\" where deformation(\"delete\", r, _), r in k8s\n",
     );
-    let r = dform(&s, &["plan"]).failure();
+    let r = mock(&s, &["plan"]).failure();
     assert!(
         r.stdout
             .contains("denied:\n! a k8s delete: k8s.namespace[\"ns\"]\n"),

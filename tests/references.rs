@@ -4,11 +4,7 @@
 //! address is left alone by `modules::scoped_term`.
 
 mod common;
-use common::Scratch;
-
-fn dform(s: &Scratch, args: &[&str]) -> common::Run {
-    s.run(&common::on("p.df", &["--world", "w.json"], args))
-}
+use common::{Scratch, mock};
 
 /// Applies two VPCs and a namespace, then plans a program with none of
 /// them and the checks `checks`: every row of the plan is a delete.
@@ -21,12 +17,12 @@ fn deletes(name: &str, checks: &str) -> common::Run {
          resource net.vpc b { cidr = \"10.1.0.0/16\" }\n\
          resource k8s.namespace ns { metadata.name = \"ns\" }\n",
     );
-    dform(&s, &["apply"]).success();
+    mock(&s, &["apply"]).success();
     s.write(
         "p.df",
         &format!("\n\nprovider fake\nprovider k8s\n\n{checks}"),
     );
-    dform(&s, &["plan"])
+    mock(&s, &["plan"])
 }
 
 /// `requires_approval(sg, ..) where deformation(action, sg, _), sg in T`

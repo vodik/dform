@@ -6,7 +6,7 @@
 //! over gRPC, linked in, linked in across prost).
 
 mod common;
-use common::{BACKENDS, Backend, Scratch};
+use common::{BACKENDS, Backend, Scratch, mock};
 use dform::plugin::link::Link;
 use dform::plugin::{Config, Launch, Providers};
 
@@ -20,10 +20,6 @@ provider fake
 
 fn fake() -> String {
     common::exe("dform-provider-fake")
-}
-
-fn dform(s: &Scratch, args: &[&str]) -> common::Run {
-    s.run(&common::on("p.df", &["--world", "w.json"], args))
 }
 
 fn identities(s: &Scratch) -> Vec<String> {
@@ -43,7 +39,7 @@ fn identities(s: &Scratch) -> Vec<String> {
 fn a_provider_crash_mid_apply_fails_the_action_and_resume_finishes() {
     let s = Scratch::new("protocol-crash");
     s.write("p.df", PROG);
-    let r = dform(&s, &["apply", "--chaos", "crash=compute.vm[\"app\"]"]).failure();
+    let r = mock(&s, &["apply", "--chaos", "crash=compute.vm[\"app\"]"]).failure();
     assert!(
         r.stderr.contains(
             "apply compute.vm[\"app\"]: the provider fakecloud exited during the call \
@@ -53,7 +49,7 @@ fn a_provider_crash_mid_apply_fails_the_action_and_resume_finishes() {
         r.stderr
     );
     assert_eq!(identities(&s), ["net.subnet::a", "net.vpc::main"]);
-    let r = dform(&s, &["apply"]).success();
+    let r = mock(&s, &["apply"]).success();
     assert!(
         r.stdout
             .contains("resuming the apply interrupted at tick 1; remaining: compute.vm[\"app\"]"),
@@ -61,7 +57,7 @@ fn a_provider_crash_mid_apply_fails_the_action_and_resume_finishes() {
         r.stdout
     );
     assert!(r.stdout.ends_with("apply: complete\n"), "{}", r.stdout);
-    let r = dform(&s, &["plan"]).success();
+    let r = mock(&s, &["plan"]).success();
     assert_eq!(r.summary(), "stack p is undeformed", "{}", r.stdout);
 }
 
@@ -122,7 +118,7 @@ fn a_source_directory_holding_an_executable_is_that_plugin() {
         "p.df",
         "\n\nprovider fake { source = \"prov\" }\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\n",
     );
-    let r = dform(&s, &["plan"]).success();
+    let r = mock(&s, &["plan"]).success();
     assert!(r.stdout.contains("+ net.vpc[\"main\"]"), "{}", r.stdout);
 }
 

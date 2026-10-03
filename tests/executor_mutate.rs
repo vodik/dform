@@ -5,7 +5,7 @@
 //! the run goes on.
 
 mod common;
-use common::Scratch;
+use common::{Scratch, mock};
 
 /// Tick 1 creates the database; the vm's update waits on its endpoint.
 fn stack(name: &str) -> Scratch {
@@ -22,14 +22,10 @@ fn stack(name: &str) -> Scratch {
     s
 }
 
-fn dform(s: &Scratch, args: &[&str]) -> common::Run {
-    s.run(&common::on("p.df", &["--world", "w.json"], args))
-}
-
 #[test]
 fn a_mutation_under_a_pending_deformation_stops_before_tick_two() {
     let s = stack("mutate-pending");
-    let r = dform(
+    let r = mock(
         &s,
         &["apply", "--chaos", "mutate=compute.vm[\"app\"].size=2"],
     )
@@ -74,7 +70,7 @@ fn a_mutation_under_a_pending_deformation_stops_before_tick_two() {
 #[test]
 fn a_mutation_elsewhere_is_drift_and_the_run_continues() {
     let s = stack("mutate-elsewhere");
-    let r = dform(
+    let r = mock(
         &s,
         &["apply", "--chaos", "mutate=db.postgres[\"main\"].size=9"],
     )
@@ -95,7 +91,7 @@ fn a_mutation_elsewhere_is_drift_and_the_run_continues() {
     );
     assert!(r.stdout.ends_with("apply: complete\n"), "{}", r.stdout);
     // The mutation lands once per run: the stack is now undeformed.
-    let r = dform(&s, &["plan"]).success();
+    let r = mock(&s, &["plan"]).success();
     assert!(
         r.stdout.ends_with("stack p is undeformed\n"),
         "{}",

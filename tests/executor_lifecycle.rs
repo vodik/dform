@@ -3,11 +3,7 @@
 //! resource reference (R-42).
 
 mod common;
-use common::Scratch;
-
-fn dform(s: &Scratch, args: &[&str]) -> common::Run {
-    s.run(&common::on("p.df", &["--world", "w.json"], args))
-}
+use common::{Scratch, mock};
 
 fn world(s: &Scratch) -> serde_json::Value {
     serde_json::from_str(&s.read("w.json")).unwrap()
@@ -26,13 +22,13 @@ provider fake
 fn prevent_destroy_makes_a_delete_a_deny() {
     let s = Scratch::new("prevent-destroy");
     s.write("p.df", NET);
-    dform(&s, &["apply"]).success();
+    mock(&s, &["apply"]).success();
     // The resource goes; the fact stays, naming it by its address.
     s.write(
         "p.df",
         "\nlifecycle(net.vpc[\"main\"], \"prevent_destroy\")\nprovider fake\n",
     );
-    let r = dform(&s, &["plan"]).failure();
+    let r = mock(&s, &["plan"]).failure();
     assert!(r.stdout.contains("- net.vpc[\"main\"]"), "{}", r.stdout);
     assert!(
         r.stderr.contains(
@@ -41,7 +37,7 @@ fn prevent_destroy_makes_a_delete_a_deny() {
         "{}",
         r.stderr
     );
-    let r = dform(&s, &["apply"]).failure();
+    let r = mock(&s, &["apply"]).failure();
     assert!(
         r.stderr
             .contains("apply stopped at tick 1: blocked by constraints"),
@@ -51,7 +47,7 @@ fn prevent_destroy_makes_a_delete_a_deny() {
     assert!(world(&s)["resources"].get("net.vpc::main").is_some());
     // A force_new change would replace it: also a deny.
     s.write("p.df", &NET.replace("10.0.0.0/16", "10.1.0.0/16"));
-    let r = dform(&s, &["apply"]).failure();
+    let r = mock(&s, &["apply"]).failure();
     assert!(
         r.stderr
             .contains("- lifecycle prevent_destroy: the plan would replace net.vpc[\"main\"]\n"),
@@ -84,12 +80,12 @@ provider fake
         )
     };
     s.write("p.df", &prog("main"));
-    dform(&s, &["apply"]).success();
+    mock(&s, &["apply"]).success();
     let before = world(&s);
 
     // Without moved the rename is two creates and two deletes.
     s.write("p.df", &prog("core"));
-    let r = dform(&s, &["plan"]).success();
+    let r = mock(&s, &["plan"]).success();
     assert_eq!(
         r.summary(),
         "plan: 4 deformations (2 create, 2 delete)",
@@ -105,7 +101,7 @@ provider fake
             prog("core")
         ),
     );
-    let r = dform(&s, &["plan"]).success();
+    let r = mock(&s, &["plan"]).success();
     assert_eq!(
         r.stdout,
         "moved net.subnet[\"main/a\"] -> net.subnet[\"core/a\"]\n\
@@ -113,7 +109,7 @@ provider fake
          stack p is undeformed\n"
     );
     // plan does not write state; apply does.
-    let r = dform(&s, &["apply"]).success();
+    let r = mock(&s, &["apply"]).success();
     assert!(r.stdout.ends_with("apply: nothing to do\n"), "{}", r.stdout);
     let st: serde_json::Value = serde_json::from_str(&s.read("w.state.json")).unwrap();
     assert_eq!(
@@ -126,7 +122,7 @@ provider fake
     );
     assert_eq!(st["resources"]["net.vpc::core/vpc"]["remote"], "main/vpc");
     assert_eq!(world(&s)["resources"], before["resources"]);
-    let r = dform(&s, &["plan"]).success();
+    let r = mock(&s, &["plan"]).success();
     assert_eq!(r.stdout, "stack p is undeformed\n");
 }
 
@@ -142,7 +138,7 @@ fn ignore_changes_drops_the_path_from_both_sides() {
         )
     };
     s.write("p.df", &prog("a"));
-    dform(
+    mock(
         &s,
         &[
             "apply",
@@ -151,14 +147,14 @@ fn ignore_changes_drops_the_path_from_both_sides() {
         ],
     )
     .success();
-    let r = dform(&s, &["plan"]).success();
+    let r = mock(&s, &["plan"]).success();
     assert!(
         r.stdout.ends_with("stack p is undeformed\n"),
         "{}",
         r.stdout
     );
     s.write("p.df", &prog("b"));
-    let r = dform(&s, &["apply"]).success();
+    let r = mock(&s, &["apply"]).success();
     assert!(
         r.stdout
             .contains("~ net.vpc[\"main\"]\n  tags.team: \"a\" -> \"b\"\napply order:\n  tick 1\n    net.vpc[\"main\"]\napply: complete\n"),
@@ -188,7 +184,7 @@ deny "databases must be protected" {addr: a} where {
 provider fake
 "#,
     );
-    let r = dform(&s, &["plan"]).failure();
+    let r = mock(&s, &["plan"]).failure();
     assert!(
         r.stderr.contains("databases must be protected"),
         "{}",
@@ -200,7 +196,7 @@ provider fake
         &s.read("p.df")
             .replacen("provider fake\n", "provider fake\nuse lib\n", 1),
     );
-    dform(&s, &["plan"]).success();
+    mock(&s, &["plan"]).success();
 }
 
 /// ignore_changes ignores changes to an object that exists: a create sets
@@ -215,20 +211,20 @@ fn ignore_changes_still_sets_the_path_on_create() {
         )
     };
     s.write("p.df", &prog("ops"));
-    let r = dform(&s, &["plan"]).success();
+    let r = mock(&s, &["plan"]).success();
     assert!(
         r.stdout
             .contains("+ net.vpc[\"main\"]\n  cidr = \"10.0.0.0/16\"\n  tags.owner = \"ops\"\n"),
         "{}",
         r.stdout
     );
-    dform(&s, &["apply"]).success();
+    mock(&s, &["apply"]).success();
     assert_eq!(
         world(&s)["resources"]["net.vpc::main"]["attrs"]["tags"]["owner"],
         "ops"
     );
     s.write("p.df", &prog("dev"));
-    let r = dform(&s, &["plan"]).success();
+    let r = mock(&s, &["plan"]).success();
     assert_eq!(r.stdout, "stack p is undeformed\n");
 }
 
@@ -240,12 +236,12 @@ fn ignore_changes_update_leaves_an_absent_path_absent() {
         "p.df",
         "\nresource net.vpc main { cidr = \"10.0.0.0/16\", size = 1 }\nprovider fake\n",
     );
-    dform(&s, &["apply"]).success();
+    mock(&s, &["apply"]).success();
     s.write(
         "p.df",
         "\nresource net.vpc main { cidr = \"10.0.0.0/16\", size = 2, tags = { owner: \"ops\" } }\nignore_changes(main, \"tags.owner\")\nprovider fake\n",
     );
-    let r = dform(&s, &["apply"]).success();
+    let r = mock(&s, &["apply"]).success();
     assert!(
         r.stdout.contains("~ net.vpc[\"main\"]\n  size: 1 -> 2\n"),
         "{}",
@@ -267,12 +263,12 @@ fn ignore_changes_update_leaves_an_absent_path_absent() {
 fn why_explains_prevent_destroy() {
     let s = Scratch::new("prevent-destroy-why");
     s.write("p.df", NET);
-    dform(&s, &["apply"]).success();
+    mock(&s, &["apply"]).success();
     s.write(
         "p.df",
         "\nlifecycle(net.vpc[\"main\"], \"prevent_destroy\")\nprovider fake\n",
     );
-    let r = dform(&s, &["why", "deny(M)"]).success();
+    let r = mock(&s, &["why", "deny(M)"]).success();
     assert!(
         r.stdout.starts_with(
             "deny \"lifecycle prevent_destroy: the plan would delete net.vpc[\\\"main\\\"]\"\n"
@@ -300,18 +296,18 @@ fn why_explains_prevent_destroy() {
 fn policy_reads_the_deformation() {
     let s = Scratch::new("policy-deformation");
     s.write("p.df", NET);
-    dform(&s, &["apply"]).success();
+    mock(&s, &["apply"]).success();
     s.write(
         "p.df",
         "\nresource compute.vm keep { size = 1 }\ndeny(m) where deformation(\"delete\", r, _), m = \"no deletes here: ${r}\"\nprovider fake\n",
     );
-    let r = dform(&s, &["plan"]).failure();
+    let r = mock(&s, &["plan"]).failure();
     assert!(
         r.stdout.contains("denied:\n") && r.stdout.contains("no deletes here: net.vpc[\"main\"]"),
         "{}",
         r.stdout
     );
-    let r = dform(&s, &["query", "deformation(K, R, _)"]).success();
+    let r = mock(&s, &["query", "deformation(K, R, _)"]).success();
     assert!(
         r.stdout.contains("\"create\"  compute.vm[\"keep\"]")
             && r.stdout.contains("\"delete\"  net.vpc[\"main\"]"),
@@ -329,7 +325,7 @@ fn a_resource_rule_over_the_deformation_is_an_error() {
         "p.df",
         "\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\nresource net.vpc shadow {\n  cidr = \"10.1.0.0/16\"\n} where deformation(\"create\", main, _)\nprovider fake\n",
     );
-    let r = dform(&s, &["plan"]).failure();
+    let r = mock(&s, &["plan"]).failure();
     assert!(
         r.stderr
             .contains("a resource rule reads deformation/3 or world_digest/2"),
@@ -358,7 +354,7 @@ deny "not main: ${r}" where deformation(_, r, _), r != main, r != net.vpc["gone"
 provider fake
 "#,
     );
-    let r = dform(&s, &["plan"]).failure();
+    let r = mock(&s, &["plan"]).failure();
     assert!(
         r.stderr.contains(
             "constraint violations:\n\
@@ -370,7 +366,7 @@ provider fake
         "{}",
         r.stderr
     );
-    let r = dform(&s, &["query", "deformation(K, R, _)"]).success();
+    let r = mock(&s, &["query", "deformation(K, R, _)"]).success();
     assert!(
         r.stdout.contains("\"create\"  net.vpc[\"other\"]"),
         "{}",
@@ -387,7 +383,7 @@ fn a_lifecycle_fact_takes_a_resource_not_text() {
         "p.df",
         "\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\nlifecycle(net.vpc, \"main\", \"prevent_destroy\")\nadopt(\"main\", \"vpc-1\")\n",
     );
-    let r = dform(&s, &["plan"]).failure();
+    let r = mock(&s, &["plan"]).failure();
     assert!(
         r.stderr.contains(
             "`lifecycle` takes 2 arguments: `lifecycle(resource, \"prevent_destroy\")` (R-42)"
