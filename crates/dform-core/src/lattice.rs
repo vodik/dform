@@ -728,7 +728,7 @@ fn rank_of(i: usize) -> Rank {
 mod tests {
     use super::*;
 
-    fn s(x: &str) -> Value {
+    pub(super) fn s(x: &str) -> Value {
         Value::Str(x.into())
     }
     fn i(n: i64) -> Value {
@@ -750,14 +750,14 @@ mod tests {
             ty: "string".into(),
         }
     }
-    fn open(l: &str) -> Value {
+    pub(super) fn open(l: &str) -> Value {
         Value::Null {
             label: l.into(),
             class: NullClass::Open,
             ty: "string".into(),
         }
     }
-    fn secret(l: &str) -> Value {
+    pub(super) fn secret(l: &str) -> Value {
         Value::Null {
             label: l.into(),
             class: NullClass::Secret,
@@ -2295,26 +2295,8 @@ fn key_label(keys: &[String], k: &[Value]) -> String {
 
 #[cfg(test)]
 mod f_tests {
+    use super::tests::{open, s, secret};
     use super::*;
-    use crate::value::NullClass;
-
-    fn s(x: &str) -> Value {
-        Value::Str(x.into())
-    }
-    fn open(l: &str) -> Value {
-        Value::Null {
-            label: l.into(),
-            class: NullClass::Open,
-            ty: "string".into(),
-        }
-    }
-    fn secret(l: &str) -> Value {
-        Value::Null {
-            label: l.into(),
-            class: NullClass::Secret,
-            ty: "string".into(),
-        }
-    }
     fn joined(cells: &[Ranked]) -> Ranked {
         cells
             .iter()
