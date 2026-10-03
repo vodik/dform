@@ -3170,9 +3170,10 @@ fn rekey_args(
 
 /// `dform test` (R-32): the program's denies over its input space
 /// (`testing::space`), each combination evaluated against an empty mock
-/// world (the provider's schema, no world, no state). A combination fails
-/// when anything is denied or it does not compile, printed as the command
-/// that plans it.
+/// world (the provider's schema, no world, no state). A result set (R-63):
+/// a row per combination, its inputs and its result. A combination fails
+/// when anything is denied or it does not compile, printed after the
+/// matrix as the command that plans it.
 fn run_tests(
     program: &crate::ast::Program,
     stack: &str,
@@ -3270,7 +3271,11 @@ fn run_tests(
         format!(" of {}", names.join(", "))
     };
     println!("test {stack}: {n} combination{s}{over}");
-    let mut failed = 0;
+    // The matrix: a row per combination, its inputs then its result; each
+    // that failed is then printed as the command that plans it, with its
+    // denies or its error.
+    let mut matrix: Option<report::table::Table> = None;
+    let mut failures: Vec<(String, Vec<String>)> = Vec::new();
     for combination in &combinations {
         let mut pairs = pinned.clone();
         pairs.extend(combination.iter().cloned());
@@ -3285,25 +3290,43 @@ fn run_tests(
             files[0].display().to_string()
         };
         let command = crate::testing::reproduce(&target, &on_target, &set);
-        match run(&pairs) {
-            Ok(denied) if denied.is_empty() => println!("ok      {command}"),
-            Ok(denied) => {
-                failed += 1;
-                println!("denied  {command}");
-                for d in denied {
-                    println!("  - {d}");
-                }
-            }
+        let (result, lines) = match run(&pairs) {
+            Ok(denied) if denied.is_empty() => ("ok", Vec::new()),
+            Ok(denied) => ("denied", denied.iter().map(|d| format!("- {d}")).collect()),
             Err(e) => {
-                failed += 1;
-                println!("error   {command}");
                 let text = crate::diag::report(&e, std::io::stdout().is_terminal());
-                for line in text.lines() {
-                    println!("  {line}");
-                }
+                ("error", text.lines().map(String::from).collect())
             }
+        };
+        let t = matrix.get_or_insert_with(|| {
+            let mut columns: Vec<String> = pairs.iter().map(|(k, _)| k.clone()).collect();
+            columns.push("result".into());
+            report::table::Table::new(columns)
+        });
+        let mut row: Vec<report::table::Cell> = pairs
+            .iter()
+            .map(|(_, v)| report::table::Cell::text(crate::stack::key_text(v)))
+            .collect();
+        let cell = report::table::Cell::text(result);
+        row.push(match result {
+            "ok" => cell,
+            _ => cell.painted(report::Paint::Error),
+        });
+        t.push(row);
+        if result != "ok" {
+            failures.push((format!("{result}  {command}"), lines));
         }
     }
+    if let Some(t) = matrix {
+        print!("{}", t.render(&cli.table));
+    }
+    for (head, lines) in &failures {
+        println!("{head}");
+        for l in lines {
+            println!("  {l}");
+        }
+    }
+    let failed = failures.len();
     println!("test {stack}: {n} combination{s}, {failed} failed");
     if failed > 0 {
         bail!("{failed} of {n} combination{s} failed");

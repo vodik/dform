@@ -2,7 +2,9 @@
 //! the program once per combination of its inputs (each enum input's
 //! values, a bool both ways, a key's enum values; the rest their
 //! defaults) against an empty mock world, and every deny must hold in
-//! each. A failure is the command that plans it. `scenario` is gone.
+//! each. It prints a matrix, a row per combination, its inputs and its
+//! result; a failure then as the command that plans it. `scenario` is
+//! gone.
 
 mod common;
 use common::{Scratch, repo};
@@ -33,9 +35,11 @@ fn test_runs_the_denies_over_every_combination() {
     assert!(
         r.stdout.contains(
             "test p: 4 combinations of env, public\n\
-             ok      dform plan p.df --set env=dev --set public=false\n\
-             ok      dform plan p.df --set env=dev --set public=true\n\
-             ok      dform plan p.df --set env=prod --set public=false\n\
+             env   public  result\n\
+             dev   false   ok\n\
+             dev   true    ok\n\
+             prod  false   ok\n\
+             prod  true    denied\n\
              denied  dform plan p.df --set env=prod --set public=true\n  \
              - a database is never public\n\
              test p: 4 combinations, 1 failed\n"
@@ -65,7 +69,7 @@ fn a_set_pins_an_input() {
     );
     assert!(
         r.stdout
-            .contains("ok      dform plan p.df --set public=false --set env=prod\n"),
+            .contains("public  env   result\nfalse   dev   ok\nfalse   prod  ok\n"),
         "{}",
         r.stdout
     );
@@ -90,7 +94,9 @@ fn the_target_pins_a_key() {
     assert!(
         r.stdout.contains(
             "test app: 2 combinations of public\n\
-             ok      dform plan app env=dev --set public=false\n"
+             env  public  result\n\
+             dev  false   ok\n\
+             dev  true    ok\n"
         ),
         "{}",
         r.stdout
@@ -138,9 +144,10 @@ fn the_demo_denies_hold_in_every_env() {
     assert!(
         r.stdout.contains(
             "test dform: 3 combinations of env\n\
-             ok      dform plan dform env=dev\n\
-             ok      dform plan dform env=staging\n\
-             ok      dform plan dform env=prod\n\
+             env      result\n\
+             dev      ok\n\
+             staging  ok\n\
+             prod     ok\n\
              test dform: 3 combinations, 0 failed\n"
         ),
         "{}",
@@ -170,7 +177,11 @@ fn the_space_is_every_input_the_stack_gives() {
     assert!(
         r.stdout.contains(
             "test p: 4 combinations of cluster.tier, pg.public\n\
-             ok      dform plan p --set cluster.tier=a --set pg.public=false\n\
+             cluster.tier  pg.public  result\n\
+             a             false      ok\n\
+             a             true       denied\n\
+             b             false      ok\n\
+             b             true       denied\n\
              denied  dform plan p --set cluster.tier=a --set pg.public=true\n"
         ),
         "{}",

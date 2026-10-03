@@ -2056,16 +2056,21 @@ deny "prod keeps 14 days of db backups" where env == "prod", not db.postgres["da
 deny "dev has no database" where env == "dev", _ in db.postgres
 ```
 
-It prints one line per combination, `ok` or `denied` (or `error`, for
-one that does not compile), and the command that plans it, then each
-deny under a denied one; it exits non-zero if any failed:
+It prints a result set, a row per combination: its inputs, then `ok` or
+`denied` (or `error`, for one that does not compile). Each that failed
+follows as the command that plans it with its denies (or its error); it
+exits non-zero if any failed:
 
 ```
-test dform: 3 combinations of env
-ok      dform plan dform env=dev
-ok      dform plan dform env=staging
-ok      dform plan dform env=prod
-test dform: 3 combinations, 0 failed
+test p: 4 combinations of env, public
+env   public  result
+dev   false   ok
+dev   true    ok
+prod  false   ok
+prod  true    denied
+denied  dform plan p.df --set env=prod --set public=true
+  - a database is never public
+test p: 4 combinations, 1 failed
 ```
 
 `dform test shop env=prod` pins the key, so only prod's combinations
