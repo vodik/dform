@@ -1,8 +1,8 @@
-tests/syntax/err/singleton.df:7:32: variable `b` is used once; a typo, or `_b` if it is meant to be unbound
+tests/syntax/err/singleton.df:5:32: variable `b` is used once; a typo, or `_b` if it is meant to be unbound
   help: a variable joins where it is written twice; written once it matches anything
-tests/syntax/err/singleton.df:7:41: variable `bb` is used once; a typo, or `_bb` if it is meant to be unbound
+tests/syntax/err/singleton.df:5:41: variable `bb` is used once; a typo, or `_bb` if it is meant to be unbound
   help: a variable joins where it is written twice; written once it matches anything
-tests/syntax/err/singleton.df:9:61: variable `i` is used once; a typo, or `_i` if it is meant to be unbound
+tests/syntax/err/singleton.df:7:61: variable `i` is used once; a typo, or `_i` if it is meant to be unbound
   help: a variable joins where it is written twice; written once it matches anything
-tests/syntax/err/singleton.df:11:43: variable `z` is used once; a typo, or `_z` if it is meant to be unbound
+tests/syntax/err/singleton.df:9:43: variable `z` is used once; a typo, or `_z` if it is meant to be unbound
   help: a variable joins where it is written twice; written once it matches anything

@@ -1,3 +1,3 @@
-tests/syntax/err/positions.df:7:3: expected an entry or `}`, found keyword `where`
+tests/syntax/err/positions.df:5:3: expected an entry or `}`, found keyword `where`
   help: a block's clause follows the block (R-1): `resource net.vpc a { .. } where q(x)`
-tests/syntax/err/positions.df:10:7: expected `=`, found `+=`
+tests/syntax/err/positions.df:8:7: expected `=`, found `+=`

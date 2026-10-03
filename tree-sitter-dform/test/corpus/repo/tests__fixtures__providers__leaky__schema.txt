@@ -16,8 +16,6 @@ tests/fixtures/providers/leaky/schema.df
 # pass refuses a rule that copies vault's password into oops's (E0304);
 # vault's `backup` is where a rule may forward it.
 
-edition 2026
-
 type_provider(leaky.vault, "fakecloud")
 type_provider(leaky.oops, "fakecloud")
 
@@ -44,8 +42,6 @@ type_attr(leaky.oops, "password", "string", [])
   (comment)
   (comment)
   (comment)
-  (edition
-    (integer))
   (fact
     (call
       (identifier)

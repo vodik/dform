@@ -1,5 +1,5 @@
-tests/syntax/err/extern_in_program.df:5:1: file.text is the file provider's extern: a program does not declare it
-  tests/syntax/err/extern_in_program.df:4:1: provider file declares it
+tests/syntax/err/extern_in_program.df:3:1: file.text is the file provider's extern: a program does not declare it
+  tests/syntax/err/extern_in_program.df:2:1: provider file declares it
   help: delete the `extern` statement
-tests/syntax/err/extern_in_program.df:6:1: env.var is the env provider's extern: a program does not declare it
+tests/syntax/err/extern_in_program.df:4:1: env.var is the env provider's extern: a program does not declare it
   help: write `provider env` instead

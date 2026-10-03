@@ -1,2 +1,2 @@
-tests/syntax/err/hyphen_subtraction.df:4:8: `us-east` is arithmetic on two names
+tests/syntax/err/hyphen_subtraction.df:2:8: `us-east` is arithmetic on two names
   help: `-` is always an operator; a name with one is a string: "us-east"

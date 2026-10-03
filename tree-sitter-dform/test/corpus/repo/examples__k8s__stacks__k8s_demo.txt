@@ -11,25 +11,19 @@ examples/k8s/stacks/k8s_demo.df
 # Apply: until then the Deployment's configMapRef carries the null
 # ?k8s.config_map/web_config#metadata.name.
 
-edition 2026
 provider k8s
 
 app("web", "nginx:1.27", 3)
 
-resource k8s.namespace shop {
-  metadata.name = "shop"
-  metadata.labels = { team: "storefront" }
-}
+resource k8s.namespace shop { metadata.name = "shop", metadata.labels = { team: "storefront" } }
 
 resource k8s.config_map web_config {
-  metadata.generateName = "web-config-"
-  metadata.namespace = shop.metadata.name
+  metadata = { generateName: "web-config-", namespace: shop.metadata.name }
   data = { "MODE": "production", "LOG_LEVEL": "info" }
 }
 
 resource k8s.deployment name {
-  metadata.name
-  metadata.namespace = shop.metadata.name
+  metadata = { name, namespace: shop.metadata.name }
   spec.replicas
   spec.selector.matchLabels = { app: name }
   spec.template.metadata.labels = { app: name }
@@ -37,13 +31,12 @@ resource k8s.deployment name {
     name,
     image,
     ports: [{ containerPort: 8080, protocol: "TCP" }],
-    envFrom: [{ configMapRef: { name: web_config.metadata.name } }]
+    envFrom: [{ configMapRef: { name: web_config.metadata.name } }],
   }]
 } where app(name, image, replicas)
 
 resource k8s.service name {
-  metadata.name
-  metadata.namespace = shop.metadata.name
+  metadata = { name, namespace: shop.metadata.name }
   spec.selector = { app: name }
   spec.ports = [{ port: 80, targetPort: 8080, protocol: "TCP" }]
 } where app(name, _, _)
@@ -59,8 +52,6 @@ resource k8s.service name {
   (comment)
   (comment)
   (comment)
-  (edition
-    (integer))
   (provider
     (identifier))
   (fact
@@ -101,19 +92,19 @@ resource k8s.service name {
     (block
       (field
         (block_path
-          (identifier)
           (identifier))
-        (string
-          (string_content)))
-      (field
-        (block_path
-          (identifier)
-          (identifier))
-        (member_expression
-          (member_expression
+        (object
+          (object_field
             (identifier)
-            (identifier))
-          (identifier)))
+            (string
+              (string_content)))
+          (object_field
+            (identifier)
+            (member_expression
+              (member_expression
+                (identifier)
+                (identifier))
+              (identifier)))))
       (field
         (block_path
           (identifier))
@@ -136,17 +127,17 @@ resource k8s.service name {
     (block
       (field
         (block_path
-          (identifier)
-          (identifier)))
-      (field
-        (block_path
-          (identifier)
           (identifier))
-        (member_expression
-          (member_expression
-            (identifier)
+        (object
+          (object_field
             (identifier))
-          (identifier)))
+          (object_field
+            (identifier)
+            (member_expression
+              (member_expression
+                (identifier)
+                (identifier))
+              (identifier)))))
       (field
         (block_path
           (identifier)
@@ -224,17 +215,17 @@ resource k8s.service name {
     (block
       (field
         (block_path
-          (identifier)
-          (identifier)))
-      (field
-        (block_path
-          (identifier)
           (identifier))
-        (member_expression
-          (member_expression
-            (identifier)
+        (object
+          (object_field
             (identifier))
-          (identifier)))
+          (object_field
+            (identifier)
+            (member_expression
+              (member_expression
+                (identifier)
+                (identifier))
+              (identifier)))))
       (field
         (block_path
           (identifier)

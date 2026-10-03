@@ -2,17 +2,12 @@
 examples/demo/identity.df
 =========================
 
-edition 2026
-
 # A component with no inputs: its file declares resources. `iam_need` is
 # the stack's relation, read outward.
 
 #| The app's role, and one policy of every permission the stack's other
 #| components need.
-resource iam.role app_role {
-  name = "app"
-  assume = { principals: ["k8s.serviceaccount.app"] }
-}
+resource iam.role app_role { name = "app", assume = { principals: ["k8s.serviceaccount.app"] } }
 
 resource iam.policy app_policy {
   name = "app"
@@ -20,16 +15,11 @@ resource iam.policy app_policy {
   statements = [ { action: a, resource: r } | iam_need("app", a, r) ]
 }
 
-resource iam.role_policy_attachment attach {
-  role = app_role
-  policy = app_policy
-}
+resource iam.role_policy_attachment attach { role = app_role, policy = app_policy }
 
 ---
 
 (source_file
-  (edition
-    (integer))
   (comment)
   (comment)
   (comment)

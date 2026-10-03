@@ -7,20 +7,14 @@ tests/fixtures/adversarial/adv2_rule3_coarse.df
 # UNRELATED aggregate over `want` must not become undetermined.
 # Run with --provider gke.
 
-edition 2026
-
-resource google.container_cluster pngu {
-  name = "pngu-gke"
-}
+resource google.container_cluster pngu { name = "pngu-gke" }
 
 resource google.container_node_pool np {
   cluster = ref("google.container_cluster", "pngu", "id")
   zone = z
 } where arg("google.container_cluster", "pngu", "zones", zs), z in zs, np = format("np-%s", z)
 
-resource k8s.namespace pngu {
-  name = "pngu"
-}
+resource k8s.namespace pngu { name = "pngu" }
 
 # Unrelated negation over want (different type): decidable now.
 deny "namespace without deployment" { ns: n } where n in k8s.namespace, not n in k8s.deployment
@@ -45,8 +39,6 @@ provider fake
   (comment)
   (comment)
   (comment)
-  (edition
-    (integer))
   (resource
     (dotted_name
       (identifier)

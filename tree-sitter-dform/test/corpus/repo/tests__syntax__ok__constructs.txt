@@ -2,8 +2,6 @@
 tests/syntax/ok/constructs.df
 =============================
 
-edition 2026
-
 # One of everything the grammar lowers today.
 # A keyed stack: each value of its keys is its own deployment.
 key tier: string = "dev"
@@ -14,20 +12,20 @@ input gke { static_ips: any }
 input seen from yaml("seen.yaml")[*].rows
 input peers from csv("peers.csv")
 input pinned from yaml(git("ops.git", "main", "pinned.yaml"))
-
 decl seen(a: string, b: int)
 decl peers(env: enum("dev", "prod"), name: string)
 decl pinned(name: string)
-
 decl provided(a, b)
 decl project(id: int, network_name: string)
+# Patterns (R-58): after `in`, on the left of `=`, as an argument.
+decl labels(l)
+decl images(i)
+decl p(a) mixed
+decl q(a) mixed
 
 project(1, "net-a")
 names(n) where project(network_name: n)
 
-# Patterns (R-58): after `in`, on the left of `=`, as an argument.
-decl labels(l)
-decl images(i)
 label(k, v) where labels(l), (k, v) in l
 host_of(h) where labels(l), { host: h } = l
 tagged(repo, tag) where images(i), (repo, tag) = str.split(i, ":", 1)
@@ -39,6 +37,7 @@ use checks where env("prod")
 
 component m {
   input on: bool
+  output vpc: addr = vpc
 
   resource net.vpc vpc @default {
     cidr = "10.0.0.0/16"
@@ -50,7 +49,6 @@ component m {
 
   on_vpc("vpc") where on == true
   iam_need("app", "net.read", ref(net.vpc, "vpc", "id"))
-  output vpc: addr = vpc
 }
 
 instance m main { on = true }
@@ -63,14 +61,20 @@ instance tagging tags
 
 q(1) where env("prod")
 
-set {
-  store.backup_days = 3
-} @default where env("prod")
+set { store.backup_days = 3 } @default where env("prod")
 set { gke.static_ips = { "pngu-grpc": { type: "INTERNAL" } } } where env("prod")
 set from yaml("settings.yaml") @override where env("prod")
 
 env("prod")
-p(x_) where q(x_), x_ == 1 + 2 * 3 - -4 / (5 % 2), x_ != 0, x_ >= 1, x_ <= 9, x_ > 0, x_ < 10
+p(x_) where {
+  q(x_)
+  x_ == 1 + 2 * 3 - -4 / (5 % 2)
+  x_ != 0
+  x_ >= 1
+  x_ <= 9
+  x_ > 0
+  x_ < 10
+}
 r(v) where v = gke.static_ips."pngu-grpc".type
 s(v) where q(x_), o = { a: { b: x_ } }, v = o.a.b
 t(l) where l = [ x_ | q(x_) ], 1 in l, 2 not in l
@@ -82,8 +86,6 @@ ignore_changes(net.vpc["main::vpc"], "tags.owner")
 counts(n_) where n_ = count(x_), q(x_)
 deny "q must not be empty" where not q(1)
 v("input", "output", "settings", "type") where input("env", _), output("k", _)
-decl p(a) mixed
-decl q(a) mixed
 p(5)
 q(2)
 w(v) where v = main.vpc, checks.listed("main")
@@ -93,8 +95,6 @@ x(i, a_) where vpc_inst(i), output(m[i], "vpc", a_)
 ---
 
 (source_file
-  (edition
-    (integer))
   (comment)
   (comment)
   (input
@@ -230,6 +230,31 @@ x(i, a_) where vpc_inst(i), output(m[i], "vpc", a_)
         (type
           (dotted_name
             (identifier))))))
+  (comment)
+  (decl
+    (dotted_name
+      (identifier))
+    (columns
+      (field_declaration
+        (identifier))))
+  (decl
+    (dotted_name
+      (identifier))
+    (columns
+      (field_declaration
+        (identifier))))
+  (decl
+    (dotted_name
+      (identifier))
+    (columns
+      (field_declaration
+        (identifier))))
+  (decl
+    (dotted_name
+      (identifier))
+    (columns
+      (field_declaration
+        (identifier))))
   (fact
     (call
       (identifier)
@@ -250,19 +275,6 @@ x(i, a_) where vpc_inst(i), output(m[i], "vpc", a_)
             (named_argument
               (identifier)
               (identifier)))))))
-  (comment)
-  (decl
-    (dotted_name
-      (identifier))
-    (columns
-      (field_declaration
-        (identifier))))
-  (decl
-    (dotted_name
-      (identifier))
-    (columns
-      (field_declaration
-        (identifier))))
   (rule
     (call
       (identifier)
@@ -381,6 +393,12 @@ x(i, a_) where vpc_inst(i), output(m[i], "vpc", a_)
         (type
           (dotted_name
             (identifier))))
+      (output
+        (identifier)
+        (type
+          (dotted_name
+            (identifier)))
+        (identifier))
       (resource
         (dotted_name
           (identifier)
@@ -456,13 +474,7 @@ x(i, a_) where vpc_inst(i), output(m[i], "vpc", a_)
                 (string
                   (string_content))
                 (string
-                  (string_content)))))))
-      (output
-        (identifier)
-        (type
-          (dotted_name
-            (identifier)))
-        (identifier))))
+                  (string_content)))))))))
   (instance
     (dotted_name
       (identifier))
@@ -574,7 +586,7 @@ x(i, a_) where vpc_inst(i), output(m[i], "vpc", a_)
       (identifier)
       (arguments
         (identifier)))
-    (body
+    (body_block
       (atom_literal
         (call
           (identifier)
@@ -798,18 +810,6 @@ x(i, a_) where vpc_inst(i), output(m[i], "vpc", a_)
             (string
               (string_content))
             (identifier))))))
-  (decl
-    (dotted_name
-      (identifier))
-    (columns
-      (field_declaration
-        (identifier))))
-  (decl
-    (dotted_name
-      (identifier))
-    (columns
-      (field_declaration
-        (identifier))))
   (fact
     (call
       (identifier)

@@ -2,14 +2,13 @@
 examples/adopt/network.df
 =========================
 
-edition 2026
-
 input vpc_net: inet
+#| The private subnets, one row each.
+decl private_subnet(subnet: net.subnet)
+output vpc: net.vpc = vpc
+output private_subnet
 
-resource net.vpc vpc {
-  cidr = vpc_net
-  tags = { env, component: "network" }
-}
+resource net.vpc vpc { cidr = vpc_net, tags = { env, component: "network" } }
 
 zone_index("us-test-1a", 0)
 zone_index("us-test-1b", 1)
@@ -21,23 +20,36 @@ resource net.subnet "private-${z}" {
   visibility = "private"
 } where data("zone", z)
 
-output vpc: net.vpc = vpc
-
-#| The private subnets, one row each.
-decl private_subnet(subnet: net.subnet)
 private_subnet(s) where s in net.subnet, s.visibility == "private"
-output private_subnet
 
 ---
 
 (source_file
-  (edition
-    (integer))
   (input
     (identifier)
     (type
       (dotted_name
         (identifier))))
+  (comment)
+  (decl
+    (dotted_name
+      (identifier))
+    (columns
+      (field_declaration
+        (identifier)
+        (type
+          (dotted_name
+            (identifier)
+            (identifier))))))
+  (output
+    (identifier)
+    (type
+      (dotted_name
+        (identifier)
+        (identifier)))
+    (identifier))
+  (output
+    (identifier))
   (resource
     (dotted_name
       (identifier)
@@ -117,24 +129,6 @@ output private_subnet
               (string
                 (string_content))
               (identifier)))))))
-  (output
-    (identifier)
-    (type
-      (dotted_name
-        (identifier)
-        (identifier)))
-    (identifier))
-  (comment)
-  (decl
-    (dotted_name
-      (identifier))
-    (columns
-      (field_declaration
-        (identifier)
-        (type
-          (dotted_name
-            (identifier)
-            (identifier))))))
   (rule
     (call
       (identifier)
@@ -151,6 +145,4 @@ output private_subnet
           (identifier)
           (identifier))
         (string
-          (string_content)))))
-  (output
-    (identifier)))
+          (string_content))))))

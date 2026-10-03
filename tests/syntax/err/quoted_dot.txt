@@ -1,1 +1,1 @@
-tests/syntax/err/quoted_dot.df:5:46: the key "a.b" holds `.`, `[` or `]`, which a path segment cannot carry
+tests/syntax/err/quoted_dot.df:3:46: the key "a.b" holds `.`, `[` or `]`, which a path segment cannot carry

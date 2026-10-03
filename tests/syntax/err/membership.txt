@@ -1,6 +1,6 @@
-tests/syntax/err/membership.df:11:17: `tier` is an input, one value of enum("a", "b"): `x in T` ranges over a type's values, so name the type
+tests/syntax/err/membership.df:9:17: `tier` is an input, one value of enum("a", "b"): `x in T` ranges over a type's values, so name the type
   help: an inline `enum(..)` has no name: name it, `type T = enum("a", "b")`, declare `input tier: T`, and range over it, `x in T`
-tests/syntax/err/membership.df:12:17: `env` is an input, one value of environment: `x in T` ranges over a type's values, so name the type
+tests/syntax/err/membership.df:10:17: `env` is an input, one value of environment: `x in T` ranges over a type's values, so name the type
   help: range over its type: `x in environment`
-tests/syntax/err/membership.df:13:17: `environments` is the type list(enum(dev, prod)): `x in T` ranges over an enum type's values, a resource type's resources or a provider's namespace
-tests/syntax/err/membership.df:14:29: `r.spec`: r is a resource of any k8s type, and k8s.config_map, k8s.secret, k8s.service_account have no `spec`
+tests/syntax/err/membership.df:11:17: `environments` is the type list(enum(dev, prod)): `x in T` ranges over an enum type's values, a resource type's resources or a provider's namespace
+tests/syntax/err/membership.df:12:29: `r.spec`: r is a resource of any k8s type, and k8s.config_map, k8s.secret, k8s.service_account have no `spec`

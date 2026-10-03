@@ -2,8 +2,6 @@
 tests/fixtures/adversarial/packs/same_path.df
 =============================================
 
-edition 2026
-
 # The pack adv3b_pack_reads_same_path.df uses: a module, `use packs.same_path`.
 type_lattice("iam.policy", "statements", "set")
 set p.statements = [{ action: "org.read", resource: "org" }] where {
@@ -15,8 +13,6 @@ set p.statements = [{ action: "org.read", resource: "org" }] where {
 ---
 
 (source_file
-  (edition
-    (integer))
   (comment)
   (fact
     (call

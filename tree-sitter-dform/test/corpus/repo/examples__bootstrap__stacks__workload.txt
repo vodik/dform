@@ -18,9 +18,9 @@ examples/bootstrap/stacks/workload.df
 #   cargo run -q -p dform-direct --bin dform-approve -- sign approver.key \
 #     --digest sha256:... --stack workload --approver alice --format fact >> data/approvals.df
 
-edition 2026
-
 input env: enum("dev", "prod") = "dev"
+decl approve(type, address)
+decl approval(token)
 
 # The release to run, `releases.release(image)`; a change to the file is
 # an input event, as to any program file.
@@ -29,33 +29,27 @@ use data.releases
 # a signed approval of a plan's digest.
 use data.approvals
 
-decl approve(type, address)
-decl approval(token)
 approve(t, a) where approvals.approve(t, a)
 approval(t) where approvals.approval(t)
 
 provider k8s
 
-resource k8s.namespace web {
-  metadata.name = "web"
-}
+resource k8s.namespace web { metadata.name = "web" }
 
 resource k8s.deployment web {
-  metadata.name = "web"
-  metadata.namespace = k8s.namespace["web"].metadata.name
+  metadata = { name: "web", namespace: k8s.namespace["web"].metadata.name }
   spec.replicas = 3
   spec.selector.matchLabels = { app: "web" }
   spec.template.metadata.labels = { app: "web" }
   spec.template.spec.containers = [{
     name: "web",
     image,
-    ports: [{ containerPort: 8080, protocol: "TCP" }]
+    ports: [{ containerPort: 8080, protocol: "TCP" }],
   }]
 } where releases.release(image)
 
 resource k8s.service web {
-  metadata.name = "web"
-  metadata.namespace = k8s.namespace["web"].metadata.name
+  metadata = { name: "web", namespace: k8s.namespace["web"].metadata.name }
   spec.selector = { app: "web" }
   spec.ports = [{ port: 80, targetPort: 8080, protocol: "TCP" }]
 }
@@ -91,8 +85,6 @@ requires_approval(d, "a prod rollout") where {
   (comment)
   (comment)
   (comment)
-  (edition
-    (integer))
   (input
     (identifier)
     (type
@@ -104,18 +96,6 @@ requires_approval(d, "a prod rollout") where {
         (string_content)))
     (string
       (string_content)))
-  (comment)
-  (comment)
-  (use
-    (dotted_name
-      (identifier)
-      (identifier)))
-  (comment)
-  (comment)
-  (use
-    (dotted_name
-      (identifier)
-      (identifier)))
   (decl
     (dotted_name
       (identifier))
@@ -130,6 +110,18 @@ requires_approval(d, "a prod rollout") where {
     (columns
       (field_declaration
         (identifier))))
+  (comment)
+  (comment)
+  (use
+    (dotted_name
+      (identifier)
+      (identifier)))
+  (comment)
+  (comment)
+  (use
+    (dotted_name
+      (identifier)
+      (identifier)))
   (rule
     (call
       (identifier)
@@ -180,24 +172,24 @@ requires_approval(d, "a prod rollout") where {
     (block
       (field
         (block_path
-          (identifier)
           (identifier))
-        (string
-          (string_content)))
-      (field
-        (block_path
-          (identifier)
-          (identifier))
-        (member_expression
-          (member_expression
-            (index_expression
+        (object
+          (object_field
+            (identifier)
+            (string
+              (string_content)))
+          (object_field
+            (identifier)
+            (member_expression
               (member_expression
-                (identifier)
+                (index_expression
+                  (member_expression
+                    (identifier)
+                    (identifier))
+                  (string
+                    (string_content)))
                 (identifier))
-              (string
-                (string_content)))
-            (identifier))
-          (identifier)))
+              (identifier)))))
       (field
         (block_path
           (identifier)
@@ -266,24 +258,24 @@ requires_approval(d, "a prod rollout") where {
     (block
       (field
         (block_path
-          (identifier)
           (identifier))
-        (string
-          (string_content)))
-      (field
-        (block_path
-          (identifier)
-          (identifier))
-        (member_expression
-          (member_expression
-            (index_expression
+        (object
+          (object_field
+            (identifier)
+            (string
+              (string_content)))
+          (object_field
+            (identifier)
+            (member_expression
               (member_expression
-                (identifier)
+                (index_expression
+                  (member_expression
+                    (identifier)
+                    (identifier))
+                  (string
+                    (string_content)))
                 (identifier))
-              (string
-                (string_content)))
-            (identifier))
-          (identifier)))
+              (identifier)))))
       (field
         (block_path
           (identifier)

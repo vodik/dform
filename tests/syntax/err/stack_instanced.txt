@@ -1,2 +1,2 @@
-tests/syntax/err/stack_instanced/stacks/main.df:5:1: stacks.platform is deployed by the tool; `use` it
+tests/syntax/err/stack_instanced/stacks/main.df:3:1: stacks.platform is deployed by the tool; `use` it
   note: a stack is a module the tool uses, one deployment per key: `use` binds to its deployments, and `NAME[k=v].output` reads one

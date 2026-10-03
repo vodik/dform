@@ -2,8 +2,6 @@
 examples/demo/network.df
 ========================
 
-edition 2026
-
 # The demo's networking: a component, `vpc`, copied once per network
 # (`instance network.vpc main`). A copy's private subnets are a relation
 # it exports, `output private_subnet`: a database or a cluster takes them
@@ -15,11 +13,14 @@ edition 2026
 component vpc {
   #| The VPC's IPv4 range; each zone's subnet is a /20 of it.
   input vpc_net: inet
+  decl private_subnet(subnet: net.subnet)
+  #| The network's VPC, for peering.
+  output vpc: net.vpc = vpc
+  #| The network's private subnets, one row each, for a database or a
+  #| cluster: `main.private_subnet(s)`.
+  output private_subnet
 
-  resource net.vpc vpc {
-    cidr = vpc_net
-    tags = { env, component: "network" }
-  }
+  resource net.vpc vpc { cidr = vpc_net, tags = { env, component: "network" } }
 
   zone_index("us-test-1a", 0)
   zone_index("us-test-1b", 1)
@@ -30,21 +31,13 @@ component vpc {
     zone = z
     visibility = "private"
   } where data("zone", z)
-  #| The network's VPC, for peering.
-  output vpc: net.vpc = vpc
 
-  decl private_subnet(subnet: net.subnet)
   private_subnet(s) where s in net.subnet, s.visibility == "private"
-  #| The network's private subnets, one row each, for a database or a
-  #| cluster: `main.private_subnet(s)`.
-  output private_subnet
 }
 
 ---
 
 (source_file
-  (edition
-    (integer))
   (comment)
   (comment)
   (comment)
@@ -61,6 +54,28 @@ component vpc {
         (type
           (dotted_name
             (identifier))))
+      (decl
+        (dotted_name
+          (identifier))
+        (columns
+          (field_declaration
+            (identifier)
+            (type
+              (dotted_name
+                (identifier)
+                (identifier))))))
+      (comment)
+      (output
+        (identifier)
+        (type
+          (dotted_name
+            (identifier)
+            (identifier)))
+        (identifier))
+      (comment)
+      (comment)
+      (output
+        (identifier))
       (resource
         (dotted_name
           (identifier)
@@ -140,24 +155,6 @@ component vpc {
                   (string
                     (string_content))
                   (identifier)))))))
-      (comment)
-      (output
-        (identifier)
-        (type
-          (dotted_name
-            (identifier)
-            (identifier)))
-        (identifier))
-      (decl
-        (dotted_name
-          (identifier))
-        (columns
-          (field_declaration
-            (identifier)
-            (type
-              (dotted_name
-                (identifier)
-                (identifier))))))
       (rule
         (call
           (identifier)
@@ -174,8 +171,4 @@ component vpc {
               (identifier)
               (identifier))
             (string
-              (string_content)))))
-      (comment)
-      (comment)
-      (output
-        (identifier)))))
+              (string_content))))))))

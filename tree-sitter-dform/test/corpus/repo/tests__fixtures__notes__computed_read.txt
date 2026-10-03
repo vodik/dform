@@ -2,8 +2,6 @@
 tests/fixtures/notes/computed_read.df
 =====================================
 
-edition 2026
-
 # R-4's play: a block that interpolates a computed value waits a tick for
 # it, and `plan` says so at the read, once per block. `url` needs the
 # endpoint's bytes; `host` is a whole value, a reference, and waits for
@@ -23,8 +21,6 @@ provider fake
 ---
 
 (source_file
-  (edition
-    (integer))
   (comment)
   (comment)
   (comment)

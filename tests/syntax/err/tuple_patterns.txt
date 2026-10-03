@@ -1,6 +1,6 @@
-tests/syntax/err/tuple_patterns.df:6:27: `(a, b, c)` has 3 parts: after `in`, a tuple is `(key, value)` of an object or `(index, element)` of a list
-tests/syntax/err/tuple_patterns.df:7:31: `(ps, ps)` is a pattern, not a value
+tests/syntax/err/tuple_patterns.df:4:27: `(a, b, c)` has 3 parts: after `in`, a tuple is `(key, value)` of an object or `(index, element)` of a list
+tests/syntax/err/tuple_patterns.df:5:31: `(ps, ps)` is a pattern, not a value
   help: a tuple matches: after `in` (`(k, v) in obj`), on the left of `=` (`(a, b) = pair`) or as a relation's argument; a list value is `[ps, ps]`
-tests/syntax/err/tuple_patterns.df:8:28: `[a, b]` is a list: a pattern is a tuple
+tests/syntax/err/tuple_patterns.df:6:28: `[a, b]` is a list: a pattern is a tuple
   help: write `(a, b)`: it matches a list of exactly that many elements
-tests/syntax/err/tuple_patterns.df:9:16: `(a, b)` is a pattern: a resource is enumerated by a name, `r in net.vpc`
+tests/syntax/err/tuple_patterns.df:7:16: `(a, b)` is a pattern: a resource is enumerated by a name, `r in net.vpc`

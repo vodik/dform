@@ -10,8 +10,6 @@ crates/dform-mock/schemas/gke.df
 # google.client_config and google.secret_manager_secret_version are data
 # sources: no type_provider.
 
-edition 2026
-
 type_provider("google.compute_subnetwork", "google")
 type_provider("google.compute_network_peering", "google")
 type_provider("google.compute_address", "google")
@@ -57,28 +55,84 @@ type_mint("google.container_cluster", "zones", "{doc:node_locations}")
 # Descriptions (`type_doc(Type, Path, Text)`; the path "" is the type's),
 # for the paths the examples write: the language server's hover and
 # completion show them.
-type_doc("google.container_cluster", "", "A GKE cluster, as the terraform-mi-gke module creates it.")
-type_doc("google.container_cluster", "cluster_type", "The module's cluster flavour, such as \"autopilot-private\".")
+type_doc(
+  "google.container_cluster",
+  "",
+  "A GKE cluster, as the terraform-mi-gke module creates it.",
+)
+type_doc(
+  "google.container_cluster",
+  "cluster_type",
+  "The module's cluster flavour, such as \"autopilot-private\".",
+)
 type_doc("google.container_cluster", "env", "The environment the cluster serves.")
-type_doc("google.container_cluster", "project_id", "The id of the Google Cloud project the cluster is in.")
-type_doc("google.container_cluster", "project_name", "The project's name, the prefix of the cluster's resources.")
-type_doc("google.container_cluster", "name", "The cluster's name, unique in the project and location.")
+type_doc(
+  "google.container_cluster",
+  "project_id",
+  "The id of the Google Cloud project the cluster is in.",
+)
+type_doc(
+  "google.container_cluster",
+  "project_name",
+  "The project's name, the prefix of the cluster's resources.",
+)
+type_doc(
+  "google.container_cluster",
+  "name",
+  "The cluster's name, unique in the project and location.",
+)
 type_doc("google.container_cluster", "network", "The VPC network the cluster attaches to.")
-type_doc("google.container_cluster", "network_id", "The VPC network's self link (projects/P/global/networks/N).")
+type_doc(
+  "google.container_cluster",
+  "network_id",
+  "The VPC network's self link (projects/P/global/networks/N).",
+)
 type_doc("google.container_cluster", "subnetwork", "The subnetwork the cluster's nodes are in.")
 type_doc("google.container_cluster", "subnetwork_id", "The subnetwork the cluster's nodes are in.")
-type_doc("google.container_cluster", "master_control_plane_cidr", "The /28 range of the private control plane's endpoints.")
-type_doc("google.container_cluster", "ip_range_pods", "The name of the subnetwork's secondary range for pod addresses.")
-type_doc("google.container_cluster", "ip_range_services", "The name of the subnetwork's secondary range for service addresses.")
+type_doc(
+  "google.container_cluster",
+  "master_control_plane_cidr",
+  "The /28 range of the private control plane's endpoints.",
+)
+type_doc(
+  "google.container_cluster",
+  "ip_range_pods",
+  "The name of the subnetwork's secondary range for pod addresses.",
+)
+type_doc(
+  "google.container_cluster",
+  "ip_range_services",
+  "The name of the subnetwork's secondary range for service addresses.",
+)
 type_doc("google.container_cluster", "node_locations", "The zones the cluster's nodes run in.")
-type_doc("google.container_cluster", "enable_secret_manager_addon", "Whether workloads read Secret Manager secrets through the CSI add-on.")
-type_doc("google.container_cluster", "deletion_protection", "Whether Terraform refuses to destroy the cluster.")
-type_doc("google.container_cluster", "endpoint", "The control plane's address, known once the cluster exists.")
-type_doc("google.container_cluster", "ca_certificate", "The cluster's CA certificate, known once the cluster exists.")
+type_doc(
+  "google.container_cluster",
+  "enable_secret_manager_addon",
+  "Whether workloads read Secret Manager secrets through the CSI add-on.",
+)
+type_doc(
+  "google.container_cluster",
+  "deletion_protection",
+  "Whether Terraform refuses to destroy the cluster.",
+)
+type_doc(
+  "google.container_cluster",
+  "endpoint",
+  "The control plane's address, known once the cluster exists.",
+)
+type_doc(
+  "google.container_cluster",
+  "ca_certificate",
+  "The cluster's CA certificate, known once the cluster exists.",
+)
 type_doc("google.container_node_pool", "", "A node pool of a GKE cluster.")
 type_doc("google.container_node_pool", "cluster", "The cluster the pool's nodes join.")
 type_doc("google.container_node_pool", "zone", "The zone the pool's nodes run in.")
-type_doc("google.container_node_pool", "node_count", "The number of nodes, when the pool does not autoscale.")
+type_doc(
+  "google.container_node_pool",
+  "node_count",
+  "The number of nodes, when the pool does not autoscale.",
+)
 type_doc("google.container_node_pool", "min", "The fewest nodes autoscaling keeps.")
 type_doc("google.container_node_pool", "max", "The most nodes autoscaling adds.")
 type_doc("google.compute_subnetwork", "", "A regional subnetwork of a VPC network.")
@@ -86,11 +140,31 @@ type_doc("google.compute_subnetwork", "project", "The project the subnetwork is 
 type_doc("google.compute_subnetwork", "region", "The region the subnetwork is in.")
 type_doc("google.compute_subnetwork", "network", "The VPC network the subnetwork belongs to.")
 type_doc("google.compute_subnetwork", "name", "The subnetwork's name, unique in the project.")
-type_doc("google.compute_subnetwork", "ip_cidr_range", "The subnetwork's primary IPv4 range; ranges in a network may not overlap.")
-type_doc("google.compute_subnetwork", "subnet_private_access", "Whether VMs without external addresses reach Google APIs (Private Google Access).")
-type_doc("google.compute_subnetwork", "secondary_ranges", "Named alias IP ranges, each a range_name and an ip_cidr_range (GKE's pod and service ranges).")
-type_doc("google.compute_subnetwork", "purpose", "What the subnetwork is for: PRIVATE, or REGIONAL_MANAGED_PROXY for Envoy-based load balancers.")
-type_doc("google.compute_subnetwork", "role", "ACTIVE or BACKUP, for a REGIONAL_MANAGED_PROXY subnetwork.")
+type_doc(
+  "google.compute_subnetwork",
+  "ip_cidr_range",
+  "The subnetwork's primary IPv4 range; ranges in a network may not overlap.",
+)
+type_doc(
+  "google.compute_subnetwork",
+  "subnet_private_access",
+  "Whether VMs without external addresses reach Google APIs (Private Google Access).",
+)
+type_doc(
+  "google.compute_subnetwork",
+  "secondary_ranges",
+  "Named alias IP ranges, each a range_name and an ip_cidr_range (GKE's pod and service ranges).",
+)
+type_doc(
+  "google.compute_subnetwork",
+  "purpose",
+  "What the subnetwork is for: PRIVATE, or REGIONAL_MANAGED_PROXY for Envoy-based load balancers.",
+)
+type_doc(
+  "google.compute_subnetwork",
+  "role",
+  "ACTIVE or BACKUP, for a REGIONAL_MANAGED_PROXY subnetwork.",
+)
 type_doc("google.compute_network_peering", "", "A peering from one VPC network to another.")
 type_doc("google.compute_network_peering", "project", "The project of the local network.")
 type_doc("google.compute_network_peering", "name", "The peering's name.")
@@ -101,10 +175,18 @@ type_doc("google.compute_address", "project", "The project the address is in.")
 type_doc("google.compute_address", "region", "The region the address is in.")
 type_doc("google.compute_address", "name", "The address's name, unique in the project.")
 type_doc("google.compute_address", "address_type", "INTERNAL (from a subnetwork) or EXTERNAL.")
-type_doc("google.compute_address", "subnetwork_id", "The subnetwork an INTERNAL address is taken from.")
+type_doc(
+  "google.compute_address",
+  "subnetwork_id",
+  "The subnetwork an INTERNAL address is taken from.",
+)
 type_doc("google.monitoring_dashboard", "", "A Cloud Monitoring dashboard.")
 type_doc("google.monitoring_dashboard", "project", "The project the dashboard is in.")
-type_doc("google.monitoring_dashboard", "dashboard_json", "The dashboard's definition, as the Monitoring API's JSON.")
+type_doc(
+  "google.monitoring_dashboard",
+  "dashboard_json",
+  "The dashboard's definition, as the Monitoring API's JSON.",
+)
 
 ---
 
@@ -116,8 +198,6 @@ type_doc("google.monitoring_dashboard", "dashboard_json", "The dashboard's defin
   (comment)
   (comment)
   (comment)
-  (edition
-    (integer))
   (fact
     (call
       (identifier)

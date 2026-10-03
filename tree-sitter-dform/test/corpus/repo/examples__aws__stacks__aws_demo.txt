@@ -15,13 +15,9 @@ examples/aws/stacks/aws_demo.df
 #   - keyless sets: the security group's ingress rules have no key; the plan
 #     compares them as a set, so their order never matters.
 
-edition 2026
 provider aws
 
-resource aws.vpc main {
-  cidr_block = "10.0.0.0/16"
-  tags = { "Name": "main" }
-}
+resource aws.vpc main { cidr_block = "10.0.0.0/16", tags = { "Name": "main" } }
 
 resource aws.subnet a {
   vpc_id = main
@@ -34,11 +30,9 @@ resource aws.security_group web {
   vpc_id = main
   ingress = [
     { from_port: 443, to_port: 443, protocol: "tcp", cidr_blocks: ["0.0.0.0/0"] },
-    { from_port: 80, to_port: 80, protocol: "tcp", cidr_blocks: ["0.0.0.0/0"] }
+    { from_port: 80, to_port: 80, protocol: "tcp", cidr_blocks: ["0.0.0.0/0"] },
   ]
-  egress = [
-    { from_port: 0, to_port: 0, protocol: "-1", cidr_blocks: ["0.0.0.0/0"] }
-  ]
+  egress = [{ from_port: 0, to_port: 0, protocol: "-1", cidr_blocks: ["0.0.0.0/0"] }]
 }
 
 resource aws.instance web {
@@ -53,10 +47,7 @@ resource aws.instance bastion {
   tags = { subnet_az: a.availability_zone, web_az: aws.instance["web"].availability_zone }
 }
 
-resource aws.eip web {
-  domain = "vpc"
-  instance = aws.instance["web"]
-}
+resource aws.eip web { domain = "vpc", instance = aws.instance["web"] }
 
 resource aws.db_instance app {
   identifier = "app"
@@ -81,8 +72,6 @@ resource aws.db_instance app {
   (comment)
   (comment)
   (comment)
-  (edition
-    (integer))
   (provider
     (identifier))
   (resource

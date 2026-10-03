@@ -2,14 +2,13 @@
 examples/demo/database.df
 =========================
 
-edition 2026
-
 input backup_days: int
 input multi_az: bool
 #| The subnets the database is placed in, one row each.
 input subnet
-
 decl subnet(subnet: net.subnet)
+#| Only when the database exists in this environment.
+output iam_need = { action: "db.connect", resource: db } where has backup_days
 
 #| A PostgreSQL database in the network's private subnets.
 resource db.postgres db {
@@ -19,14 +18,9 @@ resource db.postgres db {
   multi_az
 }
 
-#| Only when the database exists in this environment.
-output iam_need = { action: "db.connect", resource: db } where has backup_days
-
 ---
 
 (source_file
-  (edition
-    (integer))
   (input
     (identifier)
     (type
@@ -50,6 +44,20 @@ output iam_need = { action: "db.connect", resource: db } where has backup_days
           (dotted_name
             (identifier)
             (identifier))))))
+  (comment)
+  (output
+    (identifier)
+    (object
+      (object_field
+        (identifier)
+        (string
+          (string_content)))
+      (object_field
+        (identifier)
+        (identifier)))
+    (body
+      (has_literal
+        (identifier))))
   (comment)
   (resource
     (dotted_name
@@ -82,18 +90,4 @@ output iam_need = { action: "db.connect", resource: db } where has backup_days
           (identifier)))
       (field
         (block_path
-          (identifier)))))
-  (comment)
-  (output
-    (identifier)
-    (object
-      (object_field
-        (identifier)
-        (string
-          (string_content)))
-      (object_field
-        (identifier)
-        (identifier)))
-    (body
-      (has_literal
-        (identifier)))))
+          (identifier))))))

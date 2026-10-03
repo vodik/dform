@@ -1,2 +1,2 @@
-tests/syntax/err/bad_rank.df:3:23: unknown rank `@normal`: a rank is `@default` or `@override`
-tests/syntax/err/bad_rank.df:4:1: a rank applies to an `arg(T, A, Path, Value)` head only
+tests/syntax/err/bad_rank.df:1:23: unknown rank `@normal`: a rank is `@default` or `@override`
+tests/syntax/err/bad_rank.df:2:1: a rank applies to an `arg(T, A, Path, Value)` head only

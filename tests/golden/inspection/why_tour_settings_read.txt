@@ -1,24 +1,24 @@
 db.postgres["orders"].backup_days = 14
   merged from 1 contribution
   ├─ 14
-  │    examples/tour/stacks/tour.df:147  resource db.postgres orders { .. backup_days = database.backup_days .. }
+  │    examples/tour/stacks/tour.df:145  resource db.postgres orders { .. backup_days = database.backup_days .. }
   │    with database.backup_days = 14
   │    ├─ input database = {backup_days: 14, multi_az: true}
   │    │    merged from 4 contributions
-  │    │    ├─ {backup_days: 1} @default   examples/tour/stacks/tour.df:29
-  │    │    ├─ {multi_az: false} @default   examples/tour/stacks/tour.df:29
+  │    │    ├─ {backup_days: 1} @default   examples/tour/stacks/tour.df:27
+  │    │    ├─ {multi_az: false} @default   examples/tour/stacks/tour.df:27
   │    │    ├─ {backup_days: 14}
-  │    │    │    examples/tour/stacks/tour.df:141  set { database.backup_days = 14 .. } where env == "prod"
+  │    │    │    examples/tour/stacks/tour.df:139  set { database.backup_days = 14 .. } where env == "prod"
   │    │    │    └─ input env = "prod"
   │    │    │         merged from 2 contributions
-  │    │    │         ├─ "dev" @default   examples/tour/stacks/tour.df:27
+  │    │    │         ├─ "dev" @default   examples/tour/stacks/tour.df:25
   │    │    │         └─ "prod"
-  │    │    │              examples/tour/stacks/tour.df:27  key env: enum("dev", "prod") = "dev"
+  │    │    │              examples/tour/stacks/tour.df:25  key env: enum("dev", "prod") = "dev"
   │    │    │              └─ --set env=prod
   │    │    └─ {multi_az: true}
-  │    │         examples/tour/stacks/tour.df:141  set { .. database.multi_az = true } where env == "prod"
+  │    │         examples/tour/stacks/tour.df:139  set { .. database.multi_az = true } where env == "prod"
   │    │         └─ input env = "prod"   (see above)
   │    └─ input public_db = false
   │         merged from 1 contribution
-  │         └─ false @default   examples/tour/stacks/tour.df:28
+  │         └─ false @default   examples/tour/stacks/tour.df:26
   └─ check range(1, 35)   provider schema

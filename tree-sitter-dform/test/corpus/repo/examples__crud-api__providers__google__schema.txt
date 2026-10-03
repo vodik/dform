@@ -6,8 +6,6 @@ examples/crud-api/providers/google/schema.df
 # SQL instance, database and user. The instance's private IP is computed
 # (an open null until it exists); the user's password is sensitive.
 
-edition 2026
-
 type_provider("google.compute_network", "google")
 type_attr("google.compute_network", "id", "string", ["computed", "id"])
 type_attr("google.compute_network", "name", "string", ["required", "force_new"])
@@ -24,10 +22,20 @@ type_attr("google.sql_database_instance", "settings.tier", "string", ["required"
 type_attr("google.sql_database_instance", "settings.availability_type", "string", [])
 type_attr("google.sql_database_instance", "settings.backup_configuration", "object", [])
 type_attr("google.sql_database_instance", "settings.backup_configuration.enabled", "bool", [])
-type_attr("google.sql_database_instance", "settings.backup_configuration.point_in_time_recovery_enabled", "bool", [])
+type_attr(
+  "google.sql_database_instance",
+  "settings.backup_configuration.point_in_time_recovery_enabled",
+  "bool",
+  [],
+)
 type_attr("google.sql_database_instance", "settings.ip_configuration", "object", [])
 type_attr("google.sql_database_instance", "settings.ip_configuration.ipv4_enabled", "bool", [])
-type_attr("google.sql_database_instance", "settings.ip_configuration.private_network", "ref(google.compute_network)", [])
+type_attr(
+  "google.sql_database_instance",
+  "settings.ip_configuration.private_network",
+  "ref(google.compute_network)",
+  [],
+)
 type_attr("google.sql_database_instance", "private_ip_address", "string", ["computed"])
 type_mint("google.sql_database_instance", "private_ip_address", "10.20.0.3")
 
@@ -48,8 +56,6 @@ type_attr("google.sql_user", "password", "string", ["sensitive"])
   (comment)
   (comment)
   (comment)
-  (edition
-    (integer))
   (fact
     (call
       (identifier)

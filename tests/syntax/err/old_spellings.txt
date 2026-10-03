@@ -1,44 +1,44 @@
-tests/syntax/err/old_spellings.df:5:1: expected a statement, found `component_def`
+tests/syntax/err/old_spellings.df:3:1: expected a statement, found `component_def`
   help: `component_def` is spelled `component`
-tests/syntax/err/old_spellings.df:6:1: expected a statement, found `policy_pack`
+tests/syntax/err/old_spellings.df:4:1: expected a statement, found `policy_pack`
   help: `policy` is gone (R-65): a policy pack is a module, a file of `set`, `deny` and `warn` statements, applied with `use PATH`
-tests/syntax/err/old_spellings.df:7:1: expected a statement, found `apply_policy`
+tests/syntax/err/old_spellings.df:5:1: expected a statement, found `apply_policy`
   help: `apply_policy` is spelled `use`
-tests/syntax/err/old_spellings.df:8:1: expected a statement, found `unique`
+tests/syntax/err/old_spellings.df:6:1: expected a statement, found `unique`
   help: `unique` is gone: one value per key is what the attribute aggregate enforces
-tests/syntax/err/old_spellings.df:9:1: expected a statement, found `when`
+tests/syntax/err/old_spellings.df:7:1: expected a statement, found `when`
   help: statement groups are gone (H-4): put `where B` on each statement, or gate a group of resources by an `instance` with a `where` clause
-tests/syntax/err/old_spellings.df:10:1: expected a statement, found `with`
+tests/syntax/err/old_spellings.df:8:1: expected a statement, found `with`
   help: `with k = v` is spelled `set k = v`
-tests/syntax/err/old_spellings.df:11:1: expected a statement, found `constraint`
+tests/syntax/err/old_spellings.df:9:1: expected a statement, found `constraint`
   help: `constraint` is spelled `deny` (H-8)
-tests/syntax/err/old_spellings.df:12:1: expected a statement, found `apply`
+tests/syntax/err/old_spellings.df:10:1: expected a statement, found `apply`
   help: `apply pack` is spelled `use pack`
-tests/syntax/err/old_spellings.df:13:1: expected a statement, found `k`
+tests/syntax/err/old_spellings.df:11:1: expected a statement, found `k`
   help: a value is `let k = t`
-tests/syntax/err/old_spellings.df:14:1: expected a statement, found `r`
+tests/syntax/err/old_spellings.df:12:1: expected a statement, found `r`
   help: a contribution to another block's field is `set r.path = t`
-tests/syntax/err/old_spellings.df:15:7: expected `(`, found `/`
+tests/syntax/err/old_spellings.df:13:7: expected `(`, found `/`
   help: a relation is declared by its columns: `decl p(a, b)`
-tests/syntax/err/old_spellings.df:16:1: expected a statement, found `export`
+tests/syntax/err/old_spellings.df:14:1: expected a statement, found `export`
   help: `export` is gone (R-65): a module's items are public, and a component's outputs are its public face
-tests/syntax/err/old_spellings.df:17:1: expected a statement, found `module`
+tests/syntax/err/old_spellings.df:15:1: expected a statement, found `module`
   help: `module` is gone (R-65): a module is a file, named by its path and brought in with `use PATH`; a thing copied with inputs is `component NAME { .. }`, made with `instance`
-tests/syntax/err/old_spellings.df:20:1: expected a statement, found `import`
+tests/syntax/err/old_spellings.df:18:1: expected a statement, found `import`
   help: `import` is gone (R-65): `use PATH` brings in a module by its path from the project root, `use modules.net` for modules/net.df
-tests/syntax/err/old_spellings.df:21:1: expected a statement, found `policy`
+tests/syntax/err/old_spellings.df:19:1: expected a statement, found `policy`
   help: `policy` is gone (R-65): a policy pack is a module, a file of `set`, `deny` and `warn` statements, applied with `use PATH`
-tests/syntax/err/old_spellings.df:22:7: expected `:` or `(` after the input's name, found `p`
+tests/syntax/err/old_spellings.df:20:7: expected `:` or `(` after the input's name, found `p`
   help: `input relation p(cols) from ..` is spelled `decl p(cols)` and `input p from ..`
-tests/syntax/err/old_spellings.df:23:12: expected a literal, found `exists`
+tests/syntax/err/old_spellings.df:21:12: expected a literal, found `exists`
   help: `exists R` is `R in T` (H-9): a resource named in scope is its address
-tests/syntax/err/old_spellings.df:24:12: expected a literal, found `some`
+tests/syntax/err/old_spellings.df:22:12: expected a literal, found `some`
   help: `some x in e` is `x in e`; `some i, x in e` is `x = e[i]` (H-9)
-tests/syntax/err/old_spellings.df:25:23: expected a term, found `.`
+tests/syntax/err/old_spellings.df:23:23: expected a term, found `.`
   help: a path that is data is a string (`"cidr"`, H-12); a `.` is member access
-tests/syntax/err/old_spellings.df:26:13: expected the end of the term, found `{`
+tests/syntax/err/old_spellings.df:24:13: expected the end of the term, found `{`
   help: a record atom `p{a: x}` is spelled with named arguments, `p(a: x)`
-tests/syntax/err/old_spellings.df:28:3: expected an entry or `}`, found `for`
+tests/syntax/err/old_spellings.df:26:3: expected an entry or `}`, found `for`
   help: a block's clause follows the block (R-1): `resource t a { .. } where q(x)`
-tests/syntax/err/old_spellings.df:31:1: expected a statement, found `/`
+tests/syntax/err/old_spellings.df:29:1: expected a statement, found `/`
   help: a comment starts with `#`

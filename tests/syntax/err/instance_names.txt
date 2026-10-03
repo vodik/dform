@@ -1,5 +1,5 @@
-tests/syntax/err/instance_names.df:10:1: `main` names two things in one scope
-  tests/syntax/err/instance_names.df:9:1: the first
+tests/syntax/err/instance_names.df:8:1: `main` names two things in one scope
+  tests/syntax/err/instance_names.df:7:1: the first
   help: an instance's name is its scope (`main.out`, `T["main::x"]`): name one otherwise, `instance network NAME`
-tests/syntax/err/instance_names.df:11:1: no component `subnet`
+tests/syntax/err/instance_names.df:9:1: no component `subnet`
   note: a component is an item of a module, `component NAME { .. }`

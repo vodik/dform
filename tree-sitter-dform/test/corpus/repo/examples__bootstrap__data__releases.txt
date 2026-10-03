@@ -5,8 +5,6 @@ examples/bootstrap/data/releases.df
 # The release to run, `release(image)`: a module of facts workload.df
 # reads with `use data.releases`. Edit it and the controller deploys it.
 
-edition 2026
-
 release("gcr.io/renfry/web:1.0")
 
 ---
@@ -14,8 +12,6 @@ release("gcr.io/renfry/web:1.0")
 (source_file
   (comment)
   (comment)
-  (edition
-    (integer))
   (fact
     (call
       (identifier)

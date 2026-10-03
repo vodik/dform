@@ -13,17 +13,13 @@ examples/approvals/stacks/approvals.df
 #     --digest sha256:... --stack approvals --key env=prod --approver alice > approval.json
 #   dform apply plan.json --approval approval.json
 
-edition 2026
-
 key env: enum("staging", "prod") = "staging"
 input cidr: string = "10.0.0.0/16"
 
 # The mock's built-in fake schema.
 provider fake
 
-resource net.vpc main {
-  cidr
-}
+resource net.vpc main { cidr }
 
 # In prod, replacing anything needs an approval.
 requires_approval(r, "a replace in prod") where env == "prod", deformation("replace", r, _)
@@ -44,8 +40,6 @@ approver_allowed(who, r) where requires_approval(r, _), who in ["alice", "bob"]
   (comment)
   (comment)
   (comment)
-  (edition
-    (integer))
   (input
     (identifier)
     (type

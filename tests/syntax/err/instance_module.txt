@@ -1,2 +1,2 @@
-tests/syntax/err/instance_module/stacks/main.df:4:1: config is a module; `use` it
+tests/syntax/err/instance_module/stacks/main.df:2:1: config is a module; `use` it
   note: a module, a file, is imported once by `use`; `instance` copies a component, an item `component NAME { .. }` of a module

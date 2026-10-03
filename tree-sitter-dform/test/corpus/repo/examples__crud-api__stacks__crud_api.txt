@@ -22,20 +22,18 @@ examples/crud-api/stacks/crud_api.df
 # The live objects are read through the kubernetes provider's inventory
 # (`world.T[e].p`), named by remote id (`shop/crud-api`).
 
-edition 2026
-
 input env: enum("dev", "prod") = "dev"
 input region: string = "us-east1"
 input replicas: int = 2 check replicas >= 1
 # The database's machine and availability, per environment (below).
 input database { tier: string, availability: string }
+decl approve(type, address)
 
 # release("crud_api", "digest", "sha256:9f2c..."): data/releases.df.
 use data.releases
 # approve(t, a): accept the drift of t.a, data/approvals.df's.
 use data.approvals
 
-decl approve(type, address)
 approve(t, a) where approvals.approve(t, a)
 
 # Sources and versions are dform.toml's.
@@ -78,10 +76,7 @@ let rollout = next where not has active
 # The database: private, regional in prod, password from an extern
 ########################################
 
-resource google.compute_network vpc {
-  name = "shop-${env}"
-  auto_create_subnetworks = false
-}
+resource google.compute_network vpc { name = "shop-${env}", auto_create_subnetworks = false }
 
 resource google.sql_database_instance db {
   name = "crud-api-${env}"
@@ -92,14 +87,11 @@ resource google.sql_database_instance db {
     tier: database.tier,
     availability_type: database.availability,
     backup_configuration: { enabled: true, point_in_time_recovery_enabled: true },
-    ip_configuration: { ipv4_enabled: false, private_network: vpc }
+    ip_configuration: { ipv4_enabled: false, private_network: vpc },
   }
 }
 
-resource google.sql_database crud_db {
-  instance = db.name
-  name = "crud_api"
-}
+resource google.sql_database crud_db { instance = db.name, name = "crud_api" }
 
 resource google.sql_user crud_user {
   instance = db.name
@@ -130,13 +122,12 @@ resource k8s.network_policy default_deny {
 # "postgres://...@{db.private_ip_address}" would need the content, and a
 # read in any field holds the whole Secret until the instance exists.
 resource k8s.secret db_conn {
-  metadata.name = "crud-api-db"
-  metadata.namespace = shop.metadata.name
+  metadata = { name: "crud-api-db", namespace: shop.metadata.name }
   stringData = {
     PGHOST: db.private_ip_address,
     PGUSER: crud_user.name,
     PGDATABASE: crud_db.name,
-    PGPASSWORD: random.password("crud-api-db")
+    PGPASSWORD: random.password("crud-api-db"),
   }
 }
 
@@ -149,17 +140,16 @@ resource k8s.job "migrate-v${schema}" {
   metadata.namespace = shop.metadata.name
   metadata.labels = { app: "crud-api", schema: "${schema}" }
   spec.backoffLimit = 2
-  spec.template.spec.restartPolicy = "Never"
-  spec.template.spec.containers = [{
-    name: "migrate",
-    image: released_image,
-    args: ["migrate", "--to", "${schema}"],
-    envFrom: [{ secretRef: { name: db_conn.metadata.name } }],
-    resources: {
-      requests: { cpu: 100m, memory: 128Mi },
-      limits: { cpu: 500m, memory: 256Mi }
-    }
-  }]
+  spec.template.spec = {
+    restartPolicy: "Never",
+    containers: [{
+      name: "migrate",
+      image: released_image,
+      args: ["migrate", "--to", "${schema}"],
+      envFrom: [{ secretRef: { name: db_conn.metadata.name } }],
+      resources: { requests: { cpu: 100m, memory: 128Mi }, limits: { cpu: 500m, memory: 256Mi } },
+    }],
+  }
 }
 
 # status.succeeded is an open null until the Job finishes: until then
@@ -202,8 +192,7 @@ let serving = cutover
 let serving = active where not has cutover
 
 resource k8s.service api {
-  metadata.name = "crud-api"
-  metadata.namespace = shop.metadata.name
+  metadata = { name: "crud-api", namespace: shop.metadata.name }
   spec.selector = { app: "crud-api", color: serving }
   spec.ports = [{ port: 80, targetPort: 8080, protocol: "TCP" }]
 }
@@ -215,6 +204,10 @@ component app {
   input namespace: string
   input db_secret: string
   input replicas: int
+  # Only while the instance runs: a color with no run has no Deployment,
+  # and a ref to it would dangle.
+  output ready_replicas: int = n where has color, n = deploy.status.readyReplicas
+  output total_replicas: int = n where has color, n = deploy.status.replicas
 
   let labels = { app: "crud-api", color }
 
@@ -230,44 +223,35 @@ component app {
       ports: [{ containerPort: 8080, protocol: "TCP" }],
       envFrom: [{ secretRef: { name: db_secret } }],
       readinessProbe: { httpGet: { path: "/healthz", port: 8080 } },
-      resources: {
-        requests: { cpu: 250m, memory: 256Mi },
-        limits: { cpu: 1, memory: 512Mi }
-      }
+      resources: { requests: { cpu: 250m, memory: 256Mi }, limits: { cpu: 1, memory: 512Mi } },
     }]
   }
 
   # The autoscaler owns spec.replicas; the Deployment does not set it.
   resource k8s.horizontal_pod_autoscaler hpa {
-    metadata.name = "crud-api-${color}"
-    metadata.namespace
+    metadata = { name: "crud-api-${color}", namespace }
     spec.scaleTargetRef = { apiVersion: "apps/v1", kind: "Deployment", name: deploy.metadata.name }
     spec.minReplicas = replicas
     spec.maxReplicas = 10
   }
 
   resource k8s.pod_disruption_budget pdb {
-    metadata.name = "crud-api-${color}"
-    metadata.namespace
+    metadata = { name: "crud-api-${color}", namespace }
     spec.minAvailable = 1
     spec.selector.matchLabels = labels
   }
 
   resource k8s.network_policy allow_http {
-    metadata.name = "crud-api-${color}-http"
-    metadata.namespace
+    metadata = { name: "crud-api-${color}-http", namespace }
     spec.podSelector.matchLabels = labels
     spec.policyTypes = ["Ingress"]
     spec.ingress = [{
-      from: [{ namespaceSelector: { matchLabels: { "kubernetes.io/metadata.name": "ingress-nginx" } } }],
-      ports: [{ port: 8080, protocol: "TCP" }]
+      from: [{
+        namespaceSelector: { matchLabels: { "kubernetes.io/metadata.name": "ingress-nginx" } },
+      }],
+      ports: [{ port: 8080, protocol: "TCP" }],
     }]
   }
-
-  # Only while the instance runs: a color with no run has no Deployment,
-  # and a ref to it would dangle.
-  output ready_replicas: int = n where has color, n = deploy.status.readyReplicas
-  output total_replicas: int = n where has color, n = deploy.status.replicas
 }
 
 ########################################
@@ -414,8 +398,6 @@ auto_reconcile(t, a, p) where drift(t, a, p, _, _), owned_label(l), p == "metada
   (comment)
   (comment)
   (comment)
-  (edition
-    (integer))
   (input
     (identifier)
     (type
@@ -461,16 +443,6 @@ auto_reconcile(t, a, p) where drift(t, a, p, _, _), owned_label(l), p == "metada
         (type
           (dotted_name
             (identifier))))))
-  (comment)
-  (use
-    (dotted_name
-      (identifier)
-      (identifier)))
-  (comment)
-  (use
-    (dotted_name
-      (identifier)
-      (identifier)))
   (decl
     (dotted_name
       (identifier))
@@ -479,6 +451,16 @@ auto_reconcile(t, a, p) where drift(t, a, p, _, _), owned_label(l), p == "metada
         (identifier))
       (field_declaration
         (identifier))))
+  (comment)
+  (use
+    (dotted_name
+      (identifier)
+      (identifier)))
+  (comment)
+  (use
+    (dotted_name
+      (identifier)
+      (identifier)))
   (rule
     (call
       (identifier)
@@ -875,19 +857,19 @@ auto_reconcile(t, a, p) where drift(t, a, p, _, _), owned_label(l), p == "metada
     (block
       (field
         (block_path
-          (identifier)
           (identifier))
-        (string
-          (string_content)))
-      (field
-        (block_path
-          (identifier)
-          (identifier))
-        (member_expression
-          (member_expression
+        (object
+          (object_field
             (identifier)
-            (identifier))
-          (identifier)))
+            (string
+              (string_content)))
+          (object_field
+            (identifier)
+            (member_expression
+              (member_expression
+                (identifier)
+                (identifier))
+              (identifier)))))
       (field
         (block_path
           (identifier))
@@ -968,70 +950,68 @@ auto_reconcile(t, a, p) where drift(t, a, p, _, _), owned_label(l), p == "metada
         (block_path
           (identifier)
           (identifier)
-          (identifier)
           (identifier))
-        (string
-          (string_content)))
-      (field
-        (block_path
-          (identifier)
-          (identifier)
-          (identifier)
-          (identifier))
-        (list
-          (object
-            (object_field
-              (identifier)
-              (string
-                (string_content)))
-            (object_field
-              (identifier)
-              (identifier))
-            (object_field
-              (identifier)
-              (list
-                (string
-                  (string_content))
-                (string
-                  (string_content))
-                (string
-                  (interpolation
-                    (identifier)))))
-            (object_field
-              (identifier)
-              (list
-                (object
-                  (object_field
-                    (identifier)
-                    (object
-                      (object_field
-                        (identifier)
-                        (member_expression
-                          (member_expression
-                            (identifier)
-                            (identifier))
-                          (identifier))))))))
-            (object_field
-              (identifier)
+        (object
+          (object_field
+            (identifier)
+            (string
+              (string_content)))
+          (object_field
+            (identifier)
+            (list
               (object
                 (object_field
                   (identifier)
-                  (object
-                    (object_field
-                      (identifier)
-                      (quantity))
-                    (object_field
-                      (identifier)
-                      (quantity))))
+                  (string
+                    (string_content)))
+                (object_field
+                  (identifier)
+                  (identifier))
+                (object_field
+                  (identifier)
+                  (list
+                    (string
+                      (string_content))
+                    (string
+                      (string_content))
+                    (string
+                      (interpolation
+                        (identifier)))))
+                (object_field
+                  (identifier)
+                  (list
+                    (object
+                      (object_field
+                        (identifier)
+                        (object
+                          (object_field
+                            (identifier)
+                            (member_expression
+                              (member_expression
+                                (identifier)
+                                (identifier))
+                              (identifier))))))))
                 (object_field
                   (identifier)
                   (object
                     (object_field
                       (identifier)
-                      (quantity))
+                      (object
+                        (object_field
+                          (identifier)
+                          (quantity))
+                        (object_field
+                          (identifier)
+                          (quantity))))
                     (object_field
                       (identifier)
-                      (quantity)))))))))))
+                      (object
+                        (object_field
+                          (identifier)
+                          (quantity))
+                        (object_field
+                          (identifier)
+                          (quantity)))))))))))))
   (comment)
   (comment)
   (rule
@@ -1224,19 +1204,19 @@ auto_reconcile(t, a, p) where drift(t, a, p, _, _), owned_label(l), p == "metada
     (block
       (field
         (block_path
-          (identifier)
           (identifier))
-        (string
-          (string_content)))
-      (field
-        (block_path
-          (identifier)
-          (identifier))
-        (member_expression
-          (member_expression
+        (object
+          (object_field
             (identifier)
-            (identifier))
-          (identifier)))
+            (string
+              (string_content)))
+          (object_field
+            (identifier)
+            (member_expression
+              (member_expression
+                (identifier)
+                (identifier))
+              (identifier)))))
       (field
         (block_path
           (identifier)
@@ -1302,6 +1282,40 @@ auto_reconcile(t, a, p) where drift(t, a, p, _, _), owned_label(l), p == "metada
         (type
           (dotted_name
             (identifier))))
+      (comment)
+      (comment)
+      (output
+        (identifier)
+        (type
+          (dotted_name
+            (identifier)))
+        (identifier)
+        (body
+          (has_literal
+            (identifier))
+          (comparison
+            (identifier)
+            (member_expression
+              (member_expression
+                (identifier)
+                (identifier))
+              (identifier)))))
+      (output
+        (identifier)
+        (type
+          (dotted_name
+            (identifier)))
+        (identifier)
+        (body
+          (has_literal
+            (identifier))
+          (comparison
+            (identifier)
+            (member_expression
+              (member_expression
+                (identifier)
+                (identifier))
+              (identifier)))))
       (let
         (identifier)
         (object
@@ -1435,16 +1449,16 @@ auto_reconcile(t, a, p) where drift(t, a, p, _, _), owned_label(l), p == "metada
         (block
           (field
             (block_path
-              (identifier)
               (identifier))
-            (string
-              (string_content)
-              (interpolation
+            (object
+              (object_field
+                (identifier)
+                (string
+                  (string_content)
+                  (interpolation
+                    (identifier))))
+              (object_field
                 (identifier))))
-          (field
-            (block_path
-              (identifier)
-              (identifier)))
           (field
             (block_path
               (identifier)
@@ -1483,16 +1497,16 @@ auto_reconcile(t, a, p) where drift(t, a, p, _, _), owned_label(l), p == "metada
         (block
           (field
             (block_path
-              (identifier)
               (identifier))
-            (string
-              (string_content)
-              (interpolation
+            (object
+              (object_field
+                (identifier)
+                (string
+                  (string_content)
+                  (interpolation
+                    (identifier))))
+              (object_field
                 (identifier))))
-          (field
-            (block_path
-              (identifier)
-              (identifier)))
           (field
             (block_path
               (identifier)
@@ -1512,17 +1526,17 @@ auto_reconcile(t, a, p) where drift(t, a, p, _, _), owned_label(l), p == "metada
         (block
           (field
             (block_path
-              (identifier)
               (identifier))
-            (string
-              (string_content)
-              (interpolation
-                (identifier))
-              (string_content)))
-          (field
-            (block_path
-              (identifier)
-              (identifier)))
+            (object
+              (object_field
+                (identifier)
+                (string
+                  (string_content)
+                  (interpolation
+                    (identifier))
+                  (string_content)))
+              (object_field
+                (identifier))))
           (field
             (block_path
               (identifier)
@@ -1567,41 +1581,7 @@ auto_reconcile(t, a, p) where drift(t, a, p, _, _), owned_label(l), p == "metada
                       (object_field
                         (identifier)
                         (string
-                          (string_content)))))))))))
-      (comment)
-      (comment)
-      (output
-        (identifier)
-        (type
-          (dotted_name
-            (identifier)))
-        (identifier)
-        (body
-          (has_literal
-            (identifier))
-          (comparison
-            (identifier)
-            (member_expression
-              (member_expression
-                (identifier)
-                (identifier))
-              (identifier)))))
-      (output
-        (identifier)
-        (type
-          (dotted_name
-            (identifier)))
-        (identifier)
-        (body
-          (has_literal
-            (identifier))
-          (comparison
-            (identifier)
-            (member_expression
-              (member_expression
-                (identifier)
-                (identifier))
-              (identifier)))))))
+                          (string_content)))))))))))))
   (comment)
   (comment)
   (comment)

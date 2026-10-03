@@ -16,8 +16,6 @@ crates/dform-mock/schemas/fake.df
 # accepts any configured attribute) unless a change to one replaces the
 # object: a vpc's or a subnet's cidr is force_new.
 
-edition 2026
-
 type_provider(net.vpc, "fakecloud")
 type_provider(net.subnet, "fakecloud")
 type_provider(net.vpc_peering, "fakecloud")
@@ -80,13 +78,25 @@ type_refine("db.postgres", "backup_days", range(1, 35))
 # Descriptions (`type_doc(Type, Path, Text)`; the path "" is the type's):
 # the language server's hover and completion show them.
 type_doc(net.vpc, "", "A virtual network: an isolated address space subnets are cut from.")
-type_doc(net.vpc, "cidr", "The network's IPv4 range in CIDR notation. Changing it replaces the network.")
+type_doc(
+  net.vpc,
+  "cidr",
+  "The network's IPv4 range in CIDR notation. Changing it replaces the network.",
+)
 type_doc(net.vpc, "tags", "Key-value labels on the network.")
 type_doc(net.subnet, "", "A range of a network's addresses in one zone.")
-type_doc(net.subnet, "cidr", "The subnet's IPv4 range, inside its network's; a /24 or larger. Changing it replaces the subnet.")
+type_doc(
+  net.subnet,
+  "cidr",
+  "The subnet's IPv4 range, inside its network's; a /24 or larger. Changing it replaces the subnet.",
+)
 type_doc(net.subnet, "vpc", "The network the subnet is in.")
 type_doc(net.subnet, "zone", "The zone the subnet's addresses are served in.")
-type_doc(net.subnet, "visibility", "\"private\" or \"public\": whether the subnet routes to the internet.")
+type_doc(
+  net.subnet,
+  "visibility",
+  "\"private\" or \"public\": whether the subnet routes to the internet.",
+)
 type_doc(net.vpc_peering, "", "A peering connection between two networks.")
 type_doc(net.vpc_peering, "requester_vpc", "The network that requests the peering.")
 type_doc(net.vpc_peering, "accepter_vpc", "The network that accepts the peering.")
@@ -101,9 +111,17 @@ type_doc("db.postgres", "backup_days", "How many days of automated backups are k
 type_doc("db.postgres", "multi_az", "Whether a standby replica runs in a second zone.")
 type_doc("db.postgres", "public", "Whether the database has an address outside its network.")
 type_doc("db.postgres", "subnets", "The subnets the database may be placed in.")
-type_doc("db.postgres", "endpoint", "The address clients connect to, known once the database exists.")
+type_doc(
+  "db.postgres",
+  "endpoint",
+  "The address clients connect to, known once the database exists.",
+)
 type_doc(k8s.cluster, "", "A managed Kubernetes control plane.")
-type_doc(k8s.cluster, "private_api", "Whether the API server is reachable only from inside the network.")
+type_doc(
+  k8s.cluster,
+  "private_api",
+  "Whether the API server is reachable only from inside the network.",
+)
 type_doc(k8s.cluster, "subnets", "The subnets the cluster's nodes and endpoints use.")
 type_doc(k8s.cluster, "version", "The Kubernetes version of the control plane.")
 type_doc(k8s.cluster, "api_endpoint", "The API server's URL, known once the cluster exists.")
@@ -116,7 +134,11 @@ type_doc("iam.role", "name", "The role's name, unique in the account.")
 type_doc("iam.role", "assume", "Who may assume the role: `{ principals: [...] }`.")
 type_doc("iam.policy", "", "A set of permissions.")
 type_doc("iam.policy", "name", "The policy's name, unique in the account.")
-type_doc("iam.policy", "statements", "The policy's statements: each an effect, actions and resources.")
+type_doc(
+  "iam.policy",
+  "statements",
+  "The policy's statements: each an effect, actions and resources.",
+)
 type_doc("iam.role_policy_attachment", "", "Grants a policy's permissions to a role.")
 type_doc("iam.role_policy_attachment", "role", "The role.")
 type_doc("iam.role_policy_attachment", "policy", "The policy.")
@@ -137,8 +159,6 @@ type_doc("iam.role_policy_attachment", "policy", "The policy.")
   (comment)
   (comment)
   (comment)
-  (edition
-    (integer))
   (fact
     (call
       (identifier)

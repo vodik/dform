@@ -5,13 +5,11 @@ examples/decl/stacks/decl_demo.df
 # Demo: schemas + record matching + wildcards. No resources.
 # To run it, from this directory: README.md.
 
-edition 2026
+# The names are the record's fields: `project{ network_name: n }`.
+decl project(id: int, name: string, region: string, network_name: string, proxy_cidr: string)
 
 # No resources, but a plan still runs against a provider: the mock's fake.
 provider fake
-
-# The names are the record's fields: `project{ network_name: n }`.
-decl project(id: int, name: string, region: string, network_name: string, proxy_cidr: string)
 
 project(1, "alpha", "us-east-1", "net-a", "10.0.0.0/24")
 project(2, "beta", "us-east-1", "net-b", "10.1.0.0/24")
@@ -27,11 +25,6 @@ proj_ids(id) where project(id, _, _, _, _)
 (source_file
   (comment)
   (comment)
-  (edition
-    (integer))
-  (comment)
-  (provider
-    (identifier))
   (comment)
   (decl
     (dotted_name
@@ -62,6 +55,9 @@ proj_ids(id) where project(id, _, _, _, _)
         (type
           (dotted_name
             (identifier))))))
+  (comment)
+  (provider
+    (identifier))
   (fact
     (call
       (identifier)

@@ -27,8 +27,6 @@ crates/dform-mock/schemas/aws-mock.df
 # typed `ref(T)`: the program gives it the resource (`vpc_id = main`), and
 # the provider its id (R-43).
 
-edition 2026
-
 # aws.vpc
 type_provider("aws.vpc", "aws")
 type_attr("aws.vpc", "id", "string", ["computed", "id"])
@@ -127,7 +125,12 @@ type_attr("aws.instance", "subnet_id", "ref(aws.subnet)", ["optional_computed"])
 type_mint("aws.instance", "subnet_id", "subnet-default{n}")
 type_attr("aws.instance", "availability_zone", "string", ["optional_computed"])
 type_mint("aws.instance", "availability_zone", "us-east-1a")
-type_attr("aws.instance", "vpc_security_group_ids", "set(ref(aws.security_group))", ["optional_computed"])
+type_attr(
+  "aws.instance",
+  "vpc_security_group_ids",
+  "set(ref(aws.security_group))",
+  ["optional_computed"],
+)
 type_attr("aws.instance", "associate_public_ip_address", "bool", ["optional_computed"])
 type_mint("aws.instance", "associate_public_ip_address", false)
 type_attr("aws.instance", "private_ip", "string", ["optional_computed"])
@@ -240,7 +243,12 @@ type_attr("aws.db_instance", "password", "string", ["sensitive"])
 type_attr("aws.db_instance", "manage_master_user_password", "bool", [])
 type_attr("aws.db_instance", "db_subnet_group_name", "string", ["optional_computed"])
 type_mint("aws.db_instance", "db_subnet_group_name", "default")
-type_attr("aws.db_instance", "vpc_security_group_ids", "set(ref(aws.security_group))", ["optional_computed"])
+type_attr(
+  "aws.db_instance",
+  "vpc_security_group_ids",
+  "set(ref(aws.security_group))",
+  ["optional_computed"],
+)
 type_attr("aws.db_instance", "availability_zone", "string", ["optional_computed"])
 type_mint("aws.db_instance", "availability_zone", "us-east-1b")
 type_attr("aws.db_instance", "multi_az", "bool", ["optional_computed"])
@@ -256,7 +264,11 @@ type_attr("aws.db_instance", "skip_final_snapshot", "bool", [])
 type_attr("aws.db_instance", "address", "string", ["computed"])
 type_mint("aws.db_instance", "address", "{doc:identifier}.c123abc.us-east-1.rds.amazonaws.com")
 type_attr("aws.db_instance", "endpoint", "string", ["computed"])
-type_mint("aws.db_instance", "endpoint", "{doc:identifier}.c123abc.us-east-1.rds.amazonaws.com:5432")
+type_mint(
+  "aws.db_instance",
+  "endpoint",
+  "{doc:identifier}.c123abc.us-east-1.rds.amazonaws.com:5432",
+)
 type_attr("aws.db_instance", "hosted_zone_id", "string", ["computed"])
 type_mint("aws.db_instance", "hosted_zone_id", "Z2R2ITUGPM61AM")
 type_attr("aws.db_instance", "resource_id", "string", ["computed"])
@@ -268,11 +280,19 @@ type_attr("aws.db_instance", "master_user_secret", "list", ["computed"])
 # aws.lb
 type_provider("aws.lb", "aws")
 type_attr("aws.lb", "id", "string", ["computed", "id"])
-type_mint("aws.lb", "id", "arn:aws:elasticloadbalancing:us-east-1:123456789012:loadbalancer/app/{name}/{hash}")
+type_mint(
+  "aws.lb",
+  "id",
+  "arn:aws:elasticloadbalancing:us-east-1:123456789012:loadbalancer/app/{name}/{hash}",
+)
 type_attr("aws.lb", "tags", "map", [])
 type_attr("aws.lb", "tags_all", "map", ["computed"])
 type_attr("aws.lb", "arn", "string", ["computed"])
-type_mint("aws.lb", "arn", "arn:aws:elasticloadbalancing:us-east-1:123456789012:loadbalancer/app/{name}/{hash}")
+type_mint(
+  "aws.lb",
+  "arn",
+  "arn:aws:elasticloadbalancing:us-east-1:123456789012:loadbalancer/app/{name}/{hash}",
+)
 type_attr("aws.lb", "name", "string", ["optional_computed"])
 type_mint("aws.lb", "name", "tf-lb-{hash}")
 type_attr("aws.lb", "name_prefix", "string", ["optional_computed", "name_like"])
@@ -297,11 +317,19 @@ type_mint("aws.lb", "vpc_id", "vpc-{hash}")
 # aws.lb_listener
 type_provider("aws.lb_listener", "aws")
 type_attr("aws.lb_listener", "id", "string", ["computed", "id"])
-type_mint("aws.lb_listener", "id", "arn:aws:elasticloadbalancing:us-east-1:123456789012:listener/app/{name}/{hash}")
+type_mint(
+  "aws.lb_listener",
+  "id",
+  "arn:aws:elasticloadbalancing:us-east-1:123456789012:listener/app/{name}/{hash}",
+)
 type_attr("aws.lb_listener", "tags", "map", [])
 type_attr("aws.lb_listener", "tags_all", "map", ["computed"])
 type_attr("aws.lb_listener", "arn", "string", ["computed"])
-type_mint("aws.lb_listener", "arn", "arn:aws:elasticloadbalancing:us-east-1:123456789012:listener/app/{name}/{hash}")
+type_mint(
+  "aws.lb_listener",
+  "arn",
+  "arn:aws:elasticloadbalancing:us-east-1:123456789012:listener/app/{name}/{hash}",
+)
 type_attr("aws.lb_listener", "load_balancer_arn", "string", ["required"])
 type_attr("aws.lb_listener", "port", "int", [])
 type_attr("aws.lb_listener", "protocol", "string", ["optional_computed"])
@@ -364,28 +392,76 @@ type_doc("aws.vpc", "cidr_block", "The IPv4 CIDR block of the VPC. Changing it r
 type_doc("aws.vpc", "tags", "A map of tags to assign to the resource.")
 type_doc("aws.subnet", "", "A subnet of a VPC.")
 type_doc("aws.subnet", "vpc_id", "The VPC ID.")
-type_doc("aws.subnet", "cidr_block", "The IPv4 CIDR block for the subnet. Changing it replaces the subnet.")
-type_doc("aws.subnet", "availability_zone", "The AZ for the subnet; AWS picks one when it is not set.")
-type_doc("aws.security_group", "", "A security group: stateful firewall rules for the instances in it.")
-type_doc("aws.security_group", "name", "The name of the security group; AWS generates one when it is not set.")
+type_doc(
+  "aws.subnet",
+  "cidr_block",
+  "The IPv4 CIDR block for the subnet. Changing it replaces the subnet.",
+)
+type_doc(
+  "aws.subnet",
+  "availability_zone",
+  "The AZ for the subnet; AWS picks one when it is not set.",
+)
+type_doc(
+  "aws.security_group",
+  "",
+  "A security group: stateful firewall rules for the instances in it.",
+)
+type_doc(
+  "aws.security_group",
+  "name",
+  "The name of the security group; AWS generates one when it is not set.",
+)
 type_doc("aws.security_group", "vpc_id", "The VPC ID; the default VPC when it is not set.")
-type_doc("aws.security_group", "ingress", "Ingress rules, a set: each from_port, to_port, protocol and cidr_blocks.")
-type_doc("aws.security_group", "egress", "Egress rules, a set: each from_port, to_port, protocol and cidr_blocks.")
+type_doc(
+  "aws.security_group",
+  "ingress",
+  "Ingress rules, a set: each from_port, to_port, protocol and cidr_blocks.",
+)
+type_doc(
+  "aws.security_group",
+  "egress",
+  "Egress rules, a set: each from_port, to_port, protocol and cidr_blocks.",
+)
 type_doc("aws.instance", "", "An EC2 instance.")
 type_doc("aws.instance", "ami", "The AMI to use for the instance.")
 type_doc("aws.instance", "instance_type", "The instance type, such as t3.micro.")
-type_doc("aws.instance", "subnet_id", "The VPC subnet ID to launch in; AWS picks one when it is not set.")
-type_doc("aws.instance", "vpc_security_group_ids", "The security group IDs to associate with, a set.")
+type_doc(
+  "aws.instance",
+  "subnet_id",
+  "The VPC subnet ID to launch in; AWS picks one when it is not set.",
+)
+type_doc(
+  "aws.instance",
+  "vpc_security_group_ids",
+  "The security group IDs to associate with, a set.",
+)
 type_doc("aws.instance", "tags", "A map of tags to assign to the resource.")
 type_doc("aws.eip", "", "An Elastic IP address.")
 type_doc("aws.eip", "domain", "Whether the address is for use in a VPC (\"vpc\").")
 type_doc("aws.eip", "instance", "The EC2 instance ID the address is associated with.")
 type_doc("aws.db_instance", "", "An RDS database instance.")
-type_doc("aws.db_instance", "identifier", "The name of the RDS instance; AWS generates one when it is not set.")
-type_doc("aws.db_instance", "instance_class", "The instance type of the RDS instance, such as db.t3.micro.")
+type_doc(
+  "aws.db_instance",
+  "identifier",
+  "The name of the RDS instance; AWS generates one when it is not set.",
+)
+type_doc(
+  "aws.db_instance",
+  "instance_class",
+  "The instance type of the RDS instance, such as db.t3.micro.",
+)
 type_doc("aws.db_instance", "password", "The password for the master database user.")
-type_doc("aws.db_instance", "skip_final_snapshot", "Whether no final snapshot is taken before the instance is deleted.")
-type_doc("aws.db_instance", "vpc_security_group_ids", "The VPC security groups to associate with, a set.")
+type_doc(
+  "aws.db_instance",
+  "skip_final_snapshot",
+  "Whether no final snapshot is taken before the instance is deleted.",
+)
+type_doc(
+  "aws.db_instance",
+  "vpc_security_group_ids",
+  "The VPC security groups to associate with, a set.",
+)
 
 ---
 
@@ -414,8 +490,6 @@ type_doc("aws.db_instance", "vpc_security_group_ids", "The VPC security groups t
   (comment)
   (comment)
   (comment)
-  (edition
-    (integer))
   (comment)
   (fact
     (call

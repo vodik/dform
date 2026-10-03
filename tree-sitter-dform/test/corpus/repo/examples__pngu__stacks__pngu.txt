@@ -18,8 +18,6 @@ examples/pngu/stacks/pngu.df
 # - The monitoring dashboard JSON is read by the loader `json(path)` from a stub,
 #   files/dashboard-pngu.json (see terraform/modules/monitoring/dashboard-pngu.json).
 
-edition 2026
-
 # The stack's key, typed: `dform plan pngu env=qa` is an error naming it.
 key env: environment = "dev"
 # The project and its networks, each environment's in a settings block
@@ -41,8 +39,9 @@ input gke {
 # The rows are data/peerings.csv's, typed column by column as `decl peering`
 # says: a row whose env is not one of these is an error naming its line.
 input peering from csv("data/peerings.csv")
-
 decl peering(env: environment, name: string, peer_network: string)
+output active_env = env
+output project_id = gcp.project_id
 
 ########################################
 # Environment selection
@@ -68,7 +67,7 @@ set {
     subnet_cidr: "10.141.76.0/22",
     pods_cidr: "10.141.80.0/21",
     services_cidr: "10.141.88.0/21",
-    static_ips: { "pngu-grpc": { type: "INTERNAL" } }
+    static_ips: { "pngu-grpc": { type: "INTERNAL" } },
   }
 } where env == "dev"
 
@@ -85,7 +84,7 @@ set {
     subnet_cidr: "10.141.100.0/22",
     pods_cidr: "10.141.104.0/21",
     services_cidr: "10.141.112.0/21",
-    static_ips: { "pngu-grpc": { type: "INTERNAL" } }
+    static_ips: { "pngu-grpc": { type: "INTERNAL" } },
   }
 } where env == "stg"
 
@@ -102,7 +101,7 @@ set {
     subnet_cidr: "10.141.124.0/22",
     pods_cidr: "10.141.128.0/21",
     services_cidr: "10.141.136.0/21",
-    static_ips: { "pngu-grpc": { type: "INTERNAL" } }
+    static_ips: { "pngu-grpc": { type: "INTERNAL" } },
   }
 } where env == "prod"
 
@@ -150,7 +149,7 @@ resource google.compute_subnetwork gke_subnet {
   subnet_private_access = true
   secondary_ranges = [
     { range_name: "${gcp.project_name}-gke-pods-range", ip_cidr_range: gke.pods_cidr },
-    { range_name: "${gcp.project_name}-gke-svc-range", ip_cidr_range: gke.services_cidr }
+    { range_name: "${gcp.project_name}-gke-svc-range", ip_cidr_range: gke.services_cidr },
   ]
 }
 
@@ -236,9 +235,6 @@ resource alert_metrics_pack pngu {
 # Optional outputs (handy for wiring)
 ########################################
 
-output active_env = env
-output project_id = gcp.project_id
-
 ---
 
 (source_file
@@ -257,8 +253,6 @@ output project_id = gcp.project_id
   (comment)
   (comment)
   (comment)
-  (edition
-    (integer))
   (comment)
   (input
     (identifier)
@@ -363,6 +357,14 @@ output project_id = gcp.project_id
         (type
           (dotted_name
             (identifier))))))
+  (output
+    (identifier)
+    (identifier))
+  (output
+    (identifier)
+    (member_expression
+      (identifier)
+      (identifier)))
   (comment)
   (comment)
   (comment)
@@ -1068,12 +1070,4 @@ output project_id = gcp.project_id
           (string_content)))))
   (comment)
   (comment)
-  (comment)
-  (output
-    (identifier)
-    (identifier))
-  (output
-    (identifier)
-    (member_expression
-      (identifier)
-      (identifier))))
+  (comment))

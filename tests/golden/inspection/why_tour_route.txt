@@ -1,38 +1,38 @@
 net.route["blue-to-green"]
-  examples/tour/stacks/tour.df:285  resource net.route "${a}-to-${b}" { .. } where reaches(a, b), a != b, network_of(b, v), dest = net.vpc[v].cidr
+  examples/tour/stacks/tour.df:283  resource net.route "${a}-to-${b}" { .. } where reaches(a, b), a != b, network_of(b, v), dest = net.vpc[v].cidr
   with a = "blue", b = "green", v = "green::vpc", dest = 10.2.0.0/16
        "${a}-to-${b}" = "blue-to-green"
        net.vpc[v].cidr = 10.2.0.0/16
   ├─ reaches("blue", "green")
-  │    examples/tour/stacks/tour.df:283  reaches(a, c) where reaches(a, b), link(b, c)
+  │    examples/tour/stacks/tour.df:281  reaches(a, c) where reaches(a, b), link(b, c)
   │    with a = "blue", c = "green", b = "main"
   │    ├─ reaches("blue", "main")
-  │    │    examples/tour/stacks/tour.df:282  reaches(a, b) where link(a, b)
+  │    │    examples/tour/stacks/tour.df:280  reaches(a, b) where link(a, b)
   │    │    with a = "blue", b = "main"
   │    │    └─ link("blue", "main")
-  │    │         examples/tour/stacks/tour.df:280  link(t, h) where hub(h), spoke(t)
+  │    │         examples/tour/stacks/tour.df:278  link(t, h) where hub(h), spoke(t)
   │    │         with t = "blue", h = "main"
-  │    │         ├─ hub("main")   examples/tour/stacks/tour.df:252
-  │    │         └─ spoke("blue")   examples/tour/stacks/tour.df:249
+  │    │         ├─ hub("main")   examples/tour/stacks/tour.df:250
+  │    │         └─ spoke("blue")   examples/tour/stacks/tour.df:247
   │    └─ link("main", "green")
-  │         examples/tour/stacks/tour.df:279  link(h, t) where hub(h), spoke(t)
+  │         examples/tour/stacks/tour.df:277  link(h, t) where hub(h), spoke(t)
   │         with h = "main", t = "green"
-  │         ├─ hub("main")   examples/tour/stacks/tour.df:252
-  │         └─ spoke("green")   examples/tour/stacks/tour.df:250
+  │         ├─ hub("main")   examples/tour/stacks/tour.df:250
+  │         └─ spoke("green")   examples/tour/stacks/tour.df:248
   ├─ network_of("green", "green::vpc")
-  │    examples/tour/stacks/tour.df:255  network_of(t, v) where spoke(t), v = network[t].vpc
+  │    examples/tour/stacks/tour.df:253  network_of(t, v) where spoke(t), v = network[t].vpc
   │    with t = "green", v = "green::vpc"
   │         network[t].vpc = "green::vpc"
-  │    ├─ spoke("green")   examples/tour/stacks/tour.df:250
-  │    ├─ instance network green   examples/tour/stacks/tour.df:231
+  │    ├─ spoke("green")   examples/tour/stacks/tour.df:248
+  │    ├─ instance network green   examples/tour/stacks/tour.df:229
   │    └─ output green.vpc = "green::vpc"
   │         merged from 1 contribution
-  │         └─ "green::vpc"   examples/tour/stacks/tour.df:218   (instance network green)
+  │         └─ "green::vpc"   examples/tour/stacks/tour.df:216   (instance network green)
   └─ net.vpc["green::vpc"].cidr = 10.2.0.0/16
        merged from 1 contribution
        └─ 10.2.0.0/16
-            examples/tour/stacks/tour.df:220  resource net.vpc vpc { cidr .. }   (instance network green)
+            examples/tour/stacks/tour.df:218  resource net.vpc vpc { cidr .. }   (instance network green)
             with cidr = 10.2.0.0/16
             └─ input green.cidr = 10.2.0.0/16
                  merged from 1 contribution
-                 └─ 10.2.0.0/16   examples/tour/stacks/tour.df:231
+                 └─ 10.2.0.0/16   examples/tour/stacks/tour.df:229

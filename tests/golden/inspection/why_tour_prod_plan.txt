@@ -6,153 +6,153 @@ definite:
   from = "blue"
   tags.team = "shop"
   to = "green"
-  by examples/tour/stacks/tour.df:285  resource net.route "${a}-to-${b}" { .. } where reaches(a, b), a != b, network_of(b, v), dest = net.vpc[v].cidr
-  because examples/tour/stacks/tour.df:250  spoke("green")
-  because examples/tour/stacks/tour.df:252  hub("main")
-  because examples/tour/stacks/tour.df:249  spoke("blue")
-  because examples/tour/stacks/tour.df:231  instance network green
-  because examples/tour/stacks/tour.df:218  output green.vpc = "green::vpc"   (instance network green)
-  because examples/tour/stacks/tour.df:231  input green.cidr = 10.2.0.0/16
+  by examples/tour/stacks/tour.df:283  resource net.route "${a}-to-${b}" { .. } where reaches(a, b), a != b, network_of(b, v), dest = net.vpc[v].cidr
+  because examples/tour/stacks/tour.df:248  spoke("green")
+  because examples/tour/stacks/tour.df:250  hub("main")
+  because examples/tour/stacks/tour.df:247  spoke("blue")
+  because examples/tour/stacks/tour.df:229  instance network green
+  because examples/tour/stacks/tour.df:216  output green.vpc = "green::vpc"   (instance network green)
+  because examples/tour/stacks/tour.df:229  input green.cidr = 10.2.0.0/16
 + net.route["blue-to-main"]
   destination = "10.0.0.0/16"
   from = "blue"
   tags.team = "shop"
   to = "main"
-  by examples/tour/stacks/tour.df:285  resource net.route "${a}-to-${b}" { .. } where reaches(a, b), a != b, network_of(b, v), dest = net.vpc[v].cidr
-  because examples/tour/stacks/tour.df:249  spoke("blue")
-  because examples/tour/stacks/tour.df:252  hub("main")
-  because examples/tour/stacks/tour.df:48  net.vpc["main"].cidr = 10.0.0.0/16
+  by examples/tour/stacks/tour.df:283  resource net.route "${a}-to-${b}" { .. } where reaches(a, b), a != b, network_of(b, v), dest = net.vpc[v].cidr
+  because examples/tour/stacks/tour.df:247  spoke("blue")
+  because examples/tour/stacks/tour.df:250  hub("main")
+  because examples/tour/stacks/tour.df:46  net.vpc["main"].cidr = 10.0.0.0/16
 + net.route["green-to-blue"]
   destination = "10.1.0.0/16"
   from = "green"
   tags.team = "shop"
   to = "blue"
-  by examples/tour/stacks/tour.df:285  resource net.route "${a}-to-${b}" { .. } where reaches(a, b), a != b, network_of(b, v), dest = net.vpc[v].cidr
-  because examples/tour/stacks/tour.df:249  spoke("blue")
-  because examples/tour/stacks/tour.df:252  hub("main")
-  because examples/tour/stacks/tour.df:250  spoke("green")
-  because examples/tour/stacks/tour.df:229  instance network blue
-  because examples/tour/stacks/tour.df:218  output blue.vpc = "blue::vpc"   (instance network blue)
-  because examples/tour/stacks/tour.df:229  input blue.cidr = 10.1.0.0/16
+  by examples/tour/stacks/tour.df:283  resource net.route "${a}-to-${b}" { .. } where reaches(a, b), a != b, network_of(b, v), dest = net.vpc[v].cidr
+  because examples/tour/stacks/tour.df:247  spoke("blue")
+  because examples/tour/stacks/tour.df:250  hub("main")
+  because examples/tour/stacks/tour.df:248  spoke("green")
+  because examples/tour/stacks/tour.df:227  instance network blue
+  because examples/tour/stacks/tour.df:216  output blue.vpc = "blue::vpc"   (instance network blue)
+  because examples/tour/stacks/tour.df:227  input blue.cidr = 10.1.0.0/16
 + net.route["green-to-main"]
   destination = "10.0.0.0/16"
   from = "green"
   tags.team = "shop"
   to = "main"
-  by examples/tour/stacks/tour.df:285  resource net.route "${a}-to-${b}" { .. } where reaches(a, b), a != b, network_of(b, v), dest = net.vpc[v].cidr
-  because examples/tour/stacks/tour.df:250  spoke("green")
-  because examples/tour/stacks/tour.df:252  hub("main")
-  because examples/tour/stacks/tour.df:48  net.vpc["main"].cidr = 10.0.0.0/16
+  by examples/tour/stacks/tour.df:283  resource net.route "${a}-to-${b}" { .. } where reaches(a, b), a != b, network_of(b, v), dest = net.vpc[v].cidr
+  because examples/tour/stacks/tour.df:248  spoke("green")
+  because examples/tour/stacks/tour.df:250  hub("main")
+  because examples/tour/stacks/tour.df:46  net.vpc["main"].cidr = 10.0.0.0/16
 + net.route["main-to-blue"]
   destination = "10.1.0.0/16"
   from = "main"
   tags.team = "shop"
   to = "blue"
-  by examples/tour/stacks/tour.df:285  resource net.route "${a}-to-${b}" { .. } where reaches(a, b), a != b, network_of(b, v), dest = net.vpc[v].cidr
-  because examples/tour/stacks/tour.df:249  spoke("blue")
-  because examples/tour/stacks/tour.df:252  hub("main")
-  because examples/tour/stacks/tour.df:229  instance network blue
-  because examples/tour/stacks/tour.df:218  output blue.vpc = "blue::vpc"   (instance network blue)
-  because examples/tour/stacks/tour.df:229  input blue.cidr = 10.1.0.0/16
+  by examples/tour/stacks/tour.df:283  resource net.route "${a}-to-${b}" { .. } where reaches(a, b), a != b, network_of(b, v), dest = net.vpc[v].cidr
+  because examples/tour/stacks/tour.df:247  spoke("blue")
+  because examples/tour/stacks/tour.df:250  hub("main")
+  because examples/tour/stacks/tour.df:227  instance network blue
+  because examples/tour/stacks/tour.df:216  output blue.vpc = "blue::vpc"   (instance network blue)
+  because examples/tour/stacks/tour.df:227  input blue.cidr = 10.1.0.0/16
 + net.route["main-to-green"]
   destination = "10.2.0.0/16"
   from = "main"
   tags.team = "shop"
   to = "green"
-  by examples/tour/stacks/tour.df:285  resource net.route "${a}-to-${b}" { .. } where reaches(a, b), a != b, network_of(b, v), dest = net.vpc[v].cidr
-  because examples/tour/stacks/tour.df:250  spoke("green")
-  because examples/tour/stacks/tour.df:252  hub("main")
-  because examples/tour/stacks/tour.df:231  instance network green
-  because examples/tour/stacks/tour.df:218  output green.vpc = "green::vpc"   (instance network green)
-  because examples/tour/stacks/tour.df:231  input green.cidr = 10.2.0.0/16
+  by examples/tour/stacks/tour.df:283  resource net.route "${a}-to-${b}" { .. } where reaches(a, b), a != b, network_of(b, v), dest = net.vpc[v].cidr
+  because examples/tour/stacks/tour.df:248  spoke("green")
+  because examples/tour/stacks/tour.df:250  hub("main")
+  because examples/tour/stacks/tour.df:229  instance network green
+  because examples/tour/stacks/tour.df:216  output green.vpc = "green::vpc"   (instance network green)
+  because examples/tour/stacks/tour.df:229  input green.cidr = 10.2.0.0/16
 + net.vpc["blue::vpc"]
   cidr = "10.1.0.0/16"
   tags.component = "network"
   tags.team = "shop"
-  by examples/tour/stacks/tour.df:220  resource net.vpc vpc { .. }   (instance network blue)
-  because examples/tour/stacks/tour.df:229  input blue.cidr = 10.1.0.0/16
+  by examples/tour/stacks/tour.df:218  resource net.vpc vpc { .. }   (instance network blue)
+  because examples/tour/stacks/tour.df:227  input blue.cidr = 10.1.0.0/16
 + net.vpc["green::vpc"]
   cidr = "10.2.0.0/16"
   tags.component = "network"
   tags.team = "shop"
-  by examples/tour/stacks/tour.df:220  resource net.vpc vpc { .. }   (instance network green)
-  because examples/tour/stacks/tour.df:231  input green.cidr = 10.2.0.0/16
+  by examples/tour/stacks/tour.df:218  resource net.vpc vpc { .. }   (instance network green)
+  because examples/tour/stacks/tour.df:229  input green.cidr = 10.2.0.0/16
 + net.vpc["main"]
   cidr = "10.0.0.0/16"
   tags.team = "shop"
-  because examples/tour/stacks/tour.df:48  net.vpc["main"]
+  because examples/tour/stacks/tour.df:46  net.vpc["main"]
 + net.vpc_peering["main-blue"]
   accepter_vpc = ?net.vpc["blue::vpc"]
   requester_vpc = ?net.vpc["main"]
   tags.team = "shop"
-  by examples/tour/stacks/tour.df:257  resource net.vpc_peering "main-${t}" { .. } where spoke(t), v = network[t].vpc
-  because examples/tour/stacks/tour.df:229  instance network blue
-  because examples/tour/stacks/tour.df:249  spoke("blue")
-  because examples/tour/stacks/tour.df:218  output blue.vpc = "blue::vpc"   (instance network blue)
+  by examples/tour/stacks/tour.df:255  resource net.vpc_peering "main-${t}" { .. } where spoke(t), v = network[t].vpc
+  because examples/tour/stacks/tour.df:227  instance network blue
+  because examples/tour/stacks/tour.df:247  spoke("blue")
+  because examples/tour/stacks/tour.df:216  output blue.vpc = "blue::vpc"   (instance network blue)
 + net.vpc_peering["main-green"]
   accepter_vpc = ?net.vpc["green::vpc"]
   requester_vpc = ?net.vpc["main"]
   tags.team = "shop"
-  by examples/tour/stacks/tour.df:257  resource net.vpc_peering "main-${t}" { .. } where spoke(t), v = network[t].vpc
-  because examples/tour/stacks/tour.df:231  instance network green
-  because examples/tour/stacks/tour.df:250  spoke("green")
-  because examples/tour/stacks/tour.df:218  output green.vpc = "green::vpc"   (instance network green)
+  by examples/tour/stacks/tour.df:255  resource net.vpc_peering "main-${t}" { .. } where spoke(t), v = network[t].vpc
+  because examples/tour/stacks/tour.df:229  instance network green
+  because examples/tour/stacks/tour.df:248  spoke("green")
+  because examples/tour/stacks/tour.df:216  output green.vpc = "green::vpc"   (instance network green)
 + net.subnet["blue::private-us-test-1a"]
   cidr = "10.1.1.0/24"
   tags.team = "shop"
   vpc = ?net.vpc["blue::vpc"]
   zone = "us-test-1a"
-  by examples/tour/stacks/tour.df:222  resource net.subnet "private-${z}" { .. } where zone(z, n)   (instance network blue)
-  because examples/tour/stacks/tour.df:103  zone("us-test-1a", 1)
-  because examples/tour/stacks/tour.df:229  input blue.cidr = 10.1.0.0/16
+  by examples/tour/stacks/tour.df:220  resource net.subnet "private-${z}" { .. } where zone(z, n)   (instance network blue)
+  because examples/tour/stacks/tour.df:101  zone("us-test-1a", 1)
+  because examples/tour/stacks/tour.df:227  input blue.cidr = 10.1.0.0/16
 + net.subnet["blue::private-us-test-1b"]
   cidr = "10.1.2.0/24"
   tags.team = "shop"
   vpc = ?net.vpc["blue::vpc"]
   zone = "us-test-1b"
-  by examples/tour/stacks/tour.df:222  resource net.subnet "private-${z}" { .. } where zone(z, n)   (instance network blue)
-  because examples/tour/stacks/tour.df:104  zone("us-test-1b", 2)
-  because examples/tour/stacks/tour.df:229  input blue.cidr = 10.1.0.0/16
+  by examples/tour/stacks/tour.df:220  resource net.subnet "private-${z}" { .. } where zone(z, n)   (instance network blue)
+  because examples/tour/stacks/tour.df:102  zone("us-test-1b", 2)
+  because examples/tour/stacks/tour.df:227  input blue.cidr = 10.1.0.0/16
 + net.subnet["green::private-us-test-1a"]
   cidr = "10.2.1.0/24"
   tags.team = "shop"
   vpc = ?net.vpc["green::vpc"]
   zone = "us-test-1a"
-  by examples/tour/stacks/tour.df:222  resource net.subnet "private-${z}" { .. } where zone(z, n)   (instance network green)
-  because examples/tour/stacks/tour.df:103  zone("us-test-1a", 1)
-  because examples/tour/stacks/tour.df:231  input green.cidr = 10.2.0.0/16
+  by examples/tour/stacks/tour.df:220  resource net.subnet "private-${z}" { .. } where zone(z, n)   (instance network green)
+  because examples/tour/stacks/tour.df:101  zone("us-test-1a", 1)
+  because examples/tour/stacks/tour.df:229  input green.cidr = 10.2.0.0/16
 + net.subnet["green::private-us-test-1b"]
   cidr = "10.2.2.0/24"
   tags.team = "shop"
   vpc = ?net.vpc["green::vpc"]
   zone = "us-test-1b"
-  by examples/tour/stacks/tour.df:222  resource net.subnet "private-${z}" { .. } where zone(z, n)   (instance network green)
-  because examples/tour/stacks/tour.df:104  zone("us-test-1b", 2)
-  because examples/tour/stacks/tour.df:231  input green.cidr = 10.2.0.0/16
+  by examples/tour/stacks/tour.df:220  resource net.subnet "private-${z}" { .. } where zone(z, n)   (instance network green)
+  because examples/tour/stacks/tour.df:102  zone("us-test-1b", 2)
+  because examples/tour/stacks/tour.df:229  input green.cidr = 10.2.0.0/16
 + net.subnet["private-us-test-1a"]
   cidr = "10.0.1.0/24"
   tags.team = "shop"
   visibility = "private"
   vpc = ?net.vpc["main"]
   zone = "us-test-1a"
-  by examples/tour/stacks/tour.df:106  resource net.subnet "private-${z}" { .. } where zone(z, n)
-  because examples/tour/stacks/tour.df:103  zone("us-test-1a", 1)
-  because examples/tour/stacks/tour.df:48  net.vpc["main"].cidr = 10.0.0.0/16
+  by examples/tour/stacks/tour.df:104  resource net.subnet "private-${z}" { .. } where zone(z, n)
+  because examples/tour/stacks/tour.df:101  zone("us-test-1a", 1)
+  because examples/tour/stacks/tour.df:46  net.vpc["main"].cidr = 10.0.0.0/16
 + net.subnet["private-us-test-1b"]
   cidr = "10.0.2.0/24"
   tags.team = "shop"
   visibility = "private"
   vpc = ?net.vpc["main"]
   zone = "us-test-1b"
-  by examples/tour/stacks/tour.df:106  resource net.subnet "private-${z}" { .. } where zone(z, n)
-  because examples/tour/stacks/tour.df:104  zone("us-test-1b", 2)
-  because examples/tour/stacks/tour.df:48  net.vpc["main"].cidr = 10.0.0.0/16
+  by examples/tour/stacks/tour.df:104  resource net.subnet "private-${z}" { .. } where zone(z, n)
+  because examples/tour/stacks/tour.df:102  zone("us-test-1b", 2)
+  because examples/tour/stacks/tour.df:46  net.vpc["main"].cidr = 10.0.0.0/16
 + net.subnet["public"]
   cidr = "10.0.0.0/24"
   tags.team = "shop"
   visibility = "public"
   vpc = ?net.vpc["main"]
-  because examples/tour/stacks/tour.df:79  net.subnet["public"]
+  because examples/tour/stacks/tour.df:77  net.subnet["public"]
 + db.postgres["orders"]
   backup_days = 14
   multi_az = true
@@ -160,11 +160,11 @@ definite:
   subnets[0] = ?net.subnet["private-us-test-1a"]
   subnets[1] = ?net.subnet["private-us-test-1b"]
   tags.team = "shop"
-  by examples/tour/stacks/tour.df:145  resource db.postgres orders { .. }
-  because examples/tour/stacks/tour.df:28  input public_db = false
-  because examples/tour/stacks/tour.df:141  input database = {backup_days: 14}
+  by examples/tour/stacks/tour.df:143  resource db.postgres orders { .. }
+  because examples/tour/stacks/tour.df:26  input public_db = false
+  because examples/tour/stacks/tour.df:139  input database = {backup_days: 14}
   because --set env=prod
-  because examples/tour/stacks/tour.df:141  input database = {multi_az: true}
+  because examples/tour/stacks/tour.df:139  input database = {multi_az: true}
 pending groups:
 ? iam.policy[?] x unknown, on ?db.postgres["orders"].endpoint, resolves after tick 1  (builtin format() over a null)
 apply order:

@@ -7,17 +7,11 @@ tests/fixtures/adversarial/adv7b_mutual_via_different_paths.df
 # (The resource-block sugar shares one body across every field, so putting
 # the read in the block would drag A.z above B.x and close the cycle.)
 
-edition 2026
-
-resource net.vpc x {
-  z = 1
-}
+resource net.vpc x { z = 1 }
 
 set x.y = p where x in net.vpc, arg(net.subnet, "y", "x", p)
 
-resource net.subnet y {
-  x = q
-} where arg(net.vpc, "x", "z", q)
+resource net.subnet y { x = q } where arg(net.vpc, "x", "z", q)
 
 provider fake
 
@@ -28,8 +22,6 @@ provider fake
   (comment)
   (comment)
   (comment)
-  (edition
-    (integer))
   (resource
     (dotted_name
       (identifier)

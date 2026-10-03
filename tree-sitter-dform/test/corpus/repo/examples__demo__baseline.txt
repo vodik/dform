@@ -2,8 +2,6 @@
 examples/demo/baseline.df
 =========================
 
-edition 2026
-
 # The baseline every stack applies, `use baseline`: a team tag, audit
 # sinks, no public database. `env` is the using stack's; its input is the
 # stack's to give, by its path (config/dform/prod.yaml's `baseline.audit`).
@@ -34,8 +32,6 @@ warn "prod should enable audit logging" { env: "prod" } where env == "prod", not
 ---
 
 (source_file
-  (edition
-    (integer))
   (comment)
   (comment)
   (comment)

@@ -18,8 +18,6 @@ examples/refine/stacks/refine_gke.df
 # the gke mock schema, which makes the cluster's zones, endpoint and ca open
 # nulls until the cluster exists.
 
-edition 2026
-
 input env: enum("dev", "stg", "prod") = "dev"
 # How many zones the cluster is placed in: two is fewer than the
 # refinement on its zones allows.
@@ -42,14 +40,15 @@ set {
   gcp.project_name = "renfry-dev"
   gcp.region = "us-east1"
   gcp.network_name = "renfry-dev-network"
-  gke = {
-    control_plane_cidr: inet("172.16.3.96/28"),
-    subnet_cidr: inet("10.141.76.0/22")
-  }
+  gke = { control_plane_cidr: inet("172.16.3.96/28"), subnet_cidr: inet("10.141.76.0/22") }
 } where env == "dev"
 
-project(gcp.project_id, gcp.project_name, gcp.region,
-  "projects/${gcp.project_id}/global/networks/${gcp.network_name}")
+project(
+  gcp.project_id,
+  gcp.project_name,
+  gcp.region,
+  "projects/${gcp.project_id}/global/networks/${gcp.network_name}",
+)
 
 resource google.compute_subnetwork gke_subnet {
   project = id
@@ -79,15 +78,16 @@ resource google.container_cluster pngu {
 } where project(id, name, _, net_id)
 
 # Provider configured from phase-1 nulls (two open, one secret).
-provider_config("k8s", {
-  host: google.container_cluster["pngu"].endpoint,
-  ca: google.container_cluster["pngu"].ca_certificate,
-  token: google.client_config["current"].access_token
-})
+provider_config(
+  "k8s",
+  {
+    host: google.container_cluster["pngu"].endpoint,
+    ca: google.container_cluster["pngu"].ca_certificate,
+    token: google.client_config["current"].access_token,
+  },
+)
 
-resource k8s.namespace pngu {
-  name = "pngu"
-}
+resource k8s.namespace pngu { name = "pngu" }
 
 # A read in the clause is an attr join (the value now), not a reference.
 resource k8s.deployment api {
@@ -126,9 +126,7 @@ deny "cluster must not be deletable" { cluster: c } where {
 }
 
 # A refinement the cluster meets only in three zones.
-type google.container_cluster {
-  zones: list(string) check len(zones) >= 3
-}
+type google.container_cluster { zones: list(string) check len(zones) >= 3 }
 
 ---
 
@@ -148,8 +146,6 @@ type google.container_cluster {
   (comment)
   (comment)
   (comment)
-  (edition
-    (integer))
   (input
     (identifier)
     (type

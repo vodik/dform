@@ -1,6 +1,6 @@
-tests/syntax/err/unknown_name.df:8:27: `prod` is unbound at this `==`; `=` binds, `==` compares
+tests/syntax/err/unknown_name.df:6:27: `prod` is unbound at this `==`; `=` binds, `==` compares
   help: bind it with `prod = ..`, `in`, or a relation; a string is quoted: "prod"
-tests/syntax/err/unknown_name.df:9:34: variable `main` shadows the resource `main`: rename the variable, or write `main.path` to read it
-tests/syntax/err/unknown_name.df:10:22: variable `net` shadows the type namespace `net`: rename the variable, or write `net.path` to read it
-tests/syntax/err/unknown_name.df:11:20: unknown name `cfg`
+tests/syntax/err/unknown_name.df:7:34: variable `main` shadows the resource `main`: rename the variable, or write `main.path` to read it
+tests/syntax/err/unknown_name.df:8:22: variable `net` shadows the type namespace `net`: rename the variable, or write `net.path` to read it
+tests/syntax/err/unknown_name.df:9:20: unknown name `cfg`
   help: a resource, module, input, `let` or type is declared before it is read; a string is quoted: "cfg.region"

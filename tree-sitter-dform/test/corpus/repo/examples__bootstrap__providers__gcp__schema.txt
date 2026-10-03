@@ -6,8 +6,6 @@ examples/bootstrap/providers/gcp/schema.df
 # whose endpoint, CA and zones are open until it exists, and node pools
 # whose instance group is open until they do.
 
-edition 2026
-
 type_provider("google.compute_network", "google")
 type_provider("google.compute_subnetwork", "google")
 type_provider("google.container_cluster", "google")
@@ -41,8 +39,6 @@ type_mint("google.container_node_pool", "instance_group", "ig-{name}-{hash}")
   (comment)
   (comment)
   (comment)
-  (edition
-    (integer))
   (fact
     (call
       (identifier)
