@@ -342,9 +342,21 @@ fn a_git_source_is_read_at_its_ref() {
     s.write(
         "stacks/workload.df",
         &WORKLOAD
+            // Replace the `use data.releases` import (and its comment) with
+            // an inline relation input, placed with the other `input` and
+            // `decl` lines (R-11a) so the file still has its header in
+            // order: an `input` after `decl approve`/`decl approval` would
+            // otherwise be a header statement below the body (R-27).
             .replace(
-                "use data.releases\n",
-                "input release from csv(git(\"releases.git\", \"main\", \"web.csv\"))\n\
+                "# The release to run, `releases.release(image)`; a change to the file is\n\
+                 # an input event, as to any program file.\n\
+                 use data.releases\n",
+                "",
+            )
+            .replace(
+                "input env: enum(\"dev\", \"prod\") = \"dev\"\n",
+                "input env: enum(\"dev\", \"prod\") = \"dev\"\n\
+                 input release from csv(git(\"releases.git\", \"main\", \"web.csv\"))\n\
                  decl release(image: string)\n",
             )
             .replace("where releases.release(image)", "where release(image)"),
