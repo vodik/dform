@@ -47,11 +47,12 @@ pub fn compute(program: &Program, schema: &Schema) -> Result<BTreeMap<String, Sc
     let compiled = partition::compile(program, &schema.facts)?;
     let inputs_by_scope = input_names(&compiled.inputs);
     let externs: BTreeSet<&str> = compiled.externs.iter().map(|e| e.pred.as_str()).collect();
+    let relations = relations(program);
 
     for a in &compiled.facts {
         let scope = scope_of(a.span);
-        let entry = out.entry(scope).or_default();
-        if let Some(w) = classify_write(a) {
+        let entry = out.entry(scope.clone()).or_default();
+        if let Some(w) = classify_write(a).or_else(|| relations.write(&scope, &a.pred)) {
             entry.writes.insert(w);
         }
     }
@@ -59,7 +60,8 @@ pub fn compute(program: &Program, schema: &Schema) -> Result<BTreeMap<String, Sc
         let scope = scope_of(r.head.span);
         {
             let entry = out.entry(scope.clone()).or_default();
-            if let Some(w) = classify_write(&r.head) {
+            if let Some(w) = classify_write(&r.head).or_else(|| relations.write(&scope, &r.head.pred))
+            {
                 entry.writes.insert(w);
             }
         }
@@ -68,12 +70,102 @@ pub fn compute(program: &Program, schema: &Schema) -> Result<BTreeMap<String, Sc
                 Lit::Pos(a) | Lit::Not(a) => a,
                 _ => continue,
             };
-            if let Some(rd) = classify_read(&scope, a, &inputs_by_scope, &externs) {
+            if let Some(rd) = classify_read(&scope, a, &inputs_by_scope, &externs)
+                .or_else(|| relations.read(&scope, &a.pred))
+                .or_else(|| rows_read(&scope, a))
+            {
                 out.entry(scope.clone()).or_default().reads.insert(rd);
             }
         }
     }
     Ok(out)
+}
+
+/// The relations that cross a scope's edge (R-55), by the copy's scope:
+/// those it takes (`input p`, its user gives the rows) and those it
+/// exports (`output p`, its user reads them). A copy's relation `p` is
+/// the predicate `SCOPE::p`.
+#[derive(Default)]
+struct Relations {
+    inputs: BTreeMap<String, BTreeSet<String>>,
+    outputs: BTreeMap<String, BTreeSet<String>>,
+}
+
+impl Relations {
+    fn split(pred: &str) -> Option<(&str, &str)> {
+        pred.rsplit_once("::")
+    }
+
+    /// Rows `scope` gives another scope's relation input: `rows S.p`.
+    fn write(&self, scope: &str, pred: &str) -> Option<String> {
+        let (s, p) = Self::split(pred)?;
+        (s != scope && self.inputs.get(s).is_some_and(|ps| ps.contains(p)))
+            .then(|| format!("rows {s}.{p}"))
+    }
+
+    /// A relation that crosses into `scope`: its own relation input
+    /// (`input p`), or another scope's exported relation (`output S.p`).
+    fn read(&self, scope: &str, pred: &str) -> Option<String> {
+        let (s, p) = Self::split(pred)?;
+        if s == scope && self.inputs.get(s).is_some_and(|ps| ps.contains(p)) {
+            return Some(format!("input {p}"));
+        }
+        (s != scope && self.outputs.get(s).is_some_and(|ps| ps.contains(p)))
+            .then(|| format!("output {s}.{p}"))
+    }
+}
+
+/// Another scope's exported relation read through its rows
+/// (`modules::ROWS`, `__rows("blue", "made", [..])`): `output S.p`.
+fn rows_read(scope: &str, a: &crate::ast::Atom) -> Option<String> {
+    if a.pred != modules::ROWS {
+        return None;
+    }
+    let (s, p) = (const_str(a.args.first()?)?, const_str(a.args.get(1)?)?);
+    let s = canon_scope(&s);
+    (s != scope).then(|| format!("output {s}.{p}"))
+}
+
+/// Each `instance` and `use`'s relation inputs and exported relations,
+/// from its component's or module's interface.
+fn relations(program: &Program) -> Relations {
+    let mut defs = Vec::new();
+    fn definitions<'a>(stmts: &'a [Stmt], out: &mut Vec<&'a crate::ast::Module>) {
+        for s in stmts {
+            if let Stmt::Module(m) = s {
+                out.push(m);
+                definitions(&m.body, out);
+            }
+        }
+    }
+    definitions(&program.statements, &mut defs);
+    let mut out = Relations::default();
+    for s in &program.statements {
+        let (Stmt::Instance(u) | Stmt::Use(u)) = s else {
+            continue;
+        };
+        let Some(m) = defs.iter().find(|m| m.name == u.module) else {
+            continue;
+        };
+        for st in &m.body {
+            match st {
+                Stmt::RelationInput(e) => {
+                    out.inputs
+                        .entry(u.name.clone())
+                        .or_default()
+                        .insert(e.pred.clone());
+                }
+                Stmt::Output(o) if o.value.is_none() && o.ty.is_none() => {
+                    out.outputs
+                        .entry(u.name.clone())
+                        .or_default()
+                        .insert(o.name.clone());
+                }
+                _ => {}
+            }
+        }
+    }
+    out
 }
 
 fn const_str(t: &Term) -> Option<String> {

@@ -85,3 +85,28 @@ fn json_is_the_same_information() {
     let text = dform("examples/demo/stacks/dform.df", &["effects"]);
     assert_eq!(rows.len() + 2, text.lines().count(), "{text}");
 }
+
+/// Rows crossing a scope's edge (R-55): the rows a user gives a copy's
+/// relation input, the copy reading its own relation input, and another
+/// scope reading the relation the copy exports.
+#[test]
+fn effects_show_relations_given_and_read_across_scopes() {
+    let s = common::Scratch::new("effects-relations");
+    s.write(
+        "p.df",
+        "edition 2026\nprovider fake\ncomponent subnets {\n  input cidr: inet\n  input zone\n  \
+         decl zone(name: string, index: int)\n  decl made(name: string)\n  \
+         made(z) where zone(z, _)\n  output made\n  resource net.subnet \"s-${z}\" {\n    \
+         cidr = inet.subnet(cidr, 8, i)\n    zone = z\n  } where zone(z, i)\n}\n\
+         az(\"a\", 0)\ninstance subnets blue {\n  cidr = \"10.0.0.0/16\"\n  \
+         zone(n, i) where az(n, i)\n}\nseen(n) where blue.made(n)\n",
+    );
+    let out = s.run(&["dev", "effects", "p.df"]).success().stdout;
+    for line in [
+        "blue   reads   input zone\n",
+        "stack  reads   output blue.made\n",
+        "stack  writes  rows blue.zone\n",
+    ] {
+        assert!(out.contains(line), "{line}{out}");
+    }
+}

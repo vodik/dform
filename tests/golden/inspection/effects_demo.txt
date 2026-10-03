@@ -6,6 +6,7 @@ baseline    writes  (iam.policy, statements)
 database    reads   db.postgres.id
 database    reads   input backup_days
 database    reads   input multi_az
+database    reads   input subnet
 database    writes  (db.postgres, backup_days)
 database    writes  (db.postgres, multi_az)
 database    writes  (db.postgres, public)
@@ -22,6 +23,7 @@ identity    writes  (iam.role_policy_attachment, role)
 kubernetes  reads   input nodepool_max
 kubernetes  reads   input nodepool_min
 kubernetes  reads   input private_api
+kubernetes  reads   input subnet
 kubernetes  reads   k8s.cluster.id
 kubernetes  writes  (k8s.cluster, private_api)
 kubernetes  writes  (k8s.cluster, subnets)
@@ -64,6 +66,7 @@ stack       reads   net.vpc.cidr
 stack       reads   net.vpc.id
 stack       reads   output database.iam_need
 stack       reads   output kubernetes.iam_need
+stack       reads   output main.private_subnet
 stack       writes  (compute.vm, id)
 stack       writes  (compute.vm, private_ip)
 stack       writes  (db.postgres, endpoint)
@@ -91,6 +94,8 @@ stack       writes  input main.vpc_net
 stack       writes  input peer.vpc_net
 stack       writes  input stack.cidrs
 stack       writes  input stack.env
+stack       writes  rows database.subnet
+stack       writes  rows kubernetes.subnet
 stdlib_net  reads   compute.vm.private_ip
 stdlib_net  reads   net.vpc.cidr
-(94 rows)
+(99 rows)
