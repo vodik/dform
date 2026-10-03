@@ -95,19 +95,10 @@ fn term_name(k: SyntaxKind) -> bool {
             ))
 }
 
-/// Any word: a key, a path segment, a declared name.
-fn word(k: SyntaxKind) -> bool {
-    k == IDENT || k.is_keyword()
-}
-
 /// A statement of a file's header (R-27): what the program takes, before
 /// its body.
 fn header_stmt(k: SyntaxKind) -> bool {
     matches!(k, KEY_KW | INPUT_KW)
-}
-
-fn is_cmp(k: SyntaxKind) -> bool {
-    matches!(k, EQ | EQ2 | NEQ | LT | LE | GT | GE)
 }
 
 /// Statements of an earlier surface, and what each is spelled now.
@@ -480,7 +471,7 @@ impl<'a> Parser<'a> {
     }
 
     fn expect_word(&mut self) -> P {
-        if word(self.nth(0)) {
+        if self.nth(0).is_word() {
             self.bump();
             Ok(())
         } else {
@@ -490,11 +481,11 @@ impl<'a> Parser<'a> {
 
     /// `name (.name)*`: a type, an extern, a relation.
     fn dotted(&mut self, what: &str) -> P {
-        if !word(self.nth(0)) {
+        if !self.nth(0).is_word() {
             return self.err_expected(what);
         }
         self.bump();
-        while self.at(DOT) && word(self.raw(1)) {
+        while self.at(DOT) && self.raw(1).is_word() {
             self.bump();
             self.bump();
         }
@@ -613,14 +604,14 @@ impl<'a> Parser<'a> {
 
     /// The statement ahead is `NAME (.NAME)* (`: a fact or a rule.
     fn at_head(&self) -> bool {
-        if !word(self.nth(0)) {
+        if !self.nth(0).is_word() {
             return false;
         }
         let mut i = 1;
         loop {
             match self.raw(i) {
                 L_PAREN => return true,
-                DOT if word(self.raw(i + 1)) => i += 2,
+                DOT if self.raw(i + 1).is_word() => i += 2,
                 _ => return false,
             }
         }
@@ -894,7 +885,7 @@ impl<'a> Parser<'a> {
             // `instance PATH NAME [{ .. }] [where B]`: a named copy (R-65).
             INSTANCE_KW => self.simple(INSTANCE, |p| {
                 p.dotted("a component's path")?;
-                if word(p.nth(0)) && !matches!(p.nth(0), WHERE_KW | IF_KW) {
+                if p.nth(0).is_word() && !matches!(p.nth(0), WHERE_KW | IF_KW) {
                     p.bump();
                 } else {
                     let msg = format!("expected the instance's name, found {}", p.found());
@@ -912,11 +903,11 @@ impl<'a> Parser<'a> {
                 p.opt_clause()
             }),
             RESOURCE_KW => self.simple(RESOURCE, |p| {
-                if !word(p.nth(0)) {
+                if !p.nth(0).is_word() {
                     return p.err_expected("a resource type");
                 }
                 p.dotted("a resource type")?;
-                if word(p.nth(0)) || p.at(STRING) {
+                if p.nth(0).is_word() || p.at(STRING) {
                     p.bump();
                 } else {
                     return p.err_expected("a resource name (a name or a string)");
@@ -1220,7 +1211,7 @@ impl<'a> Parser<'a> {
                 if rows && p.at_head() {
                     p.rule()?;
                 } else if rows
-                    && word(p.nth(0))
+                    && p.nth(0).is_word()
                     && p.raw(1) == IDENT
                     && p.nth_text(1) == "from"
                 {
@@ -1279,7 +1270,7 @@ impl<'a> Parser<'a> {
     /// A path in a block: `a.b[0]."c-d"`.
     fn block_path(&mut self) -> P {
         self.start(BLOCK_PATH);
-        if word(self.nth(0)) || self.at(STRING) {
+        if self.nth(0).is_word() || self.at(STRING) {
             self.bump();
         } else {
             return self.err_expected("an attribute path");
@@ -1287,7 +1278,7 @@ impl<'a> Parser<'a> {
         loop {
             if self.at(DOT) {
                 self.bump();
-                if word(self.nth(0)) || self.at(STRING) {
+                if self.nth(0).is_word() || self.at(STRING) {
                     self.bump();
                 } else {
                     return self.err_expected("a path segment");
@@ -1382,7 +1373,7 @@ impl<'a> Parser<'a> {
 
     /// The next tokens start an attribute declaration: `path:`.
     fn at_attr_decl(&self) -> bool {
-        (word(self.nth(0)) || self.nth(0) == STRING) && self.raw(1) == COLON
+        (self.nth(0).is_word() || self.nth(0) == STRING) && self.raw(1) == COLON
     }
 
     /// `[check body]`: a refinement of an input's or an attribute's type.
@@ -1429,7 +1420,7 @@ impl<'a> Parser<'a> {
     }
 
     fn attr_decl_after_comma(&self) -> bool {
-        (word(self.raw(1)) || self.raw(1) == STRING) && self.raw(2) == COLON
+        (self.raw(1).is_word() || self.raw(1) == STRING) && self.raw(2) == COLON
     }
 
     /// `type := name | name(type, ...) | { name: type, ... } | STRING`
@@ -1442,7 +1433,7 @@ impl<'a> Parser<'a> {
                 self.with_nl(false, |p| {
                     while !p.at(R_BRACE) {
                         p.start(OBJECT_FIELD);
-                        if word(p.nth(0)) || p.at(STRING) {
+                        if p.nth(0).is_word() || p.at(STRING) {
                             p.bump();
                         } else {
                             return p.err_expected("a field name");
@@ -1457,7 +1448,7 @@ impl<'a> Parser<'a> {
                     p.expect(R_BRACE)
                 })?;
             }
-            k if word(k) => {
+            k if k.is_word() => {
                 self.dotted("a type")?;
                 if self.at(L_PAREN) {
                     self.bump();
@@ -1562,10 +1553,10 @@ impl<'a> Parser<'a> {
         let cp = self.checkpoint();
         let kind = self.term()?;
         match self.nth(0) {
-            k if is_cmp(k) => {
+            k if k.is_cmp() => {
                 self.start_at(cp, LIT_CMP);
                 // `lo <= x <= hi` chains: each operator compares its neighbours.
-                while is_cmp(self.nth(0)) {
+                while self.nth(0).is_cmp() {
                     self.bump();
                     self.term()?;
                 }
@@ -1599,7 +1590,7 @@ impl<'a> Parser<'a> {
         self.expect(L_PAREN)?;
         self.with_nl(false, |p| {
             while !p.at(R_PAREN) {
-                if word(p.nth(0)) && p.raw(1) == COLON {
+                if p.nth(0).is_word() && p.raw(1) == COLON {
                     p.start(NAMED_ARG);
                     p.bump();
                     p.bump();
@@ -1746,7 +1737,7 @@ impl<'a> Parser<'a> {
         if kind != CHAIN {
             return Ok(kind);
         }
-        if self.at(L_BRACE) && word(self.raw(1)) && self.raw(2) == COLON {
+        if self.at(L_BRACE) && self.raw(1).is_word() && self.raw(2) == COLON {
             let msg = format!("expected the end of the term, found {}", self.found());
             self.error_here(
                 msg,
@@ -1770,7 +1761,7 @@ impl<'a> Parser<'a> {
         self.start(SELECTOR);
         loop {
             if self.eat(DOT) {
-                if word(self.nth(0)) || self.at(STRING) {
+                if self.nth(0).is_word() || self.at(STRING) {
                     self.bump();
                 } else {
                     return self.err_expected("a field's name after `.`");
@@ -1799,7 +1790,9 @@ impl<'a> Parser<'a> {
     /// A `.name` or `[t]` that reads a call's result. A `.` at the end of
     /// a line is the old terminator (`p(x).`), not a read.
     fn at_chain_tail(&self) -> bool {
-        (self.at(DOT) && (word(self.raw(1)) || self.raw(1) == STRING) && !self.on_new_line_at(1))
+        (self.at(DOT)
+            && (self.raw(1).is_word() || self.raw(1) == STRING)
+            && !self.on_new_line_at(1))
             || (self.at(L_BRACKET) && self.raw(1) != STAR)
     }
 
@@ -1808,7 +1801,7 @@ impl<'a> Parser<'a> {
         loop {
             if self.at(DOT) {
                 self.bump();
-                if word(self.nth(0)) || self.at(STRING) {
+                if self.nth(0).is_word() || self.at(STRING) {
                     self.bump();
                 } else {
                     return self.err_expected("a name after `.`");
@@ -1820,7 +1813,7 @@ impl<'a> Parser<'a> {
                     loop {
                         // `[k=v, ..]`: a stack's deployment by its keys
                         // (R-65).
-                        if word(p.nth(0)) && p.raw(1) == EQ {
+                        if p.nth(0).is_word() && p.raw(1) == EQ {
                             p.start(NAMED_ARG);
                             p.bump();
                             p.bump();
@@ -1883,7 +1876,7 @@ impl<'a> Parser<'a> {
         self.with_nl(false, |p| {
             while !p.at(R_BRACE) {
                 p.start(OBJECT_FIELD);
-                if word(p.nth(0)) || p.at(STRING) {
+                if p.nth(0).is_word() || p.at(STRING) {
                     p.bump();
                 } else {
                     return p.err_expected("an object key (a name or a string)");

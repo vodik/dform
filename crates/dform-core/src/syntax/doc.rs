@@ -5,8 +5,8 @@
 //! Value)` facts; the language server shows them and `dform doc` renders
 //! them.
 
-use super::SyntaxKind::{self, *};
-use super::{SyntaxNode, SyntaxToken};
+use super::SyntaxKind::*;
+use super::{SyntaxNode, SyntaxToken, tokens};
 use rowan::TextRange;
 
 /// The keys docs/grammar.md documents; any other key is kept as written.
@@ -100,20 +100,10 @@ fn key_value(l: &str) -> Option<(&str, &str)> {
     ok.then(|| (k, v.trim()))
 }
 
-fn tokens(n: &SyntaxNode) -> impl Iterator<Item = SyntaxToken> + '_ {
-    n.children_with_tokens()
-        .filter_map(|e| e.into_token())
-        .filter(|t| !t.kind().is_trivia())
-}
-
-fn is_word(k: SyntaxKind) -> bool {
-    k == IDENT || k.is_keyword()
-}
-
 /// The `skip`th word of a node's own tokens.
 fn word(n: &SyntaxNode, skip: usize) -> Option<String> {
     tokens(n)
-        .filter(|t| is_word(t.kind()))
+        .filter(|t| t.kind().is_word())
         .nth(skip)
         .map(|t| t.text().to_string())
 }
@@ -123,7 +113,7 @@ fn dotted(n: &SyntaxNode) -> Option<String> {
     let mut out = String::new();
     for t in tokens(n).skip(1) {
         match t.kind() {
-            k if is_word(k) && !out.ends_with(|c: char| c.is_alphanumeric() || c == '_') => {
+            k if k.is_word() && !out.ends_with(|c: char| c.is_alphanumeric() || c == '_') => {
                 out.push_str(t.text())
             }
             DOT if !out.is_empty() => out.push('.'),
@@ -168,7 +158,7 @@ pub fn item(n: &SyntaxNode) -> Option<(&'static str, String)> {
             let (name, typ) = ts.split_last()?;
             let name = match name.kind() {
                 STRING => unquote(name),
-                k if is_word(k) => name.text().to_string(),
+                k if k.is_word() => name.text().to_string(),
                 _ => return None,
             };
             let typ: String = typ.iter().map(|t| t.text()).collect();

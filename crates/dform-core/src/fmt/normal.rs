@@ -8,19 +8,9 @@
 //! Each is an edit of the source text, read from the tree; the caller
 //! parses the result again and prints it, until nothing changes.
 
-use crate::syntax::SyntaxKind::{self, *};
-use crate::syntax::{SyntaxNode, SyntaxToken};
+use crate::syntax::SyntaxKind::*;
+use crate::syntax::{SyntaxNode, SyntaxToken, tokens};
 use std::collections::BTreeSet;
-
-fn toks(n: &SyntaxNode) -> impl Iterator<Item = SyntaxToken> + '_ {
-    n.children_with_tokens()
-        .filter_map(|e| e.into_token())
-        .filter(|t| !t.kind().is_trivia())
-}
-
-fn is_word(k: SyntaxKind) -> bool {
-    k == IDENT || k.is_keyword()
-}
 
 fn is_name(s: &str) -> bool {
     crate::lexer::is_word(s) && crate::lexer::keyword(s).is_none()
@@ -42,7 +32,7 @@ impl Names {
         n.declared
             .extend(["settings", "world", "true", "false", "_"].map(String::from));
         for d in root.descendants() {
-            let first_word = || toks(&d).filter(|t| is_word(t.kind())).nth(1);
+            let first_word = || tokens(&d).filter(|t| t.kind().is_word()).nth(1);
             match d.kind() {
                 INPUT | LET => {
                     if let Some(t) = first_word() {
@@ -58,7 +48,7 @@ impl Names {
                 }
                 RESOURCE => {
                     let ts: Vec<SyntaxToken> =
-                        toks(&d).filter(|t| t.kind() != RANK).skip(1).collect();
+                        tokens(&d).filter(|t| t.kind() != RANK).skip(1).collect();
                     if let Some((name, typ)) = ts.split_last() {
                         // A name the clause binds is the clause's variable.
                         let bound = d
@@ -67,7 +57,7 @@ impl Names {
                             .flat_map(|c| c.descendants_with_tokens())
                             .filter_map(|e| e.into_token())
                             .any(|t| t.text() == name.text());
-                        if is_word(name.kind()) && !bound {
+                        if name.kind().is_word() && !bound {
                             n.declared.insert(name.text().to_string());
                         }
                         if let Some(first) = typ.first() {
@@ -101,7 +91,7 @@ impl Names {
 fn heads(n: &SyntaxNode, out: &mut Vec<String>) {
     match n.kind() {
         CHAIN => {
-            if let Some(t) = toks(n).next() {
+            if let Some(t) = tokens(n).next() {
                 out.push(t.text().to_string());
             }
             for ix in n.children().filter(|c| c.kind() == INDEX) {
@@ -123,7 +113,7 @@ fn heads(n: &SyntaxNode, out: &mut Vec<String>) {
                 for c in n.children() {
                     heads(&c, out);
                 }
-            } else if let Some(k) = toks(n).next() {
+            } else if let Some(k) = tokens(n).next() {
                 out.push(k.text().to_string());
             }
         }
@@ -186,7 +176,7 @@ impl Ctx {
     fn lit(&mut self, l: &SyntaxNode, bound: &BTreeSet<String>) {
         match l.kind() {
             LIT_CMP => {
-                let ops: Vec<SyntaxToken> = toks(l).collect();
+                let ops: Vec<SyntaxToken> = tokens(l).collect();
                 let sides: Vec<SyntaxNode> = l.children().collect();
                 if ops.len() != 1 || sides.len() != 2 {
                     return;
@@ -228,7 +218,7 @@ impl Ctx {
                 let at = self.text(a);
                 if self.bound(a, bound) {
                     self.put(l, format!("{name} == {at}"));
-                } else if a.kind() == CHAIN && toks(a).count() == 1 {
+                } else if a.kind() == CHAIN && tokens(a).count() == 1 {
                     self.put(l, format!("{at} = {name}"));
                 }
             }
@@ -268,13 +258,13 @@ impl Ctx {
         if v.kind() != CHAIN || c.kind() != CHAIN {
             return None;
         }
-        let vt: Vec<SyntaxToken> = toks(v).collect();
+        let vt: Vec<SyntaxToken> = tokens(v).collect();
         let [var] = vt.as_slice() else { return None };
         let var = var.text();
         if bound.contains(var) || self.names.known(var) || var == "_" {
             return None;
         }
-        let ct: Vec<SyntaxToken> = toks(c).collect();
+        let ct: Vec<SyntaxToken> = tokens(c).collect();
         let [p] = ct.as_slice() else { return None };
         let ix: Vec<SyntaxNode> = c.children().filter(|x| x.kind() == INDEX).collect();
         let [ix] = ix.as_slice() else { return None };
@@ -317,7 +307,7 @@ impl Ctx {
     /// A header name is quoted only when it needs it: not a name, a
     /// keyword, a hole, or a name the clause binds.
     fn header(&mut self, n: &SyntaxNode) {
-        let Some(name) = toks(n).filter(|t| t.kind() != RANK).last() else {
+        let Some(name) = tokens(n).filter(|t| t.kind() != RANK).last() else {
             return;
         };
         if name.kind() != STRING {
@@ -379,15 +369,15 @@ impl Ctx {
             ) else {
                 continue;
             };
-            let Some(seg) = toks(&path).last() else {
+            let Some(seg) = tokens(&path).last() else {
                 continue;
             };
-            let named = is_word(seg.kind())
+            let named = seg.kind().is_word()
                 && !matches!(
                     seg.kind(),
                     NOT_KW | IN_KW | HAS_KW | WHERE_KW | IF_KW | TRUE_KW | FALSE_KW
                 );
-            let assign = toks(&a).any(|t| t.kind() == EQ);
+            let assign = tokens(&a).any(|t| t.kind() == EQ);
             let source = path.text() == "source"
                 && a.parent()
                     .and_then(|b| b.parent())
@@ -472,11 +462,13 @@ impl Ctx {
             if f.parent().is_some_and(|p| p.kind() != OBJECT) {
                 continue;
             }
-            let Some(key) = toks(&f).next() else { continue };
+            let Some(key) = tokens(&f).next() else {
+                continue;
+            };
             let Some(value) = f.children().next() else {
                 continue;
             };
-            if value.kind() == CHAIN && is_word(key.kind()) && self.text(&value) == key.text() {
+            if value.kind() == CHAIN && key.kind().is_word() && self.text(&value) == key.text() {
                 self.put(&f, key.text().to_string());
             }
         }
@@ -499,14 +491,14 @@ impl Entry {
     /// `+=` or a path with an index.
     fn of(a: &SyntaxNode) -> Option<Entry> {
         let path = a.children().find(|c| c.kind() == BLOCK_PATH)?;
-        let segs: Vec<SyntaxToken> = toks(&path).filter(|t| t.kind() != DOT).collect();
+        let segs: Vec<SyntaxToken> = tokens(&path).filter(|t| t.kind() != DOT).collect();
         if segs
             .iter()
-            .any(|t| !is_word(t.kind()) && t.kind() != STRING)
+            .any(|t| !t.kind().is_word() && t.kind() != STRING)
         {
             return None;
         }
-        if toks(a).any(|t| t.kind() == PLUS_EQ) {
+        if tokens(a).any(|t| t.kind() == PLUS_EQ) {
             return None;
         }
         let value = a.children().find(|c| c.kind() != BLOCK_PATH);
@@ -518,7 +510,7 @@ impl Entry {
                 .collect(),
             leaf: value.as_ref().is_none_or(|v| v.kind() != OBJECT),
             value: value.map(|v| v.text().to_string().trim().to_string()),
-            rank: toks(a)
+            rank: tokens(a)
                 .find(|t| t.kind() == RANK)
                 .map(|t| t.text().to_string()),
         })

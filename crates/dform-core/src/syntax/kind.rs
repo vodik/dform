@@ -186,6 +186,17 @@ impl SyntaxKind {
         (PROVIDER_KW as u16..=FALSE_KW as u16).contains(&(self as u16))
     }
 
+    /// Any word: a name, or a keyword where a name stands (a key, a path
+    /// segment, a declared name).
+    pub fn is_word(self) -> bool {
+        self == IDENT || self.is_keyword()
+    }
+
+    /// A comparison operator: `=`, `==`, `!=`, `<`, `<=`, `>`, `>=`.
+    pub fn is_cmp(self) -> bool {
+        matches!(self, EQ | EQ2 | NEQ | LT | LE | GT | GE)
+    }
+
     /// How a token kind is named in "expected ..." diagnostics.
     pub fn describe(self) -> &'static str {
         match self {
@@ -254,3 +265,15 @@ impl rowan::Language for Lang {
 pub type SyntaxNode = rowan::SyntaxNode<Lang>;
 pub type SyntaxToken = rowan::SyntaxToken<Lang>;
 pub type SyntaxElement = rowan::SyntaxElement<Lang>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_word_is_a_name_or_a_keyword_and_a_comparison_one_of_seven() {
+        assert!(IDENT.is_word() && WHERE_KW.is_word() && !STRING.is_word());
+        let cmp = [EQ, EQ2, NEQ, LT, LE, GT, GE];
+        assert!(cmp.iter().all(|k| k.is_cmp()) && !DOT.is_cmp());
+    }
+}

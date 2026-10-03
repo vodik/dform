@@ -25,7 +25,7 @@
 
 use super::SyntaxKind::{self, *};
 use super::parser as parse;
-use super::{SyntaxNode, SyntaxToken};
+use super::{SyntaxNode, SyntaxToken, tokens};
 use crate::ast::{
     Atom, AttrDecl, BindArg, Config, Decl, Extern, ExternFn, FieldAssign, FieldOp, InputDecl,
     Instance, Lit, Module, OutputDecl, Pending, PendingKind, Program, Rank, Resource, RuleStmt,
@@ -283,12 +283,6 @@ struct ModDecl {
     component: bool,
 }
 
-fn tokens(n: &SyntaxNode) -> impl Iterator<Item = SyntaxToken> + '_ {
-    n.children_with_tokens()
-        .filter_map(|e| e.into_token())
-        .filter(|t| !t.kind().is_trivia())
-}
-
 fn node(n: &SyntaxNode, k: SyntaxKind) -> Option<SyntaxNode> {
     n.children().find(|c| c.kind() == k)
 }
@@ -327,14 +321,10 @@ fn bare_name(t: &SyntaxNode) -> Option<String> {
     }
 }
 
-fn is_word(k: SyntaxKind) -> bool {
-    k == IDENT || k.is_keyword()
-}
-
 /// The first word token of a node after `skip` others.
 fn word_text(n: &SyntaxNode, skip: usize) -> String {
     tokens(n)
-        .filter(|t| is_word(t.kind()))
+        .filter(|t| t.kind().is_word())
         .nth(skip)
         .map(|t| t.text().to_string())
         .unwrap_or_default()
@@ -347,7 +337,7 @@ fn dotted_text(n: &SyntaxNode, skip_words: usize) -> String {
     let mut words = 0;
     let mut started = false;
     for t in tokens(n) {
-        if is_word(t.kind()) {
+        if t.kind().is_word() {
             if words >= skip_words {
                 if started && !out.ends_with('.') {
                     break;
@@ -375,11 +365,11 @@ fn path_parts(n: &SyntaxNode) -> (Vec<SyntaxToken>, Vec<SyntaxToken>) {
     for t in tokens(n).skip(1) {
         match t.kind() {
             DOT if !dot && rest.is_empty() => dot = true,
-            k if is_word(k) && dot && rest.is_empty() => {
+            k if k.is_word() && dot && rest.is_empty() => {
                 path.push(t);
                 dot = false;
             }
-            k if is_word(k) => rest.push(t),
+            k if k.is_word() => rest.push(t),
             _ => break,
         }
     }
@@ -1067,7 +1057,7 @@ impl<'u> Lowerer<'u> {
             match t.kind() {
                 DOT => after_dot = true,
                 STRING => return Some(t),
-                k if is_word(k) => {
+                k if k.is_word() => {
                     if seen_word && !after_dot {
                         return Some(t);
                     }
@@ -5195,7 +5185,7 @@ impl<'u> Lowerer<'u> {
         }
         let path = node(a, BLOCK_PATH).ok_or(Skip)?;
         let seg = tokens(&path).last().ok_or(Skip)?;
-        if !is_word(seg.kind())
+        if !seg.kind().is_word()
             || matches!(
                 seg.kind(),
                 NOT_KW | IN_KW | HAS_KW | WHERE_KW | IF_KW | TRUE_KW | FALSE_KW

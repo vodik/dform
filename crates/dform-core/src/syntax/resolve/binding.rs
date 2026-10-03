@@ -252,7 +252,7 @@ impl Lowerer<'_> {
             }
             LIT_CMP => {
                 let ts: Vec<SyntaxNode> = terms(n).collect();
-                let ops: Vec<SyntaxToken> = tokens(n).filter(|t| is_cmp_op(t.kind())).collect();
+                let ops: Vec<SyntaxToken> = tokens(n).filter(|t| t.kind().is_cmp()).collect();
                 if ts.len() == 2 && ops.len() == 1 && ops[0].kind() == EQ {
                     return self.eq_shape(rc, &ts, &ops[0], offset);
                 }
@@ -635,10 +635,6 @@ fn shared(rc: &Rc, bodies: &[Inner], out: &mut BTreeSet<String>) {
             }
         }
     }
-}
-
-fn is_cmp_op(k: SyntaxKind) -> bool {
-    matches!(k, EQ | EQ2 | NEQ | LT | LE | GT | GE)
 }
 
 /// What the body binds from `outer`, and the literals that hold in the
