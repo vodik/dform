@@ -2288,10 +2288,7 @@ fn keyed_overlay(
 fn key_label(keys: &[String], k: &[Value]) -> String {
     keys.iter()
         .zip(k)
-        .map(|(f, v)| match v {
-            Value::Str(s) => format!("{f}={s}"),
-            v => format!("{f}={}", crate::partition::fmt_value(v)),
-        })
+        .map(|(f, v)| format!("{f}={}", crate::partition::fmt_bare(v)))
         .collect::<Vec<_>>()
         .join(",")
 }
