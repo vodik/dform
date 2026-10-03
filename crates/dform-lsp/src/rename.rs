@@ -21,7 +21,7 @@ use std::path::{Path, PathBuf};
 /// cannot be renamed.
 pub fn prepare(p: &Project, path: &Path, at: usize) -> Result<(Range, String)> {
     let files = p.parse();
-    let d = Decls::of(files.iter().map(|f| &f.tree));
+    let d = Decls::of_files(&files);
     let (f, t, what) = refs::at(&d, &files, path, at).ok_or_else(|| anyhow!("no name here"))?;
     // An instance whose name is also a string an `m[e]` reads: the
     // rename would not change the string, and `m[e]` would no longer
@@ -132,7 +132,7 @@ pub struct Renaming {
 /// `textDocument/rename` of the name at `at` to `new`.
 pub fn rename(p: &Project, path: &Path, at: usize, new: &str) -> Result<Renaming> {
     let files = p.parse();
-    let d = Decls::of(files.iter().map(|f| &f.tree));
+    let d = Decls::of_files(&files);
     let (_, t, what) = refs::at(&d, &files, path, at).ok_or_else(|| anyhow!("no name here"))?;
     let sym = renameable(&what, &t)?;
     let old = t.text().to_string();

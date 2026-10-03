@@ -71,11 +71,64 @@ pub struct Decls {
     /// Resource headers' and `type` blocks' types.
     types: BTreeSet<String>,
     instances: BTreeSet<(String, String)>,
+    /// The files that are modules (`use`d or instanced by their path, R-65)
+    /// by their tree's root: each a scope of its own for the relations it
+    /// defines at its top level, `module STEM`.
+    module_files: Vec<(SyntaxNode, String)>,
+    /// The name a `use` binds -> the module file's stem it names.
+    uses: BTreeMap<String, String>,
 }
 
 impl Decls {
+    /// The declarations of a project's files, a module file's relations
+    /// its own (R-65).
+    pub fn of_files(files: &[Parsed]) -> Decls {
+        // The module paths the files `use` and instance, dotted and by
+        // their last segment.
+        let mut named: BTreeSet<String> = BTreeSet::new();
+        let mut uses = BTreeMap::new();
+        for f in files {
+            for n in f.tree.descendants() {
+                let path = match n.kind() {
+                    SyntaxKind::USE => {
+                        let (path, name) = dform_core::syntax::resolve::use_parts(&n);
+                        let stem = path.rsplit('.').next().unwrap_or(&path).to_string();
+                        uses.insert(name, stem);
+                        path
+                    }
+                    SyntaxKind::INSTANCE => dform_core::syntax::resolve::instance_parts(&n).0,
+                    _ => continue,
+                };
+                named.extend(path.rsplit('.').next().map(str::to_string));
+                named.insert(path);
+            }
+        }
+        let module_files = files
+            .iter()
+            .filter_map(|f| {
+                let stem = f.path.file_stem()?.to_str()?.to_string();
+                named
+                    .contains(&stem)
+                    .then(|| (f.tree.clone(), stem))
+            })
+            .collect();
+        let mut d = Decls::of_trees(files.iter().map(|f| &f.tree), module_files);
+        d.uses = uses;
+        d
+    }
+
     pub fn of<'a>(trees: impl IntoIterator<Item = &'a SyntaxNode>) -> Decls {
-        let mut d = Decls::default();
+        Decls::of_trees(trees, Vec::new())
+    }
+
+    fn of_trees<'a>(
+        trees: impl IntoIterator<Item = &'a SyntaxNode>,
+        module_files: Vec<(SyntaxNode, String)>,
+    ) -> Decls {
+        let mut d = Decls {
+            module_files,
+            ..Decls::default()
+        };
         for root in trees {
             for n in root.descendants() {
                 let scope = || scope_of(&n.parent().unwrap_or_else(|| n.clone()));
@@ -124,8 +177,8 @@ impl Decls {
                         };
                         if let Some(t) = t {
                             d.predicates.insert(t.text().to_string());
-                            d.defined
-                                .insert((private_scope(scope()), t.text().to_string()));
+                            let s = d.relation_scope(&scope(), &n);
+                            d.defined.insert((s, t.text().to_string()));
                         }
                     }
                     _ => {}
@@ -167,10 +220,23 @@ impl Decls {
         })
     }
 
-    /// The relation `name` read or defined in `scope`: its module's or
-    /// pack's own when that defines it, else the program's.
-    fn predicate(&self, scope: &Scope, name: &str) -> Symbol {
-        let s = private_scope(scope.clone());
+    /// The scope that keeps the relations defined at `at` private: its
+    /// component, else its file when the file is a module.
+    fn relation_scope(&self, scope: &Scope, at: &SyntaxNode) -> Scope {
+        private_scope(scope.clone()).or_else(|| {
+            let root = at.ancestors().last()?;
+            self.module_files
+                .iter()
+                .find(|(r, _)| *r == root)
+                .map(|(_, m)| format!("module {m}"))
+        })
+    }
+
+    /// The relation `name` read or defined at `at` in `scope`: its
+    /// component's, pack's or module file's own when that defines it, else
+    /// the program's.
+    fn predicate(&self, scope: &Scope, at: &SyntaxNode, name: &str) -> Symbol {
+        let s = self.relation_scope(scope, at);
         let key = (s.clone(), name.to_string());
         if s.is_some() && self.defined.contains(&key) && !dform_core::loader::is_core_pred(name) {
             Symbol::Predicate(s, name.to_string())
@@ -212,7 +278,8 @@ pub fn scope_of(node: &SyntaxNode) -> Scope {
     })
 }
 
-/// A scope that keeps relations private: a component's.
+/// A scope that keeps relations private: a component's (a module file's
+/// is [`Decls::relation_scope`]'s).
 fn private_scope(scope: Scope) -> Scope {
     scope.filter(|s| s.starts_with("component "))
 }
@@ -356,7 +423,7 @@ pub fn classify(d: &Decls, t: &SyntaxToken) -> What {
         SyntaxKind::DECL | SyntaxKind::EXTERN | SyntaxKind::INPUT_RELATION
             if relation_name(&parent).as_ref() == Some(t) =>
         {
-            What::Name(d.predicate(&scope, &name), true)
+            What::Name(d.predicate(&scope, &parent, &name), true)
         }
         // `instance c n`: the path's segments name a module or a
         // component in scope, `n` is the copy's.
@@ -454,7 +521,7 @@ fn chain(d: &Decls, c: &SyntaxNode, t: &SyntaxToken, scope: &Scope) -> What {
             .parent()
             .and_then(|call| call.parent())
             .is_some_and(|h| matches!(h.kind(), SyntaxKind::RULE | SyntaxKind::FACT));
-        return What::Name(d.predicate(scope, t.text()), head);
+        return What::Name(d.predicate(scope, c, t.text()), head);
     }
     let path = |start: usize| if k >= start { What::Path } else { What::Other };
     if ps.is_empty() {
@@ -501,6 +568,18 @@ fn chain(d: &Decls, c: &SyntaxNode, t: &SyntaxToken, scope: &Scope) -> What {
         }
         return path(3);
     }
+    // `m.p(..)`: the relation `p` of the module file `m` names.
+    if k == 2
+        && context == Some(SyntaxKind::CALL)
+        && ps.len() == 3
+        && matches!(ps.get(1), Some(Part::Dot))
+        && let Some(stem) = d.uses.get(&name0)
+    {
+        let s = Some(format!("module {stem}"));
+        if d.defined.contains(&(s.clone(), t.text().to_string())) {
+            return What::Name(Symbol::Predicate(s, t.text().to_string()), false);
+        }
+    }
     if d.modules.contains(&name0) && matches!(ps.get(1), Some(Part::Dot | Part::Index)) {
         if k == 0 {
             return What::Name(Symbol::Module(name0), false);
@@ -511,7 +590,7 @@ fn chain(d: &Decls, c: &SyntaxNode, t: &SyntaxToken, scope: &Scope) -> What {
     // `p[..]`.
     if matches!(ps.get(1), Some(Part::Index)) && d.predicates.contains(&name0) {
         return if k == 0 {
-            What::Name(d.predicate(scope, &name0), false)
+            What::Name(d.predicate(scope, c, &name0), false)
         } else {
             What::Path
         };
@@ -730,7 +809,7 @@ pub fn at<'p>(
 /// `textDocument/references` at byte `at` of `path`.
 pub fn references(p: &Project, path: &Path, at: usize, declarations: bool) -> Vec<Location> {
     let files = p.parse();
-    let d = Decls::of(files.iter().map(|f| &f.tree));
+    let d = Decls::of_files(&files);
     let Some((_, _, what)) = self::at(&d, &files, path, at) else {
         return Vec::new();
     };
@@ -851,7 +930,7 @@ zone_index("a", 0)
             text: src.into(),
             tree: dform_core::syntax::parser::parse(src).syntax(),
         }];
-        let d = Decls::of(files.iter().map(|f| &f.tree));
+        let d = Decls::of_files(&files);
         occurrences(&d, &files, sym)
             .into_iter()
             .map(|(f, t, decl)| {
@@ -943,6 +1022,58 @@ s(x) where helper(x), shared(x)
         assert_eq!(
             names(PRIVATE, &Symbol::Predicate(None, "shared".into())),
             vec![(3, false), (10, true), (11, false)]
+        );
+    }
+
+    /// Two module files that define a relation of the same name: each
+    /// module's is its own (R-65), read from the stack as `m.p(..)`.
+    #[test]
+    fn a_module_files_relation_is_its_own() {
+        let file = |path: &str, src: &str| Parsed {
+            path: PathBuf::from(path),
+            text: src.into(),
+            tree: dform_core::syntax::parser::parse(src).syntax(),
+        };
+        let files = vec![
+            file("/p/a.df", "edition 2026\nhelper(1)\nq(x) where helper(x)\n"),
+            file("/p/b.df", "edition 2026\nhelper(2)\nr(x) where helper(x)\n"),
+            file(
+                "/p/stacks/s.df",
+                "edition 2026\nuse a\nuse b\ns(x) where a.helper(x)\nt(x) where b.helper(x)\n",
+            ),
+        ];
+        let d = Decls::of_files(&files);
+        let at = |m: &str| -> Vec<(String, u32, bool)> {
+            occurrences(
+                &d,
+                &files,
+                &Symbol::Predicate(Some(format!("module {m}")), "helper".into()),
+            )
+            .into_iter()
+            .map(|(f, t, decl)| {
+                (
+                    f.path.display().to_string(),
+                    text::position(&f.text, t.text_range().start().into()).line,
+                    decl,
+                )
+            })
+            .collect()
+        };
+        assert_eq!(
+            at("a"),
+            vec![
+                ("/p/a.df".into(), 1, true),
+                ("/p/a.df".into(), 2, false),
+                ("/p/stacks/s.df".into(), 3, false)
+            ]
+        );
+        assert_eq!(
+            at("b"),
+            vec![
+                ("/p/b.df".into(), 1, true),
+                ("/p/b.df".into(), 2, false),
+                ("/p/stacks/s.df".into(), 4, false)
+            ]
         );
     }
 }

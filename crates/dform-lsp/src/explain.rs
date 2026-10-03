@@ -339,7 +339,7 @@ fn atom_of(f: &dform_core::circuit::Fact) -> Atom {
 /// evaluations; `None` where point is on nothing with content.
 pub fn hover_at(p: &refs::Project, path: &Path, at: usize) -> Option<String> {
     let files = p.parse();
-    let d = Decls::of(files.iter().map(|f| &f.tree));
+    let d = Decls::of_files(&files);
     let f = files.iter().find(|f| f.path == path)?;
     let t = nav::token_at(&f.tree, at)?;
     // `check` is a word only where it opens a refinement.
