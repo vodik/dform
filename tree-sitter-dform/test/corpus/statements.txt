@@ -61,6 +61,7 @@ type db.pg {
 }
 let cfg = settings[env]
 let big = n where size(n), n > 3
+let region: enum("a", "b") = "a"
 
 --------------------------------------------------------------------------------
 
@@ -269,7 +270,18 @@ let big = n where size(n), n > 3
             (identifier))))
       (comparison
         (identifier)
-        (integer)))))
+        (integer))))
+  (let
+    (identifier)
+    (type
+      (dotted_name
+        (identifier))
+      (string
+        (string_content))
+      (string
+        (string_content)))
+    (string
+      (string_content))))
 
 ================================================================================
 Modules, components and instances

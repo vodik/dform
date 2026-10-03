@@ -783,8 +783,12 @@ impl<'a> Parser<'a> {
                 }
                 p.opt_where_body()
             }),
+            // `let NAME [: T] = term [@rank] [where B]` (R-74).
             LET_KW => self.simple(LET, |p| {
                 p.expect_word()?;
+                if p.eat(COLON) {
+                    p.type_expr()?;
+                }
                 p.expect(EQ)?;
                 p.term()?;
                 p.eat(RANK);

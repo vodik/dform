@@ -223,10 +223,11 @@ export default grammar({
       ),
     ),
 
-    // `let k = t [where B]`: a value.
+    // `let k [: T] = t [where B]`: a value, typed or not (R-74).
     let: $ => seq(
       'let',
       field('name', $._word),
+      optional(seq(':', field('type', $._type))),
       '=',
       field('value', $._term),
       optional(seq('where', field('condition', $._body))),

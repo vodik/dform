@@ -361,8 +361,10 @@ top level and in CLI arguments it is the full address, which pastes
 unchanged from `plan` (H-16): `net.vpc["main/vpc"]`. A resource in scope is written by its
 name: `T["n"]` for a resource `n` in scope, and `T.n`, are errors naming
 `n`. A name declared twice in scope (three resources named `web`) is an
-error listing the candidates by address. A dot on a variable with no
-static type is field access on a value: `__path(X, "f")`. A variable a
+error listing the candidates by address, but in a `let` typed `T`
+(R-74), which takes the one of type `T`. A
+dot on a variable with no static type is field access on a value:
+`__path(X, "f")`. A variable a
 reference column binds with no `in` (`deformation(k, r, _)`) is a
 reference of no known type, and `r.p` on it is an error that says to bind
 it with `r in T` (R-43).
@@ -493,7 +495,7 @@ output     := "output" NAME (":" type)? ("=" term)? ("where" body)?
             | "output" NAME                        ; a relation exported (R-55)
 ofields    := "{" (ofield SEP)* "}"
 ofield     := NAME (":" type)? "=" term | NAME ":" ofields
-let        := "let" NAME "=" term RANK? ("where" body)?
+let        := "let" NAME (":" type)? "=" term RANK? ("where" body)?
 set        := "set" chain ("=" | "+=") term RANK? ("where" body)?
             | "set" "{" (chain ("=" | "+=") term RANK? SEP)* "}" RANK? ("where" body)?
             | "set" "from" term selector? RANK? ("where" body)?   ; a document's leaves (R-38)
@@ -596,7 +598,18 @@ disagree at the winning rank are a conflict naming both; a `@default` row
 gives way to any other. When `t` is a reference (a resource, a live
 object), `k`'s value is that reference and its static type is the
 reference's, so a dot on `k` reads through it: `let pg =
-db.postgres["main"]`, then `pg.endpoint`.
+db.postgres["main"]`, then `pg.endpoint`; `k` alone, given as a value, is
+the reference (`db = pg`).
+
+`let k: T = t` declares the cell's type (R-74): the value is checked as in
+any typed position (R-31), a literal read as `T` (`let region:
+enum("eu", "us") = "ca"` is an error at `"ca"`, `let n: inet =
+"10.0.0.0/16"` a network); a reference is an error unless `T` is its
+resource type (`let v: net.vpc = main`, also written `ref(net.vpc)`),
+and a bare name two resources share is the one of type `T`. Every row of
+a typed `let` declares the same `T`. The type is the column of `k`'s
+reads (R-34), so hover and the inferred signatures show it; `let k = t`
+stays untyped.
 
 `output k: T = t [where B]` is one statement (H-7): the type is optional (an
 untyped output is `any`), the value is not ("Inputs and outputs").

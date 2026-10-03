@@ -309,6 +309,18 @@ fn terms(n: &SyntaxNode) -> impl Iterator<Item = SyntaxNode> + '_ {
     n.children().filter(|c| is_term(c.kind()))
 }
 
+/// The resource type a typed `let`'s row declares, from the row's term
+/// `t`: `let v: net.vpc = ..`, `let v: ref(net.vpc) = ..` (R-74).
+fn declared_ref(t: &SyntaxNode) -> Option<String> {
+    let ty = node(&t.parent().filter(|l| l.kind() == LET)?, TYPE_EXPR)?;
+    let name = dotted_text(&ty, 0);
+    let name = match node(&ty, TYPE_EXPR) {
+        Some(inner) if name == "ref" => dotted_text(&inner, 0),
+        _ => name,
+    };
+    name.contains('.').then_some(name)
+}
+
 /// The name a term is when it is one word and nothing else: `env`.
 fn bare_name(t: &SyntaxNode) -> Option<String> {
     let mut ws = t
@@ -703,6 +715,20 @@ pub struct Lowerer<'u> {
     /// The columns of a relation with no `decl`, read from its first
     /// source (R-34).
     read_columns: BTreeMap<String, Vec<BindArg>>,
+    /// What picks among the resources a bare name shares, in the value
+    /// being lowered (R-74).
+    want: Want,
+}
+
+/// What a value's position says of the resource a bare name two types
+/// share names (R-74).
+#[derive(Clone, Default, PartialEq, Eq)]
+enum Want {
+    /// Nothing: the name is an error listing them.
+    #[default]
+    Nothing,
+    /// A typed `let`'s resource type.
+    Type(String),
 }
 
 /// What a call is where it is written.
@@ -742,6 +768,7 @@ impl<'u> Lowerer<'u> {
             nested: 0,
             after: Vec::new(),
             read_columns: BTreeMap::new(),
+            want: Want::Nothing,
         };
         l.decls.deployed = deployed.to_vec();
         for (i, u) in units.iter().enumerate() {
@@ -1230,6 +1257,15 @@ impl<'u> Lowerer<'u> {
     /// (by name in scope or `T[e]`), a live object, or another `let`
     /// holding one.
     fn term_vtype(&self, scope: usize, t: &SyntaxNode, depth: usize) -> Option<VType> {
+        match declared_ref(t) {
+            Some(typ) => Some(VType::Ref(typ)),
+            None => self.written_vtype(scope, t, depth),
+        }
+    }
+
+    /// The reference a `let` row's term names as written, whatever the
+    /// row declares.
+    fn written_vtype(&self, scope: usize, t: &SyntaxNode, depth: usize) -> Option<VType> {
         let c = Chain::of(t)?;
         let index_then_end = |ops: &[Op]| matches!(ops, [Op::Index(ts, _)] if ts.len() == 1);
         if c.head == "world" {
@@ -3173,6 +3209,33 @@ impl<'u> Lowerer<'u> {
         if let Err(e) = self.value_type(scope, &name) {
             return self.error(span, e);
         }
+        // `let NAME: T = t` (R-74): its rows agree on `T`, and a literal is
+        // read as one, as in any typed position (R-31).
+        let declared = node(n, TYPE_EXPR).map(|t| self.type_expr(&t));
+        let typed_rows: Vec<SyntaxNode> = self
+            .find_let(scope, &name)
+            .map(|(_, rows)| rows)
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|r| r.parent().and_then(|l| node(&l, TYPE_EXPR)))
+            .collect();
+        if let (Some(here), Some(first)) = (node(n, TYPE_EXPR), typed_rows.first())
+            && here.text() != first.text()
+        {
+            return self.error(
+                self.span(&here),
+                format!(
+                    "`let {name}` is declared `{}` in one row and `{}` in another",
+                    first.text(),
+                    here.text()
+                ),
+            );
+        }
+        let ty = declared.as_ref().map(crate::types::of_expr);
+        let want = match &ty {
+            Some(crate::types::Ty::Ref(t)) => Want::Type(t.clone()),
+            _ => Want::Nothing,
+        };
         let mut rc = self.rc(n, scope, outer);
         let mut body = self.opt_body(&mut rc, n)?;
         let has_body = node(n, BODY).is_some();
@@ -3189,7 +3252,11 @@ impl<'u> Lowerer<'u> {
             body.push(Lit::Eq(var(&v), call));
             var(&v)
         } else {
-            self.let_value(&mut rc, &t, &mut body)?
+            self.wanting(want, |l| l.let_value(&mut rc, &t, &mut body))?
+        };
+        let value = match &ty {
+            Some(ty) => self.let_typed(scope, &name, ty, &t, value)?,
+            None => value,
         };
         let rank = self.rank_tok(n)?.unwrap_or(Rank::Normal);
         let head = Atom {
@@ -3199,17 +3266,79 @@ impl<'u> Lowerer<'u> {
             span,
         };
         self.check_bound(&rc, &body, &atom_terms(&head))?;
-        Ok(vec![if body.is_empty() && !has_body {
+        let mut out = vec![if body.is_empty() && !has_body {
             Stmt::Fact(head)
         } else {
             Stmt::Rule(RuleStmt { head, body })
-        }])
+        }];
+        // The cell's type is its reader's column, `decl NAME(NAME: T)`, as
+        // R-34 types a relation: once, at the first typed row. A resource
+        // type is the reference's own (`value_type`).
+        if let (Some(d), Some(ty)) = (declared, &ty)
+            && !matches!(ty, crate::types::Ty::Ref(_))
+            && typed_rows.first().and_then(|t| t.parent()).as_ref() == Some(n)
+        {
+            out.push(Stmt::Decl(Decl {
+                pred: name.clone(),
+                fields: vec![name],
+                types: vec![Some(d)],
+                span,
+            }));
+        }
+        Ok(out)
+    }
+
+    /// A typed `let`'s value `value` (lowered from `t`) checked against
+    /// its type `ty`, a literal read as one (R-31, R-74).
+    fn let_typed(
+        &mut self,
+        scope: usize,
+        name: &str,
+        ty: &crate::types::Ty,
+        t: &SyntaxNode,
+        value: Term,
+    ) -> L<Term> {
+        use crate::types::Ty;
+        let span = self.span(t);
+        // A reference: its type is the row's, read from its text.
+        let got = match Chain::of(t) {
+            Some(c) if c.is_bare() && !self.is_value(scope, &c.head) => {
+                self.resource(scope, &c.head).map(|types| match ty {
+                    Ty::Ref(want) if types.contains(want) => want.clone(),
+                    _ => types[0].clone(),
+                })
+            }
+            _ => match self.written_vtype(scope, t, 0) {
+                Some(VType::Ref(typ)) => Some(typ),
+                _ => None,
+            },
+        };
+        match got {
+            Some(typ) => {
+                let r = func("ref", vec![str_term(&typ), value.clone(), str_term("")]);
+                match crate::types::mismatch(ty, &r) {
+                    Some(why) => self.error(span, format!("let {name} {why}")),
+                    None => Ok(value),
+                }
+            }
+            None => crate::types::literal(ty, value)
+                .or_else(|why| self.error(span, format!("let {name} {why}"))),
+        }
     }
 
     /// A `let`'s value: a reference is its key (a resource's address, a
     /// live object's name); anything else the term.
     fn let_value(&mut self, rc: &mut Rc, t: &SyntaxNode, body: &mut Vec<Lit>) -> L<Term> {
         if let Some(c) = Chain::of(t) {
+            // A resource by its bare name.
+            if c.is_bare()
+                && !rc.vars.contains_key(&c.head)
+                && !self.is_value(rc.scope, &c.head)
+                && self.resource(rc.scope, &c.head).is_some()
+            {
+                let span = self.span(t);
+                return Ok(self.reference(rc, &c, body, span)?.1);
+            }
             let mut pre = Vec::new();
             let mut rc2 = rc.clone();
             if let Ok(res) = self.probe(|l| l.resolve(&mut rc2, &c, &mut pre)) {
@@ -4365,10 +4494,12 @@ impl<'u> Lowerer<'u> {
         if c.is_bare()
             && let Some(types) = self.resource(rc.scope, &c.head)
         {
-            if types.len() > 1 {
-                return self.ambiguous(&c.head, &types, span);
-            }
-            return Ok((str_term(&types[0]), self.resource_addr(rc.scope, &c.head)));
+            let typ = match &self.want {
+                _ if types.len() == 1 => &types[0],
+                Want::Type(t) if types.contains(t) => t,
+                _ => return self.ambiguous(&c.head, &types, span),
+            };
+            return Ok((str_term(typ), self.resource_addr(rc.scope, &c.head)));
         }
         match self.resolve(rc, c, out)? {
             Res::Ref { typ, addr, path } if path.is_empty() => Ok((typ, addr)),
@@ -4376,25 +4507,16 @@ impl<'u> Lowerer<'u> {
         }
     }
 
+    /// `f` with `want` picking among the resources a bare name shares.
+    fn wanting<T>(&mut self, want: Want, f: impl FnOnce(&mut Self) -> T) -> T {
+        let saved = std::mem::replace(&mut self.want, want);
+        let r = f(self);
+        self.want = saved;
+        r
+    }
+
     fn ambiguous<T>(&mut self, name: &str, types: &[String], span: Span) -> L<T> {
-        let list = types
-            .iter()
-            .map(|t| {
-                crate::ir::Address {
-                    typ: t.clone(),
-                    name: name.to_string(),
-                }
-                .to_string()
-            })
-            .collect::<Vec<_>>()
-            .join(", ");
-        self.error(
-            span,
-            format!(
-                "`{name}` names {} resources: write one of {list}",
-                types.len()
-            ),
-        )
+        self.error(span, crate::types::ambiguous_resource(name, types))
     }
 
     /// A relation atom, its arguments lowered at `pos`: positional, or
@@ -5423,7 +5545,9 @@ impl<'u> Lowerer<'u> {
             Ok(t) => t,
             Err(e) => return self.error(span, e),
         };
-        let Some(ty) = ty.filter(|_| !c.is_bare()) else {
+        // A `let` holding a live object is its name alone; one holding a
+        // resource is the reference (R-43).
+        let Some(ty) = ty.filter(|t| !c.is_bare() || matches!(t, VType::Ref(_))) else {
             let path = self.segs(rc, &c.ops, pre)?;
             return Ok(Res::Value { pred, path });
         };

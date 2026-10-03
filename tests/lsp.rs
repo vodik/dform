@@ -1623,3 +1623,23 @@ fn completion_offers_input_fields_and_relation_outputs() {
     let rels = labels(&c.at("textDocument/completion", &file, (n - 1, 20)));
     assert_eq!(rels, ["zone"], "{rels:?}");
 }
+
+/// A typed `let` (R-74): hover on a read shows its declaration, the type
+/// with it.
+#[test]
+fn hover_on_a_typed_let_shows_its_type() {
+    let s = common::Scratch::project("lsp-typed-let");
+    let file = s.write(
+        "stacks/app.df",
+        "\nprovider fake\nlet block: inet = \"10.0.0.0/16\"\n\
+         resource net.vpc main {\n  cidr = \"10.0.0.0/16\"\n  tags = { b: block }\n}\n",
+    );
+    let root = std::fs::canonicalize(&s.dir).unwrap();
+    let file = std::fs::canonicalize(&file).unwrap();
+    let mut c = Client::start(&root, json!({}));
+    c.open(&file);
+    let hover = c.at("textDocument/hover", &file, find(&file, "block }", 1));
+    let text = hover["contents"]["value"].as_str().unwrap_or_default();
+    assert!(text.contains("let block: inet = \"10.0.0.0/16\""), "{text}");
+    c.shutdown();
+}

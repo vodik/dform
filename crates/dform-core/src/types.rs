@@ -186,6 +186,26 @@ pub fn ambiguous_literal(text: &str, span: crate::ast::Span) -> Term {
     }
 }
 
+/// The error for a bare name two or more resources of `types` share,
+/// where no type picks one: `main` names 2 resources: write one of ..
+pub fn ambiguous_resource(name: &str, types: &[String]) -> String {
+    let list = types
+        .iter()
+        .map(|t| {
+            Address {
+                typ: t.clone(),
+                name: name.to_string(),
+            }
+            .to_string()
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "`{name}` names {} resources: write one of {list}",
+        types.len()
+    )
+}
+
 /// The text of an ambiguous quantity literal, `__quantity("500m", ..)`.
 pub fn ambiguous(t: &Term) -> Option<&str> {
     match t {
