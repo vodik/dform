@@ -145,7 +145,8 @@ fn a_literal_key_and_a_second_list_merge_by_key() {
     );
 }
 
-/// Two writes of one leaf at one rank conflict, named by the element.
+/// Two writes of one leaf at one rank conflict, named by the element and
+/// the leaf.
 #[test]
 fn a_same_rank_disagreement_names_the_element() {
     let s = project(
@@ -157,7 +158,7 @@ fn a_same_rank_disagreement_names_the_element() {
         .success();
     assert!(
         r.stdout
-            .contains("two contributions disagree at spec.template.spec.containers[name=api]"),
+            .contains("two contributions disagree at spec.template.spec.containers[name=api].image"),
         "{}{}",
         r.stdout,
         r.stderr

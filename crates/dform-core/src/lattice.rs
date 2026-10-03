@@ -242,7 +242,7 @@ fn flat_normalize(path: &str, items: Vec<(Value, Witnesses)>) -> Elem {
             match eq3(&a.0, &b.0) {
                 Truth::False => {
                     return Elem::Conflict {
-                        path: path.to_string(),
+                        path: format!("{path}{}", difference(&a.0, &b.0)),
                         a: a.clone(),
                         b: b.clone(),
                         vals: merged.clone(),
@@ -269,6 +269,35 @@ fn flat_normalize(path: &str, items: Vec<(Value, Witnesses)>) -> Elem {
     Elem::Stuck {
         vals: merged,
         nulls,
+    }
+}
+
+/// Where inside two definitely unequal values they first disagree, as a
+/// path suffix (`.name`, `[0].image`): empty when they differ whole.
+fn difference(a: &Value, b: &Value) -> String {
+    match (a, b) {
+        (Value::Obj(x), Value::Obj(y)) => {
+            for (k, v) in x {
+                match y.get(k) {
+                    None => return format!(".{k}"),
+                    Some(w) if eq3(v, w) == Truth::False => {
+                        return format!(".{k}{}", difference(v, w));
+                    }
+                    _ => {}
+                }
+            }
+            match y.keys().find(|k| !x.contains_key(*k)) {
+                Some(k) => format!(".{k}"),
+                None => String::new(),
+            }
+        }
+        (Value::List(x), Value::List(y)) if x.len() == y.len() => x
+            .iter()
+            .zip(y)
+            .position(|(v, w)| eq3(v, w) == Truth::False)
+            .map(|i| format!("[{i}]{}", difference(&x[i], &y[i])))
+            .unwrap_or_default(),
+        _ => String::new(),
     }
 }
 
@@ -408,7 +437,7 @@ fn keyed_normalize(
     let mut out = Vec::new();
     let mut stuck: BTreeSet<String> = BTreeSet::new();
     for (k, contribs) in groups {
-        let child = format!("{path}[{k:?}]");
+        let child = format!("{path}[{}]", key_label(keys, &k));
         match normalize(elem, &child, contribs) {
             Elem::Bottom => {}
             Elem::Val(v, _) => out.push(v),
@@ -902,7 +931,8 @@ mod tests {
                 );
             }
         }
-        // The same leaf at one rank, two values: a conflict at the element.
+        // The same leaf at one rank, two values: a conflict at the element's
+        // leaf, named by its key.
         let ws = [write(6, Rank::Normal, s("a"), obj(&[("image", s("a:2"))]))];
         let below = Below {
             lattices: None,
@@ -910,7 +940,7 @@ mod tests {
         };
         let got = lub_ranked_refined(&lat, "spec.containers", &lists, &[], below);
         assert!(
-            matches!(&got, Collapsed::Conflict { reason, .. } if reason.ends_with("at spec.containers[name=a]")),
+            matches!(&got, Collapsed::Conflict { reason, .. } if reason.ends_with("at spec.containers[name=a].image")),
             "{got:?}"
         );
     }
@@ -1655,11 +1685,21 @@ impl Ranked {
         let rank = rank_of(top);
         match &self.ranks[top] {
             Elem::Bottom => unreachable!(),
-            e @ Elem::Conflict { a, b, reason, .. } => Collapsed::Conflict {
+            e @ Elem::Conflict {
+                a,
+                b,
+                reason,
+                path: leaf,
+                ..
+            } => Collapsed::Conflict {
                 rank: Some(rank),
                 a: a.clone(),
                 b: b.clone(),
-                reason: reason.clone(),
+                // The leaf the contributions disagree at, below the cell.
+                reason: match leaf.len() > path.len() && leaf.starts_with(path) {
+                    true => format!("{reason} at {leaf}"),
+                    false => reason.clone(),
+                },
                 witnesses: e.witnesses(),
                 shadowed,
             },
@@ -2003,6 +2043,11 @@ fn lub_ranked_map(
                 shadowed: sh,
             } => {
                 shadowed.extend(sh);
+                // Named at the leaf: the innermost key that disagrees.
+                let reason = match reason.contains(" at ") {
+                    true => reason,
+                    false => format!("{reason} at {key_path}"),
+                };
                 return Collapsed::Conflict {
                     rank,
                     a,
@@ -2225,7 +2270,12 @@ fn keyed_overlay(
                     rank,
                     a,
                     b,
-                    reason: format!("{reason} at {at}"),
+                    // Named at its leaf already when the element's own
+                    // collapse found it below the element.
+                    reason: match reason.contains(&format!(" at {at}")) {
+                        true => reason,
+                        false => format!("{reason} at {at}"),
+                    },
                     witnesses,
                     shadowed,
                 };

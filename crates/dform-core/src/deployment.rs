@@ -510,14 +510,23 @@ impl Evaluator {
     ) -> Result<Planned> {
         let backend = &self.backend;
         let schema = self.schema();
-        let mut plan = backend.plan(&resources, adopts, lifecycle, st)?;
+        // A resource with a conflicting attribute is not planned: the
+        // report shows the conflict, and the deny blocks an apply.
+        let asked = |res: &EvalResult, docs: &[ir::Resource]| -> Vec<ir::Resource> {
+            let conflicted = report::conflicted(res);
+            docs.iter()
+                .filter(|r| !conflicted.contains(&r.addr))
+                .cloned()
+                .collect()
+        };
+        let mut plan = backend.plan(&asked(&res, &resources), adopts, lifecycle, st)?;
         let replaced = executor::replaced(&plan);
         let (res, violations, resources) = if replaced.is_empty() {
             (res, violations.to_vec(), resources)
         } else {
             let (again, violations) = self.evaluate_with(st, &replaced, &[], None)?;
             let docs = ir::compile_resources(again.facts.iter().cloned(), schema)?;
-            plan = backend.plan_retracting(&docs, adopts, lifecycle, st, &replaced)?;
+            plan = backend.plan_retracting(&asked(&again, &docs), adopts, lifecycle, st, &replaced)?;
             executor::hold_dependents(&mut plan, &docs, &replaced);
             (again, violations, docs)
         };

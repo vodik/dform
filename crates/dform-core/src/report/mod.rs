@@ -371,10 +371,24 @@ pub struct Input<'a> {
     pub denies: &'a [String],
 }
 
+/// The deny that names an attribute whose contributions conflict.
+pub const CONFLICT: &str = "conflicting attribute contributions";
+
+/// The resources an attribute of which conflicts: the report shows their
+/// conflicts in place of any deformation of theirs, and the provider is
+/// not asked to plan them (its refusal of the document the conflict left
+/// incomplete would hide the conflict).
+pub fn conflicted(res: &EvalResult) -> BTreeSet<Address> {
+    diags(res, &Redactor::default(), "deny", CONFLICT)
+        .into_iter()
+        .map(|d| d.addr)
+        .collect()
+}
+
 pub fn report(i: &Input) -> Report {
     let r = Redactor::new(&i.res.facts, i.schema);
     let refs = Refs::new(&i.res.facts);
-    let mut conflicts = diags(i.res, &r, "deny", "conflicting attribute contributions");
+    let mut conflicts = diags(i.res, &r, "deny", CONFLICT);
     conflicts.extend(diags(i.res, &r, "deny", crate::refine::VIOLATED));
     let conflicted: BTreeSet<&Address> = conflicts.iter().map(|d| &d.addr).collect();
     let (held, definite): (Vec<&Action>, Vec<&Action>) = i
