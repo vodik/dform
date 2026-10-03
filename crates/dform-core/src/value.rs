@@ -24,6 +24,11 @@ pub enum Value {
     /// A zoned instant (R-62), printed canonically
     /// (`2026-10-02T09:00:00+02:00[Europe/Paris]`).
     Time(crate::time::Time),
+    /// A url (the url ticket): its canonical text, parsed at the edge
+    /// (`url(s)`, a literal in a `url` position), so two spellings of one
+    /// url are equal and a url never equals a string. `.scheme`, `.host`,
+    /// `.port`, `.path`, `.query`, `.fragment` read its components.
+    Url(String),
     Ref {
         typ: String,
         name: String,
@@ -104,16 +109,46 @@ impl Value {
         }
     }
 
-    /// The canonical text of a quantity or a time (`1536Mi`,
-    /// `2026-10-02T09:00:00+02:00[Europe/Paris]`): what `str()`,
+    /// The canonical text of a quantity, a time or a url (`1536Mi`,
+    /// `2026-10-02T09:00:00+02:00[Europe/Paris]`, `https://h/p`): what `str()`,
     /// interpolation and the plan print where no schema renders it.
     pub fn typed_text(&self) -> Option<String> {
         match self {
             Value::Quantity(q) => Some(q.to_string()),
             Value::Time(t) => Some(t.to_string()),
+            Value::Url(u) => Some(u.clone()),
             _ => None,
         }
     }
+}
+
+/// `text` read as a url: its canonical text, or why it is not one.
+pub fn parse_url(text: &str) -> Result<Value, url::ParseError> {
+    url::Url::parse(text).map(|u| Value::Url(u.to_string()))
+}
+
+/// A url's components as an object: `scheme`, `host`, `port` (absent: the
+/// scheme's default), `path`, `query` (its pairs), `fragment` (absent:
+/// none). What `.host` on a url and `url.parse` read; no value for a url
+/// without a host (`mailto:x`).
+pub fn url_parts(text: &str) -> Option<Value> {
+    let u = url::Url::parse(text).ok()?;
+    let mut m = BTreeMap::new();
+    m.insert("scheme".to_string(), Value::Str(u.scheme().to_string()));
+    m.insert("host".to_string(), Value::Str(u.host_str()?.to_string()));
+    if let Some(port) = u.port() {
+        m.insert("port".to_string(), Value::Int(i64::from(port)));
+    }
+    m.insert("path".to_string(), Value::Str(u.path().to_string()));
+    let q = u
+        .query_pairs()
+        .map(|(k, v)| (k.into_owned(), Value::Str(v.into_owned())))
+        .collect();
+    m.insert("query".to_string(), Value::Obj(q));
+    if let Some(f) = u.fragment() {
+        m.insert("fragment".to_string(), Value::Str(f.to_string()));
+    }
+    Some(Value::Obj(m))
 }
 
 pub fn ipv4_to_u32(ip: &str) -> Option<u32> {

@@ -444,13 +444,21 @@ is then one spelling for every provider; a value its form cannot hold
 (`1536Mi` as whole GiB) is a plan error naming the attribute, and what a
 provider sends back at such an attribute is read the same way.
 
-A `url` is parsed at the edge, like `inet`: written as a string in a
-`url` position or to `url(..)`, and printed canonically (its scheme
-lower-case, its path and query percent-encoded consistently) so equal
-URLs print alike. `url.join`, `url.with_scheme`, `url.with_host`,
-`url.with_port`, `url.with_path` and `url.with_query` change one part
-and reprint the rest; `url.parse` breaks every part out as a plain
-object instead, for reading rather than rebuilding.
+A `url` is a value, like `inet`: written as a string in a `url`
+position or to `url(..)`, parsed there, and held canonically (its scheme
+and host lower-case, a default port dropped, its path and query
+percent-encoded consistently), so two spellings of one url are equal.
+A url never equals a string: `url("https://h") == "https://h/"` is
+false; write `url(..)` on the string side. It prints as its canonical
+text in the plan, the plan file, state and JSON. `u.scheme`, `u.host`,
+`u.port` (absent: the scheme's default), `u.path`, `u.query` (an
+object of its pairs) and `u.fragment` (absent: none) read its parts.
+`url.with_scheme`, `url.with_host`, `url.with_port`, `url.with_path`
+and `url.with_query` change one part and give a url; `url.parse` breaks
+every part out as a plain object (a string argument read as a url);
+`url.join` and `url.encode` work on strings. A `regex` is a parameter
+type only (`regex.match`'s pattern): a string whose text is checked
+as a pattern at compile time.
 
 A literal in a position whose type is known is checked as that type at
 compile time (R-31, Postgres's unknown-literal rule): a schema attribute's

@@ -166,6 +166,7 @@ fn shown_literal(v: &Value) -> String {
         Value::Bool(b) => format!("the bool {b}"),
         Value::Quantity(q) => format!("the {} {q}", q.dim().name()),
         Value::Time(t) => format!("the time {t}"),
+        Value::Url(u) => format!("the url {u}"),
         v => crate::partition::fmt_value(v),
     }
 }
@@ -301,8 +302,9 @@ pub fn mismatch(ty: &Ty, t: &Term) -> Option<String> {
                 ("inet", Value::Str(x)) => crate::value::parse_ipnet(x).is_some(),
                 ("ip", Value::Ip(_)) => true,
                 ("ip", Value::Str(x)) => crate::value::ipv4_to_u32(x).is_some(),
-                // A url (and a regex pattern, R-31) stays a plain string;
-                // only its text is checked.
+                // A url's text is read as one (`read_as`); a regex pattern
+                // stays a string, its text checked.
+                ("url", Value::Url(_)) => true,
                 ("url", Value::Str(x)) => url::Url::parse(x).is_ok(),
                 ("regex", Value::Str(x)) => regex::Regex::new(x).is_ok(),
                 // A null is not known yet; a computed value fits its type.
@@ -397,12 +399,11 @@ fn read_as(ty: &Ty, t: Term) -> Term {
                 None => Term::Val(Value::Str(x)),
             }
         }
-        // A url literal is canonicalized at compile time, the same text
-        // the constructor and `url.parse` would print (R-31).
-        (Ty::Scalar(s), Term::Val(Value::Str(x))) if s == "url" => match url::Url::parse(&x) {
-            Ok(u) => Term::Val(Value::Str(u.to_string())),
-            Err(_) => Term::Val(Value::Str(x)),
-        },
+        // A string in a url position is a url, parsed at compile time
+        // into its canonical text (the constructor's value).
+        (Ty::Scalar(s), Term::Val(Value::Str(x))) if s == "url" => {
+            Term::Val(crate::value::parse_url(&x).unwrap_or(Value::Str(x)))
+        }
         (Ty::Secret(inner), t) => read_as(inner, t),
         (Ty::List(inner), Term::List(xs)) => {
             Term::List(xs.into_iter().map(|x| read_as(inner, x)).collect())

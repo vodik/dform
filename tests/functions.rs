@@ -303,7 +303,8 @@ d(s) where s = base64.decode("aGVsbG8=")
 
 /// A `url` literal is canonicalized and checked at compile time (R-31);
 /// `url.join`, `with_scheme`, `with_host`, `with_port`, `with_path`,
-/// `with_query`, `url.encode`.
+/// `with_query`, `url.encode`. A url prints as its canonical text, as an
+/// `inet` does; `url.join` and `url.encode` are about strings.
 #[test]
 fn url_functions_evaluate() {
     let src = r#"u(x) where x = url("https://example.com/a")
@@ -316,15 +317,37 @@ qu(x) where x = url.with_query(url("http://h/p"), { a: "1" })
 en(x) where x = url.encode("a b/c")
 pr(h) where p = url.parse("https://h.example.com:8080/x?a=1"), h = p.host
 "#;
-    assert_eq!(facts(src, "u"), [r#"u("https://example.com/a")"#]);
+    assert_eq!(facts(src, "u"), [r#"u(https://example.com/a)"#]);
     assert_eq!(facts(src, "j"), [r#"j("https://example.com/a/b")"#]);
-    assert_eq!(facts(src, "sc"), [r#"sc("https://h/p")"#]);
-    assert_eq!(facts(src, "ho"), [r#"ho("http://other/p")"#]);
-    assert_eq!(facts(src, "po"), [r#"po("http://h:8080/p")"#]);
-    assert_eq!(facts(src, "pa"), [r#"pa("http://h/q")"#]);
-    assert_eq!(facts(src, "qu"), [r#"qu("http://h/p?a=1")"#]);
+    assert_eq!(facts(src, "sc"), [r#"sc(https://h/p)"#]);
+    assert_eq!(facts(src, "ho"), [r#"ho(http://other/p)"#]);
+    assert_eq!(facts(src, "po"), [r#"po(http://h:8080/p)"#]);
+    assert_eq!(facts(src, "pa"), [r#"pa(http://h/q)"#]);
+    assert_eq!(facts(src, "qu"), [r#"qu(http://h/p?a=1)"#]);
     assert_eq!(facts(src, "en"), [r#"en("a%20b%2Fc")"#]);
     assert_eq!(facts(src, "pr"), [r#"pr("h.example.com")"#]);
+}
+
+/// A url is a value (the url ticket's decisions): two spellings of one
+/// url are equal, a url never equals its string, `.scheme`, `.host`,
+/// `.port`, `.path`, `.query` and `.fragment` read its components, and
+/// JSON carries its canonical text.
+#[test]
+fn a_url_is_a_value() {
+    let src = r#"same() where url("HTTPS://Example.COM:443") == url("https://example.com/")
+text() where url("https://example.com/") == "https://example.com/"
+parts(s, h, p, a, q, f) where u = url("http://h.example.com:8080/a/b?x=1#top"), s = u.scheme, h = u.host, p = u.port, a = u.path, q = u.query.x, f = u.fragment
+noport(p) where u = url("https://h/"), p = u.port
+enc(j) where j = json.encode({ u: url("https://h") })
+"#;
+    assert_eq!(facts(src, "same"), ["same()"]);
+    assert!(facts(src, "text").is_empty());
+    assert_eq!(
+        facts(src, "parts"),
+        [r#"parts("http", "h.example.com", 8080, "/a/b", "1", "top")"#]
+    );
+    assert!(facts(src, "noport").is_empty());
+    assert_eq!(facts(src, "enc"), [r#"enc("{\"u\":\"https://h/\"}")"#]);
 }
 
 /// A bad url literal in a `url`-typed position is a compile error.

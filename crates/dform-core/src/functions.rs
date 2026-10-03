@@ -698,6 +698,10 @@ pub const BODIES: &[(&str, Body)] = &[
         [v, path] => {
             let mut v = v.clone();
             for seg in path.as_str()?.split('.') {
+                // A url's components read as an object's (`u.host`).
+                if let Value::Url(u) = &v {
+                    v = crate::value::url_parts(u)?;
+                }
                 let Value::Obj(mut m) = v else {
                     return None;
                 };
@@ -1115,29 +1119,12 @@ pub const BODIES: &[(&str, Body)] = &[
         _ => None,
     }),
     ("url", |a| match a {
-        [Value::Str(s)] => url::Url::parse(s).ok().map(|u| Value::Str(u.to_string())),
+        [u @ Value::Url(_)] => Some(u.clone()),
+        [Value::Str(s)] => crate::value::parse_url(s).ok(),
         _ => None,
     }),
     ("url.parse", |a| match a {
-        [Value::Str(s)] => {
-            let u = url::Url::parse(s).ok()?;
-            let mut m = BTreeMap::new();
-            m.insert("scheme".to_string(), Value::Str(u.scheme().to_string()));
-            m.insert("host".to_string(), Value::Str(u.host_str()?.to_string()));
-            if let Some(port) = u.port() {
-                m.insert("port".to_string(), Value::Int(i64::from(port)));
-            }
-            m.insert("path".to_string(), Value::Str(u.path().to_string()));
-            let mut q = BTreeMap::new();
-            for (k, v) in u.query_pairs() {
-                q.insert(k.into_owned(), Value::Str(v.into_owned()));
-            }
-            m.insert("query".to_string(), Value::Obj(q));
-            if let Some(f) = u.fragment() {
-                m.insert("fragment".to_string(), Value::Str(f.to_string()));
-            }
-            Some(Value::Obj(m))
-        }
+        [v] => crate::value::url_parts(&as_url(v)?),
         _ => None,
     }),
     ("url.join", |a| match a {
@@ -1145,41 +1132,29 @@ pub const BODIES: &[(&str, Body)] = &[
         _ => None,
     }),
     ("url.with_scheme", |a| match a {
-        [Value::Str(s), Value::Str(scheme)] => {
-            let mut u = url::Url::parse(s).ok()?;
-            u.set_scheme(scheme).ok()?;
-            Some(Value::Str(u.to_string()))
-        }
+        [u, Value::Str(scheme)] => with_url(u, |u| u.set_scheme(scheme).ok()),
         _ => None,
     }),
     ("url.with_host", |a| match a {
-        [Value::Str(s), Value::Str(host)] => {
-            let mut u = url::Url::parse(s).ok()?;
-            u.set_host(Some(host)).ok()?;
-            Some(Value::Str(u.to_string()))
-        }
+        [u, Value::Str(host)] => with_url(u, |u| u.set_host(Some(host)).ok()),
         _ => None,
     }),
     ("url.with_port", |a| match a {
-        [Value::Str(s), Value::Int(port)] => {
-            let mut u = url::Url::parse(s).ok()?;
+        [u, Value::Int(port)] => {
             let p = u16::try_from(*port).ok()?;
-            u.set_port(Some(p)).ok()?;
-            Some(Value::Str(u.to_string()))
+            with_url(u, |u| u.set_port(Some(p)).ok())
         }
         _ => None,
     }),
     ("url.with_path", |a| match a {
-        [Value::Str(s), Value::Str(path)] => {
-            let mut u = url::Url::parse(s).ok()?;
+        [u, Value::Str(path)] => with_url(u, |u| {
             u.set_path(path);
-            Some(Value::Str(u.to_string()))
-        }
+            Some(())
+        }),
         _ => None,
     }),
     ("url.with_query", |a| match a {
-        [Value::Str(s), Value::Obj(q)] => {
-            let mut u = url::Url::parse(s).ok()?;
+        [u, Value::Obj(q)] => {
             let pairs: Option<Vec<(&String, &String)>> = q
                 .iter()
                 .map(|(k, v)| match v {
@@ -1188,16 +1163,18 @@ pub const BODIES: &[(&str, Body)] = &[
                 })
                 .collect();
             let pairs = pairs?;
-            if pairs.is_empty() {
-                u.set_query(None);
-            } else {
-                let mut qs = url::form_urlencoded::Serializer::new(String::new());
-                for (k, v) in pairs {
-                    qs.append_pair(k, v);
+            with_url(u, |u| {
+                if pairs.is_empty() {
+                    u.set_query(None);
+                } else {
+                    let mut qs = url::form_urlencoded::Serializer::new(String::new());
+                    for (k, v) in &pairs {
+                        qs.append_pair(k, v);
+                    }
+                    u.set_query(Some(&qs.finish()));
                 }
-                u.set_query(Some(&qs.finish()));
-            }
-            Some(Value::Str(u.to_string()))
+                Some(())
+            })
         }
         _ => None,
     }),
@@ -1349,6 +1326,7 @@ pub(crate) fn value_to_string(v: &Value) -> String {
         Value::Null { label, .. } => format!("?{label}"),
         Value::Quantity(q) => q.to_string(),
         Value::Time(t) => t.to_string(),
+        Value::Url(u) => u.clone(),
     }
 }
 
@@ -1425,6 +1403,24 @@ fn as_ip_u32(v: &Value) -> Option<u32> {
     }
 }
 
+/// A url argument's canonical text: a url, or a string read as one (a
+/// string in a `url` position parses at the edge).
+fn as_url(v: &Value) -> Option<String> {
+    match v {
+        Value::Url(u) => Some(u.clone()),
+        Value::Str(s) => url::Url::parse(s).ok().map(|u| u.to_string()),
+        _ => None,
+    }
+}
+
+/// The url `u` with `set` applied (`url.with_host`, ..): a url, or no
+/// value when `u` is not one or `set` refuses.
+fn with_url(u: &Value, set: impl FnOnce(&mut url::Url) -> Option<()>) -> Option<Value> {
+    let mut u = url::Url::parse(&as_url(u)?).ok()?;
+    set(&mut u)?;
+    Some(Value::Url(u.to_string()))
+}
+
 fn as_ipnet(v: &Value) -> Option<(u32, u8)> {
     match v {
         Value::IpNet { addr, prefix } => Some((*addr, *prefix)),
@@ -1452,7 +1448,7 @@ fn scalar_text(v: &Value) -> Option<String> {
         Value::Str(s) => Some(s.clone()),
         Value::Int(i) => Some(i.to_string()),
         Value::Bool(b) => Some(b.to_string()),
-        Value::Quantity(_) | Value::Time(_) => v.typed_text(),
+        Value::Quantity(_) | Value::Time(_) | Value::Url(_) => v.typed_text(),
         Value::Ip(_) | Value::IpNet { .. } | Value::IpRange { .. } => {
             Some(crate::partition::fmt_value(v))
         }
