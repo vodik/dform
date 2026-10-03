@@ -690,6 +690,7 @@ dependencies = [
  "dform-wire",
  "ed25519-dalek",
  "hkdf",
+ "hmac 0.12.1",
  "jiff",
  "jiff-tzdb",
  "jsonwebtoken",

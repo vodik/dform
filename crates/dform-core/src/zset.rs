@@ -600,20 +600,12 @@ pub mod file {
 
         /// HMAC-SHA256 (RFC 2104) of `bytes`, hex.
         pub fn digest(&self, bytes: &[u8]) -> String {
-            use sha2::{Digest, Sha256};
-            let pad = |b: u8| -> Vec<u8> {
-                let mut k = [0u8; 64];
-                k[..32].copy_from_slice(&self.0);
-                k.iter().map(|x| x ^ b).collect()
-            };
-            let inner = Sha256::new()
-                .chain_update(pad(0x36))
-                .chain_update(bytes)
-                .finalize();
-            Sha256::new()
-                .chain_update(pad(0x5c))
-                .chain_update(inner)
-                .finalize()
+            use hmac::{Hmac, Mac};
+            let mut mac = <Hmac<sha2::Sha256>>::new_from_slice(&self.0)
+                .expect("HMAC takes a key of any length");
+            mac.update(bytes);
+            mac.finalize()
+                .into_bytes()
                 .iter()
                 .map(|b| format!("{b:02x}"))
                 .collect()
@@ -1245,5 +1237,17 @@ mod tests {
         assert_eq!(got["open"], (Kind::Pending, set(&["db/x#endpoint"])));
         assert_eq!(got["stale"], (Kind::Drift, set(&["v/gone#id"])));
         assert_eq!(got["gone"], (Kind::Delete, set(&[])));
+    }
+
+    /// The plan key's digest is HMAC-SHA256 (RFC 2104): the value Python's
+    /// `hmac.new(bytes(range(32)), b"Hi There", hashlib.sha256)` gives.
+    #[test]
+    fn a_keys_digest_is_hmac_sha256() {
+        let key = file::Key::from_hex(&(0u8..32).map(|b| format!("{b:02x}")).collect::<String>())
+            .unwrap();
+        assert_eq!(
+            key.digest(b"Hi There"),
+            "278639ec02309d3afded1b273f1349ba63b9089c12476d716bee3ecc94673e9e"
+        );
     }
 }
