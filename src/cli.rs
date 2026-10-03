@@ -373,7 +373,9 @@ enum Run {
         #[arg(long)]
         json: bool,
     },
-    /// Controller mode.
+    /// Controller mode: experimental, listed only with
+    /// `DFORM_EXPERIMENTAL=1`.
+    #[command(hide = !experimental())]
     Controller {
         #[command(subcommand)]
         cmd: ControllerCommand,
@@ -440,7 +442,8 @@ enum StackCommand {
     /// region: "R"})` (the deployment's own prefix), or `k8s("ns/name")`,
     /// the in-cluster backend (for now a directory in the bootstrap stack's
     /// state). The controller runs the stack from there; a batch `apply`
-    /// refuses it.
+    /// refuses it. Experimental (R-41), as controller mode is.
+    #[command(hide = !experimental())]
     Handover {
         stack: String,
         #[arg(long = "to")]
@@ -1412,6 +1415,9 @@ fn run_with(
     );
     if !cli.in_project && !planned && needs_project(&cli) {
         return Err(crate::project::not_in_a_project(Path::new(".")));
+    }
+    if let Cmd::Controller { .. } | Cmd::Handover { .. } = cli.cmd {
+        eprintln!("{EXPERIMENTAL}");
     }
     if let Cmd::Controller { .. } = cli.cmd {
         return run_controller(cli);
@@ -4646,6 +4652,21 @@ fn state_mv(
     Ok(())
 }
 
+/// Whether the experimental commands (R-41: `controller`, `stack
+/// handover`) are listed in `--help` and completions: `DFORM_EXPERIMENTAL=1`.
+/// They run either way, each run with [`EXPERIMENTAL`] on stderr.
+fn experimental() -> bool {
+    std::env::var_os("DFORM_EXPERIMENTAL").is_some_and(|v| v == "1")
+}
+
+/// The line an experimental command prints on every run.
+const EXPERIMENTAL: &str = "warning: controller mode is experimental: its process model (where it \
+                            runs, how it is supervised, what an operator sees) is not decided; \
+                            see docs/experimental/controller.md";
+
+/// The commands and subcommands only `DFORM_EXPERIMENTAL=1` lists.
+const EXPERIMENTAL_COMMANDS: &[&str] = &["controller", "handover"];
+
 /// The top-level commands, and each noun's subcommands.
 const COMMANDS: &[&str] = &[
     "plan",
@@ -4694,10 +4715,19 @@ fn subcommands(noun: &str) -> &'static [&'static str] {
     }
 }
 
+/// `names` without the experimental ones, unless they are listed.
+fn listed<'a>(names: &[&'a str]) -> Vec<&'a str> {
+    names
+        .iter()
+        .copied()
+        .filter(|n| experimental() || !EXPERIMENTAL_COMMANDS.contains(n))
+        .collect()
+}
+
 /// `dform completions SHELL`: a script that completes commands, and asks
 /// `dform __complete` for targets.
 fn completion_script(shell: Shell) -> String {
-    let commands = COMMANDS.join(" ");
+    let commands = listed(COMMANDS).join(" ");
     match shell {
         Shell::Zsh => format!(
             "#compdef dform\n\
@@ -4742,9 +4772,10 @@ fn complete(words: &[String]) -> Result<()> {
         .filter(|w| !w.starts_with('-'))
         .collect();
     let out: Vec<String> = match words.as_slice() {
-        [noun] if !subcommands(noun).is_empty() => {
-            subcommands(noun).iter().map(|s| s.to_string()).collect()
-        }
+        [noun] if !subcommands(noun).is_empty() => listed(subcommands(noun))
+            .iter()
+            .map(|s| s.to_string())
+            .collect(),
         _ => {
             let Some(project) =
                 crate::project::Project::find(Path::new("."), env!("CARGO_PKG_VERSION"))?

@@ -1,8 +1,9 @@
-//! The bootstrap and handover demo (examples/bootstrap/, README "Bootstrap
-//! and handover"): a batch stack creates the cluster and installs dform in
-//! it, the workload stack's state is handed over to a bucket (s3: MinIO
-//! when `DFORM_S3_TEST_ENDPOINT` names one, as tests/s3.rs takes it, else
-//! the fake S3 server), and the controller runs the workload from there.
+//! The bootstrap and handover demo (examples/bootstrap/,
+//! docs/experimental/controller.md "Bootstrap and handover"): a batch
+//! stack creates the cluster and installs dform in it, the workload
+//! stack's state is handed over to a bucket (s3: MinIO when
+//! `DFORM_S3_TEST_ENDPOINT` names one, as tests/s3.rs takes it, else the
+//! fake S3 server), and the controller runs the workload from there.
 
 mod common;
 use common::{Run, Scratch, controller_log};

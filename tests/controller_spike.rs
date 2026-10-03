@@ -1,4 +1,4 @@
-//! Controller mode (README "Controller mode"): program files and tables as
+//! Controller mode (docs/experimental/controller.md): program files and tables as
 //! sources, events,
 //! drift as facts and the policy gate, driven one event at a time with
 //! `--once`, and the polling loop once with `--max-events`.
@@ -441,6 +441,39 @@ fn the_controller_runs_a_stack_of_the_project() {
     assert!(
         r.stderr.contains("no stack other in the project")
             && r.stderr.contains("workload  stacks/workload.df"),
+        "{}",
+        r.stderr
+    );
+}
+
+/// Controller mode is experimental (R-41): `--help`, `stack --help` and
+/// the completions list `controller` and `stack handover` only with
+/// `DFORM_EXPERIMENTAL=1`; they run either way, each run with the warning.
+#[test]
+fn controller_mode_is_listed_only_when_experimental() {
+    let s = setup("ctl-hidden");
+    let help = |args: &[&str], on: bool| {
+        let mut c = common::dform();
+        c.args(args)
+            .current_dir(&s.dir)
+            .env_remove("DFORM_EXPERIMENTAL");
+        if on {
+            c.env("DFORM_EXPERIMENTAL", "1");
+        }
+        String::from_utf8(c.output().unwrap().stdout).unwrap()
+    };
+    assert!(!help(&["--help"], false).contains("controller"));
+    assert!(help(&["--help"], true).contains("controller"));
+    assert!(!help(&["stack", "--help"], false).contains("handover"));
+    assert!(help(&["stack", "--help"], true).contains("handover"));
+    assert!(!help(&["completions", "zsh"], false).contains("controller"));
+    assert!(!help(&["__complete", "stack"], false).contains("handover"));
+    let r = s
+        .run(&["controller", "run", "workload", "--once"])
+        .success();
+    assert!(
+        r.stderr
+            .contains("warning: controller mode is experimental"),
         "{}",
         r.stderr
     );

@@ -1,4 +1,6 @@
 # bootstrap
+Experimental: controller mode, `stack handover` and `role = "bootstrap"` are not settled (docs/experimental/controller.md; `DFORM_EXPERIMENTAL=1` lists the commands in `--help`).
+
 Two stacks (name one): a cluster with dform installed as its controller, and the workload it runs.
 ```bash
 dform plan bootstrap
