@@ -235,6 +235,8 @@ pub struct ExternFn {
 pub struct Decl {
     pub pred: String,
     pub fields: Vec<String>,
+    /// Each column's type as written, `None` where it gives none.
+    pub types: Vec<Option<TypeExpr>>,
     pub span: Span,
 }
 

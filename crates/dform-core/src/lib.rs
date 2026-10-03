@@ -17,6 +17,7 @@ pub mod graph;
 #[cfg(feature = "test-hooks")]
 #[doc(hidden)]
 pub mod hooks;
+pub mod infer;
 pub mod inputs;
 pub mod ir;
 pub mod lattice;

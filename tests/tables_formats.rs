@@ -237,15 +237,18 @@ fn a_tables_rows_and_stated_facts_are_one_relation() {
     for p in ["\"x\"", "\"y\"", "\"z\""] {
         assert!(r.stdout.contains(p), "{p}: {}", r.stdout);
     }
-    // With no `decl`, a table has no columns to read.
+    // With no `decl`, the columns are the first source's (R-34), and the
+    // second source and the stated fact are read with them.
     s.write(
         "p.df",
-        "edition 2026\ninput t from csv(\"t.csv\")\nprovider fake\n",
+        "edition 2026\ninput t from csv(\"t.csv\")\ninput t from json(\"u.json\")\n\
+         t(\"x\")\nprovider fake\n",
     );
-    let r = s.run(&["plan", "p.df"]).failure();
-    assert!(
-        r.stderr.contains("input t from ..: t has no columns"),
-        "{}",
-        r.stderr
-    );
+    let r = s.run(&["query", "t(p)", "p.df"]).success();
+    for p in ["\"x\"", "\"y\"", "\"z\""] {
+        assert!(r.stdout.contains(p), "{p}: {}", r.stdout);
+    }
+    s.write("u.json", "[{\"q\": \"z\"}]");
+    let r = s.run(&["query", "t(p)", "p.df"]).failure();
+    assert!(r.stderr.contains("no column p"), "{}", r.stderr);
 }

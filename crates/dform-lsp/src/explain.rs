@@ -390,6 +390,7 @@ pub fn hover_at(p: &refs::Project, path: &Path, at: usize) -> Option<String> {
                 .find(|n| doc::comment(n).is_some())
                 .or(decls.first());
             let own = match &sym {
+                Symbol::Predicate(_, name) => joined(signature_md(p, name), documented.map(item_md)),
                 Symbol::Module(m) => module_md(&files, m),
                 Symbol::Instance(m, _) => joined(documented.map(item_md), module_md(&files, m)),
                 _ => documented.map(item_md),
@@ -407,6 +408,33 @@ pub fn hover_at(p: &refs::Project, path: &Path, at: usize) -> Option<String> {
             .map(reference_md)
             .or_else(|| output_md(&files, &t)),
     }
+}
+
+/// A relation's columns as declared or inferred (R-34): `az(name:
+/// string, index: int)`; a component's relation by its copies'.
+fn signature_md(p: &refs::Project, name: &str) -> Option<String> {
+    let sigs: std::collections::BTreeSet<String> = p
+        .evaluated
+        .iter()
+        .flat_map(|e| e.signatures.values())
+        .filter(|s| {
+            s.pred == name
+                || s.pred
+                    .rsplit_once("::")
+                    .is_some_and(|(_, last)| last == name)
+        })
+        .map(|s| {
+            let mut s = s.clone();
+            s.pred = name.to_string();
+            s.to_string()
+        })
+        .collect();
+    (!sigs.is_empty()).then(|| {
+        format!(
+            "```dform\n{}\n```\n",
+            sigs.into_iter().collect::<Vec<_>>().join("\n")
+        )
+    })
 }
 
 /// A quantity literal (R-66): its type, canonical form and base value;

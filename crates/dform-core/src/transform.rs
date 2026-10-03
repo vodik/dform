@@ -17,6 +17,10 @@ pub struct Lowered {
     /// Outputs declared `secret(T)`: (scope, key), scope `""` for the
     /// stack's own.
     pub secret_outputs: Vec<(String, String)>,
+    /// Every relation's columns, declared or inferred (R-34).
+    pub signatures: crate::infer::Signatures,
+    /// The source program's `decl`s, for the pass with a schema.
+    pub declared: crate::infer::Declared,
 }
 
 /// `secret_cell(Type, Scope, Key)`: an input or output declared
@@ -47,6 +51,7 @@ pub fn lower(program: &Program) -> Result<Lowered> {
     // `type` blocks: their refinements (`crate::refine`).
     let program = &crate::refine::lower_types(program)?;
     reject_pending(&program.statements)?;
+    let declared = crate::infer::Declared::of(program);
     let program = apply_decls(program)?;
     // In the future, imports should be handled in a loader before parsing.
     // For now, keep Import statements in the AST but drop them before eval.
@@ -83,12 +88,19 @@ pub fn lower(program: &Program) -> Result<Lowered> {
             vec![str_term(typ), str_term(scope), str_term(key)],
         )));
     }
+    // Column types (R-34): checked, and the literals read as them.
+    let inferred = crate::infer::infer(&expanded, &extern_fns, &inputs, &declared, None)?;
+    inferred.read(&mut expanded);
+    let mut extern_fns = extern_fns;
+    inferred.type_tables(&mut extern_fns);
     Ok(Lowered {
         program: expanded,
         externs,
         inputs,
         extern_fns,
         secret_outputs,
+        signatures: inferred.signatures,
+        declared,
     })
 }
 

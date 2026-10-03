@@ -757,6 +757,15 @@ impl Located {
             ));
             crate::refine::check(&l.program, backend.schema())?;
             crate::types::check(&l.program, backend.schema())?;
+            // Column types again, the attributes read into a column typed
+            // by the schema (R-34).
+            crate::infer::infer(
+                &l.program,
+                &l.extern_fns,
+                &l.inputs,
+                &l.declared,
+                Some(backend.schema()),
+            )?;
             for (at, n) in transform::computed_reads(&l.program.statements, backend.schema()) {
                 obs.note(Note::Computed(at, n));
             }

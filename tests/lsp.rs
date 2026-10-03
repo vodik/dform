@@ -375,6 +375,22 @@ fn hover_shows_docs_builtins_keywords_and_nothing_elsewhere() {
         "{text}"
     );
 
+    // A relation: its columns, declared or inferred (R-34).
+    let text = hover(&mut c, &stack, "vpc_peer_inst(\"main\"", 2);
+    assert!(
+        text.as_str()
+            .unwrap()
+            .contains("```dform\nvpc_peer_inst(string, string)\n```"),
+        "{text}"
+    );
+    let text = hover(&mut c, &network, "zone_index(\"us-test-1a\"", 2);
+    assert!(
+        text.as_str()
+            .unwrap()
+            .contains("zone_index(string, int)"),
+        "{text}"
+    );
+
     // A schema type: its description.
     let text = hover(&mut c, &network, "resource net.vpc vpc", 11);
     assert!(

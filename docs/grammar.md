@@ -302,6 +302,28 @@ and `x in T` there take `T` as written.
 `query` and `why` patterns are read without the program's declarations:
 there, any dotted name that names nothing else is a type.
 
+**Column types** (R-34). A relation's columns are typed: by its `decl`
+where it has one, else by its uses. A non-string literal is its kind
+(`az("a", 1)` gives `az(string, int)`); a string literal is unknown, as
+in Postgres, until its column is settled. A variable in two columns makes
+them one (a join, a head taking its body's column); a function's
+parameter types its argument's column and its result the column it is
+bound into (`s = inet.subnet(n, 8, 1)`); an input's type, an extern's
+column and, with the provider's schema, an attribute read (`c = v.cidr`)
+type the column they reach; `input p from FORMAT("path")` with no `decl`
+takes its first document's columns. Two uses that disagree are an error
+naming both; a column with a type checks each literal against it, a
+string read as that type (`"10.0.0.0/8"` in a column `inet.contains`
+reads is a network; `"foo"` there is an error); literals of two kinds
+with nothing else are an error naming both; a column of string literals
+only is a string. `n + 1` on a column that is no number, and a
+comparison of two types that are never equal, are errors, not a silent
+non-match. A column declared `any` (`decl release(key, value: any)`)
+takes every type and joins nothing. Variables are never coerced, but a
+string column may hold the text of an `inet` or an `ip` a function reads.
+The settled signature (`az(string, int)`, a `decl`'s or a rule head's
+column names where there are some) is what the editor's hover prints.
+
 ### References and their type
 
 A reference is a pair (type, address). A dot on a reference needs its type
@@ -612,8 +634,9 @@ where env == "prod"`, an instance block's `nodes.count = 2` or `nodes = {
 required like an input, by its path. `why nodes.count` shows the leaf's
 layers. A `key` is a scalar and takes no block.
 
-**Relations.** A relation is declared once, by `decl p(a: T, ..)`; `input`
-and `output` name it and never re-spell its columns:
+**Relations.** A relation is declared once, by `decl p(a: T, ..)` or by
+its uses (R-34); `input` and `output` name it and never re-spell its
+columns:
 
 - `input p from TERM [selector] [where B]`, in a stack, gives `p` rows
   out of a document ("Documents"): a loader's, `csv("data/p.csv")`, a
@@ -621,7 +644,13 @@ and `output` name it and never re-spell its columns:
   an input or a `let`, read with the decl's columns and checked against
   their types. Several lines are one
   relation, their rows together, and facts the program states join
-  them; a source with no `decl` is an error that names it.
+  them. With no `decl`, the columns are the first source's: the first
+  row's keys in the document's order (a CSV's header), typed by their
+  values where they say (an int, a bool) and by the program's uses
+  ("Column types"); later lines are read with the same columns. A first
+  source the compiler cannot read now (`git(..)`, a path with holes, a
+  selection, a document value, a missing file) is an error that says to
+  declare the columns.
 - `input p`, in a module or a component, is a relation its user gives.
   The `use` or `instance` block gives its rows beside the values:
   `zone("a", 0)`, a rule over the user's relations `zone(z, n) where
@@ -927,7 +956,8 @@ call is a value: `let net = toml("data/network.toml")`, then
 stays, the file's text.
 
 `input p from DOC [selector] [where B]` destructures a document into the
-relation `p`, by the columns of its `decl`:
+relation `p`, by the columns of its `decl`, or with no `decl` by its first
+source's (R-34; "Inputs and outputs"):
 
 ```
 input az from toml("data/network.toml")                 # its [[az]] tables

@@ -1503,6 +1503,15 @@ for byte, and a file with a syntax error is reported, not rewritten.
   - `decl pred(field_one: type, field_two)` declares a relation by its
     columns (a type optional); named arguments match by them:
     `pred(field_one: x)`.
+  - A relation with no `decl` is typed by its uses (R-34): `az("a", 1)`
+    gives `az(string, int)`, a rule's head takes its body's columns, a
+    function's parameter or an attribute read types the column it reads,
+    and `input p from FORMAT("path")` takes its first document's columns.
+    Uses that disagree are a compile error naming both, a string literal
+    is read as its column's type (`"10.0.0.0/8"` in a column
+    `inet.contains` reads), and `n + 1` on a column of strings is an
+    error, not a silent non-match; a column declared `any` takes every
+    type. The editor's hover prints the signature.
   - A `decl` of a relation no rule defines declares one a provider feeds
     (it may have no rows).
   - `decl pred(a, b) mixed` lets a predicate have both ground facts and rules (E §2.6); without it, one that has both is a compile error naming the rule and the fact.

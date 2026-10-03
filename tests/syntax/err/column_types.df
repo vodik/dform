@@ -1,0 +1,19 @@
+edition 2026
+
+# A relation's columns are typed by their uses (R-34): literals of two
+# kinds, two typed uses that disagree, a literal that does not parse as
+# its column's type, arithmetic on strings, and a comparison never true.
+az("us-east-1a", 1)
+az("us-east-1b", "2")
+decl count_of(n: int)
+decl name_of(n: string)
+count_of(1)
+name_of("a")
+both(n) where count_of(n), name_of(n)
+net("10.0.0.0/8")
+net("ten")
+inside(n) where net(n), inet.contains(n, ip("10.1.2.3"))
+label("a", "1")
+next(k, m) where label(k, n), m = n + 1
+size("a", 1)
+big(k) where size(k, n), n > "0"

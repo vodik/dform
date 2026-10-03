@@ -3159,6 +3159,13 @@ fn run_tests(
     let lowered = crate::transform::lower(program)?;
     crate::secrets::check(&lowered, backend.schema(), &Default::default())?;
     crate::refine::check(&lowered.program, backend.schema())?;
+    crate::infer::infer(
+        &lowered.program,
+        &lowered.extern_fns,
+        &lowered.inputs,
+        &lowered.declared,
+        Some(backend.schema()),
+    )?;
     // What the target and `--set` pin, as given.
     let mut pinned: Vec<(String, Value)> = Vec::new();
     for kv in &cli.set {

@@ -146,6 +146,8 @@ pub struct Evaluated {
     /// The program as evaluated, and as lowered (its facts' spans).
     pub program: Program,
     pub lowered: Option<Program>,
+    /// Every relation's columns, declared or inferred (R-34).
+    pub signatures: dform_core::infer::Signatures,
     pub redact: Redactor,
     /// The collision lint's findings over the program's own evaluation.
     pub collisions: Vec<Collision>,
@@ -423,13 +425,15 @@ fn run_noted(
     let explained = ev.explained();
     let program = ev.evaluator.program.clone();
     problems.extend(explained.problems(&program).into_iter().map(of_core));
+    let lowered = transform::lower(&program).ok();
     Ok(Evaluated {
         deployment: ev.located.instance.describe(),
         providers: ev.located.loaded.providers.clone(),
         files: BTreeMap::new(),
         schema: ev.schema().clone(),
         res: explained.res,
-        lowered: transform::lower(&program).ok().map(|l| l.program),
+        lowered: lowered.as_ref().map(|l| l.program.clone()),
+        signatures: lowered.map(|l| l.signatures).unwrap_or_default(),
         program,
         redact: explained.redact,
         collisions: std::mem::take(&mut ev.collisions),

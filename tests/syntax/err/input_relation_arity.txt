@@ -1,2 +1,2 @@
-tests/syntax/err/input_relation_arity.df:4:1: input release from ..: release has no columns
-  help: a relation is declared once, by its columns: `decl release(a: T, ..)`
+tests/syntax/err/input_relation_arity.df:5:1: input release from ..: release has no `decl`, so its columns are its first source's, and that is no file path the compiler can read
+  help: declare its columns: `decl release(a: T, ..)`

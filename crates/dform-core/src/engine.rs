@@ -4149,7 +4149,8 @@ mod tests {
     /// `min` and `max` over ints and over strings, per group.
     #[test]
     fn min_and_max_order_ints_and_strings() {
-        let (r, violations) = run(r#"v("a", 3)
+        let (r, violations) = run(r#"decl v(g, x: any)
+             v("a", 3)
              v("a", 1)
              v("a", 12)
              v("b", "q")
@@ -4167,7 +4168,8 @@ mod tests {
     /// value, and not its head; the other groups derive theirs.
     #[test]
     fn an_ill_kinded_group_is_a_deny() {
-        let (r, violations) = run(r#"v("a", 1)
+        let (r, violations) = run(r#"decl v(g, x: any)
+             v("a", 1)
              v("a", "p")
              v("b", true)
              v("c", 2)
@@ -4651,10 +4653,11 @@ mod tests {
     /// integers; conversions are explicit builtins.
     #[test]
     fn coercion_is_explicit() {
+        // A column of strings in arithmetic is a compile error (R-34).
         let err = run("s(\"10\")\nn(x) where s(s), x = s + 1")
             .unwrap_err()
             .to_string();
-        assert!(err.contains("add(\"10\", 1) is not defined"), "{err}");
+        assert!(err.contains("`s + 1`: `s` is string"), "{err}");
         let err = run("n(x) where x = int(\"abc\") + 1")
             .unwrap_err()
             .to_string();

@@ -676,6 +676,9 @@ pub struct Lowerer<'u> {
     /// An object pattern's field reads, appended after the literal that
     /// binds it (`pattern`).
     after: Vec<Lit>,
+    /// The columns of a relation with no `decl`, read from its first
+    /// source (R-34).
+    read_columns: BTreeMap<String, Vec<BindArg>>,
 }
 
 /// What a call is where it is written.
@@ -714,6 +717,7 @@ impl<'u> Lowerer<'u> {
             agg_rules: 0,
             nested: 0,
             after: Vec::new(),
+            read_columns: BTreeMap::new(),
         };
         l.decls.deployed = deployed.to_vec();
         for (i, u) in units.iter().enumerate() {
@@ -1815,10 +1819,11 @@ impl<'u> Lowerer<'u> {
     /// rules. The column names are the named-argument form's.
     fn decl(&mut self, n: &SyntaxNode, scope: usize, span: Span) -> Vec<Stmt> {
         let pred = dotted_text(n, 1);
-        let fields: Vec<String> = n
-            .children()
-            .filter(|c| c.kind() == BIND_ARG)
-            .map(|b| word_text(&b, 0))
+        let binds: Vec<SyntaxNode> = n.children().filter(|c| c.kind() == BIND_ARG).collect();
+        let fields: Vec<String> = binds.iter().map(|b| word_text(b, 0)).collect();
+        let types = binds
+            .iter()
+            .map(|b| node(b, TYPE_EXPR).map(|t| self.type_expr(&t)))
             .collect();
         let arity = fields.len();
         let mixed = tokens(n).last().is_some_and(|t| t.text() == "mixed");
@@ -1838,7 +1843,12 @@ impl<'u> Lowerer<'u> {
             // another module of the same name is another relation (R-65).
             out.push(Stmt::Extern(e));
         }
-        out.push(Stmt::Decl(Decl { pred, fields, span }));
+        out.push(Stmt::Decl(Decl {
+            pred,
+            fields,
+            types,
+            span,
+        }));
         out
     }
 
@@ -1876,15 +1886,24 @@ impl<'u> Lowerer<'u> {
                 ),
             );
         }
-        let Some(decl) = self.relation_decl(scope, &pred) else {
-            let d = Diagnostic::error(span, format!("input {pred} from ..: {pred} has no columns"))
-                .with_help(format!(
-                    "a relation is declared once, by its columns: `decl {pred}(a: T, ..)`"
-                ));
-            self.diags.push(d);
-            return Err(Skip);
-        };
         self.reject_facts(&source)?;
+        let Some(decl) = self.relation_decl(scope, &pred) else {
+            // No `decl`: the columns are the first source's (R-34).
+            let cols = match self.read_columns.get(&pred) {
+                Some(c) => c.clone(),
+                None => {
+                    let c = self.first_source_columns(&pred, n, &source, span)?;
+                    self.read_columns.insert(pred.clone(), c.clone());
+                    c
+                }
+            };
+            let arity = cols.len();
+            let mut rc = self.rc(n, scope, outer);
+            let body = self.opt_body(&mut rc, n)?;
+            let mut out = self.table(&mut rc, &pred, cols, n, body, span)?;
+            out.push(Stmt::Mixed(Extern { pred, arity, span }));
+            return Ok(out);
+        };
         let cols = self.table_columns(&pred, &decl)?;
         let mut rc = self.rc(n, scope, outer);
         let body = self.opt_body(&mut rc, n)?;
@@ -1895,6 +1914,74 @@ impl<'u> Lowerer<'u> {
             span,
         }));
         Ok(out)
+    }
+
+    /// The columns of `input p from FORMAT("path")` with no `decl`: the
+    /// first row's of the document at `path`, read now (R-34). A source the
+    /// compiler cannot read (a `git(..)` one, a path with holes, a missing
+    /// file) is an error that says to declare the columns.
+    fn first_source_columns(
+        &mut self,
+        pred: &str,
+        n: &SyntaxNode,
+        src: &SyntaxNode,
+        span: Span,
+    ) -> L<Vec<BindArg>> {
+        let declare = format!("declare its columns: `decl {pred}(a: T, ..)`");
+        let format = self
+            .callee(src)
+            .filter(|f| crate::tables::FORMATS.contains(&f.as_str()) && node(n, SELECTOR).is_none())
+            .unwrap_or_default();
+        let args: Vec<SyntaxNode> = node(src, ARG_LIST)
+            .map(|l| terms(&l).collect())
+            .unwrap_or_default();
+        let path = match args.as_slice() {
+            [a] if a.kind() == LITERAL && !format.is_empty() => tokens(a)
+                .find(|t| t.kind() == STRING)
+                .filter(|t| !has_hole(t.text()))
+                .and_then(|t| string_value(t.text()).ok()),
+            _ => None,
+        };
+        let Some(path) = path else {
+            let d = Diagnostic::error(
+                span,
+                format!(
+                    "input {pred} from ..: {pred} has no `decl`, so its columns are its first \
+                     source's, and that is no file path the compiler can read"
+                ),
+            )
+            .with_help(declare);
+            self.diags.push(d);
+            return Err(Skip);
+        };
+        let base = crate::diag::location(span)
+            .map(|(file, _, _)| crate::project::base_of(std::path::Path::new(&file)))
+            .unwrap_or_default();
+        let read = std::fs::read_to_string(base.join(&path))
+            .map_err(anyhow::Error::from)
+            .and_then(|text| crate::infer::document_columns(&format, pred, &text));
+        match read {
+            Ok(cols) => Ok(cols
+                .into_iter()
+                .map(|(name, ty)| BindArg {
+                    input: false,
+                    name,
+                    ty,
+                })
+                .collect()),
+            Err(e) => {
+                let d = Diagnostic::error(
+                    span,
+                    format!(
+                        "input {pred} from ..: {pred} has no `decl`, so its columns are its first \
+                         source's, and {path} cannot be read for them: {e:#}"
+                    ),
+                )
+                .with_help(declare);
+                self.diags.push(d);
+                Err(Skip)
+            }
+        }
     }
 
     /// The `decl` of the relation `pred` in scope.

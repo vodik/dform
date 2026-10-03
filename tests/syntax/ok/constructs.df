@@ -80,8 +80,8 @@ deny "q must not be empty" where not q(1)
 v("input", "output", "settings", "type") where input("env", _), output("k", _)
 decl p(a) mixed
 decl q(a) mixed
-p("a")
-q("b")
+p(5)
+q(2)
 w(v) where v = main.vpc, checks.listed("main")
 vpc_inst("main")
 x(i, a_) where vpc_inst(i), output(m[i], "vpc", a_)
