@@ -22,7 +22,7 @@
 use crate::ast::{Atom, Program, Term};
 use crate::engine::EvalResult;
 use crate::ir::Address;
-use crate::partition::{fmt_atom, fmt_value};
+use crate::partition::{fmt_atom, fmt_bare, fmt_value};
 use crate::provider::{Action, ActionKind, Change, NULL_KEY, Plan, marker};
 use crate::query::Redactor;
 use crate::schema::Schema;
@@ -680,10 +680,7 @@ fn deferred(
             .iter()
             .filter_map(|n| n.as_str().map(str::to_string))
             .collect();
-        let addr = match addr {
-            Value::Str(s) => s.clone(),
-            v => fmt_value(v),
-        };
+        let addr = fmt_bare(addr);
         out.push(Policy {
             message: format!(
                 "{c} of {}",

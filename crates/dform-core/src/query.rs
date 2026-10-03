@@ -239,10 +239,7 @@ impl Redactor {
                 continue;
             };
             if schema.is_sensitive(t, p) || cells.contains(&(tv, addr, pv)) {
-                let addr = match addr {
-                    Value::Str(s) => s.clone(),
-                    v => partition::fmt_value(v),
-                };
+                let addr = partition::fmt_bare(addr);
                 r.add(v, &crate::value::null_label(t, &addr, p));
             }
         }

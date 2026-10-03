@@ -135,11 +135,7 @@ fn given_leaf(a: &Atom, externs: &BTreeSet<crate::ast::Extern>, tick: Option<usi
             let flag = if a.pred == "input" { "set" } else { "data" };
             let kv = match a.args.as_slice() {
                 [Term::Val(k), Term::Val(v)] => {
-                    let raw = |v: &Value| match v {
-                        Value::Str(s) => s.clone(),
-                        v => partition::fmt_value(v),
-                    };
-                    format!("{}={}", raw(k), raw(v))
+                    format!("{}={}", partition::fmt_bare(k), partition::fmt_bare(v))
                 }
                 _ => text,
             };

@@ -769,6 +769,16 @@ pub fn quote(s: &str) -> String {
     out.replace("${", "$${")
 }
 
+/// A value with a string bare, unquoted, and anything else as
+/// [`fmt_value`]: how a key's value, a label's part or a value inside a
+/// message prints (`name=api`).
+pub fn fmt_bare(v: &Value) -> String {
+    match v {
+        Value::Str(s) => s.clone(),
+        v => fmt_value(v),
+    }
+}
+
 pub fn fmt_value(v: &Value) -> String {
     match v {
         Value::Str(s) => quote(s),
@@ -1048,5 +1058,13 @@ mod tests {
             println!("{r}");
             assert_eq!(matches!(v, Verdict::Stratified { .. }), expect_ok, "{file}");
         }
+    }
+
+    #[test]
+    fn fmt_bare_leaves_a_string_unquoted_and_nothing_else() {
+        assert_eq!(fmt_bare(&Value::Str("api".into())), "api");
+        assert_eq!(fmt_value(&Value::Str("api".into())), "\"api\"");
+        let list = Value::List(vec![Value::Str("a".into()), Value::Int(1)]);
+        assert_eq!(fmt_bare(&list), "[\"a\", 1]");
     }
 }

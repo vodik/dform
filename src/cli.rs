@@ -3480,7 +3480,7 @@ fn run_tests(
     for combination in &combinations {
         let mut pairs = pinned.clone();
         pairs.extend(combination.iter().cloned());
-        let text = |(k, v): &(String, Value)| (k.clone(), crate::stack::key_text(v));
+        let text = |(k, v): &(String, Value)| (k.clone(), partition::fmt_bare(v));
         let (on_target, set): (Vec<_>, Vec<_>) = pairs
             .iter()
             .map(text)
@@ -3506,7 +3506,7 @@ fn run_tests(
         });
         let mut row: Vec<report::table::Cell> = pairs
             .iter()
-            .map(|(_, v)| report::table::Cell::text(crate::stack::key_text(v)))
+            .map(|(_, v)| report::table::Cell::text(partition::fmt_bare(v)))
             .collect();
         let cell = report::table::Cell::text(result);
         row.push(match result {

@@ -346,14 +346,6 @@ pub fn instance_dir(root: &Path, name: &str) -> PathBuf {
     }
 }
 
-/// A value as a key prints it: a string bare, anything else as a value.
-pub fn key_text(v: &Value) -> String {
-    match v {
-        Value::Str(s) => s.clone(),
-        v => crate::partition::fmt_value(v),
-    }
-}
-
 /// The deployment a run is of: the stack, and each key's value as this
 /// run gives it: the target (`set`, the `input(k, v)` facts), else an
 /// input fact or an `--input-file` contribution of the program, else the
@@ -399,7 +391,7 @@ pub fn instance(cfg: &Stack, stack: &str, program: &Program, set: &[Atom]) -> Re
             defaulted.push(k.clone());
         }
         match named.or_else(default) {
-            Some(v) => key.push((k.clone(), key_text(&v))),
+            Some(v) => key.push((k.clone(), crate::partition::fmt_bare(&v))),
             None => diags.push(
                 Diagnostic::error(
                     *span,

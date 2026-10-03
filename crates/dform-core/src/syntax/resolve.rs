@@ -5814,7 +5814,7 @@ impl<'u> Lowerer<'u> {
                     values.push(match v {
                         Term::Val(Value::Str(s)) => str_term(&crate::stack::escape(&s)),
                         Term::Val(v) => {
-                            str_term(&crate::stack::escape(&crate::stack::key_text(&v)))
+                            str_term(&crate::stack::escape(&crate::partition::fmt_bare(&v)))
                         }
                         v => v,
                     });

@@ -405,7 +405,7 @@ pub fn sections(
             .collect();
         blocking.extend(nulls.iter().cloned());
         stuck_cells
-            .entry((t.clone(), value_name(n)))
+            .entry((t.clone(), crate::partition::fmt_bare(n)))
             .or_default()
             .extend(nulls);
     }
@@ -555,12 +555,5 @@ fn other_stacks(v: &Value) -> BTreeSet<String> {
         Value::List(xs) => xs.iter().flat_map(other_stacks).collect(),
         Value::Obj(m) => m.values().flat_map(other_stacks).collect(),
         _ => BTreeSet::new(),
-    }
-}
-
-fn value_name(v: &Value) -> String {
-    match v {
-        Value::Str(s) => s.clone(),
-        other => crate::partition::fmt_value(other),
     }
 }

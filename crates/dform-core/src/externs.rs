@@ -79,13 +79,7 @@ impl Answer {
 /// The label of the secret an extern's call answers in column `col` (from
 /// 0): `pred/INPUTS#N`, `N` the column from 1.
 pub fn secret_label(pred: &str, inputs: &[Value], col: usize) -> String {
-    let ins: Vec<String> = inputs
-        .iter()
-        .map(|v| match v {
-            Value::Str(s) => s.clone(),
-            v => crate::partition::fmt_value(v),
-        })
-        .collect();
+    let ins: Vec<String> = inputs.iter().map(crate::partition::fmt_bare).collect();
     crate::value::null_label(pred, &ins.join(","), &(col + 1).to_string())
 }
 

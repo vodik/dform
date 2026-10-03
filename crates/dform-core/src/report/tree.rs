@@ -16,6 +16,7 @@ use crate::ast::{Atom, Lit, RuleStmt, Term};
 use crate::circuit::{Circuit, Fact, Leaf, NodeId, View};
 use crate::engine;
 use crate::ir::Address;
+use crate::partition::fmt_bare;
 use crate::query::Redactor;
 use crate::syntax::resolve::{Piece, capitalise, pieces};
 use crate::syntax::{SyntaxElement, SyntaxKind, SyntaxNode};
@@ -579,11 +580,11 @@ impl Surface<'_, '_> {
         let label = match (keys.get(&(t.to_string(), list.to_string())), k) {
             (Some(ks), Value::Obj(m)) => ks
                 .iter()
-                .map(|f| Some(format!("{f}={}", key_text(m.get(f)?))))
+                .map(|f| Some(format!("{f}={}", fmt_bare(m.get(f)?))))
                 .collect::<Option<Vec<_>>>()?
                 .join(","),
-            (Some(ks), k) if ks.len() == 1 => format!("{}={}", ks[0], key_text(k)),
-            _ => key_text(k),
+            (Some(ks), k) if ks.len() == 1 => format!("{}={}", ks[0], fmt_bare(k)),
+            _ => fmt_bare(k),
         };
         Some((format!("{list}[{label}]"), content))
     }
@@ -1203,13 +1204,6 @@ fn cell(t: &str, a: &str, p: &str) -> String {
     }
 }
 
-/// A key's value in an element's name: a string bare (`name=api`).
-fn key_text(v: &Value) -> String {
-    match v {
-        Value::Str(s) => s.clone(),
-        v => crate::partition::fmt_value(v),
-    }
-}
 
 /// A contribution's rank as the program writes it: nothing for normal.
 fn rank_text(rank: &Value) -> String {

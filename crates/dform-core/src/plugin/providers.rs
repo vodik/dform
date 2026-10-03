@@ -732,10 +732,7 @@ impl Providers {
             if self.awaiting.borrow().contains(&i) {
                 continue;
             }
-            let want = match want {
-                Value::Str(s) => s.clone(),
-                v => crate::partition::fmt_value(v),
-            };
+            let want = crate::partition::fmt_bare(want);
             let shown = if secret.contains(name) {
                 format!(
                     "{} (a secret)",

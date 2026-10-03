@@ -259,13 +259,6 @@ pub fn coerce(t: &TypeExpr, v: Value) -> Value {
     }
 }
 
-fn shown(v: &Value) -> String {
-    match v {
-        Value::Str(s) => s.clone(),
-        v => crate::partition::fmt_value(v),
-    }
-}
-
 /// The type of every `attr(input, Scope, k, V)` of an evaluation: one
 /// violation per value that is not its input's type. An object input's
 /// cell holds its leaves (R-54): each is checked, and a field no leaf
@@ -337,7 +330,7 @@ pub fn violations(facts: &BTreeSet<Atom>, declared: &[Declared]) -> Vec<String> 
                 out.push(format!(
                     "{}: {} is not {}",
                     d.who(),
-                    shown(x),
+                    crate::partition::fmt_bare(x),
                     type_text(&d.decl.ty)
                 ));
             }
@@ -442,7 +435,7 @@ fn object_value(k: &str, v: Value, leaves: &[&Declared]) -> Result<Value> {
         anyhow::bail!(
             "--set {k}={}: input {k} is an object of {}: give a field, `--set {k}.FIELD=v`, \
              or a document, `--set {k}=@FILE`",
-            shown(&v),
+            crate::partition::fmt_bare(&v),
             fields.join(", ")
         );
     };
@@ -470,7 +463,7 @@ fn object_value(k: &str, v: Value, leaves: &[&Declared]) -> Result<Value> {
         if !has_type(&d.decl.ty, &x) {
             anyhow::bail!(
                 "--set {k}: {a} = {} is not {}",
-                shown(&x),
+                crate::partition::fmt_bare(&x),
                 type_text(&d.decl.ty)
             );
         }
@@ -509,7 +502,7 @@ pub fn set_facts(declared: &[Declared], set: &[(String, Value)]) -> Result<Vec<A
             if !has_type(&d.decl.ty, &v) {
                 anyhow::bail!(
                     "--set {k}={}: input {k} is {}",
-                    shown(&v),
+                    crate::partition::fmt_bare(&v),
                     type_text(&d.decl.ty)
                 );
             }
