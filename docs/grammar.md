@@ -748,7 +748,12 @@ needs no clause.
 An input a `set` gives with no default is required only in the
 deployments none of them holds in: there it is a violation, `input k is
 required and has no value`. `dform test` leaves it to the program: it is
-no axis of the space.
+no axis of the space. The space `dform test` enumerates is the declared
+inputs the outside gives (an enum's members, a bool's two values, a
+default or `--set` for the rest); a `set` is the program's own choice,
+exercised through its guards: `set cloud.region = "r-prod" where env ==
+"prod"` is tested in the combinations where `env` is `"prod"`, never as
+an axis of its own.
 
 Gone (R-38): the `settings` statement and its rows (`settings prod { ..
 }`, `settings _`), their reads (`settings[e].p`, `let cfg =

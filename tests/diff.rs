@@ -24,7 +24,9 @@ resource net.subnet "private-${z}" {
 } where zone(z, n)
 "#;
 
-/// `git ARGS` in the scratch project; its output.
+/// `git ARGS` in the scratch project; its output. Hermetic: no global or
+/// system configuration, and a fixed date, so a commit's hash is the same
+/// on every run.
 fn git(s: &Scratch, args: &[&str]) -> String {
     let out = std::process::Command::new("git")
         .args([
@@ -37,6 +39,10 @@ fn git(s: &Scratch, args: &[&str]) -> String {
         .current_dir(&s.dir)
         .env_remove("GIT_DIR")
         .env_remove("GIT_WORK_TREE")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_AUTHOR_DATE", "2026-01-01T00:00:00Z")
+        .env("GIT_COMMITTER_DATE", "2026-01-01T00:00:00Z")
         .output()
         .unwrap();
     assert!(
@@ -116,9 +122,12 @@ fn diff_names_the_row_an_apply_added_and_explains_each_apply_by_its_commit() {
         "{out}"
     );
 
-    // The same window by the commit the log recorded, and as JSON.
+    // The same window by the commit the log recorded, and as JSON. The
+    // whole hash: a prefix of only decimal digits (one 8-digit prefix in 43)
+    // prefixes) is read as a sequence number, which is how this test
+    // flaked while commit dates, and so hashes, varied.
     let r = s
-        .run(&["diff", "--since", &second[..8], "--json", "net"])
+        .run(&["diff", "--since", &second, "--json", "net"])
         .success();
     let j: Value = serde_json::from_str(&r.stdout).unwrap();
     assert_eq!(j["deployment"], "net");
