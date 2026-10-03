@@ -1,184 +1,18 @@
 //! `dform fmt`: print a file in its normal forms (proposal H section 3,
-//! [`normal`]) from its lossless tree, with whitespace and commas
-//! normalised. Line breaks are the author's (gofmt's rule) but for a body,
-//! which is on one line when it fits and in braces when it does not: a
-//! break between two tokens stays a break, at most one blank line in a
-//! row; the spaces within a line, the indentation, and the commas that a
-//! newline makes redundant are the formatter's. A file already in this form
-//! prints back byte for byte.
-//!
-//! Indentation: a line is one step deeper than the line that holds the
-//! innermost construct still open at its first token: a bracket, or a
-//! statement, block entry or clause that began on an earlier line. A line
-//! that starts with a closer sits at the depth of the line that opened it.
+//! [`normal`]) from its lossless tree, in its layout ([`layout`], R-52):
+//! what fits in [`WIDTH`] columns on one line, what does not broken from
+//! the outside in. The author's line breaks are not kept, their blank
+//! lines (at most one in a row) and comments are. A file already in this
+//! form prints back byte for byte.
 
+mod doc;
 mod header;
+mod layout;
 mod normal;
 
-use crate::syntax::SyntaxKind::{self, *};
-use crate::syntax::{SyntaxNode, SyntaxToken};
+pub use layout::{INLINE_LITERALS, WIDTH};
 
-const INDENT: &str = "  ";
-
-/// A significant token or a comment, with what the source had before it.
-struct Item {
-    tok: SyntaxToken,
-    /// Newlines in the whitespace before this item (since the last item
-    /// printed: a dropped comma's surroundings count).
-    newlines: usize,
-}
-
-fn parent_kind(t: &SyntaxToken) -> Option<SyntaxKind> {
-    t.parent().map(|p| p.kind())
-}
-
-fn is_open(k: SyntaxKind) -> bool {
-    matches!(k, L_PAREN | L_BRACKET | L_BRACE)
-}
-
-fn is_close(k: SyntaxKind) -> bool {
-    matches!(k, R_PAREN | R_BRACKET | R_BRACE)
-}
-
-/// Nodes a line break inside continues: the next line is one step deeper.
-fn continues(k: SyntaxKind) -> bool {
-    matches!(
-        k,
-        RULE | FACT
-            | CHECK
-            | SET
-            | CLAUSE
-            | ASSIGN
-            | LET
-            | INPUT
-            | INPUT_RELATION
-            | OUTPUT_DECL
-            | ATTR_DECL
-    )
-}
-
-/// A `{ }` body: its entries are separated by newlines or commas.
-fn is_block_body(n: &SyntaxNode) -> bool {
-    n.kind() == BODY
-        && n.children_with_tokens()
-            .find(|e| !e.kind().is_trivia())
-            .is_some_and(|e| e.kind() == L_BRACE)
-}
-
-/// A comma the formatter drops: before a closer, or where a newline already
-/// separates the entries of a block, a type block or a `{ }` body.
-fn drop_comma(t: &SyntaxToken, next: Option<&SyntaxToken>, newline_after: bool) -> bool {
-    if t.kind() != COMMA {
-        return false;
-    }
-    let Some(next) = next else { return false };
-    let parent = t.parent();
-    if matches!(next.kind(), R_BRACKET | R_BRACE) && parent_kind(t) != Some(ARG_LIST) {
-        return true;
-    }
-    newline_after
-        && (matches!(parent_kind(t), Some(BLOCK | TYPE_DECL | ATTR_DECL))
-            || parent.as_ref().is_some_and(is_block_body))
-}
-
-/// The space between two tokens on one line: "" or " ".
-fn space(prev: &SyntaxToken, cur: &SyntaxToken) -> &'static str {
-    let (p, c) = (prev.kind(), cur.kind());
-    let (pp, cp) = (parent_kind(prev), parent_kind(cur));
-    if p == COMMENT || c == COMMENT {
-        return " ";
-    }
-    // Chains, dotted names and paths: `a.b[e].c`; ranges: `0..n`.
-    if matches!(p, DOT | DOT2 | DOT2_EQ) || matches!(c, DOT | DOT2 | DOT2_EQ) {
-        return "";
-    }
-    if c == L_BRACKET && matches!(cp, Some(INDEX | BLOCK_PATH | SELECTOR)) {
-        return "";
-    }
-    if (p == L_BRACKET && matches!(pp, Some(INDEX | BLOCK_PATH | SELECTOR)))
-        || (c == R_BRACKET && matches!(cp, Some(INDEX | BLOCK_PATH | SELECTOR)))
-    {
-        return "";
-    }
-    if matches!(p, PLUS | MINUS) && matches!(pp, Some(UNARY_EXPR | BIND_ARG)) {
-        return "";
-    }
-    if matches!(c, COMMA | R_PAREN | COLON) {
-        return "";
-    }
-    // Calls, atoms, type applications, declarations and records hug their
-    // name.
-    if c == L_PAREN
-        && matches!(
-            cp,
-            Some(ARG_LIST | TYPE_EXPR | DECL | EXTERN | INPUT_RELATION)
-        )
-    {
-        return "";
-    }
-    // Empty brackets.
-    if is_open(p) && is_close(c) {
-        return "";
-    }
-    // Lists and argument lists are tight; comprehensions, objects, records,
-    // bodies and blocks breathe.
-    if p == L_PAREN || c == R_PAREN {
-        return "";
-    }
-    if p == L_BRACKET && pp == Some(LIST) || c == R_BRACKET && cp == Some(LIST) {
-        return "";
-    }
-    " "
-}
-
-/// Every significant token and comment, in order, with the newlines before
-/// each; commas the formatter drops are left out.
-fn items(root: &SyntaxNode) -> Vec<Item> {
-    let toks: Vec<SyntaxToken> = root
-        .descendants_with_tokens()
-        .filter_map(|e| e.into_token())
-        .collect();
-    let mut out = Vec::new();
-    let mut newlines = 0;
-    for (i, t) in toks.iter().enumerate() {
-        if t.kind() == WHITESPACE {
-            newlines += t.text().matches('\n').count();
-            continue;
-        }
-        if t.kind() == COMMA {
-            // The next significant token, and whether a newline comes first.
-            let mut nl = false;
-            let mut next = None;
-            for u in &toks[i + 1..] {
-                match u.kind() {
-                    WHITESPACE => nl |= u.text().contains('\n'),
-                    COMMENT => {}
-                    _ => {
-                        next = Some(u);
-                        break;
-                    }
-                }
-            }
-            if drop_comma(t, next, nl) {
-                continue;
-            }
-        }
-        out.push(Item {
-            tok: t.clone(),
-            newlines,
-        });
-        newlines = 0;
-    }
-    out
-}
-
-/// An open construct: a bracket (closed by its closer) or a continuing
-/// node (open until its text ends), and the output line it began on.
-struct Open {
-    bracket: bool,
-    end: u32,
-    line: usize,
-}
+use crate::syntax::SyntaxNode;
 
 /// Format a file's source; a file with syntax errors is not formatted, but
 /// for a header statement after the body began, which is moved (R-27).
@@ -248,14 +82,7 @@ fn print_signature(f: &crate::functions::Function) -> String {
     let params: Vec<String> = f
         .params
         .iter()
-        .map(|p| {
-            format!(
-                "{}{}: {}",
-                p.name,
-                if p.optional { "?" } else { "" },
-                p.ty
-            )
-        })
+        .map(|p| format!("{}{}: {}", p.name, if p.optional { "?" } else { "" }, p.ty))
         .chain(f.variadic.then(|| "...".to_string()))
         .collect();
     let mut s = format!("{}({}) -> {}", f.name, params.join(", "), f.ret);
@@ -301,87 +128,15 @@ pub fn format(root: &SyntaxNode) -> String {
     out
 }
 
-/// Print a parsed file with its layout normalised.
+/// Print a parsed file in its layout (R-52).
 fn print(root: &SyntaxNode) -> String {
-    let items = items(root);
-    let mut out = String::new();
-    let mut stack: Vec<Open> = Vec::new();
-    // The indentation of every output line.
-    let mut indents: Vec<usize> = vec![0];
-    let mut line = 0usize;
-    for (i, it) in items.iter().enumerate() {
-        let t = &it.tok;
-        let k = t.kind();
-        let start: u32 = t.text_range().start().into();
-        // Continuations that ended before this token.
-        while stack.last().is_some_and(|o| !o.bracket && o.end <= start) {
-            stack.pop();
-        }
-        let mut opener_line = None;
-        if is_close(k) {
-            while let Some(o) = stack.pop() {
-                if o.bracket {
-                    opener_line = Some(o.line);
-                    break;
-                }
-            }
-        }
-        if i > 0 {
-            if it.newlines > 0 {
-                let blank = it.newlines > 1 && !is_close(k);
-                out.push('\n');
-                if blank {
-                    out.push('\n');
-                    indents.push(0);
-                }
-                line += 1 + usize::from(blank);
-                let depth = match opener_line {
-                    Some(l) => indents[l],
-                    None => stack.last().map_or(0, |o| indents[o.line] + 1),
-                };
-                indents.push(depth);
-                for _ in 0..depth {
-                    out.push_str(INDENT);
-                }
-            } else {
-                out.push_str(space(&items[i - 1].tok, t));
-            }
-        }
-        // Continuing nodes that begin at this token.
-        let mut starts: Vec<(u32, SyntaxKind)> = t
-            .parent_ancestors()
-            .filter(|n| continues(n.kind()))
-            .filter(|n| first_token(n).is_some_and(|f| f == *t))
-            .map(|n| (n.text_range().end().into(), n.kind()))
-            .collect();
-        starts.reverse();
-        for (end, _) in starts {
-            stack.push(Open {
-                bracket: false,
-                end,
-                line,
-            });
-        }
-        let text = t.text();
-        out.push_str(if k == COMMENT { text.trim_end() } else { text });
-        if is_open(k) {
-            stack.push(Open {
-                bracket: true,
-                end: u32::MAX,
-                line,
-            });
-        }
-    }
+    let mut d = layout::layout(root);
+    doc::propagate(&mut d);
+    let mut out = doc::print(&d, WIDTH);
     if !out.is_empty() {
         out.push('\n');
     }
     out
-}
-
-fn first_token(n: &SyntaxNode) -> Option<SyntaxToken> {
-    n.descendants_with_tokens()
-        .filter_map(|e| e.into_token())
-        .find(|t| !t.kind().is_trivia())
 }
 
 #[cfg(test)]
@@ -419,7 +174,8 @@ mod tests {
     }
 
     /// A string may span lines (R-61): its text is the program's, so fmt
-    /// re-indents the lines around it and never the lines inside it.
+    /// re-indents the lines around it and never the lines inside it; the
+    /// groups around it break, but for a body.
     #[test]
     fn a_string_that_spans_lines_is_kept_as_written() {
         assert_eq!(
@@ -430,15 +186,16 @@ mod tests {
         assert_eq!(fmt(src), src);
     }
 
-    /// A body that fits the line is written on it (section 3's normal
-    /// form); one that does not keeps its braces, a literal per line.
+    /// A body that fits the line is written on it; one that does not is
+    /// in braces, a literal per line (R-52), and so is one of more than
+    /// three literals whatever the width (R-10).
     #[test]
     fn a_body_goes_on_one_line_when_it_fits() {
         assert_eq!(
             fmt(
                 "resource t n {\nf = x\n} where {\n  a(x)\n  b(x)\n}\ndeny \"m\" { x } where {\na(x)\nnot b(x)\n}\n"
             ),
-            "resource t n {\n  f = x\n} where a(x), b(x)\ndeny \"m\" { x } where a(x), not b(x)\n"
+            "resource t n { f = x } where a(x), b(x)\ndeny \"m\" { x } where a(x), not b(x)\n"
         );
         let long = "p(x) where {\n  q(x, \"a rather long string that fills the line\")\n  \
                     r(x, \"and another one that runs past its end\")\n}\n";
@@ -449,14 +206,143 @@ mod tests {
             ),
             long
         );
+        // Three literals stay on the line; four are a literal per line.
+        assert_eq!(
+            fmt("p(x) where a(x), b(x), c(x)\n"),
+            "p(x) where a(x), b(x), c(x)\n"
+        );
+        assert_eq!(
+            fmt("p(x) where a(x), b(x), c(x), d(x)\n"),
+            "p(x) where {\n  a(x)\n  b(x)\n  c(x)\n  d(x)\n}\n"
+        );
+        let four = "deny \"m\" where not { a(x), b(x), c(x), d(x) }\n";
+        assert_eq!(
+            fmt(four),
+            "deny \"m\" where not {\n  a(x)\n  b(x)\n  c(x)\n  d(x)\n}\n"
+        );
+        // A refinement's body has no braces: it stays on its line.
+        let refined = "input n: int check n > 0, n < 10, n != 3, n != 5\n";
+        assert_eq!(fmt(refined), refined);
     }
 
+    /// No line break of the author's survives (R-52): what fits on a line
+    /// is printed on it, however it was written.
     #[test]
-    fn commas_a_newline_makes_redundant_are_dropped() {
+    fn the_authors_line_breaks_do_not_survive() {
+        assert_eq!(
+            fmt("resource t n {\n  a = 1\n  b = [\n    1,\n    2,\n  ]\n}\n"),
+            "resource t n { a = 1, b = [1, 2] }\n"
+        );
+        assert_eq!(
+            fmt("p(x) where q(\n  x,\n  {\n    a: 1\n  }\n)\n"),
+            "p(x) where q(x, { a: 1 })\n"
+        );
+        assert_eq!(
+            fmt("component m {\n  input n: int = 1\n}\nf(\"k\", {\n  a: 1\n})\n"),
+            "component m {\n  input n: int = 1\n}\nf(\"k\", { a: 1 })\n"
+        );
+    }
+
+    /// What does not fit breaks from the outside in, an element per line
+    /// with a trailing comma; inner groups that then fit stay on one line.
+    #[test]
+    fn a_long_term_breaks_from_the_outside_in() {
+        let wide = "x".repeat(48);
+        let src = format!(
+            "resource t n {{ tags = {{ a: \"{wide}\", b: {{ c: 1, d: [1, 2] }}, e: \"{wide}\" }} }}\n"
+        );
+        assert_eq!(
+            fmt(&src),
+            format!(
+                "resource t n {{\n  tags = {{\n    a: \"{wide}\",\n    b: {{ c: 1, d: [1, 2] }},\n    \
+                 e: \"{wide}\",\n  }}\n}}\n"
+            )
+        );
+        // A call breaks its arguments.
+        let src = format!("f(\"{wide}\", \"{wide}\", [1, 2])\n");
+        assert_eq!(
+            fmt(&src),
+            format!("f(\n  \"{wide}\",\n  \"{wide}\",\n  [1, 2],\n)\n")
+        );
+        // A comprehension: `[ item |`, a literal per line, `]`.
+        let src = format!("let l = [ x | q(x, \"{wide}\"), r(x, \"{wide}\") ]\n");
+        assert_eq!(
+            fmt(&src),
+            format!("let l = [ x |\n  q(x, \"{wide}\"),\n  r(x, \"{wide}\")\n]\n")
+        );
+        // A long chain or string has nowhere to break: left as is.
+        let chain = format!("let l = a.{}\n", ["segment"; 14].join("."));
+        assert_eq!(fmt(&chain), chain);
+    }
+
+    /// A list whose only element is an object hugs it, `[{` .. `}]`, and an
+    /// object whose only field is a list hugs that.
+    #[test]
+    fn a_list_of_one_object_hugs_it() {
+        let wide = "x".repeat(50);
+        let src = format!("resource t n {{ c = [{{ a: \"{wide}\", b: \"{wide}\" }}] }}\n");
+        assert_eq!(
+            fmt(&src),
+            format!(
+                "resource t n {{\n  c = [{{\n    a: \"{wide}\",\n    b: \"{wide}\",\n  }}]\n}}\n"
+            )
+        );
+        let src = format!("let o = {{ k: [\"{wide}\", \"{wide}\"] }}\n");
+        assert_eq!(
+            fmt(&src),
+            format!("let o = {{ k: [\n  \"{wide}\",\n  \"{wide}\",\n] }}\n")
+        );
+    }
+
+    /// Blocks, type blocks and object inputs have one rule: a comma
+    /// between entries on one line, none when broken; lists and objects
+    /// have a trailing comma when broken and none on one line.
+    #[test]
+    fn commas_follow_one_rule() {
         assert_eq!(
             fmt("resource t n {\n  a = 1,\n  b = [1, 2,],\n}\n"),
-            "resource t n {\n  a = 1\n  b = [1, 2]\n}\n"
+            "resource t n { a = 1, b = [1, 2] }\n"
         );
+        let wide = "x".repeat(40);
+        for (open, field) in [
+            ("input i {", "a: string"),
+            ("type t {", "a: string"),
+            ("output o {", "a = 1"),
+        ] {
+            let src = format!("{open}\n  {field},\n  b: \"{wide}\",\n  c: \"{wide}\",\n}}\n");
+            let src = src
+                .replace("b: \"", "b: enum(\"")
+                .replace("\",\n  c", "\"),\n  c");
+            let src = src
+                .replace("c: \"", "c: enum(\"")
+                .replace("\",\n}", "\"),\n}");
+            let want =
+                format!("{open}\n  {field}\n  b: enum(\"{wide}\")\n  c: enum(\"{wide}\")\n}}\n");
+            assert_eq!(fmt(&src), want, "{open}");
+            let one = format!("{open} {field}, b: int }}\n");
+            assert_eq!(fmt(&format!("{open}\n  {field},\n  b: int,\n}}\n")), one);
+        }
+    }
+
+    /// A block entry with a body would run into the next entry on one
+    /// line: such a block is an entry per line.
+    #[test]
+    fn a_block_with_a_rule_in_it_breaks() {
+        let src = "use m {\n  p(x) where q(x), r(x)\n  n = 1\n}\n";
+        assert_eq!(fmt(src), src);
+    }
+
+    /// Comments stay where they were: one on its own line above what
+    /// follows it, one after code at the end of that code's line; the
+    /// groups around them break.
+    #[test]
+    fn comments_stay_in_place() {
+        let src = "resource t n {\n  # above\n  a = 1 # after\n\n  b = [\n    1, # one\n    2,\n  ]\n  # last\n}\n";
+        assert_eq!(fmt(src), src);
+        let src = "p(x) where {\n  q(x) # why\n  r(x)\n}\n";
+        assert_eq!(fmt(src), src);
+        let src = "provider k8s { # later\n}\np(x) where q(x) # a rule\n# the end\n";
+        assert_eq!(fmt(src), src);
     }
 
     #[test]
@@ -465,12 +351,6 @@ mod tests {
             fmt("p(\"a\")\n\n\n\nq(\"b\")\n\n"),
             "p(\"a\")\n\nq(\"b\")\n"
         );
-    }
-
-    #[test]
-    fn brackets_opened_on_one_line_indent_once() {
-        let src = "resource t n {\n  c = [{\n    a: 1\n  }]\n}\nf(\"k\", {\n  a: 1\n})\n";
-        assert_eq!(fmt(src), src);
     }
 
     #[test]

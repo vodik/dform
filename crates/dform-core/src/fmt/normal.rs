@@ -1,6 +1,5 @@
 //! The normal forms `dform fmt` prints where two spellings of one meaning
-//! survive (proposal H section 3): a body on one line when it fits and in
-//! braces when it does not, `{ a }` for `{ a: a }`, a header name quoted
+//! survive (proposal H section 3): `{ a }` for `{ a: a }`, a header name quoted
 //! only when it needs it, `not lit` for `not { lit }`, `==` where both
 //! sides are bound, the atom `p(k, i)` for `i = p[k]` with `i` fresh,
 //! `env == "prod"` for a value name's atom `env("prod")`, no `{}` on a
@@ -12,9 +11,6 @@
 use crate::syntax::SyntaxKind::{self, *};
 use crate::syntax::{SyntaxNode, SyntaxToken};
 use std::collections::BTreeSet;
-
-/// The widest a line `fmt` joins a body onto.
-pub const WIDTH: usize = 100;
 
 fn toks(n: &SyntaxNode) -> impl Iterator<Item = SyntaxToken> + '_ {
     n.children_with_tokens()
@@ -159,13 +155,12 @@ fn binds(l: &SyntaxNode, out: &mut BTreeSet<String>) {
     out.extend(hs);
 }
 
-struct Ctx<'a> {
-    src: &'a str,
+struct Ctx {
     names: Names,
     edits: Vec<(usize, usize, String)>,
 }
 
-impl Ctx<'_> {
+impl Ctx {
     fn text(&self, n: &SyntaxNode) -> String {
         n.text().to_string().trim().to_string()
     }
@@ -173,13 +168,6 @@ impl Ctx<'_> {
     fn put(&mut self, n: &SyntaxNode, s: String) {
         let r = n.text_range();
         self.edits.push((r.start().into(), r.end().into(), s));
-    }
-
-    /// The column `at` is at in the source, and its line's text.
-    fn line(&self, at: usize) -> (usize, &str) {
-        let start = self.src[..at].rfind('\n').map_or(0, |i| i + 1);
-        let end = self.src[at..].find('\n').map_or(self.src.len(), |i| at + i);
-        (at - start, &self.src[start..end])
     }
 
     fn bound(&self, n: &SyntaxNode, bound: &BTreeSet<String>) -> bool {
@@ -197,7 +185,6 @@ impl Ctx<'_> {
             self.lit(&l, &bound);
             binds(&l, &mut bound);
         }
-        self.width(body);
     }
 
     fn lit(&mut self, l: &SyntaxNode, bound: &BTreeSet<String>) {
@@ -301,35 +288,6 @@ impl Ctx<'_> {
         }
         let args: Vec<String> = ix.children().map(|a| self.text(&a)).collect();
         Some(format!("{p}({}, {var})", args.join(", ")))
-    }
-
-    /// A body on one line when it fits, in braces when it does not.
-    fn width(&mut self, body: &SyntaxNode) {
-        let lits: Vec<SyntaxNode> = body.children().collect();
-        let braced = toks(body).next().is_some_and(|t| t.kind() == L_BRACE);
-        if lits.is_empty() || body.descendants_with_tokens().any(|e| e.kind() == COMMENT) {
-            return;
-        }
-        let texts: Vec<String> = lits.iter().map(|l| self.text(l)).collect();
-        if texts.iter().any(|t| t.contains('\n')) {
-            return;
-        }
-        let r = body.text_range();
-        let (start, end): (usize, usize) = (r.start().into(), r.end().into());
-        let (col, line) = self.line(start);
-        let one = texts.join(", ");
-        let rest = self.src[end..].split('\n').next().unwrap_or("").trim_end();
-        if braced {
-            // The line up to the body, the literals, and what follows the
-            // closing brace.
-            let fits = col + one.len() + rest.len() <= WIDTH;
-            if fits && !self.src[start..end].contains("\n\n") {
-                self.edits.push((start, end, one));
-            }
-        } else if line.trim_end().len() > WIDTH && lits.len() > 1 {
-            self.edits
-                .push((start, end, format!("{{\n{}\n}}", texts.join("\n"))));
-        }
     }
 
     fn stmt(&mut self, n: &SyntaxNode) {
@@ -464,7 +422,6 @@ impl Ctx<'_> {
 /// The source with its normal forms, or `None` when it is in them.
 pub fn normalize(root: &SyntaxNode, src: &str) -> Option<String> {
     let mut c = Ctx {
-        src,
         names: Names::of(root),
         edits: Vec::new(),
     };

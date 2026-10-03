@@ -1,5 +1,6 @@
 //! `dform fmt`: the repository's files are in formatted form, formatting
-//! changes only whitespace and commas, and the CLI rewrites or checks.
+//! changes only whitespace and commas, no line break of the author's
+//! survives it (R-52), and the CLI rewrites or checks.
 
 mod common;
 use common::{Scratch, repo};
@@ -44,14 +45,21 @@ fn fmt(src: &str) -> String {
     dform::fmt::format(&p.syntax())
 }
 
-/// The tokens that carry meaning: everything but whitespace and commas
-/// (comments included, so none is lost).
+/// The tokens that carry meaning: everything but whitespace, commas and a
+/// `where` body's braces (comments included, so none is lost).
 fn meaning(src: &str) -> Vec<String> {
+    use dform::syntax::SyntaxKind::{BODY, L_BRACE, LIT_NOT_BLOCK, R_BRACE};
+    let where_brace = |t: &dform::syntax::SyntaxToken| {
+        matches!(t.kind(), L_BRACE | R_BRACE)
+            && t.parent().is_some_and(|b| {
+                b.kind() == BODY && b.parent().is_some_and(|p| p.kind() != LIT_NOT_BLOCK)
+            })
+    };
     parse(src)
         .syntax()
         .descendants_with_tokens()
         .filter_map(|e| e.into_token())
-        .filter(|t| !matches!(t.kind(), WHITESPACE | COMMA))
+        .filter(|t| !matches!(t.kind(), WHITESPACE | COMMA) && !where_brace(t))
         .map(|t| t.text().trim_end().to_string())
         .collect()
 }
@@ -74,18 +82,107 @@ fn the_repository_is_formatted() {
     }
 }
 
-/// Formatting is idempotent and moves only whitespace and commas; the
-/// commas it drops are the ones a newline or a closer makes redundant.
+/// Formatting is idempotent and moves only whitespace and commas (a
+/// broken list's trailing comma, a broken block's separators, R-52).
 #[test]
-fn formatting_keeps_every_token_but_redundant_commas() {
+fn formatting_keeps_every_token_but_commas() {
     for f in corpus() {
         let src = std::fs::read_to_string(&f).unwrap();
         let once = fmt(&src);
         assert_eq!(fmt(&once), once, "{} is not idempotent", f.display());
         assert_eq!(meaning(&once), meaning(&src), "{}", f.display());
-        let commas = |s: &str| s.matches(',').count();
-        assert!(commas(&once) <= commas(&src), "{}", f.display());
     }
+}
+
+/// No line break of the author's survives (R-52): every file of the
+/// repository (its comments and the blank lines inside its statements
+/// taken out, which do survive), with each of its terms, blocks and bodies
+/// joined onto one line, formats as it did.
+#[test]
+fn the_authors_line_breaks_do_not_survive() {
+    let mut joins = 0;
+    for f in corpus() {
+        let name = f.strip_prefix(repo()).unwrap().display().to_string();
+        let src = plain(&std::fs::read_to_string(&f).unwrap());
+        let joined = join_lines(&src);
+        joins += usize::from(joined != src);
+        assert_eq!(fmt(&joined), fmt(&src), "{name}");
+    }
+    assert!(joins > 20, "only {joins} files had a line to join");
+}
+
+/// `src` without its comments, and without blank lines but between
+/// statements.
+fn plain(src: &str) -> String {
+    let tree = parse(src).syntax();
+    let mut out = String::new();
+    for t in tree
+        .descendants_with_tokens()
+        .filter_map(|e| e.into_token())
+    {
+        match t.kind() {
+            dform::syntax::SyntaxKind::COMMENT => {}
+            WHITESPACE if t.text().contains('\n') && !top(&t) => {
+                if !out.ends_with('\n') {
+                    out.push('\n');
+                }
+            }
+            _ => out.push_str(t.text()),
+        }
+    }
+    out
+}
+
+/// A token between two statements.
+fn top(t: &dform::syntax::SyntaxToken) -> bool {
+    t.parent().is_some_and(|p| {
+        matches!(
+            p.kind(),
+            dform::syntax::SyntaxKind::SOURCE_FILE | dform::syntax::SyntaxKind::STMT_BLOCK
+        )
+    })
+}
+
+/// `src` with every newline inside brackets replaced by a space, and every
+/// block and braced body written on one line (its entries joined by `, `).
+fn join_lines(src: &str) -> String {
+    let tree = parse(src).syntax();
+    let mut out = String::new();
+    for t in tree
+        .descendants_with_tokens()
+        .filter_map(|e| e.into_token())
+    {
+        if t.kind() != WHITESPACE || !t.text().contains('\n') {
+            out.push_str(t.text());
+            continue;
+        }
+        let top = top(&t);
+        let prev = t.prev_token().map(|p| p.kind());
+        let next = t.next_token().map(|p| p.kind());
+        if top || next.is_none() {
+            out.push_str(t.text());
+        } else if matches!(prev, Some(COMMA | dform::syntax::SyntaxKind::L_BRACE))
+            || matches!(next, Some(dform::syntax::SyntaxKind::R_BRACE | COMMA))
+            || !separates(&t)
+        {
+            out.push(' ');
+        } else {
+            out.push_str(", ");
+        }
+    }
+    out
+}
+
+/// Whether the newline `t` separates two entries of a block or a braced
+/// body (and so is a comma when joined).
+fn separates(t: &dform::syntax::SyntaxToken) -> bool {
+    use dform::syntax::SyntaxKind::*;
+    t.parent().is_some_and(|p| {
+        matches!(
+            p.kind(),
+            BLOCK | BODY | TYPE_DECL | INPUT | OUTPUT_DECL | ATTR_DECL
+        )
+    })
 }
 
 #[test]
@@ -104,7 +201,7 @@ fn check_lists_unformatted_files_and_fmt_rewrites_them() {
     s.run(&["fmt", "ok.df", "messy.df"]).success();
     assert_eq!(
         s.read("messy.df"),
-        "edition 2026\nresource net.vpc main {\n  cidr = \"10.0.0.0/16\"\n  tags = { team: \"x\" }\n}\nprovider fake\n"
+        "edition 2026\nresource net.vpc main { cidr = \"10.0.0.0/16\", tags = { team: \"x\" } }\nprovider fake\n"
     );
     s.run(&["fmt", "--check", "ok.df", "messy.df"]).success();
 }
@@ -166,8 +263,7 @@ fn fmt_puns_an_entry_whose_value_is_its_name() {
                resource net.subnet s {\n  zone = zone\n  spec.selector.color = color @default\n  \
                cidr = zone\n  tags += tags\n}\n";
     let want = "edition 2026\n\nprovider aws { region, source = source }\n\
-                resource net.subnet s {\n  zone\n  spec.selector.color @default\n  \
-                cidr = zone\n  tags += tags\n}\n";
+                resource net.subnet s { zone, spec.selector.color @default, cidr = zone, tags += tags }\n";
     assert_eq!(fmt(src), want);
     assert_eq!(fmt(want), want);
 }

@@ -1426,32 +1426,64 @@ of the program are rejected with "not yet supported".
 
 ## Formatting
 
-`dform fmt` prints the normal form of each construct (H section 3) and
-keeps the author's other line breaks (at most one blank line in a row),
-the spaces within a line and the indentation: a line is one step deeper
-than the line that holds the innermost bracket, statement, block entry or
-clause still open at its first token, and a line that starts with a closer
-sits with the line that opened it. The normal forms:
+`dform fmt` prints the normal form of each construct (H section 3) in one
+layout (R-52). The author's line breaks are not kept: what fits in 100
+columns is printed on one line however it was written, and what does not
+breaks from the outside in, its outermost group first, then each part
+measured again, so an inner group that fits stays on its line. A blank
+line between statements, entries or elements is kept (at most one), and
+so is every comment, where it was: one on its own line above what follows
+it, one after code at the end of that code's line; a comment breaks the
+groups around it. Two spaces indent a line one step deeper than the line
+its group opened on; a closer is on its own line at the opener's indent.
 
-- a body goes on one line (`where a, b`) when the line fits in 100 columns,
-  else into a `{ }` block, one literal per line;
+The groups, and how each breaks:
+
+- a list, an object, an argument list, a tuple, an object type and a
+  declaration's columns: one element per line, each with a trailing
+  comma; on one line, none (`[1, 2]`, `{ a: 1 }`, `f(x)`);
+- a list whose only element is an object hugs it, `[{` and `}]` on the
+  outer lines, and an object whose only field is a list hugs that
+  (`{ k: [` .. `] }`): the only closers not on their own line;
+- a comprehension: `[ item |` on the first line, a body literal per line
+  with a comma between, `]` on its own line;
+- a block (a resource's, a `use`'s or an `instance`'s, a `set`'s, a
+  provider's, a type's, an object input's or output's fields) and a
+  `not { }` body: one entry per line and no commas, the newline separates;
+  on one line, `{ a = 1, b = 2 }`; a block holding an entry with a body
+  (a row's `where`) is always an entry per line;
+- a `where` body: on its line, `where a, b`, else in braces, one literal
+  per line; a body of more than three literals is in braces whatever the
+  width (R-10). A refinement's `check` body has no braces and stays on its
+  line;
+- a component's statements: one per line, always.
+
+Of the groups of one statement, its block breaks before its body, and a
+term's group (a call's arguments, a list) is measured up to the next
+place the statement could break, so the statement's own block or body
+breaks before the terms inside it. A chain, an operator and a string have
+no break in them: a line still too long after every group broke is left
+as it is. A string is printed as written: the lines inside one that spans
+lines keep their indentation, and the groups around it break (but for a
+`where` body, which may stay on its line). Entries, elements and
+statements stay in the author's order but for the header's (see "The
+header").
+
+The normal forms:
+
 - `{ a: a }` is `{ a }`, and a block's entry `k = k` is `k`;
 - a `provider` or `instance` with no entries has no block: `provider aws`;
 - a header name is bare when it is a name, not a keyword, and not bound by
   the clause; else it is quoted;
 - `not { lit }` of one literal whose names are all bound is `not lit`;
-- `=` between two bound sides is `==`;
+- `=` binds and `==` compares: fmt never trades one for the other;
 - `i = p[k]` with `i` fresh is `p(k, i)`;
 - `env("prod")` for a value name is `env == "prod"`;
 - the header is `key`, `input`, `input p from`, before the
   body, each statement with the comments directly above it and on its line
   (see "The header").
 
-It drops the commas a newline makes redundant (in blocks and `{ }` bodies)
-and the trailing comma of a list or object. A string is printed as
-written: the lines inside one that spans lines keep their indentation,
-and no line is broken inside a string. A formatted file prints back
-byte for byte.
+A formatted file prints back byte for byte.
 
 ## Decisions the proposal left open
 
