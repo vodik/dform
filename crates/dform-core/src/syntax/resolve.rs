@@ -729,6 +729,9 @@ enum Want {
     Nothing,
     /// A typed `let`'s resource type.
     Type(String),
+    /// A resource's attribute: its schema's `ref(T)`, once the schema is
+    /// known (`types::read`).
+    Schema,
 }
 
 /// What a call is where it is written.
@@ -3018,7 +3021,7 @@ impl<'u> Lowerer<'u> {
         let mut rc = self.rc(n, scope, outer);
         let mut body = self.clauses(&mut rc, n)?;
         let mut reads = Vec::new();
-        let fields = self.fields(&mut rc, &block, &mut reads)?;
+        let fields = self.wanting(Want::Schema, |l| l.fields(&mut rc, &block, &mut reads))?;
         let reads_at = body.len()..body.len() + reads.len();
         body.extend(reads);
         // A local name has no `/`: that is the scope separator of an
@@ -3444,7 +3447,8 @@ impl<'u> Lowerer<'u> {
                     self.diags.push(d);
                     return Err(Skip);
                 }
-                let value = self.term(rc, rhs, Pos::Value, &mut body)?;
+                let value =
+                    self.wanting(Want::Schema, |l| l.term(rc, rhs, Pos::Value, &mut body))?;
                 let head = atom_at(
                     "arg",
                     vec![
@@ -3519,7 +3523,7 @@ impl<'u> Lowerer<'u> {
             self.diags.push(d);
             return Err(Skip);
         }
-        let value = self.term(rc, rhs, Pos::Value, &mut body)?;
+        let value = self.wanting(Want::Schema, |l| l.term(rc, rhs, Pos::Value, &mut body))?;
         let mut args = vec![typ, addr, str_term(&path), value];
         if let Some(rank) = rank {
             args.push(str_term(rank.name()));
@@ -4519,6 +4523,21 @@ impl<'u> Lowerer<'u> {
         self.error(span, crate::types::ambiguous_resource(name, types))
     }
 
+    /// A resource's attribute given a bare name two types share: every
+    /// candidate, for the schema's `ref(T)` to pick (`types::read`, R-74).
+    fn deferred_ref(&self, rc: &Rc, name: &str, span: Span) -> Option<Term> {
+        let types = self.resource(rc.scope, name)?;
+        if self.want != Want::Schema || types.len() < 2 {
+            return None;
+        }
+        let addr = self.resource_addr(rc.scope, name);
+        let candidates = types
+            .iter()
+            .map(|t| func("ref", vec![str_term(t), addr.clone(), str_term("")]))
+            .collect();
+        Some(crate::types::ambiguous_ref(name, span, candidates))
+    }
+
     /// A relation atom, its arguments lowered at `pos`: positional, or
     /// named by the relation's columns (`p(a: x)`, H-12).
     fn atom(&mut self, rc: &mut Rc, n: &SyntaxNode, pos: Pos, pre: &mut Vec<Lit>) -> L<Atom> {
@@ -4989,6 +5008,9 @@ impl<'u> Lowerer<'u> {
                     && !self.is_value(rc.scope, &c.head)
                     && self.resource(rc.scope, &c.head).is_some()
                 {
+                    if let Some(t) = self.deferred_ref(rc, &c.head, span) {
+                        return Ok(t);
+                    }
                     let (typ, addr) = self.reference(rc, &c, pre, span)?;
                     return Ok(func("ref", vec![typ, addr, str_term("")]));
                 }

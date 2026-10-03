@@ -186,6 +186,35 @@ pub fn ambiguous_literal(text: &str, span: crate::ast::Span) -> Term {
     }
 }
 
+/// A resource named by a bare name two or more types share, in a
+/// resource's attribute (R-74): `__resource("main", file, start, end,
+/// ref(T1, A1, ""), ..)`, one reference per candidate. The attribute's
+/// `ref(T)` picks the candidate of type `T` ([`read`]); anywhere else it
+/// is the error that lists them.
+pub const AMBIGUOUS_REF: &str = "__resource";
+
+pub fn ambiguous_ref(name: &str, span: crate::ast::Span, candidates: Vec<Term>) -> Term {
+    let Term::Func { mut args, .. } = ambiguous_literal(name, span) else {
+        unreachable!("ambiguous_literal is a call")
+    };
+    args.extend(candidates);
+    Term::Func {
+        name: AMBIGUOUS_REF.to_string(),
+        args,
+    }
+}
+
+/// The name and the candidate references of an ambiguous resource name.
+fn ambiguous_ref_of(t: &Term) -> Option<(&str, &[Term])> {
+    match t {
+        Term::Func { name, args } if name == AMBIGUOUS_REF && args.len() > 4 => match &args[0] {
+            Term::Val(Value::Str(s)) => Some((s, &args[4..])),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 /// The error for a bare name two or more resources of `types` share,
 /// where no type picks one: `main` names 2 resources: write one of ..
 pub fn ambiguous_resource(name: &str, types: &[String]) -> String {
@@ -204,6 +233,27 @@ pub fn ambiguous_resource(name: &str, types: &[String]) -> String {
         "`{name}` names {} resources: write one of {list}",
         types.len()
     )
+}
+
+/// Pick, in `t` (a value of an attribute typed `ty`), the candidate of an
+/// ambiguous resource name whose type the attribute's `ref(T)` names.
+fn pick_refs(ty: &Ty, t: &mut Term) {
+    match (ty, &mut *t) {
+        (Ty::Secret(inner), _) => pick_refs(inner, t),
+        (Ty::List(inner), Term::List(xs)) => xs.iter_mut().for_each(|x| pick_refs(inner, x)),
+        (Ty::Ref(want), _) => {
+            let picked = ambiguous_ref_of(t).and_then(|(_, cs)| {
+                let mut of = cs
+                    .iter()
+                    .filter(|c| reference(c).is_some_and(|(typ, _)| typ == want));
+                of.next().filter(|_| of.next().is_none()).cloned()
+            });
+            if let Some(c) = picked {
+                *t = c;
+            }
+        }
+        _ => {}
+    }
 }
 
 /// The text of an ambiguous quantity literal, `__quantity("500m", ..)`.
@@ -487,9 +537,16 @@ pub fn read(program: &mut Program, schema: &Schema) -> Result<()> {
     for s in &program.statements {
         stmt_terms(s, &mut |t, span| {
             visit(t, &mut |t| {
+                let at = || ambiguous_span(t).filter(|s| !s.is_none()).unwrap_or(span);
                 if let Some(x) = ambiguous(t) {
-                    let at = ambiguous_span(t).filter(|s| !s.is_none()).unwrap_or(span);
-                    diags.push(Diagnostic::error(at, quantity::ambiguous(x)));
+                    diags.push(Diagnostic::error(at(), quantity::ambiguous(x)));
+                }
+                if let Some((name, cs)) = ambiguous_ref_of(t) {
+                    let types: Vec<String> = cs
+                        .iter()
+                        .filter_map(|c| reference(c).map(|(typ, _)| typ.to_string()))
+                        .collect();
+                    diags.push(Diagnostic::error(at(), ambiguous_resource(name, &types)));
                 }
             })
         });
@@ -556,6 +613,7 @@ fn read_stmt(s: &mut Stmt, schema: &Schema, diags: &mut Vec<Diagnostic>) {
 fn read_at(schema: &Schema, typ: &str, path: &str, t: &mut Term) -> Result<(), (String, String)> {
     if let Some(spec) = schema.attr(typ, path) {
         let ty = Ty::parse(&spec.ty);
+        pick_refs(&ty, t);
         if ty.measured() {
             if let Some(why) = mismatch(&ty, t) {
                 return Err((path.to_string(), why));

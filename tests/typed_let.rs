@@ -1,6 +1,8 @@
 //! R-74: a typed `let` (`let k: T = t`) checks its value as any typed
 //! position does and types the columns its reads reach; a bare name two
-//! resources share is the one of a typed `let`'s resource type.
+//! resources share is the one the position's type names, a typed `let`'s
+//! or a schema's `ref(T)` attribute's, and the error listing them
+//! anywhere else.
 
 mod common;
 use common::{Scratch, error, mock};
@@ -12,7 +14,7 @@ fn two_mains(rest: &str) -> String {
     format!(
         "provider fake\n\n\
          resource net.vpc main {{ cidr = \"10.0.0.0/16\" }}\n\
-         resource net.subnet main {{\n  vpc = net.vpc[\"main\"]\n  cidr = \"10.0.1.0/24\"\n}}\n{rest}"
+         resource net.subnet main {{\n  vpc = main\n  cidr = \"10.0.1.0/24\"\n}}\n{rest}"
     )
 }
 
@@ -118,4 +120,56 @@ fn a_typed_let_types_the_columns_it_reaches() {
     assert!(typed.contains(&"q(h: string)".to_string()), "{typed:?}");
     let untyped = sigs("decl src(v: any)\nlet host = x where src(x)\nq(h) where h = host\n");
     assert!(untyped.contains(&"q(h: any)".to_string()), "{untyped:?}");
+}
+
+/// A schema attribute typed `ref(T)` picks the resource of type `T`
+/// among those a bare name shares: in a block, a list, a `set` with no
+/// rank and one with a rank, and in a component's copy.
+#[test]
+fn a_ref_attribute_picks_the_resource_of_its_type() {
+    let r = plan(
+        "ambiguous-ref-schema",
+        &format!(
+            "input on: bool = true\n{}",
+            two_mains(
+                "resource db.postgres main {\n  subnets = [main]\n}\n\
+                 resource net.subnet a { cidr = \"10.0.2.0/24\" }\n\
+                 resource net.subnet b { cidr = \"10.0.3.0/24\" }\n\
+                 set a.vpc = main where on\nset b.vpc = main @default where on\n\
+                 component c {\n  resource net.vpc main { cidr = \"10.1.0.0/16\" }\n  \
+                 resource net.subnet main {\n    vpc = main\n    cidr = \"10.1.1.0/24\"\n  }\n}\n\
+                 instance c x\n",
+            )
+        ),
+    )
+    .success();
+    for want in [
+        "+ net.subnet[\"main\"]\n  cidr = \"10.0.1.0/24\"\n  vpc = ?net.vpc[\"main\"]\n",
+        "+ db.postgres[\"main\"]\n  subnets[0] = ?net.subnet[\"main\"]\n",
+        "+ net.subnet[\"a\"]\n  cidr = \"10.0.2.0/24\"\n  vpc = ?net.vpc[\"main\"]\n",
+        "+ net.subnet[\"b\"]\n  cidr = \"10.0.3.0/24\"\n  vpc = ?net.vpc[\"main\"]\n",
+        "+ net.subnet[\"x/main\"]\n  cidr = \"10.1.1.0/24\"\n  vpc = ?net.vpc[\"x/main\"]\n",
+    ] {
+        assert!(r.stdout.contains(want), "{want}\n{}", r.stdout);
+    }
+}
+
+/// Where nothing types the position, the shared name is the error that
+/// lists the candidates: an attribute the schema does not type, a
+/// `string` attribute, a relation's argument, an untyped output.
+#[test]
+fn an_untyped_position_keeps_the_error() {
+    let listed = "`main` names 2 resources: write one of net.vpc[\"main\"], net.subnet[\"main\"]";
+    for rest in [
+        "resource net.vpc other {\n  cidr = \"10.2.0.0/16\"\n  peer = main\n}\n",
+        "resource net.vpc other { cidr = main }\n",
+        "resource net.vpc other {\n  cidr = \"10.2.0.0/16\"\n  tags = { m: main }\n}\n",
+    ] {
+        let r = plan("ambiguous-ref-untyped", &two_mains(rest)).failure();
+        assert!(r.stderr.contains(listed), "{rest}\n{}", r.stderr);
+    }
+    for rest in ["requires_approval(main, \"x\")\n", "output o = main\n"] {
+        let e = error(&two_mains(rest));
+        assert!(e.contains(listed), "{rest}\n{e}");
+    }
 }

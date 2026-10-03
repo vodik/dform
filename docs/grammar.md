@@ -361,8 +361,12 @@ top level and in CLI arguments it is the full address, which pastes
 unchanged from `plan` (H-16): `net.vpc["main/vpc"]`. A resource in scope is written by its
 name: `T["n"]` for a resource `n` in scope, and `T.n`, are errors naming
 `n`. A name declared twice in scope (three resources named `web`) is an
-error listing the candidates by address, but in a `let` typed `T`
-(R-74), which takes the one of type `T`. A
+error listing the candidates by address, but where the position's type
+picks one (R-74): an attribute the provider's schema types `ref(T)`
+(`list(ref(T))`, `set(ref(T))`) takes the one of type `T` (`network =
+main` with `ovh.network main` and `ovh.kube main` in scope), and so does
+a `let` typed `T`. An untyped position (no schema, a `string` attribute,
+a relation's argument, an untyped `let` or output) keeps the error. A
 dot on a variable with no static type is field access on a value:
 `__path(X, "f")`. A variable a
 reference column binds with no `in` (`deformation(k, r, _)`) is a
