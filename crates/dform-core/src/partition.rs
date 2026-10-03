@@ -115,11 +115,9 @@ pub enum Verdict {
     },
 }
 
-fn const_str(t: &Term) -> Option<String> {
-    match t {
-        Term::Val(Value::Str(s)) => Some(s.clone()),
-        _ => None,
-    }
+/// The text of a string literal term, owned ([`Term::as_str`]).
+pub(crate) fn const_str(t: &Term) -> Option<String> {
+    t.as_str().map(str::to_string)
 }
 
 /// A's path normalization, approximated without a schema: a resource

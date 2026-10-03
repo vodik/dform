@@ -461,7 +461,7 @@ impl Hook {
             facts.iter().any(|a| {
                 a.pred == pred
                     && a.args.len() >= args.len()
-                    && a.args.iter().zip(args).all(|(t, s)| str_of(t) == Some(s))
+                    && a.args.iter().zip(args).all(|(t, s)| t.as_str() == Some(s))
             })
         };
         if tick == 1 {
@@ -501,7 +501,7 @@ impl Hook {
             let reasons: Vec<String> = facts
                 .iter()
                 .filter(|f| f.pred == "hold" && f.args.len() == 3)
-                .filter(|f| str_of(&f.args[0]) == Some(t) && str_of(&f.args[1]) == Some(a))
+                .filter(|f| f.args[0].as_str() == Some(t) && f.args[1].as_str() == Some(a))
                 .map(|f| match &f.args[2] {
                     Term::Val(Value::Str(s)) => s.clone(),
                     other => format!("{other:?}"),
@@ -677,13 +677,6 @@ fn stamps(relations: &[Relation], stamp: impl Fn(&Relation) -> String) -> BTreeM
             (p, s.join(","))
         })
         .collect()
-}
-
-fn str_of(t: &Term) -> Option<&str> {
-    match t {
-        Term::Val(Value::Str(s)) => Some(s),
-        _ => None,
-    }
 }
 
 /// Every leaf where `now` differs from `baseline`, per address both have;

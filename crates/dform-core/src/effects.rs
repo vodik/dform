@@ -13,14 +13,13 @@
 //! `attr(output, ...)` or `world(...)`, a call to
 //! an extern, or (by predicate name) a read of the scope's own input.
 
-use crate::ast::{Lit, Program, Span, Stmt, Term};
+use crate::ast::{Lit, Program, Span, Stmt};
 use crate::diag;
 use crate::inputs::Declared;
 use crate::modules;
-use crate::partition;
+use crate::partition::{self, const_str};
 use crate::schema::Schema;
 use crate::transform;
-use crate::value::Value;
 use anyhow::Result;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -166,13 +165,6 @@ fn relations(program: &Program) -> Relations {
         }
     }
     out
-}
-
-fn const_str(t: &Term) -> Option<String> {
-    match t {
-        Term::Val(Value::Str(s)) => Some(s.clone()),
-        _ => None,
-    }
 }
 
 /// `""` (the stack's own) prints as `stack`; anything else is already

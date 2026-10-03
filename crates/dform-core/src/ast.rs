@@ -51,6 +51,14 @@ impl Term {
         matches!(self, Term::Var(_))
     }
 
+    /// The text of a string literal term; none for any other term.
+    pub fn as_str(&self) -> Option<&str> {
+        match self {
+            Term::Val(Value::Str(s)) => Some(s),
+            _ => None,
+        }
+    }
+
     /// A constant term's value: a literal, or a list or object of them
     /// (a fact's argument, as `--set k=@FILE.df` and an `--input-file`
     /// give it); none for a term with a variable or a call in it.

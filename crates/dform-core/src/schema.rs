@@ -464,17 +464,11 @@ impl Schema {
     /// Each `type_doc(T, Path, Text)`: a type's (path `""`) and its
     /// attributes' descriptions, by type and path.
     pub fn docs(&self) -> BTreeMap<(&str, &str), &str> {
-        fn s(t: &Term) -> Option<&str> {
-            match t {
-                Term::Val(Value::Str(s)) => Some(s),
-                _ => None,
-            }
-        }
         self.facts
             .iter()
             .filter(|f| f.pred == "type_doc")
             .filter_map(|f| match f.args.as_slice() {
-                [t, p, d] => Some(((s(t)?, s(p)?), s(d)?)),
+                [t, p, d] => Some(((t.as_str()?, p.as_str()?), d.as_str()?)),
                 _ => None,
             })
             .collect()

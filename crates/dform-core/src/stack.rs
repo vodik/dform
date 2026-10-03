@@ -90,7 +90,7 @@ fn backend(v: &Term) -> Result<Backend, String> {
         return Err("unknown backend".into());
     };
     match (name.as_str(), args.as_slice()) {
-        ("local", [dir]) => match string(dir) {
+        ("local", [dir]) => match dir.as_str() {
             Some(dir) => Ok(Backend::Local(PathBuf::from(dir))),
             None => Err("backend local(DIR) takes a directory string".into()),
         },
@@ -98,7 +98,7 @@ fn backend(v: &Term) -> Result<Backend, String> {
             let usage = "backend s3(\"BUCKET\", \"PREFIX\", {endpoint: \"URL\", region: \"R\"}) \
                          takes a bucket and a prefix string, and optionally a record of \
                          endpoint and region strings";
-            let (Some(bucket), Some(prefix)) = (string(bucket), string(prefix)) else {
+            let (Some(bucket), Some(prefix)) = (bucket.as_str(), prefix.as_str()) else {
                 return Err(usage.into());
             };
             if bucket.is_empty() {
@@ -115,7 +115,9 @@ fn backend(v: &Term) -> Result<Backend, String> {
                     return Err(usage.into());
                 };
                 for (k, v) in m {
-                    let v = string(v).ok_or_else(|| format!("backend s3: {k} is a string"))?;
+                    let v = v
+                        .as_str()
+                        .ok_or_else(|| format!("backend s3: {k} is a string"))?;
                     match k.as_str() {
                         "endpoint" => spec.endpoint = Some(v.trim_end_matches('/').to_string()),
                         "region" => spec.region = Some(v.to_string()),
@@ -227,13 +229,6 @@ pub fn template_key(rest: &str, keys: &[String], path: &str) -> Option<String> {
         .map(|k| found.get(k.as_str()).map(|v| format!("{k}={v}")))
         .collect::<Option<Vec<_>>>()
         .map(|kv| kv.join(","))
-}
-
-fn string(t: &Term) -> Option<&str> {
-    match t {
-        Term::Val(Value::Str(s)) => Some(s),
-        _ => None,
-    }
 }
 
 /// Read the stack's settings, keys and `provider` statements of a loaded
@@ -440,7 +435,7 @@ fn stack_config(c: &Config, out: &mut Stack, diags: &mut Vec<Diagnostic>) {
                 }
                 Err(e) => diags.push(Diagnostic::error(*span, e)),
             },
-            "role" => match string(v) {
+            "role" => match v.as_str() {
                 Some("bootstrap") => out.bootstrap = true,
                 _ => diags.push(Diagnostic::error(*span, "role is \"bootstrap\"")),
             },
@@ -473,7 +468,7 @@ fn stack_config(c: &Config, out: &mut Stack, diags: &mut Vec<Diagnostic>) {
                     }
                 }
             }
-            "audit_sink" => match string(v) {
+            "audit_sink" => match v.as_str() {
                 Some(cmd) => out.audit_sink = Some(cmd.to_string()),
                 None => diags.push(Diagnostic::error(
                     *span,
@@ -498,7 +493,7 @@ fn trust_root(at: Span, t: &Term) -> Option<crate::approval::TrustRoot> {
     let Term::Func { name, args } = t else {
         return None;
     };
-    let args: Vec<&str> = args.iter().map(string).collect::<Option<_>>()?;
+    let args: Vec<&str> = args.iter().map(Term::as_str).collect::<Option<_>>()?;
     let (src, issuer) = match args.as_slice() {
         [src] => (*src, None),
         [src, iss] => (*src, Some(iss.to_string())),
@@ -525,7 +520,7 @@ fn trust_root(at: Span, t: &Term) -> Option<crate::approval::TrustRoot> {
 fn provider(c: &Config, diags: &mut Vec<Diagnostic>) -> String {
     let mut spec = c.name.clone();
     for (k, v, span) in &c.config {
-        match (k.as_str(), string(v)) {
+        match (k.as_str(), v.as_str()) {
             ("source", Some(src)) => {
                 let base = diag::location(c.span)
                     .map(|(file, _, _)| crate::project::base_of(Path::new(&file)))
