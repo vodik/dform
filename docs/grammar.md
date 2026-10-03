@@ -47,8 +47,17 @@ to move it ("`key env` is a header statement: move it above the body's
 first statement, line 5"); `dform fmt` moves it, and puts the header's
 kinds in order, keeping the author's order within a kind. The header
 reads names the body declares: `input env: environment` above `type
-environment = ..` resolves, as every name does, program-wide. A
-component's statements are its own (R-11a orders them).
+environment = ..` resolves, as every name does, program-wide.
+
+What a file or a component offers, not only what it takes, comes first
+too (R-11a): `decl`, then `output`, after `input` and before the rest.
+Unlike `key` and `input`, the parser does not reject a `decl` or an
+`output` written below the body (it is not a syntax error at any
+position); `dform fmt` places them regardless, moving each with the
+comments it owns. A component's `{ }` block takes the same order, `input`
+then `decl` then `output`, nothing in it checked by the parser at all
+(it is fmt's alone to place); `use` and `instance` stay among the body's
+statements, in a component as in a file.
 
 The first token decides what a statement is (H-2): a statement keyword
 starts its own statement, and a name followed by `(` is a fact or a rule.
@@ -1508,7 +1517,8 @@ The groups, and how each breaks:
   per line; a body of more than three literals is in braces whatever the
   width (R-10). A refinement's `check` body has no braces and stays on its
   line;
-- a component's statements: one per line, always.
+- a component's statements: one per line, always, in its interface
+  order (R-11a), like a file's.
 
 Of the groups of one statement, its block breaks before its body, and a
 term's group (a call's arguments, a list) is measured up to the next
@@ -1518,8 +1528,8 @@ no break in them: a line still too long after every group broke is left
 as it is. A string is printed as written: the lines inside one that spans
 lines keep their indentation, and the groups around it break (but for a
 `where` body, which may stay on its line). Entries, elements and
-statements stay in the author's order but for the header's (see "The
-header").
+statements stay in the author's order but for the header's and a
+component's own interface (see "The header", R-11a).
 
 The normal forms:
 
@@ -1538,9 +1548,10 @@ The normal forms:
 - `=` binds and `==` compares: fmt never trades one for the other;
 - `i = p[k]` with `i` fresh is `p(k, i)`;
 - `env("prod")` for a value name is `env == "prod"`;
-- the header is `key`, `input`, `input p from`, before the
-  body, each statement with the comments directly above it and on its line
-  (see "The header");
+- the header is `key`, `input`, `input p from`, `decl`, `output`, before
+  the body, each statement with the comments directly above it and on its
+  line (see "The header"); a component's `{ }` block takes the same
+  order, `input` then `decl` then `output`, before its own body (R-11a);
 - in a project, a literal in a typed position is in its shortest
   spelling: a string in a `bytes`, `cpu` or `duration` position that reads
   as one loses its quotes (`"2Gi"` is `2Gi`, `"500m"` is `500m`), and an

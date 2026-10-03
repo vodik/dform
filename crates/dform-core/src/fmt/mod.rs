@@ -112,16 +112,16 @@ fn print_signature(f: &crate::functions::Function) -> String {
     s
 }
 
-/// Format a parsed file: its header in order (R-27), its normal forms,
-/// then its layout. The tree must be free of syntax errors but for a
-/// header statement out of place.
+/// Format a parsed file: its header in order (R-27), a component's block in
+/// the same order (R-11a), its normal forms, then its layout. The tree must
+/// be free of syntax errors but for a header statement out of place.
 pub fn format(root: &SyntaxNode) -> String {
     format_in(root, None)
 }
 
 /// [`format`], with a project's `typing`.
 pub fn format_in(root: &SyntaxNode, typing: Option<&Typing>) -> String {
-    let placed = header::reorder(root, &root.to_string())
+    let placed = header::reorder_all(root, &root.to_string())
         .map(|src| crate::syntax::parser::parse(&src))
         .filter(|p| p.errors.is_empty());
     let root = placed.as_ref().map_or(root.clone(), |p| p.syntax());

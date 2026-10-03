@@ -83,10 +83,19 @@ fn the_repository_is_formatted() {
 }
 
 /// Formatting is idempotent and moves only whitespace and commas (a
-/// broken list's trailing comma, a broken block's separators, R-52).
+/// broken list's trailing comma, a broken block's separators, R-52), but
+/// for a header statement out of order (R-27, R-11a), which it reorders
+/// instead: every other file's is already in order, so this still holds
+/// for it. E §7's programs are not (`the_repository_is_formatted`'s
+/// exception): its two-phase `output k: T` then `output k = t` is the
+/// style R-11a reorders, so it is excepted here too.
 #[test]
 fn formatting_keeps_every_token_but_commas() {
     for f in corpus() {
+        let name = f.strip_prefix(repo()).unwrap().display().to_string();
+        if name.starts_with("tests/syntax/ok/e7") {
+            continue;
+        }
         let src = std::fs::read_to_string(&f).unwrap();
         let once = fmt(&src);
         assert_eq!(fmt(&once), once, "{} is not idempotent", f.display());
@@ -218,26 +227,44 @@ fn fmt_refuses_a_file_that_does_not_parse() {
 }
 
 /// A file's header is `edition`, then `key` and `input` lines (value
-/// inputs, then relation inputs), then the body (R-27); `use` is a body
-/// statement (R-65): `fmt`
-/// moves a header statement written below the body, or out of its kind's
-/// order, with the comments above it and on its line, and keeps the
-/// author's order within a kind.
+/// inputs, then relation inputs), then `decl` and `output` (R-11a), then
+/// the body; `use` is a body statement (R-65): `fmt` moves a header
+/// statement written below the body, or out of its kind's order, with the
+/// comments above it and on its line, and keeps the author's order within
+/// a kind. The parser does not enforce `decl` and `output` (only `key` and
+/// `input`, R-27), so this is `fmt`'s own placement, not the parser's.
 #[test]
 fn fmt_puts_the_header_in_order() {
     let src = "# A program.\n\nedition 2026\n\ninput b: int\n# The key.\nkey env: string\n\n\
-               provider fake\n\n#| The relation.\ninput p from csv(\"p.csv\")\ndecl p(a)\n\
-               p2(x) where p(x)\nuse m # its modules\ninput a: int\n";
+               provider fake\n\n#| The relation.\ninput p from csv(\"p.csv\")\ndecl p(a)\n\n\
+               p2(x) where p(x)\noutput r = p2(1)\nuse m # its modules\ninput a: int\n";
     let want = "# A program.\n\nedition 2026\n\n# The key.\n\
                 key env: string\ninput b: int\ninput a: int\n#| The relation.\n\
-                input p from csv(\"p.csv\")\n\nprovider fake\n\ndecl p(a)\np2(x) where p(x)\n\
-                use m # its modules\n";
+                input p from csv(\"p.csv\")\ndecl p(a)\noutput r = p2(1)\n\nprovider fake\n\n\
+                p2(x) where p(x)\nuse m # its modules\n";
     let got = dform::fmt::format_source("p.df", src).unwrap();
     assert_eq!(got, want);
     assert_eq!(dform::fmt::format_source("p.df", &got).unwrap(), got);
     // Another error is not formatted.
     let e = dform::fmt::format_source("p.df", &format!("{src}p(\n")).unwrap_err();
     assert!(format!("{e:#}").contains("p.df:"), "{e:#}");
+}
+
+/// A component's `{ }` block takes the same order (R-11a): `input`, then
+/// `decl`, then `output`, each in source order with its comments, before
+/// the rest; nothing in a block is a parser error (the order is fmt's
+/// alone to place), and `use` and `instance` are body statements, never
+/// moved.
+#[test]
+fn fmt_orders_a_components_interface_first() {
+    let src = "edition 2026\n\ncomponent m {\n  input a: int\n\n  p(x) where q(x)\n  \
+               use helper\n  decl q(a)\n  instance other o\n  #| the answer\n  \
+               output r = p(a)\n}\n";
+    let want = "edition 2026\n\ncomponent m {\n  input a: int\n  decl q(a)\n  \
+                #| the answer\n  output r = p(a)\n\n  p(x) where q(x)\n  use helper\n  \
+                instance other o\n}\n";
+    assert_eq!(fmt(src), want);
+    assert_eq!(fmt(&want), want);
 }
 
 /// A `provider` or `instance` with no entries is written without braces
