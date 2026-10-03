@@ -21,8 +21,6 @@ state, modules, policy, secrets and approvals built in. Here is a
 complete program, for an AWS provider.
 
 ```dform
-edition 2026
-
 provider aws { region = "us-east-1" }
 
 resource aws.vpc main {
@@ -374,7 +372,8 @@ the arithmetic is on networks:
 
 ```dform
 input vpc_net: inet = "10.0.0.0/16"
-az(name: string, index: int) from yaml("data/azs.yaml")
+decl az(name: string, index: int)
+input az from yaml("data/azs.yaml")
 
 resource aws.subnet "private-${availability_zone}" {
   cidr_block = inet.subnet(vpc_net, 4, n)          # the n-th /20 of the /16
@@ -419,26 +418,30 @@ computed value, and by the provider after apply for a secret, with
 
 **Externs and functions.** An extern is a relation a provider answers
 on demand, with binding modes: `aws.availability_zone["available"]`,
-`aws.ami[filter]`, `random.password[key]` (a secret, generated once and
-kept). The document loaders, `yaml(path)` and the rest, are the file
-provider's externs. Functions are qualified by the type they are about,
-`inet.subnet`, `str.split`, `list.join`, declared in signature files
-you can jump to from the editor; constructors are named by their type,
-`int(s)`, `inet(s)`.
+`aws.ami[filter]`, `time.now()`. Functions are pure and qualified by the
+type they are about, `inet.subnet`, `str.split`, `regex.match`,
+`oci.parse`, declared in signature files you can jump to from the
+editor; constructors are named by their type, `int(s)`, `inet(s)`. A
+generated secret is a function too: `random.password("db")` derives the
+same value every run from the deployment's own secret, so nothing is
+stored; what must be kept is kept on purpose, `memo.first("db-created",
+time.now(), created)` returns the first value it was ever given.
 
 **Secrets.** A sensitive value never leaves the provider as bytes. The
 compiler tracks where secrets flow and refuses a program that would
 print one, compare one, or put one in a public attribute, before
 anything runs.
 
-**The header.** A file begins with what it is and what it takes:
+**The header.** A file begins with what it takes:
 
 ```dform
-edition 2026
 key env: enum("dev", "staging", "prod") = "dev"
 key region: enum("us-east-1", "eu-west-1") = "us-east-1"
 input owner: string
-input db: { multi_az: bool, backup_days: int } = { multi_az: false, backup_days: 3 }
+input db {
+  multi_az: bool = false
+  backup_days: int = 3
+}
 ```
 
 A stack is the unit of state and apply, and a file under `stacks/` is
@@ -489,9 +492,12 @@ each with a line `why` can point at:
 
 ```dform
 let network = toml("data/network.toml")
-az(name: string, index: int) from network          # the [[az]] tables
-peering(name: string, peer: string) from network.peerings
-pin(app: string, image: string) from toml(git("ops.git", "env/${env}", "pins.toml"))
+decl az(name: string, index: int)
+decl peering(name: string, peer: string)
+decl pin(app: string, image: string)
+input az from network.az                         # the [[az]] tables
+input peering from network.peerings
+input pin from toml(git("ops.git", "env/${env}", "pins.toml"))
 ```
 
 ```toml
@@ -505,9 +511,10 @@ name = "shared"
 peer = "vpc-0a1b2c"
 ```
 
-`yaml`, `toml`, `json` and `csv` load; `name(columns) from DOC` reads one
-row per object by column name, parsing each cell to its type or failing
-with the file and line. A `git(..)` source is read at a commit the plan
+`yaml`, `toml`, `json` and `csv` load; `input name from DOC` reads one
+row per object by the declared column names, parsing each cell to its
+type or failing with the file and line, and several `from` lines union;
+a row written by hand mixes in. A `git(..)` source is read at a commit the plan
 records, so apply reads what plan read even if the branch moved. A file
 of plain facts is a module like any other: `use data.releases`, then
 `releases.release(app, key, value)`.
@@ -764,12 +771,13 @@ at different speeds and are applied by different people. The second
 says `use stacks.platform` and reads `platform[env].endpoint`, and
 nothing else changes: the engine treats a value another stack published
 exactly as it treats one the cloud will produce. The same policy pack that tags every VPC can set
-resource limits on every container, in every module, and the list is
-merged by the container's name, not its position:
+resource limits on every container, in every module: `c` is bound to
+an element of a keyed list, so the write lands on that container by
+name, not by position, and a module's own limits win over the default:
 
 ```dform
-set w.spec.template.spec.containers[name].resources.limits = { cpu: "1", memory: "512Mi" } @default
-  where w in k8s.deployment, c in w.spec.template.spec.containers, name = c.name
+set c.resources.limits = { cpu: 1, memory: 512Mi } @default
+  where w in k8s.deployment, c in w.spec.template.spec.containers
 ```
 
 Deployments are rules too. A blue/green rollout is the release (a fact
