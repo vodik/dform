@@ -1079,8 +1079,9 @@ first: `+ -` (left), `* / %` (left), unary `-`. An aggregate (`count(x)`,
 lower to a record pattern.
 
 Membership (H-9): `x in e` for a list, `x in T` for a type, `x in
-resource` for any, `x in E` for each value of an enum type, `x in
-world.T` for a live object, `i in lo..hi` for
+resource` for any, `r in NS` for any resource of a provider's namespace,
+`x in E` for each value of an enum type, `x in world.T` for a live
+object, `i in lo..hi` for
 the integers from `lo` up to `hi` (half-open) and `i in lo..=hi` up to
 and including it (R-56); `(i, x) in e` gives each index and element of
 a list, `(k, v) in e` each key and value of an object (R-58,
@@ -1102,6 +1103,18 @@ the leaf. An input of an enum type holds one value, so `x in env` is an
 error that says to name the type and range over it; an inline
 `enum(..)` has no name, so it says to declare one. `dform test` takes an
 enum input's values from the same type, in the same order.
+
+`r in NS`, `NS` a provider's name (R-36: its types' namespace, `k8s`), is
+a resource of any type in it (R-49): `set r.metadata.labels.owner =
+"platform" where r in k8s` labels every Kubernetes object and nothing
+else; `r in resource` stays every resource of any provider. Its types
+are the program's own in the namespace and the built-in schemas' the
+provider of that name serves (the fake mock's `k8s.cluster` is
+`fakecloud`'s). `r.p` reads an attribute every one of those types has
+that the compiler knows the attributes of; otherwise it is an error
+naming the types that lack it. With `r` already bound by a reference
+column (`deformation(k, r, _)`, a plan row), `r in k8s` tests its type,
+so a deleted object binds the same way.
 
 ### Aggregates
 
@@ -1369,6 +1382,7 @@ as it is.
 | `r == n`, `r != T[e]` (a resource on either side) | `R = ref(T, "n", "")`, `R != ref(T, e', "")`; a typed `r` is `ref(T, R, "")` |
 | `x in T`, `x in resource`, `R in T`       | `want(T, x)`, `want(Type, x)`, `want(T, A)`            |
 | `x in E` (`E` an enum type)               | `__enum("E", L), member(L, X)`, the fact `__enum("E", [values])` at `E`'s declaration |
+| `r in NS` (`NS` a provider's namespace)   | `__namespace("NS", Type), want(Type, R)` (a type test, `r` bound), a fact `__namespace("NS", T)` per type |
 | `"n-${e}" in T`                           | `Name = format(..), want(T, Name)`                     |
 | `x in world.T`                            | `cloud_exists(T, x)`                                   |
 | `x in e`                                  | `member(e', x)`                                        |

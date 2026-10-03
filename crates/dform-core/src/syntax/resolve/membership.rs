@@ -1,4 +1,5 @@
-//! Membership over a named type's values (docs/grammar.md "Membership").
+//! Membership over a named type's values and over a provider's namespace
+//! (docs/grammar.md "Membership").
 //!
 //! - `x in T`, `T` an enum type alias (`type environment = enum("staging",
 //!   "prod")`), binds `x` to each value in declaration order (R-70),
@@ -7,12 +8,67 @@
 //!   member(L, X)`, so `why` shows the type as the leaf. `x in env`,
 //!   `env` an input of an enum type, is a cell, not a type: an error that
 //!   says to name the type.
+//! - `r in NS`, `NS` a provider's namespace (`k8s`, R-36), is a resource
+//!   of any type in it (R-49): `__namespace("k8s", Type), want(Type, R)`,
+//!   the facts `__namespace("k8s", T)` one per type of the namespace the
+//!   program knows (its own types, and the built-in schemas' the provider
+//!   of that name serves). With `r` already bound, by a reference column
+//!   (`deformation(k, r, _)`), it is a type test. `r.p` reads an attribute
+//!   every type of the namespace the compiler knows the attributes of has;
+//!   otherwise an error names the types that lack it.
 
 use super::*;
 
 /// The relation of the enum types `x in T` ranges over: `__enum(T,
 /// [values])`, one fact at the type's declaration, so `why` names it.
 pub(super) const ENUM: &str = "__enum";
+
+/// The relation of a namespace's types: `__namespace(NS, T)`.
+pub(super) const NAMESPACE: &str = "__namespace";
+
+/// What the built-in schemas say of a type: its attribute paths, and the
+/// providers that serve it (`type_provider`).
+#[derive(Default)]
+struct Known {
+    paths: BTreeSet<String>,
+    providers: BTreeSet<String>,
+}
+
+/// The built-in schemas' types, read from their text (`type_*` rows).
+fn builtin_types() -> &'static BTreeMap<String, Known> {
+    static TYPES: std::sync::OnceLock<BTreeMap<String, Known>> = std::sync::OnceLock::new();
+    TYPES.get_or_init(|| {
+        let mut out: BTreeMap<String, Known> = BTreeMap::new();
+        for name in ["fake", "gke", "k8s", "aws-mock"] {
+            let Some(src) = crate::schema::builtin(name) else {
+                continue;
+            };
+            for line in src.lines() {
+                let Some((head, rest)) = line.trim().split_once('(') else {
+                    continue;
+                };
+                if !head.starts_with("type_") {
+                    continue;
+                }
+                let mut args = rest.split(',').map(|a| a.trim().trim_matches(['"', ')']));
+                let Some(t) = args.next().filter(|t| !t.is_empty()) else {
+                    continue;
+                };
+                let known = out.entry(t.to_string()).or_default();
+                match (head, args.next()) {
+                    ("type_attr", Some(p)) => {
+                        known.paths.insert(p.to_string());
+                    }
+                    ("type_provider", Some(p)) => {
+                        known.providers.insert(p.to_string());
+                    }
+                    _ => {}
+                }
+            }
+        }
+        out
+    })
+}
 
 impl Lowerer<'_> {
     /// The enum type a membership's right side names, its values; `None`
@@ -120,5 +176,108 @@ impl Lowerer<'_> {
         self.chain_of(scope)
             .into_iter()
             .find_map(|s| self.decls.scopes[s].input_nodes.get(name).cloned())
+    }
+
+    /// The provider namespace a bare name is, where nothing else of that
+    /// name is in scope: `k8s`.
+    pub(super) fn namespace_of(&self, rc: &Rc, c: &Chain) -> Option<String> {
+        let h = &c.head;
+        let shadowed = rc.vars.contains_key(h)
+            || rc.types.contains_key(h)
+            || self.is_value(rc.scope, h)
+            || self.resource(rc.scope, h).is_some()
+            || self.decls.modules.contains_key(h)
+            || self.decls.relations.contains(h)
+            || self.chain_of(rc.scope).into_iter().any(|s| {
+                let s = &self.decls.scopes[s];
+                s.uses.contains_key(h) || s.instances.contains_key(h) || s.components.contains_key(h)
+            });
+        (c.is_bare() && !shadowed && self.decls.namespaces.contains(h)).then(|| h.clone())
+    }
+
+    /// The types of the namespace `ns` the program knows: its own, and
+    /// the built-in schemas' that the provider `ns` serves (R-36: a
+    /// provider's name is its namespace; the fake mock's `k8s.cluster` is
+    /// `fakecloud`'s).
+    fn namespace_types(&self, ns: &str) -> Vec<String> {
+        let prefix = format!("{ns}.");
+        let known = builtin_types();
+        let served = |t: &str| match known.get(t) {
+            Some(k) if !k.providers.is_empty() => k.providers.contains(ns),
+            _ => true,
+        };
+        self.decls
+            .types
+            .iter()
+            .filter(|t| t.starts_with(&prefix) && served(t))
+            .cloned()
+            .collect()
+    }
+
+    /// `r in NS`: the facts of the namespace's types, and the literal.
+    pub(super) fn namespace_member(
+        &mut self,
+        rc: &mut Rc,
+        lhs: &SyntaxNode,
+        ns: &str,
+        out: &mut Vec<Lit>,
+        span: Span,
+    ) -> L<Lit> {
+        let Some(c) = Chain::of(lhs).filter(Chain::is_bare) else {
+            return self.error(
+                span,
+                format!("a namespace's resources are enumerated by a name: `r in {ns}`"),
+            );
+        };
+        let bound = rc.vars.contains_key(&c.head);
+        let typ = match rc.types.get(&c.head) {
+            Some(t) => t.clone(),
+            None => var(&fresh(rc, "Type")),
+        };
+        let addr = var(&self.var_named(rc, &c.head, span));
+        for t in self.namespace_types(ns) {
+            let mut fact = atom_at(NAMESPACE, vec![str_term(ns), str_term(&t)], span);
+            fact.span = span;
+            self.helpers.push(Stmt::Fact(fact));
+        }
+        let test = Lit::Pos(atom_at(NAMESPACE, vec![str_term(ns), typ.clone()], span));
+        if bound {
+            return Ok(test);
+        }
+        out.push(test);
+        Ok(Lit::Pos(atom_at("want", vec![typ, addr], span)))
+    }
+
+    /// `r.p` on a variable a namespace ranges: an error naming the types
+    /// of the namespace that have no `p`.
+    pub(super) fn namespace_attr(&mut self, rc: &Rc, h: &str, first: &str, span: Span) -> L<()> {
+        let Some(ns) = rc.namespaces.get(h).cloned() else {
+            return Ok(());
+        };
+        let known = builtin_types();
+        let lacking: Vec<String> = self
+            .namespace_types(&ns)
+            .into_iter()
+            .filter(|t| {
+                known.get(t).is_some_and(|k| {
+                    !k.paths.is_empty()
+                        && !k
+                            .paths
+                            .iter()
+                            .any(|p| p == first || p.starts_with(&format!("{first}.")))
+                })
+            })
+            .collect();
+        if lacking.is_empty() {
+            return Ok(());
+        }
+        self.error(
+            span,
+            format!(
+                "`{h}.{first}`: {h} is a resource of any {ns} type, and {} {} no `{first}`",
+                lacking.join(", "),
+                if lacking.len() == 1 { "has" } else { "have" }
+            ),
+        )
     }
 }

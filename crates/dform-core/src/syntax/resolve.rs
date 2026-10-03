@@ -617,6 +617,9 @@ struct Rc {
     reserved: BTreeSet<String>,
     /// Source variable -> its static resource type.
     types: BTreeMap<String, Term>,
+    /// Source variable -> the provider namespace `x in NS` ranges it over
+    /// (R-49); its type in `types` is a variable.
+    namespaces: BTreeMap<String, String>,
     /// Names that stand alone somewhere in the statement: variables.
     candidates: BTreeSet<String>,
     /// Value name -> the variable its read binds (one read per rule).
@@ -1574,10 +1577,14 @@ impl<'u> Lowerer<'u> {
             if tokens(&c).any(|t| t.kind() == RESOURCE_KW) {
                 let tv = fresh(&mut rc, "Type");
                 rc.types.insert(lhs.head, var(&tv));
-            } else if let Some(rhs) = ts.next().and_then(|t| Chain::of(&t))
-                && let Some(t) = self.chain_type(&rc, &rhs)
-            {
-                rc.types.insert(lhs.head, str_term(&t));
+            } else if let Some(rhs) = ts.next().and_then(|t| Chain::of(&t)) {
+                if let Some(t) = self.chain_type(&rc, &rhs) {
+                    rc.types.insert(lhs.head, str_term(&t));
+                } else if let Some(ns) = self.namespace_of(&rc, &rhs) {
+                    let tv = fresh(&mut rc, "Type");
+                    rc.types.insert(lhs.head.clone(), var(&tv));
+                    rc.namespaces.insert(lhs.head, ns);
+                }
             }
         }
         rc
@@ -4219,6 +4226,11 @@ impl<'u> Lowerer<'u> {
             if let Some(e) = self.enum_type(rc, c, rhs_node)? {
                 return self.enum_member(rc, lhs_node, e, out, span);
             }
+            // `r in NS`, a provider's namespace (R-49): a resource of any
+            // of its types.
+            if let Some(ns) = self.namespace_of(rc, c) {
+                return self.namespace_member(rc, lhs_node, &ns, out, span);
+            }
         }
         let typ = if any_type {
             let lhs = Chain::of(lhs_node).map(|c| c.head).unwrap_or_default();
@@ -5280,6 +5292,9 @@ impl<'u> Lowerer<'u> {
         }
         // A typed variable: a reference.
         if let Some(t) = rc.types.get(h).cloned() {
+            if let Some(Op::Field(first)) = c.ops.first() {
+                self.namespace_attr(rc, h, first, span)?;
+            }
             let v = self.var_named(rc, h, span);
             let path = self.segs(rc, &c.ops, pre)?;
             return Ok(Res::Ref {

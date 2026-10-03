@@ -95,6 +95,9 @@ impl Pass<'_> {
             (Some(t), None) => self.schema.facts.iter().any(|f| {
                 f.pred == "type_attr" && s(&f.args[0]) == Some(t) && self.flag(f, "sensitive")
             }),
+            // The resource itself, of a type the program does not fix
+            // (`r in resource`, `r in k8s`): its address, never a secret.
+            (None, Some("")) => false,
             (None, _) => self
                 .schema
                 .facts
