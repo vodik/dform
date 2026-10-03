@@ -668,7 +668,7 @@ name in `dform.toml`:
 use stacks.platform
 use acme.stacks.platform as acme_platform
 
-let cluster_endpoint = platform[env=env].endpoint
+let cluster_endpoint = platform[env].endpoint
 let registry = acme_platform[env="prod"].registry_url
 ```
 
@@ -761,7 +761,7 @@ plan, one apply, one state, one `why`.
 In a real project this is two stacks, `stacks/platform.df` owning the
 cluster and `stacks/shop.df` owning what runs on it, because they change
 at different speeds and are applied by different people. The second
-says `use stacks.platform` and reads `platform[env=env].endpoint`, and
+says `use stacks.platform` and reads `platform[env].endpoint`, and
 nothing else changes: the engine treats a value another stack published
 exactly as it treats one the cloud will produce. The same policy pack that tags every VPC can set
 resource limits on every container, in every module, and the list is
