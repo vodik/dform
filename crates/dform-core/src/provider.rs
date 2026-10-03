@@ -238,7 +238,8 @@ pub fn get_path<'a>(v: &'a serde_json::Value, path: &str) -> Option<&'a serde_js
     Some(cur)
 }
 
-/// A change's path without list indices or keys: the schema's spelling.
+/// A path as the schema spells it: no list indices or keys
+/// (`containers[name=api].image` is `containers.image`).
 pub fn norm_path(path: &str) -> String {
     let mut out = String::new();
     let mut depth = 0;
@@ -426,5 +427,12 @@ type_attr(k8s.np, "spec.ref.name", "string", ["required"])
         assert_eq!(get_path(&v, "subnets[1].id"), Some(&json!("s-1")));
         assert_eq!(get_path(&v, "subnets[2].id"), None);
         assert_eq!(get_path(&v, "tags.missing"), None);
+    }
+
+    #[test]
+    fn norm_path_drops_list_indices_and_keys() {
+        assert_eq!(norm_path("containers[name=api].image"), "containers.image");
+        assert_eq!(norm_path("subnet_ids[0]"), "subnet_ids");
+        assert_eq!(norm_path("tags.team"), "tags.team");
     }
 }

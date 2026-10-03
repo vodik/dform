@@ -1795,24 +1795,8 @@ pub struct Below<'a> {
 
 impl Below<'_> {
     fn lattice(&self, path: &str) -> Option<&Lattice> {
-        self.lattices?.get(&schema_path(path))
+        self.lattices?.get(&crate::provider::norm_path(path))
     }
-}
-
-/// A path as the schema spells it: no list indices or keys
-/// (`containers[name=api].image` is `containers.image`).
-pub fn schema_path(path: &str) -> String {
-    let mut out = String::new();
-    let mut depth = 0;
-    for c in path.chars() {
-        match c {
-            '[' => depth += 1,
-            ']' => depth -= 1,
-            _ if depth == 0 => out.push(c),
-            _ => {}
-        }
-    }
-    out
 }
 
 /// `lub_ranked` with the cell's checkable refinements (E §2.5, the
@@ -1830,7 +1814,7 @@ pub fn lub_ranked_refined(
 ) -> Collapsed {
     let (here, below): (Vec<&Refinement>, Vec<&Refinement>) =
         refinements.iter().partition(|r| r.path == path);
-    let list = schema_path(path);
+    let list = crate::provider::norm_path(path);
     let writes: Vec<&ElemWrite> = nested.elems.iter().filter(|e| e.list == list).collect();
     if !writes.is_empty() {
         let c = match lat {
@@ -1960,7 +1944,7 @@ fn lub_ranked_map(
     let mut per_key: BTreeMap<String, Vec<RankedContribution>> = BTreeMap::new();
     // A key an element write reaches is a key of the map even when no
     // contribution names it: the write makes the list, and its element.
-    let here = schema_path(path);
+    let here = crate::provider::norm_path(path);
     for e in nested.elems {
         if let Some(k) = e
             .list
