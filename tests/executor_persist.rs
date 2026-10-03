@@ -2,7 +2,7 @@
 //! leaves the N-1 identities before it in state.
 
 mod common;
-use common::{Scratch, mock};
+use common::{Scratch, identities, mock};
 
 const PROG: &str = r#"
 
@@ -16,16 +16,6 @@ fn stack(name: &str) -> Scratch {
     let s = Scratch::new(name);
     s.write("p.df", PROG);
     s
-}
-
-fn identities(s: &Scratch) -> Vec<String> {
-    let st: serde_json::Value = serde_json::from_str(&s.read("w.state.json")).unwrap();
-    st["resources"]
-        .as_object()
-        .unwrap()
-        .keys()
-        .cloned()
-        .collect()
 }
 
 /// `fail=` at the third action: the first two are in state.

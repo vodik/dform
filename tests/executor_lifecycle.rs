@@ -5,10 +5,6 @@
 mod common;
 use common::{Scratch, mock};
 
-fn world(s: &Scratch) -> serde_json::Value {
-    serde_json::from_str(&s.read("w.json")).unwrap()
-}
-
 const NET: &str = r#"
 
 resource net.vpc main { cidr = "10.0.0.0/16" }
@@ -44,7 +40,7 @@ fn prevent_destroy_makes_a_delete_a_deny() {
         "{}",
         r.stderr
     );
-    assert!(world(&s)["resources"].get("net.vpc::main").is_some());
+    assert!(s.json("w.json")["resources"].get("net.vpc::main").is_some());
     // A force_new change would replace it: also a deny.
     s.write("p.df", &NET.replace("10.0.0.0/16", "10.1.0.0/16"));
     let r = mock(&s, &["apply"]).failure();
@@ -55,7 +51,7 @@ fn prevent_destroy_makes_a_delete_a_deny() {
         r.stderr
     );
     assert_eq!(
-        world(&s)["resources"]["net.vpc::main"]["attrs"]["cidr"],
+        s.json("w.json")["resources"]["net.vpc::main"]["attrs"]["cidr"],
         "10.0.0.0/16"
     );
 }
@@ -81,7 +77,7 @@ provider fake
     };
     s.write("p.df", &prog("main"));
     mock(&s, &["apply"]).success();
-    let before = world(&s);
+    let before = s.json("w.json");
 
     // Without moved the rename is two creates and two deletes.
     s.write("p.df", &prog("core"));
@@ -121,7 +117,7 @@ provider fake
         ["net.subnet::core/a", "net.vpc::core/vpc"]
     );
     assert_eq!(st["resources"]["net.vpc::core/vpc"]["remote"], "main/vpc");
-    assert_eq!(world(&s)["resources"], before["resources"]);
+    assert_eq!(s.json("w.json")["resources"], before["resources"]);
     let r = mock(&s, &["plan"]).success();
     assert_eq!(r.stdout, "stack p is undeformed\n");
 }
@@ -162,7 +158,7 @@ fn ignore_changes_drops_the_path_from_both_sides() {
         r.stdout
     );
     assert_eq!(
-        world(&s)["resources"]["net.vpc::main"]["attrs"]["tags"],
+        s.json("w.json")["resources"]["net.vpc::main"]["attrs"]["tags"],
         serde_json::json!({"owner": "ops", "team": "b"})
     );
 }
@@ -220,7 +216,7 @@ fn ignore_changes_still_sets_the_path_on_create() {
     );
     mock(&s, &["apply"]).success();
     assert_eq!(
-        world(&s)["resources"]["net.vpc::main"]["attrs"]["tags"]["owner"],
+        s.json("w.json")["resources"]["net.vpc::main"]["attrs"]["tags"]["owner"],
         "ops"
     );
     s.write("p.df", &prog("dev"));
@@ -248,7 +244,7 @@ fn ignore_changes_update_leaves_an_absent_path_absent() {
         r.stdout
     );
     assert!(
-        world(&s)["resources"]["net.vpc::main"]["attrs"]
+        s.json("w.json")["resources"]["net.vpc::main"]["attrs"]
             .get("tags")
             .is_none(),
         "{}",

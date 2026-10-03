@@ -6,10 +6,6 @@
 mod common;
 use common::{Scratch, mock};
 
-fn json(s: &Scratch, f: &str) -> serde_json::Value {
-    serde_json::from_str(&s.read(f)).unwrap()
-}
-
 /// net.vpc sorts before its dependents; its delete still comes last.
 #[test]
 fn deletes_run_in_reverse_dependency_order() {
@@ -27,7 +23,7 @@ provider fake
     );
     mock(&s, &["apply"]).success();
     assert_eq!(
-        json(&s, "w.state.json")["resources"]["net.route::r"]["deps"],
+        s.json("w.state.json")["resources"]["net.route::r"]["deps"],
         serde_json::json!(["net.vpc_peering::p"])
     );
     s.write(
@@ -46,7 +42,7 @@ provider fake
         "{}",
         r.stdout
     );
-    let w = json(&s, "w.json");
+    let w = s.json("w.json");
     assert_eq!(
         w["resources"]
             .as_object()
@@ -84,12 +80,12 @@ fn a_force_new_change_replaces_destroying_first() {
          tick 2:\nstack p is undeformed\n\
          apply: complete\n"
     );
-    let w = json(&s, "w.json");
+    let w = s.json("w.json");
     assert_eq!(
         w["resources"]["net.vpc::main"]["attrs"]["cidr"],
         "10.1.0.0/16"
     );
-    let st = json(&s, "w.state.json");
+    let st = s.json("w.state.json");
     assert_eq!(st["resources"]["net.vpc::main"]["remote"], "main");
     assert!(st.get("deposed").is_none(), "{st}");
 }
@@ -114,10 +110,10 @@ fn create_before_destroy_deposes_the_old_object_until_dependents_move() {
         "{}",
         r.stdout
     );
-    let st = json(&s, "w.state.json");
+    let st = s.json("w.state.json");
     assert_eq!(st["deposed"]["net.vpc::main"]["remote"], "main", "{st}");
     assert_eq!(st["resources"]["net.vpc::main"]["remote"], "main-2", "{st}");
-    let w = json(&s, "w.json");
+    let w = s.json("w.json");
     assert!(w["resources"].get("net.vpc::main").is_some());
     assert!(w["resources"].get("net.vpc::main-2").is_some());
     // The next apply finishes: the dependent first, then the deposed object.
@@ -131,9 +127,9 @@ fn create_before_destroy_deposes_the_old_object_until_dependents_move() {
         "{}",
         r.stdout
     );
-    let st = json(&s, "w.state.json");
+    let st = s.json("w.state.json");
     assert!(st.get("deposed").is_none(), "{st}");
-    let w = json(&s, "w.json");
+    let w = s.json("w.json");
     assert_eq!(
         w["resources"]
             .as_object()

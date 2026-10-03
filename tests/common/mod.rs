@@ -103,6 +103,12 @@ impl Scratch {
         std::fs::read_to_string(self.path(rel)).unwrap()
     }
 
+    /// The JSON file `rel` (the mock's world `w.json`, its state
+    /// `w.state.json`, a plan).
+    pub fn json(&self, rel: &str) -> serde_json::Value {
+        serde_json::from_str(&self.read(rel)).unwrap()
+    }
+
     /// Run `dform ARGS` with the scratch directory as the working directory.
     pub fn run<S: AsRef<std::ffi::OsStr>>(&self, args: &[S]) -> Run {
         self.run_in("", args)
@@ -429,6 +435,16 @@ pub fn golden_file(path: &Path, got: &str, test: &str) {
         "\n{} does not match its golden file\n{accept} if this is the intended change",
         path.display()
     );
+}
+
+/// The addresses the mock's state `w.state.json` in `s` maps.
+pub fn identities(s: &Scratch) -> Vec<String> {
+    s.json("w.state.json")["resources"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .cloned()
+        .collect()
 }
 
 /// The repository root, for programs and fixtures the tests read.

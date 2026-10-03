@@ -16,14 +16,6 @@ fn stack(name: &str) -> Scratch {
     s
 }
 
-fn world(s: &Scratch) -> serde_json::Value {
-    serde_json::from_str(&s.read("w.json")).unwrap()
-}
-
-fn state(s: &Scratch) -> serde_json::Value {
-    serde_json::from_str(&s.read("w.state.json")).unwrap()
-}
-
 #[test]
 fn fail_stops_before_the_action_and_keeps_what_came_before() {
     let s = stack("chaos-fail");
@@ -34,9 +26,13 @@ fn fail_stops_before_the_action_and_keeps_what_came_before() {
         "{}",
         r.stderr
     );
-    assert!(world(&s)["resources"].get("net.vpc::main").is_some());
-    assert!(world(&s)["resources"].get("net.subnet::a").is_none());
-    assert!(state(&s)["resources"].get("net.vpc::main").is_some());
+    assert!(s.json("w.json")["resources"].get("net.vpc::main").is_some());
+    assert!(s.json("w.json")["resources"].get("net.subnet::a").is_none());
+    assert!(
+        s.json("w.state.json")["resources"]
+            .get("net.vpc::main")
+            .is_some()
+    );
     let r = mock(&s, &["plan"]).success();
     assert_eq!(
         r.summary(),
@@ -60,9 +56,16 @@ fn a_create_that_timed_out_is_found_not_created_again() {
         "{}",
         r.stderr
     );
-    assert!(world(&s)["resources"].get("net.subnet::a").is_some());
-    assert!(state(&s)["resources"].get("net.subnet::a").is_none());
-    assert_eq!(state(&s)["uncertain"]["net.subnet::a"]["op"], "create");
+    assert!(s.json("w.json")["resources"].get("net.subnet::a").is_some());
+    assert!(
+        s.json("w.state.json")["resources"]
+            .get("net.subnet::a")
+            .is_none()
+    );
+    assert_eq!(
+        s.json("w.state.json")["uncertain"]["net.subnet::a"]["op"],
+        "create"
+    );
     // The plan asks first: the subnet is there, and nothing is to do.
     let r = mock(&s, &["plan"]).success();
     assert!(
@@ -74,9 +77,12 @@ fn a_create_that_timed_out_is_found_not_created_again() {
     assert_eq!(r.summary(), "stack p is undeformed", "{}", r.stdout);
     let r = mock(&s, &["apply"]).success();
     assert!(!r.stdout.contains("+ net.subnet[\"a\"]"), "{}", r.stdout);
-    assert_eq!(state(&s)["resources"]["net.subnet::a"]["remote"], "a");
+    assert_eq!(
+        s.json("w.state.json")["resources"]["net.subnet::a"]["remote"],
+        "a"
+    );
     assert!(
-        state(&s).get("uncertain").is_none(),
+        s.json("w.state.json").get("uncertain").is_none(),
         "{}",
         s.read("w.state.json")
     );
@@ -94,7 +100,7 @@ fn a_timed_out_create_the_program_dropped_is_deleted() {
     );
     let r = mock(&s, &["apply"]).success();
     assert!(r.stdout.contains("- net.subnet[\"a\"]"), "{}", r.stdout);
-    assert!(world(&s)["resources"].get("net.subnet::a").is_none());
+    assert!(s.json("w.json")["resources"].get("net.subnet::a").is_none());
 }
 
 /// Not found (the timed-out call never reached the world), the Create is
@@ -103,12 +109,12 @@ fn a_timed_out_create_the_program_dropped_is_deleted() {
 fn a_create_that_was_not_found_is_retried_with_its_key() {
     let s = stack("chaos-timeout-retry");
     mock(&s, &["apply", "--chaos", "timeout=net.subnet[\"a\"]"]).failure();
-    let key = state(&s)["uncertain"]["net.subnet::a"]["key"]
+    let key = s.json("w.state.json")["uncertain"]["net.subnet::a"]["key"]
         .as_str()
         .unwrap()
         .to_string();
     // The world lost it after all.
-    let mut w = world(&s);
+    let mut w = s.json("w.json");
     w["resources"]
         .as_object_mut()
         .unwrap()
@@ -116,9 +122,12 @@ fn a_create_that_was_not_found_is_retried_with_its_key() {
     std::fs::write(s.path("w.json"), w.to_string()).unwrap();
     let r = mock(&s, &["apply"]).success();
     assert!(r.stdout.contains("+ net.subnet[\"a\"]"), "{}", r.stdout);
-    assert_eq!(world(&s)["resources"]["net.subnet::a"]["key"], key.as_str());
+    assert_eq!(
+        s.json("w.json")["resources"]["net.subnet::a"]["key"],
+        key.as_str()
+    );
     assert!(
-        state(&s).get("uncertain").is_none(),
+        s.json("w.state.json").get("uncertain").is_none(),
         "{}",
         s.read("w.state.json")
     );
@@ -133,7 +142,7 @@ fn read_lag_past_the_retry_budget_is_gone() {
     // Within the apply the subnet gets the vpc's id from the Create response.
     mock(&s, &["apply", "--chaos", "read-lag=net.vpc[\"main\"]:3"]).success();
     assert_eq!(
-        world(&s)["resources"]["net.subnet::a"]["attrs"]["vpc"],
+        s.json("w.json")["resources"]["net.subnet::a"]["attrs"]["vpc"],
         "net.vpc:main"
     );
     let r = mock(&s, &["plan"]).success();

@@ -17,10 +17,6 @@ fn dform_on(s: &Scratch, backend: Backend, args: &[&str]) -> common::Run {
     s.run_on(backend, &common::on("p.df", &["--world", "w.json"], args))
 }
 
-fn state(s: &Scratch) -> serde_json::Value {
-    serde_json::from_str(&s.read("w.state.json")).unwrap()
-}
-
 /// The provider dies as it is called to Apply the vm (a process exits; the
 /// mock linked in is gone); the next apply finishes, on every backend.
 #[test]
@@ -45,7 +41,7 @@ fn apply_after_a_crash_finishes_on(backend: Backend) {
         "{backend:?}: {}",
         r.stderr
     );
-    let st = state(&s);
+    let st = s.json("w.state.json");
     assert_eq!(
         st["in_flight"]["remaining"]
             .as_object()
@@ -66,7 +62,7 @@ fn apply_after_a_crash_finishes_on(backend: Backend) {
          compute.vm[\"app\"]  (retried with its idempotency key: nothing it made was found)\n\
          apply: complete\n"
     );
-    let st = state(&s);
+    let st = s.json("w.state.json");
     assert!(st.get("in_flight").is_none(), "{st}");
     assert_eq!(st["resources"].as_object().unwrap().len(), 3);
     let r = dform_on(&s, backend, &["plan"]).success();
@@ -94,7 +90,7 @@ fn apply_after_a_stop_finishes_the_remaining_actions() {
             "{backend:?}: {}",
             r.stderr
         );
-        let st = state(&s);
+        let st = s.json("w.state.json");
         assert_eq!(
             st["resources"]
                 .as_object()
@@ -176,7 +172,7 @@ fn apply_stops_when_the_world_changed_under_a_remaining_action() {
         r.stderr
     );
     assert_eq!(s.read("w.json"), before, "no Apply call was made");
-    assert!(state(&s).get("in_flight").is_none());
+    assert!(s.json("w.state.json").get("in_flight").is_none());
     let r = mock(&s, &["apply"]).success();
     assert!(
         r.stdout.contains(

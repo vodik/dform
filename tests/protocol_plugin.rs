@@ -6,7 +6,7 @@
 //! over gRPC, linked in, linked in across prost).
 
 mod common;
-use common::{BACKENDS, Backend, Scratch, mock};
+use common::{BACKENDS, Backend, Scratch, identities, mock};
 use dform::plugin::link::Link;
 use dform::plugin::{Config, Launch, Providers};
 
@@ -20,16 +20,6 @@ provider fake
 
 fn fake() -> String {
     common::exe("dform-provider-fake")
-}
-
-fn identities(s: &Scratch) -> Vec<String> {
-    let st: serde_json::Value = serde_json::from_str(&s.read("w.state.json")).unwrap();
-    st["resources"]
-        .as_object()
-        .unwrap()
-        .keys()
-        .cloned()
-        .collect()
 }
 
 /// The provider process exits as it is called to Apply the third action:

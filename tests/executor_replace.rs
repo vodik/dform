@@ -6,10 +6,6 @@
 mod common;
 use common::{Scratch, mock};
 
-fn json(s: &Scratch, f: &str) -> serde_json::Value {
-    serde_json::from_str(&s.read(f)).unwrap()
-}
-
 const NET: &str = r#"
 
 resource net.vpc main { cidr = "10.0.0.0/16" }
@@ -20,7 +16,7 @@ provider fake
 
 /// What the world's subnets point at, and the vpc's id.
 fn ids(s: &Scratch, vpc: &str) -> (String, Vec<String>) {
-    let w = json(s, "w.json");
+    let w = s.json("w.json");
     let r = &w["resources"];
     let id = r[format!("net.vpc::{vpc}")]["computed"]["id"]
         .as_str()
@@ -108,7 +104,7 @@ fn create_before_destroy_moves_dependents_before_the_deposed_delete() {
     );
     let (new, subnets) = ids(&s, "main-2");
     assert_eq!(subnets, [new.clone(), new], "{}", r.stdout);
-    assert!(json(&s, "w.state.json").get("deposed").is_none());
+    assert!(s.json("w.state.json").get("deposed").is_none());
 }
 
 /// A deposed object waits for its dependents: while the subnet is held (on
@@ -132,7 +128,7 @@ provider fake
     s.write("p.df", &cbd);
     mock(&s, &["apply", "--max-ticks", "1"]).failure();
     assert!(
-        json(&s, "w.state.json")["deposed"]
+        s.json("w.state.json")["deposed"]
             .get("net.vpc::main")
             .is_some()
     );
@@ -161,14 +157,14 @@ provider fake
     );
     mock(&s, &["apply", "--max-ticks", "1"]).failure();
     assert!(
-        json(&s, "w.state.json")["deposed"]
+        s.json("w.state.json")["deposed"]
             .get("net.vpc::main")
             .is_some(),
         "the deposed vpc was deleted while the subnet still pointed at it"
     );
     mock(&s, &["apply"]).success();
-    assert!(json(&s, "w.state.json").get("deposed").is_none());
-    let w = json(&s, "w.json");
+    assert!(s.json("w.state.json").get("deposed").is_none());
+    let w = s.json("w.json");
     assert_eq!(
         w["resources"]["net.subnet::a"]["attrs"]["vpc_id"],
         w["resources"]["net.vpc::main-2"]["computed"]["id"]
