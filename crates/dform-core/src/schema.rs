@@ -813,16 +813,8 @@ fn refine_args(f: &Atom) -> Result<Vec<Value>> {
 }
 
 fn ground(t: &Term) -> Result<Value> {
-    match t {
-        Term::Val(v) => Ok(v.clone()),
-        Term::List(xs) => Ok(Value::List(xs.iter().map(ground).collect::<Result<_>>()?)),
-        Term::Obj(m) => Ok(Value::Obj(
-            m.iter()
-                .map(|(k, x)| Ok((k.clone(), ground(x)?)))
-                .collect::<Result<_>>()?,
-        )),
-        other => bail!("schema facts must be ground, found {other:?}"),
-    }
+    t.ground()
+        .ok_or_else(|| anyhow!("schema facts must be ground, found {t:?}"))
 }
 
 /// The names of the schemas shipped with the binary ([`builtin`]).
