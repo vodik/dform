@@ -264,15 +264,14 @@ fn why_shows_the_pattern_as_written() {
     );
 }
 
-/// A partial function with no value fails the pattern's match, as it
-/// fails any literal (docs/grammar.md "Functions").
+/// A tuple pattern against a partial function with no value fails the
+/// match (docs/grammar.md "Patterns"); a name bound to it alone is still
+/// an error naming the call (tests/functions.rs).
 #[test]
 fn a_pattern_against_a_call_with_no_value_fails_the_match() {
     let src = r#"text("[1, 2]")
 text("not json")
 two(a, b) where text(t), (a, b) = json.decode(t)
-one(v) where text(t), v = json.decode(t)
 "#;
     assert_eq!(facts(src, "two"), ["two(1, 2)"]);
-    assert_eq!(facts(src, "one"), ["one([1, 2])"]);
 }

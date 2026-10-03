@@ -3057,9 +3057,11 @@ fn eval_eq(
                     return Ok(None);
                 }
                 if let Some((name, args)) = failed_builtin(t, &out) {
-                    // A partial function off its domain has no value: the
-                    // literal fails, a binding and a pattern alike (R-58).
-                    if crate::functions::get(&name).is_some_and(|f| f.partial) {
+                    // A tuple pattern against a partial function off its
+                    // domain is a test: the match fails (R-58). A name
+                    // bound to it alone is an error naming the call.
+                    let tuple = matches!(a, Term::List(_)) || matches!(b, Term::List(_));
+                    if tuple && crate::functions::get(&name).is_some_and(|f| f.partial) {
                         return Ok(None);
                     }
                     let args: Vec<String> = args.iter().map(partition::fmt_value).collect();
