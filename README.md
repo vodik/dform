@@ -1503,7 +1503,9 @@ for byte, and a file with a syntax error is reported, not rewritten.
     body` is a value, read by name.
   - `set r.tags = { team: "platform" } where r in resource`: a contribution.
   - `deny "msg" { key: v } where body`, `warn ...`; the message interpolates.
-  - `x in net.vpc` ranges over the wanted resources of a type; `r in T`,
+  - `x in net.vpc` ranges over the wanted resources of a type (with `x`
+    a plan row's reference, `deformation(k, x, _)`, it tests the type, so
+    a delete passes); `r in T`,
     `has r.p`, `not r.p` (not true, absent included); `x in list`, and
     `(i, x) in list` for the index too and `(k, v) in obj` for an
     object's entries; `i in 0..n` (`0..=n` inclusive) once
@@ -1524,7 +1526,15 @@ for byte, and a file with a syntax error is reported, not rewritten.
     aws.subnet, s.vpc_id == v` counts per group of the head's other
     variables (`v`); `let n = count(s) where s in aws.subnet` is one group
     (docs/grammar.md "Aggregates").
-  - expression terms: `ib = ia + 1` lowers to `IB = add(IA, 1)`.
+  - expression terms: `ib = ia + 1` lowers to `IB = add(IA, 1)`; a
+    call's result is read in place, `not has oci.parse(c.image).digest`,
+    `str.split(s, ":")[0]`.
+  - binding (docs/grammar.md "Bodies"): `=` binds the side no other
+    literal binds, `in` binds its left, a relation its free variables, an
+    aggregate its name; `==`, `!=`, the orders, arithmetic, function
+    arguments, reads, `has` and `not` need their names bound by another
+    literal. Literal order is irrelevant; an unbound operand is an error
+    at it, and `=` between two bound sides says to write `==`.
   - `use PATH [as N] [{ k = v }] [where B]` imports a module, a file by
     its path from the project root, once under `N`; `instance PATH N {
     k = v }` copies a component (see "Modules").
@@ -2363,7 +2373,7 @@ examples/demo an evaluation takes about 30 ms in a release build.
   component inputs and a copy's outputs after `n.`; elsewhere the builtins and keywords a
   word starts, each with its signature.
 - *Quick fixes* (`textDocument/codeAction`), each on its diagnostic: an
-  unknown name (quote it), a predicate with both facts and rules (`decl
+  unknown name (quote it), `=` with both sides bound (write `==`), a predicate with both facts and rules (`decl
   p(a, b) mixed`), the collision lint (interpolate the key into the name, or
   say `isolated = true` on the stack), a required attribute nothing sets
   (a typed placeholder in the resource's block) and a ref to an address
