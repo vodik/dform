@@ -542,7 +542,10 @@ fn the_controller_runs_an_s3_stack() {
         // Its deployment is listed, with its last apply.
         let r = p.run(&["stack", "list"]).success();
         assert!(
-            r.stdout.contains("  dform[env=staging]: last apply "),
+            r.stdout
+                .lines()
+                .nth(1)
+                .is_some_and(|l| l.contains("  dform[env=staging]  s3://")),
             "{}: {}",
             t.what,
             r.stdout

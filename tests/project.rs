@@ -152,10 +152,8 @@ fn a_stack_is_a_file_named_after_itself() {
     assert_eq!(r.summary(), "plan: 1 deformation (1 create)");
     let r = s.run(&["stack", "list"]).success();
     assert_eq!(
-        r.stdout.lines().next(),
-        Some("shop  shop.df"),
-        "{}",
-        r.stdout
+        r.stdout,
+        "stack  file     result\nshop   shop.df  no deployment has state\n",
     );
     // With a stacks/ directory, only its files are stacks.
     s.write("stacks/net.df", NET);
@@ -373,19 +371,46 @@ fn stack_list_shows_deployments_and_their_last_apply() {
     s.run(&["apply", "app", "env=prod"]).success();
     s.run(&["plan", "net", "--out", "net.json"]).success();
     let r = s.run(&["stack", "list"]).success();
+    // One row per deployment: its stack, file, last apply and pending
+    // plan; the commit column is left out, no row has one.
     let lines: Vec<&str> = r.stdout.lines().collect();
-    assert_eq!(lines[0], "app[env]  stacks/app.df", "{}", r.stdout);
-    assert!(
-        lines[1].starts_with("  app[env=prod]: last apply 20") && lines[1].ends_with(": ok"),
+    let cells = |l: &str| -> Vec<String> {
+        l.split("  ")
+            .map(|c| c.trim().to_string())
+            .filter(|c| !c.is_empty())
+            .collect()
+    };
+    assert_eq!(
+        cells(lines[0]),
+        [
+            "stack",
+            "file",
+            "deployment",
+            "applied",
+            "by",
+            "result",
+            "pending"
+        ],
         "{}",
         r.stdout
     );
-    assert_eq!(lines[2], "net  stacks/net.df", "{}", r.stdout);
-    assert!(
-        lines[3].starts_with("  net: never applied; plan pending: net.json (sha256:"),
+    let app = cells(lines[1]);
+    assert_eq!(
+        app[..3],
+        ["app[env]", "stacks/app.df", "app[env=prod]"],
         "{}",
         r.stdout
     );
+    assert!(app[3].starts_with("20") && app[5] == "ok", "{}", r.stdout);
+    let net = cells(lines[2]);
+    assert_eq!(
+        net[..4],
+        ["net", "stacks/net.df", "net", "never"],
+        "{}",
+        r.stdout
+    );
+    assert!(net[4].starts_with("net.json (sha256:"), "{}", r.stdout);
+    assert_eq!(lines.len(), 3, "{}", r.stdout);
 }
 
 #[test]
@@ -394,7 +419,9 @@ fn state_show_mv_and_unlock() {
     s.run(&["apply", "net"]).success();
     let r = s.run(&["state", "show", "net"]).success();
     assert!(
-        r.stdout.contains("  net.vpc[\"shared\"]  fakecloud shared"),
+        r.stdout.contains(
+            "address            provider   remote\nnet.vpc[\"shared\"]  fakecloud  shared\n"
+        ),
         "{}",
         r.stdout
     );
@@ -407,12 +434,15 @@ fn state_show_mv_and_unlock() {
     ])
     .success();
     let r = s.run(&["state", "show", "net"]).success();
-    assert!(r.stdout.contains("  net.vpc[\"moved\"]  "), "{}", r.stdout);
+    assert!(r.stdout.contains("\nnet.vpc[\"moved\"]  "), "{}", r.stdout);
     // An address as plan prints it names one object; the old spelling is
     // refused.
     let one = r#"net.vpc["moved"]"#;
     let r = s.run(&["state", "show", "net", "--address", one]).success();
-    assert_eq!(r.stdout, "net.vpc[\"moved\"]  fakecloud shared\n");
+    assert_eq!(
+        r.stdout,
+        "address           provider   remote\nnet.vpc[\"moved\"]  fakecloud  shared\n"
+    );
     let r = s
         .run(&["state", "show", "net", "--address", r#"net.vpc["shared"]"#])
         .failure();

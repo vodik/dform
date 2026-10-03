@@ -1,133 +1,96 @@
-baseline:
-  reads:
-    db.postgres.public
-    iam.policy.name
-  writes:
-    (*, tags)
-    (iam.policy, statements)
-  offers:
-
-database:
-  reads:
-    db.postgres.id
-    input backup_days
-    input multi_az
-  writes:
-    (db.postgres, backup_days)
-    (db.postgres, multi_az)
-    (db.postgres, public)
-    (db.postgres, subnets)
-  offers:
-    iam_need: any
-
-identity:
-  reads:
-    iam.policy.id
-    iam.role.id
-  writes:
-    (iam.policy, name)
-    (iam.policy, statements)
-    (iam.role, assume)
-    (iam.role, name)
-    (iam.role_policy_attachment, policy)
-    (iam.role_policy_attachment, role)
-  offers:
-
-kubernetes:
-  reads:
-    input nodepool_max
-    input nodepool_min
-    input private_api
-    k8s.cluster.id
-  writes:
-    (k8s.cluster, private_api)
-    (k8s.cluster, subnets)
-    (k8s.cluster, version)
-    (k8s.nodepool, cluster)
-    (k8s.nodepool, max)
-    (k8s.nodepool, min)
-  offers:
-    iam_need: any
-
-main:
-  reads:
-    input vpc_net
-    net.subnet.visibility
-    net.vpc.cidr
-    net.vpc.id
-  writes:
-    (net.subnet, cidr)
-    (net.subnet, visibility)
-    (net.subnet, vpc)
-    (net.subnet, zone)
-    (net.vpc, cidr)
-    (net.vpc, tags)
-  offers:
-    private_subnet: relation/1
-    vpc: addr
-
-peer:
-  reads:
-    input vpc_net
-    net.subnet.visibility
-    net.vpc.cidr
-    net.vpc.id
-  writes:
-    (net.subnet, cidr)
-    (net.subnet, visibility)
-    (net.subnet, vpc)
-    (net.subnet, zone)
-    (net.vpc, cidr)
-    (net.vpc, tags)
-  offers:
-    private_subnet: relation/1
-    vpc: addr
-
-stack:
-  reads:
-    db.postgres.backup_days
-    db.postgres.multi_az
-    extern table.yaml.set
-    input cidrs
-    input env
-    k8s.cluster.private_api
-    net.vpc.cidr
-    net.vpc.id
-    output database.iam_need
-    output kubernetes.iam_need
-  writes:
-    (compute.vm, id)
-    (compute.vm, private_ip)
-    (db.postgres, endpoint)
-    (db.postgres, id)
-    (iam.policy, id)
-    (iam.role, id)
-    (iam.role_policy_attachment, id)
-    (k8s.cluster, api_endpoint)
-    (k8s.cluster, ca_cert)
-    (k8s.cluster, id)
-    (k8s.nodepool, id)
-    (net.route, id)
-    (net.subnet, id)
-    (net.vpc, id)
-    (net.vpc_peering, accepter_vpc)
-    (net.vpc_peering, id)
-    (net.vpc_peering, requester_vpc)
-    input baseline.audit
-    input database.backup_days
-    input database.multi_az
-    input kubernetes.nodepool_max
-    input kubernetes.nodepool_min
-    input kubernetes.private_api
-    input main.vpc_net
-    input peer.vpc_net
-    input stack.cidrs
-    input stack.env
-  offers:
-
-stdlib_net:
-  reads:
-    compute.vm.private_ip
-    net.vpc.cidr
-  writes:
-  offers:
+scope       effect  what
+baseline    reads   db.postgres.public
+baseline    reads   iam.policy.name
+baseline    writes  (*, tags)
+baseline    writes  (iam.policy, statements)
+database    reads   db.postgres.id
+database    reads   input backup_days
+database    reads   input multi_az
+database    writes  (db.postgres, backup_days)
+database    writes  (db.postgres, multi_az)
+database    writes  (db.postgres, public)
+database    writes  (db.postgres, subnets)
+database    offers  iam_need: any
+identity    reads   iam.policy.id
+identity    reads   iam.role.id
+identity    writes  (iam.policy, name)
+identity    writes  (iam.policy, statements)
+identity    writes  (iam.role, assume)
+identity    writes  (iam.role, name)
+identity    writes  (iam.role_policy_attachment, policy)
+identity    writes  (iam.role_policy_attachment, role)
+kubernetes  reads   input nodepool_max
+kubernetes  reads   input nodepool_min
+kubernetes  reads   input private_api
+kubernetes  reads   k8s.cluster.id
+kubernetes  writes  (k8s.cluster, private_api)
+kubernetes  writes  (k8s.cluster, subnets)
+kubernetes  writes  (k8s.cluster, version)
+kubernetes  writes  (k8s.nodepool, cluster)
+kubernetes  writes  (k8s.nodepool, max)
+kubernetes  writes  (k8s.nodepool, min)
+kubernetes  offers  iam_need: any
+main        reads   input vpc_net
+main        reads   net.subnet.visibility
+main        reads   net.vpc.cidr
+main        reads   net.vpc.id
+main        writes  (net.subnet, cidr)
+main        writes  (net.subnet, visibility)
+main        writes  (net.subnet, vpc)
+main        writes  (net.subnet, zone)
+main        writes  (net.vpc, cidr)
+main        writes  (net.vpc, tags)
+main        offers  private_subnet: relation/1
+main        offers  vpc: addr
+peer        reads   input vpc_net
+peer        reads   net.subnet.visibility
+peer        reads   net.vpc.cidr
+peer        reads   net.vpc.id
+peer        writes  (net.subnet, cidr)
+peer        writes  (net.subnet, visibility)
+peer        writes  (net.subnet, vpc)
+peer        writes  (net.subnet, zone)
+peer        writes  (net.vpc, cidr)
+peer        writes  (net.vpc, tags)
+peer        offers  private_subnet: relation/1
+peer        offers  vpc: addr
+stack       reads   db.postgres.backup_days
+stack       reads   db.postgres.multi_az
+stack       reads   extern table.yaml.set
+stack       reads   input cidrs
+stack       reads   input env
+stack       reads   k8s.cluster.private_api
+stack       reads   net.vpc.cidr
+stack       reads   net.vpc.id
+stack       reads   output database.iam_need
+stack       reads   output kubernetes.iam_need
+stack       writes  (compute.vm, id)
+stack       writes  (compute.vm, private_ip)
+stack       writes  (db.postgres, endpoint)
+stack       writes  (db.postgres, id)
+stack       writes  (iam.policy, id)
+stack       writes  (iam.role, id)
+stack       writes  (iam.role_policy_attachment, id)
+stack       writes  (k8s.cluster, api_endpoint)
+stack       writes  (k8s.cluster, ca_cert)
+stack       writes  (k8s.cluster, id)
+stack       writes  (k8s.nodepool, id)
+stack       writes  (net.route, id)
+stack       writes  (net.subnet, id)
+stack       writes  (net.vpc, id)
+stack       writes  (net.vpc_peering, accepter_vpc)
+stack       writes  (net.vpc_peering, id)
+stack       writes  (net.vpc_peering, requester_vpc)
+stack       writes  input baseline.audit
+stack       writes  input database.backup_days
+stack       writes  input database.multi_az
+stack       writes  input kubernetes.nodepool_max
+stack       writes  input kubernetes.nodepool_min
+stack       writes  input kubernetes.private_api
+stack       writes  input main.vpc_net
+stack       writes  input peer.vpc_net
+stack       writes  input stack.cidrs
+stack       writes  input stack.env
+stdlib_net  reads   compute.vm.private_ip
+stdlib_net  reads   net.vpc.cidr
+(94 rows)

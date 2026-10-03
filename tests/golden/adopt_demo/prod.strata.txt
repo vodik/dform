@@ -1,92 +1,84 @@
 exit: ok
 -- stdout --
-== examples/adopt/stacks/adopt_demo.df: 78 nodes, 143 edges (52 negative)
-   STRATIFIED, 9 strata
-   stratum 0:
-     (arg, input, env)
-     (arg, output, vpc)
-     (want, compute.vm)
-     (want, db.postgres)
-     (want, iam.policy)
-     (want, iam.role)
-     (want, iam.role_policy_attachment)
-     (want, k8s.cluster)
-     (want, k8s.nodepool)
-     (want, net.route)
-     (want, net.vpc_peering)
-     cloud_exists
-     data
-     doc
-     identity
-     input
-     network::zone_index
-     resolve
-     resolved
-     world_attr
-   stratum 1:
-     (arg, compute.vm, id)
-     (arg, db.postgres, endpoint)
-     (arg, db.postgres, id)
-     (arg, iam.policy, id)
-     (arg, iam.role, id)
-     (arg, iam.role_policy_attachment, id)
-     (arg, k8s.cluster, api_endpoint)
-     (arg, k8s.cluster, ca_cert)
-     (arg, k8s.cluster, id)
-     (arg, k8s.nodepool, id)
-     (arg, net.route, id)
-     (arg, net.vpc_peering, id)
-     (attr, input, env)
-     (attr, output, vpc)
-   stratum 2:
-     (adopt, net.vpc)
-     (arg, input, network::vpc_net)
-     (arg, net.vpc, adopted_id)
-     (arg, net.vpc, owner_tag)
-     (attr, compute.vm, id)
-     (attr, db.postgres, endpoint)
-     (attr, db.postgres, id)
-     (attr, iam.policy, id)
-     (attr, iam.role, id)
-     (attr, iam.role_policy_attachment, id)
-     (attr, k8s.cluster, api_endpoint)
-     (attr, k8s.cluster, ca_cert)
-     (attr, k8s.cluster, id)
-     (attr, k8s.nodepool, id)
-     (attr, net.route, id)
-     (attr, net.vpc_peering, id)
-     env
-   stratum 3:
-     (attr, input, network::vpc_net)
-     (attr, net.vpc, adopted_id)
-     (attr, net.vpc, owner_tag)
-   stratum 4:
-     (arg, net.vpc, cidr)
-     (arg, net.vpc, id)
-     (arg, net.vpc, tags)
-     (want, net.vpc)
-     network::vpc_net
-   stratum 5:
-     (attr, net.vpc, cidr)
-     (attr, net.vpc, id)
-     (attr, net.vpc, tags)
-   stratum 6:
-     (arg, net.subnet, cidr)
-     (arg, net.subnet, id)
-     (arg, net.subnet, visibility)
-     (arg, net.subnet, vpc)
-     (arg, net.subnet, zone)
-     (want, net.subnet)
-     __field_read_0
-     deny
-   stratum 7:
-     (attr, net.subnet, cidr)
-     (attr, net.subnet, id)
-     (attr, net.subnet, visibility)
-     (attr, net.subnet, vpc)
-     (attr, net.subnet, zone)
-     warn
-   stratum 8:
-     __rows
-     network::private_subnet
+== examples/adopt/stacks/adopt_demo.df: 78 nodes, 143 edges (52 negative), 9 strata
+stratum  node
+0        (arg, input, env)
+0        (arg, output, vpc)
+0        (want, compute.vm)
+0        (want, db.postgres)
+0        (want, iam.policy)
+0        (want, iam.role)
+0        (want, iam.role_policy_attachment)
+0        (want, k8s.cluster)
+0        (want, k8s.nodepool)
+0        (want, net.route)
+0        (want, net.vpc_peering)
+0        cloud_exists
+0        data
+0        doc
+0        identity
+0        input
+0        network::zone_index
+0        resolve
+0        resolved
+0        world_attr
+1        (arg, compute.vm, id)
+1        (arg, db.postgres, endpoint)
+1        (arg, db.postgres, id)
+1        (arg, iam.policy, id)
+1        (arg, iam.role, id)
+1        (arg, iam.role_policy_attachment, id)
+1        (arg, k8s.cluster, api_endpoint)
+1        (arg, k8s.cluster, ca_cert)
+1        (arg, k8s.cluster, id)
+1        (arg, k8s.nodepool, id)
+1        (arg, net.route, id)
+1        (arg, net.vpc_peering, id)
+1        (attr, input, env)
+1        (attr, output, vpc)
+2        (adopt, net.vpc)
+2        (arg, input, network::vpc_net)
+2        (arg, net.vpc, adopted_id)
+2        (arg, net.vpc, owner_tag)
+2        (attr, compute.vm, id)
+2        (attr, db.postgres, endpoint)
+2        (attr, db.postgres, id)
+2        (attr, iam.policy, id)
+2        (attr, iam.role, id)
+2        (attr, iam.role_policy_attachment, id)
+2        (attr, k8s.cluster, api_endpoint)
+2        (attr, k8s.cluster, ca_cert)
+2        (attr, k8s.cluster, id)
+2        (attr, k8s.nodepool, id)
+2        (attr, net.route, id)
+2        (attr, net.vpc_peering, id)
+2        env
+3        (attr, input, network::vpc_net)
+3        (attr, net.vpc, adopted_id)
+3        (attr, net.vpc, owner_tag)
+4        (arg, net.vpc, cidr)
+4        (arg, net.vpc, id)
+4        (arg, net.vpc, tags)
+4        (want, net.vpc)
+4        network::vpc_net
+5        (attr, net.vpc, cidr)
+5        (attr, net.vpc, id)
+5        (attr, net.vpc, tags)
+6        (arg, net.subnet, cidr)
+6        (arg, net.subnet, id)
+6        (arg, net.subnet, visibility)
+6        (arg, net.subnet, vpc)
+6        (arg, net.subnet, zone)
+6        (want, net.subnet)
+6        __field_read_0
+6        deny
+7        (attr, net.subnet, cidr)
+7        (attr, net.subnet, id)
+7        (attr, net.subnet, visibility)
+7        (attr, net.subnet, vpc)
+7        (attr, net.subnet, zone)
+7        warn
+8        __rows
+8        network::private_subnet
+(78 rows)
 -- stderr --

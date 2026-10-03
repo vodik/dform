@@ -1,176 +1,164 @@
 exit: ok
 -- stdout --
-== examples/demo/stacks/dform.df: 158 nodes, 413 edges (144 negative)
-   STRATIFIED, 13 strata
-   stratum 0:
-     (arg, iam.policy, name)
-     (arg, iam.role, assume)
-     (arg, iam.role, name)
-     (arg, input, env)
-     (want, iam.policy)
-     (want, iam.role)
-     (want, iam.role_policy_attachment)
-     (want, net.route)
-     __set_path
-     data
-     doc
-     identity
-     input
-     main::zone_index
-     resolve
-     resolved
-     table.yaml.set
-     type_lattice
-     vpc_peer_inst
-     world_attr
-   stratum 1:
-     (arg, iam.policy, id)
-     (arg, iam.role, id)
-     (arg, iam.role_policy_attachment, id)
-     (arg, net.route, id)
-     (attr, iam.policy, name)
-     (attr, iam.role, assume)
-     (attr, iam.role, name)
-     (attr, input, env)
-   stratum 2:
-     (arg, input, baseline::audit)
-     (arg, input, cidrs)
-     (arg, input, database::backup_days)
-     (arg, input, database::multi_az)
-     (arg, input, kubernetes::nodepool_max)
-     (arg, input, kubernetes::nodepool_min)
-     (arg, input, kubernetes::private_api)
-     (arg, output, vpc)
-     (attr, iam.policy, id)
-     (attr, iam.role, id)
-     (attr, iam.role_policy_attachment, id)
-     (attr, net.route, id)
-     database::__instance
-     env
-     instance_of
-     kubernetes::__instance
-     peer::__instance
-     peer::zone_index
-   stratum 3:
-     (arg, iam.role_policy_attachment, policy)
-     (arg, iam.role_policy_attachment, role)
-     (attr, input, baseline::audit)
-     (attr, input, cidrs)
-     (attr, input, database::backup_days)
-     (attr, input, database::multi_az)
-     (attr, input, kubernetes::nodepool_max)
-     (attr, input, kubernetes::nodepool_min)
-     (attr, input, kubernetes::private_api)
-     (attr, output, vpc)
-   stratum 4:
-     (arg, compute.vm, id)
-     (arg, compute.vm, private_ip)
-     (arg, db.postgres, backup_days)
-     (arg, db.postgres, endpoint)
-     (arg, db.postgres, id)
-     (arg, db.postgres, multi_az)
-     (arg, db.postgres, public)
-     (arg, input, main::vpc_net)
-     (arg, input, peer::vpc_net)
-     (arg, k8s.cluster, api_endpoint)
-     (arg, k8s.cluster, ca_cert)
-     (arg, k8s.cluster, id)
-     (arg, k8s.cluster, private_api)
-     (arg, k8s.cluster, version)
-     (arg, k8s.nodepool, id)
-     (arg, k8s.nodepool, max)
-     (arg, k8s.nodepool, min)
-     (attr, iam.role_policy_attachment, policy)
-     (attr, iam.role_policy_attachment, role)
-     (want, compute.vm)
-     (want, db.postgres)
-     (want, k8s.cluster)
-     (want, k8s.nodepool)
-     baseline::__neg_0
-     baseline::audit
-     cidrs
-     database::backup_days
-     database::multi_az
-     kubernetes::nodepool_max
-     kubernetes::nodepool_min
-     kubernetes::private_api
-     vpc_peer
-     vpc_peer_pair
-   stratum 5:
-     (attr, compute.vm, id)
-     (attr, compute.vm, private_ip)
-     (attr, db.postgres, backup_days)
-     (attr, db.postgres, endpoint)
-     (attr, db.postgres, id)
-     (attr, db.postgres, multi_az)
-     (attr, db.postgres, public)
-     (attr, input, main::vpc_net)
-     (attr, input, peer::vpc_net)
-     (attr, k8s.cluster, api_endpoint)
-     (attr, k8s.cluster, ca_cert)
-     (attr, k8s.cluster, id)
-     (attr, k8s.cluster, private_api)
-     (attr, k8s.cluster, version)
-     (attr, k8s.nodepool, id)
-     (attr, k8s.nodepool, max)
-     (attr, k8s.nodepool, min)
-   stratum 6:
-     (arg, k8s.nodepool, cluster)
-     (arg, net.vpc, cidr)
-     (arg, net.vpc, id)
-     (arg, net.vpc, tags)
-     (arg, net.vpc_peering, id)
-     (arg, output, iam_need)
-     (want, net.vpc)
-     (want, net.vpc_peering)
-     main::vpc_net
-     peer::vpc_net
-   stratum 7:
-     (attr, k8s.nodepool, cluster)
-     (attr, net.vpc, cidr)
-     (attr, net.vpc, id)
-     (attr, net.vpc_peering, id)
-     (attr, output, iam_need)
-   stratum 8:
-     (arg, *, tags)
-     (arg, net.subnet, cidr)
-     (arg, net.subnet, id)
-     (arg, net.subnet, visibility)
-     (arg, net.subnet, vpc)
-     (arg, net.subnet, zone)
-     (arg, net.vpc_peering, accepter_vpc)
-     (arg, net.vpc_peering, requester_vpc)
-     (want, net.subnet)
-     __field_read_0
-     __field_read_1
-     deny
-     iam_need
-   stratum 9:
-     (arg, iam.policy, statements)
-     (attr, *, tags)
-     (attr, net.subnet, cidr)
-     (attr, net.subnet, id)
-     (attr, net.subnet, visibility)
-     (attr, net.subnet, vpc)
-     (attr, net.subnet, zone)
-     (attr, net.vpc, tags)
-     (attr, net.vpc_peering, accepter_vpc)
-     (attr, net.vpc_peering, requester_vpc)
-     __lc_3
-     warn
-   stratum 10:
-     (attr, iam.policy, statements)
-     __rows
-     database::subnet
-     kubernetes::subnet
-     main::private_subnet
-     peer::private_subnet
-   stratum 11:
-     (arg, db.postgres, subnets)
-     (arg, k8s.cluster, subnets)
-     __lc_1
-     __lc_2
-   stratum 12:
-     (attr, db.postgres, subnets)
-     (attr, k8s.cluster, subnets)
+== examples/demo/stacks/dform.df: 158 nodes, 413 edges (144 negative), 13 strata
+stratum  node
+0        (arg, iam.policy, name)
+0        (arg, iam.role, assume)
+0        (arg, iam.role, name)
+0        (arg, input, env)
+0        (want, iam.policy)
+0        (want, iam.role)
+0        (want, iam.role_policy_attachment)
+0        (want, net.route)
+0        __set_path
+0        data
+0        doc
+0        identity
+0        input
+0        main::zone_index
+0        resolve
+0        resolved
+0        table.yaml.set
+0        type_lattice
+0        vpc_peer_inst
+0        world_attr
+1        (arg, iam.policy, id)
+1        (arg, iam.role, id)
+1        (arg, iam.role_policy_attachment, id)
+1        (arg, net.route, id)
+1        (attr, iam.policy, name)
+1        (attr, iam.role, assume)
+1        (attr, iam.role, name)
+1        (attr, input, env)
+2        (arg, input, baseline::audit)
+2        (arg, input, cidrs)
+2        (arg, input, database::backup_days)
+2        (arg, input, database::multi_az)
+2        (arg, input, kubernetes::nodepool_max)
+2        (arg, input, kubernetes::nodepool_min)
+2        (arg, input, kubernetes::private_api)
+2        (arg, output, vpc)
+2        (attr, iam.policy, id)
+2        (attr, iam.role, id)
+2        (attr, iam.role_policy_attachment, id)
+2        (attr, net.route, id)
+2        database::__instance
+2        env
+2        instance_of
+2        kubernetes::__instance
+2        peer::__instance
+2        peer::zone_index
+3        (arg, iam.role_policy_attachment, policy)
+3        (arg, iam.role_policy_attachment, role)
+3        (attr, input, baseline::audit)
+3        (attr, input, cidrs)
+3        (attr, input, database::backup_days)
+3        (attr, input, database::multi_az)
+3        (attr, input, kubernetes::nodepool_max)
+3        (attr, input, kubernetes::nodepool_min)
+3        (attr, input, kubernetes::private_api)
+3        (attr, output, vpc)
+4        (arg, compute.vm, id)
+4        (arg, compute.vm, private_ip)
+4        (arg, db.postgres, backup_days)
+4        (arg, db.postgres, endpoint)
+4        (arg, db.postgres, id)
+4        (arg, db.postgres, multi_az)
+4        (arg, db.postgres, public)
+4        (arg, input, main::vpc_net)
+4        (arg, input, peer::vpc_net)
+4        (arg, k8s.cluster, api_endpoint)
+4        (arg, k8s.cluster, ca_cert)
+4        (arg, k8s.cluster, id)
+4        (arg, k8s.cluster, private_api)
+4        (arg, k8s.cluster, version)
+4        (arg, k8s.nodepool, id)
+4        (arg, k8s.nodepool, max)
+4        (arg, k8s.nodepool, min)
+4        (attr, iam.role_policy_attachment, policy)
+4        (attr, iam.role_policy_attachment, role)
+4        (want, compute.vm)
+4        (want, db.postgres)
+4        (want, k8s.cluster)
+4        (want, k8s.nodepool)
+4        baseline::__neg_0
+4        baseline::audit
+4        cidrs
+4        database::backup_days
+4        database::multi_az
+4        kubernetes::nodepool_max
+4        kubernetes::nodepool_min
+4        kubernetes::private_api
+4        vpc_peer
+4        vpc_peer_pair
+5        (attr, compute.vm, id)
+5        (attr, compute.vm, private_ip)
+5        (attr, db.postgres, backup_days)
+5        (attr, db.postgres, endpoint)
+5        (attr, db.postgres, id)
+5        (attr, db.postgres, multi_az)
+5        (attr, db.postgres, public)
+5        (attr, input, main::vpc_net)
+5        (attr, input, peer::vpc_net)
+5        (attr, k8s.cluster, api_endpoint)
+5        (attr, k8s.cluster, ca_cert)
+5        (attr, k8s.cluster, id)
+5        (attr, k8s.cluster, private_api)
+5        (attr, k8s.cluster, version)
+5        (attr, k8s.nodepool, id)
+5        (attr, k8s.nodepool, max)
+5        (attr, k8s.nodepool, min)
+6        (arg, k8s.nodepool, cluster)
+6        (arg, net.vpc, cidr)
+6        (arg, net.vpc, id)
+6        (arg, net.vpc, tags)
+6        (arg, net.vpc_peering, id)
+6        (arg, output, iam_need)
+6        (want, net.vpc)
+6        (want, net.vpc_peering)
+6        main::vpc_net
+6        peer::vpc_net
+7        (attr, k8s.nodepool, cluster)
+7        (attr, net.vpc, cidr)
+7        (attr, net.vpc, id)
+7        (attr, net.vpc_peering, id)
+7        (attr, output, iam_need)
+8        (arg, *, tags)
+8        (arg, net.subnet, cidr)
+8        (arg, net.subnet, id)
+8        (arg, net.subnet, visibility)
+8        (arg, net.subnet, vpc)
+8        (arg, net.subnet, zone)
+8        (arg, net.vpc_peering, accepter_vpc)
+8        (arg, net.vpc_peering, requester_vpc)
+8        (want, net.subnet)
+8        __field_read_0
+8        __field_read_1
+8        deny
+8        iam_need
+9        (arg, iam.policy, statements)
+9        (attr, *, tags)
+9        (attr, net.subnet, cidr)
+9        (attr, net.subnet, id)
+9        (attr, net.subnet, visibility)
+9        (attr, net.subnet, vpc)
+9        (attr, net.subnet, zone)
+9        (attr, net.vpc, tags)
+9        (attr, net.vpc_peering, accepter_vpc)
+9        (attr, net.vpc_peering, requester_vpc)
+9        __lc_3
+9        warn
+10       (attr, iam.policy, statements)
+10       __rows
+10       database::subnet
+10       kubernetes::subnet
+10       main::private_subnet
+10       peer::private_subnet
+11       (arg, db.postgres, subnets)
+11       (arg, k8s.cluster, subnets)
+11       __lc_1
+11       __lc_2
+12       (attr, db.postgres, subnets)
+12       (attr, k8s.cluster, subnets)
+(158 rows)
 -- stderr --

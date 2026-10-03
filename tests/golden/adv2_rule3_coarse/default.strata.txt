@@ -1,70 +1,66 @@
 exit: ok
 -- stdout --
-== tests/fixtures/adversarial/adv2_rule3_coarse.df: 60 nodes, 117 edges (47 negative)
-   STRATIFIED, 5 strata
-   stratum 0:
-     (arg, google.client_config, access_token)
-     (arg, google.container_cluster, name)
-     (arg, google.secret_manager_secret_version, secret_data)
-     (arg, k8s.namespace, name)
-     (want, google.client_config)
-     (want, google.compute_address)
-     (want, google.compute_network_peering)
-     (want, google.compute_subnetwork)
-     (want, google.container_cluster)
-     (want, google.monitoring_dashboard)
-     (want, google.secret_manager_secret_version)
-     (want, k8s.deployment)
-     (want, k8s.namespace)
-     (want, k8s.secret)
-     identity
-     resolve
-     resolved
-     world_attr
-   stratum 1:
-     (arg, google.compute_address, id)
-     (arg, google.compute_network_peering, id)
-     (arg, google.compute_subnetwork, id)
-     (arg, google.container_cluster, ca_certificate)
-     (arg, google.container_cluster, endpoint)
-     (arg, google.container_cluster, id)
-     (arg, google.container_cluster, zones)
-     (arg, google.monitoring_dashboard, id)
-     (arg, k8s.deployment, id)
-     (arg, k8s.deployment, uid)
-     (arg, k8s.namespace, id)
-     (arg, k8s.namespace, uid)
-     (arg, k8s.secret, id)
-     (arg, k8s.secret, uid)
-     (attr, google.client_config, access_token)
-     (attr, google.container_cluster, name)
-     (attr, google.secret_manager_secret_version, secret_data)
-     (attr, k8s.namespace, name)
-     ns_count
-   stratum 2:
-     (attr, google.compute_address, id)
-     (attr, google.compute_network_peering, id)
-     (attr, google.compute_subnetwork, id)
-     (attr, google.container_cluster, ca_certificate)
-     (attr, google.container_cluster, endpoint)
-     (attr, google.container_cluster, id)
-     (attr, google.container_cluster, zones)
-     (attr, google.monitoring_dashboard, id)
-     (attr, k8s.deployment, id)
-     (attr, k8s.deployment, uid)
-     (attr, k8s.namespace, id)
-     (attr, k8s.namespace, uid)
-     (attr, k8s.secret, id)
-     (attr, k8s.secret, uid)
-   stratum 3:
-     (arg, google.container_node_pool, cluster)
-     (arg, google.container_node_pool, id)
-     (arg, google.container_node_pool, zone)
-     (want, google.container_node_pool)
-     __ref_dep
-   stratum 4:
-     (attr, google.container_node_pool, cluster)
-     (attr, google.container_node_pool, id)
-     (attr, google.container_node_pool, zone)
-     deny
+== tests/fixtures/adversarial/adv2_rule3_coarse.df: 60 nodes, 117 edges (47 negative), 5 strata
+stratum  node
+0        (arg, google.client_config, access_token)
+0        (arg, google.container_cluster, name)
+0        (arg, google.secret_manager_secret_version, secret_data)
+0        (arg, k8s.namespace, name)
+0        (want, google.client_config)
+0        (want, google.compute_address)
+0        (want, google.compute_network_peering)
+0        (want, google.compute_subnetwork)
+0        (want, google.container_cluster)
+0        (want, google.monitoring_dashboard)
+0        (want, google.secret_manager_secret_version)
+0        (want, k8s.deployment)
+0        (want, k8s.namespace)
+0        (want, k8s.secret)
+0        identity
+0        resolve
+0        resolved
+0        world_attr
+1        (arg, google.compute_address, id)
+1        (arg, google.compute_network_peering, id)
+1        (arg, google.compute_subnetwork, id)
+1        (arg, google.container_cluster, ca_certificate)
+1        (arg, google.container_cluster, endpoint)
+1        (arg, google.container_cluster, id)
+1        (arg, google.container_cluster, zones)
+1        (arg, google.monitoring_dashboard, id)
+1        (arg, k8s.deployment, id)
+1        (arg, k8s.deployment, uid)
+1        (arg, k8s.namespace, id)
+1        (arg, k8s.namespace, uid)
+1        (arg, k8s.secret, id)
+1        (arg, k8s.secret, uid)
+1        (attr, google.client_config, access_token)
+1        (attr, google.container_cluster, name)
+1        (attr, google.secret_manager_secret_version, secret_data)
+1        (attr, k8s.namespace, name)
+1        ns_count
+2        (attr, google.compute_address, id)
+2        (attr, google.compute_network_peering, id)
+2        (attr, google.compute_subnetwork, id)
+2        (attr, google.container_cluster, ca_certificate)
+2        (attr, google.container_cluster, endpoint)
+2        (attr, google.container_cluster, id)
+2        (attr, google.container_cluster, zones)
+2        (attr, google.monitoring_dashboard, id)
+2        (attr, k8s.deployment, id)
+2        (attr, k8s.deployment, uid)
+2        (attr, k8s.namespace, id)
+2        (attr, k8s.namespace, uid)
+2        (attr, k8s.secret, id)
+2        (attr, k8s.secret, uid)
+3        (arg, google.container_node_pool, cluster)
+3        (arg, google.container_node_pool, id)
+3        (arg, google.container_node_pool, zone)
+3        (want, google.container_node_pool)
+3        __ref_dep
+4        (attr, google.container_node_pool, cluster)
+4        (attr, google.container_node_pool, id)
+4        (attr, google.container_node_pool, zone)
+4        deny
+(60 rows)
 -- stderr --

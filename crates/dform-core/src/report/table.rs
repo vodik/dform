@@ -88,11 +88,13 @@ impl Cell {
         }
     }
 
-    /// A secret known only by its size, if that: `secret(SIZE)`, dim.
+    /// A secret known by its size, `secret(SIZE)`, or by nothing (a
+    /// stack's secret output, which state keeps no bytes of), `secret`;
+    /// dim.
     pub fn secret(size_of: Option<usize>, json: Json) -> Cell {
         let text = match size_of {
             Some(n) => format!("secret({})", size(n)),
-            None => "secret(?)".into(),
+            None => "secret".into(),
         };
         Cell {
             text,
@@ -152,6 +154,26 @@ impl Table {
         self.rows.push(row);
     }
 
+    /// The table without the columns no row has anything in (a listing's
+    /// optional columns: a commit, a pending plan).
+    pub fn without_empty_columns(mut self) -> Table {
+        let keep: Vec<bool> = (0..self.columns.len())
+            .map(|i| self.rows.iter().any(|r| !r[i].text.is_empty()))
+            .collect();
+        fn pick<T>(xs: Vec<T>, keep: &[bool]) -> Vec<T> {
+            xs.into_iter()
+                .zip(keep)
+                .filter_map(|(x, k)| k.then_some(x))
+                .collect()
+        }
+        self.columns = pick(std::mem::take(&mut self.columns), &keep);
+        self.rows = std::mem::take(&mut self.rows)
+            .into_iter()
+            .map(|r| pick(r, &keep))
+            .collect();
+        self
+    }
+
     /// The header line, the rows, and `(N rows)` past five or when there
     /// are none.
     pub fn render(&self, o: &Options) -> String {
@@ -198,6 +220,8 @@ impl Table {
                     s.push_str(&" ".repeat(pad + 2));
                 }
             }
+            // An empty last column leaves no padding behind.
+            let mut s = s.trim_end_matches(' ').to_string();
             s.push('\n');
             s
         };

@@ -177,10 +177,13 @@ themselves.
 | `completions zsh\|bash\|fish` | a completion script |
 | `lsp` | the language server, on stdin and stdout (see "Language server") |
 
-`dform stack list` shows every stack, its key and file, and per deployment
-with state its last apply (time, actor and the project's commit, from the
+`dform stack list` is a result set, one row per deployment with state:
+its stack (with its key) and file, where its state is when that is a
+bucket, its last apply (time, actor and the project's commit, from the
 audit log) and a saved plan not yet applied. `dform state show TARGET`
-prints the deployment's objects, `--address ADDR` only the one at `ADDR` (it, `state mv`, `log` and `stack unlock`
+prints the deployment's objects, one row per address with its provider
+and remote id, then its outputs as a key/value table (a secret output as
+`secret`: state keeps no bytes of it); `--address ADDR` only the one at `ADDR` (it, `state mv`, `log` and `stack unlock`
 need the deployment's key, not the program's other inputs); `dform state mv FROM TO TARGET` gives the
 object at the address `FROM` the address `TO`; `dform stack unlock TARGET` removes
 an apply lock whose holder is gone (breaks an s3 backend's lease). `dform provider schema NAME` prints a
@@ -1367,8 +1370,9 @@ cargo run -- -C examples/demo dev graph --strata                     # partition
 cargo run -- -C examples/demo dev graph --relation vpc_peer/2        # any binary relation of the fact store
 ```
 
-`dform dev effects` prints, per scope (the stack, each copy of a
-component, each module used), what it reads
+`dform dev effects` prints a result set of `scope  effect  what`: per
+scope (the stack, each copy of a component, each module used), what it
+reads
 (inputs by name, world types, externs by name, another copy's outputs),
 writes (cells as `(type, path)` partitions, `*` for a variable type or
 path, the input cells its `set`s give, another copy's input cells)
@@ -1377,8 +1381,8 @@ lowered program's rule heads and bodies and the partition graph; no
 evaluation.
 
 ```bash
-cargo run -- -C examples/demo dev effects                  # every scope, text
-cargo run -- -C examples/demo dev effects --json           # one JSON document
+cargo run -- -C examples/demo dev effects                  # every scope, a row per effect
+cargo run -- -C examples/demo dev effects --json           # the rows, an array of objects
 ```
 
 ## Chaos: failure and latency injection

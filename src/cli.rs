@@ -1422,10 +1422,20 @@ fn run_with(
         return run_tests(&loaded.program, &loaded.stack, &providers, &cli, &files);
     }
     if let Cmd::Strata = cli.cmd {
-        return print_strata(&files, &loaded.program, &load_schema(&providers)?);
+        return print_strata(
+            &files,
+            &loaded.program,
+            &load_schema(&providers)?,
+            &cli.table,
+        );
     }
     if let Cmd::Effects { json } = &cli.cmd {
-        return print_effects(&loaded.program, &load_schema(&providers)?, *json);
+        return print_effects(
+            &loaded.program,
+            &load_schema(&providers)?,
+            *json,
+            &cli.table,
+        );
     }
     if let Cmd::Graph { what: Some(w) } = &cli.cmd
         && w == "strata"
@@ -1510,7 +1520,7 @@ fn run_with(
             println!("{}", dep.unlock()?);
             return Ok(());
         }
-        Cmd::StateShow { addr } => return state_show(&dep, addr.as_deref()),
+        Cmd::StateShow { addr } => return state_show(&dep, addr.as_deref(), &cli.table),
         Cmd::TaintMemo { key } => return taint_memo(&dep, key, &audit),
         Cmd::StateMv { from, to } => {
             return state_mv(&dep, from, to, &audit);
@@ -3543,6 +3553,7 @@ fn print_strata(
     files: &[PathBuf],
     program: &crate::ast::Program,
     schema: &schema::Schema,
+    o: &report::table::Options,
 ) -> Result<()> {
     let graph = partition::build(program, schema)?;
     let verdict = partition::stratify(&graph);
@@ -3551,7 +3562,7 @@ fn print_strata(
         .map(|f| f.display().to_string())
         .collect::<Vec<_>>()
         .join(" ");
-    print!("{}", format_strata(&name, &graph, &verdict));
+    print!("{}", format_strata(&name, &graph, &verdict, o));
     if let partition::Verdict::Rejected {
         scc,
         negative_edges,
@@ -3562,80 +3573,71 @@ fn print_strata(
     Ok(())
 }
 
-/// A stable, multi-line rendering of the stratified case (one node per
-/// line, sorted) so `dform dev strata` can be pinned as a golden snapshot.
-/// Rejected (negative cycle) keeps `partition::report`'s own format.
-fn format_strata(name: &str, g: &partition::Graph, v: &partition::Verdict) -> String {
+/// The stratified case as a result set (R-63), one row per node, by
+/// stratum then node, under a line of counts; `dform dev strata` is pinned
+/// as a golden snapshot. Rejected (negative cycle) keeps
+/// `partition::report`'s own format.
+fn format_strata(
+    name: &str,
+    g: &partition::Graph,
+    v: &partition::Verdict,
+    o: &report::table::Options,
+) -> String {
+    use report::table::{Cell, Table};
     match v {
         partition::Verdict::Stratified { strata } => {
-            let mut out = String::new();
-            out.push_str(&format!(
-                "== {name}: {} nodes, {} edges ({} negative)\n",
+            let max = strata.values().copied().max().unwrap_or(0);
+            let mut out = format!(
+                "== {name}: {} nodes, {} edges ({} negative), {} strata\n",
                 g.nodes.len(),
                 g.edges.len(),
-                g.edges.iter().filter(|e| e.negative).count()
-            ));
-            let max = strata.values().copied().max().unwrap_or(0);
-            out.push_str(&format!("   STRATIFIED, {} strata\n", max + 1));
-            let mut by: std::collections::BTreeMap<usize, Vec<String>> =
-                std::collections::BTreeMap::new();
-            for (n, s) in strata {
-                by.entry(*s).or_default().push(n.to_string());
+                g.edges.iter().filter(|e| e.negative).count(),
+                max + 1
+            );
+            let mut rows: Vec<(usize, String)> =
+                strata.iter().map(|(n, s)| (*s, n.to_string())).collect();
+            rows.sort();
+            let mut t = Table::new(["stratum", "node"]);
+            for (s, n) in rows {
+                t.push(vec![Cell::text(s.to_string()), Cell::text(n)]);
             }
-            for (s, mut ns) in by {
-                ns.sort();
-                out.push_str(&format!("   stratum {s}:\n"));
-                for n in ns {
-                    out.push_str(&format!("     {n}\n"));
-                }
-            }
+            out.push_str(&t.render(o));
             out
         }
         partition::Verdict::Rejected { .. } => partition::report(name, g, v),
     }
 }
 
-/// `dform dev effects`: what each scope (the stack, each module instance,
-/// each pack in use) reads, writes and offers (DESIGN.org R-11c), text or
-/// `--json`.
-fn print_effects(program: &crate::ast::Program, schema: &schema::Schema, json: bool) -> Result<()> {
+/// `dform dev effects`, a result set (R-63): what each scope (the stack,
+/// each module instance, each pack in use) reads, writes and offers
+/// (DESIGN.org R-11c), one row per effect.
+fn print_effects(
+    program: &crate::ast::Program,
+    schema: &schema::Schema,
+    json: bool,
+    o: &report::table::Options,
+) -> Result<()> {
+    use report::table::{Cell, Table};
     let effects = crate::effects::compute(program, schema)?;
-    if json {
-        let doc: serde_json::Map<String, serde_json::Value> = effects
-            .iter()
-            .map(|(scope, e)| {
-                (
-                    scope.clone(),
-                    serde_json::json!({
-                        "reads": e.reads,
-                        "writes": e.writes,
-                        "offers": e.offers,
-                    }),
-                )
-            })
-            .collect();
-        println!("{}", serde_json::to_string_pretty(&doc)?);
-        return Ok(());
-    }
-    let mut first = true;
+    let mut t = Table::new(["scope", "effect", "what"]);
     for (scope, e) in &effects {
-        if !first {
-            println!();
-        }
-        first = false;
-        println!("{scope}:");
-        println!("  reads:");
-        for r in &e.reads {
-            println!("    {r}");
-        }
-        println!("  writes:");
-        for w in &e.writes {
-            println!("    {w}");
-        }
-        println!("  offers:");
-        for (k, t) in &e.offers {
-            println!("    {k}: {t}");
-        }
+        let mut row = |effect: &str, what: String| {
+            t.push(vec![
+                Cell::text(scope.clone()),
+                Cell::text(effect),
+                Cell::text(what),
+            ])
+        };
+        e.reads.iter().for_each(|r| row("reads", r.to_string()));
+        e.writes.iter().for_each(|w| row("writes", w.to_string()));
+        e.offers
+            .iter()
+            .for_each(|(k, ty)| row("offers", format!("{k}: {ty}")));
+    }
+    if json {
+        println!("{}", serde_json::to_string_pretty(&t.json())?);
+    } else {
+        print!("{}", t.render(o));
     }
     Ok(())
 }
@@ -3943,9 +3945,11 @@ fn check_keys(cli: &Cli, cfg: &crate::stack::Stack, stack: &str) -> Result<()> {
     Ok(())
 }
 
-/// `dform stack list`: every stack discovery finds, its key and file, and
-/// per deployment with state its last apply and a pending saved plan.
+/// `dform stack list`, a result set (R-63): one row per deployment with
+/// state (a stack with none, one row saying so), its stack, file and
+/// where its state is, its last apply and a pending saved plan.
 fn stack_list(cli: &Cli) -> Result<()> {
+    use report::table::{Cell, Table};
     let project = crate::project::Project::require(Path::new("."), env!("CARGO_PKG_VERSION"))?;
     let d = crate::project::discover(&project);
     for w in &d.warnings {
@@ -3957,24 +3961,55 @@ fn stack_list(cli: &Cli) -> Result<()> {
         return Ok(());
     }
     let registry = crate::stack::registry(&cli.root)?;
+    let mut t = Table::new([
+        "stack",
+        "file",
+        "deployment",
+        "state",
+        "applied",
+        "by",
+        "commit",
+        "result",
+        "pending",
+    ]);
     for s in &d.stacks {
         let key = if s.keys.is_empty() {
             String::new()
         } else {
             format!("[{}]", s.keys.join(", "))
         };
-        println!("{}{key}  {}", s.name, s.file.display());
+        let row = |deployment: &str, state: String, last: LastApply| {
+            [
+                format!("{}{key}", s.name),
+                s.file.display().to_string(),
+                deployment.to_string(),
+                state,
+                last.applied,
+                last.by,
+                last.commit,
+                last.result,
+                last.pending,
+            ]
+            .into_iter()
+            .map(Cell::text)
+            .collect::<Vec<_>>()
+        };
+        let failed = |e: &anyhow::Error| LastApply {
+            result: format!("{e:#}"),
+            ..Default::default()
+        };
         // Where the stack's deployments are: its backend's, else the state
         // root's.
         let base = deployment::stack_location(&cli.root, &s.name, stack_backend(s).as_ref());
-        if let store::Location::S3(spec) = &base {
-            println!("  state in {spec}");
-        }
+        let shown = |l: &store::Location| match l {
+            store::Location::S3(spec) => spec.to_string(),
+            store::Location::Local(_) => String::new(),
+        };
         let opener = open_s3(&cli.root, false);
         let keys = match base.open(&opener).and_then(|st| st.list("")) {
             Ok(k) => k,
             Err(e) => {
-                println!("  {base}: {e:#}");
+                t.push(row("", base.to_string(), failed(&e)));
                 continue;
             }
         };
@@ -4003,7 +4038,8 @@ fn stack_list(cli: &Cli) -> Result<()> {
             let store = match location.open(&opener) {
                 Ok(st) => st,
                 Err(e) => {
-                    println!("  {name}: {e:#}");
+                    any = true;
+                    t.push(row(&name, location.to_string(), failed(&e)));
                     continue;
                 }
             };
@@ -4014,26 +4050,42 @@ fn stack_list(cli: &Cli) -> Result<()> {
                 continue;
             }
             any = true;
-            let handed = registry
-                .get(&name)
-                .and_then(|e| e.backend.clone())
-                .map(|b| format!(" (handed over to {b})"))
-                .unwrap_or_default();
-            println!("  {name}{handed}: {}", last_apply(&entries));
+            let state = match registry.get(&name).and_then(|e| e.backend.clone()) {
+                Some(b) => format!("handed over to {b}"),
+                None => shown(&location),
+            };
+            t.push(row(&name, state, last_apply(&entries)));
         }
         if !any {
-            println!("  no deployment has state");
+            let none = LastApply {
+                result: "no deployment has state".into(),
+                ..Default::default()
+            };
+            t.push(row("", shown(&base), none));
         }
     }
+    print!("{}", t.without_empty_columns().render(&cli.table));
     Ok(())
 }
 
 /// A deployment's last apply and pending saved plan, from its audit log.
-fn last_apply(entries: &[serde_json::Value]) -> String {
+#[derive(Debug, Default)]
+struct LastApply {
+    applied: String,
+    by: String,
+    commit: String,
+    result: String,
+    pending: String,
+}
+
+fn last_apply(entries: &[serde_json::Value]) -> LastApply {
     let field = |e: &serde_json::Value, k: &str| e[k].as_str().unwrap_or("").to_string();
     let start = entries.iter().rposition(|e| e["kind"] == "apply_start");
     let mut out = match start {
-        None => "never applied".to_string(),
+        None => LastApply {
+            applied: "never".into(),
+            ..Default::default()
+        },
         Some(i) => {
             let e = &entries[i];
             let end = entries[i..]
@@ -4042,15 +4094,16 @@ fn last_apply(entries: &[serde_json::Value]) -> String {
                 .map(|e| field(e, "result"))
                 .filter(|r| !r.is_empty())
                 .unwrap_or_else(|| "running or interrupted".into());
-            let commit = e["commit"]
-                .as_str()
-                .map(|c| format!(" at {}", &c[..c.len().min(12)]))
-                .unwrap_or_default();
-            format!(
-                "last apply {} by {}{commit}: {end}",
-                field(e, "time"),
-                field(e, "who")
-            )
+            LastApply {
+                applied: field(e, "time"),
+                by: field(e, "who"),
+                commit: e["commit"]
+                    .as_str()
+                    .map(|c| c[..c.len().min(12)].to_string())
+                    .unwrap_or_default(),
+                result: end,
+                pending: String::new(),
+            }
         }
     };
     let plan = entries
@@ -4059,57 +4112,93 @@ fn last_apply(entries: &[serde_json::Value]) -> String {
     if let Some(p) = plan
         && start.is_none_or(|s| p > s)
     {
-        out.push_str(&format!(
-            "; plan pending: {} ({})",
+        out.pending = format!(
+            "{} ({})",
             field(&entries[p], "file"),
             field(&entries[p], "digest")
-        ));
+        );
     }
     out
 }
 
-/// `dform state show [ADDR]`: the deployment's objects, by address; with
-/// ADDR, that object's only.
-fn state_show(dep: &crate::store::Deployment, only: Option<&str>) -> Result<()> {
+/// `dform state show [ADDR]`, a result set (R-63): the deployment's
+/// objects, one row per address (with ADDR, that object's only), then its
+/// outputs as a key/value table.
+fn state_show(
+    dep: &crate::store::Deployment,
+    only: Option<&str>,
+    o: &report::table::Options,
+) -> Result<()> {
+    use report::table::{Cell, Table};
     let only = only.map(ir::parse_resource_address).transpose()?;
     let (deployment, at) = (dep.name(), dep.locate(crate::store::STATE));
     if !dep.has_state()? {
         bail!("stack {deployment} has no state at {at}: it was never applied");
     }
     let st = dep.load_state()?;
+    let mut objects = Table::new(["address", "provider", "remote"]);
+    let mut push = |addr: String, deposed: bool, e: &state::StateEntry| {
+        let addr = if deposed {
+            format!("{addr} (deposed)")
+        } else {
+            addr
+        };
+        objects.push(vec![
+            Cell::text(addr),
+            Cell::text(e.provider.clone()),
+            Cell::text(e.remote.clone()),
+        ]);
+    };
     if let Some(a) = &only {
         let key = state::key(a);
         let (live, deposed) = (st.resources.get(&key), st.deposed.get(&key));
         if live.is_none() && deposed.is_none() {
             bail!("stack {deployment} has no object at {a}");
         }
-        if let Some(e) = live {
-            println!("{a}  {} {}", e.provider, e.remote);
-        }
-        if let Some(e) = deposed {
-            println!("{a} (deposed)  {} {}", e.provider, e.remote);
-        }
+        live.into_iter().for_each(|e| push(a.to_string(), false, e));
+        deposed
+            .into_iter()
+            .for_each(|e| push(a.to_string(), true, e));
+        print!("{}", objects.render(o));
         return Ok(());
     }
+    let addr = |k: &String| state::parse_key(k).map_or(k.clone(), |a| a.to_string());
+    st.resources
+        .iter()
+        .for_each(|(k, e)| push(addr(k), false, e));
+    st.deposed.iter().for_each(|(k, e)| push(addr(k), true, e));
     println!("{deployment}: {at}");
-    for (k, e) in &st.resources {
-        let addr = state::parse_key(k).map_or(k.clone(), |a| a.to_string());
-        println!("  {addr}  {} {}", e.provider, e.remote);
-    }
-    for (k, e) in &st.deposed {
-        let addr = state::parse_key(k).map_or(k.clone(), |a| a.to_string());
-        println!("  {addr} (deposed)  {} {}", e.provider, e.remote);
-    }
-    for (k, v) in &st.outputs {
-        println!("  output {k} = {}", partition::fmt_value(v));
-    }
-    for (k, o) in &st.secret_outputs {
-        println!("  output {k} = (sensitive {})", ir::label(&o.label));
+    print!("{}", objects.render(o));
+    if !st.outputs.is_empty() || !st.secret_outputs.is_empty() {
+        println!();
+        print!("{}", output_table(&st).pairs(o));
     }
     if st.in_flight.is_some() {
-        println!("  an apply was interrupted: the next apply resumes it");
+        println!("an apply was interrupted: the next apply resumes it");
     }
     Ok(())
+}
+
+/// A deployment's outputs as of its last apply, as a key/value table: a
+/// secret as `secret`, its bytes held nowhere in state.
+fn output_table(st: &state::State) -> report::table::Table {
+    use report::table::{Cell, Table};
+    let redact = query::Redactor::default();
+    let mut t = Table::new(["output", "value"]);
+    let mut rows: Vec<(&String, Cell)> = st
+        .outputs
+        .iter()
+        .map(|(k, v)| (k, Cell::value(v, &redact)))
+        .collect();
+    rows.extend(st.secret_outputs.iter().map(|(k, o)| {
+        let label = serde_json::json!({ "sensitive": ir::label(&o.label) });
+        (k, Cell::secret(None, label))
+    }));
+    rows.sort_by(|a, b| a.0.cmp(b.0));
+    for (k, c) in rows {
+        t.push(vec![Cell::text(k.clone()), c]);
+    }
+    t
 }
 
 /// `dform state mv FROM TO`: the object state maps at FROM, at TO; under

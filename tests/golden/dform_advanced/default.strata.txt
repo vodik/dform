@@ -1,95 +1,90 @@
 exit: ok
 -- stdout --
-== examples/advanced/stacks/dform-advanced.df: 84 nodes, 164 edges (53 negative)
-   STRATIFIED, 6 strata
-   stratum 0:
-     (arg, input, env)
-     (arg, input, mesh)
-     (arg, input, tenants)
-     (want, compute.vm)
-     (want, db.postgres)
-     (want, iam.policy)
-     (want, iam.role)
-     (want, iam.role_policy_attachment)
-     (want, k8s.cluster)
-     (want, k8s.nodepool)
-     (want, net.subnet)
-     corp_net
-     group_edge
-     group_member
-     identity
-     in_group
-     input
-     mesh_allow_direct_route
-     resolve
-     resolved
-     world_attr
-   stratum 1:
-     (arg, compute.vm, id)
-     (arg, db.postgres, endpoint)
-     (arg, db.postgres, id)
-     (arg, iam.policy, id)
-     (arg, iam.role, id)
-     (arg, iam.role_policy_attachment, id)
-     (arg, k8s.cluster, api_endpoint)
-     (arg, k8s.cluster, ca_cert)
-     (arg, k8s.cluster, id)
-     (arg, k8s.nodepool, id)
-     (arg, net.subnet, id)
-     (attr, input, env)
-     (attr, input, mesh)
-     (attr, input, tenants)
-   stratum 2:
-     (arg, net.vpc, cidr)
-     (arg, net.vpc, id)
-     (arg, net.vpc, tags)
-     (arg, net.vpc_peering, id)
-     (attr, compute.vm, id)
-     (attr, db.postgres, endpoint)
-     (attr, db.postgres, id)
-     (attr, iam.policy, id)
-     (attr, iam.role, id)
-     (attr, iam.role_policy_attachment, id)
-     (attr, k8s.cluster, api_endpoint)
-     (attr, k8s.cluster, ca_cert)
-     (attr, k8s.cluster, id)
-     (attr, k8s.nodepool, id)
-     (attr, net.subnet, id)
-     (want, net.vpc)
-     (want, net.vpc_peering)
-     env
-     link
-     mesh
-     mesh_adjacent
-     mesh_node
-     mesh_peer
-     mesh_vpc
-     peer
-     peer_intent
-     reachable
-     tenant
-     tenants
-   stratum 3:
-     (attr, net.vpc, cidr)
-     (attr, net.vpc, id)
-     (attr, net.vpc, tags)
-     (attr, net.vpc_peering, id)
-     mesh_non_adjacent_pair
-   stratum 4:
-     (arg, net.route, destination)
-     (arg, net.route, from)
-     (arg, net.route, id)
-     (arg, net.route, to)
-     (arg, net.vpc_peering, accepter_vpc)
-     (arg, net.vpc_peering, requester_vpc)
-     (want, net.route)
-     deny
-     warn
-   stratum 5:
-     (attr, net.route, destination)
-     (attr, net.route, from)
-     (attr, net.route, id)
-     (attr, net.route, to)
-     (attr, net.vpc_peering, accepter_vpc)
-     (attr, net.vpc_peering, requester_vpc)
+== examples/advanced/stacks/dform-advanced.df: 84 nodes, 164 edges (53 negative), 6 strata
+stratum  node
+0        (arg, input, env)
+0        (arg, input, mesh)
+0        (arg, input, tenants)
+0        (want, compute.vm)
+0        (want, db.postgres)
+0        (want, iam.policy)
+0        (want, iam.role)
+0        (want, iam.role_policy_attachment)
+0        (want, k8s.cluster)
+0        (want, k8s.nodepool)
+0        (want, net.subnet)
+0        corp_net
+0        group_edge
+0        group_member
+0        identity
+0        in_group
+0        input
+0        mesh_allow_direct_route
+0        resolve
+0        resolved
+0        world_attr
+1        (arg, compute.vm, id)
+1        (arg, db.postgres, endpoint)
+1        (arg, db.postgres, id)
+1        (arg, iam.policy, id)
+1        (arg, iam.role, id)
+1        (arg, iam.role_policy_attachment, id)
+1        (arg, k8s.cluster, api_endpoint)
+1        (arg, k8s.cluster, ca_cert)
+1        (arg, k8s.cluster, id)
+1        (arg, k8s.nodepool, id)
+1        (arg, net.subnet, id)
+1        (attr, input, env)
+1        (attr, input, mesh)
+1        (attr, input, tenants)
+2        (arg, net.vpc, cidr)
+2        (arg, net.vpc, id)
+2        (arg, net.vpc, tags)
+2        (arg, net.vpc_peering, id)
+2        (attr, compute.vm, id)
+2        (attr, db.postgres, endpoint)
+2        (attr, db.postgres, id)
+2        (attr, iam.policy, id)
+2        (attr, iam.role, id)
+2        (attr, iam.role_policy_attachment, id)
+2        (attr, k8s.cluster, api_endpoint)
+2        (attr, k8s.cluster, ca_cert)
+2        (attr, k8s.cluster, id)
+2        (attr, k8s.nodepool, id)
+2        (attr, net.subnet, id)
+2        (want, net.vpc)
+2        (want, net.vpc_peering)
+2        env
+2        link
+2        mesh
+2        mesh_adjacent
+2        mesh_node
+2        mesh_peer
+2        mesh_vpc
+2        peer
+2        peer_intent
+2        reachable
+2        tenant
+2        tenants
+3        (attr, net.vpc, cidr)
+3        (attr, net.vpc, id)
+3        (attr, net.vpc, tags)
+3        (attr, net.vpc_peering, id)
+3        mesh_non_adjacent_pair
+4        (arg, net.route, destination)
+4        (arg, net.route, from)
+4        (arg, net.route, id)
+4        (arg, net.route, to)
+4        (arg, net.vpc_peering, accepter_vpc)
+4        (arg, net.vpc_peering, requester_vpc)
+4        (want, net.route)
+4        deny
+4        warn
+5        (attr, net.route, destination)
+5        (attr, net.route, from)
+5        (attr, net.route, id)
+5        (attr, net.route, to)
+5        (attr, net.vpc_peering, accepter_vpc)
+5        (attr, net.vpc_peering, requester_vpc)
+(84 rows)
 -- stderr --

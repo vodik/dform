@@ -1,5 +1,6 @@
 //! `dform dev effects`: what each scope reads, writes and offers
-//! (DESIGN.org R-11c), text and `--json`.
+//! (DESIGN.org R-11c), a result set of `scope  effect  what`, text and
+//! `--json`.
 
 mod common;
 mod inspection_common;
@@ -11,18 +12,23 @@ use inspection_common::{dform, golden};
 #[test]
 fn the_demo_pack_writes_the_grants_it_declares() {
     let out = dform("examples/demo/stacks/dform.df", &["effects"]);
+    // A scope's rows, `effect  what`.
     let scope = |name: &str| {
-        out.split("\n\n")
-            .find(|s| s.starts_with(&format!("{name}:")))
-            .unwrap_or(&out)
-            .to_string()
+        out.lines()
+            .filter_map(|l| l.strip_prefix(name).filter(|r| r.starts_with(' ')))
+            .map(|r| r.trim_start().to_string())
+            .collect::<Vec<_>>()
+            .join("\n")
     };
     let baseline = scope("baseline");
-    assert!(baseline.contains("(*, tags)"), "{out}");
-    assert!(baseline.contains("(iam.policy, statements)"), "{out}");
+    assert!(baseline.contains("writes  (*, tags)"), "{out}");
+    assert!(
+        baseline.contains("writes  (iam.policy, statements)"),
+        "{out}"
+    );
     let stack = scope("stack");
-    assert!(stack.contains("input database.multi_az"), "{out}");
-    assert!(stack.contains("input baseline.audit"), "{out}");
+    assert!(stack.contains("writes  input database.multi_az"), "{out}");
+    assert!(stack.contains("writes  input baseline.audit"), "{out}");
     // Deterministic: a second run prints the same thing.
     assert_eq!(out, dform("examples/demo/stacks/dform.df", &["effects"]));
     golden("effects_demo", &out);
@@ -61,18 +67,21 @@ fn cross_instance_wiring_is_the_callers_effect() {
     );
 }
 
-/// `--json` is the same information, one document, parseable.
+/// `--json` is the same rows, an array of objects keyed by column.
 #[test]
 fn json_is_the_same_information() {
     let out = dform("examples/demo/stacks/dform.df", &["effects", "--json"]);
     let doc: serde_json::Value =
         serde_json::from_str(&out).unwrap_or_else(|e| panic!("{e}: {out}"));
-    let baseline = &doc["baseline"];
-    let writes: Vec<&str> = baseline["writes"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|v| v.as_str().unwrap())
-        .collect();
-    assert!(writes.contains(&"(iam.policy, statements)"), "{out}");
+    let rows = doc.as_array().unwrap();
+    assert!(
+        rows.contains(&serde_json::json!({
+            "scope": "baseline",
+            "effect": "writes",
+            "what": "(iam.policy, statements)",
+        })),
+        "{out}"
+    );
+    let text = dform("examples/demo/stacks/dform.df", &["effects"]);
+    assert_eq!(rows.len() + 2, text.lines().count(), "{text}");
 }
