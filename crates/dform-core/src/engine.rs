@@ -2946,8 +2946,10 @@ fn unify_term(pat: &Term, fv: &Value, out: &mut HashMap<String, Value>, rec: &Re
                 let Value::Str(full) = fv else {
                     return Ok(false);
                 };
-                let prefix = format!("{scope}::");
-                if let Some(suffix) = full.strip_prefix(&prefix) {
+                let prefix = crate::ir::scoped(&scope, "");
+                if let Some(suffix) = full.strip_prefix(&prefix)
+                    && !crate::ir::is_scoped(suffix)
+                {
                     let mut tmp = out.clone();
                     if unify_term(&args[1], &Value::Str(suffix.to_string()), &mut tmp, rec)? {
                         *out = tmp;
@@ -2957,9 +2959,8 @@ fn unify_term(pat: &Term, fv: &Value, out: &mut HashMap<String, Value>, rec: &Re
                 // As the function: a bound name that is already an address
                 // is itself (R-65), another copy's resource read through
                 // its output. An unbound one ranges over the scope's own.
-                return Ok(
-                    full.contains("::") && eval_term(&args[1], out).is_some_and(|v| v == *fv)
-                );
+                return Ok(crate::ir::is_scoped(full)
+                    && eval_term(&args[1], out).is_some_and(|v| v == *fv));
             }
             // `ref(T, A, P)` as a pattern takes a reference apart (R-42):
             // `deformation(k, ref("aws.vpc", A, ""), _)` binds `A`.
@@ -3397,7 +3398,7 @@ const REFERENCE: &[Reference] = &[
         "use",
         Kw,
         "use PATH (as NAME)? { INPUT = TERM, ... }? (where BODY)?",
-        "Import a module, a file by its path from the project root, once under NAME: its items read as `NAME.x`, its rules and denies run over what this scope sees, its inputs bound by the block or their defaults, its resources stamped once as `NAME::x`. `use stacks.NAME` binds a stack's deployments, read as `NAME[k=v].output`.",
+        "Import a module, a file by its path from the project root, once under NAME: its items read as `NAME.x`, its rules and denies run over what this scope sees, its inputs bound by the block or their defaults, its resources stamped once as `NAME/x`. `use stacks.NAME` binds a stack's deployments, read as `NAME[k=v].output`.",
         "use baseline",
     ),
     r(
@@ -3683,11 +3684,10 @@ pub const BODIES: &[(&str, Body)] = &[
     // A name that is already an address (another copy's resource, read
     // through its output) is itself (R-65).
     ("scoped", |a| match a {
-        [_, Value::Str(name)] if name.contains("::") => Some(Value::Str(name.clone())),
-        [scope, name] => Some(Value::Str(format!(
-            "{}::{}",
-            value_to_string(scope),
-            value_to_string(name)
+        [_, Value::Str(name)] if crate::ir::is_scoped(name) => Some(Value::Str(name.clone())),
+        [scope, name] => Some(Value::Str(crate::ir::scoped(
+            &value_to_string(scope),
+            &value_to_string(name),
         ))),
         _ => None,
     }),

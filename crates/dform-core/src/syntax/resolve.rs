@@ -3003,6 +3003,23 @@ impl<'u> Lowerer<'u> {
         let fields = self.fields(&mut rc, &block, &mut reads)?;
         let reads_at = body.len()..body.len() + reads.len();
         body.extend(reads);
+        // A local name has no `/`: that is the scope separator of an
+        // address (R-72), `blue/vpc` the copy blue's resource vpc.
+        if header.kind() == STRING
+            && pieces(header.text()).is_some_and(|ps| {
+                ps.iter()
+                    .any(|p| matches!(p, Piece::Text(t) if t.contains(crate::ir::SCOPE)))
+            })
+        {
+            return self.error(
+                self.span_of(header.text_range()),
+                format!(
+                    "{}: a resource's name may not contain `/`, the scope separator of an \
+                     address (`blue/vpc` is the copy blue's resource vpc)",
+                    header.text()
+                ),
+            );
+        }
         // The header: a string with holes is bound last, by `format`; a
         // name the clauses bind is that variable; anything else static.
         let name = if header.kind() == STRING && has_hole(header.text()) {
@@ -4309,6 +4326,7 @@ impl<'u> Lowerer<'u> {
                     span,
                 )));
             }
+            self.address_key(&lhs, span)?;
             return Ok(Lit::Pos(atom_at("want", vec![typ.unwrap(), lhs], span)));
         }
         let rhs = ts.get(1).ok_or(Skip)?;
@@ -5992,6 +6010,7 @@ impl<'u> Lowerer<'u> {
                 return Err(Skip);
             }
             let addr = self.bind(true, |l| l.term(rc, &ts[0], Pos::Content, pre))?;
+            self.address_key(&addr, span)?;
             let path = self.segs(rc, rest, pre)?;
             return Ok(Some(Res::Ref {
                 typ: str_term(&name),
@@ -6012,6 +6031,24 @@ impl<'u> Lowerer<'u> {
         }
         self.error(span, format!("unknown relation or type `{name}`"))
             .map(Some)
+    }
+
+    /// An address written as a constant, `T["blue::vpc"]` or `"blue::vpc"
+    /// in T`, spells its scope with `/` (R-72): `::` is an error that says
+    /// so.
+    fn address_key(&mut self, addr: &Term, span: Span) -> L<()> {
+        if let Term::Val(Value::Str(a)) = addr
+            && let Some(fixed) = crate::ir::old_scope(a)
+        {
+            let d = Diagnostic::error(
+                span,
+                format!("\"{a}\": a scope in an address is separated by `/`, not `::`"),
+            )
+            .with_help(format!("write \"{fixed}\" (R-72)"));
+            self.diags.push(d);
+            return Err(Skip);
+        }
+        Ok(())
     }
 
     /// Hoist a read `pred(args.., V)` (V at `out`) once per rule; its
@@ -6838,7 +6875,7 @@ mod tests {
              instance m a { n = 1 }\n\
              inst(\"a\")\n\
              p(v, s) where inst(i), v = m[i].vpc, s = a.vpc.size\n\
-             q(x) where x = a.ids, \"a::vpc\" in net.vpc\n",
+             q(x) where x = a.ids, \"a/vpc\" in net.vpc\n",
         );
         assert_eq!(
             got[0],
@@ -6850,7 +6887,7 @@ mod tests {
             &got[3..],
             [
                 "p(V, S) :- inst(I), instance_of(\"m\", \"\", I), output(I, \"vpc\", V), output(\"a\", \"vpc\", Vpc), attr(\"net.vpc\", Vpc, \"size\", S)",
-                "q(X) :- output(\"a\", \"ids\", X), want(\"net.vpc\", \"a::vpc\")",
+                "q(X) :- output(\"a\", \"ids\", X), want(\"net.vpc\", \"a/vpc\")",
             ]
         );
     }

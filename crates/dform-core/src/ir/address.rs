@@ -1,6 +1,7 @@
 //! H-16: one spelling of an address. `T["A"]` is the source term that names
-//! the resource `A` of type `T` (`A` the full address, `m.i::` scope
-//! included), and `.path` after it names an attribute. `Display` for
+//! the resource `A` of type `T` (`A` the full address, a copy's scope
+//! included: `edge/left/vpc`, R-72), and `.path` after it names an
+//! attribute. `Display` for
 //! [`Address`] is the one printer, [`parse`] the one reader: every address
 //! the CLI prints or takes goes through them.
 
@@ -21,6 +22,55 @@ impl Address {
     pub fn attr(&self, path: &str) -> String {
         format!("{self}{}", path_suffix(path))
     }
+}
+
+/// The scope separator in an address (R-72): a copy's resource is
+/// `scope/name`, a nested copy's `outer/inner/name`. A local name may not
+/// contain it, so a name that does is already an address.
+pub const SCOPE: char = '/';
+
+/// The address of `name` in the scope `scope` (a copy's dotted path,
+/// `edge.left`): `edge/left/name`; with `name` empty, the scope's prefix.
+pub fn scoped(scope: &str, name: &str) -> String {
+    let mut out: String = scope
+        .chars()
+        .map(|c| if c == '.' { SCOPE } else { c })
+        .collect();
+    out.push(SCOPE);
+    out.push_str(name);
+    out
+}
+
+/// `name` written with the old scope separator, `main::vpc`, as it is
+/// written now (`main/vpc`); `None` when it has no `::`.
+pub fn old_scope(name: &str) -> Option<String> {
+    name.contains("::").then(|| name.replace("::", "/"))
+}
+
+/// An address written with `::` for `/` (R-72): [`parse`]'s error for
+/// it, which a reader that takes other text too passes on rather than
+/// trying the text as something else.
+#[derive(Debug)]
+pub struct OldScope {
+    src: String,
+    fixed: String,
+}
+
+impl fmt::Display for OldScope {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "'{}': a scope in an address is separated by `/`, not `::` (R-72): \"{}\"",
+            self.src, self.fixed
+        )
+    }
+}
+
+impl std::error::Error for OldScope {}
+
+/// Whether `name` is a scoped address, not a local name.
+pub fn is_scoped(name: &str) -> bool {
+    name.contains(SCOPE)
 }
 
 /// `s` as a source string literal, which reads back as `s`.
@@ -177,7 +227,17 @@ pub fn parse(src: &str) -> Result<(Address, Option<String>)> {
                     return Err(bad());
                 };
                 match (&name, t.kind()) {
-                    (None, STRING) => name = Some(constant(t.text()).ok_or_else(bad)?),
+                    (None, STRING) => {
+                        let n = constant(t.text()).ok_or_else(bad)?;
+                        if let Some(fixed) = old_scope(&n) {
+                            return Err(OldScope {
+                                src: src.to_string(),
+                                fixed,
+                            }
+                            .into());
+                        }
+                        name = Some(n);
+                    }
                     (Some(_), INT) if !path.is_empty() => {
                         path.push('[');
                         path.push_str(t.text());
@@ -219,8 +279,8 @@ mod tests {
     #[test]
     fn prints_as_source() {
         assert_eq!(
-            a("net.vpc", "network.main::vpc").to_string(),
-            r#"net.vpc["network.main::vpc"]"#
+            a("net.vpc", "network/main/vpc").to_string(),
+            r#"net.vpc["network/main/vpc"]"#
         );
         assert_eq!(a("t", "a\"{b}").to_string(), r#"t["a\"{{b}}"]"#);
         assert_eq!(
@@ -234,8 +294,8 @@ mod tests {
         );
         // A resource's identity is the resource (R-43).
         assert_eq!(
-            label("net.vpc/network.main::vpc#id"),
-            r#"net.vpc["network.main::vpc"]"#
+            label("net.vpc/network/main/vpc#id"),
+            r#"net.vpc["network/main/vpc"]"#
         );
         assert_eq!(
             label("db.postgres/main#endpoint"),
@@ -246,7 +306,7 @@ mod tests {
     #[test]
     fn reads_what_it_prints() {
         for (addr, path) in [
-            (a("net.vpc", "network.main::vpc"), None),
+            (a("net.vpc", "network/main/vpc"), None),
             (a("t", "a\"{b}/c"), None),
             (a("k8s.cluster", "x"), Some("tags.team")),
             (a("t", "x"), Some("subnet_ids[0]")),
@@ -263,6 +323,17 @@ mod tests {
                 "{text}"
             );
         }
+    }
+
+    /// A copy's address is `scope/name`, a nested copy's every scope in
+    /// front (R-72); `::` is the old separator, refused naming `/`.
+    #[test]
+    fn a_scope_is_separated_by_a_slash() {
+        assert_eq!(scoped("edge.left", "vpc"), "edge/left/vpc");
+        assert_eq!(scoped("blue", ""), "blue/");
+        assert!(is_scoped("blue/vpc") && !is_scoped("vpc"));
+        let e = parse(r#"aws.vpc["blue::vpc"]"#).unwrap_err().to_string();
+        assert!(e.contains("not `::`") && e.contains(r#""blue/vpc""#), "{e}");
     }
 
     #[test]

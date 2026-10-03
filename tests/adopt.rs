@@ -23,7 +23,7 @@ fn adopt_demo_plans_with_dotted_cloud_refs() {
         ])
         .success();
     assert!(
-        r.stdout.contains("> net.vpc[\"network::vpc\"]"),
+        r.stdout.contains("> net.vpc[\"network/vpc\"]"),
         "{}",
         r.stdout
     );
@@ -54,7 +54,7 @@ fn world_flag_defaults_inventory_beside_it() {
         ])
         .success();
     assert!(
-        r.stdout.contains("> net.vpc[\"network::vpc\"]"),
+        r.stdout.contains("> net.vpc[\"network/vpc\"]"),
         "{}",
         r.stdout
     );

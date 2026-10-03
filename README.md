@@ -786,8 +786,8 @@ endpoints and secrets per the schema and fills the nulls in dependency order.
 
 ```bash
 cargo run -- -C examples/demo plan
-# + net.subnet["main::private-us-test-1a"]
-#   vpc = ?net.vpc["main::vpc"]
+# + net.subnet["main/private-us-test-1a"]
+#   vpc = ?net.vpc["main/vpc"]
 ```
 
 A reference is the resource (R-43). Where an attribute points at another
@@ -800,13 +800,13 @@ error naming `x`, and `ref(x)` writes the reference out where an attribute
 that is no `ref(T)` needs the id as text.
 
 Every address dform prints is the source term that names it, `T["A"]` (`A`
-the full address, a copy's scope `n::` included), and an
+the full address, a copy's scope included: `n/x`, `edge/left/vpc`), and an
 attribute of it is `.path` after it: plan lines, the apply order, nulls,
 secret labels, `state show`, `dev graph` and diagnostics. Every address the
 command line takes is read the same way (`why`, `query`, `state show`,
 `state mv`, `dev show`, `--chaos`), so an address copied from a plan pastes
 into a program, a query or a command; quote it for the shell
-(`why 'net.vpc["main::vpc"].cidr'`).
+(`why 'net.vpc["main/vpc"].cidr'`).
 
 The plan is the Z-set `desired - world` (proposal E §2.8): per address a
 create, a delete, an update, or nothing. The first line counts it in those
@@ -960,7 +960,7 @@ at once by a rule that binds them with `in`:
 ```dform
 lifecycle(main, "prevent_destroy")                   # a delete or replace of it is a deny
 lifecycle(main, "create_before_destroy")             # replace creates first (type_replace either)
-moved(net.vpc, "main::vpc", net.vpc["core::vpc"])  # rename without destroy
+moved(net.vpc, "main/vpc", net.vpc["core/vpc"])  # rename without destroy
 ignore_changes(main, "tags.owner")                   # set on create, then ignored
 lifecycle(pg, "prevent_destroy") where env == "prod", pg in db.postgres   # every prod database
 ```
@@ -1016,8 +1016,8 @@ clock from the time its provider says it took; on the mock (chaos `latency`)
 the difference shows there:
 
 ```bash
-cargo run -- -C examples/demo dev --chaos 'latency=net.vpc["main::vpc"]:100' \
-  --chaos 'latency=net.vpc["peer::vpc"]:100' apply dform env=staging --parallel 4   # the two vpcs overlap: 100ms, not 200ms
+cargo run -- -C examples/demo dev --chaos 'latency=net.vpc["main/vpc"]:100' \
+  --chaos 'latency=net.vpc["peer/vpc"]:100' apply dform env=staging --parallel 4   # the two vpcs overlap: 100ms, not 200ms
 ```
 
 An apply that fails or is killed can be resumed: before a tick's first Apply
@@ -1296,14 +1296,14 @@ SELECT of the goal's variables):
 
 ```bash
 cargo run -- -C examples/demo query 'attr(net.vpc, n, "cidr", c)' dform env=prod
-# N            C
-# "main::vpc"  10.20.0.0/16
-# "peer::vpc"  10.21.0.0/16
+# N           C
+# "main/vpc"  10.20.0.0/16
+# "peer/vpc"  10.21.0.0/16
 cargo run -- -C examples/demo query 'attr(t, a, "cidr", c), want(t, a), t != net.subnet'
-cargo run -- -C examples/demo query 'want(net.vpc, "main::vpc")'    # yes / no
+cargo run -- -C examples/demo query 'want(net.vpc, "main/vpc")'    # yes / no
 cargo run -- -C examples/demo query want                                    # every want fact
-cargo run -- -C examples/demo query 'net.vpc["main::vpc"]'          # its attributes: path, value
-cargo run -- -C examples/demo query 'net.vpc["main::vpc"].cidr'     # one attribute's value
+cargo run -- -C examples/demo query 'net.vpc["main/vpc"]'          # its attributes: path, value
+cargo run -- -C examples/demo query 'net.vpc["main/vpc"].cidr'     # one attribute's value
 ```
 
 A bare predicate's columns are its `decl`'s fields, a core relation's own
@@ -1363,13 +1363,13 @@ pattern may name part of an object attribute, by dotted path or by object
 value, and then shows only the contributions that hold it:
 
 ```bash
-cargo run -- -C examples/demo why 'attr(net.vpc, "main::vpc", "tags.team", "platform")' dform env=prod
-# net.vpc["main::vpc"].tags = {component: "network", env: "prod", team: "platform"}
+cargo run -- -C examples/demo why 'attr(net.vpc, "main/vpc", "tags.team", "platform")' dform env=prod
+# net.vpc["main/vpc"].tags = {component: "network", env: "prod", team: "platform"}
 #   merged from 2 contributions
 #   ├─ {team: "platform"}
 #   │    baseline.df:10  set r.tags = { team: "platform" } where r in resource   (use baseline)
-#   │    with r = net.vpc["main::vpc"]
-#   │    └─ net.vpc["main::vpc"]
+#   │    with r = net.vpc["main/vpc"]
+#   │    └─ net.vpc["main/vpc"]
 #   │         network.df:15  resource net.vpc vpc { .. }   (instance network.vpc main)
 #   ...
 #   └─ ... 1 other contribution (--all)
@@ -1430,8 +1430,8 @@ file keeps a `tick` counter; every `apply` is one tick.
 | `fresh-ids` | every Create mints new ids (the world keeps a `serial`), as a real cloud does; without it a destroy-first replacement under the same name gets its predecessor's id |
 
 ```bash
-cargo run -- -C examples/demo dev --chaos 'fail=net.subnet["main::private-us-test-1a"]' apply dform env=staging
-cargo run -- -C examples/demo dev --chaos 'mutate=net.vpc["main::vpc"].cidr="10.9.0.0/16"' apply dform env=staging
+cargo run -- -C examples/demo dev --chaos 'fail=net.subnet["main/private-us-test-1a"]' apply dform env=staging
+cargo run -- -C examples/demo dev --chaos 'mutate=net.vpc["main/vpc"].cidr="10.9.0.0/16"' apply dform env=staging
 ```
 
 Refresh reads every object state maps; a Read that returns nothing is retried
@@ -1474,7 +1474,7 @@ is quoted (`"prod"`), a path that is data too (`"tags.team"`), a variable
 is a lowercase name bound where it is written, an input or a `let` is read
 by its name (`env == "prod"`), and a resource in scope by its name
 (`vpc.cidr`); anywhere else a resource is its address, `T["A"]`
-(`net.vpc[b]`, `db.postgres["database.main::db"]`), the spelling `plan`
+(`net.vpc[b]`, `db.postgres["database/main/db"]`), the spelling `plan`
 prints and every command takes. `.` is static and `[ ]` a key computed at
 run time. A dot is a reference where it is a whole value (a field:
 `endpoint = db.endpoint`) and a read everywhere else; the resource alone,
@@ -1795,12 +1795,12 @@ term. In the fake backend it resolves against `dform.state/inventory.json`.
 Planning will produce an `Adopt` action (`>` in plan output) instead of `Create`.
 
 ```dform
-adopt(net.vpc["network::vpc"], "existing-prod-vpc") where env == "prod", "existing-prod-vpc" in world.net.vpc
+adopt(net.vpc["network/vpc"], "existing-prod-vpc") where env == "prod", "existing-prod-vpc" in world.net.vpc
 
-set net.vpc["network::vpc"].adopted_id = cloud_ref(net.vpc, "existing-prod-vpc", "id") where env == "prod"
+set net.vpc["network/vpc"].adopted_id = cloud_ref(net.vpc, "existing-prod-vpc", "id") where env == "prod"
 ```
 
-`net.vpc["network::vpc"]` is an address: resource `vpc` of the module
+`net.vpc["network/vpc"]` is an address: resource `vpc` of the module
 `network` the stack uses, spelled as `plan` prints it.
 ```
 
@@ -2005,8 +2005,8 @@ use database {
 A module's import and a component's copy are one mechanism, stamped under
 a name (`database`, `main`):
 
-- resource names are scoped, `main::vpc` (its address from outside
-  `net.vpc["main::vpc"]`), in `want`, `arg`, `attr`, `adopt` and `ref`;
+- resource names are scoped, `main/vpc` (its address from outside
+  `net.vpc["main/vpc"]`), in `want`, `arg`, `attr`, `adopt` and `ref`;
   inside a component `T[e]` is relative to the copy, in a module a name
   it writes out is its own and a variable any resource its user sees;
 - every predicate a component defines is private to the copy: another
@@ -2090,7 +2090,7 @@ enum type). An input a `set` gives is the program's to decide in
 the deployments it holds in, and no axis (R-38). More than 4096 combinations is an error asking to pin some.
 
 ```dform
-deny "prod keeps 14 days of db backups" where env == "prod", not db.postgres["database.main::db"].backup_days == 14
+deny "prod keeps 14 days of db backups" where env == "prod", not db.postgres["database/main/db"].backup_days == 14
 deny "dev has no database" where env == "dev", _ in db.postgres
 ```
 
@@ -2405,7 +2405,7 @@ examples/demo an evaluation takes about 30 ms in a release build.
   the same edit, `moved(T, "old", new)` per address just after the
   declaration's block, so the next plan is a move and not a destroy and a
   create; an address written as a string at the top of a program
-  (`net.vpc["main::vpc"]`, `"main::vpc" in net.vpc`) is
+  (`net.vpc["main/vpc"]`, `"main/vpc" in net.vpc`) is
   renamed with it. A rename is checked: the selected deployment is evaluated with
   the edit applied to the buffers, and the rename is refused, naming
   what changed, if it adds a diagnostic or changes the plan in anything

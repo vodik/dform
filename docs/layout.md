@@ -50,7 +50,7 @@ dform.state/                state: per deployment, audit logs, plan keys,
   `use` (`use config`, then `config.region`), once under its name, its
   inputs bound by a block on the `use` (`use traefik { acme_email }`) or by
   their defaults, its resources stamped once under its name
-  (`traefik::x`). `component NAME { .. }`, an item of a module, is what is
+  (`traefik/x`). `component NAME { .. }`, an item of a module, is what is
   copied many times, by `instance` (`instance modules.net.vpc blue`). A
   path is looked up, never searched: `modules.net` is `modules/net.df`,
   and `modules.net.vpc` its `component vpc`. A stack is a module the tool

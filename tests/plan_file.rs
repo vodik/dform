@@ -62,6 +62,43 @@ fn apply_plan_applies_the_files_delta() {
     assert_eq!(r.summary(), "stack p is undeformed", "{}", r.stdout);
 }
 
+/// A nested copy's resource is `outer/inner/name` (R-72): the file
+/// records it as `plan` prints it, its apply creates it at that address,
+/// and the state and the world key it there.
+#[test]
+fn a_nested_copys_address_round_trips_through_the_plan_file() {
+    let s = Scratch::new("planfile-scoped");
+    s.write(
+        "p.df",
+        "component spoke {\n  resource net.vpc vpc {\n    cidr = \"10.1.0.0/16\"\n  }\n}\n\
+         component pair {\n  instance spoke left\n}\ninstance pair edge\nprovider fake\n",
+    );
+    s.run(&[
+        "dev",
+        "--world",
+        "w.json",
+        "plan",
+        "--out",
+        "plan.json",
+        "p.df",
+    ])
+    .success();
+    let f: serde_json::Value = serde_json::from_str(&s.read("plan.json")).unwrap();
+    assert_eq!(
+        f["ticks"][0]["addresses"][0], "net.vpc[\"edge/left/vpc\"]",
+        "{f}"
+    );
+    assert_eq!(f["deformations"][0]["name"], "edge/left/vpc", "{f}");
+    let r = s.run(&["apply", "plan.json"]).success();
+    assert!(r.stdout.ends_with("apply: complete\n"), "{}", r.stdout);
+    let w: serde_json::Value = serde_json::from_str(&s.read("w.json")).unwrap();
+    assert!(w["resources"]["net.vpc::edge/left/vpc"].is_object(), "{w}");
+    let r = s
+        .run(&["dev", "--world", "w.json", "plan", "p.df"])
+        .success();
+    assert_eq!(r.summary(), "stack p is undeformed", "{}", r.stdout);
+}
+
 /// The world moved after the plan: the saved before-state is stale, and
 /// nothing is applied.
 #[test]

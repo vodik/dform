@@ -59,7 +59,7 @@ in a condition does not."
     ;; `requester_vpc_id = a.id': a field value, so `a.id' is a
     ;; reference, not a read (proposal G, G-6).
     (should (eq (dform-ts-mode-test--face-at "a.id") 'dform-reference-face))
-    ;; `not db.postgres["database::db"].multi_az': a check
+    ;; `not db.postgres["database/db"].multi_az': a check
     ;; condition, so this chain reads now and must not carry the
     ;; reference face.
     (should-not (eq (dform-ts-mode-test--face-at "db.postgres[")

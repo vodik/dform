@@ -32,9 +32,14 @@ pub enum Query {
 /// An address as `plan` prints it (H-16, `ir::parse_address`), as a
 /// pattern: `T["A"].p` is its attribute, `attr(T, A, "p", value)`; `T["A"]`
 /// is the resource, `want(T, A)` for `why` and every `attr(T, A, path,
-/// value)` for `query`.
-pub fn address(src: &str, why: bool) -> Option<Query> {
-    let (addr, path) = crate::ir::parse_address(src).ok()?;
+/// value)` for `query`. `None` when `src` is not an address; an address
+/// with the old scope separator, `::`, is an error (R-72).
+pub fn address(src: &str, why: bool) -> Result<Option<Query>> {
+    let (addr, path) = match crate::ir::parse_address(src) {
+        Ok(a) => a,
+        Err(e) if e.is::<crate::ir::OldScope>() => return Err(e),
+        Err(_) => return Ok(None),
+    };
     let s = |x: &str| Term::Val(Value::Str(x.to_string()));
     let v = |x: &str| Term::Var(x.to_string());
     let (pred, args) = match (path, why) {
@@ -53,16 +58,16 @@ pub fn address(src: &str, why: bool) -> Option<Query> {
     };
     let mut vars = Vec::new();
     atom.args.iter().for_each(|t| term_vars(t, &mut vars));
-    Some(Query::Body {
+    Ok(Some(Query::Body {
         body: vec![Lit::Pos(atom)],
         vars,
-    })
+    }))
 }
 
 /// Parse an address (`address`), `pred`, or body literals such as
 /// `attr(t, a, .cidr, c), want(t, a)`, with the program's own parser.
 pub fn parse(src: &str) -> Result<Query> {
-    if let Some(q) = address(src, false) {
+    if let Some(q) = address(src, false)? {
         return Ok(q);
     }
     let src = src.trim().trim_end_matches('.').trim();

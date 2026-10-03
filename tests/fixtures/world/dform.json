@@ -13,39 +13,39 @@
         "id": "compute.vm:bastion"
       }
     },
-    "db.postgres::database::db": {
+    "db.postgres::database/db": {
       "typ": "db.postgres",
-      "name": "database::db",
+      "name": "database/db",
       "attrs": {
         "backup_days": 3,
         "multi_az": false,
         "public": false,
         "subnets": [
-          "net.subnet:main::private-us-test-1a",
-          "net.subnet:main::private-us-test-1b"
+          "net.subnet:main/private-us-test-1a",
+          "net.subnet:main/private-us-test-1b"
         ],
         "tags": {
           "team": "platform"
         }
       },
       "computed": {
-        "endpoint": "database::db.db.fake",
-        "id": "db.postgres:database::db"
+        "endpoint": "database/db.db.fake",
+        "id": "db.postgres:database/db"
       }
     },
-    "iam.policy::identity::app_policy": {
+    "iam.policy::identity/app_policy": {
       "typ": "iam.policy",
-      "name": "identity::app_policy",
+      "name": "identity/app_policy",
       "attrs": {
         "name": "app",
         "statements": [
           {
             "action": "db.connect",
-            "resource": "db.postgres:database::db"
+            "resource": "db.postgres:database/db"
           },
           {
             "action": "k8s.describe_cluster",
-            "resource": "k8s.cluster:kubernetes::cluster"
+            "resource": "k8s.cluster:kubernetes/cluster"
           }
         ],
         "tags": {
@@ -53,12 +53,12 @@
         }
       },
       "computed": {
-        "id": "iam.policy:identity::app_policy"
+        "id": "iam.policy:identity/app_policy"
       }
     },
-    "iam.role::identity::app_role": {
+    "iam.role::identity/app_role": {
       "typ": "iam.role",
-      "name": "identity::app_role",
+      "name": "identity/app_role",
       "attrs": {
         "assume": {
           "principals": [
@@ -71,31 +71,31 @@
         }
       },
       "computed": {
-        "id": "iam.role:identity::app_role"
+        "id": "iam.role:identity/app_role"
       }
     },
-    "iam.role_policy_attachment::identity::attach": {
+    "iam.role_policy_attachment::identity/attach": {
       "typ": "iam.role_policy_attachment",
-      "name": "identity::attach",
+      "name": "identity/attach",
       "attrs": {
-        "policy": "iam.policy:identity::app_policy",
-        "role": "iam.role:identity::app_role",
+        "policy": "iam.policy:identity/app_policy",
+        "role": "iam.role:identity/app_role",
         "tags": {
           "team": "platform"
         }
       },
       "computed": {
-        "id": "iam.role_policy_attachment:identity::attach"
+        "id": "iam.role_policy_attachment:identity/attach"
       }
     },
-    "k8s.cluster::kubernetes::cluster": {
+    "k8s.cluster::kubernetes/cluster": {
       "typ": "k8s.cluster",
-      "name": "kubernetes::cluster",
+      "name": "kubernetes/cluster",
       "attrs": {
         "private_api": false,
         "subnets": [
-          "net.subnet:main::private-us-test-1a",
-          "net.subnet:main::private-us-test-1b"
+          "net.subnet:main/private-us-test-1a",
+          "net.subnet:main/private-us-test-1b"
         ],
         "tags": {
           "team": "platform"
@@ -103,16 +103,16 @@
         "version": "1.29"
       },
       "computed": {
-        "api_endpoint": "https://kubernetes::cluster.k8s.fake",
+        "api_endpoint": "https://kubernetes/cluster.k8s.fake",
         "ca_cert": "FAKECERT",
-        "id": "k8s.cluster:kubernetes::cluster"
+        "id": "k8s.cluster:kubernetes/cluster"
       }
     },
-    "k8s.nodepool::kubernetes::default": {
+    "k8s.nodepool::kubernetes/default": {
       "typ": "k8s.nodepool",
-      "name": "kubernetes::default",
+      "name": "kubernetes/default",
       "attrs": {
-        "cluster": "k8s.cluster:kubernetes::cluster",
+        "cluster": "k8s.cluster:kubernetes/cluster",
         "max": 3,
         "min": 1,
         "tags": {
@@ -120,76 +120,76 @@
         }
       },
       "computed": {
-        "id": "k8s.nodepool:kubernetes::default"
+        "id": "k8s.nodepool:kubernetes/default"
       }
     },
-    "net.subnet::main::private-us-test-1a": {
+    "net.subnet::main/private-us-test-1a": {
       "typ": "net.subnet",
-      "name": "main::private-us-test-1a",
+      "name": "main/private-us-test-1a",
       "attrs": {
         "cidr": "10.50.0.0/20",
         "tags": {
           "team": "platform"
         },
         "visibility": "private",
-        "vpc": "net.vpc:main::vpc",
+        "vpc": "net.vpc:main/vpc",
         "zone": "us-test-1a"
       },
       "computed": {
-        "id": "net.subnet:main::private-us-test-1a"
+        "id": "net.subnet:main/private-us-test-1a"
       }
     },
-    "net.subnet::main::private-us-test-1b": {
+    "net.subnet::main/private-us-test-1b": {
       "typ": "net.subnet",
-      "name": "main::private-us-test-1b",
+      "name": "main/private-us-test-1b",
       "attrs": {
         "cidr": "10.50.16.0/20",
         "tags": {
           "team": "platform"
         },
         "visibility": "private",
-        "vpc": "net.vpc:main::vpc",
+        "vpc": "net.vpc:main/vpc",
         "zone": "us-test-1b"
       },
       "computed": {
-        "id": "net.subnet:main::private-us-test-1b"
+        "id": "net.subnet:main/private-us-test-1b"
       }
     },
-    "net.subnet::peer::private-us-test-1a": {
+    "net.subnet::peer/private-us-test-1a": {
       "typ": "net.subnet",
-      "name": "peer::private-us-test-1a",
+      "name": "peer/private-us-test-1a",
       "attrs": {
         "cidr": "10.60.0.0/20",
         "tags": {
           "team": "platform"
         },
         "visibility": "private",
-        "vpc": "net.vpc:peer::vpc",
+        "vpc": "net.vpc:peer/vpc",
         "zone": "us-test-1a"
       },
       "computed": {
-        "id": "net.subnet:peer::private-us-test-1a"
+        "id": "net.subnet:peer/private-us-test-1a"
       }
     },
-    "net.subnet::peer::private-us-test-1b": {
+    "net.subnet::peer/private-us-test-1b": {
       "typ": "net.subnet",
-      "name": "peer::private-us-test-1b",
+      "name": "peer/private-us-test-1b",
       "attrs": {
         "cidr": "10.60.16.0/20",
         "tags": {
           "team": "platform"
         },
         "visibility": "private",
-        "vpc": "net.vpc:peer::vpc",
+        "vpc": "net.vpc:peer/vpc",
         "zone": "us-test-1b"
       },
       "computed": {
-        "id": "net.subnet:peer::private-us-test-1b"
+        "id": "net.subnet:peer/private-us-test-1b"
       }
     },
-    "net.vpc::main::vpc": {
+    "net.vpc::main/vpc": {
       "typ": "net.vpc",
-      "name": "main::vpc",
+      "name": "main/vpc",
       "attrs": {
         "cidr": "10.50.0.0/16",
         "tags": {
@@ -199,12 +199,12 @@
         }
       },
       "computed": {
-        "id": "net.vpc:main::vpc"
+        "id": "net.vpc:main/vpc"
       }
     },
-    "net.vpc::peer::vpc": {
+    "net.vpc::peer/vpc": {
       "typ": "net.vpc",
-      "name": "peer::vpc",
+      "name": "peer/vpc",
       "attrs": {
         "cidr": "10.60.0.0/16",
         "tags": {
@@ -214,15 +214,15 @@
         }
       },
       "computed": {
-        "id": "net.vpc:peer::vpc"
+        "id": "net.vpc:peer/vpc"
       }
     },
     "net.vpc_peering::peer-main-peer": {
       "typ": "net.vpc_peering",
       "name": "peer-main-peer",
       "attrs": {
-        "accepter_vpc": "net.vpc:peer::vpc",
-        "requester_vpc": "net.vpc:main::vpc",
+        "accepter_vpc": "net.vpc:peer/vpc",
+        "requester_vpc": "net.vpc:main/vpc",
         "tags": {
           "team": "platform"
         }

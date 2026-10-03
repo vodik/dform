@@ -1,0 +1,15 @@
+# `/` is the scope separator of an address (R-72): a resource's own name
+# may not contain it, in a literal or in an interpolation's text, and an
+# address written with the old separator, `::`, is an error naming `/`.
+input n: string = "x"
+
+provider fake
+
+resource net.vpc "a/b" {
+  cidr = "10.0.0.0/16"
+}
+resource net.vpc "${n}/b" {
+  cidr = "10.1.0.0/16"
+}
+p(c) where c = net.vpc["main::vpc"].cidr
+deny "no peer" where "peer::vpc" in net.vpc

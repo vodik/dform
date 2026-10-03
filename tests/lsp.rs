@@ -243,8 +243,8 @@ fn hover_shows_every_contribution_and_why_prints_the_derivation() {
     assert!(!text.contains("dform[env=staging]"), "{text}");
     // The schema's description of the path.
     assert!(text.contains("Key-value labels on the network."), "{text}");
-    assert!(text.contains("**net.vpc[\"main::vpc\"].tags**"), "{text}");
-    assert!(text.contains("**net.vpc[\"peer::vpc\"].tags**"), "{text}");
+    assert!(text.contains("**net.vpc[\"main/vpc\"].tags**"), "{text}");
+    assert!(text.contains("**net.vpc[\"peer/vpc\"].tags**"), "{text}");
     assert!(text.contains("winning rank: normal"), "{text}");
     // Every contribution: the module's, and the policy pack's.
     assert!(
@@ -266,7 +266,7 @@ fn hover_shows_every_contribution_and_why_prints_the_derivation() {
     let why = why.as_str().unwrap();
     assert!(
         why.starts_with(
-            "net.vpc[\"main::vpc\"].tags = {component: \"network\", env: \"staging\", team: \"platform\"}\n  merged from 2 contributions\n"
+            "net.vpc[\"main/vpc\"].tags = {component: \"network\", env: \"staging\", team: \"platform\"}\n  merged from 2 contributions\n"
         ),
         "{why}"
     );
@@ -281,7 +281,7 @@ fn hover_shows_every_contribution_and_why_prints_the_derivation() {
     let hover = c.at("textDocument/hover", &stdlib, find(&stdlib, "a.cidr", 3));
     let text = hover["contents"]["value"].as_str().unwrap_or_default();
     assert!(
-        text.contains("**net.vpc[\"main::vpc\"].cidr** = `10.50.0.0/16`"),
+        text.contains("**net.vpc[\"main/vpc\"].cidr** = `10.50.0.0/16`"),
         "{hover}"
     );
     assert!(
@@ -1123,7 +1123,7 @@ fn references_of_every_kind_of_name() {
     assert_eq!(found, at_places("stacks/dform.df", &[45]));
 
     // A resource by its name in its component (from outside its address
-    // is a string, `net.vpc["peer::vpc"]`).
+    // is a string, `net.vpc["peer/vpc"]`).
     let found = references(&mut c, &root, &network, find(&network, "net.vpc vpc", 8));
     assert_eq!(
         found,
@@ -1330,7 +1330,7 @@ fn rename_of_a_resource_with_state_plans_as_a_move() {
     apply_edit(&mut c, &root, &edit);
     let edit = rename(&mut c, &network, find(&network, "net.vpc vpc", 8), "net0");
     for i in ["main", "peer"] {
-        let fact = format!(r#"moved(net.vpc, \"{i}::vpc\", net.vpc[\"{i}::net0\"])"#);
+        let fact = format!(r#"moved(net.vpc, \"{i}/vpc\", net.vpc[\"{i}/net0\"])"#);
         assert!(edit.to_string().contains(&fact), "{fact} in {edit}");
     }
     apply_edit(&mut c, &root, &edit);
@@ -1339,7 +1339,7 @@ fn rename_of_a_resource_with_state_plans_as_a_move() {
     let written = std::fs::read_to_string(&stack).unwrap();
     assert!(
         written.contains("resource compute.vm jump {")
-            && written.contains("\"peer::net0\" in net.vpc"),
+            && written.contains("\"peer/net0\" in net.vpc"),
         "{written}"
     );
     let plan = run(&["plan", "dform", "env=staging"]);
@@ -1348,7 +1348,7 @@ fn rename_of_a_resource_with_state_plans_as_a_move() {
         "{plan}"
     );
     assert!(
-        plan.contains("moved net.vpc[\"main::vpc\"] -> net.vpc[\"main::net0\"]"),
+        plan.contains("moved net.vpc[\"main/vpc\"] -> net.vpc[\"main/net0\"]"),
         "{plan}"
     );
     assert!(plan.contains("stack dform is undeformed"), "{plan}");

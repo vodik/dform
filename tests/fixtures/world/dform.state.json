@@ -5,53 +5,53 @@
       "provider": "fakecloud",
       "remote": "bastion"
     },
-    "db.postgres::database::db": {
+    "db.postgres::database/db": {
       "provider": "fakecloud",
-      "remote": "database::db"
+      "remote": "database/db"
     },
-    "iam.policy::identity::app_policy": {
+    "iam.policy::identity/app_policy": {
       "provider": "fakecloud",
-      "remote": "identity::app_policy"
+      "remote": "identity/app_policy"
     },
-    "iam.role::identity::app_role": {
+    "iam.role::identity/app_role": {
       "provider": "fakecloud",
-      "remote": "identity::app_role"
+      "remote": "identity/app_role"
     },
-    "iam.role_policy_attachment::identity::attach": {
+    "iam.role_policy_attachment::identity/attach": {
       "provider": "fakecloud",
-      "remote": "identity::attach"
+      "remote": "identity/attach"
     },
-    "k8s.cluster::kubernetes::cluster": {
+    "k8s.cluster::kubernetes/cluster": {
       "provider": "fakecloud",
-      "remote": "kubernetes::cluster"
+      "remote": "kubernetes/cluster"
     },
-    "k8s.nodepool::kubernetes::default": {
+    "k8s.nodepool::kubernetes/default": {
       "provider": "fakecloud",
-      "remote": "kubernetes::default"
+      "remote": "kubernetes/default"
     },
-    "net.subnet::main::private-us-test-1a": {
+    "net.subnet::main/private-us-test-1a": {
       "provider": "fakecloud",
-      "remote": "main::private-us-test-1a"
+      "remote": "main/private-us-test-1a"
     },
-    "net.subnet::main::private-us-test-1b": {
+    "net.subnet::main/private-us-test-1b": {
       "provider": "fakecloud",
-      "remote": "main::private-us-test-1b"
+      "remote": "main/private-us-test-1b"
     },
-    "net.subnet::peer::private-us-test-1a": {
+    "net.subnet::peer/private-us-test-1a": {
       "provider": "fakecloud",
-      "remote": "peer::private-us-test-1a"
+      "remote": "peer/private-us-test-1a"
     },
-    "net.subnet::peer::private-us-test-1b": {
+    "net.subnet::peer/private-us-test-1b": {
       "provider": "fakecloud",
-      "remote": "peer::private-us-test-1b"
+      "remote": "peer/private-us-test-1b"
     },
-    "net.vpc::main::vpc": {
+    "net.vpc::main/vpc": {
       "provider": "fakecloud",
-      "remote": "main::vpc"
+      "remote": "main/vpc"
     },
-    "net.vpc::peer::vpc": {
+    "net.vpc::peer/vpc": {
       "provider": "fakecloud",
-      "remote": "peer::vpc"
+      "remote": "peer/vpc"
     },
     "net.vpc_peering::peer-main-peer": {
       "provider": "fakecloud",

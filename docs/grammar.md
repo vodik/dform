@@ -351,14 +351,14 @@ statically:
 | `x` after `x in T`   | `T`                                    | `x`                            |
 | `x` after `x in resource` | a fresh type variable             | `x`                            |
 | `n.k` (`output k: T`, `T` a resource type) | `T`              | the output's value             |
-| `m.x` (`m` used, `x` its resource) | `x`'s                    | `"m::x"`                       |
+| `m.x` (`m` used, `x` its resource) | `x`'s                    | `"m/x"`                        |
 | `k` (`let k = R`, `R` a reference) | `R`'s                    | `R`'s                          |
 
 `T[e]` is relative to the scope (H-10): inside a component it is
 `scoped("n", e)`, `n` the copy; in a module, a constant is the module's
 own (`scoped("m", "x")`) and a variable any resource its user sees; at the
 top level and in CLI arguments it is the full address, which pastes
-unchanged from `plan` (H-16): `net.vpc["main::vpc"]`. A resource in scope is written by its
+unchanged from `plan` (H-16): `net.vpc["main/vpc"]`. A resource in scope is written by its
 name: `T["n"]` for a resource `n` in scope, and `T.n`, are errors naming
 `n`. A name declared twice in scope (three resources named `web`) is an
 error listing the candidates by address. A dot on a variable with no
@@ -778,11 +778,11 @@ statement that closes it.
   pack is the stack's);
 - its items read as `n.x`: a `let` or an input (`config.region`), a
   relation (`n.p(..)`), an output (`n.k`), a resource (`n.x`, the address
-  `T["n::x"]`), a type alias (`n.T`), a component (`n.c`, to `instance`);
+  `T["n/x"]`), a type alias (`n.T`), a component (`n.c`, to `instance`);
 - its inputs are bound by the block, as a copy's are, else by their
   defaults; an input with neither is the error a stack input's is (`input
   traefik.acme_email is required and has no value`);
-- its resources, if it has any, are stamped once under `n` (`T["n::x"]`);
+- its resources, if it has any, are stamped once under `n` (`T["n/x"]`);
   a module used from two stacks runs in both, each in its own state;
 - with a clause, all of it exists only while `B` holds.
 
@@ -794,10 +794,12 @@ two imports, each reading its own user's names.
 many times: `instance PATH NAME { k = v } [where B]` makes one copy, by
 the component's path (`instance modules.net.vpc main`, `instance net.vpc
 main` after `use modules.net`, `instance network blue` for one the file
-declares). A copy is named; its resources are `NAME::x`, its relations its
+declares). A copy is named; its resources are `NAME/x`, its relations its
 own, its outputs `NAME.k`, and `c[t].k` ranges over the copies of `c` the
 scope makes, `instance_of(c, user, name)` joined to their outputs. A copy
-inside a copy is scoped under it (`edge.left::vpc`). The names a scope's
+inside a copy is scoped under it (`edge/left/vpc`). `/` is the scope
+separator of an address (R-72), so a resource's own name may not contain
+one, and an address written with `::` is an error naming `/`. The names a scope's
 `use`s and `instance`s bind are one namespace. `instance` of a module is
 an error naming `use`, and so is one with no name.
 
@@ -1439,7 +1441,7 @@ as it is.
 | `ref(R)`                                  | `ref(ref(T, A, ""))`: the reference, written out       |
 | `R.p.q` (content)                         | `V`, reading `attr(T, A, "p", V)`; `__path(V, "q")`    |
 | `n.k`, `c[e].k`                           | `V`, reading `output("n", "k", V)`; `instance_of("c", "", E), output(E, "k", V)` |
-| `m.x` (`use m`; a value, a resource)      | `V`, reading `m::x(V)`; `T["m::x"]`                    |
+| `m.x` (`use m`; a value, a resource)      | `V`, reading `m::x(V)`; `T["m/x"]`                     |
 | `s[k=v].o` (`use stacks.s`)               | `V`, reading `stack_output("s[k=v]", "o", V)`          |
 | `world.T[e].a.b`                          | `V`, reading `cloud_attr("T", e', "a.b", V)`           |
 | `x = R.p`, `R.p == c`                     | `attr(T, A, "p", x)`, `attr(T, A, "p", c)`: the read itself |
@@ -1477,9 +1479,9 @@ A copy and an import are one mechanism (`modules::expand`): the body
 under the scope `n`, its predicates `n::p` (a module's read as `n.p`, a
 component's private to the copy, a value leaving it through an output),
 an input `k` the cell `n::k(V) :- attr(input, "n", k, V)` with its default
-at `@default`, its resources `n::x`, its writes needing no grant (ranks
+at `@default`, its resources `n/x`, its writes needing no grant (ranks
 decide); a top-level input also takes `--set`. A copy inside a copy puts
-the outer scope in front (`edge.left::vpc`). `extern p(+a, -b)` is asked
+the outer scope in front (`edge/left/vpc`). `extern p(+a, -b)` is asked
 on demand, and `declassify(v, "reason")` lowers a secret's label
 (E DR-19).
 

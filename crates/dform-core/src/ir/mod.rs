@@ -14,8 +14,8 @@ use anyhow::{Result, bail};
 use std::collections::{BTreeMap, BTreeSet};
 
 pub use address::{
-    label, parse as parse_address, parse_resource as parse_resource_address, path_suffix,
-    string_literal,
+    OldScope, SCOPE, is_scoped, label, old_scope, parse as parse_address,
+    parse_resource as parse_resource_address, path_suffix, scoped, string_literal,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]

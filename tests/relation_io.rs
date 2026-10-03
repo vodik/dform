@@ -64,9 +64,9 @@ fn a_components_relation_input_is_given_by_rows_and_by_from() {
     );
     let r = plan(&s, "p.df").success();
     for (addr, cidr) in [
-        ("blue::s-a", "10.0.0.0/24"),
-        ("blue::s-b", "10.0.1.0/24"),
-        ("blue::s-c", "10.0.2.0/24"),
+        ("blue/s-a", "10.0.0.0/24"),
+        ("blue/s-b", "10.0.1.0/24"),
+        ("blue/s-c", "10.0.2.0/24"),
     ] {
         assert!(
             r.stdout
@@ -81,7 +81,7 @@ fn a_components_relation_input_is_given_by_rows_and_by_from() {
         .success();
     assert!(
         r.stdout
-            .contains("+ net.subnet[\"green::s-x\"]\n  cidr = \"10.1.9.0/24\"\n"),
+            .contains("+ net.subnet[\"green/s-x\"]\n  cidr = \"10.1.9.0/24\"\n"),
         "{}",
         r.stdout
     );
@@ -191,7 +191,7 @@ fn a_relation_output_is_read_from_a_copy_and_from_every_copy() {
     for z in ["a", "b"] {
         assert!(
             r.stdout.contains(&format!(
-                "+ compute.vm[\"vm-{z}\"]\n  size = 1\n  subnet = ?net.subnet[\"blue::s-{z}\"]\n"
+                "+ compute.vm[\"vm-{z}\"]\n  size = 1\n  subnet = ?net.subnet[\"blue/s-{z}\"]\n"
             )),
             "{z}: {}",
             r.stdout

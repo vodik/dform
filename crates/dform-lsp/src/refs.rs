@@ -920,7 +920,7 @@ component network {
 }
 instance network main { vpc_net = inet(cfg.a) }
 resource compute.vm bastion { private_ip = 1 }
-p(a) where a = net.vpc["main::vpc"].cidr, c = main.vpc, b = network[a].vpc, bastion.cidr == 1, bastion in compute.vm
+p(a) where a = net.vpc["main/vpc"].cidr, c = main.vpc, b = network[a].vpc, bastion.cidr == 1, bastion in compute.vm
 zone_index("a", 0)
 "#;
 
@@ -944,7 +944,7 @@ zone_index("a", 0)
 
     #[test]
     fn a_resource_is_found_by_its_name() {
-        // Its address from outside, `net.vpc["main::vpc"]`, is a string.
+        // Its address from outside, `net.vpc["main/vpc"]`, is a string.
         assert_eq!(
             names(SRC, &Symbol::Resource(Some("network".into()), "vpc".into())),
             vec![(6, true), (10, false), (11, false)]

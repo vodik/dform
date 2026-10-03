@@ -1585,7 +1585,9 @@ pub fn computed_reads(statements: &[Stmt], schema: &Schema) -> Vec<(Span, String
                 .into_iter()
                 .find(|q| schema.class_of(t, q).is_some())?;
             let at = match addr {
-                Term::Val(Value::Str(a)) => a.rsplit("::").next().unwrap_or(a).to_string(),
+                Term::Val(Value::Str(a)) => {
+                    a.rsplit(crate::ir::SCOPE).next().unwrap_or(a).to_string()
+                }
                 other => format!("{t}[{}]", crate::partition::fmt_term(other)),
             };
             Some((a.span, at, path))

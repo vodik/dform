@@ -54,7 +54,7 @@ instance network.vpc main { vpc_net = inet(cidrs.main) }
 instance network.vpc peer { vpc_net = inet(cidrs.peer) } where env != "dev"
 
 # A module is imported once, its inputs bound by its block, rows included
-# (database.df's resources are `database::db`): main's private subnets.
+# (database.df's resources are `database/db`): main's private subnets.
 # Its inputs are the stack's `set`s (`database.backup_days`, ..): the block
 # above and, in prod, config/dform/prod.yaml.
 use database {
@@ -103,7 +103,7 @@ deny "prod k8s must have private api" where env == "prod", c in k8s.cluster, not
 deny "prod peers the two vpcs" where env == "prod", not "peer-main-peer" in net.vpc_peering
 deny "prod keeps 14 days of db backups" where {
   env == "prod"
-  not db.postgres["database::db"].backup_days == 14
+  not db.postgres["database/db"].backup_days == 14
 }
 deny "dev has no database" where env == "dev", _ in db.postgres
-deny "dev has no peer network" where env == "dev", "peer::vpc" in net.vpc
+deny "dev has no peer network" where env == "dev", "peer/vpc" in net.vpc

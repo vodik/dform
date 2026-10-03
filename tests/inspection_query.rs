@@ -13,7 +13,7 @@ fn a_pattern_prints_one_column_per_variable() {
         &["query", "attr(net.vpc, N, \"cidr\", C)"],
     );
     assert!(out.starts_with("N "), "{out}");
-    assert!(out.contains(r#""main::vpc"  10.20.0.0/16"#), "{out}");
+    assert!(out.contains(r#""main/vpc"  10.20.0.0/16"#), "{out}");
     assert_eq!(out.lines().count(), 3, "{out}");
     golden("query_dform_prod_vpc_cidr", &out);
 }
@@ -34,7 +34,7 @@ fn a_conjunction_is_evaluated_against_the_final_fact_store() {
     );
     let ground = dform(
         "examples/demo/stacks/dform.df",
-        &["query", r#"want(net.vpc, "main::vpc")"#],
+        &["query", r#"want(net.vpc, "main/vpc")"#],
     );
     assert_eq!(ground, "yes\n");
 }

@@ -5,7 +5,7 @@
 //! `instance c n { k = V } where B` copies component `c`, an item of one:
 //! one mechanism, the body under the scope `n`:
 //!
-//! - resource names are scoped (`n::name`, its address `T["n::name"]`); in
+//! - resource names are scoped (`n/name`, its address `T["n/name"]`, R-72); in
 //!   a component a resource written as a variable is the copy's own, in a
 //!   module any its user sees (the module's rules merge into the user's
 //!   scope);
@@ -24,7 +24,7 @@
 //!
 //! A body is expanded inside out: its own `use`s and `instance`s are
 //! expanded first, their names relative to it, and the body's scope is put
-//! in front of them (`n.inner::x`, `output("n.inner", k, V)`); a name the
+//! in front of them (`n/inner/x`, `output("n.inner", k, V)`); a name the
 //! resolver wrote as its user's, `__scope(t)`, is left as it is. What a
 //! module or a copy writes is not granted: ranks are the ownership model,
 //! and the stratifier partitions a write by its head's constant type and
@@ -1533,14 +1533,14 @@ fn rewrite_term(term: Term, sc: Sc) -> Term {
 
 /// `scoped(Scope, Name)`; a name a copy inside this one scoped,
 /// `scoped(inner, Name)`, is `scoped(Scope.inner, Name)`; and a name that
-/// is already an address (`"blue::vpc"` names another copy's resource) is
+/// is already an address (`"blue/vpc"` names another copy's resource) is
 /// itself. In a module's (`!sc.vars`), only a name the module writes out is
 /// its own: a variable ranges over every resource its user sees.
 fn scoped_term(sc: Sc, name: Term) -> Term {
     match name {
         Term::Func { name: ref f, .. } if f == "scoped" => rewrite_term(name, sc),
         Term::Func { name: ref f, .. } if f == ABSOLUTE => name,
-        Term::Val(Value::Str(s)) if s.contains("::") => Term::Val(Value::Str(s)),
+        Term::Val(Value::Str(s)) if crate::ir::is_scoped(&s) => Term::Val(Value::Str(s)),
         name if !sc.vars && !matches!(name, Term::Val(_)) => rewrite_term(name, sc),
         name => Term::Func {
             name: "scoped".to_string(),

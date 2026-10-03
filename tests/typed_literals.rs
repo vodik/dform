@@ -99,13 +99,13 @@ fn a_resource_name_is_the_reference_inside_its_module() {
         );
         let r = plan(&s).success();
         assert!(
-            r.stdout.contains("  vpc = ?net.vpc[\"blue::vpc\"]\n"),
+            r.stdout.contains("  vpc = ?net.vpc[\"blue/vpc\"]\n"),
             "{entry}: {}",
             r.stdout
         );
         assert!(
             r.stdout
-                .contains("  requester_vpc = ?net.vpc[\"blue::vpc\"]\n"),
+                .contains("  requester_vpc = ?net.vpc[\"blue/vpc\"]\n"),
             "{entry}: {}",
             r.stdout
         );

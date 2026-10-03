@@ -10,6 +10,7 @@ use crate::refs::{self, Decls, Parsed, Project, Symbol, What};
 use crate::text;
 use anyhow::{Result, anyhow, bail};
 use dform_core::ast::Term;
+use dform_core::ir::SCOPE;
 use dform_core::syntax::{SyntaxKind, SyntaxToken};
 use dform_core::value::Value;
 use lsp_types::{Range, TextEdit};
@@ -163,7 +164,7 @@ pub fn rename(p: &Project, path: &Path, at: usize, new: &str) -> Result<Renaming
     }
     let found = refs::occurrences(&d, &files, &sym);
     let moves = moves(p, &r);
-    // An address written as a string, `T["m.i::n"]` (H-16).
+    // An address written as a string, `T["m/i/n"]` (H-16).
     let strings: Vec<_> = refs::addresses(&files)
         .into_iter()
         .filter_map(|(f, t, typ, a)| Some((f, t, format!("{:?}", r.address(&typ, &a)?))))
@@ -240,15 +241,16 @@ impl Renaming {
             Symbol::Resource(None, _) => {
                 (Some(typ) == self.typ.as_deref() && a == old).then(|| new.clone())
             }
-            // An address of a copy is `instance::name` (R-65): the copy
-            // does not say its component.
+            // An address of a copy is `instance/name` (R-65, R-72): the
+            // copy does not say its component.
             Symbol::Resource(Some(_), _) => {
-                let (inst, local) = a.split_once("::")?;
-                (Some(typ) == self.typ.as_deref() && local == old).then(|| format!("{inst}::{new}"))
+                let (inst, local) = a.rsplit_once(SCOPE)?;
+                (Some(typ) == self.typ.as_deref() && local == old)
+                    .then(|| format!("{inst}{SCOPE}{new}"))
             }
             Symbol::Instance(_, _) => {
-                let rest = a.strip_prefix(&format!("{old}::"))?;
-                Some(format!("{new}::{rest}"))
+                let rest = a.strip_prefix(&format!("{old}{SCOPE}"))?;
+                Some(format!("{new}{SCOPE}{rest}"))
             }
             _ => None,
         }
@@ -322,7 +324,7 @@ fn severity(s: Severity) -> &'static str {
 /// name, one of a module instance by its address, which a module body
 /// does not scope again.
 fn reference(typ: &str, b: &str) -> String {
-    if b.contains("::") {
+    if dform_core::ir::is_scoped(b) {
         dform_core::ir::Address {
             typ: typ.to_string(),
             name: b.to_string(),

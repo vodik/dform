@@ -2814,7 +2814,7 @@ fn why_tree(
     let matched = match input_cell(pattern, &res.facts)? {
         Some(m) => m,
         None => {
-            let parsed = match query::address(pattern, true) {
+            let parsed = match query::address(pattern, true)? {
                 Some(q) => q,
                 None => query::parse(pattern)?,
             };

@@ -1835,7 +1835,7 @@ impl Cx<'_> {
             return true;
         }
         match self.core(a) {
-            Some(Value::Str(s)) => s == name || s.ends_with(&format!("::{name}")),
+            Some(Value::Str(s)) => s == name || s.ends_with(&crate::ir::scoped("", name)),
             _ => false,
         }
     }

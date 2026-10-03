@@ -246,7 +246,7 @@ pub struct Decl {
 /// component is a `component NAME { .. }` item of one (`modules.net.vpc`;
 /// an entry file's is its own name), copied by `instance`. Either is
 /// stamped under a name: its predicates are that name's (`n::p`), its
-/// resources `n::x`, its values leaving it through outputs.
+/// resources `n/x`, its values leaving it through outputs.
 #[derive(Debug, Clone)]
 pub struct Module {
     pub name: String,
