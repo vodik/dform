@@ -1,5 +1,5 @@
 tests/syntax/err/table_source.df:10:26: token: column value is a secret
-  note: a table's rows are read in the clear and recorded in the plan file; a secret comes from a secret input or a `persist` extern
+  note: a table's rows are read in the clear and recorded in the plan file; a secret comes from a secret input, an extern's secret column or a std function such as `random.password`
 tests/syntax/err/table_source.df:5:18: unknown format xml: a table's source is FORMAT(SOURCE)
   help: FORMAT is one of csv, json, yaml, toml; SOURCE is a path, `"data/p.csv"`, or `git("repo", "ref", "path")`
 tests/syntax/err/table_source.df:6:17: git takes a repository, a ref and a path: a table's source is FORMAT(SOURCE)
