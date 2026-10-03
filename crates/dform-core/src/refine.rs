@@ -902,7 +902,7 @@ pub fn check(program: &Program, schema: &Schema) -> Result<()> {
                 .strip_prefix(path.as_str())
                 .map(|p| p.trim_start_matches('.'))
                 .unwrap_or("");
-            let Some(v) = value_at(&value, rest) else {
+            let Some(v) = crate::lattice::value_at(&value, rest) else {
                 continue;
             };
             if r.constraint.check(v) == Truth::False {
@@ -924,16 +924,6 @@ pub fn check(program: &Program, schema: &Schema) -> Result<()> {
     } else {
         Err(Diagnostics(diags).into())
     }
-}
-
-fn value_at<'v>(v: &'v Value, path: &str) -> Option<&'v Value> {
-    if path.is_empty() {
-        return Some(v);
-    }
-    path.split('.').try_fold(v, |v, k| match v {
-        Value::Obj(m) => m.get(k),
-        _ => None,
-    })
 }
 
 #[cfg(test)]

@@ -1940,7 +1940,7 @@ fn check_below(c: Collapsed, path: &str, refinements: &[&Refinement]) -> Collaps
 }
 
 /// The value at a dotted path inside `v` (`""` is `v`).
-fn value_at<'v>(v: &'v Value, path: &str) -> Option<&'v Value> {
+pub(crate) fn value_at<'v>(v: &'v Value, path: &str) -> Option<&'v Value> {
     if path.is_empty() {
         return Some(v);
     }
@@ -2536,5 +2536,15 @@ mod f_tests {
                 i += 1;
             }
         }
+    }
+
+    #[test]
+    fn value_at_reads_a_dotted_path_inside_objects() {
+        let inner = Value::Obj([("b".to_string(), s("x"))].into());
+        let v = Value::Obj([("a".to_string(), inner.clone())].into());
+        assert_eq!(value_at(&v, ""), Some(&v));
+        assert_eq!(value_at(&v, "a"), Some(&inner));
+        assert_eq!(value_at(&v, "a.b"), Some(&s("x")));
+        assert_eq!(value_at(&v, "a.b.c"), None);
     }
 }
