@@ -566,11 +566,19 @@ fn rewrite_stmt_records(stmt: Stmt, schemas: &BTreeMap<String, Vec<String>>) -> 
             let body = rewrite_lits_records(r.body, schemas)?;
             Stmt::Rule(RuleStmt { head, body })
         }
+        // A module's or component's own `decl`s name its relations'
+        // fields inside it, over any outer one of the same name.
         Stmt::Module(mut c) => {
+            let mut inner = schemas.clone();
+            for s in &c.body {
+                if let Stmt::Decl(d) = s {
+                    inner.insert(d.pred.clone(), d.fields.clone());
+                }
+            }
             c.body = c
                 .body
                 .into_iter()
-                .map(|s| rewrite_stmt_records(s, schemas))
+                .map(|s| rewrite_stmt_records(s, &inner))
                 .collect::<Result<Vec<_>>>()?;
             Stmt::Module(c)
         }

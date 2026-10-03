@@ -177,6 +177,23 @@ second(s) where pair((2, s))
     );
 }
 
+/// A component's own `decl` names its relation's columns inside it: the
+/// record pattern and named arguments read by them there.
+#[test]
+fn a_components_decl_names_its_record_pattern() {
+    let src = r#"component c {
+  decl zone(name: string, index: int)
+  zone("a", 0)
+  zone("b", 1)
+  output first = n where zone({ name: n, index: 0 })
+  output second = n where zone(name: n, index: 1)
+}
+instance c x
+got(f, s) where f = x.first, s = x.second
+"#;
+    assert_eq!(facts(src, "got"), [r#"got("a", "b")"#]);
+}
+
 /// A tuple is a pattern, never a value; a list on the left of `=` is
 /// written as a tuple.
 #[test]
