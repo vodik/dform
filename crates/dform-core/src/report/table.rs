@@ -116,6 +116,16 @@ impl Cell {
         self
     }
 
+    /// The cell's text, unfolded.
+    pub fn text_of(&self) -> &str {
+        &self.text
+    }
+
+    /// The cell's `--json`.
+    pub fn json_of(&self) -> &Json {
+        &self.json
+    }
+
     /// What the cell prints as at `width`: a string longer than a screen
     /// is its first line and `.. (SIZE, N lines)`.
     fn shown(&self, width: usize) -> String {
@@ -298,6 +308,21 @@ mod tests {
         assert_eq!(
             table(&[]).render(&Options::PLAIN),
             "name  value\n(0 rows)\n"
+        );
+    }
+
+    #[test]
+    fn a_string_wider_than_the_screen_folds_in_its_cell() {
+        let t = table(&[("s", Value::Str("x".repeat(30)))]);
+        let narrow = Options {
+            width: 20,
+            style: Style::PLAIN,
+        };
+        let folded = format!("\"{} .. (30 B, 1 line)", "x".repeat(30));
+        assert_eq!(t.pairs(&narrow), format!("s  {folded}\n"));
+        assert!(
+            t.pairs(&Options::PLAIN)
+                .contains(&format!("\"{}\"", "x".repeat(30)))
         );
     }
 

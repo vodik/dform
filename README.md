@@ -167,6 +167,7 @@ themselves.
 | Commands | |
 |---|---|
 | `plan`, `apply`, `why`, `query`, `diff`, `test`, `fmt`, `log` | on a target |
+| `output TARGET [NAME]` | a deployment's outputs |
 | `stack list`, `stack rekey`, `stack handover`, `stack unlock` | the project's stacks |
 | `state show`, `state taint`, `state mv` | a deployment's state |
 | `provider check`, `provider schema` | providers |
@@ -176,6 +177,22 @@ themselves.
 | `init [NAME]` | make the working directory a project |
 | `completions zsh\|bash\|fish` | a completion script |
 | `lsp` | the language server, on stdin and stdout (see "Language server") |
+
+`dform output TARGET` lists a deployment's outputs as of its last apply
+(what other stacks read): the scalars as a key/value table, each relation
+(`output p`) as its own table headed by its name, its columns its
+`decl`'s. `dform output TARGET NAME` prints one for the shell, so it is
+always safe to redirect: a string's bytes exactly (no quotes, no
+folding, no newline added), another scalar as the program spells it, a
+relation's rows tab-separated. `--json` prints either as JSON. A secret
+output lists as `secret`; state keeps no bytes of it, so `output TARGET
+NAME` of one is an error.
+
+```bash
+dform output app env=prod                 # url  "https://..", then each relation's table
+curl "$(dform output app env=prod url)"   # the bare value
+dform output app env=prod zone            # prod-a<TAB>0, a row per line
+```
 
 `dform stack list` is a result set, one row per deployment with state:
 its stack (with its key) and file, where its state is when that is a

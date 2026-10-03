@@ -195,6 +195,18 @@ enum Command {
         #[command(subcommand)]
         cmd: StackCommand,
     },
+    /// A result set: a deployment's outputs as of its last apply, the
+    /// scalars as a key/value table and each relation as its own table;
+    /// with NAME, that output's bare value for the shell (a string's bytes
+    /// unquoted, a relation's rows tab-separated).
+    Output {
+        /// The stack (or deployment) and its key values, then the output's
+        /// NAME: `dform output app env=prod url`.
+        #[command(flatten)]
+        target: Target,
+        #[arg(long)]
+        json: bool,
+    },
     /// A deployment's state.
     State {
         #[command(subcommand)]
@@ -240,7 +252,8 @@ enum Command {
 /// The commands that run on a target, at the top level and under `dev`.
 #[derive(Subcommand, Debug, Clone)]
 enum Run {
-    /// Plan a deployment: what apply would do, and what it waits on.
+    /// A report: plan a deployment, what apply would do, and what it
+    /// waits on.
     Plan {
         #[command(flatten)]
         target: Target,
@@ -258,9 +271,9 @@ enum Run {
         #[arg(long)]
         why: bool,
     },
-    /// Apply a deployment, every key value named (`apply app env=prod`),
-    /// after the deployments it reads, or a plan file from `plan --out`
-    /// (`apply PLAN.json`): refresh, re-evaluate, and refuse unless the
+    /// A report: apply a deployment, every key value named (`apply app
+    /// env=prod`), after the deployments it reads, or a plan file from `plan
+    /// --out` (`apply PLAN.json`): refresh, re-evaluate, and refuse unless the
     /// delta is the file's.
     Apply {
         #[command(flatten)]
@@ -287,8 +300,8 @@ enum Run {
         #[arg(long = "yes", short = 'y')]
         yes: bool,
     },
-    /// Print how a fact was derived: rule, bindings, the facts it read,
-    /// recursively. Variables are allowed; every match is printed.
+    /// A derivation: how a fact was derived, its rule, bindings and the facts
+    /// it read, recursively. Variables are allowed; every match is printed.
     Why {
         pattern: String,
         #[command(flatten)]
@@ -301,8 +314,8 @@ enum Run {
         #[arg(long)]
         core: bool,
     },
-    /// Query the final fact store: a predicate name (every fact of it) or
-    /// body literals with variables, printed as a table with one column per
+    /// A result set: query the final fact store, a predicate name (every
+    /// fact of it) or body literals with variables, one column per
     /// variable: `dform query 'attr(net.vpc, n, .cidr, c)'`.
     Query {
         pattern: String,
@@ -312,8 +325,8 @@ enum Run {
         #[arg(long)]
         json: bool,
     },
-    /// What the applies since REF did, each deformation with why it was
-    /// planned (as `plan --why`, by the program as it was at that apply),
+    /// A report: what the applies since REF did, each deformation with why it
+    /// was planned (as `plan --why`, by the program as it was at that apply),
     /// and which inputs and stated rows changed since the apply before.
     Diff {
         #[command(flatten)]
@@ -335,9 +348,9 @@ enum Run {
         #[arg(long = "address")]
         addresses: Vec<String>,
     },
-    /// Run the program's denies over its input space (each enum input's
-    /// values, a bool both ways, a key's enum or applied values; the rest
-    /// their defaults), once per combination against an empty mock world.
+    /// A result set: run the program's denies over its input space (each enum
+    /// input's values, a bool both ways, a key's enum or applied values; the
+    /// rest their defaults), once per combination against an empty mock world.
     /// `K=V` and `--set` pin inputs. Fails if any combination is denied,
     /// printing the command that plans it.
     Test {
@@ -404,8 +417,8 @@ enum LogCommand {
 
 #[derive(Subcommand, Debug, Clone)]
 enum StackCommand {
-    /// Every stack of the project: its key, the deployments with state,
-    /// and per deployment the last apply (commit, time, actor, from the
+    /// A result set: every stack of the project, its key, the deployments with
+    /// state, and per deployment the last apply (commit, time, actor, from the
     /// audit log) and whether a saved plan is pending.
     List,
     /// Move one deployment of a keyed stack to another key value: `rekey
@@ -443,9 +456,9 @@ enum StackCommand {
 
 #[derive(Subcommand, Debug, Clone)]
 enum StateCommand {
-    /// The deployment's state: each address, its provider and remote id;
-    /// with `--address ADDR` (`T["N"]`, as plan prints it), that object's
-    /// only.
+    /// A result set: the deployment's state, each address, its provider and
+    /// remote id; with `--address ADDR` (`T["N"]`, as plan prints it), that
+    /// object's only.
     Show {
         #[arg(long = "address", value_name = "ADDR")]
         addr: Option<String>,
@@ -488,14 +501,15 @@ enum ProviderCommand {
 enum DevCommand {
     #[command(flatten)]
     Run(Run),
-    /// Print the stratification of the program (partition graph strata)
+    /// A result set: the stratification of the program (partition graph
+    /// strata), a row per node.
     Strata {
         #[command(flatten)]
         target: Target,
     },
-    /// What each scope reads, writes and offers (R-11c): the stack, each
-    /// module instance and each pack in use. From the lowered program and
-    /// the partition graph; no evaluation.
+    /// A result set: what each scope reads, writes and offers (R-11c): the
+    /// stack, each module instance and each pack in use. From the lowered
+    /// program and the partition graph; no evaluation.
     Effects {
         #[command(flatten)]
         target: Target,
@@ -641,6 +655,10 @@ enum Cmd {
     Unlock,
     StateShow {
         addr: Option<String>,
+    },
+    Output {
+        name: Option<String>,
+        json: bool,
     },
     StateMv {
         from: String,
@@ -973,6 +991,28 @@ fn resolve(args: Args) -> Result<Cli> {
             StackCommand::Handover { stack, to } => (Cmd::Handover { stack, to }, None),
             StackCommand::Unlock { target } => (Cmd::Unlock, Some(target)),
         },
+        Command::Output { mut target, json } => {
+            // The output's NAME is the one word after the target that is
+            // not a key value.
+            let mut names: Vec<String> = Vec::new();
+            target.keys.retain(|k| {
+                let key = k.contains('=');
+                if !key {
+                    names.push(k.clone());
+                }
+                key
+            });
+            if names.len() > 1 {
+                bail!("output: one NAME at most, got {}", names.join(" "));
+            }
+            (
+                Cmd::Output {
+                    name: names.pop(),
+                    json,
+                },
+                Some(target),
+            )
+        }
         Command::State { cmd } => match cmd {
             StateCommand::Show { addr, target } => (Cmd::StateShow { addr }, Some(target)),
             StateCommand::Taint { key, target, .. } => (Cmd::TaintMemo { key }, Some(target)),
@@ -1485,7 +1525,11 @@ fn run_with(
             inventory: cli.inventory.clone(),
             objects_only: matches!(
                 cli.cmd,
-                Cmd::StateShow { .. } | Cmd::StateMv { .. } | Cmd::Log { .. } | Cmd::Unlock
+                Cmd::StateShow { .. }
+                    | Cmd::Output { .. }
+                    | Cmd::StateMv { .. }
+                    | Cmd::Log { .. }
+                    | Cmd::Unlock
             ),
         },
         &open_s3(&root, writes),
@@ -1521,6 +1565,15 @@ fn run_with(
             return Ok(());
         }
         Cmd::StateShow { addr } => return state_show(&dep, addr.as_deref(), &cli.table),
+        Cmd::Output { name, json } => {
+            return print_output(
+                &dep,
+                &located.loaded.program,
+                name.as_deref(),
+                *json,
+                &cli.table,
+            );
+        }
         Cmd::TaintMemo { key } => return taint_memo(&dep, key, &audit),
         Cmd::StateMv { from, to } => {
             return state_mv(&dep, from, to, &audit);
@@ -1989,6 +2042,7 @@ fn run_with(
         | Cmd::Handover { .. }
         | Cmd::Unlock
         | Cmd::StateShow { .. }
+        | Cmd::Output { .. }
         | Cmd::StateMv { .. }
         | Cmd::ProviderCheck { .. }
         | Cmd::ProviderSchema { .. }
@@ -3932,6 +3986,7 @@ fn needs_project(cli: &Cli) -> bool {
         | Cmd::Handover { .. }
         | Cmd::Unlock
         | Cmd::StateShow { .. }
+        | Cmd::Output { .. }
         | Cmd::StateMv { .. }
         | Cmd::TaintMemo { .. } => true,
         _ => false,
@@ -4224,6 +4279,148 @@ fn output_table(st: &state::State) -> report::table::Table {
     t
 }
 
+/// `dform output TARGET [NAME]`, a result set (R-63): the deployment's
+/// outputs as of its last apply, what other stacks read. The scalars are
+/// a key/value table and each relation (`output p`) its own table headed
+/// by its name, its columns its `decl`'s. With NAME, that output's value
+/// for the shell: a string's bytes as they are, another scalar in surface
+/// spelling, a relation's rows tab-separated. `--json` is the same, as
+/// JSON. A secret output prints as `secret`: state keeps no bytes of it.
+fn print_output(
+    dep: &crate::store::Deployment,
+    program: &crate::ast::Program,
+    name: Option<&str>,
+    json: bool,
+    o: &report::table::Options,
+) -> Result<()> {
+    use report::table::{Cell, Table};
+    let deployment = dep.name();
+    if !dep.has_state()? {
+        bail!(
+            "stack {deployment} has no state at {}: it was never applied",
+            dep.locate(crate::store::STATE)
+        );
+    }
+    let st = dep.load_state()?;
+    let relations: BTreeSet<&str> = program
+        .statements
+        .iter()
+        .filter_map(|s| match s {
+            crate::ast::Stmt::Output(o) if o.relation.is_some() => Some(o.name.as_str()),
+            _ => None,
+        })
+        .collect();
+    let redact = query::Redactor::default();
+    // A relation's rows as a table: one row per list of values.
+    let rows = |k: &str, v: &Value| -> Table {
+        let rows: Vec<&Vec<Value>> = match v {
+            Value::List(xs) => xs
+                .iter()
+                .filter_map(|r| match r {
+                    Value::List(r) => Some(r),
+                    _ => None,
+                })
+                .collect(),
+            _ => Vec::new(),
+        };
+        let arity = rows.first().map_or_else(
+            || {
+                program
+                    .statements
+                    .iter()
+                    .find_map(|s| match s {
+                        crate::ast::Stmt::Decl(d) if d.pred == k => Some(d.fields.len()),
+                        _ => None,
+                    })
+                    .unwrap_or(0)
+            },
+            |r| r.len(),
+        );
+        let mut t = Table::new(query::columns(k, arity, program));
+        for r in rows {
+            t.push(r.iter().map(|v| Cell::value(v, &redact)).collect());
+        }
+        t
+    };
+    let Some(name) = name else {
+        let mut scalars = output_table(&st);
+        scalars.rows.retain(|r| !relations.contains(r[0].text_of()));
+        let blocks: Vec<(String, Table)> = st
+            .outputs
+            .iter()
+            .filter(|(k, _)| relations.contains(k.as_str()))
+            .map(|(k, v)| (k.clone(), rows(k, v)))
+            .collect();
+        if json {
+            let mut doc = serde_json::Map::new();
+            for r in &scalars.rows {
+                doc.insert(r[0].text_of().to_string(), r[1].json_of().clone());
+            }
+            for (k, t) in &blocks {
+                doc.insert(k.clone(), t.json());
+            }
+            println!("{}", serde_json::to_string_pretty(&doc)?);
+            return Ok(());
+        }
+        if scalars.rows.is_empty() && blocks.is_empty() {
+            println!("stack {deployment} has no outputs");
+            return Ok(());
+        }
+        print!("{}", scalars.pairs(o));
+        if !scalars.rows.is_empty() && !blocks.is_empty() {
+            println!();
+        }
+        print!("{}", report::table::blocks(&blocks, o));
+        return Ok(());
+    };
+    if st.secret_outputs.contains_key(name) {
+        bail!(
+            "output {name} of stack {deployment} is secret: its state keeps no bytes of it, \
+             only its label and digest"
+        );
+    }
+    let Some(v) = st.outputs.get(name) else {
+        let mut names: Vec<&String> = st.outputs.keys().chain(st.secret_outputs.keys()).collect();
+        names.sort();
+        let names: Vec<&str> = names.iter().map(|n| n.as_str()).collect();
+        bail!(
+            "stack {deployment} has no output {name} (its outputs: {})",
+            if names.is_empty() {
+                "none".to_string()
+            } else {
+                names.join(", ")
+            }
+        );
+    };
+    let bare = |v: &Value| match v {
+        Value::Str(s) => s.clone(),
+        v => redact.surface(v),
+    };
+    if relations.contains(name) {
+        let t = rows(name, v);
+        if json {
+            println!("{}", serde_json::to_string_pretty(&t.json())?);
+            return Ok(());
+        }
+        if let Value::List(xs) = v {
+            for r in xs {
+                let Value::List(r) = r else { continue };
+                println!("{}", r.iter().map(bare).collect::<Vec<_>>().join("\t"));
+            }
+        }
+        return Ok(());
+    }
+    if json {
+        println!("{}", serde_json::to_string_pretty(&redact.json(v))?);
+    } else if let Value::Str(s) = v {
+        use std::io::Write;
+        std::io::stdout().write_all(s.as_bytes())?;
+    } else {
+        println!("{}", bare(v));
+    }
+    Ok(())
+}
+
 /// `dform state mv FROM TO`: the object state maps at FROM, at TO; under
 /// the deployment's lock, logged.
 fn state_mv(
@@ -4267,6 +4464,7 @@ const COMMANDS: &[&str] = &[
     "fmt",
     "doc",
     "log",
+    "output",
     "stack",
     "state",
     "provider",
