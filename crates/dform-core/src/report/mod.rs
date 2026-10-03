@@ -1,4 +1,9 @@
-//! The plan printer (proposal E §2.7, §7.4; F DR-2 revised): one report
+//! The tool's three printers (R-63); every command prints through one:
+//! a result set (`table`: rows under a header line, `query`, `output`,
+//! the listings), a derivation ([`tree`]: what `why` prints), or a report
+//! (this module: `plan`, `apply` and `diff`, which compose the two).
+//!
+//! The plan report (proposal E §2.7, §7.4; F DR-2 revised): one report
 //! built from an evaluation and the provider's plan, rendered as text for
 //! `plan` and every `apply` tick, or as one JSON document for `--json`.
 //!
@@ -23,9 +28,11 @@ use crate::query::Redactor;
 use crate::schema::Schema;
 use crate::stuck::{Sections, Stuck};
 use crate::value::{Value, null_owner};
-use crate::why::{self, Because};
 use serde_json::{Value as Json, json};
 use std::collections::{BTreeMap, BTreeSet};
+use tree::Because;
+
+pub mod tree;
 
 /// One side of a change, after redaction.
 #[derive(Debug, Clone, PartialEq)]
@@ -1024,7 +1031,7 @@ impl Report {
     /// (its `want` when the program sets none of them), a delete by state
     /// alone. Every line passes through `r`.
     pub fn explain(&mut self, res: &EvalResult, r: &Redactor) {
-        let p = why::Printer {
+        let p = tree::Printer {
             circuit: &res.circuit,
             redact: r,
             all: false,
@@ -1320,7 +1327,7 @@ impl Report {
 }
 
 /// Why deformation `d` is planned ([`Report::explain`]).
-fn explanation(p: &why::Printer, res: &EvalResult, d: &Deformation) -> Vec<Because> {
+fn explanation(p: &tree::Printer, res: &EvalResult, d: &Deformation) -> Vec<Because> {
     let state = |text: &str| {
         vec![Because {
             kind: "state".into(),

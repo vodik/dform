@@ -13,17 +13,17 @@ use crate::inputs;
 use crate::ir;
 use crate::loader;
 use crate::partition;
-use crate::plan_print::{self, waits_on};
 use crate::plugin::{self, Providers};
 use crate::provider::ActionKind;
 use crate::query;
+use crate::report::tree;
+use crate::report::{self, waits_on};
 use crate::schema;
 use crate::state;
 use crate::store;
 use crate::stuck;
 use crate::value::Value;
 use crate::watch;
-use crate::why;
 use crate::zset;
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
@@ -106,9 +106,9 @@ enum ColorWhen {
 impl ColorWhen {
     /// Colour output to a stream that is a terminal (`terminal`) or not:
     /// `auto` colours a terminal unless NO_COLOR is set (non-empty).
-    fn style(self, terminal: bool) -> plan_print::Style {
+    fn style(self, terminal: bool) -> report::Style {
         let no_color = std::env::var_os("NO_COLOR").is_some_and(|v| !v.is_empty());
-        plan_print::Style {
+        report::Style {
             color: match self {
                 ColorWhen::Always => true,
                 ColorWhen::Never => false,
@@ -551,7 +551,7 @@ struct Cli {
     inventory: Option<PathBuf>,
     audit_sink: Option<String>,
     /// How plan text is painted on stdout (`--color`).
-    style: plan_print::Style,
+    style: report::Style,
 }
 
 /// What a run does.
@@ -750,7 +750,7 @@ fn run_command(cli: Cli) -> Result<()> {
         println!(
             "{}",
             cli.style
-                .paint(plan_print::Paint::Bold, &format!("== {}", d.name))
+                .paint(report::Paint::Bold, &format!("== {}", d.name))
         );
         let mut dep = cli.clone();
         dep.user_set = sets(d);
@@ -765,7 +765,7 @@ fn run_command(cli: Cli) -> Result<()> {
     println!(
         "{}",
         cli.style
-            .paint(plan_print::Paint::Bold, &format!("== {target}"))
+            .paint(report::Paint::Bold, &format!("== {target}"))
     );
     let mut cli = cli;
     let own = order.last().map(|d| &d.inputs);
@@ -1740,7 +1740,7 @@ fn run_with(
                      tick: usize,
                      moved: &[(ir::Address, ir::Address)],
                      denies: &[String]| {
-        plan_print::report(&plan_print::Input {
+        report::report(&report::Input {
             plan,
             res,
             sections,
@@ -2553,7 +2553,7 @@ fn run_with(
                     } else if changed || tick > 1 {
                         println!(
                             "{}",
-                            cli.style.paint(plan_print::Paint::Done, "apply: complete")
+                            cli.style.paint(report::Paint::Done, "apply: complete")
                         );
                     } else {
                         println!("apply: nothing to do");
@@ -2644,13 +2644,13 @@ fn why_tree(
             let [crate::ast::Lit::Pos(pat)] = body.as_slice() else {
                 bail!("why: expected one fact pattern, got '{pattern}'");
             };
-            why::find(pat, &res.facts)?
+            tree::find(pat, &res.facts)?
         }
     };
     if matched.is_empty() {
         bail!("why: no fact matches {pattern}");
     }
-    let printer = why::Printer {
+    let printer = tree::Printer {
         circuit: &res.circuit,
         redact,
         all,
@@ -2672,7 +2672,7 @@ fn why_tree(
 }
 
 /// A fact `why` explains, and the part of it the pattern named.
-type Matched = (Atom, Option<why::Focus>);
+type Matched = (Atom, Option<tree::Focus>);
 
 /// `why NAME`: the cell of an input or a `let` by the name the stack reads
 /// it by (R-54, R-55): `replicas`, a leaf of an object input
@@ -2701,7 +2701,7 @@ fn input_cell(pattern: &str, facts: &BTreeSet<Atom>) -> Result<Option<Vec<Matche
                 record: None,
                 span: Default::default(),
             };
-            let found = why::find(&pat, facts)?;
+            let found = tree::find(&pat, facts)?;
             if !found.is_empty() {
                 return Ok(Some(found));
             }
@@ -2950,13 +2950,7 @@ fn run_controller(cli: Cli) -> Result<()> {
 /// Ask on the terminal whether to apply `n` deformations (`new` ones, at
 /// a later tick) to `deployment` at `tick`: only `y` or `yes` proceeds.
 /// With no terminal to ask on, a refusal naming `--yes`, never a wait.
-fn confirm(
-    n: usize,
-    new: bool,
-    deployment: &str,
-    tick: usize,
-    style: plan_print::Style,
-) -> Result<()> {
+fn confirm(n: usize, new: bool, deployment: &str, tick: usize, style: report::Style) -> Result<()> {
     use std::io::{BufRead, IsTerminal, Write};
     let stdin = std::io::stdin();
     if !stdin.is_terminal() {
@@ -2970,7 +2964,7 @@ fn confirm(
         true => format!("Apply {n} new deformation{s} to {deployment}?"),
         false => format!("Apply these {n} deformation{s} to {deployment}?"),
     };
-    print!("{} [y/N] ", style.paint(plan_print::Paint::Bold, &ask));
+    print!("{} [y/N] ", style.paint(report::Paint::Bold, &ask));
     std::io::stdout().flush()?;
     let mut answer = String::new();
     stdin.lock().read_line(&mut answer)?;
@@ -3518,7 +3512,7 @@ fn print_log(
 
 /// `moved/3` rewrites applied to state before the plan.
 fn print_moves(moves: &[(ir::Address, ir::Address)]) {
-    print!("{}", plan_print::moved_text(moves));
+    print!("{}", report::moved_text(moves));
 }
 
 /// `dform dev strata`: the partition graph's strata, or the negative cycle.

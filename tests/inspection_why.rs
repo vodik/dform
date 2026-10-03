@@ -337,7 +337,7 @@ fn why_labels_facts_injected_at_a_tick() {
     );
     let schema = dform::schema::Schema::default();
     let redact = dform::query::Redactor::new(&res.facts, &schema);
-    let printer = dform::why::Printer {
+    let printer = dform::report::tree::Printer {
         circuit: &res.circuit,
         redact: &redact,
         all: false,
@@ -348,7 +348,7 @@ fn why_labels_facts_injected_at_a_tick() {
     let [Lit::Pos(pat)] = body.as_slice() else {
         unreachable!()
     };
-    let (deny, _) = dform::why::find(pat, &res.facts).unwrap().remove(0);
+    let (deny, _) = dform::report::tree::find(pat, &res.facts).unwrap().remove(0);
     let id = res
         .circuit
         .fact_id(&dform::engine::circuit_fact(&deny))

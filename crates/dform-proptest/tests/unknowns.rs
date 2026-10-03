@@ -44,9 +44,9 @@ use dform_core::engine::{self, EvalResult};
 use dform_core::hooks::{self, Rule3};
 use dform_core::ir::{self, Address, Resource};
 use dform_core::partition::{fmt_atom, fmt_value};
-use dform_core::plan_print::{self, Report};
 use dform_core::plugin::{Config, Providers};
 use dform_core::provider::json_to_value;
+use dform_core::report::{self, Report};
 use dform_core::state::State;
 use dform_core::stuck;
 use dform_core::value::{Value, null_label};
@@ -726,7 +726,7 @@ fn plan(program: &dform_core::ast::Program, world: &Path, state: &State) -> Resu
         .map(|r| ((r.addr.typ.clone(), r.addr.name.clone()), r.attrs.clone()))
         .collect();
     let sections = stuck::sections(&res.stuck, &res.may_derive, &res.facts, &docs, schema);
-    let report = plan_print::report(&plan_print::Input {
+    let report = report::report(&report::Input {
         plan: &p,
         res: &res,
         sections: &sections,

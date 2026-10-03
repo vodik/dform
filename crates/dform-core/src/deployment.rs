@@ -30,7 +30,7 @@ use crate::state::{self, State};
 use crate::store::{self, Location, OpenS3};
 use crate::value::Value;
 use crate::watch::Relation;
-use crate::{executor, lint, loader, plan_print, provider, stuck, tables, transform, zset};
+use crate::{executor, lint, loader, provider, report, stuck, tables, transform, zset};
 use anyhow::{Context, Result, bail};
 use std::cell::RefCell;
 use std::collections::BTreeSet;
@@ -539,7 +539,7 @@ impl Evaluator {
             .collect();
         let mut facts = zset::deformation_facts(
             plan.actions.iter().filter_map(|a| {
-                let held = plan_print::waits_on(a, &sections).is_some();
+                let held = report::waits_on(a, &sections).is_some();
                 Some((zset::deformation_kind(&a.kind, held)?, &a.addr))
             }),
             &before,

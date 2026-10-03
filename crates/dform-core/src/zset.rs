@@ -494,9 +494,9 @@ fn compare(desired: &Value, world: &Value) -> (Kind, BTreeSet<String>) {
 pub mod file {
     use crate::ast::{Atom, Term};
     use crate::engine::EvalResult;
-    use crate::plan_print::{self, Report};
     use crate::provider::{Action, ActionKind, Plan};
     use crate::query::Redactor;
+    use crate::report::{self, Report};
     use crate::schema::Schema;
     use crate::stuck::Sections;
     use crate::value::Value;
@@ -610,9 +610,9 @@ pub mod file {
 
         /// A redacted value as the file stores it: a sensitive one with the
         /// digest of `bytes`, anything else as shown.
-        fn stored(&self, shown: plan_print::Shown, bytes: impl FnOnce() -> Vec<u8>) -> Json {
+        fn stored(&self, shown: report::Shown, bytes: impl FnOnce() -> Vec<u8>) -> Json {
             match shown {
-                plan_print::Shown::Sensitive(l) => {
+                report::Shown::Sensitive(l) => {
                     serde_json::json!({ "sensitive": l, "digest": self.digest(&bytes()) })
                 }
                 s => s.json(),
@@ -868,7 +868,7 @@ pub mod file {
         key: &Key,
     ) -> Entry {
         let side = |v: Option<&Json>, sensitive: bool| {
-            key.stored(plan_print::shown(v, sensitive, schema, r), || {
+            key.stored(report::shown(v, sensitive, schema, r), || {
                 serde_json::to_vec(&v).unwrap_or_default()
             })
         };
@@ -878,7 +878,7 @@ pub mod file {
             name: a.addr.name.clone(),
             action: action_name(&a.kind).into(),
             tick: tick_of.get(name.as_str()).copied(),
-            on: plan_print::waits_on(a, sections).unwrap_or_default(),
+            on: report::waits_on(a, sections).unwrap_or_default(),
             changes: a
                 .changes
                 .iter()
@@ -909,7 +909,7 @@ pub mod file {
         let mut out: Vec<Group> = Vec::new();
         for (rule, head, nulls, bindings) in stuck.chain(may) {
             let g = Group {
-                pattern: plan_print::group_pattern(head),
+                pattern: report::group_pattern(head),
                 on: nulls.iter().cloned().collect(),
                 head: crate::partition::fmt_atom(head),
                 rule: format!("r{rule}"),
@@ -970,7 +970,7 @@ pub mod file {
         bindings
             .filter(|(_, v)| !crate::stuck::has_null(v))
             .map(|(k, v)| {
-                let j = key.stored(plan_print::shown_value(v, r), || {
+                let j = key.stored(report::shown_value(v, r), || {
                     serde_json::to_vec(&crate::engine::value_to_json(v)).unwrap_or_default()
                 });
                 (k.clone(), j)
@@ -990,7 +990,7 @@ pub mod file {
             .filter_map(|a| match a.args.as_slice() {
                 [Term::Val(Value::Str(l)), Term::Val(v)] => Some(Resolved {
                     null: l.clone(),
-                    value: key.stored(plan_print::shown_value(v, r), || {
+                    value: key.stored(report::shown_value(v, r), || {
                         serde_json::to_vec(&crate::engine::value_to_json(v)).unwrap_or_default()
                     }),
                 }),

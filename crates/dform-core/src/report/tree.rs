@@ -1,10 +1,11 @@
-//! `dform why`: a fact's derivation tree, read from the provenance circuit
-//! (E §3.3). Each fact prints with the firing that derived it (rule id and
-//! text, the rule's bindings) and that firing's children, recursively; a
-//! given fact prints with where it came from. An aggregate prints every
-//! contribution with its rank and owner. A fact with several alternatives
-//! shows the first and `...` for the rest unless `all`; a fact already
-//! expanded above prints `(see above)`.
+//! The derivation printer (R-63): `dform why`, and under each deformation
+//! of `plan --why` and `diff --since`: a fact's derivation tree, read from
+//! the provenance circuit (E §3.3). Each fact prints with the firing that
+//! derived it (rule id and text, the rule's bindings) and that firing's
+//! children, recursively; a given fact prints with where it came from. An
+//! aggregate prints every contribution with its rank and owner. A fact
+//! with several alternatives shows the first and `...` for the rest unless
+//! `all`; a fact already expanded above prints `(see above)`.
 //!
 //! An `attr` or `arg` pattern may name part of an object attribute, by a
 //! dotted path (`"tags.team"`) or an object value (`{team: "platform"}`):

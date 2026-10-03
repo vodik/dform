@@ -16,10 +16,10 @@ use dform_core::ast::{Atom, Lit, Span, Stmt, Term};
 use dform_core::circuit::{Leaf, NodeId, View};
 use dform_core::engine::{self, Reference};
 use dform_core::lattice::Rank;
+use dform_core::report::tree;
 use dform_core::syntax::doc;
 use dform_core::syntax::{SyntaxKind, SyntaxNode, SyntaxToken};
 use dform_core::value::Value;
-use dform_core::why;
 use std::path::Path;
 
 /// What is written at a place: a rule (its index), an `attr` read in a
@@ -110,7 +110,7 @@ pub fn targets(e: &Evaluated, in_file: &dyn Fn(u32) -> bool, at: usize) -> Vec<N
                 // A rule that never fired read nothing: the attributes its
                 // literal matches.
                 if found.len() == before
-                    && let Ok(matched) = why::find(atom, &e.res.facts)
+                    && let Ok(matched) = tree::find(atom, &e.res.facts)
                 {
                     for (a, _) in matched {
                         if let Some(n) = c.fact_id(&engine::circuit_fact(&a)) {
@@ -204,7 +204,7 @@ fn up(e: &Evaluated, n: NodeId) -> Vec<NodeId> {
 
 /// `dform why`'s text for each fact node, one after another.
 pub fn why_text(e: &Evaluated, facts: &[NodeId]) -> String {
-    let printer = why::Printer {
+    let printer = tree::Printer {
         circuit: &e.res.circuit,
         redact: &e.redact,
         all: false,
