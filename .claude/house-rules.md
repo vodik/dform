@@ -12,7 +12,8 @@
 - Every behaviour change ships with a test that fails with the change reverted, and
   the report says you checked.
 - Snapshot tests live under tests/golden/; accept with the documented command only.
-- New CLI flags are documented in README.md in the same commit.
+- New CLI flags are documented in docs/reference.md in the same commit; the README is the
+  introduction and changes only when the surface it describes does.
 - No new dependencies without naming them in the report (insta, logos, ariadne are pre-approved).
 - Delete code the ticket says to delete; do not leave the old path behind a flag.
 - Rust 2024 edition, rustfmt defaults, no clippy warnings on files you touch.

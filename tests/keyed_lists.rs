@@ -38,7 +38,7 @@ fn has(r: &Run, lines: &[&str]) {
     }
 }
 
-/// README.next's policy: one `@default` limits contribution per container,
+/// README's policy: one `@default` limits contribution per container,
 /// by the container's key; a container's own limits win.
 #[test]
 fn an_indexed_default_writes_every_element_and_yields_to_its_own() {

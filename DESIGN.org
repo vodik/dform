@@ -118,6 +118,39 @@ conflict or a stuck read, never a printed byte. Argued, not tested. Add a
 test with a deliberately mislabelled provider schema (sensitive value
 declared public) through plan output, plan file, state, log, =why=, and
 =dform query=. State the property as a claim until it passes.
+(2026-10-03: tests/secrets.rs now drives a mislabelled schema through plan,
+state, show, query, --json and the policy messages; tests/inspection_why.rs
+and tests/inspection_query.rs cover =why= and =query=. Probably closable.)
+
+** TODO [#A] The deployment key is unwrapped and unrotatable
+Found writing the README's secrets section (2026-10-03). Both secret
+mechanisms rest on one 32-byte =state.key=: =random.*= is HKDF of it
+(=functions::random=), and a sealed =memo.first= is XChaCha20-Poly1305
+under a key derived from it (=secrets::seal=). It is made on first use
+(=zset::file::Key::load_or_create=), written =0600= by the local backend,
+and sits beside the state it protects.
+*The gap.* Reading =state.json= alone reveals nothing, which is a real
+improvement on Terraform: a copy, a backup or a pasted file leaks no
+password. But whoever takes the directory takes the key, and with it
+recomputes every derived secret and opens every seal. Against an attacker
+with the state's storage we are one step from Terraform, not a class
+better. The claim to make in public is "not written to state", never
+"never hits disk".
+*Two pieces, neither built.*
+- *Wrapping.* The key is held by something outside the state: a KMS key
+  (the s3 backend's bucket already has IAM; =aws:kms= is the obvious
+  first), a passphrase for local development, or an external reference in
+  =dform.toml= beside =backend=. Local dev should reach the protection
+  Terraform gets from an encrypted state before this is sold as stronger.
+- *Rotation.* Rotating =state.key= today changes every derived value at
+  once, so it is a credential rotation across the whole deployment, not a
+  key rotation. Sealed memos can be re-sealed (open under the old key,
+  seal under the new); derived values cannot be preserved by
+  construction, which may mean =random.*= needs a generation counter in
+  its info string so a rotation of the wrapping key is not a rotation of
+  every password.
+*Until then* the README says secret handling is the newest and least
+exercised part of the design, and names both gaps.
 
 ** TODO [#B] First real target: Kubernetes operator niche
 One provider, an OpenAPI schema rich enough to derive classes and merge

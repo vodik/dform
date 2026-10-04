@@ -26,7 +26,7 @@ fn deletes(name: &str, checks: &str) -> common::Run {
 }
 
 /// `requires_approval(sg, ..) where deformation(action, sg, _), sg in T`
-/// (README.next): the type test passes a delete, in either order.
+/// (README): the type test passes a delete, in either order.
 #[test]
 fn in_a_type_tests_a_bound_reference() {
     for checks in [

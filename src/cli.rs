@@ -1,4 +1,4 @@
-//! The command line (`dform`, README.md). `main` takes the backend the
+//! The command line (`dform`, docs/reference.md). `main` takes the backend the
 //! run reaches its providers through.
 
 use crate::ast::Atom;
