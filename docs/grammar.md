@@ -719,6 +719,13 @@ marked, and `--set k=v` at `@override` ("Giving inputs").
 `output k [: T] = t [where B]` hands a value out (H-7): read as
 `n.k` from a copy or a used module, `c[t].k` from every copy, and
 `stack[k=v].k` from another stack's deployment.
+An input typed by a resource type, a provider's (`input namespace:
+k8s.namespace`) or the program's, is typed `ref(T)`: it takes a
+reference to a resource of `T` (`namespace = shop`), and one of another
+type is an error at the block that gives it. A dotted name a used module
+declares as a type alias is that alias (`input env: types.environment`),
+and a name in a namespace whose every type the compiler knows (`net`)
+must be one of them.
 
 An object input is declared by its fields (R-54): `input nodes { flavor:
 string = "b3-8", count: int = 1 check 1 <= count <= 3, pool: { size: int }

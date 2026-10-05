@@ -1812,7 +1812,7 @@ impl<'u> Lowerer<'u> {
                 // `input k { f: T [= d] [check B] .. }` (R-54).
                 let fields = self.input_fields(n, scope, outer)?;
                 let ty = match node(n, TYPE_EXPR) {
-                    Some(t) => self.type_expr(&t),
+                    Some(t) => self.input_type(&t),
                     None => crate::inputs::fields_type(&fields),
                 };
                 let key = is_key(n);
@@ -1968,7 +1968,7 @@ impl<'u> Lowerer<'u> {
                 }
                 let fields = self.input_fields(&a, scope, outer)?;
                 let ty = match node(&a, TYPE_EXPR) {
-                    Some(t) => self.type_expr(&t),
+                    Some(t) => self.input_type(&t),
                     None => crate::inputs::fields_type(&fields),
                 };
                 let mut rc = self.rc(&a, scope, outer);
@@ -2239,6 +2239,44 @@ impl<'u> Lowerer<'u> {
 
     fn type_expr(&mut self, n: &SyntaxNode) -> TypeExpr {
         self.type_expr_in(n, true)
+    }
+
+    /// An input's type: a resource type `T` is `ref(T)`, a reference to a
+    /// resource of it (`input namespace: k8s.namespace`), wherever a type
+    /// alias does not name it.
+    fn input_type(&mut self, n: &SyntaxNode) -> TypeExpr {
+        let t = self.type_expr(n);
+        self.refs_of(t)
+    }
+
+    /// `t` with each dotted name that is no alias read as `ref(T)`: a type
+    /// of a namespace the compiler closes must be one it knows, and a name
+    /// under a used module is a missing alias, both left to `check_type`.
+    fn refs_of(&self, t: TypeExpr) -> TypeExpr {
+        match t {
+            TypeExpr::Name(n) => {
+                let ns = n.split('.').next().unwrap_or_default();
+                let module = self.decls.modules.contains_key(ns)
+                    || self
+                        .decls
+                        .scopes
+                        .iter()
+                        .any(|s| s.uses.contains_key(ns) || s.components.contains_key(ns));
+                let known = self.decls.types.contains(&n) || !self.decls.closed.contains(ns);
+                if n.contains('.') && known && !module {
+                    TypeExpr::Apply("ref".into(), vec![TypeExpr::Name(n)])
+                } else {
+                    TypeExpr::Name(n)
+                }
+            }
+            TypeExpr::Apply(n, args) if n != "enum" && n != "ref" => {
+                TypeExpr::Apply(n, args.into_iter().map(|a| self.refs_of(a)).collect())
+            }
+            TypeExpr::Object(fs) => {
+                TypeExpr::Object(fs.into_iter().map(|(k, t)| (k, self.refs_of(t))).collect())
+            }
+            t => t,
+        }
     }
 
     /// `type_expr`; `aliases`: a bare name may be a type alias (not in an
