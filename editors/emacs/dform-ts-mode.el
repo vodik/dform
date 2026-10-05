@@ -30,7 +30,12 @@
 ;;   `dform-select-environment' and `dform-why-at-point', wired to
 ;;   `eglot-execute-command'.  Start the server with `M-x eglot' in a
 ;;   .df buffer; it runs `dform lsp' from the project, and the commands
-;;   send `dform.selectEnvironment' and `dform.why' to it.
+;;   send `dform.selectEnvironment' and `dform.why' to it.  Through
+;;   eglot, xref (`M-.', `M-?'; evil's `gd', `gr') finds what a name
+;;   denotes across the project's files, through `use' and instance
+;;   scopes (`config.region', `app_db.conn'), a std function's
+;;   signature line and a provider type's schema line (docs/reference.md
+;;   "Language server").
 ;;
 ;; Installation (straight.el, this repository checked out locally):
 ;;

@@ -148,6 +148,82 @@ indenting leaves its lines as written."
       (indent-region (point-min) (point-max))
       (should (equal (buffer-string) before)))))
 
+;;; Go-to-definition through `dform lsp' (R-78)
+
+(defun dform-ts-mode-test--dform ()
+  "The `dform' binary the xref tests run: $DFORM, else this worktree's
+debug build; nil when neither is there."
+  (let ((built (expand-file-name "../../../target/debug/dform" dform-ts-mode-test--dir)))
+    (cond ((getenv "DFORM") (getenv "DFORM"))
+          ((file-executable-p built) built))))
+
+(defun dform-ts-mode-test--write (root files)
+  "Write FILES, (NAME . TEXT) pairs, under ROOT."
+  (dolist (f files)
+    (let ((path (expand-file-name (car f) root)))
+      (make-directory (file-name-directory path) t)
+      (with-temp-file path (insert (cdr f))))))
+
+(defun dform-ts-mode-test--definition (needle ahead)
+  "The file and line of each definition xref finds for the name AHEAD
+characters into the first NEEDLE in the current buffer."
+  (goto-char (point-min))
+  (search-forward needle)
+  (goto-char (+ (match-beginning 0) ahead))
+  (mapcar (lambda (item)
+            (let ((loc (xref-item-location item)))
+              (cons (xref-location-group loc) (xref-location-line loc))))
+          (xref-backend-definitions
+           'eglot (xref-backend-identifier-at-point 'eglot))))
+
+(ert-deftest dform-ts-mode-test-xref-definitions ()
+  "`xref-find-definitions' through eglot and `dform lsp' finds a used
+module's item (`config.region', in config.df) and a std function's
+signature line (`inet.subnet', in the extracted std/inet.df)."
+  (dform-ts-mode-test--ensure-grammar)
+  (let ((dform (dform-ts-mode-test--dform)))
+    (skip-unless dform)
+    (require 'eglot)
+    (let* ((root (file-name-as-directory
+                  (make-temp-file
+                   (expand-file-name "xref-" dform-ts-mode-test--grammar-out-dir) t)))
+           (process-environment
+            (cons (concat "XDG_CACHE_HOME=" (expand-file-name "cache" root))
+                  process-environment))
+           (eglot-server-programs `((dform-ts-mode ,dform "lsp")))
+           ;; The project is the directory (no VCS needed).
+           (project-find-functions (list (lambda (_) (cons 'transient root))))
+           (eglot-sync-connect t)
+           (buffer nil))
+      (unwind-protect
+          (progn
+            (dform-ts-mode-test--write
+             root
+             '(("dform.toml" . "[project]\nname = \"xref\"\nedition = \"2026\"\n")
+               ("config.df" . "let region: string = \"r1\"\n")
+               ("stacks/s.df" . "use config\nlet place = config.region\nlet net = inet.subnet(inet(\"10.0.0.0/8\"), 8, 1)\n")))
+            (setq buffer (find-file-noselect (expand-file-name "stacks/s.df" root)))
+            (with-current-buffer buffer
+              (dform-ts-mode)
+              (eglot 'dform-ts-mode (cons 'transient root) 'eglot-lsp-server
+                     (list dform "lsp") "dform")
+              (should (eglot-managed-p))
+              (should (equal (dform-ts-mode-test--definition "config.region" 7)
+                             (list (cons (expand-file-name "config.df" root) 1))))
+              (let ((found (dform-ts-mode-test--definition "inet.subnet" 5)))
+                (should (= (length found) 1))
+                (should (string-suffix-p "std/inet.df" (caar found)))
+                (with-temp-buffer
+                  (insert-file-contents (caar found))
+                  (forward-line (1- (cdar found)))
+                  (should (looking-at "fn subnet("))))))
+        (when buffer
+          (with-current-buffer buffer
+            (when (eglot-current-server)
+              (eglot-shutdown (eglot-current-server))))
+          (kill-buffer buffer))
+        (delete-directory root t)))))
+
 (provide 'dform-ts-mode-test)
 
 ;;; dform-ts-mode-test.el ends here
