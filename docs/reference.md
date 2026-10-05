@@ -2301,8 +2301,10 @@ examples/demo an evaluation takes about 30 ms in a release build.
   name, the one the attribute's `ref(T)` takes, R-74); on a `use` or
   `instance` path, the file (or the component in it) the path names
   (R-65), and from a name a `use` binds, its file. A std function
-  (`inet.subnet`) goes to its signature line, and a provider type
-  (`net.vpc`) to the line of its schema file that declares it: the
+  (`inet.subnet`) goes to its signature line, a provider type
+  (`net.vpc`) to the line of its schema file that declares it and an
+  attribute (`cidr = ..`, `vpc.cidr`) to its `type_attr` row; a type
+  only a provider's run time declares has none, its hover says so. The
   files shipped inside dform (`std/*.df`, the built-in schemas) are
   extracted read-only under `$XDG_CACHE_HOME/dform/` (R-24). A place
   that names nothing answers empty, never an error.

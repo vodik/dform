@@ -1979,3 +1979,38 @@ fn explain_opens_the_derivation_as_a_document() {
     assert_eq!(std::fs::read_to_string(&file).unwrap(), text);
     c.shutdown();
 }
+
+/// R-20 (amended): an attribute's definition is its schema's `type_attr`
+/// row; a type no schema declares is its provider's, said by the hover.
+#[test]
+fn an_attribute_goes_to_its_schema_row() {
+    let (_s, root) = example("demo");
+    let network = root.join("network.df");
+    let mut c = Client::start(&root, json!({}));
+    c.open(&network);
+    let found = definitions(&mut c, &root, &network, "cidr = vpc_net", 0);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(found[0].0, "schemas/fake.df");
+    assert_eq!(found[0].2, "cidr");
+
+    let stack = root.join("stacks/dform.df");
+    c.open(&stack);
+    let original = std::fs::read_to_string(&stack).unwrap();
+    c.change(
+        &stack,
+        2,
+        &format!("{original}resource fake.widget w {{}}\n"),
+    );
+    let last = original.lines().count() as u32;
+    let h = c.at("textDocument/hover", &stack, (last, 15));
+    let text = h["contents"]["value"].as_str().unwrap_or_default();
+    assert!(
+        text.contains("declared by provider fake at run time"),
+        "{h}"
+    );
+    assert_eq!(
+        c.at("textDocument/definition", &stack, (last, 15)),
+        json!([])
+    );
+    c.shutdown();
+}

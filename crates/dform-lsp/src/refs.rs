@@ -123,11 +123,76 @@ pub fn definition(
             }
         })
         .collect();
-    // A type's schema declaration beside the program's `type` blocks.
-    if let What::Type(typ) = &what {
-        out.extend(schema_type(schema_files, typ));
+    // A type's schema declaration beside the program's `type` blocks; an
+    // attribute's `type_attr` row.
+    match &what {
+        What::Type(typ) => out.extend(schema_type(schema_files, typ)),
+        What::Path => {
+            if let Some(n) = d.at(&files, path, at)
+                && n.range == n.token.text_range()
+                && let Some((typ, attr)) = attribute(&d, &n.token)
+            {
+                out.extend(schema_attr(schema_files, &typ, &attr));
+            }
+        }
+        _ => {}
     }
     out
+}
+
+/// The resource type and attribute path a path's name `t` is part of: a
+/// field of a resource block (`cidr = ..`), or what a dot reads off a
+/// resource (`vpc.cidr`); the path up to `t`.
+fn attribute(d: &Decls, t: &dform_core::syntax::SyntaxToken) -> Option<(String, String)> {
+    use dform_core::syntax::SyntaxKind;
+    let parent = t.parent()?;
+    match parent.kind() {
+        SyntaxKind::BLOCK_PATH => {
+            let block = parent.parent()?.parent()?;
+            let resource = block
+                .parent()
+                .filter(|r| r.kind() == SyntaxKind::RESOURCE)?;
+            let typ = dform_core::names::header(&resource)?.typ;
+            let mut path = Vec::new();
+            for x in parent
+                .children_with_tokens()
+                .filter_map(|e| e.into_token())
+                .filter(|x| x.kind() == SyntaxKind::IDENT)
+            {
+                path.push(x.text().to_string());
+                if &x == t {
+                    break;
+                }
+            }
+            Some((typ, path.join(".")))
+        }
+        SyntaxKind::CHAIN => match crate::cells::read_at(d, &parent, t)? {
+            (dform_core::names::Symbol::Resource(_, typ, _), path) if !path.is_empty() => {
+                Some((typ, path))
+            }
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// The `type_attr` row of a schema file that declares `typ`'s attribute
+/// `attr`: the attribute's path, quoted.
+fn schema_attr(files: &[PathBuf], typ: &str, attr: &str) -> Option<Location> {
+    files.iter().find_map(|f| {
+        let t = std::fs::read_to_string(f).ok()?;
+        let at = [
+            format!("type_attr({typ}, \"{attr}\""),
+            format!("type_attr(\"{typ}\", \"{attr}\""),
+        ]
+        .iter()
+        .filter_map(|w| t.find(w.as_str()).map(|i| i + w.len() - attr.len() - 1))
+        .min()?;
+        Some(Location::new(
+            text::uri_of(f),
+            text::range(&t, at, at + attr.len()),
+        ))
+    })
 }
 
 /// The first fact of a schema file (a provider's `schema.df`, R-24) about

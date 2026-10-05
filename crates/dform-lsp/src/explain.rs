@@ -459,7 +459,7 @@ pub fn hover_at(p: &refs::Project, path: &Path, at: usize) -> Option<String> {
         What::Path => values(&What::Path)
             .or_else(contributors)
             .or_else(|| field_doc(p, &t)),
-        What::Type(_) => type_md(p, &t),
+        What::Type(typ) => type_md(p, &t).or_else(|| run_time_type(&files, &typ)),
         What::Names(_) | What::Provider | What::Variable | What::Key | What::Other => builtin(&t)
             .map(reference_md)
             .or_else(|| output_md(&files, &t)),
@@ -697,6 +697,18 @@ fn field_doc(p: &refs::Project, t: &SyntaxToken) -> Option<String> {
     let path = path.text().to_string().replace(' ', "");
     let d = schema_doc(p, &typ, &path)?;
     Some(format!("**{typ} .{path}**\n\n{d}\n"))
+}
+
+/// A type no schema declares whose namespace is a provider's: the
+/// provider says it at run time (Kubernetes' kinds), so it has no
+/// definition to go to.
+fn run_time_type(files: &[Parsed], typ: &str) -> Option<String> {
+    let ns = typ.split('.').next()?;
+    let declared = files.iter().flat_map(|f| f.tree.descendants()).any(|n| {
+        n.kind() == SyntaxKind::PROVIDER && names::declared_name(&n).is_some_and(|x| x.text() == ns)
+    });
+    (declared && typ.contains('.'))
+        .then(|| format!("resource type `{typ}`\n\ndeclared by provider {ns} at run time\n"))
 }
 
 /// A schema type's name: its description.
