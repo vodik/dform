@@ -806,6 +806,8 @@ input at its path, a leaf by its dotted path (`db: {backup_days: 14}` is
 the document is a loader call, a selection into one, or any document
 value ("Documents"); a string is read as the input's type by its
 constructor (an `inet`, a quantity, a time, a `float`; a CSV cell as an `int` too).
+A leaf under a `map(T)` input is a key of it (`labels: {owner: ops}`
+gives `labels.owner`), read as `T`, beside the keys other ranks give.
 A leaf at a path that is no input is a deny naming the file and line and
 the inputs there are. The document is the table `set(path, value)` read
 by the file provider, one rule per input the scope gives

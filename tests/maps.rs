@@ -130,3 +130,52 @@ fn a_map_field_and_a_map_column() {
         r.stderr
     );
 }
+
+/// `set from` gives a map input each key its document has, beside the
+/// default's (the After R-38/R-39 ticket's item 3), read as the values'
+/// type (a CSV cell as an int); a leaf beside the map is still a typo.
+#[test]
+fn set_from_gives_a_map_input_its_keys() {
+    for (format, doc) in [
+        ("yaml", "labels:\n  owner: ops\nsizes:\n  a: 3\n"),
+        (
+            "json",
+            "{\"labels\": {\"owner\": \"ops\"}, \"sizes\": {\"a\": 3}}",
+        ),
+        ("toml", "[labels]\nowner = \"ops\"\n[sizes]\na = 3\n"),
+        ("csv", "path,value\nlabels.owner,ops\nsizes.a,3\n"),
+    ] {
+        let s = scratch(&format!("map-set-from-{format}"));
+        s.write(
+            "p.df",
+            &format!(
+                "\ninput labels: map(string) = {{ team: \"core\" }}\n\
+                 input sizes: map(int) = {{}}\nprovider fake\n\
+                 set from {format}(\"c.{format}\")\n\
+                 label(k, v) where (k, v) in labels\n\
+                 size(k, v) where (k, v) in sizes\n"
+            ),
+        );
+        s.write(&format!("c.{format}"), doc);
+        let r = s.run(&["query", "label(K, V)", "p.df"]).success();
+        for want in [["\"team\"", "\"core\""], ["\"owner\"", "\"ops\""]] {
+            assert!(row(&r.stdout, &want), "{format} {want:?}: {}", r.stdout);
+        }
+        let r = s.run(&["query", "size(K, V)", "p.df"]).success();
+        assert!(row(&r.stdout, &["\"a\"", "3"]), "{format}: {}", r.stdout);
+    }
+    let s = scratch("map-set-from-typo");
+    s.write(
+        "p.df",
+        "\ninput labels: map(string) = {}\nprovider fake\nset from yaml(\"c.yaml\")\n",
+    );
+    s.write("c.yaml", "labels:\n  owner: ops\nlabelz:\n  x: y\n");
+    let r = s.run(&["plan", "p.df"]).failure();
+    assert!(
+        r.stderr
+            .contains("c.yaml:4: labelz.x is not an input (its inputs: labels)")
+            && !r.stderr.contains("labels.owner"),
+        "{}",
+        r.stderr
+    );
+}

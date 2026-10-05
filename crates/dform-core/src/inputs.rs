@@ -439,16 +439,21 @@ fn map_entry<'a>(given: &[&'a Declared], k: &str) -> Option<(&'a Declared, Optio
 /// Is `t` a `map(T)` (or a secret one): an input whose keys are given
 /// one by one (`--set labels.team=x`, `set from`).
 pub fn is_map(t: &TypeExpr) -> bool {
-    map_value(t, "_").is_some()
+    map_values(t).is_some()
+}
+
+/// The type of a `map(T)`'s values, `T`; none for any other type.
+pub fn map_values(t: &TypeExpr) -> Option<&TypeExpr> {
+    map_value(t, "_").flatten()
 }
 
 /// The body that takes a key of the map input at `prefix` from a row
 /// `(key, value)`: `str.starts_with(Key, "prefix."), Out = __under(Key,
 /// "prefix", Value)`, `Out` the entry as an object under the input
 /// (`{team: V}` for `labels.team`).
-pub fn map_entry_lits(key: &Term, prefix: &str, value: Term, out: &str) -> Vec<crate::ast::Lit> {
+pub fn map_entry_lits(key: &Term, prefix: &str, value: Term, out: &str) -> [crate::ast::Lit; 2] {
     let s = |x: &str| Term::Val(Value::Str(x.to_string()));
-    vec![
+    [
         crate::ast::Lit::Pos(crate::ast::atom(
             "str.starts_with",
             vec![key.clone(), s(&format!("{prefix}."))],

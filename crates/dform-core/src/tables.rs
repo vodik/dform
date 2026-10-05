@@ -906,8 +906,10 @@ fn toml_value(v: toml::Value) -> Result<Value> {
 /// stack (`S` is `""`) every input it addresses but a key, its own and its used
 /// modules' (`db.backup_days`, `traefik.acme_email`), in a module its own;
 /// a string read as the input's type by its constructor (`inet(V)`). A
-/// leaf at any other path is a deny naming it, where the file has it, and
-/// the inputs there are.
+/// map input (`labels: map(string)`) has a second rule, for the leaves
+/// under it: the key's entry at the input's path (`inputs::map_entry_lits`),
+/// so it stays one cell. A leaf at any other path is a deny naming it,
+/// where the file has it, and the inputs there are.
 /// Each of those inputs is one the program gives (`Declared::given`).
 pub fn expand_set_from(program: Program, declared: &mut [crate::inputs::Declared]) -> Program {
     let is_doc = |l: &Lit| {
@@ -971,24 +973,9 @@ pub fn expand_set_from(program: Program, declared: &mut [crate::inputs::Declared
                     l => l.clone(),
                 })
                 .collect();
-            // A document's text read as the leaf's type, by its
-            // constructor: a CIDR, a quantity, a time, a float (from an
-            // int too); and a CSV cell, all text, as an int too.
             let csv = parse_name(&ext.pred).is_some_and(|(f, _)| f == "csv");
-            if let TypeExpr::Name(n) = &d.decl.ty
-                && (matches!(
-                    n.as_str(),
-                    "inet" | "ip" | "float" | "bytes" | "cpu" | "duration" | "time"
-                ) || (csv && n == "int"))
-            {
-                let parsed = format!("{v}__{n}");
-                body.push(Lit::Eq(
-                    Term::Var(parsed.clone()),
-                    Term::Func {
-                        name: n.clone(),
-                        args: vec![Term::Var(v.clone())],
-                    },
-                ));
+            if let Some((parsed, l)) = read_leaf(&d.decl.ty, v, csv) {
+                body.push(l);
                 head.args[3] = Term::Var(parsed);
             }
             // The core form's path, as `transform::lower_contributions`
@@ -1002,8 +989,49 @@ pub fn expand_set_from(program: Program, declared: &mut [crate::inputs::Declared
             head.args[3] = value;
             out.push(Stmt::Rule(RuleStmt { head, body }));
             known.insert((scope.clone(), path.to_string()));
+            // A leaf under a map input (`labels.team`) is its key: the
+            // entry `{team: V}` at the input's own path, so the input
+            // stays one cell (the path is not the row's).
+            if let Some(elem) = crate::inputs::map_values(&d.decl.ty) {
+                let mut head = r.head.clone();
+                head.args[1] = s(cell);
+                let read = read_leaf(elem, v, csv);
+                let leaf = read
+                    .as_ref()
+                    .map_or(v.clone(), |(parsed, _)| parsed.clone());
+                let entry = format!("{v}__entry");
+                let [under, at] = crate::inputs::map_entry_lits(
+                    &Term::Var(p.clone()),
+                    path,
+                    Term::Var(leaf),
+                    &entry,
+                );
+                // The key's test before its value is read as the type.
+                let mut body = r.body.clone();
+                body.push(under);
+                body.extend(read.map(|(_, l)| l));
+                body.push(at);
+                let (top, value) = crate::transform::normalize_contribution(
+                    crate::modules::INPUT,
+                    &d.decl.name,
+                    Term::Var(entry),
+                );
+                head.args[2] = s(&top);
+                head.args[3] = value;
+                out.push(Stmt::Rule(RuleStmt { head, body }));
+            }
         }
         let mut body = r.body.clone();
+        // A map input's keys are no typo.
+        for (path, _, d) in &inputs {
+            if crate::inputs::is_map(&d.decl.ty) {
+                body.push(Lit::Not(atom(
+                    "str.starts_with",
+                    vec![Term::Var(p.clone()), s(&format!("{path}."))],
+                    r.head.span,
+                )));
+            }
+        }
         body.push(Lit::Not(atom(
             KNOWN,
             vec![s(scope), Term::Var(p.clone())],
@@ -1045,6 +1073,31 @@ pub fn expand_set_from(program: Program, declared: &mut [crate::inputs::Declared
         statements: out,
         stack,
     }
+}
+
+/// A document's leaf `v` read as the input's type `ty` by its
+/// constructor: a CIDR, a quantity, a time, a float (from an int too);
+/// and a CSV cell, all text, as an int too. The variable it binds and
+/// the literal that binds it; none where the leaf is taken as it is.
+fn read_leaf(ty: &TypeExpr, v: &str, csv: bool) -> Option<(String, Lit)> {
+    let TypeExpr::Name(n) = ty else {
+        return None;
+    };
+    let read = matches!(
+        n.as_str(),
+        "inet" | "ip" | "float" | "bytes" | "cpu" | "duration" | "time"
+    ) || (csv && n == "int");
+    read.then(|| {
+        let parsed = format!("{v}__{n}");
+        let l = Lit::Eq(
+            Term::Var(parsed.clone()),
+            Term::Func {
+                name: n.clone(),
+                args: vec![Term::Var(v.to_string())],
+            },
+        );
+        (parsed, l)
+    })
 }
 
 /// `a` with variable `v` replaced by `t` in its arguments.
