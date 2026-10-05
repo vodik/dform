@@ -77,7 +77,7 @@ body block (`where { }`) separate their entries by a newline or a comma.
 
 ```
 IDENT    := [A-Za-z_][A-Za-z0-9_]*       ; case decides nothing; "_" alone is the placeholder
-STRING   := "\"" ... "\""                ; may span lines; escapes \" \\ \n \t \u{hex}; ${e} interpolates
+STRING   := "\"" ... "\""                ; may span lines; escapes \" \\ \n \t \u{hex}, \ at a line end joins; ${e} interpolates
 INT      := [0-9]+                       ; -1 is unary minus applied to 1
 QUANTITY := [0-9]+ ("." [0-9]+)? [A-Za-z][A-Za-z0-9]*   ; 1Gi 500m 1h30m 1.5Gi (R-66)
           | [0-9]+ "." [0-9]+                           ; 0.5: a float (R-75); cores in a cpu position
@@ -138,7 +138,10 @@ _), r in k8s` prints `k8s.namespace["ns"]`. A literal part may not contain
 A string may span lines (R-61), as in Lisp: its text is everything
 between the quotes, newlines and leading spaces included, and nothing is
 stripped, so what is written is what the provider gets. A hole works on
-any line. For a script or a config file indented with the program,
+any line. A `\` at a line end joins the line with the next: the
+backslash and the line break are not in the text, and the next line's
+leading whitespace is (`"a \` then `  b"` is `"a   b"`); `dform fmt`
+keeps it as written. For a script or a config file indented with the program,
 `str.dedent(s)` removes the indentation its non-blank lines share and the
 line break right after the opening quote:
 

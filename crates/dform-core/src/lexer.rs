@@ -16,7 +16,9 @@ enum Tok {
 
     #[regex(r"[A-Za-z_][A-Za-z0-9_]*")]
     Ident,
-    #[regex(r#""([^"\\]|\\.)*""#)]
+    /// A string may span lines (R-61), and `\` at a line end joins it
+    /// with the next.
+    #[regex(r#""([^"\\]|\\.|\\\r?\n)*""#)]
     String,
     #[regex(r"[0-9]+")]
     Int,

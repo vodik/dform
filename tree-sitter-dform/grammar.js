@@ -695,8 +695,10 @@ export default grammar({
       token.immediate('"'),
     ),
 
+    // `\` at a line end joins the line with the next (R-61).
     escape_sequence: _ => token.immediate(choice(
       /\\["\\nt]/,
+      /\\\r?\n/,
       /\\u\{[0-9A-Fa-f]+\}/,
       '$${',
     )),

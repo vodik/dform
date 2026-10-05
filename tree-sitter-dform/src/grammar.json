@@ -4475,6 +4475,10 @@
           },
           {
             "type": "PATTERN",
+            "value": "\\\\\\r?\\n"
+          },
+          {
+            "type": "PATTERN",
             "value": "\\\\u\\{[0-9A-Fa-f]+\\}"
           },
           {

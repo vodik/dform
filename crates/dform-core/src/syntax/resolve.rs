@@ -6995,17 +6995,23 @@ pub fn pieces(text: &str) -> Option<Vec<Piece<'_>>> {
     Some(out)
 }
 
-/// A string literal's value: escapes `\"` `\\` `\n` `\t` `\u{...}`.
+/// A string literal's value: escapes `\"` `\\` `\n` `\t` `\u{...}`, and
+/// `\` at a line end, which joins the line with the next, whose leading
+/// whitespace is kept (R-61).
 pub fn unescape(lit: &str) -> Result<String, String> {
     let inner = &lit[1..lit.len() - 1];
     let mut out = String::new();
-    let mut chars = inner.chars();
+    let mut chars = inner.chars().peekable();
     while let Some(c) = chars.next() {
         if c != '\\' {
             out.push(c);
             continue;
         }
         match chars.next() {
+            Some('\n') => {}
+            Some('\r') if chars.peek() == Some(&'\n') => {
+                chars.next();
+            }
             Some('n') => out.push('\n'),
             Some('t') => out.push('\t'),
             Some('"') => out.push('"'),
