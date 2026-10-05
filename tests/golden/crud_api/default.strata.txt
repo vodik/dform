@@ -1,6 +1,6 @@
 exit: ok
 -- stdout --
-== examples/crud-api/stacks/crud_api.df: 258 nodes, 1493 edges (369 negative), 24 strata
+== examples/crud-api/stacks/crud_api.df: 262 nodes, 1497 edges (373 negative), 24 strata
 stratum  node
 0        (arg, google.sql_database, instance)
 0        (arg, google.sql_database, name)
@@ -233,13 +233,17 @@ stratum  node
 13       (attr_base, k8s.deployment, spec)
 14       (arg, k8s.deployment, spec[])
 14       (arg, k8s.horizontal_pod_autoscaler, spec)
-14       (arg, output, ready_replicas)
-14       (arg, output, total_replicas)
+14       (arg, output, blue::ready_replicas)
+14       (arg, output, blue::total_replicas)
+14       (arg, output, green::ready_replicas)
+14       (arg, output, green::total_replicas)
 14       __neg_4
 15       (attr, k8s.deployment, spec)
 15       (attr, k8s.horizontal_pod_autoscaler, spec)
-15       (attr, output, ready_replicas)
-15       (attr, output, total_replicas)
+15       (attr, output, blue::ready_replicas)
+15       (attr, output, blue::total_replicas)
+15       (attr, output, green::ready_replicas)
+15       (attr, output, green::total_replicas)
 15       default_deny
 16       (arg, let, cutover)
 16       __neg_0
@@ -260,5 +264,5 @@ stratum  node
 22       (attr, k8s.service, spec)
 22       (attr, k8s.service, status)
 23       deny
-(258 rows)
+(262 rows)
 -- stderr --

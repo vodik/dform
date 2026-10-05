@@ -1,11 +1,12 @@
 exit: ok
 -- stdout --
-== examples/demo/stacks/dform.df: 158 nodes, 413 edges (144 negative), 13 strata
+== examples/demo/stacks/dform.df: 162 nodes, 417 edges (148 negative), 13 strata
 stratum  node
 0        (arg, iam.policy, name)
 0        (arg, iam.role, assume)
 0        (arg, iam.role, name)
 0        (arg, input, env)
+0        (arg, output, main::vpc)
 0        (want, iam.policy)
 0        (want, iam.role)
 0        (want, iam.role_policy_attachment)
@@ -30,6 +31,7 @@ stratum  node
 1        (attr, iam.role, assume)
 1        (attr, iam.role, name)
 1        (attr, input, env)
+1        (attr, output, main::vpc)
 2        (arg, input, baseline::audit)
 2        (arg, input, cidrs)
 2        (arg, input, database::backup_days)
@@ -37,7 +39,7 @@ stratum  node
 2        (arg, input, kubernetes::nodepool_max)
 2        (arg, input, kubernetes::nodepool_min)
 2        (arg, input, kubernetes::private_api)
-2        (arg, output, vpc)
+2        (arg, output, peer::vpc)
 2        (attr, iam.policy, id)
 2        (attr, iam.role, id)
 2        (attr, iam.role_policy_attachment, id)
@@ -57,7 +59,7 @@ stratum  node
 3        (attr, input, kubernetes::nodepool_max)
 3        (attr, input, kubernetes::nodepool_min)
 3        (attr, input, kubernetes::private_api)
-3        (attr, output, vpc)
+3        (attr, output, peer::vpc)
 4        (arg, compute.vm, id)
 4        (arg, compute.vm, private_ip)
 4        (arg, db.postgres, backup_days)
@@ -113,7 +115,8 @@ stratum  node
 6        (arg, net.vpc, id)
 6        (arg, net.vpc, tags)
 6        (arg, net.vpc_peering, id)
-6        (arg, output, iam_need)
+6        (arg, output, database::iam_need)
+6        (arg, output, kubernetes::iam_need)
 6        (want, net.vpc)
 6        (want, net.vpc_peering)
 6        main::vpc_net
@@ -122,7 +125,8 @@ stratum  node
 7        (attr, net.vpc, cidr)
 7        (attr, net.vpc, id)
 7        (attr, net.vpc_peering, id)
-7        (attr, output, iam_need)
+7        (attr, output, database::iam_need)
+7        (attr, output, kubernetes::iam_need)
 8        (arg, *, tags)
 8        (arg, net.subnet, cidr)
 8        (arg, net.subnet, id)
@@ -160,5 +164,5 @@ stratum  node
 11       __lc_2
 12       (attr, db.postgres, subnets)
 12       (attr, k8s.cluster, subnets)
-(158 rows)
+(162 rows)
 -- stderr --

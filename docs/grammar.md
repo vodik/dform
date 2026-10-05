@@ -218,7 +218,9 @@ Case decides nothing; a resolver does (`syntax/resolve.rs`). Resolution is
 program-wide: `loader::load_program` parses the entry file and every module
 its paths name (see "Modules"), collects the declarations of all of them,
 then lowers each: the entry as the program's top level, each module as
-itself. `parser::parse_file` and `parse_program` lower one text on its
+itself. Statement order means nothing (R-100): a read may come before
+the resource, `let`, `use` or `instance` it names, as `dform fmt` writes
+a file with its outputs first. `parser::parse_file` and `parse_program` lower one text on its
 own.
 
 What a name can denote:
@@ -896,7 +898,9 @@ two imports, each reading its own user's names.
 many times: `instance PATH NAME { k = v } [where B]` makes one copy, by
 the component's path (`instance modules.net.vpc main`, `instance net.vpc
 main` after `use modules.net`, `instance network blue` for one the file
-declares). A copy is named; its resources are `NAME/x`, its relations its
+declares; `instance k3s.k3s cluster` after `use k3s` for k3s.df's
+`component k3s`, whose copies read `k3s.k3s[t]` since `k3s` names the
+module). A copy is named; its resources are `NAME/x`, its relations its
 own, its outputs `NAME.k`, and `c[t].k` ranges over the copies of `c` the
 scope makes, `instance_of(c, user, name)` joined to their outputs. A copy
 inside a copy is scoped under it (`edge/left/vpc`). `/` is the scope

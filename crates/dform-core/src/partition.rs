@@ -77,7 +77,30 @@ impl Node {
             (Some(x), Some(y)) => x == y,
             _ => true,
         };
-        ok(&self.typ, &other.typ) && ok(&self.path, &other.path)
+        ok(&self.typ, &other.typ) && self.paths_unify(other)
+    }
+
+    /// A scoped cell's path is `scope::k` ([`type_path_node`]), `k` in
+    /// the stack's own scope and `*::k` in a scope that is not constant,
+    /// which is `k` in every scope; so is a path whose type is not
+    /// constant, since its type may be a scoped cell's.
+    fn paths_unify(&self, other: &Node) -> bool {
+        let (Some(x), Some(y)) = (&self.path, &other.path) else {
+            return true;
+        };
+        if x == y {
+            return true;
+        }
+        let split = |p: &str| match p.rsplit_once("::") {
+            Some((s, k)) => (Some(s.to_string()), k.to_string()),
+            None => (None, p.to_string()),
+        };
+        let ((sx, kx), (sy, ky)) = (split(x), split(y));
+        let any = |n: &Node, s: &Option<String>| match s {
+            Some(s) => s == "*",
+            None => n.typ.is_none(),
+        };
+        kx == ky && (any(self, &sx) || any(other, &sy))
     }
 }
 
@@ -139,19 +162,20 @@ pub fn normalize_path(typ: &Option<String>, path: &str) -> String {
 }
 
 /// The `(pred, T, P)` node of an atom whose type is column 0 and path is
-/// column 2. An input or `let` cell is partitioned by its scope too
-/// (column 1): a module instance's input `k` is the path `m.i::k`, distinct
-/// from the stack's own input `k` (scope `""`), so `instance m i { k = k }`
-/// passes one cell to another instead of reading its own aggregate. A scope
-/// that is not constant is any scope (`*`).
+/// column 2. An input, `let` or output cell is partitioned by its scope
+/// too (column 1): a module instance's input `k` is the path `m.i::k`,
+/// distinct from the stack's own input `k` (scope `""`), so `instance m i
+/// { k = k }` passes one cell to another instead of reading its own
+/// aggregate, and `output k = c.k` reads the copy's output `k` (R-100). A
+/// scope that is not constant is any scope, `*::k`.
 fn type_path_node(pred: &str, atom: &Atom) -> Node {
     let typ = const_str(&atom.args[0]);
     let path = const_str(&atom.args[2]).map(|p| normalize_path(&typ, &p));
     let path = match typ.as_deref() {
-        Some(crate::modules::INPUT | crate::modules::LET) => match const_str(&atom.args[1]) {
+        Some(t) if scoped_cell(t) => match const_str(&atom.args[1]) {
             Some(scope) if scope.is_empty() => path,
             Some(scope) => path.map(|p| format!("{scope}::{p}")),
-            None => None,
+            None => path.map(|p| format!("*::{p}")),
         },
         _ => path,
     };
@@ -160,6 +184,15 @@ fn type_path_node(pred: &str, atom: &Atom) -> Node {
         typ,
         path,
     }
+}
+
+/// Whether a cell of the pseudo-type `typ` is partitioned by its scope
+/// ([`type_path_node`]): an input's, a `let`'s, an output's.
+pub(crate) fn scoped_cell(typ: &str) -> bool {
+    matches!(
+        typ,
+        crate::modules::INPUT | crate::modules::LET | transform::OUTPUT
+    )
 }
 
 /// A contribution head `arg(T, A, P, V, Rank)` (the lowered core form):

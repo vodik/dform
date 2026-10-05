@@ -211,10 +211,16 @@ struct Scope {
     /// then, once bound, as resolved (`instances`).
     instances_written: BTreeMap<String, String>,
     instances: BTreeMap<String, String>,
-    /// Components by the name this scope reads them by: declared here
-    /// (`component network`), or instanced here (`instance postgres db`
-    /// makes `postgres[t]` readable) -> the component's path.
+    /// Components declared here (`component network`) -> the path.
     components: BTreeMap<String, String>,
+    /// Components instanced here, by their last segment (`instance
+    /// postgres db` makes `postgres[t]` readable) -> the path. A path an
+    /// `instance` or a `use` writes never reads one, so binding does not
+    /// depend on which statement comes first.
+    copied: BTreeMap<String, String>,
+    /// Instances whose component names nothing: the `instance` is the
+    /// error, and a read of its name says nothing more.
+    unbound: BTreeSet<String>,
     /// Modules used here: the name it binds -> the module's path.
     uses: BTreeMap<String, String>,
     /// Stacks used here: the name it binds -> its index in `deployed`.
@@ -830,14 +836,22 @@ impl<'u> Lowerer<'u> {
                 let path = self.module_path_of(s, &written);
                 self.decls.scopes[s].uses.insert(name, path);
             }
+        }
+        for s in 0..self.decls.scopes.len() {
             let written = self.decls.scopes[s].instances_written.clone();
             for (name, path) in written {
                 let Ok(full) = self.component_path(s, &path) else {
+                    self.decls.scopes[s].unbound.insert(name);
                     continue;
                 };
+                // A used module of the name is read by it, and its
+                // component's copies by the path (`k3s.k3s[t]`).
                 let last = path.rsplit('.').next().unwrap_or(&path).to_string();
+                let used = self.use_in(s, &last).is_some() || self.stack_in(s, &last).is_some();
                 let scope = &mut self.decls.scopes[s];
-                scope.components.entry(last).or_insert(full.clone());
+                if !used {
+                    scope.copied.entry(last).or_insert(full.clone());
+                }
                 scope.instances.insert(name, full);
             }
         }
@@ -870,22 +884,46 @@ impl<'u> Lowerer<'u> {
         let full = self.module_path_of(scope, written);
         match self.decls.modules.get(&full) {
             Some(m) if m.component => Ok(full),
-            Some(_) => Err(Box::new(Diagnostic::error(
-                Span::default(),
-                format!("{written} is a module; `use` it"),
-            )
-            .with_note(
-                "a module, a file, is imported once by `use`; `instance` copies a component, \
-                 an item `component NAME { .. }` of a module",
-            ))),
-            None if self.decls.deployed.iter().any(|d| d.path == full) => Err(Box::new(Diagnostic::error(
-                Span::default(),
-                format!("{written} is deployed by the tool; `use` it"),
-            )
-            .with_note(
-                "a stack is a module the tool uses, one deployment per key: `use` binds to its \
+            Some(_) => {
+                let mut d = Diagnostic::error(
+                    Span::default(),
+                    format!("{written} is a module; `use` it"),
+                )
+                .with_note(
+                    "a module, a file, is imported once by `use`; `instance` copies a component, \
+                     an item `component NAME { .. }` of a module",
+                );
+                // `instance k3s cluster` for k3s.df's `component k3s`.
+                let items: Vec<String> = self
+                    .decls
+                    .modules
+                    .iter()
+                    .filter(|(p, m)| {
+                        m.component
+                            && p.strip_prefix(&full)
+                                .and_then(|r| r.strip_prefix('.'))
+                                .is_some_and(|r| !r.contains('.'))
+                    })
+                    .map(|(p, _)| format!("`{written}{}`", &p[full.len()..]))
+                    .collect();
+                if !items.is_empty() {
+                    d = d.with_help(format!(
+                        "its components are instanced by their path: {}",
+                        items.join(", ")
+                    ));
+                }
+                Err(Box::new(d))
+            }
+            None if self.decls.deployed.iter().any(|d| d.path == full) => Err(Box::new(
+                Diagnostic::error(
+                    Span::default(),
+                    format!("{written} is deployed by the tool; `use` it"),
+                )
+                .with_note(
+                    "a stack is a module the tool uses, one deployment per key: `use` binds to its \
                  deployments, and `NAME[k=v].output` reads one",
-            ))),
+                ),
+            )),
             None => Err(Box::new(
                 Diagnostic::error(Span::default(), format!("no component `{written}`"))
                     .with_note("a component is an item of a module, `component NAME { .. }`"),
@@ -1207,9 +1245,21 @@ impl<'u> Lowerer<'u> {
 
     /// The component `name` reads as in scope: its path.
     fn component_in(&self, scope: usize, name: &str) -> Option<String> {
+        self.chain_of(scope).into_iter().find_map(|s| {
+            let sc = &self.decls.scopes[s];
+            sc.components
+                .get(name)
+                .or_else(|| sc.copied.get(name))
+                .cloned()
+        })
+    }
+
+    /// Whether `name` is an instance in scope whose component names
+    /// nothing: its `instance` statement is the error.
+    fn unbound_instance(&self, scope: usize, name: &str) -> bool {
         self.chain_of(scope)
             .into_iter()
-            .find_map(|s| self.decls.scopes[s].components.get(name).cloned())
+            .any(|s| self.decls.scopes[s].unbound.contains(name))
     }
 
     /// A `let`'s rows and the scope that declares it.
@@ -5607,6 +5657,11 @@ impl<'u> Lowerer<'u> {
                  name it (`env.p`)",
             );
         }
+        // A copy whose `instance` is the error reads nothing, and says so
+        // there.
+        if !rc.vars.contains_key(h) && self.unbound_instance(rc.scope, h) {
+            return Err(Skip);
+        }
         // A copy `x in network` binds (R-67): its name, `x.k` its output.
         if let Some(path) = rc.instances.get(h).cloned() {
             let v = self.var_named(rc, h, span);
@@ -5708,8 +5763,8 @@ impl<'u> Lowerer<'u> {
         }
         let quoted = format!("\"{}\"", c.fields().join("."));
         let mut d = Diagnostic::error(span, format!("unknown name `{h}`")).with_help(format!(
-            "a resource, module, input, `let` or type is declared before it is read; a string \
-             is quoted: {quoted}"
+            "no resource, module, copy, input, `let` or type in scope is named `{h}`; a \
+             string is quoted: {quoted}"
         ));
         if c.ops.iter().all(|o| matches!(o, Op::Field(..))) {
             d = d.with_fix(format!("quote it: {quoted}"), vec![(span, quoted)]);

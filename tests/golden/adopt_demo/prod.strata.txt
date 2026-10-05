@@ -3,7 +3,7 @@ exit: ok
 == examples/adopt/stacks/adopt_demo.df: 78 nodes, 143 edges (52 negative), 9 strata
 stratum  node
 0        (arg, input, env)
-0        (arg, output, vpc)
+0        (arg, output, network::vpc)
 0        (want, compute.vm)
 0        (want, db.postgres)
 0        (want, iam.policy)
@@ -35,7 +35,7 @@ stratum  node
 1        (arg, net.route, id)
 1        (arg, net.vpc_peering, id)
 1        (attr, input, env)
-1        (attr, output, vpc)
+1        (attr, output, network::vpc)
 2        (adopt, net.vpc)
 2        (arg, input, network::vpc_net)
 2        (arg, net.vpc, adopted_id)
