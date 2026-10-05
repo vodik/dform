@@ -37,21 +37,24 @@ resource aws.subnet "private-${availability_zone}" {
 
 ```
 $ dform plan
-plan: 7 deformations (7 create)
-+ aws.vpc["main"]
-  cidr_block = "10.0.0.0/16"
-+ aws.subnet["private-us-east-1a"]
-  availability_zone = "us-east-1a"
-  cidr_block = "10.0.0.0/24"
-  vpc = ?aws.vpc["main"]
-+ aws.subnet["private-us-east-1b"]
-  availability_zone = "us-east-1b"
-  cidr_block = "10.0.1.0/24"
-  vpc = ?aws.vpc["main"]
+plan: 7 changes over 1 tick
+
+tick 1  7 changes, applies now
+  + aws.vpc["main"]                         shop.df:3
+      cidr_block = 10.0.0.0/16
+  + aws.subnet["private-us-east-1a"]        shop.df:9  with availability_zone = "us-east-1a", n = 0
+      availability_zone = "us-east-1a"
+      cidr_block = 10.0.0.0/24                inet.subnet(main.cidr_block, 8, n)
+      vpc = ?aws.vpc["main"]
+  + aws.subnet["private-us-east-1b"]        shop.df:9  with availability_zone = "us-east-1b", n = 1
+      availability_zone = "us-east-1b"
+      cidr_block = 10.0.1.0/24                inet.subnet(main.cidr_block, 8, n)
+      vpc = ?aws.vpc["main"]
   ... four more
 ```
 
-A deformation is one change the plan would make.
+Every line of the plan says which statement made it and how the
+variables were bound; a changed attribute says which write won.
 The subnet block ends in a `where` clause, which makes it a rule: the
 clause is a query, and every answer is one subnet. `aws.availability_zone`
 is a table the provider answers, what Terraform calls a data source:
@@ -62,6 +65,14 @@ takes the variable of that name. `?` marks a value apply will learn:
 here the VPC itself, which does not exist yet. The `#|` line is a doc comment, which the editor
 shows and policy can read. When the region gains a
 zone, the next plan has one more subnet; nothing in the file changes.
+
+If you have run Terraform in anger, three things are different here and
+none of them is a feature flag. The plan tells you why each line is
+there and how many rounds the apply will take before you say yes. A
+policy is a query over the change set, written in the same file as the
+resources, refused with the same `why`. A value the cloud only learns at
+apply is a value now, so the cluster and what runs on it are one
+program and one plan. There is no second tool for any of these.
 
 ## One model
 
@@ -87,12 +98,12 @@ follows:
 
 ```
 $ dform plan shop env=prod
-plan: 3 deformations (1 create, 1 update, 1 delete)
+plan: 3 changes over 1 tick, 1 denied, 1 approval
 ...
-denied:
-  no deletes in prod                    aws.db_instance["reports"]
-needs approval:
-  aws.security_group["api"]             security group update
+denied
+  no deletes in prod                      aws.db_instance["reports"]    shop.df:7
+held for approval
+  aws.security_group["api"]               security group update         shop.df:8
 plan digest: sha256:4f9c1e...
 ```
 
@@ -317,8 +328,29 @@ up by the name the clause bound. Add `spoke("red")` and a slot for it,
 and red's VPC, its route table and every route to and from it all
 appear.
 
-**The plan is a database.** Every fact has a derivation and you can ask
-for it, down to the line of source or the row of a table.
+**The plan is a database, and it explains itself.** Every fact has a
+derivation, and the plan prints the short form of it on every line:
+the statement that produced the change with its bindings, the write
+that won each changed attribute, and, since the last apply, what moved
+to cause it: the row that appeared, the input that changed, the guard
+that stopped holding. A delete says what used to derive the resource
+and which of those facts is gone. For the thing that is not there,
+`why-not` names the rule that could have produced it and the first
+condition that failed, with the nearest rows that would have passed:
+
+```
+$ dform why-not 'aws.subnet["private-us-east-1c"]'
+aws.subnet["private-us-east-1c"]: no rule derives it
+  shop.df:9  resource aws.subnet "private-${availability_zone}" { .. } where aws.availability_zone("available", availability_zone, n)
+    aws.availability_zone("available", "us-east-1c", n): no row
+    nearest: ("us-east-1a", 0), ("us-east-1b", 1)
+```
+
+The limit is stated rather than papered over: `why` explains what the
+program derived, `why-not` explains what one rule failed to derive, and
+neither invents a reason for something no rule mentions. The full
+derivation, down to the line of source or the row of a table, is one
+question away:
 
 ```
 $ dform why 'aws.route["blue-to-green"]'
@@ -702,12 +734,14 @@ it, not because `policies/` is a thing. State lives in a gitignored
 `dform.state/`. A command runs on a target: a stack by name, or one
 deployment of a keyed stack, `dform plan shop env=prod`.
 
-**plan** prints the difference between the program and the world:
-creates, updates, deletes and replaces grouped by resource, what is
-pending on an unknown, what cannot be decided yet, conflicts, and the
-apply order by tick. `--json` for machines. `--why` prints under each
-change the rule and the base facts that caused it: "because
-`data/azs.yaml:3`".
+**plan** prints what will change, grouped by tick. Tick 1 applies now;
+each later tick names the values it waits on; `later` lists the rules
+that may add changes once a value is known, as the rule, never as a
+count. Every change carries the statement that made it with its
+bindings, each changed attribute the write that won, and a `because`
+line naming what moved since the last apply. `--why=none` is the bare
+diff for scripts, `--why=full` expands each change into its derivation,
+`--json` for machines.
 
 **apply** prints the plan and asks. It applies in ticks; at any tick that
 adds a resource the first plan could not name, it prints that tick's
@@ -745,8 +779,11 @@ inputs moved. `apply --approval` verifies a signed digest offline
 against the stack's trust root. `dform verify plan.json` recomputes the
 plan from the file alone, with no cloud access.
 
-**why, query, diff.** `dform why ADDR` explains a resource; `dform why
-'deny(m)'` explains a refusal. `dform query 'attr(aws.subnet, s,
+**why, why-not, query, diff.** `dform why ADDR` explains a resource;
+`dform why 'deny(m)'` explains a refusal; `dform why-not ADDR` explains
+an absence, and `plan` warns when a change would empty a relation that
+had rows at the last apply, so a broken join and a deliberate delete do
+not look alike. `dform query 'attr(aws.subnet, s,
 "availability_zone", z)'` asks the fact store anything. `dform diff
 --since 2026-09-20` explains what changed between applies, and why.
 
@@ -922,8 +959,10 @@ without a digest, no public database) as denies.
 |---------------------------------------------|-------------------------------------------|-----------------------------------------------------------|
 |a resource per value only apply knows        |`-target`, then a second run by hand       |a pending group; apply runs a second tick                  |
 |a tag on everything, overridable per resource|a variable threaded through every module   |`set r.tags.team = "platform" @default where r in resource`|
-|"why does this exist?"                       |read the source, guess                     |`dform why ADDR`                                           |
-|rules about the change set itself            |plan JSON through an external policy engine|`deformation(..)` rows the program's own denies read       |
+|"why does this exist?"                       |read the source, guess                     |every plan line says; `dform why ADDR` for the derivation  |
+|"why does this not exist?"                   |read the source, guess harder              |`dform why-not ADDR` names the condition that failed †     |
+|"how many rounds will this apply take?"      |find out during the apply                  |the plan is grouped by tick, with what each tick waits on †|
+|rules about the change set itself            |plan JSON through an external policy engine|the plan is a table the program's own denies read          |
 |routes from reachability                     |write them out, keep them in sync          |a recursive rule                                           |
 |a policy that sees inside modules            |export every value as an output            |policy reads any resource                                  |
 |a /20 per team that never moves              |a spreadsheet                              |`allocate`, pinned in state †                              |
@@ -948,8 +987,11 @@ denies read, provenance, approvals over a signed digest, secret labels
 the compiler tracks, `dform test` over the input space, keyed stacks and
 their state. `examples/` is the proof; each one is a project you can run.
 
-The four rows marked † in the table above are designed and not built,
-and so are `check --sarif` and the provider registry.
+The rows marked † in the table above are designed and not built, and
+so are `check --sarif` and the provider registry. The plan grouped by
+tick with a reason on every line, and `why-not`, are being built now;
+until they land, `plan` prints the bare diff and `plan --why` the
+derivation tree.
 
 Secret handling is the newest part and the one to treat as an
 experiment. The compiler's refusals and the redaction are tested, but
