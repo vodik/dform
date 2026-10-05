@@ -997,7 +997,8 @@ fn element_of(typ: &str, path: &str, schema: &Schema) -> Option<(String, String,
     ))
 }
 
-fn marker_of(k: &ActionKind) -> &'static str {
+/// The mark a deformation of kind `k` has in the plan: `+`, `~`, `-`.
+pub fn marker_of(k: &ActionKind) -> &'static str {
     match k {
         ActionKind::Create => "+",
         ActionKind::Adopt => ">",
@@ -1011,7 +1012,8 @@ fn marker_of(k: &ActionKind) -> &'static str {
     }
 }
 
-fn kind_name(k: &ActionKind) -> &'static str {
+/// A deformation's kind as the plan names it: `create`, `update`.
+pub fn kind_name(k: &ActionKind) -> &'static str {
     match k {
         ActionKind::Create => "create",
         ActionKind::Adopt => "adopt",

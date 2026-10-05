@@ -1778,3 +1778,204 @@ fn references_through_modules_and_copies() {
     );
     c.shutdown();
 }
+
+/// Each inlay hint of `file`, as (line from 1, label).
+fn inlays(c: &mut Client, file: &Path) -> Vec<(u64, String)> {
+    let hints = c.request(
+        "textDocument/inlayHint",
+        json!({
+            "textDocument": { "uri": uri(file) },
+            "range": { "start": { "line": 0, "character": 0 }, "end": { "line": 10000, "character": 0 } },
+        }),
+    );
+    hints
+        .as_array()
+        .unwrap_or_else(|| panic!("{hints}"))
+        .iter()
+        .map(|h| {
+            (
+                h["position"]["line"].as_u64().unwrap() + 1,
+                h["label"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect()
+}
+
+/// R-20: inlay hints of the selected deployment. At each resource
+/// header's line the plan's deformation of each object the block
+/// declares, as many in all as `dform plan` plans; after a read, its value
+/// (one per copy), a null as the plan prints it.
+#[test]
+fn inlay_hints_show_the_plan_and_values() {
+    let (_s, root) = example("demo");
+    let stack = root.join("stacks/dform.df");
+    let network = root.join("network.df");
+    let mut c = Client::start(&root, json!({}));
+    c.open(&stack);
+    let hints = inlays(&mut c, &stack);
+    for want in [
+        (15, "= \"staging\""),
+        (51, "= \"10.50.0.0/16\""),
+        (93, "+ create"),
+        (93, "= \"10.50.0.0/16\""),
+    ] {
+        assert!(
+            hints.contains(&(want.0, want.1.to_string())),
+            "{want:?} in {hints:?}"
+        );
+    }
+    let hints = inlays(&mut c, &network);
+    assert!(
+        hints.contains(&(
+            19,
+            "= main: \"10.50.0.0/16\", peer: \"10.60.0.0/16\"".to_string()
+        )),
+        "{hints:?}"
+    );
+    assert!(
+        hints.contains(&(19, "2× + create".to_string())),
+        "{hints:?}"
+    );
+
+    // As many objects as the plan has.
+    let mut files = Vec::new();
+    for e in std::fs::read_dir(&root).unwrap().flatten() {
+        if e.path().extension().is_some_and(|x| x == "df") {
+            files.push(e.path());
+        }
+    }
+    files.push(stack.clone());
+    let mut planned = 0;
+    for f in &files {
+        for (_, label) in inlays(&mut c, f) {
+            let (count, rest) = match label.split_once("× ") {
+                Some((k, rest)) => (k.parse::<usize>().unwrap(), rest.to_string()),
+                None => (1, label.clone()),
+            };
+            if ["+ ", "~ ", "- ", "-/+ "]
+                .iter()
+                .any(|m| rest.starts_with(m))
+            {
+                planned += count;
+            }
+        }
+    }
+    let out = common::dform()
+        .args(["plan", "dform"])
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&out.stdout);
+    let line = text
+        .lines()
+        .find(|l| l.starts_with("plan: "))
+        .unwrap_or_else(|| panic!("{text}"));
+    let n: usize = line["plan: ".len()..]
+        .split(' ')
+        .next()
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert_eq!(planned, n, "{line}");
+
+    // A null: as the plan prints it.
+    let original = std::fs::read_to_string(&stack).unwrap();
+    c.change(
+        &stack,
+        2,
+        &format!("{original}let db_endpoint = database.db.endpoint\n"),
+    );
+    let last = original.lines().count() as u64 + 1;
+    let hints = inlays(&mut c, &stack);
+    assert!(
+        hints.contains(&(last, "= ?db.postgres[\"database/db\"].endpoint".to_string())),
+        "{hints:?}"
+    );
+    c.shutdown();
+}
+
+/// R-20: the hover of a read (an input, a field of an object input, a
+/// copy's input, a copy's output) gives the cell's value for the selected
+/// deployment, its winning rank, each contribution with its owner, and
+/// the derivation.
+#[test]
+fn hover_gives_a_reads_value_and_its_provenance() {
+    let (_s, root) = example("demo");
+    let stack = root.join("stacks/dform.df");
+    let network = root.join("network.df");
+    let mut c = Client::start(&root, json!({}));
+    c.open(&stack);
+    let mut hover = |file: &Path, needle: &str, ahead: u32| {
+        let h = c.at("textDocument/hover", file, find(file, needle, ahead));
+        h["contents"]["value"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string()
+    };
+    let text = hover(&stack, "inet(cidrs.main)", 11);
+    for want in [
+        "**cidrs.main** = `\"10.50.0.0/16\"`",
+        "**input cidrs** = `{main: \"10.50.0.0/16\", peer: \"10.60.0.0/16\"}`",
+        "winning rank: default",
+        "- rank default: `{main: \"10.50.0.0/16\"}` by stacks/dform.df:10:15",
+        "input cidrs = {main: \"10.50.0.0/16\", peer: \"10.60.0.0/16\"}",
+    ] {
+        assert!(text.contains(want), "{want} in {text}");
+    }
+    let text = hover(&network, "cidr = vpc_net", 8);
+    for want in [
+        "**vpc_net** = `main: \"10.50.0.0/16\", peer: \"10.60.0.0/16\"`",
+        "**input main.vpc_net** = `10.50.0.0/16`",
+        "- rank normal: `10.60.0.0/16` by r",
+    ] {
+        assert!(text.contains(want), "{want} in {text}");
+    }
+    let text = hover(&stack, "network.vpc[ia].vpc", 16);
+    assert!(text.contains("**output main.vpc**"), "{text}");
+    c.shutdown();
+}
+
+/// R-20: the "Explain" code action runs `dform.why` with `document`,
+/// which writes the derivation to a file and asks the client to show it.
+#[test]
+fn explain_opens_the_derivation_as_a_document() {
+    let (_s, root) = example("demo");
+    let stack = root.join("stacks/dform.df");
+    let cache = root.parent().unwrap().join("cache");
+    let mut cmd = common::dform();
+    cmd.env("XDG_CACHE_HOME", &cache);
+    let mut c = Client::start_with(&root, json!({}), cmd);
+    c.open(&stack);
+    let at = find(&stack, "private_ip = inet.host", 0);
+    let actions = c.request(
+        "textDocument/codeAction",
+        json!({
+            "textDocument": { "uri": uri(&stack) },
+            "range": { "start": { "line": at.0, "character": at.1 }, "end": { "line": at.0, "character": at.1 } },
+            "context": { "diagnostics": [] },
+        }),
+    );
+    let explain = actions
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["title"] == "Explain (dform why)")
+        .unwrap_or_else(|| panic!("{actions}"))
+        .clone();
+    let command = &explain["command"];
+    let text = c.command(
+        command["command"].as_str().unwrap(),
+        command["arguments"].clone(),
+    );
+    let text = text.as_str().unwrap();
+    assert!(
+        text.contains("compute.vm[\"bastion\"].private_ip"),
+        "{text}"
+    );
+    let shown = c.wait("window/showDocument", |_| true);
+    let u = shown["uri"].as_str().unwrap();
+    let file = PathBuf::from(u.strip_prefix("file://").unwrap());
+    assert!(file.starts_with(&cache), "{u}");
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), text);
+    c.shutdown();
+}

@@ -488,6 +488,39 @@ impl Decls {
         }
     }
 
+    /// How an evaluation names the cells of a scope's inputs, lets and
+    /// outputs (`attr("input", S, k, V)`): `""` for the program's or a
+    /// stack's own, each copy's name for a component's, each name a `use`
+    /// binds for a module file's.
+    pub fn cell_scopes(&self, scope: &Scope) -> Vec<String> {
+        match scope.as_deref() {
+            None => vec![String::new()],
+            Some(s) => match (s.strip_prefix("component "), s.strip_prefix("module ")) {
+                (Some(c), _) => self
+                    .instances
+                    .iter()
+                    .filter(|(p, _)| last_segment(p) == c)
+                    .map(|(_, i)| i.clone())
+                    .collect(),
+                (_, Some(m)) if self.stacks.contains(m) => vec![String::new()],
+                (_, Some(m)) => self
+                    .uses
+                    .iter()
+                    .filter(|(_, p)| *p == m)
+                    .map(|(n, _)| n.clone())
+                    .collect(),
+                _ => Vec::new(),
+            },
+        }
+    }
+
+    /// The file of the stack whose own scope `scope` is, when it is one
+    /// another stack uses: only its evaluation has its cells.
+    pub fn stack_file(&self, scope: &Scope) -> Option<&PathBuf> {
+        let m = scope.as_deref()?.strip_prefix("module ")?;
+        self.stacks.contains(m).then(|| self.files.get(m)).flatten()
+    }
+
     /// The addresses a resource has, as strings name it (H-16, R-72): its
     /// name in the program's scope or a stack's; `n/name` in each copy `n`
     /// of its component or under each name its module file is used by.

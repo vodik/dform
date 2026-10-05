@@ -10,8 +10,10 @@
 
 pub mod actions;
 pub mod analysis;
+pub mod cells;
 pub mod complete;
 pub mod explain;
+pub mod inlay;
 pub mod nav;
 pub mod refs;
 pub mod rename;

@@ -2223,6 +2223,24 @@ examples/demo an evaluation takes about 30 ms in a release build.
   (`type_doc`), the winning rank and every contribution with its rank and
   owner (rule, `file:line:col`, the module used or the copy), then the
   derivation as `dform why --core` prints it.
+- *Values at point* (R-20): on a read or the declaration of an input, a
+  `let`, an output (`n.k`, `c[e].k`, `m.k`), an object input's field
+  (`cidrs.main`) or a resource's attribute (`vpc.cidr`): its value for
+  the selected deployment (one per copy, a null as the plan prints it,
+  a secret by its label), then the cell's winning rank, every
+  contribution with its rank and owner, and the derivation, as for an
+  attribute above.
+- *Inlay hints* (`textDocument/inlayHint`, R-20): at the end of each
+  resource header's line, the plan's deformation of each object the
+  block declares (`+ create`, `~ update`, `- delete`, `-/+ replace`,
+  `undeformed`, `~ pending on ?T["a"].p`; `2× + create` for a
+  component's copies), as many in all as `dform plan` plans; after each
+  read of the values above, `= value`. The client shows them or not (the
+  Emacs mode: `dform-ts-mode-inlay-hints`, off by default).
+- *Explain* (a code action wherever something is derived, R-20): runs
+  `dform.why` with `"document": true`, which writes the derivation to a
+  read-only file under `$XDG_CACHE_HOME/dform/` and asks the client to
+  show it (`window/showDocument`).
 - *Docs at point*: on a declared name, where it is declared or used, its
   declaration's first line and doc comment (docs/grammar.md "Doc
   comments"); an alias its definition; a component, in its declaration or

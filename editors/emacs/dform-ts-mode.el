@@ -35,7 +35,9 @@
 ;;   denotes across the project's files, through `use' and instance
 ;;   scopes (`config.region', `app_db.conn'), a std function's
 ;;   signature line and a provider type's schema line (docs/reference.md
-;;   "Language server").
+;;   "Language server").  The server's inlay hints (each resource's
+;;   planned deformation, a read's value) show when
+;;   `dform-ts-mode-inlay-hints' is non-nil; it is nil by default.
 ;;
 ;; Installation (straight.el, this repository checked out locally):
 ;;
@@ -395,8 +397,28 @@ a running `dform lsp' server (start it with `M-x eglot')."
                           (vector `(:textDocument ,(eglot--TextDocumentIdentifier)
                                     :position ,(eglot--pos-to-lsp-position)))))
 
+(defcustom dform-ts-mode-inlay-hints nil
+  "Whether eglot shows the dform language server's inlay hints.
+They are the selected deployment's: at each resource header the
+plan's deformation of what the block declares (`+ create',
+`undeformed'), after each read its value.  Nil turns
+`eglot-inlay-hints-mode' off in `dform-ts-mode' buffers."
+  :type 'boolean
+  :group 'languages)
+
+(declare-function eglot-inlay-hints-mode "eglot")
+(declare-function eglot-managed-p "eglot")
+
+(defun dform-ts-mode--inlay-hints ()
+  "Turn eglot's inlay hints on or off as `dform-ts-mode-inlay-hints' says."
+  (when (and (derived-mode-p 'dform-ts-mode)
+             (fboundp 'eglot-inlay-hints-mode)
+             (eglot-managed-p))
+    (eglot-inlay-hints-mode (if dform-ts-mode-inlay-hints 1 -1))))
+
 (with-eval-after-load 'eglot
-  (add-to-list 'eglot-server-programs '((dform-ts-mode) "dform" "lsp")))
+  (add-to-list 'eglot-server-programs '((dform-ts-mode) "dform" "lsp"))
+  (add-hook 'eglot-managed-mode-hook #'dform-ts-mode--inlay-hints))
 
 ;;; Major mode
 

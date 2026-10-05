@@ -10,7 +10,7 @@
 //! hover.
 
 use crate::analysis::Evaluated;
-use crate::refs;
+use crate::{cells, refs};
 use dform_core::ast::{Atom, Lit, Span, Stmt, Term};
 use dform_core::circuit::{Leaf, NodeId, View};
 use dform_core::engine::{self, Reference};
@@ -237,13 +237,20 @@ pub fn hover(e: &Evaluated, facts: &[NodeId]) -> String {
             Value::Str(s) => s.clone(),
             v => e.redact.fmt(v),
         };
-        let at = dform_core::ir::Address {
-            typ: s(&fact.args[0]),
-            name: s(&fact.args[1]),
+        let (typ, name, key) = (s(&fact.args[0]), s(&fact.args[1]), s(&fact.args[2]));
+        // A cell of an input, a let or an output as `why` names it:
+        // `input main.vpc_net`.
+        let cell = match (typ.as_str(), name.as_str()) {
+            (dform_core::modules::INPUT | dform_core::modules::LET | "output", "") => {
+                format!("{typ} {key}")
+            }
+            (dform_core::modules::INPUT | dform_core::modules::LET | "output", n) => {
+                format!("{typ} {n}.{key}")
+            }
+            _ => dform_core::ir::Address { typ, name }.attr(&key),
         };
         out.push_str(&format!(
-            "**{}** = `{}`\n\n",
-            at.attr(&s(&fact.args[2])),
+            "**{cell}** = `{}`\n\n",
             e.redact.fmt(&fact.args[3])
         ));
         if let (Value::Str(t), Value::Str(p)) = (&fact.args[0], &fact.args[2])
@@ -366,6 +373,44 @@ pub fn hover_at(p: &refs::Project, path: &Path, at: usize) -> Option<String> {
         (Some(a), Some(b)) => Some(format!("{a}\n---\n\n{b}")),
         (a, b) => a.or(b),
     };
+    // The values the selected deployment gives what is read here (R-20):
+    // the cell's value, its winning rank, every contribution with its
+    // owner and the derivation, per evaluation.
+    let in_hole = named.range != t.text_range();
+    let declaration = named.is_declaration();
+    let values = |w: &What| -> Option<String> {
+        let (sym, path) = match t.parent() {
+            _ if in_hole => return None,
+            Some(c) if c.kind() == SyntaxKind::CHAIN => cells::read_at(&d, &c, &t)?,
+            _ => match w {
+                What::Name(s, true) => (s.clone(), String::new()),
+                _ => return None,
+            },
+        };
+        let found = cells::cells(&p.evaluated, &d, &files, &sym, &path);
+        let label = cells::label(&found)?;
+        let read: String = t
+            .parent()
+            .filter(|c| c.kind() == SyntaxKind::CHAIN)
+            .map(|c| {
+                let end = usize::from(t.text_range().end() - c.text_range().start());
+                c.text().to_string()[..end].to_string()
+            })
+            .unwrap_or_else(|| t.text().to_string());
+        let mut out = format!("**{read}** = `{label}`\n\n");
+        let mut by: Vec<(&Evaluated, Vec<NodeId>)> = Vec::new();
+        for c in &found {
+            match by.iter_mut().find(|(e, _)| std::ptr::eq(*e, c.e)) {
+                Some((_, ns)) => ns.push(c.node),
+                None => by.push((c.e, vec![c.node])),
+            }
+        }
+        for (e, nodes) in by {
+            out.push_str(&format!("in {}:\n\n", e.deployment));
+            out.push_str(&hover(e, &nodes));
+        }
+        Some(out)
+    };
     let what = match named.what {
         // Of a name several resources share, the first's.
         What::Names(syms) => syms
@@ -402,14 +447,18 @@ pub fn hover_at(p: &refs::Project, path: &Path, at: usize) -> Option<String> {
                 Symbol::Instance(m, _) => joined(documented.map(item_md), module_md(&files, m)),
                 _ => documented.map(item_md),
             };
+            let w = What::Name(sym.clone(), declaration);
             match sym {
-                Symbol::Predicate(..) | Symbol::Resource(..) | Symbol::Value(..) => {
-                    joined(own, contributors())
+                Symbol::Value(..) | Symbol::Let(..) | Symbol::Field(..) | Symbol::Output(..) => {
+                    joined(own, values(&w).or_else(contributors))
                 }
+                Symbol::Predicate(..) | Symbol::Resource(..) => joined(own, contributors()),
                 _ => own,
             }
         }
-        What::Path => contributors().or_else(|| field_doc(p, &t)),
+        What::Path => values(&What::Path)
+            .or_else(contributors)
+            .or_else(|| field_doc(p, &t)),
         What::Type(_) => type_md(p, &t),
         What::Names(_) | What::Provider | What::Variable | What::Key | What::Other => builtin(&t)
             .map(reference_md)

@@ -176,13 +176,12 @@ characters into the first NEEDLE in the current buffer."
           (xref-backend-definitions
            'eglot (xref-backend-identifier-at-point 'eglot))))
 
-(ert-deftest dform-ts-mode-test-xref-definitions ()
-  "`xref-find-definitions' through eglot and `dform lsp' finds a used
-module's item (`config.region', in config.df) and a std function's
-signature line (`inet.subnet', in the extracted std/inet.df)."
+(defun dform-ts-mode-test--with-server (files file body)
+  "Write FILES, (NAME . TEXT) pairs, as a project; visit FILE in it under
+eglot and `dform lsp', and call BODY there.  The caller skips the test
+without a `dform' (`skip-unless' is ERT's, in a test's body)."
   (dform-ts-mode-test--ensure-grammar)
   (let ((dform (dform-ts-mode-test--dform)))
-    (skip-unless dform)
     (require 'eglot)
     (let* ((root (file-name-as-directory
                   (make-temp-file
@@ -197,32 +196,57 @@ signature line (`inet.subnet', in the extracted std/inet.df)."
            (buffer nil))
       (unwind-protect
           (progn
-            (dform-ts-mode-test--write
-             root
-             '(("dform.toml" . "[project]\nname = \"xref\"\nedition = \"2026\"\n")
-               ("config.df" . "let region: string = \"r1\"\n")
-               ("stacks/s.df" . "use config\nlet place = config.region\nlet net = inet.subnet(inet(\"10.0.0.0/8\"), 8, 1)\n")))
-            (setq buffer (find-file-noselect (expand-file-name "stacks/s.df" root)))
+            (dform-ts-mode-test--write root files)
+            (setq buffer (find-file-noselect (expand-file-name file root)))
             (with-current-buffer buffer
               (dform-ts-mode)
               (eglot 'dform-ts-mode (cons 'transient root) 'eglot-lsp-server
                      (list dform "lsp") "dform")
               (should (eglot-managed-p))
-              (should (equal (dform-ts-mode-test--definition "config.region" 7)
-                             (list (cons (expand-file-name "config.df" root) 1))))
-              (let ((found (dform-ts-mode-test--definition "inet.subnet" 5)))
-                (should (= (length found) 1))
-                (should (string-suffix-p "std/inet.df" (caar found)))
-                (with-temp-buffer
-                  (insert-file-contents (caar found))
-                  (forward-line (1- (cdar found)))
-                  (should (looking-at "fn subnet("))))))
+              (funcall body root)))
         (when buffer
           (with-current-buffer buffer
             (when (eglot-current-server)
               (eglot-shutdown (eglot-current-server))))
           (kill-buffer buffer))
         (delete-directory root t)))))
+
+(defconst dform-ts-mode-test--project
+  '(("dform.toml" . "[project]\nname = \"xref\"\nedition = \"2026\"\n")
+    ("config.df" . "let region: string = \"r1\"\n")
+    ("stacks/s.df" . "use config\nprovider fake\nlet place = config.region\nlet net = inet.subnet(inet(\"10.0.0.0/8\"), 8, 1)\nresource compute.vm web {}\n"))
+  "A project with a used module and a std function call.")
+
+(ert-deftest dform-ts-mode-test-xref-definitions ()
+  "`xref-find-definitions' through eglot and `dform lsp' finds a used
+module's item (`config.region', in config.df) and a std function's
+signature line (`inet.subnet', in the extracted std/inet.df)."
+  (skip-unless (dform-ts-mode-test--dform))
+  (dform-ts-mode-test--with-server
+   dform-ts-mode-test--project "stacks/s.df"
+   (lambda (root)
+     (should (equal (dform-ts-mode-test--definition "config.region" 7)
+                    (list (cons (expand-file-name "config.df" root) 1))))
+     (let ((found (dform-ts-mode-test--definition "inet.subnet" 5)))
+       (should (= (length found) 1))
+       (should (string-suffix-p "std/inet.df" (caar found)))
+       (with-temp-buffer
+         (insert-file-contents (caar found))
+         (forward-line (1- (cdar found)))
+         (should (looking-at "fn subnet(")))))))
+
+(ert-deftest dform-ts-mode-test-inlay-hints-setting ()
+  "The server's inlay hints are off unless `dform-ts-mode-inlay-hints'."
+  (skip-unless (dform-ts-mode-test--dform))
+  (dform-ts-mode-test--with-server
+   dform-ts-mode-test--project "stacks/s.df"
+   (lambda (_root)
+     (should-not (bound-and-true-p eglot-inlay-hints-mode))))
+  (let ((dform-ts-mode-inlay-hints t))
+    (dform-ts-mode-test--with-server
+     dform-ts-mode-test--project "stacks/s.df"
+     (lambda (_root)
+       (should (bound-and-true-p eglot-inlay-hints-mode))))))
 
 (provide 'dform-ts-mode-test)
 

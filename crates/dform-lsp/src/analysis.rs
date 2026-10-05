@@ -132,11 +132,25 @@ impl Problem {
     }
 }
 
+/// A deformation the plan of the selected deployment has for a resource,
+/// as `dform plan` prints it (a no-op included).
+#[derive(Debug, Clone)]
+pub struct Planned {
+    pub addr: dform_core::ir::Address,
+    pub kind: dform_core::provider::ActionKind,
+    /// The nulls it waits on, when it is held until a boundary.
+    pub on: Option<Vec<String>>,
+}
+
 /// An evaluation that got as far as facts: the policy pass's, which `dform
 /// why` reads, with the program it evaluated.
 pub struct Evaluated {
+    /// The stack's file.
+    pub file: PathBuf,
     /// `dform[env=staging] (env from its default)`.
     pub deployment: String,
+    /// The plan, when one could be made.
+    pub plan: Option<Vec<Planned>>,
     /// The stack's providers (as `--provider` names them).
     pub providers: Vec<String>,
     /// The file of each source the program's spans name.
@@ -422,12 +436,28 @@ fn run_noted(
         ..deployment::Options::new(launch)
     };
     let mut ev = located.evaluate(outputs, &opts, notes)?;
+    let plan = match &ev.policy {
+        Some(Ok(p)) => Some(
+            p.plan
+                .actions
+                .iter()
+                .map(|a| Planned {
+                    addr: a.addr.clone(),
+                    kind: a.kind.clone(),
+                    on: dform_core::report::waits_on(a, &p.sections),
+                })
+                .collect(),
+        ),
+        _ => None,
+    };
     let explained = ev.explained();
     let program = ev.evaluator.program.clone();
     problems.extend(explained.problems(&program).into_iter().map(of_core));
     let lowered = transform::lower(&program).ok();
     Ok(Evaluated {
+        file: t.file.clone(),
         deployment: ev.located.instance.describe(),
+        plan,
         providers: ev.located.loaded.providers.clone(),
         files: BTreeMap::new(),
         schema: ev.schema().clone(),

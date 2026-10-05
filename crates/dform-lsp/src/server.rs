@@ -134,6 +134,8 @@ struct Server<'c> {
     schemas: BTreeMap<Vec<String>, Schema>,
     /// Every evaluation's wall-clock time (`dform/stats`).
     timings: Vec<Duration>,
+    /// The requests sent the client.
+    asked: u64,
 }
 
 /// Work in the workspace at `root`: the command line's names and paths are
@@ -181,6 +183,7 @@ pub fn serve(conn: &Connection, opts: Options) -> Result<()> {
             "capabilities": {
                 "textDocumentSync": { "openClose": true, "change": 1, "save": {} },
                 "hoverProvider": true,
+                "inlayHintProvider": true,
                 "completionProvider": { "triggerCharacters": [".", " "] },
                 "signatureHelpProvider": { "triggerCharacters": ["(", ",", "["] },
                 "definitionProvider": true,
@@ -204,6 +207,7 @@ pub fn serve(conn: &Connection, opts: Options) -> Result<()> {
         deadline: None,
         schemas: BTreeMap::new(),
         timings: Vec::new(),
+        asked: 0,
     };
     s.run()
 }
@@ -268,6 +272,16 @@ impl Server<'_> {
             )));
     }
 
+    /// Send the client a request; its answer is not waited for.
+    fn ask(&mut self, method: &str, params: Json) {
+        self.asked += 1;
+        let id = lsp_server::RequestId::from(format!("dform-{}", self.asked));
+        let _ = self
+            .conn
+            .sender
+            .send(Message::Request(Request::new(id, method.into(), params)));
+    }
+
     fn show(&self, message: impl Into<String>) {
         self.notify(
             "window/showMessage",
@@ -321,6 +335,29 @@ impl Server<'_> {
                     Some(value) => json!({ "contents": { "kind": "markdown", "value": value } }),
                     None => Json::Null,
                 })
+            }
+            "textDocument/inlayHint" => {
+                let p: lsp_types::InlayHintParams = serde_json::from_value(req.params)?;
+                let path = self.path(&p.text_document.uri)?;
+                let root = self.root_of(&path);
+                self.fresh(&root);
+                let text = self.read(&path)?;
+                let range = (
+                    text::offset(&text, p.range.start),
+                    text::offset(&text, p.range.end),
+                );
+                let hints: Vec<Json> = crate::inlay::hints(&self.project(&root), &path, range)
+                    .into_iter()
+                    .map(|h| {
+                        json!({
+                            "position": text::position(&text, h.at),
+                            "label": h.label,
+                            "tooltip": h.tooltip,
+                            "paddingLeft": true,
+                        })
+                    })
+                    .collect();
+                Ok(Json::Array(hints))
             }
             "textDocument/signatureHelp" => {
                 let p: lsp_types::SignatureHelpParams = serde_json::from_value(req.params)?;
@@ -723,15 +760,33 @@ impl Server<'_> {
         Ok(None)
     }
 
+    /// `dform.why`: the derivation text, shown as a message; with
+    /// `"document": true` (the "Explain" code action, R-20) written to a
+    /// read-only file under the cache and shown with `window/showDocument`
+    /// instead, as a document of its own.
     fn why(&mut self, arg: Option<Json>) -> Result<Json> {
-        let p: lsp_types::TextDocumentPositionParams =
-            serde_json::from_value(arg.ok_or_else(|| anyhow!("dform.why: expected a position"))?)?;
+        let arg = arg.ok_or_else(|| anyhow!("dform.why: expected a position"))?;
+        let document = arg.get("document").and_then(Json::as_bool) == Some(true);
+        let p: lsp_types::TextDocumentPositionParams = serde_json::from_value(arg)?;
         let path = self.path(&p.text_document.uri)?;
         let found = self
             .explain(&path, p.position)?
-            .map(|(e, facts)| explain::why_text(e, &facts));
+            .map(|(e, facts)| (e.deployment.clone(), explain::why_text(e, &facts)));
         match found {
-            Some(t) => {
+            Some((deployment, t)) if document => {
+                let name: String = deployment
+                    .chars()
+                    .map(|c| if c.is_alphanumeric() { c } else { '_' })
+                    .collect();
+                let f = cached(&format!("why/{name}.txt"), &t)
+                    .ok_or_else(|| anyhow!("dform.why: no cache directory to write to"))?;
+                self.ask(
+                    "window/showDocument",
+                    json!({ "uri": text::uri_of(&f), "takeFocus": true }),
+                );
+                Ok(Json::String(t))
+            }
+            Some((_, t)) => {
                 self.show(t.clone());
                 Ok(Json::String(t))
             }
@@ -958,6 +1013,23 @@ impl Server<'_> {
                 "kind": "quickfix",
                 "diagnostics": fixes,
                 "edit": { "changes": changes },
+            }));
+        }
+        // "Explain": what is derived here, as `dform why` prints it, in a
+        // document of its own (R-20).
+        let position = p.range.start;
+        if self.explain(&path, position)?.is_some() {
+            out.push(json!({
+                "title": "Explain (dform why)",
+                "command": {
+                    "title": "Explain (dform why)",
+                    "command": WHY,
+                    "arguments": [{
+                        "textDocument": { "uri": p.text_document.uri },
+                        "position": position,
+                        "document": true,
+                    }],
+                },
             }));
         }
         Ok(Json::Array(out))
