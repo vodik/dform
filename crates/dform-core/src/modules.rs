@@ -1225,35 +1225,46 @@ fn given_rules(scope: &str, address: &str, i: &InputDecl) -> Vec<Stmt> {
         true => crate::transform::NORMAL,
         false => crate::ast::Rank::Override.name(),
     };
-    input_paths(i)
-        .into_iter()
-        .map(|p| {
-            // A leaf's at its field, an object's at the input.
-            let span = leaves
-                .iter()
-                .find(|l| l.name == p)
-                .map_or(i.span, |l| l.span);
-            let v = Term::Var("V".into());
-            Stmt::Rule(RuleStmt {
-                head: atom(
-                    "arg",
-                    vec![
-                        str_term(INPUT),
-                        str_term(scope),
-                        str_term(&p),
-                        v.clone(),
-                        str_term(rank),
-                    ],
-                    span,
-                ),
-                body: vec![Lit::Pos(atom(
-                    "input",
-                    vec![str_term(&join_scope(address, &p)), v],
-                    span,
-                ))],
-            })
-        })
-        .collect()
+    let mut out = Vec::new();
+    for p in input_paths(i) {
+        // A leaf's at its field, an object's at the input.
+        let leaf = leaves.iter().find(|l| l.name == p);
+        let span = leaf.map_or(i.span, |l| l.span);
+        let v = Term::Var("V".into());
+        let head = |v: Term| {
+            atom(
+                "arg",
+                vec![
+                    str_term(INPUT),
+                    str_term(scope),
+                    str_term(&p),
+                    v,
+                    str_term(rank),
+                ],
+                span,
+            )
+        };
+        out.push(Stmt::Rule(RuleStmt {
+            head: head(v.clone()),
+            body: vec![Lit::Pos(atom(
+                "input",
+                vec![str_term(&join_scope(address, &p)), v.clone()],
+                span,
+            ))],
+        }));
+        // A map's key, `input("labels.team", V)`: the entry `{team: V}`.
+        if leaf.is_some_and(|l| crate::inputs::is_map(&l.ty)) {
+            let k = Term::Var("K".into());
+            let mut body = vec![Lit::Pos(atom("input", vec![k.clone(), v.clone()], span))];
+            let prefix = join_scope(address, &p);
+            body.extend(crate::inputs::map_entry_lits(&k, &prefix, v, "E"));
+            out.push(Stmt::Rule(RuleStmt {
+                head: head(Term::Var("E".into())),
+                body,
+            }));
+        }
+    }
+    out
 }
 
 /// Every head atom of a statement (a resource's are its `want` and `arg`).

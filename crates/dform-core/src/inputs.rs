@@ -166,7 +166,7 @@ pub fn check_type(t: &TypeExpr) -> Result<(), String> {
                 }
                 Ok(())
             }
-            ("list" | "set" | "secret", [x]) => check_type(x),
+            ("list" | "set" | "map" | "secret", [x]) => check_type(x),
             ("ref", _) => Ok(()),
             _ => Err(format!("unknown type {}", type_text(t))),
         },
@@ -202,6 +202,10 @@ pub fn has_type(t: &TypeExpr, v: &Value) -> bool {
             }),
             ("list" | "set", [x]) => match v {
                 Value::List(xs) => xs.iter().all(|e| has_type(x, e)),
+                _ => false,
+            },
+            ("map", [x]) => match v {
+                Value::Obj(m) => m.values().all(|e| has_type(x, e)),
                 _ => false,
             },
             ("secret", [x]) => has_type(x, v),
@@ -255,6 +259,9 @@ pub fn coerce(t: &TypeExpr, v: Value) -> Value {
             if (n == "list" || n == "set") && xs.len() == 1 =>
         {
             Value::List(vs.into_iter().map(|v| coerce(&xs[0], v)).collect())
+        }
+        (TypeExpr::Apply(n, xs), Value::Obj(m)) if n == "map" && xs.len() == 1 => {
+            Value::Obj(m.into_iter().map(|(k, v)| (k, coerce(&xs[0], v))).collect())
         }
         (TypeExpr::Object(fs), Value::Obj(m)) => Value::Obj(
             m.into_iter()
@@ -416,6 +423,65 @@ fn no_field(given: &[&Declared], k: &str) -> Option<String> {
     None
 }
 
+/// The map input a key of which `k` is (`labels.team` of `labels:
+/// map(string)`), and the type its value at `k` has: the map's values',
+/// or a nested map's; `None` past them.
+fn map_entry<'a>(given: &[&'a Declared], k: &str) -> Option<(&'a Declared, Option<&'a TypeExpr>)> {
+    given.iter().find_map(|d| {
+        let rest = k
+            .strip_prefix(d.address.as_deref()?)?
+            .strip_prefix('.')
+            .filter(|r| !r.is_empty())?;
+        Some((*d, map_value(&d.decl.ty, rest)?))
+    })
+}
+
+/// Is `t` a `map(T)` (or a secret one): an input whose keys are given
+/// one by one (`--set labels.team=x`, `set from`).
+pub fn is_map(t: &TypeExpr) -> bool {
+    map_value(t, "_").is_some()
+}
+
+/// The body that takes a key of the map input at `prefix` from a row
+/// `(key, value)`: `str.starts_with(Key, "prefix."), Out = __under(Key,
+/// "prefix", Value)`, `Out` the entry as an object under the input
+/// (`{team: V}` for `labels.team`).
+pub fn map_entry_lits(key: &Term, prefix: &str, value: Term, out: &str) -> Vec<crate::ast::Lit> {
+    let s = |x: &str| Term::Val(Value::Str(x.to_string()));
+    vec![
+        crate::ast::Lit::Pos(crate::ast::atom(
+            "str.starts_with",
+            vec![key.clone(), s(&format!("{prefix}."))],
+            Span::default(),
+        )),
+        crate::ast::Lit::Eq(
+            Term::Var(out.to_string()),
+            Term::Func {
+                name: "__under".into(),
+                args: vec![key.clone(), s(prefix), value],
+            },
+        ),
+    ]
+}
+
+/// The type of the value at `rest` under a `map(T)`: `T` for a key, a
+/// nested map's values' deeper; `Some(None)` past the maps; `None` when
+/// `t` is no map.
+fn map_value<'t>(t: &'t TypeExpr, rest: &str) -> Option<Option<&'t TypeExpr>> {
+    let TypeExpr::Apply(n, xs) = t else {
+        return None;
+    };
+    let [x] = xs.as_slice() else { return None };
+    match n.as_str() {
+        "secret" => map_value(x, rest),
+        "map" => Some(match rest.split_once('.') {
+            None => Some(x),
+            Some((_, deeper)) => map_value(x, deeper).flatten(),
+        }),
+        _ => None,
+    }
+}
+
 /// `v` at the path `rest` (`a.b`) of an object, if it has it.
 fn at_path<'v>(v: &'v Value, rest: &str) -> Option<&'v Value> {
     rest.split('.').try_fold(v, |v, seg| match v {
@@ -521,6 +587,25 @@ pub fn set_facts(declared: &[Declared], set: &[(String, Value)]) -> Result<Vec<A
             v
         } else if !leaves.is_empty() {
             object_value(k, v.clone(), &leaves)?
+        } else if let Some((d, elem)) = map_entry(&own, k) {
+            // A key of a map input (`labels.team`), read as its values'
+            // type; deeper than its values' maps, as given, for the
+            // input's own check (`violations`).
+            match elem {
+                Some(t) => {
+                    let v = coerce(t, v.clone());
+                    if !has_type(t, &v) {
+                        anyhow::bail!(
+                            "--set {k}={}: input {} is {}",
+                            crate::partition::fmt_bare(&v),
+                            d.address.as_deref().unwrap_or_default(),
+                            type_text(&d.decl.ty)
+                        );
+                    }
+                    v
+                }
+                None => v.clone(),
+            }
         } else if let Some(msg) = no_field(&own, k) {
             anyhow::bail!("--set {k}: {msg}");
         } else {

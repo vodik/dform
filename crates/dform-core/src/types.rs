@@ -43,6 +43,8 @@ pub enum Ty {
     Ref(String),
     /// `list(T)`, `set(T)`.
     List(Box<Ty>),
+    /// `map(T)`: an object with open keys, each value a `T`.
+    Map(Box<Ty>),
     /// `secret(T)`.
     Secret(Box<Ty>),
     /// `enum(a, b, ..)`.
@@ -52,8 +54,8 @@ pub enum Ty {
     /// a function parameter only), the quantities `bytes`, `cpu`,
     /// `duration`, and `time`.
     Scalar(String),
-    /// Anything the check does not judge (`map`, `object`, `any`, an
-    /// untyped `list`).
+    /// Anything the check does not judge (an untyped `map`, `object`,
+    /// `any`, an untyped `list`).
     Any,
 }
 
@@ -76,6 +78,7 @@ impl Ty {
         match head.trim() {
             "ref" => Ty::Ref(inner.trim().trim_matches('"').to_string()),
             "list" | "set" => Ty::List(Box::new(Ty::parse(inner))),
+            "map" => Ty::Map(Box::new(Ty::parse(inner))),
             "secret" => Ty::Secret(Box::new(Ty::parse(inner))),
             "enum" => Ty::Enum(
                 inner
@@ -92,7 +95,7 @@ impl Ty {
     fn measured(&self) -> bool {
         match self {
             Ty::Scalar(s) => measured(s),
-            Ty::Secret(t) | Ty::List(t) => t.measured(),
+            Ty::Secret(t) | Ty::List(t) | Ty::Map(t) => t.measured(),
             _ => false,
         }
     }
@@ -110,6 +113,7 @@ impl std::fmt::Display for Ty {
         match self {
             Ty::Ref(t) => write!(f, "ref({t})"),
             Ty::List(t) => write!(f, "list({t})"),
+            Ty::Map(t) => write!(f, "map({t})"),
             Ty::Secret(t) => write!(f, "secret({t})"),
             Ty::Enum(ms) => write!(
                 f,
@@ -367,6 +371,14 @@ pub fn mismatch(ty: &Ty, t: &Term) -> Option<String> {
             .iter()
             .find_map(|x| mismatch(inner, &Term::Val(x.clone()))),
         (Ty::List(_), Term::Val(v)) => Some(format!("is {ty}, not {}", shown_literal(v))),
+        (Ty::Map(inner), Term::Obj(m)) => m.iter().find_map(|(k, x)| {
+            mismatch(inner, x).map(|why| format!("is {ty}: its key {k:?} {why}"))
+        }),
+        (Ty::Map(inner), Term::Val(Value::Obj(m))) => m.iter().find_map(|(k, x)| {
+            mismatch(inner, &Term::Val(x.clone()))
+                .map(|why| format!("is {ty}: its key {k:?} {why}"))
+        }),
+        (Ty::Map(_), Term::Val(v)) => Some(format!("is {ty}, not {}", shown_literal(v))),
         (Ty::Ref(want), Term::Val(v)) => Some(format!(
             "takes a ref({want}): a resource, by its name, `{want}[\"a\"]` or a variable, not {}",
             shown_literal(v)
@@ -430,6 +442,7 @@ pub fn of_expr(t: &TypeExpr) -> Ty {
         TypeExpr::Apply(n, args) => match (n.as_str(), args.as_slice()) {
             ("ref", [TypeExpr::Name(t) | TypeExpr::Str(t)]) => Ty::Ref(t.clone()),
             ("list" | "set", [x]) => Ty::List(Box::new(of_expr(x))),
+            ("map", [x]) => Ty::Map(Box::new(of_expr(x))),
             ("secret", [x]) => Ty::Secret(Box::new(of_expr(x))),
             ("enum", xs) => Ty::Enum(
                 xs.iter()
@@ -499,6 +512,9 @@ fn read_as(ty: &Ty, t: Term) -> Term {
         (Ty::Secret(inner), t) => read_as(inner, t),
         (Ty::List(inner), Term::List(xs)) => {
             Term::List(xs.into_iter().map(|x| read_as(inner, x)).collect())
+        }
+        (Ty::Map(inner), Term::Obj(m)) => {
+            Term::Obj(m.into_iter().map(|(k, x)| (k, read_as(inner, x))).collect())
         }
         (_, t) => t,
     }
@@ -890,6 +906,10 @@ mod tests {
             Ty::List(Box::new(Ty::Ref("net.subnet".into())))
         );
         assert_eq!(Ty::parse("map"), Ty::Any);
+        assert_eq!(
+            Ty::parse("map(string)"),
+            Ty::Map(Box::new(Ty::Scalar("string".into())))
+        );
         assert_eq!(Ty::parse("list"), Ty::Any);
         assert_eq!(
             Ty::parse("enum(\"a\", \"b\")"),

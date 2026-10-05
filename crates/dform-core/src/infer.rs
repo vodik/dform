@@ -343,6 +343,9 @@ impl Pass<'_> {
                 self.s.union(col, n);
             }
             Term::Val(v) => self.literal(col, v, span),
+            Term::Obj(_) if constant(t).is_some() => {
+                self.literal(col, &constant(t).expect("a constant"), span)
+            }
             t => {
                 self.shape_of(col, t, span);
                 self.calls(rule, t, span);
@@ -377,7 +380,8 @@ impl Pass<'_> {
 
     fn literal(&mut self, n: usize, v: &Value, span: Span) {
         self.shape_of(n, &Term::Val(v.clone()), span);
-        if kind(v).is_some() || matches!(v, Value::Str(_)) {
+        // An object is judged only by a `map(T)` column (`settle`).
+        if kind(v).is_some() || matches!(v, Value::Str(_) | Value::Obj(_)) {
             let n = self.s.find(n);
             self.s.lits[n].push(Literal {
                 value: v.clone(),
@@ -634,6 +638,19 @@ impl Pass<'_> {
     }
 }
 
+/// An object literal of constants as its value (`{ x: "big" }`).
+fn constant(t: &Term) -> Option<Value> {
+    match t {
+        Term::Val(v) => Some(v.clone()),
+        Term::Obj(m) => m
+            .iter()
+            .map(|(k, x)| Some((k.clone(), constant(x)?)))
+            .collect::<Option<_>>()
+            .map(Value::Obj),
+        _ => None,
+    }
+}
+
 /// `add` and its kin: the operator they are written with.
 fn arithmetic(name: &str) -> Option<&'static str> {
     Some(match name {
@@ -677,7 +694,7 @@ fn compatible(a: &Ty, b: &Ty) -> bool {
         (Ty::Scalar(x), Ty::Scalar(y)) if text_of(x, y) || text_of(y, x) => true,
         // Numbers compare by value (R-75).
         (Ty::Scalar(x), Ty::Scalar(y)) if number(x) && number(y) => true,
-        (Ty::List(x), Ty::List(y)) => compatible(x, y),
+        (Ty::List(x), Ty::List(y)) | (Ty::Map(x), Ty::Map(y)) => compatible(x, y),
         (Ty::Ref(x), Ty::Ref(y)) => x == y,
         (Ty::Scalar(x), Ty::Scalar(y)) => x == y,
         _ => false,
@@ -1087,7 +1104,11 @@ impl Pass<'_> {
             return None;
         }
         if let Some(f) = from {
-            for l in &lits {
+            let map = matches!(&f.ty, Ty::Map(_));
+            for l in lits
+                .iter()
+                .filter(|l| map || !matches!(l.value, Value::Obj(_)))
+            {
                 if let Some(why) = types::mismatch(&f.ty, &Term::Val(l.value.clone())) {
                     diags.push(
                         Diagnostic::error(l.span, format!("{col} {why}"))
@@ -1102,6 +1123,7 @@ impl Pass<'_> {
         let mut string: Option<&Literal> = None;
         for l in &lits {
             match kind(&l.value) {
+                None if matches!(l.value, Value::Obj(_)) => {}
                 None => {
                     string.get_or_insert(l);
                 }

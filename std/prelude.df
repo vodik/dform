@@ -124,6 +124,10 @@ internal fn __label(type: string, name: string, path: string) -> string forwards
 #| example: __quantity("500m", file, start, end)
 internal fn __quantity(text: string, file: int, start: int, end: int) -> any?
 
+#| The value nested at what `path` has past `prefix.`: `{a: {b: V}}` for `prefix.a.b`; no value for a path not under it. A key of a map input given by `--set` or `set from` lowers to it.
+#| example: __under(K, "labels", V)
+internal fn __under(path: string, prefix: string, value: any) -> any? forwards
+
 #| The value at a dotted path inside a value; `x.f` on a variable with no static type lowers to it.
 #| example: __path(X, "f")
 internal fn __path(value: any, path: string) -> any? forwards, forwards nulls

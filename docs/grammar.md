@@ -712,6 +712,18 @@ where env == "prod"`, an instance block's `nodes.count = 2` or `nodes = {
 required like an input, by its path. `why nodes.count` shows the leaf's
 layers. A `key` is a scalar and takes no block.
 
+An input typed `map(T)` (`input labels: map(string) = { team: "core" }`)
+is an object with open keys, each value a `T`: one cell, read whole
+(`labels`), by a key (`labels.team`) or entry by entry (`(k, v) in
+labels`). `--set labels.owner=ops` gives one key, read as `T` (a
+`map(map(T))` reads deeper keys as the inner map's values), and the keys
+given at every rank merge as an object input's leaves do, so the default's
+`team` stays beside it. `map(T)` also types a field of an object input,
+a relation's column (`decl p(tags: map(string))`) and a schema
+attribute (`type_attr(compute.vm, "labels", "map(string)", [])`); a
+value of another type is an error naming its key. A bare `map` (a
+schema's untyped object) takes any object.
+
 **Relations.** A relation is declared once, by `decl p(a: T, ..)` or by
 its uses (R-34); `input` and `output` name it and never re-spell its
 columns:

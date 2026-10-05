@@ -732,6 +732,15 @@ pub const BODIES: &[(&str, Body)] = &[
     }),
     // `ref(T, A, "a.b")` after the rewrite: walk the rest of the path
     // inside the top-level attribute's value.
+    ("__under", |a| match a {
+        [Value::Str(path), Value::Str(prefix), v] => {
+            let rest = path.strip_prefix(prefix.as_str())?.strip_prefix('.')?;
+            rest.split('.').rev().try_fold(v.clone(), |v, k| {
+                (!k.is_empty()).then(|| Value::Obj(BTreeMap::from([(k.to_string(), v)])))
+            })
+        }
+        _ => None,
+    }),
     ("__path", |a| match a {
         [v, path] => {
             let mut v = v.clone();

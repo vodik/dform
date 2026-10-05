@@ -1,0 +1,132 @@
+//! `map(T)` (the After R-38/R-39 ticket's decisions): an object with
+//! open keys, each value a `T`, for an input, a relation's column and a
+//! schema attribute. `--set labels.team=x` and `set from` give one key,
+//! `(k, v) in labels` takes each entry.
+
+mod common;
+mod tables_common;
+use tables_common::scratch;
+
+/// Whether a query's table has the row `cells`.
+fn row(out: &str, cells: &[&str]) -> bool {
+    out.lines()
+        .any(|l| l.split_whitespace().eq(cells.iter().copied()))
+}
+
+/// An input typed `map(string)`: its default, a key given by `--set`
+/// (read as the values' type, so `--set labels.n=1` is the string "1"),
+/// each entry by `(k, v) in`; a value of another type is an error naming
+/// the input.
+#[test]
+fn a_map_input_takes_a_key_by_set_and_iterates() {
+    let s = scratch("map-input");
+    s.write(
+        "p.df",
+        "\ninput labels: map(string) = { team: \"core\" }\n\
+         input sizes: map(int) = {}\nprovider fake\n\
+         label(k, v) where (k, v) in labels\n\
+         size(k, v) where (k, v) in sizes\n",
+    );
+    let r = s.run(&["query", "label(K, V)", "p.df"]).success();
+    assert!(row(&r.stdout, &["\"team\"", "\"core\""]), "{}", r.stdout);
+    let r = s
+        .run(&[
+            "query",
+            "label(K, V)",
+            "p.df",
+            "--set",
+            "labels.owner=ops",
+            "--set",
+            "labels.n=1",
+        ])
+        .success();
+    for want in [
+        ["\"team\"", "\"core\""],
+        ["\"owner\"", "\"ops\""],
+        ["\"n\"", "\"1\""],
+    ] {
+        assert!(row(&r.stdout, &want), "{want:?}: {}", r.stdout);
+    }
+    let r = s
+        .run(&["query", "size(K, V)", "p.df", "--set", "sizes.a=3"])
+        .success();
+    assert!(row(&r.stdout, &["\"a\"", "3"]), "{}", r.stdout);
+    let r = s
+        .run(&["query", "size(K, V)", "p.df", "--set", "sizes.a=big"])
+        .failure();
+    assert!(
+        r.stderr
+            .contains("--set sizes.a=big: input sizes is map(int)"),
+        "{}",
+        r.stderr
+    );
+}
+
+/// A schema attribute typed `map(string)` checks each value; a relation's
+/// column typed `map(string)` checks each row's.
+#[test]
+fn a_map_attribute_and_column_check_their_values() {
+    let s = scratch("map-attr");
+    s.write(
+        "p.df",
+        "\nprovider fake\nresource compute.vm a { labels = { team: \"core\", tier: 1 } }\n",
+    );
+    let r = s.run(&["plan", "p.df"]).failure();
+    assert!(
+        r.stderr.contains(
+            "compute.vm[\"a\"].labels is map(string): its key \"tier\" is string, not the int 1"
+        ),
+        "{}",
+        r.stderr
+    );
+    s.write(
+        "t.json",
+        "[{\"n\": \"a\", \"tags\": {\"x\": \"1\"}}, {\"n\": \"b\", \"tags\": {\"x\": 2}}]",
+    );
+    s.write(
+        "p.df",
+        "\ninput t from json(\"t.json\")\ndecl t(n: string, tags: map(string))\nprovider fake\n\
+         resource compute.vm \"${n}\" { labels = tags } where t(n, tags)\n",
+    );
+    let r = s.run(&["plan", "p.df"]).failure();
+    assert!(
+        r.stderr.contains("column tags: {x: 2} is not map(string)"),
+        "{}",
+        r.stderr
+    );
+    s.write("t.json", "[{\"n\": \"a\", \"tags\": {\"x\": \"1\"}}]");
+    let r = s.run(&["plan", "p.df"]).success();
+    assert!(
+        r.stdout.contains("+ compute.vm[\"a\"]\n  labels.x = \"1\""),
+        "{}",
+        r.stdout
+    );
+}
+
+/// A map field of an object input takes a key by its path; a relation
+/// whose column is declared `map(int)` refuses a literal of another type.
+#[test]
+fn a_map_field_and_a_map_column() {
+    let s = scratch("map-field");
+    s.write(
+        "p.df",
+        "\ninput meta { owner: string = \"a\", labels: map(string) = {} }\nprovider fake\n\
+         l(k, v) where (k, v) in meta.labels\n",
+    );
+    let r = s
+        .run(&["query", "l(K, V)", "p.df", "--set", "meta.labels.team=core"])
+        .success();
+    assert!(row(&r.stdout, &["\"team\"", "\"core\""]), "{}", r.stdout);
+    s.write(
+        "p.df",
+        "\ndecl p(n: string, sizes: map(int))\nprovider fake\np(\"a\", { x: \"big\" })\n",
+    );
+    let r = s.run(&["plan", "p.df"]).failure();
+    assert!(
+        r.stderr.contains(
+            "`p`'s column `sizes` is map(int): its key \"x\" is int, not the string \"big\""
+        ),
+        "{}",
+        r.stderr
+    );
+}
