@@ -959,8 +959,8 @@ without a digest, no public database) as denies.
 |a resource per value only apply knows        |`-target`, then a second run by hand       |a pending group; apply runs a second tick                  |
 |a tag on everything, overridable per resource|a variable threaded through every module   |`set r.tags.team = "platform" @default where r in resource`|
 |"why does this exist?"                       |read the source, guess                     |every plan line says; `dform why ADDR` for the derivation  |
-|"why does this not exist?"                   |read the source, guess harder              |`dform why-not ADDR` names the condition that failed †     |
-|"how many rounds will this apply take?"      |find out during the apply                  |the plan is grouped by tick, with what each tick waits on †|
+|"why does this not exist?"                   |read the source, guess harder              |`dform why-not ADDR` names the condition that failed       |
+|"how many rounds will this apply take?"      |find out during the apply                  |the plan is grouped by tick, with what each tick waits on  |
 |rules about the change set itself            |plan JSON through an external policy engine|the plan is a table the program's own denies read          |
 |routes from reachability                     |write them out, keep them in sync          |a recursive rule                                           |
 |a policy that sees inside modules            |export every value as an output            |policy reads any resource                                  |
@@ -987,10 +987,7 @@ the compiler tracks, `dform test` over the input space, keyed stacks and
 their state. `examples/` is the proof; each one is a project you can run.
 
 The rows marked † in the table above are designed and not built, and
-so are `check --sarif` and the provider registry. The plan grouped by
-tick with a reason on every line, and `why-not`, are being built now;
-until they land, `plan` prints the bare diff and `plan --why` the
-derivation tree.
+so are `check --sarif` and the provider registry.
 
 Secret handling is the newest part and the one to treat as an
 experiment. The compiler's refusals and the redaction are tested, but
