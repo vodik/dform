@@ -272,11 +272,10 @@ Apply then runs tick 1, learns the endpoint, prints tick 2's plan with
 the policy's real name, and asks again before making it:
 
 ```
-tick 2:
-plan: 1 deformation (1 create)
-+ aws.iam_policy["connect-orders.cx3k.us-east-1.rds.amazonaws.com"]
-  policy.Statement[0].Resource = "orders.cx3k.us-east-1.rds.amazonaws.com"
-Apply 1 new deformation to shop[env=prod]? [y/N]
+tick 2  1 change, now that tick 1 reported
+  + aws.iam_policy["connect-orders.cx3k.us-east-1.rds.amazonaws.com"]   shop.df:31  with host = "orders.cx3k.us-east-1.rds.amazonaws.com"
+      policy.Statement[0].Resource = "orders.cx3k.us-east-1.rds.amazonaws.com"
+Apply tick 2 to shop[env=prod]? [y/N]
 ```
 
 You never approve a count of "unknown". An unattended apply (`--yes`,
