@@ -214,7 +214,7 @@ impl Pass<'_> {
                 self.public_leaf(
                     typ,
                     addr,
-                    &Term::Val(Value::Str(format!("{p}.{k}"))),
+                    &Term::Val(Value::Str(crate::ir::path_join(&p, k))),
                     v,
                     vars,
                 )

@@ -725,12 +725,7 @@ fn leaves(j: &Json, at: &str, out: &mut BTreeMap<String, Json>) {
     match j {
         Json::Object(m) if !m.is_empty() => {
             for (k, v) in m {
-                let p = if at.is_empty() {
-                    k.clone()
-                } else {
-                    format!("{at}.{k}")
-                };
-                leaves(v, &p, out);
+                leaves(v, &crate::ir::path_join(at, k), out);
             }
         }
         Json::Array(xs) if !xs.is_empty() => {

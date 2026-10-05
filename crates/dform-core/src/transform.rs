@@ -190,11 +190,13 @@ pub fn normalize_contribution(typ: &str, path: &str, value: Term) -> (String, Te
     if typ == OUTPUT {
         return (path.to_string(), value);
     }
-    let mut segs = path.split('.');
-    let first = segs.next().unwrap_or(path).to_string();
-    let rest: Vec<&str> = segs.collect();
-    let value = rest.iter().rev().fold(value, |v, k| {
-        Term::Obj(BTreeMap::from([(k.to_string(), v)]))
+    let segs = crate::ir::path_segments(path);
+    let first = segs[0].to_string();
+    let value = segs[1..].iter().rev().fold(value, |v, k| {
+        Term::Obj(BTreeMap::from([(
+            crate::ir::segment_key(k).into_owned(),
+            v,
+        )]))
     });
     (first, value)
 }
@@ -1528,7 +1530,7 @@ fn leaf_paths(t: &Term, prefix: &str, out: &mut Vec<String>) {
         _ => return,
     };
     for (k, v) in entries {
-        let p = format!("{prefix}.{k}");
+        let p = crate::ir::path_join(prefix, k);
         if let Some(v) = v {
             leaf_paths(v, &p, out);
         } else if let Term::Val(Value::Obj(m)) = t {
@@ -1928,7 +1930,7 @@ fn rewrite_term_refs(
                     }
                     *n += 1;
                     let v = var(&format!("__ref{n}"));
-                    let (top, rest) = match path.split_once('.') {
+                    let (top, rest) = match crate::ir::path_split_first(path) {
                         Some((top, rest)) => (top, Some(rest)),
                         None => (path.as_str(), None),
                     };

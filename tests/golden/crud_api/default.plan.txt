@@ -21,7 +21,7 @@ definite:
   name = "crud_api"
   password = (sensitive random.password("crud-api-db"))
 + k8s.namespace["shop"]
-  metadata.labels.pod-security.kubernetes.io/enforce = "restricted"
+  metadata.labels."pod-security.kubernetes.io/enforce" = "restricted"
   metadata.name = "shop"
 + k8s.network_policy["default_deny"]
   metadata.name = "default-deny"

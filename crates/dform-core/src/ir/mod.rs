@@ -15,7 +15,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 pub use address::{
     OldScope, SCOPE, is_scoped, label, old_scope, parse as parse_address,
-    parse_resource as parse_resource_address, path_suffix, scoped, string_literal,
+    parse_resource as parse_resource_address, path_join, path_key, path_keys, path_segments,
+    path_split_first, path_split_last, path_suffix, scoped, segment_key, segment_parts,
+    string_literal,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -131,7 +133,7 @@ pub fn compile_resources(
                 addr.attr(&path),
             );
         };
-        root.insert(path, value);
+        root.insert(segment_key(&path).into_owned(), value);
     }
 
     let mut extra_deps: BTreeMap<Address, BTreeSet<Address>> = BTreeMap::new();
@@ -209,7 +211,7 @@ fn leaves_of(at: &str, v: &Value, out: &mut Vec<(String, Value)>) {
     match v {
         Value::Obj(m) if !m.is_empty() => {
             for (k, x) in m {
-                leaves_of(&format!("{at}.{k}"), x, out);
+                leaves_of(&path_join(at, k), x, out);
             }
         }
         _ => out.push((at.to_string(), v.clone())),
@@ -246,17 +248,18 @@ fn contributes(
     })
 }
 
-/// Remove a dotted path; an object left empty by it goes too.
+/// Remove a stored path; an object left empty by it goes too.
 fn remove_path(root: &mut BTreeMap<String, Value>, path: &str) {
-    match path.split_once('.') {
+    match path_split_first(path) {
         None => {
-            root.remove(path);
+            root.remove(segment_key(path).as_ref());
         }
         Some((head, rest)) => {
-            if let Some(Value::Obj(m)) = root.get_mut(head) {
+            let head = segment_key(head);
+            if let Some(Value::Obj(m)) = root.get_mut(head.as_ref()) {
                 remove_path(m, rest);
                 if m.is_empty() {
-                    root.remove(head);
+                    root.remove(head.as_ref());
                 }
             }
         }

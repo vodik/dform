@@ -1474,7 +1474,6 @@ impl<'u> Lowerer<'u> {
         self.file = file;
         let scope = self.decls.files[&file];
         let mut statements = Vec::new();
-        self.quoted_keys(&root);
         for n in root.children() {
             match n.kind() {
                 // `edition` is a syntax error (R-68).
@@ -2244,44 +2243,32 @@ impl<'u> Lowerer<'u> {
         }
     }
 
-    /// A block path or keypath as today's dotted string: `a.b`, `a[0].b`,
-    /// quoted segments unquoted.
+    /// A block path or keypath as a stored path: `a.b`, `a[0].b`, a quoted
+    /// segment unquoted unless it holds `.`, `[`, `]`, `/` or `"` (R-77).
     fn block_path(&mut self, n: &SyntaxNode) -> L<String> {
         let mut out = String::new();
         for t in tokens(n) {
             match t.kind() {
                 DOT => out.push('.'),
                 L_BRACKET | R_BRACKET | INT => out.push_str(t.text()),
-                STRING => out.push_str(&self.segment(&t)?),
+                STRING => out.push_str(&crate::ir::path_key(&self.string(&t)?)),
                 _ => out.push_str(t.text()),
             }
         }
         Ok(out)
     }
 
-    /// A quoted segment `."k"` is one key: `.`, `[` or `]` inside it would
-    /// read as a second segment wherever the path is printed.
-    fn quoted_keys(&mut self, root: &SyntaxNode) {
-        for c in root.descendants().filter(|n| n.kind() == CHAIN) {
-            let mut after_dot = false;
-            for t in c.children_with_tokens().filter_map(|e| e.into_token()) {
-                if t.kind().is_trivia() {
-                    continue;
-                }
-                if after_dot && t.kind() == STRING {
-                    let _ = self.segment(&t);
-                }
-                after_dot = t.kind() == DOT;
-            }
-        }
-    }
-
+    /// A selector's quoted step `."k"` is one key: `.`, `[` or `]` inside
+    /// it would read as a second step (a path's quoted segment carries
+    /// any character, R-77).
     fn segment(&mut self, t: &SyntaxToken) -> L<String> {
         let s = self.string(t)?;
         if s.contains(['.', '[', ']']) {
             return self.error(
                 self.span_of(t.text_range()),
-                format!("the key {s:?} holds `.`, `[` or `]`, which a path segment cannot carry"),
+                format!(
+                    "the key {s:?} holds `.`, `[` or `]`, which a selector's step cannot carry"
+                ),
             );
         }
         Ok(s)
@@ -6446,12 +6433,13 @@ impl<'u> Lowerer<'u> {
                 let Seg::F(first) = &path[0] else {
                     return self.error(span, "a resource's attribute is `r.name`");
                 };
+                let first = crate::ir::path_key(first).into_owned();
                 let v = self.read_var(
                     rc,
                     "attr",
-                    vec![typ.clone(), addr, str_term(first)],
+                    vec![typ.clone(), addr, str_term(&first)],
                     3,
-                    first,
+                    &first,
                     pre,
                     span,
                 );
@@ -6549,7 +6537,11 @@ impl<'u> Lowerer<'u> {
             if fields.is_empty() {
                 return v;
             }
-            let p = fields.join(".");
+            let p = fields
+                .iter()
+                .map(|f| crate::ir::path_key(f))
+                .collect::<Vec<_>>()
+                .join(".");
             fields.clear();
             func("__path", vec![v, str_term(&p)])
         };
@@ -6558,7 +6550,7 @@ impl<'u> Lowerer<'u> {
                 Seg::F(f) => {
                     if let Some((_, list)) = &mut at {
                         list.push('.');
-                        list.push_str(&f);
+                        list.push_str(&crate::ir::path_key(&f));
                     }
                     fields.push(f)
                 }
@@ -6601,7 +6593,12 @@ impl<'u> Lowerer<'u> {
             Res::Ref { typ, addr, path } if path.len() == 1 => match &path[0] {
                 Seg::F(p) => Some(atom_at(
                     "attr",
-                    vec![typ.clone(), addr.clone(), str_term(p), value],
+                    vec![
+                        typ.clone(),
+                        addr.clone(),
+                        str_term(&crate::ir::path_key(p)),
+                        value,
+                    ],
                     span,
                 )),
                 Seg::I(_) | Seg::K(_) => None,
@@ -6758,7 +6755,7 @@ fn element_write(key: Term, rest: &[String], value: Term) -> Term {
     Term::Obj(m)
 }
 
-/// A constant path as today's string: `a.b[0].c`.
+/// A constant path as a stored path: `a.b[0].c`, `a."b.c"`.
 fn path_string(path: &[Seg]) -> Option<String> {
     let mut out = String::new();
     for s in path {
@@ -6767,7 +6764,7 @@ fn path_string(path: &[Seg]) -> Option<String> {
                 if !out.is_empty() {
                     out.push('.');
                 }
-                out.push_str(f);
+                out.push_str(&crate::ir::path_key(f));
             }
             Seg::I(Term::Val(Value::Int(i))) => out.push_str(&format!("[{i}]")),
             Seg::I(_) | Seg::K(_) => return None,

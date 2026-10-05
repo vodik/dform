@@ -130,10 +130,11 @@ pub fn normalize_path(typ: &Option<String>, path: &str) -> String {
         Some(transform::OUTPUT) => path.to_string(),
         // An element write (`transform::ELEM`) is its own node, `P[]`.
         _ if path.ends_with(transform::ELEM) => {
-            let top = path.split(['.', '[']).next().unwrap_or(path);
-            format!("{top}{}", transform::ELEM)
+            let first = crate::ir::path_segments(path)[0];
+            let top = crate::ir::segment_parts(first).0;
+            format!("{}{}", crate::ir::path_key(&top), transform::ELEM)
         }
-        _ => path.split('.').next().unwrap_or(path).to_string(),
+        _ => crate::ir::path_segments(path)[0].to_string(),
     }
 }
 

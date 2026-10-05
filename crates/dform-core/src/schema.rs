@@ -349,10 +349,7 @@ impl Schema {
         if let Some(r) = self.attr(typ, path).and_then(AttrSpec::render) {
             return r.apply(v).map_err(|why| (path.to_string(), why));
         }
-        let join = |k: &str| match path {
-            "" => k.to_string(),
-            p => format!("{p}.{k}"),
-        };
+        let join = |k: &str| crate::ir::path_join(path, k);
         Ok(match v {
             Value::Obj(m) => Value::Obj(
                 m.iter()

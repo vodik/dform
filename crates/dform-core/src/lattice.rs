@@ -327,7 +327,7 @@ fn map_normalize(elem: &Lattice, path: &str, items: Vec<(Value, Witnesses)>) -> 
     let mut out = BTreeMap::new();
     let mut stuck: BTreeSet<String> = BTreeSet::new();
     for (k, contribs) in per_key {
-        let child = format!("{path}.{k}");
+        let child = crate::ir::path_join(path, &k);
         match normalize(elem, &child, contribs) {
             Elem::Bottom => {}
             Elem::Val(v, _) => {
@@ -1923,15 +1923,18 @@ fn check_below(c: Collapsed, path: &str, refinements: &[&Refinement]) -> Collaps
     }
 }
 
-/// The value at a dotted path inside `v` (`""` is `v`).
+/// The value at a stored path inside `v` (`""` is `v`; a quoted segment is
+/// one key, R-77).
 pub(crate) fn value_at<'v>(v: &'v Value, path: &str) -> Option<&'v Value> {
     if path.is_empty() {
         return Some(v);
     }
-    path.split('.').try_fold(v, |v, k| match v {
-        Value::Obj(m) => m.get(k),
-        _ => None,
-    })
+    crate::ir::path_keys(path)
+        .into_iter()
+        .try_fold(v, |v, k| match v {
+            Value::Obj(m) => m.get(&k),
+            _ => None,
+        })
 }
 
 fn lub_ranked_map(
@@ -1950,9 +1953,11 @@ fn lub_ranked_map(
             .list
             .strip_prefix(&here)
             .and_then(|r| r.strip_prefix('.'))
-            .and_then(|r| r.split('.').next())
+            .and_then(|r| crate::ir::path_segments(r).into_iter().next())
         {
-            per_key.entry(k.to_string()).or_default();
+            per_key
+                .entry(crate::ir::segment_key(k).into_owned())
+                .or_default();
         }
     }
     for (w, r, v) in contribs {
@@ -1975,7 +1980,7 @@ fn lub_ranked_map(
         // Nested objects merge per key too: a dotted path `a.b.c` is the
         // contribution `{b: {c: V}}` to `a`, so two dotted paths under one
         // attribute meet here and must not conflict on `b`.
-        let key_path = format!("{path}.{k}");
+        let key_path = crate::ir::path_join(path, &k);
         let map = Lattice::Map(Box::new(elem.clone()));
         let lat = if let Some(l) = nested.lattice(&key_path) {
             l

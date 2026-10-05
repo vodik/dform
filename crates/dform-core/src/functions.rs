@@ -744,7 +744,7 @@ pub const BODIES: &[(&str, Body)] = &[
     ("__path", |a| match a {
         [v, path] => {
             let mut v = v.clone();
-            for seg in path.as_str()?.split('.') {
+            for seg in crate::ir::path_keys(path.as_str()?) {
                 // A url's components read as an object's (`u.host`).
                 if let Value::Url(u) = &v {
                     v = crate::value::url_parts(u)?;
@@ -752,7 +752,7 @@ pub const BODIES: &[(&str, Body)] = &[
                 let Value::Obj(mut m) = v else {
                     return None;
                 };
-                v = m.remove(seg)?;
+                v = m.remove(&seg)?;
             }
             Some(v)
         }

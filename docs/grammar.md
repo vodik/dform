@@ -155,8 +155,15 @@ resource compute.vm web {
 never re-indent the lines inside a string and never break a line inside
 one.
 
-A quoted path segment (`x."a-b"`) is one key: it may not hold `.`, `[` or
-`]`.
+A quoted path segment (`x."a-b"`) is one key, whatever it holds (R-77):
+a Kubernetes annotation is written and read as one leaf,
+`metadata.annotations."traefik.ingress.kubernetes.io/router.tls.certresolver"
+= "letsencrypt"`. A stored path is a list of segments: a segment holding
+`.`, `[`, `]`, `/` or `"` is kept quoted, so the plan, `why`, a null's
+label and the plan file print it as written, and `why` takes it back. `dform fmt` keeps the quoted segment, or folds it with its
+siblings into the object form (`metadata.annotations = { "a.b/c": "1",
+"d.e/f": "2" }`, "Formatting"). A selector's quoted step (`input p from
+json(..)."k"`, R-39) may still not hold `.`, `[` or `]`.
 
 ### Doc comments
 

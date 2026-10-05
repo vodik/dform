@@ -1,3 +1,4 @@
-# A path segment is one key: a quoted segment holding `.` cannot be one.
-q("prod")
-p(x) where q(e), o = { tags: e }, x = o.tags."a.b"
+# A selector's quoted step is one key: one holding `.` cannot be one (a
+# path's quoted segment can, R-77: tests/paths.rs).
+input zone from yaml("regions.yaml").regions[*]."a.b"
+decl zone(name: string)

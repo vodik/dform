@@ -1002,10 +1002,7 @@ impl Providers {
                     None => "(sensitive)".into(),
                 });
             }
-            let join = |k: &str| match path {
-                "" => k.to_string(),
-                p => format!("{p}.{k}"),
-            };
+            let join = |k: &str| crate::ir::path_join(path, k);
             match v {
                 Json::Object(m) => Json::Object(
                     m.iter()
@@ -1393,10 +1390,7 @@ impl Providers {
     /// program had (an input's) otherwise, and nothing can read it here.
     /// `verb` and `addr` name the resource, `path` the attribute.
     fn check_held(&self, verb: &str, addr: &Address, path: &str, v: &Value) -> Result<()> {
-        let join = |k: &str| match path {
-            "" => k.to_string(),
-            p => format!("{p}.{k}"),
-        };
+        let join = |k: &str| crate::ir::path_join(path, k);
         match v {
             Value::Null {
                 label,

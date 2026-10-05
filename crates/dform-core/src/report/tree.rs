@@ -78,8 +78,10 @@ pub fn find(pattern: &Atom, facts: &BTreeSet<Atom>) -> Result<Vec<(Atom, Option<
     let Term::Val(Value::Str(path)) = &pattern.args[2] else {
         return Ok(vec![]);
     };
-    let mut keys: Vec<String> = path.split('.').map(str::to_string).collect();
-    let top = keys.remove(0);
+    // A quoted segment is one key (R-77): `annotations."a.b/c"`.
+    let mut keys = crate::ir::path_keys(path);
+    let top = crate::ir::path_segments(path)[0].to_string();
+    keys.remove(0);
     let value = match &pattern.args[3] {
         Term::Var(_) | Term::Wildcard => None,
         t => match t.ground() {

@@ -183,20 +183,22 @@ pub fn short_hash(s: &str) -> String {
     out
 }
 
-/// Remove a dotted path; an object left empty by it goes too.
+/// Remove a stored path (a quoted segment is one key, R-77); an object
+/// left empty by it goes too.
 pub fn remove_path(v: &mut Json, path: &str) {
     let Some(m) = v.as_object_mut() else {
         return;
     };
-    match path.split_once('.') {
+    match crate::ir::path_split_first(path) {
         None => {
-            m.remove(path);
+            m.remove(crate::ir::segment_key(path).as_ref());
         }
         Some((head, rest)) => {
-            if let Some(child) = m.get_mut(head) {
+            let head = crate::ir::segment_key(head);
+            if let Some(child) = m.get_mut(head.as_ref()) {
                 remove_path(child, rest);
                 if child.as_object().is_some_and(|c| c.is_empty()) {
-                    m.remove(head);
+                    m.remove(head.as_ref());
                 }
             }
         }
@@ -205,31 +207,30 @@ pub fn remove_path(v: &mut Json, path: &str) {
 
 pub fn set_path(v: &mut Json, path: &str, x: Json) {
     let mut cur = v;
-    let mut parts = path.split('.').peekable();
+    let keys = crate::ir::path_keys(path);
+    let mut parts = keys.into_iter().peekable();
     while let Some(p) = parts.next() {
         if !cur.is_object() {
             *cur = json!({});
         }
         let m = cur.as_object_mut().unwrap();
         if parts.peek().is_none() {
-            m.insert(p.to_string(), x);
+            m.insert(p, x);
             return;
         }
-        cur = m.entry(p.to_string()).or_insert_with(|| json!({}));
+        cur = m.entry(p).or_insert_with(|| json!({}));
     }
 }
 
-/// The value at a keypath (`tags.owner`, `subnets[0].id`) in nested JSON, the
-/// shape `ir::insert_keypath` builds and `flatten` spells.
+/// The value at a keypath (`tags.owner`, `subnets[0].id`, `labels."a.b"`)
+/// in nested JSON, the shape `ir::insert_keypath` builds and `flatten`
+/// spells.
 pub fn get_path<'a>(v: &'a serde_json::Value, path: &str) -> Option<&'a serde_json::Value> {
     let mut cur = v;
-    for seg in path.split('.') {
-        let (key, mut rest) = match seg.find('[') {
-            Some(i) => (&seg[..i], &seg[i..]),
-            None => (seg, ""),
-        };
+    for seg in crate::ir::path_segments(path) {
+        let (key, mut rest) = crate::ir::segment_parts(seg);
         if !key.is_empty() {
-            cur = cur.get(key)?;
+            cur = cur.get(key.as_ref())?;
         }
         while let Some(r) = rest.strip_prefix('[') {
             let (idx, tail) = r.split_once(']')?;
@@ -323,13 +324,9 @@ pub fn flatten(
         }
         Json::Object(m) => {
             for (k, vv) in m {
-                let join = |p: &str| {
-                    if p.is_empty() {
-                        k.clone()
-                    } else {
-                        format!("{p}.{k}")
-                    }
-                };
+                // A key holding `.`, `[`, `]` or `/` is its segment quoted
+                // (R-77): `metadata.annotations."a.b/c"`.
+                let join = |p: &str| crate::ir::path_join(p, k);
                 flatten(schema, typ, vv, &join(prefix), &join(norm), by_content, out);
             }
         }

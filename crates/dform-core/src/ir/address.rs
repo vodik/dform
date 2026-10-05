@@ -92,15 +92,124 @@ pub fn string_literal(s: &str) -> String {
     out
 }
 
+/// The characters a stored path's segment cannot hold bare (R-77): a key
+/// holding one is the segment quoted, `metadata.annotations."a.b/c"`.
+const PATH_QUOTED: [char; 5] = ['.', '[', ']', '/', '"'];
+
+/// `key` as one segment of a stored path: itself, or quoted as a source
+/// string when it holds `.`, `[`, `]`, `/` or `"` (R-77).
+pub fn path_key(key: &str) -> std::borrow::Cow<'_, str> {
+    match key.contains(PATH_QUOTED) {
+        true => string_literal(key).into(),
+        false => key.into(),
+    }
+}
+
+/// The stored path `path` with the key `key` after it: `a.b` and `c.d` are
+/// `a.b."c.d"`.
+pub fn path_join(path: &str, key: &str) -> String {
+    match path.is_empty() {
+        true => path_key(key).into_owned(),
+        false => format!("{path}.{}", path_key(key)),
+    }
+}
+
+/// A stored path's segments as written, each with its index suffix
+/// (`containers[name=api]`): split at each `.` outside a quoted segment
+/// and an index.
+pub fn path_segments(path: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let (mut start, mut depth, mut quoted, mut escaped) = (0, 0usize, false, false);
+    for (i, c) in path.char_indices() {
+        match c {
+            _ if escaped => escaped = false,
+            '\\' if quoted => escaped = true,
+            '"' => quoted = !quoted,
+            _ if quoted => {}
+            '[' => depth += 1,
+            ']' => depth = depth.saturating_sub(1),
+            '.' if depth == 0 => {
+                out.push(&path[start..i]);
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    out.push(&path[start..]);
+    out
+}
+
+/// A stored segment's key: a quoted one unquoted (an index suffix stays).
+pub fn segment_key(seg: &str) -> std::borrow::Cow<'_, str> {
+    match segment_parts(seg) {
+        (k, "") => k,
+        (k, index) => format!("{k}{index}").into(),
+    }
+}
+
+/// A stored segment's key, unquoted, and its index suffix: `"a.b"[0]` is
+/// `a.b` and `[0]`, `tags` is `tags` and nothing.
+pub fn segment_parts(seg: &str) -> (std::borrow::Cow<'_, str>, &str) {
+    if seg.starts_with('"') {
+        let end = quote_end(seg);
+        if let Some(k) = constant(&seg[..end]) {
+            return (k.into(), &seg[end..]);
+        }
+    }
+    let i = seg.find('[').unwrap_or(seg.len());
+    (seg[..i].into(), &seg[i..])
+}
+
+/// The byte just past the closing quote of the quoted segment `seg`.
+fn quote_end(seg: &str) -> usize {
+    let mut escaped = false;
+    for (i, c) in seg.char_indices().skip(1) {
+        match c {
+            _ if escaped => escaped = false,
+            '\\' => escaped = true,
+            '"' => return i + 1,
+            _ => {}
+        }
+    }
+    seg.len()
+}
+
+/// A stored path's keys, unquoted: `a."b.c"` is `a`, `b.c`.
+pub fn path_keys(path: &str) -> Vec<String> {
+    path_segments(path)
+        .into_iter()
+        .map(|s| segment_key(s).into_owned())
+        .collect()
+}
+
+/// A stored path's first segment and the rest: `a."b.c".d` is `a` and
+/// `"b.c".d`.
+pub fn path_split_first(path: &str) -> Option<(&str, &str)> {
+    let first = path_segments(path).into_iter().next()?;
+    (first.len() < path.len()).then(|| (first, &path[first.len() + 1..]))
+}
+
+/// A stored path's parent and its last segment: `a."b.c"` is `a` and
+/// `"b.c"`.
+pub fn path_split_last(path: &str) -> Option<(&str, &str)> {
+    let last = path_segments(path).into_iter().next_back()?;
+    (last.len() < path.len()).then(|| (&path[..path.len() - last.len() - 1], last))
+}
+
 /// A stored path (`tags.team`, `subnet_ids[0]`) as member access after an
 /// address: `.tags.team`, `.subnet_ids[0]`, `."a-b"` for a segment that is
-/// not a name.
+/// not a name, a quoted one as stored (`."a.b/c"`).
 pub fn path_suffix(path: &str) -> String {
     if path.is_empty() {
         return String::new();
     }
     let mut out = String::new();
-    for seg in path.split('.') {
+    for seg in path_segments(path) {
+        out.push('.');
+        if seg.starts_with('"') {
+            out.push_str(seg);
+            continue;
+        }
         let base = seg.find('[').map_or(seg, |i| &seg[..i]);
         let index = &seg[base.len()..];
         let indexes = index.split_inclusive(']').all(|x| {
@@ -108,7 +217,6 @@ pub fn path_suffix(path: &str) -> String {
                 && x.starts_with('[')
                 && x[1..x.len() - 1].bytes().all(|b| b.is_ascii_digit())
         });
-        out.push('.');
         if crate::lexer::is_word(base) && (index.is_empty() || indexes) {
             out.push_str(seg);
         } else {
@@ -199,9 +307,9 @@ pub fn parse(src: &str) -> Result<(Address, Option<String>)> {
             }
             NodeOrToken::Token(t) if name.is_some() && dot => {
                 let seg = match t.kind() {
-                    STRING => {
-                        constant(t.text()).filter(|s| !s.contains(['.', '[']) && !s.is_empty())
-                    }
+                    STRING => constant(t.text())
+                        .filter(|s| !s.is_empty())
+                        .map(|s| path_key(&s).into_owned()),
                     k if word(k) => Some(t.text().to_string()),
                     _ => None,
                 }
@@ -269,6 +377,38 @@ mod tests {
             typ: t.into(),
             name: n.into(),
         }
+    }
+
+    /// A quoted segment is one key (R-77): split, joined and printed whole.
+    #[test]
+    fn a_quoted_segment_is_one_key() {
+        let p = path_join("metadata.annotations", "a.b/c");
+        assert_eq!(p, r#"metadata.annotations."a.b/c""#);
+        assert_eq!(path_join("labels", "app"), "labels.app");
+        assert_eq!(
+            path_segments(r#"a."b.c"[0].d[name=x.y]"#),
+            [r#"a"#, r#""b.c"[0]"#, "d[name=x.y]"]
+        );
+        assert_eq!(path_keys(&p), ["metadata", "annotations", "a.b/c"]);
+        assert_eq!(segment_parts(r#""b.c"[0]"#), ("b.c".into(), "[0]"));
+        assert_eq!(
+            path_split_first(&p),
+            Some(("metadata", r#"annotations."a.b/c""#))
+        );
+        assert_eq!(
+            path_split_last(&p),
+            Some(("metadata.annotations", r#""a.b/c""#))
+        );
+        assert_eq!(path_join("x", r#"q"t"#), r#"x."q\"t""#);
+        assert_eq!(path_keys(r#"x."q\"t""#), ["x", r#"q"t"#]);
+        assert_eq!(
+            a("t", "x").attr(&p),
+            r#"t["x"].metadata.annotations."a.b/c""#
+        );
+        let (_, parsed) = parse(r#"t["x"].metadata.annotations."a.b/c""#).unwrap();
+        assert_eq!(parsed.as_deref(), Some(p.as_str()));
+        let (_, parsed) = parse(r#"t["x"].labels."app-name""#).unwrap();
+        assert_eq!(parsed.as_deref(), Some("labels.app-name"));
     }
 
     #[test]

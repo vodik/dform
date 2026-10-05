@@ -62,6 +62,47 @@ fn apply_plan_applies_the_files_delta() {
     assert_eq!(r.summary(), "stack p is undeformed", "{}", r.stdout);
 }
 
+/// A path with a quoted segment (R-77), an annotation's dotted key, is
+/// recorded as `plan` prints it, and `apply PLAN` reproduces its delta.
+#[test]
+fn a_quoted_path_segment_round_trips_through_the_plan_file() {
+    let s = Scratch::new("planfile-quoted");
+    s.write(
+        "p.df",
+        "provider k8s\nresource k8s.namespace ns {\n  metadata.name = \"ns\"\n  \
+         metadata.annotations.\"a.b/c\" = \"1\"\n}\n",
+    );
+    s.run(&[
+        "dev",
+        "--world",
+        "w.json",
+        "plan",
+        "--out",
+        "plan.json",
+        "p.df",
+    ])
+    .success();
+    let f: serde_json::Value = serde_json::from_str(&s.read("plan.json")).unwrap();
+    let changes = f["deformations"][0]["changes"].as_array().unwrap();
+    assert!(
+        changes
+            .iter()
+            .any(|c| c["path"] == "metadata.annotations.\"a.b/c\"" && c["after"] == "1"),
+        "{f}"
+    );
+    let r = s.run(&["apply", "plan.json"]).success();
+    assert!(r.stdout.ends_with("apply: complete\n"), "{}", r.stdout);
+    let w: serde_json::Value = serde_json::from_str(&s.read("w.json")).unwrap();
+    assert!(
+        w.to_string().contains("\"annotations\":{\"a.b/c\":\"1\"}"),
+        "{w}"
+    );
+    let r = s
+        .run(&["dev", "--world", "w.json", "plan", "p.df"])
+        .success();
+    assert_eq!(r.summary(), "stack p is undeformed", "{}", r.stdout);
+}
+
 /// A nested copy's resource is `outer/inner/name` (R-72): the file
 /// records it as `plan` prints it, its apply creates it at that address,
 /// and the state and the world key it there.
