@@ -1123,10 +1123,7 @@ fn flatten_json_facts(
             let val = match other {
                 Json::String(s) => Value::Str(s.clone()),
                 Json::Bool(b) => Value::Bool(*b),
-                Json::Number(n) => n
-                    .as_i64()
-                    .map(Value::Int)
-                    .unwrap_or(Value::Str(n.to_string())),
+                Json::Number(_) => dform_core::provider::json_to_value(other),
                 Json::Null => Value::Str("null".to_string()),
                 _ => Value::Str(other.to_string()),
             };

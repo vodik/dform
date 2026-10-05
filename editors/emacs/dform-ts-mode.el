@@ -209,7 +209,7 @@ apply-order edge, not its content read now (`docs/grammar.md'
    `((call
       function: (identifier) @font-lock-builtin-face
       (:match ,(rx bos (or "count" "sum" "min" "max" "any" "all"
-                           "collect_set" "collect_list" "int" "string"
+                           "collect_set" "collect_list" "int" "float" "string"
                            "inet" "ip" "bytes" "cpu" "duration" "time"
                            "url" "iprange" "format" "len" "ref"
                            "scoped" "cloud_ref" "declassify" "attr"

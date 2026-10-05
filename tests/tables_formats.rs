@@ -254,8 +254,9 @@ fn a_tables_rows_and_stated_facts_are_one_relation() {
 }
 
 /// A document's values read one way in a table and in `json.decode` (the
-/// url ticket's decisions): a whole float is an int, a fraction is an
-/// error, a null member is absent (so the row lacks the column), a YAML
+/// url ticket's decisions, R-75): a number is an int or a float as written,
+/// an `int` column reads a whole float as one and refuses a fraction, a
+/// null member is absent (so the row lacks the column), a YAML
 /// tag is an error naming its line, a TOML datetime is a time.
 #[test]
 fn a_documents_corners_read_as_json_decode_reads_them() {
@@ -273,7 +274,7 @@ fn a_documents_corners_read_as_json_decode_reads_them() {
     s.write("t.json", "[{\"n\": 1.5}]");
     let r = s.run(&["plan", "p.df"]).failure();
     assert!(
-        r.stderr.contains("1.5 is a number with a fraction"),
+        r.stderr.contains("column n: 1.5 is not int"),
         "{}",
         r.stderr
     );

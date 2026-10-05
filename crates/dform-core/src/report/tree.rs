@@ -1609,6 +1609,10 @@ impl Cx<'_> {
                     .find(|t| !t.kind().is_trivia())?;
                 match t.kind() {
                     INT => t.text().parse().ok().map(Value::Int),
+                    // A decimal, `0.5`, is a float (R-75).
+                    QUANTITY if t.text().bytes().all(|b| b.is_ascii_digit() || b == b'.') => {
+                        crate::value::Float::parse(t.text()).ok().map(Value::Float)
+                    }
                     STRING => self.string(t.text()),
                     TRUE_KW => Some(Value::Bool(true)),
                     FALSE_KW => Some(Value::Bool(false)),

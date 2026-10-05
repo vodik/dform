@@ -482,8 +482,9 @@ enum Cell {
     Value(Value),
 }
 
-/// A cell read as its column's type: CSV text as an `int` or a `bool`
-/// when it spells one, a string as an `inet` when it parses as one;
+/// A cell read as its column's type: CSV text as an `int`, a `float` or a
+/// `bool` when it spells one, a whole float as an `int` and an int as a
+/// `float`, a string as an `inet` when it parses as one;
 /// anything else as it is, for `has_type` to judge (a number is not a
 /// string).
 fn typed(ty: Option<&TypeExpr>, cell: Cell) -> Value {
@@ -495,11 +496,24 @@ fn typed(ty: Option<&TypeExpr>, cell: Cell) -> Value {
         Cell::Value(v) => v,
         Cell::Text(s) => match name {
             "int" => s.parse().map(Value::Int).unwrap_or(Value::Str(s)),
+            "float" | "number" => match (s.parse().map(Value::Int), crate::value::Float::parse(&s))
+            {
+                (Ok(i), _) if name == "number" => i,
+                (_, Ok(f)) => Value::Float(f),
+                _ => Value::Str(s),
+            },
             "bool" if s == "true" || s == "false" => Value::Bool(s == "true"),
             _ => Value::Str(s),
         },
     };
     match (name, v) {
+        // A whole float is the int it names, an int the float.
+        ("int", Value::Float(f)) if f.get().fract() == 0.0 && f.get().abs() < 9.0e15 => {
+            Value::Int(f.get() as i64)
+        }
+        ("float", Value::Int(i)) => {
+            crate::value::Float::new(i as f64).map_or(Value::Int(i), Value::Float)
+        }
         ("inet", Value::Str(s)) => match crate::value::parse_ipnet(&s) {
             Some((addr, prefix)) => Value::IpNet { addr, prefix },
             None => Value::Str(s),
@@ -772,25 +786,22 @@ fn yaml_key_lines(text: &str) -> BTreeMap<String, usize> {
 
 // One reading of a document's values, for a table's rows, `set from`,
 // a loader call and `json.decode`, `yaml.decode`, `toml.decode` alike
-// (the url ticket's decisions): a number is an int (a float with no
-// fraction is one; one with a fraction is an error: the value model's
-// numbers are whole, a fraction is a quantity's); `null` is no value,
+// (the url ticket's decisions): a number written as an integer is an
+// int, one with a fraction or an exponent a float (R-75: `2` is an int,
+// `1.5` and `2.0` floats; NaN and the infinities are errors); `null` is no value,
 // so an object's member that is null is absent and a null anywhere else
 // is an error; a YAML tag is an error naming its line; a TOML datetime is
 // a `time` (one with an offset: a local one is an error); a YAML key that
 // is a number or a bool is its text.
 
-/// A number as a value: an integer, or a float that is one.
+/// A number as a value: an int, or a float.
 fn number(text: String, int: Option<i64>, float: Option<f64>) -> Result<Value> {
     if let Some(i) = int {
         return Ok(Value::Int(i));
     }
-    match float {
-        Some(f) if f.fract() == 0.0 && f.abs() < 9.0e15 => Ok(Value::Int(f as i64)),
-        _ => bail!(
-            "{text} is a number with a fraction: a value's numbers are whole \
-             (write a quantity, `500m`, or a string)"
-        ),
+    match float.and_then(crate::value::Float::new) {
+        Some(f) => Ok(Value::Float(f)),
+        None => bail!("{text} is not a number a value holds (a finite int or float)"),
     }
 }
 
@@ -961,13 +972,13 @@ pub fn expand_set_from(program: Program, declared: &mut [crate::inputs::Declared
                 })
                 .collect();
             // A document's text read as the leaf's type, by its
-            // constructor: a CIDR, a quantity, a time; and a CSV cell, all
-            // text, as an int too.
+            // constructor: a CIDR, a quantity, a time, a float (from an
+            // int too); and a CSV cell, all text, as an int too.
             let csv = parse_name(&ext.pred).is_some_and(|(f, _)| f == "csv");
             if let TypeExpr::Name(n) = &d.decl.ty
                 && (matches!(
                     n.as_str(),
-                    "inet" | "ip" | "bytes" | "cpu" | "duration" | "time"
+                    "inet" | "ip" | "float" | "bytes" | "cpu" | "duration" | "time"
                 ) || (csv && n == "int"))
             {
                 let parsed = format!("{v}__{n}");

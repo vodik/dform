@@ -39,6 +39,10 @@ type_attr("iam.role_policy_attachment", "id", "string", ["computed", "id"])
 type_attr(net.vpc, "cidr", "string", ["force_new"])
 type_attr(net.subnet, "cidr", "string", ["force_new"])
 
+# A decimal (R-75): a vm's `weight` is a number, an int or a float, sent
+# as a JSON number.
+type_attr(compute.vm, "weight", "number", [])
+
 # What an attribute that points at another resource takes: the resource
 # itself (`vpc = main`), resolved to its id at Apply (R-43). Each is named
 # for the thing it points at.

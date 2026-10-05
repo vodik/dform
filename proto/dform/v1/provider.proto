@@ -46,8 +46,8 @@ service Provider {
   rpc Import(ImportRequest) returns (ImportResponse);
 }
 
-// A value, as src/value.rs has it, and a float, which it does not have: the
-// engine reads a float as the string of its shortest round-trip decimal.
+// A value, as src/value.rs has it. A float is finite: NaN and the infinities
+// are no value.
 message Value {
   oneof kind {
     string str = 1;

@@ -142,8 +142,8 @@ pub struct Plan {
 }
 
 /// A world value (or any JSON document) as the evaluator's value: a
-/// number that is not an integer and `null` become strings (the value
-/// model has neither).
+/// number an integer or a float (R-75), `null` the string (the value model
+/// has none).
 pub fn json_to_value(j: &Json) -> Value {
     match j {
         Json::Null => Value::Str("null".into()),
@@ -151,6 +151,11 @@ pub fn json_to_value(j: &Json) -> Value {
         Json::Number(n) => n
             .as_i64()
             .map(Value::Int)
+            .or_else(|| {
+                n.as_f64()
+                    .and_then(crate::value::Float::new)
+                    .map(Value::Float)
+            })
             .unwrap_or(Value::Str(n.to_string())),
         Json::String(s) => Value::Str(s.clone()),
         Json::Array(xs) => Value::List(xs.iter().map(json_to_value).collect()),

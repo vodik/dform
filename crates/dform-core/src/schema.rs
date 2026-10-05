@@ -187,6 +187,10 @@ impl Render {
             (Some(Dim::Cpu), Value::Int(n)) => {
                 Value::Quantity(Quantity::Cpu(n.checked_mul(1000).ok_or("out of range")?))
             }
+            // A decimal is cores (R-75, R-66).
+            (Some(Dim::Cpu), Value::Float(f)) => {
+                Value::Quantity(q::read(Dim::Cpu, &f.to_string())?)
+            }
             (None, Value::Str(s)) => Value::Time(crate::time::Time::parse(s)?),
             (_, v) => v.clone(),
         };

@@ -544,13 +544,13 @@ pub fn body(name: &str) -> Option<Body> {
 /// Every function's body, by its qualified name.
 pub const BODIES: &[(&str, Body)] = &[
     ("add", |a| {
-        int2(a, |x, y| Some(x + y)).or_else(|| measured(a, false))
+        num2(a, |x, y| Some(x + y), |x, y| x + y).or_else(|| measured(a, false))
     }),
     ("sub", |a| {
-        int2(a, |x, y| Some(x - y)).or_else(|| measured(a, true))
+        num2(a, |x, y| Some(x - y), |x, y| x - y).or_else(|| measured(a, true))
     }),
     ("mul", |a| {
-        int2(a, |x, y| Some(x * y)).or_else(|| match a {
+        num2(a, |x, y| Some(x * y), |x, y| x * y).or_else(|| match a {
             [Value::Quantity(q), Value::Int(n)] | [Value::Int(n), Value::Quantity(q)] => {
                 crate::quantity::scale(q, *n).map(Value::Quantity)
             }
@@ -558,7 +558,7 @@ pub const BODIES: &[(&str, Body)] = &[
         })
     }),
     ("div", |a| {
-        int2(a, |x, y| (y != 0).then(|| x / y)).or_else(|| match a {
+        num2(a, |x, y| (y != 0).then(|| x / y), |x, y| x / y).or_else(|| match a {
             [Value::Quantity(q), Value::Int(n)] => {
                 crate::quantity::divide(q, *n).map(Value::Quantity)
             }
@@ -568,12 +568,25 @@ pub const BODIES: &[(&str, Body)] = &[
             _ => None,
         })
     }),
-    ("mod", |a| int2(a, |x, y| (y != 0).then(|| x % y))),
+    ("mod", |a| {
+        num2(a, |x, y| (y != 0).then(|| x % y), |x, y| x % y)
+    }),
     // Constructors (DESIGN.org "Silent string-to-int coercion"):
     // conversions are explicit and named by their type.
     ("int", |a| match a {
         [Value::Int(i)] => Some(Value::Int(*i)),
+        // Toward zero; none past an int's range.
+        [Value::Float(f)] => {
+            let t = f.get().trunc();
+            (t >= i64::MIN as f64 && t < i64::MAX as f64).then_some(Value::Int(t as i64))
+        }
         [Value::Str(s)] => s.trim().parse().ok().map(Value::Int),
+        _ => None,
+    }),
+    ("float", |a| match a {
+        [f @ Value::Float(_)] => Some(f.clone()),
+        [Value::Int(i)] => crate::value::Float::new(*i as f64).map(Value::Float),
+        [Value::Str(s)] => crate::value::Float::parse(s).ok().map(Value::Float),
         _ => None,
     }),
     ("string", |a| match a {
@@ -986,14 +999,12 @@ pub const BODIES: &[(&str, Body)] = &[
         _ => None,
     }),
     ("list.sum", |a| match a {
-        [Value::List(xs)] => {
-            let mut total = 0i64;
-            for x in xs {
-                let Value::Int(n) = x else { return None };
-                total = total.checked_add(*n)?;
+        [Value::List(xs)] => xs.iter().try_fold(Value::Int(0), |total, x| match x {
+            Value::Int(_) | Value::Float(_) => {
+                num2(&[total, x.clone()], i64::checked_add, |x, y| x + y)
             }
-            Some(Value::Int(total))
-        }
+            _ => None,
+        }),
         _ => None,
     }),
     ("list.contains", |a| match a {
@@ -1325,6 +1336,7 @@ pub(crate) fn value_to_string(v: &Value) -> String {
     match v {
         Value::Str(s) => s.clone(),
         Value::Int(i) => i.to_string(),
+        Value::Float(f) => f.to_string(),
         Value::Bool(b) => b.to_string(),
         Value::List(_) => "<list>".to_string(),
         Value::Obj(_) => "<obj>".to_string(),
@@ -1365,6 +1377,8 @@ fn quantity_of(a: &[Value], dim: crate::quantity::Dim) -> Option<Value> {
     match (a, dim) {
         ([Value::Quantity(q)], d) if q.dim() == d => Some(Value::Quantity(*q)),
         ([Value::Str(s)], d) => read(d, s).ok().map(Value::Quantity),
+        // A decimal is cores (`cpu(0.5)` is `500m`).
+        ([Value::Float(f)], Dim::Cpu) => read(Dim::Cpu, &f.to_string()).ok().map(Value::Quantity),
         ([Value::Int(n)], Dim::Bytes) => Some(Value::Quantity(Quantity::Bytes(*n))),
         ([Value::Int(n)], Dim::Cpu) => n
             .checked_mul(1000)
@@ -1398,10 +1412,22 @@ fn measured(a: &[Value], sub: bool) -> Option<Value> {
     }
 }
 
-/// A function of two integers.
-fn int2(a: &[Value], f: fn(i64, i64) -> Option<i64>) -> Option<Value> {
+/// A function of two numbers (R-75): of two ints `int`, an int; of a
+/// float and a number `float`, the int promoted, and no value when the
+/// result is not finite (a division by zero).
+fn num2(
+    a: &[Value],
+    int: fn(i64, i64) -> Option<i64>,
+    float: fn(f64, f64) -> f64,
+) -> Option<Value> {
+    let f = |v: &Value| match v {
+        Value::Int(i) => Some(*i as f64),
+        Value::Float(f) => Some(f.get()),
+        _ => None,
+    };
     match a {
-        [Value::Int(x), Value::Int(y)] => f(*x, *y).map(Value::Int),
+        [Value::Int(x), Value::Int(y)] => int(*x, *y).map(Value::Int),
+        [x, y] => crate::value::Float::new(float(f(x)?, f(y)?)).map(Value::Float),
         _ => None,
     }
 }
@@ -1466,6 +1492,7 @@ fn scalar_text(v: &Value) -> Option<String> {
     match v {
         Value::Str(s) => Some(s.clone()),
         Value::Int(i) => Some(i.to_string()),
+        Value::Float(f) => Some(f.to_string()),
         Value::Bool(b) => Some(b.to_string()),
         Value::Quantity(_) | Value::Time(_) | Value::Url(_) => v.typed_text(),
         Value::Ip(_) | Value::IpNet { .. } | Value::IpRange { .. } => {

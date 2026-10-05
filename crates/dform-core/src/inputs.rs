@@ -153,8 +153,8 @@ pub fn type_text(t: &TypeExpr) -> String {
 pub fn check_type(t: &TypeExpr) -> Result<(), String> {
     match t {
         TypeExpr::Name(n) => match n.as_str() {
-            "int" | "string" | "bool" | "inet" | "symbol" | "addr" | "any" | "bytes" | "cpu"
-            | "duration" | "time" | "url" => Ok(()),
+            "int" | "float" | "number" | "string" | "bool" | "inet" | "symbol" | "addr" | "any"
+            | "bytes" | "cpu" | "duration" | "time" | "url" => Ok(()),
             _ => Err(format!("unknown type {n}")),
         },
         TypeExpr::Apply(n, args) => match (n.as_str(), args.as_slice()) {
@@ -183,6 +183,8 @@ pub fn has_type(t: &TypeExpr, v: &Value) -> bool {
     match t {
         TypeExpr::Name(n) => match n.as_str() {
             "int" => matches!(v, Value::Int(_)),
+            "float" => matches!(v, Value::Float(_)),
+            "number" => matches!(v, Value::Int(_) | Value::Float(_)),
             "string" | "symbol" | "addr" => matches!(v, Value::Str(_)),
             "bool" => matches!(v, Value::Bool(_)),
             "inet" => matches!(v, Value::IpNet { .. }),
@@ -217,10 +219,20 @@ pub fn has_type(t: &TypeExpr, v: &Value) -> bool {
 
 /// A command-line value read as the input's type: `--set` gives a string,
 /// an int or a bool, `--set k=@FILE` a document; an `inet` input parses its
-/// string, a `string` input takes the text of an int or a bool, and an
+/// string, a `float` or `number` one its text as a number (an int is the
+/// float it names), a `string` input takes the text of an int or a bool, and an
 /// object's fields and a list's elements are read as theirs.
 pub fn coerce(t: &TypeExpr, v: Value) -> Value {
     match (t, v) {
+        (TypeExpr::Name(n), Value::Str(s)) if n == "float" || n == "number" => {
+            match crate::value::Float::parse(&s) {
+                Ok(f) => Value::Float(f),
+                Err(_) => Value::Str(s),
+            }
+        }
+        (TypeExpr::Name(n), Value::Int(i)) if n == "float" => {
+            crate::value::Float::new(i as f64).map_or(Value::Int(i), Value::Float)
+        }
         (TypeExpr::Name(n), Value::Str(s)) if n == "inet" => match crate::value::parse_ipnet(&s) {
             Some((addr, prefix)) => Value::IpNet { addr, prefix },
             None => Value::Str(s),
@@ -236,6 +248,7 @@ pub fn coerce(t: &TypeExpr, v: Value) -> Value {
             }
         }
         (TypeExpr::Name(n), Value::Int(i)) if n == "string" => Value::Str(i.to_string()),
+        (TypeExpr::Name(n), Value::Float(f)) if n == "string" => Value::Str(f.to_string()),
         (TypeExpr::Name(n), Value::Bool(b)) if n == "string" => Value::Str(b.to_string()),
         (TypeExpr::Apply(n, xs), v) if n == "secret" && xs.len() == 1 => coerce(&xs[0], v),
         (TypeExpr::Apply(n, xs), Value::List(vs))

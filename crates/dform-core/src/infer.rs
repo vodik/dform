@@ -652,6 +652,7 @@ fn kind(v: &Value) -> Option<Ty> {
     let s = |x: &str| Some(Ty::Scalar(x.into()));
     match v {
         Value::Int(_) => s("int"),
+        Value::Float(_) => s("float"),
         Value::Bool(_) => s("bool"),
         Value::IpNet { .. } => s("inet"),
         Value::Ip(_) => s("ip"),
@@ -674,11 +675,18 @@ fn compatible(a: &Ty, b: &Ty) -> bool {
         // string attribute): a string column holding them is the narrower
         // type.
         (Ty::Scalar(x), Ty::Scalar(y)) if text_of(x, y) || text_of(y, x) => true,
+        // Numbers compare by value (R-75).
+        (Ty::Scalar(x), Ty::Scalar(y)) if number(x) && number(y) => true,
         (Ty::List(x), Ty::List(y)) => compatible(x, y),
         (Ty::Ref(x), Ty::Ref(y)) => x == y,
         (Ty::Scalar(x), Ty::Scalar(y)) => x == y,
         _ => false,
     }
+}
+
+/// `int`, `float`, `number` (either).
+fn number(ty: &str) -> bool {
+    matches!(ty, "int" | "float" | "number")
 }
 
 /// `narrow` is read from a string: an `inet`, an `ip`.
@@ -687,9 +695,12 @@ fn text_of(string: &str, narrow: &str) -> bool {
 }
 
 /// The more telling of two compatible types: an enum over a string, a
-/// typed list over an untyped one.
+/// typed list over an untyped one; an int and a float are numbers.
 fn narrower(a: Ty, b: &Ty) -> Ty {
     match (&a, b) {
+        (Ty::Scalar(x), Ty::Scalar(y)) if x != y && number(x) && number(y) => {
+            Ty::Scalar("number".into())
+        }
         (Ty::Any, _) => b.clone(),
         (Ty::Scalar(s), Ty::Enum(_)) if s == "string" => b.clone(),
         (Ty::Scalar(s), Ty::Scalar(n)) if text_of(s, n) => b.clone(),
@@ -905,8 +916,8 @@ impl Pass<'_> {
             if matches!(c.op, "+" | "-" | "*" | "/" | "%") {
                 for (t, ty) in [(&c.a, &ta), (&c.b, &tb)] {
                     let Some(ty) = ty else { continue };
-                    let number = matches!(ty, Ty::Scalar(s) if matches!(s.as_str(),
-                        "int" | "bytes" | "cpu" | "duration" | "time"));
+                    let number = matches!(ty, Ty::Scalar(s) if number(s) || matches!(s.as_str(),
+                        "bytes" | "cpu" | "duration" | "time"));
                     if !number && !matches!(ty, Ty::Any | Ty::Secret(_)) {
                         diags.push(Diagnostic::error(
                             c.span,
@@ -1094,7 +1105,7 @@ impl Pass<'_> {
                 None => {
                     string.get_or_insert(l);
                 }
-                Some(k) => match &first {
+                Some(k) => match &mut first {
                     None => first = Some((l, k)),
                     Some((f, fk)) if !compatible(fk, &k) => {
                         diags.push(
@@ -1106,7 +1117,7 @@ impl Pass<'_> {
                         );
                         return None;
                     }
-                    Some(_) => {}
+                    Some((_, fk)) => *fk = narrower(fk.clone(), &k),
                 },
             }
         }
@@ -1136,6 +1147,7 @@ fn shown(v: &Value) -> String {
     match v {
         Value::Str(s) => format!("the string {s:?}"),
         Value::Int(i) => format!("the int {i}"),
+        Value::Float(f) => format!("the float {f}"),
         Value::Bool(b) => format!("the bool {b}"),
         v => format!("`{}`", crate::partition::fmt_value(v)),
     }
@@ -1165,7 +1177,7 @@ impl Inferred {
         let read = |ty: Option<&Ty>, t: &mut Term| {
             let Some(ty) = ty else { return };
             let wanted = matches!(ty, Ty::Scalar(s) if matches!(s.as_str(),
-                "inet" | "ip" | "bytes" | "cpu" | "duration" | "time"));
+                "inet" | "ip" | "float" | "bytes" | "cpu" | "duration" | "time"));
             if !wanted || !matches!(t, Term::Val(_)) {
                 return;
             }
@@ -1290,7 +1302,7 @@ impl<'de> serde::Deserialize<'de> for Cell {
                 Ok(Cell(Some("int")))
             }
             fn visit_f64<E>(self, _: f64) -> std::result::Result<Cell, E> {
-                Ok(Cell(None))
+                Ok(Cell(Some("float")))
             }
             fn visit_str<E>(self, _: &str) -> std::result::Result<Cell, E> {
                 Ok(Cell(None))

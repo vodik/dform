@@ -6,6 +6,10 @@ use std::collections::BTreeMap;
 pub enum Value {
     Str(String),
     Int(i64),
+    /// A decimal number (R-75): a decimal literal (`0.5`), a document's
+    /// `1.5`, `float(x)`. Finite, so it is equal to, ordered and hashed
+    /// by its value.
+    Float(Float),
     Bool(bool),
     List(Vec<Value>),
     Obj(BTreeMap<String, Value>),
@@ -47,6 +51,87 @@ pub enum Value {
         class: NullClass,
         ty: String,
     },
+}
+
+/// A float's value: an `f64` that is finite (NaN and the infinities are
+/// errors where a float is read, [`Float::new`]) and never `-0` (read as
+/// `0`), so equality, order and hash are total and agree.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(try_from = "f64", into = "f64")]
+pub struct Float(f64);
+
+impl Float {
+    /// `f` as a float; none for NaN or an infinity.
+    pub fn new(f: f64) -> Option<Float> {
+        f.is_finite()
+            .then_some(Float(if f == 0.0 { 0.0 } else { f }))
+    }
+
+    pub fn get(self) -> f64 {
+        self.0
+    }
+
+    /// `text` read as a float (`1.5`, `2`, `-0.25`, `1e-3`), or why it is
+    /// not one: what `--set` and `float(s)` read.
+    pub fn parse(text: &str) -> Result<Float, String> {
+        let f: f64 = text
+            .trim()
+            .parse()
+            .map_err(|_| format!("{text:?} is not a number"))?;
+        Float::new(f).ok_or_else(|| format!("{text:?} is not a finite number"))
+    }
+}
+
+impl TryFrom<f64> for Float {
+    type Error = String;
+    fn try_from(f: f64) -> Result<Float, String> {
+        Float::new(f).ok_or_else(|| format!("{f} is not a finite number"))
+    }
+}
+
+impl From<Float> for f64 {
+    fn from(f: Float) -> f64 {
+        f.0
+    }
+}
+
+impl PartialEq for Float {
+    fn eq(&self, other: &Float) -> bool {
+        self.0.to_bits() == other.0.to_bits()
+    }
+}
+
+impl Eq for Float {}
+
+impl PartialOrd for Float {
+    fn partial_cmp(&self, other: &Float) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Float {
+    fn cmp(&self, other: &Float) -> std::cmp::Ordering {
+        self.0.total_cmp(&other.0)
+    }
+}
+
+impl std::hash::Hash for Float {
+    fn hash<H: std::hash::Hasher>(&self, h: &mut H) {
+        self.0.to_bits().hash(h);
+    }
+}
+
+/// The shortest text that reads back as the same float, always with a
+/// fraction so it reads back as a float: `1.5`, `2.0`, `0.001`.
+impl std::fmt::Display for Float {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = self.0.to_string();
+        if s.contains('.') {
+            f.write_str(&s)
+        } else {
+            write!(f, "{s}.0")
+        }
+    }
 }
 
 /// The three null classes of proposal E (grafted from direction C). The class is
@@ -177,4 +262,24 @@ pub fn parse_ipnet(s: &str) -> Option<(u32, u8)> {
 
 pub fn ipnet_to_string(addr: u32, prefix: u8) -> String {
     format!("{}/{}", u32_to_ipv4(addr), prefix)
+}
+
+/// How two numbers order by value (R-75), an int against a float exactly
+/// (no rounding of a large int); none when either is not a number.
+pub fn compare_numbers(a: &Value, b: &Value) -> Option<std::cmp::Ordering> {
+    use std::cmp::Ordering;
+    let int_float = |i: i64, f: f64| match (i as f64).total_cmp(&f) {
+        // `f` is integral and within a rounding of `i`: compare as ints
+        // (`2^63` itself is past every i64).
+        Ordering::Equal if f >= i64::MAX as f64 => Ordering::Less,
+        Ordering::Equal => i.cmp(&(f as i64)),
+        o => o,
+    };
+    Some(match (a, b) {
+        (Value::Int(x), Value::Int(y)) => x.cmp(y),
+        (Value::Float(x), Value::Float(y)) => x.cmp(y),
+        (Value::Int(x), Value::Float(y)) => int_float(*x, y.get()),
+        (Value::Float(x), Value::Int(y)) => int_float(*y, x.get()).reverse(),
+        _ => return None,
+    })
 }

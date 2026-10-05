@@ -37,9 +37,9 @@ fn min(xs: list) -> any?
 #| example: let busiest = list.max(replica_counts)
 fn max(xs: list) -> any?
 
-#| The sum of the list's integers; no value when one is not an integer.
+#| The sum of the list's numbers, a float if one is (R-75); no value when one is not a number.
 #| example: let total = list.sum(replica_counts)
-fn sum(xs: list) -> int?
+fn sum(xs: list) -> number?
 
 #| Whether the list holds the value; also a predicate.
 #| example: deny "unknown zone" where not list.contains(allowed_zones, z)

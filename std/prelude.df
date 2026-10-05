@@ -13,9 +13,13 @@
 # own, not callable from a program.
 package prelude
 
-#| An integer from its text (an integer is itself); strings never coerce silently.
+#| An integer from its text or a float (toward zero; an integer is itself); strings never coerce silently.
 #| example: let port = int(cfg.port)
-fn int(value: string) -> int?
+fn int(value: any) -> int?
+
+#| A float from its text or an integer (a float is itself).
+#| example: let ratio = float(cfg.ratio)
+fn float(value: any) -> float?
 
 #| A scalar's text; lists, objects, references and nulls have none.
 #| example: let label = string(replicas)
@@ -79,25 +83,25 @@ fn declassify(value: any, reason: string) -> any forwards nulls
 
 # Arithmetic: `a + b` lowers to `add(a, b)`, and so on.
 
-#| The sum of two integers; `a + b` lowers to it.
+#| The sum of two numbers (a float if either is, R-75); `a + b` lowers to it.
 #| example: let n = replicas + 1
-internal fn add(a: int, b: int) -> int forwards
+internal fn add(a: number, b: number) -> number forwards
 
-#| The difference of two integers; `a - b` lowers to it.
+#| The difference of two numbers (a float if either is); `a - b` lowers to it.
 #| example: let spare = max - used
-internal fn sub(a: int, b: int) -> int forwards
+internal fn sub(a: number, b: number) -> number forwards
 
-#| The product of two integers; `a * b` lowers to it.
+#| The product of two numbers (a float if either is); `a * b` lowers to it.
 #| example: let bytes = gib * 1073741824
-internal fn mul(a: int, b: int) -> int forwards
+internal fn mul(a: number, b: number) -> number forwards
 
-#| Integer division, no value when `b` is 0; `a / b` lowers to it.
+#| Integer division of two ints, else a float's; no value when `b` is 0; `a / b` lowers to it.
 #| example: let half = n / 2
-internal fn div(a: int, b: int) -> int? forwards
+internal fn div(a: number, b: number) -> number? forwards
 
-#| The remainder of integer division, no value when `b` is 0; `a % b` lowers to it.
+#| The remainder of a division, no value when `b` is 0; `a % b` lowers to it.
 #| example: odd(n) where n % 2 == 1
-internal fn mod(a: int, b: int) -> int? forwards
+internal fn mod(a: number, b: number) -> number? forwards
 
 # The lowering's own (E §2.5): a declared attribute's null, its label,
 # and a walk inside a value.
@@ -116,7 +120,7 @@ internal fn __null(
 #| example: __label(T, A, P)
 internal fn __label(type: string, name: string, path: string) -> string forwards nulls
 
-#| A quantity literal with no reading of its own (`500m`, `0.5`) until its position's type reads it (R-66); it has no value.
+#| A quantity literal with no reading of its own (`500m`) until its position's type reads it (R-66); it has no value.
 #| example: __quantity("500m", file, start, end)
 internal fn __quantity(text: string, file: int, start: int, end: int) -> any?
 

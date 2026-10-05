@@ -1440,6 +1440,7 @@ impl Providers {
         Ok(match v {
             Value::Str(s) => json!(s),
             Value::Int(i) => json!(i),
+            Value::Float(f) => json!(f.get()),
             Value::Bool(b) => json!(b),
             Value::List(xs) => Json::Array(
                 xs.iter()
@@ -2216,6 +2217,7 @@ fn known_json(v: &Value) -> Option<Json> {
     Some(match v {
         Value::Str(s) => json!(s),
         Value::Int(i) => json!(i),
+        Value::Float(f) => json!(f.get()),
         Value::Bool(b) => json!(b),
         Value::List(xs) => Json::Array(xs.iter().map(known_json).collect::<Option<_>>()?),
         Value::Obj(m) => Json::Object(

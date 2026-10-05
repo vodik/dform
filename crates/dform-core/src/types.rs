@@ -33,7 +33,7 @@ use crate::value::Value;
 use anyhow::Result;
 
 /// The internal function a quantity literal with no reading of its own
-/// lowers to (`500m`, `0.5`): the position's type reads it.
+/// lowers to (`500m`, `2.5m`): the position's type reads it.
 pub const AMBIGUOUS: &str = "__quantity";
 
 /// A schema attribute's type, as `type_attr` writes it.
@@ -47,9 +47,10 @@ pub enum Ty {
     Secret(Box<Ty>),
     /// `enum(a, b, ..)`.
     Enum(Vec<String>),
-    /// `string`, `int`, `bool`, `inet`, `ip`, `url`, `regex` (a pattern,
-    /// not a schema type: a function parameter only), the quantities
-    /// `bytes`, `cpu`, `duration`, and `time`.
+    /// `string`, `int`, `float`, `number` (an int or a float, R-75),
+    /// `bool`, `inet`, `ip`, `url`, `regex` (a pattern, not a schema type:
+    /// a function parameter only), the quantities `bytes`, `cpu`,
+    /// `duration`, and `time`.
     Scalar(String),
     /// Anything the check does not judge (`map`, `object`, `any`, an
     /// untyped `list`).
@@ -64,8 +65,8 @@ impl Ty {
         let s = s.trim();
         let Some((head, rest)) = s.split_once('(') else {
             return match s {
-                "string" | "int" | "bool" | "inet" | "ip" | "bytes" | "cpu" | "duration"
-                | "time" | "url" | "regex" => Ty::Scalar(s.to_string()),
+                "string" | "int" | "float" | "number" | "bool" | "inet" | "ip" | "bytes"
+                | "cpu" | "duration" | "time" | "url" | "regex" => Ty::Scalar(s.to_string()),
                 _ => Ty::Any,
             };
         };
@@ -163,6 +164,7 @@ fn shown_literal(v: &Value) -> String {
     match v {
         Value::Str(s) => format!("the string {s:?}"),
         Value::Int(i) => format!("the int {i}"),
+        Value::Float(f) => format!("the float {f}"),
         Value::Bool(b) => format!("the bool {b}"),
         Value::Quantity(q) => format!("the {} {q}", q.dim().name()),
         Value::Time(t) => format!("the time {t}"),
@@ -171,12 +173,26 @@ fn shown_literal(v: &Value) -> String {
     }
 }
 
-/// An ambiguous quantity literal as it lowers: `__quantity("500m", file,
-/// start, end)`, its span kept for the error when no position reads it.
+/// A quantity literal with no unit of its own (`quantity::Literal::Ambiguous`)
+/// as it lowers: a decimal, `0.5`, is a float (R-75), which a quantity's
+/// position reads as one (`0.5` cores is `500m`); `500m` is
+/// `__quantity("500m", file, start, end)`, its span kept for the error
+/// when no position reads it.
 pub fn ambiguous_literal(text: &str, span: crate::ast::Span) -> Term {
+    if !text.ends_with('m')
+        && let Ok(f) = crate::value::Float::parse(text)
+    {
+        return Term::Val(Value::Float(f));
+    }
+    spanned(AMBIGUOUS, text, span)
+}
+
+/// `name(text, file, start, end)`: an internal call that keeps the span of
+/// what it was written as.
+fn spanned(name: &str, text: &str, span: crate::ast::Span) -> Term {
     let n = |x: u32| Term::Val(Value::Int(i64::from(x)));
     Term::Func {
-        name: AMBIGUOUS.to_string(),
+        name: name.to_string(),
         args: vec![
             Term::Val(Value::Str(text.to_string())),
             n(span.file),
@@ -194,14 +210,11 @@ pub fn ambiguous_literal(text: &str, span: crate::ast::Span) -> Term {
 pub const AMBIGUOUS_REF: &str = "__resource";
 
 pub fn ambiguous_ref(name: &str, span: crate::ast::Span, candidates: Vec<Term>) -> Term {
-    let Term::Func { mut args, .. } = ambiguous_literal(name, span) else {
-        unreachable!("ambiguous_literal is a call")
+    let Term::Func { name, mut args } = spanned(AMBIGUOUS_REF, name, span) else {
+        unreachable!("spanned is a call")
     };
     args.extend(candidates);
-    Term::Func {
-        name: AMBIGUOUS_REF.to_string(),
-        args,
-    }
+    Term::Func { name, args }
 }
 
 /// The name and the candidate references of an ambiguous resource name.
@@ -304,6 +317,10 @@ fn measure(s: &str, t: &Term) -> Option<Result<Value, String>> {
         ("duration", Term::Val(Value::Int(n))) => Err(format!(
             "is a duration: the int {n} has no unit (`{n}s`, `{n}m`, `{n}h`, `{n}d`)"
         )),
+        // A decimal is cores (`0.5` is `500m`, R-66); bytes are whole.
+        ("cpu" | "bytes", Term::Val(Value::Float(f))) => {
+            text(&f.to_string()).map_err(|e| format!("is {s}: {e}"))
+        }
         (_, Term::Val(Value::Str(x))) => text(x).map_err(|e| format!("is {s}: {e}")),
         (_, Term::Val(Value::Null { .. })) => return None,
         (_, Term::Val(v)) => Err(format!("is {s}, not {}", shown_literal(v))),
@@ -367,6 +384,8 @@ pub fn mismatch(ty: &Ty, t: &Term) -> Option<String> {
             let fits = match (s.as_str(), v) {
                 ("string", Value::Str(_)) => true,
                 ("int", Value::Int(_)) => true,
+                // An int literal in a float position is that float.
+                ("float" | "number", Value::Int(_) | Value::Float(_)) => true,
                 ("bool", Value::Bool(_)) => true,
                 ("inet", Value::IpNet { .. }) => true,
                 ("inet", Value::Str(x)) => crate::value::parse_ipnet(x).is_some(),
@@ -457,6 +476,9 @@ fn read_as(ty: &Ty, t: Term) -> Term {
             Some(Ok(v)) => Term::Val(v),
             _ => t,
         },
+        (Ty::Scalar(s), Term::Val(Value::Int(i))) if s == "float" => {
+            Term::Val(crate::value::Float::new(i as f64).map_or(Value::Int(i), Value::Float))
+        }
         (Ty::Scalar(s), Term::Val(Value::Str(x))) if s == "inet" => {
             match crate::value::parse_ipnet(&x) {
                 Some((addr, prefix)) => Term::Val(Value::IpNet { addr, prefix }),
@@ -686,7 +708,8 @@ enum Operand {
     Q(Dim),
     Time,
     Int,
-    /// `500m`, `0.5`: the other side says which.
+    Float,
+    /// `500m`: the other side says which.
     Ambiguous,
 }
 
@@ -695,6 +718,7 @@ fn operand(t: &Term) -> Option<Operand> {
         Term::Val(Value::Quantity(q)) => Operand::Q(q.dim()),
         Term::Val(Value::Time(_)) => Operand::Time,
         Term::Val(Value::Int(_)) => Operand::Int,
+        Term::Val(Value::Float(_)) => Operand::Float,
         t if ambiguous(t).is_some() => Operand::Ambiguous,
         _ => return None,
     })
@@ -704,7 +728,7 @@ fn operand_name(o: Operand) -> &'static str {
     match o {
         Operand::Q(d) => d.name(),
         Operand::Time => "a time",
-        Operand::Int => "a number",
+        Operand::Int | Operand::Float => "a number",
         Operand::Ambiguous => "a quantity",
     }
 }
@@ -723,14 +747,22 @@ pub fn operands(op: &str, a: Term, b: Term) -> Result<(Term, Term), String> {
         return Ok((a, b));
     };
     let read = |t: Term, d: Dim| -> Result<(Term, Operand), String> {
-        let text = ambiguous(&t).unwrap_or_default().to_string();
+        let text = match &t {
+            Term::Val(Value::Float(f)) => f.to_string(),
+            t => ambiguous(t).unwrap_or_default().to_string(),
+        };
         quantity::read(d, &text)
             .map(|q| (Term::Val(Value::Quantity(q)), Operand::Q(d)))
             .map_err(|e| format!("{e}, where the other side is {}", d.name()))
     };
+    // A decimal is a quantity where it adds to or compares with one
+    // (`c > 0.5` where `c` is cpu); it does not scale one.
+    let measures = !matches!(op, "*" | "/" | "%");
     let ((a, x), (b, y)) = match (x, y) {
         (Operand::Ambiguous, Operand::Q(d)) => (read(a, d)?, (b, y)),
         (Operand::Q(d), Operand::Ambiguous) => ((a, x), read(b, d)?),
+        (Operand::Float, Operand::Q(d)) if measures => (read(a, d)?, (b, y)),
+        (Operand::Q(d), Operand::Float) if measures => ((a, x), read(b, d)?),
         _ => ((a, x), (b, y)),
     };
     let shown = |t: &Term| match ambiguous(t) {
@@ -758,7 +790,12 @@ pub fn operands(op: &str, a: Term, b: Term) -> Result<(Term, Term), String> {
     let dur = Q(Dim::Duration);
     match (op, x, y) {
         (_, Ambiguous, _) | (_, _, Ambiguous) => return Ok((a, b)),
-        (_, Int, Int) => {}
+        (_, Int | Float, Int | Float) => {}
+        ("mul", Q(_), Float) | ("mul", Float, Q(_)) | ("div", Q(_), Float) => {
+            return Err(format!(
+                "{written}: a quantity scales by an int; a float scales none"
+            ));
+        }
         ("add" | "sub" | "cmp", Q(p), Q(q)) if p == q => {}
         ("add" | "sub", Time, d) if d == dur => {}
         ("add", d, Time) if d == dur => {}

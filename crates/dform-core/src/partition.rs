@@ -783,6 +783,7 @@ pub fn fmt_value(v: &Value) -> String {
     match v {
         Value::Str(s) => quote(s),
         Value::Int(i) => i.to_string(),
+        Value::Float(f) => f.to_string(),
         Value::Bool(b) => b.to_string(),
         Value::List(xs) => format!(
             "[{}]",

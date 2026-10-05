@@ -48,6 +48,7 @@ pub fn value(v: &Value) -> pb::Value {
     msg(match v {
         Value::Str(s) => Kind::Str(s.clone()),
         Value::Int(i) => Kind::Int(*i),
+        Value::Float(f) => Kind::Float(f.get()),
         Value::Bool(b) => Kind::Bool(*b),
         Value::List(xs) => Kind::List(pb::List {
             items: xs.iter().map(value).collect(),
@@ -85,10 +86,10 @@ pub fn value(v: &Value) -> pb::Value {
     })
 }
 
-/// A float as the engine holds it: the shortest decimal that parses back to
-/// the same `f64` (what a JSON number's text is).
-pub fn float(f: f64) -> String {
-    serde_json::Number::from_f64(f).map_or_else(|| f.to_string(), |n| n.to_string())
+/// A float as the engine holds it (R-75): NaN and the infinities are no
+/// value.
+fn float(f: f64) -> Result<crate::value::Float> {
+    crate::value::Float::new(f).ok_or_else(|| anyhow!("{f} is not a finite number"))
 }
 
 pub fn from_value(v: &pb::Value) -> Result<Value> {
@@ -134,7 +135,7 @@ pub fn from_value(v: &pb::Value) -> Result<Value> {
             class: from_class(n.class)?,
             ty: n.ty.clone(),
         },
-        Kind::Float(f) => Value::Str(float(*f)),
+        Kind::Float(f) => Value::Float(float(*f)?),
     })
 }
 
@@ -213,7 +214,7 @@ pub fn from_doc(v: &pb::Value) -> Result<Json> {
             },
             _ => provider::null_json(&n.label),
         },
-        Kind::Float(f) => Json::String(float(*f)),
+        Kind::Float(f) => Json::from(f64::from(float(*f)?)),
         other => bail!("a document holds JSON values, not {other:?}"),
     })
 }
@@ -322,26 +323,25 @@ mod tests {
         assert_eq!(from_doc(&doc(&d)).unwrap(), d);
     }
 
-    /// A float crosses as `Float`; the engine reads it as the text of its
-    /// shortest round-trip decimal, what it read the JSON number as before.
+    /// A float crosses as `Float` and is the engine's float (R-75), back
+    /// as the same JSON number; NaN is no value.
     #[test]
-    fn a_float_crosses_as_a_float_and_reads_as_its_decimal() {
+    fn a_float_crosses_as_a_float() {
         use pb::value::Kind;
-        for (j, text) in [
-            (json!(0.1), "0.1"),
-            (json!(1e300), "1e+300"),
-            (json!(-2.5), "-2.5"),
-        ] {
+        for j in [json!(0.1), json!(1e300), json!(-2.5)] {
             let w = doc(&j);
             let Some(Kind::Float(f)) = w.kind else {
                 panic!("{j} crosses as {w:?}");
             };
-            assert_eq!(from_doc(&w).unwrap(), json!(text));
-            assert_eq!(from_value(&w).unwrap(), Value::Str(text.into()));
-            assert_eq!(text.parse::<f64>().unwrap(), f);
-            let Json::Number(n) = &j else { unreachable!() };
-            assert_eq!(n.to_string(), text, "the JSON number's own text");
+            assert_eq!(from_doc(&w).unwrap(), j);
+            let v = from_value(&w).unwrap();
+            assert_eq!(v, Value::Float(crate::value::Float::new(f).unwrap()));
+            assert_eq!(from_value(&value(&v)).unwrap(), v);
         }
+        let nan = pb::Value {
+            kind: Some(Kind::Float(f64::NAN)),
+        };
+        assert!(from_value(&nan).is_err() && from_doc(&nan).is_err());
         assert_eq!(
             doc(&json!(u64::MAX)).kind,
             Some(Kind::Str(u64::MAX.to_string()))

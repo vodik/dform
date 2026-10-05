@@ -1806,6 +1806,8 @@ pub fn value_to_json(v: &Value) -> serde_json::Value {
     match v {
         Value::Str(s) => serde_json::Value::String(s.clone()),
         Value::Int(i) => serde_json::Value::Number((*i).into()),
+        Value::Float(f) => serde_json::Number::from_f64(f.get())
+            .map_or(serde_json::Value::Null, serde_json::Value::Number),
         Value::Bool(b) => serde_json::Value::Bool(*b),
         Value::List(xs) => serde_json::Value::Array(xs.iter().map(value_to_json).collect()),
         Value::Obj(m) => serde_json::Value::Object(
@@ -2305,10 +2307,30 @@ fn fold(name: &str, kind: AggKind, items: Vec<Value>) -> std::result::Result<Val
             }
             Ok(Value::Quantity(total.expect("a group has a row")))
         }
+        // A sum with a float in it is a float (R-75).
+        AggKind::Sum if items.iter().any(|v| matches!(v, Value::Float(_))) => {
+            let mut total = 0f64;
+            for v in &items {
+                total += match v {
+                    Value::Int(n) => *n as f64,
+                    Value::Float(f) => f.get(),
+                    v => {
+                        return Err(format!(
+                            "{name}() over {}, which is not a number",
+                            partition::fmt_value(v)
+                        ));
+                    }
+                };
+            }
+            crate::value::Float::new(total)
+                .map(Value::Float)
+                .ok_or_else(|| format!("{name}() overflows"))
+        }
         // The least and greatest quantity or time (R-66, R-62), in its
-        // dimension's order.
+        // dimension's order, and number with a float among them by value.
         AggKind::Min | AggKind::Max
-            if matches!(items.first(), Some(Value::Quantity(_) | Value::Time(_))) =>
+            if matches!(items.first(), Some(Value::Quantity(_) | Value::Time(_)))
+                || items.iter().any(|v| matches!(v, Value::Float(_))) =>
         {
             let mut best = items[0].clone();
             for v in &items[1..] {
@@ -3033,7 +3055,13 @@ fn eval_eq(
     }
     let mut out = state.clone();
     match (eval_term(a, &out), eval_term(b, &out)) {
-        (Some(av), Some(bv)) => Ok(rec.eq(&av, &bv, &out, "=").then_some(out)),
+        // Two numbers compare by value, an int with a float (R-75); a
+        // join matches a value as it is.
+        (Some(av), Some(bv)) => Ok(match crate::value::compare_numbers(&av, &bv) {
+            Some(o) => o.is_eq(),
+            None => rec.eq(&av, &bv, &out, "="),
+        }
+        .then_some(out)),
         (Some(av), None) => {
             if bind_term(b, av, &mut out, rec)? {
                 Ok(Some(out))
@@ -3106,15 +3134,19 @@ fn eval_neq(
         return Ok(None);
     }
     match (eval_term(a, state), eval_term(b, state)) {
-        (Some(av), Some(bv)) => Ok(match crate::lattice::eq3(&av, &bv) {
-            Truth::False => Some(state.clone()),
-            Truth::True => None,
-            Truth::Unknown => {
-                let mut nulls = nulls_in(&av);
-                nulls.extend(nulls_in(&bv));
-                rec.stuck(state, nulls, "!= against an open/secret null");
-                None
-            }
+        (Some(av), Some(bv)) => Ok(match crate::value::compare_numbers(&av, &bv) {
+            Some(o) if o.is_eq() => None,
+            Some(_) => Some(state.clone()),
+            None => match crate::lattice::eq3(&av, &bv) {
+                Truth::False => Some(state.clone()),
+                Truth::True => None,
+                Truth::Unknown => {
+                    let mut nulls = nulls_in(&av);
+                    nulls.extend(nulls_in(&bv));
+                    rec.stuck(state, nulls, "!= against an open/secret null");
+                    None
+                }
+            },
         }),
         _ => bail!("unsafe !=: both sides must be ground"),
     }
@@ -3519,11 +3551,14 @@ fn eval_func(name: &str, args: &[Term], state: &HashMap<String, Value>) -> Optio
     body(&vals)
 }
 
-/// How two values order: integers, quantities of one dimension, times by
-/// their instant; `Err` with why they do not.
+/// How two values order: numbers by value (an int with a float, R-75),
+/// quantities of one dimension, times by their instant; `Err` with why
+/// they do not.
 fn order(a: &Value, b: &Value) -> std::result::Result<Ordering, String> {
+    if let Some(o) = crate::value::compare_numbers(a, b) {
+        return Ok(o);
+    }
     match (a, b) {
-        (Value::Int(x), Value::Int(y)) => Ok(x.cmp(y)),
         (Value::Time(x), Value::Time(y)) => Ok(x.instant().cmp(&y.instant())),
         (Value::Quantity(x), Value::Quantity(y)) => {
             crate::quantity::compare(x, y).ok_or_else(|| {
@@ -3541,7 +3576,7 @@ fn order(a: &Value, b: &Value) -> std::result::Result<Ordering, String> {
                 }
             })
         }
-        _ => Err("comparison only supports ints, quantities and times".to_string()),
+        _ => Err("comparison only supports numbers, quantities and times".to_string()),
     }
 }
 

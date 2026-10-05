@@ -427,25 +427,23 @@ te(s) where s = toml.encode({ a: 1 })
 }
 
 /// `json.decode`, `yaml.decode` and `toml.decode` read as a table's
-/// document does: a whole float is an int, a null member is absent, a
-/// fraction, a null element and a YAML tag leave no value, a TOML
+/// document does: a number is an int or a float as written (R-75), a null
+/// member is absent, a null element and a YAML tag leave no value, a TOML
 /// datetime is a time.
 #[test]
 fn decode_reads_as_a_document_does() {
-    let src = r#"whole(n) where n = json.decode("{\"a\": 2.0}").a
+    let src = r#"whole(n, i) where n = json.decode("{\"a\": 2.0}").a, i = json.decode("2")
+frac(n) where n = yaml.decode("a: 1.5\n").a
 absent(k) where v = json.decode("{\"a\": 1, \"b\": null}"), k = len(v)
 when(t) where t = toml.decode("a = 2026-10-02T09:00:00Z\n").a, time.before(t, time("2027-01-01T00:00:00Z"))
 "#;
-    assert_eq!(facts(src, "whole"), ["whole(2)"]);
+    assert_eq!(facts(src, "whole"), ["whole(2.0, 2)"]);
+    assert_eq!(facts(src, "frac"), ["frac(1.5)"]);
     assert_eq!(facts(src, "absent"), ["absent(1)"]);
     assert_eq!(facts(src, "when").len(), 1);
-    // A fraction, a null element and a tag: no value, an error naming
-    // the call (engine.rs's `failed_builtin`).
-    for call in [
-        r#"json.decode("{\"a\": 1.5}")"#,
-        r#"json.decode("[1, null]")"#,
-        r#"yaml.decode("a: !x 1\n")"#,
-    ] {
+    // A null element and a tag: no value, an error naming the call
+    // (engine.rs's `failed_builtin`).
+    for call in [r#"json.decode("[1, null]")"#, r#"yaml.decode("a: !x 1\n")"#] {
         let program = parse_program(&format!("p(x) where x = {call}\n")).unwrap();
         let err = engine::eval(&program, &[]).unwrap_err().to_string();
         assert!(err.contains("is not defined for these arguments"), "{err}");

@@ -21,7 +21,9 @@ enum Tok {
     #[regex(r"[0-9]+")]
     Int,
     /// A quantity (R-66, R-62): a number with a unit adjacent (`1Gi`,
-    /// `500m`, `1h30m`, `1.5Gi`), or a number with a fraction (`0.5`).
+    /// `500m`, `1h30m`, `1.5Gi`), or a number with a fraction (`0.5`): a
+    /// float (R-75), which a quantity's position reads as one
+    /// (`types::ambiguous_literal`).
     #[regex(r"[0-9]+(\.[0-9]+)?[A-Za-z][A-Za-z0-9]*")]
     #[regex(r"[0-9]+\.[0-9]+")]
     Quantity,

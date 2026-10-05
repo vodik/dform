@@ -69,7 +69,7 @@
   function: (identifier) @function.builtin
   (#any-of? @function.builtin
     "count" "sum" "min" "max" "any" "all" "collect_set" "collect_list" "int"
-    "string" "inet" "ip" "bytes" "cpu" "duration" "time" "url" "iprange"
+    "float" "string" "inet" "ip" "bytes" "cpu" "duration" "time" "url" "iprange"
     "format" "len" "ref" "scoped" "cloud_ref" "declassify" "attr" "want"
     "arg" "output" "input" "cloud_attr" "cloud_exists"))
 

@@ -622,6 +622,7 @@ fn value_bytes(v: &Value) -> usize {
         Value::Url(u) => u.len(),
         Value::Quantity(_)
         | Value::Int(_)
+        | Value::Float(_)
         | Value::Bool(_)
         | Value::Ip(_)
         | Value::IpNet { .. }

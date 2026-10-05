@@ -80,7 +80,7 @@ IDENT    := [A-Za-z_][A-Za-z0-9_]*       ; case decides nothing; "_" alone is th
 STRING   := "\"" ... "\""                ; may span lines; escapes \" \\ \n \t \u{hex}; ${e} interpolates
 INT      := [0-9]+                       ; -1 is unary minus applied to 1
 QUANTITY := [0-9]+ ("." [0-9]+)? [A-Za-z][A-Za-z0-9]*   ; 1Gi 500m 1h30m 1.5Gi (R-66)
-          | [0-9]+ "." [0-9]+                           ; 0.5: cores, in a cpu position
+          | [0-9]+ "." [0-9]+                           ; 0.5: a float (R-75); cores in a cpu position
 RANK     := "@default" | "@override"
 COMMENT  := "#" to end of line
 ```
@@ -386,6 +386,36 @@ is no `ref(T)` needs the id as text (a bridged provider's `string`). An
 input or output of a module or component typed `ref(T)`, `list(ref(T))`
 or by a resource type holds references.
 
+### Numbers
+
+A number is an `int` (a whole `i64`) or a `float` (R-75: an `f64`).
+An integer literal is an int, `2`; a decimal literal is a float, `0.5`,
+`2.0`. A float is finite: NaN and the infinities are errors where a
+float is read (`--set`, a document, `float("nan")`, a division by
+zero), never values. It prints as the shortest decimal that reads back
+as the same float, with a fraction always (`0.1`, `2.0`), in the plan,
+`string(f)` and `"${f}"`; JSON, state and a provider get a JSON number.
+
+Arithmetic on two ints is an int, and `int / int` stays integer
+division (`7 / 2` is `3`); with a float on either side the int is
+promoted and the result is a float (`7 / 2.0` is `3.5`, `1 + 0.5` is
+`1.5`). `int(x)` converts a float toward zero or a string's text, and
+`float(x)` an int or a string's text; nothing converts silently.
+Comparison is by value across the two: `1 == 1.0`, `1 < 1.5`, exactly
+(no rounding of a large int). A join matches a value as it is, so a
+relation's int column does not join a float one; `sum`, `min` and
+`max` over numbers with a float among them are by value, a float sum.
+A quantity scales by an int only.
+
+`float` and `number` are types: an input, a column or a schema
+attribute typed `float` takes a float, an int literal read as the float
+it names (`input ratio: float = 1`); one typed `number` takes either and
+keeps it, as a JSON number. A document's `1.5` (and `2.0`) is a float
+and `2` an int; an `int` column reads a whole float as an int and
+refuses a fraction, a `float` one reads an int as a float. `--set` reads
+its text by the input's declared type: `--set ratio=0.25` is a float,
+`--set label=1.5` a string.
+
 ### Quantities and times
 
 A quantity is a number with its unit, held in the dimension's base unit
@@ -411,11 +441,12 @@ exactly, so equal values print alike; `string(q)` and `"${q}"` give
 that.
 
 `m` is millicores in a `cpu` position and minutes in a `duration` one, so
-`500m` (and a bare fraction, `0.5`) is read by its position: an
-attribute, an input, a function's parameter, or the other side of an
-operator (`1h + 30m`, `cpu(1) > 500m`). Where nothing gives it a type
-the literal is an error naming both readings; `cpu(500m)` and
-`duration(30m)` say which.
+`500m` is read by its position: an attribute, an input, a function's
+parameter, or the other side of an operator (`1h + 30m`, `cpu(1) >
+500m`). Where nothing gives it a type the literal is an error naming
+both readings; `cpu(500m)` and `duration(30m)` say which. A bare
+fraction, `0.5`, is a float ("Numbers"), read as cores where a `cpu`
+is wanted (`0.5` is `500m`, and so is `c > 0.5` where `c` is a cpu).
 
 The algebra (R-66 amendments 3, 4): a quantity scales by a number
 (`512Mi * 2`, `max_size / 2`, whole base units as integer division),
@@ -468,7 +499,7 @@ as a pattern at compile time.
 
 A literal in a position whose type is known is checked as that type at
 compile time (R-31, Postgres's unknown-literal rule): a schema attribute's
-type (`inet`, `int`, `bool`, `url`, `enum(..)`, `ref(T)`), an input's declared
+type (`inet`, `int`, `float`, `number`, `bool`, `url`, `enum(..)`, `ref(T)`), an input's declared
 type for its default and a copy's value, a function's parameter.
 `cidr_block = "10.0.0/16"` in an `inet` attribute, `vpc = "main"` in a
 `ref(net.vpc)` one and `subnets = [main]` (a `ref(net.vpc)` where
@@ -762,7 +793,7 @@ input at its path, a leaf by its dotted path (`db: {backup_days: 14}` is
 `db.backup_days`; a CSV document has the columns `path` and `value`);
 the document is a loader call, a selection into one, or any document
 value ("Documents"); a string is read as the input's type by its
-constructor (an `inet`, a quantity, a time; a CSV cell as an `int` too).
+constructor (an `inet`, a quantity, a time, a `float`; a CSV cell as an `int` too).
 A leaf at a path that is no input is a deny naming the file and line and
 the inputs there are. The document is the table `set(path, value)` read
 by the file provider, one rule per input the scope gives
