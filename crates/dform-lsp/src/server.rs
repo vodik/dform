@@ -229,7 +229,19 @@ impl Server<'_> {
                         return Ok(());
                     }
                     let id = req.id.clone();
-                    let answer = self.request(req);
+                    let method = req.method.clone();
+                    // A request that panics fails alone; the session goes on.
+                    let answer = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        self.request(req)
+                    }))
+                    .unwrap_or_else(|p| {
+                        let why = p
+                            .downcast_ref::<String>()
+                            .map(String::as_str)
+                            .or_else(|| p.downcast_ref::<&str>().copied())
+                            .unwrap_or("a panic");
+                        Err(anyhow!("{method}: internal error: {why}"))
+                    });
                     let resp = match answer {
                         Ok(v) => Response::new_ok(id, v),
                         Err(e) => Response::new_err(
@@ -971,10 +983,12 @@ impl Server<'_> {
                     &project, &path, at, decl,
                 ))?)
             }
-            "textDocument/prepareRename" => {
-                let (range, placeholder) = rename::prepare(&project, &path, at)?;
-                Ok(json!({ "range": range, "placeholder": placeholder }))
-            }
+            "textDocument/prepareRename" => Ok(match rename::prepare(&project, &path, at)? {
+                Some((range, placeholder)) => {
+                    json!({ "range": range, "placeholder": placeholder })
+                }
+                None => Json::Null,
+            }),
             _ => {
                 let r: lsp_types::RenameParams = serde_json::from_value(params)?;
                 let renaming = rename::rename(&project, &path, at, &r.new_name)?;

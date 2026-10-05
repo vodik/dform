@@ -20,18 +20,20 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 /// `textDocument/prepareRename`: the name's range and text, or why it
-/// cannot be renamed.
-pub fn prepare(p: &Project, path: &Path, at: usize) -> Result<(Range, String)> {
+/// cannot be renamed; `None` where no word is (a literal, a comment,
+/// whitespace, punctuation).
+pub fn prepare(p: &Project, path: &Path, at: usize) -> Result<Option<(Range, String)>> {
     let files = p.parse();
     let d = p.decls(&files);
-    let names::Named {
+    let Some(names::Named {
         file: f,
         token: t,
         range: r,
         what,
-    } = d
-        .at(&files, path, at)
-        .ok_or_else(|| anyhow!("no name here"))?;
+    }) = d.at(&files, path, at).filter(|n| n.token.kind().is_word())
+    else {
+        return Ok(None);
+    };
     // An instance whose name is also a string an `m[e]` reads: the
     // rename would not change the string, and `m[e]` would no longer
     // find the instance.
@@ -56,10 +58,10 @@ pub fn prepare(p: &Project, path: &Path, at: usize) -> Result<(Range, String)> {
             );
         }
     }
-    Ok((
+    Ok(Some((
         text::range(&f.text, r.start().into(), r.end().into()),
         t.text().to_string(),
-    ))
+    )))
 }
 
 /// What `t` denotes, when a rename may change it.
