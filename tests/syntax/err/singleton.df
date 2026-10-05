@@ -4,6 +4,6 @@ link("b", "c")
 reaches(a, b) where link(a, b)
 reaches(a, c) where reaches(a, b), link(bb, c)
 tenant("t1", 1)
-resource net.vpc t { cidr = "10.0.0.0/16" } where tenant(t, i)
+resource net.vpc "${t}" { cidr = "10.0.0.0/16" } where tenant(t, i)
 resource net.vpc "v-${t}" { cidr = "10.0.0.0/16" } where tenant(t, _n)
 lonely(a) where link(a, _), not { link(a, z) }

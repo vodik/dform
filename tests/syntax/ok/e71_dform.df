@@ -85,7 +85,7 @@ vpc_peer(a_, b) where {
 
 # requester_vpc_id and accepter_vpc_id are fresh nulls at plan time. They are
 # forwarded, never inspected, so this resource is definite and single-phase.
-resource net.vpc_peering peer {
+resource net.vpc_peering "${peer}" {
   requester_vpc_id = ref(net.vpc, a_, "id")
   accepter_vpc_id = ref(net.vpc, b, "id")
 } where vpc_peer_inst(i_a, i_b), vpc_peer(a_, b), peer = format("peer-%s-%s", i_a, i_b)

@@ -22,7 +22,7 @@ resource k8s.config_map web_config {
   data = { "MODE": "production", "LOG_LEVEL": "info" }
 }
 
-resource k8s.deployment name {
+resource k8s.deployment "${name}" {
   metadata = { name, namespace: shop.metadata.name }
   spec.replicas
   spec.selector.matchLabels = { app: name }
@@ -35,7 +35,7 @@ resource k8s.deployment name {
   }]
 } where app(name, image, replicas)
 
-resource k8s.service name {
+resource k8s.service "${name}" {
   metadata = { name, namespace: shop.metadata.name }
   spec.selector = { app: name }
   spec.ports = [{ port: 80, targetPort: 8080, protocol: "TCP" }]
@@ -123,7 +123,9 @@ resource k8s.service name {
     (dotted_name
       (identifier)
       (identifier))
-    (identifier)
+    (string
+      (interpolation
+        (identifier)))
     (block
       (field
         (block_path
@@ -211,7 +213,9 @@ resource k8s.service name {
     (dotted_name
       (identifier)
       (identifier))
-    (identifier)
+    (string
+      (interpolation
+        (identifier)))
     (block
       (field
         (block_path

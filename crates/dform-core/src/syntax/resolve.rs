@@ -1066,7 +1066,8 @@ impl<'u> Lowerer<'u> {
     }
 
     /// A resource header's name when it is static: a string with no holes,
-    /// or a name the block's clauses do not bind.
+    /// or a bare name (R-76). A bare name the block's clauses bind is the
+    /// error `block_stmt` reports, and names nothing here.
     fn static_header(&self, n: &SyntaxNode) -> Option<String> {
         let t = self.header_token(n)?;
         if t.kind() == STRING {
@@ -1300,6 +1301,125 @@ impl<'u> Lowerer<'u> {
         let rest = &c.ops[fields.len() - 1..];
         let typ = fields.join(".");
         (self.decls.types.contains(&typ) && index_then_end(rest)).then_some(VType::Ref(typ))
+    }
+
+    /// A read whose head names a resource and something else in scope is
+    /// an error (R-76): a scope's reads are one namespace, so `nodes` with
+    /// `input nodes` and `resource net.vpc nodes` names two things. A
+    /// module's item (`config.base_domain`), an instance's output and a
+    /// stack's or a component's copy (`platform[env]`) read the other one;
+    /// the resource always reads by its type, `net.vpc["nodes"]`.
+    fn shared_name(&mut self, scope: usize, c: &Chain, span: Span) -> L<bool> {
+        let h = c.head.as_str();
+        let Some(types) = self.resource(scope, h) else {
+            return Ok(false);
+        };
+        let field = match c.ops.first() {
+            Some(Op::Field(f)) => Some(f.as_str()),
+            _ => None,
+        };
+        let indexed = matches!(c.ops.first(), Some(Op::Index(..) | Op::Keyed(..)));
+        let items = |sc: &Scope| -> Vec<String> {
+            sc.values
+                .iter()
+                .chain(sc.outputs.keys())
+                .chain(sc.resources.keys())
+                .cloned()
+                .collect()
+        };
+        let (what, other) = if let Some(s) = self
+            .chain_of(scope)
+            .into_iter()
+            .find(|s| self.decls.scopes[*s].values.contains(h))
+        {
+            let kind = if self.decls.scopes[s].input_nodes.contains_key(h) {
+                "the input"
+            } else {
+                "the let"
+            };
+            (kind.to_string(), None)
+        } else if let Some(path) = self.use_in(scope, h) {
+            let own = self
+                .decls
+                .modules
+                .get(&path)
+                .map(|m| items(&self.decls.scopes[m.scope]))
+                .unwrap_or_default();
+            if field.is_some_and(|f| own.iter().any(|i| i == f)) {
+                return Ok(true);
+            }
+            (
+                "the module".to_string(),
+                own.first().map(|i| format!("`{h}.{i}`")),
+            )
+        } else if let Some((_, path)) = self.instance_in(scope, h) {
+            let outputs: Vec<String> = self
+                .decls
+                .modules
+                .get(&path)
+                .map(|m| self.decls.scopes[m.scope].outputs.keys().cloned().collect())
+                .unwrap_or_default();
+            if field.is_some_and(|f| outputs.iter().any(|o| o == f)) {
+                return Ok(true);
+            }
+            (
+                format!("the instance {h} of {path}"),
+                outputs.first().map(|o| format!("`{h}.{o}`")),
+            )
+        } else if self.stack_in(scope, h).is_some() || self.component_in(scope, h).is_some() {
+            // A stack or a component is read by a copy, `platform[env]`,
+            // which a resource never is: no read is ambiguous.
+            return Ok(indexed);
+        } else {
+            return Ok(false);
+        };
+        let rest: String = c
+            .ops
+            .iter()
+            .map(|o| match o {
+                Op::Field(f) => format!(".{f}"),
+                Op::Index(ts, _) => format!(
+                    "[{}]",
+                    ts.iter()
+                        .map(|t| t.text().to_string().trim().to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+                Op::Keyed(kv, _) => format!(
+                    "[{}]",
+                    kv.iter()
+                        .map(|(k, v)| format!("{k}={}", v.text().to_string().trim()))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            })
+            .collect();
+        let resources = types
+            .iter()
+            .map(|t| format!("{t}[\"{h}\"]"))
+            .collect::<Vec<_>>();
+        let resource = match &resources[..] {
+            [one] => format!("the resource {one}"),
+            _ => format!("the resources {}", resources.join(", ")),
+        };
+        let read = resources
+            .iter()
+            .map(|r| format!("{r}{rest}"))
+            .collect::<Vec<_>>()
+            .join(" or ");
+        let help = match other {
+            Some(o) => format!("read {o} or {read}"),
+            None => format!("read {read}, or name one of them otherwise"),
+        };
+        self.error(span, format!("`{h}` names {what} and {resource}: {help}"))
+    }
+
+    /// Whether `name` names a value, a used module or an instance in
+    /// scope: what a resource's bare name may share ambiguously.
+    fn names_other(&self, scope: usize, name: &str) -> bool {
+        self.is_value(scope, name)
+            || self.use_in(scope, name).is_some()
+            || self.instance_in(scope, name).is_some()
     }
 
     fn is_value(&self, scope: usize, name: &str) -> bool {
@@ -3052,7 +3172,7 @@ impl<'u> Lowerer<'u> {
             );
         }
         // The header: a string with holes is bound last, by `format`; a
-        // name the clauses bind is that variable; anything else static.
+        // bare name is the literal name, always (R-76).
         let name = if header.kind() == STRING && has_hole(header.text()) {
             let mut pre = Vec::new();
             let t = self.string_term(&mut rc, &header, &mut pre)?;
@@ -3067,29 +3187,28 @@ impl<'u> Lowerer<'u> {
             let bound = bound_vars(&body);
             match rc.vars.get(text) {
                 Some(v) if bound.contains(v) || rc.outer.contains(v) => {
-                    rc.uses.add(text, self.span_of(header.text_range()));
-                    var(v)
+                    let d = Diagnostic::error(
+                        self.span_of(header.text_range()),
+                        format!(
+                            "`{text}` is bound by the clause, but a bare header name is the \
+                             resource's literal name: a name from the clause is a string, \
+                             `\"${{{text}}}\"`"
+                        ),
+                    )
+                    .with_help(format!(
+                        "write `resource {} \"${{{text}}}\" {{ .. }}` for the resource the \
+                         clause names, or `\"{text}\"` quoted for the one named \"{text}\"",
+                        dotted_text(n, 1)
+                    ));
+                    self.diags.push(d);
+                    return Err(Skip);
                 }
                 _ if text == "_" => {
                     return self.error(
                         self.span_of(header.text_range()),
                         "a resource is written by its name: `_` names nothing; name it, or \
-                         bind the name in the clause (`resource T n { .. } where p(n)`)",
+                         name it from the clause (`resource T \"${n}\" { .. } where p(n)`)",
                     );
-                }
-                _ if self.is_value(scope, text) => {
-                    let d = Diagnostic::error(
-                        self.span_of(header.text_range()),
-                        format!(
-                            "`{text}` is a value in scope, but a header name the clause does not \
-                             bind is the resource's literal name: this is the resource \"{text}\""
-                        ),
-                    )
-                    .with_help(format!(
-                        "write `\"{text}\"` for a resource named \"{text}\""
-                    ));
-                    self.diags.push(d);
-                    return Err(Skip);
                 }
                 _ => str_term(text),
             }
@@ -5519,6 +5638,8 @@ impl<'u> Lowerer<'u> {
                 path,
             });
         }
+        // A name a resource shares, read as the other thing's (R-76).
+        let shared = !rc.vars.contains_key(h) && self.shared_name(rc.scope, c, span)?;
         if !rc.vars.contains_key(h) {
             if self.is_value(rc.scope, h) {
                 return self.value(rc, c, pre, span);
@@ -5541,7 +5662,7 @@ impl<'u> Lowerer<'u> {
             return self.bare(rc, h, span);
         }
         if !rc.vars.contains_key(h) {
-            if let Some(types) = self.resource(rc.scope, h) {
+            if let Some(types) = self.resource(rc.scope, h).filter(|_| !shared) {
                 if types.len() > 1 {
                     return self.ambiguous(h, &types, span);
                 }
@@ -6212,7 +6333,8 @@ impl<'u> Lowerer<'u> {
             if ts.len() != 1 {
                 return self.error(span, "a resource is `T[key]`").map(Some);
             }
-            // `T["n"]` for a resource `n` in scope: it is named `n` (H-10).
+            // `T["n"]` for a resource `n` in scope: it is named `n` (H-10),
+            // unless `n` names something else too (R-76).
             if !self.any_type
                 && let Some(LITERAL) = ts.first().map(|t| t.kind())
                 && let Some(s) = tokens(&ts[0]).find(|t| t.kind() == STRING)
@@ -6221,6 +6343,7 @@ impl<'u> Lowerer<'u> {
                 && self
                     .resource(rc.scope, &n)
                     .is_some_and(|types| types == vec![name.clone()])
+                && !self.names_other(rc.scope, &n)
             {
                 let d = Diagnostic::error(
                     span,
@@ -7245,11 +7368,11 @@ mod tests {
         // a `not { }` body counts once; `_x` opts out.
         lower(
             "tenant(\"t\", 1)\n\
-             resource net.vpc t { cidr = \"${n}\" } where tenant(t, n)\n\
+             resource net.vpc \"${t}\" { cidr = \"${n}\" } where tenant(t, n)\n\
              resource net.vpc \"v-${t}\" {} where tenant(t, _n)\n\
              lonely(a) where tenant(a, _), not { tenant(a, z), z > 1 }\n",
         );
-        let e = error("tenant(\"t\", 1)\nresource net.vpc t {} where tenant(t, n)\n");
+        let e = error("tenant(\"t\", 1)\nresource net.vpc \"${t}\" {} where tenant(t, n)\n");
         assert!(e.contains("variable `n` is used once"), "{e}");
         let e = error("tenant(\"t\", 1)\nlonely(a) where tenant(a, _), not { tenant(a, z) }\n");
         assert!(e.contains("variable `z` is used once"), "{e}");
@@ -7283,17 +7406,26 @@ mod tests {
         );
     }
 
+    /// A bare header name is the literal name, a value in scope or not; a
+    /// name from the clause is a string (R-76).
     #[test]
-    fn a_block_name_is_a_variable_when_its_clause_binds_it() {
+    fn a_bare_block_name_is_literal() {
         let got = lower(
-            "t(\"a\")\nresource net.vpc t {\n size = 1 } where t(t)\nresource net.vpc shared { size = 2 }\n",
+            "let env = 1\nresource net.vpc env { size = 1 }\nresource net.vpc shared { size = 2 }\n",
         );
         assert_eq!(
             &got[1..],
             [
-                "resource \"net.vpc\" T { size = 1 } :- t(T)",
+                "resource \"net.vpc\" \"env\" { size = 1 } :- ",
                 "resource \"net.vpc\" \"shared\" { size = 2 } :- ",
             ]
+        );
+        let e = error("t(\"a\")\nresource net.vpc t {\n size = 1 } where t(t)\n");
+        assert!(
+            e.contains(
+                "`t` is bound by the clause, but a bare header name is the resource's literal name"
+            ) && e.contains("`\"${t}\"`"),
+            "{e}"
         );
         assert!(matches!(
             parse("resource net.vpc n { size = 1 }\n")

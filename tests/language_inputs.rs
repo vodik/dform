@@ -15,7 +15,7 @@ resource net.vpc main {
   replicas = r
   owner = o
 } where env(e), replicas(r), owner(o)
-resource net.subnet s {
+resource net.subnet "${s}" {
   cidr = n
 } where nets(ns), n = ns[i], s = format("s%s", i)
 provider fake

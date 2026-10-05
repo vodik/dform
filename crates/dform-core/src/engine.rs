@@ -4251,7 +4251,7 @@ mod tests {
     /// any other body, so the resource is derived (pngu.df's peerings).
     #[test]
     fn a_record_atom_in_a_resource_body_matches() {
-        let (r, _) = run("decl peering(env: symbol, name: symbol)\n             peering( env: \"prod\", name: \"legacy\" )\n             resource net.peering name {\n               env = env\n             } where peering( env: env, name: name )")
+        let (r, _) = run("decl peering(env: symbol, name: symbol)\n             peering( env: \"prod\", name: \"legacy\" )\n             resource net.peering \"${name}\" {\n               env = env\n             } where peering( env: env, name: name )")
         .unwrap();
         assert_eq!(
             facts_of(&r, "attr"),

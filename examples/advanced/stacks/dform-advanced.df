@@ -40,7 +40,7 @@ tenant(t, i) where t = tenants[i]
 resource net.vpc shared { cidr = inet("10.200.0.0/16"), tags = { segment: "shared" } }
 
 # One VPC per tenant, with deterministic CIDRs derived from corp_net.
-resource net.vpc t {
+resource net.vpc "${t}" {
   cidr = inet.subnet(corp, 4, i)
   tags = { segment: "tenant", tenant: t }
 } where tenant(t, i), corp_net(corp)
@@ -105,7 +105,7 @@ warn "mesh has direct route between non-adjacent nodes" { from: a, to: b } where
 
 mesh_vpc(name, cidr, i) where mesh.vpcs[i] = { name, net: cidr }
 
-resource net.vpc name { cidr, tags = { segment: "mesh" } } where mesh_vpc(name, cidr, _)
+resource net.vpc "${name}" { cidr, tags = { segment: "mesh" } } where mesh_vpc(name, cidr, _)
 
 # Derive a sparse base graph: connect consecutive VPCs in the list.
 # The reachability closure will infer core_a -> core_c via core_b.

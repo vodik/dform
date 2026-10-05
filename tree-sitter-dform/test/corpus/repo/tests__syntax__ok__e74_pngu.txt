@@ -119,7 +119,7 @@ resource google.compute_subnetwork regional_proxy {
   ip_cidr_range = proxy_cidr
 } where project(id, name, region, net_id), e = env, setting(e, "regional_proxy_cidr", proxy_cidr)
 
-resource google.compute_network_peering p {
+resource google.compute_network_peering "${p}" {
   project = id
   name = peer_name
   network = net_id
@@ -138,7 +138,7 @@ static_ip(ip_name, type_) where {
   member_kv(ips, ip_name, { type: type_ })
 }
 
-resource google.compute_address s {
+resource google.compute_address "${s}" {
   project = id
   region
   name = ip_name
@@ -211,7 +211,7 @@ resource k8s.secret db_credentials {
 # open null at plan time; member/2 over it is a content position, so this
 # rule is stuck on ?gke.cluster/pngu#zones and the plan prints one pending
 # group of unknown cardinality. After phase 1 it fires once per zone.
-resource gke.nodepool np {
+resource gke.nodepool "${np}" {
   cluster = ref("gke.cluster", "pngu", "id")
   zone = z
   min = 1
@@ -854,7 +854,9 @@ output("project_id", id) where project(id, _, _, _)
     (dotted_name
       (identifier)
       (identifier))
-    (identifier)
+    (string
+      (interpolation
+        (identifier)))
     (block
       (field
         (block_path
@@ -933,7 +935,9 @@ output("project_id", id) where project(id, _, _, _)
     (dotted_name
       (identifier)
       (identifier))
-    (identifier)
+    (string
+      (interpolation
+        (identifier)))
     (block
       (field
         (block_path
@@ -1288,7 +1292,9 @@ output("project_id", id) where project(id, _, _, _)
     (dotted_name
       (identifier)
       (identifier))
-    (identifier)
+    (string
+      (interpolation
+        (identifier)))
     (block
       (field
         (block_path

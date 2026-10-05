@@ -265,6 +265,19 @@ first (rule, then component, then file, then program):
 
 Anything else is `unknown name`, with a hint to quote it.
 
+A scope's reads are one namespace (R-76): a resource may be named like a
+value, a used module or a copy in scope (its header name is literal, see
+"Block names"), but a read whose first name means both is an error at
+the read, naming both: "`config` names the module and the resource
+k8s.secret[\"config\"]: read `config.base_domain` or
+k8s.secret[\"config\"].metadata.name". A module's item (`config.x` with
+`x` a `let`, input, output or resource of it) and a copy's output
+(`n.k`) read the module or the copy; a value is never read past such a
+resource, so rename one. The resource reads by its type, `T["n"]`, which
+H-10 allows here. A component and a stack are read only by a copy
+(`c[t]`, `s[k=v]`), which a resource never is, so they share a name with
+a resource unambiguously.
+
 A bare name (no `.` or `[`) is a variable unless it is a value name. A
 variable may not take the name of a resource, a module, a copy, a
 component or a type namespace in scope ("variable `net` shadows the type
@@ -1117,14 +1130,17 @@ deny for a leaf at any other path ("Giving inputs").
 
 A resource's header name is a string or a name. A string
 with holes (`"private-${z}"`) is the variable `Addr`, bound last in the
-body by `format`. A name the block's clause binds is that variable
-(`resource net.vpc t { .. } where tenant(t, i)`); any other name is the
-static name (`resource net.vpc shared`), and it may not be a value in
-scope (`resource net.vpc env` with `input env` is an error: write
-`"env"` for the literal one). A block (header,
+body by `format`. A bare name is always the literal name (R-76):
+`resource k8s.secret config` is the secret named "config", whatever
+`config` names in scope (a `let`, an input, a used module); reading it
+bare where `config` also names that is the error "Names" shows. A name
+from the clause is always a string, `resource net.vpc "${t}" { .. }
+where tenant(t, i)`; a bare name the clause binds is an error naming
+that form. An instance's name is literal too, and may not be a value in
+scope (`instance m env` with `input env` is an error). A block (header,
 entries, clause, interpolated names) is one rule; a header name's scope
-is its block and its clause. The clause follows the block, so a header
-name it binds is read forward: the header names a variable the reader
+is its block and its clause. The clause follows the block, so the
+holes of a header name are read forward: they name variables the reader
 meets in the clause below, as a rule's head names variables its body
 binds (R-1 keeps the rule and moves only the clause).
 

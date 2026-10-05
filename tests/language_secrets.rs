@@ -100,7 +100,7 @@ fn e0304_a_public_place() {
 #[test]
 fn e0305_a_name() {
     refused(
-        "resource leaky.vault n {\n  password = \"x\"\n} where pw(n)\n",
+        "resource leaky.vault \"${n}\" {\n  password = \"x\"\n} where pw(n)\n",
         "E0305: a secret reaches a resource address",
     );
 }

@@ -9,7 +9,7 @@ tests/fixtures/adversarial/adv2_rule3_coarse.df
 
 resource google.container_cluster pngu { name = "pngu-gke" }
 
-resource google.container_node_pool np {
+resource google.container_node_pool "${np}" {
   cluster = ref("google.container_cluster", "pngu", "id")
   zone = z
 } where arg("google.container_cluster", "pngu", "zones", zs), z in zs, np = format("np-%s", z)
@@ -54,7 +54,9 @@ provider fake
     (dotted_name
       (identifier)
       (identifier))
-    (identifier)
+    (string
+      (interpolation
+        (identifier)))
     (block
       (field
         (block_path

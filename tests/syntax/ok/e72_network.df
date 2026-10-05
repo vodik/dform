@@ -18,7 +18,7 @@ zone_index(z, i) where zs = zones, member(zs, i, z)
 # Reads attr of net.vpc (partition (attr, net.vpc, .cidr)), writes arg of
 # net.subnet (partitions (arg, net.subnet, .vpc_id) etc.): no cycle.
 # vpc_id carries a fresh null; cidr is computed from a constant.
-resource net.subnet sn {
+resource net.subnet "${sn}" {
   vpc_id = ref(net.vpc, "vpc", "id")
   cidr = inet.subnet(net_, 4, i)
   zone = z
