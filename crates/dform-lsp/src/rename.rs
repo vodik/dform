@@ -6,11 +6,12 @@
 //! and what a provider owns (attribute paths, its relations) are refused.
 
 use crate::analysis::{Outcome, Severity};
-use crate::refs::{self, Decls, Parsed, Project, Symbol, What};
+use crate::refs::Project;
 use crate::text;
 use anyhow::{Result, anyhow, bail};
 use dform_core::ast::Term;
 use dform_core::ir::SCOPE;
+use dform_core::names::{self, Parsed, Symbol, What};
 use dform_core::syntax::{SyntaxKind, SyntaxToken};
 use dform_core::value::Value;
 use lsp_types::{Range, TextEdit};
@@ -22,16 +23,23 @@ use std::path::{Path, PathBuf};
 /// cannot be renamed.
 pub fn prepare(p: &Project, path: &Path, at: usize) -> Result<(Range, String)> {
     let files = p.parse();
-    let d = Decls::of_files(&files);
-    let (f, t, what) = refs::at(&d, &files, path, at).ok_or_else(|| anyhow!("no name here"))?;
+    let d = p.decls(&files);
+    let names::Named {
+        file: f,
+        token: t,
+        range: r,
+        what,
+    } = d
+        .at(&files, path, at)
+        .ok_or_else(|| anyhow!("no name here"))?;
     // An instance whose name is also a string an `m[e]` reads: the
     // rename would not change the string, and `m[e]` would no longer
     // find the instance.
     if let Symbol::Instance(path, i) = renameable(&what, &t)?
         && let m = path.rsplit('.').next().unwrap_or(&path).to_string()
-        && refs::indexed(&files, &m)
+        && names::indexed(&files, &m)
     {
-        let places: Vec<String> = refs::strings(&files, &i)
+        let places: Vec<String> = names::strings(&files, &i)
             .into_iter()
             .map(|(f, s)| {
                 let at = text::position(&f.text, s.text_range().start().into());
@@ -48,7 +56,6 @@ pub fn prepare(p: &Project, path: &Path, at: usize) -> Result<(Range, String)> {
             );
         }
     }
-    let r = t.text_range();
     Ok((
         text::range(&f.text, r.start().into(), r.end().into()),
         t.text().to_string(),
@@ -69,13 +76,19 @@ fn renameable(what: &What, t: &SyntaxToken) -> Result<Symbol> {
         What::Name(Symbol::Predicate(_, n), _) if dform_core::loader::is_core_pred(n) => {
             bail!("`{n}` is dform's own relation (the compiler's or a provider's)")
         }
+        What::Name(Symbol::Function(f) | Symbol::Package(f), _) => bail!("`{f}` is a builtin"),
+        What::Name(Symbol::File(f), _) => bail!("`{f}` is a file's path: rename the file"),
         What::Name(s, _) => Ok(s.clone()),
-        What::Type => bail!("`{name}` is part of a schema type's name: its provider's"),
+        What::Names(ss) => bail!(
+            "`{name}` names {} resources of different types here: rename it at its declaration",
+            ss.len()
+        ),
+        What::Type(_) => bail!("`{name}` is part of a schema type's name: its provider's"),
         What::Path => bail!("`{name}` is an attribute path of the provider's schema"),
         What::Provider => bail!("`{name}` is a provider's name"),
-        What::Other => bail!(
-            "`{name}` is not a name a rename changes (a variable, an output, a key or a string)"
-        ),
+        What::Variable | What::Key | What::Other => {
+            bail!("`{name}` is not a name a rename changes (a variable, a key or a string)")
+        }
     }
 }
 
@@ -111,8 +124,13 @@ fn describe(s: &Symbol) -> String {
         Symbol::Alias(_) => "a type alias".into(),
         Symbol::Module(_) => "a component or a used module".into(),
         Symbol::Instance(m, _) => format!("an instance of component {m}"),
-        Symbol::Resource(Some(m), _) => format!("a resource in component {m}"),
-        Symbol::Resource(None, _) => "a resource".into(),
+        Symbol::Field(_, i, _) => format!("a field of input {i}"),
+        Symbol::Output(Some(scope), _) => format!("an output of {scope}"),
+        Symbol::Output(None, _) => "an output".into(),
+        Symbol::Resource(Some(scope), _, _) => format!("a resource in {scope}"),
+        Symbol::Resource(None, _, _) => "a resource".into(),
+        Symbol::Function(_) | Symbol::Package(_) => "a builtin".into(),
+        Symbol::File(_) => "a file".into(),
     }
 }
 
@@ -133,9 +151,12 @@ pub struct Renaming {
 /// `textDocument/rename` of the name at `at` to `new`.
 pub fn rename(p: &Project, path: &Path, at: usize, new: &str) -> Result<Renaming> {
     let files = p.parse();
-    let d = Decls::of_files(&files);
-    let (_, t, what) = refs::at(&d, &files, path, at).ok_or_else(|| anyhow!("no name here"))?;
-    let sym = renameable(&what, &t)?;
+    let d = p.decls(&files);
+    let here = d
+        .at(&files, path, at)
+        .ok_or_else(|| anyhow!("no name here"))?;
+    let t = here.token;
+    let sym = renameable(&here.what, &t)?;
     let old = t.text().to_string();
     let lexed = dform_core::syntax::parser::parse(new).syntax();
     if lexed
@@ -146,7 +167,7 @@ pub fn rename(p: &Project, path: &Path, at: usize, new: &str) -> Result<Renaming
         bail!("`{new}` is not a name (a keyword, or not one word)");
     }
     let typ = match &sym {
-        Symbol::Resource(m, n) => d.type_of(m, n).map(str::to_string),
+        Symbol::Resource(_, t, _) => Some(t.clone()),
         _ => None,
     };
     let mut r = Renaming {
@@ -162,10 +183,10 @@ pub fn rename(p: &Project, path: &Path, at: usize, new: &str) -> Result<Renaming
     if d.taken(&sym, new) {
         bail!("`{new}` is already {}", describe(&sym));
     }
-    let found = refs::occurrences(&d, &files, &sym);
+    let found = d.occurrences(&files, &sym);
     let moves = moves(p, &r);
     // An address written as a string, `T["m/i/n"]` (H-16).
-    let strings: Vec<_> = refs::addresses(&files)
+    let strings: Vec<_> = names::addresses(&files)
         .into_iter()
         .filter_map(|(f, t, typ, a)| Some((f, t, format!("{:?}", r.address(&typ, &a)?))))
         .collect();
@@ -176,14 +197,13 @@ pub fn rename(p: &Project, path: &Path, at: usize, new: &str) -> Result<Renaming
             .1
             .push((s, e, t));
     };
-    for (f, t, _) in &found {
-        let range = t.text_range();
+    for n in &found {
         // A pun keeps its key: `vpc` becomes `vpc = net0`.
-        let to = match t.parent() {
-            Some(p) if refs::is_pun(&p, t) => format!("{old} = {new}"),
+        let to = match n.token.parent() {
+            Some(p) if names::is_pun(&p, &n.token) => format!("{old} = {new}"),
             _ => new.to_string(),
         };
-        edit(f, range.start().into(), range.end().into(), to);
+        edit(n.file, n.range.start().into(), n.range.end().into(), to);
     }
     for (f, t, to) in strings {
         let range = t.text_range();
@@ -238,12 +258,12 @@ impl Renaming {
     fn address(&self, typ: &str, a: &str) -> Option<String> {
         let (old, new) = (&self.old, &self.new);
         match &self.sym {
-            Symbol::Resource(None, _) => {
+            Symbol::Resource(None, _, _) => {
                 (Some(typ) == self.typ.as_deref() && a == old).then(|| new.clone())
             }
             // An address of a copy is `instance/name` (R-65, R-72): the
             // copy does not say its component.
-            Symbol::Resource(Some(_), _) => {
+            Symbol::Resource(Some(_), _, _) => {
                 let (inst, local) = a.rsplit_once(SCOPE)?;
                 (Some(typ) == self.typ.as_deref() && local == old)
                     .then(|| format!("{inst}{SCOPE}{new}"))
@@ -361,9 +381,10 @@ fn str_of(t: Option<&Term>) -> Option<String> {
 
 /// Where the `moved` facts go: just after the declaration's block, at its
 /// indentation.
-fn beside<'p>(found: &[(&'p Parsed, SyntaxToken, bool)]) -> Option<(&'p Parsed, usize, String)> {
-    let (f, t, _) = found.iter().find(|(_, _, is_decl)| *is_decl)?;
-    let node = t.parent()?;
+fn beside<'p>(found: &[names::Named<'p>]) -> Option<(&'p Parsed, usize, String)> {
+    let decl = found.iter().find(|n| n.is_declaration())?;
+    let f = decl.file;
+    let node = decl.token.parent()?;
     if !matches!(
         node.kind(),
         SyntaxKind::RESOURCE | SyntaxKind::INSTANCE | SyntaxKind::COMPONENT

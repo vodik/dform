@@ -7,209 +7,13 @@
 //! an explicit apply.
 
 mod common;
+mod lsp_client;
 
-use common::{Scratch, copy_dir, repo};
+use common::{Scratch, repo};
+use lsp_client::{Client, example, find, uri};
 use serde_json::{Value, json};
-use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::time::{Duration, Instant};
-
-/// A client speaking JSON-RPC to a `dform lsp` process.
-struct Client {
-    child: Child,
-    stdin: ChildStdin,
-    stdout: BufReader<ChildStdout>,
-    next: u64,
-    /// Notifications received, in order.
-    notes: Vec<Value>,
-}
-
-impl Client {
-    fn start(root: &Path, options: Value) -> Client {
-        Client::start_with(root, options, common::dform())
-    }
-
-    /// A server run as `command` (its environment) says.
-    fn start_with(root: &Path, options: Value, mut command: Command) -> Client {
-        let mut child = command
-            .arg("lsp")
-            .current_dir(root)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
-            .spawn()
-            .unwrap();
-        let stdin = child.stdin.take().unwrap();
-        let stdout = BufReader::new(child.stdout.take().unwrap());
-        let mut c = Client {
-            child,
-            stdin,
-            stdout,
-            next: 0,
-            notes: Vec::new(),
-        };
-        let init = c.request(
-            "initialize",
-            json!({
-                "processId": null,
-                "rootUri": uri(root),
-                "capabilities": {},
-                "initializationOptions": options,
-            }),
-        );
-        let commands = &init["capabilities"]["executeCommandProvider"]["commands"];
-        assert_eq!(
-            commands,
-            &json!(["dform.selectEnvironment", "dform.why"]),
-            "{init}"
-        );
-        c.notify("initialized", json!({}));
-        c
-    }
-
-    fn send(&mut self, msg: Value) {
-        let body = msg.to_string();
-        write!(self.stdin, "Content-Length: {}\r\n\r\n{body}", body.len()).unwrap();
-        self.stdin.flush().unwrap();
-    }
-
-    fn recv(&mut self) -> Value {
-        let mut len = 0;
-        loop {
-            let mut line = String::new();
-            assert!(
-                self.stdout.read_line(&mut line).unwrap() > 0,
-                "server exited"
-            );
-            let line = line.trim_end();
-            if line.is_empty() {
-                break;
-            }
-            if let Some(n) = line.strip_prefix("Content-Length: ") {
-                len = n.parse().unwrap();
-            }
-        }
-        let mut body = vec![0; len];
-        self.stdout.read_exact(&mut body).unwrap();
-        serde_json::from_slice(&body).unwrap()
-    }
-
-    fn notify(&mut self, method: &str, params: Value) {
-        self.send(json!({ "jsonrpc": "2.0", "method": method, "params": params }));
-    }
-
-    /// The result of a request; notifications meanwhile are kept.
-    fn request(&mut self, method: &str, params: Value) -> Value {
-        self.next += 1;
-        let id = self.next;
-        self.send(json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params }));
-        loop {
-            let m = self.recv();
-            if m.get("id") == Some(&json!(id)) && m.get("method").is_none() {
-                assert!(m.get("error").is_none(), "{method}: {m}");
-                return m["result"].clone();
-            }
-            self.notes.push(m);
-        }
-    }
-
-    /// The next notification `method` whose params satisfy `pred`, waiting
-    /// for it.
-    fn wait(&mut self, method: &str, pred: impl Fn(&Value) -> bool) -> Value {
-        if let Some(i) = self
-            .notes
-            .iter()
-            .position(|n| n["method"] == method && pred(&n["params"]))
-        {
-            return self.notes.remove(i)["params"].clone();
-        }
-        loop {
-            let m = self.recv();
-            if m["method"] == method && pred(&m["params"]) {
-                return m["params"].clone();
-            }
-            self.notes.push(m);
-        }
-    }
-
-    /// The diagnostics last published for `file`, after the next
-    /// publication for it.
-    fn diagnostics(&mut self, file: &Path) -> Vec<Value> {
-        let u = uri(file);
-        let p = self.wait("textDocument/publishDiagnostics", |p| p["uri"] == u);
-        p["diagnostics"].as_array().unwrap().clone()
-    }
-
-    fn open(&mut self, file: &Path) {
-        let text = std::fs::read_to_string(file).unwrap();
-        self.notify(
-            "textDocument/didOpen",
-            json!({ "textDocument": {
-                "uri": uri(file), "languageId": "dform", "version": 1, "text": text
-            }}),
-        );
-    }
-
-    fn change(&mut self, file: &Path, version: i32, text: &str) {
-        self.notify(
-            "textDocument/didChange",
-            json!({
-                "textDocument": { "uri": uri(file), "version": version },
-                "contentChanges": [{ "text": text }],
-            }),
-        );
-    }
-
-    fn at(&mut self, method: &str, file: &Path, (line, character): (u32, u32)) -> Value {
-        self.request(
-            method,
-            json!({
-                "textDocument": { "uri": uri(file) },
-                "position": { "line": line, "character": character },
-            }),
-        )
-    }
-
-    fn command(&mut self, command: &str, arguments: Value) -> Value {
-        self.request(
-            "workspace/executeCommand",
-            json!({ "command": command, "arguments": arguments }),
-        )
-    }
-
-    fn shutdown(mut self) {
-        self.request("shutdown", Value::Null);
-        self.notify("exit", Value::Null);
-        let status = self.child.wait().unwrap();
-        assert!(status.success(), "{status}");
-    }
-}
-
-fn uri(p: &Path) -> String {
-    format!("file://{}", p.display())
-}
-
-/// A copy of the example project `name`, its path canonical (as the server
-/// names files).
-fn example(name: &str) -> (Scratch, PathBuf) {
-    let s = Scratch::new(&format!("lsp-{name}"));
-    let root = s.dir.join(name);
-    copy_dir(&repo().join("examples").join(name), &root);
-    let root = std::fs::canonicalize(&root).unwrap();
-    (s, root)
-}
-
-/// The (line, character) of the first `needle` in `file`, plus `ahead`
-/// characters.
-fn find(file: &Path, needle: &str, ahead: u32) -> (u32, u32) {
-    let text = std::fs::read_to_string(file).unwrap();
-    let at = text
-        .find(needle)
-        .unwrap_or_else(|| panic!("{needle} in {}", file.display()));
-    let p = dform_lsp::text::position(&text, at);
-    (p.line, p.character + ahead)
-}
 
 fn labels(items: &Value) -> Vec<String> {
     items
@@ -1090,6 +894,7 @@ fn references_of_every_kind_of_name() {
     assert_eq!(found, at_places("stacks/dform.df", &[9, 40]));
 
     // A component, a module used, a module the stack uses.
+    // Its copies read by its path, `network.vpc[ia].vpc`, too.
     let found = references(&mut c, &root, &network, find(&network, "component vpc", 10));
     assert_eq!(
         found,
@@ -1097,6 +902,8 @@ fn references_of_every_kind_of_name() {
             ("network.df".into(), 9),
             ("stacks/dform.df".into(), 51),
             ("stacks/dform.df".into(), 54),
+            ("stacks/dform.df".into(), 80),
+            ("stacks/dform.df".into(), 81),
         ]
     );
     // Its output read in the stack; its resources' addresses from outside
@@ -1107,8 +914,8 @@ fn references_of_every_kind_of_name() {
     let found = references(&mut c, &root, &stack, find(&stack, "use baseline", 6));
     assert_eq!(found, at_places("stacks/dform.df", &[45]));
 
-    // A resource by its name in its component (from outside its address
-    // is a string, `net.vpc["peer/vpc"]`).
+    // A resource by its name in its component, and from outside by its
+    // address as a string (`"peer/vpc" in net.vpc`, H-16).
     let found = references(&mut c, &root, &network, find(&network, "net.vpc vpc", 8));
     assert_eq!(
         found,
@@ -1117,6 +924,7 @@ fn references_of_every_kind_of_name() {
             ("network.df".into(), 19),
             ("network.df".into(), 25),
             ("network.df".into(), 26),
+            ("stacks/dform.df".into(), 109),
         ]
     );
 
@@ -1782,5 +1590,191 @@ fn formatting_reads_the_projects_schemas() {
     );
     let text = edits[0]["newText"].as_str().unwrap_or_default();
     assert!(text.contains("memory: 2Gi"), "{edits}");
+    c.shutdown();
+}
+
+/// Where go-to-definition at the first `needle` in `file` (plus `ahead`
+/// characters) lands: each target's path (relative to `root`, or its last
+/// two segments outside it), line (from 1) and the text it covers.
+fn definitions(
+    c: &mut Client,
+    root: &Path,
+    file: &Path,
+    needle: &str,
+    ahead: u32,
+) -> Vec<(String, u64, String)> {
+    let at = find(file, needle, ahead);
+    let locs = c.at("textDocument/definition", file, at);
+    locs.as_array()
+        .unwrap_or_else(|| panic!("{needle}: {locs}"))
+        .iter()
+        .map(|l| {
+            let u = l["uri"].as_str().unwrap();
+            let path = PathBuf::from(u.strip_prefix("file://").unwrap());
+            let text = std::fs::read_to_string(&path).unwrap();
+            let line = l["range"]["start"]["line"].as_u64().unwrap();
+            let line_text = text.lines().nth(line as usize).unwrap_or("");
+            let (s, e) = (
+                l["range"]["start"]["character"].as_u64().unwrap() as usize,
+                l["range"]["end"]["character"].as_u64().unwrap() as usize,
+            );
+            let covered = line_text.get(s..e.max(s)).unwrap_or(&line_text[s..]);
+            let name = match path.strip_prefix(root) {
+                Ok(rel) => rel.display().to_string(),
+                Err(_) => {
+                    let segs: Vec<_> = path.iter().rev().take(2).collect();
+                    format!(
+                        "{}/{}",
+                        segs[1].to_string_lossy(),
+                        segs[0].to_string_lossy()
+                    )
+                }
+            };
+            (name, line + 1, covered.to_string())
+        })
+        .collect()
+}
+
+/// R-78: go-to-definition through the module system, from the one buffer
+/// an editor has open: a used module's `let` (`config.region`, in a hole
+/// too), a component by its path, a copy's output (`app_db.conn`), a
+/// used stack's output (`platform[env].subnet`), a module file by its
+/// path, a copy's input given in its block, an object input's field, a
+/// resource two types name picked by the attribute's `ref(T)` (R-74),
+/// and a std function's signature line, whose hover has its doc comment.
+#[test]
+fn definition_through_modules_copies_and_std() {
+    let (_s, root) = lsp_client::modules_project();
+    let apps = root.join("stacks/apps.df");
+    let platform = root.join("stacks/platform.df");
+    let mut c = Client::start(&root, json!({}));
+    c.open(&apps);
+    let mut def =
+        |file: &Path, needle: &str, ahead: u32| definitions(&mut c, &root, file, needle, ahead);
+    let at = |f: &str, line: u64, text: &str| vec![(f.to_string(), line, text.to_string())];
+    assert_eq!(
+        def(&apps, "config.base_domain", 7),
+        at("config.df", 2, "base_domain")
+    );
+    assert_eq!(
+        def(&apps, "config.region}", 7),
+        at("config.df", 3, "region")
+    );
+    assert_eq!(def(&apps, "config.region}", 0), at("config.df", 1, ""));
+    assert_eq!(def(&apps, "use config", 4), at("config.df", 1, ""));
+    assert_eq!(
+        def(&apps, "databases.postgres app_db", 10),
+        at("databases.df", 2, "postgres")
+    );
+    assert_eq!(
+        def(&apps, "databases.postgres app_db", 0),
+        at("databases.df", 1, "")
+    );
+    assert_eq!(def(&apps, "app_db.conn", 7), at("databases.df", 8, "conn"));
+    assert_eq!(
+        def(&apps, "app_db.conn", 0),
+        at("stacks/apps.df", 9, "app_db")
+    );
+    assert_eq!(
+        def(&apps, "platform[env].subnet", 14),
+        at("stacks/platform.df", 4, "subnet")
+    );
+    assert_eq!(
+        def(&apps, "platform[env]", 0),
+        at("stacks/platform.df", 1, "")
+    );
+    assert_eq!(
+        def(&apps, "name = \"app-", 0),
+        at("databases.df", 6, "name")
+    );
+    assert_eq!(
+        def(&platform, "nodes.count)", 6),
+        at("stacks/platform.df", 2, "count")
+    );
+    assert_eq!(
+        def(&platform, "set { nodes.count", 12),
+        at("stacks/platform.df", 2, "count")
+    );
+    assert_eq!(
+        def(&platform, "vpc = main", 6),
+        at("stacks/platform.df", 11, "main")
+    );
+    assert_eq!(
+        def(&platform, "output subnet: net.subnet = main", 28),
+        at("stacks/platform.df", 13, "main")
+    );
+    let host = def(&apps, "inet.host", 5);
+    let [(file, line, covered)] = host.as_slice() else {
+        panic!("{host:?}")
+    };
+    assert_eq!(file, "std/inet.df");
+    assert!(covered.starts_with("host(net: inet"), "{covered}");
+    let f = dform_core::functions::get("inet.host").unwrap();
+    assert_eq!(*line as usize, f.line);
+    let package = def(&apps, "inet.host", 0);
+    assert_eq!(package[0].0, "std/inet.df");
+    assert!(package[0].2.starts_with("inet"), "{package:?}");
+    // A provider type: the line of the built-in schema that declares it.
+    let typ = def(&apps, "compute.vm web", 9);
+    assert_eq!(typ.len(), 1, "{typ:?}");
+    assert_eq!(typ[0].0, "schemas/fake.df");
+    assert_eq!(typ[0].2, "compute.vm");
+
+    let hover = c.at("textDocument/hover", &apps, find(&apps, "inet.host", 5));
+    let text = hover["contents"]["value"].as_str().unwrap_or_default();
+    assert!(text.contains(&f.summary), "{hover}");
+    c.shutdown();
+}
+
+/// R-78: references through `use` and instance scopes: a module's `let`
+/// read from a stack and in a string's hole, an input given by a copy's
+/// block, an output read through the copy, an object input's field read
+/// (in its refinement and a hole too) and set; a resource two types name,
+/// by the type each place takes, and its address in a lifecycle fact.
+#[test]
+fn references_through_modules_and_copies() {
+    let (_s, root) = lsp_client::modules_project();
+    let config = root.join("config.df");
+    let databases = root.join("databases.df");
+    let platform = root.join("stacks/platform.df");
+    let mut c = Client::start(&root, json!({}));
+    c.open(&config);
+    let mut refs = |file: &Path, needle: &str, ahead: u32| {
+        references(&mut c, &root, file, find(file, needle, ahead))
+    };
+    assert_eq!(
+        refs(&config, "let region", 4),
+        vec![("config.df".into(), 3), ("stacks/apps.df".into(), 10)]
+    );
+    assert_eq!(
+        refs(&databases, "input name", 6),
+        vec![
+            ("databases.df".into(), 6),
+            ("databases.df".into(), 8),
+            ("stacks/apps.df".into(), 10)
+        ]
+    );
+    assert_eq!(
+        refs(&databases, "output conn", 7),
+        vec![("databases.df".into(), 8), ("stacks/apps.df".into(), 16)]
+    );
+    assert_eq!(
+        refs(&platform, "count: int", 0),
+        vec![
+            ("stacks/platform.df".into(), 2),
+            ("stacks/platform.df".into(), 2),
+            ("stacks/platform.df".into(), 6),
+            ("stacks/platform.df".into(), 15)
+        ]
+    );
+    assert_eq!(
+        refs(&platform, "resource net.vpc main", 17),
+        vec![
+            ("stacks/platform.df".into(), 3),
+            ("stacks/platform.df".into(), 11),
+            ("stacks/platform.df".into(), 14),
+            ("stacks/platform.df".into(), 18)
+        ]
+    );
     c.shutdown();
 }

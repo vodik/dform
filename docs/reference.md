@@ -2250,14 +2250,20 @@ examples/demo an evaluation takes about 30 ms in a release build.
   no rule wants (guard the block on it: `} where "other" in net.vpc`). An edit
   to a formatted file leaves it formatted.
 - *References* of a predicate, an input or value name (a `{ k }` field
-  included), a `let` or type alias (bare or read through its module), a
-  component, a module a `use` names, an instance, a resource (by its name
-  in scope), across the project's files and unsaved
-  buffers, read in the resolver's order (docs/grammar.md "Names"); a
-  relation a component defines is its own (two components' private
-  `helper` are two). On an attribute path (a field of a resource block,
-  `r.p` in a body, an `attr` literal): every rule contributing to that
-  cell, across components and modules, as the hover lists them.
+  included) and an object input's field (`nodes.count`), a `let` or type
+  alias (bare or read through its module), an output, a component, a
+  module a `use` names, an instance, a resource (by its name in scope,
+  and its address written as a string, `net.vpc["main"]` in a
+  `lifecycle` fact or a deny), a function, across the project's files
+  and unsaved buffers and through `use` and instance scopes
+  (`config.region`, `app_db.conn`, `platform[env].out`, an instance
+  block's `k = v`), in strings' `${..}` holes too, read in the
+  resolver's order (docs/grammar.md "Names",
+  `dform_core::names`); a relation a component or a module file defines
+  is its own (two components' private `helper` are two). On an attribute
+  path (a field of a resource block, `r.p` in a body, an `attr`
+  literal): every rule contributing to that cell, across components and
+  modules, as the hover lists them.
 - *Rename* of the same names. Renaming a resource or an instance whose
   addresses have state in the selected deployment adds, in
   the same edit, `moved(T, "old", new)` per address just after the
@@ -2271,9 +2277,17 @@ examples/demo an evaluation takes about 30 ms in a release build.
   schema types, attribute paths, provider names and dform's own
   relations (`data`, `attr`, ...), and an instance whose name is also a
   string a dynamic index `c[e]` may read (naming where the string is).
-- Formatting (`dform fmt`'s formatter) and go-to-definition of components,
-  instances, `use`s and predicates; on a `use` or `instance` path, the
-  file (or the component in it) the path names (R-65).
+- Formatting (`dform fmt`'s formatter) and go-to-definition of every
+  name the references find: its declaration (a relation's `decl`, else
+  its first rule; an output's typed declaration; a resource two types
+  name, the one the attribute's `ref(T)` takes, R-74); on a `use` or
+  `instance` path, the file (or the component in it) the path names
+  (R-65), and from a name a `use` binds, its file. A std function
+  (`inet.subnet`) goes to its signature line, and a provider type
+  (`net.vpc`) to the line of its schema file that declares it: the
+  files shipped inside dform (`std/*.df`, the built-in schemas) are
+  extracted read-only under `$XDG_CACHE_HOME/dform/` (R-24). A place
+  that names nothing answers empty, never an error.
 
 Two commands (`workspace/executeCommand`), which the Emacs mode binds:
 

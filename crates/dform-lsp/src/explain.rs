@@ -10,12 +10,12 @@
 //! hover.
 
 use crate::analysis::Evaluated;
-use crate::nav;
-use crate::refs::{self, Decls, Symbol, What};
+use crate::refs;
 use dform_core::ast::{Atom, Lit, Span, Stmt, Term};
 use dform_core::circuit::{Leaf, NodeId, View};
 use dform_core::engine::{self, Reference};
 use dform_core::lattice::Rank;
+use dform_core::names::{self, Parsed, Symbol, What};
 use dform_core::report::tree;
 use dform_core::syntax::doc;
 use dform_core::syntax::{SyntaxKind, SyntaxNode, SyntaxToken};
@@ -330,9 +330,10 @@ fn owner(e: &Evaluated, n: NodeId) -> String {
 /// evaluations; `None` where point is on nothing with content.
 pub fn hover_at(p: &refs::Project, path: &Path, at: usize) -> Option<String> {
     let files = p.parse();
-    let d = Decls::of_files(&files);
-    let f = files.iter().find(|f| f.path == path)?;
-    let t = nav::token_at(&f.tree, at)?;
+    let d = p.decls(&files);
+    // The token at point, a name in an interpolation hole included.
+    let named = d.at(&files, path, at)?;
+    let t = named.token.clone();
     // `check` is a word only where it opens a refinement.
     let refinement = t.kind() == SyntaxKind::IDENT
         && t.parent().is_some_and(|n| {
@@ -365,12 +366,21 @@ pub fn hover_at(p: &refs::Project, path: &Path, at: usize) -> Option<String> {
         (Some(a), Some(b)) => Some(format!("{a}\n---\n\n{b}")),
         (a, b) => a.or(b),
     };
-    match refs::classify(&d, &t) {
+    let what = match named.what {
+        // Of a name several resources share, the first's.
+        What::Names(syms) => syms
+            .into_iter()
+            .next()
+            .map_or(What::Other, |s| What::Name(s, false)),
+        w => w,
+    };
+    match what {
         What::Name(sym, _) => {
-            let decls: Vec<SyntaxNode> = refs::occurrences(&d, &files, &sym)
+            let decls: Vec<SyntaxNode> = d
+                .occurrences(&files, &sym)
                 .into_iter()
-                .filter(|(_, _, is_decl)| *is_decl)
-                .filter_map(|(_, t, _)| statement(&t))
+                .filter(names::Named::is_declaration)
+                .filter_map(|n| statement(&n.token))
                 .collect();
             if decls.is_empty()
                 && let Some(r) = builtin(&t)
@@ -382,9 +392,12 @@ pub fn hover_at(p: &refs::Project, path: &Path, at: usize) -> Option<String> {
                 .find(|n| doc::comment(n).is_some())
                 .or(decls.first());
             let own = match &sym {
-                Symbol::Predicate(_, name) => {
-                    joined(signature_md(p, name), documented.map(item_md))
-                }
+                // A relation a copy exports, read through it (`n.p(..)`):
+                // the output's declaration too.
+                Symbol::Predicate(_, name) => joined(
+                    output_md(&files, &t),
+                    joined(signature_md(p, name), documented.map(item_md)),
+                ),
                 Symbol::Module(m) => module_md(&files, m),
                 Symbol::Instance(m, _) => joined(documented.map(item_md), module_md(&files, m)),
                 _ => documented.map(item_md),
@@ -397,8 +410,8 @@ pub fn hover_at(p: &refs::Project, path: &Path, at: usize) -> Option<String> {
             }
         }
         What::Path => contributors().or_else(|| field_doc(p, &t)),
-        What::Type => type_md(p, &t),
-        What::Provider | What::Other => builtin(&t)
+        What::Type(_) => type_md(p, &t),
+        What::Names(_) | What::Provider | What::Variable | What::Key | What::Other => builtin(&t)
             .map(reference_md)
             .or_else(|| output_md(&files, &t)),
     }
@@ -512,10 +525,10 @@ fn item_md(n: &SyntaxNode) -> String {
 }
 
 /// The component `m` (a path's last segment) some file declares.
-fn module_node(files: &[refs::Parsed], m: &str) -> Option<SyntaxNode> {
+fn module_node(files: &[Parsed], m: &str) -> Option<SyntaxNode> {
     let m = m.rsplit('.').next().unwrap_or(m);
     files.iter().flat_map(|f| f.tree.descendants()).find(|n| {
-        n.kind() == SyntaxKind::COMPONENT && nav::declared_name(n).is_some_and(|t| t.text() == m)
+        n.kind() == SyntaxKind::COMPONENT && names::declared_name(n).is_some_and(|t| t.text() == m)
     })
 }
 
@@ -558,7 +571,7 @@ fn members(module: &SyntaxNode, kind: SyntaxKind) -> Vec<(String, String, Option
 
 /// A module's first line and doc comment, then its inputs and outputs with
 /// theirs.
-fn module_md(files: &[refs::Parsed], m: &str) -> Option<String> {
+fn module_md(files: &[Parsed], m: &str) -> Option<String> {
     let module = module_node(files, m)?;
     let mut out = item_md(&module);
     for (kind, title) in [
@@ -582,7 +595,7 @@ fn module_md(files: &[refs::Parsed], m: &str) -> Option<String> {
 
 /// An output read through its instance, `n.k` or `c[e].k`: the output's
 /// declaration and doc comment.
-fn output_md(files: &[refs::Parsed], t: &SyntaxToken) -> Option<String> {
+fn output_md(files: &[Parsed], t: &SyntaxToken) -> Option<String> {
     let chain = t.parent().filter(|c| c.kind() == SyntaxKind::CHAIN)?;
     let text = chain.text().to_string();
     let segs: Vec<&str> = text.split('.').collect();
@@ -631,7 +644,7 @@ fn field_doc(p: &refs::Project, t: &SyntaxToken) -> Option<String> {
     let resource = path
         .ancestors()
         .find(|n| n.kind() == SyntaxKind::RESOURCE)?;
-    let typ = refs::header(&resource)?.typ;
+    let typ = names::header(&resource)?.typ;
     let path = path.text().to_string().replace(' ', "");
     let d = schema_doc(p, &typ, &path)?;
     Some(format!("**{typ} .{path}**\n\n{d}\n"))

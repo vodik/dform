@@ -19,6 +19,7 @@ use lsp_types::{
 use serde_json::{Value as Json, json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 /// How long edits must pause before the project is evaluated again.
@@ -228,7 +229,8 @@ impl Server<'_> {
                         return Ok(());
                     }
                     let id = req.id.clone();
-                    let resp = match self.request(req) {
+                    let answer = self.request(req);
+                    let resp = match answer {
                         Ok(v) => Response::new_ok(id, v),
                         Err(e) => Response::new_err(
                             id,
@@ -610,24 +612,80 @@ impl Server<'_> {
     /// The project at `root` as references and the hover read it: its
     /// files as the editor has them, its stacks' evaluations.
     fn project(&self, root: &Path) -> refs::Project<'_> {
+        let dir = if root.is_dir() {
+            root.to_path_buf()
+        } else {
+            root.parent().unwrap_or(Path::new("/")).to_path_buf()
+        };
+        let files: Vec<(PathBuf, String)> = self
+            .files(root)
+            .into_iter()
+            .filter_map(|f| Some((f.clone(), self.read(&f).ok()?)))
+            .collect();
+        let evaluated: Vec<&Evaluated> = self.workspaces.get(root).map_or(Vec::new(), |w| {
+            w.stacks
+                .iter()
+                .filter_map(|ev| ev.outcome.evaluated.as_ref())
+                .collect()
+        });
+        let schemas = self.schema_files(&dir, &files, &evaluated);
         refs::Project {
-            dir: if root.is_dir() {
-                root.to_path_buf()
-            } else {
-                root.parent().unwrap_or(Path::new("/")).to_path_buf()
-            },
-            files: self
-                .files(root)
-                .into_iter()
-                .filter_map(|f| Some((f.clone(), self.read(&f).ok()?)))
-                .collect(),
-            evaluated: self.workspaces.get(root).map_or(Vec::new(), |w| {
-                w.stacks
-                    .iter()
-                    .filter_map(|ev| ev.outcome.evaluated.as_ref())
-                    .collect()
-            }),
+            dir,
+            files,
+            evaluated,
+            schemas,
         }
+    }
+
+    /// Each provider's schema file, read: a path, the project's
+    /// providers/NAME/schema.df, a built-in schema extracted to the cache,
+    /// a plugin's `schema.df` beside it. The providers are the
+    /// evaluations', and the `provider` blocks' by the manifest (an
+    /// evaluation that failed has none).
+    fn schema_files(
+        &self,
+        dir: &Path,
+        files: &[(PathBuf, String)],
+        evaluated: &[&Evaluated],
+    ) -> Vec<(PathBuf, Arc<Schema>)> {
+        use dform_core::plugin::source::{Source, resolve};
+        let manifest = Project::find(dir, self.opts.version).ok().flatten();
+        let mut specs: BTreeSet<String> = evaluated
+            .iter()
+            .flat_map(|e| e.providers.iter().cloned())
+            .collect();
+        for (_, text) in files {
+            let tree = dform_core::syntax::parser::parse(text).syntax();
+            for n in tree
+                .descendants()
+                .filter(|n| n.kind() == dform_core::syntax::SyntaxKind::PROVIDER)
+            {
+                if let Some(name) = dform_core::names::declared_name(&n) {
+                    let name = name.text().to_string();
+                    specs.insert(
+                        manifest
+                            .as_ref()
+                            .and_then(|m| m.manifest.provider_source(&name))
+                            .unwrap_or(name),
+                    );
+                }
+            }
+        }
+        specs
+            .iter()
+            .filter_map(|spec| {
+                let local = dir.join("providers").join(spec).join("schema.df");
+                let f = match resolve(spec) {
+                    Source::Plugin(exe) => exe.parent()?.join("schema.df"),
+                    Source::Mock(f) if f.ends_with(".df") || f.contains('/') => PathBuf::from(f),
+                    Source::Mock(_) if local.is_file() => local,
+                    Source::Mock(name) => return builtin_schema(&name),
+                };
+                let f = if f.is_absolute() { f } else { dir.join(f) };
+                let schema = Schema::load(&f).ok()?;
+                Some((f, Arc::new(schema)))
+            })
+            .collect()
     }
 
     /// The evaluation that reads `path`, and the facts the code at `pos`
@@ -749,10 +807,16 @@ impl Server<'_> {
     /// Every `.df` file of the workspace at `root`, open or not.
     fn files(&self, root: &Path) -> Vec<PathBuf> {
         let mut out: BTreeSet<PathBuf> = BTreeSet::new();
-        if root.is_dir()
-            && enter(root).is_ok()
-            && let Ok(Some(p)) = Project::find(root, self.opts.version)
-        {
+        if root.is_dir() && enter(root).is_ok() {
+            // A manifest that does not load (one a newer dform wrote) is
+            // the evaluation's error; its files are still the project's.
+            let p = match Project::find(root, self.opts.version) {
+                Ok(Some(p)) => p,
+                _ => Project {
+                    root: root.to_path_buf(),
+                    manifest: Default::default(),
+                },
+            };
             for f in project::df_files(&p) {
                 let abs = if f.is_absolute() { f } else { root.join(f) };
                 out.insert(std::fs::canonicalize(&abs).unwrap_or(abs));
@@ -814,63 +878,17 @@ impl Server<'_> {
         Ok(complete::complete(&tree, &text, at, &schema, &modules))
     }
 
+    /// Go-to-definition (`refs::definition`): a function's signature line
+    /// in the std files extracted to the cache, a provider type's line in
+    /// its schema file.
     fn definition(&mut self, path: &Path, pos: Position) -> Result<Vec<Location>> {
-        let (text, tree) = self
-            .tree(path)
-            .ok_or_else(|| anyhow!("no text for {}", path.display()))?;
-        let at = text::offset(&text, pos);
-        let Some(r) = nav::token_at(&tree, at).and_then(|t| nav::reference(&t)) else {
-            return Ok(Vec::new());
-        };
         let root = self.root_of(path);
-        let files = self.files(&root);
-        let find = |r: &nav::Ref| -> Vec<Location> {
-            let mut out = Vec::new();
-            for f in &files {
-                let Some((t, tree)) = self.tree(f) else {
-                    continue;
-                };
-                for (s, e) in nav::definitions(&tree, r) {
-                    out.push(Location::new(text::uri_of(f), text::range(&t, s, e)));
-                }
-            }
-            out
-        };
-        // A path is looked up from the root (R-65): its file, or the
-        // component it names in that file.
-        let by_path = |p: &str| -> Vec<Location> {
-            let Some((f, item)) = nav::path_file(&root, p) else {
-                return Vec::new();
-            };
-            let Some((t, tree)) = self.tree(&f) else {
-                return Vec::new();
-            };
-            match item {
-                Some(i) => nav::definitions(&tree, &nav::Ref::Module(i))
-                    .into_iter()
-                    .map(|(s, e)| Location::new(text::uri_of(&f), text::range(&t, s, e)))
-                    .collect(),
-                None => vec![Location::new(text::uri_of(&f), text::range(&t, 0, 0))],
-            }
-        };
-        let mut locs = match &r {
-            nav::Ref::Path(p) => by_path(p),
-            r => find(r),
-        };
-        // `zone_index[z]` and `network[ia]` read alike: a name that is no
-        // predicate may be a scope's, and the other way round; a component
-        // no file declares may be a file of its own.
-        if locs.is_empty() {
-            locs = match &r {
-                nav::Ref::Predicate(n) => find(&nav::Ref::Module(n.clone())),
-                nav::Ref::Module(n) => {
-                    let l = find(&nav::Ref::Predicate(n.clone()));
-                    if l.is_empty() { by_path(n) } else { l }
-                }
-                nav::Ref::Path(_) => Vec::new(),
-            };
-        }
-        Ok(locs)
+        self.fresh(&root);
+        let text = self.read(path)?;
+        let at = text::offset(&text, pos);
+        let project = self.project(&root);
+        let schema_files: Vec<PathBuf> = project.schemas.iter().map(|(f, _)| f.clone()).collect();
+        Ok(refs::definition(&project, path, at, &cached, &schema_files))
     }
 
     /// The quick fixes of the diagnostics the client names (`actions`):
@@ -936,33 +954,15 @@ impl Server<'_> {
     /// References, prepareRename and rename (`refs`, `rename`), over the
     /// project's files as the editor has them and its evaluations.
     fn names(&mut self, method: &str, params: Json) -> Result<Json> {
-        use crate::{refs, rename};
+        use crate::rename;
         let p: lsp_types::TextDocumentPositionParams = serde_json::from_value(params.clone())?;
         let path = self.path(&p.text_document.uri)?;
         let root = self.root_of(&path);
         self.fresh(&root);
         let text = self.read(&path)?;
         let at = text::offset(&text, p.position);
-        let files = self
-            .files(&root)
-            .into_iter()
-            .filter_map(|f| Some((f.clone(), self.read(&f).ok()?)))
-            .collect();
         let ws = self.workspaces.get(&root);
-        let project = refs::Project {
-            dir: if root.is_dir() {
-                root.clone()
-            } else {
-                root.parent().unwrap_or(Path::new("/")).to_path_buf()
-            },
-            files,
-            evaluated: ws.map_or(Vec::new(), |w| {
-                w.stacks
-                    .iter()
-                    .filter_map(|ev| ev.outcome.evaluated.as_ref())
-                    .collect()
-            }),
-        };
+        let project = self.project(&root);
         match method {
             "textDocument/references" => {
                 let r: lsp_types::ReferenceParams = serde_json::from_value(params)?;
@@ -1019,4 +1019,61 @@ impl Server<'_> {
             })
             .collect()
     }
+}
+
+/// A built-in schema (`schema::BUILTINS`), read once, and the file it is
+/// extracted to.
+fn builtin_schema(name: &str) -> Option<(PathBuf, Arc<Schema>)> {
+    use std::sync::{LazyLock, Mutex};
+    type Read = BTreeMap<String, Option<(PathBuf, Arc<Schema>)>>;
+    static READ: LazyLock<Mutex<Read>> = LazyLock::new(Default::default);
+    let mut read = READ.lock().ok()?;
+    read.entry(name.to_string())
+        .or_insert_with(|| {
+            let text = dform_core::schema::builtin(name)?;
+            let schema = Schema::parse(text, name).ok()?;
+            Some((
+                cached(&format!("schemas/{name}.df"), text)?,
+                Arc::new(schema),
+            ))
+        })
+        .clone()
+}
+
+/// A file shipped inside dform (a signature file of `functions::SOURCES`,
+/// a built-in schema) extracted read-only under the user's cache
+/// directory at `rel`, so what it declares has a definition to go to
+/// (DESIGN.org R-24: as rust-analyzer's `rust-src`). The directory is
+/// named by the shipped files' digest: another dform extracts beside it.
+fn cached(rel: &str, source: &str) -> Option<PathBuf> {
+    use std::sync::OnceLock;
+    static DIR: OnceLock<PathBuf> = OnceLock::new();
+    let dir = DIR.get_or_init(|| {
+        let base = std::env::var_os("XDG_CACHE_HOME")
+            .map(PathBuf::from)
+            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")))
+            .unwrap_or_else(std::env::temp_dir);
+        let schemas = dform_core::schema::BUILTINS
+            .iter()
+            .filter_map(|n| Some((*n, dform_core::schema::builtin(n)?)));
+        let all: String = dform_core::functions::SOURCES
+            .iter()
+            .copied()
+            .chain(schemas)
+            .map(|(f, t)| format!("{f}\n{t}"))
+            .collect();
+        let digest = dform_core::approval::sha256_hex(all.as_bytes());
+        base.join("dform")
+            .join(format!("shipped-{}", &digest[..16]))
+    });
+    let f = dir.join(rel);
+    if std::fs::read_to_string(&f).ok().as_deref() != Some(source) {
+        std::fs::create_dir_all(f.parent()?).ok()?;
+        let _ = std::fs::remove_file(&f);
+        std::fs::write(&f, source).ok()?;
+        let mut perms = std::fs::metadata(&f).ok()?.permissions();
+        perms.set_readonly(true);
+        std::fs::set_permissions(&f, perms).ok()?;
+    }
+    Some(f)
 }

@@ -26,6 +26,7 @@ pub mod lint;
 pub mod loader;
 pub mod memo;
 pub mod modules;
+pub mod names;
 pub mod parser;
 pub mod partition;
 pub mod plugin;
