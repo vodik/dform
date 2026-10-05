@@ -299,8 +299,8 @@ reaches(a, b) where link(a, b)
 reaches(a, c) where reaches(a, b), link(b, c)
 
 resource aws.ec2_transit_gateway tgw
-resource aws.vpc v { cidr_block = inet.subnet(supernet, 4, slot) } where net(v, slot)
-resource aws.route_table t { vpc = aws.vpc[t] } where net(t, _)
+resource aws.vpc "${v}" { cidr_block = inet.subnet(supernet, 4, slot) } where net(v, slot)
+resource aws.route_table "${t}" { vpc = aws.vpc[t] } where net(t, _)
 
 resource aws.route "${a}-to-${b}" {
   route_table = aws.route_table[a]
@@ -347,7 +347,7 @@ aws.route["blue-to-green"]
   └─ aws.vpc["green"].cidr_block = 10.2.0.0/16
        merged from 1 contribution
        └─ 10.2.0.0/16
-            stacks/network.df:23  resource aws.vpc v { cidr_block = inet.subnet(supernet, 4, slot) } where net(v, slot)
+            stacks/network.df:23  resource aws.vpc "${v}" { cidr_block = inet.subnet(supernet, 4, slot) } where net(v, slot)
             with v = "green", slot = 2
                  inet.subnet(supernet, 4, slot) = 10.2.0.0/16
             ├─ input supernet = 10.0.0.0/12
