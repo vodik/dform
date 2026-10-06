@@ -381,14 +381,18 @@ deployment has no state yet but whose unkeyed state exists says so.
 The collision lint: in a keyed stack, a resource whose name-like attribute
 (`name`, `metadata.name`, `bucket`, or a path a provider's schema flags
 `name_like`) has a value no key input flows into gets the same name in
-every deployment, and they collide in a shared account: a warning at the
-field. The value flows through bindings, interpolation,
+every deployment, and they collide in a shared account: a warning per
+provider, listing each name at its field. The value flows through bindings, interpolation,
 calls, lookups (`buckets[env]`), module inputs and refs; a read
 that only gates the resource's block, or feeds another field, does not
 count, and neither does it for `rekey`'s list. `isolated = true` in the
 stack's `[stacks.NAME]` says each key value deploys into its own account
 (or world), and turns the lint off; `dform.df`'s says so, since its
-identity module's names are fixed.
+identity module's names are fixed. A provider whose `provider` block
+reads the key, or a value that depends on it, or a computed attribute of
+a resource (`provider k8s { kubeconfig = k3s.kubeconfig }`, read back
+from a server each deployment creates) reaches a per-deployment account
+already, and its names are not linted (R-117).
 
 `use stacks.app` then `app[env="prod"].k` reads one deployment's outputs
 (the core's `stack_output("app[env=prod]", k, V)`).

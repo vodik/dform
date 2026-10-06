@@ -729,7 +729,7 @@ fn quick_fix_derives_a_colliding_name_from_the_key_or_isolates_the_stack() {
         );
         (stack, edited)
     };
-    let needle = "net.vpc[\"fixed\"].name = \"fixed\" does not depend on the stack's key (env)";
+    let needle = "net.vpc[\"fixed\"].name = \"fixed\"";
     let (_s, root) = example("demo");
     let (stack, edited) = collides(&root);
     let texts = quick_fix(

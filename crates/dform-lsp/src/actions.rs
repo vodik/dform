@@ -248,15 +248,21 @@ fn collisions(e: &Evaluated, stack_file: &Path, read: Reader) -> Vec<Action> {
     let mut out = Vec::new();
     for c in &e.collisions {
         let message = e.redact.text(&c.text);
-        let at = e
-            .res
-            .circuit
-            .fact_id(&c.fact)
-            .and_then(|id| placed(e, id, read));
-        if let (Some(Value::Str(name)), Some((file, start, end))) = (c.fact.args.get(3), &at)
-            && file == stack_file
-            && let Ok(text) = read(file)
-        {
+        for fact in &c.facts {
+            let at = e
+                .res
+                .circuit
+                .fact_id(fact)
+                .and_then(|id| placed(e, id, read));
+            let (Some(Value::Str(name)), Some((file, start, end))) = (fact.args.get(3), &at) else {
+                continue;
+            };
+            if file != stack_file {
+                continue;
+            }
+            let Ok(text) = read(file) else {
+                continue;
+            };
             let quoted = format!("\"{name}\"");
             let written = text.get(*start..*end).unwrap_or_default();
             if written.matches(&quoted).count() == 1 {

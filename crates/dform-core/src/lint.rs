@@ -364,42 +364,208 @@ fn owner(circuit: &Circuit, fact: &circuit::Fact) -> Option<String> {
     None
 }
 
-/// One finding of the collision lint: its message, and the `attr` fact it
-/// is about.
+/// One finding of the collision lint: its message, and the `attr` facts
+/// of the names it is about.
 #[derive(Debug, Clone)]
 pub struct Collision {
     pub text: String,
-    pub fact: circuit::Fact,
+    pub facts: Vec<circuit::Fact>,
 }
 
-/// The collision lint of a keyed stack: one finding per name-like
-/// attribute whose value does not depend on any key input, at the place it
-/// is written. `stack` is the deployment's name.
+/// The collision lint of a keyed stack: the name-like attributes whose
+/// values do not depend on any key input, one finding per provider (R-117)
+/// listing each at the place it is written. `stack` is the deployment's
+/// name; `provider` names the provider that serves a type, as the
+/// program's `provider` block does when it configures one. A provider
+/// whose configuration differs per deployment ([`configured_per_key`])
+/// reaches a per-deployment account, and its names do not collide.
 pub fn key_collisions(
     res: &EvalResult,
     schema: &Schema,
     keys: &[String],
     stack: &str,
+    provider: impl Fn(&str) -> String,
 ) -> Vec<Collision> {
-    name_like(&res.facts, schema)
+    let mut isolated: BTreeMap<String, bool> = BTreeMap::new();
+    let mut groups: BTreeMap<String, Vec<(String, circuit::Fact)>> = BTreeMap::new();
+    for n in name_like(&res.facts, schema) {
+        if from_key(res, &n, keys) {
+            continue;
+        }
+        let p = provider(&n.addr.typ);
+        if *isolated
+            .entry(p.clone())
+            .or_insert_with(|| configured_per_key(&res.rules, schema, &p, keys))
+        {
+            continue;
+        }
+        let at = owner(&res.circuit, &n.fact)
+            .map(|at| format!("{at}: "))
+            .unwrap_or_default();
+        groups
+            .entry(p)
+            .or_default()
+            .push((format!("{at}{}", n.text()), n.fact));
+    }
+    let (key, keys) = (&keys[0], keys.join(", "));
+    groups
         .into_iter()
-        .filter(|n| !from_key(res, n, keys))
-        .map(|n| {
-            let at = owner(&res.circuit, &n.fact)
-                .map(|at| format!("{at}: "))
-                .unwrap_or_default();
-            let text = format!(
-                "{at}{} does not depend on the stack's key ({}): every deployment of \
-                 {stack} gives it this name, and they collide; derive it from the key \
-                 (\"...${{{}}}\"), or say `isolated = true` on the stack when each key value \
-                 deploys into its own account",
-                n.text(),
-                keys.join(", "),
-                keys[0],
-            );
-            Collision { text, fact: n.fact }
+        .map(|(p, names)| {
+            let text = match names.as_slice() {
+                [(name, _)] => format!(
+                    "{name} does not depend on the stack's key ({keys}): every deployment of \
+                     {stack} gives it this name, and they collide; derive it from the key \
+                     (\"...${{{key}}}\"), or say `isolated = true` on the stack when each key \
+                     value deploys into its own account"
+                ),
+                _ => format!(
+                    "provider {p}: {} names do not depend on the stack's key ({keys}): every \
+                     deployment of {stack} gives each the same name, and they collide: {}; \
+                     derive them from the key (\"...${{{key}}}\"), configure provider {p} from \
+                     the key, or say `isolated = true` on the stack when each key value deploys \
+                     into its own account",
+                    names.len(),
+                    names
+                        .iter()
+                        .map(|(n, _)| n.as_str())
+                        .collect::<Vec<_>>()
+                        .join("; "),
+                ),
+            };
+            Collision {
+                text,
+                facts: names.into_iter().map(|(_, f)| f).collect(),
+            }
         })
         .collect()
+}
+
+/// Whether the configuration of the provider `name` differs per
+/// deployment of a keyed stack (R-117): its `provider_config(name, ..)`
+/// reads, through any chain of rules, a key input, or a computed attribute
+/// of a resource, which the cloud gives each deployment's own object (`k8s
+/// { kubeconfig = k3s.kubeconfig }`, read back from a server the deployment
+/// creates). Its resources then live in a per-deployment account.
+pub fn configured_per_key(
+    rules: &[RuleStmt],
+    schema: &Schema,
+    name: &str,
+    keys: &[String],
+) -> bool {
+    fn text(t: &Term) -> Option<&str> {
+        match t {
+            Term::Val(Value::Str(s)) => Some(s.as_str()),
+            _ => None,
+        }
+    }
+    // Two columns that may hold the same value.
+    let meet = |a: &Term, b: &Term| match (text(a), text(b)) {
+        (Some(x), Some(y)) => x == y,
+        _ => true,
+    };
+    let mut todo: Vec<usize> = rules
+        .iter()
+        .enumerate()
+        .filter(|(_, r)| r.head.pred == "provider_config")
+        .filter(|(_, r)| r.head.args.first().and_then(text) == Some(name))
+        .map(|(i, _)| i)
+        .collect();
+    let mut seen: BTreeSet<usize> = todo.iter().copied().collect();
+    while let Some(i) = todo.pop() {
+        for (k, l) in rules[i].body.iter().enumerate() {
+            let (Lit::Pos(a) | Lit::Not(a)) = l else {
+                continue;
+            };
+            let cell = (a.pred == "attr" || a.pred == transform::ATTR_BASE) && a.args.len() == 4;
+            if cell {
+                let (t, p) = (text(&a.args[0]), text(&a.args[2]));
+                if t == Some(crate::modules::INPUT)
+                    && text(&a.args[1]) == Some("")
+                    && p.is_some_and(|p| keys.iter().any(|k| k == p))
+                {
+                    return true;
+                }
+                let read = p.map(|p| read_paths(&rules[i], k, &a.args[3], p));
+                let under = |q: &str| {
+                    read.as_ref().is_none_or(|ps| {
+                        ps.iter().any(|p| {
+                            q == p
+                                || q.strip_prefix(p.as_str())
+                                    .is_some_and(|r| r.starts_with('.') || r.starts_with('['))
+                                || p.strip_prefix(q).is_some_and(|r| r.starts_with('.'))
+                        })
+                    })
+                };
+                if schema
+                    .computed
+                    .keys()
+                    .any(|(ct, cp)| t.is_none_or(|t| t == ct) && under(cp))
+                {
+                    return true;
+                }
+            }
+            for (j, r) in rules.iter().enumerate() {
+                let h = &r.head;
+                let writes = if cell {
+                    h.pred == "arg"
+                        && h.args.len() == 5
+                        && (0..3).all(|c| meet(&h.args[c], &a.args[c]))
+                } else {
+                    h.pred == a.pred && h.args.len() == a.args.len()
+                };
+                if writes && seen.insert(j) {
+                    todo.push(j);
+                }
+            }
+        }
+    }
+    false
+}
+
+/// The paths rule `r` reads of the attribute `p` its body literal `at`
+/// binds to `v`: each `__path(V, "rest")` it takes of it, `p.rest`, or `p`
+/// when it uses the value whole.
+fn read_paths(r: &RuleStmt, at: usize, v: &Term, p: &str) -> Vec<String> {
+    let Term::Var(v) = v else {
+        return vec![p.to_string()];
+    };
+    fn walk(t: &Term, v: &str, p: &str, out: &mut Vec<String>, whole: &mut bool) {
+        match t {
+            Term::Var(x) if x == v => *whole = true,
+            Term::Func { name, args } if name == "__path" => match args.as_slice() {
+                [Term::Var(x), Term::Val(Value::Str(rest))] if x == v => {
+                    out.push(format!("{p}.{rest}"))
+                }
+                _ => args.iter().for_each(|a| walk(a, v, p, out, whole)),
+            },
+            Term::Func { args, .. } | Term::List(args) => {
+                args.iter().for_each(|a| walk(a, v, p, out, whole))
+            }
+            Term::Obj(m) => m.values().for_each(|a| walk(a, v, p, out, whole)),
+            Term::Val(_) | Term::Wildcard | Term::Var(_) | Term::ListComp { .. } => {}
+        }
+    }
+    let mut terms: Vec<&Term> = r.head.args.iter().collect();
+    for (k, l) in r.body.iter().enumerate() {
+        match l {
+            _ if k == at => {}
+            Lit::Pos(a) | Lit::Not(a) => terms.extend(&a.args),
+            Lit::Eq(x, y)
+            | Lit::Neq(x, y)
+            | Lit::Gt(x, y)
+            | Lit::Ge(x, y)
+            | Lit::Lt(x, y)
+            | Lit::Le(x, y) => terms.extend([x, y]),
+        }
+    }
+    let (mut out, mut whole) = (Vec::new(), false);
+    for t in terms {
+        walk(t, v, p, &mut out, &mut whole);
+    }
+    if whole || out.is_empty() {
+        out.push(p.to_string());
+    }
+    out
 }
 
 /// The name-like attributes that depend on a key input: what a new key

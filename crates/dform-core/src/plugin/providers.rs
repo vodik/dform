@@ -1216,6 +1216,12 @@ impl Providers {
         self.names.get(self.route(typ)).map_or("", String::as_str)
     }
 
+    /// Whether the provider a program names `name` (its own name, or its
+    /// `provider` block's: `provider_config(name, ..)`) serves `typ`.
+    pub fn serves(&self, name: &str, typ: &str) -> bool {
+        self.link_for(name) == Some(self.route(typ))
+    }
+
     /// The providers started, by name, in link order.
     pub fn names(&self) -> &[String] {
         &self.names

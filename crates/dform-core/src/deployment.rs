@@ -1049,7 +1049,17 @@ impl Located {
         // writes the same.
         let collisions = if opts.collisions && !l.cfg.keys.is_empty() && !l.cfg.isolated {
             let keys: Vec<String> = l.cfg.keys.iter().map(|(k, _)| k.clone()).collect();
-            lint::key_collisions(&res, backend.schema(), &keys, &self.deployment)
+            // A type's provider, by the name a `provider` block that
+            // configures it gives it (its namespace's, R-36).
+            let configured = provider_configs(&self.program);
+            let provider = |t: &str| {
+                configured
+                    .iter()
+                    .find(|n| backend.serves(n, t) || t.starts_with(&format!("{n}.")))
+                    .cloned()
+                    .unwrap_or_else(|| backend.provider_of(t).to_string())
+            };
+            lint::key_collisions(&res, backend.schema(), &keys, &self.deployment, provider)
         } else {
             Vec::new()
         };
