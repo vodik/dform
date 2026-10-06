@@ -242,6 +242,13 @@ pub struct ProviderTable {
     pub source: Option<String>,
     /// A version requirement in Cargo's syntax (`"2.1"` is `^2.1`).
     pub version: Option<String>,
+    /// How long one call may go unanswered (`60s`; `500ms`, `2m`) before
+    /// it is taken as timed out (R-81).
+    pub timeout: Option<String>,
+    /// How many times a failed call is sent again (5).
+    pub retries: Option<u32>,
+    /// The first retry's delay (`1s`); each next one doubles, with jitter.
+    pub backoff: Option<String>,
 }
 
 impl ProviderEntry {
@@ -257,6 +264,19 @@ impl ProviderEntry {
             ProviderEntry::Source(_) => None,
             ProviderEntry::Table(t) => t.version.as_deref(),
         }
+    }
+
+    /// Its call policy: the table's `timeout`, `retries` and `backoff`
+    /// over the defaults. Checked by `Manifest::parse`.
+    pub fn policy(&self) -> crate::plugin::policy::Policy {
+        let mut p = crate::plugin::policy::Policy::default();
+        if let ProviderEntry::Table(t) = self {
+            let d = |v: &Option<String>| v.as_deref().and_then(crate::store::parse_duration);
+            p.timeout = d(&t.timeout).unwrap_or(p.timeout);
+            p.backoff = d(&t.backoff).unwrap_or(p.backoff);
+            p.retries = t.retries.unwrap_or(p.retries);
+        }
+        p
     }
 }
 
@@ -302,6 +322,10 @@ pub struct StackTable {
     /// Gone (R-38): a document of the deployment's settings is the
     /// stack's `settings from yaml(..)`. Read only to say so.
     pub config: Option<Spanned<String>>,
+    /// How long an apply's tick waits for its open nulls to resolve (a
+    /// Job's status, a host that answers) before it stops (`10m`; R-81);
+    /// `apply --wait` overrides it.
+    pub wait: Option<String>,
 }
 
 /// The settings a stack table holds, as text: a term's (`backend`,
@@ -341,6 +365,7 @@ impl Defaults {
             audit_sink: self.audit_sink.clone(),
             isolated: self.isolated.clone(),
             config: self.config.clone(),
+            wait: None,
         }
     }
 }
@@ -399,6 +424,18 @@ impl Manifest {
             ),
         }
         for (name, p) in &m.providers {
+            if let ProviderEntry::Table(t) = p {
+                for (key, v) in [("timeout", &t.timeout), ("backoff", &t.backoff)] {
+                    if let Some(v) = v
+                        && crate::store::parse_duration(v).is_none_or(|d| d.is_zero())
+                    {
+                        bail!(
+                            "{} = {v:?}: a duration, `500ms`, `30s` or `2m`",
+                            at(&format!("[providers.{name}] {key}"))
+                        );
+                    }
+                }
+            }
             if let Some(req) = p.version() {
                 semver::VersionReq::parse(req).map_err(|e| {
                     anyhow!(
@@ -414,6 +451,14 @@ impl Manifest {
                 .map(|(n, t)| (format!("[stacks.{n}]"), t.clone())),
         );
         for (table, t) in tables {
+            if let Some(v) = &t.wait
+                && crate::store::parse_duration(v).is_none()
+            {
+                bail!(
+                    "{} = {v:?}: a duration, `30s`, `10m` or `0s` (do not wait)",
+                    at(&format!("{table} wait"))
+                );
+            }
             if let Some(c) = &t.config {
                 bail!(
                     "{} = {:?}: a stack's config is gone (R-38): its settings are the program's \
@@ -553,6 +598,24 @@ impl Manifest {
             path
         };
         Some(path.display().to_string())
+    }
+
+    /// Each provider's call policy, by the source `--provider` takes
+    /// ([`Manifest::provider_source`]), for the providers whose table sets
+    /// one.
+    pub fn policies(&self) -> BTreeMap<String, crate::plugin::policy::Policy> {
+        self.providers
+            .iter()
+            .filter(|(_, p)| p.policy() != crate::plugin::policy::Policy::default())
+            .filter_map(|(name, p)| Some((self.provider_source(name)?, p.policy())))
+            .collect()
+    }
+
+    /// How long a tick of `stack` waits on open nulls: `[stacks.NAME]
+    /// wait`, if it says.
+    pub fn stack_wait(&self, stack: &str) -> Option<std::time::Duration> {
+        let w = self.stacks.get(stack)?.wait.as_deref()?;
+        crate::store::parse_duration(w)
     }
 
     /// The default backend of `stack` (a `local` directory relative to
@@ -924,6 +987,32 @@ mod tests {
         assert!(e.to_string().contains("[defaults] lease_duration"), "{e}");
         let e = manifest("[defaults]\nbackend = 's3(\"\", \"p\")'\n").unwrap_err();
         assert!(e.to_string().contains("[defaults] backend"), "{e}");
+    }
+
+    /// `[providers.NAME]` sets a provider's call policy, by its source;
+    /// `[stacks.NAME] wait` a stack's wait budget (R-81).
+    #[test]
+    fn a_manifest_sets_call_policies_and_wait_budgets() {
+        use crate::plugin::policy::Policy;
+        use std::time::Duration;
+        let m = manifest(
+            "[providers]\nfake = { source = \"fake\", timeout = \"2m\", backoff = \"10ms\", \
+             retries = 2 }\nk8s = \"k8s\"\n[stacks.app]\nwait = \"30m\"\n",
+        )
+        .unwrap();
+        let fake = Policy {
+            timeout: Duration::from_secs(120),
+            retries: 2,
+            backoff: Duration::from_millis(10),
+        };
+        assert_eq!(m.policies(), BTreeMap::from([("fake".to_string(), fake)]));
+        assert_eq!(m.stack_wait("app"), Some(Duration::from_secs(1800)));
+        assert_eq!(m.stack_wait("other"), None);
+        let e = manifest("[providers]\nfake = { source = \"fake\", timeout = \"soon\" }\n")
+            .unwrap_err();
+        assert!(e.to_string().contains("[providers.fake] timeout"), "{e}");
+        let e = manifest("[stacks.app]\nwait = \"later\"\n").unwrap_err();
+        assert!(e.to_string().contains("[stacks.app] wait"), "{e}");
     }
 
     #[test]

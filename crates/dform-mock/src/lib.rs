@@ -125,6 +125,9 @@ pub struct Applied {
     pub computed: Json,
     pub elapsed_ms: u64,
     pub notes: Vec<String>,
+    /// Chaos `delay`: how long to sleep before answering, the cloud
+    /// unlocked.
+    pub delay_ms: u64,
 }
 
 /// One Apply call, as the fake reads it.
@@ -174,6 +177,8 @@ pub struct FakeCloud {
     /// Address -> remote id, as Read and Apply saw them: where a chaos
     /// `mutate` of an address lands.
     remotes: BTreeMap<Address, String>,
+    /// The addresses whose first Apply chaos `delay` has delayed.
+    delayed: BTreeSet<Address>,
     /// Linked in: chaos `crash` cannot kill the process, so the mock is
     /// gone instead.
     in_process: bool,
@@ -760,6 +765,12 @@ impl FakeCloud {
             )));
         }
         let mut out = Applied::default();
+        if let Some(ms) = self.chaos.delay.get(addr)
+            && self.delayed.insert(addr.clone())
+        {
+            eprintln!("chaos: apply {at} answers {ms}ms late");
+            out.delay_ms = *ms;
+        }
         if let Some(ms) = self.chaos.latency.get(addr) {
             out.notes
                 .push(format!("latency {at}: {ms}ms (simulated, not slept)"));
@@ -1358,7 +1369,13 @@ impl Mock {
             assertions,
             key: r.idempotency_key,
         };
-        match self.cloud().apply(call) {
+        let applied = self.cloud().apply(call);
+        if let Ok(a) = &applied
+            && a.delay_ms > 0
+        {
+            std::thread::sleep(std::time::Duration::from_millis(a.delay_ms));
+        }
+        match applied {
             Ok(a) => Ok(pb::ApplyResponse {
                 remote: a.remote,
                 attrs: Some(wire::doc(&a.attrs)),

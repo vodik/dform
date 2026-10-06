@@ -1,10 +1,12 @@
 //! One started provider: its handshake, and calls to it. A blocking call
 //! is a submit and a wait for its own ticket; an answer to another call
 //! that arrives meanwhile (an Apply in flight) is kept for whoever waits
-//! for it.
+//! for it. Every call has the link's timeout ([`Timed`], R-81).
 
 use super::backend::{BUILD, BUILT_IN, Call, CallError, Provider, Reply, Ticket, VERSION};
 use super::pb;
+use super::policy::Policy;
+use super::timed::Timed;
 use anyhow::{Result, bail};
 use std::collections::BTreeMap;
 
@@ -14,7 +16,9 @@ pub struct Link {
     pub capabilities: Vec<String>,
     /// What was started, for messages.
     pub program: String,
-    backend: Box<dyn Provider>,
+    backend: Timed,
+    /// Its timeout, retries and backoff.
+    policy: Policy,
     /// Answers taken while waiting for another call.
     done: BTreeMap<Ticket, Result<Reply, CallError>>,
 }
@@ -41,12 +45,15 @@ fn check_build(program: &str, hs: &pb::HandshakeResponse) -> Result<()> {
 impl Link {
     /// Shake hands with the provider `backend` reaches; `program` names it
     /// in messages until it has a name.
-    pub fn start(program: impl Into<String>, backend: Box<dyn Provider>) -> Result<Link> {
+    pub fn start(program: impl Into<String>, backend: Box<dyn Provider + Send>) -> Result<Link> {
+        let program = program.into();
+        let policy = Policy::default();
         let mut link = Link {
             name: String::new(),
             capabilities: Vec::new(),
-            program: program.into(),
-            backend,
+            backend: Timed::new(program.clone(), backend, policy.timeout),
+            program,
+            policy,
             done: BTreeMap::new(),
         };
         let hs: pb::HandshakeResponse = link.call(pb::HandshakeRequest {
@@ -60,9 +67,20 @@ impl Link {
             );
         }
         check_build(&link.program, &hs)?;
+        link.backend.set_name(&hs.name);
         link.name = hs.name;
         link.capabilities = hs.capabilities;
         Ok(link)
+    }
+
+    /// Its call policy (`[providers.NAME]` in dform.toml).
+    pub fn set_policy(&mut self, policy: Policy) {
+        self.policy = policy;
+        self.backend.set_timeout(policy.timeout);
+    }
+
+    pub fn policy(&self) -> Policy {
+        self.policy
     }
 
     pub fn has(&self, capability: &str) -> bool {

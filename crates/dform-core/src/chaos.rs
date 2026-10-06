@@ -2,9 +2,10 @@
 //! and one knob of the executor's own, `stop-after`, which works whatever
 //! the backend.
 //!
-//! Deterministic: nothing sleeps and nothing is random. Time is the world's
-//! tick counter, which every apply advances by one, and for `read-lag` the
-//! count of Reads, so that a retried Read can see the object.
+//! Deterministic: nothing is random, and nothing sleeps but `delay`, which
+//! is for the timeouts of R-81. Time is the world's tick counter, which
+//! every apply advances by one, and for `read-lag` the count of Reads, so
+//! that a retried Read can see the object.
 //!
 //! An address is written as `plan` prints it, `T["N"]` (`ir::parse_address`);
 //! quote the spec for the shell.
@@ -23,6 +24,8 @@
 //! |                                | each persisted: nothing in flight is waited for         |
 //! | `fresh-ids`                    | every Create mints new ids, as a real cloud does: a     |
 //! |                                | replacement's id is not its predecessor's               |
+//! | `delay=T["N"]:MS`              | the first Apply of T["N"] takes effect, then answers MS |
+//! |                                | late (slept): past a short `timeout`, it times out      |
 
 use crate::ir::Address;
 use anyhow::{Context, Result, anyhow, bail};
@@ -35,6 +38,8 @@ pub struct Chaos {
     pub read_lag: BTreeMap<Address, u64>,
     pub mutate: Vec<(Address, String, serde_json::Value)>,
     pub latency: BTreeMap<Address, u64>,
+    /// The first Apply of each answers this many ms late, really slept.
+    pub delay: BTreeMap<Address, u64>,
     pub crash: BTreeSet<Address>,
     /// The executor stops once this many Apply calls have returned.
     pub stop_after: Option<usize>,
@@ -70,7 +75,7 @@ impl Chaos {
         let (knob, arg) = spec.split_once('=').ok_or_else(|| {
             anyhow!(
                 "expected KNOB=ARG (fail, timeout, crash, read-lag, mutate, latency, \
-                 stop-after) or fresh-ids"
+                 delay, stop-after) or fresh-ids"
             )
         })?;
         match knob {
@@ -98,6 +103,10 @@ impl Chaos {
                 let (a, ms) = addr_and(arg, "MS")?;
                 self.latency.insert(a, ms.parse().context("milliseconds")?);
             }
+            "delay" => {
+                let (a, ms) = addr_and(arg, "MS")?;
+                self.delay.insert(a, ms.parse().context("milliseconds")?);
+            }
             "mutate" => {
                 let bad = || anyhow!("expected mutate=T[\"N\"].PATH=JSON");
                 let (lhs, json) = arg.split_once('=').ok_or_else(bad)?;
@@ -110,7 +119,7 @@ impl Chaos {
             other => {
                 bail!(
                     "unknown chaos knob '{other}' (fail, timeout, crash, read-lag, mutate, latency, \
-                     stop-after, fresh-ids)"
+                     delay, stop-after, fresh-ids)"
                 )
             }
         }
@@ -124,6 +133,7 @@ impl Chaos {
         out.extend(&self.crash);
         out.extend(self.read_lag.keys());
         out.extend(self.latency.keys());
+        out.extend(self.delay.keys());
         out.extend(self.mutate.iter().map(|m| &m.0));
         out
     }

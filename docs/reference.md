@@ -95,6 +95,7 @@ dform = ">=0.1"
 [providers]
 aws = { source = "aws-mock", version = "2.1" }   # `provider aws` in a program
 google = { source = "providers/gcp" }            # a path under the root
+k8s = { source = "k8s", timeout = "2m" }         # each call's timeout (60s by default)
 
 [defaults]
 backend = 'local("state/{stack}")'   # or 's3("bucket", "dform/{stack}", {...})'
@@ -1405,10 +1406,21 @@ cargo run -- -C examples/demo dev effects                  # every scope, a row 
 cargo run -- -C examples/demo dev effects --json           # the rows, an array of objects
 ```
 
+## Timeouts, retries and waiting
+
+Every call to a provider has a timeout: 60s, or the provider's
+`[providers.NAME] timeout` in dform.toml (`500ms`, `30s`, `2m`). A call with
+no answer by then is taken as one that may have taken effect, as a
+`DEADLINE_EXCEEDED` from the provider is: `apply T["N"]: the provider P did not
+answer the Apply T["N"] call within 2m (its timeout); the call may have taken
+effect`. Its answer, if it comes later, is dropped. The calls dform makes to
+that provider after it wait behind it, and each one's timeout starts again
+when that late answer arrives.
+
 ## Chaos: failure and latency injection
 
 `dform dev --chaos SPEC apply` (repeatable) makes the fake provider misbehave, the way a
-real cloud does. Deterministic: nothing sleeps and nothing is random. The world
+real cloud does. Deterministic: nothing is random and nothing sleeps but `delay`. The world
 file keeps a `tick` counter; every `apply` is one tick.
 
 | SPEC | Effect |
@@ -1421,6 +1433,7 @@ file keeps a `tick` counter; every `apply` is one tick.
 | `mutate=T["N"].PATH=JSON` | once per run, after the first tick `T["N"]` exists at, the world sets its `PATH` to `JSON` (drift) |
 | `latency=T["N"]:MS` | Apply of `T["N"]` takes `MS` on a simulated clock, reported, never slept; the world's `timeline` records each call's start and end |
 | `fresh-ids` | every Create mints new ids (the world keeps a `serial`), as a real cloud does; without it a destroy-first replacement under the same name gets its predecessor's id |
+| `delay=T["N"]:MS` | the first Apply of `T["N"]` in a run takes effect, then answers `MS` late, really slept: past a shorter `timeout` it times out (the one knob that sleeps) |
 
 ```bash
 cargo run -- -C examples/demo dev --chaos 'fail=net.subnet["main/private-us-test-1a"]' apply dform env=staging

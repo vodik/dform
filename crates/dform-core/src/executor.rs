@@ -211,14 +211,16 @@ pub fn run_tick(
     for (i, start, end) in spans {
         tick.record(&actions[i].addr, start, end);
     }
-    let returned = tick.end(state)?;
+    // The end of a tick that failed may fail in turn (its call waits
+    // behind one that timed out): why the tick stopped comes first.
+    let ended = tick.end(state);
     let persisted = (opts.persist)(state);
-    match (failed, persisted) {
-        (Some(e), Ok(())) => Err(e),
-        // Why the tick stopped first, then why its state was not written.
+    match (failed, ended.and_then(|r| persisted.map(|()| r))) {
+        (Some(e), Ok(_)) => Err(e),
+        // Why the tick stopped first, then why it did not end or its state
+        // was not written.
         (Some(e), Err(p)) => Err(p.context(format!("{e:#}"))),
-        (None, Err(p)) => Err(p),
-        (None, Ok(())) => Ok(returned),
+        (None, r) => r,
     }
 }
 

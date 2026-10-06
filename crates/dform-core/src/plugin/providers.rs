@@ -84,6 +84,11 @@ pub struct Config {
     /// for a provider to digest a secret it holds (`provider::Held`'s
     /// digest); `None` when the run has no plan key (a plain plan).
     pub digest_key: Option<String>,
+    /// Each provider's call policy by its spec (`[providers.NAME]`'s
+    /// `timeout`, `retries`, `backoff`, R-81); a provider not named has the
+    /// default. The mock's one link takes the first of its schemas' that
+    /// has one.
+    pub policies: BTreeMap<String, super::policy::Policy>,
 }
 
 /// How a run reaches its providers: a backend (`plugin::backend`). The
@@ -272,8 +277,16 @@ impl Providers {
                     .iter()
                     .any(|(b, &j)| j == i && cfg.configured.contains(b))
         };
+        let policy_of = |s: &String| cfg.policies.get(s).copied();
         if !mocks.is_empty() {
             let mut link = launch.mock()?;
+            if let Some(p) = specs
+                .iter()
+                .filter(|s| matches!(source::resolve(s), Source::Mock(_)))
+                .find_map(policy_of)
+            {
+                link.set_policy(p);
+            }
             let mut config = base.clone();
             config["schemas"] = json!(mocks);
             // A mock schema the program configures by its block serves
@@ -291,8 +304,15 @@ impl Providers {
             links.push(link);
             bases.push(config);
         }
-        for p in plugins {
+        let plugin_specs: Vec<&String> = specs
+            .iter()
+            .filter(|s| matches!(source::resolve(s), Source::Plugin(_)))
+            .collect();
+        for (p, spec) in plugins.into_iter().zip(plugin_specs) {
             let mut link = launch.plugin(&p)?;
+            if let Some(policy) = policy_of(spec) {
+                link.set_policy(policy);
+            }
             let mut config = base.clone();
             let i = links.len();
             if by_block(i, &link.name) {
@@ -2113,6 +2133,9 @@ impl Tick<'_> {
             Ok(_) => Ok(()),
             Err(CallError::Crashed(m)) => {
                 bail!("apply {at}: {m}; the change may have taken effect")
+            }
+            Err(CallError::MaybeApplied(m)) if !m.starts_with(&format!("apply {at}")) => {
+                bail!("apply {at}: {m}")
             }
             Err(e) => Err(anyhow!(e.clone())),
         }

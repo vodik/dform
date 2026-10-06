@@ -694,6 +694,11 @@ impl Located {
                     stack: self.deployment.clone(),
                     blocks: l.cfg.provider_blocks.clone(),
                     digest_key: opts.digest_key.clone(),
+                    policies: l
+                        .manifest
+                        .as_ref()
+                        .map(|m| m.policies())
+                        .unwrap_or_default(),
                     held: held.clone(),
                     worlds: outputs
                         .iter()
