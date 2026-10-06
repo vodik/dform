@@ -332,16 +332,24 @@ fn private_name(scope: &str, p: &str) -> String {
 }
 
 /// A program with its modules and components expanded, and the interface
-/// the later passes check: every typed input, and every output declared
-/// `secret(T)` (scope, key).
+/// the later passes check: every typed input, and every output cell
+/// declared `secret(T)` (scope, key; `conn.password` for a field of an
+/// object type).
 pub struct Expanded {
     pub program: Program,
     pub inputs: Vec<Declared>,
     pub secret_outputs: Vec<(String, String)>,
+    /// Every output declared with a type, by (scope, name).
+    pub output_types: BTreeMap<(String, String), TypeExpr>,
 }
 
-fn is_secret_type(t: &Option<TypeExpr>) -> bool {
-    matches!(t, Some(TypeExpr::Apply(n, _)) if n == "secret")
+/// The cells of an output its type declares secret: `k` for `secret(T)`,
+/// `k.password` for an object type with a `password: secret(T)` field.
+fn secret_paths(o: &OutputDecl) -> Vec<String> {
+    o.ty.iter()
+        .flat_map(crate::types::secret_fields)
+        .map(|(p, _)| crate::types::dotted(&o.name, &p))
+        .collect()
 }
 
 /// Every definition of the program, by path, wherever it stands.
@@ -360,6 +368,7 @@ struct Cx<'a> {
     diags: Vec<Diagnostic>,
     declared: Vec<Declared>,
     secret_outputs: Vec<(String, String)>,
+    output_types: BTreeMap<(String, String), TypeExpr>,
     /// Private names by plain name, for the error when the program reads
     /// one.
     private: BTreeMap<String, (String, Option<String>)>,
@@ -404,6 +413,7 @@ pub fn expand(program: &Program) -> Result<Expanded> {
         diags: Vec::new(),
         declared: Vec::new(),
         secret_outputs: Vec::new(),
+        output_types: BTreeMap::new(),
         private: BTreeMap::new(),
         expanding: Vec::new(),
         checked: BTreeSet::new(),
@@ -428,8 +438,11 @@ pub fn expand(program: &Program) -> Result<Expanded> {
             Stmt::Output(o) if o.relation.is_some() => out.push(published_rows(o)),
             // The stack's own output: `output(k, V)` in the root scope.
             Stmt::Output(o) if o.value.is_none() => {
-                if is_secret_type(&o.ty) {
-                    cx.secret_outputs.push((String::new(), o.name.clone()));
+                cx.secret_outputs
+                    .extend(secret_paths(o).into_iter().map(|k| (String::new(), k)));
+                if let Some(t) = &o.ty {
+                    cx.output_types
+                        .insert((String::new(), o.name.clone()), t.clone());
                 }
             }
             Stmt::Output(o) => out.push(fact_or_rule(
@@ -579,6 +592,7 @@ pub fn expand(program: &Program) -> Result<Expanded> {
             },
             inputs: cx.declared,
             secret_outputs: cx.secret_outputs,
+            output_types: cx.output_types,
         })
     } else {
         Err(Diagnostics(cx.diags).into())
@@ -691,13 +705,14 @@ impl Cx<'_> {
             .collect();
         let mut copy = lets(stmts, scope, Some(&names));
         copy.extend(input_readers(scope, &iface.inputs, &names));
-        self.secret_outputs.extend(
-            iface
-                .outputs
-                .values()
-                .filter(|o| is_secret_type(&o.ty))
-                .map(|o| (abs.clone(), o.name.clone())),
-        );
+        for o in iface.outputs.values() {
+            self.secret_outputs
+                .extend(secret_paths(o).into_iter().map(|k| (abs.clone(), k)));
+            if let Some(t) = &o.ty {
+                self.output_types
+                    .insert((abs.clone(), o.name.clone()), t.clone());
+            }
+        }
         if flat {
             for i in &iface.inputs {
                 out.extend(given_rules(scope, &abs, i));

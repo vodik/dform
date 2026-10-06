@@ -9,7 +9,10 @@
 //! secret when its candidate is one: that literal's value is secret, and
 //! not another's (`secret_memos`). A head position is secret when a secret value reaches
 //! it through its rule: a variable bound at a secret position, or built
-//! from one (`format`, arithmetic, lists, objects, field access).
+//! from one (`format`, arithmetic, lists, objects, field access). A
+//! label is the paths inside a value that are secret (R-118): a field an
+//! object type declares `secret(T)` (`conn.password`) is a secret cell of
+//! its own, so `conn.password` reads as a secret and `conn.host` does not.
 //!
 //! Then each rule is checked, each violation a compile error with a span:
 //!
@@ -32,7 +35,7 @@
 //! boundary where a secret may be checked, so its generated rules are
 //! exempt from E0301/E0302.
 
-use crate::ast::{Atom, Lit, Program, Span, Stmt, Term, TypeExpr};
+use crate::ast::{Atom, Lit, Program, Span, Stmt, Term};
 use crate::diag::{Diagnostic, Diagnostics};
 use crate::schema::Schema;
 use crate::transform::Lowered;
@@ -60,63 +63,160 @@ fn s(t: &Term) -> Option<&str> {
     }
 }
 
+/// Where a value is secret: the paths inside it, `""` the whole of it.
+/// A `conn` whose type declares only `password: secret(string)` is
+/// `{password}`, so `conn.host` is public and `conn.password` secret
+/// (R-118). Empty: public.
+type Label = BTreeSet<String>;
+
+/// The secret label of each variable of a body.
+type Vars = BTreeMap<String, Label>;
+
+/// A path in a label deeper than this is cut to its first segments, so a
+/// rule that nests a secret in itself (`p({a: X}) :- p(X)`) ends.
+const DEPTH: usize = 8;
+
+fn whole() -> Label {
+    BTreeSet::from([String::new()])
+}
+
+/// Is `p` in `l`, or under a path that is?
+fn covered(l: &Label, p: &str) -> bool {
+    l.contains("") || l.contains(p) || p.match_indices('.').any(|(i, _)| l.contains(&p[..i]))
+}
+
+/// Adds `m` to `l`; whether `l` grew.
+fn join(l: &mut Label, m: Label) -> bool {
+    let mut grew = false;
+    for p in m {
+        if !covered(l, &p) {
+            if p.is_empty() {
+                l.clear();
+            } else {
+                l.retain(|q| !q.starts_with(&format!("{p}.")));
+            }
+            l.insert(p);
+            grew = true;
+        }
+    }
+    grew
+}
+
+/// The label of the field `f` of a value labelled `l`.
+fn narrow(l: &Label, f: &str) -> Label {
+    if covered(l, f) {
+        return whole();
+    }
+    let f = format!("{f}.");
+    l.iter()
+        .filter_map(|p| p.strip_prefix(&f))
+        .map(str::to_string)
+        .collect()
+}
+
+/// The label of an object whose field `k` is labelled `l`.
+fn under(l: Label, k: &str) -> Label {
+    l.into_iter()
+        .map(|p| {
+            let p = crate::types::dotted(k, &p);
+            match p.match_indices('.').nth(DEPTH - 1) {
+                Some((i, _)) => p[..i].to_string(),
+                None => p,
+            }
+        })
+        .collect()
+}
+
+/// The label of the cell `p` given the secret cells `keys` of its scope: a
+/// key at `p` or above it makes all of it secret, one below it that path.
+fn label_at<'k>(keys: impl Iterator<Item = &'k str>, p: &str) -> Label {
+    let mut out = Label::new();
+    for k in keys {
+        if p.is_empty() {
+            join(&mut out, BTreeSet::from([k.to_string()]));
+        } else if k == p || p.starts_with(&format!("{k}.")) {
+            return whole();
+        } else if let Some(rest) = k.strip_prefix(&format!("{p}.")) {
+            join(&mut out, BTreeSet::from([rest.to_string()]));
+        }
+    }
+    out
+}
+
 struct Pass<'a> {
     schema: &'a Schema,
-    /// Secret positions: (predicate, column).
-    secret: BTreeSet<(String, usize)>,
-    /// Pseudo-type cells declared secret: (type, scope, key).
+    /// Secret positions: (predicate, column) -> where in its values.
+    secret: BTreeMap<(String, usize), Label>,
+    /// Pseudo-type cells declared secret: (type, scope, key); the key
+    /// `conn.password` for a field of an object type.
     cells: BTreeSet<(String, String, String)>,
     /// Other stacks' secret outputs: (deployment, key).
     outputs: &'a BTreeSet<(String, String)>,
 }
 
 impl Pass<'_> {
-    /// Is `attr(T, A, P, _)` a secret cell?
-    fn attr_secret(&self, typ: &Term, addr: &Term, path: &Term) -> bool {
+    /// The label of `attr(T, A, P, _)`.
+    fn attr_label(&self, typ: &Term, addr: &Term, path: &Term) -> Label {
+        let all = |b: bool| if b { whole() } else { Label::new() };
         match (s(typ), s(path)) {
             (Some(t), Some(p)) => {
                 let p = p.trim_start_matches('.');
-                if t == crate::transform::OUTPUT && self.read_output_secret(addr, p) {
-                    return true;
+                if t == crate::transform::OUTPUT {
+                    let l = self.read_output_label(addr, p);
+                    if !l.is_empty() {
+                        return l;
+                    }
                 }
                 if crate::transform::is_pseudo_type(t) {
-                    return s(addr).is_some_and(|a| {
-                        self.cells
-                            .contains(&(t.to_string(), a.to_string(), p.to_string()))
+                    return s(addr).map_or_else(Label::new, |a| {
+                        let keys = self
+                            .cells
+                            .iter()
+                            .filter(|(ct, ca, _)| ct == t && ca == a)
+                            .map(|(_, _, k)| k.as_str());
+                        label_at(keys, p)
                     });
                 }
                 // A read of an object holding a sensitive leaf is secret too.
-                self.schema.is_sensitive(t, p)
+                all(self.schema.is_sensitive(t, p)
                     || self.schema.facts.iter().any(|f| {
                         f.pred == "type_attr"
                             && s(&f.args[0]) == Some(t)
                             && s(&f.args[1]).is_some_and(|q| q.starts_with(&format!("{p}.")))
                             && self.flag(f, "sensitive")
-                    })
+                    }))
             }
             // A path the program computes: secret if any it could be is.
-            (Some(t), None) => self.schema.facts.iter().any(|f| {
+            (Some(t), None) => all(self.schema.facts.iter().any(|f| {
                 f.pred == "type_attr" && s(&f.args[0]) == Some(t) && self.flag(f, "sensitive")
-            }),
+            })),
             // The resource itself, of a type the program does not fix
             // (`r in resource`, `r in k8s`): its address, never a secret.
-            (None, Some("")) => false,
-            (None, _) => self
+            (None, Some("")) => Label::new(),
+            (None, _) => all(self
                 .schema
                 .facts
                 .iter()
-                .any(|f| f.pred == "type_attr" && self.flag(f, "sensitive")),
+                .any(|f| f.pred == "type_attr" && self.flag(f, "sensitive"))),
         }
     }
 
-    /// Is the output `k` of the deployment `addr` a run read (R-73) a
-    /// secret? A deployment the program names by a computed name
-    /// (`platform[env=e]`, a `format`) is secret if any it could be is.
-    fn read_output_secret(&self, addr: &Term, k: &str) -> bool {
+    /// The label of the output `k` of the deployment `addr` a run read
+    /// (R-73). A deployment the program names by a computed name
+    /// (`platform[env=e]`, a `format`) is secret where any it could be is.
+    fn read_output_label(&self, addr: &Term, k: &str) -> Label {
         match addr {
-            Term::Val(Value::Str(d)) => self.outputs.contains(&(d.clone(), k.to_string())),
-            Term::Func { name, .. } if name == "format" => self.outputs.iter().any(|(_, y)| y == k),
-            _ => false,
+            Term::Val(Value::Str(d)) => label_at(
+                self.outputs
+                    .iter()
+                    .filter(|(x, _)| x == d)
+                    .map(|(_, y)| y.as_str()),
+                k,
+            ),
+            Term::Func { name, .. } if name == "format" => {
+                label_at(self.outputs.iter().map(|(_, y)| y.as_str()), k)
+            }
+            _ => Label::new(),
         }
     }
 
@@ -125,124 +225,145 @@ impl Pass<'_> {
             || matches!(f.args.get(3), Some(Term::List(fs)) if fs.iter().any(|t| s(t) == Some(flag)))
     }
 
-    /// Is `t` secret given the secret variables `vars`?
-    fn term_secret(&self, t: &Term, vars: &BTreeSet<String>) -> bool {
+    /// Where `t` is secret given the labels of the variables `vars`.
+    fn term_label(&self, t: &Term, vars: &Vars) -> Label {
+        let all = |b: bool| if b { whole() } else { Label::new() };
         match t {
-            Term::Var(v) => vars.contains(v),
+            Term::Var(v) => vars.get(v).cloned().unwrap_or_default(),
             // Its label lowered to public.
-            Term::Func { name, .. } if name == DECLASSIFY => false,
+            Term::Func { name, .. } if name == DECLASSIFY => Label::new(),
             // A function whose value is a secret (`-> secret(T)`).
-            Term::Func { name, .. } if returns_secret(name) => true,
+            Term::Func { name, .. } if returns_secret(name) => whole(),
             Term::Func { name, args } if name == "ref" && args.len() == 3 => {
-                self.attr_secret(&args[0], &args[1], &args[2])
-                    || args.iter().any(|a| self.term_secret(a, vars))
+                all(!self.attr_label(&args[0], &args[1], &args[2]).is_empty()
+                    || args.iter().any(|a| self.term_secret(a, vars)))
             }
+            // A field of a value: the part of its label under the field.
+            Term::Func { name, args } if name == "__path" => match args.as_slice() {
+                [x, Term::Val(Value::Str(f))] => narrow(&self.term_label(x, vars), f),
+                _ => all(args.iter().any(|a| self.term_secret(a, vars))),
+            },
             Term::Func { args, .. } | Term::List(args) => {
-                args.iter().any(|a| self.term_secret(a, vars))
+                all(args.iter().any(|a| self.term_secret(a, vars)))
             }
-            Term::Obj(m) => m.values().any(|a| self.term_secret(a, vars)),
-            _ => false,
+            Term::Obj(m) => {
+                let mut out = Label::new();
+                for (k, v) in m {
+                    join(&mut out, under(self.term_label(v, vars), k));
+                }
+                out
+            }
+            _ => Label::new(),
         }
     }
 
-    /// The secret variables of a body, to a fixpoint (an equality may come
-    /// before what binds its other side).
-    fn body_vars(&self, body: &[Lit]) -> BTreeSet<String> {
-        let mut vars = BTreeSet::new();
+    /// Is any of `t` secret given the labels of the variables `vars`?
+    fn term_secret(&self, t: &Term, vars: &Vars) -> bool {
+        !self.term_label(t, vars).is_empty()
+    }
+
+    /// The labels of a body's variables, to a fixpoint (an equality may
+    /// come before what binds its other side).
+    fn body_vars(&self, body: &[Lit]) -> Vars {
+        let mut vars = Vars::new();
         loop {
-            let before = vars.len();
+            let mut grew = false;
             for l in body {
                 match l {
                     // A memo's value is as secret as its candidate.
                     Lit::Pos(a) if a.pred == crate::memo::FIRST && a.args.len() == 3 => {
-                        if self.term_secret(&a.args[1], &vars) {
-                            collect_vars(&a.args[2], &mut vars);
-                        }
+                        let l = self.term_label(&a.args[1], &vars);
+                        grew |= bind(&a.args[2], &l, &mut vars);
                     }
                     Lit::Pos(a) => {
                         for (i, t) in a.args.iter().enumerate() {
-                            if self.position_secret(a, i) || self.term_secret(t, &vars) {
-                                collect_vars(t, &mut vars);
-                            }
+                            let mut l = self.position_label(a, i);
+                            join(&mut l, self.term_label(t, &vars));
+                            grew |= bind(t, &l, &mut vars);
                         }
                     }
                     Lit::Eq(x, y) => {
-                        if self.term_secret(x, &vars) {
-                            collect_vars(y, &mut vars);
-                        }
-                        if self.term_secret(y, &vars) {
-                            collect_vars(x, &mut vars);
-                        }
+                        let lx = self.term_label(x, &vars);
+                        let ly = self.term_label(y, &vars);
+                        grew |= bind(y, &lx, &mut vars);
+                        grew |= bind(x, &ly, &mut vars);
                     }
                     _ => {}
                 }
             }
-            if vars.len() == before {
+            if !grew {
                 return vars;
             }
         }
     }
 
-    /// The first leaf of a contribution `arg(T, A, P, V)` where a secret
-    /// meets a public path: `V` is taken apart by object keys (a
-    /// contribution to `a.b` is `{b: V}` at `a`).
+    /// The first path of a contribution `arg(T, A, P, V)` where a secret
+    /// meets a public place: each path `V`'s label holds, under `P`, must
+    /// be sensitive, or declared `secret(T)`, or under one that is.
     fn public_leaf(
         &self,
         typ: &Term,
         addr: &Term,
         path: &Term,
         value: &Term,
-        vars: &BTreeSet<String>,
+        vars: &Vars,
     ) -> Option<String> {
-        if !self.term_secret(value, vars) {
+        let label = self.term_label(value, vars);
+        if label.is_empty() {
             return None;
         }
-        // Is the path public: not sensitive, nor under a sensitive one?
-        let here = |p: &str| match s(typ) {
-            Some(t) if !crate::transform::is_pseudo_type(t) => !self.schema.is_sensitive(t, p),
-            _ => !self.attr_secret(typ, addr, &Term::Val(Value::Str(p.into()))),
-        };
         let Some(p) = s(path) else {
-            return (!self.attr_secret(typ, addr, path)).then(|| "?".to_string());
+            return self
+                .attr_label(typ, addr, path)
+                .is_empty()
+                .then(|| "?".to_string());
         };
-        let p = p.trim_start_matches('.').to_string();
-        if !here(&p) {
-            return None;
-        }
-        match value {
-            Term::Obj(m) => m.iter().find_map(|(k, v)| {
-                self.public_leaf(
-                    typ,
-                    addr,
-                    &Term::Val(Value::Str(crate::ir::path_join(&p, k))),
-                    v,
-                    vars,
-                )
-            }),
-            _ => Some(p),
+        // Is the path declared: sensitive, or a secret cell, or under one?
+        let declared = |p: &str| match s(typ) {
+            Some(t) if !crate::transform::is_pseudo_type(t) => self.schema.is_sensitive(t, p),
+            _ => self.attr_label(typ, addr, &Term::Val(Value::Str(p.into()))) == whole(),
+        };
+        let p = p.trim_start_matches('.');
+        label
+            .iter()
+            .map(|q| crate::types::dotted(p, q))
+            .find(|f| !declared(f))
+    }
+
+    fn position_label(&self, a: &Atom, i: usize) -> Label {
+        match (a.pred.as_str(), a.args.len()) {
+            ("attr" | "world_attr", 4) if i == 3 => {
+                self.attr_label(&a.args[0], &a.args[1], &a.args[2])
+            }
+            _ => self
+                .secret
+                .get(&(a.pred.clone(), i))
+                .cloned()
+                .unwrap_or_default(),
         }
     }
 
     fn position_secret(&self, a: &Atom, i: usize) -> bool {
-        match (a.pred.as_str(), a.args.len()) {
-            ("attr" | "world_attr", 4) if i == 3 => {
-                self.attr_secret(&a.args[0], &a.args[1], &a.args[2])
-            }
-            _ => self.secret.contains(&(a.pred.clone(), i)),
-        }
+        !self.position_label(a, i).is_empty()
     }
 }
 
-fn collect_vars(t: &Term, out: &mut BTreeSet<String>) {
+/// Gives the variables of the pattern `t` the label `l` (an object
+/// pattern's fields theirs, any other term's variables all of it);
+/// whether any grew.
+fn bind(t: &Term, l: &Label, out: &mut Vars) -> bool {
+    if l.is_empty() {
+        return false;
+    }
     match t {
-        Term::Var(v) => {
-            out.insert(v.clone());
-        }
-        Term::Func { args, .. } | Term::List(args) => {
-            args.iter().for_each(|a| collect_vars(a, out))
-        }
-        Term::Obj(m) => m.values().for_each(|a| collect_vars(a, out)),
-        _ => {}
+        Term::Var(v) => join(out.entry(v.clone()).or_default(), l.clone()),
+        Term::Obj(m) => m
+            .iter()
+            .fold(false, |grew, (k, x)| bind(x, &narrow(l, k), out) | grew),
+        Term::Func { args, .. } | Term::List(args) => args
+            .iter()
+            .fold(false, |grew, x| bind(x, &whole(), out) | grew),
+        _ => false,
     }
 }
 
@@ -272,10 +393,6 @@ fn returns_secret(name: &str) -> bool {
     crate::functions::get(name).is_some_and(|f| f.ret.starts_with("secret("))
 }
 
-fn is_secret_ty(t: &TypeExpr) -> bool {
-    matches!(t, TypeExpr::Apply(n, _) if n == "secret")
-}
-
 /// The secret positions of a lowered program: the fixpoint over predicate
 /// signatures, from the sources to every head a secret reaches.
 fn fixpoint<'a>(
@@ -285,16 +402,16 @@ fn fixpoint<'a>(
 ) -> Pass<'a> {
     let mut pass = Pass {
         schema,
-        secret: BTreeSet::new(),
+        secret: BTreeMap::new(),
         cells: BTreeSet::new(),
         outputs,
     };
     for d in &lowered.inputs {
-        if is_secret_ty(&d.decl.ty) {
+        for (q, _) in crate::types::secret_fields(&d.decl.ty) {
             pass.cells.insert((
                 crate::modules::INPUT.into(),
                 d.scope.clone(),
-                d.decl.name.clone(),
+                crate::types::dotted(&d.decl.name, &q),
             ));
         }
     }
@@ -305,36 +422,39 @@ fn fixpoint<'a>(
     for f in &lowered.extern_fns {
         for (i, b) in f.args.iter().enumerate() {
             if crate::externs::is_secret(b) {
-                pass.secret.insert((f.name.clone(), i));
+                pass.secret.insert((f.name.clone(), i), whole());
             }
         }
     }
     let rs = rules(&lowered.program);
     // The fixpoint over predicate signatures.
     loop {
-        let before = (pass.secret.len(), pass.cells.len());
+        let mut grew = false;
         for (head, body, _) in &rs {
             let Some(h) = head else { continue };
             let vars = pass.body_vars(body);
             for (i, t) in h.args.iter().enumerate() {
-                if pass.term_secret(t, &vars) {
-                    pass.secret.insert((h.pred.clone(), i));
+                let l = pass.term_label(t, &vars);
+                if !l.is_empty() {
+                    grew |= join(pass.secret.entry((h.pred.clone(), i)).or_default(), l);
                 }
             }
-            // A `let` holding a secret is a secret cell (R-3).
+            // A `let` holding a secret is a secret cell (R-3), each path
+            // of it that is.
             if let ("arg", [t, scope, k, v, _]) = (h.pred.as_str(), h.args.as_slice())
                 && s(t) == Some(crate::modules::LET)
-                && pass.term_secret(v, &vars)
                 && let (Some(scope), Some(k)) = (s(scope), s(k))
             {
-                pass.cells.insert((
-                    crate::modules::LET.to_string(),
-                    scope.to_string(),
-                    k.to_string(),
-                ));
+                for q in pass.term_label(v, &vars) {
+                    grew |= pass.cells.insert((
+                        crate::modules::LET.to_string(),
+                        scope.to_string(),
+                        crate::types::dotted(k, &q),
+                    ));
+                }
             }
         }
-        if (pass.secret.len(), pass.cells.len()) == before {
+        if !grew {
             break;
         }
     }
@@ -512,12 +632,32 @@ pub fn check(
                 if let Some(leak) =
                     pass.public_leaf(&h.args[0], &h.args[1], &h.args[2], &h.args[3], &vars) =>
             {
+                // The type the program declares at the place, if any.
+                let its = |ty: Option<&crate::ast::TypeExpr>| {
+                    ty.map(|t| format!(": its type is {}", crate::inputs::type_text(t)))
+                        .unwrap_or_default()
+                };
+                let scope = s(&h.args[1]).unwrap_or_default();
                 let place = match (s(&h.args[0]), Some(leak.as_str())) {
                     (Some(crate::transform::OUTPUT), Some(p)) => {
-                        format!("output {p}, not declared secret(T)")
+                        let (k, rest) = p.split_once('.').unwrap_or((p, ""));
+                        let ty = lowered
+                            .output_types
+                            .get(&(scope.to_string(), k.to_string()))
+                            .and_then(|t| crate::types::field(t, rest));
+                        format!("output {p}, not declared secret(T){}", its(ty))
                     }
                     (Some(crate::modules::INPUT), Some(p)) => {
-                        format!("input {p}, not declared secret(T)")
+                        let ty = lowered.inputs.iter().find_map(|d| {
+                            let rest = match p.strip_prefix(d.decl.name.as_str())? {
+                                "" => "",
+                                r => r.strip_prefix('.')?,
+                            };
+                            (d.scope == scope)
+                                .then(|| crate::types::field(&d.decl.ty, rest))
+                                .flatten()
+                        });
+                        format!("input {p}, not declared secret(T){}", its(ty))
                     }
                     (Some(t), Some("?")) => format!("{t} at a path the program computes"),
                     (Some(t), Some(p)) => format!("{t} .{p}, not marked sensitive in the schema"),

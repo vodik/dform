@@ -1077,22 +1077,34 @@ impl Published {
             class,
             ty: ty.to_string(),
         };
-        let mut out = vec![atom(
-            crate::modules::INSTANCE_OF,
-            vec![s(path), s(""), s(name)],
-            Span::default(),
-        )];
-        out.extend(self.outputs.iter().map(|(k, v)| fact(k, v.clone())));
-        for k in &self.pending {
-            out.push(fact(k, null(k, crate::value::NullClass::Open, "")));
-        }
+        // A field an object output's type declares secret goes back in
+        // its object, as its null (R-118); any other secret is its own.
+        let mut outputs = self.outputs.clone();
+        let mut secret = Vec::new();
         for (k, o) in &self.secret {
             let class = match o.pending() {
                 true => crate::value::NullClass::Open,
                 false => crate::value::NullClass::Secret,
             };
-            out.push(fact(k, null(k, class, &o.ty)));
+            let x = null(k, class, &o.ty);
+            match k.split_once('.') {
+                Some((top, rest))
+                    if outputs
+                        .get_mut(top)
+                        .is_some_and(|v| put_field(v, rest, x.clone())) => {}
+                _ => secret.push(fact(k, x)),
+            }
         }
+        let mut out = vec![atom(
+            crate::modules::INSTANCE_OF,
+            vec![s(path), s(""), s(name)],
+            Span::default(),
+        )];
+        out.extend(outputs.into_iter().map(|(k, v)| fact(&k, v)));
+        for k in &self.pending {
+            out.push(fact(k, null(k, crate::value::NullClass::Open, "")));
+        }
+        out.extend(secret);
         out
     }
 }
@@ -1184,23 +1196,11 @@ pub fn outputs(
         attrs: &attrs,
         world,
     };
-    let mut out = Outputs::default();
-    for ((t, scope, k), v) in &attrs {
-        if *t != crate::transform::OUTPUT || !scope.is_empty() {
-            continue;
-        }
+    // A secret output, or a field of one its type declares secret
+    // (`conn.password`, R-118), at `path`: its label, digest and where it
+    // is held, never its value.
+    let secret_output = |path: &str, v: &Value, ty: &str| {
         let known = resolver.resolve(v, 0);
-        let Some(ty) = secret.get(*k) else {
-            match known {
-                Some(v) => {
-                    out.known.insert(k.to_string(), v);
-                }
-                None => {
-                    out.pending.insert(k.to_string());
-                }
-            }
-            continue;
-        };
         let at = match v {
             Value::Ref { typ, name, attr } => Some((typ.clone(), name.clone(), attr.clone())),
             Value::Null {
@@ -1242,17 +1242,70 @@ pub fn outputs(
                 )
             })
             .unwrap_or_default();
-        out.secret.insert(
-            k.to_string(),
-            SecretOutput {
-                label: crate::value::null_label(crate::transform::OUTPUT, "", k),
-                ty: ty.clone(),
-                held,
-                digest,
-            },
-        );
+        SecretOutput {
+            label: crate::value::null_label(crate::transform::OUTPUT, "", path),
+            ty: ty.to_string(),
+            held,
+            digest,
+        }
+    };
+    let mut out = Outputs::default();
+    for ((t, scope, k), v) in &attrs {
+        if *t != crate::transform::OUTPUT || !scope.is_empty() {
+            continue;
+        }
+        if let Some(ty) = secret.get(*k) {
+            out.secret.insert(k.to_string(), secret_output(k, v, ty));
+            continue;
+        }
+        // The fields its type declares secret are taken out of it.
+        let mut v = (*v).clone();
+        let prefix = format!("{k}.");
+        for (path, ty) in secret.range(prefix.clone()..) {
+            let Some(rest) = path.strip_prefix(&prefix) else {
+                break;
+            };
+            if let Some(x) = take_field(&mut v, rest) {
+                out.secret.insert(path.clone(), secret_output(path, &x, ty));
+            }
+        }
+        match resolver.resolve(&v, 0) {
+            Some(v) => {
+                out.known.insert(k.to_string(), v);
+            }
+            None => {
+                out.pending.insert(k.to_string());
+            }
+        }
     }
     out
+}
+
+/// Takes the field at the dotted `path` out of an object value.
+fn take_field(v: &mut Value, path: &str) -> Option<Value> {
+    let Value::Obj(m) = v else { return None };
+    match path.split_once('.') {
+        None => m.remove(path),
+        Some((k, rest)) => take_field(m.get_mut(k)?, rest),
+    }
+}
+
+/// Puts `x` at the dotted `path` inside an object value; `false` when a
+/// field on the way is not an object.
+fn put_field(v: &mut Value, path: &str, x: Value) -> bool {
+    let Value::Obj(m) = v else { return false };
+    match path.split_once('.') {
+        None => {
+            m.insert(path.to_string(), x);
+            true
+        }
+        Some((k, rest)) => put_field(
+            m.entry(k.to_string())
+                .or_insert_with(|| Value::Obj(Default::default())),
+            rest,
+            x,
+        ),
+    }
 }
 
 /// A value with its refs to configured attributes resolved: `None` while
@@ -1326,23 +1379,26 @@ pub fn held(read: &[Read]) -> BTreeMap<String, crate::provider::Held> {
 }
 
 /// The outputs a program declares `secret(T)`, with T's name (the stack's
-/// own, not a module's).
+/// own, not a module's), and each field an output's object type declares
+/// `secret(T)`, by its path (`conn.password`, R-118).
 pub fn secret_output_types(program: &Program) -> BTreeMap<String, String> {
     program
         .statements
         .iter()
         .filter_map(|s| match s {
-            Stmt::Output(o) => match &o.ty {
-                Some(crate::ast::TypeExpr::Apply(n, args)) if n == "secret" => {
-                    let ty = match args.as_slice() {
-                        [crate::ast::TypeExpr::Name(t)] => t.clone(),
+            Stmt::Output(o) => Some((o, o.ty.as_ref()?)),
+            _ => None,
+        })
+        .flat_map(|(o, t)| {
+            crate::types::secret_fields(t)
+                .into_iter()
+                .map(|(p, inner)| {
+                    let ty = match inner {
+                        Some(crate::ast::TypeExpr::Name(t)) => t.clone(),
                         _ => String::new(),
                     };
-                    Some((o.name.clone(), ty))
-                }
-                _ => None,
-            },
-            _ => None,
+                    (crate::types::dotted(&o.name, &p), ty)
+                })
         })
         .collect()
 }

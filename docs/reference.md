@@ -1332,6 +1332,22 @@ is a compile error with a span, before anything is evaluated:
 | E0304 | a public place: a resource attribute the schema does not mark `sensitive`, a setting, an output or input not declared `secret(T)`, a `deny`/`warn` |
 | E0305 | a resource address (`want`, a resource name, `ref`, `scoped`) |
 
+A field an object type declares `secret(T)` is declared the same way,
+through a `type` alias as well as inline: with `type conn = { host:
+string, port: int, password: secret(string) }`, `output conn: conn = {
+host: .., port: 5432, password: random.password("db") }` passes, and a
+reader's `db.conn.password` is a secret while `db.conn.host` is a public
+value. The pass labels each value with the paths inside it that are
+secret, so a secret in any other field (`user: random.password(..)`
+where `user: string`) is still E0304, naming the field and its type
+(`output conn.user, not declared secret(T): its type is string`). The
+same holds for an input of such a type (`input db: { host: string,
+password: secret(string) }`, given as `--set db.password=..`), a
+component's output, and another stack's: the producer records and
+publishes each secret field by its label (`output/#conn.password`) and
+digest, the rest of the object by value, and the reader's
+`prod.conn.password` is a secret null as a whole secret output's is.
+
 An input's own refinement (`input pw: secret(string) check len(pw) >=
 12`) is where a secret may be checked; its deny does not print the value.
 `declassify(V, Reason)` is the one way a secret leaves on purpose: its

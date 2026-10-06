@@ -458,6 +458,48 @@ pub fn of_expr(t: &TypeExpr) -> Ty {
     }
 }
 
+/// The paths inside a value of the declared type `t` that it declares
+/// `secret(T)`, each with T: `""` when `t` is one, `password` for `{ host:
+/// string, password: secret(string) }`, through nested object types (an
+/// alias is already expanded). The secrets pass reads a secret at such a
+/// path as declared (R-118).
+pub fn secret_fields(t: &TypeExpr) -> Vec<(String, Option<&TypeExpr>)> {
+    match t {
+        TypeExpr::Apply(n, args) if n == "secret" => vec![(String::new(), args.first())],
+        TypeExpr::Object(fs) => fs
+            .iter()
+            .flat_map(|(k, t)| {
+                secret_fields(t)
+                    .into_iter()
+                    .map(move |(p, x)| (dotted(k, &p), x))
+            })
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// `a.b`, or `a` when `b` is empty.
+pub fn dotted(a: &str, b: &str) -> String {
+    match (a.is_empty(), b.is_empty()) {
+        (true, _) => b.to_string(),
+        (_, true) => a.to_string(),
+        _ => format!("{a}.{b}"),
+    }
+}
+
+/// The declared type at `path` inside `t` (`""` is `t`): an object type's
+/// field, `None` past a type that has no fields.
+pub fn field<'a>(t: &'a TypeExpr, path: &str) -> Option<&'a TypeExpr> {
+    if path.is_empty() {
+        return Some(t);
+    }
+    let (k, rest) = path.split_once('.').unwrap_or((path, ""));
+    match t {
+        TypeExpr::Object(fs) => field(&fs.iter().find(|(f, _)| f == k)?.1, rest),
+        _ => None,
+    }
+}
+
 /// An enum type's values, in declaration order: what `x in T` enumerates
 /// (R-70) and `dform test` takes for an input of the type.
 pub fn members(t: &TypeExpr) -> Option<Vec<String>> {

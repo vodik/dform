@@ -17,8 +17,11 @@ pub struct Lowered {
     /// `extern p(+a, -b)` declarations: what the provider answers on demand.
     pub extern_fns: Vec<crate::ast::ExternFn>,
     /// Outputs declared `secret(T)`: (scope, key), scope `""` for the
-    /// stack's own.
+    /// stack's own; the key `conn.password` for a field an object type
+    /// declares `secret(T)`.
     pub secret_outputs: Vec<(String, String)>,
+    /// Every output declared with a type, by (scope, name).
+    pub output_types: std::collections::BTreeMap<(String, String), crate::ast::TypeExpr>,
     /// Every relation's columns, declared or inferred (R-34).
     pub signatures: crate::infer::Signatures,
     /// The source program's `decl`s, for the pass with a schema.
@@ -61,6 +64,7 @@ pub fn lower(program: &Program) -> Result<Lowered> {
         program: expanded,
         mut inputs,
         secret_outputs,
+        output_types,
     } = crate::modules::expand(&program)?;
     check_mixed(&expanded)?;
     let (expanded, externs, extern_fns) = drop_metadata(&expanded);
@@ -101,6 +105,7 @@ pub fn lower(program: &Program) -> Result<Lowered> {
         inputs,
         extern_fns,
         secret_outputs,
+        output_types,
         signatures: inferred.signatures,
         declared,
     })

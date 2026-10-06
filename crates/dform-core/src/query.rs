@@ -324,6 +324,25 @@ impl Redactor {
                 let addr = partition::fmt_bare(addr);
                 r.add(v, &crate::value::null_label(t, &addr, p));
             }
+            // A field its object type declares secret (`conn.password`).
+            for (_, _, k) in cells.iter().filter(|(ct, ca, _)| *ct == tv && *ca == addr) {
+                let Some(field) = k
+                    .as_str()
+                    .and_then(|k| k.strip_prefix(p)?.strip_prefix('.'))
+                else {
+                    continue;
+                };
+                if let Some(x) = field.split('.').try_fold(v, |v, f| match v {
+                    Value::Obj(m) => m.get(f),
+                    _ => None,
+                }) {
+                    let addr = partition::fmt_bare(addr);
+                    r.add(
+                        x,
+                        &crate::value::null_label(t, &addr, &format!("{p}.{field}")),
+                    );
+                }
+            }
         }
         // `env.var(NAME)` answers a `secret(string)` (R-60): its value is
         // `env.var/NAME`, as the plan file records it, wherever it goes.
