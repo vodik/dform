@@ -1,0 +1,4 @@
+net.subnet["private-us-east-1a"].tags.tier: no rule derives it
+  stacks/shop.df:19  set s.tags = { tier: "edge" } where s in net.subnet, s.zone == "us-east-1c"
+    net.subnet["private-us-east-1a"].zone = "us-east-1c": no row
+    nearest: net.subnet["private-us-east-1a"].zone = "us-east-1a"

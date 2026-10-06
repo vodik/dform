@@ -330,6 +330,16 @@ enum Run {
         #[arg(long)]
         core: bool,
     },
+    /// A derivation that did not happen: for an address, an attribute or
+    /// a row the program does not derive, each rule that could have, and
+    /// the first condition of it that failed with the nearest rows that
+    /// would have passed (`why-not 'net.subnet["private-us-east-1c"]'`).
+    #[command(name = "why-not")]
+    WhyNot {
+        pattern: String,
+        #[command(flatten)]
+        target: Target,
+    },
     /// A result set: query the final fact store, a predicate name (every
     /// fact of it) or body literals with variables, one column per
     /// variable: `dform query 'attr(net.vpc, n, .cidr, c)'`.
@@ -641,6 +651,9 @@ enum Cmd {
         pattern: String,
         all: bool,
         core: bool,
+    },
+    WhyNot {
+        pattern: String,
     },
     Diff {
         since: String,
@@ -1262,6 +1275,7 @@ fn run_cmd(r: Run) -> (Cmd, Option<Target>) {
             all,
             core,
         } => (Cmd::Why { pattern, all, core }, Some(target)),
+        Run::WhyNot { pattern, target } => (Cmd::WhyNot { pattern }, Some(target)),
         Run::Query {
             pattern,
             target,
@@ -1601,6 +1615,7 @@ fn run_with(
             | Cmd::Apply { .. }
             | Cmd::Query { .. }
             | Cmd::Why { .. }
+            | Cmd::WhyNot { .. }
             | Cmd::Show { .. }
             | Cmd::Controller { .. }
     ) {
@@ -1843,7 +1858,11 @@ fn run_with(
     // refuses. Any other run is blocked by a violation.
     let explains = matches!(
         cli.cmd,
-        Cmd::Query { .. } | Cmd::Why { .. } | Cmd::Diff { .. } | Cmd::Explain { .. }
+        Cmd::Query { .. }
+            | Cmd::Why { .. }
+            | Cmd::WhyNot { .. }
+            | Cmd::Diff { .. }
+            | Cmd::Explain { .. }
     );
     let opts = deployment::Options {
         launch: launch(),
@@ -1867,16 +1886,26 @@ fn run_with(
         check_types: matches!(cli.cmd, Cmd::Plan { .. } | Cmd::Apply { .. }) || hook.is_some(),
         discover_all: explains,
         whole_schema: match &cli.cmd {
-            Cmd::Query { pattern, .. } | Cmd::Why { pattern, .. } => reads_schema(pattern),
+            Cmd::Query { pattern, .. } | Cmd::Why { pattern, .. } | Cmd::WhyNot { pattern } => {
+                reads_schema(pattern)
+            }
             _ => false,
         },
         collisions: matches!(
             cli.cmd,
-            Cmd::Plan { .. } | Cmd::Apply { .. } | Cmd::Query { .. } | Cmd::Why { .. }
+            Cmd::Plan { .. }
+                | Cmd::Apply { .. }
+                | Cmd::Query { .. }
+                | Cmd::Why { .. }
+                | Cmd::WhyNot { .. }
         ),
         blocking: !matches!(
             cli.cmd,
-            Cmd::Plan { .. } | Cmd::Query { .. } | Cmd::Why { .. } | Cmd::Rekey { .. }
+            Cmd::Plan { .. }
+                | Cmd::Query { .. }
+                | Cmd::Why { .. }
+                | Cmd::WhyNot { .. }
+                | Cmd::Rekey { .. }
         ),
         policy: explains || matches!(cli.cmd, Cmd::Plan { .. }),
     };
@@ -1917,6 +1946,9 @@ fn run_with(
                 &x.redact,
                 ev.located.loaded.lowered.as_ref().map(|l| &l.signatures),
             )?,
+            Cmd::WhyNot { pattern } => {
+                print!("{}", crate::whynot::why_not(pattern, &x.res, &x.redact)?)
+            }
             Cmd::Explain { addresses } => {
                 let addresses = addresses
                     .iter()
@@ -1946,7 +1978,7 @@ fn run_with(
                     print!("{}", d.text());
                 }
             }
-            _ => unreachable!("explains is query, why, diff or __explain"),
+            _ => unreachable!("explains is query, why, why-not, diff or __explain"),
         }
         return Ok(());
     }
@@ -2216,7 +2248,11 @@ fn run_with(
                 println!("- {}", r.addr);
             }
         }
-        Cmd::Query { .. } | Cmd::Why { .. } | Cmd::Diff { .. } | Cmd::Explain { .. } => {
+        Cmd::Query { .. }
+        | Cmd::Why { .. }
+        | Cmd::WhyNot { .. }
+        | Cmd::Diff { .. }
+        | Cmd::Explain { .. } => {
             unreachable!("explained before")
         }
         Cmd::Show { addr } => {
@@ -5000,6 +5036,7 @@ const COMMANDS: &[&str] = &[
     "plan",
     "apply",
     "why",
+    "why-not",
     "query",
     "diff",
     "test",
@@ -5029,6 +5066,7 @@ fn subcommands(noun: &str) -> &'static [&'static str] {
             "plan",
             "apply",
             "why",
+            "why-not",
             "query",
             "diff",
             "test",

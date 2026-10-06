@@ -181,7 +181,7 @@ key) in dependency order, each run headed and confirmed on its own; a
 
 | Commands | |
 |---|---|
-| `plan`, `apply`, `why`, `query`, `diff`, `test`, `fmt`, `log` | on a target |
+| `plan`, `apply`, `why`, `why-not`, `query`, `diff`, `test`, `fmt`, `log` | on a target |
 | `output TARGET [NAME]` | a deployment's outputs |
 | `stack list`, `stack rekey`, `stack unlock` | the project's stacks |
 | `state show`, `state taint`, `state forget-host`, `state mv` | a deployment's state |
@@ -1467,6 +1467,38 @@ cargo run -- -C examples/tour why 'db.postgres["orders"].backup_days' tour env=p
 #        │    ├─ {backup_days: 14}
 #        │    │    stacks/tour.df:139  set { database.backup_days = 14 .. } where env == "prod"
 #   ...
+```
+
+`dform why-not PATTERN` (R-80) explains an absence: a resource address
+(`T["A"]`), an attribute (`T["A"].path`, an attribute of a resource not
+derived explains the resource) or a relation's row with constants
+(`zone("us-east-1c", n)`). It finds the rules whose head could produce
+it, by type and by the name's shape: an interpolated name is read
+backwards (`"private-${z}"` against `"private-us-east-1c"` binds `z`), a
+copy's scope is stripped, an attribute is matched by its path or the
+attribute it is under. With what the address fixes bound, each such
+rule's body is evaluated left to right against the final fact store,
+and for each rule `why-not` prints its statement at `file:line` and the
+first condition no row satisfies, with the bindings substituted:
+a relation's literal says `no row` and `nearest:` up to three rows of the
+same relation that differ in the fewest columns the literal fixes (the
+columns the source states must match and are left out; with none that
+do, the nearest rows whole; an attribute by its value there); a
+comparison says `false` with the values it compared; a negation the row
+that exists; a row a rule of the program derives (a copy's guard,
+`instance network.vpc peer: not made`, a relation of its own) is
+followed one level in, up to three, with the rule that did not derive it.
+What no rule mentions gets one line and nothing invented:
+`no rule derives aws.subnet["x"]: no resource aws.subnet is named like
+it`; what is derived says so and points at `why`.
+
+```bash
+cargo run -- -C examples/demo why-not 'net.vpc["peer/vpc"]' dform env=dev
+# net.vpc["peer/vpc"]: no rule derives it
+#   network.df:19  resource net.vpc vpc { .. }   (instance network.vpc peer)
+#     instance network.vpc peer: not made
+#       stacks/dform.df:54  instance network.vpc peer { .. } where env != "dev"
+#         env != "dev": false, with env = "dev"
 ```
 
 `dform dev graph` prints Graphviz DOT, nodes and edges sorted:
