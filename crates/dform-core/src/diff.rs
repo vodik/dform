@@ -19,7 +19,7 @@ use crate::circuit::Leaf;
 use crate::engine::EvalResult;
 use crate::ir::Address;
 use crate::query::Redactor;
-use crate::report::tree::{Because, Printer};
+use crate::report::tree::{Because, Printer, Site, cell_name};
 use crate::value::Value;
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
@@ -39,6 +39,12 @@ pub struct Snapshot {
     pub rows: BTreeMap<String, String>,
     /// `--set k=v` and `--data k=v`, as given.
     pub inputs: BTreeSet<String>,
+    /// Where each address is derived (R-79's `was FILE:LINE`).
+    #[serde(default)]
+    pub sites: BTreeMap<String, Site>,
+    /// Every input and `let` cell (`input env`) and its value.
+    #[serde(default)]
+    pub cells: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -60,6 +66,9 @@ pub fn snapshot(res: &EvalResult, redact: &Redactor, addresses: &[Address]) -> S
         if let Some(w) = p.want(&res.rules, a) {
             s.wants.insert(a.to_string(), w);
         }
+        if let Some(site) = p.want_site(&res.rules, a) {
+            s.sites.insert(a.to_string(), site);
+        }
     }
     for f in res.facts.iter().filter(|f| f.pred == "attr") {
         let [
@@ -71,6 +80,9 @@ pub fn snapshot(res: &EvalResult, redact: &Redactor, addresses: &[Address]) -> S
         else {
             continue;
         };
+        if matches!(t.as_str(), "input" | "let") {
+            s.cells.insert(cell_name(t, n, path), redact.surface(v));
+        }
         let a = Address {
             typ: t.clone(),
             name: n.clone(),
@@ -419,6 +431,12 @@ pub fn at_commit(
             String::from_utf8_lossy(&archived.stderr).trim()
         );
     }
+    explain_in(r, &scratch.0, apply, addresses)
+}
+
+/// The snapshot of the program in `dir` for `addresses`, evaluated by
+/// `dform __explain` there with the inputs `apply`'s plan recorded.
+fn explain_in(r: &Rerun, dir: &Path, apply: &Apply, addresses: &[Address]) -> Result<Snapshot> {
     let plan = apply.plan.as_ref();
     let recorded = |k: &str| -> Vec<String> {
         plan.and_then(|p| p["inputs"][k].as_array())
@@ -428,7 +446,7 @@ pub fn at_commit(
             .collect()
     };
     let mut cmd = Command::new(&r.exe);
-    cmd.arg("-C").arg(&scratch.0).args(&r.dev).arg("__explain");
+    cmd.arg("-C").arg(dir).args(&r.dev).arg("__explain");
     cmd.args(&r.target);
     for kv in recorded("set") {
         let k = kv.split_once('=').map_or(kv.as_str(), |(k, _)| k);
@@ -457,6 +475,157 @@ pub fn at_commit(
         );
     }
     serde_json::from_slice(&out.stdout).context("dform __explain: not a snapshot")
+}
+
+/// The snapshot of the program the last apply in `entries` ran, for
+/// `addresses` (R-79's `because`): at the commit it recorded, or here
+/// with the inputs it recorded. `None` when the log has no apply that
+/// ended well, when that apply ran the program now with the inputs now
+/// (`set`, `data`: there is nothing to compare), or when its program
+/// cannot be read or evaluated.
+pub fn last_apply(
+    entries: &[Json],
+    files: &[PathBuf],
+    rerun: &Rerun,
+    set: &[String],
+    data: &[String],
+    addresses: &[Address],
+) -> Option<Snapshot> {
+    let all = applies(entries);
+    let last = all.iter().rev().find(|a| a.result == "ok")?;
+    match program_of(last, files, &rerun.top).0 {
+        Program::Commit(c) => at_commit(rerun, &c, last, addresses).ok(),
+        Program::Now => {
+            let recorded = |k: &str| -> BTreeSet<String> {
+                last.plan
+                    .as_ref()
+                    .and_then(|p| p["inputs"][k].as_array())
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|v| v.as_str().map(str::to_string))
+                    .collect()
+            };
+            let given = |xs: &[String]| xs.iter().cloned().collect::<BTreeSet<_>>();
+            if (recorded("set"), recorded("data")) == (given(set), given(data))
+                || !documents_moved(last).is_empty()
+            {
+                return None;
+            }
+            explain_in(rerun, &rerun.top, last, addresses).ok()
+        }
+    }
+}
+
+/// The leaf change `kind` of `addr` turns on since the last apply (R-79),
+/// `then` the snapshot of the last apply's program and `now` this plan's:
+/// for a delete, the first leaf of the derivation the last apply had that
+/// is false now (a row gone, an input changed); for an update or a
+/// replace, the same of each changed attribute's winning derivation, else
+/// its first leaf new since; for a create, the first leaf new since the
+/// last apply. `None` when no leaf says.
+pub fn because_since(
+    kind: &str,
+    addr: &str,
+    paths: &[String],
+    then: &Snapshot,
+    now: &Snapshot,
+) -> Option<String> {
+    let gone = |bs: &[Because]| bs.iter().find_map(|b| moved(b, then, now, false));
+    let new = |bs: &[Because]| bs.iter().find_map(|b| moved(b, now, then, true));
+    match kind {
+        "delete" => gone(then.wants.get(addr)?),
+        "create" | "adopt" => new(now.wants.get(addr)?),
+        _ => {
+            // The attribute a change path is under (`tags` of `tags.team`).
+            let under = |attrs: Option<&BTreeMap<String, Attr>>, path: &str| {
+                attrs?
+                    .iter()
+                    .filter(|(k, _)| {
+                        path == k.as_str()
+                            || path
+                                .strip_prefix(k.as_str())
+                                .is_some_and(|r| r.starts_with(['.', '[']))
+                    })
+                    .max_by_key(|(k, _)| k.len())
+                    .map(|(_, a)| a.why.clone())
+            };
+            paths.iter().find_map(|p| {
+                under(then.attrs.get(addr), p)
+                    .and_then(|w| gone(&w))
+                    .or_else(|| under(now.attrs.get(addr), p).and_then(|w| new(&w)))
+            })
+        }
+    }
+}
+
+/// Leaf `b` of snapshot `from`, when it does not hold in `to`: what
+/// changed, said from `to`'s side when `gained` (a create's new leaf),
+/// else from `from`'s (a delete's lost one).
+fn moved(b: &Because, from: &Snapshot, to: &Snapshot, gained: bool) -> Option<String> {
+    let (old, new) = if gained { (to, from) } else { (from, to) };
+    match b.kind.as_str() {
+        "fact" => {
+            let text = b.text.split("   (").next().unwrap_or(&b.text);
+            // A cell's value: `input env = "prod"`.
+            if let Some((cell, v)) = text.split_once(" = ")
+                && (cell.starts_with("input ") || cell.starts_with("let "))
+            {
+                let other = to.cells.get(cell)?;
+                if other == v {
+                    return None;
+                }
+                let (was, is) = if gained {
+                    (other.as_str(), v)
+                } else {
+                    (v, other.as_str())
+                };
+                return Some(format!("{cell} is now {is} (was {was})"));
+            }
+            // A stated row: one both snapshots can say, stated by one only.
+            if !from.rows.contains_key(text) || to.rows.contains_key(text) {
+                return None;
+            }
+            let at = b.at.as_deref().unwrap_or_default();
+            let file = at.rsplit_once(':').map_or(at, |(f, _)| f);
+            let program = file.ends_with(".df");
+            Some(match (gained, program) {
+                (true, true) => format!("{at} now states {text}"),
+                (true, false) => format!("{at} gained the row {text}"),
+                (false, true) => format!("{file} no longer states {text}"),
+                (false, false) => format!("{file} no longer has the row {text}"),
+            })
+        }
+        "input" => {
+            if to.inputs.contains(&b.text) {
+                return None;
+            }
+            // A `--set`: by the input's value, however it is given now
+            // (a key's value may come from the target, not a flag).
+            if let Some((k, _)) = b
+                .text
+                .strip_prefix("--set ")
+                .and_then(|kv| kv.split_once('='))
+            {
+                let cell = format!("input {k}");
+                let (was, is) = (old.cells.get(&cell)?, new.cells.get(&cell)?);
+                return (was != is).then(|| format!("{cell} is now {is} (was {was})"));
+            }
+            let key = b.text.split_once('=').map_or(b.text.as_str(), |(k, _)| k);
+            let other = |s: &Snapshot| {
+                s.inputs
+                    .iter()
+                    .find(|i| i.split_once('=').is_some_and(|(k, _)| k == key))
+                    .cloned()
+            };
+            Some(match (other(old), other(new)) {
+                (Some(was), Some(is)) => format!("{is} (was {was})"),
+                (None, Some(is)) => format!("{is} is given now"),
+                (Some(was), None) => format!("{was} is no longer given"),
+                (None, None) => return None,
+            })
+        }
+        _ => None,
+    }
 }
 
 /// One apply as `diff` reports it.
@@ -708,7 +877,7 @@ impl Diff {
                 out.push_str(&format!("  note: {n}\n"));
             }
             if e.deformations.is_empty() {
-                out.push_str("  no deformations\n");
+                out.push_str("  no changes\n");
             }
             for (x, why) in &e.deformations {
                 let failed = if x.result == "ok" {
@@ -764,7 +933,7 @@ impl Diff {
                     Program::Commit(c) => json!(c),
                 };
                 j["note"] = json!(e.note);
-                j["deformations"] = e.deformations.iter().map(|(x, why)| json!({
+                j["changes"] = e.deformations.iter().map(|(x, why)| json!({
                     "action": x.action,
                     "address": x.address,
                     "tick": x.tick,

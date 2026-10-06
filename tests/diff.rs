@@ -132,7 +132,7 @@ fn diff_names_the_row_an_apply_added_and_explains_each_apply_by_its_commit() {
     let j: Value = serde_json::from_str(&r.stdout).unwrap();
     assert_eq!(j["deployment"], "net");
     assert_eq!(j["applies"].as_array().unwrap().len(), 1);
-    let create = j["applies"][0]["deformations"]
+    let create = j["applies"][0]["changes"]
         .as_array()
         .unwrap()
         .iter()
