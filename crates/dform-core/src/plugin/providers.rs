@@ -811,12 +811,39 @@ impl Providers {
     /// provider still waiting on the program's settings is checked once
     /// they arrive. `secret`: the providers whose expected account a
     /// secret reaches (`secrets::secret_expected_accounts`), named by its
-    /// label, `provider/NAME#expect_account`, never its value.
+    /// label, `provider/NAME#expect_account`, never its value. `settings`:
+    /// the settings a secret reaches, by provider
+    /// (`secrets::secret_settings`); an account a provider reports that is
+    /// one of their values (a provider that echoes its token) is named by
+    /// the setting's label, `provider/NAME#KEY`, never its value.
     pub fn check_accounts<'a>(
         &self,
-        facts: impl IntoIterator<Item = &'a Atom>,
+        facts: impl IntoIterator<Item = &'a Atom> + Clone,
         secret: &BTreeSet<String>,
+        settings: &BTreeMap<String, BTreeSet<String>>,
     ) -> Result<()> {
+        // The values of the secret settings, by their label.
+        let mut secrets: Vec<(String, String)> = Vec::new();
+        for a in facts
+            .clone()
+            .into_iter()
+            .filter(|a| a.pred == "provider_config")
+        {
+            let [Term::Val(Value::Str(name)), Term::Val(Value::Obj(given))] = a.args.as_slice()
+            else {
+                continue;
+            };
+            for k in settings.get(name).into_iter().flatten() {
+                if let Some(v) = given.get(k) {
+                    let label = crate::value::null_label("provider", name, k);
+                    secrets.push((crate::partition::fmt_bare(v), label));
+                }
+            }
+        }
+        let reported = |got: &String| match secrets.iter().find(|(v, _)| v == got) {
+            Some((_, label)) => format!("{label} (a secret)"),
+            None => got.clone(),
+        };
         let mut wrong = Vec::new();
         for a in facts.into_iter().filter(|a| a.pred == EXPECT_ACCOUNT) {
             let [Term::Val(Value::Str(name)), Term::Val(want)] = a.args.as_slice() else {
@@ -840,8 +867,9 @@ impl Providers {
             match self.accounts.borrow().get(&i) {
                 Some(got) if *got == want => {}
                 Some(got) => wrong.push(format!(
-                    "provider {name} reports account {got}, but the program expects {shown} \
-                     (expect_account)"
+                    "provider {name} reports account {}, but the program expects {shown} \
+                     (expect_account)",
+                    reported(got)
                 )),
                 None => wrong.push(format!(
                     "provider {name} reports no account, but the program expects {shown} \

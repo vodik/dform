@@ -496,7 +496,7 @@ impl Evaluator {
             // Each provider reaches the account the program expects of it
             // (`expect_account`), or nothing is planned.
             backend
-                .check_accounts(&res.facts, &self.secret_accounts)
+                .check_accounts(&res.facts, &self.secret_accounts, &self.secret_settings)
                 .with_context(|| format!("deployment {}", self.deployment))?;
             *self.last.borrow_mut() = Some((extra, resumable));
             (res, violations)
@@ -526,7 +526,7 @@ impl Evaluator {
                 *self.last.borrow_mut() = None;
                 let (res, violations) = self.evaluate_with(st, withheld, more, tick)?;
                 backend
-                    .check_accounts(&res.facts, &self.secret_accounts)
+                    .check_accounts(&res.facts, &self.secret_accounts, &self.secret_settings)
                     .with_context(|| format!("deployment {}", self.deployment))?;
                 return Ok((res, violations));
             }

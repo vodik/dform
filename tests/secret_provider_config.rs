@@ -168,3 +168,27 @@ fn a_provider_configured_from_a_secret_applies_at_tick_two_and_the_bytes_stay_in
         assert!(!r.stderr.contains(&tok), "{}", r.stderr);
     }
 }
+
+/// A provider that reports its secret setting as its account (the mock's
+/// `account`), refused by `expect_account`: the refusal names the account
+/// by the setting's label, never its bytes.
+#[test]
+fn a_refused_account_that_is_a_secret_setting_prints_its_label() {
+    let s = project();
+    s.write(
+        "stacks/p.df",
+        &STACK.replace("expect_account = kc", "expect_account = \"someone-else\""),
+    );
+    let tok = token();
+    let r = dform(&s, &tok, &["apply", "p"]).failure();
+    assert!(
+        r.stderr.contains(
+            "provider k8s reports account provider/k8s#account (a secret), but the program \
+             expects someone-else (expect_account)"
+        ),
+        "{}",
+        r.stderr
+    );
+    assert!(!r.stdout.contains(&tok), "{}", r.stdout);
+    assert!(!r.stderr.contains(&tok), "{}", r.stderr);
+}

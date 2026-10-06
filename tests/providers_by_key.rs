@@ -61,7 +61,9 @@ fn each_deployment_configures_the_provider_from_its_key() {
 }
 
 /// The same shell pointing prod's plan at dev's account: refused before
-/// anything is planned, naming both accounts and the deployment.
+/// anything is planned, naming both accounts and the deployment. The
+/// account the provider reports is its `account` setting, an `env.var`,
+/// a secret: named by the setting's label, not its value.
 #[test]
 fn a_mismatched_account_refuses_to_plan() {
     let s = project("bykey-mismatch", APP);
@@ -69,8 +71,8 @@ fn a_mismatched_account_refuses_to_plan() {
     let r = run_with_env(&s, &wrong, &["plan", "stacks/app.df", "env=prod"]).failure();
     assert!(
         r.stderr.contains(
-            "provider fake reports account acct-dev, but the program expects acct-prod \
-             (expect_account)"
+            "provider fake reports account provider/fake#account (a secret), but the program \
+             expects acct-prod (expect_account)"
         ),
         "{}",
         r.stderr
