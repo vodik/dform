@@ -544,12 +544,13 @@ a literal is a string; a quantity literal is its unit's. A reference and a strin
 stmt       := KEYWORD ...                      ; one production per keyword, below
             | NAME ("." NAME)* "(" args ")" RANK? ("where" body)?   ; a fact or a rule
 
-provider   := "provider" NAME block?                ; no block when it has no entries
+provider   := "provider" NAME block? ("where" body)?   ; no block when it has no entries
 type       := "type" NAME "=" type | "type" DOTTED attrs
+            | "type" NAME "=" "component" stmts    ; a component signature (R-104)
 decl       := "decl" DOTTED columns "mixed"?
 extern     := "extern" DOTTED "(" bindarg ("," bindarg)* ")"
 bindarg    := ("+" | "-") NAME (":" type)?
-input      := ("input" | "key") NAME ":" type ("=" term)? ("check" body1)?
+input      := ("input" | "key") NAME ":" type ("=" term)? ("check" body1)? ("where" body)?
             | "input" NAME fields                  ; an object input (R-54)
             | "input" NAME ("from" term ("where" body)?)?   ; rows of a relation (R-55)
 fields     := "{" (field SEP)* "}"
@@ -566,7 +567,7 @@ set        := "set" chain ("=" | "+=") term RANK? ("where" body)?
 selector   := ("." SEG | "[" "*" "]")+                ; a path into a document (R-39)
 use        := "use" path ("as" NAME)? cblock? ("where" body)?
 instance   := "instance" path NAME cblock? ("where" body)?
-component  := "component" NAME stmts             ; an item of a module
+component  := "component" NAME (":" type)? stmts   ; an item of a module, of a signature
 path       := NAME ("." NAME)*                    ; a/b.df from the root; std.x; a package mount
 resource   := "resource" DOTTED hname RANK? block ("where" body)?
 deny, warn := ("deny" | "warn") STRING object? ("where" body)?
@@ -596,8 +597,9 @@ instance or `use` takes at most one clause, after its block's `}` (and a
 `set` block's rank): `resource T n { .. } where B`, and a body of
 several lines is `} where {`, one literal per line, closed by its own
 `}`. The clause is a query, and the block is one resource (or set of
-contributions, or copy) per match. A `provider` block takes no
-clause. `if`, the clause word of an earlier surface (H-3), is an
+contributions, or copy) per match. A `provider` and an `input` take one
+too, and a named statement under a clause may be declared again under
+another ("Guarded declarations"). `if`, the clause word of an earlier surface (H-3), is an
 error wherever it stands, and the error prints the statement with its
 clause spelled `where`.
 
@@ -666,7 +668,8 @@ SCOPE, k)` (scope `""` for the program's, `n` in the copy or import
 `n`), and a read
 of `k` reads the collapsed cell. Rows that agree are one value; two that
 disagree at the winning rank are a conflict naming both; a `@default` row
-gives way to any other. When `t` is a reference (a resource, a live
+gives way to any other: several `let`s of one name are this cell's rows,
+clause or none ("Guarded declarations"). When `t` is a reference (a resource, a live
 object), `k`'s value is that reference and its static type is the
 reference's, so a dot on `k` reads through it: `let pg =
 db.postgres["main"]`, then `pg.endpoint`; `k` alone, given as a value, is
@@ -716,10 +719,12 @@ Inputs and outputs are one grammar in both directions and in every scope
 (R-55): a declaration is a value, `input|output k: T [= t]`, an object
 by its fields, or a relation.
 
-**Values.** `input k: T [= d] [check B]` is a cell of the attribute
+**Values.** `input k: T [= d] [check B] [where C]` is a cell of the attribute
 aggregate the outside gives: the default contributes `@default`, `set k
 = t where B` and an `--input-file`'s `k(v)` at the normal rank unless
-marked, and `--set k=v` at `@override` ("Giving inputs").
+marked, and `--set k=v` at `@override` ("Giving inputs"). With `where C`
+it is a dependent input, declared only where `C` holds ("Guarded
+declarations").
 `output k [: T] = t [where B]` hands a value out (H-7): read as
 `n.k` from a copy or a used module, `c[t].k` from every copy, and
 `stack[k=v].k` from another stack's deployment.
@@ -906,8 +911,8 @@ statement that closes it.
   a module used from two stacks runs in both, each in its own state;
 - with a clause, all of it exists only while `B` holds.
 
-`use` twice of one name in a scope is an error, and so is `use` of a
-component; from two scopes (a stack, and a component it instances) it is
+`use` twice of one name in a scope is an error unless each has a clause
+("Guarded declarations"), and so is `use` of a component; from two scopes (a stack, and a component it instances) it is
 two imports, each reading its own user's names.
 
 `component NAME { .. }` is an item of a module, the only thing stamped
@@ -922,8 +927,98 @@ scope makes, `instance_of(c, user, name)` joined to their outputs. A copy
 inside a copy is scoped under it (`edge/left/vpc`). `/` is the scope
 separator of an address (R-72), so a resource's own name may not contain
 one, and an address written with `::` is an error naming `/`. The names a scope's
-`use`s and `instance`s bind are one namespace. `instance` of a module is
-an error naming `use`, and so is one with no name.
+`use`s and `instance`s bind are one namespace, a name in it declared
+once or under a clause each ("Guarded declarations"). `instance` of a
+module is an error naming `use`, and so is one with no name.
+
+### Guarded declarations
+
+A named statement, `let`, `instance`, `use`, `provider`, `resource` or
+`input`, may be declared more than once in a scope when every
+declaration of the name has a clause (R-104); one without a clause is
+the only one of its name, and a second beside it is the error at the
+second, naming the first: "`db` is declared twice; give each a
+`where`". The clauses pick one, and the compiler does not prove that
+they are exclusive: the evaluation does. Each declaration holds while
+its clause does, and two that both hold are a deny naming both sites,
+"`db` is declared twice and both declarations hold: `instance pg_aws db`
+at p.df:13:1 and `instance pg_gcp db` at p.df:14:1". A read is the one
+that holds:
+
+```dform
+instance postgres_aws db { name = "shop" } where cloud == "aws"
+instance cloudsql db { name = "shop" } where cloud == "gcp"
+resource k8s.secret conn { data = { url: db.conn } }
+```
+
+Both copies are scoped `db` (`T["db/x"]`, `db.conn`), each gated by its
+own clause, and the plan shows the one that holds, under its component.
+A read `db.x` is checked against every declaration: one that has no `x`,
+or gives it another type, is an error naming each declaration, and a
+component signature ("Component signatures") is what makes them agree.
+
+- `use m as n where B` beside `use m2 as n where B2`: the module that
+  holds, `n.x` its item.
+- `provider aws { .. } where B`: its settings, its account check and its
+  start hold only while `B` does. The block's `provider_config` is
+  derived under the clause, with no settings too, so the provider serves
+  nothing until it arrives (the deferred configuration a provider block
+  with settings always had); a stack that picks gcp never configures
+  aws. Two declarations of one provider each give their settings, the
+  first its `source`. `dform dev effects` lists each guarded provider's
+  `starts` row, per combination of the enum inputs its clause reads.
+- `input gcp_project: string where cloud == "gcp"`, a dependent input:
+  it is declared, read and defaulted only where its clause holds, and
+  one with no default is required there (a deny, `input gcp_project is
+  required and has no value: its clause holds in this deployment`).
+  `dform test` enumerates a dependent enum only in the combinations its
+  clause holds in, its column `-` in the others. Two declarations of one
+  input have one type. A key is never under a clause: it names the
+  deployment, so every deployment has it. A clause that reads the input
+  itself is a refinement misspelled, `check`.
+- `let` and `resource` were already cells: several `let`s of a name are
+  the rows of its cell, and several blocks of one address its
+  contributions, with a clause or without, and two that hold and
+  disagree are the conflict naming both.
+
+Over enum and bool inputs the clauses are decided at compile time, over
+the product `dform test` enumerates, and two warnings name the sites: a
+combination where no declaration holds ("`db` has no declaration when
+cloud == \"azure\"") and one where two do ("`db`: the clauses of two
+declarations both hold when cloud == \"aws\""). A clause that reads
+anything else is the evaluation's. The plan file and `plan --json` list
+every name declared more than once, `"guarded": [{"name": "db",
+"declarations": 2}]`, so a review sees a pair a refactor enabled.
+
+### Component signatures
+
+`type NAME = component { stmts }` is a component signature (R-104): the
+inputs and outputs, by name and type, that a component of it has.
+`component C: NAME { .. }` is checked against it at the component: each
+input and output the signature declares, of its type (aliases read on
+both sides), and each input it does not declare has a default, so that
+a copy picked by the signature is given what the signature says alone.
+A missing output, another type, or an extra input with no default is an
+error at the component naming the signature.
+
+```dform
+type database = component {
+  input name: string
+  output conn: conn
+}
+
+component postgres_aws: database {
+  input name: string
+  input size: int = 1
+  output conn: conn = "postgres://${name}.aws"
+}
+```
+
+A signature is not instanced: the guarded concrete copies are
+(`instance database db` is "database is a component signature, which is
+not instanced"). Another module's is read by its path or the name its
+`use` binds, `component pg: kinds.database`. `dform doc` and hover
+print it whole.
 
 ### Deployed modules
 
@@ -993,7 +1088,8 @@ expect_account = t                 provider_expect_account("p", t') :- reads
 ```
 
 A setting is a content position: a dot in it reads now. A block takes no
-clause, no `+=` and no rank; a setting given twice is an error.
+`+=` and no rank; a setting given twice is an error. A clause starts the
+provider only where it holds ("Guarded declarations").
 
 A `provider` statement also brings the provider's externs into scope, with
 their binding modes (DESIGN.org R-8): a program does not write `extern`
@@ -1164,7 +1260,8 @@ bare where `config` also names that is the error "Names" shows. A name
 from the clause is always a string, `resource net.vpc "${t}" { .. }
 where tenant(t, i)`; a bare name the clause binds is an error naming
 that form. An instance's name is literal too, and may not be a value in
-scope (`instance m env` with `input env` is an error). A block (header,
+scope (`instance m env` with `input env` is an error). Several blocks of
+one address are its contributions ("Guarded declarations"). A block (header,
 entries, clause, interpolated names) is one rule; a header name's scope
 is its block and its clause. The clause follows the block, so the
 holes of a header name are read forward: they name variables the reader

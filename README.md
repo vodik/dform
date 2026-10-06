@@ -707,6 +707,36 @@ table, read like any fact. `green` exists only in prod. The copy's VPC is
 value is the same error wherever it is: in a stack, a module, or a
 component.
 
+**Either cloud.** A name may be declared more than once when each
+declaration has a clause, and a signature says what the copies have in
+common, so one stack runs on either cloud:
+
+```dform
+input cloud: enum("aws", "gcp")
+input gcp_project: string where cloud == "gcp"
+
+type database = component {
+  input name: string
+  output conn: string
+}
+
+component rds: database { .. }
+component cloudsql: database { .. }
+
+provider aws { region = "eu-west-1" } where cloud == "aws"
+provider google { project = gcp_project } where cloud == "gcp"
+
+instance rds db { name = "shop" } where cloud == "aws"
+instance cloudsql db { name = "shop" } where cloud == "gcp"
+```
+
+`db.conn` is whichever copy holds; a deployment that picks gcp never
+starts the aws provider, and `gcp_project` is asked for only there.
+Two declarations that both hold are a deny naming both, and over enum
+inputs the compiler warns of a value no declaration covers. Switching
+`cloud` on a deployment plans a delete of one copy and a create of the
+other: the data does not move.
+
 **Policies.** A policy is a module of `set`, `deny` and `warn`
 statements, and nothing marks it as one but where you chose to put it:
 `policies/baseline.df` is applied with `use policies.baseline`. A pack

@@ -1166,8 +1166,10 @@ pattern, its rule and the null-free bindings of its stuck instance
 (redacted); the nulls round 0
 resolved and the ones the delta still carries; the tick schedule; the
 extern answers the plan read (a git table's or document's commit among
-them); and the plan's digest, with what needs an approval (see
-"Approvals"). `apply PLAN.json` takes its inputs from the
+them); the names the program declares more than once, each under a
+clause, `"guarded": [{"name": "db", "declarations": 2}]` (also in `plan
+--json`; docs/grammar.md "Guarded declarations"); and the plan's
+digest, with what needs an approval (see "Approvals"). `apply PLAN.json` takes its inputs from the
 file (flags given on the command line must match them), refreshes and re-evaluates at
 every tick, and refuses unless the delta it computes is the file's:
 Terraform's stale-plan rule, stated for Z-sets. Every deformation must be in
@@ -1555,7 +1557,10 @@ reads
 (inputs by name, world types, externs by name, another copy's outputs),
 writes (cells as `(type, path)` partitions, `*` for a variable type or
 path, the input cells its `set`s give, another copy's input cells)
-and offers (its declared outputs, with their types). Read off the
+and offers (its declared outputs, with their types); and for the stack,
+the providers it starts under a clause, `starts  provider aws when cloud
+== "aws"`, a row per combination of the enum inputs the clause reads
+(the clause as written when it reads more). Read off the
 lowered program's rule heads and bodies and the partition graph; no
 evaluation.
 
