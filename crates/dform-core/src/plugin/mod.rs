@@ -8,6 +8,8 @@
 
 pub mod backend;
 pub mod check;
+pub mod credentials;
+pub mod host;
 pub mod link;
 pub mod policy;
 pub mod providers;

@@ -709,6 +709,8 @@ impl Located {
         let lowered = l.lowered.as_ref();
         let secret_outputs = stack::secret_outputs(&outputs);
         let held = stack::held(&outputs);
+        // What dform.toml grants each provider, for the launcher (R-13b).
+        plugin::host::register(l.manifest.iter().flat_map(|m| m.grants()));
         let backend = Rc::new(if l.starts_none() {
             Providers::none()
         } else {

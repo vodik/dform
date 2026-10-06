@@ -255,6 +255,13 @@ pub struct ProviderTable {
     pub retries: Option<u32>,
     /// The first retry's delay (`1s`); each next one doubles, with jitter.
     pub backoff: Option<String>,
+    /// What the provider may use beyond the host's own interfaces
+    /// (`["wasi:sockets"]`, R-13b): `wasi:filesystem`, `wasi:http`,
+    /// `wasi:sockets`.
+    pub allow: Option<Vec<String>>,
+    /// The credentials it may open by name (`["kubeconfig:prod"]`), which
+    /// the host applies (`plugin::credentials`).
+    pub credentials: Option<Vec<String>>,
 }
 
 impl ProviderEntry {
@@ -461,6 +468,23 @@ impl Manifest {
                     }
                 }
             }
+            if let ProviderEntry::Table(t) = p {
+                for a in t.allow.iter().flatten() {
+                    if !crate::plugin::host::GRANTABLE.contains(&a.as_str()) {
+                        bail!(
+                            "{} names {a:?}: a grant is one of {} (the host's own interfaces \
+                             need none)",
+                            at(&format!("[providers.{name}] allow")),
+                            crate::plugin::host::GRANTABLE.join(", ")
+                        );
+                    }
+                }
+                for c in t.credentials.iter().flatten() {
+                    crate::plugin::credentials::parse_name(c).map_err(|e| {
+                        anyhow!("{}: {e}", at(&format!("[providers.{name}] credentials")))
+                    })?;
+                }
+            }
             if let Some(req) = p.version() {
                 semver::VersionReq::parse(req).map_err(|e| {
                     anyhow!(
@@ -628,7 +652,14 @@ impl Manifest {
             return Some(src.to_string());
         }
         let path = if path.is_dir() {
-            crate::plugin::source::plugin_in(&path).unwrap_or_else(|| path.join("schema.df"))
+            let component = path.join(crate::plugin::source::COMPONENT);
+            crate::plugin::source::plugin_in(&path).unwrap_or_else(|| {
+                if crate::plugin::source::is_component(&component) {
+                    component
+                } else {
+                    path.join("schema.df")
+                }
+            })
         } else {
             path
         };
@@ -643,6 +674,28 @@ impl Manifest {
             .iter()
             .filter(|(_, p)| p.policy() != crate::plugin::policy::Policy::default())
             .filter_map(|(name, p)| Some((self.provider_source(name)?, p.policy())))
+            .collect()
+    }
+
+    /// Each provider's grants (R-13b), by the source `--provider` takes:
+    /// `[providers.NAME] allow` and `credentials`.
+    pub fn grants(&self) -> Vec<(String, crate::plugin::host::Grants)> {
+        self.providers
+            .iter()
+            .filter_map(|(name, p)| {
+                let ProviderEntry::Table(t) = p else {
+                    return None;
+                };
+                let set = |v: &Option<Vec<String>>| v.iter().flatten().cloned().collect();
+                Some((
+                    self.provider_source(name)?,
+                    crate::plugin::host::Grants {
+                        provider: name.clone(),
+                        allow: set(&t.allow),
+                        credentials: set(&t.credentials),
+                    },
+                ))
+            })
             .collect()
     }
 
@@ -1080,6 +1133,30 @@ mod tests {
         assert!(e.to_string().contains("[providers.fake] timeout"), "{e}");
         let e = manifest("[stacks.app]\nwait = \"later\"\n").unwrap_err();
         assert!(e.to_string().contains("[stacks.app] wait"), "{e}");
+    }
+
+    /// `[providers.NAME] allow` and `credentials` grant a provider what it
+    /// may use beyond the host's interfaces and the credentials it may
+    /// open (R-13b); anything else is refused naming the key.
+    #[test]
+    fn a_manifest_grants_providers() {
+        let m = manifest(
+            "[providers]\nk8s = { source = \"k8s\", allow = [\"wasi:sockets\"], credentials = \
+             [\"kubeconfig:prod\"] }\n",
+        )
+        .unwrap();
+        let g = m.grants();
+        assert_eq!(g.len(), 1);
+        assert_eq!(g[0].0, "k8s");
+        assert_eq!(g[0].1.provider, "k8s");
+        assert!(g[0].1.allow.contains("wasi:sockets"));
+        assert!(g[0].1.credentials.contains("kubeconfig:prod"));
+        let e = manifest("[providers]\nk8s = { source = \"k8s\", allow = [\"dform:host/ssh\"] }\n")
+            .unwrap_err();
+        assert!(e.to_string().contains("[providers.k8s] allow"), "{e}");
+        let e = manifest("[providers]\nk8s = { source = \"k8s\", credentials = [\"prod\"] }\n")
+            .unwrap_err();
+        assert!(e.to_string().contains("[providers.k8s] credentials"), "{e}");
     }
 
     #[test]
