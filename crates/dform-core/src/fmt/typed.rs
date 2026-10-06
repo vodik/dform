@@ -54,8 +54,15 @@ impl Typing {
                 continue;
             };
             let tree = crate::syntax::parser::parse(&text).syntax();
-            for p in tree.descendants().filter(|n| n.kind() == PROVIDER) {
-                if let Some(t) = words(&p).nth(1) {
+            // A provider's `use` (R-112) is one segment; a module's has a
+            // schema of none, so naming it too is harmless.
+            for p in tree
+                .descendants()
+                .filter(|n| matches!(n.kind(), PROVIDER | USE))
+            {
+                let w: Vec<_> = words(&p).collect();
+                let one = p.kind() == PROVIDER || w.get(2).is_none_or(|t| t.text() == "as");
+                if let (true, Some(t)) = (one, w.get(1)) {
                     names.push(t.text().to_string());
                 }
             }

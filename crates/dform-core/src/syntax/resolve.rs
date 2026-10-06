@@ -422,6 +422,41 @@ pub fn use_parts(n: &SyntaxNode) -> (String, String) {
     (text, name)
 }
 
+/// A `use` of a provider (R-112 amendment 2): `use ovh { endpoint = .. }`
+/// imports the provider's namespace and configures it, as `provider ovh
+/// { .. }` did. A `use` is a provider's when its path is one segment that
+/// names no module of the program (`units`), no stack it deploys, no
+/// component its file declares and not `std`; the provider's name.
+pub fn provider_use(n: &SyntaxNode, units: &[Unit], deployed: &[Deployed]) -> Option<String> {
+    if n.kind() != USE {
+        return None;
+    }
+    let (written, _) = use_parts(n);
+    let local_component = || {
+        n.parent().is_some_and(|p| {
+            p.children()
+                .any(|c| c.kind() == COMPONENT && component_name(&c) == written)
+        })
+    };
+    (!written.is_empty()
+        && !written.contains('.')
+        && written != "std"
+        && !units
+            .iter()
+            .any(|u| u.path.as_deref() == Some(written.as_str()))
+        && !deployed.iter().any(|d| d.path == written)
+        && !local_component())
+    .then_some(written)
+}
+
+/// The name a `provider` statement or a provider's `use` configures.
+fn provider_name(n: &SyntaxNode) -> String {
+    match n.kind() {
+        USE => use_parts(n).0,
+        _ => word_text(n, 1),
+    }
+}
+
 /// An `instance` statement (R-65): its component's path as written, and
 /// its name (the path's last segment, for a statement in error with none).
 pub fn instance_parts(n: &SyntaxNode) -> (String, String) {
@@ -1084,6 +1119,8 @@ impl<'u> Lowerer<'u> {
                     ));
                     sc.instances_written.entry(name).or_insert(path);
                 }
+                // A provider's `use` binds its namespace, not a module.
+                USE if provider_use(&n, self.units, &self.decls.deployed).is_some() => {}
                 USE => {
                     // The path as written; `bind_instances` resolves it.
                     let (path, name) = use_parts(&n);
@@ -3315,12 +3352,15 @@ impl<'u> Lowerer<'u> {
         let Some(parent) = n.parent() else {
             return Ok(());
         };
+        // A provider's name is in the scope's one namespace too (R-112):
+        // `use db` beside `provider db` is the error two uses are.
         let same: Vec<SyntaxNode> = parent
             .children()
-            .filter(|c| matches!(c.kind(), USE | INSTANCE))
+            .filter(|c| matches!(c.kind(), USE | INSTANCE | PROVIDER))
             .filter(|c| {
                 let other = match c.kind() {
                     USE => use_parts(c).1,
+                    PROVIDER => word_text(c, 1),
                     _ => instance_parts(c).1,
                 };
                 other == name
@@ -3356,6 +3396,18 @@ impl<'u> Lowerer<'u> {
         let span = self.span(n);
         let (written, name) = use_parts(n);
         self.redeclared(n, &name)?;
+        if provider_use(n, self.units, &self.decls.deployed).is_some() {
+            if name != written {
+                return self.error(
+                    span,
+                    format!(
+                        "`use {written} as {name}`: a provider's namespace is not renamed yet; \
+                         write `use {written}`"
+                    ),
+                );
+            }
+            return self.provider(n, scope, outer);
+        }
         if let Some(rest) = written.strip_prefix("std.") {
             let fns = crate::functions::registry();
             if !fns.packages().contains(&rest) {

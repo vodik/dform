@@ -1096,7 +1096,23 @@ from` ("Giving inputs"):
 The loader reads them into one `Stmt::Stack` of the program, at their
 place in dform.toml, so an error in one is reported there.
 
-### Provider blocks
+### Providers
+
+A provider is imported with `use` and configured by the block the `use`
+takes (R-112): `use ovh { endpoint = "ovh-ca", project = config.project
+}`, `use fake` with no settings. It imports a namespace and configures
+it: `ovh`'s items are its types (`ovh.instance`) and externs
+(`ovh.image(..)`), read as a module's are ("Paths"), and its name is in
+the scope's one namespace, so `use db` for a provider beside `use db`
+for a module, or beside a copy `db`, is the error two uses are. A `use`
+is a provider's when its path is one segment naming no module, stack or
+component of the program, and a provider: one `dform.toml`'s
+`[providers]` names, a built-in (`file`, `env`, `time`, `ssh`, the
+mock's `fake`, `gke`, `k8s`) or a project's `providers/NAME/`; any other
+is the error for a missing module, which says it is no provider either. `use ovh as cloud` is not read yet (an error
+saying so). `provider NAME { .. }` is the old spelling of the same
+statement, read until the corpus is rewritten. Below, "a `provider`
+statement" is either spelling.
 
 `provider NAME { .. }`, or `provider NAME` with no settings, names a
 provider the program uses; a program with no `provider` statement starts
@@ -1116,7 +1132,8 @@ expect_account = t                 provider_expect_account("p", t') :- reads
 
 A setting is a content position: a dot in it reads now. A block takes no
 `+=` and no rank; a setting given twice is an error. A clause starts the
-provider only where it holds ("Guarded declarations").
+provider only where it holds ("Guarded declarations"): `use fake {
+region = "eu-west-1" } where cloud == "aws"`.
 
 A `provider` statement also brings the provider's externs into scope, with
 their binding modes (DESIGN.org R-8): a program does not write `extern`
@@ -1751,7 +1768,7 @@ as it is.
 | `let k = R` (`R` a reference)             | the cell holds `R`'s key; `k.p` reads through it       |
 | `type a = T`                              | nothing: each use of `a` is `T`                        |
 | `#\| k: v` above an item (Doc comments)  | `doc(Kind, Name, "k", "v")`                            |
-| `provider p { k = t, expect_account = a }` | `provider_config("p", {k: t'}) :- reads`, `provider_expect_account("p", a') :- reads` ("Provider blocks") |
+| `use p { k = t, expect_account = a }` | `provider_config("p", {k: t'}) :- reads`, `provider_expect_account("p", a') :- reads` ("Providers") |
 | `env.var(t)`                              | `V`, reading `env.var(t', V)`                          |
 | `resource T n { f = t } where B`          | `resource T n { f = t' } :- B, reads`                  |
 | `resource T "a-${e}" { .. }`              | name `Addr`, `Addr = format("a-%s", e')` last          |

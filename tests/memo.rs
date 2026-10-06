@@ -257,7 +257,7 @@ resource db.user app {
     let r = run(&s, &[], &["plan", "p.df"]).failure();
     assert!(
         r.stderr
-            .contains("time.now is the time provider's: declare `provider time`"),
+            .contains("time.now is the time provider's: declare `use time`"),
         "{}",
         r.stderr
     );

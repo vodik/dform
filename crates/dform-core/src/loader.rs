@@ -83,6 +83,8 @@ struct Mounts {
     root: PathBuf,
     project: bool,
     packages: BTreeMap<String, PathBuf>,
+    /// The providers `dform.toml` names (`[providers]`).
+    providers: BTreeSet<String>,
 }
 
 /// What a path names.
@@ -104,6 +106,7 @@ impl Mounts {
                 root: entry.parent().unwrap_or(Path::new(".")).to_path_buf(),
                 project: false,
                 packages: BTreeMap::new(),
+                providers: BTreeSet::new(),
             });
         };
         let path = root.join(crate::project::MANIFEST);
@@ -111,9 +114,20 @@ impl Mounts {
         let manifest = crate::project::Manifest::parse(&path, &text)?;
         Ok(Mounts {
             packages: manifest.package_roots(),
+            providers: manifest.providers.keys().cloned().collect(),
             root,
             project: true,
         })
+    }
+
+    /// Whether `name` is a provider a `use` may import (R-112): one
+    /// `dform.toml` names, a built-in (`file`, `env`, the mock's schemas)
+    /// or a project's `providers/NAME/`.
+    fn provider(&self, name: &str) -> bool {
+        self.providers.contains(name)
+            || crate::externs::builtin(name).is_some()
+            || crate::schema::builtin(name).is_some()
+            || self.root.join("providers").join(name).is_dir()
     }
 
     /// The file a path names: `a.b.c` is `a/b/c.df`, or the item `c` of
@@ -268,6 +282,10 @@ fn load_units(
                         loaded.deployed.push(d);
                     }
                 }
+                // One segment that is no module: a provider's `use`
+                // (R-112), which the resolver configures.
+                Target::Missing(_)
+                    if n.kind() == USE && !path.contains('.') && mounts.provider(&path) => {}
                 Target::Missing(tried) => {
                     let tried: Vec<String> = tried.iter().map(|f| display_name(f)).collect();
                     let what = if n.kind() == USE {
@@ -284,6 +302,12 @@ fn load_units(
                          `modules.net` is modules/net.df, and `modules.net.vpc` its \
                          `component vpc`",
                     );
+                    if n.kind() == USE && !path.contains('.') {
+                        d = d.with_note(format!(
+                            "nor a provider: `dform.toml` names none `{path}`, and there is \
+                             no built-in one and no providers/{path}/"
+                        ));
+                    }
                     if n.kind() == INSTANCE {
                         d = d.with_note(
                             "a component this file declares or a `use` names is \

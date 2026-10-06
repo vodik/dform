@@ -43,7 +43,10 @@ const EXPECT_ACCOUNT: &str = "expect_account";
 impl Lowerer<'_> {
     pub(super) fn provider(&mut self, n: &SyntaxNode, scope: usize, outer: &Rc) -> L<Vec<Stmt>> {
         let span = self.span(n);
-        let name = word_text(n, 1);
+        let name = provider_name(n);
+        if n.kind() == PROVIDER {
+            self.redeclared(n, &name)?;
+        }
         if name == "random" {
             let d = Diagnostic::error(span, "random is not a provider").with_help(
                 "random.password, random.bytes, random.id, random.uuid and \
@@ -181,33 +184,21 @@ impl Lowerer<'_> {
         Ok(out)
     }
 
-    /// The `provider` statements beside `n` of its name, in source order.
-    /// A provider is declared once, or several times each under a clause
-    /// (R-104); else the second is the error, naming the first.
+    /// The statements beside `n` that configure the provider `name` (a
+    /// `provider` or a provider's `use`), in source order. A provider is
+    /// declared once, or several times each under a clause (R-104); the
+    /// scope's one namespace says so (`redeclared`).
     fn providers_named(&mut self, n: &SyntaxNode, name: &str) -> L<Vec<SyntaxNode>> {
-        let same: Vec<SyntaxNode> = n
-            .parent()
+        Ok(n.parent()
             .into_iter()
             .flat_map(|p| p.children())
-            .filter(|c| c.kind() == PROVIDER && word_text(c, 1) == name)
-            .collect();
-        if same.len() > 1
-            && same.first() != Some(n)
-            && !same.iter().all(|c| node(c, CLAUSE).is_some())
-        {
-            let d = Diagnostic::error(
-                self.span(n),
-                format!("`{name}` is declared twice; give each a `where`"),
-            )
-            .with_label(self.span(&same[0]), "first here")
-            .with_help(
-                "a provider is declared once, or several times each under a clause that picks \
-                 it (`provider aws { region = \"eu-west-1\" } where env == \"prod\"`)",
-            );
-            self.diags.push(d);
-            return Err(Skip);
-        }
-        Ok(same)
+            .filter(|c| self.is_provider_stmt(c) && provider_name(c) == name)
+            .collect())
+    }
+
+    /// A `provider` statement, or a `use` of a provider (R-112).
+    fn is_provider_stmt(&self, c: &SyntaxNode) -> bool {
+        c.kind() == PROVIDER || provider_use(c, self.units, &self.decls.deployed).is_some()
     }
 
     fn rule_or_fact(&mut self, rc: &Rc, head: Atom, body: Vec<Lit>) -> L<Stmt> {
@@ -247,7 +238,7 @@ impl Lowerer<'_> {
         if !self.decls.externs.contains_key(&name) {
             return Some(self.error(
                 span,
-                format!("{name} is the {head} provider's: declare `provider {head}`"),
+                format!("{name} is the {head} provider's: declare `use {head}`"),
             ));
         }
         Some(self.extern_read(rc, n, pos, pre, &name))
@@ -323,8 +314,8 @@ impl Lowerer<'_> {
     fn provider_blocks(&self) -> Vec<(String, Span)> {
         let mut out: Vec<(String, Span)> = Vec::new();
         for u in self.units {
-            for c in u.root.children().filter(|c| c.kind() == PROVIDER) {
-                let name = word_text(&c, 1);
+            for c in u.root.children().filter(|c| self.is_provider_stmt(c)) {
+                let name = provider_name(&c);
                 if out.iter().any(|(n, _)| *n == name) {
                     continue;
                 }
@@ -361,9 +352,9 @@ impl Lowerer<'_> {
         );
         let d = match provider {
             Some((_, at)) => d
-                .with_label(at, format!("provider {head} declares it"))
+                .with_label(at, format!("the {head} provider is declared here"))
                 .with_help("delete the `extern` statement"),
-            None => d.with_help(format!("write `provider {head}` instead")),
+            None => d.with_help(format!("write `use {head}` instead")),
         };
         self.diags.push(d);
         Err(Skip)
