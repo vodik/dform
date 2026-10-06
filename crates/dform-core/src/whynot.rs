@@ -76,7 +76,9 @@ pub fn why_not(
     let name = w.name(&atom);
     if !engine::query(&[Lit::Pos(atom.clone())], &res.facts)?.is_empty() {
         let waiting = match (atom.pred.as_str(), atom.args.first()) {
-            ("want" | "attr", Some(Term::Val(Value::Str(t)))) => waits(t),
+            ("want" | "attr", Some(Term::Val(Value::Str(t)))) => {
+                waits(t).or_else(|| unapplied(&atom, res))
+            }
             _ => None,
         };
         match waiting {
@@ -140,6 +142,38 @@ pub fn reason(typ: &str, name: &str, res: &EvalResult, redact: &Redactor) -> Opt
         .map(str::trim)
         .rfind(|l| !l.starts_with("nearest: ") && !l.ends_with(" has no rows"))?;
     Some(redact.text(line))
+}
+
+/// The deployments not applied yet (R-121) whose outputs the attributes
+/// of the resource `atom` names hold, as `later` names them: `stack
+/// platform[env=lab], which has not been applied`.
+fn unapplied(atom: &Atom, res: &EvalResult) -> Option<String> {
+    let [t, a, ..] = atom.args.as_slice() else {
+        return None;
+    };
+    let mut on = BTreeSet::new();
+    for f in res.facts.iter().filter(|f| f.pred == "attr") {
+        if let [ft, fa, _, Term::Val(v)] = f.args.as_slice()
+            && ft == t
+            && fa == a
+        {
+            for l in crate::lattice::nulls_in(v) {
+                if let Some((u, n, _)) = crate::value::null_parts(&l)
+                    && u == crate::stack::UNAPPLIED
+                {
+                    on.insert(n);
+                }
+            }
+        }
+    }
+    let on: Vec<String> = on.into_iter().map(|n| format!("stack {n}")).collect();
+    (!on.is_empty()).then(|| {
+        format!(
+            "{}, which {} not been applied",
+            on.join(", "),
+            if on.len() == 1 { "has" } else { "have" }
+        )
+    })
 }
 
 struct WhyNot<'a> {

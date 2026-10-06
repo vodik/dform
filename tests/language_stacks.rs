@@ -189,8 +189,15 @@ resource net.subnet a {
 }
 "#,
     );
+    // Before net is applied, what reads it waits on it (R-121).
     let r = s.run(&["plan", "app.df"]).success();
-    assert_eq!(r.summary(), "stack app is up to date", "{}", r.stdout);
+    assert_eq!(
+        r.summary(),
+        "plan: 0 changes, 1 undetermined, 1 later",
+        "{}",
+        r.stdout
+    );
+    assert!(r.stdout.contains("  waits on  stack net  "), "{}", r.stdout);
     s.run(&["apply", "net"]).success();
     let r = s.run(&["plan", "--why=none", "app.df"]).success();
     assert!(
@@ -239,7 +246,12 @@ resource net.subnet a {
     s.write("stacks/net.df", NET);
     s.write("elsewhere/app.df", app);
     let r = s.run_in("elsewhere", &["plan", "app.df"]).success();
-    assert_eq!(r.summary(), "stack app is up to date", "{}", r.stdout);
+    assert_eq!(
+        r.summary(),
+        "plan: 0 changes, 1 undetermined, 1 later",
+        "{}",
+        r.stdout
+    );
     let r = s
         .run_in(
             "elsewhere",

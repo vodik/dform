@@ -332,7 +332,7 @@ fn plan_text(tick: Option<usize>) -> String {
 /// Where a world leaf's fact came from: a deployment's published outputs
 /// (`stack::published`), else the refresh.
 fn world_text(event: &str) -> String {
-    match event.starts_with(crate::stack::PUBLISHED) {
+    match event.starts_with(crate::stack::PUBLISHED) || event.ends_with(crate::stack::NOT_APPLIED) {
         true => event.to_string(),
         false => "world (refresh)".into(),
     }

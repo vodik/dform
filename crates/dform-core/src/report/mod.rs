@@ -94,6 +94,7 @@ pub fn attribute_label(l: &str) -> String {
         return call;
     }
     match crate::value::null_parts(l) {
+        Some((typ, name, _)) if typ == crate::stack::UNAPPLIED => format!("stack {name}"),
         Some((typ, name, p)) if !name.is_empty() && typ != crate::transform::OUTPUT => {
             let a = Address { typ, name };
             match p == crate::schema::IDENTITY {
@@ -114,6 +115,8 @@ pub fn label(l: &str) -> String {
         return call;
     }
     match crate::value::null_parts(l) {
+        // What reads a deployment not applied yet waits on it (R-121).
+        Some((typ, name, _)) if typ == crate::stack::UNAPPLIED => format!("stack {name}"),
         Some((typ, name, p)) if !name.is_empty() && typ != crate::transform::OUTPUT => {
             let a = Address { typ, name };
             match p == crate::schema::IDENTITY {
@@ -1580,14 +1583,20 @@ fn count(n: usize, thing: &str) -> String {
 /// The values a tick waits on, as the references they are,
 /// `k3s.server.public_ip` (R-111).
 fn waited(on: &BTreeSet<String>) -> Vec<String> {
-    on.iter()
-        .map(|n| match extern_label(n) {
+    let mut out: Vec<String> = Vec::new();
+    for n in on {
+        let w = match extern_label(n) {
             // What dform's own extern has not answered yet (a host still
             // booting, a file not written yet).
             Some(call) => format!("{call} not yet"),
             None => label(n),
-        })
-        .collect()
+        };
+        // A deployment not applied yet once, whatever of it is read.
+        if !out.contains(&w) {
+            out.push(w);
+        }
+    }
+    out
 }
 
 /// The page width the right column folds at.

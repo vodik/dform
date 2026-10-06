@@ -1114,6 +1114,22 @@ impl Published {
 pub fn published(a: &Atom) -> Option<String> {
     let name = match (a.pred.as_str(), a.args.as_slice()) {
         (crate::modules::INSTANCE_OF, [_, _, Term::Val(Value::Str(n))]) => n,
+        // An output of a deployment not applied yet (R-121).
+        (
+            "arg",
+            [
+                Term::Val(Value::Str(t)),
+                _,
+                _,
+                Term::Val(Value::Null { label, .. }),
+                _,
+            ],
+        ) if t == crate::transform::OUTPUT
+            && crate::value::null_parts(label).is_some_and(|(u, _, _)| u == UNAPPLIED) =>
+        {
+            let (_, n, _) = crate::value::null_parts(label)?;
+            return Some(format!("{n}{NOT_APPLIED}"));
+        }
         ("arg", [Term::Val(Value::Str(t)), Term::Val(Value::Str(n)), ..])
             if t == crate::transform::OUTPUT && !n.is_empty() =>
         {
@@ -1123,6 +1139,9 @@ pub fn published(a: &Atom) -> Option<String> {
     };
     Some(format!("{PUBLISHED}{name}"))
 }
+
+/// The text of a [`published`] leaf of a deployment not applied yet ends so.
+pub const NOT_APPLIED: &str = " has not been applied";
 
 /// The text of a [`published`] leaf begins so.
 pub const PUBLISHED: &str = "published by ";
@@ -1138,7 +1157,9 @@ fn output_label(name: &str, k: &str) -> String {
 /// stack's own outputs are `output/#k`).
 pub fn deployment_output(label: &str) -> Option<(String, String)> {
     match crate::value::null_parts(label)? {
-        (t, name, k) if t == crate::transform::OUTPUT && !name.is_empty() => Some((name, k)),
+        (t, name, k) if (t == crate::transform::OUTPUT || t == UNAPPLIED) && !name.is_empty() => {
+            Some((name, k))
+        }
         _ => None,
     }
 }
@@ -1610,6 +1631,94 @@ pub fn reads(
         }
     }
     (out, any)
+}
+
+/// The null-label type of an output of a deployment the program reads that
+/// has not been applied (R-121): `stack/platform[env=lab]#ingress_ip`, which
+/// `later` prints as the deployment it waits on, `stack platform[env=lab]`.
+pub const UNAPPLIED: &str = "stack";
+
+/// The facts of each deployment the program reads by a name it knows
+/// (`reads`) that has published no outputs (`read` has none of it): it is
+/// an instance of its stack, as one that has, and each output the program
+/// reads of it is an open null labeled [`UNAPPLIED`], so what reads it
+/// waits on that deployment's apply under `later` instead of deriving
+/// nothing. A deployment that has published and lacks an output is not
+/// this: the read finds no row, as any absent output.
+pub fn unapplied_facts(
+    program: &Program,
+    deployed: &[Deployed],
+    key: &[(String, String)],
+    read: &[Read],
+) -> Vec<Atom> {
+    use crate::ast::Lit;
+    // Per stack path, the outputs a body reads of a deployment of it:
+    // `instance_of(PATH, _, N), .., attr(output, N, "k", V)`.
+    let mut keys: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for st in &program.statements {
+        let body: &[Lit] = match st {
+            Stmt::Rule(r) => &r.body,
+            Stmt::Resource(r) => r.body.as_deref().unwrap_or_default(),
+            _ => continue,
+        };
+        for l in body {
+            let (Lit::Pos(a) | Lit::Not(a)) = l else {
+                continue;
+            };
+            let (Some(n), Some(Term::Val(Value::Str(path)))) =
+                (deployment_read(a, deployed), a.args.first())
+            else {
+                continue;
+            };
+            for m in body {
+                if let Lit::Pos(b) | Lit::Not(b) = m
+                    && let [Term::Val(Value::Str(t)), on, Term::Val(Value::Str(k)), _] =
+                        b.args.as_slice()
+                    && b.pred == "attr"
+                    && t == crate::transform::OUTPUT
+                    && on == n
+                {
+                    keys.entry(path.clone()).or_default().insert(k.clone());
+                }
+            }
+        }
+    }
+    let s = |x: &str| Term::Val(Value::Str(x.to_string()));
+    let published = |n: &str| read.iter().any(|r| r.name == n && r.published.is_some());
+    let mut out = Vec::new();
+    for name in reads(program, deployed, key).0 {
+        if published(&name) {
+            continue;
+        }
+        let base = name.split_once('[').map_or(name.as_str(), |(b, _)| b);
+        let Some(d) = deployed.iter().find(|d| d.name == base) else {
+            continue;
+        };
+        out.push(atom(
+            crate::modules::INSTANCE_OF,
+            vec![s(&d.path), s(""), s(&name)],
+            Span::default(),
+        ));
+        for k in keys.get(&d.path).into_iter().flatten() {
+            let null = Value::Null {
+                label: crate::value::null_label(UNAPPLIED, &name, k),
+                class: crate::value::NullClass::Open,
+                ty: String::new(),
+            };
+            out.push(atom(
+                "arg",
+                vec![
+                    s(crate::transform::OUTPUT),
+                    s(&name),
+                    s(k),
+                    Term::Val(null),
+                    s(crate::transform::NORMAL),
+                ],
+                Span::default(),
+            ));
+        }
+    }
+    out
 }
 
 /// What a run reads of other stacks' outputs: each deployment the program

@@ -132,8 +132,15 @@ fn a_remote_backend_takes_the_stack_name() {
         "stacks/app.df",
         &APP.replace("env=\"prod\"", "env=\"staging\""),
     );
+    // Staging is not applied: what reads it waits on it (R-121).
     let r = app.run(&["plan", "app"]).success();
-    assert_eq!(r.summary(), "stack app is up to date", "{}", r.stdout);
+    assert_eq!(r.summary(), "plan: 0 changes, 1 later", "{}", r.stdout);
+    assert!(
+        r.stdout
+            .contains("  waits on  stack platform.cluster[env=staging]  "),
+        "{}",
+        r.stdout
+    );
 }
 
 /// A secret output reaches the reader as its label: into a public field it

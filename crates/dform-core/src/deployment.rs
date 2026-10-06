@@ -997,6 +997,16 @@ impl Located {
         let mut base_extra = self.set_facts.clone();
         base_extra.extend(opts.data.iter().cloned());
         base_extra.extend(stack::output_facts(&outputs, &l.deployed));
+        // A deployment it reads that has not been applied: what reads it
+        // waits on it (R-121).
+        if let Some(lw) = lowered {
+            base_extra.extend(stack::unapplied_facts(
+                &lw.program,
+                &l.deployed,
+                &self.instance.key,
+                &outputs,
+            ));
+        }
         // The manifest, as facts policy may read.
         if let Some(m) = &l.manifest {
             base_extra.extend(m.facts());

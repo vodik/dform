@@ -271,7 +271,11 @@ pub fn path_suffix(path: &str) -> String {
 pub fn label(l: &str) -> String {
     match crate::value::null_parts(l) {
         Some((typ, name, path)) if name.is_empty() => format!("{typ}{}", path_suffix(&path)),
-        Some((typ, name, path)) if typ == crate::transform::OUTPUT => format!("{name}.{path}"),
+        Some((typ, name, path))
+            if typ == crate::transform::OUTPUT || typ == crate::stack::UNAPPLIED =>
+        {
+            format!("{name}.{path}")
+        }
         Some((typ, name, path)) if path == crate::schema::IDENTITY => {
             Address { typ, name }.to_string()
         }
