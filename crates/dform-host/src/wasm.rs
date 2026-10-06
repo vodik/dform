@@ -403,6 +403,8 @@ pub struct Wasm {
     /// Why it answers no more calls, once it trapped.
     dead: Option<String>,
     program: String,
+    /// The name its handshake gave, once it has: messages name it.
+    name: String,
 }
 
 impl Wasm {
@@ -432,6 +434,12 @@ impl Wasm {
             wasi.preopened_dir("/", "/", FsPerms::ReadWrite)
                 .map_err(anyhow::Error::from)
                 .context("preopen / for wasi:filesystem")?;
+            // A relative path (`--world w.json`) is dform's working
+            // directory's, as for a native provider (the SDK changes to
+            // it: wasi-libc starts at `/`).
+            if let Ok(cwd) = std::env::current_dir() {
+                wasi.initial_cwd(cwd.display().to_string());
+            }
         }
         if grants.allow.contains("wasi:sockets") {
             wasi.inherit_network().allow_ip_name_lookup(true);
@@ -459,6 +467,7 @@ impl Wasm {
                 next: 0,
                 dead: None,
                 program,
+                name: String::new(),
             },
             manifest,
         ))
@@ -515,25 +524,33 @@ impl Wasm {
             })
         })();
         match out {
-            Ok(answer) => answer,
+            Ok(answer) => {
+                if let Ok(Reply::Handshake(h)) = &answer {
+                    self.name = h.name.clone();
+                }
+                answer
+            }
             Err(trap) => {
+                let who = if self.name.is_empty() {
+                    self.program.clone()
+                } else {
+                    self.name.clone()
+                };
                 let interrupted = trap
                     .downcast_ref::<wasmtime::Trap>()
                     .is_some_and(|t| *t == wasmtime::Trap::Interrupt);
                 let exit = trap.downcast_ref::<wasmtime_wasi::I32Exit>().map(|e| e.0);
                 let why = match exit {
-                    Some(code) => format!(
-                        "the provider {} exited during the call (exit status: {code})",
-                        self.program
-                    ),
+                    Some(code) => {
+                        format!("the provider {who} exited during the call (exit status: {code})")
+                    }
                     None if interrupted => format!(
-                        "the provider {} ran past its deadline ({}s) and was stopped",
-                        self.program,
+                        "the provider {who} ran past its deadline ({}s) and was stopped",
                         DEADLINE.as_secs()
                     ),
-                    None => format!("the provider {} trapped: {trap:#}", self.program),
+                    None => format!("the provider {who} trapped: {trap:#}"),
                 };
-                self.dead = Some(format!("the provider {} has exited", self.program));
+                self.dead = Some(format!("the provider {who} has exited"));
                 Err(match (interrupted, apply) {
                     (true, true) => CallError::MaybeApplied(why),
                     (true, false) => CallError::Refused(why),

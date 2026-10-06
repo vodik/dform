@@ -1200,6 +1200,7 @@ dependencies = [
  "dform-mock",
  "dform-provider-ovh",
  "dform-s3",
+ "dform-sdk",
  "expectrl",
  "k8s-openapi",
  "kube",
@@ -1210,6 +1211,7 @@ dependencies = [
  "tokio",
  "tree-sitter",
  "tree-sitter-dform",
+ "wat",
 ]
 
 [[package]]

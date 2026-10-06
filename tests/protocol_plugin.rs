@@ -24,7 +24,9 @@ fn fake() -> String {
 
 /// The provider process exits as it is called to Apply the third action:
 /// dform reports that action failed, naming it, keeps the two identities
-/// before it, and the next apply finishes the rest.
+/// before it, and the next apply finishes the rest. (Its exit status is the
+/// native process's: a component's wasip2 exit carries none, and
+/// tests/host_wasm.rs has its own case.)
 #[test]
 fn a_provider_crash_mid_apply_fails_the_action_and_resume_finishes() {
     let s = Scratch::new("protocol-crash");
@@ -164,11 +166,12 @@ fn the_mock_conforms() {
 /// The backends a test links: the process one, the direct and wire ones.
 fn launches() -> [(Backend, Box<dyn Launch>); 3] {
     // The process backend spawns the mock provider: in a test binary,
-    // its own executable.
+    // its own executable, started as the CLI starts it (`dform-host`'s
+    // launcher: the component when `DFORM_PROVIDER_FAKE` names one).
     [
         (
             Backend::Process,
-            Box::new(dform_grpc::client::Process::Mock(fake().into())),
+            Box::new(dform_host::Launcher::Mock(fake().into())),
         ),
         (Backend::Direct, Box::new(dform_mock::Linked::direct())),
         (Backend::Wire, Box::new(dform_mock::Linked::wire())),

@@ -33,9 +33,19 @@ thread_local! {
     static HANDLER: OnceCell<Box<dyn Handler>> = const { OnceCell::new() };
 }
 
+/// The provider, made at the first call, in the working directory the
+/// host gives (`wasi:cli/environment`'s initial-cwd, which wasi-libc does
+/// not read: it starts at `/`).
+fn start(make: fn() -> Box<dyn Handler>) -> Box<dyn Handler> {
+    if let Some(cwd) = bindings::wasi::cli::environment::initial_cwd() {
+        let _ = std::env::set_current_dir(cwd);
+    }
+    make()
+}
+
 fn call(make: fn() -> Box<dyn Handler>, c: Call) -> Result<Reply, t::CallError> {
     HANDLER.with(|cell| {
-        cell.get_or_init(make)
+        cell.get_or_init(|| start(make))
             .handle(c)
             .map_err(|e| conv::to_call_error(&e))
     })
