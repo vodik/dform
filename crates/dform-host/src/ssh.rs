@@ -2,11 +2,16 @@
 //! itself is the built-in ssh provider's (`dform_core::plugin::ssh`, keys
 //! from the agent), wired in with [`wire`].
 //!
-//! TODO(landing, with the built-in ssh provider): call
-//! `dform_host::ssh::wire(..)` with an adapter over `plugin/ssh.rs`'s
-//! client (exec with argv, SFTP read and write, a local forward), and map
-//! its "host not up yet" to `Failure::NotYet`. Until then every call is
-//! refused naming this.
+//! TODO(landing, with the built-in ssh provider, `plugin/ssh.rs`): its
+//! russh client is private to its externs (`ssh.read`, `ssh.run` with a
+//! command string). Wiring it here needs from it: a session by host, user
+//! and port with its host-key check; exec with argv (quoted for the remote
+//! shell, which SSH's exec request always goes through) and stdin; SFTP
+//! read and write with a mode; a direct-tcpip channel behind a local
+//! listener for `forward`. Its "not yet" (no answer within
+//! `CONNECT_TIMEOUT`, refused, no route; a path that does not exist) maps
+//! to `Failure::NotYet`. Then `dform_host::ssh::wire(..)` with an adapter.
+//! Until then every call is refused naming this.
 
 use dform_core::plugin::host::{Endpoint, Error, Failure, Run, Target};
 use std::net::SocketAddr;
