@@ -2307,6 +2307,7 @@ fn run_with(
                 })
                 .collect(),
             digest: None,
+            guarded: zset::file::guarded(res),
         })
     };
 
@@ -2464,6 +2465,12 @@ fn run_with(
                 if let Some(f) = &file {
                     j["needs_approval"] = serde_json::to_value(&f.needs_approval)?;
                     j["digest"] = serde_json::to_value(&f.digest)?;
+                }
+                // The names declared more than once (R-104), as the plan
+                // file lists them.
+                let guarded = zset::file::guarded(&res);
+                if !guarded.is_empty() {
+                    j["guarded"] = serde_json::to_value(&guarded)?;
                 }
                 println!("{}", serde_json::to_string_pretty(&j)?);
             } else {

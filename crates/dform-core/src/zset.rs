@@ -1134,6 +1134,49 @@ pub mod file {
         /// [`PlanFile::digest`], as written: what an approval signs.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub digest: Option<String>,
+        /// Every name the program declares more than once, each under a
+        /// clause (R-104): a review sees a pair a refactor enabled.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        pub guarded: Vec<Guarded>,
+    }
+
+    /// A name declared more than once, each under a clause (R-104), as
+    /// the plan file lists it: `{"name": "db", "declarations": 2}`; a
+    /// copy's own as `copy.name`.
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+    pub struct Guarded {
+        pub name: String,
+        pub declarations: usize,
+    }
+
+    /// The guarded groups of an evaluation's rules: each name's
+    /// `__declared(name, i)` rows (`modules::exclusive`), those of more
+    /// than one declaration.
+    pub fn guarded(res: &EvalResult) -> Vec<Guarded> {
+        let mut by: BTreeMap<String, std::collections::BTreeSet<i64>> = BTreeMap::new();
+        for r in res.rules.iter() {
+            let (scope, pred) = match r.head.pred.rsplit_once("::") {
+                Some((s, p)) => (Some(s), p),
+                None => (None, r.head.pred.as_str()),
+            };
+            let (crate::modules::DECLARED, [Term::Val(Value::Str(n)), Term::Val(Value::Int(i))]) =
+                (pred, r.head.args.as_slice())
+            else {
+                continue;
+            };
+            let name = match scope {
+                Some(s) => format!("{s}.{n}"),
+                None => n.clone(),
+            };
+            by.entry(name).or_default().insert(*i);
+        }
+        by.into_iter()
+            .filter(|(_, is)| is.len() > 1)
+            .map(|(name, is)| Guarded {
+                name,
+                declarations: is.len(),
+            })
+            .collect()
     }
 
     /// A deformation that needs an approval, and why (`requires_approval`).

@@ -297,3 +297,37 @@ fn the_enum_lints_name_a_gap_and_an_overlap() {
     let r = plan(&s, &[]).success();
     assert!(!r.stderr.contains("warning"), "{}", r.stderr);
 }
+
+/// The plan file and `plan --json` list every name declared more than
+/// once, so a review sees a pair a refactor enabled; the text does not.
+#[test]
+fn the_plan_file_lists_the_guarded_groups() {
+    let s = Scratch::new("guards-plan-file");
+    s.write("p.df", PAIR);
+    s.run(&[
+        "dev",
+        "--world",
+        "w.json",
+        "plan",
+        "--out",
+        "plan.json",
+        "p.df",
+    ])
+    .success();
+    let f = s.json("plan.json");
+    assert_eq!(
+        f["guarded"],
+        serde_json::json!([{"name": "store", "declarations": 2}]),
+        "{f}"
+    );
+    let r = s
+        .run(&["dev", "--world", "w.json", "plan", "--json", "p.df"])
+        .success();
+    let j: serde_json::Value = serde_json::from_str(&r.stdout).unwrap();
+    assert_eq!(
+        j["guarded"],
+        serde_json::json!([{"name": "store", "declarations": 2}])
+    );
+    let r = plan(&s, &[]).success();
+    assert!(!r.stdout.contains("declarations"), "{}", r.stdout);
+}
