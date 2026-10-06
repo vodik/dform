@@ -1,0 +1,16 @@
+[package]
+name = "dform-sdk-derive"
+version = "0.1.0"
+license = "Apache-2.0"
+edition = "2024"
+publish = false
+
+# `#[derive(Resource)]` for dform-sdk (R-25): a provider type's schema
+# facts from its Rust fields.
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2 = "1"
+quote = "1"
+syn = { version = "2", features = ["full"] }

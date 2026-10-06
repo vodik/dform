@@ -15,6 +15,8 @@ members = [
     "crates/dform-lsp",
     "crates/dform-wit",
     "crates/dform-host",
+    "crates/dform-sdk",
+    "crates/dform-sdk-derive",
     "tree-sitter-dform",
 ]
 # `cargo build` and `cargo test` build the provider binaries the CLI spawns
@@ -35,6 +37,8 @@ default-members = [
     "crates/dform-s3",
     "crates/dform-lsp",
     "crates/dform-host",
+    "crates/dform-sdk",
+    "crates/dform-sdk-derive",
 ]
 resolver = "3"
 

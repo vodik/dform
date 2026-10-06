@@ -1284,6 +1284,7 @@ dependencies = [
  "dform-wit",
  "gix",
  "serde_json",
+ "sha2 0.10.9",
  "tokio",
  "tonic",
  "ureq",
@@ -1348,8 +1349,8 @@ dependencies = [
 name = "dform-provider-fake"
 version = "0.1.0"
 dependencies = [
- "dform-grpc",
  "dform-mock",
+ "dform-sdk",
 ]
 
 [[package]]
@@ -1383,6 +1384,32 @@ dependencies = [
  "dform-core",
  "rusty-s3",
  "ureq",
+]
+
+[[package]]
+name = "dform-sdk"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "dform-core",
+ "dform-grpc",
+ "dform-sdk-derive",
+ "dform-wire",
+ "dform-wit",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tonic",
+ "wit-bindgen",
+]
+
+[[package]]
+name = "dform-sdk-derive"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -6481,6 +6508,7 @@ version = "49.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "64b67114739063bb72bb8ed2b4994b8b22809d354432db68553ad529850f9536"
 dependencies = [
+ "anyhow",
  "hashbrown 0.17.1",
  "libm",
  "serde",

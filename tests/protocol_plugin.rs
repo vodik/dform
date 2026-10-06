@@ -138,7 +138,24 @@ fn the_mock_conforms() {
             "{backend:?}: {}",
             r.stdout
         );
-        reports.push(r.stdout.replace(path, "PATH"));
+        // The executable is hosted natively, the host's service beside it,
+        // and declares what it uses (its Manifest service, R-13b).
+        if path == exe {
+            for line in [
+                "host  native: imports: host none",
+                "host  native: imports: beyond the host wasi:filesystem",
+                "host  native: granted: none",
+            ] {
+                assert!(r.stdout.contains(line), "{line}\n{}", r.stdout);
+            }
+        }
+        // The same cases; how each is hosted (`host` lines) is its own.
+        let cases: Vec<&str> = r
+            .stdout
+            .lines()
+            .filter(|l| !l.starts_with("host  "))
+            .collect();
+        reports.push(cases.join("\n").replace(path, "PATH"));
     }
     // The same cases, the same report.
     assert!(reports.windows(2).all(|w| w[0] == w[1]), "{reports:#?}");

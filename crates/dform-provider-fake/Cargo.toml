@@ -5,6 +5,16 @@ license = "Apache-2.0"
 edition = "2024"
 publish = false
 
+# The mock behind the provider protocol, written with the SDK (R-13b): the
+# executable over gRPC (`cargo build`), or the component dform's wasm host
+# runs (`cargo build --target wasm32-wasip2 --features component`:
+# target/wasm32-wasip2/debug/dform_provider_fake.wasm).
+[lib]
+crate-type = ["rlib", "cdylib"]
+
+[features]
+component = ["dform-sdk/component"]
+
 [dependencies]
 dform-mock = { path = "../dform-mock" }
-dform-grpc = { path = "../dform-grpc" }
+dform-sdk = { path = "../dform-sdk" }

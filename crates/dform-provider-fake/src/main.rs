@@ -1,13 +1,6 @@
-//! The mock provider (`dform-mock`) behind the plugin protocol, over gRPC
-//! (`dform-grpc`'s server adapter). dform starts it for every mock schema;
-//! `dform provider check` checks it.
+//! The mock provider's executable: `dform_provider_fake::main` serves it
+//! over gRPC (`dform_sdk::provider!`).
 
 fn main() -> std::process::ExitCode {
-    match dform_grpc::server::serve(dform_mock::Mock::process()) {
-        Ok(()) => std::process::ExitCode::SUCCESS,
-        Err(e) => {
-            eprintln!("dform-provider-fake: {e:#}");
-            std::process::ExitCode::FAILURE
-        }
-    }
+    dform_provider_fake::main()
 }

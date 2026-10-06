@@ -1,0 +1,31 @@
+[package]
+name = "dform-sdk"
+version = "0.1.0"
+license = "Apache-2.0"
+edition = "2024"
+publish = false
+
+# The provider SDK (R-25, R-13b): one API over the host's interfaces
+# (`host().http.request(..)`, `host().ssh.exec(..)`) whichever way the
+# provider is built, `#[derive(Resource)]` for its schema, and the entry
+# point (`provider!`). Built natively it serves the protocol over gRPC and
+# calls the host back over the `Host` service; built with
+# `--target wasm32-wasip2 --features component` it is a component whose
+# imports are the host's interfaces (wit/host).
+[features]
+component = ["dep:wit-bindgen", "dep:dform-wit"]
+
+[dependencies]
+anyhow = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+dform-core = { path = "../dform-core" }
+dform-wire = { path = "../dform-wire" }
+dform-sdk-derive = { path = "../dform-sdk-derive" }
+wit-bindgen = { version = "0.57", optional = true }
+dform-wit = { path = "../dform-wit", default-features = false, optional = true }
+
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+dform-grpc = { path = "../dform-grpc" }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "net", "macros", "time"] }
+tonic = "0.13"
