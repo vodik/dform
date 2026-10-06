@@ -93,7 +93,7 @@ fn why_not_names_the_provider_a_resource_waits_on() {
     .success();
     assert!(
         r.stdout.starts_with(
-            "k8s.storage_class[\"traefik.block\"]: it is derived, and waits on provider k8s \
+            "k8s.storage_class traefik.block: it is derived, and waits on provider k8s \
              (kubeconfig from raw): the plan lists it under `later`"
         ),
         "{}",

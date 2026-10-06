@@ -533,7 +533,7 @@ impl Redactor {
         let mut out = s.to_string();
         for (k, l) in &self.secrets {
             if let Value::Str(k) = k {
-                let shown = format!("(sensitive {})", crate::ir::label(l));
+                let shown = format!("(sensitive {})", crate::report::attribute_label(l));
                 out = out.replace(&format!("{k:?}"), &shown);
                 out = out.replace(k.as_str(), &shown);
             }

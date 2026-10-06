@@ -1679,12 +1679,13 @@ that exists; a row a rule of the program derives (a copy's guard,
 `resource network.vpc peer: not made`, a relation of its own) is
 followed one level in, up to three, with the rule that did not derive it.
 What no rule mentions gets one line and nothing invented:
-`no rule derives aws.subnet["x"]: no resource aws.subnet is named like
-it`; what is derived says so and points at `why`.
+`no rule derives aws.subnet x: no resource aws.subnet is named like
+it`; what is derived says so and points at `why`. It names each address
+as the plan prints it (R-111).
 
 ```bash
 cargo run -- -C examples/demo why-not 'net.vpc["peer.vpc"]' dform env=dev
-# net.vpc["peer.vpc"]: no rule derives it
+# net.vpc peer.vpc: no rule derives it
 #   network.df:19  resource net.vpc vpc { .. }   (resource network.vpc peer)
 #     resource network.vpc peer: not made
 #       stacks/dform.df:54  resource network.vpc peer { .. } where env != "dev"

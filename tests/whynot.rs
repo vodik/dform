@@ -54,7 +54,7 @@ fn a_missing_subnet_names_the_zone_row_it_lacks() {
         .success();
     assert_eq!(
         r.stdout,
-        "net.subnet[\"private-us-east-1c\"]: no rule derives it\n  \
+        "net.subnet private-us-east-1c: no rule derives it\n  \
          stacks/shop.df:13  resource net.subnet \"private-${availability_zone}\" { .. } where \
          availability_zone(\"available\", availability_zone, n)\n    \
          availability_zone(\"available\", \"us-east-1c\", n): no row\n    \
@@ -108,7 +108,7 @@ fn a_guarded_instance_names_the_guard_that_did_not_hold() {
     let out = r.stdout.replace(&format!("{}/", repo().display()), "");
     assert_eq!(
         out,
-        "net.vpc[\"peer.vpc\"]: no rule derives it\n  \
+        "net.vpc peer.vpc: no rule derives it\n  \
          examples/demo/network.df:19  resource net.vpc vpc { .. }   (resource network.vpc peer)\n    \
          resource network.vpc peer: not made\n      \
          examples/demo/stacks/dform.df:54  resource network.vpc peer { .. } where env != \"dev\"\n        \
@@ -131,11 +131,11 @@ fn an_attribute_names_the_condition_and_the_value_there() {
         .success();
     assert_eq!(
         r.stdout,
-        "net.subnet[\"private-us-east-1a\"].tags.tier: no rule derives it\n  \
+        "net.subnet private-us-east-1a.tags.tier: no rule derives it\n  \
          stacks/shop.df:19  set s.tags = { tier: \"edge\" } where s in net.subnet, s.zone == \
          \"us-east-1c\"\n    \
-         net.subnet[\"private-us-east-1a\"].zone = \"us-east-1c\": no row\n    \
-         nearest: net.subnet[\"private-us-east-1a\"].zone = \"us-east-1a\"\n"
+         net.subnet private-us-east-1a.zone = \"us-east-1c\": no row\n    \
+         nearest: net.subnet private-us-east-1a.zone = \"us-east-1a\"\n"
     );
     golden("whynot_attribute", &r.stdout);
     // An attribute of a resource that is not derived: the resource.
@@ -148,7 +148,7 @@ fn an_attribute_names_the_condition_and_the_value_there() {
         .success();
     assert!(
         r.stdout.starts_with(
-            "net.subnet[\"private-us-east-1c\"].cidr: net.subnet[\"private-us-east-1c\"] is not \
+            "net.subnet private-us-east-1c.cidr: net.subnet private-us-east-1c is not \
              derived\n"
         ) && r.stdout.contains("nearest: (\"us-east-1a\", 0)"),
         "{}",
@@ -164,17 +164,17 @@ fn a_never_mentioned_address_says_so_and_stops() {
     for (addr, want) in [
         (
             r#"aws.subnet["private-us-east-1c"]"#,
-            "no rule derives aws.subnet[\"private-us-east-1c\"]: no resource aws.subnet is \
+            "no rule derives aws.subnet private-us-east-1c: no resource aws.subnet is \
              named like it\n",
         ),
         (
             r#"net.subnet["public-us-east-1a"]"#,
-            "no rule derives net.subnet[\"public-us-east-1a\"]: no resource net.subnet is \
+            "no rule derives net.subnet public-us-east-1a: no resource net.subnet is \
              named like it\n",
         ),
         (
             r#"net.vpc["main"].tags"#,
-            "no rule derives net.vpc[\"main\"].tags: no statement sets it\n",
+            "no rule derives net.vpc main.tags: no statement sets it\n",
         ),
     ] {
         let r = s.run(&["why-not", addr, "shop"]).success();

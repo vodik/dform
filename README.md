@@ -372,7 +372,7 @@ condition that failed, with the nearest rows that would have passed:
 
 ```
 $ dform why-not 'aws.subnet["private-us-east-1c"]'
-aws.subnet["private-us-east-1c"]: no rule derives it
+aws.subnet private-us-east-1c: no rule derives it
   shop.df:8  resource aws.subnet "private-${availability_zone}" { .. } where aws.availability_zone("available", availability_zone, n)
     aws.availability_zone("available", "us-east-1c", n): no row
     nearest: ("us-east-1a", 0), ("us-east-1b", 1)

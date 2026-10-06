@@ -392,11 +392,15 @@ impl WhyNot<'_> {
         };
         match (a.pred.as_str(), a.args.as_slice()) {
             ("want", [t, n]) => match (s(t), s(n)) {
-                (Some(t), Some(n)) => crate::ir::Address { typ: t, name: n }.to_string(),
+                (Some(t), Some(n)) => {
+                    crate::report::address(&crate::ir::Address { typ: t, name: n })
+                }
                 _ => self.atom_text(a),
             },
             ("attr", [t, n, p, _]) => match (s(t), s(n), s(p)) {
-                (Some(t), Some(n), Some(p)) => crate::ir::Address { typ: t, name: n }.attr(&p),
+                (Some(t), Some(n), Some(p)) => {
+                    crate::report::attribute(&crate::ir::Address { typ: t, name: n }, &p)
+                }
                 _ => self.atom_text(a),
             },
             _ => self.atom_text(a),
@@ -426,11 +430,13 @@ impl WhyNot<'_> {
             ],
         ) = (a.pred.as_str(), a.args.as_slice())
         {
-            let addr = crate::ir::Address {
-                typ: t.clone(),
-                name: n.clone(),
-            }
-            .attr(p);
+            let addr = crate::report::attribute(
+                &crate::ir::Address {
+                    typ: t.clone(),
+                    name: n.clone(),
+                },
+                p,
+            );
             return match v {
                 Term::Val(v) => format!("{addr} = {}", self.redact.surface(v)),
                 _ => addr.to_string(),
