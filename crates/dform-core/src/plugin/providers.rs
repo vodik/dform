@@ -832,8 +832,8 @@ impl Providers {
             for t in s.provider_of.keys().chain(s.attrs.keys().map(|(t, _)| t)) {
                 owner.entry(t.clone()).or_insert(i);
             }
-            for e in &resp.externs {
-                externs.entry(e.pred.clone()).or_insert(i);
+            for e in resp.externs.iter().map(|e| &e.pred).chain(s.externs.keys()) {
+                externs.entry(e.clone()).or_insert(i);
             }
             schema = schema.merge(s)?;
         }

@@ -10,6 +10,14 @@
 # a replacement deletes the old one first. A record's key is its zone,
 # subdomain, type and target: only its ttl changes in place.
 
+# The data sources (R-106): a program reads them with no `extern` line.
+# `ovh.region` the project's regions, `ovh.flavor` a region's available
+# flavors (RAM and disk as the API counts them), `ovh.image` a region's
+# active images, the distribution the first word of the name.
+extern_decl("ovh.region", "+project, -name, -status")
+extern_decl("ovh.flavor", "+region, -name, -vcpus: int, -ram: bytes, -disk: bytes")
+extern_decl("ovh.image", "+region, -name, -id, -distribution")
+
 type_provider("ovh.instance", "ovh")
 type_provider("ovh.ssh_key", "ovh")
 type_provider("ovh.domain_record", "ovh")

@@ -94,12 +94,13 @@ after every change. Its remote id, and its `id`, is `ZONE/ID`.
 
 ## Data sources
 
-Tables a program declares with `extern` and reads like any relation:
+Tables the provider's schema declares (`extern_decl`, R-106), which a
+program reads like any relation with no `extern` line:
 
 ```text
-extern ovh.region(+project, -name, -status)
-extern ovh.flavor(+region, -name, -vcpus: int, -ram: bytes, -disk: bytes)
-extern ovh.image(+region, -name, -id, -distribution)
+ovh.region(+project, -name, -status)
+ovh.flavor(+region, -name, -vcpus: int, -ram: bytes, -disk: bytes)
+ovh.image(+region, -name, -id, -distribution)
 
 resource ovh.instance db {
   name = "db"

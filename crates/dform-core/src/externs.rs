@@ -751,22 +751,6 @@ pub const BUILTINS: &[Builtin] = &[
         in_process: true,
         always: true,
     },
-    // The aws mock's data source (R-36): a table, its index a stable
-    // ordinal of the names the provider defines. Declared here until a
-    // provider's schema declares its externs to the compiler.
-    Builtin {
-        name: "aws",
-        externs: &[(
-            "aws.availability_zone",
-            &[
-                (true, "state", "string"),
-                (false, "name", "string"),
-                (false, "index", "int"),
-            ],
-        )],
-        in_process: false,
-        always: false,
-    },
 ];
 
 /// The `time` provider's extern `time.now(-t: time)`.
@@ -826,16 +810,22 @@ pub fn builtin(name: &str) -> Option<&'static Builtin> {
     BUILTINS.iter().find(|b| b.name == name)
 }
 
+/// A column's type as an extern declaration writes it: a name, or
+/// `secret(T)`.
+pub fn type_expr(t: &str) -> TypeExpr {
+    match t.strip_prefix("secret(") {
+        Some(inner) => TypeExpr::Apply(
+            "secret".into(),
+            vec![TypeExpr::Name(inner.trim_end_matches(')').into())],
+        ),
+        None => TypeExpr::Name(t.into()),
+    }
+}
+
 impl Builtin {
     /// Its externs' declarations.
     pub fn externs(&self) -> Vec<ExternFn> {
-        let ty = |t: &str| match t.strip_prefix("secret(") {
-            Some(inner) => TypeExpr::Apply(
-                "secret".into(),
-                vec![TypeExpr::Name(inner.trim_end_matches(')').into())],
-            ),
-            None => TypeExpr::Name(t.into()),
-        };
+        let ty = type_expr;
         self.externs
             .iter()
             .map(|(name, cols)| ExternFn {

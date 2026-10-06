@@ -264,6 +264,48 @@ pub struct Schema {
     /// refinement on a sensitive path of one is an Apply assertion (F
     /// DR-13 revised); of any other type, E0306.
     pub checks_refinements: BTreeSet<String>,
+    /// The provider's data sources (R-106): `extern_decl(Pred, Signature)`,
+    /// the signature as an `extern` line writes it (`"+region, -name, -id,
+    /// -distribution"`, `"-vcpus: int"`), so a program reads one with no
+    /// `extern` line of its own.
+    pub externs: BTreeMap<String, crate::ast::ExternFn>,
+}
+
+/// A schema's data source declaration (R-106): `extern_decl(Pred, Sig)`.
+pub const EXTERN_DECL: &str = "extern_decl";
+
+/// `extern_decl(pred, sig)`'s declaration: each column `+name` or
+/// `-name`, then `: type` if it is typed.
+fn extern_decl(pred: &str, sig: &str) -> Result<crate::ast::ExternFn> {
+    let args = sig
+        .split(',')
+        .map(str::trim)
+        .filter(|c| !c.is_empty())
+        .map(|c| {
+            let (input, rest) = match c.split_at(1) {
+                ("+", r) => (true, r),
+                ("-", r) => (false, r),
+                _ => bail!("extern_decl({pred}): column `{c}` is `+name` or `-name`"),
+            };
+            let (name, ty) = match rest.split_once(':') {
+                Some((n, t)) => (n.trim(), Some(crate::externs::type_expr(t.trim()))),
+                None => (rest.trim(), None),
+            };
+            Ok(crate::ast::BindArg {
+                input,
+                name: name.to_string(),
+                ty,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    if args.is_empty() {
+        bail!("extern_decl({pred}): no columns");
+    }
+    Ok(crate::ast::ExternFn {
+        name: pred.to_string(),
+        args,
+        span: Default::default(),
+    })
 }
 
 /// Read attempts for a type without `type_retry`.
@@ -587,6 +629,12 @@ impl Schema {
                     };
                     s.mints.insert((t.clone(), p.clone()), v.clone());
                 }
+                EXTERN_DECL => {
+                    let [Value::Str(p), Value::Str(sig)] = args.as_slice() else {
+                        return Err(bad());
+                    };
+                    s.externs.insert(p.clone(), extern_decl(p, sig)?);
+                }
                 _ => {}
             }
             s.facts.push(Atom {
@@ -658,6 +706,12 @@ impl Schema {
         }
         self.facts.extend(other.facts);
         self.checks_refinements.extend(other.checks_refinements);
+        for (p, f) in other.externs {
+            if self.externs.contains_key(&p) {
+                bail!("extern_decl({p}) declared by two schemas");
+            }
+            self.externs.insert(p, f);
+        }
         Ok(self)
     }
 

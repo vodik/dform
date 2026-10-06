@@ -1101,8 +1101,21 @@ dform answers them itself:
 provider file         file.text(+path, -value: string); the loaders, `yaml(p)` .. ("Documents")
 provider env          env.var(+name, -value: secret(string))
 provider time         time.now(-t: time)
-provider aws          aws.availability_zone(+state, -name: string, -index: int)
 ```
+
+Any other provider declares its externs in its schema (R-106), one fact
+each, the signature as an `extern` line writes it:
+
+```
+extern_decl("ovh.image", "+region, -name, -id, -distribution")
+extern_decl("ovh.flavor", "+region, -name, -vcpus: int, -ram: bytes, -disk: bytes")
+extern_decl("aws.availability_zone", "+state, -name, -index: int")
+```
+
+and the compiler reads them once the provider's schema is loaded: a
+program reads `ovh.image(config.region, image, id, _)` with no `extern`
+line, called with the declared arity and binding modes and checked as a
+declared extern is. A program's own `extern` line for the same name wins.
 
 An extern is asked again every run (a plan file records what its plan
 read, and its apply reads that): nothing keeps an answer but `memo.first`
@@ -1121,10 +1134,8 @@ statement to write instead. `env.var(t)` as a term is the lookup
 `env.var[t]`, `time.now()` the lookup `time.now[]`; without the
 `provider` statement either is an error that says to declare it.
 `persist` after an extern is an error naming `memo.first`. `extern`
-stays the schema's word: provider schemas and the compiler's tests
-declare externs with it, and so, until the compiler reads a provider's
-schema (DESIGN.org R-24), does a program for a provider that is not
-built in.
+stays the compiler's tests' word, and a program's for an extern no
+schema declares.
 
 ### Memo
 

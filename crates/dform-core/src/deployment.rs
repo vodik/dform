@@ -719,6 +719,42 @@ fn setting_text(span: Span, key: &str) -> Option<String> {
         .filter(|v| !v.is_empty())
 }
 
+/// `l` with the data sources `schema` declares that it reads and does
+/// not declare itself (R-106): each an `extern` declaration, as if the
+/// program had written it.
+fn with_schema_externs(l: &transform::Lowered, schema: &Schema) -> transform::Lowered {
+    if schema.externs.is_empty() {
+        return l.clone();
+    }
+    let own: BTreeSet<&str> = l.extern_fns.iter().map(|f| f.name.as_str()).collect();
+    let read: BTreeSet<&str> = l
+        .program
+        .statements
+        .iter()
+        .filter_map(|s| match s {
+            Stmt::Rule(r) => Some(&r.body),
+            _ => None,
+        })
+        .flatten()
+        .filter_map(|l| match l {
+            Lit::Pos(a) | Lit::Not(a) => Some(a.pred.as_str()),
+            _ => None,
+        })
+        .collect();
+    let mut out = l.clone();
+    for (p, f) in &schema.externs {
+        if read.contains(p.as_str()) && !own.contains(p.as_str()) {
+            out.extern_fns.push(f.clone());
+            out.externs.insert(crate::ast::Extern {
+                pred: p.clone(),
+                arity: f.args.len(),
+                span: f.span,
+            });
+        }
+    }
+    out
+}
+
 /// E §2.7's sections for an evaluation: what waits on a boundary.
 pub fn sections(res: &EvalResult, resources: &[ir::Resource], schema: &Schema) -> stuck::Sections {
     let docs = resources
@@ -858,6 +894,29 @@ impl Located {
         ));
         // `provider ssh`: the host keys state knows, and those met.
         let ssh = Rc::new(crate::plugin::ssh::Ssh::new(st.known_hosts.clone()));
+        let mut base_extra = self.set_facts.clone();
+        base_extra.extend(opts.data.iter().cloned());
+        base_extra.extend(stack::output_facts(&outputs, &l.deployed));
+        // The manifest, as facts policy may read.
+        if let Some(m) = &l.manifest {
+            base_extra.extend(m.facts());
+        }
+        // The schema is asked for once the run knows the types it names.
+        let types = match opts.discover_all {
+            true => None,
+            false => world_types(lowered),
+        };
+        let discovered = backend.discover(types.as_ref())?;
+        let scope = match opts.whole_schema {
+            true => None,
+            false => catalog_scope(&self.program, &base_extra, &discovered, &st),
+        };
+        backend.load_schema(scope.as_ref())?;
+        // The data sources the providers' schemas declare that the program
+        // reads with no `extern` line of its own (R-106): declared as if it
+        // had one.
+        let with_externs = lowered.map(|l| with_schema_externs(l, backend.schema()));
+        let lowered = with_externs.as_ref();
         let externs = {
             let (no_program, no_fns) = (Program::default(), vec![]);
             let program_dir = project::base_of(&l.files[0]);
@@ -890,24 +949,6 @@ impl Located {
         };
         // What the plan file read, before asking.
         externs.preload(opts.recorded.clone());
-        let mut base_extra = self.set_facts.clone();
-        base_extra.extend(opts.data.iter().cloned());
-        base_extra.extend(stack::output_facts(&outputs, &l.deployed));
-        // The manifest, as facts policy may read.
-        if let Some(m) = &l.manifest {
-            base_extra.extend(m.facts());
-        }
-        // The schema is asked for once the run knows the types it names.
-        let types = match opts.discover_all {
-            true => None,
-            false => world_types(lowered),
-        };
-        let discovered = backend.discover(types.as_ref())?;
-        let scope = match opts.whole_schema {
-            true => None,
-            false => catalog_scope(&self.program, &base_extra, &discovered, &st),
-        };
-        backend.load_schema(scope.as_ref())?;
         // What a run plans, its providers declare: a type none does would
         // be handed to one that knows nothing of it.
         if opts.check_types {
@@ -959,6 +1000,23 @@ impl Located {
         // Quantity and time literals read as their attributes' types
         // (R-66, R-62), now the schema is known.
         let mut program = self.program.clone();
+        if let Some(l) = lowered {
+            let own: BTreeSet<&str> = program
+                .statements
+                .iter()
+                .filter_map(|s| match s {
+                    Stmt::ExternFn(f) => Some(f.name.as_str()),
+                    _ => None,
+                })
+                .collect();
+            let more: Vec<Stmt> = l
+                .extern_fns
+                .iter()
+                .filter(|f| !own.contains(f.name.as_str()))
+                .map(|f| Stmt::ExternFn(f.clone()))
+                .collect();
+            program.statements.extend(more);
+        }
         crate::types::read(&mut program, backend.schema())?;
         let evaluator = Evaluator {
             backend: backend.clone(),
