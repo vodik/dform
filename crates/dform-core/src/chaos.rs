@@ -189,8 +189,8 @@ mod tests {
     fn specs_parse_with_scoped_names() {
         let c = Chaos::parse(&[
             r#"fail=net.subnet["private-a"]"#.into(),
-            r#"read-lag=net.vpc["network/main/vpc"]:3"#.into(),
-            r#"mutate=net.vpc["network/main/vpc"].tags.env="prod""#.into(),
+            r#"read-lag=net.vpc["network.main.vpc"]:3"#.into(),
+            r#"mutate=net.vpc["network.main.vpc"].tags.env="prod""#.into(),
             r#"latency=net.vpc["v"]:250"#.into(),
             "fresh-ids".into(),
         ])
@@ -202,7 +202,7 @@ mod tests {
         );
         assert_eq!(
             c.read_lag
-                .get(&parse_addr(r#"net.vpc["network/main/vpc"]"#).unwrap()),
+                .get(&parse_addr(r#"net.vpc["network.main.vpc"]"#).unwrap()),
             Some(&3)
         );
         assert_eq!(c.mutate[0].1, "tags.env");

@@ -14,12 +14,12 @@ fn why_a_tag_exists() {
         "examples/demo/stacks/dform.df env=prod",
         &[
             "why",
-            r#"attr(net.vpc, "main/vpc", "tags.team", "platform")"#,
+            r#"attr(net.vpc, "main.vpc", "tags.team", "platform")"#,
         ],
     );
     assert!(
         out.starts_with(
-            "net.vpc[\"main/vpc\"].tags = {component: \"network\", env: \"prod\", \
+            "net.vpc[\"main.vpc\"].tags = {component: \"network\", env: \"prod\", \
              team: \"platform\"}\n  merged from 2 contributions\n  ├─ {team: \"platform\"}\n"
         ),
         "{out}"
@@ -31,7 +31,7 @@ fn why_a_tag_exists() {
         ),
         "{out}"
     );
-    assert!(out.contains("with r = net.vpc[\"main/vpc\"]\n"), "{out}");
+    assert!(out.contains("with r = net.vpc[\"main.vpc\"]\n"), "{out}");
     assert!(out.contains("... 1 other contribution (--all)"), "{out}");
     assert!(!out.contains(":-") && !out.contains("Σattr"), "{out}");
     golden("why_dform_prod_tag", &out);
@@ -46,7 +46,7 @@ fn why_core_prints_the_lowered_rules() {
         &[
             "why",
             "--core",
-            r#"attr(net.vpc, "main/vpc", "tags.team", "platform")"#,
+            r#"attr(net.vpc, "main.vpc", "tags.team", "platform")"#,
         ],
     );
     assert!(
@@ -57,28 +57,46 @@ fn why_core_prints_the_lowered_rules() {
     assert!(out.contains("[rank normal, owner r"), "{out}");
 }
 
+/// R-112: a resource's address is its path, so `why` takes it as the plan
+/// prints it after the type, with the type or without: `main.vpc` (the
+/// copy main's vpc), `net.vpc main.vpc`, and `T["main.vpc"]` explain one
+/// want.
+#[test]
+fn why_takes_a_resource_by_its_path() {
+    let at = "examples/demo/stacks/dform.df env=prod";
+    let by_address = dform(at, &["why", r#"net.vpc["main.vpc"]"#]);
+    for path in ["main.vpc", "net.vpc main.vpc"] {
+        let out = dform(at, &["why", path]);
+        assert_eq!(out, by_address, "{path}");
+    }
+    assert!(
+        by_address.starts_with("net.vpc[\"main.vpc\"]\n"),
+        "{by_address}"
+    );
+}
+
 /// H-16: an address as plan prints it is a `why` and a `query` argument.
 /// `T["A"]` explains the want, `T["A"].path` the attribute; any other
 /// spelling of an address is refused.
 #[test]
 fn why_and_query_take_an_address_as_plan_prints_it() {
     let at = "examples/demo/stacks/dform.df env=prod";
-    let want = dform(at, &["why", r#"net.vpc["main/vpc"]"#]);
+    let want = dform(at, &["why", r#"net.vpc["main.vpc"]"#]);
     assert!(
         want.starts_with(
-            "net.vpc[\"main/vpc\"]\n  examples/demo/network.df:19  resource \
+            "net.vpc[\"main.vpc\"]\n  examples/demo/network.df:19  resource \
              net.vpc vpc { .. }   (instance network.vpc main)\n"
         ),
         "{want}"
     );
-    let tag = dform(at, &["why", r#"net.vpc["main/vpc"].tags.team"#]);
+    let tag = dform(at, &["why", r#"net.vpc["main.vpc"].tags.team"#]);
     assert!(
         tag.contains(r#"set r.tags = { team: "platform" } where r in resource"#),
         "{tag}"
     );
-    let cidr = dform(at, &["query", r#"net.vpc["main/vpc"].cidr"#]);
+    let cidr = dform(at, &["query", r#"net.vpc["main.vpc"].cidr"#]);
     assert!(cidr.contains("10.20.0.0/16"), "{cidr}");
-    let all = dform(at, &["query", r#"net.vpc["main/vpc"]"#]);
+    let all = dform(at, &["query", r#"net.vpc["main.vpc"]"#]);
     assert!(
         all.contains("\"tags\"") && all.contains("\"cidr\""),
         "{all}"
@@ -88,17 +106,19 @@ fn why_and_query_take_an_address_as_plan_prints_it() {
     let r = s
         .run(&["why", "net.vpc/main/vpc", "dform", "env=prod"])
         .failure();
-    assert!(r.stderr.contains("cannot parse"), "{}", r.stderr);
-    // The old scope separator is refused naming the new one (R-72).
-    for cmd in ["why", "query"] {
-        let r = s
-            .run(&[cmd, r#"net.vpc["main::vpc"].cidr"#, "dform", "env=prod"])
-            .failure();
+    assert!(r.stderr.contains("not `/` (R-112)"), "{}", r.stderr);
+    // The old scope separators are refused naming the path (R-112).
+    for (cmd, old) in [
+        ("why", r#"net.vpc["main::vpc"].cidr"#),
+        ("query", r#"net.vpc["main/vpc"].cidr"#),
+        ("why", "net.vpc main/vpc"),
+    ] {
+        let r = s.run(&[cmd, old, "dform", "env=prod"]).failure();
         assert!(
             r.stderr.contains(
-                "a scope in an address is separated by `/`, not `::` (R-72): \"main/vpc\""
+                "an address is a path, its scope separated by `.`, not `/` (R-112): \"main.vpc\""
             ),
-            "{cmd}: {}",
+            "{cmd} {old}: {}",
             r.stderr
         );
     }
@@ -111,7 +131,7 @@ fn why_and_query_take_an_address_as_plan_prints_it() {
 fn why_an_attribute_shows_every_contribution() {
     let out = dform(
         "examples/demo/stacks/dform.df env=prod",
-        &["why", r#"attr(net.vpc, "main/vpc", "tags", X)"#],
+        &["why", r#"attr(net.vpc, "main.vpc", "tags", X)"#],
     );
     assert!(out.contains("  merged from 2 contributions\n"), "{out}");
     assert!(
@@ -146,7 +166,7 @@ fn why_a_route_shows_the_statements_that_fired() {
     );
     let start = "net.route[\"blue-to-green\"]
   examples/tour/stacks/tour.df:283  resource net.route \"${a}-to-${b}\" { .. } where reaches(a, b), a != b, network_of(b, v), dest = net.vpc[v].cidr
-  with a = \"blue\", b = \"green\", v = \"green/vpc\", dest = 10.2.0.0/16
+  with a = \"blue\", b = \"green\", v = \"green.vpc\", dest = 10.2.0.0/16
        \"${a}-to-${b}\" = \"blue-to-green\"
        net.vpc[v].cidr = 10.2.0.0/16
   ├─ reaches(\"blue\", \"green\")
@@ -162,7 +182,7 @@ fn why_a_route_shows_the_statements_that_fired() {
         out.contains("├─ spoke(\"green\")   examples/tour/stacks/tour.df:248\n"),
         "{out}"
     );
-    assert!(out.contains("network[t].vpc = \"green/vpc\"\n"), "{out}");
+    assert!(out.contains("network[t].vpc = \"green.vpc\"\n"), "{out}");
     golden("why_tour_route", &out);
 }
 
@@ -386,7 +406,7 @@ fn why_prints_a_braced_clause_on_one_line() {
     );
     assert!(
         out.contains(
-            "│    with p = iam.policy[\"identity/app_policy\"]\n  │         p.name = \"app\"\n"
+            "│    with p = iam.policy[\"identity.app_policy\"]\n  │         p.name = \"app\"\n"
         ),
         "{out}"
     );

@@ -1,6 +1,6 @@
 //! H-16: one spelling of an address. `T["A"]` is the source term that names
 //! the resource `A` of type `T` (`A` the full address, a copy's scope
-//! included: `edge/left/vpc`, R-72), and `.path` after it names an
+//! included: `edge.left.vpc`, R-112), and `.path` after it names an
 //! attribute. `Display` for
 //! [`Address`] is the one printer, [`parse`] the one reader: every address
 //! the CLI prints or takes goes through them.
@@ -24,32 +24,60 @@ impl Address {
     }
 }
 
-/// The scope separator in an address (R-72): a copy's resource is
-/// `scope/name`, a nested copy's `outer/inner/name`. A local name may not
-/// contain it, so a name that does is already an address.
-pub const SCOPE: char = '/';
-
 /// The address of `name` in the scope `scope` (a copy's dotted path,
-/// `edge.left`): `edge/left/name`; with `name` empty, the scope's prefix.
+/// `edge.left`): `edge.left.name` (R-112: a resource's address is its
+/// path, as a `let`'s is); with `name` empty, the scope's prefix
+/// `edge.left.`. `name` is one stored segment ([`name_segment`]).
 pub fn scoped(scope: &str, name: &str) -> String {
-    let mut out: String = scope
-        .chars()
-        .map(|c| if c == '.' { SCOPE } else { c })
-        .collect();
-    out.push(SCOPE);
-    out.push_str(name);
-    out
+    format!("{scope}.{name}")
 }
 
-/// `name` written with the old scope separator, `main::vpc`, as it is
-/// written now (`main/vpc`); `None` when it has no `::`.
+/// A resource's local name as one segment of its address (R-112): itself,
+/// or quoted when it holds `.`, `[`, `]`, `/` or `"` (R-77's
+/// [`path_key`]), so `k8s-lab.vodik.xyz` is `"k8s-lab.vodik.xyz"` and
+/// the copy k3s's resource of that name is `k3s."k8s-lab.vodik.xyz"`. An
+/// empty name stays empty.
+pub fn name_segment(name: &str) -> std::borrow::Cow<'_, str> {
+    path_key(name)
+}
+
+/// The engine function [`name_segment`] is: a header name with holes is
+/// `__segment(format(..))`.
+pub const NAME_SEGMENT: &str = "__segment";
+
+/// `name` written with the old separators of a scope, `/` (R-72) or `::`,
+/// outside a quoted segment: as it is written now (`blue/vpc` is
+/// `blue.vpc`, R-112); `None` when it has neither.
 pub fn old_scope(name: &str) -> Option<String> {
-    name.contains("::").then(|| name.replace("::", "/"))
+    let mut out = String::new();
+    let (mut quoted, mut escaped, mut found) = (false, false, false);
+    let mut cs = name.chars().peekable();
+    while let Some(c) = cs.next() {
+        match c {
+            _ if escaped => escaped = false,
+            '\\' if quoted => escaped = true,
+            '"' => quoted = !quoted,
+            '/' if !quoted => {
+                found = true;
+                out.push('.');
+                continue;
+            }
+            ':' if !quoted && cs.peek() == Some(&':') => {
+                cs.next();
+                found = true;
+                out.push('.');
+                continue;
+            }
+            _ => {}
+        }
+        out.push(c);
+    }
+    found.then_some(out)
 }
 
-/// An address written with `::` for `/` (R-72): [`parse`]'s error for
-/// it, which a reader that takes other text too passes on rather than
-/// trying the text as something else.
+/// An address written with `/` (or `::`) for `.` (R-112): [`parse`]'s
+/// error for it, which a reader that takes other text too passes on
+/// rather than trying the text as something else.
 #[derive(Debug)]
 pub struct OldScope {
     src: String,
@@ -60,7 +88,7 @@ impl fmt::Display for OldScope {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "'{}': a scope in an address is separated by `/`, not `::` (R-72): \"{}\"",
+            "'{}': an address is a path, its scope separated by `.`, not `/` (R-112): \"{}\"",
             self.src, self.fixed
         )
     }
@@ -68,9 +96,16 @@ impl fmt::Display for OldScope {
 
 impl std::error::Error for OldScope {}
 
-/// Whether `name` is a scoped address, not a local name.
+/// Whether `name` is a scoped address, not a local name: it has more than
+/// one segment (a quoted one is one, `"a.b"`).
 pub fn is_scoped(name: &str) -> bool {
-    name.contains(SCOPE)
+    path_split_last(name).is_some()
+}
+
+/// A scoped address's scope and its local name's segment: `edge.left.vpc`
+/// is `edge.left` and `vpc`, `k3s."a.b"` is `k3s` and `"a.b"`.
+pub fn scope_split(name: &str) -> Option<(&str, &str)> {
+    path_split_last(name)
 }
 
 /// `s` as a source string literal, which reads back as `s`.
@@ -358,6 +393,42 @@ pub fn parse(src: &str) -> Result<(Address, Option<String>)> {
     Ok((Address { typ, name }, (!path.is_empty()).then_some(path)))
 }
 
+/// A resource's address written as a path, as the plan prints it after
+/// its type (R-112): `k3s.admin`, `k3s."k8s-lab.vodik.xyz"`, `vpc`. Each
+/// segment is a name or a quoted string; the stored form, quoted where
+/// [`name_segment`] quotes. `/` or `::` for `.` is [`OldScope`]'s error;
+/// any other text is `None`.
+pub fn parse_path(src: &str) -> Result<Option<String>> {
+    let src = src.trim();
+    if let Some(fixed) = old_scope(src) {
+        return Err(OldScope {
+            src: src.to_string(),
+            fixed,
+        }
+        .into());
+    }
+    let mut out = Vec::new();
+    for seg in path_segments(src) {
+        let key = match seg.starts_with('"') {
+            true => match segment_parts(seg) {
+                (k, "") if quote_end(seg) == seg.len() && !k.is_empty() => k.into_owned(),
+                _ => return Ok(None),
+            },
+            false
+                if seg.is_empty()
+                    || seg.chars().any(|c| {
+                        c.is_whitespace() || matches!(c, '[' | ']' | '"' | '(' | ')' | ',')
+                    }) =>
+            {
+                return Ok(None);
+            }
+            false => seg.to_string(),
+        };
+        out.push(name_segment(&key).into_owned());
+    }
+    Ok(Some(out.join(".")))
+}
+
 /// An address with no attribute path.
 pub fn parse_resource(src: &str) -> Result<Address> {
     match parse(src)? {
@@ -414,8 +485,8 @@ mod tests {
     #[test]
     fn prints_as_source() {
         assert_eq!(
-            a("net.vpc", "network/main/vpc").to_string(),
-            r#"net.vpc["network/main/vpc"]"#
+            a("net.vpc", "network.main.vpc").to_string(),
+            r#"net.vpc["network.main.vpc"]"#
         );
         assert_eq!(a("t", "a\"{b}").to_string(), r#"t["a\"{{b}}"]"#);
         assert_eq!(
@@ -429,8 +500,8 @@ mod tests {
         );
         // A resource's identity is the resource (R-43).
         assert_eq!(
-            label("net.vpc/network/main/vpc#id"),
-            r#"net.vpc["network/main/vpc"]"#
+            label("net.vpc/network.main.vpc#id"),
+            r#"net.vpc["network.main.vpc"]"#
         );
         assert_eq!(
             label("db.postgres/main#endpoint"),
@@ -441,8 +512,9 @@ mod tests {
     #[test]
     fn reads_what_it_prints() {
         for (addr, path) in [
-            (a("net.vpc", "network/main/vpc"), None),
-            (a("t", "a\"{b}/c"), None),
+            (a("net.vpc", "network.main.vpc"), None),
+            (a("t", r#"k3s."a.b""#), None),
+            (a("t", "a\"{b}"), None),
             (a("k8s.cluster", "x"), Some("tags.team")),
             (a("t", "x"), Some("subnet_ids[0]")),
             (a("t", "x"), Some("labels.app-name")),
@@ -460,15 +532,44 @@ mod tests {
         }
     }
 
-    /// A copy's address is `scope/name`, a nested copy's every scope in
-    /// front (R-72); `::` is the old separator, refused naming `/`.
+    /// A copy's address is its path, `scope.name`, a nested copy's every
+    /// scope in front (R-112); a local name holding a dot is one quoted
+    /// segment; `/` and `::` are the old separators, refused naming `.`.
     #[test]
-    fn a_scope_is_separated_by_a_slash() {
-        assert_eq!(scoped("edge.left", "vpc"), "edge/left/vpc");
-        assert_eq!(scoped("blue", ""), "blue/");
-        assert!(is_scoped("blue/vpc") && !is_scoped("vpc"));
-        let e = parse(r#"aws.vpc["blue::vpc"]"#).unwrap_err().to_string();
-        assert!(e.contains("not `::`") && e.contains(r#""blue/vpc""#), "{e}");
+    fn an_address_is_a_path() {
+        assert_eq!(scoped("edge.left", "vpc"), "edge.left.vpc");
+        assert_eq!(scoped("blue", ""), "blue.");
+        assert_eq!(name_segment("vpc"), "vpc");
+        assert_eq!(name_segment("k8s-lab.vodik.xyz"), r#""k8s-lab.vodik.xyz""#);
+        assert_eq!(
+            scoped("k3s", &name_segment("k8s-lab.vodik.xyz")),
+            r#"k3s."k8s-lab.vodik.xyz""#
+        );
+        assert!(is_scoped("blue.vpc") && !is_scoped("vpc"));
+        assert!(!is_scoped(r#""a.b""#) && is_scoped(r#"k3s."a.b""#));
+        assert_eq!(
+            scope_split(r#"edge.left."a.b""#),
+            Some(("edge.left", r#""a.b""#))
+        );
+        for old in [r#"aws.vpc["blue/vpc"]"#, r#"aws.vpc["blue::vpc"]"#] {
+            let e = parse(old).unwrap_err().to_string();
+            assert!(e.contains("not `/`") && e.contains(r#""blue.vpc""#), "{e}");
+        }
+        assert_eq!(old_scope(r#"k3s/"a/b""#).as_deref(), Some(r#"k3s."a/b""#));
+        assert_eq!(old_scope(r#""a/b""#), None);
+        assert_eq!(
+            parse_path("k3s.admin").unwrap().as_deref(),
+            Some("k3s.admin")
+        );
+        assert_eq!(
+            parse_path(r#"k3s."k8s-lab.vodik.xyz""#).unwrap().as_deref(),
+            Some(r#"k3s."k8s-lab.vodik.xyz""#)
+        );
+        assert_eq!(parse_path(r#""plain""#).unwrap().as_deref(), Some("plain"));
+        assert!(parse_path("k3s/admin").is_err());
+        for not in ["want(t, a)", "a..b", "a[0]", "a b"] {
+            assert_eq!(parse_path(not).unwrap(), None, "{not}");
+        }
     }
 
     #[test]

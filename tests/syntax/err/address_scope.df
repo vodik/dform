@@ -1,6 +1,8 @@
-# `/` is the scope separator of an address (R-72): a resource's own name
-# may not contain it, in a literal or in an interpolation's text, and an
-# address written with the old separator, `::`, is an error naming `/`.
+# An address is a path (R-112): the copy blue's resource vpc is
+# `blue.vpc`. A resource's own name may hold `.` or `/`, which make it one
+# quoted segment (`"a/b"`, `"x.b"`), so neither header below is an error;
+# an address written with the old separators, `/` or `::`, is, naming the
+# dot form.
 input n: string = "x"
 
 provider fake
@@ -8,8 +10,10 @@ provider fake
 resource net.vpc "a/b" {
   cidr = "10.0.0.0/16"
 }
-resource net.vpc "${n}/b" {
+resource net.vpc "${n}.b" {
   cidr = "10.1.0.0/16"
 }
-p(c) where c = net.vpc["main::vpc"].cidr
+p(c) where c = net.vpc["main/vpc"].cidr
 deny "no peer" where "peer::vpc" in net.vpc
+moved(net.vpc, "old/vpc", net.vpc["main.vpc"])
+q(c) where c = net.vpc["\"a/b\""].cidr

@@ -10,7 +10,7 @@ use crate::refs::Project;
 use crate::text;
 use anyhow::{Result, anyhow, bail};
 use dform_core::ast::Term;
-use dform_core::ir::SCOPE;
+use dform_core::ir::{scope_split, scoped};
 use dform_core::names::{self, Parsed, Symbol, What};
 use dform_core::syntax::{SyntaxKind, SyntaxToken};
 use dform_core::value::Value;
@@ -263,16 +263,15 @@ impl Renaming {
             Symbol::Resource(None, _, _) => {
                 (Some(typ) == self.typ.as_deref() && a == old).then(|| new.clone())
             }
-            // An address of a copy is `instance/name` (R-65, R-72): the
-            // copy does not say its component.
+            // An address of a copy is its path, `instance.name` (R-65,
+            // R-112): the copy does not say its component.
             Symbol::Resource(Some(_), _, _) => {
-                let (inst, local) = a.rsplit_once(SCOPE)?;
-                (Some(typ) == self.typ.as_deref() && local == old)
-                    .then(|| format!("{inst}{SCOPE}{new}"))
+                let (inst, local) = scope_split(a)?;
+                (Some(typ) == self.typ.as_deref() && local == old).then(|| scoped(inst, new))
             }
             Symbol::Instance(_, _) => {
-                let rest = a.strip_prefix(&format!("{old}{SCOPE}"))?;
-                Some(format!("{new}{SCOPE}{rest}"))
+                let rest = a.strip_prefix(&scoped(old, ""))?;
+                Some(scoped(new, rest))
             }
             _ => None,
         }

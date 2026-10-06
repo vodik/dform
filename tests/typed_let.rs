@@ -149,7 +149,7 @@ fn a_ref_attribute_picks_the_resource_of_its_type() {
         "+ net.subnet[\"a\"]\n  cidr = \"10.0.2.0/24\"\n  vpc = ?net.vpc[\"main\"]\n",
         "+ net.subnet[\"b\"]\n  cidr = \"10.0.3.0/24\"\n  vpc = ?net.vpc[\"main\"]\n",
         // The copy's own, under it (R-67).
-        "  + net.subnet[\"x/main\"]\n    cidr = \"10.1.1.0/24\"\n    vpc = ?net.vpc[\"x/main\"]\n",
+        "  + net.subnet[\"x.main\"]\n    cidr = \"10.1.1.0/24\"\n    vpc = ?net.vpc[\"x.main\"]\n",
     ] {
         assert!(r.stdout.contains(want), "{want}\n{}", r.stdout);
     }

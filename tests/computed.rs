@@ -10,7 +10,7 @@ fn a_fresh_stack_carries_nulls_until_apply() {
     let prog = prog.to_str().unwrap();
     let r = s.run(&["dev", "--world", "w.json", "plan", prog]).success();
     assert!(
-        r.stdout.contains("vpc = ?net.vpc[\"main/vpc\"]"),
+        r.stdout.contains("vpc = ?net.vpc[\"main.vpc\"]"),
         "{}",
         r.stdout
     );

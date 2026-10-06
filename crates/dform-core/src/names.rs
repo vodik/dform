@@ -526,15 +526,16 @@ impl Decls {
         self.stacks.contains(m).then(|| self.files.get(m)).flatten()
     }
 
-    /// The addresses a resource has, as strings name it (H-16, R-72): its
-    /// name in the program's scope or a stack's; `n/name` in each copy `n`
-    /// of its component or under each name its module file is used by.
+    /// The addresses a resource has, as strings name it (H-16, R-112): its
+    /// name in the program's scope or a stack's; its path `n.name` in each
+    /// copy `n` of its component or under each name its module file is
+    /// used by.
     pub fn addresses_of(&self, sym: &Symbol) -> Vec<(String, String)> {
         let Symbol::Resource(scope, typ, name) = sym else {
             return Vec::new();
         };
-        let sep = crate::ir::SCOPE;
-        let under = |n: &str| (typ.clone(), format!("{n}{sep}{name}"));
+        let name = crate::ir::name_segment(name).into_owned();
+        let under = |n: &str| (typ.clone(), crate::ir::scoped(n, &name));
         match scope.as_deref() {
             None => vec![(typ.clone(), name.clone())],
             Some(s) => match (s.strip_prefix("component "), s.strip_prefix("module ")) {
@@ -1673,7 +1674,7 @@ component network {
 }
 instance network main { vpc_net = inet(cfg.a) }
 resource compute.vm bastion { private_ip = 1 }
-p(a) where a = net.vpc["main/vpc"].cidr, c = main.vpc, b = network[a].vpc, bastion.cidr == 1, bastion in compute.vm
+p(a) where a = net.vpc["main.vpc"].cidr, c = main.vpc, b = network[a].vpc, bastion.cidr == 1, bastion in compute.vm
 zone_index("a", 0)
 "#;
 
@@ -1698,7 +1699,7 @@ zone_index("a", 0)
 
     #[test]
     fn a_resource_is_found_by_its_name() {
-        // Its address from outside, `net.vpc["main/vpc"]`, is a string.
+        // Its address from outside, `net.vpc["main.vpc"]`, is a string.
         assert_eq!(
             names(
                 SRC,

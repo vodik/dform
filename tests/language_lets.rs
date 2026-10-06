@@ -88,12 +88,12 @@ provider fake
     )
     .success();
     assert!(
-        r.stdout.contains("  + net.vpc[\"a/vpc\"]\n    size = 1\n"),
+        r.stdout.contains("  + net.vpc[\"a.vpc\"]\n    size = 1\n"),
         "{}",
         r.stdout
     );
     assert!(
-        r.stdout.contains("  + net.vpc[\"b/vpc\"]\n    size = 2\n"),
+        r.stdout.contains("  + net.vpc[\"b.vpc\"]\n    size = 2\n"),
         "{}",
         r.stdout
     );

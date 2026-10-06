@@ -14,10 +14,10 @@ use anyhow::{Result, bail};
 use std::collections::{BTreeMap, BTreeSet};
 
 pub use address::{
-    OldScope, SCOPE, is_scoped, label, old_scope, parse as parse_address,
-    parse_resource as parse_resource_address, path_join, path_key, path_keys, path_segments,
-    path_split_first, path_split_last, path_suffix, scoped, segment_key, segment_parts,
-    string_literal,
+    NAME_SEGMENT, OldScope, is_scoped, label, name_segment, old_scope, parse as parse_address,
+    parse_path, parse_resource as parse_resource_address, path_join, path_key, path_keys,
+    path_segments, path_split_first, path_split_last, path_suffix, scope_split, scoped,
+    segment_key, segment_parts, string_literal,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]

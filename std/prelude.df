@@ -69,7 +69,7 @@ fn len(value: list) -> int?
 #| example: let vpc_cidr = ref(net.vpc, "vpc", "cidr")
 fn ref(type: string, name: string, path: string) -> ref forwards
 
-#| A name inside a module instance, `scope/name`, as module lowering writes it.
+#| A name inside a module instance, its path `scope.name` (R-112), as module lowering writes it.
 #| example: let n = scoped("network.main", "vpc")
 fn scoped(scope: string, name: string) -> string forwards
 
@@ -127,6 +127,10 @@ internal fn __quantity(text: string, file: int, start: int, end: int) -> any?
 #| The value nested at what `path` has past `prefix.`: `{a: {b: V}}` for `prefix.a.b`; no value for a path not under it. A key of a map input given by `--set` or `set from` lowers to it.
 #| example: __under(K, "labels", V)
 internal fn __under(path: string, prefix: string, value: any) -> any? forwards
+
+#| A resource's name as one segment of its address: quoted when it holds a dot, `"a.b"` (R-112). A header name with holes lowers to it.
+#| example: __segment(format("s-%s", Zone))
+internal fn __segment(name: string) -> string forwards
 
 #| The value at a dotted path inside a value; `x.f` on a variable with no static type lowers to it.
 #| example: __path(X, "f")

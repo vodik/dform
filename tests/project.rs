@@ -239,7 +239,7 @@ fn a_program_uses_a_stack_and_never_instances_it() {
     s.write("stacks/both.df", "\nuse modules.tags\nprovider fake\n");
     let r = s.run(&["plan", "both"]).success();
     assert!(
-        r.stdout.contains("+ net.vpc[\"tags/extra\"]"),
+        r.stdout.contains("+ net.vpc[\"tags.extra\"]"),
         "{}",
         r.stdout
     );

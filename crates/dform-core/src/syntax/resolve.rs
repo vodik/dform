@@ -1274,7 +1274,7 @@ impl<'u> Lowerer<'u> {
             .into_iter()
             .find(|s| self.decls.scopes[*s].resources.contains_key(name))
             .unwrap_or(scope);
-        self.scope_term(scope, declared, str_term(name))
+        self.scope_term(scope, declared, str_term(&crate::ir::name_segment(name)))
     }
 
     /// The instance `name` in scope: the scope that declares it and its
@@ -3576,34 +3576,18 @@ impl<'u> Lowerer<'u> {
         let fields = self.wanting(Want::Schema, |l| l.fields(&mut rc, &block, &mut reads))?;
         let reads_at = body.len()..body.len() + reads.len();
         body.extend(reads);
-        // A local name has no `/`: that is the scope separator of an
-        // address (R-72), `blue/vpc` the copy blue's resource vpc.
-        if header.kind() == STRING
-            && pieces(header.text()).is_some_and(|ps| {
-                ps.iter()
-                    .any(|p| matches!(p, Piece::Text(t) if t.contains(crate::ir::SCOPE)))
-            })
-        {
-            return self.error(
-                self.span_of(header.text_range()),
-                format!(
-                    "{}: a resource's name may not contain `/`, the scope separator of an \
-                     address (`blue/vpc` is the copy blue's resource vpc)",
-                    header.text()
-                ),
-            );
-        }
         // The header: a string with holes is bound last, by `format`; a
-        // bare name is the literal name, always (R-76).
+        // bare name is the literal name, always (R-76). The name is one
+        // segment of the address, quoted when it holds a dot (R-112).
         let name = if header.kind() == STRING && has_hole(header.text()) {
             let mut pre = Vec::new();
             let t = self.string_term(&mut rc, &header, &mut pre)?;
             body.extend(pre);
             let v = fresh(&mut rc, "Addr");
-            body.push(Lit::Eq(var(&v), t));
+            body.push(Lit::Eq(var(&v), func(crate::ir::NAME_SEGMENT, vec![t])));
             var(&v)
         } else if header.kind() == STRING {
-            str_term(&self.string(&header)?)
+            str_term(&crate::ir::name_segment(&self.string(&header)?))
         } else {
             let text = header.text();
             let bound = bound_vars(&body);
@@ -5184,6 +5168,11 @@ impl<'u> Lowerer<'u> {
                         self.term(rc, t, pos, pre)?
                     });
                 }
+                // `moved(T, "old-address", r)`: the old address is a path
+                // too (R-112).
+                if pred == "moved" {
+                    self.address_key(&args[1], span)?;
+                }
                 args
             }
             // In a body an argument is a pattern (R-58): `pair((a, b))`;
@@ -6513,7 +6502,7 @@ impl<'u> Lowerer<'u> {
                     let path = self.segs(rc, &ops[1..], pre)?;
                     return Ok(Some(Res::Ref {
                         typ: str_term(&types[0]),
-                        addr: func("scoped", vec![scope, str_term(x)]),
+                        addr: func("scoped", vec![scope, str_term(&crate::ir::name_segment(x))]),
                         path,
                     }));
                 }
@@ -6926,18 +6915,18 @@ impl<'u> Lowerer<'u> {
             .map(Some)
     }
 
-    /// An address written as a constant, `T["blue::vpc"]` or `"blue::vpc"
-    /// in T`, spells its scope with `/` (R-72): `::` is an error that says
-    /// so.
+    /// An address written as a constant, `T["blue/vpc"]` or `"blue/vpc"
+    /// in T`, is a path (R-112): `/` (and R-72's `::` before it) is an
+    /// error naming the dot form, `"blue.vpc"`.
     fn address_key(&mut self, addr: &Term, span: Span) -> L<()> {
         if let Term::Val(Value::Str(a)) = addr
             && let Some(fixed) = crate::ir::old_scope(a)
         {
             let d = Diagnostic::error(
                 span,
-                format!("\"{a}\": a scope in an address is separated by `/`, not `::`"),
+                format!("\"{a}\": an address is a path, its scope separated by `.`, not `/`"),
             )
-            .with_help(format!("write \"{fixed}\" (R-72)"));
+            .with_help(format!("write \"{fixed}\" (R-112)"));
             self.diags.push(d);
             return Err(Skip);
         }
@@ -7708,7 +7697,7 @@ mod tests {
             "resource \"net.subnet\" Addr { vpc = ref(\"net.vpc\", \"vpc\", \"\"), \
              cidr = inet.subnet(Cidr, 4, ZoneIndex), zone = Z, visibility = \"private\" } :- \
              data(\"zone\", Z), attr(\"net.vpc\", \"vpc\", \"cidr\", Cidr), \
-             zone_index(Z, ZoneIndex), Addr = format(\"private-%s\", Z)"
+             zone_index(Z, ZoneIndex), Addr = __segment(format(\"private-%s\", Z))"
         );
     }
 
@@ -7729,7 +7718,7 @@ mod tests {
         assert_eq!(
             got[got.len() - 1],
             "resource \"net.subnet\" Addr { zone = Zone, meta.zone = Zone, tags = Tags } \
-             :- data(\"zone\", Zone), tags(Tags), Addr = format(\"s-%s\", Zone)"
+             :- data(\"zone\", Zone), tags(Tags), Addr = __segment(format(\"s-%s\", Zone))"
         );
         let ranked = parse("let tags = {}\nresource net.vpc v {\n  tags @default\n}\n")
             .unwrap()
@@ -7863,7 +7852,7 @@ mod tests {
              instance m a { n = 1 }\n\
              inst(\"a\")\n\
              p(v, s) where inst(i), v = m[i].vpc, s = a.vpc.size\n\
-             q(x) where x = a.ids, \"a/vpc\" in net.vpc\n",
+             q(x) where x = a.ids, \"a.vpc\" in net.vpc\n",
         );
         assert_eq!(
             got[0],
@@ -7875,7 +7864,7 @@ mod tests {
             &got[3..],
             [
                 "p(V, S) :- inst(I), instance_of(\"m\", \"\", I), output(I, \"vpc\", V), output(\"a\", \"vpc\", Vpc), attr(\"net.vpc\", Vpc, \"size\", S)",
-                "q(X) :- output(\"a\", \"ids\", X), want(\"net.vpc\", \"a/vpc\")",
+                "q(X) :- output(\"a\", \"ids\", X), want(\"net.vpc\", \"a.vpc\")",
             ]
         );
     }

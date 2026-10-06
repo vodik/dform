@@ -33,7 +33,7 @@ fn why_prints_a_copys_relations_in_its_frame() {
     let r = s
         .run(&[
             "why",
-            "net.vpc[\"green/vpc\"].cidr",
+            "net.vpc[\"green.vpc\"].cidr",
             "main.df",
             "--set",
             "env=prod",
@@ -56,25 +56,24 @@ fn why_prints_a_copys_relations_in_its_frame() {
     );
 }
 
-/// A name whose `/` comes from a value at run time is refused where the
-/// plan assembles addresses (R-73 item 5): `/` separates a copy's scope.
+/// A name whose dot comes from a value at run time is one quoted segment
+/// of its address, never a scope (R-112), and so is a `/`: the address is
+/// the path, and a name is never refused for what it holds.
 #[test]
-fn a_name_with_a_slash_from_a_value_is_an_error() {
+fn a_name_with_a_dot_from_a_value_is_one_quoted_segment() {
     let s = project(
-        "instances-slash",
-        "part(\"a/b\")\nresource net.vpc \"${p}\" { cidr = \"10.9.0.0/16\" } where part(p)\n",
+        "instances-dot",
+        "part(\"a.b\")\npart(\"c/d\")\n\
+         resource net.vpc \"${p}\" { cidr = \"10.9.0.0/16\" } where part(p)\n",
     );
-    let r = s.run(&["plan", "main.df"]).failure();
-    assert!(
-        r.stderr.contains(
-            "net.vpc[\"a/b\"]: its name holds `/` from a value the program computed (\"a/b\")"
-        ),
-        "{}",
-        r.stderr
-    );
-    // A copy's own resources are scoped, and pass.
-    let s = project("instances-slash-ok", "");
-    s.run(&["plan", "main.df"]).success();
+    let r = s.run(&["plan", "main.df"]).success();
+    for name in [r#"\"a.b\""#, r#"\"c/d\""#] {
+        assert!(
+            r.stdout.contains(&format!("+ net.vpc[\"{name}\"]")),
+            "{name}: {}",
+            r.stdout
+        );
+    }
 }
 
 /// `x in vpc` binds every copy of the component (R-67), and `x.id` reads
@@ -86,9 +85,9 @@ fn x_in_a_component_binds_every_copy() {
         .run(&["query", "ids(i, c)", "main.df", "--set", "env=prod"])
         .success();
     assert!(
-        r.stdout.contains("\"blue\"   net.vpc[\"blue/vpc\"].cidr\n")
+        r.stdout.contains("\"blue\"   net.vpc[\"blue.vpc\"].cidr\n")
             && r.stdout
-                .contains("\"green\"  net.vpc[\"green/vpc\"].cidr\n"),
+                .contains("\"green\"  net.vpc[\"green.vpc\"].cidr\n"),
         "{}",
         r.stdout
     );
@@ -108,12 +107,12 @@ fn the_plan_groups_a_copys_resources_under_it() {
     );
     assert!(
         r.stdout.contains(
-            "  + vpc[\"blue\"]\n    + net.vpc[\"blue/vpc\"]               main.df:7\n        \
+            "  + vpc[\"blue\"]\n    + net.vpc[\"blue.vpc\"]               main.df:7\n        \
              cidr = \"10.1.0.0/16\"            input blue.vpc_net = \"10.1.0.0/16\"   main.df:10\n    \
-             + net.subnet[\"blue/a\"]  "
+             + net.subnet[\"blue.a\"]  "
         ) && r
             .stdout
-            .contains("  + vpc[\"green\"]\n    + net.vpc[\"green/vpc\"]  "),
+            .contains("  + vpc[\"green\"]\n    + net.vpc[\"green.vpc\"]  "),
         "{}",
         r.stdout
     );
@@ -123,7 +122,7 @@ fn the_plan_groups_a_copys_resources_under_it() {
     let r = s.run(&["plan", "main.df"]).success();
     assert!(
         r.stdout
-            .contains("  - vpc[\"green\"]\n    - net.subnet[\"green/a\"]"),
+            .contains("  - vpc[\"green\"]\n    - net.subnet[\"green.a\"]"),
         "{}",
         r.stdout
     );
@@ -154,7 +153,7 @@ fn a_lifecycle_over_a_copy_covers_its_resources() {
     assert!(
         r.stdout.contains(
             "\ndenied\n  lifecycle prevent_destroy on vpc[\"blue\"]: the plan would delete \
-             net.subnet[\"blue/a\"]\n"
+             net.subnet[\"blue.a\"]\n"
         ),
         "{}",
         r.stdout
@@ -192,7 +191,7 @@ fn a_policy_reads_a_copys_deformation_row() {
     let r = s.run(&["plan", "main.df"]).failure();
     assert!(
         r.stdout.contains(
-            "\n  a new copy blue at net.vpc[\"blue/vpc\"].cidr  vpc[\"blue\"]    main.df:12\n"
+            "\n  a new copy blue at net.vpc[\"blue.vpc\"].cidr  vpc[\"blue\"]    main.df:12\n"
         ),
         "{}",
         r.stdout

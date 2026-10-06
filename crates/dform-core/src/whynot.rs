@@ -414,7 +414,7 @@ impl WhyNot<'_> {
         if let Some(scope) = a.pred.strip_suffix("::__instance")
             && let [Term::Val(Value::Str(c))] = a.args.as_slice()
         {
-            return format!("instance {c} {}", scope.replace("::", "/"));
+            return format!("instance {c} {}", scope.replace("::", "."));
         }
         if let (
             "attr",
@@ -627,6 +627,15 @@ fn unify(t: &Term, v: &Value, body: &[Lit]) -> Vec<Env> {
                 Some(rest) => unify(inner, &Value::Str(rest.to_string()), body),
                 None => vec![],
             }
+        }
+        // A header name's segment (R-112) is its name, quoted or not.
+        Term::Func { name, args } if name == crate::ir::NAME_SEGMENT && args.len() == 1 => {
+            let Value::Str(s) = v else { return vec![] };
+            unify(
+                &args[0],
+                &Value::Str(crate::ir::segment_key(s).into_owned()),
+                body,
+            )
         }
         Term::Func { name, args } if name == "format" => {
             let (Some(Term::Val(Value::Str(f))), Value::Str(s)) = (args.first(), v) else {

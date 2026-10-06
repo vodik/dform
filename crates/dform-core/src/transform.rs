@@ -19,9 +19,6 @@ pub struct Lowered {
     /// Outputs declared `secret(T)`: (scope, key), scope `""` for the
     /// stack's own.
     pub secret_outputs: Vec<(String, String)>,
-    /// Every copy's and activation's scope as an address writes it
-    /// (`modules::Expanded::scopes`).
-    pub scopes: BTreeSet<String>,
     /// Every relation's columns, declared or inferred (R-34).
     pub signatures: crate::infer::Signatures,
     /// The source program's `decl`s, for the pass with a schema.
@@ -64,7 +61,6 @@ pub fn lower(program: &Program) -> Result<Lowered> {
         program: expanded,
         mut inputs,
         secret_outputs,
-        scopes,
     } = crate::modules::expand(&program)?;
     check_mixed(&expanded)?;
     let (expanded, externs, extern_fns) = drop_metadata(&expanded);
@@ -105,7 +101,6 @@ pub fn lower(program: &Program) -> Result<Lowered> {
         inputs,
         extern_fns,
         secret_outputs,
-        scopes,
         signatures: inferred.signatures,
         declared,
     })
@@ -1607,9 +1602,9 @@ pub fn computed_reads(statements: &[Stmt], schema: &Schema) -> Vec<(Span, String
                 .into_iter()
                 .find(|q| schema.class_of(t, q).is_some())?;
             let at = match addr {
-                Term::Val(Value::Str(a)) => {
-                    a.rsplit(crate::ir::SCOPE).next().unwrap_or(a).to_string()
-                }
+                Term::Val(Value::Str(a)) => crate::ir::scope_split(a)
+                    .map_or(a.as_str(), |(_, n)| n)
+                    .to_string(),
                 other => format!("{t}[{}]", crate::partition::fmt_term(other)),
             };
             Some((a.span, at, path))

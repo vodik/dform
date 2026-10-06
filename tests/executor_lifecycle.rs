@@ -92,16 +92,16 @@ provider fake
     s.write(
         "p.df",
         &format!(
-            "{}moved(net.vpc, \"main/vpc\", net.vpc[\"core/vpc\"])\n\
-             moved(net.subnet, \"main/a\", net.subnet[\"core/a\"])\n",
+            "{}moved(net.vpc, \"main.vpc\", net.vpc[\"core.vpc\"])\n\
+             moved(net.subnet, \"main.a\", net.subnet[\"core.a\"])\n",
             prog("core")
         ),
     );
     let r = mock(&s, &["plan"]).success();
     assert_eq!(
         r.stdout,
-        "moved net.subnet[\"main/a\"] -> net.subnet[\"core/a\"]\n\
-         moved net.vpc[\"main/vpc\"] -> net.vpc[\"core/vpc\"]\n\
+        "moved net.subnet[\"main.a\"] -> net.subnet[\"core.a\"]\n\
+         moved net.vpc[\"main.vpc\"] -> net.vpc[\"core.vpc\"]\n\
          stack p is up to date\n"
     );
     // plan does not write state; apply does.
@@ -114,9 +114,9 @@ provider fake
             .unwrap()
             .keys()
             .collect::<Vec<_>>(),
-        ["net.subnet::core/a", "net.vpc::core/vpc"]
+        ["net.subnet::core.a", "net.vpc::core.vpc"]
     );
-    assert_eq!(st["resources"]["net.vpc::core/vpc"]["remote"], "main/vpc");
+    assert_eq!(st["resources"]["net.vpc::core.vpc"]["remote"], "main.vpc");
     assert_eq!(s.json("w.json")["resources"], before["resources"]);
     let r = mock(&s, &["plan"]).success();
     assert_eq!(r.stdout, "stack p is up to date\n");

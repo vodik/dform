@@ -42,7 +42,7 @@ fn a_guarded_pair_is_the_copy_that_holds() {
     let r = plan(&s, &[]).success();
     for want in [
         "+ net.subnet[\"s\"]\n  name = \"aws:a\"\n",
-        "+ pg_aws[\"store\"]\n  + net.vpc[\"store/v\"]\n    size = 1\n",
+        "+ pg_aws[\"store\"]\n  + net.vpc[\"store.v\"]\n    size = 1\n",
     ] {
         assert!(r.stdout.contains(want), "{want}\n---\n{}", r.stdout);
     }
@@ -50,7 +50,7 @@ fn a_guarded_pair_is_the_copy_that_holds() {
     let r = plan(&s, &["--set", "cloud=gcp"]).success();
     for want in [
         "+ net.subnet[\"s\"]\n  name = \"gcp:b\"\n",
-        "+ pg_gcp[\"store\"]\n  + net.vpc[\"store/v\"]\n    size = 2\n",
+        "+ pg_gcp[\"store\"]\n  + net.vpc[\"store.v\"]\n    size = 2\n",
     ] {
         assert!(r.stdout.contains(want), "{want}\n---\n{}", r.stdout);
     }
@@ -167,7 +167,7 @@ resource net.vpc v { name = store.engine }
     let r = s.run(&["plan", "--why=none", "app"]).success();
     assert!(r.stdout.contains("name = \"aurora\""), "{}", r.stdout);
     assert!(
-        r.stdout.contains("+ db.postgres[\"store/main\"]"),
+        r.stdout.contains("+ db.postgres[\"store.main\"]"),
         "{}",
         r.stdout
     );

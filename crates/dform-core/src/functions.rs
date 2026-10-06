@@ -706,6 +706,12 @@ pub const BODIES: &[(&str, Body)] = &[
         ))),
         _ => None,
     }),
+    // A resource's name interpolated at run time as one segment of its
+    // address (R-112): quoted when it holds a dot (`"a.b"`).
+    (crate::ir::NAME_SEGMENT, |a| match a {
+        [Value::Str(name)] => Some(Value::Str(crate::ir::name_segment(name).into_owned())),
+        _ => None,
+    }),
     // E DR-19: `declassify(V, Reason)` is `V`; the static pass reads it
     // as public, and `declassified/2` records it (`transform`).
     ("declassify", |a| match a {

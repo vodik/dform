@@ -149,8 +149,8 @@ provider fake
     );
     let r = plan(&s, &[]).success();
     for want in [
-        "+ net.vpc[\"a/w\"]\n    name = \"aws\"\n",
-        "+ net.vpc[\"g/v\"]\n    name = \"p1\"\n",
+        "+ net.vpc[\"a.w\"]\n    name = \"aws\"\n",
+        "+ net.vpc[\"g.v\"]\n    name = \"p1\"\n",
     ] {
         assert!(r.stdout.contains(want), "{want}\n---\n{}", r.stdout);
     }

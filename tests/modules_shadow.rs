@@ -23,7 +23,7 @@ resource net.subnet web { cidr = traefik.cidr }
     let r = s.run(&["plan", "--why=none", "app"]).success();
     assert!(
         r.stdout
-            .contains("+ net.subnet[\"traefik/web\"]\n  cidr = \"10.0.0.0/16\"\n"),
+            .contains("+ net.subnet[\"traefik.web\"]\n  cidr = \"10.0.0.0/16\"\n"),
         "{}",
         r.stdout
     );
@@ -63,7 +63,7 @@ provider fake
         .success();
     assert!(
         r.stdout
-            .contains("+ net.vpc[\"a/v\"]\n    cidr = \"10.2.0.0/16\"\n"),
+            .contains("+ net.vpc[\"a.v\"]\n    cidr = \"10.2.0.0/16\"\n"),
         "{}",
         r.stdout
     );
@@ -99,8 +99,8 @@ provider fake
         .run(&["dev", "--world", "w.json", "plan", "--why=none", "p.df"])
         .success();
     for want in [
-        "+ net.subnet[\"a/s\"]\n    cidr = \"10.0.0.0/16\"\n",
-        "+ net.subnet[\"e/inner/s\"]\n      cidr = \"10.1.0.0/16\"\n",
+        "+ net.subnet[\"a.s\"]\n    cidr = \"10.0.0.0/16\"\n",
+        "+ net.subnet[\"e.inner.s\"]\n      cidr = \"10.1.0.0/16\"\n",
         "+ net.subnet[\"s\"]\n  cidr = \"10.1.0.0/16\"\n",
     ] {
         assert!(r.stdout.contains(want), "{want}\n---\n{}", r.stdout);

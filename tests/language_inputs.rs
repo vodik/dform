@@ -527,13 +527,13 @@ fn a_field_with_no_default_is_required() {
     let r = object_plan(&s, &[]).success();
     assert!(
         r.stdout
-            .contains("  + net.vpc[\"a/v\"]\n    size = 2\n    zone = \"a\"\n"),
+            .contains("  + net.vpc[\"a.v\"]\n    size = 2\n    zone = \"a\"\n"),
         "{}",
         r.stdout
     );
     assert!(
         r.stdout
-            .contains("  + net.vpc[\"b/v\"]\n    size = 5\n    zone = \"b\"\n"),
+            .contains("  + net.vpc[\"b.v\"]\n    size = 5\n    zone = \"b\"\n"),
         "{}",
         r.stdout
     );

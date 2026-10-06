@@ -98,7 +98,7 @@ fn a_guarded_instance_names_the_guard_that_did_not_hold() {
             &common::on(
                 file.to_str().unwrap(),
                 &["--world", "w.json"],
-                &["why-not", r#"net.vpc["peer/vpc"]"#],
+                &["why-not", r#"net.vpc["peer.vpc"]"#],
             )
             .into_iter()
             .chain(["env=dev".to_string()])
@@ -108,7 +108,7 @@ fn a_guarded_instance_names_the_guard_that_did_not_hold() {
     let out = r.stdout.replace(&format!("{}/", repo().display()), "");
     assert_eq!(
         out,
-        "net.vpc[\"peer/vpc\"]: no rule derives it\n  \
+        "net.vpc[\"peer.vpc\"]: no rule derives it\n  \
          examples/demo/network.df:19  resource net.vpc vpc { .. }   (instance network.vpc peer)\n    \
          instance network.vpc peer: not made\n      \
          examples/demo/stacks/dform.df:54  instance network.vpc peer { .. } where env != \"dev\"\n        \

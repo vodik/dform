@@ -32,16 +32,39 @@ pub enum Query {
 /// An address as `plan` prints it (H-16, `ir::parse_address`), as a
 /// pattern: `T["A"].p` is its attribute, `attr(T, A, "p", value)`; `T["A"]`
 /// is the resource, `want(T, A)` for `why` and every `attr(T, A, path,
-/// value)` for `query`. `None` when `src` is not an address; an address
-/// with the old scope separator, `::`, is an error (R-72).
+/// value)` for `query`. For `why`, a resource is also its path, as the
+/// plan prints it, with its type before it or not (R-112): `k3s.admin`,
+/// `ovh.ssh_key k3s.admin`. `None` when `src` is not an address; an
+/// address with an old scope separator, `/` or `::`, is an error.
 pub fn address(src: &str, why: bool) -> Result<Option<Query>> {
+    let s = |x: &str| Term::Val(Value::Str(x.to_string()));
+    let v = |x: &str| Term::Var(x.to_string());
     let (addr, path) = match crate::ir::parse_address(src) {
         Ok(a) => a,
         Err(e) if e.is::<crate::ir::OldScope>() => return Err(e),
+        Err(_) if why => {
+            let (typ, at) = match src.trim().split_once(char::is_whitespace) {
+                Some((t, p)) if t.split('.').all(crate::lexer::is_word) => (s(t), p),
+                Some(_) => return Ok(None),
+                None => (v("type"), src),
+            };
+            let Some(name) = crate::ir::parse_path(at)? else {
+                return Ok(None);
+            };
+            let mut vars = Vec::new();
+            term_vars(&typ, &mut vars);
+            return Ok(Some(Query::Body {
+                body: vec![Lit::Pos(Atom {
+                    pred: "want".into(),
+                    args: vec![typ, s(&name)],
+                    record: None,
+                    span: Default::default(),
+                })],
+                vars,
+            }));
+        }
         Err(_) => return Ok(None),
     };
-    let s = |x: &str| Term::Val(Value::Str(x.to_string()));
-    let v = |x: &str| Term::Var(x.to_string());
     let (pred, args) = match (path, why) {
         (Some(p), _) => ("attr", vec![s(&addr.typ), s(&addr.name), s(&p), v("value")]),
         (None, true) => ("want", vec![s(&addr.typ), s(&addr.name)]),

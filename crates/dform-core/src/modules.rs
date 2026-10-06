@@ -5,7 +5,7 @@
 //! `instance c n { k = V } where B` copies component `c`, an item of one:
 //! one mechanism, the body under the scope `n`:
 //!
-//! - resource names are scoped (`n/name`, its address `T["n/name"]`, R-72); in
+//! - resource names are scoped (`n.name`, its address `T["n.name"]`, R-112); in
 //!   a component a resource written as a variable is the copy's own, in a
 //!   module any its user sees (the module's rules merge into the user's
 //!   scope);
@@ -338,9 +338,6 @@ pub struct Expanded {
     pub program: Program,
     pub inputs: Vec<Declared>,
     pub secret_outputs: Vec<(String, String)>,
-    /// Every copy's and activation's scope, as an address writes it
-    /// (`blue`, `edge/left`): what a resource name's `/` may separate.
-    pub scopes: BTreeSet<String>,
 }
 
 fn is_secret_type(t: &Option<TypeExpr>) -> bool {
@@ -363,7 +360,6 @@ struct Cx<'a> {
     diags: Vec<Diagnostic>,
     declared: Vec<Declared>,
     secret_outputs: Vec<(String, String)>,
-    scopes: BTreeSet<String>,
     /// Private names by plain name, for the error when the program reads
     /// one.
     private: BTreeMap<String, (String, Option<String>)>,
@@ -408,7 +404,6 @@ pub fn expand(program: &Program) -> Result<Expanded> {
         diags: Vec::new(),
         declared: Vec::new(),
         secret_outputs: Vec::new(),
-        scopes: BTreeSet::new(),
         private: BTreeMap::new(),
         expanding: Vec::new(),
         checked: BTreeSet::new(),
@@ -584,7 +579,6 @@ pub fn expand(program: &Program) -> Result<Expanded> {
             },
             inputs: cx.declared,
             secret_outputs: cx.secret_outputs,
-            scopes: cx.scopes,
         })
     } else {
         Err(Diagnostics(cx.diags).into())
@@ -641,8 +635,6 @@ impl Cx<'_> {
         }
         let scope = u.name.as_str();
         let abs = join_scope(at, scope);
-        self.scopes
-            .insert(abs.replace('.', &crate::ir::SCOPE.to_string()));
         let mut out = Vec::new();
         // A used module's inputs are the stack's to give, `m.k` (R-55); a
         // copy's are its instance block's.
@@ -1700,7 +1692,7 @@ fn rewrite_term(term: Term, sc: Sc) -> Term {
 
 /// `scoped(Scope, Name)`; a name a copy inside this one scoped,
 /// `scoped(inner, Name)`, is `scoped(Scope.inner, Name)`; and a name that
-/// is already an address (`"blue/vpc"` names another copy's resource) is
+/// is already an address (`"blue.vpc"` names another copy's resource) is
 /// itself. In a module's (`!sc.vars`), only a name the module writes out is
 /// its own: a variable ranges over every resource its user sees.
 fn scoped_term(sc: Sc, name: Term) -> Term {
@@ -1806,20 +1798,23 @@ pub fn set_origin(stmts: &mut [Stmt], origin: u32) {
 mod tests {
     use super::*;
 
-    /// A name that is already an address (`"m/i/n"`, another copy's
-    /// resource) is left alone; a local one is scoped (After R-42).
+    /// A name that is already an address (`"m.i.n"`, another copy's
+    /// resource) is left alone; a local one is scoped, a quoted segment
+    /// too (After R-42, R-112).
     #[test]
     fn scoped_term_leaves_an_already_scoped_address_alone() {
         for vars in [true, false] {
             let sc = Sc { name: "m", vars };
-            assert_eq!(scoped_term(sc, str_term("m/i/n")), str_term("m/i/n"));
-            assert_eq!(
-                scoped_term(sc, str_term("n")),
-                Term::Func {
-                    name: "scoped".to_string(),
-                    args: vec![str_term("m"), str_term("n")],
-                }
-            );
+            assert_eq!(scoped_term(sc, str_term("m.i.n")), str_term("m.i.n"));
+            for local in ["n", r#""a.b""#] {
+                assert_eq!(
+                    scoped_term(sc, str_term(local)),
+                    Term::Func {
+                        name: "scoped".to_string(),
+                        args: vec![str_term("m"), str_term(local)],
+                    }
+                );
+            }
         }
     }
 }

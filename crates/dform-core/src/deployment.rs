@@ -403,10 +403,7 @@ pub struct Compiled {
 }
 
 impl Compiled {
-    /// `scopes`: the program's copies' and activations' (a resource name's
-    /// `/` separates one, `zset::check_names`).
-    pub fn of(res: &EvalResult, schema: &Schema, scopes: &BTreeSet<String>) -> Result<Compiled> {
-        zset::check_names(&res.facts, scopes)?;
+    pub fn of(res: &EvalResult, schema: &Schema) -> Result<Compiled> {
         Ok(Compiled {
             resources: ir::compile_resources(res.facts.iter().cloned(), schema)?,
             adopts: ir::compile_adopts(res.facts.iter())?,
@@ -1074,8 +1071,7 @@ impl Located {
         let (compiled, policy) = if opts.blocking && !violations.is_empty() {
             (Err(anyhow::anyhow!("blocked by constraints")), None)
         } else {
-            let scopes = lowered.map(|l| l.scopes.clone()).unwrap_or_default();
-            let compiled = Compiled::of(&res, backend.schema(), &scopes);
+            let compiled = Compiled::of(&res, backend.schema());
             // No plan when the resources do not compile: that is why.
             let plan = |c: &Compiled| {
                 evaluator.plan(
@@ -1089,9 +1085,7 @@ impl Located {
             };
             let policy = match (&compiled, opts.policy) {
                 (Ok(c), true) => Some(plan(c)),
-                (Err(_), true) => {
-                    Some(Compiled::of(&res, backend.schema(), &scopes).and_then(|c| plan(&c)))
-                }
+                (Err(_), true) => Some(Compiled::of(&res, backend.schema()).and_then(|c| plan(&c))),
                 (_, false) => None,
             };
             (compiled, policy)

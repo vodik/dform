@@ -126,14 +126,14 @@ fn a_nested_copys_address_round_trips_through_the_plan_file() {
     .success();
     let f: serde_json::Value = serde_json::from_str(&s.read("plan.json")).unwrap();
     assert_eq!(
-        f["ticks"][0]["addresses"][0], "net.vpc[\"edge/left/vpc\"]",
+        f["ticks"][0]["addresses"][0], "net.vpc[\"edge.left.vpc\"]",
         "{f}"
     );
-    assert_eq!(f["deformations"][0]["name"], "edge/left/vpc", "{f}");
+    assert_eq!(f["deformations"][0]["name"], "edge.left.vpc", "{f}");
     let r = s.run(&["apply", "plan.json"]).success();
     assert!(r.stdout.ends_with("apply: complete\n"), "{}", r.stdout);
     let w: serde_json::Value = serde_json::from_str(&s.read("w.json")).unwrap();
-    assert!(w["resources"]["net.vpc::edge/left/vpc"].is_object(), "{w}");
+    assert!(w["resources"]["net.vpc::edge.left.vpc"].is_object(), "{w}");
     let r = s
         .run(&["dev", "--world", "w.json", "plan", "p.df"])
         .success();

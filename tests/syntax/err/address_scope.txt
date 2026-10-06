@@ -1,6 +1,6 @@
-tests/syntax/err/address_scope.df:8:18: "a/b": a resource's name may not contain `/`, the scope separator of an address (`blue/vpc` is the copy blue's resource vpc)
-tests/syntax/err/address_scope.df:11:18: "${n}/b": a resource's name may not contain `/`, the scope separator of an address (`blue/vpc` is the copy blue's resource vpc)
-tests/syntax/err/address_scope.df:14:16: "main::vpc": a scope in an address is separated by `/`, not `::`
-  help: write "main/vpc" (R-72)
-tests/syntax/err/address_scope.df:15:22: "peer::vpc": a scope in an address is separated by `/`, not `::`
-  help: write "peer/vpc" (R-72)
+tests/syntax/err/address_scope.df:16:16: "main/vpc": an address is a path, its scope separated by `.`, not `/`
+  help: write "main.vpc" (R-112)
+tests/syntax/err/address_scope.df:17:22: "peer::vpc": an address is a path, its scope separated by `.`, not `/`
+  help: write "peer.vpc" (R-112)
+tests/syntax/err/address_scope.df:18:1: "old/vpc": an address is a path, its scope separated by `.`, not `/`
+  help: write "old.vpc" (R-112)
