@@ -50,7 +50,7 @@ fn a_tick_waits_until_the_world_reaches_the_value() {
     let r = apply(&s, &["--chaos", "not-ready=db.postgres[\"d\"].endpoint:3"]).failure();
     assert!(
         r.stderr
-            .contains("waiting on db.postgres[\"d\"].endpoint since "),
+            .contains("waiting on db.postgres d.endpoint since "),
         "{}",
         r.stderr
     );
@@ -94,7 +94,7 @@ fn past_the_wait_budget_the_apply_stops_saying_what_it_waited_on() {
     assert!(
         r.stderr.contains(
             "Error: apply stopped at tick 2: waited 200ms (--wait) on \
-             db.postgres[\"d\"].endpoint, still unknown; state is consistent: run apply again \
+             db.postgres d.endpoint, still unknown; state is consistent: run apply again \
              to wait again (`--wait` for longer)\n"
         ),
         "{}",
@@ -132,12 +132,16 @@ fn a_wait_of_zero_does_not_wait() {
     assert!(
         r.stderr.contains(
             "apply stopped at tick 2: nothing definite to apply, still waiting on \
-             ?db.postgres[\"d\"].endpoint"
+             db.postgres d.endpoint"
         ),
         "{}",
         r.stderr
     );
-    assert!(!r.stderr.contains("waiting on db"), "{}", r.stderr);
+    assert!(
+        !r.stderr.lines().any(|l| l.starts_with("waiting on ")),
+        "{}",
+        r.stderr
+    );
     assert!(waits(&s).is_empty());
 }
 
@@ -153,7 +157,7 @@ fn a_stack_sets_its_wait_budget() {
     let r = apply(&s, &["--chaos", "not-ready=db.postgres[\"d\"].endpoint:3"]).failure();
     assert!(
         r.stderr
-            .contains("nothing definite to apply, still waiting on ?db.postgres[\"d\"].endpoint"),
+            .contains("nothing definite to apply, still waiting on db.postgres d.endpoint"),
         "{}",
         r.stderr
     );
@@ -190,7 +194,7 @@ fn an_extern_that_says_not_yet_is_asked_again() {
     let r = common::Run::from(out).failure();
     assert!(
         r.stderr
-            .contains("waiting on aws.availability_zone[\"available\"]"),
+            .contains("waiting on aws.availability_zone(\"available\")"),
         "{}",
         r.stderr
     );

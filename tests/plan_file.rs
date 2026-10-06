@@ -379,7 +379,7 @@ fn a_tick_2_address_the_file_does_not_list_stops_the_apply() {
     assert!(
         r.stderr.contains(
             "apply stopped after tick 1: tick 2 adds 1 change the plan could not name \
-             (iam.policy[?] on ?db.postgres[\"orders\"].endpoint)"
+             (iam.policy ? on db.postgres orders.endpoint)"
         ),
         "{}",
         r.stderr

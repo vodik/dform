@@ -574,10 +574,19 @@ impl Evaluator {
                     on: BTreeSet::from([label.clone()]),
                 });
             }
-            sections
+            // One waiting on what dform's own extern has not answered (the
+            // kubeconfig `ssh.read` reads from a host still booting) waits
+            // on it through the provider: said as both.
+            let waits = sections
                 .pending
                 .entry((r.addr.typ.clone(), r.addr.name.clone()))
-                .or_insert_with(|| BTreeSet::from([label]));
+                .or_default();
+            let read = |l: &String| {
+                crate::value::null_owner(l).is_some_and(|(t, _)| crate::externs::in_process(&t))
+            };
+            if waits.is_empty() || waits.iter().any(read) {
+                waits.insert(label);
+            }
         }
     }
 

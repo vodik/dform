@@ -796,6 +796,28 @@ pub fn inputs_of(pred: &str, row: &[Value]) -> Vec<Value> {
         .unwrap_or_default()
 }
 
+/// An extern's call as a label names it ([`secret_label`],
+/// `pred/INPUTS#N`), as the program writes it: `ssh.read("127.0.0.1:22",
+/// "ubuntu", "/etc/k3s.yaml")`. The inputs are joined by `,`: a built-in
+/// extern's that do not split into as many as it takes are said whole.
+pub fn call_text(pred: &str, inputs: &str) -> String {
+    let n = builtin_extern(pred).map(|cols| cols.iter().filter(|(i, _, _)| *i).count());
+    let parts: Vec<&str> = match (n, inputs.split(',').collect::<Vec<_>>()) {
+        (Some(0), _) => Vec::new(),
+        (Some(n), p) if p.len() != n => vec![inputs],
+        (_, p) => p,
+    };
+    let args: Vec<String> = parts.iter().map(|a| crate::ir::string_literal(a)).collect();
+    format!("{pred}({})", args.join(", "))
+}
+
+/// Whether a null's label `T/A#P` is an extern call's answer, not a
+/// resource's attribute: `T` an extern dform answers, or `P` a column
+/// number (no attribute is named by digits).
+pub fn is_call_label(typ: &str, path: &str) -> bool {
+    in_process(typ) || (!path.is_empty() && path.bytes().all(|b| b.is_ascii_digit()))
+}
+
 fn builtin_extern(pred: &str) -> Option<&'static [(bool, &'static str, &'static str)]> {
     let (h, _) = pred.split_once('.')?;
     builtin(h)?

@@ -264,7 +264,8 @@ fn a_host_or_a_file_not_there_yet_is_waited_on() {
     let s = project("ssh-not-yet", port);
     let r = run(&s, &["apply", "--wait", "1s", "p.df"]).failure();
     assert!(r.stderr.contains("waiting on "), "{}", r.stderr);
-    assert!(r.stderr.contains("ssh.run[\"127.0.0.1:"), "{}", r.stderr);
+    // An extern's call as the program writes it (R-111).
+    assert!(r.stderr.contains("ssh.run(\"127.0.0.1:"), "{}", r.stderr);
     assert!(r.stderr.contains("still unknown"), "{}", r.stderr);
 
     // The host answers; the kubeconfig is not written yet.
@@ -272,7 +273,7 @@ fn a_host_or_a_file_not_there_yet_is_waited_on() {
     std::fs::remove_file(s.path("remote/k3s.yaml")).unwrap();
     let r = run(&s, &["plan", "p.df"]).success();
     assert!(
-        r.stdout.contains("\n  waits on  127.0.0.1:"),
+        r.stdout.contains("\n  waits on  ssh.read(\"127.0.0.1:"),
         "{}",
         r.stdout
     );
@@ -295,7 +296,7 @@ fn a_host_or_a_file_not_there_yet_is_waited_on() {
     std::thread::sleep(Duration::from_millis(1500));
     s.write("remote/k3s.yaml", "token: KUBE-SECRET-LATE\n");
     let r = apply.join().unwrap().success();
-    assert!(r.stderr.contains("waiting on ssh.read["), "{}", r.stderr);
+    assert!(r.stderr.contains("waiting on ssh.read("), "{}", r.stderr);
     for out in [&r.stdout, &r.stderr] {
         assert!(!out.contains("KUBE-SECRET"), "{out}");
     }

@@ -139,7 +139,7 @@ fn gke_two_phase_applies_in_two_ticks() {
     assert!(
         r.stderr.contains(
             "apply stopped after tick 1: tick 2 adds 2 changes the plan could not name \
-             (google.container_node_pool[?] on ?google.container_cluster[\"pngu\"].zones)"
+             (google.container_node_pool ? on google.container_cluster pngu.zones)"
         ),
         "{}",
         r.stderr

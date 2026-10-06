@@ -7,7 +7,7 @@ mod common;
 use common::{Scratch, copy_dir, repo};
 
 const STOPPED: &str = "apply stopped after tick 1: tick 2 adds 1 change the plan could \
-    not name (iam.policy[?] on ?db.postgres[\"orders\"].endpoint); run apply again to plan \
+    not name (iam.policy ? on db.postgres orders.endpoint); run apply again to plan \
     them against the world as it now is";
 
 /// The tour's prod: the database's endpoint names a policy only tick 2 can

@@ -2971,8 +2971,8 @@ fn run_with(
                         .iter()
                         .map(|g| {
                             let on: Vec<String> =
-                                g.on.iter().map(|n| format!("?{}", ir::label(n))).collect();
-                            format!("{} on {}", g.pattern, on.join(" "))
+                                g.on.iter().map(|n| report::attribute_label(n)).collect();
+                            format!("{} on {}", report::address_text(&g.pattern), on.join(", "))
                         })
                         .collect();
                 }
@@ -3229,15 +3229,18 @@ fn run_with(
                             .iter()
                             .map(|n| match n.starts_with("provider ") {
                                 true => n.clone(),
-                                false => format!("?{}", ir::label(n)),
+                                false => report::attribute_label(n),
                             })
                             .collect();
                         bail!(
                             "apply stopped at tick {tick}: nothing definite to apply, still waiting on {}",
-                            waits.join(" ")
+                            waits.join(", ")
                         );
                     }
-                    let names: Vec<String> = on.iter().map(|l| ir::label(l)).collect();
+                    // Said as printed (R-111); the audit log keeps the labels.
+                    let names: Vec<String> =
+                        on.iter().map(|l| report::attribute_label(l)).collect();
+                    let labels: Vec<String> = on.iter().map(|l| ir::label(l)).collect();
                     let mut w = crate::progress::Wait::new();
                     let resolved = loop {
                         w.tick(&names);
@@ -3260,7 +3263,7 @@ fn run_with(
                     let result = if resolved { "resolved" } else { "expired" };
                     audit.append(
                         "wait",
-                        crate::audit::wait(tick, &names, w.since(), w.elapsed(), result),
+                        crate::audit::wait(tick, &labels, w.since(), w.elapsed(), result),
                     )?;
                     if !resolved {
                         // Nothing of the tick was applied: the next apply

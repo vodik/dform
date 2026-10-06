@@ -131,3 +131,28 @@ fn an_unknown_type_is_an_error_unless_its_provider_is_configured_later() {
         r.stderr
     );
 }
+
+/// A kubeconfig read from a host that has not answered yet (`ssh.read`
+/// says "not yet"): the provider waits on it, and `later` says both, the
+/// read as the program writes it (R-111), never its inputs split at their
+/// dots as if they were an address.
+#[test]
+fn a_provider_waiting_on_a_read_not_yet_answered_says_both() {
+    let s = project();
+    s.write(
+        "stacks/p.df",
+        &STACK.replace(
+            "ssh.read(server.endpoint, ",
+            "ssh.read(\"127.0.0.1:1\", ",
+        ),
+    );
+    let r = dform(&s, &["plan", "p"]).success();
+    assert!(
+        r.stdout.contains(
+            "\n  waits on  provider k8s (kubeconfig from raw), ssh.read(\"127.0.0.1:1\", \
+             \"ubuntu\", \"/etc/rancher/k3s/k3s.yaml\") not yet\n"
+        ),
+        "{}",
+        r.stdout
+    );
+}

@@ -958,7 +958,11 @@ apply: tick 1 once this plan's digest is approved (`--approval`), then tick 2 wh
   program gives and this plan does not know (a kubeconfig read from a
   server still booting) is one, under `waits on  provider k8s (kubeconfig
   from k3s.kubeconfig)` and the dim note `which this plan does not
-  resolve`, typed by the provider's static schema; one of a kind no
+  resolve`, typed by the provider's static schema; one whose settings
+  wait on what dform's own extern has not answered (a host still
+  booting) says that too, the call as the program writes it,
+  `provider k8s (kubeconfig from raw), ssh.read("10.0.0.5", "ubuntu",
+  "/etc/rancher/k3s/k3s.yaml") not yet`; one of a kind no
   schema has yet (a cluster's CRD) under `waits on  provider k8s for its
   schema`, its attributes as written. The summary counts them, `, N
   later`, and `why-not` names what such a resource waits on. A type whose

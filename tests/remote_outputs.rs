@@ -228,7 +228,7 @@ fn an_output_of_a_configured_attribute_is_published_resolved_or_pending() {
     let r = s.run(&["apply", "app"]).failure();
     assert!(
         r.stderr
-            .contains("nothing definite to apply, still waiting on ?net.n"),
+            .contains("nothing definite to apply, still waiting on net.n"),
         "{}",
         r.stderr
     );

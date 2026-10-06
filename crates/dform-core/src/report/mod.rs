@@ -90,6 +90,9 @@ pub fn attribute(a: &Address, attr: &str) -> String {
 /// identity [`address`]; an input's or an output's as
 /// [`crate::ir::label`] says it.
 pub fn attribute_label(l: &str) -> String {
+    if let Some(call) = extern_label(l) {
+        return call;
+    }
     match crate::value::null_parts(l) {
         Some((typ, name, p)) if !name.is_empty() && typ != crate::transform::OUTPUT => {
             let a = Address { typ, name };
@@ -107,6 +110,9 @@ pub fn attribute_label(l: &str) -> String {
 /// identity the resource, `k3s.server`; an input's or an output's as
 /// [`crate::ir::label`] says it.
 pub fn label(l: &str) -> String {
+    if let Some(call) = extern_label(l) {
+        return call;
+    }
     match crate::value::null_parts(l) {
         Some((typ, name, p)) if !name.is_empty() && typ != crate::transform::OUTPUT => {
             let a = Address { typ, name };
@@ -119,9 +125,30 @@ pub fn label(l: &str) -> String {
     }
 }
 
+/// The label of an answer of dform's own extern (`ssh.read/INPUTS#N`,
+/// what a host still booting has "not yet" said) as its call:
+/// `ssh.read("127.0.0.1:22", "ubuntu", "/etc/k3s.yaml")`. Its inputs are
+/// no address, so never split at their dots.
+fn extern_label(l: &str) -> Option<String> {
+    let (pred, inputs, col) = crate::value::null_parts(l)?;
+    crate::externs::is_call_label(&pred, &col).then(|| crate::externs::call_text(&pred, &inputs))
+}
+
+/// A label as [`crate::ir::label`] printed it (`T["A"].p`), when it is an
+/// extern call's ([`extern_label`]).
+fn printed_call(l: &str) -> Option<String> {
+    let (a, p) = crate::ir::parse_address(l).ok()?;
+    let col = p.unwrap_or_default();
+    let col = col.trim_matches('"');
+    crate::externs::is_call_label(&a.typ, col).then(|| crate::externs::call_text(&a.typ, &a.name))
+}
+
 /// A label as [`crate::ir::label`] printed it (`T["A"].p`), as
 /// [`label`] prints it.
 fn printed_label(l: &str) -> String {
+    if let Some(call) = printed_call(l) {
+        return call;
+    }
     match crate::ir::parse_address(l) {
         Ok((a, p)) => reference(&a, p.as_deref().unwrap_or_default()),
         Err(_) => l.to_string(),
@@ -132,6 +159,9 @@ fn printed_label(l: &str) -> String {
 /// [`attribute_label`] prints it; a call (`random.password("db")`) as
 /// itself.
 fn printed_attribute(l: &str) -> String {
+    if let Some(call) = printed_call(l) {
+        return call;
+    }
     match crate::ir::parse_address(l) {
         Ok((a, p)) => attribute(&a, p.as_deref().unwrap_or_default()),
         Err(_) => l.to_string(),
@@ -1501,7 +1531,14 @@ fn count(n: usize, thing: &str) -> String {
 /// The values a tick waits on, as the references they are,
 /// `k3s.server.public_ip` (R-111).
 fn waited(on: &BTreeSet<String>) -> Vec<String> {
-    on.iter().map(|n| label(n)).collect()
+    on.iter()
+        .map(|n| match extern_label(n) {
+            // What dform's own extern has not answered yet (a host still
+            // booting, a file not written yet).
+            Some(call) => format!("{call} not yet"),
+            None => label(n),
+        })
+        .collect()
 }
 
 /// The page width the right column folds at.
