@@ -2981,7 +2981,9 @@ fn run_with(
                         .unwrap_or_default();
                     let redact = query::Redactor::new(&res.facts, schema);
                     let record = zset::Derived::of(&res, &redact, &relations, top.as_deref());
-                    audit.append("derived", serde_json::json!({ "record": record }))?;
+                    if record != zset::Derived::default() {
+                        audit.append("derived", serde_json::json!({ "record": record }))?;
+                    }
                     // The stack's outputs, as the world now is, for other
                     // stacks to read (evaluated again only when it has any:
                     // the evaluation refreshes). A --world fixture is not

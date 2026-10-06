@@ -1344,10 +1344,10 @@ The kinds:
 - `wait`: a tick that waited on open nulls: the tick, what it waited on,
   since when, how long, and whether they `resolved` or the budget `expired`;
 - `derived`: at the end of an apply that completes, what it derived
-  (`record`): each rule that binds variables by its `FILE:LINE`, its
-  statement and the resources it derived, and each relation of the
-  program with its rows; the next plan's guardrail and its
-  `derived_at_last_apply` read the last one (R-80);
+  (`record`), when it derived any: each rule that binds variables by its
+  `FILE:LINE`, its statement and the resources it derived, and each
+  relation of the program with its rows; the next plan's guardrail and
+  its `derived_at_last_apply` read the last apply's (R-80);
 - `apply_end`: `ok`, `declined` (the confirmation was answered no), or
   `failed` and the error;
 - `controller`: each event, holds for approval and the run's result; and
