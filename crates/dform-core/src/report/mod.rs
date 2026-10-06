@@ -337,6 +337,12 @@ pub enum Paint {
     Bold,
     /// `apply: complete`: bold green.
     Done,
+    /// The site column, `(sensitive)`: dim (R-111).
+    Dim,
+    /// `because`: cyan.
+    Because,
+    /// `held for approval`: magenta.
+    Held,
 }
 
 impl Style {
@@ -354,29 +360,43 @@ impl Style {
             Paint::Replace => "35",
             Paint::Null => "36",
             Paint::Sensitive => "2",
-            Paint::Warn => "1;33",
+            Paint::Warn => "33",
             Paint::Bold => "1",
             Paint::Done => "1;32",
+            Paint::Dim => "2",
+            Paint::Because => "36",
+            Paint::Held => "35",
         };
         format!("\x1b[{sgr}m{s}\x1b[0m")
     }
 
     /// An action's marker in its kind's colour.
     fn marker(&self, k: &ActionKind) -> String {
-        let p = match k {
-            ActionKind::Create | ActionKind::Adopt => Paint::Create,
-            ActionKind::Update | ActionKind::Drift | ActionKind::Pending => Paint::Update,
-            ActionKind::Delete | ActionKind::DeleteDeposed => Paint::Delete,
-            ActionKind::Replace { .. } => Paint::Replace,
-            ActionKind::Noop => return marker_of(k).to_string(),
+        match kind_paint(k) {
+            Some(p) => self.paint(p, marker_of(k)),
+            None => marker_of(k).to_string(),
+        }
+    }
+
+    /// A change's address, bold in its kind's colour (R-111).
+    fn address(&self, k: &ActionKind, s: &str) -> String {
+        if !self.color || s.is_empty() {
+            return s.to_string();
+        }
+        let sgr = match kind_paint(k) {
+            Some(Paint::Create) => "1;32",
+            Some(Paint::Update) => "1;33",
+            Some(Paint::Delete) => "1;31",
+            Some(_) => "1;35",
+            None => "1",
         };
-        self.paint(p, marker_of(k))
+        format!("\x1b[{sgr}m{s}\x1b[0m")
     }
 
     /// A value as the plan prints it at `why`: `(sensitive)` dim.
     fn said(&self, v: &Shown, why: Why) -> String {
         match v {
-            Shown::Sensitive(_) => self.paint(Paint::Sensitive, &v.said(why)),
+            Shown::Sensitive(_) => self.paint(Paint::Dim, &v.said(why)),
             _ => v.said(why),
         }
     }
@@ -388,6 +408,18 @@ impl Style {
             Shown::Sensitive(_) => self.paint(Paint::Sensitive, &v.text()),
             _ => v.text(),
         }
+    }
+}
+
+/// The colour of a change of kind `k`: `+` green, `~` yellow, `±`
+/// magenta, `-` red.
+fn kind_paint(k: &ActionKind) -> Option<Paint> {
+    match k {
+        ActionKind::Create | ActionKind::Adopt => Some(Paint::Create),
+        ActionKind::Update | ActionKind::Drift | ActionKind::Pending => Some(Paint::Update),
+        ActionKind::Delete | ActionKind::DeleteDeposed => Some(Paint::Delete),
+        ActionKind::Replace { .. } => Some(Paint::Replace),
+        ActionKind::Noop => None,
     }
 }
 
@@ -1393,9 +1425,10 @@ impl Row {
     }
 }
 
-/// The rows, the right column aligned across them; a right column that
-/// does not fit in [`WIDTH`] folds to a shorter one, or to nothing.
-fn layout(rows: &[Row]) -> String {
+/// The rows, the right column aligned across them and dim (R-111); a
+/// right column that does not fit in [`WIDTH`] folds to a shorter one, or
+/// to nothing.
+fn layout(rows: &[Row], style: Style) -> String {
     let col = rows
         .iter()
         .filter(|r| !r.right.is_empty() && r.width + 2 <= COLUMN)
@@ -1408,7 +1441,7 @@ fn layout(rows: &[Row]) -> String {
         let at = col.max(r.width + 2);
         if let Some(x) = r.right.iter().find(|x| at + x.chars().count() <= WIDTH) {
             out.push_str(&" ".repeat(at - r.width));
-            out.push_str(x);
+            out.push_str(&style.paint(Paint::Dim, x));
         }
         out.push('\n');
     }
@@ -1880,7 +1913,7 @@ impl Report {
                 let painted = format!(
                     "  {} {}  (deposed)",
                     style.paint(Paint::Delete, "-"),
-                    style.paint(Paint::Bold, &addr)
+                    style.address(&ActionKind::Delete, &addr)
                 );
                 rows.push(Row::new(&plain, painted));
             }
@@ -1927,7 +1960,7 @@ impl Report {
         if !self.approvals.is_empty() {
             rows.push(Row::plain(String::new()));
             let head = "held for approval";
-            rows.push(Row::new(head, style.paint(Paint::Warn, head)));
+            rows.push(Row::new(head, style.paint(Paint::Held, head)));
             let wide = self
                 .approvals
                 .iter()
@@ -1941,7 +1974,7 @@ impl Report {
                 rows.push(Row::plain(format!("  {}", address_text(&a.addr))).with(vec![right]));
             }
         }
-        out.push_str(&layout(&rows));
+        out.push_str(&layout(&rows, style));
         let header = |s: &str| format!("{}\n", bold(s));
         let diags = [("shadowed", &self.shadowed), ("conflicts", &self.conflicts)];
         for (title, ds) in diags {
@@ -2024,7 +2057,7 @@ impl Report {
                 let reads = g.reads.clone().unwrap_or_default();
                 let shown = address_text(c);
                 let plain = format!("  {shown}");
-                let painted = format!("  {}", style.paint(Paint::Warn, &shown));
+                let painted = format!("  {}", style.paint(Paint::Bold, &shown));
                 rows.push(Row::new(&plain, painted).with(vec![format!("if {reads} derives")]));
                 for m in self
                     .groups
@@ -2150,7 +2183,7 @@ impl Report {
         let painted = format!(
             "{indent}{} {}{note}",
             style.marker(&d.kind),
-            style.paint(Paint::Bold, &addr)
+            style.address(&d.kind, &addr)
         );
         let at = d.site.as_ref().map(|s| place_text(s, self.why));
         let right: Vec<String> = match (&d.kind, at) {
@@ -2195,7 +2228,8 @@ impl Report {
         }
         if let Some(b) = &d.because {
             let plain = format!("{inner}because {b}");
-            rows.push(Row::plain(plain));
+            let painted = format!("{inner}{} {b}", style.paint(Paint::Because, "because"));
+            rows.push(Row::new(&plain, painted));
         }
     }
 }
@@ -2854,5 +2888,23 @@ mod tests {
         };
         assert_eq!(r.said(Why::Line), "main.vpc");
         assert_eq!(r.text(), r#"net.vpc["main.vpc"]"#);
+    }
+
+    /// Colour is a hint: the address bold in its kind's colour, the site
+    /// column dim; plain, nothing.
+    #[test]
+    fn colour_follows_the_kind() {
+        let c = Style { color: true };
+        assert_eq!(
+            c.address(&ActionKind::Create, "net.vpc main"),
+            "\x1b[1;32mnet.vpc main\x1b[0m"
+        );
+        assert_eq!(
+            c.address(&ActionKind::Delete, "net.vpc main"),
+            "\x1b[1;31mnet.vpc main\x1b[0m"
+        );
+        assert_eq!(c.paint(Paint::Dim, "p.df:3"), "\x1b[2mp.df:3\x1b[0m");
+        assert_eq!(c.paint(Paint::Because, "because"), "\x1b[36mbecause\x1b[0m");
+        assert_eq!(Style::PLAIN.address(&ActionKind::Create, "x"), "x");
     }
 }

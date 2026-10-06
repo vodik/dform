@@ -296,10 +296,11 @@ fn a_denied_replace_is_a_section() {
     assert!(r.stderr.contains("blocked by constraints"), "{}", r.stderr);
 }
 
-/// `--color always` paints the plan by its semantics (a create's `+`
-/// green, its address bold, a tick's head bold, `(sensitive)` dim, a rule
-/// in `later` in the warning colour); `never`, `NO_COLOR` under `auto`,
-/// and `--json` print none.
+/// `--color always` paints the plan by its semantics, as a hint only
+/// (R-111): a create's `+` green and its address bold green, a tick's head
+/// bold, the site column and `(sensitive)` dim, a rule in `later` in the
+/// warning colour; `never`, `NO_COLOR` under `auto`, and `--json` print
+/// none, and lose nothing.
 /// What `plan` prints uncoloured is the text every golden has.
 #[test]
 fn color_is_a_rendering_of_the_same_text() {
@@ -320,11 +321,12 @@ fn color_is_a_rendering_of_the_same_text() {
     };
     let always = colored("always");
     for want in [
-        "  \x1b[32m+\x1b[0m \x1b[1mgoogle.compute_subnetwork gke_subnet\x1b[0m  ",
+        "  \x1b[32m+\x1b[0m \x1b[1;32mgoogle.compute_subnetwork gke_subnet\x1b[0m  ",
         "\x1b[1mtick 1  3 changes, applies now\x1b[0m\n",
+        "  \x1b[2mstacks/gke_two_phase.df:38\x1b[0m\n",
         "  waits on  pngu.ca_certificate\n",
         "      data.password = \x1b[2m(sensitive)\x1b[0m\n",
-        "  \x1b[1;33mgoogle.container_node_pool \"np-${z}\"\x1b[0m  ",
+        "  \x1b[33mgoogle.container_node_pool \"np-${z}\"\x1b[0m  ",
     ] {
         assert!(always.contains(want), "{want:?}\n---\n{always:?}");
     }

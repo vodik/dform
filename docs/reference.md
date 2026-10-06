@@ -1059,13 +1059,16 @@ The page is 100 columns wide: a right column that does not fit says less
 (the statement, then its entry, then `FILE:LINE` alone), and goes when
 not even that fits; a `because` line is always its own.
 
-Colour: `--color auto|always|never` (global; `auto`, the default, colours
-when stdout is a terminal and `NO_COLOR` is unset; errors on stderr
-likewise) paints the plan by its semantics: `+` green, `~` yellow, `-` red,
-`±` magenta, `(sensitive)` dim, addresses and tick headers bold,
-conflicts and denies red with the witnesses' names bold, a rule in
-`later` in the warning colour (bold yellow); apply's question and `apply:
-complete` likewise. `--json` and the plan file are never coloured.
+Colour is a hint, never the only carrier: every colour has a character
+beside it, and `NO_COLOR` or a pipe loses nothing. `--color
+auto|always|never` (global; `auto`, the default, colours when stdout is a
+terminal and `NO_COLOR` is unset; errors on stderr likewise) paints the
+plan in the eight basic colours: `+`, `~`, `±`, `-` with the address
+bold in green, yellow, magenta and red; the site column, `later`'s notes
+and `(sensitive)` dim; `because` cyan; `held for approval` magenta,
+`denied` and conflicts red, `warning` and a rule in `later` yellow; tick
+headers and a copy's header bold. `--json` and the plan file are never
+coloured.
 
 `plan --json` prints the same report as one JSON document, the thing CI and
 editors consume: `stack`, `up_to_date`, a `summary` of counts (`changes`,
