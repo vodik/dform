@@ -13,14 +13,14 @@
 //! ([`key_named`]): the resources whose names do depend on the key, and so
 //! change when it does.
 
-use crate::ast::{Atom, Lit, Program, RuleStmt, Stmt, Term};
+use crate::ast::{Atom, Lit, Program, RuleStmt, Span, Stmt, Term};
 use crate::circuit::{self, Circuit, Leaf, NodeId, View};
 use crate::engine::EvalResult;
 use crate::ir::Address;
 use crate::schema::Schema;
 use crate::transform;
 use crate::value::Value;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// A name-like attribute of a resource in an evaluation: `path` (dotted,
 /// maybe below the attribute `fact` holds) names the object in the cloud.
@@ -425,6 +425,184 @@ pub fn lint(program: &Program, cli_keys: &[String]) -> Vec<String> {
         return out;
     };
     out.extend(lint_lowered(&lowered.program, cli_keys));
+    out.extend(guard_lints(program, &lowered.program));
+    out
+}
+
+/// The values each `enum` or `bool` input of the stack takes: the space a
+/// clause over them is decided in at compile time (R-104), as `dform test`
+/// enumerates it.
+pub fn enum_inputs(program: &Program) -> BTreeMap<String, Vec<Value>> {
+    let mut out = BTreeMap::new();
+    for s in &program.statements {
+        let Stmt::Input(i) = s else { continue };
+        let values = match &i.ty {
+            crate::ast::TypeExpr::Name(n) if n == "bool" => {
+                vec![Value::Bool(false), Value::Bool(true)]
+            }
+            t => match crate::types::members(t) {
+                Some(ms) => ms.into_iter().map(Value::Str).collect(),
+                None => continue,
+            },
+        };
+        out.insert(i.name.clone(), values);
+    }
+    out
+}
+
+/// Whether a clause holds where the stack's enum inputs have the values
+/// `at`, when it reads nothing else: `cloud("aws")` (`cloud == "aws"`),
+/// `cloud(C), C != "gcp"`, their negations. `None`: it reads something
+/// else, so only the evaluation decides it.
+pub fn guard_holds(body: &[Lit], at: &BTreeMap<String, Value>) -> Option<bool> {
+    let mut vars: BTreeMap<&str, &Value> = BTreeMap::new();
+    let mut holds = true;
+    // The readers bind first, whatever the order.
+    for l in body {
+        let (Lit::Pos(a) | Lit::Not(a)) = l else {
+            continue;
+        };
+        let v = at.get(&a.pred)?;
+        let [t] = a.args.as_slice() else {
+            return None;
+        };
+        let matched = match t {
+            Term::Val(x) => x == v,
+            Term::Var(x) if matches!(l, Lit::Pos(_)) => match vars.insert(x, v) {
+                Some(prev) => prev == v,
+                None => true,
+            },
+            Term::Wildcard => true,
+            _ => return None,
+        };
+        holds &= matched == matches!(l, Lit::Pos(_));
+    }
+    let val = |t: &Term| -> Option<Value> {
+        match t {
+            Term::Val(v) => Some(v.clone()),
+            Term::Var(x) => vars.get(x.as_str()).map(|v| (*v).clone()),
+            _ => None,
+        }
+    };
+    for l in body {
+        match l {
+            Lit::Eq(a, b) => holds &= val(a)? == val(b)?,
+            Lit::Neq(a, b) => holds &= val(a)? != val(b)?,
+            Lit::Pos(_) | Lit::Not(_) => {}
+            _ => return None,
+        }
+    }
+    Some(holds)
+}
+
+/// Every combination of the values of `inputs`, the first slowest.
+pub fn combinations(inputs: &[(&String, &Vec<Value>)]) -> Vec<BTreeMap<String, Value>> {
+    let mut out = vec![BTreeMap::new()];
+    for (k, vs) in inputs {
+        out = out
+            .into_iter()
+            .flat_map(|c| {
+                vs.iter().map(move |v| {
+                    let mut c = c.clone();
+                    c.insert((*k).clone(), v.clone());
+                    c
+                })
+            })
+            .collect();
+    }
+    out
+}
+
+/// `cloud == "aws", env == "dev"`.
+pub fn combination_text(c: &BTreeMap<String, Value>) -> String {
+    c.iter()
+        .map(|(k, v)| format!("{k} == {}", crate::partition::fmt_value(v)))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// The enum inputs a clause reads.
+pub fn guard_reads<'a>(
+    body: &[Lit],
+    space: &'a BTreeMap<String, Vec<Value>>,
+) -> Vec<(&'a String, &'a Vec<Value>)> {
+    let preds: BTreeSet<&str> = body
+        .iter()
+        .filter_map(|l| match l {
+            Lit::Pos(a) | Lit::Not(a) => Some(a.pred.as_str()),
+            _ => None,
+        })
+        .collect();
+    space
+        .iter()
+        .filter(|(k, _)| preds.contains(k.as_str()))
+        .collect()
+}
+
+/// The two lints over a name declared several times, each under a clause
+/// over enum inputs (R-104), decided over the enum product as `dform test`
+/// enumerates it: a combination where no declaration holds, and one where
+/// two do, each naming the sites. A clause that reads anything else is
+/// the evaluation's to decide.
+fn guard_lints(program: &Program, lowered: &Program) -> Vec<String> {
+    let space = enum_inputs(program);
+    let mut groups: BTreeMap<(String, String), Vec<(&RuleStmt, Span)>> = BTreeMap::new();
+    for s in &lowered.statements {
+        let Stmt::Rule(r) = s else { continue };
+        let pred = r.head.pred.rsplit("::").next().unwrap_or(&r.head.pred);
+        if pred != crate::modules::DECLARED {
+            continue;
+        }
+        let [Term::Val(Value::Str(name)), _] = r.head.args.as_slice() else {
+            continue;
+        };
+        groups
+            .entry((r.head.pred.clone(), name.clone()))
+            .or_default()
+            .push((r, r.head.span));
+    }
+    let mut out = Vec::new();
+    for ((_, name), decls) in groups.into_iter().filter(|(_, d)| d.len() > 1) {
+        let mut reads: Vec<(&String, &Vec<Value>)> = Vec::new();
+        for (r, _) in &decls {
+            for x in guard_reads(&r.body, &space) {
+                if !reads.contains(&x) {
+                    reads.push(x);
+                }
+            }
+        }
+        let site = |span: Span| crate::diag::at(span).unwrap_or_default();
+        let (mut none, mut both) = (None, None);
+        for c in combinations(&reads) {
+            let holds: Option<Vec<Span>> = decls
+                .iter()
+                .map(|(r, span)| Some(guard_holds(&r.body, &c)?.then_some(*span)))
+                .collect::<Option<Vec<_>>>()
+                .map(|v| v.into_iter().flatten().collect());
+            let Some(holds) = holds else {
+                break;
+            };
+            match holds.as_slice() {
+                [] if none.is_none() => none = Some(combination_text(&c)),
+                [a, b, ..] if both.is_none() => both = Some((combination_text(&c), *a, *b)),
+                _ => {}
+            }
+        }
+        let sites: Vec<String> = decls.iter().map(|(_, s)| site(*s)).collect();
+        if let Some(c) = none {
+            out.push(format!(
+                "`{name}` has no declaration when {c} (declared at {})",
+                sites.join(", ")
+            ));
+        }
+        if let Some((c, a, b)) = both {
+            out.push(format!(
+                "`{name}`: the clauses of two declarations both hold when {c}: {} and {}",
+                site(a),
+                site(b)
+            ));
+        }
+    }
     out
 }
 

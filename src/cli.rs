@@ -4333,6 +4333,7 @@ fn print_effects(
         e.offers
             .iter()
             .for_each(|(k, ty)| row("offers", format!("{k}: {ty}")));
+        e.starts.iter().for_each(|p| row("starts", p.to_string()));
     }
     if json {
         println!("{}", serde_json::to_string_pretty(&t.json())?);

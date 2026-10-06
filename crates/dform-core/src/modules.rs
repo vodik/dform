@@ -198,31 +198,48 @@ pub const DECLARED: &str = "__declared";
 /// evaluation does. Each declaration's clause derives `__declared(name,
 /// i)`, and two that both hold are a deny naming both sites.
 pub fn exclusive(name: &str, alts: &[Alternative]) -> Vec<Stmt> {
+    let mut out: Vec<Stmt> = alts
+        .iter()
+        .enumerate()
+        .map(|(i, a)| declared(name, i, a.clause.clone(), a.span))
+        .collect();
+    let sites: Vec<(String, Span)> = alts.iter().map(|a| (a.what.clone(), a.span)).collect();
+    out.extend(denies(name, &sites));
+    out
+}
+
+/// The `i`th declaration of `name` holds while its clause does:
+/// `__declared(name, i) :- clause`.
+pub fn declared(name: &str, i: usize, clause: Vec<Lit>, span: Span) -> Stmt {
+    fact_or_rule(held(name, i, span), clause)
+}
+
+fn held(name: &str, i: usize, span: Span) -> Atom {
+    atom(
+        DECLARED,
+        vec![str_term(name), Term::Val(Value::Int(i as i64))],
+        span,
+    )
+}
+
+/// A deny for each pair of the declarations of `name` (what each is, and
+/// where) that both hold, naming both.
+pub fn denies(name: &str, sites: &[(String, Span)]) -> Vec<Stmt> {
+    let site = |(what, span): &(String, Span)| match diag::at(*span) {
+        Some(at) => format!("`{what}` at {at}"),
+        None => format!("`{what}`"),
+    };
     let mut out = Vec::new();
-    let held = |i: usize, span: Span| {
-        atom(
-            DECLARED,
-            vec![str_term(name), Term::Val(Value::Int(i as i64))],
-            span,
-        )
-    };
-    for (i, a) in alts.iter().enumerate() {
-        out.push(fact_or_rule(held(i, a.span), a.clause.clone()));
-    }
-    let site = |a: &Alternative| match diag::at(a.span) {
-        Some(at) => format!("`{}` at {at}", a.what),
-        None => format!("`{}`", a.what),
-    };
-    for (i, a) in alts.iter().enumerate() {
-        for (j, b) in alts.iter().enumerate().skip(i + 1) {
+    for (i, a) in sites.iter().enumerate() {
+        for (j, b) in sites.iter().enumerate().skip(i + 1) {
             let msg = format!(
                 "`{name}` is declared twice and both declarations hold: {} and {}",
                 site(a),
                 site(b)
             );
             out.push(Stmt::Rule(RuleStmt {
-                head: atom("deny", vec![str_term(&msg)], b.span),
-                body: vec![Lit::Pos(held(i, a.span)), Lit::Pos(held(j, b.span))],
+                head: atom("deny", vec![str_term(&msg)], b.1),
+                body: vec![Lit::Pos(held(name, i, a.1)), Lit::Pos(held(name, j, b.1))],
             }));
         }
     }

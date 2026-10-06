@@ -58,10 +58,11 @@ impl Lowerer<'_> {
         let mut source = Vec::new();
         let mut settings = BTreeMap::new();
         let mut rc = self.rc(n, scope, outer);
-        let mut body = Vec::new();
-        if let Some(c) = node(n, CLAUSE) {
-            return self.error(self.span(&c), "a provider or stack block takes no clause");
-        }
+        // A guarded provider (R-104): its settings, its account and its
+        // start hold only while the clause does.
+        let clause = self.clauses(&mut rc, n)?;
+        let mut body = clause.clone();
+        let others = self.providers_named(n, &name)?;
         if let Some(b) = &block {
             for a in b.children().filter(|c| c.kind() == ASSIGN) {
                 let at = self.span(&a);
@@ -84,7 +85,10 @@ impl Lowerer<'_> {
                     }
                     EXPECT_ACCOUNT => {
                         let mut rc = self.rc(&a, scope, outer);
-                        let mut body = Vec::new();
+                        let mut body = match clause.is_empty() {
+                            true => Vec::new(),
+                            false => self.clauses(&mut rc, n)?,
+                        };
                         let v = self.entry_value(&mut rc, &a, Pos::Content, &mut body)?;
                         let head = atom_at(
                             crate::plugin::providers::EXPECT_ACCOUNT,
@@ -102,7 +106,10 @@ impl Lowerer<'_> {
                 }
             }
         }
-        if !settings.is_empty() {
+        // A guarded provider is configured by the program, with no
+        // settings too: it serves nothing until its clause holds and its
+        // `provider_config` fact arrives (`Providers::configure_from`).
+        if !settings.is_empty() || !clause.is_empty() {
             let head = atom_at(
                 "provider_config",
                 vec![str_term(&name), Term::Obj(settings)],
@@ -110,15 +117,97 @@ impl Lowerer<'_> {
             );
             out.insert(0, self.rule_or_fact(&rc, head, body)?);
         }
-        out.insert(
-            0,
-            Stmt::Provider(Config {
-                name,
-                config: source,
-                span,
-            }),
-        );
+        // Declared more than once, each under a clause (R-104): the first
+        // starts it, each holds while its clause does, and two that both
+        // hold are the deny naming both.
+        // `effects` reads each guarded declaration's clause off it.
+        if !clause.is_empty() {
+            let i = others.iter().position(|o| o == n).unwrap_or_default();
+            let group = format!("provider {name}");
+            out.push(crate::modules::declared(&group, i, clause.clone(), span));
+        }
+        match others.first() {
+            Some(first) if first != n => {
+                let first_source = node(first, BLOCK)
+                    .into_iter()
+                    .flat_map(|b| {
+                        b.children()
+                            .filter(|c| c.kind() == ASSIGN)
+                            .collect::<Vec<_>>()
+                    })
+                    .find(|a| node(a, BLOCK_PATH).is_some_and(|p| p.text() == "source"))
+                    .and_then(|a| terms(&a).next())
+                    .map(|t| t.text().to_string());
+                let this_source = block
+                    .iter()
+                    .flat_map(|b| {
+                        b.children()
+                            .filter(|c| c.kind() == ASSIGN)
+                            .collect::<Vec<_>>()
+                    })
+                    .find(|a| node(a, BLOCK_PATH).is_some_and(|p| p.text() == "source"))
+                    .and_then(|a| terms(&a).next())
+                    .map(|t| t.text().to_string());
+                if this_source.is_some() && this_source != first_source {
+                    let at = self.span(first);
+                    let d = Diagnostic::error(
+                        span,
+                        format!("provider {name}: each declaration names another source"),
+                    )
+                    .with_label(at, "the first declaration")
+                    .with_help("one provider is started by its source: give it in the first only");
+                    self.diags.push(d);
+                    return Err(Skip);
+                }
+            }
+            _ => {
+                out.insert(
+                    0,
+                    Stmt::Provider(Config {
+                        name: name.clone(),
+                        config: source,
+                        span,
+                    }),
+                );
+                if others.len() > 1 {
+                    let sites: Vec<(String, Span)> = others
+                        .iter()
+                        .map(|o| (format!("provider {name}"), self.span(o)))
+                        .collect();
+                    out.extend(crate::modules::denies(&format!("provider {name}"), &sites));
+                }
+            }
+        }
         Ok(out)
+    }
+
+    /// The `provider` statements beside `n` of its name, in source order.
+    /// A provider is declared once, or several times each under a clause
+    /// (R-104); else the second is the error, naming the first.
+    fn providers_named(&mut self, n: &SyntaxNode, name: &str) -> L<Vec<SyntaxNode>> {
+        let same: Vec<SyntaxNode> = n
+            .parent()
+            .into_iter()
+            .flat_map(|p| p.children())
+            .filter(|c| c.kind() == PROVIDER && word_text(c, 1) == name)
+            .collect();
+        if same.len() > 1
+            && same.first() != Some(n)
+            && !same.iter().all(|c| node(c, CLAUSE).is_some())
+        {
+            let d = Diagnostic::error(
+                self.span(n),
+                format!("`{name}` is declared twice; give each a `where`"),
+            )
+            .with_label(self.span(&same[0]), "first here")
+            .with_help(
+                "a provider is declared once, or several times each under a clause that picks \
+                 it (`provider aws { region = \"eu-west-1\" } where env == \"prod\"`)",
+            );
+            self.diags.push(d);
+            return Err(Skip);
+        }
+        Ok(same)
     }
 
     fn rule_or_fact(&mut self, rc: &Rc, head: Atom, body: Vec<Lit>) -> L<Stmt> {

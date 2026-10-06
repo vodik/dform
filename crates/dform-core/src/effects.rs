@@ -34,13 +34,17 @@ pub struct ScopeEffects {
     pub reads: BTreeSet<String>,
     pub writes: BTreeSet<String>,
     pub offers: BTreeMap<String, String>,
+    /// Each guarded provider the scope starts (R-104), and where its
+    /// clause holds: the combinations of the enum inputs it reads, or the
+    /// clause as written when it reads more.
+    pub starts: BTreeSet<String>,
 }
 
 /// Every scope's effects of `program`: the stack, each module instance
 /// and each pack `use`d.
 pub fn compute(program: &Program, schema: &Schema) -> Result<BTreeMap<String, ScopeEffects>> {
     let mut out: BTreeMap<String, ScopeEffects> = BTreeMap::new();
-    out.entry(STACK.to_string()).or_default();
+    out.entry(STACK.to_string()).or_default().starts = guarded_providers(program);
     collect_offers(program, &mut out);
 
     let compiled = partition::compile(program, &schema.facts)?;
@@ -79,6 +83,46 @@ pub fn compute(program: &Program, schema: &Schema) -> Result<BTreeMap<String, Sc
         }
     }
     Ok(out)
+}
+
+/// The providers a stack starts under a clause (R-104), each with where it
+/// holds: `provider aws when cloud == "aws"`, a combination of the enum
+/// inputs the clause reads per line it holds in; a clause that reads
+/// anything else as written.
+fn guarded_providers(program: &Program) -> BTreeSet<String> {
+    let space = crate::lint::enum_inputs(program);
+    let mut out = BTreeSet::new();
+    for s in &program.statements {
+        let Stmt::Rule(r) = s else { continue };
+        let (crate::modules::DECLARED, [crate::ast::Term::Val(crate::value::Value::Str(name)), _]) =
+            (r.head.pred.as_str(), r.head.args.as_slice())
+        else {
+            continue;
+        };
+        if !name.starts_with("provider ") {
+            continue;
+        }
+        let reads = crate::lint::guard_reads(&r.body, &space);
+        let held: Option<Vec<String>> = crate::lint::combinations(&reads)
+            .into_iter()
+            .filter_map(|c| match crate::lint::guard_holds(&r.body, &c) {
+                Some(true) => Some(Some(crate::lint::combination_text(&c))),
+                Some(false) => None,
+                None => Some(None),
+            })
+            .collect();
+        match held {
+            Some(cs) if cs.is_empty() => {
+                out.insert(format!("{name} never"));
+            }
+            Some(cs) => out.extend(cs.into_iter().map(|c| format!("{name} when {c}"))),
+            None => {
+                let body: Vec<String> = r.body.iter().map(partition::fmt_lit).collect();
+                out.insert(format!("{name} where {}", body.join(", ")));
+            }
+        }
+    }
+    out
 }
 
 /// The relations that cross a scope's edge (R-55), by the copy's scope:

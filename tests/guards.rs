@@ -176,3 +176,124 @@ resource net.vpc v { name = store.engine }
         .success();
     assert!(r.stdout.contains("name = \"cloudsql\""), "{}", r.stdout);
 }
+
+const PROVIDERS: &str = r#"
+input cloud: enum("aws", "gcp") = "aws"
+provider fake { region = "eu-west-1" } where cloud == "aws"
+provider fake { region = "us-east-1" } where cloud == "gcp"
+provider gke where cloud == "gcp"
+resource net.vpc v { size = 1 }
+"#;
+
+/// A provider under a clause is configured, and serves, only where its
+/// clause holds: its `provider_config` is derived under the clause (with
+/// no settings too), so the provider waits for it (`configure_from`).
+/// `effects` says where each starts.
+#[test]
+fn a_guarded_provider_is_configured_where_its_clause_holds() {
+    let s = Scratch::new("guards-providers");
+    s.write("p.df", PROVIDERS);
+    let config = |set: &str| {
+        s.run(&["dev", "--set", set, "query", "provider_config", "p.df"])
+            .success()
+            .stdout
+    };
+    let aws = config("cloud=aws");
+    assert!(aws.contains("\"fake\"  {region: \"eu-west-1\"}"), "{aws}");
+    assert!(!aws.contains("us-east-1") && !aws.contains("gke"), "{aws}");
+    let gcp = config("cloud=gcp");
+    assert!(gcp.contains("\"fake\"  {region: \"us-east-1\"}"), "{gcp}");
+    assert!(gcp.contains("\"gke\"   {}"), "{gcp}");
+    let r = s.run(&["dev", "effects", "p.df"]).success();
+    for want in [
+        "stack  starts  provider fake when cloud == \"aws\"\n",
+        "stack  starts  provider fake when cloud == \"gcp\"\n",
+        "stack  starts  provider gke when cloud == \"gcp\"\n",
+    ] {
+        assert!(r.stdout.contains(want), "{want}\n---\n{}", r.stdout);
+    }
+    // A provider the clause leaves out serves nothing: the vpc it would
+    // serve is planned only where it holds.
+    s.write(
+        "q.df",
+        "\ninput cloud: enum(\"aws\", \"gcp\") = \"aws\"\nprovider fake where cloud == \"gcp\"\n\
+         resource net.vpc v { size = 1 } where cloud == \"gcp\"\n",
+    );
+    let r = s
+        .run(&["dev", "--world", "w.json", "plan", "q.df"])
+        .success();
+    assert!(r.stdout.contains("is up to date"), "{}", r.stdout);
+    let r = s
+        .run(&[
+            "dev",
+            "--world",
+            "w.json",
+            "--set",
+            "cloud=gcp",
+            "plan",
+            "q.df",
+        ])
+        .success();
+    assert!(r.stdout.contains("+ net.vpc[\"v\"]"), "{}", r.stdout);
+}
+
+/// Two declarations of a provider that both hold are the deny; one with
+/// no clause beside another is the compile error.
+#[test]
+fn guarded_providers_follow_the_rule() {
+    let s = Scratch::new("guards-providers-rule");
+    s.write(
+        "p.df",
+        &PROVIDERS.replace(
+            "where cloud == \"gcp\"\nprovider gke",
+            "where cloud != \"gcp\"\nprovider gke",
+        ),
+    );
+    let r = plan(&s, &[]).failure();
+    assert!(
+        r.stderr.contains(
+            "`provider fake` is declared twice and both declarations hold: `provider fake` at \
+             p.df:3:1 and `provider fake` at p.df:4:1"
+        ),
+        "{}",
+        r.stderr
+    );
+    s.write("p.df", &PROVIDERS.replace(" where cloud == \"aws\"", ""));
+    let r = plan(&s, &[]).failure();
+    assert!(
+        r.stderr
+            .contains("p.df:4:1: `fake` is declared twice; give each a `where`"),
+        "{}",
+        r.stderr
+    );
+}
+
+/// Over enum inputs the clauses are decided at compile time, over the
+/// product `dform test` enumerates: a combination where no declaration
+/// holds, and one where two do, are warnings naming the sites.
+#[test]
+fn the_enum_lints_name_a_gap_and_an_overlap() {
+    let s = Scratch::new("guards-lints");
+    s.write(
+        "p.df",
+        &PAIR
+            .replace(
+                "enum(\"aws\", \"gcp\")",
+                "enum(\"aws\", \"gcp\", \"azure\")",
+            )
+            .replace("where cloud == \"gcp\"", "where cloud != \"gcp\""),
+    );
+    let r = plan(&s, &[]).failure();
+    for want in [
+        "warning: `store` has no declaration when cloud == \"gcp\" (declared at p.df:14:1, \
+         p.df:15:1)",
+        "warning: `store`: the clauses of two declarations both hold when cloud == \"aws\": \
+         p.df:14:1 and p.df:15:1",
+    ] {
+        assert!(r.stderr.contains(want), "{want}\n---\n{}", r.stderr);
+    }
+    // Exclusive and exhaustive: no warning.
+    s.write("p.df", PAIR);
+    let r = plan(&s, &[]).success();
+    assert!(!r.stderr.contains("warning"), "{}", r.stderr);
+}
