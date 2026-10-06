@@ -167,6 +167,9 @@ pub enum SyntaxKind {
     LIT_NOT_BLOCK,
     /// `type NAME = TYPE`: a type alias.
     TYPE_ALIAS,
+    /// `component { stmts }` after `type NAME =`: a component signature
+    /// (R-104), the inputs and outputs a component that has it declares.
+    SIGNATURE,
     __LAST,
 }
 

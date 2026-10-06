@@ -140,6 +140,7 @@ pub fn item(n: &SyntaxNode) -> Option<(&'static str, String)> {
         INPUT => ("input", word(n, 1)?),
         INPUT_RELATION => ("predicate", word(n, 1)?),
         OUTPUT_DECL => ("output", word(n, 1)?),
+        TYPE_ALIAS if n.children().any(|c| c.kind() == SIGNATURE) => ("signature", word(n, 1)?),
         TYPE_ALIAS => ("alias", word(n, 1)?),
         DECL => ("predicate", dotted(n)?),
         EXTERN => ("predicate", dotted(n)?),
@@ -179,7 +180,11 @@ pub fn enclosing(n: &SyntaxNode) -> Option<String> {
 /// Every documented item of a file's tree, in source order.
 pub fn collect(root: &SyntaxNode) -> Vec<Doc> {
     let mut out = Vec::new();
-    for n in root.descendants() {
+    // A signature's inputs and outputs are its own, printed with it.
+    for n in root
+        .descendants()
+        .filter(|n| !n.ancestors().skip(1).any(|a| a.kind() == SIGNATURE))
+    {
         let Some((kind, name)) = item(&n) else {
             continue;
         };
@@ -208,6 +213,10 @@ pub fn collect(root: &SyntaxNode) -> Vec<Doc> {
 /// rendering shows above its docs.
 pub fn header(n: &SyntaxNode) -> String {
     let text = n.text().to_string();
+    // A component signature (R-104) is all it says: printed whole.
+    if n.kind() == TYPE_ALIAS && n.children().any(|c| c.kind() == SIGNATURE) {
+        return text.trim().to_string();
+    }
     let line = text.lines().next().unwrap_or("").trim_end();
     let line = line.strip_suffix('{').unwrap_or(line).trim_end();
     line.strip_suffix(" if").unwrap_or(line).to_string()

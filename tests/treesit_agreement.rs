@@ -62,6 +62,7 @@ const SAME: &[(SyntaxKind, &[&str])] = &[
     (EXTERN, &["extern"]),
     (TYPE_DECL, &["type_declaration"]),
     (TYPE_ALIAS, &["type_alias"]),
+    (SIGNATURE, &["signature"]),
     (ATTR_DECL, &["attribute_declaration"]),
     (DECL, &["decl"]),
     (COMPONENT, &["component"]),

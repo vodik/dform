@@ -292,7 +292,17 @@ export default grammar({
     type_declaration: $ => seq('type', field('name', $.dotted_name), field('body', $.attribute_block)),
 
     // `type NAME = TYPE`: a transparent alias.
-    type_alias: $ => seq('type', field('name', $.identifier), '=', field('type', $._type)),
+    // `type T = TYPE`, or `type T = component { .. }`: a component
+    // signature, the inputs and outputs a component that has it declares
+    // (R-104).
+    type_alias: $ => seq(
+      'type',
+      field('name', $.identifier),
+      '=',
+      choice(field('type', $._type), field('signature', $.signature)),
+    ),
+
+    signature: $ => seq('component', field('body', $.statement_block)),
 
     attribute_block: $ => seq(
       '{',
@@ -334,7 +344,12 @@ export default grammar({
     ),
 
     // `component NAME { .. }`: a component declared as an item (R-65).
-    component: $ => seq('component', field('name', $._word), field('body', $.statement_block)),
+    component: $ => seq(
+      'component',
+      field('name', $._word),
+      optional(seq(':', field('signature', $._type))),
+      field('body', $.statement_block),
+    ),
 
     // `instance PATH NAME [{ .. }] [where B]`: a named copy of a
     // component.

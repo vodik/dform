@@ -1,0 +1,31 @@
+# Guarded declarations and component signatures (R-104): a name declared
+# more than once in a scope, each under a clause, and a component checked
+# against the inputs and outputs a signature declares.
+input cloud: enum("aws", "gcp") = "aws"
+input gcp_project: string = "p" where cloud == "gcp"
+
+provider fake { region = "eu-west-1" } where cloud == "aws"
+provider fake { region = "europe-west1" } where cloud == "gcp"
+
+type conn = string
+
+type database = component {
+  input name: string
+  output conn: conn
+}
+
+component pg_aws: database {
+  input name: string
+  input size: int = 1
+  output conn: conn = "aws:${name}"
+}
+
+component pg_gcp: database {
+  input name: string
+  output conn: conn = "gcp:${gcp_project}/${name}"
+}
+
+instance pg_aws store { name = "a" } where cloud == "aws"
+instance pg_gcp store { name = "b" } where cloud == "gcp"
+
+resource net.vpc main { name = store.conn }

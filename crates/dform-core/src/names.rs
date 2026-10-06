@@ -236,6 +236,11 @@ impl Decls {
 
     fn declare(&mut self, root: &SyntaxNode) {
         for n in root.descendants() {
+            // A component signature's inputs and outputs (R-104) are no
+            // scope's: the components that have it declare their own.
+            if n.ancestors().any(|a| a.kind() == SyntaxKind::SIGNATURE) {
+                continue;
+            }
             let at = n.parent().unwrap_or_else(|| n.clone());
             let scope = self.scopes(&at).remove(0);
             let name = || declared_name(&n).map(|t| t.text().to_string());

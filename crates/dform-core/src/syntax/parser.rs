@@ -847,6 +847,14 @@ impl<'a> Parser<'a> {
             TYPE_KW if self.raw(2) == EQ => self.simple(TYPE_ALIAS, |p| {
                 p.expect_word()?;
                 p.expect(EQ)?;
+                // `type T = component { .. }`: a component signature (R-104).
+                if p.at(COMPONENT_KW) {
+                    p.start(SIGNATURE);
+                    p.bump();
+                    p.stmt_block()?;
+                    p.finish();
+                    return Ok(());
+                }
                 p.type_expr()
             }),
             TYPE_KW => self.simple(TYPE_DECL, |p| {
@@ -877,8 +885,13 @@ impl<'a> Parser<'a> {
                 Ok(())
             }),
             // `component NAME { .. }`: a component declared as an item.
+            // `component NAME [: SIGNATURE] { .. }`: a component declared
+            // as an item, checked against its signature (R-104).
             COMPONENT_KW => self.simple(COMPONENT, |p| {
                 p.expect_word()?;
+                if p.eat(COLON) {
+                    p.type_expr()?;
+                }
                 p.stmt_block()
             }),
             // `use PATH [as NAME] [{ .. }] [where B]` (R-65): a module
@@ -2055,7 +2068,7 @@ mod tests {
             ("p(x) if q(x) # c\n", "`p(x) where q(x)`"),
             ("let k = 1 if {\n  q(1)\n}\n", "`let k = 1 where { .. }`"),
             ("instance m i {} if p(1)\n", "`instance m i {} where p(1)`"),
-            ("input k: int = 1 where k > 0\n", "spelled `check`"),
+            ("input k: int = 1 if k > 0\n", "spelled `check`"),
             ("type t.u { a: int where a > 0 }\n", "spelled `check`"),
             ("let k = 1 check k > 0\n", "a clause is `where`"),
             ("// a comment\n", "`#`"),

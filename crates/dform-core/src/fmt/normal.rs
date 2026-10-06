@@ -31,7 +31,11 @@ impl Names {
         let mut n = Names::default();
         n.declared
             .extend(["settings", "world", "true", "false", "_"].map(String::from));
-        for d in root.descendants() {
+        // A component signature's inputs (R-104) are no scope's names.
+        for d in root
+            .descendants()
+            .filter(|d| !d.ancestors().any(|a| a.kind() == SIGNATURE))
+        {
             let first_word = || tokens(&d).filter(|t| t.kind().is_word()).nth(1);
             match d.kind() {
                 INPUT | LET => {

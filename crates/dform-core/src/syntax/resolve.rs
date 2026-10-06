@@ -233,6 +233,9 @@ struct Scope {
     /// Each value output's declared type, as written (R-104): what two
     /// declarations of one name must agree on.
     output_types: BTreeMap<String, String>,
+    /// Component signatures declared here, `type T = component { .. }`
+    /// (R-104): name -> the file and the `type` statement.
+    signatures: BTreeMap<String, (u32, SyntaxNode)>,
     /// Stacks used here: the name it binds -> its index in `deployed`.
     stacks: BTreeMap<String, usize>,
     /// A component's `output k: T`: `Some(T)` when T is a resource type.
@@ -1053,6 +1056,12 @@ impl<'u> Lowerer<'u> {
                 }
                 TYPE_DECL => {
                     self.decls.types.insert(dotted_text(&n, 1));
+                }
+                TYPE_ALIAS if node(&n, SIGNATURE).is_some() => {
+                    let name = word_text(&n, 1);
+                    self.decls.scopes[decl]
+                        .signatures
+                        .insert(name, (file, n.clone()));
                 }
                 RESOURCE => {
                     let typ = dotted_text(&n, 1);
@@ -2057,6 +2066,9 @@ impl<'u> Lowerer<'u> {
                     .get(&name)
                     .cloned()
                     .unwrap_or(name);
+                if let Some(t) = node(n, TYPE_EXPR) {
+                    self.check_signature(n, &t, scope);
+                }
                 let body = self.stmts(node(n, STMT_BLOCK), inner, outer);
                 one(Stmt::Module(Module {
                     name: path,
@@ -3115,6 +3127,121 @@ impl<'u> Lowerer<'u> {
         if failed { Err(Skip) } else { Ok(out) }
     }
 
+    /// The component signature `name` in scope: the file and the `type`
+    /// statement. A dotted name is another module's, by its path or the
+    /// name its `use` binds (`db.database`).
+    fn signature(&self, scope: usize, name: &str) -> Option<(u32, SyntaxNode)> {
+        match name.rsplit_once('.') {
+            Some((m, s)) => {
+                let path = self.module_path_of(scope, m);
+                let at = self.decls.modules.get(&path)?.scope;
+                self.decls.scopes[at].signatures.get(s).cloned()
+            }
+            None => self
+                .chain_of(scope)
+                .into_iter()
+                .find_map(|s| self.decls.scopes[s].signatures.get(name).cloned()),
+        }
+    }
+
+    /// A type as its declaration in `file` reads, aliases expanded: what
+    /// a signature and a component compare.
+    fn type_text_in(&mut self, file: u32, t: Option<SyntaxNode>) -> String {
+        let Some(t) = t else {
+            return "any".to_string();
+        };
+        let saved = std::mem::replace(&mut self.file, file);
+        let ty = self.type_expr(&t);
+        self.file = saved;
+        crate::inputs::type_text(&ty)
+    }
+
+    /// `component C: T { .. }` (R-104): C declares every input and output
+    /// the signature `T` does, of its type; an input `T` does not declare
+    /// has a default, so a copy picked by `T` can be given what `T` says
+    /// alone. Each difference is an error at the component.
+    fn check_signature(&mut self, n: &SyntaxNode, t: &SyntaxNode, scope: usize) {
+        let span = self.span(n);
+        let comp = word_text(n, 1);
+        let sig = dotted_text(t, 0);
+        let Some((file, decl)) = self.signature(scope, &sig) else {
+            self.diags.push(
+                Diagnostic::error(self.span(t), format!("no component signature `{sig}`"))
+                    .with_note("a signature is `type NAME = component { input ..  output .. }`"),
+            );
+            return;
+        };
+        let items = |b: Option<SyntaxNode>| -> Vec<SyntaxNode> {
+            b.into_iter()
+                .flat_map(|b| b.children().collect::<Vec<_>>())
+                .collect()
+        };
+        let sig_items = items(node(&decl, SIGNATURE).and_then(|s| node(&s, STMT_BLOCK)));
+        let own = items(node(n, STMT_BLOCK));
+        let find = |kind: SyntaxKind, name: &str| {
+            own.iter()
+                .find(|c| c.kind() == kind && word_text(c, 1) == name)
+                .cloned()
+        };
+        let at = self.span(&decl);
+        let mut errors = Vec::new();
+        for c in &sig_items {
+            let name = word_text(c, 1);
+            match c.kind() {
+                INPUT | OUTPUT_DECL => {
+                    let what = if c.kind() == INPUT { "input" } else { "output" };
+                    let want = self.type_text_in(file, node(c, TYPE_EXPR));
+                    match find(c.kind(), &name) {
+                        None => errors.push(format!(
+                            "component {comp} has no {what} {name}, which {sig} declares ({name}: {want})"
+                        )),
+                        Some(o) => {
+                            let got = self.type_text_in(self.file, node(&o, TYPE_EXPR));
+                            if got != want {
+                                errors.push(format!(
+                                    "{what} {name} of component {comp} is {got}; {sig} declares {want}"
+                                ));
+                            }
+                        }
+                    }
+                }
+                INPUT_RELATION => {
+                    if find(INPUT_RELATION, &name).is_none() {
+                        errors.push(format!(
+                            "component {comp} takes no relation {name}, which {sig} declares"
+                        ));
+                    }
+                }
+                _ => errors.push(format!(
+                    "{sig} is a signature: it declares inputs and outputs, not `{}`",
+                    c.text()
+                        .to_string()
+                        .lines()
+                        .next()
+                        .unwrap_or_default()
+                        .trim()
+                )),
+            }
+        }
+        // An input the signature does not declare has a default: a copy
+        // picked by the signature is given what the signature says.
+        for c in own.iter().filter(|c| c.kind() == INPUT) {
+            let name = word_text(c, 1);
+            let declared = sig_items
+                .iter()
+                .any(|s| s.kind() == INPUT && word_text(s, 1) == name);
+            if !declared && terms(c).next().is_none() {
+                errors.push(format!(
+                    "input {name} of component {comp} is not in {sig} and has no default"
+                ));
+            }
+        }
+        for e in errors {
+            self.diags
+                .push(Diagnostic::error(span, e).with_label(at, format!("the signature {sig}")));
+        }
+    }
+
     /// The checks of an input declared more than once beside `n` (R-104):
     /// each under a clause, of one type; its own `__declared` row, and at
     /// the first the denies of two that both hold.
@@ -3284,6 +3411,18 @@ impl<'u> Lowerer<'u> {
         let (written, name) = instance_parts(n);
         let module = match self.component_path(scope, &written) {
             Ok(m) => m,
+            Err(_) if self.signature(scope, &written).is_some() => {
+                let d = Diagnostic::error(
+                    span,
+                    format!("{written} is a component signature, which is not instanced"),
+                )
+                .with_help(format!(
+                    "instance a component that has it, `component C: {written} {{ .. }}`, and \
+                     pick one by a clause: `instance C {name} {{ .. }} where ..`"
+                ));
+                self.diags.push(d);
+                return Err(Skip);
+            }
             Err(d) => {
                 self.diags.push(Diagnostic { span, ..*d });
                 return Err(Skip);

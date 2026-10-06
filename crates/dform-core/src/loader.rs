@@ -233,6 +233,14 @@ fn load_units(
                 USE => {
                     local.insert(crate::syntax::resolve::use_parts(&n).1);
                 }
+                // A component signature (R-104): the resolver says it is
+                // not instanced.
+                crate::syntax::SyntaxKind::TYPE_ALIAS
+                    if n.children()
+                        .any(|c| c.kind() == crate::syntax::SyntaxKind::SIGNATURE) =>
+                {
+                    local.insert(crate::syntax::resolve::component_name(&n));
+                }
                 _ => {}
             }
         }
