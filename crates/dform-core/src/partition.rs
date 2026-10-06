@@ -347,7 +347,7 @@ pub fn normalize_path(typ: &Option<String>, path: &str) -> String {
 /// The `(pred, T, P)` node of an atom whose type is column 0 and path is
 /// column 2. An input, `let` or output cell is partitioned by its scope
 /// too (column 1): a module instance's input `k` is the path `m.i::k`,
-/// distinct from the stack's own input `k` (scope `""`), so `instance m i
+/// distinct from the stack's own input `k` (scope `""`), so `resource m i
 /// { k = k }` passes one cell to another instead of reading its own
 /// aggregate, and `output k = c.k` reads the copy's output `k` (R-100). A
 /// scope that is not constant is any scope, `*::k`.

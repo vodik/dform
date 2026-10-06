@@ -82,7 +82,7 @@ fn why_and_query_take_an_address_as_plan_prints_it() {
     assert!(
         want.starts_with(
             "net.vpc main.vpc\n  examples/demo/network.df:19  resource \
-             net.vpc vpc { .. }   (instance network.vpc main)\n"
+             net.vpc vpc { .. }   (resource network.vpc main)\n"
         ),
         "{want}"
     );
@@ -147,7 +147,7 @@ fn why_an_attribute_shows_every_contribution() {
     assert!(
         out.contains(
             "examples/demo/network.df:19  resource net.vpc vpc { .. tags = { env, \
-             component: \"network\" } }   (instance network.vpc main)\n"
+             component: \"network\" } }   (resource network.vpc main)\n"
         ),
         "{out}"
     );
@@ -520,12 +520,12 @@ fn why_prints_the_statement_of_a_rule_that_reads_nothing() {
     );
 }
 
-/// `plan --why` prints a copy's frame as its statement, `instance network.vpc
+/// `plan --why` prints a copy's frame as its statement, `resource network.vpc
 /// main`, not the core's `instance_of(..)` (R-65).
 #[test]
-fn plan_why_prints_a_copy_as_its_instance_statement() {
+fn plan_why_prints_a_copy_as_its_resource_statement() {
     let out = dform("examples/demo/stacks/dform.df", &["plan", "--why"]);
-    assert!(out.contains("  instance network.vpc main\n"), "{out}");
+    assert!(out.contains("  resource network.vpc main\n"), "{out}");
     assert!(!out.contains("instance_of("), "{out}");
 }
 

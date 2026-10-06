@@ -1092,7 +1092,7 @@ impl<'u> Lowerer<'u> {
                     "a module, a file, is imported once by `use`; `instance` copies a component, \
                      an item `component NAME { .. }` of a module",
                 );
-                // `instance k3s cluster` for k3s.df's `component k3s`.
+                // `resource k3s cluster` for k3s.df's `component k3s`.
                 let items: Vec<String> = self
                     .decls
                     .modules
@@ -3482,7 +3482,7 @@ impl<'u> Lowerer<'u> {
         .with_label(first, "first here")
         .with_help(
             "a name is declared once in a scope, or several times each under a clause that \
-             picks it (`instance pg_aws db { .. } where cloud == \"aws\"`); a copy or an \
+             picks it (`resource pg_aws db { .. } where cloud == \"aws\"`); a copy or an \
              import of another name is `instance PATH NAME`, `use PATH as NAME`",
         );
         self.diags.push(d);
@@ -8046,7 +8046,7 @@ mod tests {
         let got = lower(
             "component m {\n  input n: int\n  resource net.vpc vpc { size = n }\n  \
              output vpc: net.vpc = vpc\n  output ids: list(ref(net.vpc)) = [vpc]\n}\n\
-             instance m a { n = 1 }\n\
+             resource m a { n = 1 }\n\
              inst(\"a\")\n\
              p(v, s) where inst(i), v = m[i].vpc, s = a.vpc.size\n\
              q(x) where x = a.ids, \"a.vpc\" in net.vpc\n",

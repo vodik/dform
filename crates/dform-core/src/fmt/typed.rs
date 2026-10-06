@@ -748,13 +748,13 @@ mod tests {
         let src = "input size: bytes = \"512Mi\"\ninput ttl: duration = \"30d\"\n\
                    input net: inet = inet(\"10.0.0.0/16\")\ninput host: inet = inet(\"10.0.0.1/16\")\n\n\
                    component c {\n  input cidr: inet\n}\n\
-                   instance c a { cidr = inet(\"10.1.0.0/16\") }\n\
+                   resource c a { cidr = inet(\"10.1.0.0/16\") }\n\
                    let s = inet.subnet(inet(\"10.0.0.0/16\"), 8, 1)\n\
                    let t = inet.subnet(inet(net), 8, 1)\n";
         let want = "input size: bytes = 512Mi\ninput ttl: duration = 30d\n\
                     input net: inet = \"10.0.0.0/16\"\ninput host: inet = inet(\"10.0.0.1/16\")\n\n\
                     component c {\n  input cidr: inet\n}\n\
-                    instance c a { cidr = \"10.1.0.0/16\" }\n\
+                    resource c a { cidr = \"10.1.0.0/16\" }\n\
                     let s = inet.subnet(\"10.0.0.0/16\", 8, 1)\n\
                     let t = inet.subnet(inet(net), 8, 1)\n";
         assert_eq!(fmt(src), want);

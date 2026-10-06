@@ -97,7 +97,7 @@ fn a_resource_name_is_the_reference_inside_its_module() {
                 "component network {{\n  input cidr: inet\n  output vpc: net.vpc = vpc\n  \
                  resource net.vpc vpc {{ cidr }}\n  \
                  resource net.subnet a {{ {entry}, cidr = inet.subnet(cidr, 8, 1) }}\n}}\n\
-                 instance network blue {{ cidr = \"10.1.0.0/16\" }}\n\
+                 resource network blue {{ cidr = \"10.1.0.0/16\" }}\n\
                  resource net.vpc_peering p {{ requester_vpc = blue.vpc, accepter_vpc = blue.vpc }}\n"
             )),
         );
@@ -220,7 +220,7 @@ fn an_instance_input_literal_is_checked() {
         "p.df",
         &program(
             "component m {\n  input cidr: inet\n  resource net.vpc v { cidr }\n}\n\
-             instance m one { cidr = \"nope\" }\n",
+             resource m one { cidr = \"nope\" }\n",
         ),
     );
     let r = plan(&s).failure();

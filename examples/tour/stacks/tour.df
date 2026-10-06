@@ -208,7 +208,7 @@ deny "a database must not be public" { database: pg } where pg in db.postgres, p
 # In Terraform an attribute has one author, and a policy's tag has to be
 # threaded into every module as a variable and merged by hand (the AWS
 # provider's `default_tags` covers tags alone). In a larger project a
-# component is a file of its own, network.df, and `instance network blue`
+# component is a file of its own, network.df, and `resource network blue`
 # names it by its path from the project root (docs/layout.md).
 
 component network {
@@ -224,9 +224,9 @@ component network {
   } where zone(z, n)
 }
 
-instance network blue { cidr = "10.1.0.0/16" }
+resource network blue { cidr = "10.1.0.0/16" }
 
-instance network green { cidr = "10.2.0.0/16" }
+resource network green { cidr = "10.2.0.0/16" }
 
 # 8. Rules over rules: a hub and its spokes
 #

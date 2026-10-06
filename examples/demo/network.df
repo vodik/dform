@@ -1,5 +1,5 @@
 # The demo's networking: a component, `vpc`, copied once per network
-# (`instance network.vpc main`). A copy's private subnets are a relation
+# (`resource network.vpc main`). A copy's private subnets are a relation
 # it exports, `output private_subnet`: a database or a cluster takes them
 # a row at a time, `subnet(s) where main.private_subnet(s)`, where a list
 # would be handed over whole (docs/grammar.md "Inputs and outputs": a list

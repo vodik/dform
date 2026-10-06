@@ -99,7 +99,7 @@ fn a_nested_copys_resource_is_every_scope_in_front() {
     s.write(
         "p.df",
         "component spoke {\n  resource net.vpc vpc {\n    cidr = \"10.1.0.0/16\"\n  }\n}\n\
-         component pair {\n  instance spoke left\n}\ninstance pair edge\nuse fake\n\
+         component pair {\n  resource spoke left {}\n}\nresource pair edge {}\nuse fake\n\
          resource net.subnet s {\n  cidr = net.vpc[\"edge.left.vpc\"].cidr\n}\n",
     );
     let r = s.run(&["plan", "--why=none", "p.df"]).success();

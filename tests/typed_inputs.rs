@@ -12,7 +12,7 @@ fn program(ty: &str, given: &str) -> String {
          resource net.subnet s {{ cidr = \"10.0.1.0/24\", vpc_id = vpc }}\n}}\n\
          resource net.vpc main {{ cidr = \"10.0.0.0/16\" }}\n\
          resource net.subnet other {{ cidr = \"10.0.2.0/24\" }}\n\
-         instance sub a {{ vpc = {given} }}\n"
+         resource sub a {{ vpc = {given} }}\n"
     )
 }
 

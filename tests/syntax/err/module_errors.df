@@ -9,8 +9,8 @@ component network {
   output peers = []
 }
 
-instance network main { vpc_cidr = "10.0.0.0/16" }
-instance network peer {}
+resource network main { vpc_cidr = "10.0.0.0/16" }
+resource network peer {}
 
 reads_private(z) where zone_index(z, _)
 
@@ -20,4 +20,4 @@ component tags {
   set v.cidr = "10.0.0.0/8" where v in net.vpc
 }
 
-instance tags all
+resource tags all {}

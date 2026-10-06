@@ -17,7 +17,7 @@ resource net.vpc "v-${z}" {
   cidr = "10.0.0.0/16"
 }
 set { if zone(s), a = 1 }
-instance m i {
+resource m i {
   if {
     zone("a")
   }

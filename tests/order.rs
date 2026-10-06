@@ -41,7 +41,7 @@ use fake
 
 use k3s
 
-instance k3s.k3s cluster { name = "k8s-${env}" }
+resource k3s.k3s cluster { name = "k8s-${env}" }
 "#,
     );
     s.run(&["plan", "main.df"]).success();
@@ -94,7 +94,7 @@ fn an_instance_of_a_module_names_its_components() {
     s.write("k3s.df", K3S);
     s.write(
         "main.df",
-        "output ip: string = cluster.ip\nuse fake\nuse k3s\ninstance k3s cluster { name = \"a\" }\n",
+        "output ip: string = cluster.ip\nuse fake\nuse k3s\nresource k3s cluster { name = \"a\" }\n",
     );
     let r = s.run(&["plan", "main.df"]).failure();
     assert!(

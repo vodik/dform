@@ -51,7 +51,7 @@ fn hover_shows_every_contribution_and_why_prints_the_derivation() {
     assert!(text.contains("winning rank: normal"), "{text}");
     // Every contribution: the module's, and the policy pack's.
     assert!(
-        text.contains("network.df:19:42, instance network.vpc main"),
+        text.contains("network.df:19:42, resource network.vpc main"),
         "{text}"
     );
     assert!(text.contains("baseline.df:10:1, use baseline"), "{text}");
@@ -90,7 +90,7 @@ fn hover_shows_every_contribution_and_why_prints_the_derivation() {
         "{hover}"
     );
     assert!(
-        text.contains("network.df:19:26, instance network.vpc peer"),
+        text.contains("network.df:19:26, resource network.vpc peer"),
         "{hover}"
     );
     c.shutdown();
@@ -140,7 +140,7 @@ fn hover_shows_docs_builtins_keywords_and_nothing_elsewhere() {
     assert!(text.contains("The environments: an alias"), "{text}");
 
     // A component in an instance's path: its docs, its inputs and outputs.
-    let text = hover(&mut c, &stack, "instance network.vpc main", 18);
+    let text = hover(&mut c, &stack, "resource network.vpc main {}", 18);
     let text = text.as_str().unwrap();
     assert!(
         text.contains("One VPC, and a private subnet in every zone."),
@@ -430,7 +430,7 @@ fn completion_reads_the_schema_and_the_modules() {
     );
 
     // An instance block: its component's inputs.
-    let at = find(&stack, "instance network.vpc main { ", 28);
+    let at = find(&stack, "resource network.vpc main { ", 28);
     let items = c.at("textDocument/completion", &stack, at);
     assert!(labels(&items).contains(&"vpc_net".to_string()), "{items}");
 
@@ -487,7 +487,7 @@ fn definition_and_formatting() {
         .position(|l| l.starts_with("component vpc"))
         .unwrap() as u64;
     assert_eq!(
-        def(&mut c, "instance network.vpc main", 18),
+        def(&mut c, "resource network.vpc main {}", 18),
         vec![("demo/network.df".into(), component)]
     );
     assert_eq!(
@@ -1157,7 +1157,7 @@ fn a_rename_that_changes_the_plan_is_refused() {
     let stack = root.join("stacks/dform.df");
     let mut c = Client::start(&root, json!({}));
     c.open(&stack);
-    let at = find(&stack, "instance network.vpc main", 22);
+    let at = find(&stack, "resource network.vpc main {}", 22);
     let e = refused(
         &mut c,
         "textDocument/prepareRename",
@@ -1184,7 +1184,7 @@ fn a_rename_that_changes_the_plan_is_refused() {
     );
     // Nothing was changed.
     let text = std::fs::read_to_string(&stack).unwrap();
-    assert!(text.contains("instance network.vpc main {"));
+    assert!(text.contains("resource network.vpc main {"));
     c.shutdown();
 }
 

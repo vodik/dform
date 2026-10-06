@@ -165,7 +165,7 @@ migrated(schema) where k8s.job["migrate-v${schema}"].status.succeeded == 1
 run(active, live_image, live_schema)
 run(rollout, released_image, schema) where migrated(schema)
 
-instance app blue {
+resource app blue {
   color = "blue"
   image
   schema = version
@@ -174,7 +174,7 @@ instance app blue {
   replicas
 } where run("blue", image, version)
 
-instance app green {
+resource app green {
   color = "green"
   image
   schema = version

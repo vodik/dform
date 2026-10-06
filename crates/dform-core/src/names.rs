@@ -37,7 +37,7 @@ pub enum Symbol {
     Alias(String),
     /// A component, or the name a `use` binds (R-65).
     Module(String),
-    /// `instance c n`: the component's path and the instance's name.
+    /// `resource c n`: the component's path and the instance's name.
     Instance(String, String),
     /// `resource T n` with a static name: its scope, type and name.
     Resource(Scope, String, String),
@@ -742,8 +742,8 @@ impl Decls {
         if self.files.contains_key(&prefix) {
             return What::Name(Symbol::File(prefix), false);
         }
-        // `instance network.vpc main`: the component `vpc` of network.df;
-        // `instance vpc main`, a component of the program.
+        // `resource network.vpc main`: the component `vpc` of network.df;
+        // `resource vpc main`, a component of the program.
         if self.components.contains(t.text()) {
             return What::Name(Symbol::Module(t.text().to_string()), false);
         }
@@ -1736,7 +1736,7 @@ component network {
   output vpc: net.vpc = vpc
   q(x) where zone_index[x] = 1, vpc.cidr == x
 }
-instance network main { vpc_net = inet(cfg.a) }
+resource network main { vpc_net = inet(cfg.a) }
 resource compute.vm bastion { private_ip = 1 }
 p(a) where a = net.vpc["main.vpc"].cidr, c = main.vpc, b = network[a].vpc, bastion.cidr == 1, bastion in compute.vm
 zone_index("a", 0)
@@ -1952,7 +1952,7 @@ s(x) where helper(x), shared(x)
             ),
             file(
                 "/p/stacks/s.df",
-                "use config\nresource k8s.secret config {}\ninstance db.pg app { name = \"a\" }\n\
+                "use config\nresource k8s.secret config {}\nresource db.pg app { name = \"a\" }\n\
                  resource k8s.secret app {}\n\
                  let x = config.base_domain\nlet y = app.conn\nlet z = \"${config.base_domain}\"\n",
             ),

@@ -221,11 +221,11 @@ fn fmt_puts_the_header_in_order() {
 #[test]
 fn fmt_orders_a_components_interface_first() {
     let src = "component m {\n  input a: int\n\n  p(x) where q(x)\n  \
-               use helper\n  decl q(a)\n  instance other o\n  #| the answer\n  \
+               use helper\n  decl q(a)\n  resource other o {}\n  #| the answer\n  \
                output r = p(a)\n}\n";
     let want = "component m {\n  input a: int\n  decl q(a)\n  \
                 #| the answer\n  output r = p(a)\n\n  p(x) where q(x)\n  use helper\n  \
-                instance other o\n}\n";
+                resource other o {}\n}\n";
     assert_eq!(fmt(src), want);
     assert_eq!(fmt(want), want);
 }
@@ -235,10 +235,10 @@ fn fmt_orders_a_components_interface_first() {
 #[test]
 fn fmt_drops_an_empty_block() {
     let src = "use fake {}\nuse env {\n}\nuse k8s { # later\n}\n\
-               component m {\n  input n: int = 1\n}\ninstance m a {} where 1 == 1\ninstance m b {   }\n\
+               component m {\n  input n: int = 1\n}\nresource m a {} where 1 == 1\nresource m b {   }\n\
                resource net.vpc v {}\n";
     let want = "use fake\nuse env\nuse k8s { # later\n}\n\
-                component m {\n  input n: int = 1\n}\ninstance m a where 1 == 1\ninstance m b\n\
+                component m {\n  input n: int = 1\n}\nresource m a {} where 1 == 1\nresource m b {}\n\
                 resource net.vpc v {}\n";
     assert_eq!(fmt(src), want);
     assert_eq!(fmt(want), want);
@@ -267,10 +267,10 @@ fn fmt_puns_an_entry_whose_value_is_its_name() {
 fn fmt_writes_a_typed_literal_in_its_shortest_spelling() {
     let src = "use k8s\n\nresource k8s.deployment d {\n  spec.replicas = 1\n  \
                spec.template.spec.containers = [{ name: \"a\", resources: { limits: { memory: \"2Gi\" } } }]\n}\n\
-               component c {\n  input cidr: inet\n}\ninstance c a { cidr = inet(\"10.1.0.0/16\") }\n";
+               component c {\n  input cidr: inet\n}\nresource c a { cidr = inet(\"10.1.0.0/16\") }\n";
     let want = "use k8s\n\nresource k8s.deployment d {\n  spec.replicas = 1\n  \
                 spec.template.spec.containers = [{ name: \"a\", resources: { limits: { memory: 2Gi } } }]\n}\n\
-                component c {\n  input cidr: inet\n}\ninstance c a { cidr = \"10.1.0.0/16\" }\n";
+                component c {\n  input cidr: inet\n}\nresource c a { cidr = \"10.1.0.0/16\" }\n";
     let p = Scratch::project("fmt-typed");
     p.write("stacks/app.df", src);
     p.run(&["fmt", "stacks/app.df"]).success();

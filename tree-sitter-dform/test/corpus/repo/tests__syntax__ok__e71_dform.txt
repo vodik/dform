@@ -53,17 +53,17 @@ use baseline
 use stdlib_net
 
 # Copies of components. Inputs are typed at the component; the body binds them.
-instance network main { vpc_net = v } where e = env, setting(e, "network.main.vpc_net", v)
-instance network peer { vpc_net = v } where e = env, setting(e, "network.peer.vpc_net", v)
+resource network main { vpc_net = v } where e = env, setting(e, "network.main.vpc_net", v)
+resource network peer { vpc_net = v } where e = env, setting(e, "network.peer.vpc_net", v)
 
-instance database primary { backup_days = days, multi_az = m_a, subnet_ids = ids } where {
+resource database primary { backup_days = days, multi_az = m_a, subnet_ids = ids } where {
   e = env
   setting(e, "db.backup_days", days)
   setting(e, "db.multi_az", m_a)
   output("network.main", "private_subnet_ids", ids)
 }
 
-instance kubernetes apps {
+resource kubernetes apps {
   private_api = api_
   nodepool_min = min
   nodepool_max = max

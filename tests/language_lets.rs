@@ -81,8 +81,8 @@ component m {
   let size = n
   resource net.vpc vpc { size = size }
 }
-instance m a { n = 1 }
-instance m b { n = 2 }
+resource m a { n = 1 }
+resource m b { n = 2 }
 use fake
 "#,
     )

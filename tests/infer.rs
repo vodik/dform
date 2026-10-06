@@ -250,7 +250,7 @@ fn an_attribute_read_types_its_column() {
 fn outputs_and_lets_type_the_columns_they_reach() {
     let sigs = signatures(
         "component network {\n  output cidr: inet = \"10.0.0.0/16\"\n  output n: int = 3\n}\n\
-         instance network main\nlet width = 8\n\
+         resource network main {}\nlet width = 8\n\
          p(c, k) where c = main.cidr, k = main.n\nq(w) where w = width\n",
     );
     assert!(sigs.contains(&"p(c: inet, k: int)".to_string()), "{sigs:?}");

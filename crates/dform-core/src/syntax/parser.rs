@@ -913,7 +913,7 @@ impl<'a> Parser<'a> {
                     p.error_here(
                         msg,
                         Some(
-                            "a copy is named, `instance network blue`; a module is imported \
+                            "a copy is named, `resource network blue`; a module is imported \
                              once by `use`, under its name"
                                 .into(),
                         ),
@@ -2054,7 +2054,7 @@ mod tests {
             ),
             ("p(x) if q(x) # c\n", "`p(x) where q(x)`"),
             ("let k = 1 if {\n  q(1)\n}\n", "`let k = 1 where { .. }`"),
-            ("instance m i {} if p(1)\n", "`instance m i {} where p(1)`"),
+            ("resource m i {} if p(1)\n", "`resource m i {} where p(1)`"),
             ("input k: int = 1 if k > 0\n", "spelled `check`"),
             ("type t.u { a: int where a > 0 }\n", "spelled `check`"),
             ("let k = 1 check k > 0\n", "a clause is `where`"),
@@ -2198,7 +2198,7 @@ mod tests {
     fn the_header_comes_before_the_body() {
         let src = "\nkey env: string\ninput n: int\n\
                    input p from facts(\"p.facts\")\nuse config\nuse fake {}\np(1)\n\
-                   component m {\n  r(1)\n  input k: int\n}\ninstance m a\n";
+                   component m {\n  r(1)\n  input k: int\n}\nresource m a {}\n";
         assert!(errors(src).is_empty(), "{:?}", errors(src));
         let src = "\nuse fake {}\nkey env: string\nq(1)\ninput p from facts(\"p\")\n";
         let e = parse(src).errors;

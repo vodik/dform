@@ -293,8 +293,8 @@ component network {
   output vpc: net.vpc = vpc
   output n = 1 where q(1)
 }
-instance network main { vpc_net = cfg.network.main.vpc_net }
-instance modules.net.vpc blue where env == "prod"
+resource network main { vpc_net = cfg.network.main.vpc_net }
+resource modules.net.vpc blue {} where env == "prod"
 use baseline
 use modules.net as net where env == "prod"
 use traefik { acme_email }
@@ -846,7 +846,7 @@ resource net.subnet "s-${z}" {
   zone(z)
   z != "x"
 }
-instance network main {} where env == "prod"
+resource network main {} where env == "prod"
 
 --------------------------------------------------------------------------------
 
@@ -1035,7 +1035,7 @@ names(name) where zone({ name })
 A copy's block gives rows
 ================================================================================
 
-instance network blue {
+resource network blue {
   cidr = "10.0.0.0/16"
   zone("a", 0)
   zone(z, n) where az(z, n)

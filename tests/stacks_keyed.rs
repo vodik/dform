@@ -198,7 +198,7 @@ fn a_deployment_read_is_the_keyed_read_of_an_instance() {
     let r = s.run(&["why", "net.vpc[\"edge\"].name", "web"]).success();
     assert!(
         r.stdout
-            .contains("instance stacks.app app[env=prod]   published by app[env=prod]\n")
+            .contains("resource stacks.app app[env=prod]   published by app[env=prod]\n")
             && r.stdout
                 .contains("output app[env=prod].url = \"https://prod.example\"\n"),
         "{}",

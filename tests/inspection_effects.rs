@@ -98,7 +98,7 @@ fn effects_show_relations_given_and_read_across_scopes() {
          decl zone(name: string, index: int)\n  decl made(name: string)\n  \
          made(z) where zone(z, _)\n  output made\n  resource net.subnet \"s-${z}\" {\n    \
          cidr = inet.subnet(cidr, 8, i)\n    zone = z\n  } where zone(z, i)\n}\n\
-         az(\"a\", 0)\ninstance subnets blue {\n  cidr = \"10.0.0.0/16\"\n  \
+         az(\"a\", 0)\nresource subnets blue {\n  cidr = \"10.0.0.0/16\"\n  \
          zone(n, i) where az(n, i)\n}\nseen(n) where blue.made(n)\n",
     );
     let out = s.run(&["dev", "effects", "p.df"]).success().stdout;

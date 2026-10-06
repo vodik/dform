@@ -92,7 +92,7 @@ fn a_negative_cycle_names_each_rule() {
 
 #[test]
 fn a_lowering_error_names_its_statement() {
-    let r = plan("\ninstance nope main\nuse fake\n").failure();
+    let r = plan("\nresource nope main {}\nuse fake\n").failure();
     assert!(
         r.stderr
             .contains("p.df:2:1: no component `nope`: there is no"),
@@ -112,7 +112,7 @@ fn why_names_the_activation_and_the_copy() {
     );
     s.write(
         "p.df",
-        "\ncomponent m {\n  resource net.vpc vpc { cidr = \"10.0.0.0/16\" }\n}\ninstance m main\nuse tags\nuse fake\n",
+        "\ncomponent m {\n  resource net.vpc vpc { cidr = \"10.0.0.0/16\" }\n}\nresource m main {}\nuse tags\nuse fake\n",
     );
     let out = s
         .run(&[
@@ -127,7 +127,7 @@ fn why_names_the_activation_and_the_copy() {
         .success()
         .stdout;
     assert!(
-        out.contains("└─ \"10.0.0.0/16\"   p.df:3   (instance m main)\n"),
+        out.contains("└─ \"10.0.0.0/16\"   p.df:3   (resource m main)\n"),
         "{out}"
     );
     assert!(

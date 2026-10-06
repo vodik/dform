@@ -54,7 +54,7 @@ component c {
   resource net.vpc v { cidr = cfg }
 }
 resource net.vpc cfg { cidr = "10.1.0.0/16" }
-instance c a { cfg = "10.2.0.0/16" }
+resource c a { cfg = "10.2.0.0/16" }
 use fake
 "#,
     );
@@ -85,12 +85,12 @@ component sub {
 }
 component edge {
   resource net.vpc main { cidr = "10.1.0.0/16" }
-  instance sub inner { vpc = main }
+  resource sub inner { vpc = main }
   output c: string = inner.c
 }
 resource net.vpc main { cidr = "10.0.0.0/16" }
-instance sub a { vpc = main }
-instance edge e
+resource sub a { vpc = main }
+resource edge e {}
 resource net.subnet s { cidr = e.c }
 use fake
 "#,

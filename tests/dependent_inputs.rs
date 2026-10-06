@@ -142,8 +142,8 @@ component store {
   resource net.vpc v { name = project } where cloud == "gcp"
   resource net.vpc w { name = "aws" } where cloud == "aws"
 }
-instance store a { cloud = "aws" }
-instance store g { cloud = "gcp", project = "p1" }
+resource store a { cloud = "aws" }
+resource store g { cloud = "gcp", project = "p1" }
 use fake
 "#,
     );

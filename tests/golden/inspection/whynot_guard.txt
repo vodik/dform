@@ -1,5 +1,5 @@
 net.vpc["peer.vpc"]: no rule derives it
-  examples/demo/network.df:19  resource net.vpc vpc { .. }   (instance network.vpc peer)
-    instance network.vpc peer: not made
-      examples/demo/stacks/dform.df:54  instance network.vpc peer { .. } where env != "dev"
+  examples/demo/network.df:19  resource net.vpc vpc { .. }   (resource network.vpc peer)
+    resource network.vpc peer: not made
+      examples/demo/stacks/dform.df:54  resource network.vpc peer { .. } where env != "dev"
         env != "dev": false, with env = "dev"

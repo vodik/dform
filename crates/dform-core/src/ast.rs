@@ -303,7 +303,7 @@ pub struct Module {
     pub span: Span,
 }
 
-/// `instance component name { k = v ... } [where body]`, or `use module
+/// `resource component name { k = v ... } [where body]`, or `use module
 /// [as name] { .. } [where body]`: each `k = v` is a contribution to input
 /// `k` of the copy `name` (R-65), `module` the component's or module's
 /// path.

@@ -27,8 +27,8 @@ component m {
     size = s
   } where size(s)
 }
-instance m a { n = 1 }
-instance m b { n = 2 }
+resource m a { n = 1 }
+resource m b { n = 2 }
 use fake
 "#,
     )
@@ -53,7 +53,7 @@ fn reading_a_private_predicate_is_an_error_naming_the_component() {
 component m {
   size(1)
 }
-instance m a
+resource m a {}
 big(s) where size(s)
 use fake
 "#,
@@ -82,7 +82,7 @@ component m {
   output size: int = s_ where size(s_)
   output vpc: addr = vpc
 }
-instance m a { n = 3 }
+resource m a { n = 3 }
 inst("a")
 resource net.subnet s {
   size = s_
@@ -111,7 +111,7 @@ component m {
   contributes need
   size(1)
 }
-instance m a
+resource m a {}
 use fake
 "#,
     )
@@ -154,8 +154,8 @@ component m {
     size = n_
   } where n(n_)
 }
-instance m a
-instance m b { n = 1 }
+resource m a {}
+resource m b { n = 1 }
 use fake
 "#;
     let r = plan(src).success();
@@ -189,7 +189,7 @@ component m {
     size = n_
   } where n(n_)
 }
-instance m a { n = 9 }
+resource m a { n = 9 }
 use fake
 "#,
     )
@@ -261,8 +261,8 @@ component app {
     count = replicas
   }
 }
-instance app blue { replicas = replicas }
-instance app green { replicas = 7 }
+resource app blue { replicas = replicas }
+resource app green { replicas = 7 }
 use fake
 "#,
     );
@@ -301,7 +301,7 @@ fn dform_df_peers_each_edge_with_its_own_pair() {
     let s = Scratch::new("lang-modules-peering");
     common::copy_dir(&common::repo().join("examples/demo"), &s.dir);
     let third = r#"
-instance network.vpc third {
+resource network.vpc third {
   vpc_net = inet("10.70.0.0/16")
 }
 vpc_peer_inst("main", "third")
@@ -372,8 +372,8 @@ use fake
 use config
 use modules.lan
 
-instance lan.vpc main { range = inet("10.1.0.0/16") }
-instance modules.lan.vpc spare { range = inet("10.2.0.0/16") }
+resource lan.vpc main { range = inet("10.1.0.0/16") }
+resource modules.lan.vpc spare { range = inet("10.2.0.0/16") }
 use postgres
 
 tiers(t) where config.tier(t)
@@ -452,7 +452,7 @@ component c {
   use naming
   output labels = [ x | naming.label(x) ]
 }
-instance c one
+resource c one {}
 got(x) where naming.label(x)
 inner(l) where l = one.labels
 use fake
@@ -490,7 +490,7 @@ component bastion {
     size = 1
   }
 }
-instance bastion jump where env == "prod"
+resource bastion jump {} where env == "prod"
 use tagged where env == "prod"
 resource net.vpc main { cidr = "10.0.0.0/16" }
 use fake
@@ -527,8 +527,8 @@ component spoke {
 component pair {
   input a: string
   input b: string
-  instance spoke left { range = a }
-  instance spoke right { range = b }
+  resource spoke left { range = a }
+  resource spoke right { range = b }
   side("left")
   side("right")
   resource net.vpc_peering p {
@@ -537,7 +537,7 @@ component pair {
   }
   output vpcs = [ v | side(s), v = spoke[s].vpc ]
 }
-instance pair edge { a = "10.1.0.0/16", b = "10.2.0.0/16" }
+resource pair edge { a = "10.1.0.0/16", b = "10.2.0.0/16" }
 n(c) where c = edge.vpcs
 use fake
 "#,

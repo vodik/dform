@@ -48,10 +48,10 @@ use stdlib_net
 # Copies of a component (Terraform module-like): network.df's `vpc`, once
 # per network. Inputs are declared by the component; each `k = v` here is
 # a contribution to one.
-instance network.vpc main { vpc_net = inet(cidrs.main) }
+resource network.vpc main { vpc_net = inet(cidrs.main) }
 
 # Dev is small: one network, no database, no cluster.
-instance network.vpc peer { vpc_net = inet(cidrs.peer) } where env != "dev"
+resource network.vpc peer { vpc_net = inet(cidrs.peer) } where env != "dev"
 
 # A module is imported once, its inputs bound by its block, rows included
 # (database.df's resources are `database/db`): main's private subnets.

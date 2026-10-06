@@ -14,8 +14,8 @@ component vpc {
   resource net.vpc vpc { cidr = vpc_net }
   resource net.subnet a { cidr = vpc_net, vpc_id = ref(vpc) }
 }
-instance vpc blue { vpc_net = "10.1.0.0/16" }
-instance vpc green { vpc_net = "10.2.0.0/16" } where env != "dev"
+resource vpc blue { vpc_net = "10.1.0.0/16" }
+resource vpc green { vpc_net = "10.2.0.0/16" } where env != "dev"
 "#;
 
 fn project(name: &str, extra: &str) -> Scratch {
@@ -40,7 +40,7 @@ fn why_prints_a_copys_relations_in_its_frame() {
         ])
         .success();
     assert!(
-        r.stdout.contains("├─ instance vpc green\n")
+        r.stdout.contains("├─ resource vpc green\n")
             && r.stdout
                 .contains("└─ vpc_net(\"10.2.0.0/16\")   (in green)\n"),
         "{}",
@@ -50,7 +50,7 @@ fn why_prints_a_copys_relations_in_its_frame() {
     // A copy's resource names the copy's frame (R-67).
     assert!(
         r.stdout
-            .contains("resource net.vpc vpc { cidr = vpc_net }   (instance vpc green)\n"),
+            .contains("resource net.vpc vpc { cidr = vpc_net }   (resource vpc green)\n"),
         "{}",
         r.stdout
     );
@@ -166,8 +166,8 @@ fn a_lifecycle_over_a_copy_covers_its_resources() {
     s.write(
         "main.df",
         &s.read("main.df").replace(
-            "instance vpc blue { vpc_net = \"10.1.0.0/16\" }",
-            "instance vpc blue { vpc_net = \"10.1.0.0/16\" } where env == \"none\"",
+            "resource vpc blue { vpc_net = \"10.1.0.0/16\" }",
+            "resource vpc blue { vpc_net = \"10.1.0.0/16\" } where env == \"none\"",
         ),
     );
     let r = s.run(&["plan", "main.df"]).failure();
@@ -213,9 +213,9 @@ component vpc {
 }
 component edge {
   input base: string
-  instance vpc left { vpc_net = base }
+  resource vpc left { vpc_net = base }
 }
-instance edge east { base = "10.1.0.0/16" }
+resource edge east { base = "10.1.0.0/16" }
 "#,
     );
     let r = s.run(&["plan", "main.df"]).success();

@@ -55,9 +55,9 @@ fn a_components_relation_input_is_given_by_rows_and_by_from() {
         &format!(
             "\nkey env: enum(\"dev\", \"prod\") = \"dev\"\n{NET}\
              az(\"a\", 0)\naz(\"b\", 1)\n\
-             instance subnets blue {{\n  cidr = \"10.0.0.0/16\"\n  zone(n, i) where az(n, i)\n  \
+             resource subnets blue {{\n  cidr = \"10.0.0.0/16\"\n  zone(n, i) where az(n, i)\n  \
              zone from csv(\"z.csv\")\n}}\n\
-             instance subnets green {{\n  cidr = \"10.1.0.0/16\"\n  zone(\"x\", 9)\n}} \
+             resource subnets green {{\n  cidr = \"10.1.0.0/16\"\n  zone(\"x\", 9)\n}} \
              where env == \"prod\"\n\
              use fake\n"
         ),
@@ -171,8 +171,8 @@ component vnet {
 }
 az("a", 0)
 az("b", 1)
-instance vnet blue { cidr = "10.0.0.0/16" }
-instance vnet green { cidr = "10.1.0.0/16" }
+resource vnet blue { cidr = "10.0.0.0/16" }
+resource vnet green { cidr = "10.1.0.0/16" }
 "#;
 
 /// `output p` exports a copy's relation (R-55): read as `blue.p(..)`,

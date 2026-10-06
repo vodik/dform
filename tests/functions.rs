@@ -84,7 +84,7 @@ fn internal_functions_are_not_callable() {
 /// function package is an error naming both.
 #[test]
 fn a_head_two_things_claim_is_an_error() {
-    let e = error("component inet {\n  output k = 1\n}\ninstance inet main\n");
+    let e = error("component inet {\n  output k = 1\n}\nresource inet main {}\n");
     assert!(
         e.contains(
             "`inet` is both the component `inet` and the function package `inet` (std/inet.df)"

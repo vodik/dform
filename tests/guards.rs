@@ -27,8 +27,8 @@ component pg_gcp {
   resource net.vpc v { size = 2 }
   output conn: conn = "gcp:${name}"
 }
-instance pg_aws store { name = "a" } where cloud == "aws"
-instance pg_gcp store { name = "b" } where cloud == "gcp"
+resource pg_aws store { name = "a" } where cloud == "aws"
+resource pg_gcp store { name = "b" } where cloud == "gcp"
 resource net.subnet s { size = 3, name = store.conn }
 use fake
 "#;
@@ -71,8 +71,8 @@ fn two_that_both_hold_are_denied_naming_both() {
     let r = plan(&s, &[]).failure();
     assert!(
         r.stderr.contains(
-            "`store` is declared twice and both declarations hold: `instance pg_aws store` at \
-             p.df:14:1 and `instance pg_gcp store` at p.df:15:1"
+            "`store` is declared twice and both declarations hold: `resource pg_aws store` at \
+             p.df:14:1 and `resource pg_gcp store` at p.df:15:1"
         ),
         "{}",
         r.stderr
@@ -118,8 +118,8 @@ fn a_read_across_declarations_of_other_types_is_an_error() {
     let r = plan(&s, &[]).failure();
     for want in [
         "`store.conn` has another type in each declaration of `store`",
-        "instance pg_aws store: output conn: conn",
-        "instance pg_gcp store: output conn: int",
+        "resource pg_aws store: output conn: conn",
+        "resource pg_gcp store: output conn: int",
         "a component signature unifies them",
     ] {
         assert!(r.stderr.contains(want), "{want}\n---\n{}", r.stderr);
@@ -134,7 +134,7 @@ fn a_read_across_declarations_of_other_types_is_an_error() {
     let r = plan(&s, &[]).failure();
     assert!(
         r.stderr
-            .contains("`store.conn`: `instance pg_gcp store` has no `conn`"),
+            .contains("`store.conn`: `resource pg_gcp store` has no `conn`"),
         "{}",
         r.stderr
     );

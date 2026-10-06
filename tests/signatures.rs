@@ -28,8 +28,8 @@ component pg_gcp: database {
   output conn: conn = "gcp:${name}"
 }
 
-instance pg_aws store { name = "a" } where cloud == "aws"
-instance pg_gcp store { name = "b" } where cloud == "gcp"
+resource pg_aws store { name = "a" } where cloud == "aws"
+resource pg_gcp store { name = "b" } where cloud == "gcp"
 resource net.subnet s { size = 3, name = store.conn }
 use fake
 "#;
@@ -113,8 +113,8 @@ fn a_signature_is_not_instanced() {
     s.write(
         "p.df",
         &SIG.replace(
-            "instance pg_gcp store",
-            "instance database other\ninstance pg_gcp store",
+            "resource pg_gcp store {}",
+            "resource database other {}\nresource pg_gcp store {}",
         ),
     );
     let r = plan(&s, &[]).failure();

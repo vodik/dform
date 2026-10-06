@@ -276,7 +276,7 @@ use databases
 
 use fake
 
-instance databases.postgres app_db {
+resource databases.postgres app_db {
   name = "app-${config.region}"
   subnet = platform[env].subnet
 }

@@ -135,7 +135,7 @@ fn a_component_input_of_the_wrong_type_is_a_violation() {
     let s = Scratch::project("lang-inputs-module");
     s.write(
         "p.df",
-        "\ncomponent m {\n  input n: int\n  resource net.vpc v {\n    n = n_\n  } where n(n_)\n}\ninstance m a { n = format(\"%s\", \"three\") }\nuse fake\n",
+        "\ncomponent m {\n  input n: int\n  resource net.vpc v {\n    n = n_\n  } where n(n_)\n}\nresource m a { n = format(\"%s\", \"three\") }\nuse fake\n",
     );
     let r = s
         .run(&["dev", "--world", "w.json", "plan", "p.df"])
@@ -521,7 +521,7 @@ fn a_field_with_no_default_is_required() {
         "p.df",
         "\ncomponent m {\n  input db {\n    size: int\n    zone: string = \"a\"\n  }\n\
          resource net.vpc v {\n    size = db.size\n    zone = db.zone\n  }\n}\n\
-         instance m a { db.size = 2 }\ninstance m b { db = { size: 5, zone: \"b\" } }\n\
+         resource m a { db.size = 2 }\nresource m b { db = { size: 5, zone: \"b\" } }\n\
          use fake\n",
     );
     let r = object_plan(&s, &[]).success();

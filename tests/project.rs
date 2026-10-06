@@ -223,7 +223,7 @@ fn a_program_uses_a_stack_and_never_instances_it() {
     let s = project("target-use-stack");
     s.write(
         "stacks/both.df",
-        "\ncomponent c {\n  input n: int\n}\ninstance stacks.net x\nuse fake\n",
+        "\ncomponent c {\n  input n: int\n}\nresource stacks.net x {}\nuse fake\n",
     );
     let r = s.run(&["plan", "both"]).failure();
     assert!(

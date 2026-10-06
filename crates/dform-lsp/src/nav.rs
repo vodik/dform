@@ -13,7 +13,7 @@ pub fn token_before(root: &SyntaxNode, at: usize) -> Option<SyntaxToken> {
 }
 
 /// The dotted name after a node's keyword: `net.vpc` of `resource net.vpc
-/// vpc {`, `network` of `instance network main {`.
+/// vpc {`, `network` of `resource network main {`.
 pub fn name_after_keyword(node: &SyntaxNode) -> Option<String> {
     let mut out = String::new();
     let mut started = false;

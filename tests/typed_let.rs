@@ -138,7 +138,7 @@ fn a_ref_attribute_picks_the_resource_of_its_type() {
                  set a.vpc = main where on\nset b.vpc = main @default where on\n\
                  component c {\n  resource net.vpc main { cidr = \"10.1.0.0/16\" }\n  \
                  resource net.subnet main {\n    vpc = main\n    cidr = \"10.1.1.0/24\"\n  }\n}\n\
-                 instance c x\n",
+                 resource c x {}\n",
             )
         ),
     )

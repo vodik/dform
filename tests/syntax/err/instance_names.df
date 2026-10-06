@@ -1,9 +1,9 @@
-# R-65: an instance's name is its scope, one namespace per scope; and an
-# instance names a component, never a module's value or nothing.
+# R-65: a component's resource's name is its scope, one namespace per
+# scope; and its type names a component, never a module's value or nothing.
 component network {
   input cidr: string
 }
 
-instance network main { cidr = "10.1.0.0/16" }
-instance network main { cidr = "10.2.0.0/16" }
-instance subnet blue
+resource network main { cidr = "10.1.0.0/16" }
+resource network main { cidr = "10.2.0.0/16" }
+resource subnet blue {}

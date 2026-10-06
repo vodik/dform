@@ -3467,7 +3467,7 @@ const REFERENCE: &[Reference] = &[
         Kw,
         "instance PATH NAME? { INPUT = TERM, ... } (where BODY)?",
         "One copy of a component, by its path or a name in scope, named NAME or after the component; each field is a contribution to one of its inputs, and the clause gates the copy.",
-        "instance network main { vpc_net = inet(\"10.0.0.0/16\") }",
+        "resource network main { vpc_net = inet(\"10.0.0.0/16\") }",
     ),
     r(
         "use",
@@ -3958,7 +3958,7 @@ mod tests {
              input audit: bool = false
              set days = 14 where audit == false
              component network {\n output ids: list(string) = [\"a\", \"b\"]\n }
-             instance network main
+             resource network main {}
              got(d) where d = days
              ids(l) where output(\"main\", \"ids\", l)
              deny \"no audit\" where not audit")

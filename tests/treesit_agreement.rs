@@ -344,7 +344,7 @@ fn edge_cases_agree() {
         "resource net.vpc a {\n  if q(x)\n  cidr = \"x\"\n}\n",
         "resource net.vpc a {\n  cidr = x\n} where {\n  q(x)\n  r(x)\n}\n",
         "resource net.vpc a {\n  cidr = x\n}\nwhere q(x)\n",
-        "instance m i {} where p(1)\n",
+        "resource m i {} where p(1)\n",
         "use p { a = 1 } where q(1)\n",
         // Refinements are `check`; `where` there is the clause word.
         "input k: int = 1 check k > 0\n",
@@ -392,10 +392,10 @@ fn edge_cases_agree() {
         "use p\nlet cfg = settings[env]\n",
         // Paths (R-65).
         "use modules.net as net where env == \"prod\"\nuse stacks.platform\n",
-        "instance network blue\ninstance modules.net.vpc main { cidr }\n",
+        "resource network blue {}\nresource modules.net.vpc main { cidr }\n",
         "instance network\n",
-        "instance network where q(1)\n",
-        "instance traefik edge {\n  acme_email = config.admin_email\n} where env == \"prod\"\n",
+        "resource network where q(1)\n",
+        "resource traefik edge {\n  acme_email = config.admin_email\n} where env == \"prod\"\n",
         "let e = platform[env=env].endpoint\nlet r = acme[env=\"prod\", region=r].x\n",
         // Strings.
         "p(\"a ${x} $${b} {c} \\\"c\\\" \\u{41}\") where q(x)\n",

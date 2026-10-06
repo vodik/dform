@@ -51,13 +51,13 @@ component m {
   iam_need("app", "net.read", ref(net.vpc, "vpc", "id"))
 }
 
-instance m main { on = true }
+resource m main { on = true }
 
 component tagging {
   arg(t, a_, "tags", { owner: "ops" }) @override where want(t, a_)
 }
 
-instance tagging tags
+resource tagging tags {}
 
 q(1) where env("prod")
 

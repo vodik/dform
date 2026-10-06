@@ -188,7 +188,7 @@ fn a_components_decl_names_its_record_pattern() {
   output first = n where zone({ name: n, index: 0 })
   output second = n where zone(name: n, index: 1)
 }
-instance c x
+resource c x {}
 got(f, s) where f = x.first, s = x.second
 "#;
     assert_eq!(facts(src, "got"), [r#"got("a", "b")"#]);

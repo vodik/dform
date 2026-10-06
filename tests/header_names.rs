@@ -117,7 +117,7 @@ fn a_module_item_reads_the_module_and_another_read_is_ambiguous() {
 #[test]
 fn an_instance_output_reads_the_copy() {
     let src = "component c {\n  output size: int = 3\n}\n\
-               instance c main\n\
+               resource c main {}\n\
                resource net.vpc main { cidr = \"10.0.0.0/16\", tags = { n: \"${main.size}\" } }\n";
     let e = error(&format!(
         "{src}resource net.subnet s {{ vpc = net.vpc[\"main\"], cidr = main.cidr }}\n"

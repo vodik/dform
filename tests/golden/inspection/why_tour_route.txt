@@ -24,14 +24,14 @@ net.route blue-to-green
   │    with t = "green", v = "green.vpc"
   │         network[t].vpc = "green.vpc"
   │    ├─ spoke("green")   examples/tour/stacks/tour.df:248
-  │    ├─ instance network green   examples/tour/stacks/tour.df:229
+  │    ├─ resource network green   examples/tour/stacks/tour.df:229
   │    └─ output green.vpc = "green.vpc"
   │         merged from 1 contribution
-  │         └─ "green.vpc"   examples/tour/stacks/tour.df:216   (instance network green)
+  │         └─ "green.vpc"   examples/tour/stacks/tour.df:216   (resource network green)
   └─ net.vpc green.vpc.cidr = 10.2.0.0/16
        merged from 1 contribution
        └─ 10.2.0.0/16
-            examples/tour/stacks/tour.df:218  resource net.vpc vpc { cidr .. }   (instance network green)
+            examples/tour/stacks/tour.df:218  resource net.vpc vpc { cidr .. }   (resource network green)
             with cidr = 10.2.0.0/16
             └─ input green.cidr = 10.2.0.0/16
                  merged from 1 contribution

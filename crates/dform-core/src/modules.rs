@@ -2,7 +2,7 @@
 //! proposals/I-modules.md).
 //!
 //! A `use m [as n] { k = V } where B` imports module `m`, a file, and an
-//! `instance c n { k = V } where B` copies component `c`, an item of one:
+//! `resource c n { k = V } where B` copies component `c`, an item of one:
 //! one mechanism, the body under the scope `n`:
 //!
 //! - resource names are scoped (`n.name`, its address `T["n.name"]`, R-112); in
@@ -181,7 +181,7 @@ fn lets(stmts: Vec<Stmt>, scope: &str, names: Option<&Names>) -> Vec<Stmt> {
 }
 
 /// One declaration of a name a scope declares more than once (R-104):
-/// what it is as written (`instance pg_aws db`), its clause, where.
+/// what it is as written (`resource pg_aws db`), its clause, where.
 pub struct Alternative {
     pub what: String,
     pub clause: Vec<Lit>,
@@ -616,7 +616,7 @@ impl Cx<'_> {
         Some(def)
     }
 
-    /// `instance c n { k = V } where B`, a component's body under the
+    /// `resource c n { k = V } where B`, a component's body under the
     /// scope `n`, recorded in `instance_of`; or `use m [as n] { k = V }
     /// where B`, a module's (`used`): one mechanism (R-65).
     fn instance(&mut self, u: &crate::ast::Instance, at: &str, used: bool) -> Vec<Stmt> {
