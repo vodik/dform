@@ -184,7 +184,10 @@ fn walk(name: &str, root: &Path, every_token: bool) -> Vec<String> {
                     What::Other => {
                         WORDS.contains(&t.text())
                             || t.parent().is_some_and(|p| {
-                                matches!(p.kind(), SyntaxKind::USE | SyntaxKind::INSTANCE)
+                                matches!(
+                                    p.kind(),
+                                    SyntaxKind::USE | SyntaxKind::INSTANCE | SyntaxKind::RESOURCE
+                                )
                             })
                     }
                     _ => false,

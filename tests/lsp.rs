@@ -1165,7 +1165,7 @@ fn a_rename_that_changes_the_plan_is_refused() {
     );
     assert!(
         e.contains(
-            "instance main of component vpc is also the string \"main\" at stacks/dform.df:74:15"
+            "resource network.vpc main is also the string \"main\" at stacks/dform.df:74:15"
         ),
         "{e}"
     );

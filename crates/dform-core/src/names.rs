@@ -212,6 +212,22 @@ impl Decls {
                 };
                 d.named.insert(path);
             }
+            // The components, which a resource's type may name (R-113).
+            for n in f.tree.descendants() {
+                if n.kind() == SyntaxKind::COMPONENT
+                    && let Some(x) = declared_name(&n)
+                {
+                    d.components.insert(x.text().to_string());
+                }
+            }
+        }
+        // A resource of a component names its file as a `use` does.
+        for f in files {
+            for n in f.tree.descendants() {
+                if n.kind() == SyntaxKind::RESOURCE && d.is_copy(&n) {
+                    d.named.insert(crate::syntax::resolve::copy_parts(&n).0);
+                }
+            }
         }
         let providers: Vec<(String, String)> = d
             .uses
@@ -228,6 +244,47 @@ impl Decls {
             d.declare(&f.tree);
         }
         d
+    }
+
+    /// Whether `n` makes a copy of a component: an `instance`, or a
+    /// `resource` whose type's last segment is a component of the
+    /// project, before it a file, a `use`'s name or nothing (R-113).
+    fn is_copy(&self, n: &SyntaxNode) -> bool {
+        match n.kind() {
+            SyntaxKind::INSTANCE => true,
+            SyntaxKind::RESOURCE => {
+                let (path, _) = crate::syntax::resolve::copy_parts(n);
+                match path.rsplit_once('.') {
+                    None => self.components.contains(&path),
+                    Some((prefix, last)) => {
+                        let head = prefix.split('.').next().unwrap_or(prefix);
+                        self.components.contains(last)
+                            && (self.files.contains_key(prefix)
+                                || self.uses.contains_key(head)
+                                || self.components.contains(head))
+                    }
+                }
+            }
+            _ => false,
+        }
+    }
+
+    /// Whether the body `at` is in (its component's, else its file's)
+    /// binds `name` itself by a `use` or a copy: then the body's own
+    /// resource of the name does not win a read over it (R-101).
+    fn binds_here(&self, at: &SyntaxNode, name: &str) -> bool {
+        let body = at
+            .ancestors()
+            .find(|a| a.kind() == SyntaxKind::COMPONENT)
+            .and_then(|c| c.children().find(|x| x.kind() == SyntaxKind::STMT_BLOCK))
+            .or_else(|| at.ancestors().last());
+        body.into_iter()
+            .flat_map(|b| b.children())
+            .any(|n| match n.kind() {
+                SyntaxKind::USE => crate::syntax::resolve::use_parts(&n).1 == name,
+                _ if self.is_copy(&n) => crate::syntax::resolve::copy_parts(&n).1 == name,
+                _ => false,
+            })
     }
 
     /// Whether `n` is a `use` of a provider (R-112).
@@ -287,8 +344,8 @@ impl Decls {
                 SyntaxKind::USE => {
                     self.modules.insert(crate::syntax::resolve::use_parts(&n).1);
                 }
-                SyntaxKind::INSTANCE => {
-                    let (path, name) = crate::syntax::resolve::instance_parts(&n);
+                _ if self.is_copy(&n) => {
+                    let (path, name) = crate::syntax::resolve::copy_parts(&n);
                     if let Some(last) = path.rsplit('.').next() {
                         self.modules.insert(last.to_string());
                     }
@@ -461,11 +518,11 @@ impl Decls {
     fn block_target(&self, at: &SyntaxNode) -> Scope {
         let owner = at
             .ancestors()
-            .find(|a| matches!(a.kind(), SyntaxKind::USE | SyntaxKind::INSTANCE))?;
+            .find(|a| a.kind() == SyntaxKind::USE || self.is_copy(a))?;
         Some(match owner.kind() {
             SyntaxKind::USE => format!("module {}", crate::syntax::resolve::use_parts(&owner).0),
             _ => {
-                let (path, _) = crate::syntax::resolve::instance_parts(&owner);
+                let (path, _) = crate::syntax::resolve::copy_parts(&owner);
                 format!("component {}", last_segment(&path))
             }
         })
@@ -615,6 +672,7 @@ impl Decls {
             SyntaxKind::COMPONENT if is_declared() => decl(Symbol::Module(name)),
             SyntaxKind::USE if self.provider_use(&parent) => What::Provider,
             SyntaxKind::USE | SyntaxKind::INSTANCE => self.statement_path(&parent, t),
+            SyntaxKind::RESOURCE if self.is_copy(&parent) => self.statement_path(&parent, t),
             SyntaxKind::DECL | SyntaxKind::EXTERN | SyntaxKind::INPUT_RELATION
                 if relation_name(&parent).as_ref() == Some(t) =>
             {
@@ -665,14 +723,15 @@ impl Decls {
         }
     }
 
-    /// A segment of a `use` or `instance` path, or the name it binds: a
-    /// file the path names so far, a component of one, the binding.
+    /// A segment of a `use`'s path or a copy's component path, or the
+    /// name it binds: a file the path names so far, a component of one,
+    /// the binding.
     fn statement_path(&self, n: &SyntaxNode, t: &SyntaxToken) -> What {
         if crate::syntax::resolve::bound_token(n).as_ref() == Some(t) {
             return match n.kind() {
                 SyntaxKind::USE => What::Name(Symbol::Module(t.text().to_string()), true),
                 _ => {
-                    let (path, name) = crate::syntax::resolve::instance_parts(n);
+                    let (path, name) = crate::syntax::resolve::copy_parts(n);
                     What::Name(Symbol::Instance(path, name), true)
                 }
             };
@@ -713,10 +772,10 @@ impl Decls {
             .and_then(|b| b.parent())
             .filter(|s| !self.provider_use(s))
         {
-            Some(i) if matches!(i.kind(), SyntaxKind::INSTANCE | SyntaxKind::USE) && first => {
+            Some(i) if (i.kind() == SyntaxKind::USE || self.is_copy(&i)) && first => {
                 return What::Name(Symbol::Value(self.block_target(path), name), false);
             }
-            Some(i) if matches!(i.kind(), SyntaxKind::INSTANCE | SyntaxKind::USE) => {
+            Some(i) if i.kind() == SyntaxKind::USE || self.is_copy(&i) => {
                 return What::Path;
             }
             _ => {}
@@ -854,7 +913,7 @@ impl Decls {
         // In a module's or a component's body its own resource wins over
         // what its user's scope brings in (R-101).
         let own = matches!(rs.first(), Some(Symbol::Resource(Some(_), _, _)));
-        let reads_other = !(own && !binds_here(at, &name0))
+        let reads_other = !(own && !self.binds_here(at, &name0))
             && dot(1)
             && name_at(2).is_some_and(|x| {
                 let of = match (instance, self.uses.get(&name0)) {
@@ -1317,24 +1376,6 @@ pub fn component_scope(node: &SyntaxNode) -> Scope {
         (a.kind() == SyntaxKind::COMPONENT)
             .then(|| Some(format!("component {}", declared_name(&a)?.text())))?
     })
-}
-
-/// Whether the body `at` is in (its component's, else its file's) binds
-/// `name` itself by a `use` or an `instance`: then the body's own resource
-/// of the name does not win a read over it (R-101).
-fn binds_here(at: &SyntaxNode, name: &str) -> bool {
-    let body = at
-        .ancestors()
-        .find(|a| a.kind() == SyntaxKind::COMPONENT)
-        .and_then(|c| c.children().find(|x| x.kind() == SyntaxKind::STMT_BLOCK))
-        .or_else(|| at.ancestors().last());
-    body.into_iter()
-        .flat_map(|b| b.children())
-        .any(|n| match n.kind() {
-            SyntaxKind::USE => crate::syntax::resolve::use_parts(&n).1 == name,
-            SyntaxKind::INSTANCE => crate::syntax::resolve::instance_parts(&n).1 == name,
-            _ => false,
-        })
 }
 
 fn last_segment(path: &str) -> &str {

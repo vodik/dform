@@ -34,9 +34,9 @@ pub fn prepare(p: &Project, path: &Path, at: usize) -> Result<Option<(Range, Str
     else {
         return Ok(None);
     };
-    // An instance whose name is also a string an `m[e]` reads: the
-    // rename would not change the string, and `m[e]` would no longer
-    // find the instance.
+    // A component's resource whose name is also a string an `m[e]`
+    // reads: the rename would not change the string, and `m[e]` would no
+    // longer find it.
     if let Symbol::Instance(path, i) = renameable(&what, &t)?
         && let m = path.rsplit('.').next().unwrap_or(&path).to_string()
         && names::indexed(&files, &m)
@@ -51,8 +51,8 @@ pub fn prepare(p: &Project, path: &Path, at: usize) -> Result<Option<(Range, Str
             .collect();
         if !places.is_empty() {
             bail!(
-                "instance {i} of component {m} is also the string \"{i}\" at {}, and \
-                 `{m}[..]` reads instances by such strings: a rename would not change the \
+                "resource {path} {i} is also the string \"{i}\" at {}, and `{m}[..]` reads \
+                 the component's resources by such strings: a rename would not change the \
                  string",
                 places.join(", ")
             );
@@ -125,7 +125,7 @@ fn describe(s: &Symbol) -> String {
         Symbol::Let(None, _) => "a let".into(),
         Symbol::Alias(_) => "a type alias".into(),
         Symbol::Module(_) => "a component or a used module".into(),
-        Symbol::Instance(m, _) => format!("an instance of component {m}"),
+        Symbol::Instance(m, _) => format!("a resource of the component {m}"),
         Symbol::Field(_, i, _) => format!("a field of input {i}"),
         Symbol::Output(Some(scope), _) => format!("an output of {scope}"),
         Symbol::Output(None, _) => "an output".into(),

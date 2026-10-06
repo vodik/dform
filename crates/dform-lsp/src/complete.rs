@@ -1,7 +1,7 @@
 //! Schema completion: a resource block's attribute paths (with their type,
 //! flags and refinements) and an enum attribute's values, from the
 //! provider's schema facts; resource types after `resource`; a module
-//! instance's inputs and, after `copy.`, its outputs.
+//! component's resource's inputs and, after `copy.`, its outputs.
 //! A type's or path's documentation is its `type_doc`. Elsewhere a word
 //! completes to the builtins and keywords it starts (`engine::references`),
 //! a package's name and a dot (`inet.su`) to its functions.
@@ -153,21 +153,23 @@ pub fn complete(
             })
             .collect();
     }
-    // `copy.`: the outputs of the copy's component (R-65), the copy an
-    // `instance` of the file names, or of the module a `use` binds, its
-    // relations among them (`m.p(`, R-55).
+    // `copy.`: the outputs of the copy's component (R-65), the copy a
+    // resource of the file names (R-113), or of the module a `use` binds,
+    // its relations among them (`m.p(`, R-55).
     let segs: Vec<&str> = word.split('.').collect();
     if let [copy, ""] = segs.as_slice()
-        && let Some(path) = root
+        && let Some(m) = root
             .descendants()
             .filter_map(|n| match n.kind() {
-                SyntaxKind::INSTANCE => Some(dform_core::syntax::resolve::instance_parts(&n)),
+                SyntaxKind::INSTANCE | SyntaxKind::RESOURCE => {
+                    Some(dform_core::syntax::resolve::copy_parts(&n))
+                }
                 SyntaxKind::USE => Some(dform_core::syntax::resolve::use_parts(&n)),
                 _ => None,
             })
-            .find(|(_, name)| name == copy)
-            .map(|(path, _)| path)
-        && let Some(m) = modules(&path)
+            .filter(|(_, name)| name == copy)
+            .find_map(|(path, _)| modules(&path).map(|m| (path, m)))
+        && let (path, m) = m
     {
         return m
             .outputs
@@ -260,6 +262,29 @@ pub fn complete(
                 .is_some_and(|b| b.text_range().contains_inclusive((at as u32).into()))
         })
     };
+    // A component's resource's block (R-113), or an instance's: its
+    // component's inputs. A type the schema has is a provider's.
+    let copy = in_block(SyntaxKind::RESOURCE)
+        .filter(|r| nav::name_after_keyword(r).is_none_or(|t| !attrs.contains_key(&t)))
+        .or_else(|| in_block(SyntaxKind::INSTANCE))
+        .and_then(|i| {
+            let (m, _) = dform_core::syntax::resolve::copy_parts(&i);
+            modules(&m).map(|interface| (m, interface))
+        });
+    if let Some((m, interface)) = copy {
+        return interface
+            .inputs
+            .into_iter()
+            .map(|(n, ty)| {
+                item(
+                    n,
+                    CompletionItemKind::FIELD,
+                    ty,
+                    Some(format!("input of component {m}")),
+                )
+            })
+            .collect();
+    }
     // A resource block's attribute paths.
     if let Some(r) = in_block(SyntaxKind::RESOURCE) {
         let Some((t, ps)) = nav::name_after_keyword(&r).and_then(|t| attrs.get_key_value(&t))
@@ -281,25 +306,6 @@ pub fn complete(
                     (d, r) => d.or(r),
                 };
                 item(p.clone(), CompletionItemKind::FIELD, detail, doc)
-            })
-            .collect();
-    }
-    // An instance block: its component's inputs.
-    if let Some(i) = in_block(SyntaxKind::INSTANCE) {
-        let (m, _) = dform_core::syntax::resolve::instance_parts(&i);
-        let Some(interface) = modules(&m) else {
-            return Vec::new();
-        };
-        return interface
-            .inputs
-            .into_iter()
-            .map(|(n, ty)| {
-                item(
-                    n,
-                    CompletionItemKind::FIELD,
-                    ty,
-                    Some(format!("input of component {m}")),
-                )
             })
             .collect();
     }
