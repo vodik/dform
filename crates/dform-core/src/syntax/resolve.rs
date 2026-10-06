@@ -1272,6 +1272,23 @@ impl<'u> Lowerer<'u> {
         })
     }
 
+    /// The input `name` in scope when its type is a resource type, `ref(T)`
+    /// or `T` (R-101): `T`.
+    fn input_ref(&self, scope: usize, name: &str) -> Option<String> {
+        let n = self
+            .chain_of(scope)
+            .into_iter()
+            .find_map(|s| self.decls.scopes[s].input_nodes.get(name).cloned())?;
+        let ty = node(&n, TYPE_EXPR)?;
+        let typ = dotted_text(&ty, 0);
+        let typ = match node(&ty, TYPE_EXPR) {
+            Some(inner) if typ == "ref" => dotted_text(&inner, 0),
+            Some(_) => return None,
+            None => typ,
+        };
+        (typ.contains('.') && self.decls.types.contains(&typ)).then_some(typ)
+    }
+
     /// The static type of a value name whose value is a reference (H-6):
     /// what every row of its `let` names, read from the rows' text. `Err`
     /// names the rows' types when they disagree.
@@ -1462,6 +1479,34 @@ impl<'u> Lowerer<'u> {
             None => format!("read {read}, or name one of them otherwise"),
         };
         self.error(span, format!("`{h}` names {what} and {resource}: {help}"))
+    }
+
+    /// Inside a module's or a component's body, what the body declares
+    /// wins a read over what its user's scope brings in (R-101): the
+    /// module's own `resource k8s.namespace traefik` over its user's `use
+    /// traefik`. `Some(true)`: the body's resource is read; `Some(false)`:
+    /// the body's value, module or copy is; `None`: neither is the body's
+    /// alone (the program's top level, where R-76's ambiguity stands).
+    fn own_wins(&self, scope: usize, name: &str) -> Option<bool> {
+        let own = self.own_scopes(scope);
+        let names = |s: &Scope| {
+            s.values.contains(name)
+                || s.uses.contains_key(name)
+                || s.instances.contains_key(name)
+                || s.stacks.contains_key(name)
+        };
+        let resource = |s: &Scope| s.resources.contains_key(name);
+        let (res_own, other_own) = own.iter().fold((false, false), |(r, o), s| {
+            let sc = &self.decls.scopes[*s];
+            (r || resource(sc), o || names(sc))
+        });
+        if res_own && !other_own && self.names_other(scope, name) {
+            return Some(true);
+        }
+        if other_own && !res_own && self.resource(scope, name).is_some() {
+            return Some(false);
+        }
+        None
     }
 
     /// Whether `name` names a value, a used module or an instance in
@@ -5718,10 +5763,19 @@ impl<'u> Lowerer<'u> {
                 path,
             });
         }
-        // A name a resource shares, read as the other thing's (R-76).
-        let shared = !rc.vars.contains_key(h) && self.shared_name(rc.scope, c, span)?;
+        // A name a resource shares, read as the other thing's (R-76); in a
+        // module's or a component's body, the body's own (R-101).
+        let own = match rc.vars.contains_key(h) {
+            true => None,
+            false => self.own_wins(rc.scope, h),
+        };
+        let shared = !rc.vars.contains_key(h)
+            && match own {
+                Some(resource) => !resource,
+                None => self.shared_name(rc.scope, c, span)?,
+            };
         if !rc.vars.contains_key(h) {
-            if self.is_value(rc.scope, h) {
+            if self.is_value(rc.scope, h) && own != Some(true) {
                 return self.value(rc, c, pre, span);
             }
             // `settings.x` names a resource called `settings` in scope; a
@@ -5842,6 +5896,31 @@ impl<'u> Lowerer<'u> {
     /// "x", V)`.
     fn value(&mut self, rc: &mut Rc, c: &Chain, pre: &mut Vec<Lit>, span: Span) -> L<Res> {
         let pred = c.head.clone();
+        // An input typed `ref(T)` holds the reference itself: a dot reads
+        // through it, the address taken out of the reference (R-101). It
+        // is its user's, so no copy's scope goes in front of it.
+        if !c.is_bare()
+            && let Some(typ) = self.input_ref(rc.scope, &pred)
+        {
+            let key = format!("ref {pred}");
+            let addr = match rc.values.get(&key) {
+                Some(v) => var(v),
+                None => {
+                    let name = fresh(rc, &capitalise(&pred));
+                    let mark = func(crate::modules::ABSOLUTE, vec![var(&name)]);
+                    let whole = func("ref", vec![str_term(&typ), mark, str_term("")]);
+                    pre.push(Lit::Pos(atom_at(&pred, vec![whole], span)));
+                    rc.values.insert(key, name.clone());
+                    var(&name)
+                }
+            };
+            let path = self.segs(rc, &c.ops, pre)?;
+            return Ok(Res::Ref {
+                typ: str_term(&typ),
+                addr: func(crate::modules::ABSOLUTE, vec![addr]),
+                path,
+            });
+        }
         let ty = match self.value_type(rc.scope, &pred) {
             Ok(t) => t,
             Err(e) => return self.error(span, e),

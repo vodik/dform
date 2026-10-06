@@ -821,7 +821,12 @@ impl Decls {
         // module's item or a copy's output reads the module or the copy
         // though a resource has the name (R-76).
         let instance = self.instances.iter().find(|(_, i)| *i == name0);
-        let reads_other = dot(1)
+        let rs = self.resources_at(at, &name0);
+        // In a module's or a component's body its own resource wins over
+        // what its user's scope brings in (R-101).
+        let own = matches!(rs.first(), Some(Symbol::Resource(Some(_), _, _)));
+        let reads_other = !(own && !binds_here(at, &name0))
+            && dot(1)
             && name_at(2).is_some_and(|x| {
                 let of = match (instance, self.uses.get(&name0)) {
                     (Some((p, _)), _) => format!("component {}", last_segment(p)),
@@ -830,7 +835,6 @@ impl Decls {
                 };
                 self.has_item(&of, &x)
             });
-        let rs = self.resources_at(at, &name0);
         if !rs.is_empty() && !index(1) && !reads_other {
             return if k == 0 { self.pick(c, rs) } else { What::Path };
         }
@@ -1284,6 +1288,24 @@ pub fn component_scope(node: &SyntaxNode) -> Scope {
         (a.kind() == SyntaxKind::COMPONENT)
             .then(|| Some(format!("component {}", declared_name(&a)?.text())))?
     })
+}
+
+/// Whether the body `at` is in (its component's, else its file's) binds
+/// `name` itself by a `use` or an `instance`: then the body's own resource
+/// of the name does not win a read over it (R-101).
+fn binds_here(at: &SyntaxNode, name: &str) -> bool {
+    let body = at
+        .ancestors()
+        .find(|a| a.kind() == SyntaxKind::COMPONENT)
+        .and_then(|c| c.children().find(|x| x.kind() == SyntaxKind::STMT_BLOCK))
+        .or_else(|| at.ancestors().last());
+    body.into_iter()
+        .flat_map(|b| b.children())
+        .any(|n| match n.kind() {
+            SyntaxKind::USE => crate::syntax::resolve::use_parts(&n).1 == name,
+            SyntaxKind::INSTANCE => crate::syntax::resolve::instance_parts(&n).1 == name,
+            _ => false,
+        })
 }
 
 fn last_segment(path: &str) -> &str {
@@ -1759,6 +1781,43 @@ s(x) where helper(x), shared(x)
         assert_eq!(
             names(PRIVATE, &Symbol::Predicate(None, "shared".into())),
             vec![(3, false), (10, true), (11, false)]
+        );
+    }
+
+    /// A module's own resource wins a read in its body over its user's
+    /// `use` of the module's name (R-101), as the resolver reads it.
+    #[test]
+    fn a_modules_own_resource_wins_over_its_users_use() {
+        let file = |path: &str, src: &str| Parsed::new(PathBuf::from(path), src.into());
+        let files = vec![
+            file(
+                "/p/traefik.df",
+                "\nresource net.vpc traefik { cidr = \"x\" }\nresource net.subnet web { cidr = traefik.web }\n",
+            ),
+            file(
+                "/p/stacks/s.df",
+                "\nuse traefik\np(x) where x = traefik.web.cidr\n",
+            ),
+        ];
+        let d = Decls::of_files(Path::new("/p"), &files);
+        let sym = Symbol::Resource(
+            Some("module traefik".into()),
+            "net.vpc".into(),
+            "traefik".into(),
+        );
+        let got: Vec<(String, u32)> = d
+            .occurrences(&files, &sym)
+            .into_iter()
+            .map(|n| {
+                (
+                    n.file.path.display().to_string(),
+                    line(&n.file.text, n.range.start().into()),
+                )
+            })
+            .collect();
+        assert_eq!(
+            got,
+            vec![("/p/traefik.df".into(), 1), ("/p/traefik.df".into(), 2)]
         );
     }
 

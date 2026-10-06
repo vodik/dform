@@ -288,7 +288,11 @@ k8s.secret[\"config\"].metadata.name". A module's item (`config.x` with
 resource, so rename one. The resource reads by its type, `T["n"]`, which
 H-10 allows here. A component and a stack are read only by a copy
 (`c[t]`, `s[k=v]`), which a resource never is, so they share a name with
-a resource unambiguously.
+a resource unambiguously. Inside a module's or a component's body, what
+the body declares wins over what its user's scope brings in (R-101):
+traefik.df's own `resource k8s.namespace traefik` is what
+`traefik.metadata.name` reads there, though its user's `use traefik`
+names the module; the error stands where both are one scope's own.
 
 A bare name (no `.` or `[`) is a variable unless it is a value name. A
 variable may not take the name of a resource, a module, a copy, a
@@ -722,7 +726,9 @@ marked, and `--set k=v` at `@override` ("Giving inputs").
 An input typed by a resource type, a provider's (`input namespace:
 k8s.namespace`) or the program's, is typed `ref(T)`: it takes a
 reference to a resource of `T` (`namespace = shop`), and one of another
-type is an error at the block that gives it. A dotted name a used module
+type is an error at the block that gives it. A dot on it reads through
+the reference (R-101): `vpc.cidr`, with `input vpc: ref(net.vpc)`, is the
+given vpc's `cidr`, the resource its user's wherever the copy is. A dotted name a used module
 declares as a type alias is that alias (`input env: types.environment`),
 and a name in a namespace whose every type the compiler knows (`net`)
 must be one of them.
