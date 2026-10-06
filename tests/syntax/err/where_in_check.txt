@@ -1,7 +1,3 @@
-tests/syntax/err/where_in_check.df:3:25: expected `check` or the end of the line, found keyword `where`
-  help: a refinement is spelled `check` (R-1): `input replicas: int = 2 check replicas >= 1`
-tests/syntax/err/where_in_check.df:4:18: expected `check` or the end of the line, found keyword `where`
-  help: a refinement is spelled `check` (R-1): `input zones: int check zones >= 1`
 tests/syntax/err/where_in_check.df:6:20: expected `check` or the end of the line, found keyword `where`
   help: a refinement is spelled `check` (R-1): `backup_days: int check 1 <= backup_days <= 35`
 tests/syntax/err/where_in_check.df:8:11: expected `where` or the end of the line, found `check`

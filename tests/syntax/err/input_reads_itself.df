@@ -1,0 +1,5 @@
+# An input's clause picks where it is declared (R-104); one that reads the
+# input itself is a refinement misspelled, spelled `check` (R-1).
+input replicas: int = 2 where replicas >= 1
+input zones: int where zones >= 1
+key env: string where zones > 1

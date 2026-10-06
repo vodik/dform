@@ -1049,9 +1049,13 @@
       }
     },
     "children": {
-      "multiple": false,
+      "multiple": true,
       "required": false,
       "types": [
+        {
+          "type": "clause",
+          "named": true
+        },
         {
           "type": "refinement",
           "named": true

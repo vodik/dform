@@ -937,7 +937,11 @@ fn instance_inputs(
         return;
     }
     for i in &leaves {
-        if i.default.is_none() && !u.inputs.iter().any(|(k, _, _)| covers(k, &i.name)) {
+        // A dependent input is required where its clause holds: a deny.
+        if i.default.is_none()
+            && i.guard.is_empty()
+            && !u.inputs.iter().any(|(k, _, _)| covers(k, &i.name))
+        {
             diags.push(
                 Diagnostic::error(
                     u.span,
@@ -1008,7 +1012,8 @@ fn check_component(
 ) {
     let mut seen = BTreeSet::new();
     for i in &iface.inputs {
-        if !seen.insert(&i.name) {
+        // Several declarations, each under a clause (R-104).
+        if !seen.insert(&i.name) && i.guard.is_empty() {
             diags.push(Diagnostic::error(
                 i.span,
                 format!("{kind} {path} declares input {} twice", i.name),
@@ -1246,7 +1251,12 @@ fn input_readers(scope: &str, inputs: &[InputDecl], names: &Names) -> Vec<Stmt> 
     let pred = |p: &str| names.get(p).cloned().unwrap_or_else(|| p.to_string());
     inputs
         .iter()
-        .flat_map(|i| input_reader(scope, i, &pred))
+        .flat_map(|i| {
+            // A dependent input's clause reads the copy's own names.
+            let mut i = i.clone();
+            i.guard = i.guard.into_iter().map(|l| rename_lit(l, names)).collect();
+            input_reader(scope, &i, &pred)
+        })
         .collect()
 }
 
@@ -1258,14 +1268,41 @@ fn input_readers(scope: &str, inputs: &[InputDecl], names: &Names) -> Vec<Stmt> 
 /// leaf), and the object is read whole.
 pub fn input_reader(scope: &str, i: &InputDecl, pred: &dyn Fn(&str) -> String) -> Vec<Stmt> {
     let v = Term::Var("V".into());
+    // A dependent input (R-104) is read, and defaults, where its clause
+    // holds; where it holds with no value, it is required.
+    let mut body = vec![Lit::Pos(atom(
+        "attr",
+        vec![
+            str_term(INPUT),
+            str_term(scope),
+            str_term(&i.name),
+            v.clone(),
+        ],
+        i.span,
+    ))];
+    body.extend(i.guard.iter().cloned());
     let mut out = vec![Stmt::Rule(RuleStmt {
         head: atom(&pred(&i.name), vec![v.clone()], i.span),
-        body: vec![Lit::Pos(atom(
-            "attr",
-            vec![str_term(INPUT), str_term(scope), str_term(&i.name), v],
-            i.span,
-        ))],
+        body,
     })];
+    if !i.guard.is_empty() && i.default.is_none() && i.fields.is_empty() {
+        let who = match scope {
+            "" => format!("input {}", i.name),
+            s => format!("input {} of {s}", i.name),
+        };
+        let mut body = i.guard.clone();
+        body.push(Lit::Not(atom(&pred(&i.name), vec![Term::Wildcard], i.span)));
+        out.push(Stmt::Rule(RuleStmt {
+            head: atom(
+                "deny",
+                vec![str_term(&format!(
+                    "{who} is required and has no value: its clause holds in this deployment"
+                ))],
+                i.span,
+            ),
+            body,
+        }));
+    }
     for l in crate::inputs::leaves(i) {
         let (checkable, _) = crate::refine::split_input(&l);
         for c in checkable {
@@ -1290,7 +1327,7 @@ pub fn input_reader(scope: &str, i: &InputDecl, pred: &dyn Fn(&str) -> String) -
                     ],
                     l.span,
                 ),
-                Vec::new(),
+                i.guard.clone(),
             ));
         }
     }

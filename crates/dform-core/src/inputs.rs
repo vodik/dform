@@ -108,6 +108,7 @@ fn leaves_into(i: &InputDecl, path: &str, out: &mut Vec<InputDecl>) {
                 },
                 refinement: Vec::new(),
                 key: false,
+                guard: i.guard.clone(),
                 fields: Vec::new(),
                 span: i.span,
             })
@@ -754,7 +755,9 @@ pub fn check_required(declared: &[Declared], given: &BTreeSet<String>) -> Result
         |a: &str| given.contains(a) || a.match_indices('.').any(|(i, _)| given.contains(&a[..i]));
     let diags: Vec<Diagnostic> = declared
         .iter()
-        .filter(|d| d.decl.default.is_none() && !d.bound && !d.given)
+        // A dependent input (R-104) is required where its clause holds: a
+        // deny of the evaluation.
+        .filter(|d| d.decl.default.is_none() && !d.bound && !d.given && d.decl.guard.is_empty())
         .filter_map(|d| Some((d, d.address.as_deref()?)))
         .filter(|(_, a)| !is_given(a))
         .map(|(d, k)| {

@@ -333,6 +333,9 @@ pub struct InputDecl {
     /// `key k: T`: the target gives it, never `--set`, and its value names
     /// the deployment (R-29). An input in every other respect.
     pub key: bool,
+    /// `input k: T where B`, a dependent input (R-104): it is declared, and
+    /// read, only where `B` holds. Empty: everywhere.
+    pub guard: Vec<Lit>,
     /// The object form's fields, `input k { f: T [= d] [check B] .. }`
     /// (R-54), each a declaration named by its field, a nested object's
     /// with fields of its own; empty for every other input.

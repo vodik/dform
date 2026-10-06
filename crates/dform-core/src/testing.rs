@@ -24,6 +24,9 @@ pub struct Axis {
     pub input: String,
     pub key: bool,
     pub values: Vec<Value>,
+    /// A dependent input's clause (R-104): the axis is in a combination
+    /// only where it holds over the axes before it.
+    pub guard: Vec<crate::ast::Lit>,
 }
 
 /// The values a type bounds: an `enum`'s members, `bool`'s two.
@@ -64,11 +67,14 @@ pub fn space(
             None if i.key => applied(name).into_iter().map(Value::Str).collect(),
             None => Vec::new(),
         };
+        // A dependent input declared twice (R-104) is one axis per
+        // declaration, each under its own clause.
         if !values.is_empty() {
             axes.push(Axis {
                 input: name.clone(),
                 key: i.key,
                 values,
+                guard: i.guard.clone(),
             });
         } else if i.default.is_none() {
             unbounded.push(format!(
@@ -102,16 +108,28 @@ pub fn space(
     Ok(axes)
 }
 
-/// Every combination of the axes' values, the first axis slowest.
+/// Every combination of the axes' values, the first axis slowest. A
+/// dependent input's axis (R-104) is only in the combinations its clause
+/// holds in, decided over the axes before it; a clause that reads more is
+/// the evaluation's, and the axis is in every one.
 pub fn combinations(axes: &[Axis]) -> Vec<Vec<(String, Value)>> {
     let mut out: Vec<Vec<(String, Value)>> = vec![Vec::new()];
     for a in axes {
         out = out
             .into_iter()
             .flat_map(|c| {
-                a.values.iter().map(move |v| {
+                let at: std::collections::BTreeMap<String, Value> = c.iter().cloned().collect();
+                let declared =
+                    a.guard.is_empty() || crate::lint::guard_holds(&a.guard, &at) != Some(false);
+                let values: Vec<Option<&Value>> = match declared {
+                    true => a.values.iter().map(Some).collect(),
+                    false => vec![None],
+                };
+                values.into_iter().map(move |v| {
                     let mut c = c.clone();
-                    c.push((a.input.clone(), v.clone()));
+                    if let Some(v) = v {
+                        c.push((a.input.clone(), v.clone()));
+                    }
                     c
                 })
             })
@@ -159,6 +177,7 @@ mod tests {
                 default: default.map(Term::Val),
                 refinement: Vec::new(),
                 key,
+                guard: Vec::new(),
                 fields: Vec::new(),
                 span: Span::default(),
             },

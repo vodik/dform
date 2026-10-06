@@ -1956,15 +1956,53 @@ impl<'u> Lowerer<'u> {
                     None => None,
                 };
                 let refinement = self.refinement(n, scope)?;
-                one(Stmt::Input(InputDecl {
-                    name,
-                    ty,
-                    default,
-                    refinement,
-                    key,
-                    fields,
-                    span,
-                }))
+                // `input k: T where B` (R-104): declared where `B` holds. A
+                // clause that reads the input itself is a check misspelled.
+                if let Some(c) = node(n, CLAUSE)
+                    && c.descendants()
+                        .filter_map(|x| Chain::of(&x))
+                        .any(|x| x.head == name)
+                {
+                    let head = n.text().to_string();
+                    let at: usize = (c.text_range().start() - n.text_range().start()).into();
+                    let body = c.text().to_string();
+                    let body = body.trim_start().trim_start_matches("where").trim();
+                    let d = Diagnostic::error(
+                        self.span(&c),
+                        format!("the clause of input {name} reads {name}: a clause picks where it is declared"),
+                    )
+                    .with_help(format!(
+                        "a refinement is spelled `check` (R-1): `{} check {body}`",
+                        head[..at].trim()
+                    ));
+                    self.diags.push(d);
+                    return Err(Skip);
+                }
+                let guard = self.clauses(&mut rc, n)?;
+                if key && !guard.is_empty() {
+                    return self.error(
+                        span,
+                        format!(
+                            "key {name} has a clause: a key names the deployment, so every \
+                             deployment has it"
+                        ),
+                    );
+                }
+                let mut out = self.inputs_named(n, &name, &guard, span)?;
+                out.insert(
+                    0,
+                    Stmt::Input(InputDecl {
+                        name,
+                        ty,
+                        default,
+                        refinement,
+                        key,
+                        guard,
+                        fields,
+                        span,
+                    }),
+                );
+                Ok(out)
             }
             INPUT_RELATION => self.relation_input(n, scope, outer),
             OUTPUT_DECL => self.output(n, scope, outer),
@@ -2089,6 +2127,7 @@ impl<'u> Lowerer<'u> {
                     default,
                     refinement,
                     key: false,
+                    guard: Vec::new(),
                     fields,
                     span,
                 })
@@ -3074,6 +3113,70 @@ impl<'u> Lowerer<'u> {
             }
         }
         if failed { Err(Skip) } else { Ok(out) }
+    }
+
+    /// The checks of an input declared more than once beside `n` (R-104):
+    /// each under a clause, of one type; its own `__declared` row, and at
+    /// the first the denies of two that both hold.
+    fn inputs_named(
+        &mut self,
+        n: &SyntaxNode,
+        name: &str,
+        guard: &[Lit],
+        span: Span,
+    ) -> L<Vec<Stmt>> {
+        let same: Vec<SyntaxNode> = n
+            .parent()
+            .into_iter()
+            .flat_map(|p| p.children())
+            .filter(|c| c.kind() == INPUT && word_text(c, 1) == name)
+            .collect();
+        if same.len() < 2 {
+            return Ok(Vec::new());
+        }
+        if same.first() != Some(n) && !same.iter().all(|c| node(c, CLAUSE).is_some()) {
+            let d = Diagnostic::error(
+                span,
+                format!("`{name}` is declared twice; give each a `where`"),
+            )
+            .with_label(self.span(&same[0]), "first here")
+            .with_help(format!(
+                "an input is declared once, or several times each under a clause that \
+                     picks it (`input {name}: T where cloud == \"gcp\"`)"
+            ));
+            self.diags.push(d);
+            return Err(Skip);
+        }
+        let ty = |c: &SyntaxNode| {
+            node(c, TYPE_EXPR).map(|t| t.text().to_string().replace(char::is_whitespace, ""))
+        };
+        if same.first() == Some(n) && same.iter().any(|c| ty(c) != ty(n)) {
+            let mut d = Diagnostic::error(
+                span,
+                format!("input {name} is declared with another type in each declaration"),
+            );
+            for c in &same {
+                d = d.with_label(
+                    self.span(c),
+                    format!("{name}: {}", ty(c).unwrap_or_default()),
+                );
+            }
+            self.diags.push(d.with_help(
+                "one input has one type: give each declaration the same, or each its own name",
+            ));
+            return Err(Skip);
+        }
+        let group = format!("input {name}");
+        let i = same.iter().position(|c| c == n).unwrap_or_default();
+        let mut out = vec![crate::modules::declared(&group, i, guard.to_vec(), span)];
+        if i == 0 {
+            let sites: Vec<(String, Span)> = same
+                .iter()
+                .map(|c| (format!("input {name}"), self.span(c)))
+                .collect();
+            out.extend(crate::modules::denies(&group, &sites));
+        }
+        Ok(out)
     }
 
     /// The declarations of `name` by a `use` or an `instance` beside `n`,

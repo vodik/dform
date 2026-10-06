@@ -3904,7 +3904,8 @@ fn run_tests(
     let over = if axes.is_empty() {
         String::new()
     } else {
-        let names: Vec<&str> = axes.iter().map(|a| a.input.as_str()).collect();
+        let mut names: Vec<&str> = axes.iter().map(|a| a.input.as_str()).collect();
+        names.dedup();
         format!(" of {}", names.join(", "))
     };
     println!("test {stack}: {n} combination{s}{over}");
@@ -3935,15 +3936,26 @@ fn run_tests(
                 ("error", text.lines().map(String::from).collect())
             }
         };
+        // A column per input; a dependent input not declared in a
+        // combination (R-104) is `-` there.
+        let mut columns: Vec<String> = pinned.iter().map(|(k, _)| k.clone()).collect();
+        for a in &axes {
+            if !columns.contains(&a.input) {
+                columns.push(a.input.clone());
+            }
+        }
+        let mut row: Vec<report::table::Cell> = columns
+            .iter()
+            .map(|c| match pairs.iter().find(|(k, _)| k == c) {
+                Some((_, v)) => report::table::Cell::text(partition::fmt_bare(v)),
+                None => report::table::Cell::text("-"),
+            })
+            .collect();
         let t = matrix.get_or_insert_with(|| {
-            let mut columns: Vec<String> = pairs.iter().map(|(k, _)| k.clone()).collect();
+            let mut columns = columns.clone();
             columns.push("result".into());
             report::table::Table::new(columns)
         });
-        let mut row: Vec<report::table::Cell> = pairs
-            .iter()
-            .map(|(_, v)| report::table::Cell::text(partition::fmt_bare(v)))
-            .collect();
         let cell = report::table::Cell::text(result);
         row.push(match result {
             "ok" => cell,

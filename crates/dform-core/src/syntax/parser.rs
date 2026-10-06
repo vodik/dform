@@ -764,7 +764,13 @@ impl<'a> Parser<'a> {
                 if p.eat(EQ) {
                     p.term()?;
                 }
-                p.refinement(false)
+                // `where` is the clause the input is declared under
+                // (R-104); one that reads the input itself is a check
+                // misspelled, which the resolver says.
+                if !p.at(WHERE_KW) {
+                    p.refinement(false)?;
+                }
+                p.opt_clause()
             }),
             // `output NAME { field[: T] = t .. }`: an object output by its
             // fields (R-55).

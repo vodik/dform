@@ -126,9 +126,8 @@ export default grammar({
       $.fact,
     ),
 
-    // A provider's block takes no clause; the compiler's resolver says
-    // so, so the grammar takes one as the parser does. A block with no
-    // entries is left out: `provider aws`.
+    // A provider under a clause starts where it holds (R-104). A block
+    // with no entries is left out: `provider aws`.
     provider: $ => seq(
       'provider',
       field('name', $._word),
@@ -146,6 +145,8 @@ export default grammar({
         field('type', $._type),
         optional(seq('=', field('default', $._term))),
         optional($.refinement),
+        // `input k: T where B`: a dependent input (R-104).
+        optional($.clause),
       ),
       seq('input', field('name', $._word), field('body', $.input_fields)),
     ),
