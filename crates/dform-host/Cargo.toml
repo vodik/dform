@@ -30,7 +30,8 @@ tonic = "0.13"
 ureq = { version = "3", default-features = false, features = ["rustls", "platform-verifier"] }
 # git.read and git.commit: pure-Rust git into the XDG cache (house rules:
 # no shell-outs).
-gix = { version = "0.88", default-features = false, features = ["sha1", "revision", "blocking-network-client", "blocking-http-transport-reqwest-rust-tls"] }
+# No network transport: gix's reqwest one links aws-lc-rs beside ring.
+gix = { version = "0.88", default-features = false, features = ["sha1", "revision"] }
 # The component host (`wasm`).
 wasmtime = { version = "=49.0.1", default-features = false, features = ["component-model", "runtime", "std", "cranelift", "parallel-compilation", "wat", "anyhow"], optional = true }
 wasmtime-wasi = { version = "=49.0.1", optional = true }

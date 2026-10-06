@@ -1,7 +1,11 @@
 //! `dform:host/git`, through gix (no shell-outs). A remote repository is
-//! mirrored once into `$XDG_CACHE_HOME/dform/git/<host>-<owner>/<repo>.git/`
+//! read from its mirror, `$XDG_CACHE_HOME/dform/git/<host>-<owner>/<repo>.git/`
 //! (R-103's layout: every segment before the repository joins the host
-//! with `-`) and fetched on later calls; a local path is read in place.
+//! with `-`); a local path is read in place. Cloning and fetching the
+//! mirror is not done here yet: gix's HTTP transport (reqwest) links a
+//! second rustls crypto provider (aws-lc-rs) into every binary of the
+//! workspace, and kube then cannot pick one. R-103 brings the fetch, over
+//! a transport on the host's own HTTP client.
 //! Configuration is isolated: the operator's git installation is not
 //! consulted, and no `git` is run.
 //!
@@ -11,7 +15,6 @@
 
 use dform_core::plugin::host::{Error, GitFile};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::AtomicBool;
 
 pub struct Git {
     /// Where mirrors live.
@@ -60,7 +63,7 @@ impl Git {
         Git { cache }
     }
 
-    /// `repo` opened: in place, or its mirror cloned or fetched.
+    /// `repo` opened: in place, or its mirror.
     fn open(&self, repo: &str) -> Result<gix::Repository, Error> {
         if !remote(repo) {
             return gix::open_opts(repo, gix::open::Options::isolated())
@@ -70,44 +73,16 @@ impl Git {
             mirror_dir(repo)
                 .ok_or_else(|| Error::fatal(format!("git {repo}: not a repository URL")))?,
         );
-        let interrupt = AtomicBool::new(false);
-        fn transient<E: std::fmt::Display>(repo: &str) -> impl Fn(E) -> Error + '_ {
-            move |e| Error::retryable(format!("git fetch {repo}: {e}"))
+        if !dir.exists() {
+            return Err(Error::fatal(format!(
+                "git {repo}: a remote repository is read from its mirror, {}, which is not \
+                 there: the host does not fetch yet (gix's HTTP transport links a TLS stack of \
+                 its own; the mirror and its fetch are R-103's)",
+                dir.display()
+            )));
         }
-        if dir.exists() {
-            let r = gix::open_opts(&dir, gix::open::Options::isolated())
-                .map_err(|e| Error::fatal(format!("git {repo}: {}: {e}", dir.display())))?;
-            let remote = r
-                .find_fetch_remote(None)
-                .map_err(fail(format!("git {repo}: its mirror's remote")))?;
-            remote
-                .connect(gix::remote::Direction::Fetch)
-                .map_err(transient(repo))?
-                .prepare_fetch(gix::progress::Discard, Default::default())
-                .map_err(transient(repo))?
-                .receive(gix::progress::Discard, &interrupt)
-                .map_err(transient(repo))?;
-            return Ok(r);
-        }
-        std::fs::create_dir_all(&dir)
-            .map_err(|e| Error::fatal(format!("git {repo}: {}: {e}", dir.display())))?;
-        let cloned = gix::clone::PrepareFetch::new(
-            repo,
-            &dir,
-            gix::create::Kind::Bare,
-            gix::create::Options::default(),
-            gix::open::Options::isolated(),
-        )
-        .map_err(fail(format!("git clone {repo}")))
-        .and_then(|mut p| {
-            p.fetch_only(gix::progress::Discard, &interrupt)
-                .map(|(r, _)| r)
-                .map_err(transient(repo))
-        });
-        if cloned.is_err() {
-            let _ = std::fs::remove_dir_all(&dir);
-        }
-        cloned
+        gix::open_opts(&dir, gix::open::Options::isolated())
+            .map_err(|e| Error::fatal(format!("git {repo}: {}: {e}", dir.display())))
     }
 
     /// The commit `rev` names: a branch, a tag or an id, in the repository
