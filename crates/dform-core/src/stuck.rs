@@ -485,7 +485,14 @@ pub fn sections(
                 .chain(prov)
                 .filter(|l| {
                     null_owner(l).is_some_and(|o| {
-                        &o != addr && (boundary.contains(&o) || pending.contains_key(&o))
+                        &o != addr
+                            && (boundary.contains(&o)
+                                || pending.contains_key(&o)
+                                // An extern dform answers that said "not
+                                // yet" (`ssh.read` of a host still
+                                // booting): no tick fills it, the
+                                // answer does.
+                                || crate::externs::in_process(&o.0))
                     })
                 })
                 .chain(other_stacks(doc))
