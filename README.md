@@ -40,15 +40,15 @@ $ dform plan
 plan: 7 changes (7 create) over 1 tick
 
 tick 1  7 changes, applies now
-  + aws.vpc main                        shop.df:3
-      cidr_block = 10.0.0.0/16
-  + aws.subnet private-us-east-1a       shop.df:8
+  + aws.vpc main                   shop.df:3
+      cidr_block = "10.0.0.0/16"
+  + aws.subnet private-us-east-1a  shop.df:8
       availability_zone = "us-east-1a"
-      cidr_block = 10.0.0.0/24
+      cidr_block = "10.0.0.0/24"
       vpc = main
-  + aws.subnet private-us-east-1b       shop.df:8
+  + aws.subnet private-us-east-1b  shop.df:8
       availability_zone = "us-east-1b"
-      cidr_block = 10.0.1.0/24
+      cidr_block = "10.0.1.0/24"
       vpc = main
   ... four more
 
@@ -64,8 +64,9 @@ is a table the provider answers, what Terraform calls a data source:
 `"available"` is the question, and each row binds a zone's name to
 `availability_zone` and its stable position to `n`, so the n-th zone
 gets the n-th /24. An entry that is only a name, `availability_zone`,
-takes the variable of that name. `?` marks a value apply will learn:
-here the VPC itself, which does not exist yet. The `#|` line is a doc comment, which the editor
+takes the variable of that name. `vpc = main` is a reference, printed
+as the address it names: the VPC, which does not exist yet, so apply
+makes it first. The `#|` line is a doc comment, which the editor
 shows and policy can read. When the region gains a
 zone, the next plan has one more subnet; nothing in the file changes.
 
@@ -104,10 +105,10 @@ $ dform plan shop env=prod
 plan: 3 changes (1 create, 1 update, 1 delete) over 1 tick, 1 denied, 1 approval
 ...
 denied
-  no deletes in prod                      aws.db_instance["reports"]    shop.df:7
+  no deletes in prod                      aws.db_instance reports    shop.df:7
 
 held for approval
-  aws.security_group["api"]               security group update         shop.df:8
+  aws.security_group api                  security group update      shop.df:8
 
 apply: refused until the conflicts and denies above are resolved
 plan digest: sha256:4f9c1e...
@@ -290,7 +291,7 @@ how many policies there will be is not known until the first tick runs:
 
 ```
 later   changes this plan cannot count yet
-  aws.iam_policy["connect-${host}"]    shop.df:31  waits on aws.db_instance["orders"].endpoint
+  aws.iam_policy "connect-${host}"  shop.df:31  waits on orders.endpoint
 
 apply: tick 1 now; `later` is planned again when tick 1 reports, and apply asks before what it adds
 ```
@@ -302,7 +303,7 @@ the policy's real name, and asks again before making it:
 plan: 1 change (1 create) over 1 tick
 
 tick 2  1 change, now that tick 1 reported
-  + aws.iam_policy "connect-orders.cx3k.us-east-1.rds.amazonaws.com"   shop.df:31
+  + aws.iam_policy "connect-orders.cx3k.us-east-1.rds.amazonaws.com"  shop.df:31
       policy.Statement[0].Action = "rds-db:connect"
       policy.Statement[0].Resource = "orders.cx3k.us-east-1.rds.amazonaws.com"
 
@@ -423,7 +424,7 @@ The answer is the program's own text at the lines that fired (a
 block's entries elided as `..`, but for the entry that fired), the
 variables as they were bound, and under them every computed term of
 the statement with what it became: the interpolated name, each lookup,
-each read, a value still unknown as its `?` label. An attribute is
+each read, a value still unknown as `?` and what it stands for. An attribute is
 merged from its contributions, each with its value, its rank when it
 is not the normal one, and the statement or line that made it: a
 constant is its line. The same question works for an attribute
@@ -799,14 +800,20 @@ deployment of a keyed stack, `dform plan shop env=prod`.
 **plan** prints what will change, grouped by tick. Tick 1 applies now;
 each later tick names the values it waits on; `later` lists the rules
 that may add changes once a value is known, as the rule, never as a
-count; the last line says what apply will do. Every change carries the
-statement that made it with its bindings, each changed attribute the
-write that won, and a `because` line naming what moved since the last
-apply. Where a line would pass 100 columns its right column says less,
-down to `FILE:LINE`. `--why=none` is the bare diff for scripts, laid out
-as it was before any of this, `--why=full` (`--why`) expands each change
-into its derivation, `--json` carries the ticks, what each waits on, each
-change's kind, site and `because` as fields.
+count; the last line says what apply will do. A plan line is one of two
+shapes: a change, `+ aws.subnet private-us-east-1a  shop.df:8`, its
+address as the source names it with the file and line that made it, or
+an attribute, `cidr_block = "10.0.0.0/24"`, followed by a file and line
+only when the value was written outside its own block (a policy, a
+`set`, a config module). A reference is the address it names, a secret
+`(sensitive)`, a long string elided in the middle, and a `because` line
+says what moved since the last apply. `-v` adds how: the bindings, the
+expression behind each value, and the writes that lost with their ranks
+(`@normal over k3s.df:9 @default`); `-vv` expands each change into its
+derivation. `-q` is the bare diff for scripts, laid out as it was before
+any of this. Colour is a hint and never the only carrier. `--json`
+carries the ticks, what each waits on, each change's kind, full address,
+site and `because` as fields.
 
 **apply** prints the plan and asks. It applies in ticks; at any tick that
 adds a resource the first plan could not name, it prints that tick's
