@@ -473,6 +473,9 @@ impl Evaluator {
             // A provider the program configures, its settings now known,
             // is configured, and what it serves read again.
             if backend.configure_from(&res.facts)? {
+                // An extern of a provider that was waiting on its settings
+                // answered "not yet": ask it again.
+                externs.forget_not_yet();
                 extra = self.base_extra.clone();
                 extra.extend(executor::withhold(backend.world_facts(st)?, withheld));
                 (res, violations, resumable) =
