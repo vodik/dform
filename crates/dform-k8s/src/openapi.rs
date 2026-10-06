@@ -46,9 +46,9 @@ use serde_json::{Map, Value as Json};
 use std::collections::BTreeMap;
 use std::path::Path;
 
-/// The OpenAPI document of a recent Kubernetes release, trimmed to the
-/// mock's kinds and the common workload and RBAC kinds: the schema when no
-/// cluster is reachable.
+/// The OpenAPI document of a recent Kubernetes release, trimmed to every
+/// kind of its stable groups: the static schema, the provider's when no
+/// cluster is reachable or before the program's is configured (R-110).
 pub const SNAPSHOT: &str = include_str!("../openapi-snapshot.json");
 
 /// The mock Kubernetes schema, for its `type_alias` facts.
@@ -196,10 +196,15 @@ fn snake(kind: &str) -> String {
     out
 }
 
-/// The mock's short names and the types they stand for.
+/// The short names and the types they stand for: the mock's, and
+/// `k8s.<kind>` for every other kind of the snapshot whose kind no other
+/// group-version of it has (`k8s.storage_class` is
+/// `k8s.storage.k8s.io.v1.storage_class`). A short name is for the stable
+/// kinds the provider serves without a cluster; a cluster's own kinds (its
+/// CRDs) keep their full names, so a CRD never takes or shadows one.
 pub fn aliases() -> Result<Vec<(String, String)>> {
     let schema = Schema::parse(MOCK, "crates/dform-mock/schemas/k8s.df")?;
-    Ok(schema
+    let mut out: Vec<(String, String)> = schema
         .facts
         .iter()
         .filter(|f| f.pred == "type_alias")
@@ -207,7 +212,46 @@ pub fn aliases() -> Result<Vec<(String, String)>> {
             [Term::Val(Value::Str(a)), Term::Val(Value::Str(t))] => Some((a.clone(), t.clone())),
             _ => None,
         })
-        .collect())
+        .collect();
+    let doc: Json = serde_json::from_str(SNAPSHOT).context("parse the OpenAPI snapshot")?;
+    let mut by_kind: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for d in doc
+        .get("paths")
+        .and_then(Json::as_object)
+        .into_iter()
+        .flat_map(|m| m.values())
+    {
+        for item in d
+            .get("paths")
+            .and_then(Json::as_object)
+            .into_iter()
+            .flat_map(|m| m.values())
+        {
+            let Some(gvk) = item.pointer("/patch/x-kubernetes-group-version-kind") else {
+                continue;
+            };
+            let s = |k: &str| gvk.get(k).and_then(Json::as_str).unwrap_or("");
+            let typ = type_name(s("group"), s("version"), s("kind"));
+            let typs = by_kind.entry(snake(s("kind"))).or_default();
+            if !typs.contains(&typ) {
+                typs.push(typ);
+            }
+        }
+    }
+    let taken: std::collections::BTreeSet<String> = out
+        .iter()
+        .flat_map(|(a, t)| [a.clone(), t.clone()])
+        .collect();
+    for (kind, typs) in by_kind {
+        let alias = format!("k8s.{kind}");
+        if let [typ] = typs.as_slice()
+            && !taken.contains(typ)
+            && !taken.contains(&alias)
+        {
+            out.push((alias, typ.clone()));
+        }
+    }
+    Ok(out)
 }
 
 /// The derived schema: the kinds by type name (aliases included), and the
@@ -336,9 +380,10 @@ pub fn cached(
     use dform_core::zset::file::fnv64;
     let key = fnv64(
         format!(
-            "{doc_hash} {} {}",
+            "{doc_hash} {} {} {}",
             fnv64(SOURCE.as_bytes()),
-            fnv64(MOCK.as_bytes())
+            fnv64(MOCK.as_bytes()),
+            fnv64(SNAPSHOT.as_bytes())
         )
         .as_bytes(),
     );
@@ -359,6 +404,94 @@ pub fn cached(
         std::fs::write(p, text).with_context(|| format!("write {}", p.display()))?;
     }
     Ok(d)
+}
+
+/// The version of the derivation: a cache written by another one is
+/// derived again.
+fn derivation() -> String {
+    use dform_core::zset::file::fnv64;
+    fnv64(
+        format!(
+            "{} {} {}",
+            fnv64(SOURCE.as_bytes()),
+            fnv64(MOCK.as_bytes()),
+            fnv64(SNAPSHOT.as_bytes())
+        )
+        .as_bytes(),
+    )
+}
+
+/// Where a deployment's extension of the static schema is cached (R-110):
+/// `DIR/schema/<deployment>/k8s.json`, the deployment as its objects'
+/// label has it.
+pub fn extension_path(dir: &Path, stack: &str) -> std::path::PathBuf {
+    dir.join("schema").join(stack).join("k8s.json")
+}
+
+/// The kinds `full` (a cluster's derivation) has and `base` (the static
+/// schema) has not, its CRDs and aggregated APIs, with their schema rows.
+pub fn extension(full: &Derived, base: &Derived) -> Result<Derived> {
+    let kinds: BTreeMap<String, Kind> = full
+        .kinds
+        .iter()
+        .filter(|(t, _)| !base.kinds.contains_key(*t))
+        .map(|(t, k)| (t.clone(), k.clone()))
+        .collect();
+    let facts: Vec<Atom> = full
+        .schema
+        .facts
+        .iter()
+        .filter(|f| match f.args.first() {
+            Some(Term::Val(Value::Str(t))) => kinds.contains_key(t),
+            _ => false,
+        })
+        .cloned()
+        .collect();
+    let schema = Schema::from_facts(&facts).context("a cluster's extension of the schema")?;
+    Ok(Derived { kinds, schema })
+}
+
+/// `base` with the kinds of `ext`.
+pub fn extended(base: &Derived, ext: &Derived) -> Result<Derived> {
+    let mut kinds = base.kinds.clone();
+    kinds.extend(ext.kinds.iter().map(|(t, k)| (t.clone(), k.clone())));
+    let facts: Vec<Atom> = base
+        .schema
+        .facts
+        .iter()
+        .chain(&ext.schema.facts)
+        .cloned()
+        .collect();
+    let schema = Schema::from_facts(&facts).context("the schema and a cluster's extension")?;
+    Ok(Derived { kinds, schema })
+}
+
+/// The cached extension at `path` ([`extension_path`]) of this derivation:
+/// of the cluster document `doc_hash`, or of any when `None` (the
+/// deployment's cluster is not known yet: its last one's).
+pub fn read_extension(path: &Path, doc_hash: Option<&str>) -> Option<Derived> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let key = serde_json::from_str::<Json>(&text)
+        .ok()?
+        .get("key")?
+        .as_str()?
+        .to_string();
+    let (version, hash) = key.split_once(' ')?;
+    if version != derivation() || doc_hash.is_some_and(|h| h != hash) {
+        return None;
+    }
+    decode(&text, &key)
+}
+
+/// Cache `ext`, the extension of the cluster document `doc_hash`, at
+/// `path`.
+pub fn write_extension(path: &Path, doc_hash: &str, ext: &Derived) -> Result<()> {
+    let key = format!("{} {doc_hash}", derivation());
+    let text = encode(ext, &key).ok_or_else(|| anyhow!("the extension does not encode"))?;
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).with_context(|| format!("mkdir {}", dir.display()))?;
+    }
+    std::fs::write(path, text).with_context(|| format!("write {}", path.display()))
 }
 
 /// A cached derivation: `{"key", "kinds", "facts": [[PRED, ARG...]]}`,
@@ -710,6 +843,7 @@ impl<'a> Walk<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn kind_names_are_snake_case() {
@@ -785,6 +919,65 @@ mod tests {
             s.replace_order(dep),
             dform_core::schema::ReplaceOrder::CreateFirst
         );
+    }
+
+    /// A cluster's kinds beyond the static schema (a CRD) are cached per
+    /// deployment, and a deferred run serves them from there (R-110).
+    #[test]
+    fn a_clusters_crds_extend_the_static_schema() {
+        let base = snapshot().unwrap();
+        let mut doc: Json = serde_json::from_str(SNAPSHOT).unwrap();
+        // A CRD: the Lease's shape, as traefik.io/v1alpha1 Middleware.
+        let mut crd = doc["paths"]["apis/coordination.k8s.io/v1"].clone();
+        let gvk = json!({"group": "traefik.io", "version": "v1alpha1", "kind": "Middleware"});
+        let item = json!({"patch": {"x-kubernetes-action": "patch",
+            "x-kubernetes-group-version-kind": gvk}});
+        crd["paths"] = json!({
+            "/apis/traefik.io/v1alpha1/namespaces/{namespace}/middlewares/{name}": item
+        });
+        crd["components"]["schemas"]["io.k8s.api.coordination.v1.Lease"]["x-kubernetes-group-version-kind"] =
+            json!([gvk]);
+        doc["paths"]["apis/traefik.io/v1alpha1"] = crd;
+        let full = derive(&doc, &aliases().unwrap()).unwrap();
+        let ext = extension(&full, &base).unwrap();
+        let mw = "k8s.traefik.io.v1alpha1.middleware";
+        assert_eq!(ext.kinds.keys().collect::<Vec<_>>(), vec![mw]);
+        assert!(ext.schema.attr(mw, "spec.holderIdentity").is_some());
+        assert!(base.kind(mw).is_err());
+
+        let dir = std::env::temp_dir().join(format!("dform-k8s-ext-{}", std::process::id()));
+        let path = extension_path(&dir, "platform");
+        write_extension(&path, "h1", &ext).unwrap();
+        assert!(
+            read_extension(&path, Some("h2")).is_none(),
+            "another document"
+        );
+        let cached = read_extension(&path, None).unwrap();
+        let both = extended(&base, &cached).unwrap();
+        assert!(both.kind(mw).is_ok() && both.kind("k8s.storage_class").is_ok());
+        assert!(both.schema.attr(mw, "spec.holderIdentity").is_some());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// The snapshot is the static schema (R-110): every kind of the stable
+    /// groups, each under a short name when its kind is unambiguous.
+    #[test]
+    fn the_snapshot_serves_the_stable_groups_by_short_name() {
+        let d = snapshot().unwrap();
+        let sc = "k8s.storage.k8s.io.v1.storage_class";
+        assert_eq!(d.kind("k8s.storage_class").unwrap(), d.kind(sc).unwrap());
+        assert!(d.schema.attr("k8s.storage_class", "provisioner").is_some());
+        assert!(!d.kind(sc).unwrap().namespaced);
+        for short in [
+            "k8s.ingress_class",
+            "k8s.priority_class",
+            "k8s.persistent_volume",
+            "k8s.custom_resource_definition",
+            "k8s.validating_webhook_configuration",
+            "k8s.lease",
+        ] {
+            assert!(d.kind(short).is_ok(), "{short}");
+        }
     }
 
     /// OpenAPI descriptions are `type_doc` facts: the kind's and each

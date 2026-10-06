@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Build crates/dform-k8s/openapi-snapshot.json: the schema the Kubernetes
-provider derives from when no cluster is reachable.
+provider derives from when no cluster is reachable, its static schema
+(R-110): every kind of the stable API groups. A cluster's own kinds (its
+CRDs) extend it at Configure.
 
 Input: a directory of the API server's OpenAPI v3 documents as the
 Kubernetes repository checks them in (api/openapi-spec/v3/*_openapi.json,
@@ -12,6 +14,9 @@ reach. A property's `default` stays: the provider derives a defaulted leaf
 as optional_computed from it; so does its `description`: the provider's
 `type_doc` for the path (the language server's hover).
 
+The documents of a release are at
+https://github.com/kubernetes/kubernetes/tree/vX.Y.Z/api/openapi-spec/v3.
+
     python3 crates/dform-k8s/trim_openapi.py DIR v1.36.0 > crates/dform-k8s/openapi-snapshot.json
 """
 
@@ -19,16 +24,24 @@ import json
 import os
 import sys
 
+# The stable group-versions, every kind of each (`None`): a kind is one
+# with a patchable `{name}` path.
 KINDS = {
-    "api/v1": ["Namespace", "ConfigMap", "Secret", "ServiceAccount", "Service",
-               "PersistentVolumeClaim", "Pod"],
-    "apis/apps/v1": ["Deployment", "StatefulSet", "DaemonSet", "ReplicaSet"],
-    "apis/batch/v1": ["Job", "CronJob"],
-    "apis/autoscaling/v2": ["HorizontalPodAutoscaler"],
-    "apis/policy/v1": ["PodDisruptionBudget"],
-    "apis/networking.k8s.io/v1": ["NetworkPolicy", "Ingress"],
-    "apis/rbac.authorization.k8s.io/v1": ["Role", "RoleBinding", "ClusterRole",
-                                          "ClusterRoleBinding"],
+    "api/v1": None,
+    "apis/apps/v1": None,
+    "apis/batch/v1": None,
+    "apis/autoscaling/v2": None,
+    "apis/policy/v1": None,
+    "apis/networking.k8s.io/v1": None,
+    "apis/rbac.authorization.k8s.io/v1": None,
+    "apis/storage.k8s.io/v1": None,
+    "apis/scheduling.k8s.io/v1": None,
+    "apis/coordination.k8s.io/v1": None,
+    "apis/discovery.k8s.io/v1": None,
+    "apis/node.k8s.io/v1": None,
+    "apis/admissionregistration.k8s.io/v1": None,
+    "apis/apiextensions.k8s.io/v1": None,
+    "apis/certificates.k8s.io/v1": None,
 }
 
 DROP = {"uniqueItems", "x-kubernetes-patch-strategy",
@@ -58,6 +71,12 @@ def refs(v, out):
 def trim(doc, kinds):
     paths = {}
     roots = set()
+    if kinds is None:
+        kinds = set()
+        for path, item in doc["paths"].items():
+            gvk = (item.get("patch") or {}).get("x-kubernetes-group-version-kind")
+            if path.endswith("{name}") and gvk:
+                kinds.add(gvk["kind"])
     for path, item in doc["paths"].items():
         patch = item.get("patch") or {}
         gvk = patch.get("x-kubernetes-group-version-kind")
@@ -92,7 +111,7 @@ def main():
            "paths": {}}
     for gv, kinds in KINDS.items():
         with open(os.path.join(src, gv.replace("/", "__") + "_openapi.json")) as f:
-            out["paths"][gv] = trim(json.load(f), set(kinds))
+            out["paths"][gv] = trim(json.load(f), None if kinds is None else set(kinds))
     json.dump(out, sys.stdout, sort_keys=True, separators=(",", ":"))
     sys.stdout.write("\n")
 

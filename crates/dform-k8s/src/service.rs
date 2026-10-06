@@ -8,8 +8,11 @@
 //! checked-in snapshot's, Plan diffs locally, and Read, Apply and Import
 //! fail naming why. A program that names its cluster
 //! (`provider_config("k8s", ...)`) is configured `deferred` first
-//! (the snapshot's schema, the environment ignored) and again with its
-//! `settings` once they are known (`Cluster::configured`).
+//! (the snapshot's schema, the static schema of every stable kind,
+//! extended by the CRDs its cluster served at the deployment's last run,
+//! the environment ignored) and again with its `settings` once they are
+//! known (`Cluster::configured`), when the cluster's CRDs are cached for
+//! the next run (`dform.state/cache/schema/<deployment>/k8s.json`).
 //!
 //! Remote ids are `NAMESPACE/NAME` (`NAME` for a cluster-scoped kind).
 //! Read and Import GET the object. Plan validates the document, then
@@ -100,14 +103,42 @@ impl K8s {
     }
 
     /// Configure for a program that names its cluster itself
-    /// (`provider_config("k8s", ...)`): the schema is the snapshot's
+    /// (`provider_config("k8s", ...)`): the schema is the snapshot's, the
+    /// static schema, extended by the kinds the deployment's cluster served
+    /// when it was last configured (its CRDs, `openapi::read_extension`),
     /// until then, and nothing in the environment is contacted.
-    pub fn deferred(cache: Option<PathBuf>) -> Result<K8s> {
+    pub fn deferred(cache: Option<PathBuf>, stack: Option<&str>) -> Result<K8s> {
+        let base = openapi::snapshot_cached(cache.as_deref())?;
+        let ext = cache
+            .as_deref()
+            .zip(stack)
+            .and_then(|(c, s)| openapi::read_extension(&openapi::extension_path(c, s), None));
+        let derived = match ext {
+            Some(ext) => openapi::extended(&base, &ext)?,
+            None => base,
+        };
         Ok(K8s {
-            derived: Arc::new(openapi::snapshot_cached(cache.as_deref())?),
+            derived: Arc::new(derived),
             cluster: Err("the program configures it (provider_config) and has not yet".into()),
             stack: None,
         })
+    }
+
+    /// The program's cluster answered: cache the kinds it serves beyond the
+    /// static schema (its CRDs) for the deployment's next run, which starts
+    /// `deferred` again. The schema of this run stays as it is. Once per
+    /// change of the cluster's document; a cluster that does not answer
+    /// keeps the cache it had.
+    async fn extend(cluster: &Cluster, cache: &std::path::Path, stack: &str) -> Result<()> {
+        let path = openapi::extension_path(cache, stack);
+        let doc = cluster.openapi(Some(&cache.join(OPENAPI_CACHE))).await?;
+        if openapi::read_extension(&path, Some(&doc.hash)).is_some() {
+            return Ok(());
+        }
+        let hash = doc.hash.clone();
+        let full = openapi::derive(&doc.parse()?, &openapi::aliases()?)?;
+        let base = openapi::snapshot_cached(Some(cache))?;
+        openapi::write_extension(&path, &hash, &openapi::extension(&full, &base)?)
     }
 
     /// The program's configuration arrived (`Cluster::configured`): the
@@ -815,27 +846,36 @@ impl pb::provider_server::Provider for Service {
                     .and_then(Json::as_str)
                     .and_then(|w| std::path::Path::new(w).parent().map(PathBuf::from))
             });
+        // The deployment: what its objects are labelled with, and what its
+        // cluster's extension of the schema is cached under.
+        let stack = config
+            .get("stack")
+            .and_then(Json::as_str)
+            .map(stack_label)
+            .filter(|s| !s.is_empty());
         // The program's own configuration, a second Configure: the schema
         // the run already has, the cluster it names.
         let settings = config.get("settings").cloned().unwrap_or(Json::Null);
         let configured = Cluster::configured(&settings).await.map_err(invalid)?;
+        if let (Some(c), Some(dir), Some(s)) = (&configured, &cache, &stack)
+            && let Err(e) = K8s::extend(c, dir, s).await
+        {
+            eprintln!("dform-provider-k8s: the cluster's schema is not cached: {e:#}");
+        }
         let current = self.k8s.read().unwrap_or_else(|e| e.into_inner()).clone();
         let k8s = match (configured, current) {
             (Some(c), Some(k8s)) => k8s.with_cluster(c),
             (Some(c), None) => {
-                let k8s = K8s::deferred(cache).map_err(invalid)?;
+                let k8s = K8s::deferred(cache, stack.as_deref()).map_err(invalid)?;
                 k8s.with_cluster(c)
             }
             (None, _) if config.get("deferred") == Some(&Json::Bool(true)) => {
-                K8s::deferred(cache).map_err(invalid)?
+                K8s::deferred(cache, stack.as_deref()).map_err(invalid)?
             }
             (None, _) => K8s::configure(cache).await.map_err(invalid)?,
         };
         let k8s = K8s {
-            stack: match config.get("stack").and_then(Json::as_str) {
-                Some(s) if !stack_label(s).is_empty() => Some(stack_label(s)),
-                _ => k8s.stack,
-            },
+            stack: stack.or(k8s.stack),
             ..k8s
         };
         *self.k8s.write().unwrap_or_else(|e| e.into_inner()) = Some(Arc::new(k8s));
