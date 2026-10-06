@@ -2130,8 +2130,13 @@ fn eval_rule(rule: &RuleStmt, plan: &ops::Rule, src: &Src, rec: &Rec) -> Result<
         if rec.any_blocked(&rule.head.args, &b) {
             continue;
         }
-        let head = instantiate_atom(&rule.head, &b)
-            .with_context(|| format!("instantiate head {}", rule.head.pred))?;
+        let head = match instantiate_atom(&rule.head, &b) {
+            Ok(h) => h,
+            Err(e) => match head_error(&rule.head, &b) {
+                Some(why) => bail!(why),
+                None => return Err(e.context(format!("instantiate head {}", rule.head.pred))),
+            },
+        };
         let mut bindings: Vec<(String, Value)> = b
             .into_iter()
             .filter(|(k, _)| !k.starts_with("__"))
@@ -3075,6 +3080,70 @@ fn ground_atom(atom: &Atom, state: &HashMap<String, Value>) -> Result<Atom> {
         record: None,
         span: Default::default(),
     })
+}
+
+/// Why a head argument has no value (R-119), located at the head: a call
+/// that answered nothing (`oci.with_digest(.., "16.0.4")`, a `T?`
+/// function's none) reaching a cell, named with the attribute it was to
+/// give; or a variable nothing bound, which the compiler must not let
+/// through.
+fn head_error(head: &Atom, state: &HashMap<String, Value>) -> Option<String> {
+    enum NoValue {
+        Call(String),
+        Unbound(String),
+    }
+    fn no_value(t: &Term, state: &HashMap<String, Value>) -> Option<NoValue> {
+        if eval_term(t, state).is_some() {
+            return None;
+        }
+        match t {
+            Term::Var(v) => Some(NoValue::Unbound(v.clone())),
+            Term::Func { name, args } => match args.iter().find_map(|a| no_value(a, state)) {
+                Some(inner) => Some(inner),
+                None => {
+                    let shown: Vec<String> = args
+                        .iter()
+                        .filter_map(|a| eval_term(a, state))
+                        .map(|v| partition::fmt_term(&Term::Val(v)))
+                        .collect();
+                    Some(NoValue::Call(format!("{name}({})", shown.join(", "))))
+                }
+            },
+            Term::List(xs) => xs.iter().find_map(|x| no_value(x, state)),
+            Term::Obj(m) => m.values().find_map(|x| no_value(x, state)),
+            _ => None,
+        }
+    }
+    let at = crate::diag::place(head.span).unwrap_or_else(|| head.pred.clone());
+    let s = |t: &Term| match eval_term(t, state) {
+        Some(Value::Str(s)) => Some(s),
+        _ => None,
+    };
+    let cell = match (head.pred.as_str(), head.args.as_slice()) {
+        ("arg", [t, a, k, _, _]) => match (s(t), s(a), s(k)) {
+            (Some(typ), Some(name), Some(k)) => Some(match typ.as_str() {
+                crate::modules::INPUT | crate::transform::OUTPUT => format!("{typ} {k}"),
+                _ => crate::report::attribute(&crate::ir::Address { typ, name }, &k),
+            }),
+            _ => None,
+        },
+        _ => None,
+    };
+    let what = cell.unwrap_or_else(|| format!("`{}`", head.pred));
+    head.args
+        .iter()
+        .find_map(|t| no_value(t, state))
+        .map(|n| match n {
+            NoValue::Call(call) => format!(
+                "{at}: {call} answered nothing, so {what} has no value (the function's \
+                 result is optional, `T?`): give it arguments it answers, or test it with \
+                 `has` in a clause"
+            ),
+            NoValue::Unbound(v) => format!(
+                "internal error: {at}: the head of the rule for {what} leaves `{v}` unbound \
+                 (a compiler bug: please report it with the program)"
+            ),
+        })
 }
 
 fn instantiate_atom(atom: &Atom, state: &HashMap<String, Value>) -> Result<Atom> {

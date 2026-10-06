@@ -13,6 +13,6 @@ fn parse(
 #| example: deny "image not pinned by digest" where not oci.pinned(image)
 fn pinned(reference: string) -> bool
 
-#| The reference with its digest set to `digest` (its tag, if any, kept); no value for text that is not a reference.
+#| The reference with its digest set to `digest` (its tag, if any, kept); no value for text that is not a reference, or a `digest` that is not one (`16.0.4` is a tag: `"${image}:${tag}"`).
 #| example: let exact = oci.with_digest(image, "sha256:${sha}")
 fn with_digest(reference: string, digest: string) -> string?

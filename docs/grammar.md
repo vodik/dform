@@ -1436,6 +1436,14 @@ no OVH instance), and does not read the cell it writes, which a value
 test would (a cycle). Over a type that is not constant, each resource's
 type answers.
 
+A call of a function whose result is optional (`T?`, `oci.with_digest`
+over a tag rather than a digest) has no value where it answers none: in
+a clause the literal fails, as above; as a value that reaches a cell
+(an entry or a `let`, directly or inside an object or a list) it is an
+error at the entry naming the call and the attribute or `let` it was to
+give (R-119), never a value left out. A bare path in a block is the pun of its
+last segment ("Statements"), not a test: `has` is the test.
+
 A `.p` or `[i]` after a call reads the call's result (R-71):
 `oci.parse(image).digest`, `str.split(s, ":")[0]`, `json.decode(t).a[0].b`,
 anywhere a chain stands, `has` and `not` included, so `not has
