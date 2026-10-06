@@ -77,6 +77,34 @@ pub struct Span {
     pub end_ms: u64,
 }
 
+/// Chaos `not-yet`: the answer of a provider that cannot answer yet, its
+/// inputs and an open null in every other column, labeled
+/// `PRED/INPUTS#N` (`N` the column from 1).
+fn not_yet_row(pred: &str, plus: &[bool], inputs: &[Value]) -> Vec<Value> {
+    let ins: Vec<String> = inputs.iter().map(dform_core::partition::fmt_bare).collect();
+    let mut given = inputs.iter();
+    plus.iter()
+        .enumerate()
+        .map(|(c, p)| match p {
+            true => given.next().cloned().unwrap_or(Value::Str(String::new())),
+            false => Value::Null {
+                label: dform_core::value::null_label(pred, &ins.join(","), &(c + 1).to_string()),
+                class: NullClass::Open,
+                ty: String::new(),
+            },
+        })
+        .collect()
+}
+
+/// `computed` without the paths chaos `not-ready` still hides.
+fn ready(computed: &Json, not_ready: &BTreeMap<String, u64>) -> Json {
+    let mut out = computed.clone();
+    for path in not_ready.keys() {
+        provider::remove_path(&mut out, path);
+    }
+    out
+}
+
 fn is_zero(n: &u64) -> bool {
     *n == 0
 }
@@ -91,6 +119,10 @@ pub struct RemoteResource {
     /// resource (eventual consistency after Create).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub read_lag: Option<u64>,
+    /// Chaos `not-ready`: computed paths absent from Read and Apply for
+    /// this many more Reads (a status not reached yet).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub not_ready: BTreeMap<String, u64>,
     /// The idempotency key of the Create or Replace that made it: a second
     /// call with the key answers with this object.
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -181,6 +213,9 @@ pub struct FakeCloud {
     delayed: BTreeSet<Address>,
     /// How many Apply calls of each chaos `flaky` has refused this run.
     refused: BTreeMap<Address, u64>,
+    /// How many Query calls of each extern chaos `not-yet` has answered
+    /// "not yet" this run.
+    not_yet: BTreeMap<String, u64>,
     /// Linked in: chaos `crash` cannot kill the process, so the mock is
     /// gone instead.
     in_process: bool,
@@ -315,6 +350,13 @@ impl FakeCloud {
         plus: &[bool],
         inputs: &[Value],
     ) -> Result<Vec<Vec<Value>>> {
+        if let Some(&k) = self.chaos.not_yet.get(pred) {
+            let n = self.not_yet.entry(pred.to_string()).or_default();
+            if *n < k {
+                *n += 1;
+                return Ok(vec![not_yet_row(pred, plus, inputs)]);
+            }
+        }
         let all = match pred {
             CREATED => match inputs {
                 [Value::Str(typ), name, Value::Str(k)] if !k.is_empty() => self
@@ -443,10 +485,20 @@ impl FakeCloud {
                 return Ok(None);
             }
         }
+        let rr = self.world.as_mut().expect("loaded").resources.get_mut(&k);
+        let rr = rr.expect("read above");
+        let computed = ready(&rr.computed, &rr.not_ready);
+        if !rr.not_ready.is_empty() {
+            for k in rr.not_ready.values_mut() {
+                *k -= 1;
+            }
+            rr.not_ready.retain(|_, k| *k > 0);
+            self.save()?;
+        }
         let rr = &self.world.as_ref().expect("loaded").resources[&k];
         Ok(Some((
             rr.attrs.clone(),
-            self.outward(&rr.typ, remote, &rr.computed),
+            self.outward(&rr.typ, remote, &computed),
         )))
     }
 
@@ -855,6 +907,7 @@ impl FakeCloud {
                         attrs: doc,
                         computed,
                         read_lag: None,
+                        not_ready: BTreeMap::new(),
                         key: String::new(),
                         materialized: BTreeMap::new(),
                     },
@@ -878,6 +931,7 @@ impl FakeCloud {
                         attrs: doc,
                         computed,
                         read_lag: None,
+                        not_ready: BTreeMap::new(),
                         key: made_by,
                         materialized: BTreeMap::new(),
                     },
@@ -898,7 +952,7 @@ impl FakeCloud {
             }
             let rr = &self.world_ref().resources[&key(&addr.typ, r)];
             out.attrs = rr.attrs.clone();
-            out.computed = self.outward(&addr.typ, r, &rr.computed);
+            out.computed = self.outward(&addr.typ, r, &ready(&rr.computed, &rr.not_ready));
             out.remote = r.clone();
         }
         self.save().map_err(refuse)?;
@@ -981,6 +1035,13 @@ impl FakeCloud {
         let salt = self.salt();
         let computed = self.mint(&addr.typ, remote, &doc, salt);
         let read_lag = self.chaos.read_lag.get(addr).copied();
+        let not_ready = self
+            .chaos
+            .not_ready
+            .iter()
+            .filter(|(a, _, k)| a == addr && *k > 0)
+            .map(|(_, path, k)| (path.clone(), *k))
+            .collect();
         self.world_mut().resources.insert(
             key(&addr.typ, remote),
             RemoteResource {
@@ -989,6 +1050,7 @@ impl FakeCloud {
                 attrs: doc,
                 computed,
                 read_lag,
+                not_ready,
                 key: idempotency_key.to_string(),
                 materialized: BTreeMap::new(),
             },

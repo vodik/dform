@@ -509,6 +509,45 @@ impl<'a> Externs<'a> {
         )
     }
 
+    /// The labels of the open nulls the last evaluation's answers hold:
+    /// an extern that answers a column with an open null says "not yet"
+    /// (a host that does not answer yet), where a refusal is an error. An
+    /// apply waits on them (R-81, [`Externs::forget_not_yet`]).
+    pub fn not_yet(&self) -> BTreeSet<String> {
+        let known = self.known.borrow();
+        self.demanded
+            .borrow()
+            .iter()
+            .filter_map(|c| known.get(c))
+            .flatten()
+            .flatten()
+            .filter_map(|v| match v {
+                Value::Null {
+                    label,
+                    class: crate::value::NullClass::Open,
+                    ..
+                } => Some(label.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Forget every answer that said "not yet" ([`Externs::not_yet`]): the
+    /// next evaluation asks again.
+    pub fn forget_not_yet(&self) {
+        self.known.borrow_mut().retain(|_, rows| {
+            !rows.iter().flatten().any(|v| {
+                matches!(
+                    v,
+                    Value::Null {
+                        class: crate::value::NullClass::Open,
+                        ..
+                    }
+                )
+            })
+        });
+    }
+
     /// The answers the last evaluation read, for the plan file: every call
     /// it demanded, except a call with a secret column or one that carries
     /// a secret (a secret is never written in the clear).

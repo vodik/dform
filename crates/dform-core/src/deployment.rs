@@ -618,6 +618,23 @@ pub fn sections(res: &EvalResult, resources: &[ir::Resource], schema: &Schema) -
     stuck::sections(&res.stuck, &res.may_derive, &res.facts, &docs, schema)
 }
 
+/// The nulls of `on` (labels) an apply can wait on (R-81), in order:
+/// what the world has not reached yet, a computed value of an object that
+/// exists (a Job's `status.succeeded`, a cluster's endpoint), and what an
+/// extern answered "not yet" (`not_yet`, `Externs::not_yet`). Waiting
+/// changes nothing for the rest: another stack's output, an input, a value
+/// of an object no tick makes.
+pub fn waitable(on: &BTreeSet<String>, state: &State, not_yet: &BTreeSet<String>) -> Vec<String> {
+    on.iter()
+        .filter(|l| {
+            not_yet.contains(*l)
+                || crate::value::null_owner(l)
+                    .is_some_and(|(typ, name)| state.get(&Address { typ, name }).is_some())
+        })
+        .cloned()
+        .collect()
+}
+
 /// An evaluation of a deployment.
 pub struct Evaluation {
     pub located: Located,

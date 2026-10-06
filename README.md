@@ -748,7 +748,15 @@ plan and asks again before changing anything. `--yes` for scripts
 applies the ticks the plan enumerated and stops before one that would
 add more, to be run again. State is written after every provider call,
 so an interrupted apply resumes where it stopped. `--parallel N`
-overlaps independent calls.
+overlaps independent calls. Every provider call has a timeout, and one
+that failed in a way worth trying again (a 429, a 5xx, the connection)
+is sent again with backoff up to a budget; a create that timed out is
+looked up by its idempotency key first, so it is adopted, never made
+twice. A tick held on a value the world has not reached yet, a Job's
+`status.succeeded`, waits for it, saying `waiting on
+k8s.job["migrate-v42"].status.succeeded since 02:14 (3m)` every ten
+seconds. Past `--wait` (10m by default) the apply stops with the state
+consistent and says what it waited on.
 
 **Lifecycle.** The things that happen between two applies are facts,
 so policy can read them and `why` can explain them:

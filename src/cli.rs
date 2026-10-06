@@ -293,6 +293,12 @@ enum Run {
         /// `requires_approval` of a deformation.
         #[arg(long = "approval")]
         approval: Option<PathBuf>,
+        /// How long a tick waits for the open nulls it reads to resolve (a
+        /// Job's status, a host that answers) before the apply stops:
+        /// `30s`, `30m`; `0s` does not wait. Default: the stack's
+        /// `[stacks.NAME] wait`, else 10m.
+        #[arg(long = "wait", value_parser = parse_wait)]
+        wait: Option<std::time::Duration>,
         /// Apply without asking: the ticks the plan names, stopping before
         /// one that adds what it could not name (run apply again). Without
         /// it, apply prints the plan and asks before changing anything and
@@ -602,6 +608,8 @@ enum Cmd {
         max_ticks: usize,
         parallel: u64,
         approval: Option<PathBuf>,
+        /// `--wait`: how long a tick waits on open nulls (R-81).
+        wait: Option<std::time::Duration>,
         /// `--yes`: no confirmation.
         yes: bool,
     },
@@ -1204,6 +1212,7 @@ fn run_cmd(r: Run) -> (Cmd, Option<Target>) {
             max_ticks,
             parallel,
             approval,
+            wait,
             yes,
         } => (
             Cmd::Apply {
@@ -1212,6 +1221,7 @@ fn run_cmd(r: Run) -> (Cmd, Option<Target>) {
                 max_ticks,
                 parallel,
                 approval,
+                wait,
                 yes,
             },
             Some(target),
@@ -2273,9 +2283,20 @@ fn run_with(
             max_ticks,
             parallel,
             approval,
+            wait,
             yes,
             ..
         } => {
+            // How long a tick waits on open nulls (R-81).
+            let wait_budget = wait
+                .or_else(|| {
+                    located
+                        .loaded
+                        .manifest
+                        .as_ref()?
+                        .stack_wait(&located.loaded.stack)
+                })
+                .unwrap_or(crate::progress::WAIT);
             for addr in chaos.addresses() {
                 if !resources.iter().any(|r| &r.addr == addr) && st.get(addr).is_none() {
                     bail!("--chaos: {addr} is not a resource of this stack");
@@ -2814,12 +2835,56 @@ fn run_with(
                     waits.extend(held);
                     waits.sort();
                     waits.dedup();
-                    let waits: Vec<String> =
-                        waits.iter().map(|n| format!("?{}", ir::label(n))).collect();
-                    bail!(
-                        "apply stopped at tick {tick}: nothing definite to apply, still waiting on {}",
-                        waits.join(" ")
-                    );
+                    // What waiting can resolve (R-81): the world reaching a
+                    // value (a Job's status), an extern's "not yet". The
+                    // tick waits, up to its budget, for one to change.
+                    let on = waiting_on(&sections, &st, externs);
+                    if on.is_empty() || wait_budget.is_zero() {
+                        let waits: Vec<String> =
+                            waits.iter().map(|n| format!("?{}", ir::label(n))).collect();
+                        bail!(
+                            "apply stopped at tick {tick}: nothing definite to apply, still waiting on {}",
+                            waits.join(" ")
+                        );
+                    }
+                    let names: Vec<String> = on.iter().map(|l| ir::label(l)).collect();
+                    let mut w = crate::progress::Wait::new();
+                    let resolved = loop {
+                        w.tick(&names);
+                        if w.elapsed() >= wait_budget {
+                            break false;
+                        }
+                        std::thread::sleep(w.next_poll(wait_budget));
+                        backend.reread();
+                        externs.forget_not_yet();
+                        let (next, _) = evaluate_with(&st, &BTreeSet::new(), &[], Some(tick))?;
+                        let docs =
+                            ir::compile_resources(next.facts.iter().cloned(), backend.schema())?;
+                        let now = deployment::sections(&next, &docs, backend.schema());
+                        if waiting_on(&now, &st, externs) != on {
+                            break true;
+                        }
+                    };
+                    let redact = query::Redactor::new(&res.facts, schema);
+                    log_retries(&audit, &redact, backend, tick)?;
+                    let result = if resolved { "resolved" } else { "expired" };
+                    audit.append(
+                        "wait",
+                        crate::audit::wait(tick, &names, w.since(), w.elapsed(), result),
+                    )?;
+                    if !resolved {
+                        // Nothing of the tick was applied: the next apply
+                        // plans it again, as an unattended stop does.
+                        st.in_flight = None;
+                        persist(&st)?;
+                        bail!(
+                            "apply stopped at tick {tick}: waited {} (--wait) on {}, still \
+                             unknown; state is consistent: run apply again to wait again \
+                             (`--wait` for longer)",
+                            crate::plugin::policy::show(wait_budget),
+                            names.join(", ")
+                        );
+                    }
                 }
                 if tick == max_ticks {
                     bail!(
@@ -2854,6 +2919,28 @@ fn run_with(
     }
 
     Ok(())
+}
+
+/// The nulls a tick waits on that waiting can resolve (R-81,
+/// `deployment::waitable`): of the stuck rules' and the held resources'.
+fn waiting_on(
+    sections: &stuck::Sections,
+    st: &state::State,
+    externs: &crate::externs::Externs,
+) -> Vec<String> {
+    let on: BTreeSet<String> = sections
+        .blocking
+        .iter()
+        .chain(sections.pending.values().flatten())
+        .cloned()
+        .collect();
+    deployment::waitable(&on, st, &externs.not_yet())
+}
+
+/// `--wait`'s duration: `30s`, `30m`, `500ms`, `0s`.
+fn parse_wait(s: &str) -> std::result::Result<std::time::Duration, String> {
+    crate::store::parse_duration(s)
+        .ok_or_else(|| format!("{s:?}: a duration, `30s`, `30m` or `0s`"))
 }
 
 /// Every provider call sent again since the last time (R-81) to the audit
@@ -3170,6 +3257,7 @@ fn run_controller(cli: Cli) -> Result<()> {
             max_ticks,
             parallel: 1,
             approval: None,
+            wait: None,
             // The controller runs unattended: it never asks.
             yes: true,
         },

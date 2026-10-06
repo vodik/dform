@@ -898,6 +898,12 @@ impl Providers {
         self.names.iter().position(|n| n == name)
     }
 
+    /// Read the world again at the next refresh, though nothing was
+    /// written: a tick waits on what the world has not reached yet (R-81).
+    pub fn reread(&self) {
+        self.invalidate();
+    }
+
     /// A write happened: the next refresh Reads again.
     fn invalidate(&self) {
         self.refreshed.take();

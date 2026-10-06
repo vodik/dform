@@ -28,6 +28,11 @@
 //! |                                | late (slept): past a short `timeout`, it times out      |
 //! | `flaky=T["N"]:K`               | the first K Apply calls of T["N"] are refused, changing |
 //! |                                | nothing, as busy (503): retried with backoff (R-81)     |
+//! | `not-ready=T["N"].PATH:K`      | T["N"]'s computed PATH is absent from its first K Reads |
+//! |                                | after its Create (a status not reached yet): an open    |
+//! |                                | null an apply waits on (R-81)                           |
+//! | `not-yet=PRED:K`               | the first K Query calls of the extern PRED answer "not  |
+//! |                                | yet": an open null in every output column (R-81)        |
 
 use crate::ir::Address;
 use anyhow::{Context, Result, anyhow, bail};
@@ -44,6 +49,10 @@ pub struct Chaos {
     pub delay: BTreeMap<Address, u64>,
     /// The first K Apply calls of each are refused as transient (503).
     pub flaky: BTreeMap<Address, u64>,
+    /// A computed path absent from the first K Reads after the Create.
+    pub not_ready: Vec<(Address, String, u64)>,
+    /// An extern whose first K Query calls answer "not yet".
+    pub not_yet: BTreeMap<String, u64>,
     pub crash: BTreeSet<Address>,
     /// The executor stops once this many Apply calls have returned.
     pub stop_after: Option<usize>,
@@ -79,7 +88,7 @@ impl Chaos {
         let (knob, arg) = spec.split_once('=').ok_or_else(|| {
             anyhow!(
                 "expected KNOB=ARG (fail, timeout, crash, read-lag, mutate, latency, \
-                 delay, flaky, stop-after) or fresh-ids"
+                 delay, flaky, not-ready, not-yet, stop-after) or fresh-ids"
             )
         })?;
         match knob {
@@ -115,6 +124,20 @@ impl Chaos {
                 let (a, k) = addr_and(arg, "K")?;
                 self.flaky.insert(a, k.parse().context("Apply calls")?);
             }
+            "not-yet" => {
+                let (pred, k) = arg
+                    .rsplit_once(':')
+                    .ok_or_else(|| anyhow!("expected not-yet=PRED:K"))?;
+                self.not_yet
+                    .insert(pred.to_string(), k.parse().context("Query calls")?);
+            }
+            "not-ready" => {
+                let bad = || anyhow!("expected not-ready=T[\"N\"].PATH:K");
+                let (lhs, k) = arg.rsplit_once(':').ok_or_else(bad)?;
+                let (a, path) = crate::ir::parse_address(lhs)?;
+                let path = path.ok_or_else(bad)?;
+                self.not_ready.push((a, path, k.parse().context("reads")?));
+            }
             "mutate" => {
                 let bad = || anyhow!("expected mutate=T[\"N\"].PATH=JSON");
                 let (lhs, json) = arg.split_once('=').ok_or_else(bad)?;
@@ -127,7 +150,7 @@ impl Chaos {
             other => {
                 bail!(
                     "unknown chaos knob '{other}' (fail, timeout, crash, read-lag, mutate, latency, \
-                     delay, flaky, stop-after, fresh-ids)"
+                     delay, flaky, not-ready, not-yet, stop-after, fresh-ids)"
                 )
             }
         }
@@ -143,6 +166,7 @@ impl Chaos {
         out.extend(self.latency.keys());
         out.extend(self.delay.keys());
         out.extend(self.flaky.keys());
+        out.extend(self.not_ready.iter().map(|n| &n.0));
         out.extend(self.mutate.iter().map(|m| &m.0));
         out
     }

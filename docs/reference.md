@@ -238,6 +238,8 @@ backend = 'local("state/demo")'   # where state, world and lock live, relative t
 approvals = 'jwks("https://...")' # optional: who may approve a plan; see "Approvals"
 audit_sink = "logger -t dform"    # optional: each audit entry to a command; see "The audit log"
 isolated = true                   # a keyed stack's deployments do not share names
+wait = "30m"                      # optional: how long a tick waits on open nulls (10m);
+                                  # see "Timeouts, retries and waiting"
 ```
 
 Two programs never see each other's resources. `apply` holds the
@@ -908,7 +910,9 @@ rejected with the negative cycle.
 order and holds what is pending. At the boundary the results come back as
 world facts, round 0 resolves the nulls they answer, the program is
 re-evaluated and policy is checked again; a deny there stops the run with the
-reason printed. `--max-ticks N` (default 8) is a safety valve for a loop
+reason printed. A tick with nothing definite to apply, held on values the
+world has not reached yet, waits for them (`--wait`, see "Timeouts, retries
+and waiting"). `--max-ticks N` (default 8) is a safety valve for a loop
 that never settles, not a way to stop early:
 
 ```bash
@@ -1228,6 +1232,8 @@ The kinds:
 - `retry`: a provider call sent again (R-81): the tick, the provider, the
   call, the attempt and its budget (`of`), the delay, and why the last
   attempt failed (redacted);
+- `wait`: a tick that waited on open nulls: the tick, what it waited on,
+  since when, how long, and whether they `resolved` or the budget `expired`;
 - `apply_end`: `ok`, `declined` (the confirmation was answered no), or
   `failed` and the error;
 - `controller`: each event, holds for approval and the run's result; and
@@ -1447,6 +1453,34 @@ not sent again: the apply stops, the call recorded as uncertain in state, and
 the next apply resolves it before it plans (see `executor::resolve_uncertain`:
 the same lookup, or the same key again).
 
+A tick waits. When it has nothing definite to apply and what it is held on is
+a value waiting can bring, it looks again until that changes: a computed value
+of an object that exists and that the world has not reached yet (a Job's
+`status.succeeded`, a cluster's endpoint), or an extern that answered "not
+yet" (an open null in an output column, where a refusal is an error: a host
+that does not answer yet). It refreshes and evaluates again every second,
+backing off to every 10s, and says so on stderr every 10s:
+
+```
+waiting on k8s.job["migrate-v42"].status.succeeded since 02:14 (3m)
+```
+
+Once one changes the run goes on, the wait counted as a boundary: the next
+tick is planned as at any boundary (an unattended apply stops before a tick
+that adds what its plan could not name). The budget is `apply --wait 30m`, else
+the stack's `[stacks.NAME] wait`, else 10m; `--wait 0s` does not wait. Past
+it the apply stops, the state consistent and nothing of the tick in flight:
+`apply stopped at tick 2: waited 10m (--wait) on k8s.job["migrate-v42"].
+status.succeeded, still unknown; state is consistent: run apply again to wait
+again`. A null waiting cannot bring (another stack's output not published yet,
+a value of an object no tick makes) stops the tick at once, as `nothing
+definite to apply, still waiting on ...`. Every wait is a `wait` entry in the
+audit log.
+
+```bash
+cargo run -- -C examples/demo apply dform env=staging --wait 30m   # each tick waits up to 30m
+```
+
 ```toml
 [providers]
 aws = { source = "aws", timeout = "2m", retries = 8, backoff = "500ms" }
@@ -1470,6 +1504,8 @@ file keeps a `tick` counter; every `apply` is one tick.
 | `fresh-ids` | every Create mints new ids (the world keeps a `serial`), as a real cloud does; without it a destroy-first replacement under the same name gets its predecessor's id |
 | `delay=T["N"]:MS` | the first Apply of `T["N"]` in a run takes effect, then answers `MS` late, really slept: past a shorter `timeout` it times out (the one knob that sleeps) |
 | `flaky=T["N"]:K` | the first `K` Apply calls of `T["N"]` in a run are refused as busy, `(503)`, changing nothing: retried with backoff |
+| `not-ready=T["N"].PATH:K` | `T["N"]`'s computed `PATH` is absent from its first `K` Reads after its Create, as a status not reached yet: an open null a tick waits on |
+| `not-yet=PRED:K` | the first `K` Query calls of the extern `PRED` in a run answer "not yet": an open null in every output column |
 
 ```bash
 cargo run -- -C examples/demo dev --chaos 'fail=net.subnet["main/private-us-test-1a"]' apply dform env=staging
