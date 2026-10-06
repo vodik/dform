@@ -1184,6 +1184,515 @@ impl Compress {
     }
 }
 
+// --- where a fact is derived, on one line (`plan`'s right column, R-79) ----
+
+/// Where a fact is derived, terse: the statement of its shortest
+/// derivation at `file:line` with the statement's variables bound, or
+/// where it is stated. An attribute's site is the statement that wrote
+/// its winning value, followed through the inputs and `let`s that pass
+/// the value on unchanged, with the rank it won at and the rank it beat.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Site {
+    /// `file:line`; empty for a value given on the command line.
+    pub at: String,
+    /// The statement on one line, its block elided but for the entry
+    /// that fired; a stated fact as the program names it; a flag as given.
+    pub statement: String,
+    /// The block entry that fired, alone (`max = nodepool_max`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub entry: Option<String>,
+    /// The statement's variables with their values (`az = "us-east-1c"`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub with: Vec<String>,
+    /// The pack or module instance it came from (`use synapse`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<String>,
+    /// An attribute's winning rank, when it is not normal.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rank: Option<String>,
+    /// The highest rank of the contributions the winner overrode.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub beat: Option<String>,
+    /// The statement's file and first line: two sites in one statement
+    /// share it.
+    #[serde(skip)]
+    pub stmt: Option<(String, usize)>,
+    /// The statement's last line: a constant stated inside its block is
+    /// one of its entries.
+    #[serde(skip)]
+    pub last: usize,
+    /// A constant the program states of a resource (no rule fired): its
+    /// entry says no more than its value, unless it reads something.
+    #[serde(skip)]
+    pub stated: bool,
+}
+
+impl Printer<'_> {
+    fn surface<'a>(&'a self, rules: &'a [RuleStmt]) -> Surface<'a, 'a> {
+        Surface {
+            p: self,
+            rules,
+            w: Walk::default(),
+            files: BTreeMap::new(),
+            list_keys: Default::default(),
+        }
+    }
+
+    /// Where resource `addr` is derived: the site of its `want`. `None`
+    /// when the program does not want it.
+    pub fn want_site(&self, rules: &[RuleStmt], addr: &Address) -> Option<Site> {
+        let f = Fact::new(
+            "want",
+            vec![Value::Str(addr.typ.clone()), Value::Str(addr.name.clone())],
+        );
+        self.site(rules, self.circuit.fact_id(&f)?)
+    }
+
+    /// Where rule `id` (`r12`) is written, with `bindings` for the
+    /// variables it shows: a rule that has not fired (a pending group's,
+    /// an undetermined deny's). `None` for a rule the compiler wrote.
+    pub fn rule_site(
+        &self,
+        rules: &[RuleStmt],
+        id: &str,
+        bindings: &[(String, Value)],
+    ) -> Option<Site> {
+        self.surface(rules).site(id, bindings)
+    }
+
+    /// Where fact node `id` is derived.
+    pub fn site(&self, rules: &[RuleStmt], id: NodeId) -> Option<Site> {
+        let mut s = self.surface(rules);
+        let mut c = Compress {
+            out: Vec::new(),
+            sizes: BTreeMap::new(),
+        };
+        site_of(&mut s, &mut c, id, 0)
+    }
+
+    /// Where the winning value of attribute fact `attr` (an `attr/4`),
+    /// at `keys` below it when they name part of an object, was written.
+    /// `whole`: the keys reach the leaf asked about; when they stop short
+    /// (at a list element), only a single winning contribution says.
+    /// `None` when no statement of the program wrote it.
+    pub fn attr_site(
+        &self,
+        rules: &[RuleStmt],
+        attr: &Atom,
+        keys: &[String],
+        whole: bool,
+    ) -> Option<Site> {
+        let id = self.circuit.fact_id(&engine::circuit_fact(attr))?;
+        let mut s = self.surface(rules);
+        let mut c = Compress {
+            out: Vec::new(),
+            sizes: BTreeMap::new(),
+        };
+        let focus = (!keys.is_empty()).then(|| Focus {
+            keys: keys.to_vec(),
+            value: None,
+        });
+        winner_site(&mut s, &mut c, id, focus.as_ref(), !whole, 0)
+    }
+}
+
+/// How deep a value is followed through cells that pass it on.
+const FOLLOW: usize = 8;
+
+/// The rank of a contribution, `arg/5`'s last column.
+fn rank_of(f: &Fact) -> (u8, &str) {
+    match f.args.get(4).and_then(Value::as_str) {
+        Some("override") => (2, "override"),
+        Some("default") => (0, "default"),
+        _ => (1, "normal"),
+    }
+}
+
+/// The site of aggregate fact `id`'s winning contribution (holding the
+/// focused part), the value followed to where it was written.
+fn winner_site(
+    s: &mut Surface,
+    c: &mut Compress,
+    id: NodeId,
+    focus: Option<&Focus>,
+    single: bool,
+    depth: usize,
+) -> Option<Site> {
+    let circuit = s.p.circuit;
+    let View::Fact { alts, .. } = circuit.view(id) else {
+        return None;
+    };
+    let alt = *alts.iter().min_by_key(|a| c.size(circuit, **a))?;
+    let View::Times { children, .. } = circuit.view(alt) else {
+        return None;
+    };
+    let aggregate = children.iter().any(
+        |ch| matches!(circuit.view(*ch), View::Leaf(Leaf::Rule { id }) if id.starts_with('Σ')),
+    );
+    if !aggregate {
+        return value_site(s, c, id, depth);
+    }
+    let mut contributions: Vec<(NodeId, &Fact)> = children
+        .iter()
+        .filter_map(|ch| match circuit.view(*ch) {
+            View::Fact { fact, .. } if fact.pred == "arg" && !is_check(fact) => Some((*ch, fact)),
+            _ => None,
+        })
+        .filter(|(_, f)| match focus {
+            Some(focus) => f.args.get(3).is_some_and(|v| focus.holds(v)),
+            None => true,
+        })
+        .collect();
+    contributions.sort_by_key(|(_, f)| std::cmp::Reverse(rank_of(f).0));
+    let (win, fact) = *contributions.first()?;
+    let (top, rank) = rank_of(fact);
+    // Part of the value, not reached by the focus: one writer, or none.
+    if single
+        && contributions
+            .iter()
+            .filter(|(_, f)| rank_of(f).0 == top)
+            .count()
+            > 1
+    {
+        return None;
+    }
+    // The rank of a contribution the program wrote that the winner beat;
+    // a provider's default is beaten by every value.
+    let lower: Vec<(NodeId, &Fact)> = contributions
+        .iter()
+        .filter(|(_, f)| rank_of(f).0 < top)
+        .copied()
+        .collect();
+    let beat = lower
+        .into_iter()
+        .find(|(id, _)| {
+            site_of(s, c, *id, depth + 1)
+                .is_some_and(|w| !w.at.is_empty() && !w.at.starts_with('<'))
+        })
+        .map(|(_, f)| rank_of(f).1.to_string());
+    let mut site = value_site(s, c, win, depth)?;
+    if site.rank.is_none() && rank != "normal" {
+        site.rank = Some(rank.to_string());
+    }
+    if site.beat.is_none() {
+        site.beat = beat;
+    }
+    Some(site)
+}
+
+/// The site of fact `id`, a contribution or a cell's value: where its
+/// firing's statement is, unless the firing only passes on the value of
+/// an input or a `let` it reads, whose winning site it is then.
+fn value_site(s: &mut Surface, c: &mut Compress, id: NodeId, depth: usize) -> Option<Site> {
+    let circuit = s.p.circuit;
+    let own = site_of(s, c, id, depth);
+    let View::Fact { fact, alts, .. } = circuit.view(id) else {
+        return own;
+    };
+    let value = match fact.pred.as_str() {
+        "arg" | "attr" => fact.args.get(3),
+        _ => None,
+    };
+    // What the entry reads, when it is a path (`gcp.project_id`).
+    let read: Option<Vec<String>> = own.as_ref().and_then(|o| o.entry.as_deref()).and_then(|e| {
+        let rhs = e.split_once(" = ").map_or(e, |(_, r)| r);
+        let plain =
+            !rhs.is_empty() && !rhs.contains(|c: char| c.is_whitespace() || "()[]{}$,".contains(c));
+        plain.then(|| crate::ir::path_keys(rhs))
+    });
+    if depth < FOLLOW
+        && let Some(v) = value
+        && let Some(&alt) = alts.iter().min_by_key(|a| c.size(circuit, **a))
+        && let View::Times { children, .. } = circuit.view(alt)
+        && let Some((p, keys)) = passed_cell(c, circuit, children, v, read.as_deref())
+    {
+        let focus = (!keys.is_empty()).then_some(Focus { keys, value: None });
+        if let Some(site) = winner_site(s, c, p, focus.as_ref(), false, depth + 1) {
+            return Some(site);
+        }
+    }
+    own
+}
+
+/// The input or `let` cell among a firing's `children` that passes on
+/// `v`: read directly (`attr("input", .., v)`), or through the relation
+/// the compiler reads a cell by (`kubernetes::nodepool_max(3)`); an
+/// object cell when the entry reads `v` at a path of it (`read`:
+/// `gcp.project_id`), with the keys below the cell.
+fn passed_cell(
+    c: &mut Compress,
+    circuit: &Circuit,
+    children: &[NodeId],
+    v: &Value,
+    read: Option<&[String]>,
+) -> Option<(NodeId, Vec<String>)> {
+    let cell = |id: NodeId| -> Option<Vec<String>> {
+        let View::Fact { fact: f, .. } = circuit.view(id) else {
+            return None;
+        };
+        if f.pred != "attr"
+            || !matches!(
+                f.args.first().and_then(Value::as_str),
+                Some("input" | "let")
+            )
+        {
+            return None;
+        }
+        // Only the cell the entry reads: another one the firing reads may
+        // hold the same value by chance (`public = false` beside a
+        // `multi_az` that is false).
+        let at = f.args.get(3)?;
+        // `gcp.project_id` of the cell `gcp`: the keys after its name.
+        let name = crate::ir::path_keys(f.args.get(2)?.as_str()?);
+        let rest = read?.strip_prefix(name.as_slice())?;
+        if rest.is_empty() {
+            return (at == v).then(Vec::new);
+        }
+        let mut x = at;
+        for k in rest {
+            let Value::Obj(m) = x else { return None };
+            x = m.get(k)?;
+        }
+        (x == v).then(|| rest.to_vec())
+    };
+    if let Some(found) = children.iter().find_map(|ch| cell(*ch).map(|k| (*ch, k))) {
+        return Some(found);
+    }
+    children.iter().find_map(|ch| {
+        let View::Fact { fact, alts, .. } = circuit.view(*ch) else {
+            return None;
+        };
+        if matches!(fact.pred.as_str(), "attr" | "arg" | "want") {
+            return None;
+        }
+        let alt = *alts.iter().min_by_key(|a| c.size(circuit, **a))?;
+        let View::Times { children, .. } = circuit.view(alt) else {
+            return None;
+        };
+        children.iter().find_map(|x| cell(*x).map(|k| (*x, k)))
+    })
+}
+
+/// Where fact node `id` is derived: its stated place, or the statement of
+/// its shortest firing; through a firing of a rule the compiler wrote, the
+/// first fact it read that has one.
+fn site_of(s: &mut Surface, c: &mut Compress, id: NodeId, depth: usize) -> Option<Site> {
+    let circuit = s.p.circuit;
+    let View::Fact { fact, alts, .. } = circuit.view(id) else {
+        return None;
+    };
+    if let [a] = alts
+        && let View::Times { children: [l], .. } = circuit.view(*a)
+        && let View::Leaf(l) = circuit.view(*l)
+    {
+        return match l {
+            Leaf::Base { span } => {
+                let (at, origin) = base_parts(span);
+                let stmt = at
+                    .rsplit_once(':')
+                    .and_then(|(f, l)| Some((f.to_string(), l.parse().ok()?)));
+                let mut site = Site {
+                    at: at.to_string(),
+                    statement: s.fact_text(fact),
+                    origin: origin.map(str::to_string),
+                    stmt,
+                    // A resource's own attribute; an input's value given
+                    // in a `use` says which input.
+                    stated: !matches!(
+                        fact.args.first().and_then(Value::as_str),
+                        Some("input" | "let")
+                    ),
+                    ..Site::default()
+                };
+                // Stated in a block: the statement's lines, and the entry.
+                if let Some((file, first, last, entry)) = s.stated_in(span) {
+                    site.stmt = Some((file, first));
+                    site.last = last;
+                    site.entry = entry;
+                }
+                Some(site)
+            }
+            Leaf::Input { source } => Some(Site {
+                statement: s.p.redact.text(source),
+                ..Site::default()
+            }),
+            _ => None,
+        };
+    }
+    if let Some(at) = table_row(circuit, alts) {
+        return Some(Site {
+            at,
+            statement: s.fact_text(fact),
+            ..Site::default()
+        });
+    }
+    let alt = *alts.iter().min_by_key(|a| c.size(circuit, **a))?;
+    let View::Times { children, bindings } = circuit.view(alt) else {
+        return None;
+    };
+    let rule = children.iter().find_map(|ch| match circuit.view(*ch) {
+        View::Leaf(Leaf::Rule { id }) => Some(id.as_str()),
+        _ => None,
+    });
+    // A value given on the command line is the flag that gave it, not the
+    // declaration that reads it.
+    let given = |id: NodeId| match circuit.view(id) {
+        View::Leaf(Leaf::Input { source }) => Some(source),
+        View::Fact { alts: [a], .. } => match circuit.view(*a) {
+            View::Times { children: [l], .. } => match circuit.view(*l) {
+                View::Leaf(Leaf::Input { source }) => Some(source),
+                _ => None,
+            },
+            _ => None,
+        },
+        _ => None,
+    };
+    if let Some(source) = children.iter().find_map(|ch| given(*ch)) {
+        return Some(Site {
+            statement: s.p.redact.text(source),
+            ..Site::default()
+        });
+    }
+    if let Some(r) = rule
+        && !r.starts_with('Σ')
+        && let Some(site) = s.site(r, bindings)
+    {
+        return Some(site);
+    }
+    if depth >= FOLLOW {
+        return None;
+    }
+    children.iter().find_map(|ch| match circuit.view(*ch) {
+        View::Fact { .. } => site_of(s, c, *ch, depth + 1),
+        _ => None,
+    })
+}
+
+impl Surface<'_, '_> {
+    /// The statement a stated fact at `span` (`FILE:LINE:COL (..)`) is
+    /// written in: its file, first and last lines, and the block entry.
+    fn stated_in(&mut self, span: &str) -> Option<(String, usize, usize, Option<String>)> {
+        let place = span.split_once(" (").map_or(span, |(p, _)| p);
+        let (rest, col) = place.rsplit_once(':')?;
+        let (file, line) = rest.rsplit_once(':')?;
+        let (line, col): (usize, usize) = (line.parse().ok()?, col.parse().ok()?);
+        let circuit = self.p.circuit;
+        // A program of constants alone has no rule's text: the file's.
+        let text: std::sync::Arc<str> = match (0..self.rules.len())
+            .filter_map(|i| circuit.rule_source(&format!("r{i}")))
+            .find(|r| r.file == file)
+        {
+            Some(r) => r.text.clone(),
+            None => std::fs::read_to_string(file).ok()?.into(),
+        };
+        let root = self
+            .files
+            .entry(file.to_string())
+            .or_insert_with(|| crate::syntax::parser::parse(&text).syntax())
+            .clone();
+        let start: usize = text
+            .split_inclusive('\n')
+            .take(line.checked_sub(1)?)
+            .map(str::len)
+            .sum();
+        let at = start + col.checked_sub(1)?;
+        // The first character there: an empty range at a token's edge is
+        // the whitespace before it.
+        let (stmt, entry) = statement_at(&root, at, (at + 1).min(text.len()))?;
+        let line_at = |x: rowan::TextSize| {
+            text.get(..usize::from(x))
+                .unwrap_or("")
+                .matches('\n')
+                .count()
+                + 1
+        };
+        let entry = entry.map(|e| self.p.redact.text(&collapse(&e.text().to_string())));
+        Some((
+            file.to_string(),
+            line_at(stmt.text_range().start()),
+            line_at(stmt.text_range().end()),
+            entry,
+        ))
+    }
+
+    /// The site of a firing of rule `id` with `bindings`; `None` for a
+    /// rule the compiler wrote.
+    fn site(&mut self, id: &str, bindings: &[(String, Value)]) -> Option<Site> {
+        let src = self.p.circuit.rule_source(id)?.clone();
+        let (place, text, shown) = self.source_line(id)?;
+        if place == "dform" {
+            return None;
+        }
+        let origin = src.origin.clone();
+        let statement = match &origin {
+            Some(o) => text
+                .strip_suffix(&format!("   ({o})"))
+                .unwrap_or(&text)
+                .to_string(),
+            None => text,
+        };
+        let root = self.files.get(&src.file).cloned();
+        let found = root.and_then(|r| statement_at(&r, src.start, src.end));
+        let line_at = |at: rowan::TextSize| {
+            src.text
+                .get(..usize::from(at))
+                .unwrap_or("")
+                .matches('\n')
+                .count()
+                + 1
+        };
+        let stmt = found
+            .as_ref()
+            .map(|(n, _)| (src.file.clone(), line_at(n.text_range().start())));
+        let last = found
+            .as_ref()
+            .map_or(0, |(n, _)| line_at(n.text_range().end()));
+        let redact = self.p.redact;
+        let entry = found
+            .and_then(|(_, e)| e)
+            .map(|e| redact.text(&collapse(&e.text().to_string())));
+        let mut with = Vec::new();
+        if let Some(shown) = shown {
+            let rule = id
+                .strip_prefix('r')
+                .and_then(|i| i.parse::<usize>().ok())
+                .and_then(|i| self.rules.get(i));
+            let cx = Cx {
+                env: bindings.iter().cloned().collect(),
+                rule,
+            };
+            let mut names = BTreeSet::new();
+            for name in shown.vars {
+                let var = capitalise(&name);
+                if !names.insert(name.clone()) {
+                    continue;
+                }
+                if let Some(v) = cx.env.get(&var) {
+                    with.push(redact.text(&format!("{name} = {}", cx.show_var(&var, v, redact))));
+                }
+            }
+        }
+        Some(Site {
+            at: place,
+            statement,
+            entry,
+            with,
+            origin,
+            rank: None,
+            beat: None,
+            stmt,
+            last,
+            stated: false,
+        })
+    }
+}
+
+/// The cell an `attr` or `arg` of an input, a `let` or an output names,
+/// as a [`Because`]'s text spells it (`input kubernetes.nodepool_max`).
+pub fn cell_name(t: &str, a: &str, p: &str) -> String {
+    cell(t, a, p)
+}
+
 /// Where the one table row a fact is read from is (`input p(..) from
 /// csv(..)`: one firing over the row the table states), as `path:line`.
 fn table_row(c: &Circuit, alts: &[NodeId]) -> Option<String> {
