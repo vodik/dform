@@ -40,8 +40,21 @@ jobs:
             exit 1
           fi
 
+      - name: the dform binary has no wasmtime unless built with the wasm feature
+        run: |
+          if cargo tree -p dform -e normal | grep -E '\bwasmtime\b'; then
+            echo "the default dform build depends on wasmtime (above)" >&2
+            exit 1
+          fi
+
       - name: cargo test
         run: cargo test --workspace --verbose
+
+      - name: the fake provider as a component, on the wasm host (R-13b)
+        run: |
+          rustup target add wasm32-wasip2
+          cargo build -p dform-provider-fake --release --target wasm32-wasip2 --features component
+          cargo test --features wasm --test host_wasm
 
       - name: plan examples/demo
         run: cargo run -q -- -C examples/demo plan

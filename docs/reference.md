@@ -1635,6 +1635,17 @@ cargo run -- -C examples/demo apply dform env=staging --wait 30m   # each tick w
 aws = { source = "aws", timeout = "2m", retries = 8, backoff = "500ms" }
 ```
 
+A provider's table also grants it what it may use beyond the host's own
+interfaces and the credentials it may open by name (R-13b;
+docs/providers.md, "Grants and credentials"):
+
+```toml
+[providers.k8s]
+source = "providers/k8s"
+allow = ["wasi:sockets"]          # wasi:filesystem, wasi:http, wasi:sockets
+credentials = ["kubeconfig:prod"] # KIND:NAME, applied by the host, never sent to the provider
+```
+
 ## Chaos: failure and latency injection
 
 `dform dev --chaos SPEC apply` (repeatable) makes the fake provider misbehave, the way a
