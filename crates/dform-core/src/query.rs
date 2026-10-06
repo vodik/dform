@@ -253,6 +253,26 @@ impl Redactor {
                 r.add(v, &format!("{}/{name}", a.pred));
             }
         }
+        // Another in-process extern's secret column (`ssh.read`'s
+        // content): by its call's label, `PRED/INPUTS#N`, from the first
+        // answer on.
+        for a in facts {
+            for col in crate::externs::secret_columns(&a.pred) {
+                let vals: Option<Vec<Value>> = a
+                    .args
+                    .iter()
+                    .map(|t| match t {
+                        Term::Val(v) => Some(v.clone()),
+                        _ => None,
+                    })
+                    .collect();
+                let Some(vals) = vals else { continue };
+                let inputs = crate::externs::inputs_of(&a.pred, &vals);
+                if let Some(v) = vals.get(col) {
+                    r.add(v, &crate::externs::secret_label(&a.pred, &inputs, col));
+                }
+            }
+        }
         // A secret `random.*` derived this run: by its call.
         for (v, l) in crate::functions::random::derived() {
             r.add(&v, &l);

@@ -22,7 +22,8 @@
 //! built-in fact providers ([`BUILTINS`]): their externs are the
 //! compiler's own, and dform answers `file.text(+path, -value)` (paths
 //! from the program's project root, `project::base_of`), `env.var(+name,
-//! -value)` and `time.now(-t)` itself, with no `dform.toml` source; the
+//! -value)`, `time.now(-t)` and `ssh`'s (`crate::plugin::ssh`) itself,
+//! with no `dform.toml` source; the
 //! loaders, `yaml(path)` and the rest, are its documents (`crate::tables`,
 //! R-39). `memo.first` is in scope with no `provider` statement. Other
 //! externs are asked of the providers over the
@@ -579,6 +580,27 @@ impl<'a> Externs<'a> {
             .collect()
     }
 
+    /// The secret answers of dform's own externs the last evaluation read
+    /// (`ssh.read`'s content, [`secret_columns`]), each by its label
+    /// ([`secret_label`]): what the plan file records the digest of. A
+    /// "not yet" (a null) is none.
+    pub fn secret_answers(&self) -> Vec<(String, Value)> {
+        let known = self.known.borrow();
+        let mut out = Vec::new();
+        for c in self.demanded.borrow().iter() {
+            let cols = secret_columns(&c.pred);
+            for row in known.get(c).into_iter().flatten() {
+                for &col in &cols {
+                    match row.get(col) {
+                        None | Some(Value::Null { .. }) => {}
+                        Some(v) => out.push((secret_label(&c.pred, &c.inputs, col), v.clone())),
+                    }
+                }
+            }
+        }
+        out
+    }
+
     /// The `memo.first` calls the last evaluation read: each key, the value
     /// it answered, and whether it is a secret (a secret site demanded
     /// it), for state to keep ([`crate::memo::keep`]).
@@ -689,6 +711,33 @@ pub const BUILTINS: &[Builtin] = &[
         in_process: true,
         always: false,
     },
+    // An SSH host's file and command (`plugin::ssh`): answered when the
+    // host answers, "not yet" (an open null) until then.
+    Builtin {
+        name: "ssh",
+        externs: &[
+            (
+                crate::plugin::ssh::READ,
+                &[
+                    (true, "host", "any"),
+                    (true, "user", "string"),
+                    (true, "path", "string"),
+                    (false, "content", "secret(string)"),
+                ],
+            ),
+            (
+                crate::plugin::ssh::RUN,
+                &[
+                    (true, "host", "any"),
+                    (true, "user", "string"),
+                    (true, "command", "string"),
+                    (false, "stdout", "string"),
+                ],
+            ),
+        ],
+        in_process: true,
+        always: false,
+    },
     Builtin {
         name: "memo",
         externs: &[(
@@ -729,6 +778,47 @@ pub fn in_process(pred: &str) -> bool {
     pred.split_once('.')
         .and_then(|(h, _)| builtin(h))
         .is_some_and(|b| b.in_process && b.externs.iter().any(|(n, _)| *n == pred))
+}
+
+/// The secret columns (from 0) of an in-process built-in extern but
+/// `env.var` (which the redactor labels by its name): `ssh.read`'s
+/// content.
+pub fn secret_columns(pred: &str) -> Vec<usize> {
+    if pred == crate::syntax::resolve::ENV_VAR || !in_process(pred) {
+        return Vec::new();
+    }
+    builtin_extern(pred)
+        .map(|cols| {
+            cols.iter()
+                .enumerate()
+                .filter(|(_, (_, _, t))| t.starts_with("secret("))
+                .map(|(i, _)| i)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The `+` columns of a row of the built-in extern `pred`: its call's
+/// inputs.
+pub fn inputs_of(pred: &str, row: &[Value]) -> Vec<Value> {
+    builtin_extern(pred)
+        .map(|cols| {
+            cols.iter()
+                .zip(row)
+                .filter(|((input, _, _), _)| *input)
+                .map(|(_, v)| v.clone())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn builtin_extern(pred: &str) -> Option<&'static [(bool, &'static str, &'static str)]> {
+    let (h, _) = pred.split_once('.')?;
+    builtin(h)?
+        .externs
+        .iter()
+        .find(|(n, _)| *n == pred)
+        .map(|(_, cols)| *cols)
 }
 
 /// The built-in fact provider `name`.

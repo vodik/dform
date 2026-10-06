@@ -493,6 +493,15 @@ enum StateCommand {
         #[command(flatten)]
         target: Target,
     },
+    /// Forget the host key `provider ssh` recorded for HOST (as the
+    /// program names it, `10.0.0.5` or `name:2222`): the next contact
+    /// records the key the host offers then. For a host rebuilt with a new
+    /// key.
+    ForgetHost {
+        host: String,
+        #[command(flatten)]
+        target: Target,
+    },
     /// Give the object at FROM the address TO (each `T["N"]`, as plan
     /// prints it): nothing in the cloud changes, and the next plan sees the
     /// object under TO.
@@ -663,6 +672,9 @@ enum Cmd {
     },
     TaintMemo {
         key: String,
+    },
+    ForgetHost {
+        host: String,
     },
     Log {
         verify: bool,
@@ -1119,6 +1131,7 @@ fn resolve(args: Args) -> Result<Cli> {
         Command::State { cmd } => match cmd {
             StateCommand::Show { addr, target } => (Cmd::StateShow { addr }, Some(target)),
             StateCommand::Taint { key, target, .. } => (Cmd::TaintMemo { key }, Some(target)),
+            StateCommand::ForgetHost { host, target } => (Cmd::ForgetHost { host }, Some(target)),
             StateCommand::Mv { from, to, target } => (Cmd::StateMv { from, to }, Some(target)),
         },
         Command::Provider { cmd } => match cmd {
@@ -1724,6 +1737,7 @@ fn run_with(
             );
         }
         Cmd::TaintMemo { key } => return taint_memo(&dep, key, &audit),
+        Cmd::ForgetHost { host } => return forget_host(&dep, host, &audit),
         Cmd::StateMv { from, to } => {
             return state_mv(&dep, from, to, &audit);
         }
@@ -2083,7 +2097,29 @@ fn run_with(
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("internal: no plan key"))?;
         let now = zset::file::delta(plan, sections, &report, schema, &redact, key);
-        let diff = saved.stale(&now, tick);
+        let mut diff = saved.stale(&now, tick);
+        // A secret answer the plan read (`ssh.read`), read again: by its
+        // digest. One that is "not yet" now is waited on, not compared.
+        if tick == 1 {
+            let now: std::collections::BTreeMap<String, serde_json::Value> =
+                answer_inputs(externs, key)
+                    .into_iter()
+                    .filter_map(|a| {
+                        Some((
+                            a.get("sensitive")?.as_str()?.to_string(),
+                            a["digest"].clone(),
+                        ))
+                    })
+                    .collect();
+            for a in &saved.inputs.answers {
+                let Some(label) = a.get("sensitive").and_then(|l| l.as_str()) else {
+                    continue;
+                };
+                if now.get(label).is_some_and(|d| *d != a["digest"]) {
+                    diff.push(format!("{label}: changed since the plan"));
+                }
+            }
+        }
         if diff.is_empty() {
             return Ok(());
         }
@@ -2142,6 +2178,7 @@ fn run_with(
             stack: stack.clone(),
             inputs: zset::file::Inputs {
                 env: env_inputs(externs.env_labels().into_iter(), key),
+                answers: answer_inputs(externs, key),
                 ..inputs
             },
             world_digest: zset::file::world_digest(&backend.world_facts(st)?),
@@ -2266,7 +2303,8 @@ fn run_with(
         | Cmd::Init { .. }
         | Cmd::Completions { .. }
         | Cmd::Complete { .. }
-        | Cmd::TaintMemo { .. } => {
+        | Cmd::TaintMemo { .. }
+        | Cmd::ForgetHost { .. } => {
             unreachable!("handled before evaluation")
         }
         Cmd::Graph { what: None } => print!("{}", graph::resources(&resources)),
@@ -2431,6 +2469,7 @@ fn run_with(
             };
             let mut approved: Option<crate::approval::Verified> = None;
             keep_memos(&mut st, externs, key)?;
+            evaluator.ssh.keep(&mut st);
             let persist = |st: &state::State| dep.save_state(st);
             // Nothing is written, to state or the world, until the apply is
             // confirmed: the moves, the resolution of uncertain calls and the
@@ -2831,6 +2870,7 @@ fn run_with(
                     // the evaluation refreshes). A --world fixture is not
                     // registered: everything stays beside the world file.
                     keep_memos(&mut st, externs, key)?;
+                    evaluator.ssh.keep(&mut st);
                     crate::tables::record(&mut st.externs, &externs.recorded());
                     // The copies state still holds resources of (R-67).
                     let held: Vec<ir::Address> = st
@@ -2952,6 +2992,7 @@ fn run_with(
                         // Nothing of the tick was applied: the next apply
                         // plans it again, as an unattended stop does.
                         st.in_flight = None;
+                        evaluator.ssh.keep(&mut st);
                         persist(&st)?;
                         bail!(
                             "apply stopped at tick {tick}: waited {} (--wait) on {}, still \
@@ -3797,6 +3838,46 @@ fn taint_memo(dep: &crate::store::Deployment, key: &str, audit: &crate::audit::L
     Ok(())
 }
 
+fn forget_host(
+    dep: &crate::store::Deployment,
+    host: &str,
+    audit: &crate::audit::Log,
+) -> Result<()> {
+    let deployment = dep.name();
+    if !dep.has_state()? {
+        bail!(
+            "forget-host {host}: stack {deployment} has no state at {}",
+            dep.locate(store::STATE)
+        );
+    }
+    let _lock = dep.lock()?;
+    let mut st = dep.load_state()?;
+    let Some(was) = st.forget_host(host) else {
+        let known: Vec<&str> = st.known_hosts.keys().map(String::as_str).collect();
+        bail!(
+            "forget-host {host}: stack {deployment} records no key for {host} (it knows {})",
+            match known.is_empty() {
+                true => "none".to_string(),
+                false => known.join(", "),
+            }
+        );
+    };
+    dep.save_state(&st)?;
+    audit.append(
+        "state_forget_host",
+        serde_json::json!({
+            "host": host,
+            "fingerprint": was.fingerprint,
+            "who": crate::audit::who(),
+        }),
+    )?;
+    println!(
+        "forgot the {} key {} of {host} in stack {deployment}: the next contact records the key it meets",
+        was.key_type, was.fingerprint
+    );
+    Ok(())
+}
+
 /// Opens an s3 location's store with the environment's credentials.
 /// `writes`: the run writes there, so the bucket's conditional writes are
 /// checked first (once per bucket: a pass is kept in the state root's
@@ -4178,6 +4259,25 @@ fn env_inputs(
         .collect()
 }
 
+/// The secret answers of dform's own externs (`ssh.read`) as a plan file
+/// records them: each label and its value's digest with the plan key.
+fn answer_inputs(
+    externs: &crate::externs::Externs,
+    key: &zset::file::Key,
+) -> Vec<serde_json::Value> {
+    externs
+        .secret_answers()
+        .into_iter()
+        .map(|(label, v)| {
+            let bytes = match &v {
+                Value::Str(s) => s.clone().into_bytes(),
+                v => serde_json::to_vec(v).unwrap_or_default(),
+            };
+            serde_json::json!({ "sensitive": label, "digest": key.digest(&bytes) })
+        })
+        .collect()
+}
+
 /// This run's inputs as a plan file records them: each `--input-file` and
 /// a `--set` of a secret input by their digest with the stack's key (the
 /// latter with its label).
@@ -4238,6 +4338,7 @@ fn plan_inputs(
         world: show(&cli.world),
         inventory: show(&cli.inventory),
         env: Vec::new(),
+        answers: Vec::new(),
         stack_outputs: Vec::new(),
     })
 }
@@ -4392,7 +4493,8 @@ fn needs_project(cli: &Cli) -> bool {
         | Cmd::StateShow { .. }
         | Cmd::Output { .. }
         | Cmd::StateMv { .. }
-        | Cmd::TaintMemo { .. } => true,
+        | Cmd::TaintMemo { .. }
+        | Cmd::ForgetHost { .. } => true,
         _ => false,
     }
 }
@@ -4918,7 +5020,7 @@ const COMMANDS: &[&str] = &[
 fn subcommands(noun: &str) -> &'static [&'static str] {
     match noun {
         "stack" => &["list", "rekey", "handover", "unlock"],
-        "state" => &["show", "taint", "mv"],
+        "state" => &["show", "taint", "forget-host", "mv"],
         "provider" => &["check", "schema"],
         "controller" => &["run"],
         "log" => &["verify"],

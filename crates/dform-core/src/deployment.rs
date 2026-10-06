@@ -429,6 +429,9 @@ pub struct Planned {
 pub struct Evaluator {
     pub backend: Rc<Providers>,
     pub externs: Externs<'static>,
+    /// `provider ssh`'s host keys: what an apply keeps in state
+    /// (`plugin::ssh::Ssh::keep`).
+    pub ssh: Rc<crate::plugin::ssh::Ssh>,
     pub tables: Rc<tables::Tables>,
     /// The program with the policy rules.
     pub program: Program,
@@ -744,10 +747,12 @@ impl Located {
                 false => None,
             },
         ));
+        // `provider ssh`: the host keys state knows, and those met.
+        let ssh = Rc::new(crate::plugin::ssh::Ssh::new(st.known_hosts.clone()));
         let externs = {
             let (no_program, no_fns) = (Program::default(), vec![]);
             let program_dir = project::base_of(&l.files[0]);
-            let (tables, backend) = (tables.clone(), backend.clone());
+            let (tables, backend, ssh) = (tables.clone(), backend.clone(), ssh.clone());
             Externs::new(
                 lowered.map_or(&no_program, |l| &l.program),
                 lowered.map_or(&no_fns, |l| &l.extern_fns),
@@ -762,6 +767,9 @@ impl Located {
                         return r;
                     }
                     if let Some(r) = externs::time(f) {
+                        return r;
+                    }
+                    if let Some(r) = ssh.answer(f, inputs) {
                         return r;
                     }
                     if let Some(r) = memos.answer(f, inputs) {
@@ -846,6 +854,7 @@ impl Located {
         let evaluator = Evaluator {
             backend: backend.clone(),
             externs,
+            ssh,
             tables: tables.clone(),
             program,
             base_extra,

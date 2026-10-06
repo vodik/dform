@@ -28,8 +28,14 @@ use super::*;
 pub const ENV_VAR: &str = "env.var";
 
 /// The term calls of a built-in extern, its last column read: `env.var(N)`,
-/// `time.now()`, `memo.first(K, C)`.
-const TERM_CALLS: [&str; 3] = [ENV_VAR, crate::externs::TIME_NOW, crate::memo::FIRST];
+/// `time.now()`, `memo.first(K, C)`, `ssh.read(H, U, P)`, `ssh.run(H, U, C)`.
+const TERM_CALLS: [&str; 5] = [
+    ENV_VAR,
+    crate::externs::TIME_NOW,
+    crate::memo::FIRST,
+    crate::plugin::ssh::READ,
+    crate::plugin::ssh::RUN,
+];
 
 /// A `provider` block's setting that is checked, not sent.
 const EXPECT_ACCOUNT: &str = "expect_account";
@@ -171,6 +177,8 @@ impl Lowerer<'_> {
         let want = match name {
             ENV_VAR => "one argument: the variable's name",
             crate::externs::TIME_NOW => "no argument",
+            crate::plugin::ssh::READ => "three arguments: the host, the user and the path",
+            crate::plugin::ssh::RUN => "three arguments: the host, the user and the command",
             _ => "two arguments: the key and the candidate",
         };
         let ins = self.decls.externs[name].len() - 1;

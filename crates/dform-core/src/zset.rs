@@ -938,6 +938,12 @@ pub mod file {
         /// digest keyed with the plan key: never the value.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         pub env: Vec<Json>,
+        /// The secret answers of dform's own externs the program read
+        /// (`ssh.read`), each `{"sensitive": "PRED/INPUTS#N", "digest"}`
+        /// keyed as `env`'s: never the bytes. Apply reads them again and
+        /// refuses the plan when one changed.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        pub answers: Vec<Json>,
         /// Other stacks' published outputs the program reads (a keyed
         /// read of a deployment), each deployment with the digest of its
         /// outputs object as read (`absent` when it had none).
