@@ -1319,6 +1319,26 @@ type       := DOTTED ("(" type ("," type)* ")")? | "{" NAME ":" type ("," NAME "
 In a literal position a chain applied to arguments is an atom, unless an
 operator follows it (`f(x) == 3` compares a call).
 
+### Definedness
+
+`has x` holds when `x` has a value: a value name that is set, a field of a
+value that is there, a resource's attribute its document sets (`not has
+p.spec.podSelector.matchLabels`: the policy selects every pod). A computed
+attribute has a value once the provider reports it; until then `has` over
+it is undetermined, as any read of it is. One exception (R-106): in a rule
+that writes under the path it tests, of a resource's attribute the
+provider's schema declares (one a program sets, or an object holding one),
+`has r.PATH` asks the schema whether the type has it, not the value:
+
+```dform
+set r.metadata.labels.owner = "simon" @default where r in resource, has r.metadata
+```
+
+labels every resource whose type has a `metadata` (every Kubernetes kind,
+no OVH instance), and does not read the cell it writes, which a value
+test would (a cycle). Over a type that is not constant, each resource's
+type answers.
+
 A `.p` or `[i]` after a call reads the call's result (R-71):
 `oci.parse(image).digest`, `str.split(s, ":")[0]`, `json.decode(t).a[0].b`,
 anywhere a chain stands, `has` and `not` included, so `not has

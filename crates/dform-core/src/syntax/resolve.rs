@@ -4554,6 +4554,8 @@ impl<'u> Lowerer<'u> {
             LIT_HAS => {
                 let c = terms(n).next().and_then(|t| Chain::read(&t)).ok_or(Skip)?;
                 let res = self.resolve(rc, &c, out)?;
+                let start = out.len();
+                let marked = has_atom(&res, span);
                 match self.read_atom(rc, &res, Term::Wildcard, span) {
                     Some(a) => out.push(Lit::Pos(a)),
                     // A nested path, or a field of a value: it has a value
@@ -4576,6 +4578,7 @@ impl<'u> Lowerer<'u> {
                         );
                     }
                 }
+                mark_has(out, start, marked, false);
             }
             LIT_NOT => {
                 let inner = n.children().next().ok_or(Skip)?;
@@ -4615,9 +4618,20 @@ impl<'u> Lowerer<'u> {
                 };
                 let mut pre = Vec::new();
                 let res = self.resolve(rc, &c, &mut pre)?;
+                let marked = (n.kind() == LIT_HAS)
+                    .then(|| has_atom(&res, span))
+                    .flatten();
                 if let Some(a) = self.read_atom(rc, &res, value, span) {
                     out.extend(pre);
+                    let start = out.len();
                     out.push(Lit::Not(a));
+                    mark_has(out, start, marked, true);
+                    return Ok(());
+                }
+                if marked.is_some() {
+                    let start = out.len();
+                    self.neg_helper(rc, n, out, span)?;
+                    mark_has(out, start, marked, true);
                     return Ok(());
                 }
             }
@@ -7217,6 +7231,40 @@ fn string_value(text: &str) -> Result<String, String> {
     Ok(unescape(text)?.replace("$${", "${"))
 }
 
+/// Mark the literals `out[start..]` that test `has r.PATH` by its value
+/// with `__has(T, A, "PATH", N)` before them (`not` when `negated`), N
+/// their count: the compiler keeps them, or puts the schema's answer in
+/// their place (R-106, `partition::answer_has`).
+fn mark_has(out: &mut Vec<Lit>, start: usize, marked: Option<Atom>, negated: bool) {
+    let Some(mut a) = marked else { return };
+    a.args
+        .push(Term::Val(Value::Int((out.len() - start) as i64)));
+    out.insert(start, if negated { Lit::Not(a) } else { Lit::Pos(a) });
+}
+
+/// `has r.PATH` of a resource's attribute (a path of fields):
+/// `__has(T, A, "PATH")`, which the compiler answers from the schema in a
+/// rule that writes under PATH ([`mark_has`]).
+fn has_atom(res: &Res, span: Span) -> Option<Atom> {
+    let Res::Ref { typ, addr, path } = res else {
+        return None;
+    };
+    let keys: Vec<String> = path
+        .iter()
+        .map(|s| match s {
+            Seg::F(p) => Some(crate::ir::path_key(p).into_owned()),
+            Seg::I(_) | Seg::K(_) => None,
+        })
+        .collect::<Option<_>>()?;
+    (!keys.is_empty()).then(|| {
+        atom_at(
+            crate::partition::HAS,
+            vec![typ.clone(), addr.clone(), str_term(&keys.join("."))],
+            span,
+        )
+    })
+}
+
 /// The types the built-in provider schemas declare (`type_provider`,
 /// `type_attr`, ... rows): a program names them without a resource header
 /// of its own. Read from the schema text, not resolved.
@@ -7798,7 +7846,9 @@ mod tests {
                 "let(\"xs\", [1, 2], \"normal\")",
                 "let(\"ys\", [{name: \"a\", net: 1}], \"normal\")",
                 "q(X) :- xs(Xs), member(Xs, I, Item), X = Item, I >= 0, not member([3], X)",
-                "ok(1) :- want(\"db.postgres\", \"pg\"), attr(\"db.postgres\", \"pg\", \"public\", _), not want(\"db.postgres\", \"other\")",
+                // `has` of a resource's attribute is marked for the
+                // compiler, which answers it from the schema or the value.
+                "ok(1) :- want(\"db.postgres\", \"pg\"), __has(\"db.postgres\", \"pg\", \"public\", 1), attr(\"db.postgres\", \"pg\", \"public\", _), not want(\"db.postgres\", \"other\")",
                 "big(N) :- cloud_exists(\"net.vpc\", N), cloud_attr(\"net.vpc\", N, \"size\", Size), Size > 3",
                 "pair(N, C) :- ys(Ys), member(Ys, _, Obj), N = __path(Obj, \"name\"), C = __path(Obj, \"net\")",
             ]

@@ -517,6 +517,7 @@ pub fn compile(program: &Program, given: &[Atom]) -> Result<Compiled> {
         }
     }
     let schema = schema_of(given, &facts)?;
+    let (rules, facts) = answer_has(rules, facts, &schema);
     transform::check_computed_writes(&rules, &facts, &schema)?;
     let (mut rules, facts) = transform::rewrite_computed_refs(rules, facts, &schema);
     rules.extend(transform::computed_prelude(&schema));
@@ -637,6 +638,124 @@ fn source_pattern(r: &RuleStmt, at: usize, split: &BTreeSet<String>) -> Node {
         unreachable!("an address source is a positive literal")
     };
     addressed(body_pattern(a), a, &r.body, split)
+}
+
+/// `has r.PATH` of a resource's attribute, as the resolver marks it:
+/// `__has(T, A, "PATH", N)` before the N literals that test it by value.
+pub const HAS: &str = "__has";
+/// The schema's answer to `has`: `__type_has(T, P)` for every path `P` of
+/// a configurable attribute of `T` and every object above one.
+pub const TYPE_HAS: &str = "__type_has";
+
+/// Answer each `has r.PATH` (R-106). In a rule that writes under PATH
+/// (`set r.metadata.labels.owner = .. where r in resource, has
+/// r.metadata`), from the schema, when PATH is a configurable attribute of
+/// the resource's type or an object holding one: whether the type has it,
+/// so the rule does not read what it writes; for a type that is not
+/// constant, when some type's schema has PATH, each type's schema answers.
+/// Everywhere else the value answers, as it always did: whether the
+/// resource sets it (`not has p.spec.podSelector.matchLabels`), and a
+/// computed attribute, or one no schema declares, has a value once it is
+/// known. The schema's answers are `__type_has` rows in place of the
+/// marked literals; the value's are the literals, the mark dropped.
+fn answer_has(
+    rules: Vec<RuleStmt>,
+    mut facts: Vec<Atom>,
+    schema: &Schema,
+) -> (Vec<RuleStmt>, Vec<Atom>) {
+    let mark = |l: &Lit| match l {
+        Lit::Pos(a) | Lit::Not(a) if a.pred == HAS && a.args.len() == 4 => Some(a.clone()),
+        _ => None,
+    };
+    if !rules
+        .iter()
+        .flat_map(|r| &r.body)
+        .any(|l| mark(l).is_some())
+    {
+        return (rules, facts);
+    }
+    // Every configurable path of each type and the objects above it.
+    let mut declared: BTreeSet<(String, String)> = BTreeSet::new();
+    for ((t, p), spec) in &schema.attrs {
+        if spec.has("computed") {
+            continue;
+        }
+        let segs = crate::ir::path_segments(p);
+        for n in 1..=segs.len() {
+            declared.insert((t.clone(), segs[..n].join(".")));
+        }
+    }
+    // Whether the schema answers `a` in a rule with `head`: the head
+    // writes under its path, of a type that may be its, and the schema
+    // has the path.
+    let by_schema = |a: &Atom, head: &Atom| -> bool {
+        let Some(p) = a.args[2].as_str() else {
+            return false;
+        };
+        let under = |w: &str| {
+            w == p
+                || w.strip_prefix(p)
+                    .is_some_and(|r| r.starts_with('.') || r.starts_with('['))
+        };
+        let writes_under = head.pred == "arg"
+            && head.args.len() == 5
+            && head.args[2].as_str().is_some_and(under)
+            && match (key_type(&head.args[0]), key_type(&a.args[0])) {
+                (Some(x), Some(y)) => x == y,
+                _ => true,
+            };
+        writes_under
+            && match key_type(&a.args[0]) {
+                Some(t) => declared.contains(&(t, p.to_string())),
+                None => declared.iter().any(|(_, q)| q == p),
+            }
+    };
+    let mut asked: BTreeSet<String> = BTreeSet::new();
+    let mut out: Vec<RuleStmt> = Vec::with_capacity(rules.len());
+    for mut r in rules {
+        let mut body = Vec::with_capacity(r.body.len());
+        let mut lits = std::mem::take(&mut r.body).into_iter();
+        while let Some(l) = lits.next() {
+            let Some(a) = mark(&l) else {
+                body.push(l);
+                continue;
+            };
+            let n = match &a.args[3] {
+                Term::Val(Value::Int(n)) => *n as usize,
+                _ => 0,
+            };
+            if !by_schema(&a, &r.head) {
+                continue;
+            }
+            lits.by_ref().take(n).for_each(drop);
+            asked.extend(a.args[2].as_str().map(str::to_string));
+            let answer = Atom {
+                pred: TYPE_HAS.into(),
+                args: vec![a.args[0].clone(), a.args[2].clone()],
+                ..a
+            };
+            body.push(match l {
+                Lit::Not(_) => Lit::Not(answer),
+                _ => Lit::Pos(answer),
+            });
+        }
+        r.body = body;
+        out.push(r);
+    }
+    for (t, p) in &declared {
+        if asked.contains(p) {
+            facts.push(Atom {
+                pred: TYPE_HAS.into(),
+                args: vec![
+                    Term::Val(Value::Str(t.clone())),
+                    Term::Val(Value::Str(p.clone())),
+                ],
+                record: None,
+                span: Default::default(),
+            });
+        }
+    }
+    (out, facts)
 }
 
 /// The types whose resources a negative cycle runs through, not split by
