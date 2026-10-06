@@ -24,9 +24,10 @@
 //! A plan whose resource has a type none of them declares is refused before
 //! anything is planned ([`Providers::check_types`]).
 
-use super::backend::{CallError, Ticket};
-use super::link::Link;
+use super::backend::{Call, CallError, Reply, Ticket};
+use super::link::{Link, Retry};
 use super::pb;
+use super::policy::{self, Class};
 use super::source::{self, Source};
 use super::wire;
 use crate::ast::{Atom, Term};
@@ -865,6 +866,15 @@ impl Providers {
     /// What the providers said during the last apply.
     pub fn take_notes(&self) -> Vec<String> {
         self.notes.take()
+    }
+
+    /// The calls sent again since the last time they were taken (R-81),
+    /// for the audit log.
+    pub fn take_retries(&self) -> Vec<Retry> {
+        self.links
+            .iter()
+            .flat_map(|l| l.borrow_mut().take_retries())
+            .collect()
     }
 
     /// The link `i`; none when the run started no provider (a program
@@ -1827,6 +1837,10 @@ struct InFlight {
     addr: Address,
     /// The object's remote id before the call; empty for a create.
     remote: String,
+    /// The call, to send again when it failed in a way worth retrying.
+    req: pb::ApplyRequest,
+    /// How many times it has been sent again.
+    retried: u32,
 }
 
 impl Tick<'_> {
@@ -1951,7 +1965,7 @@ impl Tick<'_> {
             idempotency_key,
         };
         let link = cloud.route(&addr.typ);
-        let ticket = cloud.links[link].borrow_mut().submit(req);
+        let ticket = cloud.links[link].borrow_mut().submit(req.clone());
         cloud.invalidate();
         self.in_flight.push(InFlight {
             id,
@@ -1960,6 +1974,8 @@ impl Tick<'_> {
             kind: a.kind.clone(),
             addr: addr.clone(),
             remote,
+            req,
+            retried: 0,
         });
         Ok(true)
     }
@@ -1975,6 +1991,39 @@ impl Tick<'_> {
     /// outcome. An answer a link already holds comes first; else the link
     /// of the oldest call in flight is waited on.
     pub fn next_completed(&mut self, state: &mut State) -> (usize, Result<()>) {
+        let cloud = self.cloud;
+        let (f, answer) = loop {
+            let (mut f, answer) = self.take_answer();
+            match self.again(&mut f, answer) {
+                None => self.in_flight.push(f),
+                Some(answer) => break (f, answer),
+            }
+        };
+        cloud.invalidate();
+        let result = answer.and_then(|r| {
+            cloud.links[f.link]
+                .borrow()
+                .expect::<pb::ApplyResponse>("Apply", r)
+        });
+        let result = match result.map(|resp| self.record_object(&f, resp, state)) {
+            Ok(Ok(resp)) => Ok(Some(resp)),
+            Ok(Err(e)) => return (f.id, Err(e)),
+            Err(e) => Err(e),
+        };
+        self.forget_object(&f, &result, state);
+        if !matches!(
+            result,
+            Err(CallError::MaybeApplied(_) | CallError::Crashed(_))
+        ) {
+            state.uncertain.remove(&uncertain_key(&f.kind, &f.addr));
+        }
+        (f.id, self.answered(f.kind, &f.addr, &result, state))
+    }
+
+    /// The next answered Apply call, out of `in_flight`: an answer a link
+    /// already holds comes first; else the link of the oldest call in
+    /// flight is waited on.
+    fn take_answer(&mut self) -> (InFlight, Result<Reply, CallError>) {
         let cloud = self.cloud;
         assert!(self.busy(), "internal: no Apply call in flight");
         let held = self
@@ -1998,26 +2047,41 @@ impl Tick<'_> {
                 (k, r)
             }
         };
-        let f = self.in_flight.remove(k);
-        cloud.invalidate();
-        let result = answer.and_then(|r| {
-            cloud.links[f.link]
-                .borrow()
-                .expect::<pb::ApplyResponse>("Apply", r)
-        });
-        let result = match result.map(|resp| self.record_object(&f, resp, state)) {
-            Ok(Ok(resp)) => Ok(Some(resp)),
-            Ok(Err(e)) => return (f.id, Err(e)),
-            Err(e) => Err(e),
+        (self.in_flight.remove(k), answer)
+    }
+
+    /// A call that failed in a way worth trying again (a transient
+    /// refusal: nothing changed, R-81) is sent again after its backoff,
+    /// while its provider's budget lasts: `None`, `f` in flight again.
+    /// Anything else is its answer, the budget's end saying so.
+    fn again(
+        &mut self,
+        f: &mut InFlight,
+        answer: Result<Reply, CallError>,
+    ) -> Option<Result<Reply, CallError>> {
+        let e = match answer {
+            Err(e) if policy::class(&e) == Class::Retryable => e,
+            answer => return Some(answer),
         };
-        self.forget_object(&f, &result, state);
-        if !matches!(
-            result,
-            Err(CallError::MaybeApplied(_) | CallError::Crashed(_))
-        ) {
-            state.uncertain.remove(&uncertain_key(&f.kind, &f.addr));
+        let mut link = self.cloud.links[f.link].borrow_mut();
+        let budget = link.policy().retries;
+        if f.retried >= budget {
+            return Some(Err(super::link::gave_up(e, budget)));
         }
-        (f.id, self.answered(f.kind, &f.addr, &result, state))
+        f.retried += 1;
+        let delay = link.policy().delay(f.retried);
+        let retry = Retry {
+            provider: link.name_or_program().to_string(),
+            call: policy::describe(&Call::Apply(f.req.clone())),
+            attempt: f.retried,
+            of: budget,
+            delay,
+            error: e.to_string(),
+        };
+        link.retried(retry);
+        std::thread::sleep(delay);
+        f.ticket = link.submit(f.req.clone());
+        None
     }
 
     /// An answered call's object, in the tick's world and in state.

@@ -30,6 +30,7 @@ pub mod names;
 pub mod parser;
 pub mod partition;
 pub mod plugin;
+pub mod progress;
 pub mod project;
 pub mod provider;
 pub mod quantity;

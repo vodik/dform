@@ -19,7 +19,10 @@
 //! verified statement and the token, or `not required`, or why it was
 //! refused), `apply_start` (who, dform's version, the providers),
 //! `action` (kind, address, result, remote id, a digest of the redacted
-//! diff), `tick` (a digest of the world as the executor saw it),
+//! diff), `tick` (a digest of the world as the executor saw it), `retry`
+//! (a provider call sent again: the call, the attempt and its budget, the
+//! delay, why the last one failed; [`retry`]), `wait` (a tick waiting on
+//! open nulls: what, since when, how long, and how it ended; [`wait`]),
 //! `apply_end`, `controller` (events, holds, releases), `rekey` and
 //! `handover`. Values are never written: a diff is a digest of its redacted
 //! form, where a sensitive leaf is already the stack's HMAC of it.
@@ -213,6 +216,40 @@ fn send(cmd: &str, line: &str) -> Result<()> {
         anyhow::bail!("it exited with {status}");
     }
     Ok(())
+}
+
+/// A `retry` entry's fields: a provider call that failed in a way worth
+/// trying again, sent again after `delay` (R-81). `error` is why the last
+/// attempt failed, as the caller redacts it.
+pub fn retry(tick: usize, r: &crate::plugin::link::Retry, error: String) -> Json {
+    serde_json::json!({
+        "tick": tick,
+        "provider": r.provider,
+        "call": r.call,
+        "attempt": r.attempt,
+        "of": r.of,
+        "delay_ms": r.delay.as_millis() as u64,
+        "error": error,
+    })
+}
+
+/// A `wait` entry's fields: a tick waiting on the open nulls `on` (as
+/// plan prints them) since `since`, for `waited`; `result` is how it
+/// ended: `resolved`, or `expired` once the budget is spent.
+pub fn wait(
+    tick: usize,
+    on: &[String],
+    since: &str,
+    waited: std::time::Duration,
+    result: &str,
+) -> Json {
+    serde_json::json!({
+        "tick": tick,
+        "on": on,
+        "since": since,
+        "waited_ms": waited.as_millis() as u64,
+        "result": result,
+    })
 }
 
 /// Who is acting: `DFORM_ACTOR` when the environment gives it (a CI job's

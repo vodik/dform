@@ -26,6 +26,8 @@
 //! |                                | replacement's id is not its predecessor's               |
 //! | `delay=T["N"]:MS`              | the first Apply of T["N"] takes effect, then answers MS |
 //! |                                | late (slept): past a short `timeout`, it times out      |
+//! | `flaky=T["N"]:K`               | the first K Apply calls of T["N"] are refused, changing |
+//! |                                | nothing, as busy (503): retried with backoff (R-81)     |
 
 use crate::ir::Address;
 use anyhow::{Context, Result, anyhow, bail};
@@ -40,6 +42,8 @@ pub struct Chaos {
     pub latency: BTreeMap<Address, u64>,
     /// The first Apply of each answers this many ms late, really slept.
     pub delay: BTreeMap<Address, u64>,
+    /// The first K Apply calls of each are refused as transient (503).
+    pub flaky: BTreeMap<Address, u64>,
     pub crash: BTreeSet<Address>,
     /// The executor stops once this many Apply calls have returned.
     pub stop_after: Option<usize>,
@@ -75,7 +79,7 @@ impl Chaos {
         let (knob, arg) = spec.split_once('=').ok_or_else(|| {
             anyhow!(
                 "expected KNOB=ARG (fail, timeout, crash, read-lag, mutate, latency, \
-                 delay, stop-after) or fresh-ids"
+                 delay, flaky, stop-after) or fresh-ids"
             )
         })?;
         match knob {
@@ -107,6 +111,10 @@ impl Chaos {
                 let (a, ms) = addr_and(arg, "MS")?;
                 self.delay.insert(a, ms.parse().context("milliseconds")?);
             }
+            "flaky" => {
+                let (a, k) = addr_and(arg, "K")?;
+                self.flaky.insert(a, k.parse().context("Apply calls")?);
+            }
             "mutate" => {
                 let bad = || anyhow!("expected mutate=T[\"N\"].PATH=JSON");
                 let (lhs, json) = arg.split_once('=').ok_or_else(bad)?;
@@ -119,7 +127,7 @@ impl Chaos {
             other => {
                 bail!(
                     "unknown chaos knob '{other}' (fail, timeout, crash, read-lag, mutate, latency, \
-                     delay, stop-after, fresh-ids)"
+                     delay, flaky, stop-after, fresh-ids)"
                 )
             }
         }
@@ -134,6 +142,7 @@ impl Chaos {
         out.extend(self.read_lag.keys());
         out.extend(self.latency.keys());
         out.extend(self.delay.keys());
+        out.extend(self.flaky.keys());
         out.extend(self.mutate.iter().map(|m| &m.0));
         out
     }

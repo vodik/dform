@@ -179,6 +179,8 @@ pub struct FakeCloud {
     remotes: BTreeMap<Address, String>,
     /// The addresses whose first Apply chaos `delay` has delayed.
     delayed: BTreeSet<Address>,
+    /// How many Apply calls of each chaos `flaky` has refused this run.
+    refused: BTreeMap<Address, u64>,
     /// Linked in: chaos `crash` cannot kill the process, so the mock is
     /// gone instead.
     in_process: bool,
@@ -763,6 +765,15 @@ impl FakeCloud {
             return Err(Failed::Refused(format!(
                 "apply {at}: injected failure (chaos fail={at})"
             )));
+        }
+        if let Some(&k) = self.chaos.flaky.get(addr) {
+            let n = self.refused.entry(addr.clone()).or_default();
+            if *n < k {
+                *n += 1;
+                return Err(Failed::Refused(format!(
+                    "apply {at}: Service Unavailable (503) (chaos flaky={at}, {n} of {k})"
+                )));
+            }
         }
         let mut out = Applied::default();
         if let Some(ms) = self.chaos.delay.get(addr)

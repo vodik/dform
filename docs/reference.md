@@ -1225,6 +1225,9 @@ The kinds:
 - `action`: the kind, the address, the result (and the error), the remote
   id, and a digest of the redacted diff;
 - `tick`: the world as the executor saw it, as an HMAC with the stack's key;
+- `retry`: a provider call sent again (R-81): the tick, the provider, the
+  call, the attempt and its budget (`of`), the delay, and why the last
+  attempt failed (redacted);
 - `apply_end`: `ok`, `declined` (the confirmation was answered no), or
   `failed` and the error;
 - `controller`: each event, holds for approval and the run's result; and
@@ -1417,6 +1420,26 @@ effect`. Its answer, if it comes later, is dropped. The calls dform makes to
 that provider after it wait behind it, and each one's timeout starts again
 when that late answer arrives.
 
+A call that failed in a way worth trying again is sent again after a backoff:
+the provider's `[providers.NAME] backoff` (1s by default), doubled each time up
+to 30s, jittered to between half of it and all of it so that callers backing
+off together do not retry together. At most `retries` times (5 by default);
+then the run stops with the last error, the resource named: `apply
+T["N"]: ... (gave up after 5 retries)`. What is worth trying again is read from
+what the protocol already returns: a refusal (nothing changed) whose message is
+or has a clause `retryable: ...` (how a provider marks one), carries an HTTP
+status of 429 or 5xx (`(503)`, `HTTP 503`, `status 503`), or is the transport
+failing (`status: Unavailable`). A timeout is retried for a call that changes
+nothing (a Read, a Plan, a Query); a refusal of any other kind, and a provider
+that crashed, never. Each retry is a line on stderr, `retrying the Apply
+T["N"] call in 1.2s (retry 2 of 5): ERROR`, and a `retry` entry in the audit
+log.
+
+```toml
+[providers]
+aws = { source = "aws", timeout = "2m", retries = 8, backoff = "500ms" }
+```
+
 ## Chaos: failure and latency injection
 
 `dform dev --chaos SPEC apply` (repeatable) makes the fake provider misbehave, the way a
@@ -1434,6 +1457,7 @@ file keeps a `tick` counter; every `apply` is one tick.
 | `latency=T["N"]:MS` | Apply of `T["N"]` takes `MS` on a simulated clock, reported, never slept; the world's `timeline` records each call's start and end |
 | `fresh-ids` | every Create mints new ids (the world keeps a `serial`), as a real cloud does; without it a destroy-first replacement under the same name gets its predecessor's id |
 | `delay=T["N"]:MS` | the first Apply of `T["N"]` in a run takes effect, then answers `MS` late, really slept: past a shorter `timeout` it times out (the one knob that sleeps) |
+| `flaky=T["N"]:K` | the first `K` Apply calls of `T["N"]` in a run are refused as busy, `(503)`, changing nothing: retried with backoff |
 
 ```bash
 cargo run -- -C examples/demo dev --chaos 'fail=net.subnet["main/private-us-test-1a"]' apply dform env=staging

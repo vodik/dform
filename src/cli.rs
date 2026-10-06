@@ -2710,6 +2710,7 @@ fn run_with(
                     if let Some(e) = audit_failed.into_inner() {
                         return Err(e);
                     }
+                    log_retries(&audit, &redact, backend, tick)?;
                     seen.extend(applied?);
                     // The world as the executor saw it, keyed like a
                     // secret: a document may hold one.
@@ -2852,6 +2853,23 @@ fn run_with(
         }
     }
 
+    Ok(())
+}
+
+/// Every provider call sent again since the last time (R-81) to the audit
+/// log, a `retry` entry each, its error redacted.
+fn log_retries(
+    audit: &crate::audit::Log,
+    redact: &query::Redactor,
+    backend: &crate::plugin::Providers,
+    tick: usize,
+) -> Result<()> {
+    for r in backend.take_retries() {
+        audit.append(
+            "retry",
+            crate::audit::retry(tick, &r, redact.text(&r.error)),
+        )?;
+    }
     Ok(())
 }
 

@@ -1,14 +1,18 @@
 //! One started provider: its handshake, and calls to it. A blocking call
 //! is a submit and a wait for its own ticket; an answer to another call
 //! that arrives meanwhile (an Apply in flight) is kept for whoever waits
-//! for it. Every call has the link's timeout ([`Timed`], R-81).
+//! for it. Every call has the link's timeout ([`Timed`]), and a blocking
+//! call that failed in a way worth trying again is retried with backoff
+//! (R-81, [`super::policy`]); an Apply is the executor's to retry
+//! (`providers::Tick`).
 
 use super::backend::{BUILD, BUILT_IN, Call, CallError, Provider, Reply, Ticket, VERSION};
 use super::pb;
-use super::policy::Policy;
+use super::policy::{self, Class, Policy};
 use super::timed::Timed;
 use anyhow::{Result, bail};
 use std::collections::BTreeMap;
+use std::time::Duration;
 
 pub struct Link {
     /// The name the provider's handshake gave: what state records.
@@ -21,6 +25,38 @@ pub struct Link {
     policy: Policy,
     /// Answers taken while waiting for another call.
     done: BTreeMap<Ticket, Result<Reply, CallError>>,
+    /// The retries since they were last taken ([`Link::take_retries`]).
+    retries: Vec<Retry>,
+}
+
+/// One failed call sent again: for the progress line and the audit log.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Retry {
+    /// The provider, as its handshake named it.
+    pub provider: String,
+    /// The call (`Read net.vpc["main"]`).
+    pub call: String,
+    /// This retry, from 1, and the budget.
+    pub attempt: u32,
+    pub of: u32,
+    /// How long dform waits before sending it.
+    pub delay: Duration,
+    /// Why the last attempt failed.
+    pub error: String,
+}
+
+impl Retry {
+    /// `retrying the Read net.vpc["main"] call in 1.2s (retry 2 of 5): ERROR`.
+    pub fn line(&self) -> String {
+        format!(
+            "retrying the {} call in {} (retry {} of {}): {}",
+            self.call,
+            policy::show(self.delay),
+            self.attempt,
+            self.of,
+            self.error
+        )
+    }
 }
 
 /// A provider built with dform (`BUILT_IN`) must be this build: one built
@@ -55,6 +91,7 @@ impl Link {
             program,
             policy,
             done: BTreeMap::new(),
+            retries: Vec::new(),
         };
         let hs: pb::HandshakeResponse = link.call(pb::HandshakeRequest {
             protocol_version: VERSION,
@@ -81,6 +118,17 @@ impl Link {
 
     pub fn policy(&self) -> Policy {
         self.policy
+    }
+
+    /// Record a retry of a call to this provider, and say so on stderr.
+    pub fn retried(&mut self, r: Retry) {
+        crate::progress::line(&r.line());
+        self.retries.push(r);
+    }
+
+    /// The retries since the last time they were taken.
+    pub fn take_retries(&mut self) -> Vec<Retry> {
+        std::mem::take(&mut self.retries)
     }
 
     pub fn has(&self, capability: &str) -> bool {
@@ -138,16 +186,46 @@ impl Link {
         }
     }
 
-    /// One call, its failure classified.
+    /// One call, its failure classified. A failure worth trying again is
+    /// retried with backoff, up to the policy's budget: a transient
+    /// refusal, and a timeout of a call that changes nothing (not an
+    /// Apply, whose retries are the executor's).
     pub fn try_call<R>(&mut self, call: impl Into<Call>) -> Result<R, CallError>
     where
         R: TryFrom<Reply, Error = Reply>,
     {
         let call = call.into();
         let method = call.method();
-        let t = self.submit(call);
-        let reply = self.wait(t)?;
-        self.expect(method, reply)
+        let mut attempt = 0;
+        loop {
+            let t = self.submit(call.clone());
+            let e = match self.wait(t) {
+                Ok(reply) => return self.expect(method, reply),
+                Err(e) => e,
+            };
+            let again = match policy::class(&e) {
+                Class::Retryable => true,
+                Class::MaybeApplied => !matches!(call, Call::Apply(_)),
+                Class::Final => false,
+            };
+            attempt += 1;
+            if !again {
+                return Err(e);
+            }
+            if attempt > self.policy.retries {
+                return Err(gave_up(e, self.policy.retries));
+            }
+            let delay = self.policy.delay(attempt);
+            self.retried(Retry {
+                provider: self.name_or_program().to_string(),
+                call: policy::describe(&call),
+                attempt,
+                of: self.policy.retries,
+                delay,
+                error: e.to_string(),
+            });
+            std::thread::sleep(delay);
+        }
     }
 
     /// One call; any failure is an error carrying the provider's message.
@@ -170,6 +248,16 @@ impl Link {
                 other.method()
             ))
         })
+    }
+}
+
+/// `e`, saying the budget of `retries` is spent.
+pub fn gave_up(e: CallError, retries: u32) -> CallError {
+    let say = |m: String| format!("{m} (gave up after {retries} retries)");
+    match e {
+        CallError::Refused(m) => CallError::Refused(say(m)),
+        CallError::MaybeApplied(m) => CallError::MaybeApplied(say(m)),
+        CallError::Crashed(m) => CallError::Crashed(say(m)),
     }
 }
 
@@ -212,5 +300,57 @@ mod tests {
         }
         // A provider not built with dform versions itself.
         assert_eq!(start("acme", "2.0.0").unwrap().name, "acme");
+    }
+
+    /// Refuses the first Reads as busy (503), then answers.
+    struct Busy(std::sync::atomic::AtomicU32);
+
+    impl Handler for Busy {
+        fn handle(&self, call: Call) -> Result<Reply, CallError> {
+            use std::sync::atomic::Ordering;
+            match call {
+                Call::Handshake(_) => Hello(FAKECLOUD, BUILD).handle(call),
+                Call::Read(_)
+                    if self
+                        .0
+                        .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+                        .is_ok() =>
+                {
+                    Err(CallError::Refused("read x: Too Many Requests (429)".into()))
+                }
+                _ => Ok(Reply::Read(pb::ReadResponse::default())),
+            }
+        }
+    }
+
+    /// A blocking call refused as transient is sent again after its
+    /// backoff, each retry recorded; past the budget the last error says
+    /// the budget is spent (R-81).
+    #[test]
+    fn a_transient_refusal_of_a_read_is_retried_up_to_the_budget() {
+        use std::time::Duration;
+        let link = |busy: u32| {
+            let q = Queue::new(Busy(busy.into()), Order::Clock, false);
+            let mut l = Link::start("prov", Box::new(q)).unwrap();
+            l.set_policy(Policy {
+                retries: 2,
+                backoff: Duration::from_millis(1),
+                ..Policy::default()
+            });
+            l
+        };
+        let mut l = link(2);
+        let r: Result<pb::ReadResponse, _> = l.try_call(pb::ReadRequest::default());
+        assert!(r.is_ok(), "{r:?}");
+        let retries = l.take_retries();
+        assert_eq!(retries.len(), 2);
+        assert_eq!((retries[1].attempt, retries[1].of), (2, 2));
+        assert_eq!(retries[1].call, "Read");
+        let mut l = link(3);
+        let r: Result<pb::ReadResponse, _> = l.try_call(pb::ReadRequest::default());
+        assert_eq!(
+            r.unwrap_err().to_string(),
+            "read x: Too Many Requests (429) (gave up after 2 retries)"
+        );
     }
 }
