@@ -167,7 +167,8 @@ impl Report {
                     d.reason
                 )));
                 out.push('\n');
-                for (r, v, from) in &d.witnesses {
+                for w in &d.witnesses {
+                    let (r, v, from) = (&w.rank, &w.value, &w.from);
                     let from = if from.is_empty() {
                         String::new()
                     } else {

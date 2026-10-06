@@ -993,8 +993,12 @@ apply: tick 1 once this plan's digest is approved (`--approval`), then tick 2 wh
 - `shadowed`: contributions at a losing rank that disagree (a warning),
   and `conflicts`: cells whose contributions disagree at the winning rank,
   each naming the resource, the path and every witness (`! net.vpc
-  main.cidr: two contributions disagree`), each once. A conflicted
-  address is not a change; the plan still prints, then refuses.
+  main.cidr: two contributions disagree`), each once, a witness by its
+  value and where it was written (`"10.1.0.0/16"  stacks/net.df:4`; at
+  `-vv` the statement that made it), a broken check by its place. A
+  conflicted address is not a change; the plan still prints, then
+  refuses, and stderr does not list the conflicts or the denies again.
+  `apply`, which refuses before it plans, prints them the same way.
 - `(drift: ...)` marks an update where a fresh null meets a value the
   world already has: the identity mapping is stale.
 - The last line says what `apply` does with this plan (R-12): which tick

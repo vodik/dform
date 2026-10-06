@@ -583,8 +583,35 @@ pub struct Diag {
     pub path: String,
     pub reason: String,
     pub rank: Option<String>,
-    /// (rank, value, from)
-    pub witnesses: Vec<(String, Shown, Vec<String>)>,
+    pub witnesses: Vec<Witness>,
+    /// Where the check it violates is written, `FILE:LINE` (a
+    /// refinement's).
+    pub at: Option<String>,
+}
+
+/// One contribution to a conflicted (or shadowed) cell.
+#[derive(Debug, Clone)]
+pub struct Witness {
+    pub rank: String,
+    pub value: Shown,
+    /// The statements that made it, as the engine names them, each with
+    /// its place (`.. (at p.df:3:25)`): what `--json` and `-vv` print.
+    pub from: Vec<String>,
+    /// Where each was written, `FILE:LINE` (R-111): what the default
+    /// level prints.
+    pub at: Vec<String>,
+}
+
+/// The place `FILE:LINE` of a statement the engine names with its place
+/// after it, `.. (at FILE:LINE:COL)` or `.. (at FILE:LINE:COL, use m)`.
+fn statement_place(from: &str) -> Option<String> {
+    let inner = from.strip_suffix(')')?;
+    let at = &inner[inner.rfind(" (at ")? + 5..];
+    let at = at.split(", ").next()?;
+    let (file_line, col) = at.rsplit_once(':')?;
+    col.bytes()
+        .all(|b| b.is_ascii_digit())
+        .then(|| file_line.to_string())
 }
 
 /// Everything the plan printer shows, for text or JSON.
@@ -1026,51 +1053,7 @@ fn diags(res: &EvalResult, r: &Redactor, pred: &str, msg: &str) -> Vec<Diag> {
         if m != msg {
             continue;
         }
-        let s = |k: &str| match ctx.get(k) {
-            Some(Value::Str(s)) => s.clone(),
-            Some(v) => fmt_value(v),
-            None => String::new(),
-        };
-        let (typ, path) = (s("type"), s("path"));
-        let witnesses = match ctx.get("witnesses") {
-            Some(Value::List(ws)) => ws
-                .iter()
-                .filter_map(|w| match w {
-                    Value::Obj(w) => Some(w),
-                    _ => None,
-                })
-                .map(|w| {
-                    let rank = match w.get("rank") {
-                        Some(Value::Str(r)) => r.clone(),
-                        _ => String::new(),
-                    };
-                    let value = match w.get("value") {
-                        Some(v) => shown_value(v, r),
-                        None => Shown::Absent,
-                    };
-                    // The contributing rule's text may spell the value.
-                    let from = match w.get("from") {
-                        Some(Value::List(fs)) => fs
-                            .iter()
-                            .filter_map(|f| f.as_str().map(|f| r.text(f)))
-                            .collect(),
-                        _ => vec![],
-                    };
-                    (rank, value, from)
-                })
-                .collect(),
-            _ => vec![],
-        };
-        let d = Diag {
-            addr: Address {
-                typ,
-                name: s("addr"),
-            },
-            path,
-            reason: s("reason"),
-            rank: ctx.get("rank").map(|_| s("rank")),
-            witnesses,
-        };
+        let d = diag(ctx, r);
         // One line per disagreement, however many facts say it.
         let same = |x: &Diag| {
             (&x.addr, &x.path, &x.reason, &x.rank) == (&d.addr, &d.path, &d.reason, &d.rank)
@@ -1078,6 +1061,138 @@ fn diags(res: &EvalResult, r: &Redactor, pred: &str, msg: &str) -> Vec<Diag> {
         if !out.iter().any(same) {
             out.push(d);
         }
+    }
+    out
+}
+
+/// A conflict's or a shadowed disagreement's context (`type`, `addr`,
+/// `path`, `reason`, `rank`, `witnesses`) as the report holds it.
+fn diag(ctx: &BTreeMap<String, Value>, r: &Redactor) -> Diag {
+    let s = |k: &str| match ctx.get(k) {
+        Some(Value::Str(s)) => s.clone(),
+        Some(v) => fmt_value(v),
+        None => String::new(),
+    };
+    let witnesses = match ctx.get("witnesses") {
+        Some(Value::List(ws)) => ws
+            .iter()
+            .filter_map(|w| match w {
+                Value::Obj(w) => Some(w),
+                _ => None,
+            })
+            .map(|w| {
+                let rank = match w.get("rank") {
+                    Some(Value::Str(r)) => r.clone(),
+                    _ => String::new(),
+                };
+                let value = match w.get("value") {
+                    Some(v) => shown_value(v, r),
+                    None => Shown::Absent,
+                };
+                // The contributing rule's text may spell the value.
+                let from: Vec<String> = match w.get("from") {
+                    Some(Value::List(fs)) => fs
+                        .iter()
+                        .filter_map(|f| f.as_str().map(|f| r.text(f)))
+                        .collect(),
+                    _ => vec![],
+                };
+                let at = from.iter().filter_map(|f| statement_place(f)).collect();
+                Witness {
+                    rank,
+                    value,
+                    from,
+                    at,
+                }
+            })
+            .collect(),
+        _ => vec![],
+    };
+    Diag {
+        addr: Address {
+            typ: s("type"),
+            name: s("addr"),
+        },
+        path: s("path"),
+        reason: s("reason"),
+        rank: ctx.get("rank").map(|_| s("rank")),
+        witnesses,
+        at: match ctx.get("at") {
+            Some(Value::Str(at)) => statement_place(&format!(" (at {at})")),
+            _ => None,
+        },
+    }
+}
+
+/// A constraint violation as the plan's `conflicts` section prints it
+/// (R-111), when it is one (`conflicting attribute contributions
+/// ctx={..}` or `refinement violated ctx={..}`): what a run that refuses
+/// before it plans says in place of the raw context.
+pub fn violation_conflict(v: &str, r: &Redactor, why: Why, style: Style) -> Option<String> {
+    let (msg, ctx) = v.split_once(" ctx=")?;
+    if msg != CONFLICT && msg != crate::refine::VIOLATED {
+        return None;
+    }
+    let ctx: Json = serde_json::from_str(ctx).ok()?;
+    let Value::Obj(ctx) = json_to_value(&ctx) else {
+        return None;
+    };
+    Some(diag_lines(&diag(&ctx, r), why, style, true))
+}
+
+/// Whether the violation `v` is a conflict the plan's `conflicts`
+/// section lists ([`violation_conflict`]).
+pub fn is_conflict(v: &str) -> bool {
+    v.split_once(" ctx=")
+        .is_some_and(|(m, _)| m == CONFLICT || m == crate::refine::VIOLATED)
+}
+
+/// A conflict's lines: `! T path.p: reason`, then each witness, its value
+/// and where it was written (R-111); at `full` the statement that made it
+/// as the engine names it.
+fn diag_lines(d: &Diag, why: Why, style: Style, conflict: bool) -> String {
+    let bold = |s: &str| style.paint(Paint::Bold, s);
+    let error = |s: &str| match conflict {
+        true => style.paint(Paint::Error, s),
+        false => s.to_string(),
+    };
+    let mut out = String::new();
+    let rank = d
+        .rank
+        .as_ref()
+        .map(|r| format!(" at rank {r}"))
+        .unwrap_or_default();
+    out.push_str(&error(&format!(
+        "  ! {}{rank}: {}",
+        attribute(&d.addr, &d.path),
+        d.reason
+    )));
+    // A check's place when no witness says it.
+    if let Some(at) = d.at.as_ref().filter(|_| d.witnesses.is_empty()) {
+        out.push_str(&format!("  {}", style.paint(Paint::Dim, at)));
+    }
+    out.push('\n');
+    for w in &d.witnesses {
+        // The cell's rank is the `!` line's; a witness says its own
+        // only when it is another (a refinement, a losing rank).
+        let rank = match w.rank.as_str() {
+            "normal" | "" => String::new(),
+            r => format!("{r} "),
+        };
+        let from = match why {
+            Why::Full if !w.from.is_empty() => {
+                let names: Vec<String> = w.from.iter().map(|f| bold(f)).collect();
+                format!("  from {}", names.join("; "))
+            }
+            _ if !w.at.is_empty() => {
+                format!("  {}", style.paint(Paint::Dim, &w.at.join(", ")))
+            }
+            _ => String::new(),
+        };
+        out.push_str(&format!(
+            "      {rank}{}{from}\n",
+            style.said(&w.value, why)
+        ));
     }
     out
 }
@@ -1658,6 +1773,14 @@ impl Report {
         self.policies.iter_mut().for_each(|p| fix(&mut p.site));
         self.approvals.iter_mut().for_each(|a| fix(&mut a.site));
         self.denied.iter_mut().for_each(|d| fix(&mut d.site));
+        for d in self.conflicts.iter_mut().chain(self.shadowed.iter_mut()) {
+            let witnesses = d.witnesses.iter_mut().flat_map(|w| w.at.iter_mut());
+            for at in witnesses.chain(d.at.as_mut()) {
+                if let Some(p) = place(at) {
+                    *at = p;
+                }
+            }
+        }
     }
 
     /// The changes the plan counts: every definite one that is not a
@@ -1989,26 +2112,7 @@ impl Report {
             };
             out.push_str(&header(&error(title)));
             for d in ds {
-                let rank = d
-                    .rank
-                    .as_ref()
-                    .map(|r| format!(" at rank {r}"))
-                    .unwrap_or_default();
-                out.push_str(&error(&format!(
-                    "  ! {}{rank}: {}",
-                    attribute(&d.addr, &d.path),
-                    d.reason
-                )));
-                out.push('\n');
-                for (r, v, from) in &d.witnesses {
-                    let from = if from.is_empty() {
-                        String::new()
-                    } else {
-                        let names: Vec<String> = from.iter().map(|f| bold(f)).collect();
-                        format!("  from {}", names.join("; "))
-                    };
-                    out.push_str(&format!("      {r} {}{from}\n", style.said(v, self.why)));
-                }
+                out.push_str(&diag_lines(d, self.why, style, conflict));
             }
         }
         if self.undeformed {
@@ -2712,10 +2816,10 @@ fn diag_json(d: &Diag) -> Json {
         "path": d.path,
         "reason": d.reason,
         "rank": d.rank,
-        "witnesses": d.witnesses.iter().map(|(r, v, from)| json!({
-            "rank": r,
-            "value": v.json(),
-            "from": from,
+        "witnesses": d.witnesses.iter().map(|w| json!({
+            "rank": w.rank,
+            "value": w.value.json(),
+            "from": w.from,
         })).collect::<Vec<_>>(),
     })
 }

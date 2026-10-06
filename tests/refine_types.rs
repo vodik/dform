@@ -37,21 +37,15 @@ fn an_override_that_violates_a_refinement_is_a_deny() {
         "{}",
         r.stdout
     );
+    // Each witness by where it was written (R-111), and said once.
     assert!(
-        r.stdout.contains("    override {\"backup_days\":40}  from arg(")
-            && r.stdout.contains(
-                "    refinement \"range(1, 35)\"  from attr_refine(\"input\", \"\", \"db.backup_days\", \"range(1, 35)\") (at p.df:3:3)"
-            ),
+        r.stdout.contains(
+            "\n      override {\"backup_days\":40}  p.df:9\n      refinement \"range(1, 35)\"  p.df:3\n"
+        ),
         "{}",
         r.stdout
     );
-    assert!(
-        r.stderr.contains(
-            "- refinement violated ctx={\"addr\":\"\",\"at\":\"p.df:3:3\",\"constraint\":\"range(1, 35)\",\"path\":\"db.backup_days\",\"reason\":\"40 violates range(1, 35)\""
-        ),
-        "{}",
-        r.stderr
-    );
+    assert!(!r.stderr.contains("refinement violated"), "{}", r.stderr);
     // A losing rank's value is not checked: the winning one is.
     plan(
         &s,
@@ -122,11 +116,11 @@ resource compute.vm prod {{ pool = {{ min: {min}, max: 3 }} }}
     plan(&s, &src(2)).success();
     let r = plan(&s, &src(5)).failure();
     assert!(
-        r.stderr.contains(
-            "- refinement violated ctx={\"addr\":\"prod\",\"at\":\"p.df:4:3\",\"constraint\":\"pool.min <= pool.max\",\"path\":\"pool.max\",\"reason\":\"3 does not satisfy pool.min <= pool.max\""
+        r.stdout.contains(
+            "\nconflicts\n  ! compute.vm prod.pool.max: 3 does not satisfy pool.min <= pool.max  p.df:4\n"
         ),
         "{}",
-        r.stderr
+        r.stdout
     );
 }
 
@@ -290,14 +284,14 @@ n(\"{name}\")
     let r = plan(&s, &src("ab", "10.0.0.0/16")).failure();
     assert!(
         r.stdout
-            .contains("! app.thing a.code: ab does not satisfy len(code) != 2\n"),
+            .contains("! app.thing a.code: ab does not satisfy len(code) != 2  p.df:4\n"),
         "{}",
         r.stdout
     );
     let r = plan(&s, &src("abc", "10.0.0.0/28")).failure();
     assert!(
         r.stdout.contains(
-            "! app.thing a.net: 10.0.0.0/24 does not satisfy inet.prefix_len(net) >= inet.prefix_len(wide)\n"
+            "! app.thing a.net: 10.0.0.0/24 does not satisfy inet.prefix_len(net) >= inet.prefix_len(wide)  p.df:"
         ),
         "{}",
         r.stdout

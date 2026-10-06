@@ -1989,9 +1989,26 @@ fn run_with(
         if violations.is_empty() {
             return Ok(());
         }
-        eprintln!("constraint violations:");
-        for v in violations {
-            eprintln!("- {}", redact.text(v));
+        // A conflict as the plan's `conflicts` section says it (R-111),
+        // not its raw context.
+        let (conflicts, rest): (Vec<&String>, Vec<&String>) =
+            violations.iter().partition(|v| report::is_conflict(v));
+        if !conflicts.is_empty() {
+            eprintln!("conflicts");
+            for v in conflicts {
+                let shown =
+                    report::violation_conflict(v, redact, report::Why::Line, report::Style::PLAIN);
+                eprint!(
+                    "{}",
+                    shown.unwrap_or_else(|| format!("- {}\n", redact.text(v)))
+                );
+            }
+        }
+        if !rest.is_empty() {
+            eprintln!("constraint violations:");
+            for v in rest {
+                eprintln!("- {}", redact.text(v));
+            }
         }
         bail!("blocked by constraints");
     };
@@ -2529,7 +2546,17 @@ fn run_with(
                     println!("plan digest: {}", f.digest.as_deref().unwrap_or_default());
                 }
             }
-            blocked(&[violations, denies].concat(), &redact)?;
+            // The report listed the conflicts and the denies over the plan
+            // (R-111): stderr names only what it did not, once.
+            let unshown: Vec<String> = violations
+                .iter()
+                .filter(|v| !report::is_conflict(v))
+                .cloned()
+                .collect();
+            blocked(&unshown, &redact)?;
+            if !violations.is_empty() || !denies.is_empty() {
+                bail!("blocked by constraints");
+            }
             if let (Some(out), Some(file)) = (out, &file) {
                 file.save(&out)?;
                 eprintln!(

@@ -26,13 +26,15 @@ fn prevent_destroy_makes_a_delete_a_deny() {
     );
     let r = mock(&s, &["plan"]).failure();
     assert!(r.stdout.contains("- net.vpc main"), "{}", r.stdout);
+    // The deny is the plan's `denied` section's, said once (R-111).
     assert!(
-        r.stderr.contains(
-            "constraint violations:\n- lifecycle prevent_destroy: the plan would delete net.vpc[\"main\"]\n"
+        r.stdout.contains(
+            "\ndenied\n  lifecycle prevent_destroy: the plan would delete net.vpc[\"main\"]  "
         ),
         "{}",
-        r.stderr
+        r.stdout
     );
+    assert!(!r.stderr.contains("prevent_destroy"), "{}", r.stderr);
     let r = mock(&s, &["apply"]).failure();
     assert!(
         r.stderr
@@ -351,17 +353,14 @@ use fake
 "#,
     );
     let r = mock(&s, &["plan"]).failure();
-    assert!(
-        r.stderr.contains(
-            "constraint violations:\n\
-             - a wide vpc: net.vpc[\"other\"]\n\
-             - main changes: net.vpc[\"main\"]\n\
-             - not main: compute.vm[\"vm\"]\n\
-             - not main: net.vpc[\"other\"]\n"
-        ),
-        "{}",
-        r.stderr
-    );
+    for line in [
+        "\n  a wide vpc: net.vpc[\"other\"]   net.vpc other ",
+        "\n  main changes: net.vpc[\"main\"]  net.vpc main ",
+        "\n  not main: compute.vm[\"vm\"]     compute.vm vm ",
+        "\n  not main: net.vpc[\"other\"]     net.vpc other ",
+    ] {
+        assert!(r.stdout.contains(line), "{line}\n{}", r.stdout);
+    }
     let r = mock(&s, &["query", "deformation(K, R, _)"]).success();
     assert!(
         r.stdout.contains("\"create\"  net.vpc other"),

@@ -183,8 +183,8 @@ use fake
     assert!(!r.stdout.contains("+ net.vpc main"), "{}", r.stdout);
     for want in [
         "\nshadowed\n  ! net.vpc two.cidr at rank default: two contributions disagree at cidr\n",
-        "\nconflicts\n  ! net.vpc main.cidr: two contributions disagree\n      normal \"10.0.0.0/16\"  from arg(\"net.vpc\", \"main\", \"cidr\", \"10.0.0.0/16\", \"normal\") (at p.df:3:25)\n",
-        "      normal \"10.1.0.0/16\"  from arg(\"net.vpc\", \"main\", \"cidr\", \"10.1.0.0/16\", \"normal\") :- ok(1) (at p.df:4:1)\n",
+        // Each witness by its value and where it was written (R-111).
+        "\nconflicts\n  ! net.vpc main.cidr: two contributions disagree\n      \"10.0.0.0/16\"  p.df:3\n      \"10.1.0.0/16\"  p.df:4\n",
     ] {
         assert!(r.stdout.contains(want), "{want}\n---\n{}", r.stdout);
     }
@@ -224,7 +224,7 @@ use fake
     let witnesses = r
         .stdout
         .lines()
-        .filter(|l| l.starts_with("      normal "))
+        .filter(|l| l.starts_with("      \""))
         .count();
     assert_eq!(witnesses, 4, "{}", r.stdout);
 }
