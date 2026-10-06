@@ -25,6 +25,17 @@ use std::time::{Duration, Instant};
 
 type Answer = (Ticket, Result<Reply, CallError>);
 
+/// What the message of a call dform took as timed out says, and nothing
+/// else's ([`timed_out`]).
+const PAST: &str = "call within";
+const ITS_TIMEOUT: &str = "(its timeout); the call may have taken effect";
+
+/// Whether `e` is a call [`Timed`] took as timed out: no answer came
+/// within its timeout (not the provider saying it timed out).
+pub fn timed_out(e: &CallError) -> bool {
+    matches!(e, CallError::MaybeApplied(m) if m.contains(PAST) && m.contains(ITS_TIMEOUT))
+}
+
 enum Cmd {
     Submit(Ticket, Call),
     /// Answer one call.
@@ -182,8 +193,7 @@ impl Provider for Timed {
                     return (
                         first,
                         Err(CallError::MaybeApplied(format!(
-                            "the provider {} did not answer the {what} call within {} \
-                             (its timeout); the call may have taken effect",
+                            "the provider {} did not answer the {what} {PAST} {} {ITS_TIMEOUT}",
                             self.what,
                             show(self.timeout)
                         ))),
@@ -286,6 +296,8 @@ mod tests {
             "the provider slow did not answer the Apply net.vpc[\"450\"] call within 300ms \
              (its timeout); the call may have taken effect"
         );
+        assert!(timed_out(&CallError::MaybeApplied(m)));
+        assert!(!timed_out(&CallError::MaybeApplied("timed out".into())));
         let fast = p.submit(apply("200"));
         let (t, r) = p.next_completed();
         assert_eq!(t, fast);

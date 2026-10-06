@@ -36,11 +36,17 @@ fn apply_on(s: &Scratch, backend: Backend, chaos: &[&str]) -> common::Run {
 }
 
 /// A call past `[providers.NAME] timeout` is taken as timed out, on every
-/// backend: the message names the call and the timeout.
+/// backend: the message names the call and the timeout. With no retries an
+/// update that timed out is not sent again.
 #[test]
 fn a_call_past_its_timeout_times_out() {
     for backend in BACKENDS {
         let s = project("timeout", "300ms", 0);
+        apply_on(&s, backend, &[]).success();
+        s.write(
+            "p.df",
+            &PROG.replace("10.0.1.0/24\" }", "10.0.1.0/24\", tier = \"web\" }"),
+        );
         let r = apply_on(&s, backend, &["delay=net.subnet[\"a\"]:500"]).failure();
         assert!(
             r.stderr.contains(
@@ -52,6 +58,65 @@ fn a_call_past_its_timeout_times_out() {
             r.stderr
         );
     }
+}
+
+/// A Create that timed out is looked up by its idempotency key before it
+/// is sent again: the object it made is adopted, not made twice, and the
+/// apply goes on (R-81).
+#[test]
+fn a_create_that_timed_out_is_adopted_not_made_twice() {
+    for backend in BACKENDS {
+        let s = project("timeout-create", "300ms", 2);
+        let r = apply_on(&s, backend, &["delay=net.subnet[\"a\"]:600"]).success();
+        assert!(
+            r.stderr.contains(
+                "apply net.subnet[\"a\"]: the Create that timed out made a; it is adopted, \
+                 not made again\n"
+            ),
+            "{backend:?}: {}",
+            r.stderr
+        );
+        let world = s.json("w.json");
+        let subnets = world["resources"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .filter(|k| k.starts_with("net.subnet::"))
+            .count();
+        assert_eq!(subnets, 1, "{world}");
+        let state = s.json("w.state.json");
+        assert_eq!(
+            state["resources"]["net.subnet::a"]["remote"], "a",
+            "{state}"
+        );
+        assert!(state.get("uncertain").is_none(), "{state}");
+        assert!(r.stdout.contains("apply: complete"), "{}", r.stdout);
+    }
+}
+
+/// An Update that timed out sends the same document again, a `retry`.
+#[test]
+fn an_update_that_timed_out_is_sent_again() {
+    let s = project("timeout-update", "300ms", 2);
+    apply_on(&s, Backend::Process, &[]).success();
+    s.write(
+        "p.df",
+        &PROG.replace("10.0.1.0/24\" }", "10.0.1.0/24\", tier = \"web\" }"),
+    );
+    let r = apply_on(&s, Backend::Process, &["delay=net.subnet[\"a\"]:500"]).success();
+    assert!(
+        r.stderr
+            .contains("retrying the Apply net.subnet[\"a\"] call in ")
+            && r.stderr
+                .contains("(retry 1 of 2): the provider fakecloud did not answer"),
+        "{}",
+        r.stderr
+    );
+    assert_eq!(retries(&s).len(), 1);
+    assert_eq!(
+        s.json("w.json")["resources"]["net.subnet::a"]["attrs"]["tier"],
+        "web"
+    );
 }
 
 /// The `retry` entries of the audit log beside `w.json`.

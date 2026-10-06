@@ -29,6 +29,7 @@ use super::link::{Link, Retry};
 use super::pb;
 use super::policy::{self, Class};
 use super::source::{self, Source};
+use super::timed::timed_out;
 use super::wire;
 use crate::ast::{Atom, Term};
 use crate::ir::{Address, Adopt, Resource};
@@ -2061,6 +2062,15 @@ impl Tick<'_> {
     ) -> Option<Result<Reply, CallError>> {
         let e = match answer {
             Err(e) if policy::class(&e) == Class::Retryable => e,
+            // No answer within its timeout: what the call did is looked up
+            // before it is sent again (R-81).
+            Err(e) if timed_out(&e) => match self.look(f) {
+                Looked::Made(reply) => return Some(Ok(reply)),
+                Looked::NotMade => e,
+                Looked::Unknown(why) => {
+                    return Some(Err(CallError::MaybeApplied(format!("{e}; {why}"))));
+                }
+            },
             answer => return Some(answer),
         };
         let mut link = self.cloud.links[f.link].borrow_mut();
@@ -2082,6 +2092,71 @@ impl Tick<'_> {
         std::thread::sleep(delay);
         f.ticket = link.submit(f.req.clone());
         None
+    }
+
+    /// What an Apply call that timed out did (R-81), so that it is sent
+    /// again only when that is safe: a Create is looked up by its
+    /// idempotency key (`created`), and the object it made is the call's
+    /// answer, adopted, never made twice; a Delete by a Read. An Update
+    /// sends the same document again, an Adopt names the same object. A
+    /// Replace, or a Create whose provider cannot say what a key made, is
+    /// not sent again: the next apply resolves it (`State::uncertain`).
+    fn look(&self, f: &InFlight) -> Looked {
+        let cloud = self.cloud;
+        let at = &f.addr;
+        match f.kind {
+            ActionKind::Update | ActionKind::Drift | ActionKind::Adopt => Looked::NotMade,
+            ActionKind::Create => {
+                let key = &f.req.idempotency_key;
+                let unknown = || {
+                    Looked::Unknown(format!(
+                        "the provider {} cannot say what its idempotency key made, so it is \
+                         not sent again: the next apply looks",
+                        cloud.names[f.link]
+                    ))
+                };
+                if key.is_empty() || !cloud.links[f.link].borrow().has("managed") {
+                    return unknown();
+                }
+                let remote = match cloud.created(at, key) {
+                    Ok(Some(remote)) => remote,
+                    Ok(None) => return Looked::NotMade,
+                    Err(e) => return Looked::Unknown(format!("looking it up failed: {e:#}")),
+                };
+                match cloud.read(f.link, at, &remote) {
+                    Ok(Some(o)) => {
+                        crate::progress::line(&format!(
+                            "apply {at}: the Create that timed out made {remote}; it is \
+                             adopted, not made again"
+                        ));
+                        Looked::Made(Reply::Apply(pb::ApplyResponse {
+                            remote,
+                            attrs: Some(wire::doc(&o.attrs)),
+                            computed: Some(wire::doc(&o.computed)),
+                            ..Default::default()
+                        }))
+                    }
+                    Ok(None) => unknown(),
+                    Err(e) => Looked::Unknown(format!("reading it failed: {e:#}")),
+                }
+            }
+            ActionKind::Delete | ActionKind::DeleteDeposed => {
+                match cloud.read(f.link, at, &f.remote) {
+                    Ok(None) => {
+                        crate::progress::line(&format!(
+                            "apply {at}: the Delete that timed out took effect; {} is gone",
+                            f.remote
+                        ));
+                        Looked::Made(Reply::Apply(pb::ApplyResponse::default()))
+                    }
+                    Ok(Some(_)) => Looked::NotMade,
+                    Err(e) => Looked::Unknown(format!("reading it failed: {e:#}")),
+                }
+            }
+            ActionKind::Replace { .. } | ActionKind::Noop | ActionKind::Pending => {
+                Looked::Unknown("a replace is not sent again: the next apply looks".into())
+            }
+        }
     }
 
     /// An answered call's object, in the tick's world and in state.
@@ -2246,6 +2321,16 @@ impl Tick<'_> {
         self.cloud.invalidate();
         Ok(self.returned)
     }
+}
+
+/// What an Apply call that timed out did ([`Tick::look`]).
+enum Looked {
+    /// It took effect: this is its answer.
+    Made(Reply),
+    /// It did not: send it again.
+    NotMade,
+    /// Nobody can say; why.
+    Unknown(String),
 }
 
 /// `State::uncertain`'s key for a call of `kind` on `addr`.

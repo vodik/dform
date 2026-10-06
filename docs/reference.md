@@ -1435,6 +1435,18 @@ that crashed, never. Each retry is a line on stderr, `retrying the Apply
 T["N"] call in 1.2s (retry 2 of 5): ERROR`, and a `retry` entry in the audit
 log.
 
+An Apply that timed out may have taken effect, so it is looked up before it is
+sent again, and never sent twice blind. A Create is looked up by the
+idempotency key it carried (the provider's `provider.created` answer, which a
+provider with the `managed` capability gives): the object it made is adopted,
+`apply T["N"]: the Create that timed out made ID; it is adopted, not made
+again`; nothing found, it is sent again with the same key. A Delete is looked
+up by a Read: gone, it took effect. An Update sends the same document again.
+Where the provider cannot say what a key made, and for a Replace, the call is
+not sent again: the apply stops, the call recorded as uncertain in state, and
+the next apply resolves it before it plans (see `executor::resolve_uncertain`:
+the same lookup, or the same key again).
+
 ```toml
 [providers]
 aws = { source = "aws", timeout = "2m", retries = 8, backoff = "500ms" }

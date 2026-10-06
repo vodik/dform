@@ -251,8 +251,11 @@ impl Link {
     }
 }
 
-/// `e`, saying the budget of `retries` is spent.
+/// `e`, saying the budget of `retries` is spent (none: `e` as it is).
 pub fn gave_up(e: CallError, retries: u32) -> CallError {
+    if retries == 0 {
+        return e;
+    }
     let say = |m: String| format!("{m} (gave up after {retries} retries)");
     match e {
         CallError::Refused(m) => CallError::Refused(say(m)),
@@ -313,7 +316,7 @@ mod tests {
                 Call::Read(_)
                     if self
                         .0
-                        .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+                        .try_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
                         .is_ok() =>
                 {
                     Err(CallError::Refused("read x: Too Many Requests (429)".into()))
