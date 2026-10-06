@@ -414,7 +414,7 @@ impl WhyNot<'_> {
         if let Some(scope) = a.pred.strip_suffix("::__instance")
             && let [Term::Val(Value::Str(c))] = a.args.as_slice()
         {
-            return format!("instance {c} {}", scope.replace("::", "."));
+            return format!("resource {c} {}", scope.replace("::", "."));
         }
         if let (
             "attr",

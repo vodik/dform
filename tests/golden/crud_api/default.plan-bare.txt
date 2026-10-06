@@ -57,14 +57,14 @@ definite:
   spec.template.spec.containers[name=migrate].resources.requests.memory = "128Mi"
   spec.template.spec.restartPolicy = "Never"
 pending groups:
-? k8s.deployment["blue.deploy"] x unknown, on ?k8s.job["migrate-v42"].status.succeeded, resolves after tick 1  (reads instance app blue, which may derive after a boundary)
-? k8s.horizontal_pod_autoscaler["blue.hpa"] x unknown, on ?k8s.job["migrate-v42"].status.succeeded, resolves after tick 1  (reads instance app blue, which may derive after a boundary)
-? k8s.pod_disruption_budget["blue.pdb"] x unknown, on ?k8s.job["migrate-v42"].status.succeeded, resolves after tick 1  (reads instance app blue, which may derive after a boundary)
-? k8s.network_policy["blue.allow_http"] x unknown, on ?k8s.job["migrate-v42"].status.succeeded, resolves after tick 1  (reads instance app blue, which may derive after a boundary)
-? k8s.deployment["green.deploy"] x unknown, on ?k8s.job["migrate-v42"].status.succeeded, resolves after tick 1  (reads instance app green, which may derive after a boundary)
-? k8s.horizontal_pod_autoscaler["green.hpa"] x unknown, on ?k8s.job["migrate-v42"].status.succeeded, resolves after tick 1  (reads instance app green, which may derive after a boundary)
-? k8s.pod_disruption_budget["green.pdb"] x unknown, on ?k8s.job["migrate-v42"].status.succeeded, resolves after tick 1  (reads instance app green, which may derive after a boundary)
-? k8s.network_policy["green.allow_http"] x unknown, on ?k8s.job["migrate-v42"].status.succeeded, resolves after tick 1  (reads instance app green, which may derive after a boundary)
+? k8s.deployment["blue.deploy"] x unknown, on ?k8s.job["migrate-v42"].status.succeeded, resolves after tick 1  (reads resource app blue, which may derive after a boundary)
+? k8s.horizontal_pod_autoscaler["blue.hpa"] x unknown, on ?k8s.job["migrate-v42"].status.succeeded, resolves after tick 1  (reads resource app blue, which may derive after a boundary)
+? k8s.pod_disruption_budget["blue.pdb"] x unknown, on ?k8s.job["migrate-v42"].status.succeeded, resolves after tick 1  (reads resource app blue, which may derive after a boundary)
+? k8s.network_policy["blue.allow_http"] x unknown, on ?k8s.job["migrate-v42"].status.succeeded, resolves after tick 1  (reads resource app blue, which may derive after a boundary)
+? k8s.deployment["green.deploy"] x unknown, on ?k8s.job["migrate-v42"].status.succeeded, resolves after tick 1  (reads resource app green, which may derive after a boundary)
+? k8s.horizontal_pod_autoscaler["green.hpa"] x unknown, on ?k8s.job["migrate-v42"].status.succeeded, resolves after tick 1  (reads resource app green, which may derive after a boundary)
+? k8s.pod_disruption_budget["green.pdb"] x unknown, on ?k8s.job["migrate-v42"].status.succeeded, resolves after tick 1  (reads resource app green, which may derive after a boundary)
+? k8s.network_policy["green.allow_http"] x unknown, on ?k8s.job["migrate-v42"].status.succeeded, resolves after tick 1  (reads resource app green, which may derive after a boundary)
 ? k8s.service["api"] x unknown, on ?k8s.job["migrate-v42"].status.succeeded, resolves after tick 1  (reads serving(_), which is stuck)
 undetermined:
 ? deny "cutover to a color with unready pods" on ?k8s.job["migrate-v42"].status.succeeded, decided after tick 1  (reads undetermined aggregate attr)

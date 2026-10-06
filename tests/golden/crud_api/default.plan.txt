@@ -59,12 +59,12 @@ tick 1  8 changes, applies now
       spec.template.spec.restartPolicy = "Never"
 
 later   changes this plan cannot count yet
-  app blue                                      if instance app blue derives
+  app blue                                      if resource app blue derives
     k8s.deployment blue.deploy
     k8s.horizontal_pod_autoscaler blue.hpa
     k8s.pod_disruption_budget blue.pdb
     k8s.network_policy blue.allow_http
-  app green                                     if instance app green derives
+  app green                                     if resource app green derives
     k8s.deployment green.deploy
     k8s.horizontal_pod_autoscaler green.hpa
     k8s.pod_disruption_budget green.pdb

@@ -528,8 +528,8 @@ impl Surface<'_, '_> {
                 crate::modules::INSTANCE_OF,
                 [Value::Str(path), Value::Str(user), Value::Str(name)],
             ) => match user.is_empty() {
-                true => format!("instance {path} {name}"),
-                false => format!("instance {path} {name}   (in {user})"),
+                true => format!("resource {path} {name}"),
+                false => format!("resource {path} {name}   (in {user})"),
             },
             ("deny" | "warn", [msg @ Value::Str(_), ctx @ ..]) => {
                 let mut out = format!("{} {}", f.pred, r.surface(msg));

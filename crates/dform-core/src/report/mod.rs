@@ -2380,9 +2380,9 @@ fn reads(e: &str) -> bool {
 }
 
 /// The copy a pending group's resources are of, when what it waits on is
-/// whether the copy derives (`instance app blue`): `app["blue"]`.
+/// whether the copy derives (`resource app blue`): `app["blue"]`.
 fn group_copy(g: &Group) -> Option<String> {
-    let rest = g.reads.as_deref()?.strip_prefix("instance ")?;
+    let rest = g.reads.as_deref()?.strip_prefix("resource ")?;
     let (path, name) = rest.split_once(' ')?;
     Some(format!("{path}[\"{name}\"]"))
 }

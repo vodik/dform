@@ -226,14 +226,14 @@ fn canon_scope(s: &str) -> String {
     }
 }
 
-/// The scope a rule's head or a fact was lowered out of: `instance C N`
+/// The scope a rule's head or a fact was lowered out of: `resource C N`
 /// becomes `N`, `use M` the name it binds (`M`'s last segment, or its
 /// `as`), untagged is the stack's own.
 fn scope_of(span: Span) -> String {
     match diag::origin(span) {
         None => STACK.to_string(),
         Some(o) => {
-            if let Some(rest) = o.strip_prefix("instance ") {
+            if let Some(rest) = o.strip_prefix("resource ") {
                 return rest.rsplit(' ').next().unwrap_or(rest).to_string();
             }
             match o.strip_prefix("use ") {

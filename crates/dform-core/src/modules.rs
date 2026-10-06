@@ -256,7 +256,7 @@ fn exclusive_copies(stmts: &[Stmt]) -> Vec<Stmt> {
                 (u, format!("use {}", u.module))
             }
             Stmt::Use(u) => (u, format!("use {} as {}", u.module, u.name)),
-            Stmt::Instance(u) => (u, format!("instance {} {}", u.module, u.name)),
+            Stmt::Instance(u) => (u, format!("resource {} {}", u.module, u.name)),
             _ => continue,
         };
         groups.entry(&u.name).or_default().push(Alternative {
@@ -676,7 +676,7 @@ impl Cx<'_> {
         let origin = match used {
             true if u.module.rsplit('.').next() == Some(scope) => format!("use {}", u.module),
             true => format!("use {} as {scope}", u.module),
-            false => format!("instance {} {}", u.module, u.name),
+            false => format!("resource {} {}", u.module, u.name),
         };
         set_origin(&mut stmts, diag::origin_id(&origin));
         let stmts = stmts
@@ -804,7 +804,7 @@ pub const GATE: &str = "__instance";
 
 /// A fact of a predicate private to a copy or an activation (`n::p`,
 /// `n.inner::p`, a name no source can spell) as the program names it: a
-/// gated copy's own relation as the statement that makes it, `instance
+/// gated copy's own relation as the statement that makes it, `resource
 /// PATH n` (`(in USER)` for a copy inside another), anything else by its
 /// name there, `p(..) (in n)`; `fmt` prints that atom and `gap` comes
 /// before the parenthesis. `None` for a predicate of the program's.
@@ -814,8 +814,8 @@ pub fn private_text(a: &Atom, fmt: &dyn Fn(&Atom) -> String, gap: &str) -> Optio
         && let Some(Term::Val(Value::Str(path))) = a.args.first()
     {
         return Some(match scope.rsplit_once('.') {
-            None => format!("instance {path} {scope}"),
-            Some((user, name)) => format!("instance {path} {name}{gap}(in {user})"),
+            None => format!("resource {path} {scope}"),
+            Some((user, name)) => format!("resource {path} {name}{gap}(in {user})"),
         });
     }
     let own = Atom {
