@@ -1,0 +1,202 @@
+// What dform offers a provider (DESIGN.org R-13, WORK.org R-13b's
+// amendments): the credentialed transports, with the credential already
+// applied, so a provider does protocol logic only.
+//
+// The host owns TLS (client certificates, the machine's proxy and CA),
+// SSH (keys from the agent), git (a mirror in the XDG cache, pushed with
+// the host's keys) and the operator's credentials. A provider names a
+// credential the operator granted it in dform.toml
+// (`[providers.k8s] credentials = ["kubeconfig:prod"]`) and gets a handle;
+// the host applies the value inside its own call, and the value is never
+// passed to the provider.
+//
+// These interfaces are defined once, here, and offered on two transports:
+// as imports to a component (`world hosted-provider`, run by wasmtime),
+// and as the `Host` gRPC service a native provider calls back into dform
+// on (proto/dform/v1/host.proto, which mirrors this file). The SDK
+// (crates/dform-sdk) presents one API over both.
+//
+// Grants, not walls: these imports are the easy path, not the only one.
+// A component may import `wasi:http`, `wasi:sockets` or `wasi:filesystem`
+// directly when dform.toml grants them (`[providers.NAME] allow =
+// ["wasi:sockets"]`); it then gives up the host's TLS, retries, waits and
+// audit for what it does there. `dform provider check` prints what a
+// provider imports and what it is granted.
+//
+// Large bodies are `list<u8>` until the component model's streams are in
+// (wasip3); the 0.3 shape of each call is the same function made async.
+
+package dform:host@1.0.0;
+
+interface types {
+  // How a failure is handled, the classes dform's own retry policy reads
+  // (R-81): a `final` one fails the same way again; a `retryable` one
+  // changed nothing and is transient (a 429 or a 5xx, a refused
+  // connection); a `maybe-applied` one got no answer and may have taken
+  // effect (a timeout after the request was sent).
+  enum error-class {
+    final,
+    retryable,
+    maybe-applied,
+  }
+
+  // A failure: its class, and what it says (naming the host, the URL or
+  // the credential, never a credential's value).
+  record error {
+    class: error-class,
+    message: string,
+  }
+
+  // A read of something the world has not reached yet (the file a
+  // cloud-init writes, the host that is still booting) is `not-yet`, not
+  // an error: the engine waits on it as it waits on an open null (R-81's
+  // `--wait`), where an error fails the call.
+  variant not-yet-or-error {
+    not-yet(string),
+    error(error),
+  }
+
+  record endpoint {
+    host: string,
+    port: u16,
+  }
+
+  // A credential the operator granted this provider, by name
+  // (`KIND:NAME`, `kubeconfig:prod`): a handle, never the value. The host
+  // applies it to a request (`http.send`'s `auth`).
+  resource credential {
+    // The name it was opened by.
+    name: func() -> string;
+    // The endpoint the credential is for, when it names one (a
+    // kubeconfig's server): not secret, so the provider may build URLs
+    // against it.
+    endpoint: func() -> option<string>;
+  }
+
+  // A forwarded port (`ssh.forward`): a handle `http.send` takes as
+  // `via`, never a local port a provider could hand elsewhere.
+  resource tunnel {
+    // Where it leads.
+    to: func() -> endpoint;
+  }
+}
+
+// The operator's credentials, by name.
+interface secrets {
+  use types.{credential, error};
+
+  // Open the credential `name` (`KIND:NAME`). Refused, naming the
+  // provider and the credential, unless dform.toml's `[providers.NAME]
+  // credentials` grants it; refused when the operator has no value for it.
+  open: func(name: string) -> result<credential, error>;
+}
+
+// HTTP, with TLS by the host: the machine's CA and proxy (`HTTPS_PROXY`,
+// `NO_PROXY`), client certificates from a credential.
+interface http {
+  use types.{credential, tunnel, error};
+
+  record request {
+    method: string,
+    url: string,
+    headers: list<tuple<string, string>>,
+    body: list<u8>,
+    // At most this long, else the host's default; a request that timed
+    // out after it was sent is `maybe-applied`.
+    timeout-ms: option<u32>,
+  }
+
+  record response {
+    status: u16,
+    headers: list<tuple<string, string>>,
+    body: list<u8>,
+  }
+
+  // Send `req`. `auth` is applied by the host by its kind: a bearer token
+  // or a basic pair as the Authorization header, a client certificate (and
+  // its CA) to the TLS session, a kubeconfig as whichever of those its
+  // user has. `via` routes it through a tunnel (`ssh.forward`). A status
+  // the server answered (a 404, a 500) is a response, not an error.
+  send: func(req: request, auth: option<borrow<credential>>, via: option<borrow<tunnel>>) -> result<response, error>;
+}
+
+// SSH, with keys from the agent. Commands are argv, never a shell string:
+// no quoting class, and the audit shows the real command.
+interface ssh {
+  use types.{endpoint, tunnel, error, not-yet-or-error};
+
+  record target {
+    host: string,
+    user: string,
+    // 22 when absent.
+    port: option<u16>,
+  }
+
+  record run {
+    // The exit status; -1 when the command was killed by a signal.
+    status: s32,
+    stdout: list<u8>,
+    stderr: list<u8>,
+  }
+
+  // Run `argv` on `on`. A host that does not answer yet is `not-yet`.
+  exec: func(on: target, argv: list<string>, stdin: option<list<u8>>) -> result<run, not-yet-or-error>;
+  // Read the file `path` (SFTP). A file that does not exist yet is
+  // `not-yet`.
+  read: func(on: target, path: string) -> result<list<u8>, not-yet-or-error>;
+  // Write `data` to `path` with `mode` (SFTP).
+  write: func(on: target, path: string, data: list<u8>, mode: u32) -> result<_, error>;
+  // Forward a connection through `via` to `to` (an API behind a bastion).
+  forward: func(via: target, to: endpoint) -> result<tunnel, error>;
+}
+
+// Git, through the host's mirror in `$XDG_CACHE_HOME/dform/git/` (a local
+// path is read in place) and pushed with the host's keys.
+interface git {
+  use types.{error};
+
+  record file {
+    path: string,
+    data: list<u8>,
+  }
+
+  // The blob at `path` in `repo` at `rev` (a branch, a tag, a commit).
+  read: func(repo: string, rev: string, path: string) -> result<list<u8>, error>;
+  // Commit `files` onto `branch` of `repo` with `message`, and push it:
+  // the new commit's id.
+  commit: func(repo: string, branch: string, files: list<file>, message: string) -> result<string, error>;
+}
+
+// What the provider wants the operator to see, with dform's own output.
+interface log {
+  enum level {
+    debug,
+    info,
+    warn,
+    error,
+  }
+
+  log: func(level: level, message: string);
+}
+
+// A provider the host runs: it serves `dform:provider/provider` and may
+// import the host's interfaces. The WASI imports are there to be granted:
+// a component imports only what it uses, and the host refuses one that
+// imports `wasi:sockets`, `wasi:http` or `wasi:filesystem` without the
+// grant, naming the provider and the interface. What Rust std links on
+// wasm32-wasip2 (environment, stdio, exit, clocks, random) needs none.
+//
+// wasip2 is the target that exists on stable; the intent is wasip3 (its
+// async calls and streams), which changes no interface here.
+world hosted-provider {
+  import types;
+  import secrets;
+  import http;
+  import ssh;
+  import git;
+  import log;
+  include wasi:cli/imports@0.2.12;
+  include wasi:http/imports@0.2.12;
+
+  export dform:provider/provider@1.0.0;
+}
