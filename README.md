@@ -151,7 +151,26 @@ running it, no policy you can prove.
 
 In dform a resource block is a rule. Its clause is a query; its
 attributes are contributions to cells that other rules may also write.
-That is the whole difference. One more thing is worth saying up front:
+That is the whole difference, and it is why some of the words are
+different too. The ones you need:
+
+| word | means | in Terraform |
+|---|---|---|
+| **resource** | a thing dform makes and manages, of any type | resource |
+| **type** | what a resource is; a provider's (`aws.vpc`) or your own | resource type |
+| **component** | a type you define: a resource made of resources, with inputs and outputs | a module instance |
+| **module** | a `.df` file: a namespace of values, relations, types and components, named by its path | a module's source |
+| **use** | import a module into scope, with its inputs bound; rules it carries run here | `module` block, `source` |
+| **provider** | a module whose types a process implements; imported with `use`, its block its configuration | provider |
+| **stack** | a module the tool deploys, one deployment per key, with its own state | root module, workspace |
+| **key** | an input the target gives, selecting the deployment | workspace, `-var` |
+| **change** | one line of the plan: create, update, replace, delete | planned action |
+| **tick** | one round of an apply; a later tick waits on what an earlier one learned | a second run with `-target` |
+| **set**, **deny**, **why** | write a cell from anywhere; refuse a plan; the derivation of anything | no equivalent |
+
+There is no `instance`, no `data` block, no `locals`, no `variable`, no
+`count`: a resource with a clause is the repetition, a provider's table
+is the data source, a `let` is the local, an `input` is the variable. One more thing is worth saying up front:
 the same properties make dform easy for a model to draft. There is one
 way to spell each thing, every statement is right or wrong on its own
 with nothing to simulate, and the mistakes a draft makes, a variable
