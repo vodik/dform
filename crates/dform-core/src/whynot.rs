@@ -728,7 +728,7 @@ fn attempt(rule: &RuleStmt, seed: Env, facts: &BTreeSet<Atom>) -> Attempt {
     }
 }
 
-fn subst_lit(l: &Lit, env: &Env) -> Lit {
+pub(crate) fn subst_lit(l: &Lit, env: &Env) -> Lit {
     let t = |x: &Term| subst(x, env);
     let a = |x: &Atom| Atom {
         args: x.args.iter().map(t).collect(),
@@ -746,7 +746,7 @@ fn subst_lit(l: &Lit, env: &Env) -> Lit {
     }
 }
 
-fn subst(t: &Term, env: &Env) -> Term {
+pub(crate) fn subst(t: &Term, env: &Env) -> Term {
     match t {
         Term::Var(x) => match env.get(x) {
             Some(v) => Term::Val(v.clone()),

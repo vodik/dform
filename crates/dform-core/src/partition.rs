@@ -521,31 +521,18 @@ pub fn compile(program: &Program, given: &[Atom]) -> Result<Compiled> {
     transform::check_computed_writes(&rules, &facts, &schema)?;
     let (mut rules, facts) = transform::rewrite_computed_refs(rules, facts, &schema);
     rules.extend(transform::computed_prelude(&schema));
-    let mut opts = Options {
-        externs: lowered.externs.iter().map(|e| e.pred.clone()).collect(),
-        split: BTreeSet::new(),
-    };
-    let mut graph = build_lowered(rules.clone(), &facts, &schema, &opts);
-    // R-107: a negative cycle through a type's resources and an attribute
-    // of them (an agent reading its server's address) is partitioned by
-    // address too, kept when that stratifies it or the cycle is one between
-    // addresses (a resource reading itself, two reading each other).
-    while let Verdict::Rejected { scc, .. } = stratify(&graph) {
-        let more = own_type_reads(&scc, &opts.split);
-        if more.is_empty() {
-            break;
-        }
-        opts.split.extend(more);
-        let finer = build_lowered(rules.clone(), &facts, &schema, &opts);
-        match stratify(&finer) {
-            Verdict::Rejected { negative_edges, .. }
-                if !negative_edges
-                    .iter()
-                    .any(|e| e.rule.is_some() && e.from.addr.is_some() && e.to.addr.is_some()) =>
-            {
-                break;
-            }
-            _ => graph = finer,
+    let externs: BTreeSet<String> = lowered.externs.iter().map(|e| e.pred.clone()).collect();
+    let mut graph = stratified(&rules, &facts, &schema, &externs);
+    // R-116: a write whose type is a variable (`set r.metadata.labels.owner
+    // = .. where r in k8s`) is one node `(arg, *, P)`, which every reader
+    // of `P` of any type reads. On a negative cycle, each such rule is a
+    // rule per type it can be, kept when that stratifies.
+    if let Verdict::Rejected { .. } = stratify(&graph)
+        && let Some(expanded) = per_type(&rules, &facts, &graph)
+    {
+        let finer = stratified(&expanded, &facts, &schema, &externs);
+        if let Verdict::Stratified { .. } = stratify(&finer) {
+            (rules, graph) = (expanded, finer);
         }
     }
     Ok(Compiled {
@@ -557,6 +544,136 @@ pub fn compile(program: &Program, given: &[Atom]) -> Result<Compiled> {
         graph,
         inputs: lowered.inputs,
     })
+}
+
+/// The graph of `rules`, partitioned by address too where that stratifies
+/// a negative cycle (R-107).
+fn stratified(
+    rules: &[RuleStmt],
+    facts: &[Atom],
+    schema: &Schema,
+    externs: &BTreeSet<String>,
+) -> Graph {
+    let mut opts = Options {
+        externs: externs.clone(),
+        split: BTreeSet::new(),
+    };
+    let rules = rules.to_vec();
+    let facts = facts.to_vec();
+    let mut graph = build_lowered(rules.clone(), &facts, schema, &opts);
+    // R-107: a negative cycle through a type's resources and an attribute
+    // of them (an agent reading its server's address) is partitioned by
+    // address too, kept when that stratifies it or the cycle is one between
+    // addresses (a resource reading itself, two reading each other).
+    while let Verdict::Rejected { scc, .. } = stratify(&graph) {
+        let more = own_type_reads(&scc, &opts.split);
+        if more.is_empty() {
+            break;
+        }
+        opts.split.extend(more);
+        let finer = build_lowered(rules.clone(), &facts, schema, &opts);
+        match stratify(&finer) {
+            Verdict::Rejected { negative_edges, .. }
+                if !negative_edges
+                    .iter()
+                    .any(|e| e.rule.is_some() && e.from.addr.is_some() && e.to.addr.is_some()) =>
+            {
+                break;
+            }
+            _ => graph = finer,
+        }
+    }
+    graph
+}
+
+/// The namespace test `r in NS` lowers to (R-49, the resolver's
+/// `NAMESPACE`): `__namespace(NS, T)`, a fact per type of the namespace.
+const NAMESPACE: &str = "__namespace";
+
+/// `rules` with each contribution whose type is a variable written once
+/// per concrete type it can be (R-116): the type substituted through the
+/// whole rule, so `(arg, k8s.deployment, metadata)` and `(arg,
+/// k8s.namespace, metadata)` are apart and each copy reads its own type's
+/// resources. The types a variable can be are what its positive body
+/// literals allow: `__namespace(NS, T)` the namespace's types; `want(T,
+/// A)` (or another type-keyed relation) the types `graph` defines it for,
+/// when no rule defines it for a type that is not constant. `None` when no
+/// rule is expanded.
+fn per_type(rules: &[RuleStmt], facts: &[Atom], graph: &Graph) -> Option<Vec<RuleStmt>> {
+    let mut out = Vec::with_capacity(rules.len());
+    let mut any = false;
+    for r in rules {
+        let types = match (contrib_node(&r.head), r.head.args.first()) {
+            (Some(_), Some(Term::Var(t))) => types_of(t, r, facts, graph),
+            _ => None,
+        };
+        let (Some(types), Some(Term::Var(t))) = (types, r.head.args.first()) else {
+            out.push(r.clone());
+            continue;
+        };
+        any = true;
+        for typ in types {
+            let env = BTreeMap::from([(t.clone(), Value::Str(typ))]);
+            out.push(RuleStmt {
+                head: Atom {
+                    args: r
+                        .head
+                        .args
+                        .iter()
+                        .map(|a| crate::whynot::subst(a, &env))
+                        .collect(),
+                    ..r.head.clone()
+                },
+                body: r
+                    .body
+                    .iter()
+                    .map(|l| crate::whynot::subst_lit(l, &env))
+                    .collect(),
+            });
+        }
+    }
+    any.then_some(out)
+}
+
+/// The concrete types the variable `t` can be in `r` ([`per_type`]).
+fn types_of(t: &str, r: &RuleStmt, facts: &[Atom], graph: &Graph) -> Option<BTreeSet<String>> {
+    let is_t = |x: &Term| matches!(x, Term::Var(v) if v == t);
+    let mut out: Option<BTreeSet<String>> = None;
+    for l in &r.body {
+        let Lit::Pos(a) = l else { continue };
+        let allowed: Option<BTreeSet<String>> = match a.args.as_slice() {
+            [Term::Val(Value::Str(ns)), x] if a.pred == NAMESPACE && is_t(x) => Some(
+                facts
+                    .iter()
+                    .filter(|f| f.pred == NAMESPACE)
+                    .filter(|f| f.args[0].as_str() == Some(ns))
+                    .filter_map(|f| const_str(&f.args[1]))
+                    .collect(),
+            ),
+            [x, ..] if type_keyed(&a.pred) && is_t(x) => {
+                let defs = graph.nodes.iter().filter(|n| n.pred == a.pred);
+                let mut types = BTreeSet::new();
+                let mut constant = true;
+                for n in defs {
+                    match &n.typ {
+                        Some(typ) => {
+                            types.insert(typ.clone());
+                        }
+                        None => constant = false,
+                    }
+                }
+                constant.then_some(types)
+            }
+            _ => None,
+        };
+        if let Some(allowed) = allowed {
+            out = Some(match out {
+                Some(prev) => prev.intersection(&allowed).cloned().collect(),
+                None => allowed,
+            });
+        }
+    }
+    out
 }
 
 /// Insert a head node and the aggregate nodes behind it: a contribution's

@@ -1606,6 +1606,23 @@ addresses: a resource reading its own attribute (`(want, T["a"])` from
 `(attr, T["a"], ip)`), or two each reading the other's. An address the
 text does not fix (`where s in servers`) is every address of the type.
 
+A write whose type is a variable is grouped by each concrete type it can
+be (R-116): `set r.metadata.labels.owner = "simon" @default where r in
+k8s` beside `resource k8s.deployment server { metadata = { name:
+"traefik", namespace: traefik.metadata.name } }`. Grouped as one, the
+policy's `metadata` of any type would be one cell, and the Deployment's
+`metadata` would wait on it through the Namespace's, its own included.
+So when such a write is on a cycle, it is a rule per type: the types of
+the namespace (`r in k8s`), or every type the program wants (`r in
+resource`), each copy reading that type's resources only; the
+Deployment then reads the Namespace's `metadata` and the policy's
+Namespace copy, never its own. A rule reading the cell it writes stays a
+cycle, per type. Within a type, an attribute's group is its first
+segment, `metadata`, and its value is merged key by key: `metadata = {
+name, namespace }` and `metadata.name = ..` with `metadata.namespace =
+..` are the same contributions, and two objects writing different keys
+of it never disagree.
+
 ## Functions
 
 A function is pure and deterministic: a call is a term, evaluated when its
