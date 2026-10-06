@@ -553,7 +553,7 @@ deny(m) where {
 #| the world rule: a held deformation's resource moved since its plan
 deny(m) where {
   deformation("pending", r, before), world_digest(r, now), before != now
-  m = "the world changed under a pending deformation: ${r}"
+  m = "the world changed under a pending change: ${r}"
 }
 #| the world rule: an interrupted apply's resource moved since its plan
 deny(m) where {
@@ -1351,7 +1351,7 @@ pub mod file {
                 };
                 if s.tick.is_some_and(|t| t < tick) {
                     out.push(format!(
-                        "{} {at}: deformed again at tick {tick}; the plan file ran it in tick {}",
+                        "{} {at}: changed again at tick {tick}; the plan file ran it in tick {}",
                         c.action,
                         s.tick.unwrap_or_default()
                     ));
@@ -1376,7 +1376,7 @@ pub mod file {
                     name: k.1.clone(),
                 };
                 out.push(format!(
-                    "{} {at}: in the plan file, no longer a deformation",
+                    "{} {at}: in the plan file, no longer a change",
                     s.action
                 ));
             }

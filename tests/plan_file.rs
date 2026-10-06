@@ -179,7 +179,7 @@ fn a_world_mutated_between_ticks_is_refused_at_the_boundary() {
     );
     assert!(
         r.stderr.contains(
-            "update db.postgres[\"main\"]: deformed again at tick 2; the plan file ran it in tick 1"
+            "update db.postgres[\"main\"]: changed again at tick 2; the plan file ran it in tick 1"
         ),
         "{}",
         r.stderr

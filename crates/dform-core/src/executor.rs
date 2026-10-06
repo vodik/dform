@@ -674,7 +674,7 @@ pub fn check_boundary(
     }
     if !under.is_empty() {
         eprint!(
-            "the world changed under a pending deformation after tick {tick}:\n{}",
+            "the world changed under a pending change after tick {tick}:\n{}",
             format_changes(&under)
         );
     }

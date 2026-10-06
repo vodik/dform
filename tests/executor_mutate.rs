@@ -43,7 +43,7 @@ fn a_mutation_under_a_pending_deformation_stops_before_tick_two() {
     );
     assert!(
         r.stderr.contains(
-            "the world changed under a pending deformation after tick 1:\n\
+            "the world changed under a pending change after tick 1:\n\
              ~ compute.vm[\"app\"]\n  size: <none> -> 2\n"
         ),
         "{}",
@@ -53,7 +53,7 @@ fn a_mutation_under_a_pending_deformation_stops_before_tick_two() {
     assert!(
         r.stderr.contains(
             "constraint violations after tick 1:\n\
-             - the world changed under a pending deformation: compute.vm[\"app\"]\n"
+             - the world changed under a pending change: compute.vm[\"app\"]\n"
         ),
         "{}",
         r.stderr
