@@ -141,3 +141,19 @@ fn a_statement_that_derives_nothing_is_listed_with_why() {
         r.stderr
     );
 }
+
+/// `why` explains a copy's output by the name the program reads it by.
+#[test]
+fn why_explains_a_copys_output() {
+    let s = Scratch::project("copy-ref-why");
+    s.write("databases.df", DB);
+    s.write("main.df", USER);
+    let r = s.run(&["why", "one.host", "main.df"]).success();
+    assert!(
+        r.stdout
+            .starts_with("output one.host = \"one.apps.svc\"\n  merged from 1 contribution\n")
+            && r.stdout.contains("├─ input one.name = \"one\"\n"),
+        "{}",
+        r.stdout
+    );
+}

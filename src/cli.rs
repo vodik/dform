@@ -3368,7 +3368,8 @@ fn why_tree(
     signatures: Option<&crate::infer::Signatures>,
 ) -> Result<()> {
     let printed = query::printed(pattern, &res.facts);
-    let matched = match input_cell(pattern, &res.facts)? {
+    let cells = [crate::modules::INPUT, crate::modules::LET];
+    let matched = match input_cell(pattern, &cells, &res.facts)? {
         Some(m) => m,
         // An address as the plan prints it, `ovh.ssh_key k3s.admin`, or
         // its path, `k3s.admin` (R-111).
@@ -3401,6 +3402,12 @@ fn why_tree(
             };
             tree::find(pat, &res.facts)?
         }
+    };
+    // A copy's output, `synapse_db.conn` (R-120), when no resource is so
+    // named.
+    let matched = match matched.is_empty() {
+        true => input_cell(pattern, &[crate::transform::OUTPUT], &res.facts)?.unwrap_or_default(),
+        false => matched,
     };
     if matched.is_empty() {
         bail!("why: no fact matches {pattern}");
@@ -3443,11 +3450,16 @@ fn why_tree(
 /// A fact `why` explains, and the part of it the pattern named.
 type Matched = (Atom, Option<tree::Focus>);
 
-/// `why NAME`: the cell of an input or a `let` by the name the stack reads
-/// it by (R-54, R-55): `replicas`, a leaf of an object input
-/// `nodes.count`, a used module's `synapse.replicas`. The stack's own
-/// name first, then a used module's, its scope the name's first segments.
-fn input_cell(pattern: &str, facts: &BTreeSet<Atom>) -> Result<Option<Vec<Matched>>> {
+/// `why NAME`: the cell of one of `kinds` (an input, a `let`, an output)
+/// by the name the stack reads it by (R-54, R-55): `replicas`, a leaf of
+/// an object input `nodes.count`, a used module's `synapse.replicas`, a
+/// copy's output `synapse_db.conn` (R-120). The stack's own name first,
+/// then a used module's or a copy's, its scope the name's first segments.
+fn input_cell(
+    pattern: &str,
+    kinds: &[&str],
+    facts: &BTreeSet<Atom>,
+) -> Result<Option<Vec<Matched>>> {
     let plain = !pattern.is_empty()
         && pattern
             .chars()
@@ -3462,7 +3474,7 @@ fn input_cell(pattern: &str, facts: &BTreeSet<Atom>) -> Result<Option<Vec<Matche
             .match_indices('.')
             .map(|(i, _)| (&pattern[..i], &pattern[i + 1..])),
     );
-    for kind in [crate::modules::INPUT, crate::modules::LET] {
+    for kind in kinds {
         for (scope, path) in &splits {
             let pat = Atom {
                 pred: "attr".into(),
