@@ -179,7 +179,7 @@ key) in dependency order, each run headed and confirmed on its own; a
 | `plan`, `apply`, `why`, `query`, `diff`, `test`, `fmt`, `log` | on a target |
 | `output TARGET [NAME]` | a deployment's outputs |
 | `stack list`, `stack rekey`, `stack unlock` | the project's stacks |
-| `state show`, `state taint`, `state mv` | a deployment's state |
+| `state show`, `state taint`, `state forget-host`, `state mv` | a deployment's state |
 | `provider check`, `provider schema` | providers |
 | `dev strata`, `dev graph`, `dev effects`, `dev --world W --inventory I --provider P --chaos C COMMAND` | the mock and the evaluator |
 | `doc [TARGET]` | the doc comments as Markdown, on stdout |
@@ -1741,7 +1741,7 @@ nothing before it binds is a compile error. Evaluation is by rounds: every
 call the rules demand is asked once, then the program is evaluated again,
 until no call is new.
 
-`file`, `env` and `time` are built-in fact providers, declared like any
+`file`, `env`, `time` and `ssh` are built-in fact providers, declared like any
 provider and needing no `dform.toml` source:
 
 | provider | externs                                                   | answered by |
@@ -1749,6 +1749,36 @@ provider and needing no `dform.toml` source:
 | `file`   | `file.text(+path, -value: string)`, a path from the project root; the loaders, `yaml(path)` .. ("Documents") | dform |
 | `env`    | `env.var(+name, -value: secret(string))`; `env.var(NAME)` as a term reads it | dform |
 | `time`   | `time.now(-t: time)`, the current time in UTC; `time.now()` as a term reads it | dform |
+| `ssh`    | `ssh.read(+host, +user, +path, -content: secret(string))` over SFTP; `ssh.run(+host, +user, +command, -stdout: string)` over exec; each as a term reads it | dform |
+
+`ssh` is an SSH client inside dform, never the `ssh` binary or the
+operator's ssh config. The host is an `ip` or a string, `NAME:PORT` for a
+port other than 22. The key is the operator's: the agent's
+(`SSH_AUTH_SOCK`) first, then `~/.ssh/id_ed25519` and `~/.ssh/id_rsa`
+(a key with a passphrase is used through the agent); never one in the
+program. A host's key is recorded in the deployment's state by the first
+apply that meets it (type, SHA-256 fingerprint, when) and checked on every
+contact after: a changed key is an error naming both fingerprints until
+`dform state forget-host HOST [TARGET]` forgets it. A host that does not
+answer yet (the connection refused, no answer within 10s, no route) and a
+`read` of a path that does not exist yet are "not yet": the answer is an
+open null, and an apply waits on it ("Timeouts, retries and waiting"),
+asking again until the host answers or the wait's budget runs out. An
+authentication failure, a changed host key, a file it may not read and a
+command that exits non-zero (the error names the status and its stderr)
+are errors. `ssh.run`'s stdout is the command's, byte for byte (a
+trailing newline included).
+
+```dform
+provider ssh
+# A k3s server's kubeconfig, once cloud-init has written it.
+let raw = ssh.read(server.public_ip, "ubuntu", "/etc/rancher/k3s/k3s.yaml")
+```
+
+`ssh.read`'s content is a secret from the first answer: `query` and `why`
+print it by its call (`ssh.read["HOST,USER,PATH"]."4"`), and the plan
+file records its keyed digest (`inputs.answers`), never the bytes; `apply
+PLAN` reads it again and refuses the plan when the digest moved.
 
 `random` is not a provider: `random.password` and friends are std
 functions (below), and `provider random` is an error saying so.
