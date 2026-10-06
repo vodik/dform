@@ -21,3 +21,4 @@
 - Nothing is added to crates/dform-grpc (DESIGN.org R-13): it is the frozen native bridge until the wasm bridge passes `provider check`.
 - Decisions of the 2026-10-01 review are DESIGN.org "Review of 2026-10-01: decisions" (R-1 to R-14); a ticket that cites one follows it.
 - After each fan-out round lands, one consolidation pass (WORK.org "Consolidation pass after each round") runs before the next round starts: duplicated helpers, parallel implementations and copied test utilities are merged to one, with no behaviour change.
+- No shell-outs: git, ssh, http and archives are in-process libraries (gix, russh, the HTTP client). The only `Command::new` allowed are the provider launcher and the configured audit sink (`sh -c`), because the operator asked for a command there.
