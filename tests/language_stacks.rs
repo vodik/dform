@@ -7,7 +7,7 @@ use common::{Scratch, copy_dir, repo};
 use std::process::{Command, Stdio};
 
 const NET: &str = r#"
-provider fake
+use fake
 resource net.vpc main { cidr = "10.0.0.0/16" }
 output vpc_cidr = "10.0.0.0/16"
 output vpc_id = ref(net.vpc, "main", "id")
@@ -32,7 +32,7 @@ fn a_local_backend_holds_the_state() {
     );
     s.write(
         "p.df",
-        "\nprovider fake\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\n",
+        "\nuse fake\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\n",
     );
     s.run(&["apply", "p.df"]).success();
     assert!(s.path("state/x/state.json").exists());
@@ -55,7 +55,7 @@ fn a_local_backend_is_relative_to_the_project_root() {
     );
     s.write(
         "infra/stacks/p.df",
-        "\nprovider fake\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\n",
+        "\nuse fake\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\n",
     );
     s.run(&["-C", "infra", "apply", "p"]).success();
     assert!(s.path("infra/state/x/state.json").exists());
@@ -87,7 +87,7 @@ fn a_local_backend_is_relative_to_the_project_root() {
 #[test]
 fn a_backend_is_checked() {
     let s = Scratch::project("lang-stack-backend-check");
-    s.write("p.df", "\nprovider fake\n");
+    s.write("p.df", "\nuse fake\n");
     for (backend, error) in [
         ("gcs(\"b\")", "unknown backend"),
         ("s3(\"b\")", "takes a bucket, a prefix"),
@@ -181,7 +181,7 @@ fn another_stack_reads_the_outputs() {
     s.write(
         "app.df",
         r#"
-provider fake
+use fake
 use stacks.net as network
 resource net.subnet a {
   cidr = network.vpc_cidr
@@ -212,7 +212,7 @@ fn the_registry_is_the_projects() {
     s.write("infra/dform.toml", "[project]\nedition = \"2026\"\n");
     s.write("infra/stacks/net.df", NET);
     let app = r#"
-provider fake
+use fake
 use stacks.net as network
 resource net.subnet a {
   cidr = network.vpc_cidr
@@ -259,7 +259,7 @@ fn the_provider_statement_selects_the_schema() {
     );
     s.write(
         "p.df",
-        "\nprovider mine { source = \"mine\" }\nresource x.thing a {}\n",
+        "\nuse mine { source = \"mine\" }\nresource x.thing a {}\n",
     );
     let r = s.run(&["plan", "p.df"]).failure();
     assert!(r.stderr.contains("size"), "{}", r.stderr);
@@ -271,20 +271,17 @@ fn the_provider_statement_selects_the_schema() {
 }
 
 /// A resource's type is declared by the schema of the provider that
-/// applies it: pngu on `provider fake` (which declares only the demo
+/// applies it: pngu on `use fake` (which declares only the demo
 /// types) is refused at plan, naming the resource, the provider block and
 /// the schema that declares the type, not handed to the fake at apply. On
-/// `provider gke` it plans and applies.
+/// `use gke` it plans and applies.
 #[test]
 fn a_type_the_provider_does_not_declare_is_a_plan_error() {
     let s = Scratch::new("lang-stack-undeclared");
     copy_dir(&repo().join("examples/pngu"), &s.dir);
     let src = s.read("stacks/pngu.df");
-    assert!(src.contains("provider gke {"), "{src}");
-    s.write(
-        "stacks/pngu.df",
-        &src.replace("provider gke {", "provider fake {"),
-    );
+    assert!(src.contains("use gke {"), "{src}");
+    s.write("stacks/pngu.df", &src.replace("use gke {", "use fake {"));
     let r = s.run(&["plan", "pngu"]).failure();
     assert!(
         r.stderr
@@ -300,7 +297,7 @@ fn a_type_the_provider_does_not_declare_is_a_plan_error() {
         r.stderr
     );
     // The provider block is labeled; nothing was planned.
-    assert!(r.stderr.contains("provider fake {"), "{}", r.stderr);
+    assert!(r.stderr.contains("use fake {"), "{}", r.stderr);
     assert!(r.stderr.contains("─ provider fake\n"), "{}", r.stderr);
     assert_eq!(
         r.stdout,
@@ -349,7 +346,7 @@ fn a_program_with_no_provider_starts_none() {
         let r = s.run(args).failure();
         assert!(
             r.stderr.contains(
-                "the program names no provider: add `provider NAME` (dform.toml names its \
+                "the program names no provider: add `use NAME` (dform.toml names its \
                  source) or run under `dev --provider`"
             ),
             "{args:?}: {}",
@@ -367,7 +364,7 @@ fn a_program_with_no_provider_starts_none() {
     );
     s.write(
         "p.df",
-        "\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\nprovider fake\n",
+        "\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\nuse fake\n",
     );
     s.run(&["plan", "p.df"]).success();
 }

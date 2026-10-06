@@ -51,7 +51,7 @@ impl Lowerer<'_> {
             let d = Diagnostic::error(span, "random is not a provider").with_help(
                 "random.password, random.bytes, random.id, random.uuid and \
                      random.signing_key are std functions (std/random.df): delete the \
-                     `provider random` statement and call them",
+                     `use random` statement and call them",
             );
             self.diags.push(d);
             return Err(Skip);
@@ -126,7 +126,7 @@ impl Lowerer<'_> {
         // `effects` reads each guarded declaration's clause off it.
         if !clause.is_empty() {
             let i = others.iter().position(|o| o == n).unwrap_or_default();
-            let group = format!("provider {name}");
+            let group = format!("use {name}");
             out.push(crate::modules::declared(&group, i, clause.clone(), span));
         }
         match others.first() {
@@ -175,9 +175,9 @@ impl Lowerer<'_> {
                 if others.len() > 1 {
                     let sites: Vec<(String, Span)> = others
                         .iter()
-                        .map(|o| (format!("provider {name}"), self.span(o)))
+                        .map(|o| (format!("use {name}"), self.span(o)))
                         .collect();
-                    out.extend(crate::modules::denies(&format!("provider {name}"), &sites));
+                    out.extend(crate::modules::denies(&format!("use {name}"), &sites));
                 }
             }
         }

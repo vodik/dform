@@ -171,6 +171,9 @@ pub struct Decls {
     stacks: BTreeSet<String>,
     /// The name a `use` binds -> the module path it names.
     uses: BTreeMap<String, String>,
+    /// The providers `use`s import (R-112): a path of one segment that
+    /// names no file of the project.
+    providers: BTreeSet<String>,
     /// (type, attribute path) -> the type its `ref(T)` takes (R-74).
     refs: BTreeMap<(String, String), String>,
 }
@@ -210,10 +213,26 @@ impl Decls {
                 d.named.insert(path);
             }
         }
+        let providers: Vec<(String, String)> = d
+            .uses
+            .iter()
+            .filter(|(_, p)| !p.contains('.') && p.as_str() != "std" && !d.files.contains_key(*p))
+            .map(|(n, p)| (n.clone(), p.clone()))
+            .collect();
+        for (name, path) in providers {
+            d.uses.remove(&name);
+            d.named.remove(&path);
+            d.providers.insert(path);
+        }
         for f in files {
             d.declare(&f.tree);
         }
         d
+    }
+
+    /// Whether `n` is a `use` of a provider (R-112).
+    fn provider_use(&self, n: &SyntaxNode) -> bool {
+        crate::syntax::resolve::maybe_provider_use(n).is_some_and(|p| self.providers.contains(&p))
     }
 
     /// Take the schema's types and the types its `ref(T)` attributes take,
@@ -264,6 +283,7 @@ impl Decls {
                         self.modules.insert(x);
                     }
                 }
+                SyntaxKind::USE if self.provider_use(&n) => {}
                 SyntaxKind::USE => {
                     self.modules.insert(crate::syntax::resolve::use_parts(&n).1);
                 }
@@ -593,6 +613,7 @@ impl Decls {
             }
             SyntaxKind::TYPE_ALIAS if is_declared() => decl(Symbol::Alias(name)),
             SyntaxKind::COMPONENT if is_declared() => decl(Symbol::Module(name)),
+            SyntaxKind::USE if self.provider_use(&parent) => What::Provider,
             SyntaxKind::USE | SyntaxKind::INSTANCE => self.statement_path(&parent, t),
             SyntaxKind::PROVIDER => What::Provider,
             SyntaxKind::DECL | SyntaxKind::EXTERN | SyntaxKind::INPUT_RELATION
@@ -688,8 +709,11 @@ impl Decls {
         }
         let block = entry.as_ref().and_then(|e| e.parent());
         // `k = ..` in an instance or a use block: the component's or the
-        // module's input `k`.
-        match block.and_then(|b| b.parent()) {
+        // module's input `k`; a provider's `use` block holds its settings.
+        match block
+            .and_then(|b| b.parent())
+            .filter(|s| !self.provider_use(s))
+        {
             Some(i) if matches!(i.kind(), SyntaxKind::INSTANCE | SyntaxKind::USE) && first => {
                 return What::Name(Symbol::Value(self.block_target(path), name), false);
             }

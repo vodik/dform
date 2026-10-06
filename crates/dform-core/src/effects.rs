@@ -34,17 +34,17 @@ pub struct ScopeEffects {
     pub reads: BTreeSet<String>,
     pub writes: BTreeSet<String>,
     pub offers: BTreeMap<String, String>,
-    /// Each guarded provider the scope starts (R-104), and where its
+    /// Each guarded provider the scope uses (R-104), and where its
     /// clause holds: the combinations of the enum inputs it reads, or the
     /// clause as written when it reads more.
-    pub starts: BTreeSet<String>,
+    pub uses: BTreeSet<String>,
 }
 
 /// Every scope's effects of `program`: the stack, each module instance
 /// and each pack `use`d.
 pub fn compute(program: &Program, schema: &Schema) -> Result<BTreeMap<String, ScopeEffects>> {
     let mut out: BTreeMap<String, ScopeEffects> = BTreeMap::new();
-    out.entry(STACK.to_string()).or_default().starts = guarded_providers(program);
+    out.entry(STACK.to_string()).or_default().uses = guarded_providers(program);
     collect_offers(program, &mut out);
 
     let compiled = partition::compile(program, &schema.facts)?;
@@ -85,8 +85,9 @@ pub fn compute(program: &Program, schema: &Schema) -> Result<BTreeMap<String, Sc
     Ok(out)
 }
 
-/// The providers a stack starts under a clause (R-104), each with where it
-/// holds: `provider aws when cloud == "aws"`, a combination of the enum
+/// The providers a stack uses under a clause (R-104), each with where it
+/// holds: `provider aws when cloud == "aws"` for `use aws { .. } where cloud
+/// == "aws"`, a combination of the enum
 /// inputs the clause reads per line it holds in; a clause that reads
 /// anything else as written.
 fn guarded_providers(program: &Program) -> BTreeSet<String> {
@@ -99,9 +100,12 @@ fn guarded_providers(program: &Program) -> BTreeSet<String> {
         else {
             continue;
         };
-        if !name.starts_with("provider ") {
+        // A provider's `use` is the group `use NAME` (a module's or a
+        // copy's is its bare name): the row says which provider.
+        let Some(provider) = name.strip_prefix("use ") else {
             continue;
-        }
+        };
+        let name = format!("provider {provider}");
         let reads = crate::lint::guard_reads(&r.body, &space);
         let held: Option<Vec<String>> = crate::lint::combinations(&reads)
             .into_iter()

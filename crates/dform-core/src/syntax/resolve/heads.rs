@@ -79,6 +79,9 @@ impl Lowerer<'_> {
                             format!("the component `{m}`"),
                         );
                     }
+                    // A provider's `use` (R-112) names its namespace,
+                    // which its types and externs claim.
+                    USE if provider_use(&n, self.units, &self.decls.deployed).is_some() => {}
                     USE => {
                         let (path, m) = use_parts(&n);
                         if path.split('.').next() != Some("std") {

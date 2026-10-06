@@ -93,7 +93,7 @@ edition = "2026"                                 # the language edition: require
 dform = ">=0.1"
 
 [providers]
-aws = { source = "aws-mock", version = "2.1" }   # `provider aws` in a program
+aws = { source = "aws-mock", version = "2.1" }   # `use aws` in a program
 google = { source = "providers/gcp" }            # a path under the root
 k8s = { source = "k8s", timeout = "2m" }         # each call's timeout (60s by default)
 ovh = { path = "~/src/dform/target/debug/dform-provider-ovh" }  # the executable itself
@@ -396,7 +396,7 @@ stack's `[stacks.NAME]` says each key value deploys into its own account
 (or world), and turns the lint off; `dform.df`'s says so, since its
 identity module's names are fixed. A provider whose `provider` block
 reads the key, or a value that depends on it, or a computed attribute of
-a resource (`provider k8s { kubeconfig = k3s.kubeconfig }`, read back
+a resource (`use k8s { kubeconfig = k3s.kubeconfig }`, read back
 from a server each deployment creates) reaches a per-deployment account
 already, and its names are not linted (R-117).
 
@@ -527,7 +527,7 @@ was built from), and dform refuses one of its built-in providers (the mock,
 
 The mock can pretend to be any provider: a provider it plays is a schema file of
 plain facts, `providers/<name>/schema.df`, selected by the program's
-`provider` statements (`provider gke`, or `provider aws { source =
+`provider` statements (`use gke`, or `use aws { source =
 "providers/aws-mock" }` for a directory or `.df` file relative to the
 program's file), by the manifest's `[providers]` entry of the name, or,
 overriding them, with `dform dev --provider NAME` (repeatable). There is
@@ -535,7 +535,7 @@ no default: a program with no `provider` statement starts none, and
 `plan`, `apply`, `query`, `why` and `test` refuse it, "the program names no
 provider: add `provider NAME` (dform.toml names its source) or run under
 `dev --provider`". A `provider` or `instance` with no entries is written
-without braces (`provider fake`, `instance network blue`); `fmt` drops a
+without braces (`use fake`, `instance network blue`); `fmt` drops a
 `{}`. In any block an entry that is only a path takes the value of its
 last segment's name, `region` for `region = region` and
 `spec.selector.color` for `spec.selector.color = color`, as `{ a }` is
@@ -556,17 +556,17 @@ declare it: `provider fake does not declare google.compute_subnetwork;
 declared by: gke`. A provider's types are named under it (`aws.vpc` is
 provider aws's), so the error says which `provider` statement to add. A
 type the program declares itself with a `type` block is the mock's to
-play. A mock playing several providers on one link (`provider google`
-and `provider k8s` on mock schemas) takes no settings from any of them.
+play. A mock playing several providers on one link (`use google`
+and `use k8s` on mock schemas) takes no settings from any of them.
 
 A `provider` block's settings other than `source` configure the provider,
 and read like any rule reads: inputs, value names, tables and `env.var`.
 A keyed deployment configures its providers by its key:
 
 ```dform
-provider env
+use env
 
-provider google {
+use google {
   project = gcp.project_id                                # an input the env's `set` gives
   credentials = env.var("GOOGLE_CREDENTIALS_${env}")      # a secret, per key
   expect_account = gcp.project_id
@@ -577,7 +577,7 @@ The block lowers to `provider_config("google", { project: .., credentials:
 .. })`, which reaches the provider at a second Configure as `settings` once
 the evaluation knows it (the provider serves nothing until then; see "The
 Kubernetes provider"). `env.var("NAME")` is the built-in `env` provider's
-extern (`provider env`), answering the
+extern (`use env`), answering the
 process environment's variable as a `secret(string)`: never persisted, and
 recorded in the plan file only by its label and its value's digest keyed
 with the stack's plan key (`inputs.env`: `{"sensitive": "env.var/NAME",
@@ -700,8 +700,8 @@ account). Select it by path; the program the mock plans applies to a cluster
 unchanged:
 
 ```dform
-provider k8s { source = "./providers/k8s" }   # a directory holding dform-provider-k8s
-provider k8s { source = "bin/dform-provider-k8s" }        # an executable
+use k8s { source = "./providers/k8s" }   # a directory holding dform-provider-k8s
+use k8s { source = "bin/dform-provider-k8s" }        # an executable
 ```
 
 - A program may name the cluster itself, as a managed cluster's kubeconfig
@@ -799,7 +799,7 @@ provider k8s { source = "bin/dform-provider-k8s" }        # an executable
   `cloud_computed` its `status`. Offline the inventory is empty, and so it
   is for a provider configured by `provider_config` (discovery runs before
   the program is evaluated, and is not run again).
-- A provider configured by the program (`provider k8s { kubeconfig = .. }`)
+- A provider configured by the program (`use k8s { kubeconfig = .. }`)
   serves the static schema until its settings are known: the snapshot,
   extended by the kinds the deployment's cluster served beyond it when it
   was last reached (its CRDs, cached at
@@ -1680,7 +1680,7 @@ reads
 writes (cells as `(type, path)` partitions, `*` for a variable type or
 path, the input cells its `set`s give, another copy's input cells)
 and offers (its declared outputs, with their types); and for the stack,
-the providers it starts under a clause, `starts  provider aws when cloud
+the providers it uses under a clause, `uses  provider aws when cloud
 == "aws"`, a row per combination of the enum inputs the clause reads
 (the clause as written when it reads more). Read off the
 lowered program's rule heads and bodies and the partition graph; no
@@ -1941,7 +1941,7 @@ declare one: `provider NAME {}` brings the provider's externs into scope,
 with their modes from its schema.
 
 ```dform
-provider aws
+use aws
 
 resource aws.subnet "private-${zone}" {
   availability_zone = zone
@@ -1985,7 +1985,7 @@ are errors. `ssh.run`'s stdout is the command's, byte for byte (a
 trailing newline included).
 
 ```dform
-provider ssh
+use ssh
 # A k3s server's kubeconfig, once cloud-init has written it.
 let raw = ssh.read(server.public_ip, "ubuntu", "/etc/rancher/k3s/k3s.yaml")
 ```
@@ -1996,7 +1996,7 @@ file records its keyed digest (`inputs.answers`), never the bytes; `apply
 PLAN` reads it again and refuses the plan when the digest moved.
 
 `random` is not a provider: `random.password` and friends are std
-functions (below), and `provider random` is an error saying so.
+functions (below), and `use random` is an error saying so.
 
 A program that writes `extern file.text(..)` is told to write `provider
 file {}` instead; `extern` is the schema's word (provider schemas, the
@@ -2020,7 +2020,7 @@ deployment's state; a plan keeps nothing. `dform state taint memo KEY
 `why` names a kept value `memo, first kept <when>`:
 
 ```dform
-provider time
+use time
 let created = memo.first("db-created", time.now())   # observed once
 warn "rotate the database password" where {
   memo.first("db-created", time.now(), created)

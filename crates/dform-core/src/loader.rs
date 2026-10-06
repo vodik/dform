@@ -121,12 +121,14 @@ impl Mounts {
     }
 
     /// Whether `name` is a provider a `use` may import (R-112): one
-    /// `dform.toml` names, a built-in (`file`, `env`, the mock's schemas)
-    /// or a project's `providers/NAME/`.
+    /// `dform.toml` names, a built-in (`file`, `env`, the mock's schemas,
+    /// by their name or their types' namespace: `aws` of aws-mock's
+    /// `aws.vpc`) or a project's `providers/NAME/`.
     fn provider(&self, name: &str) -> bool {
         self.providers.contains(name)
             || crate::externs::builtin(name).is_some()
             || crate::schema::builtin(name).is_some()
+            || crate::syntax::resolve::builtin_namespace(name)
             || self.root.join("providers").join(name).is_dir()
     }
 
@@ -285,7 +287,10 @@ fn load_units(
                 // One segment that is no module: a provider's `use`
                 // (R-112), which the resolver configures.
                 Target::Missing(_)
-                    if n.kind() == USE && !path.contains('.') && mounts.provider(&path) => {}
+                    if n.kind() == USE
+                        && !path.contains('.')
+                        && (mounts.provider(&path) || crate::syntax::resolve::names_source(&n)) => {
+                }
                 Target::Missing(tried) => {
                     let tried: Vec<String> = tried.iter().map(|f| display_name(f)).collect();
                     let what = if n.kind() == USE {

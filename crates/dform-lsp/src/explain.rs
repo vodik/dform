@@ -705,7 +705,9 @@ fn field_doc(p: &refs::Project, t: &SyntaxToken) -> Option<String> {
 fn run_time_type(files: &[Parsed], typ: &str) -> Option<String> {
     let ns = typ.split('.').next()?;
     let declared = files.iter().flat_map(|f| f.tree.descendants()).any(|n| {
-        n.kind() == SyntaxKind::PROVIDER && names::declared_name(&n).is_some_and(|x| x.text() == ns)
+        (n.kind() == SyntaxKind::PROVIDER
+            && names::declared_name(&n).is_some_and(|x| x.text() == ns))
+            || dform_core::syntax::resolve::maybe_provider_use(&n).is_some_and(|x| x == ns)
     });
     (declared && typ.contains('.'))
         .then(|| format!("resource type `{typ}`\n\ndeclared by provider {ns} at run time\n"))

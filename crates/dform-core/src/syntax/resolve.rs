@@ -423,7 +423,7 @@ pub fn use_parts(n: &SyntaxNode) -> (String, String) {
 }
 
 /// A `use` of a provider (R-112 amendment 2): `use ovh { endpoint = .. }`
-/// imports the provider's namespace and configures it, as `provider ovh
+/// imports the provider's namespace and configures it, as `use ovh
 /// { .. }` did. A `use` is a provider's when its path is one segment that
 /// names no module of the program (`units`), no stack it deploys, no
 /// component its file declares and not `std`; the provider's name.
@@ -447,6 +447,36 @@ pub fn provider_use(n: &SyntaxNode, units: &[Unit], deployed: &[Deployed]) -> Op
         && !deployed.iter().any(|d| d.path == written)
         && !local_component())
     .then_some(written)
+}
+
+/// Whether `name` is the namespace of a built-in schema's types: `aws`
+/// of the aws mock's `aws.vpc` (R-112), which `dev --provider aws-mock`
+/// serves.
+pub fn builtin_namespace(name: &str) -> bool {
+    schema_types()
+        .iter()
+        .any(|t| t.split_once('.').is_some_and(|(ns, _)| ns == name))
+}
+
+/// Whether a `use`'s block names a `source`: a provider's setting, the
+/// executable that serves it (`use mine { source = "mine" }`).
+pub fn names_source(n: &SyntaxNode) -> bool {
+    node(n, BLOCK).is_some_and(|b| {
+        b.children()
+            .filter(|a| a.kind() == ASSIGN)
+            .any(|a| node(&a, BLOCK_PATH).is_some_and(|p| p.text() == "source"))
+    })
+}
+
+/// The provider a `use` may import, read from its statement alone: a
+/// path of one segment that is not `std`. Whether it is one takes the
+/// program's modules ([`provider_use`]); a tool with only the tree (`fmt`,
+/// the language server's schema lookup) takes a module's `use` along,
+/// which no provider serves.
+pub fn maybe_provider_use(n: &SyntaxNode) -> Option<String> {
+    let (written, _) = use_parts(n);
+    (n.kind() == USE && !written.is_empty() && !written.contains('.') && written != "std")
+        .then_some(written)
 }
 
 /// The name a `provider` statement or a provider's `use` configures.
@@ -3353,7 +3383,7 @@ impl<'u> Lowerer<'u> {
             return Ok(());
         };
         // A provider's name is in the scope's one namespace too (R-112):
-        // `use db` beside `provider db` is the error two uses are.
+        // `use db` beside `use db` is the error two uses are.
         let same: Vec<SyntaxNode> = parent
             .children()
             .filter(|c| matches!(c.kind(), USE | INSTANCE | PROVIDER))

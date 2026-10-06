@@ -183,7 +183,7 @@ pub fn load(t: &Target, version: &str, read: Reader, obs: &mut dyn Observer) -> 
 
 /// What a run that starts providers says of a program that names none
 /// (R-26): nothing is started in its place.
-pub const NO_PROVIDER: &str = "the program names no provider: add `provider NAME` \
+pub const NO_PROVIDER: &str = "the program names no provider: add `use NAME` \
      (dform.toml names its source) or run under `dev --provider`";
 
 impl Loaded {
@@ -431,7 +431,7 @@ pub struct Planned {
 pub struct Evaluator {
     pub backend: Rc<Providers>,
     pub externs: Externs<'static>,
-    /// `provider ssh`'s host keys: what an apply keeps in state
+    /// `use ssh`'s host keys: what an apply keeps in state
     /// (`plugin::ssh::Ssh::keep`).
     pub ssh: Rc<crate::plugin::ssh::Ssh>,
     pub tables: Rc<tables::Tables>,
@@ -979,7 +979,7 @@ impl Located {
                 false => None,
             },
         ));
-        // `provider ssh`: the host keys state knows, and those met.
+        // `use ssh`: the host keys state knows, and those met.
         let ssh = Rc::new(crate::plugin::ssh::Ssh::new(st.known_hosts.clone()));
         let mut base_extra = self.set_facts.clone();
         base_extra.extend(opts.data.iter().cloned());

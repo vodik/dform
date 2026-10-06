@@ -472,8 +472,8 @@ impl Providers {
     }
 
     /// The link a program names: by the provider's own name, else by the
-    /// name of the `provider` block that selects it. A mock playing several
-    /// providers on one link (`provider google` and `provider k8s` on the
+    /// name of the `use` that selects it. A mock playing several
+    /// providers on one link (`use google` and `use k8s` on the
     /// built-in schemas) is none of theirs: one's settings would
     /// configure the others' types too, so it plays them unconfigured.
     fn link_for(&self, name: &str) -> Option<usize> {
@@ -741,13 +741,11 @@ impl Providers {
             match (ns, by.first()) {
                 (Some(ns), _) if !names.iter().any(|n| n == ns) => {
                     d = d.with_help(format!(
-                        "{typ} is provider {ns}'s type: add `provider {ns}` to the stack"
+                        "{typ} is provider {ns}'s type: add `use {ns}` to the stack"
                     ));
                 }
                 (None, Some(first)) => {
-                    d = d.with_help(format!(
-                        "configure the provider that does: `provider {first} {{ }}`"
-                    ));
+                    d = d.with_help(format!("configure the provider that does: `use {first}`"));
                 }
                 _ => {}
             }

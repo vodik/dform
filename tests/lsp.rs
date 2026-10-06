@@ -1039,7 +1039,7 @@ fn prepare_rename_refuses_what_is_not_the_programs() {
             1,
             "dform's own relation",
         ),
-        (&stack, "provider fake", 10, "provider's name"),
+        (&stack, "use fake", 5, "provider's name"),
         (&stack, "vpc_peer_pair(ia, ib", 15, "variable"),
     ] {
         let params = prepare(file, find(file, needle, ahead));
@@ -1231,7 +1231,7 @@ fn diagnostics_of_a_plan_with_a_replacement_are_the_plans() {
     let s = common::Scratch::project("lsp-replace");
     let net = r#"
 
-provider fake
+use fake
 
 resource net.vpc main { cidr = "10.0.0.0/16" }
 resource net.subnet a { vpc_id = ref(net.vpc, "main", "id"), tier = "web" }
@@ -1302,7 +1302,7 @@ fn an_s3_deployment_is_read_with_credentials() {
         .create_bucket()
         .unwrap();
     let vpc = "resource net.vpc main { cidr = \"10.0.0.0/16\" }\n";
-    let net = format!("\n\nprovider fake\n\n{vpc}lifecycle(main, \"prevent_destroy\")\n");
+    let net = format!("\n\nuse fake\n\n{vpc}lifecycle(main, \"prevent_destroy\")\n");
     let file = s.write("stacks/p.df", &net);
     let creds = [
         ("DFORM_S3_ACCESS_KEY_ID", "fake"),
@@ -1409,12 +1409,12 @@ fn completion_offers_input_fields_and_relation_outputs() {
     let s = common::Scratch::project("lsp-fields");
     s.write(
         "stacks/zones.df",
-        "\nprovider fake\ndecl zone(name: string)\nzone(\"a\")\noutput zone\n",
+        "\nuse fake\ndecl zone(name: string)\nzone(\"a\")\noutput zone\n",
     );
     let file = s.write(
         "stacks/app.df",
         "\ninput nodes { flavor: string = \"b2\", count: int = 1, pool: { min: int = 1 } }\n\
-         provider fake\nuse stacks.zones\nset { nodes.count = 2 }\n",
+         use fake\nuse stacks.zones\nset { nodes.count = 2 }\n",
     );
     let root = std::fs::canonicalize(&s.dir).unwrap();
     let file = std::fs::canonicalize(&file).unwrap();
@@ -1439,7 +1439,7 @@ fn hover_on_a_typed_let_shows_its_type() {
     let s = Scratch::project("lsp-typed-let");
     let file = s.write(
         "stacks/app.df",
-        "\nprovider fake\nlet block: inet = \"10.0.0.0/16\"\n\
+        "\nuse fake\nlet block: inet = \"10.0.0.0/16\"\n\
          resource net.vpc main {\n  cidr = \"10.0.0.0/16\"\n  tags = { b: block }\n}\n",
     );
     let root = std::fs::canonicalize(&s.dir).unwrap();
@@ -1543,12 +1543,12 @@ fn the_editors_builtins_are_the_registrys() {
 #[test]
 fn completion_offers_a_packages_functions() {
     let s = Scratch::project("lsp-package-fns");
-    let file = s.write("stacks/app.df", "\nprovider fake\n");
+    let file = s.write("stacks/app.df", "\nuse fake\n");
     let root = std::fs::canonicalize(&s.dir).unwrap();
     let file = std::fs::canonicalize(&file).unwrap();
     let mut c = Client::start(&root, json!({}));
     c.open(&file);
-    let typed = "\nprovider fake\nlet n = inet.su\nresource net.vpc v {\n  cidr = str.tr\n}\n";
+    let typed = "\nuse fake\nlet n = inet.su\nresource net.vpc v {\n  cidr = str.tr\n}\n";
     c.change(&file, 2, typed);
     let items = c.at("textDocument/completion", &file, (2, 15));
     assert_eq!(labels(&items), ["inet.subnet"], "{items}");
@@ -1577,7 +1577,7 @@ fn formatting_reads_the_projects_schemas() {
     );
     let file = s.write(
         "stacks/app.df",
-        "provider k8s\n\nresource k8s.deployment d {\n  spec.template.spec.containers = \
+        "use k8s\n\nresource k8s.deployment d {\n  spec.template.spec.containers = \
          [{ name: \"a\", resources: { limits: { memory: \"2Gi\" } } }]\n}\n",
     );
     let root = std::fs::canonicalize(&s.dir).unwrap();

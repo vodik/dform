@@ -337,7 +337,7 @@ impl Ctx {
 
     /// `{ a: a }` as `{ a }`.
     /// A `provider` or `instance` block with no entries is left out
-    /// (R-26): `provider aws {}` is `provider aws`.
+    /// (R-26): `use aws {}` is `use aws`.
     fn empty_blocks(&mut self, root: &SyntaxNode) {
         for b in root.descendants().filter(|n| n.kind() == BLOCK) {
             if !b
@@ -383,9 +383,9 @@ impl Ctx {
                 );
             let assign = tokens(&a).any(|t| t.kind() == EQ);
             let source = path.text() == "source"
-                && a.parent()
-                    .and_then(|b| b.parent())
-                    .is_some_and(|s| s.kind() == PROVIDER);
+                && a.parent().and_then(|b| b.parent()).is_some_and(|s| {
+                    s.kind() == PROVIDER || crate::syntax::resolve::maybe_provider_use(&s).is_some()
+                });
             if named && assign && !source && self.text(&value) == seg.text() {
                 let (start, end) = (path.text_range().end(), value.text_range().end());
                 self.edits.push((start.into(), end.into(), String::new()));

@@ -533,7 +533,7 @@ enum StateCommand {
         #[command(flatten)]
         target: Target,
     },
-    /// Forget the host key `provider ssh` recorded for HOST (as the
+    /// Forget the host key `use ssh` recorded for HOST (as the
     /// program names it, `10.0.0.5` or `name:2222`): the next contact
     /// records the key the host offers then. For a host rebuilt with a new
     /// key.
@@ -4483,7 +4483,7 @@ fn print_effects(
         e.offers
             .iter()
             .for_each(|(k, ty)| row("offers", format!("{k}: {ty}")));
-        e.starts.iter().for_each(|p| row("starts", p.to_string()));
+        e.uses.iter().for_each(|p| row("uses", p.to_string()));
     }
     if json {
         println!("{}", serde_json::to_string_pretty(&t.json())?);

@@ -705,12 +705,16 @@ impl Server<'_> {
             .collect();
         for (_, text) in files {
             let tree = dform_core::syntax::parser::parse(text).syntax();
-            for n in tree
-                .descendants()
-                .filter(|n| n.kind() == dform_core::syntax::SyntaxKind::PROVIDER)
-            {
-                if let Some(name) = dform_core::names::declared_name(&n) {
-                    let name = name.text().to_string();
+            // A provider's `use` (R-112) is one segment; a module's names
+            // no schema, so taking it along finds none.
+            for n in tree.descendants() {
+                let name = match n.kind() {
+                    dform_core::syntax::SyntaxKind::PROVIDER => {
+                        dform_core::names::declared_name(&n).map(|t| t.text().to_string())
+                    }
+                    _ => dform_core::syntax::resolve::maybe_provider_use(&n),
+                };
+                if let Some(name) = name {
                     specs.insert(
                         manifest
                             .as_ref()

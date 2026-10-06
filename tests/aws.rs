@@ -118,7 +118,7 @@ fn keyless_sets_ignore_order() {
 /// index, so the n-th zone gets the n-th /24.
 const ZONES: &str = r#"
 
-provider aws { region = "us-east-1" }
+use aws { region = "us-east-1" }
 
 resource aws.vpc main {
   cidr_block = "10.0.0.0/16"
@@ -163,14 +163,14 @@ fn a_data_source_is_a_table_with_an_index() {
     }
 }
 
-/// A type is its provider's, by its namespace: without `provider aws` the
+/// A type is its provider's, by its namespace: without `use aws` the
 /// plan names the statement to add.
 #[test]
 fn a_type_names_the_provider_to_declare() {
     let s = Scratch::project("aws-undeclared");
     s.write(
         "main.df",
-        "\nprovider fake\nresource aws.vpc main { cidr_block = \"10.0.0.0/16\" }\n",
+        "\nuse fake\nresource aws.vpc main { cidr_block = \"10.0.0.0/16\" }\n",
     );
     let r = s.run(&["plan", "main.df"]).failure();
     assert!(
@@ -181,7 +181,7 @@ fn a_type_names_the_provider_to_declare() {
     );
     assert!(
         r.stderr
-            .contains("aws.vpc is provider aws's type: add `provider aws` to the stack"),
+            .contains("aws.vpc is provider aws's type: add `use aws` to the stack"),
         "{}",
         r.stderr
     );

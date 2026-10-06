@@ -30,7 +30,7 @@ component pg_gcp {
 instance pg_aws store { name = "a" } where cloud == "aws"
 instance pg_gcp store { name = "b" } where cloud == "gcp"
 resource net.subnet s { size = 3, name = store.conn }
-provider fake
+use fake
 "#;
 
 /// Two copies of one name, each under its clause: the plan has the copy
@@ -158,7 +158,7 @@ fn a_guarded_use_pair_reads_the_one_that_holds() {
         r#"
 
 input cloud: enum("aws", "gcp") = "aws"
-provider fake
+use fake
 use db_aws as store where cloud == "aws"
 use db_gcp as store where cloud == "gcp"
 resource net.vpc v { name = store.engine }
@@ -179,9 +179,9 @@ resource net.vpc v { name = store.engine }
 
 const PROVIDERS: &str = r#"
 input cloud: enum("aws", "gcp") = "aws"
-provider fake { region = "eu-west-1" } where cloud == "aws"
-provider fake { region = "us-east-1" } where cloud == "gcp"
-provider gke where cloud == "gcp"
+use fake { region = "eu-west-1" } where cloud == "aws"
+use fake { region = "us-east-1" } where cloud == "gcp"
+use gke where cloud == "gcp"
 resource net.vpc v { size = 1 }
 "#;
 
@@ -206,9 +206,9 @@ fn a_guarded_provider_is_configured_where_its_clause_holds() {
     assert!(gcp.contains("\"gke\"   {}"), "{gcp}");
     let r = s.run(&["dev", "effects", "p.df"]).success();
     for want in [
-        "stack  starts  provider fake when cloud == \"aws\"\n",
-        "stack  starts  provider fake when cloud == \"gcp\"\n",
-        "stack  starts  provider gke when cloud == \"gcp\"\n",
+        "stack  uses    provider fake when cloud == \"aws\"\n",
+        "stack  uses    provider fake when cloud == \"gcp\"\n",
+        "stack  uses    provider gke when cloud == \"gcp\"\n",
     ] {
         assert!(r.stdout.contains(want), "{want}\n---\n{}", r.stdout);
     }
@@ -216,7 +216,7 @@ fn a_guarded_provider_is_configured_where_its_clause_holds() {
     // serve is planned only where it holds.
     s.write(
         "q.df",
-        "\ninput cloud: enum(\"aws\", \"gcp\") = \"aws\"\nprovider fake where cloud == \"gcp\"\n\
+        "\ninput cloud: enum(\"aws\", \"gcp\") = \"aws\"\nuse fake where cloud == \"gcp\"\n\
          resource net.vpc v { size = 1 } where cloud == \"gcp\"\n",
     );
     let r = s
@@ -245,15 +245,15 @@ fn guarded_providers_follow_the_rule() {
     s.write(
         "p.df",
         &PROVIDERS.replace(
-            "where cloud == \"gcp\"\nprovider gke",
-            "where cloud != \"gcp\"\nprovider gke",
+            "where cloud == \"gcp\"\nuse gke",
+            "where cloud != \"gcp\"\nuse gke",
         ),
     );
     let r = plan(&s, &[]).failure();
     assert!(
         r.stderr.contains(
-            "`provider fake` is declared twice and both declarations hold: `provider fake` at \
-             p.df:3:1 and `provider fake` at p.df:4:1"
+            "`use fake` is declared twice and both declarations hold: `use fake` at \
+             p.df:3:1 and `use fake` at p.df:4:1"
         ),
         "{}",
         r.stderr
