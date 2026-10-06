@@ -8,7 +8,7 @@
 //! | provider             | its externs (`file` of `file.text`)            |
 //! | function package     | `std/*.df` (`inet` of `inet.subnet`)           |
 //! | module               | `component network { .. }`, `use config`,      |
-//! |                      | `instance network blue` (`blue.vpc`)           |
+//! |                      | `resource network blue {}` (`blue.vpc`)        |
 //! | root                 | `settings`, `world`                            |
 //!
 //! A provider's types and its externs share its name (`dns.record`,
@@ -93,13 +93,13 @@ impl Lowerer<'_> {
                             );
                         }
                     }
-                    INSTANCE => {
-                        let (path, m) = instance_parts(&n);
+                    _ if self.is_copy_in(u.file, &n) => {
+                        let (path, m) = copy_parts(&n);
                         claim(
                             &m,
                             Head::Module,
                             Some(span(&n)),
-                            format!("the instance `{m}` of `{path}`"),
+                            format!("the resource `{m}` of the component `{path}`"),
                         );
                     }
                     EXTERN | RESOURCE | TYPE_DECL => {

@@ -206,7 +206,7 @@ fn load_units(
     entry_files: &[PathBuf],
     read: &dyn Fn(&Path) -> std::io::Result<String>,
 ) -> Result<Loaded> {
-    use crate::syntax::SyntaxKind::{COMPONENT, INSTANCE, USE};
+    use crate::syntax::SyntaxKind::{COMPONENT, INSTANCE, RESOURCE, USE};
     let mut loaded = Loaded {
         units: Vec::new(),
         entries: Vec::new(),
@@ -264,19 +264,35 @@ fn load_units(
             let path = match n.kind() {
                 USE => crate::syntax::resolve::use_parts(&n).0,
                 INSTANCE => crate::syntax::resolve::instance_parts(&n).0,
+                RESOURCE => crate::syntax::resolve::copy_parts(&n).0,
                 _ => continue,
             };
             // A path whose first segment the file binds itself is its own,
             // resolved where it is lowered: a component it declares, or a
             // module one of its `use`s brings.
             let head = path.split('.').next().unwrap_or_default();
-            if components.contains(head) || (n.kind() == INSTANCE && local.contains(head)) {
+            if components.contains(head) || (n.kind() != USE && local.contains(head)) {
                 continue;
             }
             if path.is_empty() {
                 continue;
             }
             let span = span_at(file, n.text_range());
+            // A resource's type by its path from the root (R-113): a
+            // component of a file is loaded with it; anything else is a
+            // provider's type, or one the program declares.
+            if n.kind() == RESOURCE {
+                if let Target::File(module, f) = mounts.lookup(&path)
+                    && module != path
+                {
+                    let j = match loaded.files.iter().position(|x| *x == f) {
+                        Some(j) => j,
+                        None => load_unit(&f, Some(module), read, &mut loaded)?,
+                    };
+                    edges.push((i, j, span));
+                }
+                continue;
+            }
             match mounts.lookup(&path) {
                 Target::Std => {}
                 Target::Stack(d) => {

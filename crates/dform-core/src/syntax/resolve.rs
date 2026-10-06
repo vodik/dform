@@ -284,6 +284,12 @@ struct Decls {
     externs: BTreeMap<String, Vec<(bool, String)>>,
     /// Relations the program's own facts and rules define.
     heads: BTreeSet<String>,
+    /// Each `resource T n` statement as collected, before what `T` names
+    /// is known: the scope it declares into, its file and the statement.
+    pending: Vec<(usize, u32, SyntaxNode)>,
+    /// The `resource C n` statements whose type is a component (R-113):
+    /// copies, by file and offset.
+    copies: BTreeSet<(u32, u32)>,
 }
 
 const PROGRAM: usize = 0;
@@ -494,14 +500,56 @@ pub fn instance_parts(n: &SyntaxNode) -> (String, String) {
     (text, name)
 }
 
+/// A copy's component path as written and its name: `instance PATH NAME`,
+/// or `resource PATH NAME { .. }` whose type is a component (R-113), its
+/// name a word or a string.
+pub fn copy_parts(n: &SyntaxNode) -> (String, String) {
+    if n.kind() != RESOURCE {
+        return instance_parts(n);
+    }
+    let name = header_name(n)
+        .map(|t| match t.kind() {
+            STRING => string_value(t.text()).unwrap_or_else(|_| t.text().to_string()),
+            _ => t.text().to_string(),
+        })
+        .unwrap_or_default();
+    (dotted_text(n, 1), name)
+}
+
+/// The name token of a resource header: the word or string after its
+/// dotted type.
+pub fn header_name(n: &SyntaxNode) -> Option<SyntaxToken> {
+    let mut seen_word = false;
+    let mut after_dot = false;
+    for t in tokens(n).skip(1) {
+        match t.kind() {
+            DOT => after_dot = true,
+            STRING => return Some(t),
+            k if k.is_word() => {
+                if seen_word && !after_dot {
+                    return Some(t);
+                }
+                seen_word = true;
+                after_dot = false;
+            }
+            _ => return None,
+        }
+    }
+    None
+}
+
 /// A `component NAME { .. }`'s name.
 pub fn component_name(n: &SyntaxNode) -> String {
     word_text(n, 1)
 }
 
-/// The token that names what a `use` or `instance` binds: the alias or
-/// the instance's name when written, else the path's last segment.
+/// The token that names what a `use`, an `instance` or a copy's
+/// `resource` binds: the alias or the copy's name when written, else the
+/// path's last segment.
 pub fn bound_token(n: &SyntaxNode) -> Option<SyntaxToken> {
+    if n.kind() == RESOURCE {
+        return header_name(n);
+    }
     let (path, rest) = path_parts(n);
     match (n.kind(), rest.as_slice()) {
         (USE, [r#as, alias, ..]) if r#as.text() == "as" => Some(alias.clone()),
@@ -907,6 +955,7 @@ impl<'u> Lowerer<'u> {
                 self.decls.scopes[s].uses.insert(name, path);
             }
         }
+        self.classify_resources();
         // A name declared more than once: each declaration's path (R-104).
         for s in 0..self.decls.scopes.len() {
             let bound = self.decls.scopes[s].bound.clone();
@@ -951,6 +1000,59 @@ impl<'u> Lowerer<'u> {
                 }
                 scope.instances.insert(name, full);
             }
+        }
+    }
+
+    /// Each `resource T n` collected, by what `T` names (R-113): a
+    /// component's path (or a signature's, a module's, a stack's, which
+    /// `instance` reports) makes a copy, bound as the scope's other names
+    /// are; any other is a resource of the type `T`.
+    fn classify_resources(&mut self) {
+        for (decl, file, n) in std::mem::take(&mut self.decls.pending) {
+            let typ = dotted_text(&n, 1);
+            let full = self.module_path_of(decl, &typ);
+            let copy = self.decls.modules.contains_key(&full)
+                || self.decls.deployed.iter().any(|d| d.path == full)
+                || self.signature(decl, &typ).is_some();
+            if copy {
+                let (path, name) = copy_parts(&n);
+                self.decls
+                    .copies
+                    .insert((file, n.text_range().start().into()));
+                let sc = &mut self.decls.scopes[decl];
+                sc.bound
+                    .entry(name.clone())
+                    .or_default()
+                    .push((path.clone(), false, n.clone()));
+                sc.instances_written.entry(name).or_insert(path);
+                continue;
+            }
+            self.decls.types.insert(typ.clone());
+            if let Some(name) = self.static_header(&n) {
+                self.decls.scopes[decl]
+                    .resources
+                    .entry(name)
+                    .or_default()
+                    .push(typ);
+            }
+        }
+    }
+
+    /// Whether `n`, a statement of the file being lowered, makes a copy of
+    /// a component: `instance`, or `resource C n` (R-113).
+    fn is_copy(&self, n: &SyntaxNode) -> bool {
+        self.is_copy_in(self.file, n)
+    }
+
+    /// [`Self::is_copy`] for a statement of `file`.
+    fn is_copy_in(&self, file: u32, n: &SyntaxNode) -> bool {
+        match n.kind() {
+            INSTANCE => true,
+            RESOURCE => self
+                .decls
+                .copies
+                .contains(&(file, n.text_range().start().into())),
+            _ => false,
         }
     }
 
@@ -1120,17 +1222,10 @@ impl<'u> Lowerer<'u> {
                         .signatures
                         .insert(name, (file, n.clone()));
                 }
-                RESOURCE => {
-                    let typ = dotted_text(&n, 1);
-                    self.decls.types.insert(typ.clone());
-                    if let Some(name) = self.static_header(&n) {
-                        self.decls.scopes[decl]
-                            .resources
-                            .entry(name)
-                            .or_default()
-                            .push(typ);
-                    }
-                }
+                // A resource of a provider's type, or a copy of a component
+                // (R-113): which, once every module's components and every
+                // scope's `use`s are known (`classify_resources`).
+                RESOURCE => self.decls.pending.push((decl, file, n.clone())),
                 INSTANCE => {
                     let (path, name) = instance_parts(&n);
                     let sc = &mut self.decls.scopes[decl];
@@ -1246,25 +1341,9 @@ impl<'u> Lowerer<'u> {
         (!bound).then_some(name)
     }
 
-    /// The name token of a resource or settings header.
+    /// The name token of a resource header.
     fn header_token(&self, n: &SyntaxNode) -> Option<SyntaxToken> {
-        let mut seen_word = false;
-        let mut after_dot = false;
-        for t in tokens(n).skip(1) {
-            match t.kind() {
-                DOT => after_dot = true,
-                STRING => return Some(t),
-                k if k.is_word() => {
-                    if seen_word && !after_dot {
-                        return Some(t);
-                    }
-                    seen_word = true;
-                    after_dot = false;
-                }
-                _ => return None,
-            }
-        }
-        None
+        header_name(n)
     }
 
     /// `T` in `output k: T` when it names a resource type.
@@ -2139,6 +2218,7 @@ impl<'u> Lowerer<'u> {
             LET => self.let_stmt(n, scope, outer),
             SET => self.set(n, scope, outer),
             INSTANCE => self.instance(n, scope, outer),
+            RESOURCE if self.is_copy(n) => self.instance(n, scope, outer),
             RESOURCE => self.block_stmt(n, scope, outer),
             RULE | FACT => self.rule(n, scope, outer),
             CHECK => self.check(n, scope, outer),
@@ -3378,11 +3458,11 @@ impl<'u> Lowerer<'u> {
         // two uses are.
         let same: Vec<SyntaxNode> = parent
             .children()
-            .filter(|c| matches!(c.kind(), USE | INSTANCE))
+            .filter(|c| c.kind() == USE || self.is_copy(c))
             .filter(|c| {
                 let other = match c.kind() {
                     USE => use_parts(c).1,
-                    _ => instance_parts(c).1,
+                    _ => copy_parts(c).1,
                 };
                 other == name
             })
@@ -3477,21 +3557,22 @@ impl<'u> Lowerer<'u> {
         }
     }
 
-    /// `instance PATH NAME [{ k = v }] [where B]` (R-65): one copy of a
-    /// component, named NAME.
+    /// `resource PATH NAME { k = v } [where B]` of a component (R-113),
+    /// or `instance PATH NAME [{ k = v }] [where B]` (R-65): one copy of
+    /// the component, named NAME.
     fn instance(&mut self, n: &SyntaxNode, scope: usize, outer: &Rc) -> L<Vec<Stmt>> {
         let span = self.span(n);
-        let (written, name) = instance_parts(n);
+        let (written, name) = copy_parts(n);
         let module = match self.component_path(scope, &written) {
             Ok(m) => m,
             Err(_) if self.signature(scope, &written).is_some() => {
                 let d = Diagnostic::error(
                     span,
-                    format!("{written} is a component signature, which is not instanced"),
+                    format!("{written} is a component signature, which has no resources"),
                 )
                 .with_help(format!(
-                    "instance a component that has it, `component C: {written} {{ .. }}`, and \
-                     pick one by a clause: `instance C {name} {{ .. }} where ..`"
+                    "make a resource of a component that has it, `component C: {written} {{ .. \
+                     }}`, and pick one by a clause: `resource C {name} {{ .. }} where ..`"
                 ));
                 self.diags.push(d);
                 return Err(Skip);
@@ -3502,18 +3583,36 @@ impl<'u> Lowerer<'u> {
             }
         };
         self.redeclared(n, &name)?;
-        if name == "_" {
+        if let Some(t) = header_name(n).filter(|t| t.kind() == STRING && has_hole(t.text())) {
             return self.error(
-                span,
-                format!("an instance is written by its name: `instance {written} _` names nothing"),
+                self.span_of(t.text_range()),
+                format!(
+                    "a resource of the component {written} is named statically: {} takes its \
+                     name from the clause, which a copy cannot yet",
+                    t.text()
+                ),
             );
         }
-        if self.is_value(scope, &name) {
+        if tokens(n).any(|t| t.kind() == RANK) {
             return self.error(
                 span,
                 format!(
-                    "`{name}` is a value in scope, but an instance's name is literal: this is the \
-                     instance {name} of {written}; name it otherwise"
+                    "a resource of the component {written} takes no rank: its own resources do"
+                ),
+            );
+        }
+        if name == "_" {
+            return self.error(
+                span,
+                format!("a resource is written by its name: `resource {written} _` names nothing"),
+            );
+        }
+        if self.is_value(scope, &name) && header_name(n).is_some_and(|t| t.kind() != STRING) {
+            return self.error(
+                span,
+                format!(
+                    "`{name}` is a value in scope, but a resource's header name is literal: this \
+                     is the resource {name} of {written}; name it otherwise"
                 ),
             );
         }
@@ -3638,11 +3737,27 @@ impl<'u> Lowerer<'u> {
         if failed { Err(Skip) } else { Ok(out) }
     }
 
-    /// `resource T n { f = t ... } where B` and `settings e { ... } where B`.
+    /// `resource T n { f = t ... } where B`, `T` a provider's type or one
+    /// the program declares.
     fn block_stmt(&mut self, n: &SyntaxNode, scope: usize, outer: &Rc) -> L<Vec<Stmt>> {
         let span = self.span(n);
         let block = node(n, BLOCK).ok_or(Skip)?;
         let header = self.header_token(n).ok_or(Skip)?;
+        // Rows are a component's relation inputs (R-55); a type's
+        // resource has attributes.
+        if let Some(row) = block
+            .children()
+            .find(|c| matches!(c.kind(), RULE | FACT | INPUT_RELATION))
+        {
+            let typ = dotted_text(n, 1);
+            return self.error(
+                self.span(&row),
+                format!(
+                    "{typ} is no component, so its resource takes no rows: a row gives a \
+                     relation a component takes (`input p`)"
+                ),
+            );
+        }
         let mut rc = self.rc(n, scope, outer);
         let mut body = self.clauses(&mut rc, n)?;
         let mut reads = Vec::new();
@@ -4207,14 +4322,14 @@ impl<'u> Lowerer<'u> {
         }
         // An instance's input: `n.k`.
         if let [Op::Field(k)] = c.ops.as_slice()
-            && let Some((at, _)) = self.instance_in(scope, &c.head)
+            && let Some((at, path)) = self.instance_in(scope, &c.head)
         {
             let own = at == self.decl_scope(scope);
             return Ok(Target::Cell(
                 str_term(crate::modules::INPUT),
                 self.scope_term(scope, at, str_term(&c.head)),
                 k.clone(),
-                own.then(|| format!("instance {}", c.head)),
+                own.then(|| format!("resource {path} {}", c.head)),
             ));
         }
         // `set T[_].p = t`: every resource of `T` is `r in T` (H-5).
@@ -4996,9 +5111,18 @@ impl<'u> Lowerer<'u> {
             if let Some(ns) = self.namespace_of(rc, c) {
                 return self.namespace_member(rc, lhs_node, &ns, out, span);
             }
-            // `x in network`, a component (R-67): each of its copies.
+            // `x in network`, a component (R-67): each of its copies;
+            // `blue in network`, a copy in scope by its name (R-113), is
+            // the test that it is one of them.
             if let Some(path) = self.component_of(rc, c) {
-                let x = self.term(rc, lhs_node, Pos::Content, out)?;
+                let copy = Chain::of(lhs_node)
+                    .filter(|l| l.is_bare() && !rc.vars.contains_key(&l.head))
+                    .filter(|l| self.instance_in(rc.scope, &l.head).is_some())
+                    .map(|l| str_term(&l.head));
+                let x = match copy {
+                    Some(name) => name,
+                    None => self.term(rc, lhs_node, Pos::Content, out)?,
+                };
                 let parent = self.copies_scope(rc, &path);
                 return Ok(Lit::Pos(atom_at(
                     crate::modules::INSTANCE_OF,
@@ -6611,8 +6735,8 @@ impl<'u> Lowerer<'u> {
             let what = match n.kind() {
                 USE => format!("use {}", use_parts(n).0),
                 _ => {
-                    let (c, name) = instance_parts(n);
-                    format!("instance {c} {name}")
+                    let (c, name) = copy_parts(n);
+                    format!("resource {c} {name}")
                 }
             };
             let item = self.decls.modules.get(path).and_then(|m| {
