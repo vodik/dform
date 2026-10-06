@@ -44,7 +44,7 @@ use std::cell::{OnceCell, RefCell};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-/// `provider_expect_account(Name, Account)`: a `provider` block's
+/// `provider_expect_account(Name, Account)`: a provider's `use` block's
 /// `expect_account`, what [`Providers::check_accounts`] reads.
 pub const EXPECT_ACCOUNT: &str = "provider_expect_account";
 
@@ -69,7 +69,7 @@ pub struct Config {
     /// may mark what it creates with it, to find an object whose Create
     /// answer was lost (`provider.created`).
     pub stack: String,
-    /// The program's `provider NAME { .. }` blocks: each one's spec (as
+    /// The program's providers' `use NAME { .. }`: each one's spec (as
     /// `specs` names it) -> NAME, so `provider_config(NAME, ..)` (what a
     /// block's settings lower to) finds its link by the block's name as
     /// well as by the provider's own.
@@ -209,8 +209,8 @@ fn configure(link: &mut Link, config: Json) -> Result<Option<String>> {
 }
 
 impl Providers {
-    /// Start the providers `specs` name (`--provider` or the `provider`
-    /// statements; none is the mock's `fake` schema): every mock schema in
+    /// Start the providers `specs` name (`--provider` or the providers'
+    /// `use`s; none is the mock's `fake` schema): every mock schema in
     /// one mock provider, every plugin in its own process.
     pub fn start(launch: &dyn Launch, specs: &[String], cfg: &Config) -> Result<Providers> {
         let p = Self::start_deferred(launch, specs, cfg)?;
@@ -665,9 +665,9 @@ impl Providers {
     /// the fallback, which knows nothing of it (no computed attribute, no
     /// id it mints), so it is a plan error before anything is planned; a
     /// type the program declares itself (a `type` block) is the mock's. The
-    /// error names the resource, the stack's `provider` blocks, and the
+    /// error names the resource, the stack's providers' `use`s, and the
     /// known schemas that do declare the type. `specs`: the providers this
-    /// run started, as `--provider` or the `provider` statements give them.
+    /// run started, as `--provider` or the providers' `use`s give them.
     pub fn check_types(&self, program: &crate::ast::Program, specs: &[String]) -> Result<()> {
         use crate::ast::Stmt;
         let owner = &self.loaded().owner;
@@ -1249,7 +1249,7 @@ impl Providers {
     }
 
     /// Whether the provider a program names `name` (its own name, or its
-    /// `provider` block's: `provider_config(name, ..)`) serves `typ`.
+    /// provider's `use` block's: `provider_config(name, ..)`) serves `typ`.
     pub fn serves(&self, name: &str, typ: &str) -> bool {
         self.link_for(name) == Some(self.route(typ))
     }

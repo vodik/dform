@@ -138,7 +138,7 @@ fn reject_pending(stmts: &[Stmt]) -> Result<()> {
                 )),
                 Stmt::Provider(c) if at != At::Top => diags.push(misplaced(
                     c.span,
-                    "`provider` belongs at the top of the program",
+                    "a provider's `use` belongs at the top of the program",
                 )),
                 _ => {}
             }

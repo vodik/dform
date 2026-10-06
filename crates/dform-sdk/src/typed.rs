@@ -89,7 +89,7 @@ pub trait Provider: Sized + Send + 'static {
     /// Its build, for the handshake.
     const VERSION: &'static str = "0.0.0";
     /// Configure from the provider block's settings (a program's
-    /// `provider NAME { .. }`; the engine's own keys beside them):
+    /// `use NAME { .. }`; the engine's own keys beside them):
     /// the provider, and the account its credentials reach when it can
     /// tell.
     fn configure(settings: &Json) -> Result<(Self, Option<String>)>;

@@ -689,7 +689,7 @@ impl Server<'_> {
     /// Each provider's schema file, read: a path, the project's
     /// providers/NAME/schema.df, a built-in schema extracted to the cache,
     /// a plugin's `schema.df` beside it. The providers are the
-    /// evaluations', and the `provider` blocks' by the manifest (an
+    /// evaluations', and the providers' `use` blocks' by the manifest (an
     /// evaluation that failed has none).
     fn schema_files(
         &self,
@@ -707,21 +707,16 @@ impl Server<'_> {
             let tree = dform_core::syntax::parser::parse(text).syntax();
             // A provider's `use` (R-112) is one segment; a module's names
             // no schema, so taking it along finds none.
-            for n in tree.descendants() {
-                let name = match n.kind() {
-                    dform_core::syntax::SyntaxKind::PROVIDER => {
-                        dform_core::names::declared_name(&n).map(|t| t.text().to_string())
-                    }
-                    _ => dform_core::syntax::resolve::maybe_provider_use(&n),
-                };
-                if let Some(name) = name {
-                    specs.insert(
-                        manifest
-                            .as_ref()
-                            .and_then(|m| m.manifest.provider_source(&name))
-                            .unwrap_or(name),
-                    );
-                }
+            for name in tree
+                .descendants()
+                .filter_map(|n| dform_core::syntax::resolve::maybe_provider_use(&n))
+            {
+                specs.insert(
+                    manifest
+                        .as_ref()
+                        .and_then(|m| m.manifest.provider_source(&name))
+                        .unwrap_or(name),
+                );
             }
         }
         specs

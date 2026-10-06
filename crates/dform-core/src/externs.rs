@@ -17,7 +17,7 @@
 //! across runs is kept by `memo.first` (R-60, [`crate::memo`]), which the
 //! program writes where the value is read.
 //!
-//! A program does not declare an extern: `provider NAME {}` brings the
+//! A program does not declare an extern: `use NAME` brings the
 //! provider's into scope (DESIGN.org R-8). `file`, `env` and `time` are
 //! built-in fact providers ([`BUILTINS`]): their externs are the
 //! compiler's own, and dform answers `file.text(+path, -value)` (paths
@@ -25,7 +25,7 @@
 //! -value)`, `time.now(-t)` and `ssh`'s (`crate::plugin::ssh`) itself,
 //! with no `dform.toml` source; the
 //! loaders, `yaml(path)` and the rest, are its documents (`crate::tables`,
-//! R-39). `memo.first` is in scope with no `provider` statement. Other
+//! R-39). `memo.first` is in scope with no provider's `use`. Other
 //! externs are asked of the providers over the
 //! plugin protocol (Query; the mock answers from
 //! `providers/<name>/externs.df`).
@@ -670,7 +670,7 @@ pub fn row(f: &ExternFn, inputs: &[Value], outs: Vec<Value>) -> Vec<Value> {
 /// A built-in extern: `(name, [(input, column, type)])`.
 type BuiltinExtern = (&'static str, &'static [(bool, &'static str, &'static str)]);
 
-/// A built-in fact provider (DESIGN.org R-8): `provider NAME {}` brings its
+/// A built-in fact provider (DESIGN.org R-8): `use NAME` brings its
 /// externs into scope.
 pub struct Builtin {
     pub name: &'static str,
@@ -678,7 +678,7 @@ pub struct Builtin {
     /// Whether dform answers them itself; else the provider the stack
     /// configures by that name does.
     pub in_process: bool,
-    /// Whether its externs are in scope with no `provider` statement
+    /// Whether its externs are in scope with no provider's `use`
     /// (`memo`: a relation of the language, not a provider's).
     pub always: bool,
 }

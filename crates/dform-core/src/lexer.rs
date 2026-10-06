@@ -128,7 +128,6 @@ fn kind(t: Tok) -> SyntaxKind {
 /// the body words, the clause word `where` (R-1) and the literals (H
 /// section 4).
 pub const KEYWORDS: &[(&str, SyntaxKind)] = &[
-    ("provider", PROVIDER_KW),
     ("key", KEY_KW),
     ("type", TYPE_KW),
     ("decl", DECL_KW),

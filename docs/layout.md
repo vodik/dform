@@ -23,8 +23,8 @@ dform.state/                state: per deployment, audit logs, plan keys,
   or writes state refuses. It is small; programs stay in `.df` files. It holds `[project]` (a name, the
   language edition its files are written in, `edition = "2026"`, which is
   required, and the dform versions the project takes), `[providers]` (each provider's source and
-  version requirement, Cargo's semver syntax; a program's `provider NAME {}`
-  takes its source from here), `[stacks.NAME]` (the stack `NAME.df`'s
+  version requirement, Cargo's semver syntax; a program's `use NAME` of a
+  provider takes its source from here), `[stacks.NAME]` (the stack `NAME.df`'s
   operational settings, a closed list: `backend`, `role`,
   `approvals`, `audit_sink`, `isolated`; a term is a string,
   `{stack}` the stack's name and `{k}` its key `k`'s value), `[defaults]`

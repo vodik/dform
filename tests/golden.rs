@@ -133,7 +133,7 @@ const CASES: &[Case] = &[
         "default",
         "examples/gke/stacks/gke_two_phase.df",
     ),
-    // The provider is the program's `provider` statement.
+    // The provider is the program's provider's `use`.
     case("k8s_demo", "default", "examples/k8s/stacks/k8s_demo.df"),
     case("aws_demo", "default", "examples/aws/stacks/aws_demo.df"),
     // The providers are its project's (examples/crud-api/dform.toml).

@@ -1,6 +1,6 @@
 //! The provider plugin protocol at the CLI: the mock is a separate process,
 //! a provider that dies during an Apply is a failed action naming the
-//! resource and the next apply resumes, a `provider` source directory
+//! resource and the next apply resumes, a provider's `source` directory
 //! holding an executable is that plugin, and `dform provider check` is the
 //! conformance suite, which the mock passes on every backend (a process
 //! over gRPC, linked in, linked in across prost).
@@ -98,7 +98,7 @@ fn the_mock_is_dform_itself_not_the_executable_beside_it() {
     assert!(!String::from_utf8_lossy(&help.stdout).contains("__provider"));
 }
 
-/// `provider NAME { source = "DIR" }` where DIR holds an executable
+/// `use NAME { source = "DIR" }` where DIR holds an executable
 /// `dform-provider*`: that executable is the provider (here the mock
 /// itself, which plays the `fake` schema when given none).
 #[test]

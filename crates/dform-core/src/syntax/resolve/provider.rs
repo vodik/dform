@@ -1,11 +1,11 @@
-//! `provider NAME { .. }` (docs/grammar.md "Provider blocks"). `source` is
+//! A provider's `use NAME { .. }` (docs/grammar.md "Providers"). `source` is
 //! a constant: the stack reads it to start the provider. Every other
 //! setting is configuration, read like any rule reads (inputs, settings
 //! rows, value names, tables, `env.var`), so a keyed deployment configures
 //! its providers by its key:
 //!
 //! ```text
-//! provider NAME { k1 = t1, k2 = t2 }   provider_config("NAME", { k1: t1', k2: t2' }) :- reads
+//! use NAME { k1 = t1, k2 = t2 }        provider_config("NAME", { k1: t1', k2: t2' }) :- reads
 //! expect_account = t                   provider_expect_account("NAME", t') :- reads
 //! ```
 //!
@@ -14,11 +14,11 @@
 //! checks the account the provider reports against
 //! (`Providers::check_accounts`).
 //!
-//! A `provider` block also brings the provider's externs into scope
+//! A provider's `use` block also brings the provider's externs into scope
 //! (DESIGN.org R-8): a built-in fact provider's (`file`, `env`, `time`,
 //! `externs::BUILTINS`) are declared here, and a program that writes
-//! `extern` for one is told to write the `provider` statement instead.
-//! `memo.first` (R-60) is in scope with no `provider` statement. `random`
+//! `extern` for one is told to write the provider's `use` instead.
+//! `memo.first` (R-60) is in scope with no provider's `use`. `random`
 //! is no provider: its functions are std's (`std/random.df`).
 
 use super::*;
@@ -37,16 +37,13 @@ const TERM_CALLS: [&str; 5] = [
     crate::plugin::ssh::RUN,
 ];
 
-/// A `provider` block's setting that is checked, not sent.
+/// A provider's `use` block's setting that is checked, not sent.
 const EXPECT_ACCOUNT: &str = "expect_account";
 
 impl Lowerer<'_> {
     pub(super) fn provider(&mut self, n: &SyntaxNode, scope: usize, outer: &Rc) -> L<Vec<Stmt>> {
         let span = self.span(n);
-        let name = provider_name(n);
-        if n.kind() == PROVIDER {
-            self.redeclared(n, &name)?;
-        }
+        let name = use_parts(n).0;
         if name == "random" {
             let d = Diagnostic::error(span, "random is not a provider").with_help(
                 "random.password, random.bytes, random.id, random.uuid and \
@@ -184,21 +181,16 @@ impl Lowerer<'_> {
         Ok(out)
     }
 
-    /// The statements beside `n` that configure the provider `name` (a
-    /// `provider` or a provider's `use`), in source order. A provider is
+    /// The `use`s beside `n` that configure the provider `name`, in
+    /// source order. A provider is
     /// declared once, or several times each under a clause (R-104); the
     /// scope's one namespace says so (`redeclared`).
     fn providers_named(&mut self, n: &SyntaxNode, name: &str) -> L<Vec<SyntaxNode>> {
         Ok(n.parent()
             .into_iter()
             .flat_map(|p| p.children())
-            .filter(|c| self.is_provider_stmt(c) && provider_name(c) == name)
+            .filter(|c| provider_use(c, self.units, &self.decls.deployed).as_deref() == Some(name))
             .collect())
-    }
-
-    /// A `provider` statement, or a `use` of a provider (R-112).
-    fn is_provider_stmt(&self, c: &SyntaxNode) -> bool {
-        c.kind() == PROVIDER || provider_use(c, self.units, &self.decls.deployed).is_some()
     }
 
     fn rule_or_fact(&mut self, rc: &Rc, head: Atom, body: Vec<Lit>) -> L<Stmt> {
@@ -213,7 +205,7 @@ impl Lowerer<'_> {
     /// `env.var(NAME)`, `time.now()`, `memo.first(KEY, CANDIDATE)` as a
     /// term: the read of the extern with those inputs, its last column
     /// the value. `None`: the call is not one. A call of another built-in
-    /// provider's extern, or of one with no `provider` statement for it,
+    /// provider's extern, or of one with no provider's `use` for it,
     /// is an error naming the statement to write.
     pub(super) fn env_var_call(
         &mut self,
@@ -274,8 +266,8 @@ impl Lowerer<'_> {
         self.realize(rc, res, pos, pre, span)
     }
 
-    /// The externs of the built-in fact providers the program's `provider`
-    /// blocks name, declared: their statements.
+    /// The externs of the built-in fact providers the program's `use`s
+    /// name, declared: their statements.
     pub(super) fn declare_builtin_externs(&mut self) -> Vec<Stmt> {
         let mut out = Vec::new();
         // Declared where a program names it, so a file that does not
@@ -299,7 +291,7 @@ impl Lowerer<'_> {
                 if self.decls.externs.contains_key(&f.name) {
                     continue;
                 }
-                // Declared where the `provider` statement stands.
+                // Declared where the provider's `use` stands.
                 f.span = span;
                 let cols = f.args.iter().map(|b| (b.input, b.name.clone())).collect();
                 self.decls.externs.insert(f.name.clone(), cols);
@@ -309,13 +301,16 @@ impl Lowerer<'_> {
         out
     }
 
-    /// The program's `provider` statements: name and span, the first of a
+    /// The program's providers' `use`s: name and span, the first of a
     /// name.
     fn provider_blocks(&self) -> Vec<(String, Span)> {
         let mut out: Vec<(String, Span)> = Vec::new();
         for u in self.units {
-            for c in u.root.children().filter(|c| self.is_provider_stmt(c)) {
-                let name = provider_name(&c);
+            for (c, name) in u
+                .root
+                .children()
+                .filter_map(|c| provider_use(&c, self.units, &self.decls.deployed).map(|n| (c, n)))
+            {
                 if out.iter().any(|(n, _)| *n == name) {
                     continue;
                 }

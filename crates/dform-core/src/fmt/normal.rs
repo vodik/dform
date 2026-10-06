@@ -3,7 +3,7 @@
 //! only when it needs it, `not lit` for `not { lit }`, `==` where both
 //! sides are bound, the atom `p(k, i)` for `i = p[k]` with `i` fresh,
 //! `env == "prod"` for a value name's atom `env("prod")`, no `{}` on a
-//! `provider` or `instance` with no entries, and `k` for the entry `k = k`.
+//! `use` or `instance` with no entries, and `k` for the entry `k = k`.
 //!
 //! Each is an edit of the source text, read from the tree; the caller
 //! parses the result again and prints it, until nothing changes.
@@ -336,13 +336,13 @@ impl Ctx {
     }
 
     /// `{ a: a }` as `{ a }`.
-    /// A `provider` or `instance` block with no entries is left out
-    /// (R-26): `use aws {}` is `use aws`.
+    /// A `use` or `instance` block with no entries is left out (R-26):
+    /// `use aws {}` is `use aws`.
     fn empty_blocks(&mut self, root: &SyntaxNode) {
         for b in root.descendants().filter(|n| n.kind() == BLOCK) {
             if !b
                 .parent()
-                .is_some_and(|p| matches!(p.kind(), PROVIDER | INSTANCE | USE))
+                .is_some_and(|p| matches!(p.kind(), INSTANCE | USE))
             {
                 continue;
             }
@@ -383,9 +383,9 @@ impl Ctx {
                 );
             let assign = tokens(&a).any(|t| t.kind() == EQ);
             let source = path.text() == "source"
-                && a.parent().and_then(|b| b.parent()).is_some_and(|s| {
-                    s.kind() == PROVIDER || crate::syntax::resolve::maybe_provider_use(&s).is_some()
-                });
+                && a.parent()
+                    .and_then(|b| b.parent())
+                    .is_some_and(|s| crate::syntax::resolve::maybe_provider_use(&s).is_some());
             if named && assign && !source && self.text(&value) == seg.text() {
                 let (start, end) = (path.text_range().end(), value.text_range().end());
                 self.edits.push((start.into(), end.into(), String::new()));

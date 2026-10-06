@@ -20,7 +20,7 @@
 //! extern's secret column is answered with where the mock keeps it (the
 //! world's `held`), never the value (`FakeCloud::hold`).
 //!
-//! The program's settings (a `provider` block's, `provider_config`) arrive
+//! The program's settings (a provider's `use` block's, `provider_config`) arrive
 //! at a second Configure as `settings`; the mock reports `settings.account`
 //! as the account its credentials reach, for `expect_account`.
 //!

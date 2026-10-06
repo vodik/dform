@@ -42,8 +42,9 @@ deployment per value. What a file takes is its header, before its body:
 `key` lines, then `input` lines (value inputs, then
 relation inputs, `input p from ..`). `use` and `instance` are body
 statements. Everything
-else is the body, `provider` included: a provider block is a rule that
-may read values, in scope for the whole program wherever it is written.
+else is the body, a provider's `use` included: its settings are a rule
+that may read values, in scope for the whole program wherever it is
+written.
 A header statement after the body's first statement is an error that says
 to move it ("`key env` is a header statement: move it above the body's
 first statement, line 5"); `dform fmt` moves it, and puts the header's
@@ -625,7 +626,7 @@ instance or `use` takes at most one clause, after its block's `}` (and a
 `set` block's rank): `resource T n { .. } where B`, and a body of
 several lines is `} where {`, one literal per line, closed by its own
 `}`. The clause is a query, and the block is one resource (or set of
-contributions, or copy) per match. A `provider` and an `input` take one
+contributions, or copy) per match. An `input` takes one
 too, and a named statement under a clause may be declared again under
 another ("Guarded declarations"). `if`, the clause word of an earlier surface (H-3), is an
 error wherever it stands, and the error prints the statement with its
@@ -960,8 +961,8 @@ module is an error naming `use`, and so is one with no name.
 
 ### Guarded declarations
 
-A named statement, `let`, `instance`, `use`, `provider`, `resource` or
-`input`, may be declared more than once in a scope when every
+A named statement, `let`, `instance`, `use` (a module's or a
+provider's), `resource` or `input`, may be declared more than once in a scope when every
 declaration of the name has a clause (R-104); one without a clause is
 the only one of its name, and a second beside it is the error at the
 second, naming the first: "`db` is declared twice; give each a
@@ -986,14 +987,15 @@ component signature ("Component signatures") is what makes them agree.
 
 - `use m as n where B` beside `use m2 as n where B2`: the module that
   holds, `n.x` its item.
-- `use aws { .. } where B`: its settings, its account check and its
-  start hold only while `B` does. The block's `provider_config` is
-  derived under the clause, with no settings too, so the provider serves
-  nothing until it arrives (the deferred configuration a provider block
-  with settings always had); a stack that picks gcp never configures
-  aws. Two declarations of one provider each give their settings, the
-  first its `source`. `dform dev effects` lists each guarded provider's
-  `starts` row, per combination of the enum inputs its clause reads.
+- `use aws { .. } where B`, a provider's: its settings, its account
+  check and its start hold only while `B` does. The block's
+  `provider_config` is derived under the clause, with no settings too,
+  so the provider serves nothing until it arrives (the deferred
+  configuration a provider's settings always have); a stack that picks
+  gcp never configures aws. Two declarations of one provider each give
+  their settings, the first its `source`. `dform dev effects` lists each
+  guarded provider's `uses` row, per combination of the enum inputs its
+  clause reads.
 - `input gcp_project: string where cloud == "gcp"`, a dependent input:
   it is declared, read and defaulted only where its clause holds, and
   one with no default is required there (a deny, `input gcp_project is
@@ -1108,26 +1110,26 @@ for a module, or beside a copy `db`, is the error two uses are. A `use`
 is a provider's when its path is one segment naming no module, stack or
 component of the program, and a provider: one `dform.toml`'s
 `[providers]` names, a built-in (`file`, `env`, `time`, `ssh`, the
-mock's `fake`, `gke`, `k8s`) or a project's `providers/NAME/`; any other
-is the error for a missing module, which says it is no provider either. `use ovh as cloud` is not read yet (an error
-saying so). `provider NAME { .. }` is the old spelling of the same
-statement, read until the corpus is rewritten. Below, "a `provider`
-statement" is either spelling.
+mock's `fake`, `gke`, `k8s`, and the namespace of a mock's types, `aws`
+of aws-mock's `aws.vpc`), a project's `providers/NAME/`, or one whose
+block names its `source`; any other is the error for a missing module,
+which says it is no provider either. `use ovh as cloud` is not read yet
+(an error saying so). `provider`, the statement of an earlier surface,
+is an error naming `use`.
 
-`provider NAME { .. }`, or `provider NAME` with no settings, names a
-provider the program uses; a program with no `provider` statement starts
-none, and what evaluates it against providers (`plan`, `apply`, `query`,
-`why`, `test`) refuses it, naming the fix (`dev --provider` runs it
-anyway). Its `source` is a constant (the stack reads it to start the
-provider; without one, dform.toml's `[providers]` entry of the name).
-Every other setting is the provider's own, which its schema may declare;
-one it does not is passed to Configure as written. Each is a term, read like a rule's
-(inputs, value names, tables, `env.var`), and the block
-lowers to one rule for them all, plus one for `expect_account`:
+A program with no provider's `use` starts none, and what evaluates it
+against providers (`plan`, `apply`, `query`, `why`, `test`) refuses it,
+naming the fix (`dev --provider` runs it anyway). A provider's `source`
+is a constant (the stack reads it to start the provider; without one,
+dform.toml's `[providers]` entry of the name). Every other setting is
+the provider's own, which its schema may declare; one it does not is
+passed to Configure as written. Each is a term, read like a rule's
+(inputs, value names, tables, `env.var`), and the block lowers to one
+rule for them all, plus one for `expect_account`:
 
 ```
 use p { k1 = t1, k2 = t2 }    provider_config("p", { k1: t1', k2: t2' }) :- reads
-expect_account = t                 provider_expect_account("p", t') :- reads
+expect_account = t            provider_expect_account("p", t') :- reads
 ```
 
 A setting is a content position: a dot in it reads now. A block takes no
@@ -1135,16 +1137,16 @@ A setting is a content position: a dot in it reads now. A block takes no
 provider only where it holds ("Guarded declarations"): `use fake {
 region = "eu-west-1" } where cloud == "aws"`.
 
-A `provider` statement also brings the provider's externs into scope, with
-their binding modes (DESIGN.org R-8): a program does not write `extern`
-for them. `file`, `env` and `time` are built-in fact providers, declared
-like any provider and needing no `dform.toml` source (`externs::BUILTINS`);
+A provider's `use` also brings its externs into scope, with their
+binding modes (DESIGN.org R-8): a program does not write `extern` for
+them. `file`, `env` and `time` are built-in fact providers, used like
+any provider and needing no `dform.toml` source (`externs::BUILTINS`);
 dform answers them itself:
 
 ```
-provider file         file.text(+path, -value: string); the loaders, `yaml(p)` .. ("Documents")
-provider env          env.var(+name, -value: secret(string))
-provider time         time.now(-t: time)
+use file         file.text(+path, -value: string); the loaders, `yaml(p)` .. ("Documents")
+use env          env.var(+name, -value: secret(string))
+use time         time.now(-t: time)
 ```
 
 Any other provider declares its externs in its schema (R-106), one fact
@@ -1173,10 +1175,10 @@ names sorted, unless the API has an order of its own), so a program
 enumerates zones with a column and a plan never reshuffles. The aws mock
 answers it from `crates/dform-mock/schemas/aws-mock.externs.df`.
 
-`extern file.text(..)` in a program is an error naming the `provider`
-statement to write instead. `env.var(t)` as a term is the lookup
-`env.var[t]`, `time.now()` the lookup `time.now[]`; without the
-`provider` statement either is an error that says to declare it.
+`extern file.text(..)` in a program is an error naming the `use` to
+write instead. `env.var(t)` as a term is the lookup `env.var[t]`,
+`time.now()` the lookup `time.now[]`; without its `use` either is an
+error that says to write it.
 `persist` after an extern is an error naming `memo.first`. `extern`
 stays the compiler's tests' word, and a program's for an extern no
 schema declares.
@@ -1186,7 +1188,7 @@ schema declares.
 `memo.first(+key: string, +candidate, -value)` keeps a value across runs
 (R-60): the first candidate ever given for a key is the value on that
 run and every later one, whatever the candidate becomes. It is a built-in
-relation, in scope with no `provider` statement; `memo.first(k, c)` as a
+relation, in scope with no `use`; `memo.first(k, c)` as a
 term is its value. The program says what is kept, where it reads it:
 
 ```
@@ -1919,7 +1921,7 @@ The normal forms:
   nothing sets a path below them, in source order at the first one's
   place; a parent with an object under it (`metadata.labels = { .. }`) or
   with one leaf (`spec.replicas = 1`) stays dotted;
-- a `provider` or `instance` with no entries has no block: `use aws`;
+- a `use` or `instance` with no entries has no block: `use aws`;
 - a header name is bare when it is a name, not a keyword, and not bound by
   the clause; else it is quoted;
 - `not { lit }` of one literal whose names are all bound is `not lit`;

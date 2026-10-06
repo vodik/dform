@@ -355,7 +355,7 @@ pub struct OutputDecl {
     pub span: Span,
 }
 
-/// A `stack` or `provider` statement: a name and its `key = value` block.
+/// A `stack` or provider's `use`: a name and its `key = value` block.
 #[derive(Debug, Clone)]
 pub struct Config {
     pub name: String,

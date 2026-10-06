@@ -615,7 +615,6 @@ impl Decls {
             SyntaxKind::COMPONENT if is_declared() => decl(Symbol::Module(name)),
             SyntaxKind::USE if self.provider_use(&parent) => What::Provider,
             SyntaxKind::USE | SyntaxKind::INSTANCE => self.statement_path(&parent, t),
-            SyntaxKind::PROVIDER => What::Provider,
             SyntaxKind::DECL | SyntaxKind::EXTERN | SyntaxKind::INPUT_RELATION
                 if relation_name(&parent).as_ref() == Some(t) =>
             {

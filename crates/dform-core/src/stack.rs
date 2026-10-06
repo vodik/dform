@@ -44,7 +44,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// The program's stack settings and `provider` statements.
+/// The program's stack settings and providers' `use`s.
 #[derive(Debug, Clone, Default)]
 pub struct Stack {
     /// The stack's name, when the manifest gave it settings (else the
@@ -59,7 +59,7 @@ pub struct Stack {
     pub bootstrap: bool,
     /// Provider schemas, as `--provider` takes them: a name or a path.
     pub providers: Vec<String>,
-    /// Each `provider NAME { .. }` block's spec (as in `providers`) ->
+    /// Each `use NAME { .. }` block's spec (as in `providers`) ->
     /// NAME: the block's settings configure the provider it selects.
     pub provider_blocks: BTreeMap<String, String>,
     /// `key env: T`, `key region: T`: the inputs that key the stack, in
@@ -233,7 +233,7 @@ pub fn template_key(rest: &str, keys: &[String], path: &str) -> Option<String> {
         .map(|kv| kv.join(","))
 }
 
-/// Read the stack's settings, keys and `provider` statements of a loaded
+/// Read the stack's settings, keys and providers' `use`s of a loaded
 /// program.
 pub fn config(program: &Program) -> Result<Stack> {
     let mut out = Stack::default();

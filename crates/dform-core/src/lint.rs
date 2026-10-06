@@ -376,7 +376,7 @@ pub struct Collision {
 /// values do not depend on any key input, one finding per provider (R-117)
 /// listing each at the place it is written. `stack` is the deployment's
 /// name; `provider` names the provider that serves a type, as the
-/// program's `provider` block does when it configures one. A provider
+/// program's provider's `use` block does when it configures one. A provider
 /// whose configuration differs per deployment ([`configured_per_key`])
 /// reaches a per-deployment account, and its names do not collide.
 pub fn key_collisions(

@@ -91,7 +91,7 @@ pub struct Target {
     pub files: Vec<PathBuf>,
     /// Stack inputs from `.df` files of facts (`--input-file`).
     pub input_files: Vec<PathBuf>,
-    /// The providers, over the program's `provider` statements
+    /// The providers, over the program's providers' `use`s
     /// (`--provider`); none: the program's.
     pub providers: Vec<String>,
 }
@@ -105,7 +105,7 @@ pub struct Loaded {
     pub program: Program,
     /// The program's files, as sources.
     pub relations: Vec<Relation>,
-    /// The stack's settings (dform.toml's) and its `provider` statements.
+    /// The stack's settings (dform.toml's) and its providers' `use`s.
     pub cfg: stack::Stack,
     /// The stack's name.
     pub stack: String,
@@ -138,7 +138,7 @@ pub fn load(t: &Target, version: &str, read: Reader, obs: &mut dyn Observer) -> 
     let relations = crate::watch::program_sources(&loaded);
     obs.relations(&relations);
     // The stack's settings (the loader's, from the manifest) and its
-    // `provider` statements, their sources the manifest's.
+    // providers' `use`s, their sources the manifest's.
     let mut cfg = stack::config(&program)?;
     if let Some(m) = &manifest {
         with_manifest(&mut cfg, m);
@@ -199,7 +199,7 @@ impl Loaded {
     }
 
     /// A run that starts providers needs one: a program with no
-    /// `provider` statement, run with no `--provider`, starts none (R-26).
+    /// provider's `use`, run with no `--provider`, starts none (R-26).
     pub fn require_provider(&self) -> Result<()> {
         let named = self
             .program
@@ -1141,7 +1141,7 @@ impl Located {
         // writes the same.
         let collisions = if opts.collisions && !l.cfg.keys.is_empty() && !l.cfg.isolated {
             let keys: Vec<String> = l.cfg.keys.iter().map(|(k, _)| k.clone()).collect();
-            // A type's provider, by the name a `provider` block that
+            // A type's provider, by the name a provider's `use` block that
             // configures it gives it (its namespace's, R-36).
             let configured = provider_configs(&self.program);
             let provider = |t: &str| {

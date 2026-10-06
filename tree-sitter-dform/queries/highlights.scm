@@ -59,7 +59,6 @@
 (use name: (identifier) @module)
 (instance component: (dotted_name (identifier) @module))
 (instance name: (identifier) @label)
-(provider name: (identifier) @module)
 (resource name: (identifier) @label)
 
 ; A bare call of a builtin: the aggregates, the prelude's functions
@@ -110,7 +109,7 @@
 ; --- keywords ---------------------------------------------------------------
 
 [
-  "provider" "key" "input" "from" "output"
+  "key" "input" "from" "output"
   "extern" "type" "decl" "mixed" "let" "set"
   "component" "instance" "use" "as" "resource"
 ] @keyword

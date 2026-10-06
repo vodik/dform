@@ -47,7 +47,6 @@ pub enum SyntaxKind {
     DOT2_EQ,
     // Keywords: the statement keywords (a statement's first token), then
     // the body words, the clause word and the literals.
-    PROVIDER_KW,
     KEY_KW,
     TYPE_KW,
     DECL_KW,
@@ -86,7 +85,6 @@ pub enum SyntaxKind {
     /// `edition N`, which is gone (R-68): parsed so that the error names
     /// dform.toml and `fmt` drops it.
     EDITION,
-    PROVIDER,
     /// `input k: T [= t] [check B]`, or `key k: T [= t] [check B]`.
     INPUT,
     /// `input p(cols) from FORMAT(SOURCE)`: a relation fed from outside.
@@ -107,7 +105,7 @@ pub enum SyntaxKind {
     /// `use PATH [as NAME] [where B]`.
     USE,
     RESOURCE,
-    /// `{ entry* }` of a resource, settings, instance or provider.
+    /// `{ entry* }` of a resource, settings, instance or use.
     BLOCK,
     /// `path (=|+=) term [rank]` in a block.
     ASSIGN,
@@ -182,11 +180,11 @@ impl SyntaxKind {
 
     /// A keyword a statement starts with (H section 4).
     pub fn is_stmt_keyword(self) -> bool {
-        (PROVIDER_KW as u16..=WARN_KW as u16).contains(&(self as u16))
+        (KEY_KW as u16..=WARN_KW as u16).contains(&(self as u16))
     }
 
     pub fn is_keyword(self) -> bool {
-        (PROVIDER_KW as u16..=FALSE_KW as u16).contains(&(self as u16))
+        (KEY_KW as u16..=FALSE_KW as u16).contains(&(self as u16))
     }
 
     /// Any word: a name, or a keyword where a name stands (a key, a path

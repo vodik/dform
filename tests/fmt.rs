@@ -230,7 +230,7 @@ fn fmt_orders_a_components_interface_first() {
     assert_eq!(fmt(want), want);
 }
 
-/// A `provider` or `instance` with no entries is written without braces
+/// A `use` or `instance` with no entries is written without braces
 /// (R-26): `{}` parses, and `fmt` drops it; a block with a comment stays.
 #[test]
 fn fmt_drops_an_empty_block() {

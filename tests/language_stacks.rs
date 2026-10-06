@@ -1,6 +1,6 @@
-//! Stacks and `provider` statements: a stack is named after its file, which
+//! Stacks and providers' `use`s: a stack is named after its file, which
 //! scopes its state; its backend (dform.toml) holds the state and a lock,
-//! other stacks read its outputs, and `provider` picks the mock's schema.
+//! other stacks read its outputs, and a provider's `use` picks the mock's schema.
 
 mod common;
 use common::{Scratch, copy_dir, repo};
@@ -249,7 +249,7 @@ resource net.subnet a {
     assert!(r.stdout.contains(want), "{}", r.stdout);
 }
 
-/// `provider` picks the mock's schema; `--provider` overrides it.
+/// A provider's `use` picks the mock's schema; `--provider` overrides it.
 #[test]
 fn the_provider_statement_selects_the_schema() {
     let s = Scratch::project("lang-stack-provider");

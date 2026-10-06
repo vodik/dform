@@ -24,7 +24,7 @@ const IDENT = /[A-Za-z_][A-Za-z0-9_]*/;
 // The statement keywords: a statement's first token (docs/grammar.md
 // "Tokens"). Anywhere a plain name is expected a keyword is a name.
 const STATEMENT_KEYWORDS = [
-  'provider', 'key', 'type', 'decl', 'extern', 'input',
+  'key', 'type', 'decl', 'extern', 'input',
   'output', 'let', 'set', 'component', 'instance', 'use', 'resource',
   'deny', 'warn',
 ];
@@ -107,7 +107,6 @@ export default grammar({
     comment: _ => token(seq('#', /[^\n]*/)),
 
     _statement: $ => choice(
-      $.provider,
       $.input,
       $.input_relation,
       $.output,
@@ -124,15 +123,6 @@ export default grammar({
       $.check,
       $.rule,
       $.fact,
-    ),
-
-    // A provider under a clause starts where it holds (R-104). A block
-    // with no entries is left out: `provider aws`.
-    provider: $ => seq(
-      'provider',
-      field('name', $._word),
-      optional(field('body', $.block)),
-      optional($.clause),
     ),
 
     // `input k: T`, or `key k: T`: an input the target gives (R-29); or
@@ -412,7 +402,7 @@ export default grammar({
       optional($.clause),
     ),
 
-    // A resource's, instance's or provider's entries,
+    // A resource's entries,
     // separated by a newline or a comma. Its clause follows it.
     block: $ => seq(
       '{',

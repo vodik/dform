@@ -55,7 +55,6 @@ fn ts_errors(tree: &Tree) -> Vec<String> {
 /// cut them differently (tree-sitter nests `a.b[c]`, rowan lists it).
 const SAME: &[(SyntaxKind, &[&str])] = &[
     (EDITION, &["edition"]),
-    (PROVIDER, &["provider"]),
     (INPUT, &["input"]),
     (INPUT_RELATION, &["input_relation"]),
     (OUTPUT_DECL, &["output"]),

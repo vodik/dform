@@ -1,38 +1,42 @@
 //! A provider is imported with `use` and configured by its block (R-112
-//! amendment 2): `use fake { region = .. }` is what `use fake {
-//! region = .. }` was, a guarded `use .. where` R-104's conditional
-//! provider, and a provider's name is in the scope's one namespace. Both
-//! spellings are read until the corpus is rewritten.
+//! amendment 2): `use fake { region = .. }`, a guarded `use .. where`
+//! R-104's conditional provider, and a provider's name is in the scope's
+//! one namespace. `provider`, the earlier statement, is an error naming
+//! `use`.
 
 mod common;
 use common::Scratch;
 
-/// A `use` of a provider plans as its `provider` statement does, and
-/// configures it with the same `provider_config` row.
+/// A `use` of a provider plans against it and configures it with its
+/// block's `provider_config` row; the `provider` statement is gone.
 #[test]
 fn a_provider_is_used_and_configured_by_its_block() {
     let s = Scratch::new("providers-use");
     let body = "\nresource net.vpc v {\n  cidr = \"10.0.0.0/16\"\n}\n";
     s.write(
-        "old.df",
+        "p.df",
         &format!("use fake {{ region = \"eu-west-1\" }}{body}"),
+    );
+    let plan = s.run(&["plan", "--why=none", "p.df"]).success().stdout;
+    assert!(plan.contains("+ net.vpc[\"v\"]"), "{plan}");
+    let config = s
+        .run(&["dev", "query", "provider_config", "p.df"])
+        .success()
+        .stdout;
+    assert!(
+        config.contains("\"fake\"  {region: \"eu-west-1\"}"),
+        "{config}"
     );
     s.write(
-        "new.df",
-        &format!("use fake {{ region = \"eu-west-1\" }}{body}"),
+        "old.df",
+        &format!("provider fake {{ region = \"eu-west-1\" }}{body}"),
     );
-    let plan = |f: &str| s.run(&["plan", "--why=none", f]).success().stdout;
-    assert_eq!(plan("new.df"), plan("old.df"));
-    assert!(plan("new.df").contains("+ net.vpc[\"v\"]"));
-    let config = |f: &str| {
-        s.run(&["dev", "query", "provider_config", f])
-            .success()
-            .stdout
-    };
+    let r = s.run(&["plan", "old.df"]).failure();
     assert!(
-        config("new.df").contains("\"fake\"  {region: \"eu-west-1\"}"),
+        r.stderr.contains("`provider` is gone (R-112)")
+            && r.stderr.contains("`use NAME { k = v }`"),
         "{}",
-        config("new.df")
+        r.stderr
     );
 }
 

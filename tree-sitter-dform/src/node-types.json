@@ -82,10 +82,6 @@
         "named": true
       },
       {
-        "type": "provider",
-        "named": true
-      },
-      {
         "type": "resource",
         "named": true
       },
@@ -1569,42 +1565,6 @@
     }
   },
   {
-    "type": "provider",
-    "named": true,
-    "fields": {
-      "body": {
-        "multiple": false,
-        "required": false,
-        "types": [
-          {
-            "type": "block",
-            "named": true
-          }
-        ]
-      },
-      "name": {
-        "multiple": false,
-        "required": true,
-        "types": [
-          {
-            "type": "identifier",
-            "named": true
-          }
-        ]
-      }
-    },
-    "children": {
-      "multiple": false,
-      "required": false,
-      "types": [
-        {
-          "type": "clause",
-          "named": true
-        }
-      ]
-    }
-  },
-  {
     "type": "range",
     "named": true,
     "fields": {
@@ -2442,10 +2402,6 @@
   },
   {
     "type": "output",
-    "named": false
-  },
-  {
-    "type": "provider",
     "named": false
   },
   {

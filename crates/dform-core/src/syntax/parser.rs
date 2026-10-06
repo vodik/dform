@@ -122,6 +122,10 @@ fn old_spelling(word: &str) -> Option<&'static str> {
              `warn` statements, applied with `use PATH`"
         }
         "apply_policy" => "`apply_policy` is spelled `use`",
+        "provider" => {
+            "`provider` is gone (R-112): a provider is imported and configured by `use`, \
+             `use NAME { k = v }`, or `use NAME` with no settings"
+        }
         "import" => {
             "`import` is gone (R-65): `use PATH` brings in a module by its path from the \
              project root, `use modules.net` for modules/net.df"
@@ -657,12 +661,6 @@ impl<'a> Parser<'a> {
             return self.rule();
         }
         match k {
-            // `use aws`: a block with no entries is left out (R-26).
-            PROVIDER_KW => self.simple(PROVIDER, |p| {
-                p.expect_word()?;
-                p.opt_block()?;
-                p.opt_clause()
-            }),
             INPUT_KW
                 if self.raw(1) == IDENT
                     && self.nth_text(1) == "relation"
@@ -1254,16 +1252,6 @@ impl<'a> Parser<'a> {
         self.bump();
         self.finish();
         Ok(())
-    }
-
-    /// A block that may be left out when it has no entries: `provider
-    /// aws`, `instance network blue` (R-26).
-    fn opt_block(&mut self) -> P {
-        if self.at(L_BRACE) {
-            self.block()
-        } else {
-            Ok(())
-        }
     }
 
     /// A `use` or `instance` block, which may hold rows (R-55).
@@ -2032,6 +2020,7 @@ mod tests {
             ("with env = \"prod\"\n", "`set k = v`"),
             ("constraint \"m\" where p(1)\n", "spelled `deny`"),
             ("apply baseline\n", "`use pack`"),
+            ("provider fake { region = \"r\" }\n", "`use NAME { k = v }`"),
             ("module network {}\n", "a module is a file"),
             ("policy baseline {}\n", "a policy pack is a module"),
             ("import \"modules/net.df\"\n", "`use modules.net`"),

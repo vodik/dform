@@ -193,7 +193,6 @@ apply-order edge, not its content read now (`docs/grammar.md'
      (use name: (identifier) @font-lock-function-name-face)
      (instance component: (dotted_name (identifier) @font-lock-function-name-face))
      (instance name: (identifier) @font-lock-function-name-face)
-     (provider name: (identifier) @font-lock-function-name-face)
      (resource name: (identifier) @font-lock-function-name-face)
      (decl name: (dotted_name (identifier) @font-lock-function-name-face))
      (extern name: (dotted_name (identifier) @font-lock-function-name-face))
@@ -262,7 +261,7 @@ apply-order edge, not its content read now (`docs/grammar.md'
    :language 'dform
    :feature 'keyword
    '([
-      "provider" "key" "input" "from" "output"
+      "key" "input" "from" "output"
       "extern" "type" "decl" "mixed" "let" "set"
       "component" "instance" "use" "as" "resource"
       ] @font-lock-keyword-face

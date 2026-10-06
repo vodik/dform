@@ -39,7 +39,7 @@ pub struct Typing {
 
 impl Typing {
     /// The project's typing: its providers' schemas (the manifest's and
-    /// those its files' `provider` statements name) that a schema file
+    /// those its files' providers' `use`s name) that a schema file
     /// gives, read without starting a provider. A provider that is an
     /// executable types nothing here.
     pub fn of_project(project: &Project) -> Typing {
@@ -58,13 +58,9 @@ impl Typing {
             // schema of none, so naming it too is harmless.
             for p in tree
                 .descendants()
-                .filter(|n| matches!(n.kind(), PROVIDER | USE))
+                .filter_map(|n| crate::syntax::resolve::maybe_provider_use(&n))
             {
-                let w: Vec<_> = words(&p).collect();
-                let one = p.kind() == PROVIDER || w.get(2).is_none_or(|t| t.text() == "as");
-                if let (true, Some(t)) = (one, w.get(1)) {
-                    names.push(t.text().to_string());
-                }
+                names.push(p);
             }
         }
         names.sort();

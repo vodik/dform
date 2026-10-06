@@ -394,7 +394,7 @@ that only gates the resource's block, or feeds another field, does not
 count, and neither does it for `rekey`'s list. `isolated = true` in the
 stack's `[stacks.NAME]` says each key value deploys into its own account
 (or world), and turns the lint off; `dform.df`'s says so, since its
-identity module's names are fixed. A provider whose `provider` block
+identity module's names are fixed. A provider whose `use` block
 reads the key, or a value that depends on it, or a computed attribute of
 a resource (`use k8s { kubeconfig = k3s.kubeconfig }`, read back
 from a server each deployment creates) reaches a per-deployment account
@@ -527,14 +527,14 @@ was built from), and dform refuses one of its built-in providers (the mock,
 
 The mock can pretend to be any provider: a provider it plays is a schema file of
 plain facts, `providers/<name>/schema.df`, selected by the program's
-`provider` statements (`use gke`, or `use aws { source =
+providers' `use`s (`use gke`, or `use aws { source =
 "providers/aws-mock" }` for a directory or `.df` file relative to the
 program's file), by the manifest's `[providers]` entry of the name, or,
 overriding them, with `dform dev --provider NAME` (repeatable). There is
-no default: a program with no `provider` statement starts none, and
+no default: a program with no provider's `use` starts none, and
 `plan`, `apply`, `query`, `why` and `test` refuse it, "the program names no
-provider: add `provider NAME` (dform.toml names its source) or run under
-`dev --provider`". A `provider` or `instance` with no entries is written
+provider: add `use NAME` (dform.toml names its source) or run under
+`dev --provider`". A `use` or `instance` with no entries is written
 without braces (`use fake`, `instance network blue`); `fmt` drops a
 `{}`. In any block an entry that is only a path takes the value of its
 last segment's name, `region` for `region = region` and
@@ -550,16 +550,16 @@ at Configure.
 
 Every resource's type is declared by the schema of the provider that applies
 it. One that none of the stack's providers declares is a plan (and apply)
-error before anything is planned, naming the resource, the `provider` blocks
+error before anything is planned, naming the resource, the providers' `use`s
 and the known schemas (the built-in ones and `providers/*/schema.df`) that do
 declare it: `provider fake does not declare google.compute_subnetwork;
 declared by: gke`. A provider's types are named under it (`aws.vpc` is
-provider aws's), so the error says which `provider` statement to add. A
+provider aws's), so the error says which `use` to add. A
 type the program declares itself with a `type` block is the mock's to
 play. A mock playing several providers on one link (`use google`
 and `use k8s` on mock schemas) takes no settings from any of them.
 
-A `provider` block's settings other than `source` configure the provider,
+A provider's `use` block's settings other than `source` configure the provider,
 and read like any rule reads: inputs, value names, tables and `env.var`.
 A keyed deployment configures its providers by its key:
 
@@ -653,7 +653,7 @@ Kubernetes kinds; try `cargo run -- -C examples/k8s plan`)
 and `aws-mock` (twelve AWS types in the Terraform provider's shape, with its
 Optional+Computed attributes and keyless sets; try
 `cargo run -- -C examples/aws plan`). Each example names its
-provider with a `provider` statement.
+provider with a `use`.
 A `required` attribute the program does not set is a plan error. Lists with
 `type_list_key` are diffed by key (`spec.template.spec.containers[name=web].image`),
 lists of type `set` as sets. A program writes a keyed list by element too:
@@ -1937,7 +1937,7 @@ for byte, and a file with a syntax error is reported, not rewritten.
 
 An extern is a relation a provider answers on demand, with a binding
 pattern: `+` columns are inputs, `-` columns answers. A program does not
-declare one: `provider NAME {}` brings the provider's externs into scope,
+declare one: `use NAME` of a provider brings its externs into scope,
 with their modes from its schema.
 
 ```dform
@@ -2012,8 +2012,8 @@ asks none of them again. Nothing else keeps an answer: every run asks
 again, and `time.now()` is a new time on every plan.
 
 What must stay the same across runs is kept by `memo.first(+key: string,
-+candidate, -value)`, a built-in relation in scope with no `provider`
-statement (docs/grammar.md "Memo"): the first candidate ever given for a
++candidate, -value)`, a built-in relation in scope with no `use`
+(docs/grammar.md "Memo"): the first candidate ever given for a
 key is the value on every later run. An apply keeps what it read in the
 deployment's state; a plan keeps nothing. `dform state taint memo KEY
 [TARGET]` forgets one, so the next run gives its candidate again, and

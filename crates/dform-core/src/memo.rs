@@ -9,7 +9,7 @@
 //! ```
 //!
 //! It is a built-in extern, answered by dform ([`Memos::answer`]) and in
-//! scope with no `provider` statement. Within a run the first call of a key
+//! scope with no provider's `use`. Within a run the first call of a key
 //! answers every later one, so two sites agree. What a run answered is kept
 //! when an apply completes a tick ([`keep`]); a plan keeps nothing.
 //!

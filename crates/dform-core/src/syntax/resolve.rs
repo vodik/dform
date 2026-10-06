@@ -479,14 +479,6 @@ pub fn maybe_provider_use(n: &SyntaxNode) -> Option<String> {
         .then_some(written)
 }
 
-/// The name a `provider` statement or a provider's `use` configures.
-fn provider_name(n: &SyntaxNode) -> String {
-    match n.kind() {
-        USE => use_parts(n).0,
-        _ => word_text(n, 1),
-    }
-}
-
 /// An `instance` statement (R-65): its component's path as written, and
 /// its name (the path's last segment, for a statement in error with none).
 pub fn instance_parts(n: &SyntaxNode) -> (String, String) {
@@ -1980,7 +1972,6 @@ impl<'u> Lowerer<'u> {
         let span = self.span(n);
         let one = |s: Stmt| Ok(vec![s]);
         match n.kind() {
-            PROVIDER => self.provider(n, scope, outer),
             INPUT => {
                 let name = word_text(n, 1);
                 // `input k { f: T [= d] [check B] .. }` (R-54).
@@ -3383,14 +3374,14 @@ impl<'u> Lowerer<'u> {
             return Ok(());
         };
         // A provider's name is in the scope's one namespace too (R-112):
-        // `use db` beside `use db` is the error two uses are.
+        // `use db` of a provider beside `use db` of a module is the error
+        // two uses are.
         let same: Vec<SyntaxNode> = parent
             .children()
-            .filter(|c| matches!(c.kind(), USE | INSTANCE | PROVIDER))
+            .filter(|c| matches!(c.kind(), USE | INSTANCE))
             .filter(|c| {
                 let other = match c.kind() {
                     USE => use_parts(c).1,
-                    PROVIDER => word_text(c, 1),
                     _ => instance_parts(c).1,
                 };
                 other == name

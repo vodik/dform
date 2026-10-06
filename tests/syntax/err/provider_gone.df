@@ -1,0 +1,3 @@
+# A provider is imported and configured by `use` (R-112): the
+# statement `provider` is gone.
+provider fake { region = "eu-west-1" }

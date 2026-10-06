@@ -10,7 +10,7 @@
 //! stack's operational settings: where its state lives, who approves),
 //! `[defaults]` (what a stack's table does not say, and the lease) and
 //! `[discovery]` (globs discovery skips). Programs stay in `.df` files: a
-//! `provider NAME { ... }` block keeps its configuration and takes its
+//! `use NAME { ... }` block keeps its configuration and takes its
 //! source from the manifest's entry of that name. No inputs, and no key
 //! values: a deployment is named by its target. Policy reads the manifest
 //! as facts, `project_provider(Name, Constraint)`,

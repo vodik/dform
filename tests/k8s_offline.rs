@@ -31,7 +31,7 @@ fn dform<S: AsRef<std::ffi::OsStr>>(s: &Scratch, kubeconfig: Option<&str>, args:
     Run::from(c.output().unwrap())
 }
 
-/// The demo with its provider statement pointed at the real provider:
+/// The demo with its provider's `use` pointed at the real provider:
 /// `providers/k8s/` beside it holds the executable.
 fn real_demo(s: &Scratch) {
     let src = std::fs::read_to_string(repo().join("examples/k8s/stacks/k8s_demo.df")).unwrap();

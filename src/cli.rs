@@ -134,7 +134,7 @@ struct Mock {
     /// providers/NAME/schema.df else a built-in, or a path to a schema .df
     /// file), or a plugin executable (a path to one, or to a directory
     /// holding a `dform-provider*`). Repeatable; overrides the program's
-    /// `provider` statements.
+    /// providers' `use`s.
     #[arg(long = "provider", global = true)]
     providers: Vec<String>,
 
@@ -1638,8 +1638,8 @@ fn run_with(
         bail!("internal: a run with no program");
     }
     // The program, as `deployment::load` reads it: the input files'
-    // facts added; `stack` and `provider`
-    // statements over the manifest's defaults, `--provider` over the
+    // facts added; `stack` statements and providers'
+    // `use`s over the manifest's defaults, `--provider` over the
     // latter.
     let target = deployment::Target {
         files: files.clone(),

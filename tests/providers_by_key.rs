@@ -1,4 +1,4 @@
-//! Provider configuration chosen by the deployment key: a `provider` block
+//! Provider configuration chosen by the deployment key: a provider's `use` block
 //! reads the key, inputs a `set` gives and `env.var`, the provider reports the
 //! account its credentials reach, and `expect_account` refuses a plan
 //! that would reach another deployment's.

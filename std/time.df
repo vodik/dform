@@ -2,7 +2,7 @@
 # "Functions"). Zones are the tzdb bundled into dform, never the host's:
 # `dform version` prints its release. The current time is no function
 # (a function is pure): it is `time.now()`, the extern of the built-in
-# `time` provider (`provider time`), read again every run (R-60).
+# `time` provider (`use time`), read again every run (R-60).
 package time
 
 #| A time from RFC 3339 with an offset (`Z` is UTC) or a date and time with a zone, `2026-10-02T09:00[Europe/Paris]`; no value for any other text. `time(s)` is the same, checked at compile time for a literal.

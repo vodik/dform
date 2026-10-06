@@ -67,10 +67,6 @@
       "members": [
         {
           "type": "SYMBOL",
-          "name": "provider"
-        },
-        {
-          "type": "SYMBOL",
           "name": "input"
         },
         {
@@ -132,51 +128,6 @@
         {
           "type": "SYMBOL",
           "name": "fact"
-        }
-      ]
-    },
-    "provider": {
-      "type": "SEQ",
-      "members": [
-        {
-          "type": "STRING",
-          "value": "provider"
-        },
-        {
-          "type": "FIELD",
-          "name": "name",
-          "content": {
-            "type": "SYMBOL",
-            "name": "_word"
-          }
-        },
-        {
-          "type": "CHOICE",
-          "members": [
-            {
-              "type": "FIELD",
-              "name": "body",
-              "content": {
-                "type": "SYMBOL",
-                "name": "block"
-              }
-            },
-            {
-              "type": "BLANK"
-            }
-          ]
-        },
-        {
-          "type": "CHOICE",
-          "members": [
-            {
-              "type": "SYMBOL",
-              "name": "clause"
-            },
-            {
-              "type": "BLANK"
-            }
-          ]
         }
       ]
     },
@@ -3299,10 +3250,6 @@
             "members": [
               {
                 "type": "STRING",
-                "value": "provider"
-              },
-              {
-                "type": "STRING",
                 "value": "key"
               },
               {
@@ -4213,10 +4160,6 @@
               "members": [
                 {
                   "type": "STRING",
-                  "value": "provider"
-                },
-                {
-                  "type": "STRING",
                   "value": "key"
                 },
                 {
@@ -4356,10 +4299,6 @@
           "content": {
             "type": "CHOICE",
             "members": [
-              {
-                "type": "STRING",
-                "value": "provider"
-              },
               {
                 "type": "STRING",
                 "value": "key"
