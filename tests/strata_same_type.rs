@@ -40,7 +40,7 @@ fn agents_read_their_servers_address() {
         "{}",
         r.stdout
     );
-    s.converge(&["apply", "k3s"]);
+    s.run(&["apply", "k3s"]).success();
     let world = s.read("dform.state/k3s/remote.json");
     assert_eq!(
         world.matches("https://k3s.server.db.fake:6443").count(),

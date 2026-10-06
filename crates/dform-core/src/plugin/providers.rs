@@ -1121,6 +1121,18 @@ impl Providers {
         self.invalidate();
     }
 
+    /// How long a tick waits on the open null `label` (R-122): the call
+    /// timeout of the provider whose object or extern answers it
+    /// (`[providers.NAME] timeout`). `None` for a built-in extern's
+    /// (`ssh.read`), which no provider of the stack answers.
+    pub fn wait_timeout(&self, label: &str) -> Option<std::time::Duration> {
+        let (typ, _) = crate::value::null_owner(label)?;
+        let l = self.loaded.get()?;
+        let i = (l.owner.get(&typ).or_else(|| l.externs.get(&typ)).copied())
+            .or_else(|| self.reached(&typ))?;
+        Some(self.link(i).ok()?.borrow().policy().timeout)
+    }
+
     /// What a resource of `typ` waits on before its provider can plan it
     /// (R-110): the program's settings of the provider that serves it,
     /// while they are not known; or, for a type no schema declares whose

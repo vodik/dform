@@ -1,11 +1,10 @@
 //! Tick 2 of a provider configured from what tick 1 makes (R-45): the
 //! plan lists that provider's resources under `later`, waiting on its
 //! settings; apply makes tick 1, configures the provider at the boundary
-//! (waiting, up to `--wait`, while the value is not there yet), plans what
-//! `later` held against it, and asks before applying it as it asked
-//! before tick 1, unless `--yes`. A plan file or an approval did not see
-//! that diff: the apply stops before it. A value no wait brings stops it,
-//! naming the provider.
+//! (waiting, within the provider's `timeout`, while the value is not
+//! there yet), plans what `later` held against it, and asks before
+//! applying it as it asked before tick 1, unless `--yes` (R-122). A plan
+//! file or an approval did not see that diff: the apply stops before it.
 //!
 //! The server is the mock's `db.postgres` (the mock run as a plugin, a
 //! second provider process), the settings its endpoint behind an
@@ -233,35 +232,6 @@ fn the_boundary_waits_for_the_settings_then_configures() {
     let w = audit(&s, "wait");
     assert_eq!(w.len(), 1, "{w:?}");
     assert_eq!(w[0]["result"], "resolved");
-}
-
-/// `--wait 0s`, the endpoint not there: the apply stops after tick 1,
-/// naming the provider `later` waits on, as the plan's footer says.
-#[test]
-fn without_a_wait_the_apply_stops_naming_the_provider() {
-    let s = scratch("tick2-no-wait");
-    let r = dev(
-        &s,
-        &[
-            "--chaos",
-            "not-ready=db.postgres[\"server\"].endpoint:100",
-            "apply",
-            "--yes",
-            "--wait",
-            "0s",
-            "p.df",
-        ],
-    )
-    .failure();
-    assert!(
-        r.stderr.contains(
-            "apply stopped at tick 2: nothing definite to apply, still waiting on \
-             db.postgres server.endpoint, provider k8s (kubeconfig from kc)"
-        ),
-        "{}",
-        r.stderr
-    );
-    assert!(!r.stdout.contains("configured after"), "{}", r.stdout);
 }
 
 /// A kind the provider serves only once the program configures it (a

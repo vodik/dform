@@ -41,7 +41,7 @@ fn a_computed_map_with_typed_keys_is_its_keys() {
         r.stdout
     );
     assert!(!r.stdout.contains("disagree"), "{}", r.stdout);
-    s.converge(&["apply", "lab"]);
+    s.run(&["apply", "lab"]).success();
     let r = s.run(&["plan", "lab"]).success();
     assert_eq!(r.summary(), "stack lab is up to date", "{}", r.stdout);
 }

@@ -343,10 +343,6 @@ pub struct StackTable {
     /// Gone (R-38): a document of the deployment's settings is the
     /// stack's `settings from yaml(..)`. Read only to say so.
     pub config: Option<Spanned<String>>,
-    /// How long an apply's tick waits for its open nulls to resolve (a
-    /// Job's status, a host that answers) before it stops (`10m`; R-81);
-    /// `apply --wait` overrides it.
-    pub wait: Option<String>,
     /// The rules and relations a plan may empty without the guardrail's
     /// warning and ask (R-80), as `apply --allow-empty` names them.
     #[serde(default)]
@@ -390,7 +386,6 @@ impl Defaults {
             audit_sink: self.audit_sink.clone(),
             isolated: self.isolated.clone(),
             config: self.config.clone(),
-            wait: None,
             allow_empty: Vec::new(),
         }
     }
@@ -500,14 +495,6 @@ impl Manifest {
                 .map(|(n, t)| (format!("[stacks.{n}]"), t.clone())),
         );
         for (table, t) in tables {
-            if let Some(v) = &t.wait
-                && crate::store::parse_duration(v).is_none()
-            {
-                bail!(
-                    "{} = {v:?}: a duration, `30s`, `10m` or `0s` (do not wait)",
-                    at(&format!("{table} wait"))
-                );
-            }
             if let Some(c) = &t.config {
                 bail!(
                     "{} = {:?}: a stack's config is gone (R-38): its settings are the program's \
@@ -699,11 +686,15 @@ impl Manifest {
             .collect()
     }
 
-    /// How long a tick of `stack` waits on open nulls: `[stacks.NAME]
-    /// wait`, if it says.
-    pub fn stack_wait(&self, stack: &str) -> Option<std::time::Duration> {
-        let w = self.stacks.get(stack)?.wait.as_deref()?;
-        crate::store::parse_duration(w)
+    /// `[providers.NAME] timeout`, if it says: how long one call to the
+    /// provider `name` may go unanswered, and how long a tick waits on
+    /// what it has not answered yet (R-122). A built-in's (`ssh`) is
+    /// named so too, its table holding only its policy.
+    pub fn provider_timeout(&self, name: &str) -> Option<std::time::Duration> {
+        match self.providers.get(name)? {
+            ProviderEntry::Table(t) => crate::store::parse_duration(t.timeout.as_deref()?),
+            ProviderEntry::Source(_) => None,
+        }
     }
 
     /// The default backend of `stack` (a `local` directory relative to
@@ -1110,14 +1101,14 @@ mod tests {
     }
 
     /// `[providers.NAME]` sets a provider's call policy, by its source;
-    /// `[stacks.NAME] wait` a stack's wait budget (R-81).
+    /// a built-in's timeout by its name (R-122).
     #[test]
-    fn a_manifest_sets_call_policies_and_wait_budgets() {
+    fn a_manifest_sets_call_policies() {
         use crate::plugin::policy::Policy;
         use std::time::Duration;
         let m = manifest(
             "[providers]\nfake = { source = \"fake\", timeout = \"2m\", backoff = \"10ms\", \
-             retries = 2 }\nk8s = \"k8s\"\n[stacks.app]\nwait = \"30m\"\n",
+             retries = 2 }\nk8s = \"k8s\"\nssh = { timeout = \"5m\" }\n",
         )
         .unwrap();
         let fake = Policy {
@@ -1126,13 +1117,14 @@ mod tests {
             backoff: Duration::from_millis(10),
         };
         assert_eq!(m.policies(), BTreeMap::from([("fake".to_string(), fake)]));
-        assert_eq!(m.stack_wait("app"), Some(Duration::from_secs(1800)));
-        assert_eq!(m.stack_wait("other"), None);
+        assert_eq!(m.provider_timeout("ssh"), Some(Duration::from_secs(300)));
+        assert_eq!(m.provider_timeout("fake"), Some(Duration::from_secs(120)));
+        assert_eq!(m.provider_timeout("k8s"), None);
         let e = manifest("[providers]\nfake = { source = \"fake\", timeout = \"soon\" }\n")
             .unwrap_err();
         assert!(e.to_string().contains("[providers.fake] timeout"), "{e}");
-        let e = manifest("[stacks.app]\nwait = \"later\"\n").unwrap_err();
-        assert!(e.to_string().contains("[stacks.app] wait"), "{e}");
+        let e = manifest("[stacks.app]\nwait = \"30m\"\n").unwrap_err();
+        assert!(e.to_string().contains("wait"), "{e}");
     }
 
     /// `[providers.NAME] allow` and `credentials` grant a provider what it

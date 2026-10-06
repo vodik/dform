@@ -255,17 +255,28 @@ fn reads_a_file_and_runs_a_command() {
 }
 
 /// A host that refuses the connection is "not yet": the apply waits on
-/// it, and past its budget stops saying what it waited on. A file not
-/// there yet is the same: once it appears, the wait resolves.
+/// it, and past the `ssh` provider's `timeout` stops saying what it
+/// waited on (R-122). A file not there yet is the same: once it appears,
+/// the wait resolves.
 #[test]
 fn a_host_or_a_file_not_there_yet_is_waited_on() {
     let Some(bin) = sshd_binary() else { return };
     let port = free_port();
     let s = project("ssh-not-yet", port);
-    let r = run(&s, &["apply", "--wait", "1s", "p.df"]).failure();
+    let timeout = |t: &str| {
+        s.write(
+            "dform.toml",
+            &format!(
+                "[project]\nedition = \"2026\"\n\n[providers]\nssh = {{ timeout = \"{t}\" }}\n"
+            ),
+        )
+    };
+    timeout("1s");
+    let r = run(&s, &["apply", "p.df"]).failure();
     assert!(r.stderr.contains("waiting on "), "{}", r.stderr);
     // An extern's call as the program writes it (R-111).
     assert!(r.stderr.contains("ssh.run(\"127.0.0.1:"), "{}", r.stderr);
+    assert!(r.stderr.contains("waited 1s on "), "{}", r.stderr);
     assert!(r.stderr.contains("still unknown"), "{}", r.stderr);
 
     // The host answers; the kubeconfig is not written yet.
@@ -277,13 +288,14 @@ fn a_host_or_a_file_not_there_yet_is_waited_on() {
         "{}",
         r.stdout
     );
+    timeout("30s");
     let apply = {
         let s_dir = s.dir.clone();
         let home = s.path("home");
         std::thread::spawn(move || {
             Run::from(
                 dform()
-                    .args(["apply", "--yes", "--wait", "30s", "p.df"])
+                    .args(["apply", "--yes", "p.df"])
                     .current_dir(&s_dir)
                     .env("HOME", home)
                     .env_remove("SSH_AUTH_SOCK")

@@ -1,11 +1,12 @@
-//! Waiting (R-81): a tick with nothing definite to apply, held on open
-//! nulls that waiting can resolve (a computed value the world has not
-//! reached yet, an extern that answered "not yet"), waits for them up to
-//! its budget (`apply --wait`, `[stacks.NAME] wait`, 10m), saying so on
-//! stderr; past the budget the apply stops, saying what it waited on.
+//! Waiting (R-81, R-122): a tick with nothing definite to apply, held on
+//! open nulls that waiting can resolve (a computed value the world has
+//! not reached yet, an extern that answered "not yet"), waits for them up
+//! to the `timeout` of the provider that answers them (`[providers.NAME]
+//! timeout`, 60s by default), saying so on stderr; past it the apply
+//! stops, saying what it waited on.
 
 mod common;
-use common::{STOPPED, Scratch};
+use common::Scratch;
 
 /// The database's endpoint gates the vpc: until the world has it, the
 /// vpc is a pending group on it.
@@ -15,6 +16,24 @@ use fake
 resource db.postgres d { size = 1 }
 resource net.vpc v { cidr = "10.0.0.0/16" } where d.endpoint == "d.db.fake"
 "#;
+
+/// A project whose fake provider's `timeout` is `timeout`.
+fn project(name: &str, timeout: &str) -> Scratch {
+    let s = Scratch::new(name);
+    set_timeout(&s, timeout);
+    s.write("p.df", PROG);
+    s
+}
+
+fn set_timeout(s: &Scratch, timeout: &str) {
+    s.write(
+        "dform.toml",
+        &format!(
+            "[project]\nedition = \"2026\"\n\n[providers]\nfake = {{ source = \"fake\", \
+             timeout = \"{timeout}\" }}\n"
+        ),
+    );
+}
 
 /// `dform dev --world w.json apply --yes ARGS p.df`, polling every 50ms.
 fn apply(s: &Scratch, args: &[&str]) -> common::Run {
@@ -40,28 +59,27 @@ fn waits(s: &Scratch) -> Vec<serde_json::Value> {
 }
 
 /// Tick 2 has nothing definite: it waits on the endpoint, says so, and
-/// once the world has it plans the vpc (an unattended apply then stops
-/// before the tick that adds what its plan could not name, R-30; the next
-/// apply makes it).
+/// once the world has it plans the vpc, which `--yes` applies at tick 3
+/// (R-122).
 #[test]
 fn a_tick_waits_until_the_world_reaches_the_value() {
     let s = Scratch::new("wait-resolves");
     s.write("p.df", PROG);
-    let r = apply(&s, &["--chaos", "not-ready=db.postgres[\"d\"].endpoint:3"]).failure();
+    let r = apply(&s, &["--chaos", "not-ready=db.postgres[\"d\"].endpoint:3"]).success();
     assert!(
         r.stderr
             .contains("waiting on db.postgres d.endpoint since "),
         "{}",
         r.stderr
     );
-    assert!(r.stderr.contains(STOPPED), "{}", r.stderr);
     assert!(
-        r.stdout.contains(
-            "plan: 1 change (1 create) over 1 tick\n\ntick 3  1 change, now that tick 2 reported\n"
-        ),
+        r.stdout
+            .contains("\ntick 3  1 change, now that tick 2 reported\n"),
         "{}",
         r.stdout
     );
+    assert!(r.stdout.contains("+ net.vpc v"), "{}", r.stdout);
+    assert!(r.stdout.ends_with("apply: complete\n"), "{}", r.stdout);
     let w = waits(&s);
     assert_eq!(w.len(), 1, "{w:?}");
     assert_eq!(w[0]["result"], "resolved");
@@ -70,32 +88,20 @@ fn a_tick_waits_until_the_world_reaches_the_value() {
         w[0]["on"],
         serde_json::json!(["db.postgres[\"d\"].endpoint"])
     );
-    let r = apply(&s, &[]).success();
-    assert!(r.stdout.contains("+ net.vpc v"), "{}", r.stdout);
 }
 
-/// Past its budget the apply stops, saying what it waited on and how to
-/// go on; nothing of the tick is in flight, so the next apply plans it
-/// again and waits again.
+/// Past the provider's `timeout` the apply stops, saying what it waited
+/// on and how to go on; nothing of the tick is in flight, so the next
+/// apply plans it again and waits again.
 #[test]
-fn past_the_wait_budget_the_apply_stops_saying_what_it_waited_on() {
-    let s = Scratch::new("wait-expires");
-    s.write("p.df", PROG);
-    let r = apply(
-        &s,
-        &[
-            "--wait",
-            "200ms",
-            "--chaos",
-            "not-ready=db.postgres[\"d\"].endpoint:12",
-        ],
-    )
-    .failure();
+fn past_the_providers_timeout_the_apply_stops_saying_what_it_waited_on() {
+    let s = project("wait-expires", "1s");
+    let r = apply(&s, &["--chaos", "not-ready=db.postgres[\"d\"].endpoint:40"]).failure();
     assert!(
         r.stderr.contains(
-            "Error: apply stopped at tick 2: waited 200ms (--wait) on \
-             db.postgres d.endpoint, still unknown; state is consistent: run apply again \
-             to wait again (`--wait` for longer)\n"
+            "Error: apply stopped at tick 2: waited 1s on db.postgres d.endpoint, still \
+             unknown (the provider's `timeout` in dform.toml); state is consistent: run \
+             apply again to wait again\n"
         ),
         "{}",
         r.stderr
@@ -108,59 +114,9 @@ fn past_the_wait_budget_the_apply_stops_saying_what_it_waited_on() {
         "{state}"
     );
     // The next apply waits again, long enough this time.
-    let r = apply(&s, &["--wait", "30s"]).failure();
-    assert!(r.stderr.contains(STOPPED), "{}", r.stderr);
+    set_timeout(&s, "30s");
     apply(&s, &[]).success();
     assert!(s.json("w.json")["resources"].get("net.vpc::v").is_some());
-}
-
-/// `--wait 0s` does not wait: the tick stops as it did before waits.
-#[test]
-fn a_wait_of_zero_does_not_wait() {
-    let s = Scratch::new("wait-zero");
-    s.write("p.df", PROG);
-    let r = apply(
-        &s,
-        &[
-            "--wait",
-            "0s",
-            "--chaos",
-            "not-ready=db.postgres[\"d\"].endpoint:3",
-        ],
-    )
-    .failure();
-    assert!(
-        r.stderr.contains(
-            "apply stopped at tick 2: nothing definite to apply, still waiting on \
-             db.postgres d.endpoint"
-        ),
-        "{}",
-        r.stderr
-    );
-    assert!(
-        !r.stderr.lines().any(|l| l.starts_with("waiting on ")),
-        "{}",
-        r.stderr
-    );
-    assert!(waits(&s).is_empty());
-}
-
-/// `[stacks.NAME] wait` is the stack's budget when `--wait` is not given.
-#[test]
-fn a_stack_sets_its_wait_budget() {
-    let s = Scratch::project("wait-stack");
-    s.write(
-        "dform.toml",
-        "[project]\nedition = \"2026\"\n\n[stacks.p]\nwait = \"0s\"\n",
-    );
-    s.write("p.df", PROG);
-    let r = apply(&s, &["--chaos", "not-ready=db.postgres[\"d\"].endpoint:3"]).failure();
-    assert!(
-        r.stderr
-            .contains("nothing definite to apply, still waiting on db.postgres d.endpoint"),
-        "{}",
-        r.stderr
-    );
 }
 
 /// An extern that answers "not yet" (an open null in its output columns,
@@ -191,7 +147,7 @@ fn an_extern_that_says_not_yet_is_asked_again() {
         .current_dir(&s.dir)
         .output()
         .unwrap();
-    let r = common::Run::from(out).failure();
+    let r = common::Run::from(out).success();
     assert!(
         r.stderr
             .contains("waiting on aws.availability_zone(\"available\")"),

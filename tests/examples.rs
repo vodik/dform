@@ -8,7 +8,7 @@
 //! quote (`walkthrough`).
 
 mod common;
-use common::{STOPPED, Scratch, copy_dir, repo};
+use common::{Scratch, copy_dir, repo};
 use std::path::PathBuf;
 
 /// What the test adds to each README apply: apply asks for confirmation,
@@ -17,10 +17,9 @@ const APPLY_FLAGS: &[&str] = &["--yes"];
 
 /// How one stack's apply ends.
 enum Apply {
-    /// It converges in this many `--yes` applies: each but the last stops
-    /// before a tick that adds what its plan could not name (R-30), and
-    /// the plan after the last is up to date.
-    Converges(usize),
+    /// It completes: `--yes` applies every tick (R-122), and the plan
+    /// after it is up to date.
+    Completes,
     /// It stops after tick 1 on a deny (on purpose: the example shows
     /// one), with this in the error. It runs in a copy of its own.
     Stops(&'static str),
@@ -51,23 +50,23 @@ const fn one(apply: &'static [&'static str], ends: Apply) -> Stack {
 const CASES: &[Case] = &[
     Case {
         name: "adopt",
-        stacks: &[one(&["apply"], Apply::Converges(1))],
+        stacks: &[one(&["apply"], Apply::Completes)],
     },
     Case {
         name: "advanced",
-        stacks: &[one(&["apply"], Apply::Converges(1))],
+        stacks: &[one(&["apply"], Apply::Completes)],
     },
     // Keyed: apply names the deployment, the key's default.
     Case {
         name: "approvals",
         stacks: &[one(
             &["apply", "approvals", "env=staging"],
-            Apply::Converges(1),
+            Apply::Completes,
         )],
     },
     Case {
         name: "aws",
-        stacks: &[one(&["apply"], Apply::Converges(1))],
+        stacks: &[one(&["apply"], Apply::Completes)],
     },
     // Two stacks: each named. The workload after the bootstrap's.
     Case {
@@ -76,34 +75,34 @@ const CASES: &[Case] = &[
             Stack {
                 plan: &["plan", "bootstrap"],
                 apply: &["apply", "bootstrap"],
-                ends: Apply::Converges(3),
+                ends: Apply::Completes,
             },
             Stack {
                 plan: &["plan", "workload"],
                 apply: &["apply", "workload"],
-                ends: Apply::Converges(1),
+                ends: Apply::Completes,
             },
         ],
     },
     // The migration Job, then the app's color, then the Service's selector.
     Case {
         name: "crud-api",
-        stacks: &[one(&["apply"], Apply::Converges(3))],
+        stacks: &[one(&["apply"], Apply::Completes)],
     },
     // No resources: nothing to do.
     Case {
         name: "decl",
-        stacks: &[one(&["apply"], Apply::Converges(1))],
+        stacks: &[one(&["apply"], Apply::Completes)],
     },
     Case {
         name: "demo",
-        stacks: &[one(&["apply", "dform", "env=staging"], Apply::Converges(1))],
+        stacks: &[one(&["apply", "dform", "env=staging"], Apply::Completes)],
     },
     // Two zones by default; one shows the deny at the boundary.
     Case {
         name: "gke",
         stacks: &[
-            one(&["apply"], Apply::Converges(2)),
+            one(&["apply"], Apply::Completes),
             one(
                 &["apply", "--set", "zones=1"],
                 Apply::Stops("cluster must be in at least two zones"),
@@ -112,17 +111,17 @@ const CASES: &[Case] = &[
     },
     Case {
         name: "k8s",
-        stacks: &[one(&["apply"], Apply::Converges(1))],
+        stacks: &[one(&["apply"], Apply::Completes)],
     },
     Case {
         name: "pngu",
-        stacks: &[one(&["apply", "pngu", "env=dev"], Apply::Converges(1))],
+        stacks: &[one(&["apply", "pngu", "env=dev"], Apply::Completes)],
     },
     // Three zones by default; two break the refinement on them.
     Case {
         name: "refine",
         stacks: &[
-            one(&["apply"], Apply::Converges(2)),
+            one(&["apply"], Apply::Completes),
             one(
                 &["apply", "--set", "zones=2"],
                 Apply::Stops("refinement violated"),
@@ -130,10 +129,10 @@ const CASES: &[Case] = &[
         ],
     },
     // The policy named for the database's endpoint: named only once the
-    // database is made, so by a second apply.
+    // database is made, at tick 2.
     Case {
         name: "tour",
-        stacks: &[one(&["apply"], Apply::Converges(2))],
+        stacks: &[one(&["apply"], Apply::Completes)],
     },
 ];
 
@@ -216,14 +215,9 @@ fn check(name: &str) {
         let at = |what: &str| format!("examples/{name} {what}");
         let r = s.run(st.plan);
         assert!(r.ok, "{}\n{}{}", at(&st.plan.join(" ")), r.stdout, r.stderr);
-        let mut r = s.run(&[st.apply, APPLY_FLAGS].concat());
+        let r = s.run(&[st.apply, APPLY_FLAGS].concat());
         match st.ends {
-            Apply::Converges(n) => {
-                let mut applies = 1;
-                while !r.ok && r.stderr.contains(STOPPED) && applies < 5 {
-                    r = s.run(&[st.apply, APPLY_FLAGS].concat());
-                    applies += 1;
-                }
+            Apply::Completes => {
                 assert!(
                     r.ok,
                     "{}\n{}{}",
@@ -231,7 +225,6 @@ fn check(name: &str) {
                     r.stdout,
                     r.stderr
                 );
-                assert_eq!(applies, n, "{}\n{}", at("applies"), r.stdout);
                 let r = s.run(st.plan).success();
                 assert!(
                     r.summary().ends_with(" is up to date"),
@@ -403,27 +396,12 @@ fn walkthrough(name: &str, file: &str) {
     let s = Scratch::adopt(dir);
     for step in &steps {
         let mut args = step.args.clone();
-        // A reader answers each tick's question; with `--yes` each apply
-        // stops where the reader is asked again (R-30), so the step is
-        // the applies it takes, and their output together.
-        let (r, out) = if args[0] == "apply" {
+        // A reader answers each tick's question; `--yes` answers them all.
+        if args[0] == "apply" {
             args.extend(APPLY_FLAGS.iter().map(|f| f.to_string()));
-            let mut out = String::new();
-            let mut n = 0;
-            let r = loop {
-                let r = s.run(&args);
-                out.push_str(&format!("{}{}", r.stdout, r.stderr));
-                n += 1;
-                if r.ok || !r.stderr.contains(STOPPED) || n == 5 {
-                    break r;
-                }
-            };
-            (r, out)
-        } else {
-            let r = s.run(&args);
-            let out = format!("{}{}", r.stdout, r.stderr);
-            (r, out)
-        };
+        }
+        let r = s.run(&args);
+        let out = format!("{}{}", r.stdout, r.stderr);
         let fails = step.quoted.iter().any(|q| q.starts_with("Error:"));
         assert_eq!(
             !r.ok, fails,

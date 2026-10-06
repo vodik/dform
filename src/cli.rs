@@ -321,17 +321,12 @@ enum Run {
         /// `requires_approval` of a change.
         #[arg(long = "approval")]
         approval: Option<PathBuf>,
-        /// How long a tick waits for the open nulls it reads to resolve (a
-        /// Job's status, a host that answers) before the apply stops:
-        /// `30s`, `30m`; `0s` does not wait. Default: the stack's
-        /// `[stacks.NAME] wait`, else 10m.
-        #[arg(long = "wait", value_parser = parse_wait)]
-        wait: Option<std::time::Duration>,
-        /// Apply without asking: the ticks the plan names, stopping before
-        /// one that adds what it could not name (run apply again). Without
-        /// it, apply prints the plan and asks before changing anything and
-        /// at each such tick, and refuses when there is no terminal to ask
-        /// on. `apply PLAN.json` never asks, and stops the same way.
+        /// Apply without asking: every tick, each later one planned when
+        /// the one before reports. Without it, apply prints the plan and
+        /// asks before changing anything and again before a tick that
+        /// adds what the plan could not show, and refuses when there is
+        /// no terminal to ask on. `apply PLAN.json` never asks, and stops
+        /// before such a tick.
         #[arg(long = "yes", short = 'y')]
         yes: bool,
         /// A rule or relation this apply may empty (R-80): the plan's
@@ -666,8 +661,6 @@ enum Cmd {
         max_ticks: usize,
         parallel: u64,
         approval: Option<PathBuf>,
-        /// `--wait`: how long a tick waits on open nulls (R-81).
-        wait: Option<std::time::Duration>,
         /// `--yes`: no confirmation.
         yes: bool,
         /// `--allow-empty`: what the plan may empty without asking (R-80).
@@ -1302,7 +1295,6 @@ fn run_cmd(r: Run) -> (Cmd, Option<Target>) {
             max_ticks,
             parallel,
             approval,
-            wait,
             yes,
             allow_empty,
             why,
@@ -1313,7 +1305,6 @@ fn run_cmd(r: Run) -> (Cmd, Option<Target>) {
                 max_ticks,
                 parallel,
                 approval,
-                wait,
                 yes,
                 allow_empty,
                 why: why.level(),
@@ -2581,20 +2572,27 @@ fn run_with(
             max_ticks,
             parallel,
             approval,
-            wait,
             yes,
             ..
         } => {
-            // How long a tick waits on open nulls (R-81).
-            let wait_budget = wait
-                .or_else(|| {
-                    located
-                        .loaded
-                        .manifest
-                        .as_ref()?
-                        .stack_wait(&located.loaded.stack)
-                })
-                .unwrap_or(crate::progress::WAIT);
+            // How long a tick waits on an open null (R-122): the timeout
+            // of the provider that answers it, as dform.toml sets it; a
+            // built-in extern's by its `[providers.NAME]` table.
+            let manifest = located.loaded.manifest.as_ref();
+            let wait_budget = |on: &[String]| {
+                on.iter()
+                    .map(|l| {
+                        backend
+                            .wait_timeout(l)
+                            .or_else(|| {
+                                let (t, _) = crate::value::null_owner(l)?;
+                                manifest?.provider_timeout(t.split_once('.')?.0)
+                            })
+                            .unwrap_or(crate::plugin::policy::Policy::default().timeout)
+                    })
+                    .max()
+                    .unwrap_or_default()
+            };
             for addr in chaos.addresses() {
                 if !resources.iter().any(|r| &r.addr == addr) && st.get(addr).is_none() {
                     bail!(
@@ -2722,9 +2720,10 @@ fn run_with(
             // one's pending groups: what it could not name.
             let mut listed: BTreeSet<ir::Address> = BTreeSet::new();
             let mut unnamed: Vec<String> = Vec::new();
-            // An unattended apply (`--yes`, a plan file, an approval) applies
-            // only the ticks whose addresses a printed plan named.
-            let unattended = yes || saved.is_some() || approval.is_some();
+            // A plan file or an approval applies only the ticks whose
+            // addresses the plan it approves named (R-30); `--yes` answers
+            // every question (R-122).
+            let shown = saved.is_some() || approval.is_some();
             // What the last tick's plan held under `later` waiting on a
             // provider's settings (R-110): listed, but planned only once
             // the provider is configured, so asked for again (R-45).
@@ -2925,11 +2924,12 @@ fn run_with(
                     .filter(|a| !matches!(a.kind, ActionKind::Noop))
                     .map(|a| &a.addr)
                     .collect();
-                // Unattended, it stops before such a tick instead, the state
-                // consistent: the next apply plans them as its tick 1.
+                // Of a plan file or an approval, it stops before such a tick
+                // instead, the state consistent: the next apply plans them as
+                // its tick 1. `--yes` applies it.
                 if tick > 1 && hook.is_none() {
                     let new = addresses.iter().filter(|a| !listed.contains(**a)).count();
-                    if new > 0 && unattended {
+                    if new > 0 && shown {
                         st.in_flight = None;
                         persist(&st)?;
                         return Err(Stopped {
@@ -2947,7 +2947,7 @@ fn run_with(
                         .iter()
                         .filter(|a| on_provider.contains(**a))
                         .count();
-                    if planned > 0 && !yes && unattended {
+                    if planned > 0 && shown {
                         st.in_flight = None;
                         persist(&st)?;
                         return Err(Stopped {
@@ -2958,7 +2958,7 @@ fn run_with(
                         }
                         .into());
                     }
-                    if new > 0 || (planned > 0 && !yes) {
+                    if new + planned > 0 && !yes {
                         confirm(new + planned, true, &deployment, tick, cli.style)?;
                     }
                 }
@@ -3223,9 +3223,10 @@ fn run_with(
                     waits.dedup();
                     // What waiting can resolve (R-81): the world reaching a
                     // value (a Job's status), an extern's "not yet". The
-                    // tick waits, up to its budget, for one to change.
+                    // tick waits, up to its providers' timeout, for one to
+                    // change (R-122).
                     let on = waiting_on(&sections, &st, externs);
-                    if on.is_empty() || wait_budget.is_zero() {
+                    if on.is_empty() {
                         // A null by its label; a provider's settings as
                         // `later` names them (R-110).
                         let waits: Vec<String> = waits
@@ -3244,13 +3245,14 @@ fn run_with(
                     let names: Vec<String> =
                         on.iter().map(|l| report::attribute_label(l)).collect();
                     let labels: Vec<String> = on.iter().map(|l| ir::label(l)).collect();
+                    let budget = wait_budget(&on);
                     let mut w = crate::progress::Wait::new();
                     let resolved = loop {
                         w.tick(&names);
-                        if w.elapsed() >= wait_budget {
+                        if w.elapsed() >= budget {
                             break false;
                         }
-                        std::thread::sleep(w.next_poll(wait_budget));
+                        std::thread::sleep(w.next_poll(budget));
                         backend.reread();
                         externs.forget_not_yet();
                         let (next, _) = evaluate_with(&st, &BTreeSet::new(), &[], Some(tick))?;
@@ -3275,10 +3277,10 @@ fn run_with(
                         evaluator.ssh.keep(&mut st);
                         persist(&st)?;
                         bail!(
-                            "apply stopped at tick {tick}: waited {} (--wait) on {}, still \
-                             unknown; state is consistent: run apply again to wait again \
-                             (`--wait` for longer)",
-                            crate::plugin::policy::show(wait_budget),
+                            "apply stopped at tick {tick}: waited {} on {}, still unknown \
+                             (the provider's `timeout` in dform.toml); state is consistent: \
+                             run apply again to wait again",
+                            crate::plugin::policy::show(budget),
                             names.join(", ")
                         );
                     }
@@ -3332,12 +3334,6 @@ fn waiting_on(
         .cloned()
         .collect();
     deployment::waitable(&on, st, &externs.not_yet())
-}
-
-/// `--wait`'s duration: `30s`, `30m`, `500ms`, `0s`.
-fn parse_wait(s: &str) -> std::result::Result<std::time::Duration, String> {
-    crate::store::parse_duration(s)
-        .ok_or_else(|| format!("{s:?}: a duration, `30s`, `30m` or `0s`"))
 }
 
 /// Every provider call sent again since the last time (R-81) to the audit
@@ -3681,7 +3677,6 @@ fn run_controller(cli: Cli) -> Result<()> {
             max_ticks,
             parallel: 1,
             approval: None,
-            wait: None,
             // The controller runs unattended: it never asks.
             yes: true,
             allow_empty: Vec::new(),
@@ -3821,9 +3816,9 @@ impl std::fmt::Display for Declined {
 
 impl std::error::Error for Declined {}
 
-/// An unattended apply that stopped after `tick`: the next tick adds `new`
-/// changes no printed plan named (`unnamed`, the groups the last plan
-/// held them as). The audit log's `apply_end` says `stopped`.
+/// An apply of a plan file or an approval that stopped after `tick`: the
+/// next tick adds `new` changes no printed plan named (`unnamed`, the
+/// groups the last plan held them as). The audit log's `apply_end` says `stopped`.
 #[derive(Debug)]
 struct Stopped {
     tick: usize,

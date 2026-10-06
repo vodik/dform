@@ -49,8 +49,8 @@ interface types {
 
   // A read of something the world has not reached yet (the file a
   // cloud-init writes, the host that is still booting) is `not-yet`, not
-  // an error: the engine waits on it as it waits on an open null (R-81's
-  // `--wait`), where an error fails the call.
+  // an error: the engine waits on it as it waits on an open null (R-81,
+  // within the provider's `timeout`), where an error fails the call.
   variant not-yet-or-error {
     not-yet(string),
     error(error),

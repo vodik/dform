@@ -1,7 +1,9 @@
-//! An unattended apply (`--yes`, a plan file, an approval) applies only the
-//! ticks whose addresses a printed plan named, and stops before the first
-//! tick that would add one, the state consistent: the next apply plans
-//! them as its tick 1 (R-30). The controller keeps running through ticks.
+//! An apply that applies a plan it was shown (a plan file, an approval)
+//! applies only the ticks whose addresses that plan named, and stops
+//! before the first tick that would add one, the state consistent: the
+//! next apply plans them as its tick 1 (R-30). `--yes` answers every
+//! question: it plans each later tick as the one before reports and
+//! applies it (R-122). The controller keeps running through ticks.
 
 mod common;
 use common::{Scratch, copy_dir, repo};
@@ -11,13 +13,36 @@ const STOPPED: &str = "apply stopped after tick 1: tick 2 adds 1 change the plan
     them against the world as it now is";
 
 /// The tour's prod: the database's endpoint names a policy only tick 2 can
-/// name. `--yes` makes the database and stops; a second `--yes` plans the
-/// policy as its tick 1 and completes.
+/// name. `--yes` makes the database, plans tick 2 once it reports, and
+/// makes the policy.
 #[test]
-fn yes_stops_before_a_tick_the_plan_could_not_name() {
+fn yes_applies_a_tick_the_plan_could_not_name() {
     let s = Scratch::new("unattended-tour");
     copy_dir(&repo().join("examples/tour"), &s.dir);
-    let r = s.run(&["apply", "tour", "env=prod"]).failure();
+    let r = s.run(&["apply", "tour", "env=prod"]).success();
+    let (_, tick2) = r.stdout.split_once("\ntick 2  ").unwrap_or_else(|| {
+        panic!("{}", r.stdout);
+    });
+    assert!(
+        tick2.contains("  + iam.policy \"connect-orders.db.fake\"  "),
+        "{}",
+        r.stdout
+    );
+    assert!(r.stdout.ends_with("apply: complete\n"), "{}", r.stdout);
+    let state = s.read("dform.state/tour/env=prod/state.json");
+    assert!(state.contains("iam.policy"), "{state}");
+}
+
+/// A plan file of the same: applying it makes the database and stops
+/// before the policy it did not show; the next apply plans the policy as
+/// its tick 1 and completes.
+#[test]
+fn a_plan_file_stops_before_a_tick_the_plan_could_not_name() {
+    let s = Scratch::new("unattended-tour-file");
+    copy_dir(&repo().join("examples/tour"), &s.dir);
+    s.run(&["plan", "--out", "plan.json", "tour", "env=prod"])
+        .success();
+    let r = s.run(&["apply", "plan.json"]).failure();
     assert!(r.stderr.contains(STOPPED), "{}", r.stderr);
     let state = s.read("dform.state/tour/env=prod/state.json");
     assert!(state.contains("db.postgres"), "{state}");

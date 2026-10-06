@@ -13,10 +13,6 @@ pub fn line(text: &str) {
 /// How often a wait says it is still waiting.
 pub const EVERY: Duration = Duration::from_secs(10);
 
-/// How long a tick waits on open nulls when neither `apply --wait` nor
-/// `[stacks.NAME] wait` says.
-pub const WAIT: Duration = Duration::from_secs(600);
-
 /// A wait on open nulls: when it started, and when it last said so.
 pub struct Wait {
     started: Instant,

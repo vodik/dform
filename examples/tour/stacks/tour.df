@@ -309,9 +309,9 @@ resource net.route "${a}-to-${b}" { from = a, to = b, destination = dest } where
 #   + iam.policy "connect-orders.db.fake"
 #   apply: complete
 #
-# Nobody approves a count of "unknown". With `--yes`, nobody reads the
-# second plan, so apply stops before it, and the next apply makes the
-# policy from a plan that names it.
+# Nobody approves a count of "unknown". `--yes` answers the question at
+# each tick; a plan file stops before what it did not show, and the next
+# apply makes the policy from a plan that names it.
 #
 #   $ dform plan tour env=prod
 #   stack tour is up to date

@@ -238,7 +238,7 @@ pub fn retry(tick: usize, r: &crate::plugin::link::Retry, error: String) -> Json
 
 /// A `wait` entry's fields: a tick waiting on the open nulls `on` (as
 /// plan prints them) since `since`, for `waited`; `result` is how it
-/// ended: `resolved`, or `expired` once the budget is spent.
+/// ended: `resolved`, or `expired` past the provider's `timeout`.
 pub fn wait(
     tick: usize,
     on: &[String],

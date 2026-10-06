@@ -114,25 +114,6 @@ impl Scratch {
         self.run_in("", args)
     }
 
-    /// Run the apply `ARGS` until it completes: an unattended apply stops
-    /// before a tick that adds what its plan could not name, and the next
-    /// one plans it (R-30). Each run's output, the last one's ok.
-    #[track_caller]
-    pub fn converge<S: AsRef<std::ffi::OsStr>>(&self, args: &[S]) -> Vec<Run> {
-        let mut runs = Vec::new();
-        loop {
-            let r = self.run(args);
-            let stopped = !r.ok && r.stderr.contains(STOPPED);
-            runs.push(r);
-            if !stopped || runs.len() == 8 {
-                break;
-            }
-        }
-        let last = runs.pop().unwrap().success();
-        runs.push(last);
-        runs
-    }
-
     /// Run `dform ARGS` in the scratch directory's subdirectory `rel`.
     pub fn run_in<S: AsRef<std::ffi::OsStr>>(&self, rel: &str, args: &[S]) -> Run {
         let dir = self.path(rel);

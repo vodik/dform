@@ -2040,10 +2040,7 @@ impl Report {
                     "; `later` is planned again when tick {t} reports, and apply asks before \
                      what it adds"
                 )),
-                None => out.push_str(
-                    "; `later` waits on what no tick of this plan makes: apply waits for it \
-                     (`--wait`) or stops before it",
-                ),
+                None => out.push_str("; later ticks are planned as each reports and asked for"),
             }
         }
         out

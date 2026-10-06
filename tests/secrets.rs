@@ -647,9 +647,8 @@ fn a_derived_password_is_stable_and_never_stored() {
     let state = s.read("dform.state/crud_api/state.json");
     assert!(state.contains("\"in_flight\""), "{state}");
     outputs.push(state);
-    for r in s.converge(&["apply"]) {
-        outputs.extend([r.stdout, r.stderr]);
-    }
+    let r = s.run(&["apply"]).success();
+    outputs.extend([r.stdout, r.stderr]);
     let world = |s: &Scratch| -> serde_json::Value {
         serde_json::from_str(&s.read("dform.state/crud_api/remote.json")).unwrap()
     };

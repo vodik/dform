@@ -815,11 +815,12 @@ any of this. Colour is a hint and never the only carrier. `--json`
 carries the ticks, what each waits on, each change's kind, full address,
 site and `because` as fields.
 
-**apply** prints the plan and asks. It applies in ticks; at any tick that
-adds a resource the first plan could not name, it prints that tick's
-plan and asks again before changing anything. `--yes` for scripts
-applies the ticks the plan enumerated and stops before one that would
-add more, to be run again. State is written after every provider call,
+**apply** prints the plan and asks. It applies in ticks, planning each
+when the one before reports: how many there are is not known up front.
+At any tick that adds what the first plan could not show, it prints
+that tick's plan and asks again before changing anything, at tick 2, 3,
+4 as needed; `--yes` answers every question, and a plan file applies
+what it showed and stops before the rest. State is written after every provider call,
 so an interrupted apply resumes where it stopped. `--parallel N`
 overlaps independent calls. Every provider call has a timeout, and one
 that failed in a way worth trying again (a 429, a 5xx, the connection)
@@ -828,8 +829,9 @@ looked up by its idempotency key first, so it is adopted, never made
 twice. A tick held on a value the world has not reached yet, a Job's
 `status.succeeded`, waits for it, saying `waiting on
 k8s.job["migrate-v42"].status.succeeded since 02:14 (3m)` every ten
-seconds. Past `--wait` (10m by default) the apply stops with the state
-consistent and says what it waited on.
+seconds. The wait is bounded by that provider's `timeout`, the same
+knob as for its calls; past it the apply stops with the state consistent
+and says what it waited on.
 
 **Lifecycle.** The things that happen between two applies are facts,
 so policy can read them and `why` can explain them:

@@ -82,7 +82,7 @@ impl std::fmt::Display for Error {
 impl std::error::Error for Error {}
 
 /// A read of what the world has not reached yet is not an error: the
-/// engine waits on it (R-81's `--wait`).
+/// engine waits on it, within the provider's `timeout` (R-81, R-122).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Failure {
     NotYet(String),

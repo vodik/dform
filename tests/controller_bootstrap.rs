@@ -133,33 +133,21 @@ fn edit(s: &Scratch, rel: &str, from: &str, to: &str) {
 /// The dform-controller Deployment reads the helper `node_pool_up`, whose
 /// instances are stuck until the pools have instance groups: once the pools
 /// are planned the rule is a pending group (F DR-2 revised, last clause),
-/// so the apply that makes them stops before the tick that adds the
-/// Deployment (R-30) instead of stopping complete a tick early.
+/// so the apply plans the Deployment at the tick after the pools report
+/// instead of stopping complete a tick early.
 #[test]
 fn a_resource_rule_reading_a_stuck_helper_is_a_pending_group() {
     let s = demo("bootstrap-helper");
-    let runs = s.converge(&["apply", "bootstrap"]);
-    assert_eq!(runs.len(), 3, "{:?}", runs.last().unwrap().stdout);
-    let second = &runs[1];
+    let last = s.run(&["apply", "bootstrap"]).success();
     assert!(
-        second.stdout.contains(
+        last.stdout.contains(
             "later   changes this plan cannot count yet\n  \
              k8s.deployment dform_controller             \
              if node_pool_up(\"np-us-east1-b\") derives\n"
         ),
         "{}",
-        second.stdout
+        last.stdout
     );
-    assert!(
-        second.stderr.contains(
-            "apply stopped after tick 1: tick 2 adds 1 change the plan could not name \
-             (k8s.deployment dform_controller on \
-             google.container_node_pool np-us-east1-b.instance_group)"
-        ),
-        "{}",
-        second.stderr
-    );
-    let last = runs.last().unwrap();
     assert!(
         last.stdout
             .contains("  + k8s.deployment dform_controller  "),
@@ -179,10 +167,8 @@ fn a_resource_rule_reading_a_stuck_helper_is_a_pending_group() {
 fn bootstrap_handover_and_the_controller_runs_the_workload() {
     let s = demo("bootstrap");
     // The network and the cluster, then the node pools and the namespace,
-    // then dform itself: each apply stops before what its plan could not
-    // name (R-30).
-    let runs = s.converge(&["apply", "bootstrap"]);
-    assert_eq!(runs.len(), 3, "{:?}", runs.last().unwrap().stdout);
+    // then dform itself, each tick planned as the one before reports.
+    s.run(&["apply", "bootstrap"]).success();
     let world = s.read("dform.state/bootstrap/remote.json");
     assert!(world.contains("\"dform-controller\""), "{world}");
     assert!(
@@ -318,7 +304,7 @@ fn handover_needs_one_bootstrap_stack_and_an_empty_target() {
         "{}",
         r.stderr
     );
-    s.converge(&["apply", "bootstrap"]);
+    s.run(&["apply", "bootstrap"]).success();
     let r = s
         .run(&["stack", "handover", "bootstrap", "--to", to])
         .failure();

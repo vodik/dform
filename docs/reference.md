@@ -146,22 +146,27 @@ or of a plan file, and with no terminal apply refuses naming
 through. Nothing is written before the answer: an
 apply reads (refresh, the lookups that resolve uncertain calls), plans and
 asks, and only a `y` writes state (`moved` renames included) or calls
-Apply. A later tick whose plan holds an address no earlier tick listed (a
-pending group's member: `iam.policy[?]` at tick 1, named once the endpoint
-it is built from exists) asks again: its plan is printed, headed `tick 2
-1 change, now that tick 1 reported`, then `Apply tick 2 to D? [y/N]`. A `n` there stops the apply with what
-the earlier ticks did in state; the audit log's `apply_end` says
-`declined` and the `tick`, and the next apply resumes. An unattended
-apply (`--yes`, `apply plan.json`, `--approval`) has nobody to ask: it
-applies the ticks whose addresses the plan named and stops before the
-first tick that would add one, after writing state: `apply stopped after
-tick 1: tick 2 adds 1 change the plan could not name
-(iam.policy[?] on ?db.postgres["orders"].endpoint); run apply again to
-plan them against the world as it now is`. It exits non-zero, nothing
-applied that was not printed, and `apply_end` says `stopped`; the next
-apply plans them as its tick 1, by name. There is no strict mode and no
-resource-level target: a plan that needs a second tick applies tick by
-tick, and a program that wants to apply part of itself is two stacks.
+Apply. How many ticks a plan takes is not known up front, and need not
+be: `later` is planned when the tick before reports. Apply applies a
+tick, waits for the values it unblocks (within the provider's `timeout`,
+see "Timeouts, retries and waiting"), plans the next, and asks before a
+tick whose plan holds what no earlier plan showed (a pending group's
+member: `iam.policy[?]` at tick 1, named once the endpoint it is built
+from exists; what `later` held for a provider's settings): its plan is
+printed, headed `tick 2  1 change, now that tick 1 reported`, then
+`Apply tick 2 to D? [y/N]`; and so on until nothing is `later`. `--yes`
+answers every question. A `n` stops the apply with what the earlier
+ticks did in state; the audit log's `apply_end` says `declined` and the
+`tick`, and the next apply resumes. A plan file or an approval applies
+what it showed and nothing else: it stops before the first tick that
+would add something, after writing state: `apply stopped after tick 1:
+tick 2 adds 1 change the plan could not name (iam.policy[?] on
+?db.postgres["orders"].endpoint); run apply again to plan them against
+the world as it now is`. It exits non-zero, nothing applied that was not
+printed, and `apply_end` says `stopped`; the next apply plans them as its
+tick 1, by name. There is no strict mode, no resource-level target and no
+flag for how long to wait: a plan that needs a second tick applies tick
+by tick, and a program that wants to apply part of itself is two stacks.
 
 The stack is the unit of partial work. `apply X` in a project applies the
 deployments X reads (`use stacks.platform`, then `platform[env="prod"].x`,
@@ -254,8 +259,6 @@ backend = 'local("state/demo")'   # where state, world and lock live, relative t
 approvals = 'jwks("https://...")' # optional: who may approve a plan; see "Approvals"
 audit_sink = "logger -t dform"    # optional: each audit entry to a command; see "The audit log"
 isolated = true                   # a keyed stack's deployments do not share names
-wait = "30m"                      # optional: how long a tick waits on open nulls (10m);
-                                  # see "Timeouts, retries and waiting"
 allow_empty = ["net.subnet"]      # optional: what a plan may empty without the
                                   # guardrail's warning; see "Computed values come
                                   # from Apply"
@@ -1121,8 +1124,8 @@ order and holds what is pending. At the boundary the results come back as
 world facts, round 0 resolves the nulls they answer, the program is
 re-evaluated and policy is checked again; a deny there stops the run with the
 reason printed. A tick with nothing definite to apply, held on values the
-world has not reached yet, waits for them (`--wait`, see "Timeouts, retries
-and waiting"). `--max-ticks N` (default 8) is a safety valve for a loop
+world has not reached yet, waits for them within the provider's `timeout`
+(see "Timeouts, retries and waiting"). `--max-ticks N` (default 8) is a safety valve for a loop
 that never settles, not a way to stop early:
 
 ```bash
@@ -1133,8 +1136,8 @@ cargo run -- -C examples/gke apply --set zones=1   # one zone: stops after tick 
 A provider whose settings the program computes from what a tick makes
 (`use k8s { kubeconfig = k3s.kubeconfig }`, the kubeconfig read over
 SSH from the server tick 1 creates) is configured at the boundary where
-they become known, waiting for them as for any value (`--wait`) when the
-read answers "not yet". The plan lists its resources under `later`
+they become known, waiting for them as for any value when the read
+answers "not yet". The plan lists its resources under `later`
 (`waits on  provider k8s (kubeconfig from k3s.kubeconfig)`); apply makes
 tick 1, configures the provider, says so, each setting a secret reaches
 as `(sensitive)` and `-v` adding what it is written as, never a value:
@@ -1490,7 +1493,8 @@ The kinds:
   call, the attempt and its budget (`of`), the delay, and why the last
   attempt failed (redacted);
 - `wait`: a tick that waited on open nulls: the tick, what it waited on,
-  since when, how long, and whether they `resolved` or the budget `expired`;
+  since when, how long, and whether they `resolved` or the provider's
+  `timeout` `expired`;
 - `configure`: a provider configured from the program's settings at a
   tick's boundary (R-45): the tick, the provider, the settings' keys
   (never their values);
@@ -1773,24 +1777,23 @@ waiting on k8s.job["migrate-v42"].status.succeeded since 02:14 (3m)
 ```
 
 Once one changes the run goes on, the wait counted as a boundary: the next
-tick is planned as at any boundary (an unattended apply stops before a tick
-that adds what its plan could not name). The budget is `apply --wait 30m`, else
-the stack's `[stacks.NAME] wait`, else 10m; `--wait 0s` does not wait. Past
-it the apply stops, the state consistent and nothing of the tick in flight:
-`apply stopped at tick 2: waited 10m (--wait) on k8s.job["migrate-v42"].
-status.succeeded, still unknown; state is consistent: run apply again to wait
-again`. A null waiting cannot bring (another stack's output not published yet,
-a value of an object no tick makes) stops the tick at once, as `nothing
-definite to apply, still waiting on ...`. Every wait is a `wait` entry in the
-audit log.
-
-```bash
-cargo run -- -C examples/demo apply dform env=staging --wait 30m   # each tick waits up to 30m
-```
+tick is planned and asked for as at any boundary (see `apply` above). The
+wait is the tick's own retry, bounded by the `timeout` of the provider that
+answers what it waits on (the longest, for several): the one knob, the same
+that bounds each call. A built-in's (`ssh.read` while a host boots) is set
+by its name, `[providers] ssh = { timeout = "10m" }`. Past it the apply
+stops, the state consistent and nothing of the tick in flight: `apply
+stopped at tick 2: waited 2m on k8s.job["migrate-v42"].status.succeeded,
+still unknown (the provider's `timeout` in dform.toml); state is
+consistent: run apply again to wait again`. A null waiting cannot bring
+(another stack's output not published yet, a value of an object no tick
+makes) stops the tick at once, as `nothing definite to apply, still
+waiting on ...`. Every wait is a `wait` entry in the audit log.
 
 ```toml
 [providers]
 aws = { source = "aws", timeout = "2m", retries = 8, backoff = "500ms" }
+ssh = { timeout = "10m" }   # a built-in: how long a tick waits on a host that boots
 ```
 
 A provider's table also grants it what it may use beyond the host's own
@@ -2009,7 +2012,8 @@ contact after: a changed key is an error naming both fingerprints until
 answer yet (the connection refused, no answer within 10s, no route) and a
 `read` of a path that does not exist yet are "not yet": the answer is an
 open null, and an apply waits on it ("Timeouts, retries and waiting"),
-asking again until the host answers or the wait's budget runs out. An
+asking again until the host answers or the `ssh` provider's `timeout`
+(`[providers] ssh = { timeout = "10m" }`, 60s by default) runs out. An
 authentication failure, a changed host key, a file it may not read and a
 command that exits non-zero (the error names the status and its stderr)
 are errors. `ssh.run`'s stdout is the command's, byte for byte (a
