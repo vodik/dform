@@ -21,7 +21,7 @@ state, modules, policy, secrets and approvals built in. Here is a
 complete program, for an AWS provider.
 
 ```dform
-provider aws { region = "us-east-1" }
+use aws { region = "us-east-1" }
 
 resource aws.vpc main {
   cidr_block = "10.0.0.0/16"
@@ -40,23 +40,24 @@ $ dform plan
 plan: 7 changes (7 create) over 1 tick
 
 tick 1  7 changes, applies now
-  + aws.vpc["main"]                     shop.df:3
+  + aws.vpc main                        shop.df:3
       cidr_block = 10.0.0.0/16
-  + aws.subnet["private-us-east-1a"]    shop.df:8  with availability_zone = "us-east-1a", n = 0
+  + aws.subnet private-us-east-1a       shop.df:8
       availability_zone = "us-east-1a"
-      cidr_block = 10.0.0.0/24          inet.subnet(main.cidr_block, 8, n)
-      vpc = ?aws.vpc["main"]
-  + aws.subnet["private-us-east-1b"]    shop.df:8  with availability_zone = "us-east-1b", n = 1
+      cidr_block = 10.0.0.0/24
+      vpc = main
+  + aws.subnet private-us-east-1b       shop.df:8
       availability_zone = "us-east-1b"
-      cidr_block = 10.0.1.0/24          inet.subnet(main.cidr_block, 8, n)
-      vpc = ?aws.vpc["main"]
+      cidr_block = 10.0.1.0/24
+      vpc = main
   ... four more
 
 apply: tick 1 now
 ```
 
-Every line of the plan says which statement made it and how the
-variables were bound; a changed attribute says which write won.
+Every line of the plan says where it comes from, and only that: a
+value written by another file carries that file and line, `-v` adds how
+each value was computed and which writes lost, `-vv` the derivation.
 The subnet block ends in a `where` clause, which makes it a rule: the
 clause is a query, and every answer is one subnet. `aws.availability_zone`
 is a table the provider answers, what Terraform calls a data source:
@@ -192,7 +193,7 @@ resource` is every resource of every type. `@default` means any explicit
 `team` tag wins over this one. Ask for the merged result:
 
 ```
-$ dform query 'aws.vpc["main/vpc"].tags'
+$ dform query 'main.vpc.tags'
 {component: "network", env: "prod", team: "platform"}
 ```
 
@@ -251,7 +252,7 @@ endpoint does not exist until the database does. Every tool has to live
 with that; Terraform's answer is the error everyone has met, "value
 depends on resource attributes that cannot be determined until apply",
 followed by a `-target` run by hand and a second plan. dform carries the
-unknown as a value, `?aws.db_instance["orders"].endpoint`, plans with it,
+unknown as a value, `orders.endpoint`, plans with it,
 and applies in ticks: everything that can be made is made, the unknowns
 resolve, what depended on them is planned again against the real values
 and made. A resource whose *name* depends on an unknown goes under
@@ -576,9 +577,9 @@ default. A `key` is an input with one more property: it selects the
 deployment. The keys together name one, so `env` and `region` give a
 deployment per combination, each with its own state, and they are given
 with the target, `dform plan shop env=prod region=eu-west-1`.
-A `provider` statement is a rule that configures a provider from
-whatever it reads (`provider aws { region }`, or `provider aws` alone),
-and goes wherever reads best, usually next to what it depends on. Where
+A provider is imported like a module, `use aws { region }`, its block
+being its configuration, and the line goes wherever reads best, usually
+next to what it depends on. Where
 a stack's state lives and who may approve a plan are operational, so
 they live in `dform.toml`, where `[stacks.shop]` is `stacks/shop.df`:
 
@@ -677,11 +678,11 @@ acme_email }` is the ingress with its one input given. A module used
 from two stacks runs in both. `std` is used everywhere already;
 `str.split` needs no `use`.
 
-A **component** is the thing that is copied many times: `component NAME
-{ .. }`, an item of a module, with inputs. `instance` makes one copy
-with its inputs bound, gated by a clause if you like. A copy's relations
-are private and it hands values out through outputs; its resources are
-visible to policy, as cloud resources are.
+A **component** is a type you define: `component NAME { .. }`, an item
+of a module, with inputs for its attributes and outputs for what it
+computes. `resource` makes one, exactly as it makes one of a provider's
+type, gated by a clause if you like. Inside it, relations are private;
+its resources are visible to policy, as cloud resources are.
 
 ```dform
 component network {
@@ -696,14 +697,15 @@ component network {
   } where az(availability_zone, n)
 }
 
-instance network blue { cidr = "10.1.0.0/16" }
-instance network green { cidr = "10.2.0.0/16" } where env == "prod"
+resource network blue { cidr = "10.1.0.0/16" }
+resource network green { cidr = "10.2.0.0/16" } where env == "prod"
 ```
 
 Inside, `vpc` is the copy's own resource and `az(..)` is the stack's
 table, read like any fact. `green` exists only in prod. The copy's VPC is
-`aws.vpc["blue/vpc"]` everywhere else, another block reads it as
-`blue.vpc`, and `network[t].vpc` ranges over every copy. An input with no
+`blue.vpc` everywhere else, `network[t].vpc` ranges over every copy,
+and the plan shows `blue` as one change with its VPC and subnets under
+it. An input with no
 value is the same error wherever it is: in a stack, a module, or a
 component.
 
@@ -723,11 +725,11 @@ type database = component {
 component rds: database { .. }
 component cloudsql: database { .. }
 
-provider aws { region = "eu-west-1" } where cloud == "aws"
-provider google { project = gcp_project } where cloud == "gcp"
+use aws { region = "eu-west-1" } where cloud == "aws"
+use google { project = gcp_project } where cloud == "gcp"
 
-instance rds db { name = "shop" } where cloud == "aws"
-instance cloudsql db { name = "shop" } where cloud == "gcp"
+resource rds db { name = "shop" } where cloud == "aws"
+resource cloudsql db { name = "shop" } where cloud == "gcp"
 ```
 
 `db.conn` is whichever copy holds; a deployment that picks gcp never
@@ -884,8 +886,15 @@ lease per deployment, so a second apply of the same deployment is
 refused naming the holder. `dform state show`, `state mv` and `stack
 rekey` are the state operations.
 
-**Providers.** A provider is one wasm file (the component model under WASI): any platform,
-sandboxed, carrying its own schema, so the editor can jump to a type's
+**Providers.** A provider is a module whose items are types and externs
+and whose inputs are its configuration, so `use aws { region }` imports
+and configures it, `use aws as eu { region = "eu-west-1" }` is a second
+account or region, and a guarded `use` is a provider that exists only
+in some environments. It runs as a process dform starts, native over
+gRPC, or as a wasm component behind `--features wasm`, and either way
+it never touches a socket: HTTP, SSH and git are the host's, with
+credentials applied by name, so a provider holds nothing it was not
+granted. It carries its own schema, so the editor can jump to a type's
 definition with nothing running. A registry is a bucket, the same kind
 you keep state in: `[registries] acme = { backend = 's3(..)', keys =
 'jwks_file(..)' }` in `dform.toml`, versions immutable, packages signed,
@@ -915,20 +924,19 @@ the one place those tools cannot wait for a value. Terraform's provider
 configuration is evaluated before the plan, so a provider fed by a
 resource output is a documented limitation and a second root module.
 
-In dform a provider block is a rule like every other statement, and the
-evaluation engine that carries unknowns through a resource carries them
-through a provider too. `provider k8s { endpoint =
-cluster.endpoint }` is simply a rule that cannot fire until tick 1 has
-made the cluster; the engine knows that, plans the cluster first, learns
-the endpoint, configures the provider, and plans what runs on it in
-tick 2. There is no second-class corner of the language where values
-have to be known in advance: not providers, not module instances, not
-names. And because an attribute can have several authors, a Kubernetes
+In dform importing a provider is a rule like every other statement, and
+the evaluation engine that carries unknowns through a resource carries
+them through a provider too. `use k8s { endpoint = cluster.endpoint }`
+is simply a rule that cannot fire until tick 1 has made the cluster;
+the engine knows that, plans the cluster first, learns the endpoint,
+configures the provider, and plans what runs on it in tick 2. There is
+no second-class corner of the language where values have to be known
+in advance: not providers, not components, not names. And because an attribute can have several authors, a Kubernetes
 object is assembled the way kustomize assembles one, from a base and
 any number of overlays, except that the overlays are rules.
 
 ```dform
-provider aws { region }
+use aws { region }
 
 resource aws.vpc main { cidr_block = vpc_net }
 resource aws.eks_cluster cluster {
@@ -938,7 +946,7 @@ resource aws.eks_cluster cluster {
 # The Kubernetes provider is bound to the cluster above: its endpoint and
 # CA are unknown until tick 1 has created it, so this provider, and
 # everything that uses it, waits for that tick.
-provider k8s {
+use k8s {
   endpoint = cluster.endpoint
   ca = cluster.certificate_authority
 }
@@ -951,10 +959,10 @@ resource k8s.deployment api {
 }
 ```
 
-The plan says it in its own terms: the namespace and the deployment are
-`pending on ?aws.eks_cluster["cluster"].endpoint, resolves after tick
-1`. Tick 1 makes the VPC and the cluster; the provider is configured
-from the endpoint; tick 2 makes the namespace and the deployment. One
+The plan says it in its own terms: the namespace and the deployment sit
+under `tick 2  waits on cluster.endpoint`. Tick 1 makes the VPC and the
+cluster; the provider is configured from the endpoint; tick 2 makes the
+namespace and the deployment. One
 plan, one apply, one state, one `why`.
 
 In a real project this is two stacks, `stacks/platform.df` owning the
@@ -998,8 +1006,8 @@ let serving = rollout where ready(rollout)
 
 `world.T` reads what exists rather than what the program wants, so
 `active` is whichever colour the live Service selects. `app` is the
-component each colour instances, and its outputs carry the replica
-counts the cluster fills in.
+component each colour is a resource of, and its outputs carry the
+replica counts the cluster fills in.
 
 `examples/crud-api` is the whole thing: a database, its generated
 password as a secret the program never sees, the namespace with a
