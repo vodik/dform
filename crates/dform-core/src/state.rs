@@ -52,6 +52,21 @@ pub struct State {
     /// `zset::Instances`).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub instances: BTreeMap<String, String>,
+    /// The host keys the built-in `ssh` provider has met, by host as the
+    /// program names it (`10.0.0.5`, `db.example.com:2222`): recorded on
+    /// first contact, checked on every one after (`plugin::ssh`), reset by
+    /// `dform state forget-host HOST`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub known_hosts: BTreeMap<String, KnownHost>,
+}
+
+/// A host's key as first met: its type (`ssh-ed25519`), its SHA-256
+/// fingerprint as OpenSSH prints it (`SHA256:..`), and when.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct KnownHost {
+    pub key_type: String,
+    pub fingerprint: String,
+    pub when: String,
 }
 
 /// The deformations of the current tick that have not been applied yet, each
@@ -128,6 +143,12 @@ impl State {
     /// kept.
     pub fn taint_memo(&mut self, key: &str) -> Option<crate::memo::Kept> {
         self.memo.remove(key)
+    }
+
+    /// `dform state forget-host HOST`: forget the key recorded for `host`,
+    /// so the next contact records the one it meets. Returns what it kept.
+    pub fn forget_host(&mut self, host: &str) -> Option<KnownHost> {
+        self.known_hosts.remove(host)
     }
 
     /// A new idempotency key for `action` of `addr` in the deployment

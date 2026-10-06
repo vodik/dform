@@ -13,6 +13,7 @@ pub mod policy;
 pub mod providers;
 pub mod queue;
 pub mod source;
+pub mod ssh;
 pub mod timed;
 pub mod wire;
 
