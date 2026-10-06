@@ -13,7 +13,7 @@
 //!   .limits = ..` through a variable bound over a keyed list's elements),
 //!   at its own path or nested in an object or a list value;
 //! - an input's default, an object input's field's;
-//! - an `instance`'s or a `use`'s entry for its component's or module's
+//! - a component's resource's, an `instance`'s or a `use`'s entry for its component's or module's
 //!   input;
 //! - a function's typed parameter (std's signatures);
 //! - a declared relation's typed column (R-34), where an ambiguous
@@ -422,8 +422,9 @@ impl Ctx<'_> {
         }
     }
 
-    /// An `instance`'s or a `use`'s entries: its component's or module's
-    /// inputs' types.
+    /// A component's resource's, an `instance`'s or a `use`'s entries:
+    /// its component's or module's inputs' types. A resource of a
+    /// provider's type names no component, and is left to `resource`.
     fn copy(&mut self, n: &SyntaxNode, file: &SyntaxNode) {
         let Some(block) = n.children().find(|c| c.kind() == BLOCK) else {
             return;
@@ -438,10 +439,18 @@ impl Ctx<'_> {
             .map(|t| t.text().to_string())
             .collect();
         let inputs = match n.kind() {
-            INSTANCE => {
-                // `instance a.b.comp name`: the component `comp` of the
-                // module `a.b`, or of this file.
-                let Some((comp, module)) = path[..path.len().saturating_sub(1)].split_last() else {
+            INSTANCE | RESOURCE => {
+                // `resource a.b.comp name { .. }`: the component `comp` of
+                // the module `a.b`, or of this file (R-113).
+                let comp_path: Vec<String> = match n.kind() {
+                    RESOURCE => crate::syntax::resolve::copy_parts(n)
+                        .0
+                        .split('.')
+                        .map(str::to_string)
+                        .collect(),
+                    _ => path[..path.len().saturating_sub(1)].to_vec(),
+                };
+                let Some((comp, module)) = comp_path.split_last() else {
                     return;
                 };
                 let tree = if module.is_empty() {
@@ -667,7 +676,10 @@ pub fn normalize(root: &SyntaxNode, src: &str, typing: &Typing) -> Option<String
     }
     for n in root.descendants() {
         match n.kind() {
-            RESOURCE => c.resource(&n),
+            RESOURCE => {
+                c.resource(&n);
+                c.copy(&n, root);
+            }
             SET => c.set(&n, &resources),
             INPUT => c.input(&n),
             INSTANCE | USE => c.copy(&n, root),
