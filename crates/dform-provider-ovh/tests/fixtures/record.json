@@ -1,0 +1,8 @@
+{
+  "id": 5123456789,
+  "zone": "vodik.xyz",
+  "subDomain": "matrix",
+  "fieldType": "A",
+  "target": "51.79.10.20",
+  "ttl": 0
+}

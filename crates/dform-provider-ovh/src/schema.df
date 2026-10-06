@@ -1,0 +1,97 @@
+# The OVHcloud provider's schema (`dform-provider-ovh`, R-44): Public
+# Cloud instances and SSH keys of one project, and DNS records of a zone.
+#
+#   type_attr(Type, Path, Ty, Flags).   Flags: required computed id sensitive
+#                                       nullable optional_computed force_new
+#   type_provider(Type, Provider).
+#   type_replace(Type, Order).          create_first, destroy_first or either
+#
+# An instance's key is its name within the project, an SSH key's too, so
+# a replacement deletes the old one first. A record's key is its zone,
+# subdomain, type and target: only its ttl changes in place.
+
+type_provider("ovh.instance", "ovh")
+type_provider("ovh.ssh_key", "ovh")
+type_provider("ovh.domain_record", "ovh")
+
+type_attr("ovh.instance", "id", "string", ["computed", "id"])
+type_attr("ovh.instance", "name", "string", ["required"])
+type_attr("ovh.instance", "region", "string", ["required", "force_new"])
+type_attr("ovh.instance", "flavor", "string", ["required", "force_new"])
+type_attr("ovh.instance", "image", "string", ["required", "force_new"])
+type_attr("ovh.instance", "ssh_key", "ref(ovh.ssh_key)", ["force_new"])
+type_attr("ovh.instance", "user_data", "string", ["sensitive", "force_new"])
+type_attr("ovh.instance", "public_ip", "ip", ["computed"])
+type_attr("ovh.instance", "private_ip", "ip", ["computed", "nullable"])
+type_attr("ovh.instance", "status", "string", ["computed"])
+type_replace("ovh.instance", "destroy_first")
+
+type_attr("ovh.ssh_key", "id", "string", ["computed", "id"])
+type_attr("ovh.ssh_key", "name", "string", ["required", "force_new"])
+type_attr("ovh.ssh_key", "public_key", "string", ["required", "force_new"])
+type_replace("ovh.ssh_key", "destroy_first")
+
+type_attr("ovh.domain_record", "id", "string", ["computed", "id"])
+type_attr("ovh.domain_record", "zone", "string", ["required", "force_new"])
+type_attr("ovh.domain_record", "subdomain", "string", ["force_new"])
+type_attr(
+  "ovh.domain_record",
+  "type",
+  "enum(A, AAAA, CNAME, TXT, SRV, MX)",
+  ["required", "force_new"],
+)
+type_attr("ovh.domain_record", "target", "string", ["required", "force_new"])
+type_attr("ovh.domain_record", "ttl", "int", ["optional_computed"])
+type_replace("ovh.domain_record", "either")
+
+type_doc("ovh.instance", "", "A Public Cloud instance of the project.")
+type_doc(
+  "ovh.instance",
+  "name",
+  "The instance's name, unique in the project: what a Create that timed out is found by. Changed in place.",
+)
+type_doc(
+  "ovh.instance",
+  "region",
+  "The region it runs in (`ca-east-tor`, `BHS5`). Changing it replaces the instance.",
+)
+type_doc(
+  "ovh.instance",
+  "flavor",
+  "The flavor's name (`b2-7`, `d2-2`). Changing it replaces the instance.",
+)
+type_doc(
+  "ovh.instance",
+  "image",
+  "The image's name in the region (`Ubuntu 24.04`). Changing it replaces the instance.",
+)
+type_doc(
+  "ovh.instance",
+  "ssh_key",
+  "The SSH key installed for the image's default user. Changing it replaces the instance.",
+)
+type_doc(
+  "ovh.instance",
+  "user_data",
+  "The cloud-init document the instance boots with. Changing it replaces the instance.",
+)
+type_doc("ovh.instance", "public_ip", "The instance's public IPv4 address, once it has one.")
+type_doc("ovh.instance", "private_ip", "Its address on a private network, if it is on one.")
+type_doc("ovh.instance", "status", "ACTIVE once it runs; BUILD while it is made.")
+type_doc("ovh.ssh_key", "", "An SSH public key of the project, for its instances.")
+type_doc("ovh.ssh_key", "name", "The key's name, unique in the project.")
+type_doc("ovh.ssh_key", "public_key", "The OpenSSH public key (`ssh-ed25519 AAAA...`).")
+type_doc("ovh.domain_record", "", "A record of a DNS zone OVH hosts.")
+type_doc("ovh.domain_record", "zone", "The zone (`example.com`).")
+type_doc(
+  "ovh.domain_record",
+  "subdomain",
+  "The name under the zone (`www`); none for the zone's apex.",
+)
+type_doc("ovh.domain_record", "type", "A, AAAA, CNAME, TXT, SRV or MX.")
+type_doc("ovh.domain_record", "target", "The record's value.")
+type_doc(
+  "ovh.domain_record",
+  "ttl",
+  "Seconds a resolver keeps it; 0, the zone's default, when not set. Changed in place.",
+)

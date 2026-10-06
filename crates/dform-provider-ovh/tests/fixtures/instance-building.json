@@ -1,0 +1,17 @@
+{
+  "id": "0d1e2f3a-4b5c-4d6e-8f70-8192a3b4c5d6",
+  "name": "k8s-lab-agent-0",
+  "ipAddresses": [],
+  "flavorId": "3b4c5d6e-7f80-4a1b-8c2d-3e4f5a6b7c8d",
+  "imageId": "9a8b7c6d-5e4f-4a3b-2c1d-0e9f8a7b6c5d",
+  "sshKeyId": null,
+  "created": "2026-10-05T18:25:02Z",
+  "region": "ca-east-tor",
+  "monthlyBilling": null,
+  "status": "BUILD",
+  "planCode": "b2-7.consumption",
+  "operationIds": [],
+  "flavor": null,
+  "image": null,
+  "sshKey": null
+}

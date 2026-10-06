@@ -1,0 +1,13 @@
+{
+  "project_id": "0123456789abcdef0123456789abcdef",
+  "projectName": "vodik",
+  "description": "vodik",
+  "planCode": "project.2018",
+  "unleash": false,
+  "expiration": null,
+  "creationDate": "2026-09-30T12:00:00Z",
+  "orderId": 123456789,
+  "access": "full",
+  "status": "ok",
+  "manualQuota": false
+}

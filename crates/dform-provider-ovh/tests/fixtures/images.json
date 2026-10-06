@@ -1,0 +1,5 @@
+[
+  {"id": "9a8b7c6d-5e4f-4a3b-2c1d-0e9f8a7b6c5d", "name": "Ubuntu 24.04", "region": "ca-east-tor", "visibility": "public", "type": "linux", "minDisk": 0, "size": 3.5, "minRam": 0, "status": "active", "user": "ubuntu", "creationDate": "2026-04-25T10:11:12Z", "flavorType": null, "tags": [], "planCode": null},
+  {"id": "8b7c6d5e-4f3a-4b2c-1d0e-9f8a7b6c5d4e", "name": "Debian 13", "region": "ca-east-tor", "visibility": "public", "type": "linux", "minDisk": 0, "size": 2.1, "minRam": 0, "status": "active", "user": "debian", "creationDate": "2026-08-10T09:00:00Z", "flavorType": null, "tags": [], "planCode": null},
+  {"id": "7c6d5e4f-3a2b-4c1d-0e9f-8a7b6c5d4e3f", "name": "Windows Server 2025 Standard (Desktop)", "region": "ca-east-tor", "visibility": "public", "type": "windows", "minDisk": 50, "size": 12.0, "minRam": 0, "status": "active", "user": "Administrator", "creationDate": "2026-02-01T09:00:00Z", "flavorType": "win", "tags": [], "planCode": "win-standard.consumption"}
+]

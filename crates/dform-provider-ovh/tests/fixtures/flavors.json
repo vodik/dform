@@ -1,0 +1,5 @@
+[
+  {"id": "3b4c5d6e-7f80-4a1b-8c2d-3e4f5a6b7c8d", "name": "b2-7", "region": "ca-east-tor", "ram": 7000, "disk": 50, "vcpus": 2, "type": "ovh.ssd.cpu", "osType": "linux", "inboundBandwidth": 250, "outboundBandwidth": 250, "available": true, "planCodes": {"monthly": "b2-7.monthly.postpaid", "hourly": "b2-7.consumption"}, "capabilities": [], "quota": 20},
+  {"id": "4c5d6e7f-8091-4b2c-9d3e-4f5a6b7c8d9e", "name": "win-b2-7", "region": "ca-east-tor", "ram": 7000, "disk": 50, "vcpus": 2, "type": "ovh.ssd.cpu", "osType": "windows", "inboundBandwidth": 250, "outboundBandwidth": 250, "available": true, "planCodes": {"monthly": null, "hourly": "win-b2-7.consumption"}, "capabilities": [], "quota": 20},
+  {"id": "5d6e7f80-91a2-4c3d-8e4f-5a6b7c8d9e0f", "name": "d2-2", "region": "ca-east-tor", "ram": 2000, "disk": 25, "vcpus": 1, "type": "ovh.d2", "osType": "linux", "inboundBandwidth": 100, "outboundBandwidth": 100, "available": false, "planCodes": {"monthly": null, "hourly": "d2-2.consumption"}, "capabilities": [], "quota": 20}
+]

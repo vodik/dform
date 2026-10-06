@@ -1,0 +1,14 @@
+{
+  "name": "ca-east-tor",
+  "type": "localzone",
+  "status": "UP",
+  "continentCode": "NA",
+  "countryCode": "ca",
+  "datacenterLocation": "TOR",
+  "availabilityZones": [],
+  "ipCountries": ["ca"],
+  "services": [
+    {"name": "instance", "status": "UP", "endpoint": "https://compute.ca-east-tor.cloud.ovh.net/"},
+    {"name": "volume", "status": "UP", "endpoint": "https://volume.ca-east-tor.cloud.ovh.net/"}
+  ]
+}

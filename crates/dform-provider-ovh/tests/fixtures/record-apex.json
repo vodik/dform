@@ -1,0 +1,8 @@
+{
+  "id": 5123456790,
+  "zone": "vodik.xyz",
+  "subDomain": "",
+  "fieldType": "TXT",
+  "target": "\"v=spf1 -all\"",
+  "ttl": 3600
+}

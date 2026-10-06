@@ -1,0 +1,29 @@
+[package]
+name = "dform-provider-ovh"
+version = "0.1.0"
+license = "Apache-2.0"
+edition = "2024"
+publish = false
+
+[features]
+# `fake`: an OVH API server in the test process (`src/fake.rs`), for tests.
+fake = []
+
+[dependencies]
+anyhow = "1.0"
+serde_json = "1.0"
+dform-core = { path = "../dform-core" }
+dform-grpc = { path = "../dform-grpc" }
+# The gRPC service (`service.rs`): each call runs on tokio's blocking pool,
+# so a slow Create does not hold up the Reads beside it.
+tokio = { version = "1", features = ["rt"] }
+tonic = "0.13"
+# Blocking HTTP over rustls, as dform-s3 has it.
+ureq = { version = "3", default-features = false, features = ["rustls"] }
+# The request signature: SHA-1 over the signed request (`sign.rs`).
+sha1 = "0.10"
+# The user data's digest the provider keeps (`record.rs`).
+sha2 = "0.10"
+
+[dev-dependencies]
+dform-provider-ovh = { path = ".", features = ["fake"] }

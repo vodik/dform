@@ -1,0 +1,7 @@
+{
+  "id": "Wkdabc123",
+  "name": "k8s-lab-admin",
+  "publicKey": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleExampleExampleExampleExample simon@lab",
+  "fingerPrint": "a1:b2:c3:d4:e5:f6:07:18:29:3a:4b:5c:6d:7e:8f:90",
+  "regions": ["BHS5", "ca-east-tor", "GRA11"]
+}
