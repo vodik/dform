@@ -38,7 +38,7 @@ use crate::schema::Schema;
 use crate::transform::Lowered;
 use crate::value::Value;
 use anyhow::Result;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// Whether a secret flows through `name` uninspected: a function declared
 /// `forwards` (`std/*.df`), or an aggregate that only collects.
@@ -362,6 +362,35 @@ pub fn secret_expected_accounts(
             }
         })
         .collect()
+}
+
+/// The settings a secret reaches, by provider (`provider k8s { kubeconfig
+/// = k3s.kubeconfig }`: `k8s` -> `kubeconfig`): the provider takes their
+/// value at Configure, in memory; dform prints each as `(sensitive)` and
+/// keeps it nowhere (R-45).
+pub fn secret_settings(
+    lowered: &Lowered,
+    schema: &Schema,
+    outputs: &BTreeSet<(String, String)>,
+) -> BTreeMap<String, BTreeSet<String>> {
+    let pass = fixpoint(lowered, schema, outputs);
+    let mut out: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for (head, body, _) in rules(&lowered.program) {
+        let Some(h) = head.filter(|h| h.pred == "provider_config") else {
+            continue;
+        };
+        let vars = pass.body_vars(body);
+        if let [name, Term::Obj(settings)] = h.args.as_slice()
+            && let Some(name) = s(name)
+        {
+            for (k, v) in settings {
+                if pass.term_secret(v, &vars) {
+                    out.entry(name.to_string()).or_default().insert(k.clone());
+                }
+            }
+        }
+    }
+    out
 }
 
 /// The `memo.first` literals whose candidate is a secret: their value is

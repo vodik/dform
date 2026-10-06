@@ -327,8 +327,15 @@ impl Providers {
             if let Some(policy) = policy_of(spec) {
                 link.set_policy(policy);
             }
-            let mut config = base.clone();
+            let mut base = base.clone();
             let i = links.len();
+            // A world file is one process's: the mock keeps its world in
+            // memory and writes it whole. A second process (the mock as a
+            // plugin beside it) keeps its own, as a second cloud would.
+            if i > 0 {
+                base["world"] = path(&cfg.world.with_extension(format!("{}.json", link.name)));
+            }
+            let mut config = base.clone();
             if by_block(i, &link.name) {
                 config["deferred"] = json!(true);
                 awaiting.insert(i);
@@ -362,10 +369,16 @@ impl Providers {
     /// Configure each provider the program configures
     /// (`provider_config(Name, Settings)` in `facts`) whose settings are
     /// known now and changed: Configure again with them as `settings`.
-    /// Settings holding a null (a cluster not created yet) wait. Whether
-    /// any provider was configured: then what was read is read again.
-    pub fn configure_from<'a>(&self, facts: impl IntoIterator<Item = &'a Atom>) -> Result<bool> {
-        let mut changed = false;
+    /// Settings holding a null (a cluster not created yet) wait. The
+    /// providers configured, by the name the program gives them: then
+    /// what was read is read again. The settings go to the provider in
+    /// that call and are kept here only to tell a change (never written,
+    /// printed or digested: a kubeconfig may be among them, R-45).
+    pub fn configure_from<'a>(
+        &self,
+        facts: impl IntoIterator<Item = &'a Atom>,
+    ) -> Result<Vec<String>> {
+        let mut changed = Vec::new();
         for a in facts.into_iter().filter(|a| a.pred == "provider_config") {
             let [Term::Val(Value::Str(name)), Term::Val(v)] = a.args.as_slice() else {
                 continue;
@@ -391,9 +404,9 @@ impl Providers {
             drop(accounts);
             self.settings.borrow_mut().insert(i, settings);
             self.awaiting.borrow_mut().remove(&i);
-            changed = true;
+            changed.push(name.clone());
         }
-        if changed {
+        if !changed.is_empty() {
             self.invalidate();
         }
         Ok(changed)
@@ -902,12 +915,23 @@ impl Providers {
             .ok_or_else(|| anyhow!(crate::deployment::NO_PROVIDER))
     }
 
+    /// The link serving `typ`: the one whose schema declares it; else the
+    /// configured provider its namespace names (a cluster's CRD, which the
+    /// run's schema, loaded before the cluster was reached, lacks: the
+    /// provider has it since its settings arrived, R-45); else the
+    /// fallback.
     fn route(&self, typ: &str) -> usize {
-        self.loaded()
-            .owner
-            .get(typ)
-            .copied()
-            .unwrap_or(self.fallback)
+        if let Some(&i) = self.loaded().owner.get(typ) {
+            return i;
+        }
+        self.reached(typ).unwrap_or(self.fallback)
+    }
+
+    /// The provider the program configures, its settings arrived, that
+    /// `typ`'s namespace names.
+    fn reached(&self, typ: &str) -> Option<usize> {
+        let i = self.link_for(typ.split_once('.')?.0)?;
+        (self.by_program.contains(&i) && !self.awaiting.borrow().contains(&i)).then_some(i)
     }
 
     fn link_named(&self, name: &str) -> Option<usize> {
@@ -924,7 +948,8 @@ impl Providers {
     /// (R-110): the program's settings of the provider that serves it,
     /// while they are not known; or, for a type no schema declares whose
     /// namespace names a provider the program configures, that provider's
-    /// schema (a cluster's CRD, served once the cluster is reached).
+    /// schema (a cluster's CRD, served once the cluster is reached), until
+    /// its settings arrive ([`Providers::route`]).
     pub fn waits(&self, typ: &str) -> Option<ProviderWait> {
         let name = |i: usize| {
             self.blocks
@@ -942,8 +967,7 @@ impl Providers {
         }
         let ns = typ.split_once('.')?.0;
         let i = self.link_for(ns)?;
-        self.by_program
-            .contains(&i)
+        (self.by_program.contains(&i) && self.awaiting.borrow().contains(&i))
             .then(|| ProviderWait::Schema(name(i)))
     }
 
@@ -960,11 +984,21 @@ impl Providers {
         map: &'a BTreeMap<String, StateEntry>,
     ) -> impl Iterator<Item = (Address, &'a StateEntry)> + 'a {
         map.iter()
-            .filter(|(_, e)| {
-                self.link_named(&e.provider)
+            .filter_map(|(k, e)| state::parse_key(k).map(|a| (a, e)))
+            .filter(|(a, e)| {
+                self.link_serving(&a.typ, &e.provider)
                     .is_some_and(|i| !self.awaiting.borrow().contains(&i))
             })
-            .filter_map(|(k, e)| state::parse_key(k).map(|a| (a, e)))
+    }
+
+    /// The link that serves a state entry of `typ` made by `provider`:
+    /// the one of that name, or, when two have it (the mock beside itself
+    /// as a plugin, both `fakecloud`), the one serving the type.
+    fn link_serving(&self, typ: &str, provider: &str) -> Option<usize> {
+        match self.names.iter().filter(|n| *n == provider).count() {
+            0 | 1 => self.link_named(provider),
+            _ => Some(self.route(typ)).filter(|&i| self.names[i] == provider),
+        }
     }
 
     /// Query (E DR-18): an extern's answer, the rows of `pred` whose `+`
@@ -1308,7 +1342,9 @@ impl Providers {
             .entries(&state.resources)
             .chain(self.entries(&state.deposed))
         {
-            let i = self.link_named(&e.provider).expect("entries are served");
+            let i = self
+                .link_serving(&a.typ, &e.provider)
+                .expect("entries are served");
             mapped.insert(key(&a.typ, &e.remote), (a, e.remote.clone(), i));
         }
         let keys: BTreeSet<String> = mapped.keys().cloned().collect();

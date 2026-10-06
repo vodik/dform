@@ -11,8 +11,10 @@
 //! (the snapshot's schema, the static schema of every stable kind,
 //! extended by the CRDs its cluster served at the deployment's last run,
 //! the environment ignored) and again with its `settings` once they are
-//! known (`Cluster::configured`), when the cluster's CRDs are cached for
-//! the next run (`dform.state/cache/schema/<deployment>/k8s.json`).
+//! known (`Cluster::configured`), when the cluster's CRDs are cached
+//! (`dform.state/cache/schema/<deployment>/k8s.json`) and served from then
+//! on: dform plans a CRD-typed object against them at that tick, untyped
+//! in its own schema until the next run loads the cache.
 //!
 //! Remote ids are `NAMESPACE/NAME` (`NAME` for a cluster-scoped kind).
 //! Read and Import GET the object. Plan validates the document, then
@@ -125,8 +127,8 @@ impl K8s {
     }
 
     /// The program's cluster answered: cache the kinds it serves beyond the
-    /// static schema (its CRDs) for the deployment's next run, which starts
-    /// `deferred` again. The schema of this run stays as it is. Once per
+    /// static schema (its CRDs), for this provider from now on and for the
+    /// deployment's next run, which starts `deferred` again. Once per
     /// change of the cluster's document; a cluster that does not answer
     /// keeps the cache it had.
     async fn extend(cluster: &Cluster, cache: &std::path::Path, stack: &str) -> Result<()> {
@@ -141,8 +143,8 @@ impl K8s {
         openapi::write_extension(&path, &hash, &openapi::extension(&full, &base)?)
     }
 
-    /// The program's configuration arrived (`Cluster::configured`): the
-    /// same schema, this cluster.
+    /// The program's configuration arrived (`Cluster::configured`): this
+    /// schema, that cluster.
     pub fn with_cluster(&self, cluster: Cluster) -> K8s {
         K8s {
             derived: self.derived.clone(),
@@ -862,17 +864,17 @@ impl pb::provider_server::Provider for Service {
         {
             eprintln!("dform-provider-k8s: the cluster's schema is not cached: {e:#}");
         }
-        let current = self.k8s.read().unwrap_or_else(|e| e.into_inner()).clone();
-        let k8s = match (configured, current) {
-            (Some(c), Some(k8s)) => k8s.with_cluster(c),
-            (Some(c), None) => {
-                let k8s = K8s::deferred(cache, stack.as_deref()).map_err(invalid)?;
-                k8s.with_cluster(c)
-            }
-            (None, _) if config.get("deferred") == Some(&Json::Bool(true)) => {
+        // The cluster reached: the static schema extended by the kinds it
+        // serves (just cached), so a CRD the run's schema lacks is planned
+        // against it at this tick (R-45).
+        let k8s = match configured {
+            Some(c) => K8s::deferred(cache, stack.as_deref())
+                .map_err(invalid)?
+                .with_cluster(c),
+            None if config.get("deferred") == Some(&Json::Bool(true)) => {
                 K8s::deferred(cache, stack.as_deref()).map_err(invalid)?
             }
-            (None, _) => K8s::configure(cache).await.map_err(invalid)?,
+            None => K8s::configure(cache).await.map_err(invalid)?,
         };
         let k8s = K8s {
             stack: stack.or(k8s.stack),

@@ -34,7 +34,7 @@ use crate::watch::Relation;
 use crate::{executor, lint, loader, provider, report, stuck, tables, transform, zset};
 use anyhow::{Context, Result, bail};
 use std::cell::RefCell;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
@@ -445,6 +445,12 @@ pub struct Evaluator {
     last_apply: Vec<Atom>,
     /// The last evaluation's facts and where it can be continued from.
     last: RefCell<Option<(Vec<Atom>, engine::Resumable)>>,
+    /// The providers configured from the program's settings since the
+    /// last [`Evaluator::take_configured`], by the program's name.
+    configured: RefCell<Vec<String>>,
+    /// The settings a secret reaches, by provider
+    /// (`secrets::secret_settings`): printed `(sensitive)`.
+    secret_settings: BTreeMap<String, BTreeSet<String>>,
 }
 
 impl Evaluator {
@@ -476,7 +482,9 @@ impl Evaluator {
                 externs.eval_resumable(program, &extra, zset::POLICY_INPUTS)?;
             // A provider the program configures, its settings now known,
             // is configured, and what it serves read again.
-            if backend.configure_from(&res.facts)? {
+            let configured = backend.configure_from(&res.facts)?;
+            if !configured.is_empty() {
+                self.configured.borrow_mut().extend(configured);
                 // An extern of a provider that was waiting on its settings
                 // answered "not yet": ask it again.
                 externs.forget_not_yet();
@@ -497,7 +505,7 @@ impl Evaluator {
                 Some((seen, resumable)) if *seen == extra => Some(resumable.with_at(more, tick)?),
                 _ => None,
             };
-            match resumed {
+            let (res, violations) = match resumed {
                 Some((res, violations)) if externs.settle(&res.facts)? => (res, violations),
                 _ => {
                     // A new extern call: the answers the resumable was
@@ -506,7 +514,23 @@ impl Evaluator {
                     extra.extend(more.iter().cloned());
                     externs.eval_at(program, &extra, tick)?
                 }
+            };
+            // At a boundary too: a provider whose settings the last tick
+            // made known (a kubeconfig read from the server it created) is
+            // configured now, and the program evaluated again over what it
+            // serves (R-45).
+            let configured = backend.configure_from(&res.facts)?;
+            if !configured.is_empty() {
+                self.configured.borrow_mut().extend(configured);
+                externs.forget_not_yet();
+                *self.last.borrow_mut() = None;
+                let (res, violations) = self.evaluate_with(st, withheld, more, tick)?;
+                backend
+                    .check_accounts(&res.facts, &self.secret_accounts)
+                    .with_context(|| format!("deployment {}", self.deployment))?;
+                return Ok((res, violations));
             }
+            (res, violations)
         };
         violations.extend(inputs::violations(&res.facts, &self.declared));
         Ok((res, violations))
@@ -559,6 +583,72 @@ impl Evaluator {
         Some(match self.backend.waits(typ)? {
             ProviderWait::Settings(p) => self.settings_label(&p),
             ProviderWait::Schema(p) => format!("provider {p} for its schema"),
+        })
+    }
+
+    /// The providers configured from the program's settings since the
+    /// last call (at a tick boundary: a kubeconfig the tick made known).
+    pub fn take_configured(&self) -> Vec<String> {
+        self.configured.take()
+    }
+
+    /// What a run says of provider `name` configured from the program's
+    /// settings: each setting's key and `KEY = VALUE`, a secret one's
+    /// value `(sensitive)`, a public one's itself; with `how`, the
+    /// expression it is written as too (`from k3s.kubeconfig`). Never a
+    /// secret's value (R-45).
+    pub fn settings_shown(
+        &self,
+        name: &str,
+        facts: &BTreeSet<Atom>,
+        how: bool,
+    ) -> Vec<(String, String)> {
+        let secret = self.secret_settings.get(name);
+        let mut out = Vec::new();
+        for a in facts.iter().filter(|a| a.pred == "provider_config") {
+            let [Term::Val(Value::Str(n)), Term::Val(Value::Obj(settings))] = a.args.as_slice()
+            else {
+                continue;
+            };
+            if n != name {
+                continue;
+            }
+            for (k, v) in settings {
+                let shown = match secret.is_some_and(|s| s.contains(k)) {
+                    true => "(sensitive)".to_string(),
+                    false => crate::partition::fmt_bare(v),
+                };
+                let from = match how {
+                    true => self.setting_source(name, k),
+                    false => None,
+                };
+                let text = match from {
+                    Some(t) => format!("{k} = {shown} from {t}"),
+                    None => format!("{k} = {shown}"),
+                };
+                out.push((k.clone(), text));
+            }
+        }
+        out.dedup();
+        out
+    }
+
+    /// The expression setting `key` of provider `name` is written as.
+    fn setting_source(&self, name: &str, key: &str) -> Option<String> {
+        self.program.statements.iter().find_map(|s| {
+            let head = match s {
+                Stmt::Rule(r) => &r.head,
+                Stmt::Fact(a) => a,
+                _ => return None,
+            };
+            match head.args.as_slice() {
+                [Term::Val(Value::Str(n)), Term::Obj(_)]
+                    if head.pred == "provider_config" && n == name =>
+                {
+                    setting_text(head.span, key)
+                }
+                _ => None,
+            }
         })
     }
 
@@ -991,6 +1081,9 @@ impl Located {
         let secret_accounts = lowered
             .map(|l| crate::secrets::secret_expected_accounts(l, backend.schema(), &secret_outputs))
             .unwrap_or_default();
+        let secret_settings = lowered
+            .map(|l| crate::secrets::secret_settings(l, backend.schema(), &secret_outputs))
+            .unwrap_or_default();
         base_extra.extend(backend.catalog(scope.as_ref())?);
         base_extra.extend(discovered);
         base_extra.extend(obs.facts(&backend, &st)?);
@@ -1027,6 +1120,8 @@ impl Located {
             deployment: self.deployment.clone(),
             last_apply: opts.last_apply.clone(),
             last: RefCell::new(None),
+            configured: RefCell::new(Vec::new()),
+            secret_settings,
         };
         let (mut res, mut violations) = evaluator.evaluate(&st)?;
         // moved/3 rewrites state's identity before the diff (E §3.4); round
