@@ -1,0 +1,45 @@
+//! `convert!` round-trips every message the protocol has through the WIT's
+//! types: a value's tree, absent documents as the empty obj.
+
+dform_wit::convert!(c, dform_wit::guest::provider::dform::provider::types);
+
+use dform_core::plugin::{pb, wire};
+
+#[test]
+fn a_value_round_trips_through_its_tree() {
+    let v = wire::value(&dform_core::value::Value::List(vec![]));
+    assert_eq!(c::from_tree(&c::to_tree(&v)).unwrap(), v);
+    let doc = wire::doc(&serde_json::json!({"a": [1, 0.5, "x", {"b": true}], "c": null}));
+    let t = c::to_tree(&doc);
+    assert_eq!(c::from_tree(&t).unwrap(), doc);
+    let r = pb::ApplyRequest {
+        op: pb::Op::Replace as i32,
+        r#type: "net.vpc".into(),
+        config: Some(doc.clone()),
+        assertions: vec![pb::Assertion {
+            path: "a".into(),
+            op: "eq".into(),
+            value: Some(doc),
+            message: "m".into(),
+        }],
+        ..Default::default()
+    };
+    assert_eq!(c::from_apply_request(&c::to_apply_request(&r)).unwrap(), r);
+    // A read with no documents answers the empty obj for each.
+    let read = c::from_read_response(&c::to_read_response(&pb::ReadResponse::default())).unwrap();
+    assert_eq!(read.attrs, Some(wire::doc(&serde_json::json!({}))));
+}
+
+/// A tree whose child is not after its parent is refused, not looped on.
+#[test]
+fn a_malformed_tree_is_refused() {
+    use dform_wit::guest::provider::dform::provider::types as w;
+    let t = w::Tree {
+        nodes: vec![w::Value::List(w::List { items: vec![0] })],
+    };
+    assert!(
+        c::from_tree(&t)
+            .unwrap_err()
+            .contains("not after its parent")
+    );
+}

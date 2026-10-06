@@ -1,0 +1,203 @@
+// What dform offers a native provider beyond the protocol (R-13b, R-25):
+// wit/host/dform-host.wit (`dform:host`) over gRPC, the canonical contract
+// being the WIT. A file and a package of its own beside
+// proto/dform/v1/provider.proto, which it does not change: a provider that
+// never calls back is untouched by it.
+//
+// Two services:
+//
+// - `Host` is served by dform, one server per provider it starts. dform
+//   names where in the provider's environment, `DFORM_HOST` (`unix:///PATH`
+//   or `http://127.0.0.1:PORT`); a provider built with the SDK dials it
+//   (`dform-sdk`) and calls `host.http.send(..)` there as a component calls
+//   its imports.
+// - `Manifest` is served by a provider beside `Provider`: what it uses of
+//   the host and of the machine, which `dform provider check` prints beside
+//   what dform.toml grants. A provider that does not serve it (UNIMPLEMENTED)
+//   has an undeclared manifest.
+//
+// A failure is a `Failure` in the response, never a gRPC status, so its
+// class (R-81's: final, retryable, maybe-applied) and `not-yet` travel as
+// the WIT has them. A credential and a tunnel are handles: numbers this
+// connection's `Open` and `Forward` gave, never values.
+
+syntax = "proto3";
+
+package dform.host.v1;
+
+service Host {
+  // secrets.open
+  rpc Open(OpenRequest) returns (OpenResponse);
+  // http.send
+  rpc Send(SendRequest) returns (SendResponse);
+  // ssh.exec
+  rpc Exec(ExecRequest) returns (ExecResponse);
+  // ssh.read
+  rpc ReadFile(ReadFileRequest) returns (ReadFileResponse);
+  // ssh.write
+  rpc WriteFile(WriteFileRequest) returns (WriteFileResponse);
+  // ssh.forward
+  rpc Forward(ForwardRequest) returns (ForwardResponse);
+  // git.read
+  rpc GitRead(GitReadRequest) returns (GitReadResponse);
+  // git.commit
+  rpc GitCommit(GitCommitRequest) returns (GitCommitResponse);
+  // log.log
+  rpc Log(LogRequest) returns (LogResponse);
+}
+
+service Manifest {
+  rpc Manifest(ManifestRequest) returns (ManifestResponse);
+}
+
+// error-class, and not-yet-or-error's not-yet.
+enum Kind {
+  KIND_UNSPECIFIED = 0;
+  FINAL = 1;
+  RETRYABLE = 2;
+  MAYBE_APPLIED = 3;
+  // A read of what the world has not reached yet: not an error.
+  NOT_YET = 4;
+}
+
+message Failure {
+  Kind kind = 1;
+  string message = 2;
+}
+
+message OpenRequest {
+  // KIND:NAME, as dform.toml grants it.
+  string name = 1;
+}
+
+message OpenResponse {
+  optional Failure failure = 1;
+  uint64 handle = 2;
+  optional string endpoint = 3;
+}
+
+message Header {
+  string name = 1;
+  string value = 2;
+}
+
+message SendRequest {
+  string method = 1;
+  string url = 2;
+  repeated Header headers = 3;
+  bytes body = 4;
+  optional uint32 timeout_ms = 5;
+  // A handle from Open.
+  optional uint64 auth = 6;
+  // A handle from Forward.
+  optional uint64 via = 7;
+}
+
+message SendResponse {
+  optional Failure failure = 1;
+  uint32 status = 2;
+  repeated Header headers = 3;
+  bytes body = 4;
+}
+
+message Target {
+  string host = 1;
+  string user = 2;
+  optional uint32 port = 3;
+}
+
+message ExecRequest {
+  Target on = 1;
+  repeated string argv = 2;
+  optional bytes stdin = 3;
+}
+
+message ExecResponse {
+  optional Failure failure = 1;
+  int32 status = 2;
+  bytes stdout = 3;
+  bytes stderr = 4;
+}
+
+message ReadFileRequest {
+  Target on = 1;
+  string path = 2;
+}
+
+message ReadFileResponse {
+  optional Failure failure = 1;
+  bytes data = 2;
+}
+
+message WriteFileRequest {
+  Target on = 1;
+  string path = 2;
+  bytes data = 3;
+  uint32 mode = 4;
+}
+
+message WriteFileResponse {
+  optional Failure failure = 1;
+}
+
+message ForwardRequest {
+  Target via = 1;
+  string host = 2;
+  uint32 port = 3;
+}
+
+message ForwardResponse {
+  optional Failure failure = 1;
+  uint64 tunnel = 2;
+}
+
+message GitReadRequest {
+  string repo = 1;
+  string rev = 2;
+  string path = 3;
+}
+
+message GitReadResponse {
+  optional Failure failure = 1;
+  bytes data = 2;
+}
+
+message GitFile {
+  string path = 1;
+  bytes data = 2;
+}
+
+message GitCommitRequest {
+  string repo = 1;
+  string branch = 2;
+  repeated GitFile files = 3;
+  string message = 4;
+}
+
+message GitCommitResponse {
+  optional Failure failure = 1;
+  string commit = 2;
+}
+
+enum Level {
+  LEVEL_UNSPECIFIED = 0;
+  DEBUG = 1;
+  INFO = 2;
+  WARN = 3;
+  ERROR = 4;
+}
+
+message LogRequest {
+  Level level = 1;
+  string message = 2;
+}
+
+message LogResponse {}
+
+message ManifestRequest {}
+
+message ManifestResponse {
+  // The interfaces it uses, unversioned: `dform:host/http`,
+  // `wasi:sockets/tcp`.
+  repeated string imports = 1;
+}

@@ -1,0 +1,39 @@
+[package]
+name = "dform-host"
+version = "0.1.0"
+license = "Apache-2.0"
+edition = "2024"
+publish = false
+
+# dform's side of `dform:host` (wit/host/dform-host.wit, R-13b): the
+# credentialed transports a provider reaches through dform, served to a
+# native provider as the `Host` gRPC service (proto/dform/host/v1), and
+# the launcher the CLI starts providers with.
+#
+# `wasm` (experimental, R-13b amendment 4) adds the component host: a
+# provider that is a `.wasm` component runs in wasmtime with the same
+# interfaces as imports. Without it nothing here needs wasmtime or a wasm
+# target, and a `.wasm` source is refused naming the feature.
+[features]
+wasm = ["dep:wasmtime", "dep:wasmtime-wasi", "dep:wasmtime-wasi-http", "dep:dform-wit"]
+
+[dependencies]
+anyhow = "1.0"
+dform-core = { path = "../dform-core" }
+dform-grpc = { path = "../dform-grpc" }
+dform-wire = { path = "../dform-wire" }
+serde_json = "1.0"
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "net", "macros", "io-util", "time"] }
+tonic = "0.13"
+# http.send: blocking HTTP over rustls, the machine's CA (the platform
+# verifier) and proxy, client certificates from a credential.
+ureq = { version = "3", default-features = false, features = ["rustls", "platform-verifier"] }
+# git.read and git.commit: pure-Rust git into the XDG cache (house rules:
+# no shell-outs).
+gix = { version = "0.88", default-features = false, features = ["sha1", "revision", "blocking-network-client", "blocking-http-transport-reqwest-rust-tls"] }
+# The component host (`wasm`).
+wasmtime = { version = "=49.0.1", default-features = false, features = ["component-model", "runtime", "std", "cranelift", "parallel-compilation", "wat"], optional = true }
+wasmtime-wasi = { version = "=49.0.1", optional = true }
+wasmtime-wasi-http = { version = "=49.0.1", optional = true }
+dform-wit = { path = "../dform-wit", default-features = false, features = ["host"], optional = true }
+

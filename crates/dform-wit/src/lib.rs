@@ -7,6 +7,12 @@
 //! worlds as types a host instantiates. [`guest`] is the wit-bindgen side:
 //! what a provider or function component implements, exported with
 //! `guest::provider::export!` or `guest::function::export!`.
+//!
+//! [`convert!`] is the protocol's messages as the WIT's types and back,
+//! expanded over either side's bindings (R-13b); a user depends on
+//! `dform-wire` and `dform-core`.
+
+mod convert;
 
 #[cfg(feature = "host")]
 pub mod host {

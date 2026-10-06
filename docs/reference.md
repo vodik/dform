@@ -237,7 +237,10 @@ function's signature, summary and example. `dform completions zsh > _dform` comp
 names, key values (from the key inputs' enum types) and deployments with
 state. `dform version` prints dform's version and the release of the time
 zone database built into it (`tzdb 2025b`): a `time`'s zone is read from
-that, never from the host, so a plan is the same on every machine.
+that, never from the host, so a plan is the same on every machine; and
+whether the build has the wasm host (`wasm host in`), the experimental
+`--features wasm` build that runs a provider component
+(docs/providers.md).
 
 State is scoped to a stack. One program is one stack, named after its
 file (`stacks/demo.df` is `demo`), and its operational settings are

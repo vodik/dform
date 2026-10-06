@@ -28,3 +28,7 @@ prost-build = "0.13"
 prost = "0.13"
 prost-types = "0.13"
 wit-parser = "0.258"
+# The conversions' test (`convert!` over the guest bindings).
+dform-wire = { path = "../dform-wire" }
+dform-core = { path = "../dform-core" }
+serde_json = "1.0"

@@ -29,6 +29,8 @@ pub struct Conn {
     name: String,
     rt: tokio::runtime::Runtime,
     client: ProviderClient<Channel>,
+    /// The connection, for the provider's `Manifest` service.
+    channel: Channel,
     child: Child,
     stdin: Option<ChildStdin>,
     exited: Option<ExitStatus>,
@@ -63,9 +65,10 @@ impl Conn {
             program,
             name: String::new(),
             rt,
-            client: ProviderClient::new(channel)
+            client: ProviderClient::new(channel.clone())
                 .max_decoding_message_size(usize::MAX)
                 .max_encoding_message_size(usize::MAX),
+            channel,
             child,
             stdin,
             exited: None,
@@ -81,6 +84,16 @@ impl Conn {
     pub fn link(program: &Program, env: &Env) -> Result<Link> {
         let conn = Conn::start(program, env)?;
         Link::start(program.display(), Box::new(conn))
+    }
+
+    /// What the provider says it uses (its `Manifest` service, R-13b):
+    /// `None` when it does not serve one.
+    pub fn manifest(&mut self) -> Option<Vec<String>> {
+        let mut c = crate::host_pb::manifest_client::ManifestClient::new(self.channel.clone());
+        self.rt
+            .block_on(c.manifest(crate::host_pb::ManifestRequest {}))
+            .ok()
+            .map(|r| r.into_inner().imports)
     }
 
     /// Whether the process has exited, waiting up to `grace` for it.

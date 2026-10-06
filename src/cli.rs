@@ -762,6 +762,14 @@ pub fn main(
         Command::Version => {
             println!("dform {}", env!("CARGO_PKG_VERSION"));
             println!("tzdb {}", crate::time::tzdb_version());
+            println!(
+                "wasm host {}",
+                if dform_host::WASM {
+                    "in (experimental)"
+                } else {
+                    "out (build with --features wasm)"
+                }
+            );
             Ok(())
         }
         _ => resolve(args).and_then(run_command),
