@@ -7,27 +7,27 @@ fn len(value: list) -> int?
 
 #| The scalars' texts joined by `sep`; no value when one has no text.
 #| example: let hosts = list.join(names, ",")
-fn join(parts: list, sep: string) -> string?
+fn join(parts: list, sep: string) -> string? forwards
 
 #| The list in its natural order (R-59: a comprehension's own order is its body's first relation's; `sort` is how a program asks for another).
 #| example: let ordered = list.sort(zones)
-fn sort(xs: list) -> list
+fn sort(xs: list) -> list forwards
 
 #| The list of objects, ordered by `field`'s value; no value when one element lacks it.
 #| example: let by_name = list.sort_by(subnets, "name")
-fn sort_by(xs: list, field: string) -> list?
+fn sort_by(xs: list, field: string) -> list? forwards
 
 #| The list with every value after its first occurrence dropped, in its original order.
 #| example: let azs = list.unique(zones)
-fn unique(xs: list) -> list
+fn unique(xs: list) -> list forwards
 
 #| The elements of the list's lists, concatenated; no value when one element is not itself a list.
 #| example: let all_subnets = list.flatten([public, private])
-fn flatten(xs: list) -> list?
+fn flatten(xs: list) -> list? forwards
 
 #| The two lists paired up, `[a_i, b_i]` for `i` up to the shorter one's length.
 #| example: let pairs = list.zip(names, ids)
-fn zip(a: list, b: list) -> list
+fn zip(a: list, b: list) -> list forwards
 
 #| The least element, by its natural order; no value for an empty list.
 #| example: let earliest = list.min(launch_dates)
@@ -47,8 +47,8 @@ fn contains(xs: list, value: any) -> bool
 
 #| The first element; no value for an empty list.
 #| example: let primary = list.first(subnets)
-fn first(xs: list) -> any?
+fn first(xs: list) -> any? forwards
 
 #| The last element; no value for an empty list.
 #| example: let latest = list.last(releases)
-fn last(xs: list) -> any?
+fn last(xs: list) -> any? forwards

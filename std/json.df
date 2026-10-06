@@ -6,8 +6,8 @@ package json
 #| The value the text decodes to, read as a document is (a null member absent, a whole float an int);
 #| no value for text that is not JSON, or that has a fraction, a null elsewhere.
 #| example: let cfg = json.decode(body)
-fn decode(text: string) -> any?
+fn decode(text: string) -> any? forwards
 
 #| The value as JSON text; no value for a reference or a null.
 #| example: let body = json.encode(cfg)
-fn encode(value: any) -> string?
+fn encode(value: any) -> string? forwards
