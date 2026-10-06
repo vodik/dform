@@ -37,7 +37,7 @@ pub fn timed_out(e: &CallError) -> bool {
 }
 
 enum Cmd {
-    Submit(Ticket, Call),
+    Submit(Ticket, Box<Call>),
     /// Answer one call.
     Next,
     IsDead(Sender<bool>),
@@ -120,7 +120,7 @@ fn serve(
     for c in rx {
         match c {
             Cmd::Submit(t, call) => {
-                ours.insert(backend.submit(call), t);
+                ours.insert(backend.submit(*call), t);
             }
             Cmd::Next if ours.is_empty() => {}
             Cmd::Next => {
@@ -156,7 +156,7 @@ impl Provider for Timed {
     fn next_completed(&mut self) -> (Ticket, Result<Reply, CallError>) {
         assert!(!self.live.is_empty(), "internal: no call in flight");
         for (t, call) in std::mem::take(&mut self.batch) {
-            self.send(Cmd::Submit(t, call));
+            self.send(Cmd::Submit(t, Box::new(call)));
         }
         loop {
             if self.asked == 0 && self.send(Cmd::Next) {

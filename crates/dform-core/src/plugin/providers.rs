@@ -2071,7 +2071,7 @@ impl Tick<'_> {
             // No answer within its timeout: what the call did is looked up
             // before it is sent again (R-81).
             Err(e) if timed_out(&e) => match self.look(f) {
-                Looked::Made(reply) => return Some(Ok(reply)),
+                Looked::Made(reply) => return Some(Ok(*reply)),
                 Looked::NotMade => e,
                 Looked::Unknown(why) => {
                     return Some(Err(CallError::MaybeApplied(format!("{e}; {why}"))));
@@ -2135,12 +2135,12 @@ impl Tick<'_> {
                             "apply {at}: the Create that timed out made {remote}; it is \
                              adopted, not made again"
                         ));
-                        Looked::Made(Reply::Apply(pb::ApplyResponse {
+                        Looked::Made(Box::new(Reply::Apply(pb::ApplyResponse {
                             remote,
                             attrs: Some(wire::doc(&o.attrs)),
                             computed: Some(wire::doc(&o.computed)),
                             ..Default::default()
-                        }))
+                        })))
                     }
                     Ok(None) => unknown(),
                     Err(e) => Looked::Unknown(format!("reading it failed: {e:#}")),
@@ -2153,7 +2153,7 @@ impl Tick<'_> {
                             "apply {at}: the Delete that timed out took effect; {} is gone",
                             f.remote
                         ));
-                        Looked::Made(Reply::Apply(pb::ApplyResponse::default()))
+                        Looked::Made(Box::new(Reply::Apply(pb::ApplyResponse::default())))
                     }
                     Ok(Some(_)) => Looked::NotMade,
                     Err(e) => Looked::Unknown(format!("reading it failed: {e:#}")),
@@ -2332,7 +2332,7 @@ impl Tick<'_> {
 /// What an Apply call that timed out did ([`Tick::look`]).
 enum Looked {
     /// It took effect: this is its answer.
-    Made(Reply),
+    Made(Box<Reply>),
     /// It did not: send it again.
     NotMade,
     /// Nobody can say; why.

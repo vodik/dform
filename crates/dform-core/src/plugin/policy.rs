@@ -162,7 +162,7 @@ pub fn show(d: Duration) -> String {
     }
     let s = d.as_secs();
     match (s / 3600, s % 3600 / 60, s % 60) {
-        (0, 0, s) if ms % 1000 == 0 => format!("{s}s"),
+        (0, 0, s) if ms.is_multiple_of(1000) => format!("{s}s"),
         (0, 0, _) => format!("{:.1}s", d.as_secs_f64()),
         (0, m, 0) => format!("{m}m"),
         (0, m, s) => format!("{m}m{s}s"),
