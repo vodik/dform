@@ -283,7 +283,7 @@ the policy's real name, and asks again before making it:
 plan: 1 change (1 create) over 1 tick
 
 tick 2  1 change, now that tick 1 reported
-  + aws.iam_policy["connect-orders.cx3k.us-east-1.rds.amazonaws.com"]  shop.df:31
+  + aws.iam_policy "connect-orders.cx3k.us-east-1.rds.amazonaws.com"   shop.df:31
       policy.Statement[0].Action = "rds-db:connect"
       policy.Statement[0].Resource = "orders.cx3k.us-east-1.rds.amazonaws.com"
 
