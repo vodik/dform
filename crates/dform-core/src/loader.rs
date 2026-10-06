@@ -278,12 +278,11 @@ fn load_units(
             }
             let span = span_at(file, n.text_range());
             // A resource's type by its path from the root (R-113): a
-            // component of a file is loaded with it; anything else is a
-            // provider's type, or one the program declares.
-            // A built-in schema's type (`net.vpc`) stays the type, and a
-            // file naming its own component by its path loads nothing.
-            // A module's or a stack's path is loaded for the resolver to
-            // say what it is.
+            // component of a file is loaded with it, and a module's or a
+            // stack's for the resolver to say what it is; anything else is
+            // a provider's type, or one the program declares. A built-in
+            // schema's type (`net.vpc`) stays the type, and a file naming
+            // its own component by its path loads nothing.
             if n.kind() == RESOURCE {
                 if crate::syntax::resolve::builtin_type(&path) {
                     continue;
@@ -296,10 +295,8 @@ fn load_units(
                         };
                         edges.push((i, j, span));
                     }
-                    Target::Stack(d) => {
-                        if !loaded.deployed.iter().any(|x| x.path == d.path) {
-                            loaded.deployed.push(d);
-                        }
+                    Target::Stack(d) if !loaded.deployed.iter().any(|x| x.path == d.path) => {
+                        loaded.deployed.push(d);
                     }
                     _ => {}
                 }
