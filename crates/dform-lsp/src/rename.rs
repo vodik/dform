@@ -386,10 +386,7 @@ fn beside<'p>(found: &[names::Named<'p>]) -> Option<(&'p Parsed, usize, String)>
     let decl = found.iter().find(|n| n.is_declaration())?;
     let f = decl.file;
     let node = decl.token.parent()?;
-    if !matches!(
-        node.kind(),
-        SyntaxKind::RESOURCE | SyntaxKind::INSTANCE | SyntaxKind::COMPONENT
-    ) {
+    if !matches!(node.kind(), SyntaxKind::RESOURCE | SyntaxKind::COMPONENT) {
         return None;
     }
     let start: usize = node.text_range().start().into();

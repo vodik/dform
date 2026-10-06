@@ -285,7 +285,7 @@ let region: enum("a", "b") = "a"
       (string_content))))
 
 ================================================================================
-Modules, components and instances
+Modules, components and their resources
 ================================================================================
 
 component network {
@@ -328,7 +328,7 @@ let e = platform[env=env].endpoint
               (identifier)
               (arguments
                 (integer))))))))
-  (instance
+  (resource
     (dotted_name
       (identifier))
     (identifier)
@@ -343,12 +343,13 @@ let e = platform[env=env].endpoint
               (identifier))
             (identifier))
           (identifier)))))
-  (instance
+  (resource
     (dotted_name
       (identifier)
       (identifier)
       (identifier))
     (identifier)
+    (block)
     (clause
       (body
         (comparison
@@ -875,7 +876,7 @@ resource network main {} where env == "prod"
           (identifier)
           (string
             (string_content))))))
-  (instance
+  (resource
     (dotted_name
       (identifier))
     (identifier)
@@ -1046,7 +1047,7 @@ use zones { zone("b", 1) }
 --------------------------------------------------------------------------------
 
 (source_file
-  (instance
+  (resource
     (dotted_name
       (identifier))
     (identifier)

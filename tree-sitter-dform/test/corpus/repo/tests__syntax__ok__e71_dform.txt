@@ -370,7 +370,7 @@ deny("prod_k8s_private_api", "prod k8s must have private api", { cluster: c }) w
     (dotted_name
       (identifier)))
   (comment)
-  (instance
+  (resource
     (dotted_name
       (identifier))
     (identifier)
@@ -392,7 +392,7 @@ deny("prod_k8s_private_api", "prod k8s must have private api", { cluster: c }) w
               (string
                 (string_content))
               (identifier)))))))
-  (instance
+  (resource
     (dotted_name
       (identifier))
     (identifier)
@@ -414,7 +414,7 @@ deny("prod_k8s_private_api", "prod k8s must have private api", { cluster: c }) w
               (string
                 (string_content))
               (identifier)))))))
-  (instance
+  (resource
     (dotted_name
       (identifier))
     (identifier)
@@ -461,7 +461,7 @@ deny("prod_k8s_private_api", "prod k8s must have private api", { cluster: c }) w
               (string
                 (string_content))
               (identifier)))))))
-  (instance
+  (resource
     (dotted_name
       (identifier))
     (identifier)

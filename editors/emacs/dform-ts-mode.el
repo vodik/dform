@@ -22,8 +22,7 @@
 ;;   reference, not a read, and is fontified with `dform-reference-face'.
 ;; - Indentation, translated from tree-sitter-dform/queries/indents.scm,
 ;;   matching `dform fmt' (docs/grammar.md "Formatting").
-;; - Imenu for rules (by head predicate), components, uses, instances,
-;;   resources
+;; - Imenu for rules (by head predicate), components, uses, resources
 ;;   (by type and name) and policies, and defun navigation
 ;;   (`C-M-a', `C-M-e', `C-M-h') over the same node types.
 ;; - An `eglot-server-programs' entry for `dform lsp' and two commands,
@@ -32,7 +31,7 @@
 ;;   .df buffer; it runs `dform lsp' from the project, and the commands
 ;;   send `dform.selectEnvironment' and `dform.why' to it.  Through
 ;;   eglot, xref (`M-.', `M-?'; evil's `gd', `gr') finds what a name
-;;   denotes across the project's files, through `use' and instance
+;;   denotes across the project's files, through `use' and copy
 ;;   scopes (`config.region', `app_db.conn'), a std function's
 ;;   signature line and a provider type's schema line (docs/reference.md
 ;;   "Language server").  The server's inlay hints (each resource's
@@ -191,8 +190,6 @@ apply-order edge, not its content read now (`docs/grammar.md'
    '((component name: (identifier) @font-lock-function-name-face)
      (use path: (dotted_name (identifier) @font-lock-function-name-face))
      (use name: (identifier) @font-lock-function-name-face)
-     (instance component: (dotted_name (identifier) @font-lock-function-name-face))
-     (instance name: (identifier) @font-lock-function-name-face)
      (resource name: (identifier) @font-lock-function-name-face)
      (decl name: (dotted_name (identifier) @font-lock-function-name-face))
      (extern name: (dotted_name (identifier) @font-lock-function-name-face))
@@ -263,7 +260,7 @@ apply-order edge, not its content read now (`docs/grammar.md'
    '([
       "key" "input" "from" "output"
       "extern" "type" "decl" "mixed" "let" "set"
-      "component" "instance" "use" "as" "resource"
+      "component" "use" "as" "resource"
       ] @font-lock-keyword-face
      ["where" "check"] @font-lock-keyword-face
      ["deny" "warn"] @font-lock-keyword-face
@@ -328,15 +325,15 @@ text: indenting them would change the string."
 ;;; Navigation and imenu
 
 (defvar dform-ts-mode--defun-type-regexp
-  (regexp-opt '("rule" "fact" "component" "use" "instance" "resource"))
+  (regexp-opt '("rule" "fact" "component" "use" "resource"))
   "Regexp matching node types treated as defuns in `dform-ts-mode'.")
 
 (defun dform-ts-mode--defun-name (node)
   "Return a name for NODE, a dform defun node, or nil.
 
 Rules and facts are named by their head predicate; resources by
-type and name; a `use' by its path; everything else (components,
-instances) by its `name' field."
+type and name; a `use' by its path; everything else (components) by
+its `name' field."
   (pcase (treesit-node-type node)
     ((or "rule" "fact")
      (when-let* ((head (treesit-node-child-by-field-name node "head")))
@@ -359,7 +356,6 @@ instances) by its `name' field."
   '(("Rule" "\\`\\(?:rule\\|fact\\)\\'" nil nil)
     ("Component" "\\`component\\'" nil nil)
     ("Use" "\\`use\\'" nil nil)
-    ("Instance" "\\`instance\\'" nil nil)
     ("Resource" "\\`resource\\'" nil nil))
   "`treesit-simple-imenu-settings' for `dform-ts-mode'.")
 

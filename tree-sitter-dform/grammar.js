@@ -25,7 +25,7 @@ const IDENT = /[A-Za-z_][A-Za-z0-9_]*/;
 // "Tokens"). Anywhere a plain name is expected a keyword is a name.
 const STATEMENT_KEYWORDS = [
   'key', 'type', 'decl', 'extern', 'input',
-  'output', 'let', 'set', 'component', 'instance', 'use', 'resource',
+  'output', 'let', 'set', 'component', 'use', 'resource',
   'deny', 'warn',
 ];
 
@@ -117,7 +117,6 @@ export default grammar({
       $.type_alias,
       $.decl,
       $.component,
-      $.instance,
       $.use,
       $.resource,
       $.check,
@@ -341,16 +340,6 @@ export default grammar({
       field('body', $.statement_block),
     ),
 
-    // `instance PATH NAME [{ .. }] [where B]`: a named copy of a
-    // component.
-    instance: $ => seq(
-      'instance',
-      field('component', $.dotted_name),
-      field('name', $._name),
-      optional(field('body', alias($.copy_block, $.block))),
-      optional($.clause),
-    ),
-
     // `use PATH [as NAME] [{ .. }] [where B]`: a module by its path from
     // the project root, a component stamped once (its inputs the block),
     // or a stack's deployments.
@@ -362,7 +351,7 @@ export default grammar({
       optional($.clause),
     ),
 
-    // A `use` or `instance` block: its inputs, and the rows of the
+    // A `use`'s or a resource's block: its inputs, and the rows of the
     // relations its module takes, `p(t, ..) [where B]` or `p from TERM
     // [where B]` (R-55).
     copy_block: $ => seq(
@@ -398,7 +387,10 @@ export default grammar({
       field('type', $.dotted_name),
       field('name', choice($._word, $.string)),
       optional(field('rank', $.rank)),
-      field('body', $.block),
+      // A component's resource takes the rows of the relations it takes
+      // (R-113); a provider's type's resource none, which the resolver
+      // says.
+      field('body', alias($.copy_block, $.block)),
       optional($.clause),
     ),
 

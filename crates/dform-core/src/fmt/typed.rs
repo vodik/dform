@@ -13,8 +13,8 @@
 //!   .limits = ..` through a variable bound over a keyed list's elements),
 //!   at its own path or nested in an object or a list value;
 //! - an input's default, an object input's field's;
-//! - a component's resource's, an `instance`'s or a `use`'s entry for its component's or module's
-//!   input;
+//! - a component's resource's or a `use`'s entry for its component's or
+//!   module's input;
 //! - a function's typed parameter (std's signatures);
 //! - a declared relation's typed column (R-34), where an ambiguous
 //!   quantity (`500m`) is not read, so a string that would be one stays.
@@ -422,35 +422,23 @@ impl Ctx<'_> {
         }
     }
 
-    /// A component's resource's, an `instance`'s or a `use`'s entries:
-    /// its component's or module's inputs' types. A resource of a
-    /// provider's type names no component, and is left to `resource`.
+    /// A component's resource's or a `use`'s entries: its component's or
+    /// module's inputs' types. A resource of a provider's type names no
+    /// component, and is left to `resource`.
     fn copy(&mut self, n: &SyntaxNode, file: &SyntaxNode) {
         let Some(block) = n.children().find(|c| c.kind() == BLOCK) else {
             return;
         };
-        let path: Vec<String> = n
-            .children_with_tokens()
-            .filter_map(|e| e.into_token())
-            .filter(|t| !t.kind().is_trivia())
-            .skip(1)
-            .take_while(|t| t.kind() == IDENT || t.kind().is_keyword() || t.kind() == DOT)
-            .filter(|t| t.kind() != DOT)
-            .map(|t| t.text().to_string())
-            .collect();
         let inputs = match n.kind() {
-            INSTANCE | RESOURCE => {
+            RESOURCE => {
                 // `resource a.b.comp name { .. }`: the component `comp` of
                 // the module `a.b`, or of this file (R-113).
-                let comp_path: Vec<String> = match n.kind() {
-                    RESOURCE => crate::syntax::resolve::copy_parts(n)
-                        .0
-                        .split('.')
-                        .map(str::to_string)
-                        .collect(),
-                    _ => path[..path.len().saturating_sub(1)].to_vec(),
-                };
-                let Some((comp, module)) = comp_path.split_last() else {
+                let path: Vec<String> = crate::syntax::resolve::copy_parts(n)
+                    .0
+                    .split('.')
+                    .map(str::to_string)
+                    .collect();
+                let Some((comp, module)) = path.split_last() else {
                     return;
                 };
                 let tree = if module.is_empty() {
@@ -471,7 +459,8 @@ impl Ctx<'_> {
             }
             _ => {
                 // `use a.b [as n]`: the module file's inputs.
-                let module: Vec<String> = path.iter().take_while(|w| *w != "as").cloned().collect();
+                let (module, _) = crate::syntax::resolve::use_parts(n);
+                let module: Vec<String> = module.split('.').map(str::to_string).collect();
                 let Some(tree) = self.module(&module) else {
                     return;
                 };
@@ -682,7 +671,7 @@ pub fn normalize(root: &SyntaxNode, src: &str, typing: &Typing) -> Option<String
             }
             SET => c.set(&n, &resources),
             INPUT => c.input(&n),
-            INSTANCE | USE => c.copy(&n, root),
+            USE => c.copy(&n, root),
             CALL => c.call(&n),
             _ => {}
         }

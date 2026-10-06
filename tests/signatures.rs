@@ -113,14 +113,14 @@ fn a_signature_is_not_instanced() {
     s.write(
         "p.df",
         &SIG.replace(
-            "resource pg_gcp store {}",
-            "resource database other {}\nresource pg_gcp store {}",
+            "resource pg_gcp store",
+            "resource database other {}\nresource pg_gcp store",
         ),
     );
     let r = plan(&s, &[]).failure();
     assert!(
         r.stderr
-            .contains("database is a component signature, which is not instanced"),
+            .contains("database is a component signature, which has no resources"),
         "{}",
         r.stderr
     );

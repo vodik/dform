@@ -800,7 +800,7 @@ resource iam.policy "connect-${host}" {
                 (arguments
                   (identifier)
                   (identifier)))))))))
-  (instance
+  (resource
     (dotted_name
       (identifier))
     (identifier)
@@ -810,7 +810,7 @@ resource iam.policy "connect-${host}" {
           (identifier))
         (string
           (string_content)))))
-  (instance
+  (resource
     (dotted_name
       (identifier))
     (identifier)

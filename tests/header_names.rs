@@ -124,7 +124,7 @@ fn an_instance_output_reads_the_copy() {
     ));
     assert!(
         e.contains(
-            "`main` names the instance main of c and the resource net.vpc[\"main\"]: read \
+            "`main` names the resource main of the component c and the resource net.vpc[\"main\"]: read \
              `main.size` or net.vpc[\"main\"].cidr"
         ),
         "{e}"

@@ -23,8 +23,8 @@ static PARSED: Mutex<BTreeMap<PathBuf, Parsed>> = Mutex::new(BTreeMap::new());
 
 /// Every file of the program is parsed, then the whole program is resolved
 /// at once (R-65): the entry files, and every module and component a `use`
-/// or an `instance` names by its path, and theirs in turn, each loaded once
-/// however often it is named. A path is looked up, never searched:
+/// or a resource's type names by its path, and theirs in turn, each
+/// loaded once however often it is named. A path is looked up, never searched:
 /// `modules.net` is `modules/net.df` under the project root (outside every
 /// project, beside the entry), a first segment `[packages]` names is that
 /// project's root, `std.x` is the standard library, and a stack's file is
@@ -206,7 +206,7 @@ fn load_units(
     entry_files: &[PathBuf],
     read: &dyn Fn(&Path) -> std::io::Result<String>,
 ) -> Result<Loaded> {
-    use crate::syntax::SyntaxKind::{COMPONENT, INSTANCE, RESOURCE, USE};
+    use crate::syntax::SyntaxKind::{COMPONENT, RESOURCE, USE};
     let mut loaded = Loaded {
         units: Vec::new(),
         entries: Vec::new(),
@@ -236,7 +236,7 @@ fn load_units(
         done += 1;
         let (file, root) = (loaded.units[i].file, loaded.units[i].root.clone());
         // Names the file binds itself: its components, and what its
-        // `use`s bind. An `instance` path starting with one is the file's
+        // `use`s bind. A resource's type starting with one is the file's
         // own, resolved where it is lowered.
         let mut local = BTreeSet::new();
         let mut components = BTreeSet::new();
@@ -263,7 +263,6 @@ fn load_units(
         for n in root.descendants() {
             let path = match n.kind() {
                 USE => crate::syntax::resolve::use_parts(&n).0,
-                INSTANCE => crate::syntax::resolve::instance_parts(&n).0,
                 RESOURCE => crate::syntax::resolve::copy_parts(&n).0,
                 _ => continue,
             };
@@ -271,7 +270,7 @@ fn load_units(
             // resolved where it is lowered: a component it declares, or a
             // module one of its `use`s brings.
             let head = path.split('.').next().unwrap_or_default();
-            if components.contains(head) || (n.kind() != USE && local.contains(head)) {
+            if components.contains(head) || (n.kind() == RESOURCE && local.contains(head)) {
                 continue;
             }
             if path.is_empty() {
@@ -281,15 +280,28 @@ fn load_units(
             // A resource's type by its path from the root (R-113): a
             // component of a file is loaded with it; anything else is a
             // provider's type, or one the program declares.
+            // A built-in schema's type (`net.vpc`) stays the type, and a
+            // file naming its own component by its path loads nothing.
+            // A module's or a stack's path is loaded for the resolver to
+            // say what it is.
             if n.kind() == RESOURCE {
-                if let Target::File(module, f) = mounts.lookup(&path)
-                    && module != path
-                {
-                    let j = match loaded.files.iter().position(|x| *x == f) {
-                        Some(j) => j,
-                        None => load_unit(&f, Some(module), read, &mut loaded)?,
-                    };
-                    edges.push((i, j, span));
+                if crate::syntax::resolve::builtin_type(&path) {
+                    continue;
+                }
+                match mounts.lookup(&path) {
+                    Target::File(module, f) if f != loaded.files[i] => {
+                        let j = match loaded.files.iter().position(|x| *x == f) {
+                            Some(j) => j,
+                            None => load_unit(&f, Some(module), read, &mut loaded)?,
+                        };
+                        edges.push((i, j, span));
+                    }
+                    Target::Stack(d) => {
+                        if !loaded.deployed.iter().any(|x| x.path == d.path) {
+                            loaded.deployed.push(d);
+                        }
+                    }
+                    _ => {}
                 }
                 continue;
             }
@@ -309,31 +321,20 @@ fn load_units(
                 }
                 Target::Missing(tried) => {
                     let tried: Vec<String> = tried.iter().map(|f| display_name(f)).collect();
-                    let what = if n.kind() == USE {
-                        "module"
-                    } else {
-                        "component"
-                    };
                     let mut d = diag::Diagnostic::error(
                         span,
-                        format!("no {what} `{path}`: there is no {}", tried.join(" and no ")),
+                        format!("no module `{path}`: there is no {}", tried.join(" and no ")),
                     )
                     .with_help(
                         "a path is the file's from the project root, its `/` a `.`: \
                          `modules.net` is modules/net.df, and `modules.net.vpc` its \
                          `component vpc`",
                     );
-                    if n.kind() == USE && !path.contains('.') {
+                    if !path.contains('.') {
                         d = d.with_note(format!(
                             "nor a provider: `dform.toml` names none `{path}`, and there is \
                              no built-in one and no providers/{path}/"
                         ));
-                    }
-                    if n.kind() == INSTANCE {
-                        d = d.with_note(
-                            "a component this file declares or a `use` names is \
-                                         written by its own name",
-                        );
                     }
                     errors.push(d);
                 }
@@ -371,7 +372,7 @@ fn load_units(
     Ok(loaded)
 }
 
-/// A `use` or `instance` cycle among the program's files: an error naming
+/// A `use` or resource-type cycle among the program's files: an error naming
 /// it, at the statement that closes it.
 fn cycle(loaded: &Loaded, edges: &[(usize, usize, crate::ast::Span)]) -> Option<diag::Diagnostic> {
     fn visit(

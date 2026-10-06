@@ -1,9 +1,8 @@
-# R-65: a component's resource's name is its scope, one namespace per
-# scope; and its type names a component, never a module's value or nothing.
+# R-65, R-113: a component's resource's name is its scope, one namespace
+# per scope, declared once.
 component network {
   input cidr: string
 }
 
 resource network main { cidr = "10.1.0.0/16" }
 resource network main { cidr = "10.2.0.0/16" }
-resource subnet blue {}

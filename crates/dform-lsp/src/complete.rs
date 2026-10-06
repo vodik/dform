@@ -161,9 +161,7 @@ pub fn complete(
         && let Some(m) = root
             .descendants()
             .filter_map(|n| match n.kind() {
-                SyntaxKind::INSTANCE | SyntaxKind::RESOURCE => {
-                    Some(dform_core::syntax::resolve::copy_parts(&n))
-                }
+                SyntaxKind::RESOURCE => Some(dform_core::syntax::resolve::copy_parts(&n)),
                 SyntaxKind::USE => Some(dform_core::syntax::resolve::use_parts(&n)),
                 _ => None,
             })
@@ -262,11 +260,10 @@ pub fn complete(
                 .is_some_and(|b| b.text_range().contains_inclusive((at as u32).into()))
         })
     };
-    // A component's resource's block (R-113), or an instance's: its
-    // component's inputs. A type the schema has is a provider's.
+    // A component's resource's block (R-113): its component's inputs. A
+    // type the schema has is a provider's.
     let copy = in_block(SyntaxKind::RESOURCE)
         .filter(|r| nav::name_after_keyword(r).is_none_or(|t| !attrs.contains_key(&t)))
-        .or_else(|| in_block(SyntaxKind::INSTANCE))
         .and_then(|i| {
             let (m, _) = dform_core::syntax::resolve::copy_parts(&i);
             modules(&m).map(|interface| (m, interface))

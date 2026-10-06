@@ -107,10 +107,6 @@
         },
         {
           "type": "SYMBOL",
-          "name": "instance"
-        },
-        {
-          "type": "SYMBOL",
           "name": "use"
         },
         {
@@ -1671,64 +1667,6 @@
         }
       ]
     },
-    "instance": {
-      "type": "SEQ",
-      "members": [
-        {
-          "type": "STRING",
-          "value": "instance"
-        },
-        {
-          "type": "FIELD",
-          "name": "component",
-          "content": {
-            "type": "SYMBOL",
-            "name": "dotted_name"
-          }
-        },
-        {
-          "type": "FIELD",
-          "name": "name",
-          "content": {
-            "type": "SYMBOL",
-            "name": "_name"
-          }
-        },
-        {
-          "type": "CHOICE",
-          "members": [
-            {
-              "type": "FIELD",
-              "name": "body",
-              "content": {
-                "type": "ALIAS",
-                "content": {
-                  "type": "SYMBOL",
-                  "name": "copy_block"
-                },
-                "named": true,
-                "value": "block"
-              }
-            },
-            {
-              "type": "BLANK"
-            }
-          ]
-        },
-        {
-          "type": "CHOICE",
-          "members": [
-            {
-              "type": "SYMBOL",
-              "name": "clause"
-            },
-            {
-              "type": "BLANK"
-            }
-          ]
-        }
-      ]
-    },
     "use": {
       "type": "SEQ",
       "members": [
@@ -2073,8 +2011,13 @@
           "type": "FIELD",
           "name": "body",
           "content": {
-            "type": "SYMBOL",
-            "name": "block"
+            "type": "ALIAS",
+            "content": {
+              "type": "SYMBOL",
+              "name": "copy_block"
+            },
+            "named": true,
+            "value": "block"
           }
         },
         {
@@ -3286,10 +3229,6 @@
               },
               {
                 "type": "STRING",
-                "value": "instance"
-              },
-              {
-                "type": "STRING",
                 "value": "use"
               },
               {
@@ -4196,10 +4135,6 @@
                 },
                 {
                   "type": "STRING",
-                  "value": "instance"
-                },
-                {
-                  "type": "STRING",
                   "value": "use"
                 },
                 {
@@ -4334,10 +4269,6 @@
               {
                 "type": "STRING",
                 "value": "component"
-              },
-              {
-                "type": "STRING",
-                "value": "instance"
               },
               {
                 "type": "STRING",

@@ -1,2 +1,2 @@
-# R-65: a module is used, never instanced.
+# R-65: a module is used, never made a resource of.
 resource config main {}

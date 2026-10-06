@@ -1,0 +1,6 @@
+# A component is a type, and `resource` makes one of it (R-113): the
+# statement `instance` is gone.
+component network {
+  input cidr: string
+}
+instance network blue { cidr = "10.1.0.0/16" }

@@ -207,7 +207,6 @@ impl Decls {
                         d.uses.insert(name, path.clone());
                         path
                     }
-                    SyntaxKind::INSTANCE => crate::syntax::resolve::instance_parts(&n).0,
                     _ => continue,
                 };
                 d.named.insert(path);
@@ -251,7 +250,6 @@ impl Decls {
     /// project, before it a file, a `use`'s name or nothing (R-113).
     fn is_copy(&self, n: &SyntaxNode) -> bool {
         match n.kind() {
-            SyntaxKind::INSTANCE => true,
             SyntaxKind::RESOURCE => {
                 let (path, _) = crate::syntax::resolve::copy_parts(n);
                 match path.rsplit_once('.') {
@@ -671,7 +669,7 @@ impl Decls {
             SyntaxKind::TYPE_ALIAS if is_declared() => decl(Symbol::Alias(name)),
             SyntaxKind::COMPONENT if is_declared() => decl(Symbol::Module(name)),
             SyntaxKind::USE if self.provider_use(&parent) => What::Provider,
-            SyntaxKind::USE | SyntaxKind::INSTANCE => self.statement_path(&parent, t),
+            SyntaxKind::USE => self.statement_path(&parent, t),
             SyntaxKind::RESOURCE if self.is_copy(&parent) => self.statement_path(&parent, t),
             SyntaxKind::DECL | SyntaxKind::EXTERN | SyntaxKind::INPUT_RELATION
                 if relation_name(&parent).as_ref() == Some(t) =>

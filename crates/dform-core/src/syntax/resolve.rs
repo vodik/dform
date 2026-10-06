@@ -464,6 +464,12 @@ pub fn builtin_namespace(name: &str) -> bool {
         .any(|t| t.split_once('.').is_some_and(|(ns, _)| ns == name))
 }
 
+/// Whether `typ` is a type of a built-in schema (`net.vpc` of the fake
+/// cloud's).
+pub fn builtin_type(typ: &str) -> bool {
+    schema_types().contains(typ)
+}
+
 /// Whether a `use`'s block names a `source`: a provider's setting, the
 /// executable that serves it (`use mine { source = "mine" }`).
 pub fn names_source(n: &SyntaxNode) -> bool {
@@ -485,28 +491,10 @@ pub fn maybe_provider_use(n: &SyntaxNode) -> Option<String> {
         .then_some(written)
 }
 
-/// An `instance` statement (R-65): its component's path as written, and
-/// its name (the path's last segment, for a statement in error with none).
-pub fn instance_parts(n: &SyntaxNode) -> (String, String) {
-    let (path, rest) = path_parts(n);
-    let text = path.iter().map(|t| t.text()).collect::<Vec<_>>().join(".");
-    let name = match rest.first() {
-        Some(t) => t.text().to_string(),
-        None => path
-            .last()
-            .map(|t| t.text().to_string())
-            .unwrap_or_default(),
-    };
-    (text, name)
-}
-
-/// A copy's component path as written and its name: `instance PATH NAME`,
-/// or `resource PATH NAME { .. }` whose type is a component (R-113), its
-/// name a word or a string.
+/// A resource's type path as written and its name, a word or a string:
+/// for `resource PATH NAME { .. }` whose type is a component (R-113), the
+/// component's path and the copy's name.
 pub fn copy_parts(n: &SyntaxNode) -> (String, String) {
-    if n.kind() != RESOURCE {
-        return instance_parts(n);
-    }
     let name = header_name(n)
         .map(|t| match t.kind() {
             STRING => string_value(t.text()).unwrap_or_else(|_| t.text().to_string()),
@@ -553,7 +541,6 @@ pub fn bound_token(n: &SyntaxNode) -> Option<SyntaxToken> {
     let (path, rest) = path_parts(n);
     match (n.kind(), rest.as_slice()) {
         (USE, [r#as, alias, ..]) if r#as.text() == "as" => Some(alias.clone()),
-        (INSTANCE, [name, ..]) => Some(name.clone()),
         _ => path.last().cloned(),
     }
 }
@@ -1011,9 +998,19 @@ impl<'u> Lowerer<'u> {
         for (decl, file, n) in std::mem::take(&mut self.decls.pending) {
             let typ = dotted_text(&n, 1);
             let full = self.module_path_of(decl, &typ);
-            let copy = self.decls.modules.contains_key(&full)
-                || self.decls.deployed.iter().any(|d| d.path == full)
-                || self.signature(decl, &typ).is_some();
+            // A path from the root that is also a type the program or a
+            // built-in schema declares is the type: `net.vpc` in net.df
+            // is the fake cloud's, not net.df's `component vpc`.
+            let head = typ.split('.').next().unwrap_or(&typ);
+            let bound = self.chain_of(decl).into_iter().any(|s| {
+                let sc = &self.decls.scopes[s];
+                sc.components.contains_key(head) || sc.uses.contains_key(head)
+            });
+            let typed = schema_types().contains(&typ) || self.decls.types.contains(&typ);
+            let copy = (bound || !typed)
+                && (self.decls.modules.contains_key(&full)
+                    || self.decls.deployed.iter().any(|d| d.path == full)
+                    || self.signature(decl, &typ).is_some());
             if copy {
                 let (path, name) = copy_parts(&n);
                 self.decls
@@ -1039,21 +1036,18 @@ impl<'u> Lowerer<'u> {
     }
 
     /// Whether `n`, a statement of the file being lowered, makes a copy of
-    /// a component: `instance`, or `resource C n` (R-113).
+    /// a component: `resource C n { .. }` (R-113).
     fn is_copy(&self, n: &SyntaxNode) -> bool {
         self.is_copy_in(self.file, n)
     }
 
     /// [`Self::is_copy`] for a statement of `file`.
     fn is_copy_in(&self, file: u32, n: &SyntaxNode) -> bool {
-        match n.kind() {
-            INSTANCE => true,
-            RESOURCE => self
+        n.kind() == RESOURCE
+            && self
                 .decls
                 .copies
-                .contains(&(file, n.text_range().start().into())),
-            _ => false,
-        }
+                .contains(&(file, n.text_range().start().into()))
     }
 
     /// The module path a path written in `scope` names: its first segment
@@ -1084,14 +1078,13 @@ impl<'u> Lowerer<'u> {
         match self.decls.modules.get(&full) {
             Some(m) if m.component => Ok(full),
             Some(_) => {
-                let mut d = Diagnostic::error(
-                    Span::default(),
-                    format!("{written} is a module; `use` it"),
-                )
-                .with_note(
-                    "a module, a file, is imported once by `use`; `instance` copies a component, \
-                     an item `component NAME { .. }` of a module",
-                );
+                let mut d =
+                    Diagnostic::error(Span::default(), format!("{written} is a module; `use` it"))
+                        .with_note(
+                            "a module, a file, is imported once by `use`; a component, an item \
+                     `component NAME { .. }` of a module, is a type: `resource C NAME { .. }` \
+                     makes one",
+                        );
                 // `resource k3s cluster` for k3s.df's `component k3s`.
                 let items: Vec<String> = self
                     .decls
@@ -1107,7 +1100,7 @@ impl<'u> Lowerer<'u> {
                     .collect();
                 if !items.is_empty() {
                     d = d.with_help(format!(
-                        "its components are instanced by their path: {}",
+                        "its components are types by their path: {}",
                         items.join(", ")
                     ));
                 }
@@ -1226,16 +1219,6 @@ impl<'u> Lowerer<'u> {
                 // (R-113): which, once every module's components and every
                 // scope's `use`s are known (`classify_resources`).
                 RESOURCE => self.decls.pending.push((decl, file, n.clone())),
-                INSTANCE => {
-                    let (path, name) = instance_parts(&n);
-                    let sc = &mut self.decls.scopes[decl];
-                    sc.bound.entry(name.clone()).or_default().push((
-                        path.clone(),
-                        false,
-                        n.clone(),
-                    ));
-                    sc.instances_written.entry(name).or_insert(path);
-                }
                 // A provider's `use` binds its namespace, not a module.
                 USE if provider_use(&n, self.units, &self.decls.deployed).is_some() => {}
                 USE => {
@@ -1630,7 +1613,7 @@ impl<'u> Lowerer<'u> {
                 return Ok(true);
             }
             (
-                format!("the instance {h} of {path}"),
+                format!("the resource {h} of the component {path}"),
                 outputs.first().map(|o| format!("`{h}.{o}`")),
             )
         } else if self.stack_in(scope, h).is_some() || self.component_in(scope, h).is_some() {
@@ -2217,7 +2200,6 @@ impl<'u> Lowerer<'u> {
             USE => self.use_stmt(n, scope, outer),
             LET => self.let_stmt(n, scope, outer),
             SET => self.set(n, scope, outer),
-            INSTANCE => self.instance(n, scope, outer),
             RESOURCE if self.is_copy(n) => self.instance(n, scope, outer),
             RESOURCE => self.block_stmt(n, scope, outer),
             RULE | FACT => self.rule(n, scope, outer),
@@ -2361,7 +2343,7 @@ impl<'u> Lowerer<'u> {
                 span,
                 format!(
                     "a module's relation is given by its user: declare `input {pred}`, and its \
-                     user writes `{pred} from ..` in the `use` or `instance` block"
+                     user writes `{pred} from ..` in the `use` block"
                 ),
             );
         }
@@ -3482,8 +3464,8 @@ impl<'u> Lowerer<'u> {
         .with_label(first, "first here")
         .with_help(
             "a name is declared once in a scope, or several times each under a clause that \
-             picks it (`resource pg_aws db { .. } where cloud == \"aws\"`); a copy or an \
-             import of another name is `instance PATH NAME`, `use PATH as NAME`",
+             picks it (`resource pg_aws db { .. } where cloud == \"aws\"`); another name is \
+             another statement, `resource C NAME { .. }`, `use PATH as NAME`",
         );
         self.diags.push(d);
         Err(Skip)
@@ -3539,11 +3521,17 @@ impl<'u> Lowerer<'u> {
         match self.decls.modules.get(&path) {
             None => return self.error(span, format!("no module `{written}`")),
             Some(m) if m.component => {
-                let d = Diagnostic::error(span, format!("{written} is a component; `instance` it"))
-                    .with_note(
-                        "`use` imports a module, a file, once under its name; a component, an \
-                         item `component NAME { .. }`, is copied by `instance PATH NAME`",
-                    );
+                let d = Diagnostic::error(
+                    span,
+                    format!(
+                        "{written} is a component, a type: make a resource of it, `resource \
+                         {written} NAME {{ .. }}`"
+                    ),
+                )
+                .with_note(
+                    "`use` imports a module, a file, once under its name; a component, an item \
+                     `component NAME { .. }`, is a type the program defines",
+                );
                 self.diags.push(d);
                 return Err(Skip);
             }
@@ -3557,9 +3545,8 @@ impl<'u> Lowerer<'u> {
         }
     }
 
-    /// `resource PATH NAME { k = v } [where B]` of a component (R-113),
-    /// or `instance PATH NAME [{ k = v }] [where B]` (R-65): one copy of
-    /// the component, named NAME.
+    /// `resource PATH NAME { k = v } [where B]` of a component (R-113,
+    /// R-65): one copy of the component, named NAME.
     fn instance(&mut self, n: &SyntaxNode, scope: usize, outer: &Rc) -> L<Vec<Stmt>> {
         let span = self.span(n);
         let (written, name) = copy_parts(n);
@@ -6475,7 +6462,7 @@ impl<'u> Lowerer<'u> {
             let what = if self.resource(rc.scope, h).is_some() {
                 Some("the resource")
             } else if self.instance_in(rc.scope, h).is_some() {
-                Some("the instance")
+                Some("the component's resource")
             } else if self.use_in(rc.scope, h).is_some() || self.stack_in(rc.scope, h).is_some() {
                 Some("the module")
             } else if self.component_in(rc.scope, h).is_some() {
@@ -6837,7 +6824,7 @@ impl<'u> Lowerer<'u> {
                     typ: typed.map(|t| str_term(&t)),
                 })
             }
-            Some(_) => self.error(span, "after an instance: `.output`"),
+            Some(_) => self.error(span, "after a component's resource: `.output`"),
         }
     }
 

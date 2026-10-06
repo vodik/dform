@@ -70,10 +70,6 @@
         "named": true
       },
       {
-        "type": "instance",
-        "named": true
-      },
-      {
         "type": "let",
         "named": true
       },
@@ -1140,52 +1136,6 @@
           }
         ]
       }
-    }
-  },
-  {
-    "type": "instance",
-    "named": true,
-    "fields": {
-      "body": {
-        "multiple": false,
-        "required": false,
-        "types": [
-          {
-            "type": "block",
-            "named": true
-          }
-        ]
-      },
-      "component": {
-        "multiple": false,
-        "required": true,
-        "types": [
-          {
-            "type": "dotted_name",
-            "named": true
-          }
-        ]
-      },
-      "name": {
-        "multiple": false,
-        "required": true,
-        "types": [
-          {
-            "type": "identifier",
-            "named": true
-          }
-        ]
-      }
-    },
-    "children": {
-      "multiple": false,
-      "required": false,
-      "types": [
-        {
-          "type": "clause",
-          "named": true
-        }
-      ]
     }
   },
   {
@@ -2370,10 +2320,6 @@
   },
   {
     "type": "input",
-    "named": false
-  },
-  {
-    "type": "instance",
     "named": false
   },
   {

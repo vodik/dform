@@ -140,7 +140,7 @@ fn hover_shows_docs_builtins_keywords_and_nothing_elsewhere() {
     assert!(text.contains("The environments: an alias"), "{text}");
 
     // A component in an instance's path: its docs, its inputs and outputs.
-    let text = hover(&mut c, &stack, "resource network.vpc main {}", 18);
+    let text = hover(&mut c, &stack, "resource network.vpc main", 18);
     let text = text.as_str().unwrap();
     assert!(
         text.contains("One VPC, and a private subnet in every zone."),
@@ -487,7 +487,7 @@ fn definition_and_formatting() {
         .position(|l| l.starts_with("component vpc"))
         .unwrap() as u64;
     assert_eq!(
-        def(&mut c, "resource network.vpc main {}", 18),
+        def(&mut c, "resource network.vpc main", 18),
         vec![("demo/network.df".into(), component)]
     );
     assert_eq!(
@@ -1157,7 +1157,7 @@ fn a_rename_that_changes_the_plan_is_refused() {
     let stack = root.join("stacks/dform.df");
     let mut c = Client::start(&root, json!({}));
     c.open(&stack);
-    let at = find(&stack, "resource network.vpc main {}", 22);
+    let at = find(&stack, "resource network.vpc main", 22);
     let e = refused(
         &mut c,
         "textDocument/prepareRename",

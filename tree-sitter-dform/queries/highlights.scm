@@ -57,8 +57,6 @@
 (component name: (identifier) @module)
 (use path: (dotted_name (identifier) @module))
 (use name: (identifier) @module)
-(instance component: (dotted_name (identifier) @module))
-(instance name: (identifier) @label)
 (resource name: (identifier) @label)
 
 ; A bare call of a builtin: the aggregates, the prelude's functions
@@ -81,7 +79,7 @@
 ; object there, and a comprehension's item are whole-value positions;
 ; everywhere else (a body, a clause, a builtin's argument, an index, a
 ; hole) a dot reads. `world.…` is always a read. Which chains
-; name a resource is the resolver's business (a `let` alias or an instance
+; name a resource is the resolver's business (a `let` alias or a copy's
 ; output looks the same): this capture is the syntax's answer, and a
 ; language server refines it.
 (field
@@ -111,7 +109,7 @@
 [
   "key" "input" "from" "output"
   "extern" "type" "decl" "mixed" "let" "set"
-  "component" "instance" "use" "as" "resource"
+  "component" "use" "as" "resource"
 ] @keyword
 
 ["where" "check"] @keyword.conditional

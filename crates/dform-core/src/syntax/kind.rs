@@ -56,7 +56,6 @@ pub enum SyntaxKind {
     LET_KW,
     SET_KW,
     COMPONENT_KW,
-    INSTANCE_KW,
     USE_KW,
     RESOURCE_KW,
     SETTINGS_KW,
@@ -100,12 +99,10 @@ pub enum SyntaxKind {
     DECL,
     /// `component NAME { stmt* }`: a component declared as an item.
     COMPONENT,
-    /// `instance PATH [NAME] [{ entry* }] [where B]`.
-    INSTANCE,
     /// `use PATH [as NAME] [where B]`.
     USE,
     RESOURCE,
-    /// `{ entry* }` of a resource, settings, instance or use.
+    /// `{ entry* }` of a resource or a use.
     BLOCK,
     /// `path (=|+=) term [rank]` in a block.
     ASSIGN,

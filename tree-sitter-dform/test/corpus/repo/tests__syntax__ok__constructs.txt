@@ -475,7 +475,7 @@ x(i, a_) where vpc_inst(i), output(m[i], "vpc", a_)
                   (string_content))
                 (string
                   (string_content)))))))))
-  (instance
+  (resource
     (dotted_name
       (identifier))
     (identifier)
@@ -508,10 +508,11 @@ x(i, a_) where vpc_inst(i), output(m[i], "vpc", a_)
               (arguments
                 (identifier)
                 (identifier))))))))
-  (instance
+  (resource
     (dotted_name
       (identifier))
-    (identifier))
+    (identifier)
+    (block))
   (rule
     (call
       (identifier)

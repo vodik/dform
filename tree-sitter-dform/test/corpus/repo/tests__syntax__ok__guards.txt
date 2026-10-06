@@ -162,7 +162,7 @@ resource net.vpc main { name = store.conn }
           (string_content)
           (interpolation
             (identifier))))))
-  (instance
+  (resource
     (dotted_name
       (identifier))
     (identifier)
@@ -178,7 +178,7 @@ resource net.vpc main { name = store.conn }
           (identifier)
           (string
             (string_content))))))
-  (instance
+  (resource
     (dotted_name
       (identifier))
     (identifier)

@@ -540,7 +540,7 @@ fn statement(t: &SyntaxToken) -> Option<SyntaxNode> {
     use SyntaxKind::*;
     t.parent()?
         .ancestors()
-        .find(|n| doc::item(n).is_some() || matches!(n.kind(), INSTANCE | LET))
+        .find(|n| doc::item(n).is_some() || n.kind() == LET)
 }
 
 /// A doc comment's description and pairs.
@@ -656,7 +656,7 @@ fn output_md(files: &[Parsed], t: &SyntaxToken) -> Option<String> {
                 let path = files
                     .iter()
                     .flat_map(|f| f.tree.descendants())
-                    .filter(|n| matches!(n.kind(), SyntaxKind::INSTANCE | SyntaxKind::RESOURCE))
+                    .filter(|n| n.kind() == SyntaxKind::RESOURCE)
                     .map(|n| dform_core::syntax::resolve::copy_parts(&n))
                     .find(|(path, name)| name == m && module_node(files, path).is_some())?
                     .0;

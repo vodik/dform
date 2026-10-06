@@ -293,7 +293,7 @@ deny "dev has no peer network" where env == "dev", "peer.vpc" in net.vpc
   (comment)
   (comment)
   (comment)
-  (instance
+  (resource
     (dotted_name
       (identifier)
       (identifier))
@@ -309,7 +309,7 @@ deny "dev has no peer network" where env == "dev", "peer.vpc" in net.vpc
               (identifier)
               (identifier)))))))
   (comment)
-  (instance
+  (resource
     (dotted_name
       (identifier)
       (identifier))

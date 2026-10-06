@@ -106,7 +106,7 @@ fn old_spelling(word: &str) -> Option<&'static str> {
     Some(match word {
         "when" | "for" => {
             "statement groups are gone (H-4): put `where B` on each statement, or gate a group \
-             of resources by an `instance` with a `where` clause"
+             of resources by a resource of a component with a `where` clause"
         }
         "with" => "`with k = v` is spelled `set k = v`",
         "constraint" => "`constraint` is spelled `deny` (H-8)",
@@ -114,14 +114,18 @@ fn old_spelling(word: &str) -> Option<&'static str> {
         "component_def" => "`component_def` is spelled `component`",
         "module" => {
             "`module` is gone (R-65): a module is a file, named by its path and brought in \
-             with `use PATH`; a thing copied with inputs is `component NAME { .. }`, made with \
-             `instance`"
+             with `use PATH`; a type with inputs made of resources is `component NAME { .. }`, \
+             made with `resource`"
         }
         "policy" | "policy_pack" => {
             "`policy` is gone (R-65): a policy pack is a module, a file of `set`, `deny` and \
              `warn` statements, applied with `use PATH`"
         }
         "apply_policy" => "`apply_policy` is spelled `use`",
+        "instance" => {
+            "`instance` is gone (R-113): a component is a type, and `resource C NAME { .. }` \
+             makes one of it, as `resource` makes one of a provider's type"
+        }
         "provider" => {
             "`provider` is gone (R-112): a provider is imported and configured by `use`, \
              `use NAME { k = v }`, or `use NAME` with no settings"
@@ -903,26 +907,6 @@ impl<'a> Parser<'a> {
                 p.opt_copy_block()?;
                 p.opt_clause()
             }),
-            // `instance PATH NAME [{ .. }] [where B]`: a named copy (R-65).
-            INSTANCE_KW => self.simple(INSTANCE, |p| {
-                p.dotted("a component's path")?;
-                if p.nth(0).is_word() && !matches!(p.nth(0), WHERE_KW | IF_KW) {
-                    p.bump();
-                } else {
-                    let msg = format!("expected the instance's name, found {}", p.found());
-                    p.error_here(
-                        msg,
-                        Some(
-                            "a copy is named, `resource network blue`; a module is imported \
-                             once by `use`, under its name"
-                                .into(),
-                        ),
-                    );
-                    return Err(Bail);
-                }
-                p.opt_copy_block()?;
-                p.opt_clause()
-            }),
             RESOURCE_KW => self.simple(RESOURCE, |p| {
                 if !p.nth(0).is_word() {
                     return p.err_expected("a resource type");
@@ -1197,7 +1181,7 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
-    /// `{ entry* }` of a resource, a `use` or an instance: entries
+    /// `{ entry* }` of a resource or a `use`: entries
     /// separated by a newline or a comma, its clause after it; with `rows`
     /// also the rows of the relations a module or a component takes
     /// (R-55): `p(t, ..) [where B]`, or `p from TERM [where B]`.
@@ -1252,7 +1236,7 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
-    /// A `use` or `instance` block, which may hold rows (R-55).
+    /// A `use` block, which may hold rows (R-55).
     fn opt_copy_block(&mut self) -> P {
         if self.at(L_BRACE) {
             self.block_of(true)
@@ -2019,6 +2003,10 @@ mod tests {
             ("constraint \"m\" where p(1)\n", "spelled `deny`"),
             ("apply baseline\n", "`use pack`"),
             ("provider fake { region = \"r\" }\n", "`use NAME { k = v }`"),
+            (
+                "instance network blue { cidr = \"c\" }\n",
+                "`resource C NAME { .. }`",
+            ),
             ("module network {}\n", "a module is a file"),
             ("policy baseline {}\n", "a policy pack is a module"),
             ("import \"modules/net.df\"\n", "`use modules.net`"),

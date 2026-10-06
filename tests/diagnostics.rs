@@ -95,7 +95,7 @@ fn a_lowering_error_names_its_statement() {
     let r = plan("\nresource nope main {}\nuse fake\n").failure();
     assert!(
         r.stderr
-            .contains("p.df:2:1: no component `nope`: there is no"),
+            .contains("p.df:2:1: provider fake does not declare nope"),
         "{}",
         r.stderr
     );

@@ -65,7 +65,6 @@ const SAME: &[(SyntaxKind, &[&str])] = &[
     (ATTR_DECL, &["attribute_declaration"]),
     (DECL, &["decl"]),
     (COMPONENT, &["component"]),
-    (INSTANCE, &["instance"]),
     (USE, &["use"]),
     (LET, &["let"]),
     (SET, &["set"]),

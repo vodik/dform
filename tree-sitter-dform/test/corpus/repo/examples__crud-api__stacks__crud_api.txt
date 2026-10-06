@@ -1061,7 +1061,7 @@ auto_reconcile(t, a, p) where drift(t, a, p, _, _), owned_label(l), p == "metada
           (identifier)
           (arguments
             (identifier))))))
-  (instance
+  (resource
     (dotted_name
       (identifier))
     (identifier)
@@ -1107,7 +1107,7 @@ auto_reconcile(t, a, p) where drift(t, a, p, _, _), owned_label(l), p == "metada
                 (string_content))
               (identifier)
               (identifier)))))))
-  (instance
+  (resource
     (dotted_name
       (identifier))
     (identifier)

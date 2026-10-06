@@ -3,7 +3,7 @@
 //! only when it needs it, `not lit` for `not { lit }`, `==` where both
 //! sides are bound, the atom `p(k, i)` for `i = p[k]` with `i` fresh,
 //! `env == "prod"` for a value name's atom `env("prod")`, no `{}` on a
-//! `use` or `instance` with no entries, and `k` for the entry `k = k`.
+//! `use` with no entries, and `k` for the entry `k = k`.
 //!
 //! Each is an edit of the source text, read from the tree; the caller
 //! parses the result again and prints it, until nothing changes.
@@ -69,9 +69,8 @@ impl Names {
                         }
                     }
                 }
-                // A component's name, the first segment of an instance's
-                // path, and the name a `use` binds.
-                COMPONENT | INSTANCE => {
+                // A component's name, and the name a `use` binds.
+                COMPONENT => {
                     if let Some(t) = first_word() {
                         n.declared.insert(t.text().to_string());
                     }
@@ -287,13 +286,13 @@ impl Ctx {
                     self.body(&b, &BTreeSet::new());
                 }
             }
-            RESOURCE | INSTANCE | USE => {
+            RESOURCE | USE => {
                 if let Some(c) = n.children().find(|c| c.kind() == CLAUSE)
                     && let Some(b) = c.children().find(|x| x.kind() == BODY)
                 {
                     self.body(&b, &BTreeSet::new());
                 }
-                if !matches!(n.kind(), INSTANCE | USE) {
+                if n.kind() != USE {
                     self.header(n);
                 }
             }
@@ -340,10 +339,7 @@ impl Ctx {
     /// `use aws {}` is `use aws`.
     fn empty_blocks(&mut self, root: &SyntaxNode) {
         for b in root.descendants().filter(|n| n.kind() == BLOCK) {
-            if !b
-                .parent()
-                .is_some_and(|p| matches!(p.kind(), INSTANCE | USE))
-            {
+            if !b.parent().is_some_and(|p| p.kind() == USE) {
                 continue;
             }
             let empty = b

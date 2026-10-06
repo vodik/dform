@@ -104,7 +104,7 @@ fn an_instance_of_a_module_names_its_components() {
     );
     assert!(
         r.stderr
-            .contains("its components are instanced by their path: `k3s.k3s`"),
+            .contains("its components are types by their path: `k3s.k3s`"),
         "{}",
         r.stderr
     );

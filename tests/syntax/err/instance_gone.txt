@@ -1,0 +1,2 @@
+tests/syntax/err/instance_gone.df:6:1: expected a statement, found `instance`
+  help: `instance` is gone (R-113): a component is a type, and `resource C NAME { .. }` makes one of it, as `resource` makes one of a provider's type

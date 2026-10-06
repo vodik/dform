@@ -6,4 +6,4 @@ tests/syntax/err/table_source.df:4:17: git takes a repository, a ref and a path:
   help: FORMAT is one of csv, json, yaml, toml; SOURCE is a path, `"data/p.csv"`, or `git("repo", "ref", "path")`
 tests/syntax/err/table_source.df:11:24: dup: two columns are named name
 tests/syntax/err/table_source.df:12:11: typo: column name: unknown type strng
-tests/syntax/err/table_source.df:15:3: a module's relation is given by its user: declare `input inner`, and its user writes `inner from ..` in the `use` or `instance` block
+tests/syntax/err/table_source.df:15:3: a module's relation is given by its user: declare `input inner`, and its user writes `inner from ..` in the `use` block

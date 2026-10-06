@@ -728,13 +728,13 @@ fn an_unbound_input_of_a_used_module_is_a_stack_inputs_error() {
     s.write(
         "p.df",
         "\ncomponent vm {\n  resource compute.vm vm {\n    size = 1\n  }\n}\n\
-         instance vm\nuse fake\n",
+         resource vm {}\nuse fake\n",
     );
     let r = s
         .run(&["dev", "--world", "w.json", "plan", "--why=none", "p.df"])
         .failure();
     assert!(
-        r.stderr.contains("expected the instance's name"),
+        r.stderr.contains("expected a resource name"),
         "{}",
         r.stderr
     );
