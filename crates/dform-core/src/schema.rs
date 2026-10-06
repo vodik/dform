@@ -53,7 +53,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-pub const FLAGS: [&str; 8] = [
+pub const FLAGS: [&str; 9] = [
     "required",
     "computed",
     "id",
@@ -62,7 +62,14 @@ pub const FLAGS: [&str; 8] = [
     "optional_computed",
     "force_new",
     "name_like",
+    "write_only",
 ];
+
+/// The flag of an attribute the API takes and never answers (R-106): an
+/// instance's user data. State keeps the digest of what was last applied
+/// beside the resource (`state::StateEntry::written`), and Plan compares
+/// the program's value with it.
+pub const WRITE_ONLY: &str = "write_only";
 
 /// The identity attribute (R-43): the computed path a reference to an
 /// object resolves to at Apply, the id the provider's API takes where an
@@ -448,6 +455,16 @@ impl Schema {
     /// Whether changing the value at `path` (normalized: dotted, no
     /// indices) replaces the object: the path or an ancestor is declared
     /// `force_new`.
+    /// The write-only attributes of `typ` ([`WRITE_ONLY`]), by path.
+    pub fn write_only_of(&self, typ: &str) -> Vec<&str> {
+        self.attrs
+            .range((typ.to_string(), String::new())..)
+            .take_while(|((t, _), _)| t == typ)
+            .filter(|(_, a)| a.has(WRITE_ONLY))
+            .map(|((_, p), _)| p.as_str())
+            .collect()
+    }
+
     pub fn forces_new(&self, typ: &str, path: &str) -> bool {
         std::iter::successors(Some(path), |p| p.rsplit_once('.').map(|x| x.0))
             .any(|p| self.attr(typ, p).is_some_and(|a| a.has("force_new")))
@@ -559,6 +576,11 @@ impl Schema {
                     }
                     if fs.contains("computed") && fs.contains("optional_computed") {
                         bail!("type_attr({t}, {p}): computed and optional_computed are exclusive");
+                    }
+                    if fs.contains(WRITE_ONLY)
+                        && (fs.contains("computed") || fs.contains("optional_computed"))
+                    {
+                        bail!("type_attr({t}, {p}): a write_only attribute is not computed");
                     }
                     let class = if fs.contains("sensitive") {
                         NullClass::Secret

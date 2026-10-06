@@ -2,9 +2,9 @@
 //! instances and SSH keys of one project, and DNS records, over the OVH
 //! API (`api`, signed as `sign` says) with the credentials of the
 //! provider's own configuration (`config`). `ovh` is the provider, `map`
-//! the API's objects as the schema's documents (`schema.df`), `record` the
-//! user data digests the API cannot answer, and `service` the gRPC
-//! service.
+//! the API's objects as the schema's documents (`schema.df`), and
+//! `service` the gRPC service. An instance's user data is write-only: the
+//! API never answers it, and dform keeps its digest in state (R-106).
 
 pub mod api;
 pub mod config;
@@ -12,7 +12,6 @@ pub mod config;
 pub mod fake;
 pub mod map;
 pub mod ovh;
-pub mod record;
 pub mod service;
 pub mod sign;
 

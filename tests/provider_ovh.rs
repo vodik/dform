@@ -224,9 +224,17 @@ fn a_program_plans_applies_and_plans_clean() {
         .clone();
     assert_eq!(records[0]["target"], ip);
     assert_eq!(records[0]["subDomain"], "www");
-    // The digest of the user data is kept, never the text.
-    let kept = s.read("dform.state/cache/ovh-user-data.json");
-    assert!(!kept.contains("cloud-config"), "{kept}");
+    // The digest of the user data is kept in state beside the instance,
+    // never the text (R-106).
+    let state = s.read("dform.state/main/state.json");
+    let st: Json = serde_json::from_str(&state).unwrap();
+    let written = &st["resources"]["ovh.instance::server"]["written"]["user_data"];
+    assert!(
+        written.as_str().is_some_and(|d| d.contains("sha256:")),
+        "{state}"
+    );
+    assert!(!state.contains("cloud-config"), "{state}");
+    assert!(!s.path("dform.state/cache/ovh-user-data.json").exists());
 
     // Nothing changed: nothing to do, the user data included.
     let again = dform(&s, &server, &["plan", "main.df"]).success();

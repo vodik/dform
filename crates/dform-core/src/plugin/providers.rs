@@ -1101,6 +1101,57 @@ impl Providers {
         walk(self, typ, doc, "")
     }
 
+    /// A write-only attribute's value as the world document has it (R-106):
+    /// the world never answers one, so the program's value when its digest
+    /// is what state kept from the last apply (or state kept none: an
+    /// object made before, or elsewhere), else `(write-only)`, a change.
+    fn written_before(&self, typ: &str, entry: &StateEntry, want: &Json, doc: &mut Json) {
+        for p in self.schema().write_only_of(typ) {
+            let Some(v) = get_path(want, p) else { continue };
+            let same = entry
+                .written
+                .get(p)
+                .is_none_or(|kept| self.written_matches(v, kept));
+            let v = match same {
+                true => v.clone(),
+                false => Json::String("(write-only)".into()),
+            };
+            set_path(doc, p, v);
+        }
+    }
+
+    /// The digest state keeps of a write-only value: keyed with the
+    /// stack's key, `hmac-sha256:..`, else `sha256:..`.
+    fn written_digest(&self, v: &Json) -> String {
+        let text = crate::approval::canonical_json(v);
+        match &self.digest_key {
+            Some(k) => format!("hmac-sha256:{}", k.digest(text.as_bytes())),
+            None => format!("sha256:{}", crate::approval::sha256_hex(text.as_bytes())),
+        }
+    }
+
+    /// Whether `v` is the value whose digest is `kept`. A keyed digest with
+    /// no key to compare it by is taken as the same: no change is planned
+    /// that cannot be shown.
+    fn written_matches(&self, v: &Json, kept: &str) -> bool {
+        let text = crate::approval::canonical_json(v);
+        match (kept.split_once(':'), &self.digest_key) {
+            (Some(("hmac-sha256", d)), Some(k)) => k.digest(text.as_bytes()) == d,
+            (Some(("hmac-sha256", _)), None) => true,
+            (Some(("sha256", d)), _) => crate::approval::sha256_hex(text.as_bytes()) == d,
+            _ => true,
+        }
+    }
+
+    /// The digests of `doc`'s write-only attributes, by path.
+    fn written(&self, typ: &str, doc: &Json) -> BTreeMap<String, String> {
+        self.schema()
+            .write_only_of(typ)
+            .into_iter()
+            .filter_map(|p| Some((p.to_string(), self.written_digest(get_path(doc, p)?))))
+            .collect()
+    }
+
     /// [`Providers::stored`] of each document.
     pub fn stored_world(&self, docs: &BTreeMap<Address, Json>) -> BTreeMap<Address, Json> {
         docs.iter()
@@ -1624,6 +1675,9 @@ impl Providers {
                         remove_path(&mut doc, p);
                         remove_path(want, p);
                     }
+                }
+                if let Some(want) = resolved.get(&addr) {
+                    self.written_before(&addr.typ, entry, want, &mut doc);
                 }
                 before.insert(addr, doc);
             }
@@ -2235,12 +2289,14 @@ impl Tick<'_> {
                     Providers::object(resp.attrs.as_ref(), resp.computed.as_ref())?,
                 );
                 state.set(addr.clone(), provider.clone(), resp.remote.clone());
+                self.record_written(addr, state);
             }
             ActionKind::Update | ActionKind::Drift => {
                 world.insert(
                     key(&addr.typ, &f.remote),
                     Providers::object(resp.attrs.as_ref(), resp.computed.as_ref())?,
                 );
+                self.record_written(addr, state);
             }
             ActionKind::Delete => {
                 world.remove(&key(&addr.typ, &f.remote));
@@ -2253,6 +2309,14 @@ impl Tick<'_> {
             ActionKind::Noop | ActionKind::Pending => {}
         }
         Ok(resp)
+    }
+
+    /// The digests of the write-only attributes `addr`'s object was just
+    /// applied with (R-106), in state beside it.
+    fn record_written(&self, addr: &Address, state: &mut State) {
+        if let Some(doc) = self.resolved.get(addr) {
+            state.set_written(addr, self.cloud.written(&addr.typ, doc));
+        }
     }
 
     /// A call that may have taken effect without answering: what it

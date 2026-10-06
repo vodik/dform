@@ -77,12 +77,12 @@ A replacement deletes the old instance first (its name is its key). Plan
 checks the flavor and the image against what the region offers, naming
 what it does offer.
 
-The API never answers an instance's user data, so the provider keeps the
-SHA-256 of what it sent (never the text) in `dform.state/cache/
-ovh-user-data.json`, and Plan compares the program's user data with it: a
-different one replaces the instance. With nothing kept (an instance made
-elsewhere, a cache cleared, another machine) the user data is taken as
-unchanged.
+The API never answers an instance's user data: the schema marks it
+`write_only` (R-106), so dform keeps the digest of what it applied (never
+the text) in state beside the instance, and Plan compares the program's
+user data with it: a different one replaces the instance, on any machine
+that reads the state. With nothing kept (an instance made elsewhere) the
+user data is taken as unchanged.
 
 `ovh.ssh_key`: `name` and `public_key`, both required, a change to either
 replaces it; `id` computed. Its name is its key.

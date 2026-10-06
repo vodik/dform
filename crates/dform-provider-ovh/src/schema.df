@@ -28,7 +28,9 @@ type_attr("ovh.instance", "region", "string", ["required", "force_new"])
 type_attr("ovh.instance", "flavor", "string", ["required", "force_new"])
 type_attr("ovh.instance", "image", "string", ["required", "force_new"])
 type_attr("ovh.instance", "ssh_key", "ref(ovh.ssh_key)", ["force_new"])
-type_attr("ovh.instance", "user_data", "string", ["sensitive", "force_new"])
+# Write-only: the API never answers it; state keeps the digest of what was
+# applied, and a different one replaces the instance (R-106).
+type_attr("ovh.instance", "user_data", "string", ["sensitive", "force_new", "write_only"])
 type_attr("ovh.instance", "public_ip", "ip", ["computed"])
 type_attr("ovh.instance", "private_ip", "ip", ["computed", "nullable"])
 type_attr("ovh.instance", "status", "string", ["computed"])

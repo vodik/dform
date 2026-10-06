@@ -114,6 +114,13 @@ pub struct StateEntry {
     /// read them from, runs before the deletes of what it depends on.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub deps: Vec<String>,
+    /// A write-only attribute's digest (R-106, `schema::WRITE_ONLY`), by
+    /// path, of the value last applied: the API never answers it, so Plan
+    /// compares the program's value with this. Keyed with the stack's key
+    /// (`hmac-sha256:..`) when it has one, else `sha256:..`; never the
+    /// value.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub written: BTreeMap<String, String>,
 }
 
 impl State {
@@ -199,8 +206,17 @@ impl State {
                 provider,
                 remote,
                 deps,
+                written: BTreeMap::new(),
             },
         );
+    }
+
+    /// Record the digests of `addr`'s write-only attributes as applied
+    /// (no-op without an identity).
+    pub fn set_written(&mut self, addr: &Address, written: BTreeMap<String, String>) {
+        if let Some(e) = self.resources.get_mut(&key(addr)) {
+            e.written = written;
+        }
     }
 
     /// Record what `addr`'s object depends on (no-op without an identity).

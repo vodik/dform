@@ -620,13 +620,23 @@ cargo run -- provider check ./my-provider         # any plugin executable
 type_provider(net.vpc, "fakecloud")                         # who owns the type
 type_attr(net.vpc, "id", "string", ["computed", "id"])      # Flags: required computed id
 type_attr(db.postgres, "endpoint", "string", ["computed"])  #   sensitive nullable optional_computed
-type_attr(net.vpc, "cidr", "string", ["force_new"])         #   force_new
+type_attr(net.vpc, "cidr", "string", ["force_new"])         #   force_new write_only
+type_attr(ovh.instance, "user_data", "string", ["write_only"])  # the API never answers it
 type_list_key(k8s.deployment, "spec.template.spec.containers", ["name"])  # list merge keys
 type_mint(db.postgres, "endpoint", "{name}.db.fake")        # optional: how the mock mints it
 type_retry(db.postgres, 5)                                  # optional: Read attempts (default 3)
 type_replace(k8s.deployment, "create_first")                # optional: create_first, destroy_first, either (default)
 type_doc(net.vpc, "cidr", "The network's IPv4 range.")      # optional: a path's description ("" the type's)
+extern_decl("ovh.image", "+region, -name, -id, -distribution")  # a data source, no `extern` line needed
 ```
+
+A `write_only` attribute (R-106) is one the API takes and never answers:
+state keeps the digest of the value last applied beside the resource
+(`written`, keyed with the stack's key, never the value), and Plan
+compares the program's value with it: the same is no change, another a
+change (a replace when the path is `force_new`); with none kept (an
+object made elsewhere) no change. An `extern_decl` declares a data
+source to the compiler: a program reads it with no `extern` line.
 
 Built-in mock schemas: `fake` (the demo's), `gke` (pngu.df), `k8s` (fifteen
 Kubernetes kinds; try `cargo run -- -C examples/k8s plan`)

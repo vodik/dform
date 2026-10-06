@@ -22,7 +22,6 @@
 use crate::api::{self, Client, escape};
 use crate::config;
 use crate::map;
-use crate::record::{self, Record};
 use anyhow::{Result, anyhow, bail};
 use dform_core::ir::Address;
 use dform_core::plugin::backend::{self, CallError, Handler, Reply, VERSION};
@@ -34,7 +33,6 @@ use dform_core::schema::Schema;
 use dform_core::value::Value;
 use serde_json::{Value as Json, json};
 use std::collections::BTreeMap;
-use std::path::PathBuf;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
@@ -102,7 +100,6 @@ struct Account {
 /// A configured provider.
 struct Configured {
     account: std::result::Result<Arc<Account>, String>,
-    record: Arc<Record>,
     /// The program's settings are still to come (a `provider ovh { .. }`
     /// block): a data source answers "not yet".
     awaiting: bool,
@@ -215,19 +212,9 @@ impl Ovh {
         Ok((a, p))
     }
 
-    fn record(&self) -> Arc<Record> {
-        self.configured()
-            .map(|c| c.record.clone())
-            .unwrap_or_else(|_| Arc::new(Record::new(None)))
-    }
-
     /// Configure from `config` (dform's, with the program's `settings` the
     /// second time). The account's project id, for `expect_account`.
     pub fn configure(&self, config: &Json) -> Result<Option<String>> {
-        let cache = s(config, "cache").map(PathBuf::from).or_else(|| {
-            s(config, "world").and_then(|w| std::path::Path::new(w).parent().map(PathBuf::from))
-        });
-        let record = Arc::new(Record::new(cache.as_deref()));
         let settings = config.get("settings").filter(|v| v.is_object());
         let deferred = config.get("deferred") == Some(&Json::Bool(true));
         let set = |c: Configured| {
@@ -238,7 +225,6 @@ impl Ovh {
                 account: Err(
                     "the program configures it (`provider ovh { .. }`) and has not yet".into(),
                 ),
-                record,
                 awaiting: true,
             });
             return Ok(None);
@@ -266,7 +252,6 @@ impl Ovh {
             (Err(e), None) => {
                 set(Configured {
                     account: Err(format!("{e:#}")),
-                    record,
                     awaiting: false,
                 });
                 return Ok(None);
@@ -282,7 +267,6 @@ impl Ovh {
         let account = project.clone();
         set(Configured {
             account: Ok(Arc::new(Account { client, project })),
-            record,
             awaiting: false,
         });
         Ok(account)
@@ -417,7 +401,7 @@ impl Ovh {
         &self,
         typ: &str,
         name: &str,
-        remote: &str,
+        _remote: &str,
         prior: Option<&Json>,
         desired: Option<&Json>,
     ) -> Result<(Vec<provider::Change>, bool)> {
@@ -436,19 +420,10 @@ impl Ovh {
         if typ == INSTANCE {
             self.check_instance(&at, d)?;
         }
-        let mut changes = diff(&self.schema, typ, prior, Some(d));
-        if typ == INSTANCE
-            && let Some(prior) = prior
-            && prior.get("user_data").is_none()
-        {
-            // The API never answers user data: compare it with what this
-            // provider sent (`record`); with nothing kept, no change.
-            let kept = self.record().get(remote);
-            let now = d.get("user_data").map(record::digest);
-            if kept.is_none() || kept == now {
-                changes.retain(|c| norm_path(&c.path) != "user_data");
-            }
-        }
+        // An instance's user data is write-only (R-106): the API never
+        // answers it, and dform compares it with the digest state keeps,
+        // giving the program's value in `prior` when it is the same.
+        let changes = diff(&self.schema, typ, prior, Some(d));
         let replaces = prior.is_some()
             && changes
                 .iter()
@@ -751,8 +726,6 @@ impl Ovh {
             .post(&format!("/cloud/project/{p}/instance"), &body)
             .map_err(|e| failed(at, e))?;
         let id = s(&o, "id").unwrap_or_default().to_string();
-        self.record()
-            .set(&id, config.get("user_data").map(record::digest));
         // Wait for it to run: until then it has no address.
         let start = Instant::now();
         let mut last = o;
@@ -882,7 +855,6 @@ impl Ovh {
                         _ => std::thread::sleep(poll()),
                     }
                 }
-                self.record().set(remote, None);
             }
             SSH_KEY => {
                 let (a, p) = self

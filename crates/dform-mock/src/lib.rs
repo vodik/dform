@@ -441,6 +441,17 @@ impl FakeCloud {
 
     /// A computed document as it leaves the provider: every sensitive
     /// value replaced by its label.
+    /// An object's configured attributes as the API answers them: never a
+    /// write-only one (`schema::WRITE_ONLY`, an instance's user data),
+    /// which the world keeps.
+    fn answered(&self, typ: &str, attrs: &Json) -> Json {
+        let mut out = attrs.clone();
+        for p in self.schema.write_only_of(typ) {
+            provider::remove_path(&mut out, p);
+        }
+        out
+    }
+
     fn outward(&self, typ: &str, remote: &str, computed: &Json) -> Json {
         let mut out = computed.clone();
         let paths = self
@@ -497,7 +508,7 @@ impl FakeCloud {
         }
         let rr = &self.world.as_ref().expect("loaded").resources[&k];
         Ok(Some((
-            rr.attrs.clone(),
+            self.answered(&rr.typ, &rr.attrs),
             self.outward(&rr.typ, remote, &computed),
         )))
     }
@@ -511,7 +522,7 @@ impl FakeCloud {
         };
         Ok(found.map(|rr| {
             let computed = self.outward(typ, remote, &rr.computed);
-            (rr.name, rr.attrs, computed)
+            (rr.name, self.answered(typ, &rr.attrs), computed)
         }))
     }
 
@@ -951,7 +962,7 @@ impl FakeCloud {
                 rr.materialized = materialized;
             }
             let rr = &self.world_ref().resources[&key(&addr.typ, r)];
-            out.attrs = rr.attrs.clone();
+            out.attrs = self.answered(&addr.typ, &rr.attrs);
             out.computed = self.outward(&addr.typ, r, &ready(&rr.computed, &rr.not_ready));
             out.remote = r.clone();
         }
