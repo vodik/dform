@@ -934,7 +934,10 @@ impl<'a> Parser<'a> {
                     return p.err_expected("a resource name (a name or a string)");
                 }
                 p.eat(RANK);
-                p.block()?;
+                // A copy of a component takes the rows of the relations
+                // it takes (R-55, R-113); a provider's type, which the
+                // resolver says, none.
+                p.block_of(true)?;
                 p.opt_clause()
             }),
             // `settings` is gone (R-38): a contribution to an input is `set`.
@@ -1194,15 +1197,10 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
-    /// `{ entry* }` of a resource, instance or provider:
-    /// entries separated by a newline or a comma. Its clause follows it.
-    fn block(&mut self) -> P {
-        self.block_of(false)
-    }
-
-    /// A block, and for a `use` or an `instance` (`rows`) the rows of the
-    /// relations its module takes (R-55): `p(t, ..) [where B]`, or `p from
-    /// TERM [where B]`.
+    /// `{ entry* }` of a resource, a `use` or an instance: entries
+    /// separated by a newline or a comma, its clause after it; with `rows`
+    /// also the rows of the relations a module or a component takes
+    /// (R-55): `p(t, ..) [where B]`, or `p from TERM [where B]`.
     fn block_of(&mut self, rows: bool) -> P {
         self.start(BLOCK);
         let open = self.nth_index(0);
