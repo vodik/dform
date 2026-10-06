@@ -7,7 +7,7 @@
 
 use crate::grpc;
 use crate::services::Services;
-use anyhow::{Result, bail};
+use anyhow::Result;
 use dform_core::plugin::Launch;
 use dform_core::plugin::backend::{Call, CallError, Provider, Reply, Ticket};
 use dform_core::plugin::host::{self, Grants, Hosting, Manifest};
@@ -87,7 +87,7 @@ fn component(path: &Path, grants: Grants) -> Result<Link> {
 
 #[cfg(not(feature = "wasm"))]
 fn component(path: &Path, _: Grants) -> Result<Link> {
-    bail!(
+    anyhow::bail!(
         "provider {}: a component needs the wasm host, which this dform is built without \
          (experimental: cargo build --features wasm)",
         path.display()

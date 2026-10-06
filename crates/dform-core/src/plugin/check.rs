@@ -5,7 +5,9 @@
 //! whether the provider deviates. The mock provider passes it. A provider
 //! that serves its own schema (a real API's) instead of the one it is given
 //! is checked with the documents its Schema offers as `examples`; one that
-//! does neither stops after Schema, with that as the deviation.
+//! does neither stops after Schema, with that as the deviation. A provider
+//! a launcher hosted (`plugin::host::observe`) has `host` lines: the host,
+//! the interfaces its manifest imports, and its grants.
 
 use super::backend::CallError;
 use super::link::Link;
@@ -128,6 +130,13 @@ fn suite(start: impl FnOnce() -> Result<Link>, dir: &Path) -> Result<(Vec<String
             "the handshake names no provider".into()
         }),
     );
+    // How it is hosted (R-13b): which host ran it, what its manifest says
+    // it uses, and what dform.toml grants it.
+    if let Some(h) = super::host::hosting(&conn.borrow().program) {
+        for l in h.grants.describe(h.manifest.as_ref()) {
+            r.lines.push(format!("host  {}: {l}", h.host));
+        }
+    }
     let config = json!({
         "schemas": [dir.join("schema.df").display().to_string()],
         "world": dir.join("world.json").display().to_string(),

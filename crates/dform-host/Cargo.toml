@@ -15,7 +15,7 @@ publish = false
 # interfaces as imports. Without it nothing here needs wasmtime or a wasm
 # target, and a `.wasm` source is refused naming the feature.
 [features]
-wasm = ["dep:wasmtime", "dep:wasmtime-wasi", "dep:wasmtime-wasi-http", "dep:dform-wit"]
+wasm = ["dep:wasmtime", "dep:wasmtime-wasi", "dep:wasmtime-wasi-http", "dep:dform-wit", "dep:sha2"]
 
 [dependencies]
 anyhow = "1.0"
@@ -32,8 +32,10 @@ ureq = { version = "3", default-features = false, features = ["rustls", "platfor
 # no shell-outs).
 gix = { version = "0.88", default-features = false, features = ["sha1", "revision", "blocking-network-client", "blocking-http-transport-reqwest-rust-tls"] }
 # The component host (`wasm`).
-wasmtime = { version = "=49.0.1", default-features = false, features = ["component-model", "runtime", "std", "cranelift", "parallel-compilation", "wat"], optional = true }
+wasmtime = { version = "=49.0.1", default-features = false, features = ["component-model", "runtime", "std", "cranelift", "parallel-compilation", "wat", "anyhow"], optional = true }
 wasmtime-wasi = { version = "=49.0.1", optional = true }
 wasmtime-wasi-http = { version = "=49.0.1", optional = true }
 dform-wit = { path = "../dform-wit", default-features = false, features = ["host"], optional = true }
+# The compiled component's cache key.
+sha2 = { version = "0.10", optional = true }
 
