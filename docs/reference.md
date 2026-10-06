@@ -96,6 +96,7 @@ dform = ">=0.1"
 aws = { source = "aws-mock", version = "2.1" }   # `provider aws` in a program
 google = { source = "providers/gcp" }            # a path under the root
 k8s = { source = "k8s", timeout = "2m" }         # each call's timeout (60s by default)
+ovh = { path = "~/src/dform/target/debug/dform-provider-ovh" }  # the executable itself
 
 [defaults]
 backend = 'local("state/{stack}")'   # or 's3("bucket", "dform/{stack}", {...})'
@@ -110,6 +111,10 @@ isolated = true
 [discovery]
 exclude = ["scratch/**"]
 ```
+
+A provider's `path` names its executable, relative to the root, absolute,
+or under `~/`, until a registry serves it (R-24); a `[providers]` table
+has a `source` or a `path`, not both.
 
 ### Targets and commands
 

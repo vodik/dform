@@ -224,8 +224,8 @@ pub struct Meta {
     pub dform: Option<String>,
 }
 
-/// `[providers] NAME = { source = "...", version = "..." }`, or
-/// `NAME = "SOURCE"`.
+/// `[providers] NAME = { source = "...", version = "..." }`,
+/// `NAME = { path = "..." }`, or `NAME = "SOURCE"`.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(untagged)]
 pub enum ProviderEntry {
@@ -240,6 +240,12 @@ pub struct ProviderTable {
     /// directory holding one or a schema, a schema `.df`), else a built-in
     /// schema the mock plays (`fake`, `gke`, `k8s`, `aws-mock`).
     pub source: Option<String>,
+    /// The provider executable itself, until the registry serves it
+    /// (R-24): a path relative to the project root, absolute, or under
+    /// `~/` (`path = "~/src/dform/target/debug/dform-provider-ovh"`).
+    /// Never a built-in schema's name; `source` and `path` exclude each
+    /// other.
+    pub path: Option<String>,
     /// A version requirement in Cargo's syntax (`"2.1"` is `^2.1`).
     pub version: Option<String>,
     /// How long one call may go unanswered (`60s`; `500ms`, `2m`) before
@@ -255,7 +261,15 @@ impl ProviderEntry {
     fn source(&self) -> Option<&str> {
         match self {
             ProviderEntry::Source(s) => Some(s),
-            ProviderEntry::Table(t) => t.source.as_deref(),
+            ProviderEntry::Table(t) => t.source.as_deref().or(t.path.as_deref()),
+        }
+    }
+
+    /// `path = "..."`: an executable, never a schema's name.
+    fn path(&self) -> Option<&str> {
+        match self {
+            ProviderEntry::Source(_) => None,
+            ProviderEntry::Table(t) => t.path.as_deref(),
         }
     }
 
@@ -425,6 +439,12 @@ impl Manifest {
         }
         for (name, p) in &m.providers {
             if let ProviderEntry::Table(t) = p {
+                if t.source.is_some() && t.path.is_some() {
+                    bail!(
+                        "{}: a provider comes from its `source` or its `path`, not both",
+                        at(&format!("[providers.{name}]"))
+                    );
+                }
                 for (key, v) in [("timeout", &t.timeout), ("backoff", &t.backoff)] {
                     if let Some(v) = v
                         && crate::store::parse_duration(v).is_none_or(|d| d.is_zero())
@@ -587,7 +607,17 @@ impl Manifest {
     /// holding one, else its `schema.df`; a `.df` file), else the source
     /// as written (a built-in schema's name).
     pub fn provider_source(&self, name: &str) -> Option<String> {
-        let src = self.providers.get(name)?.source()?;
+        let entry = self.providers.get(name)?;
+        if let Some(p) = entry.path() {
+            // Spelled as a path whatever it is, so a missing executable is
+            // not taken for a schema's name.
+            let p = match (p.strip_prefix("~/"), std::env::var_os("HOME")) {
+                (Some(rest), Some(home)) => PathBuf::from(home).join(rest),
+                _ => self.root.join(p),
+            };
+            return Some(p.display().to_string());
+        }
+        let src = entry.source()?;
         let path = self.root.join(src);
         if !path.exists() {
             return Some(src.to_string());
@@ -989,6 +1019,38 @@ mod tests {
         assert!(e.to_string().contains("[defaults] backend"), "{e}");
     }
 
+    /// `[providers] NAME = { path = ".." }` names the executable: from the
+    /// root, absolute, or under `~/`; spelled as a path even when nothing
+    /// is there, never taken for a built-in schema's name.
+    #[test]
+    fn a_provider_by_path() {
+        let m = manifest(
+            "[providers]\novh = { path = \"bin/dform-provider-ovh\", timeout = \"10m\" }\n\
+             abs = { path = \"/opt/dform/dform-provider-x\" }\n\
+             home = { path = \"~/dform/dform-provider-y\" }\nk8s = { path = \"k8s\" }\n",
+        )
+        .unwrap();
+        let ovh = m.provider_source("ovh").unwrap();
+        assert_eq!(
+            ovh,
+            m.root.join("bin/dform-provider-ovh").display().to_string()
+        );
+        assert_eq!(
+            m.provider_source("abs").as_deref(),
+            Some("/opt/dform/dform-provider-x")
+        );
+        let home = std::env::var("HOME").unwrap();
+        assert_eq!(
+            m.provider_source("home"),
+            Some(format!("{home}/dform/dform-provider-y"))
+        );
+        assert_eq!(
+            m.provider_source("k8s"),
+            Some(m.root.join("k8s").display().to_string())
+        );
+        assert!(m.policies().contains_key(&ovh));
+    }
+
     /// `[providers.NAME]` sets a provider's call policy, by its source;
     /// `[stacks.NAME] wait` a stack's wait budget (R-81).
     #[test]
@@ -1046,6 +1108,12 @@ mod tests {
         );
         let e = manifest("[providers]\naws = { version = \"~>2.1\" }\n").unwrap_err();
         assert!(e.to_string().contains("[providers.aws] version"), "{e}");
+        let e = manifest("[providers]\novh = { source = \"a\", path = \"b\" }\n").unwrap_err();
+        assert!(
+            e.to_string()
+                .contains("[providers.ovh]: a provider comes from"),
+            "{e}"
+        );
         let e = manifest("[defaults]\nunknowns = \"strict\"\n").unwrap_err();
         assert!(e.to_string().contains("unknown field `unknowns`"), "{e}");
         let e = manifest("[inputs]\nenv = \"prod\"\n").unwrap_err();
