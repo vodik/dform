@@ -2007,7 +2007,7 @@ fn run_with(
         if !rest.is_empty() {
             eprintln!("constraint violations:");
             for v in rest {
-                eprintln!("- {}", redact.text(v));
+                eprintln!("- {}", report::violation_line(v, redact));
             }
         }
         bail!("blocked by constraints");

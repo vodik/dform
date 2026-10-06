@@ -1,6 +1,6 @@
 exit: ok
 -- stdout --
-== examples/crud-api/stacks/crud_api.df: 262 nodes, 1497 edges (373 negative), 24 strata
+== examples/crud-api/stacks/crud_api.df: 263 nodes, 1521 edges (389 negative), 24 strata
 stratum  node
 0        (arg, google.sql_database, instance)
 0        (arg, google.sql_database, name)
@@ -263,6 +263,7 @@ stratum  node
 22       (attr, k8s.service, metadata)
 22       (attr, k8s.service, spec)
 22       (attr, k8s.service, status)
+22       __not_planned
 23       deny
-(262 rows)
+(263 rows)
 -- stderr --

@@ -1,6 +1,6 @@
 exit: ok
 -- stdout --
-== examples/adopt/stacks/adopt_demo.df: 78 nodes, 143 edges (52 negative), 9 strata
+== examples/adopt/stacks/adopt_demo.df: 79 nodes, 146 edges (54 negative), 9 strata
 stratum  node
 0        (arg, input, env)
 0        (arg, output, network::vpc)
@@ -77,8 +77,9 @@ stratum  node
 7        (attr, net.subnet, visibility)
 7        (attr, net.subnet, vpc)
 7        (attr, net.subnet, zone)
+7        __not_planned
 7        warn
 8        __rows
 8        network::private_subnet
-(78 rows)
+(79 rows)
 -- stderr --

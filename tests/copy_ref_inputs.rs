@@ -71,7 +71,7 @@ fn a_module_input_binds_a_reference() {
     );
     s.write(
         "main.df",
-        "use k8s\nresource k8s.namespace apps { metadata.name = \"apps\" }\nuse tenant { namespace = apps }\n",
+        "use k8s\nnames(2, \"b\")\nresource k8s.namespace apps { metadata.name = \"apps\" }\nuse tenant { namespace = apps }\n",
     );
     let r = s.run(&["plan", "main.df"]).success();
     assert!(
@@ -82,5 +82,62 @@ fn a_module_input_binds_a_reference() {
         ),
         "{}",
         r.stdout
+    );
+}
+
+/// A statement whose own clause holds and that derives nothing is listed
+/// under `not planned` with why, never silently absent: here the copy's
+/// input reads a row nobody states, and what reads its output follows. A
+/// statement held back by its own clause is quiet. A reference to one of
+/// them names it.
+#[test]
+fn a_statement_that_derives_nothing_is_listed_with_why() {
+    let s = Scratch::project("copy-ref-not-planned");
+    s.write("databases.df", DB);
+    s.write(
+        "main.df",
+        "use k8s\nnames(2, \"b\")\nresource k8s.namespace apps { metadata.name = \"apps\" }\n\
+         resource databases.pg one { namespace = apps, name = names[1] }\n\
+         resource k8s.config_map cm { metadata = { name: \"cm\", namespace: \"apps\" }, \
+         data = { host: one.host } }\n\
+         resource k8s.config_map quiet { metadata = { name: \"q\", namespace: \"apps\" } } \
+         where names[1] == \"x\"\n",
+    );
+    let r = s.run(&["plan", "main.df"]).success();
+    assert_eq!(
+        r.summary(),
+        "plan: 1 change (1 create) over 1 tick, 2 not planned",
+        "{}",
+        r.stdout
+    );
+    assert!(
+        r.stdout.contains(
+            "not planned   statements that derive no resource\n  \
+             k8s.config_map cm     main.df:5  output one.host is not set\n  \
+             k8s.secret one.creds  databases.df:6  input one.name is not set\n"
+        ),
+        "{}",
+        r.stdout
+    );
+    assert!(!r.stdout.contains("quiet"), "{}", r.stdout);
+
+    // What reads a statement that derives nothing is refused by naming it.
+    s.write(
+        "main.df",
+        "use k8s\nnames(2, \"b\")\nresource k8s.secret ghost { metadata = { name: \"g-${names[1]}\", namespace: \"a\" } }\n\
+         resource k8s.config_map cm { metadata = { name: \"cm\", namespace: \"a\" }, \
+         data = { x: ghost.metadata.name } }\n",
+    );
+    let r = s.run(&["plan", "main.df"]).failure();
+    assert!(
+        r.stdout
+            .contains("  k8s.secret ghost     main.df:3  names(1, names): no row\n")
+            && r.stderr.contains(
+                "ref to an address no rule wants: k8s.config_map cm reads \
+                 k8s.secret ghost.metadata.name, and nothing derives k8s.secret ghost"
+            ),
+        "{}\n{}",
+        r.stdout,
+        r.stderr
     );
 }

@@ -680,6 +680,8 @@ pub struct Report {
     /// What the plan empties since the last apply (R-80): a rule all of
     /// whose resources it deletes, a relation it leaves with no rows.
     pub warnings: Vec<crate::zset::Emptied>,
+    /// The statements that derive no resource, each with why (R-120).
+    pub not_planned: Vec<crate::zset::NotPlanned>,
 }
 
 /// What the report is built from.
@@ -783,6 +785,7 @@ pub fn report(i: &Input) -> Report {
         .collect();
 
     let groups = groups(i.res, &tick_of, &resolves);
+    let not_planned = crate::zset::not_planned(i.res, &r);
     let mut policies = policies(i, &tick_of, &resolves);
     policies.extend(deferred(i.res, &tick_of, &resolves));
 
@@ -821,7 +824,8 @@ pub fn report(i: &Input) -> Report {
         && conflicts.is_empty()
         && i.sections.blocking.is_empty()
         && i.sections.undetermined.is_empty()
-        && i.sections.pending_groups.is_empty();
+        && i.sections.pending_groups.is_empty()
+        && not_planned.is_empty();
     let classes = pending
         .iter()
         .flat_map(|b| b.on.iter())
@@ -867,6 +871,7 @@ pub fn report(i: &Input) -> Report {
             .collect(),
         instances: crate::zset::Instances::from_facts(&i.res.facts).with(i.kept),
         warnings: Vec::new(),
+        not_planned,
     }
 }
 
@@ -1169,6 +1174,39 @@ pub fn violation_conflict(v: &str, r: &Redactor, why: Why, style: Style) -> Opti
         return None;
     };
     Some(diag_lines(&diag(&ctx, r), why, style, true))
+}
+
+/// A violation as a run that refuses says it: a reference to an address
+/// no rule wants (`transform::DANGLING_REF`) by what holds it and the
+/// address it names, which the plan lists under `not planned` when its
+/// statement derives nothing (R-120); any other as the evaluator words it.
+pub fn violation_line(v: &str, r: &Redactor) -> String {
+    let dangling = || -> Option<String> {
+        let (msg, ctx) = v.split_once(" ctx=")?;
+        if msg != crate::transform::DANGLING_REF {
+            return None;
+        }
+        let ctx: Json = serde_json::from_str(ctx).ok()?;
+        let s = |k: &str| ctx.get(k)?.as_str().map(str::to_string);
+        let to = Address {
+            typ: s("type")?,
+            name: s("addr")?,
+        };
+        let from = match (s("from_type"), s("from_name")) {
+            (Some(typ), Some(name)) => address(&Address { typ, name }),
+            _ => s("from")?,
+        };
+        let read = match s("path").filter(|p| !p.is_empty()) {
+            Some(p) => attribute(&to, &p),
+            None => address(&to),
+        };
+        let at = s("at").map(|a| format!(" ({a})")).unwrap_or_default();
+        Some(format!(
+            "{msg}: {from} reads {read}, and nothing derives {}{at}",
+            address(&to)
+        ))
+    };
+    r.text(&dangling().unwrap_or_else(|| v.to_string()))
 }
 
 /// Whether the violation `v` is a conflict the plan's `conflicts`
@@ -1743,6 +1781,9 @@ impl Report {
         for x in &mut self.policies {
             x.site = x.rule.as_ref().and_then(|id| p.rule_site(rules, id, &[]));
         }
+        for n in &mut self.not_planned {
+            n.site = n.rule.as_ref().and_then(|id| p.rule_site(rules, id, &[]));
+        }
         self.denied = self
             .denies
             .iter()
@@ -1921,6 +1962,9 @@ impl Report {
         if !self.policies.is_empty() {
             out.push_str(&format!(", {} undetermined", self.policies.len()));
         }
+        if !self.not_planned.is_empty() {
+            out.push_str(&format!(", {} not planned", self.not_planned.len()));
+        }
         // Changes held on what no tick of this plan makes (a provider
         // waiting on its settings, R-110), listed under `later`.
         let later: usize = self
@@ -2095,6 +2139,24 @@ impl Report {
             let head = "later   changes this plan cannot count yet";
             rows.push(Row::new(head, bold(head)));
             self.write_later(&mut rows, style);
+        }
+        // What the program states and derives nothing of (R-120): each
+        // statement as a group row is, its place and why on the right.
+        if !self.not_planned.is_empty() {
+            rows.push(Row::plain(String::new()));
+            let head = "not planned   statements that derive no resource";
+            rows.push(Row::new(head, style.paint(Paint::Warn, head)));
+            for n in &self.not_planned {
+                let addr = address(&n.addr);
+                let plain = format!("  {addr}");
+                let painted = format!("  {}", style.paint(Paint::Warn, &addr));
+                let at = n.site.as_ref().map(|s| s.at.as_str()).unwrap_or_default();
+                let right = match at.is_empty() {
+                    true => vec![n.reason.clone()],
+                    false => vec![format!("{at}  {}", n.reason), n.reason.clone()],
+                };
+                rows.push(Row::new(&plain, painted).with(right));
+            }
         }
         if !self.warnings.is_empty() {
             rows.push(Row::plain(String::new()));
@@ -2726,6 +2788,21 @@ impl Report {
             })).collect::<Vec<_>>(),
             "apply": self.apply_line(),
         });
+        // What derives no resource (R-120), only when something does not.
+        if !self.not_planned.is_empty() {
+            j["not_planned"] = self
+                .not_planned
+                .iter()
+                .map(|n| {
+                    json!({
+                        "address": n.addr.to_string(),
+                        "reason": n.reason,
+                        "site": n.site.as_ref().filter(|_| self.why != Why::None),
+                    })
+                })
+                .collect::<Vec<_>>()
+                .into();
+        }
         // What the plan empties (R-80), only when it empties something.
         if !self.warnings.is_empty() {
             j["warnings"] = self

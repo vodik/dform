@@ -1,6 +1,6 @@
 exit: error
 -- stdout --
-== tests/fixtures/adversarial/adv4_variable_path_writer.df: 50 nodes, 136 edges (65 negative)
+== tests/fixtures/adversarial/adv4_variable_path_writer.df: 51 nodes, 137 edges (66 negative)
    REJECTED: negative cycle through 3 nodes
    scc: arg  attr  (attr, net.vpc, cidr)
    arg -> attr  [attribute aggregate (lub_ranked)]  prelude

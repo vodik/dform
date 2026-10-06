@@ -1,6 +1,6 @@
 exit: ok
 -- stdout --
-== tests/fixtures/adversarial/adv7b_mutual_via_different_paths.df: 49 nodes, 94 edges (34 negative), 6 strata
+== tests/fixtures/adversarial/adv7b_mutual_via_different_paths.df: 50 nodes, 97 edges (37 negative), 6 strata
 stratum  node
 0        (arg, net.vpc, z)
 0        (want, compute.vm)
@@ -49,7 +49,8 @@ stratum  node
 2        (want, net.subnet)
 3        (attr, net.subnet, id)
 3        (attr, net.subnet, x)
+3        __not_planned
 4        (arg, net.vpc, y)
 5        (attr, net.vpc, y)
-(49 rows)
+(50 rows)
 -- stderr --

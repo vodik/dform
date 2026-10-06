@@ -980,6 +980,19 @@ read for a component's yet), and it takes no rank; a provider's type's
 resource takes no rows. A resource of a module is an error naming
 `use`.
 
+An input typed by a resource type (`input namespace: k8s.namespace`) is
+given a reference, `namespace = apps`, and binds from it as from any
+value; the copy reads the resource's attributes through it
+(`namespace.metadata.name`). A value that holds a reference waits while
+the resource may be derived and holds once it is, whatever attributes
+its type declares (R-120). A resource statement whose own clause holds
+and that derives no resource (an input of its copy with no value, a
+`let` with no row, an attribute nothing sets) is never silently absent:
+the plan lists it under `not planned` with why, the deepest condition
+`why-not` names, on one line (`input one.namespace is not set`); a
+statement held back by its own clause is quiet. `why NAME.k` explains a
+copy's output as it does an input or a `let`.
+
 ### Guarded declarations
 
 A named statement, `let`, `use` (a module's or a provider's),

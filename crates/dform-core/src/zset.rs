@@ -836,6 +836,77 @@ pub fn relative_place(top: &std::path::Path, at: &str) -> Option<String> {
     Some(format!("{rest}:{line}"))
 }
 
+/// A resource statement whose own clause holds and that derives no
+/// resource (R-120, `transform::not_planned_report`): the plan lists it
+/// with why, on one line, rather than leaving it out.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NotPlanned {
+    pub addr: Address,
+    /// The deepest condition `why-not` names (`input one.namespace is not
+    /// set`).
+    pub reason: String,
+    /// Its report's rule (`r12`), whose place is the statement's.
+    pub rule: Option<String>,
+    /// Where the statement is written ([`crate::report::Report::explain`]).
+    pub site: Option<crate::report::tree::Site>,
+}
+
+/// The statements `res` derives no resource of, each with why.
+pub fn not_planned(
+    res: &crate::engine::EvalResult,
+    redact: &crate::query::Redactor,
+) -> Vec<NotPlanned> {
+    let s = |t: &Term| match t {
+        Term::Val(Value::Str(s)) => Some(s.clone()),
+        _ => None,
+    };
+    res.facts
+        .iter()
+        .filter(|f| f.pred == crate::transform::NOT_PLANNED)
+        .filter_map(|f| {
+            let [t, a] = f.args.as_slice() else {
+                return None;
+            };
+            let addr = Address {
+                typ: s(t)?,
+                name: s(a)?,
+            };
+            // Its statement's report: the one that names it, else one
+            // whose name a variable binds.
+            let report = |exact: bool| {
+                res.rules.iter().position(|r| {
+                    r.head.pred == f.pred
+                        && r.head.args.iter().zip(&f.args).all(|(h, v)| match h {
+                            Term::Var(_) => !exact,
+                            // A copy's own resource, `scoped(n, name)`.
+                            Term::Func { name, args } if name == "scoped" => {
+                                match (args.as_slice(), v) {
+                                    (
+                                        [Term::Val(Value::Str(n)), Term::Val(Value::Str(a))],
+                                        Term::Val(Value::Str(v)),
+                                    ) => crate::ir::scoped(n, a) == *v,
+                                    _ => !exact,
+                                }
+                            }
+                            h => h == v,
+                        })
+                })
+            };
+            let rule = report(true)
+                .or_else(|| report(false))
+                .map(|i| format!("r{i}"));
+            let reason = crate::whynot::reason(&addr.typ, &addr.name, res, redact)
+                .unwrap_or_else(|| "no rule derives it".into());
+            Some(NotPlanned {
+                addr,
+                reason,
+                rule,
+                site: None,
+            })
+        })
+        .collect()
+}
+
 /// A rule the plan deletes every resource of, or a relation it empties,
 /// since the last apply (R-80): what the plan's `warning` section names,
 /// and what `apply` asks for on its own.

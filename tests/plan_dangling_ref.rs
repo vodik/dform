@@ -20,16 +20,15 @@ use fake
 "#,
     );
     let r = s.run(&["plan", "p.df"]).failure();
-    assert!(r.stderr.contains(MSG), "{}", r.stderr);
-    for want in [
-        r#""type":"net.vpc""#,
-        r#""addr":"other""#,
-        r#""path":"id""#,
-        r#""from":"net.subnet.a""#,
-        r#""at":"p.df:4:47""#,
-    ] {
-        assert!(r.stderr.contains(want), "{want}: {}", r.stderr);
-    }
+    // What holds the reference, what it reads, and where (R-120).
+    assert!(
+        r.stderr.contains(&format!(
+            "{MSG}: net.subnet a reads net.vpc other.id, and nothing derives net.vpc other \
+             (p.df:4:47)"
+        )),
+        "{}",
+        r.stderr
+    );
     assert!(r.stderr.contains("blocked by constraints"), "{}", r.stderr);
 }
 
@@ -77,7 +76,7 @@ use fake
     assert!(r.stderr.contains(MSG), "{}", r.stderr);
     assert!(
         r.stderr
-            .contains(r#""from":"net.vpc_peering.peer_main_peer""#),
+            .contains("net.vpc_peering peer_main_peer reads net.vpc main.id"),
         "{}",
         r.stderr
     );

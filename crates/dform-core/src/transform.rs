@@ -1131,6 +1131,7 @@ fn desugar_resources(program: &Program) -> Result<Program> {
         match stmt {
             Stmt::Resource(r) => {
                 reports.extend(unread_field_reports(r, &mut n));
+                reports.extend(not_planned_report(r));
                 out.extend(resource_to_stmts(r.clone())?);
             }
             _ => out.push(stmt.clone()),
@@ -1296,6 +1297,53 @@ fn unread_field_reports(r: &Resource, n: &mut usize) -> Vec<Stmt> {
     }
     out
 }
+
+/// `__not_planned(T, A)`: a resource statement whose own clause holds
+/// derives no `want` row (R-120), so a read in its block found nothing:
+/// an input of its copy with no value, a `let` with no row, another
+/// resource's attribute no rule sets. The plan lists it with why
+/// (`zset::not_planned`) instead of leaving it out silently.
+///
+/// ```text
+/// __not_planned(T, A) :- Clause, not want(T, A).
+/// ```
+///
+/// `Clause` is the block's body without its field reads: its `where`,
+/// its guards, a copy's gate and the name's holes. A clause that does
+/// not hold holds the block back on purpose, quietly. A statement whose
+/// clause needs a read to bind it, or whose name only a read binds, has
+/// no report: what it would name is not known.
+fn not_planned_report(r: &Resource) -> Option<Stmt> {
+    let body = r.body.clone().unwrap_or_default();
+    let clause: Vec<Lit> = body
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| !r.reads.contains(i))
+        .map(|(_, l)| l.clone())
+        .collect();
+    let bound = bound_by(&clause.iter().collect::<Vec<_>>());
+    let free = |vars: BTreeMap<String, usize>| vars.keys().any(|v| !bound.contains(v));
+    if clause.iter().any(|l| free(count_vars_in_lit(l)))
+        || free(count_vars_in_term(&Term::List(vec![
+            r.typ.clone(),
+            r.name.clone(),
+        ])))
+    {
+        return None;
+    }
+    let mut body = clause;
+    body.push(Lit::Not(atom("want", vec![r.typ.clone(), r.name.clone()])));
+    Some(Stmt::Rule(RuleStmt {
+        head: Atom {
+            span: r.span,
+            ..atom(NOT_PLANNED, vec![r.typ.clone(), r.name.clone()])
+        },
+        body,
+    }))
+}
+
+/// The relation of [`not_planned_report`].
+pub const NOT_PLANNED: &str = "__not_planned";
 
 /// The variables `lits` bind: every variable of a positive literal outside
 /// a function's arguments, and through `=`, a side whose variables are
@@ -1846,6 +1894,10 @@ fn dangling_ref_deny(head: &Atom, read: &Atom, path: &str, mut body: Vec<Lit>) -
         ("path".to_string(), str_term(path)),
         ("from".to_string(), from),
     ]);
+    if head.pred == "arg" && head.args.len() == 5 {
+        ctx.insert("from_type".to_string(), head.args[0].clone());
+        ctx.insert("from_name".to_string(), head.args[1].clone());
+    }
     if let Some(at) = diag::place(head.span) {
         ctx.insert("at".to_string(), str_term(&at));
     }

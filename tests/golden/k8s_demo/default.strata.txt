@@ -1,6 +1,6 @@
 exit: ok
 -- stdout --
-== examples/k8s/stacks/k8s_demo.df: 100 nodes, 925 edges (222 negative), 7 strata
+== examples/k8s/stacks/k8s_demo.df: 101 nodes, 931 edges (226 negative), 7 strata
 stratum  node
 0        (arg, k8s.config_map, data)
 0        (want, k8s.config_map)
@@ -58,6 +58,7 @@ stratum  node
 1        (arg, k8s.stateful_set, spec)
 1        (arg, k8s.stateful_set, status)
 1        (attr, k8s.config_map, data)
+1        __not_planned
 1        deny
 2        (attr, k8s.cron_job, metadata)
 2        (attr, k8s.cron_job, spec)
@@ -102,5 +103,5 @@ stratum  node
 5        (arg, k8s.deployment, spec)
 5        __ref_dep
 6        (attr, k8s.deployment, spec)
-(100 rows)
+(101 rows)
 -- stderr --

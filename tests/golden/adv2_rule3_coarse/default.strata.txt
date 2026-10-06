@@ -1,6 +1,6 @@
 exit: ok
 -- stdout --
-== tests/fixtures/adversarial/adv2_rule3_coarse.df: 60 nodes, 117 edges (47 negative), 5 strata
+== tests/fixtures/adversarial/adv2_rule3_coarse.df: 61 nodes, 121 edges (51 negative), 5 strata
 stratum  node
 0        (arg, google.client_config, access_token)
 0        (arg, google.container_cluster, name)
@@ -61,6 +61,7 @@ stratum  node
 4        (attr, google.container_node_pool, cluster)
 4        (attr, google.container_node_pool, id)
 4        (attr, google.container_node_pool, zone)
+4        __not_planned
 4        deny
-(60 rows)
+(61 rows)
 -- stderr --

@@ -795,6 +795,7 @@ fn gate(
             }
             Stmt::Resource(mut r) => {
                 r.body.get_or_insert_with(Vec::new).insert(0, on.clone());
+                r.reads = r.reads.start + 1..r.reads.end + 1;
                 Stmt::Resource(r)
             }
             other => other,

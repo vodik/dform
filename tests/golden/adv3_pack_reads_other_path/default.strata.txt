@@ -1,6 +1,6 @@
 exit: ok
 -- stdout --
-== tests/fixtures/adversarial/adv3_pack_reads_other_path.df: 48 nodes, 91 edges (31 negative), 4 strata
+== tests/fixtures/adversarial/adv3_pack_reads_other_path.df: 49 nodes, 92 edges (32 negative), 4 strata
 stratum  node
 0        (arg, iam.policy, name)
 0        (want, compute.vm)
@@ -34,6 +34,7 @@ stratum  node
 1        (arg, net.vpc, id)
 1        (arg, net.vpc_peering, id)
 1        (attr, iam.policy, name)
+1        __not_planned
 2        (arg, iam.policy, statements)
 2        (attr, compute.vm, id)
 2        (attr, db.postgres, endpoint)
@@ -50,5 +51,5 @@ stratum  node
 2        (attr, net.vpc, id)
 2        (attr, net.vpc_peering, id)
 3        (attr, iam.policy, statements)
-(48 rows)
+(49 rows)
 -- stderr --

@@ -1,6 +1,6 @@
 exit: ok
 -- stdout --
-== examples/aws/stacks/aws_demo.df: 290 nodes, 804 edges (285 negative), 5 strata
+== examples/aws/stacks/aws_demo.df: 291 nodes, 811 edges (292 negative), 5 strata
 stratum  node
 0        (arg, aws.db_instance, instance_class)
 0        (arg, aws.db_instance, password)
@@ -152,6 +152,7 @@ stratum  node
 1        (attr, aws.db_instance, skip_final_snapshot)
 1        (attr, aws.subnet, cidr_block)
 1        (attr, aws.vpc, tags)
+1        __not_planned
 1        deny
 2        (attr, aws.db_instance, address)
 2        (attr, aws.db_instance, allocated_storage)
@@ -292,5 +293,5 @@ stratum  node
 4        (attr, aws.instance, vpc_security_group_ids)
 4        (attr, aws.security_group, vpc_id)
 4        (attr, aws.subnet, vpc_id)
-(290 rows)
+(291 rows)
 -- stderr --

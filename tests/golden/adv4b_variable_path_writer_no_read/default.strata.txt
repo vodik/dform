@@ -1,6 +1,6 @@
 exit: ok
 -- stdout --
-== tests/fixtures/adversarial/adv4b_variable_path_writer_no_read.df: 51 nodes, 137 edges (65 negative), 4 strata
+== tests/fixtures/adversarial/adv4b_variable_path_writer_no_read.df: 52 nodes, 138 edges (66 negative), 4 strata
 stratum  node
 0        (arg, net.vpc, cidr)
 0        (arg, net.vpc, tags)
@@ -37,6 +37,7 @@ stratum  node
 1        (arg, net.vpc_peering, id)
 1        (attr, net.vpc, cidr)
 1        (attr, net.vpc, tags)
+1        __not_planned
 2        (attr, compute.vm, id)
 2        (attr, db.postgres, endpoint)
 2        (attr, db.postgres, id)
@@ -53,5 +54,5 @@ stratum  node
 2        (attr, net.vpc_peering, id)
 2        attr
 3        deny
-(51 rows)
+(52 rows)
 -- stderr --

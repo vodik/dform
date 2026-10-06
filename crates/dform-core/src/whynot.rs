@@ -110,6 +110,38 @@ pub fn why_not(
     Ok(redact.text(&out))
 }
 
+/// Why the program derives no resource `typ` `name`, on one line (R-120):
+/// the deepest condition [`why_not`] names (`input one.namespace is not
+/// set`), for the plan's `not planned` rows.
+pub fn reason(typ: &str, name: &str, res: &EvalResult, redact: &Redactor) -> Option<String> {
+    let want = Atom {
+        pred: "want".into(),
+        args: vec![
+            Term::Val(Value::Str(typ.into())),
+            Term::Val(Value::Str(name.into())),
+        ],
+        record: None,
+        span: Default::default(),
+    };
+    let w = WhyNot {
+        res,
+        redact,
+        printer: Printer {
+            circuit: &res.circuit,
+            redact,
+            all: false,
+        },
+    };
+    let mut out = String::new();
+    w.explain(&want, "", 0, &mut BTreeSet::new(), &mut out)
+        .ok()?;
+    let line = out
+        .lines()
+        .map(str::trim)
+        .rfind(|l| !l.starts_with("nearest: ") && !l.ends_with(" has no rows"))?;
+    Some(redact.text(line))
+}
+
 struct WhyNot<'a> {
     res: &'a EvalResult,
     redact: &'a Redactor,
@@ -398,9 +430,7 @@ impl WhyNot<'_> {
                 _ => self.atom_text(a),
             },
             ("attr", [t, n, p, _]) => match (s(t), s(n), s(p)) {
-                (Some(t), Some(n), Some(p)) => {
-                    crate::report::attribute(&crate::ir::Address { typ: t, name: n }, &p)
-                }
+                (Some(t), Some(n), Some(p)) => attribute_text(t, n, &p),
                 _ => self.atom_text(a),
             },
             _ => self.atom_text(a),
@@ -430,13 +460,7 @@ impl WhyNot<'_> {
             ],
         ) = (a.pred.as_str(), a.args.as_slice())
         {
-            let addr = crate::report::attribute(
-                &crate::ir::Address {
-                    typ: t.clone(),
-                    name: n.clone(),
-                },
-                p,
-            );
+            let addr = attribute_text(t.clone(), n.clone(), p);
             return match v {
                 Term::Val(v) => format!("{addr} = {}", self.redact.surface(v)),
                 _ => addr.to_string(),
@@ -507,6 +531,16 @@ impl WhyNot<'_> {
             .map(|(k, v)| format!("{} = {}", source_name(k), self.redact.surface(v)))
             .collect::<Vec<_>>()
             .join(", ")
+    }
+}
+
+/// An attribute by its address and path; an input's cell as the program
+/// names the input, `input one.namespace` of the copy `one` (R-120).
+fn attribute_text(typ: String, name: String, p: &str) -> String {
+    match typ == crate::modules::INPUT {
+        true if name.is_empty() => format!("input {p}"),
+        true => format!("input {name}.{p}"),
+        false => crate::report::attribute(&crate::ir::Address { typ, name }, p),
     }
 }
 
