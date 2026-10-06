@@ -807,9 +807,10 @@ use k8s { source = "bin/dform-provider-k8s" }        # an executable
   and the cluster's document, written when the program's settings
   configure the cluster). A kind in neither waits on the provider for its
   schema (`later`) until the settings arrive; from that Configure on the
-  provider serves its cluster's kinds, and dform plans such an object
-  against it, untyped in dform's own schema until the next run loads the
-  cache.
+  provider serves its cluster's kinds, and dform asks it then for the
+  kinds the run names that no schema had, so the rest of the run plans
+  them typed (a computed `metadata.uid` another object reads, a sensitive
+  field), as the next run, loading the cache, does.
 - With no cluster in reach, or `DFORM_K8S_OFFLINE` set, the provider is
   offline: the schema is the checked-in snapshot of Kubernetes v1.36.0's
   document (`crates/dform-k8s/openapi-snapshot.json`, every kind of the

@@ -263,3 +263,54 @@ fn without_a_wait_the_apply_stops_naming_the_provider() {
     );
     assert!(!r.stdout.contains("configured after"), "{}", r.stdout);
 }
+
+/// A kind the provider serves only once the program configures it (a
+/// cluster's CRD; the mock's `schemas` setting plays the cache the k8s
+/// provider writes at that Configure) is learned by dform at the boundary:
+/// tick 2 plans it with its schema, so another object reads its computed
+/// `metadata.uid` once it exists, as the next run would. Without it, the
+/// apply failed: "does not set metadata.uid".
+#[test]
+fn a_kind_served_after_the_boundary_is_planned_with_its_schema() {
+    let s = scratch("tick2-learns-schema");
+    s.write(
+        "crd.df",
+        "type_provider(k8s.example.io.v1.token, \"k8s\")\n\
+         type_attr(k8s.example.io.v1.token, \"metadata.name\", \"string\", [\"id\"])\n\
+         type_attr(k8s.example.io.v1.token, \"metadata.namespace\", \"string\", [])\n\
+         type_attr(k8s.example.io.v1.token, \"metadata.uid\", \"string\", [\"computed\", \"id\"])\n\
+         type_mint(k8s.example.io.v1.token, \"metadata.uid\", \"uid-{name}\")\n\
+         type_attr(k8s.example.io.v1.token, \"spec.value\", \"string\", [\"sensitive\"])\n",
+    );
+    s.write(
+        "p.df",
+        &format!(
+            "{}resource k8s.example.io.v1.token t {{\n  metadata.name = \"t\"\n  \
+             metadata.namespace = ns.metadata.name\n  spec.value = \"TOKEN-VALUE\"\n}}\n\
+             resource k8s.config_map c {{\n  metadata.name = \"c\"\n  \
+             metadata.namespace = ns.metadata.name\n  data = {{ uid: t.metadata.uid }}\n}}\n",
+            PROG.replace(
+                "use k8s { kubeconfig = kc }",
+                "use k8s { kubeconfig = kc, schemas = [\"crd.df\"] }"
+            )
+        ),
+    );
+    let r = dev(&s, &["apply", "--yes", "p.df"]).success();
+    let (_, tick2) = r
+        .stdout
+        .split_once("provider k8s: configured after tick 1: ")
+        .unwrap_or_else(|| panic!("{}", r.stdout));
+    assert!(
+        tick2.contains("  + k8s.example.io.v1.token t  p.df:8\n")
+            && tick2.contains("      spec.value = (sensitive)\n"),
+        "{}",
+        r.stdout
+    );
+    assert!(!tick2.contains("TOKEN-VALUE"), "{}", r.stdout);
+    assert!(r.stdout.ends_with("apply: complete\n"), "{}", r.stdout);
+    let w: serde_json::Value = serde_json::from_str(&s.read("w.json")).unwrap();
+    assert_eq!(
+        w["resources"]["k8s.config_map::c"]["attrs"]["data"]["uid"], "uid-t",
+        "{w}"
+    );
+}

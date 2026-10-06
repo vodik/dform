@@ -476,6 +476,9 @@ impl Evaluator {
         let externs = &self.externs;
         let program = &self.program;
         let mut extra = self.base_extra.clone();
+        // The types a provider configured in this run serves beyond the
+        // schema the run loaded (a cluster's CRDs): their catalog too.
+        extra.extend(backend.learned());
         extra.extend(executor::withhold(backend.world_facts(st)?, withheld));
         let (res, mut violations) = if more.is_empty() {
             let (mut res, mut violations, mut resumable) =
@@ -489,6 +492,7 @@ impl Evaluator {
                 // answered "not yet": ask it again.
                 externs.forget_not_yet();
                 extra = self.base_extra.clone();
+                extra.extend(backend.learned());
                 extra.extend(executor::withhold(backend.world_facts(st)?, withheld));
                 (res, violations, resumable) =
                     externs.eval_resumable(program, &extra, zset::POLICY_INPUTS)?;

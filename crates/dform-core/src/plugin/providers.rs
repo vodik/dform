@@ -192,13 +192,42 @@ pub enum ProviderWait {
 
 /// What the providers' Schema calls answered.
 struct Loaded {
-    schema: Schema,
+    /// The schema as loaded, then each extension of it in the run.
+    schema: Generation,
+    /// The catalog facts of the types learned so, for the evaluation.
+    learned: RefCell<Vec<Atom>>,
     /// Type -> the provider serving it.
     owner: BTreeMap<String, usize>,
     /// Extern predicate -> the provider answering it.
     externs: BTreeMap<String, usize>,
     /// The types asked for; `None`: every one.
     scope: Option<BTreeSet<String>>,
+}
+
+/// The providers' schema, and what a provider configured from the
+/// program's settings later serves beyond it ([`Providers::learn`]): each
+/// extension a new generation after the last, none changed once set, so a
+/// schema read earlier in the run stays as it was read.
+struct Generation {
+    schema: Schema,
+    next: OnceCell<Box<Generation>>,
+}
+
+impl Generation {
+    fn new(schema: Schema) -> Generation {
+        Generation {
+            schema,
+            next: OnceCell::new(),
+        }
+    }
+
+    fn latest(&self) -> &Generation {
+        let mut g = self;
+        while let Some(n) = g.next.get() {
+            g = n;
+        }
+        g
+    }
 }
 
 /// Configure a link: the account its credentials reach, if it tells.
@@ -450,6 +479,10 @@ impl Providers {
             drop(accounts);
             self.settings.borrow_mut().insert(i, settings);
             self.awaiting.borrow_mut().remove(&i);
+            if self.loaded.get().is_some() {
+                self.learn(i)
+                    .with_context(|| format!("the schema of provider {name}, configured"))?;
+            }
             changed.push(name.clone());
         }
         if !changed.is_empty() {
@@ -924,7 +957,8 @@ impl Providers {
             schema = schema.merge(s)?;
         }
         let loaded = Loaded {
-            schema,
+            schema: Generation::new(schema),
+            learned: RefCell::new(Vec::new()),
             owner,
             externs,
             scope: scope.cloned(),
@@ -941,8 +975,77 @@ impl Providers {
             .expect("internal: Providers::load_schema before the schema is read")
     }
 
+    /// The providers' schema as the run knows it now: as loaded, and what
+    /// a provider configured since serves ([`Providers::learn`]).
     pub fn schema(&self) -> &Schema {
-        &self.loaded().schema
+        &self.loaded().schema.latest().schema
+    }
+
+    /// The catalog facts of the types learned since the schema was loaded
+    /// ([`Providers::learn`]), for each evaluation after.
+    pub fn learned(&self) -> Vec<Atom> {
+        self.loaded().learned.borrow().clone()
+    }
+
+    /// The kinds the provider `i`, configured now from the program's
+    /// settings, serves that no schema declared when the run loaded it (a
+    /// cluster's CRDs, which the provider cached at that Configure,
+    /// R-110): of the types the run names (every one, with no scope),
+    /// asked for and added to dform's schema for the rest of the run, so a
+    /// later tick plans them typed, as the next run would.
+    fn learn(&self, i: usize) -> Result<()> {
+        let l = self.loaded();
+        let known = self.schema();
+        let missing = l.scope.as_ref().map(|scope| {
+            scope
+                .iter()
+                .filter(|t| !known.knows_type(t))
+                .filter(|t| {
+                    t.split_once('.')
+                        .is_some_and(|(ns, _)| self.link_for(ns) == Some(i))
+                })
+                .cloned()
+                .collect::<Vec<_>>()
+        });
+        if missing.as_ref().is_some_and(Vec::is_empty) {
+            return Ok(());
+        }
+        let req = pb::SchemaRequest {
+            types: missing.clone().map(|names| pb::TypeFilter { names }),
+        };
+        let resp: pb::SchemaResponse = self.links[i].borrow_mut().call(req)?;
+        let new = |t: &str| {
+            !known.knows_type(t) && missing.as_ref().is_none_or(|m| m.iter().any(|x| x == t))
+        };
+        let facts = resp
+            .facts
+            .iter()
+            .map(wire::from_fact)
+            .collect::<Result<Vec<Atom>>>()?
+            .into_iter()
+            .filter(|f| match f.args.first() {
+                Some(Term::Val(Value::Str(t))) => new(t),
+                _ => false,
+            })
+            .collect::<Vec<_>>();
+        if facts.is_empty() {
+            return Ok(());
+        }
+        let s = Schema::from_facts(&facts)
+            .with_context(|| format!("the schema of provider {}", self.names[i]))?;
+        let merged = known.clone().merge(s)?;
+        if l.schema
+            .latest()
+            .next
+            .set(Box::new(Generation::new(merged)))
+            .is_err()
+        {
+            bail!("internal: the providers' schema extended twice at once");
+        }
+        l.learned
+            .borrow_mut()
+            .extend(facts.into_iter().filter(|f| f.pred != "type_doc"));
+        Ok(())
     }
 
     /// The providers' schema facts (`type_attr`, `type_list_key`,
@@ -958,9 +1061,10 @@ impl Providers {
         {
             bail!("internal: the schema was loaded for fewer types than the run names");
         }
+        let schema = self.schema();
         let mut facts = match named {
-            Some(named) => l.schema.facts_for(named),
-            None => l.schema.facts.clone(),
+            Some(named) => schema.facts_for(named),
+            None => schema.facts.clone(),
         };
         facts.retain(|f| f.pred != "type_doc");
         Ok(facts)

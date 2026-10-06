@@ -269,6 +269,14 @@ impl FakeCloud {
         for n in &specs {
             schema = schema.merge(dform_core::schema::load_provider(n)?)?;
         }
+        // The kinds a cluster serves beyond them (its CRDs): the schemas
+        // the program's settings name, served once it configures the
+        // provider (R-110), as a real cluster's are once it is reached.
+        if let Some(settings) = config.get("settings") {
+            for n in strings(settings, "schemas")? {
+                schema = schema.merge(dform_core::schema::load_provider(&n)?)?;
+            }
+        }
         self.schema = schema;
         self.answers = dform_core::externs::load_answers(&specs)?;
         self.world_path = path_of(config, "world")?;
