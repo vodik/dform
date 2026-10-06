@@ -1,9 +1,9 @@
-net.vpc["main/vpc"].tags = {component: "network", env: "prod", team: "platform"}
+net.vpc["main.vpc"].tags = {component: "network", env: "prod", team: "platform"}
   merged from 2 contributions
   ├─ {team: "platform"}
   │    examples/demo/baseline.df:10  set r.tags = { team: "platform" } where r in resource   (use baseline)
-  │    with r = net.vpc["main/vpc"]
-  │    └─ net.vpc["main/vpc"]
+  │    with r = net.vpc["main.vpc"]
+  │    └─ net.vpc["main.vpc"]
   │         examples/demo/network.df:19  resource net.vpc vpc { .. }   (instance network.vpc main)
   │         ├─ input main.vpc_net = 10.20.0.0/16
   │         │    merged from 1 contribution

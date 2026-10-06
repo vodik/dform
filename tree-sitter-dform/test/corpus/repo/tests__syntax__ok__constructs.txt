@@ -78,11 +78,11 @@ p(x_) where {
 r(v) where v = gke.static_ips."pngu-grpc".type
 s(v) where q(x_), o = { a: { b: x_ } }, v = o.a.b
 t(l) where l = [ x_ | q(x_) ], 1 in l, 2 not in l
-u(a_) where ref(net.vpc, "main/vpc", "id") = a_
-adopt(net.vpc["main/vpc"], "vpc-123")
-moved(net.vpc, "old/vpc", net.vpc["main/vpc"])
-lifecycle(net.vpc["main/vpc"], "prevent_destroy")
-ignore_changes(net.vpc["main/vpc"], "tags.owner")
+u(a_) where ref(net.vpc, "main.vpc", "id") = a_
+adopt(net.vpc["main.vpc"], "vpc-123")
+moved(net.vpc, "old.vpc", net.vpc["main.vpc"])
+lifecycle(net.vpc["main.vpc"], "prevent_destroy")
+ignore_changes(net.vpc["main.vpc"], "tags.owner")
 counts(n_) where n_ = count(x_), q(x_)
 deny "q must not be empty" where not q(1)
 v("input", "output", "settings", "type") where input("env", _), output("k", _)

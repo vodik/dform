@@ -7,34 +7,34 @@ tick 1  7 changes, applies now
   + compute.vm["bastion"]                          stacks/dform.df:93
       private_ip = "10.90.0.21"                    inet.host(inet(cidrs.main), 20)
       tags.team = "platform"                       baseline.df:10
-  + iam.policy["identity/app_policy"]              identity.df:8  (use identity)
+  + iam.policy["identity.app_policy"]              identity.df:8  (use identity)
       name = "app"
       tags.team = "platform"                       baseline.df:10
-  + iam.role["identity/app_role"]                  identity.df:6  (use identity)
+  + iam.role["identity.app_role"]                  identity.df:6  (use identity)
       assume.principals[0] = "k8s.serviceaccount.app"
       name = "app"
       tags.team = "platform"                       baseline.df:10
-  + iam.role_policy_attachment["identity/attach"]  identity.df:14  (use identity)
-      policy = ?iam.policy["identity/app_policy"]
-      role = ?iam.role["identity/app_role"]
+  + iam.role_policy_attachment["identity.attach"]  identity.df:14  (use identity)
+      policy = ?iam.policy["identity.app_policy"]
+      role = ?iam.role["identity.app_role"]
       tags.team = "platform"                       baseline.df:10
   + network.vpc["main"]
-    + net.vpc["main/vpc"]                          network.df:19
+    + net.vpc["main.vpc"]                          network.df:19
         cidr = "10.90.0.0/16"                      vpc_net = inet(cidrs.main)   stacks/dform.df:51
         tags.component = "network"                 { env, component: "network" }
         tags.env = "dev"                           { env, component: "network" }
         tags.team = "platform"                     baseline.df:10
-    + net.subnet["main/private-us-test-1a"]        network.df:24  with z = "us-test-1a"
+    + net.subnet["main.private-us-test-1a"]        network.df:24  with z = "us-test-1a"
         cidr = "10.90.0.0/20"                      inet.subnet(vpc.cidr, 4, zone_index[z])
         tags.team = "platform"                     baseline.df:10
         visibility = "private"
-        vpc = ?net.vpc["main/vpc"]
+        vpc = ?net.vpc["main.vpc"]
         zone = "us-test-1a"
-    + net.subnet["main/private-us-test-1b"]        network.df:24  with z = "us-test-1b"
+    + net.subnet["main.private-us-test-1b"]        network.df:24  with z = "us-test-1b"
         cidr = "10.90.16.0/20"                     inet.subnet(vpc.cidr, 4, zone_index[z])
         tags.team = "platform"                     baseline.df:10
         visibility = "private"
-        vpc = ?net.vpc["main/vpc"]
+        vpc = ?net.vpc["main.vpc"]
         zone = "us-test-1b"
 
 apply: tick 1 now

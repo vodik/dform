@@ -6,4 +6,4 @@ resource net.vpc_peering peer {
   requester_vpc_id = a.id
 }
 
-deny "prod db must be multi_az" where not db.postgres["database/db"].multi_az
+deny "prod db must be multi_az" where not db.postgres["database.db"].multi_az

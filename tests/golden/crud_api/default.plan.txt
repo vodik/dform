@@ -60,15 +60,15 @@ tick 1  8 changes, applies now
 
 later   changes this plan cannot count yet
   app["blue"]                                       if instance app blue derives
-    k8s.deployment["blue/deploy"]
-    k8s.horizontal_pod_autoscaler["blue/hpa"]
-    k8s.pod_disruption_budget["blue/pdb"]
-    k8s.network_policy["blue/allow_http"]
+    k8s.deployment["blue.deploy"]
+    k8s.horizontal_pod_autoscaler["blue.hpa"]
+    k8s.pod_disruption_budget["blue.pdb"]
+    k8s.network_policy["blue.allow_http"]
   app["green"]                                      if instance app green derives
-    k8s.deployment["green/deploy"]
-    k8s.horizontal_pod_autoscaler["green/hpa"]
-    k8s.pod_disruption_budget["green/pdb"]
-    k8s.network_policy["green/allow_http"]
+    k8s.deployment["green.deploy"]
+    k8s.horizontal_pod_autoscaler["green.hpa"]
+    k8s.pod_disruption_budget["green.pdb"]
+    k8s.network_policy["green.allow_http"]
   k8s.service["api"]                                stacks/crud_api.df:190  if serving(_) derives
   deny "cutover to a color with unready pods"       undetermined until tick 2
   deny "migration failed; the rollout is held"      undetermined until tick 2

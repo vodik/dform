@@ -198,7 +198,7 @@ deny "a database must not be public" { database: pg } where pg in db.postgres, p
 # A component is a block of resources with named inputs, made once per
 # `instance`, as Terraform's modules are. Below, a network like sections 1
 # to 3's is made twice, blue and green; a copy's resources are named for
-# their instance (`net.vpc["blue/vpc"]`).
+# their instance (`net.vpc["blue.vpc"]`).
 #
 # Two things differ from Terraform. A copy's resources are not hidden
 # behind its outputs: section 5's tag rule reached them, and section 4's
@@ -206,7 +206,7 @@ deny "a database must not be public" { database: pg } where pg in db.postgres, p
 # attribute can have several authors: the component's vpc writes one tag,
 # the policy another, and the vpc has both:
 #
-#   $ dform query 'net.vpc["blue/vpc"].tags'
+#   $ dform query 'net.vpc["blue.vpc"].tags'
 #   {component: "network", team: "shop"}
 #
 # In Terraform an attribute has one author, and a policy's tag has to be
@@ -242,7 +242,7 @@ instance network green { cidr = "10.2.0.0/16" }
 #
 #   $ dform plan tour env=prod
 #   + net.vpc_peering["main-blue"]
-#     accepter_vpc = ?net.vpc["blue/vpc"]
+#     accepter_vpc = ?net.vpc["blue.vpc"]
 #     requester_vpc = ?net.vpc["main"]
 #
 # A third spoke is an instance and a `spoke` line: its peering, and the
@@ -308,7 +308,7 @@ resource net.route "${a}-to-${b}" { from = a, to = b, destination = dest } where
 #
 #   $ dform apply tour env=prod
 #   tick 2:
-#   + iam.policy["connect-orders.db.fake"]
+#   + iam.policy["\"connect-orders.db.fake\""]
 #   apply: complete
 #
 # Nobody approves a count of "unknown". With `--yes`, nobody reads the

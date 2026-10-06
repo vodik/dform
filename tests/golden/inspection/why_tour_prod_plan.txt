@@ -12,7 +12,7 @@ tick 1  19 changes, applies now
       because stacks/tour.df:250  hub("main")
       because stacks/tour.df:247  spoke("blue")
       because stacks/tour.df:229  instance network green
-      because stacks/tour.df:216  output green.vpc = "green/vpc"   (instance network green)
+      because stacks/tour.df:216  output green.vpc = "green.vpc"   (instance network green)
       because stacks/tour.df:229  input green.cidr = 10.2.0.0/16
   + net.route["blue-to-main"]                 stacks/tour.df:283
       destination = "10.0.0.0/16"
@@ -33,7 +33,7 @@ tick 1  19 changes, applies now
       because stacks/tour.df:250  hub("main")
       because stacks/tour.df:248  spoke("green")
       because stacks/tour.df:227  instance network blue
-      because stacks/tour.df:216  output blue.vpc = "blue/vpc"   (instance network blue)
+      because stacks/tour.df:216  output blue.vpc = "blue.vpc"   (instance network blue)
       because stacks/tour.df:227  input blue.cidr = 10.1.0.0/16
   + net.route["green-to-main"]                stacks/tour.df:283
       destination = "10.0.0.0/16"
@@ -53,7 +53,7 @@ tick 1  19 changes, applies now
       because stacks/tour.df:247  spoke("blue")
       because stacks/tour.df:250  hub("main")
       because stacks/tour.df:227  instance network blue
-      because stacks/tour.df:216  output blue.vpc = "blue/vpc"   (instance network blue)
+      because stacks/tour.df:216  output blue.vpc = "blue.vpc"   (instance network blue)
       because stacks/tour.df:227  input blue.cidr = 10.1.0.0/16
   + net.route["main-to-green"]                stacks/tour.df:283
       destination = "10.2.0.0/16"
@@ -64,50 +64,50 @@ tick 1  19 changes, applies now
       because stacks/tour.df:248  spoke("green")
       because stacks/tour.df:250  hub("main")
       because stacks/tour.df:229  instance network green
-      because stacks/tour.df:216  output green.vpc = "green/vpc"   (instance network green)
+      because stacks/tour.df:216  output green.vpc = "green.vpc"   (instance network green)
       because stacks/tour.df:229  input green.cidr = 10.2.0.0/16
   + network["blue"]
-    + net.vpc["blue/vpc"]                     stacks/tour.df:218
+    + net.vpc["blue.vpc"]                     stacks/tour.df:218
         cidr = "10.1.0.0/16"                  input blue.cidr = 10.1.0.0/16   stacks/tour.df:227
         tags.component = "network"
         tags.team = "shop"                    stacks/tour.df:170
         by stacks/tour.df:218  resource net.vpc vpc { .. }   (instance network blue)
         because stacks/tour.df:227  input blue.cidr = 10.1.0.0/16
-    + net.subnet["blue/private-us-test-1a"]   stacks/tour.df:220  with z = "us-test-1a", n = 1
+    + net.subnet["blue.private-us-test-1a"]   stacks/tour.df:220  with z = "us-test-1a", n = 1
         cidr = "10.1.1.0/24"                  inet.subnet(cidr, 8, n)
         tags.team = "shop"                    stacks/tour.df:170
-        vpc = ?net.vpc["blue/vpc"]
+        vpc = ?net.vpc["blue.vpc"]
         zone = "us-test-1a"
         by stacks/tour.df:220  resource net.subnet "private-${z}" { .. } where zone(z, n)   (instance network blue)
         because stacks/tour.df:101  zone("us-test-1a", 1)
         because stacks/tour.df:227  input blue.cidr = 10.1.0.0/16
-    + net.subnet["blue/private-us-test-1b"]   stacks/tour.df:220  with z = "us-test-1b", n = 2
+    + net.subnet["blue.private-us-test-1b"]   stacks/tour.df:220  with z = "us-test-1b", n = 2
         cidr = "10.1.2.0/24"                  inet.subnet(cidr, 8, n)
         tags.team = "shop"                    stacks/tour.df:170
-        vpc = ?net.vpc["blue/vpc"]
+        vpc = ?net.vpc["blue.vpc"]
         zone = "us-test-1b"
         by stacks/tour.df:220  resource net.subnet "private-${z}" { .. } where zone(z, n)   (instance network blue)
         because stacks/tour.df:102  zone("us-test-1b", 2)
         because stacks/tour.df:227  input blue.cidr = 10.1.0.0/16
   + network["green"]
-    + net.vpc["green/vpc"]                    stacks/tour.df:218
+    + net.vpc["green.vpc"]                    stacks/tour.df:218
         cidr = "10.2.0.0/16"                  input green.cidr = 10.2.0.0/16   stacks/tour.df:229
         tags.component = "network"
         tags.team = "shop"                    stacks/tour.df:170
         by stacks/tour.df:218  resource net.vpc vpc { .. }   (instance network green)
         because stacks/tour.df:229  input green.cidr = 10.2.0.0/16
-    + net.subnet["green/private-us-test-1a"]  stacks/tour.df:220  with z = "us-test-1a", n = 1
+    + net.subnet["green.private-us-test-1a"]  stacks/tour.df:220  with z = "us-test-1a", n = 1
         cidr = "10.2.1.0/24"                  inet.subnet(cidr, 8, n)
         tags.team = "shop"                    stacks/tour.df:170
-        vpc = ?net.vpc["green/vpc"]
+        vpc = ?net.vpc["green.vpc"]
         zone = "us-test-1a"
         by stacks/tour.df:220  resource net.subnet "private-${z}" { .. } where zone(z, n)   (instance network green)
         because stacks/tour.df:101  zone("us-test-1a", 1)
         because stacks/tour.df:229  input green.cidr = 10.2.0.0/16
-    + net.subnet["green/private-us-test-1b"]  stacks/tour.df:220  with z = "us-test-1b", n = 2
+    + net.subnet["green.private-us-test-1b"]  stacks/tour.df:220  with z = "us-test-1b", n = 2
         cidr = "10.2.2.0/24"                  inet.subnet(cidr, 8, n)
         tags.team = "shop"                    stacks/tour.df:170
-        vpc = ?net.vpc["green/vpc"]
+        vpc = ?net.vpc["green.vpc"]
         zone = "us-test-1b"
         by stacks/tour.df:220  resource net.subnet "private-${z}" { .. } where zone(z, n)   (instance network green)
         because stacks/tour.df:102  zone("us-test-1b", 2)
@@ -116,22 +116,22 @@ tick 1  19 changes, applies now
       cidr = "10.0.0.0/16"
       tags.team = "shop"                      stacks/tour.df:170
       because stacks/tour.df:46  net.vpc["main"]
-  + net.vpc_peering["main-blue"]              stacks/tour.df:255  with t = "blue", v = "blue/vpc"
-      accepter_vpc = ?net.vpc["blue/vpc"]     net.vpc[v]
+  + net.vpc_peering["main-blue"]              stacks/tour.df:255  with t = "blue", v = "blue.vpc"
+      accepter_vpc = ?net.vpc["blue.vpc"]     net.vpc[v]
       requester_vpc = ?net.vpc["main"]
       tags.team = "shop"                      stacks/tour.df:170
       by stacks/tour.df:255  resource net.vpc_peering "main-${t}" { .. } where spoke(t), v = network[t].vpc
       because stacks/tour.df:227  instance network blue
       because stacks/tour.df:247  spoke("blue")
-      because stacks/tour.df:216  output blue.vpc = "blue/vpc"   (instance network blue)
-  + net.vpc_peering["main-green"]             stacks/tour.df:255  with t = "green", v = "green/vpc"
-      accepter_vpc = ?net.vpc["green/vpc"]    net.vpc[v]
+      because stacks/tour.df:216  output blue.vpc = "blue.vpc"   (instance network blue)
+  + net.vpc_peering["main-green"]             stacks/tour.df:255  with t = "green", v = "green.vpc"
+      accepter_vpc = ?net.vpc["green.vpc"]    net.vpc[v]
       requester_vpc = ?net.vpc["main"]
       tags.team = "shop"                      stacks/tour.df:170
       by stacks/tour.df:255  resource net.vpc_peering "main-${t}" { .. } where spoke(t), v = network[t].vpc
       because stacks/tour.df:229  instance network green
       because stacks/tour.df:248  spoke("green")
-      because stacks/tour.df:216  output green.vpc = "green/vpc"   (instance network green)
+      because stacks/tour.df:216  output green.vpc = "green.vpc"   (instance network green)
   + net.subnet["private-us-test-1a"]          stacks/tour.df:104  with z = "us-test-1a", n = 1
       cidr = "10.0.1.0/24"                    inet.subnet(main.cidr, 8, n)
       tags.team = "shop"                      stacks/tour.df:170
