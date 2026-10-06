@@ -39,8 +39,8 @@ fn a_read_of_a_deployment_not_applied_waits_on_it() {
     assert_eq!(r.summary(), "plan: 0 changes, 1 later", "{}", r.stdout);
     assert!(
         r.stdout.contains(
-            "later   changes this plan cannot count yet\n  \
-             waits on  stack platform[env=lab]  which this plan does not resolve\n  \
+            "later\n  \
+             waits on  stack platform[env=lab]\n  \
              + net.vpc rec  "
         ) && r
             .stdout
@@ -99,8 +99,7 @@ fn a_published_deployment_without_the_output_is_no_wait() {
     let r = s.run(&["plan", "apps"]).success();
     assert!(!r.stdout.contains("waits on  stack"), "{}", r.stdout);
     assert!(
-        r.stdout
-            .contains("not planned   statements that derive no resource\n  net.vpc rec  "),
+        r.stdout.contains("not planned\n  net.vpc rec  "),
         "{}",
         r.stdout
     );

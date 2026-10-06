@@ -498,8 +498,7 @@ fn plan_and_apply_name_the_deployment_first() {
     s.write("app.df", APP);
     let r = s.run(&["plan", "app.df"]).success();
     assert!(
-        r.stdout
-            .starts_with("deployment: app[env=staging] (env from its default)\nplan: "),
+        r.stdout.starts_with("deployment: app[env=staging]\nplan: "),
         "{}",
         r.stdout
     );
@@ -520,8 +519,7 @@ fn plan_and_apply_name_the_deployment_first() {
 
     let r = s.run(&["apply", "app.df"]).success();
     assert!(
-        r.stdout
-            .starts_with("deployment: app[env=staging] (env from its default)\n"),
+        r.stdout.starts_with("deployment: app[env=staging]\n"),
         "{}",
         r.stdout
     );

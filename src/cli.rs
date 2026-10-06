@@ -1764,13 +1764,18 @@ fn run_with(
     )?;
     let deployment = located.deployment.clone();
     // A keyed stack's plan and apply say first which deployment they are
-    // of, and which of its key values are defaults.
+    // of; `-v` adds which of its key values are defaults.
     let text_plan = matches!(cli.cmd, Cmd::Plan { json: false, .. });
     if !located.instance.key.is_empty()
         && hook.is_none()
         && (text_plan || matches!(cli.cmd, Cmd::Apply { .. }))
     {
-        println!("deployment: {}", located.instance.describe());
+        let verbose = matches!(&cli.cmd,
+            Cmd::Plan { why, .. } | Cmd::Apply { why, .. } if *why >= report::Why::How);
+        match verbose {
+            true => println!("deployment: {}", located.instance.describe()),
+            false => println!("deployment: {}", located.instance.name()),
+        }
     }
     let dep = located.dep.clone();
     // The deployment's audit log, beside its state.
@@ -2877,10 +2882,7 @@ fn run_with(
                         // tick the report is of.
                         let report = report_of(&plan, &res, &sections, tick, &[], &denies);
                         if !report.undeformed && report.changes() == 0 {
-                            println!(
-                                "tick {tick}  0 changes, now that tick {} reported",
-                                tick - 1
-                            );
+                            println!("tick {tick}  0 changes");
                         }
                     }
                     show(&plan, &res, &sections, tick, &[], &denies);

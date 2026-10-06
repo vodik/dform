@@ -39,7 +39,7 @@ resource aws.subnet "private-${availability_zone}" {
 $ dform plan
 plan: 7 changes (7 create) over 1 tick
 
-tick 1  7 changes, applies now
+tick 1  7 changes
   + aws.vpc main                   shop.df:3
       cidr_block = "10.0.0.0/16"
   + aws.subnet private-us-east-1a  shop.df:8
@@ -51,8 +51,6 @@ tick 1  7 changes, applies now
       cidr_block = "10.0.1.0/24"
       vpc = main
   ... four more
-
-apply: tick 1 now
 ```
 
 Every line of the plan says where it comes from, and only that: a
@@ -110,7 +108,7 @@ denied
 held for approval
   aws.security_group api                  security group update      shop.df:8
 
-apply: refused until the conflicts and denies above are resolved
+apply: refused  1 deny
 plan digest: sha256:4f9c1e...
 ```
 
@@ -290,10 +288,8 @@ needs the endpoint's text, which only exists once the database does, so
 how many policies there will be is not known until the first tick runs:
 
 ```
-later   changes this plan cannot count yet
+later
   aws.iam_policy "connect-${host}"  shop.df:31  waits on orders.endpoint
-
-apply: tick 1 now; `later` is planned again when tick 1 reports, and apply asks before what it adds
 ```
 
 Apply then runs tick 1, learns the endpoint, prints tick 2's plan with
@@ -302,20 +298,20 @@ the policy's real name, and asks again before making it:
 ```
 plan: 1 change (1 create) over 1 tick
 
-tick 2  1 change, now that tick 1 reported
+tick 2  1 change
   + aws.iam_policy "connect-orders.cx3k.us-east-1.rds.amazonaws.com"  shop.df:31
       policy.Statement[0].Action = "rds-db:connect"
       policy.Statement[0].Resource = "orders.cx3k.us-east-1.rds.amazonaws.com"
 
-apply: tick 2 now
 Apply tick 2 to shop[env=prod]? [y/N]
 ```
 
-You never approve a count of "unknown". An unattended apply (`--yes`,
-or a plan file in CI) goes further only through ticks the plan
-enumerated; at a tick that would add something nobody printed, it stops
-with the state consistent and says to run apply again, which plans the
-rest with the real values in front of a reviewer.
+You never approve a count of "unknown": each tick is asked for once its
+plan has names, at tick 2, 3, 4 as needed, and `--yes` answers for you.
+A plan file in CI applies only what it showed; at a tick that would add
+something nobody printed, it stops with the state consistent and says to
+run apply again, which plans the rest with the real values in front of a
+reviewer.
 
 **Rules recurse.** Which VPCs can reach which, through a transit hub, is
 a path of any length. Routes for every pair are three lines, and they
@@ -800,7 +796,8 @@ deployment of a keyed stack, `dform plan shop env=prod`.
 **plan** prints what will change, grouped by tick. Tick 1 applies now;
 each later tick names the values it waits on; `later` lists the rules
 that may add changes once a value is known, as the rule, never as a
-count; the last line says what apply will do. A plan line is one of two
+count. A last line, `apply: refused  1 deny`, appears only when there
+is something to decide. A plan line is one of two
 shapes: a change, `+ aws.subnet private-us-east-1a  shop.df:8`, its
 address as the source names it with the file and line that made it, or
 an attribute, `cidr_block = "10.0.0.0/24"`, followed by a file and line

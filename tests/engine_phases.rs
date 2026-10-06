@@ -6,7 +6,7 @@ use common::{Scratch, repo};
 
 const GKE_PLAN: &str = r#"plan: 6 changes (6 create) over 2 ticks, 1 undetermined
 
-tick 1  3 changes, applies now
+tick 1  3 changes
   + google.compute_subnetwork gke_subnet            stacks/gke_two_phase.df:38
       ip_cidr_range = "10.141.76.0/22"              stacks/gke_two_phase.df:28
       name = "renfry-dev-gke-subnet"
@@ -29,7 +29,7 @@ tick 1  3 changes, applies now
       region = "us-east1"
       subnetwork_id = gke_subnet
 
-tick 2  3 changes, after tick 1 reports
+tick 2  3 changes
   waits on  pngu.ca_certificate
             pngu.endpoint
   + k8s.deployment api                              stacks/gke_two_phase.df:78
@@ -42,11 +42,9 @@ tick 2  3 changes, after tick 1 reports
       data.password = (sensitive)
       namespace = "pngu"
 
-later   changes this plan cannot count yet
+later
   google.container_node_pool "np-${z}"              stacks/gke_two_phase.df:90  waits on pngu.zones
-  deny "cluster must be in at least two zones"      undetermined until tick 2
-
-apply: tick 1 now, then tick 2 when tick 1 reports; `later` is planned again when tick 1 reports, and apply asks before what it adds
+  deny "cluster must be in at least two zones"      stacks/gke_two_phase.df:99  until tick 2
 "#;
 
 /// Three definite, three pending on the kubernetes provider's configuration,
@@ -91,7 +89,7 @@ fn apply_then_replan_is_undeformed() {
     let again = run("plan");
     assert_eq!(
         again.stdout,
-        "deployment: dform[env=staging] (env from its default)\nstack dform is up to date\n"
+        "deployment: dform[env=staging]\nstack dform is up to date\n"
     );
 }
 
@@ -117,13 +115,12 @@ fn world_resources(s: &Scratch) -> Vec<String> {
 /// E §2.7 item 6: tick 1 creates the subnet, the address and the cluster;
 /// the boundary resolves the cluster's zones, endpoint and ca; tick 2 creates
 /// a nodepool per zone and the kubernetes objects. The nodepools are a
-/// pending group tick 1's plan could not name, so `--yes` stops before tick
-/// 2 (R-30) and the next apply plans them, with the held kubernetes
-/// objects, as its tick 1. Apply again: undeformed.
+/// pending group tick 1's plan could not name: tick 2's plan names them,
+/// and `--yes` applies it (R-122). Apply again: undeformed.
 #[test]
 fn gke_two_phase_applies_in_two_ticks() {
     let s = Scratch::new("gke-ticks");
-    let r = gke(&s, "gke_two_phase.df", &["apply"]).failure();
+    let r = gke(&s, "gke_two_phase.df", &["apply"]).success();
     assert!(
         r.stdout
             .starts_with("plan: 6 changes (6 create) over 2 ticks, 1 undetermined\n\ntick 1  "),
@@ -132,34 +129,10 @@ fn gke_two_phase_applies_in_two_ticks() {
     );
     assert!(
         r.stdout
-            .contains("plan: 5 changes (5 create) over 1 tick\n\ntick 2  5 changes, now that tick 1 reported\n"),
+            .contains("plan: 5 changes (5 create) over 1 tick\n\ntick 2  5 changes\n"),
         "{}",
         r.stdout
     );
-    assert!(
-        r.stderr.contains(
-            "apply stopped after tick 1: tick 2 adds 2 changes the plan could not name \
-             (google.container_node_pool ? on google.container_cluster pngu.zones)"
-        ),
-        "{}",
-        r.stderr
-    );
-    assert_eq!(
-        world_resources(&s),
-        [
-            "google.compute_address::static_ip",
-            "google.compute_subnetwork::gke_subnet",
-            "google.container_cluster::pngu",
-        ]
-    );
-    let r = gke(&s, "gke_two_phase.df", &["apply"]).success();
-    assert!(
-        r.stdout
-            .starts_with("plan: 5 changes (5 create) over 1 tick\n"),
-        "{}",
-        r.stdout
-    );
-    assert!(!r.stdout.contains("tick 2"), "{}", r.stdout);
     assert!(r.stdout.ends_with("apply: complete\n"), "{}", r.stdout);
     assert_eq!(
         world_resources(&s),
@@ -190,11 +163,8 @@ fn gke_one_zone_stops_after_tick_one() {
     let s = Scratch::new("gke-one-zone");
     let r = gke(&s, "gke_two_phase.df", &["apply", "--set", "zones=1"]).failure();
     assert!(r.stdout.contains("tick 1  "), "{}", r.stdout);
-    assert!(
-        !r.stdout.contains("now that tick 1 reported"),
-        "{}",
-        r.stdout
-    );
+    // One plan printed: no later tick was planned.
+    assert_eq!(r.stdout.matches("plan: ").count(), 1, "{}", r.stdout);
     assert!(
         r.stderr
             .contains("- cluster must be in at least two zones ctx={\"cluster\":\"pngu\"}")
@@ -252,7 +222,7 @@ fn a_pending_update_applies_after_the_boundary() {
     );
     assert!(
         r.stdout.contains(
-            "tick 2  1 change, now that tick 1 reported\n  ~ compute.vm app  p.df:3\n      \
+            "tick 2  1 change\n  ~ compute.vm app  p.df:3\n      \
              db_host: \"old.db.fake\" → \"main.db.fake\"\n"
         ),
         "{}",

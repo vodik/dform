@@ -88,11 +88,8 @@ fn plan_json_has_every_section() {
     assert_eq!(later[1]["kind"], "deny");
     assert_eq!(later[1]["status"], "undetermined");
     assert_eq!(later[1]["after"], 1);
-    assert_eq!(
-        p["apply"],
-        "apply: tick 1 now, then tick 2 when tick 1 reports; `later` is planned again when \
-         tick 1 reports, and apply asks before what it adds"
-    );
+    // Nothing to decide: no `apply` line.
+    assert_eq!(p["apply"], json!(null));
     assert_eq!(p["shadowed"], json!([]));
     assert_eq!(p["conflicts"], json!([]));
 }

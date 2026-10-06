@@ -3,7 +3,7 @@ exit: ok
 deployment: dform[env=dev]
 plan: 7 changes (7 create) over 1 tick
 
-tick 1  7 changes, applies now
+tick 1  7 changes
   + compute.vm bastion                          stacks/dform.df:93
       private_ip = "10.90.0.21"
       tags.team = "platform"                    baseline.df:10
@@ -36,6 +36,4 @@ tick 1  7 changes, applies now
         visibility = "private"
         vpc = main.vpc
         zone = "us-test-1b"
-
-apply: tick 1 now
 -- stderr --

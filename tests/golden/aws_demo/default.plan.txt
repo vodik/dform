@@ -2,7 +2,7 @@ exit: ok
 -- stdout --
 plan: 7 changes (7 create) over 1 tick
 
-tick 1  7 changes, applies now
+tick 1  7 changes
   + aws.vpc main            stacks/aws_demo.df:16
       cidr_block = "10.0.0.0/16"
       tags.Name = "main"
@@ -43,6 +43,4 @@ tick 1  7 changes, applies now
       instance_type = "t3.micro"
       tags.subnet_az = "us-east-1a"
       tags.web_az = web.availability_zone
-
-apply: tick 1 now
 -- stderr --

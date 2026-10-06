@@ -1,7 +1,7 @@
 deployment: tour[env=prod]
 plan: 19 changes (19 create) over 1 tick
 
-tick 1  19 changes, applies now
+tick 1  19 changes
   + net.route blue-to-green                stacks/tour.df:283
       destination = "10.2.0.0/16"
       from = "blue"
@@ -169,7 +169,5 @@ tick 1  19 changes, applies now
       because --set env=prod
       because stacks/tour.df:139  input database = {multi_az: true}
 
-later   changes this plan cannot count yet
+later
   iam.policy "connect-${host}"             waits on orders.endpoint  (builtin format() over a null)
-
-apply: tick 1 now; `later` is planned again when tick 1 reports, and apply asks before what it adds

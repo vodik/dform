@@ -2,13 +2,11 @@ exit: ok
 -- stdout --
 plan: 1 change (1 create) over 1 tick
 
-tick 1  1 change, applies now
+tick 1  1 change
   + iam.policy app_policy  adv3_pack_reads_other_path.df:5
       name = "app"
       statements[0].action = "db.connect"
       statements[0].resource = "db"
       statements[1].action = "org.read"
       statements[1].resource = "org"
-
-apply: tick 1 now
 -- stderr --

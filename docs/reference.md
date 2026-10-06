@@ -129,8 +129,9 @@ object or a list; a plan file records the file's digest. With no target it
 is the one stack under the working directory, else the stacks are listed
 and dform exits non-zero. A key the
 target does not name is its input's default, for `plan` and `apply` alike;
-both print the deployment first, `deployment: shop[env=dev] (env from its
-default)` (`plan --json`: `deployment` and `key_defaults`). `apply` also takes a plan file (`dform apply plan.json`).
+both print the deployment first, `deployment: shop[env=dev]`, `-v` adding
+which key values are defaults, `(env from its default)` (`plan --json`:
+`deployment` and `key_defaults`). `apply` also takes a plan file (`dform apply plan.json`).
 
 `apply` prints the plan and asks `Apply these N changes to
 shop[env=prod]? [y/N]` (`Apply this change to ..` for one); only `y` or
@@ -153,7 +154,7 @@ see "Timeouts, retries and waiting"), plans the next, and asks before a
 tick whose plan holds what no earlier plan showed (a pending group's
 member: `iam.policy[?]` at tick 1, named once the endpoint it is built
 from exists; what `later` held for a provider's settings): its plan is
-printed, headed `tick 2  1 change, now that tick 1 reported`, then
+printed, headed `tick 2  1 change`, then
 `Apply tick 2 to D? [y/N]`; and so on until nothing is `later`. `--yes`
 answers every question. A `n` stops the apply with what the earlier
 ticks did in state; the audit log's `apply_end` says `declined` and the
@@ -890,7 +891,7 @@ create, a delete, an update, or nothing. It is printed grouped by tick
 $ dform plan apps env=prod
 plan: 6 changes (3 create, 1 update, 1 replace, 1 delete) over 2 ticks, 1 approval, 1 undetermined
 
-tick 1  4 changes, applies now
+tick 1  4 changes
   + k8s.namespace apps                         stacks/apps.df:26
   + k8s.secret synapse.homeserver              synapse.df:41
   ~ k8s.deployment synapse.server              synapse.df:52
@@ -899,21 +900,27 @@ tick 1  4 changes, applies now
       data.mode was "legacy"
       because data/apps.yaml no longer has the row app("legacy")
 
-tick 2  2 changes, after tick 1 reports
+tick 2  2 changes
   waits on  synapse.web.ip
   + ovh.domain_record "matrix.vodik.xyz"       synapse.df:135
       target = synapse.web.ip
   ± k8s.persistent_volume_claim synapse.media  synapse.df:70  storageClassName is immutable
 
-later   changes this plan cannot count yet
+later
   k8s.job "migrate-v${schema}"                 one per release("crud_api", "schema", _)
-  deny "prod keeps its data"                   stacks/apps.df:40  undetermined until tick 2
+  deny "prod keeps its data"                   stacks/apps.df:40  until tick 2
 
 held for approval
   k8s.persistent_volume_claim synapse.media    replace of a volume in prod    baseline.df:38
-
-apply: tick 1 once this plan's digest is approved (`--approval`), then tick 2 when tick 1 reports; `later` is planned again when tick 1 reports, and apply asks before what it adds
 ```
+
+A plan line is a label and a value; none explains how evaluation works.
+The ticks are the one rule behind them: tick 1 is what apply makes
+first; a later tick is planned when the one before reports, and holds
+the changes that read what an earlier tick makes; `later` is what no
+tick of this plan can name or count yet, planned again as ticks report
+and asked for then (see `apply`). `-v` and `-vv` add how a value was
+made; the plan itself says what it is.
 
 - The summary counts the changes the ticks hold, by kind, the ticks, and
   then the denies, approvals, undetermined policies and conflicts.
@@ -939,7 +946,7 @@ apply: tick 1 once this plan's digest is approved (`--approval`), then tick 2 wh
   the plan file's, `--json`'s and state's; `why`, `query` and `why-not`
   take it or the printed one (`why 'ovh.ssh_key k3s.admin'`, or its path
   alone, `why k3s.admin`, `why k3s.server.public_ip`).
-- `tick N  K changes, applies now`: what this apply makes first. A change
+- `tick 1  K changes`: what this apply makes first. A change
   is `+` create, `~` update, `-` delete, `>` adopt, `±` replace (`(the new
   one first)` for a `create_before_destroy` one, whose deposed object is
   `- T a  (deposed)` in the next tick). An update diffs a keyless set,
@@ -949,32 +956,32 @@ apply: tick 1 once this plan's digest is approved (`--approval`), then tick 2 wh
   (R-67) prints as its own entry, `+ network blue`, in bold, its resources
   indented under it with their full paths (`+ net.vpc blue.vpc`), a copy
   inside it nested again, inside the tick they run in.
-- `tick N  K changes, after tick N-1 reports`: changes held until values
-  a tick before makes are known, `waits on` each value (an output of a
-  resource tick N-1 makes, a field of the world). Their diffs are shown
-  now. A later tick of a running apply says `now that tick N-1
-  reported`.
-- `later   changes this plan cannot count yet`: a resource rule stuck on
-  an unknown, by the address its statement names
-  (`k8s.job "migrate-v${schema}"`), `one per ROW` when what it reads may
-  gain rows, `if ROW derives` when one may, else what it `waits on`,
-  never a count; a copy that may derive once, its resources under it; a
-  deny or check `undetermined until tick N` (never reported as satisfied)
-  or that `may hold at tick N`; a held change waiting on what this plan
-  does not resolve. Every resource of a provider whose settings the
-  program gives and this plan does not know (a kubeconfig read from a
-  server still booting) is one, under `waits on  provider k8s (kubeconfig
-  from k3s.kubeconfig)` and the dim note `which this plan does not
-  resolve`, typed by the provider's static schema; one whose settings
-  wait on what dform's own extern has not answered (a host still
-  booting) says that too, the call as the program writes it,
-  `provider k8s (kubeconfig from raw), ssh.read("10.0.0.5", "ubuntu",
-  "/etc/rancher/k3s/k3s.yaml") not yet`; one of a kind no
-  schema has yet (a cluster's CRD) under `waits on  provider k8s for its
-  schema`, its attributes as written. The summary counts them, `, N
-  later`, and `why-not` names what such a resource waits on. A type whose
-  namespace names no provider is the compile error it always was.
-- `warning  this plan empties what the last apply derived` (R-80): a
+- `tick N  K changes`: changes held until values a tick before makes are
+  known, `waits on` each value (an output of a resource tick N-1 makes, a
+  field of the world). Their diffs are shown now. A later tick of a
+  running apply is headed the same, `tick 2  0 changes` when it only
+  waits.
+- `later`: a resource rule stuck on an unknown, by the address its
+  statement names (`k8s.job "migrate-v${schema}"`), `one per ROW` when
+  what it reads may gain rows, `if ROW` when one may (`if app blue`, a
+  copy), else what it `waits on`, never a count; a copy that may derive
+  once, its resources under it; a deny or check `until tick N` (never
+  reported as satisfied) or `maybe tick N`; a held change waiting on what
+  no tick of this plan makes. Every resource of a provider whose settings
+  the program gives and this plan does not know (a kubeconfig read from a
+  server still booting) is one, under `waits on  provider k8s
+  kubeconfig = k3s.kubeconfig`, the setting as the source writes it,
+  typed by the provider's static schema; one whose settings wait on what
+  dform's own extern has not answered (a host still booting) names the
+  call too, as the program writes it, `provider k8s  kubeconfig = raw,
+  ssh.read("10.0.0.5", "ubuntu", "/etc/rancher/k3s/k3s.yaml")`; one of
+  a kind no schema has yet (a cluster's CRD) under `waits on  provider
+  k8s  schema`, its attributes as written; one reading a deployment not
+  applied yet under `waits on  stack platform[env=lab]`. The summary
+  counts them, `, N later`, and `why-not` names what such a resource
+  waits on. A type whose namespace names no provider is the compile
+  error it always was.
+- `warning` (R-80): what the plan empties since the last apply: a
   rule the plan deletes every resource of that it derived at the last
   apply, by its `FILE:LINE` and statement, with what it deletes (`deletes
   all 2 it derived at the last apply: ..`, three named and `and N more`)
@@ -1013,9 +1020,8 @@ apply: tick 1 once this plan's digest is approved (`--approval`), then tick 2 wh
   `apply`, which refuses before it plans, prints them the same way.
 - `(drift: ...)` marks an update where a fresh null meets a value the
   world already has: the identity mapping is stale.
-- The last line says what `apply` does with this plan (R-12): which tick
-  now, which after a report, and that `later` is planned again once the
-  tick it waits on reports.
+- `apply: refused  2 conflicts, 1 deny`: the last line, only when there
+  is something to decide; a plan apply would make has none.
 - `stack NAME is up to date`: nothing to do, nothing stuck (the only line).
 
 How much each change says of why it is planned is a ladder (R-79,
@@ -1138,7 +1144,7 @@ A provider whose settings the program computes from what a tick makes
 SSH from the server tick 1 creates) is configured at the boundary where
 they become known, waiting for them as for any value when the read
 answers "not yet". The plan lists its resources under `later`
-(`waits on  provider k8s (kubeconfig from k3s.kubeconfig)`); apply makes
+(`waits on  provider k8s  kubeconfig = k3s.kubeconfig`); apply makes
 tick 1, configures the provider, says so, each setting a secret reaches
 as `(sensitive)` and `-v` adding what it is written as, never a value:
 

@@ -89,9 +89,7 @@ fn apply_asks_again_for_what_waited_on_the_provider() {
     let (said, code) = answers(&s, &["y", "y"]);
     assert_eq!(code, 0, "{said:?}");
     assert!(
-        said[0].contains(
-            "  waits on  provider k8s (kubeconfig from kc)  which this plan does not resolve"
-        ),
+        said[0].contains("  waits on  provider k8s  kubeconfig = kc"),
         "{}",
         said[0]
     );
@@ -106,7 +104,7 @@ fn apply_asks_again_for_what_waited_on_the_provider() {
         said[1]
     );
     assert!(
-        said[1].contains("tick 2  1 change, now that tick 1 reported\n  + k8s.namespace ns"),
+        said[1].contains("tick 2  1 change\n  + k8s.namespace ns"),
         "{}",
         said[1]
     );
@@ -152,12 +150,7 @@ fn declining_tick_two_keeps_tick_one() {
 fn yes_applies_tick_two() {
     let s = scratch("tick2-yes");
     let r = dev(&s, &["apply", "--yes", "p.df"]).success();
-    assert!(
-        r.stdout
-            .contains("tick 2  1 change, now that tick 1 reported"),
-        "{}",
-        r.stdout
-    );
+    assert!(r.stdout.contains("tick 2  1 change"), "{}", r.stdout);
     assert!(r.stdout.ends_with("apply: complete\n"), "{}", r.stdout);
     let c = audit(&s, "configure");
     assert_eq!(c.len(), 1, "{c:?}");
@@ -217,7 +210,7 @@ fn the_boundary_waits_for_the_settings_then_configures() {
     // Tick 2 only waits: its header says which tick the report is of.
     assert!(
         r.stdout
-            .contains("tick 2  0 changes, now that tick 1 reported\nplan: 0 changes, 1 later\n"),
+            .contains("tick 2  0 changes\nplan: 0 changes, 1 later\n"),
         "{}",
         r.stdout
     );

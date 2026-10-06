@@ -48,7 +48,7 @@ fn a_replace_updates_its_dependents_after_the_create() {
     let r = mock(&s, &["plan"]).success();
     assert!(
         r.stdout.contains(
-            "tick 2  2 changes, after tick 1 reports\n  waits on  main\n  \
+            "tick 2  2 changes\n  waits on  main\n  \
              ~ net.subnet a  p.df:4\n      vpc_id: \"net.vpc:main@1\" → main\n"
         ),
         "{}",
@@ -57,7 +57,7 @@ fn a_replace_updates_its_dependents_after_the_create() {
     let r = mock(&s, &["apply", "--chaos", "fresh-ids"]).success();
     assert!(
         r.stdout
-            .contains("plan: 2 changes (2 update) over 1 tick\n\ntick 2  2 changes, now that tick 1 reported\n"),
+            .contains("plan: 2 changes (2 update) over 1 tick\n\ntick 2  2 changes\n"),
         "{}",
         r.stdout
     );
@@ -89,7 +89,7 @@ fn create_before_destroy_moves_dependents_before_the_deposed_delete() {
     let r = mock(&s, &["apply", "--chaos", "fresh-ids"]).success();
     let tick2 = r
         .stdout
-        .split("tick 2  3 changes, now that tick 1 reported\n")
+        .split("tick 2  3 changes\n")
         .nth(1)
         .unwrap_or_default();
     let order: Vec<&str> = tick2
@@ -147,15 +147,14 @@ use fake
     let r = mock(&s, &["plan"]).success();
     assert!(
         r.stdout.contains(
-            "tick 2  2 changes, after tick 1 reports\n  waits on  d.endpoint\n  \
+            "tick 2  2 changes\n  waits on  d.endpoint\n  \
              ~ net.subnet a   p.df:4\n      note: \"x\" → d.endpoint\n"
         ) && r.stdout.contains("  - net.vpc main  (deposed)\n"),
         "{}",
         r.stdout
     );
     assert!(
-        r.stdout
-            .contains("tick 1  1 change, applies now\n  + db.postgres d  "),
+        r.stdout.contains("tick 1  1 change\n  + db.postgres d  "),
         "{}",
         r.stdout
     );

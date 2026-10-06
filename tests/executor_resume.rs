@@ -55,10 +55,9 @@ fn apply_after_a_crash_finishes_on(backend: Backend) {
     assert_eq!(
         r.stdout,
         "resuming the apply interrupted at tick 1; remaining: compute.vm app\n\
-         plan: 1 change (1 create) over 1 tick\n\ntick 1  1 change, applies now\n  \
+         plan: 1 change (1 create) over 1 tick\n\ntick 1  1 change\n  \
          + compute.vm app  p.df:5\n      \
-         subnet_id = \"net.subnet:a\"\n\n\
-         apply: tick 1 now\n\
+         subnet_id = \"net.subnet:a\"\n\
          resumed from the apply interrupted at tick 1:\n  \
          compute.vm app  (retried with its idempotency key: nothing it made was found)\n\
          apply: complete\n"

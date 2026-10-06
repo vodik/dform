@@ -72,12 +72,7 @@ fn a_tick_waits_until_the_world_reaches_the_value() {
         "{}",
         r.stderr
     );
-    assert!(
-        r.stdout
-            .contains("\ntick 3  1 change, now that tick 2 reported\n"),
-        "{}",
-        r.stdout
-    );
+    assert!(r.stdout.contains("\ntick 3  1 change\n"), "{}", r.stdout);
     assert!(r.stdout.contains("+ net.vpc v"), "{}", r.stdout);
     assert!(r.stdout.ends_with("apply: complete\n"), "{}", r.stdout);
     let w = waits(&s);
@@ -156,7 +151,7 @@ fn an_extern_that_says_not_yet_is_asked_again() {
     );
     assert!(
         r.stdout
-            .contains("plan: 3 changes (3 create) over 1 tick\n\ntick 2  3 changes, now that tick 1 reported\n"),
+            .contains("plan: 3 changes (3 create) over 1 tick\n\ntick 2  3 changes\n"),
         "{}",
         r.stdout
     );

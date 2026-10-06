@@ -1,7 +1,7 @@
 exit: ok
 -- stdout --
 {
-  "apply": "apply: tick 1 now, then tick 2 when tick 1 reports; `later` is planned again when tick 1 reports, and apply asks before what it adds",
+  "apply": null,
   "conflicts": [],
   "denied": [],
   "deployment": "gke_two_phase",

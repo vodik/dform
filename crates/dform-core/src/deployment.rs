@@ -595,7 +595,7 @@ impl Evaluator {
     pub fn provider_wait(&self, typ: &str) -> Option<String> {
         Some(match self.backend.waits(typ)? {
             ProviderWait::Settings(p) => self.settings_label(&p),
-            ProviderWait::Schema(p) => format!("provider {p} for its schema"),
+            ProviderWait::Schema(p) => format!("provider {p}  schema"),
         })
     }
 
@@ -665,8 +665,8 @@ impl Evaluator {
         })
     }
 
-    /// `provider NAME (KEY from EXPR, ..)`: a provider block's settings
-    /// (its `provider_config` row) as the program writes them.
+    /// `provider NAME  KEY = EXPR, ..`: a provider block's settings (its
+    /// `provider_config` row) as the program writes them.
     fn settings_label(&self, name: &str) -> String {
         let mut from: Vec<String> = Vec::new();
         for s in &self.program.statements {
@@ -683,7 +683,7 @@ impl Evaluator {
             }
             for k in settings.keys() {
                 from.push(match setting_text(head.span, k) {
-                    Some(t) => format!("{k} from {t}"),
+                    Some(t) => format!("{k} = {t}"),
                     None => k.clone(),
                 });
             }
@@ -691,7 +691,7 @@ impl Evaluator {
         from.dedup();
         match from.as_slice() {
             [] => format!("provider {name}"),
-            from => format!("provider {name} ({})", from.join(", ")),
+            from => format!("provider {name}  {}", from.join(", ")),
         }
     }
 

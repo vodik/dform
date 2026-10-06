@@ -36,11 +36,8 @@ fn a_mutation_under_a_pending_deformation_stops_before_tick_two() {
         "{}",
         r.stdout
     );
-    assert!(
-        !r.stdout.contains("now that tick 1 reported"),
-        "{}",
-        r.stdout
-    );
+    // One plan printed: no later tick was planned.
+    assert_eq!(r.stdout.matches("plan: ").count(), 1, "{}", r.stdout);
     assert!(
         r.stderr.contains(
             "the world changed under a pending change after tick 1:\n\
@@ -82,7 +79,7 @@ fn a_mutation_elsewhere_is_drift_and_the_run_continues() {
     assert!(
         r.stdout.contains(
             "drift after tick 1:\n~ db.postgres main\n  size: 1 -> 9\n\
-             plan: 2 changes (2 update) over 1 tick\n\ntick 2  2 changes, now that tick 1 reported\n"
+             plan: 2 changes (2 update) over 1 tick\n\ntick 2  2 changes\n"
         ),
         "{}",
         r.stdout

@@ -2,12 +2,10 @@ exit: ok
 -- stdout --
 plan: 2 changes (2 create) over 1 tick
 
-tick 1  2 changes, applies now
+tick 1  2 changes
   + net.subnet y  adv7b_mutual_via_different_paths.df:10
       x = 1
   + net.vpc x     adv7b_mutual_via_different_paths.df:6
       y = 1       adv7b_mutual_via_different_paths.df:8
       z = 1
-
-apply: tick 1 now
 -- stderr --

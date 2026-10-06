@@ -77,7 +77,7 @@ fn subnets(s: &Scratch) -> usize {
         .count()
 }
 
-const WARNING: &str = "warning  this plan empties what the last apply derived\n  \
+const WARNING: &str = "warning\n  \
     stacks/net.df:13  resource net.subnet \"private-${z}\" { .. } where zone(z, n, r), active(r)\n      \
     deletes all 2 it derived at the last apply: net.subnet private-us-test-1a, \
     net.subnet private-us-test-1b\n";
@@ -103,10 +103,11 @@ fn a_broken_join_is_warned_and_asked_for() {
          active  had 1 row at the last apply, has none now\n"
     );
     assert!(r.stdout.contains(&want), "{want}\n---\n{}", r.stdout);
-    // The section is after the ticks, before what apply does.
+    // The section is after the ticks, and last.
     assert!(
-        r.stdout.find("warning  ").unwrap() > r.stdout.find("tick 1").unwrap()
-            && r.stdout.ends_with("\napply: tick 1 now\n"),
+        r.stdout.find("\nwarning\n").unwrap() > r.stdout.find("tick 1").unwrap()
+            && r.stdout
+                .ends_with("active  had 1 row at the last apply, has none now\n"),
         "{}",
         r.stdout
     );

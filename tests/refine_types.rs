@@ -143,19 +143,15 @@ fn a_refinement_on_a_null_is_deferred_and_fires_after_the_boundary() {
     let s = Scratch::new("refine-gke");
     let r = gke(&s, &["plan"]).success();
     assert!(
-        r.stdout.contains(
-            "  check len_ge(3) of google.container_cluster pngu.zones  undetermined until tick 2\n"
-        ),
+        r.stdout
+            .contains("  check len_ge(3) of google.container_cluster pngu.zones  until tick 2\n"),
         "{}",
         r.stdout
     );
     let r = gke(&s, &["apply", "--set", "zones=2"]).failure();
     assert!(r.stdout.contains("tick 1  "), "{}", r.stdout);
-    assert!(
-        !r.stdout.contains("now that tick 1 reported"),
-        "{}",
-        r.stdout
-    );
+    // One plan printed: no later tick was planned.
+    assert_eq!(r.stdout.matches("plan: ").count(), 1, "{}", r.stdout);
     assert!(
         r.stderr
             .contains("constraint violations after tick 1:\n- refinement violated ctx={\"addr\":\"pngu\",\"at\":\"")

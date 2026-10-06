@@ -3,7 +3,7 @@ exit: ok
 deployment: pngu[env=stg]
 plan: 8 changes (8 create) over 1 tick
 
-tick 1  8 changes, applies now
+tick 1  8 changes
   + alert_metrics_pack pngu                     stacks/pngu.df:222
       enable_standard_gke_alerts = true
       notification_channel_display_name = "Slack"
@@ -62,6 +62,4 @@ tick 1  8 changes, applies now
       project = "renfry-stg"                    stacks/pngu.df:71
       region = "us-east1"                       stacks/pngu.df:73
       subnetwork_id = gke_subnet
-
-apply: tick 1 now
 -- stderr --

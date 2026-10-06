@@ -3,7 +3,7 @@ exit: ok
 deployment: dform[env=prod]
 plan: 14 changes (14 create) over 1 tick
 
-tick 1  14 changes, applies now
+tick 1  14 changes
   + compute.vm bastion                          stacks/dform.df:93
       private_ip = "10.20.0.21"
       tags.team = "platform"                    baseline.df:10
@@ -84,7 +84,5 @@ tick 1  14 changes, applies now
       policy = identity.app_policy
       role = identity.app_role
       tags.team = "platform"                    baseline.df:10
-
-apply: tick 1 now
 -- stderr --
 warning: prod should enable audit logging ctx={"env":"prod"}

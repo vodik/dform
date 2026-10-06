@@ -43,13 +43,13 @@ fn a_refused_plan_says_each_conflict_once() {
     let (s, at) = project();
     let r = dform(&s, &["plan"]);
     assert!(r.stdout.contains("\ntick 2 "), "{}", r.stdout);
-    assert!(r.stdout.contains("\nlater "), "{}", r.stdout);
+    assert!(r.stdout.contains("\nlater\n"), "{}", r.stdout);
     let all = format!("{}{}", r.stdout, r.stderr);
     for want in [
         "conflicts",
         "  ! google.compute_address one.a.name: two contributions disagree",
         "  ! google.compute_address two.a.name: two contributions disagree",
-        "apply: refused until the conflicts and denies above are resolved",
+        "apply: refused  2 conflicts",
     ] {
         let n = all.lines().filter(|l| *l == want).count();
         assert_eq!(n, 1, "{want}\n---\n{all}");

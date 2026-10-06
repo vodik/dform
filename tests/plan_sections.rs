@@ -35,13 +35,12 @@ fn gke_plan_has_the_summary_ticks_and_later() {
         "plan: 6 changes (6 create) over 2 ticks, 1 undetermined"
     );
     for want in [
-        "\ntick 1  3 changes, applies now\n  + google.compute_subnetwork gke_subnet  ",
-        "\ntick 2  3 changes, after tick 1 reports\n  waits on  pngu.ca_certificate\n            pngu.endpoint\n  + k8s.deployment api  ",
-        "\nlater   changes this plan cannot count yet\n  google.container_node_pool \"np-${z}\"  ",
+        "\ntick 1  3 changes\n  + google.compute_subnetwork gke_subnet  ",
+        "\ntick 2  3 changes\n  waits on  pngu.ca_certificate\n            pngu.endpoint\n  + k8s.deployment api  ",
+        "\nlater\n  google.container_node_pool \"np-${z}\"  ",
         "  waits on pngu.zones\n",
         "  deny \"cluster must be in at least two zones\"  ",
-        "  undetermined until tick 2\n",
-        "\napply: tick 1 now, then tick 2 when tick 1 reports; `later` is planned again when tick 1 reports, and apply asks before what it adds\n",
+        "  until tick 2\n",
     ] {
         assert!(r.stdout.contains(want), "{want}\n---\n{}", r.stdout);
     }
@@ -63,7 +62,7 @@ deny "no nodepool in zone z" {pool: n} where n in google.container_node_pool, ar
     let r = gke(&s, &["extra.df"], "plan").success();
     assert!(
         r.stdout.contains(
-            "  deny \"no nodepool in zone z\"                      p.df:112  may hold at tick 2\n"
+            "  deny \"no nodepool in zone z\"                      p.df:112  maybe tick 2\n"
         ),
         "{}",
         r.stdout
@@ -100,7 +99,7 @@ fn a_keyless_set_diffs_by_element() {
     let r = aws(&s, "plan").success();
     assert!(
         r.stdout.contains(
-            "  ~ aws.security_group web  stacks/aws_demo.df:24\n      - ingress[]\n          cidr_blocks[0] was \"0.0.0.0/0\"\n          from_port was 22\n          protocol was \"tcp\"\n          to_port was 22\n\napply: tick 1 now\n"
+            "  ~ aws.security_group web  stacks/aws_demo.df:24\n      - ingress[]\n          cidr_blocks[0] was \"0.0.0.0/0\"\n          from_port was 22\n          protocol was \"tcp\"\n          to_port was 22\n"
         ),
         "{}",
         r.stdout
@@ -216,7 +215,7 @@ use fake
         "conflicts",
         "  ! net.vpc main.cidr: two contributions disagree",
         "  ! net.vpc two.cidr: two contributions disagree",
-        "apply: refused until the conflicts and denies above are resolved",
+        "apply: refused  2 conflicts",
     ] {
         let n = r.stdout.lines().filter(|l| *l == want).count();
         assert_eq!(n, 1, "{want}\n---\n{}", r.stdout);
@@ -286,12 +285,12 @@ fn a_denied_replace_is_a_section() {
     assert_eq!(
         r.stdout,
         "plan: 1 change (1 replace) over 1 tick, 1 denied\n\n\
-         tick 1  1 change, applies now\n\
+         tick 1  1 change\n\
          \x20 ± net.vpc main  p.df:2  cidr is immutable\n\
          \x20     cidr: \"10.0.0.0/16\" → \"10.1.0.0/16\"\n\n\
          denied\n\
          \x20 lifecycle prevent_destroy: the plan would replace net.vpc[\"main\"]  net.vpc main    p.df:4\n\n\
-         apply: refused until the conflicts and denies above are resolved\n"
+         apply: refused  1 deny\n"
     );
     assert!(r.stderr.contains("blocked by constraints"), "{}", r.stderr);
 }
@@ -322,7 +321,7 @@ fn color_is_a_rendering_of_the_same_text() {
     let always = colored("always");
     for want in [
         "  \x1b[32m+\x1b[0m \x1b[1;32mgoogle.compute_subnetwork gke_subnet\x1b[0m  ",
-        "\x1b[1mtick 1  3 changes, applies now\x1b[0m\n",
+        "\x1b[1mtick 1  3 changes\x1b[0m\n",
         "  \x1b[2mstacks/gke_two_phase.df:38\x1b[0m\n",
         "  waits on  pngu.ca_certificate\n",
         "      data.password = \x1b[2m(sensitive)\x1b[0m\n",

@@ -300,7 +300,7 @@ resource net.route "${a}-to-${b}" { from = a, to = b, destination = dest } where
 # plans it, and says what it waits for:
 #
 #   $ dform plan tour env=prod
-#   later   changes this plan cannot count yet
+#   later
 #     iam.policy "connect-${host}"
 #     waits on orders.endpoint
 #
@@ -309,7 +309,7 @@ resource net.route "${a}-to-${b}" { from = a, to = b, destination = dest } where
 # the policy's real name, and asks again before making it:
 #
 #   $ dform apply tour env=prod
-#   tick 2  1 change, now that tick 1 reported
+#   tick 2  1 change
 #   + iam.policy "connect-orders.db.fake"
 #   apply: complete
 #

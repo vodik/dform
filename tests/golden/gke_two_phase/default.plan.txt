@@ -2,7 +2,7 @@ exit: ok
 -- stdout --
 plan: 6 changes (6 create) over 2 ticks, 1 undetermined
 
-tick 1  3 changes, applies now
+tick 1  3 changes
   + google.compute_subnetwork gke_subnet            stacks/gke_two_phase.df:38
       ip_cidr_range = "10.141.76.0/22"              stacks/gke_two_phase.df:28
       name = "renfry-dev-gke-subnet"
@@ -25,7 +25,7 @@ tick 1  3 changes, applies now
       region = "us-east1"
       subnetwork_id = gke_subnet
 
-tick 2  3 changes, after tick 1 reports
+tick 2  3 changes
   waits on  pngu.ca_certificate
             pngu.endpoint
   + k8s.deployment api                              stacks/gke_two_phase.df:78
@@ -38,9 +38,7 @@ tick 2  3 changes, after tick 1 reports
       data.password = (sensitive)
       namespace = "pngu"
 
-later   changes this plan cannot count yet
+later
   google.container_node_pool "np-${z}"              stacks/gke_two_phase.df:90  waits on pngu.zones
-  deny "cluster must be in at least two zones"      undetermined until tick 2
-
-apply: tick 1 now, then tick 2 when tick 1 reports; `later` is planned again when tick 1 reports, and apply asks before what it adds
+  deny "cluster must be in at least two zones"      stacks/gke_two_phase.df:99  until tick 2
 -- stderr --

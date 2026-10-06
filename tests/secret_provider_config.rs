@@ -98,16 +98,13 @@ fn a_provider_configured_from_a_secret_applies_at_tick_two_and_the_bytes_stay_in
         plan.stdout
     );
     assert!(
-        plan.stdout.contains(
-            "  waits on  provider k8s (account from kc, kubeconfig from kc)  \
-             which this plan does not resolve"
-        ),
+        plan.stdout
+            .contains("  waits on  provider k8s  account = kc, kubeconfig = kc\n"),
         "{}",
         plan.stdout
     );
     assert!(
-        plan.stdout
-            .contains("  waits on  provider k8s for its schema"),
+        plan.stdout.contains("  waits on  provider k8s  schema"),
         "{}",
         plan.stdout
     );
@@ -126,7 +123,7 @@ fn a_provider_configured_from_a_secret_applies_at_tick_two_and_the_bytes_stay_in
         "{out}"
     );
     for line in [
-        "tick 2  3 changes, now that tick 1 reported",
+        "tick 2  3 changes",
         "  + k8s.namespace ns",
         "  + k8s.config_map conf",
         "  + k8s.traefik.io.v1alpha1.middleware strip",

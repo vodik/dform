@@ -197,7 +197,7 @@ resource net.subnet a {
         "{}",
         r.stdout
     );
-    assert!(r.stdout.contains("  waits on  stack net  "), "{}", r.stdout);
+    assert!(r.stdout.contains("  waits on  stack net\n"), "{}", r.stdout);
     s.run(&["apply", "net"]).success();
     let r = s.run(&["plan", "--why=none", "app.df"]).success();
     assert!(
@@ -311,10 +311,7 @@ fn a_type_the_provider_does_not_declare_is_a_plan_error() {
     // The provider block is labeled; nothing was planned.
     assert!(r.stderr.contains("use fake {"), "{}", r.stderr);
     assert!(r.stderr.contains("─ provider fake\n"), "{}", r.stderr);
-    assert_eq!(
-        r.stdout,
-        "deployment: pngu[env=dev] (env from its default)\n"
-    );
+    assert_eq!(r.stdout, "deployment: pngu[env=dev]\n");
     // A type no known schema declares says so.
     s.write(
         "stacks/pngu.df",

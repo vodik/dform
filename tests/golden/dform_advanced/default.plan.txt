@@ -2,7 +2,7 @@ exit: ok
 -- stdout --
 plan: 16 changes (16 create) over 1 tick
 
-tick 1  16 changes, applies now
+tick 1  16 changes
   + net.route rt-core_a-core_b               stacks/dform-advanced.df:65
       destination = "10.220.0.0/16"
       from = "core_a"
@@ -61,8 +61,6 @@ tick 1  16 changes, applies now
   + net.vpc_peering mesh-peer-core_b-core_c  stacks/dform-advanced.df:123
       accepter_vpc = core_c
       requester_vpc = core_b
-
-apply: tick 1 now
 -- stderr --
 warning: mesh has direct route between non-adjacent nodes ctx={"from":"core_a","to":"core_c"}
 warning: mesh has direct route between non-adjacent nodes ctx={"from":"core_c","to":"core_a"}

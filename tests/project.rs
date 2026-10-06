@@ -68,8 +68,7 @@ fn a_target_is_a_name_a_file_or_a_deployment() {
     assert!(!s.path("dform.state/app/env=staging").exists());
     let r = s.run(&["apply", "app"]).success();
     assert!(
-        r.stdout
-            .starts_with("deployment: app[env=staging] (env from its default)\n"),
+        r.stdout.starts_with("deployment: app[env=staging]\n"),
         "{}",
         r.stdout
     );

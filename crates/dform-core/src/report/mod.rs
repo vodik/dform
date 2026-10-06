@@ -1587,8 +1587,8 @@ fn waited(on: &BTreeSet<String>) -> Vec<String> {
     for n in on {
         let w = match extern_label(n) {
             // What dform's own extern has not answered yet (a host still
-            // booting, a file not written yet).
-            Some(call) => format!("{call} not yet"),
+            // booting, a file not written yet), as the call.
+            Some(call) => call,
             None => label(n),
         };
         // A deployment not applied yet once, whatever of it is read.
@@ -2000,50 +2000,20 @@ impl Report {
             || self.pending.iter().any(|b| b.resolves_after.is_none())
     }
 
-    /// The last line: what `apply` does with this plan (R-12: it asks
-    /// once, before the first tick, for everything the plan lists, and
-    /// again before a later tick only for what no plan listed).
-    pub fn apply_line(&self) -> String {
-        if !self.conflicts.is_empty() || !self.denies.is_empty() {
-            return "apply: refused until the conflicts and denies above are resolved".into();
+    /// The last line, only when there is something to decide: apply
+    /// refuses this plan, `apply: refused  2 conflicts, 1 deny`.
+    pub fn apply_line(&self) -> Option<String> {
+        let mut why = Vec::new();
+        if !self.conflicts.is_empty() {
+            why.push(count(self.conflicts.len(), "conflict"));
         }
-        let ticks: Vec<usize> = self.sections().into_keys().collect();
-        let now = match self.approvals.is_empty() {
-            true => "now",
-            false => "once this plan's digest is approved (`--approval`)",
-        };
-        let mut out = match ticks.as_slice() {
-            [] => "apply: nothing to change now".to_string(),
-            [t] => format!("apply: tick {t} {now}"),
-            [t, u] => format!("apply: tick {t} {now}, then tick {u} when tick {t} reports"),
-            [t, .., u] => format!(
-                "apply: tick {t} {now}, then ticks {} to {u}, each when the one before reports",
-                t + 1
-            ),
-        };
-        if self.has_later() {
-            let after = self
-                .groups
-                .iter()
-                .map(|g| g.resolves_after)
-                .chain(self.policies.iter().map(|p| p.after))
-                .chain(
-                    self.pending
-                        .iter()
-                        .filter(|b| b.resolves_after.is_none())
-                        .map(|_| None),
-                )
-                .collect::<Option<Vec<usize>>>()
-                .and_then(|ts| ts.into_iter().max());
-            match after {
-                Some(t) => out.push_str(&format!(
-                    "; `later` is planned again when tick {t} reports, and apply asks before \
-                     what it adds"
-                )),
-                None => out.push_str("; later ticks are planned as each reports and asked for"),
-            }
+        if !self.denies.is_empty() {
+            why.push(match self.denies.len() {
+                1 => "1 deny".to_string(),
+                n => format!("{n} denies"),
+            });
         }
-        out
+        (!why.is_empty()).then(|| format!("apply: refused  {}", why.join(", ")))
     }
 
     /// The `warning` section's lines (R-80), unindented: each rule the
@@ -2103,22 +2073,7 @@ impl Report {
         let mut rows: Vec<Row> = vec![Row::plain(self.summary())];
         for (t, s) in self.sections() {
             rows.push(Row::plain(String::new()));
-            let n = s.changes.len();
-            let head = match (t == self.tick, n) {
-                // A later tick of an apply: the one before has reported.
-                (true, _) if t > 1 => format!(
-                    "tick {t}  {}, now that tick {} reported",
-                    count(n, "change"),
-                    t - 1
-                ),
-                (true, _) => format!("tick {t}  {}, applies now", count(n, "change")),
-                (false, 0) => format!("tick {t}  after tick {} reports", t - 1),
-                (false, _) => format!(
-                    "tick {t}  {}, after tick {} reports",
-                    count(n, "change"),
-                    t - 1
-                ),
-            };
+            let head = format!("tick {t}  {}", count(s.changes.len(), "change"));
             rows.push(Row::new(&head, bold(&head)));
             for (i, w) in waited(&s.waits).into_iter().enumerate() {
                 let lead = if i == 0 {
@@ -2142,7 +2097,7 @@ impl Report {
         }
         if self.has_later() {
             rows.push(Row::plain(String::new()));
-            let head = "later   changes this plan cannot count yet";
+            let head = "later";
             rows.push(Row::new(head, bold(head)));
             self.write_later(&mut rows, style);
         }
@@ -2150,7 +2105,7 @@ impl Report {
         // statement as a group row is, its place and why on the right.
         if !self.not_planned.is_empty() {
             rows.push(Row::plain(String::new()));
-            let head = "not planned   statements that derive no resource";
+            let head = "not planned";
             rows.push(Row::new(head, style.paint(Paint::Warn, head)));
             for n in &self.not_planned {
                 let addr = address(&n.addr);
@@ -2166,7 +2121,7 @@ impl Report {
         }
         if !self.warnings.is_empty() {
             rows.push(Row::plain(String::new()));
-            let head = "warning  this plan empties what the last apply derived";
+            let head = "warning";
             rows.push(Row::new(head, style.paint(Paint::Warn, head)));
             for line in self.warning_lines() {
                 rows.push(Row::plain(format!("  {line}")));
@@ -2236,9 +2191,11 @@ impl Report {
             out.push_str(&format!("\nstack {} is up to date\n", self.stack));
             return out;
         }
-        out.push('\n');
-        out.push_str(&self.apply_line());
-        out.push('\n');
+        if let Some(line) = self.apply_line() {
+            out.push('\n');
+            out.push_str(&line);
+            out.push('\n');
+        }
         out
     }
 
@@ -2279,7 +2236,8 @@ impl Report {
                 let shown = address_text(c);
                 let plain = format!("  {shown}");
                 let painted = format!("  {}", style.paint(Paint::Bold, &shown));
-                rows.push(Row::new(&plain, painted).with(vec![format!("if {reads} derives")]));
+                let reads = reads.strip_prefix("resource ").unwrap_or(&reads);
+                rows.push(Row::new(&plain, painted).with(vec![format!("if {reads}")]));
                 for m in self
                     .groups
                     .iter()
@@ -2298,7 +2256,7 @@ impl Report {
             let on = waited(&g.on.iter().cloned().collect()).join(", ");
             let cond = match (&g.reads, unknown) {
                 (Some(r), true) => format!("one per {r}"),
-                (Some(r), false) => format!("if {r} derives"),
+                (Some(r), false) => format!("if {r}"),
                 (None, _) => format!("waits on {on}"),
             };
             let plain = format!("  {pattern}");
@@ -2308,10 +2266,10 @@ impl Report {
         for p in &self.policies {
             let on = waited(&p.on.iter().cloned().collect()).join(", ");
             let cond = match (p.may_derive, p.after) {
-                (false, Some(t)) => format!("undetermined until tick {}", t + 1),
-                (true, Some(t)) => format!("may hold at tick {}", t + 1),
+                (false, Some(t)) => format!("until tick {}", t + 1),
+                (true, Some(t)) => format!("maybe tick {}", t + 1),
                 (_, None) if on.is_empty() => "undetermined".to_string(),
-                (_, None) => format!("undetermined, waits on {on}"),
+                (_, None) => format!("waits on {on}"),
             };
             let left = match p.refinement {
                 true => format!("  check {}", p.message),
@@ -2322,9 +2280,8 @@ impl Report {
         for b in self.pending.iter().filter(|b| b.resolves_after.is_none()) {
             let ds: Vec<&Deformation> = b.deformations.iter().collect();
             let on = waited(&b.on.iter().cloned().collect()).join(", ");
-            // A header like a tick's, the note in the site column (R-111).
-            let lead = format!("  waits on  {on}");
-            rows.push(Row::plain(lead).with(vec!["which this plan does not resolve".into()]));
+            // A header like a tick's (R-111).
+            rows.push(Row::plain(format!("  waits on  {on}")));
             self.write_level(rows, &ds, None, "  ", style);
         }
     }
@@ -3063,7 +3020,7 @@ mod tests {
         assert_eq!(label(&l), call);
         assert_eq!(attribute_label(&l), call);
         assert_eq!(printed_label(&crate::ir::label(&l)), call);
-        assert_eq!(waited(&BTreeSet::from([l])), [format!("{call} not yet")]);
+        assert_eq!(waited(&BTreeSet::from([l])), [call]);
         let l = crate::value::null_label("aws.availability_zone", "available", "2");
         assert_eq!(label(&l), "aws.availability_zone(\"available\")");
         // A resource's attribute stays one.

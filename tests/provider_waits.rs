@@ -69,13 +69,13 @@ fn a_providers_resources_wait_on_its_settings_under_later() {
     let (ticks, later) = r.stdout.split_once("\nlater").unwrap();
     assert!(!ticks.contains("k8s."), "{}", r.stdout);
     for line in [
-        "  waits on  provider k8s (kubeconfig from raw)  which this plan does not resolve",
+        "  waits on  provider k8s  kubeconfig = raw",
         "  + k8s.namespace traefik.ns",
         // The static schema's kind, by its short name, typed.
         "  + k8s.storage_class traefik.block",
         "      provisioner = \"rancher.io/local-path\"",
         "  + k8s.deployment traefik.web",
-        "  waits on  provider k8s for its schema         which this plan does not resolve",
+        "  waits on  provider k8s  schema",
         "  + k8s.traefik.io.v1alpha1.middleware traefik.strip",
         "      spec.stripPrefix.prefixes[0] = \"/a\"",
     ] {
@@ -93,8 +93,8 @@ fn why_not_names_the_provider_a_resource_waits_on() {
     .success();
     assert!(
         r.stdout.starts_with(
-            "k8s.storage_class traefik.block: it is derived, and waits on provider k8s \
-             (kubeconfig from raw): the plan lists it under `later`"
+            "k8s.storage_class traefik.block: it is derived, and waits on provider k8s  \
+             kubeconfig = raw: the plan lists it under `later`"
         ),
         "{}",
         r.stdout
@@ -146,8 +146,8 @@ fn a_provider_waiting_on_a_read_not_yet_answered_says_both() {
     let r = dform(&s, &["plan", "p"]).success();
     assert!(
         r.stdout.contains(
-            "\n  waits on  provider k8s (kubeconfig from raw), ssh.read(\"127.0.0.1:1\", \
-             \"ubuntu\", \"/etc/rancher/k3s/k3s.yaml\") not yet\n"
+            "\n  waits on  provider k8s  kubeconfig = raw, ssh.read(\"127.0.0.1:1\", \
+             \"ubuntu\", \"/etc/rancher/k3s/k3s.yaml\")\n"
         ),
         "{}",
         r.stdout

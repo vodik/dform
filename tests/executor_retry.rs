@@ -86,9 +86,8 @@ fn a_boundary_refresh_retries() {
         r.stderr
     );
     assert!(
-        r.stdout.contains(
-            "plan: 1 change (1 update) over 1 tick\n\ntick 2  1 change, now that tick 1 reported\n"
-        ),
+        r.stdout
+            .contains("plan: 1 change (1 update) over 1 tick\n\ntick 2  1 change\n"),
         "{}",
         r.stdout
     );

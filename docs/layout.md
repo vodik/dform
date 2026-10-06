@@ -62,8 +62,9 @@ dform.state/                state: per deployment, audit logs, plan keys,
   `config/<stack>/`, named by the key's value, `set from
   yaml("config/dform/${env}.yaml")` in the stack: `config/dform/prod.yaml`
   is `dform[env=prod]`'s. A key the target leaves out is its input's default,
-  for `plan` and `apply` alike (both print `deployment: dform[env=staging]
-  (env from its default)` first); `controller run` names every key. A key
+  for `plan` and `apply` alike (both print `deployment: dform[env=staging]`
+  first, `-v` adding `(env from its default)`); `controller run` names
+  every key. A key
   defaulting to `"prod"` or `"production"` is a warning.
 - Every path a program states resolves from the project root: module
   paths (`use modules.net`), table and config sources

@@ -2,11 +2,9 @@ exit: ok
 -- stdout --
 plan: 1 change (1 create) over 1 tick
 
-tick 1  1 change, applies now
+tick 1  1 change
   + net.vpc main       adv4b_variable_path_writer_no_read.df:6
       cidr = "10.0.0.0/16"
       tags.env = "dev"
       tags.team = "x"  adv4b_variable_path_writer_no_read.df:8
-
-apply: tick 1 now
 -- stderr --

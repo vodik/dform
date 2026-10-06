@@ -16,12 +16,17 @@ fn plan(s: &Scratch, example: &str, why: &[&str]) -> String {
 }
 
 /// A line without its site column and its value (a secret's label and a
-/// long string say more from `-v`): the text before the first two spaces
-/// after its indent, and before ` = `.
+/// long string say more from `-v`, as does the deployment line, where its
+/// key came from): the text before the first two spaces after its indent,
+/// and before ` = ` or ` (`.
 fn left(l: &str) -> String {
     let body = l.trim_start();
     let indent = &l[..l.len() - body.len()];
     let text = body.split("  ").next().unwrap_or_default();
+    let text = match text.strip_prefix("deployment: ") {
+        Some(_) => text.split(" (").next().unwrap_or_default(),
+        None => text,
+    };
     format!("{indent}{}", text.split(" = ").next().unwrap_or_default())
 }
 
@@ -30,7 +35,7 @@ fn levels(example: &str) -> (String, String) {
     let line = plan(&s, example, &[]);
     assert_eq!(plan(&s, example, &["--why=line"]), line);
     assert!(line.contains("\ntick 1  "), "{line}");
-    assert!(line.contains("\napply: tick 1 now"), "{line}");
+    assert!(!line.contains("\napply: "), "{line}");
     // No `?`, no bindings, no ranks at the default level.
     assert!(
         !line.contains(" = ?") && !line.contains("  with ") && !line.contains(" @"),

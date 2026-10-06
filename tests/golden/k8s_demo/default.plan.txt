@@ -2,7 +2,7 @@ exit: ok
 -- stdout --
 plan: 4 changes (4 create) over 1 tick
 
-tick 1  4 changes, applies now
+tick 1  4 changes
   + k8s.namespace shop         stacks/k8s_demo.df:14
       metadata.labels.team = "storefront"
       metadata.name = "shop"
@@ -29,6 +29,4 @@ tick 1  4 changes, applies now
       spec.template.spec.containers[name=web].name = "web"
       spec.template.spec.containers[name=web].ports[containerPort=8080,protocol=TCP].containerPort = 8080
       spec.template.spec.containers[name=web].ports[containerPort=8080,protocol=TCP].protocol = "TCP"
-
-apply: tick 1 now
 -- stderr --

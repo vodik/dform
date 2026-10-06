@@ -74,16 +74,14 @@ fn a_force_new_change_replaces_destroying_first() {
         r.stdout,
         r#"plan: 2 changes (1 update, 1 replace) over 2 ticks
 
-tick 1  1 change, applies now
+tick 1  1 change
   ± net.vpc main  p.df:3  cidr is immutable
       cidr: "10.0.0.0/16" → "10.1.0.0/16"
 
-tick 2  1 change, after tick 1 reports
+tick 2  1 change
   waits on  main
   ~ net.subnet a  p.df:4
       vpc_id: "net.vpc:main" → main
-
-apply: tick 1 now, then tick 2 when tick 1 reports
 stack p is up to date
 apply: complete
 "#
@@ -128,7 +126,7 @@ fn create_before_destroy_deposes_the_old_object_until_dependents_move() {
     let r = mock(&s, &["apply"]).success();
     assert!(
         r.stdout.contains(
-            "plan: 2 changes (1 update, 1 delete) over 1 tick\n\ntick 1  2 changes, applies now\n  \
+            "plan: 2 changes (1 update, 1 delete) over 1 tick\n\ntick 1  2 changes\n  \
              ~ net.subnet a  p.df:4\n      vpc_id: \"net.vpc:main\" → \"net.vpc:main-2\"\n  \
              - net.vpc main  (deposed)\n      cidr was \"10.0.0.0/16\"\n"
         ),
@@ -176,7 +174,7 @@ fn create_before_destroy_in_one_apply_takes_two_ticks() {
     );
     assert!(
         r.stdout
-            .contains("plan: 2 changes (1 update, 1 delete) over 1 tick\n\ntick 2  2 changes, now that tick 1 reported\n"),
+            .contains("plan: 2 changes (1 update, 1 delete) over 1 tick\n\ntick 2  2 changes\n"),
         "{}",
         r.stdout
     );

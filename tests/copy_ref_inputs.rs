@@ -112,7 +112,7 @@ fn a_statement_that_derives_nothing_is_listed_with_why() {
     );
     assert!(
         r.stdout.contains(
-            "not planned   statements that derive no resource\n  \
+            "not planned\n  \
              k8s.config_map cm     main.df:5  output one.host is not set\n  \
              k8s.secret one.creds  databases.df:6  input one.name is not set\n"
         ),

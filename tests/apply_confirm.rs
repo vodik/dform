@@ -179,9 +179,7 @@ fn a_tick_that_adds_an_address_asks_again() {
         said[0]
     );
     assert!(
-        said[1].contains(
-            "plan: 1 change (1 create) over 1 tick\n\ntick 2  1 change, now that tick 1 reported\n"
-        ),
+        said[1].contains("plan: 1 change (1 create) over 1 tick\n\ntick 2  1 change\n"),
         "{}",
         said[1]
     );

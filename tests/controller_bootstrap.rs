@@ -141,9 +141,9 @@ fn a_resource_rule_reading_a_stuck_helper_is_a_pending_group() {
     let last = s.run(&["apply", "bootstrap"]).success();
     assert!(
         last.stdout.contains(
-            "later   changes this plan cannot count yet\n  \
+            "later\n  \
              k8s.deployment dform_controller             \
-             if node_pool_up(\"np-us-east1-b\") derives\n"
+             if node_pool_up(\"np-us-east1-b\")\n"
         ),
         "{}",
         last.stdout
