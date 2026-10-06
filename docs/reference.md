@@ -806,7 +806,10 @@ provider k8s { source = "bin/dform-provider-k8s" }        # an executable
   `dform.state/cache/schema/<deployment>/k8s.json`, keyed by the derivation
   and the cluster's document, written when the program's settings
   configure the cluster). A kind in neither waits on the provider for its
-  schema (`later`).
+  schema (`later`) until the settings arrive; from that Configure on the
+  provider serves its cluster's kinds, and dform plans such an object
+  against it, untyped in dform's own schema until the next run loads the
+  cache.
 - With no cluster in reach, or `DFORM_K8S_OFFLINE` set, the provider is
   offline: the schema is the checked-in snapshot of Kubernetes v1.36.0's
   document (`crates/dform-k8s/openapi-snapshot.json`, every kind of the
@@ -1112,6 +1115,31 @@ that never settles, not a way to stop early:
 cargo run -- -C examples/gke apply                  # asks again at tick 2
 cargo run -- -C examples/gke apply --set zones=1   # one zone: stops after tick 1
 ```
+
+A provider whose settings the program computes from what a tick makes
+(`provider k8s { kubeconfig = k3s.kubeconfig }`, the kubeconfig read over
+SSH from the server tick 1 creates) is configured at the boundary where
+they become known, waiting for them as for any value (`--wait`) when the
+read answers "not yet". The plan lists its resources under `later`
+(`waits on  provider k8s (kubeconfig from k3s.kubeconfig)`); apply makes
+tick 1, configures the provider, says so, each setting a secret reaches
+as `(sensitive)` and `-v` adding what it is written as, never a value:
+
+```
+provider k8s: configured after tick 1: kubeconfig = (sensitive)
+```
+
+then plans what `later` held against it (a cluster's CRDs among them),
+prints that tick and asks before it as it asked before tick 1; `--yes`
+applies it. A plan file or an approval did not see that diff, so applying
+one stops before the tick, saying it plans changes `later` held for a
+provider's settings, which the approved plan did not show; the next apply
+plans them as its tick 1. The settings go to the provider in its
+Configure call only: they are not in state, the plan file, the audit log
+(a `configure` entry names the provider, the tick and the settings' keys)
+or any output. Settings that no wait brings stop the apply at that tick,
+`nothing definite to apply, still waiting on .. provider k8s (kubeconfig
+from k3s.kubeconfig)`.
 
 At a boundary apply also compares the refreshed world with what it last saw
 (the tick's refresh and its Apply responses). A change under an address whose
@@ -1433,6 +1461,9 @@ The kinds:
   attempt failed (redacted);
 - `wait`: a tick that waited on open nulls: the tick, what it waited on,
   since when, how long, and whether they `resolved` or the budget `expired`;
+- `configure`: a provider configured from the program's settings at a
+  tick's boundary (R-45): the tick, the provider, the settings' keys
+  (never their values);
 - `derived`: at the end of an apply that completes, what it derived
   (`record`), when it derived any: each rule that binds variables by its
   `FILE:LINE`, its statement and the resources it derived, and each

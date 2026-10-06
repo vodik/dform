@@ -2695,6 +2695,12 @@ fn run_with(
             // An unattended apply (`--yes`, a plan file, an approval) applies
             // only the ticks whose addresses a printed plan named.
             let unattended = yes || saved.is_some() || approval.is_some();
+            // What the last tick's plan held under `later` waiting on a
+            // provider's settings (R-110): listed, but planned only once
+            // the provider is configured, so asked for again (R-45).
+            let mut on_provider: BTreeSet<ir::Address> = BTreeSet::new();
+            // The providers the plan's own evaluation configured.
+            evaluator.take_configured();
             loop {
                 let Planned {
                     res: r,
@@ -2705,6 +2711,27 @@ fn run_with(
                 } = plan_for(res, &violations, resources, &adopts, &lifecycle, &st)?;
                 (res, resources) = (r, docs);
                 check_saved(&plan, &res, &sections, tick)?;
+                // A provider the last tick made the settings of known (a
+                // kubeconfig read from the server it created) was
+                // configured at the boundary: said, a secret setting as
+                // `(sensitive)`, and logged by its keys, never a value.
+                for name in evaluator.take_configured() {
+                    let (keys, shown): (Vec<String>, Vec<String>) = evaluator
+                        .settings_shown(&name, &res.facts, why >= report::Why::How)
+                        .into_iter()
+                        .unzip();
+                    if why != report::Why::None {
+                        println!(
+                            "provider {name}: configured after tick {}: {}",
+                            tick - 1,
+                            shown.join(", ")
+                        );
+                    }
+                    audit.append(
+                        "configure",
+                        serde_json::json!({ "tick": tick - 1, "provider": name, "settings": keys }),
+                    )?;
+                }
                 // What the policy pass says needs an approval, and the
                 // digest of this plan: the file's, else of the plan as a
                 // file would record it.
@@ -2868,14 +2895,38 @@ fn run_with(
                             tick: tick - 1,
                             new,
                             unnamed,
+                            on_provider: false,
                         }
                         .into());
                     }
-                    if new > 0 {
-                        confirm(new, true, &deployment, tick, cli.style)?;
+                    // What `later` showed waiting on a provider, planned
+                    // now against it: asked for as tick 1 was, unless
+                    // `--yes`; a plan file or an approval did not see it.
+                    let planned = addresses
+                        .iter()
+                        .filter(|a| on_provider.contains(**a))
+                        .count();
+                    if planned > 0 && !yes && unattended {
+                        st.in_flight = None;
+                        persist(&st)?;
+                        return Err(Stopped {
+                            tick: tick - 1,
+                            new: planned,
+                            unnamed: Vec::new(),
+                            on_provider: true,
+                        }
+                        .into());
+                    }
+                    if new > 0 || (planned > 0 && !yes) {
+                        confirm(new + planned, true, &deployment, tick, cli.style)?;
                     }
                 }
                 listed.extend(addresses.into_iter().cloned());
+                on_provider = resources
+                    .iter()
+                    .filter(|r| evaluator.provider_wait(&r.addr.typ).is_some())
+                    .map(|r| r.addr.clone())
+                    .collect();
                 if hook.is_none() {
                     unnamed = report_of(&plan, &res, &sections, tick, &[], &denies)
                         .groups
@@ -3134,8 +3185,15 @@ fn run_with(
                     // tick waits, up to its budget, for one to change.
                     let on = waiting_on(&sections, &st, externs);
                     if on.is_empty() || wait_budget.is_zero() {
-                        let waits: Vec<String> =
-                            waits.iter().map(|n| format!("?{}", ir::label(n))).collect();
+                        // A null by its label; a provider's settings as
+                        // `later` names them (R-110).
+                        let waits: Vec<String> = waits
+                            .iter()
+                            .map(|n| match n.starts_with("provider ") {
+                                true => n.clone(),
+                                false => format!("?{}", ir::label(n)),
+                            })
+                            .collect();
                         bail!(
                             "apply stopped at tick {tick}: nothing definite to apply, still waiting on {}",
                             waits.join(" ")
@@ -3715,6 +3773,10 @@ struct Stopped {
     tick: usize,
     new: usize,
     unnamed: Vec<String>,
+    /// The changes are what `later` held waiting on a provider's settings,
+    /// named but planned only now (R-45): the plan file or approval did
+    /// not see their diff.
+    on_provider: bool,
 }
 
 impl std::fmt::Display for Stopped {
@@ -3724,13 +3786,23 @@ impl std::fmt::Display for Stopped {
             [] => String::new(),
             gs => format!(" ({})", gs.join("; ")),
         };
+        let what = match self.on_provider {
+            true => format!(
+                "plans {} change{s} `later` held for a provider's settings, which the \
+                 approved plan did not show",
+                self.new
+            ),
+            false => format!(
+                "adds {} change{s} the plan could not name{groups}",
+                self.new
+            ),
+        };
         write!(
             f,
-            "apply stopped after tick {}: tick {} adds {} change{s} the plan could not \
-             name{groups}; run apply again to plan them against the world as it now is",
+            "apply stopped after tick {}: tick {} {what}; run apply again to plan them \
+             against the world as it now is",
             self.tick,
             self.tick + 1,
-            self.new,
         )
     }
 }
