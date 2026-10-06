@@ -950,6 +950,7 @@ dependencies = [
  "k8s-openapi",
  "kube",
  "libc",
+ "russh",
  "rusty-s3",
  "serde_json",
  "tokio",
