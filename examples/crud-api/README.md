@@ -6,4 +6,4 @@ dform apply   # 3 ticks: database and Job; blue; the Service's selector
 dform controller run crud_api
 ```
 The plan's `undetermined:` denies are decided once the Job reports.
-Features: a component with conditional instances, `world.T`, a derived password (`random.password`), secrets, denies.
+Features: a component with conditional resources of it, `world.T`, a derived password (`random.password`), secrets, denies.

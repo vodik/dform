@@ -56,7 +56,7 @@ For authoring, prefer:
 - named arguments (`peering(env: env, name: n)`) over positional arguments
 - object/list literals (`{k: v}`, `[a, b]`) over lots of `tags.foo` entries
 - list comprehensions (`[x | ...]`) over hand-written `collect(...)` rules
-- a component's `instance` with a `where` clause to gate a group of
+- a resource of a component with a `where` clause to gate a group of
   resources on one guard
 - declare a set lattice for list attributes several sources contribute to (`type_lattice(iam.policy, "statements", "set")`)
 

@@ -69,7 +69,7 @@ fn len(value: list) -> int?
 #| example: let vpc_cidr = ref(net.vpc, "vpc", "cidr")
 fn ref(type: string, name: string, path: string) -> ref forwards
 
-#| A name inside a module instance, its path `scope.name` (R-112), as module lowering writes it.
+#| A name inside a used module or a copy, its path `scope.name` (R-112), as module lowering writes it.
 #| example: let n = scoped("network.main", "vpc")
 fn scoped(scope: string, name: string) -> string forwards
 

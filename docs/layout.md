@@ -50,12 +50,13 @@ dform.state/                state: per deployment, audit logs, plan keys,
   `use` (`use config`, then `config.region`), once under its name, its
   inputs bound by a block on the `use` (`use traefik { acme_email }`) or by
   their defaults, its resources stamped once under its name
-  (`traefik/x`). `component NAME { .. }`, an item of a module, is what is
-  copied many times, by `instance` (`instance modules.net.vpc blue`). A
+  (`traefik.x`). `component NAME { .. }`, an item of a module, is a type
+  the program defines, made many times by `resource` (`resource
+  modules.net.vpc blue { .. }`). A
   path is looked up, never searched: `modules.net` is `modules/net.df`,
   and `modules.net.vpc` its `component vpc`. A stack is a module the tool
   uses: `use stacks.platform` binds to its deployments, and no program
-  instances it. A module named like the standard library's (`str.df`,
+  makes a resource of it. A module named like the standard library's (`str.df`,
   `list.df`) is an error: `std` is in every scope already.
 - A keyed stack's settings document is one file per deployment under
   `config/<stack>/`, named by the key's value, `set from
@@ -73,7 +74,7 @@ dform.state/                state: per deployment, audit logs, plan keys,
   the HMAC key of its plan files and audit log) is a secret.
 
 The lints: a file that is not a stack with a `key` is an error, and so is
-an `instance` of a stack.
+a resource of a stack.
 
 ## This repository
 

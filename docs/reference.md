@@ -63,8 +63,8 @@ world file, and runs anywhere). A stack is a file, named after itself:
 `stacks/shop.df` is the stack `shop`. With no `stacks/` directory the
 root's `.df` files are the stacks, so `dform.toml` beside `shop.df` is a
 project with one stack; any file runs by path, named after itself. A
-file that is not a stack with a `key` is an error, and so is an
-`instance` of a stack. `docs/layout.md` has the convention; every
+file that is not a stack with a `key` is an error, and so is a
+resource of a stack. `docs/layout.md` has the convention; every
 example under `examples/` follows it, and test-only programs are under
 `tests/fixtures/`.
 Each example's `README.md` says what it shows and lists the commands to
@@ -534,8 +534,8 @@ overriding them, with `dform dev --provider NAME` (repeatable). There is
 no default: a program with no provider's `use` starts none, and
 `plan`, `apply`, `query`, `why` and `test` refuse it, "the program names no
 provider: add `use NAME` (dform.toml names its source) or run under
-`dev --provider`". A `use` or `instance` with no entries is written
-without braces (`use fake`, `instance network blue`); `fmt` drops a
+`dev --provider`". A `use` with no entries is written
+without braces (`use fake`); `fmt` drops a
 `{}`. In any block an entry that is only a path takes the value of its
 last segment's name, `region` for `region = region` and
 `spec.selector.color` for `spec.selector.color = color`, as `{ a }` is
@@ -918,7 +918,7 @@ apply: tick 1 once this plan's digest is approved (`--approval`), then tick 2 wh
   then where it is derived, `FILE:LINE`. An attribute: `path = value`
   (`path: before → after` in an update), then `FILE:LINE` only when the
   value was written outside the change's own block: a policy, a `set`, a
-  `--set` (its flag), an instance's input, a config module's `let`,
+  `--set` (its flag), a copy's input, a config module's `let`,
   followed through the inputs and `let`s that pass it on. A value written
   in its own block says nothing more. A reference is the address it
   names, `ssh_key = k3s.admin`, no `?`; a value another resource
@@ -1197,7 +1197,7 @@ lifecycle(pg, "prevent_destroy") where env == "prod", pg in db.postgres   # ever
 ```
 
 `moved(T, Old, new)` rewrites state's identity from `Old` to `new` before the
-diff, so renaming a component instance with a `moved` fact per resource plans
+diff, so renaming a component's resource with a `moved` fact per resource plans
 undeformed (`moved T["Old"] -> T["new"]` is printed; `apply` persists it). The
 old side is text, since it names a resource that no longer exists; the new
 side is a reference. It applies only while state maps `Old` and not `new`, so
@@ -1572,7 +1572,7 @@ db.name`, an unknown the attribute it stands for after a `?`,
 circuit every evaluation records (proposal E §3, DR-10), in the program's
 own terms: each statement that fired, as written, at its `file:line` (a
 block shows the entry that fired, the rest elided as `..`; a used
-module's statement names its `use`, a copy's its `instance`), then `with` the statement's
+module's statement names its `use`, a copy's its `resource`), then `with` the statement's
 variables as they were bound, by their names in the source, and under them
 each computed term of the statement with its value: an interpolation, a
 function call, a read (`database.backup_days = 14`), a lookup
@@ -1614,7 +1614,7 @@ cargo run -- -C examples/demo why 'attr(net.vpc, "main.vpc", "tags.team", "platf
 #   │    baseline.df:10  set r.tags = { team: "platform" } where r in resource   (use baseline)
 #   │    with r = net.vpc main.vpc
 #   │    └─ net.vpc main.vpc
-#   │         network.df:15  resource net.vpc vpc { .. }   (instance network.vpc main)
+#   │         network.df:15  resource net.vpc vpc { .. }   (resource network.vpc main)
 #   ...
 #   └─ ... 1 other contribution (--all)
 cargo run -- -C examples/tour why orders.backup_days tour env=prod
@@ -1650,7 +1650,7 @@ columns the source states must match and are left out; with none that
 do, the nearest rows whole; an attribute by its value there); a
 comparison says `false` with the values it compared; a negation the row
 that exists; a row a rule of the program derives (a copy's guard,
-`instance network.vpc peer: not made`, a relation of its own) is
+`resource network.vpc peer: not made`, a relation of its own) is
 followed one level in, up to three, with the rule that did not derive it.
 What no rule mentions gets one line and nothing invented:
 `no rule derives aws.subnet["x"]: no resource aws.subnet is named like
@@ -1659,9 +1659,9 @@ it`; what is derived says so and points at `why`.
 ```bash
 cargo run -- -C examples/demo why-not 'net.vpc["peer.vpc"]' dform env=dev
 # net.vpc["peer.vpc"]: no rule derives it
-#   network.df:19  resource net.vpc vpc { .. }   (instance network.vpc peer)
-#     instance network.vpc peer: not made
-#       stacks/dform.df:54  instance network.vpc peer { .. } where env != "dev"
+#   network.df:19  resource net.vpc vpc { .. }   (resource network.vpc peer)
+#     resource network.vpc peer: not made
+#       stacks/dform.df:54  resource network.vpc peer { .. } where env != "dev"
 #         env != "dev": false, with env = "dev"
 ```
 
@@ -1912,8 +1912,8 @@ for byte, and a file with a syntax error is reported, not rewritten.
     literal. Literal order is irrelevant; an unbound operand is an error
     at it, and `=` between two bound sides says to write `==`.
   - `use PATH [as N] [{ k = v }] [where B]` imports a module, a file by
-    its path from the project root, once under `N`; `instance PATH N {
-    k = v }` copies a component (see "Modules").
+    its path from the project root, once under `N`; `resource PATH N {
+    k = v }` of a component makes one of it (see "Modules").
 
 - Schemas and wildcards:
   - `decl pred(field_one: type, field_two)` declares a relation by its
@@ -2102,7 +2102,8 @@ gone.
 
 Several `input p from ..` lines are one relation, their rows together,
 and facts the program states join them. A module takes a relation from
-its user with `input p` alone, and the user's `use` or `instance` block
+its user with `input p` alone, and the user's `use` block (or its
+resource's, of a component)
 gives its rows (`zone("a", 0)`, `zone(z, n) where az(z, n)`, or `zone
 from csv("zones.csv")`); `output p` hands a relation out, read
 `copy.p(x, ..)`, `c[t].p(x, ..)` or `stack[k=v].p(x, ..)`, one fact per
@@ -2367,7 +2368,8 @@ searched; `[packages.NAME] path = "../infra"` in `dform.toml` mounts
 another project at `NAME`; `std` is in every scope. `use` imports a
 module once under its name (or `as` one), its inputs bound by a block on
 the `use` or by their defaults; `component NAME { .. }`, an item of a
-module, is the thing copied many times, by `instance PATH NAME { .. }`:
+module, is a type the program defines, made many times with `resource
+PATH NAME { .. }` as a provider's type is:
 
 ```dform
 # database.df: a module with inputs and a resource.
@@ -2379,7 +2381,7 @@ output iam_need = { action: "db.connect", resource: db }
 
 # network.df: a component, copied once per network.
 component vpc {
-  input vpc_net: inet                        # set by each instance
+  input vpc_net: inet                        # set by each resource of it
   input zones: list(string) = ["a", "b"]     # a default: @default rank
   resource net.vpc vpc { cidr = vpc_net }
   zone_index(z, i) where z = zones[i]        # private to each copy
@@ -2391,7 +2393,7 @@ component vpc {
 
 # stacks/dform.df
 use baseline
-instance network.vpc main { vpc_net = inet(cidrs.main) }
+resource network.vpc main { vpc_net = inet(cidrs.main) }
 use database {
   backup_days = 14
   subnet(s) where main.private_subnet(s)     # rows of its relation
@@ -2436,9 +2438,8 @@ a name (`database`, `main`):
 
 A name a module does not define reads outward, its user's: `env` in a
 policy pack is the stack's. A module used from two stacks runs in both,
-each in its own state. `instance` of a module, `use` of a component, a
-copy with no name and `instance` of a stack are errors naming what to
-write.
+each in its own state. A resource of a module, `use` of a component and
+a resource of a stack are errors naming what to write.
 
 ### Policies
 
@@ -2533,7 +2534,7 @@ The highlight query captures a dot in a field-value position as
 element of a list or object there, a comprehension's item) and leaves a
 dot anywhere else a plain read, as proposal G (G-6) lowers them. This is
 the syntax's answer: a chain whose head is a `let` of a reference
-or an instance output is a read in any position, which only the resolver
+or a copy's output is a read in any position, which only the resolver
 (and a language server) knows.
 
 `tests/treesit_agreement.rs` holds the two parsers together: every file
@@ -2560,7 +2561,7 @@ files (Emacs 29.1+; developed against Emacs 30/32): font-lock from
 `highlights.scm` (the reference capture gets `dform-reference-face`,
 underlined by default, a doc comment `font-lock-doc-face`), indentation from `indents.scm`, and imenu and
 defun navigation for rules (by head predicate), components, `use`s (by
-path), instances and resources (by type and name).
+path) and resources (by type and name).
 
 With straight.el, from a local checkout of this repository:
 
@@ -2646,7 +2647,7 @@ examples/demo an evaluation takes about 30 ms in a release build.
 - *Docs at point*: on a declared name, where it is declared or used, its
   declaration's first line and doc comment (docs/grammar.md "Doc
   comments"); an alias its definition; a component, in its declaration or
-  an instance's path, its docs and its inputs and outputs with theirs;
+  a resource's type path, its docs and its inputs and outputs with theirs;
   `n.k` the output's; a schema type its description; a builtin or a keyword its
   signature, summary and an example (`engine::REFERENCE`). Point on
   anything else (whitespace, a comment, a literal, a variable) has no
@@ -2659,8 +2660,8 @@ examples/demo an evaluation takes about 30 ms in a release build.
   one too.
 - *Schema completion*: a resource block's paths (type, flags,
   refinements and description from the provider's schema facts) and an
-  enum path's values; types after `resource`; an instance block's
-  component inputs and a copy's outputs after `n.`; elsewhere the builtins and keywords a
+  enum path's values; types after `resource`; a component's resource's
+  block's component inputs and a copy's outputs after `n.`; elsewhere the builtins and keywords a
   word starts, each with its signature.
 - *Quick fixes* (`textDocument/codeAction`), each on its diagnostic: an
   unknown name (quote it), `=` with both sides bound (write `==`), a predicate with both facts and rules (`decl
@@ -2672,19 +2673,19 @@ examples/demo an evaluation takes about 30 ms in a release build.
 - *References* of a predicate, an input or value name (a `{ k }` field
   included) and an object input's field (`nodes.count`), a `let` or type
   alias (bare or read through its module), an output, a component, a
-  module a `use` names, an instance, a resource (by its name in scope,
+  module a `use` names, a resource (by its name in scope,
   and its address written as a string, `net.vpc["main"]` in a
   `lifecycle` fact or a deny), a function, across the project's files
-  and unsaved buffers and through `use` and instance scopes
-  (`config.region`, `app_db.conn`, `platform[env].out`, an instance
-  block's `k = v`), in strings' `${..}` holes too, read in the
+  and unsaved buffers and through `use` and copy scopes
+  (`config.region`, `app_db.conn`, `platform[env].out`, a component's
+  resource's block's `k = v`), in strings' `${..}` holes too, read in the
   resolver's order (docs/grammar.md "Names",
   `dform_core::names`); a relation a component or a module file defines
   is its own (two components' private `helper` are two). On an attribute
   path (a field of a resource block, `r.p` in a body, an `attr`
   literal): every rule contributing to that cell, across components and
   modules, as the hover lists them.
-- *Rename* of the same names. Renaming a resource or an instance whose
+- *Rename* of the same names. Renaming a resource (a component's too) whose
   addresses have state in the selected deployment adds, in
   the same edit, `moved(T, "old", new)` per address just after the
   declaration's block, so the next plan is a move and not a destroy and a
@@ -2695,13 +2696,13 @@ examples/demo an evaluation takes about 30 ms in a release build.
   what changed, if it adds a diagnostic or changes the plan in anything
   but the renamed addresses. `prepareRename` refuses keywords, builtins,
   schema types, attribute paths, provider names and dform's own
-  relations (`data`, `attr`, ...), and an instance whose name is also a
+  relations (`data`, `attr`, ...), and a component's resource whose name is also a
   string a dynamic index `c[e]` may read (naming where the string is).
 - Formatting (`dform fmt`'s formatter) and go-to-definition of every
   name the references find: its declaration (a relation's `decl`, else
   its first rule; an output's typed declaration; a resource two types
-  name, the one the attribute's `ref(T)` takes, R-74); on a `use` or
-  `instance` path, the file (or the component in it) the path names
+  name, the one the attribute's `ref(T)` takes, R-74); on a `use`'s path
+  or a component's resource's type, the file (or the component in it) the path names
   (R-65), and from a name a `use` binds, its file. A std function
   (`inet.subnet`) goes to its signature line, a provider type
   (`net.vpc`) to the line of its schema file that declares it and an

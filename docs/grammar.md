@@ -40,7 +40,7 @@ Every file is a module (see "Modules"); a file under `stacks/` is a
 stack, a module the tool uses, named after itself, and `key` makes one
 deployment per value. What a file takes is its header, before its body:
 `key` lines, then `input` lines (value inputs, then
-relation inputs, `input p from ..`). `use` and `instance` are body
+relation inputs, `input p from ..`). `use` and `resource` are body
 statements. Everything
 else is the body, a provider's `use` included: its settings are a rule
 that may read values, in scope for the whole program wherever it is
@@ -59,7 +59,7 @@ Unlike `key` and `input`, the parser does not reject a `decl` or an
 position); `dform fmt` places them regardless, moving each with the
 comments it owns. A component's `{ }` block takes the same order, `input`
 then `decl` then `output`, nothing in it checked by the parser at all
-(it is fmt's alone to place); `use` and `instance` stay among the body's
+(it is fmt's alone to place); `use` and `resource` stay among the body's
 statements, in a component as in a file.
 
 The first token decides what a statement is (H-2): a statement keyword
@@ -71,7 +71,7 @@ term wraps inside its brackets. There is no statement terminator: `p(a).`
 is an error that says so, and so is `:-`.
 
 Two statements on one line are an error ("expected the end of the line").
-A block (`{ }` of a resource, `set`, instance or provider) and a
+A block (`{ }` of a resource, a `set` or a `use`) and a
 body block (`where { }`) separate their entries by a newline or a comma.
 
 ## Tokens
@@ -95,17 +95,20 @@ name; what its unit means is the literal's ("Quantities and times").
 `-` is always an operator: a hyphenated name is a string, and the parser
 says so.
 
-Statement keywords, recognised only as the first token of a statement (17):
+Statement keywords, recognised only as the first token of a statement (14):
 
 ```
-provider  key  type  decl  extern
+key  type  decl  extern
 input  output  let  set
-component  instance  use
-resource  deny  warn
+component  use  resource
+deny  warn
 ```
 
 `settings` is reserved: the statement of an earlier surface (R-38), an
-error naming `set`.
+error naming `set`. `provider`, `instance` and the other statements of
+earlier surfaces are names, and a statement starting with one is an
+error naming its spelling now (`use NAME { .. }`, `resource C n { ..
+}`).
 
 Body words: `not in has`. The clause word: `where` (R-1). Literals: `true
 false`. These six, and the reserved `if`, are never a name in a term; `if`
@@ -223,7 +226,7 @@ program-wide: `loader::load_program` parses the entry file and every module
 its paths name (see "Modules"), collects the declarations of all of them,
 then lowers each: the entry as the program's top level, each module as
 itself. Statement order means nothing (R-100): a read may come before
-the resource, `let`, `use` or `instance` it names, as `dform fmt` writes
+the resource, `let` or `use` it names, as `dform fmt` writes
 a file with its outputs first. `parser::parse_file` and `parse_program` lower one text on its
 own.
 
@@ -235,7 +238,7 @@ What a name can denote:
 | value name        | `input k: T`, a component's input, `let k = t`    | `k`                              |
 | resource          | a `resource T n {..}` header with a static name   | `n.p` in scope, `T[e].p`         |
 | module            | `use m`, `use a.b as m`                           | `m.x` (a value, an output, a resource), `m.p(..)` |
-| copy              | `instance c n`                                    | `n.k` (an output), `c[e].k`      |
+| copy              | `resource c n {..}`, `c` a component              | `n.k` (an output), `c[e].k`      |
 | stack deployment  | `use stacks.s`                                    | `s[k=v].out`, `s.out` unkeyed    |
 | live object       | the provider's inventory                          | `world.T[e].p`                   |
 | type              | see "Types"                                       | `T` (dotted or not)              |
@@ -243,7 +246,7 @@ What a name can denote:
 
 `.` is static and `[ ]` is a key (H section 5.1): a postfix `.name` is a
 member the program text names, which the resolver finds at compile time (a
-resource in scope, an instance's output, an attribute path, a record
+resource in scope, a copy's output, an attribute path, a record
 field), and a name it cannot find is an error. A postfix `[term]` is a
 lookup by a key computed at run time: a join, which may give no row, one or
 several, and never an error for a key that is not there.
@@ -595,10 +598,9 @@ set        := "set" chain ("=" | "+=") term RANK? ("where" body)?
             | "set" "from" term selector? RANK? ("where" body)?   ; a document's leaves (R-38)
 selector   := ("." SEG | "[" "*" "]")+                ; a path into a document (R-39)
 use        := "use" path ("as" NAME)? cblock? ("where" body)?
-instance   := "instance" path NAME cblock? ("where" body)?
 component  := "component" NAME (":" type)? stmts   ; an item of a module, of a signature
 path       := NAME ("." NAME)*                    ; a/b.df from the root; std.x; a package mount
-resource   := "resource" DOTTED hname RANK? block ("where" body)?
+resource   := "resource" DOTTED hname RANK? cblock ("where" body)?   ; DOTTED a type or a component
 deny, warn := ("deny" | "warn") STRING object? ("where" body)?
 stmts      := "{" (stmt NL)* "}"
 
@@ -607,7 +609,7 @@ attrdecl   := blockpath ":" (attrs | type flag* ("check" body1)?)
 flag       := "required" | "computed" | "id" | "sensitive" | "nullable"
 block      := "{" (entry SEP)* "}"
 entry      := blockpath (("=" | "+=") term)? RANK?   ; `zone` alone is `zone = zone`
-cblock     := "{" ((entry | row) SEP)* "}"          ; a `use` or `instance` block
+cblock     := "{" ((entry | row) SEP)* "}"          ; rows only for a module or a component
 row        := NAME "(" args ")" ("where" body)?     ; a row of a relation it takes
             | NAME "from" term ("where" body)?
 blockpath  := SEG ("." SEG | "[" INT "]")*
@@ -621,8 +623,8 @@ DOTTED     := NAME ("." NAME)*                     ; no spaces
 ```
 
 Every statement is `head where body` (R-1): the clause follows its head,
-on the head's line, and a block is a head. A resource, `set` block,
-instance or `use` takes at most one clause, after its block's `}` (and a
+on the head's line, and a block is a head. A resource, `set` block
+or `use` takes at most one clause, after its block's `}` (and a
 `set` block's rank): `resource T n { .. } where B`, and a body of
 several lines is `} where {`, one literal per line, closed by its own
 `}`. The clause is a query, and the block is one resource (or set of
@@ -779,7 +781,7 @@ way of giving it addresses a leaf or an object by its path: `--set
 nodes.count=2` (read as the leaf's type; a path that names no field is an
 error listing the object's fields), `--set nodes=@nodes.yaml` (each field
 the document has; one the object has not is an error), `set nodes.count = 2
-where env == "prod"`, an instance block's `nodes.count = 2` or `nodes = {
+where env == "prod"`, a copy's block's `nodes.count = 2` or `nodes = {
 .. }`, an input file's `nodes({ count: 2 })`. A field with no default is
 required like an input, by its path. `why nodes.count` shows the leaf's
 layers. A `key` is a scalar and takes no block.
@@ -814,7 +816,8 @@ columns:
   selection, a document value, a missing file) is an error that says to
   declare the columns.
 - `input p`, in a module or a component, is a relation its user gives.
-  The `use` or `instance` block gives its rows beside the values:
+  The `use` block, or the block of a resource of the component, gives
+  its rows beside the values:
   `zone("a", 0)`, a rule over the user's relations `zone(z, n) where
   az(z, n)` (a row with a clause ends its line), or a table `zone from
   csv("zones.csv") [where B]` with the module's columns. The rows are the
@@ -837,7 +840,7 @@ A stack's inputs are flat (R-55): its own and every used module's, by
 the module's name, `--set traefik.acme_email=..`, `why traefik.acme_email`,
 and `dform test` enumerates them all. A used module's input nothing gives
 is the stack input's error, at the `use`. Only a component's inputs nest:
-its instance block gives them.
+the block of a resource of it gives them.
 
 ### Giving inputs
 
@@ -932,7 +935,8 @@ statement that closes it.
   pack is the stack's);
 - its items read as `n.x`: a `let` or an input (`config.region`), a
   relation (`n.p(..)`), an output (`n.k`), a resource (`n.x`, the address
-  `T["n.x"]`), a type alias (`n.T`), a component (`n.c`, to `instance`);
+  `T["n.x"]`), a type alias (`n.T`), a component (`n.c`, a type to make
+  resources of);
 - its inputs are bound by the block, as a copy's are, else by their
   defaults; an input with neither is the error a stack input's is (`input
   traefik.acme_email is required and has no value`);
@@ -941,41 +945,58 @@ statement that closes it.
 - with a clause, all of it exists only while `B` holds.
 
 `use` twice of one name in a scope is an error unless each has a clause
-("Guarded declarations"), and so is `use` of a component; from two scopes (a stack, and a component it instances) it is
-two imports, each reading its own user's names.
+("Guarded declarations"), and so is `use` of a component; from two
+scopes (a stack, and a component it makes a resource of) it is two
+imports, each reading its own user's names.
 
-`component NAME { .. }` is an item of a module, the only thing stamped
-many times: `instance PATH NAME { k = v } [where B]` makes one copy, by
-the component's path (`instance modules.net.vpc main`, `instance net.vpc
-main` after `use modules.net`, `instance network blue` for one the file
-declares; `instance k3s.k3s cluster` after `use k3s` for k3s.df's
-`component k3s`, whose copies read `k3s.k3s[t]` since `k3s` names the
-module). A copy is named; its resources are `NAME.x` (their paths,
-"Paths"), its relations its own, its outputs `NAME.k`, and `c[t].k`
-ranges over the copies of `c` the scope makes, `instance_of(c, user,
-name)` joined to their outputs. A copy inside a copy is scoped under it
-(`edge.left.vpc`). The names a scope's
-`use`s and `instance`s bind are one namespace, a name in it declared
-once or under a clause each ("Guarded declarations"). `instance` of a
-module is an error naming `use`, and so is one with no name.
+### Components
+
+`component NAME { .. }` is an item of a module: a type the program
+defines, a resource made of resources, with inputs and outputs (R-113).
+A resource is a thing dform makes and manages, whatever defines its
+type, so `resource PATH NAME { k = v } [where B]` makes one of a
+component as `resource ovh.instance web { .. }` makes one of a
+provider's type. A module is imported; a type is made a resource of;
+whether the type is a provider's or the program's is where it was
+defined. The component's name is its path, as any item's is
+(`modules.net.vpc` for `component vpc` in modules/net.df, `net.vpc`
+after `use modules.net`, `network` for one the file declares, `k3s.k3s`
+for k3s.df's `component k3s` after `use k3s`, whose resources read
+`k3s.k3s[t]` since `k3s` names the module); a path from the root needs
+no `use`, the file is loaded for it. The resource, a copy of the
+component's body, is named: its block gives the component's inputs (and
+the rows of the relations it takes), its outputs are its computed
+attributes, read `NAME.k` as `server.public_ip` is, its resources are
+`NAME.x` (their paths, "Paths") and its relations its own. `c[t].k`
+ranges over the resources of `c` the scope makes, `instance_of(c, user,
+name)` joined to their outputs, and `x in c` binds them ("Membership");
+`blue in c` holds for one in scope. A resource of a component inside
+another is scoped under it (`edge.left.vpc`). The names a scope's `use`s
+and its components' resources bind are one namespace, a name in it
+declared once or under a clause each ("Guarded declarations"). Such a
+resource's name is literal, a word or a string with no holes (a name
+from the clause, which repeats a provider's type's resource, is not
+read for a component's yet), and it takes no rank; a provider's type's
+resource takes no rows. A resource of a module is an error naming
+`use`.
 
 ### Guarded declarations
 
-A named statement, `let`, `instance`, `use` (a module's or a
-provider's), `resource` or `input`, may be declared more than once in a scope when every
+A named statement, `let`, `use` (a module's or a provider's),
+`resource` (a component's too) or `input`, may be declared more than once in a scope when every
 declaration of the name has a clause (R-104); one without a clause is
 the only one of its name, and a second beside it is the error at the
 second, naming the first: "`db` is declared twice; give each a
 `where`". The clauses pick one, and the compiler does not prove that
 they are exclusive: the evaluation does. Each declaration holds while
 its clause does, and two that both hold are a deny naming both sites,
-"`db` is declared twice and both declarations hold: `instance pg_aws db`
-at p.df:13:1 and `instance pg_gcp db` at p.df:14:1". A read is the one
+"`db` is declared twice and both declarations hold: `resource pg_aws db`
+at p.df:13:1 and `resource pg_gcp db` at p.df:14:1". A read is the one
 that holds:
 
 ```dform
-instance postgres_aws db { name = "shop" } where cloud == "aws"
-instance cloudsql db { name = "shop" } where cloud == "gcp"
+resource postgres_aws db { name = "shop" } where cloud == "aws"
+resource cloudsql db { name = "shop" } where cloud == "gcp"
 resource k8s.secret conn { data = { url: db.conn } }
 ```
 
@@ -1043,9 +1064,9 @@ component postgres_aws: database {
 }
 ```
 
-A signature is not instanced: the guarded concrete copies are
-(`instance database db` is "database is a component signature, which is
-not instanced"). Another module's is read by its path or the name its
+A signature has no resources: the guarded concrete components' are
+(`resource database db {}` is "database is a component signature, which
+has no resources"). Another module's is read by its path or the name its
 `use` binds, `component pg: kinds.database`. `dform doc` and hover
 print it whole.
 
@@ -1067,15 +1088,16 @@ earlier surface, is an error that says so.
 `use stacks.platform` binds the stack's deployments, which the tool made:
 `platform[env=e].out` reads one deployment's output, each key given once,
 and `platform.out` reads an unkeyed stack's. It is the keyed read of a
-copy's output (`network[t].out`): a deployment is an instance of its
+copy's output (`network[t].out`): a deployment is a copy of its
 stack named by its key, `instance_of("stacks.platform", "",
 "platform[env=e]"), output("platform[env=e]", "out", V)`, those facts
 served from what the deployment published rather than evaluated (R-73).
 An output not published yet is `?platform[env=e].out`. Such a read is what
 `apply X` applies first (R-30), a key the target does not give at its
 default; a deployment named by a key the program computes may be any of
-the stack's, and every one there is is applied first. A program never instances a stack
-("stacks.platform is deployed by the tool; `use` it"), and its `use`
+the stack's, and every one there is is applied first. A program never
+makes a resource of a stack ("stacks.platform is deployed by the tool;
+`use` it"), and its `use`
 takes no block and no clause.
 
 ### Stack settings
@@ -1277,7 +1299,7 @@ which `why` prints. A `.df` file of facts is a module (`use
 data.releases`, then `releases.release(app, k, v)`), re-read like any
 program file; `facts(..)` is gone, an error that says so. A copy's
 relation input takes a document the same way, `p from DOC` in its
-`instance` or `use` block.
+resource's or `use`'s block.
 
 A loader's table lowers to externs (`src/tables.rs`), the source its bound
 inputs, the selector in the table's name:
@@ -1316,8 +1338,8 @@ body by `format`. A bare name is always the literal name (R-76):
 bare where `config` also names that is the error "Names" shows. A name
 from the clause is always a string, `resource net.vpc "${t}" { .. }
 where tenant(t, i)`; a bare name the clause binds is an error naming
-that form. An instance's name is literal too, and may not be a value in
-scope (`instance m env` with `input env` is an error). Several blocks of
+that form. A component's resource's name is literal too, and may not be
+a value in scope (`resource m env {}` with `input env` is an error). Several blocks of
 one address are its contributions ("Guarded declarations"). A block (header,
 entries, clause, interpolated names) is one rule; a header name's scope
 is its block and its clause. The clause follows the block, so the
@@ -1332,7 +1354,7 @@ argument of a relation in a body, the left of `in`, an index (`xs[_]`), a
 part of a pattern. `_.p`, `_[k]`, and `_` as a field's value, a
 function's argument, an interpolation or a comparison's side are errors
 that say to name it. `p(_)` in a head is an error naming the column (it
-has no finite set of values); `resource T _` and `instance c _` name
+has no finite set of values); `resource T _` names
 nothing; `set T[_].p = t` is `set r.p = t where r in T`, and the error prints
 it. A name that starts with `_` (`_x`) is an ordinary name, but for one
 thing: any other variable written once in its rule (header, clause,
@@ -1461,8 +1483,9 @@ too.
 `x in c`, `c` a component (`x in network`, `x in net.vpc`), binds `x` to
 each copy of it the scope sees, `instance_of("c", User, X)` as `c[t]`
 reads it (R-67): `x` is the copy's name and `x.k` its output, `route(x,
-c) where x in network, c = x.cidr`. A component is a resource type the
-program defines, and a copy is addressed as a resource is, `network["blue"]`:
+c) where x in network, c = x.cidr`; `blue in network` holds for the
+resource `blue` of it in scope. A component is a type the program
+defines, and its resource is addressed as any is, `network["blue"]`:
 in a reference column (`lifecycle`, `requires_approval`, `deformation`)
 a copy's name or such an `x` is the copy. `lifecycle(blue,
 "prevent_destroy")` and `ignore_changes` or `create_before_destroy` on a
@@ -1606,7 +1629,7 @@ A copy's output `n.k`, a value name, `p[..]` and
 ### Where reads go
 
 A read is hoisted: in a rule body just before the literal that holds it
-(positive, even under `not`); from a head, a field, an instance input or a
+(positive, even under `not`); from a head, a field, a copy's input or a
 comprehension item, appended to the body, after the clause, in source
 order of first use. A block has one shared body: a read in any field gates
 the whole block (the want and every field). Each distinct read is made
@@ -1776,7 +1799,7 @@ as it is.
 | `resource T "a-${e}" { .. }`              | name `Addr`, `Addr = format("a-%s", e')` last          |
 | `set { k = t } @r where B`                | each entry a `set`: `arg("input", "", "k", t', r) :- B, reads` (`m.k`, a used module's: `arg("input", "m", "k", ..)`) |
 | `set from F(S) @r where B`                | `arg("input", S, "p", V, r) :- B, reads, Path = S', table.F.set(Path, At, "p", V)` per input path `p`; a deny for any other ("Giving inputs") |
-| `instance c n { k = t } where B`          | `instance c n { k = t' } :- B, reads`; the copy exists while `B` holds |
+| `resource c n { k = t } where B`, `c` a component | the copy `n` of `c` with `k = t'` :- B, reads; it exists while `B` holds |
 | `use m { k = t } where B`                 | the same, of the module `m`, under `m`                 |
 | `set k = v [@r] where B`                  | `arg("input", "", "k", v, r) :- B` (`k` a leaf's path too; `r` normal by default) |
 | `--set k=v`                               | `input("k", v)`, read as `arg("input", S, "k", V, override) :- input("k", V)` (a key's: normal) |
@@ -1797,7 +1820,7 @@ as it is.
 | `yaml(S)` (a loader, as a value)          | `V`, reading `table.yaml.document(S', At, V)`          |
 | `input p from F(S) where B`               | `p(C) :- B, reads, Path = S', table.F.p(Path, At, C)` ("Documents") |
 | `input p from t`                          | `p(C) :- reads, Doc = t', table.value.p(Doc, At, C)`   |
-| `instance c n { p(t) where B }`           | `n::p(t') :- B, reads`, the copy's relation `p`        |
+| `resource c n { p(t) where B }`           | `n::p(t') :- B, reads`, the copy's relation `p`        |
 | `enum("a", "b")` in a type                | `enum(a, b)`                                           |
 | `"a${e}b"`                                | `format("a%sb", e')`                                   |
 | `k` (value name)                          | `V`, reading `k(V)`                                    |
@@ -1888,8 +1911,7 @@ The groups, and how each breaks:
   (`{ k: [` .. `] }`): the only closers not on their own line;
 - a comprehension: `[ item |` on the first line, a body literal per line
   with a trailing comma, the last's too, `]` on its own line;
-- a block (a resource's, a `use`'s or an `instance`'s, a `set`'s, a
-  provider's, a type's, an object input's or output's fields) and a
+- a block (a resource's, a `use`'s, a `set`'s, a type's, an object input's or output's fields) and a
   `not { }` body: one entry per line and no commas, the newline separates;
   on one line, `{ a = 1, b = 2 }`; a block holding an entry with a body
   (a row's `where`) is always an entry per line;
@@ -1921,7 +1943,7 @@ The normal forms:
   nothing sets a path below them, in source order at the first one's
   place; a parent with an object under it (`metadata.labels = { .. }`) or
   with one leaf (`spec.replicas = 1`) stays dotted;
-- a `use` or `instance` with no entries has no block: `use aws`;
+- a `use` with no entries has no block: `use aws`;
 - a header name is bare when it is a name, not a keyword, and not bound by
   the clause; else it is quoted;
 - `not { lit }` of one literal whose names are all bound is `not lit`;
@@ -1938,8 +1960,8 @@ The normal forms:
   `inet`, `ip` or `time` constructor of a string in a position of its type
   is dropped (`inet("10.0.0.0/16")` is `"10.0.0.0/16"`). The positions are
   a schema attribute (in a block, or a `set`, through a variable over a
-  keyed list's elements too), an input's default, an `instance`'s or a
-  `use`'s entry for an input, a function's typed parameter, and a
+  keyed list's elements too), an input's default, a component's
+  resource's or a `use`'s entry for an input, a function's typed parameter, and a
   `decl`'s typed column (where `"500m"`, which unquoted waits for a type
   the column does not give it, stays a string). A literal
   that does not read as its type is left for the compiler to report. The
@@ -1972,5 +1994,5 @@ A formatted file prints back byte for byte.
 - (R-65) A stack is a file under `stacks/` or one `[stacks.NAME]` names,
   for `use`; discovery keeps its fallback (with no `stacks/`, the root's
   files are the stacks).
-- (R-65) `use` of a component item is an error naming `instance`: a
-  module is imported, a component copied.
+- (R-65, R-113) `use` of a component item is an error naming `resource`:
+  a module is imported, a component is a type.
