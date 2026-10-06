@@ -1,6 +1,6 @@
-//! The plan printer's sections (E §7.4, F DR-2 revised, DR-9 revised):
-//! set-aware diffs, "may derive after tick N", shadowed and conflicts, the
-//! summary line and the apply order.
+//! The plan printer's sections (E §7.4, F DR-2 revised, DR-9 revised,
+//! R-79): set-aware diffs, the ticks and what each waits on, `later`,
+//! shadowed and conflicts, the summary line and what apply does.
 
 mod common;
 use common::{Scratch, repo};
@@ -26,20 +26,22 @@ fn gke(s: &Scratch, extra: &[&str], cmd: &str) -> common::Run {
 }
 
 #[test]
-fn gke_plan_has_the_summary_hints_and_apply_order() {
+fn gke_plan_has_the_summary_ticks_and_later() {
     let s = Scratch::new("sections-gke");
     let r = gke(&s, &[], "plan").success();
     let first = r.stdout.lines().next().unwrap();
     assert_eq!(
         first,
-        "plan: 3 deformations (3 create), 4 pending, 1 undetermined"
+        "plan: 6 changes (6 create) over 2 ticks, 1 undetermined"
     );
     for want in [
-        "definite:\n+ google.compute_subnetwork[\"gke_subnet\"]\n",
-        "pending on ?google.container_cluster[\"pngu\"].ca_certificate ?google.container_cluster[\"pngu\"].endpoint (resolves after tick 1):\n",
-        "? google.container_node_pool[?] x unknown, on ?google.container_cluster[\"pngu\"].zones, resolves after tick 1",
-        "? deny \"cluster must be in at least two zones\" on ?google.container_cluster[\"pngu\"].zones, decided after tick 1",
-        "apply order:\n  tick 1\n    google.compute_subnetwork[\"gke_subnet\"]\n    google.container_cluster[\"pngu\"]\n    google.compute_address[\"static_ip\"]\n  tick 2\n    k8s.deployment[\"api\"]\n    k8s.namespace[\"pngu\"]\n    k8s.secret[\"db_credentials\"]\n    google.container_node_pool[?]\n",
+        "\ntick 1  3 changes, applies now\n  + google.compute_subnetwork[\"gke_subnet\"]  ",
+        "\ntick 2  3 changes, after tick 1 reports\n  waits on  google.container_cluster[\"pngu\"].ca_certificate\n            google.container_cluster[\"pngu\"].endpoint\n  + k8s.deployment[\"api\"]  ",
+        "\nlater   changes this plan cannot count yet\n  google.container_node_pool[\"np-${z}\"]  ",
+        "  waits on google.container_cluster[\"pngu\"].zones\n",
+        "  deny \"cluster must be in at least two zones\"  ",
+        "  undetermined until tick 2\n",
+        "\napply: tick 1 now, then tick 2 when tick 1 reports; `later` is planned again when tick 1 reports, and apply asks before what it adds\n",
     ] {
         assert!(r.stdout.contains(want), "{want}\n---\n{}", r.stdout);
     }
@@ -61,7 +63,7 @@ deny "no nodepool in zone z" {pool: n} where n in google.container_node_pool, ar
     let r = gke(&s, &["extra.df"], "plan").success();
     assert!(
         r.stdout.contains(
-            "? deny \"no nodepool in zone z\" on ?google.container_cluster[\"pngu\"].zones, may derive after tick 1"
+            "  deny \"no nodepool in zone z\"                      p.df:112  may hold at tick 2\n"
         ),
         "{}",
         r.stdout
@@ -98,7 +100,7 @@ fn a_keyless_set_diffs_by_element() {
     let r = aws(&s, "plan").success();
     assert!(
         r.stdout.contains(
-            "~ aws.security_group[\"web\"]\n  - ingress[]\n      cidr_blocks[0] was \"0.0.0.0/0\"\n      from_port was 22\n      protocol was \"tcp\"\n      to_port was 22\napply order"
+            "  ~ aws.security_group[\"web\"]\n      - ingress[]  stacks/aws_demo.df:27  (over @default)\n          cidr_blocks[0] was \"0.0.0.0/0\"\n          from_port was 22\n          protocol was \"tcp\"\n          to_port was 22\n\napply: tick 1 now\n"
         ),
         "{}",
         r.stdout
@@ -142,7 +144,7 @@ provider fake
         .success();
     assert!(
         r.stdout.contains(
-            "~ k8s.deployment[\"api\"]\n  + spec.template.spec.containers[name=sidecar]\n      image = \"envoy:1\"\n      name = \"sidecar\"\n"
+            "  ~ k8s.deployment[\"api\"]\n      + spec.template.spec.containers[name=sidecar]  p.df:6  (over @default)\n          image = \"envoy:1\"\n          name = \"sidecar\"\n"
         ),
         "{}",
         r.stdout
@@ -151,8 +153,8 @@ provider fake
 
 /// DR-9 revised and E §2.8: a shadowed disagreement is a section, and a
 /// conflict is a section naming the resource, the path and every witness
-/// with where it is written; the conflicted address is not a deformation,
-/// and the plan refuses.
+/// with where it is written; the conflicted address is not a change, and
+/// the plan refuses.
 #[test]
 fn shadowed_and_conflicts_are_sections() {
     let s = Scratch::new("sections-conflict");
@@ -174,15 +176,15 @@ provider fake
         .failure();
     assert_eq!(
         r.summary(),
-        "plan: 1 deformation (1 create), 1 conflict",
+        "plan: 1 change (1 create) over 1 tick, 1 conflict",
         "{}",
         r.stdout
     );
     assert!(!r.stdout.contains("+ net.vpc[\"main\"]"), "{}", r.stdout);
     for want in [
-        "shadowed:\n! net.vpc[\"two\"].cidr at rank default: two contributions disagree at cidr\n",
-        "conflicts:\n! net.vpc[\"main\"].cidr: two contributions disagree\n    normal \"10.0.0.0/16\"  from arg(\"net.vpc\", \"main\", \"cidr\", \"10.0.0.0/16\", \"normal\") (at p.df:3:25)\n",
-        "    normal \"10.1.0.0/16\"  from arg(\"net.vpc\", \"main\", \"cidr\", \"10.1.0.0/16\", \"normal\") :- ok(1) (at p.df:4:1)\n",
+        "\nshadowed\n  ! net.vpc[\"two\"].cidr at rank default: two contributions disagree at cidr\n",
+        "\nconflicts\n  ! net.vpc[\"main\"].cidr: two contributions disagree\n      normal \"10.0.0.0/16\"  from arg(\"net.vpc\", \"main\", \"cidr\", \"10.0.0.0/16\", \"normal\") (at p.df:3:25)\n",
+        "      normal \"10.1.0.0/16\"  from arg(\"net.vpc\", \"main\", \"cidr\", \"10.1.0.0/16\", \"normal\") :- ok(1) (at p.df:4:1)\n",
     ] {
         assert!(r.stdout.contains(want), "{want}\n---\n{}", r.stdout);
     }
@@ -218,7 +220,7 @@ provider fake
         .failure();
     assert!(
         r.stdout
-            .contains("conflicts:\n! leaky.vault[\"v\"].password"),
+            .contains("\nconflicts\n  ! leaky.vault[\"v\"].password"),
         "{}",
         r.stdout
     );
@@ -246,17 +248,21 @@ fn a_denied_replace_is_a_section() {
         .failure();
     assert_eq!(
         r.stdout,
-        "plan: 1 deformation (1 replace)\ndefinite:\n\
-         -/+ net.vpc[\"main\"]  (replace)\n  cidr: \"10.0.0.0/16\" -> \"10.1.0.0/16\"\n\
-         denied:\n! lifecycle prevent_destroy: the plan would replace net.vpc[\"main\"]\n\
-         apply order:\n  tick 1\n    net.vpc[\"main\"]\n"
+        "plan: 1 change (1 replace) over 1 tick, 1 denied\n\n\
+         tick 1  1 change, applies now\n\
+         \x20 ± net.vpc[\"main\"]                        cidr is immutable\n\
+         \x20     cidr: \"10.0.0.0/16\" → \"10.1.0.0/16\"  p.df:2\n\n\
+         denied\n\
+         \x20 lifecycle prevent_destroy: the plan would replace net.vpc[\"main\"]  net.vpc[\"main\"]    p.df:4\n\n\
+         apply: refused until the conflicts and denies above are resolved\n"
     );
     assert!(r.stderr.contains("blocked by constraints"), "{}", r.stderr);
 }
 
 /// `--color always` paints the plan by its semantics (a create's `+`
-/// green, its address bold, a null cyan, the pending group in the warning
-/// colour); `never`, `NO_COLOR` under `auto`, and `--json` print none.
+/// green, its address bold, a tick's head bold, a value waited on cyan,
+/// a rule in `later` in the warning colour); `never`, `NO_COLOR` under
+/// `auto`, and `--json` print none.
 /// What `plan` prints uncoloured is the text every golden has.
 #[test]
 fn color_is_a_rendering_of_the_same_text() {
@@ -277,10 +283,11 @@ fn color_is_a_rendering_of_the_same_text() {
     };
     let always = colored("always");
     for want in [
-        "\x1b[32m+\x1b[0m \x1b[1mgoogle.compute_subnetwork[\"gke_subnet\"]\x1b[0m\n",
-        "\x1b[1mdefinite:\x1b[0m\n",
-        "\x1b[36m?google.container_cluster[\"pngu\"].zones\x1b[0m",
-        "\x1b[1;33m? google.container_node_pool[?] x unknown",
+        "  \x1b[32m+\x1b[0m \x1b[1mgoogle.compute_subnetwork[\"gke_subnet\"]\x1b[0m  ",
+        "\x1b[1mtick 1  3 changes, applies now\x1b[0m\n",
+        "  waits on  \x1b[36mgoogle.container_cluster[\"pngu\"].ca_certificate\x1b[0m\n",
+        "\x1b[36m?google.compute_subnetwork[\"gke_subnet\"]\x1b[0m",
+        "  \x1b[1;33mgoogle.container_node_pool[\"np-${z}\"]\x1b[0m  ",
     ] {
         assert!(always.contains(want), "{want:?}\n---\n{always:?}");
     }
@@ -346,16 +353,17 @@ fn plan_why_explains_an_update_and_a_delete_and_redacts_a_secret() {
     let r = run("SECOND-SECRET-456", &["plan", "--why"]).success();
     assert!(
         r.stdout.contains(
-            "~ leaky.vault[\"v\"]\n  password: (sensitive) -> (sensitive)\n  by p.df:4  resource \
-             leaky.vault v { password = pw }\n  because --set pw=(sensitive input.pw)\n"
+            "  ~ leaky.vault[\"v\"]\n      password: (sensitive) → (sensitive)  --set pw=(sensitive \
+             input.pw)\n      by p.df:4  resource leaky.vault v { password = pw }\n      because \
+             --set pw=(sensitive input.pw)\n"
         ),
         "{}",
         r.stdout
     );
     assert!(
         r.stdout.contains(
-            "- leaky.oops[\"o\"]\n  password was \"plain\"\n  because no statement derives it now; \
-             state has it\n"
+            "  - leaky.oops[\"o\"]\n      password was \"plain\"\n      because no statement \
+             derives it now; state has it\n"
         ),
         "{}",
         r.stdout
@@ -381,7 +389,7 @@ fn a_multi_line_string_prints_as_its_literal_in_plan_and_query() {
         .run(&["dev", "--world", "w.json", "plan", "p.df"])
         .success();
     assert!(
-        r.stdout.contains(&format!("  note = {lit}\n")),
+        r.stdout.contains(&format!("      note = {lit}\n")),
         "{}",
         r.stdout
     );

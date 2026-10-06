@@ -73,8 +73,8 @@ fn every_format_reads_typed_rows() {
         let s = scratch(&format!("read-{format}"));
         s.write("p.df", &program(format));
         s.write(&format!("data/p.{format}"), &rows(format, "22").0);
-        let r = s.run(&["plan", "p.df"]).success();
-        assert_eq!(r.summary(), "plan: 2 deformations (2 create)", "{format}");
+        let r = s.run(&["plan", "--why=none", "p.df"]).success();
+        assert_eq!(r.summary(), "plan: 2 changes (2 create)", "{format}");
         assert!(
             r.stdout.contains("+ net.vpc[\"v-a\"]\n"),
             "{format}: {}",
@@ -191,7 +191,7 @@ provider fake
     let r = s.run(&["plan", "p.df"]).success();
     assert!(r.stdout.contains("+ compute.vm[\"d1\"]"), "{}", r.stdout);
     let r = s.run(&["plan", "--set", "env=prod", "p.df"]).success();
-    assert_eq!(r.summary(), "plan: 2 deformations (2 create)");
+    assert_eq!(r.summary(), "plan: 2 changes (2 create) over 1 tick");
     let r = s
         .run(&["--set", "env=prod", "why", r#"node("p2")"#, "p.df"])
         .success();

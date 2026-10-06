@@ -1144,7 +1144,7 @@ fn rename_of_a_resource_with_state_plans_as_a_move() {
         plan.contains("moved net.vpc[\"main/vpc\"] -> net.vpc[\"main/net0\"]"),
         "{plan}"
     );
-    assert!(plan.contains("stack dform is undeformed"), "{plan}");
+    assert!(plan.contains("stack dform is up to date"), "{plan}");
 }
 
 /// A rename that would change what the program means is refused: the

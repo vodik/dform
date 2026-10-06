@@ -42,13 +42,13 @@ fn every_leaf_of_a_document_gives_the_input_at_its_path() {
                 _ => "{}",
             },
         );
-        let r = s.run(&["plan", "p.df", "env=prod"]).success();
+        let r = s.run(&["plan", "--why=none", "p.df", "env=prod"]).success();
         assert!(
             r.stdout.contains("  size = 3\n  zone = \"a\""),
             "{format}: {}",
             r.stdout
         );
-        let r = s.run(&["plan", "p.df"]).success();
+        let r = s.run(&["plan", "--why=none", "p.df"]).success();
         assert!(r.stdout.contains("  size = 1\n"), "{format}: {}", r.stdout);
     }
 }
@@ -60,7 +60,7 @@ fn a_leaf_that_is_no_input_is_a_deny() {
     let s = scratch("typo");
     s.write("p.df", &PROGRAM.replace("FORMAT", "yaml"));
     s.write("config/prod.yaml", "db:\n  size: 3\n  zome: b\n");
-    let r = s.run(&["plan", "p.df", "env=prod"]).failure();
+    let r = s.run(&["plan", "--why=none", "p.df", "env=prod"]).failure();
     assert!(
         r.stderr.contains(
             "- config/prod.yaml:3: db.zome is not an input (its inputs: db.size, db.zone)"
@@ -104,16 +104,20 @@ resource db.postgres main {
 fn overlapping_blocks_resolve_by_rank() {
     let s = scratch("keyed");
     s.write("p.df", KEYED);
-    let r = s.run(&["plan", "p.df", "env=prod", "region=us"]).success();
+    let r = s
+        .run(&["plan", "--why=none", "p.df", "env=prod", "region=us"])
+        .success();
     assert!(
         r.stdout.contains("  backup_days = 14\n  multi_az = true\n"),
         "{}",
         r.stdout
     );
-    let r = s.run(&["plan", "p.df"]).success();
+    let r = s.run(&["plan", "--why=none", "p.df"]).success();
     assert!(r.stdout.contains("  backup_days = 3\n"), "{}", r.stdout);
     // Both hold in prod/eu, at one rank, and disagree: a conflict naming both.
-    let r = s.run(&["plan", "p.df", "env=prod", "region=eu"]).failure();
+    let r = s
+        .run(&["plan", "--why=none", "p.df", "env=prod", "region=eu"])
+        .failure();
     assert!(
         r.stdout.contains("two contributions disagree")
             && r.stdout.contains("(at p.df:8:")
@@ -126,12 +130,15 @@ fn overlapping_blocks_resolve_by_rank() {
         "p.df",
         &KEYED.replace("{ db.days = 30 } where", "{ db.days = 30 } @override where"),
     );
-    let r = s.run(&["plan", "p.df", "env=prod", "region=eu"]).success();
+    let r = s
+        .run(&["plan", "--why=none", "p.df", "env=prod", "region=eu"])
+        .success();
     assert!(r.stdout.contains("  backup_days = 30\n"), "{}", r.stdout);
     // `--set` is an override: over a normal block.
     let r = s
         .run(&[
             "plan",
+            "--why=none",
             "p.df",
             "env=prod",
             "region=us",
@@ -156,7 +163,7 @@ fn an_entry_is_an_inputs_path() {
          set { db.sz = 2 } where db.size == 1\n\
          resource db.postgres main { size = db.size, owner = m.email }\n",
     );
-    let r = s.run(&["plan", "p.df"]).failure();
+    let r = s.run(&["plan", "--why=none", "p.df"]).failure();
     assert!(
         r.stderr.contains("`set db.sz`: input db has no field sz"),
         "{}",
@@ -167,7 +174,7 @@ fn an_entry_is_an_inputs_path() {
         &s.read("p.df")
             .replace("set { db.sz = 2 } where db.size == 1\n", ""),
     );
-    let r = s.run(&["plan", "p.df"]).success();
+    let r = s.run(&["plan", "--why=none", "p.df"]).success();
     assert!(
         r.stdout.contains("  owner = \"ops@example.com\""),
         "{}",
@@ -178,7 +185,7 @@ fn an_entry_is_an_inputs_path() {
         "p.df",
         &s.read("p.df").replace(" } where db.size == 1\n", " }\n"),
     );
-    let r = s.run(&["plan", "p.df"]).failure();
+    let r = s.run(&["plan", "--why=none", "p.df"]).failure();
     assert!(
         r.stderr
             .contains("`set m.email` with no condition is an entry of `use m`"),
@@ -199,8 +206,8 @@ fn a_required_input_a_set_gives_is_missing_only_where_none_holds() {
          provider fake\nset owner = \"ops\" where env == \"prod\"\n\
          resource db.postgres main { owner }\n",
     );
-    s.run(&["plan", "p.df", "env=prod"]).success();
-    let r = s.run(&["plan", "p.df"]).failure();
+    s.run(&["plan", "--why=none", "p.df", "env=prod"]).success();
+    let r = s.run(&["plan", "--why=none", "p.df"]).failure();
     assert!(
         r.stderr.contains(
             "input owner is required and has no value: no `set` gives it in this \
@@ -220,7 +227,7 @@ fn a_stack_config_names_set_from() {
         "[project]\nedition = \"2026\"\n\n[stacks.p]\nconfig = 'yaml(\"config/{env}.yaml\")'\n",
     );
     s.write("p.df", "\nprovider fake\n");
-    let r = s.run(&["plan", "p.df"]).failure();
+    let r = s.run(&["plan", "--why=none", "p.df"]).failure();
     assert!(
         r.stderr.contains("a stack's config is gone (R-38)")
             && r.stderr.contains("`set from yaml(\"config/${env}.yaml\")`"),
@@ -244,8 +251,8 @@ fn set_from_a_selection_or_a_let() {
          set from cfg.dev where env == \"dev\"\n\
          resource db.postgres main { size = db.size }\n",
     );
-    let r = s.run(&["plan", "p.df", "env=prod"]).success();
+    let r = s.run(&["plan", "--why=none", "p.df", "env=prod"]).success();
     assert!(r.stdout.contains("  size = 3\n"), "{}", r.stdout);
-    let r = s.run(&["plan", "p.df"]).success();
+    let r = s.run(&["plan", "--why=none", "p.df"]).success();
     assert!(r.stdout.contains("  size = 2\n"), "{}", r.stdout);
 }

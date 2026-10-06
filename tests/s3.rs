@@ -232,7 +232,7 @@ fn plan_and_apply_of_the_demo_keep_state_in_the_bucket() {
         );
         let again = p.run(PLAN).success();
         assert!(
-            again.stdout.contains("undeformed"),
+            again.stdout.contains("is up to date"),
             "{}: {}",
             t.what,
             again.stdout
@@ -366,7 +366,7 @@ fn a_killed_holders_lease_expires_and_a_second_run_takes_over_and_resumes() {
         assert!(st.get("in_flight").is_none(), "{}: {st}", t.what);
         let plan = p.run(PLAN).success();
         assert!(
-            plan.stdout.contains("undeformed"),
+            plan.stdout.contains("is up to date"),
             "{}: {}",
             t.what,
             plan.stdout
@@ -450,7 +450,7 @@ fn a_stale_holders_state_write_is_refused_by_fencing() {
         );
         let plan = p.run(PLAN).success();
         assert!(
-            plan.stdout.contains("undeformed"),
+            plan.stdout.contains("is up to date"),
             "{}: {}",
             t.what,
             plan.stdout
@@ -505,7 +505,7 @@ fn the_controller_runs_an_s3_stack() {
         );
         assert!(
             r.stdout
-                .ends_with("stack dform[env=staging] is undeformed\n"),
+                .ends_with("stack dform[env=staging] is up to date\n"),
             "{}: {}",
             t.what,
             r.stdout
@@ -525,7 +525,7 @@ fn the_controller_runs_an_s3_stack() {
         let r = p.run(&once).success();
         assert_eq!(
             controller_log(&r.stdout),
-            ["event resync", "stack dform[env=staging] is undeformed"],
+            ["event resync", "stack dform[env=staging] is up to date"],
             "{}",
             t.what
         );
@@ -627,7 +627,12 @@ fn handover_moves_an_s3_deployment_between_prefixes_and_to_local() {
             t.what
         );
         let r = p.run(PLAN).success();
-        assert!(r.stdout.contains("undeformed"), "{}: {}", t.what, r.stdout);
+        assert!(
+            r.stdout.contains("is up to date"),
+            "{}: {}",
+            t.what,
+            r.stdout
+        );
         let r = p.run(APPLY).failure();
         assert!(
             r.stderr.contains("the controller runs it"),
@@ -640,7 +645,7 @@ fn handover_moves_an_s3_deployment_between_prefixes_and_to_local() {
             .success();
         assert_eq!(
             controller_log(&r.stdout),
-            ["event start", "stack dform[env=staging] is undeformed"],
+            ["event start", "stack dform[env=staging] is up to date"],
             "{}",
             t.what
         );
@@ -671,7 +676,12 @@ fn handover_moves_an_s3_deployment_between_prefixes_and_to_local() {
             assert!(p.s.path("here").join(f).exists(), "{}: {f}", t.what);
         }
         let r = p.run(PLAN).success();
-        assert!(r.stdout.contains("undeformed"), "{}: {}", t.what, r.stdout);
+        assert!(
+            r.stdout.contains("is up to date"),
+            "{}: {}",
+            t.what,
+            r.stdout
+        );
         let log = p.run(&["log", "verify", "dform[env=staging]"]).success();
         assert!(
             log.stdout.contains("the chain holds"),
@@ -759,7 +769,7 @@ fn another_stack_reads_an_s3_stacks_outputs() {
         )
         .unwrap();
         assert_eq!(published["deployment"], "net", "{}: {published}", t.what);
-        let r = p.run(&["plan", "app"]).success();
+        let r = p.run(&["plan", "--why=none", "app"]).success();
         assert!(
             r.stdout.contains(
                 "+ net.subnet[\"a\"]\n  cidr = \"10.0.0.0/16\"\n  vpc_id = \"net.vpc:main\"\n"

@@ -400,22 +400,22 @@ fn plan_why_explains_each_deformation() {
     let out = dform("examples/tour/stacks/tour.df env=prod", &["plan", "--why"]);
     assert!(
         out.contains(
-            "+ net.subnet[\"private-us-test-1a\"]
-  cidr = \"10.0.1.0/24\"
-  tags.team = \"shop\"
-  visibility = \"private\"
-  vpc = ?net.vpc[\"main\"]
-  zone = \"us-test-1a\"
-  by examples/tour/stacks/tour.df:104  resource net.subnet \"private-${z}\" { .. } where zone(z, n)
-  because examples/tour/stacks/tour.df:101  zone(\"us-test-1a\", 1)
-  because examples/tour/stacks/tour.df:46  net.vpc[\"main\"].cidr = 10.0.0.0/16
+            "  + net.subnet[\"private-us-test-1a\"]          stacks/tour.df:104  with z = \"us-test-1a\", n = 1
+      cidr = \"10.0.1.0/24\"                    inet.subnet(main.cidr, 8, n)
+      tags.team = \"shop\"                      stacks/tour.df:170
+      visibility = \"private\"
+      vpc = ?net.vpc[\"main\"]
+      zone = \"us-test-1a\"
+      by stacks/tour.df:104  resource net.subnet \"private-${z}\" { .. } where zone(z, n)
+      because stacks/tour.df:101  zone(\"us-test-1a\", 1)
+      because stacks/tour.df:46  net.vpc[\"main\"].cidr = 10.0.0.0/16
 "
         ),
         "{out}"
     );
     // A value given on the command line is its flag.
-    assert!(out.contains("  because --set env=prod\n"), "{out}");
-    // Without --why the plan is as it was.
+    assert!(out.contains("      because --set env=prod\n"), "{out}");
+    // At the default level, a line per change and attribute, no tree.
     let plain = dform("examples/tour/stacks/tour.df env=prod", &["plan"]);
     assert!(
         !plain.contains("because") && !plain.contains("  by "),

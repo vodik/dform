@@ -1,4 +1,4 @@
-# README "Approvals": policy says which deformations need an approval, and
+# README "Approvals": policy says which changes need an approval, and
 # apply verifies a signed approval of the plan's digest before its first
 # Apply call. Staging needs none (README.md); a replace in prod needs one:
 #

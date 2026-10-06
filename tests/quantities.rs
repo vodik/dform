@@ -117,7 +117,7 @@ fn a_policy_compares_memory_limits_in_bytes() {
     };
     s.write("main.df", &src("1536Mi"));
     let r = s
-        .run(&["dev", "--world", "w.json", "plan", "main"])
+        .run(&["dev", "--world", "w.json", "plan", "--why=none", "main"])
         .success();
     for line in [
         "resources.limits.cpu = \"2\"",
@@ -129,7 +129,7 @@ fn a_policy_compares_memory_limits_in_bytes() {
     }
     s.write("main.df", &src("3Gi"));
     let r = s
-        .run(&["dev", "--world", "w.json", "plan", "main"])
+        .run(&["dev", "--world", "w.json", "plan", "--why=none", "main"])
         .failure();
     assert!(
         r.stdout.contains("memory limit above 2Gi") || r.stderr.contains("memory limit above 2Gi"),
@@ -159,7 +159,7 @@ fn one_spelling_renders_per_schema() {
     };
     s.write("main.df", &src("20Gi"));
     let r = s
-        .run(&["dev", "--world", "w.json", "plan", "main"])
+        .run(&["dev", "--world", "w.json", "plan", "--why=none", "main"])
         .success();
     assert!(
         r.stdout.contains("  allocated_storage = 20\n"),
@@ -174,7 +174,7 @@ fn one_spelling_renders_per_schema() {
     );
     s.write("main.df", &src("1536Mi"));
     let r = s
-        .run(&["dev", "--world", "w.json", "plan", "main"])
+        .run(&["dev", "--world", "w.json", "plan", "--why=none", "main"])
         .failure();
     assert!(
         r.stderr.contains(
@@ -187,7 +187,7 @@ fn one_spelling_renders_per_schema() {
     // A decimal unit is an error at the literal, naming the binary one.
     s.write("main.df", &src("20GB"));
     let r = s
-        .run(&["dev", "--world", "w.json", "plan", "main"])
+        .run(&["dev", "--world", "w.json", "plan", "--why=none", "main"])
         .failure();
     assert!(r.stderr.contains("write `20Gi`"), "{}", r.stderr);
 }
@@ -211,7 +211,7 @@ fn a_quantity_attribute_reads_a_string_and_refuses_another_dimension() {
     };
     s.write("main.df", &src("\"1.5Gi\""));
     let r = s
-        .run(&["dev", "--world", "w.json", "plan", "main"])
+        .run(&["dev", "--world", "w.json", "plan", "--why=none", "main"])
         .success();
     assert!(r.stdout.contains("storage = \"1536Mi\""), "{}", r.stdout);
     let q = s
@@ -220,7 +220,7 @@ fn a_quantity_attribute_reads_a_string_and_refuses_another_dimension() {
     assert!(q.stdout.contains("1536Mi"), "{}", q.stdout);
     s.write("main.df", &src("500m"));
     let r = s
-        .run(&["dev", "--world", "w.json", "plan", "main"])
+        .run(&["dev", "--world", "w.json", "plan", "--why=none", "main"])
         .failure();
     assert!(
         r.stderr.contains(

@@ -23,7 +23,7 @@ fn optional_computed_is_a_constant_when_set_and_a_null_when_not() {
     let r = run(&s, &args, "plan").success();
     assert_eq!(
         r.summary(),
-        "plan: 7 deformations (7 create)",
+        "plan: 7 changes (7 create) over 1 tick",
         "{}",
         r.stdout
     );
@@ -74,7 +74,7 @@ fn optional_computed_is_a_constant_when_set_and_a_null_when_not() {
     );
 
     let r = run(&s, &args, "plan").success();
-    assert_eq!(r.summary(), "stack aws_demo is undeformed", "{}", r.stdout);
+    assert_eq!(r.summary(), "stack aws_demo is up to date", "{}", r.stdout);
 }
 
 #[test]
@@ -91,7 +91,7 @@ fn keyless_sets_ignore_order() {
     ingress.reverse();
     s.write("w.json", &serde_json::to_string_pretty(&w).unwrap());
     let r = run(&s, &args, "plan").success();
-    assert_eq!(r.summary(), "stack aws_demo is undeformed", "{}", r.stdout);
+    assert_eq!(r.summary(), "stack aws_demo is up to date", "{}", r.stdout);
 
     // Someone opened port 22 by hand: an update of the set.
     let mut w: serde_json::Value = serde_json::from_str(&s.read("w.json")).unwrap();
@@ -103,7 +103,7 @@ fn keyless_sets_ignore_order() {
     let r = run(&s, &args, "plan").success();
     assert_eq!(
         r.summary(),
-        "plan: 1 deformation (1 update)",
+        "plan: 1 change (1 update) over 1 tick",
         "{}",
         r.stdout
     );
@@ -143,7 +143,7 @@ fn a_data_source_is_a_table_with_an_index() {
     let r = s.run(&["plan", "main.df"]).success();
     assert_eq!(
         r.summary(),
-        "plan: 4 deformations (4 create)",
+        "plan: 4 changes (4 create) over 1 tick",
         "{}",
         r.stdout
     );
@@ -152,8 +152,13 @@ fn a_data_source_is_a_table_with_an_index() {
         ("us-east-1b", "10.0.1.0/24"),
         ("us-east-1c", "10.0.2.0/24"),
     ] {
+        // Each subnet by the statement and the row that derive it, its
+        // cidr by the expression that computes it (R-79).
         let want = format!(
-            "+ aws.subnet[\"private-{zone}\"]\n  availability_zone = \"{zone}\"\n  cidr_block = \"{cidr}\"\n"
+            "  + aws.subnet[\"private-{zone}\"]  main.df:9  with availability_zone = \"{zone}\", \
+             n = {}\n      availability_zone = \"{zone}\"\n      cidr_block = \"{cidr}\"      \
+             inet.subnet(inet(main.cidr_block), 8, n)\n",
+            &cidr[5..6]
         );
         assert!(r.stdout.contains(&want), "{want}\n{}", r.stdout);
     }

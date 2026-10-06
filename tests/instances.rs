@@ -101,17 +101,19 @@ fn the_plan_groups_a_copys_resources_under_it() {
     let s = project("instances-plan", "");
     let r = s.run(&["plan", "main.df", "--set", "env=prod"]).success();
     assert!(
-        r.stdout.starts_with("plan: 4 deformations (4 create)\n"),
+        r.stdout
+            .starts_with("plan: 4 changes (4 create) over 1 tick\n"),
         "{}",
         r.stdout
     );
     assert!(
         r.stdout.contains(
-            "+ vpc[\"blue\"]\n  + net.vpc[\"blue/vpc\"]\n    cidr = \"10.1.0.0/16\"\n  \
-             + net.subnet[\"blue/a\"]\n"
+            "  + vpc[\"blue\"]\n    + net.vpc[\"blue/vpc\"]               main.df:7\n        \
+             cidr = \"10.1.0.0/16\"            input blue.vpc_net = \"10.1.0.0/16\"   main.df:10\n    \
+             + net.subnet[\"blue/a\"]  "
         ) && r
             .stdout
-            .contains("+ vpc[\"green\"]\n  + net.vpc[\"green/vpc\"]\n"),
+            .contains("  + vpc[\"green\"]\n    + net.vpc[\"green/vpc\"]  "),
         "{}",
         r.stdout
     );
@@ -121,7 +123,7 @@ fn the_plan_groups_a_copys_resources_under_it() {
     let r = s.run(&["plan", "main.df"]).success();
     assert!(
         r.stdout
-            .contains("- vpc[\"green\"]\n  - net.subnet[\"green/a\"]\n"),
+            .contains("  - vpc[\"green\"]\n    - net.subnet[\"green/a\"]"),
         "{}",
         r.stdout
     );
@@ -151,7 +153,7 @@ fn a_lifecycle_over_a_copy_covers_its_resources() {
         .failure();
     assert!(
         r.stdout.contains(
-            "! lifecycle prevent_destroy on vpc[\"blue\"]: the plan would delete \
+            "\ndenied\n  lifecycle prevent_destroy on vpc[\"blue\"]: the plan would delete \
              net.subnet[\"blue/a\"]\n"
         ),
         "{}",
@@ -173,7 +175,7 @@ fn a_lifecycle_over_a_copy_covers_its_resources() {
     let r = s.run(&["plan", "main.df"]).failure();
     assert!(
         r.stdout
-            .contains("! lifecycle prevent_destroy: the plan would delete vpc[\"blue\"]\n"),
+            .contains("\n  lifecycle prevent_destroy: the plan would delete vpc[\"blue\"]"),
         "{}",
         r.stdout
     );
@@ -189,8 +191,9 @@ fn a_policy_reads_a_copys_deformation_row() {
     );
     let r = s.run(&["plan", "main.df"]).failure();
     assert!(
-        r.stdout
-            .contains("! a new copy blue at net.vpc[\"blue/vpc\"].cidr\n"),
+        r.stdout.contains(
+            "\n  a new copy blue at net.vpc[\"blue/vpc\"].cidr  vpc[\"blue\"]    main.df:12\n"
+        ),
         "{}",
         r.stdout
     );

@@ -53,7 +53,7 @@ fn each_deployment_configures_the_provider_from_its_key() {
         let r = run_with_env(&s, RIGHT, &["plan", "stacks/app.df", env]).success();
         assert_eq!(
             r.summary(),
-            "plan: 1 deformation (1 create)",
+            "plan: 1 change (1 create) over 1 tick",
             "{}",
             r.stdout
         );

@@ -6,7 +6,7 @@
 mod common;
 use common::{Scratch, copy_dir, repo};
 
-const STOPPED: &str = "apply stopped after tick 1: tick 2 adds 1 deformation the plan could \
+const STOPPED: &str = "apply stopped after tick 1: tick 2 adds 1 change the plan could \
     not name (iam.policy[?] on ?db.postgres[\"orders\"].endpoint); run apply again to plan \
     them against the world as it now is";
 
@@ -32,11 +32,11 @@ fn yes_stops_before_a_tick_the_plan_could_not_name() {
     let r = s.run(&["apply", "tour", "env=prod"]).success();
     assert!(
         r.stdout
-            .contains("+ iam.policy[\"connect-orders.db.fake\"]\n"),
+            .contains("  + iam.policy[\"connect-orders.db.fake\"]  "),
         "{}",
         r.stdout
     );
-    assert!(!r.stdout.contains("tick 2:"), "{}", r.stdout);
+    assert!(!r.stdout.contains("tick 2"), "{}", r.stdout);
     assert!(r.stdout.ends_with("apply: complete\n"), "{}", r.stdout);
 }
 

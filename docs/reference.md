@@ -69,7 +69,7 @@ example under `examples/` follows it, and test-only programs are under
 `tests/fixtures/`.
 Each example's `README.md` says what it shows and lists the commands to
 run from its directory (`dform` there is `cargo run --` in a checkout);
-`tests/examples.rs` runs them: plan, apply, and plan again, undeformed.
+`tests/examples.rs` runs them: plan, apply, and plan again, up to date.
 
 `dform.toml` is small; programs stay in `.df` files. It holds
 the project's name and the dform versions it takes, each provider's source
@@ -127,25 +127,25 @@ target does not name is its input's default, for `plan` and `apply` alike;
 both print the deployment first, `deployment: shop[env=dev] (env from its
 default)` (`plan --json`: `deployment` and `key_defaults`). `apply` also takes a plan file (`dform apply plan.json`).
 
-`apply` prints the plan and asks `Apply these N deformations to
-shop[env=prod]? [y/N]`; only `y` or `yes` proceeds. `--yes` (`-y`)
+`apply` prints the plan and asks `Apply these N changes to
+shop[env=prod]? [y/N]` (`Apply this change to ..` for one); only `y` or
+`yes` proceeds. `--yes` (`-y`)
 applies without asking, as a script or CI does: with no terminal to ask on
-and no `--yes`, apply refuses at once, naming the flag. An undeformed plan
+and no `--yes`, apply refuses at once, naming the flag. A plan that is up to date
 asks nothing, nor does `apply plan.json` (the file was reviewed; approvals
 guard it). Nothing is written before the answer: an
 apply reads (refresh, the lookups that resolve uncertain calls), plans and
 asks, and only a `y` writes state (`moved` renames included) or calls
 Apply. A later tick whose plan holds an address no earlier tick listed (a
 pending group's member: `iam.policy[?]` at tick 1, named once the endpoint
-it is built from exists) asks again: its plan is printed, `tick 2:` and
-the report, then `Apply N new deformations to D? [y/N]`, counting the
-addresses no earlier tick listed. A `n` there stops the apply with what
+it is built from exists) asks again: its plan is printed, headed `tick 2
+1 change, now that tick 1 reported`, then `Apply tick 2 to D? [y/N]`. A `n` there stops the apply with what
 the earlier ticks did in state; the audit log's `apply_end` says
 `declined` and the `tick`, and the next apply resumes. An unattended
 apply (`--yes`, `apply plan.json`, `--approval`) has nobody to ask: it
 applies the ticks whose addresses the plan named and stops before the
 first tick that would add one, after writing state: `apply stopped after
-tick 1: tick 2 adds 1 deformation the plan could not name
+tick 1: tick 2 adds 1 change the plan could not name
 (iam.policy[?] on ?db.postgres["orders"].endpoint); run apply again to
 plan them against the world as it now is`. It exits non-zero, nothing
 applied that was not printed, and `apply_end` says `stopped`; the next
@@ -158,9 +158,12 @@ deployments X reads (`use stacks.platform`, then `platform[env="prod"].x`,
 a key written out or X's own, `platform[env=env].x`) first,
 and theirs before them, each a run of its own with its own plan,
 confirmation and state, then X; nothing that reads X. The first line
-says so: `apply shop[env=prod]: platform[env=prod] first, each with its
-own plan and state: shop[env=prod] reads its outputs`, and each run is
-headed `== NAME`. A dependency whose apply fails or is declined stops the
+is the `stacks:` line, the deployments in apply order: `stacks:
+platform[env=prod], then shop[env=prod] below, in apply order:
+shop[env=prod] reads its outputs; each is planned, confirmed and applied
+in turn`, and each run is headed `== NAME` and prints its own plan, its
+own ticks counted there (a later stack's plan reads what the earlier
+ones applied, so it cannot be counted before they run). A dependency whose apply fails or is declined stops the
 run before its reader; stacks that read each other are an error naming
 the cycle. A `--set` goes to each stack of the run that declares the
 input (one none declares is the target's error); `--input-file` is the
@@ -334,7 +337,7 @@ respect (typed, a cell, read as `env`), given by the target, never
 several keys are joined, `env=prod,region=us-east1`, and a value is escaped
 for the file system: every byte but letters, digits, `-`, `_` and a `.`
 that does not lead is `%XX`), lock, registry entry and controller. Inputs
-outside the key are parameters of a deployment: they deform it in place.
+outside the key are parameters of a deployment: they change it in place.
 The key's value comes from the target, an `--input-file`, else its
 default; a key with none is an error naming it. `plan`
 and `apply` name the deployment on their first line, and say which key
@@ -817,83 +820,152 @@ into a program, a query or a command; quote it for the shell
 (`why 'net.vpc["main/vpc"].cidr'`).
 
 The plan is the Z-set `desired - world` (proposal E §2.8): per address a
-create, a delete, an update, or nothing. The first line counts it in those
-terms, `plan: 3 deformations (2 create, 1 update), 4 pending, 1 undetermined`,
-and the sections follow in this order; what cannot be decided yet is said so:
-
-- `moved T["Old"] -> T["New"]` lines first, one per `moved/3` rename of state.
-- `definite:` deformations that run in this tick, grouped by resource: `+`
-  create, `~` update, `-` delete, `>` adopt, `-/+` and `+/-` replace,
-  `- T["A"]  (deposed)` for an object a replacement deposed. An update diffs a keyless set, or
-  a list with merge keys (`containers[name=web]`), by element: an element that
-  is new or gone is one `+`/`-` line with its leaves, not every later index
-  shifting. Map leaves print one per line.
-- `pending on ?nulls (resolves after tick N):` deformations held until those
-  nulls resolve: downstream of an Apply that resolves a null something is
-  stuck on, or an update whose new value is an open null against the world's
-  value. Their diffs are shown now. The hint appears when the nulls' owners
-  are scheduled by this plan.
-- `pending groups:` resource rules stuck on a null (`google.container_node_pool.? x
-  unknown, on ?google.container_cluster/pngu#zones`): how many there will be is not known.
-  A resource rule that reads a predicate with a stuck instance is one too
-  (`(reads node_pool_up("np-a"), which is stuck)`): it may derive after the
-  boundary, so `apply` runs another tick for it.
-- `undetermined:` policies that cannot be decided yet, `decided after tick
-  N`; and denies that read a predicate with a stuck instance, which `may
-  derive after tick N`. They are never reported as satisfied.
-- `shadowed:` contributions at a losing rank that disagree (a warning), and
-  `conflicts:` cells whose contributions disagree at the winning rank, each
-  naming the resource, the path and every witness. A conflicted address is not
-  a deformation; the plan still prints, then refuses with the deny.
-- `denied:` denies over the plan itself (`lifecycle prevent_destroy: the plan
-  would replace T["A"]`); the plan still prints, then refuses.
-- `apply order:`, one address per line under each `tick N`: which tick each deformation runs
-  in, from the dependency DAG and the nulls it waits on (a `+/-` replacement's
-  deposed object is deleted the tick after).
-- `(drift: ...)` marks an update where a fresh null meets a value the world
-  already has: the identity mapping is stale.
-- `stack NAME is undeformed`: nothing to do, nothing stuck (the only line).
-
-`plan --why` prints under each deformation why it is planned: `why`'s
-tree compressed to one line per leaf. `by FILE:LINE` is the statement
-that derived it, as `why` prints it; each `because` line is a leaf of that
-derivation, the facts in between dropped: a fact the program states at its
-`file:line`, a table's row at its `path:line` (`because data/zones.csv:4
-zone("us-test-1c", 3)`), a `--set` or `--data` as its flag, an extern's
-answer, a world fact, a fact found absent. A create is explained by its
-`want`, an update (a drift, a replace) by the winning contributions to each
-attribute it changes, a delete by state alone (`because no statement derives
-it now; state has it`). Of several derivations the one with the fewest
-leaves is shown. Secrets print as their label, as everywhere:
+create, a delete, an update, or nothing. It is printed grouped by tick
+(R-79), the only grouping, each change with where it is derived:
 
 ```
-$ dform plan net --why
-+ net.subnet["private-us-test-1c"]
-  cidr = "10.0.3.0/24"
-  ...
-  by stacks/net.df:9  resource net.subnet "private-${z}" { .. } where zone(z, n)
-  because stacks/net.df:7  net.vpc["main"].cidr = "10.0.0.0/16"
-  because data/zones.csv:4  zone("us-test-1c", 3)
+$ dform plan apps env=prod
+plan: 6 changes (3 create, 1 update, 1 replace, 1 delete) over 2 ticks, 1 approval, 1 undetermined
+
+tick 1  4 changes, applies now
+  + k8s.namespace["apps"]                         stacks/apps.df:26
+  + k8s.secret["synapse/homeserver"]              synapse.df:41  (use synapse)
+  ~ k8s.deployment["synapse/server"]
+      spec.replicas: 1 → 2                        synapse.replicas = 2   stacks/apps.df:14
+  - k8s.config_map["synapse/legacy"]              was synapse.df:60  with name = "legacy"
+      data.mode was "legacy"
+      because data/apps.yaml no longer has the row app("legacy")
+
+tick 2  2 changes, after tick 1 reports
+  waits on  k8s.service["synapse/web"].ip
+  + ovh.domain_record["matrix.vodik.xyz"]         synapse.df:135  with host = "matrix.vodik.xyz"
+      target = ?k8s.service["synapse/web"].ip
+  ± k8s.persistent_volume_claim["synapse/media"]  storageClassName is immutable
+
+later   changes this plan cannot count yet
+  k8s.job["migrate-v${schema}"]                   one per release("crud_api", "schema", _)
+  deny "prod keeps its data"                      stacks/apps.df:40  undetermined until tick 2
+
+held for approval
+  k8s.persistent_volume_claim["synapse/media"]    replace of a volume in prod    baseline.df:38
+
+apply: tick 1 once this plan's digest is approved (`--approval`), then tick 2 when tick 1 reports; `later` is planned again when tick 1 reports, and apply asks before what it adds
 ```
+
+- The summary counts the changes the ticks hold, by kind, the ticks, and
+  then the denies, approvals, undetermined policies and conflicts.
+- `moved T["Old"] -> T["New"]` lines come first, one per `moved/3` rename
+  of state.
+- `tick N  K changes, applies now`: what this apply makes first. A change
+  is `+` create, `~` update, `-` delete, `>` adopt, `±` replace (`(the new
+  one first)` for a `create_before_destroy` one, whose deposed object is
+  `- T["A"]  (deposed)` in the next tick). An update diffs a keyless set,
+  or a list with merge keys (`containers[name=web]`), by element: an
+  element that is new or gone is one `+`/`-` line with its leaves, not
+  every later index shifting. Map leaves print one per line. A copy
+  (R-67) prints as its own entry, `+ network["blue"]`, its resources
+  under it, inside the tick they run in.
+- `tick N  K changes, after tick N-1 reports`: changes held until values
+  a tick before makes are known, `waits on` each value (an output of a
+  resource tick N-1 makes, a field of the world). Their diffs are shown
+  now. A later tick of a running apply says `now that tick N-1
+  reported`.
+- `later   changes this plan cannot count yet`: a resource rule stuck on
+  an unknown, by the address its statement names
+  (`k8s.job["migrate-v${schema}"]`), `one per ROW` when what it reads may
+  gain rows, `if ROW derives` when one may, else what it `waits on`,
+  never a count; a copy that may derive once, its resources under it; a
+  deny or check `undetermined until tick N` (never reported as satisfied)
+  or that `may hold at tick N`; a held change waiting on what this plan
+  does not resolve.
+- `denied`: denies over the plan itself (`lifecycle prevent_destroy: the
+  plan would replace T["A"]`), each with the change its firing read and
+  where it is written; the plan still prints, then refuses.
+- `held for approval`: each change a `requires_approval` row holds, its
+  reason and where the row is derived; `plan digest: sha256:...` follows
+  the plan.
+- `shadowed`: contributions at a losing rank that disagree (a warning),
+  and `conflicts`: cells whose contributions disagree at the winning rank,
+  each naming the resource, the path and every witness. A conflicted
+  address is not a change; the plan still prints, then refuses.
+- `(drift: ...)` marks an update where a fresh null meets a value the
+  world already has: the identity mapping is stale.
+- The last line says what `apply` does with this plan (R-12): which tick
+  now, which after a report, and that `later` is planned again once the
+  tick it waits on reports.
+- `stack NAME is up to date`: nothing to do, nothing stuck (the only line).
+
+How much each change says of why it is planned is `--why=LEVEL` (`plan`
+and `apply`):
+
+- `line`, the default. On the change's line, where it is derived: the
+  statement's `FILE:LINE` with its variables bound (`with z =
+  "us-test-1a", n = 1`) and the module it came from (`(use synapse)`); a
+  replace, the paths the schema declares immutable; a delete, `was
+  FILE:LINE`, where the last apply derived it. On each changed
+  attribute's line, the write that won: a create's own entry by its
+  expression when it reads something (`inet.subnet(main.cidr, 8, n)`,
+  `db.name`), nothing for a literal; anything else by the statement that
+  wrote it with its place (`set db.backup_days = 14 where env == "prod"
+  stacks/shop.df:22`), followed through the inputs and `let`s that pass
+  the value on, a `--set` by its flag, with the rank it beat when that
+  is a rank the program wrote (`(over @default)`). Under the change, a
+  `because` line: the leaf of the derivation the last apply recorded that
+  is false now (a delete: `because data/azs.yaml no longer has the row
+  az("us-east-1b", 2)`; an update: `because input size is now 2 (was
+  1)`; a guard: `because input big is now false (was true)`), or for a
+  create the leaf new since (`because data/azs.yaml:7 gained the row
+  az("us-east-1c", 3)`). The last apply's program is evaluated as `diff
+  --since` reads it: at the commit its audit entry recorded, or the
+  program now with the inputs it recorded when only they changed; with
+  no apply, or nothing to compare, there is no `because`. Sites are
+  relative to the project's root, whatever directory the run is in.
+- `full` (`--why` alone): `line`, and under each change its derivation,
+  `why`'s tree compressed to one line per leaf. `by FILE:LINE` is the
+  statement that derived it; each `because` line is a leaf, the facts in
+  between dropped: a fact the program states at its `file:line`, a
+  table's row at its `path:line`, a `--set` or `--data` as its flag, an
+  extern's answer, a world fact, a fact found absent. A create is
+  explained by its `want`, an update (a drift, a replace) by the winning
+  contributions to each attribute it changes, a delete by state alone
+  (`because no statement derives it now; state has it`). Of several
+  derivations the one with the fewest leaves is shown.
+- `none`: the bare diff for scripts, laid out as the plan was before it
+  was grouped by tick (`definite:`, `pending on ?NULLS (resolves after
+  tick N):`, `pending groups:`, `undetermined:`, `denied:`, `apply
+  order:`, `needs approval:`, `->` between a value's sides); only its
+  words are the tool's (`plan: 3 changes (2 create, 1 update), 4 pending`,
+  `stack NAME is up to date`). `tests/golden/*/*.plan-bare.txt` pins it.
+
+The page is 100 columns wide: a right column that does not fit says less
+(the statement, then its entry, then `FILE:LINE` alone), and goes when
+not even that fits; a `because` line is always its own. Secrets print as
+their label, as everywhere.
 
 Colour: `--color auto|always|never` (global; `auto`, the default, colours
 when stdout is a terminal and `NO_COLOR` is unset; errors on stderr
 likewise) paints the plan by its semantics: `+` green, `~` yellow, `-` red,
-`-/+` and `+/-` magenta, a `?` null cyan, `(sensitive)` dim, addresses and
-section headers bold, conflicts and denies red with the witnesses' names
-bold, a pending group's line in the warning colour (bold yellow); apply's
-question and `apply: complete` likewise. `--json` and the plan file are
-never coloured.
+`±` magenta, a value waited on cyan, `(sensitive)` dim, addresses and tick
+headers bold, conflicts and denies red with the witnesses' names bold, a
+rule in `later` in the warning colour (bold yellow); apply's question and
+`apply: complete` likewise. `--json` and the plan file are never coloured.
 
 `plan --json` prints the same report as one JSON document, the thing CI and
-editors consume: `stack`, `undeformed`, a `summary` of counts, then the
-sections as arrays in the order above (`definite`, `pending`,
-`pending_groups`, `undetermined`, `shadowed`, `conflicts`, `apply_order`,
-`unscheduled`, `moved`, `denied`). A deformation is `{action, address,
-type, name, changes}` (`address` as the text prints it), a replace with `create_first`, a deposed delete with `deposed:
-true`, and with `--why` a `why` array of `{kind, at, text}` (`kind` is
+editors consume: `stack`, `up_to_date`, a `summary` of counts (`changes`,
+each kind, `ticks`, `approvals`, `undetermined`, `conflicts`), `ticks`
+(each `{tick, after, waits_on, changes, deposed}`), `later` (each with a
+`kind`: `group` with its `address`, `reads`, `instance`; `deny`,
+`refinement` with its `status`; `held` with its `changes`), `shadowed`,
+`conflicts`, `moved`, `denied` (`{text, message, address, site}`),
+`held_for_approval` and `apply`, the last line. A change is `{kind,
+address, type, name, changes}` (`address` as the text prints it), a
+replace with `create_first` and `immutable`, a deposed delete with
+`deposed: true`, a held one with `held`; at `line` and `full` it has its
+`site` (`{at, statement, entry, with, origin, rank, beat}`) and
+`because`, and at `full` a `why` array of `{kind, at, text}` (`kind` is
 `rule` for the `by` line, else `fact`, `input`, `extern`, `world`, `plan`,
-`absent` or `state`; `at` the `file:line` when there is one). A change is `{op, path, before, after}` (`op` is `set`, or
+`absent` or `state`; `at` the `file:line` when there is one). An attribute
+change is `{op, path, before, after}` with its `site` (`op` is `set`, or
 `add`/`remove` for a set element, with its `leaves`); a null is `{"null":
 LABEL, "class": CLASS}` and a secret `{"sensitive": LABEL}`.
 
@@ -923,7 +995,7 @@ cargo run -- -C examples/gke apply --set zones=1   # one zone: stops after tick 
 At a boundary apply also compares the refreshed world with what it last saw
 (the tick's refresh and its Apply responses). A change under an address whose
 deformation is pending for this boundary stops the run before the next tick,
-with the change printed (`the world changed under a pending deformation after
+with the change printed (`the world changed under a pending change after
 tick N:`) and the deny that stops it (see "Policy over the plan" below); a
 change anywhere else is reported as `drift after tick N:` and the
 run goes on, the next tick deforming it back:
@@ -1145,8 +1217,8 @@ requires_approval(r, "a replace in prod") where env == "prod", deformation("repl
 approver_allowed(who, r) where requires_approval(r, _), who in ["alice", "bob"]
 ```
 
-A plan with rows prints a `needs approval:` section, each deformation and
-its reason, and the plan's digest, `plan digest: sha256:...` (a plan that
+A plan with rows prints a `held for approval` section, each change with
+its reason and where the row is derived, and the plan's digest, `plan digest: sha256:...` (a plan that
 writes a file says its digest on stderr, `plan file: PLAN (plan digest:
 sha256:...)`); `plan --json` has them as
 `needs_approval` and `digest`. The digest is sha256 over the canonical JSON
@@ -1272,7 +1344,7 @@ recorded. An apply from a dirty tree is explained at its commit with a
 `note:` naming the files it had modified. An update is explained by the attributes
 whose values differ from the apply before's, a delete by what derived it
 at the apply before. `--json` prints one document: `applies`, each with
-its `deformations` and their `why`, and `changed` (`added` and `removed`
+its `changes` and their `why`, and `changed` (`added` and `removed`
 rows, `inputs` with `before` and `after`). Secrets print as their label.
 
 ```

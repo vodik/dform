@@ -1,216 +1,496 @@
 exit: ok
 -- stdout --
 {
-  "apply_order": [
-    {
-      "addresses": [
-        "google.compute_subnetwork[\"gke_subnet\"]",
-        "google.container_cluster[\"pngu\"]",
-        "google.compute_address[\"static_ip\"]"
-      ],
-      "tick": 1
-    },
-    {
-      "addresses": [
-        "k8s.deployment[\"api\"]",
-        "k8s.namespace[\"pngu\"]",
-        "k8s.secret[\"db_credentials\"]",
-        "google.container_node_pool[?]"
-      ],
-      "tick": 2
-    }
-  ],
+  "apply": "apply: tick 1 now, then tick 2 when tick 1 reports; `later` is planned again when tick 1 reports, and apply asks before what it adds",
   "conflicts": [],
-  "definite": [
-    {
-      "action": "create",
-      "address": "google.compute_subnetwork[\"gke_subnet\"]",
-      "changes": [
-        {
-          "after": "10.141.76.0/22",
-          "before": null,
-          "op": "set",
-          "path": "ip_cidr_range"
-        },
-        {
-          "after": "renfry-dev-gke-subnet",
-          "before": null,
-          "op": "set",
-          "path": "name"
-        },
-        {
-          "after": "projects/renfry-dev-973682/global/networks/renfry-dev-network",
-          "before": null,
-          "op": "set",
-          "path": "network"
-        },
-        {
-          "after": "renfry-dev-973682",
-          "before": null,
-          "op": "set",
-          "path": "project"
-        },
-        {
-          "after": "us-east1",
-          "before": null,
-          "op": "set",
-          "path": "region"
-        }
-      ],
-      "name": "gke_subnet",
-      "type": "google.compute_subnetwork"
-    },
-    {
-      "action": "create",
-      "address": "google.container_cluster[\"pngu\"]",
-      "changes": [
-        {
-          "after": true,
-          "before": null,
-          "op": "set",
-          "path": "deletion_protection"
-        },
-        {
-          "after": "dev",
-          "before": null,
-          "op": "set",
-          "path": "env"
-        },
-        {
-          "after": "172.16.3.96/28",
-          "before": null,
-          "op": "set",
-          "path": "master_control_plane_cidr"
-        },
-        {
-          "after": "renfry-dev-gke",
-          "before": null,
-          "op": "set",
-          "path": "name"
-        },
-        {
-          "after": "projects/renfry-dev-973682/global/networks/renfry-dev-network",
-          "before": null,
-          "op": "set",
-          "path": "network_id"
-        },
-        {
-          "after": "us-east1-b",
-          "before": null,
-          "op": "set",
-          "path": "node_locations[0]"
-        },
-        {
-          "after": "us-east1-c",
-          "before": null,
-          "op": "set",
-          "path": "node_locations[1]"
-        },
-        {
-          "after": "renfry-dev-973682",
-          "before": null,
-          "op": "set",
-          "path": "project_id"
-        },
-        {
-          "after": {
-            "class": "fresh",
-            "null": "google.compute_subnetwork[\"gke_subnet\"]"
-          },
-          "before": null,
-          "op": "set",
-          "path": "subnetwork_id"
-        }
-      ],
-      "name": "pngu",
-      "type": "google.container_cluster"
-    },
-    {
-      "action": "create",
-      "address": "google.compute_address[\"static_ip\"]",
-      "changes": [
-        {
-          "after": "pngu-grpc",
-          "before": null,
-          "op": "set",
-          "path": "name"
-        },
-        {
-          "after": "renfry-dev-973682",
-          "before": null,
-          "op": "set",
-          "path": "project"
-        },
-        {
-          "after": "us-east1",
-          "before": null,
-          "op": "set",
-          "path": "region"
-        },
-        {
-          "after": {
-            "class": "fresh",
-            "null": "google.compute_subnetwork[\"gke_subnet\"]"
-          },
-          "before": null,
-          "op": "set",
-          "path": "subnetwork_id"
-        }
-      ],
-      "name": "static_ip",
-      "type": "google.compute_address"
-    }
-  ],
   "denied": [],
   "deployment": "gke_two_phase",
+  "held_for_approval": [],
   "key_defaults": [],
-  "moved": [],
-  "pending": [
+  "later": [
     {
-      "deformations": [
+      "address": "google.container_node_pool[\"np-${z}\"]",
+      "after": 1,
+      "instance": null,
+      "kind": "group",
+      "on": [
         {
-          "action": "create",
+          "class": "open",
+          "null": "google.container_cluster[\"pngu\"].zones"
+        }
+      ],
+      "reads": null,
+      "reason": "member/2 over a null list",
+      "site": {
+        "at": "stacks/gke_two_phase.df:90",
+        "statement": "resource google.container_node_pool \"np-${z}\" { .. } where z in google.container_cluster[\"pngu\"].zones"
+      }
+    },
+    {
+      "after": 1,
+      "kind": "deny",
+      "message": "cluster must be in at least two zones",
+      "on": [
+        {
+          "class": "open",
+          "null": "google.container_cluster[\"pngu\"].zones"
+        }
+      ],
+      "reason": "reads undetermined aggregate zone_count",
+      "site": {
+        "at": "stacks/gke_two_phase.df:99",
+        "statement": "deny \"cluster must be in at least two zones\" { cluster: \"pngu\" } where \"pngu\" in google.container_cluster, zone_count(n), n < 2"
+      },
+      "status": "undetermined"
+    }
+  ],
+  "moved": [],
+  "shadowed": [],
+  "stack": "gke_two_phase",
+  "summary": {
+    "adopt": 0,
+    "approvals": 0,
+    "changes": 6,
+    "conflicts": 0,
+    "create": 6,
+    "delete": 0,
+    "drift": 0,
+    "no_op": 0,
+    "replace": 0,
+    "ticks": 2,
+    "undetermined": 1,
+    "update": 0
+  },
+  "ticks": [
+    {
+      "after": null,
+      "changes": [
+        {
+          "address": "google.compute_subnetwork[\"gke_subnet\"]",
+          "because": null,
+          "changes": [
+            {
+              "after": "10.141.76.0/22",
+              "before": null,
+              "op": "set",
+              "path": "ip_cidr_range",
+              "site": {
+                "at": "stacks/gke_two_phase.df:28",
+                "entry": "gke = { control_plane_cidr: inet(\"172.16.3.96/28\"), subnet_cidr: inet(\"10.141.76.0/22\") }",
+                "statement": "set { .. gke = { control_plane_cidr: inet(\"172.16.3.96/28\"), subnet_cidr: inet(\"10.141.76.0/22\") } } where env == \"dev\""
+              }
+            },
+            {
+              "after": "renfry-dev-gke-subnet",
+              "before": null,
+              "op": "set",
+              "path": "name",
+              "site": {
+                "at": "stacks/gke_two_phase.df:42",
+                "entry": "name = \"${name}-gke-subnet\"",
+                "statement": "resource google.compute_subnetwork gke_subnet { .. name = \"${name}-gke-subnet\" .. } where project(id, name, region, net_id)",
+                "with": [
+                  "id = \"renfry-dev-973682\"",
+                  "name = \"renfry-dev\"",
+                  "region = \"us-east1\"",
+                  "net_id = \"projects/renfry-dev-973682/global/networks/renfry-dev-network\""
+                ]
+              }
+            },
+            {
+              "after": "projects/renfry-dev-973682/global/networks/renfry-dev-network",
+              "before": null,
+              "op": "set",
+              "path": "network",
+              "site": {
+                "at": "stacks/gke_two_phase.df:41",
+                "entry": "network = net_id",
+                "statement": "resource google.compute_subnetwork gke_subnet { .. network = net_id .. } where project(id, name, region, net_id)",
+                "with": [
+                  "net_id = \"projects/renfry-dev-973682/global/networks/renfry-dev-network\"",
+                  "id = \"renfry-dev-973682\"",
+                  "name = \"renfry-dev\"",
+                  "region = \"us-east1\""
+                ]
+              }
+            },
+            {
+              "after": "renfry-dev-973682",
+              "before": null,
+              "op": "set",
+              "path": "project",
+              "site": {
+                "at": "stacks/gke_two_phase.df:39",
+                "entry": "project = id",
+                "statement": "resource google.compute_subnetwork gke_subnet { project = id .. } where project(id, name, region, net_id)",
+                "with": [
+                  "id = \"renfry-dev-973682\"",
+                  "name = \"renfry-dev\"",
+                  "region = \"us-east1\"",
+                  "net_id = \"projects/renfry-dev-973682/global/networks/renfry-dev-network\""
+                ]
+              }
+            },
+            {
+              "after": "us-east1",
+              "before": null,
+              "op": "set",
+              "path": "region",
+              "site": {
+                "at": "stacks/gke_two_phase.df:40",
+                "entry": "region",
+                "statement": "resource google.compute_subnetwork gke_subnet { .. region .. } where project(id, name, region, net_id)",
+                "with": [
+                  "region = \"us-east1\"",
+                  "id = \"renfry-dev-973682\"",
+                  "name = \"renfry-dev\"",
+                  "net_id = \"projects/renfry-dev-973682/global/networks/renfry-dev-network\""
+                ]
+              }
+            }
+          ],
+          "kind": "create",
+          "name": "gke_subnet",
+          "site": {
+            "at": "stacks/gke_two_phase.df:38",
+            "statement": "resource google.compute_subnetwork gke_subnet { .. } where project(id, name, region, net_id)",
+            "with": [
+              "id = \"renfry-dev-973682\"",
+              "name = \"renfry-dev\"",
+              "region = \"us-east1\"",
+              "net_id = \"projects/renfry-dev-973682/global/networks/renfry-dev-network\""
+            ]
+          },
+          "type": "google.compute_subnetwork"
+        },
+        {
+          "address": "google.container_cluster[\"pngu\"]",
+          "because": null,
+          "changes": [
+            {
+              "after": true,
+              "before": null,
+              "op": "set",
+              "path": "deletion_protection",
+              "site": {
+                "at": "stacks/gke_two_phase.df:62",
+                "entry": "deletion_protection = true",
+                "statement": "resource google.container_cluster pngu { .. deletion_protection = true } where project(id, name, _, net_id)",
+                "with": [
+                  "id = \"renfry-dev-973682\"",
+                  "name = \"renfry-dev\"",
+                  "net_id = \"projects/renfry-dev-973682/global/networks/renfry-dev-network\""
+                ]
+              }
+            },
+            {
+              "after": "dev",
+              "before": null,
+              "op": "set",
+              "path": "env",
+              "site": {
+                "at": "stacks/gke_two_phase.df:11",
+                "rank": "default",
+                "statement": "input env = \"dev\" @default"
+              }
+            },
+            {
+              "after": "172.16.3.96/28",
+              "before": null,
+              "op": "set",
+              "path": "master_control_plane_cidr",
+              "site": {
+                "at": "stacks/gke_two_phase.df:28",
+                "entry": "gke = { control_plane_cidr: inet(\"172.16.3.96/28\"), subnet_cidr: inet(\"10.141.76.0/22\") }",
+                "statement": "set { .. gke = { control_plane_cidr: inet(\"172.16.3.96/28\"), subnet_cidr: inet(\"10.141.76.0/22\") } } where env == \"dev\""
+              }
+            },
+            {
+              "after": "renfry-dev-gke",
+              "before": null,
+              "op": "set",
+              "path": "name",
+              "site": {
+                "at": "stacks/gke_two_phase.df:57",
+                "entry": "name = \"${name}-gke\"",
+                "statement": "resource google.container_cluster pngu { .. name = \"${name}-gke\" .. } where project(id, name, _, net_id)",
+                "with": [
+                  "id = \"renfry-dev-973682\"",
+                  "name = \"renfry-dev\"",
+                  "net_id = \"projects/renfry-dev-973682/global/networks/renfry-dev-network\""
+                ]
+              }
+            },
+            {
+              "after": "projects/renfry-dev-973682/global/networks/renfry-dev-network",
+              "before": null,
+              "op": "set",
+              "path": "network_id",
+              "site": {
+                "at": "stacks/gke_two_phase.df:58",
+                "entry": "network_id = net_id",
+                "statement": "resource google.container_cluster pngu { .. network_id = net_id .. } where project(id, name, _, net_id)",
+                "with": [
+                  "net_id = \"projects/renfry-dev-973682/global/networks/renfry-dev-network\"",
+                  "id = \"renfry-dev-973682\"",
+                  "name = \"renfry-dev\""
+                ]
+              }
+            },
+            {
+              "after": "us-east1-b",
+              "before": null,
+              "op": "set",
+              "path": "node_locations[0]",
+              "site": {
+                "at": "stacks/gke_two_phase.df:61",
+                "entry": "node_locations = [ z | zone_at(i, z), i <= zones ]",
+                "statement": "resource google.container_cluster pngu { .. node_locations = [ z | zone_at(i, z), i <= zones ] .. } where project(id, name, _, net_id)",
+                "with": [
+                  "id = \"renfry-dev-973682\"",
+                  "name = \"renfry-dev\"",
+                  "net_id = \"projects/renfry-dev-973682/global/networks/renfry-dev-network\""
+                ]
+              }
+            },
+            {
+              "after": "us-east1-c",
+              "before": null,
+              "op": "set",
+              "path": "node_locations[1]",
+              "site": {
+                "at": "stacks/gke_two_phase.df:61",
+                "entry": "node_locations = [ z | zone_at(i, z), i <= zones ]",
+                "statement": "resource google.container_cluster pngu { .. node_locations = [ z | zone_at(i, z), i <= zones ] .. } where project(id, name, _, net_id)",
+                "with": [
+                  "id = \"renfry-dev-973682\"",
+                  "name = \"renfry-dev\"",
+                  "net_id = \"projects/renfry-dev-973682/global/networks/renfry-dev-network\""
+                ]
+              }
+            },
+            {
+              "after": "renfry-dev-973682",
+              "before": null,
+              "op": "set",
+              "path": "project_id",
+              "site": {
+                "at": "stacks/gke_two_phase.df:56",
+                "entry": "project_id = id",
+                "statement": "resource google.container_cluster pngu { .. project_id = id .. } where project(id, name, _, net_id)",
+                "with": [
+                  "id = \"renfry-dev-973682\"",
+                  "name = \"renfry-dev\"",
+                  "net_id = \"projects/renfry-dev-973682/global/networks/renfry-dev-network\""
+                ]
+              }
+            },
+            {
+              "after": {
+                "class": "fresh",
+                "null": "google.compute_subnetwork[\"gke_subnet\"]"
+              },
+              "before": null,
+              "op": "set",
+              "path": "subnetwork_id",
+              "site": {
+                "at": "stacks/gke_two_phase.df:59",
+                "entry": "subnetwork_id = gke_subnet",
+                "statement": "resource google.container_cluster pngu { .. subnetwork_id = gke_subnet .. } where project(id, name, _, net_id)",
+                "with": [
+                  "id = \"renfry-dev-973682\"",
+                  "name = \"renfry-dev\"",
+                  "net_id = \"projects/renfry-dev-973682/global/networks/renfry-dev-network\""
+                ]
+              }
+            }
+          ],
+          "kind": "create",
+          "name": "pngu",
+          "site": {
+            "at": "stacks/gke_two_phase.df:54",
+            "statement": "resource google.container_cluster pngu { .. } where project(id, name, _, net_id)",
+            "with": [
+              "id = \"renfry-dev-973682\"",
+              "name = \"renfry-dev\"",
+              "net_id = \"projects/renfry-dev-973682/global/networks/renfry-dev-network\""
+            ]
+          },
+          "type": "google.container_cluster"
+        },
+        {
+          "address": "google.compute_address[\"static_ip\"]",
+          "because": null,
+          "changes": [
+            {
+              "after": "pngu-grpc",
+              "before": null,
+              "op": "set",
+              "path": "name",
+              "site": {
+                "at": "stacks/gke_two_phase.df:50",
+                "entry": "name = \"pngu-grpc\"",
+                "statement": "resource google.compute_address static_ip { .. name = \"pngu-grpc\" .. } where project(id, _, region, _)",
+                "with": [
+                  "id = \"renfry-dev-973682\"",
+                  "region = \"us-east1\""
+                ]
+              }
+            },
+            {
+              "after": "renfry-dev-973682",
+              "before": null,
+              "op": "set",
+              "path": "project",
+              "site": {
+                "at": "stacks/gke_two_phase.df:48",
+                "entry": "project = id",
+                "statement": "resource google.compute_address static_ip { project = id .. } where project(id, _, region, _)",
+                "with": [
+                  "id = \"renfry-dev-973682\"",
+                  "region = \"us-east1\""
+                ]
+              }
+            },
+            {
+              "after": "us-east1",
+              "before": null,
+              "op": "set",
+              "path": "region",
+              "site": {
+                "at": "stacks/gke_two_phase.df:49",
+                "entry": "region",
+                "statement": "resource google.compute_address static_ip { .. region .. } where project(id, _, region, _)",
+                "with": [
+                  "region = \"us-east1\"",
+                  "id = \"renfry-dev-973682\""
+                ]
+              }
+            },
+            {
+              "after": {
+                "class": "fresh",
+                "null": "google.compute_subnetwork[\"gke_subnet\"]"
+              },
+              "before": null,
+              "op": "set",
+              "path": "subnetwork_id",
+              "site": {
+                "at": "stacks/gke_two_phase.df:51",
+                "entry": "subnetwork_id = gke_subnet",
+                "statement": "resource google.compute_address static_ip { .. subnetwork_id = gke_subnet } where project(id, _, region, _)",
+                "with": [
+                  "id = \"renfry-dev-973682\"",
+                  "region = \"us-east1\""
+                ]
+              }
+            }
+          ],
+          "kind": "create",
+          "name": "static_ip",
+          "site": {
+            "at": "stacks/gke_two_phase.df:47",
+            "statement": "resource google.compute_address static_ip { .. } where project(id, _, region, _)",
+            "with": [
+              "id = \"renfry-dev-973682\"",
+              "region = \"us-east1\""
+            ]
+          },
+          "type": "google.compute_address"
+        }
+      ],
+      "deposed": [],
+      "tick": 1,
+      "waits_on": []
+    },
+    {
+      "after": 1,
+      "changes": [
+        {
           "address": "k8s.deployment[\"api\"]",
+          "because": null,
           "changes": [
             {
               "after": "gcr.io/renfry/api:1.42",
               "before": null,
               "op": "set",
-              "path": "image"
+              "path": "image",
+              "site": {
+                "at": "stacks/gke_two_phase.df:80",
+                "entry": "image = \"gcr.io/renfry/api:1.42\"",
+                "statement": "resource k8s.deployment api { .. image = \"gcr.io/renfry/api:1.42\" .. } where ns = k8s.namespace[\"pngu\"].name",
+                "with": [
+                  "ns = \"pngu\""
+                ]
+              }
             },
             {
               "after": "pngu",
               "before": null,
               "op": "set",
-              "path": "namespace"
+              "path": "namespace",
+              "site": {
+                "at": "stacks/gke_two_phase.df:79",
+                "entry": "namespace = ns",
+                "statement": "resource k8s.deployment api { namespace = ns .. } where ns = k8s.namespace[\"pngu\"].name",
+                "with": [
+                  "ns = \"pngu\""
+                ]
+              }
             },
             {
               "after": 3,
               "before": null,
               "op": "set",
-              "path": "replicas"
+              "path": "replicas",
+              "site": {
+                "at": "stacks/gke_two_phase.df:81",
+                "entry": "replicas = 3",
+                "statement": "resource k8s.deployment api { .. replicas = 3 } where ns = k8s.namespace[\"pngu\"].name",
+                "with": [
+                  "ns = \"pngu\""
+                ]
+              }
             }
           ],
+          "kind": "create",
           "name": "api",
+          "site": {
+            "at": "stacks/gke_two_phase.df:78",
+            "statement": "resource k8s.deployment api { .. } where ns = k8s.namespace[\"pngu\"].name",
+            "with": [
+              "ns = \"pngu\""
+            ]
+          },
           "type": "k8s.deployment"
         },
         {
-          "action": "create",
           "address": "k8s.namespace[\"pngu\"]",
+          "because": null,
           "changes": [
             {
               "after": "pngu",
               "before": null,
               "op": "set",
-              "path": "name"
+              "path": "name",
+              "site": {
+                "at": "stacks/gke_two_phase.df:75",
+                "entry": "name = \"pngu\"",
+                "statement": "k8s.namespace[\"pngu\"].name = \"pngu\""
+              }
             }
           ],
+          "kind": "create",
           "name": "pngu",
+          "site": {
+            "at": "stacks/gke_two_phase.df:75",
+            "statement": "k8s.namespace[\"pngu\"]"
+          },
           "type": "k8s.namespace"
         },
         {
-          "action": "create",
           "address": "k8s.secret[\"db_credentials\"]",
+          "because": null,
           "changes": [
             {
               "after": {
@@ -218,20 +498,46 @@ exit: ok
               },
               "before": null,
               "op": "set",
-              "path": "data.password"
+              "path": "data.password",
+              "site": {
+                "at": "stacks/gke_two_phase.df:86",
+                "entry": "data = { password: google.secret_manager_secret_version[\"db_pw\"].secret_data }",
+                "statement": "resource k8s.secret db_credentials { .. data = { password: google.secret_manager_secret_version[\"db_pw\"].secret_data } } where ns = k8s.namespace[\"pngu\"].name",
+                "with": [
+                  "ns = \"pngu\""
+                ]
+              }
             },
             {
               "after": "pngu",
               "before": null,
               "op": "set",
-              "path": "namespace"
+              "path": "namespace",
+              "site": {
+                "at": "stacks/gke_two_phase.df:85",
+                "entry": "namespace = ns",
+                "statement": "resource k8s.secret db_credentials { namespace = ns .. } where ns = k8s.namespace[\"pngu\"].name",
+                "with": [
+                  "ns = \"pngu\""
+                ]
+              }
             }
           ],
+          "kind": "create",
           "name": "db_credentials",
+          "site": {
+            "at": "stacks/gke_two_phase.df:84",
+            "statement": "resource k8s.secret db_credentials { .. } where ns = k8s.namespace[\"pngu\"].name",
+            "with": [
+              "ns = \"pngu\""
+            ]
+          },
           "type": "k8s.secret"
         }
       ],
-      "on": [
+      "deposed": [],
+      "tick": 2,
+      "waits_on": [
         {
           "class": "open",
           "null": "google.container_cluster[\"pngu\"].ca_certificate"
@@ -240,54 +546,9 @@ exit: ok
           "class": "open",
           "null": "google.container_cluster[\"pngu\"].endpoint"
         }
-      ],
-      "resolves_after": 1
+      ]
     }
   ],
-  "pending_groups": [
-    {
-      "on": [
-        {
-          "class": "open",
-          "null": "google.container_cluster[\"pngu\"].zones"
-        }
-      ],
-      "pattern": "google.container_node_pool[?]",
-      "reason": "member/2 over a null list",
-      "resolves_after": 1
-    }
-  ],
-  "shadowed": [],
-  "stack": "gke_two_phase",
-  "summary": {
-    "adopt": 0,
-    "conflicts": 0,
-    "create": 3,
-    "deformations": 3,
-    "delete": 0,
-    "drift": 0,
-    "no_op": 0,
-    "pending": 4,
-    "replace": 0,
-    "undetermined": 1,
-    "update": 0
-  },
-  "undeformed": false,
-  "undetermined": [
-    {
-      "after": 1,
-      "kind": "undetermined",
-      "message": "cluster must be in at least two zones",
-      "on": [
-        {
-          "class": "open",
-          "null": "google.container_cluster[\"pngu\"].zones"
-        }
-      ],
-      "policy": "deny",
-      "reason": "reads undetermined aggregate zone_count"
-    }
-  ],
-  "unscheduled": []
+  "up_to_date": false
 }
 -- stderr --

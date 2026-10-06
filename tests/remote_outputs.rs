@@ -64,7 +64,7 @@ fn a_project_reads_another_projects_outputs_through_a_local_remote() {
     );
     assert!(!published.contains(SECRET), "{published}");
 
-    let r = app.run(&["plan", "app"]).success();
+    let r = app.run(&["plan", "--why=none", "app"]).success();
     assert!(
         r.stdout
             .contains("+ net.vpc[\"edge\"]\n  name = \"https://prod.cluster.example\"\n"),
@@ -73,7 +73,7 @@ fn a_project_reads_another_projects_outputs_through_a_local_remote() {
     );
     app.run(&["apply", "app"]).success();
     let r = app.run(&["plan", "app"]).success();
-    assert_eq!(r.summary(), "stack app is undeformed", "{}", r.stdout);
+    assert_eq!(r.summary(), "stack app is up to date", "{}", r.stdout);
 
     // A saved plan records the digest of what it read; the upstream's
     // output moves, and the plan is stale.
@@ -107,9 +107,8 @@ fn a_project_reads_another_projects_outputs_through_a_local_remote() {
     // Planned again, it reads the new value.
     let r = app.run(&["plan", "app"]).success();
     assert!(
-        r.stdout.contains(
-            "name: \"https://prod.cluster.example\" -> \"https://prod.cluster2.example\""
-        ),
+        r.stdout
+            .contains("name: \"https://prod.cluster.example\" → \"https://prod.cluster2.example\""),
         "{}",
         r.stdout
     );
@@ -134,7 +133,7 @@ fn a_remote_backend_takes_the_stack_name() {
         &APP.replace("env=\"prod\"", "env=\"staging\""),
     );
     let r = app.run(&["plan", "app"]).success();
-    assert_eq!(r.summary(), "stack app is undeformed", "{}", r.stdout);
+    assert_eq!(r.summary(), "stack app is up to date", "{}", r.stdout);
 }
 
 /// A secret output reaches the reader as its label: into a public field it
@@ -217,7 +216,7 @@ fn an_output_of_a_configured_attribute_is_published_resolved_or_pending() {
         "{published}"
     );
 
-    let r = s.run(&["plan", "app"]).success();
+    let r = s.run(&["plan", "--why=none", "app"]).success();
     assert!(
         r.stdout.contains(
             "definite:\n+ net.vpc[\"edge\"]\n  cidr = \"10.0.0.0/16\"\npending on \
@@ -243,7 +242,7 @@ fn an_output_of_a_configured_attribute_is_published_resolved_or_pending() {
         ),
     );
     s.run(&["apply", "net"]).success();
-    let r = s.run(&["apply", "app"]).success();
+    let r = s.run(&["apply", "app", "--why=none"]).success();
     assert!(
         r.stdout
             .contains("+ net.vpc[\"other\"]\n  name = \"main\"\n"),

@@ -57,7 +57,7 @@ fn prevent_destroy_makes_a_delete_a_deny() {
 }
 
 /// Renaming a copy of a component renames every address under it. With a
-/// moved fact per resource the plan is undeformed: state's identity moves,
+/// moved fact per resource the plan is up to date: state's identity moves,
 /// nothing is destroyed or created, and a second apply has nothing to move.
 #[test]
 fn moved_closes_rename_is_destroy() {
@@ -84,7 +84,7 @@ provider fake
     let r = mock(&s, &["plan"]).success();
     assert_eq!(
         r.summary(),
-        "plan: 4 deformations (2 create, 2 delete)",
+        "plan: 4 changes (2 create, 2 delete) over 1 tick",
         "{}",
         r.stdout
     );
@@ -102,7 +102,7 @@ provider fake
         r.stdout,
         "moved net.subnet[\"main/a\"] -> net.subnet[\"core/a\"]\n\
          moved net.vpc[\"main/vpc\"] -> net.vpc[\"core/vpc\"]\n\
-         stack p is undeformed\n"
+         stack p is up to date\n"
     );
     // plan does not write state; apply does.
     let r = mock(&s, &["apply"]).success();
@@ -119,7 +119,7 @@ provider fake
     assert_eq!(st["resources"]["net.vpc::core/vpc"]["remote"], "main/vpc");
     assert_eq!(s.json("w.json")["resources"], before["resources"]);
     let r = mock(&s, &["plan"]).success();
-    assert_eq!(r.stdout, "stack p is undeformed\n");
+    assert_eq!(r.stdout, "stack p is up to date\n");
 }
 
 /// ignore_changes drops the path from both sides: a value the world has
@@ -145,12 +145,12 @@ fn ignore_changes_drops_the_path_from_both_sides() {
     .success();
     let r = mock(&s, &["plan"]).success();
     assert!(
-        r.stdout.ends_with("stack p is undeformed\n"),
+        r.stdout.ends_with("stack p is up to date\n"),
         "{}",
         r.stdout
     );
     s.write("p.df", &prog("b"));
-    let r = mock(&s, &["apply"]).success();
+    let r = mock(&s, &["apply", "--why=none"]).success();
     assert!(
         r.stdout
             .contains("~ net.vpc[\"main\"]\n  tags.team: \"a\" -> \"b\"\napply order:\n  tick 1\n    net.vpc[\"main\"]\napply: complete\n"),
@@ -207,7 +207,7 @@ fn ignore_changes_still_sets_the_path_on_create() {
         )
     };
     s.write("p.df", &prog("ops"));
-    let r = mock(&s, &["plan"]).success();
+    let r = mock(&s, &["plan", "--why=none"]).success();
     assert!(
         r.stdout
             .contains("+ net.vpc[\"main\"]\n  cidr = \"10.0.0.0/16\"\n  tags.owner = \"ops\"\n"),
@@ -221,7 +221,7 @@ fn ignore_changes_still_sets_the_path_on_create() {
     );
     s.write("p.df", &prog("dev"));
     let r = mock(&s, &["plan"]).success();
-    assert_eq!(r.stdout, "stack p is undeformed\n");
+    assert_eq!(r.stdout, "stack p is up to date\n");
 }
 
 /// An update does not set an ignored path the world does not have.
@@ -237,7 +237,7 @@ fn ignore_changes_update_leaves_an_absent_path_absent() {
         "p.df",
         "\nresource net.vpc main { cidr = \"10.0.0.0/16\", size = 2, tags = { owner: \"ops\" } }\nignore_changes(main, \"tags.owner\")\nprovider fake\n",
     );
-    let r = mock(&s, &["apply"]).success();
+    let r = mock(&s, &["apply", "--why=none"]).success();
     assert!(
         r.stdout.contains("~ net.vpc[\"main\"]\n  size: 1 -> 2\n"),
         "{}",
@@ -299,7 +299,9 @@ fn policy_reads_the_deformation() {
     );
     let r = mock(&s, &["plan"]).failure();
     assert!(
-        r.stdout.contains("denied:\n") && r.stdout.contains("no deletes here: net.vpc[\"main\"]"),
+        r.stdout.contains(
+            "\ndenied\n  no deletes here: net.vpc[\"main\"]  net.vpc[\"main\"]    p.df:3\n"
+        ),
         "{}",
         r.stdout
     );

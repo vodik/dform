@@ -198,19 +198,32 @@ fn run_on(backend: Backend, s: &Scratch, args: &[&str]) -> (bool, String, String
 
 #[test]
 fn golden() {
-    golden_on(Backend::Process, true);
+    golden_on(Backend::Process, true, false);
+}
+
+/// The cases whose bare diff (`plan --why=none`) is pinned too: the plan
+/// as it was laid out before R-79, which a script may read.
+const BARE: &[(&str, &str)] = &[("dform", "staging"), ("crud_api", "default")];
+
+/// `plan --why=none` for [`BARE`]'s cases, as `<case>.plan-bare.txt`.
+#[test]
+fn golden_bare() {
+    golden_on(Backend::Process, false, true);
 }
 
 /// Every case's plan with the mock linked in (the direct backend): the same
 /// snapshot as over gRPC.
 #[test]
 fn golden_direct() {
-    golden_on(Backend::Direct, false);
+    golden_on(Backend::Direct, false, false);
 }
 
-fn golden_on(backend: Backend, strata: bool) {
+fn golden_on(backend: Backend, strata: bool, bare: bool) {
     let run = |s: &Scratch, args: &[&str]| run_on(backend, s, args);
-    for c in CASES {
+    let cases = CASES
+        .iter()
+        .filter(|c| !bare || BARE.contains(&(c.program, c.case)));
+    for c in cases {
         let scratch = Scratch::new(&format!("golden-{}-{}", c.program, c.case));
         let file = repo().join(c.file);
         let file = file.to_str().unwrap();
@@ -247,11 +260,15 @@ fn golden_on(backend: Backend, strata: bool) {
             plan_args.push("dform.json".into());
         }
         plan_args.push("plan".into());
+        if bare {
+            plan_args.push("--why=none".into());
+        }
         plan_args.push(file.into());
         plan_args.extend(c.keys.iter().map(|k| k.to_string()));
         let plan_args: Vec<&str> = plan_args.iter().map(String::as_str).collect();
         let (ok, out, err) = run(&scratch, &plan_args);
-        check(c.program, c.case, "plan", &transcript(ok, &out, &err));
+        let ext = if bare { "plan-bare" } else { "plan" };
+        check(c.program, c.case, ext, &transcript(ok, &out, &err));
         if !strata {
             continue;
         }

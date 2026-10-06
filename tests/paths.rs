@@ -35,12 +35,12 @@ fn object<'a>(w: &'a serde_json::Value, name: &str) -> &'a serde_json::Value {
 }
 
 /// The write is one key of the annotations, planned quoted; once applied
-/// the world holds it as that key, and the plan is undeformed.
+/// the world holds it as that key, and the plan is up to date.
 #[test]
 fn a_quoted_segment_writes_one_key() {
     let s = Scratch::new("paths-write");
     s.write("p.df", PROGRAM);
-    let r = mock(&s, &["plan"]).success();
+    let r = mock(&s, &["plan", "--why=none"]).success();
     assert!(
         r.stdout.contains(&format!(
             "+ k8s.namespace[\"ns\"]\n  metadata.annotations.\"{KEY}\" = \"letsencrypt\"\n"
@@ -60,8 +60,8 @@ fn a_quoted_segment_writes_one_key() {
         ns["attrs"]["metadata"]["annotations"][KEY], "letsencrypt",
         "{w}"
     );
-    let r = mock(&s, &["plan"]).success();
-    assert!(r.stdout.contains("is undeformed"), "{}", r.stdout);
+    let r = mock(&s, &["plan", "--why=none"]).success();
+    assert!(r.stdout.contains("is up to date"), "{}", r.stdout);
 }
 
 /// The read is the one key's value.
@@ -92,7 +92,7 @@ fn a_quoted_segment_reads_one_key() {
          resource k8s.namespace ns {\n  metadata.name = \"ns\"\n  \
          metadata.labels.x = anns.\"a.b/c\"\n}\n",
     );
-    let r = mock(&s, &["plan"]).success();
+    let r = mock(&s, &["plan", "--why=none"]).success();
     assert!(
         r.stdout
             .contains("  metadata.labels.x: <none> -> \"one\"\n")
@@ -148,7 +148,7 @@ fn fmt_keeps_a_quoted_segment() {
         \x20 metadata.annotations.\"d.e/f\" = \"2\"\n\
         }\n";
     s.write("p.df", siblings);
-    let before = mock(&s, &["plan"]).success().stdout;
+    let before = mock(&s, &["plan", "--why=none"]).success().stdout;
     assert!(
         before.contains(
             "  metadata.annotations.\"a.b/c\" = \"1\"\n  metadata.annotations.\"d.e/f\" = \"2\"\n"
@@ -162,5 +162,5 @@ fn fmt_keeps_a_quoted_segment() {
         "{}",
         s.read("p.df")
     );
-    assert_eq!(mock(&s, &["plan"]).success().stdout, before);
+    assert_eq!(mock(&s, &["plan", "--why=none"]).success().stdout, before);
 }

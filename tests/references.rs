@@ -22,7 +22,7 @@ fn deletes(name: &str, checks: &str) -> common::Run {
         "p.df",
         &format!("\n\nprovider fake\nprovider k8s\n\n{checks}"),
     );
-    mock(&s, &["plan"])
+    mock(&s, &["plan", "--why=none"])
 }
 
 /// `requires_approval(sg, ..) where deformation(action, sg, _), sg in T`

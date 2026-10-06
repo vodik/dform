@@ -31,13 +31,13 @@ provider fake
         "\nresource compute.vm keep { size = 1 }\nprovider fake\n",
     );
     let r = mock(&s, &["apply"]).success();
-    let order: Vec<&str> = r.stdout.lines().filter(|l| l.starts_with("- ")).collect();
+    let order: Vec<&str> = r.stdout.lines().filter(|l| l.starts_with("  - ")).collect();
     assert_eq!(
         order,
         [
-            "- net.route[\"r\"]",
-            "- net.vpc_peering[\"p\"]",
-            "- net.vpc[\"main\"]"
+            "  - net.route[\"r\"]",
+            "  - net.vpc_peering[\"p\"]",
+            "  - net.vpc[\"main\"]"
         ],
         "{}",
         r.stdout
@@ -72,13 +72,21 @@ fn a_force_new_change_replaces_destroying_first() {
     let r = mock(&s, &["apply"]).success();
     assert_eq!(
         r.stdout,
-        "tick 1:\nplan: 1 deformation (1 replace), 1 pending\ndefinite:\n\
-         -/+ net.vpc[\"main\"]  (replace)\n  cidr: \"10.0.0.0/16\" -> \"10.1.0.0/16\"\n\
-         pending on ?net.vpc[\"main\"] (resolves after tick 1):\n\
-         ~ net.subnet[\"a\"]\n  vpc_id: \"net.vpc:main\" -> ?net.vpc[\"main\"]\n\
-         apply order:\n  tick 1\n    net.vpc[\"main\"]\n  tick 2\n    net.subnet[\"a\"]\n\
-         tick 2:\nstack p is undeformed\n\
-         apply: complete\n"
+        r#"plan: 2 changes (1 update, 1 replace) over 2 ticks
+
+tick 1  1 change, applies now
+  ± net.vpc["main"]                              cidr is immutable
+      cidr: "10.0.0.0/16" → "10.1.0.0/16"        p.df:3
+
+tick 2  1 change, after tick 1 reports
+  waits on  net.vpc["main"]
+  ~ net.subnet["a"]
+      vpc_id: "net.vpc:main" → ?net.vpc["main"]  vpc_id = ref(net.vpc, "main", "id")   p.df:4
+
+apply: tick 1 now, then tick 2 when tick 1 reports
+stack p is up to date
+apply: complete
+"#
     );
     let w = s.json("w.json");
     assert_eq!(
@@ -106,7 +114,8 @@ fn create_before_destroy_deposes_the_old_object_until_dependents_move() {
     // Stop after tick 1: the old object is deposed in state.
     let r = mock(&s, &["apply", "--max-ticks", "1"]).failure();
     assert!(
-        r.stdout.contains("+/- net.vpc[\"main\"]  (replace)"),
+        r.stdout
+            .contains("  ± net.vpc[\"main\"]  (the new one first)  "),
         "{}",
         r.stdout
     );
@@ -120,9 +129,10 @@ fn create_before_destroy_deposes_the_old_object_until_dependents_move() {
     let r = mock(&s, &["apply"]).success();
     assert!(
         r.stdout.contains(
-            "plan: 2 deformations (1 update, 1 delete)\ndefinite:\n\
-             ~ net.subnet[\"a\"]\n  vpc_id: \"net.vpc:main\" -> \"net.vpc:main-2\"\n\
-             - net.vpc[\"main\"]  (deposed)\n  cidr was \"10.0.0.0/16\"\n"
+            "plan: 2 changes (1 update, 1 delete) over 1 tick\n\ntick 1  2 changes, applies now\n  \
+             ~ net.subnet[\"a\"]\n      vpc_id: \"net.vpc:main\" → \"net.vpc:main-2\"  \
+             vpc_id = ref(net.vpc, \"main\", \"id\")   p.df:4\n  \
+             - net.vpc[\"main\"]  (deposed)\n      cidr was \"10.0.0.0/16\"\n"
         ),
         "{}",
         r.stdout
@@ -140,7 +150,7 @@ fn create_before_destroy_deposes_the_old_object_until_dependents_move() {
     );
     let r = mock(&s, &["plan"]).success();
     assert!(
-        r.stdout.ends_with("stack p is undeformed\n"),
+        r.stdout.ends_with("stack p is up to date\n"),
         "{}",
         r.stdout
     );
@@ -162,13 +172,13 @@ fn create_before_destroy_in_one_apply_takes_two_ticks() {
     let r = mock(&s, &["apply"]).success();
     assert!(
         r.stdout
-            .starts_with("tick 1:\nplan: 1 deformation (1 replace), 1 pending\n"),
+            .starts_with("plan: 2 changes (1 update, 1 replace) over 2 ticks\n"),
         "{}",
         r.stdout
     );
     assert!(
         r.stdout
-            .contains("tick 2:\nplan: 2 deformations (1 update, 1 delete)\n"),
+            .contains("plan: 2 changes (1 update, 1 delete) over 1 tick\n\ntick 2  2 changes, now that tick 1 reported\n"),
         "{}",
         r.stdout
     );

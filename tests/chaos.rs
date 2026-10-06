@@ -36,7 +36,7 @@ fn fail_stops_before_the_action_and_keeps_what_came_before() {
     let r = mock(&s, &["plan"]).success();
     assert_eq!(
         r.summary(),
-        "plan: 1 deformation (1 create)",
+        "plan: 1 change (1 create) over 1 tick",
         "{}",
         r.stdout
     );
@@ -74,7 +74,7 @@ fn a_create_that_timed_out_is_found_not_created_again() {
         "{}",
         r.stderr
     );
-    assert_eq!(r.summary(), "stack p is undeformed", "{}", r.stdout);
+    assert_eq!(r.summary(), "stack p is up to date", "{}", r.stdout);
     let r = mock(&s, &["apply"]).success();
     assert!(!r.stdout.contains("+ net.subnet[\"a\"]"), "{}", r.stdout);
     assert_eq!(
@@ -157,14 +157,14 @@ fn read_lag_past_the_retry_budget_is_gone() {
     assert!(r.stdout.contains("+ net.vpc[\"main\"]"), "{}", r.stdout);
     assert!(
         r.stdout
-            .contains("vpc: \"net.vpc:main\" -> ?net.vpc[\"main\"]"),
+            .contains("vpc: \"net.vpc:main\" → ?net.vpc[\"main\"]"),
         "{}",
         r.stdout
     );
     // Those three Reads used up the lag: visible and undeformed.
     let r = mock(&s, &["plan"]).success();
     assert_eq!(r.stderr, "");
-    assert_eq!(r.summary(), "stack p is undeformed", "{}", r.stdout);
+    assert_eq!(r.summary(), "stack p is up to date", "{}", r.stdout);
 }
 
 #[test]
@@ -190,13 +190,14 @@ fn mutate_changes_the_world_after_the_tick() {
     let r = mock(&s, &["plan"]).success();
     assert_eq!(
         r.summary(),
-        "plan: 1 deformation (1 replace), 1 pending",
+        "plan: 2 changes (1 update, 1 replace) over 2 ticks",
         "{}",
         r.stdout
     );
     assert!(
         r.stdout.contains(
-            "-/+ net.vpc[\"main\"]  (replace)\n  cidr: \"10.9.0.0/16\" -> \"10.0.0.0/16\""
+            "  ± net.vpc[\"main\"]                           cidr is immutable\n      \
+             cidr: \"10.9.0.0/16\" → \"10.0.0.0/16\""
         ),
         "{}",
         r.stdout

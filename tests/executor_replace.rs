@@ -48,8 +48,8 @@ fn a_replace_updates_its_dependents_after_the_create() {
     let r = mock(&s, &["plan"]).success();
     assert!(
         r.stdout.contains(
-            "pending on ?net.vpc[\"main\"] (resolves after tick 1):\n\
-             ~ net.subnet[\"a\"]\n  vpc_id: \"net.vpc:main@1\" -> ?net.vpc[\"main\"]\n"
+            "tick 2  2 changes, after tick 1 reports\n  waits on  net.vpc[\"main\"]\n  \
+             ~ net.subnet[\"a\"]\n      vpc_id: \"net.vpc:main@1\" → ?net.vpc[\"main\"]  "
         ),
         "{}",
         r.stdout
@@ -57,7 +57,7 @@ fn a_replace_updates_its_dependents_after_the_create() {
     let r = mock(&s, &["apply", "--chaos", "fresh-ids"]).success();
     assert!(
         r.stdout
-            .contains("tick 2:\nplan: 2 deformations (2 update)\n"),
+            .contains("plan: 2 changes (2 update) over 1 tick\n\ntick 2  2 changes, now that tick 1 reported\n"),
         "{}",
         r.stdout
     );
@@ -66,7 +66,7 @@ fn a_replace_updates_its_dependents_after_the_create() {
     assert_eq!(subnets, [new.clone(), new], "{}", r.stdout);
     let r = mock(&s, &["plan"]).success();
     assert!(
-        r.stdout.ends_with("stack p is undeformed\n"),
+        r.stdout.ends_with("stack p is up to date\n"),
         "{}",
         r.stdout
     );
@@ -87,17 +87,21 @@ fn create_before_destroy_moves_dependents_before_the_deposed_delete() {
         ),
     );
     let r = mock(&s, &["apply", "--chaos", "fresh-ids"]).success();
-    let tick2 = r.stdout.split("tick 2:\n").nth(1).unwrap_or_default();
+    let tick2 = r
+        .stdout
+        .split("tick 2  3 changes, now that tick 1 reported\n")
+        .nth(1)
+        .unwrap_or_default();
     let order: Vec<&str> = tick2
         .lines()
-        .filter(|l| l.starts_with("~ ") || l.starts_with("- "))
+        .filter(|l| l.starts_with("  ~ ") || l.starts_with("  - "))
         .collect();
     assert_eq!(
         order,
         [
-            "~ net.subnet[\"a\"]",
-            "~ net.subnet[\"b\"]",
-            "- net.vpc[\"main\"]  (deposed)"
+            "  ~ net.subnet[\"a\"]",
+            "  ~ net.subnet[\"b\"]",
+            "  - net.vpc[\"main\"]  (deposed)"
         ],
         "{}",
         r.stdout
@@ -143,15 +147,15 @@ provider fake
     let r = mock(&s, &["plan"]).success();
     assert!(
         r.stdout.contains(
-            "pending on ?db.postgres[\"d\"].endpoint (resolves after tick 1):\n\
+            "tick 2  2 changes, after tick 1 reports\n  waits on  db.postgres[\"d\"].endpoint\n  \
              ~ net.subnet[\"a\"]\n"
-        ) && r.stdout.contains("- net.vpc[\"main\"]  (deposed)\n"),
+        ) && r.stdout.contains("  - net.vpc[\"main\"]  (deposed)\n"),
         "{}",
         r.stdout
     );
     assert!(
         r.stdout
-            .contains("apply order:\n  tick 1\n    db.postgres[\"d\"]\n  tick 2\n    net.subnet[\"a\"]\n    net.vpc[\"main\"]"),
+            .contains("tick 1  1 change, applies now\n  + db.postgres[\"d\"]  "),
         "{}",
         r.stdout
     );

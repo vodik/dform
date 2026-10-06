@@ -30,7 +30,7 @@ provider fake
 const MARKS: &str = "resumed from the apply interrupted at tick 1:\n  \
     net.vpc[\"peer\"]  (retried with its idempotency key: nothing it made was found)\n  \
     net.subnet[\"a\"]  (retried with its idempotency key: nothing it made was found)\n\
-    Apply these 2 deformations to p? [y/N] ";
+    Apply these 2 changes to p? [y/N] ";
 
 /// An apply the provider crashed under at `net.vpc.peer`: `net.vpc.main`
 /// made, the other two remaining in flight, each an uncertain create;
@@ -174,22 +174,24 @@ fn a_tick_that_adds_an_address_asks_again() {
     let (said, code) = answers(&s, &["y", "y"]);
     assert_eq!(code, 0, "{said:?}");
     assert!(
-        said[0].ends_with("Apply these 2 deformations to p? [y/N] "),
+        said[0].ends_with("Apply this change to p? [y/N] "),
         "{}",
         said[0]
     );
     assert!(
-        said[1].contains("tick 2:\nplan: 1 deformation (1 create)\n"),
+        said[1].contains(
+            "plan: 1 change (1 create) over 1 tick\n\ntick 2  1 change, now that tick 1 reported\n"
+        ),
         "{}",
         said[1]
     );
     assert!(
-        said[1].contains("+ iam.policy[\"connect-orders.db.fake\"]\n"),
+        said[1].contains("  + iam.policy[\"connect-orders.db.fake\"]  "),
         "{}",
         said[1]
     );
     assert!(
-        said[1].ends_with("Apply 1 new deformation to p? [y/N] "),
+        said[1].ends_with("Apply tick 2 to p? [y/N] "),
         "{}",
         said[1]
     );

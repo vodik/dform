@@ -7,7 +7,11 @@ mod common;
 use common::Scratch;
 
 fn plan(s: &Scratch) -> common::Run {
-    s.run(&common::on("p.df", &["--world", "w.json"], &["plan"]))
+    s.run(&common::on(
+        "p.df",
+        &["--world", "w.json"],
+        &["plan", "--why=none"],
+    ))
 }
 
 fn program(body: &str) -> String {
@@ -75,7 +79,7 @@ fn an_attribute_typed_ref_takes_the_resource() {
         .run(&common::on(
             "p.df",
             &["--world", "w.json"],
-            &["plan", "--json"],
+            &["plan", "--why=none", "--json"],
         ))
         .success();
     assert!(j.stdout.contains("\"net.vpc:main\""), "{}", j.stdout);
@@ -165,7 +169,7 @@ fn a_string_attribute_takes_a_reference_only_written_out() {
         s.run(&common::on(
             "p.df",
             &["--provider", "schema.df", "--world", "w.json"],
-            &["plan"],
+            &["plan", "--why=none"],
         ))
     };
     let r = run("resource app.thing a { port = 1 }\n\

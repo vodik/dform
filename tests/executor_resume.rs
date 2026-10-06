@@ -55,9 +55,10 @@ fn apply_after_a_crash_finishes_on(backend: Backend) {
     assert_eq!(
         r.stdout,
         "resuming the apply interrupted at tick 1; remaining: compute.vm[\"app\"]\n\
-         plan: 1 deformation (1 create)\ndefinite:\n\
-         + compute.vm[\"app\"]\n  subnet_id = \"net.subnet:a\"\n\
-         apply order:\n  tick 1\n    compute.vm[\"app\"]\n\
+         plan: 1 change (1 create) over 1 tick\n\ntick 1  1 change, applies now\n  \
+         + compute.vm[\"app\"]             p.df:5\n      \
+         subnet_id = \"net.subnet:a\"  ref(net.subnet, \"a\", \"id\")\n\n\
+         apply: tick 1 now\n\
          resumed from the apply interrupted at tick 1:\n  \
          compute.vm[\"app\"]  (retried with its idempotency key: nothing it made was found)\n\
          apply: complete\n"
@@ -67,7 +68,7 @@ fn apply_after_a_crash_finishes_on(backend: Backend) {
     assert_eq!(st["resources"].as_object().unwrap().len(), 3);
     let r = dform_on(&s, backend, &["plan"]).success();
     assert!(
-        r.stdout.ends_with("stack p is undeformed\n"),
+        r.stdout.ends_with("stack p is up to date\n"),
         "{}",
         r.stdout
     );
@@ -121,7 +122,7 @@ fn apply_after_a_stop_finishes_the_remaining_actions() {
             r.stdout
         );
         let r = dform_on(&s, backend, &["plan"]).success();
-        assert_eq!(r.summary(), "stack p is undeformed", "{backend:?}");
+        assert_eq!(r.summary(), "stack p is up to date", "{backend:?}");
     }
 }
 
@@ -176,7 +177,7 @@ fn apply_stops_when_the_world_changed_under_a_remaining_action() {
     let r = mock(&s, &["apply"]).success();
     assert!(
         r.stdout.contains(
-            "~ net.subnet[\"a\"]\n  tags.owner: \"someone\" -> <none>\n  tier: <none> -> \"web\"\n"
+            "  ~ net.subnet[\"a\"]\n      tags.owner: \"someone\" → <none>\n      tier: <none> → \"web\"  "
         ),
         "{}",
         r.stdout

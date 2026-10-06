@@ -21,7 +21,7 @@ fn two_mains(rest: &str) -> String {
 fn plan(name: &str, src: &str) -> common::Run {
     let s = Scratch::new(name);
     s.write("p.df", src);
-    mock(&s, &["plan"])
+    mock(&s, &["plan", "--why=none"])
 }
 
 /// A literal is read as the declared type; the plan gives the value.

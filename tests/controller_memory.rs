@@ -57,7 +57,7 @@ fn two_hundred_events_keep_the_source_registry_bounded() {
         let left = deadline.saturating_duration_since(std::time::Instant::now());
         match rx.recv_timeout(left) {
             Ok(l) => {
-                if l.ends_with("is undeformed") {
+                if l.ends_with("is up to date") {
                     done += 1;
                     if done < EVENTS {
                         release(&s, &format!("gcr.io/renfry/web:{done}"));

@@ -62,7 +62,7 @@ fn why_shows_the_type_as_the_leaf() {
     let r = s.run(&["plan", "p.df"]).success();
     assert_eq!(
         r.summary(),
-        "plan: 2 deformations (2 create)",
+        "plan: 2 changes (2 create) over 1 tick",
         "{}",
         r.stdout
     );

@@ -33,7 +33,7 @@ fn an_override_that_violates_a_refinement_is_a_deny() {
     .failure();
     assert!(
         r.stdout
-            .contains("conflicts:\n! input[\"\"].db.backup_days: 40 violates range(1, 35)\n"),
+            .contains("conflicts\n  ! input[\"\"].db.backup_days: 40 violates range(1, 35)\n"),
         "{}",
         r.stdout
     );
@@ -150,14 +150,18 @@ fn a_refinement_on_a_null_is_deferred_and_fires_after_the_boundary() {
     let r = gke(&s, &["plan"]).success();
     assert!(
         r.stdout.contains(
-            "? refinement on ?google.container_cluster[\"pngu\"].zones deferred: len_ge(3) of google.container_cluster[\"pngu\"].zones, decided after tick 1\n"
+            "  check len_ge(3) of google.container_cluster[\"pngu\"].zones  undetermined until tick 2\n"
         ),
         "{}",
         r.stdout
     );
     let r = gke(&s, &["apply", "--set", "zones=2"]).failure();
-    assert!(r.stdout.contains("tick 1:"), "{}", r.stdout);
-    assert!(!r.stdout.contains("tick 2:"), "{}", r.stdout);
+    assert!(r.stdout.contains("tick 1  "), "{}", r.stdout);
+    assert!(
+        !r.stdout.contains("now that tick 1 reported"),
+        "{}",
+        r.stdout
+    );
     assert!(
         r.stderr
             .contains("constraint violations after tick 1:\n- refinement violated ctx={\"addr\":\"pngu\",\"at\":\"")

@@ -28,7 +28,7 @@ fn scratch() -> Scratch {
 }
 
 fn plan(s: &Scratch, extra: &[&str]) -> common::Run {
-    let mut a = vec!["plan"];
+    let mut a = vec!["plan", "--why=none"];
     a.extend(extra);
     s.run(&common::on("p.df", &["--world", "w.json"], &a))
 }
@@ -300,7 +300,7 @@ resource net.vpc main {
 "#;
 
 fn object_plan(s: &Scratch, extra: &[&str]) -> common::Run {
-    let mut a = vec!["dev", "--world", "w.json", "plan", "p.df"];
+    let mut a = vec!["dev", "--world", "w.json", "plan", "--why=none", "p.df"];
     a.extend(extra);
     s.run(&a)
 }
@@ -445,7 +445,15 @@ fn set_of_a_field_where_a_condition_holds() {
     let r = object_plan(&s, &[]).success();
     assert!(r.stdout.contains("  count = 1\n"), "{}", r.stdout);
     let r = s
-        .run(&["dev", "--world", "w.json", "plan", "p.df", "env=prod"])
+        .run(&[
+            "dev",
+            "--world",
+            "w.json",
+            "plan",
+            "--why=none",
+            "p.df",
+            "env=prod",
+        ])
         .success();
     assert!(r.stdout.contains("  count = 3\n"), "{}", r.stdout);
     s.write(

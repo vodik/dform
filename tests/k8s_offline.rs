@@ -771,7 +771,7 @@ fn the_demo_applies_through_the_api_server() {
     assert_eq!(got, want);
 
     let r = run(&["plan"]).success();
-    assert_eq!(r.summary(), "stack k8s_demo is undeformed", "{}", r.stdout);
+    assert_eq!(r.summary(), "stack k8s_demo is up to date", "{}", r.stdout);
     let cache = s.path("dform.state/cache/k8s-openapi.json");
     assert!(cache.exists(), "the schema is cached in dform.state/cache/");
     assert!(
@@ -799,7 +799,7 @@ fn the_demo_applies_through_the_api_server() {
     let r = run(&["plan"]).success();
     assert!(
         r.stdout.contains(
-            "spec.template.spec.containers[name=web].image: \"nginx:1.27\" -> \"nginx:1.28\""
+            "spec.template.spec.containers[name=web].image: \"nginx:1.27\" → \"nginx:1.28\""
         ),
         "{}",
         r.stdout
@@ -855,7 +855,7 @@ fn a_ref_to_a_server_defaulted_field_resolves_from_the_cluster() {
         .expect("the configmap");
     assert_eq!(cm["data"]["WEB"], json!(ip));
     let r = run(&["plan"]).success();
-    assert_eq!(r.summary(), "stack k8s_demo is undeformed", "{}", r.stdout);
+    assert_eq!(r.summary(), "stack k8s_demo is up to date", "{}", r.stdout);
 }
 
 /// The field managers of `obj` that own `path` (`.a.b`) per its managedFields.
@@ -908,7 +908,7 @@ fn an_update_leaves_server_defaulted_fields_to_the_server() {
     );
     assert_eq!(managers_of(&now, ".spec.ports"), vec!["dform".to_string()]);
     let r = run(&["plan"]).success();
-    assert_eq!(r.summary(), "stack k8s_demo is undeformed", "{}", r.stdout);
+    assert_eq!(r.summary(), "stack k8s_demo is up to date", "{}", r.stdout);
 
     // The generated ConfigMap name is the server's too, so the document
     // has none; Plan's dry run names the object by its remote id.
@@ -923,7 +923,7 @@ fn an_update_leaves_server_defaulted_fields_to_the_server() {
     );
     let r = run(&["plan"]).success();
     assert!(
-        r.stdout.contains("data.LOG_LEVEL: \"info\" -> \"debug\""),
+        r.stdout.contains("data.LOG_LEVEL: \"info\" → \"debug\""),
         "{}",
         r.stdout
     );
@@ -936,7 +936,7 @@ fn an_update_leaves_server_defaulted_fields_to_the_server() {
     );
     run(&["apply"]).success();
     let r = run(&["plan"]).success();
-    assert_eq!(r.summary(), "stack k8s_demo is undeformed", "{}", r.stdout);
+    assert_eq!(r.summary(), "stack k8s_demo is up to date", "{}", r.stdout);
 }
 
 /// Another field manager takes `spec.replicas`: dform's plan puts it back,
@@ -969,7 +969,7 @@ fn a_field_another_manager_owns_fails_the_apply_naming_both() {
     }
     let r = run(&["plan"]).success();
     assert!(
-        r.stdout.contains("~ k8s.deployment[\"web\"]"),
+        r.stdout.contains("  ~ k8s.deployment[\"web\"]"),
         "{}",
         r.stdout
     );
@@ -1185,7 +1185,7 @@ fn a_kubeconfig_held_as_a_secret_configures_the_provider() {
         "the token from the program authenticates"
     );
     let r = run(&["plan"]).success();
-    assert_eq!(r.summary(), "stack p is undeformed", "{}", r.stdout);
+    assert_eq!(r.summary(), "stack p is up to date", "{}", r.stdout);
     out += &(r.stdout + &r.stderr);
     assert!(!out.contains(TOKEN), "{out}");
     let mut files = Vec::new();
@@ -1331,14 +1331,14 @@ fn an_empty_pod_selector_is_present() {
         r.stdout
     );
     assert!(
-        r.stdout.contains("spec.podSelector: <none> -> {}"),
+        r.stdout.contains("spec.podSelector: <none> → {}"),
         "{}",
         r.stdout
     );
     run(&["apply"]).success();
     assert_eq!(api.get(path).unwrap()["spec"]["podSelector"], json!({}));
     let r = run(&["plan"]).success();
-    assert_eq!(r.summary(), "stack p is undeformed", "{}", r.stdout);
+    assert_eq!(r.summary(), "stack p is up to date", "{}", r.stdout);
 }
 
 /// The provider answers the inventory (`world.T[e].p`) from the cluster:
@@ -1420,8 +1420,8 @@ fn drift_from_a_kubectl_patch_is_planned_back() {
 
     let r = run(&["plan"]).success();
     assert!(
-        r.stdout.contains("~ k8s.deployment[\"web\"]")
-            && r.stdout.contains("spec.replicas: <none> -> 3"),
+        r.stdout.contains("  ~ k8s.deployment[\"web\"]")
+            && r.stdout.contains("spec.replicas: <none> → 3"),
         "{}",
         r.stdout
     );
@@ -1438,7 +1438,7 @@ fn drift_from_a_kubectl_patch_is_planned_back() {
 /// A secret output of one stack, a Secret's `stringData` key, read into a
 /// Secret of another: the provider reads it from the cluster where it is
 /// held, inside the Apply (E DR-19), and the object reads back as the
-/// reference (`dform.io/held`), so the next plan is undeformed; the bytes
+/// reference (`dform.io/held`), so the next plan is up to date; the bytes
 /// are never in dform's output or files.
 #[test]
 fn a_held_secret_is_read_from_the_cluster() {
@@ -1494,7 +1494,7 @@ fn a_held_secret_is_read_from_the_cluster() {
         });
     assert_eq!(got.as_deref(), Some(PW), "{copy}");
     let r = dform(&s, Some(&kc), &["plan", "b.df"]).success();
-    assert_eq!(r.summary(), "stack b is undeformed", "{}", r.stdout);
+    assert_eq!(r.summary(), "stack b is up to date", "{}", r.stdout);
     out += &(r.stdout + &r.stderr);
     assert!(!out.contains(PW), "{out}");
     let mut files = Vec::new();

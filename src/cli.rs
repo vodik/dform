@@ -259,18 +259,22 @@ enum Run {
         #[command(flatten)]
         target: Target,
         /// Write the plan file: inputs, a digest of the world, and the
-        /// deformation delta with its nulls and tick schedule.
+        /// changes with their nulls and tick schedule.
         /// `apply PLAN.json` applies exactly this delta or refuses.
         #[arg(long = "out")]
         out: Option<PathBuf>,
         /// Print the plan as one JSON document instead of text.
         #[arg(long)]
         json: bool,
-        /// Under each deformation, why: the statement that derived it and
-        /// the facts, table rows, inputs and extern answers it rests on,
-        /// one line each (`why ADDR`, compressed).
-        #[arg(long)]
-        why: bool,
+        /// How much each change says of why it is planned: `none`, the
+        /// bare diff; `line` (the default), where each change is derived
+        /// with its bindings, where each attribute's value was written, and
+        /// the leaf that changed since the last apply; `full` (`--why`
+        /// alone), also the facts, table rows, inputs and extern answers it
+        /// rests on, one line each (`why ADDR`, compressed).
+        #[arg(long, value_name = "LEVEL", default_value = "line",
+              num_args = 0..=1, require_equals = true, default_missing_value = "full")]
+        why: report::Why,
     },
     /// A report: apply a deployment, every key value named (`apply app
     /// env=prod`), after the deployments it reads, or a plan file from `plan
@@ -280,7 +284,7 @@ enum Run {
         #[command(flatten)]
         target: Target,
         /// A safety valve: stop after this many ticks (phase boundaries)
-        /// if the stack is still deformed, a loop that never settles.
+        /// if the stack still has changes, a loop that never settles.
         #[arg(long = "max-ticks", default_value_t = 8)]
         max_ticks: usize,
         /// At most this many provider Apply calls in flight: a tick's
@@ -290,7 +294,7 @@ enum Run {
         /// A signed approval of the plan file's digest (a JWT, or a DSSE
         /// envelope): verified against the stack's `approvals` trust root
         /// before any Apply call. Required when the policy says
-        /// `requires_approval` of a deformation.
+        /// `requires_approval` of a change.
         #[arg(long = "approval")]
         approval: Option<PathBuf>,
         /// How long a tick waits for the open nulls it reads to resolve (a
@@ -306,6 +310,11 @@ enum Run {
         /// on. `apply PLAN.json` never asks, and stops the same way.
         #[arg(long = "yes", short = 'y')]
         yes: bool,
+        /// How much each change says of why it is planned, as `plan
+        /// --why`.
+        #[arg(long, value_name = "LEVEL", default_value = "line",
+              num_args = 0..=1, require_equals = true, default_missing_value = "full")]
+        why: report::Why,
     },
     /// A derivation: how a fact was derived, its rule, bindings and the facts
     /// it read, recursively. Variables are allowed; every match is printed.
@@ -332,8 +341,8 @@ enum Run {
         #[arg(long)]
         json: bool,
     },
-    /// A report: what the applies since REF did, each deformation with why it
-    /// was planned (as `plan --why`, by the program as it was at that apply),
+    /// A report: what the applies since REF did, each change with why it was
+    /// planned (as `plan --why`, by the program as it was at that apply),
     /// and which inputs and stated rows changed since the apply before.
     Diff {
         #[command(flatten)]
@@ -408,7 +417,7 @@ enum ControllerCommand {
         /// Exit after this many events (the start counts).
         #[arg(long = "max-events")]
         max_events: Option<usize>,
-        /// Per event, stop after this many ticks if still deformed.
+        /// Per event, stop after this many ticks if changes remain.
         #[arg(long = "max-ticks", default_value_t = 8)]
         max_ticks: usize,
     },
@@ -599,7 +608,7 @@ enum Cmd {
     Plan {
         out: Option<PathBuf>,
         json: bool,
-        why: bool,
+        why: report::Why,
     },
     Test,
     Apply {
@@ -612,6 +621,8 @@ enum Cmd {
         wait: Option<std::time::Duration>,
         /// `--yes`: no confirmation.
         yes: bool,
+        /// What each change of the printed plan says of why.
+        why: report::Why,
     },
     Query {
         pattern: String,
@@ -767,9 +778,13 @@ fn run_command(cli: Cli) -> Result<()> {
     let named: Vec<String> = order.iter().map(|d| d.name.clone()).collect();
     let target = named.last().cloned().unwrap_or_default();
     let deps = &named[..named.len() - 1];
+    // The `stacks:` line (R-79): the deployments in apply order. Each is
+    // planned, confirmed and applied in turn, so its ticks are its own
+    // plan's, printed under its name.
     if cli.every_stack.is_empty() {
         println!(
-            "apply {target}: {} first, each with its own plan and state: {target} reads {}",
+            "stacks: {}, then {target} below, in apply order: {target} reads {}; each is \
+             planned, confirmed and applied in turn",
             deps.join(", then "),
             if deps.len() == 1 {
                 "its outputs"
@@ -779,8 +794,8 @@ fn run_command(cli: Cli) -> Result<()> {
         );
     } else {
         println!(
-            "apply: the project's {} stacks in dependency order, each with its own plan, \
-             state and confirmation: {}",
+            "stacks: the project's {}, in apply order: {}; each is planned, confirmed and \
+             applied in turn",
             named.len(),
             named.join(", then ")
         );
@@ -1214,6 +1229,7 @@ fn run_cmd(r: Run) -> (Cmd, Option<Target>) {
             approval,
             wait,
             yes,
+            why,
         } => (
             Cmd::Apply {
                 plan_file: None,
@@ -1223,6 +1239,7 @@ fn run_cmd(r: Run) -> (Cmd, Option<Target>) {
                 approval,
                 wait,
                 yes,
+                why,
             },
             Some(target),
         ),
@@ -1982,16 +1999,74 @@ fn run_with(
             kept: &kept,
         })
     };
+    // How much each printed change says of why (R-79).
+    let why = match &cli.cmd {
+        Cmd::Plan { why, .. } | Cmd::Apply { why, .. } => *why,
+        _ => report::Why::None,
+    };
+    // Each change's leaf that changed since the last apply: the last
+    // apply's program evaluated again (`diff`'s reading), at the commit it
+    // recorded or with the inputs it recorded. Only this executable can
+    // evaluate it (not a test linking dform in).
+    let because =
+        |report: &mut report::Report, plan: &crate::provider::Plan, res: &engine::EvalResult| {
+            let dform = std::env::current_exe()
+                .ok()
+                .is_some_and(|e| e.file_stem().is_some_and(|s| s == "dform"));
+            if why == report::Why::None || !dform || cli.files.is_empty() {
+                return;
+            }
+            let addresses: Vec<ir::Address> = plan
+                .actions
+                .iter()
+                .filter(|a| !matches!(a.kind, ActionKind::Noop))
+                .map(|a| a.addr.clone())
+                .collect();
+            let keys: Vec<String> = stack_cfg.keys.iter().map(|(k, _)| k.clone()).collect();
+            let (Ok(entries), Ok(rerun)) = (audit.entries(), rerun_of(&cli, &instance.key, keys))
+            else {
+                return;
+            };
+            let Some(then) = crate::diff::last_apply(
+                &entries, &cli.files, &rerun, &cli.set, &cli.data, &addresses,
+            ) else {
+                return;
+            };
+            let redact = query::Redactor::new(&res.facts, schema);
+            report.because(&then, &crate::diff::snapshot(res, &redact, &addresses));
+        };
+    // The project's root, else the program's directory: what a site's
+    // place is relative to.
+    let top = cli.files.first().and_then(|f| {
+        let f = std::path::absolute(f).ok()?;
+        crate::project::manifest_root(&f).or_else(|| f.parent().map(Path::to_path_buf))
+    });
+    let explain = |report: &mut report::Report,
+                   plan: &crate::provider::Plan,
+                   res: &engine::EvalResult,
+                   tick: usize| {
+        report.explain(why, res, &query::Redactor::new(&res.facts, schema));
+        if tick == 1 {
+            because(report, plan, res);
+        }
+        if let Some(top) = &top {
+            report.relative_to(top);
+        }
+    };
+    // `--why=none` is the bare diff, laid out as before R-79.
+    let rendered = |report: &report::Report| match why {
+        report::Why::None => report.render_bare(cli.style),
+        _ => report.render(cli.style),
+    };
     let show = |plan: &crate::provider::Plan,
                 res: &engine::EvalResult,
                 sections: &stuck::Sections,
                 tick: usize,
                 moved: &[(ir::Address, ir::Address)],
                 denies: &[String]| {
-        print!(
-            "{}",
-            report_of(plan, res, sections, tick, moved, denies).render(cli.style)
-        )
+        let mut report = report_of(plan, res, sections, tick, moved, denies);
+        explain(&mut report, plan, res, tick);
+        print!("{}", rendered(&report))
     };
     // `apply PLAN`: the delta re-evaluated at each tick must be the file's.
     let check_saved = |plan: &crate::provider::Plan,
@@ -2199,7 +2274,7 @@ fn run_with(
             let redact = query::Redactor::new(&res.facts, backend.schema());
             print!("{}", graph::relation(&spec, &res.facts, &redact)?);
         }
-        Cmd::Plan { out, json, why, .. } => {
+        Cmd::Plan { out, json, .. } => {
             let Planned {
                 res,
                 resources,
@@ -2210,9 +2285,7 @@ fn run_with(
                 .take()
                 .ok_or_else(|| anyhow::anyhow!("internal: a plan without its policy pass"))??;
             let mut report = report_of(&plan, &res, &sections, 1, &moves, &denies);
-            if why {
-                report.explain(&res, &query::Redactor::new(&res.facts, schema));
-            }
+            explain(&mut report, &plan, &res, 1);
             // The plan file, when one is written or the plan needs an
             // approval: its digest is what an approver signs.
             let needs = crate::approval::needs(&res.facts);
@@ -2250,11 +2323,14 @@ fn run_with(
                 }
                 println!("{}", serde_json::to_string_pretty(&j)?);
             } else {
-                print!("{}", report.render(cli.style));
-                // What needs an approval, and the digest to approve; a
-                // plan file's digest is on stderr beside its path.
+                print!("{}", rendered(&report));
+                // The digest to approve, when a change is held for an
+                // approval (the bare diff lists those changes after it);
+                // a plan file's digest is on stderr beside its path.
                 if let Some(f) = file.as_ref().filter(|f| !f.needs_approval.is_empty()) {
-                    print!("{}", needs_text(&f.needs_approval));
+                    if why == report::Why::None {
+                        print!("{}", needs_text(&f.needs_approval));
+                    }
                     println!("plan digest: {}", f.digest.as_deref().unwrap_or_default());
                 }
             }
@@ -2491,7 +2567,7 @@ fn run_with(
                     undeformed = text
                         .lines()
                         .next()
-                        .is_some_and(|l| l.ends_with(" is undeformed"));
+                        .is_some_and(|l| l.ends_with(" is up to date"));
                     h.gate(tick, &mut plan, &res.facts, &text);
                     if let (false, Some(digest)) = (needs.is_empty(), &digest) {
                         let mut tokens: Vec<String> = res
@@ -2541,7 +2617,7 @@ fn run_with(
                         !matches!(a.kind, ActionKind::Noop) && waits_on(a, &sections).is_none()
                     });
                 } else {
-                    if tick > 1 || boundary {
+                    if why == report::Why::None && (tick > 1 || boundary) {
                         println!("tick {tick}:");
                     }
                     show(&plan, &res, &sections, tick, &[], &denies);
@@ -2563,7 +2639,7 @@ fn run_with(
                 if tick == 1 && hook.is_none() && !yes && saved.is_none() {
                     let report = report_of(&plan, &res, &sections, tick, &[], &denies);
                     if !report.undeformed {
-                        let n = report.deformations() + report.pending_count();
+                        let n = report.changes();
                         confirm(n, false, &deployment, tick, cli.style)?;
                     }
                 }
@@ -2888,7 +2964,7 @@ fn run_with(
                 }
                 if tick == max_ticks {
                     bail!(
-                        "apply stopped after {max_ticks} ticks (--max-ticks): the stack is still deformed"
+                        "apply stopped after {max_ticks} ticks (--max-ticks): the stack still has changes"
                     );
                 }
                 // The boundary. The held deformations come back as facts
@@ -3260,6 +3336,7 @@ fn run_controller(cli: Cli) -> Result<()> {
             wait: None,
             // The controller runs unattended: it never asks.
             yes: true,
+            why: report::Why::None,
         },
         ..cli
     };
@@ -3305,8 +3382,9 @@ fn run_controller(cli: Cli) -> Result<()> {
     }
 }
 
-/// Ask on the terminal whether to apply `n` deformations (`new` ones, at
-/// a later tick) to `deployment` at `tick`: only `y` or `yes` proceeds.
+/// Ask on the terminal whether to apply `n` changes to `deployment`, or
+/// (`new`) tick `tick`, which adds what no plan listed: only `y` or `yes`
+/// proceeds.
 /// With no terminal to ask on, a refusal naming `--yes`, never a wait.
 fn confirm(n: usize, new: bool, deployment: &str, tick: usize, style: report::Style) -> Result<()> {
     use std::io::{BufRead, IsTerminal, Write};
@@ -3317,10 +3395,10 @@ fn confirm(n: usize, new: bool, deployment: &str, tick: usize, style: report::St
              pass --yes to apply without asking"
         );
     }
-    let s = if n == 1 { "" } else { "s" };
-    let ask = match new {
-        true => format!("Apply {n} new deformation{s} to {deployment}?"),
-        false => format!("Apply these {n} deformation{s} to {deployment}?"),
+    let ask = match (new, n) {
+        (true, _) => format!("Apply tick {tick} to {deployment}?"),
+        (false, 1) => format!("Apply this change to {deployment}?"),
+        (false, _) => format!("Apply these {n} changes to {deployment}?"),
     };
     print!("{} [y/N] ", style.paint(report::Paint::Bold, &ask));
     std::io::stdout().flush()?;
@@ -3366,7 +3444,7 @@ impl std::fmt::Display for Declined {
 impl std::error::Error for Declined {}
 
 /// An unattended apply that stopped after `tick`: the next tick adds `new`
-/// deformations no printed plan named (`unnamed`, the groups the last plan
+/// changes no printed plan named (`unnamed`, the groups the last plan
 /// held them as). The audit log's `apply_end` says `stopped`.
 #[derive(Debug)]
 struct Stopped {
@@ -3384,7 +3462,7 @@ impl std::fmt::Display for Stopped {
         };
         write!(
             f,
-            "apply stopped after tick {}: tick {} adds {} deformation{s} the plan could not \
+            "apply stopped after tick {}: tick {} adds {} change{s} the plan could not \
              name{groups}; run apply again to plan them against the world as it now is",
             self.tick,
             self.tick + 1,
@@ -3880,7 +3958,7 @@ fn approve_entry(
     }
 }
 
-/// The `needs approval:` section of a plan: each deformation and why.
+/// The bare diff's `needs approval:` section: each change and why.
 fn needs_text(needs: &[zset::file::NeedsApproval]) -> String {
     if needs.is_empty() {
         return String::new();

@@ -489,7 +489,7 @@ impl Hook {
             }
         }
         let first = report.lines().next().unwrap_or("");
-        if !first.ends_with(" is undeformed") {
+        if !first.ends_with(" is up to date") {
             log(format_args!("tick {tick}: {first}"));
         }
         let mut held = Vec::new();
@@ -544,10 +544,10 @@ impl Hook {
         observed: &BTreeMap<Address, Json>,
     ) -> Result<()> {
         let line = if undeformed && self.held.is_empty() {
-            Some(format!("stack {stack} is undeformed"))
+            Some(format!("stack {stack} is up to date"))
         } else if !self.held.is_empty() {
             Some(format!(
-                "stack {stack} is deformed: {} held",
+                "stack {stack} has changes held: {}",
                 self.held
                     .iter()
                     .map(|a| a.to_string())

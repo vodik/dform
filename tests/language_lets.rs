@@ -8,7 +8,7 @@ use common::Scratch;
 fn plan(src: &str) -> common::Run {
     let s = Scratch::new("lang-lets");
     s.write("p.df", src);
-    s.run(&["dev", "--world", "w.json", "plan", "p.df"])
+    s.run(&["dev", "--world", "w.json", "plan", "--why=none", "p.df"])
 }
 
 /// Two rows that disagree: one conflict naming both rows, not two of
@@ -46,12 +46,7 @@ provider fake
 "#,
     )
     .success();
-    assert_eq!(
-        r.summary(),
-        "plan: 1 deformation (1 create)",
-        "{}",
-        r.stdout
-    );
+    assert_eq!(r.summary(), "plan: 1 change (1 create)", "{}", r.stdout);
     assert!(r.stdout.contains("cidr = \"a\""), "{}", r.stdout);
 }
 

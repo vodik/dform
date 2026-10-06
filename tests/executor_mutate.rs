@@ -36,7 +36,11 @@ fn a_mutation_under_a_pending_deformation_stops_before_tick_two() {
         "{}",
         r.stdout
     );
-    assert!(!r.stdout.contains("tick 2:"), "{}", r.stdout);
+    assert!(
+        !r.stdout.contains("now that tick 1 reported"),
+        "{}",
+        r.stdout
+    );
     assert!(
         r.stderr.contains(
             "the world changed under a pending deformation after tick 1:\n\
@@ -78,14 +82,14 @@ fn a_mutation_elsewhere_is_drift_and_the_run_continues() {
     assert!(
         r.stdout.contains(
             "drift after tick 1:\n~ db.postgres[\"main\"]\n  size: 1 -> 9\n\
-             tick 2:\nplan: 2 deformations (2 update)\n"
+             plan: 2 changes (2 update) over 1 tick\n\ntick 2  2 changes, now that tick 1 reported\n"
         ),
         "{}",
         r.stdout
     );
     assert!(
         r.stdout
-            .contains("~ db.postgres[\"main\"]\n  size: 9 -> 1\n"),
+            .contains("  ~ db.postgres[\"main\"]\n      size: 9 → 1  "),
         "{}",
         r.stdout
     );
@@ -93,7 +97,7 @@ fn a_mutation_elsewhere_is_drift_and_the_run_continues() {
     // The mutation lands once per run: the stack is now undeformed.
     let r = mock(&s, &["plan"]).success();
     assert!(
-        r.stdout.ends_with("stack p is undeformed\n"),
+        r.stdout.ends_with("stack p is up to date\n"),
         "{}",
         r.stdout
     );

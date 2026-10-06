@@ -68,14 +68,14 @@ fn input_changes_deploy_and_world_drift_is_gated_by_policy() {
         once(&s, &[]),
         [
             "event start",
-            "tick 1: plan: 3 deformations (3 create)",
-            "stack workload is undeformed",
+            "tick 1: plan: 3 changes (3 create) over 1 tick",
+            "stack workload is up to date",
         ]
     );
     // Nothing changed: a resync that finds nothing to do.
     assert_eq!(
         once(&s, &[]),
-        ["event resync", "stack workload is undeformed"]
+        ["event resync", "stack workload is up to date"]
     );
 
     // A release is an input change: it deploys.
@@ -85,8 +85,8 @@ fn input_changes_deploy_and_world_drift_is_gated_by_policy() {
         [
             "input data.releases changed (file data/releases.df)",
             "event input data.releases",
-            "tick 1: plan: 1 deformation (1 update)",
-            "stack workload is undeformed",
+            "tick 1: plan: 1 change (1 update) over 1 tick",
+            "stack workload is up to date",
         ]
     );
     assert!(s.read(WORLD).contains("web:1.1"));
@@ -98,8 +98,8 @@ fn input_changes_deploy_and_world_drift_is_gated_by_policy() {
         [
             &format!("event world {WORLD} changed"),
             "drift k8s.deployment[\"web\"].spec.replicas: 3 -> 5 (auto_reconcile)",
-            "tick 1: plan: 1 deformation (1 update)",
-            "stack workload is undeformed",
+            "tick 1: plan: 1 change (1 update) over 1 tick",
+            "stack workload is up to date",
         ]
     );
     assert!(s.read(WORLD).contains("\"replicas\": 3"));
@@ -110,10 +110,10 @@ fn input_changes_deploy_and_world_drift_is_gated_by_policy() {
     let held = [
         "drift k8s.deployment[\"web\"].spec.template.spec.containers[0].image: \
          \"gcr.io/renfry/web:1.1\" -> \"evil:latest\" (held until approve or an input change)",
-        "tick 1: plan: 1 deformation (1 update)",
+        "tick 1: plan: 1 change (1 update) over 1 tick",
         "tick 1: proceed: held, drift at spec.template.spec.containers[0].image needs approval: \
          k8s.deployment[\"web\"]",
-        "stack workload is deformed: k8s.deployment[\"web\"] held",
+        "stack workload has changes held: k8s.deployment[\"web\"]",
     ];
     let mut want = vec![format!("event world {WORLD} changed")];
     want.extend(held.iter().map(|l| l.to_string()));
@@ -136,7 +136,7 @@ fn approve_lets_a_world_event_correct_drift() {
         [
             "input data.approvals changed (file data/approvals.df)",
             "event input data.approvals",
-            "stack workload is undeformed",
+            "stack workload is up to date",
         ]
     );
     edit_world(&s, "gcr.io/renfry/web:1.0", "evil:latest");
@@ -146,8 +146,8 @@ fn approve_lets_a_world_event_correct_drift() {
             &format!("event world {WORLD} changed"),
             "drift k8s.deployment[\"web\"].spec.template.spec.containers[0].image: \
              \"gcr.io/renfry/web:1.0\" -> \"evil:latest\" (approved)",
-            "tick 1: plan: 1 deformation (1 update)",
-            "stack workload is undeformed",
+            "tick 1: plan: 1 change (1 update) over 1 tick",
+            "stack workload is up to date",
         ]
     );
     assert!(s.read(WORLD).contains("web:1.0"));
@@ -160,7 +160,7 @@ fn an_input_change_reconciles_held_drift() {
     edit_world(&s, "gcr.io/renfry/web:1.0", "evil:latest");
     assert_eq!(
         once(&s, &[]).last().unwrap(),
-        "stack workload is deformed: k8s.deployment[\"web\"] held"
+        "stack workload has changes held: k8s.deployment[\"web\"]"
     );
     release(&s, "gcr.io/renfry/web:1.2");
     let got = once(&s, &[]);
@@ -172,7 +172,7 @@ fn an_input_change_reconciles_held_drift() {
         ),
         "{got:#?}"
     );
-    assert_eq!(got.last().unwrap(), "stack workload is undeformed");
+    assert_eq!(got.last().unwrap(), "stack workload is up to date");
     assert!(s.read(WORLD).contains("web:1.2"));
 }
 
@@ -223,15 +223,15 @@ fn a_prod_rollout_is_held_until_its_plan_is_approved() {
         got,
         [
             "event start".to_string(),
-            "tick 1: plan: 3 deformations (3 create)".to_string(),
+            "tick 1: plan: 3 changes (3 create) over 1 tick, 1 approval".to_string(),
             "tick 1: proceed: held, needs approval (a prod rollout): k8s.deployment[\"web\"]"
                 .to_string(),
             got[3].clone(),
-            "tick 2: plan: 1 deformation (1 create)".to_string(),
+            "tick 2: plan: 1 change (1 create) over 1 tick, 1 approval".to_string(),
             "tick 2: proceed: held, needs approval (a prod rollout): k8s.deployment[\"web\"]"
                 .to_string(),
             format!("tick 2: approval needed: plan digest {digest} (approval-pending.json)"),
-            "stack workload is deformed: k8s.deployment[\"web\"] held".to_string(),
+            "stack workload has changes held: k8s.deployment[\"web\"]".to_string(),
         ]
     );
     assert!(!s.read(WORLD).contains("k8s.deployment"));
@@ -243,9 +243,9 @@ fn a_prod_rollout_is_held_until_its_plan_is_approved() {
         [
             "input data.approvals changed (file data/approvals.df)".to_string(),
             "event input data.approvals".to_string(),
-            "tick 1: plan: 1 deformation (1 create)".to_string(),
+            "tick 1: plan: 1 change (1 create) over 1 tick, 1 approval".to_string(),
             format!("tick 1: approved by alice: plan digest {digest}"),
-            "stack workload is undeformed".to_string(),
+            "stack workload is up to date".to_string(),
         ]
     );
     assert!(s.read(WORLD).contains("k8s.deployment"));
@@ -274,10 +274,10 @@ fn a_prod_rollout_is_held_until_its_plan_is_approved() {
         got[..2],
         [
             "event approval (dform.state/workload/approvals changed)".to_string(),
-            "tick 1: plan: 1 deformation (1 update)".to_string(),
+            "tick 1: plan: 1 change (1 update) over 1 tick, 1 approval".to_string(),
         ]
     );
-    assert_eq!(got.last().unwrap(), "stack workload is undeformed");
+    assert_eq!(got.last().unwrap(), "stack workload is up to date");
     assert!(s.read(WORLD).contains("web:1.1"));
 }
 
@@ -359,7 +359,7 @@ fn a_git_source_is_read_at_its_ref() {
             .replace("where releases.release(image)", "where release(image)"),
     );
     let got = once(&s, &[]);
-    assert_eq!(got.last().unwrap(), "stack workload is undeformed");
+    assert_eq!(got.last().unwrap(), "stack workload is up to date");
     assert!(s.read(WORLD).contains("web:2.0"));
     commit("gcr.io/renfry/web:2.1");
     let got = once(&s, &[]);
@@ -404,7 +404,7 @@ fn the_polling_loop_runs_an_event_per_change() {
         let left = deadline.saturating_duration_since(std::time::Instant::now());
         match rx.recv_timeout(left) {
             Ok(l) => {
-                let done = l.ends_with("is undeformed");
+                let done = l.ends_with("is up to date");
                 lines.push(l);
                 if done && !changed {
                     release(&s, "gcr.io/renfry/web:3.0");
@@ -423,12 +423,12 @@ fn the_polling_loop_runs_an_event_per_change() {
         log(&lines.join("\n")),
         [
             "event start",
-            "tick 1: plan: 3 deformations (3 create)",
-            "stack workload is undeformed",
+            "tick 1: plan: 3 changes (3 create) over 1 tick",
+            "stack workload is up to date",
             "input data.releases changed (file data/releases.df)",
             "event input data.releases",
-            "tick 1: plan: 1 deformation (1 update)",
-            "stack workload is undeformed",
+            "tick 1: plan: 1 change (1 update) over 1 tick",
+            "stack workload is up to date",
         ]
     );
     assert!(s.read(WORLD).contains("web:3.0"));

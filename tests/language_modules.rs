@@ -10,7 +10,7 @@ use common::Scratch;
 fn plan(src: &str) -> common::Run {
     let s = Scratch::new("lang-modules");
     s.write("p.df", src);
-    s.run(&["dev", "--world", "w.json", "plan", "p.df"])
+    s.run(&["dev", "--world", "w.json", "plan", "--why=none", "p.df"])
 }
 
 /// Two copies of one component each define `size/1`; privately, so
@@ -224,13 +224,13 @@ provider fake
 "#;
     s.write("p.df", src);
     let r = s
-        .run(&["dev", "--world", "w.json", "plan", "p.df"])
+        .run(&["dev", "--world", "w.json", "plan", "--why=none", "p.df"])
         .success();
     assert!(r.stdout.contains("cidr = \"10.9.0.0/16\""), "{}", r.stdout);
     assert!(r.stdout.contains("team = \"x\""), "{}", r.stdout);
     s.write("p.df", &format!("{src}seen(v) where team(v)\n"));
     let r = s
-        .run(&["dev", "--world", "w.json", "plan", "p.df"])
+        .run(&["dev", "--world", "w.json", "plan", "--why=none", "p.df"])
         .failure();
     assert!(
         r.stderr
@@ -240,7 +240,7 @@ provider fake
     );
     assert!(r.stderr.contains("read it as tags.team"), "{}", r.stderr);
     s.write("p.df", &format!("{src}seen(v) where tags.team(v)\n"));
-    s.run(&["dev", "--world", "w.json", "plan", "p.df"])
+    s.run(&["dev", "--world", "w.json", "plan", "--why=none", "p.df"])
         .success();
 }
 
@@ -272,6 +272,7 @@ provider fake
             "--world",
             "w.json",
             "plan",
+            "--why=none",
             "--set",
             "replicas=3",
             "p.df",
@@ -309,7 +310,7 @@ vpc_peer_inst("main", "third")
         "stacks/dform.df",
         &format!("{}{third}", s.read("stacks/dform.df")),
     );
-    let r = s.run(&["plan", "dform"]).success();
+    let r = s.run(&["plan", "--why=none", "dform"]).success();
     assert_eq!(
         r.stdout.matches("\n+ net.vpc_peering[").count(),
         2,
@@ -388,7 +389,7 @@ resource compute.vm bastion {
 #[test]
 fn a_module_is_used_and_a_component_instanced_by_its_path() {
     let s = modules_project();
-    let r = s.run(&["plan", "app"]).success();
+    let r = s.run(&["plan", "--why=none", "app"]).success();
     for want in [
         "  + net.vpc[\"main/vpc\"]\n    cidr = \"10.1.0.0/16\"\n    tags.region = \"us-1\"\n",
         "  + net.vpc[\"spare/vpc\"]\n    cidr = \"10.2.0.0/16\"\n    tags.region = \"us-1\"\n",
@@ -415,7 +416,7 @@ fn a_module_value_is_read_through_its_use() {
         "stacks/app.df",
         "\n\nprovider fake\n\nuse config\n\nwhere_(r) where r = region\n",
     );
-    let r = s.run(&["plan", "app"]).failure();
+    let r = s.run(&["plan", "--why=none", "app"]).failure();
     assert!(
         r.stderr.contains("unknown name") || r.stderr.contains("region"),
         "{}",
@@ -425,7 +426,7 @@ fn a_module_value_is_read_through_its_use() {
         "stacks/app.df",
         "\n\nprovider fake\n\nuse config as c\n\nr(x) where x = c.region\nq(x) where x = c.nothing\n",
     );
-    let r = s.run(&["plan", "app"]).failure();
+    let r = s.run(&["plan", "--why=none", "app"]).failure();
     assert!(
         r.stderr
             .contains("the module config has no value, output or resource `nothing`"),
@@ -496,7 +497,7 @@ provider fake
 "#,
     );
     let r = s
-        .run(&["dev", "--world", "w.json", "plan", "p.df"])
+        .run(&["dev", "--world", "w.json", "plan", "--why=none", "p.df"])
         .success();
     assert!(!r.stdout.contains("jump/vm"), "{}", r.stdout);
     assert!(!r.stdout.contains("audited"), "{}", r.stdout);
@@ -574,9 +575,9 @@ fn a_module_used_from_two_stacks_fires_in_both() {
         "stacks/db.df",
         "\n\nprovider fake\n\nuse baseline\n\nresource db.postgres db {\n  public = false\n}\n",
     );
-    let web = s.run(&["plan", "web"]).success();
+    let web = s.run(&["plan", "--why=none", "web"]).success();
     assert!(
-        web.stdout.contains("plan: 1 deformation (1 create)"),
+        web.stdout.contains("plan: 1 change (1 create)"),
         "{}",
         web.stdout
     );
@@ -590,9 +591,9 @@ fn a_module_used_from_two_stacks_fires_in_both() {
         "{}",
         web.stdout
     );
-    let db = s.run(&["plan", "db"]).success();
+    let db = s.run(&["plan", "--why=none", "db"]).success();
     assert!(
-        db.stdout.contains("plan: 1 deformation (1 create)"),
+        db.stdout.contains("plan: 1 change (1 create)"),
         "{}",
         db.stdout
     );
@@ -608,7 +609,7 @@ fn a_module_used_from_two_stacks_fires_in_both() {
         "\n\nresource net.vpc vpc {\n  cidr = \"10.0.0.0/16\"\n}\n",
     );
     s.write("stacks/web.df", "\n\nprovider fake\n\nuse shared\n");
-    let r = s.run(&["plan", "web"]).success();
+    let r = s.run(&["plan", "--why=none", "web"]).success();
     assert_eq!(
         r.stdout.matches("+ net.vpc[\"shared/vpc\"]").count(),
         1,
@@ -642,7 +643,7 @@ fn use_stamps_a_module_once() {
          h(x) where x = synapse.host\nprovider fake\n",
     );
     let r = s
-        .run(&["dev", "--world", "w.json", "plan", "p.df"])
+        .run(&["dev", "--world", "w.json", "plan", "--why=none", "p.df"])
         .success();
     assert!(
         r.stdout
@@ -687,7 +688,7 @@ fn an_unbound_input_of_a_used_module_is_a_stack_inputs_error() {
     );
     s.write("p.df", "\nuse postgres\nprovider fake\n");
     let r = s
-        .run(&["dev", "--world", "w.json", "plan", "p.df"])
+        .run(&["dev", "--world", "w.json", "plan", "--why=none", "p.df"])
         .failure();
     assert!(
         r.stderr
@@ -699,7 +700,7 @@ fn an_unbound_input_of_a_used_module_is_a_stack_inputs_error() {
         "p.df",
         "\nuse postgres { database = \"x\" }\nprovider fake\n",
     );
-    s.run(&["dev", "--world", "w.json", "plan", "p.df"])
+    s.run(&["dev", "--world", "w.json", "plan", "--why=none", "p.df"])
         .success();
     // The stack gives a used module's input by its name there (R-55).
     s.write("p.df", "\nuse postgres\nprovider fake\n");
@@ -708,6 +709,7 @@ fn an_unbound_input_of_a_used_module_is_a_stack_inputs_error() {
         "--world",
         "w.json",
         "plan",
+        "--why=none",
         "p.df",
         "--set",
         "postgres.database=y",
@@ -736,7 +738,7 @@ fn an_unbound_input_of_a_used_module_is_a_stack_inputs_error() {
          instance vm\nprovider fake\n",
     );
     let r = s
-        .run(&["dev", "--world", "w.json", "plan", "p.df"])
+        .run(&["dev", "--world", "w.json", "plan", "--why=none", "p.df"])
         .failure();
     assert!(
         r.stderr.contains("expected the instance's name"),

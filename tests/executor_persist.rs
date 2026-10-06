@@ -43,7 +43,7 @@ fn a_crash_at_action_n_leaves_n_minus_one_identities() {
     let r = mock(&s, &["plan"]).success();
     assert_eq!(
         r.summary(),
-        "plan: 1 deformation (1 create)",
+        "plan: 1 change (1 create) over 1 tick",
         "{}",
         r.stdout
     );

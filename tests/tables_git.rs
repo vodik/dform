@@ -43,7 +43,7 @@ fn a_plan_file_pins_the_commit_the_branch_named() {
         r.stdout.lines().next().unwrap(),
         format!("node: ops.git main {} -> {}", short(&first), short(&second))
     );
-    assert_eq!(r.summary(), "plan: 1 deformation (1 create)");
+    assert_eq!(r.summary(), "plan: 1 change (1 create) over 1 tick");
     let plan = s.read("plan.json");
     assert!(plan.contains(&second), "{plan}");
     assert!(
@@ -105,11 +105,11 @@ fn the_controller_takes_a_moved_ref_as_an_input_event() {
         once(&s),
         [
             "event start",
-            "tick 1: plan: 1 deformation (1 create)",
-            "stack p is undeformed",
+            "tick 1: plan: 1 change (1 create) over 1 tick",
+            "stack p is up to date",
         ]
     );
-    assert_eq!(once(&s), ["event resync", "stack p is undeformed"]);
+    assert_eq!(once(&s), ["event resync", "stack p is up to date"]);
     let (first, second) = (
         tables_common::git(&s.path("work"), &["rev-parse", "HEAD"]),
         push(&s, "nodes.csv", "name\na\nb\n", "main"),
@@ -120,8 +120,8 @@ fn the_controller_takes_a_moved_ref_as_an_input_event() {
             "input node changed (git ops.git main:nodes.csv)",
             "event input node",
             &format!("node: ops.git main {} -> {}", short(&first), short(&second)),
-            "tick 1: plan: 1 deformation (1 create)",
-            "stack p is undeformed",
+            "tick 1: plan: 1 change (1 create) over 1 tick",
+            "stack p is up to date",
         ]
     );
 }

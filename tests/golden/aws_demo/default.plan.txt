@@ -1,54 +1,48 @@
 exit: ok
 -- stdout --
-plan: 7 deformations (7 create)
-definite:
-+ aws.vpc["main"]
-  cidr_block = "10.0.0.0/16"
-  tags.Name = "main"
-+ aws.security_group["web"]
-  egress[0].cidr_blocks[0] = "0.0.0.0/0"
-  egress[0].from_port = 0
-  egress[0].protocol = "-1"
-  egress[0].to_port = 0
-  ingress[0].cidr_blocks[0] = "0.0.0.0/0"
-  ingress[0].from_port = 80
-  ingress[0].protocol = "tcp"
-  ingress[0].to_port = 80
-  ingress[1].cidr_blocks[0] = "0.0.0.0/0"
-  ingress[1].from_port = 443
-  ingress[1].protocol = "tcp"
-  ingress[1].to_port = 443
-  name = "web"
-  vpc_id = ?aws.vpc["main"]
-+ aws.subnet["a"]
-  availability_zone = "us-east-1a"
-  cidr_block = "10.0.1.0/24"
-  vpc_id = ?aws.vpc["main"]
-+ aws.db_instance["app"]
-  identifier = "app"
-  instance_class = "db.t3.micro"
-  password = (sensitive)
-  skip_final_snapshot = true
-  vpc_security_group_ids[0] = ?aws.security_group["web"]
-+ aws.instance["web"]
-  ami = "ami-0abcdef1234567890"
-  instance_type = "t3.small"
-  subnet_id = ?aws.subnet["a"]
-  vpc_security_group_ids[0] = ?aws.security_group["web"]
-+ aws.eip["web"]
-  domain = "vpc"
-  instance = ?aws.instance["web"]
-+ aws.instance["bastion"]
-  instance_type = "t3.micro"
-  tags.subnet_az = "us-east-1a"
-  tags.web_az = ?aws.instance["web"].availability_zone
-apply order:
-  tick 1
-    aws.vpc["main"]
-    aws.security_group["web"]
-    aws.subnet["a"]
-    aws.db_instance["app"]
-    aws.instance["web"]
-    aws.eip["web"]
-    aws.instance["bastion"]
+plan: 7 changes (7 create) over 1 tick
+
+tick 1  7 changes, applies now
+  + aws.vpc["main"]                  stacks/aws_demo.df:16
+      cidr_block = "10.0.0.0/16"
+      tags.Name = "main"
+  + aws.security_group["web"]        stacks/aws_demo.df:24
+      egress[0].cidr_blocks[0] = "0.0.0.0/0"
+      egress[0].from_port = 0
+      egress[0].protocol = "-1"
+      egress[0].to_port = 0
+      ingress[0].cidr_blocks[0] = "0.0.0.0/0"
+      ingress[0].from_port = 80
+      ingress[0].protocol = "tcp"
+      ingress[0].to_port = 80
+      ingress[1].cidr_blocks[0] = "0.0.0.0/0"
+      ingress[1].from_port = 443
+      ingress[1].protocol = "tcp"
+      ingress[1].to_port = 443
+      name = "web"
+      vpc_id = ?aws.vpc["main"]
+  + aws.subnet["a"]                  stacks/aws_demo.df:18
+      availability_zone = "us-east-1a"
+      cidr_block = "10.0.1.0/24"
+      vpc_id = ?aws.vpc["main"]
+  + aws.db_instance["app"]           stacks/aws_demo.df:48
+      identifier = "app"
+      instance_class = "db.t3.micro"
+      password = (sensitive)
+      skip_final_snapshot = true
+      vpc_security_group_ids[0] = ?aws.security_group["web"]  [aws.security_group["web"]]
+  + aws.instance["web"]              stacks/aws_demo.df:34
+      ami = "ami-0abcdef1234567890"
+      instance_type = "t3.small"
+      subnet_id = ?aws.subnet["a"]
+      vpc_security_group_ids[0] = ?aws.security_group["web"]  [aws.security_group["web"]]
+  + aws.eip["web"]                   stacks/aws_demo.df:46
+      domain = "vpc"
+      instance = ?aws.instance["web"]
+  + aws.instance["bastion"]          stacks/aws_demo.df:41
+      instance_type = "t3.micro"
+      tags.subnet_az = "us-east-1a"
+      tags.web_az = ?aws.instance["web"].availability_zone
+
+apply: tick 1 now
 -- stderr --

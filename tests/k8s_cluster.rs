@@ -132,21 +132,21 @@ fn applies_and_converges_on_a_cluster() {
     let r = dform(&s, &kc, &["apply", "p.df"]).success();
     assert!(!r.stderr.contains("offline"), "{}", r.stderr);
     let r = dform(&s, &kc, &["plan", "p.df"]).success();
-    assert_eq!(r.summary(), "stack p is undeformed", "{}", r.stdout);
+    assert_eq!(r.summary(), "stack p is up to date", "{}", r.stdout);
     assert!(s.path("dform.state/cache/k8s-openapi.json").exists());
 
     s.write("p.df", &program(&ns.name, "nginx:1.28"));
     let r = dform(&s, &kc, &["plan", "p.df"]).success();
     assert!(
         r.stdout.contains(
-            "spec.template.spec.containers[name=web].image: \"nginx:1.27\" -> \"nginx:1.28\""
+            "spec.template.spec.containers[name=web].image: \"nginx:1.27\" → \"nginx:1.28\""
         ),
         "{}",
         r.stdout
     );
     dform(&s, &kc, &["apply", "p.df"]).success();
     let r = dform(&s, &kc, &["plan", "p.df"]).success();
-    assert_eq!(r.summary(), "stack p is undeformed", "{}", r.stdout);
+    assert_eq!(r.summary(), "stack p is up to date", "{}", r.stdout);
 }
 
 /// Another field manager takes `spec.replicas`; dform's apply, never
@@ -236,21 +236,21 @@ fn the_k8s_demo_applies_and_converges() {
     let r = dform(&s, &kc, &["apply", "k8s_demo.df"]).success();
     assert!(!r.stderr.contains("offline"), "{}", r.stderr);
     let r = dform(&s, &kc, &["plan", "k8s_demo.df"]).success();
-    assert_eq!(r.summary(), "stack k8s_demo is undeformed", "{}", r.stdout);
+    assert_eq!(r.summary(), "stack k8s_demo is up to date", "{}", r.stdout);
 
     s.write("k8s_demo.df", &demo.replace("nginx:1.27", "nginx:1.28"));
     let r = dform(&s, &kc, &["plan", "k8s_demo.df"]).success();
     assert!(
         r.stdout.contains("~ k8s.deployment[\"web\"]")
             && r.stdout.contains(
-                "spec.template.spec.containers[name=web].image: \"nginx:1.27\" -> \"nginx:1.28\""
+                "spec.template.spec.containers[name=web].image: \"nginx:1.27\" → \"nginx:1.28\""
             ),
         "{}",
         r.stdout
     );
     dform(&s, &kc, &["apply", "k8s_demo.df"]).success();
     let r = dform(&s, &kc, &["plan", "k8s_demo.df"]).success();
-    assert_eq!(r.summary(), "stack k8s_demo is undeformed", "{}", r.stdout);
+    assert_eq!(r.summary(), "stack k8s_demo is up to date", "{}", r.stdout);
 }
 
 /// Drift: a `kubectl patch` (a merge patch as another field manager) of a
@@ -391,7 +391,7 @@ fn a_create_whose_answer_was_lost_is_found_not_made_again() {
     );
     assert_eq!(settings().len(), 1, "no second ConfigMap");
     let r = dform(&s, &kc, &["plan", "p.df"]).success();
-    assert_eq!(r.summary(), "stack p is undeformed", "{}", r.stdout);
+    assert_eq!(r.summary(), "stack p is up to date", "{}", r.stdout);
 }
 
 /// A Secret's `stringData` reads back from the `data` the server folded it
@@ -415,7 +415,7 @@ fn a_secrets_string_data_reads_back() {
     s.write("p.df", &program("hunter2"));
     dform(&s, &kc, &["apply", "p.df"]).success();
     let r = dform(&s, &kc, &["plan", "p.df"]).success();
-    assert_eq!(r.summary(), "stack p is undeformed", "{}", r.stdout);
+    assert_eq!(r.summary(), "stack p is up to date", "{}", r.stdout);
     s.write("p.df", &program("hunter3"));
     let r = dform(&s, &kc, &["plan", "p.df"]).success();
     assert!(
@@ -451,7 +451,7 @@ fn an_empty_pod_selector_converges() {
     s.write("p.df", &program(""));
     dform(&s, &kc, &["apply", "p.df"]).success();
     let r = dform(&s, &kc, &["plan", "p.df"]).success();
-    assert_eq!(r.summary(), "stack p is undeformed", "{}", r.stdout);
+    assert_eq!(r.summary(), "stack p is up to date", "{}", r.stdout);
     s.write("p.df", &program("  spec.podSelector = {}\n"));
     let r = dform(&s, &kc, &["plan", "p.df"]).success();
     assert!(
@@ -462,7 +462,7 @@ fn an_empty_pod_selector_converges() {
     );
     dform(&s, &kc, &["apply", "p.df"]).success();
     let r = dform(&s, &kc, &["plan", "p.df"]).success();
-    assert_eq!(r.summary(), "stack p is undeformed", "{}", r.stdout);
+    assert_eq!(r.summary(), "stack p is up to date", "{}", r.stdout);
 }
 
 /// The provider configured from the program: the kubeconfig's text as a
@@ -512,7 +512,7 @@ fn a_kubeconfig_held_as_a_secret_configures_the_provider() {
     let r = run(&["apply", "p.df"]).success();
     out += &(r.stdout + &r.stderr);
     let r = run(&["plan", "p.df"]).success();
-    assert_eq!(r.summary(), "stack p is undeformed", "{}", r.stdout);
+    assert_eq!(r.summary(), "stack p is up to date", "{}", r.stdout);
     out += &(r.stdout + &r.stderr);
     assert!(!out.contains(&key), "{out}");
     let mut files = Vec::new();

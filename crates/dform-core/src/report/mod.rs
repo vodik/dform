@@ -7,11 +7,15 @@
 //! built from an evaluation and the provider's plan, rendered as text for
 //! `plan` and every `apply` tick, or as one JSON document for `--json`.
 //!
-//! Sections, in order: definite deformations grouped by resource; pending
-//! deformations grouped by the nulls they wait on; pending groups (stuck
-//! resource rules, `np-? x unknown`); undetermined policies, and denies
-//! that may derive after a boundary; shadowed disagreements; conflicts.
-//! Then the apply order, tick by tick.
+//! Grouped by tick (R-79), the only grouping: tick 1, what applies now;
+//! each later tick with the values it waits on; `later`, the rules that
+//! may derive an unknown number, the denies and checks undetermined until
+//! a tick, and held changes this plan does not schedule; the denies, the
+//! changes held for approval, shadowed disagreements and conflicts; then
+//! what apply does. Each change says where it is derived, each attribute
+//! where its value was written, and why it changed since the last apply,
+//! as much as [`Why`] asks. `--why=none` is the layout before R-79
+//! ([`bare`]).
 //!
 //! Every value passes through [`shown`] or [`shown_value`], which ask the
 //! one [`Redactor`] that `query`, `why`, `graph` and `show` print through: a
@@ -19,7 +23,7 @@
 //! a sensitive path as `(sensitive LABEL)`. Nothing here formats a
 //! sensitive value's bytes.
 
-use crate::ast::{Atom, Program, Term};
+use crate::ast::{Atom, Program, RuleStmt, Term};
 use crate::engine::EvalResult;
 use crate::ir::Address;
 use crate::partition::{fmt_atom, fmt_bare, fmt_value};
@@ -30,8 +34,9 @@ use crate::stuck::{Sections, Stuck};
 use crate::value::{Value, null_owner};
 use serde_json::{Value as Json, json};
 use std::collections::{BTreeMap, BTreeSet};
-use tree::Because;
+use tree::{Because, Site};
 
+mod bare;
 pub mod table;
 pub mod tree;
 
@@ -264,6 +269,8 @@ pub struct Line {
     pub after: Shown,
     /// An element's leaves, paths relative to the element.
     pub leaves: Vec<Line>,
+    /// Where its value was written (R-79, [`Report::explain`]).
+    pub site: Option<Site>,
 }
 
 #[derive(Debug, Clone)]
@@ -271,8 +278,15 @@ pub struct Deformation {
     pub kind: ActionKind,
     pub addr: Address,
     pub lines: Vec<Line>,
-    /// Why it is planned (`plan --why`, [`Report::explain`]).
+    /// Why it is planned (`plan --why=full`, [`Report::explain`]).
     pub why: Vec<Because>,
+    /// Where it is derived (R-79): its `want`'s site; a delete's, where
+    /// the last apply derived it.
+    pub site: Option<Site>,
+    /// The leaf that changed since the last apply ([`Report::because`]).
+    pub because: Option<String>,
+    /// A replace: the changed paths the schema declares immutable.
+    pub forces: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -289,6 +303,14 @@ pub struct Group {
     pub on: Vec<String>,
     pub reason: String,
     pub resolves_after: Option<usize>,
+    /// The rule (`r12`), with what its stuck instance binds.
+    pub rule: Option<String>,
+    pub bindings: Vec<(String, Value)>,
+    /// What it reads that may derive after a boundary, as the body reads
+    /// it (`release("crud_api", "schema", _)`).
+    pub reads: Option<String>,
+    /// Where the rule is written ([`Report::explain`]).
+    pub site: Option<Site>,
 }
 
 #[derive(Debug, Clone)]
@@ -302,6 +324,51 @@ pub struct Policy {
     pub may_derive: bool,
     /// A deferred refinement check, not a deny (`message` names it).
     pub refinement: bool,
+    /// The deny's rule (`r12`), and where it is written.
+    pub rule: Option<String>,
+    pub site: Option<Site>,
+}
+
+/// A deny over the plan, the row of the plan it matched and where it is
+/// written ([`Report::explain`]).
+#[derive(Debug, Clone)]
+pub struct Denied {
+    pub message: String,
+    /// The resource of the `deformation` row it read, when it read one.
+    pub addr: String,
+    pub site: Option<Site>,
+}
+
+/// A change held for an approval (`requires_approval(r, reason)`).
+#[derive(Debug, Clone)]
+pub struct Approval {
+    /// The resource, as the plan prints its address.
+    pub addr: String,
+    pub reason: String,
+    pub site: Option<Site>,
+}
+
+/// How much of why each change is planned the report says (R-79):
+/// nothing, one line per entry and attribute (the default), or the
+/// derivation compressed to its leaves.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Why {
+    None,
+    #[default]
+    Line,
+    Full,
+}
+
+impl std::str::FromStr for Why {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Why, String> {
+        match s {
+            "none" => Ok(Why::None),
+            "line" => Ok(Why::Line),
+            "full" => Ok(Why::Full),
+            _ => Err(format!("expected none, line or full, got {s:?}")),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -333,10 +400,16 @@ pub struct Report {
     pub undeformed: bool,
     pub moved: Vec<(Address, Address)>,
     pub denies: Vec<String>,
+    /// Each of `denies`, as the plan's own rows say it ([`Report::explain`]).
+    pub denied: Vec<Denied>,
     /// Every null the sections name, with its class, for `--json`.
     pub classes: BTreeMap<String, String>,
-    /// Each deformation carries why it is planned ([`Report::explain`]).
-    pub explained: bool,
+    /// The tick this report's definite changes run in (1 for `plan`).
+    pub tick: usize,
+    /// What each change says of why it is planned ([`Report::explain`]).
+    pub why: Why,
+    /// The changes held for an approval.
+    pub approvals: Vec<Approval>,
     /// The program's copies: a copy's deformations print under it, a
     /// composite resource (R-67).
     pub instances: crate::zset::Instances,
@@ -513,8 +586,18 @@ pub fn report(i: &Input) -> Report {
         undeformed,
         moved: i.moved.to_vec(),
         denies: i.denies.to_vec(),
+        denied: Vec::new(),
         classes,
-        explained: false,
+        tick: i.tick,
+        why: Why::None,
+        approvals: crate::approval::needs(&i.res.facts)
+            .into_iter()
+            .map(|(addr, reason)| Approval {
+                addr,
+                reason,
+                site: None,
+            })
+            .collect(),
         instances: crate::zset::Instances::from_facts(&i.res.facts).with(i.kept),
     }
 }
@@ -532,23 +615,43 @@ fn groups(
     tick_of: &BTreeMap<(String, String), usize>,
     resolves: &Resolves,
 ) -> Vec<Group> {
-    let stuck = res
-        .stuck
-        .iter()
-        .filter(|s| s.head.pred == "want")
-        .map(|s| (&s.head, nulls(s), s.reason.clone()));
+    let stuck = res.stuck.iter().filter(|s| s.head.pred == "want").map(|s| {
+        (
+            &s.head,
+            nulls(s),
+            s.reason.clone(),
+            s.rule,
+            s.bindings.clone().into_iter().collect(),
+            None,
+        )
+    });
     let may = res
         .may_derive
         .iter()
         .filter(|m| m.head.pred == "want")
-        .map(|m| (&m.head, m.nulls.iter().cloned().collect(), m.reason()));
+        .map(|m| {
+            let reads = crate::modules::private_text(&m.reads, &fmt_atom, " ")
+                .unwrap_or_else(|| fmt_atom(&m.reads));
+            (
+                &m.head,
+                m.nulls.iter().cloned().collect(),
+                m.reason(),
+                Some(m.rule),
+                Vec::new(),
+                Some(reads),
+            )
+        });
     let mut out: Vec<Group> = Vec::new();
-    for (head, on, reason) in stuck.chain(may) {
+    for (head, on, reason, rule, bindings, reads) in stuck.chain(may) {
         let g = Group {
             pattern: group_pattern(head),
             resolves_after: resolves(&on, tick_of),
             on,
             reason,
+            rule: rule.map(|r| format!("r{r}")),
+            bindings,
+            reads,
+            site: None,
         };
         if !out
             .iter()
@@ -601,6 +704,8 @@ fn policies(
             reason: s.reason.clone(),
             may_derive: false,
             refinement: false,
+            rule: s.rule.map(|r| format!("r{r}")),
+            site: None,
         };
         if !out
             .iter()
@@ -611,18 +716,20 @@ fn policies(
     }
     out.sort_by(|a, b| (&a.message, &a.on).cmp(&(&b.message, &b.on)));
 
-    let mut found: BTreeMap<String, (BTreeSet<String>, Vec<String>)> = BTreeMap::new();
+    type Found = (BTreeSet<String>, Vec<String>, Option<usize>);
+    let mut found: BTreeMap<String, Found> = BTreeMap::new();
     for m in i.res.may_derive.iter().filter(|m| m.head.pred == "deny") {
         let message = deny_message(&m.head);
         if out.iter().any(|p| p.message == message) {
             continue;
         }
-        let (on, reads) = found.entry(message).or_default();
+        let (on, reads, rule) = found.entry(message).or_default();
         on.extend(m.nulls.iter().cloned());
         reads.push(fmt_atom(&m.reads));
+        rule.get_or_insert(m.rule);
     }
     let mut may: Vec<Policy> = Vec::new();
-    for (message, (on, mut reads)) in found {
+    for (message, (on, mut reads, rule)) in found {
         if on.is_empty() {
             continue;
         }
@@ -636,6 +743,8 @@ fn policies(
             reason: format!("reads {} with a stuck instance", reads.join(", ")),
             may_derive: true,
             refinement: false,
+            rule: rule.map(|r| format!("r{r}")),
+            site: None,
         });
     }
     may.sort_by(|a, b| a.message.cmp(&b.message));
@@ -687,6 +796,8 @@ fn deferred(
             reason: "the value carries a null".into(),
             may_derive: false,
             refinement: true,
+            rule: None,
+            site: None,
         });
     }
     out
@@ -773,6 +884,7 @@ fn deformation(a: &Action, schema: &Schema, r: &Redactor, refs: &Refs) -> Deform
             shown(c.after.as_ref(), c.sensitive, schema, r),
         ),
         leaves: vec![],
+        site: None,
     };
     let by_element = matches!(
         a.kind,
@@ -838,6 +950,7 @@ fn deformation(a: &Action, schema: &Schema, r: &Redactor, refs: &Refs) -> Deform
             before: Shown::Absent,
             after: Shown::Absent,
             leaves,
+            site: None,
         });
     }
     Deformation {
@@ -845,7 +958,30 @@ fn deformation(a: &Action, schema: &Schema, r: &Redactor, refs: &Refs) -> Deform
         addr: a.addr.clone(),
         lines,
         why: Vec::new(),
+        site: None,
+        because: None,
+        forces: match a.kind {
+            ActionKind::Replace { .. } => forces(a, schema),
+            _ => Vec::new(),
+        },
     }
+}
+
+/// The paths of replace `a`'s changes the schema declares `force_new`,
+/// dotted, without indices.
+fn forces(a: &Action, schema: &Schema) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for c in &a.changes {
+        let p = crate::ir::path_keys(&c.path)
+            .iter()
+            .map(|k| k.split('[').next().unwrap_or(k).to_string())
+            .collect::<Vec<_>>()
+            .join(".");
+        if schema.forces_new(&a.addr.typ, &p) && !out.contains(&p) {
+            out.push(p);
+        }
+    }
+    out
 }
 
 /// What prints a resolved reference as its resource (R-43): the world's
@@ -1004,10 +1140,7 @@ pub fn marker_of(k: &ActionKind) -> &'static str {
         ActionKind::Adopt => ">",
         ActionKind::Update | ActionKind::Drift | ActionKind::Pending => "~",
         ActionKind::Delete | ActionKind::DeleteDeposed => "-",
-        ActionKind::Replace {
-            create_first: false,
-        } => "-/+",
-        ActionKind::Replace { create_first: true } => "+/-",
+        ActionKind::Replace { .. } => "±",
         ActionKind::Noop => "=",
     }
 }
@@ -1026,87 +1159,412 @@ pub fn kind_name(k: &ActionKind) -> &'static str {
     }
 }
 
-fn nulls_text(on: &[String], style: Style) -> String {
-    on.iter()
-        .map(|n| style.paint(Paint::Null, &format!("?{}", crate::ir::label(n))))
-        .collect::<Vec<_>>()
-        .join(" ")
+/// `n thing`, `n things`.
+fn count(n: usize, thing: &str) -> String {
+    format!("{n} {thing}{}", if n == 1 { "" } else { "s" })
+}
+
+/// The values a tick waits on, as `T["A"].p` (no `?`: they are values,
+/// not yet known).
+fn waited(on: &BTreeSet<String>) -> Vec<String> {
+    on.iter().map(|n| crate::ir::label(n)).collect()
+}
+
+/// The page width the right column folds at.
+const WIDTH: usize = 100;
+/// The right column starts here, unless every left column is narrower.
+const COLUMN: usize = 52;
+
+/// One printed line: its text, its visible width, and what may follow it
+/// in the right column, the longest that fits first.
+struct Row {
+    left: String,
+    width: usize,
+    right: Vec<String>,
+}
+
+impl Row {
+    fn new(plain: &str, painted: String) -> Row {
+        Row {
+            left: painted,
+            width: plain.chars().count(),
+            right: Vec::new(),
+        }
+    }
+
+    fn plain(s: String) -> Row {
+        Row {
+            width: s.chars().count(),
+            left: s,
+            right: Vec::new(),
+        }
+    }
+
+    fn with(mut self, right: Vec<String>) -> Row {
+        self.right = right.into_iter().filter(|r| !r.is_empty()).collect();
+        self
+    }
+}
+
+/// The rows, the right column aligned across them; a right column that
+/// does not fit in [`WIDTH`] folds to a shorter one, or to nothing.
+fn layout(rows: &[Row]) -> String {
+    let col = rows
+        .iter()
+        .filter(|r| !r.right.is_empty() && r.width + 2 <= COLUMN)
+        .map(|r| r.width + 2)
+        .max()
+        .unwrap_or(0);
+    let mut out = String::new();
+    for r in rows {
+        out.push_str(&r.left);
+        let at = col.max(r.width + 2);
+        if let Some(x) = r.right.iter().find(|x| at + x.chars().count() <= WIDTH) {
+            out.push_str(&" ".repeat(at - r.width));
+            out.push_str(x);
+        }
+        out.push('\n');
+    }
+    out
+}
+
+/// `FILE:LINE  with a = 1, b = 2  (use x)`: where an entry is derived.
+fn place_text(s: &Site, origin: bool) -> String {
+    let mut out = s.at.clone();
+    if !s.with.is_empty() {
+        if !out.is_empty() {
+            out.push_str("  ");
+        }
+        out.push_str(&format!("with {}", s.with.join(", ")));
+    }
+    if let Some(o) = s.origin.as_ref().filter(|_| origin) {
+        out.push_str(&format!("  ({o})"));
+    }
+    out
+}
+
+/// What wrote an attribute's value: `STATEMENT   FILE:LINE`, then
+/// `FILE:LINE` alone (a constant: its entry when it reads something, else
+/// its place); the rank it won over after either.
+fn written_text(s: &Site) -> Vec<String> {
+    let beat = s
+        .beat
+        .as_ref()
+        .map(|b| format!("  (over @{b})"))
+        .unwrap_or_default();
+    if s.at.is_empty() {
+        return vec![format!("{}{beat}", s.statement)];
+    }
+    if s.stated {
+        let entry = s
+            .entry
+            .iter()
+            .filter(|e| e.split_once(" = ").is_some_and(|(_, rhs)| reads(rhs)))
+            .map(|e| format!("{e}   {}{beat}", s.at));
+        return entry.chain([format!("{}{beat}", s.at)]).collect();
+    }
+    let mut out = vec![format!("{}   {}{beat}", s.statement, s.at)];
+    out.extend(s.entry.iter().map(|e| format!("{e}   {}{beat}", s.at)));
+    out.push(format!("{}{beat}", s.at));
+    out
 }
 
 impl Report {
-    /// Say under each deformation why it is planned (`plan --why`), from
-    /// the provenance of `res`, the evaluation the plan was made from: a
-    /// create (or an adoption) by its `want`, an update, a drift or a
-    /// replace by the winning contributions to each attribute it changes
-    /// (its `want` when the program sets none of them), a delete by state
-    /// alone. Every line passes through `r`.
-    pub fn explain(&mut self, res: &EvalResult, r: &Redactor) {
+    /// Say why each change is planned, at level `why` (R-79), from the
+    /// provenance of `res`, the evaluation the plan was made from: each
+    /// entry where it is derived, with its bindings; each attribute it
+    /// changes where its winning value was written; at `Full`, under
+    /// each, the derivation compressed to its leaves (a create by its
+    /// `want`, an update by the winning contributions to each attribute it
+    /// changes, a delete by state alone). Every line passes through `r`.
+    pub fn explain(&mut self, why: Why, res: &EvalResult, r: &Redactor) {
+        self.why = why;
+        if why == Why::None {
+            return;
+        }
         let p = tree::Printer {
             circuit: &res.circuit,
             redact: r,
             all: false,
+        };
+        let rules = &res.rules;
+        let changed: BTreeSet<(String, String)> = self
+            .definite
+            .iter()
+            .chain(self.pending.iter().flat_map(|b| b.deformations.iter()))
+            .map(|d| (d.addr.typ.clone(), d.addr.name.clone()))
+            .collect();
+        let mut attrs: BTreeMap<(String, String), Vec<&Atom>> = BTreeMap::new();
+        for f in res.facts.iter().filter(|f| f.pred == "attr") {
+            if let [Term::Val(Value::Str(t)), Term::Val(Value::Str(a)), ..] = f.args.as_slice() {
+                let k = (t.clone(), a.clone());
+                if changed.contains(&k) {
+                    attrs.entry(k).or_default().push(f);
+                }
+            }
+        }
+        let pending = self
+            .pending
+            .iter_mut()
+            .flat_map(|b| b.deformations.iter_mut());
+        for d in self.definite.iter_mut().chain(pending) {
+            if matches!(d.kind, ActionKind::Delete | ActionKind::DeleteDeposed) {
+                if why == Why::Full {
+                    d.why = explanation(&p, res, d);
+                }
+                continue;
+            }
+            d.site = p.want_site(rules, &d.addr);
+            let facts = attrs
+                .get(&(d.addr.typ.clone(), d.addr.name.clone()))
+                .map(Vec::as_slice)
+                .unwrap_or_default();
+            for l in d.lines.iter_mut() {
+                l.site = attr_site(&p, rules, facts, &l.path);
+            }
+            if why == Why::Full {
+                d.why = explanation(&p, res, d);
+            }
+        }
+        for g in &mut self.groups {
+            g.site = g
+                .rule
+                .as_ref()
+                .and_then(|id| p.rule_site(rules, id, &g.bindings));
+        }
+        for x in &mut self.policies {
+            x.site = x.rule.as_ref().and_then(|id| p.rule_site(rules, id, &[]));
+        }
+        self.denied = self
+            .denies
+            .iter()
+            .map(|text| denied(&p, res, text))
+            .collect();
+        for a in &mut self.approvals {
+            a.site = res
+                .facts
+                .iter()
+                .filter(|f| f.pred == "requires_approval" && f.args.len() == 2)
+                .find(|f| {
+                    crate::approval::needs(&BTreeSet::from([(*f).clone()]))
+                        == [(a.addr.clone(), a.reason.clone())]
+                })
+                .and_then(|f| res.circuit.fact_id(&crate::engine::circuit_fact(f)))
+                .and_then(|id| p.site(rules, id));
+        }
+    }
+
+    /// Under each change, the leaf that changed since the last apply
+    /// (R-79): `then` is the snapshot of the program the last apply ran,
+    /// `now` this plan's, both for the plan's addresses. A delete is also
+    /// said where the last apply derived it (`was FILE:LINE`).
+    pub fn because(&mut self, then: &crate::diff::Snapshot, now: &crate::diff::Snapshot) {
+        let pending = self
+            .pending
+            .iter_mut()
+            .flat_map(|b| b.deformations.iter_mut());
+        for d in self.definite.iter_mut().chain(pending) {
+            let addr = d.addr.to_string();
+            if matches!(d.kind, ActionKind::Delete | ActionKind::DeleteDeposed) {
+                d.site = then.sites.get(&addr).cloned();
+            }
+            let paths: Vec<String> = d.lines.iter().map(|l| l.path.clone()).collect();
+            d.because = crate::diff::because_since(kind_name(&d.kind), &addr, &paths, then, now);
+        }
+    }
+
+    /// Every site's place relative to `top`, the project's root (the
+    /// program's directory outside a project), whatever directory the run
+    /// is in and however it named the program.
+    pub fn relative_to(&mut self, top: &std::path::Path) {
+        let prefix = format!("{}/", top.display());
+        let place = |at: &str| -> Option<String> {
+            let (file, line) = at.rsplit_once(':')?;
+            if file.starts_with('<') {
+                return None;
+            }
+            let abs = std::path::absolute(file).ok()?;
+            let rest = abs.to_str()?.strip_prefix(&prefix)?;
+            Some(format!("{rest}:{line}"))
+        };
+        let fix = |s: &mut Option<Site>| {
+            if let Some(s) = s
+                && let Some(at) = place(&s.at)
+            {
+                s.at = at;
+            }
         };
         let pending = self
             .pending
             .iter_mut()
             .flat_map(|b| b.deformations.iter_mut());
         for d in self.definite.iter_mut().chain(pending) {
-            d.why = explanation(&p, res, d);
+            fix(&mut d.site);
+            for l in d.lines.iter_mut() {
+                fix(&mut l.site);
+            }
+            for b in d.why.iter_mut() {
+                if let Some(at) = b.at.as_deref().and_then(place) {
+                    b.at = Some(at);
+                }
+            }
         }
-        self.explained = true;
+        self.groups.iter_mut().for_each(|g| fix(&mut g.site));
+        self.policies.iter_mut().for_each(|p| fix(&mut p.site));
+        self.approvals.iter_mut().for_each(|a| fix(&mut a.site));
+        self.denied.iter_mut().for_each(|d| fix(&mut d.site));
     }
 
-    pub fn pending_count(&self) -> usize {
-        self.pending
+    /// The changes the plan counts: every definite one that is not a
+    /// no-op, and every held one a later tick of this plan makes (one
+    /// waiting on what this plan does not resolve is `later`'s).
+    fn counted(&self) -> impl Iterator<Item = &Deformation> {
+        self.definite
             .iter()
-            .map(|b| b.deformations.len())
-            .sum::<usize>()
-            + self.groups.len()
+            .filter(|d| !matches!(d.kind, ActionKind::Noop))
+            .chain(
+                self.pending
+                    .iter()
+                    .filter(|b| b.resolves_after.is_some())
+                    .flat_map(|b| b.deformations.iter()),
+            )
     }
 
-    /// Definite deformations by kind, in summary order.
+    /// The changes by kind, in summary order.
     fn kinds(&self) -> Vec<(&'static str, usize)> {
         ["create", "update", "replace", "drift", "delete", "adopt"]
             .into_iter()
             .map(|k| {
-                let n = self
-                    .definite
-                    .iter()
-                    .filter(|d| kind_name(&d.kind) == k)
-                    .count();
-                (k, n)
+                (
+                    k,
+                    self.counted().filter(|d| kind_name(&d.kind) == k).count(),
+                )
             })
             .collect()
     }
 
-    /// How many definite deformations the plan has (the summary's count).
-    pub fn deformations(&self) -> usize {
-        self.kinds().iter().map(|(_, n)| n).sum()
+    /// How many changes the plan has, in every tick (the summary's count).
+    pub fn changes(&self) -> usize {
+        self.counted().count()
     }
 
-    /// `plan: 3 deformations (2 create, 1 update), 5 pending, 2 undetermined`
+    /// The ticks, each with its changes, what it waits on and the
+    /// objects it deletes once their replacements stand; the first is
+    /// this report's tick. Held changes waiting on what this plan does
+    /// not schedule are not in any.
+    fn sections(&self) -> BTreeMap<usize, Section<'_>> {
+        let mut out: BTreeMap<usize, Section> = BTreeMap::new();
+        let shown: Vec<&Deformation> = self.definite.iter().collect();
+        if !shown.is_empty() {
+            out.entry(self.tick).or_default().changes = shown;
+        }
+        for b in &self.pending {
+            let Some(t) = b.resolves_after else { continue };
+            let s = out.entry(t + 1).or_default();
+            s.changes.extend(b.deformations.iter());
+            s.waits.extend(b.on.iter().cloned());
+        }
+        for d in &self.definite {
+            if matches!(d.kind, ActionKind::Replace { create_first: true }) {
+                out.entry(self.tick + 1).or_default().deposed.push(&d.addr);
+            }
+        }
+        out
+    }
+
+    /// `plan: 5 changes (3 create, 2 update) over 2 ticks, 1 approval, 1 undetermined`
     pub fn summary(&self) -> String {
         let kinds: Vec<(&str, usize)> = self.kinds().into_iter().filter(|(_, n)| *n > 0).collect();
-        let n = self.deformations();
-        let mut out = format!("plan: {n} deformation{}", if n == 1 { "" } else { "s" });
+        let mut out = format!("plan: {}", count(self.changes(), "change"));
         if !kinds.is_empty() {
             let ks: Vec<String> = kinds.iter().map(|(k, n)| format!("{n} {k}")).collect();
             out.push_str(&format!(" ({})", ks.join(", ")));
         }
+        let ticks = self
+            .sections()
+            .values()
+            .filter(|s| {
+                !s.deposed.is_empty()
+                    || s.changes
+                        .iter()
+                        .any(|d| !matches!(d.kind, ActionKind::Noop))
+            })
+            .count();
+        if ticks > 0 {
+            out.push_str(&format!(" over {}", count(ticks, "tick")));
+        }
         if self.show_noop {
             out.push_str(&format!(", {} no-op", self.noops));
         }
-        let pending = self.pending_count();
-        if pending > 0 {
-            out.push_str(&format!(", {pending} pending"));
+        if !self.denies.is_empty() {
+            out.push_str(&format!(", {} denied", self.denies.len()));
         }
-        let undetermined = self.policies.len();
-        if undetermined > 0 {
-            out.push_str(&format!(", {undetermined} undetermined"));
+        if !self.approvals.is_empty() {
+            out.push_str(&format!(", {}", count(self.approvals.len(), "approval")));
+        }
+        if !self.policies.is_empty() {
+            out.push_str(&format!(", {} undetermined", self.policies.len()));
         }
         if !self.conflicts.is_empty() {
-            let n = self.conflicts.len();
-            out.push_str(&format!(", {n} conflict{}", if n == 1 { "" } else { "s" }));
+            out.push_str(&format!(", {}", count(self.conflicts.len(), "conflict")));
+        }
+        out
+    }
+
+    /// What `later` holds: rules that may derive an unknown number of
+    /// resources, denies and checks undetermined until a tick, and held
+    /// changes whose nulls this plan does not resolve.
+    fn has_later(&self) -> bool {
+        !self.groups.is_empty()
+            || !self.policies.is_empty()
+            || self.pending.iter().any(|b| b.resolves_after.is_none())
+    }
+
+    /// The last line: what `apply` does with this plan (R-12: it asks
+    /// once, before the first tick, for everything the plan lists, and
+    /// again before a later tick only for what no plan listed).
+    pub fn apply_line(&self) -> String {
+        if !self.conflicts.is_empty() || !self.denies.is_empty() {
+            return "apply: refused until the conflicts and denies above are resolved".into();
+        }
+        let ticks: Vec<usize> = self.sections().into_keys().collect();
+        let now = match self.approvals.is_empty() {
+            true => "now",
+            false => "once this plan's digest is approved (`--approval`)",
+        };
+        let mut out = match ticks.as_slice() {
+            [] => "apply: nothing to change now".to_string(),
+            [t] => format!("apply: tick {t} {now}"),
+            [t, u] => format!("apply: tick {t} {now}, then tick {u} when tick {t} reports"),
+            [t, .., u] => format!(
+                "apply: tick {t} {now}, then ticks {} to {u}, each when the one before reports",
+                t + 1
+            ),
+        };
+        if self.has_later() {
+            let after = self
+                .groups
+                .iter()
+                .map(|g| g.resolves_after)
+                .chain(self.policies.iter().map(|p| p.after))
+                .chain(
+                    self.pending
+                        .iter()
+                        .filter(|b| b.resolves_after.is_none())
+                        .map(|_| None),
+                )
+                .collect::<Option<Vec<usize>>>()
+                .and_then(|ts| ts.into_iter().max());
+            match after {
+                Some(t) => out.push_str(&format!(
+                    "; `later` is planned again when tick {t} reports, and apply asks before \
+                     what it adds"
+                )),
+                None => out.push_str(
+                    "; `later` waits on what no tick of this plan makes: apply waits for it \
+                     (`--wait`) or stops before it",
+                ),
+            }
         }
         out
     }
@@ -1117,86 +1575,117 @@ impl Report {
         self.render(Style::PLAIN)
     }
 
-    /// The report as text, painted with `style`.
+    /// The report as text, painted with `style`: the summary, each tick
+    /// with its changes, `later`, the diagnostics, and what apply does.
     pub fn render(&self, style: Style) -> String {
         let bold = |s: &str| style.paint(Paint::Bold, s);
-        let header = |s: &str| format!("{}\n", bold(s));
         let mut out = moved_text(&self.moved);
         if self.undeformed && !self.show_noop {
-            out.push_str(&format!("stack {} is undeformed\n", self.stack));
+            out.push_str(&format!("stack {} is up to date\n", self.stack));
             return out;
         }
-        out.push_str(&self.summary());
-        out.push('\n');
-        if !self.definite.is_empty() {
-            out.push_str(&header("definite:"));
-            self.write_deformations(&mut out, &self.definite, style);
-        }
-        for b in &self.pending {
-            let after = b
-                .resolves_after
-                .map(|t| format!(" (resolves after tick {t})"))
-                .unwrap_or_default();
-            out.push_str(&format!(
-                "{} {}{}\n",
-                bold("pending on"),
-                nulls_text(&b.on, style),
-                bold(&format!("{after}:"))
-            ));
-            self.write_deformations(&mut out, &b.deformations, style);
-        }
-        if !self.groups.is_empty() {
-            out.push_str(&header("pending groups:"));
-            for g in &self.groups {
-                let after = g
-                    .resolves_after
-                    .map(|t| format!(", resolves after tick {t}"))
-                    .unwrap_or_default();
-                let line = format!(
-                    "? {} x unknown, on {}{after}  ({})",
-                    g.pattern,
-                    nulls_text(&g.on, Style::PLAIN),
-                    g.reason
-                );
-                out.push_str(&style.paint(Paint::Warn, &line));
-                out.push('\n');
-            }
-        }
-        if !self.policies.is_empty() {
-            out.push_str(&header("undetermined:"));
-            for p in &self.policies {
-                let when = match (p.may_derive, p.after) {
-                    (false, Some(t)) => format!(", decided after tick {t}"),
-                    (true, Some(t)) => format!(", may derive after tick {t}"),
-                    (true, None) => ", may derive after a boundary".into(),
-                    (false, None) => String::new(),
+        let mut rows: Vec<Row> = vec![Row::plain(self.summary())];
+        for (t, s) in self.sections() {
+            rows.push(Row::plain(String::new()));
+            let n = s.changes.len();
+            let head = match (t == self.tick, n) {
+                // A later tick of an apply: the one before has reported.
+                (true, _) if t > 1 => format!(
+                    "tick {t}  {}, now that tick {} reported",
+                    count(n, "change"),
+                    t - 1
+                ),
+                (true, _) => format!("tick {t}  {}, applies now", count(n, "change")),
+                (false, 0) => format!("tick {t}  after tick {} reports", t - 1),
+                (false, _) => format!(
+                    "tick {t}  {}, after tick {} reports",
+                    count(n, "change"),
+                    t - 1
+                ),
+            };
+            rows.push(Row::new(&head, bold(&head)));
+            for (i, w) in waited(&s.waits).into_iter().enumerate() {
+                let lead = if i == 0 {
+                    "  waits on  "
+                } else {
+                    "            "
                 };
-                if p.refinement {
-                    out.push_str(&format!(
-                        "? refinement on {} deferred: {}{when}\n",
-                        nulls_text(&p.on, style),
-                        p.message
-                    ));
-                    continue;
-                }
-                out.push_str(&format!(
-                    "? deny \"{}\" on {}{when}  ({})\n",
-                    p.message,
-                    nulls_text(&p.on, style),
-                    p.reason
-                ));
+                let painted = format!("{lead}{}", style.paint(Paint::Null, &w));
+                rows.push(Row::new(&format!("{lead}{w}"), painted));
+            }
+            self.write_level(&mut rows, &s.changes, None, "  ", style);
+            for a in &s.deposed {
+                let addr = Redactor::default().cell(&crate::zset::reference(a));
+                let plain = format!("  - {addr}  (deposed)");
+                let painted = format!(
+                    "  {} {}  (deposed)",
+                    style.paint(Paint::Delete, "-"),
+                    style.paint(Paint::Bold, &addr)
+                );
+                rows.push(Row::new(&plain, painted));
             }
         }
-        for (title, ds) in [("shadowed", &self.shadowed), ("conflicts", &self.conflicts)] {
+        if self.has_later() {
+            rows.push(Row::plain(String::new()));
+            let head = "later   changes this plan cannot count yet";
+            rows.push(Row::new(head, bold(head)));
+            self.write_later(&mut rows, style);
+        }
+        if !self.denies.is_empty() {
+            rows.push(Row::plain(String::new()));
+            rows.push(Row::new("denied", style.paint(Paint::Error, "denied")));
+            let wide = self
+                .denied
+                .iter()
+                .map(|d| d.addr.chars().count())
+                .max()
+                .unwrap_or(0);
+            for (i, d) in self.denies.iter().enumerate() {
+                let row = self.denied.get(i);
+                let message = row.map(|r| r.message.as_str()).unwrap_or(d);
+                let left = format!("  {message}");
+                let right = row
+                    .map(|r| {
+                        let at = r.site.as_ref().map(|s| s.at.as_str()).unwrap_or_default();
+                        let pad = " ".repeat(wide - r.addr.chars().count());
+                        format!("{}{pad}    {at}", r.addr).trim().to_string()
+                    })
+                    .into_iter()
+                    .collect();
+                rows.push(Row::new(&left, style.paint(Paint::Error, &left)).with(right));
+            }
+        }
+        if !self.approvals.is_empty() {
+            rows.push(Row::plain(String::new()));
+            let head = "held for approval";
+            rows.push(Row::new(head, style.paint(Paint::Warn, head)));
+            let wide = self
+                .approvals
+                .iter()
+                .map(|a| a.reason.chars().count())
+                .max()
+                .unwrap_or(0);
+            for a in &self.approvals {
+                let at = a.site.as_ref().map(|s| s.at.as_str()).unwrap_or_default();
+                let pad = " ".repeat(wide - a.reason.chars().count());
+                let right = format!("{}{pad}    {at}", a.reason).trim_end().to_string();
+                rows.push(Row::plain(format!("  {}", a.addr)).with(vec![right]));
+            }
+        }
+        out.push_str(&layout(&rows));
+        let header = |s: &str| format!("{}\n", bold(s));
+        let diags = [("shadowed", &self.shadowed), ("conflicts", &self.conflicts)];
+        for (title, ds) in diags {
             if ds.is_empty() {
                 continue;
             }
+            out.push('\n');
             let conflict = title == "conflicts";
             let error = |s: &str| match conflict {
                 true => style.paint(Paint::Error, s),
                 false => s.to_string(),
             };
-            out.push_str(&header(&error(&format!("{title}:"))));
+            out.push_str(&header(&error(title)));
             for d in ds {
                 let rank = d
                     .rank
@@ -1204,7 +1693,7 @@ impl Report {
                     .map(|r| format!(" at rank {r}"))
                     .unwrap_or_default();
                 out.push_str(&error(&format!(
-                    "! {}{rank}: {}",
+                    "  ! {}{rank}: {}",
                     d.addr.attr(&d.path),
                     d.reason
                 )));
@@ -1216,35 +1705,436 @@ impl Report {
                         let names: Vec<String> = from.iter().map(|f| bold(f)).collect();
                         format!("  from {}", names.join("; "))
                     };
-                    out.push_str(&format!("    {r} {}{from}\n", style.shown(v)));
-                }
-            }
-        }
-        if !self.denies.is_empty() {
-            out.push_str(&header(&style.paint(Paint::Error, "denied:")));
-            for d in &self.denies {
-                out.push_str(&style.paint(Paint::Error, &format!("! {d}")));
-                out.push('\n');
-            }
-        }
-        if !self.ticks.is_empty() || !self.unscheduled.is_empty() {
-            // One address per line, so each pastes into `why` or a program.
-            out.push_str(&header("apply order:"));
-            let unscheduled = (!self.unscheduled.is_empty())
-                .then(|| ("unscheduled".to_string(), &self.unscheduled));
-            let ticks = self.ticks.iter().map(|(t, xs)| (format!("tick {t}"), xs));
-            for (head, xs) in ticks.chain(unscheduled) {
-                out.push_str(&format!("  {head}\n"));
-                for x in xs {
-                    out.push_str(&format!("    {x}\n"));
+                    out.push_str(&format!("      {r} {}{from}\n", style.shown(v)));
                 }
             }
         }
         if self.undeformed {
-            out.push_str(&format!("stack {} is undeformed\n", self.stack));
+            out.push_str(&format!("\nstack {} is up to date\n", self.stack));
+            return out;
         }
+        out.push('\n');
+        out.push_str(&self.apply_line());
+        out.push('\n');
         out
     }
+
+    /// `later`'s rows: each group by the address its rule names (a copy
+    /// that may derive once, its resources under it), each undetermined
+    /// deny and check, each held change this plan does not schedule.
+    fn write_later(&self, rows: &mut Vec<Row>, style: Style) {
+        let site = |s: &Option<Site>| s.as_ref().map(|s| s.at.clone()).unwrap_or_default();
+        let full = self.why == Why::Full;
+        // The right column, the longest that fits first: the place, the
+        // condition, and (at `full`) the reason; the condition alone last.
+        let both = |at: String, cond: String, reason: &str| {
+            let mut out = Vec::new();
+            for cond in [
+                full.then(|| format!("{cond}  ({reason})")),
+                Some(cond.clone()),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                if !at.is_empty() {
+                    out.push(format!("{at}  {cond}"));
+                }
+                out.push(cond);
+            }
+            out
+        };
+        // A copy that may derive (R-67) is said once, its resources under it.
+        let copy_of = group_copy;
+        let mut copies: BTreeSet<String> = BTreeSet::new();
+        for g in &self.groups {
+            let copy = copy_of(g);
+            if let Some(c) = &copy {
+                if !copies.insert(c.clone()) {
+                    continue;
+                }
+                let reads = g.reads.clone().unwrap_or_default();
+                let plain = format!("  {c}");
+                let painted = format!("  {}", style.paint(Paint::Warn, c));
+                rows.push(Row::new(&plain, painted).with(vec![format!("if {reads} derives")]));
+                for m in self
+                    .groups
+                    .iter()
+                    .filter(|m| copy_of(m).as_ref() == Some(c))
+                {
+                    let pattern = group_address(m);
+                    let plain = format!("    {pattern}");
+                    let painted = format!("    {}", style.paint(Paint::Warn, &pattern));
+                    rows.push(Row::new(&plain, painted));
+                }
+                continue;
+            }
+            let pattern = group_address(g);
+            let unknown = pattern.ends_with("[?]") || pattern.contains("${");
+            let on = waited(&g.on.iter().cloned().collect()).join(", ");
+            let cond = match (&g.reads, unknown) {
+                (Some(r), true) => format!("one per {r}"),
+                (Some(r), false) => format!("if {r} derives"),
+                (None, _) => format!("waits on {on}"),
+            };
+            let plain = format!("  {pattern}");
+            let painted = format!("  {}", style.paint(Paint::Warn, &pattern));
+            rows.push(Row::new(&plain, painted).with(both(site(&g.site), cond, &g.reason)));
+        }
+        for p in &self.policies {
+            let on = waited(&p.on.iter().cloned().collect()).join(", ");
+            let cond = match (p.may_derive, p.after) {
+                (false, Some(t)) => format!("undetermined until tick {}", t + 1),
+                (true, Some(t)) => format!("may hold at tick {}", t + 1),
+                (_, None) if on.is_empty() => "undetermined".to_string(),
+                (_, None) => format!("undetermined, waits on {on}"),
+            };
+            let left = match p.refinement {
+                true => format!("  check {}", p.message),
+                false => format!("  deny \"{}\"", p.message),
+            };
+            rows.push(Row::plain(left).with(both(site(&p.site), cond, &p.reason)));
+        }
+        for b in self.pending.iter().filter(|b| b.resolves_after.is_none()) {
+            let ds: Vec<&Deformation> = b.deformations.iter().collect();
+            let on = waited(&b.on.iter().cloned().collect()).join(", ");
+            let lead = format!("  waits on  {on}, which this plan does not resolve");
+            rows.push(Row::plain(lead));
+            self.write_level(rows, &ds, None, "  ", style);
+        }
+    }
+
+    /// Changes in order, a copy's under it (R-67): `+ network["blue"]` at
+    /// the place of its first resource, the resources indented beneath, a
+    /// copy inside it nested again. The copy's marker is its `deformation`
+    /// row's kind (`zset::Instances::row_kind`): `-` when the program wants
+    /// none of its resources, `+` when one is created, else `~`.
+    fn write_level(
+        &self,
+        rows: &mut Vec<Row>,
+        ds: &[&Deformation],
+        outer: Option<&Address>,
+        indent: &str,
+        style: Style,
+    ) {
+        // The copy directly under `outer` a change is in, if any.
+        let under = |d: &Deformation| -> Option<Address> {
+            let chain = self.instances.enclosing(&d.addr);
+            let at = match outer {
+                None => chain.len(),
+                Some(o) => chain.iter().position(|a| a == o)?,
+            };
+            at.checked_sub(1).map(|i| chain[i].clone())
+        };
+        let mut done: BTreeSet<Address> = BTreeSet::new();
+        for d in ds {
+            let Some(copy) = under(d) else {
+                self.write_change(rows, d, indent, outer.is_some(), style);
+                continue;
+            };
+            if !done.insert(copy.clone()) {
+                continue;
+            }
+            let members: Vec<&Deformation> = ds
+                .iter()
+                .filter(|m| self.instances.enclosing(&m.addr).contains(&copy))
+                .copied()
+                .collect();
+            let kinds: Vec<&str> = members
+                .iter()
+                .filter_map(|m| crate::zset::deformation_kind(&m.kind, false))
+                .collect();
+            let kind = match self.instances.row_kind(&copy, &kinds) {
+                "delete" => ActionKind::Delete,
+                "create" => ActionKind::Create,
+                _ => ActionKind::Update,
+            };
+            let addr = Redactor::default().cell(&crate::zset::reference(&copy));
+            let plain = format!("{indent}{} {addr}", marker_of(&kind));
+            let painted = format!(
+                "{indent}{} {}",
+                style.marker(&kind),
+                style.paint(Paint::Bold, &addr)
+            );
+            rows.push(Row::new(&plain, painted));
+            self.write_level(rows, &members, Some(&copy), &format!("{indent}  "), style);
+        }
+    }
+
+    /// One change: its marker and address with where it is derived, its
+    /// attributes each with where its value was written, what holds it,
+    /// and why it changed since the last apply.
+    fn write_change(
+        &self,
+        rows: &mut Vec<Row>,
+        d: &Deformation,
+        indent: &str,
+        in_copy: bool,
+        style: Style,
+    ) {
+        let note = match d.kind {
+            ActionKind::Drift => {
+                "  (drift: a fresh null where the world has a value; its identity is stale)"
+            }
+            ActionKind::DeleteDeposed => "  (deposed)",
+            ActionKind::Replace { create_first: true } => "  (the new one first)",
+            _ => "",
+        };
+        // The resource as `dform query deformation`'s row spells it (R-63).
+        let addr = Redactor::default().cell(&crate::zset::reference(&d.addr));
+        let plain = format!("{indent}{} {addr}{note}", marker_of(&d.kind));
+        let painted = format!(
+            "{indent}{} {}{note}",
+            style.marker(&d.kind),
+            style.paint(Paint::Bold, &addr)
+        );
+        // A copy's members say their copy above: not again on each.
+        let origin = |s: &Site| {
+            !(in_copy
+                && s.origin
+                    .as_deref()
+                    .is_some_and(|o| o.starts_with("instance ")))
+        };
+        let right: Vec<String> = match (&d.kind, &d.site) {
+            (_, _) if self.why == Why::None => vec![],
+            (ActionKind::Replace { .. }, _) => d
+                .forces
+                .iter()
+                .map(|p| format!("{p} is immutable"))
+                .collect(),
+            (ActionKind::Delete | ActionKind::DeleteDeposed, Some(s)) => {
+                vec![format!("was {}", place_text(s, origin(s)))]
+            }
+            (ActionKind::Update | ActionKind::Drift | ActionKind::Pending, _) => vec![],
+            (_, Some(s)) => vec![place_text(s, origin(s)), place_text(s, false), s.at.clone()],
+            (_, None) => vec![],
+        };
+        rows.push(Row::new(&plain, painted).with(right));
+        // Keep plan output readable.
+        let max = 40usize;
+        let inner = format!("{indent}    ");
+        for (i, l) in d.lines.iter().enumerate() {
+            if i == max {
+                rows.push(Row::plain(format!(
+                    "{inner}... ({} more changes)",
+                    d.lines.len() - max
+                )));
+                break;
+            }
+            let right = match (&l.site, self.why) {
+                (_, Why::None) | (None, _) => vec![],
+                (Some(s), _) => attr_text(d, l, s),
+            };
+            write_line(rows, &d.kind, l, &inner, style, right);
+        }
+        for b in &d.why {
+            rows.push(Row::plain(format!("{inner}{}", b.line())));
+        }
+        if let Some(b) = &d.because {
+            rows.push(Row::plain(format!("{inner}because {b}")));
+        }
+    }
+}
+
+/// Deny `text` over the plan (`MESSAGE`, or `MESSAGE ctx={..}`) as the
+/// plan's rows say it: its message, the resource of the `deformation` row
+/// its firing read, and where it is written.
+fn denied(p: &tree::Printer, res: &EvalResult, text: &str) -> Denied {
+    let message = |a: &Atom| match a.args.first() {
+        Some(Term::Val(Value::Str(m))) => Some(m.clone()),
+        _ => None,
+    };
+    let fact =
+        res.facts.iter().filter(|a| a.pred == "deny").find(|a| {
+            message(a).is_some_and(|m| text == m || text.starts_with(&format!("{m} ctx=")))
+        });
+    let Some(fact) = fact else {
+        return Denied {
+            message: text.to_string(),
+            addr: String::new(),
+            site: None,
+        };
+    };
+    let id = res.circuit.fact_id(&crate::engine::circuit_fact(fact));
+    let addr = id
+        .and_then(|id| match res.circuit.view(id) {
+            crate::circuit::View::Fact { alts, .. } => alts.first().copied(),
+            _ => None,
+        })
+        .and_then(|alt| match res.circuit.view(alt) {
+            crate::circuit::View::Times { children, .. } => {
+                children.iter().find_map(|c| match res.circuit.view(*c) {
+                    crate::circuit::View::Fact { fact, .. } if fact.pred == "deformation" => {
+                        match fact.args.get(1) {
+                            Some(Value::Ref { typ, name, .. }) => Some(
+                                Address {
+                                    typ: typ.clone(),
+                                    name: name.clone(),
+                                }
+                                .to_string(),
+                            ),
+                            Some(v) => Some(fmt_bare(v)),
+                            None => None,
+                        }
+                    }
+                    _ => None,
+                })
+            }
+            _ => None,
+        })
+        .unwrap_or_default();
+    Denied {
+        message: message(fact).unwrap_or_else(|| text.to_string()),
+        addr,
+        site: id.and_then(|id| p.site(&res.rules, id)),
+    }
+}
+
+/// The right column of attribute line `l` of change `d`, written at `s`:
+/// a create's value written in its own block is the entry's expression
+/// when it reads something the value does not show; anything else is the
+/// statement that wrote it.
+fn attr_text(d: &Deformation, l: &Line, s: &Site) -> Vec<String> {
+    let own = d.site.as_ref().is_some_and(|h| match (&h.stmt, &s.stmt) {
+        (Some((hf, first)), Some((sf, line))) => {
+            hf == sf && (first == line || (first..=&h.last).contains(&line))
+        }
+        _ => false,
+    });
+    if own && matches!(d.kind, ActionKind::Create | ActionKind::Adopt) {
+        let rhs = s
+            .entry
+            .as_deref()
+            .and_then(|e| e.split_once(" = "))
+            .map(|(_, rhs)| rhs.to_string())
+            .filter(|rhs| {
+                let after = l.after.text();
+                // A variable is the entry's binding, on the line above; a
+                // literal is the value itself; a secret says so already.
+                !rhs.chars().all(|c| c.is_alphanumeric() || c == '_')
+                    && !rhs.starts_with("(sensitive")
+                    && reads(rhs)
+                    && !after.contains(rhs.as_str())
+                    // A typed literal: `inet("10.0.0.0/16")`.
+                    && !rhs.ends_with(&format!("({after})"))
+                    && format!("?{rhs}") != after
+            });
+        return rhs.into_iter().collect();
+    }
+    if matches!(d.kind, ActionKind::Delete | ActionKind::DeleteDeposed) {
+        return vec![];
+    }
+    written_text(s)
+}
+
+/// Whether expression `e` reads anything: a name that is not an object's
+/// key (a variable, a function), or an interpolation. `{ team: "a" }`
+/// reads nothing; `db.name`, `json("f.json")` and `"shop-${env}"` do.
+fn reads(e: &str) -> bool {
+    let mut cs = e.chars().peekable();
+    while let Some(c) = cs.next() {
+        if c == '"' {
+            let mut esc = false;
+            let mut prev = ' ';
+            for c in cs.by_ref() {
+                if prev == '$' && c == '{' && !esc {
+                    return true;
+                }
+                if c == '"' && !esc {
+                    break;
+                }
+                esc = c == '\\' && !esc;
+                prev = c;
+            }
+            continue;
+        }
+        if c.is_alphabetic() || c == '_' {
+            let mut word = String::from(c);
+            while let Some(&n) = cs.peek()
+                && (n.is_alphanumeric() || "_.".contains(n))
+            {
+                word.push(n);
+                cs.next();
+            }
+            while cs.peek().is_some_and(|n| n.is_whitespace()) {
+                cs.next();
+            }
+            let key = cs.peek() == Some(&':');
+            if !key && !matches!(word.as_str(), "true" | "false" | "null") {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// The copy a pending group's resources are of, when what it waits on is
+/// whether the copy derives (`instance app blue`): `app["blue"]`.
+fn group_copy(g: &Group) -> Option<String> {
+    let rest = g.reads.as_deref()?.strip_prefix("instance ")?;
+    let (path, name) = rest.split_once(' ')?;
+    Some(format!("{path}[\"{name}\"]"))
+}
+
+/// A pending group's address: the address its rule's statement names
+/// (`k8s.job["migrate-v${schema}"]`) where the head leaves the name open.
+fn group_address(g: &Group) -> String {
+    let Some(s) = g.site.as_ref().filter(|_| g.pattern.ends_with("[?]")) else {
+        return g.pattern.clone();
+    };
+    let mut words = s.statement.split_whitespace();
+    let (Some("resource"), Some(t), Some(name)) = (words.next(), words.next(), words.next()) else {
+        return g.pattern.clone();
+    };
+    if !g.pattern.starts_with(&format!("{t}[")) {
+        return g.pattern.clone();
+    }
+    // The name as the statement writes it: a template stays one.
+    match name.starts_with('"') {
+        true => format!("{t}[{name}]"),
+        false => format!("{t}[\"{name}\"]"),
+    }
+}
+
+/// The site of the attribute fact of `facts` that holds change path
+/// `path` (`tags.team` of `tags`, `statements[0].action` of
+/// `statements`), focused on the keys below it.
+fn attr_site(p: &tree::Printer, rules: &[RuleStmt], facts: &[&Atom], path: &str) -> Option<Site> {
+    let segs = crate::ir::path_segments(path);
+    for k in (1..=segs.len()).rev() {
+        let last = segs[k - 1];
+        let index = crate::ir::segment_parts(last).1;
+        let raw = &last[..last.len() - index.len()];
+        let prefix = segs[..k - 1]
+            .iter()
+            .copied()
+            .chain([raw])
+            .collect::<Vec<_>>()
+            .join(".");
+        let found = facts
+            .iter()
+            .find(|a| matches!(a.args.get(2), Some(Term::Val(Value::Str(p))) if *p == prefix));
+        if let Some(a) = found {
+            let keys: Vec<String> = match index.is_empty() {
+                true => segs[k..]
+                    .iter()
+                    .take_while(|s| crate::ir::segment_parts(s).1.is_empty())
+                    .map(|s| crate::ir::segment_key(s).into_owned())
+                    .collect(),
+                false => vec![],
+            };
+            let whole = index.is_empty() && keys.len() == segs.len() - k;
+            return p.attr_site(rules, a, &keys, whole);
+        }
+    }
+    None
+}
+
+/// One tick of the report.
+#[derive(Default)]
+struct Section<'a> {
+    changes: Vec<&'a Deformation>,
+    waits: BTreeSet<String>,
+    deposed: Vec<&'a Address>,
 }
 
 /// `moved OLD -> NEW`, one line per rename `moved/3` applied to state.
@@ -1256,26 +2146,27 @@ pub fn moved_text(moves: &[(Address, Address)]) -> String {
 }
 
 impl Report {
-    /// The plan as one JSON document (`plan --json`): the sections as
-    /// arrays, in the text's order; a null as `{"null": LABEL, "class":
-    /// C}`, a secret or a sensitive value as `{"sensitive": LABEL}`.
+    /// The plan as one JSON document (`plan --json`): the ticks, each
+    /// with what it waits on and its changes (kind, address, attribute
+    /// changes, where each is derived and why it changed since the last
+    /// apply), `later`, the diagnostics; a null as `{"null": LABEL,
+    /// "class": C}`, a secret or a sensitive value as `{"sensitive": LABEL}`.
     pub fn json(&self) -> Json {
-        let nulls = |on: &[String]| -> Json {
-            on.iter()
-                .map(|l| {
-                    let class = self
-                        .classes
-                        .get(l)
-                        .cloned()
-                        .unwrap_or_else(|| "unknown".into());
-                    json!({"null": crate::ir::label(l), "class": class})
-                })
-                .collect()
+        let nulls = |on: &mut dyn Iterator<Item = &String>| -> Json {
+            on.map(|l| {
+                let class = self
+                    .classes
+                    .get(l)
+                    .cloned()
+                    .unwrap_or_else(|| "unknown".into());
+                json!({"null": crate::ir::label(l), "class": class})
+            })
+            .collect()
         };
-        let deformations = |ds: &[Deformation]| -> Json {
+        let changes = |ds: &[&Deformation]| -> Json {
             ds.iter()
                 .map(|d| {
-                    let mut j = deformation_json(d, self.explained);
+                    let mut j = self.change_json(d);
                     // The copy it is a resource of, innermost (R-67).
                     if let Some(i) = self.instances.enclosing(&d.addr).first() {
                         j["instance"] = json!(i.to_string());
@@ -1285,61 +2176,139 @@ impl Report {
                 .collect()
         };
         let mut summary = serde_json::Map::new();
-        summary.insert("deformations".into(), json!(self.deformations()));
+        summary.insert("changes".into(), json!(self.changes()));
         for (k, n) in self.kinds() {
             summary.insert(k.into(), json!(n));
         }
         summary.insert("no_op".into(), json!(self.noops));
-        summary.insert("pending".into(), json!(self.pending_count()));
+        summary.insert("ticks".into(), json!(self.sections().len()));
+        summary.insert("approvals".into(), json!(self.approvals.len()));
         summary.insert("undetermined".into(), json!(self.policies.len()));
         summary.insert("conflicts".into(), json!(self.conflicts.len()));
-        json!({
-            "stack": self.stack,
-            "undeformed": self.undeformed,
-            "summary": summary,
-            "definite": deformations(&self.definite),
-            "pending": self.pending.iter().map(|b| json!({
-                "on": nulls(&b.on),
-                "resolves_after": b.resolves_after,
-                "deformations": deformations(&b.deformations),
-            })).collect::<Vec<_>>(),
-            "pending_groups": self.groups.iter().map(|g| json!({
-                "pattern": g.pattern,
-                "on": nulls(&g.on),
+        let site = |s: &Option<Site>| match s {
+            Some(s) if self.why != Why::None => json!(s),
+            _ => Json::Null,
+        };
+        let mut later: Vec<Json> = Vec::new();
+        for g in &self.groups {
+            later.push(json!({
+                "kind": "group",
+                "address": group_address(g),
+                "instance": group_copy(g),
+                "reads": g.reads,
+                "on": nulls(&mut g.on.iter()),
                 "reason": g.reason,
-                "resolves_after": g.resolves_after,
-            })).collect::<Vec<_>>(),
-            "undetermined": self.policies.iter().map(|p| json!({
-                "policy": if p.refinement { "refinement" } else { "deny" },
+                "after": g.resolves_after,
+                "site": site(&g.site),
+            }));
+        }
+        for p in &self.policies {
+            later.push(json!({
+                "kind": if p.refinement { "refinement" } else { "deny" },
                 "message": p.message,
-                "kind": if p.refinement {
+                "status": if p.refinement {
                     "deferred"
                 } else if p.may_derive {
                     "may_derive"
                 } else {
                     "undetermined"
                 },
-                "on": nulls(&p.on),
+                "on": nulls(&mut p.on.iter()),
                 "reason": p.reason,
                 "after": p.after,
+                "site": site(&p.site),
+            }));
+        }
+        for b in self.pending.iter().filter(|b| b.resolves_after.is_none()) {
+            let ds: Vec<&Deformation> = b.deformations.iter().collect();
+            later.push(json!({
+                "kind": "held",
+                "on": nulls(&mut b.on.iter()),
+                "changes": changes(&ds),
+            }));
+        }
+        json!({
+            "stack": self.stack,
+            "up_to_date": self.undeformed,
+            "summary": summary,
+            "ticks": self.sections().iter().map(|(t, s)| json!({
+                "tick": t,
+                "after": (*t != self.tick).then(|| t - 1),
+                "waits_on": nulls(&mut s.waits.iter()),
+                "changes": changes(&s.changes),
+                "deposed": s.deposed.iter().map(|a| a.to_string()).collect::<Vec<_>>(),
             })).collect::<Vec<_>>(),
+            "later": later,
             "shadowed": self.shadowed.iter().map(diag_json).collect::<Vec<_>>(),
             "conflicts": self.conflicts.iter().map(diag_json).collect::<Vec<_>>(),
-            "apply_order": self.ticks.iter().map(|(t, xs)| json!({
-                "tick": t,
-                "addresses": xs,
-            })).collect::<Vec<_>>(),
-            "unscheduled": self.unscheduled,
             "moved": self.moved.iter().map(|(old, new)| json!({
                 "from": {"address": old.to_string(), "type": old.typ, "name": old.name},
                 "to": {"address": new.to_string(), "type": new.typ, "name": new.name},
             })).collect::<Vec<_>>(),
-            "denied": self.denies,
+            "denied": self.denies.iter().enumerate().map(|(i, text)| {
+                let row = self.denied.get(i);
+                json!({
+                    "text": text,
+                    "message": row.map(|r| r.message.clone()),
+                    "address": row.map(|r| r.addr.clone()).filter(|a| !a.is_empty()),
+                    "site": row.and_then(|r| r.site.clone()).filter(|_| self.why != Why::None),
+                })
+            }).collect::<Vec<_>>(),
+            "held_for_approval": self.approvals.iter().map(|a| json!({
+                "address": a.addr,
+                "reason": a.reason,
+                "site": a.site.as_ref().filter(|_| self.why != Why::None),
+            })).collect::<Vec<_>>(),
+            "apply": self.apply_line(),
         })
+    }
+
+    fn change_json(&self, d: &Deformation) -> Json {
+        let explained = self.why != Why::None;
+        let mut m = serde_json::Map::new();
+        m.insert("kind".into(), json!(kind_name(&d.kind)));
+        m.insert("address".into(), json!(d.addr.to_string()));
+        m.insert("type".into(), json!(d.addr.typ));
+        m.insert("name".into(), json!(d.addr.name));
+        match d.kind {
+            ActionKind::Replace { create_first } => {
+                m.insert("create_first".into(), json!(create_first));
+                m.insert("immutable".into(), json!(d.forces));
+            }
+            ActionKind::DeleteDeposed => {
+                m.insert("deposed".into(), json!(true));
+            }
+            _ => {}
+        }
+        m.insert(
+            "changes".into(),
+            d.lines
+                .iter()
+                .map(|l| line_json(l, explained))
+                .collect::<Vec<_>>()
+                .into(),
+        );
+        let held: Vec<Json> = self
+            .approvals
+            .iter()
+            .filter(|a| a.addr == d.addr.to_string())
+            .map(|a| json!({"approval": a.reason, "site": a.site.as_ref().filter(|_| explained)}))
+            .collect();
+        if !held.is_empty() {
+            m.insert("held".into(), held.into());
+        }
+        if explained {
+            m.insert("site".into(), json!(d.site));
+            m.insert("because".into(), json!(d.because));
+        }
+        if self.why == Why::Full {
+            m.insert("why".into(), json!(d.why));
+        }
+        Json::Object(m)
     }
 }
 
-/// Why deformation `d` is planned ([`Report::explain`]).
+/// Why change `d` is planned ([`Report::explain`] at `Full`).
 fn explanation(p: &tree::Printer, res: &EvalResult, d: &Deformation) -> Vec<Because> {
     let state = |text: &str| {
         vec![Because {
@@ -1377,32 +2346,7 @@ fn explanation(p: &tree::Printer, res: &EvalResult, d: &Deformation) -> Vec<Beca
     }
 }
 
-fn deformation_json(d: &Deformation, explained: bool) -> Json {
-    let mut m = serde_json::Map::new();
-    m.insert("action".into(), json!(kind_name(&d.kind)));
-    m.insert("address".into(), json!(d.addr.to_string()));
-    m.insert("type".into(), json!(d.addr.typ));
-    m.insert("name".into(), json!(d.addr.name));
-    match d.kind {
-        ActionKind::Replace { create_first } => {
-            m.insert("create_first".into(), json!(create_first));
-        }
-        ActionKind::DeleteDeposed => {
-            m.insert("deposed".into(), json!(true));
-        }
-        _ => {}
-    }
-    m.insert(
-        "changes".into(),
-        d.lines.iter().map(line_json).collect::<Vec<_>>().into(),
-    );
-    if explained {
-        m.insert("why".into(), json!(d.why));
-    }
-    Json::Object(m)
-}
-
-fn line_json(l: &Line) -> Json {
+fn line_json(l: &Line, explained: bool) -> Json {
     let op = match l.op {
         Op::Leaf => "set",
         Op::Add => "add",
@@ -1416,8 +2360,15 @@ fn line_json(l: &Line) -> Json {
     if !l.leaves.is_empty() {
         m.insert(
             "leaves".into(),
-            l.leaves.iter().map(line_json).collect::<Vec<_>>().into(),
+            l.leaves
+                .iter()
+                .map(|x| line_json(x, explained))
+                .collect::<Vec<_>>()
+                .into(),
         );
+    }
+    if explained && let Some(s) = &l.site {
+        m.insert("site".into(), json!(s));
     }
     Json::Object(m)
 }
@@ -1438,142 +2389,76 @@ fn diag_json(d: &Diag) -> Json {
     })
 }
 
-impl Report {
-    /// Deformations in order, a copy's under it (R-67): `+ network["blue"]`
-    /// at the place of its first resource, the resources indented beneath,
-    /// a copy inside it nested again. The copy's marker is its
-    /// `deformation` row's kind (`zset::Instances::row_kind`): `-` when the
-    /// program wants none of its resources, `+` when one is created, else
-    /// `~`.
-    fn write_deformations(&self, out: &mut String, ds: &[Deformation], style: Style) {
-        let all: Vec<&Deformation> = ds.iter().collect();
-        self.write_level(out, &all, None, "", style);
-    }
-
-    fn write_level(
-        &self,
-        out: &mut String,
-        ds: &[&Deformation],
-        outer: Option<&Address>,
-        indent: &str,
-        style: Style,
-    ) {
-        // The copy directly under `outer` a deformation is in, if any.
-        let under = |d: &Deformation| -> Option<Address> {
-            let chain = self.instances.enclosing(&d.addr);
-            let at = match outer {
-                None => chain.len(),
-                Some(o) => chain.iter().position(|a| a == o)?,
-            };
-            at.checked_sub(1).map(|i| chain[i].clone())
-        };
-        let mut done: BTreeSet<Address> = BTreeSet::new();
-        for d in ds {
-            let Some(copy) = under(d) else {
-                write_deformation(out, d, indent, style);
-                continue;
-            };
-            if !done.insert(copy.clone()) {
-                continue;
-            }
-            let members: Vec<&Deformation> = ds
-                .iter()
-                .filter(|m| self.instances.enclosing(&m.addr).contains(&copy))
-                .copied()
-                .collect();
-            let kinds: Vec<&str> = members
-                .iter()
-                .filter_map(|m| crate::zset::deformation_kind(&m.kind, false))
-                .collect();
-            let kind = match self.instances.row_kind(&copy, &kinds) {
-                "delete" => ActionKind::Delete,
-                "create" => ActionKind::Create,
-                _ => ActionKind::Update,
-            };
-            let addr = Redactor::default().cell(&crate::zset::reference(&copy));
-            out.push_str(&format!(
-                "{indent}{} {}\n",
-                style.marker(&kind),
-                style.paint(Paint::Bold, &addr)
-            ));
-            self.write_level(out, &members, Some(&copy), &format!("{indent}  "), style);
-        }
-    }
-}
-
-fn write_deformation(out: &mut String, d: &Deformation, indent: &str, style: Style) {
-    let note = match d.kind {
-        ActionKind::Drift => {
-            "  (drift: a fresh null where the world has a value; its identity is stale)"
-        }
-        ActionKind::DeleteDeposed => "  (deposed)",
-        ActionKind::Replace { .. } => "  (replace)",
-        _ => "",
+fn write_line(
+    rows: &mut Vec<Row>,
+    kind: &ActionKind,
+    l: &Line,
+    indent: &str,
+    style: Style,
+    right: Vec<String>,
+) {
+    let mut push = |plain: String, painted: String, right: Vec<String>| {
+        rows.push(Row::new(&plain, painted).with(right))
     };
-    // The resource as `dform query deformation`'s row spells it (R-63).
-    let addr = Redactor::default().cell(&crate::zset::reference(&d.addr));
-    out.push_str(&format!(
-        "{indent}{} {}{note}\n",
-        style.marker(&d.kind),
-        style.paint(Paint::Bold, &addr)
-    ));
-    // Keep plan output readable.
-    let max = 40usize;
-    let inner = format!("{indent}  ");
-    for (i, l) in d.lines.iter().enumerate() {
-        if i == max {
-            out.push_str(&format!(
-                "{inner}... ({} more changes)\n",
-                d.lines.len() - max
-            ));
-            break;
-        }
-        write_line(out, &d.kind, l, &inner, style);
-    }
-    for b in &d.why {
-        out.push_str(&format!("{inner}{}\n", b.line()));
-    }
-}
-
-fn write_line(out: &mut String, kind: &ActionKind, l: &Line, indent: &str, style: Style) {
-    let shown = |v: &Shown| style.shown(v);
     match l.op {
         Op::Add | Op::Remove => {
-            let (sign, v) = if l.op == Op::Add {
-                (style.paint(Paint::Create, "+"), &l.after)
+            let (sign, paint, v) = if l.op == Op::Add {
+                ("+", Paint::Create, &l.after)
             } else {
-                (style.paint(Paint::Delete, "-"), &l.before)
+                ("-", Paint::Delete, &l.before)
             };
+            let painted_sign = style.paint(paint, sign);
             if l.leaves.is_empty() {
-                out.push_str(&format!("{indent}{sign} {} = {}\n", l.path, shown(v)));
+                push(
+                    format!("{indent}{sign} {} = {}", l.path, v.text()),
+                    format!("{indent}{painted_sign} {} = {}", l.path, style.shown(v)),
+                    right,
+                );
                 return;
             }
-            out.push_str(&format!("{indent}{sign} {}\n", l.path));
+            push(
+                format!("{indent}{sign} {}", l.path),
+                format!("{indent}{painted_sign} {}", l.path),
+                right,
+            );
             let inner = if l.op == Op::Add {
                 ActionKind::Create
             } else {
                 ActionKind::Delete
             };
             for x in &l.leaves {
-                write_line(out, &inner, x, &format!("{indent}    "), style);
+                write_line(rows, &inner, x, &format!("{indent}    "), style, vec![]);
             }
         }
         Op::Leaf => match kind {
-            ActionKind::Create | ActionKind::Adopt => {
-                out.push_str(&format!("{indent}{} = {}\n", l.path, shown(&l.after)))
-            }
-            ActionKind::Delete | ActionKind::DeleteDeposed => {
-                out.push_str(&format!("{indent}{} was {}\n", l.path, shown(&l.before)))
-            }
+            ActionKind::Create | ActionKind::Adopt => push(
+                format!("{indent}{} = {}", l.path, l.after.text()),
+                format!("{indent}{} = {}", l.path, style.shown(&l.after)),
+                right,
+            ),
+            ActionKind::Delete | ActionKind::DeleteDeposed => push(
+                format!("{indent}{} was {}", l.path, l.before.text()),
+                format!("{indent}{} was {}", l.path, style.shown(&l.before)),
+                right,
+            ),
             ActionKind::Update
             | ActionKind::Drift
             | ActionKind::Pending
-            | ActionKind::Replace { .. } => out.push_str(&format!(
-                "{indent}{}: {} -> {}\n",
-                l.path,
-                shown(&l.before),
-                shown(&l.after)
-            )),
+            | ActionKind::Replace { .. } => push(
+                format!(
+                    "{indent}{}: {} → {}",
+                    l.path,
+                    l.before.text(),
+                    l.after.text()
+                ),
+                format!(
+                    "{indent}{}: {} → {}",
+                    l.path,
+                    style.shown(&l.before),
+                    style.shown(&l.after)
+                ),
+                right,
+            ),
             ActionKind::Noop => {}
         },
     }

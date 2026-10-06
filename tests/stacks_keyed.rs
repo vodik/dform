@@ -32,7 +32,7 @@ fn planning_prod_after_applying_staging_proposes_creates() {
     let prod = s.run(&["plan", "app.df", "env=prod"]).success();
     assert_eq!(
         prod.summary(),
-        "plan: 1 deformation (1 create)",
+        "plan: 1 change (1 create) over 1 tick",
         "{}",
         prod.stdout
     );
@@ -40,11 +40,13 @@ fn planning_prod_after_applying_staging_proposes_creates() {
     let staging = s.run(&["plan", "app.df"]).success();
     assert_eq!(
         staging.summary(),
-        "stack app is undeformed",
+        "stack app is up to date",
         "{}",
         staging.stdout
     );
-    let size = s.run(&["plan", "--set", "size=2", "app.df"]).success();
+    let size = s
+        .run(&["plan", "--why=none", "--set", "size=2", "app.df"])
+        .success();
     assert!(
         size.stdout
             .contains("~ net.vpc[\"main\"]\n  size: 1 -> 2\n"),
@@ -64,7 +66,7 @@ fn dform_df_plans_prod_after_staging_as_creates() {
     let prod = s.run(&["plan", file, "env=prod"]).success();
     let summary = prod.summary();
     assert!(
-        summary.starts_with("plan: ") && summary.ends_with(" create)"),
+        summary.starts_with("plan: ") && summary.ends_with(" create) over 1 tick"),
         "{}",
         prod.stdout
     );
@@ -231,7 +233,7 @@ fn use_of_a_stack_reads_one_deployment() {
     };
     s.write("stacks/web.df", &web("app[env=\"prod\"].url"));
     s.run(&["apply", "app", "env=prod"]).success();
-    let r = s.run(&["plan", "web"]).success();
+    let r = s.run(&["plan", "--why=none", "web"]).success();
     assert!(
         r.stdout
             .contains("+ net.vpc[\"edge\"]\n  name = \"https://prod.example\"\n"),
@@ -279,7 +281,9 @@ fn rekey_lists_what_the_key_renames_and_moves_the_state() {
     let registry = s.read("dform.state/stacks.json");
     assert!(registry.contains("\"app[env=stg]\""), "{registry}");
     assert!(!registry.contains("env=staging"), "{registry}");
-    let r = s.run(&["plan", "app.df", "env=stg"]).success();
+    let r = s
+        .run(&["plan", "--why=none", "app.df", "env=stg"])
+        .success();
     assert!(
         r.stdout
             .contains("~ net.vpc[\"main\"]\n  name: \"main-staging\" -> \"main-stg\"\n"),
@@ -320,7 +324,7 @@ resource net.vpc main {
     let r = s.run(&["plan", "app.df", "env=stg"]).success();
     assert_eq!(
         r.summary(),
-        "stack app is undeformed",
+        "stack app is up to date",
         "{}{}",
         r.stdout,
         r.stderr
@@ -339,7 +343,7 @@ fn rekey_moves_the_state_from_before_the_stack_was_keyed() {
     s.run(&["stack", "rekey", "app", "env=staging"]).success();
     assert!(!s.path("dform.state/app/state.json").exists());
     let r = s.run(&["plan", "app.df"]).success();
-    assert_eq!(r.summary(), "stack app is undeformed", "{}", r.stdout);
+    assert_eq!(r.summary(), "stack app is up to date", "{}", r.stdout);
 }
 
 const FIXED: &str = r#"
@@ -560,7 +564,7 @@ fn apply_asks_unless_yes() {
     assert!(s.path("dform.state/app/env=prod/state.json").exists());
     // Undeformed: nothing to confirm.
     let r = apply(&["apply", "app.df", "env=prod"]).success();
-    assert!(r.stdout.contains("stack app is undeformed"), "{}", r.stdout);
+    assert!(r.stdout.contains("stack app is up to date"), "{}", r.stdout);
 
     // A reviewed plan file is applied without asking.
     apply(&["plan", "--out", "stg.json", "app.df", "env=stg"]).success();

@@ -33,7 +33,7 @@ fn project(name: &str) -> Scratch {
 fn a_target_is_a_name_a_file_or_a_deployment() {
     let s = project("target-forms");
     let by_name = s.run(&["plan", "net"]).success();
-    assert_eq!(by_name.summary(), "plan: 1 deformation (1 create)");
+    assert_eq!(by_name.summary(), "plan: 1 change (1 create) over 1 tick");
     let by_file = s.run(&["plan", "stacks/net.df"]).success();
     assert_eq!(by_file.stdout, by_name.stdout);
 
@@ -91,11 +91,11 @@ fn no_target_is_the_one_stack_here_else_a_listing() {
     s.write("net-only/dform.toml", "[project]\nedition = \"2026\"\n");
     s.write("net-only/stacks/net.df", NET);
     let r = s.run_in("net-only", &["plan"]).success();
-    assert_eq!(r.summary(), "plan: 1 deformation (1 create)");
+    assert_eq!(r.summary(), "plan: 1 change (1 create) over 1 tick");
     // A directory with its own dform.toml is another project: the outer
     // one does not see its stacks.
     let r = s.run(&["plan", "net"]).success();
-    assert_eq!(r.summary(), "plan: 1 deformation (1 create)");
+    assert_eq!(r.summary(), "plan: 1 change (1 create) over 1 tick");
 
     let r = s.run(&["plan", "nope"]).failure();
     assert!(
@@ -146,7 +146,7 @@ fn a_stack_is_a_file_named_after_itself() {
     s.write("shop.df", NET);
     s.write("modules/m.df", "\n");
     let r = s.run(&["plan", "shop"]).success();
-    assert_eq!(r.summary(), "plan: 1 deformation (1 create)");
+    assert_eq!(r.summary(), "plan: 1 change (1 create) over 1 tick");
     let r = s.run(&["stack", "list"]).success();
     assert_eq!(
         r.stdout,
@@ -300,7 +300,7 @@ default(k, v) where project_default(k, v)
     );
     s.run(&["plan", "p", "--out", "plan.json"]).success();
     let r = s.run(&["apply", "plan.json"]).success();
-    assert!(r.stdout.contains("size: 1 -> 2"), "{}", r.stdout);
+    assert!(r.stdout.contains("size: 1 → 2"), "{}", r.stdout);
     // The manifest as facts.
     let r = s.run(&["query", "pinned(N, C)", "p"]).success();
     assert!(r.stdout.contains(r#""cloud"  "^2.1""#), "{}", r.stdout);
@@ -422,7 +422,7 @@ fn a_backend_names_the_key() {
     s.run(&["apply", "app", "env=prod"]).success();
     assert!(s.path("state/app-prod/state.json").exists());
     let r = s.run(&["plan", "app", "env=prod"]).success();
-    assert_eq!(r.summary(), "stack app is undeformed", "{}", r.stdout);
+    assert_eq!(r.summary(), "stack app is up to date", "{}", r.stdout);
 }
 
 #[test]
@@ -605,7 +605,7 @@ fn outside_a_project_only_what_writes_no_state_runs() {
     let s = Scratch::adopt(dir);
     s.write("net.df", NET);
     let r = s.run(&["plan", "net.df"]).success();
-    assert_eq!(r.summary(), "plan: 1 deformation (1 create)");
+    assert_eq!(r.summary(), "plan: 1 change (1 create) over 1 tick");
     for args in [
         &["apply", "net.df"][..],
         &["plan", "net.df", "--out", "plan.json"],

@@ -90,7 +90,7 @@ fn plan_and_apply_redact_the_labeled_secret_but_not_the_mislabeled_one() {
         r.stdout
     );
     assert!(
-        r.stdout.contains(r#"password: (sensitive) -> (sensitive)"#),
+        r.stdout.contains(r#"password: (sensitive) → (sensitive)"#),
         "{}",
         r.stdout
     );
@@ -580,7 +580,7 @@ fn a_secret_output_reaches_a_sensitive_field_in_another_stack() {
     };
 
     // `apply app` applies prod first, which takes its input from `--set`.
-    let r = dev(&["apply", "app", "--set", &set]).success();
+    let r = dev(&["apply", "app", "--set", &set, "--why=none"]).success();
     for out in [&r.stdout, &r.stderr] {
         assert!(!out.contains(PRODUCED), "{out}");
     }
@@ -592,7 +592,7 @@ fn a_secret_output_reaches_a_sensitive_field_in_another_stack() {
     );
     assert_eq!(materialized(&s), PRODUCED);
     let r = dev(&["plan", "app"]).success();
-    assert_eq!(r.summary(), "stack app is undeformed", "{}", r.stdout);
+    assert_eq!(r.summary(), "stack app is up to date", "{}", r.stdout);
 
     // The producer's secret changes: the reader's field is updated, in one
     // apply of the reader that applies the producer first.
@@ -671,7 +671,7 @@ fn a_derived_password_is_stable_and_never_stored() {
     let r = s.run(&["apply"]).success();
     outputs.extend([r.stdout, r.stderr]);
     let r = s.run(&["plan", "--out", "plan.json"]).success();
-    assert_eq!(r.summary(), "stack crud_api is undeformed", "{}", r.stdout);
+    assert_eq!(r.summary(), "stack crud_api is up to date", "{}", r.stdout);
     outputs.extend([r.stdout, r.stderr]);
     assert_eq!(
         world(&s)["resources"]["google.sql_user::crud_user"]["attrs"]["password"],

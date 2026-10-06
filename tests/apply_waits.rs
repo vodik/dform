@@ -56,8 +56,9 @@ fn a_tick_waits_until_the_world_reaches_the_value() {
     );
     assert!(r.stderr.contains(STOPPED), "{}", r.stderr);
     assert!(
-        r.stdout
-            .contains("tick 3:\nplan: 1 deformation (1 create)\n"),
+        r.stdout.contains(
+            "plan: 1 change (1 create) over 1 tick\n\ntick 3  1 change, now that tick 2 reported\n"
+        ),
         "{}",
         r.stdout
     );
@@ -195,7 +196,7 @@ fn an_extern_that_says_not_yet_is_asked_again() {
     );
     assert!(
         r.stdout
-            .contains("tick 2:\nplan: 3 deformations (3 create)\n"),
+            .contains("plan: 3 changes (3 create) over 1 tick\n\ntick 2  3 changes, now that tick 1 reported\n"),
         "{}",
         r.stdout
     );

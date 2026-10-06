@@ -50,7 +50,8 @@ fn either_destroys_first_unless_lifecycle_says_otherwise() {
     );
     let r = r.success();
     assert!(
-        r.stdout.contains("-/+ net.subnet[\"a\"]  (replace)"),
+        r.stdout
+            .contains("± net.subnet[\"a\"]                        cidr is immutable"),
         "{}",
         r.stdout
     );
@@ -61,7 +62,8 @@ fn either_destroys_first_unless_lifecycle_says_otherwise() {
     );
     let r = r.success();
     assert!(
-        r.stdout.contains("+/- net.subnet[\"a\"]  (replace)"),
+        r.stdout
+            .contains("± net.subnet[\"a\"]  (the new one first)"),
         "{}",
         r.stdout
     );
@@ -78,7 +80,8 @@ fn create_first_needs_no_lifecycle_fact() {
     );
     let r = r.success();
     assert!(
-        r.stdout.contains("+/- net.subnet[\"a\"]  (replace)"),
+        r.stdout
+            .contains("± net.subnet[\"a\"]  (the new one first)"),
         "{}",
         r.stdout
     );
@@ -90,7 +93,7 @@ fn create_first_needs_no_lifecycle_fact() {
     assert!(
         r.success()
             .stdout
-            .contains("+/- net.subnet[\"a\"]  (replace)"),
+            .contains("± net.subnet[\"a\"]  (the new one first)"),
         "redundant lifecycle fact"
     );
 }
@@ -121,7 +124,7 @@ fn create_before_destroy_on_a_destroy_first_type_is_an_error() {
     assert!(
         r.success()
             .stdout
-            .contains("-/+ net.subnet[\"a\"]  (replace)"),
+            .contains("± net.subnet[\"a\"]                        cidr is immutable"),
         "destroy_first without the fact"
     );
 }

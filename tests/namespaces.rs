@@ -22,7 +22,7 @@ fn a_set_over_a_namespace_reaches_its_types_only() {
          set r.metadata.labels.owner = \"ops\" where r in k8s\n\
          every(r) where r in resource\n",
     );
-    let r = mock(&s, &["plan"]).success();
+    let r = mock(&s, &["plan", "--why=none"]).success();
     assert!(
         r.stdout.contains(
             "+ k8s.config_map[\"cfg\"]\n  metadata.labels.owner = \"ops\"\n  metadata.name = \"cfg\"\n"
@@ -68,7 +68,7 @@ fn a_deformation_row_binds_through_the_namespace() {
         "\n\nprovider fake\nprovider k8s\n\n\
          deny \"a k8s delete: ${r}\" where deformation(\"delete\", r, _), r in k8s\n",
     );
-    let r = mock(&s, &["plan"]).failure();
+    let r = mock(&s, &["plan", "--why=none"]).failure();
     assert!(
         r.stdout
             .contains("denied:\n! a k8s delete: k8s.namespace[\"ns\"]\n"),

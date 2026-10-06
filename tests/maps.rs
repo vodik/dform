@@ -71,7 +71,7 @@ fn a_map_attribute_and_column_check_their_values() {
         "p.df",
         "\nprovider fake\nresource compute.vm a { labels = { team: \"core\", tier: 1 } }\n",
     );
-    let r = s.run(&["plan", "p.df"]).failure();
+    let r = s.run(&["plan", "--why=none", "p.df"]).failure();
     assert!(
         r.stderr.contains(
             "compute.vm[\"a\"].labels is map(string): its key \"tier\" is string, not the int 1"
@@ -88,14 +88,14 @@ fn a_map_attribute_and_column_check_their_values() {
         "\ninput t from json(\"t.json\")\ndecl t(n: string, tags: map(string))\nprovider fake\n\
          resource compute.vm \"${n}\" { labels = tags } where t(n, tags)\n",
     );
-    let r = s.run(&["plan", "p.df"]).failure();
+    let r = s.run(&["plan", "--why=none", "p.df"]).failure();
     assert!(
         r.stderr.contains("column tags: {x: 2} is not map(string)"),
         "{}",
         r.stderr
     );
     s.write("t.json", "[{\"n\": \"a\", \"tags\": {\"x\": \"1\"}}]");
-    let r = s.run(&["plan", "p.df"]).success();
+    let r = s.run(&["plan", "--why=none", "p.df"]).success();
     assert!(
         r.stdout.contains("+ compute.vm[\"a\"]\n  labels.x = \"1\""),
         "{}",
@@ -121,7 +121,7 @@ fn a_map_field_and_a_map_column() {
         "p.df",
         "\ndecl p(n: string, sizes: map(int))\nprovider fake\np(\"a\", { x: \"big\" })\n",
     );
-    let r = s.run(&["plan", "p.df"]).failure();
+    let r = s.run(&["plan", "--why=none", "p.df"]).failure();
     assert!(
         r.stderr.contains(
             "`p`'s column `sizes` is map(int): its key \"x\" is int, not the string \"big\""
@@ -170,7 +170,7 @@ fn set_from_gives_a_map_input_its_keys() {
         "\ninput labels: map(string) = {}\nprovider fake\nset from yaml(\"c.yaml\")\n",
     );
     s.write("c.yaml", "labels:\n  owner: ops\nlabelz:\n  x: y\n");
-    let r = s.run(&["plan", "p.df"]).failure();
+    let r = s.run(&["plan", "--why=none", "p.df"]).failure();
     assert!(
         r.stderr
             .contains("c.yaml:4: labelz.x is not an input (its inputs: labels)")

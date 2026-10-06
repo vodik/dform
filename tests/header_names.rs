@@ -20,7 +20,7 @@ fn a_bare_name_shadowing_a_let_declares_and_its_read_is_ambiguous() {
     );
     let r = mock(&s, &["plan"]).success();
     assert!(
-        r.stdout.contains("+ net.vpc[\"env\"]\n") && r.stdout.contains("vpc = ?net.vpc[\"env\"]"),
+        r.stdout.contains("  + net.vpc[\"env\"]  ") && r.stdout.contains("vpc = ?net.vpc[\"env\"]"),
         "{}",
         r.stdout
     );
@@ -65,7 +65,7 @@ fn a_clause_bound_bare_name_is_an_error() {
          resource net.vpc \"${t}\" { cidr = \"10.0.0.0/16\" } where tenant(t)\n",
     );
     let r = mock(&s, &["plan"]).success();
-    assert!(r.stdout.contains("+ net.vpc[\"a\"]\n"), "{}", r.stdout);
+    assert!(r.stdout.contains("  + net.vpc[\"a\"]  "), "{}", r.stdout);
 }
 
 /// `config.base_domain` is the module's item; any other read through
@@ -84,11 +84,11 @@ fn a_module_item_reads_the_module_and_another_read_is_ambiguous() {
     );
     let r = mock(&s, &["plan"]).success();
     assert!(
-        r.stdout.contains(
-            "+ net.vpc[\"config\"]\n  cidr = \"10.0.0.0/16\"\n  tags.d = \"example.org\"\n"
-        ) && r
-            .stdout
-            .contains("+ net.subnet[\"s\"]\n  cidr = \"10.0.0.0/16\"\n"),
+        r.stdout
+            .contains("      cidr = \"10.0.0.0/16\"\n      tags.d = \"example.org\"  ")
+            && r.stdout.contains("  + net.subnet[\"s\"]  ")
+            && r.stdout.contains("p.df:6\n      cidr = \"10.0.0.0/16\"  ")
+            && r.stdout.contains("  net.vpc[\"config\"].cidr\n"),
         "{}",
         r.stdout
     );

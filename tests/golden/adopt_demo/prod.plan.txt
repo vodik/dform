@@ -1,13 +1,13 @@
 exit: ok
 -- stdout --
-plan: 1 deformation (1 adopt)
-definite:
-> net.vpc["network/vpc"]
-  adopted_id = "net.vpc:existing-prod-vpc"
-  cidr = "10.20.0.0/16"
-  owner_tag = "team-a"
-  tags.component = "network"
-apply order:
-  tick 1
-    net.vpc["network/vpc"]
+plan: 1 change (1 adopt) over 1 tick
+
+tick 1  1 change, applies now
+  > net.vpc["network/vpc"]                      network.df:7  (use network)
+      adopted_id = "net.vpc:existing-prod-vpc"  stacks/adopt_demo.df:26
+      cidr = "10.20.0.0/16"                     stacks/adopt_demo.df:13
+      owner_tag = "team-a"                      stacks/adopt_demo.df:38
+      tags.component = "network"                { env, component: "network" }
+
+apply: tick 1 now
 -- stderr --

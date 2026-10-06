@@ -27,30 +27,41 @@ fn plan_json_has_every_section() {
     let s = Scratch::new("json-gke");
     let p = gke_json(&s);
     assert_eq!(p["stack"], "gke_two_phase");
-    assert_eq!(p["undeformed"], false);
-    assert_eq!(p["summary"]["deformations"], 3);
-    assert_eq!(p["summary"]["create"], 3);
-    assert_eq!(p["summary"]["pending"], 4);
+    assert_eq!(p["up_to_date"], false);
+    assert_eq!(p["summary"]["changes"], 6);
+    assert_eq!(p["summary"]["create"], 6);
+    assert_eq!(p["summary"]["ticks"], 2);
     assert_eq!(p["summary"]["undetermined"], 1);
-    assert_eq!(p["definite"].as_array().unwrap().len(), 3);
-    let subnet = &p["definite"][0];
-    assert_eq!(subnet["action"], "create");
+    let ticks = p["ticks"].as_array().unwrap();
+    assert_eq!(ticks.len(), 2);
+    assert_eq!(ticks[0]["tick"], 1);
+    assert_eq!(ticks[0]["after"], Value::Null);
+    assert_eq!(ticks[0]["changes"].as_array().unwrap().len(), 3);
+    let subnet = &ticks[0]["changes"][0];
+    assert_eq!(subnet["kind"], "create");
     assert_eq!(
         subnet["address"],
         "google.compute_subnetwork[\"gke_subnet\"]"
     );
     assert_eq!(subnet["type"], "google.compute_subnetwork");
+    let cidr = &subnet["changes"][0];
     assert_eq!(
-        subnet["changes"][0],
-        json!({"op": "set", "path": "ip_cidr_range", "before": null, "after": "10.141.76.0/22"})
+        (&cidr["op"], &cidr["path"], &cidr["before"], &cidr["after"]),
+        (
+            &json!("set"),
+            &json!("ip_cidr_range"),
+            &Value::Null,
+            &json!("10.141.76.0/22")
+        )
     );
-    let block = &p["pending"][0];
+    // The second tick: after the first, with the values it waits on.
+    assert_eq!(ticks[1]["tick"], 2);
+    assert_eq!(ticks[1]["after"], 1);
     assert_eq!(
-        block["on"][0],
+        ticks[1]["waits_on"][0],
         json!({"null": "google.container_cluster[\"pngu\"].ca_certificate", "class": "open"})
     );
-    assert_eq!(block["resolves_after"], 1);
-    let secret = block["deformations"]
+    let secret = ticks[1]["changes"]
         .as_array()
         .unwrap()
         .iter()
@@ -66,13 +77,22 @@ fn plan_json_has_every_section() {
         password["after"],
         json!({"sensitive": "google.secret_manager_secret_version[\"db_pw\"].secret_data"})
     );
+    // `later`: the rule that may add an unknown number, and the deny
+    // undetermined until a tick.
+    let later = p["later"].as_array().unwrap();
+    assert_eq!(later[0]["kind"], "group");
     assert_eq!(
-        p["pending_groups"][0]["pattern"],
-        "google.container_node_pool[?]"
+        later[0]["address"],
+        "google.container_node_pool[\"np-${z}\"]"
     );
-    assert_eq!(p["undetermined"][0]["kind"], "undetermined");
-    assert_eq!(p["undetermined"][0]["after"], 1);
-    assert_eq!(p["apply_order"][1]["tick"], 2);
+    assert_eq!(later[1]["kind"], "deny");
+    assert_eq!(later[1]["status"], "undetermined");
+    assert_eq!(later[1]["after"], 1);
+    assert_eq!(
+        p["apply"],
+        "apply: tick 1 now, then tick 2 when tick 1 reports; `later` is planned again when \
+         tick 1 reports, and apply asks before what it adds"
+    );
     assert_eq!(p["shadowed"], json!([]));
     assert_eq!(p["conflicts"], json!([]));
 }
@@ -82,7 +102,7 @@ fn plan_json_has_every_section() {
 fn plan_json_nulls_carry_their_class() {
     let s = Scratch::new("json-null");
     let p = gke_json(&s);
-    let addr = p["definite"]
+    let addr = p["ticks"][0]["changes"]
         .as_array()
         .unwrap()
         .iter()
@@ -101,8 +121,8 @@ fn plan_json_nulls_carry_their_class() {
 }
 
 #[test]
-fn an_undeformed_stack_is_a_document_too() {
-    let s = Scratch::new("json-undeformed");
+fn an_up_to_date_stack_is_a_document_too() {
+    let s = Scratch::new("json-up-to-date");
     s.write(
         "p.df",
         "\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\nprovider fake\n",
@@ -117,8 +137,9 @@ fn an_undeformed_stack_is_a_document_too() {
         ))
         .success();
     let p: Value = serde_json::from_str(&r.stdout).unwrap();
-    assert_eq!(p["undeformed"], true);
-    assert_eq!(p["summary"]["deformations"], 0);
+    assert_eq!(p["up_to_date"], true);
+    assert_eq!(p["summary"]["changes"], 0);
+    assert_eq!(p["ticks"], json!([]));
 }
 
 #[test]
@@ -214,10 +235,12 @@ fn replace_denied_and_moved_are_in_the_document() {
         .failure();
     let p: Value = serde_json::from_str(&r.stdout).unwrap();
     assert_eq!(p["summary"]["replace"], 1);
-    assert_eq!(p["definite"][0]["action"], "replace");
-    assert_eq!(p["definite"][0]["create_first"], false);
+    let replace = &p["ticks"][0]["changes"][0];
+    assert_eq!(replace["kind"], "replace");
+    assert_eq!(replace["create_first"], false);
+    assert_eq!(replace["immutable"], json!(["cidr"]));
     assert_eq!(
-        p["denied"][0],
+        p["denied"][0]["text"],
         "lifecycle prevent_destroy: the plan would replace net.vpc[\"main\"]"
     );
 
@@ -240,13 +263,15 @@ fn replace_denied_and_moved_are_in_the_document() {
             "to": {"address": "net.vpc[\"core\"]", "type": "net.vpc", "name": "core"}
         })
     );
-    assert_eq!(p["undeformed"], true);
+    assert_eq!(p["up_to_date"], true);
 }
 
-/// R-15: `plan --why --json` carries each deformation's explanation as a
-/// `why` array of `{kind, at, text}`; without `--why` there is none.
+/// R-15, R-79: `plan --why --json` carries each change's explanation as a
+/// `why` array of `{kind, at, text}`; by default (`--why=line`) each change
+/// and attribute carries its `site` and the change its `because`, and
+/// `--why=none` carries neither.
 #[test]
-fn plan_json_why_explains_each_deformation() {
+fn plan_json_why_explains_each_change() {
     let s = Scratch::new("json-why");
     let prog = repo().join("examples/gke/stacks/gke_two_phase.df");
     let run = |extra: &[&str]| -> Value {
@@ -265,18 +290,12 @@ fn plan_json_why_explains_each_deformation() {
         serde_json::from_str(&r.stdout).unwrap_or_else(|e| panic!("{e}: {}", r.stdout))
     };
     let p = run(&["--why"]);
-    let subnet = &p["definite"][0];
+    let subnet = &p["ticks"][0]["changes"][0];
     assert_eq!(subnet["name"], "gke_subnet");
     let why = subnet["why"].as_array().unwrap();
     assert_eq!(why[0]["kind"], "rule");
-    assert!(
-        why[0]["at"]
-            .as_str()
-            .unwrap()
-            .ends_with("examples/gke/stacks/gke_two_phase.df:38"),
-        "{}",
-        why[0]
-    );
+    // Relative to the project's root, as every site is.
+    assert_eq!(why[0]["at"], "stacks/gke_two_phase.df:38", "{}", why[0]);
     assert!(
         why[0]["text"]
             .as_str()
@@ -294,8 +313,8 @@ fn plan_json_why_explains_each_deformation() {
                 == "input gke = {control_plane_cidr: 172.16.3.96/28, subnet_cidr: 10.141.76.0/22}"),
         "{subnet}"
     );
-    // A pending deformation is explained too.
-    let pending = p["pending"][0]["deformations"].as_array().unwrap();
+    // A change of a later tick is explained too.
+    let pending = p["ticks"][1]["changes"].as_array().unwrap();
     assert!(
         pending
             .iter()
@@ -303,9 +322,19 @@ fn plan_json_why_explains_each_deformation() {
         "{pending:?}"
     );
     let p = run(&[]);
-    assert!(
-        p["definite"][0].get("why").is_none(),
-        "{}",
-        p["definite"][0]
+    let subnet = &p["ticks"][0]["changes"][0];
+    assert!(subnet.get("why").is_none(), "{subnet}");
+    assert_eq!(
+        subnet["site"]["at"], "stacks/gke_two_phase.df:38",
+        "{subnet}"
     );
+    assert_eq!(
+        subnet["changes"][1]["site"]["entry"], "name = \"${name}-gke-subnet\"",
+        "{subnet}"
+    );
+    assert!(subnet.get("because").is_some(), "{subnet}");
+    let p = run(&["--why=none"]);
+    let subnet = &p["ticks"][0]["changes"][0];
+    assert!(subnet.get("site").is_none(), "{subnet}");
+    assert!(subnet["changes"][0].get("site").is_none(), "{subnet}");
 }

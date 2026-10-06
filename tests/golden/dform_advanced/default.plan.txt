@@ -1,83 +1,68 @@
 exit: ok
 -- stdout --
-plan: 16 deformations (16 create)
-definite:
-+ net.route["rt-core_a-core_b"]
-  destination = "10.220.0.0/16"
-  from = "core_a"
-  to = "core_b"
-+ net.route["rt-core_a-core_c"]
-  destination = "10.230.0.0/16"
-  from = "core_a"
-  to = "core_c"
-+ net.route["rt-core_b-core_a"]
-  destination = "10.210.0.0/16"
-  from = "core_b"
-  to = "core_a"
-+ net.route["rt-core_b-core_c"]
-  destination = "10.230.0.0/16"
-  from = "core_b"
-  to = "core_c"
-+ net.route["rt-core_c-core_a"]
-  destination = "10.210.0.0/16"
-  from = "core_c"
-  to = "core_a"
-+ net.route["rt-core_c-core_b"]
-  destination = "10.220.0.0/16"
-  from = "core_c"
-  to = "core_b"
-+ net.route["rt-shared-tenant_a"]
-  destination = "10.96.0.0/16"
-  from = "shared"
-  to = "tenant_a"
-+ net.route["rt-tenant_a-shared"]
-  destination = "10.200.0.0/16"
-  from = "tenant_a"
-  to = "shared"
-+ net.vpc["core_a"]
-  cidr = "10.210.0.0/16"
-  tags.segment = "mesh"
-+ net.vpc["core_b"]
-  cidr = "10.220.0.0/16"
-  tags.segment = "mesh"
-+ net.vpc["core_c"]
-  cidr = "10.230.0.0/16"
-  tags.segment = "mesh"
-+ net.vpc["shared"]
-  cidr = "10.200.0.0/16"
-  tags.segment = "shared"
-+ net.vpc["tenant_a"]
-  cidr = "10.96.0.0/16"
-  tags.segment = "tenant"
-  tags.tenant = "tenant_a"
-+ net.vpc["tenant_b"]
-  cidr = "10.97.0.0/16"
-  tags.segment = "tenant"
-  tags.tenant = "tenant_b"
-+ net.vpc_peering["mesh-peer-core_a-core_b"]
-  accepter_vpc = ?net.vpc["core_b"]
-  requester_vpc = ?net.vpc["core_a"]
-+ net.vpc_peering["mesh-peer-core_b-core_c"]
-  accepter_vpc = ?net.vpc["core_c"]
-  requester_vpc = ?net.vpc["core_b"]
-apply order:
-  tick 1
-    net.route["rt-core_a-core_b"]
-    net.route["rt-core_a-core_c"]
-    net.route["rt-core_b-core_a"]
-    net.route["rt-core_b-core_c"]
-    net.route["rt-core_c-core_a"]
-    net.route["rt-core_c-core_b"]
-    net.route["rt-shared-tenant_a"]
-    net.route["rt-tenant_a-shared"]
-    net.vpc["core_a"]
-    net.vpc["core_b"]
-    net.vpc["core_c"]
-    net.vpc["shared"]
-    net.vpc["tenant_a"]
-    net.vpc["tenant_b"]
-    net.vpc_peering["mesh-peer-core_a-core_b"]
-    net.vpc_peering["mesh-peer-core_b-core_c"]
+plan: 16 changes (16 create) over 1 tick
+
+tick 1  16 changes, applies now
+  + net.route["rt-core_a-core_b"]               stacks/dform-advanced.df:65
+      destination = "10.220.0.0/16"
+      from = "core_a"
+      to = "core_b"
+  + net.route["rt-core_a-core_c"]               stacks/dform-advanced.df:65
+      destination = "10.230.0.0/16"
+      from = "core_a"
+      to = "core_c"
+  + net.route["rt-core_b-core_a"]               stacks/dform-advanced.df:65
+      destination = "10.210.0.0/16"
+      from = "core_b"
+      to = "core_a"
+  + net.route["rt-core_b-core_c"]               stacks/dform-advanced.df:65
+      destination = "10.230.0.0/16"
+      from = "core_b"
+      to = "core_c"
+  + net.route["rt-core_c-core_a"]               stacks/dform-advanced.df:65
+      destination = "10.210.0.0/16"
+      from = "core_c"
+      to = "core_a"
+  + net.route["rt-core_c-core_b"]               stacks/dform-advanced.df:65
+      destination = "10.220.0.0/16"
+      from = "core_c"
+      to = "core_b"
+  + net.route["rt-shared-tenant_a"]             stacks/dform-advanced.df:65
+      destination = "10.96.0.0/16"
+      from = "shared"
+      to = "tenant_a"
+  + net.route["rt-tenant_a-shared"]             stacks/dform-advanced.df:65
+      destination = "10.200.0.0/16"
+      from = "tenant_a"
+      to = "shared"
+  + net.vpc["core_a"]                           stacks/dform-advanced.df:108
+      cidr = "10.210.0.0/16"
+      tags.segment = "mesh"
+  + net.vpc["core_b"]                           stacks/dform-advanced.df:108
+      cidr = "10.220.0.0/16"
+      tags.segment = "mesh"
+  + net.vpc["core_c"]                           stacks/dform-advanced.df:108
+      cidr = "10.230.0.0/16"
+      tags.segment = "mesh"
+  + net.vpc["shared"]                           stacks/dform-advanced.df:40
+      cidr = "10.200.0.0/16"
+      tags.segment = "shared"
+  + net.vpc["tenant_a"]                         stacks/dform-advanced.df:43
+      cidr = "10.96.0.0/16"                     inet.subnet(corp, 4, i)
+      tags.segment = "tenant"                   { segment: "tenant", tenant: t }
+      tags.tenant = "tenant_a"                  { segment: "tenant", tenant: t }
+  + net.vpc["tenant_b"]                         stacks/dform-advanced.df:43
+      cidr = "10.97.0.0/16"                     inet.subnet(corp, 4, i)
+      tags.segment = "tenant"                   { segment: "tenant", tenant: t }
+      tags.tenant = "tenant_b"                  { segment: "tenant", tenant: t }
+  + net.vpc_peering["mesh-peer-core_a-core_b"]  stacks/dform-advanced.df:123
+      accepter_vpc = ?net.vpc["core_b"]         net.vpc[b]
+      requester_vpc = ?net.vpc["core_a"]        net.vpc[a]
+  + net.vpc_peering["mesh-peer-core_b-core_c"]  stacks/dform-advanced.df:123
+      accepter_vpc = ?net.vpc["core_c"]         net.vpc[b]
+      requester_vpc = ?net.vpc["core_b"]        net.vpc[a]
+
+apply: tick 1 now
 -- stderr --
 warning: mesh has direct route between non-adjacent nodes ctx={"from":"core_a","to":"core_c"}
 warning: mesh has direct route between non-adjacent nodes ctx={"from":"core_c","to":"core_a"}

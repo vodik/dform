@@ -1,14 +1,13 @@
 exit: ok
 -- stdout --
-plan: 2 deformations (2 create)
-definite:
-+ net.subnet["y"]
-  x = 1
-+ net.vpc["x"]
-  y = 1
-  z = 1
-apply order:
-  tick 1
-    net.subnet["y"]
-    net.vpc["x"]
+plan: 2 changes (2 create) over 1 tick
+
+tick 1  2 changes, applies now
+  + net.subnet["y"]  adv7b_mutual_via_different_paths.df:10  with q = 1
+      x = 1
+  + net.vpc["x"]     adv7b_mutual_via_different_paths.df:6
+      y = 1          adv7b_mutual_via_different_paths.df:8
+      z = 1
+
+apply: tick 1 now
 -- stderr --

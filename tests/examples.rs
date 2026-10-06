@@ -19,7 +19,7 @@ const APPLY_FLAGS: &[&str] = &["--yes"];
 enum Apply {
     /// It converges in this many `--yes` applies: each but the last stops
     /// before a tick that adds what its plan could not name (R-30), and
-    /// the plan after the last is undeformed.
+    /// the plan after the last is up to date.
     Converges(usize),
     /// It stops after tick 1 on a deny (on purpose: the example shows
     /// one), with this in the error. It runs in a copy of its own.
@@ -234,7 +234,7 @@ fn check(name: &str) {
                 assert_eq!(applies, n, "{}\n{}", at("applies"), r.stdout);
                 let r = s.run(st.plan).success();
                 assert!(
-                    r.summary().ends_with(" is undeformed"),
+                    r.summary().ends_with(" is up to date"),
                     "{}: the plan after apply is not undeformed\n{}{}",
                     at(&st.plan.join(" ")),
                     r.stdout,

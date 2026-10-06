@@ -1,68 +1,62 @@
 exit: ok
 -- stdout --
 deployment: pngu[env=dev]
-plan: 7 deformations (7 create)
-definite:
-+ alert_metrics_pack["pngu"]
-  enable_standard_gke_alerts = true
-  notification_channel_display_name = "Slack"
-  notification_channel_type = "slack"
-  project_id = "renfry-dev-973682"
-  source = "git@github.com:coherentpath/terraform-gcp-alert-metrics.git?ref=v1.5.0"
-+ google.compute_network_peering["peering-envoy-dev"]
-  name = "envoy-dev"
-  network = "projects/renfry-dev-973682/global/networks/renfry-dev-network"
-  peer_network = "projects/envoy-dev-426188/global/networks/envoy-dev-network"
-  project = "renfry-dev-973682"
-+ google.compute_subnetwork["gke_subnet"]
-  ip_cidr_range = "10.141.76.0/22"
-  name = "renfry-dev-gke-subnet"
-  network = "projects/renfry-dev-973682/global/networks/renfry-dev-network"
-  project = "renfry-dev-973682"
-  region = "us-east1"
-  secondary_ranges[0].ip_cidr_range = "10.141.80.0/21"
-  secondary_ranges[0].range_name = "renfry-dev-gke-pods-range"
-  secondary_ranges[1].ip_cidr_range = "10.141.88.0/21"
-  secondary_ranges[1].range_name = "renfry-dev-gke-svc-range"
-  subnet_private_access = true
-+ google.compute_subnetwork["regional_proxy"]
-  ip_cidr_range = "10.193.0.0/24"
-  name = "renfry-dev-proxy"
-  network = "projects/renfry-dev-973682/global/networks/renfry-dev-network"
-  project = "renfry-dev-973682"
-  purpose = "REGIONAL_MANAGED_PROXY"
-  region = "us-east1"
-  role = "ACTIVE"
-+ google.container_cluster["pngu"]
-  cluster_type = "autopilot-private"
-  deletion_protection = false
-  enable_secret_manager_addon = true
-  env = "dev"
-  ip_range_pods = "renfry-dev-gke-pods-range"
-  ip_range_services = "renfry-dev-gke-svc-range"
-  master_control_plane_cidr = "172.16.3.96/28"
-  name = "renfry-dev-gke"
-  network_id = "projects/renfry-dev-973682/global/networks/renfry-dev-network"
-  project_id = "renfry-dev-973682"
-  project_name = "renfry-dev"
-  subnetwork_id = ?google.compute_subnetwork["gke_subnet"]
-+ google.monitoring_dashboard["pngu"]
-  dashboard_json.displayName = "pngu"
-  dashboard_json.note = "stubbed; see terraform/modules/monitoring/dashboard-pngu.json"
-  project = "renfry-dev-973682"
-+ google.compute_address["static-ip-pngu-grpc"]
-  address_type = "INTERNAL"
-  name = "pngu-grpc"
-  project = "renfry-dev-973682"
-  region = "us-east1"
-  subnetwork_id = ?google.compute_subnetwork["gke_subnet"]
-apply order:
-  tick 1
-    alert_metrics_pack["pngu"]
-    google.compute_network_peering["peering-envoy-dev"]
-    google.compute_subnetwork["gke_subnet"]
-    google.compute_subnetwork["regional_proxy"]
-    google.container_cluster["pngu"]
-    google.monitoring_dashboard["pngu"]
-    google.compute_address["static-ip-pngu-grpc"]
+plan: 7 changes (7 create) over 1 tick
+
+tick 1  7 changes, applies now
+  + alert_metrics_pack["pngu"]                      stacks/pngu.df:222
+      enable_standard_gke_alerts = true
+      notification_channel_display_name = "Slack"
+      notification_channel_type = "slack"
+      project_id = "renfry-dev-973682"              stacks/pngu.df:54
+      source = "git@github.com:coherentpath/terraform-gcp-alert-metrics.git?ref=v1.5.0"
+  + google.compute_network_peering["peering-envoy-dev"]  stacks/pngu.df:164
+      name = "envoy-dev"
+      network = "projects/renfry-dev-973682/global/networks/renfry-dev-network"
+      peer_network = "projects/envoy-dev-426188/global/networks/envoy-dev-network"
+      project = "renfry-dev-973682"                 stacks/pngu.df:54
+  + google.compute_subnetwork["gke_subnet"]         stacks/pngu.df:139
+      ip_cidr_range = "10.141.76.0/22"              stacks/pngu.df:61
+      name = "renfry-dev-gke-subnet"                "${gcp.project_name}-gke-subnet"
+      network = "projects/renfry-dev-973682/global/networks/renfry-dev-network"
+      project = "renfry-dev-973682"                 stacks/pngu.df:54
+      region = "us-east1"                           gcp.region = "us-east1"   stacks/pngu.df:56
+      secondary_ranges[0].ip_cidr_range = "10.141.80.0/21"
+      secondary_ranges[0].range_name = "renfry-dev-gke-pods-range"
+      secondary_ranges[1].ip_cidr_range = "10.141.88.0/21"
+      secondary_ranges[1].range_name = "renfry-dev-gke-svc-range"
+      subnet_private_access = true
+  + google.compute_subnetwork["regional_proxy"]     stacks/pngu.df:153
+      ip_cidr_range = "10.193.0.0/24"               stacks/pngu.df:59
+      name = "renfry-dev-proxy"                     "${gcp.project_name}-proxy"
+      network = "projects/renfry-dev-973682/global/networks/renfry-dev-network"
+      project = "renfry-dev-973682"                 stacks/pngu.df:54
+      purpose = "REGIONAL_MANAGED_PROXY"
+      region = "us-east1"                           gcp.region = "us-east1"   stacks/pngu.df:56
+      role = "ACTIVE"
+  + google.container_cluster["pngu"]                stacks/pngu.df:185
+      cluster_type = "autopilot-private"
+      deletion_protection = false
+      enable_secret_manager_addon = true
+      env = "dev"                                   --set env=dev  (over @default)
+      ip_range_pods = "renfry-dev-gke-pods-range"   "${gcp.project_name}-gke-pods-range"
+      ip_range_services = "renfry-dev-gke-svc-range"  "${gcp.project_name}-gke-svc-range"
+      master_control_plane_cidr = "172.16.3.96/28"  stacks/pngu.df:61
+      name = "renfry-dev-gke"                       "${gcp.project_name}-gke"
+      network_id = "projects/renfry-dev-973682/global/networks/renfry-dev-network"
+      project_id = "renfry-dev-973682"              stacks/pngu.df:54
+      project_name = "renfry-dev"                   stacks/pngu.df:55
+      subnetwork_id = ?google.compute_subnetwork["gke_subnet"]
+  + google.monitoring_dashboard["pngu"]             stacks/pngu.df:206
+      dashboard_json.displayName = "pngu"           json("files/dashboard-pngu.json")
+      dashboard_json.note = "stubbed; see terraform/modules/monitoring/dashboard-pngu.json"
+      project = "renfry-dev-973682"                 stacks/pngu.df:54
+  + google.compute_address["static-ip-pngu-grpc"]   stacks/pngu.df:172  with ip = "pngu-grpc"
+      address_type = "INTERNAL"                     stacks/pngu.df:61
+      name = "pngu-grpc"
+      project = "renfry-dev-973682"                 stacks/pngu.df:54
+      region = "us-east1"                           gcp.region = "us-east1"   stacks/pngu.df:56
+      subnetwork_id = ?google.compute_subnetwork["gke_subnet"]
+
+apply: tick 1 now
 -- stderr --

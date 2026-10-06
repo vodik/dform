@@ -37,20 +37,22 @@ resource aws.subnet "private-${availability_zone}" {
 
 ```
 $ dform plan
-plan: 7 changes over 1 tick
+plan: 7 changes (7 create) over 1 tick
 
 tick 1  7 changes, applies now
-  + aws.vpc["main"]                         shop.df:3
+  + aws.vpc["main"]                     shop.df:3
       cidr_block = 10.0.0.0/16
-  + aws.subnet["private-us-east-1a"]        shop.df:9  with availability_zone = "us-east-1a", n = 0
+  + aws.subnet["private-us-east-1a"]    shop.df:9  with availability_zone = "us-east-1a", n = 0
       availability_zone = "us-east-1a"
-      cidr_block = 10.0.0.0/24                inet.subnet(main.cidr_block, 8, n)
+      cidr_block = 10.0.0.0/24          inet.subnet(main.cidr_block, 8, n)
       vpc = ?aws.vpc["main"]
-  + aws.subnet["private-us-east-1b"]        shop.df:9  with availability_zone = "us-east-1b", n = 1
+  + aws.subnet["private-us-east-1b"]    shop.df:9  with availability_zone = "us-east-1b", n = 1
       availability_zone = "us-east-1b"
-      cidr_block = 10.0.1.0/24                inet.subnet(main.cidr_block, 8, n)
+      cidr_block = 10.0.1.0/24          inet.subnet(main.cidr_block, 8, n)
       vpc = ?aws.vpc["main"]
   ... four more
+
+apply: tick 1 now
 ```
 
 Every line of the plan says which statement made it and how the
@@ -98,12 +100,15 @@ follows:
 
 ```
 $ dform plan shop env=prod
-plan: 3 changes over 1 tick, 1 denied, 1 approval
+plan: 3 changes (1 create, 1 update, 1 delete) over 1 tick, 1 denied, 1 approval
 ...
 denied
   no deletes in prod                      aws.db_instance["reports"]    shop.df:7
+
 held for approval
   aws.security_group["api"]               security group update         shop.df:8
+
+apply: refused until the conflicts and denies above are resolved
 plan digest: sha256:4f9c1e...
 ```
 
@@ -249,9 +254,9 @@ followed by a `-target` run by hand and a second plan. dform carries the
 unknown as a value, `?aws.db_instance["orders"].endpoint`, plans with it,
 and applies in ticks: everything that can be made is made, the unknowns
 resolve, what depended on them is planned again against the real values
-and made. A resource whose *name* depends on an unknown is a pending
-group; the plan says so, and says which tick resolves it, instead of
-refusing.
+and made. A resource whose *name* depends on an unknown goes under
+`later`: the plan names the rule and the value it waits on, never a
+count, instead of refusing.
 
 ```dform
 resource aws.iam_policy "connect-${host}" {
@@ -264,17 +269,24 @@ needs the endpoint's text, which only exists once the database does, so
 how many policies there will be is not known until the first tick runs:
 
 ```
-pending groups:
-? aws.iam_policy[?] x unknown, on ?aws.db_instance["orders"].endpoint, resolves after tick 1
+later   changes this plan cannot count yet
+  aws.iam_policy["connect-${host}"]    shop.df:31  waits on aws.db_instance["orders"].endpoint
+
+apply: tick 1 now; `later` is planned again when tick 1 reports, and apply asks before what it adds
 ```
 
 Apply then runs tick 1, learns the endpoint, prints tick 2's plan with
 the policy's real name, and asks again before making it:
 
 ```
+plan: 1 change (1 create) over 1 tick
+
 tick 2  1 change, now that tick 1 reported
-  + aws.iam_policy["connect-orders.cx3k.us-east-1.rds.amazonaws.com"]   shop.df:31  with host = "orders.cx3k.us-east-1.rds.amazonaws.com"
+  + aws.iam_policy["connect-orders.cx3k.us-east-1.rds.amazonaws.com"]  shop.df:31
+      policy.Statement[0].Action = "rds-db:connect"
       policy.Statement[0].Resource = "orders.cx3k.us-east-1.rds.amazonaws.com"
+
+apply: tick 2 now
 Apply tick 2 to shop[env=prod]? [y/N]
 ```
 
@@ -736,11 +748,14 @@ deployment of a keyed stack, `dform plan shop env=prod`.
 **plan** prints what will change, grouped by tick. Tick 1 applies now;
 each later tick names the values it waits on; `later` lists the rules
 that may add changes once a value is known, as the rule, never as a
-count. Every change carries the statement that made it with its
-bindings, each changed attribute the write that won, and a `because`
-line naming what moved since the last apply. `--why=none` is the bare
-diff for scripts, `--why=full` expands each change into its derivation,
-`--json` for machines.
+count; the last line says what apply will do. Every change carries the
+statement that made it with its bindings, each changed attribute the
+write that won, and a `because` line naming what moved since the last
+apply. Where a line would pass 100 columns its right column says less,
+down to `FILE:LINE`. `--why=none` is the bare diff for scripts, laid out
+as it was before any of this, `--why=full` (`--why`) expands each change
+into its derivation, `--json` carries the ticks, what each waits on, each
+change's kind, site and `because` as fields.
 
 **apply** prints the plan and asks. It applies in ticks; at any tick that
 adds a resource the first plan could not name, it prints that tick's
@@ -964,7 +979,7 @@ without a digest, no public database) as denies.
 
 |You want                                     |The usual workaround                       |In dform                                                   |
 |---------------------------------------------|-------------------------------------------|-----------------------------------------------------------|
-|a resource per value only apply knows        |`-target`, then a second run by hand       |a pending group; apply runs a second tick                  |
+|a resource per value only apply knows        |`-target`, then a second run by hand       |listed under `later`; apply runs a second tick             |
 |a tag on everything, overridable per resource|a variable threaded through every module   |`set r.tags.team = "platform" @default where r in resource`|
 |"why does this exist?"                       |read the source, guess                     |every plan line says; `dform why ADDR` for the derivation  |
 |"why does this not exist?"                   |read the source, guess harder              |`dform why-not ADDR` names the condition that failed       |

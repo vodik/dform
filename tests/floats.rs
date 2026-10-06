@@ -116,14 +116,16 @@ fn a_number_attribute_takes_an_int_or_a_float() {
     );
     let r = s.run(&["plan", "p.df"]).success();
     assert!(
-        r.stdout.contains("+ compute.vm[\"a\"]\n  weight = 0.5")
-            && r.stdout.contains("+ compute.vm[\"b\"]\n  weight = 2\n"),
+        r.stdout
+            .contains("  + compute.vm[\"a\"]  p.df:3\n      weight = 0.5\n")
+            && r.stdout
+                .contains("  + compute.vm[\"b\"]  p.df:4\n      weight = 2\n"),
         "{}",
         r.stdout
     );
     let r = s.run(&["plan", "--json", "p.df"]).success();
     let j: serde_json::Value = serde_json::from_str(&r.stdout).unwrap();
-    let after = |i: usize| j["definite"][i]["changes"][0]["after"].clone();
+    let after = |i: usize| j["ticks"][0]["changes"][i]["changes"][0]["after"].clone();
     assert_eq!(
         (after(0), after(1)),
         (serde_json::json!(0.5), serde_json::json!(2))

@@ -143,16 +143,16 @@ fn a_resource_rule_reading_a_stuck_helper_is_a_pending_group() {
     let second = &runs[1];
     assert!(
         second.stdout.contains(
-            "pending groups:\n? k8s.deployment[\"dform_controller\"] x unknown, on \
-             ?google.container_node_pool[\"np-us-east1-b\"].instance_group, resolves after tick 1  \
-             (reads node_pool_up(\"np-us-east1-b\"), which is stuck)\n"
+            "later   changes this plan cannot count yet\n  \
+             k8s.deployment[\"dform_controller\"]             \
+             if node_pool_up(\"np-us-east1-b\") derives\n"
         ),
         "{}",
         second.stdout
     );
     assert!(
         second.stderr.contains(
-            "apply stopped after tick 1: tick 2 adds 1 deformation the plan could not name \
+            "apply stopped after tick 1: tick 2 adds 1 change the plan could not name \
              (k8s.deployment[\"dform_controller\"] on \
              ?google.container_node_pool[\"np-us-east1-b\"].instance_group)"
         ),
@@ -162,7 +162,7 @@ fn a_resource_rule_reading_a_stuck_helper_is_a_pending_group() {
     let last = runs.last().unwrap();
     assert!(
         last.stdout
-            .contains("+ k8s.deployment[\"dform_controller\"]\n"),
+            .contains("  + k8s.deployment[\"dform_controller\"]  "),
         "{}",
         last.stdout
     );
@@ -190,7 +190,7 @@ fn bootstrap_handover_and_the_controller_runs_the_workload() {
         "{world}"
     );
     let r = s.run(&["plan", "bootstrap"]).success();
-    assert_eq!(r.summary(), "stack bootstrap is undeformed");
+    assert_eq!(r.summary(), "stack bootstrap is up to date");
 
     // The bootstrap stack stays batch.
     let r = s
@@ -232,8 +232,8 @@ fn bootstrap_handover_and_the_controller_runs_the_workload() {
         b.controller(&s),
         [
             "event start",
-            "tick 1: plan: 3 deformations (3 create)",
-            "stack workload is undeformed",
+            "tick 1: plan: 3 changes (3 create) over 1 tick",
+            "stack workload is up to date",
         ]
     );
     let keys = b.store("workload").list("").unwrap();
@@ -253,7 +253,7 @@ fn bootstrap_handover_and_the_controller_runs_the_workload() {
         r.stderr
     );
     let r = b.run(&s, &["plan", "workload"]).success();
-    assert_eq!(r.summary(), "stack workload is undeformed");
+    assert_eq!(r.summary(), "stack workload is up to date");
 
     // A release: deployed.
     edit(&s, "data/releases.df", "web:1.0", "web:1.1");
@@ -262,8 +262,8 @@ fn bootstrap_handover_and_the_controller_runs_the_workload() {
         [
             "input data.releases changed (file data/releases.df)",
             "event input data.releases",
-            "tick 1: plan: 1 deformation (1 update)",
-            "stack workload is undeformed",
+            "tick 1: plan: 1 change (1 update) over 1 tick",
+            "stack workload is up to date",
         ]
     );
     assert!(s.read(world).contains("gcr.io/renfry/web:1.1"));
@@ -275,8 +275,8 @@ fn bootstrap_handover_and_the_controller_runs_the_workload() {
         [
             &format!("event world {world} changed"),
             "drift k8s.deployment[\"web\"].spec.replicas: 3 -> 5 (auto_reconcile)",
-            "tick 1: plan: 1 deformation (1 update)",
-            "stack workload is undeformed",
+            "tick 1: plan: 1 change (1 update) over 1 tick",
+            "stack workload is up to date",
         ]
     );
     edit(
@@ -292,10 +292,10 @@ fn bootstrap_handover_and_the_controller_runs_the_workload() {
             "drift k8s.deployment[\"web\"].spec.template.spec.containers[0].image: \
              \"gcr.io/renfry/web:1.1\" -> \"gcr.io/renfry/web:debug\" \
              (held until approve or an input change)",
-            "tick 1: plan: 1 deformation (1 update)",
+            "tick 1: plan: 1 change (1 update) over 1 tick",
             "tick 1: proceed: held, drift at spec.template.spec.containers[0].image needs \
              approval: k8s.deployment[\"web\"]",
-            "stack workload is deformed: k8s.deployment[\"web\"] held",
+            "stack workload has changes held: k8s.deployment[\"web\"]",
         ]
     );
     let w = s.read(world);
@@ -361,7 +361,7 @@ fn handover_needs_one_bootstrap_stack_and_an_empty_target() {
         .success();
     assert_eq!(
         controller(&s).last().unwrap(),
-        "stack workload is undeformed"
+        "stack workload is up to date"
     );
     assert!(s.path(&format!("{HANDED}/state.json")).exists());
     assert!(s.path(&format!("{HANDED}/remote.json")).exists());
@@ -373,7 +373,7 @@ fn handover_moves_applied_state_to_a_local_backend() {
     // The workload, run by a controller where it is, then moved.
     assert_eq!(
         controller(&s).last().unwrap(),
-        "stack workload is undeformed"
+        "stack workload is up to date"
     );
     assert!(s.path("dform.state/workload/state.json").exists());
     s.run(&["stack", "handover", "workload", "--to", "local(\"moved\")"])
@@ -383,6 +383,6 @@ fn handover_moves_applied_state_to_a_local_backend() {
     // Nothing to do from the new place: the state and the memo moved too.
     assert_eq!(
         controller(&s),
-        ["event resync", "stack workload is undeformed"]
+        ["event resync", "stack workload is up to date"]
     );
 }

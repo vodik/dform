@@ -8,7 +8,7 @@ mod common;
 use common::Scratch;
 
 fn plan(s: &Scratch, file: &str) -> common::Run {
-    s.run(&["dev", "--world", "w.json", "plan", file])
+    s.run(&["dev", "--world", "w.json", "plan", "--why=none", file])
 }
 
 /// Several sources of one relation are one relation, with the facts the
@@ -78,7 +78,15 @@ fn a_components_relation_input_is_given_by_rows_and_by_from() {
     }
     assert!(!r.stdout.contains("green::"), "{}", r.stdout);
     let r = s
-        .run(&["dev", "--world", "w.json", "plan", "p.df", "env=prod"])
+        .run(&[
+            "dev",
+            "--world",
+            "w.json",
+            "plan",
+            "--why=none",
+            "p.df",
+            "env=prod",
+        ])
         .success();
     assert!(
         r.stdout
@@ -235,7 +243,7 @@ fn a_stacks_relation_output_is_read_across_stacks() {
          resource compute.vm \"vm-${z}\" {\n  size = n\n} where zones[env=\"prod\"].zone(z, n)\n",
     );
     s.run(&["apply", "zones", "env=prod"]).success();
-    let r = s.run(&["plan", "app"]).success();
+    let r = s.run(&["plan", "--why=none", "app"]).success();
     assert!(
         r.stdout
             .contains("+ compute.vm[\"vm-prod-a\"]\n  size = 0\n"),

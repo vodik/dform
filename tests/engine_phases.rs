@@ -4,53 +4,49 @@
 mod common;
 use common::{Scratch, repo};
 
-const GKE_PLAN: &str = r#"plan: 3 deformations (3 create), 4 pending, 1 undetermined
-definite:
-+ google.compute_subnetwork["gke_subnet"]
-  ip_cidr_range = "10.141.76.0/22"
-  name = "renfry-dev-gke-subnet"
-  network = "projects/renfry-dev-973682/global/networks/renfry-dev-network"
-  project = "renfry-dev-973682"
-  region = "us-east1"
-+ google.container_cluster["pngu"]
-  deletion_protection = true
-  env = "dev"
-  master_control_plane_cidr = "172.16.3.96/28"
-  name = "renfry-dev-gke"
-  network_id = "projects/renfry-dev-973682/global/networks/renfry-dev-network"
-  node_locations[0] = "us-east1-b"
-  node_locations[1] = "us-east1-c"
-  project_id = "renfry-dev-973682"
-  subnetwork_id = ?google.compute_subnetwork["gke_subnet"]
-+ google.compute_address["static_ip"]
-  name = "pngu-grpc"
-  project = "renfry-dev-973682"
-  region = "us-east1"
-  subnetwork_id = ?google.compute_subnetwork["gke_subnet"]
-pending on ?google.container_cluster["pngu"].ca_certificate ?google.container_cluster["pngu"].endpoint (resolves after tick 1):
-+ k8s.deployment["api"]
-  image = "gcr.io/renfry/api:1.42"
-  namespace = "pngu"
-  replicas = 3
-+ k8s.namespace["pngu"]
-  name = "pngu"
-+ k8s.secret["db_credentials"]
-  data.password = (sensitive google.secret_manager_secret_version["db_pw"].secret_data)
-  namespace = "pngu"
-pending groups:
-? google.container_node_pool[?] x unknown, on ?google.container_cluster["pngu"].zones, resolves after tick 1  (member/2 over a null list)
-undetermined:
-? deny "cluster must be in at least two zones" on ?google.container_cluster["pngu"].zones, decided after tick 1  (reads undetermined aggregate zone_count)
-apply order:
-  tick 1
-    google.compute_subnetwork["gke_subnet"]
-    google.container_cluster["pngu"]
-    google.compute_address["static_ip"]
-  tick 2
-    k8s.deployment["api"]
-    k8s.namespace["pngu"]
-    k8s.secret["db_credentials"]
-    google.container_node_pool[?]
+const GKE_PLAN: &str = r#"plan: 6 changes (6 create) over 2 ticks, 1 undetermined
+
+tick 1  3 changes, applies now
+  + google.compute_subnetwork["gke_subnet"]         stacks/gke_two_phase.df:38
+      ip_cidr_range = "10.141.76.0/22"              stacks/gke_two_phase.df:28
+      name = "renfry-dev-gke-subnet"                "${name}-gke-subnet"
+      network = "projects/renfry-dev-973682/global/networks/renfry-dev-network"
+      project = "renfry-dev-973682"
+      region = "us-east1"
+  + google.container_cluster["pngu"]                stacks/gke_two_phase.df:54
+      deletion_protection = true
+      env = "dev"                                   stacks/gke_two_phase.df:11
+      master_control_plane_cidr = "172.16.3.96/28"  stacks/gke_two_phase.df:28
+      name = "renfry-dev-gke"                       "${name}-gke"
+      network_id = "projects/renfry-dev-973682/global/networks/renfry-dev-network"
+      node_locations[0] = "us-east1-b"              [ z | zone_at(i, z), i <= zones ]
+      node_locations[1] = "us-east1-c"              [ z | zone_at(i, z), i <= zones ]
+      project_id = "renfry-dev-973682"
+      subnetwork_id = ?google.compute_subnetwork["gke_subnet"]
+  + google.compute_address["static_ip"]             stacks/gke_two_phase.df:47
+      name = "pngu-grpc"
+      project = "renfry-dev-973682"
+      region = "us-east1"
+      subnetwork_id = ?google.compute_subnetwork["gke_subnet"]
+
+tick 2  3 changes, after tick 1 reports
+  waits on  google.container_cluster["pngu"].ca_certificate
+            google.container_cluster["pngu"].endpoint
+  + k8s.deployment["api"]                           stacks/gke_two_phase.df:78  with ns = "pngu"
+      image = "gcr.io/renfry/api:1.42"
+      namespace = "pngu"
+      replicas = 3
+  + k8s.namespace["pngu"]                           stacks/gke_two_phase.df:75
+      name = "pngu"
+  + k8s.secret["db_credentials"]                    stacks/gke_two_phase.df:84  with ns = "pngu"
+      data.password = (sensitive google.secret_manager_secret_version["db_pw"].secret_data)
+      namespace = "pngu"
+
+later   changes this plan cannot count yet
+  google.container_node_pool["np-${z}"]             waits on google.container_cluster["pngu"].zones
+  deny "cluster must be in at least two zones"      undetermined until tick 2
+
+apply: tick 1 now, then tick 2 when tick 1 reports; `later` is planned again when tick 1 reports, and apply asks before what it adds
 "#;
 
 /// Three definite, three pending on the kubernetes provider's configuration,
@@ -94,7 +90,7 @@ fn apply_then_replan_is_undeformed() {
     let again = run("plan");
     assert_eq!(
         again.stdout,
-        "deployment: dform[env=staging] (env from its default)\nstack dform is undeformed\n"
+        "deployment: dform[env=staging] (env from its default)\nstack dform is up to date\n"
     );
 }
 
@@ -129,19 +125,19 @@ fn gke_two_phase_applies_in_two_ticks() {
     let r = gke(&s, "gke_two_phase.df", &["apply"]).failure();
     assert!(
         r.stdout
-            .contains("tick 1:\nplan: 3 deformations (3 create), 4 pending, 1 undetermined\n"),
+            .starts_with("plan: 6 changes (6 create) over 2 ticks, 1 undetermined\n\ntick 1  "),
         "{}",
         r.stdout
     );
     assert!(
         r.stdout
-            .contains("tick 2:\nplan: 5 deformations (5 create)\n"),
+            .contains("plan: 5 changes (5 create) over 1 tick\n\ntick 2  5 changes, now that tick 1 reported\n"),
         "{}",
         r.stdout
     );
     assert!(
         r.stderr.contains(
-            "apply stopped after tick 1: tick 2 adds 2 deformations the plan could not name \
+            "apply stopped after tick 1: tick 2 adds 2 changes the plan could not name \
              (google.container_node_pool[?] on ?google.container_cluster[\"pngu\"].zones)"
         ),
         "{}",
@@ -157,11 +153,12 @@ fn gke_two_phase_applies_in_two_ticks() {
     );
     let r = gke(&s, "gke_two_phase.df", &["apply"]).success();
     assert!(
-        r.stdout.starts_with("plan: 5 deformations (5 create)\n"),
+        r.stdout
+            .starts_with("plan: 5 changes (5 create) over 1 tick\n"),
         "{}",
         r.stdout
     );
-    assert!(!r.stdout.contains("tick 2:"), "{}", r.stdout);
+    assert!(!r.stdout.contains("tick 2"), "{}", r.stdout);
     assert!(r.stdout.ends_with("apply: complete\n"), "{}", r.stdout);
     assert_eq!(
         world_resources(&s),
@@ -179,7 +176,7 @@ fn gke_two_phase_applies_in_two_ticks() {
     let again = gke(&s, "gke_two_phase.df", &["apply"]).success();
     assert_eq!(
         again.stdout,
-        "stack gke_two_phase is undeformed\napply: nothing to do\n"
+        "stack gke_two_phase is up to date\napply: nothing to do\n"
     );
 }
 
@@ -191,8 +188,12 @@ fn gke_two_phase_applies_in_two_ticks() {
 fn gke_one_zone_stops_after_tick_one() {
     let s = Scratch::new("gke-one-zone");
     let r = gke(&s, "gke_two_phase.df", &["apply", "--set", "zones=1"]).failure();
-    assert!(r.stdout.contains("tick 1:"), "{}", r.stdout);
-    assert!(!r.stdout.contains("tick 2:"), "{}", r.stdout);
+    assert!(r.stdout.contains("tick 1  "), "{}", r.stdout);
+    assert!(
+        !r.stdout.contains("now that tick 1 reported"),
+        "{}",
+        r.stdout
+    );
     assert!(
         r.stderr
             .contains("- cluster must be in at least two zones ctx={\"cluster\":\"pngu\"}")
@@ -244,12 +245,15 @@ fn a_pending_update_applies_after_the_boundary() {
         .success();
     assert!(
         r.stdout
-            .contains("tick 1:\nplan: 1 deformation (1 create), 1 pending\n"),
+            .contains("plan: 2 changes (1 create, 1 update) over 2 ticks\n"),
         "{}",
         r.stdout
     );
     assert!(
-        r.stdout.contains("tick 2:\nplan: 1 deformation (1 update)\ndefinite:\n~ compute.vm[\"app\"]\n  db_host: \"old.db.fake\" -> \"main.db.fake\"\n"),
+        r.stdout.contains(
+            "tick 2  1 change, now that tick 1 reported\n  ~ compute.vm[\"app\"]\n      \
+             db_host: \"old.db.fake\" → \"main.db.fake\"  p.df:3\n"
+        ),
         "{}",
         r.stdout
     );
@@ -257,7 +261,7 @@ fn a_pending_update_applies_after_the_boundary() {
         .run(&common::on("p.df", &["--world", "w.json"], &["plan"]))
         .success();
     assert!(
-        r.stdout.ends_with("stack p is undeformed\n"),
+        r.stdout.ends_with("stack p is up to date\n"),
         "{}",
         r.stdout
     );

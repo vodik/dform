@@ -1,4 +1,4 @@
 exit: ok
 -- stdout --
-stack decl_demo is undeformed
+stack decl_demo is up to date
 -- stderr --

@@ -27,7 +27,7 @@ fn a_toml_document_holds_several_relations() {
          resource net.subnet \"${n}-${net.region}\" { cidr = \"10.0.${i}.0/24\" } where az(n, i)\n\
          resource net.vpc_peering \"${n}\" { accepter_vpc = p } where peering(n, p)\n",
     );
-    let r = s.run(&["plan", "p.df"]).success();
+    let r = s.run(&["plan", "--why=none", "p.df"]).success();
     for want in [
         "+ net.subnet[\"a-eu\"]\n  cidr = \"10.0.1.0/24\"",
         "+ net.subnet[\"b-eu\"]\n  cidr = \"10.0.2.0/24\"",
@@ -60,7 +60,7 @@ fn a_selector_reads_rows_and_their_enclosing_objects() {
         )
     };
     s.write("p.df", &program("region: string, name: string"));
-    let r = s.run(&["plan", "p.df"]).success();
+    let r = s.run(&["plan", "--why=none", "p.df"]).success();
     for z in ["eu-a", "eu-b", "us-c"] {
         assert!(
             r.stdout.contains(&format!("+ net.subnet[\"{z}\"]")),
@@ -69,7 +69,7 @@ fn a_selector_reads_rows_and_their_enclosing_objects() {
         );
     }
     s.write("p.df", &program("zone: string, name: string"));
-    let r = s.run(&["plan", "p.df"]).failure();
+    let r = s.run(&["plan", "--why=none", "p.df"]).failure();
     assert!(
         r.stderr.contains("regions.yaml:row 1: no column zone"),
         "{}",
@@ -79,7 +79,7 @@ fn a_selector_reads_rows_and_their_enclosing_objects() {
         "p.df",
         &program("region: string, name: string").replace(".regions[*].zones", ".regions[*].zonez"),
     );
-    let r = s.run(&["plan", "p.df"]).failure();
+    let r = s.run(&["plan", "--why=none", "p.df"]).failure();
     assert!(
         r.stderr.contains("`.regions[*]` has no field zonez"),
         "{}",
@@ -105,7 +105,7 @@ fn a_relation_is_read_from_an_input_or_a_let() {
          resource net.subnet \"v${i}\" { cidr = c } where vlan(i, c)\n\
          resource compute.vm \"${n}\" { port = p } where team(n, p)\n",
     );
-    let r = s.run(&["plan", "p.df"]).success();
+    let r = s.run(&["plan", "--why=none", "p.df"]).success();
     assert!(
         r.stdout
             .contains("+ net.subnet[\"v10\"]\n  cidr = \"10.0.10.0/24\""),
@@ -119,7 +119,7 @@ fn a_relation_is_read_from_an_input_or_a_let() {
     );
     s.write("vlans.yaml", "- id: 20\n  cidr: 10.0.20.0/24\n");
     let r = s
-        .run(&["plan", "p.df", "--set", "vlans=@vlans.yaml"])
+        .run(&["plan", "--why=none", "p.df", "--set", "vlans=@vlans.yaml"])
         .success();
     assert!(r.stdout.contains("+ net.subnet[\"v20\"]"), "{}", r.stdout);
     assert!(!r.stdout.contains("v10"), "{}", r.stdout);
@@ -139,7 +139,9 @@ fn a_document_is_read_at_a_git_commit() {
          let pins = csv(git(\"ops.git\", \"main\", \"pins.csv\"))\n\
          resource compute.vm web { image = pins[0].image }\n",
     );
-    let r = s.run(&["plan", "--out", "plan.json", "p.df"]).success();
+    let r = s
+        .run(&["plan", "--why=none", "--out", "plan.json", "p.df"])
+        .success();
     assert!(r.stdout.contains("image = \"web:1\""), "{}", r.stdout);
     assert!(
         s.read("plan.json").contains(&commit),

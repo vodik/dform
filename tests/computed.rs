@@ -40,12 +40,7 @@ fn a_fresh_stack_carries_nulls_until_apply() {
     let r = s
         .run(&["dev", "--world", "w.json", "plan", "--show-noop", prog])
         .success();
-    assert_eq!(
-        r.summary(),
-        "plan: 0 deformations, 14 no-op",
-        "{}",
-        r.stdout
-    );
+    assert_eq!(r.summary(), "plan: 0 changes, 14 no-op", "{}", r.stdout);
     assert!(!r.stdout.contains('?'), "{}", r.stdout);
 }
 
@@ -118,7 +113,7 @@ fn secrets_are_labels_and_print_redacted() {
     let steady = run("plan");
     assert_eq!(
         steady.summary(),
-        "stack p is undeformed",
+        "stack p is up to date",
         "{}",
         steady.stdout
     );
@@ -128,7 +123,7 @@ fn secrets_are_labels_and_print_redacted() {
     assert!(
         changed
             .stdout
-            .contains("master_password: (sensitive) -> (sensitive)"),
+            .contains("master_password: (sensitive) → (sensitive)"),
         "{}",
         changed.stdout
     );
@@ -184,7 +179,7 @@ resource vm c { peer_zone = ref("vm", "a", "zone"), other_zone = ref("vm", "b", 
     let steady = run("plan");
     assert_eq!(
         steady.summary(),
-        "stack p is undeformed",
+        "stack p is up to date",
         "{}",
         steady.stdout
     );
@@ -231,7 +226,7 @@ fn an_update_leaves_a_picked_optional_computed_value_to_the_provider() {
     let steady = run("plan");
     assert_eq!(
         steady.summary(),
-        "stack p is undeformed",
+        "stack p is up to date",
         "{}",
         steady.stdout
     );

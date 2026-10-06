@@ -1,5 +1,5 @@
 # approvals
-Policy says which deformations need an approval; apply checks a signed approval of the plan's digest.
+Policy says which changes need an approval; apply checks a signed approval of the plan's digest.
 ```bash
 dform plan
 dform apply approvals env=staging   # keyed: apply names the deployment; one tick

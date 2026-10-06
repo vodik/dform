@@ -1,5 +1,5 @@
 exit: ok
 -- stdout --
 deployment: dform[env=staging] (env from its default)
-stack dform is undeformed
+stack dform is up to date
 -- stderr --

@@ -1,5 +1,5 @@
 //! Approvals (README "Approvals"): `requires_approval(r, Reason)` in the
-//! policy pass makes the plan print a "needs approval" section and its
+//! policy pass makes the plan hold the change for an approval and print its
 //! digest, and `apply PLAN --approval FILE` verifies a signed statement
 //! over that digest offline before any Apply call. The tokens come from
 //! the example signer, `dform-approve`, on examples/approvals/stacks/approvals.df.
@@ -88,8 +88,11 @@ fn a_prod_replace_plans_with_needs_approval() {
     let args = [&["plan", "stacks/approvals.df"][..], &PROD, &NEW_CIDR].concat();
     let r = s.run(&args).success();
     assert!(
-        r.stdout
-            .contains("needs approval:\n  net.vpc[\"main\"]  (a replace in prod)\n"),
+        r.stdout.contains("  ± net.vpc[\"main\"]  ")
+            && r.stdout
+                .contains("\nheld for approval\n  net.vpc[\"main\"]  ")
+            && r.stdout
+                .contains("  a replace in prod    stacks/approvals.df:21\n"),
         "{}",
         r.stdout
     );
@@ -109,7 +112,7 @@ fn a_prod_replace_plans_with_needs_approval() {
     // Staging: the policy asks for nothing, and the plan says nothing.
     let staging = [&["plan", "stacks/approvals.df"][..], &NEW_CIDR].concat();
     let r = s.run(&staging).success();
-    assert!(!r.stdout.contains("needs approval"), "{}", r.stdout);
+    assert!(!r.stdout.contains("held: approval"), "{}", r.stdout);
     assert!(!r.stdout.contains("plan digest"), "{}", r.stdout);
 }
 

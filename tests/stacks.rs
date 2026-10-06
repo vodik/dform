@@ -29,12 +29,12 @@ fn a_second_program_does_not_plan_deletes_of_the_first() {
     let db = s.run(&["plan", "db.df"]).success();
     assert_eq!(
         db.summary(),
-        "plan: 1 deformation (1 create)",
+        "plan: 1 change (1 create) over 1 tick",
         "{}",
         db.stdout
     );
 
     s.run(&["apply", "db.df"]).success();
     let net = s.run(&["plan", "net.df"]).success();
-    assert_eq!(net.summary(), "stack net is undeformed", "{}", net.stdout);
+    assert_eq!(net.summary(), "stack net is up to date", "{}", net.stdout);
 }

@@ -59,7 +59,7 @@ fn apply_plan_applies_the_files_delta() {
     let r = s
         .run(&["dev", "--world", "w.json", "plan", "p.df"])
         .success();
-    assert_eq!(r.summary(), "stack p is undeformed", "{}", r.stdout);
+    assert_eq!(r.summary(), "stack p is up to date", "{}", r.stdout);
 }
 
 /// A path with a quoted segment (R-77), an annotation's dotted key, is
@@ -100,7 +100,7 @@ fn a_quoted_path_segment_round_trips_through_the_plan_file() {
     let r = s
         .run(&["dev", "--world", "w.json", "plan", "p.df"])
         .success();
-    assert_eq!(r.summary(), "stack p is undeformed", "{}", r.stdout);
+    assert_eq!(r.summary(), "stack p is up to date", "{}", r.stdout);
 }
 
 /// A nested copy's resource is `outer/inner/name` (R-72): the file
@@ -137,7 +137,7 @@ fn a_nested_copys_address_round_trips_through_the_plan_file() {
     let r = s
         .run(&["dev", "--world", "w.json", "plan", "p.df"])
         .success();
-    assert_eq!(r.summary(), "stack p is undeformed", "{}", r.stdout);
+    assert_eq!(r.summary(), "stack p is up to date", "{}", r.stdout);
 }
 
 /// The world moved after the plan: the saved before-state is stale, and
@@ -159,7 +159,7 @@ fn drift_after_the_plan_is_refused() {
 }
 
 /// The chaos mock changes the database after tick 1: tick 2's refresh sees
-/// a deformation the file does not have, and apply stops there.
+/// a change the file does not have, and apply stops there.
 #[test]
 fn a_world_mutated_between_ticks_is_refused_at_the_boundary() {
     let s = two_ticks("planfile-mutate");
@@ -378,7 +378,7 @@ fn a_tick_2_address_the_file_does_not_list_stops_the_apply() {
     let r = s.run(&["apply", "plan.json"]).failure();
     assert!(
         r.stderr.contains(
-            "apply stopped after tick 1: tick 2 adds 1 deformation the plan could not name \
+            "apply stopped after tick 1: tick 2 adds 1 change the plan could not name \
              (iam.policy[?] on ?db.postgres[\"orders\"].endpoint)"
         ),
         "{}",
@@ -416,9 +416,8 @@ fn a_tick_2_address_the_file_does_not_list_stops_the_apply() {
     s.write("plan.json", &now.to_string());
     let r = s.run(&["apply", "plan.json"]).failure();
     assert!(
-        r.stderr.contains(
-            "apply stopped after tick 1: tick 2 adds 1 deformation the plan could not name"
-        ),
+        r.stderr
+            .contains("apply stopped after tick 1: tick 2 adds 1 change the plan could not name"),
         "{}",
         r.stderr
     );

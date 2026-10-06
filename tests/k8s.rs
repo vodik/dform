@@ -48,7 +48,7 @@ fn k8s_demo_plans_against_the_mock() {
         "ClusterIP"
     );
     let r = s.run(&args(&["plan"])).success();
-    assert_eq!(r.summary(), "stack k8s_demo is undeformed", "{}", r.stdout);
+    assert_eq!(r.summary(), "stack k8s_demo is up to date", "{}", r.stdout);
 }
 
 const TWO: &str = r#"
@@ -79,13 +79,13 @@ fn containers_diff_by_merge_key_not_index() {
     cs.reverse();
     s.write("w.json", &serde_json::to_string_pretty(&w).unwrap());
     let r = s.run(&args(&["plan"])).success();
-    assert_eq!(r.summary(), "stack p is undeformed", "{}", r.stdout);
+    assert_eq!(r.summary(), "stack p is up to date", "{}", r.stdout);
 
     s.write("p.df", &TWO.replace("envoy:1", "envoy:2"));
     let r = s.run(&args(&["plan"])).success();
     assert!(
         r.stdout.contains(
-            r#"spec.template.spec.containers[name=sidecar].image: "envoy:1" -> "envoy:2""#
+            r#"spec.template.spec.containers[name=sidecar].image: "envoy:1" → "envoy:2""#
         ),
         "{}",
         r.stdout

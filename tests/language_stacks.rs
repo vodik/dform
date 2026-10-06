@@ -20,7 +20,7 @@ fn the_file_names_the_stack_and_scopes_the_state() {
     s.run(&["apply", "edge.df"]).success();
     assert!(s.path("dform.state/edge/state.json").exists());
     let r = s.run(&["plan", "edge.df"]).success();
-    assert_eq!(r.summary(), "stack edge is undeformed", "{}", r.stdout);
+    assert_eq!(r.summary(), "stack edge is up to date", "{}", r.stdout);
 }
 
 #[test]
@@ -62,7 +62,7 @@ fn a_local_backend_is_relative_to_the_project_root() {
     assert!(!s.path("state").exists());
     // From a subdirectory of the project: the same root.
     let r = s.run_in("infra/stacks", &["plan", "p.df"]).success();
-    assert_eq!(r.summary(), "stack p is undeformed", "{}", r.stdout);
+    assert_eq!(r.summary(), "stack p is up to date", "{}", r.stdout);
     assert!(!s.path("infra/stacks/state").exists());
 
     s.write("infra/stacks/net.df", NET);
@@ -80,7 +80,7 @@ fn a_local_backend_is_relative_to_the_project_root() {
     assert!(s.path("infra/moved/state.json").exists());
     assert!(!s.path("moved").exists());
     let r = s.run(&["-C", "infra", "plan", "net"]).success();
-    assert_eq!(r.summary(), "stack net is undeformed", "{}", r.stdout);
+    assert_eq!(r.summary(), "stack net is up to date", "{}", r.stdout);
 }
 
 /// A backend dform.toml names is checked where it names it.
@@ -190,9 +190,9 @@ resource net.subnet a {
 "#,
     );
     let r = s.run(&["plan", "app.df"]).success();
-    assert_eq!(r.summary(), "stack app is undeformed", "{}", r.stdout);
+    assert_eq!(r.summary(), "stack app is up to date", "{}", r.stdout);
     s.run(&["apply", "net"]).success();
-    let r = s.run(&["plan", "app.df"]).success();
+    let r = s.run(&["plan", "--why=none", "app.df"]).success();
     assert!(
         r.stdout.contains(
             "+ net.subnet[\"a\"]\n  cidr = \"10.0.0.0/16\"\n  vpc_id = \"net.vpc:main\"\n"
@@ -229,7 +229,9 @@ resource net.subnet a {
     assert!(std::path::Path::new(state).is_absolute(), "{registry}");
 
     let want = "+ net.subnet[\"a\"]\n  cidr = \"10.0.0.0/16\"\n";
-    let r = s.run_in("infra/stacks", &["plan", "app"]).success();
+    let r = s
+        .run_in("infra/stacks", &["plan", "--why=none", "app"])
+        .success();
     assert!(r.stdout.contains(want), "{}", r.stdout);
 
     // Another project sees none of it, its own net not applied; -C runs in
@@ -237,9 +239,12 @@ resource net.subnet a {
     s.write("stacks/net.df", NET);
     s.write("elsewhere/app.df", app);
     let r = s.run_in("elsewhere", &["plan", "app.df"]).success();
-    assert_eq!(r.summary(), "stack app is undeformed", "{}", r.stdout);
+    assert_eq!(r.summary(), "stack app is up to date", "{}", r.stdout);
     let r = s
-        .run_in("elsewhere", &["-C", "../infra", "plan", "app"])
+        .run_in(
+            "elsewhere",
+            &["-C", "../infra", "plan", "--why=none", "app"],
+        )
         .success();
     assert!(r.stdout.contains(want), "{}", r.stdout);
 }
@@ -321,7 +326,7 @@ fn a_type_the_provider_does_not_declare_is_a_plan_error() {
     s.write("stacks/pngu.df", &src);
     s.run(&["apply", "pngu"]).success();
     let r = s.run(&["plan", "pngu"]).success();
-    assert!(r.stdout.contains("is undeformed"), "{}", r.stdout);
+    assert!(r.stdout.contains("is up to date"), "{}", r.stdout);
 }
 
 /// A program that names no provider starts none: every command that
@@ -356,7 +361,7 @@ fn a_program_with_no_provider_starts_none() {
         .success();
     assert_eq!(
         r.summary(),
-        "plan: 1 deformation (1 create)",
+        "plan: 1 change (1 create) over 1 tick",
         "{}",
         r.stdout
     );

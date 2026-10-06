@@ -69,7 +69,7 @@ fn a_memo_survives_a_replan_and_is_gone_after_taint() {
     );
     answers(&s, "second");
     let r = run(&s, &[], &["plan", "p.df"]).success();
-    assert_eq!(r.summary(), "stack p is undeformed", "{}", r.stdout);
+    assert_eq!(r.summary(), "stack p is up to date", "{}", r.stdout);
     // `why` says the value is a memo's and when it was kept.
     let r = run(&s, &[], &["why", "db.user[\"app\"].password", "p.df"]).success();
     assert!(
@@ -93,7 +93,7 @@ fn a_memo_survives_a_replan_and_is_gone_after_taint() {
     assert!(!s.read("dform.state/p/state.json").contains("pw-first"));
     let r = run(&s, &[], &["plan", "p.df"]).success();
     assert!(
-        r.stdout.contains("password: \"pw-first\" -> \"pw-second\""),
+        r.stdout.contains("password: \"pw-first\" → \"pw-second\""),
         "{}",
         r.stdout
     );
@@ -153,7 +153,7 @@ fn a_secret_memo_is_kept_sealed_never_in_the_clear() {
     // Another master: the candidate changes, the kept value does not.
     let second = [("RANDOM_MASTER", "second-master")];
     let r = run(&s, &second, &["plan", "--out", "plan.json", "p.df"]).success();
-    assert_eq!(r.summary(), "stack p is undeformed", "{}", r.stdout);
+    assert_eq!(r.summary(), "stack p is up to date", "{}", r.stdout);
     outputs.extend([r.stdout, r.stderr, s.read("plan.json")]);
     for args in [
         &["why", "db.secret[\"v\"].password", "p.df"][..],
