@@ -105,7 +105,7 @@ fn the_fake_component_conforms_as_its_native_build_does() {
     );
 }
 
-/// Plan, apply and plan again, undeformed, with the mock a component.
+/// Plan, apply and plan again, up to date, with the mock a component.
 #[test]
 fn a_run_plans_and_applies_through_the_component() {
     let s = Scratch::new("host-wasm-apply");
@@ -114,7 +114,7 @@ fn a_run_plans_and_applies_through_the_component() {
     assert!(r.stdout.contains("+ net.vpc[\"main\"]"), "{}", r.stdout);
     mock(&s, &["apply"]).success();
     let r = mock(&s, &["plan"]).success();
-    assert_eq!(r.summary(), "stack p is undeformed", "{}", r.stdout);
+    assert_eq!(r.summary(), "stack p is up to date", "{}", r.stdout);
 }
 
 /// The component exits as it is called to Apply the third action: the
