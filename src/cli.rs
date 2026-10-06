@@ -2842,6 +2842,17 @@ fn run_with(
                 } else {
                     if why == report::Why::None && (tick > 1 || boundary) {
                         println!("tick {tick}:");
+                    } else if why != report::Why::None && tick > 1 {
+                        // A later tick that only waits has no section of
+                        // its own in the report: its header says which
+                        // tick the report is of.
+                        let report = report_of(&plan, &res, &sections, tick, &[], &denies);
+                        if !report.undeformed && report.changes() == 0 {
+                            println!(
+                                "tick {tick}  0 changes, now that tick {} reported",
+                                tick - 1
+                            );
+                        }
                     }
                     show(&plan, &res, &sections, tick, &[], &denies);
                 }

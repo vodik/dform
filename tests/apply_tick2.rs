@@ -193,7 +193,8 @@ fn a_plan_file_stops_before_what_it_did_not_show() {
 
 /// The server's endpoint not there yet after tick 1 (chaos `not-ready`, a
 /// host still booting): the tick waits on it, then configures the
-/// provider and applies what waited on it.
+/// provider and applies what waited on it. The tick that only waits
+/// prints its header.
 #[test]
 fn the_boundary_waits_for_the_settings_then_configures() {
     let s = scratch("tick2-waits");
@@ -213,6 +214,13 @@ fn the_boundary_waits_for_the_settings_then_configures() {
             .contains("waiting on db.postgres[\"server\"].endpoint since "),
         "{}",
         r.stderr
+    );
+    // Tick 2 only waits: its header says which tick the report is of.
+    assert!(
+        r.stdout
+            .contains("tick 2  0 changes, now that tick 1 reported\nplan: 0 changes, 1 later\n"),
+        "{}",
+        r.stdout
     );
     assert!(
         r.stdout
