@@ -12,8 +12,12 @@
 //! Remote ids: an instance's and an SSH key's are the API's ids; a DNS
 //! record's is `ZONE/ID`. Plan diffs locally (`provider::diff`), and an
 //! instance's flavor and image are checked against what its region offers.
-//! Apply refuses every change for now: Create, Update and Delete are
-//! R-44's second half.
+//! A Create looks for an object of the same key first: one this process
+//! made under the same idempotency key is the answer (a Create sent again
+//! after a timeout, R-81), another is refused, to be adopted or renamed.
+//! `provider.created` answers by the same key, so a Create whose answer
+//! was lost is adopted. An instance's Create waits for it to be ACTIVE; a
+//! Delete waits for it to go.
 
 use crate::api::{self, Client, escape};
 use crate::config;
@@ -23,14 +27,16 @@ use anyhow::{Result, anyhow, bail};
 use dform_core::ir::Address;
 use dform_core::plugin::backend::{self, CallError, Handler, Reply, VERSION};
 use dform_core::plugin::pb;
+use dform_core::plugin::providers::CREATED;
 use dform_core::plugin::wire;
-use dform_core::provider::{self, diff, norm_path};
+use dform_core::provider::{self, diff, marker, norm_path};
 use dform_core::schema::Schema;
 use dform_core::value::Value;
 use serde_json::{Value as Json, json};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, RwLock};
+use std::time::{Duration, Instant};
 
 /// The provider's name, its types' namespace (R-36).
 pub const PROVIDER: &str = "ovh";
@@ -55,6 +61,37 @@ pub fn schema() -> Result<Schema> {
     Schema::parse(SCHEMA, "dform-provider-ovh/src/schema.df")
 }
 
+/// How long an instance's Create waits for it to be ACTIVE, and a Delete
+/// for it to go. dform's own timeout per call (R-81, `[providers.ovh]
+/// timeout`) may be shorter: past it a Create is found again by its key.
+const CREATE_WAIT: Duration = Duration::from_secs(15 * 60);
+const DELETE_WAIT: Duration = Duration::from_secs(5 * 60);
+
+/// How often an instance is polled while it is made or deleted:
+/// `DFORM_OVH_POLL_MS`, else 5s.
+fn poll() -> Duration {
+    std::env::var("DFORM_OVH_POLL_MS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .map_or(Duration::from_secs(5), Duration::from_millis)
+}
+
+/// How to find what a Create made, by the object's key.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Made {
+    Instance { name: String, region: String },
+    SshKey { name: String },
+    Record(RecordKey),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RecordKey {
+    zone: String,
+    subdomain: String,
+    typ: String,
+    target: String,
+}
+
 /// The account a configured provider reaches.
 struct Account {
     client: Client,
@@ -74,8 +111,38 @@ struct Configured {
 pub struct Ovh {
     schema: Schema,
     state: RwLock<Option<Arc<Configured>>>,
+    /// The Creates this process was sent, by idempotency key.
+    made: Mutex<BTreeMap<String, Made>>,
     /// Each region's flavors and images, as the API listed them.
     lists: Mutex<BTreeMap<String, Json>>,
+}
+
+/// Why an Apply failed.
+enum Failed {
+    Refused(String),
+    MaybeApplied(String),
+}
+
+impl From<Failed> for CallError {
+    fn from(f: Failed) -> CallError {
+        match f {
+            Failed::Refused(m) => CallError::Refused(m),
+            Failed::MaybeApplied(m) => CallError::MaybeApplied(m),
+        }
+    }
+}
+
+/// An API failure inside an Apply: no answer may have taken effect; an
+/// answer refused it (a 5xx or 429 says so, and dform sends it again).
+fn failed(at: &str, e: api::Error) -> Failed {
+    match e {
+        api::Error::Unreachable { .. } => Failed::MaybeApplied(format!("{at}: {e}")),
+        api::Error::Status { .. } => Failed::Refused(format!("{at}: {e}")),
+    }
+}
+
+fn refused(at: &str, e: impl std::fmt::Display) -> Failed {
+    Failed::Refused(format!("{at}: {e}"))
 }
 
 fn address(typ: &str, name: &str) -> Address {
@@ -89,6 +156,18 @@ fn s<'a>(doc: &'a Json, k: &str) -> Option<&'a str> {
     doc.get(k).and_then(Json::as_str)
 }
 
+/// A string attribute an Apply needs, known.
+fn need<'a>(at: &str, doc: &'a Json, k: &str) -> std::result::Result<&'a str, Failed> {
+    match doc.get(k) {
+        Some(Json::String(v)) => Ok(v),
+        Some(v) if marker(v).is_some() => Err(Failed::Refused(format!(
+            "{at}: {k} is {}, not a value the provider can send",
+            provider::fmt_value(Some(v))
+        ))),
+        _ => Err(Failed::Refused(format!("{at}: {k} is not set"))),
+    }
+}
+
 impl Default for Ovh {
     fn default() -> Ovh {
         Ovh::new()
@@ -100,6 +179,7 @@ impl Ovh {
         Ovh {
             schema: schema().expect("the provider's schema parses"),
             state: RwLock::new(None),
+            made: Mutex::new(BTreeMap::new()),
             lists: Mutex::new(BTreeMap::new()),
         }
     }
@@ -396,23 +476,482 @@ impl Ovh {
         Ok(())
     }
 
-    // Apply: Create, Update and Delete are the second half of R-44.
+    // Apply.
 
-    fn apply(&self, r: &pb::ApplyRequest) -> std::result::Result<pb::ApplyResponse, CallError> {
+    fn apply(&self, r: &pb::ApplyRequest) -> std::result::Result<pb::ApplyResponse, Failed> {
         let op = pb::Op::try_from(r.op).unwrap_or(pb::Op::Unspecified);
         if op == pb::Op::EndTick {
             return Ok(pb::ApplyResponse::default());
         }
-        Err(CallError::Refused(format!(
-            "apply {}: the ovh provider reads and plans; it does not create, change or \
-             delete yet",
-            address(&r.r#type, &r.name)
-        )))
+        let typ = r.r#type.as_str();
+        let at = format!("apply {}", address(typ, &r.name));
+        if !self.schema.knows_type(typ) {
+            return Err(refused(&at, format!("the ovh provider has no type {typ}")));
+        }
+        let config = match r.config.as_ref().map(wire::from_doc).transpose() {
+            Ok(c) => c.unwrap_or(Json::Null),
+            Err(e) => return Err(refused(&at, format!("{e:#}"))),
+        };
+        let key = r.idempotency_key.as_str();
+        let mut notes = Vec::new();
+        let (remote, attrs, computed) = match op {
+            pb::Op::Create => self.create(typ, &at, &config, key, &mut notes)?,
+            pb::Op::Update | pb::Op::Adopt => self.update(typ, &at, &r.remote, &config)?,
+            pb::Op::Delete => {
+                self.delete(typ, &at, &r.remote, &mut notes)?;
+                return Ok(pb::ApplyResponse {
+                    notes,
+                    ..Default::default()
+                });
+            }
+            pb::Op::Replace => {
+                // The key is the name: the old object goes first unless the
+                // replacement has another key.
+                let old = self
+                    .read(typ, &r.remote, &r.name)
+                    .map_err(|e| refused(&at, format!("{e:#}")))?;
+                let same = old
+                    .as_ref()
+                    .is_none_or(|(attrs, _)| self.key_of(typ, attrs) == self.key_of(typ, &config));
+                if r.create_first && same {
+                    notes.push(format!(
+                        "{at}: the replacement has the old object's key, so the old one goes first"
+                    ));
+                }
+                if !r.create_first || same {
+                    self.delete(typ, &at, &r.remote, &mut notes)?;
+                }
+                self.create(typ, &at, &config, key, &mut notes)?
+            }
+            _ => return Err(refused(&at, "no operation")),
+        };
+        Ok(pb::ApplyResponse {
+            remote,
+            attrs: Some(wire::doc(&attrs)),
+            computed: Some(wire::doc(&computed)),
+            elapsed_ms: 0,
+            notes,
+        })
+    }
+
+    /// What names an object of `typ` uniquely, from its document.
+    fn key_of(&self, typ: &str, doc: &Json) -> Option<Made> {
+        let st = |k: &str| s(doc, k).map(str::to_string);
+        Some(match typ {
+            INSTANCE => Made::Instance {
+                name: st("name")?,
+                region: st("region")?,
+            },
+            SSH_KEY => Made::SshKey { name: st("name")? },
+            RECORD => Made::Record(RecordKey {
+                zone: st("zone")?,
+                subdomain: st("subdomain").unwrap_or_default(),
+                typ: st("type")?,
+                target: st("target")?,
+            }),
+            _ => return None,
+        })
+    }
+
+    /// The remote id of the object `made` names, if it exists.
+    fn find(&self, made: &Made) -> Result<Option<String>> {
+        Ok(match made {
+            Made::Instance { name, region } => {
+                let (a, p) = self.project("find an instance")?;
+                let list = a.client.get(&format!(
+                    "/cloud/project/{p}/instance?region={}",
+                    escape(region)
+                ))?;
+                list.as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter(|o| !matches!(s(o, "status"), Some("DELETED" | "SOFT_DELETED")))
+                    .find(|o| s(o, "name") == Some(name) && s(o, "region") == Some(region))
+                    .and_then(|o| s(o, "id"))
+                    .map(str::to_string)
+            }
+            Made::SshKey { name } => {
+                let (a, p) = self.project("find an SSH key")?;
+                let list = a.client.get(&format!("/cloud/project/{p}/sshkey"))?;
+                list.as_array()
+                    .into_iter()
+                    .flatten()
+                    .find(|o| s(o, "name") == Some(name))
+                    .and_then(|o| s(o, "id"))
+                    .map(str::to_string)
+            }
+            Made::Record(k) => {
+                let a = self.account("find a DNS record")?;
+                let zone = escape(&k.zone);
+                let ids = a.client.get(&format!(
+                    "/domain/zone/{zone}/record?fieldType={}&subDomain={}",
+                    escape(&k.typ),
+                    escape(&k.subdomain)
+                ))?;
+                let mut found = None;
+                for id in ids
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(Json::as_i64)
+                {
+                    let Some(o) = a
+                        .client
+                        .get_opt(&format!("/domain/zone/{zone}/record/{id}"))?
+                    else {
+                        continue;
+                    };
+                    if s(&o, "target") == Some(k.target.as_str()) {
+                        found = Some(map::record_remote(&k.zone, id));
+                        break;
+                    }
+                }
+                found
+            }
+        })
+    }
+
+    /// `provider.created(Type, Name, Key, Remote)`: what a Create this
+    /// process was sent with `key` made.
+    pub fn created(&self, key: &str) -> Result<Option<String>> {
+        let made = self
+            .made
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(key)
+            .cloned();
+        match made {
+            Some(m) => self.find(&m),
+            None => Ok(None),
+        }
+    }
+
+    fn create(
+        &self,
+        typ: &str,
+        at: &str,
+        config: &Json,
+        key: &str,
+        notes: &mut Vec<String>,
+    ) -> std::result::Result<(String, Json, Json), Failed> {
+        let made = self
+            .key_of(typ, config)
+            .ok_or_else(|| refused(at, "its key (name, or zone, type and target) is not known"))?;
+        // An object of the same key: this process's own (the same Create
+        // sent again) is the answer; another is not taken over.
+        let ours = !key.is_empty()
+            && self.made.lock().unwrap_or_else(|e| e.into_inner()).get(key) == Some(&made);
+        if let Some(remote) = self
+            .find(&made)
+            .map_err(|e| refused(at, format!("{e:#}")))?
+        {
+            if ours {
+                let (attrs, computed) = self.read_made(typ, at, &remote)?;
+                return Ok((remote, attrs, computed));
+            }
+            return Err(refused(
+                at,
+                format!(
+                    "{typ} {remote} already exists with this key ({made:?}); adopt it or name another"
+                ),
+            ));
+        }
+        if !key.is_empty() {
+            self.made
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .insert(key.to_string(), made);
+        }
+        match typ {
+            INSTANCE => self.create_instance(at, config, notes),
+            SSH_KEY => {
+                let (a, p) = self
+                    .project(at)
+                    .map_err(|e| refused(at, format!("{e:#}")))?;
+                let body = json!({
+                    "name": need(at, config, "name")?,
+                    "publicKey": need(at, config, "public_key")?,
+                });
+                let o = a
+                    .client
+                    .post(&format!("/cloud/project/{p}/sshkey"), &body)
+                    .map_err(|e| failed(at, e))?;
+                let (attrs, computed) = map::ssh_key(&o);
+                Ok((s(&o, "id").unwrap_or_default().to_string(), attrs, computed))
+            }
+            RECORD => {
+                let a = self
+                    .account(at)
+                    .map_err(|e| refused(at, format!("{e:#}")))?;
+                let zone = need(at, config, "zone")?;
+                let mut body = json!({
+                    "fieldType": need(at, config, "type")?,
+                    "subDomain": s(config, "subdomain").unwrap_or_default(),
+                    "target": need(at, config, "target")?,
+                });
+                if let Some(ttl) = config.get("ttl").and_then(Json::as_i64) {
+                    body["ttl"] = json!(ttl);
+                }
+                let o = a
+                    .client
+                    .post(&format!("/domain/zone/{}/record", escape(zone)), &body)
+                    .map_err(|e| failed(at, e))?;
+                self.refresh_zone(&a, at, zone, notes);
+                let (attrs, computed) = map::record(&o);
+                let id = o.get("id").and_then(Json::as_i64).unwrap_or(0);
+                Ok((map::record_remote(zone, id), attrs, computed))
+            }
+            _ => Err(refused(at, format!("the ovh provider has no type {typ}"))),
+        }
+    }
+
+    /// The object a Create made, read.
+    fn read_made(
+        &self,
+        typ: &str,
+        at: &str,
+        remote: &str,
+    ) -> std::result::Result<(Json, Json), Failed> {
+        self.read(typ, remote, "")
+            .map_err(|e| refused(at, format!("{e:#}")))?
+            .ok_or_else(|| Failed::MaybeApplied(format!("{at}: {typ} {remote} is gone again")))
+    }
+
+    fn create_instance(
+        &self,
+        at: &str,
+        config: &Json,
+        notes: &mut Vec<String>,
+    ) -> std::result::Result<(String, Json, Json), Failed> {
+        let (a, p) = self
+            .project(at)
+            .map_err(|e| refused(at, format!("{e:#}")))?;
+        let region = need(at, config, "region")?;
+        let flavor = need(at, config, "flavor")?;
+        let image = need(at, config, "image")?;
+        let mut body = json!({
+            "name": need(at, config, "name")?,
+            "region": region,
+            "flavorId": self.flavor_id(&a, &p, region, flavor).map_err(|e| refused(at, format!("{e:#}")))?,
+            "imageId": self.image_id(&a, &p, region, image).map_err(|e| refused(at, format!("{e:#}")))?,
+            "monthlyBilling": false,
+        });
+        if config.get("ssh_key").is_some() {
+            body["sshKeyId"] = json!(need(at, config, "ssh_key")?);
+        }
+        let user_data = match config.get("user_data") {
+            None => None,
+            Some(_) => Some(need(at, config, "user_data")?),
+        };
+        if let Some(u) = user_data {
+            body["userData"] = json!(u);
+        }
+        let o = a
+            .client
+            .post(&format!("/cloud/project/{p}/instance"), &body)
+            .map_err(|e| failed(at, e))?;
+        let id = s(&o, "id").unwrap_or_default().to_string();
+        self.record()
+            .set(&id, config.get("user_data").map(record::digest));
+        // Wait for it to run: until then it has no address.
+        let start = Instant::now();
+        let mut last = o;
+        while s(&last, "status") != Some("ACTIVE") {
+            if s(&last, "status") == Some("ERROR") {
+                notes.push(format!(
+                    "{at}: instance {id} is in ERROR; it is kept in state, to be replaced or \
+                     deleted"
+                ));
+                break;
+            }
+            if start.elapsed() > CREATE_WAIT {
+                notes.push(format!(
+                    "{at}: instance {id} is still {} after {}s",
+                    s(&last, "status").unwrap_or("unknown"),
+                    CREATE_WAIT.as_secs()
+                ));
+                break;
+            }
+            std::thread::sleep(poll());
+            match a
+                .client
+                .get_opt(&format!("/cloud/project/{p}/instance/{}", escape(&id)))
+            {
+                Ok(Some(o)) => last = o,
+                Ok(None) => {
+                    return Err(Failed::MaybeApplied(format!(
+                        "{at}: instance {id} went away while it was made"
+                    )));
+                }
+                // A failed poll is no answer about the instance: ask again.
+                Err(_) => {}
+            }
+        }
+        let (attrs, computed) = self
+            .instance_doc(&a, &p, &last)
+            .ok_or_else(|| Failed::MaybeApplied(format!("{at}: instance {id} was deleted")))?;
+        Ok((id, attrs, computed))
+    }
+
+    fn update(
+        &self,
+        typ: &str,
+        at: &str,
+        remote: &str,
+        config: &Json,
+    ) -> std::result::Result<(String, Json, Json), Failed> {
+        let now = self
+            .read(typ, remote, "")
+            .map_err(|e| refused(at, format!("{e:#}")))?
+            .ok_or_else(|| refused(at, format!("{typ} {remote} is not there")))?;
+        match typ {
+            INSTANCE => {
+                let (a, p) = self
+                    .project(at)
+                    .map_err(|e| refused(at, format!("{e:#}")))?;
+                let name = need(at, config, "name")?;
+                if s(&now.0, "name") != Some(name) {
+                    a.client
+                        .put(
+                            &format!("/cloud/project/{p}/instance/{}", escape(remote)),
+                            &json!({"instanceName": name}),
+                        )
+                        .map_err(|e| failed(at, e))?;
+                }
+            }
+            RECORD => {
+                let a = self
+                    .account(at)
+                    .map_err(|e| refused(at, format!("{e:#}")))?;
+                let (zone, id) = remote.rsplit_once('/').unwrap_or_default();
+                let ttl = config.get("ttl").and_then(Json::as_i64).unwrap_or(0);
+                let was = now.1.get("ttl").and_then(Json::as_i64).unwrap_or(0);
+                if ttl != was {
+                    let body = json!({
+                        "subDomain": s(config, "subdomain").unwrap_or_default(),
+                        "target": need(at, config, "target")?,
+                        "ttl": ttl,
+                    });
+                    a.client
+                        .put(
+                            &format!("/domain/zone/{}/record/{}", escape(zone), escape(id)),
+                            &body,
+                        )
+                        .map_err(|e| failed(at, e))?;
+                    self.refresh_zone(&a, at, zone, &mut Vec::new());
+                }
+            }
+            // Nothing of an SSH key changes in place (the schema replaces it).
+            _ => {}
+        }
+        let (attrs, computed) = self.read_made(typ, at, remote)?;
+        Ok((remote.to_string(), attrs, computed))
+    }
+
+    fn delete(
+        &self,
+        typ: &str,
+        at: &str,
+        remote: &str,
+        notes: &mut Vec<String>,
+    ) -> std::result::Result<(), Failed> {
+        let gone_already = |e: &api::Error| e.is_not_found();
+        match typ {
+            INSTANCE => {
+                let (a, p) = self
+                    .project(at)
+                    .map_err(|e| refused(at, format!("{e:#}")))?;
+                let path = format!("/cloud/project/{p}/instance/{}", escape(remote));
+                match a.client.delete(&path) {
+                    Ok(_) => {}
+                    Err(e) if gone_already(&e) => {}
+                    Err(e) => return Err(failed(at, e)),
+                }
+                let start = Instant::now();
+                loop {
+                    match a.client.get_opt(&path) {
+                        Ok(None) => break,
+                        Ok(Some(o)) if matches!(s(&o, "status"), Some("DELETED")) => break,
+                        _ if start.elapsed() > DELETE_WAIT => {
+                            notes.push(format!(
+                                "{at}: instance {remote} is still being deleted after {}s",
+                                DELETE_WAIT.as_secs()
+                            ));
+                            break;
+                        }
+                        _ => std::thread::sleep(poll()),
+                    }
+                }
+                self.record().set(remote, None);
+            }
+            SSH_KEY => {
+                let (a, p) = self
+                    .project(at)
+                    .map_err(|e| refused(at, format!("{e:#}")))?;
+                match a
+                    .client
+                    .delete(&format!("/cloud/project/{p}/sshkey/{}", escape(remote)))
+                {
+                    Ok(_) => {}
+                    Err(e) if gone_already(&e) => {}
+                    Err(e) => return Err(failed(at, e)),
+                }
+            }
+            RECORD => {
+                let a = self
+                    .account(at)
+                    .map_err(|e| refused(at, format!("{e:#}")))?;
+                let (zone, id) = remote.rsplit_once('/').unwrap_or_default();
+                match a.client.delete(&format!(
+                    "/domain/zone/{}/record/{}",
+                    escape(zone),
+                    escape(id)
+                )) {
+                    Ok(_) => {}
+                    Err(e) if gone_already(&e) => {}
+                    Err(e) => return Err(failed(at, e)),
+                }
+                self.refresh_zone(&a, at, zone, notes);
+            }
+            _ => return Err(refused(at, format!("the ovh provider has no type {typ}"))),
+        }
+        Ok(())
+    }
+
+    /// A zone's changes are served once it is refreshed; a refresh that
+    /// fails is a note, the record is written.
+    fn refresh_zone(&self, a: &Account, at: &str, zone: &str, notes: &mut Vec<String>) {
+        if let Err(e) = a.client.post(
+            &format!("/domain/zone/{}/refresh", escape(zone)),
+            &json!({}),
+        ) {
+            notes.push(format!("{at}: the zone {zone} is not refreshed: {e}"));
+        }
     }
 
     // Query.
 
     pub fn query(&self, pred: &str, plus: &[bool], inputs: &[Value]) -> Result<Vec<Vec<Value>>> {
+        if pred == CREATED {
+            let [Value::Str(typ), name, Value::Str(key)] = inputs else {
+                bail!("{CREATED} is asked with Type, Name and Key bound");
+            };
+            if key.is_empty() {
+                return Ok(Vec::new());
+            }
+            return Ok(self
+                .created(key)?
+                .map(|remote| {
+                    vec![
+                        Value::Str(typ.clone()),
+                        name.clone(),
+                        Value::Str(key.clone()),
+                        Value::Str(remote),
+                    ]
+                })
+                .into_iter()
+                .collect());
+        }
         let Some((_, binding)) = EXTERNS.iter().find(|(p, _)| *p == pred) else {
             bail!("the ovh provider answers no extern {pred}");
         };
@@ -474,6 +1013,35 @@ impl Ovh {
                 map::image_rows(input, &self.list(&a, &p, "image", input)?)
             }
         })
+    }
+
+    /// Documents for `dform provider check`: an instance, renamed in
+    /// place, with no user data (Read cannot answer it); one with user
+    /// data for Plan's sensitive check. The region, flavor and image are
+    /// `OVH_CHECK_REGION`, `OVH_CHECK_FLAVOR` and `OVH_CHECK_IMAGE`, else
+    /// the cheapest Linux instance of BHS5.
+    pub fn examples(&self) -> Vec<pb::Example> {
+        let env = |k: &str, d: &str| std::env::var(k).unwrap_or_else(|_| d.to_string());
+        let doc = |name: &str| {
+            json!({
+                "name": name,
+                "region": env("OVH_CHECK_REGION", "BHS5"),
+                "flavor": env("OVH_CHECK_FLAVOR", "d2-2"),
+                "image": env("OVH_CHECK_IMAGE", "Ubuntu 24.04"),
+            })
+        };
+        let mut with_data = doc("dform-check-data");
+        with_data["user_data"] = json!("#cloud-config\n");
+        let ex = |create: Json, update: Json, required: &str| pb::Example {
+            r#type: INSTANCE.into(),
+            create: Some(wire::doc(&create)),
+            update: Some(wire::doc(&update)),
+            required: required.into(),
+        };
+        vec![
+            ex(doc("dform-check"), doc("dform-check-renamed"), "flavor"),
+            ex(with_data.clone(), with_data, ""),
+        ]
     }
 }
 
@@ -539,7 +1107,7 @@ impl Handler for Ovh {
                 Reply::Handshake(pb::HandshakeResponse {
                     protocol_version: VERSION,
                     name: PROVIDER.into(),
-                    capabilities: ["resource"].map(String::from).to_vec(),
+                    capabilities: ["resource", "managed"].map(String::from).to_vec(),
                     version: backend::BUILD.into(),
                 })
             }
@@ -559,7 +1127,7 @@ impl Handler for Ovh {
                     })
                     .collect(),
                 checks_refinements: false,
-                examples: Vec::new(),
+                examples: self.examples(),
             }),
             C::Query(q) => {
                 let inputs = q

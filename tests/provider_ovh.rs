@@ -12,6 +12,7 @@
 mod common;
 use common::{Run, Scratch};
 use dform_provider_ovh::fake::{self, Server};
+use serde_json::Value as Json;
 
 fn ovh() -> String {
     common::exe("dform-provider-ovh")
@@ -74,6 +75,54 @@ resource ovh.domain_record www {{
     )
 }
 
+fn names(objects: &[Json]) -> Vec<String> {
+    let mut n: Vec<String> = objects
+        .iter()
+        .map(|o| o["name"].as_str().unwrap_or_default().to_string())
+        .collect();
+    n.sort();
+    n
+}
+
+fn posts(server: &Server, path: &str) -> usize {
+    server
+        .calls()
+        .iter()
+        .filter(|c| c.starts_with("POST ") && c.ends_with(path))
+        .count()
+}
+
+#[test]
+fn provider_check_conforms_against_the_fake_api() {
+    let server = Server::start();
+    let s = Scratch::new("ovh-check");
+    let mut c = common::dform();
+    c.args(["provider", "check", &ovh()])
+        .current_dir(&s.dir)
+        .env("HOME", &s.dir)
+        .env("XDG_CONFIG_HOME", s.path("config"))
+        .env("OVH_CLOUD_PROJECT_SERVICE", fake::PROJECT)
+        .env("OVH_CHECK_REGION", "BHS5");
+    for (k, v) in server.env() {
+        c.env(k, v);
+    }
+    let r = Run::from(c.output().unwrap()).success();
+    assert!(!r.stdout.contains("FAIL"), "{}", r.stdout);
+    for check in [
+        "ok    Schema serves its own types, with examples",
+        "ok    Schema's types are named under the provider's name, ovh",
+        "ok    Plan refuses a document without a required attribute",
+        "ok    Plan marks a sensitive attribute sensitive",
+        "ok    Apply CREATE again with the same idempotency key answers the object it made",
+        "ok    Query provider.created answers what an idempotency key made",
+        "ok    Apply UPDATE changes the object in place",
+        "ok    Apply DELETE removes the object",
+    ] {
+        assert!(r.stdout.contains(check), "{check}\n{}", r.stdout);
+    }
+    assert!(server.instances().is_empty(), "{:?}", server.instances());
+}
+
 /// Planning reads the account and changes nothing: what is new is a
 /// create; an instance made elsewhere, adopted by its id, is read.
 #[test]
@@ -118,13 +167,136 @@ fn a_program_plans_against_the_account() {
         "{}",
         plan.stdout
     );
-    // Applying is the second half.
-    let r = dform(&s, &server, &["apply", "main.df"]).failure();
+    // Adopting it changes nothing there.
+    dform(&s, &server, &["apply", "main.df"]).success();
+    assert_eq!(names(&server.instances()), ["old"]);
     assert!(
-        r.stderr.contains("does not create, change or delete yet"),
-        "{}",
-        r.stderr
+        server.calls().iter().all(|c| c.starts_with("GET ")),
+        "{:?}",
+        server.calls()
     );
+}
+
+#[test]
+fn a_program_plans_applies_and_plans_clean() {
+    let server = Server::start();
+    server.build_polls(3);
+    let s = project(
+        "ovh-apply",
+        "",
+        &program(&server, "#cloud-config\\n", "b2-7"),
+    );
+    let plan = dform(&s, &server, &["plan", "main.df"]).success();
+    for line in [
+        "ovh.ssh_key[\"admin\"]",
+        "ovh.instance[\"server\"]",
+        "ovh.domain_record[\"www\"]",
+    ] {
+        assert!(plan.stdout.contains(line), "{line}\n{}", plan.stdout);
+    }
+    // Planning creates nothing.
+    assert!(server.instances().is_empty() && server.keys().is_empty());
+
+    dform(&s, &server, &["apply", "main.df"]).success();
+    let keys = server.keys();
+    let instances = server.instances();
+    assert_eq!(names(&keys), ["lab-admin"]);
+    assert_eq!(names(&instances), ["lab-server"]);
+    let server_doc = &instances[0];
+    assert_eq!(server_doc["status"], "ACTIVE");
+    // The reference is the key's id; the user data was sent.
+    assert_eq!(server_doc["sshKeyId"], keys[0]["id"]);
+    let sent = server
+        .seen()
+        .into_iter()
+        .find(|c| c.method == "POST" && c.path.ends_with("/instance"))
+        .unwrap();
+    assert_eq!(sent.body["userData"], "#cloud-config\n");
+    assert_eq!(sent.body["flavorId"], "flavor-b2-7-ca-east-tor");
+    let records = server.records();
+    assert_eq!(records.len(), 1);
+    let ip = server_doc["ipAddresses"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["version"] == 4)
+        .unwrap()["ip"]
+        .clone();
+    assert_eq!(records[0]["target"], ip);
+    assert_eq!(records[0]["subDomain"], "www");
+    // The digest of the user data is kept, never the text.
+    let kept = s.read("dform.state/cache/ovh-user-data.json");
+    assert!(!kept.contains("cloud-config"), "{kept}");
+
+    // Nothing changed: nothing to do, the user data included.
+    let again = dform(&s, &server, &["plan", "main.df"]).success();
+    assert!(
+        !again.stdout.contains("ovh.instance[\"server\"]"),
+        "{}",
+        again.stdout
+    );
+
+    // New user data replaces the instance.
+    s.write(
+        "main.df",
+        &program(&server, "#cloud-config\\nruncmd: []\\n", "b2-7"),
+    );
+    let changed = dform(&s, &server, &["plan", "main.df"]).success();
+    assert!(
+        changed.stdout.contains("ovh.instance[\"server\"]"),
+        "{}",
+        changed.stdout
+    );
+    assert!(changed.stdout.contains("replace"), "{}", changed.stdout);
+
+    // Delete them all.
+    s.write(
+        "main.df",
+        &format!(
+            "provider ovh {{ endpoint = \"{}\", project = \"lab\" }}\n",
+            server.endpoint
+        ),
+    );
+    dform(&s, &server, &["apply", "main.df"]).success();
+    assert!(server.instances().is_empty(), "{:?}", server.instances());
+    assert!(server.keys().is_empty() && server.records().is_empty());
+}
+
+/// A rename and a record's ttl change in place: the same objects, a PUT
+/// each.
+#[test]
+fn a_rename_and_a_ttl_change_in_place() {
+    let server = Server::start();
+    let program = |name: &str, ttl: &str| {
+        format!(
+            "provider ovh {{ endpoint = \"{}\", project = \"lab\" }}\n\
+             resource ovh.instance vm {{\n  name = \"{name}\"\n  region = \"BHS5\"\n  \
+             flavor = \"d2-2\"\n  image = \"Debian 13\"\n}}\n\
+             resource ovh.domain_record apex {{\n  zone = \"example.com\"\n  type = \"TXT\"\n  \
+             target = \"hello\"\n{ttl}}}\n",
+            server.endpoint
+        )
+    };
+    let s = project("ovh-in-place", "", &program("vm-a", ""));
+    dform(&s, &server, &["apply", "main.df"]).success();
+    let (vm, rec) = (server.instances(), server.records());
+    assert_eq!(rec[0]["ttl"], 0);
+    assert_eq!(rec[0]["subDomain"], "");
+    s.write("main.df", &program("vm-b", "  ttl = 300\n"));
+    let plan = dform(&s, &server, &["plan", "main.df"]).success();
+    assert!(
+        plan.stdout.contains("~ ovh.instance[\"vm\"]")
+            && plan.stdout.contains("~ ovh.domain_record[\"apex\"]"),
+        "{}",
+        plan.stdout
+    );
+    dform(&s, &server, &["apply", "main.df"]).success();
+    assert_eq!(server.instances()[0]["id"], vm[0]["id"]);
+    assert_eq!(names(&server.instances()), ["vm-b"]);
+    assert_eq!(server.records()[0]["id"], rec[0]["id"]);
+    assert_eq!(server.records()[0]["ttl"], 300);
+    let again = dform(&s, &server, &["plan", "main.df"]).success();
+    assert!(again.stdout.contains("is up to date"), "{}", again.stdout);
 }
 
 #[test]
@@ -188,6 +360,47 @@ fn a_project_is_found_by_its_description_and_credentials_are_named() {
         "{}",
         r.stderr
     );
+}
+
+/// A Create whose answer does not come within dform's timeout (R-81) is
+/// found by its key and adopted, not made twice; the record that reads
+/// the instance's address waits for it.
+#[test]
+fn a_create_that_times_out_is_adopted() {
+    let server = Server::start();
+    server.build_polls(4000);
+    let s = project(
+        "ovh-timeout",
+        ", timeout = \"1s\", backoff = \"10ms\"",
+        &program(&server, "x", "b2-7"),
+    );
+    let r = dform(&s, &server, &["apply", "main.df"]);
+    assert!(r.ok, "{}\n{}", r.stdout, r.stderr);
+    assert_eq!(posts(&server, "/instance"), 1, "{:?}", server.calls());
+    assert_eq!(names(&server.instances()), ["lab-server"]);
+    assert_eq!(server.records().len(), 1);
+}
+
+/// A 503 on a Create is transient: dform sends it again (R-81).
+#[test]
+fn a_transient_failure_is_sent_again() {
+    let server = Server::start();
+    server.fail(
+        &format!("POST /cloud/project/{}/sshkey", fake::PROJECT),
+        &[503],
+    );
+    let s = project(
+        "ovh-503",
+        ", backoff = \"10ms\"",
+        &format!(
+            "provider ovh {{ endpoint = \"{}\", project = \"lab\" }}\n\
+             resource ovh.ssh_key k {{ name = \"k\", public_key = \"ssh-ed25519 A\" }}\n",
+            server.endpoint
+        ),
+    );
+    let r = dform(&s, &server, &["apply", "main.df"]);
+    assert!(r.ok, "{}\n{}", r.stdout, r.stderr);
+    assert_eq!(names(&server.keys()), ["k"]);
 }
 
 /// A data source as a table: the program picks the region's Debian image.
