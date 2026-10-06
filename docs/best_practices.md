@@ -202,7 +202,7 @@ Prefer stable resource names and express change via attributes. If you bake lots
 of configuration into the resource name, you create needless replacements.
 
 Good:
-- `net.vpc["main/vpc"]`, the copy `main`'s `vpc` (stable)
+- `net.vpc["main.vpc"]`, the copy `main`'s `vpc` (stable)
 - `cidr` changes across envs
 
 Risky:

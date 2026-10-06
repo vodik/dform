@@ -828,7 +828,7 @@ consistent and says what it waited on.
 so policy can read them and `why` can explain them:
 
 ```dform
-moved(aws.vpc, "main/vpc", core_vpc)       # renamed: state follows, nothing is replaced
+moved(aws.vpc, "main.vpc", core_vpc)       # renamed: state follows, nothing is replaced
 adopt(legacy, "vpc-0a1b2c")                          # exists already: take it over, no create
 lifecycle(orders, "prevent_destroy")                 # a delete or replace is a deny
 lifecycle(nodes, "create_before_destroy")            # a replace builds the new one first

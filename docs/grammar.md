@@ -319,6 +319,34 @@ of a read, or the block's clause ("Bodies"). A name with none was meant as
 a string: `env < prod` is `unknown name prod`. `==`, `!=` and the orders
 test; they do not bind.
 
+### Paths
+
+There is one grammar for a dotted name (R-112): a path, segments joined
+by `.`, read from its first segment as "Names" says. A value is
+`config.region`, a copy's output `blue.cidr`, a deployment's
+`platform[env].ingress_ip`, and a resource is addressed the same way:
+its module's or copy's path, its own name last. The copy blue's
+resource `vpc` is `blue.vpc`, a nested copy's `edge.left.vpc`, a used
+module's `k3s.admin`, read `k3s.admin.public_key` and asked `why
+k3s.admin`. A type is the same shape: a provider is a scope whose items
+are its types and externs, so `ovh.instance` is the item `instance` of
+`ovh` as `k3s.admin` is the item `admin` of `k3s`, and one scope's names
+are one namespace (a module may not be named like a provider in scope,
+as two `use`s may not share a name).
+
+A segment is a name, or any text quoted: a resource whose own name holds
+`.`, `[`, `]`, `/` or `"` (an interpolated DNS name) is one quoted
+segment, `k3s."k8s-lab.vodik.xyz"`, as an attribute path's key is
+(R-77), and a name a value brings at run time is quoted the same way, so
+a name never splits into a scope. A resource's address is that path:
+state, the plan file and `--json` carry it, `T["k3s.admin"]` is the
+bracket spelling for one computed or written whole (`T["blue.vpc"]`,
+`T["k3s.\"a.b\""]`), and `why` takes it bare or after its type
+(`why k3s.admin`, `why 'ovh.ssh_key k3s.admin'`). `/` (R-72's separator)
+and `::` before it in an address a program, `why` or `query` writes are
+errors naming the dot form. State written with `/` addresses is
+pre-release and not migrated.
+
 ### Types
 
 Types are names of the core (`net.vpc`, `aws.vpc`, `k8s.deployment`).
@@ -380,14 +408,14 @@ statically:
 | `x` after `x in T`   | `T`                                    | `x`                            |
 | `x` after `x in resource` | a fresh type variable             | `x`                            |
 | `n.k` (`output k: T`, `T` a resource type) | `T`              | the output's value             |
-| `m.x` (`m` used, `x` its resource) | `x`'s                    | `"m/x"`                        |
+| `m.x` (`m` used, `x` its resource) | `x`'s                    | `"m.x"`                        |
 | `k` (`let k = R`, `R` a reference) | `R`'s                    | `R`'s                          |
 
 `T[e]` is relative to the scope (H-10): inside a component it is
 `scoped("n", e)`, `n` the copy; in a module, a constant is the module's
 own (`scoped("m", "x")`) and a variable any resource its user sees; at the
 top level and in CLI arguments it is the full address, which pastes
-unchanged from `plan` (H-16): `net.vpc["main/vpc"]`. A resource in scope is written by its
+unchanged from `plan` (H-16): `net.vpc["main.vpc"]`. A resource in scope is written by its
 name: `T["n"]` for a resource `n` in scope, and `T.n`, are errors naming
 `n`. A name declared twice in scope (three resources named `web`) is an
 error listing the candidates by address, but where the position's type
@@ -903,11 +931,11 @@ statement that closes it.
   pack is the stack's);
 - its items read as `n.x`: a `let` or an input (`config.region`), a
   relation (`n.p(..)`), an output (`n.k`), a resource (`n.x`, the address
-  `T["n/x"]`), a type alias (`n.T`), a component (`n.c`, to `instance`);
+  `T["n.x"]`), a type alias (`n.T`), a component (`n.c`, to `instance`);
 - its inputs are bound by the block, as a copy's are, else by their
   defaults; an input with neither is the error a stack input's is (`input
   traefik.acme_email is required and has no value`);
-- its resources, if it has any, are stamped once under `n` (`T["n/x"]`);
+- its resources, if it has any, are stamped once under `n` (`T["n.x"]`);
   a module used from two stacks runs in both, each in its own state;
 - with a clause, all of it exists only while `B` holds.
 
@@ -921,12 +949,11 @@ the component's path (`instance modules.net.vpc main`, `instance net.vpc
 main` after `use modules.net`, `instance network blue` for one the file
 declares; `instance k3s.k3s cluster` after `use k3s` for k3s.df's
 `component k3s`, whose copies read `k3s.k3s[t]` since `k3s` names the
-module). A copy is named; its resources are `NAME/x`, its relations its
-own, its outputs `NAME.k`, and `c[t].k` ranges over the copies of `c` the
-scope makes, `instance_of(c, user, name)` joined to their outputs. A copy
-inside a copy is scoped under it (`edge/left/vpc`). `/` is the scope
-separator of an address (R-72), so a resource's own name may not contain
-one, and an address written with `::` is an error naming `/`. The names a scope's
+module). A copy is named; its resources are `NAME.x` (their paths,
+"Paths"), its relations its own, its outputs `NAME.k`, and `c[t].k`
+ranges over the copies of `c` the scope makes, `instance_of(c, user,
+name)` joined to their outputs. A copy inside a copy is scoped under it
+(`edge.left.vpc`). The names a scope's
 `use`s and `instance`s bind are one namespace, a name in it declared
 once or under a clause each ("Guarded declarations"). `instance` of a
 module is an error naming `use`, and so is one with no name.
@@ -951,7 +978,7 @@ instance cloudsql db { name = "shop" } where cloud == "gcp"
 resource k8s.secret conn { data = { url: db.conn } }
 ```
 
-Both copies are scoped `db` (`T["db/x"]`, `db.conn`), each gated by its
+Both copies are scoped `db` (`T["db.x"]`, `db.conn`), each gated by its
 own clause, and the plan shows the one that holds, under its component.
 A read `db.x` is checked against every declaration: one that has no `x`,
 or gives it another type, is an error naming each declaration, and a
@@ -1764,7 +1791,7 @@ as it is.
 | `ref(R)`                                  | `ref(ref(T, A, ""))`: the reference, written out       |
 | `R.p.q` (content)                         | `V`, reading `attr(T, A, "p", V)`; `__path(V, "q")`    |
 | `n.k`, `c[e].k`                           | `V`, reading `output("n", "k", V)`; `instance_of("c", "", E), output(E, "k", V)` |
-| `m.x` (`use m`; a value, a resource)      | `V`, reading `m::x(V)`; `T["m/x"]`                     |
+| `m.x` (`use m`; a value, a resource)      | `V`, reading `m::x(V)`; `T["m.x"]`                     |
 | `s[k=v].o` (`use stacks.s`)               | `V`, reading `instance_of("stacks.s", "", "s[k=v]"), output("s[k=v]", "o", V)` |
 | `world.T[e].a.b`                          | `V`, reading `cloud_attr("T", e', "a.b", V)`           |
 | `x = R.p`, `R.p == c`                     | `attr(T, A, "p", x)`, `attr(T, A, "p", c)`: the read itself |
@@ -1802,9 +1829,9 @@ A copy and an import are one mechanism (`modules::expand`): the body
 under the scope `n`, its predicates `n::p` (a module's read as `n.p`, a
 component's private to the copy, a value leaving it through an output),
 an input `k` the cell `n::k(V) :- attr(input, "n", k, V)` with its default
-at `@default`, its resources `n/x`, its writes needing no grant (ranks
+at `@default`, its resources `n.x`, its writes needing no grant (ranks
 decide); a top-level input also takes `--set`. A copy inside a copy puts
-the outer scope in front (`edge/left/vpc`). `extern p(+a, -b)` is asked
+the outer scope in front (`edge.left.vpc`). `extern p(+a, -b)` is asked
 on demand, and `declassify(v, "reason")` lowers a secret's label
 (E DR-19).
 
