@@ -1364,7 +1364,10 @@ fn atom(pred: &str, args: Vec<Term>) -> Atom {
 /// The schema paths the prelude mints a null for: every `computed` and every
 /// `optional_computed` path outside a list element, with its class and the
 /// rank the null contributes at (`@default` for Optional+Computed, so a
-/// program's value wins).
+/// program's value wins). Minted paths do not nest (R-116): a path with
+/// another below it (a claim's `status.capacity`, a map whose usual keys
+/// the schema types, `status.capacity.storage`) is those leaves, so its
+/// value is not one null beside its own leaves', which disagree with it.
 pub fn minted_paths(schema: &Schema) -> Vec<(String, String, NullClass, &'static str)> {
     let mut out = Vec::new();
     for ((t, p), c) in &schema.computed {
@@ -1377,6 +1380,16 @@ pub fn minted_paths(schema: &Schema) -> Vec<(String, String, NullClass, &'static
             out.push((t.clone(), p.clone(), *c, "default"));
         }
     }
+    let below = |t: &str, p: &str| {
+        out.iter().any(|(u, q, _, _)| {
+            u == t
+                && q.strip_prefix(p)
+                    .is_some_and(|r| r.starts_with('.') || r.starts_with('['))
+        })
+    };
+    let nested: Vec<bool> = out.iter().map(|(t, p, _, _)| below(t, p)).collect();
+    let mut nested = nested.into_iter();
+    out.retain(|_| !nested.next().unwrap_or(false));
     out
 }
 

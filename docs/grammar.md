@@ -1621,7 +1621,10 @@ cycle, per type. Within a type, an attribute's group is its first
 segment, `metadata`, and its value is merged key by key: `metadata = {
 name, namespace }` and `metadata.name = ..` with `metadata.namespace =
 ..` are the same contributions, and two objects writing different keys
-of it never disagree.
+of it never disagree. The provider's computed values are minted per
+leaf: a map whose usual keys the schema types (a claim's
+`status.capacity`, `status.capacity.storage`) is those keys, not one
+unknown map beside them.
 
 ## Functions
 
