@@ -208,9 +208,18 @@ impl Client {
             .map_err(|e| unreachable(format!("reading the answer: {e}")))?;
         if !(200..300).contains(&status) {
             // `{"class": "Client::NotFound", "message": "..."}`
+            // OVH's `errorCode` says which kind of refusal: INVALID_CREDENTIAL
+            // (the consumer key), NOT_GRANTED_CALL (its rights), ...
             let message = serde_json::from_str::<Json>(&text)
                 .ok()
-                .and_then(|j| j.get("message").and_then(Json::as_str).map(str::to_string))
+                .map(|j| {
+                    let msg = j.get("message").and_then(Json::as_str).unwrap_or("").to_string();
+                    match j.get("errorCode").and_then(Json::as_str) {
+                        Some(code) if !code.is_empty() => format!("{msg} ({code})"),
+                        _ => msg,
+                    }
+                })
+                .filter(|m| !m.is_empty())
                 .unwrap_or_else(|| text.trim().chars().take(200).collect());
             return Err(Error::Status {
                 method: method.into(),
