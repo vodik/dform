@@ -234,7 +234,7 @@ fn a_guarded_provider_is_configured_where_its_clause_holds() {
             "q.df",
         ])
         .success();
-    assert!(r.stdout.contains("+ net.vpc[\"v\"]"), "{}", r.stdout);
+    assert!(r.stdout.contains("+ net.vpc v"), "{}", r.stdout);
 }
 
 /// Two declarations of a provider that both hold are the deny; one with

@@ -846,27 +846,30 @@ endpoints and secrets per the schema and fills the nulls in dependency order.
 
 ```bash
 cargo run -- -C examples/demo plan
-# + net.subnet["main.private-us-test-1a"]
-#   vpc = ?net.vpc["main.vpc"]
+# + net.subnet main.private-us-test-1a        network.df:24
+#     vpc = main.vpc
 ```
 
 A reference is the resource (R-43). Where an attribute points at another
 resource, the schema types it `ref(T)` and the program gives it the
 resource: `vpc = vpc`, `subnets = [ s | s in net.subnet ]`. The provider
 gives its API the object's id once it exists; the plan prints the
-resource, `?net.vpc["main"]` while it is unknown and `net.vpc["main"]`
-after (`--json` shows the id). A program never reads an id: `x.id` is an
+resource by its address, `vpc = main`, before it exists and after
+(`--json` shows the id). A program never reads an id: `x.id` is an
 error naming `x`, and `ref(x)` writes the reference out where an attribute
 that is no `ref(T)` needs the id as text.
 
-Every address dform prints is the source term that names it, `T["A"]` (`A`
-the full address, a copy's scope included: `n.x`, `edge.left.vpc`), and an
-attribute of it is `.path` after it: plan lines, the apply order, nulls,
-secret labels, `state show`, `dev graph` and diagnostics. Every address the
-command line takes is read the same way (`why`, `query`, `state show`,
-`state mv`, `dev show`, `--chaos`), so an address copied from a plan pastes
-into a program, a query or a command; quote it for the shell
-(`why 'net.vpc["main.vpc"].cidr'`).
+The plan, `why`, `query`, `diff` and the editor's hints print an address
+as the source names it (R-111): its type and its path, a copy's scope in
+front, `net.vpc edge.left.vpc`, a value referring to it by the path
+alone, `main.vpc`. The full address is the source term that names it,
+`T["A"]` (`A` the path, a copy's scope included: `n.x`, `edge.left.vpc`), an
+attribute of it `.path` after it: the plan file, `--json`, state, `plan
+-q`'s apply order, `state show`, `dev graph` and errors print it. Every
+address the command line takes is read that way (`why`, `query`, `state
+show`, `state mv`, `dev show`, `--chaos`), and `why` also takes the
+printed one, so an address copied from a plan pastes into a command;
+quote it for the shell (`why 'net.vpc main.vpc'`, `why main.vpc.cidr`).
 
 The plan is the Z-set `desired - world` (proposal E §2.8): per address a
 create, a delete, an update, or nothing. It is printed grouped by tick
@@ -877,26 +880,26 @@ $ dform plan apps env=prod
 plan: 6 changes (3 create, 1 update, 1 replace, 1 delete) over 2 ticks, 1 approval, 1 undetermined
 
 tick 1  4 changes, applies now
-  + k8s.namespace["apps"]                         stacks/apps.df:26
-  + k8s.secret["synapse.homeserver"]              synapse.df:41  (use synapse)
-  ~ k8s.deployment["synapse.server"]
-      spec.replicas: 1 → 2                        synapse.replicas = 2   stacks/apps.df:14
-  - k8s.config_map["synapse.legacy"]              was synapse.df:60  with name = "legacy"
+  + k8s.namespace apps                         stacks/apps.df:26
+  + k8s.secret synapse.homeserver              synapse.df:41
+  ~ k8s.deployment synapse.server              synapse.df:52
+      spec.replicas: 1 → 2                     stacks/apps.df:14
+  - k8s.config_map synapse.legacy              synapse.df:60
       data.mode was "legacy"
       because data/apps.yaml no longer has the row app("legacy")
 
 tick 2  2 changes, after tick 1 reports
-  waits on  k8s.service["synapse.web"].ip
-  + ovh.domain_record["matrix.vodik.xyz"]         synapse.df:135  with host = "matrix.vodik.xyz"
-      target = ?k8s.service["synapse.web"].ip
-  ± k8s.persistent_volume_claim["synapse.media"]  storageClassName is immutable
+  waits on  synapse.web.ip
+  + ovh.domain_record "matrix.vodik.xyz"       synapse.df:135
+      target = synapse.web.ip
+  ± k8s.persistent_volume_claim synapse.media  synapse.df:70  storageClassName is immutable
 
 later   changes this plan cannot count yet
-  k8s.job["migrate-v${schema}"]                   one per release("crud_api", "schema", _)
-  deny "prod keeps its data"                      stacks/apps.df:40  undetermined until tick 2
+  k8s.job "migrate-v${schema}"                 one per release("crud_api", "schema", _)
+  deny "prod keeps its data"                   stacks/apps.df:40  undetermined until tick 2
 
 held for approval
-  k8s.persistent_volume_claim["synapse.media"]    replace of a volume in prod    baseline.df:38
+  k8s.persistent_volume_claim synapse.media    replace of a volume in prod    baseline.df:38
 
 apply: tick 1 once this plan's digest is approved (`--approval`), then tick 2 when tick 1 reports; `later` is planned again when tick 1 reports, and apply asks before what it adds
 ```
@@ -905,15 +908,36 @@ apply: tick 1 once this plan's digest is approved (`--approval`), then tick 2 wh
   then the denies, approvals, undetermined policies and conflicts.
 - `moved T["Old"] -> T["New"]` lines come first, one per `moved/3` rename
   of state.
+- Every other line is one of two shapes (R-111). A change: its mark, then
+  its address as the source names it, the type and the path, a copy's
+  scope in front (`+ ovh.ssh_key k3s.admin`, `+ net.vpc blue.vpc`, a
+  name holding a dot one quoted segment, `k3s."k8s-lab.vodik.xyz"`),
+  then where it is derived, `FILE:LINE`. An attribute: `path = value`
+  (`path: before → after` in an update), then `FILE:LINE` only when the
+  value was written outside the change's own block: a policy, a `set`, a
+  `--set` (its flag), an instance's input, a config module's `let`,
+  followed through the inputs and `let`s that pass it on. A value written
+  in its own block says nothing more. A reference is the address it
+  names, `ssh_key = k3s.admin`, no `?`; a value another resource
+  computes is the reference that reads it, `target = k3s.server.public_ip`
+  (within a tick the executor applies in dependency order, so it is known
+  when it is read; a value no change of the tick makes puts its change in
+  a later tick, whose header says what it `waits on`). A secret is
+  `(sensitive)`. A string past 60 characters elides its middle (`"ssh-
+  ed25519 AAAA…2DK7 simon@framework"`). The full address, `T["A"]`, is
+  the plan file's, `--json`'s and state's; `why`, `query` and `why-not`
+  take it or the printed one (`why 'ovh.ssh_key k3s.admin'`, or its path
+  alone, `why k3s.admin`, `why k3s.server.public_ip`).
 - `tick N  K changes, applies now`: what this apply makes first. A change
   is `+` create, `~` update, `-` delete, `>` adopt, `±` replace (`(the new
   one first)` for a `create_before_destroy` one, whose deposed object is
-  `- T["A"]  (deposed)` in the next tick). An update diffs a keyless set,
+  `- T a  (deposed)` in the next tick). An update diffs a keyless set,
   or a list with merge keys (`containers[name=web]`), by element: an
   element that is new or gone is one `+`/`-` line with its leaves, not
   every later index shifting. Map leaves print one per line. A copy
-  (R-67) prints as its own entry, `+ network["blue"]`, its resources
-  under it, inside the tick they run in.
+  (R-67) prints as its own entry, `+ network blue`, in bold, its resources
+  indented under it with their full paths (`+ net.vpc blue.vpc`), a copy
+  inside it nested again, inside the tick they run in.
 - `tick N  K changes, after tick N-1 reports`: changes held until values
   a tick before makes are known, `waits on` each value (an output of a
   resource tick N-1 makes, a field of the world). Their diffs are shown
@@ -921,16 +945,17 @@ apply: tick 1 once this plan's digest is approved (`--approval`), then tick 2 wh
   reported`.
 - `later   changes this plan cannot count yet`: a resource rule stuck on
   an unknown, by the address its statement names
-  (`k8s.job["migrate-v${schema}"]`), `one per ROW` when what it reads may
+  (`k8s.job "migrate-v${schema}"`), `one per ROW` when what it reads may
   gain rows, `if ROW derives` when one may, else what it `waits on`,
   never a count; a copy that may derive once, its resources under it; a
   deny or check `undetermined until tick N` (never reported as satisfied)
   or that `may hold at tick N`; a held change waiting on what this plan
   does not resolve. Every resource of a provider whose settings the
   program gives and this plan does not know (a kubeconfig read from a
-  server still booting) is one, `waits on  provider k8s (kubeconfig from
-  k3s.kubeconfig)`, typed by the provider's static schema; one of a kind
-  no schema has yet (a cluster's CRD) `waits on  provider k8s for its
+  server still booting) is one, under `waits on  provider k8s (kubeconfig
+  from k3s.kubeconfig)` and the dim note `which this plan does not
+  resolve`, typed by the provider's static schema; one of a kind no
+  schema has yet (a cluster's CRD) under `waits on  provider k8s for its
   schema`, its attributes as written. The summary counts them, `, N
   later`, and `why-not` names what such a resource waits on. A type whose
   namespace names no provider is the compile error it always was.
@@ -955,14 +980,16 @@ apply: tick 1 once this plan's digest is approved (`--approval`), then tick 2 wh
   carries them as `warnings` (each `{rule, statement, relation, deletes,
   rows_at_last_apply, because}`), only when there is one.
 - `denied`: denies over the plan itself (`lifecycle prevent_destroy: the
-  plan would replace T["A"]`), each with the change its firing read and
-  where it is written; the plan still prints, then refuses.
+  plan would replace T["A"]`, the message as the rule wrote it), each
+  with the change its firing read (`net.vpc main`) and where it is
+  written; the plan still prints, then refuses.
 - `held for approval`: each change a `requires_approval` row holds, its
   reason and where the row is derived; `plan digest: sha256:...` follows
   the plan.
 - `shadowed`: contributions at a losing rank that disagree (a warning),
   and `conflicts`: cells whose contributions disagree at the winning rank,
-  each naming the resource, the path and every witness. A conflicted
+  each naming the resource, the path and every witness (`! net.vpc
+  main.cidr: two contributions disagree`), each once. A conflicted
   address is not a change; the plan still prints, then refuses.
 - `(drift: ...)` marks an update where a fresh null meets a value the
   world already has: the identity mapping is stale.
@@ -971,60 +998,74 @@ apply: tick 1 once this plan's digest is approved (`--approval`), then tick 2 wh
   tick it waits on reports.
 - `stack NAME is up to date`: nothing to do, nothing stuck (the only line).
 
-How much each change says of why it is planned is `--why=LEVEL` (`plan`
-and `apply`):
+How much each change says of why it is planned is a ladder (R-79,
+R-111), the same on `plan`, `apply` and `diff --since`: `-q`, the
+default, `-v`, `-vv`, or by name `--why=none|line|how|full` (`--why`
+alone is `full`). `-q` and `-v` together, or either with `--why`, are a
+usage error.
 
-- `line`, the default. On the change's line, where it is derived: the
-  statement's `FILE:LINE` with its variables bound (`with z =
-  "us-test-1a", n = 1`) and the module it came from (`(use synapse)`); a
-  replace, the paths the schema declares immutable; a delete, `was
-  FILE:LINE`, where the last apply derived it. On each changed
-  attribute's line, the write that won: a create's own entry by its
+- The default (`line`): the two shapes above. On a change's line, where
+  it is derived, `FILE:LINE` (a delete's where the last apply derived
+  it), and for a replace the paths the schema declares immutable. On an
+  attribute's, where its value was written when that is outside its own
+  block. Under the change, a `because` line: the leaf of the derivation
+  the last apply recorded that is false now (a delete: `because
+  data/azs.yaml no longer has the row az("us-east-1b", 2)`; an update:
+  `because input size is now 2 (was 1)`; a guard: `because input big is
+  now false (was true)`), or for a create the leaf new since (`because
+  data/azs.yaml:7 gained the row az("us-east-1c", 3)`). The last apply's
+  program is evaluated as `diff --since` reads it: at the commit its
+  audit entry recorded, or the program now with the inputs it recorded
+  when only they changed; with no apply, or nothing to compare, there is
+  no `because`. Sites are relative to the project's root, whatever
+  directory the run is in. No other prose: no expression, no binding,
+  no rank.
+- `-v` (`how`): the same lines, saying how. On a change's line, the
+  statement's variables bound (`network.df:24  with z = "us-test-1a"`).
+  On an attribute's, the write that won: a create's own entry by its
   expression when it reads something (`inet.subnet(main.cidr, 8, n)`,
-  `db.name`), nothing for a literal; anything else by the statement that
-  wrote it with its place (`set db.backup_days = 14 where env == "prod"
-  stacks/shop.df:22`), followed through the inputs and `let`s that pass
-  the value on, a `--set` by its flag, with the rank it beat when that
-  is a rank the program wrote (`(over @default)`). Under the change, a
-  `because` line: the leaf of the derivation the last apply recorded that
-  is false now (a delete: `because data/azs.yaml no longer has the row
-  az("us-east-1b", 2)`; an update: `because input size is now 2 (was
-  1)`; a guard: `because input big is now false (was true)`), or for a
-  create the leaf new since (`because data/azs.yaml:7 gained the row
-  az("us-east-1c", 3)`). The last apply's program is evaluated as `diff
-  --since` reads it: at the commit its audit entry recorded, or the
-  program now with the inputs it recorded when only they changed; with
-  no apply, or nothing to compare, there is no `because`. Sites are
-  relative to the project's root, whatever directory the run is in.
-- `full` (`--why` alone): `line`, and under each change its derivation,
-  `why`'s tree compressed to one line per leaf. `by FILE:LINE` is the
-  statement that derived it; each `because` line is a leaf, the facts in
-  between dropped: a fact the program states at its `file:line`, a
-  table's row at its `path:line`, a `--set` or `--data` as its flag, an
-  extern's answer, a world fact, a fact found absent. A create is
-  explained by its `want`, an update (a drift, a replace) by the winning
-  contributions to each attribute it changes, a delete by state alone
-  (`because no statement derives it now; state has it`). Of several
-  derivations the one with the fewest leaves is shown.
-- `none`: the bare diff for scripts, laid out as the plan was before it
-  was grouped by tick (`definite:`, `pending on ?NULLS (resolves after
-  tick N):`, `pending groups:`, `undetermined:`, `denied:`, `apply
-  order:`, `needs approval:`, `->` between a value's sides); only its
-  words are the tool's (`plan: 3 changes (2 create, 1 update), 4 pending`,
-  `stack NAME is up to date`). `tests/golden/*/*.plan-bare.txt` pins it.
+  `db.name`); anything else by the statement that wrote it with its
+  place (`set db.backup_days = 14 where env == "prod"
+  stacks/shop.df:22`), a `--set` by its flag; and the write it won over,
+  by its place and both ranks (`--set size=2  @override over
+  stacks/net.df:4 @default`), unless that write is in the change's own
+  block. A secret by its label (`(sensitive random.password("db"))`), a
+  long string whole.
+- `-vv` (`full`): `-v`, and under each change its derivation, `why`'s
+  tree compressed to one line per leaf. `by FILE:LINE` is the statement
+  that derived it; each `because` line is a leaf, the facts in between
+  dropped: a fact the program states at its `file:line`, a table's row at
+  its `path:line`, a `--set` or `--data` as its flag, an extern's answer,
+  a world fact, a fact found absent. A create is explained by its
+  `want`, an update (a drift, a replace) by the winning contributions to
+  each attribute it changes, a delete by state alone (`because no
+  statement derives it now; state has it`). Of several derivations the
+  one with the fewest leaves is shown.
+- `-q` (`none`): the bare diff for scripts, laid out as the plan was
+  before it was grouped by tick (`definite:`, `pending on ?NULLS
+  (resolves after tick N):`, `pending groups:`, `undetermined:`,
+  `denied:`, `apply order:`, `needs approval:`, `->` between a value's
+  sides), addresses in full (`+ net.vpc["main"]`); only its words are the
+  tool's (`plan: 3 changes (2 create, 1 update), 4 pending`, `stack NAME
+  is up to date`). `tests/golden/*/*.plan-bare.txt` pins it byte for
+  byte.
+
+`diff --since` takes the same ladder: `-q` the changes alone, by their
+full addresses; the default and `-v` each change with the first line of
+why it was planned (where it was derived, or what changed); `-vv` every
+line.
 
 The page is 100 columns wide: a right column that does not fit says less
 (the statement, then its entry, then `FILE:LINE` alone), and goes when
-not even that fits; a `because` line is always its own. Secrets print as
-their label, as everywhere.
+not even that fits; a `because` line is always its own.
 
 Colour: `--color auto|always|never` (global; `auto`, the default, colours
 when stdout is a terminal and `NO_COLOR` is unset; errors on stderr
 likewise) paints the plan by its semantics: `+` green, `~` yellow, `-` red,
-`±` magenta, a value waited on cyan, `(sensitive)` dim, addresses and tick
-headers bold, conflicts and denies red with the witnesses' names bold, a
-rule in `later` in the warning colour (bold yellow); apply's question and
-`apply: complete` likewise. `--json` and the plan file are never coloured.
+`±` magenta, `(sensitive)` dim, addresses and tick headers bold,
+conflicts and denies red with the witnesses' names bold, a rule in
+`later` in the warning colour (bold yellow); apply's question and `apply:
+complete` likewise. `--json` and the plan file are never coloured.
 
 `plan --json` prints the same report as one JSON document, the thing CI and
 editors consume: `stack`, `up_to_date`, a `summary` of counts (`changes`,
@@ -1034,10 +1075,11 @@ each kind, `ticks`, `approvals`, `undetermined`, `conflicts`), `ticks`
 `refinement` with its `status`; `held` with its `changes`), `shadowed`,
 `conflicts`, `moved`, `denied` (`{text, message, address, site}`),
 `held_for_approval` and `apply`, the last line. A change is `{kind,
-address, type, name, changes}` (`address` as the text prints it), a
-replace with `create_first` and `immutable`, a deposed delete with
-`deposed: true`, a held one with `held`; at `line` and `full` it has its
-`site` (`{at, statement, entry, with, origin, rank, beat}`) and
+address, type, name, changes}` (`address` in full, `T["A"]`, as the
+plan file has it), a replace with `create_first` and `immutable`, a
+deposed delete with `deposed: true`, a held one with `held`; from `line`
+it has its `site` (`{at, statement, entry, with, origin, rank, beat,
+beat_at}`) and
 `because`, and at `full` a `why` array of `{kind, at, text}` (`kind` is
 `rule` for the `by` line, else `fact`, `input`, `extern`, `world`, `plan`,
 `absent` or `state`; `at` the `file:line` when there is one). An attribute
@@ -1417,7 +1459,9 @@ hash, a removed or reordered one by the next entry's `prev`.
 `dform diff --since REF TARGET` explains what changed between applies:
 each apply since REF (a sequence number, a time or a prefix of one, or a
 git commit an apply recorded), each deformation it applied with why it was
-planned, as `plan --why` prints it, and then the inputs and the stated
+planned, as much as the ladder asks (`-q` none, the default and `-v` the
+first line, `-vv` every line, as `plan -vv` prints it; see "plan"), and
+then the inputs and the stated
 rows (a table's, the program's facts) that differ between the apply
 before REF and now. The log holds no value, so the explanations are
 computed again: each apply by the program as it was then, read at the
@@ -1435,11 +1479,11 @@ its `changes` and their `why`, and `changed` (`added` and `removed`
 rows, `inputs` with `before` and `after`). Secrets print as their label.
 
 ```
-$ dform diff --since 9 net
+$ dform diff --since 9 -vv net
 apply 11 2026-10-02T15:34:17Z by simon@host at 7e11a8c78679: ok
-+ net.subnet["private-us-test-1c"]
++ net.subnet private-us-test-1c
   by stacks/net.df:9  resource net.subnet "private-${z}" { .. } where zone(z, n)
-  because stacks/net.df:7  net.vpc["main"].cidr = "10.0.0.0/16"
+  because stacks/net.df:7  net.vpc main.cidr = "10.0.0.0/16"
   because data/zones.csv:4  zone("us-test-1c", 3)
 changed since apply 3 2026-10-01T09:12:40Z:
   + data/zones.csv:4  zone("us-test-1c", 3)
@@ -1486,8 +1530,9 @@ value equal to it or string containing it, so a rule that forwards a
 secret does not leak it either.
 
 Rows print values as the program writes them: a reference is the address
-it names, `google.sql_database_instance["db"].name`, an unknown its
-`?T["A"].p` label.
+it names as the plan prints it (R-111), `google.sql_database_instance
+db.name`, an unknown the attribute it stands for after a `?`,
+`?k8s.service web.spec.clusterIP`.
 
 `dform why PATTERN` prints how a fact was derived, from the provenance
 circuit every evaluation records (proposal E §3, DR-10), in the program's
@@ -1499,8 +1544,8 @@ each computed term of the statement with its value: an interpolation, a
 function call, a read (`database.backup_days = 14`), a lookup
 (`zone_index[z] = 1`), an unknown as its `?` label. Under
 that are the facts the firing read, recursively, each spelled as the
-program names it: `net.vpc["main"]` for a resource, `net.vpc["main"].cidr
-= 10.0.0.0/16` for an attribute, `input env = "prod"` and `let n = 3`
+plan prints it (R-111): `net.vpc main` for a resource, a copy's
+`net.vpc blue.vpc`, `net.vpc main.cidr = 10.0.0.0/16` for an attribute, `input env = "prod"` and `let n = 3`
 for a cell, a relation as `zone("us-test-1a", 1)` (its facts after its
 signature, `decl zone(name: string, index: int)`, the columns as declared
 or inferred, when any has a type). An attribute or an
@@ -1516,8 +1561,11 @@ more than one way shows its first derivation and `... N more
 alternatives`; `--all` shows them all. `--core` prints the same tree in
 the core's spelling: the lowered rules by id (`by r17: head :- body`),
 their variables, facts as relations, the aggregate as `Σattr`. An address
-as plan prints it is a pattern too: `why 'T["A"]'` explains the resource's
-`want`, `why 'T["A"].path'` the attribute's `attr`. An input or a `let`
+is a pattern too, as plan prints it or in full: `why 'net.vpc main.vpc'`,
+its path alone `why main.vpc`, or `why 'net.vpc["main.vpc"]'` explains
+the resource's `want`; `why main.vpc.cidr` (the longest prefix of the
+path that names a resource is the resource, the rest its attribute) or
+`why 'T["A"].path'` the attribute's `attr`. An input or a `let`
 is named as the stack reads it: `why replicas`, `why nodes.count` (a leaf
 of an object input, the contributions that give it), `why
 traefik.acme_email` (a used module's). An `attr`/`arg`
@@ -1526,17 +1574,17 @@ value, and then shows only the contributions that hold it:
 
 ```bash
 cargo run -- -C examples/demo why 'attr(net.vpc, "main.vpc", "tags.team", "platform")' dform env=prod
-# net.vpc["main.vpc"].tags = {component: "network", env: "prod", team: "platform"}
+# net.vpc main.vpc.tags = {component: "network", env: "prod", team: "platform"}
 #   merged from 2 contributions
 #   ├─ {team: "platform"}
 #   │    baseline.df:10  set r.tags = { team: "platform" } where r in resource   (use baseline)
-#   │    with r = net.vpc["main.vpc"]
-#   │    └─ net.vpc["main.vpc"]
+#   │    with r = net.vpc main.vpc
+#   │    └─ net.vpc main.vpc
 #   │         network.df:15  resource net.vpc vpc { .. }   (instance network.vpc main)
 #   ...
 #   └─ ... 1 other contribution (--all)
-cargo run -- -C examples/tour why 'db.postgres["orders"].backup_days' tour env=prod
-# db.postgres["orders"].backup_days = 14
+cargo run -- -C examples/tour why orders.backup_days tour env=prod
+# db.postgres orders.backup_days = 14
 #   merged from 2 contributions
 #   ├─ type_refine("db.postgres", "backup_days", "range(1, 35)")   provider schema
 #   └─ 14

@@ -80,7 +80,7 @@ fn the_mock_is_dform_itself_not_the_executable_beside_it() {
         common::Run::from(c.args(args).current_dir(&s.dir).output().unwrap())
     };
     let r = run(None).success();
-    assert!(r.stdout.contains("+ net.vpc[\"main\"]"), "{}", r.stdout);
+    assert!(r.stdout.contains("+ net.vpc main"), "{}", r.stdout);
     let stale = s.path("dform-provider-fake");
     let r = run(Some(stale.to_str().unwrap())).failure();
     assert!(
@@ -111,7 +111,7 @@ fn a_source_directory_holding_an_executable_is_that_plugin() {
         "\n\nprovider fake { source = \"prov\" }\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\n",
     );
     let r = mock(&s, &["plan"]).success();
-    assert!(r.stdout.contains("+ net.vpc[\"main\"]"), "{}", r.stdout);
+    assert!(r.stdout.contains("+ net.vpc main"), "{}", r.stdout);
 }
 
 #[test]

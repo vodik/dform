@@ -506,11 +506,7 @@ provider fake
             "dev", "--world", "w.json", "plan", "--set", "env=prod", "p.df",
         ])
         .success();
-    assert!(
-        r.stdout.contains("+ compute.vm[\"jump.vm\"]"),
-        "{}",
-        r.stdout
-    );
+    assert!(r.stdout.contains("+ compute.vm jump.vm"), "{}", r.stdout);
     assert!(r.stdout.contains("tags.audited = true"), "{}", r.stdout);
 }
 

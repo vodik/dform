@@ -69,14 +69,14 @@ fn a_providers_resources_wait_on_its_settings_under_later() {
     let (ticks, later) = r.stdout.split_once("\nlater").unwrap();
     assert!(!ticks.contains("k8s."), "{}", r.stdout);
     for line in [
-        "  waits on  provider k8s (kubeconfig from raw), which this plan does not resolve",
-        "  + k8s.namespace[\"traefik.ns\"]",
+        "  waits on  provider k8s (kubeconfig from raw)  which this plan does not resolve",
+        "  + k8s.namespace traefik.ns",
         // The static schema's kind, by its short name, typed.
-        "  + k8s.storage_class[\"traefik.block\"]",
+        "  + k8s.storage_class traefik.block",
         "      provisioner = \"rancher.io/local-path\"",
-        "  + k8s.deployment[\"traefik.web\"]",
-        "  waits on  provider k8s for its schema, which this plan does not resolve",
-        "  + k8s.traefik.io.v1alpha1.middleware[\"traefik.strip\"]",
+        "  + k8s.deployment traefik.web",
+        "  waits on  provider k8s for its schema         which this plan does not resolve",
+        "  + k8s.traefik.io.v1alpha1.middleware traefik.strip",
         "      spec.stripPrefix.prefixes[0] = \"/a\"",
     ] {
         assert!(later.contains(line), "{line}\n{}", r.stdout);
@@ -115,7 +115,7 @@ fn an_unknown_type_is_an_error_unless_its_provider_is_configured_later() {
     let r = dform(&s, &["plan", "p"]).success();
     assert!(
         r.stdout
-            .contains("  + k8s.traefik.io.v1alpha1.middleware[\"top\"]"),
+            .contains("  + k8s.traefik.io.v1alpha1.middleware top"),
         "{}",
         r.stdout
     );

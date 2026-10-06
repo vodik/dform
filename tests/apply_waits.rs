@@ -71,7 +71,7 @@ fn a_tick_waits_until_the_world_reaches_the_value() {
         serde_json::json!(["db.postgres[\"d\"].endpoint"])
     );
     let r = apply(&s, &[]).success();
-    assert!(r.stdout.contains("+ net.vpc[\"v\"]"), "{}", r.stdout);
+    assert!(r.stdout.contains("+ net.vpc v"), "{}", r.stdout);
 }
 
 /// Past its budget the apply stops, saying what it waited on and how to

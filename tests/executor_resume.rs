@@ -56,8 +56,8 @@ fn apply_after_a_crash_finishes_on(backend: Backend) {
         r.stdout,
         "resuming the apply interrupted at tick 1; remaining: compute.vm[\"app\"]\n\
          plan: 1 change (1 create) over 1 tick\n\ntick 1  1 change, applies now\n  \
-         + compute.vm[\"app\"]             p.df:5\n      \
-         subnet_id = \"net.subnet:a\"  ref(net.subnet, \"a\", \"id\")\n\n\
+         + compute.vm app  p.df:5\n      \
+         subnet_id = \"net.subnet:a\"\n\n\
          apply: tick 1 now\n\
          resumed from the apply interrupted at tick 1:\n  \
          compute.vm[\"app\"]  (retried with its idempotency key: nothing it made was found)\n\
@@ -177,7 +177,7 @@ fn apply_stops_when_the_world_changed_under_a_remaining_action() {
     let r = mock(&s, &["apply"]).success();
     assert!(
         r.stdout.contains(
-            "  ~ net.subnet[\"a\"]\n      tags.owner: \"someone\" → <none>\n      tier: <none> → \"web\"  "
+            "  ~ net.subnet a  p.df:4\n      tags.owner: \"someone\" → <none>\n      tier: <none> → \"web\"\n"
         ),
         "{}",
         r.stdout

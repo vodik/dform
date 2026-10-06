@@ -29,11 +29,7 @@ fn a_resource_type_is_a_reference_to_one() {
     let bare = plan("typed-bare", &program("net.vpc", "main")).success();
     let written = plan("typed-ref", &program("ref(net.vpc)", "main")).success();
     assert_eq!(bare.stdout, written.stdout);
-    assert!(
-        bare.stdout.contains("vpc_id = ?net.vpc[\"main\"]"),
-        "{}",
-        bare.stdout
-    );
+    assert!(bare.stdout.contains("vpc_id = main"), "{}", bare.stdout);
     let r = plan("typed-other", &program("net.vpc", "other")).failure();
     assert!(
         r.stderr

@@ -36,8 +36,7 @@ fn agents_read_their_servers_address() {
     let r = s.run(&["plan", "k3s"]).success();
     assert_eq!(r.summary(), "plan: 3 changes (3 create) over 2 ticks");
     assert!(
-        r.stdout
-            .contains("waits on  db.postgres[\"k3s.server\"].endpoint"),
+        r.stdout.contains("waits on  k3s.server.endpoint"),
         "{}",
         r.stdout
     );

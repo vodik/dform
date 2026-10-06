@@ -9,11 +9,7 @@ fn a_fresh_stack_carries_nulls_until_apply() {
     let prog = repo().join("examples/demo/stacks/dform.df");
     let prog = prog.to_str().unwrap();
     let r = s.run(&["dev", "--world", "w.json", "plan", prog]).success();
-    assert!(
-        r.stdout.contains("vpc = ?net.vpc[\"main.vpc\"]"),
-        "{}",
-        r.stdout
-    );
+    assert!(r.stdout.contains("vpc = main.vpc"), "{}", r.stdout);
     // Plan never synthesizes an id.
     assert!(!r.stdout.contains("net.vpc:main/vpc"), "{}", r.stdout);
 
@@ -77,21 +73,30 @@ fn secrets_are_labels_and_print_redacted() {
 
     let plan = run("plan");
     assert!(
-        plan.stdout
-            .contains("value = (sensitive db.instance[\"main\"].password)"),
+        plan.stdout.contains("value = (sensitive)"),
         "{}",
         plan.stdout
+    );
+    // From `-v`, by its label (R-111).
+    let how = s
+        .run(&common::on(
+            "p.df",
+            &["--provider", "schema.df", "--world", "w.json"],
+            &["plan", "-v"],
+        ))
+        .success();
+    assert!(
+        how.stdout
+            .contains("value = (sensitive db.instance main.password)"),
+        "{}",
+        how.stdout
     );
     assert!(
         plan.stdout.contains("master_password = (sensitive)"),
         "{}",
         plan.stdout
     );
-    assert!(
-        plan.stdout.contains("db = ?db.instance[\"main\"]"),
-        "{}",
-        plan.stdout
-    );
+    assert!(plan.stdout.contains("db = main"), "{}", plan.stdout);
 
     let apply = run("apply");
     let world = s.read("w.json");
@@ -106,7 +111,13 @@ fn secrets_are_labels_and_print_redacted() {
         world_json["resources"]["app.secret::creds"]["attrs"]["value"],
         serde_json::json!({"$secret": "db.instance/main#password"})
     );
-    for out in [&plan.stdout, &plan.stderr, &apply.stdout, &apply.stderr] {
+    for out in [
+        &plan.stdout,
+        &plan.stderr,
+        &how.stdout,
+        &apply.stdout,
+        &apply.stderr,
+    ] {
         assert!(!out.contains(&minted) && !out.contains("hunter2"), "{out}");
     }
 
@@ -156,7 +167,7 @@ resource vm c { peer_zone = ref("vm", "a", "zone"), other_zone = ref("vm", "b", 
     };
     let plan = run("plan");
     assert!(
-        plan.stdout.contains("peer_zone = ?vm[\"a\"].zone"),
+        plan.stdout.contains("peer_zone = a.zone"),
         "{}",
         plan.stdout
     );

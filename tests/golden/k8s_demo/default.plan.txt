@@ -3,28 +3,28 @@ exit: ok
 plan: 4 changes (4 create) over 1 tick
 
 tick 1  4 changes, applies now
-  + k8s.namespace["shop"]                        stacks/k8s_demo.df:14
+  + k8s.namespace shop         stacks/k8s_demo.df:14
       metadata.labels.team = "storefront"
       metadata.name = "shop"
-  + k8s.service["web"]                           stacks/k8s_demo.df:34  with name = "web"
-      metadata.name = "web"                      { name, namespace: shop.metadata.name }
-      metadata.namespace = "shop"                { name, namespace: shop.metadata.name }
+  + k8s.service web            stacks/k8s_demo.df:34
+      metadata.name = "web"
+      metadata.namespace = "shop"
       spec.ports[port=80,protocol=TCP].port = 80
       spec.ports[port=80,protocol=TCP].protocol = "TCP"
       spec.ports[port=80,protocol=TCP].targetPort = 8080
-      spec.selector.app = "web"                  { app: name }
-  + k8s.config_map["web_config"]                 stacks/k8s_demo.df:16
+      spec.selector.app = "web"
+  + k8s.config_map web_config  stacks/k8s_demo.df:16
       data.LOG_LEVEL = "info"
       data.MODE = "production"
       metadata.generateName = "web-config-"
       metadata.namespace = "shop"
-  + k8s.deployment["web"]                        stacks/k8s_demo.df:21
-      metadata.name = "web"                      { name, namespace: shop.metadata.name }
-      metadata.namespace = "shop"                { name, namespace: shop.metadata.name }
+  + k8s.deployment web         stacks/k8s_demo.df:21
+      metadata.name = "web"
+      metadata.namespace = "shop"
       spec.replicas = 3
-      spec.selector.matchLabels.app = "web"      { app: name }
-      spec.template.metadata.labels.app = "web"  { app: name }
-      spec.template.spec.containers[name=web].envFrom[0].configMapRef.name = ?k8s.config_map["web_config"].metadata.name
+      spec.selector.matchLabels.app = "web"
+      spec.template.metadata.labels.app = "web"
+      spec.template.spec.containers[name=web].envFrom[0].configMapRef.name = web_config.metadata.name
       spec.template.spec.containers[name=web].image = "nginx:1.27"
       spec.template.spec.containers[name=web].name = "web"
       spec.template.spec.containers[name=web].ports[containerPort=8080,protocol=TCP].containerPort = 8080

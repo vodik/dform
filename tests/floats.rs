@@ -117,9 +117,9 @@ fn a_number_attribute_takes_an_int_or_a_float() {
     let r = s.run(&["plan", "p.df"]).success();
     assert!(
         r.stdout
-            .contains("  + compute.vm[\"a\"]  p.df:3\n      weight = 0.5\n")
+            .contains("  + compute.vm a  p.df:3\n      weight = 0.5\n")
             && r.stdout
-                .contains("  + compute.vm[\"b\"]  p.df:4\n      weight = 2\n"),
+                .contains("  + compute.vm b  p.df:4\n      weight = 2\n"),
         "{}",
         r.stdout
     );

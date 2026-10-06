@@ -250,6 +250,37 @@ enum Command {
     ServeProvider { name: String },
 }
 
+/// How much each change of a report says of why it is planned (R-79,
+/// R-111): `-q`, the default, `-v`, `-vv`; `--why=LEVEL` by name.
+#[derive(clap::Args, Debug, Clone)]
+struct Ladder {
+    /// Quiet: the bare diff, addresses and values, laid out as before the
+    /// plan was grouped by tick (`--why=none`).
+    #[arg(short = 'q', long = "quiet", conflicts_with_all = ["verbose", "why"])]
+    quiet: bool,
+    /// Say how: `-v` adds the deriving statement's bindings, the
+    /// expression behind each value and the writes that lost, with their
+    /// ranks (`--why=how`); `-vv` also each change's derivation,
+    /// compressed to the facts, table rows, inputs and extern answers it
+    /// rests on, one line each (`--why=full`).
+    #[arg(short = 'v', long = "verbose", action = clap::ArgAction::Count,
+          conflicts_with = "why")]
+    verbose: u8,
+    /// The level by name: `none` (`-q`); `line` (the default): where each
+    /// change is derived, where a value written outside its block was
+    /// written, the leaf that changed since the last apply; `how` (`-v`);
+    /// `full` (`-vv`, `--why` alone).
+    #[arg(long, value_name = "LEVEL", default_value = "line",
+          num_args = 0..=1, require_equals = true, default_missing_value = "full")]
+    why: report::Why,
+}
+
+impl Ladder {
+    fn level(&self) -> report::Why {
+        report::Why::of(self.quiet, self.verbose, self.why)
+    }
+}
+
 /// The commands that run on a target, at the top level and under `dev`.
 #[derive(Subcommand, Debug, Clone)]
 enum Run {
@@ -266,15 +297,8 @@ enum Run {
         /// Print the plan as one JSON document instead of text.
         #[arg(long)]
         json: bool,
-        /// How much each change says of why it is planned: `none`, the
-        /// bare diff; `line` (the default), where each change is derived
-        /// with its bindings, where each attribute's value was written, and
-        /// the leaf that changed since the last apply; `full` (`--why`
-        /// alone), also the facts, table rows, inputs and extern answers it
-        /// rests on, one line each (`why ADDR`, compressed).
-        #[arg(long, value_name = "LEVEL", default_value = "line",
-              num_args = 0..=1, require_equals = true, default_missing_value = "full")]
-        why: report::Why,
+        #[command(flatten)]
+        why: Ladder,
     },
     /// A report: apply a deployment, every key value named (`apply app
     /// env=prod`), after the deployments it reads, or a plan file from `plan
@@ -317,11 +341,8 @@ enum Run {
         /// `[stacks.NAME] allow_empty` names them for every apply.
         #[arg(long = "allow-empty", value_name = "RULE")]
         allow_empty: Vec<String>,
-        /// How much each change says of why it is planned, as `plan
-        /// --why`.
-        #[arg(long, value_name = "LEVEL", default_value = "line",
-              num_args = 0..=1, require_equals = true, default_missing_value = "full")]
-        why: report::Why,
+        #[command(flatten)]
+        why: Ladder,
     },
     /// A derivation: how a fact was derived, its rule, bindings and the facts
     /// it read, recursively. Variables are allowed; every match is printed.
@@ -372,6 +393,8 @@ enum Run {
         /// Print the diff as one JSON document.
         #[arg(long)]
         json: bool,
+        #[command(flatten)]
+        why: Ladder,
     },
     /// `diff`'s helper: what the program says about ADDRESSes, as JSON.
     #[command(name = "__explain", hide = true)]
@@ -667,6 +690,8 @@ enum Cmd {
     Diff {
         since: String,
         json: bool,
+        /// How much each change says of why it was planned.
+        why: report::Why,
     },
     Explain {
         addresses: Vec<String>,
@@ -1264,7 +1289,14 @@ fn run_cmd(r: Run) -> (Cmd, Option<Target>) {
             out,
             json,
             why,
-        } => (Cmd::Plan { out, json, why }, Some(target)),
+        } => (
+            Cmd::Plan {
+                out,
+                json,
+                why: why.level(),
+            },
+            Some(target),
+        ),
         Run::Apply {
             target,
             max_ticks,
@@ -1284,7 +1316,7 @@ fn run_cmd(r: Run) -> (Cmd, Option<Target>) {
                 wait,
                 yes,
                 allow_empty,
-                why,
+                why: why.level(),
             },
             Some(target),
         ),
@@ -1304,7 +1336,15 @@ fn run_cmd(r: Run) -> (Cmd, Option<Target>) {
             target,
             since,
             json,
-        } => (Cmd::Diff { since, json }, Some(target)),
+            why,
+        } => (
+            Cmd::Diff {
+                since,
+                json,
+                why: why.level(),
+            },
+            Some(target),
+        ),
         Run::Explain { target, addresses } => (Cmd::Explain { addresses }, Some(target)),
         Run::Test { target } => (Cmd::Test, Some(target)),
         Run::Log {
@@ -1992,7 +2032,7 @@ fn run_with(
                 let s = crate::diff::snapshot(&x.res, &x.redact, &addresses);
                 println!("{}", serde_json::to_string(&s)?);
             }
-            Cmd::Diff { since, json } => {
+            Cmd::Diff { since, json, why } => {
                 let keys: Vec<String> = ev
                     .located
                     .loaded
@@ -2010,7 +2050,7 @@ fn run_with(
                     j["deployment"] = serde_json::json!(deployment);
                     println!("{}", serde_json::to_string_pretty(&j)?);
                 } else {
-                    print!("{}", d.text());
+                    print!("{}", d.text(*why));
                 }
             }
             _ => unreachable!("explains is query, why, why-not, diff or __explain"),
@@ -3225,8 +3265,23 @@ fn why_tree(
     redact: &query::Redactor,
     signatures: Option<&crate::infer::Signatures>,
 ) -> Result<()> {
+    let printed = query::printed(pattern, &res.facts);
     let matched = match input_cell(pattern, &res.facts)? {
         Some(m) => m,
+        // An address as the plan prints it, `ovh.ssh_key k3s.admin`, or
+        // its path, `k3s.admin` (R-111).
+        None if !printed.is_empty() => {
+            let mut out = Vec::new();
+            for (addr, path) in printed {
+                let query::Query::Body { body, .. } = query::pattern(&addr, path, true) else {
+                    continue;
+                };
+                if let [crate::ast::Lit::Pos(pat)] = body.as_slice() {
+                    out.extend(tree::find(pat, &res.facts)?);
+                }
+            }
+            out
+        }
         None => {
             let parsed = match query::address(pattern, true)? {
                 Some(q) => q,
@@ -3234,7 +3289,7 @@ fn why_tree(
             };
             let query::Query::Body { body, .. } = parsed else {
                 bail!(
-                    "why: expected an address such as 'net.vpc[\"main\"]' or \
+                    "why: expected an address such as 'net.vpc main' or \
                      'net.vpc[\"main\"].cidr', an input such as 'nodes.count', or a fact \
                      pattern such as 'want(net.vpc, N)', got '{pattern}'"
                 );

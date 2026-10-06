@@ -33,7 +33,7 @@ fn an_override_that_violates_a_refinement_is_a_deny() {
     .failure();
     assert!(
         r.stdout
-            .contains("conflicts\n  ! input[\"\"].db.backup_days: 40 violates range(1, 35)\n"),
+            .contains("conflicts\n  ! input db.backup_days: 40 violates range(1, 35)\n"),
         "{}",
         r.stdout
     );
@@ -150,7 +150,7 @@ fn a_refinement_on_a_null_is_deferred_and_fires_after_the_boundary() {
     let r = gke(&s, &["plan"]).success();
     assert!(
         r.stdout.contains(
-            "  check len_ge(3) of google.container_cluster[\"pngu\"].zones  undetermined until tick 2\n"
+            "  check len_ge(3) of google.container_cluster pngu.zones  undetermined until tick 2\n"
         ),
         "{}",
         r.stdout
@@ -283,21 +283,21 @@ n(\"{name}\")
     let r = plan(&s, &src("abcd", "10.0.0.0/16")).failure();
     assert!(
         r.stdout
-            .contains("! app.thing[\"a\"].name: \"abcd\" violates len_le(3)\n"),
+            .contains("! app.thing a.name: \"abcd\" violates len_le(3)\n"),
         "{}",
         r.stdout
     );
     let r = plan(&s, &src("ab", "10.0.0.0/16")).failure();
     assert!(
         r.stdout
-            .contains("! app.thing[\"a\"].code: ab does not satisfy len(code) != 2\n"),
+            .contains("! app.thing a.code: ab does not satisfy len(code) != 2\n"),
         "{}",
         r.stdout
     );
     let r = plan(&s, &src("abc", "10.0.0.0/28")).failure();
     assert!(
         r.stdout.contains(
-            "! app.thing[\"a\"].net: 10.0.0.0/24 does not satisfy inet.prefix_len(net) >= inet.prefix_len(wide)\n"
+            "! app.thing a.net: 10.0.0.0/24 does not satisfy inet.prefix_len(net) >= inet.prefix_len(wide)\n"
         ),
         "{}",
         r.stdout

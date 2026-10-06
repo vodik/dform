@@ -37,11 +37,7 @@ fn editing_the_world_file_shows_drift_and_apply_writes_it_back() {
         "{}",
         r.stdout
     );
-    assert!(
-        r.stdout.contains("~ compute.vm[\"bastion\"]"),
-        "{}",
-        r.stdout
-    );
+    assert!(r.stdout.contains("~ compute.vm bastion"), "{}", r.stdout);
     assert!(
         r.stdout
             .contains("private_ip: \"10.50.0.99\" → \"10.50.0.21\""),
@@ -102,7 +98,7 @@ fn an_emptied_stack_adopts_nothing() {
     let r = s
         .run(&common::on("p.df", &["--world", "w.json"], &["apply"]))
         .success();
-    assert!(r.stdout.contains("- compute.vm[\"mine\"]"), "{}", r.stdout);
+    assert!(r.stdout.contains("- compute.vm mine"), "{}", r.stdout);
     let r = s
         .run(&common::on("p.df", &["--world", "w.json"], &["plan"]))
         .success();

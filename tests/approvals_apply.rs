@@ -88,9 +88,8 @@ fn a_prod_replace_plans_with_needs_approval() {
     let args = [&["plan", "stacks/approvals.df"][..], &PROD, &NEW_CIDR].concat();
     let r = s.run(&args).success();
     assert!(
-        r.stdout.contains("  ± net.vpc[\"main\"]  ")
-            && r.stdout
-                .contains("\nheld for approval\n  net.vpc[\"main\"]  ")
+        r.stdout.contains("  ± net.vpc main  ")
+            && r.stdout.contains("\nheld for approval\n  net.vpc main  ")
             && r.stdout
                 .contains("  a replace in prod    stacks/approvals.df:21\n"),
         "{}",

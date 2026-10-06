@@ -597,7 +597,7 @@ fn a_secret_output_reaches_a_sensitive_field_in_another_stack() {
     // The producer's secret changes: the reader's field is updated, in one
     // apply of the reader that applies the producer first.
     let r = dev(&["apply", "app", "--set", "pw=ROTATED-SECRET"]).success();
-    assert!(r.stdout.contains("~ leaky.vault[\"copy\"]"), "{}", r.stdout);
+    assert!(r.stdout.contains("~ leaky.vault copy"), "{}", r.stdout);
     assert!(!r.stdout.contains("ROTATED"), "{}", r.stdout);
     assert_eq!(materialized(&s), "ROTATED-SECRET");
 

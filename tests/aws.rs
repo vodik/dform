@@ -33,8 +33,7 @@ fn optional_computed_is_a_constant_when_set_and_a_null_when_not() {
         r.stdout
     );
     assert!(
-        r.stdout
-            .contains("tags.web_az = ?aws.instance[\"web\"].availability_zone"),
+        r.stdout.contains("tags.web_az = web.availability_zone"),
         "{}",
         r.stdout
     );
@@ -108,7 +107,7 @@ fn keyless_sets_ignore_order() {
         r.stdout
     );
     assert!(
-        r.stdout.contains("~ aws.security_group[\"web\"]"),
+        r.stdout.contains("~ aws.security_group web"),
         "{}",
         r.stdout
     );
@@ -140,7 +139,7 @@ fn a_data_source_is_a_table_with_an_index() {
         "[project]\nedition = \"2026\"\n\n[providers]\naws = { source = \"aws-mock\" }\n",
     );
     s.write("main.df", ZONES);
-    let r = s.run(&["plan", "main.df"]).success();
+    let r = s.run(&["plan", "-v", "main.df"]).success();
     assert_eq!(
         r.summary(),
         "plan: 4 changes (4 create) over 1 tick",
@@ -155,8 +154,8 @@ fn a_data_source_is_a_table_with_an_index() {
         // Each subnet by the statement and the row that derive it, its
         // cidr by the expression that computes it (R-79).
         let want = format!(
-            "  + aws.subnet[\"private-{zone}\"]  main.df:9  with availability_zone = \"{zone}\", \
-             n = {}\n      availability_zone = \"{zone}\"\n      cidr_block = \"{cidr}\"      \
+            "  + aws.subnet private-{zone}  main.df:9  with availability_zone = \"{zone}\", \
+             n = {}\n      availability_zone = \"{zone}\"\n      cidr_block = \"{cidr}\"   \
              inet.subnet(inet(main.cidr_block), 8, n)\n",
             &cidr[5..6]
         );

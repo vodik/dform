@@ -35,10 +35,10 @@ fn gke_plan_has_the_summary_ticks_and_later() {
         "plan: 6 changes (6 create) over 2 ticks, 1 undetermined"
     );
     for want in [
-        "\ntick 1  3 changes, applies now\n  + google.compute_subnetwork[\"gke_subnet\"]  ",
-        "\ntick 2  3 changes, after tick 1 reports\n  waits on  google.container_cluster[\"pngu\"].ca_certificate\n            google.container_cluster[\"pngu\"].endpoint\n  + k8s.deployment[\"api\"]  ",
-        "\nlater   changes this plan cannot count yet\n  google.container_node_pool[\"np-${z}\"]  ",
-        "  waits on google.container_cluster[\"pngu\"].zones\n",
+        "\ntick 1  3 changes, applies now\n  + google.compute_subnetwork gke_subnet  ",
+        "\ntick 2  3 changes, after tick 1 reports\n  waits on  pngu.ca_certificate\n            pngu.endpoint\n  + k8s.deployment api  ",
+        "\nlater   changes this plan cannot count yet\n  google.container_node_pool \"np-${z}\"  ",
+        "  waits on pngu.zones\n",
         "  deny \"cluster must be in at least two zones\"  ",
         "  undetermined until tick 2\n",
         "\napply: tick 1 now, then tick 2 when tick 1 reports; `later` is planned again when tick 1 reports, and apply asks before what it adds\n",
@@ -100,7 +100,7 @@ fn a_keyless_set_diffs_by_element() {
     let r = aws(&s, "plan").success();
     assert!(
         r.stdout.contains(
-            "  ~ aws.security_group[\"web\"]\n      - ingress[]  stacks/aws_demo.df:27  (over @default)\n          cidr_blocks[0] was \"0.0.0.0/0\"\n          from_port was 22\n          protocol was \"tcp\"\n          to_port was 22\n\napply: tick 1 now\n"
+            "  ~ aws.security_group web  stacks/aws_demo.df:24\n      - ingress[]\n          cidr_blocks[0] was \"0.0.0.0/0\"\n          from_port was 22\n          protocol was \"tcp\"\n          to_port was 22\n\napply: tick 1 now\n"
         ),
         "{}",
         r.stdout
@@ -144,7 +144,7 @@ provider fake
         .success();
     assert!(
         r.stdout.contains(
-            "  ~ k8s.deployment[\"api\"]\n      + spec.template.spec.containers[name=sidecar]  p.df:6  (over @default)\n          image = \"envoy:1\"\n          name = \"sidecar\"\n"
+            "  ~ k8s.deployment api  p.df:3\n      + spec.template.spec.containers[name=sidecar]\n          image = \"envoy:1\"\n          name = \"sidecar\"\n"
         ),
         "{}",
         r.stdout
@@ -180,15 +180,53 @@ provider fake
         "{}",
         r.stdout
     );
-    assert!(!r.stdout.contains("+ net.vpc[\"main\"]"), "{}", r.stdout);
+    assert!(!r.stdout.contains("+ net.vpc main"), "{}", r.stdout);
     for want in [
-        "\nshadowed\n  ! net.vpc[\"two\"].cidr at rank default: two contributions disagree at cidr\n",
-        "\nconflicts\n  ! net.vpc[\"main\"].cidr: two contributions disagree\n      normal \"10.0.0.0/16\"  from arg(\"net.vpc\", \"main\", \"cidr\", \"10.0.0.0/16\", \"normal\") (at p.df:3:25)\n",
+        "\nshadowed\n  ! net.vpc two.cidr at rank default: two contributions disagree at cidr\n",
+        "\nconflicts\n  ! net.vpc main.cidr: two contributions disagree\n      normal \"10.0.0.0/16\"  from arg(\"net.vpc\", \"main\", \"cidr\", \"10.0.0.0/16\", \"normal\") (at p.df:3:25)\n",
         "      normal \"10.1.0.0/16\"  from arg(\"net.vpc\", \"main\", \"cidr\", \"10.1.0.0/16\", \"normal\") :- ok(1) (at p.df:4:1)\n",
     ] {
         assert!(r.stdout.contains(want), "{want}\n---\n{}", r.stdout);
     }
     assert!(r.stderr.contains("blocked by constraints"), "{}", r.stderr);
+}
+
+/// Two conflicts: the section once, each conflict and its witnesses once,
+/// and the refusal once (R-111).
+#[test]
+fn two_conflicts_print_once_each() {
+    let s = Scratch::new("sections-two-conflicts");
+    s.write(
+        "p.df",
+        r#"
+
+resource net.vpc main { cidr = "10.0.0.0/16" }
+set main.cidr = "10.1.0.0/16" where ok(1)
+resource net.vpc two { cidr = "10.0.0.0/16" }
+set two.cidr = "10.9.0.0/16" where ok(1)
+resource net.vpc three { cidr = "10.0.0.0/16" }
+ok(1)
+provider fake
+"#,
+    );
+    let r = s
+        .run(&["dev", "--world", "w.json", "plan", "p.df"])
+        .failure();
+    for want in [
+        "conflicts",
+        "  ! net.vpc main.cidr: two contributions disagree",
+        "  ! net.vpc two.cidr: two contributions disagree",
+        "apply: refused until the conflicts and denies above are resolved",
+    ] {
+        let n = r.stdout.lines().filter(|l| *l == want).count();
+        assert_eq!(n, 1, "{want}\n---\n{}", r.stdout);
+    }
+    let witnesses = r
+        .stdout
+        .lines()
+        .filter(|l| l.starts_with("      normal "))
+        .count();
+    assert_eq!(witnesses, 4, "{}", r.stdout);
 }
 
 /// A conflict at a sensitive path prints neither witness's value nor the
@@ -219,8 +257,7 @@ provider fake
         ])
         .failure();
     assert!(
-        r.stdout
-            .contains("\nconflicts\n  ! leaky.vault[\"v\"].password"),
+        r.stdout.contains("\nconflicts\n  ! leaky.vault v.password"),
         "{}",
         r.stdout
     );
@@ -250,19 +287,19 @@ fn a_denied_replace_is_a_section() {
         r.stdout,
         "plan: 1 change (1 replace) over 1 tick, 1 denied\n\n\
          tick 1  1 change, applies now\n\
-         \x20 ± net.vpc[\"main\"]                        cidr is immutable\n\
-         \x20     cidr: \"10.0.0.0/16\" → \"10.1.0.0/16\"  p.df:2\n\n\
+         \x20 ± net.vpc main  p.df:2  cidr is immutable\n\
+         \x20     cidr: \"10.0.0.0/16\" → \"10.1.0.0/16\"\n\n\
          denied\n\
-         \x20 lifecycle prevent_destroy: the plan would replace net.vpc[\"main\"]  net.vpc[\"main\"]    p.df:4\n\n\
+         \x20 lifecycle prevent_destroy: the plan would replace net.vpc[\"main\"]  net.vpc main    p.df:4\n\n\
          apply: refused until the conflicts and denies above are resolved\n"
     );
     assert!(r.stderr.contains("blocked by constraints"), "{}", r.stderr);
 }
 
 /// `--color always` paints the plan by its semantics (a create's `+`
-/// green, its address bold, a tick's head bold, a value waited on cyan,
-/// a rule in `later` in the warning colour); `never`, `NO_COLOR` under
-/// `auto`, and `--json` print none.
+/// green, its address bold, a tick's head bold, `(sensitive)` dim, a rule
+/// in `later` in the warning colour); `never`, `NO_COLOR` under `auto`,
+/// and `--json` print none.
 /// What `plan` prints uncoloured is the text every golden has.
 #[test]
 fn color_is_a_rendering_of_the_same_text() {
@@ -283,11 +320,11 @@ fn color_is_a_rendering_of_the_same_text() {
     };
     let always = colored("always");
     for want in [
-        "  \x1b[32m+\x1b[0m \x1b[1mgoogle.compute_subnetwork[\"gke_subnet\"]\x1b[0m  ",
+        "  \x1b[32m+\x1b[0m \x1b[1mgoogle.compute_subnetwork gke_subnet\x1b[0m  ",
         "\x1b[1mtick 1  3 changes, applies now\x1b[0m\n",
-        "  waits on  \x1b[36mgoogle.container_cluster[\"pngu\"].ca_certificate\x1b[0m\n",
-        "\x1b[36m?google.compute_subnetwork[\"gke_subnet\"]\x1b[0m",
-        "  \x1b[1;33mgoogle.container_node_pool[\"np-${z}\"]\x1b[0m  ",
+        "  waits on  pngu.ca_certificate\n",
+        "      data.password = \x1b[2m(sensitive)\x1b[0m\n",
+        "  \x1b[1;33mgoogle.container_node_pool \"np-${z}\"\x1b[0m  ",
     ] {
         assert!(always.contains(want), "{want:?}\n---\n{always:?}");
     }
@@ -353,7 +390,7 @@ fn plan_why_explains_an_update_and_a_delete_and_redacts_a_secret() {
     let r = run("SECOND-SECRET-456", &["plan", "--why"]).success();
     assert!(
         r.stdout.contains(
-            "  ~ leaky.vault[\"v\"]\n      password: (sensitive) → (sensitive)  --set pw=(sensitive \
+            "  ~ leaky.vault v                          p.df:3\n      password: (sensitive) → (sensitive)  --set pw=(sensitive \
              input.pw)\n      by p.df:4  resource leaky.vault v { password = pw }\n      because \
              --set pw=(sensitive input.pw)\n"
         ),
@@ -362,7 +399,7 @@ fn plan_why_explains_an_update_and_a_delete_and_redacts_a_secret() {
     );
     assert!(
         r.stdout.contains(
-            "  - leaky.oops[\"o\"]\n      password was \"plain\"\n      because no statement \
+            "  - leaky.oops o\n      password was \"plain\"\n      because no statement \
              derives it now; state has it\n"
         ),
         "{}",

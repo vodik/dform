@@ -57,7 +57,7 @@ fn an_attribute_typed_ref_takes_the_resource() {
             &["query", "net.subnet[\"a\"].vpc"],
         ))
         .success();
-    assert!(q.stdout.contains("net.vpc[\"main\"]"), "{}", q.stdout);
+    assert!(q.stdout.contains("net.vpc main"), "{}", q.stdout);
     // A new subnet in the existing vpc prints the vpc, not its id.
     s.write(
         "p.df",

@@ -186,7 +186,7 @@ fn a_tick_that_adds_an_address_asks_again() {
         said[1]
     );
     assert!(
-        said[1].contains("  + iam.policy[\"\\\"connect-orders.db.fake\\\"\"]  "),
+        said[1].contains("  + iam.policy \"connect-orders.db.fake\"  "),
         "{}",
         said[1]
     );

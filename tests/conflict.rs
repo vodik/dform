@@ -36,7 +36,7 @@ fn a_conflict_under_a_required_attribute_is_the_conflict() {
     assert!(!r.stderr.contains("is not set"), "{}", r.stderr);
     assert!(
         r.stdout.contains(
-            "! k8s.deployment[\"web\"].spec: two contributions disagree at \
+            "! k8s.deployment web.spec: two contributions disagree at \
              spec.template.spec.containers[name=api].image\n"
         ),
         "{}{}",
@@ -58,9 +58,8 @@ fn a_conflict_names_its_leaf() {
     )
     .failure();
     assert!(
-        r.stdout.contains(
-            "! k8s.namespace[\"n\"].metadata: two contributions disagree at metadata.name\n"
-        ),
+        r.stdout
+            .contains("! k8s.namespace n.metadata: two contributions disagree at metadata.name\n"),
         "{}{}",
         r.stdout,
         r.stderr

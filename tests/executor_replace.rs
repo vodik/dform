@@ -48,8 +48,8 @@ fn a_replace_updates_its_dependents_after_the_create() {
     let r = mock(&s, &["plan"]).success();
     assert!(
         r.stdout.contains(
-            "tick 2  2 changes, after tick 1 reports\n  waits on  net.vpc[\"main\"]\n  \
-             ~ net.subnet[\"a\"]\n      vpc_id: \"net.vpc:main@1\" → ?net.vpc[\"main\"]  "
+            "tick 2  2 changes, after tick 1 reports\n  waits on  main\n  \
+             ~ net.subnet a  p.df:4\n      vpc_id: \"net.vpc:main@1\" → main\n"
         ),
         "{}",
         r.stdout
@@ -99,9 +99,9 @@ fn create_before_destroy_moves_dependents_before_the_deposed_delete() {
     assert_eq!(
         order,
         [
-            "  ~ net.subnet[\"a\"]",
-            "  ~ net.subnet[\"b\"]",
-            "  - net.vpc[\"main\"]  (deposed)"
+            "  ~ net.subnet a  p.df:4",
+            "  ~ net.subnet b  p.df:5",
+            "  - net.vpc main  (deposed)"
         ],
         "{}",
         r.stdout
@@ -147,15 +147,15 @@ provider fake
     let r = mock(&s, &["plan"]).success();
     assert!(
         r.stdout.contains(
-            "tick 2  2 changes, after tick 1 reports\n  waits on  db.postgres[\"d\"].endpoint\n  \
-             ~ net.subnet[\"a\"]\n"
-        ) && r.stdout.contains("  - net.vpc[\"main\"]  (deposed)\n"),
+            "tick 2  2 changes, after tick 1 reports\n  waits on  d.endpoint\n  \
+             ~ net.subnet a   p.df:4\n      note: \"x\" → d.endpoint\n"
+        ) && r.stdout.contains("  - net.vpc main  (deposed)\n"),
         "{}",
         r.stdout
     );
     assert!(
         r.stdout
-            .contains("tick 1  1 change, applies now\n  + db.postgres[\"d\"]  "),
+            .contains("tick 1  1 change, applies now\n  + db.postgres d  "),
         "{}",
         r.stdout
     );

@@ -105,7 +105,8 @@ resource leaky.vault v { password = "VAULT-SECRET-DO-NOT-PRINT" }
 }
 
 /// Rows print values as the program writes them: a reference is the
-/// address it names, `T["A"].p`, not the core's `ref(T, A, p)`.
+/// address it names as the plan prints it, `T a.p` (R-111), not the
+/// core's `ref(T, A, p)`.
 #[test]
 fn a_row_prints_a_reference_as_its_address() {
     let at = "examples/crud-api/stacks/crud_api.df";
@@ -116,14 +117,14 @@ fn a_row_prints_a_reference_as_its_address() {
             r#"attr("google.sql_database", "crud_db", "instance", V)"#,
         ],
     );
-    assert_eq!(out, "V\ngoogle.sql_database_instance[\"db\"].name\n");
+    assert_eq!(out, "V\ngoogle.sql_database_instance db.name\n");
     let facts = dform(at, &["query", "arg"]);
     assert!(
         facts
             .lines()
             .any(|l| l.starts_with(r#""google.sql_database""#)
                 && l.contains(r#""instance""#)
-                && l.contains(r#"  google.sql_database_instance["db"].name  "#)),
+                && l.contains(r#"  google.sql_database_instance db.name  "#)),
         "{facts}"
     );
     assert!(!facts.contains("ref("), "{facts}");

@@ -25,7 +25,7 @@ fn prevent_destroy_makes_a_delete_a_deny() {
         "\nlifecycle(net.vpc[\"main\"], \"prevent_destroy\")\nprovider fake\n",
     );
     let r = mock(&s, &["plan"]).failure();
-    assert!(r.stdout.contains("- net.vpc[\"main\"]"), "{}", r.stdout);
+    assert!(r.stdout.contains("- net.vpc main"), "{}", r.stdout);
     assert!(
         r.stderr.contains(
             "constraint violations:\n- lifecycle prevent_destroy: the plan would delete net.vpc[\"main\"]\n"
@@ -274,13 +274,12 @@ fn why_explains_prevent_destroy() {
     );
     assert!(
         r.stdout
-            .contains("lifecycle(net.vpc[\"main\"], \"prevent_destroy\")"),
+            .contains("lifecycle(net.vpc main, \"prevent_destroy\")"),
         "{}",
         r.stdout
     );
     assert!(
-        r.stdout
-            .contains("deformation(\"delete\", net.vpc[\"main\"], "),
+        r.stdout.contains("deformation(\"delete\", net.vpc main, "),
         "{}",
         r.stdout
     );
@@ -299,16 +298,15 @@ fn policy_reads_the_deformation() {
     );
     let r = mock(&s, &["plan"]).failure();
     assert!(
-        r.stdout.contains(
-            "\ndenied\n  no deletes here: net.vpc[\"main\"]  net.vpc[\"main\"]    p.df:3\n"
-        ),
+        r.stdout
+            .contains("\ndenied\n  no deletes here: net.vpc[\"main\"]  net.vpc main    p.df:3\n"),
         "{}",
         r.stdout
     );
     let r = mock(&s, &["query", "deformation(K, R, _)"]).success();
     assert!(
-        r.stdout.contains("\"create\"  compute.vm[\"keep\"]")
-            && r.stdout.contains("\"delete\"  net.vpc[\"main\"]"),
+        r.stdout.contains("\"create\"  compute.vm keep")
+            && r.stdout.contains("\"delete\"  net.vpc main"),
         "{}",
         r.stdout
     );
@@ -366,7 +364,7 @@ provider fake
     );
     let r = mock(&s, &["query", "deformation(K, R, _)"]).success();
     assert!(
-        r.stdout.contains("\"create\"  net.vpc[\"other\"]"),
+        r.stdout.contains("\"create\"  net.vpc other"),
         "{}",
         r.stdout
     );

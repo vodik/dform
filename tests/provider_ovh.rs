@@ -135,11 +135,14 @@ fn a_program_plans_against_the_account() {
     );
     let plan = dform(&s, &server, &["plan", "main.df"]).success();
     for line in [
-        "+ ovh.ssh_key[\"admin\"]",
-        "+ ovh.instance[\"server\"]",
-        "+ ovh.domain_record[\"www\"]",
+        "+ ovh.ssh_key admin",
+        "+ ovh.instance server",
+        "+ ovh.domain_record www",
         "user_data = (sensitive)",
-        "ssh_key = ?ovh.ssh_key[\"admin\"]",
+        // A reference is the address it names; a value the provider
+        // computes is the expression that reads it (R-111).
+        "ssh_key = admin",
+        "target = server.public_ip",
     ] {
         assert!(plan.stdout.contains(line), "{line}\n{}", plan.stdout);
     }
@@ -163,7 +166,7 @@ fn a_program_plans_against_the_account() {
     );
     let plan = dform(&s, &server, &["plan", "main.df"]).success();
     assert!(
-        plan.stdout.contains("> ovh.instance[\"old\"]"),
+        plan.stdout.contains("> ovh.instance old"),
         "{}",
         plan.stdout
     );
@@ -188,9 +191,9 @@ fn a_program_plans_applies_and_plans_clean() {
     );
     let plan = dform(&s, &server, &["plan", "main.df"]).success();
     for line in [
-        "ovh.ssh_key[\"admin\"]",
-        "ovh.instance[\"server\"]",
-        "ovh.domain_record[\"www\"]",
+        "ovh.ssh_key admin",
+        "ovh.instance server",
+        "ovh.domain_record www",
     ] {
         assert!(plan.stdout.contains(line), "{line}\n{}", plan.stdout);
     }
@@ -251,7 +254,7 @@ fn a_program_plans_applies_and_plans_clean() {
     );
     let changed = dform(&s, &server, &["plan", "main.df"]).success();
     assert!(
-        changed.stdout.contains("ovh.instance[\"server\"]"),
+        changed.stdout.contains("ovh.instance server"),
         "{}",
         changed.stdout
     );
@@ -293,8 +296,8 @@ fn a_rename_and_a_ttl_change_in_place() {
     s.write("main.df", &program("vm-b", "  ttl = 300\n"));
     let plan = dform(&s, &server, &["plan", "main.df"]).success();
     assert!(
-        plan.stdout.contains("~ ovh.instance[\"vm\"]")
-            && plan.stdout.contains("~ ovh.domain_record[\"apex\"]"),
+        plan.stdout.contains("~ ovh.instance vm")
+            && plan.stdout.contains("~ ovh.domain_record apex"),
         "{}",
         plan.stdout
     );

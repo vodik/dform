@@ -22,11 +22,7 @@ fn adopt_demo_plans_with_dotted_cloud_refs() {
             prog.to_str().unwrap(),
         ])
         .success();
-    assert!(
-        r.stdout.contains("> net.vpc[\"network.vpc\"]"),
-        "{}",
-        r.stdout
-    );
+    assert!(r.stdout.contains("> net.vpc network.vpc"), "{}", r.stdout);
     assert!(r.stdout.contains("owner_tag = \"team-a\""), "{}", r.stdout);
 }
 
@@ -53,9 +49,5 @@ fn world_flag_defaults_inventory_beside_it() {
             prog.to_str().unwrap(),
         ])
         .success();
-    assert!(
-        r.stdout.contains("> net.vpc[\"network.vpc\"]"),
-        "{}",
-        r.stdout
-    );
+    assert!(r.stdout.contains("> net.vpc network.vpc"), "{}", r.stdout);
 }

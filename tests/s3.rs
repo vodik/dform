@@ -213,7 +213,7 @@ fn plan_and_apply_of_the_demo_keep_state_in_the_bucket() {
         let p = Project::new(t, "apply");
         let plan = p.run(PLAN).success();
         assert!(
-            plan.stdout.contains("+ net.vpc[\"main.vpc\"]"),
+            plan.stdout.contains("+ net.vpc main.vpc"),
             "{}: {}",
             t.what,
             plan.stdout

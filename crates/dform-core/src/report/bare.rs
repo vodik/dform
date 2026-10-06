@@ -6,7 +6,7 @@
 //! deformations; up to date, not undeformed.
 
 use super::{
-    ActionKind, Deformation, Line, Op, Paint, Redactor, Report, Shown, Style, kind_name, moved_text,
+    ActionKind, Deformation, Line, Op, Paint, Report, Shown, Style, kind_name, moved_text,
 };
 use crate::ir::Address;
 use std::collections::BTreeSet;
@@ -250,7 +250,7 @@ impl Report {
                 "create" => ActionKind::Create,
                 _ => ActionKind::Update,
             };
-            let addr = Redactor::default().cell(&crate::zset::reference(&copy));
+            let addr = copy.to_string();
             out.push_str(&format!(
                 "{indent}{} {}\n",
                 style.marker(&kind),
@@ -270,7 +270,7 @@ fn write_change(out: &mut String, d: &Deformation, indent: &str, style: Style) {
         ActionKind::Replace { .. } => "  (replace)",
         _ => "",
     };
-    let addr = Redactor::default().cell(&crate::zset::reference(&d.addr));
+    let addr = d.addr.to_string();
     out.push_str(&format!(
         "{indent}{} {}{note}\n",
         style.marker(&d.kind),

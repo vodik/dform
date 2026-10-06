@@ -35,9 +35,9 @@ provider fake
     assert_eq!(
         order,
         [
-            "  - net.route[\"r\"]",
-            "  - net.vpc_peering[\"p\"]",
-            "  - net.vpc[\"main\"]"
+            "  - net.route r",
+            "  - net.vpc_peering p",
+            "  - net.vpc main"
         ],
         "{}",
         r.stdout
@@ -75,13 +75,13 @@ fn a_force_new_change_replaces_destroying_first() {
         r#"plan: 2 changes (1 update, 1 replace) over 2 ticks
 
 tick 1  1 change, applies now
-  ± net.vpc["main"]                              cidr is immutable
-      cidr: "10.0.0.0/16" → "10.1.0.0/16"        p.df:3
+  ± net.vpc main  p.df:3  cidr is immutable
+      cidr: "10.0.0.0/16" → "10.1.0.0/16"
 
 tick 2  1 change, after tick 1 reports
-  waits on  net.vpc["main"]
-  ~ net.subnet["a"]
-      vpc_id: "net.vpc:main" → ?net.vpc["main"]  vpc_id = ref(net.vpc, "main", "id")   p.df:4
+  waits on  main
+  ~ net.subnet a  p.df:4
+      vpc_id: "net.vpc:main" → main
 
 apply: tick 1 now, then tick 2 when tick 1 reports
 stack p is up to date
@@ -114,8 +114,7 @@ fn create_before_destroy_deposes_the_old_object_until_dependents_move() {
     // Stop after tick 1: the old object is deposed in state.
     let r = mock(&s, &["apply", "--max-ticks", "1"]).failure();
     assert!(
-        r.stdout
-            .contains("  ± net.vpc[\"main\"]  (the new one first)  "),
+        r.stdout.contains("  ± net.vpc main  (the new one first)  "),
         "{}",
         r.stdout
     );
@@ -130,9 +129,8 @@ fn create_before_destroy_deposes_the_old_object_until_dependents_move() {
     assert!(
         r.stdout.contains(
             "plan: 2 changes (1 update, 1 delete) over 1 tick\n\ntick 1  2 changes, applies now\n  \
-             ~ net.subnet[\"a\"]\n      vpc_id: \"net.vpc:main\" → \"net.vpc:main-2\"  \
-             vpc_id = ref(net.vpc, \"main\", \"id\")   p.df:4\n  \
-             - net.vpc[\"main\"]  (deposed)\n      cidr was \"10.0.0.0/16\"\n"
+             ~ net.subnet a  p.df:4\n      vpc_id: \"net.vpc:main\" → \"net.vpc:main-2\"\n  \
+             - net.vpc main  (deposed)\n      cidr was \"10.0.0.0/16\"\n"
         ),
         "{}",
         r.stdout

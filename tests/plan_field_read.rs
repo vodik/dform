@@ -67,5 +67,5 @@ provider fake
     )
     .success();
     assert!(!r.stderr.contains(MSG), "{}", r.stderr);
-    assert!(r.stdout.contains("net.subnet[\"a\"]"), "{}", r.stdout);
+    assert!(r.stdout.contains("net.subnet a"), "{}", r.stdout);
 }

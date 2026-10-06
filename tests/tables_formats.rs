@@ -189,7 +189,7 @@ provider fake
     s.write("data/dev.csv", "name\nd1\n");
     s.write("data/prod.csv", "name\np1\np2\n");
     let r = s.run(&["plan", "p.df"]).success();
-    assert!(r.stdout.contains("+ compute.vm[\"d1\"]"), "{}", r.stdout);
+    assert!(r.stdout.contains("+ compute.vm d1"), "{}", r.stdout);
     let r = s.run(&["plan", "--set", "env=prod", "p.df"]).success();
     assert_eq!(r.summary(), "plan: 2 changes (2 create) over 1 tick");
     let r = s

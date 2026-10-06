@@ -67,9 +67,9 @@ fn a_name_with_a_dot_from_a_value_is_one_quoted_segment() {
          resource net.vpc \"${p}\" { cidr = \"10.9.0.0/16\" } where part(p)\n",
     );
     let r = s.run(&["plan", "main.df"]).success();
-    for name in [r#"\"a.b\""#, r#"\"c/d\""#] {
+    for name in [r#""a.b""#, r#""c/d""#] {
         assert!(
-            r.stdout.contains(&format!("+ net.vpc[\"{name}\"]")),
+            r.stdout.contains(&format!("+ net.vpc {name}  ")),
             "{name}: {}",
             r.stdout
         );
@@ -85,9 +85,8 @@ fn x_in_a_component_binds_every_copy() {
         .run(&["query", "ids(i, c)", "main.df", "--set", "env=prod"])
         .success();
     assert!(
-        r.stdout.contains("\"blue\"   net.vpc[\"blue.vpc\"].cidr\n")
-            && r.stdout
-                .contains("\"green\"  net.vpc[\"green.vpc\"].cidr\n"),
+        r.stdout.contains("\"blue\"   net.vpc blue.vpc.cidr\n")
+            && r.stdout.contains("\"green\"  net.vpc green.vpc.cidr\n"),
         "{}",
         r.stdout
     );
@@ -107,12 +106,12 @@ fn the_plan_groups_a_copys_resources_under_it() {
     );
     assert!(
         r.stdout.contains(
-            "  + vpc[\"blue\"]\n    + net.vpc[\"blue.vpc\"]               main.df:7\n        \
-             cidr = \"10.1.0.0/16\"            input blue.vpc_net = \"10.1.0.0/16\"   main.df:10\n    \
-             + net.subnet[\"blue.a\"]  "
+            "  + vpc blue\n    + net.vpc blue.vpc        main.df:7\n        \
+             cidr = \"10.1.0.0/16\"  main.df:10\n    + net.subnet blue.a       main.df:8\n        \
+             cidr = \"10.1.0.0/16\"  main.df:10\n        vpc_id = blue.vpc\n"
         ) && r
             .stdout
-            .contains("  + vpc[\"green\"]\n    + net.vpc[\"green.vpc\"]  "),
+            .contains("  + vpc green\n    + net.vpc green.vpc  "),
         "{}",
         r.stdout
     );
@@ -122,7 +121,7 @@ fn the_plan_groups_a_copys_resources_under_it() {
     let r = s.run(&["plan", "main.df"]).success();
     assert!(
         r.stdout
-            .contains("  - vpc[\"green\"]\n    - net.subnet[\"green.a\"]"),
+            .contains("  - vpc green\n    - net.subnet green.a  main.df:8\n"),
         "{}",
         r.stdout
     );
@@ -191,8 +190,48 @@ fn a_policy_reads_a_copys_deformation_row() {
     let r = s.run(&["plan", "main.df"]).failure();
     assert!(
         r.stdout.contains(
-            "\n  a new copy blue at net.vpc[\"blue.vpc\"].cidr  vpc[\"blue\"]    main.df:12\n"
+            "\n  a new copy blue at net.vpc[\"blue.vpc\"].cidr  vpc blue    main.df:12\n"
         ),
+        "{}",
+        r.stdout
+    );
+}
+
+/// A copy inside a copy nests again, each resource by its full path; a
+/// value given two copies out says where (R-111).
+#[test]
+fn a_nested_copy_nests_again() {
+    let s = Scratch::project("instances-nested");
+    s.write(
+        "main.df",
+        r#"
+provider fake
+component vpc {
+  input vpc_net: string
+  resource net.vpc vpc { cidr = vpc_net }
+  resource net.subnet a { cidr = vpc_net, vpc_id = ref(vpc) }
+}
+component edge {
+  input base: string
+  instance vpc left { vpc_net = base }
+}
+instance edge east { base = "10.1.0.0/16" }
+"#,
+    );
+    let r = s.run(&["plan", "main.df"]).success();
+    assert!(
+        r.stdout.contains(
+            "  + edge east\n    + vpc east.left\n      + net.vpc east.left.vpc   main.df:5\n          \
+             cidr = \"10.1.0.0/16\"  main.df:12\n      + net.subnet east.left.a  main.df:6\n          \
+             cidr = \"10.1.0.0/16\"  main.df:12\n          vpc_id = east.left.vpc\n"
+        ),
+        "{}",
+        r.stdout
+    );
+    // `why` takes the path the plan prints.
+    let r = s.run(&["why", "east.left.vpc", "main.df"]).success();
+    assert!(
+        r.stdout.starts_with("net.vpc east.left.vpc\n  main.df:5  "),
         "{}",
         r.stdout
     );

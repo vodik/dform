@@ -71,7 +71,7 @@ fn hover_shows_every_contribution_and_why_prints_the_derivation() {
     let why = why.as_str().unwrap();
     assert!(
         why.starts_with(
-            "net.vpc[\"main.vpc\"].tags = {component: \"network\", env: \"staging\", team: \"platform\"}\n  merged from 2 contributions\n"
+            "net.vpc main.vpc.tags = {component: \"network\", env: \"staging\", team: \"platform\"}\n  merged from 2 contributions\n"
         ),
         "{why}"
     );
@@ -1968,10 +1968,7 @@ fn explain_opens_the_derivation_as_a_document() {
         command["arguments"].clone(),
     );
     let text = text.as_str().unwrap();
-    assert!(
-        text.contains("compute.vm[\"bastion\"].private_ip"),
-        "{text}"
-    );
+    assert!(text.contains("compute.vm bastion.private_ip"), "{text}");
     let shown = c.wait("window/showDocument", |_| true);
     let u = shown["uri"].as_str().unwrap();
     let file = PathBuf::from(u.strip_prefix("file://").unwrap());

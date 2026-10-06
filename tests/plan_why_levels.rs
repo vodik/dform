@@ -1,8 +1,9 @@
-//! R-79: `plan --why=none|line|full` on the demo and crud-api. `line`, the
-//! default, is the plan grouped by tick with each change's site; `full` is
-//! `line` with each change's derivation under it (`--why` alone); `none`
-//! is the bare diff as it was laid out before (tests/golden/*.plan-bare.txt
-//! pins it byte for byte).
+//! R-79, R-111: the plan's ladder on the demo and crud-api. The default
+//! (`--why=line`) is the plan grouped by tick, each change's site and each
+//! value written outside its block's; `-v` (`--why=how`) says how on the
+//! same lines; `-vv` (`--why=full`, `--why` alone) adds each change's
+//! derivation under it; `-q` (`--why=none`) is the bare diff as it was laid
+//! out before (tests/golden/*.plan-bare.txt pins it byte for byte).
 
 mod common;
 use common::{Scratch, repo};
@@ -14,43 +15,107 @@ fn plan(s: &Scratch, example: &str, why: &[&str]) -> String {
     s.run(&args).success().stdout
 }
 
-fn levels(example: &str) {
+/// A line without its site column and its value (a secret's label and a
+/// long string say more from `-v`): the text before the first two spaces
+/// after its indent, and before ` = `.
+fn left(l: &str) -> String {
+    let body = l.trim_start();
+    let indent = &l[..l.len() - body.len()];
+    let text = body.split("  ").next().unwrap_or_default();
+    format!("{indent}{}", text.split(" = ").next().unwrap_or_default())
+}
+
+fn levels(example: &str) -> (String, String) {
     let s = Scratch::new(&format!("why-levels-{example}"));
     let line = plan(&s, example, &[]);
     assert_eq!(plan(&s, example, &["--why=line"]), line);
     assert!(line.contains("\ntick 1  "), "{line}");
     assert!(line.contains("\napply: tick 1 now"), "{line}");
+    // No `?`, no bindings, no ranks at the default level.
+    assert!(
+        !line.contains(" = ?") && !line.contains("  with ") && !line.contains(" @"),
+        "{line}"
+    );
 
-    // `full` adds the derivation's lines under each change, nothing else.
-    let full = plan(&s, example, &["--why=full"]);
+    // `-v` says how on the same lines.
+    let how = plan(&s, example, &["-v"]);
+    assert_eq!(plan(&s, example, &["--why=how"]), how);
+    assert_eq!(
+        how.lines().map(left).collect::<Vec<_>>(),
+        line.lines().map(left).collect::<Vec<_>>(),
+        "{how}"
+    );
+    assert_ne!(how, line);
+
+    // `-vv` adds the derivation's lines under each change, nothing else.
+    let full = plan(&s, example, &["-vv"]);
+    assert_eq!(plan(&s, example, &["--why=full"]), full);
     assert_eq!(plan(&s, example, &["--why"]), full);
     let derivation = |l: &str| {
         let t = l.trim_start();
         t.starts_with("by ") || t.starts_with("because ")
     };
     let kept: Vec<&str> = full.lines().filter(|l| !derivation(l)).collect();
-    assert_eq!(kept, line.lines().collect::<Vec<_>>(), "{full}");
+    assert_eq!(kept, how.lines().collect::<Vec<_>>(), "{full}");
     assert!(
         full.lines().any(|l| l.trim_start().starts_with("by ")),
         "{full}"
     );
     assert!(full.lines().count() > line.lines().count(), "{full}");
 
-    // `none`: the bare diff, no tick, no site.
-    let none = plan(&s, example, &["--why=none"]);
+    // `-q`: the bare diff, no tick, no site.
+    let none = plan(&s, example, &["-q"]);
+    assert_eq!(plan(&s, example, &["--why=none"]), none);
     assert!(none.contains("\ndefinite:\n+ "), "{none}");
     assert!(
         !none.contains("\ntick 1  ") && !none.contains(".df:") && !none.contains("\napply: "),
         "{none}"
     );
+    (line, how)
 }
 
 #[test]
 fn the_demo_plans_at_each_level() {
-    levels("demo");
+    let (line, how) = levels("demo");
+    // A copy's resources under it, each by its full address; a value set
+    // outside its block by where; a reference by its address.
+    assert!(
+        line.contains(
+            "  + network.vpc main\n    + net.vpc main.vpc                          network.df:19\n        \
+             cidr = \"10.50.0.0/16\"                   stacks/dform.df:51\n        \
+             tags.component = \"network\"\n"
+        ) && line.contains("        vpc = main.vpc\n"),
+        "{line}"
+    );
+    // `-v`: the bindings and the expressions.
+    assert!(
+        how.contains("    + net.subnet main.private-us-test-1a           network.df:24  with z = \"us-test-1a\"\n        \
+             cidr = \"10.50.0.0/20\"                      inet.subnet(vpc.cidr, 4, zone_index[z])\n"),
+        "{how}"
+    );
 }
 
 #[test]
 fn crud_api_plans_at_each_level() {
-    levels("crud-api");
+    let (line, how) = levels("crud-api");
+    // A secret is `(sensitive)`, by its label from `-v`; a value another
+    // resource of the tick computes is the expression that reads it.
+    assert!(
+        line.contains("      password = (sensitive)\n")
+            && line.contains("      stringData.PGHOST = db.private_ip_address\n"),
+        "{line}"
+    );
+    assert!(
+        how.contains("      password = (sensitive random.password(\"crud-api-db\"))\n"),
+        "{how}"
+    );
+    // A long string elides its middle by default, whole from `-v`.
+    let digest = "sha256:9f2c4d0e8a7b6c5d4e3f2a1b0c9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d";
+    assert!(
+        line.contains(
+            ".image = \"gcr.io/shop/crud-api@sha256:9f…b4c3d2e1f0a9b8c7d6e5f4a3b2c1d\"\n"
+        ) && !line.contains(digest),
+        "{line}"
+    );
+    assert!(how.contains(digest), "{how}");
 }

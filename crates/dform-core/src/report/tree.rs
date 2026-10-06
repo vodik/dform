@@ -502,11 +502,10 @@ impl Surface<'_, '_> {
     fn fact_text(&self, f: &Fact) -> String {
         let r = self.p.redact;
         match (f.pred.as_str(), f.args.as_slice()) {
-            ("want", [Value::Str(t), Value::Str(a)]) => Address {
+            ("want", [Value::Str(t), Value::Str(a)]) => super::address(&Address {
                 typ: t.clone(),
                 name: a.clone(),
-            }
-            .to_string(),
+            }),
             ("attr", [Value::Str(t), Value::Str(a), Value::Str(p), v]) => {
                 format!("{} = {}", cell(t, a, p), r.surface(v))
             }
@@ -1213,6 +1212,9 @@ pub struct Site {
     /// The highest rank of the contributions the winner overrode.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub beat: Option<String>,
+    /// Where the contribution it overrode was written (`file:line`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub beat_at: Option<String>,
     /// The statement's file and first line: two sites in one statement
     /// share it.
     #[serde(skip)]
@@ -1330,7 +1332,7 @@ fn winner_site(
         |ch| matches!(circuit.view(*ch), View::Leaf(Leaf::Rule { id }) if id.starts_with('Σ')),
     );
     if !aggregate {
-        return value_site(s, c, id, depth);
+        return value_site(s, c, id, focus, depth);
     }
     let mut contributions: Vec<(NodeId, &Fact)> = children
         .iter()
@@ -1363,19 +1365,20 @@ fn winner_site(
         .filter(|(_, f)| rank_of(f).0 < top)
         .copied()
         .collect();
-    let beat = lower
-        .into_iter()
-        .find(|(id, _)| {
-            site_of(s, c, *id, depth + 1)
-                .is_some_and(|w| !w.at.is_empty() && !w.at.starts_with('<'))
-        })
-        .map(|(_, f)| rank_of(f).1.to_string());
-    let mut site = value_site(s, c, win, depth)?;
+    let beat = lower.into_iter().find_map(|(id, f)| {
+        site_of(s, c, id, depth + 1)
+            .filter(|w| !w.at.is_empty() && !w.at.starts_with('<'))
+            .map(|w| (rank_of(f).1.to_string(), w.at))
+    });
+    let mut site = value_site(s, c, win, focus, depth)?;
     if site.rank.is_none() && rank != "normal" {
         site.rank = Some(rank.to_string());
     }
-    if site.beat.is_none() {
-        site.beat = beat;
+    if site.beat.is_none()
+        && let Some((rank, at)) = beat
+    {
+        site.beat = Some(rank);
+        site.beat_at = Some(at);
     }
     Some(site)
 }
@@ -1383,19 +1386,41 @@ fn winner_site(
 /// The site of fact `id`, a contribution or a cell's value: where its
 /// firing's statement is, unless the firing only passes on the value of
 /// an input or a `let` it reads, whose winning site it is then.
-fn value_site(s: &mut Surface, c: &mut Compress, id: NodeId, depth: usize) -> Option<Site> {
+fn value_site(
+    s: &mut Surface,
+    c: &mut Compress,
+    id: NodeId,
+    focus: Option<&Focus>,
+    depth: usize,
+) -> Option<Site> {
     let circuit = s.p.circuit;
     let own = site_of(s, c, id, depth);
     let View::Fact { fact, alts, .. } = circuit.view(id) else {
         return own;
     };
-    let value = match fact.pred.as_str() {
+    let mut value = match fact.pred.as_str() {
         "arg" | "attr" => fact.args.get(3),
         _ => None,
     };
+    let entry = own.as_ref().and_then(|o| o.entry.as_deref());
+    let mut rhs = entry.map(|e| e.split_once(" = ").map_or(e, |(_, r)| r).to_string());
+    // The focused field of an object the entry writes, `{ d: config.d }`,
+    // and its part of the value.
+    if let (Some(f), Some(e)) = (focus.filter(|f| !f.keys.is_empty()), rhs.as_deref())
+        && let Some(field) = field_of(e, &f.keys)
+    {
+        rhs = Some(field);
+        value = f
+            .keys
+            .iter()
+            .try_fold(value, |v, k| match v {
+                Some(Value::Obj(m)) => Some(m.get(k)),
+                _ => None,
+            })
+            .flatten();
+    }
     // What the entry reads, when it is a path (`gcp.project_id`).
-    let read: Option<Vec<String>> = own.as_ref().and_then(|o| o.entry.as_deref()).and_then(|e| {
-        let rhs = e.split_once(" = ").map_or(e, |(_, r)| r);
+    let read: Option<Vec<String>> = rhs.as_deref().and_then(|rhs| {
         let plain =
             !rhs.is_empty() && !rhs.contains(|c: char| c.is_whitespace() || "()[]{}$,".contains(c));
         plain.then(|| crate::ir::path_keys(rhs))
@@ -1412,6 +1437,33 @@ fn value_site(s: &mut Surface, c: &mut Compress, id: NodeId, depth: usize) -> Op
         }
     }
     own
+}
+
+/// The expression object literal `e` gives at `keys` (`config.domain` of
+/// `{ d: config.domain }` at `d`); `e` itself with no keys.
+fn field_of(e: &str, keys: &[String]) -> Option<String> {
+    let Some((k, rest)) = keys.split_first() else {
+        return Some(e.to_string());
+    };
+    let parse = crate::syntax::parser::parse_term(e.trim());
+    let object = parse
+        .syntax()
+        .descendants()
+        .find(|n| n.kind() == SyntaxKind::OBJECT)?;
+    let value = object
+        .children()
+        .filter(|n| n.kind() == SyntaxKind::OBJECT_FIELD)
+        .find_map(|f| {
+            let text = f.text().to_string();
+            let (key, value) = text.split_once(':')?;
+            let key = key.trim();
+            let key = key
+                .strip_prefix('"')
+                .and_then(|k| k.strip_suffix('"'))
+                .unwrap_or(key);
+            (key == k).then(|| value.trim().to_string())
+        })?;
+    field_of(&value, rest)
 }
 
 /// The input or `let` cell among a firing's `children` that passes on
@@ -1442,9 +1494,22 @@ fn passed_cell(
         // hold the same value by chance (`public = false` beside a
         // `multi_az` that is false).
         let at = f.args.get(3)?;
-        // `gcp.project_id` of the cell `gcp`: the keys after its name.
+        // `gcp.project_id` of the cell `gcp`: the keys after its name;
+        // a used module's item by its scope too, `config.zone` (R-111).
         let name = crate::ir::path_keys(f.args.get(2)?.as_str()?);
-        let rest = read?.strip_prefix(name.as_slice())?;
+        let scoped: Vec<String> = match f.args.get(1)?.as_str()? {
+            "" => Vec::new(),
+            scope => scope
+                .split('.')
+                .map(str::to_string)
+                .chain(name.clone())
+                .collect(),
+        };
+        let read = read?;
+        let rest = read.strip_prefix(name.as_slice()).or_else(|| {
+            read.strip_prefix(scoped.as_slice())
+                .filter(|_| !scoped.is_empty())
+        })?;
         if rest.is_empty() {
             return (at == v).then(Vec::new);
         }
@@ -1680,6 +1745,7 @@ impl Surface<'_, '_> {
             origin,
             rank: None,
             beat: None,
+            beat_at: None,
             stmt,
             last,
             stated: false,
@@ -1720,17 +1786,19 @@ fn table_row(c: &Circuit, alts: &[NodeId]) -> Option<String> {
     }
 }
 
-/// The cell an `attr` or `arg` names: `T["A"].p`, or an input, `let` or
-/// output by its name.
+/// The cell an `attr` or `arg` names: `T k3s.server.p` (R-111), or an
+/// input, `let` or output by its name.
 fn cell(t: &str, a: &str, p: &str) -> String {
     match t {
         "input" | "let" | "output" if a.is_empty() => format!("{t} {p}"),
         "input" | "let" | "output" => format!("{t} {a}.{p}"),
-        _ => Address {
-            typ: t.to_string(),
-            name: a.to_string(),
-        }
-        .attr(p),
+        _ => super::attribute(
+            &Address {
+                typ: t.to_string(),
+                name: a.to_string(),
+            },
+            p,
+        ),
     }
 }
 
@@ -2053,11 +2121,12 @@ impl Cx<'_> {
     fn show_var(&self, var: &str, v: &Value, redact: &Redactor) -> String {
         let typ = self.want_type(var);
         match (typ, v) {
-            (Some(Value::Str(t)), Value::Str(name)) if !redact.is_secret(v) => Address {
-                typ: t,
-                name: name.clone(),
+            (Some(Value::Str(t)), Value::Str(name)) if !redact.is_secret(v) => {
+                super::address(&Address {
+                    typ: t,
+                    name: name.clone(),
+                })
             }
-            .to_string(),
             _ => redact.surface(v),
         }
     }

@@ -144,7 +144,7 @@ fn a_resource_rule_reading_a_stuck_helper_is_a_pending_group() {
     assert!(
         second.stdout.contains(
             "later   changes this plan cannot count yet\n  \
-             k8s.deployment[\"dform_controller\"]             \
+             k8s.deployment dform_controller             \
              if node_pool_up(\"np-us-east1-b\") derives\n"
         ),
         "{}",
@@ -162,7 +162,7 @@ fn a_resource_rule_reading_a_stuck_helper_is_a_pending_group() {
     let last = runs.last().unwrap();
     assert!(
         last.stdout
-            .contains("  + k8s.deployment[\"dform_controller\"]  "),
+            .contains("  + k8s.deployment dform_controller  "),
         "{}",
         last.stdout
     );

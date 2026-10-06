@@ -37,7 +37,7 @@ set r.metadata.labels.owner = "simon" @default where r in resource, has r.metada
         "{}",
         r.stdout
     );
-    let db = r.stdout.split("db.postgres[\"db\"]").nth(1).unwrap();
+    let db = r.stdout.split("db.postgres db").nth(1).unwrap();
     let db = db.split("\n  +").next().unwrap();
     assert!(!db.contains("metadata"), "{}", r.stdout);
 }

@@ -238,11 +238,7 @@ fn a_program_uses_a_stack_and_never_instances_it() {
     );
     s.write("stacks/both.df", "\nuse modules.tags\nprovider fake\n");
     let r = s.run(&["plan", "both"]).success();
-    assert!(
-        r.stdout.contains("+ net.vpc[\"tags.extra\"]"),
-        "{}",
-        r.stdout
-    );
+    assert!(r.stdout.contains("+ net.vpc tags.extra"), "{}", r.stdout);
 }
 
 #[test]
@@ -290,7 +286,7 @@ default(k, v) where project_default(k, v)
     );
     // The provider is the manifest's source: its schema knows x.thing.
     let r = s.run(&["apply", "p"]).success();
-    assert!(r.stdout.contains("+ x.thing[\"a\"]"), "{}", r.stdout);
+    assert!(r.stdout.contains("+ x.thing a"), "{}", r.stdout);
     // The default backend, under the project root.
     assert!(s.path("state/p/state.json").exists());
     // A plan file's program takes its project's manifest too.

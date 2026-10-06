@@ -88,7 +88,7 @@ fn diff_names_the_row_an_apply_added_and_explains_each_apply_by_its_commit() {
     assert_eq!(starts.len(), 2);
 
     let r = s
-        .run(&["diff", "--since", &starts[1].to_string(), "net"])
+        .run(&["diff", "--since", &starts[1].to_string(), "-vv", "net"])
         .success();
     let out = &r.stdout;
     assert!(out.starts_with(&format!("apply {} ", starts[1])), "{out}");
@@ -98,9 +98,9 @@ fn diff_names_the_row_an_apply_added_and_explains_each_apply_by_its_commit() {
     );
     assert!(
         out.contains(
-            "+ net.subnet[\"private-us-test-1c\"]\n  by stacks/net.df:11  resource net.subnet \
+            "+ net.subnet private-us-test-1c\n  by stacks/net.df:11  resource net.subnet \
              \"private-${z}\" { .. } where zone(z, n)\n  because stacks/net.df:9  \
-             net.vpc[\"main\"].cidr = \"10.9.0.0/16\"\n  because data/zones.csv:4  \
+             net.vpc main.cidr = \"10.9.0.0/16\"\n  because data/zones.csv:4  \
              zone(\"us-test-1c\", 3)\n"
         ),
         "{out}"
@@ -108,10 +108,31 @@ fn diff_names_the_row_an_apply_added_and_explains_each_apply_by_its_commit() {
     // A replace is explained by the attribute that changed.
     assert!(
         out.contains(
-            "-/+ net.vpc[\"main\"]\n  because stacks/net.df:9  net.vpc[\"main\"].cidr = \
+            "-/+ net.vpc main\n  because stacks/net.df:9  net.vpc main.cidr = \
              \"10.9.0.0/16\"\n"
         ),
         "{out}"
+    );
+    // By default each change says the first line of why; `-q` the
+    // changes alone, their addresses as the plan file has them (R-111).
+    let since = starts[1].to_string();
+    let line = s.run(&["diff", "--since", &since, "net"]).success();
+    assert!(
+        line.stdout.contains(
+            "+ net.subnet private-us-test-1c\n  by stacks/net.df:11  resource net.subnet \
+             \"private-${z}\" { .. } where zone(z, n)\n"
+        ) && !line.stdout.contains("because data/zones.csv:4"),
+        "{}",
+        line.stdout
+    );
+    let quiet = s.run(&["diff", "--since", &since, "-q", "net"]).success();
+    assert!(
+        quiet.stdout.contains(
+            ": ok\n-/+ net.vpc[\"main\"]\n-/+ net.subnet[\"private-us-test-1a\"]\n-/+ \
+             net.subnet[\"private-us-test-1b\"]\n+ net.subnet[\"private-us-test-1c\"]\nchanged"
+        ),
+        "{}",
+        quiet.stdout
     );
     // What changed since the apply before: the row.
     let (_, changed) = out
@@ -155,13 +176,13 @@ fn diff_names_the_row_an_apply_added_and_explains_each_apply_by_its_commit() {
 
     // The first apply, explained by the program at its own commit: the
     // range it had then, not the one it has now.
-    let r = s.run(&["diff", "--since", "1", "net"]).success();
+    let r = s.run(&["diff", "--since", "1", "-vv", "net"]).success();
     let first = r.stdout.split("\napply ").next().unwrap();
     assert!(
         first.contains(
-            "+ net.subnet[\"private-us-test-1a\"]\n  by stacks/net.df:11  resource net.subnet \
+            "+ net.subnet private-us-test-1a\n  by stacks/net.df:11  resource net.subnet \
              \"private-${z}\" { .. } where zone(z, n)\n  because stacks/net.df:9  \
-             net.vpc[\"main\"].cidr = \"10.0.0.0/16\"\n  because data/zones.csv:2  \
+             net.vpc main.cidr = \"10.0.0.0/16\"\n  because data/zones.csv:2  \
              zone(\"us-test-1a\", 1)\n"
         ),
         "{}",
@@ -195,7 +216,7 @@ fn diff_outside_a_repository_explains_by_the_program_now_and_redacts_secrets() {
         &format!("{prog}resource leaky.oops o {{\n  password = \"plain\"\n}}\n"),
     );
     run("SECOND-SECRET-456", &["apply"]).success();
-    let r = run("SECOND-SECRET-456", &["diff", "--since", "1"]).success();
+    let r = run("SECOND-SECRET-456", &["diff", "--since", "1", "-vv"]).success();
     assert!(
         r.stdout.contains(
             "  note: not in a repository, and the program changed since this apply: explained by \
@@ -210,7 +231,7 @@ fn diff_outside_a_repository_explains_by_the_program_now_and_redacts_secrets() {
         "{}",
         r.stdout
     );
-    assert!(r.stdout.contains("+ leaky.oops[\"o\"]\n"), "{}", r.stdout);
+    assert!(r.stdout.contains("+ leaky.oops o\n"), "{}", r.stdout);
     let j = run("SECOND-SECRET-456", &["diff", "--since", "1", "--json"]).success();
     for out in [&r.stdout, &r.stderr, &j.stdout, &j.stderr] {
         assert!(!out.contains("SECRET-"), "{out}");

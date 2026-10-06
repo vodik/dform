@@ -476,7 +476,7 @@ exit: ok
               "site": {
                 "at": "stacks/gke_two_phase.df:75",
                 "entry": "name = \"pngu\"",
-                "statement": "k8s.namespace[\"pngu\"].name = \"pngu\""
+                "statement": "k8s.namespace pngu.name = \"pngu\""
               }
             }
           ],
@@ -484,7 +484,7 @@ exit: ok
           "name": "pngu",
           "site": {
             "at": "stacks/gke_two_phase.df:75",
-            "statement": "k8s.namespace[\"pngu\"]"
+            "statement": "k8s.namespace pngu"
           },
           "type": "k8s.namespace"
         },

@@ -40,6 +40,135 @@ mod bare;
 pub mod table;
 pub mod tree;
 
+/// A resource's address as the plan, `why`, `query` and the editor print
+/// it (R-111): its type, then its path the way the source names it,
+/// `ovh.ssh_key k3s.admin`. The full `T["k3s.admin"]` is for the plan
+/// file, `--json`, state, and an argument.
+pub fn address(a: &Address) -> String {
+    format!("{} {}", a.typ, path(&a.name))
+}
+
+/// A stored name as the source names it (R-112): its path, a copy's scope
+/// before it (`k3s.admin`), a segment holding a dot already quoted
+/// (`k3s."k8s-lab.vodik.xyz"`); a segment holding a space quoted too, and
+/// an empty name `""`, so the printed path reads back as one.
+pub fn path(name: &str) -> String {
+    if name.is_empty() {
+        return "\"\"".into();
+    }
+    crate::ir::path_segments(name)
+        .into_iter()
+        .map(|seg| {
+            let bare = !seg.starts_with('"')
+                && seg.contains(|c: char| c.is_whitespace() || c.is_control());
+            match bare {
+                true => crate::ir::string_literal(seg),
+                false => seg.to_string(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(".")
+}
+
+/// A reference to resource `a`, or to its attribute `attr`, as a value
+/// prints: its path, `k3s.server`, `k3s.server.public_ip`.
+pub fn reference(a: &Address, attr: &str) -> String {
+    format!("{}{}", path(&a.name), crate::ir::path_suffix(attr))
+}
+
+/// A resource's attribute as a diagnostic names it: `T k3s.server.p`;
+/// an input's by its path, `input db.backup_days`.
+pub fn attribute(a: &Address, attr: &str) -> String {
+    match a.name.is_empty() && !attr.is_empty() {
+        true => format!("{} {attr}", a.typ),
+        false => format!("{} {}", a.typ, reference(a, attr)),
+    }
+}
+
+/// A null's or a secret's label `T/A#P` as a diagnostic names what it
+/// stands for: [`attribute`], `T k3s.server.public_ip`; a resource's
+/// identity [`address`]; an input's or an output's as
+/// [`crate::ir::label`] says it.
+pub fn attribute_label(l: &str) -> String {
+    match crate::value::null_parts(l) {
+        Some((typ, name, p)) if !name.is_empty() && typ != crate::transform::OUTPUT => {
+            let a = Address { typ, name };
+            match p == crate::schema::IDENTITY {
+                true => address(&a),
+                false => attribute(&a, &p),
+            }
+        }
+        _ => crate::ir::label(l),
+    }
+}
+
+/// A null's or a secret's label `T/A#P` as the value it stands for
+/// (R-111): the reference it is, `k3s.server.public_ip`; a resource's
+/// identity the resource, `k3s.server`; an input's or an output's as
+/// [`crate::ir::label`] says it.
+pub fn label(l: &str) -> String {
+    match crate::value::null_parts(l) {
+        Some((typ, name, p)) if !name.is_empty() && typ != crate::transform::OUTPUT => {
+            let a = Address { typ, name };
+            match p == crate::schema::IDENTITY {
+                true => reference(&a, ""),
+                false => reference(&a, &p),
+            }
+        }
+        _ => crate::ir::label(l),
+    }
+}
+
+/// A label as [`crate::ir::label`] printed it (`T["A"].p`), as
+/// [`label`] prints it.
+fn printed_label(l: &str) -> String {
+    match crate::ir::parse_address(l) {
+        Ok((a, p)) => reference(&a, p.as_deref().unwrap_or_default()),
+        Err(_) => l.to_string(),
+    }
+}
+
+/// A label as [`crate::ir::label`] printed it (`T["A"].p`), as
+/// [`attribute_label`] prints it; a call (`random.password("db")`) as
+/// itself.
+fn printed_attribute(l: &str) -> String {
+    match crate::ir::parse_address(l) {
+        Ok((a, p)) => attribute(&a, p.as_deref().unwrap_or_default()),
+        Err(_) => l.to_string(),
+    }
+}
+
+/// An address the report holds as text (`T["A"]`, a pending group's
+/// `T[?]` or `T["name-${x}"]`) as [`address`] prints it: `T ?` for an
+/// unknown number, a template as the statement writes it.
+pub fn address_text(s: &str) -> String {
+    if let Ok(a) = crate::ir::parse_resource_address(s) {
+        return address(&a);
+    }
+    match s.split_once('[') {
+        Some((t, rest)) if rest.ends_with(']') && !t.is_empty() => {
+            format!("{t} {}", &rest[..rest.len() - 1])
+        }
+        _ => s.to_string(),
+    }
+}
+
+/// Past this many characters a string elides its middle at the default
+/// level (R-111): a public key, a digest.
+const LONG: usize = 60;
+
+/// `s` with its middle elided when it is longer than [`LONG`].
+fn elide(s: &str) -> String {
+    let n = s.chars().count();
+    if n <= LONG {
+        return s.to_string();
+    }
+    let (head, tail) = (LONG / 2, LONG - 1 - LONG / 2);
+    let head: String = s.chars().take(head).collect();
+    let tail: String = s.chars().skip(n - tail).collect();
+    format!("{head}…{tail}")
+}
+
 /// One side of a change, after redaction.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Shown {
@@ -56,7 +185,7 @@ pub enum Shown {
     /// A reference whose resource exists: the resource's address, and the
     /// id the provider resolved it to (`--json` shows the id; R-43).
     Ref {
-        addr: String,
+        addr: Address,
         value: Json,
     },
 }
@@ -144,7 +273,25 @@ impl Shown {
             Shown::Null { label, .. } => format!("?{label}"),
             Shown::Sensitive(Some(l)) => format!("(sensitive {l})"),
             Shown::Sensitive(None) => "(sensitive)".into(),
-            Shown::Ref { addr, .. } => addr.clone(),
+            Shown::Ref { addr, .. } => addr.to_string(),
+        }
+    }
+
+    /// The value as the plan prints it at level `why` (R-111): a reference
+    /// or a value not known yet as the reference it is (`k3s.server`,
+    /// `k3s.server.public_ip`), with no `?`; a secret `(sensitive)`, by its
+    /// label from `-v`; a long string elided in the middle at the default
+    /// level. `-q` prints [`Shown::text`].
+    pub fn said(&self, why: Why) -> String {
+        match self {
+            Shown::Null { label: l, .. } => printed_label(l),
+            Shown::Sensitive(Some(l)) if why >= Why::How => {
+                format!("(sensitive {})", printed_attribute(l))
+            }
+            Shown::Sensitive(_) => "(sensitive)".into(),
+            Shown::Ref { addr, .. } => reference(addr, ""),
+            Shown::Value(Json::String(s)) if why == Why::Line => crate::partition::quote(&elide(s)),
+            _ => self.text(),
         }
     }
 
@@ -224,6 +371,14 @@ impl Style {
             ActionKind::Noop => return marker_of(k).to_string(),
         };
         self.paint(p, marker_of(k))
+    }
+
+    /// A value as the plan prints it at `why`: `(sensitive)` dim.
+    fn said(&self, v: &Shown, why: Why) -> String {
+        match v {
+            Shown::Sensitive(_) => self.paint(Paint::Sensitive, &v.said(why)),
+            _ => v.said(why),
+        }
     }
 
     /// One side of a change: a null cyan, a sensitive value dim.
@@ -348,15 +503,33 @@ pub struct Approval {
     pub site: Option<Site>,
 }
 
-/// How much of why each change is planned the report says (R-79):
-/// nothing, one line per entry and attribute (the default), or the
-/// derivation compressed to its leaves.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+/// How much of why each change is planned the report says (R-79, R-111):
+/// a ladder, `-q` to `-vv`. `None` (`-q`): the bare diff, addresses and
+/// values. `Line` (the default): each change where it is derived, each
+/// value written outside its own block where, and the leaf that changed
+/// since the last apply. `How` (`-v`): also how, the deriving
+/// statement's bindings, the expression behind a value, the writes that
+/// lost with their ranks. `Full` (`-vv`): also the derivation, compressed
+/// to its leaves.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Why {
     None,
     #[default]
     Line,
+    How,
     Full,
+}
+
+impl Why {
+    /// The level `-q` and `-v`/`-vv` ask for, else `why` (`--why=LEVEL`).
+    pub fn of(quiet: bool, verbose: u8, why: Why) -> Why {
+        match (quiet, verbose) {
+            (true, _) => Why::None,
+            (_, 0) => why,
+            (_, 1) => Why::How,
+            _ => Why::Full,
+        }
+    }
 }
 
 impl std::str::FromStr for Why {
@@ -365,8 +538,9 @@ impl std::str::FromStr for Why {
         match s {
             "none" => Ok(Why::None),
             "line" => Ok(Why::Line),
+            "how" => Ok(Why::How),
             "full" => Ok(Why::Full),
-            _ => Err(format!("expected none, line or full, got {s:?}")),
+            _ => Err(format!("expected none, line, how or full, got {s:?}")),
         }
     }
 }
@@ -789,11 +963,13 @@ fn deferred(
         out.push(Policy {
             message: format!(
                 "{c} of {}",
-                Address {
-                    typ: t.to_string(),
-                    name: addr,
-                }
-                .attr(path)
+                attribute(
+                    &Address {
+                        typ: t.to_string(),
+                        name: addr,
+                    },
+                    path
+                )
             ),
             after: resolves(&on, tick_of),
             on,
@@ -853,7 +1029,7 @@ fn diags(res: &EvalResult, r: &Redactor, pred: &str, msg: &str) -> Vec<Diag> {
                 .collect(),
             _ => vec![],
         };
-        out.push(Diag {
+        let d = Diag {
             addr: Address {
                 typ,
                 name: s("addr"),
@@ -862,7 +1038,14 @@ fn diags(res: &EvalResult, r: &Redactor, pred: &str, msg: &str) -> Vec<Diag> {
             reason: s("reason"),
             rank: ctx.get("rank").map(|_| s("rank")),
             witnesses,
-        });
+        };
+        // One line per disagreement, however many facts say it.
+        let same = |x: &Diag| {
+            (&x.addr, &x.path, &x.reason, &x.rank) == (&d.addr, &d.path, &d.reason, &d.rank)
+        };
+        if !out.iter().any(same) {
+            out.push(d);
+        }
     }
     out
 }
@@ -1054,7 +1237,7 @@ impl<'a> Refs<'a> {
             .and_then(|d| walk(d, &path[top.len()..]));
         match (at, self.ids.get(id.as_str())) {
             (Some(Value::Ref { attr, .. }), Some(to)) if attr.is_empty() => Shown::Ref {
-                addr: to.to_string(),
+                addr: to.clone(),
                 value: Json::String(id.clone()),
             },
             _ => v,
@@ -1168,10 +1351,10 @@ fn count(n: usize, thing: &str) -> String {
     format!("{n} {thing}{}", if n == 1 { "" } else { "s" })
 }
 
-/// The values a tick waits on, as `T["A"].p` (no `?`: they are values,
-/// not yet known).
+/// The values a tick waits on, as the references they are,
+/// `k3s.server.public_ip` (R-111).
 fn waited(on: &BTreeSet<String>) -> Vec<String> {
-    on.iter().map(|n| crate::ir::label(n)).collect()
+    on.iter().map(|n| label(n)).collect()
 }
 
 /// The page width the right column folds at.
@@ -1232,30 +1415,55 @@ fn layout(rows: &[Row]) -> String {
     out
 }
 
-/// `FILE:LINE  with a = 1, b = 2  (use x)`: where an entry is derived.
-fn place_text(s: &Site, origin: bool) -> String {
-    let mut out = s.at.clone();
-    if !s.with.is_empty() {
+/// Where a change is derived, as its line's site column says it at `why`
+/// (R-111): `FILE:LINE` (a value given on the command line, the flag);
+/// from `-v`, the statement's bindings after it, `with z = "a"`.
+fn place_text(s: &Site, why: Why) -> String {
+    let mut out = match s.at.is_empty() {
+        true => s.statement.clone(),
+        false => s.at.clone(),
+    };
+    if why >= Why::How && !s.with.is_empty() {
         if !out.is_empty() {
             out.push_str("  ");
         }
         out.push_str(&format!("with {}", s.with.join(", ")));
     }
-    if let Some(o) = s.origin.as_ref().filter(|_| origin) {
-        out.push_str(&format!("  ({o})"));
-    }
     out
 }
 
-/// What wrote an attribute's value: `STATEMENT   FILE:LINE`, then
+/// The writes a winning value of change `d` overrode, from `-v` (R-111):
+/// `  @normal over k3s.df:9 @default`; not one in `d`'s own block (a
+/// default the compiler writes there).
+fn beat_text(s: &Site, d: &Deformation) -> String {
+    let own = |at: &str| {
+        let (Some(h), Some((file, line))) = (&d.site, at.rsplit_once(':')) else {
+            return false;
+        };
+        let Some((hf, first)) = h.at.rsplit_once(':') else {
+            return false;
+        };
+        let (Ok(line), Ok(first)) = (line.parse::<usize>(), first.parse::<usize>()) else {
+            return false;
+        };
+        hf == file && (first..=h.last.max(first)).contains(&line)
+    };
+    match (&s.beat, &s.beat_at) {
+        (Some(_), Some(at)) if own(at) => String::new(),
+        (Some(b), Some(at)) => {
+            let rank = s.rank.as_deref().unwrap_or("normal");
+            format!("  @{rank} over {at} @{b}")
+        }
+        (Some(b), None) => format!("  over @{b}"),
+        _ => String::new(),
+    }
+}
+
+/// What wrote an attribute's value at `-v`: `STATEMENT   FILE:LINE`, then
 /// `FILE:LINE` alone (a constant: its entry when it reads something, else
-/// its place); the rank it won over after either.
-fn written_text(s: &Site) -> Vec<String> {
-    let beat = s
-        .beat
-        .as_ref()
-        .map(|b| format!("  (over @{b})"))
-        .unwrap_or_default();
+/// its place); the writes it won over after either.
+fn written_text(s: &Site, d: &Deformation) -> Vec<String> {
+    let beat = beat_text(s, d);
     if s.at.is_empty() {
         return vec![format!("{}{beat}", s.statement)];
     }
@@ -1663,12 +1871,11 @@ impl Report {
                 } else {
                     "            "
                 };
-                let painted = format!("{lead}{}", style.paint(Paint::Null, &w));
-                rows.push(Row::new(&format!("{lead}{w}"), painted));
+                rows.push(Row::plain(format!("{lead}{w}")));
             }
             self.write_level(&mut rows, &s.changes, None, "  ", style);
             for a in &s.deposed {
-                let addr = Redactor::default().cell(&crate::zset::reference(a));
+                let addr = address(a);
                 let plain = format!("  - {addr}  (deposed)");
                 let painted = format!(
                     "  {} {}  (deposed)",
@@ -1698,7 +1905,7 @@ impl Report {
             let wide = self
                 .denied
                 .iter()
-                .map(|d| d.addr.chars().count())
+                .map(|d| address_text(&d.addr).chars().count())
                 .max()
                 .unwrap_or(0);
             for (i, d) in self.denies.iter().enumerate() {
@@ -1708,8 +1915,9 @@ impl Report {
                 let right = row
                     .map(|r| {
                         let at = r.site.as_ref().map(|s| s.at.as_str()).unwrap_or_default();
-                        let pad = " ".repeat(wide - r.addr.chars().count());
-                        format!("{}{pad}    {at}", r.addr).trim().to_string()
+                        let addr = address_text(&r.addr);
+                        let pad = " ".repeat(wide - addr.chars().count());
+                        format!("{addr}{pad}    {at}").trim().to_string()
                     })
                     .into_iter()
                     .collect();
@@ -1730,7 +1938,7 @@ impl Report {
                 let at = a.site.as_ref().map(|s| s.at.as_str()).unwrap_or_default();
                 let pad = " ".repeat(wide - a.reason.chars().count());
                 let right = format!("{}{pad}    {at}", a.reason).trim_end().to_string();
-                rows.push(Row::plain(format!("  {}", a.addr)).with(vec![right]));
+                rows.push(Row::plain(format!("  {}", address_text(&a.addr))).with(vec![right]));
             }
         }
         out.push_str(&layout(&rows));
@@ -1755,7 +1963,7 @@ impl Report {
                     .unwrap_or_default();
                 out.push_str(&error(&format!(
                     "  ! {}{rank}: {}",
-                    d.addr.attr(&d.path),
+                    attribute(&d.addr, &d.path),
                     d.reason
                 )));
                 out.push('\n');
@@ -1766,7 +1974,7 @@ impl Report {
                         let names: Vec<String> = from.iter().map(|f| bold(f)).collect();
                         format!("  from {}", names.join("; "))
                     };
-                    out.push_str(&format!("      {r} {}{from}\n", style.shown(v)));
+                    out.push_str(&format!("      {r} {}{from}\n", style.said(v, self.why)));
                 }
             }
         }
@@ -1785,7 +1993,7 @@ impl Report {
     /// deny and check, each held change this plan does not schedule.
     fn write_later(&self, rows: &mut Vec<Row>, style: Style) {
         let site = |s: &Option<Site>| s.as_ref().map(|s| s.at.clone()).unwrap_or_default();
-        let full = self.why == Why::Full;
+        let full = self.why >= Why::How;
         // The right column, the longest that fits first: the place, the
         // condition, and (at `full`) the reason; the condition alone last.
         let both = |at: String, cond: String, reason: &str| {
@@ -1814,23 +2022,25 @@ impl Report {
                     continue;
                 }
                 let reads = g.reads.clone().unwrap_or_default();
-                let plain = format!("  {c}");
-                let painted = format!("  {}", style.paint(Paint::Warn, c));
+                let shown = address_text(c);
+                let plain = format!("  {shown}");
+                let painted = format!("  {}", style.paint(Paint::Warn, &shown));
                 rows.push(Row::new(&plain, painted).with(vec![format!("if {reads} derives")]));
                 for m in self
                     .groups
                     .iter()
                     .filter(|m| copy_of(m).as_ref() == Some(c))
                 {
-                    let pattern = group_address(m);
+                    let pattern = address_text(&group_address(m));
                     let plain = format!("    {pattern}");
                     let painted = format!("    {}", style.paint(Paint::Warn, &pattern));
                     rows.push(Row::new(&plain, painted));
                 }
                 continue;
             }
-            let pattern = group_address(g);
-            let unknown = pattern.ends_with("[?]") || pattern.contains("${");
+            let full_pattern = group_address(g);
+            let unknown = full_pattern.ends_with("[?]") || full_pattern.contains("${");
+            let pattern = address_text(&full_pattern);
             let on = waited(&g.on.iter().cloned().collect()).join(", ");
             let cond = match (&g.reads, unknown) {
                 (Some(r), true) => format!("one per {r}"),
@@ -1858,13 +2068,14 @@ impl Report {
         for b in self.pending.iter().filter(|b| b.resolves_after.is_none()) {
             let ds: Vec<&Deformation> = b.deformations.iter().collect();
             let on = waited(&b.on.iter().cloned().collect()).join(", ");
-            let lead = format!("  waits on  {on}, which this plan does not resolve");
-            rows.push(Row::plain(lead));
+            // A header like a tick's, the note in the site column (R-111).
+            let lead = format!("  waits on  {on}");
+            rows.push(Row::plain(lead).with(vec!["which this plan does not resolve".into()]));
             self.write_level(rows, &ds, None, "  ", style);
         }
     }
 
-    /// Changes in order, a copy's under it (R-67): `+ network["blue"]` at
+    /// Changes in order, a copy's under it (R-67): `+ network blue` at
     /// the place of its first resource, the resources indented beneath, a
     /// copy inside it nested again. The copy's marker is its `deformation`
     /// row's kind (`zset::Instances::row_kind`): `-` when the program wants
@@ -1889,7 +2100,7 @@ impl Report {
         let mut done: BTreeSet<Address> = BTreeSet::new();
         for d in ds {
             let Some(copy) = under(d) else {
-                self.write_change(rows, d, indent, outer.is_some(), style);
+                self.write_change(rows, d, indent, style);
                 continue;
             };
             if !done.insert(copy.clone()) {
@@ -1909,7 +2120,7 @@ impl Report {
                 "create" => ActionKind::Create,
                 _ => ActionKind::Update,
             };
-            let addr = Redactor::default().cell(&crate::zset::reference(&copy));
+            let addr = address(&copy);
             let plain = format!("{indent}{} {addr}", marker_of(&kind));
             let painted = format!(
                 "{indent}{} {}",
@@ -1921,17 +2132,11 @@ impl Report {
         }
     }
 
-    /// One change: its marker and address with where it is derived, its
-    /// attributes each with where its value was written, what holds it,
-    /// and why it changed since the last apply.
-    fn write_change(
-        &self,
-        rows: &mut Vec<Row>,
-        d: &Deformation,
-        indent: &str,
-        in_copy: bool,
-        style: Style,
-    ) {
+    /// One change (R-111): its marker and address with where it is
+    /// derived, its attributes each with where its value was written when
+    /// that is outside its block, at `-vv` what it rests on, and why it
+    /// changed since the last apply.
+    fn write_change(&self, rows: &mut Vec<Row>, d: &Deformation, indent: &str, style: Style) {
         let note = match d.kind {
             ActionKind::Drift => {
                 "  (drift: a fresh null where the world has a value; its identity is stale)"
@@ -1940,33 +2145,31 @@ impl Report {
             ActionKind::Replace { create_first: true } => "  (the new one first)",
             _ => "",
         };
-        // The resource as `dform query deformation`'s row spells it (R-63).
-        let addr = Redactor::default().cell(&crate::zset::reference(&d.addr));
+        let addr = address(&d.addr);
         let plain = format!("{indent}{} {addr}{note}", marker_of(&d.kind));
         let painted = format!(
             "{indent}{} {}{note}",
             style.marker(&d.kind),
             style.paint(Paint::Bold, &addr)
         );
-        // A copy's members say their copy above: not again on each.
-        let origin = |s: &Site| {
-            !(in_copy
-                && s.origin
-                    .as_deref()
-                    .is_some_and(|o| o.starts_with("instance ")))
-        };
-        let right: Vec<String> = match (&d.kind, &d.site) {
-            (_, _) if self.why == Why::None => vec![],
-            (ActionKind::Replace { .. }, _) => d
-                .forces
-                .iter()
-                .map(|p| format!("{p} is immutable"))
-                .collect(),
-            (ActionKind::Delete | ActionKind::DeleteDeposed, Some(s)) => {
-                vec![format!("was {}", place_text(s, origin(s)))]
+        let at = d.site.as_ref().map(|s| place_text(s, self.why));
+        let right: Vec<String> = match (&d.kind, at) {
+            (ActionKind::Replace { .. }, at) => {
+                let forces: Vec<String> = d
+                    .forces
+                    .iter()
+                    .map(|p| format!("{p} is immutable"))
+                    .collect();
+                let both = at
+                    .iter()
+                    .flat_map(|at| forces.iter().map(move |f| format!("{at}  {f}")));
+                both.chain(forces.iter().cloned()).collect()
             }
-            (ActionKind::Update | ActionKind::Drift | ActionKind::Pending, _) => vec![],
-            (_, Some(s)) => vec![place_text(s, origin(s)), place_text(s, false), s.at.clone()],
+            (_, Some(at)) => match d.site.as_ref() {
+                // A line too long for its bindings keeps its place.
+                Some(s) if at != s.at && !s.at.is_empty() => vec![at, s.at.clone()],
+                _ => vec![at],
+            },
             (_, None) => vec![],
         };
         rows.push(Row::new(&plain, painted).with(right));
@@ -1981,17 +2184,18 @@ impl Report {
                 )));
                 break;
             }
-            let right = match (&l.site, self.why) {
-                (_, Why::None) | (None, _) => vec![],
-                (Some(s), _) => attr_text(d, l, s),
+            let right = match &l.site {
+                None => vec![],
+                Some(s) => attr_text(d, l, s, self.why),
             };
-            write_line(rows, &d.kind, l, &inner, style, right);
+            write_line(rows, &d.kind, l, &inner, style, self.why, right);
         }
         for b in &d.why {
             rows.push(Row::plain(format!("{inner}{}", b.line())));
         }
         if let Some(b) = &d.because {
-            rows.push(Row::plain(format!("{inner}because {b}")));
+            let plain = format!("{inner}because {b}");
+            rows.push(Row::plain(plain));
         }
     }
 }
@@ -2050,25 +2254,36 @@ fn denied(p: &tree::Printer, res: &EvalResult, text: &str) -> Denied {
     }
 }
 
-/// The right column of attribute line `l` of change `d`, written at `s`:
-/// a create's value written in its own block is the entry's expression
-/// when it reads something the value does not show; anything else is the
-/// statement that wrote it.
-fn attr_text(d: &Deformation, l: &Line, s: &Site) -> Vec<String> {
+/// The site column of attribute line `l` of change `d`, written at `s`,
+/// at level `why` (R-111). By default a value written in its own block
+/// says nothing, any other its place. From `-v`, a create's value
+/// written in its own block is the entry's expression when it reads
+/// something the value does not show; anything else is the statement
+/// that wrote it; either with the writes it won over.
+fn attr_text(d: &Deformation, l: &Line, s: &Site, why: Why) -> Vec<String> {
+    if matches!(d.kind, ActionKind::Delete | ActionKind::DeleteDeposed) {
+        return vec![];
+    }
     let own = d.site.as_ref().is_some_and(|h| match (&h.stmt, &s.stmt) {
         (Some((hf, first)), Some((sf, line))) => {
             hf == sf && (first == line || (first..=&h.last).contains(&line))
         }
         _ => false,
     });
+    if why == Why::Line {
+        return match own {
+            true => vec![],
+            false => vec![place_text(s, why)],
+        };
+    }
     if own && matches!(d.kind, ActionKind::Create | ActionKind::Adopt) {
+        let after = l.after.said(why);
         let rhs = s
             .entry
             .as_deref()
             .and_then(|e| e.split_once(" = "))
             .map(|(_, rhs)| rhs.to_string())
             .filter(|rhs| {
-                let after = l.after.text();
                 // A variable is the entry's binding, on the line above; a
                 // literal is the value itself; a secret says so already.
                 !rhs.chars().all(|c| c.is_alphanumeric() || c == '_')
@@ -2077,14 +2292,16 @@ fn attr_text(d: &Deformation, l: &Line, s: &Site) -> Vec<String> {
                     && !after.contains(rhs.as_str())
                     // A typed literal: `inet("10.0.0.0/16")`.
                     && !rhs.ends_with(&format!("({after})"))
-                    && format!("?{rhs}") != after
             });
-        return rhs.into_iter().collect();
+        let beat = beat_text(s, d);
+        return match rhs {
+            Some(rhs) if !beat.is_empty() => vec![format!("{rhs}{beat}"), rhs],
+            Some(rhs) => vec![rhs],
+            None if !beat.is_empty() => vec![beat.trim_start().to_string()],
+            None => vec![],
+        };
     }
-    if matches!(d.kind, ActionKind::Delete | ActionKind::DeleteDeposed) {
-        return vec![];
-    }
-    written_text(s)
+    written_text(s, d)
 }
 
 /// Whether expression `e` reads anything: a name that is not an object's
@@ -2475,11 +2692,14 @@ fn write_line(
     l: &Line,
     indent: &str,
     style: Style,
+    why: Why,
     right: Vec<String>,
 ) {
     let mut push = |plain: String, painted: String, right: Vec<String>| {
         rows.push(Row::new(&plain, painted).with(right))
     };
+    let plain = |v: &Shown| v.said(why);
+    let painted = |v: &Shown| style.said(v, why);
     match l.op {
         Op::Add | Op::Remove => {
             let (sign, paint, v) = if l.op == Op::Add {
@@ -2490,8 +2710,8 @@ fn write_line(
             let painted_sign = style.paint(paint, sign);
             if l.leaves.is_empty() {
                 push(
-                    format!("{indent}{sign} {} = {}", l.path, v.text()),
-                    format!("{indent}{painted_sign} {} = {}", l.path, style.shown(v)),
+                    format!("{indent}{sign} {} = {}", l.path, plain(v)),
+                    format!("{indent}{painted_sign} {} = {}", l.path, painted(v)),
                     right,
                 );
                 return;
@@ -2507,18 +2727,26 @@ fn write_line(
                 ActionKind::Delete
             };
             for x in &l.leaves {
-                write_line(rows, &inner, x, &format!("{indent}    "), style, vec![]);
+                write_line(
+                    rows,
+                    &inner,
+                    x,
+                    &format!("{indent}    "),
+                    style,
+                    why,
+                    vec![],
+                );
             }
         }
         Op::Leaf => match kind {
             ActionKind::Create | ActionKind::Adopt => push(
-                format!("{indent}{} = {}", l.path, l.after.text()),
-                format!("{indent}{} = {}", l.path, style.shown(&l.after)),
+                format!("{indent}{} = {}", l.path, plain(&l.after)),
+                format!("{indent}{} = {}", l.path, painted(&l.after)),
                 right,
             ),
             ActionKind::Delete | ActionKind::DeleteDeposed => push(
-                format!("{indent}{} was {}", l.path, l.before.text()),
-                format!("{indent}{} was {}", l.path, style.shown(&l.before)),
+                format!("{indent}{} was {}", l.path, plain(&l.before)),
+                format!("{indent}{} was {}", l.path, painted(&l.before)),
                 right,
             ),
             ActionKind::Update
@@ -2528,18 +2756,103 @@ fn write_line(
                 format!(
                     "{indent}{}: {} → {}",
                     l.path,
-                    l.before.text(),
-                    l.after.text()
+                    plain(&l.before),
+                    plain(&l.after)
                 ),
                 format!(
                     "{indent}{}: {} → {}",
                     l.path,
-                    style.shown(&l.before),
-                    style.shown(&l.after)
+                    painted(&l.before),
+                    painted(&l.after)
                 ),
                 right,
             ),
             ActionKind::Noop => {}
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn a(t: &str, n: &str) -> Address {
+        Address {
+            typ: t.into(),
+            name: n.into(),
+        }
+    }
+
+    /// R-111, R-112: an address is its type and its path, a copy's scope
+    /// in front, a local name holding a dot one quoted segment; a
+    /// reference is the path alone.
+    #[test]
+    fn an_address_prints_as_the_source_names_it() {
+        assert_eq!(
+            address(&a("ovh.ssh_key", "k3s.admin")),
+            "ovh.ssh_key k3s.admin"
+        );
+        assert_eq!(
+            address(&a("ovh.domain_record", r#"k3s."k8s-lab.vodik.xyz""#)),
+            r#"ovh.domain_record k3s."k8s-lab.vodik.xyz""#
+        );
+        assert_eq!(address(&a("net.vpc", "main")), "net.vpc main");
+        assert_eq!(address(&a("x.thing", "a b")), r#"x.thing "a b""#);
+        assert_eq!(
+            reference(&a("ovh.instance", "k3s.server"), "public_ip"),
+            "k3s.server.public_ip"
+        );
+        assert_eq!(attribute(&a("input", ""), "db.days"), "input db.days");
+        assert_eq!(
+            label("ovh.instance/k3s.server#public_ip"),
+            "k3s.server.public_ip"
+        );
+        assert_eq!(label("net.vpc/main#id"), "main");
+        assert_eq!(attribute_label("net.vpc/main#id"), "net.vpc main");
+        assert_eq!(
+            address_text(r#"k8s.job["migrate-v${schema}"]"#),
+            r#"k8s.job "migrate-v${schema}""#
+        );
+        assert_eq!(address_text("k8s.job[?]"), "k8s.job ?");
+        assert_eq!(address_text(r#"app["blue"]"#), "app blue");
+    }
+
+    /// Past 60 characters a string elides its middle at the default
+    /// level, and prints whole from `-v`.
+    #[test]
+    fn a_long_string_elides_its_middle_by_default() {
+        let key = format!("ssh-ed25519 {} simon@framework", "A".repeat(68));
+        let v = Shown::Value(Json::String(key.clone()));
+        let line = v.said(Why::Line);
+        assert_eq!(line.chars().count(), LONG + 2, "{line}");
+        assert!(line.starts_with("\"ssh-ed25519 AAAA") && line.ends_with("AA simon@framework\""));
+        assert!(line.contains('…'), "{line}");
+        assert_eq!(v.said(Why::How), crate::partition::quote(&key));
+        let short = Shown::Value(Json::String("b2-7".into()));
+        assert_eq!(short.said(Why::Line), "\"b2-7\"");
+    }
+
+    /// No `?`: a value not known yet is the reference it is; a secret is
+    /// `(sensitive)`, by its label from `-v`.
+    #[test]
+    fn an_unknown_is_its_reference_and_a_secret_is_sensitive() {
+        let null = Shown::Null {
+            label: r#"ovh.instance["k3s.server"].public_ip"#.into(),
+            class: "computed".into(),
+        };
+        assert_eq!(null.said(Why::Line), "k3s.server.public_ip");
+        assert_eq!(null.text(), r#"?ovh.instance["k3s.server"].public_ip"#);
+        let secret = Shown::Sensitive(Some(r#"db.instance["main"].password"#.into()));
+        assert_eq!(secret.said(Why::Line), "(sensitive)");
+        assert_eq!(
+            secret.said(Why::How),
+            "(sensitive db.instance main.password)"
+        );
+        let r = Shown::Ref {
+            addr: a("net.vpc", "main.vpc"),
+            value: Json::String("vpc-1".into()),
+        };
+        assert_eq!(r.said(Why::Line), "main.vpc");
+        assert_eq!(r.text(), r#"net.vpc["main.vpc"]"#);
     }
 }

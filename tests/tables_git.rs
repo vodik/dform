@@ -54,8 +54,8 @@ fn a_plan_file_pins_the_commit_the_branch_named() {
     // The branch moves again before apply: apply reads the plan's commit.
     let third = push(&s, "nodes.csv", "name\na\nb\nc\n", "main");
     let r = s.run(&["apply", "plan.json"]).success();
-    assert!(r.stdout.contains("+ compute.vm[\"b\"]"), "{}", r.stdout);
-    assert!(!r.stdout.contains("compute.vm[\"c\"]"), "{}", r.stdout);
+    assert!(r.stdout.contains("+ compute.vm b"), "{}", r.stdout);
+    assert!(!r.stdout.contains("compute.vm c"), "{}", r.stdout);
     assert!(r.stdout.contains("apply: complete"), "{}", r.stdout);
 
     // State has the commit apply read; the next plan reads the ref again.
@@ -64,7 +64,7 @@ fn a_plan_file_pins_the_commit_the_branch_named() {
         r.stdout.lines().next().unwrap(),
         format!("node: ops.git main {} -> {}", short(&second), short(&third))
     );
-    assert!(r.stdout.contains("+ compute.vm[\"c\"]"), "{}", r.stdout);
+    assert!(r.stdout.contains("+ compute.vm c"), "{}", r.stdout);
     let r = s.run(&["why", r#"node("c")"#, "p.df"]).success();
     assert!(
         r.stdout

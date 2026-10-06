@@ -58,7 +58,7 @@ fn apply_applies_what_the_stack_reads_first() {
         .nth(1)
         .unwrap_or_default();
     assert!(
-        app.contains("  + net.subnet[\"a\"]  ") && app.contains("\n      cidr = \"10.0.0.0/16\"\n"),
+        app.contains("  + net.subnet a  ") && app.contains("\n      cidr = \"10.0.0.0/16\"\n"),
         "{}",
         r.stdout
     );
@@ -170,7 +170,7 @@ fn a_keyed_read_takes_the_pun() {
     s.write("stacks/app.df", &app("network[env, region = \"r1\"]"));
     let r = s.run(&["apply", "app", "env=dev"]).success();
     assert!(
-        r.stdout.contains("  + net.subnet[\"a\"]  stacks/app.df:5"),
+        r.stdout.contains("  + net.subnet a  stacks/app.df:5"),
         "{}",
         r.stdout
     );

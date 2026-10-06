@@ -19,6 +19,7 @@ use crate::circuit::Leaf;
 use crate::engine::EvalResult;
 use crate::ir::Address;
 use crate::query::Redactor;
+use crate::report::Why;
 use crate::report::tree::{Because, Printer, Site, cell_name};
 use crate::value::Value;
 use anyhow::{Context, Result, bail};
@@ -865,7 +866,11 @@ fn apply_line(a: &Apply) -> String {
 }
 
 impl Diff {
-    pub fn text(&self) -> String {
+    /// The diff as text, each change saying as much of why it was planned
+    /// as `why` asks (R-111): `-q` the changes alone, the default and `-v`
+    /// the first line of each change's derivation, `-vv` every line.
+    pub fn text(&self, why: Why) -> String {
+        let level = why;
         let mut out = String::new();
         if self.applies.is_empty() {
             out.push_str(&format!("no apply since {}\n", self.since));
@@ -885,8 +890,17 @@ impl Diff {
                 } else {
                     format!("  ({})", x.result)
                 };
-                out.push_str(&format!("{} {}{failed}\n", marker(&x.action), x.address));
-                for b in why {
+                let addr = match level {
+                    Why::None => x.address.clone(),
+                    _ => crate::report::address_text(&x.address),
+                };
+                out.push_str(&format!("{} {addr}{failed}\n", marker(&x.action)));
+                let shown = match level {
+                    Why::None => 0,
+                    Why::Line | Why::How => 1,
+                    Why::Full => why.len(),
+                };
+                for b in why.iter().take(shown) {
                     out.push_str(&format!("  {}\n", b.line()));
                 }
             }

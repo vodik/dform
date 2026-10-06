@@ -557,7 +557,7 @@ fn apply_asks_unless_yes() {
         r.stderr
     );
     // The plan was shown; nothing was applied.
-    assert!(r.stdout.contains("+ net.vpc[\"main\"]"), "{}", r.stdout);
+    assert!(r.stdout.contains("+ net.vpc main"), "{}", r.stdout);
     assert!(!s.path("dform.state/app/env=prod/state.json").exists());
 
     apply(&["apply", "-y", "app.df", "env=prod"]).success();

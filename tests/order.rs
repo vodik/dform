@@ -51,12 +51,12 @@ instance k3s.k3s cluster { name = "k8s-${env}" }
         "{out}"
     );
     assert!(
-        out.contains("\"ip\"          net.vpc[\"cluster.server\"].cidr"),
+        out.contains("\"ip\"          net.vpc cluster.server.cidr"),
         "{out}"
     );
     let ips = s.run(&["query", "ips(n, i)", "main.df"]).success().stdout;
     assert!(
-        ips.contains("\"cluster\"  net.vpc[\"cluster.server\"].cidr"),
+        ips.contains("\"cluster\"  net.vpc cluster.server.cidr"),
         "{ips}"
     );
 }
@@ -82,7 +82,7 @@ use config
     );
     let out = outputs(&s);
     assert!(out.contains("\"zone\"   \"r1-a\""), "{out}");
-    assert!(out.contains("\"early\"  net.vpc[\"later\"].cidr"), "{out}");
+    assert!(out.contains("\"early\"  net.vpc later.cidr"), "{out}");
 }
 
 /// A copy of a module rather than of a component is the one error, at the

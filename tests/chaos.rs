@@ -40,7 +40,7 @@ fn fail_stops_before_the_action_and_keeps_what_came_before() {
         "{}",
         r.stdout
     );
-    assert!(r.stdout.contains("vpc = net.vpc[\"main\"]"), "{}", r.stdout);
+    assert!(r.stdout.contains("vpc = main"), "{}", r.stdout);
 }
 
 /// A timed-out Create may have taken effect (DEADLINE_EXCEEDED): it is
@@ -99,7 +99,7 @@ fn a_timed_out_create_the_program_dropped_is_deleted() {
         "\n\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\nprovider fake\n",
     );
     let r = mock(&s, &["apply"]).success();
-    assert!(r.stdout.contains("- net.subnet[\"a\"]"), "{}", r.stdout);
+    assert!(r.stdout.contains("- net.subnet a"), "{}", r.stdout);
     assert!(s.json("w.json")["resources"].get("net.subnet::a").is_none());
 }
 
@@ -121,7 +121,7 @@ fn a_create_that_was_not_found_is_retried_with_its_key() {
         .remove("net.subnet::a");
     std::fs::write(s.path("w.json"), w.to_string()).unwrap();
     let r = mock(&s, &["apply"]).success();
-    assert!(r.stdout.contains("+ net.subnet[\"a\"]"), "{}", r.stdout);
+    assert!(r.stdout.contains("+ net.subnet a"), "{}", r.stdout);
     assert_eq!(
         s.json("w.json")["resources"]["net.subnet::a"]["key"],
         key.as_str()
@@ -154,10 +154,9 @@ fn read_lag_past_the_retry_budget_is_gone() {
         "{}",
         r.stderr
     );
-    assert!(r.stdout.contains("+ net.vpc[\"main\"]"), "{}", r.stdout);
+    assert!(r.stdout.contains("+ net.vpc main"), "{}", r.stdout);
     assert!(
-        r.stdout
-            .contains("vpc: \"net.vpc:main\" → ?net.vpc[\"main\"]"),
+        r.stdout.contains("vpc: \"net.vpc:main\" → main"),
         "{}",
         r.stdout
     );
@@ -196,7 +195,7 @@ fn mutate_changes_the_world_after_the_tick() {
     );
     assert!(
         r.stdout.contains(
-            "  ± net.vpc[\"main\"]                           cidr is immutable\n      \
+            "  ± net.vpc main  p.df:3  cidr is immutable\n      \
              cidr: \"10.9.0.0/16\" → \"10.0.0.0/16\""
         ),
         "{}",

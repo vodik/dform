@@ -267,7 +267,7 @@ fn the_provider_statement_selects_the_schema() {
     let r = s
         .run(&["dev", "--provider", "./other.df", "plan", "p.df"])
         .success();
-    assert!(r.stdout.contains("+ x.thing[\"a\"]"), "{}", r.stdout);
+    assert!(r.stdout.contains("+ x.thing a"), "{}", r.stdout);
 }
 
 /// A resource's type is declared by the schema of the provider that

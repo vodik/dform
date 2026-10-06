@@ -19,7 +19,7 @@ fn why_a_tag_exists() {
     );
     assert!(
         out.starts_with(
-            "net.vpc[\"main.vpc\"].tags = {component: \"network\", env: \"prod\", \
+            "net.vpc main.vpc.tags = {component: \"network\", env: \"prod\", \
              team: \"platform\"}\n  merged from 2 contributions\n  ├─ {team: \"platform\"}\n"
         ),
         "{out}"
@@ -31,7 +31,7 @@ fn why_a_tag_exists() {
         ),
         "{out}"
     );
-    assert!(out.contains("with r = net.vpc[\"main.vpc\"]\n"), "{out}");
+    assert!(out.contains("with r = net.vpc main.vpc\n"), "{out}");
     assert!(out.contains("... 1 other contribution (--all)"), "{out}");
     assert!(!out.contains(":-") && !out.contains("Σattr"), "{out}");
     golden("why_dform_prod_tag", &out);
@@ -69,10 +69,7 @@ fn why_takes_a_resource_by_its_path() {
         let out = dform(at, &["why", path]);
         assert_eq!(out, by_address, "{path}");
     }
-    assert!(
-        by_address.starts_with("net.vpc[\"main.vpc\"]\n"),
-        "{by_address}"
-    );
+    assert!(by_address.starts_with("net.vpc main.vpc\n"), "{by_address}");
 }
 
 /// H-16: an address as plan prints it is a `why` and a `query` argument.
@@ -84,7 +81,7 @@ fn why_and_query_take_an_address_as_plan_prints_it() {
     let want = dform(at, &["why", r#"net.vpc["main.vpc"]"#]);
     assert!(
         want.starts_with(
-            "net.vpc[\"main.vpc\"]\n  examples/demo/network.df:19  resource \
+            "net.vpc main.vpc\n  examples/demo/network.df:19  resource \
              net.vpc vpc { .. }   (instance network.vpc main)\n"
         ),
         "{want}"
@@ -96,6 +93,19 @@ fn why_and_query_take_an_address_as_plan_prints_it() {
     );
     let cidr = dform(at, &["query", r#"net.vpc["main.vpc"].cidr"#]);
     assert!(cidr.contains("10.20.0.0/16"), "{cidr}");
+    // The address as the plan prints it now, or its path alone (R-111).
+    for arg in ["net.vpc main.vpc", "main.vpc"] {
+        let want = dform(at, &["why", arg]);
+        assert!(
+            want.starts_with("net.vpc main.vpc\n  examples/demo/network.df:19  "),
+            "{arg}: {want}"
+        );
+    }
+    let tag = dform(at, &["why", "main.vpc.tags.team"]);
+    assert!(
+        tag.contains(r#"set r.tags = { team: "platform" } where r in resource"#),
+        "{tag}"
+    );
     let all = dform(at, &["query", r#"net.vpc["main.vpc"]"#]);
     assert!(
         all.contains("\"tags\"") && all.contains("\"cidr\""),
@@ -164,7 +174,7 @@ fn why_a_route_shows_the_statements_that_fired() {
         "examples/tour/stacks/tour.df",
         &["why", r#"net.route["blue-to-green"]"#],
     );
-    let start = "net.route[\"blue-to-green\"]
+    let start = "net.route blue-to-green
   examples/tour/stacks/tour.df:283  resource net.route \"${a}-to-${b}\" { .. } where reaches(a, b), a != b, network_of(b, v), dest = net.vpc[v].cidr
   with a = \"blue\", b = \"green\", v = \"green.vpc\", dest = 10.2.0.0/16
        \"${a}-to-${b}\" = \"blue-to-green\"
@@ -297,10 +307,7 @@ provider fake
         .success()
         .stdout;
     assert!(!out.contains("VAULT-SECRET"), "{out}");
-    assert!(
-        out.contains("(sensitive leaky.vault[\"v\"].password)"),
-        "{out}"
-    );
+    assert!(out.contains("(sensitive leaky.vault v.password)"), "{out}");
 }
 
 /// The deformation the planner hands back for the policy pass is the
@@ -406,7 +413,7 @@ fn why_prints_a_braced_clause_on_one_line() {
     );
     assert!(
         out.contains(
-            "│    with p = iam.policy[\"identity.app_policy\"]\n  │         p.name = \"app\"\n"
+            "│    with p = iam.policy identity.app_policy\n  │         p.name = \"app\"\n"
         ),
         "{out}"
     );
@@ -420,15 +427,15 @@ fn plan_why_explains_each_deformation() {
     let out = dform("examples/tour/stacks/tour.df env=prod", &["plan", "--why"]);
     assert!(
         out.contains(
-            "  + net.subnet[\"private-us-test-1a\"]          stacks/tour.df:104  with z = \"us-test-1a\", n = 1
-      cidr = \"10.0.1.0/24\"                    inet.subnet(main.cidr, 8, n)
-      tags.team = \"shop\"                      stacks/tour.df:170
+            "  + net.subnet private-us-test-1a          stacks/tour.df:104  with z = \"us-test-1a\", n = 1
+      cidr = \"10.0.1.0/24\"                 inet.subnet(main.cidr, 8, n)
+      tags.team = \"shop\"                   stacks/tour.df:170
       visibility = \"private\"
-      vpc = ?net.vpc[\"main\"]
+      vpc = main
       zone = \"us-test-1a\"
       by stacks/tour.df:104  resource net.subnet \"private-${z}\" { .. } where zone(z, n)
       because stacks/tour.df:101  zone(\"us-test-1a\", 1)
-      because stacks/tour.df:46  net.vpc[\"main\"].cidr = 10.0.0.0/16
+      because stacks/tour.df:46  net.vpc main.cidr = 10.0.0.0/16
 "
         ),
         "{out}"
@@ -473,7 +480,7 @@ fn why_names_a_rule_the_compiler_wrote() {
         out.contains(
             "\n  dform  the lifecycle rule prevent_destroy, against a replace\n  with m = \
              \"lifecycle prevent_destroy: the plan would replace net.vpc[\\\"main\\\"]\", r = \
-             net.vpc[\"main\"]\n"
+             net.vpc main\n"
         ),
         "{out}"
     );
@@ -495,7 +502,7 @@ fn why_prints_a_refinement_as_a_check() {
     let out = why_in(&s, "p.df", &["db.postgres[\"main\"].backup_days"]);
     assert_eq!(
         out,
-        "db.postgres[\"main\"].backup_days = 7\n  merged from 1 contribution\n  ├─ 7   p.df:5\n  \
+        "db.postgres main.backup_days = 7\n  merged from 1 contribution\n  ├─ 7   p.df:5\n  \
          └─ check range(1, 35)   provider schema\n"
     );
 }

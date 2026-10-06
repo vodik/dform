@@ -1,10 +1,10 @@
 //! Inlay hints (R-20), read off the last evaluation of the selected
 //! deployment: at the end of each resource header's line, the plan's
 //! deformation of each object the block declares (`+ create`, `~ update`,
-//! `- delete`, `undeformed`, `~ pending on ?x`), as `dform plan` has it;
-//! after a read of an input, a `let`, an output, an object input's field
-//! or a resource's attribute, its value (`cells`). A secret shows as the
-//! redactor prints it.
+//! `- delete`, `undeformed`, `~ pending on k3s.server.ip`), as `dform
+//! plan` has it; after a read of an input, a `let`, an output, an object
+//! input's field or a resource's attribute, its value (`cells`). A secret
+//! shows as the redactor prints it.
 
 use crate::analysis::{self, Evaluated, Planned, Where};
 use crate::cells;
@@ -173,7 +173,7 @@ fn said(p: &Planned) -> String {
             "{} pending on {}",
             marker_of(k),
             on.iter()
-                .map(|n| format!("?{}", dform_core::ir::label(n)))
+                .map(|n| dform_core::report::label(n))
                 .collect::<Vec<_>>()
                 .join(" ")
         ),
@@ -195,7 +195,11 @@ fn action(p: &Project, path: &Path, text: &str, n: &SyntaxNode, at: usize) -> Op
                 .iter()
                 .find(|x| x.addr == addr)
                 .map_or_else(|| "undeformed".to_string(), said);
-            lines.push(format!("{addr}: {s} ({})", e.deployment));
+            lines.push(format!(
+                "{}: {s} ({})",
+                dform_core::report::address(&addr),
+                e.deployment
+            ));
             match counted.iter_mut().find(|(x, _)| *x == s) {
                 Some((_, k)) => *k += 1,
                 None => counted.push((s, 1)),

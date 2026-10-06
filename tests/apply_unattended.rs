@@ -32,7 +32,7 @@ fn yes_stops_before_a_tick_the_plan_could_not_name() {
     let r = s.run(&["apply", "tour", "env=prod"]).success();
     assert!(
         r.stdout
-            .contains("  + iam.policy[\"\\\"connect-orders.db.fake\\\"\"]  "),
+            .contains("  + iam.policy \"connect-orders.db.fake\"  "),
         "{}",
         r.stdout
     );

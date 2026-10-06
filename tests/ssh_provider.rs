@@ -271,7 +271,11 @@ fn a_host_or_a_file_not_there_yet_is_waited_on() {
     let _sshd = Sshd::start(&bin, &s, port, HOST_A);
     std::fs::remove_file(s.path("remote/k3s.yaml")).unwrap();
     let r = run(&s, &["plan", "p.df"]).success();
-    assert!(r.stdout.contains("ssh.read["), "{}", r.stdout);
+    assert!(
+        r.stdout.contains("\n  waits on  127.0.0.1:"),
+        "{}",
+        r.stdout
+    );
     let apply = {
         let s_dir = s.dir.clone();
         let home = s.path("home");

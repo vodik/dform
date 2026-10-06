@@ -3,54 +3,54 @@ exit: ok
 plan: 8 changes (8 create) over 1 tick, 10 undetermined
 
 tick 1  8 changes, applies now
-  + google.compute_network["vpc"]                   stacks/crud_api.df:75
+  + google.compute_network vpc                  stacks/crud_api.df:75
       auto_create_subnetworks = false
-      name = "shop-dev"                             "shop-${env}"
-  + google.sql_database_instance["db"]              stacks/crud_api.df:77
+      name = "shop-dev"
+  + google.sql_database_instance db             stacks/crud_api.df:77
       database_version = "POSTGRES_16"
       deletion_protection = true
-      name = "crud-api-dev"                         "crud-api-${env}"
-      region = "us-east1"                           stacks/crud_api.df:22
-      settings.availability_type = "ZONAL"
+      name = "crud-api-dev"
+      region = "us-east1"                       stacks/crud_api.df:22
+      settings.availability_type = "ZONAL"      stacks/crud_api.df:43
       settings.backup_configuration.enabled = true
       settings.backup_configuration.point_in_time_recovery_enabled = true
       settings.ip_configuration.ipv4_enabled = false
-      settings.ip_configuration.private_network = ?google.compute_network["vpc"]
-      settings.tier = "db-f1-micro"
-  + google.sql_user["crud_user"]                    stacks/crud_api.df:92
-      instance = "crud-api-dev"                     db.name
+      settings.ip_configuration.private_network = vpc
+      settings.tier = "db-f1-micro"             stacks/crud_api.df:43
+  + google.sql_user crud_user                   stacks/crud_api.df:92
+      instance = "crud-api-dev"
       name = "crud_api"
-      password = (sensitive random.password("crud-api-db"))
-  + k8s.namespace["shop"]                           stacks/crud_api.df:102
+      password = (sensitive)
+  + k8s.namespace shop                          stacks/crud_api.df:102
       metadata.labels."pod-security.kubernetes.io/enforce" = "restricted"
       metadata.name = "shop"
-  + k8s.network_policy["default_deny"]              stacks/crud_api.df:107
+  + k8s.network_policy default_deny             stacks/crud_api.df:107
       metadata.name = "default-deny"
-      metadata.namespace = "shop"                   shop.metadata.name
+      metadata.namespace = "shop"
       spec.podSelector = {}
       spec.policyTypes[0] = "Ingress"
       spec.policyTypes[1] = "Egress"
-  + google.sql_database["crud_db"]                  stacks/crud_api.df:90
-      instance = "crud-api-dev"                     db.name
+  + google.sql_database crud_db                 stacks/crud_api.df:90
+      instance = "crud-api-dev"
       name = "crud_api"
-  + k8s.secret["db_conn"]                           stacks/crud_api.df:120
+  + k8s.secret db_conn                          stacks/crud_api.df:120
       metadata.name = "crud-api-db"
       metadata.namespace = "shop"
       stringData.PGDATABASE = (sensitive)
-      stringData.PGHOST = ?google.sql_database_instance["db"].private_ip_address
-      stringData.PGPASSWORD = (sensitive random.password("crud-api-db"))
+      stringData.PGHOST = db.private_ip_address
+      stringData.PGPASSWORD = (sensitive)
       stringData.PGUSER = (sensitive)
-  + k8s.job["migrate-v42"]                          stacks/crud_api.df:134
-      metadata.labels.app = "crud-api"              { app: "crud-api", schema: "${schema}" }
-      metadata.labels.schema = "42"                 { app: "crud-api", schema: "${schema}" }
-      metadata.name = "crud-api-migrate-v42"        "crud-api-migrate-v${schema}"
-      metadata.namespace = "shop"                   shop.metadata.name
+  + k8s.job migrate-v42                         stacks/crud_api.df:134
+      metadata.labels.app = "crud-api"
+      metadata.labels.schema = "42"
+      metadata.name = "crud-api-migrate-v42"
+      metadata.namespace = "shop"
       spec.backoffLimit = 2
       spec.template.spec.containers[name=migrate].args[0] = "migrate"
       spec.template.spec.containers[name=migrate].args[1] = "--to"
       spec.template.spec.containers[name=migrate].args[2] = "42"
       spec.template.spec.containers[name=migrate].envFrom[0].secretRef.name = "crud-api-db"
-      spec.template.spec.containers[name=migrate].image = "gcr.io/shop/crud-api@sha256:9f2c4d0e8a7b6c5d4e3f2a1b0c9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d"
+      spec.template.spec.containers[name=migrate].image = "gcr.io/shop/crud-api@sha256:9f…b4c3d2e1f0a9b8c7d6e5f4a3b2c1d"
       spec.template.spec.containers[name=migrate].name = "migrate"
       spec.template.spec.containers[name=migrate].resources.limits.cpu = "500m"
       spec.template.spec.containers[name=migrate].resources.limits.memory = "256Mi"
@@ -59,27 +59,27 @@ tick 1  8 changes, applies now
       spec.template.spec.restartPolicy = "Never"
 
 later   changes this plan cannot count yet
-  app["blue"]                                       if instance app blue derives
-    k8s.deployment["blue.deploy"]
-    k8s.horizontal_pod_autoscaler["blue.hpa"]
-    k8s.pod_disruption_budget["blue.pdb"]
-    k8s.network_policy["blue.allow_http"]
-  app["green"]                                      if instance app green derives
-    k8s.deployment["green.deploy"]
-    k8s.horizontal_pod_autoscaler["green.hpa"]
-    k8s.pod_disruption_budget["green.pdb"]
-    k8s.network_policy["green.allow_http"]
-  k8s.service["api"]                                stacks/crud_api.df:190  if serving(_) derives
-  deny "cutover to a color with unready pods"       undetermined until tick 2
-  deny "migration failed; the rollout is held"      undetermined until tick 2
-  deny "ref to an address no rule wants"            undetermined until tick 2
-  deny "ref to an address no rule wants"            undetermined until tick 2
+  app blue                                      if instance app blue derives
+    k8s.deployment blue.deploy
+    k8s.horizontal_pod_autoscaler blue.hpa
+    k8s.pod_disruption_budget blue.pdb
+    k8s.network_policy blue.allow_http
+  app green                                     if instance app green derives
+    k8s.deployment green.deploy
+    k8s.horizontal_pod_autoscaler green.hpa
+    k8s.pod_disruption_budget green.pdb
+    k8s.network_policy green.allow_http
+  k8s.service api                               stacks/crud_api.df:190  if serving(_) derives
+  deny "cutover to a color with unready pods"   stacks/crud_api.df:269  undetermined until tick 2
+  deny "migration failed; the rollout is held"  stacks/crud_api.df:257  undetermined until tick 2
+  deny "ref to an address no rule wants"        stacks/crud_api.df:229  undetermined until tick 2
+  deny "ref to an address no rule wants"        stacks/crud_api.df:229  undetermined until tick 2
   deny "a rollout runs a schema the migration has not reached"  may hold at tick 2
-  deny "container memory limit above 2Gi"           stacks/crud_api.df:303  may hold at tick 2
+  deny "container memory limit above 2Gi"       stacks/crud_api.df:303  may hold at tick 2
   deny "container requests more memory than its limit"  stacks/crud_api.df:308  may hold at tick 2
-  deny "container without resource limits"          stacks/crud_api.df:294  may hold at tick 2
-  deny "image not pinned by digest"                 stacks/crud_api.df:313  may hold at tick 2
-  deny "plaintext secret in env"                    stacks/crud_api.df:326  may hold at tick 2
+  deny "container without resource limits"      stacks/crud_api.df:294  may hold at tick 2
+  deny "image not pinned by digest"             stacks/crud_api.df:313  may hold at tick 2
+  deny "plaintext secret in env"                stacks/crud_api.df:326  may hold at tick 2
 
 apply: tick 1 now; `later` is planned again when tick 1 reports, and apply asks before what it adds
 -- stderr --

@@ -52,7 +52,7 @@ resource ovh.instance db {{
         server.endpoint
     ));
     let r = dform(&s, &server, &["plan", "main.df"]).success();
-    assert!(r.stdout.contains("+ ovh.instance[\"db\"]"), "{}", r.stdout);
+    assert!(r.stdout.contains("+ ovh.instance db"), "{}", r.stdout);
     assert!(r.stdout.contains("image = \"Debian 13\""), "{}", r.stdout);
 }
 

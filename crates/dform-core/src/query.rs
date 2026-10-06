@@ -65,6 +65,65 @@ pub fn address(src: &str, why: bool) -> Result<Option<Query>> {
         }
         Err(_) => return Ok(None),
     };
+    Ok(Some(pattern(&addr, path, why)))
+}
+
+/// An address as the plan prints it (R-111), `ovh.ssh_key k3s.admin`, or
+/// its path alone, `k3s.admin`, with an attribute path after it
+/// (`k3s.server.public_ip`), read against the resources `facts` wants:
+/// the longest prefix of the path that names one is the resource, the
+/// rest its attribute. Every resource it names, of any type when none is
+/// given; empty when it names none.
+pub fn printed(src: &str, facts: &BTreeSet<Atom>) -> Vec<(crate::ir::Address, Option<String>)> {
+    let src = src.trim();
+    if src.is_empty() || src.contains('[') {
+        return Vec::new();
+    }
+    let (typ, rest) = match src.split_once(char::is_whitespace) {
+        Some((t, r)) if t.split('.').all(crate::lexer::is_word) => (Some(t), r.trim()),
+        Some(_) => return Vec::new(),
+        None => (None, src),
+    };
+    // As stored (R-112): a quoted segment keeps its quotes.
+    let segs = crate::ir::path_segments(rest);
+    fn s(t: &Term) -> Option<&str> {
+        match t {
+            Term::Val(Value::Str(s)) => Some(s.as_str()),
+            _ => None,
+        }
+    }
+    let wants: Vec<(&str, &str)> = facts
+        .iter()
+        .filter(|a| a.pred == "want" && a.args.len() == 2)
+        .filter_map(|a| Some((s(&a.args[0])?, s(&a.args[1])?)))
+        .filter(|(t, _)| typ.is_none_or(|x| x == *t))
+        .collect();
+    for k in (1..=segs.len()).rev() {
+        let name = segs[..k].join(".");
+        let path = segs[k..].join(".");
+        let found: Vec<_> = wants
+            .iter()
+            .filter(|(_, a)| *a == name)
+            .map(|(t, a)| {
+                let addr = crate::ir::Address {
+                    typ: t.to_string(),
+                    name: a.to_string(),
+                };
+                (addr, (!path.is_empty()).then(|| path.clone()))
+            })
+            .collect();
+        if !found.is_empty() {
+            return found;
+        }
+    }
+    Vec::new()
+}
+
+/// Address `addr`, or its attribute `path`, as a pattern: for `why` the
+/// resource is `want(T, A)`, for `query` every `attr(T, A, path, value)`.
+pub fn pattern(addr: &crate::ir::Address, path: Option<String>, why: bool) -> Query {
+    let s = |x: &str| Term::Val(Value::Str(x.to_string()));
+    let v = |x: &str| Term::Var(x.to_string());
     let (pred, args) = match (path, why) {
         (Some(p), _) => ("attr", vec![s(&addr.typ), s(&addr.name), s(&p), v("value")]),
         (None, true) => ("want", vec![s(&addr.typ), s(&addr.name)]),
@@ -81,10 +140,10 @@ pub fn address(src: &str, why: bool) -> Result<Option<Query>> {
     };
     let mut vars = Vec::new();
     atom.args.iter().for_each(|t| term_vars(t, &mut vars));
-    Ok(Some(Query::Body {
+    Query::Body {
         body: vec![Lit::Pos(atom)],
         vars,
-    }))
+    }
 }
 
 /// Parse an address (`address`), `pred`, or body literals such as
@@ -364,7 +423,8 @@ impl Redactor {
     }
 
     /// A value as the program would write it: `fmt`, with a reference as
-    /// the address it names, `T["A"]` or `T["A"].p`.
+    /// the address it names as the plan prints it (R-111), `T k3s.server`
+    /// or `T k3s.server.p`, and a null as the attribute it stands for.
     pub fn surface(&self, v: &Value) -> String {
         self.spell(v, Spelling::Surface)
     }
@@ -382,7 +442,8 @@ impl Redactor {
                 (Spelling::Cell, Value::Null { .. }) => "secret(?)".into(),
                 (Spelling::Cell, Value::Str(s)) => format!("secret({})", size(s.len())),
                 (Spelling::Cell, v) => format!("secret({})", size(partition::fmt_value(v).len())),
-                _ => format!("(sensitive {})", crate::ir::label(&l)),
+                (Spelling::Core, _) => format!("(sensitive {})", crate::ir::label(&l)),
+                _ => format!("(sensitive {})", crate::report::attribute_label(&l)),
             };
         }
         let surface = how != Spelling::Core;
@@ -401,12 +462,17 @@ impl Redactor {
                     .collect::<Vec<_>>()
                     .join(", ")
             ),
-            Value::Null { label, .. } => format!("?{}", crate::ir::label(label)),
-            Value::Ref { typ, name, attr } if surface => crate::ir::Address {
-                typ: typ.clone(),
-                name: name.clone(),
+            Value::Null { label, .. } if surface => {
+                format!("?{}", crate::report::attribute_label(label))
             }
-            .attr(attr),
+            Value::Null { label, .. } => format!("?{}", crate::ir::label(label)),
+            Value::Ref { typ, name, attr } if surface => crate::report::attribute(
+                &crate::ir::Address {
+                    typ: typ.clone(),
+                    name: name.clone(),
+                },
+                attr,
+            ),
             Value::CloudRef { typ, name, attr } if surface => format!(
                 "cloud_ref({}, {}, {})",
                 crate::ir::string_literal(typ),
