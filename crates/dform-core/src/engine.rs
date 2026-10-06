@@ -226,7 +226,7 @@ pub fn eval_resumable(
     };
     let at = (0..c.rules.len())
         .filter(|&i| reads_later(&c.rules[i].body))
-        .map(|i| c.rule_stratum[i])
+        .filter_map(|i| c.rule_strata[i].first().copied())
         .min()
         .unwrap_or(c.fixes.len());
     run_strata(&c, &mut st, 0..at)?;
@@ -263,7 +263,8 @@ struct Compiled {
     rules: std::sync::Arc<Vec<RuleStmt>>,
     externs: BTreeSet<crate::ast::Extern>,
     plans: Vec<ops::Rule>,
-    rule_stratum: Vec<usize>,
+    /// The strata each rule runs at, by its index.
+    rule_strata: Vec<BTreeSet<usize>>,
     fixes: Vec<ops::Fix>,
     rule_text: Vec<String>,
     rule_leaf: Vec<NodeId>,
@@ -367,13 +368,15 @@ fn start(
             bail!("{}", partition::cycle_error(&graph, &scc, &negative_edges))
         }
     };
-    let rule_stratum: Vec<usize> = rules
+    // A rule runs at the stratum of each node it defines: one, or one per
+    // address it reads (`partition::Graph::heads`).
+    let rule_strata: Vec<BTreeSet<usize>> = graph
+        .heads
         .iter()
-        .map(|r| {
-            strata
-                .get(&partition::head_node(&r.head))
-                .copied()
-                .unwrap_or(0)
+        .map(|hs| {
+            hs.iter()
+                .map(|h| strata.get(h).copied().unwrap_or(0))
+                .collect()
         })
         .collect();
     // The operator IR: one body per rule, a Fix per
@@ -383,7 +386,7 @@ fn start(
         .iter()
         .map(|r| ops::compile_rule(r, &extern_preds))
         .collect();
-    let fixes = ops::fixes(&rules, &rule_stratum, &plans);
+    let fixes = ops::fixes(&rules, &rule_strata, &plans);
     let bodies = plans.iter().map(|p| &p.body);
     for (rel, keys) in ops::indexes(bodies) {
         for key in keys {
@@ -413,14 +416,14 @@ fn start(
         .map(|r| r.head.pred.clone())
         .chain(["attr".to_string(), transform::ATTR_BASE.to_string()])
         .collect();
-    let attrs = AttrAggregate::new(&strata);
+    let attrs = AttrAggregate::new(&strata, &graph.split);
     let stuck_at = strata.get(&Node::plain(partition::STUCK)).copied();
     Ok((
         Compiled {
             rules: std::sync::Arc::new(rules),
             externs,
             plans,
-            rule_stratum,
+            rule_strata,
             fixes,
             rule_text,
             rule_leaf,
@@ -819,7 +822,7 @@ fn derive_stuck(
     let all = Window::below(hi);
     let mut found: Vec<Stuck> = stucks.to_vec();
     for (i, r) in c.rules.iter().enumerate() {
-        if c.rule_stratum[i] < s {
+        if c.rule_strata[i].last().is_some_and(|&t| t < s) {
             continue;
         }
         if !stuck::can_stick(&r.head, &r.body, &c.aggregates) {
@@ -1034,7 +1037,10 @@ type ElemOf = Option<(String, Value)>;
 #[derive(Clone)]
 struct AttrAggregate {
     arg_nodes: Vec<(Node, usize)>,
-    /// `ready_at` per `T`, then `P`.
+    /// The types partitioned by address too (`partition::Options::split`):
+    /// a group of one is complete per address.
+    split: BTreeSet<String>,
+    /// `ready_at` per `T`, then `P` (`A\0P` for a type in `split`).
     ready: HashMap<String, HashMap<String, usize>>,
     /// `arg/5` tuples below this id are grouped.
     grouped: TupleId,
@@ -1061,7 +1067,7 @@ struct AttrAggregate {
 }
 
 impl AttrAggregate {
-    fn new(strata: &BTreeMap<Node, usize>) -> Self {
+    fn new(strata: &BTreeMap<Node, usize>, split: &BTreeSet<String>) -> Self {
         let arg_nodes = strata
             .iter()
             .filter(|(n, _)| n.pred == "arg")
@@ -1074,6 +1080,7 @@ impl AttrAggregate {
             .collect();
         AttrAggregate {
             arg_nodes,
+            split: split.clone(),
             ready: HashMap::new(),
             grouped: 0,
             lattices: None,
@@ -1090,15 +1097,24 @@ impl AttrAggregate {
         }
     }
 
-    /// The first stratum at which group `(typ, path)` is complete.
-    fn ready_at(&mut self, typ: &str, path: &str) -> usize {
-        if let Some(s) = self.ready.get(typ).and_then(|p| p.get(path)) {
+    /// The first stratum at which group `(typ, addr, path)` is complete.
+    fn ready_at(&mut self, typ: &str, addr: &Value, path: &str) -> usize {
+        let addr = match (self.split.contains(typ), addr) {
+            (true, Value::Str(a)) => Some(a.as_str()),
+            _ => None,
+        };
+        let key = match addr {
+            Some(a) => format!("{a}\0{path}"),
+            None => path.to_string(),
+        };
+        if let Some(s) = self.ready.get(typ).and_then(|p| p.get(&key)) {
             return *s;
         }
         let node = Node {
             pred: "arg".into(),
             typ: Some(typ.into()),
             path: Some(path.into()),
+            addr: addr.map(partition::Addr::exact),
         };
         let s = self
             .arg_nodes
@@ -1110,7 +1126,7 @@ impl AttrAggregate {
         self.ready
             .entry(typ.to_string())
             .or_default()
-            .insert(path.to_string(), s);
+            .insert(key, s);
         s
     }
 
@@ -1144,14 +1160,19 @@ impl AttrAggregate {
                         }
                         _ => key.2.clone(),
                     };
-                    let base = self.ready_at(&key.0, &path);
-                    let elems = self.ready_at(&key.0, &format!("{path}{}", transform::ELEM));
+                    let base = self.ready_at(&key.0, &key.1, &path);
+                    let elems =
+                        self.ready_at(&key.0, &key.1, &format!("{path}{}", transform::ELEM));
                     self.waiting
                         .entry(base.max(elems))
                         .or_default()
                         .insert(key.clone());
                     let read = Node {
                         pred: transform::ATTR_BASE.into(),
+                        addr: match (self.split.contains(&key.0), &key.1) {
+                            (true, Value::Str(a)) => Some(partition::Addr::exact(a)),
+                            _ => None,
+                        },
                         typ: Some(key.0.clone()),
                         path: Some(path),
                     };

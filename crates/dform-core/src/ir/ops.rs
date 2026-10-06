@@ -296,12 +296,15 @@ pub fn compile_rule(r: &RuleStmt, externs: &BTreeSet<String>) -> Rule {
     }
 }
 
-/// Group rules by stratum into `Fix` operators, in stratum order.
-pub fn fixes(rules: &[RuleStmt], stratum_of: &[usize], compiled: &[Rule]) -> Vec<Fix> {
-    let max = stratum_of.iter().copied().max().unwrap_or(0) + 1;
+/// Group rules by stratum into `Fix` operators, in stratum order. A rule
+/// may run at more than one stratum (`partition::Graph::heads`).
+pub fn fixes(rules: &[RuleStmt], strata_of: &[BTreeSet<usize>], compiled: &[Rule]) -> Vec<Fix> {
+    let max = strata_of.iter().flatten().copied().max().unwrap_or(0) + 1;
     let mut out: Vec<Fix> = vec![Fix::default(); max];
-    for (i, s) in stratum_of.iter().enumerate() {
-        out[*s].rules.push(i);
+    for (i, ss) in strata_of.iter().enumerate() {
+        for s in ss {
+            out[*s].rules.push(i);
+        }
     }
     for fix in &mut out {
         let heads: BTreeSet<Rel> = fix.rules.iter().map(|i| Rel::of(&rules[*i].head)).collect();

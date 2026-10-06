@@ -1547,6 +1547,34 @@ have no source; `why` prints each at `dform` by its name and one-line
 description (`dform  the lifecycle rule prevent_destroy, against a
 replace`), with its bindings, never its core text.
 
+### Strata
+
+Nothing is ordered by the program text; the evaluator orders what reads
+an attribute after everything that can write it. A cell (an attribute of
+a type, a value, an input) is complete once every rule that can write it
+has run, and a rule that reads it, or negates or counts anything, runs
+after that. Rules are grouped by what they write: a resource type's
+existence (`want`), and each of its attributes by path. A program is
+rejected when what decides a cell reads that cell, through negation, a
+count or an attribute read: the error names the cycle and the rules on
+it (`dform dev strata` prints the groups, or the cycle).
+
+A resource may read another resource of its own type (R-107): agents
+that join a server by its address, `join = "https://${server.ip}:6443"`
+in `resource instance "agent-${i}"`. Grouped by type alone, the agents'
+existence would read the instances' `ip`, which waits on every instance's
+existence, theirs included. So when a type's existence and one of its
+attributes are on a cycle, that type is grouped by address too, as far
+as the text fixes it: a literal (`server`, `"k3s/server"` in a copy), or
+a name's literal parts (`"agent-${i}"` is every address `agent-*`). The
+agents then read the server's `ip` and nothing of their own, and the
+plan creates the server first. A rule that takes its address from what
+it reads (the computed attributes of every wanted resource) runs once for
+each group it reads. A true cycle stays an error and names the
+addresses: a resource reading its own attribute (`(want, T["a"])` from
+`(attr, T["a"], ip)`), or two each reading the other's. An address the
+text does not fix (`where s in servers`) is every address of the type.
+
 ## Functions
 
 A function is pure and deterministic: a call is a term, evaluated when its

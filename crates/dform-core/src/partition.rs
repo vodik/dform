@@ -43,22 +43,163 @@ pub struct Node {
     pub pred: String,
     pub typ: Option<String>,
     pub path: Option<String>,
+    /// The resources of the type this node is about, when the type is
+    /// partitioned by address too ([`Options::split`]) and the rule's text
+    /// fixes them; `None` is every resource of the type.
+    pub addr: Option<Addr>,
 }
 
 impl fmt::Display for Node {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let t = self.typ.as_deref().unwrap_or("*");
+        let t = match &self.addr {
+            Some(a) => format!("{t}[{a}]"),
+            None => t.to_string(),
+        };
         match (&self.typ, &self.path) {
             (None, None) => write!(f, "{}", self.pred),
-            (t, None) => write!(f, "({}, {})", self.pred, t.as_deref().unwrap_or("*")),
-            (t, p) => write!(
-                f,
-                "({}, {}, {})",
-                self.pred,
-                t.as_deref().unwrap_or("*"),
-                p.as_deref().unwrap_or("*")
-            ),
+            (_, None) => write!(f, "({}, {t})", self.pred),
+            (_, p) => write!(f, "({}, {t}, {})", self.pred, p.as_deref().unwrap_or("*")),
         }
     }
+}
+
+/// The addresses a rule's text fixes for a resource (R-107): a union of
+/// patterns, each the literal pieces of an address with any text between
+/// two pieces. One piece is a literal address (`"k3s/server"`); the agents
+/// `"${name}-agent-${i}"` of the copy `k3s` are `"k3s/*-agent-*"`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Addr(Vec<Vec<String>>);
+
+impl fmt::Display for Addr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let alts: Vec<String> = self.0.iter().map(|g| quote(&g.join("*"))).collect();
+        write!(f, "{}", alts.join("|"))
+    }
+}
+
+impl Addr {
+    /// One literal address.
+    pub fn exact(a: &str) -> Addr {
+        Addr(vec![vec![a.to_string()]])
+    }
+
+    /// Whether some address is in both.
+    pub fn overlaps(&self, other: &Addr) -> bool {
+        self.0
+            .iter()
+            .any(|a| other.0.iter().any(|b| globs_meet(a, b)))
+    }
+
+    /// The addresses `t` can be in a rule with `body`: a literal; a
+    /// variable the body equates to one of these; `format(..)` with its
+    /// literal text, an argument that is not a literal any text;
+    /// `scoped(S, N)` with its scope. `None` when the text does not fix
+    /// it, or fixes nothing (`format("%s", N)`).
+    pub fn of(t: &Term, body: &[Lit]) -> Option<Addr> {
+        let globs = addr_globs(t, body, 4)?;
+        let any = |g: &Vec<String>| g.len() > 1 && g.iter().all(String::is_empty);
+        (!globs.iter().any(any)).then_some(Addr(globs))
+    }
+}
+
+fn addr_globs(t: &Term, body: &[Lit], depth: usize) -> Option<Vec<Vec<String>>> {
+    match t {
+        Term::Val(Value::Str(s)) => Some(vec![vec![s.clone()]]),
+        Term::Var(x) if depth > 0 => body.iter().find_map(|l| match l {
+            Lit::Eq(Term::Var(y), u) | Lit::Eq(u, Term::Var(y))
+                if y == x && !matches!(u, Term::Var(z) if z == x) =>
+            {
+                addr_globs(u, body, depth - 1)
+            }
+            _ => None,
+        }),
+        Term::Func { name, args } if name == "format" => {
+            let fmt = args.first()?.as_str()?;
+            let mut glob = vec![String::new()];
+            for (i, part) in fmt.split("%s").enumerate() {
+                if i > 0 {
+                    match args.get(i)? {
+                        Term::Val(v @ (Value::Str(_) | Value::Int(_))) => glob
+                            .last_mut()
+                            .unwrap()
+                            .push_str(&crate::functions::value_to_string(v)),
+                        _ => glob.push(String::new()),
+                    }
+                }
+                glob.last_mut().unwrap().push_str(part);
+            }
+            Some(vec![glob])
+        }
+        Term::Func { name, args } if name == "scoped" && args.len() == 2 => {
+            let scope = args[0].as_str()?;
+            let prefix = crate::ir::scoped(scope, "");
+            let mut out = Vec::new();
+            for g in addr_globs(&args[1], body, depth)? {
+                // A name that is already an address is itself (R-65).
+                let scoped = g.iter().any(|p| crate::ir::is_scoped(p));
+                if !scoped {
+                    let mut s = g.clone();
+                    s[0] = format!("{prefix}{}", s[0]);
+                    out.push(s);
+                }
+                if scoped || g.len() > 1 {
+                    out.push(g);
+                }
+            }
+            Some(out)
+        }
+        _ => None,
+    }
+}
+
+/// Whether two patterns ([`Addr`]) match a common address: a search over
+/// pairs of positions, a gap taking a character or a gap of the other.
+fn globs_meet(a: &[String], b: &[String]) -> bool {
+    #[derive(Clone, Copy, PartialEq)]
+    enum Tok {
+        Ch(char),
+        Gap,
+    }
+    let toks = |g: &[String]| -> Vec<Tok> {
+        let mut out = Vec::new();
+        for (i, p) in g.iter().enumerate() {
+            if i > 0 {
+                out.push(Tok::Gap);
+            }
+            out.extend(p.chars().map(Tok::Ch));
+        }
+        out
+    };
+    let (a, b) = (toks(a), toks(b));
+    let mut seen = std::collections::HashSet::new();
+    let mut todo = vec![(0usize, 0usize)];
+    while let Some((i, j)) = todo.pop() {
+        if !seen.insert((i, j)) {
+            continue;
+        }
+        if i == a.len() && j == b.len() {
+            return true;
+        }
+        if a.get(i) == Some(&Tok::Gap) {
+            todo.push((i + 1, j));
+            if j < b.len() {
+                todo.push((i, j + 1));
+            }
+        }
+        if b.get(j) == Some(&Tok::Gap) {
+            todo.push((i, j + 1));
+            if i < a.len() {
+                todo.push((i + 1, j));
+            }
+        }
+        if let (Some(Tok::Ch(x)), Some(Tok::Ch(y))) = (a.get(i), b.get(j))
+            && x == y
+        {
+            todo.push((i + 1, j + 1));
+        }
+    }
+    false
 }
 
 impl Node {
@@ -67,6 +208,7 @@ impl Node {
             pred: pred.into(),
             typ: None,
             path: None,
+            addr: None,
         }
     }
     pub fn unifies(&self, other: &Node) -> bool {
@@ -77,7 +219,11 @@ impl Node {
             (Some(x), Some(y)) => x == y,
             _ => true,
         };
-        ok(&self.typ, &other.typ) && self.paths_unify(other)
+        let addrs = match (&self.addr, &other.addr) {
+            (Some(x), Some(y)) => x.overlaps(y),
+            _ => true,
+        };
+        ok(&self.typ, &other.typ) && addrs && self.paths_unify(other)
     }
 
     /// A scoped cell's path is `scope::k` ([`type_path_node`]), `k` in
@@ -119,12 +265,24 @@ pub struct Graph {
     pub nodes: BTreeSet<Node>,
     pub edges: Vec<Edge>,
     pub rules: Vec<RuleStmt>,
+    /// The nodes each rule defines, by its index in `rules`: the strata
+    /// it runs in. One, but for a rule that takes its head's address from
+    /// a read of a type split by address: one per address it reads.
+    pub heads: Vec<Vec<Node>>,
+    /// The types partitioned by address too ([`Options::split`]).
+    pub split: BTreeSet<String>,
 }
 
 #[derive(Debug, Clone, Default)]
 pub struct Options {
     /// Predicates that are externs (negative edges into their readers).
     pub externs: BTreeSet<String>,
+    /// Resource types partitioned by address as well as by path (R-107):
+    /// a `want` or an aggregate of one is a node per address its rule's
+    /// text fixes, so an agent's `want` reads its server's `attr` without
+    /// reading its own. [`compile`] splits a type when the graph by path
+    /// has a negative cycle through a rule that reads its own type.
+    pub split: BTreeSet<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -183,6 +341,7 @@ fn type_path_node(pred: &str, atom: &Atom) -> Node {
         pred: pred.into(),
         typ,
         path,
+        addr: None,
     }
 }
 
@@ -215,6 +374,7 @@ fn aggregate_of(arg: &Node) -> Node {
             .path
             .as_ref()
             .map(|p| p.strip_suffix(transform::ELEM).unwrap_or(p).to_string()),
+        addr: arg.addr.clone(),
     }
 }
 
@@ -266,6 +426,7 @@ pub fn head_node(atom: &Atom) -> Node {
             pred: atom.pred.clone(),
             typ: key_type(&atom.args[0]),
             path: None,
+            addr: None,
         };
     }
     Node::plain(&atom.pred)
@@ -274,6 +435,19 @@ pub fn head_node(atom: &Atom) -> Node {
 /// The pattern a body literal reads.
 fn body_pattern(atom: &Atom) -> Node {
     aggregate_read(atom).unwrap_or_else(|| head_node(atom))
+}
+
+/// `n` with the addresses its atom's column 1 fixes in a rule with
+/// `body`, when `n` is a resource's (`want`, a contribution, the
+/// aggregate) and its type is partitioned by address (R-107).
+fn addressed(mut n: Node, atom: &Atom, body: &[Lit], split: &BTreeSet<String>) -> Node {
+    if is_resource_node(&n)
+        && n.typ.as_ref().is_some_and(|t| split.contains(t))
+        && let Some(a) = atom.args.get(1)
+    {
+        n.addr = Addr::of(a, body);
+    }
+    n
 }
 
 fn is_builtin_or_edb(pred: &str) -> bool {
@@ -346,10 +520,33 @@ pub fn compile(program: &Program, given: &[Atom]) -> Result<Compiled> {
     transform::check_computed_writes(&rules, &facts, &schema)?;
     let (mut rules, facts) = transform::rewrite_computed_refs(rules, facts, &schema);
     rules.extend(transform::computed_prelude(&schema));
-    let opts = Options {
+    let mut opts = Options {
         externs: lowered.externs.iter().map(|e| e.pred.clone()).collect(),
+        split: BTreeSet::new(),
     };
-    let graph = build_lowered(rules.clone(), &facts, &schema, &opts);
+    let mut graph = build_lowered(rules.clone(), &facts, &schema, &opts);
+    // R-107: a negative cycle through a type's resources and an attribute
+    // of them (an agent reading its server's address) is partitioned by
+    // address too, kept when that stratifies it or the cycle is one between
+    // addresses (a resource reading itself, two reading each other).
+    while let Verdict::Rejected { scc, .. } = stratify(&graph) {
+        let more = own_type_reads(&scc, &opts.split);
+        if more.is_empty() {
+            break;
+        }
+        opts.split.extend(more);
+        let finer = build_lowered(rules.clone(), &facts, &schema, &opts);
+        match stratify(&finer) {
+            Verdict::Rejected { negative_edges, .. }
+                if !negative_edges
+                    .iter()
+                    .any(|e| e.rule.is_some() && e.from.addr.is_some() && e.to.addr.is_some()) =>
+            {
+                break;
+            }
+            _ => graph = finer,
+        }
+    }
     Ok(Compiled {
         statements: lowered.program.statements,
         rules,
@@ -359,6 +556,106 @@ pub fn compile(program: &Program, given: &[Atom]) -> Result<Compiled> {
         graph,
         inputs: lowered.inputs,
     })
+}
+
+/// Insert a head node and the aggregate nodes behind it: a contribution's
+/// `attr`, and an element write's base.
+fn define(defs: &mut BTreeSet<Node>, h: &Node) {
+    defs.insert(h.clone());
+    if h.pred != "arg" {
+        return;
+    }
+    let attr = aggregate_of(h);
+    if h.path
+        .as_ref()
+        .is_some_and(|p| p.ends_with(transform::ELEM))
+    {
+        defs.insert(Node {
+            pred: transform::ATTR_BASE.into(),
+            ..attr.clone()
+        });
+    }
+    defs.insert(attr);
+}
+
+/// The prelude's contribution to the computed path `p` of `t`.
+fn prelude_arg(t: &str, p: &str, addr: Option<Addr>) -> Node {
+    Node {
+        pred: "arg".into(),
+        typ: Some(t.to_string()),
+        path: Some(p.to_string()),
+        addr,
+    }
+}
+
+/// The addresses `want` of `t` is defined at; every address when none is.
+fn want_addrs(defs: &BTreeSet<Node>, t: &str) -> Vec<Option<Addr>> {
+    let mut out: Vec<Option<Addr>> = defs
+        .iter()
+        .filter(|n| n.pred == "want" && n.typ.as_deref() == Some(t))
+        .map(|n| n.addr.clone())
+        .collect();
+    if out.is_empty() {
+        out.push(None);
+    }
+    out
+}
+
+fn is_resource_node(n: &Node) -> bool {
+    matches!(n.pred.as_str(), "want" | "arg" | "attr") || n.pred == transform::ATTR_BASE
+}
+
+/// The body literal a rule takes its head's address from (R-107): the
+/// head is a resource's of a type split by address, its address a
+/// variable the text does not fix, and a positive literal reads a resource
+/// of the same type at that variable (`arg(T, A, P, ..) :- want(T, A)`).
+/// The rule then derives at every address that literal reads.
+fn address_source(r: &RuleStmt, split: &BTreeSet<String>) -> Option<usize> {
+    let head = addressed(head_node(&r.head), &r.head, &r.body, split);
+    let typ = head.typ.as_ref().filter(|t| split.contains(*t))?;
+    if !is_resource_node(&head) || head.addr.is_some() || is_aggregate_head(&r.head) {
+        return None;
+    }
+    let a = match r.head.args.get(1)? {
+        Term::Var(a) => a,
+        _ => return None,
+    };
+    r.body.iter().position(|l| match l {
+        Lit::Pos(b) => {
+            let pat = body_pattern(b);
+            is_resource_node(&pat)
+                && pat.typ.as_ref() == Some(typ)
+                && matches!(b.args.get(1), Some(Term::Var(v)) if v == a)
+        }
+        _ => false,
+    })
+}
+
+/// The pattern of the literal a rule takes its head's address from.
+fn source_pattern(r: &RuleStmt, at: usize, split: &BTreeSet<String>) -> Node {
+    let (Lit::Pos(a) | Lit::Not(a)) = &r.body[at] else {
+        unreachable!("an address source is a positive literal")
+    };
+    addressed(body_pattern(a), a, &r.body, split)
+}
+
+/// The types whose resources a negative cycle runs through, not split by
+/// address yet ([`Options::split`]): a type whose `want` and an attribute
+/// of it are both on the cycle, so its resources' existence waits on one
+/// of their own attributes.
+fn own_type_reads(scc: &BTreeSet<Node>, split: &BTreeSet<String>) -> BTreeSet<String> {
+    let of = |pred: &str| -> BTreeSet<&String> {
+        scc.iter()
+            .filter(|n| n.pred == pred)
+            .filter_map(|n| n.typ.as_ref())
+            .collect()
+    };
+    let attrs = of("attr");
+    of("want")
+        .into_iter()
+        .filter(|t| attrs.contains(t) && !split.contains(*t))
+        .cloned()
+        .collect()
 }
 
 /// The provider schema among the facts given to a run (the catalog the
@@ -391,56 +688,91 @@ pub fn build_lowered(
 
     // Definition nodes: every head, every fact's predicate, every aggregate
     // node behind a contribution, and the prelude's computed contributions.
+    let split = &opts.split;
     let mut defs: BTreeSet<Node> = BTreeSet::new();
     for a in fact_atoms {
-        if let Some((arg, attr)) = contrib_node(a) {
+        if let Some((arg, _)) = contrib_node(a) {
+            let arg = addressed(arg, a, &[], split);
+            defs.insert(aggregate_of(&arg));
             defs.insert(arg);
-            defs.insert(attr);
         } else {
-            defs.insert(head_node(a));
+            defs.insert(addressed(head_node(a), a, &[], split));
         }
     }
-    for r in &rules {
-        let h = head_node(&r.head);
-        defs.insert(h.clone());
-        if let Some((arg, attr)) = contrib_node(&r.head) {
-            // An element write's rule reads its attribute's base.
-            if arg
-                .path
-                .as_ref()
-                .is_some_and(|p| p.ends_with(transform::ELEM))
-            {
-                defs.insert(Node {
-                    pred: transform::ATTR_BASE.into(),
-                    ..attr.clone()
-                });
+    // A rule's head node; a rule that takes its head's address from a read
+    // of its own type, split by address (`arg(T, A, ..) :- want(T, A)`),
+    // has one per address it reads, and runs at each ([`address_source`]).
+    let sources: Vec<Option<usize>> = rules.iter().map(|r| address_source(r, split)).collect();
+    let mut heads: Vec<Vec<Node>> = vec![Vec::new(); rules.len()];
+    for (i, r) in rules.iter().enumerate() {
+        if sources[i].is_none() {
+            let h = addressed(head_node(&r.head), &r.head, &r.body, split);
+            define(&mut defs, &h);
+            heads[i].push(h);
+        }
+    }
+    // The prelude's and the copies' nodes, to a fixpoint: a copy may read
+    // what another copy or the prelude defines.
+    let minted: Vec<(String, String)> = transform::minted_paths(schema)
+        .into_iter()
+        .map(|(t, p, _, _)| {
+            let p = normalize_path(&Some(t.clone()), &p);
+            (t, p)
+        })
+        .collect();
+    loop {
+        let before = defs.len();
+        for (t, p) in minted.iter().filter(|(t, _)| split.contains(t)) {
+            for addr in want_addrs(&defs, t) {
+                define(&mut defs, &prelude_arg(t, p, addr));
             }
-            defs.insert(attr);
+        }
+        for (i, r) in rules.iter().enumerate() {
+            let Some(at) = sources[i] else { continue };
+            let pat = source_pattern(r, at, split);
+            let head = head_node(&r.head);
+            let found: BTreeSet<Option<Addr>> =
+                unifying(&defs, &pat).map(|d| d.addr.clone()).collect();
+            for addr in found {
+                let h = Node {
+                    addr,
+                    ..head.clone()
+                };
+                if !heads[i].contains(&h) {
+                    define(&mut defs, &h);
+                    heads[i].push(h);
+                }
+            }
+        }
+        if defs.len() == before {
+            break;
+        }
+    }
+    for (i, r) in rules.iter().enumerate() {
+        if heads[i].is_empty() {
+            let h = head_node(&r.head);
+            define(&mut defs, &h);
+            heads[i].push(h);
         }
     }
     // Prelude: (arg, T, P) :- (want, T) per minted schema row (computed and
-    // optional_computed, E §2.5); expanded per row, P normalized.
+    // optional_computed, E §2.5); expanded per row, P normalized. A type
+    // partitioned by address has it per address its `want` is defined at.
     let mut prelude: Vec<(Node, Node)> = Vec::new();
-    for (t, attr_name, _, _) in transform::minted_paths(schema) {
-        let attr_name = normalize_path(&Some(t.clone()), &attr_name);
-        {
-            let arg = Node {
-                pred: "arg".into(),
-                typ: Some(t.clone()),
-                path: Some(attr_name.clone()),
-            };
-            let attr = Node {
-                pred: "attr".into(),
-                typ: Some(t.clone()),
-                path: Some(attr_name),
-            };
+    for (t, p) in &minted {
+        let addrs = match split.contains(t) {
+            true => want_addrs(&defs, t),
+            false => vec![None],
+        };
+        for addr in addrs {
+            let arg = prelude_arg(t, p, addr.clone());
             let want = Node {
                 pred: "want".into(),
                 typ: Some(t.clone()),
                 path: None,
+                addr,
             };
-            defs.insert(arg.clone());
-            defs.insert(attr.clone());
+            define(&mut defs, &arg);
             defs.insert(want.clone());
             prelude.push((want, arg));
         }
@@ -494,9 +826,8 @@ pub fn build_lowered(
     // Rule edges. `read`: the nodes each rule's body reads.
     let mut read: Vec<Vec<Node>> = vec![Vec::new(); rules.len()];
     for (i, r) in rules.iter().enumerate() {
-        let head = head_node(&r.head);
         let agg_head = is_aggregate_head(&r.head);
-        for lit in &r.body {
+        for (k, lit) in r.body.iter().enumerate() {
             let (atom, negated) = match lit {
                 Lit::Pos(a) => (a, false),
                 Lit::Not(a) => (a, true),
@@ -505,7 +836,7 @@ pub fn build_lowered(
             if is_builtin_or_edb(&atom.pred) {
                 continue;
             }
-            let pat = body_pattern(atom);
+            let pat = addressed(body_pattern(atom), atom, &r.body, split);
             let reads_aggregate = pat.pred == "attr" || pat.pred == transform::ATTR_BASE;
             let is_extern = opts.externs.contains(&atom.pred);
             let negative = negated || agg_head || reads_aggregate || is_extern;
@@ -520,18 +851,25 @@ pub fn build_lowered(
             } else {
                 "positive"
             };
-            // Connect from every definition node the pattern unifies with.
+            // Connect from every definition node the pattern unifies with,
+            // to every head; the read a head takes its address from, to
+            // the head at that address.
             let mut matched = false;
             for d in unifying(&defs, &pat) {
                 matched = true;
                 read[i].push(d.clone());
-                edges.push(Edge {
-                    from: d.clone(),
-                    to: head.clone(),
-                    negative,
-                    rule: Some(i),
-                    why: why.into(),
-                });
+                for head in &heads[i] {
+                    if sources[i] == Some(k) && head.addr != d.addr {
+                        continue;
+                    }
+                    edges.push(Edge {
+                        from: d.clone(),
+                        to: head.clone(),
+                        negative,
+                        rule: Some(i),
+                        why: why.into(),
+                    });
+                }
             }
             if !matched {
                 // Undefined predicate (or EDB with no facts): a node with no
@@ -539,13 +877,15 @@ pub fn build_lowered(
                 // plain node so the graph still stratifies.
                 nodes.insert(pat.clone());
                 read[i].push(pat.clone());
-                edges.push(Edge {
-                    from: pat.clone(),
-                    to: head.clone(),
-                    negative,
-                    rule: Some(i),
-                    why: format!("{why} (undefined)"),
-                });
+                for head in &heads[i] {
+                    edges.push(Edge {
+                        from: pat.clone(),
+                        to: head.clone(),
+                        negative,
+                        rule: Some(i),
+                        why: format!("{why} (undefined)"),
+                    });
+                }
             }
         }
     }
@@ -594,6 +934,8 @@ pub fn build_lowered(
         nodes,
         edges,
         rules,
+        heads,
+        split: split.clone(),
     }
 }
 
@@ -617,6 +959,7 @@ fn unifying<'a>(defs: &'a BTreeSet<Node>, pat: &'a Node) -> impl Iterator<Item =
             pred: pat.pred.clone(),
             typ: typ.clone(),
             path: None,
+            addr: None,
         };
         defs.range(from..)
             .take_while(move |n| n.pred == pat.pred && (typ.is_none() || n.typ == typ))
@@ -1070,6 +1413,7 @@ mod tests {
             pred: pred.into(),
             typ: Some(t.into()),
             path: Some(p.into()),
+            addr: None,
         };
         let peering = strata[&node("arg", "net.vpc_peering", "requester_vpc")];
         let vpc_id = strata[&node("attr", "net.vpc", "id")];
