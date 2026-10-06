@@ -869,7 +869,11 @@ front, `net.vpc edge.left.vpc`, a value referring to it by the path
 alone, `main.vpc`. The full address is the source term that names it,
 `T["A"]` (`A` the path, a copy's scope included: `n.x`, `edge.left.vpc`), an
 attribute of it `.path` after it: the plan file, `--json`, state, `plan
--q`'s apply order, `state show`, `dev graph` and errors print it. Every
+-q`'s apply order, `state show` and `dev graph` print it. Errors,
+`why-not`, `apply`'s progress lines and the audit log's retries say the
+printed one (`apply net.subnet a: ..`, `waiting on db.postgres
+d.endpoint`), and a value dform's own extern has not answered yet is its
+call (`ssh.read("10.0.0.5", "ubuntu", "/etc/k3s.yaml")`). Every
 address the command line takes is read that way (`why`, `query`, `state
 show`, `state mv`, `dev show`, `--chaos`), and `why` also takes the
 printed one, so an address copied from a plan pastes into a command;

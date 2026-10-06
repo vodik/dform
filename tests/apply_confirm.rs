@@ -28,8 +28,8 @@ use fake
 "#;
 
 const MARKS: &str = "resumed from the apply interrupted at tick 1:\n  \
-    net.vpc[\"peer\"]  (retried with its idempotency key: nothing it made was found)\n  \
-    net.subnet[\"a\"]  (retried with its idempotency key: nothing it made was found)\n\
+    net.vpc peer  (retried with its idempotency key: nothing it made was found)\n  \
+    net.subnet a  (retried with its idempotency key: nothing it made was found)\n\
     Apply these 2 changes to p? [y/N] ";
 
 /// An apply the provider crashed under at `net.vpc.peer`: `net.vpc.main`

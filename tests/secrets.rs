@@ -269,9 +269,10 @@ resource leaky.vault copy {{
     );
     let r = s.run(&common::on("p.df", &mock, &["plan"])).failure();
     assert!(
-        r.stderr.contains("conflicting attribute contributions"),
+        r.stdout
+            .contains("\nconflicts\n  ! leaky.vault v.password: "),
         "{}",
-        r.stderr
+        r.stdout
     );
     for out in [&r.stdout, &r.stderr] {
         assert!(!out.contains("VAULT-SECRET"), "{out}");
@@ -366,7 +367,7 @@ fn a_sensitive_leaf_changed_between_plan_and_apply_is_refused() {
     let r = s.run(&["apply", "plan.json"]).failure();
     assert!(
         r.stderr
-            .contains("leaky.vault[\"v\"].password: the plan saw (sensitive, digest "),
+            .contains("leaky.vault v.password: the plan saw (sensitive, digest "),
         "{}",
         r.stderr
     );

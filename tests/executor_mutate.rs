@@ -44,7 +44,7 @@ fn a_mutation_under_a_pending_deformation_stops_before_tick_two() {
     assert!(
         r.stderr.contains(
             "the world changed under a pending change after tick 1:\n\
-             ~ compute.vm[\"app\"]\n  size: <none> -> 2\n"
+             ~ compute.vm app\n  size: <none> -> 2\n"
         ),
         "{}",
         r.stderr
@@ -81,7 +81,7 @@ fn a_mutation_elsewhere_is_drift_and_the_run_continues() {
     .success();
     assert!(
         r.stdout.contains(
-            "drift after tick 1:\n~ db.postgres[\"main\"]\n  size: 1 -> 9\n\
+            "drift after tick 1:\n~ db.postgres main\n  size: 1 -> 9\n\
              plan: 2 changes (2 update) over 1 tick\n\ntick 2  2 changes, now that tick 1 reported\n"
         ),
         "{}",

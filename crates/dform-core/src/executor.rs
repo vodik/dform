@@ -193,7 +193,7 @@ pub fn run_tick(
                 bail!(
                     "apply {}: dform stopped after this Apply call returned \
                      (chaos stop-after); the next apply resumes",
-                    a.addr
+                    crate::report::address(&a.addr)
                 );
             }
         }
@@ -201,7 +201,7 @@ pub fn run_tick(
     if failed.is_none()
         && let Some(i) = started.iter().position(|s| !s)
     {
-        let a = &actions[i].addr;
+        let a = crate::report::address(&actions[i].addr);
         failed = Some(anyhow::anyhow!(
             "apply {a}: its dependencies never finished (a cycle)"
         ));
@@ -507,7 +507,7 @@ pub fn resolve_uncertain(cloud: &Providers, state: &mut State) -> Result<Vec<Str
             state.uncertain.remove(&k);
             continue;
         };
-        let at = addr.to_string();
+        let at = crate::report::address(&addr);
         match u.op {
             UncertainOp::Create | UncertainOp::Replace { .. } => {
                 // A create's address may still map an object that is gone.
@@ -600,7 +600,7 @@ pub fn carried_over(resumed: Option<&InFlight>, state: &State, plan: &Plan) -> S
                 None => "carried over from an interrupted apply:\n".to_string(),
             };
         }
-        out.push_str(&format!("  {}", a.addr));
+        out.push_str(&format!("  {}", crate::report::address(&a.addr)));
         if retried {
             out.push_str("  (retried with its idempotency key: nothing it made was found)");
         }
@@ -697,7 +697,7 @@ pub fn check_boundary(
 pub fn format_changes(changed: &[(Address, Vec<Change>)]) -> String {
     let mut out = String::new();
     for (addr, changes) in changed {
-        out.push_str(&format!("~ {addr}\n"));
+        out.push_str(&format!("~ {}\n", crate::report::address(addr)));
         for ch in changes {
             let side = |v: Option<&Json>| match (ch.sensitive, v) {
                 (true, Some(_)) => "(sensitive)".to_string(),

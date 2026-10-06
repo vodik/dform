@@ -1677,8 +1677,10 @@ impl Providers {
             Some(v) => Ok(v.clone()),
             None => match ctx.strict {
                 Some(at) => bail!(
-                    "apply {at}: ?{} is still unknown ({addr} does not set {attr})",
-                    crate::ir::label(&label)
+                    "apply {}: {} is still unknown ({} does not set {attr})",
+                    crate::report::address(at),
+                    crate::report::attribute_label(&label),
+                    crate::report::address(&addr)
                 ),
                 None => Ok(provider::null_json(&label)),
             },
@@ -1710,8 +1712,9 @@ impl Providers {
         match (found, ctx.strict) {
             (Some(v), _) => Ok(v),
             (None, Some(at)) => bail!(
-                "apply {at}: ?{} is still unknown (its resource has not been created)",
-                crate::ir::label(label)
+                "apply {}: {} is still unknown (its resource has not been created)",
+                crate::report::address(at),
+                crate::report::attribute_label(label)
             ),
             (None, None) => Ok(provider::null_json(label)),
         }
@@ -2178,7 +2181,7 @@ impl Tick<'_> {
     pub fn submit(&mut self, id: usize, a: &Action, state: &mut State) -> Result<bool> {
         let cloud = self.cloud;
         let addr = &a.addr;
-        let at = addr.to_string();
+        let at = crate::report::address(addr);
         if matches!(a.kind, ActionKind::Noop | ActionKind::Pending) {
             return Ok(false);
         }
@@ -2453,8 +2456,9 @@ impl Tick<'_> {
                 match cloud.read(f.link, at, &remote) {
                     Ok(Some(o)) => {
                         crate::progress::line(&format!(
-                            "apply {at}: the Create that timed out made {remote}; it is \
-                             adopted, not made again"
+                            "apply {}: the Create that timed out made {remote}; it is \
+                             adopted, not made again",
+                            crate::report::address(at)
                         ));
                         Looked::Made(Box::new(Reply::Apply(pb::ApplyResponse {
                             remote,
@@ -2471,7 +2475,8 @@ impl Tick<'_> {
                 match cloud.read(f.link, at, &f.remote) {
                     Ok(None) => {
                         crate::progress::line(&format!(
-                            "apply {at}: the Delete that timed out took effect; {} is gone",
+                            "apply {}: the Delete that timed out took effect; {} is gone",
+                            crate::report::address(at),
                             f.remote
                         ));
                         Looked::Made(Box::new(Reply::Apply(pb::ApplyResponse::default())))
@@ -2585,7 +2590,7 @@ impl Tick<'_> {
         result: &std::result::Result<Option<pb::ApplyResponse>, CallError>,
         state: &mut State,
     ) -> Result<()> {
-        let at = addr.to_string();
+        let at = crate::report::address(addr);
         if let Ok(Some(resp)) = result {
             self.elapsed.insert(addr.clone(), resp.elapsed_ms);
             self.cloud
@@ -2610,7 +2615,12 @@ impl Tick<'_> {
             Err(CallError::Crashed(m)) => {
                 bail!("apply {at}: {m}; the change may have taken effect")
             }
-            Err(CallError::MaybeApplied(m)) if !m.starts_with(&format!("apply {at}")) => {
+            // A message that names the change already, as dform prints it
+            // or as a provider does (`apply T["A"]`), is not named twice.
+            Err(CallError::MaybeApplied(m))
+                if !m.starts_with(&format!("apply {at}"))
+                    && !m.starts_with(&format!("apply {addr}")) =>
+            {
                 bail!("apply {at}: {m}")
             }
             Err(e) => Err(anyhow!(e.clone())),

@@ -137,10 +137,11 @@ fn extern_label(l: &str) -> Option<String> {
 /// A label as [`crate::ir::label`] printed it (`T["A"].p`), when it is an
 /// extern call's ([`extern_label`]).
 fn printed_call(l: &str) -> Option<String> {
-    let (a, p) = crate::ir::parse_address(l).ok()?;
-    let col = p.unwrap_or_default();
+    let (typ, rest) = l.split_once('[')?;
+    let (inputs, col) = rest.rsplit_once("].")?;
+    let inputs = crate::syntax::resolve::unescape(inputs).ok()?;
     let col = col.trim_matches('"');
-    crate::externs::is_call_label(&a.typ, col).then(|| crate::externs::call_text(&a.typ, &a.name))
+    crate::externs::is_call_label(typ, col).then(|| crate::externs::call_text(typ, &inputs))
 }
 
 /// A label as [`crate::ir::label`] printed it (`T["A"].p`), as
@@ -2967,6 +2968,24 @@ mod tests {
             typ: t.into(),
             name: n.into(),
         }
+    }
+
+    /// An extern's answer is its call, its inputs never read as a path
+    /// (`127.0.0.1:22,ubuntu,/etc/k3s.yaml` split at its dots); a
+    /// provider's extern by its column number.
+    #[test]
+    fn an_extern_label_is_its_call() {
+        let l = crate::value::null_label("ssh.read", "127.0.0.1:22,ubuntu,/etc/k3s.yaml", "4");
+        let call = "ssh.read(\"127.0.0.1:22\", \"ubuntu\", \"/etc/k3s.yaml\")";
+        assert_eq!(label(&l), call);
+        assert_eq!(attribute_label(&l), call);
+        assert_eq!(printed_label(&crate::ir::label(&l)), call);
+        assert_eq!(waited(&BTreeSet::from([l])), [format!("{call} not yet")]);
+        let l = crate::value::null_label("aws.availability_zone", "available", "2");
+        assert_eq!(label(&l), "aws.availability_zone(\"available\")");
+        // A resource's attribute stays one.
+        let l = crate::value::null_label("db.postgres", "d", "endpoint");
+        assert_eq!(attribute_label(&l), "db.postgres d.endpoint");
     }
 
     /// R-111, R-112: an address is its type and its path, a copy's scope

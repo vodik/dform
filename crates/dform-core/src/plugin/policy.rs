@@ -134,10 +134,10 @@ pub fn describe(call: &Call) -> String {
         } else {
             format!(
                 " {}",
-                crate::ir::Address {
+                crate::report::address(&crate::ir::Address {
                     typ: typ.to_string(),
                     name: name.to_string(),
-                }
+                })
             )
         }
     };

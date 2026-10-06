@@ -293,7 +293,7 @@ mod tests {
         };
         assert_eq!(
             m,
-            "the provider slow did not answer the Apply net.vpc[\"450\"] call within 300ms \
+            "the provider slow did not answer the Apply net.vpc 450 call within 300ms \
              (its timeout); the call may have taken effect"
         );
         assert!(timed_out(&CallError::MaybeApplied(m)));

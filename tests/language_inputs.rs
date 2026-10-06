@@ -83,13 +83,14 @@ fn set_is_checked_against_the_declaration() {
 fn a_refinement_on_an_input_is_a_deny() {
     let s = scratch();
     let r = plan(&s, &["--set", "owner=ops", "--set", "replicas=9"]).failure();
+    // The plan's conflict (the bare layout), said once (R-111).
     assert!(
-        r.stderr.contains(
-            "- refinement violated ctx={\"addr\":\"\",\"at\":\"p.df:3:1\",\"constraint\":\"range(1, 5)\",\"path\":\"replicas\",\"reason\":\"9 violates range(1, 5)\",\"type\":\"input\",\"value\":9,"
-        ),
+        r.stdout
+            .contains("conflicts:\n! input[\"\"].replicas: 9 violates range(1, 5)\n"),
         "{}",
-        r.stderr
+        r.stdout
     );
+    assert!(!r.stderr.contains("ctx="), "{}", r.stderr);
 }
 
 /// An input file holds one fact per input; its values are program terms,
@@ -333,10 +334,10 @@ fn an_object_input_is_a_block_of_fields() {
     // The field's check is the leaf's refinement.
     let r = object_plan(&s, &["--set", "nodes.count=9"]).failure();
     assert!(
-        r.stderr
-            .contains("\"path\":\"nodes.count\",\"reason\":\"9 violates range(1, 3)\""),
+        r.stdout
+            .contains("\n! input[\"\"].nodes.count: 9 violates range(1, 3)\n"),
         "{}",
-        r.stderr
+        r.stdout
     );
     // `why` shows the leaf's layers: the default and the `--set`.
     let r = s

@@ -153,8 +153,8 @@ fn a_resource_rule_reading_a_stuck_helper_is_a_pending_group() {
     assert!(
         second.stderr.contains(
             "apply stopped after tick 1: tick 2 adds 1 change the plan could not name \
-             (k8s.deployment[\"dform_controller\"] on \
-             ?google.container_node_pool[\"np-us-east1-b\"].instance_group)"
+             (k8s.deployment dform_controller on \
+             google.container_node_pool np-us-east1-b.instance_group)"
         ),
         "{}",
         second.stderr

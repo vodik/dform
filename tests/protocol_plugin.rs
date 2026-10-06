@@ -34,7 +34,7 @@ fn a_provider_crash_mid_apply_fails_the_action_and_resume_finishes() {
     let r = mock(&s, &["apply", "--chaos", "crash=compute.vm[\"app\"]"]).failure();
     assert!(
         r.stderr.contains(
-            "apply compute.vm[\"app\"]: the provider fakecloud exited during the call \
+            "apply compute.vm app: the provider fakecloud exited during the call \
              (exit status: 137)"
         ),
         "{}",
@@ -44,7 +44,7 @@ fn a_provider_crash_mid_apply_fails_the_action_and_resume_finishes() {
     let r = mock(&s, &["apply"]).success();
     assert!(
         r.stdout
-            .contains("resuming the apply interrupted at tick 1; remaining: compute.vm[\"app\"]"),
+            .contains("resuming the apply interrupted at tick 1; remaining: compute.vm app"),
         "{}",
         r.stdout
     );

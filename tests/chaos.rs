@@ -70,7 +70,7 @@ fn a_create_that_timed_out_is_found_not_created_again() {
     let r = mock(&s, &["plan"]).success();
     assert!(
         r.stderr
-            .contains("resolved: net.subnet[\"a\"]: the create whose answer was lost made a"),
+            .contains("resolved: net.subnet a: the create whose answer was lost made a"),
         "{}",
         r.stderr
     );
@@ -228,7 +228,7 @@ fn chaos_names_must_be_resources_of_the_stack() {
     let r = mock(&s, &["apply", "--chaos", "fail=net.subnet[\"b\"]"]).failure();
     assert!(
         r.stderr
-            .contains(r#"net.subnet["b"] is not a resource of this stack"#),
+            .contains("net.subnet b is not a resource of this stack"),
         "{}",
         r.stderr
     );

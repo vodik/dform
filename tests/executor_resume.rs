@@ -37,7 +37,7 @@ fn apply_after_a_crash_finishes_on(backend: Backend) {
     .failure();
     assert!(
         r.stderr
-            .contains("apply compute.vm[\"app\"]: the provider fakecloud exited during the call"),
+            .contains("apply compute.vm app: the provider fakecloud exited during the call"),
         "{backend:?}: {}",
         r.stderr
     );
@@ -54,13 +54,13 @@ fn apply_after_a_crash_finishes_on(backend: Backend) {
     let r = dform_on(&s, backend, &["apply"]).success();
     assert_eq!(
         r.stdout,
-        "resuming the apply interrupted at tick 1; remaining: compute.vm[\"app\"]\n\
+        "resuming the apply interrupted at tick 1; remaining: compute.vm app\n\
          plan: 1 change (1 create) over 1 tick\n\ntick 1  1 change, applies now\n  \
          + compute.vm app  p.df:5\n      \
          subnet_id = \"net.subnet:a\"\n\n\
          apply: tick 1 now\n\
          resumed from the apply interrupted at tick 1:\n  \
-         compute.vm[\"app\"]  (retried with its idempotency key: nothing it made was found)\n\
+         compute.vm app  (retried with its idempotency key: nothing it made was found)\n\
          apply: complete\n"
     );
     let st = s.json("w.state.json");
@@ -85,7 +85,7 @@ fn apply_after_a_stop_finishes_the_remaining_actions() {
         let r = dform_on(&s, backend, &["apply", "--chaos", "stop-after=2"]).failure();
         assert!(
             r.stderr.contains(
-                "apply net.subnet[\"a\"]: dform stopped after this Apply call returned \
+                "apply net.subnet a: dform stopped after this Apply call returned \
                  (chaos stop-after)"
             ),
             "{backend:?}: {}",
@@ -116,7 +116,7 @@ fn apply_after_a_stop_finishes_the_remaining_actions() {
         let r = dform_on(&s, backend, &["apply"]).success();
         assert!(
             r.stdout.starts_with(
-                "resuming the apply interrupted at tick 1; remaining: compute.vm[\"app\"]\n"
+                "resuming the apply interrupted at tick 1; remaining: compute.vm app\n"
             ),
             "{backend:?}: {}",
             r.stdout
@@ -151,7 +151,7 @@ fn apply_stops_when_the_world_changed_under_a_remaining_action() {
     let r = mock(&s, &["apply"]).failure();
     assert!(
         r.stderr.contains(
-            "the world changed under a remaining action:\n~ net.subnet[\"a\"]\n  tags.owner: <none> -> \"someone\"\n"
+            "the world changed under a remaining action:\n~ net.subnet a\n  tags.owner: <none> -> \"someone\"\n"
         ),
         "{}",
         r.stderr

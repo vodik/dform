@@ -1277,7 +1277,7 @@ fn a_create_whose_answer_was_lost_is_found_by_its_label_and_key() {
     let name = path.rsplit('/').next().unwrap();
     assert!(
         r.stderr.contains(&format!(
-            "k8s.config_map[\"settings\"]: the create whose answer was lost made default/{name}"
+            "k8s.config_map settings: the create whose answer was lost made default/{name}"
         )),
         "{}\n{}",
         r.stdout,

@@ -149,7 +149,7 @@ fn drift_after_the_plan_is_refused() {
     let r = s.run(&["apply", "plan.json"]).failure();
     assert!(
         r.stderr.contains(
-            "compute.vm[\"app\"].db_host: the plan saw \"old.db.fake\", the world now has \"older.db.fake\""
+            "compute.vm app.db_host: the plan saw \"old.db.fake\", the world now has \"older.db.fake\""
         ),
         "{}",
         r.stderr
@@ -179,7 +179,7 @@ fn a_world_mutated_between_ticks_is_refused_at_the_boundary() {
     );
     assert!(
         r.stderr.contains(
-            "update db.postgres[\"main\"]: changed again at tick 2; the plan file ran it in tick 1"
+            "update db.postgres main: changed again at tick 2; the plan file ran it in tick 1"
         ),
         "{}",
         r.stderr

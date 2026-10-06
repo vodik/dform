@@ -1242,13 +1242,15 @@ deny(m) where deformation("pending", r, _), m = "${r} waits on a replacement"
     s.run(&["apply", "p"]).success();
     std::fs::write(&file, net.replace("10.0.0.0/16", "10.1.0.0/16")).unwrap();
     let plan = s.run(&["plan", "p"]).failure();
+    // The plan's `denied` section, each deny's message before its columns.
     let refused: Vec<String> = plan
-        .stderr
-        .split("constraint violations:\n")
+        .stdout
+        .split("\ndenied\n")
         .nth(1)
-        .unwrap_or_else(|| panic!("{}", plan.stderr))
+        .unwrap_or_else(|| panic!("{}", plan.stdout))
         .lines()
-        .filter_map(|l| l.strip_prefix("- "))
+        .take_while(|l| !l.is_empty())
+        .filter_map(|l| l.strip_prefix("  ")?.split("  ").next())
         .map(str::to_string)
         .collect();
     assert_eq!(
@@ -1332,7 +1334,10 @@ fn an_s3_deployment_is_read_with_credentials() {
     std::fs::write(&file, gone).unwrap();
     let deny = "lifecycle prevent_destroy: the plan would delete net.vpc[\"main\"]";
     let (ok, text) = dform(&["plan", "p"]);
-    assert!(!ok && text.contains(&format!("- {deny}")), "{text}");
+    assert!(
+        !ok && text.contains(&format!("\ndenied\n  {deny}")),
+        "{text}"
+    );
 
     let root = std::fs::canonicalize(&s.dir).unwrap();
     let file = root.join("stacks/p.df");

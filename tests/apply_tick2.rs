@@ -138,7 +138,7 @@ fn declining_tick_two_keeps_tick_one() {
     let r = dev(&s, &["apply", "--yes", "p.df"]).success();
     assert!(
         r.stdout.starts_with(
-            "resuming the apply interrupted at tick 1; remaining: k8s.namespace[\"ns\"]\n\
+            "resuming the apply interrupted at tick 1; remaining: k8s.namespace ns\n\
              plan: 1 change (1 create) over 1 tick\n"
         ),
         "{}",
@@ -211,7 +211,7 @@ fn the_boundary_waits_for_the_settings_then_configures() {
     .success();
     assert!(
         r.stderr
-            .contains("waiting on db.postgres[\"server\"].endpoint since "),
+            .contains("waiting on db.postgres server.endpoint since "),
         "{}",
         r.stderr
     );
@@ -256,7 +256,7 @@ fn without_a_wait_the_apply_stops_naming_the_provider() {
     assert!(
         r.stderr.contains(
             "apply stopped at tick 2: nothing definite to apply, still waiting on \
-             ?db.postgres[\"server\"].endpoint provider k8s (kubeconfig from kc)"
+             db.postgres server.endpoint, provider k8s (kubeconfig from kc)"
         ),
         "{}",
         r.stderr

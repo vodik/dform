@@ -2390,7 +2390,7 @@ fn run_with(
         Cmd::Show { addr } => {
             let addr = ir::parse_resource_address(&addr)?;
             let Some(r) = resources.iter().find(|r| r.addr == addr) else {
-                bail!("no resource {addr} in this deployment");
+                bail!("no resource {} in this deployment", report::address(&addr));
             };
             let json = serde_json::to_string_pretty(&redact.json(&r.attrs))?;
             println!("{}", json);
@@ -2597,7 +2597,10 @@ fn run_with(
                 .unwrap_or(crate::progress::WAIT);
             for addr in chaos.addresses() {
                 if !resources.iter().any(|r| &r.addr == addr) && st.get(addr).is_none() {
-                    bail!("--chaos: {addr} is not a resource of this stack");
+                    bail!(
+                        "--chaos: {} is not a resource of this stack",
+                        report::address(addr)
+                    );
                 }
             }
             // One apply at a time per deployment; the lock is held until the
@@ -2667,7 +2670,7 @@ fn run_with(
                     .remaining
                     .keys()
                     .filter_map(|k| state::parse_key(k))
-                    .map(|a| a.to_string())
+                    .map(|a| report::address(&a))
                     .collect();
                 println!(
                     "resuming the apply interrupted at tick {}; remaining: {}",

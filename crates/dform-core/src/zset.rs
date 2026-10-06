@@ -1559,11 +1559,11 @@ pub mod file {
                 current.iter().map(|e| (key(e), e)).collect();
             let mut out = Vec::new();
             for (k, c) in &now {
-                let at = crate::ir::Address {
+                let addr = crate::ir::Address {
                     typ: k.0.clone(),
                     name: k.1.clone(),
-                }
-                .to_string();
+                };
+                let at = report::address(&addr);
                 // The object a create_before_destroy replacement deposed
                 // is deleted the tick after.
                 let deposed = c.action == "delete_deposed"
@@ -1597,17 +1597,17 @@ pub mod file {
                     ));
                     continue;
                 }
-                out.extend(leaf_differences(&at, s, c));
+                out.extend(leaf_differences(&addr, s, c));
             }
             for (k, s) in &saved {
                 // Deformations of earlier ticks have run.
                 if s.tick.is_some_and(|t| t < tick) || now.contains_key(k) {
                     continue;
                 }
-                let at = crate::ir::Address {
+                let at = report::address(&crate::ir::Address {
                     typ: k.0.clone(),
                     name: k.1.clone(),
-                };
+                });
                 out.push(format!(
                     "{} {at}: in the plan file, no longer a change",
                     s.action
@@ -1621,7 +1621,7 @@ pub mod file {
         matches!(v, Json::Object(m) if m.len() == 2 && m.contains_key("null") && m.contains_key("class"))
     }
 
-    fn leaf_differences(at: &str, saved: &Entry, now: &Entry) -> Vec<String> {
+    fn leaf_differences(at: &crate::ir::Address, saved: &Entry, now: &Entry) -> Vec<String> {
         let s: BTreeMap<&str, &Leaf> = saved.changes.iter().map(|l| (l.path.as_str(), l)).collect();
         let n: BTreeMap<&str, &Leaf> = now.changes.iter().map(|l| (l.path.as_str(), l)).collect();
         // A sensitive value by its label and the head of its digest.
@@ -1635,8 +1635,8 @@ pub mod file {
             }
             _ => serde_json::to_string(v).unwrap_or_default(),
         };
-        // The leaf `p` of the address `at`: `T["A"].p`.
-        let leaf = |p: &str| format!("{at}{}", crate::ir::path_suffix(p));
+        // The leaf `p` of the address `at` as a diagnostic names it (R-111).
+        let leaf = |p: &str| report::attribute(at, p);
         let mut out = Vec::new();
         for (p, l) in &n {
             let at = leaf(p);
