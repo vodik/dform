@@ -1730,10 +1730,7 @@ pub fn rewrite_computed_refs(
             let mut to = Vec::new();
             references(&head.args[3], &mut to);
             for (typ, addr) in to {
-                wants.push(atom(
-                    "attr",
-                    vec![typ, addr, str_term(crate::schema::IDENTITY), Term::Wildcard],
-                ));
+                wants.push(identity_read(typ, addr, schema));
             }
         }
         if r.body.is_empty() && head_reads.is_empty() && wants.is_empty() {
@@ -1775,6 +1772,26 @@ pub fn rewrite_computed_refs(
     }
     out_rules.extend(dangling);
     (out_rules, out_facts)
+}
+
+/// The read a reference to the resource `(typ, addr)` joins: its identity
+/// `attr(T, A, id, _)`, a cell minted for every wanted resource, whose
+/// aggregate is stuck while the resource may still derive. A type need not
+/// declare an `id` (`k8s.namespace`, whose reference a copy's input takes,
+/// R-120): then the top of its first computed attribute, minted the same
+/// way (`metadata`); a type with none, its `want`.
+fn identity_read(typ: Term, addr: Term, schema: &Schema) -> Atom {
+    let cell = match &typ {
+        Term::Val(Value::Str(t)) if schema.attr(t, crate::schema::IDENTITY).is_none() => schema
+            .computed_of(t)
+            .first()
+            .map(|(p, _)| p.split('.').next().unwrap_or(p).to_string()),
+        _ => Some(crate::schema::IDENTITY.to_string()),
+    };
+    match cell {
+        Some(p) => atom("attr", vec![typ, addr, str_term(&p), Term::Wildcard]),
+        None => atom("want", vec![typ, addr]),
+    }
 }
 
 /// `deny("ref to an address no rule wants", {type, addr, path, from, at})
