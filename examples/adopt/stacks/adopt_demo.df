@@ -6,7 +6,7 @@
 input env: enum("staging", "prod") = "staging"
 
 # The mock's built-in fake schema.
-provider fake
+use fake
 
 # network.df's input, per environment.
 set { network.vpc_net = inet("10.10.0.0/16") } where env == "staging"

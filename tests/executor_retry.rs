@@ -9,7 +9,7 @@ const PROG: &str = r#"
 
 resource net.vpc main { cidr = "10.0.0.0/16" }
 resource net.subnet a { vpc_id = ref(net.vpc, "main", "id"), tier = "web" }
-provider fake
+use fake
 "#;
 
 #[test]
@@ -72,7 +72,7 @@ fn a_boundary_refresh_retries() {
     );
     s.write(
         "p.df",
-        "\nresource db.postgres main { size = 1 }\nresource compute.vm app { db_host = ref(db.postgres, \"main\", \"endpoint\") }\nprovider fake\n",
+        "\nresource db.postgres main { size = 1 }\nresource compute.vm app { db_host = ref(db.postgres, \"main\", \"endpoint\") }\nuse fake\n",
     );
     let r = mock(
         &s,

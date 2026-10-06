@@ -119,7 +119,7 @@ resource k8s.deployment api {
   spec.selector.matchLabels = {app: "api"},
   spec.template.spec.containers = [ {name: "app", image: "api:1"} ]
 }
-provider fake
+use fake
 "#;
     s.write("p.df", one);
     s.run(&common::on(
@@ -168,7 +168,7 @@ resource net.vpc two @default { cidr = "10.0.0.0/16" }
 set two.cidr = "10.9.0.0/16" @default where ok(1)
 set two.cidr = "10.3.0.0/16" where ok(1)
 ok(1)
-provider fake
+use fake
 "#,
     );
     let r = s
@@ -206,7 +206,7 @@ resource net.vpc two { cidr = "10.0.0.0/16" }
 set two.cidr = "10.9.0.0/16" where ok(1)
 resource net.vpc three { cidr = "10.0.0.0/16" }
 ok(1)
-provider fake
+use fake
 "#,
     );
     let r = s
@@ -241,7 +241,7 @@ fn a_conflict_at_a_sensitive_path_is_redacted_in_the_plan() {
 resource leaky.vault v { password = "VAULT-SECRET-A" }
 set v.password = "VAULT-SECRET-B" where ok(1)
 ok(1)
-provider fake
+use fake
 "#,
     );
     let schema = repo().join("tests/fixtures/providers/leaky/schema.df");
@@ -269,7 +269,7 @@ provider fake
 #[test]
 fn a_denied_replace_is_a_section() {
     let s = Scratch::new("sections-denied");
-    let net = "\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\nprovider fake\n";
+    let net = "\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\nuse fake\n";
     s.write("p.df", net);
     s.run(&common::on("p.df", &["--world", "w.json"], &["apply"]))
         .success();
@@ -420,7 +420,7 @@ fn a_multi_line_string_prints_as_its_literal_in_plan_and_query() {
     let s = Scratch::new("sections-multiline");
     s.write(
         "p.df",
-        "\nprovider fake\nresource net.vpc main {\n  cidr = \"10.0.0.0/16\"\n  \
+        "\nuse fake\nresource net.vpc main {\n  cidr = \"10.0.0.0/16\"\n  \
          note = \"one\\ntwo \\\"three\\\" $${four}\"\n}\n",
     );
     let lit = r#""one\ntwo \"three\" $${four}""#;

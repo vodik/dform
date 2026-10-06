@@ -5,7 +5,8 @@ crates/dform-mock/schemas/aws-mock.df
 # Mock AWS provider in the shape of the Terraform AWS provider (v5 schema),
 # twelve resource types, written by hand from the provider's schema. A type is
 # Terraform's under the provider's name (`aws_vpc` is `aws.vpc`, R-36); the
-# data source aws.availability_zone is answered from aws-mock.externs.df. It
+# data source aws.availability_zone, declared below (`extern_decl`, R-106),
+# is answered from aws-mock.externs.df. It
 # exists to make two shapes concrete for the phase 2 decisions:
 #
 #   - Optional+Computed (optional_computed): the program may set the attribute;
@@ -26,6 +27,10 @@ crates/dform-mock/schemas/aws-mock.df
 # attribute that holds another object's id keeps the Terraform name and is
 # typed `ref(T)`: the program gives it the resource (`vpc_id = main`), and
 # the provider its id (R-43).
+
+# The data source: a program reads it with no `extern` line (R-106). Its
+# index is a stable ordinal of the names the provider defines.
+extern_decl("aws.availability_zone", "+state, -name, -index: int")
 
 # aws.vpc
 type_provider("aws.vpc", "aws")
@@ -490,6 +495,17 @@ type_doc(
   (comment)
   (comment)
   (comment)
+  (comment)
+  (comment)
+  (comment)
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (string
+          (string_content))
+        (string
+          (string_content)))))
   (comment)
   (fact
     (call

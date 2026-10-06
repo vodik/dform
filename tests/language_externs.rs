@@ -7,8 +7,8 @@ mod common;
 use common::{Scratch, repo};
 
 const P: &str = r#"
-provider file
-provider fake
+use file
+use fake
 extern kv.password(+name, -value)
 extern kv.token(+name, -value)
 dash("dash.json")

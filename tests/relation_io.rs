@@ -21,7 +21,7 @@ fn sources_and_stated_rows_are_one_relation() {
     s.write(
         "p.df",
         "\ninput r from csv(\"a.csv\")\ninput r from yaml(\"b.yaml\").rows\n\
-         decl r(x: string)\nr(\"c\")\nprovider fake\n",
+         decl r(x: string)\nr(\"c\")\nuse fake\n",
     );
     let r = s.run(&["query", "r(x)", "p.df"]).success();
     for x in ["\"a\"", "\"b\"", "\"c\""] {
@@ -59,7 +59,7 @@ fn a_components_relation_input_is_given_by_rows_and_by_from() {
              zone from csv(\"z.csv\")\n}}\n\
              instance subnets green {{\n  cidr = \"10.1.0.0/16\"\n  zone(\"x\", 9)\n}} \
              where env == \"prod\"\n\
-             provider fake\n"
+             use fake\n"
         ),
     );
     let r = plan(&s, "p.df").success();
@@ -127,15 +127,12 @@ fn a_used_modules_relation_input_is_its_blocks() {
     s.write(
         "p.df",
         "\nuse zones {\n  zone(\"a\", 0)\n  zone(z, 1) where z = \"b\"\n}\n\
-         resource net.vpc main {\n  cidr = \"10.0.0.0/16\"\n  n = zones.count\n}\nprovider fake\n",
+         resource net.vpc main {\n  cidr = \"10.0.0.0/16\"\n  n = zones.count\n}\nuse fake\n",
     );
     let r = plan(&s, "p.df").success();
     assert!(r.stdout.contains("  n = 2\n"), "{}", r.stdout);
 
-    s.write(
-        "p.df",
-        "\ninput zone\ndecl zone(n: string)\nprovider fake\n",
-    );
+    s.write("p.df", "\ninput zone\ndecl zone(n: string)\nuse fake\n");
     let r = plan(&s, "p.df").failure();
     assert!(
         r.stderr
@@ -147,7 +144,7 @@ fn a_used_modules_relation_input_is_its_blocks() {
         "zones.df",
         "\ninput zone from csv(\"z.csv\")\ndecl zone(name: string)\n",
     );
-    s.write("p.df", "\nuse zones\nprovider fake\n");
+    s.write("p.df", "\nuse zones\nuse fake\n");
     let r = plan(&s, "p.df").failure();
     assert!(
         r.stderr
@@ -193,7 +190,7 @@ fn a_relation_output_is_read_from_a_copy_and_from_every_copy() {
              seen(t, s) where vnet[t].subnet(s, _)\n\
              resource net.vpc tally {{\n  cidr = \"10.9.0.0/16\"\n  n\n  info = green.info\n}} \
              where n = list.len([ s | seen(_, s) ])\n\
-             provider fake\n"
+             use fake\n"
         ),
     );
     let r = plan(&s, "p.df").success();
@@ -234,12 +231,12 @@ fn a_stacks_relation_output_is_read_across_stacks() {
     let s = Scratch::project("rel-io-stacks");
     s.write(
         "stacks/zones.df",
-        "\nkey env: string = \"dev\"\nprovider fake\n\
+        "\nkey env: string = \"dev\"\nuse fake\n\
          zone(\"${env}-a\", 0)\nzone(\"${env}-b\", 1)\noutput zone\n",
     );
     s.write(
         "stacks/app.df",
-        "\nprovider fake\nuse stacks.zones\n\
+        "\nuse fake\nuse stacks.zones\n\
          resource compute.vm \"vm-${z}\" {\n  size = n\n} where zones[env=\"prod\"].zone(z, n)\n",
     );
     s.run(&["apply", "zones", "env=prod"]).success();

@@ -7,7 +7,7 @@ use common::Scratch;
 
 const APP: &str = r#"
 key env: enum("staging", "prod") = "staging"
-provider fake
+use fake
 resource net.vpc main { cidr = "10.0.0.0/16", tags = { env } }
 "#;
 

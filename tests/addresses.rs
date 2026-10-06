@@ -20,7 +20,7 @@ fn k3s(name: &str) -> Scratch {
     );
     s.write(
         "stacks/main.df",
-        "\n\nprovider fake\n\nuse k3s\n\n\
+        "\n\nuse fake\n\nuse k3s\n\n\
          resource net.subnet s {\n  cidr = k3s.admin.cidr\n}\n",
     );
     s
@@ -99,7 +99,7 @@ fn a_nested_copys_resource_is_every_scope_in_front() {
     s.write(
         "p.df",
         "component spoke {\n  resource net.vpc vpc {\n    cidr = \"10.1.0.0/16\"\n  }\n}\n\
-         component pair {\n  instance spoke left\n}\ninstance pair edge\nprovider fake\n\
+         component pair {\n  instance spoke left\n}\ninstance pair edge\nuse fake\n\
          resource net.subnet s {\n  cidr = net.vpc[\"edge.left.vpc\"].cidr\n}\n",
     );
     let r = s.run(&["plan", "--why=none", "p.df"]).success();
@@ -118,7 +118,7 @@ fn a_slash_in_an_address_is_an_error_naming_the_path() {
     let s = Scratch::new("addresses-slash");
     s.write(
         "p.df",
-        "provider fake\nresource net.vpc \"a/b\" {\n  cidr = \"10.1.0.0/16\"\n}\n\
+        "use fake\nresource net.vpc \"a/b\" {\n  cidr = \"10.1.0.0/16\"\n}\n\
          p(c) where c = net.vpc[\"blue/vpc\"].cidr\n\
          q(c) where c = net.vpc[\"\\\"a/b\\\"\"].cidr\n",
     );

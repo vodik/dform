@@ -4,8 +4,8 @@
 input cloud: enum("aws", "gcp") = "aws"
 input gcp_project: string = "p" where cloud == "gcp"
 
-provider fake { region = "eu-west-1" } where cloud == "aws"
-provider fake { region = "europe-west1" } where cloud == "gcp"
+use fake { region = "eu-west-1" } where cloud == "aws"
+use fake { region = "europe-west1" } where cloud == "gcp"
 
 type conn = string
 

@@ -2,7 +2,7 @@
 # in a recursive rule, never stated by the program. What binds a + argument
 # may be written after the extern (R-10): `reach(a, b)` below is asked once
 # `start(a)` binds `a`.
-provider file {}
+use file {}
 extern next.hop(+from, -to)
 
 paths("a.txt")

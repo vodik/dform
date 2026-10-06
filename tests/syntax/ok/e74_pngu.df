@@ -3,9 +3,9 @@
 input env: enum("dev", "stg", "prod") = "dev"
 decl peering(env: symbol, name: string, peer_network: string)
 
-provider google { source = "registry.dform.dev/google", version = ">=6" }
-provider k8s { source = "registry.dform.dev/k8s", version = ">=3" }
-provider file { source = "registry.dform.dev/file" }
+use google { source = "registry.dform.dev/google", version = ">=6" }
+use k8s { source = "registry.dform.dev/k8s", version = ">=3" }
+use file { source = "registry.dform.dev/file" }
 
 ########################################
 # Settings: base layer plus per-environment overrides
@@ -229,7 +229,7 @@ deny("two_zones", "cluster must be in at least two zones", { cluster: "pngu" }) 
 # Monitoring: the dashboard JSON is a file extern, hashed, with provenance
 ########################################
 
-provider file
+use file
 
 resource google.monitoring_dashboard pngu {
   project = id

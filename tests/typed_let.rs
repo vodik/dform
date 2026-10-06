@@ -12,7 +12,7 @@ use dform::transform;
 /// A vpc and a subnet both named `main`, then `rest`.
 fn two_mains(rest: &str) -> String {
     format!(
-        "provider fake\n\n\
+        "use fake\n\n\
          resource net.vpc main {{ cidr = \"10.0.0.0/16\" }}\n\
          resource net.subnet main {{\n  vpc = main\n  cidr = \"10.0.1.0/24\"\n}}\n{rest}"
     )

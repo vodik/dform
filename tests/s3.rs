@@ -693,7 +693,7 @@ fn handover_moves_an_s3_deployment_between_prefixes_and_to_local() {
 }
 
 const PERSISTED: &str = r#"
-provider fake
+use fake
 extern kv.password(+name, -value)
 resource db.user app {
   password = pw
@@ -735,14 +735,14 @@ fn taint_forgets_an_answer_in_the_bucket() {
 }
 
 const NET: &str = r#"
-provider fake
+use fake
 resource net.vpc main { cidr = "10.0.0.0/16" }
 output vpc_cidr = "10.0.0.0/16"
 output vpc_id = ref(net.vpc, "main", "id")
 "#;
 
 const APP: &str = r#"
-provider fake
+use fake
 use stacks.net as network
 resource net.subnet a {
   cidr = network.vpc_cidr
@@ -870,7 +870,7 @@ fn a_server_that_ignores_conditions_is_refused() {
     let p = Project::of(&t, "lax-approval", |s| {
         s.write(
             "stacks/app.df",
-            "\nprovider fake\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\nrequires_approval(r, \"every change\") where deformation(_, r, _)\n",
+            "\nuse fake\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\nrequires_approval(r, \"every change\") where deformation(_, r, _)\n",
         );
     });
     let r = p.run(&["plan", "app"]).failure();
@@ -900,7 +900,7 @@ fn a_project_reads_another_projects_outputs_through_its_s3_backend() {
                 "stacks/cluster.df",
                 "\n\
                  key env: string = \"dev\"\n\
-                 provider fake\n\
+                 use fake\n\
                  output endpoint = \"https://${env}.cluster.example\"\n\
                  ",
             );
@@ -917,7 +917,7 @@ fn a_project_reads_another_projects_outputs_through_its_s3_backend() {
         app.write(
             "stacks/app.df",
             "\n\
-             provider fake\n\
+             use fake\n\
              use platform.stacks.cluster\n\
              resource net.vpc edge {\n\
                name = e\n\

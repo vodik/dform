@@ -18,7 +18,7 @@ resource net.vpc main { cidr = "10.0.0.0/16" }
 resource net.vpc_peering p { vpc_id = ref(net.vpc, "main", "id") }
 resource net.route r { peering_id = ref(net.vpc_peering, "p", "id") }
 resource compute.vm keep { size = 1 }
-provider fake
+use fake
 "#,
     );
     mock(&s, &["apply"]).success();
@@ -28,7 +28,7 @@ provider fake
     );
     s.write(
         "p.df",
-        "\nresource compute.vm keep { size = 1 }\nprovider fake\n",
+        "\nresource compute.vm keep { size = 1 }\nuse fake\n",
     );
     let r = mock(&s, &["apply"]).success();
     let order: Vec<&str> = r.stdout.lines().filter(|l| l.starts_with("  - ")).collect();
@@ -57,7 +57,7 @@ const NET: &str = r#"
 
 resource net.vpc main { cidr = "10.0.0.0/16" }
 resource net.subnet a { vpc_id = ref(net.vpc, "main", "id"), tier = "web" }
-provider fake
+use fake
 "#;
 
 /// A force_new change is a replace; by default the old object goes first

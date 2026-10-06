@@ -29,7 +29,7 @@ examples/tour/stacks/tour.df
 key env: enum("dev", "prod") = "dev"
 input public_db: bool = false
 input database { backup_days: int = 1, multi_az: bool = false }
-provider fake
+use fake
 
 # 1. One resource
 #
@@ -37,12 +37,12 @@ provider fake
 # This one is a network (a VPC) with an address range.
 #
 #   $ dform plan
-#   plan: 19 deformations (19 create), 1 pending
-#   + net.vpc["main"]
+#   plan: 19 changes (19 create) over 1 tick
+#   + net.vpc main
 #     cidr = "10.0.0.0/16"
 #
 # The plan lists everything in this file, so it is long; this section is
-# its `net.vpc["main"]` (section 10 is the pending one). `+` is a create: the fake cloud is empty, so
+# its `net.vpc main` (section 10 is the pending one). `+` is a create: the fake cloud is empty, so
 # everything is new. As in Terraform, the program says what should exist
 # and the plan is the difference between that and the world. (The plan's
 # first line, `deployment: tour[env=dev]`, is section 4.)
@@ -53,13 +53,13 @@ resource net.vpc main { cidr = inet("10.0.0.0/16") }
 #
 # A subnet lives in a network, so it takes the network: `vpc = main`. The
 # network does not exist until it is made. Terraform prints `(known after
-# apply)`; dform prints which resource the subnet is waiting for:
+# apply)`; dform prints the resource the subnet reads:
 #
-#   + net.subnet["public"]
-#     vpc = ?net.vpc["main"]
+#   + net.subnet public
+#     vpc = main
 #
-# `?` marks an unknown. Because the subnet refers to the network, apply
-# makes the network first, and gives the cloud its id. Apply prints the
+# Because the subnet refers to the network, apply makes the network
+# first, and gives the cloud its id. Apply prints the
 # plan and asks before it changes anything:
 #
 #   $ dform apply
@@ -69,14 +69,14 @@ resource net.vpc main { cidr = inet("10.0.0.0/16") }
 # section 10 is why.) The unknown is now the network, which exists:
 #
 #   $ dform query 'net.subnet["public"].vpc'
-#   net.vpc["main"]
+#   net.vpc main
 #
 # Plan again, and there is nothing to do:
 #
 #   $ dform plan
-#   stack tour is undeformed
+#   stack tour is up to date
 #
-# Undeformed means the world matches the program.
+# Up to date means the world matches the program.
 
 resource net.subnet public { vpc = main, cidr = "10.0.0.0/24", visibility = "public" }
 
@@ -128,7 +128,7 @@ resource net.subnet "private-${z}" {
 #
 #   $ dform plan tour env=prod
 #   deployment: tour[env=prod]
-#   + db.postgres["orders"]
+#   + db.postgres orders
 #     backup_days = 14
 #     multi_az = true
 #
@@ -162,8 +162,8 @@ resource db.postgres orders {
 # database, and it does:
 #
 #   $ dform plan --set public_db=true
-#   ~ db.postgres["orders"]
-#     public: false -> true
+#   ~ db.postgres orders
+#     public: false → true
 #   - a database must not be public ctx={"database":"orders"}
 #   Error: blocked by constraints
 #
@@ -180,13 +180,13 @@ deny "a database must not be public" { database: pg } where pg in db.postgres, p
 # Any value dform works out can be asked where it came from. The network
 # has a tag its block does not write:
 #
-#   $ dform why 'net.vpc["main"].tags.team'
-#   net.vpc["main"].tags = {team: "shop"}
+#   $ dform why 'net.vpc main.tags.team'
+#   net.vpc main.tags = {team: "shop"}
 #     merged from 1 contribution
 #     └─ {team: "shop"}
 #          stacks/tour.df:170  set r.tags = { team: "shop" } where r in resource
-#          with r = net.vpc["main"]
-#          └─ net.vpc["main"]   stacks/tour.df:46
+#          with r = net.vpc main
+#          └─ net.vpc main   stacks/tour.df:46
 #
 # Read it from the top: the tag was added by the statement at line 181 of
 # this file (section 5's), because the network exists, which line 48 says. The
@@ -198,7 +198,7 @@ deny "a database must not be public" { database: pg } where pg in db.postgres, p
 # A component is a block of resources with named inputs, made once per
 # `instance`, as Terraform's modules are. Below, a network like sections 1
 # to 3's is made twice, blue and green; a copy's resources are named for
-# their instance (`net.vpc["blue.vpc"]`).
+# their instance (`net.vpc blue.vpc`).
 #
 # Two things differ from Terraform. A copy's resources are not hidden
 # behind its outputs: section 5's tag rule reached them, and section 4's
@@ -238,12 +238,12 @@ instance network green { cidr = "10.2.0.0/16" }
 # `spoke` lists them, and `network[t].vpc` reads instance `t`'s output,
 # its vpc's address. `network_of` names every network, the hub's and the
 # spokes'. The peering rule joins them: one peering per spoke, between two
-# networks still unknown:
+# networks not made yet:
 #
 #   $ dform plan tour env=prod
-#   + net.vpc_peering["main-blue"]
-#     accepter_vpc = ?net.vpc["blue.vpc"]
-#     requester_vpc = ?net.vpc["main"]
+#   + net.vpc_peering main-blue
+#     accepter_vpc = blue.vpc
+#     requester_vpc = main
 #
 # A third spoke is an instance and a `spoke` line: its peering, and the
 # routes of section 9, follow.
@@ -300,15 +300,17 @@ resource net.route "${a}-to-${b}" { from = a, to = b, destination = dest } where
 # plans it, and says what it waits for:
 #
 #   $ dform plan tour env=prod
-#   ? iam.policy[?] x unknown, on ?db.postgres["orders"].endpoint, resolves after tick 1
+#   later   changes this plan cannot count yet
+#     iam.policy "connect-${host}"
+#     waits on orders.endpoint
 #
 # Apply runs in ticks: the first makes everything it can, then dform
 # plans again with what it learned, prints the second tick's plan with
 # the policy's real name, and asks again before making it:
 #
 #   $ dform apply tour env=prod
-#   tick 2:
-#   + iam.policy["\"connect-orders.db.fake\""]
+#   tick 2  1 change, now that tick 1 reported
+#   + iam.policy "connect-orders.db.fake"
 #   apply: complete
 #
 # Nobody approves a count of "unknown". With `--yes`, nobody reads the
@@ -316,7 +318,7 @@ resource net.route "${a}-to-${b}" { from = a, to = b, destination = dest } where
 # policy from a plan that names it.
 #
 #   $ dform plan tour env=prod
-#   stack tour is undeformed
+#   stack tour is up to date
 
 resource iam.policy "connect-${host}" {
   statements = [{ action: "db.connect", resource: host }]
@@ -402,8 +404,9 @@ resource iam.policy "connect-${host}" {
           (dotted_name
             (identifier)))
         (false))))
-  (provider
-    (identifier))
+  (use
+    (dotted_name
+      (identifier)))
   (comment)
   (comment)
   (comment)
@@ -1047,6 +1050,8 @@ resource iam.policy "connect-${host}" {
                 (identifier))
               (identifier))
             (identifier))))))
+  (comment)
+  (comment)
   (comment)
   (comment)
   (comment)

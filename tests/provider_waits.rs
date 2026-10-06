@@ -11,11 +11,11 @@ use common::{Run, Scratch};
 /// The k3s shape of ~/src/ovh-infra: the kubeconfig is read from the
 /// server once it is up; the Traefik module's objects are the cluster's.
 const STACK: &str = r#"
-provider fake
-provider ssh
+use fake
+use ssh
 resource db.postgres server { name = "server" }
 let raw = ssh.read(server.endpoint, "ubuntu", "/etc/rancher/k3s/k3s.yaml")
-provider k8s { source = "./providers/k8s", kubeconfig = raw }
+use k8s { source = "./providers/k8s", kubeconfig = raw }
 use traefik
 "#;
 

@@ -1,0 +1,208 @@
+=========================
+tests/syntax/ok/guards.df
+=========================
+
+# Guarded declarations and component signatures (R-104): a name declared
+# more than once in a scope, each under a clause, and a component checked
+# against the inputs and outputs a signature declares.
+input cloud: enum("aws", "gcp") = "aws"
+input gcp_project: string = "p" where cloud == "gcp"
+
+use fake { region = "eu-west-1" } where cloud == "aws"
+use fake { region = "europe-west1" } where cloud == "gcp"
+
+type conn = string
+
+type database = component {
+  input name: string
+  output conn: conn
+}
+
+component pg_aws: database {
+  input name: string
+  input size: int = 1
+  output conn: conn = "aws:${name}"
+}
+
+component pg_gcp: database {
+  input name: string
+  output conn: conn = "gcp:${gcp_project}/${name}"
+}
+
+instance pg_aws store { name = "a" } where cloud == "aws"
+instance pg_gcp store { name = "b" } where cloud == "gcp"
+
+resource net.vpc main { name = store.conn }
+
+---
+
+(source_file
+  (comment)
+  (comment)
+  (comment)
+  (input
+    (identifier)
+    (type
+      (dotted_name
+        (identifier))
+      (string
+        (string_content))
+      (string
+        (string_content)))
+    (string
+      (string_content)))
+  (input
+    (identifier)
+    (type
+      (dotted_name
+        (identifier)))
+    (string
+      (string_content))
+    (clause
+      (body
+        (comparison
+          (identifier)
+          (string
+            (string_content))))))
+  (use
+    (dotted_name
+      (identifier))
+    (block
+      (field
+        (block_path
+          (identifier))
+        (string
+          (string_content))))
+    (clause
+      (body
+        (comparison
+          (identifier)
+          (string
+            (string_content))))))
+  (use
+    (dotted_name
+      (identifier))
+    (block
+      (field
+        (block_path
+          (identifier))
+        (string
+          (string_content))))
+    (clause
+      (body
+        (comparison
+          (identifier)
+          (string
+            (string_content))))))
+  (type_alias
+    (identifier)
+    (type
+      (dotted_name
+        (identifier))))
+  (type_alias
+    (identifier)
+    (signature
+      (statement_block
+        (input
+          (identifier)
+          (type
+            (dotted_name
+              (identifier))))
+        (output
+          (identifier)
+          (type
+            (dotted_name
+              (identifier)))))))
+  (component
+    (identifier)
+    (type
+      (dotted_name
+        (identifier)))
+    (statement_block
+      (input
+        (identifier)
+        (type
+          (dotted_name
+            (identifier))))
+      (input
+        (identifier)
+        (type
+          (dotted_name
+            (identifier)))
+        (integer))
+      (output
+        (identifier)
+        (type
+          (dotted_name
+            (identifier)))
+        (string
+          (string_content)
+          (interpolation
+            (identifier))))))
+  (component
+    (identifier)
+    (type
+      (dotted_name
+        (identifier)))
+    (statement_block
+      (input
+        (identifier)
+        (type
+          (dotted_name
+            (identifier))))
+      (output
+        (identifier)
+        (type
+          (dotted_name
+            (identifier)))
+        (string
+          (string_content)
+          (interpolation
+            (identifier))
+          (string_content)
+          (interpolation
+            (identifier))))))
+  (instance
+    (dotted_name
+      (identifier))
+    (identifier)
+    (block
+      (field
+        (block_path
+          (identifier))
+        (string
+          (string_content))))
+    (clause
+      (body
+        (comparison
+          (identifier)
+          (string
+            (string_content))))))
+  (instance
+    (dotted_name
+      (identifier))
+    (identifier)
+    (block
+      (field
+        (block_path
+          (identifier))
+        (string
+          (string_content))))
+    (clause
+      (body
+        (comparison
+          (identifier)
+          (string
+            (string_content))))))
+  (resource
+    (dotted_name
+      (identifier)
+      (identifier))
+    (identifier)
+    (block
+      (field
+        (block_path
+          (identifier))
+        (member_expression
+          (identifier)
+          (identifier))))))

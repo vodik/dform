@@ -7,7 +7,7 @@ const PROG: &str = r#"
 
 resource net.vpc main { cidr = "10.0.0.0/16" }
 resource net.subnet a { vpc = main, cidr = "10.0.1.0/24" }
-provider fake
+use fake
 "#;
 
 fn stack(name: &str) -> Scratch {
@@ -96,7 +96,7 @@ fn a_timed_out_create_the_program_dropped_is_deleted() {
     mock(&s, &["apply", "--chaos", "timeout=net.subnet[\"a\"]"]).failure();
     s.write(
         "p.df",
-        "\n\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\nprovider fake\n",
+        "\n\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\nuse fake\n",
     );
     let r = mock(&s, &["apply"]).success();
     assert!(r.stdout.contains("- net.subnet a"), "{}", r.stdout);

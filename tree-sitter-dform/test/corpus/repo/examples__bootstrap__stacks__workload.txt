@@ -32,7 +32,7 @@ use data.approvals
 approve(t, a) where approvals.approve(t, a)
 approval(t) where approvals.approval(t)
 
-provider k8s
+use k8s
 
 resource k8s.namespace web { metadata.name = "web" }
 
@@ -150,8 +150,9 @@ requires_approval(d, "a prod rollout") where {
             (identifier))
           (arguments
             (identifier))))))
-  (provider
-    (identifier))
+  (use
+    (dotted_name
+      (identifier)))
   (resource
     (dotted_name
       (identifier)

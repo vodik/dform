@@ -5,4 +5,4 @@ resource net.vpc x { peer = p } where arg(net.subnet, "y", "name", p)
 
 resource net.subnet y { name = q } where arg(net.vpc, "x", "peer", q)
 
-provider fake
+use fake

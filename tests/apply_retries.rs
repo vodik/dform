@@ -7,7 +7,7 @@ mod common;
 use common::{BACKENDS, Backend, Scratch};
 
 const PROG: &str = r#"
-provider fake
+use fake
 resource net.vpc main { cidr = "10.0.0.0/16" }
 resource net.subnet a { vpc_id = ref(main), cidr = "10.0.1.0/24" }
 "#;

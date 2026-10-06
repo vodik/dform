@@ -351,12 +351,12 @@ pre-release and not migrated.
 
 Types are names of the core (`net.vpc`, `aws.vpc`, `k8s.deployment`).
 A provider's types are `provider.type` (R-36): the provider's name is
-their namespace, so `provider aws` serves `aws.vpc` and `aws.s3_bucket`,
-`provider k8s` serves `k8s.deployment`, and a bridged Terraform type
+their namespace, so `use aws` serves `aws.vpc` and `aws.s3_bucket`,
+`use k8s` serves `k8s.deployment`, and a bridged Terraform type
 drops its prefix's underscore (`google_compute_subnetwork` is
 `google.compute_subnetwork`) while its attributes keep their names. A
 type no provider of the stack serves is a plan error that names the
-provider and the statement to add (`provider aws`); `dform provider
+provider and the statement to add (`use aws`); `dform provider
 check` refuses a provider whose handshake name is not its types'
 namespace. The fake cloud of the examples is the exception: one mock
 playing several made-up namespaces (`net`, `compute`, `db`, `iam`).
@@ -986,7 +986,7 @@ component signature ("Component signatures") is what makes them agree.
 
 - `use m as n where B` beside `use m2 as n where B2`: the module that
   holds, `n.x` its item.
-- `provider aws { .. } where B`: its settings, its account check and its
+- `use aws { .. } where B`: its settings, its account check and its
   start hold only while `B` does. The block's `provider_config` is
   derived under the clause, with no settings too, so the provider serves
   nothing until it arrives (the deferred configuration a provider block
@@ -1126,7 +1126,7 @@ one it does not is passed to Configure as written. Each is a term, read like a r
 lowers to one rule for them all, plus one for `expect_account`:
 
 ```
-provider p { k1 = t1, k2 = t2 }    provider_config("p", { k1: t1', k2: t2' }) :- reads
+use p { k1 = t1, k2 = t2 }    provider_config("p", { k1: t1', k2: t2' }) :- reads
 expect_account = t                 provider_expect_account("p", t') :- reads
 ```
 
@@ -1163,7 +1163,7 @@ declared extern is. A program's own `extern` line for the same name wins.
 
 An extern is asked again every run (a plan file records what its plan
 read, and its apply reads that): nothing keeps an answer but `memo.first`
-("Memo"). `random` is not a provider: `provider random` is an error
+("Memo"). `random` is not a provider: `use random` is an error
 naming the std functions `random.password` and friends ("Functions").
 
 A data source (Terraform's `data` block) is such an extern, and a table:
@@ -1919,7 +1919,7 @@ The normal forms:
   nothing sets a path below them, in source order at the first one's
   place; a parent with an object under it (`metadata.labels = { .. }`) or
   with one leaf (`spec.replicas = 1`) stays dotted;
-- a `provider` or `instance` with no entries has no block: `provider aws`;
+- a `provider` or `instance` with no entries has no block: `use aws`;
 - a header name is bare when it is a name, not a keyword, and not bound by
   the clause; else it is quoted;
 - `not { lit }` of one literal whose names are all bound is `not lit`;

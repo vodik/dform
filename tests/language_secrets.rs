@@ -12,7 +12,7 @@ fn run(body: &str) -> common::Run {
         "p.df",
         &format!(
             "\ninput pw: secret(string) check len(pw) >= 3\n\
-             extern vault.read(+path, -value: secret(string))\n{body}\nprovider fake\n"
+             extern vault.read(+path, -value: secret(string))\n{body}\nuse fake\n"
         ),
     );
     s.run(&[
@@ -111,7 +111,7 @@ fn a_secret_input_refinement_does_not_print_it() {
     let s = Scratch::new("lang-secrets-refine");
     s.write(
         "p.df",
-        "\ninput pw: secret(string) check len(pw) >= 12\nprovider fake\n",
+        "\ninput pw: secret(string) check len(pw) >= 12\nuse fake\n",
     );
     let r = s
         .run(&[

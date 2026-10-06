@@ -1,6 +1,6 @@
 //! `plugin::ssh` where dform-core is built for wasm (a provider component
 //! links dform-core, R-13b): the same names with no client. A component is
-//! a provider, not the engine that answers `provider ssh`, and russh's
+//! a provider, not the engine that answers `use ssh`, and russh's
 //! tokio networking does not build for wasm.
 
 use crate::ast::ExternFn;

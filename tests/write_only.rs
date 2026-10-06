@@ -23,7 +23,7 @@ fn program(s: &Scratch, user_data: &str, token: &str) {
     s.write(
         "stacks/p.df",
         &format!(
-            "provider fake\nresource compute.vm a {{\n  name = \"a\"\n  user_data = \"{user_data}\"\n  token = \"{token}\"\n}}\n"
+            "use fake\nresource compute.vm a {{\n  name = \"a\"\n  user_data = \"{user_data}\"\n  token = \"{token}\"\n}}\n"
         ),
     );
 }

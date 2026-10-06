@@ -66,7 +66,7 @@ fn why_shows_the_range_as_written() {
     let s = Scratch::project("lang-ranges");
     s.write(
         "p.df",
-        "\nprovider fake\n\npool(\"web\", 2)\n\nresource compute.vm \"${p}-${i}\" {\n  size = \"small\"\n} where pool(p, n), i in 0..n\n",
+        "\nuse fake\n\npool(\"web\", 2)\n\nresource compute.vm \"${p}-${i}\" {\n  size = \"small\"\n} where pool(p, n), i in 0..n\n",
     );
     let r = s.run(&["plan", "p.df"]).success();
     assert_eq!(

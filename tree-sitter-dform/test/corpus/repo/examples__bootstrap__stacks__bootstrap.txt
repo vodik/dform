@@ -17,8 +17,8 @@ examples/bootstrap/stacks/bootstrap.df
 output endpoint = renfry.endpoint
 
 # The mock GCP's schema is the project's own (dform.toml: providers/gcp).
-provider google
-provider k8s
+use google
+use k8s
 
 resource google.compute_network vpc { name = "renfry-vpc", auto_create_subnetworks = false }
 
@@ -93,10 +93,12 @@ resource k8s.deployment dform_controller {
       (identifier)
       (identifier)))
   (comment)
-  (provider
-    (identifier))
-  (provider
-    (identifier))
+  (use
+    (dotted_name
+      (identifier)))
+  (use
+    (dotted_name
+      (identifier)))
   (resource
     (dotted_name
       (identifier)

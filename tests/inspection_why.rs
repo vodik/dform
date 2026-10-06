@@ -233,7 +233,7 @@ fn why_prints_one_alternative_unless_all() {
     let s = Scratch::new("why-alts");
     s.write(
         "p.df",
-        "\np(1)\nq(1)\nr(x) where p(x)\nr(x) where q(x)\ns(x) where r(x), not t(x)\nt(2) where p(2)\nprovider fake\n",
+        "\np(1)\nq(1)\nr(x) where p(x)\nr(x) where q(x)\ns(x) where r(x), not t(x)\nt(2) where p(2)\nuse fake\n",
     );
     let why = |extra: &[&str]| {
         let mut a = vec!["dev", "--world", "w.json", "why"];
@@ -268,7 +268,7 @@ fn why_prints_one_alternative_unless_all() {
 #[test]
 fn why_with_a_variable_prints_each_match() {
     let s = Scratch::new("why-vars");
-    s.write("p.df", "\np(1)\np(2)\nq(x) where p(x)\nprovider fake\n");
+    s.write("p.df", "\np(1)\np(2)\nq(x) where p(x)\nuse fake\n");
     let out = s
         .run(&["dev", "--world", "w.json", "why", "q(N)", "p.df"])
         .success()
@@ -289,7 +289,7 @@ fn why_never_prints_a_labeled_secret() {
         r#"
 resource leaky.vault v { password = "VAULT-SECRET-DO-NOT-PRINT" }
            copy(p) where p = v.password
-provider fake
+use fake
 "#,
     );
     let schema = repo().join("tests/fixtures/providers/leaky/schema.df");
@@ -318,13 +318,13 @@ fn why_labels_planner_facts_as_the_plan() {
     let s = Scratch::new("why-plan-leaf");
     s.write(
         "p.df",
-        "\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\nprovider fake\n",
+        "\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\nuse fake\n",
     );
     s.run(&["dev", "--world", "w.json", "apply", "p.df"])
         .success();
     s.write(
         "p.df",
-        "\nlifecycle(net.vpc[\"main\"], \"prevent_destroy\")\nseen(a) where identity(net.vpc, a, _)\nprovider fake\n",
+        "\nlifecycle(net.vpc[\"main\"], \"prevent_destroy\")\nseen(a) where identity(net.vpc, a, _)\nuse fake\n",
     );
     let why = |q: &str| {
         s.run(&["dev", "--world", "w.json", "why", q, "p.df"])
@@ -467,7 +467,7 @@ fn why_names_a_rule_the_compiler_wrote() {
     let s = Scratch::new("why-policy-rule");
     let p = |cidr: &str| {
         format!(
-            "\nprovider fake\nresource net.vpc main {{\n  cidr = \"{cidr}\"\n}}\n\
+            "\nuse fake\nresource net.vpc main {{\n  cidr = \"{cidr}\"\n}}\n\
              lifecycle(main, \"prevent_destroy\") where main in net.vpc\n"
         )
     };
@@ -497,7 +497,7 @@ fn why_prints_a_refinement_as_a_check() {
     let s = Scratch::new("why-refine");
     s.write(
         "p.df",
-        "\nprovider fake\nresource db.postgres main {\n  size = 1\n  backup_days = 7\n}\n",
+        "\nuse fake\nresource db.postgres main {\n  size = 1\n  backup_days = 7\n}\n",
     );
     let out = why_in(&s, "p.df", &["db.postgres[\"main\"].backup_days"]);
     assert_eq!(
@@ -512,7 +512,7 @@ fn why_prints_a_refinement_as_a_check() {
 #[test]
 fn why_prints_the_statement_of_a_rule_that_reads_nothing() {
     let s = Scratch::new("why-no-reads");
-    s.write("p.df", "\nprovider fake\nys(n) where n = 1 + 2\n");
+    s.write("p.df", "\nuse fake\nys(n) where n = 1 + 2\n");
     let out = why_in(&s, "p.df", &["ys(N)"]);
     assert_eq!(
         out,
@@ -536,7 +536,7 @@ fn why_prints_a_relations_signature() {
     let s = Scratch::new("why-signature");
     s.write(
         "p.df",
-        "\nprovider fake\naz(\"us-test-1a\", 1)\naz(\"us-test-1b\", 2)\n",
+        "\nuse fake\naz(\"us-test-1a\", 1)\naz(\"us-test-1b\", 2)\n",
     );
     let out = why_in(&s, "p.df", &["az(Z, I)"]);
     assert!(
@@ -553,7 +553,7 @@ fn why_interpolates_a_reference_as_its_address() {
     let s = Scratch::new("why-ref-interp");
     s.write(
         "p.df",
-        "\nprovider fake\nresource net.vpc main {\n  cidr = \"10.0.0.0/16\"\n}\n\
+        "\nuse fake\nresource net.vpc main {\n  cidr = \"10.0.0.0/16\"\n}\n\
          msg(m) where r in net.vpc, m = \"vpc ${r}\"\n",
     );
     let out = why_in(&s, "p.df", &["msg(M)"]);

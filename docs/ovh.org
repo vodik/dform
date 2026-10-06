@@ -120,7 +120,7 @@ stack ovh.infra[env] {
   backend = s3("dform-state", "infra/{env}", endpoint: "https://s3.gra.io.cloud.ovh.net")   # not implemented
 }
 
-provider ovh {}                                       # the bridge (dform.toml); not implemented
+use ovh {}                                            # the bridge (dform.toml); not implemented
 provider k8s {}
 
 input env: enum("dev", "prod") = "dev"

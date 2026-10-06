@@ -17,7 +17,7 @@ decl node(name: string)
 resource compute.vm "${n}" {
   size = 1
 } where node(n)
-provider fake
+use fake
 "#;
 
 fn setup(name: &str) -> (Scratch, String) {

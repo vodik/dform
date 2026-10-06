@@ -37,8 +37,8 @@ use data.approvals
 approve(t, a) where approvals.approve(t, a)
 
 # Sources and versions are dform.toml's.
-provider google
-provider k8s
+use google
+use k8s
 
 # The database password is random.password("crud-api-db") (std/random.df):
 # derived from the deployment's master secret, a secret, the same value on
@@ -477,10 +477,12 @@ auto_reconcile(t, a, p) where drift(t, a, p, _, _), owned_label(l), p == "metada
             (identifier)
             (identifier))))))
   (comment)
-  (provider
-    (identifier))
-  (provider
-    (identifier))
+  (use
+    (dotted_name
+      (identifier)))
+  (use
+    (dotted_name
+      (identifier)))
   (comment)
   (comment)
   (comment)

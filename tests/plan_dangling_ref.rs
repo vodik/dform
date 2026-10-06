@@ -16,7 +16,7 @@ fn a_ref_to_an_unwanted_address_is_denied() {
 
 resource net.vpc main { cidr = "10.0.0.0/16" }
 resource net.subnet a { cidr = "10.0.1.0/24", vpc_id = ref(net.vpc, "other", "id") }
-provider fake
+use fake
 "#,
     );
     let r = s.run(&["plan", "p.df"]).failure();
@@ -42,7 +42,7 @@ fn a_ref_to_a_wanted_address_is_not_denied() {
 
 resource net.vpc main { cidr = "10.0.0.0/16" }
 resource net.subnet a { cidr = "10.0.1.0/24", vpc_id = ref(net.vpc, "main", "id") }
-provider fake
+use fake
 "#,
     );
     let r = s.run(&["plan", "p.df"]).success();
@@ -70,7 +70,7 @@ resource net.vpc_peering peer_main_peer {
   requester_vpc_id = ref(net.vpc, "main", "id")
   accepter_vpc_id = ref(net.vpc, "peer", "id")
 }
-provider fake
+use fake
 "#,
     );
     let r = s.run(&["plan", "p.df"]).failure();

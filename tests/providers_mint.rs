@@ -15,7 +15,7 @@ fn a_minted_quantity_is_its_canonical_text() {
          type_attr(app.disk, \"size\", \"bytes\", [\"computed\"])\n\
          type_mint(app.disk, \"size\", 512Mi)\n",
     );
-    s.write("p.df", "\nresource app.disk d {}\nprovider fake\n");
+    s.write("p.df", "\nresource app.disk d {}\nuse fake\n");
     s.run(&[
         "dev",
         "--provider",

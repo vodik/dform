@@ -14,7 +14,7 @@
 //! stack's (`dform.state/app/env=prod,region=us-east1/`), lock, registry
 //! entry and controller; the other inputs are parameters of a deployment
 //! and change it in place. `rekey` moves one deployment's state to another
-//! key value. `provider name { source = "path" }` selects a provider: a
+//! key value. `use name { source = "path" }` selects a provider: a
 //! plugin executable, or a schema the mock provider plays; the block's
 //! other settings configure it (`provider_config`, lowered by the
 //! resolver).

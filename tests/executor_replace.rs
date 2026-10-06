@@ -11,7 +11,7 @@ const NET: &str = r#"
 resource net.vpc main { cidr = "10.0.0.0/16" }
 resource net.subnet a { vpc_id = ref(net.vpc, "main", "id"), tier = "web" }
 resource net.subnet b { vpc_id = ref(net.vpc, "main", "id"), tier = "db" }
-provider fake
+use fake
 "#;
 
 /// What the world's subnets point at, and the vpc's id.
@@ -121,7 +121,7 @@ fn a_deposed_object_is_held_while_a_dependent_is() {
 
 resource net.vpc main { cidr = "10.0.0.0/16" }
 resource net.subnet a { vpc_id = ref(net.vpc, "main", "id"), note = "x" }
-provider fake
+use fake
 "#;
     s.write("p.df", net);
     mock(&s, &["apply"]).success();

@@ -214,7 +214,7 @@ without a `dform' (`skip-unless' is ERT's, in a test's body)."
 (defconst dform-ts-mode-test--project
   '(("dform.toml" . "[project]\nname = \"xref\"\nedition = \"2026\"\n")
     ("config.df" . "let region: string = \"r1\"\n")
-    ("stacks/s.df" . "use config\nprovider fake\nlet place = config.region\nlet net = inet.subnet(inet(\"10.0.0.0/8\"), 8, 1)\nresource compute.vm web {}\n"))
+    ("stacks/s.df" . "use config\nuse fake\nlet place = config.region\nlet net = inet.subnet(inet(\"10.0.0.0/8\"), 8, 1)\nresource compute.vm web {}\n"))
   "A project with a used module and a std function call.")
 
 (ert-deftest dform-ts-mode-test-xref-definitions ()

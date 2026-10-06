@@ -12,4 +12,4 @@ deny "vpc without cidr" { vpc: n } where {
   not arg(net.vpc, n, "cidr", inet("10.0.0.0/16"))
 }
 
-provider fake
+use fake

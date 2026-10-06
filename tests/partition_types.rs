@@ -14,7 +14,7 @@ fn project(policy: &str) -> Scratch {
         "stacks/lab.df",
         &format!(
             r#"
-provider k8s
+use k8s
 
 {policy}
 

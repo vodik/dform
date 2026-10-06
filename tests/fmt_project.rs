@@ -7,7 +7,7 @@ use common::Scratch;
 
 #[test]
 fn format_file_types_a_projects_literals_as_dform_fmt_does() {
-    let src = "provider k8s\n\nresource k8s.deployment d {\n  \
+    let src = "use k8s\n\nresource k8s.deployment d {\n  \
                spec.template.spec.containers = [{ name: \"a\", resources: { limits: { memory: \"2Gi\" } } }]\n}\n";
     let p = Scratch::project("format-file");
     p.write("stacks/app.df", src);

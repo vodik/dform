@@ -1,5 +1,5 @@
 //! A provider is imported with `use` and configured by its block (R-112
-//! amendment 2): `use fake { region = .. }` is what `provider fake {
+//! amendment 2): `use fake { region = .. }` is what `use fake {
 //! region = .. }` was, a guarded `use .. where` R-104's conditional
 //! provider, and a provider's name is in the scope's one namespace. Both
 //! spellings are read until the corpus is rewritten.
@@ -15,7 +15,7 @@ fn a_provider_is_used_and_configured_by_its_block() {
     let body = "\nresource net.vpc v {\n  cidr = \"10.0.0.0/16\"\n}\n";
     s.write(
         "old.df",
-        &format!("provider fake {{ region = \"eu-west-1\" }}{body}"),
+        &format!("use fake {{ region = \"eu-west-1\" }}{body}"),
     );
     s.write(
         "new.df",
@@ -85,13 +85,13 @@ fn a_used_builtin_provider_brings_its_externs() {
 }
 
 /// One name per scope: a module, a copy and a provider share it, so
-/// `use fake` beside `provider fake` is the error two uses are; a name
+/// `use fake` beside `use fake` is the error two uses are; a name
 /// that is neither a module nor a provider is the module error, saying
 /// so; a provider's namespace is not renamed yet.
 #[test]
 fn a_provider_shares_the_scopes_one_namespace() {
     let s = Scratch::new("providers-use-twice");
-    s.write("p.df", "\nprovider fake\nuse fake\n");
+    s.write("p.df", "\nuse fake\nuse fake\n");
     let r = s.run(&["plan", "p.df"]).failure();
     assert!(
         r.stderr

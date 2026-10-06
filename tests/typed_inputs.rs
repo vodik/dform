@@ -7,7 +7,7 @@ use common::Scratch;
 
 fn program(ty: &str, given: &str) -> String {
     format!(
-        "provider fake\n\
+        "use fake\n\
          component sub {{\n  input vpc: {ty}\n  \
          resource net.subnet s {{ cidr = \"10.0.1.0/24\", vpc_id = vpc }}\n}}\n\
          resource net.vpc main {{ cidr = \"10.0.0.0/16\" }}\n\
@@ -45,7 +45,7 @@ fn a_resource_type_is_a_reference_to_one() {
 fn a_stack_input_takes_a_provider_type() {
     let r = plan(
         "typed-stack",
-        "input ns: k8s.namespace\noutput n = ns\nprovider fake\n",
+        "input ns: k8s.namespace\noutput n = ns\nuse fake\n",
     )
     .failure();
     assert!(
@@ -53,7 +53,7 @@ fn a_stack_input_takes_a_provider_type() {
         "{}",
         r.stderr
     );
-    let r = plan("typed-typo", "input v: net.vcp\nprovider fake\n").failure();
+    let r = plan("typed-typo", "input v: net.vcp\nuse fake\n").failure();
     assert!(
         r.stderr.contains("stack input v: unknown type net.vcp"),
         "{}",

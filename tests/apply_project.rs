@@ -6,13 +6,13 @@ mod common;
 use common::Scratch;
 
 const NET: &str = r#"
-provider fake
+use fake
 resource net.vpc main { cidr = "10.0.0.0/16" }
 output cidr = main.cidr
 "#;
 
 const APP: &str = r#"
-provider fake
+use fake
 use stacks.net as network
 resource net.subnet a {
   cidr = c
@@ -20,7 +20,7 @@ resource net.subnet a {
 "#;
 
 const SOLO: &str = r#"
-provider fake
+use fake
 resource net.vpc solo { cidr = "10.9.0.0/16" }
 "#;
 

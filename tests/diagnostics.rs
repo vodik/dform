@@ -15,7 +15,7 @@ fn plan(src: &str) -> common::Run {
 /// and what was expected; every error in the file, then a count.
 #[test]
 fn syntax_errors_print_with_their_source_line() {
-    let r = plan("\np(\"a\") where q(]\nr(\"b\") where ,\nprovider fake\n").failure();
+    let r = plan("\np(\"a\") where q(]\nr(\"b\") where ,\nuse fake\n").failure();
     assert!(
         r.stderr.contains("p.df:2:16: expected a term, found `]`"),
         "{}",
@@ -32,7 +32,7 @@ fn syntax_errors_print_with_their_source_line() {
 
 #[test]
 fn an_undefined_predicate_names_its_literal() {
-    let r = plan("\nenv(\"prod\")\nq(x) where envv(x)\nprovider fake\n").failure();
+    let r = plan("\nenv(\"prod\")\nq(x) where envv(x)\nuse fake\n").failure();
     assert!(
         r.stderr.contains("p.df:3:12: undefined predicate envv/1"),
         "{}",
@@ -51,7 +51,7 @@ fn an_undefined_predicate_names_its_literal() {
 /// body (`n = count(x)`, R-59) and nowhere else.
 #[test]
 fn an_unknown_function_names_its_call() {
-    let r = plan("\nenv(\"prod\")\nq(y) where env(x), y = lowr(x)\nprovider fake\n").failure();
+    let r = plan("\nenv(\"prod\")\nq(y) where env(x), y = lowr(x)\nuse fake\n").failure();
     assert!(
         r.stderr.contains("p.df:3:24: unknown function lowr"),
         "{}",
@@ -62,27 +62,27 @@ fn an_unknown_function_names_its_call() {
         "{}",
         r.stderr
     );
-    let r = plan("\nresource net.a x {\n  name = uper(\"x\")\n}\nprovider fake\n").failure();
+    let r = plan("\nresource net.a x {\n  name = uper(\"x\")\n}\nuse fake\n").failure();
     assert!(
         r.stderr.contains("p.df:3:10: unknown function uper"),
         "{}",
         r.stderr
     );
-    let r = plan("\nenv(\"prod\")\nq(count(x)) where env(x)\nprovider fake\n").failure();
+    let r = plan("\nenv(\"prod\")\nq(count(x)) where env(x)\nuse fake\n").failure();
     assert!(
         r.stderr
             .contains("p.df:3:3: `count` is an aggregate: it is bound in a body, `n = count(x)`"),
         "{}",
         r.stderr
     );
-    plan("\nenv(\"prod\")\nq(n) where env(x), n = count(x)\nr(y) where env(x), y = str.upper(x)\nprovider fake\n")
+    plan("\nenv(\"prod\")\nq(n) where env(x), n = count(x)\nr(y) where env(x), y = str.upper(x)\nuse fake\n")
         .success();
 }
 
 #[test]
 fn a_negative_cycle_names_each_rule() {
     let r = plan(
-        "\nresource net.vpc x {\n  peer = p\n} where p = y.name\nresource net.subnet y {\n  name = q\n} where q = x.peer\nprovider fake\n",
+        "\nresource net.vpc x {\n  peer = p\n} where p = y.name\nresource net.subnet y {\n  name = q\n} where q = x.peer\nuse fake\n",
     )
     .failure();
     assert!(r.stderr.contains("not stratifiable"), "{}", r.stderr);
@@ -92,7 +92,7 @@ fn a_negative_cycle_names_each_rule() {
 
 #[test]
 fn a_lowering_error_names_its_statement() {
-    let r = plan("\ninstance nope main\nprovider fake\n").failure();
+    let r = plan("\ninstance nope main\nuse fake\n").failure();
     assert!(
         r.stderr
             .contains("p.df:2:1: no component `nope`: there is no"),
@@ -112,7 +112,7 @@ fn why_names_the_activation_and_the_copy() {
     );
     s.write(
         "p.df",
-        "\ncomponent m {\n  resource net.vpc vpc { cidr = \"10.0.0.0/16\" }\n}\ninstance m main\nuse tags\nprovider fake\n",
+        "\ncomponent m {\n  resource net.vpc vpc { cidr = \"10.0.0.0/16\" }\n}\ninstance m main\nuse tags\nuse fake\n",
     );
     let out = s
         .run(&[

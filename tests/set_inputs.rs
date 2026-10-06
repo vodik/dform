@@ -12,7 +12,7 @@ const PROGRAM: &str = r#"
 
 key env: enum("dev", "prod") = "dev"
 input db { size: int = 1, zone: string = "a" }
-provider fake
+use fake
 
 set from FORMAT("config/${env}.FORMAT")
 
@@ -89,7 +89,7 @@ const KEYED: &str = r#"
 key env: enum("dev", "prod") = "dev"
 key region: enum("us", "eu") = "us"
 input db { days: int = 3, multi_az: bool = false }
-provider fake
+use fake
 
 set { db.days = 14, db.multi_az = true } where env == "prod"
 set { db.days = 30 } where env == "prod", region == "eu"
@@ -158,7 +158,7 @@ fn an_entry_is_an_inputs_path() {
     s.write("m.df", "\ninput email: string\n");
     s.write(
         "p.df",
-        "\ninput db { size: int = 1 }\nuse m\nprovider fake\n\
+        "\ninput db { size: int = 1 }\nuse m\nuse fake\n\
          set { m.email = \"ops@example.com\" } where db.size == 1\n\
          set { db.sz = 2 } where db.size == 1\n\
          resource db.postgres main { size = db.size, owner = m.email }\n",
@@ -203,7 +203,7 @@ fn a_required_input_a_set_gives_is_missing_only_where_none_holds() {
     s.write(
         "p.df",
         "\nkey env: enum(\"dev\", \"prod\") = \"dev\"\ninput owner: string\n\
-         provider fake\nset owner = \"ops\" where env == \"prod\"\n\
+         use fake\nset owner = \"ops\" where env == \"prod\"\n\
          resource db.postgres main { owner }\n",
     );
     s.run(&["plan", "--why=none", "p.df", "env=prod"]).success();
@@ -226,7 +226,7 @@ fn a_stack_config_names_set_from() {
         "dform.toml",
         "[project]\nedition = \"2026\"\n\n[stacks.p]\nconfig = 'yaml(\"config/{env}.yaml\")'\n",
     );
-    s.write("p.df", "\nprovider fake\n");
+    s.write("p.df", "\nuse fake\n");
     let r = s.run(&["plan", "--why=none", "p.df"]).failure();
     assert!(
         r.stderr.contains("a stack's config is gone (R-38)")
@@ -245,7 +245,7 @@ fn set_from_a_selection_or_a_let() {
     s.write(
         "p.df",
         "\nkey env: enum(\"dev\", \"prod\") = \"dev\"\n\
-         input db { size: int = 1, zone: string = \"a\" }\nprovider fake\n\
+         input db { size: int = 1, zone: string = \"a\" }\nuse fake\n\
          let cfg = toml(\"cfg.toml\")\n\
          set from toml(\"cfg.toml\").prod where env == \"prod\"\n\
          set from cfg.dev where env == \"dev\"\n\

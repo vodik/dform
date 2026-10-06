@@ -1,4 +1,4 @@
-//! The built-in `ssh` fact provider (`provider ssh`): two externs dform
+//! The built-in `ssh` fact provider (`use ssh`): two externs dform
 //! answers itself, over an SSH client in process (russh; never the `ssh`
 //! binary, the operator's ssh config or PATH).
 //!

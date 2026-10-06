@@ -14,7 +14,7 @@ fn a_module_named_twice_loads_once() {
     s.write("lib/more.df", "\nuse lib.types\nlet best = \"gold\"\n");
     s.write(
         "p.df",
-        "\ninput t: types.tier = \"gold\"\nuse lib.types\nuse lib.more\nprovider fake\n",
+        "\ninput t: types.tier = \"gold\"\nuse lib.types\nuse lib.more\nuse fake\n",
     );
     let files = dform::loader::program_files(&[s.path("p.df")]).unwrap();
     let types = files.iter().filter(|f| f.ends_with("lib/types.df")).count();
@@ -29,14 +29,14 @@ fn a_module_named_twice_loads_once() {
 fn a_path_is_looked_up_never_searched() {
     let s = Scratch::project("lang-paths-lookup");
     s.write("modules/lan.df", "\nlet cidr = \"10.0.0.0/16\"\n");
-    s.write("stacks/app.df", "\nuse lan\nprovider fake\n");
+    s.write("stacks/app.df", "\nuse lan\nuse fake\n");
     let r = s.run(&["plan", "app"]).failure();
     assert!(
         r.stderr.contains("no module `lan`: there is no lan.df"),
         "{}",
         r.stderr
     );
-    s.write("stacks/app.df", "\nuse modules.lan\nprovider fake\n");
+    s.write("stacks/app.df", "\nuse modules.lan\nuse fake\n");
     s.run(&["plan", "app"]).success();
 }
 
@@ -56,7 +56,7 @@ fn a_package_mounts_another_project() {
     );
     s.write(
         "app/stacks/web.df",
-        "\nprovider fake\nuse infra.config\nresource compute.vm web {\n  tags = { domain: config.domain }\n}\n",
+        "\nuse fake\nuse infra.config\nresource compute.vm web {\n  tags = { domain: config.domain }\n}\n",
     );
     let r = s.run_in("app", &["plan", "web"]).success();
     assert!(

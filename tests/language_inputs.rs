@@ -18,7 +18,7 @@ resource net.vpc main {
 resource net.subnet "${s}" {
   cidr = n
 } where nets(ns), n = ns[i], s = format("s%s", i)
-provider fake
+use fake
 "#;
 
 fn scratch() -> Scratch {
@@ -135,7 +135,7 @@ fn a_component_input_of_the_wrong_type_is_a_violation() {
     let s = Scratch::project("lang-inputs-module");
     s.write(
         "p.df",
-        "\ncomponent m {\n  input n: int\n  resource net.vpc v {\n    n = n_\n  } where n(n_)\n}\ninstance m a { n = format(\"%s\", \"three\") }\nprovider fake\n",
+        "\ncomponent m {\n  input n: int\n  resource net.vpc v {\n    n = n_\n  } where n(n_)\n}\ninstance m a { n = format(\"%s\", \"three\") }\nuse fake\n",
     );
     let r = s
         .run(&["dev", "--world", "w.json", "plan", "p.df"])
@@ -235,7 +235,7 @@ fn set_reads_a_file_as_the_inputs_type() {
         "p.df",
         r#"
 input db: { size: int, net: inet, zones: list(string) }
-provider fake
+use fake
 resource net.vpc main {
   cidr = inet.subnet(db.net, 8, db.size)
   zones = db.zones
@@ -291,7 +291,7 @@ input nodes {
     size: int = 4
   }
 }
-provider fake
+use fake
 resource net.vpc main {
   flavor = nodes.flavor
   count = nodes.count
@@ -500,7 +500,7 @@ fn a_field_with_no_default_is_required() {
     let s = Scratch::project("lang-inputs-object-required");
     s.write(
         "p.df",
-        "\ninput db {\n  size: int\n  zone: string = \"a\"\n}\nprovider fake\n\
+        "\ninput db {\n  size: int\n  zone: string = \"a\"\n}\nuse fake\n\
          resource net.vpc main {\n  size = db.size\n  zone = db.zone\n}\n",
     );
     let r = object_plan(&s, &[]).failure();
@@ -522,7 +522,7 @@ fn a_field_with_no_default_is_required() {
         "\ncomponent m {\n  input db {\n    size: int\n    zone: string = \"a\"\n  }\n\
          resource net.vpc v {\n    size = db.size\n    zone = db.zone\n  }\n}\n\
          instance m a { db.size = 2 }\ninstance m b { db = { size: 5, zone: \"b\" } }\n\
-         provider fake\n",
+         use fake\n",
     );
     let r = object_plan(&s, &[]).success();
     assert!(

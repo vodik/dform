@@ -94,7 +94,7 @@ fn effects_show_relations_given_and_read_across_scopes() {
     let s = common::Scratch::new("effects-relations");
     s.write(
         "p.df",
-        "\nprovider fake\ncomponent subnets {\n  input cidr: inet\n  input zone\n  \
+        "\nuse fake\ncomponent subnets {\n  input cidr: inet\n  input zone\n  \
          decl zone(name: string, index: int)\n  decl made(name: string)\n  \
          made(z) where zone(z, _)\n  output made\n  resource net.subnet \"s-${z}\" {\n    \
          cidr = inet.subnet(cidr, 8, i)\n    zone = z\n  } where zone(z, i)\n}\n\

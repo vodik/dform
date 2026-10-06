@@ -42,7 +42,7 @@ fn answers(s: &Scratch, v: &str) {
 }
 
 const PLAIN: &str = r#"
-provider fake
+use fake
 extern kv.password(+name, -value)
 resource db.user app {
   password = pw
@@ -106,7 +106,7 @@ fn two_sites_of_a_key_agree_and_a_plan_keeps_nothing() {
     let s = project(
         "memo-sites",
         r#"
-provider fake
+use fake
 resource db.user a {
   password = memo.first("pw", "from-a")
 }
@@ -126,7 +126,7 @@ resource db.user b {
 }
 
 const SECRET: &str = r#"
-provider fake
+use fake
 resource db.secret v {
   password = pw
 } where memo.first("db-pw", random.password("db-pw"), pw)
@@ -217,8 +217,8 @@ fn a_kept_creation_time_drives_a_rotation() {
     let s = project(
         "memo-rotate",
         r#"
-provider fake
-provider time
+use fake
+use time
 resource db.user app {
   password = "x"
 }
@@ -242,13 +242,13 @@ warn "rotate the password" where {
     );
 }
 
-/// `time.now()` needs `provider time`, like any built-in provider's extern.
+/// `time.now()` needs `use time`, like any built-in provider's extern.
 #[test]
 fn time_now_is_the_time_providers() {
     let s = project(
         "memo-time",
         r#"
-provider fake
+use fake
 resource db.user app {
   password = time.format(time.now(), "%Y")
 }
@@ -263,8 +263,7 @@ resource db.user app {
     );
     s.write(
         "p.df",
-        &s.read("p.df")
-            .replace("provider fake\n", "provider fake\nprovider time\n"),
+        &s.read("p.df").replace("use fake\n", "use fake\nuse time\n"),
     );
     let r = run(
         &s,
@@ -281,12 +280,12 @@ resource db.user app {
 fn a_no_op_apply_keeps_a_memo_it_first_read() {
     let s = project(
         "memo-noop",
-        "\nprovider fake\nresource db.user a {\n  password = \"same\"\n}\n",
+        "\nuse fake\nresource db.user a {\n  password = \"same\"\n}\n",
     );
     run(&s, &[], &["apply", "p.df"]).success();
     s.write(
         "p.df",
-        "\nprovider fake\nresource db.user a {\n  password = memo.first(\"pw\", \"same\")\n}\n",
+        "\nuse fake\nresource db.user a {\n  password = memo.first(\"pw\", \"same\")\n}\n",
     );
     let now = [("DFORM_TEST_NOW", "2026-10-03T09:00:00Z")];
     let r = run(&s, &now, &["apply", "p.df"]).success();

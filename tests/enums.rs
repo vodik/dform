@@ -56,7 +56,7 @@ fn why_shows_the_type_as_the_leaf() {
     let s = Scratch::project("enum-why");
     s.write(
         "p.df",
-        "\nprovider fake\n\ntype environment = enum(\"staging\", \"prod\")\n\n\
+        "\nuse fake\n\ntype environment = enum(\"staging\", \"prod\")\n\n\
          resource compute.vm \"web-${e}\" {\n  size = \"small\"\n} where e in environment\n",
     );
     let r = s.run(&["plan", "p.df"]).success();
@@ -109,7 +109,7 @@ fn the_test_space_is_the_types_values() {
     let s = Scratch::project("enum-test");
     s.write(
         "p.df",
-        "\ninput env: environment = \"staging\"\n\nprovider fake\n\n\
+        "\ninput env: environment = \"staging\"\n\nuse fake\n\n\
          type environment = enum(\"staging\", \"prod\")\n\
          deny \"env ${e} is not prod\" where e in environment, env == e, e != \"prod\"\n",
     );

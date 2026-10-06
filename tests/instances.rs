@@ -7,7 +7,7 @@ use common::Scratch;
 /// A component, `vpc`, copied twice, one copy gated by a clause.
 const NET: &str = r#"
 input env: string = "dev"
-provider fake
+use fake
 component vpc {
   input vpc_net: string
   output id = vpc.cidr
@@ -205,7 +205,7 @@ fn a_nested_copy_nests_again() {
     s.write(
         "main.df",
         r#"
-provider fake
+use fake
 component vpc {
   input vpc_net: string
   resource net.vpc vpc { cidr = vpc_net }

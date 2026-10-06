@@ -24,7 +24,7 @@ fn plan(name: &str, program: &str) -> Run {
 fn a_conflict_under_a_required_attribute_is_the_conflict() {
     let r = plan(
         "conflict-required",
-        "\n\nprovider k8s\n\n\
+        "\n\nuse k8s\n\n\
          resource k8s.deployment web {\n  \
          metadata.name = \"web\"\n  \
          spec.selector.matchLabels = { app: \"web\" }\n  \
@@ -52,7 +52,7 @@ fn a_conflict_under_a_required_attribute_is_the_conflict() {
 fn a_conflict_names_its_leaf() {
     let r = plan(
         "conflict-leaf",
-        "\n\nprovider k8s\n\n\
+        "\n\nuse k8s\n\n\
          resource k8s.namespace n {\n  metadata.name = \"a\"\n}\n\n\
          set n.metadata.name = \"b\" where n in k8s.namespace\n",
     )

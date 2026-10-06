@@ -8,7 +8,7 @@
 # to input env; --set env=prod is a normal contribution and wins.
 input env: enum("dev", "staging", "prod") = "staging"
 
-provider fake { source = "./providers/fake" }
+use fake { source = "./providers/fake" }
 
 zone("us-test-1a")
 zone("us-test-1b")

@@ -1,0 +1,20 @@
+==========================
+tests/syntax/ok/strings.df
+==========================
+
+# A string spans lines (R-61), and `\` at a line end joins the line with
+# the next, whose leading whitespace is kept.
+output note = "a long line, \
+  continued"
+
+---
+
+(source_file
+  (comment)
+  (comment)
+  (output
+    (identifier)
+    (string
+      (string_content)
+      (escape_sequence)
+      (string_content))))

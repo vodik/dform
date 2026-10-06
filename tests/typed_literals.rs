@@ -15,7 +15,7 @@ fn plan(s: &Scratch) -> common::Run {
 }
 
 fn program(body: &str) -> String {
-    format!("\n\n{body}provider fake\n")
+    format!("\n\n{body}use fake\n")
 }
 
 /// `vpc = main` gives the subnet the vpc; the plan prints the resource,

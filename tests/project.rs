@@ -8,12 +8,12 @@ use common::Scratch;
 use std::path::PathBuf;
 
 const APP: &str = r#"key env: enum("staging", "prod") = "staging"
-provider fake
+use fake
 resource net.vpc main { cidr = "10.0.0.0/16", tags = { env } }
 "#;
 
 const NET: &str = r#"
-provider fake
+use fake
 resource net.vpc shared { cidr = "10.9.0.0/16" }
 "#;
 
@@ -223,7 +223,7 @@ fn a_program_uses_a_stack_and_never_instances_it() {
     let s = project("target-use-stack");
     s.write(
         "stacks/both.df",
-        "\ncomponent c {\n  input n: int\n}\ninstance stacks.net x\nprovider fake\n",
+        "\ncomponent c {\n  input n: int\n}\ninstance stacks.net x\nuse fake\n",
     );
     let r = s.run(&["plan", "both"]).failure();
     assert!(
@@ -236,7 +236,7 @@ fn a_program_uses_a_stack_and_never_instances_it() {
         "modules/tags.df",
         "\nresource net.vpc extra { cidr = \"10.1.0.0/16\" }\n",
     );
-    s.write("stacks/both.df", "\nuse modules.tags\nprovider fake\n");
+    s.write("stacks/both.df", "\nuse modules.tags\nuse fake\n");
     let r = s.run(&["plan", "both"]).success();
     assert!(r.stdout.contains("+ net.vpc tags.extra"), "{}", r.stdout);
 }
@@ -278,7 +278,7 @@ audit_sink = "true"
     s.write(
         "stacks/p.df",
         r#"
-provider cloud
+use cloud
 resource x.thing a { size = 1 }
 pinned(n, c) where project_provider(n, c)
 default(k, v) where project_default(k, v)
@@ -331,7 +331,7 @@ fn the_edition_is_the_projects() {
     let s = Scratch::new("edition");
     s.write(
         "stacks/p.df",
-        "provider fake\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\n",
+        "use fake\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\n",
     );
     s.write("dform.toml", "[project]\nname = \"e\"\n");
     let r = s.run(&["plan", "p"]).failure();
@@ -355,7 +355,7 @@ fn the_edition_is_the_projects() {
     s.run(&["plan", "p"]).success();
 
     // A file with the old first line.
-    s.write("stacks/p.df", "edition 2026\nprovider fake\n");
+    s.write("stacks/p.df", "edition 2026\nuse fake\n");
     let r = s.run(&["plan", "p"]).failure();
     assert!(
         r.stderr.contains(
@@ -370,7 +370,7 @@ fn the_edition_is_the_projects() {
     let lone = Scratch::new("edition-lone");
     lone.write(
         "p.df",
-        "provider fake\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\n",
+        "use fake\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\n",
     );
     let r = lone.run(&["plan", "p.df"]).success();
     assert_eq!(r.stderr, "");
@@ -388,7 +388,7 @@ fn a_stack_table_overrides_the_defaults() {
     );
     s.write(
         "stacks/p.df",
-        "\nprovider fake\nresource db.postgres main { size = 1 }\n\
+        "\nuse fake\nresource db.postgres main { size = 1 }\n\
          stacked(n, k, v) where project_stack(n, k, v)\n",
     );
     s.run(&["apply", "p", "--yes"]).success();
@@ -581,7 +581,7 @@ fn fmt_with_no_path_formats_the_project() {
     let s = project("fmt-project");
     s.write(
         "stacks/net.df",
-        "\nprovider fake\nresource net.vpc shared {cidr=\"10.9.0.0/16\"}\n",
+        "\nuse fake\nresource net.vpc shared {cidr=\"10.9.0.0/16\"}\n",
     );
     let r = s.run(&["fmt", "--check"]).failure();
     assert_eq!(r.stdout, "stacks/net.df\n");
@@ -682,8 +682,8 @@ fn program_paths_resolve_from_the_root() {
 input peer from csv("data/peers.csv")
 use data.tags
 decl peer(name: string)
-provider cloud { source = "providers/cloud" }
-provider file
+use cloud { source = "providers/cloud" }
+use file
 note(v) where v = file.text["data/note.txt"]
 resource x.thing "${n}" {
   label = "${n}-${g}-${v}"

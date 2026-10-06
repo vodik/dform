@@ -5,7 +5,7 @@
 decl project(id: int, name: string, region: string, network_name: string, proxy_cidr: string)
 
 # No resources, but a plan still runs against a provider: the mock's fake.
-provider fake
+use fake
 
 project(1, "alpha", "us-east-1", "net-a", "10.0.0.0/24")
 project(2, "beta", "us-east-1", "net-b", "10.1.0.0/24")

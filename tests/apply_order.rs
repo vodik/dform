@@ -8,14 +8,14 @@ use common::Scratch;
 
 const NET: &str = r#"
 key env: string = "dev"
-provider fake
+use fake
 resource net.vpc main { cidr = "10.0.0.0/16" }
 output cidr = main.cidr
 "#;
 
 const APP: &str = r#"
 key env: string = "dev"
-provider fake
+use fake
 use stacks.net as network
 resource net.subnet a {
   cidr = c
@@ -24,7 +24,7 @@ output subnet = a.cidr
 "#;
 
 const WEB: &str = r#"
-provider fake
+use fake
 use stacks.app
 resource net.subnet w {
   cidr = c
@@ -119,7 +119,7 @@ fn a_set_goes_to_the_stack_that_declares_it() {
     let s = project("order-set");
     s.write(
         "stacks/net.df",
-        &NET.replace("provider fake\n", "input cidr: string\nprovider fake\n")
+        &NET.replace("use fake\n", "input cidr: string\nuse fake\n")
             .replace("{ cidr = \"10.0.0.0/16\" }", "{ cidr }"),
     );
     let r = s
@@ -158,12 +158,12 @@ fn a_keyed_read_takes_the_pun() {
     let s = Scratch::project("order-pun");
     s.write(
         "stacks/net.df",
-        "\nkey env: string = \"dev\"\nkey region: string = \"r1\"\nprovider fake\n\
+        "\nkey env: string = \"dev\"\nkey region: string = \"r1\"\nuse fake\n\
          resource net.vpc main { cidr = \"10.0.0.0/16\" }\noutput cidr = main.cidr\n",
     );
     let app = |read: &str| {
         format!(
-            "\nkey env: string = \"dev\"\nprovider fake\nuse stacks.net as network\n\
+            "\nkey env: string = \"dev\"\nuse fake\nuse stacks.net as network\n\
              resource net.subnet a {{\n  cidr = c\n}} where c = {read}.cidr\n"
         )
     };
@@ -177,7 +177,7 @@ fn a_keyed_read_takes_the_pun() {
     // One key, the pun alone.
     s.write(
         "stacks/net.df",
-        "\nkey env: string = \"dev\"\nprovider fake\n\
+        "\nkey env: string = \"dev\"\nuse fake\n\
          resource net.vpc main { cidr = \"10.0.0.0/16\" }\noutput cidr = main.cidr\n",
     );
     s.write("stacks/app.df", &app("network[env]"));

@@ -1,6 +1,6 @@
 # A file is its header (`key`, `input`), then its body:
 # a header statement below the body's first statement is out of place.
-provider fake {}
+use fake {}
 key env: string = "dev"
 input zones: int = 2
 

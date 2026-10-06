@@ -35,10 +35,7 @@ fn dform<S: AsRef<std::ffi::OsStr>>(s: &Scratch, kubeconfig: Option<&str>, args:
 /// `providers/k8s/` beside it holds the executable.
 fn real_demo(s: &Scratch) {
     let src = std::fs::read_to_string(repo().join("examples/k8s/stacks/k8s_demo.df")).unwrap();
-    let real = src.replace(
-        "provider k8s",
-        "provider k8s { source = \"./providers/k8s\" }",
-    );
+    let real = src.replace("use k8s", "use k8s { source = \"./providers/k8s\" }");
     assert_ne!(src, real, "the demo names its provider `provider k8s.`");
     s.write("k8s_demo.df", &real);
     std::fs::create_dir_all(s.path("providers/k8s")).unwrap();
@@ -83,7 +80,7 @@ fn the_demo_plans_the_same_against_the_real_provider_offline() {
     // The long names are the same types.
     real.write(
         "long.df",
-        "\nprovider k8s { source = \"./providers/k8s\" }\nresource k8s.apps.v1.deployment api {\n  metadata.name = \"api\"\n  spec.selector.matchLabels = {app: \"api\"}\n  spec.template.spec.containers = [{name: \"api\", image: \"api:1\"}]\n}\n",
+        "\nuse k8s { source = \"./providers/k8s\" }\nresource k8s.apps.v1.deployment api {\n  metadata.name = \"api\"\n  spec.selector.matchLabels = {app: \"api\"}\n  spec.template.spec.containers = [{name: \"api\", image: \"api:1\"}]\n}\n",
     );
     let r = dform(&real, None, &["plan", "long.df"]).success();
     assert!(
@@ -150,7 +147,7 @@ fn offline_plan_validates_and_hides_secrets() {
     real_demo(&s);
     s.write(
         "p.df",
-        "\nprovider k8s { source = \"./providers/k8s\" }\nresource k8s.secret token {\n  metadata.name = \"token\"\n  stringData = {password: \"hunter2\"}\n}\n",
+        "\nuse k8s { source = \"./providers/k8s\" }\nresource k8s.secret token {\n  metadata.name = \"token\"\n  stringData = {password: \"hunter2\"}\n}\n",
     );
     let r = dform(&s, None, &["plan", "p.df"]).success();
     assert!(!r.stdout.contains("hunter2"), "{}", r.stdout);
@@ -162,7 +159,7 @@ fn offline_plan_validates_and_hides_secrets() {
 
     s.write(
         "p.df",
-        "\nprovider k8s { source = \"./providers/k8s\" }\nresource k8s.deployment api {\n  metadata.name = \"api\"\n  spec.template.spec.containers = [{name: \"api\", image: \"api:1\"}]\n}\n",
+        "\nuse k8s { source = \"./providers/k8s\" }\nresource k8s.deployment api {\n  metadata.name = \"api\"\n  spec.template.spec.containers = [{name: \"api\", image: \"api:1\"}]\n}\n",
     );
     let r = dform(&s, None, &["plan", "p.df"]).failure();
     assert!(
@@ -1146,7 +1143,7 @@ fn a_kubeconfig_held_as_a_secret_configures_the_provider() {
     let program = |settings: &str| {
         format!(
             "\ninput kubeconfig: secret(string)\n\
-             provider k8s {{ source = \"./providers/k8s\" }}\n\
+             use k8s {{ source = \"./providers/k8s\" }}\n\
              provider_config(\"k8s\", {settings}) where kubeconfig(k)\n\
              resource k8s.config_map settings {{\n  metadata.name = \"settings\"\n  \
              data = {{ \"MODE\": \"test\" }}\n}}\n"
@@ -1234,7 +1231,7 @@ fn a_create_whose_answer_was_lost_is_found_by_its_label_and_key() {
     let s = Scratch::project("k8s-lost-create");
     std::fs::create_dir_all(s.path("providers/k8s")).unwrap();
     std::os::unix::fs::symlink(k8s(), s.path("providers/k8s/dform-provider-k8s")).unwrap();
-    let head = "\nprovider k8s { source = \"./providers/k8s\" }\n";
+    let head = "\nuse k8s { source = \"./providers/k8s\" }\n";
     let cm = "resource k8s.config_map settings {\n  metadata.generateName = \"settings-\"\n  \
               data = { \"MODE\": \"test\" }\n}\n";
     s.write("p.df", &format!("{head}{cm}"));
@@ -1305,7 +1302,7 @@ fn an_empty_pod_selector_is_present() {
     std::os::unix::fs::symlink(k8s(), s.path("providers/k8s/dform-provider-k8s")).unwrap();
     let program = |selector: &str| {
         format!(
-            "\nprovider k8s {{ source = \"./providers/k8s\" }}\n\
+            "\nuse k8s {{ source = \"./providers/k8s\" }}\n\
              resource k8s.network_policy deny {{\n  metadata.name = \"deny\"\n{selector}  \
              spec.policyTypes = [\"Ingress\"]\n}}\n"
         )
@@ -1347,7 +1344,7 @@ fn a_world_read_is_answered_from_the_live_object() {
     s.write(
         "p.df",
         "\n\
-         provider k8s { source = \"./providers/k8s\" }\n\
+         use k8s { source = \"./providers/k8s\" }\n\
          let active = world.k8s.service[\"shop/web\"].spec.selector.color\n\
          resource k8s.config_map serving {\n\
            metadata.name = \"serving\"\n\
@@ -1445,7 +1442,7 @@ fn a_held_secret_is_read_from_the_cluster() {
         "a.df",
         "\n\
          input pw: secret(string)\n\
-         provider k8s { source = \"./providers/k8s\" }\n\
+         use k8s { source = \"./providers/k8s\" }\n\
          resource k8s.secret creds {\n\
            metadata.name = \"creds\"\n\
            stringData = { pw: p }\n\
@@ -1456,7 +1453,7 @@ fn a_held_secret_is_read_from_the_cluster() {
     s.write(
         "b.df",
         "\n\
-         provider k8s { source = \"./providers/k8s\" }\n\
+         use k8s { source = \"./providers/k8s\" }\n\
          use a\n\
          resource k8s.secret copy {\n\
            metadata.name = \"copy\"\n\

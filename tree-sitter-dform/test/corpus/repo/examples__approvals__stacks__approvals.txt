@@ -2,7 +2,7 @@
 examples/approvals/stacks/approvals.df
 ======================================
 
-# README "Approvals": policy says which deformations need an approval, and
+# README "Approvals": policy says which changes need an approval, and
 # apply verifies a signed approval of the plan's digest before its first
 # Apply call. Staging needs none (README.md); a replace in prod needs one:
 #
@@ -17,7 +17,7 @@ key env: enum("staging", "prod") = "staging"
 input cidr: string = "10.0.0.0/16"
 
 # The mock's built-in fake schema.
-provider fake
+use fake
 
 resource net.vpc main { cidr }
 
@@ -59,8 +59,9 @@ approver_allowed(who, r) where requires_approval(r, _), who in ["alice", "bob"]
     (string
       (string_content)))
   (comment)
-  (provider
-    (identifier))
+  (use
+    (dotted_name
+      (identifier)))
   (resource
     (dotted_name
       (identifier)

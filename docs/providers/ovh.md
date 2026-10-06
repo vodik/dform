@@ -25,7 +25,7 @@ waits for it. A longer timeout makes the apply print less.
 The program names the account, never a credential:
 
 ```text
-provider ovh { endpoint = "ovh-ca", project = "vodik" }
+use ovh { endpoint = "ovh-ca", project = "vodik" }
 ```
 
 - `endpoint`: `ovh-eu`, `ovh-ca`, `ovh-us` (or `kimsufi-*`,

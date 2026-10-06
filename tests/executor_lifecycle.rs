@@ -9,7 +9,7 @@ const NET: &str = r#"
 
 resource net.vpc main { cidr = "10.0.0.0/16" }
 lifecycle(main, "prevent_destroy")
-provider fake
+use fake
 "#;
 
 /// prevent_destroy turns a delete, or a replace, into a deny: plan and
@@ -22,7 +22,7 @@ fn prevent_destroy_makes_a_delete_a_deny() {
     // The resource goes; the fact stays, naming it by its address.
     s.write(
         "p.df",
-        "\nlifecycle(net.vpc[\"main\"], \"prevent_destroy\")\nprovider fake\n",
+        "\nlifecycle(net.vpc[\"main\"], \"prevent_destroy\")\nuse fake\n",
     );
     let r = mock(&s, &["plan"]).failure();
     assert!(r.stdout.contains("- net.vpc main"), "{}", r.stdout);
@@ -71,7 +71,7 @@ component network {{
   resource net.subnet a {{ vpc, tier = "web" }}
 }}
 instance network {inst}
-provider fake
+use fake
 "#
         )
     };
@@ -130,7 +130,7 @@ fn ignore_changes_drops_the_path_from_both_sides() {
     let prog = |team: &str| {
         format!(
             "\nresource net.vpc main {{ cidr = \"10.0.0.0/16\", tags = {{ team: \"{team}\" }} }}\n\
-             ignore_changes(main, \"tags.owner\")\nprovider fake\n"
+             ignore_changes(main, \"tags.owner\")\nuse fake\n"
         )
     };
     s.write("p.df", &prog("a"));
@@ -177,7 +177,7 @@ deny "databases must be protected" {addr: a} where {
   a in db.postgres
   not lifecycle(a, "prevent_destroy")
 }
-provider fake
+use fake
 "#,
     );
     let r = mock(&s, &["plan"]).failure();
@@ -190,7 +190,7 @@ provider fake
     s.write(
         "p.df",
         &s.read("p.df")
-            .replacen("provider fake\n", "provider fake\nuse lib\n", 1),
+            .replacen("use fake\n", "use fake\nuse lib\n", 1),
     );
     mock(&s, &["plan"]).success();
 }
@@ -203,7 +203,7 @@ fn ignore_changes_still_sets_the_path_on_create() {
     let prog = |owner: &str| {
         format!(
             "\nresource net.vpc main {{ cidr = \"10.0.0.0/16\", tags = {{ owner: \"{owner}\" }} }}\n\
-             ignore_changes(main, \"tags.owner\")\nprovider fake\n"
+             ignore_changes(main, \"tags.owner\")\nuse fake\n"
         )
     };
     s.write("p.df", &prog("ops"));
@@ -230,12 +230,12 @@ fn ignore_changes_update_leaves_an_absent_path_absent() {
     let s = Scratch::new("ignore-changes-absent");
     s.write(
         "p.df",
-        "\nresource net.vpc main { cidr = \"10.0.0.0/16\", size = 1 }\nprovider fake\n",
+        "\nresource net.vpc main { cidr = \"10.0.0.0/16\", size = 1 }\nuse fake\n",
     );
     mock(&s, &["apply"]).success();
     s.write(
         "p.df",
-        "\nresource net.vpc main { cidr = \"10.0.0.0/16\", size = 2, tags = { owner: \"ops\" } }\nignore_changes(main, \"tags.owner\")\nprovider fake\n",
+        "\nresource net.vpc main { cidr = \"10.0.0.0/16\", size = 2, tags = { owner: \"ops\" } }\nignore_changes(main, \"tags.owner\")\nuse fake\n",
     );
     let r = mock(&s, &["apply", "--why=none"]).success();
     assert!(
@@ -262,7 +262,7 @@ fn why_explains_prevent_destroy() {
     mock(&s, &["apply"]).success();
     s.write(
         "p.df",
-        "\nlifecycle(net.vpc[\"main\"], \"prevent_destroy\")\nprovider fake\n",
+        "\nlifecycle(net.vpc[\"main\"], \"prevent_destroy\")\nuse fake\n",
     );
     let r = mock(&s, &["why", "deny(M)"]).success();
     assert!(
@@ -294,7 +294,7 @@ fn policy_reads_the_deformation() {
     mock(&s, &["apply"]).success();
     s.write(
         "p.df",
-        "\nresource compute.vm keep { size = 1 }\ndeny(m) where deformation(\"delete\", r, _), m = \"no deletes here: ${r}\"\nprovider fake\n",
+        "\nresource compute.vm keep { size = 1 }\ndeny(m) where deformation(\"delete\", r, _), m = \"no deletes here: ${r}\"\nuse fake\n",
     );
     let r = mock(&s, &["plan"]).failure();
     assert!(
@@ -319,7 +319,7 @@ fn a_resource_rule_over_the_deformation_is_an_error() {
     let s = Scratch::new("deformation-circular");
     s.write(
         "p.df",
-        "\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\nresource net.vpc shadow {\n  cidr = \"10.1.0.0/16\"\n} where deformation(\"create\", main, _)\nprovider fake\n",
+        "\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\nresource net.vpc shadow {\n  cidr = \"10.1.0.0/16\"\n} where deformation(\"create\", main, _)\nuse fake\n",
     );
     let r = mock(&s, &["plan"]).failure();
     assert!(
@@ -347,7 +347,7 @@ resource compute.vm vm { size = 1 }
 deny "a wide vpc: ${v}" where deformation(_, v, _), v in net.vpc, v.cidr == "10.1.0.0/16"
 deny "main changes: ${r}" where deformation("create", r, _), r == main
 deny "not main: ${r}" where deformation(_, r, _), r != main, r != net.vpc["gone"]
-provider fake
+use fake
 "#,
     );
     let r = mock(&s, &["plan"]).failure();

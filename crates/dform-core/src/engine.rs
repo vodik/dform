@@ -3397,7 +3397,7 @@ const REFERENCE: &[Reference] = &[
         Kw,
         "provider NAME { KEY = TERM, ... }",
         "A provider's configuration; `source` is a constant, every other setting a term.",
-        "provider aws { region = \"us-east-1\" }",
+        "use aws { region = \"us-east-1\" }",
     ),
     r(
         "key",

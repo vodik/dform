@@ -1,4 +1,4 @@
-//! The built-in `ssh` provider (`provider ssh`): `ssh.read` over SFTP and
+//! The built-in `ssh` provider (`use ssh`): `ssh.read` over SFTP and
 //! `ssh.run` over exec, against a real sshd each test starts on a free
 //! port with a throwaway host key, and a client key in a scratch `HOME`
 //! (no agent). A host that does not answer yet, and a file that is not
@@ -140,7 +140,7 @@ fn project(name: &str, port: u16) -> Scratch {
     s.write(
         "p.df",
         &format!(
-            "\nprovider fake\nprovider ssh\n\n\
+            "\nuse fake\nuse ssh\n\n\
              let host = \"127.0.0.1:{port}\"\n\
              let cidr = ssh.run(host, \"{user}\", \"cat {dir}/cidr\")\n\
              let raw = ssh.read(host, \"{user}\", \"{dir}/k3s.yaml\")\n\
@@ -205,7 +205,7 @@ fn reads_a_file_and_runs_a_command() {
     s.write(
         "q.df",
         &format!(
-            "\nprovider ssh\nkube(r) where r = ssh.read(\"127.0.0.1:{port}\", \"{}\", \"{}\")\n",
+            "\nuse ssh\nkube(r) where r = ssh.read(\"127.0.0.1:{port}\", \"{}\", \"{}\")\n",
             user(),
             s.path("remote/k3s.yaml").display()
         ),

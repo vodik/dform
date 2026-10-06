@@ -247,7 +247,7 @@ fn why_shows_the_pattern_as_written() {
     let s = Scratch::project("lang-patterns");
     s.write(
         "p.df",
-        "\nprovider fake\n\nlabels({ app: \"web\" })\n\nlabel(k, v) where labels(l), (k, v) in l\n",
+        "\nuse fake\n\nlabels({ app: \"web\" })\n\nlabel(k, v) where labels(l), (k, v) in l\n",
     );
     let r = s.run(&["why", "label(_, _)", "p.df"]).success();
     assert!(

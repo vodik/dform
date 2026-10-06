@@ -30,7 +30,7 @@ fn warnings(r: &Run) -> Vec<&str> {
 
 #[test]
 fn a_constant_provider_warns_once_listing_its_names() {
-    let r = plan("provider fake", "");
+    let r = plan("use fake", "");
     let w = warnings(&r);
     assert_eq!(w.len(), 1, "{}", r.stderr);
     for name in [
@@ -44,7 +44,7 @@ fn a_constant_provider_warns_once_listing_its_names() {
 
 #[test]
 fn a_provider_configured_from_the_key_is_isolated() {
-    let r = plan("provider fake { region = \"r-${env}\" }", "");
+    let r = plan("use fake { region = \"r-${env}\" }", "");
     assert_eq!(warnings(&r), Vec::<&str>::new(), "{}", r.stderr);
 }
 
@@ -53,7 +53,7 @@ fn a_provider_configured_from_the_key_is_isolated() {
 #[test]
 fn a_provider_configured_from_a_computed_attribute_is_isolated() {
     let r = plan(
-        "provider fake\nprovider k8s { kubeconfig = cluster.api_endpoint }",
+        "use fake\nuse k8s { kubeconfig = cluster.api_endpoint }",
         "resource k8s.cluster cluster { name = \"c-${env}\" }\n\
          resource k8s.namespace web { metadata.name = \"web\" }\n",
     );

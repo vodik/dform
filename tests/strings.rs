@@ -15,7 +15,7 @@ fn a_backslash_at_a_line_end_joins_the_lines() {
                output hole = \"${name}-\\\n${name}\"\n\
                output crlf = \"x\\\r\ny\"\n\
                output script = str.dedent(\n  \"\n  echo \\\n    ${name}\n\",\n)\n\
-               provider fake\n";
+               use fake\n";
     s.write("main.df", src);
     let r = s
         .run(&["query", "attr(\"output\", \"\", k, v)", "main.df"])

@@ -15,7 +15,7 @@ input zones: int = 2 check zones >= 1
 input gcp { project_id: string, project_name: string, region: string, network_name: string }
 input gke { control_plane_cidr: inet, subnet_cidr: inet }
 
-provider gke
+use gke
 
 zone_at(1, "us-east1-b")
 zone_at(2, "us-east1-c")

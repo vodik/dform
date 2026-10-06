@@ -31,7 +31,7 @@ component pg_gcp: database {
 instance pg_aws store { name = "a" } where cloud == "aws"
 instance pg_gcp store { name = "b" } where cloud == "gcp"
 resource net.subnet s { size = 3, name = store.conn }
-provider fake
+use fake
 "#;
 
 fn plan(s: &Scratch, sets: &[&str]) -> common::Run {
@@ -136,7 +136,7 @@ fn a_signature_is_read_through_its_module() {
     );
     s.write(
         "stacks/app.df",
-        "\n\nprovider fake\nuse kinds\n\ncomponent pg: kinds.database {\n  output conn: int = 1\n}\n",
+        "\n\nuse fake\nuse kinds\n\ncomponent pg: kinds.database {\n  output conn: int = 1\n}\n",
     );
     let r = s.run(&["plan", "app"]).failure();
     assert!(

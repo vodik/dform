@@ -43,6 +43,11 @@ type_attr("iam.role_policy_attachment", "id", "string", ["computed", "id"])
 type_attr(net.vpc, "cidr", "string", ["force_new"])
 type_attr(net.subnet, "cidr", "string", ["force_new"])
 
+# A decimal (R-75): a vm's `weight` is a number, an int or a float, sent
+# as a JSON number. Its `labels` are a map: any keys, each value a string.
+type_attr(compute.vm, "weight", "number", [])
+type_attr(compute.vm, "labels", "map(string)", [])
+
 # What an attribute that points at another resource takes: the resource
 # itself (`vpc = main`), resolved to its id at Apply (R-43). Each is named
 # for the thing it points at.
@@ -454,6 +459,32 @@ type_doc("iam.role_policy_attachment", "policy", "The policy.")
         (list
           (string
             (string_content))))))
+  (comment)
+  (comment)
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (member_expression
+          (identifier)
+          (identifier))
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (list))))
+  (fact
+    (call
+      (identifier)
+      (arguments
+        (member_expression
+          (identifier)
+          (identifier))
+        (string
+          (string_content))
+        (string
+          (string_content))
+        (list))))
   (comment)
   (comment)
   (comment)

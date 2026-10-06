@@ -12,7 +12,7 @@ tests/syntax/ok/e71_dform.df
 # to input env; --set env=prod is a normal contribution and wins.
 input env: enum("dev", "staging", "prod") = "staging"
 
-provider fake { source = "./providers/fake" }
+use fake { source = "./providers/fake" }
 
 zone("us-test-1a")
 zone("us-test-1b")
@@ -137,8 +137,9 @@ deny("prod_k8s_private_api", "prod k8s must have private api", { cluster: c }) w
         (string_content)))
     (string
       (string_content)))
-  (provider
-    (identifier)
+  (use
+    (dotted_name
+      (identifier))
     (block
       (field
         (block_path

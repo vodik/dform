@@ -13,7 +13,7 @@ input gcp_zone: enum("a", "b") where cloud == "gcp"
 input gcp_project: string where cloud == "gcp"
 input region: string = "eu" where cloud == "aws"
 input region: string = "europe-west1" where cloud == "gcp"
-provider fake
+use fake
 resource net.vpc v { name = "${gcp_project}-${gcp_zone}-${region}" } where cloud == "gcp"
 resource net.vpc w { name = region } where cloud == "aws"
 "#;
@@ -87,7 +87,7 @@ fn a_key_takes_no_clause_and_a_twice_declared_input_follows_the_rule() {
     s.write(
         "p.df",
         "\ninput cloud: enum(\"aws\", \"gcp\") = \"aws\"\nkey env: string where cloud == \"aws\"\n\
-         provider fake\n",
+         use fake\n",
     );
     let r = plan(&s, &[]).failure();
     assert!(
@@ -144,7 +144,7 @@ component store {
 }
 instance store a { cloud = "aws" }
 instance store g { cloud = "gcp", project = "p1" }
-provider fake
+use fake
 "#,
     );
     let r = plan(&s, &[]).success();

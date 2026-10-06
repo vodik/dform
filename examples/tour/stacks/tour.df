@@ -25,7 +25,7 @@
 key env: enum("dev", "prod") = "dev"
 input public_db: bool = false
 input database { backup_days: int = 1, multi_az: bool = false }
-provider fake
+use fake
 
 # 1. One resource
 #

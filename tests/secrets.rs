@@ -39,7 +39,7 @@ resource leaky.vault v {
 resource leaky.oops o {
   password = "OOPS-SECRET-DO-NOT-PRINT"
 }
-provider fake
+use fake
 "#;
 
 fn schema() -> String {
@@ -286,7 +286,7 @@ fn a_secret_input_never_prints_in_query_why_or_the_plan_file() {
     let s = Scratch::new("secrets-input");
     s.write(
         "p.df",
-        "\ninput pw: secret(string)\noutput token: secret(string) = p where pw(p)\nresource leaky.vault v {\n  password = p\n} where pw(p)\nprovider fake\n",
+        "\ninput pw: secret(string)\noutput token: secret(string) = p where pw(p)\nresource leaky.vault v {\n  password = p\n} where pw(p)\nuse fake\n",
     );
     let schema = schema();
     let mock = ["--provider", schema.as_str(), "--world", "w.json"];
@@ -385,7 +385,7 @@ fn a_secret_reaches_a_public_output_only_through_declassify() {
     let s = Scratch::new("secrets-declassify");
     let prog = |body: &str, policy: &str| {
         format!(
-            "\ninput pw: secret(string)\noutput pw_len: int = n where pw(p), {body}\n{policy}\nprovider fake\n"
+            "\ninput pw: secret(string)\noutput pw_len: int = n where pw(p), {body}\n{policy}\nuse fake\n"
         )
     };
     let mock = ["--world", "w.json", "--set", "pw=HUNTER-TWO"];
@@ -446,7 +446,7 @@ fn a_secret_reaches_a_public_output_only_through_declassify() {
 /// resource's sensitive attribute (`pass`, a ref to what the provider holds).
 const PRODUCER: &str = r#"
 input pw: secret(string)
-provider fake
+use fake
 resource leaky.vault v {
   password = p
 } where pw(p)
@@ -561,7 +561,7 @@ fn a_secret_output_reaches_a_sensitive_field_in_another_stack() {
     s.write(
         "stacks/app.df",
         "\n\
-         provider fake\n\
+         use fake\n\
          use stacks.prod\n\
          resource leaky.vault copy { backup = prod.pass }\n\
          ",
@@ -722,7 +722,7 @@ fn kept_world_documents_hold_a_sensitive_leaf_by_its_digest() {
         "stacks/s.df",
         "\n\
          input pw: secret(string)\n\
-         provider fake\n\
+         use fake\n\
          resource leaky.vault v {\n\
            password = p\n\
          } where pw(p)\n\
@@ -782,7 +782,7 @@ fn an_env_var_never_prints_in_query_or_why() {
     let s = Scratch::new("secrets-env");
     s.write(
         "p.df",
-        "\nprovider env\ntok(t) where t = env.var(\"DFORM_TEST_TOK\")\n",
+        "\nuse env\ntok(t) where t = env.var(\"DFORM_TEST_TOK\")\n",
     );
     let schema = schema();
     let mock = ["--provider", schema.as_str(), "--world", "w.json"];

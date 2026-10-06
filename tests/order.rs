@@ -37,7 +37,7 @@ output kubeconfig: string = cluster.kubeconfig
 output ip: string = cluster.ip
 ips(n, i) where i = k3s.k3s[n].ip
 
-provider fake
+use fake
 
 use k3s
 
@@ -75,7 +75,7 @@ fn a_read_comes_before_what_it_names() {
         r#"output zone = config.zone
 output early = vpc_cidr
 let vpc_cidr = later.cidr
-provider fake
+use fake
 resource net.vpc later { cidr = "10.1.0.0/16" }
 use config
 "#,
@@ -94,7 +94,7 @@ fn an_instance_of_a_module_names_its_components() {
     s.write("k3s.df", K3S);
     s.write(
         "main.df",
-        "output ip: string = cluster.ip\nprovider fake\nuse k3s\ninstance k3s cluster { name = \"a\" }\n",
+        "output ip: string = cluster.ip\nuse fake\nuse k3s\ninstance k3s cluster { name = \"a\" }\n",
     );
     let r = s.run(&["plan", "main.df"]).failure();
     assert!(

@@ -13,7 +13,7 @@ set x.y = p where x in net.vpc, arg(net.subnet, "y", "x", p)
 
 resource net.subnet y { x = q } where arg(net.vpc, "x", "z", q)
 
-provider fake
+use fake
 
 ---
 
@@ -79,5 +79,6 @@ provider fake
               (string
                 (string_content))
               (identifier)))))))
-  (provider
-    (identifier)))
+  (use
+    (dotted_name
+      (identifier))))

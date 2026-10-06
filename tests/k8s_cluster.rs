@@ -83,7 +83,7 @@ fn program(ns: &str, image: &str) -> String {
     format!(
         r#"
 
-provider k8s {{ source = "./providers/k8s" }}
+use k8s {{ source = "./providers/k8s" }}
 
 resource k8s.namespace test {{
   metadata.name = "{ns}"
@@ -223,10 +223,7 @@ fn the_k8s_demo_applies_and_converges() {
     let s = scratch("k8s-cluster-demo");
     let src = std::fs::read_to_string(repo().join("examples/k8s/stacks/k8s_demo.df")).unwrap();
     let demo = src
-        .replace(
-            "provider k8s",
-            "provider k8s { source = \"./providers/k8s\" }",
-        )
+        .replace("use k8s", "use k8s { source = \"./providers/k8s\" }")
         .replace(
             "metadata.name = \"shop\"",
             &format!("metadata.name = \"{}\"", ns.name),
@@ -405,7 +402,7 @@ fn a_secrets_string_data_reads_back() {
     let s = scratch("k8s-cluster-secret");
     let program = |pw: &str| {
         format!(
-            "\nprovider k8s {{ source = \"./providers/k8s\" }}\n\
+            "\nuse k8s {{ source = \"./providers/k8s\" }}\n\
              resource k8s.namespace test {{\n  metadata.name = \"{}\"\n}}\n\
              resource k8s.secret token {{\n  metadata.name = \"token\"\n  \
              metadata.namespace = test.metadata.name\n  stringData = {{ password: \"{pw}\" }}\n}}\n",
@@ -437,7 +434,7 @@ fn an_empty_pod_selector_converges() {
     let s = scratch("k8s-cluster-pod-selector");
     let program = |selector: &str| {
         format!(
-            "\nprovider k8s {{ source = \"./providers/k8s\" }}\n\
+            "\nuse k8s {{ source = \"./providers/k8s\" }}\n\
              resource k8s.namespace test {{\n  metadata.name = \"{}\"\n}}\n\
              resource k8s.network_policy all {{\n  metadata.name = \"all\"\n  \
              metadata.namespace = test.metadata.name\n  spec.podSelector = {{}}\n  \
@@ -488,7 +485,7 @@ fn a_kubeconfig_held_as_a_secret_configures_the_provider() {
         "p.df",
         &format!(
             "\ninput kubeconfig: secret(string)\n\
-             provider k8s {{ source = \"./providers/k8s\" }}\n\
+             use k8s {{ source = \"./providers/k8s\" }}\n\
              provider_config(\"k8s\", {{ kubeconfig: k }}) where kubeconfig(k)\n\
              resource k8s.namespace test {{\n  metadata.name = \"{}\"\n}}\n",
             ns.name
@@ -566,7 +563,7 @@ fn a_world_read_answers_from_a_live_object() {
     s.write(
         "p.df",
         &format!(
-            "\nprovider k8s {{ source = \"./providers/k8s\" }}\n\
+            "\nuse k8s {{ source = \"./providers/k8s\" }}\n\
              color = world.k8s.config_map[\"{0}/release\"].data.COLOR\n\
              resource k8s.config_map serving {{\n  metadata.name = \"serving\"\n  \
              metadata.namespace = \"{0}\"\n  data = {{ \"COLOR\": color }}\n}}\n",

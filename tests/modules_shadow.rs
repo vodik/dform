@@ -19,7 +19,7 @@ resource net.vpc traefik { cidr = "10.0.0.0/16" }
 resource net.subnet web { cidr = traefik.cidr }
 "#,
     );
-    s.write("stacks/app.df", "\n\nprovider fake\n\nuse traefik\n");
+    s.write("stacks/app.df", "\n\nuse fake\n\nuse traefik\n");
     let r = s.run(&["plan", "--why=none", "app"]).success();
     assert!(
         r.stdout
@@ -30,7 +30,7 @@ resource net.subnet web { cidr = traefik.cidr }
     // The stack's own scope keeps the error: there both are its names.
     s.write(
         "stacks/app.df",
-        "\n\nprovider fake\n\nuse traefik\nresource net.vpc traefik { cidr = \"10.9.0.0/16\" }\n\
+        "\n\nuse fake\n\nuse traefik\nresource net.vpc traefik { cidr = \"10.9.0.0/16\" }\n\
          resource net.subnet s { cidr = traefik.cidr }\n",
     );
     let r = s.run(&["plan", "--why=none", "app"]).failure();
@@ -55,7 +55,7 @@ component c {
 }
 resource net.vpc cfg { cidr = "10.1.0.0/16" }
 instance c a { cfg = "10.2.0.0/16" }
-provider fake
+use fake
 "#,
     );
     let r = s
@@ -92,7 +92,7 @@ resource net.vpc main { cidr = "10.0.0.0/16" }
 instance sub a { vpc = main }
 instance edge e
 resource net.subnet s { cidr = e.c }
-provider fake
+use fake
 "#,
     );
     let r = s

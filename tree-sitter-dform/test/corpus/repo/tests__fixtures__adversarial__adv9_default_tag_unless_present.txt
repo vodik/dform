@@ -13,7 +13,7 @@ arg_add(t, n, "tags", { team: "platform" }) where {
   not arg(t, n, "tags", { team: "platform" })
 }
 
-provider fake
+use fake
 
 ---
 
@@ -77,5 +77,6 @@ provider fake
                   (identifier)
                   (string
                     (string_content))))))))))
-  (provider
-    (identifier)))
+  (use
+    (dotted_name
+      (identifier))))

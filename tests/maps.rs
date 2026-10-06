@@ -23,7 +23,7 @@ fn a_map_input_takes_a_key_by_set_and_iterates() {
     s.write(
         "p.df",
         "\ninput labels: map(string) = { team: \"core\" }\n\
-         input sizes: map(int) = {}\nprovider fake\n\
+         input sizes: map(int) = {}\nuse fake\n\
          label(k, v) where (k, v) in labels\n\
          size(k, v) where (k, v) in sizes\n",
     );
@@ -69,7 +69,7 @@ fn a_map_attribute_and_column_check_their_values() {
     let s = scratch("map-attr");
     s.write(
         "p.df",
-        "\nprovider fake\nresource compute.vm a { labels = { team: \"core\", tier: 1 } }\n",
+        "\nuse fake\nresource compute.vm a { labels = { team: \"core\", tier: 1 } }\n",
     );
     let r = s.run(&["plan", "--why=none", "p.df"]).failure();
     assert!(
@@ -85,7 +85,7 @@ fn a_map_attribute_and_column_check_their_values() {
     );
     s.write(
         "p.df",
-        "\ninput t from json(\"t.json\")\ndecl t(n: string, tags: map(string))\nprovider fake\n\
+        "\ninput t from json(\"t.json\")\ndecl t(n: string, tags: map(string))\nuse fake\n\
          resource compute.vm \"${n}\" { labels = tags } where t(n, tags)\n",
     );
     let r = s.run(&["plan", "--why=none", "p.df"]).failure();
@@ -110,7 +110,7 @@ fn a_map_field_and_a_map_column() {
     let s = scratch("map-field");
     s.write(
         "p.df",
-        "\ninput meta { owner: string = \"a\", labels: map(string) = {} }\nprovider fake\n\
+        "\ninput meta { owner: string = \"a\", labels: map(string) = {} }\nuse fake\n\
          l(k, v) where (k, v) in meta.labels\n",
     );
     let r = s
@@ -119,7 +119,7 @@ fn a_map_field_and_a_map_column() {
     assert!(row(&r.stdout, &["\"team\"", "\"core\""]), "{}", r.stdout);
     s.write(
         "p.df",
-        "\ndecl p(n: string, sizes: map(int))\nprovider fake\np(\"a\", { x: \"big\" })\n",
+        "\ndecl p(n: string, sizes: map(int))\nuse fake\np(\"a\", { x: \"big\" })\n",
     );
     let r = s.run(&["plan", "--why=none", "p.df"]).failure();
     assert!(
@@ -150,7 +150,7 @@ fn set_from_gives_a_map_input_its_keys() {
             "p.df",
             &format!(
                 "\ninput labels: map(string) = {{ team: \"core\" }}\n\
-                 input sizes: map(int) = {{}}\nprovider fake\n\
+                 input sizes: map(int) = {{}}\nuse fake\n\
                  set from {format}(\"c.{format}\")\n\
                  label(k, v) where (k, v) in labels\n\
                  size(k, v) where (k, v) in sizes\n"
@@ -167,7 +167,7 @@ fn set_from_gives_a_map_input_its_keys() {
     let s = scratch("map-set-from-typo");
     s.write(
         "p.df",
-        "\ninput labels: map(string) = {}\nprovider fake\nset from yaml(\"c.yaml\")\n",
+        "\ninput labels: map(string) = {}\nuse fake\nset from yaml(\"c.yaml\")\n",
     );
     s.write("c.yaml", "labels:\n  owner: ops\nlabelz:\n  x: y\n");
     let r = s.run(&["plan", "--why=none", "p.df"]).failure();

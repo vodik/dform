@@ -9,7 +9,7 @@ use common::{Scratch, mock};
 
 const KEY: &str = "traefik.ingress.kubernetes.io/router.tls.certresolver";
 
-const PROGRAM: &str = "\n\nprovider k8s\n\n\
+const PROGRAM: &str = "\n\nuse k8s\n\n\
     resource k8s.namespace ns {\n\
     \x20 metadata.name = \"ns\"\n\
     \x20 metadata.annotations.\"traefik.ingress.kubernetes.io/router.tls.certresolver\" = \"letsencrypt\"\n\
@@ -88,7 +88,7 @@ fn a_quoted_segment_reads_one_key() {
     // An object's key read through a quoted segment, not a walk of `a`, `b`.
     s.write(
         "p.df",
-        "\n\nprovider k8s\n\nlet anns = { \"a.b/c\": \"one\" }\n\
+        "\n\nuse k8s\n\nlet anns = { \"a.b/c\": \"one\" }\n\
          resource k8s.namespace ns {\n  metadata.name = \"ns\"\n  \
          metadata.labels.x = anns.\"a.b/c\"\n}\n",
     );
@@ -141,7 +141,7 @@ fn fmt_keeps_a_quoted_segment() {
         "{}",
         s.read("p.df")
     );
-    let siblings = "\n\nprovider k8s\n\n\
+    let siblings = "\n\nuse k8s\n\n\
         resource k8s.namespace ns {\n\
         \x20 metadata.name = \"ns\"\n\
         \x20 metadata.annotations.\"a.b/c\" = \"1\"\n\

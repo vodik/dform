@@ -10,7 +10,7 @@ const WORLD: &str = r#"{"resources": {"compute.vm::app": {"typ": "compute.vm", "
 
 /// Two ticks: the database is created in tick 1; the vm's update waits on
 /// its endpoint and runs in tick 2.
-const TWO_TICKS: &str = "\nresource db.postgres main { size = 1 }\nresource compute.vm app { db_host = ref(db.postgres, \"main\", \"endpoint\") }\nprovider fake\n";
+const TWO_TICKS: &str = "\nresource db.postgres main { size = 1 }\nresource compute.vm app { db_host = ref(db.postgres, \"main\", \"endpoint\") }\nuse fake\n";
 
 fn two_ticks(name: &str) -> Scratch {
     let s = Scratch::new(name);
@@ -69,7 +69,7 @@ fn a_quoted_path_segment_round_trips_through_the_plan_file() {
     let s = Scratch::new("planfile-quoted");
     s.write(
         "p.df",
-        "provider k8s\nresource k8s.namespace ns {\n  metadata.name = \"ns\"\n  \
+        "use k8s\nresource k8s.namespace ns {\n  metadata.name = \"ns\"\n  \
          metadata.annotations.\"a.b/c\" = \"1\"\n}\n",
     );
     s.run(&[
@@ -112,7 +112,7 @@ fn a_nested_copys_address_round_trips_through_the_plan_file() {
     s.write(
         "p.df",
         "component spoke {\n  resource net.vpc vpc {\n    cidr = \"10.1.0.0/16\"\n  }\n}\n\
-         component pair {\n  instance spoke left\n}\ninstance pair edge\nprovider fake\n",
+         component pair {\n  instance spoke left\n}\ninstance pair edge\nuse fake\n",
     );
     s.run(&[
         "dev",
@@ -235,7 +235,7 @@ fn the_file_never_carries_a_labeled_secret() {
     let s = Scratch::new("planfile-secret");
     s.write(
         "p.df",
-        "\nresource leaky.vault v { password = \"VAULT-SECRET-DO-NOT-PRINT\" }\nprovider fake\n",
+        "\nresource leaky.vault v { password = \"VAULT-SECRET-DO-NOT-PRINT\" }\nuse fake\n",
     );
     let schema = repo().join("tests/fixtures/providers/leaky/schema.df");
     s.run(&[
@@ -311,7 +311,7 @@ fn a_two_phase_plan_file_stops_before_the_tick_it_could_not_name() {
 #[test]
 fn a_create_before_destroy_plan_file_applies_in_two_ticks() {
     let s = Scratch::new("planfile-cbd");
-    let net = "\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\nresource net.subnet a { vpc_id = ref(net.vpc, \"main\", \"id\"), tier = \"web\" }\nprovider fake\n";
+    let net = "\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\nresource net.subnet a { vpc_id = ref(net.vpc, \"main\", \"id\"), tier = \"web\" }\nuse fake\n";
     s.write("p.df", net);
     s.run(&common::on("p.df", &["--world", "w.json"], &["apply"]))
         .success();
@@ -344,7 +344,7 @@ resource db.postgres orders { size = 1 }
 resource iam.policy "connect-${host}" {
   statements = [{ action: "db.connect", resource: host }]
 } where pg in db.postgres, host = pg.endpoint
-provider fake
+use fake
 "#;
 
 /// The file records the group's head, its rule and the stuck instance's

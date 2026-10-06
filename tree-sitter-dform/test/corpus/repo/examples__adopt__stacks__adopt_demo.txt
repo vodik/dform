@@ -10,7 +10,7 @@ examples/adopt/stacks/adopt_demo.df
 input env: enum("staging", "prod") = "staging"
 
 # The mock's built-in fake schema.
-provider fake
+use fake
 
 # network.df's input, per environment.
 set { network.vpc_net = inet("10.10.0.0/16") } where env == "staging"
@@ -62,8 +62,9 @@ set net.vpc["network.vpc"].owner_tag = cloud_ref(net.vpc, "existing-prod-vpc", "
     (string
       (string_content)))
   (comment)
-  (provider
-    (identifier))
+  (use
+    (dotted_name
+      (identifier)))
   (comment)
   (set
     (set_block

@@ -12,8 +12,8 @@ const APP: &str = r#"
 key env: environment = "dev"
 input cloud { account: string, region: string }
 type environment = enum("dev", "prod")
-provider env
-provider fake {
+use env
+use fake {
   account = env.var("FAKE_ACCOUNT_${env}")
   region = cloud.region
   expect_account = cloud.account
@@ -90,7 +90,7 @@ fn an_expected_account_the_provider_does_not_report_is_refused() {
     let s = project(
         "bykey-silent",
         "\n\
-         provider fake { expect_account = \"acct\" }\n\
+         use fake { expect_account = \"acct\" }\n\
          resource net.vpc main {\n\
            cidr = \"10.0.0.0/16\"\n\
          }\n\
@@ -112,7 +112,7 @@ fn a_provider_configured_from_what_it_serves_is_a_cycle() {
     let s = project(
         "bykey-cycle",
         "\n\
-         provider fake { zone = z }\n\
+         use fake { zone = z }\n\
          let z = main.cidr\n\
          resource net.vpc main {\n\
            cidr = \"10.0.0.0/16\"\n\
@@ -144,8 +144,8 @@ fn an_env_var_is_in_the_plan_file_only_as_its_label() {
     let s = project(
         "bykey-label",
         "\n\
-         provider env\n\
-         provider fake { token = env.var(\"FAKE_TOKEN\") }\n\
+         use env\n\
+         use fake { token = env.var(\"FAKE_TOKEN\") }\n\
          resource net.vpc main {\n\
            cidr = \"10.0.0.0/16\"\n\
          }\n\
@@ -182,8 +182,8 @@ fn a_changed_env_var_makes_a_saved_plan_stale() {
     let s = project(
         "bykey-stale",
         "\n\
-         provider env\n\
-         provider fake { token = env.var(\"FAKE_TOKEN\") }\n\
+         use env\n\
+         use fake { token = env.var(\"FAKE_TOKEN\") }\n\
          resource net.vpc main {\n\
            cidr = \"10.0.0.0/16\"\n\
          }\n\
@@ -220,8 +220,8 @@ fn a_secret_expected_account_is_refused_by_its_label() {
     let s = project(
         "bykey-secret-account",
         "\n\
-         provider env\n\
-         provider fake {\n\
+         use env\n\
+         use fake {\n\
            account = \"acct-real\"\n\
            expect_account = env.var(\"WANT_ACCOUNT\")\n\
          }\n\

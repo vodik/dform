@@ -11,7 +11,7 @@ use common::{STOPPED, Scratch};
 /// vpc is a pending group on it.
 const PROG: &str = r#"
 
-provider fake
+use fake
 resource db.postgres d { size = 1 }
 resource net.vpc v { cidr = "10.0.0.0/16" } where d.endpoint == "d.db.fake"
 "#;
@@ -166,7 +166,7 @@ fn an_extern_that_says_not_yet_is_asked_again() {
     let s = Scratch::new("wait-extern");
     s.write(
         "p.df",
-        "\nprovider aws { region = \"us-east-1\" }\n\n\
+        "\nuse aws { region = \"us-east-1\" }\n\n\
          resource aws.vpc \"v-${availability_zone}\" {\n  cidr_block = \"10.${n}.0.0/16\"\n\
          } where aws.availability_zone(\"available\", availability_zone, n)\n",
     );

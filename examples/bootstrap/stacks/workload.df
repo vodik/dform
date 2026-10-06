@@ -28,7 +28,7 @@ use data.approvals
 approve(t, a) where approvals.approve(t, a)
 approval(t) where approvals.approval(t)
 
-provider k8s
+use k8s
 
 resource k8s.namespace web { metadata.name = "web" }
 

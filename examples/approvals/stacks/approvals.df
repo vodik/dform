@@ -13,7 +13,7 @@ key env: enum("staging", "prod") = "staging"
 input cidr: string = "10.0.0.0/16"
 
 # The mock's built-in fake schema.
-provider fake
+use fake
 
 resource net.vpc main { cidr }
 

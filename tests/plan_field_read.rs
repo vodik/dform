@@ -25,7 +25,7 @@ resource net.subnet a {
   cidr = "10.0.1.0/24"
   name = "a-${main.cidrr}"
 }
-provider fake
+use fake
 "#,
     )
     .success();
@@ -62,7 +62,7 @@ resource net.subnet c {
   cidr = "10.0.3.0/24"
   name = "c-${gated.cidr}"
 }
-provider fake
+use fake
 "#,
     )
     .success();

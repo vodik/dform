@@ -28,7 +28,7 @@ decl peer_intent(tenant) mixed
 decl mesh_allow_direct_route(from, to)
 
 # The mock's built-in fake schema.
-provider fake
+use fake
 
 # Base IP space for tenants
 corp_net(inet("10.100.0.0/12"))

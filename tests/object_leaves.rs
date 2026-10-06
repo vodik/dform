@@ -31,7 +31,7 @@ fn a_computed_map_with_typed_keys_is_its_keys() {
     volume(&s);
     s.write(
         "stacks/lab.df",
-        "provider fake\nresource db.volume data { size = 10 }\n",
+        "use fake\nresource db.volume data { size = 10 }\n",
     );
     let r = s.run(&["plan", "lab"]).success();
     assert_eq!(
@@ -60,7 +60,7 @@ fn a_claim_plans_against_the_kubernetes_schema() {
     s.write(
         "stacks/lab.df",
         r#"
-provider k8s { source = "./providers/k8s" }
+use k8s { source = "./providers/k8s" }
 
 resource k8s.namespace traefik { metadata.name = "traefik" }
 

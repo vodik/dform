@@ -13,7 +13,7 @@ fn a_bare_name_shadowing_a_let_declares_and_its_read_is_ambiguous() {
     let s = Scratch::new("header-let");
     s.write(
         "p.df",
-        "\n\nprovider fake\n\
+        "\n\nuse fake\n\
          let env = \"dev\"\n\
          resource net.vpc env { cidr = \"10.0.0.0/16\" }\n\
          resource net.subnet s { vpc = net.vpc[\"env\"], cidr = \"10.0.1.0/24\" }\n",
@@ -60,7 +60,7 @@ fn a_clause_bound_bare_name_is_an_error() {
     let s = Scratch::new("header-clause");
     s.write(
         "p.df",
-        "\n\nprovider fake\n\
+        "\n\nuse fake\n\
          tenant(\"a\")\n\
          resource net.vpc \"${t}\" { cidr = \"10.0.0.0/16\" } where tenant(t)\n",
     );
@@ -77,7 +77,7 @@ fn a_module_item_reads_the_module_and_another_read_is_ambiguous() {
     s.write("config.df", "let base_domain = \"example.org\"\n");
     s.write(
         "p.df",
-        "\n\nprovider fake\n\
+        "\n\nuse fake\n\
          use config\n\
          resource net.vpc config { cidr = \"10.0.0.0/16\", tags = { d: config.base_domain } }\n\
          resource net.subnet s { vpc = net.vpc[\"config\"], cidr = net.vpc[\"config\"].cidr }\n",
@@ -96,7 +96,7 @@ fn a_module_item_reads_the_module_and_another_read_is_ambiguous() {
     );
     s.write(
         "p.df",
-        "\n\nprovider fake\n\
+        "\n\nuse fake\n\
          use config\n\
          resource net.vpc config { cidr = \"10.0.0.0/16\" }\n\
          resource net.subnet s { vpc = net.vpc[\"config\"], cidr = config.cidr }\n",

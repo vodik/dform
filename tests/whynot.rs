@@ -7,7 +7,7 @@ use common::{Scratch, repo};
 
 /// The README's program, on the fake cloud: a subnet in every zone the
 /// table says is available.
-const SHOP: &str = r#"provider fake
+const SHOP: &str = r#"use fake
 
 resource net.vpc main {
   cidr = "10.0.0.0/16"

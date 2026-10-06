@@ -39,7 +39,7 @@ set {
 # settings are dform.toml's [stacks.dform]: isolated, each env in its own
 # account, so identity's fixed names do not collide.
 
-provider fake
+use fake
 #| The environments: an alias, the enum wherever it is written.
 type environment = enum("dev", "staging", "prod")
 
@@ -266,8 +266,9 @@ deny "dev has no peer network" where env == "dev", "peer.vpc" in net.vpc
   (comment)
   (comment)
   (comment)
-  (provider
-    (identifier))
+  (use
+    (dotted_name
+      (identifier)))
   (comment)
   (type_alias
     (identifier)

@@ -11,7 +11,7 @@ examples/k8s/stacks/k8s_demo.df
 # Apply: until then the Deployment's configMapRef carries the null
 # ?k8s.config_map/web_config#metadata.name.
 
-provider k8s
+use k8s
 
 app("web", "nginx:1.27", 3)
 
@@ -52,8 +52,9 @@ resource k8s.service "${name}" {
   (comment)
   (comment)
   (comment)
-  (provider
-    (identifier))
+  (use
+    (dotted_name
+      (identifier)))
   (fact
     (call
       (identifier)

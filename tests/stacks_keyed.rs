@@ -10,7 +10,7 @@ use common::{Scratch, repo};
 const APP: &str = r#"
 key env: enum("staging", "stg", "prod") = "staging"
 input size: int = 1
-provider fake
+use fake
 net_of("staging", "10.1.0.0/16")
 net_of("stg", "10.1.0.0/16")
 net_of("prod", "10.2.0.0/16")
@@ -107,7 +107,7 @@ fn key_values_are_escaped_and_joined() {
         r#"
 key team: string
 key region: string = "us-east1"
-provider fake
+use fake
 resource net.vpc main {
   name = "main-${team}-${region}"
 }
@@ -141,7 +141,7 @@ fn a_key_needs_a_value_from_the_target() {
         "app.df",
         r#"
 key env: string
-provider fake
+use fake
 "#,
     );
     let r = s.run(&["plan", "app.df"]).failure();
@@ -168,13 +168,13 @@ provider fake
 #[test]
 fn a_key_is_the_stacks_and_not_a_secret() {
     let s = Scratch::new("keyed-secret");
-    s.write("app.df", "\nkey env: secret(string)\nprovider fake\n");
+    s.write("app.df", "\nkey env: secret(string)\nuse fake\n");
     let r = s.run(&["plan", "app.df", "env=prod"]).failure();
     assert!(r.stderr.contains("key env is a secret"), "{}", r.stderr);
     assert!(r.stderr.contains("app.df:2:1"), "{}", r.stderr);
     s.write(
         "app.df",
-        "\ncomponent m {\n  key env: string\n}\nprovider fake\n",
+        "\ncomponent m {\n  key env: string\n}\nuse fake\n",
     );
     let r = s.run(&["plan", "app.df"]).failure();
     assert!(r.stderr.contains("key env inside a block"), "{}", r.stderr);
@@ -188,11 +188,11 @@ fn a_deployment_read_is_the_keyed_read_of_an_instance() {
     let s = Scratch::project("keyed-instance");
     s.write(
         "stacks/app.df",
-        "\nkey env: string = \"staging\"\nprovider fake\noutput url = \"https://${env}.example\"\n",
+        "\nkey env: string = \"staging\"\nuse fake\noutput url = \"https://${env}.example\"\n",
     );
     s.write(
         "stacks/web.df",
-        "\nprovider fake\nuse stacks.app\nresource net.vpc edge { name = app[env=\"prod\"].url }\n",
+        "\nuse fake\nuse stacks.app\nresource net.vpc edge { name = app[env=\"prod\"].url }\n",
     );
     s.run(&["apply", "app", "env=prod", "--yes"]).success();
     let r = s.run(&["why", "net.vpc[\"edge\"].name", "web"]).success();
@@ -224,11 +224,11 @@ fn use_of_a_stack_reads_one_deployment() {
     let s = Scratch::project("keyed-use");
     s.write(
         "stacks/app.df",
-        "\nkey env: string = \"staging\"\nprovider fake\noutput url = \"https://${env}.example\"\n",
+        "\nkey env: string = \"staging\"\nuse fake\noutput url = \"https://${env}.example\"\n",
     );
     let web = |read: &str| {
         format!(
-            "\nprovider fake\nuse stacks.app\nresource net.vpc edge {{\n  name = u\n}} where u = {read}\n"
+            "\nuse fake\nuse stacks.app\nresource net.vpc edge {{\n  name = u\n}} where u = {read}\n"
         )
     };
     s.write("stacks/web.df", &web("app[env=\"prod\"].url"));
@@ -305,7 +305,7 @@ fn rekey_moves_state_and_the_next_plan_is_undeformed() {
         "app.df",
         r#"
 key env: string = "staging"
-provider fake
+use fake
 resource net.vpc main {
   name = "main"
 }
@@ -348,7 +348,7 @@ fn rekey_moves_the_state_from_before_the_stack_was_keyed() {
 
 const FIXED: &str = r#"
 key env: string = "staging"
-provider fake
+use fake
 resource net.vpc logs {
   bucket = "company-logs"
 }
@@ -388,7 +388,7 @@ fn a_fixed_bucket_name_in_a_keyed_stack_is_a_warning() {
 /// depends on the key does too.
 const GATED: &str = r#"
 key env: string = "staging"
-provider fake
+use fake
 resource net.vpc logs {
   bucket = "company-logs"
   tags = { env: env }
@@ -612,7 +612,7 @@ fn state_show_needs_the_key_not_the_other_inputs() {
         "\n\
          key env: string\n\
          input pw: secret(string)\n\
-         provider fake\n\
+         use fake\n\
          resource net.vpc main { cidr = \"10.0.0.0/16\" }\n\
          ",
     );

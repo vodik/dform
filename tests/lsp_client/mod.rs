@@ -254,7 +254,7 @@ output subnet: net.subnet = main
 set { nodes.count = 2 } where env == "prod"
 
 use config
-provider fake
+use fake
 let base = inet("10.0.0.0/16")
 resource net.vpc main { cidr = "${base}" }
 
@@ -274,7 +274,7 @@ use config
 use stacks.platform
 use databases
 
-provider fake
+use fake
 
 instance databases.postgres app_db {
   name = "app-${config.region}"

@@ -50,7 +50,7 @@ fn project(name: &str, providers: &str, program: &str) -> Scratch {
 fn program(server: &Server, user_data: &str, flavor: &str) -> String {
     format!(
         r#"
-provider ovh {{ endpoint = "{}", project = "{}" }}
+use ovh {{ endpoint = "{}", project = "{}" }}
 
 resource ovh.ssh_key admin {{ name = "lab-admin", public_key = "ssh-ed25519 AAAAC3Nz lab" }}
 
@@ -157,7 +157,7 @@ fn a_program_plans_against_the_account() {
     s.write(
         "main.df",
         &format!(
-            "provider ovh {{ endpoint = \"{}\", project = \"lab\" }}\n\
+            "use ovh {{ endpoint = \"{}\", project = \"lab\" }}\n\
              resource ovh.instance old {{\n  name = \"old\"\n  region = \"BHS5\"\n  \
              flavor = \"b2-7\"\n  image = \"Ubuntu 24.04\"\n}}\n\
              adopt(old, \"{id}\")\n",
@@ -264,7 +264,7 @@ fn a_program_plans_applies_and_plans_clean() {
     s.write(
         "main.df",
         &format!(
-            "provider ovh {{ endpoint = \"{}\", project = \"lab\" }}\n",
+            "use ovh {{ endpoint = \"{}\", project = \"lab\" }}\n",
             server.endpoint
         ),
     );
@@ -280,7 +280,7 @@ fn a_rename_and_a_ttl_change_in_place() {
     let server = Server::start();
     let program = |name: &str, ttl: &str| {
         format!(
-            "provider ovh {{ endpoint = \"{}\", project = \"lab\" }}\n\
+            "use ovh {{ endpoint = \"{}\", project = \"lab\" }}\n\
              resource ovh.instance vm {{\n  name = \"{name}\"\n  region = \"BHS5\"\n  \
              flavor = \"d2-2\"\n  image = \"Debian 13\"\n}}\n\
              resource ovh.domain_record apex {{\n  zone = \"example.com\"\n  type = \"TXT\"\n  \
@@ -333,7 +333,7 @@ fn a_project_is_found_by_its_description_and_credentials_are_named() {
         "ovh-project",
         "",
         &format!(
-            "provider ovh {{ endpoint = \"{}\", project = \"nope\" }}\n{key}",
+            "use ovh {{ endpoint = \"{}\", project = \"nope\" }}\n{key}",
             server.endpoint
         ),
     );
@@ -348,7 +348,7 @@ fn a_project_is_found_by_its_description_and_credentials_are_named() {
     // (and nothing is asked of the real endpoint).
     s.write(
         "main.df",
-        &format!("provider ovh {{ endpoint = \"ovh-ca\", project = \"lab\" }}\n{key}"),
+        &format!("use ovh {{ endpoint = \"ovh-ca\", project = \"lab\" }}\n{key}"),
     );
     let mut c = common::dform();
     c.args(["plan", "main.df"])
@@ -404,7 +404,7 @@ fn a_transient_failure_is_sent_again() {
         "ovh-503",
         ", backoff = \"10ms\"",
         &format!(
-            "provider ovh {{ endpoint = \"{}\", project = \"lab\" }}\n\
+            "use ovh {{ endpoint = \"{}\", project = \"lab\" }}\n\
              resource ovh.ssh_key k {{ name = \"k\", public_key = \"ssh-ed25519 A\" }}\n",
             server.endpoint
         ),
@@ -422,7 +422,7 @@ fn the_images_of_a_region_are_a_table() {
         "ovh-images",
         "",
         &format!(
-            "provider ovh {{ endpoint = \"{}\", project = \"lab\" }}\n\
+            "use ovh {{ endpoint = \"{}\", project = \"lab\" }}\n\
              extern ovh.image(+region, -name, -id, -distribution)\n\
              resource ovh.instance db {{\n  name = \"db\"\n  region = \"BHS5\"\n  \
              flavor = \"d2-2\"\n  image\n}} where ovh.image(\"BHS5\", image, _, \"Debian\")\n",

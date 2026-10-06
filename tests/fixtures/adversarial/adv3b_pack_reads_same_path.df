@@ -8,4 +8,4 @@ resource iam.policy app_policy {
 
 use packs.same_path
 
-provider fake
+use fake

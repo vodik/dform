@@ -53,7 +53,7 @@ resource db.postgres orders { size = 1 }
 resource iam.policy "connect-${host}" {
   statements = [{ action: "db.connect", resource: host }]
 } where pg in db.postgres, host = pg.endpoint
-provider fake
+use fake
 "#,
     );
     s.run(&["controller", "run", "--once", "p.df"]).success();

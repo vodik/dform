@@ -176,7 +176,7 @@ pub enum Stmt {
     RelationInput(Extern),
     /// An output's declaration (`k: T`) or its value (`k = term`).
     Output(OutputDecl),
-    /// `provider name { ... }`: a provider the program uses (`stack`).
+    /// `use name { ... }`: a provider the program uses (`stack`).
     Provider(Config),
     /// `use PATH [as NAME] [{ k = v }] [where B]`: a module imported into
     /// the scope (R-65), its inputs the block's: one copy of the file, as

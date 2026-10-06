@@ -7,7 +7,7 @@ mod common;
 use common::Scratch;
 use serde_json::Value;
 
-const PROGRAM: &str = "\nprovider file\nprovider time\n\
+const PROGRAM: &str = "\nuse file\nuse time\n\
     now(t) where t = time.now()\nnote(x) where file.text(\"note.txt\", x)\n";
 
 #[test]

@@ -7,7 +7,7 @@ mod common;
 use common::{Scratch, query};
 
 fn program(body: &str) -> String {
-    format!("\n\n{body}\nprovider fake\n")
+    format!("\n\n{body}\nuse fake\n")
 }
 
 /// Every unit of a dimension compares in its base unit, sums and takes a
@@ -71,7 +71,7 @@ fn m_is_read_by_its_position_and_alone_is_an_error() {
     s.write(
         "p.df",
         "\n\ninput limit: cpu = 500m\ninput grace: duration = 90m\n\n\
-         got(l, g) where l = limit, g = grace\nprovider fake\n",
+         got(l, g) where l = limit, g = grace\nuse fake\n",
     );
     let r = query(&s, "got(l, g)").success();
     assert!(
@@ -104,7 +104,7 @@ fn a_policy_compares_memory_limits_in_bytes() {
     );
     let src = |memory: &str| {
         format!(
-            "\n\nprovider k8s\n\n\
+            "\n\nuse k8s\n\n\
              resource k8s.deployment web {{\n  metadata.name = \"web\"\n  \
              spec.selector.matchLabels = {{ app: \"web\" }}\n  \
              spec.template.spec.containers = [{{\n    name: \"web\",\n    image: \"web:1\",\n    \
@@ -151,7 +151,7 @@ fn one_spelling_renders_per_schema() {
     );
     let src = |storage: &str| {
         format!(
-            "\n\nprovider aws\nprovider k8s\n\n\
+            "\n\nuse aws\nuse k8s\n\n\
              resource aws.db_instance db {{\n  instance_class = \"db.t3.micro\"\n  allocated_storage = {storage}\n}}\n\n\
              resource k8s.persistent_volume_claim data {{\n  metadata.name = \"data\"\n  \
              spec.accessModes = [\"ReadWriteOnce\"]\n  spec.resources.requests.storage = {storage}\n}}\n"
@@ -203,7 +203,7 @@ fn a_quantity_attribute_reads_a_string_and_refuses_another_dimension() {
     );
     let src = |storage: &str| {
         format!(
-            "\n\nprovider k8s\n\n\
+            "\n\nuse k8s\n\n\
              resource k8s.persistent_volume_claim data {{\n  metadata.name = \"data\"\n  \
              spec.accessModes = [\"ReadWriteOnce\"]\n  spec.resources.requests.storage = {storage}\n}}\n\
              big(x) where c in k8s.persistent_volume_claim, x = c.spec.resources.requests.storage, x >= 1Gi\n"
@@ -243,7 +243,7 @@ fn dform_test_reads_quantities_as_plan_does() {
     );
     s.write(
         "main.df",
-        "\n\nprovider k8s\n\n\
+        "\n\nuse k8s\n\n\
          resource k8s.deployment web {\n  metadata.name = \"web\"\n  \
          spec.selector.matchLabels = { app: \"web\" }\n  \
          spec.template.spec.containers = [{\n    name: \"web\",\n    image: \"web:1\",\n    \

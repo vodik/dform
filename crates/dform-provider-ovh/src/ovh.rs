@@ -1,7 +1,7 @@
 //! The provider: the plugin protocol (`Handler`) over the OVH API.
 //!
 //! Configure finds the credentials (`config`), and with the program's
-//! settings (`provider ovh { endpoint, project }`, a second Configure) the
+//! settings (`use ovh { endpoint, project }`, a second Configure) the
 //! project: its id, or the description or name it was given in the
 //! console (`vodik`). It reports the project's id as the account
 //! (`expect_account`). Without settings it is configured from the
@@ -100,7 +100,7 @@ struct Account {
 /// A configured provider.
 struct Configured {
     account: std::result::Result<Arc<Account>, String>,
-    /// The program's settings are still to come (a `provider ovh { .. }`
+    /// The program's settings are still to come (a `use ovh { .. }`
     /// block): a data source answers "not yet".
     awaiting: bool,
 }
@@ -205,7 +205,7 @@ impl Ovh {
         let a = self.account(what)?;
         let p = a.project.clone().ok_or_else(|| {
             anyhow!(
-                "{what}: no project: name it in the program (`provider ovh {{ project = \"..\" }}`) \
+                "{what}: no project: name it in the program (`use ovh {{ project = \"..\" }}`) \
                  or in OVH_CLOUD_PROJECT_SERVICE"
             )
         })?;
@@ -222,9 +222,7 @@ impl Ovh {
         };
         if settings.is_none() && deferred {
             set(Configured {
-                account: Err(
-                    "the program configures it (`provider ovh { .. }`) and has not yet".into(),
-                ),
+                account: Err("the program configures it (`use ovh { .. }`) and has not yet".into()),
                 awaiting: true,
             });
             return Ok(None);

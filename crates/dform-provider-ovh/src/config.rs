@@ -15,7 +15,7 @@
 //!
 //! read from `/etc/ovh.conf`, `~/.ovh.conf` and
 //! `$XDG_CONFIG_HOME/ovh/ovh.conf` (`~/.config/ovh/ovh.conf`), a later file
-//! overriding an earlier one key by key. The program's `provider ovh {
+//! overriding an earlier one key by key. The program's `use ovh {
 //! endpoint }` names the account's endpoint and wins over both; its keys
 //! come from the section of that name.
 
@@ -137,7 +137,7 @@ pub fn resolve(
         {
             Some(e) => e,
             None => bail!(
-                "no OVH endpoint: the provider block names none (`provider ovh {{ endpoint = \
+                "no OVH endpoint: the provider block names none (`use ovh {{ endpoint = \
                  \"ovh-ca\" }}`), and neither does {}",
                 looked("OVH_ENDPOINT")
             ),

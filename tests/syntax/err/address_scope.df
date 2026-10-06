@@ -5,7 +5,7 @@
 # dot form.
 input n: string = "x"
 
-provider fake
+use fake
 
 resource net.vpc "a/b" {
   cidr = "10.0.0.0/16"

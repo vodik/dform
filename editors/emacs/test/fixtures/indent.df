@@ -1,4 +1,4 @@
-provider fake {
+use fake {
   source = "providers/fake"
 }
 

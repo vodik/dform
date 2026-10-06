@@ -113,7 +113,7 @@ set {
 # would come from the environment, by key, as a secret:
 #   credentials = env.var("GOOGLE_CREDENTIALS_{env}")
 # and the account from the credentials; the mock reports its `account`.
-provider gke {
+use gke {
   project = gcp.project_id
   region = gcp.region
   account = gcp.project_id

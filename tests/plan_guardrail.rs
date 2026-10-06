@@ -19,7 +19,7 @@ input active from csv("data/active.csv")
 decl zone(name: string, n: int, region: string)
 decl active(name: string)
 
-provider fake
+use fake
 
 resource net.vpc main { cidr = "10.0.0.0/16" }
 

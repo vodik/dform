@@ -346,7 +346,7 @@ fn edge_cases_agree() {
         "resource net.vpc a {\n  cidr = x\n} where {\n  q(x)\n  r(x)\n}\n",
         "resource net.vpc a {\n  cidr = x\n}\nwhere q(x)\n",
         "instance m i {} where p(1)\n",
-        "provider p { a = 1 } where q(1)\n",
+        "use p { a = 1 } where q(1)\n",
         // Refinements are `check`; `where` there is the clause word.
         "input k: int = 1 check k > 0\n",
         "input k: int = 1 where k > 0\n",
@@ -354,7 +354,7 @@ fn edge_cases_agree() {
         "let check = 1\n",
         "p(where)\n",
         "resource net.vpc \"a-${x}\" @default {\n\n  # c\n  tags.team = \"x\"\n  list[0].name = x\n  audit.sinks += [\"s3\"] @override\n} where q(x)\n",
-        "provider fake\n",
+        "use fake\n",
         "settings e @default {\n} where env(e)\n",
         "set settings[\"prod\"].audit.sinks = [\"s3\"]\n",
         "set x.tags = {} @override where x in resource\n",

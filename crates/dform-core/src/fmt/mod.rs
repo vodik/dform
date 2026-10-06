@@ -412,7 +412,7 @@ mod tests {
         assert_eq!(fmt(src), src);
         let src = "p(x) where {\n  q(x) # why\n  r(x)\n}\n";
         assert_eq!(fmt(src), src);
-        let src = "provider k8s { # later\n}\np(x) where q(x) # a rule\n# the end\n";
+        let src = "use k8s { # later\n}\np(x) where q(x) # a rule\n# the end\n";
         assert_eq!(fmt(src), src);
     }
 

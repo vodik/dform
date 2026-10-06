@@ -40,7 +40,7 @@ fn a_providers_data_sources_need_no_extern_line() {
     let server = Server::start();
     let s = project(&format!(
         r#"
-provider ovh {{ endpoint = "{}", project = "lab" }}
+use ovh {{ endpoint = "{}", project = "lab" }}
 let region = "BHS5"
 resource ovh.instance db {{
   name = "db"
@@ -63,7 +63,7 @@ fn a_schema_extern_is_called_with_its_declared_arity() {
     let server = Server::start();
     let s = project(&format!(
         r#"
-provider ovh {{ endpoint = "{}", project = "lab" }}
+use ovh {{ endpoint = "{}", project = "lab" }}
 resource ovh.instance db {{
   name = "db"
   region = "BHS5"

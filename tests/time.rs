@@ -15,7 +15,7 @@ fn one(s: &Scratch, goal: &str) -> String {
 }
 
 fn program(body: &str) -> String {
-    format!("\n\n{body}\nprovider fake\n")
+    format!("\n\n{body}\nuse fake\n")
 }
 
 /// A day added across Paris's change from summer time is a calendar day,
@@ -99,7 +99,7 @@ fn durations_parse_print_and_total() {
          minutes(d) where d = 90m + 0s\n\
          twice(d) where d = 2 * duration(45m)\n\
          month(d) where d = duration(\"P1M\")\n\
-         provider fake\n",
+         use fake\n",
     );
     assert_eq!(one(&s, "iso(d)"), "1y2mo3d4h5m");
     assert_eq!(one(&s, "ttl_hours(n)"), "36");
@@ -127,7 +127,7 @@ fn a_bad_time_literal_is_a_compile_error() {
     );
     s.write(
         "p.df",
-        "\n\ninput expires: time = \"2026-10-02\"\n\nprovider fake\n",
+        "\n\ninput expires: time = \"2026-10-02\"\n\nuse fake\n",
     );
     let r = query(&s, "x(y)").failure();
     assert!(

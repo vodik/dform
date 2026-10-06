@@ -7,7 +7,7 @@
 mod common;
 use common::{Run, Scratch};
 
-const DEPLOYMENT: &str = "\n\nprovider k8s\n\n\
+const DEPLOYMENT: &str = "\n\nuse k8s\n\n\
     resource k8s.deployment web {\n  \
     metadata.name = \"web\"\n  \
     spec.selector.matchLabels = { app: \"web\" }\n  \
@@ -219,7 +219,7 @@ fn a_quantity_in_an_unranked_set_is_read_by_its_attribute() {
     );
     s.write(
         "main.df",
-        "\ninput on: bool = true\n\nprovider k8s\n\n\
+        "\ninput on: bool = true\n\nuse k8s\n\n\
          resource k8s.deployment job {\n  metadata.name = \"job\"\n  \
          spec.selector.matchLabels = { app: \"job\" }\n}\n\n\
          set job.spec.template.spec.containers = [\n  \
@@ -278,7 +278,7 @@ fn a_merge_key_with_a_default_is_defaulted_before_the_key_check() {
     s.write(
         "main.df",
         r#"
-provider k8s
+use k8s
 
 resource k8s.service web {
   metadata.name = "web"

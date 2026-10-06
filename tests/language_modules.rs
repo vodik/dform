@@ -29,7 +29,7 @@ component m {
 }
 instance m a { n = 1 }
 instance m b { n = 2 }
-provider fake
+use fake
 "#,
     )
     .success();
@@ -55,7 +55,7 @@ component m {
 }
 instance m a
 big(s) where size(s)
-provider fake
+use fake
 "#,
     )
     .failure();
@@ -88,7 +88,7 @@ resource net.subnet s {
   size = s_
   vpc = v
 } where s_ = a.size, inst(i), output(m[i], "vpc", v)
-provider fake
+use fake
 "#,
     )
     .success();
@@ -112,7 +112,7 @@ component m {
   size(1)
 }
 instance m a
-provider fake
+use fake
 "#,
     )
     .failure();
@@ -156,7 +156,7 @@ component m {
 }
 instance m a
 instance m b { n = 1 }
-provider fake
+use fake
 "#;
     let r = plan(src).success();
     assert!(
@@ -190,7 +190,7 @@ component m {
   } where n(n_)
 }
 instance m a { n = 9 }
-provider fake
+use fake
 "#,
     )
     .failure();
@@ -220,7 +220,7 @@ set a.cidr = "10.9.0.0/16" @override where a in net.vpc
     let src = r#"
 resource net.vpc main { cidr = "10.0.0.0/16" }
 use tags
-provider fake
+use fake
 "#;
     s.write("p.df", src);
     let r = s
@@ -263,7 +263,7 @@ component app {
 }
 instance app blue { replicas = replicas }
 instance app green { replicas = 7 }
-provider fake
+use fake
 "#,
     );
     let r = s
@@ -367,7 +367,7 @@ resource db.postgres db {
         "stacks/app.df",
         r#"
 
-provider fake
+use fake
 
 use config
 use modules.lan
@@ -414,7 +414,7 @@ fn a_module_value_is_read_through_its_use() {
     let s = modules_project();
     s.write(
         "stacks/app.df",
-        "\n\nprovider fake\n\nuse config\n\nwhere_(r) where r = region\n",
+        "\n\nuse fake\n\nuse config\n\nwhere_(r) where r = region\n",
     );
     let r = s.run(&["plan", "--why=none", "app"]).failure();
     assert!(
@@ -424,7 +424,7 @@ fn a_module_value_is_read_through_its_use() {
     );
     s.write(
         "stacks/app.df",
-        "\n\nprovider fake\n\nuse config as c\n\nr(x) where x = c.region\nq(x) where x = c.nothing\n",
+        "\n\nuse fake\n\nuse config as c\n\nr(x) where x = c.region\nq(x) where x = c.nothing\n",
     );
     let r = s.run(&["plan", "--why=none", "app"]).failure();
     assert!(
@@ -455,7 +455,7 @@ component c {
 instance c one
 got(x) where naming.label(x)
 inner(l) where l = one.labels
-provider fake
+use fake
 "#,
     );
     let q = |pattern: &str| {
@@ -493,7 +493,7 @@ component bastion {
 instance bastion jump where env == "prod"
 use tagged where env == "prod"
 resource net.vpc main { cidr = "10.0.0.0/16" }
-provider fake
+use fake
 "#,
     );
     let r = s
@@ -539,7 +539,7 @@ component pair {
 }
 instance pair edge { a = "10.1.0.0/16", b = "10.2.0.0/16" }
 n(c) where c = edge.vpcs
-provider fake
+use fake
 "#,
     )
     .success();
@@ -565,11 +565,11 @@ fn a_module_used_from_two_stacks_fires_in_both() {
     );
     s.write(
         "stacks/web.df",
-        "\n\nprovider fake\n\nuse baseline\n\nresource compute.vm web {\n  size = 2\n}\n",
+        "\n\nuse fake\n\nuse baseline\n\nresource compute.vm web {\n  size = 2\n}\n",
     );
     s.write(
         "stacks/db.df",
-        "\n\nprovider fake\n\nuse baseline\n\nresource db.postgres db {\n  public = false\n}\n",
+        "\n\nuse fake\n\nuse baseline\n\nresource db.postgres db {\n  public = false\n}\n",
     );
     let web = s.run(&["plan", "--why=none", "web"]).success();
     assert!(
@@ -604,7 +604,7 @@ fn a_module_used_from_two_stacks_fires_in_both() {
         "shared.df",
         "\n\nresource net.vpc vpc {\n  cidr = \"10.0.0.0/16\"\n}\n",
     );
-    s.write("stacks/web.df", "\n\nprovider fake\n\nuse shared\n");
+    s.write("stacks/web.df", "\n\nuse fake\n\nuse shared\n");
     let r = s.run(&["plan", "--why=none", "web"]).success();
     assert_eq!(
         r.stdout.matches("+ net.vpc[\"shared.vpc\"]").count(),
@@ -636,7 +636,7 @@ fn use_stamps_a_module_once() {
     s.write(
         "p.df",
         "\nuse synapse\nuse forgejo as git\nuse postgres { database = \"matrix\" }\n\
-         h(x) where x = synapse.host\nprovider fake\n",
+         h(x) where x = synapse.host\nuse fake\n",
     );
     let r = s
         .run(&["dev", "--world", "w.json", "plan", "--why=none", "p.df"])
@@ -682,7 +682,7 @@ fn an_unbound_input_of_a_used_module_is_a_stack_inputs_error() {
         "postgres.df",
         "\n\ninput database: string\n\nresource db.postgres db {\n  public = false\n}\n",
     );
-    s.write("p.df", "\nuse postgres\nprovider fake\n");
+    s.write("p.df", "\nuse postgres\nuse fake\n");
     let r = s
         .run(&["dev", "--world", "w.json", "plan", "--why=none", "p.df"])
         .failure();
@@ -692,14 +692,11 @@ fn an_unbound_input_of_a_used_module_is_a_stack_inputs_error() {
         "{}",
         r.stderr
     );
-    s.write(
-        "p.df",
-        "\nuse postgres { database = \"x\" }\nprovider fake\n",
-    );
+    s.write("p.df", "\nuse postgres { database = \"x\" }\nuse fake\n");
     s.run(&["dev", "--world", "w.json", "plan", "--why=none", "p.df"])
         .success();
     // The stack gives a used module's input by its name there (R-55).
-    s.write("p.df", "\nuse postgres\nprovider fake\n");
+    s.write("p.df", "\nuse postgres\nuse fake\n");
     s.run(&[
         "dev",
         "--world",
@@ -731,7 +728,7 @@ fn an_unbound_input_of_a_used_module_is_a_stack_inputs_error() {
     s.write(
         "p.df",
         "\ncomponent vm {\n  resource compute.vm vm {\n    size = 1\n  }\n}\n\
-         instance vm\nprovider fake\n",
+         instance vm\nuse fake\n",
     );
     let r = s
         .run(&["dev", "--world", "w.json", "plan", "--why=none", "p.df"])

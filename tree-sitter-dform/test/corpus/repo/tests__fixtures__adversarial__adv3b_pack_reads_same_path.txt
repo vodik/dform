@@ -12,7 +12,7 @@ resource iam.policy app_policy {
 
 use packs.same_path
 
-provider fake
+use fake
 
 ---
 
@@ -47,5 +47,6 @@ provider fake
     (dotted_name
       (identifier)
       (identifier)))
-  (provider
-    (identifier)))
+  (use
+    (dotted_name
+      (identifier))))

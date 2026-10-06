@@ -19,7 +19,7 @@ resource net.vpc "v-${{name}}" {{
   cidr = string(c)
   port = port
 }} where peering(env: "dev", name: name, port: port, cidr: c, on: true)
-provider fake
+use fake
 "#
     )
 }
@@ -156,7 +156,7 @@ fn an_enum_a_missing_and_an_extra_column_are_errors() {
     let s = scratch("strict");
     s.write(
         "p.df",
-        "\ninput t from json(\"t.json\")\ndecl t(name: string)\nwarn \"${n}\" where t(n)\nprovider fake\n",
+        "\ninput t from json(\"t.json\")\ndecl t(name: string)\nwarn \"${n}\" where t(n)\nuse fake\n",
     );
     s.write("t.json", "[{\"name\": 3}]");
     let r = s.run(&["plan", "p.df"]).failure();
@@ -183,7 +183,7 @@ decl node(name: string)
 resource compute.vm "${n}" {
   size = 1
 } where node(n)
-provider fake
+use fake
 "#,
     );
     s.write("data/dev.csv", "name\nd1\n");
@@ -205,7 +205,7 @@ fn a_table_whose_source_reads_its_rows_is_a_compile_error() {
     let s = scratch("cycle");
     s.write(
         "p.df",
-        "\ninput t from csv(\"${src}\")\ndecl t(p: string)\nlet src = p where t(p)\nprovider fake\n",
+        "\ninput t from csv(\"${src}\")\ndecl t(p: string)\nlet src = p where t(p)\nuse fake\n",
     );
     let r = s.run(&["plan", "p.df"]).failure();
     assert!(
@@ -229,7 +229,7 @@ fn a_tables_rows_and_stated_facts_are_one_relation() {
     s.write(
         "p.df",
         "\ninput t from csv(\"t.csv\")\ninput t from json(\"u.json\") where \"a\" != \"b\"\n\
-         decl t(p: string)\nt(\"x\")\nprovider fake\n",
+         decl t(p: string)\nt(\"x\")\nuse fake\n",
     );
     s.write("t.csv", "p\ny\n");
     s.write("u.json", "[{\"p\": \"z\"}]");
@@ -242,7 +242,7 @@ fn a_tables_rows_and_stated_facts_are_one_relation() {
     s.write(
         "p.df",
         "\ninput t from csv(\"t.csv\")\ninput t from json(\"u.json\")\n\
-         t(\"x\")\nprovider fake\n",
+         t(\"x\")\nuse fake\n",
     );
     let r = s.run(&["query", "t(p)", "p.df"]).success();
     for p in ["\"x\"", "\"y\"", "\"z\""] {
@@ -264,7 +264,7 @@ fn a_documents_corners_read_as_json_decode_reads_them() {
     let table = |format: &str, decl: &str| {
         format!(
             "\ninput t from {format}(\"t.{format}\")\ndecl t({decl})\n\
-             warn \"${{n}}\" where t(n)\nprovider fake\n"
+             warn \"${{n}}\" where t(n)\nuse fake\n"
         )
     };
     s.write("p.df", &table("json", "n: int"));

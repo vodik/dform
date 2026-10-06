@@ -32,7 +32,7 @@ fn project(stack: &str) -> Scratch {
 
 #[test]
 fn agents_read_their_servers_address() {
-    let s = project("provider fake\nuse k3s { name = \"lab\", agents = 2 }\n");
+    let s = project("use fake\nuse k3s { name = \"lab\", agents = 2 }\n");
     let r = s.run(&["plan", "k3s"]).success();
     assert_eq!(r.summary(), "plan: 3 changes (3 create) over 2 ticks");
     assert!(
@@ -55,7 +55,7 @@ fn agents_read_their_servers_address() {
 /// `want` sits above the server's endpoint.
 #[test]
 fn the_strata_name_the_addresses() {
-    let s = project("provider fake\nuse k3s { name = \"lab\", agents = 2 }\n");
+    let s = project("use fake\nuse k3s { name = \"lab\", agents = 2 }\n");
     let r = s.run(&["dev", "strata", "k3s"]).success();
     let at = |node: &str| -> usize {
         let line = r
@@ -80,7 +80,7 @@ fn a_stacks_own_agents_read_its_server() {
     s.write(
         "stacks/k3s.df",
         r#"
-provider fake
+use fake
 resource db.postgres server { name = "server" }
 resource db.postgres "agent-${i}" { join = "${server.endpoint}:6443" } where i in 0..2
 "#,
@@ -94,7 +94,7 @@ fn a_resource_reading_itself_is_a_cycle_through_its_address() {
     let s = Scratch::project("strata-self");
     s.write(
         "stacks/k3s.df",
-        "provider fake\nresource db.postgres a { x = \"${a.endpoint}\" }\n",
+        "use fake\nresource db.postgres a { x = \"${a.endpoint}\" }\n",
     );
     let r = s.run(&["plan", "k3s"]).failure();
     assert!(
@@ -113,7 +113,7 @@ fn two_resources_reading_each_other_are_a_cycle_through_both() {
     s.write(
         "stacks/k3s.df",
         r#"
-provider fake
+use fake
 resource db.postgres a { x = "${b.endpoint}" }
 resource db.postgres b { x = "${a.endpoint}" }
 "#,

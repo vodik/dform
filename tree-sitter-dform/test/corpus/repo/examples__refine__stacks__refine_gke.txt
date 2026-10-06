@@ -29,7 +29,7 @@ input gke {
   subnet_cidr: inet check inet.prefix_len(subnet_cidr) == 22
 }
 
-provider gke
+use gke
 
 zone_at(1, "us-east1-b")
 zone_at(2, "us-east1-c")
@@ -235,8 +235,9 @@ type google.container_cluster { zones: list(string) check len(zones) >= 3 }
                 (arguments
                   (identifier)))
               (integer)))))))
-  (provider
-    (identifier))
+  (use
+    (dotted_name
+      (identifier)))
   (fact
     (call
       (identifier)

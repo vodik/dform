@@ -184,7 +184,7 @@ A credential is a name; its kind says how the host applies it:
 | `tls` | PEM: a certificate chain and its key | the TLS session's client certificate |
 | `kubeconfig` | a kubeconfig | its current context's token or client certificate, and its cluster's CA; its server is the credential's `endpoint` |
 
-The value comes from the program (`provider k8s { kubeconfig =
+The value comes from the program (`use k8s { kubeconfig =
 cluster.kubeconfig }` registers the secret under the name the grant
 lists, R-45's reveal), else the operator's file
 `$XDG_CONFIG_HOME/dform/credentials/KIND/NAME` (`DFORM_CREDENTIALS`

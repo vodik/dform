@@ -657,7 +657,7 @@ impl<'a> Parser<'a> {
             return self.rule();
         }
         match k {
-            // `provider aws`: a block with no entries is left out (R-26).
+            // `use aws`: a block with no entries is left out (R-26).
             PROVIDER_KW => self.simple(PROVIDER, |p| {
                 p.expect_word()?;
                 p.opt_block()?;
@@ -2139,7 +2139,7 @@ mod tests {
             .unwrap();
         assert_eq!(clause.parent().unwrap().kind(), RESOURCE);
         // A provider block parses a clause too; the resolver refuses it.
-        assert!(errors("provider p { a = 1 } where q(1)\n").is_empty());
+        assert!(errors("use p { a = 1 } where q(1)\n").is_empty());
     }
 
     #[test]
@@ -2210,10 +2210,10 @@ mod tests {
     #[test]
     fn the_header_comes_before_the_body() {
         let src = "\nkey env: string\ninput n: int\n\
-                   input p from facts(\"p.facts\")\nuse config\nprovider fake {}\np(1)\n\
+                   input p from facts(\"p.facts\")\nuse config\nuse fake {}\np(1)\n\
                    component m {\n  r(1)\n  input k: int\n}\ninstance m a\n";
         assert!(errors(src).is_empty(), "{:?}", errors(src));
-        let src = "\nprovider fake {}\nkey env: string\nq(1)\ninput p from facts(\"p\")\n";
+        let src = "\nuse fake {}\nkey env: string\nq(1)\ninput p from facts(\"p\")\n";
         let e = parse(src).errors;
         let got: Vec<(&str, bool)> = e
             .iter()

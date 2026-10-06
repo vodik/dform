@@ -13,7 +13,7 @@ const PROG: &str = r#"
 resource net.vpc a { cidr = "10.0.0.0/16" }
 resource net.vpc b { cidr = "10.1.0.0/16" }
 resource net.subnet s { vpc_id = ref(net.vpc, "a", "id"), tier = "web" }
-provider fake
+use fake
 "#;
 
 fn apply(backend: Backend, parallel: &str) -> (common::Run, Vec<(String, u64, u64)>) {

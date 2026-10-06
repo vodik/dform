@@ -1,6 +1,6 @@
 key env: enum("dev", "prod") = "dev"
 
-provider fake { source = "providers/fake" }
+use fake { source = "providers/fake" }
 
 resource net.vpc_peering peer {
   requester_vpc_id = a.id

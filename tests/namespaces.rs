@@ -14,7 +14,7 @@ fn a_set_over_a_namespace_reaches_its_types_only() {
     let s = Scratch::new("ns-set");
     s.write(
         "p.df",
-        "\n\nprovider fake\nprovider k8s\n\n\
+        "\n\nuse fake\nuse k8s\n\n\
          resource net.vpc v { cidr = \"10.0.0.0/16\" }\n\
          resource k8s.cluster c { name = \"c\" }\n\
          resource k8s.namespace ns { metadata.name = \"ns\" }\n\
@@ -58,14 +58,14 @@ fn a_deformation_row_binds_through_the_namespace() {
     let s = Scratch::new("ns-deformation");
     s.write(
         "p.df",
-        "\n\nprovider fake\nprovider k8s\n\n\
+        "\n\nuse fake\nuse k8s\n\n\
          resource net.vpc v { cidr = \"10.0.0.0/16\" }\n\
          resource k8s.namespace ns { metadata.name = \"ns\" }\n",
     );
     mock(&s, &["apply"]).success();
     s.write(
         "p.df",
-        "\n\nprovider fake\nprovider k8s\n\n\
+        "\n\nuse fake\nuse k8s\n\n\
          deny \"a k8s delete: ${r}\" where deformation(\"delete\", r, _), r in k8s\n",
     );
     let r = mock(&s, &["plan", "--why=none"]).failure();

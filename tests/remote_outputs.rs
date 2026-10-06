@@ -11,13 +11,13 @@ use common::Scratch;
 const CLUSTER: &str = r#"
 key env: string = "dev"
 input token: secret(string)
-provider fake
+use fake
 output endpoint = "https://${env}.cluster.example"
 output token: secret(string) = token
 "#;
 
 const APP: &str = r#"
-provider fake
+use fake
 use platform.stacks.cluster
 resource net.vpc edge {
   name = e
@@ -187,7 +187,7 @@ fn a_package_is_a_path_to_a_project() {
 fn an_output_of_a_configured_attribute_is_published_resolved_or_pending() {
     let s = Scratch::project("outputs-resolved");
     let net = "\n\
-               provider fake\n\
+               use fake\n\
                resource net.vpc main { cidr = \"10.0.0.0/16\" }\n\
                output c = main.cidr\n\
                output n = main.name\n\
@@ -196,7 +196,7 @@ fn an_output_of_a_configured_attribute_is_published_resolved_or_pending() {
     s.write(
         "stacks/app.df",
         "\n\
-         provider fake\n\
+         use fake\n\
          use stacks.net as network\n\
          resource net.vpc edge { cidr = network.c }\n\
          resource net.vpc other { name = network.n }\n\

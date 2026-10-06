@@ -110,7 +110,7 @@ fn a_number_attribute_takes_an_int_or_a_float() {
     let s = scratch("number-attr");
     s.write(
         "p.df",
-        "\nprovider fake\n\
+        "\nuse fake\n\
          resource compute.vm a { weight = 0.5 }\n\
          resource compute.vm b { weight = 2 }\n",
     );
@@ -132,7 +132,7 @@ fn a_number_attribute_takes_an_int_or_a_float() {
     );
     s.write(
         "p.df",
-        "\nprovider fake\nresource compute.vm a { weight = \"heavy\" }\n",
+        "\nuse fake\nresource compute.vm a { weight = \"heavy\" }\n",
     );
     let r = s.run(&["plan", "p.df"]).failure();
     assert!(
@@ -151,7 +151,7 @@ fn a_float_input_and_set_by_the_declared_type() {
     let s = scratch("float-input");
     s.write(
         "p.df",
-        "\ninput ratio: float = 1\ninput label: string = \"x\"\nprovider fake\n\
+        "\ninput ratio: float = 1\ninput label: string = \"x\"\nuse fake\n\
          got(r, l) where r = ratio, l = label\n",
     );
     let r = s.run(&["query", "got(R, L)", "p.df"]).success();
@@ -202,7 +202,7 @@ fn a_documents_decimal_is_a_float() {
     );
     s.write(
         "p.df",
-        "\ninput t from json(\"t.json\")\nprovider fake\n\
+        "\ninput t from json(\"t.json\")\nuse fake\n\
          heavy(n) where t(n, r), r > 1.75\n",
     );
     let r = s.run(&["query", "t(N, R)", "p.df"]).success();

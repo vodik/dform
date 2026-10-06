@@ -263,7 +263,7 @@ fn suite(start: impl FnOnce() -> Result<Link>, dir: &Path) -> Result<(Vec<String
     Ok((r.lines, r.failed))
 }
 
-/// A provider's name is its types' namespace (R-36): `provider k8s` serves
+/// A provider's name is its types' namespace (R-36): `use k8s` serves
 /// `k8s.deployment`, and a handshake whose name is not the first segment
 /// of every type the schema declares deviates.
 fn named_under(name: &str, schema: &Schema) -> Result<()> {

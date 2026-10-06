@@ -13,7 +13,7 @@ const P: &str = r#"
 input env: enum("dev", "prod")
 input public: bool = false
 input size: int = 1
-provider fake
+use fake
 resource net.vpc main {
   cidr = "10.0.0.0/16"
   size
@@ -169,7 +169,7 @@ fn the_space_is_every_input_the_stack_gives() {
     s.write(
         "p.df",
         "\ninput cluster {\n  tier: enum(\"a\", \"b\") = \"a\"\n  size: int = 1\n}\n\
-         use pg { multi_az = true }\nprovider fake\n\
+         use pg { multi_az = true }\nuse fake\n\
          resource net.vpc main {\n  cidr = \"10.0.0.0/16\"\n  tier = cluster.tier\n}\n\
          deny \"a database is never public\" where d in db.postgres, d.public\n",
     );
@@ -209,7 +209,7 @@ fn an_input_a_set_gives_is_no_axis() {
     s.write(
         "p.df",
         "\ninput env: enum(\"dev\", \"prod\") = \"dev\"\n\
-         input multi_az: bool = false\ninput public: bool = false\nprovider fake\n\
+         input multi_az: bool = false\ninput public: bool = false\nuse fake\n\
          set multi_az = true where env == \"prod\"\n\
          resource db.postgres main {\n  multi_az\n  public\n}\n\
          deny \"prod is multi_az\" where env == \"prod\", d in db.postgres, not d.multi_az\n",

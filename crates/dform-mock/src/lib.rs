@@ -1307,7 +1307,7 @@ impl Handler for Mock {
             C::Configure(req) => {
                 let config = doc_of(req.config.as_ref())?.unwrap_or(json!({}));
                 self.cloud().configure(&config).map_err(invalid)?;
-                // The account its settings name (`provider fake { account
+                // The account its settings name (`use fake { account
                 // = .. }`): what `expect_account` is checked against.
                 let account = config
                     .pointer("/settings/account")

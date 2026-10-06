@@ -4,7 +4,7 @@ Headers
 
 key env: enum("dev", "prod") = "dev"
 key region: string
-provider fake { source = "providers/fake" }
+use fake { source = "providers/fake" }
 
 --------------------------------------------------------------------------------
 
@@ -25,8 +25,9 @@ provider fake { source = "providers/fake" }
     (type
       (dotted_name
         (identifier))))
-  (provider
-    (identifier)
+  (use
+    (dotted_name
+      (identifier))
     (block
       (field
         (block_path
