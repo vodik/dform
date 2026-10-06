@@ -137,3 +137,22 @@ fn what_each_kind_of_resource_refuses() {
         r.stderr
     );
 }
+
+/// Every resource the program makes is checked against its providers'
+/// schemas, a component's and a used module's too: a type none declares
+/// is a plan error naming it, before anything is planned.
+#[test]
+fn a_components_resource_type_is_checked_against_the_providers() {
+    let s = Scratch::project("component-resource-types");
+    s.write(
+        "main.df",
+        "\nuse fake\ncomponent box {\n  resource nosuch.thing t { size = 1 }\n}\nresource box b {}\n",
+    );
+    let r = s.run(&["plan", "main.df"]).failure();
+    assert!(
+        r.stderr
+            .contains("provider fake does not declare nosuch.thing"),
+        "{}",
+        r.stderr
+    );
+}
