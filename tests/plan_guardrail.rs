@@ -7,6 +7,7 @@
 
 mod common;
 use common::Scratch;
+use expectrl::{Eof, Expect, Session};
 
 /// Subnets joined through a table of active regions: one row of
 /// `data/active.csv` is the whole join.
@@ -122,6 +123,39 @@ fn a_broken_join_is_warned_and_asked_for() {
     let j: serde_json::Value = serde_json::from_str(&r.stdout).unwrap();
     assert_eq!(j["warnings"][0]["rule"], "stacks/net.df:13", "{j}");
     assert_eq!(j["warnings"][1]["relation"], "active", "{j}");
+
+    let r = s.run(&["apply", "net", "--yes"]).failure();
+    assert!(
+        r.stderr.contains(
+            "apply net: the plan deletes all 2 resources the rule at stacks/net.df:13 derived \
+             at the last apply; nothing to ask on (stdin is not a terminal): confirm it on a \
+             terminal, or pass --allow-empty stacks/net.df:13 if it is meant"
+        ),
+        "{}",
+        r.stderr
+    );
+    assert_eq!(subnets(&s), 2, "the refused apply deleted");
+    // Naming the rule leaves the relation, which is asked for too.
+    let r = s
+        .run(&["apply", "net", "--yes", "--allow-empty", "stacks/net.df:13"])
+        .failure();
+    assert!(
+        r.stderr
+            .contains("the plan empties the relation active, which had 1 row at the last apply"),
+        "{}",
+        r.stderr
+    );
+    s.run(&[
+        "apply",
+        "net",
+        "--yes",
+        "--allow-empty",
+        "net.subnet",
+        "--allow-empty",
+        "active",
+    ])
+    .success();
+    assert_eq!(subnets(&s), 0);
 }
 
 /// A deliberate delete: the rule is gone from the program. Without git
@@ -136,6 +170,8 @@ fn a_deliberate_delete_is_silenced_by_the_flag() {
     let r = s.run(&["plan", "net"]).success();
     assert!(r.stdout.contains(WARNING), "{}", r.stdout);
     assert!(!r.stdout.contains("because"), "{}", r.stdout);
+    s.run(&["apply", "net", "--yes"]).failure();
+    assert_eq!(subnets(&s), 2);
     // Named in dform.toml: the plan says nothing, apply asks nothing.
     s.write(
         "dform.toml",
@@ -155,6 +191,38 @@ fn a_deliberate_delete_is_silenced_by_the_flag() {
     let r = t.run(&["plan", "net"]).success();
     assert!(r.stdout.contains("(1 delete)"), "{}", r.stdout);
     assert!(!r.stdout.contains("warning"), "{}", r.stdout);
+}
+
+/// The ask is on its own, after the plan's: on a terminal, under
+/// `--yes`, `n` declines and nothing is deleted.
+#[test]
+fn the_ask_is_on_a_terminal_also_under_yes() {
+    let s = project("guard-pty");
+    s.run(&["apply", "net", "--yes"]).success();
+    s.write("data/active.csv", "name\n");
+    let mut cmd = common::dform();
+    cmd.args(["apply", "net", "--yes", "--allow-empty", "active"])
+        .env("NO_COLOR", "1")
+        .current_dir(s.path(""));
+    let mut p = Session::spawn(cmd).unwrap();
+    p.set_expect_timeout(Some(std::time::Duration::from_secs(60)));
+    let text = |b: &[u8]| String::from_utf8_lossy(b).replace('\r', "");
+    let all = |c: &expectrl::Captures| c.matches().fold(text(c.before()), |t, m| t + &text(m));
+    let before = text(p.expect("[y/N] ").unwrap().before());
+    assert!(
+        before.ends_with(
+            "The plan deletes all 2 resources the rule at stacks/net.df:13 derived at the last \
+             apply. Apply it anyway? "
+        ),
+        "{before}"
+    );
+    p.send_line("n").unwrap();
+    let after = all(&p.expect(Eof).unwrap());
+    assert!(
+        after.contains("apply net: not confirmed; nothing was applied"),
+        "{after}"
+    );
+    assert_eq!(subnets(&s), 2);
 }
 
 /// `derived_at_last_apply(rule, n)` is a relation a deny reads: here, a

@@ -310,6 +310,13 @@ enum Run {
         /// on. `apply PLAN.json` never asks, and stops the same way.
         #[arg(long = "yes", short = 'y')]
         yes: bool,
+        /// A rule or relation this apply may empty (R-80): the plan's
+        /// `warning` names it and apply asks for it on its own, also
+        /// under `--yes`, unless named here: the rule's `FILE:LINE`, a
+        /// resource type it derives, or the relation. Repeatable; dform.toml
+        /// `[stacks.NAME] allow_empty` names them for every apply.
+        #[arg(long = "allow-empty", value_name = "RULE")]
+        allow_empty: Vec<String>,
         /// How much each change says of why it is planned, as `plan
         /// --why`.
         #[arg(long, value_name = "LEVEL", default_value = "line",
@@ -640,6 +647,8 @@ enum Cmd {
         wait: Option<std::time::Duration>,
         /// `--yes`: no confirmation.
         yes: bool,
+        /// `--allow-empty`: what the plan may empty without asking (R-80).
+        allow_empty: Vec<String>,
         /// What each change of the printed plan says of why.
         why: report::Why,
     },
@@ -1255,6 +1264,7 @@ fn run_cmd(r: Run) -> (Cmd, Option<Target>) {
             approval,
             wait,
             yes,
+            allow_empty,
             why,
         } => (
             Cmd::Apply {
@@ -1265,6 +1275,7 @@ fn run_cmd(r: Run) -> (Cmd, Option<Target>) {
                 approval,
                 wait,
                 yes,
+                allow_empty,
                 why,
             },
             Some(target),
@@ -2099,9 +2110,12 @@ fn run_with(
         let f = std::path::absolute(f).ok()?;
         crate::project::manifest_root(&f).or_else(|| f.parent().map(Path::to_path_buf))
     });
-    // What the plan empties since the last apply (R-80), less what the
-    // stack's `allow_empty` names.
-    let mut allow_empty = Vec::new();
+    // What the plan empties since the last apply (R-80), less what this
+    // apply's `--allow-empty` and the stack's `allow_empty` name.
+    let mut allow_empty = match &cli.cmd {
+        Cmd::Apply { allow_empty, .. } => allow_empty.clone(),
+        _ => Vec::new(),
+    };
     if let Some(t) = located
         .loaded
         .manifest
@@ -2764,6 +2778,14 @@ fn run_with(
                     if !report.undeformed {
                         let n = report.changes();
                         confirm(n, false, &deployment, tick, cli.style)?;
+                    }
+                }
+                // What the plan empties since the last apply is asked for
+                // on its own, also under `--yes` or of a plan file, unless
+                // `--allow-empty` names it (R-80).
+                if tick == 1 && hook.is_none() {
+                    for e in emptied(&plan, &res, &|_| None) {
+                        confirm_emptied(&e, &deployment, cli.style)?;
                     }
                 }
                 // A later tick whose plan holds an address no earlier one
@@ -3472,6 +3494,7 @@ fn run_controller(cli: Cli) -> Result<()> {
             wait: None,
             // The controller runs unattended: it never asks.
             yes: true,
+            allow_empty: Vec::new(),
             why: report::Why::None,
         },
         ..cli
@@ -3545,6 +3568,35 @@ fn confirm(n: usize, new: bool, deployment: &str, tick: usize, style: report::St
         _ => Err(Declined {
             deployment: deployment.to_string(),
             tick,
+        }
+        .into()),
+    }
+}
+
+/// Ask whether to apply a plan that empties `e` (R-80), on a terminal
+/// only: there is no `--yes` for it, only `--allow-empty`.
+fn confirm_emptied(e: &zset::Emptied, deployment: &str, style: report::Style) -> Result<()> {
+    use std::io::{BufRead, IsTerminal, Write};
+    let stdin = std::io::stdin();
+    if !stdin.is_terminal() {
+        bail!(
+            "apply {deployment}: {}; nothing to ask on (stdin is not a terminal): confirm it \
+             on a terminal, or pass --allow-empty {} if it is meant",
+            e.what(),
+            e.name
+        );
+    }
+    let what = e.what();
+    let ask = format!("T{}. Apply it anyway?", &what[1..]);
+    print!("{} [y/N] ", style.paint(report::Paint::Warn, &ask));
+    std::io::stdout().flush()?;
+    let mut answer = String::new();
+    stdin.lock().read_line(&mut answer)?;
+    match answer.trim().to_ascii_lowercase().as_str() {
+        "y" | "yes" => Ok(()),
+        _ => Err(Declined {
+            deployment: deployment.to_string(),
+            tick: 1,
         }
         .into()),
     }

@@ -138,7 +138,12 @@ shop[env=prod]? [y/N]` (`Apply this change to ..` for one); only `y` or
 applies without asking, as a script or CI does: with no terminal to ask on
 and no `--yes`, apply refuses at once, naming the flag. A plan that is up to date
 asks nothing, nor does `apply plan.json` (the file was reviewed; approvals
-guard it). Nothing is written before the answer: an
+guard it). The one exception is the plan's `warning` (R-80): a rule the
+plan deletes everything of, or a relation it empties, since the last
+apply is asked for on its own after that question, also under `--yes`
+or of a plan file, and with no terminal apply refuses naming
+`--allow-empty RULE`, which (or the stack's `allow_empty`) lets it
+through. Nothing is written before the answer: an
 apply reads (refresh, the lookups that resolve uncertain calls), plans and
 asks, and only a `y` writes state (`moved` renames included) or calls
 Apply. A later tick whose plan holds an address no earlier tick listed (a
@@ -896,8 +901,12 @@ apply: tick 1 once this plan's digest is approved (`--approval`), then tick 2 wh
   is one that binds variables (a `where` with a join, an `in`); a
   resource stated once is not. A broken join and a deliberate delete look
   alike to the plan, so it says so, and `apply` asks for each on its own.
-  `[stacks.NAME] allow_empty` in dform.toml names those that may empty
-  without a word: a rule's `FILE:LINE`, a resource type it derives, or
+  Under `--yes`, or of a plan file, `apply` still asks for each, on a
+  terminal (`The plan deletes all 2 resources the rule at
+  stacks/net.df:13 derived at the last apply. Apply it anyway? [y/N]`),
+  and with none to ask on it refuses before changing anything, naming
+  the flag: `apply --allow-empty RULE` (repeatable) or `[stacks.NAME]
+  allow_empty` in dform.toml names those that may empty without a word: a rule's `FILE:LINE`, a resource type it derives, or
   the relation. What each apply derived is the audit log's `derived`
   entry; a plan with no apply before it warns of nothing. `--json`
   carries them as `warnings` (each `{rule, statement, relation, deletes,
