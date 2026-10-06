@@ -70,13 +70,13 @@ fn a_providers_resources_wait_on_its_settings_under_later() {
     assert!(!ticks.contains("k8s."), "{}", r.stdout);
     for line in [
         "  waits on  provider k8s (kubeconfig from raw), which this plan does not resolve",
-        "  + k8s.namespace[\"traefik/ns\"]",
+        "  + k8s.namespace[\"traefik.ns\"]",
         // The static schema's kind, by its short name, typed.
-        "  + k8s.storage_class[\"traefik/block\"]",
+        "  + k8s.storage_class[\"traefik.block\"]",
         "      provisioner = \"rancher.io/local-path\"",
-        "  + k8s.deployment[\"traefik/web\"]",
+        "  + k8s.deployment[\"traefik.web\"]",
         "  waits on  provider k8s for its schema, which this plan does not resolve",
-        "  + k8s.traefik.io.v1alpha1.middleware[\"traefik/strip\"]",
+        "  + k8s.traefik.io.v1alpha1.middleware[\"traefik.strip\"]",
         "      spec.stripPrefix.prefixes[0] = \"/a\"",
     ] {
         assert!(later.contains(line), "{line}\n{}", r.stdout);
@@ -88,12 +88,12 @@ fn why_not_names_the_provider_a_resource_waits_on() {
     let s = project();
     let r = dform(
         &s,
-        &["why-not", "k8s.storage_class[\"traefik/block\"]", "p"],
+        &["why-not", "k8s.storage_class[\"traefik.block\"]", "p"],
     )
     .success();
     assert!(
         r.stdout.starts_with(
-            "k8s.storage_class[\"traefik/block\"]: it is derived, and waits on provider k8s \
+            "k8s.storage_class[\"traefik.block\"]: it is derived, and waits on provider k8s \
              (kubeconfig from raw): the plan lists it under `later`"
         ),
         "{}",

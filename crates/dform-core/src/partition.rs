@@ -66,8 +66,9 @@ impl fmt::Display for Node {
 
 /// The addresses a rule's text fixes for a resource (R-107): a union of
 /// patterns, each the literal pieces of an address with any text between
-/// two pieces. One piece is a literal address (`"k3s/server"`); the agents
-/// `"${name}-agent-${i}"` of the copy `k3s` are `"k3s/*-agent-*"`.
+/// two pieces. One piece is a literal address (`"k3s.server"`); the agents
+/// `"${name}-agent-${i}"` of the copy `k3s` are `"k3s.*-agent-*"` (or
+/// that name quoted, R-112, should a gap hold a dot).
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Addr(Vec<Vec<String>>);
 
@@ -130,6 +131,30 @@ fn addr_globs(t: &Term, body: &[Lit], depth: usize) -> Option<Vec<Vec<String>>> 
                 glob.last_mut().unwrap().push_str(part);
             }
             Some(vec![glob])
+        }
+        // A header name's segment (R-112): itself, or quoted when it
+        // holds a dot, which a literal piece may say and a gap may hold.
+        Term::Func { name, args } if name == crate::ir::NAME_SEGMENT && args.len() == 1 => {
+            let mut out = Vec::new();
+            for g in addr_globs(&args[0], body, depth)? {
+                let must = g.iter().any(|p| crate::ir::name_segment(p) != p.as_str());
+                if !must {
+                    out.push(g.clone());
+                }
+                if must || g.len() > 1 {
+                    let mut q: Vec<String> = g
+                        .iter()
+                        .map(|p| {
+                            let l = crate::ir::string_literal(p);
+                            l[1..l.len() - 1].to_string()
+                        })
+                        .collect();
+                    q[0].insert(0, '"');
+                    q.last_mut().unwrap().push('"');
+                    out.push(q);
+                }
+            }
+            Some(out)
         }
         Term::Func { name, args } if name == "scoped" && args.len() == 2 => {
             let scope = args[0].as_str()?;

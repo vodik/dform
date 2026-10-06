@@ -37,14 +37,14 @@ fn agents_read_their_servers_address() {
     assert_eq!(r.summary(), "plan: 3 changes (3 create) over 2 ticks");
     assert!(
         r.stdout
-            .contains("waits on  db.postgres[\"k3s/server\"].endpoint"),
+            .contains("waits on  db.postgres[\"k3s.server\"].endpoint"),
         "{}",
         r.stdout
     );
     s.converge(&["apply", "k3s"]);
     let world = s.read("dform.state/k3s/remote.json");
     assert_eq!(
-        world.matches("https://k3s/server.db.fake:6443").count(),
+        world.matches("https://k3s.server.db.fake:6443").count(),
         2,
         "{world}"
     );
@@ -66,8 +66,11 @@ fn the_strata_name_the_addresses() {
             .unwrap_or_else(|| panic!("no node {node}:\n{}", r.stdout));
         line.split_whitespace().next().unwrap().parse().unwrap()
     };
-    let server = at("(attr, db.postgres[\"k3s/server\"], endpoint)");
-    let agents = at("(want, db.postgres[\"k3s/*-agent-*\"|\"*-agent-*\"])");
+    let server = at("(attr, db.postgres[\"k3s.server\"], endpoint)");
+    // An agent's name is a segment, quoted should a gap hold a dot (R-112).
+    let agents = at(
+        r#"(want, db.postgres["k3s.*-agent-*"|"*-agent-*"|"k3s.\"*-agent-*\""|"\"*-agent-*\""])"#,
+    );
     assert!(server < agents, "{server} >= {agents}\n{}", r.stdout);
 }
 
