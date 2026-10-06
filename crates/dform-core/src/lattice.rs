@@ -141,6 +141,9 @@ pub enum Lattice {
     Set,
     Keyed {
         keys: Vec<String>,
+        /// The schema's default of a key an element leaves out
+        /// (`type_default`, R-116): `protocol` of a port is `TCP`.
+        defaults: BTreeMap<String, Value>,
         elem: Box<Lattice>,
     },
 }
@@ -380,6 +383,7 @@ fn null_collection(items: &[(Value, Witnesses)]) -> Option<Elem> {
 /// apart until resolution), then `elem` normal form per group.
 fn keyed_normalize(
     keys: &[String],
+    defaults: &BTreeMap<String, Value>,
     elem: &Lattice,
     path: &str,
     items: Vec<(Value, Witnesses)>,
@@ -387,6 +391,10 @@ fn keyed_normalize(
     if let Some(e) = null_collection(&items) {
         return e;
     }
+    let items = items
+        .into_iter()
+        .map(|(v, w)| (key_defaults(v, defaults), w))
+        .collect();
     let items = dedup_equal(items);
     let mut ws = Witnesses::new();
     let mut groups: Vec<(Vec<Value>, Contributions)> = Vec::new();
@@ -464,6 +472,29 @@ fn keyed_normalize(
     Elem::Val(Value::List(out), ws)
 }
 
+/// A keyed list's elements with each key they leave out at its default
+/// (R-116): a Service's `{port: 80}` is `{port: 80, protocol: "TCP"}`,
+/// as the server stores it, so it is keyed and meets an element that
+/// writes the default out.
+fn key_defaults(v: Value, defaults: &BTreeMap<String, Value>) -> Value {
+    match v {
+        Value::List(xs) if !defaults.is_empty() => Value::List(
+            xs.into_iter()
+                .map(|x| match x {
+                    Value::Obj(mut m) => {
+                        for (k, d) in defaults {
+                            m.entry(k.clone()).or_insert_with(|| d.clone());
+                        }
+                        Value::Obj(m)
+                    }
+                    x => x,
+                })
+                .collect(),
+        ),
+        v => v,
+    }
+}
+
 /// Set normal form: union modulo definite equality. Never conflicts, never
 /// stuck: two elements that *might* be equal are both kept until a null
 /// resolves, and the provider receives both.
@@ -502,7 +533,11 @@ fn normalize(lat: &Lattice, path: &str, items: Vec<(Value, Witnesses)>) -> Elem 
         Lattice::Flat => flat_normalize(path, items),
         Lattice::Map(elem) => map_normalize(elem, path, items),
         Lattice::Set => set_normalize(path, items),
-        Lattice::Keyed { keys, elem } => keyed_normalize(keys, elem, path, items),
+        Lattice::Keyed {
+            keys,
+            defaults,
+            elem,
+        } => keyed_normalize(keys, defaults, elem, path, items),
     }
 }
 
@@ -884,6 +919,7 @@ mod tests {
     fn element_writes_join_the_winning_elements_in_any_order() {
         let lat = Lattice::Keyed {
             keys: vec!["name".into()],
+            defaults: BTreeMap::new(),
             elem: Box::new(Lattice::Map(Box::new(Lattice::Flat))),
         };
         let c = |n: &str, img: &str| obj(&[("name", s(n)), ("image", s(img))]);
@@ -949,6 +985,7 @@ mod tests {
     fn ranked_keyed_collapses_to_the_highest_nonempty_shelf() {
         let lat = Lattice::Keyed {
             keys: vec!["port".into()],
+            defaults: BTreeMap::new(),
             elem: Box::new(Lattice::Map(Box::new(Lattice::Flat))),
         };
         let row = |p: i64, proto: &str| obj(&[("port", i(p)), ("proto", s(proto))]);
@@ -1461,6 +1498,7 @@ mod tests {
     fn keyed_list_merges_by_key_and_conflicts_within_a_key() {
         let lat = Lattice::Keyed {
             keys: vec!["action".into(), "resource".into()],
+            defaults: BTreeMap::new(),
             elem: Box::new(Lattice::Map(Box::new(Lattice::Flat))),
         };
         let st = |a: &str, r: Value, extra: Option<(&str, Value)>| {
@@ -1818,9 +1856,11 @@ pub fn lub_ranked_refined(
     let writes: Vec<&ElemWrite> = nested.elems.iter().filter(|e| e.list == list).collect();
     if !writes.is_empty() {
         let c = match lat {
-            Lattice::Keyed { keys, elem } => {
-                keyed_overlay(keys, elem, path, contribs, &writes, nested)
-            }
+            Lattice::Keyed {
+                keys,
+                defaults,
+                elem,
+            } => keyed_overlay(keys, defaults, elem, path, contribs, &writes, nested),
             _ => {
                 let w = writes[0];
                 Collapsed::Conflict {
@@ -2096,6 +2136,7 @@ fn lub_ranked_map(
 /// in key order, as the Keyed normal form puts them.
 fn keyed_overlay(
     keys: &[String],
+    defaults: &BTreeMap<String, Value>,
     elem: &Lattice,
     path: &str,
     contribs: &[RankedContribution],
@@ -2104,8 +2145,13 @@ fn keyed_overlay(
 ) -> Collapsed {
     let lat = Lattice::Keyed {
         keys: keys.to_vec(),
+        defaults: defaults.clone(),
         elem: Box::new(elem.clone()),
     };
+    let contribs: Vec<RankedContribution> = contribs
+        .iter()
+        .map(|(w, r, v)| (*w, *r, key_defaults(v.clone(), defaults)))
+        .collect();
     let cell = contribs.iter().fold(Ranked::default(), |acc, (w, r, v)| {
         acc.join_in(&lat, &Ranked::at(*r, *w, v.clone()), path)
     });
@@ -2149,7 +2195,7 @@ fn keyed_overlay(
         Some(i) => groups[i].1.push(c),
         None => groups.push((k, vec![c])),
     };
-    for (w, r, v) in contribs {
+    for (w, r, v) in &contribs {
         let (Some(top), Value::List(xs)) = (top, v) else {
             continue;
         };
@@ -2167,7 +2213,10 @@ fn keyed_overlay(
     }
     for w in writes {
         let k: Option<Vec<Value>> = match &w.key {
-            Value::Obj(m) => keys.iter().map(|k| m.get(k).cloned()).collect(),
+            Value::Obj(m) => keys
+                .iter()
+                .map(|k| m.get(k).or_else(|| defaults.get(k)).cloned())
+                .collect(),
             k if keys.len() == 1 => Some(vec![k.clone()]),
             _ => None,
         };
@@ -2413,6 +2462,7 @@ mod f_tests {
         };
         let keyed = Lattice::Keyed {
             keys: vec!["prio".into()],
+            defaults: BTreeMap::new(),
             elem: Box::new(Lattice::Flat),
         };
         let e = lub(

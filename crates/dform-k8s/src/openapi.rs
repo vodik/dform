@@ -11,8 +11,9 @@
 //! property path of its schema a `type_attr`, dotted through objects and
 //! list elements:
 //!
-//! - `x-kubernetes-list-map-keys` are the list's `type_list_key`; a list
-//!   whose `x-kubernetes-list-type` is `set` is a `set`;
+//! - `x-kubernetes-list-map-keys` are the list's `type_list_key`, and a
+//!   key's server default (a port's `protocol`, `TCP`) its `type_default`;
+//!   a list whose `x-kubernetes-list-type` is `set` is a `set`;
 //! - the leaves of `status` and `metadata.uid`, `resourceVersion`,
 //!   `generation`, `creationTimestamp`, `deletionTimestamp`,
 //!   `deletionGracePeriodSeconds` are `computed`, `uid` an identity (`id`);
@@ -314,6 +315,7 @@ pub fn derive(doc: &Json, aliases: &[(String, String)]) -> Result<Derived> {
                 kind: &kind,
                 attrs: Vec::new(),
                 keys: Vec::new(),
+                defaults: Vec::new(),
                 docs: Vec::new(),
             };
             if let Some(d) = root.get("description").and_then(Json::as_str) {
@@ -621,6 +623,16 @@ fn type_facts(typ: &str, kind: &Kind, w: &Walk) -> Vec<Atom> {
             vec![sym(typ), sym(path), Term::List(keys)],
         ));
     }
+    for (path, v) in &w.defaults {
+        out.push(atom(
+            "type_default",
+            vec![
+                sym(typ),
+                sym(path),
+                Term::Val(dform_core::provider::json_to_value(v)),
+            ],
+        ));
+    }
     out
 }
 
@@ -637,6 +649,9 @@ struct Walk<'a> {
     kind: &'a Kind,
     attrs: Vec<(String, &'static str, Vec<&'static str>)>,
     keys: Vec<(String, Vec<String>)>,
+    /// The server's default of a keyed list's merge key (`protocol` of a
+    /// Service's ports, `TCP`): an element that leaves it out has it.
+    defaults: Vec<(String, Json)>,
     /// Each path's description.
     docs: Vec<(String, String)>,
 }
@@ -779,6 +794,17 @@ impl<'a> Walk<'a> {
         }
         let ty = self.ty(node);
         let defaulted = self.get(node, "default").is_some_and(server_default) && ty != "object";
+        let key = p.rsplit_once('.').is_some_and(|(list, k)| {
+            self.keys
+                .iter()
+                .any(|(l, ks)| l == list && ks.iter().any(|x| x == k))
+        });
+        if key
+            && defaulted
+            && let Some(d) = self.get(node, "default")
+        {
+            self.defaults.push((p.to_string(), d.clone()));
+        }
         // A computed value is minted per path, so computed paths do not
         // nest: an object the server writes is its leaves.
         if !(ctx.computed && ty == "object") {
@@ -864,6 +890,26 @@ mod tests {
             type_name("cert-manager.io", "v1", "ClusterIssuer"),
             "k8s.cert_manager.io.v1.cluster_issuer"
         );
+    }
+
+    /// A merge key's server default is its `type_default` (R-116): a
+    /// Service's and a container's port `protocol`, `TCP`.
+    #[test]
+    fn the_snapshot_derives_merge_key_defaults() {
+        let d = snapshot().unwrap();
+        let defaults: Vec<String> = d
+            .schema
+            .facts
+            .iter()
+            .filter(|f| f.pred == "type_default")
+            .map(dform_core::partition::fmt_atom)
+            .collect();
+        for want in [
+            r#"type_default("k8s.core.v1.service", "spec.ports.protocol", "TCP")"#,
+            r#"type_default("k8s.apps.v1.deployment", "spec.template.spec.containers.ports.protocol", "TCP")"#,
+        ] {
+            assert!(defaults.iter().any(|d| d == want), "{want}: {defaults:#?}");
+        }
     }
 
     #[test]

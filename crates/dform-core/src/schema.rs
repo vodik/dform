@@ -19,6 +19,10 @@
 //!                                     % the cloud; `name`, `metadata.name` and
 //!                                     % `bucket` always do)
 //!   type_list_key(T, Path, Keys).     % merge keys of a list attribute
+//!   type_default(T, Path, V).         % optional: the value the server gives
+//!                                     % a merge key an element leaves out
+//!                                     % (`spec.ports.protocol`, "TCP"); the
+//!                                     % element has it before it is keyed
 //!   type_provider(T, P).              % which provider owns T
 //!   type_retry(T, Attempts).          % optional: how many times Read is tried
 //!                                     % before an object is taken as gone
@@ -770,10 +774,11 @@ impl Schema {
 }
 
 /// Schema predicates with a row per type (the type in the first column).
-const PER_TYPE: [&str; 7] = [
+const PER_TYPE: [&str; 8] = [
     "type_attr",
     "type_doc",
     "type_list_key",
+    "type_default",
     "type_retry",
     "type_replace",
     "type_mint",

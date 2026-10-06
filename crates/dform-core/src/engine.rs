@@ -1450,8 +1450,29 @@ fn contribution(a: &Atom) -> Result<(GroupKey, Rank, Value, ElemOf)> {
     Ok(((typ.to_string(), vals[1].clone(), path), rank, value, None))
 }
 
-/// `type_lattice(T, P, flat|map|set)` and `type_list_key(T, P, Keys)` facts.
+/// `type_lattice(T, P, flat|map|set)` and `type_list_key(T, P, Keys)`
+/// facts, a keyed list's with its keys' `type_default(T, P.K, V)`.
 fn declared_lattices(facts: &[Atom]) -> Result<BTreeMap<(String, String), Lattice>> {
+    let mut defaults: BTreeMap<(&str, &str), &Value> = BTreeMap::new();
+    for a in facts.iter().filter(|a| a.pred == "type_default") {
+        if let [
+            Term::Val(Value::Str(t)),
+            Term::Val(Value::Str(p)),
+            Term::Val(v),
+        ] = a.args.as_slice()
+        {
+            defaults.insert((t, p), v);
+        }
+    }
+    let key_defaults = |t: &str, p: &str, keys: &[String]| -> BTreeMap<String, Value> {
+        keys.iter()
+            .filter_map(|k| {
+                let at = format!("{p}.{k}");
+                let d = defaults.get(&(t, at.as_str()))?;
+                Some((k.clone(), (*d).clone()))
+            })
+            .collect()
+    };
     let mut decls: Vec<&Atom> = facts
         .iter()
         .filter(|a| LATTICE_DECLS.contains(&a.pred.as_str()))
@@ -1475,12 +1496,17 @@ fn declared_lattices(facts: &[Atom]) -> Result<BTreeMap<(String, String), Lattic
             ("type_lattice", Value::Str(k)) if k == "flat" => Lattice::Flat,
             ("type_lattice", Value::Str(k)) if k == "map" => Lattice::Map(Box::new(Lattice::Flat)),
             ("type_lattice", Value::Str(k)) if k == "set" => Lattice::Set,
-            ("type_list_key", Value::List(ks)) => Lattice::Keyed {
-                keys: ks.iter().map(crate::functions::value_to_string).collect(),
-                elem: Box::new(Lattice::Map(Box::new(Lattice::Flat))),
-            },
+            ("type_list_key", Value::List(ks)) => {
+                let keys: Vec<String> = ks.iter().map(crate::functions::value_to_string).collect();
+                Lattice::Keyed {
+                    defaults: key_defaults(t, p, &keys),
+                    keys,
+                    elem: Box::new(Lattice::Map(Box::new(Lattice::Flat))),
+                }
+            }
             ("type_list_key", Value::Str(k)) => Lattice::Keyed {
                 keys: vec![k.clone()],
+                defaults: key_defaults(t, p, std::slice::from_ref(k)),
                 elem: Box::new(Lattice::Map(Box::new(Lattice::Flat))),
             },
             _ => bail!(

@@ -261,3 +261,40 @@ fn a_body_reads_an_element_by_its_key() {
     }
     assert!(!r.stderr.contains("none"), "{}", r.stderr);
 }
+
+/// A merge key the schema defaults (`type_default`, R-116) is the
+/// element's before the key check: a Service's `{ port: 80 }` is keyed
+/// `port=80,protocol=TCP`, and meets a policy's element that writes the
+/// protocol out.
+#[test]
+fn a_merge_key_with_a_default_is_defaulted_before_the_key_check() {
+    let s = Scratch::project("kl-key-default");
+    s.write(
+        "providers/k8s/schema.df",
+        &(std::fs::read_to_string(common::repo().join("crates/dform-mock/schemas/k8s.df"))
+            .unwrap()
+            + "\ntype_default(k8s.service, \"spec.ports.protocol\", \"TCP\")\n"),
+    );
+    s.write(
+        "main.df",
+        r#"
+provider k8s
+
+resource k8s.service web {
+  metadata.name = "web"
+  spec.ports = [{ port: 80, targetPort: 8080 }]
+}
+
+set s.spec.ports = [{ port: 80, protocol: "TCP", name: "http" }] where s in k8s.service
+"#,
+    );
+    let r = plan(&s).success();
+    has(
+        &r,
+        &[
+            "spec.ports[port=80,protocol=TCP].name = \"http\"",
+            "spec.ports[port=80,protocol=TCP].protocol = \"TCP\"",
+            "spec.ports[port=80,protocol=TCP].targetPort = 8080",
+        ],
+    );
+}
