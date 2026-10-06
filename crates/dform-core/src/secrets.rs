@@ -364,7 +364,7 @@ pub fn secret_expected_accounts(
         .collect()
 }
 
-/// The settings a secret reaches, by provider (`provider k8s { kubeconfig
+/// The settings a secret reaches, by provider (`use k8s { kubeconfig
 /// = k3s.kubeconfig }`: `k8s` -> `kubeconfig`): the provider takes their
 /// value at Configure, in memory; dform prints each as `(sensitive)` and
 /// keeps it nowhere (R-45).

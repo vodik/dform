@@ -1117,7 +1117,7 @@ cargo run -- -C examples/gke apply --set zones=1   # one zone: stops after tick 
 ```
 
 A provider whose settings the program computes from what a tick makes
-(`provider k8s { kubeconfig = k3s.kubeconfig }`, the kubeconfig read over
+(`use k8s { kubeconfig = k3s.kubeconfig }`, the kubeconfig read over
 SSH from the server tick 1 creates) is configured at the boundary where
 they become known, waiting for them as for any value (`--wait`) when the
 read answers "not yet". The plan lists its resources under `later`
