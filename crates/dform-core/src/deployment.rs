@@ -21,6 +21,7 @@ use crate::engine::{self, EvalResult};
 use crate::externs::{self, Externs};
 use crate::inputs::{self, Declared};
 use crate::ir::{self, Address};
+use crate::plugin::providers::ProviderWait;
 use crate::plugin::{self, Launch, Providers};
 use crate::project::{self, Manifest};
 use crate::query::Redactor;
@@ -514,6 +515,86 @@ impl Evaluator {
         Ok((res, violations))
     }
 
+    /// A resource whose provider cannot plan it yet waits on that provider
+    /// (R-110), under `later` until a run that has it: one whose settings
+    /// the program gives and this evaluation does not know (a kubeconfig
+    /// read from a server still booting), as `provider k8s (kubeconfig
+    /// from k3s.kubeconfig)`; one of a kind no schema has yet, a cluster's
+    /// CRD, as `provider k8s for its schema`, created as written, untyped.
+    /// A resource already waiting on a null keeps what it waits on.
+    fn wait_on_providers(
+        &self,
+        plan: &mut provider::Plan,
+        resources: &[ir::Resource],
+        sections: &mut stuck::Sections,
+        st: &State,
+    ) {
+        for r in resources {
+            let Some(label) = self.provider_wait(&r.addr.typ) else {
+                continue;
+            };
+            if let Some(ProviderWait::Schema(_)) = self.backend.waits(&r.addr.typ) {
+                let doc = engine::value_to_json(&r.attrs);
+                let (kind, changes) = match st.get(&r.addr) {
+                    Some(_) => (provider::ActionKind::Pending, Vec::new()),
+                    None => (
+                        provider::ActionKind::Create,
+                        provider::diff(self.schema(), &r.addr.typ, None, Some(&doc)),
+                    ),
+                };
+                plan.actions.push(provider::Action {
+                    kind,
+                    addr: r.addr.clone(),
+                    changes,
+                    on: BTreeSet::from([label.clone()]),
+                });
+            }
+            sections
+                .pending
+                .entry((r.addr.typ.clone(), r.addr.name.clone()))
+                .or_insert_with(|| BTreeSet::from([label]));
+        }
+    }
+
+    /// What a resource of `typ` waits on before its provider plans it, as
+    /// `later` prints it ([`Providers::waits`]).
+    pub fn provider_wait(&self, typ: &str) -> Option<String> {
+        Some(match self.backend.waits(typ)? {
+            ProviderWait::Settings(p) => self.settings_label(&p),
+            ProviderWait::Schema(p) => format!("provider {p} for its schema"),
+        })
+    }
+
+    /// `provider NAME (KEY from EXPR, ..)`: a provider block's settings
+    /// (its `provider_config` row) as the program writes them.
+    fn settings_label(&self, name: &str) -> String {
+        let mut from: Vec<String> = Vec::new();
+        for s in &self.program.statements {
+            let head = match s {
+                Stmt::Rule(r) => &r.head,
+                Stmt::Fact(a) => a,
+                _ => continue,
+            };
+            let [Term::Val(Value::Str(n)), Term::Obj(settings)] = head.args.as_slice() else {
+                continue;
+            };
+            if head.pred != "provider_config" || n != name {
+                continue;
+            }
+            for k in settings.keys() {
+                from.push(match setting_text(head.span, k) {
+                    Some(t) => format!("{k} from {t}"),
+                    None => k.clone(),
+                });
+            }
+        }
+        from.dedup();
+        match from.as_slice() {
+            [] => format!("provider {name}"),
+            from => format!("provider {name} ({})", from.join(", ")),
+        }
+    }
+
     /// The program over the world as `st` has it.
     pub fn evaluate(&self, st: &State) -> Result<(EvalResult, Vec<String>)> {
         self.evaluate_with(st, &BTreeSet::new(), &[], None)
@@ -541,11 +622,13 @@ impl Evaluator {
         let backend = &self.backend;
         let schema = self.schema();
         // A resource with a conflicting attribute is not planned: the
-        // report shows the conflict, and the deny blocks an apply.
+        // report shows the conflict, and the deny blocks an apply. Nor is
+        // one whose provider has no schema of its type yet (R-110).
         let asked = |res: &EvalResult, docs: &[ir::Resource]| -> Vec<ir::Resource> {
             let conflicted = report::conflicted(res);
             docs.iter()
                 .filter(|r| !conflicted.contains(&r.addr))
+                .filter(|r| !matches!(backend.waits(&r.addr.typ), Some(ProviderWait::Schema(_))))
                 .cloned()
                 .collect()
         };
@@ -561,7 +644,8 @@ impl Evaluator {
             executor::hold_dependents(&mut plan, &docs, &replaced);
             (again, violations, docs)
         };
-        let sections = sections(&res, &resources, schema);
+        let mut sections = sections(&res, &resources, schema);
+        self.wait_on_providers(&mut plan, &resources, &mut sections, st);
         executor::hold_deposed(&mut plan, &resources, &sections);
         // The resource rules that may derive after a boundary (pending
         // groups), for the plan's policy pass.
@@ -620,6 +704,19 @@ impl Evaluator {
             denies,
         })
     }
+}
+
+/// The text of the entry `key = EXPR` in the block at `span`: `EXPR`, to
+/// the end of its line or the next `,` or `}`.
+fn setting_text(span: Span, key: &str) -> Option<String> {
+    let (_, text) = crate::diag::source_of(span)?;
+    let block = text.get(span.start as usize..span.end as usize)?;
+    let body = &block[block.find('{')? + 1..];
+    body.split(['\n', ','])
+        .filter_map(|e| e.split_once('='))
+        .find(|(k, _)| k.trim() == key)
+        .map(|(_, v)| v.trim().trim_end_matches('}').trim().to_string())
+        .filter(|v| !v.is_empty())
 }
 
 /// E §2.7's sections for an evaluation: what waits on a boundary.

@@ -37,7 +37,15 @@ type Env = BTreeMap<String, Value>;
 
 /// What `why-not PATTERN` prints: an address (`T["A"]`), an attribute
 /// (`T["A"].path`) or a relation's row with constants (`zone("x", n)`).
-pub fn why_not(pattern: &str, res: &EvalResult, redact: &Redactor) -> Result<String> {
+/// `waits`: what a resource of a type waits on before its provider plans
+/// it (R-110, `deployment::Evaluator::provider_wait`), which a derived
+/// resource's answer names, since the plan does not show it in a tick.
+pub fn why_not(
+    pattern: &str,
+    res: &EvalResult,
+    redact: &Redactor,
+    waits: &dyn Fn(&str) -> Option<String>,
+) -> Result<String> {
     let atom = match query::address(pattern, true)? {
         Some(query::Query::Body { body, .. }) => match body.as_slice() {
             [Lit::Pos(a)] => a.clone(),
@@ -67,9 +75,19 @@ pub fn why_not(pattern: &str, res: &EvalResult, redact: &Redactor) -> Result<Str
     let mut out = String::new();
     let name = w.name(&atom);
     if !engine::query(&[Lit::Pos(atom.clone())], &res.facts)?.is_empty() {
-        out.push_str(&format!(
-            "{name}: it is derived; `dform why '{pattern}'` explains it\n"
-        ));
+        let waiting = match (atom.pred.as_str(), atom.args.first()) {
+            ("want" | "attr", Some(Term::Val(Value::Str(t)))) => waits(t),
+            _ => None,
+        };
+        match waiting {
+            Some(on) => out.push_str(&format!(
+                "{name}: it is derived, and waits on {on}: the plan lists it under `later`; \
+                 `dform why '{pattern}'` explains it\n"
+            )),
+            None => out.push_str(&format!(
+                "{name}: it is derived; `dform why '{pattern}'` explains it\n"
+            )),
+        }
         return Ok(redact.text(&out));
     }
     // An attribute of a resource the program does not want: the resource.

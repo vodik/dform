@@ -160,6 +160,8 @@ pub struct Providers {
     /// The links whose settings the program gives and has not yet (a
     /// null, or not evaluated): they serve no state entry.
     awaiting: RefCell<BTreeSet<usize>>,
+    /// The links the program configures itself: `awaiting` as it started.
+    by_program: BTreeSet<usize>,
     /// The settings each link was last configured with from the program.
     settings: RefCell<BTreeMap<usize, Json>>,
     /// A program's provider block name -> its link ([`Config::blocks`]).
@@ -176,6 +178,16 @@ pub struct Providers {
     /// [`Config::digest_key`]: what a sensitive leaf of a world document
     /// dform keeps is digested with ([`Providers::stored`]).
     digest_key: Option<crate::zset::file::Key>,
+}
+
+/// What a resource waits on before its provider plans it
+/// ([`Providers::waits`]), by the provider's name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProviderWait {
+    /// The provider's settings, which the program gives and has not yet.
+    Settings(String),
+    /// The provider's schema of the type: a kind its cluster serves.
+    Schema(String),
 }
 
 /// What the providers' Schema calls answered.
@@ -333,6 +345,7 @@ impl Providers {
         let p = Self::deferred(links);
         Ok(Providers {
             bases,
+            by_program: awaiting.clone(),
             awaiting: RefCell::new(awaiting),
             blocks,
             mock_blocks,
@@ -408,6 +421,7 @@ impl Providers {
             notes: RefCell::new(Vec::new()),
             bases: Vec::new(),
             awaiting: RefCell::new(BTreeSet::new()),
+            by_program: BTreeSet::new(),
             settings: RefCell::new(BTreeMap::new()),
             blocks: BTreeMap::new(),
             mock_blocks: BTreeMap::new(),
@@ -686,7 +700,9 @@ impl Providers {
             let Term::Val(Value::Str(typ)) = &r.typ else {
                 continue;
             };
-            if owner.contains_key(typ) || own.contains(typ.as_str()) {
+            // A kind of a provider the program configures is known once
+            // the provider is (R-110): the plan lists it under `later`.
+            if owner.contains_key(typ) || own.contains(typ.as_str()) || self.waits(typ).is_some() {
                 continue;
             }
             let by = crate::schema::declaring(typ);
@@ -902,6 +918,33 @@ impl Providers {
     /// written: a tick waits on what the world has not reached yet (R-81).
     pub fn reread(&self) {
         self.invalidate();
+    }
+
+    /// What a resource of `typ` waits on before its provider can plan it
+    /// (R-110): the program's settings of the provider that serves it,
+    /// while they are not known; or, for a type no schema declares whose
+    /// namespace names a provider the program configures, that provider's
+    /// schema (a cluster's CRD, served once the cluster is reached).
+    pub fn waits(&self, typ: &str) -> Option<ProviderWait> {
+        let name = |i: usize| {
+            self.blocks
+                .iter()
+                .find(|&(_, &j)| j == i)
+                .map(|(b, _)| b.clone())
+                .unwrap_or_else(|| self.names[i].clone())
+        };
+        if let Some(&i) = self.loaded().owner.get(typ) {
+            return self
+                .awaiting
+                .borrow()
+                .contains(&i)
+                .then(|| ProviderWait::Settings(name(i)));
+        }
+        let ns = typ.split_once('.')?.0;
+        let i = self.link_for(ns)?;
+        self.by_program
+            .contains(&i)
+            .then(|| ProviderWait::Schema(name(i)))
     }
 
     /// A write happened: the next refresh Reads again.

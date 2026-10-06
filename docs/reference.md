@@ -702,7 +702,9 @@ provider k8s { source = "bin/dform-provider-k8s" }        # an executable
   `k8s.networking.k8s.io.v1.ingress`): a type name is a lowercase qualified
   name. The mock's short names (`k8s.deployment`) are aliases of them
   (`type_alias` in `crates/dform-mock/schemas/k8s.df`), so `examples/k8s/stacks/k8s_demo.df`
-  plans the same against either.
+  plans the same against either; so is `k8s.<kind>` for every other kind
+  of the static schema whose kind no other group has (`k8s.storage_class`,
+  `k8s.ingress_class`). A cluster's own kinds keep their full names.
 - The schema is derived at Configure from the cluster's `/openapi/v3`, and
   cached as `k8s-openapi.json` in the stack's state directory (fetched again
   when the server's index changes); the schema derived from it is cached
@@ -777,10 +779,21 @@ provider k8s { source = "bin/dform-provider-k8s" }        # an executable
   `cloud_computed` its `status`. Offline the inventory is empty, and so it
   is for a provider configured by `provider_config` (discovery runs before
   the program is evaluated, and is not run again).
+- A provider configured by the program (`provider k8s { kubeconfig = .. }`)
+  serves the static schema until its settings are known: the snapshot,
+  extended by the kinds the deployment's cluster served beyond it when it
+  was last reached (its CRDs, cached at
+  `dform.state/cache/schema/<deployment>/k8s.json`, keyed by the derivation
+  and the cluster's document, written when the program's settings
+  configure the cluster). A kind in neither waits on the provider for its
+  schema (`later`).
 - With no cluster in reach, or `DFORM_K8S_OFFLINE` set, the provider is
   offline: the schema is the checked-in snapshot of Kubernetes v1.36.0's
-  document (`crates/dform-k8s/openapi-snapshot.json`, trimmed to the mock's
-  kinds, Pod, ReplicaSet and RBAC by `crates/dform-k8s/trim_openapi.py`), Plan
+  document (`crates/dform-k8s/openapi-snapshot.json`, every kind of the
+  stable groups: core, apps, batch, autoscaling/v2, policy, networking,
+  rbac, storage, scheduling, coordination, discovery, node,
+  admissionregistration, apiextensions and certificates, trimmed by
+  `crates/dform-k8s/trim_openapi.py`), the provider's static schema; Plan
   diffs locally, and Read, Apply and Import fail naming why.
 
 ```bash
@@ -893,7 +906,14 @@ apply: tick 1 once this plan's digest is approved (`--approval`), then tick 2 wh
   never a count; a copy that may derive once, its resources under it; a
   deny or check `undetermined until tick N` (never reported as satisfied)
   or that `may hold at tick N`; a held change waiting on what this plan
-  does not resolve.
+  does not resolve. Every resource of a provider whose settings the
+  program gives and this plan does not know (a kubeconfig read from a
+  server still booting) is one, `waits on  provider k8s (kubeconfig from
+  k3s.kubeconfig)`, typed by the provider's static schema; one of a kind
+  no schema has yet (a cluster's CRD) `waits on  provider k8s for its
+  schema`, its attributes as written. The summary counts them, `, N
+  later`, and `why-not` names what such a resource waits on. A type whose
+  namespace names no provider is the compile error it always was.
 - `warning  this plan empties what the last apply derived` (R-80): a
   rule the plan deletes every resource of that it derived at the last
   apply, by its `FILE:LINE` and statement, with what it deletes (`deletes

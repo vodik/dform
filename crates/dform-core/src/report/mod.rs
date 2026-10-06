@@ -1509,6 +1509,17 @@ impl Report {
         if !self.policies.is_empty() {
             out.push_str(&format!(", {} undetermined", self.policies.len()));
         }
+        // Changes held on what no tick of this plan makes (a provider
+        // waiting on its settings, R-110), listed under `later`.
+        let later: usize = self
+            .pending
+            .iter()
+            .filter(|b| b.resolves_after.is_none())
+            .map(|b| b.deformations.len())
+            .sum();
+        if later > 0 {
+            out.push_str(&format!(", {later} later"));
+        }
         if !self.conflicts.is_empty() {
             out.push_str(&format!(", {}", count(self.conflicts.len(), "conflict")));
         }

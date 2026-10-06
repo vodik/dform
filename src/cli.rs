@@ -1978,7 +1978,11 @@ fn run_with(
                 ev.located.loaded.lowered.as_ref().map(|l| &l.signatures),
             )?,
             Cmd::WhyNot { pattern } => {
-                print!("{}", crate::whynot::why_not(pattern, &x.res, &x.redact)?)
+                let waits = |t: &str| ev.evaluator.provider_wait(t);
+                print!(
+                    "{}",
+                    crate::whynot::why_not(pattern, &x.res, &x.redact, &waits)?
+                )
             }
             Cmd::Explain { addresses } => {
                 let addresses = addresses
