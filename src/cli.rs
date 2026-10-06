@@ -1864,6 +1864,14 @@ fn run_with(
             | Cmd::Diff { .. }
             | Cmd::Explain { .. }
     );
+    // What the last apply derived (R-80): the plan's guardrail compares
+    // against it, and its policy pass reads it as `derived_at_last_apply`.
+    let last_derived = match &cli.cmd {
+        Cmd::Plan { .. } | Cmd::Apply { .. } | Cmd::Why { .. } | Cmd::Query { .. } => {
+            audit.entries().ok().and_then(|es| zset::Derived::last(&es))
+        }
+        _ => None,
+    };
     let opts = deployment::Options {
         launch: launch(),
         data: build_extra_facts(&cli.data)?,
@@ -1908,6 +1916,10 @@ fn run_with(
                 | Cmd::Rekey { .. }
         ),
         policy: explains || matches!(cli.cmd, Cmd::Plan { .. }),
+        last_apply: last_derived
+            .as_ref()
+            .map(zset::Derived::facts)
+            .unwrap_or_default(),
     };
     let mut ev = located.evaluate(
         read_outputs,
@@ -2087,6 +2099,36 @@ fn run_with(
         let f = std::path::absolute(f).ok()?;
         crate::project::manifest_root(&f).or_else(|| f.parent().map(Path::to_path_buf))
     });
+    // What the plan empties since the last apply (R-80), less what the
+    // stack's `allow_empty` names.
+    let mut allow_empty = Vec::new();
+    if let Some(t) = located
+        .loaded
+        .manifest
+        .as_ref()
+        .and_then(|m| m.stacks.get(stack))
+    {
+        allow_empty.extend(t.allow_empty.iter().cloned());
+    }
+    let emptied = |plan: &crate::provider::Plan,
+                   res: &engine::EvalResult,
+                   because: &dyn Fn(&str) -> Option<String>|
+     -> Vec<zset::Emptied> {
+        let Some(then) = &last_derived else {
+            return Vec::new();
+        };
+        let deleted: BTreeSet<String> = plan
+            .actions
+            .iter()
+            .filter(|a| matches!(a.kind, ActionKind::Delete))
+            .map(|a| a.addr.to_string())
+            .collect();
+        let rows_now = |rel: &str| res.facts.iter().filter(|f| f.pred == rel).count();
+        zset::emptied(then, &deleted, &rows_now, because)
+            .into_iter()
+            .filter(|e| !e.allowed(&allow_empty))
+            .collect()
+    };
     let explain = |report: &mut report::Report,
                    plan: &crate::provider::Plan,
                    res: &engine::EvalResult,
@@ -2094,6 +2136,12 @@ fn run_with(
         report.explain(why, res, &query::Redactor::new(&res.facts, schema));
         if tick == 1 {
             because(report, plan, res);
+            let leaf: std::collections::BTreeMap<String, String> = report
+                .definite
+                .iter()
+                .filter_map(|d| Some((d.addr.to_string(), d.because.clone()?)))
+                .collect();
+            report.warnings = emptied(plan, res, &|a| leaf.get(a).cloned());
         }
         if let Some(top) = &top {
             report.relative_to(top);
@@ -2901,6 +2949,17 @@ fn run_with(
                 }
                 if !boundary {
                     st.in_flight = None;
+                    // What this apply derived, for the next plan's
+                    // guardrail and policy pass (R-80).
+                    let relations: BTreeSet<String> = located
+                        .loaded
+                        .lowered
+                        .as_ref()
+                        .map(|l| l.signatures.keys().map(|(p, _)| p.clone()).collect())
+                        .unwrap_or_default();
+                    let redact = query::Redactor::new(&res.facts, schema);
+                    let record = zset::Derived::of(&res, &redact, &relations, top.as_deref());
+                    audit.append("derived", serde_json::json!({ "record": record }))?;
                     // The stack's outputs, as the world now is, for other
                     // stacks to read (evaluated again only when it has any:
                     // the evaluation refreshes). A --world fixture is not

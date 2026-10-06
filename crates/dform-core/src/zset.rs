@@ -565,6 +565,7 @@ deny(m) where {
 /// The predicates a policy pass gives the program (`deformation_facts`).
 pub const POLICY_INPUTS: &[&str] = &[
     "deformation",
+    DERIVED_AT_LAST_APPLY,
     "world_digest",
     IN_INSTANCE,
     crate::stuck::MAY_DERIVE,
@@ -752,6 +753,227 @@ fn compare(desired: &Value, world: &Value) -> (Kind, BTreeSet<String>) {
     } else {
         (Kind::Undeformed, BTreeSet::new())
     }
+}
+
+// --- the emptied-relation guardrail (R-80) -------------------------------
+
+/// The policy pass's record of the last apply (R-80): one row per rule
+/// that derived resources then, by where it is written (`FILE:LINE`),
+/// with how many; one per relation of the program, by its name, with its
+/// rows. A deny may read it beside `deformation/3`.
+pub const DERIVED_AT_LAST_APPLY: &str = "derived_at_last_apply";
+
+/// What an apply derived (R-80), as the audit log's `derived` entry
+/// keeps it: each rule with variables (a statement with a `where` that
+/// binds something; a resource stated once is not one) by where it is
+/// written, its statement and the resources it derived; each relation of
+/// the program with its rows. A later plan that deletes every resource of
+/// a rule, or empties a relation, says so ([`emptied`]).
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct Derived {
+    pub rules: BTreeMap<String, DerivedRule>,
+    pub rows: BTreeMap<String, usize>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct DerivedRule {
+    /// The statement on one line, as a site prints it.
+    pub statement: String,
+    /// The resources it derived, as the plan prints their addresses.
+    pub addresses: Vec<String>,
+}
+
+impl Derived {
+    /// What `res` derives: each `want`'s site (relative to `top`, the
+    /// project's root, when it is under it), and the rows of each of
+    /// `relations`.
+    pub fn of(
+        res: &crate::engine::EvalResult,
+        redact: &crate::query::Redactor,
+        relations: &BTreeSet<String>,
+        top: Option<&std::path::Path>,
+    ) -> Derived {
+        let p = crate::report::tree::Printer {
+            circuit: &res.circuit,
+            redact,
+            all: false,
+        };
+        let mut out = Derived::default();
+        for f in res.facts.iter().filter(|f| f.pred == "want") {
+            let [Term::Val(Value::Str(t)), Term::Val(Value::Str(a))] = f.args.as_slice() else {
+                continue;
+            };
+            let addr = Address {
+                typ: t.clone(),
+                name: a.clone(),
+            };
+            let Some(site) = p.want_site(&res.rules, &addr) else {
+                continue;
+            };
+            if site.with.is_empty() || site.at.is_empty() {
+                continue;
+            }
+            let at = top
+                .and_then(|top| relative_place(top, &site.at))
+                .unwrap_or(site.at);
+            let r = out.rules.entry(at).or_default();
+            r.statement = site.statement;
+            r.addresses.push(addr.to_string());
+        }
+        for rel in relations {
+            let n = res.facts.iter().filter(|f| &f.pred == rel).count();
+            out.rows.insert(rel.clone(), n);
+        }
+        out
+    }
+
+    /// The record of the last apply in the audit log `entries` that ended
+    /// well; `None` when there is none, or it kept no record.
+    pub fn last(entries: &[serde_json::Value]) -> Option<Derived> {
+        let (mut last, mut open) = (None, None);
+        for e in entries {
+            match e["kind"].as_str() {
+                Some("apply_start") => open = Some(None),
+                Some("derived") => {
+                    if let Some(o) = open.as_mut() {
+                        *o = serde_json::from_value::<Derived>(e["record"].clone()).ok();
+                    }
+                }
+                Some("apply_end") => {
+                    if let Some(d) = open.take()
+                        && e["result"] == "ok"
+                    {
+                        last = d;
+                    }
+                }
+                _ => {}
+            }
+        }
+        last
+    }
+
+    /// `derived_at_last_apply(rule, n)`: each rule by its place with the
+    /// resources it derived, each relation by its name with its rows.
+    pub fn facts(&self) -> Vec<Atom> {
+        let row = |name: &str, n: usize| Atom {
+            pred: DERIVED_AT_LAST_APPLY.into(),
+            args: vec![
+                Term::Val(Value::Str(name.to_string())),
+                Term::Val(Value::Int(n as i64)),
+            ],
+            record: None,
+            span: Default::default(),
+        };
+        self.rules
+            .iter()
+            .map(|(at, r)| row(at, r.addresses.len()))
+            .chain(self.rows.iter().map(|(rel, n)| row(rel, *n)))
+            .collect()
+    }
+}
+
+/// `FILE:LINE` relative to `top` when the file is under it.
+pub fn relative_place(top: &std::path::Path, at: &str) -> Option<String> {
+    let prefix = format!("{}/", top.display());
+    let (file, line) = at.rsplit_once(':')?;
+    if file.starts_with('<') {
+        return None;
+    }
+    let abs = std::path::absolute(file).ok()?;
+    let rest = abs.to_str()?.strip_prefix(&prefix)?;
+    Some(format!("{rest}:{line}"))
+}
+
+/// A rule the plan deletes every resource of, or a relation it empties,
+/// since the last apply (R-80): what the plan's `warning` section names,
+/// and what `apply` asks for on its own.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Emptied {
+    /// A rule's place (`FILE:LINE`), or a relation's name.
+    pub name: String,
+    /// A rule's statement; `None` for a relation.
+    pub statement: Option<String>,
+    /// A rule's resources, every one deleted by the plan.
+    pub deleted: Vec<String>,
+    /// A relation's rows at the last apply.
+    pub rows: usize,
+    /// The leaf that changed since the last apply (R-79's `because`), of
+    /// the first deleted resource that says.
+    pub because: Option<String>,
+}
+
+impl Emptied {
+    /// `--allow-empty NAME` (or `[stacks.NAME] allow_empty`) names it: its
+    /// place, a resource type it deletes, or the relation.
+    pub fn allowed(&self, names: &[String]) -> bool {
+        names.iter().any(|n| {
+            *n == self.name
+                || self
+                    .deleted
+                    .iter()
+                    .any(|a| crate::ir::parse_resource_address(a).is_ok_and(|a| a.typ == *n))
+        })
+    }
+
+    /// The question `apply` asks of it, and the line it refuses with.
+    pub fn what(&self) -> String {
+        match &self.statement {
+            Some(_) => format!(
+                "the plan deletes all {} resources the rule at {} derived at the last apply",
+                self.deleted.len(),
+                self.name
+            ),
+            None => format!(
+                "the plan empties the relation {}, which had {} at the last apply",
+                self.name,
+                count_rows(self.rows)
+            ),
+        }
+    }
+}
+
+fn count_rows(n: usize) -> String {
+    match n {
+        1 => "1 row".into(),
+        n => format!("{n} rows"),
+    }
+}
+
+/// What the plan empties since the last apply `then`: each rule all of
+/// whose resources are in `deleted`, and each relation with rows then and
+/// none now (`rows_now`). `because` is each address's leaf, when R-79
+/// found one.
+pub fn emptied(
+    then: &Derived,
+    deleted: &BTreeSet<String>,
+    rows_now: &dyn Fn(&str) -> usize,
+    because: &dyn Fn(&str) -> Option<String>,
+) -> Vec<Emptied> {
+    let mut out = Vec::new();
+    for (at, r) in &then.rules {
+        if r.addresses.is_empty() || !r.addresses.iter().all(|a| deleted.contains(a)) {
+            continue;
+        }
+        out.push(Emptied {
+            name: at.clone(),
+            statement: Some(r.statement.clone()),
+            deleted: r.addresses.clone(),
+            rows: 0,
+            because: r.addresses.iter().find_map(|a| because(a)),
+        });
+    }
+    for (rel, n) in &then.rows {
+        if *n > 0 && rows_now(rel) == 0 {
+            out.push(Emptied {
+                name: rel.clone(),
+                statement: None,
+                deleted: Vec::new(),
+                rows: *n,
+                because: None,
+            });
+        }
+    }
+    out
 }
 
 /// The plan file (`plan --out PLAN.json`, `apply PLAN.json`; E §2.8):

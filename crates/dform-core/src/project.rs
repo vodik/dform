@@ -340,6 +340,10 @@ pub struct StackTable {
     /// Job's status, a host that answers) before it stops (`10m`; R-81);
     /// `apply --wait` overrides it.
     pub wait: Option<String>,
+    /// The rules and relations a plan may empty without the guardrail's
+    /// warning and ask (R-80), as `apply --allow-empty` names them.
+    #[serde(default)]
+    pub allow_empty: Vec<String>,
 }
 
 /// The settings a stack table holds, as text: a term's (`backend`,
@@ -380,6 +384,7 @@ impl Defaults {
             isolated: self.isolated.clone(),
             config: self.config.clone(),
             wait: None,
+            allow_empty: Vec::new(),
         }
     }
 }

@@ -413,6 +413,9 @@ pub struct Report {
     /// The program's copies: a copy's deformations print under it, a
     /// composite resource (R-67).
     pub instances: crate::zset::Instances,
+    /// What the plan empties since the last apply (R-80): a rule all of
+    /// whose resources it deletes, a relation it leaves with no rows.
+    pub warnings: Vec<crate::zset::Emptied>,
 }
 
 /// What the report is built from.
@@ -599,6 +602,7 @@ pub fn report(i: &Input) -> Report {
             })
             .collect(),
         instances: crate::zset::Instances::from_facts(&i.res.facts).with(i.kept),
+        warnings: Vec::new(),
     }
 }
 
@@ -1569,6 +1573,44 @@ impl Report {
         out
     }
 
+    /// The `warning` section's lines (R-80), unindented: each rule the
+    /// plan deletes every resource of, with what it deletes and the leaf
+    /// that changed since the last apply; each relation it empties.
+    fn warning_lines(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        for w in &self.warnings {
+            match &w.statement {
+                Some(statement) => {
+                    out.push(format!("{}  {statement}", w.name));
+                    let shown: Vec<&str> = w.deleted.iter().take(3).map(String::as_str).collect();
+                    let more = match w.deleted.len().saturating_sub(3) {
+                        0 => String::new(),
+                        n => format!(" and {n} more"),
+                    };
+                    let n = w.deleted.len();
+                    out.push(format!(
+                        "    deletes all {n} it derived at the last apply: {}{more}",
+                        shown.join(", ")
+                    ));
+                    if let Some(b) = &w.because {
+                        out.push(format!("    because {b}"));
+                    }
+                }
+                None => {
+                    let rows = match w.rows {
+                        1 => "1 row".to_string(),
+                        n => format!("{n} rows"),
+                    };
+                    out.push(format!(
+                        "{}  had {rows} at the last apply, has none now",
+                        w.name
+                    ));
+                }
+            }
+        }
+        out
+    }
+
     /// The report as text, uncoloured: what `plan` prints with no colour,
     /// every golden, and the controller's log line.
     pub fn text(&self) -> String {
@@ -1630,6 +1672,14 @@ impl Report {
             let head = "later   changes this plan cannot count yet";
             rows.push(Row::new(head, bold(head)));
             self.write_later(&mut rows, style);
+        }
+        if !self.warnings.is_empty() {
+            rows.push(Row::plain(String::new()));
+            let head = "warning  this plan empties what the last apply derived";
+            rows.push(Row::new(head, style.paint(Paint::Warn, head)));
+            for line in self.warning_lines() {
+                rows.push(Row::plain(format!("  {line}")));
+            }
         }
         if !self.denies.is_empty() {
             rows.push(Row::plain(String::new()));
@@ -2227,7 +2277,7 @@ impl Report {
                 "changes": changes(&ds),
             }));
         }
-        json!({
+        let mut j = json!({
             "stack": self.stack,
             "up_to_date": self.undeformed,
             "summary": summary,
@@ -2260,7 +2310,26 @@ impl Report {
                 "site": a.site.as_ref().filter(|_| self.why != Why::None),
             })).collect::<Vec<_>>(),
             "apply": self.apply_line(),
-        })
+        });
+        // What the plan empties (R-80), only when it empties something.
+        if !self.warnings.is_empty() {
+            j["warnings"] = self
+                .warnings
+                .iter()
+                .map(|w| {
+                    json!({
+                        "rule": w.statement.as_ref().map(|_| w.name.clone()),
+                        "statement": w.statement,
+                        "relation": w.statement.is_none().then(|| w.name.clone()),
+                        "deletes": w.deleted,
+                        "rows_at_last_apply": w.statement.is_none().then_some(w.rows),
+                        "because": w.because,
+                    })
+                })
+                .collect::<Vec<_>>()
+                .into();
+        }
+        j
     }
 
     fn change_json(&self, d: &Deformation) -> Json {

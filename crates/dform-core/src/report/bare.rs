@@ -137,6 +137,14 @@ impl Report {
                 ));
             }
         }
+        if !self.warnings.is_empty() {
+            let head = "warning: this plan empties what the last apply derived";
+            out.push_str(&style.paint(Paint::Warn, head));
+            out.push('\n');
+            for line in self.warning_lines() {
+                out.push_str(&format!("  {line}\n"));
+            }
+        }
         for (title, ds) in [("shadowed", &self.shadowed), ("conflicts", &self.conflicts)] {
             if ds.is_empty() {
                 continue;

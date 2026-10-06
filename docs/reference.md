@@ -248,6 +248,9 @@ audit_sink = "logger -t dform"    # optional: each audit entry to a command; see
 isolated = true                   # a keyed stack's deployments do not share names
 wait = "30m"                      # optional: how long a tick waits on open nulls (10m);
                                   # see "Timeouts, retries and waiting"
+allow_empty = ["net.subnet"]      # optional: what a plan may empty without the
+                                  # guardrail's warning; see "Computed values come
+                                  # from Apply"
 ```
 
 Two programs never see each other's resources. `apply` holds the
@@ -883,6 +886,22 @@ apply: tick 1 once this plan's digest is approved (`--approval`), then tick 2 wh
   deny or check `undetermined until tick N` (never reported as satisfied)
   or that `may hold at tick N`; a held change waiting on what this plan
   does not resolve.
+- `warning  this plan empties what the last apply derived` (R-80): a
+  rule the plan deletes every resource of that it derived at the last
+  apply, by its `FILE:LINE` and statement, with what it deletes (`deletes
+  all 2 it derived at the last apply: ..`, three named and `and N more`)
+  and the leaf that changed since (R-79's `because`, when there is one);
+  and a relation of the program that had rows at the last apply and has
+  none now (`active  had 1 row at the last apply, has none now`). A rule
+  is one that binds variables (a `where` with a join, an `in`); a
+  resource stated once is not. A broken join and a deliberate delete look
+  alike to the plan, so it says so, and `apply` asks for each on its own.
+  `[stacks.NAME] allow_empty` in dform.toml names those that may empty
+  without a word: a rule's `FILE:LINE`, a resource type it derives, or
+  the relation. What each apply derived is the audit log's `derived`
+  entry; a plan with no apply before it warns of nothing. `--json`
+  carries them as `warnings` (each `{rule, statement, relation, deletes,
+  rows_at_last_apply, because}`), only when there is one.
 - `denied`: denies over the plan itself (`lifecycle prevent_destroy: the
   plan would replace T["A"]`), each with the change its firing read and
   where it is written; the plan still prints, then refuses.
@@ -1071,7 +1090,11 @@ pass): `deformation(Kind, r, Before)` per deformation, `r` the resource as a
 reference that prints as its address, `T["A"]` (`Kind` is
 `create`, `adopt`, `update`, `drift`, `pending`, `replace`, `delete`,
 `delete_deposed` or `remaining`; `Before` a digest of the world document it was planned
-against, `absent` for none) and `world_digest(r, Now)`. The lifecycle
+against, `absent` for none) and `world_digest(r, Now)`; and
+`derived_at_last_apply(rule, n)` (R-80), from the last apply's `derived`
+entry in the audit log: a rule that derived resources then, by its
+`FILE:LINE`, with how many, and a relation of the program, by its name,
+with its rows. The lifecycle
 denies are rules over them (`zset::POLICY_RULES`): `prevent_destroy` reads
 `lifecycle/2` and a `delete` or `replace`, and at a phase boundary the held
 deformations come back as `pending` with the digest they were planned
@@ -1311,6 +1334,11 @@ The kinds:
   attempt failed (redacted);
 - `wait`: a tick that waited on open nulls: the tick, what it waited on,
   since when, how long, and whether they `resolved` or the budget `expired`;
+- `derived`: at the end of an apply that completes, what it derived
+  (`record`): each rule that binds variables by its `FILE:LINE`, its
+  statement and the resources it derived, and each relation of the
+  program with its rows; the next plan's guardrail and its
+  `derived_at_last_apply` read the last one (R-80);
 - `apply_end`: `ok`, `declined` (the confirmation was answered no), or
   `failed` and the error;
 - `controller`: each event, holds for approval and the run's result; and

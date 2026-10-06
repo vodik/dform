@@ -23,11 +23,14 @@
 //! (a provider call sent again: the call, the attempt and its budget, the
 //! delay, why the last one failed; [`retry`]), `wait` (a tick waiting on
 //! open nulls: what, since when, how long, and how it ended; [`wait`]),
-//! `apply_end`, `controller` (events, holds, releases), `rekey` and
+//! `derived` (what a completed apply derived: each rule's resources and
+//! each relation's rows, `zset::Derived`; R-80), `apply_end`, `controller` (events, holds, releases), `rekey` and
 //! `handover`. Values are never written: a diff is a digest of its redacted
 //! form, where a sensitive leaf is already the stack's HMAC of it.
 //!
-//! Nothing reads the log as truth (DR-16): plan and apply never look at it.
+//! Nothing reads the log as truth (DR-16): plan and apply read only what
+//! the last apply recorded, to say what changed since (R-79's `because`)
+//! and what a plan empties (R-80's guardrail), never to decide a change.
 //! A sink (`--audit-sink CMD`, or the stack's `audit_sink = "CMD"`) gets
 //! each entry as a JSON line on its stdin (`sh -c CMD`, once per entry);
 //! a sink that fails is a warning, and the local log stays authoritative.

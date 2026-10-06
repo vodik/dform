@@ -527,6 +527,7 @@ pub const PROVIDER_PREDS: &[&str] = &[
     "world_attr",
     "identity",
     "deformation",
+    "derived_at_last_apply",
     "in_instance",
     "world_digest",
     "may_derive",

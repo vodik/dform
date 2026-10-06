@@ -367,6 +367,9 @@ pub struct Options<'a> {
     pub blocking: bool,
     /// The plan and the policy pass over it.
     pub policy: bool,
+    /// What the last apply derived, for the policy pass
+    /// (`zset::DERIVED_AT_LAST_APPLY`, R-80).
+    pub last_apply: Vec<Atom>,
 }
 
 impl<'a> Options<'a> {
@@ -385,6 +388,7 @@ impl<'a> Options<'a> {
             collisions: false,
             blocking: false,
             policy: false,
+            last_apply: Vec::new(),
         }
     }
 }
@@ -439,6 +443,8 @@ pub struct Evaluator {
     declared: Vec<Declared>,
     secret_accounts: BTreeSet<String>,
     deployment: String,
+    /// What the last apply derived, given to every policy pass (R-80).
+    last_apply: Vec<Atom>,
     /// The last evaluation's facts and where it can be continued from.
     last: RefCell<Option<(Vec<Atom>, engine::Resumable)>>,
 }
@@ -588,6 +594,7 @@ impl Evaluator {
             &instances,
         ));
         facts.extend(may_derive);
+        facts.extend(self.last_apply.iter().cloned());
         let (res, all) = self.evaluate_with(st, &replaced, &facts, None)?;
         let again = ir::compile_resources(res.facts.iter().cloned(), schema)?;
         if again.len() != resources.len()
@@ -864,6 +871,7 @@ impl Located {
             declared: l.declared.clone(),
             secret_accounts,
             deployment: self.deployment.clone(),
+            last_apply: opts.last_apply.clone(),
             last: RefCell::new(None),
         };
         let (mut res, mut violations) = evaluator.evaluate(&st)?;
