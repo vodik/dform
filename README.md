@@ -42,11 +42,11 @@ plan: 7 changes (7 create) over 1 tick
 tick 1  7 changes, applies now
   + aws.vpc["main"]                     shop.df:3
       cidr_block = 10.0.0.0/16
-  + aws.subnet["private-us-east-1a"]    shop.df:9  with availability_zone = "us-east-1a", n = 0
+  + aws.subnet["private-us-east-1a"]    shop.df:8  with availability_zone = "us-east-1a", n = 0
       availability_zone = "us-east-1a"
       cidr_block = 10.0.0.0/24          inet.subnet(main.cidr_block, 8, n)
       vpc = ?aws.vpc["main"]
-  + aws.subnet["private-us-east-1b"]    shop.df:9  with availability_zone = "us-east-1b", n = 1
+  + aws.subnet["private-us-east-1b"]    shop.df:8  with availability_zone = "us-east-1b", n = 1
       availability_zone = "us-east-1b"
       cidr_block = 10.0.1.0/24          inet.subnet(main.cidr_block, 8, n)
       vpc = ?aws.vpc["main"]
@@ -352,7 +352,7 @@ condition that failed, with the nearest rows that would have passed:
 ```
 $ dform why-not 'aws.subnet["private-us-east-1c"]'
 aws.subnet["private-us-east-1c"]: no rule derives it
-  shop.df:9  resource aws.subnet "private-${availability_zone}" { .. } where aws.availability_zone("available", availability_zone, n)
+  shop.df:8  resource aws.subnet "private-${availability_zone}" { .. } where aws.availability_zone("available", availability_zone, n)
     aws.availability_zone("available", "us-east-1c", n): no row
     nearest: ("us-east-1a", 0), ("us-east-1b", 1)
 ```
@@ -803,9 +803,11 @@ plan from the file alone, with no cloud access.
 
 **why, why-not, query, diff.** `dform why ADDR` explains a resource;
 `dform why 'deny(m)'` explains a refusal; `dform why-not ADDR` explains
-an absence, and `plan` warns when a change would empty a relation that
-had rows at the last apply, so a broken join and a deliberate delete do
-not look alike. `dform query 'attr(aws.subnet, s,
+an absence, and `plan` warns when a change would delete everything a
+rule derived at the last apply, or empty a relation that had rows then,
+naming the rule and the row that went, so a broken join and a deliberate
+delete do not look alike; `apply` asks for that on its own, also under
+`--yes`, unless `--allow-empty` names it. `dform query 'attr(aws.subnet, s,
 "availability_zone", z)'` asks the fact store anything. `dform diff
 --since 2026-09-20` explains what changed between applies, and why.
 
