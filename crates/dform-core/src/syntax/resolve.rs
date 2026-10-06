@@ -223,6 +223,16 @@ struct Scope {
     unbound: BTreeSet<String>,
     /// Modules used here: the name it binds -> the module's path.
     uses: BTreeMap<String, String>,
+    /// The names a `use` or an `instance` binds here, each declaration in
+    /// source order: `(path as written, whether it is a use, the
+    /// statement)`. Several of one name are guarded declarations (R-104).
+    bound: BTreeMap<String, Vec<(String, bool, SyntaxNode)>>,
+    /// A name declared more than once (R-104) -> each declaration's
+    /// module or component path, as resolved, and its statement.
+    alternatives: BTreeMap<String, Vec<(String, SyntaxNode)>>,
+    /// Each value output's declared type, as written (R-104): what two
+    /// declarations of one name must agree on.
+    output_types: BTreeMap<String, String>,
     /// Stacks used here: the name it binds -> its index in `deployed`.
     stacks: BTreeMap<String, usize>,
     /// A component's `output k: T`: `Some(T)` when T is a resource type.
@@ -837,6 +847,33 @@ impl<'u> Lowerer<'u> {
                 self.decls.scopes[s].uses.insert(name, path);
             }
         }
+        // A name declared more than once: each declaration's path (R-104).
+        for s in 0..self.decls.scopes.len() {
+            let bound = self.decls.scopes[s].bound.clone();
+            for (name, decls) in bound.into_iter().filter(|(_, d)| d.len() > 1) {
+                let mut alts = Vec::new();
+                for (written, used, n) in decls {
+                    let path = match used {
+                        true => self.module_path_of(s, &written),
+                        false => match self.component_path(s, &written) {
+                            Ok(p) => p,
+                            Err(_) => continue,
+                        },
+                    };
+                    if !used {
+                        let last = written.rsplit('.').next().unwrap_or(&written).to_string();
+                        if self.use_in(s, &last).is_none() && self.stack_in(s, &last).is_none() {
+                            self.decls.scopes[s]
+                                .copied
+                                .entry(last)
+                                .or_insert(path.clone());
+                        }
+                    }
+                    alts.push((path, n));
+                }
+                self.decls.scopes[s].alternatives.insert(name, alts);
+            }
+        }
         for s in 0..self.decls.scopes.len() {
             let written = self.decls.scopes[s].instances_written.clone();
             for (name, path) in written {
@@ -982,6 +1019,10 @@ impl<'u> Lowerer<'u> {
                 OUTPUT_DECL => {
                     let ty = node(&n, TYPE_EXPR).and_then(|t| self.resource_type(&t));
                     let k = word_text(&n, 1);
+                    if let Some(t) = node(&n, TYPE_EXPR) {
+                        let text = t.text().to_string().replace(char::is_whitespace, "");
+                        self.decls.scopes[decl].output_types.insert(k.clone(), text);
+                    }
                     let typed = self.decls.scopes[decl].outputs.get(&k).cloned().flatten();
                     self.decls.scopes[decl].outputs.insert(k, ty.or(typed));
                 }
@@ -1026,7 +1067,13 @@ impl<'u> Lowerer<'u> {
                 }
                 INSTANCE => {
                     let (path, name) = instance_parts(&n);
-                    self.decls.scopes[decl].instances_written.insert(name, path);
+                    let sc = &mut self.decls.scopes[decl];
+                    sc.bound.entry(name.clone()).or_default().push((
+                        path.clone(),
+                        false,
+                        n.clone(),
+                    ));
+                    sc.instances_written.entry(name).or_insert(path);
                 }
                 USE => {
                     // The path as written; `bind_instances` resolves it.
@@ -1036,7 +1083,13 @@ impl<'u> Lowerer<'u> {
                             self.decls.scopes[decl].stacks.insert(name, i);
                         }
                         None if path.split('.').next() != Some("std") => {
-                            self.decls.scopes[decl].uses.insert(name, path);
+                            let sc = &mut self.decls.scopes[decl];
+                            sc.bound.entry(name.clone()).or_default().push((
+                                path.clone(),
+                                true,
+                                n.clone(),
+                            ));
+                            sc.uses.entry(name).or_insert(path);
                         }
                         None => {}
                     }
@@ -3023,22 +3076,46 @@ impl<'u> Lowerer<'u> {
         if failed { Err(Skip) } else { Ok(out) }
     }
 
-    /// The earlier `use` or `instance` beside `n` that binds the same name,
-    /// if one does: the names of a scope's copies and imports are one
-    /// namespace.
-    fn bound_before(&self, n: &SyntaxNode, name: &str) -> Option<SyntaxNode> {
-        let parent = n.parent()?;
-        parent
+    /// The declarations of `name` by a `use` or an `instance` beside `n`,
+    /// in source order: the names of a scope's copies and imports are one
+    /// namespace. A name may be declared more than once when every
+    /// declaration of it has a clause (R-104); else the second is the
+    /// error, naming the first.
+    fn redeclared(&mut self, n: &SyntaxNode, name: &str) -> L<()> {
+        let Some(parent) = n.parent() else {
+            return Ok(());
+        };
+        let same: Vec<SyntaxNode> = parent
             .children()
-            .take_while(|c| c != n)
             .filter(|c| matches!(c.kind(), USE | INSTANCE))
-            .find(|c| {
+            .filter(|c| {
                 let other = match c.kind() {
                     USE => use_parts(c).1,
                     _ => instance_parts(c).1,
                 };
                 other == name
             })
+            .collect();
+        if same.len() < 2
+            || same.first() == Some(n)
+            || same.iter().all(|c| node(c, CLAUSE).is_some())
+        {
+            return Ok(());
+        }
+        let span = self.span(n);
+        let first = self.span(&same[0]);
+        let d = Diagnostic::error(
+            span,
+            format!("`{name}` is declared twice; give each a `where`"),
+        )
+        .with_label(first, "first here")
+        .with_help(
+            "a name is declared once in a scope, or several times each under a clause that \
+             picks it (`instance pg_aws db { .. } where cloud == \"aws\"`); a copy or an \
+             import of another name is `instance PATH NAME`, `use PATH as NAME`",
+        );
+        self.diags.push(d);
+        Err(Skip)
     }
 
     /// `use PATH [as NAME] [{ k = v }] [where B]` (R-65): a module imported
@@ -3048,14 +3125,7 @@ impl<'u> Lowerer<'u> {
     fn use_stmt(&mut self, n: &SyntaxNode, scope: usize, outer: &Rc) -> L<Vec<Stmt>> {
         let span = self.span(n);
         let (written, name) = use_parts(n);
-        if let Some(prev) = self.bound_before(n, &name) {
-            let at = self.span(&prev);
-            let d = Diagnostic::error(span, format!("`{name}` names two things in one scope"))
-                .with_label(at, "first here")
-                .with_help("a module is used once per scope; `use .. as NAME` names another");
-            self.diags.push(d);
-            return Err(Skip);
-        }
+        self.redeclared(n, &name)?;
         if let Some(rest) = written.strip_prefix("std.") {
             let fns = crate::functions::registry();
             if !fns.packages().contains(&rest) {
@@ -3116,17 +3186,7 @@ impl<'u> Lowerer<'u> {
                 return Err(Skip);
             }
         };
-        if let Some(prev) = self.bound_before(n, &name) {
-            let at = self.span(&prev);
-            let d = Diagnostic::error(span, format!("`{name}` names two things in one scope"))
-                .with_label(at, "the first")
-                .with_help(format!(
-                    "an instance's name is its scope (`{name}.out`, `T[\"{name}::x\"]`): \
-                     name one otherwise, `instance {written} NAME`"
-                ));
-            self.diags.push(d);
-            return Err(Skip);
-        }
+        self.redeclared(n, &name)?;
         if name == "_" {
             return self.error(
                 span,
@@ -6088,6 +6148,9 @@ impl<'u> Lowerer<'u> {
         span: Span,
     ) -> L<Option<Res>> {
         let h = c.head.as_str();
+        if let Some(Op::Field(x)) = c.ops.first() {
+            self.alternatives_agree(rc.scope, h, x, span)?;
+        }
         if let Some((at, path)) = self.instance_in(rc.scope, h) {
             let inst = self.scope_term(rc.scope, at, str_term(h));
             return self.output_of(rc, inst, &path, &c.ops, pre, span).map(Some);
@@ -6211,6 +6274,77 @@ impl<'u> Lowerer<'u> {
                 )
                 .map(Some),
         }
+    }
+
+    /// `h.x` where `h` is declared more than once, each under a clause
+    /// (R-104): every declaration has `x`, of one type, else the read is
+    /// an error naming every declaration.
+    fn alternatives_agree(&mut self, scope: usize, h: &str, x: &str, span: Span) -> L<()> {
+        let Some(alts) = self
+            .chain_of(scope)
+            .into_iter()
+            .find(|s| self.decls.scopes[*s].bound.contains_key(h))
+            .and_then(|s| self.decls.scopes[s].alternatives.get(h).cloned())
+        else {
+            return Ok(());
+        };
+        let mut found = Vec::new();
+        for (path, n) in &alts {
+            let what = match n.kind() {
+                USE => format!("use {}", use_parts(n).0),
+                _ => {
+                    let (c, name) = instance_parts(n);
+                    format!("instance {c} {name}")
+                }
+            };
+            let item = self.decls.modules.get(path).and_then(|m| {
+                let sc = &self.decls.scopes[m.scope];
+                if sc.outputs.contains_key(x) {
+                    let ty = sc.output_types.get(x).map_or("any", String::as_str);
+                    return Some(format!("output {x}: {ty}"));
+                }
+                if let Some(i) = sc.input_nodes.get(x) {
+                    let ty = node(i, TYPE_EXPR)
+                        .map(|t| t.text().to_string().replace(char::is_whitespace, ""))
+                        .unwrap_or_default();
+                    return Some(format!("input {x}: {ty}"));
+                }
+                if sc.values.contains(x) {
+                    return Some(format!("let {x}"));
+                }
+                sc.resources
+                    .get(x)
+                    .map(|ts| format!("resource {}", ts.join(", ")))
+            });
+            found.push((what, item, self.span(n)));
+        }
+        if let Some((what, _, _)) = found.iter().find(|(_, i, _)| i.is_none()) {
+            let mut d = Diagnostic::error(span, format!("`{h}.{x}`: `{what}` has no `{x}`"));
+            for (w, i, at) in &found {
+                d = d.with_label(*at, format!("{w}: {}", i.as_deref().unwrap_or("none")));
+            }
+            self.diags.push(d.with_help(format!(
+                "each declaration of `{h}` must have `{x}`: a component signature says what \
+                 they all have, `type T = component {{ output {x}: TYPE }}`"
+            )));
+            return Err(Skip);
+        }
+        let first = &found[0].1;
+        if found.iter().any(|(_, i, _)| i != first) {
+            let mut d = Diagnostic::error(
+                span,
+                format!("`{h}.{x}` has another type in each declaration of `{h}`"),
+            );
+            for (w, i, at) in &found {
+                d = d.with_label(*at, format!("{w}: {}", i.as_deref().unwrap_or("")));
+            }
+            self.diags.push(d.with_help(
+                "a component signature unifies them: `type T = component { .. }` declares the \
+                 inputs and outputs, and `component C: T { .. }` is checked against it",
+            ));
+            return Err(Skip);
+        }
+        Ok(())
     }
 
     /// `.k.path` after an instance's scope `inst`, of the component at

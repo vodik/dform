@@ -180,6 +180,81 @@ fn lets(stmts: Vec<Stmt>, scope: &str, names: Option<&Names>) -> Vec<Stmt> {
     out
 }
 
+/// One declaration of a name a scope declares more than once (R-104):
+/// what it is as written (`instance pg_aws db`), its clause, where.
+pub struct Alternative {
+    pub what: String,
+    pub clause: Vec<Lit>,
+    pub span: Span,
+}
+
+/// The relation each declaration of a guarded name holds in, `__declared(
+/// name, i)`, by its clause: a pair that both hold is the deny naming
+/// both.
+pub const DECLARED: &str = "__declared";
+
+/// A name declared several times in one scope, each under a clause
+/// (R-104): the compiler does not prove the clauses exclusive, the
+/// evaluation does. Each declaration's clause derives `__declared(name,
+/// i)`, and two that both hold are a deny naming both sites.
+pub fn exclusive(name: &str, alts: &[Alternative]) -> Vec<Stmt> {
+    let mut out = Vec::new();
+    let held = |i: usize, span: Span| {
+        atom(
+            DECLARED,
+            vec![str_term(name), Term::Val(Value::Int(i as i64))],
+            span,
+        )
+    };
+    for (i, a) in alts.iter().enumerate() {
+        out.push(fact_or_rule(held(i, a.span), a.clause.clone()));
+    }
+    let site = |a: &Alternative| match diag::at(a.span) {
+        Some(at) => format!("`{}` at {at}", a.what),
+        None => format!("`{}`", a.what),
+    };
+    for (i, a) in alts.iter().enumerate() {
+        for (j, b) in alts.iter().enumerate().skip(i + 1) {
+            let msg = format!(
+                "`{name}` is declared twice and both declarations hold: {} and {}",
+                site(a),
+                site(b)
+            );
+            out.push(Stmt::Rule(RuleStmt {
+                head: atom("deny", vec![str_term(&msg)], b.span),
+                body: vec![Lit::Pos(held(i, a.span)), Lit::Pos(held(j, b.span))],
+            }));
+        }
+    }
+    out
+}
+
+/// The guarded groups of a body's `use`s and `instance`s: each name
+/// bound more than once, its checks (`exclusive`).
+fn exclusive_copies(stmts: &[Stmt]) -> Vec<Stmt> {
+    let mut groups: BTreeMap<&str, Vec<Alternative>> = BTreeMap::new();
+    for s in stmts {
+        let (u, what) = match s {
+            Stmt::Use(u) if u.module.rsplit('.').next() == Some(u.name.as_str()) => {
+                (u, format!("use {}", u.module))
+            }
+            Stmt::Use(u) => (u, format!("use {} as {}", u.module, u.name)),
+            Stmt::Instance(u) => (u, format!("instance {} {}", u.module, u.name)),
+            _ => continue,
+        };
+        groups.entry(&u.name).or_default().push(Alternative {
+            what,
+            clause: u.clause.clone().unwrap_or_default(),
+            span: u.span,
+        });
+    }
+    groups
+        .into_iter()
+        .filter(|(_, alts)| alts.len() > 1)
+        .flat_map(|(name, alts)| exclusive(name, &alts))
+        .collect()
+}
+
 /// Predicates a module may never make private: the compiler's, the
 /// provider's and the policy heads.
 fn is_shared(pred: &str) -> bool {
@@ -322,7 +397,7 @@ pub fn expand(program: &Program) -> Result<Expanded> {
         checked: BTreeSet::new(),
         flat: BTreeSet::from([String::new()]),
     };
-    let mut out = Vec::new();
+    let mut out = exclusive_copies(&program.statements);
     for s in &program.statements {
         match s {
             // The stack's own input: read as `k(V)`, given by `--set` (an
@@ -503,7 +578,7 @@ impl Cx<'_> {
     /// The `use`s and `instance`s of a body expanded, every name relative
     /// to the body's scope; `at` is that scope's absolute name.
     fn body(&mut self, stmts: &[Stmt], at: &str) -> Vec<Stmt> {
-        let mut out = Vec::new();
+        let mut out = exclusive_copies(stmts);
         for s in stmts {
             match s {
                 Stmt::Use(u) => out.extend(self.instance(u, at, true)),
@@ -629,6 +704,14 @@ impl Cx<'_> {
                             .strip_prefix(k.as_str())
                             .is_some_and(|r| r.starts_with('.'))
                 });
+                // A name declared twice (R-104) declares its inputs once.
+                if self
+                    .declared
+                    .iter()
+                    .any(|d| d.scope == abs && d.decl.name == leaf.name)
+                {
+                    continue;
+                }
                 let mut d = Declared::new(&abs, leaf, address, bound);
                 d.used_at = flat.then_some(u.span);
                 self.declared.push(d);
