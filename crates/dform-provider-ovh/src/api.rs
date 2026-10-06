@@ -213,7 +213,11 @@ impl Client {
             let message = serde_json::from_str::<Json>(&text)
                 .ok()
                 .map(|j| {
-                    let msg = j.get("message").and_then(Json::as_str).unwrap_or("").to_string();
+                    let msg = j
+                        .get("message")
+                        .and_then(Json::as_str)
+                        .unwrap_or("")
+                        .to_string();
                     match j.get("errorCode").and_then(Json::as_str) {
                         Some(code) if !code.is_empty() => format!("{msg} ({code})"),
                         _ => msg,
