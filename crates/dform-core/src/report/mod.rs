@@ -1523,6 +1523,16 @@ pub fn kind_name(k: &ActionKind) -> &'static str {
     }
 }
 
+/// A relation as the source names it (R-111): a copy's or a used
+/// module's own by its name there, `vpc_net (in green)`, never the core's
+/// `green::vpc_net`.
+pub fn relation_name(rel: &str) -> String {
+    match rel.rsplit_once("::") {
+        Some((scope, p)) => format!("{p} (in {scope})"),
+        None => rel.to_string(),
+    }
+}
+
 /// `n thing`, `n things`.
 fn count(n: usize, thing: &str) -> String {
     format!("{n} {thing}{}", if n == 1 { "" } else { "s" })
@@ -1994,7 +2004,8 @@ impl Report {
             match &w.statement {
                 Some(statement) => {
                     out.push(format!("{}  {statement}", w.name));
-                    let shown: Vec<&str> = w.deleted.iter().take(3).map(String::as_str).collect();
+                    let shown: Vec<String> =
+                        w.deleted.iter().take(3).map(|a| address_text(a)).collect();
                     let more = match w.deleted.len().saturating_sub(3) {
                         0 => String::new(),
                         n => format!(" and {n} more"),
@@ -2015,7 +2026,7 @@ impl Report {
                     };
                     out.push(format!(
                         "{}  had {rows} at the last apply, has none now",
-                        w.name
+                        relation_name(&w.name)
                     ));
                 }
             }

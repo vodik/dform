@@ -983,7 +983,8 @@ apply: tick 1 once this plan's digest is approved (`--approval`), then tick 2 wh
   and with none to ask on it refuses before changing anything, naming
   the flag: `apply --allow-empty RULE` (repeatable) or `[stacks.NAME]
   allow_empty` in dform.toml names those that may empty without a word: a rule's `FILE:LINE`, a resource type it derives, or
-  the relation. What each apply derived is the audit log's `derived`
+  the relation (a copy's own, which the warning names `vpc_net (in
+  green)`, by its path, `green.vpc_net`). What each apply derived is the audit log's `derived`
   entry; a plan with no apply before it warns of nothing. `--json`
   carries them as `warnings` (each `{rule, statement, relation, deletes,
   rows_at_last_apply, because}`), only when there is one.

@@ -141,10 +141,7 @@ fn a_provider_waiting_on_a_read_not_yet_answered_says_both() {
     let s = project();
     s.write(
         "stacks/p.df",
-        &STACK.replace(
-            "ssh.read(server.endpoint, ",
-            "ssh.read(\"127.0.0.1:1\", ",
-        ),
+        &STACK.replace("ssh.read(server.endpoint, ", "ssh.read(\"127.0.0.1:1\", "),
     );
     let r = dform(&s, &["plan", "p"]).success();
     assert!(

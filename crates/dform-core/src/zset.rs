@@ -860,11 +860,21 @@ impl Emptied {
     pub fn allowed(&self, names: &[String]) -> bool {
         names.iter().any(|n| {
             *n == self.name
+                || *n == self.flag()
                 || self
                     .deleted
                     .iter()
                     .any(|a| crate::ir::parse_resource_address(a).is_ok_and(|a| a.typ == *n))
         })
+    }
+
+    /// What `--allow-empty` names it by: its place, or the relation as
+    /// the source reads it, a copy's own by its path (`green.vpc_net`).
+    pub fn flag(&self) -> String {
+        match &self.statement {
+            Some(_) => self.name.clone(),
+            None => self.name.replace("::", "."),
+        }
     }
 
     /// The question `apply` asks of it, and the line it refuses with.
@@ -877,7 +887,7 @@ impl Emptied {
             ),
             None => format!(
                 "the plan empties the relation {}, which had {} at the last apply",
-                self.name,
+                crate::report::relation_name(&self.name),
                 count_rows(self.rows)
             ),
         }

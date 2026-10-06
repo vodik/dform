@@ -3758,7 +3758,7 @@ fn confirm_emptied(e: &zset::Emptied, deployment: &str, style: report::Style) ->
             "apply {deployment}: {}; nothing to ask on (stdin is not a terminal): confirm it \
              on a terminal, or pass --allow-empty {} if it is meant",
             e.what(),
-            e.name
+            e.flag()
         );
     }
     let what = e.what();

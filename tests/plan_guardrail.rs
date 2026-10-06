@@ -79,8 +79,8 @@ fn subnets(s: &Scratch) -> usize {
 
 const WARNING: &str = "warning  this plan empties what the last apply derived\n  \
     stacks/net.df:13  resource net.subnet \"private-${z}\" { .. } where zone(z, n, r), active(r)\n      \
-    deletes all 2 it derived at the last apply: net.subnet[\"private-us-test-1a\"], \
-    net.subnet[\"private-us-test-1b\"]\n";
+    deletes all 2 it derived at the last apply: net.subnet private-us-test-1a, \
+    net.subnet private-us-test-1b\n";
 
 /// A broken join: the one row of the table the join reads is gone, so
 /// every subnet goes. The plan's warning names the rule, what it deletes
@@ -255,4 +255,46 @@ fn a_deny_reads_what_the_last_apply_derived() {
         "{}",
         r.stdout
     );
+}
+
+/// A copy's own relation is named as the source reads it, by its name
+/// there and the copy (R-111), never in the core's spelling
+/// (`green::vpc_net`); `--allow-empty` takes its path.
+#[test]
+fn a_copys_relation_is_named_as_the_source_reads_it() {
+    let s = Scratch::project("guard-copy");
+    let net = "
+use fake
+component box {
+  input vpc_net: string
+  resource net.vpc v { cidr = vpc_net }
+}
+resource box blue { vpc_net = \"10.1.0.0/16\" }
+";
+    s.write(
+        "stacks/net.df",
+        &format!("{net}resource box green {{ vpc_net = \"10.0.0.0/16\" }}\n"),
+    );
+    s.run(&["apply", "net", "--yes"]).success();
+    s.write("stacks/net.df", net);
+    let r = s.run(&["plan", "net"]).success();
+    assert!(
+        r.stdout
+            .contains("\n  vpc_net (in green)  had 1 row at the last apply, has none now\n"),
+        "{}",
+        r.stdout
+    );
+    assert!(!r.stdout.contains("::"), "{}", r.stdout);
+    let r = s.run(&["apply", "net", "--yes"]).failure();
+    assert!(
+        r.stderr.contains(
+            "the plan empties the relation vpc_net (in green), which had 1 row at the last \
+             apply; nothing to ask on (stdin is not a terminal): confirm it on a terminal, or \
+             pass --allow-empty green.vpc_net if it is meant"
+        ),
+        "{}",
+        r.stderr
+    );
+    s.run(&["apply", "net", "--yes", "--allow-empty", "green.vpc_net"])
+        .success();
 }
