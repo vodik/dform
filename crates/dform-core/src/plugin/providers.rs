@@ -1664,6 +1664,11 @@ impl Providers {
                     create_first: lifecycle.create_first(self.schema(), &addr),
                 },
                 zset::Kind::Drift => ActionKind::Drift,
+                // The provider's Plan finds nothing to change: the world
+                // document differs only where the provider compares for
+                // itself (a write-only attribute its API never answers,
+                // such as an OVH instance's user data).
+                zset::Kind::Update if changes.is_empty() => ActionKind::Noop,
                 zset::Kind::Update => ActionKind::Update,
                 zset::Kind::Pending => ActionKind::Pending,
                 zset::Kind::Undeformed => ActionKind::Noop,
