@@ -249,6 +249,9 @@ pub struct SecretsTable {
     /// `"env:NAME"` (a variable: fnox, `op run` or CI may set it) or
     /// `"prompt"` (the terminal).
     pub passphrase: Option<String>,
+    /// Age recipients, a team's mixing (the master sealed to each): not
+    /// yet, refused naming `passphrase`.
+    pub recipients: Option<Vec<String>>,
 }
 
 /// `[project]`.
@@ -514,6 +517,13 @@ impl Manifest {
             bail!(
                 "{}: `[files]` is `[io]` (R-155), its keys the same: `wait`, `credentials`",
                 at("[files]")
+            );
+        }
+        if m.secrets.recipients.is_some() {
+            bail!(
+                "{}: age recipients (the master sealed to each of a team's keys) are not \
+                 supported yet; `passphrase = \"env:NAME\"` seals it under a passphrase",
+                at("[secrets] recipients")
             );
         }
         if let Some(p) = &m.secrets.passphrase {
@@ -1312,6 +1322,32 @@ mod tests {
         // The ssh provider is gone (R-153): its wait is `[io] wait`.
         let e = manifest("[providers]\nssh = { wait = \"10m\" }\n").unwrap_err();
         assert!(e.to_string().contains("[io] wait"), "{e}");
+    }
+
+    /// `[secrets] passphrase` says where the passphrase a master is sealed
+    /// under comes from (R-164): a variable or the terminal; recipients
+    /// are not yet.
+    #[test]
+    fn a_manifest_says_who_holds_the_master() {
+        use crate::custody::{Mixing, Passphrase};
+        let m = manifest("[secrets]\npassphrase = \"env:DFORM_PASSPHRASE\"\n").unwrap();
+        assert_eq!(
+            Mixing::of(Some(&m)).unwrap(),
+            Mixing::Passphrase(Passphrase::Env("DFORM_PASSPHRASE".into()))
+        );
+        let m = manifest("[secrets]\npassphrase = \"prompt\"\n").unwrap();
+        assert_eq!(
+            Mixing::of(Some(&m)).unwrap(),
+            Mixing::Passphrase(Passphrase::Prompt)
+        );
+        assert_eq!(
+            Mixing::of(Some(&manifest("").unwrap())).unwrap(),
+            Mixing::KeyFile
+        );
+        let e = manifest("[secrets]\npassphrase = \"file:x\"\n").unwrap_err();
+        assert!(e.to_string().contains("[secrets] passphrase"), "{e}");
+        let e = manifest("[secrets]\nrecipients = [\"age1x\"]\n").unwrap_err();
+        assert!(e.to_string().contains("not supported yet"), "{e}");
     }
 
     /// `[io] credentials` names a credential per location pattern, and
