@@ -1,6 +1,6 @@
 exit: ok
 -- stdout --
-== examples/pngu/stacks/pngu.df: 146 nodes, 301 edges (92 negative), 8 strata
+== examples/pngu/stacks/pngu.df: 145 nodes, 290 edges (93 negative), 8 strata
 stratum  node
 0        (arg, google.client_config, access_token)
 0        (arg, google.secret_manager_secret_version, secret_data)
@@ -44,6 +44,7 @@ stratum  node
 3        (attr, input, gcp)
 3        (attr, input, gke)
 3        (attr, output, active_env)
+3        __lc_1
 4        (arg, alert_metrics_pack, enable_standard_gke_alerts)
 4        (arg, alert_metrics_pack, notification_channel_display_name)
 4        (arg, alert_metrics_pack, notification_channel_type)
@@ -54,11 +55,10 @@ stratum  node
 4        (arg, google.compute_address, name)
 4        (arg, google.compute_address, project)
 4        (arg, google.compute_address, region)
-4        (arg, google.compute_network_peering, id)
-4        (arg, google.compute_network_peering, name)
-4        (arg, google.compute_network_peering, network)
-4        (arg, google.compute_network_peering, peer_network)
-4        (arg, google.compute_network_peering, project)
+4        (arg, google.compute_network, id)
+4        (arg, google.compute_network, name)
+4        (arg, google.compute_network, peerings)
+4        (arg, google.compute_network, project)
 4        (arg, google.compute_subnetwork, id)
 4        (arg, google.compute_subnetwork, ip_cidr_range)
 4        (arg, google.compute_subnetwork, name)
@@ -90,7 +90,7 @@ stratum  node
 4        (arg, output, project_id)
 4        (want, alert_metrics_pack)
 4        (want, google.compute_address)
-4        (want, google.compute_network_peering)
+4        (want, google.compute_network)
 4        (want, google.compute_subnetwork)
 4        (want, google.container_cluster)
 4        (want, google.monitoring_dashboard)
@@ -108,11 +108,10 @@ stratum  node
 5        (attr, google.compute_address, name)
 5        (attr, google.compute_address, project)
 5        (attr, google.compute_address, region)
-5        (attr, google.compute_network_peering, id)
-5        (attr, google.compute_network_peering, name)
-5        (attr, google.compute_network_peering, network)
-5        (attr, google.compute_network_peering, peer_network)
-5        (attr, google.compute_network_peering, project)
+5        (attr, google.compute_network, id)
+5        (attr, google.compute_network, name)
+5        (attr, google.compute_network, peerings)
+5        (attr, google.compute_network, project)
 5        (attr, google.compute_subnetwork, id)
 5        (attr, google.compute_subnetwork, ip_cidr_range)
 5        (attr, google.compute_subnetwork, name)
@@ -148,5 +147,5 @@ stratum  node
 6        (arg, google.container_cluster, subnetwork_id)
 7        (attr, google.compute_address, subnetwork_id)
 7        (attr, google.container_cluster, subnetwork_id)
-(146 rows)
+(145 rows)
 -- stderr --

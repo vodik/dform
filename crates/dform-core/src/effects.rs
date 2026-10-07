@@ -315,7 +315,7 @@ fn classify_write(a: &crate::ast::Atom) -> Option<String> {
 /// instance's output (`output m.i.k`; its own is not "another instance's"
 /// and is left out), or, read like a resource attribute but not one of
 /// those pseudo-types, `type.path` (a resource the scope reads, its own
-/// included: `iam.policy.id` read by a rule of `iam.role_policy_attachment`
+/// included: `iam.policy.id` read by a rule of `iam.role`
 /// inside module `iam` is still worth seeing). `None` for anything else.
 fn classify_read(
     scope: &str,

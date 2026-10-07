@@ -1,79 +1,76 @@
 exit: ok
 -- stdout --
 deployment: dform[env=staging]
-plan: 14 changes (14 create) over 1 tick
+plan: 13 changes (13 create) over 1 tick
 
-tick 1  14 changes
-  + compute.vm bastion                          stacks/dform.df:93
+tick 1  13 changes
+  + compute.vm bastion                    stacks/dform.df:93
       private_ip = "10.50.0.21"
-      tags.team = "platform"                    baseline.df:10
-  + iam.role identity.app_role                  identity.df:6
-      assume.principals = ["k8s.serviceaccount.app"]
-      name = "app"
-      tags.team = "platform"                    baseline.df:10
+      tags.team = "platform"              baseline.df:10
   + network.vpc main
-    + net.vpc main.vpc                          network.df:19
-        cidr = "10.50.0.0/16"                   stacks/dform.df:10
+    + net.vpc main.vpc                    network.df:19
+        cidr = "10.50.0.0/16"             stacks/dform.df:10
         tags = { env: "staging", component: "network" }
-        tags.team = "platform"                  baseline.df:10
-    + net.subnet main.private-us-test-1a        network.df:24
+        tags.team = "platform"            baseline.df:10
+    + net.subnet main.private-us-test-1a  network.df:24
         cidr = "10.50.0.0/20"
-        tags.team = "platform"                  baseline.df:10
+        tags.team = "platform"            baseline.df:10
         visibility = "private"
         vpc = main.vpc
         zone = "us-test-1a"
-    + net.subnet main.private-us-test-1b        network.df:24
+    + net.subnet main.private-us-test-1b  network.df:24
         cidr = "10.50.16.0/20"
-        tags.team = "platform"                  baseline.df:10
+        tags.team = "platform"            baseline.df:10
         visibility = "private"
         vpc = main.vpc
         zone = "us-test-1b"
   + network.vpc peer
-    + net.vpc peer.vpc                          network.df:19
-        cidr = "10.60.0.0/16"                   stacks/dform.df:10
+    + net.vpc peer.vpc                    network.df:19
+        cidr = "10.60.0.0/16"             stacks/dform.df:10
         tags = { env: "staging", component: "network" }
-        tags.team = "platform"                  baseline.df:10
-    + net.subnet peer.private-us-test-1a        network.df:24
+        tags.team = "platform"            baseline.df:10
+    + net.subnet peer.private-us-test-1a  network.df:24
         cidr = "10.60.0.0/20"
-        tags.team = "platform"                  baseline.df:10
+        tags.team = "platform"            baseline.df:10
         visibility = "private"
         vpc = peer.vpc
         zone = "us-test-1a"
-    + net.subnet peer.private-us-test-1b        network.df:24
+    + net.subnet peer.private-us-test-1b  network.df:24
         cidr = "10.60.16.0/20"
-        tags.team = "platform"                  baseline.df:10
+        tags.team = "platform"            baseline.df:10
         visibility = "private"
         vpc = peer.vpc
         zone = "us-test-1b"
-  + net.vpc_peering peer-main-peer              stacks/dform.df:86
+  + net.vpc_peering peer-main-peer        stacks/dform.df:86
       accepter_vpc = peer.vpc
       requester_vpc = main.vpc
-      tags.team = "platform"                    baseline.df:10
-  + db.postgres database.db                     database.df:10
-      backup_days = 3                           stacks/dform.df:27
-      multi_az = false                          stacks/dform.df:28
+      tags.team = "platform"              baseline.df:10
+  + db.postgres database.db               database.df:10
+      backup_days = 3                     stacks/dform.df:27
+      multi_az = false                    stacks/dform.df:28
       public = false
       subnets = [main.private-us-test-1a, main.private-us-test-1b]
-      tags.team = "platform"                    baseline.df:10
-  + k8s.cluster kubernetes.cluster              kubernetes.df:12
-      private_api = false                       stacks/dform.df:29
+      tags.team = "platform"              baseline.df:10
+  + k8s.cluster kubernetes.cluster        kubernetes.df:12
+      private_api = false                 stacks/dform.df:29
       subnets = [main.private-us-test-1a, main.private-us-test-1b]
-      tags.team = "platform"                    baseline.df:10
+      tags.team = "platform"              baseline.df:10
       version = "1.29"
-  + k8s.nodepool kubernetes.default             kubernetes.df:18
+  + k8s.nodepool kubernetes.default       kubernetes.df:18
       cluster = kubernetes.cluster
-      max = 3                                   stacks/dform.df:31
-      min = 1                                   stacks/dform.df:30
-      tags.team = "platform"                    baseline.df:10
-  + iam.policy identity.app_policy              identity.df:8
+      max = 3                             stacks/dform.df:31
+      min = 1                             stacks/dform.df:30
+      tags.team = "platform"              baseline.df:10
+  + iam.policy identity.app_policy        identity.df:14
       name = "app"
       statements = [
         { action: "db.connect", resource: database.db },
         { action: "k8s.describe_cluster", resource: kubernetes.cluster },
       ]
-      tags.team = "platform"                    baseline.df:10
-  + iam.role_policy_attachment identity.attach  identity.df:14
-      policy = identity.app_policy
-      role = identity.app_role
-      tags.team = "platform"                    baseline.df:10
+      tags.team = "platform"              baseline.df:10
+  + iam.role identity.app_role            identity.df:8
+      assume.principals = ["k8s.serviceaccount.app"]
+      name = "app"
+      policies = [identity.app_policy]
+      tags.team = "platform"              baseline.df:10
 -- stderr --

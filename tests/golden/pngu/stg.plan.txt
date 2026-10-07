@@ -1,24 +1,27 @@
 exit: ok
 -- stdout --
 deployment: pngu[env=stg]
-plan: 8 changes (8 create) over 1 tick
+plan: 7 changes (7 create) over 1 tick
 
-tick 1  8 changes
-  + alert_metrics_pack pngu                     stacks/pngu.df:222
+tick 1  7 changes
+  + alert_metrics_pack pngu                     stacks/pngu.df:223
       enable_standard_gke_alerts = true
       notification_channel_display_name = "Slack"
       notification_channel_type = "slack"
       project_id = "renfry-stg"                 stacks/pngu.df:71
       source = "git@github.com:coherentpath/te…-alert-metrics.git?ref=v1.5.0"
-  + google.compute_network_peering peering-envoy-stg  stacks/pngu.df:164
-      name = "envoy-stg"
-      network = "projects/renfry-stg/global/networks/renfry-stg-network"
-      peer_network = "projects/envoy-stg-597462/global/networks/envoy-stg-network"
-      project = "renfry-stg"                    stacks/pngu.df:71
-  + google.compute_network_peering peering-envoy-stg-legacy  stacks/pngu.df:164
-      name = "envoy-stg-legacy"
-      network = "projects/renfry-stg/global/networks/renfry-stg-network"
-      peer_network = "projects/coherentpath-stg/global/networks/envoy-proxy-stg"
+  + google.compute_network main                 stacks/pngu.df:166
+      name = "renfry-stg-network"               stacks/pngu.df:74
+      peerings = [
+        {
+          name: "envoy-stg",
+          peer_network: "projects/envoy-stg-597462/global/networks/envoy-stg-network",
+        },
+        {
+          name: "envoy-stg-legacy",
+          peer_network: "projects/coherentpath-stg/global/networks/envoy-proxy-stg",
+        },
+      ]
       project = "renfry-stg"                    stacks/pngu.df:71
   + google.compute_subnetwork gke_subnet        stacks/pngu.df:139
       ip_cidr_range = "10.141.100.0/22"         stacks/pngu.df:78
@@ -39,7 +42,7 @@ tick 1  8 changes
       purpose = "REGIONAL_MANAGED_PROXY"
       region = "us-east1"                       stacks/pngu.df:73
       role = "ACTIVE"
-  + google.container_cluster pngu               stacks/pngu.df:185
+  + google.container_cluster pngu               stacks/pngu.df:186
       cluster_type = "autopilot-private"
       deletion_protection = false
       enable_secret_manager_addon = true
@@ -52,10 +55,10 @@ tick 1  8 changes
       project_id = "renfry-stg"                 stacks/pngu.df:71
       project_name = "renfry-stg"               stacks/pngu.df:72
       subnetwork_id = gke_subnet
-  + google.monitoring_dashboard pngu            stacks/pngu.df:206
+  + google.monitoring_dashboard pngu            stacks/pngu.df:207
       dashboard_json = files/dashboard-pngu.json  (93 B)
       project = "renfry-stg"                    stacks/pngu.df:71
-  + google.compute_address static-ip-pngu-grpc  stacks/pngu.df:172
+  + google.compute_address static-ip-pngu-grpc  stacks/pngu.df:173
       address_type = "INTERNAL"                 stacks/pngu.df:78
       name = "pngu-grpc"
       project = "renfry-stg"                    stacks/pngu.df:71

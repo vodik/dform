@@ -8408,14 +8408,14 @@ mod tests {
             "extern file.json(+path, -value)\n\
              p(\"{x} $${x} ${x}%\") where q(x)\n\
              r(v) where v = file.json[\"a.json\"]\n\
-             s(y) where q(x), y = \"n-${x}\", \"n-${x}\" in net.route\n",
+             s(y) where q(x), y = \"n-${x}\", \"n-${x}\" in net.route_table\n",
         );
         assert_eq!(
             &got[..],
             [
                 "p(str.format(\"{x} $${x} %s%\", X)) :- q(X)",
                 "r(V) :- file.json(\"a.json\", V)",
-                "s(Y) :- q(X), Y = str.format(\"n-%s\", X), Name = str.format(\"n-%s\", X), want(\"net.route\", Name)",
+                "s(Y) :- q(X), Y = str.format(\"n-%s\", X), Name = str.format(\"n-%s\", X), want(\"net.route_table\", Name)",
             ]
         );
     }

@@ -16,14 +16,14 @@ fn deletes_run_in_reverse_dependency_order() {
 
 resource net.vpc main { cidr = "10.0.0.0/16" }
 resource net.vpc_peering p { vpc_id = ref(net.vpc, "main", "id") }
-resource net.route r { peering_id = ref(net.vpc_peering, "p", "id") }
+resource net.route_table r { peering_id = ref(net.vpc_peering, "p", "id") }
 resource compute.vm keep { size = 1 }
 use fake
 "#,
     );
     mock(&s, &["apply"]).success();
     assert_eq!(
-        s.json("w.state.json")["resources"]["net.route::r"]["deps"],
+        s.json("w.state.json")["resources"]["net.route_table::r"]["deps"],
         serde_json::json!(["net.vpc_peering::p"])
     );
     s.write(
@@ -41,7 +41,7 @@ use fake
     assert_eq!(
         order,
         [
-            "  - net.route r",
+            "  - net.route_table r",
             "  - net.vpc_peering p",
             "  - net.vpc main"
         ],
@@ -76,16 +76,16 @@ use fake
     s.write(
         "p.df",
         &format!(
-            "{first}resource iam.role_policy_attachment attach {{ role = app_role, policy = app_policy }}\n"
+            "{first}resource iam.role reader {{ name = \"reader\", assume = {{ principals: [\"y\"] }}, policies = [app_policy] }}\n"
         ),
     );
     mock(&s, &["apply"]).success();
     assert_eq!(
-        s.json("w.state.json")["resources"]["iam.role_policy_attachment::attach"]["deps"],
-        serde_json::json!(["iam.policy::app_policy", "iam.role::app_role"])
+        s.json("w.state.json")["resources"]["iam.role::reader"]["deps"],
+        serde_json::json!(["iam.policy::app_policy"])
     );
-    // The attachment sorts first by name only after the role: its delete
-    // still comes first.
+    // The role sorts after the policy by type: its delete still comes
+    // before the policy's.
     s.write("p.df", "\nuse fake\n");
     let r = mock(&s, &["apply"]).success();
     // Each delete's line, without why it is gone (After R-149).
@@ -95,8 +95,9 @@ use fake
         .filter(|l| l.starts_with("  - "))
         .map(|l| l.trim_end_matches("not in the program").trim_end())
         .collect();
-    assert_eq!(
-        order[0], "  - iam.role_policy_attachment attach",
+    let at = |l: &str| order.iter().position(|o| *o == l);
+    assert!(
+        at("  - iam.role reader") < at("  - iam.policy app_policy"),
         "{}",
         r.stdout
     );

@@ -1,38 +1,67 @@
-net.route blue-to-green
-  examples/tour/stacks/tour.df:283  resource net.route "${a}-to-${b}" { .. } where reaches(a, b), a != b, network_of(b, v), dest = net.vpc[v].cidr
-  with a = "blue", b = "green", v = "green.vpc", dest = 10.2.0.0/16
-       "${a}-to-${b}" = "blue-to-green"
-       net.vpc[v].cidr = 10.2.0.0/16
-  ├─ reaches("blue", "green")
-  │    examples/tour/stacks/tour.df:281  reaches(a, c) where reaches(a, b), link(b, c)
-  │    with a = "blue", c = "green", b = "main"
-  │    ├─ reaches("blue", "main")
-  │    │    examples/tour/stacks/tour.df:280  reaches(a, b) where link(a, b)
-  │    │    with a = "blue", b = "main"
-  │    │    └─ link("blue", "main")
-  │    │         examples/tour/stacks/tour.df:278  link(t, h) where hub(h), spoke(t)
-  │    │         with t = "blue", h = "main"
+net.route_table blue.routes = [{destination: 10.0.0.0/16, target: net.vpc main}, {destination: 10.2.0.0/16, target: net.vpc green.vpc}]
+  merged from 2 contributions
+  ├─ [{destination: 10.2.0.0/16, target: net.vpc green.vpc}]
+  │    examples/tour/stacks/tour.df:288  set net.route_table[a].routes = [{ destination: dest, target: net.vpc[w] }] where reaches(a, b), a != b, network_of(b, w), dest = net.vpc[w].cidr
+  │    with a = "blue", dest = 10.2.0.0/16, w = "green.vpc", b = "green"
+  │         net.vpc[w] = net.vpc green.vpc
+  │         net.vpc[w].cidr = 10.2.0.0/16
+  │    ├─ reaches("blue", "green")
+  │    │    examples/tour/stacks/tour.df:281  reaches(a, c) where reaches(a, b), link(b, c)
+  │    │    with a = "blue", c = "green", b = "main"
+  │    │    ├─ reaches("blue", "main")
+  │    │    │    examples/tour/stacks/tour.df:280  reaches(a, b) where link(a, b)
+  │    │    │    with a = "blue", b = "main"
+  │    │    │    └─ link("blue", "main")
+  │    │    │         examples/tour/stacks/tour.df:278  link(t, h) where hub(h), spoke(t)
+  │    │    │         with t = "blue", h = "main"
+  │    │    │         ├─ hub("main")   examples/tour/stacks/tour.df:250
+  │    │    │         └─ spoke("blue")   examples/tour/stacks/tour.df:247
+  │    │    └─ link("main", "green")
+  │    │         examples/tour/stacks/tour.df:277  link(h, t) where hub(h), spoke(t)
+  │    │         with h = "main", t = "green"
   │    │         ├─ hub("main")   examples/tour/stacks/tour.df:250
-  │    │         └─ spoke("blue")   examples/tour/stacks/tour.df:247
-  │    └─ link("main", "green")
-  │         examples/tour/stacks/tour.df:277  link(h, t) where hub(h), spoke(t)
-  │         with h = "main", t = "green"
-  │         ├─ hub("main")   examples/tour/stacks/tour.df:250
-  │         └─ spoke("green")   examples/tour/stacks/tour.df:248
-  ├─ network_of("green", "green.vpc")
-  │    examples/tour/stacks/tour.df:253  network_of(t, v) where spoke(t), v = network[t].vpc
-  │    with t = "green", v = "green.vpc"
-  │         network[t].vpc = "green.vpc"
-  │    ├─ spoke("green")   examples/tour/stacks/tour.df:248
-  │    ├─ resource network green   examples/tour/stacks/tour.df:229
-  │    └─ output green.vpc = "green.vpc"
+  │    │         └─ spoke("green")   examples/tour/stacks/tour.df:248
+  │    ├─ network_of("green", "green.vpc")
+  │    │    examples/tour/stacks/tour.df:253  network_of(t, v) where spoke(t), v = network[t].vpc
+  │    │    with t = "green", v = "green.vpc"
+  │    │         network[t].vpc = "green.vpc"
+  │    │    ├─ spoke("green")   examples/tour/stacks/tour.df:248
+  │    │    ├─ resource network green   examples/tour/stacks/tour.df:229
+  │    │    └─ output green.vpc = "green.vpc"
+  │    │         merged from 1 contribution
+  │    │         └─ "green.vpc"   examples/tour/stacks/tour.df:216   (resource network green)
+  │    ├─ net.vpc green.vpc.cidr = 10.2.0.0/16
+  │    │    merged from 1 contribution
+  │    │    └─ 10.2.0.0/16
+  │    │         examples/tour/stacks/tour.df:218  resource net.vpc vpc { cidr .. }   (resource network green)
+  │    │         with cidr = 10.2.0.0/16
+  │    │         └─ input green.cidr = 10.2.0.0/16
+  │    │              merged from 1 contribution
+  │    │              └─ 10.2.0.0/16   examples/tour/stacks/tour.df:229
+  │    └─ net.vpc green.vpc.id = ?net.vpc green.vpc
   │         merged from 1 contribution
-  │         └─ "green.vpc"   examples/tour/stacks/tour.df:216   (resource network green)
-  └─ net.vpc green.vpc.cidr = 10.2.0.0/16
-       merged from 1 contribution
-       └─ 10.2.0.0/16
-            examples/tour/stacks/tour.df:218  resource net.vpc vpc { cidr .. }   (resource network green)
-            with cidr = 10.2.0.0/16
-            └─ input green.cidr = 10.2.0.0/16
-                 merged from 1 contribution
-                 └─ 10.2.0.0/16   examples/tour/stacks/tour.df:229
+  │         └─ ?net.vpc green.vpc
+  │              arg("net.vpc", __A, "id", __null("net.vpc", __A, "id", "fresh", "string"), "normal") :- want("net.vpc", __A), not resolved(__label("net.vpc", __A, "id"))
+  │              ├─ net.vpc green.vpc
+  │              │    examples/tour/stacks/tour.df:218  resource net.vpc vpc { .. }   (resource network green)
+  │              │    └─ input green.cidr = 10.2.0.0/16   (see above)
+  │              └─ not resolved("net.vpc/green.vpc#id")   (absent)
+  └─ [{destination: 10.0.0.0/16, target: net.vpc main}]
+       examples/tour/stacks/tour.df:288  set net.route_table[a].routes = [{ destination: dest, target: net.vpc[w] }] where reaches(a, b), a != b, network_of(b, w), dest = net.vpc[w].cidr
+       with a = "blue", dest = "10.0.0.0/16", w = "main", b = "main"
+            net.vpc[w] = net.vpc main
+            net.vpc[w].cidr = "10.0.0.0/16"
+       ├─ reaches("blue", "main")   (see above)
+       ├─ network_of("main", "main")
+       │    examples/tour/stacks/tour.df:252  network_of(h, h) where hub(h)
+       │    with h = "main"
+       │    └─ hub("main")   examples/tour/stacks/tour.df:250
+       ├─ net.vpc main.cidr = "10.0.0.0/16"
+       │    merged from 1 contribution
+       │    └─ "10.0.0.0/16"   examples/tour/stacks/tour.df:46
+       └─ net.vpc main.id = ?net.vpc main
+            merged from 1 contribution
+            └─ ?net.vpc main
+                 arg("net.vpc", __A, "id", __null("net.vpc", __A, "id", "fresh", "string"), "normal") :- want("net.vpc", __A), not resolved(__label("net.vpc", __A, "id"))
+                 ├─ net.vpc main   examples/tour/stacks/tour.df:46
+                 └─ not resolved("net.vpc/main#id")   (absent)

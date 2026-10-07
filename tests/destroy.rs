@@ -11,8 +11,8 @@ use common::{Run, Scratch};
 use expectrl::{Eof, Expect, Session};
 
 /// The k3s shape on the mock: a server, a provider configured from it,
-/// the cluster's object; a role and a policy, and (by a second apply) an
-/// attachment that references both by name.
+/// the cluster's object; a role and a policy, and (by a second apply) a
+/// second role that holds the policy, referenced by name.
 const PROG: &str = r#"
 use fake { source = "prov" }
 resource db.postgres server { name = "server" }
@@ -22,8 +22,8 @@ resource iam.role app_role { name = "app", assume = { principals: ["x"] } }
 resource iam.policy app_policy { name = "p", document = "{}" }
 "#;
 
-const ATTACH: &str =
-    "resource iam.role_policy_attachment attach { role = app_role, policy = app_policy }\n";
+const ATTACH: &str = "resource iam.role reader { name = \"reader\", assume = { principals: [\"y\"] }, \
+     policies = [app_policy] }\n";
 
 fn scratch(name: &str) -> Scratch {
     let s = Scratch::new(name);
@@ -51,7 +51,7 @@ fn dev(s: &Scratch, args: &[&str]) -> Run {
     Run::from(dform(s, &all).output().unwrap())
 }
 
-/// Two applies: the attachment's references are to objects the first made.
+/// Two applies: the second role's reference is to an object the first made.
 fn applied(name: &str) -> Scratch {
     let s = scratch(name);
     dev(&s, &["apply", "--yes"]).success();
@@ -70,9 +70,9 @@ fn objects(s: &Scratch) -> Vec<String> {
 }
 
 const ORDER: [&str; 5] = [
-    "  - iam.role_policy_attachment attach",
-    "  - iam.policy app_policy",
     "  - iam.role app_role",
+    "  - iam.role reader",
+    "  - iam.policy app_policy",
     "  - k8s.namespace ns",
     "  - db.postgres server",
 ];
@@ -116,9 +116,9 @@ fn destroy_deletes_in_that_order_and_leaves_an_empty_state() {
     assert_eq!(
         calls,
         [
-            "iam.role_policy_attachment[\"attach\"]",
-            "iam.policy[\"app_policy\"]",
             "iam.role[\"app_role\"]",
+            "iam.role[\"reader\"]",
+            "iam.policy[\"app_policy\"]",
             "k8s.namespace[\"ns\"]",
             "db.postgres[\"server\"]",
         ]

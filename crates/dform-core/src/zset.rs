@@ -691,9 +691,29 @@ fn compare(desired: &Value, world: &Value) -> (Kind, BTreeSet<String>) {
     let mut changed = false;
     let mut unknown = BTreeSet::new();
     let mut stale = false;
+    // A set's element is labeled by its content (`policies[#k3j2d]`):
+    // an element only one side has is a change, but a fresh null the
+    // program holds where the world has another element of the same
+    // set is a stale identity, as a fresh null against a constant is.
+    let set_of = |p: &str| p.find("[#").map(|i| p[..i].to_string());
+    let mut fresh_only = Vec::new();
+    let mut world_only = BTreeSet::new();
     for p in paths {
         let (Some(dv), Some(wv)) = (d.get(p), w.get(p)) else {
             changed = true;
+            match (d.get(p), set_of(p)) {
+                (
+                    Some(Value::Null {
+                        class: NullClass::Fresh,
+                        ..
+                    }),
+                    Some(list),
+                ) => fresh_only.push(list),
+                (None, Some(list)) => {
+                    world_only.insert(list);
+                }
+                _ => {}
+            }
             continue;
         };
         match eq3(dv, wv) {
@@ -716,6 +736,9 @@ fn compare(desired: &Value, world: &Value) -> (Kind, BTreeSet<String>) {
                 }
             }
         }
+    }
+    if fresh_only.iter().any(|l| world_only.contains(l)) {
+        stale = true;
     }
     if !unknown.is_empty() {
         (Kind::Pending, unknown)
@@ -1835,6 +1858,31 @@ mod tests {
         assert_eq!(got["open"], (Kind::Pending, set(&["db/x#endpoint"])));
         assert_eq!(got["stale"], (Kind::Drift, set(&["v/gone#id"])));
         assert_eq!(got["gone"], (Kind::Delete, set(&[])));
+    }
+
+    /// A set's elements are by content (R-158): a fresh null the program
+    /// adds is an element more; one in place of an element the world has
+    /// is a stale identity.
+    #[test]
+    fn a_fresh_element_of_a_set_is_an_update_or_a_stale_identity() {
+        let fresh = || null("p/new#id", NullClass::Fresh);
+        let desired = BTreeMap::from([
+            (
+                addr("added"),
+                doc(&[("ps[#a]", s("p-1")), ("ps[#n]", fresh())]),
+            ),
+            (addr("stale"), doc(&[("ps[#n]", fresh())])),
+        ]);
+        let world = BTreeMap::from([
+            (addr("added"), doc(&[("ps[#a]", s("p-1"))])),
+            (addr("stale"), doc(&[("ps[#a]", s("p-1"))])),
+        ]);
+        let got: BTreeMap<String, Kind> = deformation(&desired, &world)
+            .into_iter()
+            .map(|d| (d.addr.name, d.kind))
+            .collect();
+        assert_eq!(got["added"], Kind::Update);
+        assert_eq!(got["stale"], Kind::Drift);
     }
 
     /// The plan key's digest is HMAC-SHA256 (RFC 2104): the value Python's

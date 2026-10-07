@@ -409,9 +409,9 @@ whose state lives on one side is an attribute of that side, a reference or
 a set of them, and the order of applies comes from the reference: a role's
 policies are `iam.role`'s `policies`, not an attachment resource. An
 attribute the schema types `set(T)` is a set: each contribution adds its
-elements, so several modules each add one to the same role (`set
-r.policies = [access] where r in iam.role, r.name == role.name`), and a
-union never conflicts. A rank applies per contribution: an `@override`
+elements, so several modules each add one to the role they are given
+(`set role.policies = [access]`, `input role: iam.role`), and a union
+never conflicts. A rank applies per contribution: an `@override`
 set replaces the others, a `@default` one yields to any normal one.
 Elements are equal by value, references by address; the provider
 receives the union as one list, in one order whatever order the writers

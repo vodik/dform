@@ -8,7 +8,7 @@ stratum  node
 0        (arg, k8s.namespace, name)
 0        (want, google.client_config)
 0        (want, google.compute_address)
-0        (want, google.compute_network_peering)
+0        (want, google.compute_network)
 0        (want, google.compute_subnetwork)
 0        (want, google.container_cluster)
 0        (want, google.monitoring_dashboard)
@@ -21,7 +21,7 @@ stratum  node
 0        resolved
 0        world_attr
 1        (arg, google.compute_address, id)
-1        (arg, google.compute_network_peering, id)
+1        (arg, google.compute_network, id)
 1        (arg, google.compute_subnetwork, id)
 1        (arg, google.container_cluster, ca_certificate)
 1        (arg, google.container_cluster, endpoint)
@@ -40,7 +40,7 @@ stratum  node
 1        (attr, k8s.namespace, name)
 1        ns_count
 2        (attr, google.compute_address, id)
-2        (attr, google.compute_network_peering, id)
+2        (attr, google.compute_network, id)
 2        (attr, google.compute_subnetwork, id)
 2        (attr, google.container_cluster, ca_certificate)
 2        (attr, google.container_cluster, endpoint)

@@ -8,7 +8,7 @@ stratum  node
 0        (arg, input, zones)
 0        (arg, k8s.namespace, name)
 0        (want, google.client_config)
-0        (want, google.compute_network_peering)
+0        (want, google.compute_network)
 0        (want, google.monitoring_dashboard)
 0        (want, google.secret_manager_secret_version)
 0        (want, k8s.namespace)
@@ -18,7 +18,7 @@ stratum  node
 0        resolved
 0        world_attr
 0        zone_at
-1        (arg, google.compute_network_peering, id)
+1        (arg, google.compute_network, id)
 1        (arg, google.monitoring_dashboard, id)
 1        (arg, k8s.namespace, id)
 1        (arg, k8s.namespace, uid)
@@ -38,7 +38,7 @@ stratum  node
 2        (arg, k8s.secret, id)
 2        (arg, k8s.secret, namespace)
 2        (arg, k8s.secret, uid)
-2        (attr, google.compute_network_peering, id)
+2        (attr, google.compute_network, id)
 2        (attr, google.monitoring_dashboard, id)
 2        (attr, k8s.namespace, id)
 2        (attr, k8s.namespace, uid)

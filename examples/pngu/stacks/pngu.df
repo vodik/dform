@@ -160,13 +160,14 @@ resource google.compute_subnetwork regional_proxy {
   ip_cidr_range = gcp.regional_proxy_cidr
 }
 
-# VPC peerings
-resource google.compute_network_peering "peering-${name}" {
+# The VPC network and its peerings: a peering is the network's, kept on
+# it (GCP's networks.addPeering), so the peerings are its attribute, one
+# element per row of the table, not resources of their own
+resource google.compute_network main {
   project = gcp.project_id
-  name
-  network = "projects/${gcp.project_id}/global/networks/${gcp.network_name}"
-  peer_network = peer
-} where peering(env: env, name: name, peer_network: peer)
+  name = gcp.network_name
+  peerings = [ { name: n, peer_network: p } | peering(env, n, p) ]
+}
 
 # Static IPs for services
 resource google.compute_address "static-ip-${ip}" {

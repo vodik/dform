@@ -112,16 +112,16 @@ fn the_demo_plans_at_each_level() {
     // outside its block by where; a reference by its address.
     assert!(
         line.contains(
-            "  + network.vpc main\n    + net.vpc main.vpc                          network.df:19\n        \
-             cidr = \"10.50.0.0/16\"                   stacks/dform.df:10\n        \
+            "  + network.vpc main\n    + net.vpc main.vpc                    network.df:19\n        \
+             cidr = \"10.50.0.0/16\"             stacks/dform.df:10\n        \
              tags = { env: \"staging\", component: \"network\" }\n"
         ) && line.contains("        vpc = main.vpc\n"),
         "{line}"
     );
     // `-v`: the bindings and the expressions.
     assert!(
-        how.contains("    + net.subnet main.private-us-test-1a        network.df:24  with z = \"us-test-1a\"\n        \
-             cidr = \"10.50.0.0/20\"                   inet.subnet(vpc.cidr, 4, zone_index[z])\n"),
+        how.contains("    + net.subnet main.private-us-test-1a  network.df:24  with z = \"us-test-1a\"\n        \
+             cidr = \"10.50.0.0/20\"             inet.subnet(vpc.cidr, 4, zone_index[z])\n"),
         "{how}"
     );
 }

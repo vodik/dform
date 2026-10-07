@@ -27,7 +27,7 @@ fn project(uses: &[&str]) -> Scratch {
             &format!(
                 "input role: iam.role\n\
                  resource iam.policy access {{ name = \"{m}\" }}\n\
-                 set r.policies = [access] where r in iam.role, r.name == role.name\n"
+                 set role.policies = [access]\n"
             ),
         );
     }

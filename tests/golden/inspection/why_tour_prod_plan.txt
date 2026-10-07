@@ -1,55 +1,7 @@
 deployment: tour[env=prod]
-plan: 19 changes (19 create) over 1 tick
+plan: 16 changes (16 create) over 1 tick
 
-tick 1  19 changes
-  + net.route blue-to-green                stacks/tour.df:283
-      destination = "10.2.0.0/16"
-        = dest                             stacks/tour.df:283
-      from = "blue"
-        = a                                stacks/tour.df:283
-      tags.team = "shop"                   stacks/tour.df:170
-      to = "green"
-        = b                                stacks/tour.df:283
-  + net.route blue-to-main                 stacks/tour.df:283
-      destination = "10.0.0.0/16"
-        = dest                             stacks/tour.df:283
-      from = "blue"
-        = a                                stacks/tour.df:283
-      tags.team = "shop"                   stacks/tour.df:170
-      to = "main"
-        = b                                stacks/tour.df:283
-  + net.route green-to-blue                stacks/tour.df:283
-      destination = "10.1.0.0/16"
-        = dest                             stacks/tour.df:283
-      from = "green"
-        = a                                stacks/tour.df:283
-      tags.team = "shop"                   stacks/tour.df:170
-      to = "blue"
-        = b                                stacks/tour.df:283
-  + net.route green-to-main                stacks/tour.df:283
-      destination = "10.0.0.0/16"
-        = dest                             stacks/tour.df:283
-      from = "green"
-        = a                                stacks/tour.df:283
-      tags.team = "shop"                   stacks/tour.df:170
-      to = "main"
-        = b                                stacks/tour.df:283
-  + net.route main-to-blue                 stacks/tour.df:283
-      destination = "10.1.0.0/16"
-        = dest                             stacks/tour.df:283
-      from = "main"
-        = a                                stacks/tour.df:283
-      tags.team = "shop"                   stacks/tour.df:170
-      to = "blue"
-        = b                                stacks/tour.df:283
-  + net.route main-to-green                stacks/tour.df:283
-      destination = "10.2.0.0/16"
-        = dest                             stacks/tour.df:283
-      from = "main"
-        = a                                stacks/tour.df:283
-      tags.team = "shop"                   stacks/tour.df:170
-      to = "green"
-        = b                                stacks/tour.df:283
+tick 1  16 changes
   + network blue
     + net.vpc blue.vpc                     stacks/tour.df:218
         cidr = "10.1.0.0/16"               input blue.cidr = 10.1.0.0/16   stacks/tour.df:227
@@ -113,6 +65,30 @@ tick 1  19 changes
         = net.vpc[v]                       stacks/tour.df:257  with v = "green.vpc"
       requester_vpc = main
       tags.team = "shop"                   stacks/tour.df:170
+  + net.route_table blue                   stacks/tour.df:286  with n = "blue", v = "blue.vpc"
+      routes[0].destination = "10.0.0.0/16"
+      routes[0].target = main
+      routes[1].destination = "10.2.0.0/16"
+      routes[1].target = green.vpc
+      tags.team = "shop"                   stacks/tour.df:170
+      vpc = blue.vpc                       net.vpc[v]
+        = net.vpc[v]                       stacks/tour.df:286  with v = "blue.vpc"
+  + net.route_table green                  stacks/tour.df:286  with n = "green", v = "green.vpc"
+      routes[0].destination = "10.0.0.0/16"
+      routes[0].target = main
+      routes[1].destination = "10.1.0.0/16"
+      routes[1].target = blue.vpc
+      tags.team = "shop"                   stacks/tour.df:170
+      vpc = green.vpc                      net.vpc[v]
+        = net.vpc[v]                       stacks/tour.df:286  with v = "green.vpc"
+  + net.route_table main                   stacks/tour.df:286  with n = "main", v = "main"
+      routes[0].destination = "10.1.0.0/16"
+      routes[0].target = blue.vpc
+      routes[1].destination = "10.2.0.0/16"
+      routes[1].target = green.vpc
+      tags.team = "shop"                   stacks/tour.df:170
+      vpc = main                           net.vpc[v]
+        = net.vpc[v]                       stacks/tour.df:286  with v = "main"
   + net.subnet private-us-test-1a          stacks/tour.df:104  with z = "us-test-1a", n = 1
       cidr = "10.0.1.0/24"                 inet.subnet(main.cidr, 8, n)
         = inet.subnet(main.cidr, 8, n)     stacks/tour.df:106  with n = 1
@@ -151,4 +127,4 @@ tick 1  19 changes
       tags.team = "shop"                   stacks/tour.df:170
 
 later
-  iam.policy "connect-${host}"             stacks/tour.df:318  waits on orders.endpoint
+  iam.policy "connect-${host}"             stacks/tour.df:323  waits on orders.endpoint

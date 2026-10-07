@@ -1,6 +1,6 @@
 exit: ok
 -- stdout --
-== tests/fixtures/adversarial/adv4b_variable_path_writer_no_read.df: 52 nodes, 138 edges (66 negative), 4 strata
+== tests/fixtures/adversarial/adv4b_variable_path_writer_no_read.df: 49 nodes, 129 edges (62 negative), 4 strata
 stratum  node
 0        (arg, net.vpc, cidr)
 0        (arg, net.vpc, tags)
@@ -8,10 +8,9 @@ stratum  node
 0        (want, db.postgres)
 0        (want, iam.policy)
 0        (want, iam.role)
-0        (want, iam.role_policy_attachment)
 0        (want, k8s.cluster)
 0        (want, k8s.nodepool)
-0        (want, net.route)
+0        (want, net.route_table)
 0        (want, net.subnet)
 0        (want, net.vpc)
 0        (want, net.vpc_peering)
@@ -26,12 +25,11 @@ stratum  node
 1        (arg, db.postgres, id)
 1        (arg, iam.policy, id)
 1        (arg, iam.role, id)
-1        (arg, iam.role_policy_attachment, id)
 1        (arg, k8s.cluster, api_endpoint)
 1        (arg, k8s.cluster, ca_cert)
 1        (arg, k8s.cluster, id)
 1        (arg, k8s.nodepool, id)
-1        (arg, net.route, id)
+1        (arg, net.route_table, id)
 1        (arg, net.subnet, id)
 1        (arg, net.vpc, id)
 1        (arg, net.vpc_peering, id)
@@ -43,16 +41,15 @@ stratum  node
 2        (attr, db.postgres, id)
 2        (attr, iam.policy, id)
 2        (attr, iam.role, id)
-2        (attr, iam.role_policy_attachment, id)
 2        (attr, k8s.cluster, api_endpoint)
 2        (attr, k8s.cluster, ca_cert)
 2        (attr, k8s.cluster, id)
 2        (attr, k8s.nodepool, id)
-2        (attr, net.route, id)
+2        (attr, net.route_table, id)
 2        (attr, net.subnet, id)
 2        (attr, net.vpc, id)
 2        (attr, net.vpc_peering, id)
 2        attr
 3        deny
-(52 rows)
+(49 rows)
 -- stderr --

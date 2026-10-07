@@ -36,7 +36,7 @@ fn a_fresh_stack_carries_nulls_until_apply() {
     let r = s
         .run(&["dev", "--world", "w.json", "plan", "--show-noop", prog])
         .success();
-    assert_eq!(r.summary(), "plan: 0 changes, 14 no-op", "{}", r.stdout);
+    assert_eq!(r.summary(), "plan: 0 changes, 13 no-op", "{}", r.stdout);
     assert!(!r.stdout.contains('?'), "{}", r.stdout);
 }
 

@@ -129,8 +129,8 @@ fn fixture_prod_is_eleven_updates() {
     // Six of them change a force_new cidr: replacements.
     assert_eq!(count(&p, |k| matches!(k, ActionKind::Update)), 5);
     assert_eq!(count(&p, |k| matches!(k, ActionKind::Replace { .. })), 6);
-    assert_eq!(count(&p, |k| matches!(k, ActionKind::Noop)), 3);
-    assert_eq!(p.len(), 14);
+    assert_eq!(count(&p, |k| matches!(k, ActionKind::Noop)), 2);
+    assert_eq!(p.len(), 13);
     let noop: BTreeSet<&str> = p
         .iter()
         .filter(|x| matches!(x.1, ActionKind::Noop))
@@ -140,7 +140,6 @@ fn fixture_prod_is_eleven_updates() {
         noop,
         BTreeSet::from([
             "iam.role[\"identity.app_role\"]",
-            "iam.role_policy_attachment[\"identity.attach\"]",
             "net.vpc_peering[\"peer-main-peer\"]",
         ])
     );

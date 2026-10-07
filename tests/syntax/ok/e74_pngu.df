@@ -115,17 +115,11 @@ resource google.compute_subnetwork regional_proxy {
   ip_cidr_range = proxy_cidr
 } where project(id, name, region, net_id), e = env, setting(e, "regional_proxy_cidr", proxy_cidr)
 
-resource google.compute_network_peering "${p}" {
+resource google.compute_network main {
   project = id
-  name = peer_name
-  network = net_id
-  peer_network = peer_net
-} where {
-  project(id, _, _, net_id)
-  e = env
-  peering(e, peer_name, peer_net)
-  p = str.format("peering-%s", peer_name)
-}
+  name = net_id
+  peerings = [ { name: n, peer_network: pn } | peering(e, n, pn) ]
+} where project(id, _, _, net_id), e = env
 
 # One static address per declared static IP; the map explodes into rows.
 static_ip(ip_name, type_) where {

@@ -63,20 +63,24 @@ link(b, a) where peer(a, b)
 reachable(a, b) where link(a, b)
 reachable(a, c) where reachable(a, b), link(b, c)
 
-# Derived infra: create a route for every reachable pair (excluding self).
-# `dest` is bound in the clause, so it is read now (an attr join);
-# `destination = net.vpc[b].cidr` would be a reference.
-resource net.route "rt-${a}-${b}" {
-  from = a
-  to = b
-  destination = dest
-} where reachable(a, b), a != b, dest = net.vpc[b].cidr
+# Derived infra: a route for every reachable pair (excluding self). A
+# route is an element of its network's route table's `routes`, a set
+# each pair adds to, not a resource of its own. `dest` is bound in the
+# clause, so it is read now (an attr join).
+direct_route(a, b) where reachable(a, b), a != b
+
+resource net.route_table "${a}" { vpc = net.vpc[a] } where direct_route(a, _)
+
+set net.route_table[a].routes = [{ destination: dest, target: net.vpc[b] }] where {
+  direct_route(a, b)
+  dest = net.vpc[b].cidr
+}
 
 # Policy: warn if we materialize *direct* routes between non-adjacent nodes in the mesh.
 #
 # This highlights an important distinction:
 # - `reachable/2` is the *closure* (it includes transitive reachability)
-# - a `net.route` is a *direct* configuration object
+# - a route (`direct_route/2`, an element of a route table) is *direct* configuration
 #
 # In some orgs you may want transitive reachability without generating a direct
 # route for every transitive pair (or you may want to require explicit allows).
@@ -95,7 +99,7 @@ mesh_non_adjacent_pair(a, b) where {
 
 warn "mesh has direct route between non-adjacent nodes" { from: a, to: b } where {
   mesh_non_adjacent_pair(a, b)
-  "rt-${a}-${b}" in net.route
+  direct_route(a, b)
   not mesh_allow_direct_route(a, b)
 }
 
@@ -451,30 +455,39 @@ warn "user is effectively admin (via group nesting)" { user: u } where in_group(
   (comment)
   (comment)
   (comment)
+  (comment)
+  (rule
+    (call
+      (identifier)
+      (arguments
+        (identifier)
+        (identifier)))
+    (body
+      (atom_literal
+        (call
+          (identifier)
+          (arguments
+            (identifier)
+            (identifier))))
+      (comparison
+        (identifier)
+        (identifier))))
   (resource
     (dotted_name
       (identifier)
       (identifier))
     (string
-      (string_content)
-      (interpolation
-        (identifier))
-      (string_content)
       (interpolation
         (identifier)))
     (block
       (field
         (block_path
           (identifier))
-        (identifier))
-      (field
-        (block_path
-          (identifier))
-        (identifier))
-      (field
-        (block_path
-          (identifier))
-        (identifier)))
+        (index_expression
+          (member_expression
+            (identifier)
+            (identifier))
+          (identifier))))
     (clause
       (body
         (atom_literal
@@ -482,19 +495,43 @@ warn "user is effectively admin (via group nesting)" { user: u } where in_group(
             (identifier)
             (arguments
               (identifier)
-              (identifier))))
-        (comparison
+              (identifier)))))))
+  (set
+    (member_expression
+      (index_expression
+        (member_expression
           (identifier)
           (identifier))
-        (comparison
+        (identifier))
+      (identifier))
+    (list
+      (object
+        (object_field
           (identifier)
-          (member_expression
-            (index_expression
-              (member_expression
-                (identifier)
-                (identifier))
+          (identifier))
+        (object_field
+          (identifier)
+          (index_expression
+            (member_expression
+              (identifier)
               (identifier))
-            (identifier))))))
+            (identifier)))))
+    (body_block
+      (atom_literal
+        (call
+          (identifier)
+          (arguments
+            (identifier)
+            (identifier))))
+      (comparison
+        (identifier)
+        (member_expression
+          (index_expression
+            (member_expression
+              (identifier)
+              (identifier))
+            (identifier))
+          (identifier)))))
   (comment)
   (comment)
   (comment)
@@ -592,17 +629,12 @@ warn "user is effectively admin (via group nesting)" { user: u } where in_group(
           (arguments
             (identifier)
             (identifier))))
-      (in_literal
-        (string
-          (string_content)
-          (interpolation
-            (identifier))
-          (string_content)
-          (interpolation
-            (identifier)))
-        (member_expression
+      (atom_literal
+        (call
           (identifier)
-          (identifier)))
+          (arguments
+            (identifier)
+            (identifier))))
       (not_literal
         (atom_literal
           (call

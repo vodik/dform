@@ -207,26 +207,29 @@ fn why_an_attribute_shows_every_contribution() {
     assert_eq!(out.matches("merged from").count(), 4, "{out}");
 }
 
-/// The tour's route: the resource statement as written, the clause's
-/// variables as bound, the interpolated name and the read it joins
-/// through, and under it the recursion that found the path.
+/// The tour's route to green: an element of blue's route table's
+/// `routes` (R-158), the `set` as written, the clause's variables as
+/// bound and the read it joins through, and under it the recursion that
+/// found the path.
 #[test]
 fn why_a_route_shows_the_statements_that_fired() {
     let out = dform(
         "examples/tour/stacks/tour.df",
-        &["why", "--tree", r#"net.route["blue-to-green"]"#],
+        &["why", "--tree", r#"net.route_table["blue"].routes"#],
     );
-    let start = "net.route blue-to-green
-  examples/tour/stacks/tour.df:283  resource net.route \"${a}-to-${b}\" { .. } where reaches(a, b), a != b, network_of(b, v), dest = net.vpc[v].cidr
-  with a = \"blue\", b = \"green\", v = \"green.vpc\", dest = 10.2.0.0/16
-       \"${a}-to-${b}\" = \"blue-to-green\"
-       net.vpc[v].cidr = 10.2.0.0/16
-  ├─ reaches(\"blue\", \"green\")
-       examples/tour/stacks/tour.df:281  reaches(a, c) where reaches(a, b), link(b, c)
+    let start = "net.route_table blue.routes = [{destination: 10.0.0.0/16, target: net.vpc main}, {destination: 10.2.0.0/16, target: net.vpc green.vpc}]
+  merged from 2 contributions
+  ├─ [{destination: 10.2.0.0/16, target: net.vpc green.vpc}]
+       examples/tour/stacks/tour.df:288  set net.route_table[a].routes = [{ destination: dest, target: net.vpc[w] }] where reaches(a, b), a != b, network_of(b, w), dest = net.vpc[w].cidr
+       with a = \"blue\", dest = 10.2.0.0/16, w = \"green.vpc\", b = \"green\"
+            net.vpc[w] = net.vpc green.vpc
+            net.vpc[w].cidr = 10.2.0.0/16
+       ├─ reaches(\"blue\", \"green\")
+            examples/tour/stacks/tour.df:281  reaches(a, c) where reaches(a, b), link(b, c)
 ";
     let got: String = out
         .lines()
-        .take(7)
+        .take(9)
         .map(|l| format!("{}\n", l.replace('│', " ")))
         .collect();
     assert_eq!(got.replace("  │ ", "    "), start, "{out}");

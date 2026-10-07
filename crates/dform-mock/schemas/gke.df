@@ -173,7 +173,11 @@ type_doc(
 type_doc("google.compute_network", "", "A VPC network: its subnetworks are regional, it is global.")
 type_doc("google.compute_network", "project", "The project the network is in.")
 type_doc("google.compute_network", "name", "The network's name, unique in the project.")
-type_doc("google.compute_network", "peerings", "The networks it peers with: each a name and the peer's self link.")
+type_doc(
+  "google.compute_network",
+  "peerings",
+  "The networks it peers with: each a name and the peer's self link.",
+)
 type_doc("google.compute_network", "peerings.name", "The peering's name.")
 type_doc("google.compute_network", "peerings.peer_network", "The peer network's self link.")
 type_doc("google.compute_address", "", "A static IP address.")

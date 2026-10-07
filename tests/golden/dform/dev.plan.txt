@@ -1,37 +1,34 @@
 exit: ok
 -- stdout --
 deployment: dform[env=dev]
-plan: 7 changes (7 create) over 1 tick
+plan: 6 changes (6 create) over 1 tick
 
-tick 1  7 changes
-  + compute.vm bastion                          stacks/dform.df:93
+tick 1  6 changes
+  + compute.vm bastion                    stacks/dform.df:93
       private_ip = "10.90.0.21"
-      tags.team = "platform"                    baseline.df:10
-  + iam.policy identity.app_policy              identity.df:8
+      tags.team = "platform"              baseline.df:10
+  + iam.policy identity.app_policy        identity.df:14
       name = "app"
-      tags.team = "platform"                    baseline.df:10
-  + iam.role identity.app_role                  identity.df:6
+      tags.team = "platform"              baseline.df:10
+  + iam.role identity.app_role            identity.df:8
       assume.principals = ["k8s.serviceaccount.app"]
       name = "app"
-      tags.team = "platform"                    baseline.df:10
-  + iam.role_policy_attachment identity.attach  identity.df:14
-      policy = identity.app_policy
-      role = identity.app_role
-      tags.team = "platform"                    baseline.df:10
+      policies = [identity.app_policy]
+      tags.team = "platform"              baseline.df:10
   + network.vpc main
-    + net.vpc main.vpc                          network.df:19
-        cidr = "10.90.0.0/16"                   stacks/dform.df:25
+    + net.vpc main.vpc                    network.df:19
+        cidr = "10.90.0.0/16"             stacks/dform.df:25
         tags = { env: "dev", component: "network" }
-        tags.team = "platform"                  baseline.df:10
-    + net.subnet main.private-us-test-1a        network.df:24
+        tags.team = "platform"            baseline.df:10
+    + net.subnet main.private-us-test-1a  network.df:24
         cidr = "10.90.0.0/20"
-        tags.team = "platform"                  baseline.df:10
+        tags.team = "platform"            baseline.df:10
         visibility = "private"
         vpc = main.vpc
         zone = "us-test-1a"
-    + net.subnet main.private-us-test-1b        network.df:24
+    + net.subnet main.private-us-test-1b  network.df:24
         cidr = "10.90.16.0/20"
-        tags.team = "platform"                  baseline.df:10
+        tags.team = "platform"            baseline.df:10
         visibility = "private"
         vpc = main.vpc
         zone = "us-test-1b"

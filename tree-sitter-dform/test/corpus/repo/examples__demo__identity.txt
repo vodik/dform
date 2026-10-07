@@ -6,8 +6,14 @@ examples/demo/identity.df
 # the stack's relation, read outward.
 
 #| The app's role, and one policy of every permission the stack's other
-#| components need.
-resource iam.role app_role { name = "app", assume = { principals: ["k8s.serviceaccount.app"] } }
+#| components need. The role holds its policies: a relationship whose
+#| state lives on one side is that side's attribute, a set any module may
+#| add to (`set r.policies = [p] where ..`), not a resource of its own.
+resource iam.role app_role {
+  name = "app"
+  assume = { principals: ["k8s.serviceaccount.app"] }
+  policies = [app_policy]
+}
 
 resource iam.policy app_policy {
   name = "app"
@@ -15,11 +21,11 @@ resource iam.policy app_policy {
   statements = [ { action: a, resource: r } | iam_need("app", a, r) ]
 }
 
-resource iam.role_policy_attachment attach { role = app_role, policy = app_policy }
-
 ---
 
 (source_file
+  (comment)
+  (comment)
   (comment)
   (comment)
   (comment)
@@ -43,7 +49,12 @@ resource iam.role_policy_attachment attach { role = app_role, policy = app_polic
             (identifier)
             (list
               (string
-                (string_content))))))))
+                (string_content))))))
+      (field
+        (block_path
+          (identifier))
+        (list
+          (identifier)))))
   (resource
     (dotted_name
       (identifier)
@@ -75,18 +86,4 @@ resource iam.role_policy_attachment attach { role = app_role, policy = app_polic
                   (string
                     (string_content))
                   (identifier)
-                  (identifier)))))))))
-  (resource
-    (dotted_name
-      (identifier)
-      (identifier))
-    (identifier)
-    (block
-      (field
-        (block_path
-          (identifier))
-        (identifier))
-      (field
-        (block_path
-          (identifier))
-        (identifier)))))
+                  (identifier))))))))))

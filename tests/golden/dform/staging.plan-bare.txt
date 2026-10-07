@@ -1,14 +1,10 @@
 exit: ok
 -- stdout --
 deployment: dform[env=staging]
-plan: 14 changes (14 create)
+plan: 13 changes (13 create)
 definite:
 + compute.vm["bastion"]
   private_ip = "10.50.0.21"
-  tags.team = "platform"
-+ iam.role["identity.app_role"]
-  assume.principals[0] = "k8s.serviceaccount.app"
-  name = "app"
   tags.team = "platform"
 + network.vpc["main"]
   + net.vpc["main.vpc"]
@@ -75,14 +71,14 @@ definite:
   statements[1].action = "k8s.describe_cluster"
   statements[1].resource = ?k8s.cluster["kubernetes.cluster"]
   tags.team = "platform"
-+ iam.role_policy_attachment["identity.attach"]
-  policy = ?iam.policy["identity.app_policy"]
-  role = ?iam.role["identity.app_role"]
++ iam.role["identity.app_role"]
+  assume.principals[0] = "k8s.serviceaccount.app"
+  name = "app"
+  policies[0] = ?iam.policy["identity.app_policy"]
   tags.team = "platform"
 apply order:
   tick 1
     compute.vm["bastion"]
-    iam.role["identity.app_role"]
     net.vpc["main.vpc"]
     net.vpc["peer.vpc"]
     net.vpc_peering["peer-main-peer"]
@@ -94,5 +90,5 @@ apply order:
     k8s.cluster["kubernetes.cluster"]
     k8s.nodepool["kubernetes.default"]
     iam.policy["identity.app_policy"]
-    iam.role_policy_attachment["identity.attach"]
+    iam.role["identity.app_role"]
 -- stderr --

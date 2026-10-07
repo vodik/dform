@@ -4,7 +4,6 @@ digraph "resources" {
   "db.postgres[\"database.db\"]";
   "iam.policy[\"identity.app_policy\"]";
   "iam.role[\"identity.app_role\"]";
-  "iam.role_policy_attachment[\"identity.attach\"]";
   "k8s.cluster[\"kubernetes.cluster\"]";
   "k8s.nodepool[\"kubernetes.default\"]";
   "net.subnet[\"main.private-us-test-1a\"]";
@@ -18,8 +17,7 @@ digraph "resources" {
   "db.postgres[\"database.db\"]" -> "net.subnet[\"main.private-us-test-1b\"]";
   "iam.policy[\"identity.app_policy\"]" -> "db.postgres[\"database.db\"]";
   "iam.policy[\"identity.app_policy\"]" -> "k8s.cluster[\"kubernetes.cluster\"]";
-  "iam.role_policy_attachment[\"identity.attach\"]" -> "iam.policy[\"identity.app_policy\"]";
-  "iam.role_policy_attachment[\"identity.attach\"]" -> "iam.role[\"identity.app_role\"]";
+  "iam.role[\"identity.app_role\"]" -> "iam.policy[\"identity.app_policy\"]";
   "k8s.cluster[\"kubernetes.cluster\"]" -> "net.subnet[\"main.private-us-test-1a\"]";
   "k8s.cluster[\"kubernetes.cluster\"]" -> "net.subnet[\"main.private-us-test-1b\"]";
   "k8s.nodepool[\"kubernetes.default\"]" -> "k8s.cluster[\"kubernetes.cluster\"]";

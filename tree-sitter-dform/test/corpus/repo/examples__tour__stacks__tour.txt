@@ -37,7 +37,7 @@ use fake
 # This one is a network (a VPC) with an address range.
 #
 #   $ dform plan
-#   plan: 19 changes (19 create) over 1 tick
+#   plan: 16 changes (16 create) over 1 tick
 #   + net.vpc main
 #     cidr = "10.0.0.0/16"
 #
@@ -276,7 +276,7 @@ resource net.vpc_peering "main-${t}" {
 #   "main"
 #
 # (`"blue"` is in it too: blue to main and back.) The routes follow,
-# `blue-to-green` among them.
+# blue's to green among them.
 
 link(h, t) where hub(h), spoke(t)
 link(t, h) where hub(h), spoke(t)
@@ -284,11 +284,16 @@ link(t, h) where hub(h), spoke(t)
 reaches(a, b) where link(a, b)
 reaches(a, c) where reaches(a, b), link(b, c)
 
-resource net.route "${a}-to-${b}" { from = a, to = b, destination = dest } where {
+# A route is not a resource: the cloud keeps a network's routes on its
+# route table, so each one is an element of the table's `routes`, a set
+# every rule that holds adds to.
+resource net.route_table "${n}" { vpc = net.vpc[v] } where network_of(n, v)
+
+set net.route_table[a].routes = [{ destination: dest, target: net.vpc[w] }] where {
   reaches(a, b)
   a != b
-  network_of(b, v)
-  dest = net.vpc[v].cidr
+  network_of(b, w)
+  dest = net.vpc[w].cidr
 }
 
 # 10. A name only apply learns
@@ -997,55 +1002,78 @@ resource iam.policy "connect-${host}" {
           (arguments
             (identifier)
             (identifier))))))
+  (comment)
+  (comment)
+  (comment)
   (resource
     (dotted_name
       (identifier)
       (identifier))
     (string
       (interpolation
-        (identifier))
-      (string_content)
-      (interpolation
         (identifier)))
     (block
       (field
         (block_path
           (identifier))
-        (identifier))
-      (field
-        (block_path
-          (identifier))
-        (identifier))
-      (field
-        (block_path
-          (identifier))
-        (identifier)))
-    (clause
-      (body_block
-        (atom_literal
-          (call
-            (identifier)
-            (arguments
-              (identifier)
-              (identifier))))
-        (comparison
-          (identifier)
-          (identifier))
-        (atom_literal
-          (call
-            (identifier)
-            (arguments
-              (identifier)
-              (identifier))))
-        (comparison
-          (identifier)
+        (index_expression
           (member_expression
-            (index_expression
-              (member_expression
-                (identifier)
-                (identifier))
+            (identifier)
+            (identifier))
+          (identifier))))
+    (clause
+      (body
+        (atom_literal
+          (call
+            (identifier)
+            (arguments
+              (identifier)
+              (identifier)))))))
+  (set
+    (member_expression
+      (index_expression
+        (member_expression
+          (identifier)
+          (identifier))
+        (identifier))
+      (identifier))
+    (list
+      (object
+        (object_field
+          (identifier)
+          (identifier))
+        (object_field
+          (identifier)
+          (index_expression
+            (member_expression
+              (identifier)
               (identifier))
-            (identifier))))))
+            (identifier)))))
+    (body_block
+      (atom_literal
+        (call
+          (identifier)
+          (arguments
+            (identifier)
+            (identifier))))
+      (comparison
+        (identifier)
+        (identifier))
+      (atom_literal
+        (call
+          (identifier)
+          (arguments
+            (identifier)
+            (identifier))))
+      (comparison
+        (identifier)
+        (member_expression
+          (index_expression
+            (member_expression
+              (identifier)
+              (identifier))
+            (identifier))
+          (identifier)))))
   (comment)
   (comment)
   (comment)

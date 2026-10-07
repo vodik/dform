@@ -4,16 +4,18 @@ deployment: pngu[env=prod]
 plan: 7 changes (7 create) over 1 tick
 
 tick 1  7 changes
-  + alert_metrics_pack pngu                     stacks/pngu.df:222
+  + alert_metrics_pack pngu                     stacks/pngu.df:223
       enable_standard_gke_alerts = true
       notification_channel_display_name = "Slack"
       notification_channel_type = "slack"
       project_id = "renfry-prod"                stacks/pngu.df:88
       source = "git@github.com:coherentpath/te…-alert-metrics.git?ref=v1.5.0"
-  + google.compute_network_peering peering-envoy-prod-legacy  stacks/pngu.df:164
-      name = "envoy-prod-legacy"
-      network = "projects/renfry-prod/global/networks/renfry-prod-network"
-      peer_network = "projects/coherentpath-prod/global/networks/envoy-proxy-prod"
+  + google.compute_network main                 stacks/pngu.df:166
+      name = "renfry-prod-network"              stacks/pngu.df:91
+      peerings = [{
+        name: "envoy-prod-legacy",
+        peer_network: "projects/coherentpath-prod/global/networks/envoy-proxy-prod",
+      }]
       project = "renfry-prod"                   stacks/pngu.df:88
   + google.compute_subnetwork gke_subnet        stacks/pngu.df:139
       ip_cidr_range = "10.141.124.0/22"         stacks/pngu.df:95
@@ -34,7 +36,7 @@ tick 1  7 changes
       purpose = "REGIONAL_MANAGED_PROXY"
       region = "us-east1"                       stacks/pngu.df:90
       role = "ACTIVE"
-  + google.container_cluster pngu               stacks/pngu.df:185
+  + google.container_cluster pngu               stacks/pngu.df:186
       cluster_type = "autopilot-private"
       deletion_protection = false
       enable_secret_manager_addon = true
@@ -47,10 +49,10 @@ tick 1  7 changes
       project_id = "renfry-prod"                stacks/pngu.df:88
       project_name = "renfry-prod"              stacks/pngu.df:89
       subnetwork_id = gke_subnet
-  + google.monitoring_dashboard pngu            stacks/pngu.df:206
+  + google.monitoring_dashboard pngu            stacks/pngu.df:207
       dashboard_json = files/dashboard-pngu.json  (93 B)
       project = "renfry-prod"                   stacks/pngu.df:88
-  + google.compute_address static-ip-pngu-grpc  stacks/pngu.df:172
+  + google.compute_address static-ip-pngu-grpc  stacks/pngu.df:173
       address_type = "INTERNAL"                 stacks/pngu.df:95
       name = "pngu-grpc"
       project = "renfry-prod"                   stacks/pngu.df:88

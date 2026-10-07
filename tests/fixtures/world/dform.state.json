@@ -17,10 +17,6 @@
       "provider": "fakecloud",
       "remote": "identity.app_role"
     },
-    "iam.role_policy_attachment::identity.attach": {
-      "provider": "fakecloud",
-      "remote": "identity.attach"
-    },
     "k8s.cluster::kubernetes.cluster": {
       "provider": "fakecloud",
       "remote": "kubernetes.cluster"

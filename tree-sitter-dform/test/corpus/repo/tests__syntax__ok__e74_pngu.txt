@@ -119,17 +119,11 @@ resource google.compute_subnetwork regional_proxy {
   ip_cidr_range = proxy_cidr
 } where project(id, name, region, net_id), e = env, setting(e, "regional_proxy_cidr", proxy_cidr)
 
-resource google.compute_network_peering "${p}" {
+resource google.compute_network main {
   project = id
-  name = peer_name
-  network = net_id
-  peer_network = peer_net
-} where {
-  project(id, _, _, net_id)
-  e = env
-  peering(e, peer_name, peer_net)
-  p = str.format("peering-%s", peer_name)
-}
+  name = net_id
+  peerings = [ { name: n, peer_network: pn } | peering(e, n, pn) ]
+} where project(id, _, _, net_id), e = env
 
 # One static address per declared static IP; the map explodes into rows.
 static_ip(ip_name, type_) where {
@@ -829,9 +823,7 @@ output("project_id", id) where project(id, _, _, _)
     (dotted_name
       (identifier)
       (identifier))
-    (string
-      (interpolation
-        (identifier)))
+    (identifier)
     (block
       (field
         (block_path
@@ -844,41 +836,35 @@ output("project_id", id) where project(id, _, _, _)
       (field
         (block_path
           (identifier))
-        (identifier))
-      (field
-        (block_path
-          (identifier))
-        (identifier)))
-    (clause
-      (body_block
-        (atom_literal
-          (call
-            (identifier)
-            (arguments
-              (identifier)
-              (identifier)
-              (identifier)
-              (identifier))))
-        (comparison
-          (identifier)
-          (identifier))
-        (atom_literal
-          (call
-            (identifier)
-            (arguments
-              (identifier)
-              (identifier)
-              (identifier))))
-        (comparison
-          (identifier)
-          (call
-            (member_expression
+        (comprehension
+          (object
+            (object_field
               (identifier)
               (identifier))
+            (object_field
+              (identifier)
+              (identifier)))
+          (body
+            (atom_literal
+              (call
+                (identifier)
+                (arguments
+                  (identifier)
+                  (identifier)
+                  (identifier))))))))
+    (clause
+      (body
+        (atom_literal
+          (call
+            (identifier)
             (arguments
-              (string
-                (string_content))
-              (identifier)))))))
+              (identifier)
+              (identifier)
+              (identifier)
+              (identifier))))
+        (comparison
+          (identifier)
+          (identifier)))))
   (comment)
   (rule
     (call

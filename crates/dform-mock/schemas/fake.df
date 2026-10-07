@@ -114,7 +114,11 @@ type_doc(net.vpc_peering, "requester_vpc", "The network that requests the peerin
 type_doc(net.vpc_peering, "accepter_vpc", "The network that accepts the peering.")
 type_doc(net.route_table, "", "A network's routes: where traffic leaving it goes.")
 type_doc(net.route_table, "vpc", "The network whose traffic the table routes.")
-type_doc(net.route_table, "routes", "The routes: each a destination range and the network it goes to.")
+type_doc(
+  net.route_table,
+  "routes",
+  "The routes: each a destination range and the network it goes to.",
+)
 type_doc(net.route_table, "routes.destination", "The CIDR range the route sends to its target.")
 type_doc(net.route_table, "routes.target", "The network the route reaches.")
 type_doc(compute.vm, "", "A virtual machine.")

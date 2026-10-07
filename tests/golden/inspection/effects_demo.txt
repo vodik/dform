@@ -13,13 +13,11 @@ database    writes  (db.postgres, public)
 database    writes  (db.postgres, subnets)
 database    offers  iam_need: any
 identity    reads   iam.policy.id
-identity    reads   iam.role.id
 identity    writes  (iam.policy, name)
 identity    writes  (iam.policy, statements)
 identity    writes  (iam.role, assume)
 identity    writes  (iam.role, name)
-identity    writes  (iam.role_policy_attachment, policy)
-identity    writes  (iam.role_policy_attachment, role)
+identity    writes  (iam.role, policies)
 kubernetes  reads   input nodepool_max
 kubernetes  reads   input nodepool_min
 kubernetes  reads   input private_api
@@ -73,12 +71,11 @@ stack       writes  (db.postgres, endpoint)
 stack       writes  (db.postgres, id)
 stack       writes  (iam.policy, id)
 stack       writes  (iam.role, id)
-stack       writes  (iam.role_policy_attachment, id)
 stack       writes  (k8s.cluster, api_endpoint)
 stack       writes  (k8s.cluster, ca_cert)
 stack       writes  (k8s.cluster, id)
 stack       writes  (k8s.nodepool, id)
-stack       writes  (net.route, id)
+stack       writes  (net.route_table, id)
 stack       writes  (net.subnet, id)
 stack       writes  (net.vpc, id)
 stack       writes  (net.vpc_peering, accepter_vpc)
@@ -98,4 +95,4 @@ stack       writes  rows database.subnet
 stack       writes  rows kubernetes.subnet
 stdlib_net  reads   compute.vm.private_ip
 stdlib_net  reads   net.vpc.cidr
-(99 rows)
+(96 rows)

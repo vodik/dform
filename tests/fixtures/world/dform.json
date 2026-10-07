@@ -66,26 +66,15 @@
           ]
         },
         "name": "app",
+        "policies": [
+          "iam.policy:identity.app_policy"
+        ],
         "tags": {
           "team": "platform"
         }
       },
       "computed": {
         "id": "iam.role:identity.app_role"
-      }
-    },
-    "iam.role_policy_attachment::identity.attach": {
-      "typ": "iam.role_policy_attachment",
-      "name": "identity.attach",
-      "attrs": {
-        "policy": "iam.policy:identity.app_policy",
-        "role": "iam.role:identity.app_role",
-        "tags": {
-          "team": "platform"
-        }
-      },
-      "computed": {
-        "id": "iam.role_policy_attachment:identity.attach"
       }
     },
     "k8s.cluster::kubernetes.cluster": {

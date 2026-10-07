@@ -1,6 +1,6 @@
 exit: ok
 -- stdout --
-== examples/demo/stacks/dform.df: 163 nodes, 437 edges (160 negative), 13 strata
+== examples/demo/stacks/dform.df: 158 nodes, 426 edges (154 negative), 13 strata
 stratum  node
 0        (arg, iam.policy, name)
 0        (arg, iam.role, assume)
@@ -9,8 +9,7 @@ stratum  node
 0        (arg, output, main::vpc)
 0        (want, iam.policy)
 0        (want, iam.role)
-0        (want, iam.role_policy_attachment)
-0        (want, net.route)
+0        (want, net.route_table)
 0        __set_path
 0        data
 0        doc
@@ -25,8 +24,7 @@ stratum  node
 0        world_attr
 1        (arg, iam.policy, id)
 1        (arg, iam.role, id)
-1        (arg, iam.role_policy_attachment, id)
-1        (arg, net.route, id)
+1        (arg, net.route_table, id)
 1        (attr, iam.policy, name)
 1        (attr, iam.role, assume)
 1        (attr, iam.role, name)
@@ -42,16 +40,14 @@ stratum  node
 2        (arg, output, peer::vpc)
 2        (attr, iam.policy, id)
 2        (attr, iam.role, id)
-2        (attr, iam.role_policy_attachment, id)
-2        (attr, net.route, id)
+2        (attr, net.route_table, id)
 2        database::__instance
 2        env
 2        instance_of
 2        kubernetes::__instance
 2        peer::__instance
 2        peer::zone_index
-3        (arg, iam.role_policy_attachment, policy)
-3        (arg, iam.role_policy_attachment, role)
+3        (arg, iam.role, policies)
 3        (attr, input, baseline::audit)
 3        (attr, input, cidrs)
 3        (attr, input, database::backup_days)
@@ -77,8 +73,7 @@ stratum  node
 4        (arg, k8s.nodepool, id)
 4        (arg, k8s.nodepool, max)
 4        (arg, k8s.nodepool, min)
-4        (attr, iam.role_policy_attachment, policy)
-4        (attr, iam.role_policy_attachment, role)
+4        (attr, iam.role, policies)
 4        (want, compute.vm)
 4        (want, db.postgres)
 4        (want, k8s.cluster)
@@ -165,5 +160,5 @@ stratum  node
 11       __lc_2
 12       (attr, db.postgres, subnets)
 12       (attr, k8s.cluster, subnets)
-(163 rows)
+(158 rows)
 -- stderr --
