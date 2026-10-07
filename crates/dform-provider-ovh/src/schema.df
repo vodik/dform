@@ -92,6 +92,28 @@ type_attr("ovh.cloud_project_user", "s3_access_key", "string", ["computed", "nul
 type_attr("ovh.cloud_project_user", "s3_secret_key", "string", ["computed", "sensitive"])
 type_replace("ovh.cloud_project_user", "destroy_first")
 
+# A volume's key is its name in its region; it grows in place (a smaller
+# size replaces it, which Plan says), its name, description and instance
+# change in place. Its image and snapshot are write-only: the API never
+# answers them, and dform keeps their digests (R-106).
+type_provider("ovh.volume", "ovh")
+type_attr("ovh.volume", "id", "string", ["computed", "id"])
+type_attr("ovh.volume", "name", "string", ["required"])
+type_attr("ovh.volume", "region", "string", ["required", "force_new"])
+type_attr("ovh.volume", "size", "bytes(gib)", ["required"])
+type_attr(
+  "ovh.volume",
+  "type",
+  "enum(classic, classic-luks, high-speed, high-speed-luks, high-speed-gen2, high-speed-gen2-luks)",
+  ["optional_computed", "force_new"],
+)
+type_attr("ovh.volume", "description", "string", ["optional_computed"])
+type_attr("ovh.volume", "image", "string", ["force_new", "write_only"])
+type_attr("ovh.volume", "snapshot", "string", ["force_new", "write_only"])
+type_attr("ovh.volume", "instance", "ref(ovh.instance)", [])
+type_attr("ovh.volume", "status", "string", ["computed"])
+type_replace("ovh.volume", "destroy_first")
+
 type_doc("ovh.instance", "", "A Public Cloud instance of the project.")
 type_doc(
   "ovh.instance",
@@ -199,4 +221,42 @@ type_doc(
   "ovh.cloud_project_user",
   "s3_secret_key",
   "The S3 credential's secret. The API keeps it; dform has only its label, and a provider configured with it reads it from the API.",
+)
+type_doc("ovh.volume", "", "A block storage volume of the project (the API's `/volume`).")
+type_doc(
+  "ovh.volume",
+  "name",
+  "The volume's name, unique in its region: what a Create that timed out is found by. Changed in place.",
+)
+type_doc("ovh.volume", "region", "The region it is in. Changing it replaces the volume.")
+type_doc(
+  "ovh.volume",
+  "size",
+  "Its size, in whole GiB (`50Gi`). It grows in place; a smaller one replaces the volume.",
+)
+type_doc(
+  "ovh.volume",
+  "type",
+  "`classic`, `high-speed` or `high-speed-gen2`, `-luks` for an encrypted one; `classic` when not set. Changing it replaces the volume.",
+)
+type_doc("ovh.volume", "description", "What it is for. Changed in place.")
+type_doc(
+  "ovh.volume",
+  "image",
+  "The image's name in the region, for a bootable volume. Changing it replaces the volume.",
+)
+type_doc(
+  "ovh.volume",
+  "snapshot",
+  "The id of the snapshot it is made from. Changing it replaces the volume.",
+)
+type_doc(
+  "ovh.volume",
+  "instance",
+  "The instance it is attached to (`instance = server`), in its region. Set, it is attached; cleared, detached; changed, moved.",
+)
+type_doc(
+  "ovh.volume",
+  "status",
+  "`available`, or `in-use` attached; `creating`, `attaching`, `detaching` while it changes.",
 )

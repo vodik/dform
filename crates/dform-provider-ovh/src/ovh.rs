@@ -38,6 +38,7 @@ use std::time::{Duration, Instant};
 
 mod storage;
 mod user;
+mod volume;
 
 /// The provider's name, its types' namespace (R-36).
 pub const PROVIDER: &str = "ovh";
@@ -46,6 +47,7 @@ pub const SSH_KEY: &str = "ovh.ssh_key";
 pub const RECORD: &str = "ovh.domain_record";
 pub const CONTAINER: &str = "ovh.storage_container";
 pub const USER: &str = "ovh.cloud_project_user";
+pub const VOLUME: &str = "ovh.volume";
 pub const REGION: &str = "ovh.region";
 pub const FLAVOR: &str = "ovh.flavor";
 pub const IMAGE: &str = "ovh.image";
@@ -89,6 +91,7 @@ enum Made {
     Record(RecordKey),
     Container { region: String, name: String },
     User { description: String },
+    Volume { name: String, region: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -581,6 +584,10 @@ impl Ovh {
                 let (a, p) = self.project(&at)?;
                 self.read_user(&a, &p, remote)?
             }
+            VOLUME => {
+                let (a, p) = self.project(&at)?;
+                self.read_volume(&a, &p, remote)?.map(|o| map::volume(&o))
+            }
             _ => bail!("{at}: the ovh provider has no type {typ}"),
         })
     }
@@ -612,6 +619,14 @@ impl Ovh {
         if typ == INSTANCE {
             self.check_instance(&at, d)?;
         }
+        // A bootable volume's image is the region's, as an instance's is.
+        if typ == VOLUME
+            && let (Some(region), Some(image)) = (s(d, "region"), s(d, "image"))
+            && let Ok((a, p)) = self.project(&at)
+        {
+            self.image_id(&a, &p, region, image)
+                .map_err(|e| anyhow!("{at}: image: {e:#}"))?;
+        }
         // An instance's user data is write-only (R-106): the API never
         // answers it, and dform compares it with the digest state keeps,
         // giving the program's value in `prior` when it is the same.
@@ -620,6 +635,12 @@ impl Ovh {
             && changes
                 .iter()
                 .any(|c| self.schema.forces_new(typ, &norm_path(&c.path)));
+        // A volume grows in place; it does not shrink.
+        let shrinks = |p: &Json| {
+            let size = |d: &Json| d.get("size").and_then(Json::as_i64);
+            matches!((size(p), size(d)), (Some(was), Some(now)) if now < was)
+        };
+        let replaces = replaces || (typ == VOLUME && prior.is_some_and(shrinks));
         Ok((changes, replaces))
     }
 
@@ -738,6 +759,10 @@ impl Ovh {
             USER => Made::User {
                 description: st("description")?,
             },
+            VOLUME => Made::Volume {
+                name: st("name")?,
+                region: st("region")?,
+            },
             _ => return None,
         })
     }
@@ -818,6 +843,20 @@ impl Ovh {
                     .find(|o| s(o, "description") == Some(description))
                     .and_then(|o| o.get("id").and_then(Json::as_i64))
                     .map(|id| id.to_string())
+            }
+            Made::Volume { name, region } => {
+                let (a, p) = self.project("find a volume")?;
+                let list = a.client.get(&format!(
+                    "/cloud/project/{p}/volume?region={}",
+                    escape(region)
+                ))?;
+                list.as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter(|o| !matches!(s(o, "status"), Some("deleted" | "deleting")))
+                    .find(|o| s(o, "name") == Some(name) && s(o, "region") == Some(region))
+                    .and_then(|o| s(o, "id"))
+                    .map(str::to_string)
             }
         })
     }
@@ -919,6 +958,7 @@ impl Ovh {
             }
             CONTAINER => self.create_container(at, config),
             USER => self.create_user(at, config, notes, say),
+            VOLUME => self.create_volume(at, config, notes, say),
             _ => Err(refused(at, format!("the ovh provider has no type {typ}"))),
         }
     }
@@ -1030,7 +1070,6 @@ impl Ovh {
         notes: &mut Vec<String>,
         say: Say,
     ) -> std::result::Result<(String, Json, Json), Failed> {
-        let _ = (&notes, say);
         let now = self
             .read(typ, remote, "")
             .map_err(|e| refused(at, format!("{e:#}")))?
@@ -1074,6 +1113,7 @@ impl Ovh {
             }
             CONTAINER => self.update_container(at, remote, &now.0, config)?,
             USER => self.update_user(at, remote, &now, config)?,
+            VOLUME => self.update_volume(at, remote, config, notes, say)?,
             // Nothing of an SSH key changes in place (the schema replaces it).
             _ => {}
         }
@@ -1165,6 +1205,7 @@ impl Ovh {
                 let path = format!("/cloud/project/{p}/user/{}", escape(remote));
                 self.delete_at(&a, at, &path, true, notes, say)?;
             }
+            VOLUME => self.delete_volume(at, remote, notes, say)?,
             _ => return Err(refused(at, format!("the ovh provider has no type {typ}"))),
         }
         Ok(())

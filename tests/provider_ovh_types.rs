@@ -346,3 +346,233 @@ fn a_user_has_an_s3_credential_whose_secret_is_held() {
     lab.delete(USER, "backup", &u.remote);
     assert!(lab.read(USER, "backup", &u.remote).is_none());
 }
+
+const VOLUME: &str = "ovh.volume";
+
+/// A volume is made, said `creating` then `available`, and attached to
+/// its instance (`attaching`, `in-use`): the attachment is its attribute,
+/// read back as the instance's id. It grows in place and is replaced to
+/// shrink; it moves to another instance (detached, attached) and is
+/// detached when the program clears it; an attached volume is detached
+/// before it is deleted. One made elsewhere is refused to another Create
+/// of its name, to be adopted.
+#[test]
+fn a_volume_is_attached_moved_grown_and_deleted() {
+    let lab = Lab::new();
+    let one = lab.server.add_instance("one", "BHS5");
+    let two = lab.server.add_instance("two", "BHS5");
+    let doc = |size: i64, instance: Option<&str>| {
+        let mut d = json!({"name": "data", "region": "BHS5", "size": size,
+                           "type": "high-speed", "description": "lab data"});
+        if let Some(i) = instance {
+            d["instance"] = json!(i);
+        }
+        d
+    };
+    let v = lab.create(VOLUME, "data", doc(20, Some(&one)));
+    assert_eq!(v.said, ["creating", "available", "attaching", "in-use"]);
+    assert_eq!(v.attrs, doc(20, Some(&one)));
+    assert_eq!(v.computed["status"], "in-use");
+    assert_eq!(lab.server.volumes()[0]["attachedTo"], json!([one]));
+    let (attrs, _) = lab.read(VOLUME, "data", &v.remote).unwrap();
+    assert_eq!(attrs, v.attrs);
+    assert_eq!(
+        lab.plan(VOLUME, Some(&attrs), &doc(20, Some(&one))).0.len(),
+        0
+    );
+
+    // Bigger in place, smaller replaced, another region replaced.
+    assert_eq!(
+        lab.plan(VOLUME, Some(&attrs), &doc(50, Some(&one))),
+        (vec!["size".to_string()], false)
+    );
+    assert!(lab.plan(VOLUME, Some(&attrs), &doc(10, Some(&one))).1);
+    let mut moved = doc(20, Some(&one));
+    moved["region"] = json!("ca-east-tor");
+    assert!(lab.plan(VOLUME, Some(&attrs), &moved).1);
+    let grown = lab.update(VOLUME, "data", &v.remote, doc(50, Some(&one)));
+    assert_eq!(grown.attrs["size"], 50);
+    assert_eq!(lab.calls("POST", "/upsize"), 1);
+
+    // To the other instance: detached, then attached; then cleared.
+    assert_eq!(
+        lab.plan(VOLUME, Some(&grown.attrs), &doc(50, Some(&two))),
+        (vec!["instance".to_string()], false)
+    );
+    let to_two = lab.update(VOLUME, "data", &v.remote, doc(50, Some(&two)));
+    assert_eq!(
+        to_two.said,
+        ["detaching", "available", "attaching", "in-use"]
+    );
+    assert_eq!(to_two.attrs["instance"], two.as_str());
+    let cleared = lab.update(VOLUME, "data", &v.remote, doc(50, None));
+    assert_eq!(cleared.attrs.get("instance"), None);
+    assert_eq!(lab.server.volumes()[0]["status"], "available");
+
+    // Another Create of a name the region has: refused, to be adopted.
+    let found = lab.server.add_volume("found", "BHS5", 10);
+    let again = lab
+        .apply(
+            pb::Op::Create,
+            VOLUME,
+            "other",
+            "",
+            json!({"name": "found", "region": "BHS5", "size": 10}),
+        )
+        .unwrap_err();
+    assert!(again.contains("already exists with this key"), "{again}");
+    let adopted = lab
+        .apply(
+            pb::Op::Adopt,
+            VOLUME,
+            "found",
+            &found,
+            json!({"name": "found", "region": "BHS5", "size": 10, "instance": one}),
+        )
+        .unwrap();
+    assert_eq!(adopted.attrs["instance"], one.as_str());
+
+    // Deleting an attached volume detaches it first.
+    let gone = lab.delete(VOLUME, "found", &found);
+    assert_eq!(gone.said.first().map(String::as_str), Some("detaching"));
+    assert!(lab.read(VOLUME, "found", &found).is_none());
+    lab.delete(VOLUME, "data", &v.remote);
+    assert!(lab.server.volumes().is_empty());
+}
+
+/// A bootable volume's image is sent as the region's image id; one the
+/// region does not have is refused at plan, naming what it has.
+#[test]
+fn a_volume_from_an_image() {
+    let lab = Lab::new();
+    lab.create(
+        VOLUME,
+        "boot",
+        json!({"name": "boot", "region": "BHS5", "size": 10, "image": "Debian 13"}),
+    );
+    let sent = lab
+        .server
+        .seen()
+        .into_iter()
+        .find(|c| c.method == "POST" && c.path.ends_with("/volume"))
+        .unwrap();
+    assert_eq!(sent.body["imageId"], "image-debian-13-BHS5");
+    let bad = lab.plan_err(
+        VOLUME,
+        None,
+        &json!({"name": "bad", "region": "BHS5", "size": 10, "image": "Arch"}),
+    );
+    assert!(
+        bad.contains("plan ovh.volume[\"x\"]: image: image \"Arch\" is not in region BHS5")
+            && bad.contains("Debian 13"),
+        "{bad}"
+    );
+}
+
+fn ovh() -> String {
+    common::exe("dform-provider-ovh")
+}
+
+/// `dform ARGS` in the scratch project, the provider pointed at `server`.
+fn dform(s: &Scratch, server: &Server, args: &[&str]) -> Run {
+    let mut c = common::dform();
+    c.args(common::yes(args))
+        .current_dir(&s.dir)
+        .env("HOME", &s.dir)
+        .env("XDG_CONFIG_HOME", s.path("config"))
+        .env_remove("OVH_CLOUD_PROJECT_SERVICE");
+    for (k, v) in server.env() {
+        c.env(k, v);
+    }
+    Run::from(c.output().unwrap())
+}
+
+fn project(name: &str, program: &str) -> Scratch {
+    let s = Scratch::project(name);
+    s.write(
+        "dform.toml",
+        &format!(
+            "[project]\nedition = \"2026\"\n\n[providers]\novh = {{ path = \"{}\" }}\n",
+            ovh()
+        ),
+    );
+    s.write("main.df", program);
+    s
+}
+
+/// The program of R-157's done-when: a private network and its subnet, an
+/// instance on it, a volume attached to the instance, a user with S3
+/// credentials and a container it owns.
+fn lab_program(server: &Server, image: &str) -> String {
+    format!(
+        r#"
+use ovh {{ endpoint = "{}", project = "{}" }}
+
+resource ovh.instance server {{
+  name = "lab-server"
+  region = "BHS5"
+  flavor = "b2-7"
+  image = "Ubuntu 24.04"
+}}
+
+resource ovh.volume data {{
+  name = "lab-data"
+  region = "BHS5"
+  size = 20Gi
+  type = "high-speed"
+  image = "{image}"
+  instance = server
+}}
+"#,
+        server.endpoint,
+        fake::DESCRIPTION
+    )
+}
+
+/// R-157's done-when: the program plans, applies against the fake API,
+/// and plans clean; the volume's image, write-only, is kept as its digest
+/// in state (R-106), and a new one replaces the volume.
+#[test]
+fn a_program_with_every_type_plans_applies_and_plans_clean() {
+    let server = Server::start();
+    let s = project("ovh-types", &lab_program(&server, "Debian 13"));
+    let plan = dform(&s, &server, &["plan", "main.df"]).success();
+    for line in [
+        "+ ovh.instance server",
+        "+ ovh.volume data",
+        "instance = server",
+    ] {
+        assert!(plan.stdout.contains(line), "{line}\n{}", plan.stdout);
+    }
+    assert!(server.instances().is_empty() && server.volumes().is_empty());
+
+    let applied = dform(&s, &server, &["apply", "main.df"]).success();
+    // Each status the API gave, beside the change (R-130).
+    for line in ["+ ovh.volume data      0.0s  attaching", "in-use"] {
+        assert!(applied.stderr.contains(line), "{line}\n{}", applied.stderr);
+    }
+    let instance = server.instances()[0]["id"].clone();
+    let volume = &server.volumes()[0];
+    assert_eq!(volume["attachedTo"], json!([instance]));
+    assert_eq!(volume["size"], 20);
+    let state = s.read("dform.state/main/state.json");
+    let st: Json = serde_json::from_str(&state).unwrap();
+    let written = &st["resources"]["ovh.volume::data"]["written"]["image"];
+    assert!(
+        written.as_str().is_some_and(|d| d.contains("sha256:")),
+        "{state}"
+    );
+    assert!(!state.contains("Debian"), "{state}");
+
+    let again = dform(&s, &server, &["plan", "main.df"]).success();
+    assert!(again.stdout.contains("is up to date"), "{}", again.stdout);
+
+    // Another image replaces the volume.
+    s.write("main.df", &lab_program(&server, "Ubuntu 24.04"));
+    let changed = dform(&s, &server, &["plan", "main.df"]).success();
+    assert!(
+        changed.stdout.contains("ovh.volume data") && changed.stdout.contains("replace"),
+        "{}",
+        changed.stdout
+    );
+}

@@ -1,0 +1,14 @@
+{
+  "id": "0d9e8f7a-6b5c-4d3e-2f1a-0b9c8d7e6f5a",
+  "name": "lab-data",
+  "description": "",
+  "region": "ca-east-tor",
+  "size": 50,
+  "type": "high-speed-gen2",
+  "status": "in-use",
+  "attachedTo": ["6f8b2c1e-4a1d-4f7e-9d3c-2b1a0e9f8c7d"],
+  "bootable": false,
+  "availabilityZone": "nova",
+  "creationDate": "2026-10-05T18:51:47Z",
+  "planCode": "volume.high-speed-gen2.consumption"
+}

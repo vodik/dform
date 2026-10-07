@@ -173,6 +173,45 @@ pub fn user(o: &Json, access: Option<&str>) -> (Json, Json) {
     (attrs, computed)
 }
 
+/// A volume (`cloud.volume.Volume`): its size in GiB, as the schema's
+/// `bytes(gib)` takes it, and the instance it is attached to, the
+/// reference `instance = server` names. Its image and snapshot are not in
+/// the answer (write-only). Its type and description are the program's
+/// when it sets them and the API's otherwise, so they are also computed.
+pub fn volume(o: &Json) -> (Json, Json) {
+    let mut attrs = json!({
+        "name": str_of(o, "name").unwrap_or_default(),
+        "region": str_of(o, "region").unwrap_or_default(),
+        "size": o.get("size").and_then(Json::as_i64).unwrap_or(0),
+        "type": str_of(o, "type").unwrap_or_default(),
+    });
+    if let Some(i) = attached_to(o).first() {
+        attrs["instance"] = json!(i);
+    }
+    let mut computed = json!({
+        "id": str_of(o, "id").unwrap_or_default(),
+        "status": str_of(o, "status").unwrap_or_default(),
+        "type": attrs["type"],
+    });
+    // No description is none, not an empty one.
+    if let Some(d) = str_of(o, "description").filter(|d| !d.is_empty()) {
+        attrs["description"] = json!(d);
+        computed["description"] = json!(d);
+    }
+    (attrs, computed)
+}
+
+/// The instances a volume is attached to.
+pub fn attached_to(o: &Json) -> Vec<String> {
+    o.get("attachedTo")
+        .and_then(Json::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Json::as_str)
+        .map(str::to_string)
+        .collect()
+}
+
 /// `ovh.flavor(+region, -name, -vcpus: int, -ram: bytes, -disk: bytes)`:
 /// the flavors offered in `region` (`cloud.flavor.Flavor[]`), available
 /// ones, a name once. The API counts RAM in MiB and disk in GiB, as
@@ -377,6 +416,19 @@ mod tests {
         let (_, none) = user(&fixture("user.json"), None);
         assert_eq!(none["s3_access_key"], Json::Null);
         assert_eq!(none.get("s3_secret_key"), None);
+    }
+
+    #[test]
+    fn a_volume_and_its_instance() {
+        let (attrs, computed) = volume(&fixture("volume.json"));
+        assert_eq!(
+            attrs,
+            json!({"name": "lab-data", "region": "ca-east-tor", "size": 50,
+                   "type": "high-speed-gen2",
+                   "instance": "6f8b2c1e-4a1d-4f7e-9d3c-2b1a0e9f8c7d"})
+        );
+        assert_eq!(computed["status"], "in-use");
+        assert_eq!(computed["id"], "0d9e8f7a-6b5c-4d3e-2f1a-0b9c8d7e6f5a");
     }
 
     #[test]
