@@ -497,7 +497,8 @@ impl Providers {
                 (None, Source::Plugin(p)) => crate::timing::time(
                     || format!("provider {} started (spawn and handshake)", p.display()),
                     || {
-                        let none = super::host::Grants::none_for(&p);
+                        let mut none = super::host::Grants::none_for(&p);
+                        none.files = crate::files::Shared(Some(cfg.files.clone()));
                         launch.plugin(&p, cfg.grants.get(&st.spec).unwrap_or(&none))
                     },
                 )?,
@@ -546,6 +547,15 @@ impl Providers {
         }
         if links.is_empty() {
             bail!("no providers");
+        }
+        // The location schemes a provider's manifest declares are read by
+        // it, through the run's reader (R-153).
+        for link in &links {
+            if let Some(r) = &link.reader {
+                for s in &link.schemes {
+                    cfg.files.declare(s, &link.name, r.clone());
+                }
+            }
         }
         let p = Self::deferred(links);
         Ok(Providers {

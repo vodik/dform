@@ -128,9 +128,12 @@ fn native(exe: &Path, grants: Grants) -> Result<Link> {
     let served = grpc::serve(Services::new(grants.clone()))?;
     let program = Program::exe(exe);
     let mut conn = Conn::start(&program, &Env::default().set(grpc::ENV, &served.address))?;
-    let manifest = conn
-        .manifest()?
-        .map(|imports| Manifest::of(imports.iter().map(String::as_str), false));
+    let declared = conn.manifest()?;
+    let manifest = declared
+        .as_ref()
+        .map(|d| Manifest::of(d.imports.iter().map(String::as_str), false));
+    let schemes = declared.map(|d| d.schemes).unwrap_or_default();
+    let reader = conn.reader();
     let mut link = Link::start(
         program.display(),
         Box::new(Native {
@@ -143,5 +146,10 @@ fn native(exe: &Path, grants: Grants) -> Result<Link> {
         manifest,
         grants,
     });
+    // The schemes it declares are read through its `Files` (R-153).
+    if !schemes.is_empty() {
+        link.schemes = schemes;
+        link.reader = Some(reader);
+    }
     Ok(link)
 }

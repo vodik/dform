@@ -16,37 +16,38 @@ use std::future::Future;
 use std::sync::Mutex;
 use tonic::transport::Channel;
 
-/// What a native provider says it uses (it runs as the user: a
-/// declaration, not a sandbox).
-struct Declared(Vec<String>);
-
-#[tonic::async_trait]
-impl h::manifest_server::Manifest for Declared {
-    async fn manifest(
-        &self,
-        _: tonic::Request<h::ManifestRequest>,
-    ) -> Result<tonic::Response<h::ManifestResponse>, tonic::Status> {
-        Ok(tonic::Response::new(h::ManifestResponse {
-            imports: self.0.clone(),
-            schemes: Vec::new(),
-        }))
-    }
+/// Serve `handler` over gRPC, declaring `uses` (it runs as the user: a
+/// declaration, not a sandbox) and the location schemes it reads
+/// (`Handler::schemes`, served as `Files`, R-153), until stdin closes.
+pub fn serve<H: Handler + Send + Sync + 'static>(handler: H, uses: &[&str]) -> Result<()> {
+    let handler = std::sync::Arc::new(handler);
+    let schemes = handler.schemes();
+    let reads = handler.clone();
+    let declares = dform_grpc::server::Declares {
+        imports: uses.iter().map(|s| s.to_string()).collect(),
+        read: (!schemes.is_empty()).then(|| -> dform_grpc::server::Read {
+            std::sync::Arc::new(move |l: &str| reads.read_location(l))
+        }),
+        schemes,
+    };
+    dform_grpc::server::serve_declaring(Shared(handler), declares)
 }
 
-/// Serve `handler` over gRPC, declaring `uses`, until stdin closes.
-pub fn serve<H: Handler + Send + Sync + 'static>(handler: H, uses: &[&str]) -> Result<()> {
-    use dform_grpc::pb::provider_server::ProviderServer;
-    dform_grpc::transport::serve(
-        tonic::transport::Server::builder()
-            .add_service(
-                ProviderServer::new(dform_grpc::server::Adapter::new(handler))
-                    .max_decoding_message_size(usize::MAX)
-                    .max_encoding_message_size(usize::MAX),
-            )
-            .add_service(h::manifest_server::ManifestServer::new(Declared(
-                uses.iter().map(|s| s.to_string()).collect(),
-            ))),
-    )
+/// A handler held twice: by the protocol's service and by `Files`.
+struct Shared<H>(std::sync::Arc<H>);
+
+impl<H: Handler> Handler for Shared<H> {
+    fn handle(
+        &self,
+        call: dform_core::plugin::backend::Call,
+        progress: dform_core::plugin::backend::Progress,
+    ) -> Result<dform_core::plugin::backend::Reply, dform_core::plugin::backend::CallError> {
+        self.0.handle(call, progress)
+    }
+
+    fn is_dead(&self) -> bool {
+        self.0.is_dead()
+    }
 }
 
 /// `provider!`'s `main`.

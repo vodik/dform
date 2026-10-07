@@ -805,6 +805,9 @@ pub const BODIES: &[(&str, Body)] = &[
         _ => None,
     }),
     ("__path", |a| match a {
+        // A part of a value not known yet (a document a host has not
+        // written, R-153) is not known yet either: the same null.
+        [v @ Value::Null { .. }, _] => Some(v.clone()),
         [v, path] => {
             let mut v = v.clone();
             for seg in crate::ir::path_keys(path.as_str()?) {

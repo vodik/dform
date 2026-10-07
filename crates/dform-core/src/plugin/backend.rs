@@ -198,4 +198,19 @@ pub trait Handler {
     fn is_dead(&self) -> bool {
         false
     }
+
+    /// The location schemes it reads (R-153): its manifest declares them,
+    /// and dform routes a read of one to [`Handler::read_location`].
+    fn schemes(&self) -> Vec<String> {
+        Vec::new()
+    }
+
+    /// The bytes at `location`, of a scheme it declares; not there yet is
+    /// `Failure::NotYet`.
+    fn read_location(&self, location: &str) -> Result<Vec<u8>, super::host::Failure> {
+        Err(
+            super::host::Error::fatal(format!("{location}: this provider reads no location"))
+                .into(),
+        )
+    }
 }

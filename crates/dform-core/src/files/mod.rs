@@ -422,22 +422,21 @@ impl Files {
             "ssh" => self.ssh(u),
             #[cfg(not(target_family = "wasm"))]
             "https" => self.https(u),
+            // dform's own transports first (the CLI's `s3`), then the one a
+            // provider declares.
             s => {
-                if let Some((_, t)) = self
-                    .declared
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .get(s)
-                    .cloned()
-                {
-                    return t.read(u, self);
-                }
                 let registered = registry()
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
                     .get(s)
                     .cloned();
-                match registered {
+                let declared = self
+                    .declared
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .get(s)
+                    .map(|(_, t)| t.clone());
+                match registered.or(declared) {
                     Some(t) => t.read(u, self),
                     None => Err(Error::fatal(format!(
                         "{u}: no transport reads `{s}:` (dform reads {}, and a scheme a \

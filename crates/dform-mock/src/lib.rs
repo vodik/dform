@@ -1294,6 +1294,9 @@ impl Mock {
     }
 }
 
+/// The location scheme the mock reads (R-153).
+pub const MOCK_SCHEME: &str = "mock";
+
 fn invalid(e: anyhow::Error) -> CallError {
     CallError::Refused(format!("{e:#}"))
 }
@@ -1303,6 +1306,30 @@ fn doc_of(v: Option<&pb::Value>) -> std::result::Result<Option<Json>, CallError>
 }
 
 impl Handler for Mock {
+    /// `mock://HOST/PATH` (R-153): the mock reads its own scheme, as a
+    /// provider whose client reads `gs://` would.
+    fn schemes(&self) -> Vec<String> {
+        vec![MOCK_SCHEME.into()]
+    }
+
+    /// `mock://HOST/PATH` is the YAML document `{host: HOST, path: PATH}`;
+    /// a path under `/later/` is not written yet.
+    fn read_location(
+        &self,
+        location: &str,
+    ) -> std::result::Result<Vec<u8>, dform_core::plugin::host::Failure> {
+        use dform_core::plugin::host::{Error, Failure};
+        let u = dform_core::uri::Uri::parse(location).map_err(Error::fatal)?;
+        if u.scheme != MOCK_SCHEME {
+            return Err(Error::fatal(format!("{location}: the mock reads mock: only")).into());
+        }
+        if u.path.starts_with("/later/") {
+            return Err(Failure::NotYet(format!("{location} is not written yet")));
+        }
+        let host = u.host.unwrap_or_default();
+        Ok(format!("host: {host}\npath: {}\n", u.path).into_bytes())
+    }
+
     fn handle(
         &self,
         call: backend::Call,

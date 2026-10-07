@@ -81,9 +81,12 @@ pub fn apply_answer(result: Result<pb::ApplyResponse, Status>) -> ApplyStream {
 
 impl<H: Handler + Send + Sync + 'static> Adapter<H> {
     pub fn new(handler: H) -> Adapter<H> {
-        Adapter {
-            handler: Arc::new(handler),
-        }
+        Adapter::shared(Arc::new(handler))
+    }
+
+    /// The adapter of a handler held elsewhere too (its `Files`).
+    pub fn shared(handler: Arc<H>) -> Adapter<H> {
+        Adapter { handler }
     }
 
     /// `call` on the blocking pool: the transport's runtime is a single
@@ -159,13 +162,111 @@ impl<H: Handler + Send + Sync + 'static> pb::provider_server::Provider for Adapt
 }
 
 /// Serve `handler` as a provider: listen, print the handshake line, serve
-/// until stdin closes (`transport::serve`).
+/// until stdin closes (`transport::serve`). A handler that reads location
+/// schemes declares them in its `Manifest` and serves them as `Files`
+/// (R-153).
 pub fn serve<H: Handler + Send + Sync + 'static>(handler: H) -> anyhow::Result<()> {
+    let schemes = handler.schemes();
+    if !schemes.is_empty() {
+        let handler = Arc::new(handler);
+        let reads = handler.clone();
+        return serve_shared(
+            handler,
+            Declares {
+                imports: Vec::new(),
+                schemes,
+                read: Some(Arc::new(move |l: &str| reads.read_location(l))),
+            },
+        );
+    }
     crate::transport::serve(
         tonic::transport::Server::builder().add_service(
             pb::provider_server::ProviderServer::new(Adapter::new(handler))
                 .max_decoding_message_size(usize::MAX)
                 .max_encoding_message_size(usize::MAX),
         ),
+    )
+}
+
+/// A provider's reader of the location schemes it declares (R-153).
+pub type Read =
+    Arc<dyn Fn(&str) -> Result<Vec<u8>, dform_core::plugin::host::Failure> + Send + Sync>;
+
+/// What a provider declares beside the protocol (`Manifest`, R-13b): the
+/// interfaces it imports, and the location schemes it reads, which it
+/// serves as `Files` (R-153).
+#[derive(Clone, Default)]
+pub struct Declares {
+    pub imports: Vec<String>,
+    pub schemes: Vec<String>,
+    pub read: Option<Read>,
+}
+
+#[tonic::async_trait]
+impl crate::host_pb::manifest_server::Manifest for Declares {
+    async fn manifest(
+        &self,
+        _: Request<crate::host_pb::ManifestRequest>,
+    ) -> Result<Response<crate::host_pb::ManifestResponse>, Status> {
+        Ok(Response::new(crate::host_pb::ManifestResponse {
+            imports: self.imports.clone(),
+            schemes: self.schemes.clone(),
+        }))
+    }
+}
+
+/// The `Files` service: the declared schemes' reads, on the blocking pool.
+struct Files(Read);
+
+type ReadStream = tonic::codegen::tokio_stream::Iter<
+    std::vec::IntoIter<Result<crate::host_pb::ReadChunk, Status>>,
+>;
+
+#[tonic::async_trait]
+impl crate::host_pb::files_server::Files for Files {
+    type ReadStream = ReadStream;
+
+    async fn read(
+        &self,
+        r: Request<crate::host_pb::ReadRequest>,
+    ) -> Result<Response<ReadStream>, Status> {
+        let (read, location) = (self.0.clone(), r.into_inner().location);
+        let chunks = tokio::task::spawn_blocking(move || crate::host::chunks(read(&location)))
+            .await
+            .map_err(|e| Status::internal(format!("the read failed: {e}")))?;
+        Ok(Response::new(tonic::codegen::tokio_stream::iter(
+            chunks.into_iter().map(Ok).collect::<Vec<_>>(),
+        )))
+    }
+}
+
+/// [`serve`], with `Manifest` saying what it `declares`, and `Files` its
+/// reader of the schemes it declares.
+pub fn serve_declaring<H: Handler + Send + Sync + 'static>(
+    handler: H,
+    declares: Declares,
+) -> anyhow::Result<()> {
+    serve_shared(Arc::new(handler), declares)
+}
+
+fn serve_shared<H: Handler + Send + Sync + 'static>(
+    handler: Arc<H>,
+    declares: Declares,
+) -> anyhow::Result<()> {
+    let files = declares.read.clone().map(|r| {
+        crate::host_pb::files_server::FilesServer::new(Files(r))
+            .max_encoding_message_size(usize::MAX)
+    });
+    crate::transport::serve(
+        tonic::transport::Server::builder()
+            .add_service(
+                pb::provider_server::ProviderServer::new(Adapter::shared(handler))
+                    .max_decoding_message_size(usize::MAX)
+                    .max_encoding_message_size(usize::MAX),
+            )
+            .add_service(crate::host_pb::manifest_server::ManifestServer::new(
+                declares,
+            ))
+            .add_optional_service(files),
     )
 }

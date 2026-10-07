@@ -32,6 +32,56 @@ enum Back {
     Answer(Ticket, Box<Answer>),
 }
 
+/// What a provider's `Manifest` declares.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Declared {
+    pub imports: Vec<String>,
+    pub schemes: Vec<String>,
+}
+
+/// A provider's `Files` service, by where it listens.
+struct FilesClient {
+    address: String,
+    program: String,
+}
+
+impl dform_core::files::Transport for FilesClient {
+    fn read(
+        &self,
+        at: &dform_core::uri::Uri,
+        _: &dform_core::files::Files,
+    ) -> std::result::Result<Vec<u8>, dform_core::plugin::host::Failure> {
+        use dform_core::plugin::host::Error;
+        let fail =
+            |e: String| Error::retryable(format!("provider {}: read {at}: {e}", self.program));
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| fail(e.to_string()))?;
+        let (address, location) = (self.address.clone(), at.ascii());
+        let chunks = rt
+            .block_on(async move {
+                let channel = crate::transport::dial(&address)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                let mut c = crate::host_pb::files_client::FilesClient::new(channel)
+                    .max_decoding_message_size(usize::MAX);
+                let mut s = c
+                    .read(crate::host_pb::ReadRequest { location })
+                    .await
+                    .map_err(|e| e.message().to_string())?
+                    .into_inner();
+                let mut out = Vec::new();
+                while let Some(chunk) = s.message().await.map_err(|e| e.message().to_string())? {
+                    out.push(chunk);
+                }
+                Ok::<_, String>(out)
+            })
+            .map_err(fail)?;
+        crate::host::read(chunks)
+    }
+}
+
 pub struct Conn {
     /// What was started, for messages.
     program: String,
@@ -93,27 +143,57 @@ impl Conn {
         })
     }
 
-    /// Start the provider `program`, with `env`, dial it and shake hands.
+    /// Start the provider `program`, with `env`, dial it and shake hands;
+    /// the schemes its manifest declares are read through its `Files`
+    /// (R-153).
     pub fn link(program: &Program, env: &Env) -> Result<Link> {
-        let conn = Conn::start(program, env)?;
-        Link::start(program.display(), Box::new(conn))
+        let mut conn = Conn::start(program, env)?;
+        let schemes = conn
+            .manifest()
+            .ok()
+            .flatten()
+            .map(|d| d.schemes)
+            .unwrap_or_default();
+        let reader = conn.reader();
+        let mut link = Link::start(program.display(), Box::new(conn))?;
+        if !schemes.is_empty() {
+            link.schemes = schemes;
+            link.reader = Some(reader);
+        }
+        Ok(link)
+    }
+
+    /// A reader of the schemes the provider declares: its `Files`
+    /// service, dialed for each read (the connection's own runtime runs
+    /// only while dform waits on a call).
+    pub fn reader(&self) -> std::sync::Arc<dyn dform_core::files::Transport> {
+        std::sync::Arc::new(FilesClient {
+            address: self.address.clone(),
+            program: self.program.clone(),
+        })
     }
 
     /// What the provider says it uses (its `Manifest` service, R-13b):
     /// `None` when it does not serve one; an error when it does not
     /// answer within the handshake's timeout.
-    pub fn manifest(&mut self) -> Result<Option<Vec<String>>> {
+    pub fn manifest(&mut self) -> Result<Option<Declared>> {
         self.manifest_within(HANDSHAKE_TIMEOUT)
     }
 
     /// [`Conn::manifest`], waiting at most `timeout`.
-    pub fn manifest_within(&mut self, timeout: Duration) -> Result<Option<Vec<String>>> {
+    pub fn manifest_within(&mut self, timeout: Duration) -> Result<Option<Declared>> {
         let mut c = crate::host_pb::manifest_client::ManifestClient::new(self.channel.clone());
         let asked = async move {
             tokio::time::timeout(timeout, c.manifest(crate::host_pb::ManifestRequest {})).await
         };
         match self.rt.block_on(asked) {
-            Ok(r) => Ok(r.ok().map(|r| r.into_inner().imports)),
+            Ok(r) => Ok(r.ok().map(|r| {
+                let r = r.into_inner();
+                Declared {
+                    imports: r.imports,
+                    schemes: r.schemes,
+                }
+            })),
             Err(_) => anyhow::bail!(
                 "provider {} did not answer its Manifest in {}s",
                 self.program,

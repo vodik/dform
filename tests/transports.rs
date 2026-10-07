@@ -265,3 +265,30 @@ fn a_secret_read_is_recorded_by_its_digest() {
         r.stderr
     );
 }
+
+/// A scheme a provider's manifest declares is read by that provider: the
+/// mock declares `mock` (as a google provider would `gs`), and a
+/// program's `yaml("mock://..")` reaches it through the host; its "not
+/// yet" is waited on as any read's.
+#[test]
+fn a_scheme_a_provider_declares_is_read_by_it() {
+    let s = Scratch::project("transport-provider");
+    s.write(
+        "p.df",
+        "\nuse fake\nlet d = yaml(\"mock://alpha/x.yml\")\n\
+         resource net.vpc \"${d.host}\" { cidr_block = \"10.0.0.0/16\" }\n",
+    );
+    let r = run(&s, &["plan", "p.df"]).success();
+    assert!(r.stdout.contains("+ net.vpc alpha"), "{}", r.stdout);
+    s.write(
+        "p.df",
+        "\nuse fake\nlet d = yaml(\"mock://alpha/later/x.yml\")\n\
+         resource net.vpc \"x\" { cidr_block = d.host }\n",
+    );
+    let r = run(&s, &["plan", "p.df"]).success();
+    assert!(
+        r.stdout.contains("waits on  mock://alpha/later/x.yml"),
+        "{}",
+        r.stdout
+    );
+}
