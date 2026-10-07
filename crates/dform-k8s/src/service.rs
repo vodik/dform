@@ -159,20 +159,21 @@ impl K8s {
         }
     }
 
-    fn schema(&self) -> &Schema {
-        &self.derived.schema
+    /// The schema with `typ`'s rows read.
+    fn schema_of(&self, typ: &str) -> Result<Arc<Schema>> {
+        self.derived.schema_of([typ])
     }
 
     /// The computed values of a live object of `typ`.
-    fn computed(&self, typ: &str, live: &Json) -> Json {
-        let schema = self.schema();
+    fn computed(&self, typ: &str, live: &Json) -> Result<Json> {
+        let schema = self.schema_of(typ)?;
         let defaulted: Vec<String> = schema
             .optional_computed_of(typ)
             .into_iter()
             .map(|(p, _)| p)
             .filter(|p| !p.starts_with("metadata.") && !schema.in_list(typ, p))
             .collect();
-        computed(live, &defaulted)
+        Ok(computed(live, &defaulted))
     }
 
     /// The object `doc` describes (`object::manifest`), marked with the
@@ -260,9 +261,10 @@ impl K8s {
         let kind = self.derived.kind(typ)?;
         let c = self.cluster(&format!("read {}", address(typ, name)))?;
         let (ns, n) = parse_remote(kind, remote_id, &c.namespace);
-        Ok(c.get(kind, ns, n)
-            .await?
-            .map(|o| (attrs(&o), self.computed(typ, &o))))
+        let Some(o) = c.get(kind, ns, n).await? else {
+            return Ok(None);
+        };
+        Ok(Some((attrs(&o), self.computed(typ, &o)?)))
     }
 
     /// Plan one resource: validate, diff, and whether it replaces. The dry
@@ -278,7 +280,7 @@ impl K8s {
         desired: Option<&Json>,
     ) -> Result<(Vec<provider::Change>, bool)> {
         let kind = self.derived.kind(typ)?;
-        let schema = self.schema();
+        let schema = &*self.schema_of(typ)?;
         let at = format!("plan {}", address(typ, name));
         let Some(d) = desired else {
             return Ok((diff(schema, typ, prior, None), false));
@@ -325,7 +327,7 @@ impl K8s {
         let obj = self.manifest(kind, d, &ns, n)?;
         match c.apply(kind, &ns, n, &obj, true).await {
             Ok(live) => {
-                let after = world_doc(schema, typ, &attrs(&live), &self.computed(typ, &live), d);
+                let after = world_doc(schema, typ, &attrs(&live), &self.computed(typ, &live)?, d);
                 let changes = diff(schema, typ, prior, Some(&after));
                 let r = replaces(&changes);
                 Ok((changes, r))
@@ -350,13 +352,14 @@ impl K8s {
         let kind = self.derived.kind(typ)?;
         let c = self.cluster(&format!("import {typ} {remote_id}"))?;
         let (ns, n) = parse_remote(kind, remote_id, &c.namespace);
-        Ok(c.get(kind, ns, n).await?.map(|o| {
-            let name = get_path(&o, "metadata.name")
-                .and_then(Json::as_str)
-                .unwrap_or(n)
-                .to_string();
-            (name, attrs(&o), self.computed(typ, &o))
-        }))
+        let Some(o) = c.get(kind, ns, n).await? else {
+            return Ok(None);
+        };
+        let name = get_path(&o, "metadata.name")
+            .and_then(Json::as_str)
+            .unwrap_or(n)
+            .to_string();
+        Ok(Some((name, attrs(&o), self.computed(typ, &o)?)))
     }
 
     /// Apply one planned action.
@@ -473,7 +476,11 @@ impl K8s {
         Ok(pb::ApplyResponse {
             remote: remote(kind, ns, name),
             attrs: Some(wire::doc(&attrs(&live))),
-            computed: Some(wire::doc(&self.computed(typ, &live))),
+            computed: Some(wire::doc(
+                &self
+                    .computed(typ, &live)
+                    .map_err(|e| Failed::MaybeApplied(format!("{at}: {e:#}")))?,
+            )),
             elapsed_ms: 0,
             notes,
         })
@@ -966,7 +973,12 @@ impl pb::provider_server::Provider for Service {
 
     async fn schema(&self, req: Request<pb::SchemaRequest>) -> Reply<pb::SchemaResponse> {
         let k8s = self.k8s()?;
-        let facts = wire::schema_facts(k8s.schema(), req.get_ref()).map_err(invalid)?;
+        let schema = match &req.get_ref().types {
+            Some(t) => k8s.derived.schema_of(t.names.iter().map(String::as_str)),
+            None => k8s.derived.schema(),
+        }
+        .map_err(invalid)?;
+        let facts = wire::schema_facts(&schema, req.get_ref()).map_err(invalid)?;
         Ok(Response::new(pb::SchemaResponse {
             facts,
             externs: Vec::new(),
@@ -1159,14 +1171,14 @@ mod tests {
         let ok = json!({"metadata": {"name": "a"}, "spec": {
             "selector": {"matchLabels": {"app": "a"}},
             "template": {"spec": {"containers": [{"name": "a", "image": "x"}]}}}});
-        assert_eq!(missing_required(&s.schema, typ, &ok), None);
+        assert_eq!(missing_required(&s.schema().unwrap(), typ, &ok), None);
         let mut no_selector = ok.clone();
         no_selector["spec"]
             .as_object_mut()
             .unwrap()
             .remove("selector");
         assert_eq!(
-            missing_required(&s.schema, typ, &no_selector).as_deref(),
+            missing_required(&s.schema().unwrap(), typ, &no_selector).as_deref(),
             Some("spec.selector")
         );
         let mut unnamed = ok.clone();
@@ -1175,13 +1187,17 @@ mod tests {
             .unwrap()
             .remove("name");
         assert_eq!(
-            missing_required(&s.schema, typ, &unnamed).as_deref(),
+            missing_required(&s.schema().unwrap(), typ, &unnamed).as_deref(),
             Some("spec.template.spec.containers.name")
         );
         // No spec at all: nothing under it is checked here (the API server
         // refuses it at the dry run).
         assert_eq!(
-            missing_required(&s.schema, typ, &json!({"metadata": {"name": "a"}})),
+            missing_required(
+                &s.schema().unwrap(),
+                typ,
+                &json!({"metadata": {"name": "a"}})
+            ),
             None
         );
     }

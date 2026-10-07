@@ -46,6 +46,7 @@ use dform_core::value::Value;
 use serde_json::{Map, Value as Json};
 use std::collections::BTreeMap;
 use std::path::Path;
+use std::sync::{Arc, Mutex, RwLock};
 
 /// The OpenAPI document of a recent Kubernetes release, trimmed to every
 /// kind of its stable groups: the static schema, the provider's when no
@@ -250,18 +251,171 @@ pub fn aliases() -> Result<Vec<(String, String)>> {
 }
 
 /// The derived schema: the kinds by type name (aliases included), and the
-/// schema facts.
-#[derive(Debug, Clone)]
+/// schema facts. One read from the cache ([`cached`]) keeps each type's
+/// rows unread until a call asks for that type ([`Derived::schema_of`]):
+/// a run plans a few kinds of the hundred the snapshot has, and reading
+/// every row (half of them descriptions) was most of a Configure.
+#[derive(Debug)]
 pub struct Derived {
     pub kinds: BTreeMap<String, Kind>,
-    pub schema: Schema,
+    /// The types read so far.
+    loaded: RwLock<Arc<Schema>>,
+    /// The rows of each type not read yet, by type (`""`: rows of no
+    /// type).
+    unread: Mutex<BTreeMap<String, Rows>>,
+    /// Each type's place in the derivation's order of rows: a schema's
+    /// facts are in it, however many reads made it.
+    order: Arc<BTreeMap<String, usize>>,
+}
+
+/// A type's rows in a cache file's text, not parsed yet: a JSON list of
+/// `[PRED, ARG...]`.
+#[derive(Debug, Clone)]
+struct Rows {
+    text: Arc<str>,
+    at: std::ops::Range<usize>,
+}
+
+impl Clone for Derived {
+    fn clone(&self) -> Derived {
+        Derived {
+            kinds: self.kinds.clone(),
+            loaded: RwLock::new(
+                self.loaded
+                    .read()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .clone(),
+            ),
+            unread: Mutex::new(
+                self.unread
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .clone(),
+            ),
+            order: self.order.clone(),
+        }
+    }
+}
+
+/// The type a schema row is of: its first column (`""` for none).
+fn row_type(f: &Atom) -> &str {
+    match f.args.first() {
+        Some(Term::Val(Value::Str(t))) => t,
+        _ => "",
+    }
+}
+
+/// A row's place in [`Derived::order`]: its type's, or (`\0TYPE`) that of
+/// its type's rows a request for any type answers.
+fn row_group(f: &Atom) -> std::borrow::Cow<'_, str> {
+    match dform_core::schema::PER_TYPE.contains(&f.pred.as_str()) {
+        true => row_type(f).into(),
+        false => format!("\0{}", row_type(f)).into(),
+    }
 }
 
 impl Derived {
+    /// A derivation every row of which is read.
+    pub fn new(kinds: BTreeMap<String, Kind>, schema: Schema) -> Derived {
+        let mut order = BTreeMap::new();
+        for f in &schema.facts {
+            let n = order.len();
+            order.entry(row_group(f).into_owned()).or_insert(n);
+        }
+        Derived {
+            kinds,
+            loaded: RwLock::new(Arc::new(schema)),
+            unread: Mutex::new(BTreeMap::new()),
+            order: Arc::new(order),
+        }
+    }
+
     pub fn kind(&self, typ: &str) -> Result<&Kind> {
         self.kinds
             .get(typ)
             .ok_or_else(|| anyhow!("{typ} is not a kind this cluster serves"))
+    }
+
+    /// The schema of every type.
+    pub fn schema(&self) -> Result<Arc<Schema>> {
+        let all: Vec<String> = self
+            .unread
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .keys()
+            .cloned()
+            .collect();
+        self.schema_of(all.iter().map(String::as_str))
+    }
+
+    /// The schema with at least `types` (and the types they are aliases
+    /// of) read; a type it does not have is none of its.
+    pub fn schema_of<'a>(&self, types: impl IntoIterator<Item = &'a str>) -> Result<Arc<Schema>> {
+        let mut unread = self.unread.lock().unwrap_or_else(|e| e.into_inner());
+        let mut loaded = self.loaded.write().unwrap_or_else(|e| e.into_inner());
+        // An alias's rows are its type's too (`Schema::facts_for`).
+        let aliases: BTreeMap<&str, &str> = loaded
+            .facts
+            .iter()
+            .filter_map(|f| match (f.pred.as_str(), f.args.as_slice()) {
+                ("type_alias", [Term::Val(Value::Str(a)), Term::Val(Value::Str(t))]) => {
+                    Some((a.as_str(), t.as_str()))
+                }
+                _ => None,
+            })
+            .collect();
+        let mut want: Vec<String> = Vec::new();
+        for t in types {
+            want.push(t.to_string());
+            want.extend(aliases.get(t).map(|t| t.to_string()));
+        }
+        let mut facts = Vec::new();
+        for t in want {
+            let Some(rows) = unread.remove(&t) else {
+                continue;
+            };
+            facts.extend(
+                rows.read()
+                    .with_context(|| format!("the cached schema of {t}"))?,
+            );
+        }
+        if !facts.is_empty() {
+            let more = Schema::from_facts(&facts).context("the cached schema")?;
+            let mut merged = (**loaded).clone().merge(more)?;
+            let order = &self.order;
+            merged
+                .facts
+                .sort_by_key(|f| order.get(&*row_group(f)).copied().unwrap_or(usize::MAX));
+            *loaded = Arc::new(merged);
+        }
+        Ok(loaded.clone())
+    }
+}
+
+impl Rows {
+    /// The rows as facts.
+    fn read(&self) -> Result<Vec<Atom>> {
+        fn value(v: &Json) -> Option<Value> {
+            Some(match v {
+                Json::String(s) => Value::Str(s.clone()),
+                Json::Number(n) => Value::Int(n.as_i64()?),
+                Json::Array(xs) => Value::List(xs.iter().map(value).collect::<Option<_>>()?),
+                _ => return None,
+            })
+        }
+        let rows: Vec<Vec<Json>> = serde_json::from_str(&self.text[self.at.clone()])?;
+        rows.iter()
+            .map(|row| {
+                let (pred, args) = row.split_first()?;
+                Some(atom(
+                    pred.as_str()?,
+                    args.iter()
+                        .map(|v| value(v).map(Term::Val))
+                        .collect::<Option<_>>()?,
+                ))
+            })
+            .collect::<Option<Vec<_>>>()
+            .ok_or_else(|| anyhow!("a row is not [PRED, ARG...] of strings and integers"))
     }
 }
 
@@ -368,7 +522,7 @@ pub fn derive(doc: &Json, aliases: &[(String, String)]) -> Result<Derived> {
     }
     facts.extend(alias_facts);
     let schema = Schema::from_facts(&facts).context("the schema derived from OpenAPI")?;
-    Ok(Derived { kinds, schema })
+    Ok(Derived::new(kinds, schema))
 }
 
 /// The derived schema of the checked-in snapshot.
@@ -464,7 +618,7 @@ pub fn extension(full: &Derived, base: &Derived) -> Result<Derived> {
         .map(|(t, k)| (t.clone(), k.clone()))
         .collect();
     let facts: Vec<Atom> = full
-        .schema
+        .schema()?
         .facts
         .iter()
         .filter(|f| match f.args.first() {
@@ -474,22 +628,35 @@ pub fn extension(full: &Derived, base: &Derived) -> Result<Derived> {
         .cloned()
         .collect();
     let schema = Schema::from_facts(&facts).context("a cluster's extension of the schema")?;
-    Ok(Derived { kinds, schema })
+    Ok(Derived::new(kinds, schema))
 }
 
-/// `base` with the kinds of `ext`.
+/// `base` with the kinds of `ext`, each type read when it is asked for
+/// as in either.
 pub fn extended(base: &Derived, ext: &Derived) -> Result<Derived> {
     let mut kinds = base.kinds.clone();
     kinds.extend(ext.kinds.iter().map(|(t, k)| (t.clone(), k.clone())));
-    let facts: Vec<Atom> = base
-        .schema
-        .facts
-        .iter()
-        .chain(&ext.schema.facts)
-        .cloned()
-        .collect();
-    let schema = Schema::from_facts(&facts).context("the schema and a cluster's extension")?;
-    Ok(Derived { kinds, schema })
+    let loaded = |d: &Derived| d.loaded.read().unwrap_or_else(|e| e.into_inner()).clone();
+    let schema = (*loaded(base))
+        .clone()
+        .merge((*loaded(ext)).clone())
+        .context("the schema and a cluster's extension")?;
+    let mut unread = base
+        .unread
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone();
+    unread.extend(ext.unread.lock().unwrap_or_else(|e| e.into_inner()).clone());
+    let mut order = (*base.order).clone();
+    for (t, n) in ext.order.iter() {
+        order.entry(t.clone()).or_insert(base.order.len() + n);
+    }
+    Ok(Derived {
+        kinds,
+        loaded: RwLock::new(Arc::new(schema)),
+        unread: Mutex::new(unread),
+        order: Arc::new(order),
+    })
 }
 
 /// The cached extension at `path` ([`extension_path`]) of this derivation:
@@ -497,7 +664,7 @@ pub fn extended(base: &Derived, ext: &Derived) -> Result<Derived> {
 /// deployment's cluster is not known yet: its last one's).
 pub fn read_extension(path: &Path, doc_hash: Option<&str>) -> Option<Derived> {
     let text = std::fs::read_to_string(path).ok()?;
-    let key = serde_json::from_str::<Json>(&text)
+    let key = serde_json::from_str::<Json>(text.split_once('\n')?.0)
         .ok()?
         .get("key")?
         .as_str()?
@@ -520,9 +687,14 @@ pub fn write_extension(path: &Path, doc_hash: &str, ext: &Derived) -> Result<()>
     std::fs::write(path, text).with_context(|| format!("write {}", path.display()))
 }
 
-/// A cached derivation: `{"key", "kinds", "facts": [[PRED, ARG...]]}`,
-/// each argument a string, an integer or a list of them. `None` for a
-/// schema with anything else.
+/// A cached derivation: a line `{"key", "kinds", "types": [[TYPE, FROM,
+/// TO, EAGER]...]}`, then each type's rows, a JSON list of `[PRED,
+/// ARG...]`, at bytes `FROM..TO` of what follows the line, each argument
+/// a string, an integer or a list of them; the types in the derivation's
+/// order, so a type is read alone ([`Derived::schema_of`]). A type's rows
+/// that a schema request answers for every type (`type_provider`,
+/// `type_alias`: not `schema::PER_TYPE`) are a group of their own, read
+/// with the kinds (EAGER). `None` for a schema with anything else.
 fn encode(d: &Derived, key: &str) -> Option<String> {
     fn value(v: &Value) -> Option<Json> {
         Some(match v {
@@ -538,57 +710,74 @@ fn encode(d: &Derived, key: &str) -> Option<String> {
             _ => None,
         }
     }
-    let facts = d
-        .schema
-        .facts
-        .iter()
-        .map(|f| {
-            let mut row = vec![Json::String(f.pred.clone())];
-            for a in &f.args {
-                row.push(term(a)?);
-            }
-            Some(Json::Array(row))
-        })
-        .collect::<Option<Vec<_>>>()?;
-    serde_json::to_string(&serde_json::json!({"key": key, "kinds": d.kinds, "facts": facts})).ok()
+    let schema = d.schema().ok()?;
+    // A row a request for some types answers for every type (a
+    // `type_provider`, a `type_alias`) is read with the kinds.
+    let mut by_type: Vec<((&str, bool), Vec<Json>)> = Vec::new();
+    for f in &schema.facts {
+        let mut row = vec![Json::String(f.pred.clone())];
+        for a in &f.args {
+            row.push(term(a)?);
+        }
+        let at = (
+            row_type(f),
+            !dform_core::schema::PER_TYPE.contains(&f.pred.as_str()),
+        );
+        match by_type.iter_mut().find(|(x, _)| *x == at) {
+            Some((_, rows)) => rows.push(Json::Array(row)),
+            None => by_type.push((at, vec![Json::Array(row)])),
+        }
+    }
+    let mut body = String::new();
+    let mut types = Vec::new();
+    for ((t, eager), rows) in by_type {
+        let from = body.len();
+        body.push_str(&serde_json::to_string(&rows).ok()?);
+        types.push(serde_json::json!([t, from, body.len(), eager]));
+    }
+    let head =
+        serde_json::to_string(&serde_json::json!({"key": key, "kinds": d.kinds, "types": types}))
+            .ok()?;
+    Some(format!("{head}\n{body}"))
 }
 
-/// The cached derivation in `text`, if it is keyed `key` and whole.
+/// The cached derivation in `text`, if it is keyed `key` and whole: its
+/// kinds read, its rows each read when its type is first asked for.
 fn decode(text: &str, key: &str) -> Option<Derived> {
-    fn value(v: &Json) -> Option<Value> {
-        Some(match v {
-            Json::String(s) => Value::Str(s.clone()),
-            Json::Number(n) => Value::Int(n.as_i64()?),
-            Json::Array(xs) => Value::List(xs.iter().map(value).collect::<Option<_>>()?),
-            _ => return None,
-        })
-    }
-    let term = |v: &Json| value(v).map(Term::Val);
     #[derive(serde::Deserialize)]
-    struct Cached {
+    struct Head {
         key: String,
         kinds: BTreeMap<String, Kind>,
-        facts: Vec<Vec<Json>>,
+        types: Vec<(String, usize, usize, bool)>,
     }
-    let c: Cached = serde_json::from_str(text).ok()?;
-    if c.key != key {
+    let (head, body) = text.split_once('\n')?;
+    let head: Head = serde_json::from_str(head).ok()?;
+    if head.key != key {
         return None;
     }
-    let facts = c
-        .facts
-        .iter()
-        .map(|row| {
-            let (pred, args) = row.split_first()?;
-            Some(atom(
-                pred.as_str()?,
-                args.iter().map(term).collect::<Option<_>>()?,
-            ))
-        })
-        .collect::<Option<Vec<_>>>()?;
-    let schema = Schema::from_facts(&facts).ok()?;
+    let body: Arc<str> = Arc::from(body);
+    let mut unread = BTreeMap::new();
+    let mut order = BTreeMap::new();
+    let mut eager = Vec::new();
+    for (i, (t, from, to, now)) in head.types.into_iter().enumerate() {
+        body.get(from..to)?;
+        let rows = Rows {
+            text: body.clone(),
+            at: from..to,
+        };
+        if now {
+            eager.extend(rows.read().ok()?);
+            order.insert(format!("\0{t}"), i);
+            continue;
+        }
+        order.insert(t.clone(), i);
+        unread.insert(t, rows);
+    }
     Some(Derived {
-        kinds: c.kinds,
-        schema,
+        kinds: head.kinds,
+        loaded: RwLock::new(Arc::new(Schema::from_facts(&eager).ok()?)),
+        unread: Mutex::new(unread),
+        order: Arc::new(order),
     })
 }
 
@@ -916,13 +1105,42 @@ mod tests {
         );
     }
 
+    /// The cache reads a type's rows when a call first asks for it (After
+    /// R-123): nothing at Configure; a type and the type it is an alias
+    /// of; every row when all are asked for, in the order derived.
+    #[test]
+    fn a_cached_derivation_reads_each_type_when_asked() {
+        let d = snapshot().unwrap();
+        let all = d.schema().unwrap();
+        let c = decode(&encode(&d, "k").unwrap(), "k").unwrap();
+        assert!(
+            !c.loaded
+                .read()
+                .unwrap()
+                .facts
+                .iter()
+                .any(|f| f.pred == "type_attr")
+        );
+        let named = std::collections::BTreeSet::from(["k8s.deployment".to_string()]);
+        let some = c.schema_of(["k8s.deployment"]).unwrap();
+        assert_eq!(some.facts_for(&named), all.facts_for(&named));
+        assert!(
+            some.attr("k8s.apps.v1.deployment", "spec.replicas")
+                .is_some()
+        );
+        assert!(some.attr("k8s.core.v1.config_map", "data").is_none());
+        assert_eq!(c.schema().unwrap().facts, all.facts);
+        assert_eq!(c.kinds, d.kinds);
+    }
+
     /// A merge key's server default is its `type_default` (R-116): a
     /// Service's and a container's port `protocol`, `TCP`.
     #[test]
     fn the_snapshot_derives_merge_key_defaults() {
         let d = snapshot().unwrap();
         let defaults: Vec<String> = d
-            .schema
+            .schema()
+            .unwrap()
             .facts
             .iter()
             .filter(|f| f.pred == "type_default")
@@ -940,7 +1158,7 @@ mod tests {
     fn the_snapshot_derives_classes_keys_and_aliases() {
         use dform_core::value::NullClass;
         let d = snapshot().unwrap();
-        let s = &d.schema;
+        let s = &*d.schema().unwrap();
         let dep = "k8s.apps.v1.deployment";
         assert_eq!(s.class_of(dep, "metadata.uid"), Some(NullClass::Fresh));
         assert_eq!(
@@ -1016,8 +1234,18 @@ mod tests {
         let short = "k8s.traefik.middleware";
         assert_eq!(ext.kinds.keys().collect::<Vec<_>>(), vec![mw, short]);
         assert_eq!(ext.kinds[short], ext.kinds[mw]);
-        assert!(ext.schema.attr(mw, "spec.holderIdentity").is_some());
-        assert!(ext.schema.attr(short, "spec.holderIdentity").is_some());
+        assert!(
+            ext.schema()
+                .unwrap()
+                .attr(mw, "spec.holderIdentity")
+                .is_some()
+        );
+        assert!(
+            ext.schema()
+                .unwrap()
+                .attr(short, "spec.holderIdentity")
+                .is_some()
+        );
         assert!(base.kind(mw).is_err());
 
         let dir = std::env::temp_dir().join(format!("dform-k8s-ext-{}", std::process::id()));
@@ -1030,7 +1258,12 @@ mod tests {
         let cached = read_extension(&path, None).unwrap();
         let both = extended(&base, &cached).unwrap();
         assert!(both.kind(mw).is_ok() && both.kind("k8s.storage_class").is_ok());
-        assert!(both.schema.attr(mw, "spec.holderIdentity").is_some());
+        assert!(
+            both.schema()
+                .unwrap()
+                .attr(mw, "spec.holderIdentity")
+                .is_some()
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -1041,7 +1274,12 @@ mod tests {
         let d = snapshot().unwrap();
         let sc = "k8s.storage.k8s.io.v1.storage_class";
         assert_eq!(d.kind("k8s.storage_class").unwrap(), d.kind(sc).unwrap());
-        assert!(d.schema.attr("k8s.storage_class", "provisioner").is_some());
+        assert!(
+            d.schema()
+                .unwrap()
+                .attr("k8s.storage_class", "provisioner")
+                .is_some()
+        );
         assert!(!d.kind(sc).unwrap().namespaced);
         for short in [
             "k8s.ingress_class",
@@ -1059,7 +1297,7 @@ mod tests {
     /// property's, the short names' too.
     #[test]
     fn descriptions_are_type_docs() {
-        let s = snapshot().unwrap().schema;
+        let s = (*snapshot().unwrap().schema().unwrap()).clone();
         let docs = s.docs();
         let dep = "k8s.apps.v1.deployment";
         assert!(docs[&(dep, "")].starts_with("Deployment enables declarative updates"));
@@ -1074,7 +1312,7 @@ mod tests {
     /// document, else the known paths; an object never is.
     #[test]
     fn server_defaulted_fields_are_optional_computed() {
-        let s = snapshot().unwrap().schema;
+        let s = (*snapshot().unwrap().schema().unwrap()).clone();
         let (svc, dep) = ("k8s.core.v1.service", "k8s.apps.v1.deployment");
         for (t, p) in [
             (svc, "spec.clusterIP"),
@@ -1124,7 +1362,7 @@ mod tests {
                     "count": {"type": "integer", "default": 0},
                     "opts": {"type": "object", "default": {},
                              "properties": {"a": {"type": "string"}}}}}}}}}}}});
-        let s = derive(&doc, &[]).unwrap().schema;
+        let s = (*derive(&doc, &[]).unwrap().schema().unwrap()).clone();
         let t = "k8s.x.io.v1.thing";
         assert!(s.attr(t, "spec.mode").unwrap().has("optional_computed"));
         assert!(!s.attr(t, "spec.size").unwrap().has("optional_computed"));

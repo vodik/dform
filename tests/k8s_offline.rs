@@ -1081,16 +1081,22 @@ fn the_schema_is_derived_once_and_answered_for_the_types_asked_for() {
         count(&all, "type_provider(")
     );
 
-    // Served from the cache: a row added there shows.
-    let mut c: Json = serde_json::from_str(&std::fs::read_to_string(&cache).unwrap()).unwrap();
-    c["facts"].as_array_mut().unwrap().push(json!([
+    // Served from the cache: a row added there shows. The cache is a line
+    // naming the bytes of each type's rows, then the rows (After R-123).
+    let (mut head, mut groups) = read_cache(&cache);
+    let rows = &mut groups
+        .iter_mut()
+        .find(|(t, eager, _)| t == "k8s.core.v1.namespace" && !eager)
+        .unwrap()
+        .2;
+    rows.push(json!([
         "type_attr",
         "k8s.core.v1.namespace",
         "cached.probe",
         "string",
         []
     ]));
-    std::fs::write(&cache, c.to_string()).unwrap();
+    write_cache(&cache, &mut head, &groups);
     let probe = "type_attr(\"k8s.core.v1.namespace\", \"cached.probe\"";
     let ns = schema_of(
         &mut offline_provider(&s, "st"),
@@ -1099,15 +1105,51 @@ fn the_schema_is_derived_once_and_answered_for_the_types_asked_for() {
     assert_eq!(count(&ns, probe), 1, "answered from the cache");
 
     // A cache keyed by another document is derived again, and rewritten.
-    c["key"] = json!("another");
-    std::fs::write(&cache, c.to_string()).unwrap();
+    head["key"] = json!("another");
+    write_cache(&cache, &mut head, &groups);
     let ns = schema_of(
         &mut offline_provider(&s, "st"),
         Some(&["k8s.core.v1.namespace"]),
     );
     assert_eq!(count(&ns, probe), 0);
-    let c: Json = serde_json::from_str(&std::fs::read_to_string(&cache).unwrap()).unwrap();
-    assert_ne!(c["key"], json!("another"));
+    let (head, _) = read_cache(&cache);
+    assert_ne!(head["key"], json!("another"));
+}
+
+/// The k8s schema cache's head and its groups of rows: (type, read with
+/// the kinds, rows).
+fn read_cache(path: &std::path::Path) -> (Json, Vec<(String, bool, Vec<Json>)>) {
+    let text = std::fs::read_to_string(path).unwrap();
+    let (head, body) = text.split_once('\n').unwrap();
+    let head: Json = serde_json::from_str(head).unwrap();
+    let groups = head["types"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| {
+            let at = |i: usize| e[i].as_u64().unwrap() as usize;
+            let rows: Vec<Json> = serde_json::from_str(&body[at(1)..at(2)]).unwrap();
+            (
+                e[0].as_str().unwrap().to_string(),
+                e[3] == json!(true),
+                rows,
+            )
+        })
+        .collect();
+    (head, groups)
+}
+
+/// Write `groups` under `head` as the k8s schema cache.
+fn write_cache(path: &std::path::Path, head: &mut Json, groups: &[(String, bool, Vec<Json>)]) {
+    let mut body = String::new();
+    let mut types = Vec::new();
+    for (t, eager, rows) in groups {
+        let from = body.len();
+        body.push_str(&serde_json::to_string(rows).unwrap());
+        types.push(json!([t, from, body.len(), eager]));
+    }
+    head["types"] = json!(types);
+    std::fs::write(path, format!("{head}\n{body}")).unwrap();
 }
 
 /// Every file under `dir`, recursively.

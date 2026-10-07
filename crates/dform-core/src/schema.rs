@@ -797,7 +797,7 @@ impl Schema {
 }
 
 /// Schema predicates with a row per type (the type in the first column).
-const PER_TYPE: [&str; 8] = [
+pub const PER_TYPE: [&str; 8] = [
     "type_attr",
     "type_doc",
     "type_list_key",

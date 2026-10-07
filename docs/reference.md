@@ -960,7 +960,10 @@ use k8s { source = "bin/dform-provider-k8s" }        # an executable
   cached as `k8s-openapi.json` in the stack's state directory (fetched again
   when the server's index changes); the schema derived from it is cached
   beside it as `k8s-schema.json`, keyed by the document's hash, and so is
-  the snapshot's when offline. `x-kubernetes-list-map-keys` are
+  the snapshot's when offline. A run reads a kind's rows from it only when
+  it asks for that kind: its head names each kind and where its rows are,
+  so a Configure reads the head (about 20ms on a debug build, where reading
+  every row took 0.4s). `x-kubernetes-list-map-keys` are
   `type_list_key`, list-type `set` a `set`; the leaves of `status.*` and the
   server-written metadata are computed (`metadata.uid` the identity);
   `metadata.name` (a program may set `metadata.generateName` instead) and
