@@ -1350,6 +1350,21 @@ redactor: `plan` (text, `--json`, the plan file), `show`, `query`, `why`,
 `graph`, and the policy messages on stderr, whose context quotes values and
 rule text.
 
+The redactor works by taint, never by text (R-128). A value prints as a
+secret because of where it is or where it came from: a `sensitive` path, a
+cell declared `secret(T)` (an input, an output, a field of an object type),
+a `let` or a relation's column the secret pass found a secret reaches
+(`signed(s) where s = format("key=%s", signing)` prints `(sensitive
+signed#0)`), an attribute's part a rule writes a secret into, or a secret
+an extern, `env.var` or `random.*` gave. A secret object is one secret
+and prints once (`secret(63 B)` in a result set); a plain value inside it
+(`stringData = { user: database, .. }` with `database = "synapse"`) is
+not a secret anywhere else: the literal `"synapse-config"`, the resource
+`synapse`, the address `synapse_db` and `random.signing_key("synapse")`
+print as written. The last line holds: a secret value, whole, never
+prints, as a value, as a literal quoted in rule text, or as a `--set`
+flag's value; a string that merely holds its bytes is not searched.
+
 Secrets are also checked statically (E DR-19): one dataflow pass over
 the predicate signatures labels every position a secret reaches, from a
 `sensitive` schema attribute, an input declared `secret(T)` (`input pw:
