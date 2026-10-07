@@ -1,0 +1,9 @@
+# A regex pattern literal (R-31) is checked where its position is
+# typed `regex` (`regex.match`'s `re`).
+a(x) where x = regex.match("text", "[")
+
+# A uri literal (R-31) is checked where its position is typed `uri`
+# (`with_scheme`'s `u`); a `url` is the browser's word, an error naming
+# `uri` (R-134).
+b(x) where x = uri.with_scheme("not a uri", "https")
+c(x) where x = url.with_scheme("https://h", "http")

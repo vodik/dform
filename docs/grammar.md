@@ -397,7 +397,7 @@ comparison of two types that are never equal, are errors, not a silent
 non-match. A column declared `any` (`decl release(key, value: any)`)
 takes every type and joins nothing. Variables are never coerced, but a
 string column may hold the text of an `inet` or an `ip` a function reads,
-and a value type (an `oci`, a `url`, an `inet`, an `ip`, a time, a
+and a value type (an `oci`, a `uri`, an `inet`, an `ip`, a time, a
 quantity) given to a function's `string` parameter is its canonical print
 there (`not str.contains(c.image, ":")` over an `oci`).
 The settled signature (`az(string, int)`, a `decl`'s or a rule head's
@@ -547,20 +547,33 @@ is then one spelling for every provider; a value its form cannot hold
 (`1536Mi` as whole GiB) is a plan error naming the attribute, and what a
 provider sends back at such an attribute is read the same way.
 
-A `url` is a value, like `inet`: written as a string in a `url`
-position (`let base: url = ".."`), parsed there, and held canonically (its scheme
-and host lower-case, a default port dropped, its path and query
-percent-encoded consistently), so two spellings of one url are equal.
-A url never equals a string: `base == "https://h/"` is false; give the
-string a `url` position (a typed `let`). It prints as its canonical
-text in the plan, the plan file, state and JSON. `u.scheme`, `u.host`,
-`u.port` (absent: the scheme's default), `u.path`, `u.query` (an
-object of its pairs) and `u.fragment` (absent: none) read its parts.
-`url.with_scheme`, `url.with_host`, `url.with_port`, `url.with_path`
-and `url.with_query` change one part and give a url, as `url.join`
-appends a path segment; `url.encode` works on a string.
+A `uri` is a value, like `inet` (R-134): RFC 3986's generic syntax, the
+same for every scheme, not a browser's WHATWG url. What a program holds
+is `s3://bucket/key`, `postgres://user:pw@host:5432/db`,
+`git+ssh://git@host/repo`, `ssh://ops@host`, `oci://ghcr.io/o/app`,
+`file:///etc/hosts`, and the forms with no authority,
+`mailto:ops@example.com`, `tel:+15551234`, `sip:alice@host`,
+`urn:ietf:rfc:3986`, `data:text/plain,hi`, which parse to a scheme and a
+path and print back as written. It is written as a string in a `uri`
+position (`let base: uri = ".."`), parsed there, and held normalized
+(RFC 3986 section 6: its scheme lower-case, its escapes' hex upper-case
+and an escaped unreserved character unescaped, `.` and `..` resolved in a
+hierarchical path, and for `http`, `https`, `ws`, `wss` the default port
+dropped and an empty path `/`), so two spellings of one uri are equal. A
+uri never equals a string: `base == "https://h/"` is false; give the
+string a `uri` position (a typed `let`). It prints as its text in the
+plan, the plan file, state and JSON. `u.scheme`, `u.user`, `u.password`
+(escaped as written; a secret's when the uri was written from one,
+R-118), `u.host` (absent: no authority), `u.port` (absent: the scheme's
+default), `u.path`, `u.query` (an object of its pairs, each unescaped)
+and `u.fragment` read its parts. `uri.with_scheme`, `uri.with_user`,
+`uri.with_password`, `uri.with_host`, `uri.with_port`, `uri.with_path`,
+`uri.with_query` and `uri.with_fragment` set one part and give a uri
+(`with_host` on a uri with no authority gives it one, `mailto://h/x`),
+as `uri.join` appends a path segment; `uri.escape` escapes a string for
+a part. `url`, in a type or a call, is an error naming `uri`.
 
-An `oci` is a container image reference, a value as a url is (R-133):
+An `oci` is a container image reference, a value as a uri is (R-133):
 the OCI distribution reference `[registry/]repository[:tag][@digest]`,
 written as a string where an `oci` is wanted (a parameter, an
 attribute typed `oci`, `let base: oci = "ghcr.io/element-hq/synapse"`)
@@ -604,7 +617,7 @@ to a time, a version or a quantity is read as the other side's type.
 
 A literal in a position whose type is known is checked as that type at
 compile time (R-31, Postgres's unknown-literal rule): a schema attribute's
-type (`inet`, `int`, `float`, `number`, `bool`, `url`, `oci`, `semver`, `enum(..)`, `ref(T)`), an input's declared
+type (`inet`, `int`, `float`, `number`, `bool`, `uri`, `oci`, `semver`, `enum(..)`, `ref(T)`), an input's declared
 type for its default and a copy's value, a function's parameter.
 `cidr_block = "10.0.0/16"` in an `inet` attribute, `vpc = "main"` in a
 `ref(net.vpc)` one and `subnets = [main]` (a `ref(net.vpc)` where
@@ -1878,7 +1891,7 @@ are written bare.
 | `oci`     | `oci.pinned(r)`, `oci.with_tag(r, t)`, `oci.with_digest(r, d)`, `oci.with_registry(r, host)` (`r` an `oci`, the OCI distribution reference `[registry/]repository[:tag][@digest]`, a string read as one; its parts are fields, `r.digest`; "Types") |
 | `hash`    | `hash.sha256(s)` (a short one is `str.slice(hash.sha256(s), 0, 8)`)       |
 | `base64`  | `base64.encode(s)`, `base64.decode(s)`                                    |
-| `url`     | `url.join(u, segment)`, `url.with_scheme(u, s)`, `url.with_host(u, h)`, `url.with_port(u, p)`, `url.with_path(u, p)`, `url.with_query(u, q)`, `url.encode(s)` |
+| `uri`     | `uri.join(u, segment)`, `uri.with_scheme(u, s)`, `uri.with_user(u, n)`, `uri.with_password(u, p)`, `uri.with_host(u, h)`, `uri.with_port(u, p)`, `uri.with_path(u, p)`, `uri.with_query(u, q)`, `uri.with_fragment(u, f)`, `uri.escape(s)`; fields `u.scheme`, `u.user`, `u.password`, `u.host`, `u.port`, `u.path`, `u.query`, `u.fragment` |
 | `path`    | `path.join(parts)`, `path.dir(p)`, `path.base(p)`, `path.ext(p)`, `path.rel(p, base)`, `path.clean(p)` (POSIX slashes, independent of the host) |
 | `json`, `yaml`, `toml` | `.decode(text)`, `.encode(value)`, on a document's text already in hand; the loader (`yaml(path)`, docs/layout.md) stays for reading one |
 

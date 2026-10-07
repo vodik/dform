@@ -46,7 +46,7 @@ pub const SOURCES: &[(&str, &str)] = &[
     ("std/oci.df", include_str!("../../../std/oci.df")),
     ("std/hash.df", include_str!("../../../std/hash.df")),
     ("std/base64.df", include_str!("../../../std/base64.df")),
-    ("std/url.df", include_str!("../../../std/url.df")),
+    ("std/uri.df", include_str!("../../../std/uri.df")),
     ("std/path.df", include_str!("../../../std/path.df")),
     ("std/json.df", include_str!("../../../std/json.df")),
     ("std/yaml.df", include_str!("../../../std/yaml.df")),
@@ -60,7 +60,7 @@ pub const PRELUDE: &str = "prelude";
 /// constructor (`inet(s) -> inet`).
 const TYPE_NAMES: &[&str] = &[
     "int", "string", "bool", "inet", "ip", "iprange", "list", "any", "ref", "secret", "symbol",
-    "addr", "bytes", "cpu", "duration", "time", "url", "oci", "semver", "float",
+    "addr", "bytes", "cpu", "duration", "time", "uri", "oci", "semver", "float",
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -235,8 +235,8 @@ fn gone(name: &str) -> Option<String> {
         "duration" | "duration.parse" => typed("duration", "d", "30m", &[]),
         "bytes" => typed("bytes", "b", "\"512Mi\"", &[]),
         "cpu" => typed("cpu", "c", "500m", &[]),
-        "url" | "url.parse" => typed(
-            "url",
+        "uri.parse" => typed(
+            "uri",
             "u",
             "\"https://example.com\"",
             &["scheme", "host", "port", "path", "query", "fragment"],
@@ -278,6 +278,19 @@ fn gone(name: &str) -> Option<String> {
         }
         "string" | "str" => {
             "a value's text is an interpolation, `\"${x}\"`; there are no constructors".to_string()
+        }
+        // R-134: a uri is RFC 3986's, not a browser's url.
+        n if n == "url" || n.starts_with("url.") => {
+            let f = n.strip_prefix("url.").unwrap_or("");
+            format!(
+                "the type and its package are `uri` (RFC 3986's generic syntax){}; a string \
+                 where a uri is wanted is read as one, `let u: uri = \"https://example.com\"`",
+                match f {
+                    "" | "parse" => String::new(),
+                    "encode" => ": `uri.escape`".to_string(),
+                    f => format!(": `uri.{f}`"),
+                }
+            )
         }
         _ => return None,
     })
@@ -797,9 +810,6 @@ pub const BODIES: &[(&str, Body)] = &[
             for seg in crate::ir::path_keys(path.as_str()?) {
                 // A url's or an image reference's parts read as an
                 // object's (`u.host`, `r.digest`).
-                if let Value::Url(u) = &v {
-                    v = crate::value::url_parts(u)?;
-                }
                 if let Value::Oci(r) = &v {
                     v = crate::value::OciRef::parse(r).ok()?.parts();
                 }
@@ -1141,64 +1151,109 @@ pub const BODIES: &[(&str, Body)] = &[
         }
         _ => None,
     }),
-    ("url.join", |a| match a {
-        [u, Value::Str(segment)] => with_url(u, |u| {
-            let path = join_slash(u.path(), segment);
-            u.set_path(&path);
+    ("uri.join", |a| match a {
+        [u, Value::Str(segment)] => with_uri(u, |u| {
+            u.path = join_slash(&u.path, segment);
+            if !u.path.starts_with('/') && u.host.is_some() {
+                u.path.insert(0, '/');
+            }
             Some(())
         }),
         _ => None,
     }),
-    ("url.with_scheme", |a| match a {
-        [u, Value::Str(scheme)] => with_url(u, |u| u.set_scheme(scheme).ok()),
-        _ => None,
-    }),
-    ("url.with_host", |a| match a {
-        [u, Value::Str(host)] => with_url(u, |u| u.set_host(Some(host)).ok()),
-        _ => None,
-    }),
-    ("url.with_port", |a| match a {
-        [u, Value::Int(port)] => {
-            let p = u16::try_from(*port).ok()?;
-            with_url(u, |u| u.set_port(Some(p)).ok())
-        }
-        _ => None,
-    }),
-    ("url.with_path", |a| match a {
-        [u, Value::Str(path)] => with_url(u, |u| {
-            u.set_path(path);
+    ("uri.with_scheme", |a| match a {
+        [u, Value::Str(scheme)] => with_uri(u, |u| {
+            u.scheme = scheme.clone();
             Some(())
         }),
         _ => None,
     }),
-    ("url.with_query", |a| match a {
-        [u, Value::Obj(q)] => {
-            let pairs: Option<Vec<(&String, &String)>> = q
-                .iter()
-                .map(|(k, v)| match v {
-                    Value::Str(s) => Some((k, s)),
-                    _ => None,
-                })
-                .collect();
-            let pairs = pairs?;
-            with_url(u, |u| {
-                if pairs.is_empty() {
-                    u.set_query(None);
-                } else {
-                    let mut qs = url::form_urlencoded::Serializer::new(String::new());
-                    for (k, v) in &pairs {
-                        qs.append_pair(k, v);
-                    }
-                    u.set_query(Some(&qs.finish()));
-                }
+    ("uri.with_user", |a| match a {
+        [u, Value::Str(user)] => {
+            let u = as_uri(u)?.with_authority();
+            with_uri(&Value::Uri(Box::new(u)), |u| {
+                u.user = Some(utf8_percent_encode(user, USERINFO).to_string());
+                u.host.get_or_insert_default();
                 Some(())
             })
         }
         _ => None,
     }),
-    ("url.encode", |a| match a {
+    ("uri.with_password", |a| match a {
+        [u, Value::Str(pw)] => {
+            let u = as_uri(u)?.with_authority();
+            with_uri(&Value::Uri(Box::new(u)), |u| {
+                u.password = Some(utf8_percent_encode(pw, USERINFO).to_string());
+                u.user.get_or_insert_default();
+                u.host.get_or_insert_default();
+                Some(())
+            })
+        }
+        _ => None,
+    }),
+    ("uri.with_host", |a| match a {
+        [u, Value::Str(host)] => {
+            let u = as_uri(u)?.with_authority();
+            with_uri(&Value::Uri(Box::new(u)), |u| {
+                u.host = Some(host.clone());
+                Some(())
+            })
+        }
+        _ => None,
+    }),
+    ("uri.with_port", |a| match a {
+        [u, Value::Int(port)] => {
+            let p = u16::try_from(*port).ok()?;
+            let u = as_uri(u)?.with_authority();
+            with_uri(&Value::Uri(Box::new(u)), |u| {
+                u.port = Some(p);
+                u.host.get_or_insert_default();
+                Some(())
+            })
+        }
+        _ => None,
+    }),
+    ("uri.with_path", |a| match a {
+        [u, Value::Str(path)] => with_uri(u, |u| {
+            u.path = path.clone();
+            if !u.path.is_empty() && !u.path.starts_with('/') && u.host.is_some() {
+                u.path.insert(0, '/');
+            }
+            Some(())
+        }),
+        _ => None,
+    }),
+    ("uri.with_query", |a| match a {
+        [u, Value::Obj(q)] => {
+            let pairs: Option<Vec<String>> = q
+                .iter()
+                .map(|(k, v)| match v {
+                    Value::Str(s) => Some(format!(
+                        "{}={}",
+                        utf8_percent_encode(k, URL_COMPONENT),
+                        utf8_percent_encode(s, URL_COMPONENT)
+                    )),
+                    _ => None,
+                })
+                .collect();
+            let pairs = pairs?;
+            with_uri(u, |u| {
+                u.query = (!pairs.is_empty()).then(|| pairs.join("&"));
+                Some(())
+            })
+        }
+        _ => None,
+    }),
+    ("uri.with_fragment", |a| match a {
+        [u, Value::Str(f)] => with_uri(u, |u| {
+            u.fragment = Some(f.clone());
+            Some(())
+        }),
+        _ => None,
+    }),
+    ("uri.escape", |a| match a {
         [Value::Str(s)] => Some(Value::Str(
-            percent_encoding::utf8_percent_encode(s, URL_COMPONENT).to_string(),
+            utf8_percent_encode(s, URL_COMPONENT).to_string(),
         )),
         _ => None,
     }),
@@ -1338,7 +1393,8 @@ pub(crate) fn value_to_string(v: &Value) -> String {
         Value::Null { label, .. } => format!("?{label}"),
         Value::Quantity(q) => q.to_string(),
         Value::Time(t) => t.to_string(),
-        Value::Url(u) | Value::Oci(u) => u.clone(),
+        Value::Uri(u) => u.to_string(),
+        Value::Oci(u) => u.clone(),
         Value::Semver(v) => v.to_string(),
     }
 }
@@ -1435,12 +1491,12 @@ fn as_ip_u32(v: &Value) -> Option<u32> {
     }
 }
 
-/// A url argument's canonical text: a url, or a string read as one (a
-/// string in a `url` position parses at the edge).
-fn as_url(v: &Value) -> Option<String> {
+/// A uri argument: a uri, or a string read as one (a string in a `uri`
+/// position parses at the edge).
+fn as_uri(v: &Value) -> Option<crate::uri::Uri> {
     match v {
-        Value::Url(u) => Some(u.clone()),
-        Value::Str(s) => url::Url::parse(s).ok().map(|u| u.to_string()),
+        Value::Uri(u) => Some((**u).clone()),
+        Value::Str(s) => crate::uri::Uri::parse(s).ok(),
         _ => None,
     }
 }
@@ -1454,12 +1510,13 @@ fn as_oci(v: &Value) -> Option<crate::value::OciRef> {
     }
 }
 
-/// The url `u` with `set` applied (`url.with_host`, ..): a url, or no
-/// value when `u` is not one or `set` refuses.
-fn with_url(u: &Value, set: impl FnOnce(&mut url::Url) -> Option<()>) -> Option<Value> {
-    let mut u = url::Url::parse(&as_url(u)?).ok()?;
+/// The uri `u` with `set` applied (`uri.with_host`, ..), read again so
+/// it is normalized as a parsed one is: a uri, or no value when `u` is
+/// not one or the part does not fit.
+fn with_uri(u: &Value, set: impl FnOnce(&mut crate::uri::Uri) -> Option<()>) -> Option<Value> {
+    let mut u = as_uri(u)?;
     set(&mut u)?;
-    Some(Value::Url(u.to_string()))
+    u.reparse().ok().map(|u| Value::Uri(Box::new(u)))
 }
 
 fn as_ipnet(v: &Value) -> Option<(u32, u8)> {
@@ -1490,7 +1547,7 @@ fn scalar_text(v: &Value) -> Option<String> {
         Value::Int(i) => Some(i.to_string()),
         Value::Float(f) => Some(f.to_string()),
         Value::Bool(b) => Some(b.to_string()),
-        Value::Quantity(_) | Value::Time(_) | Value::Url(_) | Value::Oci(_) | Value::Semver(_) => {
+        Value::Quantity(_) | Value::Time(_) | Value::Uri(_) | Value::Oci(_) | Value::Semver(_) => {
             v.typed_text()
         }
         Value::Ip(_) | Value::IpNet { .. } | Value::IpRange { .. } => {
@@ -1534,13 +1591,31 @@ fn str_slice(s: &str, start: i64, end: Option<i64>) -> Option<Value> {
     Some(Value::Str(chars[start..end].iter().collect()))
 }
 
-/// A URL path or query component's safe characters: alphanumerics and
-/// the unreserved punctuation (RFC 3986), everything else percent-encoded.
+/// A uri component's safe characters (`uri.escape`, a query pair's
+/// parts): alphanumerics and the unreserved punctuation (RFC 3986),
+/// everything else percent-encoded.
 static URL_COMPONENT: &percent_encoding::AsciiSet = &percent_encoding::NON_ALPHANUMERIC
     .remove(b'-')
     .remove(b'_')
     .remove(b'.')
     .remove(b'~');
+
+/// A userinfo part's safe characters: the unreserved and the
+/// sub-delimiters, `:` escaped (it separates the user from the password).
+static USERINFO: &percent_encoding::AsciiSet = &URL_COMPONENT
+    .remove(b'!')
+    .remove(b'$')
+    .remove(b'&')
+    .remove(b'\'')
+    .remove(b'(')
+    .remove(b')')
+    .remove(b'*')
+    .remove(b'+')
+    .remove(b',')
+    .remove(b';')
+    .remove(b'=');
+
+use percent_encoding::utf8_percent_encode;
 
 /// `a` and `b` joined by exactly one `/`, whatever either side already has.
 fn join_slash(a: &str, b: &str) -> String {
@@ -1634,7 +1709,7 @@ mod tests {
             r.packages(),
             [
                 "base64", "hash", "inet", "int", "ip", "json", "list", "oci", "path", "random",
-                "regex", "semver", "str", "time", "toml", "url", "yaml"
+                "regex", "semver", "str", "time", "toml", "uri", "yaml"
             ]
         );
     }
@@ -1734,15 +1809,13 @@ mod tests {
         fn subject(p: &str) -> Option<&str> {
             match p {
                 "str" | "path" | "regex" | "hash" | "base64" | "random" => Some("string"),
-                "inet" | "ip" | "time" | "oci" | "url" | "uri" | "semver" | "list" | "int" => {
-                    Some(p)
-                }
+                "inet" | "ip" | "time" | "oci" | "uri" | "semver" | "list" | "int" => Some(p),
                 _ => None,
             }
         }
         for f in registry().functions().filter(|f| !f.internal) {
             // A component's escape is about the text going into one.
-            let escape = matches!(f.name.as_str(), "url.encode" | "uri.escape");
+            let escape = f.name == "uri.escape";
             if let Some(want) = subject(&f.package).filter(|_| !escape) {
                 // Or a list of them, joined (`path.join`).
                 let first = f.params.first().map(|p| p.ty.as_str());

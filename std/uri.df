@@ -1,0 +1,54 @@
+# URIs: functions about a `uri` (R-134; docs/grammar.md "Functions"). A
+# `uri` is RFC 3986's generic syntax, every scheme alike: `https://h/p`,
+# `postgres://user:pw@host:5432/db`, `git+ssh://git@host/r`, `s3://b/k`,
+# `file:///etc/hosts`, and the forms with no authority,
+# `mailto:ops@example.com`, `tel:+15551234`, `urn:ietf:rfc:3986`. A
+# string where a uri is wanted (a parameter, an attribute, `let u: uri =
+# ".."`) is read as one there, a literal at compile time, and held
+# normalized, so two spellings of one uri are equal. Its parts are
+# fields: `.scheme`, `.user`, `.password` (a secret's when the uri came
+# from one), `.host` (as written; equal by its A-labels), `.port`
+# (absent: the scheme's default), `.path`, `.query` (an object of its
+# pairs) and `.fragment`. A host is printed as written and sent to a
+# provider in its A-labels.
+package uri
+
+#| The uri with `segment` appended to its path, one `/` between them whatever either side has.
+#| example: let endpoint = uri.join(base, "v1/status")
+fn join(u: uri, segment: string) -> uri forwards
+
+#| The uri with its scheme set.
+#| example: let secure = uri.with_scheme(u, "https")
+fn with_scheme(u: uri, scheme: string) -> uri forwards
+
+#| The uri with its user set (escaped as a userinfo is).
+#| example: let as_app = uri.with_user(u, "app")
+fn with_user(u: uri, user: string) -> uri forwards
+
+#| The uri with its password set (escaped as a userinfo is); a secret's makes the uri a secret.
+#| example: let dsn = uri.with_password(db.dsn, db.password)
+fn with_password(u: uri, password: string) -> uri forwards
+
+#| The uri with its host set; a uri with no authority gains one (`mailto:x` with a host is `mailto://h/x`).
+#| example: let canary = uri.with_host(u, "canary.${domain}")
+fn with_host(u: uri, host: string) -> uri forwards
+
+#| The uri with its port set (0 to 65535); the scheme's default port is left out of its text.
+#| example: let direct = uri.with_port(u, 8443)
+fn with_port(u: uri, port: int) -> uri forwards
+
+#| The uri with its path set.
+#| example: let health = uri.with_path(u, "/healthz")
+fn with_path(u: uri, path: string) -> uri forwards
+
+#| The uri with its query set to the object's pairs, each escaped, replacing any it had.
+#| example: let paged = uri.with_query(u, { page: "2" })
+fn with_query(u: uri, query: object) -> uri forwards
+
+#| The uri with its fragment set.
+#| example: let anchor = uri.with_fragment(u, "install")
+fn with_fragment(u: uri, fragment: string) -> uri forwards
+
+#| The text with every character but the unreserved ones (`A-Z a-z 0-9 - . _ ~`) percent-escaped: a path segment's or a query pair's part.
+#| example: let safe = uri.escape(team_name)
+fn escape(text: string) -> string forwards

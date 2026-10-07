@@ -158,3 +158,19 @@ fn a_secret_flows_through_its_content_and_not_through_a_judgment() {
         "E0301: hash.sha256() over a secret",
     );
 }
+
+/// A uri's password is a secret's when it came from one (R-134, R-118):
+/// the uri a secret was written into is secret, and so is its
+/// `.password`; a uri of no secret is public.
+#[test]
+fn a_uris_password_from_a_secret_is_secret() {
+    let r = run("resource leaky.vault v {\n  password = w\n} where pw(p), d = uri.with_password(\"postgres://app@db/x\", p), w = d.password\n\
+                 resource leaky.oops o {\n  password = h\n} where d = uri.with_password(\"postgres://app@db/x\", \"public\"), h = d.password\n")
+        .success();
+    assert!(r.stdout.contains("password = (sensitive)"), "{}", r.stdout);
+    assert!(r.stdout.contains("password = \"public\""), "{}", r.stdout);
+    refused(
+        "resource leaky.oops o {\n  password = w\n} where pw(p), d = uri.with_password(\"postgres://app@db/x\", p), w = d.password\n",
+        "E0304",
+    );
+}

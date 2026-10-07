@@ -2617,6 +2617,14 @@ impl<'u> Lowerer<'u> {
                     .map(|c| self.type_expr_in(&c, name != "enum"))
                     .collect();
                 if args.is_empty() {
+                    // R-134: a uri is RFC 3986's, not a browser's url.
+                    if name == "url" && aliases && self.alias(n, &name).is_none() {
+                        let d = Diagnostic::error(self.span(n), "unknown type url").with_help(
+                            "the type is `uri`, RFC 3986's generic syntax: `let u: uri = \
+                             \"https://example.com\"`",
+                        );
+                        self.diags.push(d);
+                    }
                     match aliases.then(|| self.alias(n, &name)).flatten() {
                         Some(t) => t,
                         None => TypeExpr::Name(name),

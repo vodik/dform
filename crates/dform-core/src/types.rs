@@ -50,7 +50,7 @@ pub enum Ty {
     /// `enum(a, b, ..)`.
     Enum(Vec<String>),
     /// `string`, `int`, `float`, `number` (an int or a float, R-75),
-    /// `bool`, `inet`, `ip`, `url`, `oci`, `regex` (a pattern, not a schema type:
+    /// `bool`, `inet`, `ip`, `uri`, `oci`, `regex` (a pattern, not a schema type:
     /// a function parameter only), the quantities `bytes`, `cpu`,
     /// `duration`, and `time`.
     Scalar(String),
@@ -68,7 +68,7 @@ impl Ty {
         let Some((head, rest)) = s.split_once('(') else {
             return match s {
                 "string" | "int" | "float" | "number" | "bool" | "inet" | "ip" | "iprange"
-                | "bytes" | "cpu" | "duration" | "time" | "url" | "oci" | "semver" | "regex" => {
+                | "bytes" | "cpu" | "duration" | "time" | "uri" | "oci" | "semver" | "regex" => {
                     Ty::Scalar(s.to_string())
                 }
                 _ => Ty::Any,
@@ -174,7 +174,7 @@ fn shown_literal(v: &Value) -> String {
         Value::Bool(b) => format!("the bool {b}"),
         Value::Quantity(q) => format!("the {} {q}", q.dim().name()),
         Value::Time(t) => format!("the time {t}"),
-        Value::Url(u) => format!("the url {u}"),
+        Value::Uri(u) => format!("the uri {u}"),
         Value::Oci(r) => format!("the image reference {r}"),
         Value::Semver(v) => format!("the version {v}"),
         v => crate::partition::fmt_value(v),
@@ -407,10 +407,10 @@ pub fn mismatch(ty: &Ty, t: &Term) -> Option<String> {
                 ("inet", Value::Str(x)) => crate::value::parse_ipnet(x).is_some(),
                 ("ip", Value::Ip(_)) => true,
                 ("ip", Value::Str(x)) => crate::value::ipv4_to_u32(x).is_some(),
-                // A url's text is read as one (`read_as`); a regex pattern
+                // A uri's text is read as one (`read_as`); a regex pattern
                 // stays a string, its text checked.
-                ("url", Value::Url(_)) => true,
-                ("url", Value::Str(x)) => url::Url::parse(x).is_ok(),
+                ("uri", Value::Uri(_)) => true,
+                ("uri", Value::Str(x)) => crate::uri::Uri::parse(x).is_ok(),
                 ("oci", Value::Oci(_)) => true,
                 ("oci", Value::Str(x)) => crate::value::OciRef::parse(x).is_ok(),
                 ("iprange" | "semver", v) => crate::value::read_typed(s, v).is_ok(),
@@ -424,10 +424,9 @@ pub fn mismatch(ty: &Ty, t: &Term) -> Option<String> {
                     format!("is an inet: {x:?} is not a network (`a.b.c.d/n`)")
                 }
                 ("ip", Value::Str(x)) => format!("is an ip: {x:?} is not an address (`a.b.c.d`)"),
-                ("url", Value::Str(x)) => format!(
-                    "is a url: {x:?} is not one ({})",
-                    url::Url::parse(x).unwrap_err()
-                ),
+                ("uri", Value::Str(x)) => {
+                    format!("is a uri: {}", crate::uri::Uri::parse(x).unwrap_err())
+                }
                 ("oci", Value::Str(x)) => {
                     format!("is an oci: {}", crate::value::parse_oci(x).unwrap_err())
                 }
@@ -602,10 +601,9 @@ fn read_as(ty: &Ty, t: Term) -> Term {
                 None => Term::Val(Value::Str(x)),
             }
         }
-        // A string in a url position is a url, parsed at compile time
-        // into its canonical text (the constructor's value).
-        (Ty::Scalar(s), Term::Val(Value::Str(x))) if s == "url" => {
-            Term::Val(crate::value::parse_url(&x).unwrap_or(Value::Str(x)))
+        // A string in a uri position is a uri, parsed at compile time.
+        (Ty::Scalar(s), Term::Val(Value::Str(x))) if s == "uri" => {
+            Term::Val(crate::value::parse_uri(&x).unwrap_or(Value::Str(x)))
         }
         (Ty::Scalar(s), Term::Val(Value::Str(x))) if s == "oci" => {
             Term::Val(crate::value::parse_oci(&x).unwrap_or(Value::Str(x)))

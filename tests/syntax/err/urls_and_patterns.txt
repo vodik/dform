@@ -1,5 +1,0 @@
-tests/syntax/err/urls_and_patterns.df:3:16: `regex.match`'s argument `re` is a regex: "[" is not a valid pattern (regex parse error:
-    [
-    ^
-error: unclosed character class)
-tests/syntax/err/urls_and_patterns.df:8:16: `url.with_scheme`'s argument `u` is a url: "not a url" is not one (relative URL without a base)

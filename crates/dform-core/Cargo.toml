@@ -42,10 +42,14 @@ toml = "1"
 # dform.toml's version requirements (src/project.rs), Cargo's syntax;
 # `semver.*` (std/semver.df).
 semver = "1"
-# `url.*` (std/url.df): a url value is parsed and printed through it.
-url = "2"
-# `url.encode` (std/url.df): percent-encoding, `url`'s own dependency,
-# depended on directly for its `AsciiSet`.
+# `uri` (R-134, std/uri.df): RFC 3986's generic syntax is dform's own
+# (src/uri.rs); a host is compared and sent by its A-labels, UTS 46
+# through `idna` (already a dependency of the HTTP stack's), and held as
+# written in NFC (`unicode-normalization`, idna's own dependency).
+idna = "1"
+unicode-normalization = "0.1"
+# `uri.escape` (std/uri.df): percent-encoding, depended on directly for
+# its `AsciiSet`.
 percent-encoding = "2"
 # `time` and `duration` (R-62): the Temporal model. Zone data is the
 # bundled tzdb (jiff-tzdb), never the host's, so a plan is the same on

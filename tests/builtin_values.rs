@@ -1,4 +1,4 @@
-//! A value type (`oci`, `url`, `inet`, `ip`, `time`, a quantity) given to
+//! A value type (`oci`, `uri`, `inet`, `ip`, `time`, a quantity) given to
 //! a builtin's `string` parameter is its canonical print, as it is in a
 //! string column (After R-133): `not str.contains(c.image, ":")` over an
 //! `oci` image. A null there is a content position (the literal waits);
@@ -31,7 +31,7 @@ const VALUES: &[(&str, &str, &str, &str, &str, &str)] = &[
         "^ghcr[.]io/o/app:1$",
     ),
     (
-        "url",
+        "uri",
         "https://example.com/a",
         "example",
         "http:",

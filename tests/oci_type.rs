@@ -1,4 +1,4 @@
-//! `oci` is a value type like `url` (R-133): an image reference parsed at
+//! `oci` is a value type like `uri` (R-133): an image reference parsed at
 //! the edge (a string where an `oci` is declared; no constructor), `[registry/]repository[:tag][@digest]`, its parts read as
 //! fields, changed by `oci.with_tag`, `oci.with_digest` and
 //! `oci.with_registry`, printed canonically, and its text where a string
@@ -181,7 +181,7 @@ fn oci_parse_is_gone() {
 /// An `oci` where a schema attribute takes a string is its text: the
 /// image field of a workload written from a typed base and a release
 /// (the R-133 "Done when"); an `oci`-typed attribute checks its literal
-/// (and, as a `url`-typed one, keeps its text).
+/// (and, as a `uri`-typed one, keeps its text).
 #[test]
 fn an_oci_in_a_string_attribute_is_its_text() {
     let s = common::Scratch::new("oci-attr");

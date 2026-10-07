@@ -155,6 +155,8 @@ pub fn check_type(t: &TypeExpr) -> Result<(), String> {
     match t {
         TypeExpr::Name(n) => match n.as_str() {
             "int" | "float" | "number" | "string" | "bool" | "symbol" | "addr" | "any" => Ok(()),
+            // R-134: a uri is RFC 3986's, not a browser's url.
+            "url" => Err("unknown type url: the type is `uri` (RFC 3986's generic syntax)".into()),
             n if crate::value::VALUE_TYPES.contains(&n) => Ok(()),
             _ => Err(format!("unknown type {n}")),
         },

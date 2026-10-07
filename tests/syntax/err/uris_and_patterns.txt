@@ -1,0 +1,7 @@
+tests/syntax/err/uris_and_patterns.df:3:16: `regex.match`'s argument `re` is a regex: "[" is not a valid pattern (regex parse error:
+    [
+    ^
+error: unclosed character class)
+tests/syntax/err/uris_and_patterns.df:8:16: `uri.with_scheme`'s argument `u` is a uri: "not a uri" is not a uri: it has no scheme; a uri is `scheme:` and its parts, RFC 3986: `https://host/path`, `postgres://user@host:5432/db`, `mailto:ops@example.com`
+tests/syntax/err/uris_and_patterns.df:9:16: unknown function url.with_scheme
+  help: the type and its package are `uri` (RFC 3986's generic syntax): `uri.with_scheme`; a string where a uri is wanted is read as one, `let u: uri = "https://example.com"`

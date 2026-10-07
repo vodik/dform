@@ -684,7 +684,7 @@ fn kind(v: &Value) -> Option<Ty> {
         Value::Ip(_) => s("ip"),
         Value::Quantity(q) => s(q.dim().name()),
         Value::Time(_) => s("time"),
-        Value::Url(_) => s("url"),
+        Value::Uri(_) => s("uri"),
         Value::Oci(_) => s("oci"),
         Value::Semver(_) => s("semver"),
         Value::IpRange { .. } => s("iprange"),
@@ -714,10 +714,10 @@ fn compatible(a: &Ty, b: &Ty) -> bool {
 }
 
 /// A value type with a canonical print, given as it where a string is
-/// wanted: an `oci`, a `url`, a network or an address, a time, a quantity.
+/// wanted: an `oci`, a `uri`, a network or an address, a time, a quantity.
 fn printed(ty: &Ty) -> bool {
     matches!(ty, Ty::Scalar(s) if matches!(s.as_str(),
-        "oci" | "url" | "inet" | "ip" | "iprange" | "time" | "bytes" | "cpu" | "duration"
+        "oci" | "uri" | "inet" | "ip" | "iprange" | "time" | "bytes" | "cpu" | "duration"
         | "semver"))
 }
 

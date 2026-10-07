@@ -1880,7 +1880,8 @@ pub fn value_to_json(v: &Value) -> serde_json::Value {
         Value::Null { label, .. } => serde_json::Value::String(format!("?{label}")),
         Value::Quantity(q) => serde_json::Value::String(q.to_string()),
         Value::Time(t) => serde_json::Value::String(t.to_string()),
-        Value::Url(u) | Value::Oci(u) => serde_json::Value::String(u.clone()),
+        Value::Uri(u) => serde_json::Value::String(u.to_string()),
+        Value::Oci(u) => serde_json::Value::String(u.clone()),
         Value::Semver(v) => serde_json::Value::String(v.to_string()),
     }
 }
@@ -3801,7 +3802,7 @@ fn eval_func(name: &str, args: &[Term], state: &HashMap<String, Value>) -> Optio
 }
 
 /// `vals` as the parameters of the function `name` take them: a value type
-/// (`oci`, `url`, `inet`, `ip`, `time`, a quantity) where a `string` is
+/// (`oci`, `uri`, `inet`, `ip`, `time`, a quantity) where a `string` is
 /// declared is its canonical text, as it is in a string column (R-133):
 /// `str.contains(c.image, ":")` over an `oci`; a string where a value type
 /// is declared is read as one (R-134: `time.format(cert.not_after, ..)`
@@ -3824,7 +3825,7 @@ fn as_params(name: &str, vals: Vec<Value>) -> Vec<Value> {
                 Some("string"),
                 Value::Quantity(_)
                 | Value::Time(_)
-                | Value::Url(_)
+                | Value::Uri(_)
                 | Value::Oci(_)
                 | Value::Semver(_),
             ) => v.typed_text().map_or(v, Value::Str),

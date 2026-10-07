@@ -67,11 +67,11 @@ pub fn value(v: &Value) -> pb::Value {
         }),
         Value::Ref { typ, name, attr } => Kind::Ref(pb_ref(typ, name, attr)),
         Value::CloudRef { typ, name, attr } => Kind::CloudRef(pb_ref(typ, name, attr)),
-        // A provider reads a quantity, a time or a url as its canonical
-        // text; an attribute's schema renders it before it gets there
-        // (`render`).
-        Value::Quantity(_) | Value::Time(_) | Value::Url(_) | Value::Oci(_) | Value::Semver(_) => {
-            Kind::Str(v.typed_text().unwrap_or_default())
+        // A provider reads a quantity, a time or a uri as its canonical
+        // text, a uri's host in its A-labels (R-134); an attribute's
+        // schema renders it before it gets there (`render`).
+        Value::Quantity(_) | Value::Time(_) | Value::Uri(_) | Value::Oci(_) | Value::Semver(_) => {
+            Kind::Str(v.wire_text().unwrap_or_default())
         }
         Value::Null {
             label,

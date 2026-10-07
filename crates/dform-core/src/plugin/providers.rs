@@ -2252,12 +2252,13 @@ impl Providers {
             Value::CloudRef { typ, name, attr } => self.resolve_cloud_ref(typ, name, attr)?,
             Value::Null { label, class, .. } => self.resolve_null(ctx, label, *class)?,
             // Where the schema renders one, it already has (`render`).
+            // A uri's host in its A-labels: the provider boundary (R-134).
             Value::Quantity(_)
             | Value::Time(_)
-            | Value::Url(_)
+            | Value::Uri(_)
             | Value::Oci(_)
             | Value::Semver(_) => {
-                json!(v.typed_text())
+                json!(v.wire_text())
             }
         })
     }
@@ -3234,8 +3235,8 @@ fn known_json(v: &Value) -> Option<Json> {
             crate::value::u32_to_ipv4(*start),
             crate::value::u32_to_ipv4(*end)
         )),
-        Value::Quantity(_) | Value::Time(_) | Value::Url(_) | Value::Oci(_) | Value::Semver(_) => {
-            json!(v.typed_text())
+        Value::Quantity(_) | Value::Time(_) | Value::Uri(_) | Value::Oci(_) | Value::Semver(_) => {
+            json!(v.wire_text())
         }
         Value::Ref { .. } | Value::CloudRef { .. } | Value::Null { .. } => return None,
     })

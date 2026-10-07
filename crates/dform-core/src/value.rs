@@ -28,14 +28,15 @@ pub enum Value {
     /// A zoned instant (R-62), printed canonically
     /// (`2026-10-02T09:00:00+02:00[Europe/Paris]`).
     Time(crate::time::Time),
-    /// A url (the url ticket): its canonical text, parsed at the edge
-    /// (a string in a `url` position), so two spellings of one
-    /// url are equal and a url never equals a string. `.scheme`, `.host`,
-    /// `.port`, `.path`, `.query`, `.fragment` read its components.
-    Url(String),
+    /// A uri (R-134): RFC 3986's generic syntax, parsed at the edge (a
+    /// string in a `uri` position) and normalized, so two spellings of one
+    /// uri are equal, its host compared by its A-labels; a uri never
+    /// equals a string. `.scheme`, `.user`, `.password`, `.host`, `.port`,
+    /// `.path`, `.query`, `.fragment` read its parts ([`crate::uri::Uri`]).
+    Uri(Box<crate::uri::Uri>),
     /// A container image reference (R-133): its canonical text,
     /// `[registry/]repository[:tag][@digest]`, parsed at the edge
-    /// (a string in an `oci` position) as a url is, so two
+    /// (a string in an `oci` position) as a uri is, so two
     /// spellings of one reference are equal and an `oci` never equals a
     /// string. `.registry`, `.repository`, `.tag`, `.digest` read its
     /// parts ([`OciRef`]).
@@ -205,7 +206,7 @@ impl Value {
         }
     }
 
-    /// The canonical text of a quantity, a time, a url or an image
+    /// The canonical text of a quantity, a time, a uri or an image
     /// reference (`1536Mi`, `2026-10-02T09:00:00+02:00[Europe/Paris]`,
     /// `https://h/p`, `ghcr.io/o/app:1.2`): what `str()`,
     /// interpolation and the plan print where no schema renders it.
@@ -213,9 +214,19 @@ impl Value {
         match self {
             Value::Quantity(q) => Some(q.to_string()),
             Value::Time(t) => Some(t.to_string()),
-            Value::Url(u) | Value::Oci(u) => Some(u.clone()),
+            Value::Uri(u) => Some(u.to_string()),
+            Value::Oci(u) => Some(u.clone()),
             Value::Semver(v) => Some(v.to_string()),
             _ => None,
+        }
+    }
+
+    /// [`Value::typed_text`] as a provider receives it: a uri's host in
+    /// its A-labels (R-134: the provider boundary is IDNA's wire edge).
+    pub fn wire_text(&self) -> Option<String> {
+        match self {
+            Value::Uri(u) => Some(u.ascii()),
+            v => v.typed_text(),
         }
     }
 }
@@ -269,7 +280,7 @@ impl<'de> Deserialize<'de> for Version {
 /// The value types a string is read as where one is wanted (R-31, R-134):
 /// a typed `let`, a parameter, an attribute, an input.
 pub const VALUE_TYPES: &[&str] = &[
-    "inet", "ip", "iprange", "url", "oci", "semver", "time", "bytes", "cpu", "duration",
+    "inet", "ip", "iprange", "uri", "oci", "semver", "time", "bytes", "cpu", "duration",
 ];
 
 /// `v` read as the value type `ty` (one of [`VALUE_TYPES`]): a string
@@ -287,7 +298,7 @@ pub fn read_typed(ty: &str, v: &Value) -> Result<Value, String> {
         ("inet", Value::IpNet { .. })
         | ("ip", Value::Ip(_))
         | ("iprange", Value::IpRange { .. })
-        | ("url", Value::Url(_))
+        | ("uri", Value::Uri(_))
         | ("oci", Value::Oci(_))
         | ("semver", Value::Semver(_))
         | ("time", Value::Time(_)) => Ok(v.clone()),
@@ -301,7 +312,7 @@ pub fn read_typed(ty: &str, v: &Value) -> Result<Value, String> {
         ("iprange", Value::Str(s)) => parse_iprange(s)
             .map(|(start, end)| Value::IpRange { start, end })
             .ok_or_else(|| format!("{s:?} is not a range of addresses (`a.b.c.d-e.f.g.h`)")),
-        ("url", Value::Str(s)) => parse_url(s).map_err(|e| format!("{s:?} is not a url ({e})")),
+        ("uri", Value::Str(s)) => parse_uri(s),
         ("oci", Value::Str(s)) => parse_oci(s),
         ("semver", Value::Str(s)) => Version::parse(s).map(Value::Semver),
         ("time", Value::Str(s)) => crate::time::Time::parse(s).map(Value::Time),
@@ -330,6 +341,7 @@ pub fn parts(v: &Value) -> Option<Value> {
             ("bits".to_string(), Value::Int(i64::from(*prefix))),
         ]))),
         Value::Semver(s) => Some(s.parts()),
+        Value::Uri(u) => Some(uri_parts(u)),
         _ => None,
     }
 }
@@ -341,33 +353,36 @@ pub fn parse_iprange(s: &str) -> Option<(u32, u32)> {
     Some(if a <= b { (a, b) } else { (b, a) })
 }
 
-/// `text` read as a url: its canonical text, or why it is not one.
-pub fn parse_url(text: &str) -> Result<Value, url::ParseError> {
-    url::Url::parse(text).map(|u| Value::Url(u.to_string()))
+/// `text` read as a uri, or why it is not one.
+pub fn parse_uri(text: &str) -> Result<Value, String> {
+    crate::uri::Uri::parse(text).map(|u| Value::Uri(Box::new(u)))
 }
 
-/// A url's components as an object: `scheme`, `host`, `port` (absent: the
-/// scheme's default), `path`, `query` (its pairs), `fragment` (absent:
-/// none). What `.host` on a url and `url.parse` read; no value for a url
-/// without a host (`mailto:x`).
-pub fn url_parts(text: &str) -> Option<Value> {
-    let u = url::Url::parse(text).ok()?;
+/// A uri's parts as an object: `scheme`, `path`, `query` (its pairs, each
+/// unescaped), and `user`, `password`, `host`, `port` (absent: the
+/// scheme's default) and `fragment` where it has them. What `.host` on a
+/// uri reads (R-134).
+pub fn uri_parts(u: &crate::uri::Uri) -> Value {
     let mut m = BTreeMap::new();
-    m.insert("scheme".to_string(), Value::Str(u.scheme().to_string()));
-    m.insert("host".to_string(), Value::Str(u.host_str()?.to_string()));
-    if let Some(port) = u.port() {
-        m.insert("port".to_string(), Value::Int(i64::from(port)));
-    }
-    m.insert("path".to_string(), Value::Str(u.path().to_string()));
+    let mut put = |k: &str, v: Option<Value>| {
+        if let Some(v) = v {
+            m.insert(k.to_string(), v);
+        }
+    };
+    put("scheme", Some(Value::Str(u.scheme.clone())));
+    put("user", u.user.clone().map(Value::Str));
+    put("password", u.password.clone().map(Value::Str));
+    put("host", u.host.clone().map(Value::Str));
+    put("port", u.port.map(|p| Value::Int(i64::from(p))));
+    put("path", Some(Value::Str(u.path.clone())));
     let q = u
         .query_pairs()
-        .map(|(k, v)| (k.into_owned(), Value::Str(v.into_owned())))
+        .into_iter()
+        .map(|(k, v)| (k, Value::Str(v)))
         .collect();
-    m.insert("query".to_string(), Value::Obj(q));
-    if let Some(f) = u.fragment() {
-        m.insert("fragment".to_string(), Value::Str(f.to_string()));
-    }
-    Some(Value::Obj(m))
+    put("query", Some(Value::Obj(q)));
+    put("fragment", u.fragment.clone().map(Value::Str));
+    Value::Obj(m)
 }
 
 /// A container image reference: the OCI distribution reference grammar,

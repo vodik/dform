@@ -298,98 +298,6 @@ d(s) where s = base64.decode("aGVsbG8=")
     assert_eq!(facts(src, "q"), ["q()"]);
 }
 
-/// A `url` literal is canonicalized and checked at compile time (R-31);
-/// `url.join` (a url, R-134), `with_scheme`, `with_host`, `with_port`, `with_path`,
-/// `with_query`, `url.encode`. A url prints as its canonical text, as an
-/// `inet` does; `url.encode` is about strings.
-#[test]
-fn url_functions_evaluate() {
-    let src = r#"let a: url = "https://example.com/a"
-let p: url = "https://h.example.com:8080/x?a=1"
-u(x) where x = a
-j(x) where x = url.join("https://example.com/a", "b")
-sc(x) where x = url.with_scheme("http://h/p", "https")
-ho(x) where x = url.with_host("http://h/p", "other")
-po(x) where x = url.with_port("http://h/p", 8080)
-pa(x) where x = url.with_path("http://h/p", "/q")
-qu(x) where x = url.with_query("http://h/p", { a: "1" })
-en(x) where x = url.encode("a b/c")
-pr(h) where h = p.host
-"#;
-    assert_eq!(facts(src, "u"), [r#"u(https://example.com/a)"#]);
-    assert_eq!(facts(src, "j"), [r#"j(https://example.com/a/b)"#]);
-    assert_eq!(facts(src, "sc"), [r#"sc(https://h/p)"#]);
-    assert_eq!(facts(src, "ho"), [r#"ho(http://other/p)"#]);
-    assert_eq!(facts(src, "po"), [r#"po(http://h:8080/p)"#]);
-    assert_eq!(facts(src, "pa"), [r#"pa(http://h/q)"#]);
-    assert_eq!(facts(src, "qu"), [r#"qu(http://h/p?a=1)"#]);
-    assert_eq!(facts(src, "en"), [r#"en("a%20b%2Fc")"#]);
-    assert_eq!(facts(src, "pr"), [r#"pr("h.example.com")"#]);
-}
-
-/// A url is a value (the url ticket's decisions): two spellings of one
-/// url are equal, a url never equals its string, `.scheme`, `.host`,
-/// `.port`, `.path`, `.query` and `.fragment` read its components, and
-/// JSON carries its canonical text.
-#[test]
-fn a_url_is_a_value() {
-    let src = r#"let shouting: url = "HTTPS://Example.COM:443"
-let plain: url = "https://example.com/"
-let full: url = "http://h.example.com:8080/a/b?x=1#top"
-let bare: url = "https://h/"
-let home: url = "https://h"
-same() where shouting == plain
-text() where plain == "https://example.com/"
-parts(s, h, p, a, q, f) where s = full.scheme, h = full.host, p = full.port, a = full.path, q = full.query.x, f = full.fragment
-noport(p) where p = bare.port
-enc(j) where j = json.encode({ u: home })
-"#;
-    assert_eq!(facts(src, "same"), ["same()"]);
-    assert!(facts(src, "text").is_empty());
-    assert_eq!(
-        facts(src, "parts"),
-        [r#"parts("http", "h.example.com", 8080, "/a/b", "1", "top")"#]
-    );
-    assert!(facts(src, "noport").is_empty());
-    assert_eq!(facts(src, "enc"), [r#"enc("{\"u\":\"https://h/\"}")"#]);
-}
-
-/// A bad url literal in a `url`-typed position is a compile error
-/// (`with_scheme`'s `u`).
-#[test]
-fn a_bad_url_literal_is_a_compile_error() {
-    let e = error("p(x) where x = url.with_scheme(\"not a url\", \"https\")\n");
-    assert!(e.contains("is a url"), "{e}");
-}
-
-/// A schema attribute typed `url` (R-31; the url ticket's "Done when"):
-/// a good literal plans, a bad one is a compile error at the resource.
-#[test]
-fn a_url_typed_attribute_checks_its_literal() {
-    let s = common::Scratch::new("url-attr");
-    s.write(
-        "schema.df",
-        "\ntype_provider(app.thing, \"mock\")\n\
-         type_attr(app.thing, \"link\", \"url\", [])\n",
-    );
-    let run = |body: &str| {
-        s.write("p.df", &format!("\n{body}"));
-        s.run(&common::on(
-            "p.df",
-            &["--provider", "schema.df", "--world", "w.json"],
-            &["plan"],
-        ))
-    };
-    let r = run("resource app.thing t { link = \"https://example.com/a\" }\n").success();
-    assert!(
-        r.stdout.contains("link = \"https://example.com/a\""),
-        "{}",
-        r.stdout
-    );
-    let r = run("resource app.thing t { link = \"nope\" }\n").failure();
-    assert!(r.stderr.contains("is a url"), "{}", r.stderr);
-}
-
 /// `path.join`, `dir`, `base`, `ext`, `rel`, `clean`.
 #[test]
 fn path_functions_evaluate() {
@@ -491,7 +399,7 @@ fn a_constructor_is_an_error_naming_the_typed_position() {
         ("duration(\"P1M\")", "`let d: duration = 30m`"),
         ("bytes(\"1Gi\")", "`let b: bytes ="),
         ("cpu(\"500m\")", "`let c: cpu = 500m`"),
-        ("url(\"https://h\")", "`let u: url ="),
+        ("url(\"https://h\")", "`let u: uri ="),
         ("semver.parse(\"1.2.3\")", "`v.major`"),
         ("time.parse(\"2026-10-02T09:00:00Z\")", "`let t: time ="),
         ("inet.prefix_len(\"10.0.0.0/8\")", "`n.bits`"),

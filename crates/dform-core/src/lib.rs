@@ -52,6 +52,7 @@ pub mod time;
 pub mod timing;
 pub mod transform;
 pub mod types;
+pub mod uri;
 pub mod value;
 pub mod wal;
 pub mod watch;

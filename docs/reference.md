@@ -2669,7 +2669,7 @@ deployment (see "Keyed stacks"); `--set` of one is an error. `--input-file FILE.
 allowed_cidrs(["10.0.0.0/8"]).`, each a normal contribution stated
 where the file states it, like a `set`'s; the plan file records each input file's digest.
 
-Types are `int`, `string`, `bool`, `inet`, `ip`, `iprange`, `url`, `oci`,
+Types are `int`, `string`, `bool`, `inet`, `ip`, `iprange`, `uri`, `oci`,
 `semver`, the quantities `bytes`, `cpu` and `duration`, `time`, `enum(a, b, ...)`, `list(T)`, `set(T)` and objects
 `{ k: T }` (`addr`, `ref(...)` and `any` are unchecked). A quantity is a
 number with its unit, one token (`512Mi`, `1.5Gi`, `500m`, `2`, `1h30m`,
@@ -3293,7 +3293,7 @@ share: the time spent in the mock's calls.
 This is an MVP:
 
 - semi-naive evaluator with hash indexes (see Performance)
-- functions declared in `std/*.df` (docs/grammar.md "Functions"): the prelude's `int`, `float`, `format`, `len`, `to`, `declassify`; `inet.subnet`, `inet.host`, `inet.contains`, `inet.overlaps`, `ip.unspecified`, `str.split`, `str.lower`, `str.upper`, `str.dedent`, `str.trim`, `str.replace`, `str.starts_with`, `str.ends_with`, `str.contains`, `str.pad_left`, `str.pad_right`, `str.slice`, `list.join`, `list.sort`, `list.sort_by`, `list.unique`, `list.flatten`, `list.zip`, `list.min`, `list.max`, `list.sum`, `list.contains`, `list.first`, `list.last`, `time.format`, `time.in_zone`, `regex.match`, `regex.capture`, `regex.replace`, `semver.satisfies`, `oci.pinned`, `oci.with_tag`, `oci.with_digest`, `oci.with_registry`, `hash.sha256`, `base64.encode`, `base64.decode`, `url.join`, `url.with_scheme`, `url.with_host`, `url.with_port`, `url.with_path`, `url.with_query`, `url.encode`, `path.join`, `path.dir`, `path.base`, `path.ext`, `path.rel`, `path.clean`, `json.decode`, `json.encode`, `yaml.decode`, `yaml.encode`, `toml.decode`, `toml.encode`; arithmetic `+ - * / %`; aggregates `collect_*`, `count`, `sum`, `min`, `max`, `any`, `all`, bound in a body (`n = count(x)`)
+- functions declared in `std/*.df` (docs/grammar.md "Functions"): the prelude's `int`, `float`, `format`, `len`, `to`, `declassify`; `inet.subnet`, `inet.host`, `inet.contains`, `inet.overlaps`, `ip.unspecified`, `str.split`, `str.lower`, `str.upper`, `str.dedent`, `str.trim`, `str.replace`, `str.starts_with`, `str.ends_with`, `str.contains`, `str.pad_left`, `str.pad_right`, `str.slice`, `list.join`, `list.sort`, `list.sort_by`, `list.unique`, `list.flatten`, `list.zip`, `list.min`, `list.max`, `list.sum`, `list.contains`, `list.first`, `list.last`, `time.format`, `time.in_zone`, `regex.match`, `regex.capture`, `regex.replace`, `semver.satisfies`, `oci.pinned`, `oci.with_tag`, `oci.with_digest`, `oci.with_registry`, `hash.sha256`, `base64.encode`, `base64.decode`, `uri.join`, `uri.with_scheme`, `uri.with_user`, `uri.with_password`, `uri.with_host`, `uri.with_port`, `uri.with_path`, `uri.with_query`, `uri.with_fragment`, `uri.escape`, `path.join`, `path.dir`, `path.base`, `path.ext`, `path.rel`, `path.clean`, `json.decode`, `json.encode`, `yaml.decode`, `yaml.encode`, `toml.decode`, `toml.encode`; arithmetic `+ - * / %`; aggregates `collect_*`, `count`, `sum`, `min`, `max`, `any`, `all`, bound in a body (`n = count(x)`)
 - list helper predicate: `member(List, Item)` and `member(List, Index, Item)` (Index starts at 0)
 - safe(ish) negation: `not` requires the atom be ground at evaluation time
 
