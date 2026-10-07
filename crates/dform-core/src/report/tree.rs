@@ -852,7 +852,7 @@ impl Surface<'_, '_> {
             .and_then(|i| i.parse::<usize>().ok())
             .and_then(|i| self.rules.get(i));
         let cx = Cx {
-            env: bindings.iter().cloned().collect(),
+            env: bindings.iter().map(|(k, v)| (k.as_str(), v)).collect(),
             rule,
         };
         let mut lines = Vec::new();
@@ -862,12 +862,12 @@ impl Surface<'_, '_> {
             if !names.insert(name.clone()) {
                 continue;
             }
-            if let Some(v) = cx.env.get(&var) {
+            if let Some(v) = cx.env.get(var.as_str()) {
                 lines.push(format!("{name} = {}", cx.show_var(&var, v, redact)));
             }
         }
         for (name, var) in &shown.each {
-            if let Some(v) = cx.env.get(var) {
+            if let Some(v) = cx.env.get(var.as_str()) {
                 lines.push(format!("{name} = {}", cx.show_var(var, v, redact)));
             }
         }
@@ -2606,7 +2606,7 @@ impl Surface<'_, '_> {
                 .and_then(|i| i.parse::<usize>().ok())
                 .and_then(|i| self.rules.get(i));
             let cx = Cx {
-                env: bindings.iter().cloned().collect(),
+                env: bindings.iter().map(|(k, v)| (k.as_str(), v)).collect(),
                 rule,
             };
             let mut names = BTreeSet::new();
@@ -2615,12 +2615,12 @@ impl Surface<'_, '_> {
                 if !names.insert(name.clone()) {
                     continue;
                 }
-                if let Some(v) = cx.env.get(&var) {
+                if let Some(v) = cx.env.get(var.as_str()) {
                     with.push(redact.text(&format!("{name} = {}", cx.show_var(&var, v, redact))));
                 }
             }
             for (name, var) in shown.each {
-                if let Some(v) = cx.env.get(&var) {
+                if let Some(v) = cx.env.get(var.as_str()) {
                     with.push(redact.text(&format!("{name} = {}", cx.show_var(&var, v, redact))));
                 }
             }
@@ -2997,7 +2997,9 @@ fn has_hole(text: &str) -> bool {
 /// One firing's bindings and its lowered rule: what a term of the
 /// statement evaluates against.
 struct Cx<'a> {
-    env: std::collections::HashMap<String, Value>,
+    /// The firing's bindings, borrowed: a firing over a manifest binds
+    /// its documents.
+    env: std::collections::HashMap<&'a str, &'a Value>,
     rule: Option<&'a RuleStmt>,
 }
 
@@ -3006,7 +3008,7 @@ impl Cx<'_> {
     /// over (`r in T`), `T["A"]`; `None` for anything else.
     fn address_of(&self, name: &str) -> Option<String> {
         let var = capitalise(name);
-        let v = self.env.get(&var)?;
+        let v = *self.env.get(var.as_str())?;
         let typ = self.want_type(&var)?;
         match (typ, v) {
             (Value::Str(t), Value::Str(n)) => Some(
@@ -3060,20 +3062,33 @@ impl Cx<'_> {
             let [.., at, doc] = a.args.as_slice() else {
                 return None;
             };
-            let (Some(Value::Str(at)), Some(doc)) = (self.core(at), self.core(doc)) else {
+            let (Some(at), Some(doc)) = (self.bound(at), self.bound(doc)) else {
                 return None;
             };
-            let at = place_in(&at, &doc, v)?;
+            let Value::Str(at) = &*at else {
+                return None;
+            };
+            let at = place_in(at, &doc, v)?;
             let size = serde_json::to_vec(&engine::value_to_json(v)).map_or(0, |b| b.len());
             Some(format!("{at}  ({})", crate::query::size(size)))
         })
+    }
+
+    /// [`Cx::core`], a variable's or a literal's value borrowed.
+    fn bound<'t>(&'t self, t: &'t Term) -> Option<std::borrow::Cow<'t, Value>> {
+        use std::borrow::Cow;
+        match t {
+            Term::Val(v) => Some(Cow::Borrowed(v)),
+            Term::Var(x) => self.env.get(x.as_str()).map(|v| Cow::Borrowed(*v)),
+            t => self.core(t).map(Cow::Owned),
+        }
     }
 
     /// A lowered term's value under the bindings.
     fn core(&self, t: &Term) -> Option<Value> {
         match t {
             Term::Val(v) => Some(v.clone()),
-            Term::Var(x) => self.env.get(x).cloned(),
+            Term::Var(x) => self.env.get(x.as_str()).map(|v| (*v).clone()),
             Term::Func { name, args } => {
                 let args = args
                     .iter()
@@ -3164,7 +3179,7 @@ impl Cx<'_> {
                         .find(|t| t.kind() == IDENT)?;
                     let v = match f.children().next() {
                         Some(v) => self.eval(&v)?,
-                        None => self.env.get(&capitalise(key.text()))?.clone(),
+                        None => (*self.env.get(capitalise(key.text()).as_str())?).clone(),
                     };
                     Some((key.text().to_string(), v))
                 })
@@ -3244,12 +3259,16 @@ impl Cx<'_> {
             let names = names(&segs)?;
             let head = names.first()?;
             if names.len() == 1 {
-                return self.env.get(&capitalise(head)).cloned();
+                return self
+                    .env
+                    .get(capitalise(head).as_str())
+                    .map(|v| (*v).clone());
             }
             // A variable bound to an object: its field.
             if let Some(mut v) = self
                 .env
-                .get(&capitalise(head))
+                .get(capitalise(head).as_str())
+                .copied()
                 .filter(|v| matches!(v, Value::Obj(_)))
             {
                 for k in &names[1..] {
