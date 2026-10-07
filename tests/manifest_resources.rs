@@ -35,7 +35,7 @@ spec:
 ";
 
 /// A `---` stream is the list of its documents (an empty one is none): a
-/// clause walks it, a selector's `[*]` too, and a relation reads a row
+/// clause walks it, a selector's `[_]` too, and a relation reads a row
 /// per document, at the line it starts on. A file of one document is
 /// that document, as it was.
 #[test]
@@ -46,7 +46,7 @@ fn a_stream_of_documents_is_their_list() {
     s.write(
         "p.df",
         "\ninput crd from yaml.decode(io.read(\"crds.yml\"))\n\
-         input named from yaml.decode(io.read(\"crds.yml\"))[*].metadata\n\
+         input named from yaml.decode(io.read(\"crds.yml\"))[_].metadata\n\
          decl crd(apiVersion: string, kind: string, metadata: any, spec: any)\n\
          decl named(name: string)\n\
          decl walked(n: string)\n\

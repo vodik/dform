@@ -258,10 +258,10 @@ export default grammar({
       optional(field('rank', $.rank)),
     ),
 
-    // `.name` and `[*]` steps into a document after `from` (R-39).
+    // `.name` and `[_]` steps into a document after `from` (R-39, R-162).
     selector: $ => repeat1(choice(
       seq(token.immediate('.'), choice($._word, $.string)),
-      seq(token.immediate('['), '*', ']'),
+      seq(token.immediate('['), '_', ']'),
     )),
 
     extern: $ => seq(

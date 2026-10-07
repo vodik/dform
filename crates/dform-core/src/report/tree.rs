@@ -866,6 +866,11 @@ impl Surface<'_, '_> {
                 lines.push(format!("{name} = {}", cx.show_var(&var, v, redact)));
             }
         }
+        for (name, var) in &shown.each {
+            if let Some(v) = cx.env.get(var) {
+                lines.push(format!("{name} = {}", cx.show_var(var, v, redact)));
+            }
+        }
         let mut terms = Vec::new();
         let mut seen = BTreeSet::new();
         for t in &shown.terms {
@@ -2602,6 +2607,11 @@ impl Surface<'_, '_> {
                     with.push(redact.text(&format!("{name} = {}", cx.show_var(&var, v, redact))));
                 }
             }
+            for (name, var) in shown.each {
+                if let Some(v) = cx.env.get(&var) {
+                    with.push(redact.text(&format!("{name} = {}", cx.show_var(&var, v, redact))));
+                }
+            }
         }
         Some(Site {
             at: place,
@@ -2777,6 +2787,9 @@ fn statement_at(
 struct Shown {
     text: String,
     vars: Vec<String>,
+    /// Each `[_]` of a chain (R-162): how `with` names it and its core
+    /// variable (`resolve::each_var`).
+    each: Vec<(String, String)>,
     terms: Vec<SyntaxElement>,
 }
 
@@ -2872,9 +2885,37 @@ impl Shown {
             }
             _ => {}
         }
-        // A chain prints as written; only its index terms are noted.
+        // A chain prints as written; only its index terms are noted, and
+        // a `[_]` by its path: `k8s.deployment[_]`, then `containers[_]`.
         if c.kind() == CHAIN {
             self.text.push_str(&c.text().to_string());
+            let mut segs: Vec<String> = Vec::new();
+            for el in c.children_with_tokens() {
+                match el {
+                    NodeOrToken::Token(t) if t.kind() != DOT && !t.kind().is_trivia() => {
+                        segs.push(t.text().to_string());
+                    }
+                    NodeOrToken::Node(ix) if ix.kind() == INDEX => {
+                        let mut ts = ix.children();
+                        let each = ts.next().and_then(|t| bare_name(&t)).as_deref() == Some("_")
+                            && ts.next().is_none();
+                        if !each {
+                            if let Some(last) = segs.last_mut() {
+                                last.push_str(&ix.text().to_string());
+                            }
+                            continue;
+                        }
+                        let name = match self.each.is_empty() {
+                            true => segs.join("."),
+                            false => segs.last().cloned().unwrap_or_default(),
+                        };
+                        let var = crate::syntax::resolve::each_var(ix.text_range().start().into());
+                        self.each.push((format!("{name}[_]"), var));
+                        segs.clear();
+                    }
+                    _ => {}
+                }
+            }
             for ix in c.children().filter(|x| x.kind() == INDEX) {
                 for t in ix.children() {
                     let mut inner = Shown::default();

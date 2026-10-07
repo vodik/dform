@@ -173,6 +173,9 @@ struct Parser<'a> {
     /// The term being parsed follows `from`: a path after its call is a
     /// selector, not a read of the call (`source_term`).
     selector: bool,
+    /// The chain being parsed is a `from` term's: `[_]` ends it, the
+    /// selector's first step (`source_term`).
+    each_ends: bool,
 }
 
 impl<'a> Parser<'a> {
@@ -188,6 +191,7 @@ impl<'a> Parser<'a> {
             nl_eaten: None,
             stmt_start: 0,
             selector: false,
+            each_ends: false,
         }
     }
 
@@ -231,6 +235,23 @@ impl<'a> Parser<'a> {
 
     fn at(&self, k: SyntaxKind) -> bool {
         self.nth(0) == k
+    }
+
+    /// At `[_]`: every element, a selector's step (R-162).
+    fn at_each(&self) -> bool {
+        self.at(L_BRACKET)
+            && self.raw(1) == IDENT
+            && self.nth_text(1) == "_"
+            && self.raw(2) == R_BRACKET
+    }
+
+    /// At `[*]`, which is no step: an error naming `[_]` (R-162).
+    fn star_step(&mut self) -> P {
+        self.error_here(
+            "expected a term, found `*`: `[*]` is no step, every element is `[_]`".into(),
+            Some("`_` binds each anonymously, as in an atom: `teams[_].services`".into()),
+        );
+        Err(Bail)
     }
 
     fn at_contextual(&self, word: &str) -> bool {
@@ -1719,7 +1740,10 @@ impl<'a> Parser<'a> {
         let cp = self.checkpoint();
         // After `from`, a path after the call is the document's (R-39).
         let selector = std::mem::take(&mut self.selector);
-        self.chain()?;
+        self.each_ends = selector;
+        let chain = self.chain();
+        self.each_ends = false;
+        chain?;
         let mut kind = CHAIN;
         loop {
             if self.at(L_PAREN) && kind != CHAIN {
@@ -1762,14 +1786,17 @@ impl<'a> Parser<'a> {
     }
 
     /// The term after `from`, and a path into the document it is (R-39):
-    /// `toml.decode(io.read("x")).peerings`, `yaml.decode(io.read("x"))[*].items`,
-    /// `d.teams[*].services`.
+    /// `toml.decode(io.read("x")).peerings`, `yaml.decode(io.read("x"))[_].items`,
+    /// `d.teams[_].services`.
     fn source_term(&mut self) -> P {
         self.selector = true;
         let t = self.term();
         self.selector = false;
         t?;
-        if !(self.at(DOT) || (self.at(L_BRACKET) && self.raw(1) == STAR)) {
+        if self.at(L_BRACKET) && self.raw(1) == STAR {
+            return self.star_step();
+        }
+        if !(self.at(DOT) || self.at_each()) {
             return Ok(());
         }
         self.start(SELECTOR);
@@ -1780,10 +1807,12 @@ impl<'a> Parser<'a> {
                 } else {
                     return self.err_expected("a field's name after `.`");
                 }
-            } else if self.at(L_BRACKET) {
+            } else if self.at_each() {
                 self.bump();
-                self.expect(STAR)?;
-                self.expect(R_BRACKET)?;
+                self.bump();
+                self.bump();
+            } else if self.at(L_BRACKET) && self.raw(1) == STAR {
+                return self.star_step();
             } else {
                 break;
             }
@@ -1792,7 +1821,8 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
-    /// `name (.seg | [t, ...])*`; `[*]` ends it (a selector's, `source_term`).
+    /// `name (.seg | [t, ...])*`; in a `from` term `[_]` ends it (a
+    /// selector's, `source_term`).
     fn chain(&mut self) -> P {
         self.start(CHAIN);
         self.bump();
@@ -1807,7 +1837,7 @@ impl<'a> Parser<'a> {
         (self.at(DOT)
             && (self.raw(1).is_word() || self.raw(1) == STRING)
             && !self.on_new_line_at(1))
-            || (self.at(L_BRACKET) && self.raw(1) != STAR)
+            || self.at(L_BRACKET)
     }
 
     /// `(.seg | [t, ...])*`.
@@ -1820,7 +1850,9 @@ impl<'a> Parser<'a> {
                 } else {
                     return self.err_expected("a name after `.`");
                 }
-            } else if self.at(L_BRACKET) && self.raw(1) != STAR {
+            } else if self.at(L_BRACKET) && self.raw(1) == STAR {
+                return self.star_step();
+            } else if self.at(L_BRACKET) && !(self.each_ends && self.at_each()) {
                 self.start(INDEX);
                 self.bump();
                 self.with_nl(false, |p| {

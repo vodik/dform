@@ -2264,6 +2264,10 @@
     "named": false
   },
   {
+    "type": "_",
+    "named": false
+  },
+  {
     "type": "any_resource",
     "named": true
   },

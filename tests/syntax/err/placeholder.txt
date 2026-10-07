@@ -8,7 +8,6 @@ tests/syntax/err/placeholder.df:12:1: `_` in the head of `e`: column 1 has no fi
   help: `_` is a placeholder and is never accessed: name it (`env.p`, `x`)
 tests/syntax/err/placeholder.df:13:18: a resource is written by its name: `_` names nothing; name it, or name it from the clause (`resource T "${n}" { .. } where p(n)`)
 tests/syntax/err/placeholder.df:14:1: a resource is written by its name: `resource m _` names nothing
-tests/syntax/err/placeholder.df:15:1: `compute.vm[_]` is every resource of `compute.vm`: write `set r.tags = .. where r in compute.vm`
 tests/syntax/err/placeholder.df:16:25: `cidr` is given `_`, which has no value
   help: `_` is a placeholder and is never accessed: name it (`env.p`, `x`)
 tests/syntax/err/placeholder.df:19:1: `env` is a value in scope, but a resource's header name is literal: this is the resource env of m; name it otherwise

@@ -355,6 +355,28 @@ and `::` before it in an address a program, `why` or `query` writes are
 errors naming the dot form. State written with `/` addresses is
 pre-release and not migrated.
 
+`[_]` in a path binds each anonymously (R-162): it is the placeholder of
+an atom or a pattern written as a step, so it ranges over every match,
+and each `[_]` is its own. After a type, `k8s.stateful_set[_]` is every
+resource of it, as `w in k8s.stateful_set` is; after a list, every
+element; after an object, every value (`has r.metadata.labels[_]`: some
+label). In a body or a value the path is a read that enumerates
+(`img = k8s.deployment[_].spec.template.spec.containers[_].image`), and
+`v in PATH` binds `v` to each value the path reaches, the value at its
+end not walked again. A `set` is the clause form with a variable per
+`[_]`, so it fires per binding: `set
+k8s.stateful_set[_].spec.template.spec.containers[_].resources.limits =
+{ cpu: 500m, memory: 256Mi } @default` is `set c.resources.limits = ..
+where w in k8s.stateful_set, c in w.spec.template.spec.containers`, and
+over a list it writes the elements there are, by their key (R-69): one
+`[_]` per list, below it fields. `[k]` takes one element by its key as
+before (`containers["api"]`), beside `[_]` or not, and `where` stays for
+a binding that has a name. `why` prints each `[_]`'s binding under
+`with` by its path (`with k8s.stateful_set[_] = k8s.stateful_set db,
+containers[_] = {..}`), and `dform fmt` keeps the path as written. A
+document's selector takes the same step (`..teams[_].services`,
+"Documents"). There is no `*` in a path: `[*]` is an error naming `[_]`.
+
 ### Types
 
 Types are names of the core (`net.vpc`, `aws.vpc`, `k8s.deployment`).
@@ -1456,7 +1478,7 @@ A read is a value: `let net = toml.decode(io.read("data/network.toml"))`,
 then `net.region`, `net.az[0].name`. A YAML file that is a stream of
 documents (`---`, a vendored manifest) is the list of them, an empty
 document none: `d in yaml.decode(io.read("crds.yml"))` walks it,
-`yaml.decode(io.read("crds.yml"))[*]` selects each, and a relation read
+`yaml.decode(io.read("crds.yml"))[_]` selects each, and a relation read
 from it has a row per document, at the line it starts on; a file of one
 document is that document. A decode of a value already in hand
 (`yaml.decode(raw)`, `raw` a `let` of an `io.read`) is the pure function:
@@ -1471,15 +1493,15 @@ source's (R-34; "Inputs and outputs"):
 ```
 input az from toml.decode(io.read("data/network.toml"))                 # its [[az]] tables
 input peering from toml.decode(io.read("data/network.toml")).peerings    # a selection
-input service from yaml.decode(io.read("teams.yaml")).teams[*].services  # every team's
+input service from yaml.decode(io.read("teams.yaml")).teams[_].services  # every team's
 input vlan from vlans                                    # an input, list(vlan)
 ```
 
 A list of objects is a row per object, each field a column by name; a
 whole TOML document is its `[[p]]` tables, by the relation's name (the
 document may hold other relations' too). A selector is a path into the
-document, `.name` a field and `[*]` every element of a list, chained; a
-list at its end is its elements. A column a row lacks is the nearest
+document, `.name` a field and `[_]` every element of a list (or value of
+an object, "Paths"), chained; a list at its end is its elements. A column a row lacks is the nearest
 enclosing object's that has it; else it is an error naming the row, and
 so is a field no column takes and a cell that is not its column's type
 (read to it as an input's, `inputs::check_type`, never `secret`). Rows
@@ -1565,8 +1587,7 @@ part of a pattern. `_.p`, `_[k]`, and `_` as a field's value, a
 function's argument, an interpolation or a comparison's side are errors
 that say to name it. `p(_)` in a head is an error naming the column (it
 has no finite set of values); `resource T _` names
-nothing; `set T[_].p = t` is `set r.p = t where r in T`, and the error prints
-it. A name that starts with `_` (`_x`) is an ordinary name, but for one
+nothing; `[_]` in a path binds each anonymously ("Paths"). A name that starts with `_` (`_x`) is an ordinary name, but for one
 thing: any other variable written once in its rule (header, clause,
 entries and interpolated names together, a `not { }` body once) is an
 error, a typo or a placeholder that should say so (R-2); `_x` opts out.
@@ -2124,6 +2145,7 @@ as it is.
 | `set R.p = t @r where B` (`+=`: `arg_add`) | `arg(T, A, "p", t', r) :- B, reads`                   |
 | `set R.l[k].p = t @r where B` (`l` keyed) | `arg(T, A, "l[]", [k', {p: t'}], r) :- B, reads`, the body's reads of `R`'s attribute `attr_base(..)` |
 | `set c.p = t where .., c in R.l`          | `set R.l[c].p = t`: the key is `c`'s key fields        |
+| `set T[_].l[_].p = t`                     | `set c.p = t where r in T, c in r.l` (R-162)           |
 | `output k: T = t` (`T` a resource type)   | `output k: addr`, and its value                        |
 | `output k = t` (no reads)                 | `output k = t'`                                        |
 | `output k = t where B` (reads, or a body) | `output(k, t') :- B, reads`                            |

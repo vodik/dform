@@ -66,7 +66,7 @@ pub const DOCUMENT: &str = "document";
 /// -at, ..)`.
 pub const VALUE: &str = "value";
 
-/// A table's name with the selector its rows are at: `p|.teams[*].services`.
+/// A table's name with the selector its rows are at: `p|.teams[_].services`.
 pub fn selected(table: &str, selector: &str) -> String {
     match selector.is_empty() {
         true => table.to_string(),
@@ -74,7 +74,8 @@ pub fn selected(table: &str, selector: &str) -> String {
     }
 }
 
-/// One step of a selector (R-39): `.name` a field, `[*]` every element.
+/// One step of a selector (R-39): `.name` a field, `[_]` every element
+/// (R-162).
 #[derive(Debug, Clone, PartialEq)]
 enum Step {
     Field(String),
@@ -85,7 +86,7 @@ fn steps(selector: &str) -> Result<Vec<Step>> {
     let mut out = Vec::new();
     let mut rest = selector;
     while !rest.is_empty() {
-        if let Some(r) = rest.strip_prefix("[*]") {
+        if let Some(r) = rest.strip_prefix("[_]") {
             out.push(Step::Each);
             rest = r;
         } else if let Some(r) = rest.strip_prefix('.') {
@@ -100,8 +101,9 @@ fn steps(selector: &str) -> Result<Vec<Step>> {
 }
 
 /// The rows a selector names in `doc`, each with the objects that enclose
-/// it, innermost last: `.name` takes a field, `[*]` every element, and a
-/// list at the end is its elements (R-39).
+/// it, innermost last: `.name` takes a field, `[_]` every element of a list
+/// or value of an object (R-162), and a list at the end is its elements
+/// (R-39).
 fn select(doc: Value, selector: &str) -> Result<Vec<(Value, Vec<Value>)>> {
     let mut at: Vec<(Value, Vec<Value>)> = vec![(doc, Vec::new())];
     let mut path = String::new();
@@ -120,13 +122,19 @@ fn select(doc: Value, selector: &str) -> Result<Vec<(Value, Vec<Value>)>> {
                 (Step::Each, Value::List(xs)) => {
                     next.extend(xs.into_iter().map(|x| (x, ctx.clone())));
                 }
+                (Step::Each, Value::Obj(m)) => {
+                    next.extend(m.into_values().map(|x| (x, ctx.clone())));
+                }
                 (Step::Field(f), _) => bail!("{} is no object: no field {f}", shown_path(&path)),
-                (Step::Each, _) => bail!("{} is no list: `[*]` takes a list", shown_path(&path)),
+                (Step::Each, _) => bail!(
+                    "{} is no list or object: `[_]` takes each element",
+                    shown_path(&path)
+                ),
             }
         }
         path.push_str(&match &step {
             Step::Field(f) => format!(".{f}"),
-            Step::Each => "[*]".to_string(),
+            Step::Each => "[_]".to_string(),
         });
         at = next;
     }

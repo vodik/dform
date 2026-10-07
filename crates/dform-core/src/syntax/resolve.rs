@@ -38,6 +38,8 @@ use std::collections::{BTreeMap, BTreeSet};
 mod aggregate;
 mod alias;
 mod binding;
+mod each;
+pub use each::each_var;
 mod heads;
 mod membership;
 mod pattern;
@@ -2069,6 +2071,7 @@ impl<'u> Lowerer<'u> {
                 let tv = fresh(&mut rc, "Type");
                 rc.types.insert(lhs.head, var(&tv));
             } else if let Some(rhs) = ts.next().and_then(|t| Chain::of(&t)) {
+                let rhs = self.type_each(&rc, rhs);
                 if let Some(t) = self.chain_type(&rc, &rhs) {
                     // A type under several names (R-115): which one is
                     // the resource's.
@@ -2877,7 +2880,7 @@ impl<'u> Lowerer<'u> {
     /// The rows of `table` a `from` statement `n` reads (R-39): its term a
     /// loader call, `FORMAT(PATH)` (`table_body`), or any other document
     /// value (an input, a `let`, a selection into one), read by the extern
-    /// `table.value.TABLE(+doc, -at, ..)`; and its selector, `.f` and `[*]`
+    /// `table.value.TABLE(+doc, -at, ..)`; and its selector, `.f` and `[_]`
     /// steps into the document, in the table's name (`tables::selected`).
     fn doc_source(
         &mut self,
@@ -3042,12 +3045,12 @@ impl<'u> Lowerer<'u> {
         Err(Skip)
     }
 
-    /// A selector's steps as text: `.teams[*].services`.
+    /// A selector's steps as text: `.teams[_].services`.
     fn selector(&mut self, n: &SyntaxNode) -> L<String> {
         let mut out = String::new();
         for t in tokens(n) {
             match t.kind() {
-                DOT | L_BRACKET | STAR | R_BRACKET => out.push_str(t.text()),
+                DOT | L_BRACKET | R_BRACKET => out.push_str(t.text()),
                 STRING => out.push_str(&self.segment(&t)?),
                 _ => out.push_str(t.text()),
             }
@@ -4437,6 +4440,14 @@ impl<'u> Lowerer<'u> {
     /// written; or a stack input.
     fn set_target(&mut self, rc: &mut Rc, c: &Chain, body: &mut Vec<Lit>, span: Span) -> L<Target> {
         let scope = rc.scope;
+        // `[_]`: a variable per step, the clause form (R-162).
+        let each;
+        let c = if c.ops.iter().any(each::is_each) {
+            each = self.each_target(rc, c, body, span)?;
+            &each
+        } else {
+            c
+        };
         // A stack input, set by name, or a field of an object input by its
         // path (R-54); a field of an input that is a reference is the
         // referenced resource's attribute (`set role.policies` in a module
@@ -4469,7 +4480,7 @@ impl<'u> Lowerer<'u> {
         // An element of a keyed list a variable ranges over: `set c.p = v
         // where c in w.containers` writes `w.containers[c].p` (R-69).
         if let Some((typ, addr, list)) = rc.elems.get(&c.head).cloned()
-            && !c.ops.is_empty()
+            && (!c.ops.is_empty() || c.head.starts_with("_[_]"))
         {
             let mut rest = Vec::new();
             for op in &c.ops {
@@ -4502,32 +4513,6 @@ impl<'u> Lowerer<'u> {
                 k.clone(),
                 own.then(|| format!("resource {path} {}", c.head)),
             ));
-        }
-        // `set T[_].p = t`: every resource of `T` is `r in T` (H-5).
-        if let Some(k) = c.ops.iter().position(|o| {
-            matches!(o, Op::Index(ts, _) if ts.len() == 1
-                && Chain::of(&ts[0]).is_some_and(|x| x.head == "_" && x.is_bare()))
-        }) {
-            let typ: Vec<&str> = std::iter::once(c.head.as_str())
-                .chain(c.ops[..k].iter().filter_map(|o| match o {
-                    Op::Field(f) => Some(f.as_str()),
-                    Op::Index(..) | Op::Keyed(..) => None,
-                }))
-                .collect();
-            let typ = typ.join(".");
-            let path: String = c.ops[k + 1..]
-                .iter()
-                .filter_map(|o| match o {
-                    Op::Field(f) => Some(format!(".{f}")),
-                    Op::Index(..) | Op::Keyed(..) => None,
-                })
-                .collect();
-            return self.error(
-                span,
-                format!(
-                    "`{typ}[_]` is every resource of `{typ}`: write `set r{path} = .. where r in {typ}`"
-                ),
-            );
         }
         let mut pre = Vec::new();
         let res = self.resolve(rc, c, &mut pre)?;
@@ -5314,7 +5299,26 @@ impl<'u> Lowerer<'u> {
         let ts: Vec<SyntaxNode> = terms(n).collect();
         let lhs_node = ts.first().ok_or(Skip)?;
         let any_type = tokens(n).any(|t| t.kind() == RESOURCE_KW);
-        let rhs = ts.get(1).and_then(Chain::of);
+        let rhs = ts.get(1).and_then(Chain::of).map(|c| self.type_each(rc, c));
+        // `v in PATH` with a `[_]` in it binds `v` to each value the path
+        // reaches (R-162): the steps enumerate.
+        if let (Some(c), Some(rhs_node)) = (&rhs, ts.get(1))
+            && c.ops.iter().any(each::is_each)
+        {
+            if lhs_node.kind() == TUPLE {
+                return self.error(
+                    span,
+                    format!(
+                        "`{}` binds each value of a path with `[_]`, one name: `v in {}`",
+                        lhs_node.text(),
+                        rhs_node.text()
+                    ),
+                );
+            }
+            let value = self.bind(false, |l| l.term(rc, rhs_node, Pos::Content, out))?;
+            let item = self.term(rc, lhs_node, Pos::Content, out)?;
+            return Ok(Lit::Eq(item, value));
+        }
         if !any_type && let (Some(c), Some(rhs_node)) = (&rhs, ts.get(1)) {
             // `x in T`, `T` an enum type (R-70): each of its values, in
             // order, as a range is enumerated.

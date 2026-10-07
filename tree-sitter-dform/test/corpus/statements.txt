@@ -1190,3 +1190,63 @@ let l = [ x |
             (identifier)
             (arguments
               (identifier))))))))
+
+================================================================================
+A path binds each anonymously (R-162)
+================================================================================
+
+set k8s.stateful_set[_].spec.template.spec.containers[_].resources.limits = { cpu: 500m } @default
+warn "${img}" where img in k8s.deployment[_].spec.template.spec.containers[_].image
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (set
+    (member_expression
+      (member_expression
+        (index_expression
+          (member_expression
+            (member_expression
+              (member_expression
+                (member_expression
+                  (index_expression
+                    (member_expression
+                      (identifier)
+                      (identifier))
+                    (identifier))
+                  (identifier))
+                (identifier))
+              (identifier))
+            (identifier))
+          (identifier))
+        (identifier))
+      (identifier))
+    (object
+      (object_field
+        (identifier)
+        (quantity)))
+    (rank))
+  (check
+    (string
+      (interpolation
+        (identifier)))
+    (body
+      (in_literal
+        (identifier)
+        (member_expression
+          (index_expression
+            (member_expression
+              (member_expression
+                (member_expression
+                  (member_expression
+                    (index_expression
+                      (member_expression
+                        (identifier)
+                        (identifier))
+                      (identifier))
+                    (identifier))
+                  (identifier))
+                (identifier))
+              (identifier))
+            (identifier))
+          (identifier))))))

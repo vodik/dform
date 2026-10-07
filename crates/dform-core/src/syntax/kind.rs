@@ -145,7 +145,7 @@ pub enum SyntaxKind {
     CALL_CHAIN,
     /// `[t, ...]` after a chain.
     INDEX,
-    /// `(.name | [*])+` after a `from` term: a path into a document (R-39).
+    /// `(.name | [_])+` after a `from` term: a path into a document (R-39).
     SELECTOR,
     /// `where body` after a block: its clause.
     CLAUSE,

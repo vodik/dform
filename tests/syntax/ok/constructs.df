@@ -5,7 +5,7 @@ key region: string = "us-east1"
 input relation: string = "an input named relation"
 input store { backup_days: int = 1 }
 input gke { static_ips: any }
-input seen from yaml.decode(io.read("seen.yaml"))[*].rows
+input seen from yaml.decode(io.read("seen.yaml"))[_].rows
 input peers from csv.decode(io.read("peers.csv"))
 input pinned from yaml.decode(io.read("git+https://github.com/acme/ops/pinned.yaml?ref=main"))
 decl seen(a: string, b: int)

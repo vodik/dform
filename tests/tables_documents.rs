@@ -1,7 +1,7 @@
 //! Documents (R-39, R-155): a read, `io.read(LOCATION)`, and a decode of
 //! one, `yaml.decode(io.read(path))`, `toml`, `json`, `csv`, is a document
 //! value; `input p from TERM` reads a relation's rows out of one by column
-//! name, through a selector (`.name`, `[*]`), out of a read, a `let` or an
+//! name, through a selector (`.name`, `[_]`), out of a read, a `let` or an
 //! input.
 
 mod common;
@@ -41,7 +41,7 @@ fn a_toml_document_holds_several_relations() {
     assert!(r.stdout.contains("net.toml:7"), "{}", r.stdout);
 }
 
-/// A selector is a path into the document: `.name` a field, `[*]` every
+/// A selector is a path into the document: `.name` a field, `[_]` every
 /// element, a list at its end its elements. A column the row lacks is
 /// the nearest enclosing object's; a row's field no column takes, and a
 /// column nothing gives, are errors naming the row.
@@ -55,7 +55,7 @@ fn a_selector_reads_rows_and_their_enclosing_objects() {
     );
     let program = |cols: &str| {
         format!(
-            "\ninput zone from yaml.decode(io.read(\"regions.yaml\")).regions[*].zones\n\
+            "\ninput zone from yaml.decode(io.read(\"regions.yaml\")).regions[_].zones\n\
              decl zone({cols})\nuse fake\n\
              resource net.subnet \"${{r}}-${{z}}\" {{ cidr = \"10.0.0.0/24\" }} where zone(r, z)\n"
         )
@@ -78,11 +78,11 @@ fn a_selector_reads_rows_and_their_enclosing_objects() {
     );
     s.write(
         "p.df",
-        &program("region: string, name: string").replace(".regions[*].zones", ".regions[*].zonez"),
+        &program("region: string, name: string").replace(".regions[_].zones", ".regions[_].zonez"),
     );
     let r = s.run(&["plan", "--why=none", "p.df"]).failure();
     assert!(
-        r.stderr.contains("`.regions[*]` has no field zonez"),
+        r.stderr.contains("`.regions[_]` has no field zonez"),
         "{}",
         r.stderr
     );

@@ -1,0 +1,2 @@
+# `[*]` is no step: every element is `[_]` (R-162).
+input zone from yaml.decode(io.read("regions.yaml")).regions[*].zones

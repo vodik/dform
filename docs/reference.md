@@ -1011,7 +1011,7 @@ use k8s { source = "bin/dform-provider-k8s" }        # an executable
 - A kind its cluster does not serve, the cluster reached (R-126): when
   the program makes a `k8s.custom_resource_definition` whose group and
   kind define it (`spec.group`, `spec.names.kind`, a served
-  `spec.versions[*].name`, or the short name above), the resource waits
+  `spec.versions[_].name`, or the short name above), the resource waits
   on that CRD under `later` (`waits on  k8s.custom_resource_definition
   "middlewares.traefik.io"`); once state has the CRD, dform configures the
   provider again with the kinds it expects (Configure's `kinds`; the
@@ -2657,14 +2657,14 @@ input peering from csv.decode(io.read("data/peerings.csv"))
 input pins from yaml.decode(io.read("git+https://github.com/acme/ops/pins.yaml?ref=env/${env}")) where env != "dev"
 input az from toml.decode(io.read("data/network.toml"))                  # its [[az]] tables
 input link from toml.decode(io.read("data/network.toml")).peerings       # a selection
-input service from yaml.decode(io.read("teams.yaml")).teams[*].services  # every team's
+input service from yaml.decode(io.read("teams.yaml")).teams[_].services  # every team's
 input vlan from vlans                                    # an input, a list of objects
 
 decl peering(env: enum("dev", "stg", "prod"), name: string, peer_network: string)
 decl pins(app: string, image: string)
 ```
 
-A selector is a path into the document: `.name` a field, `[*]` every
+A selector is a path into the document: `.name` a field, `[_]` every
 element of a list, chained; a list at its end is its elements, a row per
 object, and a column a row lacks is taken from the nearest enclosing
 object that has it. A whole TOML document is its `[[p]]` tables by the
