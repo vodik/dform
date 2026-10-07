@@ -114,14 +114,14 @@ fn the_log_has_what_the_checkpoint_does_not() {
     let mapped: Vec<&String> = st["resources"].as_object().unwrap().keys().collect();
     assert_eq!(mapped, ["net.subnet::a", "net.vpc::main"]);
     let r = s.run(&["state", "show", "--from-log", "p.df"]).success();
-    assert!(r.stdout.contains("net.subnet[\"a\"]"), "{}", r.stdout);
+    assert!(r.stdout.contains("net.subnet a "), "{}", r.stdout);
     assert!(
         r.stdout.contains("rebuilt from the log alone"),
         "{}",
         r.stdout
     );
     let r = s.run(&["state", "show", "p.df"]).success();
-    assert!(r.stdout.contains("net.subnet[\"a\"]"), "{}", r.stdout);
+    assert!(r.stdout.contains("net.subnet a "), "{}", r.stdout);
     assert!(
         r.stdout
             .contains("an apply was interrupted: the next apply resumes it"),
