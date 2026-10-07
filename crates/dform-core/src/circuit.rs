@@ -112,8 +112,10 @@ pub struct Circuit {
     nodes: Vec<Node>,
     by_fact: FxHashMap<Fact, NodeId>,
     leaves: BTreeMap<Leaf, NodeId>,
-    /// Per Times node: the rule's variable bindings for that firing.
-    bindings: BTreeMap<NodeId, Vec<(String, Value)>>,
+    /// Per Times node: the rule's variable bindings for that firing,
+    /// shared by the circuit's copies (a firing over a manifest binds its
+    /// documents; the policy pass copies the circuit).
+    bindings: BTreeMap<NodeId, std::sync::Arc<[(String, Value)]>>,
     /// Rule id -> rule text.
     rule_text: BTreeMap<String, String>,
     /// Rule id -> where the rule is written (`diag::place`).
@@ -272,7 +274,7 @@ impl Circuit {
         self.nodes.push(Node::Times(ch));
         let times = self.nodes.len() - 1;
         if !bindings.is_empty() {
-            self.bindings.insert(times, bindings);
+            self.bindings.insert(times, bindings.into());
         }
         times
     }
@@ -320,7 +322,7 @@ impl Circuit {
             },
             Node::Times(ch) => View::Times {
                 children: ch,
-                bindings: self.bindings.get(&id).map(Vec::as_slice).unwrap_or(&[]),
+                bindings: self.bindings.get(&id).map(|b| &b[..]).unwrap_or(&[]),
             },
             Node::Dead => View::Dead,
         }
