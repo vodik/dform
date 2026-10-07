@@ -2,12 +2,15 @@
 //! itself is the built-in ssh provider's (`dform_core::plugin::ssh`, keys
 //! from the agent), wired in with [`wire`].
 //!
+//! `exec` is here for a provider's apply, the one place a command runs
+//! (R-151: no program calls one; the built-in provider only reads).
+//!
 //! TODO(landing, with the built-in ssh provider, `plugin/ssh.rs`): its
-//! russh client is private to its externs (`ssh.read`, `ssh.run` with a
-//! command string). Wiring it here needs from it: a session by host, user
-//! and port with its host-key check; exec with argv (quoted for the remote
-//! shell, which SSH's exec request always goes through) and stdin; SFTP
-//! read and write with a mode; a direct-tcpip channel behind a local
+//! russh client is private to its extern (`ssh.read`, over SFTP). Wiring
+//! it here needs from it: a session by host, user and port with its
+//! host-key check; exec with argv (quoted for the remote shell, which
+//! SSH's exec request always goes through) and stdin; SFTP read and
+//! write with a mode; a direct-tcpip channel behind a local
 //! listener for `forward`. Its "not yet" (no answer within
 //! `CONNECT_TIMEOUT`, refused, no route; a path that does not exist) maps
 //! to `Failure::NotYet`. Then `dform_host::ssh::wire(..)` with an adapter.

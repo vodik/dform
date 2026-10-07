@@ -28,13 +28,12 @@ use super::*;
 pub const ENV_VAR: &str = "env.var";
 
 /// The term calls of a built-in extern, its last column read: `env.var(N)`,
-/// `time.now()`, `memo.first(K, C)`, `ssh.read(H, U, P)`, `ssh.run(H, U, C)`.
-const TERM_CALLS: [&str; 5] = [
+/// `time.now()`, `memo.first(K, C)`, `ssh.read(H, U, P)`.
+const TERM_CALLS: [&str; 4] = [
     ENV_VAR,
     crate::externs::TIME_NOW,
     crate::memo::FIRST,
     crate::plugin::ssh::READ,
-    crate::plugin::ssh::RUN,
 ];
 
 /// A provider's `use` block's setting that is checked, not sent.
@@ -228,6 +227,19 @@ impl Lowerer<'_> {
         pre: &mut Vec<Lit>,
     ) -> Option<L<Term>> {
         let name = self.callee(n)?;
+        if name == "ssh.run" {
+            let d = Diagnostic::error(
+                self.span(n),
+                "`ssh.run` is not a function: a command is a provider's apply",
+            )
+            .with_help(
+                "the ssh provider reads a remote filesystem: `ssh.read(host, user, path)`; \
+                 a file, a package or a unit to manage is a resource of a provider whose \
+                 apply runs what it must",
+            );
+            self.diags.push(d);
+            return Some(Err(Skip));
+        }
         let (head, _) = name.split_once('.')?;
         let b = crate::externs::builtin(head)?;
         if !b.externs().iter().any(|f| f.name == name) {
@@ -263,7 +275,6 @@ impl Lowerer<'_> {
             ENV_VAR => "one argument: the variable's name",
             crate::externs::TIME_NOW => "no argument",
             crate::plugin::ssh::READ => "three arguments: the host, the user and the path",
-            crate::plugin::ssh::RUN => "three arguments: the host, the user and the command",
             _ => "two arguments: the key and the candidate",
         };
         let ins = self.decls.externs[name].len() - 1;

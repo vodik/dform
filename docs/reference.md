@@ -2282,7 +2282,13 @@ provider and needing no `dform.toml` source:
 | `file`   | `file.text(+path, -value: string)`, a path from the project root; the loaders, `yaml(path)` .. ("Documents") | dform |
 | `env`    | `env.var(+name, -value: secret(string))`; `env.var(NAME)` as a term reads it | dform |
 | `time`   | `time.now(-t: time)`, the current time in UTC; `time.now()` as a term reads it | dform |
-| `ssh`    | `ssh.read(+host, +user, +path, -content: secret(string))` over SFTP; `ssh.run(+host, +user, +command, -stdout: string)` over exec; each as a term reads it | dform |
+| `ssh`    | `ssh.read(+host, +user, +path, -content: secret(string))` over SFTP; `ssh.read(HOST, USER, PATH)` as a term reads it | dform |
+
+`ssh` reads a remote filesystem, and only reads: a read is pure, so
+there is no extern that runs a command. A file to manage, a package, a
+unit are resources of a provider whose apply runs what it must; a
+program that calls `ssh.run` is told so ("`ssh.run` is not a function:
+a command is a provider's apply").
 
 `ssh` is an SSH client inside dform, never the `ssh` binary or the
 operator's ssh config. The host is an `ip` or a string, `NAME:PORT` for a
@@ -2319,9 +2325,7 @@ open null, and an apply waits on it ("Timeouts, retries and waiting"),
 asking again until the host answers or the `ssh` provider's `timeout`
 (`[providers] ssh = { timeout = "10m" }`, 60s by default) runs out. An
 authentication failure, a changed host key, a file it may not read and a
-command that exits non-zero (the error names the status and its stderr)
-are errors. `ssh.run`'s stdout is the command's, byte for byte (a
-trailing newline included).
+file that is not UTF-8 text are errors.
 
 ```dform
 use ssh

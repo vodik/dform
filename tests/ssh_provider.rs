@@ -1,7 +1,8 @@
-//! The built-in `ssh` provider (`use ssh`): `ssh.read` over SFTP and
-//! `ssh.run` over exec, against a real sshd each test starts on a free
-//! port with a throwaway host key, and a client key in a scratch `HOME`
-//! (no agent). A host that does not answer yet, and a file that is not
+//! The built-in `ssh` provider (`use ssh`): `ssh.read` over SFTP, against
+//! a real sshd each test starts on a free port with a throwaway host key,
+//! and a client key in a scratch `HOME` (no agent). It only reads: a
+//! program that calls `ssh.run` is told a command is a provider's apply
+//! (R-151). A host that does not answer yet, and a file that is not
 //! there yet, are "not yet": the apply waits (R-81). A host key is
 //! recorded by the first apply and checked after; a changed one is an
 //! error until `dform state forget-host`.
@@ -154,9 +155,9 @@ const CLIENT: u8 = 7;
 const HOST_A: u8 = 1;
 const HOST_B: u8 = 2;
 
-/// A project whose vpc's cidr is what the host prints, and whose secret's
-/// password (sensitive) is the file the host holds, as a cluster's
-/// kubeconfig configures its provider: the client key in its `home/.ssh`.
+/// A project whose secret's password (sensitive) is the file the host
+/// holds, as a cluster's kubeconfig configures its provider: the client
+/// key in its `home/.ssh`.
 fn project(name: &str, port: u16) -> Scratch {
     let s = Scratch::project(name);
     std::fs::create_dir_all(s.path("home/.ssh")).unwrap();
@@ -167,9 +168,7 @@ fn project(name: &str, port: u16) -> Scratch {
         &format!(
             "\nuse fake\nuse ssh\n\n\
              let host = \"127.0.0.1:{port}\"\n\
-             let cidr = ssh.run(host, \"{user}\", \"cat {dir}/cidr\")\n\
              let raw = ssh.read(host, \"{user}\", \"{dir}/k3s.yaml\")\n\
-             resource net.vpc v {{ cidr }}\n\
              resource db.secret kube {{ password = raw }}\n",
             user = user(),
             dir = s.path("remote").display(),
@@ -181,7 +180,6 @@ fn project(name: &str, port: u16) -> Scratch {
             + "type_provider(db.secret, \"fakecloud\")\n\
                type_attr(db.secret, \"password\", \"string\", [\"sensitive\"])\n"),
     );
-    s.write("remote/cidr", "10.7.0.0/16");
     s.write("remote/k3s.yaml", "token: KUBE-SECRET-ONE\n");
     s
 }
@@ -219,17 +217,17 @@ fn state(s: &Scratch) -> serde_json::Value {
     s.json("dform.state/p/state.json")
 }
 
-/// `ssh.run`'s stdout is the vpc's cidr; `ssh.read`'s content never
-/// prints and the plan file holds only its digest. An apply of the plan
-/// file reads it again, and refuses the plan when it changed.
+/// `ssh.read`'s content never prints and the plan file holds only its
+/// digest. An apply of the plan file reads it again, and refuses the plan
+/// when it changed.
 #[test]
-fn reads_a_file_and_runs_a_command() {
+fn reads_a_file() {
     let Some(bin) = sshd_binary() else { return };
     let port = free_port();
-    let s = project("ssh-read-run", port);
+    let s = project("ssh-read", port);
     let _sshd = Sshd::start(&bin, &s, port, HOST_A);
     let r = run(&s, &["plan", "--out", "plan.json", "p.df"]).success();
-    assert!(r.stdout.contains("10.7.0.0/16"), "{}", r.stdout);
+    answered(&r);
     for out in [&r.stdout, &r.stderr] {
         assert!(!out.contains("KUBE-SECRET"), "{out}");
     }
@@ -308,7 +306,7 @@ fn a_host_or_a_file_not_there_yet_is_waited_on() {
     let r = run(&s, &["apply", "p.df"]).failure();
     assert!(r.stderr.contains("waiting on "), "{}", r.stderr);
     // An extern's call as the program writes it (R-111).
-    assert!(r.stderr.contains("ssh.run(\"127.0.0.1:"), "{}", r.stderr);
+    assert!(r.stderr.contains("ssh.read(\"127.0.0.1:"), "{}", r.stderr);
     assert!(r.stderr.contains("waited 1s on "), "{}", r.stderr);
     assert!(r.stderr.contains("still unknown"), "{}", r.stderr);
 
@@ -418,17 +416,36 @@ fn an_authentication_failure_is_an_error() {
     );
 }
 
-/// A command that fails is an error naming its status and its stderr.
+/// The plan `r` printed read the file: the secret is planned, waiting on
+/// nothing.
+fn answered(r: &Run) {
+    assert!(r.stdout.contains("+ db.secret kube"), "{}", r.stdout);
+    assert!(!r.stdout.contains("waits on"), "{}", r.stdout);
+}
+
+/// The provider reads; it runs no command (R-151). A program that calls
+/// `ssh.run` is told where a command belongs, at the call, with no host
+/// contacted.
 #[test]
-fn a_failing_command_is_an_error() {
-    let Some(bin) = sshd_binary() else { return };
-    let port = free_port();
-    let s = project("ssh-run-fails", port);
-    std::fs::remove_file(s.path("remote/cidr")).unwrap();
-    let _sshd = Sshd::start(&bin, &s, port, HOST_A);
+fn ssh_run_is_not_a_function() {
+    let s = project("ssh-run", free_port());
+    let p = s.read("p.df").replace(
+        "let raw = ",
+        "let out = ssh.run(host, \"root\", \"apt-get install -y k3s\")\nlet raw = ",
+    );
+    s.write("p.df", &p);
     let r = run(&s, &["plan", "p.df"]).failure();
-    assert!(r.stderr.contains("exited with status 1"), "{}", r.stderr);
-    assert!(r.stderr.contains("No such file"), "{}", r.stderr);
+    assert!(
+        r.stderr
+            .contains("p.df:6:11: `ssh.run` is not a function: a command is a provider's apply"),
+        "{}",
+        r.stderr
+    );
+    assert!(
+        r.stderr.contains("ssh.read(host, user, path)"),
+        "{}",
+        r.stderr
+    );
 }
 
 /// An OpenSSH ed25519 key with the passphrase `blabla` (russh's own test
@@ -525,7 +542,7 @@ fn a_key_with_a_passphrase_is_used_through_the_agent() {
 
     let sock = agent(&s, &[key(30), unlocked()]);
     let r = run_with(&s, Some(&sock), &["plan", "p.df"]).success();
-    assert!(r.stdout.contains("10.7.0.0/16"), "{}", r.stdout);
+    answered(&r);
 }
 
 /// An agent whose keys the host does not hold: the refusal names each it

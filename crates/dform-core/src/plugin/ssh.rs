@@ -1,11 +1,14 @@
-//! The built-in `ssh` fact provider (`use ssh`): two externs dform
-//! answers itself, over an SSH client in process (russh; never the `ssh`
-//! binary, the operator's ssh config or PATH).
+//! The built-in `ssh` fact provider (`use ssh`): a remote filesystem read,
+//! the one extern dform answers itself, over an SSH client in process
+//! (russh; never the `ssh` binary, the operator's ssh config or PATH).
 //!
 //! ```text
 //! ssh.read(+host, +user, +path, -content: secret(string))   SFTP
-//! ssh.run(+host, +user, +command, -stdout: string)          exec
 //! ```
+//!
+//! A read is pure: it runs no command (R-151). A file to manage, a
+//! package, a unit are resources of a provider whose apply runs what it
+//! must, never a function a program calls.
 //!
 //! `host` is an `ip` or a string, `NAME` or `NAME:PORT` (22 when none).
 //! The key is the operator's, never one in the program, and never asked
@@ -27,7 +30,7 @@
 //! not exist yet (cloud-init still running) are "not yet": the answer's
 //! output column is an open null, which an apply waits on (R-81,
 //! `Externs::not_yet`). An authentication failure, a changed host key, a
-//! command that fails are errors. Every answer is read again each run, as
+//! file that is not UTF-8 text are errors. Every answer is read again each run, as
 //! any extern's is; `memo.first` keeps one where wanted.
 
 use crate::ast::{ExternFn, Program, Stmt, Term};
@@ -35,11 +38,11 @@ use crate::plugin::credentials;
 use crate::state::{KnownHost, State};
 use crate::value::{NullClass, Value};
 use anyhow::{Context, Result, anyhow, bail};
+use russh::Disconnect;
 use russh::client::{self, Handle};
 use russh::keys::agent::AgentIdentity;
 use russh::keys::agent::client::AgentClient;
 use russh::keys::{HashAlg, PrivateKeyWithHashAlg, PublicKeyOrCertificate};
-use russh::{ChannelMsg, Disconnect};
 use russh_sftp::client::SftpSession;
 use russh_sftp::client::error::Error as SftpError;
 use russh_sftp::protocol::StatusCode;
@@ -50,14 +53,11 @@ use std::time::Duration;
 
 /// `ssh.read(+host, +user, +path, -content: secret(string))`.
 pub const READ: &str = "ssh.read";
-/// `ssh.run(+host, +user, +command, -stdout: string)`.
-pub const RUN: &str = "ssh.run";
-
 /// How long one attempt waits for the host to answer and agree a session;
 /// past it the host is "not yet" (an apply asks again within its wait).
 pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// How long a read or a command may take once connected; past it the call
+/// How long a read may take once connected; past it the call
 /// is an error.
 const CALL_TIMEOUT: Duration = Duration::from_secs(60);
 
@@ -87,19 +87,13 @@ impl Ssh {
         }
     }
 
-    /// The answer to `ssh.read` or `ssh.run`; `None` for another extern.
+    /// The answer to `ssh.read`; `None` for another extern.
     pub fn answer(&self, f: &ExternFn, inputs: &[Value]) -> Option<Result<Vec<Vec<Value>>>> {
-        if f.name != READ && f.name != RUN {
+        if f.name != READ {
             return None;
         }
-        let want = || {
-            anyhow!(
-                "{} takes the host (an ip or a string), the user and the {}",
-                f.name,
-                if f.name == READ { "path" } else { "command" }
-            )
-        };
-        let [host, Value::Str(user), Value::Str(arg)] = inputs else {
+        let want = || anyhow!("{READ} takes the host (an ip or a string), the user and the path");
+        let [host, Value::Str(user), Value::Str(path)] = inputs else {
             return Some(Err(want()));
         };
         let host = match host {
@@ -107,11 +101,7 @@ impl Ssh {
             Value::Str(s) => s.clone(),
             _ => return Some(Err(want())),
         };
-        let op = match f.name.as_str() {
-            READ => Op::Read(arg.clone()),
-            _ => Op::Run(arg.clone()),
-        };
-        Some(self.call(&host, user, op).map(|o| {
+        Some(self.call(&host, user, path).map(|o| {
             let out = match o {
                 Outcome::Answered(s) => Value::Str(s),
                 Outcome::NotYet => Value::Null {
@@ -131,7 +121,7 @@ impl Ssh {
         }
     }
 
-    fn call(&self, host: &str, user: &str, op: Op) -> Result<Outcome> {
+    fn call(&self, host: &str, user: &str, path: &str) -> Result<Outcome> {
         let (name, port) = address(host)?;
         let expect = self.known.borrow().get(host).cloned();
         let seen = Arc::new(Mutex::new(None));
@@ -139,10 +129,7 @@ impl Ssh {
             expect,
             seen: seen.clone(),
         };
-        let what = match &op {
-            Op::Read(p) => format!("{READ} {user}@{host}:{p}"),
-            Op::Run(c) => format!("{RUN} {user}@{host} `{c}`"),
-        };
+        let what = format!("{READ} {user}@{host}:{path}");
         let named = self.key.as_deref();
         // On a thread of its own, with a runtime of its own: the caller
         // may be inside another (a controller's).
@@ -152,7 +139,7 @@ impl Ssh {
                     .enable_all()
                     .build()
                     .context("ssh: start a runtime")?
-                    .block_on(session(&name, port, user, host, named, handler, &op))
+                    .block_on(session(&name, port, user, host, named, handler, path))
             })
             .join()
             .unwrap_or_else(|_| Err(anyhow!("ssh: the client panicked")))
@@ -171,11 +158,6 @@ impl Ssh {
         }
         Ok(out)
     }
-}
-
-enum Op {
-    Read(String),
-    Run(String),
 }
 
 /// The key `use ssh { key = "NAME" }` names: a string, the name of an
@@ -227,7 +209,7 @@ fn address(host: &str) -> Result<(String, u16)> {
     }
 }
 
-/// Connect, check the host key, authenticate and do `op`.
+/// Connect, check the host key, authenticate and read `path`.
 async fn session(
     name: &str,
     port: u16,
@@ -235,7 +217,7 @@ async fn session(
     host: &str,
     named: Option<&str>,
     handler: Client,
-    op: &Op,
+    path: &str,
 ) -> Result<Outcome> {
     let config = Arc::new(client::Config {
         inactivity_timeout: Some(CALL_TIMEOUT),
@@ -260,7 +242,7 @@ async fn session(
         Ok(Ok(h)) => h,
     };
     authenticate(&mut h, user, host, named).await?;
-    let out = tokio::time::timeout(CALL_TIMEOUT, run(&h, op))
+    let out = tokio::time::timeout(CALL_TIMEOUT, read(&h, path))
         .await
         .map_err(|_| anyhow!("did not finish within {}s", CALL_TIMEOUT.as_secs()))??;
     let _ = h.disconnect(Disconnect::ByApplication, "", "en").await;
@@ -557,60 +539,24 @@ fn show_key(comment: &str, key: &russh::keys::PublicKey) -> String {
     }
 }
 
-async fn run(h: &Handle<Client>, op: &Op) -> Result<Outcome> {
-    match op {
-        Op::Read(path) => {
-            let ch = h.channel_open_session().await?;
-            ch.request_subsystem(true, "sftp").await?;
-            let sftp = SftpSession::new(ch.into_stream())
-                .await
-                .context("start SFTP")?;
-            let bytes = match sftp.read(path.as_str()).await {
-                Ok(b) => b,
-                Err(SftpError::Status(s)) if s.status_code == StatusCode::NoSuchFile => {
-                    return Ok(Outcome::NotYet);
-                }
-                Err(e) => bail!("read {path}: {e}"),
-            };
-            let _ = sftp.close().await;
-            String::from_utf8(bytes)
-                .map(Outcome::Answered)
-                .map_err(|_| anyhow!("read {path}: not UTF-8 text"))
+/// The file at `path`, over SFTP; one that does not exist is "not yet".
+async fn read(h: &Handle<Client>, path: &str) -> Result<Outcome> {
+    let ch = h.channel_open_session().await?;
+    ch.request_subsystem(true, "sftp").await?;
+    let sftp = SftpSession::new(ch.into_stream())
+        .await
+        .context("start SFTP")?;
+    let bytes = match sftp.read(path).await {
+        Ok(b) => b,
+        Err(SftpError::Status(s)) if s.status_code == StatusCode::NoSuchFile => {
+            return Ok(Outcome::NotYet);
         }
-        Op::Run(command) => {
-            let mut ch = h.channel_open_session().await?;
-            ch.exec(true, command.as_str()).await?;
-            let (mut out, mut err) = (Vec::new(), Vec::new());
-            let mut status = None;
-            let mut signal = None;
-            while let Some(m) = ch.wait().await {
-                match m {
-                    ChannelMsg::Data { data } => out.extend_from_slice(&data),
-                    ChannelMsg::ExtendedData { data, ext: 1 } => err.extend_from_slice(&data),
-                    ChannelMsg::ExitStatus { exit_status } => status = Some(exit_status),
-                    ChannelMsg::ExitSignal { signal_name, .. } => signal = Some(signal_name),
-                    _ => {}
-                }
-            }
-            let stderr = String::from_utf8_lossy(&err);
-            let stderr = stderr.trim();
-            let failed = match (status, signal) {
-                (Some(0), _) => None,
-                (Some(n), _) => Some(format!("exited with status {n}")),
-                (None, Some(s)) => Some(format!("was killed by signal {s:?}")),
-                (None, None) => Some("ended with no exit status".to_string()),
-            };
-            if let Some(f) = failed {
-                match stderr.is_empty() {
-                    true => bail!("the command {f}, with nothing on stderr"),
-                    false => bail!("the command {f}; stderr: {stderr}"),
-                }
-            }
-            String::from_utf8(out)
-                .map(Outcome::Answered)
-                .map_err(|_| anyhow!("its stdout is not UTF-8 text"))
-        }
-    }
+        Err(e) => bail!("read {path}: {e}"),
+    };
+    let _ = sftp.close().await;
+    String::from_utf8(bytes)
+        .map(Outcome::Answered)
+        .map_err(|_| anyhow!("read {path}: not UTF-8 text"))
 }
 
 /// The client's side of the handshake: the host key checked against the

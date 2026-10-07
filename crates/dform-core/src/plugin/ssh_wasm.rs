@@ -11,8 +11,6 @@ use std::collections::BTreeMap;
 
 /// `ssh.read(+host, +user, +path, -content: secret(string))`.
 pub const READ: &str = "ssh.read";
-/// `ssh.run(+host, +user, +command, -stdout: string)`.
-pub const RUN: &str = "ssh.run";
 
 #[derive(Debug, Default)]
 pub struct Ssh;
@@ -29,7 +27,7 @@ impl Ssh {
 
     /// Refused: there is no SSH client in a component.
     pub fn answer(&self, f: &ExternFn, _: &[Value]) -> Option<Result<Vec<Vec<Value>>>> {
-        (f.name == READ || f.name == RUN).then(|| {
+        (f.name == READ).then(|| {
             Err(anyhow!(
                 "{}: no SSH client in a wasm build of dform-core",
                 f.name

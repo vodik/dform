@@ -717,30 +717,19 @@ pub const BUILTINS: &[Builtin] = &[
         in_process: true,
         always: false,
     },
-    // An SSH host's file and command (`plugin::ssh`): answered when the
+    // An SSH host's file (`plugin::ssh`): answered when the
     // host answers, "not yet" (an open null) until then.
     Builtin {
         name: "ssh",
-        externs: &[
-            (
-                crate::plugin::ssh::READ,
-                &[
-                    (true, "host", "any"),
-                    (true, "user", "string"),
-                    (true, "path", "string"),
-                    (false, "content", "secret(string)"),
-                ],
-            ),
-            (
-                crate::plugin::ssh::RUN,
-                &[
-                    (true, "host", "any"),
-                    (true, "user", "string"),
-                    (true, "command", "string"),
-                    (false, "stdout", "string"),
-                ],
-            ),
-        ],
+        externs: &[(
+            crate::plugin::ssh::READ,
+            &[
+                (true, "host", "any"),
+                (true, "user", "string"),
+                (true, "path", "string"),
+                (false, "content", "secret(string)"),
+            ],
+        )],
         in_process: true,
         always: false,
     },
