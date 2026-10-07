@@ -41,6 +41,8 @@ fn a_full_apply_is_a_verifiable_chain() {
             "plan",
             "approval",
             "apply_start",
+            // The first apply records its master (R-163).
+            "master",
             "state",
             "state",
             "action",
@@ -53,12 +55,15 @@ fn a_full_apply_is_a_verifiable_chain() {
             "apply_end"
         ]
     );
-    assert!(es[3]["full"].is_object(), "{}", es[3]);
-    assert!(es[4]["changes"].is_array(), "{}", es[4]);
+    assert!(es[4]["full"].is_object(), "{}", es[4]);
+    assert!(es[5]["changes"].is_array(), "{}", es[5]);
     assert_eq!(es[1]["result"], "not required");
     assert!(es[0]["digest"].as_str().unwrap().starts_with("sha256:"));
     assert_eq!(es[2]["dform"], env!("CARGO_PKG_VERSION"));
-    let es: Vec<serde_json::Value> = es.into_iter().filter(|e| e["kind"] != "state").collect();
+    let es: Vec<serde_json::Value> = es
+        .into_iter()
+        .filter(|e| e["kind"] != "state" && e["kind"] != "master")
+        .collect();
     let actions: Vec<(&str, &str, &str)> = es[3..6]
         .iter()
         .map(|e| {
@@ -88,12 +93,12 @@ fn a_full_apply_is_a_verifiable_chain() {
     let r = mock(&s, &["log", "verify"]).success();
     assert!(
         r.stdout
-            .contains("w.state.audit.jsonl: 13 entries, the chain holds"),
+            .contains("w.state.audit.jsonl: 14 entries, the chain holds"),
         "{}",
         r.stdout
     );
     // The text form, from an entry on.
-    let r = mock(&s, &["log", "--since", "11"]).success();
+    let r = mock(&s, &["log", "--since", "12"]).success();
     let lines: Vec<&str> = r.stdout.lines().collect();
     assert_eq!(lines.len(), 3, "{}", r.stdout);
     assert!(

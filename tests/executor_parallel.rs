@@ -232,6 +232,8 @@ fn any_answer_order_ends_in_the_same_world() {
         // Where the checkpoint is in the log differs by its entries' times.
         let mut st = s.json("w.state.json");
         st.as_object_mut().unwrap().remove("log");
+        // Each scratch deployment has a master of its own (R-163).
+        st.as_object_mut().unwrap().remove("master");
         (w, st)
     };
     let serial = world(None, "1");

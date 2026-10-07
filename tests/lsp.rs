@@ -1302,7 +1302,7 @@ fn an_s3_deployment_is_read_with_credentials() {
         "dform.toml",
         &format!(
             "[project]\nedition = \"2026\"\n\n[defaults]\nbackend = 's3(\"dform-test\", \"lsp/{{stack}}\", \
-             {{endpoint: \"{}\", region: \"us-east-1\"}})'\n",
+             {{endpoint: \"{}\", region: \"us-east-1\"}})'\n\n[secrets]\npassphrase = \"env:DFORM_TEST_PASSPHRASE\"\n",
             server.endpoint
         ),
     );
@@ -1322,6 +1322,7 @@ fn an_s3_deployment_is_read_with_credentials() {
     let creds = [
         ("DFORM_S3_ACCESS_KEY_ID", "fake"),
         ("DFORM_S3_SECRET_ACCESS_KEY", "fake"),
+        ("DFORM_TEST_PASSPHRASE", "lsp"),
     ];
     let dform = |args: &[&str]| {
         let out = common::dform()
