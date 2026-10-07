@@ -5749,6 +5749,19 @@ impl<'u> Lowerer<'u> {
         let Some(f) = crate::functions::get(name).filter(|_| !self.lenient && !self.text) else {
             return Ok(args);
         };
+        // A call takes the arguments its signature declares (R-134: no
+        // function takes any number of values but `format`).
+        let lowering = f.internal || matches!(name, "ref" | "scoped" | "cloud_ref");
+        if !lowering && !f.takes(args.len()) {
+            return self.error(
+                span,
+                format!(
+                    "`{name}` is called with {} arguments: its signature is `{}`",
+                    args.len(),
+                    f.signature
+                ),
+            );
+        }
         let mut out = Vec::with_capacity(args.len());
         for (i, a) in args.into_iter().enumerate() {
             let p = f

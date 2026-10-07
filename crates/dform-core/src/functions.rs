@@ -1196,17 +1196,16 @@ pub const BODIES: &[(&str, Body)] = &[
         )),
         _ => None,
     }),
-    ("path.join", |a| {
-        let mut parts = a.iter();
-        let Value::Str(first) = parts.next()? else {
-            return None;
-        };
-        let mut out = first.clone();
-        for v in parts {
-            let Value::Str(s) = v else { return None };
-            out = join_slash(&out, s);
+    ("path.join", |a| match a {
+        [Value::List(parts)] => {
+            let mut out = String::new();
+            for v in parts {
+                let Value::Str(s) = v else { return None };
+                out = join_slash(&out, s);
+            }
+            Some(Value::Str(out))
         }
-        Some(Value::Str(out))
+        _ => None,
     }),
     ("path.dir", |a| match a {
         [Value::Str(p)] => Some(Value::Str(
@@ -1243,7 +1242,7 @@ pub const BODIES: &[(&str, Body)] = &[
         _ => None,
     }),
     ("path.rel", |a| match a {
-        [Value::Str(from), Value::Str(to)] => rel_path(from, to).map(Value::Str),
+        [Value::Str(p), Value::Str(base)] => rel_path(base, p).map(Value::Str),
         _ => None,
     }),
     ("path.clean", |a| match a {
@@ -1697,7 +1696,8 @@ mod tests {
     }
 
     /// The std audit's rules, checked over every signature std/*.df
-    /// declares where a rule can be read off a signature (R-134).
+    /// declares where a rule can be read off a signature (R-134): (3),
+    /// (5) and (6) below.
     ///
     /// (3) `?` is for a valid input with no answer: a partial function's
     /// summary says when it has no value, and any other function's says
@@ -1719,7 +1719,43 @@ mod tests {
                     "ref" | "scoped" | "cloud_ref" | "declassify"
                 )
         };
+        // (6) Subject first, options last: a package about a type takes
+        // a value of it first (`str.*` a string, `inet.*` a network);
+        // optional parameters come last (`parse` refuses the rest), and
+        // the one variadic is `format`'s values after its template:
+        // `path.join` takes a list, as `list.join` does.
+        fn subject(p: &str) -> Option<&str> {
+            match p {
+                "str" | "path" | "regex" | "hash" | "base64" | "random" => Some("string"),
+                "inet" | "ip" | "time" | "oci" | "url" | "uri" | "semver" | "list" | "int" => {
+                    Some(p)
+                }
+                _ => None,
+            }
+        }
         for f in registry().functions().filter(|f| !f.internal) {
+            // A component's escape is about the text going into one.
+            let escape = matches!(f.name.as_str(), "url.encode" | "uri.escape");
+            if let Some(want) = subject(&f.package).filter(|_| !escape) {
+                // Or a list of them, joined (`path.join`).
+                let first = f.params.first().map(|p| p.ty.as_str());
+                let list = format!("list({want})");
+                assert!(
+                    first == Some(want) || first == Some(list.as_str()),
+                    "{}: a function of the package {} takes its subject, a {want}, first ({}:{})",
+                    f.signature,
+                    f.package,
+                    f.file,
+                    f.line
+                );
+            }
+            assert!(
+                !f.variadic || f.name == "format",
+                "{}: a function takes a list, not any number of values ({}:{})",
+                f.signature,
+                f.file,
+                f.line
+            );
             let judgment = matches!(f.ret.as_str(), "bool" | "int" | "float" | "number");
             if judgment {
                 assert!(

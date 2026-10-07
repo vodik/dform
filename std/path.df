@@ -3,9 +3,9 @@
 # docs/grammar.md "Functions").
 package path
 
-#| The parts joined by `/`, collapsing the slashes that meet.
-#| example: let dest = path.join(root, env, "config.yaml")
-fn join(a: string, b: string, ...) -> string forwards
+#| The parts joined by `/`, collapsing the slashes that meet, as `list.join` joins by its separator.
+#| example: let dest = path.join([root, env, "config.yaml"])
+fn join(parts: list(string)) -> string forwards
 
 #| The path's directory, the part before its last `/` (`"."` for a path with none).
 #| example: let dir = path.dir("config/dform/prod.yaml")
@@ -19,9 +19,9 @@ fn base(p: string) -> string forwards
 #| example: let kind = path.ext("prod.yaml")
 fn ext(p: string) -> string forwards
 
-#| `to`, as a relative path from the directory `from`; no value when one is absolute and the other is not.
-#| example: let rel = path.rel("config/dform", "config/dform/prod.yaml")
-fn rel(from: string, to: string) -> string? forwards
+#| The path relative to the directory `base`; no value when one is absolute and the other is not.
+#| example: let rel = path.rel("config/dform/prod.yaml", "config/dform")
+fn rel(p: string, base: string) -> string? forwards
 
 #| The path with `.` and `..` segments resolved and repeated slashes collapsed.
 #| example: let norm = path.clean("config/../config/./prod.yaml")

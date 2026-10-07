@@ -1879,7 +1879,7 @@ are written bare.
 | `hash`    | `hash.sha256(s)` (a short one is `str.slice(hash.sha256(s), 0, 8)`)       |
 | `base64`  | `base64.encode(s)`, `base64.decode(s)`                                    |
 | `url`     | `url.join(u, segment)`, `url.with_scheme(u, s)`, `url.with_host(u, h)`, `url.with_port(u, p)`, `url.with_path(u, p)`, `url.with_query(u, q)`, `url.encode(s)` |
-| `path`    | `path.join(a, b, ...)`, `path.dir(p)`, `path.base(p)`, `path.ext(p)`, `path.rel(from, to)`, `path.clean(p)` (POSIX slashes, independent of the host) |
+| `path`    | `path.join(parts)`, `path.dir(p)`, `path.base(p)`, `path.ext(p)`, `path.rel(p, base)`, `path.clean(p)` (POSIX slashes, independent of the host) |
 | `json`, `yaml`, `toml` | `.decode(text)`, `.encode(value)`, on a document's text already in hand; the loader (`yaml(path)`, docs/layout.md) stays for reading one |
 
 `random.*` are derived, not drawn: each value is HKDF-SHA256 of the

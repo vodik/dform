@@ -393,11 +393,11 @@ fn a_url_typed_attribute_checks_its_literal() {
 /// `path.join`, `dir`, `base`, `ext`, `rel`, `clean`.
 #[test]
 fn path_functions_evaluate() {
-    let src = r#"j(s) where s = path.join("a", "b", "c.yaml")
+    let src = r#"j(s) where s = path.join(["a", "b/", "/c.yaml"])
 d(s) where s = path.dir("a/b/c.yaml")
 b(s) where s = path.base("a/b/c.yaml")
 e(s) where s = path.ext("c.yaml")
-r(s) where s = path.rel("a/b", "a/b/c/d.yaml")
+r(s) where s = path.rel("a/b/c/d.yaml", "a/b")
 cl(s) where s = path.clean("a/../a/./b.yaml")
 "#;
     assert_eq!(facts(src, "j"), [r#"j("a/b/c.yaml")"#]);
@@ -581,4 +581,17 @@ f(s) where s = format("%s:%s", "a", 1)
         let e = error(&format!("p(x) where x = {call}\n"));
         assert!(e.contains(help), "{call}: {e}");
     }
+}
+
+/// Subject first, options last (R-134 rule 6): `path.join` takes a list
+/// as `list.join` does, and `path.rel` the path first, its base after.
+#[test]
+fn a_functions_subject_comes_first() {
+    let src = r#"j(s) where s = path.join(["etc", "dform", "prod.yaml"])
+r(s) where s = path.rel("/etc/dform/prod.yaml", "/etc")
+"#;
+    assert_eq!(facts(src, "j"), [r#"j("etc/dform/prod.yaml")"#]);
+    assert_eq!(facts(src, "r"), [r#"r("dform/prod.yaml")"#]);
+    let e = error("p(x) where x = path.join(\"a\", \"b\")\n");
+    assert!(e.contains("path.join"), "{e}");
 }
