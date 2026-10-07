@@ -945,7 +945,16 @@ pub fn query(body: &[Lit], facts: &BTreeSet<Atom>) -> Result<Vec<Answer>> {
             store.index(&rel, &key);
         }
     }
-    for a in facts {
+    // Only the relations the body reads: an extern's demand asks this of
+    // every fact of an evaluation, a manifest's documents among them.
+    let read: BTreeSet<&str> = body
+        .iter()
+        .filter_map(|l| match l {
+            Lit::Pos(a) | Lit::Not(a) => Some(a.pred.as_str()),
+            _ => None,
+        })
+        .collect();
+    for a in facts.iter().filter(|a| read.contains(a.pred.as_str())) {
         store.insert(a.clone());
     }
     let head = Atom {
