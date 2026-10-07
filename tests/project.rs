@@ -474,9 +474,8 @@ fn state_show_mv_and_unlock() {
     s.run(&["apply", "net"]).success();
     let r = s.run(&["state", "show", "net"]).success();
     assert!(
-        r.stdout.contains(
-            "address            provider   remote\nnet.vpc[\"shared\"]  fakecloud  shared\n"
-        ),
+        r.stdout
+            .contains("address         provider   remote\nnet.vpc shared  fakecloud  shared\n"),
         "{}",
         r.stdout
     );
@@ -489,14 +488,15 @@ fn state_show_mv_and_unlock() {
     ])
     .success();
     let r = s.run(&["state", "show", "net"]).success();
-    assert!(r.stdout.contains("\nnet.vpc[\"moved\"]  "), "{}", r.stdout);
+    // As the plan prints it (R-111), not the stored `net.vpc["moved"]`.
+    assert!(r.stdout.contains("\nnet.vpc moved  "), "{}", r.stdout);
     // An address as plan prints it names one object; the old spelling is
     // refused.
     let one = r#"net.vpc["moved"]"#;
     let r = s.run(&["state", "show", "net", "--address", one]).success();
     assert_eq!(
         r.stdout,
-        "address           provider   remote\nnet.vpc[\"moved\"]  fakecloud  shared\n"
+        "address        provider   remote\nnet.vpc moved  fakecloud  shared\n"
     );
     let r = s
         .run(&["state", "show", "net", "--address", r#"net.vpc["shared"]"#])

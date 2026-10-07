@@ -40,7 +40,7 @@ tick 1  4 changes
       availability_zone = "us-east-1a"
       cidr_block = "10.0.0.0/24"
       vpc_id = main
-  + aws.subnet private-us-east-1b  shop.df:6
+  + aws.subnet private-us-east-1b  shop.df:6  with n = 1
       availability_zone = "us-east-1b"
       cidr_block = "10.0.1.0/24"
       vpc_id = main

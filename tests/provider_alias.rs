@@ -59,17 +59,14 @@ fn two_names_of_one_provider_apply_each_its_own() {
     let again = s.run(&["plan", "main.df"]).success().stdout;
     assert!(again.contains("is up to date"), "{again}");
     let state = s.run(&["state", "show", "main.df"]).success().stdout;
-    for addr in ["east.vpc[\"a\"]", "west.vpc[\"b\"]", "west.subnet[\"s\"]"] {
+    for addr in ["east.vpc a", "west.vpc b", "west.subnet s"] {
         assert!(state.contains(addr), "{addr}\n{state}");
     }
     let one = s
         .run(&["state", "show", "--address", "west.vpc[\"b\"]", "main.df"])
         .success()
         .stdout;
-    assert!(
-        one.contains("west.vpc[\"b\"]") && !one.contains("east"),
-        "{one}"
-    );
+    assert!(one.contains("west.vpc b") && !one.contains("east"), "{one}");
     // One process per name, each its own world, in the provider's names:
     // a resource of `east` never reaches `west`.
     let east = s.read("dform.state/main/remote.east.json");
@@ -242,7 +239,7 @@ fn one_use_of_a_provider_is_as_before() {
     );
     s.run(&["apply", "-y", "main.df"]).success();
     let state = s.run(&["state", "show", "main.df"]).success().stdout;
-    assert!(state.contains("aws.vpc[\"a\"]"), "{state}");
+    assert!(state.contains("aws.vpc a"), "{state}");
     let config = s
         .run(&["dev", "query", "provider_config", "main.df"])
         .success()

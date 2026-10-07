@@ -3097,10 +3097,6 @@ impl Report {
     }
 }
 
-/// A change's bindings as the default level says them (After R-149
-/// amendment 5): only those whose value its address does not show
-/// (`k3s.agent-3` shows `n = 3`), each value elided as any long one, at
-/// most two and then `…`: `with zone = "us-test-1a", n = 3, …`.
 /// A row's right column, the longest that fits first: the place, the
 /// condition, and (at `full`) the reason; the condition alone last.
 fn both(full: bool, at: String, cond: String, reason: &str) -> Vec<String> {
@@ -3120,11 +3116,16 @@ fn both(full: bool, at: String, cond: String, reason: &str) -> Vec<String> {
     out
 }
 
+/// A change's bindings as the default level says them (After R-149
+/// amendment 5): only those whose value its address does not show as a
+/// whole segment (`k3s.agent-3` shows `n = 3`; `private-us-east-1b` shows
+/// `zone = "us-east-1b"`, not `n = 1`), each value elided as any long one,
+/// at most two and then `…`: `with zone = "us-test-1a", n = 3, …`.
 pub(crate) fn terse(with: &[String], addr: &str) -> Option<String> {
     let shown: Vec<String> = with
         .iter()
         .filter(|b| match b.split_once(" = ") {
-            Some((_, v)) => !addr.contains(v.trim_matches('"')),
+            Some((_, v)) => !shows(addr, v.trim_matches('"')),
             None => true,
         })
         .map(|b| match b.split_once(" = ") {
@@ -3137,6 +3138,17 @@ pub(crate) fn terse(with: &[String], addr: &str) -> Option<String> {
         out.push_str(", …");
     }
     (!out.is_empty()).then(|| format!("with {out}"))
+}
+
+/// Whether `addr` shows `v` whole: `v` in it with no letter or digit
+/// either side, so a segment (`3` of `agent-3`, `us-east-1b` of
+/// `private-us-east-1b`) and not a part of one (`1` of `1b`).
+fn shows(addr: &str, v: &str) -> bool {
+    let word = |c: Option<char>| c.is_some_and(char::is_alphanumeric);
+    !v.is_empty()
+        && addr.match_indices(v).any(|(i, _)| {
+            !word(addr[..i].chars().next_back()) && !word(addr[i + v.len()..].chars().next())
+        })
 }
 
 /// A delete, of the object or of a deposed one.
@@ -4369,6 +4381,25 @@ fn write_line(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// After R-23: a binding is left out when its value is a whole
+    /// segment of the address, not a part of one (`n = 1` is not shown
+    /// by `private-us-east-1b`).
+    #[test]
+    fn a_binding_is_hidden_by_a_whole_segment_of_the_address() {
+        let with = |b: &[&str]| b.iter().map(|b| b.to_string()).collect::<Vec<_>>();
+        let zone = with(&["zone = \"us-east-1b\"", "n = 1"]);
+        assert_eq!(
+            terse(&zone, "aws.subnet private-us-east-1b").as_deref(),
+            Some("with n = 1")
+        );
+        assert_eq!(terse(&with(&["n = 3"]), "k3s.agent-3"), None);
+        assert_eq!(
+            terse(&with(&["n = 3"]), "k3s.agent-31"),
+            Some("with n = 3".into())
+        );
+        assert_eq!(terse(&with(&["n = 0"]), "net.subnet a[0]"), None);
+    }
 
     /// After R-149: a run that refuses prints a deny as the plan's `!`
     /// line, its bindings `key = value` in the site column aligned across

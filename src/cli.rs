@@ -50,7 +50,7 @@ fn launch() -> &'static dyn plugin::Launch {
         .expect("internal: cli::main sets the providers' backend")
 }
 
-/// The command line as typed (README "Commands"). `resolve` turns it into
+/// The command line as typed (docs/reference.md). `resolve` turns it into
 /// one run, [`Cli`]: the target's files, its key, the project's state.
 #[derive(Parser, Debug, Clone)]
 #[command(name = "dform")]
@@ -244,8 +244,8 @@ enum Command {
     },
     /// Serve the language server protocol on stdin and stdout: diagnostics
     /// of the selected environment, a contributors hover and docs at
-    /// point, schema completion, signature help (README "Language
-    /// server").
+    /// point, schema completion, signature help (docs/reference.md,
+    /// "Language server").
     Lsp,
     /// The completion scripts' helper: candidates for the next word.
     #[command(name = "__complete", hide = true)]
@@ -260,8 +260,8 @@ enum Command {
 /// R-111): `-q`, the default, `-v`, `-vv`; `--why=LEVEL` by name.
 #[derive(clap::Args, Debug, Clone)]
 struct Ladder {
-    /// Quiet: the bare diff, addresses and values, laid out as before the
-    /// plan was grouped by tick (`--why=none`).
+    /// Quiet: the bare diff in apply order, each change by its full
+    /// address with its values, no site or binding (`--why=none`).
     #[arg(short = 'q', long = "quiet", conflicts_with_all = ["verbose", "why"])]
     quiet: bool,
     /// Say how: `-v` adds the deriving statement's bindings, the
@@ -3262,7 +3262,7 @@ fn run_with(
             let inputs = inputs
                 .clone()
                 .ok_or_else(|| anyhow::anyhow!("internal: no plan inputs"))?;
-            // Approvals (README "Approvals"): a token verifies against the
+            // Approvals (docs/reference.md, "Approvals"): a token verifies against the
             // stack's trust root (loaded once), for this plan's digest and
             // this deployment, by an approver `approver_allowed` admits
             // when the program restricts them.
@@ -6663,14 +6663,16 @@ fn state_show(
         if live.is_none() && deposed.is_none() {
             bail!("stack {deployment} has no object at {a}");
         }
-        live.into_iter().for_each(|e| push(a.to_string(), false, e));
+        live.into_iter()
+            .for_each(|e| push(report::address(a), false, e));
         deposed
             .into_iter()
-            .for_each(|e| push(a.to_string(), true, e));
+            .for_each(|e| push(report::address(a), true, e));
         print!("{}", objects.render(o));
         return Ok(());
     }
-    let addr = |k: &String| state::parse_key(k).map_or(k.clone(), |a| a.to_string());
+    // As the plan prints it (R-111); the stored form is the state file's.
+    let addr = |k: &String| state::parse_key(k).map_or(k.clone(), |a| report::address(&a));
     st.resources
         .iter()
         .for_each(|(k, e)| push(addr(k), false, e));

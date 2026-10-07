@@ -10,7 +10,10 @@ introduction; `docs/grammar.md` is the language.
 - rules: derive desired resources
 - constraints: enforce production invariants
 
-This repo currently uses a **fake backend** (no AWS/GCP/Azure) so we can iterate on language + semantics.
+Three providers are real: Kubernetes, OVH and Postgres (`docs/providers/`;
+"Providers are processes; the mock plays schema files" below). The
+examples run on the fake cloud and the AWS- and Google-shaped mocks built
+into dform, with no credentials.
 
 New here? Start with the tour: `examples/tour/stacks/tour.df` is a tutorial
 read top to bottom, from what Terraform does to what it cannot express,
@@ -1104,7 +1107,7 @@ front, `net.vpc edge.left.vpc`, a value referring to it by the path
 alone, `main.vpc`. The full address is the source term that names it,
 `T["A"]` (`A` the path, a copy's scope included: `n.x`, `edge.left.vpc`), an
 attribute of it `.path` after it: the plan file, `--json`, state, `plan
--q`'s apply order, `state show` and `dev graph` print it. Errors,
+-q`'s apply order and `dev graph` print it. `state show`, errors,
 `why`, `apply`'s progress lines and the audit log's retries say the
 printed one (`apply net.subnet a: ..`, `waiting on db.postgres
 d.endpoint`), and a document dform's own read has not answered yet is

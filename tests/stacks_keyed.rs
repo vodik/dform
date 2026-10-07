@@ -620,7 +620,7 @@ fn state_show_needs_the_key_not_the_other_inputs() {
         .success();
     let r = s.run(&["state", "show", "app", "env=prod"]).success();
     assert!(
-        r.stdout.contains("\nnet.vpc[\"main\"]  fakecloud  main\n"),
+        r.stdout.contains("\nnet.vpc main  fakecloud  main\n"),
         "{}",
         r.stdout
     );
