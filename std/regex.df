@@ -10,8 +10,8 @@ fn match(text: string, re: regex) -> bool
 
 #| The `n`th capture group (0 the whole match) of the pattern's first match in the text; no value when it does not match or has no such group.
 #| example: let (repo, tag) = (regex.capture(image, "^(.+):([^:]+)$", 1), regex.capture(image, "^(.+):([^:]+)$", 2))
-fn capture(text: string, re: regex, n: int) -> string?
+fn capture(text: string, re: regex, n: int) -> string? forwards
 
 #| The text with every match of the pattern replaced by `with` (`$1` for its first capture group).
 #| example: let host = regex.replace(name, "[^a-z0-9-]", "-")
-fn replace(text: string, re: regex, with: string) -> string
+fn replace(text: string, re: regex, with: string) -> string forwards

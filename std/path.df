@@ -5,24 +5,24 @@ package path
 
 #| The parts joined by `/`, collapsing the slashes that meet.
 #| example: let dest = path.join(root, env, "config.yaml")
-fn join(a: string, b: string, ...) -> string
+fn join(a: string, b: string, ...) -> string forwards
 
 #| The path's directory, the part before its last `/` (`"."` for a path with none).
 #| example: let dir = path.dir("config/dform/prod.yaml")
-fn dir(p: string) -> string
+fn dir(p: string) -> string forwards
 
 #| The path's last component, after its last `/`.
 #| example: let name = path.base("config/dform/prod.yaml")
-fn base(p: string) -> string
+fn base(p: string) -> string forwards
 
 #| The base name's extension, from its last `.` (empty for none).
 #| example: let kind = path.ext("prod.yaml")
-fn ext(p: string) -> string
+fn ext(p: string) -> string forwards
 
 #| `to`, as a relative path from the directory `from`; no value when one is absolute and the other is not.
 #| example: let rel = path.rel("config/dform", "config/dform/prod.yaml")
-fn rel(from: string, to: string) -> string?
+fn rel(from: string, to: string) -> string? forwards
 
 #| The path with `.` and `..` segments resolved and repeated slashes collapsed.
 #| example: let norm = path.clean("config/../config/./prod.yaml")
-fn clean(p: string) -> string
+fn clean(p: string) -> string forwards

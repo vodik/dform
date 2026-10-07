@@ -132,3 +132,29 @@ fn a_secret_input_refinement_does_not_print_it() {
     );
     assert!(!r.stderr.contains("hunter2"), "{}", r.stderr);
 }
+
+/// `forwards` by content (R-134 rule 5): an encoding, a `min`, a slice
+/// carries a secret to a sensitive place as the secret itself does; a
+/// judgment of one (`str.starts_with`, a digest) inspects it.
+#[test]
+fn a_secret_flows_through_its_content_and_not_through_a_judgment() {
+    let r = run(
+        "resource leaky.vault v {\n  password = e\n} where pw(p), e = base64.encode(p)\n\
+                 resource leaky.vault w {\n  password = m\n} where pw(p), m = list.min([p, p])\n\
+                 resource leaky.vault x {\n  password = s\n} where pw(p), s = str.slice(p, 0, 2)\n",
+    )
+    .success();
+    assert!(r.stdout.contains("password = (sensitive)"), "{}", r.stdout);
+    refused(
+        "resource leaky.oops v {\n  password = e\n} where pw(p), e = base64.encode(p)\n",
+        "E0304",
+    );
+    refused(
+        "deny \"x\" where pw(p), str.starts_with(p, \"h\")\n",
+        "E0301",
+    );
+    refused(
+        "n(d) where pw(p), d = hash.sha256(p)\n",
+        "E0301: hash.sha256() over a secret",
+    );
+}

@@ -3,4 +3,4 @@ package int
 
 #| The integers from `lo` up to but not including `hi`, `step` apart (down when `step` is negative); an error when `step` is 0. `i in lo..hi` enumerates `int.range(lo, hi, 1)`.
 #| example: let even = int.range(0, 10, 2)
-fn range(lo: int, hi: int, step: int) -> list(int)
+fn range(lo: int, hi: int, step: int) -> list(int) forwards

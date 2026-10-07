@@ -1702,9 +1702,38 @@ mod tests {
     /// (3) `?` is for a valid input with no answer: a partial function's
     /// summary says when it has no value, and any other function's says
     /// none (what it does not take is an error, not a none).
+    ///
+    /// (5) `forwards` by content: a judgment of a value (a function to
+    /// `bool`, a number, a measure) does not forward a secret, it inspects
+    /// it (E0301); a function whose result is its arguments' content
+    /// (`min`, `sort`, `slice`, an encoder, a `with_*`) forwards. The
+    /// derivations (`random.*`, `hash.sha256`) and the lowering's own
+    /// forms make values of their own.
     #[test]
     fn std_follows_the_audits_rules() {
+        let derives = |f: &Function| {
+            f.package == "random"
+                || f.name == "hash.sha256"
+                || matches!(
+                    f.name.as_str(),
+                    "ref" | "scoped" | "cloud_ref" | "declassify"
+                )
+        };
         for f in registry().functions().filter(|f| !f.internal) {
+            let judgment = matches!(f.ret.as_str(), "bool" | "int" | "float" | "number");
+            if judgment {
+                assert!(
+                    !f.forwards,
+                    "{}: a judgment of a value does not forward it ({}:{})",
+                    f.signature, f.file, f.line
+                );
+            } else if !derives(f) {
+                assert!(
+                    f.forwards,
+                    "{}: a function of its arguments' content forwards ({}:{})",
+                    f.signature, f.file, f.line
+                );
+            }
             let says = f.summary.contains("no value");
             assert_eq!(
                 f.partial, says,

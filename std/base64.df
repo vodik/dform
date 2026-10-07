@@ -1,12 +1,12 @@
 # Base64: functions about a `string`'s standard (RFC 4648, padded)
-# base64 text (docs/grammar.md "Functions"). A secret may flow in; the
-# result is inspected like any other (the secrets pass, E0301).
+# base64 text (docs/grammar.md "Functions"). An encoding carries its
+# text's content: a secret's encoding is a secret (`forwards`).
 package base64
 
 #| The text's base64.
 #| example: let wrapped = base64.encode(key)
-fn encode(text: string) -> string
+fn encode(text: string) -> string forwards
 
 #| The text base64 decodes to; no value for text that is not valid base64, or whose bytes are not UTF-8.
 #| example: let key = base64.decode(wrapped)
-fn decode(text: string) -> string?
+fn decode(text: string) -> string? forwards
