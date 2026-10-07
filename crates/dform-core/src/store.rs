@@ -147,7 +147,9 @@ pub trait Store: Send + Sync {
     }
 
     /// Append to the object at `key` what `line` makes of its current
-    /// content, without losing a concurrent append.
+    /// content, without losing a concurrent append. `line` is given the
+    /// content, or (a store that appends in place) at least its last
+    /// [`TAIL_LINES`] lines.
     fn append(&self, key: &str, line: &mut dyn FnMut(&[u8]) -> Vec<u8>) -> Result<()> {
         append(self, key, line)
     }
@@ -510,6 +512,10 @@ pub struct LocalStore {
     /// The lock files this store holds locked, by key: dropping one
     /// unlocks it.
     held: Mutex<BTreeMap<String, std::fs::File>>,
+    /// Per key appended to, its length and its last lines as this store
+    /// last wrote or read them: the next append that finds the file that
+    /// long reads nothing.
+    tails: Mutex<BTreeMap<String, (u64, Vec<u8>)>>,
 }
 
 impl LocalStore {
@@ -525,6 +531,7 @@ impl LocalStore {
             dir,
             prefix,
             held: Mutex::new(BTreeMap::new()),
+            tails: Mutex::new(BTreeMap::new()),
         }
     }
 
@@ -791,9 +798,12 @@ impl Store for LocalStore {
 
     /// The file is locked (`flock`) while it is read and written, so two
     /// processes appending (a `plan --out` beside an apply) do not fork an
-    /// audit log's chain; and synced before the lock is let go.
+    /// audit log's chain; and synced before the lock is let go. Only its
+    /// last lines are read, and not even those when it is as long as this
+    /// store's last append left it (R-146): an apply's appends cost what
+    /// they write, not the log's length.
     fn append(&self, key: &str, line: &mut dyn FnMut(&[u8]) -> Vec<u8>) -> Result<()> {
-        use std::io::{Read, Seek, Write};
+        use std::io::Write;
         let path = self.path(key);
         LocalStore::mkdir(&path)?;
         let mut f = std::fs::OpenOptions::new()
@@ -804,18 +814,84 @@ impl Store for LocalStore {
             .with_context(|| format!("open {}", path.display()))?;
         f.lock()
             .with_context(|| format!("lock {}", path.display()))?;
-        let mut text = Vec::new();
-        f.seek(std::io::SeekFrom::Start(0))?;
-        f.read_to_end(&mut text)
-            .with_context(|| format!("read {}", path.display()))?;
-        f.write_all(&line(&text))
+        let len = f
+            .metadata()
+            .with_context(|| format!("stat {}", path.display()))?
+            .len();
+        let mut tails = self.tails.lock().expect("tails");
+        let tail = match tails.remove(key) {
+            Some((at, tail)) if at == len => tail,
+            _ => read_tail(&mut f, len).with_context(|| format!("read {}", path.display()))?,
+        };
+        let add = line(&tail);
+        f.write_all(&add)
             .with_context(|| format!("write {}", path.display()))?;
         // Durable before it returns: the log is the state's (`wal`).
         f.sync_data()
             .with_context(|| format!("sync {}", path.display()))?;
+        let mut tail = tail;
+        tail.extend_from_slice(&add);
+        let keep = last_lines(&tail, TAIL_LINES);
+        tails.insert(
+            key.to_string(),
+            (len + add.len() as u64, tail[keep..].to_vec()),
+        );
         f.unlock()?;
         Ok(())
     }
+}
+
+/// How many of an object's last lines an append in place is given
+/// ([`Store::append`]): the last entry, and the one before it when the
+/// last is a line a crash cut short.
+pub const TAIL_LINES: usize = 2;
+
+/// Where in `bytes` its last `n` non-empty lines start (0 when it has no
+/// more).
+fn last_lines(bytes: &[u8], n: usize) -> usize {
+    let mut seen = 0;
+    let mut end = bytes.len();
+    while end > 0 {
+        let start = bytes[..end]
+            .iter()
+            .rposition(|b| *b == b'\n')
+            .map_or(0, |i| i + 1);
+        if bytes[start..end].iter().any(|b| !b.is_ascii_whitespace()) {
+            seen += 1;
+            if seen == n {
+                return start;
+            }
+        }
+        end = start.saturating_sub(1);
+        if start == 0 {
+            break;
+        }
+    }
+    0
+}
+
+/// The end of file `f` (`len` bytes long) from the start of its last
+/// [`TAIL_LINES`] lines, read backwards in blocks.
+fn read_tail(f: &mut std::fs::File, len: u64) -> std::io::Result<Vec<u8>> {
+    use std::io::{Read, Seek, SeekFrom};
+    const BLOCK: u64 = 64 * 1024;
+    let mut from = len;
+    let mut tail: Vec<u8> = Vec::new();
+    while from > 0 {
+        let start = from.saturating_sub(BLOCK);
+        let mut block = vec![0; (from - start) as usize];
+        f.seek(SeekFrom::Start(start))?;
+        f.read_exact(&mut block)?;
+        block.extend_from_slice(&tail);
+        tail = block;
+        from = start;
+        // A line is whole once a newline before it is in hand.
+        let at = last_lines(&tail, TAIL_LINES);
+        if at > 0 {
+            return Ok(tail[at..].to_vec());
+        }
+    }
+    Ok(tail)
 }
 
 /// Write `bytes` to `path` whole (R-138): a temporary file beside it
@@ -1804,6 +1880,40 @@ impl Drop for Guard {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An append in place is given the file's last lines, never the
+    /// whole of it (R-146): from memory when the file is as this store
+    /// left it, else read from the end; what another writer (another
+    /// store on the same file) appended is seen.
+    #[test]
+    fn an_append_reads_the_last_lines_not_the_log() {
+        let dir = std::env::temp_dir().join(format!("dform-store-tail-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let a = LocalStore::beside(&dir.join(STATE));
+        let b = LocalStore::beside(&dir.join(STATE));
+        let mut given = Vec::new();
+        for n in 0..200 {
+            let store = if n % 50 == 49 { &b } else { &a };
+            store
+                .append("log", &mut |text| {
+                    given.push(text.len());
+                    let last = String::from_utf8_lossy(text)
+                        .lines()
+                        .last()
+                        .map(|l| l.trim().parse::<usize>().unwrap());
+                    assert_eq!(last, (n > 0).then(|| n - 1), "append {n}");
+                    // Long lines: more than one block apart.
+                    format!("{n}{}\n", " ".repeat(if n % 7 == 0 { 70_000 } else { 10 }))
+                        .into_bytes()
+                })
+                .unwrap();
+        }
+        let whole = std::fs::metadata(a.path("log")).unwrap().len() as usize;
+        assert!(whole > 1_000_000);
+        // At most two lines' worth, however long the log.
+        assert!(given.iter().all(|g| *g <= 2 * 70_100), "{given:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     fn times(ms: u64) -> LeaseTimes {
         LeaseTimes {

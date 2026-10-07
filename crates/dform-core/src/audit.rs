@@ -165,17 +165,27 @@ impl Log {
     pub fn append(&self, kind: &str, fields: Json) -> Result<Pos> {
         let mut written = String::new();
         let mut at = Pos::default();
+        // `text` is the log, or its last lines (`store::TAIL_LINES`).
         let mut line = |text: &[u8]| {
             let text = String::from_utf8_lossy(text);
-            let (seq, prev) = match text.lines().rev().find(|l| !l.trim().is_empty()) {
+            let mut lines = text.lines().rev().filter(|l| !l.trim().is_empty());
+            let seq_of = |l: &str| {
+                serde_json::from_str::<Json>(l)
+                    .ok()
+                    .and_then(|e| Some((e["seq"].as_u64()?, e)))
+            };
+            let (seq, prev) = match lines.next() {
                 None => (1, String::new()),
-                Some(last) => match serde_json::from_str::<Json>(last) {
-                    Ok(e) => (
-                        e["seq"].as_u64().unwrap_or(0) + 1,
-                        e["hash"].as_str().unwrap_or_default().to_string(),
-                    ),
-                    Err(_) => (
-                        text.lines().filter(|l| !l.trim().is_empty()).count() as u64 + 1,
+                Some(last) => match seq_of(last) {
+                    Some((seq, e)) => (seq + 1, e["hash"].as_str().unwrap_or_default().to_string()),
+                    // A line a crash cut short counts as an entry.
+                    None => (
+                        match lines.next().and_then(seq_of) {
+                            Some((seq, _)) => seq + 2,
+                            None => {
+                                text.lines().filter(|l| !l.trim().is_empty()).count() as u64 + 1
+                            }
+                        },
                         format!("sha256:{}", crate::approval::sha256_hex(last.as_bytes())),
                     ),
                 },
