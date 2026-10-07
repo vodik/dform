@@ -195,7 +195,7 @@ fn a_tick_that_adds_an_address_asks_again() {
         "{}",
         said[1]
     );
-    assert!(!said[!2].contains("apply: complete"), "{}", said[2]);
+    assert!(!said[2].contains("apply: complete"), "{}", said[2]);
     assert!(s.read("w.json").contains("connect-orders.db.fake"));
 }
 

@@ -113,7 +113,7 @@ fn apply_asks_again_for_what_waited_on_the_provider() {
         "{}",
         said[1]
     );
-    assert!(!said[!2].contains("apply: complete"), "{}", said[2]);
+    assert!(!said[2].contains("apply: complete"), "{}", said[2]);
     assert!(s.read("w.json").contains("k8s.namespace"));
 }
 
