@@ -115,12 +115,25 @@ fn main() -> std::process::ExitCode {
   `Vec` list, a map map, anything else obj (`Option<T>` is T's);
   `ty = "ref(net.vpc)"` says otherwise. Field flags: `required`,
   `computed`, `id`, `sensitive`, `force_new`, `optional_computed`,
-  `nullable`; `list_key = "name"`. On the struct: `type` (required),
-  `replace`, `retry`. A computed field is an `Option` with
+  `nullable`, `write_only` (the API takes it and never answers it: a
+  password; dform keeps its digest in state and a changed one is a
+  change, R-106), `name_like`; `list_key = "name"`. On the struct: `type`
+  (required), `replace`, `retry`. A computed field is an `Option` with
   `#[serde(default)]`: the engine's desired document does not have it.
-- `Lifecycle` is the four calls. Plan is not written: the SDK diffs
-  leaf by leaf with the schema, a change to a `force_new` path replaces,
-  a missing `required` attribute refuses. Import is a read.
+  An `optional_computed` one is answered as computed (dform compares it
+  only where the program writes it), so leave it out of what Read
+  answers when unset: `skip_serializing_if = "Option::is_none"`.
+- `Lifecycle` is the four calls, and `check`, a refusal of a document
+  the provider cannot apply as configured (Postgres refuses to manage the
+  role it connects as), called by Plan once the provider is configured
+  and by Apply before it changes anything. Plan is not written: the SDK
+  diffs leaf by leaf with the schema, a change to a `force_new` path
+  replaces, a missing `required` attribute refuses. Import is a read.
+- `Provider::configure` gets the program's `use NAME { .. }` settings,
+  each secret revealed into them, `{}` when the program writes none.
+- `Typed::example::<R>(create, update, required)` gives `dform provider
+  check` documents of the provider's own types to run its resource
+  checks with.
 - Create, update and delete get a `Progress`: `progress.status("BUILD")`
   each time the object's status as the API gives it changes (a poll that
   saw a new one), `progress.message(..)` for the log. dform prints the
@@ -138,7 +151,7 @@ fn main() -> std::process::ExitCode {
 
 Not yet in the typed layer: externs (Query), refinements on secret paths
 (an Apply with assertions is refused saying so), the `managed`
-capability, schema docs from `///`, and `examples` for `provider check`.
+capability, and schema docs from `///`.
 A provider that needs them implements `Handler` itself.
 
 ## Two transports, one source

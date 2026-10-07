@@ -22,7 +22,7 @@ use dform_core::plugin::{pb, wire};
 use dform_core::schema::Schema;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
-use serde_json::{Map, Value as Json};
+use serde_json::{Map, Value as Json, json};
 use std::collections::BTreeMap;
 use std::sync::Mutex;
 
@@ -48,6 +48,16 @@ impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Error::Refused(m) | Error::MaybeApplied(m) => f.write_str(m),
+        }
+    }
+}
+
+impl Error {
+    /// The message, after `at` (`plan postgres.role["x"]`).
+    pub fn at(self, at: &str) -> Error {
+        match self {
+            Error::Refused(m) => Error::Refused(format!("{at}: {m}")),
+            Error::MaybeApplied(m) => Error::MaybeApplied(format!("{at}: {m}")),
         }
     }
 }
@@ -93,9 +103,10 @@ pub trait Provider: Sized + Send + 'static {
     /// Its build, for the handshake.
     const VERSION: &'static str = "0.0.0";
     /// Configure from the provider block's settings (a program's
-    /// `use NAME { .. }`; the engine's own keys beside them):
-    /// the provider, and the account its credentials reach when it can
-    /// tell.
+    /// `use NAME { .. }`, a secret among them revealed; `{}` when the
+    /// program configures it with none, the engine's own keys never
+    /// among them): the provider, and the account its credentials reach
+    /// when it can tell.
     fn configure(settings: &Json) -> Result<(Self, Option<String>)>;
 }
 
@@ -140,6 +151,15 @@ pub trait Lifecycle<P: Provider>: Resource {
     fn update(p: &P, remote: &str, prior: Self, desired: Self, progress: &Progress)
     -> Result<Self>;
     fn delete(p: &P, remote: &str, progress: &Progress) -> Result<()>;
+    /// Refuse a desired document the provider cannot apply as configured
+    /// (a role it connects as, to be rotated), before anything changes:
+    /// called by Plan once the provider is configured, and by Apply before
+    /// a create, an update or a replace. `desired` is the protocol's
+    /// document: a value not known yet is its marker (`{"$null": ..}`).
+    fn check(p: &P, desired: &Json) -> Result<()> {
+        let _ = (p, desired);
+        Ok(())
+    }
 }
 
 /// An object as the protocol has it: configured and computed.
@@ -164,6 +184,7 @@ trait Kind<P>: Send + Sync {
         progress: &Progress,
     ) -> Result<Json>;
     fn delete(&self, p: &P, remote: &str, progress: &Progress) -> Result<()>;
+    fn check(&self, p: &P, desired: &Json) -> Result<()>;
 }
 
 struct K<R>(std::marker::PhantomData<fn() -> R>);
@@ -213,6 +234,10 @@ impl<P: Provider, R: Lifecycle<P> + 'static> Kind<P> for K<R> {
     fn delete(&self, p: &P, remote: &str, progress: &Progress) -> Result<()> {
         R::delete(p, remote, progress)
     }
+
+    fn check(&self, p: &P, desired: &Json) -> Result<()> {
+        R::check(p, desired)
+    }
 }
 
 /// The [`Handler`] a typed provider is.
@@ -220,6 +245,7 @@ pub struct Typed<P: Provider> {
     kinds: BTreeMap<&'static str, Box<dyn Kind<P>>>,
     facts: String,
     schema: Schema,
+    examples: Vec<pb::Example>,
     provider: Mutex<Option<P>>,
 }
 
@@ -235,6 +261,7 @@ impl<P: Provider> Typed<P> {
             kinds: BTreeMap::new(),
             facts: String::new(),
             schema: Schema::default(),
+            examples: Vec::new(),
             provider: Mutex::new(None),
         }
     }
@@ -251,6 +278,22 @@ impl<P: Provider> Typed<P> {
         ));
         self.schema = Schema::parse(&self.facts, P::NAME)
             .unwrap_or_else(|e| panic!("the derived schema of {} does not parse: {e:#}", R::TYPE));
+        self
+    }
+
+    /// A document of `R` for `dform provider check` (its Schema's
+    /// `examples`): `create` makes one, `update` is it changed in place,
+    /// and `required` a path `create` sets that Plan refuses it without
+    /// (empty for none). The first example is the object the Apply checks
+    /// create, update, replace and delete; each Plan check takes the first
+    /// that has what it checks.
+    pub fn example<R: Resource>(mut self, create: Json, update: Json, required: &str) -> Typed<P> {
+        self.examples.push(pb::Example {
+            r#type: R::TYPE.to_string(),
+            create: Some(wire::doc(&create)),
+            update: Some(wire::doc(&update)),
+            required: required.to_string(),
+        });
         self
     }
 
@@ -277,14 +320,15 @@ impl<P: Provider> Typed<P> {
         }
     }
 
-    /// `j`'s attributes split by the schema: computed, else configured.
-    /// An absent (`null`) one is neither.
+    /// `j`'s attributes split by the schema: computed (an Optional+Computed
+    /// one too: the engine compares it only where the program sets it),
+    /// else configured. An absent (`null`) one is neither.
     fn split(&self, typ: &str, j: Json) -> Object {
         let computed: Vec<String> = self
             .schema
             .attrs
             .iter()
-            .filter(|((t, _), s)| t == typ && s.has("computed"))
+            .filter(|((t, _), s)| t == typ && (s.has("computed") || s.has("optional_computed")))
             .map(|((_, p), _)| p.clone())
             .collect();
         let (mut attrs, mut comp) = (Map::new(), Map::new());
@@ -313,7 +357,7 @@ impl<P: Provider> Typed<P> {
             typ: r.r#type.clone(),
             name: r.name.clone(),
         };
-        self.kind(&addr.typ)?;
+        let k = self.kind(&addr.typ)?;
         if let Some(d) = &desired {
             for ((t, path), spec) in &self.schema.attrs {
                 if t == &addr.typ
@@ -324,6 +368,12 @@ impl<P: Provider> Typed<P> {
                         "plan {addr}: required attribute {path} is not set"
                     )));
                 }
+            }
+            // A provider configured later (from a tick's output) checks at
+            // its Apply.
+            let p = self.provider.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(p) = p.as_ref() {
+                k.check(p, d).map_err(|e| e.at(&format!("plan {addr}")))?;
             }
         }
         let changes =
@@ -375,8 +425,12 @@ impl<P: Provider> Typed<P> {
                 .ok_or_else(|| Error::Refused(format!("{} {remote:?} does not exist", r.r#type)))
         };
         let (remote, obj) = self.with(|p| match op {
-            pb::Op::Create => k.create(p, desired, &r.idempotency_key, progress),
+            pb::Op::Create => {
+                k.check(p, &desired)?;
+                k.create(p, desired, &r.idempotency_key, progress)
+            }
             pb::Op::Update | pb::Op::Adopt => {
+                k.check(p, &desired)?;
                 let prior = found(p, &r.remote)?;
                 let obj = k.update(p, &r.remote, prior, desired, progress)?;
                 Ok((r.remote.clone(), obj))
@@ -386,6 +440,7 @@ impl<P: Provider> Typed<P> {
                 Ok((String::new(), Json::Null))
             }
             pb::Op::Replace => {
+                k.check(p, &desired)?;
                 if !r.create_first {
                     k.delete(p, &r.remote, progress)?;
                 }
@@ -420,13 +475,14 @@ impl<P: Provider> Typed<P> {
                 if config.get("deferred") == Some(&Json::Bool(true)) {
                     return Ok(Reply::Configure(pb::ConfigureResponse::default()));
                 }
-                let settings = config.get("settings").cloned().unwrap_or(config);
+                let settings = config.get("settings").cloned().unwrap_or_else(|| json!({}));
                 let (p, account) = P::configure(&settings)?;
                 *self.provider.lock().unwrap_or_else(|e| e.into_inner()) = Some(p);
                 Reply::Configure(pb::ConfigureResponse { account })
             }
             Call::Schema(r) => Reply::Schema(pb::SchemaResponse {
                 facts: wire::schema_facts(&self.schema, &r).map_err(Error::from)?,
+                examples: self.examples.clone(),
                 ..pb::SchemaResponse::default()
             }),
             Call::Query(r) => {

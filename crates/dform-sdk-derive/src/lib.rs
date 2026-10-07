@@ -17,14 +17,15 @@
 //! bool, `Vec` list, a map map, anything else obj; `Option<T>` is T's), or
 //! `ty = ".."` (`ty = "ref(net.vpc)"`). Flags are the field's: `required`,
 //! `computed`, `id`, `sensitive`, `force_new`, `optional_computed`,
-//! `nullable`. `list_key = "a,b"` is a `type_list_key`; the struct's
+//! `nullable`, `write_only` (R-106: the API takes it and never answers
+//! it; state keeps its digest), `name_like`. `list_key = "a,b"` is a `type_list_key`; the struct's
 //! `replace` a `type_replace`, its `retry` a `type_retry`.
 
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::{Data, DeriveInput, Fields, LitInt, LitStr, Type, parse_macro_input};
 
-const FLAGS: [&str; 7] = [
+const FLAGS: [&str; 9] = [
     "required",
     "computed",
     "id",
@@ -32,6 +33,8 @@ const FLAGS: [&str; 7] = [
     "force_new",
     "optional_computed",
     "nullable",
+    "write_only",
+    "name_like",
 ];
 
 fn ty_of(t: &Type) -> String {

@@ -248,3 +248,143 @@ fn a_create_says_how_it_goes_on_the_apply_sink() {
         "{said:?}"
     );
 }
+
+/// A key: its secret write-only, its size the API's when not written,
+/// and the provider's own key not one it manages.
+#[derive(Resource, Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[dform(type = "acme.key")]
+struct Key {
+    #[dform(required, force_new)]
+    name: String,
+    #[dform(sensitive, write_only)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    secret: Option<String>,
+    #[dform(optional_computed)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    size: Option<i64>,
+    #[dform(computed, id)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    id: Option<String>,
+}
+
+impl Lifecycle<Acme> for Key {
+    fn read(_: &Acme, remote: &str) -> Result<Option<Key>> {
+        Ok(Some(Key {
+            name: remote.to_string(),
+            secret: None,
+            size: Some(2048),
+            id: Some(remote.to_string()),
+        }))
+    }
+    fn create(p: &Acme, desired: Key, _: &str, _: &Progress) -> Result<(String, Key)> {
+        let k = Key::read(p, &desired.name)?.unwrap();
+        Ok((desired.name, k))
+    }
+    fn update(p: &Acme, remote: &str, _: Key, _: Key, _: &Progress) -> Result<Key> {
+        Ok(Key::read(p, remote)?.unwrap())
+    }
+    fn delete(_: &Acme, _: &str, _: &Progress) -> Result<()> {
+        Ok(())
+    }
+    fn check(_: &Acme, desired: &Json) -> Result<()> {
+        match desired["name"].as_str() {
+            Some("own") => Err(dform_sdk::typed::Error::Refused(
+                "name: \"own\" is the provider's own key".into(),
+            )),
+            _ => Ok(()),
+        }
+    }
+}
+
+/// The derive's `write_only`; an Optional+Computed attribute answered
+/// as computed (the engine compares it where the program sets it); the
+/// examples `provider check` runs with; a lifecycle's `check` refusing
+/// at Plan, after the address; and Configure's settings `{}` when the
+/// program writes none, never the engine's own keys.
+#[test]
+fn write_only_optional_computed_examples_and_check() {
+    let h = Typed::<Acme>::new().resource::<Key>().example::<Key>(
+        json!({"name": "a"}),
+        json!({"name": "a", "size": 4096}),
+        "name",
+    );
+    assert!(
+        h.facts()
+            .contains(r#"type_attr("acme.key", "secret", "string", ["sensitive", "write_only"])"#),
+        "{}",
+        h.facts()
+    );
+    let s: pb::SchemaResponse = call(&h, pb::SchemaRequest::default());
+    assert_eq!(s.examples.len(), 1);
+    assert_eq!(s.examples[0].r#type, "acme.key");
+    assert_eq!(s.examples[0].required, "name");
+
+    let _: pb::ConfigureResponse = call(
+        &h,
+        pb::ConfigureRequest {
+            config: Some(wire::doc(&json!({"world": "/w.json", "stack": "s"}))),
+        },
+    );
+    let r: pb::ReadResponse = call(
+        &h,
+        pb::ReadRequest {
+            r#type: "acme.key".into(),
+            remote: "a".into(),
+            name: "a".into(),
+        },
+    );
+    let attrs = wire::from_doc(r.attrs.as_ref().unwrap()).unwrap();
+    let computed = wire::from_doc(r.computed.as_ref().unwrap()).unwrap();
+    assert_eq!(attrs, json!({"name": "a"}));
+    assert_eq!(computed, json!({"id": "a", "size": 2048}));
+
+    let e = h
+        .handle(
+            pb::PlanRequest {
+                r#type: "acme.key".into(),
+                name: "mine".into(),
+                desired: Some(wire::doc(&json!({"name": "own"}))),
+                ..Default::default()
+            }
+            .into(),
+            &silent,
+        )
+        .unwrap_err();
+    assert!(
+        e.to_string()
+            .contains(r#"plan acme.key["mine"]: name: "own" is the provider's own key"#),
+        "{e}"
+    );
+}
+
+/// The settings a typed provider is configured with: the program's, `{}`
+/// for none.
+#[test]
+fn configure_takes_the_programs_settings_only() {
+    struct Seen;
+    static SEEN: Mutex<Vec<Json>> = Mutex::new(Vec::new());
+    impl Provider for Seen {
+        const NAME: &'static str = "seen";
+        fn configure(settings: &Json) -> Result<(Seen, Option<String>)> {
+            SEEN.lock().unwrap().push(settings.clone());
+            Ok((Seen, None))
+        }
+    }
+    let h = Typed::<Seen>::new();
+    for config in [
+        json!({"world": "/w.json", "stack": "s"}),
+        json!({"world": "/w.json", "settings": {"region": "r"}}),
+    ] {
+        let _: pb::ConfigureResponse = h
+            .handle(
+                pb::ConfigureRequest {
+                    config: Some(wire::doc(&config)),
+                }
+                .into(),
+                &silent,
+            )
+            .map(|r| pb::ConfigureResponse::try_from(r).unwrap())
+            .unwrap();
+    }
+    assert_eq!(*SEEN.lock().unwrap(), [json!({}), json!({"region": "r"})]);
+}
