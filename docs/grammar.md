@@ -1556,8 +1556,13 @@ The statement types the documents: one statement per kind, a manifest
 of one kind (or a selection of one, `where d in yaml.decode(io.read(..)), d.kind ==
 "Service"`). A manifest of mixed kinds, a chart's render, is not read
 by kind. The keys of a value known only at run time are not known to the
-evaluator's strata, so its rule writes every attribute of its type: a
-rule that reads one attribute of that type and writes another of it is a
+evaluator's strata, so its rule writes every attribute of its type; when
+that makes a cycle (a rule that reads one attribute of the type and
+writes another of it, `set c.metadata.labels.team = "x" where c in
+k8s.config_map, c.data.k == "v"`), the rule is written once per
+attribute the type declares and once for every other key (a document's
+`apiVersion`, `kind`), so each write is a node of its own (After R-126).
+A rule that reads an attribute to write that same attribute is still a
 cycle (write the condition on another type, or give the resource a
 block).
 

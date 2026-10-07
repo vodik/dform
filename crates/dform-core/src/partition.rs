@@ -262,6 +262,15 @@ impl Node {
         if x == y {
             return true;
         }
+        // A value body's write of the keys its type does not declare
+        // (`per_path`) is every top-level path but the declared ones.
+        let top = |p: &str| p.strip_suffix(transform::ELEM).unwrap_or(p).to_string();
+        match (other_keys(x), other_keys(y)) {
+            (Some(_), Some(_)) => return true,
+            (Some(ks), None) => return !ks.contains(&top(y)),
+            (None, Some(ks)) => return !ks.contains(&top(x)),
+            (None, None) => {}
+        }
         let split = |p: &str| match p.rsplit_once("::") {
             Some((s, k)) => (Some(s.to_string()), k.to_string()),
             None => (None, p.to_string()),
@@ -459,6 +468,62 @@ pub fn head_node(atom: &Atom) -> Node {
     Node::plain(&atom.pred)
 }
 
+/// The node rule `r` defines: its head's ([`head_node`]); a value body's
+/// write of the keys its type does not declare ([`per_path`]) is the path
+/// [`other_keys`] reads, every top-level path but those.
+fn head_of(r: &RuleStmt) -> Node {
+    let mut n = head_node(&r.head);
+    if let Some(p) = other_path(r) {
+        n.path = Some(p);
+    }
+    n
+}
+
+/// The path of [`per_path`]'s catch-all: `!{K1,K2,..}`, the segments of
+/// the keys it leaves out, when `r` is one (`arg(T, A, P, V, R) :- ..,
+/// not member([K1, ..], K), P = __segment(K)`).
+fn other_path(r: &RuleStmt) -> Option<String> {
+    if r.head.pred != "arg" || r.head.args.len() != 5 {
+        return None;
+    }
+    let Term::Var(p) = &r.head.args[2] else {
+        return None;
+    };
+    let k = r.body.iter().find_map(|l| match l {
+        Lit::Eq(Term::Var(x), Term::Func { name, args })
+            if x == p && name == crate::ir::NAME_SEGMENT =>
+        {
+            match args.as_slice() {
+                [Term::Var(k)] => Some(k),
+                _ => None,
+            }
+        }
+        _ => None,
+    })?;
+    r.body.iter().find_map(|l| match l {
+        Lit::Not(a) if a.pred == "member" => match a.args.as_slice() {
+            [Term::Val(Value::List(keys)), Term::Var(x)] if x == k => {
+                let segs: Vec<String> = keys
+                    .iter()
+                    .map(|v| crate::ir::name_segment(v.as_str().unwrap_or_default()).into_owned())
+                    .collect();
+                Some(format!("{OTHER_OPEN}{}}}", segs.join(",")))
+            }
+            _ => None,
+        },
+        _ => None,
+    })
+}
+
+/// How [`other_path`] opens its path: no attribute's path starts so.
+const OTHER_OPEN: &str = "!{";
+
+/// The keys an [`other_path`] leaves out.
+fn other_keys(p: &str) -> Option<BTreeSet<String>> {
+    let inner = p.strip_prefix(OTHER_OPEN)?.strip_suffix('}')?;
+    Some(inner.split(',').map(str::to_string).collect())
+}
+
 /// The pattern a body literal reads.
 fn body_pattern(atom: &Atom) -> Node {
     aggregate_read(atom).unwrap_or_else(|| head_node(atom))
@@ -555,12 +620,21 @@ pub fn compile(program: &Program, given: &[Atom]) -> Result<Compiled> {
     // = .. where r in k8s`) is one node `(arg, *, P)`, which every reader
     // of `P` of any type reads. On a negative cycle, each such rule is a
     // rule per type it can be, kept when that stratifies.
-    if let Verdict::Rejected { .. } = stratify(&graph)
-        && let Some(expanded) = per_type(&rules, &facts, &graph)
-    {
-        let finer = stratified(&expanded, &facts, &schema, &externs);
-        if let Verdict::Stratified { .. } = stratify(&finer) {
-            (rules, graph) = (expanded, finer);
+    // A value body known only at run time (R-126) writes a path per key
+    // of its document, one node `(arg, T, *)` too; on a negative cycle,
+    // each is a rule per attribute its type declares and one for every
+    // other key (`per_path`), kept when that stratifies, alone or with
+    // R-116's.
+    if let Verdict::Rejected { .. } = stratify(&graph) {
+        let typed = per_type(&rules, &facts, &graph);
+        let pathed = per_path(&rules, &schema);
+        let both = typed.as_deref().and_then(|t| per_path(t, &schema));
+        for expanded in [typed, pathed, both].into_iter().flatten() {
+            let finer = stratified(&expanded, &facts, &schema, &externs);
+            if let Verdict::Stratified { .. } = stratify(&finer) {
+                (rules, graph) = (expanded, finer);
+                break;
+            }
         }
     }
     Ok(Compiled {
@@ -663,6 +737,146 @@ fn per_type(rules: &[RuleStmt], facts: &[Atom], graph: &Graph) -> Option<Vec<Rul
     any.then_some(out)
 }
 
+/// `rules` with each value body known only at run time (R-126: `arg(T, A,
+/// P, V, R) :- .., X = __body(VALUE), member(X, K, V), P = __segment(K)`)
+/// written once per key it can have, so a rule reading one attribute of
+/// `T` and writing another is no cycle through it: the keys of VALUE when
+/// it is an object written out; else one rule per top-level attribute `T`
+/// declares (`member(X, "spec", V)`, the path `spec`) and one for every
+/// other key (`not member(["metadata", "spec"], K)`), whose node is every
+/// path but those ([`other_path`]): a document's `apiVersion` and `kind`,
+/// which the provider checks. A type the schema declares no attribute of
+/// is left as it is. `None` when no rule is expanded.
+fn per_path(rules: &[RuleStmt], schema: &Schema) -> Option<Vec<RuleStmt>> {
+    let mut out = Vec::with_capacity(rules.len());
+    let mut any = false;
+    for r in rules {
+        match value_body(r).and_then(|vb| per_key(r, &vb, schema)) {
+            Some(rs) => {
+                any = true;
+                out.extend(rs);
+            }
+            None => out.push(r.clone()),
+        }
+    }
+    any.then_some(out)
+}
+
+/// A value body's rule, by its parts ([`per_path`]).
+struct ValueBody<'a> {
+    typ: &'a str,
+    value: &'a Term,
+    /// The body's `member(X, K, V)` and `P = __segment(K)`, by index.
+    member: usize,
+    segment: usize,
+}
+
+fn value_body(r: &RuleStmt) -> Option<ValueBody<'_>> {
+    if r.head.pred != "arg" || r.head.args.len() != 5 {
+        return None;
+    }
+    let (Some(typ), Term::Var(p)) = (r.head.args[0].as_str(), &r.head.args[2]) else {
+        return None;
+    };
+    let (x, value) = r.body.iter().find_map(|l| match l {
+        Lit::Eq(Term::Var(x), Term::Func { name, args })
+            if name == crate::ir::RESOURCE_BODY && args.len() == 1 =>
+        {
+            Some((x, &args[0]))
+        }
+        _ => None,
+    })?;
+    let member = r.body.iter().position(|l| {
+        matches!(l, Lit::Pos(a) if a.pred == "member"
+            && matches!(a.args.as_slice(), [Term::Var(y), Term::Var(_), _] if y == x))
+    })?;
+    let Lit::Pos(m) = &r.body[member] else {
+        return None;
+    };
+    let Term::Var(k) = &m.args[1] else {
+        return None;
+    };
+    let segment = r.body.iter().position(|l| {
+        matches!(l, Lit::Eq(Term::Var(y), Term::Func { name, args })
+            if y == p && name == crate::ir::NAME_SEGMENT
+                && matches!(args.as_slice(), [Term::Var(z)] if z == k))
+    })?;
+    Some(ValueBody {
+        typ,
+        value,
+        member,
+        segment,
+    })
+}
+
+/// `r` as one rule per key ([`per_path`]); `None` when its keys are not
+/// known.
+fn per_key(r: &RuleStmt, vb: &ValueBody, schema: &Schema) -> Option<Vec<RuleStmt>> {
+    let written: Option<Vec<String>> = match vb.value {
+        Term::Obj(m) => Some(m.keys().cloned().collect()),
+        Term::Val(Value::Obj(m)) => Some(m.keys().cloned().collect()),
+        _ => None,
+    };
+    let (keys, rest) = match written {
+        Some(keys) => (keys, false),
+        None => {
+            let declared: BTreeSet<String> = schema
+                .attrs
+                .keys()
+                .filter(|(t, _)| t == vb.typ)
+                .map(|(_, p)| crate::ir::segment_key(crate::ir::path_segments(p)[0]).into_owned())
+                .collect();
+            if declared.is_empty() {
+                return None;
+            }
+            (declared.into_iter().collect(), true)
+        }
+    };
+    let Lit::Pos(member) = &r.body[vb.member] else {
+        return None;
+    };
+    let mut out = Vec::new();
+    for key in &keys {
+        let body: Vec<Lit> = r
+            .body
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| *i != vb.segment)
+            .map(|(i, l)| match i == vb.member {
+                true => {
+                    let mut m = member.clone();
+                    m.args[1] = Term::Val(Value::Str(key.clone()));
+                    Lit::Pos(m)
+                }
+                false => l.clone(),
+            })
+            .collect();
+        let mut head = r.head.clone();
+        head.args[2] = Term::Val(Value::Str(crate::ir::name_segment(key).into_owned()));
+        out.push(RuleStmt { head, body });
+    }
+    if rest {
+        let mut body = r.body.clone();
+        body.insert(
+            vb.member + 1,
+            Lit::Not(Atom {
+                pred: "member".into(),
+                args: vec![
+                    Term::Val(Value::List(keys.into_iter().map(Value::Str).collect())),
+                    member.args[1].clone(),
+                ],
+                record: None,
+                span: member.span,
+            }),
+        );
+        out.push(RuleStmt {
+            head: r.head.clone(),
+            body,
+        });
+    }
+    Some(out)
+}
+
 /// The concrete types the variable `t` can be in `r` ([`per_type`]).
 fn types_of(t: &str, r: &RuleStmt, facts: &[Atom], graph: &Graph) -> Option<BTreeSet<String>> {
     let is_t = |x: &Term| matches!(x, Term::Var(v) if v == t);
@@ -757,7 +971,7 @@ fn is_resource_node(n: &Node) -> bool {
 /// of the same type at that variable (`arg(T, A, P, ..) :- want(T, A)`).
 /// The rule then derives at every address that literal reads.
 fn address_source(r: &RuleStmt, split: &BTreeSet<String>) -> Option<usize> {
-    let head = addressed(head_node(&r.head), &r.head, &r.body, split);
+    let head = addressed(head_of(r), &r.head, &r.body, split);
     let typ = head.typ.as_ref().filter(|t| split.contains(*t))?;
     if !is_resource_node(&head) || head.addr.is_some() || is_aggregate_head(&r.head) {
         return None;
@@ -1177,7 +1391,7 @@ pub fn build_lowered(
     let mut heads: Vec<Vec<Node>> = vec![Vec::new(); rules.len()];
     for (i, r) in rules.iter().enumerate() {
         if sources[i].is_none() {
-            let h = addressed(head_node(&r.head), &r.head, &r.body, split);
+            let h = addressed(head_of(r), &r.head, &r.body, split);
             define(&mut defs, &h);
             heads[i].push(h);
         }
@@ -1201,7 +1415,7 @@ pub fn build_lowered(
         for (i, r) in rules.iter().enumerate() {
             let Some(at) = sources[i] else { continue };
             let pat = source_pattern(r, at, split);
-            let head = head_node(&r.head);
+            let head = head_of(r);
             let found: BTreeSet<Option<Addr>> =
                 unifying(&defs, &pat).map(|d| d.addr.clone()).collect();
             for addr in found {
@@ -1221,7 +1435,7 @@ pub fn build_lowered(
     }
     for (i, r) in rules.iter().enumerate() {
         if heads[i].is_empty() {
-            let h = head_node(&r.head);
+            let h = head_of(r);
             define(&mut defs, &h);
             heads[i].push(h);
         }
