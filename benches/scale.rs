@@ -183,7 +183,7 @@ impl Launch for TimedDirect {
         Link::start("the mock (direct, timed)", Box::new(q))
     }
 
-    fn plugin(&self, exe: &Path) -> anyhow::Result<Link> {
+    fn plugin(&self, exe: &Path, _: &dform::plugin::host::Grants) -> anyhow::Result<Link> {
         anyhow::bail!("{}: the bench plans with the mock only", exe.display())
     }
 }
