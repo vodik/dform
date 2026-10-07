@@ -30,7 +30,6 @@ struct Applied {
     remote: String,
     attrs: Json,
     computed: Json,
-    notes: Vec<String>,
     said: Vec<String>,
 }
 
@@ -88,7 +87,6 @@ impl Lab {
                     .computed
                     .as_ref()
                     .map_or(Json::Null, |d| wire::from_doc(d).unwrap()),
-                notes: a.notes,
                 said: said.into_inner().unwrap(),
             }),
             Ok(_) => Err("not an Apply's reply".into()),
@@ -116,7 +114,6 @@ impl Lab {
             r#type: typ.into(),
             name: name.into(),
             remote: remote.into(),
-            ..Default::default()
         };
         match self.call(Call::Read(r), &Mutex::default()).unwrap() {
             Reply::Read(r) if r.found => Some((
@@ -817,7 +814,7 @@ fn a_program_with_every_type_plans_applies_and_plans_clean() {
             applied.stderr
         );
     }
-    let net = server.networks()[0]["id"].as_str().unwrap().to_string();
+    assert_eq!(server.networks()[0]["id"], "pn-1000123_42");
     assert_eq!(server.subnets()[0]["cidr"], "10.42.0.0/24");
     let instance = &server.instances()[0];
     let private = instance["ipAddresses"]

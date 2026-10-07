@@ -9,8 +9,11 @@
 //! runs it; without credentials it serves its schema and Plan, and every
 //! call that needs the API fails naming why.
 //!
-//! Remote ids: an instance's and an SSH key's are the API's ids; a DNS
-//! record's is `ZONE/ID`. Plan diffs locally (`provider::diff`), and an
+//! Remote ids: an instance's, an SSH key's, a volume's, a private
+//! network's and a user's are the API's ids; a DNS record's is `ZONE/ID`,
+//! a subnet's `NETWORK/ID`, an S3 container's `REGION/NAME`. The types
+//! beyond the instance, key and record are in the modules below
+//! (`storage`, `user`, `volume`, `network`). Plan diffs locally (`provider::diff`), and an
 //! instance's flavor and image are checked against what its region offers.
 //! A Create looks for an object of the same key first: one this process
 //! made under the same idempotency key is the answer (a Create sent again
@@ -345,9 +348,12 @@ impl Ovh {
             Err(e) if e.is_not_found() => return Ok(()),
             Err(e) => return Err(failed(at, e)),
         }
+        if !wait {
+            return Ok(());
+        }
         let start = Instant::now();
         let mut said = None;
-        while wait {
+        loop {
             match a.client.get_opt(path) {
                 Ok(None) => break,
                 Ok(Some(o)) => {
