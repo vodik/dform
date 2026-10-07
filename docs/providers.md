@@ -158,9 +158,15 @@ built with `--features wasm` (`dform version` says `wasm host in`); a
 `.wasm` source, or a directory holding `provider.wasm`, is one. Its
 imports are its manifest, and nothing reaches it that it does not
 import: no environment variable, no file, no socket without a grant.
-wasip2 is the target stable Rust has; wasip3 is the intent (async calls,
-streams) and changes no interface. On 0.2 one instance takes its calls
-one at a time, so `--parallel` serializes for a component. A component's
+The provider's calls are async functions (the component model's async
+ABI, WASI 0.3's; wit-bindgen's `async` and wasmtime's
+`component-model-async`): one instance has every call dform submits in
+flight at once, and an Apply answers a `stream<event>` and a `future` of
+its result. The SDK runs a `Handler`, which is synchronous, one call at a
+time, so `--parallel` still serializes for an SDK component, and its
+events reach dform as the call returns; the WASI imports are 0.2's, which
+the wasm32-wasip2 target links (wasm32-wasip3 is not a target stable Rust
+ships yet). A component's
 exit carries no code (`exit status: 1`). Its compiled code is cached in
 `$XDG_CACHE_HOME/dform/wasm/` by the file's digest.
 

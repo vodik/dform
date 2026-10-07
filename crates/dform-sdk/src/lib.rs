@@ -383,29 +383,32 @@ macro_rules! provider {
             struct Exported;
 
             impl $crate::component::bindings::exports::dform::provider::provider::Guest for Exported {
-                fn handshake(r: t::HandshakeRequest) -> ::std::result::Result<t::HandshakeResponse, t::CallError> {
-                    $crate::component::handshake(make, r)
+                async fn handshake(r: t::HandshakeRequest) -> ::std::result::Result<t::HandshakeResponse, t::CallError> {
+                    $crate::component::handshake(make, r).await
                 }
-                fn configure(r: t::ConfigureRequest) -> ::std::result::Result<t::ConfigureResponse, t::CallError> {
-                    $crate::component::configure(make, r)
+                async fn configure(r: t::ConfigureRequest) -> ::std::result::Result<t::ConfigureResponse, t::CallError> {
+                    $crate::component::configure(make, r).await
                 }
-                fn schema(r: t::SchemaRequest) -> ::std::result::Result<t::SchemaResponse, t::CallError> {
-                    $crate::component::schema(make, r)
+                async fn schema(r: t::SchemaRequest) -> ::std::result::Result<t::SchemaResponse, t::CallError> {
+                    $crate::component::schema(make, r).await
                 }
-                fn query(r: t::QueryRequest) -> ::std::result::Result<::std::vec::Vec<t::Row>, t::CallError> {
-                    $crate::component::query(make, r)
+                async fn query(r: t::QueryRequest) -> ::std::result::Result<::std::vec::Vec<t::Row>, t::CallError> {
+                    $crate::component::query(make, r).await
                 }
-                fn read(r: t::ReadRequest) -> ::std::result::Result<t::ReadResponse, t::CallError> {
-                    $crate::component::read(make, r)
+                async fn read(r: t::ReadRequest) -> ::std::result::Result<t::ReadResponse, t::CallError> {
+                    $crate::component::read(make, r).await
                 }
-                fn plan(r: t::PlanRequest) -> ::std::result::Result<t::PlanResponse, t::CallError> {
-                    $crate::component::plan(make, r)
+                async fn plan(r: t::PlanRequest) -> ::std::result::Result<t::PlanResponse, t::CallError> {
+                    $crate::component::plan(make, r).await
                 }
-                fn apply(r: t::ApplyRequest) -> ::std::result::Result<t::ApplyResponse, t::CallError> {
-                    $crate::component::apply(make, r)
+                async fn apply(r: t::ApplyRequest) -> $crate::component::Applied {
+                    $crate::component::apply(make, r).await
                 }
-                fn import(r: t::ImportRequest) -> ::std::result::Result<t::ImportResponse, t::CallError> {
-                    $crate::component::import(make, r)
+                async fn import(r: t::ImportRequest) -> ::std::result::Result<t::ImportResponse, t::CallError> {
+                    $crate::component::import(make, r).await
+                }
+                async fn reveal(r: t::RevealRequest) -> ::std::result::Result<t::RevealResponse, t::CallError> {
+                    $crate::component::reveal(make, r).await
                 }
             }
 

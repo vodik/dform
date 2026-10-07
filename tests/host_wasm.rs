@@ -111,10 +111,36 @@ fn a_run_plans_and_applies_through_the_component() {
     let s = Scratch::new("host-wasm-apply");
     s.write("p.df", PROG);
     let r = mock(&s, &["plan"]).success();
-    assert!(r.stdout.contains("+ net.vpc[\"main\"]"), "{}", r.stdout);
+    assert!(r.stdout.contains("+ net.vpc main"), "{}", r.stdout);
     mock(&s, &["apply"]).success();
     let r = mock(&s, &["plan"]).success();
     assert_eq!(r.summary(), "stack p is up to date", "{}", r.stdout);
+}
+
+/// The component's Apply answers a stream of events and a future of its
+/// result (the component model's async ABI, R-130): what the mock says
+/// under chaos `delay` is shown beside the change, as the native build's
+/// is (tests/apply_events.rs).
+#[test]
+fn an_apply_s_events_come_through_the_component_s_stream() {
+    let s = Scratch::new("host-wasm-events");
+    s.write("p.df", PROG);
+    let r = mock(
+        &s,
+        &["apply", "--chaos", "delay=net.subnet[\"a\"]:200", "--yes"],
+    )
+    .success();
+    let lines: Vec<&str> = r
+        .stderr
+        .lines()
+        .filter(|l| l.starts_with("  + net.subnet a  "))
+        .collect();
+    assert!(
+        !lines.is_empty() && lines.iter().all(|l| l.ends_with("s  made")),
+        "{}",
+        r.stderr
+    );
+    assert!(r.stdout.ends_with("apply: complete\n"), "{}", r.stdout);
 }
 
 /// The component exits as it is called to Apply the third action: the
@@ -127,7 +153,7 @@ fn a_component_crash_mid_apply_fails_the_action_and_resume_finishes() {
     let r = mock(&s, &["apply", "--chaos", "crash=compute.vm[\"app\"]"]).failure();
     assert!(
         r.stderr
-            .contains("apply compute.vm[\"app\"]: the provider")
+            .contains("apply compute.vm app: the provider")
             // wasip2's exit carries only failure, not its code.
             && r.stderr.contains("exited during the call (exit status: 1)"),
         "{}",

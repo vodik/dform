@@ -2,12 +2,21 @@
 //! component`): `dform:host/hosted-provider`'s bindings, its exports
 //! answered by the provider's [`Handler`] and its imports the host's
 //! calls ([`Imports`]).
+//!
+//! The exports are async (the component model's async ABI, R-130): Apply
+//! answers at once with a stream of events and a future of its result,
+//! and runs the handler in a task of its own. The handler is synchronous,
+//! so the instance does nothing else while it runs, and its events are
+//! written as it returns, before its result; an async handler would
+//! write each as it said it. A host that drops the stream (it cancelled
+//! the call) is written no more events.
 
-use dform_core::plugin::backend::{Call, Handler, Reply};
+use dform_core::plugin::backend::{Call, Handler, Progress, Reply};
 use dform_core::plugin::host::{
     self as h, Calls, Endpoint, Failure, GitFile, Handle, HttpRequest, HttpResponse, Level, Opened,
     Run, Target,
 };
+use dform_core::plugin::pb;
 use std::cell::OnceCell;
 use std::collections::BTreeMap;
 
@@ -43,10 +52,14 @@ fn start(make: fn() -> Box<dyn Handler>) -> Box<dyn Handler> {
     make()
 }
 
-fn call(make: fn() -> Box<dyn Handler>, c: Call) -> Result<Reply, t::CallError> {
+fn call(
+    make: fn() -> Box<dyn Handler>,
+    c: Call,
+    progress: Progress,
+) -> Result<Reply, t::CallError> {
     HANDLER.with(|cell| {
         cell.get_or_init(|| start(make))
-            .handle(c)
+            .handle(c, progress)
             .map_err(|e| conv::to_call_error(&e))
     })
 }
@@ -61,9 +74,9 @@ fn wrong(r: Reply) -> t::CallError {
 
 macro_rules! export {
     ($($name:ident($req:ty => $from:ident) -> $resp:ty: $variant:ident => $to:expr;)*) => {$(
-        pub fn $name(make: fn() -> Box<dyn Handler>, r: $req) -> Result<$resp, t::CallError> {
+        pub async fn $name(make: fn() -> Box<dyn Handler>, r: $req) -> Result<$resp, t::CallError> {
             let req = decode(conv::$from(&r))?;
-            match call(make, req.into())? {
+            match call(make, req.into(), &dform_core::plugin::backend::silent)? {
                 Reply::$variant(x) => Ok(($to)(&x)),
                 other => Err(wrong(other)),
             }
@@ -78,8 +91,45 @@ export! {
     query(t::QueryRequest => from_query_request) -> Vec<t::Row>: Query => |rows: &Vec<_>| conv::to_rows(rows);
     read(t::ReadRequest => from_read_request) -> t::ReadResponse: Read => conv::to_read_response;
     plan(t::PlanRequest => from_plan_request) -> t::PlanResponse: Plan => conv::to_plan_response;
-    apply(t::ApplyRequest => from_apply_request) -> t::ApplyResponse: Apply => conv::to_apply_response;
     import(t::ImportRequest => from_import_request) -> t::ImportResponse: Import => conv::to_import_response;
+    reveal(t::RevealRequest => from_reveal_request) -> t::RevealResponse: Reveal => conv::to_reveal_response;
+}
+
+/// What an Apply answers: its events, and its result.
+pub type Applied = (
+    wit_bindgen::StreamReader<t::Event>,
+    wit_bindgen::FutureReader<Result<t::ApplyResponse, t::CallError>>,
+);
+
+/// Apply `r`: the stream and the future at once, the handler in a task
+/// of its own writing them.
+pub async fn apply(make: fn() -> Box<dyn Handler>, r: t::ApplyRequest) -> Applied {
+    let (mut events, said_rx) = bindings::wit_stream::new::<t::Event>();
+    let (result, result_rx) =
+        bindings::wit_future::new::<Result<t::ApplyResponse, t::CallError>>(|| {
+            Err(t::CallError::Crashed(
+                "the provider dropped its Apply's answer".into(),
+            ))
+        });
+    wit_bindgen::spawn(async move {
+        let said = std::sync::Mutex::new(Vec::<pb::Event>::new());
+        let progress = |e: pb::Event| said.lock().unwrap_or_else(|e| e.into_inner()).push(e);
+        let answer = decode(conv::from_apply_request(&r)).and_then(|req| {
+            match call(make, req.into(), &progress)? {
+                Reply::Apply(x) => Ok(conv::to_apply_response(&x)),
+                other => Err(wrong(other)),
+            }
+        });
+        for e in said.into_inner().unwrap_or_else(|e| e.into_inner()) {
+            // Refused: the host dropped the stream.
+            if events.write_one(conv::to_event(&e)).await.is_some() {
+                break;
+            }
+        }
+        drop(events);
+        let _ = result.write(answer).await;
+    });
+    (said_rx, result_rx)
 }
 
 fn error(e: wh::types::Error) -> h::Error {

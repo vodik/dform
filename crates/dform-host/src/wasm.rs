@@ -2,11 +2,13 @@
 //! is a component of `dform:host/hosted-provider` (wit/host), run by
 //! wasmtime behind dform-core's `Provider` trait.
 //!
-//! One instance per provider per run; calls run one at a time on it, in
-//! the order they were submitted (wasip2 has no concurrent calls into an
-//! instance: `--parallel` serializes here, where on wasip3 one instance
-//! takes them all). A trap is the provider crashing (`Crashed`), and the
-//! instance answers no call after one. Every call has an epoch deadline,
+//! One instance per provider per run, on a thread of its own: the
+//! provider's calls are async (the component model's async ABI, R-130),
+//! so every call submitted runs at once on it, each a subtask, as many as
+//! the component takes (a synchronous handler takes one at a time). An
+//! Apply answers a stream of events, told as they are written, and a
+//! future of its result. A trap is the provider crashing (`Crashed`), and
+//! the instance answers no call after one. Every call has an epoch deadline,
 //! a backstop under the link's own timeout (`plugin::timed`): a call past
 //! it is `MaybeApplied` for an Apply, `Refused` otherwise.
 //!
@@ -23,12 +25,17 @@ use dform_core::plugin::backend::{Call, CallError, Provider, Reply, Ticket};
 use dform_core::plugin::host::{self as h, Calls, Grants, Hosting, Manifest};
 use dform_core::plugin::link::Link;
 use dform_core::plugin::pb;
-use std::collections::VecDeque;
+use std::future::Future;
 use std::path::Path;
-use std::sync::OnceLock;
+use std::pin::Pin;
+use std::sync::{Arc, Mutex, OnceLock};
+use std::task::Poll;
 use std::time::Duration;
-use wasmtime::component::{Component, HasSelf, Linker, Resource, ResourceTable};
-use wasmtime::{Config, Engine, Store};
+use wasmtime::component::{
+    Accessor, Component, FutureConsumer, HasSelf, Linker, Resource, ResourceTable, Source,
+    StreamConsumer, StreamResult,
+};
+use wasmtime::{AsContextMut, Config, Engine, Store, StoreContextMut};
 use wasmtime_wasi::{FsPerms, WasiCtx, WasiCtxView, WasiView};
 use wasmtime_wasi_http::{WasiHttpCtx, WasiHttpCtxView, WasiHttpView};
 
@@ -36,14 +43,15 @@ mod bindings {
     wasmtime::component::bindgen!({
         path: "../../wit/host",
         world: "dform:host/hosted-provider",
+        require_store_data_send: true,
         with: {
             "wasi:cli": wasmtime_wasi::p2::bindings::cli,
             "wasi:clocks": wasmtime_wasi::p2::bindings::clocks,
             "wasi:random": wasmtime_wasi::p2::bindings::random,
-            "wasi:io": wasmtime_wasi::p2::bindings::sync::io,
-            "wasi:filesystem": wasmtime_wasi::p2::bindings::sync::filesystem,
-            "wasi:sockets": wasmtime_wasi::p2::bindings::sync::sockets,
-            "wasi:http": wasmtime_wasi_http::p2::bindings::sync::http,
+            "wasi:io": wasmtime_wasi::p2::bindings::io,
+            "wasi:filesystem": wasmtime_wasi::p2::bindings::filesystem,
+            "wasi:sockets": wasmtime_wasi::p2::bindings::sockets,
+            "wasi:http": wasmtime_wasi_http::p2::bindings::http,
             "dform:host/types.credential": super::Credential,
             "dform:host/types.tunnel": super::Tunnel,
         },
@@ -53,6 +61,7 @@ mod bindings {
 dform_wit::convert!(conv, super::bindings::dform::provider::types);
 
 use bindings::dform::host as wh;
+use bindings::dform::provider::types as wp;
 
 /// A credential a component opened: the host's handle, never its value.
 pub struct Credential {
@@ -79,7 +88,9 @@ fn engine() -> Result<&'static Engine> {
     ENGINE
         .get_or_init(|| {
             let mut c = Config::new();
-            c.wasm_component_model(true).epoch_interruption(true);
+            c.wasm_component_model(true)
+                .wasm_component_model_async(true)
+                .epoch_interruption(true);
             let e = Engine::new(&c).map_err(|e| format!("{e:#}"))?;
             let ticker = e.clone();
             std::thread::Builder::new()
@@ -394,17 +405,23 @@ pub fn manifest(engine: &Engine, component: &Component) -> Manifest {
     Manifest::of(names.iter().map(String::as_str), true)
 }
 
-/// A running component provider.
+/// What the instance's thread sends back: an event of a call in flight,
+/// or a call's answer.
+enum Back {
+    Event(Ticket, pb::Event),
+    Answer(Ticket, Box<Result<Reply, CallError>>),
+}
+
+/// A running component provider: its instance on a thread of its own,
+/// which takes every call as it is submitted and runs them at once.
 pub struct Wasm {
-    store: Store<State>,
-    provider: bindings::HostedProvider,
-    queued: VecDeque<(Ticket, Call)>,
+    calls: Option<tokio::sync::mpsc::UnboundedSender<(Ticket, Call)>>,
+    back: std::sync::mpsc::Receiver<Back>,
     next: u64,
     /// Why it answers no more calls, once it trapped.
-    dead: Option<String>,
-    program: String,
-    /// The name its handshake gave, once it has: messages name it.
-    name: String,
+    dead: Arc<Mutex<Option<String>>>,
+    /// Calls refused before they were sent (it had trapped).
+    refused: Vec<(Ticket, CallError)>,
 }
 
 impl Wasm {
@@ -419,18 +436,75 @@ impl Wasm {
         grants
             .admit(&manifest)
             .map_err(|e| anyhow!("{e} ({program})"))?;
+        let (calls, rx) = tokio::sync::mpsc::unbounded_channel();
+        let (tx, back) = std::sync::mpsc::channel();
+        let (ready, started) = std::sync::mpsc::channel();
+        let dead = Arc::new(Mutex::new(None));
+        let instance = Instance {
+            program: program.clone(),
+            grants,
+            dead: dead.clone(),
+            tx,
+        };
+        std::thread::Builder::new()
+            .name("dform-wasm".into())
+            .spawn(move || {
+                let rt = match tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                {
+                    Ok(rt) => rt,
+                    Err(e) => {
+                        let _ = ready.send(Err(anyhow!("start its runtime: {e}")));
+                        return;
+                    }
+                };
+                rt.block_on(instance.serve(engine, component, rx, ready));
+            })
+            .context("start the wasm provider's thread")?;
+        started
+            .recv()
+            .unwrap_or_else(|_| Err(anyhow!("its thread exited")))
+            .with_context(|| format!("instantiate the provider component {program}"))?;
+        Ok((
+            Wasm {
+                calls: Some(calls),
+                back,
+                next: 0,
+                dead,
+                refused: Vec::new(),
+            },
+            manifest,
+        ))
+    }
+}
+
+/// The instance's side: what it was started as, and where answers go.
+struct Instance {
+    program: String,
+    grants: Grants,
+    dead: Arc<Mutex<Option<String>>>,
+    tx: std::sync::mpsc::Sender<Back>,
+}
+
+impl Instance {
+    fn linker(&self, engine: &Engine) -> Result<Linker<State>> {
         let mut linker: Linker<State> = Linker::new(engine);
-        wasmtime_wasi::p2::add_to_linker_sync(&mut linker)?;
-        wasmtime_wasi_http::p2::add_only_http_to_linker_sync(&mut linker)?;
+        wasmtime_wasi::p2::add_to_linker_async(&mut linker)?;
+        wasmtime_wasi_http::p2::add_only_http_to_linker_async(&mut linker)?;
         wh::types::add_to_linker::<State, HasSelf<State>>(&mut linker, |s| s)?;
         wh::secrets::add_to_linker::<State, HasSelf<State>>(&mut linker, |s| s)?;
         wh::http::add_to_linker::<State, HasSelf<State>>(&mut linker, |s| s)?;
         wh::ssh::add_to_linker::<State, HasSelf<State>>(&mut linker, |s| s)?;
         wh::git::add_to_linker::<State, HasSelf<State>>(&mut linker, |s| s)?;
         wh::log::add_to_linker::<State, HasSelf<State>>(&mut linker, |s| s)?;
+        Ok(linker)
+    }
+
+    fn state(&self) -> Result<State> {
         let mut wasi = WasiCtx::builder();
         wasi.inherit_stdout().inherit_stderr();
-        if grants.allow.contains("wasi:filesystem") {
+        if self.grants.allow.contains("wasi:filesystem") {
             wasi.preopened_dir("/", "/", FsPerms::ReadWrite)
                 .map_err(anyhow::Error::from)
                 .context("preopen / for wasi:filesystem")?;
@@ -441,123 +515,291 @@ impl Wasm {
                 wasi.initial_cwd(cwd.display().to_string());
             }
         }
-        if grants.allow.contains("wasi:sockets") {
+        if self.grants.allow.contains("wasi:sockets") {
             wasi.inherit_network().allow_ip_name_lookup(true);
         } else {
             wasi.allow_tcp(false)
                 .allow_udp(false)
                 .allow_ip_name_lookup(false);
         }
-        let state = State {
+        Ok(State {
             wasi: wasi.build(),
             http: WasiHttpCtx::new(),
             table: ResourceTable::new(),
-            host: Services::new(grants),
-        };
-        let mut store = Store::new(engine, state);
-        store.set_epoch_deadline(ticks(DEADLINE));
-        let provider = bindings::HostedProvider::instantiate(&mut store, &component, &linker)
-            .map_err(anyhow::Error::from)
-            .with_context(|| format!("instantiate the provider component {program}"))?;
-        Ok((
-            Wasm {
-                store,
-                provider,
-                queued: VecDeque::new(),
-                next: 0,
-                dead: None,
-                program,
-                name: String::new(),
-            },
-            manifest,
-        ))
+            host: Services::new(self.grants.clone()),
+        })
     }
 
-    fn run(&mut self, call: Call) -> Result<Reply, CallError> {
-        if let Some(why) = &self.dead {
-            return Err(CallError::Crashed(why.clone()));
+    /// Instantiate, say so on `ready`, then run every call `calls` brings
+    /// at once, until dform drops the provider or the instance traps.
+    async fn serve(
+        self,
+        engine: &'static Engine,
+        component: Component,
+        mut calls: tokio::sync::mpsc::UnboundedReceiver<(Ticket, Call)>,
+        ready: std::sync::mpsc::Sender<Result<()>>,
+    ) {
+        let started = async {
+            let linker = self.linker(engine)?;
+            let mut store = Store::new(engine, self.state()?);
+            store.set_epoch_deadline(ticks(DEADLINE));
+            let provider =
+                bindings::HostedProvider::instantiate_async(&mut store, &component, &linker)
+                    .await
+                    .map_err(anyhow::Error::from)?;
+            Ok::<_, anyhow::Error>((store, provider))
+        };
+        let (mut store, provider) = match started.await {
+            Ok(s) => {
+                let _ = ready.send(Ok(()));
+                s
+            }
+            Err(e) => {
+                let _ = ready.send(Err(e));
+                return;
+            }
+        };
+        let who = std::cell::RefCell::new(self.program.clone());
+        // The calls not answered yet: each answered as crashed if the
+        // instance traps.
+        let open = std::cell::RefCell::new(std::collections::BTreeSet::new());
+        let ran = store
+            .run_concurrent(async |a| {
+                type Running<'a> =
+                    Pin<Box<dyn Future<Output = (Ticket, bool, wasmtime::Result<()>)> + 'a>>;
+                let mut running: Vec<Running> = Vec::new();
+                loop {
+                    let next = std::future::poll_fn(|cx| {
+                        for i in 0..running.len() {
+                            if let Poll::Ready(r) = running[i].as_mut().poll(cx) {
+                                drop(running.swap_remove(i));
+                                return Poll::Ready(r);
+                            }
+                        }
+                        Poll::Pending
+                    });
+                    tokio::select! {
+                        got = calls.recv() => match got {
+                            Some((t, call)) => {
+                                open.borrow_mut().insert(t);
+                                running.push(Box::pin(self.one(a, &provider, &who, t, call)));
+                            }
+                            // dform dropped the provider.
+                            None => return None,
+                        },
+                        (t, apply, r) = next => {
+                            open.borrow_mut().remove(&t);
+                            if let Err(trap) = r {
+                                return Some((t, apply, trap));
+                            }
+                        }
+                    }
+                }
+            })
+            .await;
+        let trapped = match ran {
+            Ok(None) => return,
+            Ok(Some((t, apply, trap))) => Some((t, apply, trap)),
+            Err(trap) => {
+                let t = open.borrow().iter().next().copied();
+                t.map(|t| (t, false, trap))
+            }
+        };
+        let who = who.into_inner();
+        if let Some((t, apply, trap)) = trapped {
+            open.borrow_mut().remove(&t);
+            let _ = self.tx.send(Back::Answer(
+                t,
+                Box::new(Err(trapped_as(&who, apply, &trap))),
+            ));
         }
+        let gone = format!("the provider {who} has exited");
+        *self.dead.lock().unwrap_or_else(|e| e.into_inner()) = Some(gone.clone());
+        for t in open.into_inner() {
+            let _ = self.tx.send(Back::Answer(
+                t,
+                Box::new(Err(CallError::Crashed(gone.clone()))),
+            ));
+        }
+        // A call submitted before the submitter saw it die.
+        while let Some((t, _)) = calls.recv().await {
+            let _ = self.tx.send(Back::Answer(
+                t,
+                Box::new(Err(CallError::Crashed(gone.clone()))),
+            ));
+        }
+    }
+
+    /// Run `call`, telling its events and then its answer; a trap is its
+    /// outcome, with whether it was an Apply.
+    async fn one(
+        &self,
+        a: &Accessor<State>,
+        provider: &bindings::HostedProvider,
+        who: &std::cell::RefCell<String>,
+        t: Ticket,
+        call: Call,
+    ) -> (Ticket, bool, wasmtime::Result<()>) {
         let apply = matches!(call, Call::Apply(_));
-        self.store.set_epoch_deadline(ticks(DEADLINE));
-        let p = self.provider.dform_provider_provider();
-        let s = &mut self.store;
-        let out: wasmtime::Result<Result<Reply, CallError>> = (|| {
-            Ok(match &call {
+        let p = provider.dform_provider_provider();
+        let answered = async {
+            Ok::<_, wasmtime::Error>(match &call {
                 Call::Handshake(r) => p
-                    .call_handshake(&mut *s, conv::to_handshake_request(r))?
+                    .call_handshake(a, conv::to_handshake_request(r))
+                    .await?
                     .map_err(conv::from_call_error)
                     .and_then(|r| decode(conv::from_handshake_response(&r)).map(Reply::Handshake)),
                 Call::Configure(r) => p
-                    .call_configure(&mut *s, &conv::to_configure_request(r))?
+                    .call_configure(a, conv::to_configure_request(r))
+                    .await?
                     .map_err(conv::from_call_error)
                     .and_then(|r| decode(conv::from_configure_response(&r)).map(Reply::Configure)),
                 Call::Schema(r) => p
-                    .call_schema(&mut *s, &conv::to_schema_request(r))?
+                    .call_schema(a, conv::to_schema_request(r))
+                    .await?
                     .map_err(conv::from_call_error)
                     .and_then(|r| decode(conv::from_schema_response(&r)).map(Reply::Schema)),
                 Call::Query(r) => p
-                    .call_query(&mut *s, &conv::to_query_request(r))?
+                    .call_query(a, conv::to_query_request(r))
+                    .await?
                     .map_err(conv::from_call_error)
                     .and_then(|r| decode(conv::from_rows(&r)).map(Reply::Query)),
                 Call::Read(r) => p
-                    .call_read(&mut *s, &conv::to_read_request(r))?
+                    .call_read(a, conv::to_read_request(r))
+                    .await?
                     .map_err(conv::from_call_error)
                     .and_then(|r| decode(conv::from_read_response(&r)).map(Reply::Read)),
                 Call::Plan(r) => p
-                    .call_plan(&mut *s, &conv::to_plan_request(r))?
+                    .call_plan(a, conv::to_plan_request(r))
+                    .await?
                     .map_err(conv::from_call_error)
                     .and_then(|r| decode(conv::from_plan_response(&r)).map(Reply::Plan)),
+                Call::Apply(r) if r.op == pb::Op::Unspecified as i32 => {
+                    Err(CallError::Refused("an Apply call with no op".to_string()))
+                }
                 Call::Apply(r) => {
-                    if r.op == pb::Op::Unspecified as i32 {
-                        return Ok(Err(CallError::Refused(
-                            "an Apply call with no op".to_string(),
-                        )));
+                    let (events, result) = p.call_apply(a, conv::to_apply_request(r)).await?;
+                    let (done, answer) = tokio::sync::oneshot::channel();
+                    a.with(|mut s| -> wasmtime::Result<()> {
+                        events.pipe(
+                            &mut s,
+                            Events {
+                                t,
+                                tx: self.tx.clone(),
+                            },
+                        )?;
+                        result.pipe(&mut s, Done(Some(done)))?;
+                        Ok(())
+                    })?;
+                    match answer.await {
+                        Ok(r) => r
+                            .map_err(conv::from_call_error)
+                            .and_then(|r| decode(conv::from_apply_response(&r)).map(Reply::Apply)),
+                        Err(_) => Err(CallError::Crashed(format!(
+                            "the provider {} dropped its Apply's answer",
+                            who.borrow()
+                        ))),
                     }
-                    p.call_apply(&mut *s, &conv::to_apply_request(r))?
-                        .map_err(conv::from_call_error)
-                        .and_then(|r| decode(conv::from_apply_response(&r)).map(Reply::Apply))
                 }
                 Call::Import(r) => p
-                    .call_import(&mut *s, &conv::to_import_request(r))?
+                    .call_import(a, conv::to_import_request(r))
+                    .await?
                     .map_err(conv::from_call_error)
                     .and_then(|r| decode(conv::from_import_response(&r)).map(Reply::Import)),
+                Call::Reveal(r) => p
+                    .call_reveal(a, conv::to_reveal_request(r))
+                    .await?
+                    .map_err(conv::from_call_error)
+                    .and_then(|r| decode(conv::from_reveal_response(&r)).map(Reply::Reveal)),
             })
-        })();
-        match out {
+        };
+        match answered.await {
             Ok(answer) => {
                 if let Ok(Reply::Handshake(h)) = &answer {
-                    self.name = h.name.clone();
+                    *who.borrow_mut() = h.name.clone();
                 }
-                answer
+                let _ = self.tx.send(Back::Answer(t, Box::new(answer)));
+                (t, apply, Ok(()))
             }
-            Err(trap) => {
-                let who = if self.name.is_empty() {
-                    self.program.clone()
-                } else {
-                    self.name.clone()
-                };
-                let interrupted = trap
-                    .downcast_ref::<wasmtime::Trap>()
-                    .is_some_and(|t| *t == wasmtime::Trap::Interrupt);
-                let exit = trap.downcast_ref::<wasmtime_wasi::I32Exit>().map(|e| e.0);
-                let why = match exit {
-                    Some(code) => {
-                        format!("the provider {who} exited during the call (exit status: {code})")
-                    }
-                    None if interrupted => format!(
-                        "the provider {who} ran past its deadline ({}s) and was stopped",
-                        DEADLINE.as_secs()
-                    ),
-                    None => format!("the provider {who} trapped: {trap:#}"),
-                };
-                self.dead = Some(format!("the provider {who} has exited"));
-                Err(match (interrupted, apply) {
-                    (true, true) => CallError::MaybeApplied(why),
-                    (true, false) => CallError::Refused(why),
-                    (false, _) => CallError::Crashed(why),
-                })
+            Err(trap) => (t, apply, Err(trap)),
+        }
+    }
+}
+
+/// A trap of the provider `who` in a call, as the call's failure: an exit
+/// or a crash is `Crashed`; past its deadline, an Apply may have taken
+/// effect, another call is refused.
+fn trapped_as(who: &str, apply: bool, trap: &wasmtime::Error) -> CallError {
+    let interrupted = trap
+        .downcast_ref::<wasmtime::Trap>()
+        .is_some_and(|t| *t == wasmtime::Trap::Interrupt);
+    let exit = trap.downcast_ref::<wasmtime_wasi::I32Exit>().map(|e| e.0);
+    let why = match exit {
+        Some(code) => format!("the provider {who} exited during the call (exit status: {code})"),
+        None if interrupted => format!(
+            "the provider {who} ran past its deadline ({}s) and was stopped",
+            DEADLINE.as_secs()
+        ),
+        None => format!("the provider {who} trapped: {trap:#}"),
+    };
+    match (interrupted, apply) {
+        (true, true) => CallError::MaybeApplied(why),
+        (true, false) => CallError::Refused(why),
+        (false, _) => CallError::Crashed(why),
+    }
+}
+
+/// An Apply's events, as the component writes them, told with its ticket.
+struct Events {
+    t: Ticket,
+    tx: std::sync::mpsc::Sender<Back>,
+}
+
+impl<D> StreamConsumer<D> for Events {
+    type Item = wp::Event;
+
+    fn poll_consume(
+        self: Pin<&mut Self>,
+        _: &mut std::task::Context<'_>,
+        mut store: StoreContextMut<D>,
+        mut source: Source<'_, wp::Event>,
+        _: bool,
+    ) -> Poll<wasmtime::Result<StreamResult>> {
+        while source.remaining(store.as_context_mut()) > 0 {
+            let mut one = None;
+            source.read(store.as_context_mut(), &mut one)?;
+            let Some(e) = one else { break };
+            if self
+                .tx
+                .send(Back::Event(self.t, conv::from_event(&e)))
+                .is_err()
+            {
+                return Poll::Ready(Ok(StreamResult::Dropped));
             }
         }
+        Poll::Ready(Ok(StreamResult::Completed))
+    }
+}
+
+/// An Apply's result, as the component resolves its future.
+struct Done(Option<tokio::sync::oneshot::Sender<Result<wp::ApplyResponse, wp::CallError>>>);
+
+impl<D> FutureConsumer<D> for Done {
+    type Item = Result<wp::ApplyResponse, wp::CallError>;
+
+    fn poll_consume(
+        mut self: Pin<&mut Self>,
+        _: &mut std::task::Context<'_>,
+        store: StoreContextMut<D>,
+        mut source: Source<'_, Self::Item>,
+        _: bool,
+    ) -> Poll<wasmtime::Result<()>> {
+        let mut v = None;
+        source.read(store, &mut v)?;
+        if let (Some(v), Some(tx)) = (v, self.0.take()) {
+            let _ = tx.send(v);
+        }
+        Poll::Ready(Ok(()))
     }
 }
 
@@ -574,20 +816,50 @@ impl Provider for Wasm {
     fn submit(&mut self, call: Call) -> Ticket {
         let t = Ticket(self.next);
         self.next += 1;
-        self.queued.push_back((t, call));
+        let dead = self.dead.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let sent = dead.is_none()
+            && self
+                .calls
+                .as_ref()
+                .is_some_and(|c| c.send((t, call)).is_ok());
+        if !sent {
+            let why = dead.unwrap_or_else(|| "the provider has exited".into());
+            self.refused.push((t, CallError::Crashed(why)));
+        }
         t
     }
 
-    fn next_completed(&mut self) -> (Ticket, Result<Reply, CallError>) {
-        let (t, call) = self
-            .queued
-            .pop_front()
-            .expect("internal: no call in flight");
-        (t, self.run(call))
+    fn next_completed(
+        &mut self,
+        events: &mut dyn FnMut(Ticket, pb::Event),
+    ) -> (Ticket, Result<Reply, CallError>) {
+        if let Some((t, e)) = self.refused.pop() {
+            return (t, Err(e));
+        }
+        loop {
+            match self.back.recv() {
+                Ok(Back::Event(t, e)) => events(t, e),
+                Ok(Back::Answer(t, r)) => return (t, *r),
+                Err(_) => {
+                    panic!("internal: the wasm provider's thread is gone with a call in flight")
+                }
+            }
+        }
     }
 
     fn is_dead(&mut self) -> bool {
-        self.dead.is_some()
+        self.dead
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .is_some()
+    }
+}
+
+impl Drop for Wasm {
+    /// Its thread ends once it sees no more calls can come; a call still
+    /// running in it is left to finish there.
+    fn drop(&mut self) {
+        self.calls.take();
     }
 }
 

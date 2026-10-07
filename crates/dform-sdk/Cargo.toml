@@ -22,7 +22,8 @@ serde_json = "1.0"
 dform-core = { path = "../dform-core" }
 dform-wire = { path = "../dform-wire" }
 dform-sdk-derive = { path = "../dform-sdk-derive" }
-wit-bindgen = { version = "0.57", optional = true }
+# The provider's exports are async (R-130): a task per Apply.
+wit-bindgen = { version = "0.57", features = ["async", "async-spawn"], optional = true }
 dform-wit = { path = "../dform-wit", default-features = false, optional = true }
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies]

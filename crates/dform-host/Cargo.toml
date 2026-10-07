@@ -23,7 +23,7 @@ dform-core = { path = "../dform-core" }
 dform-grpc = { path = "../dform-grpc" }
 dform-wire = { path = "../dform-wire" }
 serde_json = "1.0"
-tokio = { version = "1", features = ["rt", "rt-multi-thread", "net", "macros", "io-util", "time"] }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "net", "macros", "io-util", "time", "sync"] }
 tonic = "0.13"
 # http.send: blocking HTTP over rustls, the machine's CA (the platform
 # verifier) and proxy, client certificates from a credential.
@@ -33,7 +33,9 @@ ureq = { version = "3", default-features = false, features = ["rustls", "platfor
 # No network transport: gix's reqwest one links aws-lc-rs beside ring.
 gix = { version = "0.88", default-features = false, features = ["sha1", "revision"] }
 # The component host (`wasm`).
-wasmtime = { version = "=49.0.1", default-features = false, features = ["component-model", "runtime", "std", "cranelift", "parallel-compilation", "wat", "anyhow"], optional = true }
+# `async` and `component-model-async`: the provider's calls are async
+# (R-130), several in flight on one instance.
+wasmtime = { version = "=49.0.1", default-features = false, features = ["component-model", "component-model-async", "async", "runtime", "std", "cranelift", "parallel-compilation", "wat", "anyhow"], optional = true }
 wasmtime-wasi = { version = "=49.0.1", optional = true }
 wasmtime-wasi-http = { version = "=49.0.1", optional = true }
 dform-wit = { path = "../dform-wit", default-features = false, features = ["host"], optional = true }
