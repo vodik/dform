@@ -2957,20 +2957,28 @@ fn run_with(
             yes,
             ..
         } => {
-            // How long a tick waits on an open null (R-122): the timeout
-            // of the provider that answers it, as dform.toml sets it; a
-            // built-in extern's by its `[providers.NAME]` table.
-            let manifest = located.loaded.manifest.as_ref();
+            // How long a tick waits on an open null (R-122): the `wait` of
+            // the provider that answers it, as dform.toml sets it (a
+            // built-in extern's by its `[providers.NAME]` table), else
+            // 10m; not its calls' `timeout`.
+            let waits = located
+                .loaded
+                .manifest
+                .as_ref()
+                .map(|m| m.provider_waits())
+                .unwrap_or_default();
             let wait_budget = |on: &[String]| {
                 on.iter()
                     .map(|l| {
-                        backend
-                            .wait_timeout(l)
-                            .or_else(|| {
-                                let (t, _) = crate::value::null_owner(l)?;
-                                manifest?.provider_timeout(t.split_once('.')?.0)
-                            })
-                            .unwrap_or(crate::plugin::policy::Policy::default().timeout)
+                        let set = || {
+                            let (t, _) = crate::value::null_owner(l)?;
+                            let serving = waits.iter().find(|(n, _)| backend.serves(n, &t));
+                            match serving {
+                                Some((_, d)) => Some(*d),
+                                None => waits.get(t.split_once('.')?.0).copied(),
+                            }
+                        };
+                        set().unwrap_or(crate::project::WAIT)
                     })
                     .max()
                     .unwrap_or_default()
@@ -3838,7 +3846,7 @@ fn run_with(
                         crate::interrupt::check()?;
                         bail!(
                             "apply stopped at tick {tick}: waited {} on {}, still unknown \
-                             (the provider's `timeout` in dform.toml); state is consistent: \
+                             (the provider's `wait` in dform.toml); state is consistent: \
                              run apply again to wait again",
                             crate::plugin::policy::show(budget),
                             names.join(", ")

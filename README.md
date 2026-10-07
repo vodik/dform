@@ -843,9 +843,9 @@ looked up by its idempotency key first, so it is adopted, never made
 twice. A tick held on a value the world has not reached yet, a Job's
 `status.succeeded`, waits for it, saying `waiting on
 k8s.job["migrate-v42"].status.succeeded since 02:14 (3m)` every ten
-seconds. The wait is bounded by that provider's `timeout`, the same
-knob as for its calls; past it the apply stops with the state consistent
-and says what it waited on.
+seconds. The wait is bounded by that provider's `wait` (10m unless
+dform.toml says), not the `timeout` of its calls; past it the apply
+stops with the state consistent and says what it waited on.
 
 **Lifecycle.** The things that happen between two applies are facts,
 so policy can read them and `why` can explain them:

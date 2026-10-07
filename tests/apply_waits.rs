@@ -1,9 +1,9 @@
 //! Waiting (R-81, R-122): a tick with nothing definite to apply, held on
 //! open nulls that waiting can resolve (a computed value the world has
 //! not reached yet, an extern that answered "not yet"), waits for them up
-//! to the `timeout` of the provider that answers them (`[providers.NAME]
-//! timeout`, 60s by default), saying so on stderr; past it the apply
-//! stops, saying what it waited on.
+//! to the `wait` of the provider that answers them (`[providers.NAME]
+//! wait`, 10m by default; not its calls' `timeout`), saying so on stderr;
+//! past it the apply stops, saying what it waited on.
 
 mod common;
 use common::Scratch;
@@ -17,20 +17,20 @@ resource db.postgres d { size = 1 }
 resource net.vpc v { cidr = "10.0.0.0/16" } where d.endpoint == "d.db.fake"
 "#;
 
-/// A project whose fake provider's `timeout` is `timeout`.
-fn project(name: &str, timeout: &str) -> Scratch {
+/// A project whose fake provider's `KEY` (`wait`, `timeout`) is `d`.
+fn project(name: &str, key: &str, d: &str) -> Scratch {
     let s = Scratch::new(name);
-    set_timeout(&s, timeout);
+    set(&s, key, d);
     s.write("p.df", PROG);
     s
 }
 
-fn set_timeout(s: &Scratch, timeout: &str) {
+fn set(s: &Scratch, key: &str, d: &str) {
     s.write(
         "dform.toml",
         &format!(
             "[project]\nedition = \"2026\"\n\n[providers]\nfake = {{ source = \"fake\", \
-             timeout = \"{timeout}\" }}\n"
+             {key} = \"{d}\" }}\n"
         ),
     );
 }
@@ -85,17 +85,17 @@ fn a_tick_waits_until_the_world_reaches_the_value() {
     );
 }
 
-/// Past the provider's `timeout` the apply stops, saying what it waited
-/// on and how to go on; nothing of the tick is in flight, so the next
-/// apply plans it again and waits again.
+/// Past the provider's `wait` the apply stops, saying what it waited on
+/// and how to go on; nothing of the tick is in flight, so the next apply
+/// plans it again and waits again.
 #[test]
-fn past_the_providers_timeout_the_apply_stops_saying_what_it_waited_on() {
-    let s = project("wait-expires", "1s");
+fn past_the_providers_wait_the_apply_stops_saying_what_it_waited_on() {
+    let s = project("wait-expires", "wait", "1s");
     let r = apply(&s, &["--chaos", "not-ready=db.postgres[\"d\"].endpoint:40"]).failure();
     assert!(
         r.stderr.contains(
             "Error: apply stopped at tick 2: waited 1s on db.postgres d.endpoint, still \
-             unknown (the provider's `timeout` in dform.toml); state is consistent: run \
+             unknown (the provider's `wait` in dform.toml); state is consistent: run \
              apply again to wait again\n"
         ),
         "{}",
@@ -109,7 +109,7 @@ fn past_the_providers_timeout_the_apply_stops_saying_what_it_waited_on() {
         "{state}"
     );
     // The next apply waits again, long enough this time.
-    set_timeout(&s, "30s");
+    set(&s, "wait", "30s");
     apply(&s, &[]).success();
     assert!(s.json("w.json")["resources"].get("net.vpc::v").is_some());
 }
@@ -155,4 +155,15 @@ fn an_extern_that_says_not_yet_is_asked_again() {
         "{}",
         r.stdout
     );
+}
+
+/// A call's `timeout` does not bound the wait (R-122): a provider whose
+/// calls time out after 1s still waits past it on a value not reached.
+#[test]
+fn a_calls_timeout_is_not_the_wait() {
+    let s = project("wait-not-timeout", "timeout", "1s");
+    let start = std::time::Instant::now();
+    apply(&s, &["--chaos", "not-ready=db.postgres[\"d\"].endpoint:40"]).success();
+    assert!(start.elapsed() > std::time::Duration::from_secs(1));
+    assert_eq!(waits(&s)[0]["result"], "resolved");
 }

@@ -22,8 +22,8 @@ reach it, is a call to the host (`wit/host/dform-host.wit`, `dform:host`):
 
 A read of something the world has not reached yet (a file cloud-init has
 not written, a host still booting) answers `not-yet`, distinct from an
-error, so the engine waits on it, within the provider's `timeout` (R-81,
-R-122). An error carries a class: `final`, `retryable` (nothing changed,
+error, so the engine waits on it, within the provider's `wait` (10m
+unless dform.toml says; R-81, R-122), not a call's `timeout`. An error carries a class: `final`, `retryable` (nothing changed,
 worth sending again) or `maybe-applied` (no answer came; it may have
 taken effect).
 

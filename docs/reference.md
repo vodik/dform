@@ -95,7 +95,7 @@ dform = ">=0.1"
 [providers]
 aws = { source = "aws-mock", version = "2.1" }   # `use aws` in a program
 google = { source = "providers/gcp" }            # a path under the root
-k8s = { source = "k8s", timeout = "2m" }         # each call's timeout (60s by default)
+k8s = { source = "k8s", timeout = "2m" }         # each call's timeout (60s by default); `wait`, a tick's on "not yet" (10m)
 ovh = { path = "~/src/dform/target/debug/dform-provider-ovh" }  # the executable itself
 
 [defaults]
@@ -151,7 +151,7 @@ apply reads (refresh, the lookups that resolve uncertain calls), plans and
 asks, and only a `y` writes state (`moved` renames included) or calls
 Apply. How many ticks a plan takes is not known up front, and need not
 be: `later` is planned when the tick before reports. Apply applies a
-tick, waits for the values it unblocks (within the provider's `timeout`,
+tick, waits for the values it unblocks (within the provider's `wait`,
 see "Timeouts, retries and waiting"), plans the next, and asks before a
 tick whose plan holds what no earlier plan showed (a pending group's
 member: `iam.policy[?]` at tick 1, named once the endpoint it is built
@@ -1427,7 +1427,7 @@ order and holds what is pending. At the boundary the results come back as
 world facts, round 0 resolves the nulls they answer, the program is
 re-evaluated and policy is checked again; a deny there stops the run with the
 reason printed. A tick with nothing definite to apply, held on values the
-world has not reached yet, waits for them within the provider's `timeout`
+world has not reached yet, waits for them within the provider's `wait`
 (see "Timeouts, retries and waiting"). `--max-ticks N` (default 8) is a safety valve for a loop
 that never settles, not a way to stop early:
 
@@ -2205,13 +2205,15 @@ waiting on k8s.job["migrate-v42"].status.succeeded since 02:14 (3m)
 
 Once one changes the run goes on, the wait counted as a boundary: the next
 tick is planned and asked for as at any boundary (see `apply` above). The
-wait is the tick's own retry, bounded by the `timeout` of the provider that
-answers what it waits on (the longest, for several): the one knob, the same
-that bounds each call. A built-in's (`ssh.read` while a host boots) is set
-by its name, `[providers] ssh = { timeout = "10m" }`. Past it the apply
+wait is the tick's own retry, bounded by the `wait` of the provider that
+answers what it waits on (the longest, for several), 10m unless dform.toml
+says: not the `timeout` that bounds each call, since a host that boots or
+a job that runs takes minutes while a call that hangs is wrong after one.
+A built-in's (`ssh.read` while a host boots) is set by its name,
+`[providers] ssh = { wait = "20m" }`. Past it the apply
 stops, the state consistent and nothing of the tick in flight: `apply
 stopped at tick 2: waited 2m on k8s.job["migrate-v42"].status.succeeded,
-still unknown (the provider's `timeout` in dform.toml); state is
+still unknown (the provider's `wait` in dform.toml); state is
 consistent: run apply again to wait again`. A null waiting cannot bring
 (another stack's output not published yet, a value of an object no tick
 makes) stops the tick at once, as `nothing definite to apply, still
@@ -2220,7 +2222,7 @@ waiting on ...`. Every wait is a `wait` entry in the audit log.
 ```toml
 [providers]
 aws = { source = "aws", timeout = "2m", retries = 8, backoff = "500ms" }
-ssh = { timeout = "10m" }   # a built-in: how long a tick waits on a host that boots
+ssh = { wait = "20m" }      # a built-in: how long a tick waits on a host that boots (10m by default)
 ```
 
 A provider's table also grants it what it may use beyond the host's own
@@ -2465,8 +2467,8 @@ contact after: a changed key is an error naming both fingerprints until
 answer yet (the connection refused, no answer within 10s, no route) and a
 `read` of a path that does not exist yet are "not yet": the answer is an
 open null, and an apply waits on it ("Timeouts, retries and waiting"),
-asking again until the host answers or the `ssh` provider's `timeout`
-(`[providers] ssh = { timeout = "10m" }`, 60s by default) runs out. An
+asking again until the host answers or the `ssh` provider's `wait`
+(`[providers] ssh = { wait = "20m" }`, 10m by default) runs out. An
 authentication failure, a changed host key, a file it may not read and a
 file that is not UTF-8 text are errors.
 

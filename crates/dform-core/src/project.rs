@@ -233,6 +233,10 @@ pub enum ProviderEntry {
     Table(ProviderTable),
 }
 
+/// How long a tick waits on a value its provider answers "not yet"
+/// unless dform.toml says (`[providers.NAME] wait`, R-122).
+pub const WAIT: std::time::Duration = std::time::Duration::from_secs(600);
+
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProviderTable {
@@ -251,6 +255,10 @@ pub struct ProviderTable {
     /// How long one call may go unanswered (`60s`; `500ms`, `2m`) before
     /// it is taken as timed out (R-81).
     pub timeout: Option<String>,
+    /// How long a tick waits on a value the provider answers "not yet"
+    /// (`10m`, [`WAIT`]): a host booting, a job running (R-122). Not a
+    /// call's timeout: each call the wait makes has its own.
+    pub wait: Option<String>,
     /// How many times a failed call is sent again (5).
     pub retries: Option<u32>,
     /// The first retry's delay (`1s`); each next one doubles, with jitter.
@@ -458,7 +466,11 @@ impl Manifest {
                         at(&format!("[providers.{name}]"))
                     );
                 }
-                for (key, v) in [("timeout", &t.timeout), ("backoff", &t.backoff)] {
+                for (key, v) in [
+                    ("timeout", &t.timeout),
+                    ("backoff", &t.backoff),
+                    ("wait", &t.wait),
+                ] {
                     if let Some(v) = v
                         && crate::store::parse_duration(v).is_none_or(|d| d.is_zero())
                     {
@@ -712,6 +724,22 @@ impl Manifest {
             ProviderEntry::Table(t) => crate::store::parse_duration(t.timeout.as_deref()?),
             ProviderEntry::Source(_) => None,
         }
+    }
+
+    /// How long a tick waits on what each provider answers "not yet"
+    /// (`[providers.NAME] wait`), by its name, where dform.toml says;
+    /// else [`WAIT`].
+    pub fn provider_waits(&self) -> BTreeMap<String, std::time::Duration> {
+        self.providers
+            .iter()
+            .filter_map(|(name, p)| match p {
+                ProviderEntry::Table(t) => Some((
+                    name.clone(),
+                    crate::store::parse_duration(t.wait.as_deref()?)?,
+                )),
+                ProviderEntry::Source(_) => None,
+            })
+            .collect()
     }
 
     /// The default backend of `stack` (a `local` directory relative to
