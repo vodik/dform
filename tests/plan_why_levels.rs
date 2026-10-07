@@ -27,6 +27,8 @@ fn left(l: &str) -> String {
         Some(_) => text.split(" (").next().unwrap_or_default(),
         None => text,
     };
+    // A secret inside a laid-out value says its label from `-v` too.
+    let text = text.split("(sensitive").next().unwrap_or_default();
     format!("{indent}{}", text.split(" = ").next().unwrap_or_default())
 }
 
@@ -61,8 +63,27 @@ fn levels(example: &str) -> (String, String) {
         let t = l.trim_start();
         t.starts_with("= ") || t.starts_with("over ")
     };
-    let kept: Vec<&str> = full.lines().filter(|l| !derivation(l)).collect();
-    assert_eq!(kept, how.lines().collect::<Vec<_>>(), "{full}");
+    // Its changes are `-v`'s, each value leaf by leaf (R-124): a value
+    // one write made is one laid-out line below `-vv`.
+    let changes = |s: &str| -> Vec<String> {
+        s.lines()
+            .filter(|l| {
+                let t = l.trim_start();
+                l.len() == t.len()
+                    || ["+ ", "~ ", "- ", "± ", "tick "]
+                        .iter()
+                        .any(|m| t.starts_with(m))
+            })
+            .map(left)
+            .collect()
+    };
+    assert_eq!(changes(&full), changes(&how), "{full}");
+    assert!(
+        !full
+            .lines()
+            .any(|l| !derivation(l) && (l.ends_with(" = {") || l.ends_with(" = ["))),
+        "{full}"
+    );
     assert!(
         full.lines().any(|l| l.trim_start().starts_with("= ")),
         "{full}"
@@ -93,14 +114,14 @@ fn the_demo_plans_at_each_level() {
         line.contains(
             "  + network.vpc main\n    + net.vpc main.vpc                          network.df:19\n        \
              cidr = \"10.50.0.0/16\"                   stacks/dform.df:51\n        \
-             tags.component = \"network\"\n"
+             tags = { component: \"network\", env: \"staging\" }\n"
         ) && line.contains("        vpc = main.vpc\n"),
         "{line}"
     );
     // `-v`: the bindings and the expressions.
     assert!(
-        how.contains("    + net.subnet main.private-us-test-1a           network.df:24  with z = \"us-test-1a\"\n        \
-             cidr = \"10.50.0.0/20\"                      inet.subnet(vpc.cidr, 4, zone_index[z])\n"),
+        how.contains("    + net.subnet main.private-us-test-1a        network.df:24  with z = \"us-test-1a\"\n        \
+             cidr = \"10.50.0.0/20\"                   inet.subnet(vpc.cidr, 4, zone_index[z])\n"),
         "{how}"
     );
 }
@@ -112,20 +133,25 @@ fn crud_api_plans_at_each_level() {
     // resource of the tick computes is the expression that reads it.
     assert!(
         line.contains("      password = (sensitive)\n")
-            && line.contains("      stringData.PGHOST = db.private_ip_address\n"),
+            && line.contains("        PGHOST: db.private_ip_address,\n"),
         "{line}"
     );
     assert!(
         how.contains("      password = (sensitive random.password(\"crud-api-db\"))\n"),
         "{how}"
     );
-    // A long string elides its middle by default, whole from `-v`.
+    // A long string inside a laid-out value is whole (R-124); one on its
+    // own line elides its middle by default, whole from `-v`.
     let digest = "sha256:9f2c4d0e8a7b6c5d4e3f2a1b0c9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d";
     assert!(
-        line.contains(
-            ".image = \"gcr.io/shop/crud-api@sha256:9f…b4c3d2e1f0a9b8c7d6e5f4a3b2c1d\"\n"
-        ) && !line.contains(digest),
+        line.contains(&format!(
+            "          image: \"gcr.io/shop/crud-api@{digest}\",\n"
+        )),
         "{line}"
     );
-    assert!(how.contains(digest), "{how}");
+    let full = plan(&Scratch::new("why-levels-crud-vv"), "crud-api", &["-vv"]);
+    assert!(
+        full.contains(".image = \"gcr.io/shop/crud-api@sha256:9f2c4d0e8a7b6c5d4e3f2a1b0c9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d\"\n"),
+        "{full}"
+    );
 }

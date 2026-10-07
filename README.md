@@ -300,8 +300,10 @@ plan: 1 change (1 create) over 1 tick
 
 tick 2  1 change
   + aws.iam_policy "connect-orders.cx3k.us-east-1.rds.amazonaws.com"  shop.df:31
-      policy.Statement[0].Action = "rds-db:connect"
-      policy.Statement[0].Resource = "orders.cx3k.us-east-1.rds.amazonaws.com"
+      policy = { Statement: [{
+        Action: "rds-db:connect",
+        Resource: "orders.cx3k.us-east-1.rds.amazonaws.com",
+      }] }
 
 Apply tick 2 to shop[env=prod]? [y/N]
 ```

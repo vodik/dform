@@ -11,6 +11,7 @@ mod header;
 mod layout;
 mod normal;
 mod typed;
+pub mod value;
 
 pub use layout::{INLINE_LITERALS, WIDTH};
 pub use typed::Typing;

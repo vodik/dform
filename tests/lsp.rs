@@ -1920,7 +1920,8 @@ fn hover_gives_a_reads_value_and_its_provenance() {
     let text = hover(&stack, "inet(cidrs.main)", 11);
     for want in [
         "**cidrs.main** = `\"10.50.0.0/16\"`",
-        "**input cidrs** = `{main: \"10.50.0.0/16\", peer: \"10.60.0.0/16\"}`",
+        // In the formatter's layout, as plan, why and query print it.
+        "**input cidrs** = `{ main: \"10.50.0.0/16\", peer: \"10.60.0.0/16\" }`",
         "winning rank: default",
         "- rank default: `{main: \"10.50.0.0/16\"}` by stacks/dform.df:10:15",
         "input cidrs = {main: \"10.50.0.0/16\", peer: \"10.60.0.0/16\"}",

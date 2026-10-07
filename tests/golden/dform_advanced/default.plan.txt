@@ -49,12 +49,10 @@ tick 1  16 changes
       tags.segment = "shared"
   + net.vpc tenant_a                         stacks/dform-advanced.df:43
       cidr = "10.96.0.0/16"
-      tags.segment = "tenant"
-      tags.tenant = "tenant_a"
+      tags = { segment: "tenant", tenant: "tenant_a" }
   + net.vpc tenant_b                         stacks/dform-advanced.df:43
       cidr = "10.97.0.0/16"
-      tags.segment = "tenant"
-      tags.tenant = "tenant_b"
+      tags = { segment: "tenant", tenant: "tenant_b" }
   + net.vpc_peering mesh-peer-core_a-core_b  stacks/dform-advanced.df:123
       accepter_vpc = core_b
       requester_vpc = core_a

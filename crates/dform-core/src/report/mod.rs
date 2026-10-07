@@ -37,6 +37,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use tree::Site;
 
 mod bare;
+pub mod fold;
 pub mod table;
 pub mod tree;
 
@@ -495,6 +496,9 @@ pub struct Line {
     /// At `-vv`, how its value was made: each expression it passed
     /// through, then what it beat (R-122, [`tree::Printer::attr_chain`]).
     pub chain: Vec<tree::Step>,
+    /// A fold (R-124): the value its leaves make, which one contribution
+    /// wrote, printed in the formatter's layout.
+    pub value: Option<crate::fmt::value::Tree>,
 }
 
 #[derive(Debug, Clone)]
@@ -509,6 +513,10 @@ pub struct Deformation {
     pub because: Option<String>,
     /// A replace: the changed paths the schema declares immutable.
     pub forces: Vec<String>,
+    /// The lines as the plan prints them below `-vv` (R-124): each value
+    /// one contribution wrote folded back to where the writers diverge
+    /// ([`fold`]). Empty: [`Deformation::lines`] as they are.
+    pub folded: Vec<Line>,
 }
 
 #[derive(Debug, Clone)]
@@ -1300,6 +1308,7 @@ fn deformation(a: &Action, schema: &Schema, r: &Redactor, refs: &Refs) -> Deform
         leaves: vec![],
         site: None,
         chain: Vec::new(),
+        value: None,
     };
     let by_element = matches!(
         a.kind,
@@ -1367,6 +1376,7 @@ fn deformation(a: &Action, schema: &Schema, r: &Redactor, refs: &Refs) -> Deform
             leaves,
             site: None,
             chain: Vec::new(),
+            value: None,
         });
     }
     Deformation {
@@ -1379,6 +1389,7 @@ fn deformation(a: &Action, schema: &Schema, r: &Redactor, refs: &Refs) -> Deform
             ActionKind::Replace { .. } => forces(a, schema),
             _ => Vec::new(),
         },
+        folded: Vec::new(),
     }
 }
 
@@ -1609,7 +1620,7 @@ fn waited(on: &BTreeSet<String>) -> Vec<String> {
 }
 
 /// The page width the right column folds at.
-const WIDTH: usize = 100;
+pub const WIDTH: usize = 100;
 /// The right column starts here, unless every left column is narrower.
 const COLUMN: usize = 52;
 
@@ -1786,6 +1797,9 @@ impl Report {
                     l.chain = attr_chain(&p, rules, facts, &l.path, &self.keys);
                 }
             }
+            if why < Why::Full && matches!(d.kind, ActionKind::Create | ActionKind::Adopt) {
+                d.folded = folded(d, &p, rules, facts, &res.facts, why);
+            }
         }
         for g in &mut self.groups {
             g.site = g
@@ -1855,7 +1869,7 @@ impl Report {
             .flat_map(|b| b.deformations.iter_mut());
         for d in self.definite.iter_mut().chain(pending) {
             fix(&mut d.site);
-            for l in d.lines.iter_mut() {
+            for l in d.lines.iter_mut().chain(d.folded.iter_mut()) {
                 fix(&mut l.site);
                 for step in l.chain.iter_mut() {
                     if let Some(at) = place(&step.at) {
@@ -2387,11 +2401,15 @@ impl Report {
         // Keep plan output readable.
         let max = 40usize;
         let inner = format!("{indent}    ");
-        for (i, l) in d.lines.iter().enumerate() {
+        let lines = match d.folded.is_empty() {
+            true => &d.lines,
+            false => &d.folded,
+        };
+        for (i, l) in lines.iter().enumerate() {
             if i == max {
                 rows.push(Row::plain(format!(
                     "{inner}... ({} more changes)",
-                    d.lines.len() - max
+                    lines.len() - max
                 )));
                 break;
             }
@@ -2453,28 +2471,55 @@ fn chain_rows(chain: &[tree::Step], indent: &str) -> Vec<Row> {
     rows
 }
 
+/// One value `why` prints ([`chains_text`]).
+pub struct ChainItem {
+    /// `path = value`; before a fold's value, `path = `.
+    pub head: String,
+    /// The value as its head says it.
+    pub shown: String,
+    pub chain: Vec<tree::Step>,
+    /// A fold (R-124): the value one contribution wrote, laid out after
+    /// `head`.
+    pub value: Option<crate::fmt::value::Tree>,
+}
+
 /// Values and their chains as `why` prints them (R-122): each `head`
 /// (`path = value`) at `indent`, its steps under it, in one layout. A
 /// chain that only says the value (`shown`) again is left out.
-pub fn chains_text(
-    items: &[(String, String, Vec<tree::Step>)],
-    indent: &str,
-    style: Style,
-) -> String {
+pub fn chains_text(items: &[ChainItem], indent: &str, style: Style) -> String {
     let mut rows = Vec::new();
-    for (head, shown, chain) in items {
-        let row = Row::plain(format!("{indent}{}", elide_literals(head)));
-        // A literal: its place on its line.
-        if let [only] = chain.as_slice()
-            && !only.lost
-            && only.with.is_empty()
-            && only.expr == *shown
-        {
-            rows.push(row.with(vec![only.at.clone()]));
+    for it in items {
+        // A literal: its place on its (first) line.
+        let literal = match it.chain.as_slice() {
+            [only] if !only.lost && only.with.is_empty() && only.expr == it.shown => {
+                Some(only.at.clone())
+            }
+            _ => None,
+        };
+        if let Some(t) = &it.value {
+            let width = WIDTH.saturating_sub(indent.chars().count());
+            for (i, text) in crate::fmt::value::layout(&it.head, t, width)
+                .into_iter()
+                .enumerate()
+            {
+                let row = Row::plain(format!("{indent}{text}"));
+                rows.push(match (i, &literal) {
+                    (0, Some(at)) => row.with(vec![at.clone()]),
+                    _ => row,
+                });
+            }
+            if literal.is_none() {
+                rows.extend(chain_rows(&it.chain, &format!("{indent}  ")));
+            }
+            continue;
+        }
+        let row = Row::plain(format!("{indent}{}", elide_literals(&it.head)));
+        if let Some(at) = literal {
+            rows.push(row.with(vec![at]));
             continue;
         }
         rows.push(row);
-        rows.extend(chain_rows(chain, &format!("{indent}  ")));
+        rows.extend(chain_rows(&it.chain, &format!("{indent}  ")));
     }
     layout(&rows, style)
 }
@@ -2594,6 +2639,8 @@ fn attr_text(d: &Deformation, l: &Line, s: &Site, why: Why) -> Vec<String> {
             .as_deref()
             .and_then(|e| e.split_once(" = "))
             .map(|(_, rhs)| rhs.to_string())
+            // A fold is the value the entry wrote, laid out.
+            .filter(|_| l.value.is_none())
             .filter(|rhs| {
                 // A variable is the entry's binding, on the line above; a
                 // literal is the value itself; a secret says so already.
@@ -2682,6 +2729,115 @@ fn group_address(g: &Group) -> String {
         true => format!("{t}[{name}]"),
         false => format!("{t}[\"{name}\"]"),
     }
+}
+
+/// Create `d`'s lines folded (R-124): the leaves each contribution wrote
+/// as one value where the writers diverge, a leaf another wrote on its
+/// own line; one no contribution wrote is the schema's default when the
+/// schema gives one there (`type_default`, in `all`).
+fn folded(
+    d: &Deformation,
+    p: &tree::Printer,
+    rules: &[RuleStmt],
+    facts: &[&Atom],
+    all: &BTreeSet<Atom>,
+    why: Why,
+) -> Vec<Line> {
+    // The lines in the order the program gave a list's elements.
+    let mut lines: Vec<&Line> = d.lines.iter().collect();
+    lines.sort_by_cached_key(|l| {
+        let Some((a, _, _)) = attr_holding(facts, &l.path) else {
+            return Vec::new();
+        };
+        let (Some(Term::Val(Value::Str(top))), Some(Term::Val(v))) = (a.args.get(2), a.args.get(3))
+        else {
+            return Vec::new();
+        };
+        let toks = fold::tokens(&l.path);
+        let skip = fold::tokens(top).len().min(toks.len());
+        let mut key: Vec<(usize, String)> =
+            toks[..skip].iter().map(|t| (0, t.text.clone())).collect();
+        key.extend(fold::position(v, &toks[skip..]));
+        key
+    });
+    let paths: Vec<String> = lines.iter().map(|l| l.path.clone()).collect();
+    let mut writers: Vec<Option<crate::circuit::NodeId>> = vec![None; paths.len()];
+    let mut by_attr: BTreeMap<&Atom, Vec<usize>> = BTreeMap::new();
+    for (i, l) in lines.iter().enumerate() {
+        if l.op == Op::Leaf
+            && let Some((a, _, _)) = attr_holding(facts, &l.path)
+        {
+            by_attr.entry(a).or_default().push(i);
+        }
+    }
+    for (a, at) in by_attr {
+        let held: Vec<String> = at.iter().map(|&i| paths[i].clone()).collect();
+        for (i, w) in at.into_iter().zip(p.writers(a, &held)) {
+            writers[i] = w;
+        }
+    }
+    let defaults: BTreeSet<String> = all
+        .iter()
+        .filter(|f| f.pred == "type_default")
+        .filter_map(|f| match f.args.as_slice() {
+            [Term::Val(Value::Str(t)), Term::Val(Value::Str(p)), _] if *t == d.addr.typ => {
+                Some(p.clone())
+            }
+            _ => None,
+        })
+        .collect();
+    let values: Vec<crate::fmt::value::Tree> = lines
+        .iter()
+        .map(|l| crate::fmt::value::Tree::Leaf(whole(&l.after, why)))
+        .collect();
+    fold::fold(&paths, &writers)
+        .into_iter()
+        .map(|g| {
+            let first = lines[g.leaves[0]];
+            match (g.leaves.as_slice(), writers[g.leaves[0]]) {
+                ([i], None) if defaults.contains(&schema_path(&paths[*i])) => Line {
+                    site: Some(Site {
+                        statement: "schema default".into(),
+                        ..Site::default()
+                    }),
+                    ..first.clone()
+                },
+                ([_], _) => first.clone(),
+                (_, w) => Line {
+                    op: Op::Leaf,
+                    path: g.path.clone(),
+                    before: Shown::Absent,
+                    after: Shown::Absent,
+                    leaves: Vec::new(),
+                    site: w.and_then(|w| p.contribution_site(rules, w, &g.path)),
+                    chain: Vec::new(),
+                    value: Some(fold::assemble(&g, &paths, &values)),
+                },
+            }
+        })
+        .collect()
+}
+
+/// A leaf's value inside a folded one: as the line says it, a string
+/// whole (no elision inside a laid-out value).
+fn whole(v: &Shown, why: Why) -> String {
+    match v {
+        Shown::Value(Json::String(s)) => crate::partition::quote(s),
+        v => v.said(why),
+    }
+}
+
+/// A printed path's schema path: its keys, no selectors
+/// (`spec.ports[name=web].protocol` is `spec.ports.protocol`).
+fn schema_path(path: &str) -> String {
+    fold::tokens(path)
+        .into_iter()
+        .filter_map(|t| match t.step {
+            fold::Step::Key(k) => Some(crate::ir::segment_key(&k).into_owned()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join(".")
 }
 
 /// The site of the attribute fact of `facts` that holds change path
@@ -3058,6 +3214,21 @@ fn write_line(
                     why,
                     vec![],
                 );
+            }
+        }
+        Op::Leaf if l.value.is_some() => {
+            let head = format!("{} = ", l.path);
+            let width = WIDTH.saturating_sub(indent.chars().count());
+            let tree = l.value.as_ref().expect("a fold has its value");
+            for (i, text) in crate::fmt::value::layout(&head, tree, width)
+                .into_iter()
+                .enumerate()
+            {
+                let row = format!("{indent}{text}");
+                match i {
+                    0 => push(row.clone(), row, right.clone()),
+                    _ => push(row.clone(), row, vec![]),
+                }
             }
         }
         Op::Leaf => match kind {

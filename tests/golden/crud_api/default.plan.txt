@@ -11,12 +11,12 @@ tick 1  8 changes
       deletion_protection = true
       name = "crud-api-dev"
       region = "us-east1"                       stacks/crud_api.df:22
-      settings.availability_type = "ZONAL"      stacks/crud_api.df:43
-      settings.backup_configuration.enabled = true
-      settings.backup_configuration.point_in_time_recovery_enabled = true
-      settings.ip_configuration.ipv4_enabled = false
-      settings.ip_configuration.private_network = vpc
-      settings.tier = "db-f1-micro"             stacks/crud_api.df:43
+      settings = {
+        availability_type: "ZONAL",
+        backup_configuration: { enabled: true, point_in_time_recovery_enabled: true },
+        ip_configuration: { ipv4_enabled: false, private_network: vpc },
+        tier: "db-f1-micro",
+      }
   + google.sql_user crud_user                   stacks/crud_api.df:92
       instance = "crud-api-dev"
       name = "crud_api"
@@ -28,35 +28,36 @@ tick 1  8 changes
       metadata.name = "default-deny"
       metadata.namespace = "shop"
       spec.podSelector = {}
-      spec.policyTypes[0] = "Ingress"
-      spec.policyTypes[1] = "Egress"
+      spec.policyTypes = ["Ingress", "Egress"]
   + google.sql_database crud_db                 stacks/crud_api.df:90
       instance = "crud-api-dev"
       name = "crud_api"
   + k8s.secret db_conn                          stacks/crud_api.df:120
-      metadata.name = "crud-api-db"
-      metadata.namespace = "shop"
-      stringData.PGDATABASE = (sensitive)
-      stringData.PGHOST = db.private_ip_address
-      stringData.PGPASSWORD = (sensitive)
-      stringData.PGUSER = (sensitive)
+      metadata = { name: "crud-api-db", namespace: "shop" }
+      stringData = {
+        PGDATABASE: (sensitive),
+        PGHOST: db.private_ip_address,
+        PGPASSWORD: (sensitive),
+        PGUSER: (sensitive),
+      }
   + k8s.job migrate-v42                         stacks/crud_api.df:134
-      metadata.labels.app = "crud-api"
-      metadata.labels.schema = "42"
+      metadata.labels = { app: "crud-api", schema: "42" }
       metadata.name = "crud-api-migrate-v42"
       metadata.namespace = "shop"
       spec.backoffLimit = 2
-      spec.template.spec.containers[name=migrate].args[0] = "migrate"
-      spec.template.spec.containers[name=migrate].args[1] = "--to"
-      spec.template.spec.containers[name=migrate].args[2] = "42"
-      spec.template.spec.containers[name=migrate].envFrom[0].secretRef.name = "crud-api-db"
-      spec.template.spec.containers[name=migrate].image = "gcr.io/shop/crud-api@sha256:9f…b4c3d2e1f0a9b8c7d6e5f4a3b2c1d"
-      spec.template.spec.containers[name=migrate].name = "migrate"
-      spec.template.spec.containers[name=migrate].resources.limits.cpu = "500m"
-      spec.template.spec.containers[name=migrate].resources.limits.memory = "256Mi"
-      spec.template.spec.containers[name=migrate].resources.requests.cpu = "100m"
-      spec.template.spec.containers[name=migrate].resources.requests.memory = "128Mi"
-      spec.template.spec.restartPolicy = "Never"
+      spec.template.spec = {
+        containers: [{
+          args: ["migrate", "--to", "42"],
+          envFrom: [{ secretRef: { name: "crud-api-db" } }],
+          image: "gcr.io/shop/crud-api@sha256:9f2c4d0e8a7b6c5d4e3f2a1b0c9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d",
+          name: "migrate",
+          resources: {
+            limits: { cpu: "500m", memory: "256Mi" },
+            requests: { cpu: "100m", memory: "128Mi" },
+          },
+        }],
+        restartPolicy: "Never",
+      }
 
 later
   app blue                                      if app blue

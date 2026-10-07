@@ -962,7 +962,37 @@ made; the plan itself says what it is.
   when it is read; a value no change of the tick makes puts its change in
   a later tick, whose header says what it `waits on`). A secret is
   `(sensitive)`. A string past 60 characters elides its middle (`"ssh-
-  ed25519 AAAA…2DK7 simon@framework"`). The full address, `T["A"]`, is
+  ed25519 AAAA…2DK7 simon@framework"`), but inside a laid-out value.
+  An attribute prints as the source wrote it (R-124): the leaves one
+  write made (a block's entry, a `set`, a policy's element) fold back
+  into one value at the path where its writers diverge, in `dform fmt`'s
+  layout: on one line when it fits, else a field or an element per line
+  with a trailing comma, a list of one object hugging it (`[{` .. `}]`),
+  no string elided. A leaf another write made is its own line with its
+  site, a merge key the schema defaults `schema default`:
+
+  ```
+  + k8s.deployment traefik                     traefik.df:4
+      metadata = { labels: { app: "traefik" }, name: "traefik" }
+      metadata.labels.owner = "simon"          baseline.df:2
+      spec.template.spec.containers[name=traefik] = {
+        args: [
+          "--entrypoints.web.address=:80",
+          "--certificatesresolvers.letsencrypt.acme.email=admin@vodik.xyz",
+        ],
+        image: "traefik:v3.1",
+        name: "traefik",
+        ports: [{ containerPort: 80, name: "web" }],
+      }
+      spec.template.spec.containers[name=traefik].ports[containerPort=80,protocol=TCP].protocol = "TCP"  schema default
+  ```
+
+  A keyed element is said by its key (`containers[name=traefik]`); an
+  element by position is its list's (`args = [..]`), unless another write
+  adds elements to the list too, when each writer's elements are said by
+  position (`statements[1] = { .. }  baseline.df:15`). Only a create
+  folds: an update says the leaves that change. `-vv` says every leaf on
+  its own line, with its chain. The full address, `T["A"]`, is
   the plan file's, `--json`'s and state's; `why`, `query` and `why-not`
   take it or the printed one (`why 'ovh.ssh_key k3s.admin'`, or its path
   alone, `why k3s.admin`, `why k3s.server.public_ip`).
@@ -972,7 +1002,7 @@ made; the plan itself says what it is.
   `- T a  (deposed)` in the next tick). An update diffs a keyless set,
   or a list with merge keys (`containers[name=web]`), by element: an
   element that is new or gone is one `+`/`-` line with its leaves, not
-  every later index shifting. Map leaves print one per line. A copy
+  every later index shifting. A copy
   (R-67) prints as its own entry, `+ network blue`, in bold, its resources
   indented under it with their full paths (`+ net.vpc blue.vpc`), a copy
   inside it nested again, inside the tick they run in.
@@ -1087,7 +1117,8 @@ usage error.
   value; a clause's binding where the expression reads it, `= zone_index[z]
   stacks/net.df:12  with z = "us-test-1a"`; a rank that is not normal,
   `= "BHS5" @default`; then one `over VALUE @RANK   SITE` line per write
-  it beat. A key is never a step (the deployment line has it); a value
+  it beat; no `over` for the engine's own placeholder of an optional
+  computed attribute, which every write replaces. A key is never a step (the deployment line has it); a value
   printed above is named, not repeated (a literal written where the
   site column already says says nothing more); long strings elide.
   Nothing is said of the resource as a whole.
@@ -1630,7 +1661,7 @@ cargo run -- -C examples/demo query 'attr(t, a, "cidr", c), want(t, a), t != net
 cargo run -- -C examples/demo query 'want(net.vpc, "main.vpc")'    # yes / no
 cargo run -- -C examples/demo query want                                    # every want fact
 cargo run -- -C examples/demo query 'net.vpc["main.vpc"]'          # its attributes: path, value
-cargo run -- -C examples/demo query 'net.vpc["main.vpc"].cidr'     # one attribute's value
+cargo run -- -C examples/demo query 'net.vpc["main.vpc"].cidr'     # one attribute's value, laid out
 ```
 
 A bare predicate's columns are its `decl`'s fields, a core relation's own
@@ -1650,6 +1681,10 @@ A secret prints as its size, `secret(32 B)` (in `--json`, as its label
 value equal to it or string containing it, so a rule that forwards a
 secret does not leak it either.
 
+One attribute's value, `query 'T["A"].p'`, prints alone in `dform fmt`'s
+layout, as the plan prints a folded value (R-124); every other query is
+its table.
+
 Rows print values as the program writes them: a reference is the address
 it names as the plan prints it (R-111), `google.sql_database_instance
 db.name`, an unknown the attribute it stands for after a `?`,
@@ -1661,7 +1696,9 @@ its chain, as `plan -vv` prints it under the attribute: each
 `= EXPRESSION   SITE` the value passed through, following only what the
 expression reads, then each write it beat (`over 1 @default`). A value
 written as the literal it is is one line, its place beside it. An object
-is its leaves, each its own chain. A resource is its header, `T NAME
+folds as the plan folds it (R-124): the leaves one write made are one
+value in `dform fmt`'s layout with that write's chain, a leaf another
+write made its own line; a list is laid out the same way. A resource is its header, `T NAME
 SITE` with the statement's bindings, then each attribute and its chain;
 nothing else of the resource:
 
@@ -2737,7 +2774,8 @@ examples/demo an evaluation takes about 30 ms in a release build.
   information; lint warnings.
 - *Contributors hover*: on an attribute in a resource block, a rule's or
   fact's name, or an attribute read in a rule's body (`a.cidr`): each
-  attribute's collapsed value, the provider's description of its path
+  attribute's collapsed value (in `dform fmt`'s layout, as the plan
+  prints a folded value), the provider's description of its path
   (`type_doc`), the winning rank and every contribution with its rank and
   owner (rule, `file:line:col`, the module used or the copy), then the
   derivation as `dform why --core` prints it.

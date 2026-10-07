@@ -249,10 +249,19 @@ pub fn hover(e: &Evaluated, facts: &[NodeId]) -> String {
             }
             _ => dform_core::ir::Address { typ, name }.attr(&key),
         };
-        out.push_str(&format!(
-            "**{cell}** = `{}`\n\n",
-            e.redact.fmt(&fact.args[3])
-        ));
+        // The value in the formatter's layout, as `plan`, `why` and
+        // `query` print one (R-124).
+        let tree = dform_core::fmt::value::Tree::of(&fact.args[3], &|v| {
+            let open = matches!(v, Value::Obj(_) | Value::List(_)) && !e.redact.is_secret(v);
+            (!open).then(|| e.redact.fmt(v))
+        });
+        match dform_core::fmt::value::layout("", &tree, 80).as_slice() {
+            [one] => out.push_str(&format!("**{cell}** = `{one}`\n\n")),
+            lines => out.push_str(&format!(
+                "**{cell}** =\n```text\n{}\n```\n\n",
+                lines.join("\n")
+            )),
+        }
         if let (Value::Str(t), Value::Str(p)) = (&fact.args[0], &fact.args[2])
             && let Some(d) = docs.get(&(t.as_str(), p.as_str()))
         {

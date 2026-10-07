@@ -288,8 +288,9 @@ fn plan_reads_a_module_of_facts() {
     let s = setup("ctl-plan");
     let r = s.run(&["plan", "stacks/workload.df"]).success();
     assert!(
-        r.stdout
-            .contains("spec.template.spec.containers[name=web].image = \"gcr.io/renfry/web:1.0\""),
+        r.stdout.contains(
+            "spec.template.spec.containers[name=web] = {\n        image: \"gcr.io/renfry/web:1.0\","
+        ),
         "{}",
         r.stdout
     );

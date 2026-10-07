@@ -19,8 +19,7 @@ tick 1  3 changes
       master_control_plane_cidr = "172.16.3.96/28"  stacks/gke_two_phase.df:28
       name = "renfry-dev-gke"
       network_id = "projects/renfry-dev-973682/glo…l/networks/renfry-dev-network"
-      node_locations[0] = "us-east1-b"
-      node_locations[1] = "us-east1-c"
+      node_locations = ["us-east1-b", "us-east1-c"]
       project_id = "renfry-dev-973682"
       subnetwork_id = gke_subnet
   + google.compute_address static_ip                stacks/gke_two_phase.df:47

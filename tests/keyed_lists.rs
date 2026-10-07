@@ -29,7 +29,8 @@ fn project(name: &str, policy: &str) -> Scratch {
 }
 
 fn plan(s: &Scratch) -> Run {
-    s.run(&["dev", "--world", "w.json", "plan", "main"])
+    // Leaf by leaf (R-124: below `-vv` a value one write made is one line).
+    s.run(&["dev", "--world", "w.json", "plan", "-vv", "main"])
 }
 
 fn has(r: &Run, lines: &[&str]) {
@@ -230,7 +231,8 @@ fn a_quantity_in_an_unranked_set_is_read_by_its_attribute() {
         .run(&["dev", "--world", "w.json", "plan", "main"])
         .success();
     assert!(
-        r.stdout.contains("resources.limits.cpu = \"500m\""),
+        r.stdout
+            .contains("resources: { limits: { cpu: \"500m\" } },"),
         "{}",
         r.stdout
     );

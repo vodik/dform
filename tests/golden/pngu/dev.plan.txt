@@ -21,10 +21,10 @@ tick 1  7 changes
       network = "projects/renfry-dev-973682/glo…l/networks/renfry-dev-network"
       project = "renfry-dev-973682"                 stacks/pngu.df:54
       region = "us-east1"                           stacks/pngu.df:56
-      secondary_ranges[0].ip_cidr_range = "10.141.80.0/21"
-      secondary_ranges[0].range_name = "renfry-dev-gke-pods-range"
-      secondary_ranges[1].ip_cidr_range = "10.141.88.0/21"
-      secondary_ranges[1].range_name = "renfry-dev-gke-svc-range"
+      secondary_ranges = [
+        { ip_cidr_range: "10.141.80.0/21", range_name: "renfry-dev-gke-pods-range" },
+        { ip_cidr_range: "10.141.88.0/21", range_name: "renfry-dev-gke-svc-range" },
+      ]
       subnet_private_access = true
   + google.compute_subnetwork regional_proxy        stacks/pngu.df:153
       ip_cidr_range = "10.193.0.0/24"               stacks/pngu.df:59
@@ -48,8 +48,10 @@ tick 1  7 changes
       project_name = "renfry-dev"                   stacks/pngu.df:55
       subnetwork_id = gke_subnet
   + google.monitoring_dashboard pngu                stacks/pngu.df:206
-      dashboard_json.displayName = "pngu"
-      dashboard_json.note = "stubbed; see terraform/modules…onitoring/dashboard-pngu.json"
+      dashboard_json = {
+        displayName: "pngu",
+        note: "stubbed; see terraform/modules/monitoring/dashboard-pngu.json",
+      }
       project = "renfry-dev-973682"                 stacks/pngu.df:54
   + google.compute_address static-ip-pngu-grpc      stacks/pngu.df:172
       address_type = "INTERNAL"                     stacks/pngu.df:61

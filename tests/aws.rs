@@ -27,13 +27,10 @@ fn optional_computed_is_a_constant_when_set_and_a_null_when_not() {
         "{}",
         r.stdout
     );
+    // One write of both tags: one value (R-124).
     assert!(
-        r.stdout.contains("tags.subnet_az = \"us-east-1a\""),
-        "{}",
         r.stdout
-    );
-    assert!(
-        r.stdout.contains("tags.web_az = web.availability_zone"),
+            .contains("tags = { subnet_az: \"us-east-1a\", web_az: web.availability_zone }"),
         "{}",
         r.stdout
     );

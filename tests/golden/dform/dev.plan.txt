@@ -21,8 +21,7 @@ tick 1  7 changes
   + network.vpc main
     + net.vpc main.vpc                          network.df:19
         cidr = "10.90.0.0/16"                   stacks/dform.df:51
-        tags.component = "network"
-        tags.env = "dev"
+        tags = { component: "network", env: "dev" }
         tags.team = "platform"                  baseline.df:10
     + net.subnet main.private-us-test-1a        network.df:24
         cidr = "10.90.0.0/20"

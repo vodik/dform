@@ -14,8 +14,7 @@ tick 1  14 changes
   + network.vpc main
     + net.vpc main.vpc                          network.df:19
         cidr = "10.50.0.0/16"                   stacks/dform.df:51
-        tags.component = "network"
-        tags.env = "staging"
+        tags = { component: "network", env: "staging" }
         tags.team = "platform"                  baseline.df:10
     + net.subnet main.private-us-test-1a        network.df:24
         cidr = "10.50.0.0/20"
@@ -32,8 +31,7 @@ tick 1  14 changes
   + network.vpc peer
     + net.vpc peer.vpc                          network.df:19
         cidr = "10.60.0.0/16"                   stacks/dform.df:54
-        tags.component = "network"
-        tags.env = "staging"
+        tags = { component: "network", env: "staging" }
         tags.team = "platform"                  baseline.df:10
     + net.subnet peer.private-us-test-1a        network.df:24
         cidr = "10.60.0.0/20"
@@ -55,13 +53,11 @@ tick 1  14 changes
       backup_days = 3                           stacks/dform.df:27
       multi_az = false                          stacks/dform.df:28
       public = false
-      subnets[0] = main.private-us-test-1a
-      subnets[1] = main.private-us-test-1b
+      subnets = [main.private-us-test-1a, main.private-us-test-1b]
       tags.team = "platform"                    baseline.df:10
   + k8s.cluster kubernetes.cluster              kubernetes.df:12
       private_api = false                       stacks/dform.df:29
-      subnets[0] = main.private-us-test-1a
-      subnets[1] = main.private-us-test-1b
+      subnets = [main.private-us-test-1a, main.private-us-test-1b]
       tags.team = "platform"                    baseline.df:10
       version = "1.29"
   + k8s.nodepool kubernetes.default             kubernetes.df:18
@@ -71,10 +67,10 @@ tick 1  14 changes
       tags.team = "platform"                    baseline.df:10
   + iam.policy identity.app_policy              identity.df:8
       name = "app"
-      statements[0].action = "db.connect"
-      statements[0].resource = database.db
-      statements[1].action = "k8s.describe_cluster"
-      statements[1].resource = kubernetes.cluster
+      statements = [
+        { action: "db.connect", resource: database.db },
+        { action: "k8s.describe_cluster", resource: kubernetes.cluster },
+      ]
       tags.team = "platform"                    baseline.df:10
   + iam.role_policy_attachment identity.attach  identity.df:14
       policy = identity.app_policy

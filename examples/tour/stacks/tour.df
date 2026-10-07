@@ -203,7 +203,7 @@ deny "a database must not be public" { database: pg } where pg in db.postgres, p
 # the policy another, and the vpc has both:
 #
 #   $ dform query 'net.vpc["blue.vpc"].tags'
-#   {component: "network", team: "shop"}
+#   { component: "network", team: "shop" }
 #
 # In Terraform an attribute has one author, and a policy's tag has to be
 # threaded into every module as a variable and merged by hand (the AWS

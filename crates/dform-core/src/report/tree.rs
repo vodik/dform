@@ -1303,6 +1303,168 @@ impl Printer<'_> {
     }
 }
 
+impl Printer<'_> {
+    /// Which contribution to attribute fact `attr` (an `attr/4`) wrote
+    /// each leaf of `paths` (as the plan prints them, from the resource:
+    /// `spec.containers[name=web].image`): the winning `arg` that holds
+    /// it, the attribute itself when no aggregate made it, `None` when no
+    /// contribution holds it (a schema's default of a merge key).
+    pub fn writers(&self, attr: &Atom, paths: &[String]) -> Vec<Option<NodeId>> {
+        let none = || vec![None; paths.len()];
+        let Some(id) = self.circuit.fact_id(&engine::circuit_fact(attr)) else {
+            return none();
+        };
+        let View::Fact { alts, .. } = self.circuit.view(id) else {
+            return none();
+        };
+        let mut c = Compress {
+            out: Vec::new(),
+            sizes: BTreeMap::new(),
+        };
+        let Some(&alt) = alts.iter().min_by_key(|a| c.size(self.circuit, **a)) else {
+            return none();
+        };
+        let View::Times { children, .. } = self.circuit.view(alt) else {
+            return none();
+        };
+        let aggregate = children.iter().any(
+            |ch| matches!(self.circuit.view(*ch), View::Leaf(Leaf::Rule { id }) if id.starts_with('Σ')),
+        );
+        if !aggregate {
+            return vec![Some(id); paths.len()];
+        }
+        let contributions: Vec<(NodeId, &Fact)> = children
+            .iter()
+            .filter_map(|ch| match self.circuit.view(*ch) {
+                View::Fact { fact, .. } if fact.pred == "arg" && !is_check(fact) => {
+                    Some((*ch, fact))
+                }
+                _ => None,
+            })
+            .collect();
+        let (top, merged) = match attr.args.as_slice() {
+            [_, _, Term::Val(Value::Str(p)), Term::Val(v)] => (super::fold::tokens(p).len(), v),
+            _ => return none(),
+        };
+        paths
+            .iter()
+            .map(|p| {
+                let toks = super::fold::tokens(p);
+                contributions
+                    .iter()
+                    .filter(|(_, f)| holds(f, &toks, merged, top))
+                    .max_by_key(|(id, f)| (rank_of(f).0, std::cmp::Reverse(*id)))
+                    .map(|(id, _)| *id)
+            })
+            .collect()
+    }
+
+    /// Where contribution `id` (an `arg`, or an attribute no aggregate
+    /// made) wrote the part of its value at printed path `path`, with its
+    /// rank when it is not normal.
+    pub fn contribution_site(&self, rules: &[RuleStmt], id: NodeId, path: &str) -> Option<Site> {
+        let View::Fact { fact, .. } = self.circuit.view(id) else {
+            return None;
+        };
+        let mut s = self.surface(rules);
+        let mut c = Compress {
+            out: Vec::new(),
+            sizes: BTreeMap::new(),
+        };
+        let focus = contribution_focus(fact, path);
+        let mut site = value_site(&mut s, &mut c, id, focus.as_ref(), 0)?;
+        let rank = rank_of(fact).1;
+        if fact.pred == "arg" && site.rank.is_none() && rank != "normal" {
+            site.rank = Some(rank.to_string());
+        }
+        Some(site)
+    }
+}
+
+impl Printer<'_> {
+    /// The chain of the part at printed path `path` of contribution `id`
+    /// ([`Printer::writers`]), as [`Printer::attr_chain`] says a value's.
+    pub fn contribution_chain(
+        &self,
+        rules: &[RuleStmt],
+        id: NodeId,
+        path: &str,
+        stack_keys: &BTreeSet<String>,
+    ) -> Vec<Step> {
+        let View::Fact { fact, .. } = self.circuit.view(id) else {
+            return Vec::new();
+        };
+        let focus = contribution_focus(fact, path);
+        self.chain(rules, id, focus.as_ref(), stack_keys)
+    }
+}
+
+/// The keys of printed path `path` below contribution `fact`'s own path,
+/// up to a list: the part of its value the path names.
+fn contribution_focus(fact: &Fact, path: &str) -> Option<Focus> {
+    let at = fact.args.get(2).and_then(Value::as_str).unwrap_or_default();
+    let skip = match at.ends_with(crate::transform::ELEM) {
+        true => usize::MAX,
+        false => super::fold::tokens(at).len(),
+    };
+    let keys: Vec<String> = super::fold::tokens(path)
+        .into_iter()
+        .skip(skip)
+        .map_while(|t| match t.step {
+            super::fold::Step::Key(k) => Some(crate::ir::segment_key(&k).into_owned()),
+            _ => None,
+        })
+        .collect();
+    (!keys.is_empty()).then_some(Focus { keys, value: None })
+}
+
+/// Whether contribution `f` (an `arg/5`) holds the leaf at printed path
+/// `toks`: its path is a prefix, and its value has the rest.
+fn holds(f: &Fact, toks: &[super::fold::Tok], merged: &Value, top: usize) -> bool {
+    use super::fold::Step;
+    // The merged value where the contribution's path ends: a list's
+    // element is found in a contribution by its value, not its position
+    // in the merged list.
+    let merged_at = |n: usize| super::fold::reach(merged, &toks[top.min(n)..n]);
+    let (Some(at), Some(v)) = (f.args.get(2).and_then(Value::as_str), f.args.get(3)) else {
+        return false;
+    };
+    let key = |s: &Step| match s {
+        Step::Key(k) => Some(crate::ir::segment_key(k).into_owned()),
+        _ => None,
+    };
+    let prefix = |p: &str| -> Option<usize> {
+        let ptoks = super::fold::tokens(p);
+        let same = ptoks.len() <= toks.len()
+            && ptoks
+                .iter()
+                .zip(toks)
+                .all(|(a, b)| key(&a.step).is_some() && key(&a.step) == key(&b.step));
+        same.then_some(ptoks.len())
+    };
+    // An element write: `[K, V]` into the element of list `L` keyed `K`.
+    if let Some(list) = at.strip_suffix(crate::transform::ELEM) {
+        let (Some(n), Value::List(kv)) = (prefix(list), v) else {
+            return false;
+        };
+        let ([k, content], Some(Step::Keyed(pairs))) =
+            (kv.as_slice(), toks.get(n).map(|t| &t.step))
+        else {
+            return false;
+        };
+        let matches = match k {
+            Value::Obj(_) => super::fold::keyed(k, pairs),
+            k => matches!(pairs.as_slice(), [(_, want)] if fmt_bare(k) == *want),
+        };
+        let elem = merged_at(n + 1);
+        return matches && super::fold::reach_along(content, elem, &toks[n + 1..]).is_some();
+    }
+    match prefix(at) {
+        Some(n) => super::fold::reach_along(v, merged_at(n), &toks[n..]).is_some(),
+        None => false,
+    }
+}
+
 /// How deep a value is followed through cells that pass it on.
 const FOLLOW: usize = 8;
 
@@ -1367,7 +1529,7 @@ fn winner_site(
     // a provider's default is beaten by every value.
     let lower: Vec<(NodeId, &Fact)> = contributions
         .iter()
-        .filter(|(_, f)| rank_of(f).0 < top)
+        .filter(|(_, f)| rank_of(f).0 < top && !placeholder(f, f.args.get(3)))
         .copied()
         .collect();
     let beat = lower.into_iter().find_map(|(id, f)| {
@@ -1589,7 +1751,11 @@ fn winner_chain(
     // contributions at the winning rank merge; none of them lost.
     for &(l, f) in &contributions[1..] {
         let v = f.args.get(3).and_then(part);
-        if rank_of(f).0 == top || v == won || matches!(v, Some(Value::Obj(_))) {
+        if rank_of(f).0 == top
+            || v == won
+            || matches!(v, Some(Value::Obj(_)))
+            || placeholder(f, v.as_ref())
+        {
             continue;
         }
         if let (Some(site), Some(v)) = (site_of(s, c, l, depth + 1), v) {
@@ -1605,6 +1771,31 @@ fn winner_chain(
     }
     let rank = (rank != "normal").then_some(rank);
     value_chain(s, c, win, focus, rank, depth, w);
+}
+
+/// Whether `v`, contribution `f`'s value (or the part of it asked
+/// about), is the engine's own open null for an attribute of the resource
+/// it contributes to: a placeholder the program's write replaces, never a
+/// write it beat (R-124).
+fn placeholder(f: &Fact, v: Option<&Value>) -> bool {
+    let own = |label: &str| {
+        crate::value::null_owner(label).is_some_and(|(t, a)| {
+            f.args.first().and_then(Value::as_str) == Some(t.as_str())
+                && f.args.get(1).and_then(Value::as_str) == Some(a.as_str())
+        })
+    };
+    fn nulls<'v>(v: &'v Value, out: &mut Vec<&'v str>) -> bool {
+        match v {
+            Value::Null { label, .. } => {
+                out.push(label);
+                true
+            }
+            Value::Obj(m) => !m.is_empty() && m.values().all(|x| nulls(x, out)),
+            _ => false,
+        }
+    }
+    let mut labels = Vec::new();
+    v.is_some_and(|v| nulls(v, &mut labels)) && labels.iter().all(|l| own(l))
 }
 
 /// A site's place: `file:line`, or the flag that gave the value.
