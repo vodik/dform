@@ -32,8 +32,12 @@
 //! the last apply recorded, to say what changed since (R-79's `because`)
 //! and what a plan empties (R-80's guardrail), never to decide a change.
 //! A sink (`--audit-sink CMD`, or the stack's `audit_sink = "CMD"`) gets
-//! each entry as a JSON line on its stdin (`sh -c CMD`, once per entry);
-//! a sink that fails is a warning, and the local log stays authoritative.
+//! each entry as a JSON line on its stdin (`sh -c CMD`, once per entry, in
+//! a process group of its own); a sink that fails is a warning, and the
+//! local log stays authoritative. A sink that does not finish within
+//! `[defaults] audit_sink_timeout` ([`SINK_TIMEOUT`]) is killed with its
+//! group (what `sh` started goes too), and that is a warning as well: a
+//! sink never holds the apply, nor its lease.
 
 use crate::approval::{canonical_json, digest_of, now, rfc3339};
 use crate::store::{AUDIT, AUDIT_SEGMENTS, Cond, LocalStore, Store};
@@ -42,22 +46,38 @@ use serde_json::{Map, Value as Json};
 use std::io::Write;
 use std::path::Path;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 /// The entries of one segment of a log kept in segments.
 pub const SEGMENT: usize = 100;
+
+/// How long a sink may take over one entry, unless dform.toml says
+/// (`[defaults] audit_sink_timeout`).
+pub const SINK_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// A deployment's audit log: the object `state.audit.jsonl` of its store.
 #[derive(Clone)]
 pub struct Log {
     store: Arc<dyn Store>,
     sink: Option<String>,
+    sink_timeout: Duration,
 }
 
 impl Log {
     /// The log in `store`; each entry also goes to `sink` when there is
     /// one.
     pub fn new(store: Arc<dyn Store>, sink: Option<String>) -> Log {
-        Log { store, sink }
+        Log {
+            store,
+            sink,
+            sink_timeout: SINK_TIMEOUT,
+        }
+    }
+
+    /// The same log, its sink given `timeout` for each entry.
+    pub fn with_sink_timeout(mut self, timeout: Duration) -> Log {
+        self.sink_timeout = timeout;
+        self
     }
 
     /// The log of the local deployment whose state file is `state`.
@@ -143,7 +163,7 @@ impl Log {
             self.append_segment(&mut line)?;
         }
         if let Some(cmd) = &self.sink
-            && let Err(e) = send(cmd, &written)
+            && let Err(e) = send(cmd, &written, self.sink_timeout)
         {
             eprintln!("warning: audit sink `{cmd}`: {e:#}; the local log has the entry");
         }
@@ -201,24 +221,80 @@ impl Log {
     }
 }
 
-/// Pipe `line` to `sh -c CMD`.
-fn send(cmd: &str, line: &str) -> Result<()> {
-    let mut child = std::process::Command::new("sh")
-        .arg("-c")
+/// Pipe `line` to `sh -c CMD`, in a process group of its own, waiting at
+/// most `budget`. The line is written from a thread of its own, so a sink
+/// that reads nothing cannot block it on a full pipe; past the budget, or
+/// when `sh` has exited and something it started still holds the pipe,
+/// the group is killed and reaped.
+fn send(cmd: &str, line: &str, budget: Duration) -> Result<()> {
+    let mut c = std::process::Command::new("sh");
+    c.arg("-c")
         .arg(cmd)
         .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::null())
-        .spawn()
-        .context("start it")?;
-    if let Some(mut stdin) = child.stdin.take() {
-        // A sink that exits without reading is judged by its status.
-        let _ = stdin.write_all(format!("{line}\n").as_bytes());
+        .stdout(std::process::Stdio::null());
+    #[cfg(unix)]
+    std::os::unix::process::CommandExt::process_group(&mut c, 0);
+    let mut child = c.spawn().context("start it")?;
+    let group = Group(child.id());
+    let stdin = child.stdin.take();
+    let bytes = format!("{line}\n").into_bytes();
+    // A sink that exits without reading is judged by its status.
+    let writer = std::thread::Builder::new()
+        .name("dform-audit-sink".into())
+        .spawn(move || {
+            if let Some(mut stdin) = stdin {
+                let _ = stdin.write_all(&bytes);
+            }
+        })
+        .context("start its writer")?;
+    let deadline = Instant::now() + budget;
+    let status = loop {
+        if let Some(status) = child.try_wait().context("wait for it")? {
+            break Some(status);
+        }
+        if Instant::now() >= deadline {
+            break None;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    };
+    let Some(status) = status else {
+        group.kill();
+        let _ = child.wait();
+        let _ = writer.join();
+        anyhow::bail!(
+            "it did not finish in {}; it was stopped",
+            crate::plugin::policy::show(budget)
+        );
+    };
+    // `sh` is done; what it left holding the pipe is waited for only
+    // within the budget. (A group with a live member keeps its id, so the
+    // kill reaches no one else.)
+    while !writer.is_finished() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(5));
     }
-    let status = child.wait().context("wait for it")?;
+    if !writer.is_finished() {
+        group.kill();
+    }
+    let _ = writer.join();
     if !status.success() {
         anyhow::bail!("it exited with {status}");
     }
     Ok(())
+}
+
+/// A sink's process group, by its leader's pid.
+struct Group(u32);
+
+impl Group {
+    /// SIGKILL to every process of the group.
+    fn kill(&self) {
+        #[cfg(unix)]
+        // SAFETY: killpg takes a pid and a signal number and touches no
+        // memory; the group is the sink's own (`process_group(0)`).
+        unsafe {
+            libc::killpg(self.0 as libc::pid_t, libc::SIGKILL);
+        }
+    }
 }
 
 /// A `retry` entry's fields: a provider call that failed in a way worth
@@ -394,6 +470,31 @@ mod tests {
         let (_, broken) = verify(&format!("{}\n{}\n", lines[0], lines[2]));
         assert!(broken.unwrap().why.starts_with("entry 2 (tick): its prev"));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_sink_that_reads_nothing_still_finishes_with_a_large_line() {
+        // Larger than a pipe's buffer: written from a thread, so a sink
+        // that exits without reading is judged by its status alone.
+        let line = "x".repeat(1 << 20);
+        let start = Instant::now();
+        send("exit 0", &line, Duration::from_secs(10)).unwrap();
+        assert!(start.elapsed() < Duration::from_secs(5));
+        let e = send("exit 3", &line, Duration::from_secs(10)).unwrap_err();
+        assert!(e.to_string().contains("exit status: 3"), "{e}");
+    }
+
+    #[test]
+    fn a_sink_that_hangs_is_stopped_at_its_budget() {
+        let start = Instant::now();
+        let e = send("cat >/dev/null; sleep 30", "{}", Duration::from_millis(300)).unwrap_err();
+        assert!(e.to_string().contains("did not finish in"), "{e}");
+        assert!(start.elapsed() < Duration::from_secs(5));
+        // Something left holding the pipe once `sh` is done is stopped too.
+        let start = Instant::now();
+        let line = "x".repeat(1 << 20);
+        send("sleep 30 & exit 0", &line, Duration::from_millis(300)).unwrap();
+        assert!(start.elapsed() < Duration::from_secs(5));
     }
 
     #[test]

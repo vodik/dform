@@ -320,6 +320,9 @@ pub struct Defaults {
     pub lease_duration: Option<String>,
     /// How often its holder renews it (`20s`), less than the duration.
     pub lease_renewal: Option<String>,
+    /// How long an audit sink may take over one entry (`30s`) before it
+    /// is killed, its process group with it (`audit`).
+    pub audit_sink_timeout: Option<String>,
 }
 
 /// `[stacks.NAME]`: a stack's operational settings (docs/grammar.md
@@ -522,6 +525,7 @@ impl Manifest {
         for (key, v) in [
             ("lease_duration", &m.defaults.lease_duration),
             ("lease_renewal", &m.defaults.lease_renewal),
+            ("audit_sink_timeout", &m.defaults.audit_sink_timeout),
         ] {
             if let Some(v) = v
                 && crate::store::parse_duration(v).is_none_or(|d| d.is_zero())
@@ -587,6 +591,7 @@ impl Manifest {
         for (k, v) in [
             ("lease_duration", &self.defaults.lease_duration),
             ("lease_renewal", &self.defaults.lease_renewal),
+            ("audit_sink_timeout", &self.defaults.audit_sink_timeout),
         ] {
             if let Some(v) = v {
                 out.push(atom("project_default", vec![s(k), s(v)]));
@@ -745,6 +750,16 @@ impl Manifest {
             out.insert(name.clone(), term);
         }
         out
+    }
+
+    /// How long an audit sink may take over one entry
+    /// (`[defaults] audit_sink_timeout`).
+    pub fn audit_sink_timeout(&self) -> std::time::Duration {
+        self.defaults
+            .audit_sink_timeout
+            .as_deref()
+            .and_then(crate::store::parse_duration)
+            .unwrap_or(crate::audit::SINK_TIMEOUT)
     }
 
     /// The lease's duration and renewal interval (an `s3` backend's).

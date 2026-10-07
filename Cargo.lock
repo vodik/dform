@@ -1211,6 +1211,7 @@ dependencies = [
  "jiff",
  "jiff-tzdb",
  "jsonwebtoken",
+ "libc",
  "logos",
  "percent-encoding",
  "prost",

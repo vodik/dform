@@ -102,6 +102,7 @@ ovh = { path = "~/src/dform/target/debug/dform-provider-ovh" }  # the executable
 backend = 'local("state/{stack}")'   # or 's3("bucket", "dform/{stack}", {...})'
 lease_duration = "60s"               # an s3 backend's lease (the default)
 lease_renewal = "20s"                # how often its holder renews it (the default)
+audit_sink_timeout = "30s"           # how long an audit sink may take per entry (the default)
 
 [stacks.shop]                        # stacks/shop.df
 backend = 's3("acme-state", "shop/{env}")'
@@ -1748,7 +1749,13 @@ changed since apply 3 2026-10-01T09:12:40Z:
 `--audit-sink CMD` (or the stack's `audit_sink = "CMD"`) also pipes each
 entry, a JSON line, to `sh -c CMD`, once per entry: a SIEM forwarder, say.
 A sink that fails is a warning, never a failed apply; the local log is
-authoritative.
+authoritative. The sink runs in a process group of its own and gets
+`[defaults] audit_sink_timeout` (30s unless dform.toml says, `500ms`,
+`30s`, `2m`) for each entry; one that takes longer is killed with its
+group (whatever `sh -c` started goes too) and the apply goes on with a
+warning ("did not finish in 30s; it was stopped"): a sink never holds the
+apply, nor its lock or lease. One that exits and leaves something
+holding its stdin is treated the same way at the end of the budget.
 
 ## Asking the fact store
 

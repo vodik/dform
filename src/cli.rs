@@ -1847,11 +1847,19 @@ fn run_with(
     }
     let dep = located.dep.clone();
     // The deployment's audit log, beside its state.
-    let audit = dep.audit(
-        cli.audit_sink
-            .clone()
-            .or(located.loaded.cfg.audit_sink.clone()),
-    );
+    let audit = dep
+        .audit(
+            cli.audit_sink
+                .clone()
+                .or(located.loaded.cfg.audit_sink.clone()),
+        )
+        .with_sink_timeout(
+            located
+                .loaded
+                .manifest
+                .as_ref()
+                .map_or(crate::audit::SINK_TIMEOUT, |m| m.audit_sink_timeout()),
+        );
     match &cli.cmd {
         Cmd::Log {
             verify,
