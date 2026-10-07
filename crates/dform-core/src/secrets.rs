@@ -25,7 +25,10 @@
 //!   schema does not mark `sensitive`, a setting, an output not declared
 //!   `secret(T)`, an input not declared `secret(T)`, a `deny`/`warn`;
 //! - E0305 a secret reaching a resource address (`want`, `arg`, `ref`,
-//!   `scoped`): names are printed everywhere.
+//!   `scoped`): names are printed everywhere;
+//! - E0306 a secret reaching what a coeffect is asked with: a location
+//!   (`io.read("https://x/${pw}")`), an extern's `+` column not declared
+//!   `+x: secret(T)`; it is sent over the network at plan (R-167).
 //!
 //! `secret.declassify(V, Reason)` is the one way out: its value is public, and
 //! what is inside it may be inspected (`secret.declassify(pw.len, "...")`). The
@@ -764,12 +767,50 @@ pub fn check(
 ) -> Result<()> {
     let pass = fixpoint(lowered, schema, outputs);
     let rs = rules(&lowered.program);
+    let fns: BTreeMap<&str, &crate::ast::ExternFn> = lowered
+        .extern_fns
+        .iter()
+        .map(|f| (f.name.as_str(), f))
+        .collect();
+    // An extern's `+` column is asked with, not answered: it binds nothing.
+    let binds = |a: &Atom, i: usize| {
+        fns.get(a.pred.as_str())
+            .and_then(|f| f.args.get(i))
+            .is_none_or(|b| !b.input)
+    };
 
     let mut diags = Vec::new();
     for (head, body, span) in &rs {
         let vars = pass.body_vars(body);
         let refinement = is_refinement(*head);
         let secret = |t: &Term| pass.term_secret(t, &vars);
+        // E0306: what a coeffect is asked with is sent off the machine at
+        // plan (a location's host and path, a data source's argument),
+        // unless its column is declared `+x: secret(T)` (R-167).
+        for l in body.iter() {
+            let (Lit::Pos(a) | Lit::Not(a)) = l else {
+                continue;
+            };
+            let Some(f) = fns.get(a.pred.as_str()) else {
+                continue;
+            };
+            for (t, b) in a.args.iter().zip(&f.args) {
+                if b.input && !crate::externs::is_secret(b) && secret(t) {
+                    let at = if a.span.is_none() { *span } else { a.span };
+                    let what = match crate::tables::is_document(&a.pred) {
+                        true => "a location".to_string(),
+                        false => format!("{}'s argument `{}`", f.name, b.name),
+                    };
+                    diags.push(
+                        Diagnostic::error(
+                            at,
+                            format!("E0306: a secret reaches {what}, which is sent over the network and printed"),
+                        )
+                        .with_help("credentials are by name: [io] credentials in dform.toml"),
+                    );
+                }
+            }
+        }
         for (i, l) in body.iter().enumerate() {
             match l {
                 Lit::Neq(x, y) | Lit::Gt(x, y) | Lit::Ge(x, y) | Lit::Lt(x, y) | Lit::Le(x, y)
@@ -789,7 +830,7 @@ pub fn check(
                     }
                     // A test: both sides bound by the rest of the body
                     // (`pw(p), p == "hunter2"`), not a binding of either.
-                    let bound = bound_without(body, i);
+                    let bound = bound_without(body, i, &binds);
                     let mut both = BTreeSet::new();
                     term_vars(x, &mut both);
                     term_vars(y, &mut both);
@@ -949,15 +990,25 @@ fn term_vars(t: &Term, out: &mut BTreeSet<String>) {
 }
 
 /// The variables `body` binds without its literal `skip`: a positive
-/// literal binds its own, an equality one side's once the other's are.
-fn bound_without(body: &[Lit], skip: usize) -> BTreeSet<String> {
+/// literal its own (an extern's answer columns, `binds`), an equality one
+/// side's once the other's are.
+fn bound_without(
+    body: &[Lit],
+    skip: usize,
+    binds: &dyn Fn(&Atom, usize) -> bool,
+) -> BTreeSet<String> {
     let mut bound = BTreeSet::new();
     loop {
         let n = bound.len();
         for (i, l) in body.iter().enumerate() {
             match l {
                 _ if i == skip => {}
-                Lit::Pos(a) => a.args.iter().for_each(|t| term_vars(t, &mut bound)),
+                Lit::Pos(a) => a
+                    .args
+                    .iter()
+                    .enumerate()
+                    .filter(|(j, _)| binds(a, *j))
+                    .for_each(|(_, t)| term_vars(t, &mut bound)),
                 Lit::Eq(x, y) => {
                     for (p, q) in [(x, y), (y, x)] {
                         let mut vq = BTreeSet::new();

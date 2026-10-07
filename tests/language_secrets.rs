@@ -174,3 +174,60 @@ fn a_uris_password_from_a_secret_is_secret() {
         "E0304",
     );
 }
+
+/// What a coeffect is asked with leaves the machine at plan (R-167): a
+/// location's host and path go to DNS and the server, an extern's `+`
+/// column to its provider. A secret there is E0306, refused before any
+/// read; a column declared `+x: secret(T)` takes one on purpose, and a
+/// declassified value is the program's to send.
+#[test]
+fn e0306_a_location_or_an_externs_input() {
+    refused(
+        "let x = io.read(\"https://example.invalid/${pw}\")\n",
+        "p.df:4:9: E0306: a secret reaches a location, which is sent over the network and printed",
+    );
+    refused(
+        "let x = io.read(\"https://${random.password(\"a\")}.example.invalid/\")\n",
+        "E0306: a secret reaches a location",
+    );
+    refused(
+        "extern lookup(+name, -id: string)\nq(i) where lookup(pw, i)\n",
+        "E0306: a secret reaches lookup's argument `name`",
+    );
+    // `vault.read`'s `+path` is public: a secret there is refused too.
+    refused(
+        "q(1) where pw(p), vault.read(p, _)\n",
+        "E0306: a secret reaches vault.read's argument `path`",
+    );
+    run("extern sealed.read(+path: secret(string), -value: string)\nq(v) where sealed.read(pw, v)\n")
+        .success();
+}
+
+/// A provider's setting may take a secret (R-45: `use k8s { kubeconfig =
+/// .. }`): the provider is given it at Configure, in memory, and dform
+/// prints it as a secret and keeps it nowhere. It is no E0306.
+#[test]
+fn a_secret_setting_is_configured_and_never_printed() {
+    let s = Scratch::new("lang-secrets-setting");
+    let schema = repo().join("tests/fixtures/providers/leaky/schema.df");
+    s.write(
+        "p.df",
+        "\ninput pw: secret(string)\nq(1)\nuse fake { token = pw }\n",
+    );
+    let r = s
+        .run(&[
+            "dev",
+            "--provider",
+            schema.to_str().unwrap(),
+            "--world",
+            "w.json",
+            "--set",
+            "pw=hunter2",
+            "query",
+            "provider_config",
+            "p.df",
+        ])
+        .success();
+    assert!(r.stdout.contains("{token: secret(7 B)}"), "{}", r.stdout);
+    assert!(!r.stdout.contains("hunter2"), "{}", r.stdout);
+}

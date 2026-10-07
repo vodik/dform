@@ -1819,6 +1819,7 @@ is a compile error with a span, before anything is evaluated:
 | E0303 | an aggregate other than `collect_*` (`count` leaks cardinality) |
 | E0304 | a public place: a resource attribute the schema does not mark `sensitive`, a setting, an output or input not declared `secret(T)`, a `deny`/`warn` |
 | E0305 | a resource address (`want`, a resource name, `ref`, `scoped`) |
+| E0306 | what a coeffect is asked with, sent off the machine at plan: a location (`io.read("https://x/${pw}")`), an extern's `+` column not declared `+x: secret(T)` (R-167) |
 
 A field an object type declares `secret(T)` is declared the same way,
 through a `type` alias as well as inline: with `type conn = { host:
@@ -2982,6 +2983,14 @@ wins) to a credential (docs/providers.md, "Grants and credentials"):
 wait = "20m"
 credentials = { "ssh://51.79.*" = "ssh:k3s-admin", "https://git.example.com/*" = "bearer:git" }
 ```
+
+So a location never holds a secret: one built from it (`io.read(
+"https://x.example/${pw}")`) is E0306 at compile time, because its host
+and path go to DNS and the server at plan, before any review, and print
+in a `waits on` line (R-167). The same holds for an extern's `+`
+column, unless the extern declares it `+x: secret(T)`. A read into a
+secret cell is the other way round: its answer is the secret, its
+location public.
 
 SSH is a client inside dform, never the `ssh` binary or the operator's
 ssh config. The user is the location's (the local user when it names
