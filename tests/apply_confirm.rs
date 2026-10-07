@@ -98,7 +98,8 @@ fn audit_kinds(s: &Scratch) -> Vec<(String, String)> {
 
 /// `n`: no Apply call reaches the world, state is as the interrupted apply
 /// left it (the rename is not written either), and the audit log's plan
-/// ends `declined`.
+/// ends `declined`. A decline is not an error: nothing is said after the
+/// answer, the exit is 0, and the stack is unlocked.
 #[test]
 fn declining_a_resumed_apply_changes_nothing() {
     let s = interrupted();
@@ -110,11 +111,12 @@ fn declining_a_resumed_apply_changes_nothing() {
         before.contains("moved net.vpc[\"main\"] -> net.vpc[\"core\"]\n"),
         "{before}"
     );
+    assert_eq!(after.trim(), "", "nothing is said after the answer");
+    assert_eq!(code, 0);
     assert!(
-        after.contains("apply p: not confirmed; nothing was applied"),
-        "{after}"
+        !s.path("w.state.lock").exists(),
+        "the stack is still locked"
     );
-    assert_ne!(code, 0);
     assert_eq!(s.read("w.json"), world, "the world changed");
     assert_eq!(s.read("w.state.json"), state, "state changed");
     let now = audit_kinds(&s);
@@ -204,7 +206,12 @@ fn declining_at_a_later_tick_keeps_what_ran() {
     let s = Scratch::new("confirm-tick2-no");
     s.write("p.df", GROUP);
     let (said, code) = answers(&s, &["y", "n"]);
-    assert_ne!(code, 0);
+    assert_eq!(code, 0);
+    assert!(!said[2].contains("Error"), "{}", said[2]);
+    assert!(
+        !s.path("w.state.lock").exists(),
+        "the stack is still locked"
+    );
     assert!(
         said[2].contains(
             "apply p: not confirmed at tick 2; ticks 1 to 1 were applied, and the next apply \
@@ -221,4 +228,40 @@ fn declining_at_a_later_tick_keeps_what_ran() {
     assert_eq!(end["kind"], "apply_end");
     assert_eq!(end["result"], "declined");
     assert_eq!(end["tick"], 2);
+}
+
+/// `n` to a stack the target reads ends the command there, exit 0: the
+/// reader is neither planned nor applied, and the declined stack is
+/// unlocked.
+#[test]
+fn declining_a_dependency_stops_before_its_reader() {
+    let s = Scratch::project("confirm-dependency");
+    s.write(
+        "stacks/platform.df",
+        "key env: enum(\"lab\") = \"lab\"\nuse fake\nresource net.vpc edge { cidr = \"10.0.0.0/16\" }\noutput ip = edge.cidr\n",
+    );
+    s.write(
+        "stacks/apps.df",
+        "key env: enum(\"lab\") = \"lab\"\nuse fake\nuse stacks.platform\nresource net.vpc rec { cidr = \"10.1.0.0/16\", name = platform[env].ip }\n",
+    );
+    let mut cmd = common::dform();
+    cmd.args(["apply", "apps"])
+        .env("NO_COLOR", "1")
+        .current_dir(s.path(""));
+    let mut p = Session::spawn(cmd).unwrap();
+    p.set_expect_timeout(Some(std::time::Duration::from_secs(60)));
+    let before = String::from_utf8_lossy(p.expect("[y/N] ").unwrap().before()).replace('\r', "");
+    assert!(before.contains("== platform[env=lab]"), "{before}");
+    p.send_line("n").unwrap();
+    let after = String::from_utf8_lossy(p.expect(Eof).unwrap().before()).replace('\r', "");
+    assert_eq!(after.trim(), "", "{after}");
+    let code = match p.get_process().wait().unwrap() {
+        expectrl::process::unix::WaitStatus::Exited(_, code) => code,
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(code, 0);
+    let dir = s.path("dform.state/platform/env=lab");
+    assert!(dir.join("state.audit.jsonl").exists(), "{}", dir.display());
+    assert!(!dir.join("state.lock").exists(), "platform is still locked");
+    assert!(!s.path("dform.state/apps").exists(), "apps ran");
 }

@@ -782,11 +782,12 @@ pub fn main(
     let args = Args::parse_from(args);
     let color = args.inputs.color;
     let result = match &args.cmd {
-        Command::ServeProvider { name } => serve_provider(name),
+        Command::ServeProvider { name } => serve_provider(name).map(|()| Outcome::Done),
         Command::Lsp => dform_lsp::serve_stdio(dform_lsp::Options {
             version: env!("CARGO_PKG_VERSION"),
             real: launch,
-        }),
+        })
+        .map(|()| Outcome::Done),
         Command::Version => {
             println!("dform {}", env!("CARGO_PKG_VERSION"));
             println!("tzdb {}", crate::time::tzdb_version());
@@ -798,13 +799,14 @@ pub fn main(
                     "out (build with --features wasm)"
                 }
             );
-            Ok(())
+            Ok(Outcome::Done)
         }
         _ => resolve(args).and_then(run_command),
     };
     crate::timing::finish();
     match result {
-        Ok(()) => std::process::ExitCode::SUCCESS,
+        // A decline or a stop said what it had to (`run`).
+        Ok(_) => std::process::ExitCode::SUCCESS,
         Err(e) => {
             use std::io::IsTerminal;
             let color = color.style(std::io::stderr().is_terminal()).color;
@@ -827,7 +829,8 @@ fn serve_provider(name: &str) -> Result<()> {
 /// The command line `args` in this process, as often as a caller likes:
 /// `main` returning the error instead of printing it. A process reaches its
 /// providers one way: every call passes the same `launch`, and `main` has
-/// not set another. For tests that drive many runs (`tests/model.rs`).
+/// not set another. For tests that drive many runs (`tests/model.rs`). A
+/// decline or a stop is `Ok`, as `main` exits 0 for one.
 pub fn run_in_process(
     launch: &'static (dyn plugin::Launch + Sync),
     args: impl IntoIterator<Item = std::ffi::OsString>,
@@ -836,12 +839,13 @@ pub fn run_in_process(
     if !std::ptr::addr_eq(set, launch) {
         bail!("internal: this process reaches its providers through another backend");
     }
-    run_command(resolve(Args::try_parse_from(args)?)?)
+    run_command(resolve(Args::try_parse_from(args)?)?).map(|_| ())
 }
 
 /// The command line's run: `apply X` applies the stacks X reads first
-/// ([`apply_order`]), each a run of its own.
-fn run_command(cli: Cli) -> Result<()> {
+/// ([`apply_order`]), each a run of its own; one declined or stopped ends
+/// the command there, before the stacks that read it.
+fn run_command(cli: Cli) -> Result<Outcome> {
     let order = apply_order(&cli)?;
     if order.is_empty() {
         return run(cli, None);
@@ -912,7 +916,10 @@ fn run_command(cli: Cli) -> Result<()> {
         dep.keys = d.keys.clone();
         dep.input_files = Vec::new();
         dep.files = vec![d.file.clone()];
-        run(dep, None)?;
+        match run(dep, None)? {
+            Outcome::Done => {}
+            o => return Ok(o),
+        }
     }
     println!(
         "{}",
@@ -1517,42 +1524,73 @@ fn listing(stacks: &[crate::project::Found]) -> String {
 }
 
 /// An apply's audit session: its log, and the stack's lock, held until the
-/// apply's end is logged.
+/// apply's end is logged and released then ([`run`]).
 struct Session {
     log: crate::audit::Log,
-    _lock: crate::store::Guard,
+    lock: crate::store::Guard,
+}
+
+/// How a run ended that did not fail. A decline and a stop are outcomes a
+/// person chose or a plan file bounds, not errors: the command exits 0.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Outcome {
+    /// It ran to its end: an apply applied every tick.
+    Done,
+    /// The confirmation of `tick` was answered no; nothing of that tick
+    /// was applied. `why` says what earlier ticks did, when there were
+    /// any.
+    Declined { tick: usize, why: Option<String> },
+    /// A plan file or an approval applied its ticks to `tick` and stopped
+    /// before one that adds what it did not show; `why` says so.
+    Stopped { tick: usize, why: String },
 }
 
 /// One run of the command line. `hook`: controller mode's part of an apply
 /// (`controller::Hook`). An apply's end, whatever it is, goes to the audit
-/// log.
-fn run(cli: Cli, hook: Option<&mut controller::Hook>) -> Result<()> {
+/// log, and then its lock is released; what the outcome says, if
+/// anything, is said last.
+fn run(cli: Cli, hook: Option<&mut controller::Hook>) -> Result<Outcome> {
     let mut session = None;
     let r = run_with(cli, hook, &mut session);
-    if let Some(s) = session {
-        let end = match &r {
-            Ok(()) => serde_json::json!({ "result": "ok" }),
-            Err(e) if let Some(d) = e.downcast_ref::<Declined>() => {
-                serde_json::json!({ "result": "declined", "tick": d.tick })
+    let Some(s) = session else {
+        return r;
+    };
+    let end = match &r {
+        Ok(Outcome::Done) => serde_json::json!({ "result": "ok" }),
+        Ok(Outcome::Declined { tick, .. }) => {
+            serde_json::json!({ "result": "declined", "tick": tick })
+        }
+        Ok(Outcome::Stopped { tick, .. }) => {
+            serde_json::json!({ "result": "stopped", "tick": tick })
+        }
+        Err(e) => serde_json::json!({ "result": "failed", "error": e.to_string() }),
+    };
+    let logged = s.log.append("apply_end", end);
+    let released = s.lock.release();
+    let outcome = match r {
+        Ok(o) => o,
+        Err(e) => {
+            // The apply's error is the one reported; what else failed is
+            // said beside it.
+            for e in [logged.err(), released.err()].into_iter().flatten() {
+                eprintln!("warning: {e:#}");
             }
-            Err(e) if let Some(d) = e.downcast_ref::<Stopped>() => {
-                serde_json::json!({ "result": "stopped", "tick": d.tick })
-            }
-            Err(e) => serde_json::json!({ "result": "failed", "error": e.to_string() }),
-        };
-        let logged = s.log.append("apply_end", end);
-        r?;
-        logged?;
-        return Ok(());
+            return Err(e);
+        }
+    };
+    logged?;
+    released?;
+    if let Outcome::Declined { why: Some(why), .. } | Outcome::Stopped { why, .. } = &outcome {
+        eprintln!("{why}");
     }
-    r
+    Ok(outcome)
 }
 
 fn run_with(
     mut cli: Cli,
     mut hook: Option<&mut controller::Hook>,
     session: &mut Option<Session>,
-) -> Result<()> {
+) -> Result<Outcome> {
     // A plan file's run is checked once its inputs (its world) are read.
     let planned = matches!(
         cli.cmd,
@@ -1568,7 +1606,7 @@ fn run_with(
         eprintln!("{EXPERIMENTAL}");
     }
     if let Cmd::Controller { .. } = cli.cmd {
-        return run_controller(cli);
+        return run_controller(cli).map(|()| Outcome::Done);
     }
     match &cli.cmd {
         Cmd::Handover { stack, to } => {
@@ -1580,20 +1618,20 @@ fn run_with(
                 serde_json::json!({ "stack": stack, "to": to, "who": crate::audit::who() }),
             )?;
             println!("stack {stack} handed over to {to}: {moved}");
-            return Ok(());
+            return Ok(Outcome::Done);
         }
-        Cmd::StackList => return stack_list(&cli),
+        Cmd::StackList => return stack_list(&cli).map(|()| Outcome::Done),
         Cmd::Init { name } => {
             for line in crate::project::init(Path::new("."), name.as_deref())? {
                 println!("{line}");
             }
-            return Ok(());
+            return Ok(Outcome::Done);
         }
         Cmd::Completions { shell } => {
             print!("{}", completion_script(*shell));
-            return Ok(());
+            return Ok(Outcome::Done);
         }
-        Cmd::Complete { words } => return complete(words),
+        Cmd::Complete { words } => return complete(words).map(|()| Outcome::Done),
         Cmd::ProviderCheck { path } => {
             let (lines, failed) = plugin::check::run(launch(), path)?;
             for l in &lines {
@@ -1606,7 +1644,7 @@ fn run_with(
                 );
             }
             println!("provider {path}: conforms");
-            return Ok(());
+            return Ok(Outcome::Done);
         }
         Cmd::ProviderSchema { provider } => {
             let backend = Providers::start(
@@ -1617,7 +1655,7 @@ fn run_with(
             for a in &backend.schema().facts {
                 println!("{}", partition::fmt_atom(a));
             }
-            return Ok(());
+            return Ok(Outcome::Done);
         }
         Cmd::Fmt { paths, check } => {
             let paths = if paths.is_empty() {
@@ -1627,9 +1665,9 @@ fn run_with(
             } else {
                 paths.clone()
             };
-            return fmt_files(&paths, *check);
+            return fmt_files(&paths, *check).map(|()| Outcome::Done);
         }
-        Cmd::Doc => return doc(&cli.files),
+        Cmd::Doc => return doc(&cli.files).map(|()| Outcome::Done),
         _ => {}
     }
     let plan_file = match &cli.cmd {
@@ -1711,7 +1749,8 @@ fn run_with(
             none,
             &cli,
             &files,
-        );
+        )
+        .map(|()| Outcome::Done);
     }
     if let Cmd::Strata = cli.cmd {
         return print_strata(
@@ -1719,7 +1758,8 @@ fn run_with(
             &loaded.program,
             &load_schema(&providers)?,
             &cli.table,
-        );
+        )
+        .map(|()| Outcome::Done);
     }
     if let Cmd::Effects { json } = &cli.cmd {
         return print_effects(
@@ -1727,7 +1767,8 @@ fn run_with(
             &load_schema(&providers)?,
             *json,
             &cli.table,
-        );
+        )
+        .map(|()| Outcome::Done);
     }
     if let Cmd::Graph { what: Some(w) } = &cli.cmd
         && w == "strata"
@@ -1736,7 +1777,7 @@ fn run_with(
         return match partition::stratify(&graph) {
             partition::Verdict::Stratified { strata } => {
                 print!("{}", graph::strata(&graph, Some(&strata)));
-                Ok(())
+                Ok(Outcome::Done)
             }
             partition::Verdict::Rejected {
                 scc,
@@ -1817,13 +1858,16 @@ fn run_with(
             since,
             json,
         } => {
-            return print_log(&audit, &deployment, *verify, since.as_deref(), *json);
+            return print_log(&audit, &deployment, *verify, since.as_deref(), *json)
+                .map(|()| Outcome::Done);
         }
         Cmd::Unlock => {
             println!("{}", dep.unlock()?);
-            return Ok(());
+            return Ok(Outcome::Done);
         }
-        Cmd::StateShow { addr } => return state_show(&dep, addr.as_deref(), &cli.table),
+        Cmd::StateShow { addr } => {
+            return state_show(&dep, addr.as_deref(), &cli.table).map(|()| Outcome::Done);
+        }
         Cmd::Output { name, json } => {
             return print_output(
                 &dep,
@@ -1831,12 +1875,13 @@ fn run_with(
                 name.as_deref(),
                 *json,
                 &cli.table,
-            );
+            )
+            .map(|()| Outcome::Done);
         }
-        Cmd::TaintMemo { key } => return taint_memo(&dep, key, &audit),
-        Cmd::ForgetHost { host } => return forget_host(&dep, host, &audit),
+        Cmd::TaintMemo { key } => return taint_memo(&dep, key, &audit).map(|()| Outcome::Done),
+        Cmd::ForgetHost { host } => return forget_host(&dep, host, &audit).map(|()| Outcome::Done),
         Cmd::StateMv { from, to } => {
-            return state_mv(&dep, from, to, &audit);
+            return state_mv(&dep, from, to, &audit).map(|()| Outcome::Done);
         }
         _ => {}
     }
@@ -2115,7 +2160,7 @@ fn run_with(
             }
             _ => unreachable!("explains is query, why, why-not, diff or __explain"),
         }
-        return Ok(());
+        return Ok(Outcome::Done);
     }
     let deployment::Evaluation {
         located,
@@ -2672,7 +2717,7 @@ fn run_with(
             // apply's end is in the audit log.
             *session = Some(Session {
                 log: audit.clone(),
-                _lock: dep.lock()?,
+                lock: dep.lock()?,
             });
             // Under the lease again: a memo the last run kept in memory.
             if let Some(h) = hook.as_deref_mut() {
@@ -2957,7 +3002,10 @@ fn run_with(
                     let report = report_of(&plan, &res, &sections, tick, &[], &denies);
                     if !report.undeformed {
                         let n = report.changes();
-                        confirm(n, false, &deployment, tick, cli.style)?;
+                        still_held(session)?;
+                        if !confirm(n, false, &deployment, tick, cli.style)? {
+                            return Ok(declined(&deployment, tick));
+                        }
                     }
                 }
                 // What the plan empties since the last apply is asked for
@@ -2965,7 +3013,10 @@ fn run_with(
                 // `--allow-empty` names it (R-80).
                 if tick == 1 && hook.is_none() {
                     for e in emptied(&plan, &res, &|_| None) {
-                        confirm_emptied(&e, &deployment, cli.style)?;
+                        still_held(session)?;
+                        if !confirm_emptied(&e, &deployment, cli.style)? {
+                            return Ok(declined(&deployment, tick));
+                        }
                     }
                 }
                 // A later tick whose plan holds an address no earlier one
@@ -2986,13 +3037,12 @@ fn run_with(
                     if new > 0 && shown {
                         st.in_flight = None;
                         persist(&st)?;
-                        return Err(Stopped {
+                        return Ok(stopped(Stopped {
                             tick: tick - 1,
                             new,
                             unnamed,
                             on_provider: false,
-                        }
-                        .into());
+                        }));
                     }
                     // What `later` showed waiting on a provider, planned
                     // now against it: asked for as tick 1 was, unless
@@ -3004,16 +3054,18 @@ fn run_with(
                     if planned > 0 && shown {
                         st.in_flight = None;
                         persist(&st)?;
-                        return Err(Stopped {
+                        return Ok(stopped(Stopped {
                             tick: tick - 1,
                             new: planned,
                             unnamed: Vec::new(),
                             on_provider: true,
-                        }
-                        .into());
+                        }));
                     }
                     if new + planned > 0 && !yes {
-                        confirm(new + planned, true, &deployment, tick, cli.style)?;
+                        still_held(session)?;
+                        if !confirm(new + planned, true, &deployment, tick, cli.style)? {
+                            return Ok(declined(&deployment, tick));
+                        }
                     }
                 }
                 listed.extend(addresses.into_iter().cloned());
@@ -3405,7 +3457,7 @@ fn run_with(
         }
     }
 
-    Ok(())
+    Ok(Outcome::Done)
 }
 
 /// The nulls a tick waits on that waiting can resolve (R-81,
@@ -4089,7 +4141,14 @@ fn run_controller(cli: Cli) -> Result<()> {
 /// (`new`) tick `tick`, which adds what no plan listed: only `y` or `yes`
 /// proceeds.
 /// With no terminal to ask on, a refusal naming `--yes`, never a wait.
-fn confirm(n: usize, new: bool, deployment: &str, tick: usize, style: report::Style) -> Result<()> {
+/// Answered no, `false`: a decline, not an error.
+fn confirm(
+    n: usize,
+    new: bool,
+    deployment: &str,
+    tick: usize,
+    style: report::Style,
+) -> Result<bool> {
     use std::io::{BufRead, IsTerminal, Write};
     let stdin = std::io::stdin();
     if !stdin.is_terminal() {
@@ -4107,19 +4166,16 @@ fn confirm(n: usize, new: bool, deployment: &str, tick: usize, style: report::St
     std::io::stdout().flush()?;
     let mut answer = String::new();
     stdin.lock().read_line(&mut answer)?;
-    match answer.trim().to_ascii_lowercase().as_str() {
-        "y" | "yes" => Ok(()),
-        _ => Err(Declined {
-            deployment: deployment.to_string(),
-            tick,
-        }
-        .into()),
-    }
+    Ok(matches!(
+        answer.trim().to_ascii_lowercase().as_str(),
+        "y" | "yes"
+    ))
 }
 
 /// Ask whether to apply a plan that empties `e` (R-80), on a terminal
-/// only: there is no `--yes` for it, only `--allow-empty`.
-fn confirm_emptied(e: &zset::Emptied, deployment: &str, style: report::Style) -> Result<()> {
+/// only: there is no `--yes` for it, only `--allow-empty`. Answered no,
+/// `false`.
+fn confirm_emptied(e: &zset::Emptied, deployment: &str, style: report::Style) -> Result<bool> {
     use std::io::{BufRead, IsTerminal, Write};
     let stdin = std::io::stdin();
     if !stdin.is_terminal() {
@@ -4136,44 +4192,41 @@ fn confirm_emptied(e: &zset::Emptied, deployment: &str, style: report::Style) ->
     std::io::stdout().flush()?;
     let mut answer = String::new();
     stdin.lock().read_line(&mut answer)?;
-    match answer.trim().to_ascii_lowercase().as_str() {
-        "y" | "yes" => Ok(()),
-        _ => Err(Declined {
-            deployment: deployment.to_string(),
-            tick: 1,
-        }
-        .into()),
+    Ok(matches!(
+        answer.trim().to_ascii_lowercase().as_str(),
+        "y" | "yes"
+    ))
+}
+
+/// The apply's lock, checked still held before a question: a person never
+/// answers one while the lease is lost or no longer renewed.
+fn still_held(session: &Option<Session>) -> Result<()> {
+    match session {
+        Some(s) => s.lock.check(),
+        None => Ok(()),
     }
 }
 
-/// An apply its confirmation declined at `tick`: the audit log's
-/// `apply_end` says `declined`, and at which tick.
-#[derive(Debug)]
-struct Declined {
-    deployment: String,
-    tick: usize,
+/// An apply whose confirmation of `tick` was answered no: at tick 1
+/// nothing was applied, and nothing is said; later, what the earlier ticks
+/// did. The audit log's `apply_end` says `declined`, and at which tick.
+fn declined(deployment: &str, tick: usize) -> Outcome {
+    let why = (tick > 1).then(|| {
+        format!(
+            "apply {deployment}: not confirmed at tick {tick}; ticks 1 to {} were applied, \
+             and the next apply resumes from there",
+            tick - 1
+        )
+    });
+    Outcome::Declined { tick, why }
 }
 
-impl std::fmt::Display for Declined {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        match self.tick {
-            1 => write!(
-                f,
-                "apply {}: not confirmed; nothing was applied",
-                self.deployment
-            ),
-            t => write!(
-                f,
-                "apply {}: not confirmed at tick {t}; ticks 1 to {} were applied, \
-                 and the next apply resumes from there",
-                self.deployment,
-                t - 1
-            ),
-        }
+fn stopped(s: Stopped) -> Outcome {
+    Outcome::Stopped {
+        tick: s.tick,
+        why: s.to_string(),
     }
 }
-
-impl std::error::Error for Declined {}
 
 /// An apply of a plan file or an approval that stopped after `tick`: the
 /// next tick adds `new` changes no printed plan named (`unnamed`, the
@@ -4216,8 +4269,6 @@ impl std::fmt::Display for Stopped {
         )
     }
 }
-
-impl std::error::Error for Stopped {}
 
 /// `stack rekey`: the deployment whose state moves, and where to.
 struct Rekey {
@@ -4541,7 +4592,7 @@ fn taint_memo(dep: &crate::store::Deployment, key: &str, audit: &crate::audit::L
             dep.locate(store::STATE)
         );
     }
-    let _lock = dep.lock()?;
+    let lock = dep.lock()?;
     let mut st = dep.load_state()?;
     if st.taint_memo(key).is_none() {
         bail!("taint memo {key}: stack {deployment} keeps no memo {key}");
@@ -4552,7 +4603,7 @@ fn taint_memo(dep: &crate::store::Deployment, key: &str, audit: &crate::audit::L
         serde_json::json!({ "memo": key, "who": crate::audit::who() }),
     )?;
     println!("tainted memo {key} of stack {deployment}: the next apply keeps a new value");
-    Ok(())
+    lock.release()
 }
 
 fn forget_host(
@@ -4567,7 +4618,7 @@ fn forget_host(
             dep.locate(store::STATE)
         );
     }
-    let _lock = dep.lock()?;
+    let lock = dep.lock()?;
     let mut st = dep.load_state()?;
     let Some(was) = st.forget_host(host) else {
         let known: Vec<&str> = st.known_hosts.keys().map(String::as_str).collect();
@@ -4592,7 +4643,7 @@ fn forget_host(
         "forgot the {} key {} of {host} in stack {deployment}: the next contact records the key it meets",
         was.key_type, was.fingerprint
     );
-    Ok(())
+    lock.release()
 }
 
 /// Opens an s3 location's store with the environment's credentials.
@@ -5694,7 +5745,7 @@ fn state_mv(
         ir::parse_resource_address(from)?,
         ir::parse_resource_address(to)?,
     );
-    let _lock = dep.lock()?;
+    let lock = dep.lock()?;
     let mut st = dep.load_state()?;
     if st.get(&old).is_none() {
         bail!("state mv: stack {deployment} has no object at {old}");
@@ -5710,7 +5761,7 @@ fn state_mv(
         serde_json::json!({ "from": from, "to": to, "who": crate::audit::who() }),
     )?;
     println!("moved {from} to {to} in stack {deployment}");
-    Ok(())
+    lock.release()
 }
 
 /// Whether the experimental commands (R-41: `controller`, `stack

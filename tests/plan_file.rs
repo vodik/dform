@@ -275,7 +275,7 @@ fn a_two_phase_plan_file_stops_before_the_tick_it_could_not_name() {
         prog.to_str().unwrap(),
     ])
     .success();
-    let r = s.run(&["apply", "plan.json"]).failure();
+    let r = s.run(&["apply", "plan.json"]).success();
     assert!(
         r.stderr
             .contains("apply stopped after tick 1: tick 2 adds "),
@@ -375,7 +375,7 @@ fn a_tick_2_address_the_file_does_not_list_stops_the_apply() {
     assert_eq!(bound, [&serde_json::json!("orders")], "{f}");
     // The group as recorded: tick 2's policy is its member, which the file
     // could not name, so its apply stops before tick 2 (R-30).
-    let r = s.run(&["apply", "plan.json"]).failure();
+    let r = s.run(&["apply", "plan.json"]).success();
     assert!(
         r.stderr.contains(
             "apply stopped after tick 1: tick 2 adds 1 change the plan could not name \
@@ -414,7 +414,7 @@ fn a_tick_2_address_the_file_does_not_list_stops_the_apply() {
     now["pending_groups"] = f["pending_groups"].clone();
     now.as_object_mut().unwrap().remove("digest");
     s.write("plan.json", &now.to_string());
-    let r = s.run(&["apply", "plan.json"]).failure();
+    let r = s.run(&["apply", "plan.json"]).success();
     assert!(
         r.stderr
             .contains("apply stopped after tick 1: tick 2 adds 1 change the plan could not name"),

@@ -219,10 +219,7 @@ fn the_ask_is_on_a_terminal_also_under_yes() {
     );
     p.send_line("n").unwrap();
     let after = all(&p.expect(Eof).unwrap());
-    assert!(
-        after.contains("apply net: not confirmed; nothing was applied"),
-        "{after}"
-    );
+    assert!(!after.contains("not confirmed"), "{after}");
     assert_eq!(subnets(&s), 2);
 }
 

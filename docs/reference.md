@@ -156,15 +156,19 @@ member: `iam.policy[?]` at tick 1, named once the endpoint it is built
 from exists; what `later` held for a provider's settings): its plan is
 printed, headed `tick 2  1 change`, then
 `Apply tick 2 to D? [y/N]`; and so on until nothing is `later`. `--yes`
-answers every question. A `n` stops the apply with what the earlier
-ticks did in state; the audit log's `apply_end` says `declined` and the
-`tick`, and the next apply resumes. A plan file or an approval applies
+answers every question. A `n` is not an error: it stops the apply with
+what the earlier ticks did in state, says nothing at tick 1 (nothing was
+applied) and, later, `apply D: not confirmed at tick 2; ticks 1 to 1 were
+applied, and the next apply resumes from there`, and exits 0, the stack
+unlocked; the audit log's `apply_end` says `declined` and the `tick`, and
+the next apply resumes. (A run with no terminal on stdin, CI, never
+reaches a question: it is refused, naming `--yes`.) A plan file or an approval applies
 what it showed and nothing else: it stops before the first tick that
 would add something, after writing state: `apply stopped after tick 1:
 tick 2 adds 1 change the plan could not name (iam.policy[?] on
 ?db.postgres["orders"].endpoint); run apply again to plan them against
-the world as it now is`. It exits non-zero, nothing applied that was not
-printed, and `apply_end` says `stopped`; the next apply plans them as its
+the world as it now is`. It exits 0, having applied what was approved and
+nothing that was not printed, and `apply_end` says `stopped`; the next apply plans them as its
 tick 1, by name. There is no strict mode, no resource-level target and no
 flag for how long to wait: a plan that needs a second tick applies tick
 by tick, and a program that wants to apply part of itself is two stacks.
@@ -179,7 +183,7 @@ platform[env=prod], then shop[env=prod] below, in apply order:
 shop[env=prod] reads its outputs; each is planned, confirmed and applied
 in turn`, and each run is headed `== NAME` and prints its own plan, its
 own ticks counted there (a later stack's plan reads what the earlier
-ones applied, so it cannot be counted before they run). A dependency whose apply fails or is declined stops the
+ones applied, so it cannot be counted before they run). A dependency whose apply fails, is declined or stops ends the
 run before its reader; stacks that read each other are an error naming
 the cycle. A `--set` goes to each stack of the run that declares the
 input (one none declares is the target's error); `--input-file` is the
@@ -314,7 +318,16 @@ since November 2024, MinIO). The lock is a lease: an object holding the
 holder, an expiry and a fencing counter. An apply takes it (refused, naming
 the holder and when its lease expires, while another's is live), renews
 it every `lease_renewal` from a thread (one Apply call, a cluster's
-create, can outlast a lease), and releases it at the end. A lease that
+create, can outlast a lease), and releases it at the end, also after a
+decline, an error or a panic (a release that fails says so: the lease is
+then held until it expires, or `dform stack unlock`). A renewal that does
+not reach the backend (a timeout, a 503) is tried again, sooner and
+backing off to `lease_renewal`, with a warning once and a note when it
+succeeds; one whose answer was lost after it landed is still this
+holder's. Only a lease found another's (taken over, or broken) stops
+the renewal, said once, and the next state write is refused. A renewer
+that stopped otherwise is the lost lease at its next use: before a
+question is asked, and at each state write. A lease that
 expired (its holder was killed) is taken over, with a note, and the
 counter goes up; the new holder writes its counter into the state at
 once, and every state write first checks that the lease is still its own.
@@ -1669,8 +1682,9 @@ The kinds:
   `FILE:LINE`, its statement and the resources it derived, and each
   relation of the program with its rows; the next plan's guardrail and
   its `derived_at_last_apply` read the last apply's (R-80);
-- `apply_end`: `ok`, `declined` (the confirmation was answered no), or
-  `failed` and the error;
+- `apply_end`: `ok`, `declined` (the confirmation was answered no) or
+  `stopped` (a plan file or approval stopped before what it did not
+  show), each with its `tick`, or `failed` and the error;
 - `controller`: each event, holds for approval and the run's result; and
   `rekey` and `handover`.
 

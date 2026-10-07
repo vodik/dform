@@ -42,7 +42,7 @@ fn a_plan_file_stops_before_a_tick_the_plan_could_not_name() {
     copy_dir(&repo().join("examples/tour"), &s.dir);
     s.run(&["plan", "--out", "plan.json", "tour", "env=prod"])
         .success();
-    let r = s.run(&["apply", "plan.json"]).failure();
+    let r = s.run(&["apply", "plan.json"]).success();
     assert!(r.stderr.contains(STOPPED), "{}", r.stderr);
     let state = s.read("dform.state/tour/env=prod/state.json");
     assert!(state.contains("db.postgres"), "{state}");

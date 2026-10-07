@@ -124,7 +124,7 @@ fn apply_asks_again_for_what_waited_on_the_provider() {
 fn declining_tick_two_keeps_tick_one() {
     let s = scratch("tick2-declined");
     let (said, code) = answers(&s, &["y", "n"]);
-    assert_ne!(code, 0);
+    assert_eq!(code, 0);
     assert!(
         said[2].contains("apply p: not confirmed at tick 2"),
         "{}",
@@ -167,7 +167,7 @@ fn yes_applies_tick_two() {
 fn a_plan_file_stops_before_what_it_did_not_show() {
     let s = scratch("tick2-plan-file");
     dev(&s, &["plan", "--out", "plan.json", "p.df"]).success();
-    let r = Run::from(dform(&s, &["apply", "plan.json"]).output().unwrap()).failure();
+    let r = Run::from(dform(&s, &["apply", "plan.json"]).output().unwrap()).success();
     assert!(
         r.stderr.contains(
             "apply stopped after tick 1: tick 2 plans 1 change `later` held for a provider's \
