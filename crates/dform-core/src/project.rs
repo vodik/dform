@@ -1403,12 +1403,15 @@ mod tests {
         let m = manifest(&format!("[secrets]\nrecipients = [\"{KEY}\"]\n")).unwrap();
         let r = Mixing::of(Some(&m), "app").unwrap().recipients;
         assert_eq!((r[0].name.as_deref(), r[0].key.as_str()), (None, KEY));
+        // The second is docs/reference.md's Bob.
+        const BOB: &str = "age1xr48qujdxdj8q7acv5a25385ewug9kdrr86ghxk93h3vmfe9gz3q53xqv8";
         let m = manifest(&format!(
-            "[secrets]\nrecipients = {{ alice = \"{KEY}\" }}\n"
+            "[secrets]\nrecipients = {{ alice = \"{KEY}\", bob = \"{BOB}\" }}\n"
         ))
         .unwrap();
         let r = Mixing::of(Some(&m), "app").unwrap().recipients;
         assert_eq!(r[0].describe(), "alice");
+        assert_eq!(r[1].describe(), "bob");
         let e = manifest("[secrets]\nrecipients = [\"age1x\"]\n").unwrap_err();
         assert!(
             e.to_string().contains("[secrets] recipients")

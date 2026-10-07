@@ -2058,7 +2058,7 @@ the passphrase (SOPS's recipients, Pulumi's secrets providers):
 ```toml
 [secrets]
 recipients = { alice = "age1ql3z7hjy54pw3hyww5ayyfg7zqgvc7w3j2elw8zmrj2kg5sfn9aqmcac8p",
-               bob   = "age1lggyhqrw2nlhcxprm67z43rta597azn8gknawjehu9d9dl0jq3yqqvfafg" }
+               bob   = "age1xr48qujdxdj8q7acv5a25385ewug9kdrr86ghxk93h3vmfe9gz3q53xqv8" }
 passphrase = "env:DFORM_PASSPHRASE"   # optional: CI's, beside the members'
 ```
 
@@ -2122,6 +2122,35 @@ with the passphrase: a plan reads the key file as it is; the apply
 whose `state.master` is sealed and whose dform.toml names no passphrase
 is refused, naming the setting. `stack handover` to a bucket seals a
 key file the same way first (docs/experimental/controller.md).
+
+### A team's setup
+
+Two engineers and CI, a lab and prod; prod's apply is CI's and Alice's:
+
+```toml
+[secrets]
+recipients = { alice = "age1ql3z7hjy54pw3hyww5ayyfg7zqgvc7w3j2elw8zmrj2kg5sfn9aqmcac8p",
+               bob   = "age1xr48qujdxdj8q7acv5a25385ewug9kdrr86ghxk93h3vmfe9gz3q53xqv8" }
+passphrase = "env:DFORM_PASSPHRASE"          # CI's, a secret of the pipeline
+
+[stacks.prod.secrets]
+recipients = { alice = "age1ql3z7hjy54pw3hyww5ayyfg7zqgvc7w3j2elw8zmrj2kg5sfn9aqmcac8p" }
+passphrase = "env:DFORM_PROD_PASSPHRASE"     # CI's on main only
+```
+
+- Each member makes an identity once (`age-keygen -o
+  ~/.config/dform/credentials/age/me`) and adds its public key to
+  dform.toml in a reviewed change; the next apply by someone who holds
+  the master seals it to them.
+- A pull request's plan in CI runs with neither: it plans in full, marks
+  each change that needs the key, says where drift is unknown, and
+  derives nothing. CI's apply on main has the passphrase.
+- A change whose secrets are unchanged is applied by anyone who can
+  plan, without the key ("Planning and applying without the master").
+- Someone leaves: remove them from dform.toml and apply (no longer sealed
+  to them), `dform secrets cycle` each deployment they could open, and
+  `dform secrets list` names, per epoch, who could still open it and the
+  secrets to rotate off it.
 
 ### Planning and applying without the master
 
