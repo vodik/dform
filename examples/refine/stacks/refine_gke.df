@@ -122,4 +122,4 @@ deny "cluster must not be deletable" { cluster: c } where {
 }
 
 # A refinement the cluster meets only in three zones.
-type google.container_cluster { zones: list(string) check len(zones) >= 3 }
+type google.container_cluster { zones: list(string) check zones.len >= 3 }

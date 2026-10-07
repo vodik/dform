@@ -1942,8 +1942,8 @@ address, and with `n` an `iprange` when the range does; the right side's
 type decides, so a string read as a network is typed first (`let n:
 inet = cfg.net`). A field of a value is a part of it, never a
 computation over it but `len`: `xs.len` of a list, `s.len` of a string
-(its characters), `o.len` of an object (its keys; an object with a key
-named `len` reads that key).
+(its characters), `o.len` of an object (its keys; `o."len"` reads a key
+named `len`).
 
 Every function is declared in
 a signature file shipped with dform, `std/*.df`, which the compiler, the
@@ -1980,17 +1980,17 @@ only for a valid input with no answer (`regex.capture`, `path.rel`, the
 decoders, `list.min`, `list.max`, `list.first`, `list.last`); an input a
 function does not take (a bad unit, layout, template or port) is an
 error at the call. (4) One name per idea: `to(q, unit)` for every
-quantity, one `len`, one `format` (its values after the template, as an
+quantity, `x.len` for every length, one `format` (its values after the template, as an
 interpolation lowers to it), `inet.host` for an address in a network.
 (5) `forwards` by content: a function whose result is its arguments'
 content forwards a secret (`list.min`, `str.slice`, an encoder, a
-`with_*`); a judgment of one (a function to a bool or a number: `len`,
+`with_*`); a judgment of one (a function to a bool or a number, or `.len`:
 `oci.pinned`, `regex.match`) inspects it. (6) Subject
 first, options last, and a list rather than any number of values
 (`path.join` as `list.join`), but `format`'s. (7) A type's package is its
 namespace: a function is named by its package, the type it is about
 (`inet.subnet`, `uri.with_host`), and the prelude keeps only what is
-about no one type, `int`, `float`, `format`, `len`, `to`, `declassify`
+about no one type, `int`, `float`, `format`, `to`, `declassify`
 (`ref` and `cloud_ref` are forms of the language, listed nowhere). (8) A
 uri is RFC 3986's generic syntax, the type `uri`, never a browser's url.
 (9) A host is held as written and equal by its A-labels: IDNA is the
@@ -1999,7 +1999,7 @@ and checks (3), (5) and (6) where a signature says them.
 
 | package   | functions                                                                 |
 |-----------|---------------------------------------------------------------------------|
-| prelude   | `int(x)`, `float(x)`; `format(t, v, ...)`, `len(x)`, `to(q, unit)` (a quantity as a whole number of a unit, written as its literals write it: `"Gi"`, `"m"`, `"h"`), `declassify(v, why)`: what is about no one type (`ref(r)` and `cloud_ref(T, n, p)` are forms of the language, "References and their type") |
+| prelude   | `int(x)`, `float(x)`; `format(t, v, ...)`, `to(q, unit)` (a quantity as a whole number of a unit, written as its literals write it: `"Gi"`, `"m"`, `"h"`), `declassify(v, why)`: what is about no one type (`ref(r)` and `cloud_ref(T, n, p)` are forms of the language, "References and their type") |
 | `inet`    | `inet.subnet(net, bits, n)`, `inet.host(net, n)`, `inet.overlaps(a, b)`; fields `n.addr`, `n.bits`; `a in n` |
 | `int`     | `int.range(lo, hi, step)` (what `i in lo..hi` enumerates)                 |
 | `ip`      | `ip.unspecified(a)`                                                       |

@@ -7,7 +7,7 @@ resource net.vpc main { cidr = "10.0.0.0/16" }
 q(1)
 a(x) where q(x), x == _.size
 b(x) where q(x), y = _[x]
-c(x) where q(x), _n = len(_)
+c(x) where q(x), _n = str.trim(_)
 d(x) where q(x), _t = "n-${_}"
 e(_) where q(1)
 resource net.vpc _ {}

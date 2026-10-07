@@ -1981,7 +1981,10 @@ impl Rec<'_> {
                 let why = if name == "scoped" || name == "ref" {
                     "resource address carries a null".to_string()
                 } else {
-                    format!("builtin {name}() over a null")
+                    format!(
+                        "builtin {} over a null",
+                        crate::functions::shown_call(&name)
+                    )
                 };
                 self.stuck(state, nulls, why);
                 true
@@ -2786,7 +2789,14 @@ fn eval_builtin_pred(
     }
     if !forwards_nulls(&atom.pred) && vals.iter().any(stuck::has_null) {
         let nulls = vals.iter().flat_map(nulls_in).collect();
-        rec.stuck(state, nulls, format!("builtin {}() over a null", atom.pred));
+        rec.stuck(
+            state,
+            nulls,
+            format!(
+                "builtin {} over a null",
+                crate::functions::shown_call(&atom.pred)
+            ),
+        );
         return Ok(None);
     }
     let body = crate::functions::body(&atom.pred)
@@ -4562,7 +4572,7 @@ mod tests {
         let (r, _) = run("s(\"10\")
              explicit(x) where s(s), x = int(s) + 1
              text(t) where t = \"${14}\"
-             sizes(a, b, c) where a = len([\"x\", \"y\"]), b = len(\"héllo\"), c = len({k: 1})
+             sizes(a, b, c) where xs = [\"x\", \"y\"], s = \"héllo\", o = {k: 1}, a = xs.len, b = s.len, c = o.len
              cases(l, u) where l = str.lower(\"AbC\"), u = str.upper(\"AbC\")
              parts(p) where p = str.split(\"a,b,c\", \",\")
              joined(j) where j = list.join([\"a\", 1, true], \"-\")")
@@ -4590,7 +4600,7 @@ mod tests {
     fn a_builtin_over_a_null_is_stuck() {
         let (r, _) = run_with(
             "want(net.vpc, \"a\")
-             id_len(n) where want(net.vpc, a), n = len(ref(net.vpc, a, \"id\"))",
+             id_len(n) where want(net.vpc, a), i = ref(net.vpc, a, \"id\"), n = i.len",
             &crate::schema::fake().facts,
         )
         .unwrap();
@@ -4598,7 +4608,7 @@ mod tests {
         assert!(
             r.stuck
                 .iter()
-                .any(|s| s.reason == "builtin len() over a null"),
+                .any(|s| s.reason == "builtin `.len` over a null"),
             "{:?}",
             r.stuck
         );

@@ -1575,6 +1575,10 @@ pub fn fmt_term(t: &Term) -> String {
         Term::Val(v) => fmt_value(v),
         Term::Var(v) => v.clone(),
         Term::Wildcard => "_".into(),
+        // `x.len` (R-155), as the program writes it.
+        Term::Func { name, args } if name == crate::ir::LEN && args.len() == 1 => {
+            format!("{}.len", fmt_term(&args[0]))
+        }
         Term::Func { name, args } => format!(
             "{name}({})",
             args.iter().map(fmt_term).collect::<Vec<_>>().join(", ")

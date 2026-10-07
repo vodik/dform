@@ -49,6 +49,10 @@ pub const NAME_SEGMENT: &str = "__segment";
 /// the value when it is an object, else no value, the error naming it.
 pub const RESOURCE_BODY: &str = "__body";
 
+/// The engine function `x.len` lowers to (R-155): a list's elements, a
+/// string's characters or an object's keys, counted.
+pub const LEN: &str = "__len";
+
 /// `name` written with the old separators of a scope, `/` (R-72) or `::`,
 /// outside a quoted segment: as it is written now (`blue/vpc` is
 /// `blue.vpc`, R-112); `None` when it has neither.

@@ -1767,7 +1767,7 @@ publishes each secret field by its label (`output/#conn.password`) and
 digest, the rest of the object by value, and the reader's
 `prod.conn.password` is a secret null as a whole secret output's is.
 
-An input's own refinement (`input pw: secret(string) check len(pw) >=
+An input's own refinement (`input pw: secret(string) check pw.len >=
 12`) is where a secret may be checked; its deny does not print the value.
 `declassify(V, Reason)` is the one way a secret leaves on purpose: its
 value is `V`, public to the pass (what is inside it may be inspected), and
@@ -1775,7 +1775,7 @@ the rule also derives `declassified(Site, Reason)`, `Site` where the rule
 is written, for a policy to read or deny:
 
 ```dform
-output pw_len = declassify(len(pw), "its length is public")
+output pw_len = declassify(pw.len, "its length is public")
 deny "declassified at ${at}: ${r}" where declassified(at, r)
 ```
 
@@ -2907,13 +2907,13 @@ schema's `type_refine(T, Path, C)` fact refines a value:
 ```dform
 input db { backup_days: int = 3 check 1 <= backup_days <= 35 }
 input gke { control_plane_cidr: inet check control_plane_cidr.bits == 28 }
-type google.container_cluster { zones: list(string) check len(zones) >= 3 }
+type google.container_cluster { zones: list(string) check zones.len >= 3 }
 ```
 
 A `check` over the value alone that fits the checkable table is a
 constraint in the attribute's cell: `lo <= x <= hi` is `range(Lo, Hi)`,
 `x.bits <= N` (`>=`, `==`) is `prefix_len_le(N)` / `prefix_len_ge(N)`,
-`len(x) <= N` is `len_le(N)` / `len_ge(N)`, `x in [..]` or `x == v` is
+`x.len <= N` is `len_le(N)` / `len_ge(N)`, `x in [..]` or `x == v` is
 `enum([..])`, `matches(x, "re")` is `regex("re")`; a `type` block's `int`,
 `string`, `bool`, `inet` or `enum(...)` is a type check. A schema writes
 the same terms: `type_refine(net.subnet, cidr, prefix_len_le(24)).` The

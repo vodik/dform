@@ -159,7 +159,7 @@ fn an_aggregate_of_an_unbound_name_is_an_error() {
 fn an_aggregate_elsewhere_is_an_error() {
     for src in [
         "q(1)\np(count(x)) where q(x)\n",
-        "q(1)\np(y) where q(x), y = len([count(x)])\n",
+        "q(1)\np(y) where q(x), y = list.sum([count(x)])\n",
         "q(1)\nresource net.vpc v { size = count(x) } where q(x)\n",
     ] {
         let e = error(src);

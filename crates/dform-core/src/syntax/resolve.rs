@@ -6021,7 +6021,21 @@ impl<'u> Lowerer<'u> {
                 }
             }
             CHAIN | CALL_CHAIN => {
-                let c = Chain::read(n).ok_or(Skip)?;
+                let mut c = Chain::read(n).ok_or(Skip)?;
+                // `x.len` (R-155): the length of a list, a string or an
+                // object, the one field that is a computation; `x."len"`
+                // is an object's key.
+                let len = matches!(c.ops.last(), Some(Op::Field(f)) if f == "len")
+                    && tokens(n)
+                        .filter(|t| !t.kind().is_trivia())
+                        .last()
+                        .is_some_and(|t| t.kind() == IDENT);
+                if len {
+                    c.ops.pop();
+                    let res = self.resolve(rc, &c, pre)?;
+                    let t = self.realize(rc, res, Pos::Content, pre, span)?;
+                    return Ok(func(crate::ir::LEN, vec![t]));
+                }
                 // A resource by its bare name, given as a value: the
                 // reference, in its module or out of it (R-43).
                 if pos == Pos::Value

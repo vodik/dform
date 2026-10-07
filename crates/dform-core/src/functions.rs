@@ -147,6 +147,15 @@ pub fn callable(name: &str) -> bool {
     get(name).is_some_and(|f| !f.internal) || FORMS.contains(&name)
 }
 
+/// A call of `name` as a message names it: `str.split()`, or the field
+/// `x.len` lowers from (R-155).
+pub fn shown_call(name: &str) -> String {
+    match name {
+        crate::ir::LEN => "`.len`".to_string(),
+        n => format!("{n}()"),
+    }
+}
+
 /// Whether `name` is a builtin predicate: a function to bool.
 pub fn is_predicate(name: &str) -> bool {
     get(name).is_some_and(Function::is_predicate)
@@ -274,8 +283,8 @@ fn gone(name: &str) -> Option<String> {
         "time.before" => "a time before another is `a < b`".to_string(),
         "semver.compare" => "versions compare with `<`, `==` and `>`: `a < b`".to_string(),
         // One name per idea (R-134).
-        "list.len" | "str.len" => {
-            "the length of a list, an object or a string is `len(x)`".to_string()
+        "len" | "list.len" | "str.len" => {
+            "the length of a list, an object or a string is its field `x.len`".to_string()
         }
         "str.format" => "a template is `format(\"%s-%s\", a, b)`, its values after it".to_string(),
         "bytes.to" | "cpu.to" | "duration.total" => {
@@ -727,7 +736,7 @@ pub const BODIES: &[(&str, Body)] = &[
         }
         Some(Value::Str(out))
     }),
-    ("len", len_of),
+    (crate::ir::LEN, len_of),
     ("ref", |a| match a {
         [Value::Str(t), Value::Str(n), Value::Str(p)] => Some(Value::Ref {
             typ: t.clone(),

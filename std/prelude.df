@@ -1,5 +1,5 @@
 # The prelude: the functions written bare, those about no one type
-# (R-134): `int`, `float`, `format`, `len`, `to`, `declassify`. Every other
+# (R-134): `int`, `float`, `format`, `to`, `declassify`. Every other
 # function is qualified by its package, the type it is about
 # (`inet.subnet`, `str.split`). Signature files are read by the compiler, the language
 # server and `dform doc` (docs/grammar.md "Functions"); the bodies are the
@@ -28,10 +28,6 @@ fn float(value: any) -> float
 #| The template with each `%s` replaced by the next value's text; an error when there are fewer values than `%s`. `"a${e}"` lowers to it.
 #| example: let name = format("%s-%s", env, zone)
 fn format(template: string, value: any, ...) -> string forwards
-
-#| The number of elements of a list, keys of an object or characters of a string.
-#| example: let zones = len(subnet_ids)
-fn len(value: any) -> int
 
 #| The quantity as a whole number of `unit`, written as its literals write it: bytes "Ki", "Mi", "Gi", "Ti", "Pi" or "" for bytes; a cpu "m" or "" for cores; a duration "w", "d", "h", "m", "s", "ms", "us", "ns" (a day as 24 hours) or "mo", "y" for one of whole months. An error for another unit or a quantity that is not a whole number of them.
 #| example: let gib = to(volume.size, "Gi")
@@ -119,3 +115,7 @@ internal fn __path(value: any, path: string) -> any? forwards, forwards nulls
 #| Whether a value is known: true of every value; over a null, undetermined, as any content position (Rule 2). `has r` of a resource lowers to it over the resource's identity (R-152).
 #| example: __known(V)
 internal fn __known(value: any) -> bool
+
+#| The number of elements of a list, keys of an object or characters of a string; `x.len` lowers to it (R-155).
+#| example: __len(Xs)
+internal fn __len(value: any) -> int

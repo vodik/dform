@@ -700,7 +700,7 @@ pub fn check(
                     // `X = f(Secret)`: a function that inspects it.
                     for t in [x, y] {
                         if let Some(f) = inspecting(t, &|t| secret(t)) {
-                            diags.push(e0301(*span, &format!("{f}()")));
+                            diags.push(e0301(*span, &crate::functions::shown_call(&f)));
                         }
                     }
                     // A test between two terms, neither a fresh variable.
@@ -751,7 +751,7 @@ pub fn check(
             if let Some(f) = inspecting(t, &|t| secret(t))
                 && !COLLECT.contains(&f.as_str())
             {
-                diags.push(e0301(h.span, &format!("{f}()")));
+                diags.push(e0301(h.span, &crate::functions::shown_call(&f)));
             }
         }
         // E0305: a name.

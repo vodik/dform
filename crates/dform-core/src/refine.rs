@@ -220,7 +220,7 @@ pub fn of_type(t: &TypeExpr) -> Option<Constraint> {
 /// A `check` body over the value written `names`, split into what fits the
 /// checkable table and the rest (which lowers to a deny). A literal fits
 /// when it reads the value alone: `lo <= x <= hi` (both bounds: a range;
-/// one alone does not fit), `x == v`, `x in [..]`, `len(x) OP n`,
+/// one alone does not fit), `x == v`, `x in [..]`, `x.len OP n`,
 /// `x.bits OP n` (a network's prefix length), `matches(x, "re")`. The split is sound because a
 /// `check` is a conjunction: `not (A, B)` is `not A` or `not B`, and a
 /// literal that fits shares no variable with the rest.
@@ -230,6 +230,11 @@ pub fn split(body: &[Lit], names: &[&str]) -> (Vec<Constraint>, Vec<Lit>) {
     // `x.bits`: a network's prefix length, its field (R-134), named by
     // its text as the value is.
     let bits = |t: &Term| matches!(t, Term::Val(Value::Str(s)) if s.strip_suffix(".bits").is_some_and(|n| names.contains(&n)));
+    // `x.len`: its length (R-155), lowered or as its text.
+    let length = |t: &Term| {
+        of_self(t, crate::ir::LEN)
+            || matches!(t, Term::Val(Value::Str(s)) if s.strip_suffix(".len").is_some_and(|n| names.contains(&n)))
+    };
     let int = |t: &Term| match t {
         Term::Val(Value::Int(n)) => Some(*n),
         _ => None,
@@ -252,7 +257,7 @@ pub fn split(body: &[Lit], names: &[&str]) -> (Vec<Constraint>, Vec<Lit>) {
             Lit::Gt(a, b) => (a, Op::Gt, b),
             _ => return None,
         };
-        let mentions = |t: &Term| is_self(t) || of_self(t, "len") || bits(t);
+        let mentions = |t: &Term| is_self(t) || length(t) || bits(t);
         if mentions(a) {
             Some((a.clone(), op, b.clone()))
         } else if mentions(b) {
@@ -315,7 +320,7 @@ pub fn split(body: &[Lit], names: &[&str]) -> (Vec<Constraint>, Vec<Lit>) {
             continue;
         };
         type Make = fn(i64) -> Option<Constraint>;
-        let (le, ge): (Make, Make) = if of_self(&subject, "len") {
+        let (le, ge): (Make, Make) = if length(&subject) {
             (
                 |n| Some(Constraint::LenLe(n)),
                 |n| Some(Constraint::LenGe(n)),
@@ -435,7 +440,9 @@ pub fn check_rest(rest: &[Lit], span: Span) -> Vec<Diagnostic> {
             }
         }
         for f in names {
-            if !crate::functions::callable(&f) {
+            // The lowering's own (`x.len`, `a + b`) came from what the
+            // program wrote.
+            if !crate::functions::callable(&f) && crate::functions::get(&f).is_none() {
                 let d = crate::functions::unknown(span, &f);
                 out.push(Diagnostic {
                     message: format!("in a refinement: {}", d.message),
@@ -1028,7 +1035,7 @@ mod tests {
             vec![Constraint::PrefixLenLe(28), Constraint::PrefixLenGe(28)]
         );
         assert!(rest.is_empty());
-        let (cs, _) = split(&lits("len(pw) >= 16, matches(pw, \"[a-z]+\")"), &["pw"]);
+        let (cs, _) = split(&lits("pw.len >= 16, matches(pw, \"[a-z]+\")"), &["pw"]);
         assert_eq!(
             cs,
             vec![Constraint::LenGe(16), Constraint::Regex("[a-z]+".into())]
@@ -1039,7 +1046,7 @@ mod tests {
         let (cs, rest) = split(&lits("n <= 5"), &["n"]);
         assert!(cs.is_empty());
         assert_eq!(rest.len(), 1);
-        let (cs, rest) = split(&lits("len(pw) >= 3, max <= min, ok(pw)"), &["pw"]);
+        let (cs, rest) = split(&lits("pw.len >= 3, max <= min, ok(pw)"), &["pw"]);
         assert_eq!(cs, vec![Constraint::LenGe(3)]);
         assert_eq!(rest.len(), 2);
     }

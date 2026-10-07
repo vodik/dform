@@ -17,7 +17,7 @@ size(p) where net(n), p = n.bits
 inside(a) where a = "10.50.3.4", net(n), a in n
 words(w) where w = str.split("a,b", ",")
 joined(j) where j = list.join(["a", 1], "-")
-counted(a, b) where a = len([1, 2]), b = len("abc")
+counted(a, b) where xs = [1, 2], s = "abc", a = xs.len, b = s.len
 port(p) where p = int("8080") + 1
 "#,
         "sub",
@@ -213,7 +213,7 @@ w(ref) where ref = oci.with_digest("org/app:1.2.3", "{digest}")
 }
 
 /// `str.trim`, `replace`, `starts_with`, `ends_with`, `contains`,
-/// `format`, `pad_left`, `pad_right`, `len`, `slice`.
+/// `format`, `pad_left`, `pad_right`, `.len`, `slice`.
 #[test]
 fn str_additions_evaluate() {
     let src = r#"t(s) where s = str.trim("  web  ")
@@ -225,7 +225,7 @@ nco() where not "x" in "team=platform"
 fo(s) where s = format("%s-%s", "a", "b")
 pl(s) where s = str.pad_left("7", 3, "0")
 pr(s) where s = str.pad_right("ab", 4, "-")
-ln(n) where n = len("hello")
+ln(n) where s = "hello", n = s.len
 sl(s) where s = str.slice("hello world", 6)
 sl2(s) where s = str.slice("hello world", 0, 5)
 "#;
@@ -346,7 +346,7 @@ te(s) where s = toml.encode({ a: 1 })
 fn decode_reads_as_a_document_does() {
     let src = r#"whole(n, i) where n = json.decode("{\"a\": 2.0}").a, i = json.decode("2")
 frac(n) where n = yaml.decode("a: 1.5\n").a
-absent(k) where v = json.decode("{\"a\": 1, \"b\": null}"), k = len(v)
+absent(k) where v = json.decode("{\"a\": 1, \"b\": null}"), k = v.len
 when(t) where t = toml.decode("a = 2026-10-02T09:00:00Z\n").a, t < "2027-01-01T00:00:00Z"
 "#;
     assert_eq!(facts(src, "whole"), ["whole(2.0, 2)"]);
@@ -471,18 +471,22 @@ let millis: cpu = 1500m
 g(n) where n = to(3Gi, "Gi")
 h(n) where n = to(ttl, "h")
 m(n) where n = to(millis, "m")
-l(a, b, c) where a = len([1]), b = len("ab"), c = len({ x: 1 })
+l(a, b, c) where xs = [1], s = "ab", o = { x: 1 }, a = xs.len, b = s.len, c = o.len
 f(s) where s = format("%s:%s", "a", 1)
 "#;
     assert_eq!(facts(src, "g"), ["g(3)"]);
     assert_eq!(facts(src, "h"), ["h(36)"]);
     assert_eq!(facts(src, "m"), ["m(1500)"]);
     assert_eq!(facts(src, "l"), ["l(1, 2, 1)"]);
+    // `.len` is the count; a key named `len` is `o."len"` (R-155).
+    let keyed = "let o = { len: 7, a: 1 }\nk(n, v) where n = o.len, v = o.\"len\"\n";
+    assert_eq!(facts(keyed, "k"), ["k(2, 7)"]);
     assert_eq!(facts(src, "f"), [r#"f("a:1")"#]);
     for (call, help) in [
         ("bytes.to(1Gi, \"Mi\")", "`to(q, unit)`"),
         ("duration.total(1h, \"hours\")", "`to(q, unit)`"),
-        ("list.len([1])", "`len(x)`"),
+        ("list.len([1])", "`x.len`"),
+        ("len([1])", "`x.len`"),
         ("str.format(\"%s\", [1])", "`format(\"%s-%s\", a, b)`"),
         ("hash.short(\"a\", 8)", "`str.slice(hash.sha256(s), 0, n)`"),
         ("inet.addr(\"10.0.0.0/8\", 1)", "`inet.host(net, n)`"),
@@ -516,10 +520,7 @@ fn the_prelude_is_what_has_no_type() {
         .filter(|f| f.package == "prelude" && !f.internal)
         .map(|f| f.name.as_str())
         .collect();
-    assert_eq!(
-        prelude,
-        ["declassify", "float", "format", "int", "len", "to"]
-    );
+    assert_eq!(prelude, ["declassify", "float", "format", "int", "to"]);
     let e = error("p(x) where x = scoped(\"a\", \"b\")\n");
     assert!(e.contains("scoped is the lowering's"), "{e}");
     assert!(engine::reference("ref", true).is_none());

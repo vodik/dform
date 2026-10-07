@@ -229,7 +229,7 @@ fn e0306_a_refinement_on_a_sensitive_path_the_provider_cannot_check() {
     .unwrap();
     s.write(
         "p.df",
-        "\nuse k8s { source = \"./providers/k8s\" }\ntype k8s.secret {\n  data.password: string check len(data.password) >= 16\n}\nresource k8s.secret db { metadata.name = \"db\", data = { password: \"x\" } }\n",
+        "\nuse k8s { source = \"./providers/k8s\" }\ntype k8s.secret {\n  data.password: string check data.password.len >= 16\n}\nresource k8s.secret db { metadata.name = \"db\", data = { password: \"x\" } }\n",
     );
     let out = common::dform()
         .args(["plan", "p.df"])
@@ -249,7 +249,7 @@ fn e0306_a_refinement_on_a_sensitive_path_the_provider_cannot_check() {
 }
 
 /// In a `where`, the attribute's name is its value, in the checkable form
-/// (`len(name) <= 3`, a cell refinement) and in a deny (`len(name) != 2`),
+/// (`name.len <= 3`, a cell refinement) and in a deny (`code.len != 2`),
 /// whose message prints the name as written; another attribute of the
 /// block is its value too, through the `prefix_len` builtin.
 #[test]
@@ -258,8 +258,8 @@ fn a_refinement_names_its_attribute_by_name() {
     let src = |name: &str, wide: &str| {
         format!(
             "\ntype app.thing {{
-  name: string check len(name) <= 3
-  code: string check len(code) != 2
+  name: string check name.len <= 3
+  code: string check code.len != 2
   net: inet check net.bits >= wide.bits
   wide: inet
 }}
@@ -284,7 +284,7 @@ n(\"{name}\")
     let r = plan(&s, &src("ab", "10.0.0.0/16")).failure();
     assert!(
         r.stdout
-            .contains("! app.thing a.code: ab does not satisfy len(code) != 2  p.df:4\n"),
+            .contains("! app.thing a.code: ab does not satisfy code.len != 2  p.df:4\n"),
         "{}",
         r.stdout
     );

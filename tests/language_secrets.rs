@@ -11,7 +11,7 @@ fn run(body: &str) -> common::Run {
     s.write(
         "p.df",
         &format!(
-            "\ninput pw: secret(string) check len(pw) >= 3\n\
+            "\ninput pw: secret(string) check pw.len >= 3\n\
              extern vault.read(+path, -value: secret(string))\n{body}\nuse fake\n"
         ),
     );
@@ -47,7 +47,7 @@ fn a_secret_flows_to_sensitive_places() {
 #[test]
 fn e0301_a_comparison_or_an_inspecting_function() {
     refused(
-        "deny \"short\" where pw(p), len(p) < 12\n",
+        "deny \"short\" where pw(p), p.len < 12\n",
         "p.df:4:1: E0301: a comparison over a secret",
     );
     refused(
@@ -55,8 +55,8 @@ fn e0301_a_comparison_or_an_inspecting_function() {
         "E0301: a comparison over a secret",
     );
     refused(
-        "n(l) where pw(p), l = len(p)\n",
-        "E0301: len() over a secret",
+        "n(l) where pw(p), l = p.len\n",
+        "E0301: `.len` over a secret",
     );
 }
 
@@ -111,7 +111,7 @@ fn a_secret_input_refinement_does_not_print_it() {
     let s = Scratch::new("lang-secrets-refine");
     s.write(
         "p.df",
-        "\ninput pw: secret(string) check len(pw) >= 12\nuse fake\n",
+        "\ninput pw: secret(string) check pw.len >= 12\nuse fake\n",
     );
     let r = s
         .run(&[
@@ -126,7 +126,7 @@ fn a_secret_input_refinement_does_not_print_it() {
         .failure();
     assert!(
         r.stderr
-            .contains("input pw fails its refinement: len(pw) >= 12\n"),
+            .contains("input pw fails its refinement: pw.len >= 12\n"),
         "{}",
         r.stderr
     );

@@ -390,7 +390,7 @@ fn a_secret_reaches_a_public_output_only_through_declassify() {
         )
     };
     let mock = ["--world", "w.json", "--set", "pw=HUNTER-TWO"];
-    s.write("p.df", &prog("n = len(p)", ""));
+    s.write("p.df", &prog("n = p.len", ""));
     let r = s.run(&common::on("p.df", &mock, &["plan"])).failure();
     assert!(
         r.stderr
@@ -401,7 +401,7 @@ fn a_secret_reaches_a_public_output_only_through_declassify() {
 
     s.write(
         "p.df",
-        &prog("n = declassify(len(p), \"its length is public\")", ""),
+        &prog("n = declassify(p.len, \"its length is public\")", ""),
     );
     let r = s
         .run(&common::on(
@@ -427,7 +427,7 @@ fn a_secret_reaches_a_public_output_only_through_declassify() {
     s.write(
         "p.df",
         &prog(
-            "n = declassify(len(p), \"its length is public\")",
+            "n = declassify(p.len, \"its length is public\")",
             "deny \"declassified at ${at}: ${r}\" where declassified(at, r)\n",
         ),
     );

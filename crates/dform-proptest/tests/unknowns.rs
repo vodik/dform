@@ -167,7 +167,7 @@ enum AggKind {
 }
 
 /// What `sum`, `min` and `max` fold (`count` and `collect_set` fold `x`):
-/// `x` itself (`len(x)` for `sum`), `len(x)`, or `sS.size`, an open int.
+/// `x` itself (`x.len` for `sum`), `x.len`, or `sS.size`, an open int.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Item {
     X,
@@ -266,7 +266,7 @@ impl Printer<'_> {
     fn agg(&self, a: &AggDef) -> String {
         let item = match (a.kind, a.item) {
             (AggKind::Count | AggKind::Set, _) => "x".to_string(),
-            (AggKind::Sum, Item::X | Item::Len) | (_, Item::Len) => "len(x)".to_string(),
+            (AggKind::Sum, Item::X | Item::Len) | (_, Item::Len) => "x.len".to_string(),
             (_, Item::X) => "x".to_string(),
             (_, Item::Size(s)) => format!("{}.size", self.src(s)),
         };
