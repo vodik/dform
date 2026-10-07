@@ -778,6 +778,7 @@ pub fn main(
     if LAUNCH.set(launch).is_err() {
         panic!("internal: cli::main runs once per process");
     }
+    crate::timing::begin();
     let args = Args::parse_from(args);
     let color = args.inputs.color;
     let result = match &args.cmd {
@@ -801,6 +802,7 @@ pub fn main(
         }
         _ => resolve(args).and_then(run_command),
     };
+    crate::timing::finish();
     match result {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(e) => {
@@ -1655,11 +1657,16 @@ fn run_with(
         input_files: cli.input_files.clone(),
         providers: cli.providers.clone(),
     };
-    let loaded = deployment::load(
-        &target,
-        env!("CARGO_PKG_VERSION"),
-        &|p: &Path| std::fs::read_to_string(p),
-        &mut Watch::new(hook.as_deref_mut(), &cli.cmd),
+    let loaded = crate::timing::time(
+        || "loaded and compiled".into(),
+        || {
+            deployment::load(
+                &target,
+                env!("CARGO_PKG_VERSION"),
+                &|p: &Path| std::fs::read_to_string(p),
+                &mut Watch::new(hook.as_deref_mut(), &cli.cmd),
+            )
+        },
     )?;
     cli.manifest = loaded.manifest.clone();
     // A key's value is the target's, else its input's default.
@@ -1761,6 +1768,7 @@ fn run_with(
     // The deployment this run is of: the stack, or one value of its key
     // (rekey's old one), and where its objects are. A command that only
     // reads or moves them needs its key, not the program's other inputs.
+    let locating = crate::timing::span(|| "located the deployment".into());
     let located = loaded.locate(
         &deployment::Selection {
             root: root.clone(),
@@ -1780,6 +1788,7 @@ fn run_with(
         &open_s3(&root, writes),
         &mut Watch::new(hook.as_deref_mut(), &cli.cmd),
     )?;
+    drop(locating);
     let deployment = located.deployment.clone();
     // A keyed stack's plan and apply say first which deployment they are
     // of; `-v` adds which of its key values are defaults.
@@ -2199,9 +2208,15 @@ fn run_with(
             else {
                 return;
             };
-            let Some(then) = crate::diff::last_apply(
-                &entries, &cli.files, &rerun, &cli.set, &cli.data, &addresses,
-            ) else {
+            let then = crate::timing::time(
+                || "evaluated the last apply's program, for why".into(),
+                || {
+                    crate::diff::last_apply(
+                        &entries, &cli.files, &rerun, &cli.set, &cli.data, &addresses,
+                    )
+                },
+            );
+            let Some(then) = then else {
                 return;
             };
             let redact = query::Redactor::new(&res.facts, schema);

@@ -53,8 +53,9 @@ pub struct Timed {
     next: u64,
     /// Submitted, not yet passed on.
     batch: Vec<(Ticket, Call)>,
-    /// Calls with no answer yet: when each times out, and what it is.
-    live: BTreeMap<Ticket, (Instant, String)>,
+    /// Calls with no answer yet: when each times out, what it is, and
+    /// when it was submitted.
+    live: BTreeMap<Ticket, (Instant, String, Instant)>,
     /// Calls that timed out; their answers are dropped.
     abandoned: BTreeSet<Ticket>,
     /// Calls submitted while one that timed out had no answer: they wait
@@ -144,8 +145,9 @@ impl Provider for Timed {
     fn submit(&mut self, call: Call) -> Ticket {
         let t = Ticket(self.next);
         self.next += 1;
+        let now = Instant::now();
         self.live
-            .insert(t, (Instant::now() + self.timeout, describe(&call)));
+            .insert(t, (now + self.timeout, describe(&call), now));
         if !self.abandoned.is_empty() {
             self.behind.insert(t);
         }
@@ -162,10 +164,10 @@ impl Provider for Timed {
             if self.asked == 0 && self.send(Cmd::Next) {
                 self.asked += 1;
             }
-            let (&first, (due, _)) = self
+            let (&first, (due, _, _)) = self
                 .live
                 .iter()
-                .min_by_key(|(t, (due, _))| (*due, **t))
+                .min_by_key(|(t, (due, _, _))| (*due, **t))
                 .expect("a call is live");
             let wait = due.saturating_duration_since(Instant::now());
             match self.answers.recv_timeout(wait) {
@@ -182,12 +184,17 @@ impl Provider for Timed {
                         }
                         continue;
                     }
-                    self.live.remove(&t);
+                    if let Some((_, what, from)) = self.live.remove(&t) {
+                        crate::timing::line(
+                            &format!("provider {}: {what}", self.what),
+                            from.elapsed(),
+                        );
+                    }
                     self.behind.remove(&t);
                     return (t, r);
                 }
                 Err(RecvTimeoutError::Timeout) => {
-                    let (_, what) = self.live.remove(&first).expect("live");
+                    let (_, what, _) = self.live.remove(&first).expect("live");
                     self.behind.remove(&first);
                     self.abandoned.insert(first);
                     return (
@@ -200,7 +207,7 @@ impl Provider for Timed {
                     );
                 }
                 Err(RecvTimeoutError::Disconnected) => {
-                    let (_, what) = self.live.remove(&first).expect("live");
+                    let (_, what, _) = self.live.remove(&first).expect("live");
                     return (
                         first,
                         Err(CallError::Crashed(format!(

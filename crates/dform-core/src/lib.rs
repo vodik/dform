@@ -48,6 +48,7 @@ pub mod syntax;
 pub mod tables;
 pub mod testing;
 pub mod time;
+pub mod timing;
 pub mod transform;
 pub mod types;
 pub mod value;

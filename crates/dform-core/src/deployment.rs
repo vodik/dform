@@ -479,8 +479,10 @@ impl Evaluator {
         extra.extend(backend.learned());
         extra.extend(executor::withhold(backend.world_facts(st)?, withheld));
         let (res, mut violations) = if more.is_empty() {
-            let (mut res, mut violations, mut resumable) =
-                externs.eval_resumable(program, &extra, zset::POLICY_INPUTS)?;
+            let (mut res, mut violations, mut resumable) = crate::timing::time(
+                || "evaluated".into(),
+                || externs.eval_resumable(program, &extra, zset::POLICY_INPUTS),
+            )?;
             // A provider the program configures, its settings now known,
             // is configured, and what it serves read again.
             let configured = backend.configure_from(agreed(&res.facts))?;
@@ -494,8 +496,10 @@ impl Evaluator {
                 extra = self.base_extra.clone();
                 extra.extend(backend.learned());
                 extra.extend(executor::withhold(backend.world_facts(st)?, withheld));
-                (res, violations, resumable) =
-                    externs.eval_resumable(program, &extra, zset::POLICY_INPUTS)?;
+                (res, violations, resumable) = crate::timing::time(
+                    || "evaluated".into(),
+                    || externs.eval_resumable(program, &extra, zset::POLICY_INPUTS),
+                )?;
             }
             // Each provider reaches the account the program expects of it
             // (`expect_account`), or nothing is planned.
@@ -516,7 +520,10 @@ impl Evaluator {
                     // taken with are not all of them any more.
                     *self.last.borrow_mut() = None;
                     extra.extend(more.iter().cloned());
-                    externs.eval_at(program, &extra, tick)?
+                    crate::timing::time(
+                        || "evaluated".into(),
+                        || externs.eval_at(program, &extra, tick),
+                    )?
                 }
             };
             // At a boundary too: a provider whose settings the last tick
@@ -1057,6 +1064,7 @@ impl Located {
         let held = stack::held(&outputs);
         // What dform.toml grants each provider, for the launcher (R-13b).
         plugin::host::register(l.manifest.iter().flat_map(|m| m.grants()));
+        let started = crate::timing::span(|| "providers started and configured".into());
         let backend = Rc::new(if l.starts_none() {
             Providers::none()
         } else {
@@ -1086,6 +1094,7 @@ impl Located {
                 },
             )?
         });
+        drop(started);
         // Externs are asked on demand: a table's of its file, else of the
         // file provider, else of the providers.
         let tables = Rc::new(tables::Tables::default());
@@ -1133,12 +1142,14 @@ impl Located {
             true => None,
             false => world_types(lowered),
         };
+        let schema = crate::timing::span(|| "providers' schema loaded".into());
         let discovered = backend.discover(types.as_ref())?;
         let scope = match opts.whole_schema {
             true => None,
             false => catalog_scope(&self.program, &base_extra, &discovered, &st),
         };
         backend.load_schema(scope.as_ref())?;
+        drop(schema);
         // The data sources the providers' schemas declare that the program
         // reads with no `extern` line of its own (R-106): declared as if it
         // had one.
@@ -1194,6 +1205,7 @@ impl Located {
         }
         // The static secret pass and the refinement checks (a literal that
         // violates one, E0306), against the provider's schema.
+        let checks = crate::timing::span(|| "checked against the schema".into());
         if let Some(l) = lowered {
             crate::secrets::check(l, backend.schema(), &secret_outputs)?;
             // Where the pass found secrets, for the redactor (R-128).
@@ -1219,6 +1231,7 @@ impl Located {
                 obs.note(Note::Computed(at, n));
             }
         }
+        drop(checks);
         // An `expect_account` a secret reaches is named by its label.
         let secret_accounts = lowered
             .map(|l| crate::secrets::secret_expected_accounts(l, backend.schema(), &secret_outputs))
@@ -1311,6 +1324,7 @@ impl Located {
             let compiled = Compiled::of(&res, backend.schema());
             // No plan when the resources do not compile: that is why.
             let plan = |c: &Compiled| {
+                let _t = crate::timing::span(|| "planned (refresh, Plan calls, policy)".into());
                 evaluator.plan(
                     res.clone(),
                     &violations,

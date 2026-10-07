@@ -22,6 +22,7 @@
 
 use anyhow::{Context, Result, anyhow, bail};
 use dform_core::store::{Cond, Object, S3Spec, Store};
+use dform_core::timing;
 use rusty_s3::actions::{
     CreateBucket, DeleteObject, GetObject, ListObjectsV2, PutObject, S3Action,
 };
@@ -277,6 +278,35 @@ impl Store for S3Store {
     }
 
     fn get(&self, key: &str) -> Result<Option<Object>> {
+        let what = || format!("s3 get {}", self.locate(key));
+        timing::time(what, || self.get_now(key))
+    }
+
+    fn put(&self, key: &str, bytes: &[u8], cond: &Cond) -> Result<Option<String>> {
+        let what = || {
+            format!(
+                "s3 put {} ({} bytes, {cond:?})",
+                self.locate(key),
+                bytes.len()
+            )
+        };
+        timing::time(what, || self.put_now(key, bytes, cond))
+    }
+
+    fn list(&self, prefix: &str) -> Result<Vec<String>> {
+        let what = || format!("s3 list {}", self.locate(prefix));
+        timing::time(what, || self.list_now(prefix))
+    }
+
+    fn delete(&self, key: &str) -> Result<()> {
+        let what = || format!("s3 delete {}", self.locate(key));
+        timing::time(what, || self.delete_now(key))
+    }
+}
+
+/// The calls, each one HTTP request (a list, one a page).
+impl S3Store {
+    fn get_now(&self, key: &str) -> Result<Option<Object>> {
         let (obj, at) = (self.object(key), self.locate(key));
         let url = GetObject::new(&self.bucket, Some(&self.creds), &obj).sign(SIGNED_FOR);
         let mut resp = self
@@ -303,7 +333,7 @@ impl Store for S3Store {
         }
     }
 
-    fn put(&self, key: &str, bytes: &[u8], cond: &Cond) -> Result<Option<String>> {
+    fn put_now(&self, key: &str, bytes: &[u8], cond: &Cond) -> Result<Option<String>> {
         let (obj, at) = (self.object(key), self.locate(key));
         let header = match cond {
             Cond::Any => None,
@@ -335,7 +365,7 @@ impl Store for S3Store {
         }
     }
 
-    fn list(&self, prefix: &str) -> Result<Vec<String>> {
+    fn list_now(&self, prefix: &str) -> Result<Vec<String>> {
         let full = self.object(prefix);
         let strip = match self.prefix.as_str() {
             "" => String::new(),
@@ -379,7 +409,7 @@ impl Store for S3Store {
         Ok(out)
     }
 
-    fn delete(&self, key: &str) -> Result<()> {
+    fn delete_now(&self, key: &str) -> Result<()> {
         let (obj, at) = (self.object(key), self.locate(key));
         let url = DeleteObject::new(&self.bucket, Some(&self.creds), &obj).sign(SIGNED_FOR);
         let resp = self

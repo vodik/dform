@@ -371,7 +371,8 @@ impl Providers {
         };
         let policy_of = |s: &String| cfg.policies.get(s).copied();
         if !mocks.is_empty() {
-            let mut link = launch.mock()?;
+            let mut link =
+                crate::timing::time(|| "provider mock started".into(), || launch.mock())?;
             if let Some(p) = specs
                 .iter()
                 .filter(|s| matches!(source::resolve(s), Source::Mock(_)))
@@ -401,7 +402,10 @@ impl Providers {
             .filter(|s| matches!(source::resolve(s), Source::Plugin(_)))
             .collect();
         for (p, spec) in plugins.into_iter().zip(plugin_specs) {
-            let mut link = launch.plugin(&p)?;
+            let mut link = crate::timing::time(
+                || format!("provider {} started (spawn and handshake)", p.display()),
+                || launch.plugin(&p),
+            )?;
             if let Some(policy) = policy_of(spec) {
                 link.set_policy(policy);
             }
