@@ -228,3 +228,121 @@ fn a_storage_container_is_made_changed_and_deleted() {
     // Gone already is deleted.
     lab.delete(CONTAINER, "logs", &c.remote);
 }
+
+const USER: &str = "ovh.cloud_project_user";
+
+/// A reveal of `path` of the user `remote`, as the engine asks it.
+fn reveal(lab: &Lab, typ: &str, remote: &str, path: &str, lease: &str) -> Result<String, String> {
+    let r = pb::RevealRequest {
+        held: Some(pb::Held {
+            provider: "ovh".into(),
+            deployment: "main".into(),
+            r#type: typ.into(),
+            remote: remote.into(),
+            path: path.into(),
+            digest: String::new(),
+        }),
+        lease: lease.into(),
+    };
+    match lab.call(Call::Reveal(r), &Mutex::default()) {
+        Ok(Reply::Reveal(r)) => Ok(String::from_utf8(r.value).unwrap()),
+        Ok(_) => Err("not a Reveal's reply".into()),
+        Err(e) => Err(format!("{e:?}")),
+    }
+}
+
+/// A user is made with its roles, said `creating` then `ok`, and given
+/// an S3 credential: its access key is computed, its secret only a label
+/// (the value never leaves the API but for Reveal, with the lease). Its
+/// roles change in place; a new description replaces it; the same
+/// description from another Create is refused, to be adopted.
+#[test]
+fn a_user_has_an_s3_credential_whose_secret_is_held() {
+    let lab = Lab::new();
+    let doc = json!({"description": "backup", "roles": ["objectstore_operator"]});
+    let u = lab.create(USER, "backup", doc.clone());
+    assert_eq!(u.said, ["creating", "ok"], "{u:?}");
+    let id: i64 = u.remote.parse().unwrap();
+    let creds = lab.server.s3_credentials(id);
+    assert_eq!(creds.len(), 1);
+    let (access, secret) = &creds[0];
+    assert_eq!(u.attrs, doc);
+    assert_eq!(u.computed["s3_access_key"], access.as_str());
+    assert_eq!(u.computed["status"], "ok");
+    assert_eq!(
+        u.computed["s3_secret_key"],
+        json!({"$secret": "ovh.cloud_project_user/backup#s3_secret_key"})
+    );
+    // The secret and the password the API answered are nowhere in what
+    // the provider answers.
+    let answered = format!("{u:?}");
+    assert!(
+        !answered.contains(secret.as_str()) && !answered.contains("pw-"),
+        "{answered}"
+    );
+    let (_, computed) = lab.read(USER, "backup", &u.remote).unwrap();
+    assert_eq!(computed, u.computed);
+
+    // Reveal: the secret, read from the API, with the lease only.
+    assert_eq!(
+        reveal(&lab, USER, &u.remote, "s3_secret_key", "lease-1").unwrap(),
+        *secret
+    );
+    let no_lease = reveal(&lab, USER, &u.remote, "s3_secret_key", "").unwrap_err();
+    assert!(
+        no_lease.contains("without the deployment's lease"),
+        "{no_lease}"
+    );
+    let elsewhere = reveal(&lab, USER, &u.remote, "username", "lease-1").unwrap_err();
+    assert!(elsewhere.contains("holds no secret there"), "{elsewhere}");
+
+    // Roles in place: one PUT of their ids.
+    let more = json!({"description": "backup",
+                      "roles": ["volume_operator", "objectstore_operator"]});
+    let (paths, replaces) = lab.plan(USER, Some(&u.attrs), &more);
+    assert!(!paths.is_empty() && !replaces, "{paths:?}");
+    let changed = lab.update(USER, "backup", &u.remote, more);
+    assert_eq!(
+        changed.attrs["roles"],
+        json!(["objectstore_operator", "volume_operator"])
+    );
+    assert_eq!(lab.calls("PUT", "/role"), 1);
+    // The same roles in another order: nothing to do.
+    let (paths, _) = lab.plan(
+        USER,
+        Some(&changed.attrs),
+        &json!({"description": "backup",
+                "roles": ["volume_operator", "objectstore_operator"]}),
+    );
+    assert!(paths.is_empty(), "{paths:?}");
+    // A new description replaces it.
+    let (_, replaces) = lab.plan(
+        USER,
+        Some(&changed.attrs),
+        &json!({"description": "backup-2", "roles": ["objectstore_operator"]}),
+    );
+    assert!(replaces);
+
+    // Another Create of the same description: refused, to be adopted.
+    let again = lab
+        .apply(pb::Op::Create, USER, "other", "", doc.clone())
+        .unwrap_err();
+    assert!(again.contains("already exists with this key"), "{again}");
+    // Adopting one made elsewhere with no credential gives it one.
+    let found = lab.server.add_user("found");
+    lab.server.world.lock().unwrap().s3.remove(&found);
+    let adopted = lab
+        .apply(
+            pb::Op::Adopt,
+            USER,
+            "found",
+            &found.to_string(),
+            json!({"description": "found", "roles": ["objectstore_operator"]}),
+        )
+        .unwrap();
+    assert_eq!(lab.server.s3_credentials(found).len(), 1);
+    assert!(adopted.computed["s3_access_key"].is_string());
+
+    lab.delete(USER, "backup", &u.remote);
+    assert!(lab.read(USER, "backup", &u.remote).is_none());
+}

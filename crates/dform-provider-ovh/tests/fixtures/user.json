@@ -1,0 +1,12 @@
+{
+  "id": 482913,
+  "username": "user-Xk3pQ9",
+  "description": "backup",
+  "status": "ok",
+  "creationDate": "2026-10-05T18:38:11Z",
+  "openstackId": "c0f7e1b2a3d44e5f9a8b7c6d5e4f3a2b",
+  "roles": [
+    {"id": "9b3c2d1e0f", "name": "volume_operator", "description": "Volume operator", "permissions": ["volume:all"]},
+    {"id": "4a5b6c7d8e", "name": "objectstore_operator", "description": "ObjectStore operator", "permissions": ["objectstore:all"]}
+  ]
+}

@@ -142,6 +142,37 @@ pub fn container(o: &Json) -> (Json, Json) {
     (attrs, computed)
 }
 
+/// A user (`cloud.user.User`) and the access key of its first S3
+/// credential, if it has one. Its roles are their names, sorted; its S3
+/// secret is never here: where the credential exists, `s3_secret_key` is
+/// `true`, which the provider answers as the secret's label.
+pub fn user(o: &Json, access: Option<&str>) -> (Json, Json) {
+    let mut roles: Vec<&str> = o
+        .get("roles")
+        .and_then(Json::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|r| str_of(r, "name"))
+        .collect();
+    roles.sort();
+    roles.dedup();
+    let attrs = json!({
+        "description": str_of(o, "description").unwrap_or_default(),
+        "roles": roles,
+    });
+    let id = o.get("id").and_then(Json::as_i64).unwrap_or(0);
+    let mut computed = json!({
+        "id": id.to_string(),
+        "username": str_of(o, "username").unwrap_or_default(),
+        "status": str_of(o, "status").unwrap_or_default(),
+        "s3_access_key": access,
+    });
+    if access.is_some() {
+        computed["s3_secret_key"] = json!(true);
+    }
+    (attrs, computed)
+}
+
 /// `ovh.flavor(+region, -name, -vcpus: int, -ram: bytes, -disk: bytes)`:
 /// the flavors offered in `region` (`cloud.flavor.Flavor[]`), available
 /// ones, a name once. The API counts RAM in MiB and disk in GiB, as
@@ -327,6 +358,25 @@ mod tests {
             container_path("p", "BHS/lab-backups"),
             "/cloud/project/p/region/BHS/storage/lab-backups"
         );
+    }
+
+    #[test]
+    fn a_user_and_its_s3_credential() {
+        let (attrs, computed) = user(&fixture("user.json"), Some("AKIA0EXAMPLE"));
+        assert_eq!(
+            attrs,
+            json!({"description": "backup",
+                   "roles": ["objectstore_operator", "volume_operator"]})
+        );
+        assert_eq!(
+            computed,
+            json!({"id": "482913", "username": "user-Xk3pQ9", "status": "ok",
+                   "s3_access_key": "AKIA0EXAMPLE", "s3_secret_key": true})
+        );
+        // No credential: no secret, and the access key is null.
+        let (_, none) = user(&fixture("user.json"), None);
+        assert_eq!(none["s3_access_key"], Json::Null);
+        assert_eq!(none.get("s3_secret_key"), None);
     }
 
     #[test]

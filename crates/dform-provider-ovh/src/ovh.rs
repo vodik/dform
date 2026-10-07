@@ -37,6 +37,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
 mod storage;
+mod user;
 
 /// The provider's name, its types' namespace (R-36).
 pub const PROVIDER: &str = "ovh";
@@ -44,6 +45,7 @@ pub const INSTANCE: &str = "ovh.instance";
 pub const SSH_KEY: &str = "ovh.ssh_key";
 pub const RECORD: &str = "ovh.domain_record";
 pub const CONTAINER: &str = "ovh.storage_container";
+pub const USER: &str = "ovh.cloud_project_user";
 pub const REGION: &str = "ovh.region";
 pub const FLAVOR: &str = "ovh.flavor";
 pub const IMAGE: &str = "ovh.image";
@@ -86,6 +88,7 @@ enum Made {
     SshKey { name: String },
     Record(RecordKey),
     Container { region: String, name: String },
+    User { description: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -574,6 +577,10 @@ impl Ovh {
                 let (a, p) = self.project(&at)?;
                 self.read_container(&a, &p, remote)?
             }
+            USER => {
+                let (a, p) = self.project(&at)?;
+                self.read_user(&a, &p, remote)?
+            }
             _ => bail!("{at}: the ovh provider has no type {typ}"),
         })
     }
@@ -668,7 +675,9 @@ impl Ovh {
         };
         let (remote, attrs, computed) = match op {
             pb::Op::Create => self.create(typ, &at, &config, key, &mut notes, &say)?,
-            pb::Op::Update | pb::Op::Adopt => self.update(typ, &at, &r.remote, &config)?,
+            pb::Op::Update | pb::Op::Adopt => {
+                self.update(typ, &at, &r.remote, &config, &mut notes, &say)?
+            }
             pb::Op::Delete => {
                 self.delete(typ, &at, &r.remote, &mut notes, &say)?;
                 return Ok(pb::ApplyResponse {
@@ -697,6 +706,7 @@ impl Ovh {
             }
             _ => return Err(refused(&at, "no operation")),
         };
+        let computed = self.outward(typ, &r.name, &computed);
         Ok(pb::ApplyResponse {
             remote,
             attrs: Some(wire::doc(&attrs)),
@@ -724,6 +734,9 @@ impl Ovh {
             CONTAINER => Made::Container {
                 region: st("region")?,
                 name: st("name")?,
+            },
+            USER => Made::User {
+                description: st("description")?,
             },
             _ => return None,
         })
@@ -795,6 +808,17 @@ impl Ovh {
                 self.read_container(&a, &p, &map::container_remote(region, name))?
                     .map(|_| map::container_remote(region, name))
             }
+            Made::User { description } => {
+                let (a, p) = self.project("find a user")?;
+                let list = a.client.get(&format!("/cloud/project/{p}/user"))?;
+                list.as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter(|o| !matches!(s(o, "status"), Some("deleted" | "deleting")))
+                    .find(|o| s(o, "description") == Some(description))
+                    .and_then(|o| o.get("id").and_then(Json::as_i64))
+                    .map(|id| id.to_string())
+            }
         })
     }
 
@@ -833,9 +857,10 @@ impl Ovh {
             .find(&made)
             .map_err(|e| refused(at, format!("{e:#}")))?
         {
+            // The same Create again: what it made, brought to the
+            // document (a user's S3 credential, a volume's attachment).
             if ours {
-                let (attrs, computed) = self.read_made(typ, at, &remote)?;
-                return Ok((remote, attrs, computed));
+                return self.update(typ, at, &remote, config, notes, say);
             }
             return Err(refused(
                 at,
@@ -893,6 +918,7 @@ impl Ovh {
                 Ok((map::record_remote(zone, id), attrs, computed))
             }
             CONTAINER => self.create_container(at, config),
+            USER => self.create_user(at, config, notes, say),
             _ => Err(refused(at, format!("the ovh provider has no type {typ}"))),
         }
     }
@@ -1001,7 +1027,10 @@ impl Ovh {
         at: &str,
         remote: &str,
         config: &Json,
+        notes: &mut Vec<String>,
+        say: Say,
     ) -> std::result::Result<(String, Json, Json), Failed> {
+        let _ = (&notes, say);
         let now = self
             .read(typ, remote, "")
             .map_err(|e| refused(at, format!("{e:#}")))?
@@ -1044,6 +1073,7 @@ impl Ovh {
                 }
             }
             CONTAINER => self.update_container(at, remote, &now.0, config)?,
+            USER => self.update_user(at, remote, &now, config)?,
             // Nothing of an SSH key changes in place (the schema replaces it).
             _ => {}
         }
@@ -1130,6 +1160,11 @@ impl Ovh {
                 let path = map::container_path(&p, remote);
                 self.delete_at(&a, at, &path, false, notes, say)?;
             }
+            USER => {
+                let (a, p) = self.project_for(at)?;
+                let path = format!("/cloud/project/{p}/user/{}", escape(remote));
+                self.delete_at(&a, at, &path, true, notes, say)?;
+            }
             _ => return Err(refused(at, format!("the ovh provider has no type {typ}"))),
         }
         Ok(())
@@ -1144,6 +1179,22 @@ impl Ovh {
         ) {
             notes.push(format!("{at}: the zone {zone} is not refreshed: {e}"));
         }
+    }
+
+    /// A computed document as it leaves the provider: each sensitive
+    /// value (a user's S3 secret) is its label, `{"$secret": "T/N#P"}`;
+    /// the value stays with the API, and Reveal reads it there.
+    fn outward(&self, typ: &str, name: &str, computed: &Json) -> Json {
+        let mut out = computed.clone();
+        for (path, class) in self.schema.computed_of(typ) {
+            if class == dform_core::value::NullClass::Secret
+                && provider::get_path(&out, &path).is_some_and(|v| marker(v).is_none())
+            {
+                let label = dform_core::value::null_label(typ, name, &path);
+                provider::set_path(&mut out, &path, provider::secret_json(&label));
+            }
+        }
+        out
     }
 
     // Query.
@@ -1422,7 +1473,7 @@ impl Handler for Ovh {
                     Some((attrs, computed)) => pb::ReadResponse {
                         found: true,
                         attrs: Some(wire::doc(&attrs)),
-                        computed: Some(wire::doc(&computed)),
+                        computed: Some(wire::doc(&self.outward(&r.r#type, &r.name, &computed))),
                     },
                     None => pb::ReadResponse::default(),
                 },
@@ -1458,21 +1509,18 @@ impl Handler for Ovh {
                     Some((attrs, computed)) => pb::ImportResponse {
                         found: true,
                         name: s(&attrs, "name").unwrap_or(&r.remote).to_string(),
+                        computed: Some(wire::doc(&self.outward(
+                            &r.r#type,
+                            s(&attrs, "name").unwrap_or(&r.remote),
+                            &computed,
+                        ))),
                         r#type: r.r#type,
                         attrs: Some(wire::doc(&attrs)),
-                        computed: Some(wire::doc(&computed)),
                     },
                     None => pb::ImportResponse::default(),
                 },
             ),
-            // No type of this provider has a sensitive attribute.
-            C::Reveal(r) => {
-                let h = r.held.unwrap_or_default();
-                return Err(CallError::Refused(format!(
-                    "reveal {} {}#{}: the ovh provider holds no secret",
-                    h.r#type, h.remote, h.path
-                )));
-            }
+            C::Reveal(r) => Reply::Reveal(self.reveal(r)?),
         })
     }
 }
