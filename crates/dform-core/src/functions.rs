@@ -40,9 +40,6 @@ pub const SOURCES: &[(&str, &str)] = &[
     ("std/str.df", include_str!("../../../std/str.df")),
     ("std/list.df", include_str!("../../../std/list.df")),
     ("std/time.df", include_str!("../../../std/time.df")),
-    ("std/duration.df", include_str!("../../../std/duration.df")),
-    ("std/bytes.df", include_str!("../../../std/bytes.df")),
-    ("std/cpu.df", include_str!("../../../std/cpu.df")),
     ("std/random.df", include_str!("../../../std/random.df")),
     ("std/regex.df", include_str!("../../../std/regex.df")),
     ("std/semver.df", include_str!("../../../std/semver.df")),
@@ -256,6 +253,23 @@ fn gone(name: &str) -> Option<String> {
         "time.until" => "the duration from `a` to `b` is `b - a`".to_string(),
         "time.before" => "a time before another is `a < b`".to_string(),
         "semver.compare" => "versions compare with `<`, `==` and `>`: `a < b`".to_string(),
+        // One name per idea (R-134).
+        "list.len" | "str.len" => {
+            "the length of a list, an object or a string is `len(x)`".to_string()
+        }
+        "str.format" => "a template is `format(\"%s-%s\", a, b)`, its values after it".to_string(),
+        "bytes.to" | "cpu.to" | "duration.total" => {
+            "a quantity in a unit is `to(q, unit)`, the unit as its literals write it (`\"Gi\"`, \
+             `\"m\"`, `\"h\"`)"
+                .to_string()
+        }
+        "inet.addr" => "a network's `n`th usable host is `inet.host(net, n)`, its base address \
+                        the field `net.addr`"
+            .to_string(),
+        "hash.short" => "a short digest is `str.slice(hash.sha256(s), 0, n)`".to_string(),
+        "random.bytes" => {
+            "base64 text of derived bytes is `random.base64(key, length)`".to_string()
+        }
         "string" | "str" => {
             "a value's text is an interpolation, `\"${x}\"`; there are no constructors".to_string()
         }
@@ -668,9 +682,7 @@ pub const BODIES: &[(&str, Body)] = &[
         [Value::Time(t), Value::Str(zone)] => t.in_zone(zone).map(Value::Time),
         _ => None,
     }),
-    ("duration.total", unit_of),
-    ("bytes.to", unit_of),
-    ("cpu.to", unit_of),
+    ("to", unit_of),
     ("format", |a| {
         let fmt = a.first()?.as_str()?;
         let mut out = String::new();
@@ -683,7 +695,6 @@ pub const BODIES: &[(&str, Body)] = &[
         Some(Value::Str(out))
     }),
     ("len", len_of),
-    ("list.len", len_of),
     ("ref", |a| match a {
         [Value::Str(t), Value::Str(n), Value::Str(p)] => Some(Value::Ref {
             typ: t.clone(),
@@ -833,17 +844,6 @@ pub const BODIES: &[(&str, Body)] = &[
         }
         _ => None,
     }),
-    ("inet.addr", |a| match a {
-        [net, n] => {
-            let (addr, _) = as_ipnet(net)?;
-            let idx = as_i64(n)?;
-            if idx < 0 {
-                return None;
-            }
-            Some(Value::Ip(addr.wrapping_add(idx as u32)))
-        }
-        _ => None,
-    }),
     ("inet.contains", |a| match a {
         [net, ip] => {
             let (addr, prefix) = as_ipnet(net)?;
@@ -918,7 +918,7 @@ pub const BODIES: &[(&str, Body)] = &[
         _ => None,
     }),
     ("random.password", crate::functions::random::password),
-    ("random.bytes", crate::functions::random::bytes),
+    ("random.base64", crate::functions::random::base64),
     ("random.id", crate::functions::random::id),
     ("random.uuid", crate::functions::random::uuid),
     ("random.signing_key", crate::functions::random::signing_key),
@@ -944,20 +944,6 @@ pub const BODIES: &[(&str, Body)] = &[
         [Value::Str(s), Value::Str(n)] => Some(Value::Bool(s.contains(n.as_str()))),
         _ => None,
     }),
-    ("str.format", |a| match a {
-        [Value::Str(fmt), Value::List(args)] => {
-            let mut out = String::new();
-            let mut parts = fmt.split("%s");
-            out.push_str(parts.next().unwrap_or(""));
-            let mut args = args.iter();
-            for p in parts {
-                out.push_str(&scalar_text(args.next()?)?);
-                out.push_str(p);
-            }
-            Some(Value::Str(out))
-        }
-        _ => None,
-    }),
     ("str.pad_left", |a| match a {
         [Value::Str(s), Value::Int(width), Value::Str(pad)] if !pad.is_empty() => {
             Some(Value::Str(pad_to(s, *width, pad, true)?))
@@ -968,10 +954,6 @@ pub const BODIES: &[(&str, Body)] = &[
         [Value::Str(s), Value::Int(width), Value::Str(pad)] if !pad.is_empty() => {
             Some(Value::Str(pad_to(s, *width, pad, false)?))
         }
-        _ => None,
-    }),
-    ("str.len", |a| match a {
-        [Value::Str(s)] => Some(Value::Int(s.chars().count() as i64)),
         _ => None,
     }),
     ("str.slice", |a| match a {
@@ -1134,14 +1116,6 @@ pub const BODIES: &[(&str, Body)] = &[
         [Value::Str(s)] => Some(Value::Str(crate::approval::sha256_hex(s.as_bytes()))),
         _ => None,
     }),
-    ("hash.short", |a| match a {
-        [Value::Str(s), Value::Int(n)] => {
-            let full = crate::approval::sha256_hex(s.as_bytes());
-            let n = usize::try_from(*n).ok()?;
-            (n <= full.len()).then(|| Value::Str(full[..n].to_string()))
-        }
-        _ => None,
-    }),
     ("base64.encode", |a| match a {
         [Value::Str(s)] => {
             use base64::Engine;
@@ -1162,7 +1136,11 @@ pub const BODIES: &[(&str, Body)] = &[
         _ => None,
     }),
     ("url.join", |a| match a {
-        [Value::Str(x), Value::Str(y)] => Some(Value::Str(join_slash(x, y))),
+        [u, Value::Str(segment)] => with_url(u, |u| {
+            let path = join_slash(u.path(), segment);
+            u.set_path(&path);
+            Some(())
+        }),
         _ => None,
     }),
     ("url.with_scheme", |a| match a {
@@ -1369,8 +1347,8 @@ fn len_of(a: &[Value]) -> Option<Value> {
     }
 }
 
-/// A quantity as a whole number of a unit (`bytes.to`, `cpu.to`,
-/// `duration.total`), of its own dimension only.
+/// A quantity as a whole number of a unit (`to`), of its own dimension
+/// only.
 fn unit_of(a: &[Value]) -> Option<Value> {
     match a {
         [Value::Quantity(q), Value::Str(unit)] => crate::quantity::to_unit(q, unit).map(Value::Int),
@@ -1649,8 +1627,8 @@ mod tests {
         assert_eq!(
             r.packages(),
             [
-                "base64", "bytes", "cpu", "duration", "hash", "inet", "int", "ip", "json", "list",
-                "oci", "path", "random", "regex", "semver", "str", "time", "toml", "url", "yaml"
+                "base64", "hash", "inet", "int", "ip", "json", "list", "oci", "path", "random",
+                "regex", "semver", "str", "time", "toml", "url", "yaml"
             ]
         );
     }
@@ -1914,7 +1892,9 @@ pub mod random {
         )
     }
 
-    pub fn bytes(a: &[Value]) -> Option<Value> {
+    /// `random.base64`: derived as `random.bytes` was (its derivation's
+    /// name kept, so a rename is no rotation).
+    pub fn base64(a: &[Value]) -> Option<Value> {
         use base64::Engine;
         let [Value::Str(key), Value::Int(n)] = a else {
             return None;
@@ -1924,7 +1904,7 @@ pub mod random {
         }
         let b = derive("bytes", key, &[&n.to_string()], *n as usize)?;
         secret(
-            "bytes",
+            "base64",
             key,
             Some(Value::Str(
                 base64::engine::general_purpose::STANDARD.encode(b),
@@ -2010,7 +1990,7 @@ mod random_tests {
         assert!(hex.len() == 16 && hex.chars().all(|c| c.is_ascii_hexdigit()));
         assert!(password(&[k("db"), Value::Int(16), k("emoji")]).is_none());
         assert!(password(&[k("db"), Value::Int(0)]).is_none());
-        let b = s(bytes(&[k("cookie"), Value::Int(32)]));
+        let b = s(base64(&[k("cookie"), Value::Int(32)]));
         assert_eq!(b.len(), 44);
         let id = s(id(&[k("logs")]));
         assert_eq!(id.len(), 16);

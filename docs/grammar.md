@@ -557,8 +557,8 @@ text in the plan, the plan file, state and JSON. `u.scheme`, `u.host`,
 `u.port` (absent: the scheme's default), `u.path`, `u.query` (an
 object of its pairs) and `u.fragment` (absent: none) read its parts.
 `url.with_scheme`, `url.with_host`, `url.with_port`, `url.with_path`
-and `url.with_query` change one part and give a url; `url.join` and
-`url.encode` work on strings.
+and `url.with_query` change one part and give a url, as `url.join`
+appends a path segment; `url.encode` works on a string.
 
 An `oci` is a container image reference, a value as a url is (R-133):
 the OCI distribution reference `[registry/]repository[:tag][@digest]`,
@@ -1301,7 +1301,7 @@ relation, in scope with no `use`; `memo.first(k, c)` as a
 term is its value. The program says what is kept, where it reads it:
 
 ```
-let pw = memo.first("db-pw", random.bytes("db-pw", 32))   # made once, kept
+let pw = memo.first("db-pw", random.base64("db-pw", 32))  # made once, kept
 let created = memo.first("db-created", time.now())        # observed once
 
 # The rotation idiom: a creation time kept, compared with the clock.
@@ -1865,23 +1865,20 @@ are written bare.
 
 | package   | functions                                                                 |
 |-----------|---------------------------------------------------------------------------|
-| prelude   | `int(x)`, `float(x)`; `format(t, v, ...)`, `len(x)`, `ref(T, n, p)`, `scoped(s, n)`, `cloud_ref(T, n, p)`, `declassify(v, why)` |
-| `inet`    | `inet.subnet(net, bits, n)`, `inet.host(net, n)`, `inet.addr(net, n)`, `inet.contains(net, a)`, `inet.overlaps(a, b)`; fields `n.addr`, `n.bits` |
+| prelude   | `int(x)`, `float(x)`; `format(t, v, ...)`, `len(x)`, `to(q, unit)` (a quantity as a whole number of a unit, written as its literals write it: `"Gi"`, `"m"`, `"h"`), `ref(T, n, p)`, `scoped(s, n)`, `cloud_ref(T, n, p)`, `declassify(v, why)` |
+| `inet`    | `inet.subnet(net, bits, n)`, `inet.host(net, n)`, `inet.contains(net, a)`, `inet.overlaps(a, b)`; fields `n.addr`, `n.bits` |
 | `int`     | `int.range(lo, hi, step)` (what `i in lo..hi` enumerates)                 |
 | `ip`      | `ip.unspecified(a)`                                                       |
-| `str`     | `str.split(s, sep[, limit])`, `str.lower(s)`, `str.upper(s)`, `str.dedent(s)`, `str.trim(s)`, `str.replace(s, from, to)`, `str.starts_with(s, p)`, `str.ends_with(s, p)`, `str.contains(s, n)`, `str.format(fmt, args)`, `str.pad_left(s, w, pad)`, `str.pad_right(s, w, pad)`, `str.len(s)`, `str.slice(s, start[, end])` |
-| `list`    | `list.len(l)` (`len` in the prelude), `list.join(l, sep)`, `list.sort(l)`, `list.sort_by(l, field)`, `list.unique(l)`, `list.flatten(l)`, `list.zip(a, b)`, `list.min(l)`, `list.max(l)`, `list.sum(l)`, `list.contains(l, v)`, `list.first(l)`, `list.last(l)` |
+| `str`     | `str.split(s, sep[, limit])`, `str.lower(s)`, `str.upper(s)`, `str.dedent(s)`, `str.trim(s)`, `str.replace(s, from, to)`, `str.starts_with(s, p)`, `str.ends_with(s, p)`, `str.contains(s, n)`, `str.pad_left(s, w, pad)`, `str.pad_right(s, w, pad)`, `str.slice(s, start[, end])` |
+| `list`    | `list.join(l, sep)`, `list.sort(l)`, `list.sort_by(l, field)`, `list.unique(l)`, `list.flatten(l)`, `list.zip(a, b)`, `list.min(l)`, `list.max(l)`, `list.sum(l)`, `list.contains(l, v)`, `list.first(l)`, `list.last(l)` |
 | `time`    | `time.format(t, layout)`, `time.in_zone(t, zone)`; operators `t + d`, `t - d`, `b - a`, `a < b` |
-| `duration`| `duration.total(d, unit)`                                                 |
-| `bytes`   | `bytes.to(q, unit)` (`"Mi"`: a whole number of them, else no value)      |
-| `cpu`     | `cpu.to(q, unit)` (`"m"` or `""` for cores)                               |
-| `random`  | `random.password(key[, length[, alphabet]])`, `random.bytes(key, length)`, `random.signing_key(key)` (secrets); `random.id(key[, length])`, `random.uuid(key)` |
+| `random`  | `random.password(key[, length[, alphabet]])`, `random.base64(key, length)`, `random.signing_key(key)` (secrets); `random.id(key[, length])`, `random.uuid(key)` |
 | `regex`   | `regex.match(s, re)`, `regex.capture(s, re, n)`, `regex.replace(s, re, with)` (`re` a `regex`-typed pattern, checked at compile time, R-31) |
 | `semver`  | `semver.satisfies(v, range)`; `a < b`; fields `v.major`, `v.minor`, `v.patch`, `v.pre` |
 | `oci`     | `oci.pinned(r)`, `oci.with_tag(r, t)`, `oci.with_digest(r, d)`, `oci.with_registry(r, host)` (`r` an `oci`, the OCI distribution reference `[registry/]repository[:tag][@digest]`, a string read as one; its parts are fields, `r.digest`; "Types") |
-| `hash`    | `hash.sha256(s)`, `hash.short(s, n)`                                      |
+| `hash`    | `hash.sha256(s)` (a short one is `str.slice(hash.sha256(s), 0, 8)`)       |
 | `base64`  | `base64.encode(s)`, `base64.decode(s)`                                    |
-| `url`     | `url.join(base, segment)`, `url.with_scheme(u, s)`, `url.with_host(u, h)`, `url.with_port(u, p)`, `url.with_path(u, p)`, `url.with_query(u, q)`, `url.encode(s)` |
+| `url`     | `url.join(u, segment)`, `url.with_scheme(u, s)`, `url.with_host(u, h)`, `url.with_port(u, p)`, `url.with_path(u, p)`, `url.with_query(u, q)`, `url.encode(s)` |
 | `path`    | `path.join(a, b, ...)`, `path.dir(p)`, `path.base(p)`, `path.ext(p)`, `path.rel(from, to)`, `path.clean(p)` (POSIX slashes, independent of the host) |
 | `json`, `yaml`, `toml` | `.decode(text)`, `.encode(value)`, on a document's text already in hand; the loader (`yaml(path)`, docs/layout.md) stays for reading one |
 
@@ -1893,12 +1890,12 @@ value is the same on every run, nothing stores it, and changing the
 length, the alphabet (`"alnum"`, the default, `"ascii"`, `"hex"`,
 `"base64"`), the key or the master is a new value: rotation is a new key
 (`"db-pw-2"`) or a new master. `random.password` (32 alphanumerics by
-default), `random.bytes` (base64 text) and `random.signing_key` (an
+default), `random.base64` (base64 text) and `random.signing_key` (an
 ed25519 key in Synapse's format, `ed25519 a_XXXX SEED`) are declared `->
 secret(string)`: a function returning `secret(T)` is a source of the
 secrets pass like a secret input. `random.id` (hex) and `random.uuid` are
 public, so a name may carry one. A value that must be made once and kept
-whatever the master becomes is `memo.first(KEY, random.bytes(KEY, 32))`
+whatever the master becomes is `memo.first(KEY, random.base64(KEY, 32))`
 ("Memo").
 
 A function to `bool` is also a predicate: `inet.contains(n, a)` as a body

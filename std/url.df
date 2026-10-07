@@ -3,9 +3,9 @@
 # `url`-typed position is checked at compile time (R-31).
 package url
 
-#| `base` with `segment` appended as a path component, one `/` between them whatever either side has.
+#| The url with `segment` appended to its path, one `/` between them whatever either side has.
 #| example: let endpoint = url.join(base_url, "v1/status")
-fn join(base: string, segment: string) -> string
+fn join(base: url, segment: string) -> url
 
 #| The url with its scheme set.
 #| example: let secure = url.with_scheme(u, "https")

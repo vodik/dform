@@ -36,7 +36,7 @@ fn quantities_compare_and_aggregate_across_units() {
              scaled(x) where x = 3 * 512Mi + 26Mi\n\
              label(l) where l = \"limit ${1536Mi}\"\n\
              text(t) where t = \"${some}\"\n\
-             mib(n) where n = bytes.to(1.5Gi, \"Mi\")\n",
+             mib(n) where n = to(1.5Gi, \"Mi\")\n",
         ),
     );
     for (goal, want) in [

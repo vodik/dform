@@ -235,7 +235,7 @@ impl Render {
                 whole(q::to_unit(x, "m"), "millicores", &v)
             }
             (Render::Seconds, Value::Quantity(x @ Quantity::Duration(_))) => {
-                whole(q::to_unit(x, "seconds"), "seconds", &v)
+                whole(q::to_unit(x, "s"), "seconds", &v)
             }
             (Render::Iso, Value::Quantity(Quantity::Duration(s))) => s
                 .to_jiff()

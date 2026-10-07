@@ -66,7 +66,7 @@
   function: (identifier) @function.builtin
   (#any-of? @function.builtin
     "count" "sum" "min" "max" "any" "all" "collect_set" "collect_list" "int"
-    "float" "format" "len" "ref" "scoped" "cloud_ref" "declassify" "attr" "want"
+    "float" "format" "len" "to" "ref" "scoped" "cloud_ref" "declassify" "attr" "want"
     "arg" "output" "input" "cloud_attr" "cloud_exists"))
 
 ((identifier) @variable.builtin

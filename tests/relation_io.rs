@@ -122,7 +122,7 @@ fn a_used_modules_relation_input_is_its_blocks() {
     s.write(
         "zones.df",
         "\ninput zone\ndecl zone(name: string, index: int)\n\
-         let count = list.len([ z | zone(z, _) ])\n",
+         let count = len([ z | zone(z, _) ])\n",
     );
     s.write(
         "p.df",
@@ -189,7 +189,7 @@ fn a_relation_output_is_read_from_a_copy_and_from_every_copy() {
              where blue.subnet(s, z), s in net.subnet\n\
              seen(t, s) where vnet[t].subnet(s, _)\n\
              resource net.vpc tally {{\n  cidr = \"10.9.0.0/16\"\n  n\n  info = green.info\n}} \
-             where n = list.len([ s | seen(_, s) ])\n\
+             where n = len([ s | seen(_, s) ])\n\
              use fake\n"
         ),
     );

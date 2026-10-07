@@ -17,7 +17,7 @@ size(p) where net(n), p = n.bits
 inside(a) where a = "10.50.3.4", net(n), inet.contains(n, a)
 words(w) where w = str.split("a,b", ",")
 joined(j) where j = list.join(["a", 1], "-")
-counted(a, b) where a = len([1, 2]), b = list.len("abc")
+counted(a, b) where a = len([1, 2]), b = len("abc")
 port(p) where p = int("8080") + 1
 "#,
         "sub",
@@ -221,10 +221,10 @@ r(s) where s = str.replace("a_b_c", "_", "-")
 sw(b) where b = str.starts_with("web-1", "web-")
 ew(b) where b = str.ends_with("image:latest", ":latest")
 co(b) where b = str.contains("team=platform", "team=")
-fo(s) where s = str.format("%s-%s", ["a", "b"])
+fo(s) where s = format("%s-%s", "a", "b")
 pl(s) where s = str.pad_left("7", 3, "0")
 pr(s) where s = str.pad_right("ab", 4, "-")
-ln(n) where n = str.len("hello")
+ln(n) where n = len("hello")
 sl(s) where s = str.slice("hello world", 6)
 sl2(s) where s = str.slice("hello world", 0, 5)
 "#;
@@ -270,11 +270,11 @@ la(n) where n = list.last([1, 2, 3])
     assert_eq!(facts(src2, "so"), [r#"so([{name: "a"}, {name: "b"}])"#]);
 }
 
-/// `hash.sha256`, `hash.short`.
+/// `hash.sha256`, and a short digest as a slice of it.
 #[test]
 fn hash_functions_evaluate() {
     let src = r#"h(d) where d = hash.sha256("hello")
-s(d) where d = hash.short("hello", 8)
+s(d) where d = str.slice(hash.sha256("hello"), 0, 8)
 "#;
     assert_eq!(
         facts(src, "h"),
@@ -299,9 +299,9 @@ d(s) where s = base64.decode("aGVsbG8=")
 }
 
 /// A `url` literal is canonicalized and checked at compile time (R-31);
-/// `url.join`, `with_scheme`, `with_host`, `with_port`, `with_path`,
+/// `url.join` (a url, R-134), `with_scheme`, `with_host`, `with_port`, `with_path`,
 /// `with_query`, `url.encode`. A url prints as its canonical text, as an
-/// `inet` does; `url.join` and `url.encode` are about strings.
+/// `inet` does; `url.encode` is about strings.
 #[test]
 fn url_functions_evaluate() {
     let src = r#"let a: url = "https://example.com/a"
@@ -317,7 +317,7 @@ en(x) where x = url.encode("a b/c")
 pr(h) where h = p.host
 "#;
     assert_eq!(facts(src, "u"), [r#"u(https://example.com/a)"#]);
-    assert_eq!(facts(src, "j"), [r#"j("https://example.com/a/b")"#]);
+    assert_eq!(facts(src, "j"), [r#"j(https://example.com/a/b)"#]);
     assert_eq!(facts(src, "sc"), [r#"sc(https://h/p)"#]);
     assert_eq!(facts(src, "ho"), [r#"ho(http://other/p)"#]);
     assert_eq!(facts(src, "po"), [r#"po(http://h:8080/p)"#]);
@@ -462,7 +462,8 @@ fn a_total_functions_bad_input_is_an_error() {
     for body in [
         "x = str.pad_left(\"a\", 3, \"\")",
         "str.pad_left(\"a\", 3, \"\") == x, x = \"b\"",
-        "x = bytes.to(1536Mi, \"Gi\")",
+        "x = to(1536Mi, \"Gi\")",
+        "x = to(1536Mi, \"GB\")",
         "x = time.in_zone(\"2026-10-02T09:00:00Z\", \"Mars/Olympus\")",
         "semver.satisfies(\"1.0.0\", \"not a range\"), x = 1",
     ] {
@@ -548,4 +549,36 @@ text_gap(d) where d = "2026-10-03T10:30:00Z" - a
 "#;
     assert_eq!(facts(src, "gap"), ["gap(25h30m)"]);
     assert_eq!(facts(src, "text_gap"), ["text_gap(25h30m)"]);
+}
+
+/// One name per idea (R-134 rule 4): `to(q, unit)` for every quantity,
+/// its unit as its literals write it; one `len`; one `format`, its values
+/// after the template; the names they replace are errors naming them.
+#[test]
+fn one_name_per_idea() {
+    let src = r#"let ttl: duration = 36h
+let millis: cpu = 1500m
+g(n) where n = to(3Gi, "Gi")
+h(n) where n = to(ttl, "h")
+m(n) where n = to(millis, "m")
+l(a, b, c) where a = len([1]), b = len("ab"), c = len({ x: 1 })
+f(s) where s = format("%s:%s", "a", 1)
+"#;
+    assert_eq!(facts(src, "g"), ["g(3)"]);
+    assert_eq!(facts(src, "h"), ["h(36)"]);
+    assert_eq!(facts(src, "m"), ["m(1500)"]);
+    assert_eq!(facts(src, "l"), ["l(1, 2, 1)"]);
+    assert_eq!(facts(src, "f"), [r#"f("a:1")"#]);
+    for (call, help) in [
+        ("bytes.to(1Gi, \"Mi\")", "`to(q, unit)`"),
+        ("duration.total(1h, \"hours\")", "`to(q, unit)`"),
+        ("list.len([1])", "`len(x)`"),
+        ("str.format(\"%s\", [1])", "`format(\"%s-%s\", a, b)`"),
+        ("hash.short(\"a\", 8)", "`str.slice(hash.sha256(s), 0, n)`"),
+        ("inet.addr(\"10.0.0.0/8\", 1)", "`inet.host(net, n)`"),
+        ("random.bytes(\"k\", 32)", "`random.base64(key, length)`"),
+    ] {
+        let e = error(&format!("p(x) where x = {call}\n"));
+        assert!(e.contains(help), "{call}: {e}");
+    }
 }

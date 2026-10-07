@@ -13,10 +13,6 @@ fn subnet(net: inet, bits: int, n: int) -> inet
 #| example: let private_ip = inet.host(cfg.vpc_net, 20)
 fn host(net: inet, n: int) -> ip
 
-#| The network's address `n` places after its base address.
-#| example: let first = inet.addr(net, 0)
-fn addr(net: inet, n: int) -> ip
-
 #| Whether the network holds the address; also a predicate.
 #| example: inside(a) where inet.contains("10.0.0.0/8", a)
 fn contains(net: inet, addr: ip) -> bool

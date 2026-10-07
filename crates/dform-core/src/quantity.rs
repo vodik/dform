@@ -636,13 +636,14 @@ fn magnitudes(a: &Quantity, b: &Quantity) -> Option<(i128, i128)> {
     }
 }
 
-/// The quantity in `unit` (`"Mi"`, `"m"`, `"hours"`), when it is a whole
-/// number of them.
+/// The quantity in `unit`, spelled as its literals spell it (`"Mi"`,
+/// `"m"`, `"h"`; `""` for bytes and cores), when it is a whole number of
+/// them (R-134: one spelling per unit, `to(q, unit)`).
 pub fn to_unit(q: &Quantity, unit: &str) -> Option<i64> {
     let (n, size): (i128, i128) = match q {
         Quantity::Bytes(n) => {
             let shift = match unit {
-                "" | "bytes" => 0,
+                "" => 0,
                 u => BINARY.iter().find(|(x, _)| *x == u)?.1,
             };
             (*n as i128, 1i128 << shift)
@@ -650,15 +651,15 @@ pub fn to_unit(q: &Quantity, unit: &str) -> Option<i64> {
         Quantity::Cpu(n) => (
             *n as i128,
             match unit {
-                "m" | "millicores" => 1,
-                "" | "cores" => 1000,
+                "m" => 1,
+                "" => 1000,
                 _ => return None,
             },
         ),
         Quantity::Duration(s) => {
             if let Some(months) = match unit {
-                "months" => Some(1),
-                "years" => Some(12),
+                "mo" => Some(1),
+                "y" => Some(12),
                 _ => None,
             } {
                 if s.days != 0 || s.nanos != 0 {
@@ -667,14 +668,14 @@ pub fn to_unit(q: &Quantity, unit: &str) -> Option<i64> {
                 (s.months as i128, months)
             } else {
                 let size = match unit {
-                    "weeks" => 7 * DAY,
-                    "days" => DAY,
-                    "hours" => HOUR,
-                    "minutes" => MIN,
-                    "seconds" => SEC,
-                    "milliseconds" => MS,
-                    "microseconds" => US,
-                    "nanoseconds" => NS,
+                    "w" => 7 * DAY,
+                    "d" => DAY,
+                    "h" => HOUR,
+                    "m" => MIN,
+                    "s" => SEC,
+                    "ms" => MS,
+                    "us" => US,
+                    "ns" => NS,
                     _ => return None,
                 };
                 (s.exact()?, size as i128)

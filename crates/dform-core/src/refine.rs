@@ -252,8 +252,7 @@ pub fn split(body: &[Lit], names: &[&str]) -> (Vec<Constraint>, Vec<Lit>) {
             Lit::Gt(a, b) => (a, Op::Gt, b),
             _ => return None,
         };
-        let mentions =
-            |t: &Term| is_self(t) || of_self(t, "len") || of_self(t, "list.len") || bits(t);
+        let mentions = |t: &Term| is_self(t) || of_self(t, "len") || bits(t);
         if mentions(a) {
             Some((a.clone(), op, b.clone()))
         } else if mentions(b) {
@@ -316,7 +315,7 @@ pub fn split(body: &[Lit], names: &[&str]) -> (Vec<Constraint>, Vec<Lit>) {
             continue;
         };
         type Make = fn(i64) -> Option<Constraint>;
-        let (le, ge): (Make, Make) = if of_self(&subject, "len") || of_self(&subject, "list.len") {
+        let (le, ge): (Make, Make) = if of_self(&subject, "len") {
             (
                 |n| Some(Constraint::LenLe(n)),
                 |n| Some(Constraint::LenGe(n)),

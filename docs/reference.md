@@ -2474,7 +2474,7 @@ dform state taint memo db-created    # the next apply keeps a new time
 
 Generated secrets are std functions, derived rather than drawn:
 `random.password(key[, length[, alphabet]])` (32 alphanumerics by
-default; `"ascii"`, `"hex"`, `"base64"`), `random.bytes(key, length)`
+default; `"ascii"`, `"hex"`, `"base64"`), `random.base64(key, length)`
 (base64 text) and `random.signing_key(key)` (ed25519 in Synapse's format)
 return `secret(string)`; `random.id(key[, length])` and
 `random.uuid(key)` are public. Each is HKDF-SHA256 of the deployment's
@@ -2484,7 +2484,7 @@ the state), with the function, the deployment, the key and every knob in
 the derivation: the same on every run, stored nowhere, and a new value
 when a knob, the key or the master changes (rotate with a new key,
 `"db-pw-2"`). A value that must be made once and survive a change of
-master is `memo.first(KEY, random.bytes(KEY, 32))`: a memo of a secret
+master is `memo.first(KEY, random.base64(KEY, 32))`: a memo of a secret
 candidate is kept sealed with a key derived from the stack's key, never in
 state in the clear, and opened in memory by the run that reads it.
 
@@ -3293,7 +3293,7 @@ share: the time spent in the mock's calls.
 This is an MVP:
 
 - semi-naive evaluator with hash indexes (see Performance)
-- functions declared in `std/*.df` (docs/grammar.md "Functions"): the prelude's `int`, `float`, `format`, `len`, `ref`, `scoped`, `cloud_ref`, `declassify`; `inet.subnet`, `inet.host`, `inet.addr`, `inet.contains`, `inet.overlaps`, `ip.unspecified`, `str.split`, `str.lower`, `str.upper`, `str.dedent`, `str.trim`, `str.replace`, `str.starts_with`, `str.ends_with`, `str.contains`, `str.format`, `str.pad_left`, `str.pad_right`, `str.len`, `str.slice`, `list.len`, `list.join`, `list.sort`, `list.sort_by`, `list.unique`, `list.flatten`, `list.zip`, `list.min`, `list.max`, `list.sum`, `list.contains`, `list.first`, `list.last`, `time.format`, `time.in_zone`, `duration.total`, `bytes.to`, `cpu.to`, `regex.match`, `regex.capture`, `regex.replace`, `semver.satisfies`, `oci.pinned`, `oci.with_tag`, `oci.with_digest`, `oci.with_registry`, `hash.sha256`, `hash.short`, `base64.encode`, `base64.decode`, `url.join`, `url.with_scheme`, `url.with_host`, `url.with_port`, `url.with_path`, `url.with_query`, `url.encode`, `path.join`, `path.dir`, `path.base`, `path.ext`, `path.rel`, `path.clean`, `json.decode`, `json.encode`, `yaml.decode`, `yaml.encode`, `toml.decode`, `toml.encode`; arithmetic `+ - * / %`; aggregates `collect_*`, `count`, `sum`, `min`, `max`, `any`, `all`, bound in a body (`n = count(x)`)
+- functions declared in `std/*.df` (docs/grammar.md "Functions"): the prelude's `int`, `float`, `format`, `len`, `to`, `ref`, `scoped`, `cloud_ref`, `declassify`; `inet.subnet`, `inet.host`, `inet.contains`, `inet.overlaps`, `ip.unspecified`, `str.split`, `str.lower`, `str.upper`, `str.dedent`, `str.trim`, `str.replace`, `str.starts_with`, `str.ends_with`, `str.contains`, `str.pad_left`, `str.pad_right`, `str.slice`, `list.join`, `list.sort`, `list.sort_by`, `list.unique`, `list.flatten`, `list.zip`, `list.min`, `list.max`, `list.sum`, `list.contains`, `list.first`, `list.last`, `time.format`, `time.in_zone`, `regex.match`, `regex.capture`, `regex.replace`, `semver.satisfies`, `oci.pinned`, `oci.with_tag`, `oci.with_digest`, `oci.with_registry`, `hash.sha256`, `base64.encode`, `base64.decode`, `url.join`, `url.with_scheme`, `url.with_host`, `url.with_port`, `url.with_path`, `url.with_query`, `url.encode`, `path.join`, `path.dir`, `path.base`, `path.ext`, `path.rel`, `path.clean`, `json.decode`, `json.encode`, `yaml.decode`, `yaml.encode`, `toml.decode`, `toml.encode`; arithmetic `+ - * / %`; aggregates `collect_*`, `count`, `sum`, `min`, `max`, `any`, `all`, bound in a body (`n = count(x)`)
 - list helper predicate: `member(List, Item)` and `member(List, Index, Item)` (Index starts at 0)
 - safe(ish) negation: `not` requires the atom be ground at evaluation time
 

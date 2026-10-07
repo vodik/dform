@@ -5,7 +5,7 @@
 //!
 //! ```text
 //! memo.first("db-created", time.now(), created)      # a creation time
-//! let pw = memo.first("db-pw", random.bytes("db-pw", 32))
+//! let pw = memo.first("db-pw", random.base64("db-pw", 32))
 //! ```
 //!
 //! It is a built-in extern, answered by dform ([`Memos::answer`]) and in

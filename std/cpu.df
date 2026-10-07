@@ -1,9 +1,0 @@
-# Cpu: functions about a `cpu` quantity (R-66; docs/grammar.md
-# "Functions"). A cpu is whole cores, `2`, or millicores, `500m`, in a
-# cpu position, and prints as cores when it is whole ones (`2000m` is
-# `2`).
-package cpu
-
-#| The quantity as a whole number of `unit` ("m" for millicores, "" for cores); an error when it is not a whole number of them.
-#| example: let millis = cpu.to(limits.cpu, "m")
-fn to(q: cpu, unit: string) -> int

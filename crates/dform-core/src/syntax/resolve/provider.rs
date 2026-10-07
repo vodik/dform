@@ -47,7 +47,7 @@ impl Lowerer<'_> {
         let (of, name) = use_parts(n);
         if of == "random" {
             let d = Diagnostic::error(span, "random is not a provider").with_help(
-                "random.password, random.bytes, random.id, random.uuid and \
+                "random.password, random.base64, random.id, random.uuid and \
                      random.signing_key are std functions (std/random.df): delete the \
                      `use random` statement and call them",
             );

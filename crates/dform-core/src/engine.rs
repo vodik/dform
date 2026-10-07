@@ -4484,7 +4484,7 @@ mod tests {
         let (r, _) = run("s(\"10\")
              explicit(x) where s(s), x = int(s) + 1
              text(t) where t = \"${14}\"
-             sizes(a, b, c) where a = len([\"x\", \"y\"]), b = len(\"héllo\"), c = list.len({k: 1})
+             sizes(a, b, c) where a = len([\"x\", \"y\"]), b = len(\"héllo\"), c = len({k: 1})
              cases(l, u) where l = str.lower(\"AbC\"), u = str.upper(\"AbC\")
              parts(p) where p = str.split(\"a,b,c\", \",\")
              joined(j) where j = list.join([\"a\", 1, true], \"-\")")

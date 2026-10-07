@@ -30,7 +30,11 @@ fn format(template: string, value: any, ...) -> string forwards
 
 #| The number of elements of a list, keys of an object or characters of a string.
 #| example: let zones = len(subnet_ids)
-fn len(value: list) -> int
+fn len(value: any) -> int
+
+#| The quantity as a whole number of `unit`, written as its literals write it: bytes "Ki", "Mi", "Gi", "Ti", "Pi" or "" for bytes; a cpu "m" or "" for cores; a duration "w", "d", "h", "m", "s", "ms", "us", "ns" (a day as 24 hours) or "mo", "y" for one of whole months. An error for another unit or a quantity that is not a whole number of them.
+#| example: let gib = to(volume.size, "Gi")
+fn to(q: any, unit: string) -> int
 
 #| A reference to an attribute of the program's own resource: an apply-order edge; `vpc.cidr` in a field lowers to it. `ref(r)`, one resource, is the reference written out where an attribute that is no `ref(T)` takes one (R-43).
 #| example: let vpc_cidr = ref(net.vpc, "vpc", "cidr")

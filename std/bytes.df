@@ -1,9 +1,0 @@
-# Bytes: functions about a `bytes` quantity (R-66; docs/grammar.md
-# "Functions"). Bytes are written with binary units, `512Mi`, `1.5Gi`,
-# or a bare integer for bytes, and print in the largest unit that divides
-# exactly (`1536Mi`).
-package bytes
-
-#| The quantity as a whole number of `unit` ("Ki", "Mi", "Gi", "Ti", "Pi", or "" for bytes); an error when it is not a whole number of them.
-#| example: let gib = bytes.to(volume.size, "Gi")
-fn to(q: bytes, unit: string) -> int
