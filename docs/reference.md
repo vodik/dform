@@ -728,7 +728,12 @@ use k8s { source = "bin/dform-provider-k8s" }        # an executable
   (`type_alias` in `crates/dform-mock/schemas/k8s.df`), so `examples/k8s/stacks/k8s_demo.df`
   plans the same against either; so is `k8s.<kind>` for every other kind
   of the static schema whose kind no other group has (`k8s.storage_class`,
-  `k8s.ingress_class`). A cluster's own kinds keep their full names.
+  `k8s.ingress_class`). A cluster's own kind (a group the static schema
+  has not, a CRD's) is served under `k8s.<the group's first
+  label>.<kind>` too, at its preferred version, when no other kind takes
+  that name: `traefik.io`'s `Middleware` is
+  `k8s.traefik.io.v1alpha1.middleware` and `k8s.traefik.middleware`
+  (R-126).
 - The schema is derived at Configure from the cluster's `/openapi/v3`, and
   cached as `k8s-openapi.json` in the stack's state directory (fetched again
   when the server's index changes); the schema derived from it is cached
@@ -815,6 +820,21 @@ use k8s { source = "bin/dform-provider-k8s" }        # an executable
   kinds the run names that no schema had, so the rest of the run plans
   them typed (a computed `metadata.uid` another object reads, a sensitive
   field), as the next run, loading the cache, does.
+- A kind its cluster does not serve, the cluster reached (R-126): when
+  the program makes a `k8s.custom_resource_definition` whose group and
+  kind define it (`spec.group`, `spec.names.kind`, a served
+  `spec.versions[*].name`, or the short name above), the resource waits
+  on that CRD under `later` (`waits on  k8s.custom_resource_definition
+  "middlewares.traefik.io"`); once state has the CRD, dform configures the
+  provider again with the kinds it expects (Configure's `kinds`; the
+  provider fetches the cluster's document again until it serves them, up
+  to 30s) and learns them, so the apply makes the resource at the tick
+  after the CRD's. When nothing in the program makes it, the plan stops at
+  the resource: `the cluster has no kind traefik.middleware and nothing
+  in the program makes its CRD (middlewares.traefik.*)`. A manifest of
+  CRDs is one statement (docs/grammar.md "Documents"):
+  `resource k8s.custom_resource_definition "${d.metadata.name}" = d where
+  d in yaml("vendor/traefik-crds.yml")`.
 - With no cluster in reach, or `DFORM_K8S_OFFLINE` set, the provider is
   offline: the schema is the checked-in snapshot of Kubernetes v1.36.0's
   document (`crates/dform-k8s/openapi-snapshot.json`, every kind of the
@@ -976,7 +996,9 @@ made; the plan itself says what it is.
   call too, as the program writes it, `provider k8s  kubeconfig = raw,
   ssh.read("10.0.0.5", "ubuntu", "/etc/rancher/k3s/k3s.yaml")`; one of
   a kind no schema has yet (a cluster's CRD) under `waits on  provider
-  k8s  schema`, its attributes as written; one reading a deployment not
+  k8s  schema`, its attributes as written, or under the CRD the program
+  makes for it, `waits on  k8s.custom_resource_definition
+  "middlewares.traefik.io"` (R-126); one reading a deployment not
   applied yet under `waits on  stack platform[env=lab]`. The summary
   counts them, `, N later`, and `why-not` names what such a resource
   waits on. A type whose namespace names no provider is the compile

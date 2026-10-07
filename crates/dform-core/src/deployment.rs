@@ -486,7 +486,9 @@ impl Evaluator {
             // A provider the program configures, its settings now known,
             // is configured, and what it serves read again.
             let configured = backend.configure_from(&res.facts)?;
-            if !configured.is_empty() {
+            // A kind a CRD the program made defines, served now (R-126).
+            let learned = self.learn_made_kinds(&res, st)?;
+            if !configured.is_empty() || learned {
                 self.configured.borrow_mut().extend(configured);
                 // An extern of a provider that was waiting on its settings
                 // answered "not yet": ask it again.
@@ -524,7 +526,9 @@ impl Evaluator {
             // configured now, and the program evaluated again over what it
             // serves (R-45).
             let configured = backend.configure_from(&res.facts)?;
-            if !configured.is_empty() {
+            // So is a kind the CRD the last tick made defines (R-126).
+            let learned = self.learn_made_kinds(&res, st)?;
+            if !configured.is_empty() || learned {
                 self.configured.borrow_mut().extend(configured);
                 externs.forget_not_yet();
                 *self.last.borrow_mut() = None;
@@ -547,18 +551,34 @@ impl Evaluator {
     /// from k3s.kubeconfig)`; one of a kind no schema has yet, a cluster's
     /// CRD, as `provider k8s  schema`, created as written, untyped.
     /// A resource already waiting on a null keeps what it waits on.
+    ///
+    /// A kind no schema has that a CRD the program makes defines waits on
+    /// that CRD instead (R-126), under `later` as `waits on
+    /// k8s.custom_resource_definition "middlewares.traefik.io"`: apply makes
+    /// it at the tick after the CRD's, once its provider serves the kind
+    /// ([`Evaluator::learn_made_kinds`]). One nothing makes, of a provider
+    /// whose cluster was reached, is an error naming the CRD it lacks.
     fn wait_on_providers(
         &self,
         plan: &mut provider::Plan,
         resources: &[ir::Resource],
         sections: &mut stuck::Sections,
         st: &State,
-    ) {
+    ) -> Result<()> {
+        let crds = crds_made(resources);
         for r in resources {
-            let Some(label) = self.provider_wait(&r.addr.typ) else {
-                continue;
+            let typ = &r.addr.typ;
+            // A kind no schema has: its provider's cluster serves it once
+            // reached (R-110), or does not, reached (R-126).
+            let schema_wait = matches!(self.backend.waits(typ), Some(ProviderWait::Schema(_)))
+                || self.backend.unserved(typ);
+            let label = match (self.provider_wait(typ), crd_of(&crds, typ)) {
+                (_, Some(crd)) if schema_wait => report::address(crd),
+                (Some(label), _) => label,
+                (None, _) if schema_wait => bail!(self.no_crd(&r.addr)),
+                (None, _) => continue,
             };
-            if let Some(ProviderWait::Schema(_)) = self.backend.waits(&r.addr.typ) {
+            if schema_wait {
                 let doc = engine::value_to_json(&r.attrs);
                 let (kind, changes) = match st.get(&r.addr) {
                     Some(_) => (provider::ActionKind::Pending, Vec::new()),
@@ -588,6 +608,71 @@ impl Evaluator {
                 waits.insert(label);
             }
         }
+        Ok(())
+    }
+
+    /// The error of a resource whose kind its provider's cluster does not
+    /// serve and no CRD the program makes defines (R-126), at its
+    /// statement.
+    fn no_crd(&self, addr: &Address) -> String {
+        let (kind, crd) = crate::crd::expected(&addr.typ)
+            .unwrap_or_else(|| (addr.typ.clone(), "a CustomResourceDefinition".into()));
+        let at = self
+            .program
+            .statements
+            .iter()
+            .find_map(|s| {
+                let (typ, span) = match s {
+                    Stmt::Resource(r) => (&r.typ, r.span),
+                    Stmt::Rule(r) if r.head.pred == "want" => (r.head.args.first()?, r.head.span),
+                    Stmt::Fact(a) if a.pred == "want" => (a.args.first()?, a.span),
+                    _ => return None,
+                };
+                (typ.as_str() == Some(&addr.typ))
+                    .then(|| crate::diag::place(span))
+                    .flatten()
+            })
+            .map(|p| format!("{p}: "))
+            .unwrap_or_default();
+        format!(
+            "{at}{}: the cluster has no kind {kind} and nothing in the program makes its CRD \
+             ({crd})",
+            report::address(addr)
+        )
+    }
+
+    /// Ask the providers again for the kinds no schema has that a CRD the
+    /// program made defines, the CRD in state (R-126): the cluster serves
+    /// them once it has the CRD. Whether the schema learned any, so the
+    /// program is evaluated again over it.
+    fn learn_made_kinds(&self, res: &EvalResult, st: &State) -> Result<bool> {
+        let typ = |a: &Atom| a.args.first().and_then(Term::as_str).map(str::to_string);
+        let waiting: BTreeSet<String> = res
+            .facts
+            .iter()
+            .filter(|a| a.pred == "want")
+            .filter_map(typ)
+            .filter(|t| self.backend.unserved(t))
+            .collect();
+        if waiting.is_empty() {
+            return Ok(false);
+        }
+        let facts = res
+            .facts
+            .iter()
+            .filter(|a| typ(a).is_some_and(|t| crate::crd::TYPES.contains(&t.as_str())))
+            .cloned();
+        let made = ir::compile_resources(facts, self.schema())?;
+        let types: BTreeSet<String> = crds_made(&made)
+            .into_iter()
+            .filter(|(crd, _)| st.get(crd).is_some())
+            .flat_map(|(_, ts)| ts)
+            .filter(|t| waiting.contains(t))
+            .collect();
+        if types.is_empty() {
+            return Ok(false);
+        }
+        self.backend.relearn(&types)
     }
 
     /// What a resource of `typ` waits on before its provider plans it, as
@@ -724,11 +809,21 @@ impl Evaluator {
         // A resource with a conflicting attribute is not planned: the
         // report shows the conflict, and the deny blocks an apply. Nor is
         // one whose provider has no schema of its type yet (R-110).
+        // Nor one of a kind its provider's cluster does not serve (R-126):
+        // it waits on the CRD the program makes, or is an error.
+        let crds = crds_made(&resources);
+        if let Some(r) = resources
+            .iter()
+            .find(|r| backend.unserved(&r.addr.typ) && crd_of(&crds, &r.addr.typ).is_none())
+        {
+            bail!(self.no_crd(&r.addr));
+        }
         let asked = |res: &EvalResult, docs: &[ir::Resource]| -> Vec<ir::Resource> {
             let conflicted = report::conflicted(res);
             docs.iter()
                 .filter(|r| !conflicted.contains(&r.addr))
                 .filter(|r| !matches!(backend.waits(&r.addr.typ), Some(ProviderWait::Schema(_))))
+                .filter(|r| !backend.unserved(&r.addr.typ))
                 .cloned()
                 .collect()
         };
@@ -745,7 +840,7 @@ impl Evaluator {
             (again, violations, docs)
         };
         let mut sections = sections(&res, &resources, schema);
-        self.wait_on_providers(&mut plan, &resources, &mut sections, st);
+        self.wait_on_providers(&mut plan, &resources, &mut sections, st)?;
         executor::hold_deposed(&mut plan, &resources, &sections);
         // The resource rules that may derive after a boundary (pending
         // groups), for the plan's policy pass.
@@ -804,6 +899,23 @@ impl Evaluator {
             denies,
         })
     }
+}
+
+/// The CRD among `crds` ([`crds_made`]) that defines `typ`.
+fn crd_of<'a>(crds: &'a [(Address, Vec<String>)], typ: &str) -> Option<&'a Address> {
+    crds.iter()
+        .find(|(_, ts)| ts.iter().any(|t| t == typ))
+        .map(|(crd, _)| crd)
+}
+
+/// The CRDs among `resources` and the types each defines
+/// (`crd::defines`).
+fn crds_made(resources: &[ir::Resource]) -> Vec<(Address, Vec<String>)> {
+    resources
+        .iter()
+        .filter(|r| crate::crd::TYPES.contains(&r.addr.typ.as_str()))
+        .filter_map(|r| Some((r.addr.clone(), crate::crd::defines(&r.attrs)?)))
+        .collect()
 }
 
 /// The text of the entry `key = EXPR` in the block at `span`: `EXPR`, to

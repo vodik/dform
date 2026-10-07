@@ -22,7 +22,7 @@ use env
 use fake { source = "prov" }
 resource db.postgres server { name = "server" }
 let kc = format("%s@%s", env.var("R45_KUBECONFIG"), server.endpoint)
-use k8s { kubeconfig = kc, account = kc, expect_account = kc }
+use k8s { kubeconfig = kc, account = kc, expect_account = kc, schemas = ["crd.df"] }
 resource k8s.namespace ns { metadata.name = "app" }
 resource k8s.config_map conf {
   metadata.name = "conf"
@@ -34,9 +34,19 @@ resource k8s.traefik.io.v1alpha1.middleware strip {
 }
 "#;
 
+/// The kind the cluster serves once reached: the mock serves the schemas
+/// its settings name once configured (R-126: a kind it does not serve is
+/// an error).
+const CRD: &str = "\
+type_provider(k8s.traefik.io.v1alpha1.middleware, \"k8s\")
+type_attr(k8s.traefik.io.v1alpha1.middleware, \"metadata.name\", \"string\", [\"id\"])
+type_attr(k8s.traefik.io.v1alpha1.middleware, \"spec.stripPrefix.prefixes\", \"list\", [])
+";
+
 fn project() -> Scratch {
     let s = Scratch::project("secret-provider-config");
     s.write("stacks/p.df", STACK);
+    s.write("crd.df", CRD);
     std::fs::create_dir_all(s.path("prov")).unwrap();
     std::os::unix::fs::symlink(
         common::exe("dform-provider-fake"),
@@ -98,8 +108,9 @@ fn a_provider_configured_from_a_secret_applies_at_tick_two_and_the_bytes_stay_in
         plan.stdout
     );
     assert!(
-        plan.stdout
-            .contains("  waits on  provider k8s  account = kc, kubeconfig = kc\n"),
+        plan.stdout.contains(
+            "  waits on  provider k8s  account = kc, kubeconfig = kc, schemas = [\"crd.df\"]\n"
+        ),
         "{}",
         plan.stdout
     );
@@ -119,7 +130,10 @@ fn a_provider_configured_from_a_secret_applies_at_tick_two_and_the_bytes_stay_in
     assert!(!tick1.contains("tick 2"), "{out}");
     // Each secret setting `(sensitive)`; `-v` adds what it is written as.
     assert!(
-        tick2.starts_with("account = (sensitive) from kc, kubeconfig = (sensitive) from kc\n"),
+        tick2.starts_with(
+            "account = (sensitive) from kc, kubeconfig = (sensitive) from kc, \
+             schemas = [\"crd.df\"] from [\"crd.df\"]\n"
+        ),
         "{out}"
     );
     for line in [
@@ -144,7 +158,7 @@ fn a_provider_configured_from_a_secret_applies_at_tick_two_and_the_bytes_stay_in
     assert_eq!(configured[0]["tick"], 1);
     assert_eq!(
         configured[0]["settings"],
-        serde_json::json!(["account", "kubeconfig"])
+        serde_json::json!(["account", "kubeconfig", "schemas"])
     );
     runs.push(apply);
 

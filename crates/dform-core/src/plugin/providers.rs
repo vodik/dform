@@ -164,6 +164,9 @@ pub struct Providers {
     by_program: BTreeSet<usize>,
     /// The settings each link was last configured with from the program.
     settings: RefCell<BTreeMap<usize, Json>>,
+    /// The kinds a link was asked to serve again (a CRD made at the last
+    /// tick defines them, R-126): each once a run.
+    relearned: RefCell<BTreeSet<String>>,
     /// A program's provider block name -> its link ([`Config::blocks`]).
     blocks: BTreeMap<String, usize>,
     /// The mock schemas' blocks: name -> the schema (the mock's one link
@@ -433,6 +436,7 @@ impl Providers {
             mock_blocks,
             accounts: RefCell::new(accounts),
             held: RefCell::new(cfg.held.clone()),
+            relearned: RefCell::new(BTreeSet::new()),
             digest_key: cfg
                 .digest_key
                 .as_deref()
@@ -491,6 +495,56 @@ impl Providers {
         Ok(changed)
     }
 
+    /// The kinds of `types` (none in any schema, a provider the program
+    /// configures their namespace's) a CRD the program made defines
+    /// (R-126): each such provider is configured again with the settings it
+    /// has, told the kinds (`kinds`, which it may wait a moment for the
+    /// cluster to serve), and what it serves now learned. Each kind is
+    /// asked for once a run. Whether the schema learned any.
+    pub fn relearn(&self, types: &BTreeSet<String>) -> Result<bool> {
+        let mut by_link: BTreeMap<usize, Vec<String>> = BTreeMap::new();
+        for t in types {
+            if self.relearned.borrow().contains(t) || self.schema().knows_type(t) {
+                continue;
+            }
+            let Some(i) = t.split_once('.').and_then(|(ns, _)| self.link_for(ns)) else {
+                continue;
+            };
+            if self.settings.borrow().contains_key(&i) {
+                by_link.entry(i).or_default().push(t.clone());
+            }
+        }
+        let mut grew = false;
+        for (i, kinds) in by_link {
+            self.relearned.borrow_mut().extend(kinds.iter().cloned());
+            let mut config = self.bases.get(i).cloned().unwrap_or_else(|| json!({}));
+            config["settings"] = self.settings.borrow()[&i].clone();
+            config["kinds"] = json!(kinds);
+            configure(&mut self.links[i].borrow_mut(), config)
+                .with_context(|| format!("configure provider {} again", self.names[i]))?;
+            if self.loaded.get().is_some() {
+                self.learn(i)
+                    .with_context(|| format!("the schema of provider {}", self.names[i]))?;
+            }
+            grew |= kinds.iter().any(|t| self.schema().knows_type(t));
+        }
+        if grew {
+            self.invalidate();
+        }
+        Ok(grew)
+    }
+
+    /// Whether `typ` is a kind no schema has of a provider the program
+    /// configured, its settings arrived (R-126): the provider learned
+    /// what its cluster serves then ([`Providers::learn`]), so this is a
+    /// kind the cluster does not serve, which a plan would send it anyway
+    /// ([`Providers::route`]).
+    pub fn unserved(&self, typ: &str) -> bool {
+        !self.loaded().owner.contains_key(typ)
+            && !self.schema().knows_type(typ)
+            && self.reached(typ).is_some()
+    }
+
     /// The providers of started, configured links, their schema loaded.
     /// The first serves the types no schema declares.
     pub fn from_links(links: Vec<Link>) -> Result<Providers> {
@@ -519,6 +573,7 @@ impl Providers {
             mock_blocks: BTreeMap::new(),
             accounts: RefCell::new(BTreeMap::new()),
             held: RefCell::new(BTreeMap::new()),
+            relearned: RefCell::new(BTreeSet::new()),
             digest_key: None,
         }
     }

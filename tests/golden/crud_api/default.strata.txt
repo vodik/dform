@@ -1,6 +1,6 @@
 exit: ok
 -- stdout --
-== examples/crud-api/stacks/crud_api.df: 263 nodes, 1521 edges (389 negative), 24 strata
+== examples/crud-api/stacks/crud_api.df: 266 nodes, 1527 edges (391 negative), 24 strata
 stratum  node
 0        (arg, google.sql_database, instance)
 0        (arg, google.sql_database, name)
@@ -17,6 +17,7 @@ stratum  node
 0        (want, google.sql_user)
 0        (want, k8s.config_map)
 0        (want, k8s.cron_job)
+0        (want, k8s.custom_resource_definition)
 0        (want, k8s.daemon_set)
 0        (want, k8s.ingress)
 0        (want, k8s.namespace)
@@ -43,6 +44,7 @@ stratum  node
 1        (arg, k8s.cron_job, metadata)
 1        (arg, k8s.cron_job, spec)
 1        (arg, k8s.cron_job, status)
+1        (arg, k8s.custom_resource_definition, metadata)
 1        (arg, k8s.daemon_set, metadata)
 1        (arg, k8s.daemon_set, spec)
 1        (arg, k8s.daemon_set, status)
@@ -84,6 +86,7 @@ stratum  node
 2        (attr, k8s.cron_job, metadata)
 2        (attr, k8s.cron_job, spec)
 2        (attr, k8s.cron_job, status)
+2        (attr, k8s.custom_resource_definition, metadata)
 2        (attr, k8s.daemon_set, metadata)
 2        (attr, k8s.daemon_set, spec)
 2        (attr, k8s.daemon_set, status)
@@ -265,5 +268,5 @@ stratum  node
 22       (attr, k8s.service, status)
 22       __not_planned
 23       deny
-(263 rows)
+(266 rows)
 -- stderr --

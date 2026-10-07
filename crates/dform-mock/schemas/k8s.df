@@ -1,5 +1,5 @@
 # Mock Kubernetes provider: a hand-written subset of the Kubernetes OpenAPI
-# document (v1.30), fifteen kinds. No client, no cluster: the fake provider
+# document (v1.30), sixteen kinds. No client, no cluster: the fake provider
 # plans and applies these against a world file.
 #
 # Paths are the object's own JSON paths (metadata.name, spec.replicas, ...).
@@ -42,6 +42,7 @@ type_alias(k8s.horizontal_pod_autoscaler, "k8s.autoscaling.v2.horizontal_pod_aut
 type_alias(k8s.pod_disruption_budget, "k8s.policy.v1.pod_disruption_budget")
 type_alias(k8s.network_policy, "k8s.networking.k8s.io.v1.network_policy")
 type_alias(k8s.ingress, "k8s.networking.k8s.io.v1.ingress")
+type_alias(k8s.custom_resource_definition, "k8s.apiextensions.k8s.io.v1.custom_resource_definition")
 
 # Namespace (core/v1)
 type_provider(k8s.namespace, "k8s")
@@ -781,6 +782,20 @@ type_attr(k8s.ingress, "spec.rules", "list", [])
 type_attr(k8s.ingress, "spec.tls", "list", [])
 type_attr(k8s.ingress, "status.loadBalancer.ingress", "list", ["computed"])
 type_mint(k8s.ingress, "status.loadBalancer.ingress", [{ ip: "203.0.113.10" }])
+
+# CustomResourceDefinition (apiextensions.k8s.io/v1): a kind the cluster
+# serves once it has the definition (R-126). A world settings' `crds`
+# names the schema the mock serves for each, once its world has it.
+type_provider(k8s.custom_resource_definition, "k8s")
+type_attr(k8s.custom_resource_definition, "metadata.name", "string", ["required", "id"])
+type_attr(k8s.custom_resource_definition, "metadata.labels", "map", [])
+type_attr(k8s.custom_resource_definition, "metadata.annotations", "map", [])
+type_attr(k8s.custom_resource_definition, "metadata.uid", "string", ["computed", "id"])
+type_mint(k8s.custom_resource_definition, "metadata.uid", "uid-{name}-{hash}")
+type_attr(k8s.custom_resource_definition, "spec.group", "string", ["required"])
+type_attr(k8s.custom_resource_definition, "spec.names", "map", ["required"])
+type_attr(k8s.custom_resource_definition, "spec.scope", "string", ["required"])
+type_attr(k8s.custom_resource_definition, "spec.versions", "list", ["required"])
 
 # Descriptions (`type_doc(Type, Path, Text)`; the path "" is the type's),
 # the first sentence of the OpenAPI description, for the paths the examples

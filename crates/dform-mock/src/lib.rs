@@ -276,6 +276,21 @@ impl FakeCloud {
             for n in strings(settings, "schemas")? {
                 schema = schema.merge(dform_core::schema::load_provider(&n)?)?;
             }
+            // A kind a CRD defines (R-126): `crds = { NAME: SCHEMA }`, the
+            // schema served once the world holds the CRD named NAME, as a
+            // cluster serves the kind once it has the definition.
+            if let Some(crds) = settings.get("crds").and_then(Json::as_object) {
+                let world = load_json(&path_of(config, "world")?, "world")?;
+                for (name, file) in crds {
+                    let made = world.resources.keys().any(|k| {
+                        k.strip_prefix("k8s.custom_resource_definition::")
+                            .is_some_and(|n| n.trim_matches('"') == name)
+                    });
+                    if let (true, Some(file)) = (made, file.as_str()) {
+                        schema = schema.merge(dform_core::schema::load_provider(file)?)?;
+                    }
+                }
+            }
         }
         self.schema = schema;
         self.answers = dform_core::externs::load_answers(&specs)?;
