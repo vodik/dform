@@ -676,6 +676,7 @@ fn kind(v: &Value) -> Option<Ty> {
         Value::Quantity(q) => s(q.dim().name()),
         Value::Time(_) => s("time"),
         Value::Url(_) => s("url"),
+        Value::Oci(_) => s("oci"),
         _ => None,
     }
 }
@@ -706,9 +707,10 @@ fn number(ty: &str) -> bool {
     matches!(ty, "int" | "float" | "number")
 }
 
-/// `narrow` is read from a string: an `inet`, an `ip`.
+/// `narrow` is read from a string: an `inet`, an `ip`, an image
+/// reference (R-133: and is its text where a string is wanted).
 fn text_of(string: &str, narrow: &str) -> bool {
-    string == "string" && matches!(narrow, "inet" | "ip")
+    string == "string" && matches!(narrow, "inet" | "ip" | "oci")
 }
 
 /// The more telling of two compatible types: an enum over a string, a

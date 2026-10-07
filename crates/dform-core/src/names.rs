@@ -715,7 +715,7 @@ impl Decls {
             }
             // A field of an object, a named argument, a column of a `decl`.
             SyntaxKind::OBJECT_FIELD | SyntaxKind::NAMED_ARG | SyntaxKind::BIND_ARG => What::Key,
-            // What a dot reads off a call's value, `oci.parse(s).digest`.
+            // What a dot reads off a call's value, `url.parse(s).host`.
             SyntaxKind::CALL_CHAIN => What::Path,
             _ => What::Other,
         }

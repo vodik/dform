@@ -1880,7 +1880,7 @@ pub fn value_to_json(v: &Value) -> serde_json::Value {
         Value::Null { label, .. } => serde_json::Value::String(format!("?{label}")),
         Value::Quantity(q) => serde_json::Value::String(q.to_string()),
         Value::Time(t) => serde_json::Value::String(t.to_string()),
-        Value::Url(u) => serde_json::Value::String(u.clone()),
+        Value::Url(u) | Value::Oci(u) => serde_json::Value::String(u.clone()),
     }
 }
 

@@ -193,22 +193,20 @@ c(n) where n = semver.compare("2.0.0", "1.9.9")
     assert_eq!(facts(src, "c"), ["c(1)"]);
 }
 
-/// `oci.parse`, `oci.pinned`, `oci.with_digest` (the OCI distribution
-/// reference grammar, the std ticket's amendment).
+/// `oci.pinned`, `oci.with_digest` (the OCI distribution
+/// reference grammar; tests/oci_type.rs has the rest, R-133).
 #[test]
 fn oci_functions_evaluate() {
     let digest = format!("sha256:{}", "0".repeat(64));
     let src = format!(
-        r#"r(repo) where r = oci.parse("registry.example.com/org/app:1.2.3"), repo = r.repository
-p0(x) where x = oci.pinned("app:1.2.3")
+        r#"p0(x) where x = oci.pinned("app:1.2.3")
 p1(x) where x = oci.pinned("app@{digest}")
 w(ref) where ref = oci.with_digest("org/app:1.2.3", "{digest}")
 "#
     );
-    assert_eq!(facts(&src, "r"), [r#"r("org/app")"#]);
     assert_eq!(facts(&src, "p0"), ["p0(false)"]);
     assert_eq!(facts(&src, "p1"), ["p1(true)"]);
-    assert_eq!(facts(&src, "w"), [format!("w(\"org/app:1.2.3@{digest}\")")]);
+    assert_eq!(facts(&src, "w"), [format!("w(org/app:1.2.3@{digest})")]);
 }
 
 /// `str.trim`, `replace`, `starts_with`, `ends_with`, `contains`,

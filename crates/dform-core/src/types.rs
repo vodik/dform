@@ -50,7 +50,7 @@ pub enum Ty {
     /// `enum(a, b, ..)`.
     Enum(Vec<String>),
     /// `string`, `int`, `float`, `number` (an int or a float, R-75),
-    /// `bool`, `inet`, `ip`, `url`, `regex` (a pattern, not a schema type:
+    /// `bool`, `inet`, `ip`, `url`, `oci`, `regex` (a pattern, not a schema type:
     /// a function parameter only), the quantities `bytes`, `cpu`,
     /// `duration`, and `time`.
     Scalar(String),
@@ -68,7 +68,9 @@ impl Ty {
         let Some((head, rest)) = s.split_once('(') else {
             return match s {
                 "string" | "int" | "float" | "number" | "bool" | "inet" | "ip" | "bytes"
-                | "cpu" | "duration" | "time" | "url" | "regex" => Ty::Scalar(s.to_string()),
+                | "cpu" | "duration" | "time" | "url" | "oci" | "regex" => {
+                    Ty::Scalar(s.to_string())
+                }
                 _ => Ty::Any,
             };
         };
@@ -173,6 +175,7 @@ fn shown_literal(v: &Value) -> String {
         Value::Quantity(q) => format!("the {} {q}", q.dim().name()),
         Value::Time(t) => format!("the time {t}"),
         Value::Url(u) => format!("the url {u}"),
+        Value::Oci(r) => format!("the image reference {r}"),
         v => crate::partition::fmt_value(v),
     }
 }
@@ -407,6 +410,8 @@ pub fn mismatch(ty: &Ty, t: &Term) -> Option<String> {
                 // stays a string, its text checked.
                 ("url", Value::Url(_)) => true,
                 ("url", Value::Str(x)) => url::Url::parse(x).is_ok(),
+                ("oci", Value::Oci(_)) => true,
+                ("oci", Value::Str(x)) => crate::value::OciRef::parse(x).is_ok(),
                 ("regex", Value::Str(x)) => regex::Regex::new(x).is_ok(),
                 // A null is not known yet; a computed value fits its type.
                 (_, Value::Null { .. }) => true,
@@ -421,6 +426,9 @@ pub fn mismatch(ty: &Ty, t: &Term) -> Option<String> {
                     "is a url: {x:?} is not one ({})",
                     url::Url::parse(x).unwrap_err()
                 ),
+                ("oci", Value::Str(x)) => {
+                    format!("is an oci: {}", crate::value::parse_oci(x).unwrap_err())
+                }
                 ("regex", Value::Str(x)) => format!(
                     "is a regex: {x:?} is not a valid pattern ({})",
                     regex::Regex::new(x).unwrap_err()
@@ -550,6 +558,9 @@ fn read_as(ty: &Ty, t: Term) -> Term {
         // into its canonical text (the constructor's value).
         (Ty::Scalar(s), Term::Val(Value::Str(x))) if s == "url" => {
             Term::Val(crate::value::parse_url(&x).unwrap_or(Value::Str(x)))
+        }
+        (Ty::Scalar(s), Term::Val(Value::Str(x))) if s == "oci" => {
+            Term::Val(crate::value::parse_oci(&x).unwrap_or(Value::Str(x)))
         }
         (Ty::Secret(inner), t) => read_as(inner, t),
         (Ty::List(inner), Term::List(xs)) => {

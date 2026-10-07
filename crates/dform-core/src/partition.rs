@@ -1446,7 +1446,7 @@ pub fn fmt_value(v: &Value) -> String {
         Value::Null { label, class, .. } => format!("?{label}:{class:?}"),
         Value::Quantity(q) => q.to_string(),
         Value::Time(t) => t.to_string(),
-        Value::Url(u) => u.clone(),
+        Value::Url(u) | Value::Oci(u) => u.clone(),
     }
 }
 

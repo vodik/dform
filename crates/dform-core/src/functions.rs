@@ -174,6 +174,15 @@ pub fn unknown(span: crate::ast::Span, name: &str) -> crate::diag::Diagnostic {
             None => d.with_help(f.summary.clone()),
         };
     }
+    // `oci.parse` went with R-133: a string in an `oci` position is one,
+    // and its parts are fields.
+    if name == "oci.parse" {
+        return Diagnostic::error(span, format!("unknown function {name}")).with_help(
+            "a string where an `oci` is wanted is read as one (`let r: oci = \"ghcr.io/o/app:1\"`, \
+             a parameter or an attribute typed `oci`); its parts are its fields, `r.registry`, \
+             `r.repository`, `r.tag`, `r.digest`",
+        );
+    }
     let meant = name
         .split_once('_')
         .map(|(p, rest)| format!("{p}.{rest}"))
@@ -756,9 +765,13 @@ pub const BODIES: &[(&str, Body)] = &[
         [v, path] => {
             let mut v = v.clone();
             for seg in crate::ir::path_keys(path.as_str()?) {
-                // A url's components read as an object's (`u.host`).
+                // A url's or an image reference's parts read as an
+                // object's (`u.host`, `r.digest`).
                 if let Value::Url(u) = &v {
                     v = crate::value::url_parts(u)?;
+                }
+                if let Value::Oci(r) = &v {
+                    v = crate::value::OciRef::parse(r).ok()?.parts();
                 }
                 let Value::Obj(mut m) = v else {
                     return None;
@@ -1097,49 +1110,38 @@ pub const BODIES: &[(&str, Body)] = &[
         }
         _ => None,
     }),
-    ("oci.parse", |a| match a {
-        [Value::Str(s)] => {
-            let r = oci_split(s)?;
-            let mut m = BTreeMap::new();
-            if let Some(reg) = r.registry {
-                m.insert("registry".to_string(), Value::Str(reg));
-            }
-            m.insert("repository".to_string(), Value::Str(r.repository));
-            if let Some(t) = r.tag {
-                m.insert("tag".to_string(), Value::Str(t));
-            }
-            if let Some(d) = r.digest {
-                m.insert("digest".to_string(), Value::Str(d));
-            }
-            Some(Value::Obj(m))
+    // A predicate as well: a string that is no reference is not pinned.
+    ("oci.pinned", |a| match a {
+        [r] => Some(Value::Bool(as_oci(r).is_some_and(|r| r.digest.is_some()))),
+        _ => None,
+    }),
+    // A new tag names other content: the digest, which pinned the old,
+    // goes with the old tag.
+    ("oci.with_tag", |a| match a {
+        [r, Value::Str(t)] => {
+            crate::value::oci_tag(t).ok()?;
+            let mut r = as_oci(r)?;
+            r.tag = Some(t.clone());
+            r.digest = None;
+            Some(r.value())
         }
         _ => None,
     }),
-    ("oci.pinned", |a| match a {
-        [Value::Str(s)] => Some(Value::Bool(
-            oci_split(s).is_some_and(|r| r.digest.is_some()),
-        )),
+    ("oci.with_digest", |a| match a {
+        [r, Value::Str(d)] => {
+            crate::value::oci_digest(d).ok()?;
+            let mut r = as_oci(r)?;
+            r.digest = Some(d.clone());
+            Some(r.value())
+        }
         _ => None,
     }),
-    ("oci.with_digest", |a| match a {
-        [Value::Str(s), Value::Str(d)] => {
-            let r = oci_split(s)?;
-            if !is_digest(d) {
-                return None;
-            }
-            let mut out = String::new();
-            if let Some(reg) = &r.registry {
-                out.push_str(reg);
-                out.push('/');
-            }
-            out.push_str(&r.repository);
-            if let Some(t) = &r.tag {
-                out.push(':');
-                out.push_str(t);
-            }
-            out.push('@');
-            out.push_str(d);
-            Some(Value::Str(out))
+    ("oci.with_registry", |a| match a {
+        [r, Value::Str(reg)] => {
+            crate::value::oci_registry(reg).ok()?;
+            let mut r = as_oci(r)?;
+            r.set_registry(Some(reg.clone()));
+            Some(r.value())
         }
         _ => None,
     }),
@@ -1377,7 +1379,7 @@ pub(crate) fn value_to_string(v: &Value) -> String {
         Value::Null { label, .. } => format!("?{label}"),
         Value::Quantity(q) => q.to_string(),
         Value::Time(t) => t.to_string(),
-        Value::Url(u) => u.clone(),
+        Value::Url(u) | Value::Oci(u) => u.clone(),
     }
 }
 
@@ -1478,6 +1480,15 @@ fn as_url(v: &Value) -> Option<String> {
     }
 }
 
+/// An image reference argument's parts: an `oci`, or a string read as
+/// one (a string in an `oci` position parses at the edge).
+fn as_oci(v: &Value) -> Option<crate::value::OciRef> {
+    match v {
+        Value::Oci(r) | Value::Str(r) => crate::value::OciRef::parse(r).ok(),
+        _ => None,
+    }
+}
+
 /// The url `u` with `set` applied (`url.with_host`, ..): a url, or no
 /// value when `u` is not one or `set` refuses.
 fn with_url(u: &Value, set: impl FnOnce(&mut url::Url) -> Option<()>) -> Option<Value> {
@@ -1514,7 +1525,7 @@ fn scalar_text(v: &Value) -> Option<String> {
         Value::Int(i) => Some(i.to_string()),
         Value::Float(f) => Some(f.to_string()),
         Value::Bool(b) => Some(b.to_string()),
-        Value::Quantity(_) | Value::Time(_) | Value::Url(_) => v.typed_text(),
+        Value::Quantity(_) | Value::Time(_) | Value::Url(_) | Value::Oci(_) => v.typed_text(),
         Value::Ip(_) | Value::IpNet { .. } | Value::IpRange { .. } => {
             Some(crate::partition::fmt_value(v))
         }
@@ -1618,70 +1629,6 @@ fn rel_path(from: &str, to: &str) -> Option<String> {
     })
 }
 
-/// A parsed OCI distribution reference, `[registry/]repository[:tag][@digest]`.
-struct OciRef {
-    registry: Option<String>,
-    repository: String,
-    tag: Option<String>,
-    digest: Option<String>,
-}
-
-fn oci_split(reference: &str) -> Option<OciRef> {
-    let (rest, digest) = match reference.split_once('@') {
-        Some((a, b)) if is_digest(b) => (a, Some(b.to_string())),
-        Some(_) => return None,
-        None => (reference, None),
-    };
-    if rest.is_empty() {
-        return None;
-    }
-    let last_slash = rest.rfind('/');
-    let (name, tag) = match rest.rfind(':') {
-        Some(ci) if last_slash.is_none_or(|si| ci > si) => {
-            let tag = &rest[ci + 1..];
-            if !is_tag(tag) {
-                return None;
-            }
-            (&rest[..ci], Some(tag.to_string()))
-        }
-        _ => (rest, None),
-    };
-    if name.is_empty() {
-        return None;
-    }
-    let (registry, repository) = match name.split_once('/') {
-        Some((head, tail)) if is_registry(head) && !tail.is_empty() => {
-            (Some(head.to_string()), tail.to_string())
-        }
-        _ => (None, name.to_string()),
-    };
-    if repository.is_empty() {
-        return None;
-    }
-    Some(OciRef {
-        registry,
-        repository,
-        tag,
-        digest,
-    })
-}
-
-fn is_digest(s: &str) -> bool {
-    matches!(s.split_once(':'), Some((algo, hex)) if !algo.is_empty() && !hex.is_empty()
-        && hex.chars().all(|c| c.is_ascii_hexdigit()))
-}
-
-fn is_tag(s: &str) -> bool {
-    !s.is_empty()
-        && s.len() <= 128
-        && s.chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-'))
-}
-
-fn is_registry(s: &str) -> bool {
-    !s.is_empty() && (s.contains('.') || s.contains(':') || s == "localhost")
-}
-
 /// Whether `v` has no reference and no null anywhere inside it
 /// (`json.encode`, `yaml.encode`, `toml.encode`): what a document format
 /// can write.
@@ -1728,10 +1675,10 @@ mod tests {
     /// out in full, found past its balanced braces.
     #[test]
     fn an_object_return_type_is_one_type() {
-        let f = registry().get("oci.parse").unwrap();
+        let f = registry().get("url.parse").unwrap();
         assert_eq!(
             f.ret,
-            "{ registry: string?, repository: string, tag: string?, digest: string? }"
+            "{ scheme: string, host: string, port: int?, path: string, query: object, fragment: string? }"
         );
         assert!(f.partial);
     }
@@ -1784,7 +1731,7 @@ mod tests {
         assert_eq!(wrapped[0].signature, line[0].signature);
         assert_eq!(wrapped[0].params, line[0].params);
         assert_eq!((wrapped[0].line, wrapped[1].line), (3, 7));
-        assert_eq!(registry().get("oci.parse").unwrap().params.len(), 1);
+        assert_eq!(registry().get("url.parse").unwrap().params.len(), 1);
     }
 
     /// The reverse: every body is declared somewhere (no orphan).

@@ -619,7 +619,7 @@ fn value_bytes(v: &Value) -> usize {
         }
         Value::Null { label, ty, .. } => label.len() + ty.len(),
         Value::Time(t) => t.zone.len(),
-        Value::Url(u) => u.len(),
+        Value::Url(u) | Value::Oci(u) => u.len(),
         Value::Quantity(_)
         | Value::Int(_)
         | Value::Float(_)

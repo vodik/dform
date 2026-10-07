@@ -155,7 +155,7 @@ pub fn check_type(t: &TypeExpr) -> Result<(), String> {
     match t {
         TypeExpr::Name(n) => match n.as_str() {
             "int" | "float" | "number" | "string" | "bool" | "inet" | "symbol" | "addr" | "any"
-            | "bytes" | "cpu" | "duration" | "time" | "url" => Ok(()),
+            | "bytes" | "cpu" | "duration" | "time" | "url" | "oci" => Ok(()),
             _ => Err(format!("unknown type {n}")),
         },
         TypeExpr::Apply(n, args) => match (n.as_str(), args.as_slice()) {
@@ -194,6 +194,7 @@ pub fn has_type(t: &TypeExpr, v: &Value) -> bool {
             }
             "time" => matches!(v, Value::Time(_)),
             "url" => matches!(v, Value::Url(_)),
+            "oci" => matches!(v, Value::Oci(_)),
             _ => true,
         },
         TypeExpr::Apply(n, args) => match (n.as_str(), args.as_slice()) {
@@ -251,6 +252,9 @@ pub fn coerce(t: &TypeExpr, v: Value) -> Value {
                 Ok(crate::ast::Term::Val(r)) => r,
                 _ => v,
             }
+        }
+        (TypeExpr::Name(n), Value::Str(s)) if n == "oci" => {
+            crate::value::parse_oci(&s).unwrap_or(Value::Str(s))
         }
         (TypeExpr::Name(n), Value::Int(i)) if n == "string" => Value::Str(i.to_string()),
         (TypeExpr::Name(n), Value::Float(f)) if n == "string" => Value::Str(f.to_string()),

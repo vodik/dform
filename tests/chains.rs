@@ -8,14 +8,11 @@ use common::{error, facts};
 
 #[test]
 fn a_field_of_a_call() {
-    let src = r#"image("gcr.io/shop/api@sha256:9f2c")
-image("gcr.io/shop/api:v1")
-digest(i, d) where image(i), d = oci.parse(i).digest
+    let src = r#"version("1.2.3-rc.1")
+version("1.2.3")
+pre(v, p) where version(v), p = semver.parse(v).pre
 "#;
-    assert_eq!(
-        facts(src, "digest"),
-        [r#"digest("gcr.io/shop/api@sha256:9f2c", "sha256:9f2c")"#]
-    );
+    assert_eq!(facts(src, "pre"), [r#"pre("1.2.3-rc.1", "rc.1")"#]);
 }
 
 #[test]
@@ -41,35 +38,23 @@ second(d, v) where doc(d), v = json.decode(d).a.b[1].c
 
 #[test]
 fn has_and_not_has_a_field_of_a_call() {
-    let src = r#"image("gcr.io/shop/api@sha256:9f2c")
-image("gcr.io/shop/api:v1")
-pinned(i) where image(i), has oci.parse(i).digest
-unpinned(i) where image(i), not has oci.parse(i).digest
+    let src = r#"version("1.2.3-rc.1")
+version("1.2.3")
+prerelease(v) where version(v), has semver.parse(v).pre
+release(v) where version(v), not has semver.parse(v).pre
 "#;
-    assert_eq!(
-        facts(src, "pinned"),
-        [r#"pinned("gcr.io/shop/api@sha256:9f2c")"#]
-    );
-    assert_eq!(
-        facts(src, "unpinned"),
-        [r#"unpinned("gcr.io/shop/api:v1")"#]
-    );
-    // Under `not` the call is inside what is negated: a text that is no
-    // reference has no digest.
-    let src = r#"image("Not A Reference")
-unpinned(i) where image(i), not has oci.parse(i).digest
-"#;
-    assert_eq!(facts(src, "unpinned"), [r#"unpinned("Not A Reference")"#]);
+    assert_eq!(facts(src, "prerelease"), [r#"prerelease("1.2.3-rc.1")"#]);
+    assert_eq!(facts(src, "release"), [r#"release("1.2.3")"#]);
 }
 
 /// The chain reads what the rebinding reads: one rule written both ways
 /// derives the same rows.
 #[test]
 fn a_chain_after_a_call_is_the_rebinding() {
-    let src = r#"image("gcr.io/shop/api@sha256:9f2c")
-image("gcr.io/shop/api:v1")
-a(i, r) where image(i), r = oci.parse(i).repository
-b(i, r) where image(i), p = oci.parse(i), r = p.repository
+    let src = r#"version("1.2.3-rc.1")
+version("2.0.0")
+a(v, m) where version(v), m = semver.parse(v).major
+b(v, m) where version(v), p = semver.parse(v), m = p.major
 "#;
     let a: Vec<String> = facts(src, "a").iter().map(|f| f[1..].to_string()).collect();
     let b: Vec<String> = facts(src, "b").iter().map(|f| f[1..].to_string()).collect();

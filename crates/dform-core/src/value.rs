@@ -33,6 +33,13 @@ pub enum Value {
     /// url are equal and a url never equals a string. `.scheme`, `.host`,
     /// `.port`, `.path`, `.query`, `.fragment` read its components.
     Url(String),
+    /// A container image reference (R-133): its canonical text,
+    /// `[registry/]repository[:tag][@digest]`, parsed at the edge
+    /// (`oci(s)`, a literal in an `oci` position) as a url is, so two
+    /// spellings of one reference are equal and an `oci` never equals a
+    /// string. `.registry`, `.repository`, `.tag`, `.digest` read its
+    /// parts ([`OciRef`]).
+    Oci(String),
     Ref {
         typ: String,
         name: String,
@@ -194,14 +201,15 @@ impl Value {
         }
     }
 
-    /// The canonical text of a quantity, a time or a url (`1536Mi`,
-    /// `2026-10-02T09:00:00+02:00[Europe/Paris]`, `https://h/p`): what `str()`,
+    /// The canonical text of a quantity, a time, a url or an image
+    /// reference (`1536Mi`, `2026-10-02T09:00:00+02:00[Europe/Paris]`,
+    /// `https://h/p`, `ghcr.io/o/app:1.2`): what `str()`,
     /// interpolation and the plan print where no schema renders it.
     pub fn typed_text(&self) -> Option<String> {
         match self {
             Value::Quantity(q) => Some(q.to_string()),
             Value::Time(t) => Some(t.to_string()),
-            Value::Url(u) => Some(u.clone()),
+            Value::Url(u) | Value::Oci(u) => Some(u.clone()),
             _ => None,
         }
     }
@@ -234,6 +242,225 @@ pub fn url_parts(text: &str) -> Option<Value> {
         m.insert("fragment".to_string(), Value::Str(f.to_string()));
     }
     Some(Value::Obj(m))
+}
+
+/// A container image reference: the OCI distribution reference grammar,
+/// `[registry/]repository[:tag][@digest]`, normalized as Docker's
+/// familiar names are. The registry is absent for the default registry
+/// (`docker.io`, also written `index.docker.io`), whose one-component
+/// repositories are `library/`'s (`nginx` is `library/nginx`); a
+/// reference may carry both a tag and a digest (the digest decides what
+/// is pulled, the tag says what it was).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OciRef {
+    pub registry: Option<String>,
+    pub repository: String,
+    pub tag: Option<String>,
+    pub digest: Option<String>,
+}
+
+/// What `oci(..)` and an `oci`-typed position say a reference is.
+pub const OCI_GRAMMAR: &str = "`[registry/]repository[:tag][@digest]`";
+
+impl OciRef {
+    /// `text` read as a reference, or why it is not one.
+    pub fn parse(text: &str) -> Result<OciRef, String> {
+        let (rest, digest) = match text.split_once('@') {
+            Some((a, d)) => {
+                oci_digest(d)?;
+                (a, Some(d.to_string()))
+            }
+            None => (text, None),
+        };
+        let last_slash = rest.rfind('/');
+        let (name, tag) = match rest.rfind(':') {
+            Some(ci) if last_slash.is_none_or(|si| ci > si) => {
+                let tag = &rest[ci + 1..];
+                oci_tag(tag)?;
+                (&rest[..ci], Some(tag.to_string()))
+            }
+            _ => (rest, None),
+        };
+        if name.is_empty() {
+            return Err("it has no repository".to_string());
+        }
+        let (registry, repository) = match name.split_once('/') {
+            Some((head, tail)) if oci_is_registry(head) => {
+                oci_registry(head)?;
+                (Some(head.to_string()), tail)
+            }
+            _ => (None, name),
+        };
+        let mut r = OciRef {
+            registry: None,
+            repository: oci_repository(repository)?.to_string(),
+            tag,
+            digest,
+        };
+        r.set_registry(registry);
+        Ok(r)
+    }
+
+    /// The registry set, the default one (`docker.io`) read as absent.
+    pub fn set_registry(&mut self, registry: Option<String>) {
+        self.registry = registry.filter(|r| !matches!(r.as_str(), "docker.io" | "index.docker.io"));
+        if self.registry.is_none() && !self.repository.contains('/') {
+            self.repository = format!("library/{}", self.repository);
+        }
+    }
+
+    /// The reference as a value: its canonical text.
+    pub fn value(&self) -> Value {
+        Value::Oci(self.to_string())
+    }
+
+    /// Its parts as an object: `repository`, and `registry` (absent: the
+    /// default registry), `tag` and `digest` where it has them. What
+    /// `.digest` on a reference reads.
+    pub fn parts(&self) -> Value {
+        let mut m = BTreeMap::new();
+        let mut put = |k: &str, v: &Option<String>| {
+            if let Some(v) = v {
+                m.insert(k.to_string(), Value::Str(v.clone()));
+            }
+        };
+        put("registry", &self.registry);
+        put("repository", &Some(self.repository.clone()));
+        put("tag", &self.tag);
+        put("digest", &self.digest);
+        Value::Obj(m)
+    }
+}
+
+/// The familiar form: the default registry left out, and with it
+/// `library/` (`nginx:1.27`, `ghcr.io/o/app@sha256:..`).
+impl std::fmt::Display for OciRef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.registry {
+            Some(r) => write!(f, "{r}/{}", self.repository)?,
+            None => match self.repository.strip_prefix("library/") {
+                Some(short) if !short.contains('/') => f.write_str(short)?,
+                _ => f.write_str(&self.repository)?,
+            },
+        }
+        if let Some(t) = &self.tag {
+            write!(f, ":{t}")?;
+        }
+        if let Some(d) = &self.digest {
+            write!(f, "@{d}")?;
+        }
+        Ok(())
+    }
+}
+
+/// Whether a reference's first component names a registry rather than
+/// a repository's: it has a `.` or a port, or is `localhost`.
+fn oci_is_registry(s: &str) -> bool {
+    s.contains('.') || s.contains(':') || s == "localhost"
+}
+
+/// A registry, `host[:port]`.
+pub fn oci_registry(s: &str) -> Result<(), String> {
+    let (host, port) = match s.rsplit_once(':') {
+        Some((h, p)) => (h, Some(p)),
+        None => (s, None),
+    };
+    let label = |l: &str| {
+        !l.is_empty()
+            && l.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+            && !l.starts_with('-')
+            && !l.ends_with('-')
+    };
+    if host.is_empty() || !host.split('.').all(label) {
+        return Err(format!("{s:?} is not a registry (`host[:port]`)"));
+    }
+    if port.is_some_and(|p| p.parse::<u16>().is_err()) {
+        return Err(format!("{s:?} has no port after its `:`"));
+    }
+    Ok(())
+}
+
+/// A repository: `/`-separated components of lower-case letters and
+/// digits, joined inside by `.`, `_`, `__` or dashes.
+fn oci_repository(s: &str) -> Result<&str, String> {
+    let component = |c: &str| {
+        let b = c.as_bytes();
+        let alnum = |x: &u8| x.is_ascii_lowercase() || x.is_ascii_digit();
+        if b.is_empty() || !alnum(&b[0]) || !alnum(&b[b.len() - 1]) {
+            return false;
+        }
+        let mut i = 0;
+        while i < b.len() {
+            if alnum(&b[i]) {
+                i += 1;
+                continue;
+            }
+            let start = i;
+            while i < b.len() && !alnum(&b[i]) {
+                i += 1;
+            }
+            let sep = &c[start..i];
+            if !(sep == "." || sep == "_" || sep == "__" || sep.bytes().all(|x| x == b'-')) {
+                return false;
+            }
+        }
+        true
+    };
+    if s.split('/').all(component) {
+        Ok(s)
+    } else {
+        Err(format!(
+            "{s:?} is not a repository (lower-case letters and digits, \
+             joined by `.`, `_`, `__`, `-` or `/`)"
+        ))
+    }
+}
+
+/// A tag: up to 128 letters, digits, `_`, `.` and `-`, not starting with
+/// `.` or `-`.
+pub fn oci_tag(s: &str) -> Result<(), String> {
+    let ok = s.len() <= 128
+        && s.chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_')
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-'));
+    ok.then_some(())
+        .ok_or_else(|| format!("{s:?} is not a tag (letters, digits, `_`, `.`, `-`)"))
+}
+
+/// A digest, `algorithm:encoded`: `sha256` 64 lower-case hex digits,
+/// `sha512` 128; another algorithm's encoding letters, digits, `=`,
+/// `_`, `-`.
+pub fn oci_digest(s: &str) -> Result<(), String> {
+    let bad = || format!("{s:?} is not a digest (`sha256:` and 64 hex digits)");
+    let (algo, enc) = s.split_once(':').ok_or_else(bad)?;
+    let algo_ok = !algo.is_empty()
+        && algo.split(['+', '.', '_', '-']).all(|p| {
+            !p.is_empty()
+                && p.chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+        });
+    let hex = |n: usize| enc.len() == n && enc.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f'));
+    let enc_ok = match algo {
+        "sha256" => hex(64),
+        "sha512" => hex(128),
+        _ => {
+            !enc.is_empty()
+                && enc
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '=' | '_' | '-'))
+        }
+    };
+    (algo_ok && enc_ok).then_some(()).ok_or_else(bad)
+}
+
+/// `text` read as an image reference: its canonical text, or why it is
+/// not one (the grammar named).
+pub fn parse_oci(text: &str) -> Result<Value, String> {
+    OciRef::parse(text)
+        .map(|r| r.value())
+        .map_err(|why| format!("{text:?} is not an image reference {OCI_GRAMMAR}: {why}"))
 }
 
 pub fn ipv4_to_u32(ip: &str) -> Option<u32> {

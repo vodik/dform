@@ -54,7 +54,7 @@ fn an_unbound_operand_is_named_at_its_operator() {
 #[test]
 fn double_equals_never_binds() {
     let e =
-        error("image(\"a\")\np(i) where image(i), parsed == oci.parse(i), not has parsed.digest\n");
+        error("image(\"a\")\np(i) where image(i), parsed == semver.parse(i), not has parsed.pre\n");
     assert!(
         e.contains("`parsed` is unbound at this `==`; `=` binds, `==` compares"),
         "{e}"
@@ -126,10 +126,10 @@ fn a_negation_waits_for_its_binders() {
 r(2)
 t(x) where not r(x), q(l), x in l
 u(x) where not { r(y), y > x }, q(l), x in l
-v(i) where not has oci.parse(i).digest, image(i)
-image("a:v1")
+v(i) where not has semver.parse(i).pre, version(i)
+version("1.0.0")
 "#;
     assert_eq!(facts(src, "t"), ["t(1)", "t(3)"]);
     assert_eq!(facts(src, "u"), ["u(2)", "u(3)"]);
-    assert_eq!(facts(src, "v"), [r#"v("a:v1")"#]);
+    assert_eq!(facts(src, "v"), [r#"v("1.0.0")"#]);
 }

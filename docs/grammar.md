@@ -554,13 +554,34 @@ object of its pairs) and `u.fragment` (absent: none) read its parts.
 `url.with_scheme`, `url.with_host`, `url.with_port`, `url.with_path`
 and `url.with_query` change one part and give a url; `url.parse` breaks
 every part out as a plain object (a string argument read as a url);
-`url.join` and `url.encode` work on strings. A `regex` is a parameter
+`url.join` and `url.encode` work on strings.
+
+An `oci` is a container image reference, a value as a url is (R-133):
+the OCI distribution reference `[registry/]repository[:tag][@digest]`,
+written as a string where an `oci` is wanted (a parameter, an
+attribute typed `oci`, `let base: oci = "ghcr.io/element-hq/synapse"`)
+and parsed there, a literal at compile time with an error naming the
+grammar. There is no constructor. It is held in Docker's familiar
+form, so two spellings of one reference are equal: the default
+registry (`docker.io`, `index.docker.io`) is left out, and with it
+`library/` (`docker.io/library/nginx:1.27` is `nginx:1.27`). It never
+equals a string. `r.registry` (absent: the default registry),
+`r.repository` (`library/nginx` for `nginx`), `r.tag` and `r.digest`
+(absent: none) read its parts. A reference may carry a tag and a
+digest both: the digest decides what is pulled, the tag says what it
+was. `oci.with_tag` sets the tag and drops a digest (it pinned the old
+tag's content), `oci.with_digest` sets the digest and keeps the tag,
+`oci.with_registry` moves it to another registry; each gives an `oci`,
+and none for a tag, digest or registry that is not one. `oci.pinned(r)`
+is `has r.digest`. Where a string is wanted, an attribute typed
+`string` (Kubernetes's `image`) or an interpolation, an `oci` is its
+text: `image: oci.with_tag(base, release)`. A `regex` is a parameter
 type only (`regex.match`'s pattern): a string whose text is checked
 as a pattern at compile time.
 
 A literal in a position whose type is known is checked as that type at
 compile time (R-31, Postgres's unknown-literal rule): a schema attribute's
-type (`inet`, `int`, `float`, `number`, `bool`, `url`, `enum(..)`, `ref(T)`), an input's declared
+type (`inet`, `int`, `float`, `number`, `bool`, `url`, `oci`, `enum(..)`, `ref(T)`), an input's declared
 type for its default and a copy's value, a function's parameter.
 `cidr_block = "10.0.0/16"` in an `inet` attribute, `vpc = "main"` in a
 `ref(net.vpc)` one and `subnets = [main]` (a `ref(net.vpc)` where
@@ -1480,13 +1501,12 @@ give (R-119), never a value left out. A bare path in a block is the pun of its
 last segment ("Statements"), not a test: `has` is the test.
 
 A `.p` or `[i]` after a call reads the call's result (R-71):
-`oci.parse(image).digest`, `str.split(s, ":")[0]`, `json.decode(t).a[0].b`,
+`semver.parse(v).pre`, `str.split(s, ":")[0]`, `json.decode(t).a[0].b`,
 anywhere a chain stands, `has` and `not` included, so `not has
-oci.parse(c.image).digest` reads "no digest". It is the call bound to a
-variable and the path read from it, `p = oci.parse(image), p.digest`; a
+semver.parse(c.version).pre` reads "no pre-release". It is the call bound to a
+variable and the path read from it, `p = semver.parse(v), p.pre`; a
 call with no value fails the literal as the binding would, and under `not`
-the binding is inside what is negated (`not has oci.parse("?").digest`
-holds). A call's result
+the binding is inside what is negated. A call's result
 is never called (`f(x).g(y)` is an error: a function is named by a plain
 name), and after `from` a path after the call is the document's
 (`toml("x").peerings`, R-39). Precedence, loosest
@@ -1659,8 +1679,8 @@ body binds the names it shares with it.
 - An unbound operand is an error at it: "`y` is unbound at this `<`; bind
   it with `=`, `in`, or a relation first". A name no literal binds is
   `unknown name y` (a string meant, unquoted).
-- `==` never binds: `image == oci.parse(c.image)` with nothing else
-  binding `image` is "`image` is unbound at this `==`; `=` binds, `==`
+- `==` never binds: `parsed == semver.parse(c.version)` with nothing else
+  binding `parsed` is "`parsed` is unbound at this `==`; `=` binds, `==`
   compares".
 - `=` with both sides bound by the other literals is "both sides are
   bound; write `==`": `pool = "np-a", node_pool_up(pool)` is
@@ -1803,7 +1823,7 @@ are written bare.
 | `random`  | `random.password(key[, length[, alphabet]])`, `random.bytes(key, length)`, `random.signing_key(key)` (secrets); `random.id(key[, length])`, `random.uuid(key)` |
 | `regex`   | `regex.match(s, re)`, `regex.capture(s, re, n)`, `regex.replace(s, re, with)` (`re` a `regex`-typed pattern, checked at compile time, R-31) |
 | `semver`  | `semver.parse(s)`, `semver.satisfies(v, range)`, `semver.compare(a, b)`   |
-| `oci`     | `oci.parse(ref)`, `oci.pinned(ref)`, `oci.with_digest(ref, d)` (the OCI distribution reference grammar, `[registry/]repository[:tag][@digest]`) |
+| `oci`     | `oci.pinned(r)`, `oci.with_tag(r, t)`, `oci.with_digest(r, d)`, `oci.with_registry(r, host)` (`r` an `oci`, the OCI distribution reference `[registry/]repository[:tag][@digest]`, a string read as one; its parts are fields, `r.digest`; "Types") |
 | `hash`    | `hash.sha256(s)`, `hash.short(s, n)`                                      |
 | `base64`  | `base64.encode(s)`, `base64.decode(s)`                                    |
 | `url`     | `url.parse(s)`, `url.join(base, segment)`, `url.with_scheme(u, s)`, `url.with_host(u, h)`, `url.with_port(u, p)`, `url.with_path(u, p)`, `url.with_query(u, q)`, `url.encode(s)` |

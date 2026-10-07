@@ -7,7 +7,7 @@
 mod common;
 use common::Scratch;
 
-const CALL: &str = "oci.with_digest(\"codeberg.org/forgejo/forgejo\", \"16.0.4\") answered nothing";
+const CALL: &str = "oci.with_digest(codeberg.org/forgejo/forgejo, \"16.0.4\") answered nothing";
 
 fn plan(name: &str, src: &str) -> common::Run {
     let s = Scratch::new(name);

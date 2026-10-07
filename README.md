@@ -526,7 +526,7 @@ computed value, and by the provider after apply for a secret, with
 on demand, with binding modes: `aws.availability_zone["available"]`,
 `aws.ami[filter]`, `time.now()`. Functions are pure and qualified by the
 type they are about, `inet.subnet`, `str.split`, `regex.match`,
-`oci.parse`, declared in signature files you can jump to from the
+`oci.with_tag`, declared in signature files you can jump to from the
 editor; constructors are named by their type, `int(s)`, `inet(s)`. A
 generated secret is a function too: `random.password("db")` derives the
 same value every run from the deployment's own secret, so nothing is

@@ -1,18 +1,24 @@
-# Container image references: functions about the OCI distribution
-# reference grammar, `[registry/]repository[:tag][@digest]`
-# (docs/grammar.md "Functions").
+# Container image references: functions about an `oci` (docs/grammar.md
+# "Functions"). An `oci` value is the OCI distribution reference
+# `[registry/]repository[:tag][@digest]`: a string where an `oci` is
+# wanted (a parameter, an attribute, `let r: oci = ".."`) is parsed there,
+# a literal at compile time, and it prints canonically; `.registry`
+# (absent: the default registry), `.repository`, `.tag` and `.digest`
+# read its parts (R-133).
 package oci
 
-#| The reference's registry (absent: the default registry), repository, tag and digest; no value for text that is not a reference.
-#| example: let r = oci.parse(image)
-fn parse(
-  reference: string,
-) -> { registry: string?, repository: string, tag: string?, digest: string? }?
-
-#| Whether the reference carries a digest; also a predicate.
+#| Whether the reference carries a digest; also a predicate (a string that is no reference is not pinned).
 #| example: deny "image not pinned by digest" where not oci.pinned(image)
-fn pinned(reference: string) -> bool
+fn pinned(reference: oci) -> bool
 
-#| The reference with its digest set to `digest` (its tag, if any, kept); no value for text that is not a reference, or a `digest` that is not one (`16.0.4` is a tag: `"${image}:${tag}"`).
+#| The reference with its tag set to `tag`; its digest, which pinned the old tag's content, is dropped. No value for a `tag` that is not one.
+#| example: image: oci.with_tag("ghcr.io/element-hq/synapse", release)
+fn with_tag(reference: oci, tag: string) -> oci?
+
+#| The reference with its digest set to `digest`, its tag, if any, kept (the digest decides what is pulled); no value for a `digest` that is not one (`16.0.4` is a tag: `oci.with_tag`).
 #| example: let exact = oci.with_digest(image, "sha256:${sha}")
-fn with_digest(reference: string, digest: string) -> string?
+fn with_digest(reference: oci, digest: string) -> oci?
+
+#| The reference with its registry set (`docker.io`, the default, is left out of its text); no value for a `registry` that is not `host[:port]`.
+#| example: let mirrored = oci.with_registry(image, "registry.internal:5000")
+fn with_registry(reference: oci, registry: string) -> oci?
