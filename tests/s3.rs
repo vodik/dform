@@ -659,6 +659,65 @@ fn rekey_moves_an_s3_deployment_in_the_bucket() {
     }
 }
 
+/// A deployment whose master is a local key file handed over to a bucket
+/// (After R-164): refused without `[secrets]`, since a bucket never holds a
+/// key file; with it, the key file is sealed first (the same master) and
+/// the bucket gets `state.master`, never `state.key`.
+#[test]
+fn handover_to_a_bucket_seals_a_key_file() {
+    let t = &targets("handover_to_a_bucket_seals_a_key_file")[0];
+    let p = Project::new(t, "handover-key");
+    let toml = p.s.read("dform.toml");
+    let local = toml.split("\n[defaults]").next().unwrap().to_string();
+    p.s.write("dform.toml", &local);
+    p.run(APPLY).success();
+    let key = p.s.path("dform.state/dform/env=staging/state.key");
+    assert!(key.exists());
+    let id = p.s.json("dform.state/dform/env=staging/state.json")["master"].clone();
+    let to = p.term("handed");
+    let r = p
+        .run(&["stack", "handover", "dform[env=staging]", "--to", &to])
+        .failure();
+    assert!(
+        r.stderr.contains("a bucket never holds one") && r.stderr.contains("[secrets] passphrase"),
+        "{}",
+        r.stderr
+    );
+    assert!(key.exists() && p.bucket("handed").list("").unwrap().is_empty());
+    p.s.write(
+        "dform.toml",
+        &format!("{local}\n[secrets]\npassphrase = \"env:DFORM_TEST_PASSPHRASE\"\n"),
+    );
+    let r = p
+        .run(&["stack", "handover", "dform[env=staging]", "--to", &to])
+        .success();
+    assert!(
+        r.stderr
+            .contains("its key file is sealed into state.master for the handover"),
+        "{}",
+        r.stderr
+    );
+    let objects = p.bucket("handed").list("").unwrap();
+    assert!(
+        objects.contains(&"state.master".to_string())
+            && !objects.contains(&"state.key".to_string()),
+        "{objects:?}"
+    );
+    let record: serde_json::Value = serde_json::from_slice(
+        &p.bucket("handed")
+            .get("state.master")
+            .unwrap()
+            .unwrap()
+            .bytes,
+    )
+    .unwrap();
+    assert_eq!(record["id"], id, "the same master: {record}");
+    assert!(record["passphrase"].is_object(), "{record}");
+    let r = p.run(PLAN).success();
+    assert!(r.stdout.contains("is up to date"), "{}", r.stdout);
+    assert!(!r.stderr.contains("key file"), "{}", r.stderr);
+}
+
 /// `stack handover` moves a deployment between prefixes, and from a bucket
 /// to a directory; the controller runs it where it is.
 #[test]

@@ -1929,6 +1929,7 @@ fn run_with(
         Cmd::Handover { stack, to } => {
             let (from, home, times) = place_of(&cli, stack)?;
             let opener = open_s3(&cli.root, true);
+            seal_before_handover(&cli, stack, &from, to, &opener, times)?;
             let moved = crate::stack::handover(&cli.root, stack, &from, &home, to, &opener, times)?;
             crate::audit::Log::new(moved.open(&opener)?, cli.audit_sink.clone()).append(
                 "handover",
@@ -5630,6 +5631,73 @@ fn stack_backend(found: &crate::project::Found) -> Option<crate::stack::Backend>
 /// program's backend says, else under the state root. With its default
 /// directory (its world's when its state is in a bucket) and the lease
 /// times.
+/// Before `stack handover NAME --to s3(..)`: a bucket never holds a key
+/// file (R-164), so a deployment whose master is one is sealed first, as
+/// dform.toml's `[secrets]` says (the same master: nothing derived
+/// changes), and the sealed master is what moves; with no `[secrets]` the
+/// handover is refused, naming the setting.
+fn seal_before_handover(
+    cli: &Cli,
+    name: &str,
+    from: &crate::stack::Place,
+    to: &str,
+    s3: store::OpenS3,
+    times: store::LeaseTimes,
+) -> Result<()> {
+    if !to.trim_start().starts_with("s3") {
+        return Ok(());
+    }
+    let src = from.location.open(s3)?;
+    if crate::zset::file::Key::load(src.as_ref())?.is_none() {
+        return Ok(());
+    }
+    let stack = name.split_once('[').map_or(name, |(s, _)| s);
+    let project = crate::project::Project::find(Path::new("."), env!("CARGO_PKG_VERSION"))?;
+    let mixing = crate::custody::Mixing::of(project.as_ref().map(|p| &p.manifest), stack)?;
+    if mixing.key_file() {
+        bail!(
+            "handover {name} to {to}: its master is the key file {}, and a bucket never holds \
+             one (read access to the state would be read access to every derived secret): set \
+             `[secrets] passphrase = \"env:NAME\"` (or `recipients = [\"age1..\"]`) in \
+             dform.toml, and the handover seals it",
+            src.locate(store::KEY)
+        );
+    }
+    let dep = store::Deployment::new(src.clone(), name, times);
+    let master = dep.master(&mixing, crate::custody::Want::default())?;
+    if master.key.is_none() {
+        bail!(
+            "handover {name} to {to}: sealing its key file needs the master: {}",
+            master.without.as_deref().unwrap_or("not held")
+        );
+    }
+    match crate::custody::reseal(src.as_ref(), name, &master, &mixing)? {
+        Some(done) if done.key_file => {
+            dep.audit(cli.audit_sink.clone(), crate::audit::SINK_TIMEOUT, false)
+                .append(
+                    "custody",
+                    serde_json::json!({
+                        "sealed": store::KEY,
+                        "into": store::MASTER,
+                        "id": master.id,
+                        "who": crate::audit::who(),
+                    }),
+                )?;
+            eprintln!(
+                "{name}: its key file is sealed into {} for the handover ({})",
+                store::MASTER,
+                mixing.describe()
+            );
+            Ok(())
+        }
+        _ => bail!(
+            "handover {name} to {to}: its key file could not be sealed ({}): a bucket never holds \
+             one",
+            mixing.describe()
+        ),
+    }
+}
+
 fn place_of(cli: &Cli, name: &str) -> Result<(crate::stack::Place, PathBuf, store::LeaseTimes)> {
     let root = &cli.root;
     let home = crate::stack::instance_dir(root, name);

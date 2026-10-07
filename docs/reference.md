@@ -2120,7 +2120,8 @@ with the passphrase: a plan reads the key file as it is; the apply
 `state.key`, and writes a `custody` entry to the audit log (`sealed`,
 `into`, the master `id`, `who`). Nothing derived changes. A deployment
 whose `state.master` is sealed and whose dform.toml names no passphrase
-is refused, naming the setting.
+is refused, naming the setting. `stack handover` to a bucket seals a
+key file the same way first (docs/experimental/controller.md).
 
 ### Planning and applying without the master
 

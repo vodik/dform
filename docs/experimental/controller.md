@@ -153,7 +153,11 @@ of a deployment's objects, and the stack not be locked. Backends:
   `backend` is.
 - `s3("BUCKET", "PREFIX", {endpoint: "URL", region: "R"})`: the
   deployment's own prefix of a bucket (a handover between prefixes, or
-  between buckets, works alike).
+  between buckets, works alike). A bucket never holds a key file
+  (reference.md "Custody"): a deployment whose master is a local
+  `state.key` has it sealed first, as dform.toml's `[secrets]` says (the
+  same master; a `custody` audit entry), and `state.master` moves; with
+  no `[secrets]` the handover is refused, naming the setting.
 - `k8s("namespace/name")`: the in-cluster backend. For now it stands in as
   the directory `k8s/namespace/name` inside the state directory of the
   registered `role = bootstrap` stack (there must be exactly one; an apply
