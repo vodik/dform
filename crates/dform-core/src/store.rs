@@ -5,7 +5,7 @@
 //! `dform-s3`'s, the objects of a bucket under a prefix; dform-core has no
 //! network stack, and the command line wires the S3 store in.
 //!
-//! A deployment's objects: [`STATE`], [`KEY`] (the plan key), [`AUDIT`]
+//! A deployment's objects: [`STATE`], [`KEY`] (its master), [`AUDIT`]
 //! (and, where a store cannot append in place, its segments under
 //! [`AUDIT_SEGMENTS`]), [`LOCK`], [`OUTPUTS`] (what other stacks read),
 //! and the controller's [`MEMO`], [`PENDING`] and drop directory
@@ -49,7 +49,7 @@ use std::time::Duration;
 
 /// The deployment's state.
 pub const STATE: &str = "state.json";
-/// The deployment's plan key (`zset::file::Key`).
+/// The deployment's key file: its master (`custody`, `zset::file::Key`).
 pub const KEY: &str = "state.key";
 /// The deployment's audit log (`audit`).
 pub const AUDIT: &str = "state.audit.jsonl";
@@ -1641,14 +1641,32 @@ impl Deployment {
         self.wal_log()
     }
 
-    /// The deployment's plan key, made on first use.
-    pub fn plan_key(&self) -> Result<crate::zset::file::Key> {
-        crate::zset::file::Key::load_or_create(self.inner.store.as_ref())
+    /// The deployment's master (`custody`): its key file read, one made
+    /// only for a deployment with no state (`want`), or on `--new-master`.
+    pub fn master(&self, want: crate::custody::Want) -> Result<crate::custody::Master> {
+        crate::custody::resolve(
+            self.inner.store.as_ref(),
+            &self.inner.name,
+            &|| self.applied(),
+            want,
+        )
     }
 
-    /// The plan key, when the deployment has one; a read makes none.
-    pub fn existing_plan_key(&self) -> Result<Option<crate::zset::file::Key>> {
-        crate::zset::file::Key::load(self.inner.store.as_ref())
+    /// Was the deployment ever applied with a master: its state records
+    /// one (R-163), or its log an apply from before states did. A state
+    /// written by hand (a test's fixture) was not.
+    fn applied(&self) -> Result<bool> {
+        if let Some(o) = self.inner.store.get(STATE)?
+            && serde_json::from_slice::<serde_json::Value>(&o.bytes)
+                .is_ok_and(|s| s["master"].is_string())
+        {
+            return Ok(true);
+        }
+        Ok(self
+            .wal_log()
+            .entries()?
+            .iter()
+            .any(|e| e["kind"] == "apply_start" || e["master"].is_string()))
     }
 }
 

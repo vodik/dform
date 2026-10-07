@@ -157,7 +157,12 @@ fn a_secret_memo_is_kept_sealed_never_in_the_clear() {
 
     // Another master: the candidate changes, the kept value does not.
     let second = [("RANDOM_MASTER", "second-master")];
-    let r = run(&s, &second, &["plan", "--out", "plan.json", "p.df"]).success();
+    let r = run(
+        &s,
+        &second,
+        &["plan", "--new-master", "--out", "plan.json", "p.df"],
+    )
+    .success();
     assert_eq!(r.summary(), "stack p is up to date", "{}", r.stdout);
     outputs.extend([r.stdout, r.stderr, s.read("plan.json")]);
     for args in [
@@ -198,10 +203,10 @@ fn a_secret_memo_is_kept_sealed_never_in_the_clear() {
     // Tainted, the next apply keeps the new master's candidate, which no
     // output of the runs before showed either.
     run(&s, &[], &["state", "taint", "memo", "db-pw", "p"]).success();
-    let r = run(&s, &second, &["plan", "p.df"]).success();
+    let r = run(&s, &second, &["plan", "--new-master", "p.df"]).success();
     assert!(r.summary().contains("1 update"), "{}", r.stdout);
     assert!(!r.stdout.contains(&pw), "{}", r.stdout);
-    run(&s, &second, &["apply", "p.df"]).success();
+    run(&s, &second, &["apply", "--new-master", "p.df"]).success();
     let world: serde_json::Value =
         serde_json::from_str(&s.read("dform.state/p/remote.json")).unwrap();
     let pw2 = world["resources"]["db.secret::v"]["attrs"]["password"]

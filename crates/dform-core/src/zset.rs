@@ -1087,9 +1087,11 @@ pub mod file {
 
     pub const VERSION: u32 = 4;
 
-    /// The stack's plan-file key: 32 random bytes in `state.key` beside
-    /// the stack's state (it moves with the state on a handover), made on
-    /// first use, readable by its owner only. It never leaves the state dir.
+    /// The deployment's master (`custody`): 32 random bytes, the key of
+    /// every digest of a secret dform keeps and the root of `random.*`
+    /// and the memo seal. It never leaves the state's backend in the
+    /// clear but as the key file `state.key`.
+    #[derive(Clone)]
     pub struct Key([u8; 32]);
 
     impl Key {
@@ -1104,41 +1106,17 @@ pub mod file {
                 .bytes
                 .as_slice()
                 .try_into()
-                .map_err(|_| anyhow::anyhow!("plan key {}: not 32 bytes", store.locate(KEY)))?;
+                .map_err(|_| anyhow::anyhow!("the key {}: not 32 bytes", store.locate(KEY)))?;
             Ok(Some(Key(key)))
         }
 
-        /// The key of the deployment whose objects are `store`'s.
-        pub fn load_or_create(store: &dyn crate::store::Store) -> Result<Key> {
-            use crate::store::{Cond, KEY};
-            let parse = |bytes: &[u8]| -> Result<Key> {
-                let key: [u8; 32] = bytes
-                    .try_into()
-                    .map_err(|_| anyhow::anyhow!("plan key {}: not 32 bytes", store.locate(KEY)))?;
-                Ok(Key(key))
-            };
-            if let Some(o) = store.get(KEY)? {
-                return parse(&o.bytes);
-            }
-            let mut key = [0u8; 32];
-            {
-                use std::io::Read;
-                std::fs::File::open("/dev/urandom")
-                    .and_then(|mut f| f.read_exact(&mut key))
-                    .context("read /dev/urandom for the plan key")?;
-            }
-            if store
-                .put(KEY, &key, &Cond::IfAbsent)
-                .with_context(|| format!("write plan key {}", store.locate(KEY)))?
-                .is_none()
-            {
-                // Made by another run meanwhile: that one is the key.
-                let o = store
-                    .get(KEY)?
-                    .ok_or_else(|| anyhow::anyhow!("plan key {}: gone", store.locate(KEY)))?;
-                return parse(&o.bytes);
-            }
-            Ok(Key(key))
+        pub fn from_bytes(bytes: [u8; 32]) -> Key {
+            Key(bytes)
+        }
+
+        /// Its 32 bytes.
+        pub fn bytes(&self) -> [u8; 32] {
+            self.0
         }
 
         /// A key derived from this one for `what`: its HMAC, so the derived

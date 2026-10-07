@@ -350,6 +350,7 @@ too):
 | `DFORM_CREDENTIALS` | the directory of the operator's credential files, instead of `$XDG_CONFIG_HOME/dform/credentials` |
 | `DFORM_S3_ACCESS_KEY_ID`, `DFORM_S3_SECRET_ACCESS_KEY`, `DFORM_S3_SESSION_TOKEN` | the s3 state backend's credentials; else `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` and `AWS_SESSION_TOKEN`; only the environment, no profile file |
 | `NO_COLOR` | set and not empty: `--color=auto` colours nothing |
+| `RANDOM_MASTER` | the `random.*` input key material instead of the deployment's master (tests, the editor): taken only where state was applied with it, or nothing was applied (see "Secrets") |
 | `XDG_CONFIG_HOME` | where the credential files (`dform/credentials/`) are; default `~/.config` |
 | `XDG_CACHE_HOME` | where git mirrors, compiled wasm providers and the language server's read-only files are kept (`dform/`); default `~/.cache` |
 <!-- /man:environment -->
@@ -1865,6 +1866,49 @@ cargo run -- apply plan.json --approval approval.json
 
 `examples/approvals/stacks/approvals.df` is that program.
 
+## Secrets
+
+### The master
+
+Every deployment has a master: 32 random bytes, the root of every
+`random.*` value, the seal of a secret memo, and the key of every digest
+dform keeps of a secret (a write-only attribute's, a plan file's, the
+audit log's). It is made once, by the first run that needs one (an
+apply, a plan file, a plan of a program calling `random.*`) of a
+deployment never applied, and kept beside the state in the key file
+`state.key`. State records the id of the master it was applied with
+(`master`: an HMAC of the master, public), and every plan and apply
+compares: a run whose master is another refuses before it plans, naming
+both ids and where this run's came from:
+
+```text
+Error: crud_api: the master this run derives from (RANDOM_MASTER, id 3f2a9c1b0d4e) is not
+the one its state was applied with (id 9c1b3f2a0e7d): every random.* value and every secret
+digest would change. unset RANDOM_MASTER, or run with --new-master to take this master and
+change them all
+```
+
+A deployment that was applied and whose key file is gone (a restore that
+missed one object, a bucket moved by hand) refuses the same way, before
+anything is made: `state.key is missing, and the deployment was applied
+with it`. dform never makes a key for a deployment that has used one,
+since every derived secret would change at the next apply (a k3s token in
+`user_data` replaces the servers; Postgres keeps the password it was
+initialized with). Restore it from the backup the state came from: state
+and key go together. `plan --new-master` and `apply --new-master` take
+the master the run has, a new key file made where there is none: the plan
+shows every derived secret changing, stderr says why (`new master
+(--new-master): random.* derive from ..`), and the apply writes a
+`master` entry to the audit log (`from`, `to`, `source`, `made`, `who`),
+as the first apply of a deployment does. `query` and `why` take the run's
+master as it is: they only read.
+
+`RANDOM_MASTER` in the environment is the `random.*` input key material
+itself, for tests and the editor. It is taken where state was applied
+with it, or where nothing was applied; beside a deployment's own key file
+a run says so once on stderr (`warning: RANDOM_MASTER is set: ..`), and
+refuses it when the ids differ.
+
 ## The audit log
 
 Every deployment has an append-only audit log beside its state,
@@ -1907,6 +1951,9 @@ The kinds:
 - `configure`: a provider configured from the program's settings at a
   tick's boundary (R-45): the tick, the provider, the settings' keys
   (never their values);
+- `master`: an apply whose master is not the one state recorded (the
+  first apply, `--new-master`): `from` and `to` (the ids), its `source`,
+  whether it `made` the key, and `who` (see "Secrets");
 - `derived`: at the end of an apply that completes, what it derived
   (`record`), when it derived any: each rule that binds variables by its
   `FILE:LINE`, its statement and the resources it derived, and each
@@ -2635,9 +2682,8 @@ default; `"ascii"`, `"hex"`, `"base64"`), `random.base64(key, length)`
 (base64 text) and `random.signing_key(key)` (ed25519 in Synapse's format)
 return `secret(string)`; `random.id(key[, length])` and
 `random.uuid(key)` are public. Each is HKDF-SHA256 of the deployment's
-master secret, `RANDOM_MASTER` in the environment or else a key derived
-from the stack's key file (`state.key`, made on first use and moved with
-the state), with the function, the deployment, the key and every knob in
+master (see "Secrets"; `RANDOM_MASTER` in the environment for tests),
+with the function, the deployment, the key and every knob in
 the derivation: the same on every run, stored nowhere, and a new value
 when a knob, the key or the master changes (rotate with a new key,
 `"db-pw-2"`). A value that must be made once and survive a change of

@@ -889,26 +889,16 @@ pub fn hkdf(salt: &[u8], ikm: &[u8], info: &[u8], len: usize) -> Vec<u8> {
     out
 }
 
-/// A key's 32 bytes, from its hex.
-fn key_bytes(k: &crate::zset::file::Key) -> [u8; 32] {
-    let hex = k.to_hex();
-    let mut out = [0u8; 32];
-    for (i, b) in out.iter_mut().enumerate() {
-        *b = u8::from_str_radix(&hex[2 * i..2 * i + 2], 16).expect("a key is hex");
-    }
-    out
-}
-
 /// The bytes the stack's key derives for `what` (`Key::derive`): a key
 /// that says nothing of the stack's, for one use.
 pub fn derived(k: &crate::zset::file::Key, what: &str) -> [u8; 32] {
-    key_bytes(&k.derive(what))
+    k.derive(what).bytes()
 }
 
 /// The held store's cipher: its key HKDF of the stack's.
 fn cipher(k: &crate::zset::file::Key) -> chacha20poly1305::XChaCha20Poly1305 {
     use chacha20poly1305::KeyInit;
-    let key = hkdf(b"dform held store", &key_bytes(k), b"xchacha20poly1305", 32);
+    let key = hkdf(b"dform held store", &k.bytes(), b"xchacha20poly1305", 32);
     chacha20poly1305::XChaCha20Poly1305::new_from_slice(&key).expect("a 32-byte key")
 }
 

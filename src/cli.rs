@@ -302,6 +302,12 @@ enum Run {
         /// deployment's state deleted.
         #[arg(long, conflicts_with = "out")]
         destroy: bool,
+        /// Take the master this run has (`RANDOM_MASTER`, a restored or a
+        /// new key file) though state was applied with another, or make
+        /// one where the key file is missing: every `random.*` value and
+        /// every secret digest changes, on purpose (R-163).
+        #[arg(long = "new-master")]
+        new_master: bool,
         #[command(flatten)]
         why: Ladder,
     },
@@ -341,6 +347,12 @@ enum Run {
         /// `[stacks.NAME] allow_empty` names them for every apply.
         #[arg(long = "allow-empty", value_name = "RULE")]
         allow_empty: Vec<String>,
+        /// Take the master this run has (`RANDOM_MASTER`, a restored or a
+        /// new key file) though state was applied with another, or make
+        /// one where the key file is missing: every `random.*` value and
+        /// every secret digest changes, on purpose (R-163).
+        #[arg(long = "new-master")]
+        new_master: bool,
         #[command(flatten)]
         why: Ladder,
     },
@@ -699,6 +711,8 @@ enum Cmd {
         /// `plan --destroy`: the plan against an empty wanted set.
         destroy: bool,
         why: report::Why,
+        /// `--new-master` (R-163).
+        new_master: bool,
     },
     Test,
     Apply {
@@ -715,6 +729,8 @@ enum Cmd {
         why: report::Why,
         /// `destroy`: the deployment is removed (R-149).
         destroy: bool,
+        /// `--new-master` (R-163).
+        new_master: bool,
     },
     Query {
         pattern: String,
@@ -1369,6 +1385,7 @@ fn run_cmd(r: Run) -> (Cmd, Option<Target>) {
             out,
             json,
             destroy,
+            new_master,
             why,
         } => (
             Cmd::Plan {
@@ -1376,6 +1393,7 @@ fn run_cmd(r: Run) -> (Cmd, Option<Target>) {
                 json,
                 destroy,
                 why: why.level(),
+                new_master,
             },
             Some(target),
         ),
@@ -1386,6 +1404,7 @@ fn run_cmd(r: Run) -> (Cmd, Option<Target>) {
             approval,
             yes,
             allow_empty,
+            new_master,
             why,
         } => (
             Cmd::Apply {
@@ -1398,6 +1417,7 @@ fn run_cmd(r: Run) -> (Cmd, Option<Target>) {
                 allow_empty,
                 why: why.level(),
                 destroy: false,
+                new_master,
             },
             Some(target),
         ),
@@ -1419,6 +1439,7 @@ fn run_cmd(r: Run) -> (Cmd, Option<Target>) {
                 allow_empty: Vec::new(),
                 why: why.level(),
                 destroy: true,
+                new_master: false,
             },
             Some(target),
         ),
@@ -2151,13 +2172,64 @@ fn run_with(
         }
         _ => {}
     }
-    // The stack's plan-file key: a plan that writes a file, and an apply,
-    // digest secrets with it (the plan file's, the audit log's).
-    let key = match (&saved, &cli.cmd) {
-        (Some(_), _) | (None, Cmd::Plan { out: Some(_), .. }) | (None, Cmd::Apply { .. }) => {
-            Some(dep.plan_key()?)
+    // The deployment's master (R-163): its key file read, one made only
+    // for a deployment with no state, by a run that writes (a plan file,
+    // an apply) or derives (`random.*`); a plan that writes a file, and an
+    // apply, digest secrets with it (the plan file's, the audit log's).
+    let writes = matches!(
+        (&saved, &cli.cmd),
+        (Some(_), _) | (None, Cmd::Plan { out: Some(_), .. }) | (None, Cmd::Apply { .. })
+    );
+    let derives = located
+        .loaded
+        .lowered
+        .as_ref()
+        .is_some_and(|l| crate::functions::random::called(&l.program));
+    let new_master = matches!(
+        cli.cmd,
+        Cmd::Plan {
+            new_master: true,
+            ..
+        } | Cmd::Apply {
+            new_master: true,
+            ..
         }
-        _ => None,
+    );
+    let master = match &cli.cmd {
+        Cmd::Plan { .. } | Cmd::Apply { .. } | Cmd::Query { .. } | Cmd::Why { .. } => {
+            // The key may be made now: a bucket is checked first, as for
+            // any run that writes.
+            if let (true, None, store::Location::S3(spec)) = (
+                writes || derives || new_master,
+                &cli.world,
+                &located.location,
+            ) {
+                open_s3(&root, true)(spec)?;
+            }
+            let mut m = dep.master(crate::custody::Want {
+                make: writes || derives,
+                new_master,
+            })?;
+            // A query or a why only reads: it says what this master
+            // derives, whatever state was applied with.
+            m.accept |= matches!(cli.cmd, Cmd::Query { .. } | Cmd::Why { .. });
+            m
+        }
+        _ => crate::custody::Master::none(),
+    };
+    if new_master && let Some(id) = &master.id {
+        eprintln!(
+            "new master (--new-master): random.* derive from {} (id {}); every value derived \
+             from another master changes",
+            master.source,
+            crate::custody::short(id)
+        );
+    }
+    let key = match writes {
+        true => Some(master.key.clone().ok_or_else(|| {
+            anyhow::anyhow!("internal: a run that writes without the deployment's key")
+        })?),
+        false => None,
     };
     let secret_inputs: BTreeSet<String> = located
         .loaded
@@ -2241,10 +2313,6 @@ fn run_with(
         Some(w) => w.parent().unwrap_or(Path::new("")).to_path_buf(),
         None => root.join("cache"),
     };
-    let existing_key = match &key {
-        None => dep.existing_plan_key()?,
-        Some(_) => None,
-    };
     // query and why read the policy pass, so a deny over the plan can be
     // asked for and explained; a plan prints what it would do, conflicts
     // included (E §2.8: a conflict is a fact, not an abort), and then
@@ -2275,11 +2343,11 @@ fn run_with(
         },
         cache: cli.world.is_none().then(|| cache.clone()),
         // A plan that makes no key digests with the one there is.
-        digest_key: match &key {
-            Some(k) => Some(k),
-            None => existing_key.as_ref(),
-        }
-        .map(|k| k.derive("provider digest").to_hex()),
+        digest_key: master
+            .key
+            .as_ref()
+            .map(|k| k.derive("provider digest").to_hex()),
+        master: master.clone(),
         recorded: saved
             .as_ref()
             .map(|(_, f)| f.externs.clone())
@@ -2881,7 +2949,13 @@ fn run_with(
                         if let (None, store::Location::S3(spec)) = (&cli.world, &location) {
                             open_s3(&root, true)(spec)?;
                         }
-                        loaded = dep.plan_key()?;
+                        loaded = dep
+                            .master(crate::custody::Want {
+                                make: true,
+                                new_master,
+                            })?
+                            .key
+                            .ok_or_else(|| anyhow::anyhow!("internal: no key made"))?;
                         &loaded
                     }
                 };
@@ -3467,6 +3541,26 @@ fn run_with(
                         e["destroy"] = true.into();
                     }
                     audit.append("apply_start", e)?;
+                    // The master this apply derives with, as state records
+                    // it (R-163): a new one is said in the log, and where
+                    // it came from.
+                    if let Some(id) = master
+                        .id
+                        .as_ref()
+                        .filter(|id| st.master.as_ref() != Some(*id))
+                    {
+                        audit.append(
+                            "master",
+                            serde_json::json!({
+                                "from": st.master,
+                                "to": id,
+                                "source": master.source,
+                                "made": master.made,
+                                "who": crate::audit::who(),
+                            }),
+                        )?;
+                        st.master = Some(id.clone());
+                    }
                 }
                 // Kept in state: a sensitive leaf by its digest.
                 let observed = backend.stored_world(&backend.observe(&st)?);
@@ -4155,6 +4249,7 @@ fn run_controller(cli: Cli) -> Result<Outcome> {
             allow_empty: Vec::new(),
             why: report::Why::None,
             destroy: false,
+            new_master: false,
         },
         ..cli
     };

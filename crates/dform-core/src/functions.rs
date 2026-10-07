@@ -2069,7 +2069,7 @@ mod tests {
 /// HKDF-SHA256 of the deployment's master secret, its info the function,
 /// the deployment, the key and every knob, so it is the same on every run
 /// and a changed knob or master is a new value. The master is the run's
-/// ([`random::master`]): a deployment's evaluation sets it on its thread; with
+/// (`custody::Master`): a deployment's evaluation sets it on its thread; with
 /// none (an editor, a bare evaluation) the functions have no value.
 pub mod random {
     use crate::value::Value;
@@ -2111,17 +2111,6 @@ pub mod random {
                 .or_insert_with(|| format!("random.{what}({key:?})"));
         });
         Some(v)
-    }
-
-    /// The master's input key material: `RANDOM_MASTER` from the
-    /// environment, else what the stack's key derives for it (`key`).
-    pub fn master(
-        key: impl FnOnce() -> anyhow::Result<crate::zset::file::Key>,
-    ) -> anyhow::Result<Vec<u8>> {
-        match std::env::var("RANDOM_MASTER") {
-            Ok(m) if !m.is_empty() => Ok(m.into_bytes()),
-            _ => Ok(crate::secrets::derived(&key()?, "random master").to_vec()),
-        }
     }
 
     /// Whether `program` calls a `random.*` function: its run needs a master.

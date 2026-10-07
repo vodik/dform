@@ -58,6 +58,11 @@ pub struct State {
     /// `dform state forget-host HOST`.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub known_hosts: BTreeMap<String, KnownHost>,
+    /// The id of the master the deployment was last applied with
+    /// (`custody::id`, public): a run whose master is another refuses
+    /// before it plans (R-163).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub master: Option<String>,
 }
 
 /// A host's key as first met: its type (`ssh-ed25519`), its SHA-256

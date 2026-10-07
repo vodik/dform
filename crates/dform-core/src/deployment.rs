@@ -349,6 +349,10 @@ pub struct Options<'a> {
     pub cache: Option<PathBuf>,
     /// The key a provider digests a sensitive value with.
     pub digest_key: Option<String>,
+    /// The deployment's master (`custody`): `random.*` derive from it, a
+    /// sealed memo opens with it; a master other than the one state was
+    /// applied with is refused.
+    pub master: crate::custody::Master,
     /// Extern answers a plan file recorded: asked of nothing again.
     pub recorded: Vec<externs::Answer>,
     /// Every type the program plans is one its providers declare.
@@ -383,6 +387,7 @@ impl<'a> Options<'a> {
             chaos: Vec::new(),
             cache: None,
             digest_key: None,
+            master: crate::custody::Master::none(),
             recorded: Vec::new(),
             check_types: false,
             discover_all: false,
@@ -1256,21 +1261,17 @@ impl Located {
         let mut st = reading
             .join()
             .map_err(|_| anyhow::anyhow!("internal: the state read panicked"))??;
-        // `random.*` derive from the deployment's master (R-60): made on
-        // first use when it is the stack's key.
-        if lowered.is_some_and(|l| crate::functions::random::called(&l.program)) {
-            let ikm = crate::functions::random::master(|| self.dep.plan_key())?;
-            crate::functions::random::set_master(ikm, &self.deployment);
+        // The master state was applied with, or `--new-master` (R-163).
+        opts.master.check(&self.deployment, st.master.as_deref())?;
+        // `random.*` derive from the deployment's master (R-60).
+        if lowered.is_some_and(|l| crate::functions::random::called(&l.program))
+            && let Some(ikm) = &opts.master.random
+        {
+            crate::functions::random::set_master(ikm.clone(), &self.deployment);
         }
         // `memo.first`: what state keeps, a sealed one opened with the
-        // stack's key.
-        let memos = Rc::new(crate::memo::Memos::new(
-            &st,
-            match st.memo.values().any(|m| m.value.is_none()) {
-                true => self.dep.existing_plan_key()?,
-                false => None,
-            },
-        ));
+        // deployment's key.
+        let memos = Rc::new(crate::memo::Memos::new(&st, opts.master.key.clone()));
         // The SSH host keys state knows.
         files.know(&st.known_hosts);
         let mut base_extra = self.set_facts.clone();
