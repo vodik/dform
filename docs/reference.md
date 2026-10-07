@@ -228,7 +228,6 @@ prints the same plan and applies nothing.
 | `init [NAME]` | make the working directory a project |
 | `completions zsh\|bash\|fish` | a completion script |
 | `lsp` | the language server, on stdin and stdout (see "Language server") |
-| `help [COMMAND..]` | the manual: dform(1), or the command's page (see "See also") |
 
 Controller mode (`controller run`, `stack handover`) is experimental:
 `DFORM_EXPERIMENTAL=1` lists it in `--help` and the completions, and
@@ -366,10 +365,10 @@ describes every command at length, and docs/providers.md the provider
 protocol.
 <!-- /man:see-also -->
 
-`dform help [COMMAND..]` shows these sections in dform(1), and a command's
-page (`dform help stack list`), each generated from the command line's
-definitions by `cargo xtask man`, which writes them to `target/man/`;
-a package installs them under `share/man/man1/`.
+dform(1) carries these sections, and each command has its page
+(dform-stack-list(1)), generated from the command line's definitions by
+`cargo xtask man`, which writes them to `target/man/`; a package installs
+them under `share/man/man1/`.
 
 ### State backends
 
