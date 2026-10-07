@@ -24,9 +24,10 @@ tick 1  3 changes
       region = "us-east1"
       subnetwork_id = gke_subnet
 
-tick 2  3 changes
+tick 2  3+ changes
   waits on  pngu.ca_certificate
             pngu.endpoint
+            pngu.zones
   + k8s.deployment api                              stacks/gke_two_phase.df:78
       image = "gcr.io/renfry/api:1.42"
       namespace = "pngu"
@@ -36,8 +37,8 @@ tick 2  3 changes
   + k8s.secret db_credentials                       stacks/gke_two_phase.df:84
       data.password = (sensitive)
       namespace = "pngu"
+  google.container_node_pool "np-${z}"              stacks/gke_two_phase.df:90  waits on pngu.zones
 
 later
-  google.container_node_pool "np-${z}"              stacks/gke_two_phase.df:90  waits on pngu.zones
   deny "cluster must be in at least two zones"      stacks/gke_two_phase.df:99  until tick 2
 -- stderr --

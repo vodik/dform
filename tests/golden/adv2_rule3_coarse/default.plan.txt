@@ -1,6 +1,6 @@
 exit: error
 -- stdout --
-plan: 2 changes (2 create) over 1 tick, 1 undetermined
+plan: 2 changes (2 create) over 2 ticks, 1 undetermined
 
 tick 1  2 changes
   + google.container_cluster pngu     adv2_rule3_coarse.df:6
@@ -8,8 +8,11 @@ tick 1  2 changes
   + k8s.namespace pngu                adv2_rule3_coarse.df:13
       name = "pngu"
 
-later
+tick 2  ? changes
+  waits on  pngu.zones
   google.container_node_pool "${np}"  adv2_rule3_coarse.df:8  waits on pngu.zones
+
+later
   deny "no nodepool in zone b"        adv2_rule3_coarse.df:24  until tick 2
 -- stderr --
 constraint violations:

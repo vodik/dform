@@ -38,9 +38,20 @@ fn dev(s: &Scratch, args: &[&str]) -> common::Run {
     common::Run::from(out)
 }
 
-/// Whether the plan's `later` group has `what`, waiting on `on`.
+/// The plan's first tick: what comes before tick 2 or `later`.
+fn tick1(plan: &str) -> &str {
+    let end = ["\ntick 2", "\nlater\n"]
+        .iter()
+        .filter_map(|m| plan.find(m))
+        .min()
+        .unwrap_or(plan.len());
+    &plan[..end]
+}
+
+/// Whether the plan holds `what` after its first tick (a group the tick
+/// before decides, R-156, or `later`'s), waiting on `on`.
 fn waits(plan: &str, what: &str, on: &str) -> bool {
-    let later = plan.split("\nlater\n").nth(1).unwrap_or("");
+    let later = &plan[tick1(plan).len()..];
     later
         .lines()
         .any(|l| l.trim_start().starts_with(what) && l.ends_with(&format!("  waits on {on}")))
@@ -52,7 +63,7 @@ fn waits(plan: &str, what: &str, on: &str) -> bool {
 fn a_gate_on_a_resource_waits_the_tick_it_takes() {
     let s = scratch("has-ref-gate");
     let r = dev(&s, &["plan"]).success();
-    let tick1 = r.stdout.split("\nlater\n").next().unwrap();
+    let tick1 = tick1(&r.stdout);
     assert!(tick1.contains("+ db.postgres warm_cache"), "{}", r.stdout);
     assert!(!tick1.contains("net.vpc web"), "{}", r.stdout);
     assert!(
@@ -61,7 +72,7 @@ fn a_gate_on_a_resource_waits_the_tick_it_takes() {
         r.stdout
     );
     let r = dev(&s, &["apply", "--yes"]).success();
-    let tick2 = r.stdout.split("\ntick 2").nth(1).unwrap_or("");
+    let tick2 = r.stdout.rsplit("\ntick 2").next().unwrap_or("");
     assert!(tick2.contains("+ net.vpc web"), "{}", r.stdout);
     assert!(!r.stdout.contains("apply: complete"), "{}", r.stdout);
     let r = dev(&s, &["plan"]).success();
@@ -74,7 +85,7 @@ fn a_gate_on_a_resource_waits_the_tick_it_takes() {
 fn not_has_a_resource_guards_on_its_absence() {
     let s = scratch("has-ref-not");
     let r = dev(&s, &["plan"]).success();
-    let tick1 = r.stdout.split("\nlater\n").next().unwrap();
+    let tick1 = tick1(&r.stdout);
     assert!(tick1.contains("+ net.vpc fresh"), "{}", r.stdout);
 
     let s = scratch("has-ref-not-legacy");
@@ -120,7 +131,7 @@ resource net.vpc bare { cidr = "10.1.0.0/16" } where not has cache.endpoint
 "#,
     );
     let r = dev(&s, &["plan"]).success();
-    let tick1 = r.stdout.split("\nlater\n").next().unwrap();
+    let tick1 = tick1(&r.stdout);
     assert!(tick1.contains("+ db.postgres cache"), "{}", r.stdout);
     assert!(!tick1.contains("net.vpc"), "{}", r.stdout);
     assert!(
@@ -134,7 +145,7 @@ resource net.vpc bare { cidr = "10.1.0.0/16" } where not has cache.endpoint
         r.stdout
     );
     let r = dev(&s, &["apply", "--yes"]).success();
-    let tick2 = r.stdout.split("\ntick 2").nth(1).unwrap_or("");
+    let tick2 = r.stdout.rsplit("\ntick 2").next().unwrap_or("");
     assert!(tick2.contains("+ net.vpc web"), "{}", r.stdout);
     assert!(!tick2.contains("net.vpc bare"), "{}", r.stdout);
     let r = dev(&s, &["plan"]).success();

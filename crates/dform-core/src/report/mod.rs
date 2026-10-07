@@ -887,17 +887,27 @@ pub fn report(i: &Input) -> Report {
         .filter(|a| matches!(a.kind, ActionKind::Noop))
         .count();
 
-    // The schedule: definite deformations run in this tick; a held one
-    // runs after every null it waits on is resolved, which is after the
-    // tick its owner runs in.
+    // The schedule, by the dependency graph alone (R-156): definite
+    // deformations run in this tick; a held one runs after everything it
+    // waits on is made, which is the tick after the last of their owners'.
+    // A wait no null names (a provider's settings, a CRD) is made by what
+    // `boundary_owners` says; one nothing in this plan makes is `later`'s.
     let mut tick_of: BTreeMap<(String, String), usize> = definite
         .iter()
         .filter(|a| !matches!(a.kind, ActionKind::Noop))
         .map(|a| ((a.addr.typ.clone(), a.addr.name.clone()), i.tick))
         .collect();
+    let made_by = boundary_owners(i, &held);
     let resolves = |on: &[String], tick_of: &BTreeMap<(String, String), usize>| {
         on.iter()
-            .map(|n| null_owner(n).and_then(|o| tick_of.get(&o).copied()))
+            .map(|n| match made_by.get(n) {
+                Some(owners) => owners
+                    .iter()
+                    .map(|o| tick_of.get(o).copied())
+                    .collect::<Option<Vec<usize>>>()
+                    .and_then(|ts| ts.into_iter().max()),
+                None => null_owner(n).and_then(|o| tick_of.get(&o).copied()),
+            })
             .collect::<Option<Vec<usize>>>()
             .and_then(|ts| ts.into_iter().max())
     };
@@ -1031,6 +1041,114 @@ pub fn report(i: &Input) -> Report {
 }
 
 type Resolves<'a> = dyn Fn(&[String], &BTreeMap<(String, String), usize>) -> Option<usize> + 'a;
+
+/// What makes each wait of a held change that no null names (R-156): the
+/// resources of this plan it is resolved after. A CRD's wait (R-126), the
+/// CRD; a provider's (`provider k8s  kubeconfig = ..`, `provider k8s
+/// schema`, R-110), what its settings are made from ([`settings_owners`]).
+/// A wait not here, or one whose owners this plan does not schedule, is
+/// outside the plan: another stack's output, a provider configured from
+/// outside, a read no tick makes answerable.
+fn boundary_owners(i: &Input, held: &[&Action]) -> BTreeMap<String, Vec<(String, String)>> {
+    let key = |a: &Address| (a.typ.clone(), a.name.clone());
+    let printed: BTreeMap<String, (String, String)> = i
+        .plan
+        .actions
+        .iter()
+        .map(|a| (address(&a.addr), key(&a.addr)))
+        .collect();
+    let mut out = BTreeMap::new();
+    for a in held {
+        for l in waits_on(a, i.sections).unwrap_or_default() {
+            if out.contains_key(&l) {
+                continue;
+            }
+            let owners = match (printed.get(&l), l.strip_prefix("provider ")) {
+                (Some(k), _) => Some(vec![k.clone()]),
+                (None, Some(rest)) => {
+                    let name = rest.split_once("  ").map_or(rest, |(n, _)| n);
+                    settings_owners(i, name).map(|o| o.into_iter().collect())
+                }
+                (None, None) => None,
+            };
+            if let Some(o) = owners {
+                out.insert(l, o);
+            }
+        }
+    }
+    out
+}
+
+/// The resources provider `name`'s settings are made from, when every
+/// null they wait on is one's (R-156): the nulls its `provider_config`
+/// row holds, or, when no row derives yet, those of the stuck instances
+/// its settings' rules read (a kubeconfig read from the server a tick
+/// creates). `None` when they wait on something no resource makes (a
+/// read that said "not yet", a stand-in) or on nothing this run can see.
+fn settings_owners(i: &Input, name: &str) -> Option<BTreeSet<(String, String)>> {
+    let named = |a: &Atom| matches!(a.args.first(), Some(Term::Val(Value::Str(n))) if n == name);
+    let mut nulls: BTreeSet<String> = BTreeSet::new();
+    let rows: Vec<&Atom> = i
+        .res
+        .facts
+        .iter()
+        .filter(|a| a.pred == "provider_config" && named(a))
+        .collect();
+    for a in &rows {
+        if let Some(Term::Val(v)) = a.args.get(1) {
+            nulls.extend(crate::lattice::nulls_in(v));
+        }
+    }
+    if rows.is_empty() {
+        let rules: Vec<&RuleStmt> = crate::modules::reached(i.program)
+            .into_iter()
+            .filter_map(|s| match s {
+                crate::ast::Stmt::Rule(r) => Some(r),
+                _ => None,
+            })
+            .collect();
+        let body = |r: &RuleStmt| -> Vec<Atom> {
+            r.body
+                .iter()
+                .filter_map(|l| match l {
+                    crate::ast::Lit::Pos(a) | crate::ast::Lit::Not(a) => Some(a.clone()),
+                    _ => None,
+                })
+                .collect()
+        };
+        // The atoms the settings read, through the rules that derive them.
+        let mut read: Vec<Atom> = rules
+            .iter()
+            .filter(|r| r.head.pred == "provider_config" && named(&r.head))
+            .flat_map(|r| body(r))
+            .collect();
+        let mut used: BTreeSet<usize> = BTreeSet::new();
+        let mut next = 0;
+        while next < read.len() {
+            let a = read[next].clone();
+            next += 1;
+            for (k, r) in rules.iter().enumerate() {
+                if !used.contains(&k) && crate::stuck::patterns_unify(&r.head, &a) {
+                    used.insert(k);
+                    read.extend(body(r));
+                }
+            }
+        }
+        for s in &i.res.stuck {
+            if read
+                .iter()
+                .any(|a| crate::stuck::patterns_unify(a, &s.head))
+            {
+                nulls.extend(s.nulls.iter().cloned());
+            }
+        }
+    }
+    let owners = nulls
+        .iter()
+        .map(|l| null_owner(l).filter(|o| !crate::externs::in_process(&o.0)))
+        .collect::<Option<BTreeSet<_>>>()?;
+    (!owners.is_empty()).then_some(owners)
+}
 
 fn nulls(s: &Stuck) -> Vec<String> {
     s.nulls.iter().cloned().collect()
@@ -2225,7 +2343,10 @@ impl Report {
                 self.pending
                     .iter()
                     .filter(|b| b.resolves_after.is_some())
-                    .flat_map(|b| b.deformations.iter()),
+                    .flat_map(|b| b.deformations.iter())
+                    // An object state holds, as state has it until its
+                    // provider reads it at the boundary (R-177).
+                    .filter(|d| !matches!(d.kind, ActionKind::Noop)),
             )
     }
 
@@ -2270,6 +2391,12 @@ impl Report {
                 out.entry(self.tick + 1).or_default().deposed.push(&d.addr);
             }
         }
+        for g in &self.groups {
+            let Some(t) = g.resolves_after else { continue };
+            let s = out.entry(t + 1).or_default();
+            s.groups.push(g);
+            s.waits.extend(g.on.iter().cloned());
+        }
         out
     }
 
@@ -2286,6 +2413,7 @@ impl Report {
             .values()
             .filter(|s| {
                 !s.deposed.is_empty()
+                    || !s.groups.is_empty()
                     || s.changes
                         .iter()
                         .any(|d| !matches!(d.kind, ActionKind::Noop))
@@ -2330,7 +2458,7 @@ impl Report {
     /// resources, denies and checks undetermined until a tick, and held
     /// changes whose nulls this plan does not resolve.
     fn has_later(&self) -> bool {
-        !self.groups.is_empty()
+        self.groups.iter().any(|g| g.resolves_after.is_none())
             || !self.policies.is_empty()
             || self.pending.iter().any(|b| b.resolves_after.is_none())
     }
@@ -2450,9 +2578,20 @@ impl Report {
         let mut rows: Vec<Row> = vec![Row::plain(self.summary())];
         for (t, s) in self.sections() {
             rows.push(Row::plain(String::new()));
-            let head = match self.resumed && t == self.tick {
-                true => format!("tick {t}  {} remaining, resumed", s.changes.len()),
-                false => format!("tick {t}  {}", count(s.changes.len(), "change")),
+            // A held object state has, unread until the boundary
+            // (R-177), is listed as state has it, not counted.
+            let n = s
+                .changes
+                .iter()
+                .filter(|d| self.show_noop || !matches!(d.kind, ActionKind::Noop))
+                .count();
+            // A rule the tick before decides may add changes: how many
+            // is not known yet (R-156).
+            let head = match (self.resumed && t == self.tick, s.groups.is_empty(), n) {
+                (true, _, _) => format!("tick {t}  {n} remaining, resumed"),
+                (false, true, _) => format!("tick {t}  {}", count(n, "change")),
+                (false, false, 0) => format!("tick {t}  ? changes"),
+                (false, false, _) => format!("tick {t}  {n}+ changes"),
             };
             rows.push(Row::new(&head, bold(&head)));
             for (i, w) in waited(&s.waits).into_iter().enumerate() {
@@ -2474,6 +2613,7 @@ impl Report {
                 );
                 rows.push(Row::new(&plain, painted));
             }
+            self.write_groups(&mut rows, &s.groups, style);
         }
         if self.has_later() {
             rows.push(Row::plain(String::new()));
@@ -2580,34 +2720,53 @@ impl Report {
         out
     }
 
-    /// `later`'s rows: each group by the address its rule names (a copy
-    /// that may derive once, its resources under it), each undetermined
-    /// deny and check, each held change this plan does not schedule.
+    /// `later`'s rows: each group no tick of this plan decides, each
+    /// undetermined deny and check, each held change this plan does not
+    /// schedule (R-156).
     fn write_later(&self, rows: &mut Vec<Row>, style: Style) {
+        let unscheduled: Vec<&Group> = self
+            .groups
+            .iter()
+            .filter(|g| g.resolves_after.is_none())
+            .collect();
+        self.write_groups(rows, &unscheduled, style);
         let site = |s: &Option<Site>| s.as_ref().map(|s| s.at.clone()).unwrap_or_default();
         let full = self.why >= Why::How;
-        // The right column, the longest that fits first: the place, the
-        // condition, and (at `full`) the reason; the condition alone last.
-        let both = |at: String, cond: String, reason: &str| {
-            let mut out = Vec::new();
-            for cond in [
-                full.then(|| format!("{cond}  ({reason})")),
-                Some(cond.clone()),
-            ]
-            .into_iter()
-            .flatten()
-            {
-                if !at.is_empty() {
-                    out.push(format!("{at}  {cond}"));
-                }
-                out.push(cond);
-            }
-            out
-        };
+        let both = |at: String, cond: String, reason: &str| both(full, at, cond, reason);
+        for p in &self.policies {
+            let on = waited(&p.on.iter().cloned().collect()).join(", ");
+            let cond = match (p.may_derive, p.after) {
+                (false, Some(t)) => format!("until tick {}", t + 1),
+                (true, Some(t)) => format!("maybe tick {}", t + 1),
+                (_, None) if on.is_empty() => "undetermined".to_string(),
+                (_, None) => format!("waits on {on}"),
+            };
+            let left = match p.refinement {
+                true => format!("  check {}", p.message),
+                false => format!("  deny \"{}\"", p.message),
+            };
+            rows.push(Row::plain(left).with(both(site(&p.site), cond, &p.reason)));
+        }
+        for b in self.pending.iter().filter(|b| b.resolves_after.is_none()) {
+            let ds: Vec<&Deformation> = b.deformations.iter().collect();
+            let on = waited(&b.on.iter().cloned().collect()).join(", ");
+            // A header like a tick's (R-111).
+            rows.push(Row::plain(format!("  waits on  {on}")));
+            self.write_level(rows, &ds, None, "  ", style);
+        }
+    }
+
+    /// Group rows (R-67, R-156): each by the address its rule names (a
+    /// copy that may derive once, its resources under it), with what it
+    /// reads or waits on; `later`'s, or a tick's whose boundary decides it.
+    fn write_groups(&self, rows: &mut Vec<Row>, groups: &[&Group], style: Style) {
+        let site = |s: &Option<Site>| s.as_ref().map(|s| s.at.clone()).unwrap_or_default();
+        let full = self.why >= Why::How;
+        let both = |at: String, cond: String, reason: &str| both(full, at, cond, reason);
         // A copy that may derive (R-67) is said once, its resources under it.
         let copy_of = group_copy;
         let mut copies: BTreeSet<String> = BTreeSet::new();
-        for g in &self.groups {
+        for g in groups {
             let copy = copy_of(g);
             if let Some(c) = &copy {
                 if !copies.insert(c.clone()) {
@@ -2619,11 +2778,7 @@ impl Report {
                 let painted = format!("  {}", style.paint(Paint::Bold, &shown));
                 let reads = reads.strip_prefix("resource ").unwrap_or(&reads);
                 rows.push(Row::new(&plain, painted).with(vec![format!("if {reads}")]));
-                for m in self
-                    .groups
-                    .iter()
-                    .filter(|m| copy_of(m).as_ref() == Some(c))
-                {
+                for m in groups.iter().filter(|m| copy_of(m).as_ref() == Some(c)) {
                     let pattern = address_text(&group_address(m));
                     let plain = format!("    {pattern}");
                     let painted = format!("    {}", style.paint(Paint::Warn, &pattern));
@@ -2651,27 +2806,6 @@ impl Report {
             let plain = format!("  {pattern}");
             let painted = format!("  {}", style.paint(Paint::Warn, &pattern));
             rows.push(Row::new(&plain, painted).with(right));
-        }
-        for p in &self.policies {
-            let on = waited(&p.on.iter().cloned().collect()).join(", ");
-            let cond = match (p.may_derive, p.after) {
-                (false, Some(t)) => format!("until tick {}", t + 1),
-                (true, Some(t)) => format!("maybe tick {}", t + 1),
-                (_, None) if on.is_empty() => "undetermined".to_string(),
-                (_, None) => format!("waits on {on}"),
-            };
-            let left = match p.refinement {
-                true => format!("  check {}", p.message),
-                false => format!("  deny \"{}\"", p.message),
-            };
-            rows.push(Row::plain(left).with(both(site(&p.site), cond, &p.reason)));
-        }
-        for b in self.pending.iter().filter(|b| b.resolves_after.is_none()) {
-            let ds: Vec<&Deformation> = b.deformations.iter().collect();
-            let on = waited(&b.on.iter().cloned().collect()).join(", ");
-            // A header like a tick's (R-111).
-            rows.push(Row::plain(format!("  waits on  {on}")));
-            self.write_level(rows, &ds, None, "  ", style);
         }
     }
 
@@ -2861,6 +2995,25 @@ impl Report {
 /// amendment 5): only those whose value its address does not show
 /// (`k3s.agent-3` shows `n = 3`), each value elided as any long one, at
 /// most two and then `…`: `with zone = "us-test-1a", n = 3, …`.
+/// A row's right column, the longest that fits first: the place, the
+/// condition, and (at `full`) the reason; the condition alone last.
+fn both(full: bool, at: String, cond: String, reason: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for cond in [
+        full.then(|| format!("{cond}  ({reason})")),
+        Some(cond.clone()),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        if !at.is_empty() {
+            out.push(format!("{at}  {cond}"));
+        }
+        out.push(cond);
+    }
+    out
+}
+
 pub(crate) fn terse(with: &[String], addr: &str) -> Option<String> {
     let shown: Vec<String> = with
         .iter()
@@ -3696,6 +3849,9 @@ struct Section<'a> {
     changes: Vec<&'a Deformation>,
     waits: BTreeSet<String>,
     deposed: Vec<&'a Address>,
+    /// The rules that may derive an unknown number of resources once
+    /// the tick before has run (R-156).
+    groups: Vec<&'a Group>,
 }
 
 /// `moved OLD -> NEW`, one line per rename `moved/3` applied to state.
@@ -3753,9 +3909,8 @@ impl Report {
             Some(s) if self.why != Why::None => json!(s),
             _ => Json::Null,
         };
-        let mut later: Vec<Json> = Vec::new();
-        for g in &self.groups {
-            later.push(json!({
+        let group = |g: &Group| {
+            json!({
                 "kind": "group",
                 "address": group_address(g),
                 "instance": group_copy(g),
@@ -3764,7 +3919,11 @@ impl Report {
                 "reason": g.reason,
                 "after": g.resolves_after,
                 "site": site(&g.site),
-            }));
+            })
+        };
+        let mut later: Vec<Json> = Vec::new();
+        for g in self.groups.iter().filter(|g| g.resolves_after.is_none()) {
+            later.push(group(g));
         }
         for p in &self.policies {
             later.push(json!({
@@ -3801,6 +3960,7 @@ impl Report {
                 "waits_on": nulls(&mut s.waits.iter()),
                 "changes": changes(&s.changes),
                 "deposed": s.deposed.iter().map(|a| a.to_string()).collect::<Vec<_>>(),
+                "groups": s.groups.iter().map(|g| group(g)).collect::<Vec<_>>(),
             })).collect::<Vec<_>>(),
             "later": later,
             "shadowed": self.shadowed.iter().map(diag_json).collect::<Vec<_>>(),

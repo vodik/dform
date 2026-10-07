@@ -1,6 +1,6 @@
 exit: ok
 -- stdout --
-plan: 8 changes (8 create) over 1 tick, 10 undetermined
+plan: 8 changes (8 create) over 2 ticks, 10 undetermined
 
 tick 1  8 changes
   + google.compute_network vpc                  stacks/crud_api.df:75
@@ -59,7 +59,8 @@ tick 1  8 changes
         }],
       }
 
-later
+tick 2  ? changes
+  waits on  migrate-v42.status.succeeded
   app blue                                      if app blue
     k8s.deployment blue.deploy
     k8s.horizontal_pod_autoscaler blue.hpa
@@ -71,6 +72,8 @@ later
     k8s.pod_disruption_budget green.pdb
     k8s.network_policy green.allow_http
   k8s.service api                               stacks/crud_api.df:190  if serving(_)
+
+later
   deny "cutover to a color with unready pods"   stacks/crud_api.df:269  until tick 2
   deny "migration failed; the rollout is held"  stacks/crud_api.df:257  until tick 2
   deny "ref to an address no rule wants"        stacks/crud_api.df:229  until tick 2

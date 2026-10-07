@@ -33,7 +33,7 @@ use fake
 # This one is a network (a VPC) with an address range.
 #
 #   $ dform plan
-#   plan: 16 changes (16 create) over 1 tick
+#   plan: 16 changes (16 create) over 2 ticks
 #   + net.vpc main
 #     cidr = "10.0.0.0/16"
 #
@@ -298,12 +298,12 @@ set net.route_table[a].routes = [{ destination: dest, target: net.vpc[w] }] wher
 # policy below is named for it, one per database. In Terraform this is
 # the error "Invalid for_each argument ... cannot be determined until
 # apply", and the answer is `-target` and a second run by hand. dform
-# plans it, and says what it waits for:
+# plans it in the tick after the database's, and says what it waits for:
 #
 #   $ dform plan tour env=prod
-#   later
+#   tick 2  ? changes
+#     waits on  orders.endpoint
 #     iam.policy "connect-${host}"
-#     waits on orders.endpoint
 #
 # Apply runs in ticks: the first makes everything it can, then dform
 # plans again with what it learned, prints the second tick's plan with

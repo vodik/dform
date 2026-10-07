@@ -77,17 +77,18 @@ fn plan_json_has_every_section() {
         password["after"],
         json!({"sensitive": "google.secret_manager_secret_version[\"db_pw\"].secret_data"})
     );
-    // `later`: the rule that may add an unknown number, and the deny
-    // undetermined until a tick.
-    let later = p["later"].as_array().unwrap();
-    assert_eq!(later[0]["kind"], "group");
+    // Tick 2's: the rule that may add an unknown number once tick 1 has
+    // run (R-156); `later`'s: the deny undetermined until a tick.
+    let groups = ticks[1]["groups"].as_array().unwrap();
+    assert_eq!(groups[0]["kind"], "group");
     assert_eq!(
-        later[0]["address"],
+        groups[0]["address"],
         "google.container_node_pool[\"np-${z}\"]"
     );
-    assert_eq!(later[1]["kind"], "deny");
-    assert_eq!(later[1]["status"], "undetermined");
-    assert_eq!(later[1]["after"], 1);
+    let later = p["later"].as_array().unwrap();
+    assert_eq!(later[0]["kind"], "deny");
+    assert_eq!(later[0]["status"], "undetermined");
+    assert_eq!(later[0]["after"], 1);
     // Nothing to decide: no `apply` line.
     assert_eq!(p["apply"], json!(null));
     assert_eq!(p["shadowed"], json!([]));

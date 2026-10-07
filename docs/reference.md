@@ -1011,7 +1011,8 @@ use k8s { source = "bin/dform-provider-k8s" }        # an executable
   `dform.state/cache/schema/<deployment>/k8s.json`, keyed by the derivation
   and the cluster's document, written when the program's settings
   configure the cluster). A kind in neither waits on the provider for its
-  schema (`later`) until the settings arrive; from that Configure on the
+  schema until the settings arrive (in the tick after what they are made
+  from, R-156; `later` when no tick of the plan makes them); from that Configure on the
   provider serves its cluster's kinds, and dform asks it then for the
   kinds the run names that no schema had, so the rest of the run plans
   them typed (a computed `metadata.uid` another object reads, a sensitive
@@ -1020,8 +1021,9 @@ use k8s { source = "bin/dform-provider-k8s" }        # an executable
   the program makes a `k8s.custom_resource_definition` whose group and
   kind define it (`spec.group`, `spec.names.kind`, a served
   `spec.versions[_].name`, or the short name above), the resource waits
-  on that CRD under `later` (`waits on  k8s.custom_resource_definition
-  "middlewares.traefik.io"`); once state has the CRD, dform configures the
+  on that CRD in the tick after the CRD's (`waits on
+  k8s.custom_resource_definition "middlewares.traefik.io"`), planned as
+  written; once state has the CRD, dform configures the
   provider again with the kinds it expects (Configure's `kinds`; the
   provider fetches the cluster's document again until it serves them, up
   to 30s) and learns them, so the apply makes the resource at the tick
@@ -1145,9 +1147,17 @@ held for approval
 A plan line is a label and a value; none explains how evaluation works.
 The ticks are the one rule behind them: tick 1 is what apply makes
 first; a later tick is planned when the one before reports, and holds
-the changes that read what an earlier tick makes; `later` is what no
-tick of this plan can name or count yet, planned again as ticks report
-and asked for then (see `apply`). `-v` and `-vv` add how a value was
+the changes that read what an earlier tick makes. A change is in the
+first tick after every tick that makes what it waits on (R-156): a value
+another change computes, a provider's settings made from one (the
+kubeconfig read from the server tick 1 creates), a CRD the plan creates;
+it is counted, its attributes as written even when its schema arrives
+only at that boundary (the provider checks them at apply, and a refusal
+stops the apply with state consistent). `later` is what no tick of this
+plan makes or names: another deployment's output not applied yet, a
+provider configured from outside the plan, a read no tick makes
+answerable; it is planned again as ticks report and asked for then (see
+`apply`). `-v` and `-vv` add how a value was
 made; the plan itself says what it is.
 
 - The summary counts the changes the ticks hold, by kind, the ticks, and
@@ -1243,30 +1253,38 @@ made; the plan itself says what it is.
   (R-67) prints as its own entry, `+ network blue`, in bold, its resources
   indented under it with their full paths (`+ net.vpc blue.vpc`), a copy
   inside it nested again, inside the tick they run in.
-- `tick N  K changes`: changes held until values a tick before makes are
+- `tick N  K changes`: changes held until what a tick before makes is
   known, `waits on` each value (an output of a resource tick N-1 makes, a
-  field of the world). Their diffs are shown now. A later tick of a
-  running apply is headed the same, `tick 2  0 changes` when it only
-  waits.
-- `later`: a resource rule stuck on an unknown, by the address its
+  field of the world), provider (`provider k8s  kubeconfig =
+  k3s.kubeconfig`, its settings made by an earlier tick) or CRD
+  (`k8s.custom_resource_definition "middlewares.traefik.io"`, created by
+  an earlier tick). Their diffs are shown now. A resource rule the tick
+  before decides (`one per ..`, `if ..`, `waits on ..`, as under `later`)
+  is listed after the tick's changes, and the header says the count is
+  not all of it: `tick 2  3+ changes`, `tick 2  ? changes` when the rule
+  is all the tick has. A later tick of a running apply is headed the
+  same, `tick 2  0 changes` when it only waits.
+- `later`: what no tick of this plan decides (R-156). A resource rule
+  stuck on an unknown no tick makes, by the address its
   statement names (`k8s.job "migrate-v${schema}"`), `one per ROW` when
   what it reads may gain rows, `if ROW` when one may (`if app blue`, a
   copy), else what it `waits on`, never a count; a copy that may derive
   once, its resources under it; a deny or check `until tick N` (never
   reported as satisfied) or `maybe tick N`; a held change waiting on what
   no tick of this plan makes. Every resource of a provider whose settings
-  the program gives and this plan does not know (a kubeconfig read from a
-  server still booting) is one, under `waits on  provider k8s
-  kubeconfig = k3s.kubeconfig`, the setting as the source writes it,
-  typed by the provider's static schema; one whose settings wait on what
-  dform's own read has not answered (a host still booting) names the
-  location too, `provider k8s  kubeconfig = raw,
-  ssh://ubuntu@10.0.0.5/etc/rancher/k3s/k3s.yaml`; one of
-  a kind no schema has yet (a cluster's CRD) under `waits on  provider
-  k8s  schema`, its attributes as written, or under the CRD the program
-  makes for it, `waits on  k8s.custom_resource_definition
+  the program gives and no tick of this plan makes (a kubeconfig read
+  from a host that has not answered, no resource of the plan behind it)
+  is one, under `waits on  provider k8s  kubeconfig = k3s.kubeconfig`,
+  the setting as the source writes it, typed by the provider's static
+  schema; one whose settings wait on what dform's own read has not
+  answered names the location too, `provider k8s  kubeconfig = raw,
+  ssh://ubuntu@10.0.0.5/etc/rancher/k3s/k3s.yaml`; one of a kind no
+  schema has yet (a cluster's CRD) under `waits on  provider k8s
+  schema`, its attributes as written, or under the CRD the program makes
+  for it, `waits on  k8s.custom_resource_definition
   "middlewares.traefik.io"` (R-126); one reading a deployment not
-  applied yet under `waits on  stack platform[env=lab]`. The summary
+  applied yet under `waits on  stack platform[env=lab]`. When a tick of
+  the plan makes what they wait on, they are that tick's instead. The summary
   counts them, `, N later`, and `why` names what such a resource
   waits on. A type whose namespace names no provider is the compile
   error it always was.
@@ -1418,7 +1436,9 @@ coloured.
 `plan --json` prints the same report as one JSON document, the thing CI and
 editors consume: `stack`, `up_to_date`, a `summary` of counts (`changes`,
 each kind, `ticks`, `approvals`, `undetermined`, `conflicts`), `ticks`
-(each `{tick, after, waits_on, changes, deposed}`), `later` (each with a
+(each `{tick, after, waits_on, changes, deposed, groups}`, `groups` the
+resource rules the tick before decides, each as `later` has one),
+`later` (each with a
 `kind`: `group` with its `address`, `reads`, `instance`; `deny`,
 `refinement` with its `status`; `held` with its `changes`), `shadowed`,
 `conflicts`, `moved`, `denied` (`{text, message, address, site}`),
@@ -1510,17 +1530,23 @@ A provider whose settings the program computes from what a tick makes
 (`use k8s { kubeconfig = k3s.kubeconfig }`, the kubeconfig read over
 SSH from the server tick 1 creates) is configured at the boundary where
 they become known, waiting for them as for any value when the read
-answers "not yet". The plan lists its resources under `later`
-(`waits on  provider k8s  kubeconfig = k3s.kubeconfig`); apply makes
-tick 1, configures the provider, says so, each setting a secret reaches
-as `(sensitive)` and `-v` adding what it is written as, never a value:
+answers "not yet". The plan lists its resources in the tick after the
+one that makes the settings (`tick 2  9 changes` / `waits on  provider
+k8s  kubeconfig = k3s.kubeconfig`), counted, their attributes as written
+(R-156), or under `later` when no tick of the plan makes them; apply
+makes tick 1, configures the provider, says so, each setting a secret
+reaches as `(sensitive)` and `-v` adding what it is written as, never a
+value:
 
 ```
 provider k8s: configured after tick 1: kubeconfig = (sensitive)
 ```
 
-then plans what `later` held against it (a cluster's CRDs among them),
-prints that tick and asks before it as it asked before tick 1; `--yes`
+then plans the tick against it (a cluster's CRDs among them) and applies
+it: the question before tick 1 counted it, and a plan file holds it
+(its diff is checked against the file's as any tick's). What the plan
+had under `later` for a provider's settings, or listed as state has it
+(below), it prints and asks before as it asked before tick 1; `--yes`
 applies it. A plan file or an approval did not see that diff, so applying
 one stops before the tick, saying it plans changes `later` held for a
 provider's settings, which the approved plan did not show; the next apply

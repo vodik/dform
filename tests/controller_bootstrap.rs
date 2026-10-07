@@ -142,7 +142,8 @@ fn a_resource_rule_reading_a_stuck_helper_is_a_pending_group() {
     let last = s.run(&["apply", "bootstrap"]).success();
     assert!(
         last.stdout.contains(
-            "later\n  \
+            "tick 3  ? changes\n  \
+             waits on  np-us-east1-b.instance_group\n  \
              k8s.deployment dform_controller             \
              if node_pool_up(\"np-us-east1-b\")\n"
         ),

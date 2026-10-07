@@ -90,19 +90,19 @@ fn dev(s: &Scratch, args: &[&str]) -> Run {
     Run::from(out)
 }
 
-/// The plan makes the CRDs, and lists the Middleware under `later`,
-/// waiting on its CRD, never "not a kind this cluster serves".
+/// The plan makes the CRDs in tick 1 and the Middleware in tick 2,
+/// waiting on its CRD (R-156), never "not a kind this cluster serves".
 #[test]
 fn a_kind_the_program_defines_waits_on_its_crd() {
     let s = scratch("crd-wait-plan", PROG);
     let r = dev(&s, &["plan"]).success();
     assert_eq!(
         r.summary(),
-        "plan: 2 changes (2 create) over 1 tick, 1 later",
+        "plan: 3 changes (3 create) over 2 ticks",
         "{}",
         r.stdout
     );
-    let (tick1, later) = r.stdout.split_once("\nlater").unwrap();
+    let (tick1, later) = r.stdout.split_once("\ntick 2  1 change").unwrap();
     assert!(
         tick1.contains("  + k8s.custom_resource_definition \"middlewares.traefik.io\"")
             && tick1.contains("  + k8s.custom_resource_definition \"tlsoptions.traefik.io\""),
@@ -161,7 +161,8 @@ fn a_kind_nothing_defines_is_an_error_naming_its_crd() {
 /// With the Kubernetes provider itself, waiting on its settings (R-110: a
 /// kubeconfig read from a server not up yet): the CRDs are typed by its
 /// static schema, and the Middleware waits on its CRD rather than on the
-/// provider's schema.
+/// provider's schema: the server in tick 1, the CRDs in tick 2, the
+/// Middleware in tick 3 (R-156).
 #[test]
 fn with_the_kubernetes_provider_the_kind_waits_on_its_crd() {
     let s = Scratch::project("crd-wait-k8s");
@@ -197,10 +198,18 @@ resource k8s.traefik.middleware large_upload {
         .output()
         .unwrap();
     let r = Run::from(out).success();
-    let (_, later) = r.stdout.split_once("\nlater").unwrap();
+    assert_eq!(
+        r.summary(),
+        "plan: 4 changes (4 create) over 3 ticks",
+        "{}",
+        r.stdout
+    );
+    let (_, tick2) = r.stdout.split_once("\ntick 2  2 changes\n").unwrap();
+    let (tick2, tick3) = tick2.split_once("\ntick 3  1 change\n").unwrap();
     assert!(
-        later.contains("      = crds.yml:1  (285 B)\n")
-            && later.contains(
+        tick2.starts_with("  waits on  provider k8s  kubeconfig = raw\n")
+            && tick2.contains("      = crds.yml:1  (285 B)\n")
+            && tick3.starts_with(
                 "  waits on  k8s.custom_resource_definition \"middlewares.traefik.io\"\n  \
                  + k8s.traefik.middleware large_upload"
             ),

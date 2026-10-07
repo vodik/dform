@@ -103,7 +103,7 @@ fn a_provider_configured_from_a_secret_applies_at_tick_two_and_the_bytes_stay_in
     let plan = dform(&s, &tok, &["plan", "p", "--out", "plan1.json"]).success();
     assert_eq!(
         plan.summary(),
-        "plan: 1 change (1 create) over 1 tick, 3 later",
+        "plan: 4 changes (4 create) over 2 ticks",
         "{}",
         plan.stdout
     );
@@ -115,7 +115,7 @@ fn a_provider_configured_from_a_secret_applies_at_tick_two_and_the_bytes_stay_in
         plan.stdout
     );
     assert!(
-        plan.stdout.contains("  waits on  provider k8s  schema"),
+        plan.stdout.contains("\n            provider k8s  schema\n"),
         "{}",
         plan.stdout
     );
@@ -127,7 +127,9 @@ fn a_provider_configured_from_a_secret_applies_at_tick_two_and_the_bytes_stay_in
         .split_once("provider k8s: configured after tick 1: ")
         .unwrap_or_else(|| panic!("{out}"));
     assert!(tick1.contains("  + db.postgres server"), "{out}");
-    assert!(!tick1.contains("tick 2"), "{out}");
+    // The plan showed tick 2 (R-156); nothing of it ran before the
+    // boundary configured the provider.
+    assert!(tick1.contains("tick 2  3 changes"), "{out}");
     // Each secret setting `(sensitive)`; `-v` adds what it is written as.
     assert!(
         tick2.starts_with(

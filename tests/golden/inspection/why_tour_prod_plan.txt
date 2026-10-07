@@ -1,5 +1,5 @@
 deployment: tour[env=prod]
-plan: 16 changes (16 create) over 1 tick
+plan: 16 changes (16 create) over 2 ticks
 
 tick 1  16 changes
   + network blue
@@ -126,5 +126,6 @@ tick 1  16 changes
       subnets[1] = private-us-test-1b      [ s | s in net.subnet, s.visibility == "private" ]
       tags.team = "shop"                   stacks/tour.df:170
 
-later
+tick 2  ? changes
+  waits on  orders.endpoint
   iam.policy "connect-${host}"             stacks/tour.df:323  waits on orders.endpoint

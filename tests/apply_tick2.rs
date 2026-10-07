@@ -1,10 +1,10 @@
 //! Tick 2 of a provider configured from what tick 1 makes (R-45): the
-//! plan lists that provider's resources under `later`, waiting on its
-//! settings; apply makes tick 1, configures the provider at the boundary
-//! (waiting, within the provider's `timeout`, while the value is not
-//! there yet), plans what `later` held against it, and asks before
-//! applying it as it asked before tick 1, unless `--yes` (R-122). A plan
-//! file or an approval did not see that diff: the apply stops before it.
+//! plan schedules that provider's resources in tick 2, waiting on its
+//! settings, their attributes as written (R-156); apply makes tick 1,
+//! configures the provider at the boundary (waiting, within the
+//! provider's `timeout`, while the value is not there yet) and applies
+//! what tick 2 showed, asked for once before tick 1 (R-122). The plan
+//! file holds them too.
 //!
 //! The server is the mock's `db.postgres` (the mock run as a plugin, a
 //! second provider process), the settings its endpoint behind an
@@ -81,20 +81,22 @@ fn answers(s: &Scratch, answers: &[&str]) -> (Vec<String>, i32) {
     (said, code)
 }
 
-/// Tick 1 asks for the server; the boundary configures `k8s`; tick 2's
-/// plan, now against it, is printed and asked for again.
+/// The plan schedules the namespace in tick 2, after the server its
+/// provider's settings are made from (R-156): one question for both
+/// ticks; the boundary configures `k8s` and tick 2 applies what was
+/// shown, not asked again.
 #[test]
-fn apply_asks_again_for_what_waited_on_the_provider() {
+fn apply_asks_once_for_what_waits_on_the_provider() {
     let s = scratch("tick2-asks");
-    let (said, code) = answers(&s, &["y", "y"]);
+    let (said, code) = answers(&s, &["y"]);
     assert_eq!(code, 0, "{said:?}");
     assert!(
-        said[0].contains("  waits on  provider k8s  kubeconfig = kc"),
+        said[0].contains("tick 2  1 change\n  waits on  provider k8s  kubeconfig = kc\n"),
         "{}",
         said[0]
     );
     assert!(
-        said[0].ends_with("Apply this change to p? [y/N] "),
+        said[0].ends_with("Apply these 2 changes to p? [y/N] "),
         "{}",
         said[0]
     );
@@ -108,39 +110,17 @@ fn apply_asks_again_for_what_waited_on_the_provider() {
         "{}",
         said[1]
     );
-    assert!(
-        said[1].ends_with("Apply tick 2 to p? [y/N] "),
-        "{}",
-        said[1]
-    );
-    assert!(!said[2].contains("apply: complete"), "{}", said[2]);
+    assert!(!said[1].contains("[y/N]"), "{}", said[1]);
     assert!(s.read("w.json").contains("k8s.namespace"));
 }
 
-/// `n` at tick 2: the server stays made, the namespace is not; the next
-/// apply resumes, the provider's settings known at plan time, and makes
-/// it at its tick 1.
+/// `n` to the one question: nothing is made, neither tick.
 #[test]
-fn declining_tick_two_keeps_tick_one() {
+fn declining_makes_neither_tick() {
     let s = scratch("tick2-declined");
-    let (said, code) = answers(&s, &["y", "n"]);
-    assert_eq!(code, 3, "a decline exits 3 (R-147)");
-    assert!(
-        said[2].contains("apply p: not confirmed at tick 2"),
-        "{}",
-        said[2]
-    );
-    assert!(s.read("w.fakecloud.json").contains("db.postgres"));
-    assert!(!s.read("w.json").contains("k8s.namespace"));
-    let r = dev(&s, &["apply", "--yes", "p.df"]).success();
-    assert!(
-        r.stdout
-            .starts_with("plan: 1 change (1 create) over 1 tick\n\ntick 1  1 remaining, resumed\n"),
-        "{}",
-        r.stdout
-    );
-    assert!(r.stdout.contains("  + k8s.namespace ns"), "{}", r.stdout);
-    assert!(!r.stdout.contains("configured after"), "{}", r.stdout);
+    let (said, code) = answers(&s, &["n"]);
+    assert_eq!(code, 3, "a decline exits 3 (R-147): {said:?}");
+    assert!(!s.path("w.json").exists() || !s.read("w.json").contains("k8s.namespace"));
 }
 
 /// `--yes` applies both ticks: the addresses were in the printed plan.
@@ -161,24 +141,17 @@ fn yes_applies_tick_two() {
     );
 }
 
-/// A plan file shows tick 1 and `later` without a diff for it: applying
-/// the file makes tick 1 and stops before what it did not show.
+/// A plan file shows tick 2's namespace, its attributes as written
+/// (R-156): applying the file makes both ticks.
 #[test]
-fn a_plan_file_stops_before_what_it_did_not_show() {
+fn a_plan_file_applies_the_tick_it_showed() {
     let s = scratch("tick2-plan-file");
-    dev(&s, &["plan", "--out", "plan.json", "p.df"]).success();
-    let r = Run::from(dform(&s, &["apply", "plan.json"]).output().unwrap()).stopped();
-    assert!(
-        r.stderr.contains(
-            "apply stopped after tick 1: tick 2 plans 1 change `later` held for a provider's \
-             settings, which the approved plan did not show; "
-        ),
-        "{}",
-        r.stderr
-    );
-    assert!(r.stderr.contains(STOPPED), "{}", r.stderr);
+    let p = dev(&s, &["plan", "--out", "plan.json", "p.df"]).success();
+    assert!(p.stdout.contains("tick 2  1 change"), "{}", p.stdout);
+    let r = Run::from(dform(&s, &["apply", "plan.json"]).output().unwrap()).success();
+    assert!(!r.stderr.contains(STOPPED), "{}", r.stderr);
     assert!(s.read("w.fakecloud.json").contains("db.postgres"));
-    assert!(!s.read("w.json").contains("k8s.namespace"));
+    assert!(s.read("w.json").contains("k8s.namespace"));
 }
 
 /// The server's endpoint not there yet after tick 1 (chaos `not-ready`, a

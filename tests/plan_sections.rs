@@ -36,9 +36,10 @@ fn gke_plan_has_the_summary_ticks_and_later() {
     );
     for want in [
         "\ntick 1  3 changes\n  + google.compute_subnetwork gke_subnet  ",
-        "\ntick 2  3 changes\n  waits on  pngu.ca_certificate\n            pngu.endpoint\n  + k8s.deployment api  ",
-        "\nlater\n  google.container_node_pool \"np-${z}\"  ",
-        "  waits on pngu.zones\n",
+        "\ntick 2  3+ changes\n  waits on  pngu.ca_certificate\n            pngu.endpoint\n            pngu.zones\n  + k8s.deployment api  ",
+        // The rule tick 1 decides is tick 2's (R-156).
+        "\n  google.container_node_pool \"np-${z}\"  ",
+        "  waits on pngu.zones\n\nlater\n",
         "  deny \"cluster must be in at least two zones\"  ",
         "  until tick 2\n",
     ] {

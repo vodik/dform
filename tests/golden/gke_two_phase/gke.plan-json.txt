@@ -9,24 +9,6 @@ exit: ok
   "key_defaults": [],
   "later": [
     {
-      "address": "google.container_node_pool[\"np-${z}\"]",
-      "after": 1,
-      "instance": null,
-      "kind": "group",
-      "on": [
-        {
-          "class": "open",
-          "null": "google.container_cluster[\"pngu\"].zones"
-        }
-      ],
-      "reads": null,
-      "reason": "member/2 over a null list",
-      "site": {
-        "at": "stacks/gke_two_phase.df:90",
-        "statement": "resource google.container_node_pool \"np-${z}\" { .. } where z in google.container_cluster[\"pngu\"].zones"
-      }
-    },
-    {
       "after": 1,
       "kind": "deny",
       "message": "cluster must be in at least two zones",
@@ -401,6 +383,7 @@ exit: ok
         }
       ],
       "deposed": [],
+      "groups": [],
       "tick": 1,
       "waits_on": []
     },
@@ -537,6 +520,26 @@ exit: ok
         }
       ],
       "deposed": [],
+      "groups": [
+        {
+          "address": "google.container_node_pool[\"np-${z}\"]",
+          "after": 1,
+          "instance": null,
+          "kind": "group",
+          "on": [
+            {
+              "class": "open",
+              "null": "google.container_cluster[\"pngu\"].zones"
+            }
+          ],
+          "reads": null,
+          "reason": "member/2 over a null list",
+          "site": {
+            "at": "stacks/gke_two_phase.df:90",
+            "statement": "resource google.container_node_pool \"np-${z}\" { .. } where z in google.container_cluster[\"pngu\"].zones"
+          }
+        }
+      ],
       "tick": 2,
       "waits_on": [
         {
@@ -546,6 +549,10 @@ exit: ok
         {
           "class": "open",
           "null": "google.container_cluster[\"pngu\"].endpoint"
+        },
+        {
+          "class": "open",
+          "null": "google.container_cluster[\"pngu\"].zones"
         }
       ]
     }

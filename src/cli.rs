@@ -3380,6 +3380,9 @@ fn run_with(
             // provider's settings (R-110): listed, but planned only once
             // the provider is configured, so asked for again (R-45).
             let mut on_provider: BTreeSet<ir::Address> = BTreeSet::new();
+            // What the first tick's plan scheduled in a later tick, its
+            // attributes as written (R-156): shown, so not asked again.
+            let mut scheduled: BTreeSet<String> = BTreeSet::new();
             // The providers the plan's own evaluation configured.
             evaluator.take_configured();
             loop {
@@ -3611,7 +3614,9 @@ fn run_with(
                     // `--yes`; a plan file or an approval did not see it.
                     let planned = addresses
                         .iter()
-                        .filter(|a| on_provider.contains(**a))
+                        .filter(|a| {
+                            on_provider.contains(**a) && !scheduled.contains(&a.to_string())
+                        })
                         .count();
                     if planned > 0 && shown {
                         st.in_flight = None;
@@ -3636,6 +3641,14 @@ fn run_with(
                             return Ok(declined(&deployment, tick));
                         }
                     }
+                }
+                if tick == 1 {
+                    scheduled = report_of(&plan, &res, &sections, tick, &[], &denies)
+                        .ticks
+                        .into_iter()
+                        .filter(|(t, _)| *t > 1)
+                        .flat_map(|(_, xs)| xs)
+                        .collect();
                 }
                 listed.extend(addresses.into_iter().cloned());
                 on_provider = resources

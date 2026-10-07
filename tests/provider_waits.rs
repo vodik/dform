@@ -1,7 +1,9 @@
 //! A provider the program configures, whose settings this plan does not
 //! know (a kubeconfig read over SSH from a server not created yet), plans
-//! nothing of its own: every resource it serves is under `later`, waiting
-//! on it (R-110). The Kubernetes provider serves the stable kinds without
+//! nothing of its own: every resource it serves waits on it (R-110), in
+//! the tick after the server's when a tick of this plan makes the
+//! settings (R-156), under `later` when none does (a read that said "not
+//! yet"). The Kubernetes provider serves the stable kinds without
 //! a cluster (its static schema), so they are typed there; a kind only a
 //! cluster serves (a CRD) waits on the provider for its schema.
 
@@ -55,30 +57,35 @@ fn dform(s: &Scratch, args: &[&str]) -> Run {
     Run::from(out)
 }
 
+/// The settings are made from the server tick 1 creates (R-156): the
+/// provider's resources are tick 2's, counted, their attributes as
+/// written; none is `later`.
 #[test]
-fn a_providers_resources_wait_on_its_settings_under_later() {
+fn a_providers_resources_are_the_tick_after_its_settings() {
     let s = project();
     let r = dform(&s, &["plan", "p"]).success();
     assert_eq!(
         r.summary(),
-        "plan: 1 change (1 create) over 1 tick, 4 later",
+        "plan: 5 changes (5 create) over 2 ticks",
         "{}",
         r.stdout
     );
-    let (ticks, later) = r.stdout.split_once("\nlater").unwrap();
-    assert!(!ticks.contains("k8s."), "{}", r.stdout);
+    assert!(!r.stdout.contains("\nlater"), "{}", r.stdout);
+    let (tick1, tick2) = r.stdout.split_once("\ntick 2  4 changes\n").unwrap();
+    assert!(!tick1.contains("k8s."), "{}", r.stdout);
     for line in [
-        "  waits on  provider k8s  kubeconfig = raw",
+        "  waits on  provider k8s  kubeconfig = raw\n            provider k8s  schema\n",
         "  + k8s.namespace traefik.ns",
         // The static schema's kind, by its short name, typed.
         "  + k8s.storage_class traefik.block",
         "      provisioner = \"rancher.io/local-path\"",
         "  + k8s.deployment traefik.web",
-        "  waits on  provider k8s  schema",
+        // A kind only the cluster serves, planned as written: its schema
+        // arrives at the boundary that configures the provider.
         "  + k8s.traefik.io.v1alpha1.middleware traefik.strip",
         "      spec.stripPrefix.prefixes = [\"/a\"]",
     ] {
-        assert!(later.contains(line), "{line}\n{}", r.stdout);
+        assert!(tick2.contains(line), "{line}\n{}", r.stdout);
     }
 }
 
@@ -140,10 +147,11 @@ fn a_provider_waiting_on_a_read_not_yet_answered_says_both() {
     );
     let r = dform(&s, &["plan", "p"]).success();
     assert!(
-        r.stdout.contains(
-            "\n  waits on  provider k8s  kubeconfig = raw, \
+        r.summary().ends_with(", 4 later")
+            && r.stdout.contains(
+                "\nlater\n  waits on  provider k8s  kubeconfig = raw, \
              ssh://ubuntu@127.0.0.1:1/etc/rancher/k3s/k3s.yaml\n"
-        ),
+            ),
         "{}",
         r.stdout
     );
