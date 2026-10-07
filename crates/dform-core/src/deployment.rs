@@ -615,6 +615,16 @@ impl Evaluator {
                     changes,
                     on: BTreeSet::from([label.clone()]),
                 });
+            } else if let Some(a) = plan.actions.iter_mut().find(|a| a.addr == r.addr) {
+                a.on.insert(label.clone());
+                // An object state holds whose provider waits on its
+                // settings was not read (R-177): no diff, it is as state
+                // has it (`=`) until the boundary configures the provider
+                // and reads it.
+                if st.get(&r.addr).is_some() {
+                    a.kind = provider::ActionKind::Noop;
+                    a.changes.clear();
+                }
             }
             // One waiting on what dform's own read has not answered (the
             // kubeconfig `io.read("ssh://..")` reads from a host still booting) waits
@@ -1356,7 +1366,10 @@ impl Located {
         }
         // Apply calls whose answer was lost, resolved before anything is
         // planned: a plan sees what they did (`apply` writes it down).
-        for line in executor::resolve_uncertain(&backend, &mut st)? {
+        // Those of a provider the program configures wait for the
+        // evaluation to configure it (R-177).
+        let waiting = executor::uncertain_waiting(&backend, &st);
+        for line in executor::resolve_uncertain(&backend, &mut st, |_| true)? {
             obs.note(Note::Resolved(line));
         }
         // The static secret pass and the refinement checks (a literal that
@@ -1448,6 +1461,18 @@ impl Located {
             st.apply_moves(&zset::Lifecycle::from_facts(&res.facts, backend.schema())?.moved);
         if !moves.is_empty() {
             (res, violations) = evaluator.evaluate(&st)?;
+        }
+        // The lost answers of a provider the evaluation has configured
+        // (R-177): what they did is the world round 0 reads, so the program
+        // is evaluated again over it.
+        if !waiting.is_empty() {
+            let resolved = executor::resolve_uncertain(&backend, &mut st, |k| waiting.contains(k))?;
+            if !resolved.is_empty() {
+                (res, violations) = evaluator.evaluate(&st)?;
+            }
+            for line in resolved {
+                obs.note(Note::Resolved(line));
+            }
         }
         // The tables' sources; a git table whose ref has moved since the
         // deployment was last applied says so.

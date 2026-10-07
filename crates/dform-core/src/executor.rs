@@ -54,7 +54,7 @@ use crate::state::{self, InFlight, State, Uncertain, UncertainOp};
 use crate::stuck::Sections;
 use crate::value::{Value, null_owner};
 use crate::zset::Lifecycle;
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use serde_json::Value as Json;
 use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -540,7 +540,17 @@ pub fn mark_creates<'a>(
 ///   moving under it is its own doing, not someone else's.
 /// * A delete: a Read. Gone, state forgets it; there, the plan deletes it
 ///   again.
-pub fn resolve_uncertain(cloud: &Providers, state: &mut State) -> Result<Vec<String>> {
+///
+/// Only the entries `which` keys name are looked at. One whose provider
+/// waits on the program's settings (R-177: a kubeconfig the evaluation
+/// reads) is left for a call once the evaluation has configured it
+/// ([`uncertain_waiting`]); one still waiting then is sent again with its
+/// key at the tick that plans it, once its provider is configured.
+pub fn resolve_uncertain(
+    cloud: &Providers,
+    state: &mut State,
+    which: impl Fn(&str) -> bool,
+) -> Result<Vec<String>> {
     let mut out = Vec::new();
     let outstanding = |state: &State, k: &str| {
         state
@@ -556,16 +566,28 @@ pub fn resolve_uncertain(cloud: &Providers, state: &mut State) -> Result<Vec<Str
     };
     for (k, u) in state.uncertain.clone() {
         let deposed = matches!(u.op, UncertainOp::DeleteDeposed);
+        if !which(&k) {
+            continue;
+        }
         let Some(addr) = state::parse_key(k.strip_suffix("#deposed").unwrap_or(&k)) else {
             state.uncertain.remove(&k);
             continue;
         };
+        if cloud.waits(&addr.typ).is_some() {
+            continue;
+        }
         let at = crate::report::address(&addr);
         match u.op {
             UncertainOp::Create | UncertainOp::Replace { .. } => {
                 // A create's address may still map an object that is gone.
                 let mapped = state.get(&addr).map(|e| e.remote.clone());
-                if let Some(remote) = created(cloud, &addr, &u.key)? {
+                let made = created(cloud, &addr, &u.key).with_context(|| {
+                    format!(
+                        "{at}: looking up what the {} whose answer was lost made",
+                        op_name(&u.op)
+                    )
+                })?;
+                if let Some(remote) = made {
                     if let UncertainOp::Replace { create_first: true } = u.op
                         && mapped.as_ref().is_some_and(|m| *m != remote)
                     {
@@ -625,6 +647,21 @@ pub fn resolve_uncertain(cloud: &Providers, state: &mut State) -> Result<Vec<Str
     Ok(out)
 }
 
+/// The uncertain entries (`State::uncertain`) whose provider waits on the
+/// program's settings: [`resolve_uncertain`] leaves them until the
+/// evaluation has configured it.
+pub fn uncertain_waiting(cloud: &Providers, state: &State) -> BTreeSet<String> {
+    state
+        .uncertain
+        .keys()
+        .filter(|k| {
+            state::parse_key(k.strip_suffix("#deposed").unwrap_or(k))
+                .is_some_and(|a| cloud.waits(&a.typ).is_some())
+        })
+        .cloned()
+        .collect()
+}
+
 /// What `plan` carries over from an interrupted apply, for the plan shown
 /// before apply asks: each Create or Replace that `resolve_uncertain`
 /// found made nothing, to be sent again with its idempotency key (what
@@ -655,8 +692,13 @@ pub fn carried_over(resumed: Option<&InFlight>, state: &State, plan: &Plan) -> S
             };
         }
         out.push_str(&format!("  {}", crate::report::address(&a.addr)));
-        if retried {
-            out.push_str("  (retried with its idempotency key: nothing it made was found)");
+        // One whose provider waits on its settings was not looked up
+        // (`resolve_uncertain`): it is sent with its key once configured.
+        match a.on.is_empty() {
+            true => out.push_str("  (retried with its idempotency key: nothing it made was found)"),
+            false => out.push_str(
+                "  (sent again with its idempotency key once its provider is configured)",
+            ),
         }
         out.push('\n');
     }

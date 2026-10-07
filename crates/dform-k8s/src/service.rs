@@ -189,9 +189,14 @@ impl K8s {
     /// Create with idempotency key `key` made, if there is one: of the
     /// objects of the type that carry this deployment's label (every one,
     /// with no label configured), the one whose `KEY_ANNOTATION` is `key`.
-    pub async fn created(&self, typ: &str, key: &str) -> Result<Option<String>> {
+    /// A message names the object by its address (`name`), never by its
+    /// key, which is dform's own (R-177).
+    pub async fn created(&self, typ: &str, name: &str, key: &str) -> Result<Option<String>> {
         let kind = self.derived.kind(typ)?;
-        let c = self.cluster(&format!("find what {key} made"))?;
+        let c = self.cluster(&format!(
+            "find what the create of {} made",
+            address(typ, name)
+        ))?;
         let selector = self.stack.as_ref().map(|l| format!("{STACK_LABEL}={l}"));
         Ok(c.list(kind, selector.as_deref())
             .await?
@@ -975,7 +980,7 @@ impl pb::provider_server::Provider for Service {
             )));
         };
         let found = k8s
-            .created(typ, key)
+            .created(typ, name, key)
             .await
             .map_err(|e| Status::unavailable(format!("{e:#}")))?;
         let s = |x: &str| wire::value(&Value::Str(x.to_string()));

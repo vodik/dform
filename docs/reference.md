@@ -1536,6 +1536,20 @@ prints as the secret's label. Settings that no wait brings stop the apply at tha
 `nothing definite to apply, still waiting on .. provider k8s (kubeconfig
 from k3s.kubeconfig)`.
 
+The objects state already holds of such a provider (a cluster an earlier
+apply filled) are read once the program is evaluated and the provider
+configured from what state holds (a kubeconfig read from the server state
+maps): a plan of them is a plan like any other. While its settings are
+not known in this run (the read "not yet", the server gone), they are
+listed under the same `later` group as state has them, `= k8s.namespace
+traefik  traefik.df:1`, with no diff (nothing read them), counted
+`later`; apply reads them at the boundary that configures the provider,
+before it plans the next tick. An Apply call of the provider whose answer
+was lost (`uncertain` in state, see "Chaos: failure and latency
+injection") is looked up once the provider is configured, a create not
+found sent again with its idempotency key, and a message names its
+address, never that key (R-177).
+
 At a boundary apply also compares the refreshed world with what it last saw
 (the tick's refresh and its Apply responses). A change under an address whose
 deformation is pending for this boundary stops the run before the next tick,

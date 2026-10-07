@@ -221,6 +221,10 @@ pub struct FakeCloud {
     in_process: bool,
     /// The address whose Apply crashed the mock linked in.
     crashed: Option<String>,
+    /// Configured `deferred` (a provider the program configures) and its
+    /// settings not given yet: like a cluster not reached, it reads
+    /// nothing and says what a Create made of nothing.
+    awaiting: bool,
 }
 
 fn load_json(path: &Option<PathBuf>, what: &str) -> Result<RemoteState> {
@@ -314,6 +318,8 @@ impl FakeCloud {
         };
         self.inventory_path = path_of(config, "inventory")?;
         self.chaos = Chaos::parse(&strings(config, "chaos")?)?;
+        self.awaiting =
+            config.get("deferred") == Some(&Json::Bool(true)) && config.get("settings").is_none();
         self.world = None;
         self.inventory = None;
         Ok(())
@@ -379,6 +385,9 @@ impl FakeCloud {
                 *n += 1;
                 return Ok(vec![not_yet_row(pred, plus, inputs)]);
             }
+        }
+        if pred == CREATED && self.awaiting {
+            bail!("{pred}: no cloud (the program configures it and has not yet)");
         }
         let all = match pred {
             CREATED => match inputs {
@@ -497,6 +506,9 @@ impl FakeCloud {
     /// may not see the object yet, and that is not drift. Still missing
     /// after the last attempt, it is gone.
     pub fn read(&mut self, addr: &Address, remote: &str) -> Result<Option<(Json, Json)>> {
+        if self.awaiting {
+            bail!("read {addr}: no cloud (the program configures it and has not yet)");
+        }
         self.remotes.insert(addr.clone(), remote.to_string());
         let attempts = u64::from(self.schema.read_attempts(&addr.typ));
         let k = key(&addr.typ, remote);

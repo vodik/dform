@@ -477,6 +477,7 @@ impl Providers {
                     .iter()
                     .any(|(b, &j)| j == 0 && cfg.configured.contains(b))
             {
+                config["deferred"] = json!(true);
                 awaiting.insert(0);
             }
             accounts.extend(configure(&mut link, config.clone())?.map(|a| (0, a)));
@@ -530,9 +531,7 @@ impl Providers {
                 config["schemas"] = json!([m]);
             }
             if by_block(i, &link.name) {
-                if mock.is_none() {
-                    config["deferred"] = json!(true);
-                }
+                config["deferred"] = json!(true);
                 awaiting.insert(i);
             }
             let account = configure(&mut link, config.clone())
