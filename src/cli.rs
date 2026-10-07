@@ -2248,7 +2248,8 @@ fn run_with(
         }
     );
     // Who holds it: dform.toml's `[secrets]` (R-164).
-    let mixing = crate::custody::Mixing::of(located.loaded.manifest.as_ref())?;
+    let mixing =
+        crate::custody::Mixing::of(located.loaded.manifest.as_ref(), &located.instance.stack)?;
     // What only reads the deployment's secrets: a query, a why, `secrets`.
     let reads = matches!(
         cli.cmd,

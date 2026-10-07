@@ -2051,6 +2051,19 @@ passphrase = "env:DFORM_PASSPHRASE"   # or "prompt": asked on the terminal
   in the bucket beside the state ..`), and a deployment whose key file is
   already in a bucket is said on every run until it is sealed.
 
+The stack is the unit of custody: `[stacks.NAME.secrets]` takes the
+place of the project's `[secrets]` for the stack `NAME`'s deployments
+(the whole table, not merged), so prod's team holds prod's passphrase
+and the lab's another:
+
+```toml
+[secrets]
+passphrase = "env:LAB_PASSPHRASE"
+
+[stacks.prod.secrets]
+passphrase = "env:PROD_PASSPHRASE"
+```
+
 To seal a deployment's key file, set `[secrets] passphrase` and apply
 with the passphrase: a plan reads the key file as it is; the apply
 (once confirmed) seals the same master into `state.master`, removes

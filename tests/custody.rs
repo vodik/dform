@@ -199,3 +199,37 @@ fn the_first_apply_with_the_passphrase_seals_the_key_file() {
     let r = run(&s, &[PASS], &["plan"]).success();
     assert_eq!(r.summary(), "stack crud_api is up to date", "{}", r.stdout);
 }
+
+/// `[stacks.NAME.secrets]` in place of the project's `[secrets]`: each
+/// stack's master is sealed under its own team's passphrase, and a run of
+/// one stack needs no other's.
+#[test]
+fn a_stack_names_its_own_custody() {
+    let s = Scratch::project("custody-per-stack");
+    s.write(
+        "dform.toml",
+        &(s.read("dform.toml")
+            + "\n[secrets]\npassphrase = \"env:LAB_PASSPHRASE\"\n\n\
+               [stacks.prod.secrets]\npassphrase = \"env:PROD_PASSPHRASE\"\n"),
+    );
+    let program = "use fake\noutput pw: secret(string) = random.password(\"db\")\n\
+                   resource compute.vm a {\n  name = \"a\"\n}\n";
+    s.write("stacks/lab.df", program);
+    s.write("stacks/prod.df", program);
+    let prod = [("PROD_PASSPHRASE", "prod team's")];
+    let lab = [("LAB_PASSPHRASE", "lab team's")];
+    run(&s, &prod, &["apply", "prod"]).success();
+    run(&s, &lab, &["apply", "lab"]).success();
+    assert!(s.json("dform.state/prod/state.master")["passphrase"].is_object());
+    // The lab's passphrase does not open prod's master: prod's is another.
+    let r = run(&s, &lab, &["plan", "prod"]).success();
+    assert!(
+        r.stderr
+            .contains("prod: planned without its master (PROD_PASSPHRASE is not set)"),
+        "{}",
+        r.stderr
+    );
+    let r = run(&s, &prod, &["plan", "prod"]).success();
+    assert_eq!(r.summary(), "stack prod is up to date", "{}", r.stdout);
+    assert!(r.stderr.is_empty(), "{}", r.stderr);
+}

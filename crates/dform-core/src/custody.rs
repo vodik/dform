@@ -268,9 +268,16 @@ impl Passphrase {
 }
 
 impl Mixing {
-    /// The mixing a project's dform.toml names.
-    pub fn of(manifest: Option<&crate::project::Manifest>) -> Result<Mixing> {
-        match manifest.and_then(|m| m.secrets.passphrase.as_deref()) {
+    /// The mixing a project's dform.toml names for the stack `stack`: its
+    /// `[stacks.NAME.secrets]`, else the project's `[secrets]`.
+    pub fn of(manifest: Option<&crate::project::Manifest>, stack: &str) -> Result<Mixing> {
+        let table = manifest.map(|m| {
+            m.stacks
+                .get(stack)
+                .and_then(|t| t.secrets.as_ref())
+                .unwrap_or(&m.secrets)
+        });
+        match table.and_then(|t| t.passphrase.as_deref()) {
             Some(p) => Ok(Mixing::Passphrase(Passphrase::parse(p)?)),
             None => Ok(Mixing::KeyFile),
         }

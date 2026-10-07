@@ -407,6 +407,10 @@ pub struct StackTable {
     /// warning and ask (R-80), as `apply --allow-empty` names them.
     #[serde(default)]
     pub allow_empty: Vec<String>,
+    /// `[stacks.NAME.secrets]`: who holds the stack's masters, in place of
+    /// the project's `[secrets]` (the stack is the unit of custody: its
+    /// team).
+    pub secrets: Option<SecretsTable>,
 }
 
 /// The settings a stack table holds, as text: a term's (`backend`,
@@ -447,6 +451,7 @@ impl Defaults {
             isolated: self.isolated.clone(),
             config: self.config.clone(),
             allow_empty: Vec::new(),
+            secrets: None,
         }
     }
 }
@@ -519,16 +524,23 @@ impl Manifest {
                 at("[files]")
             );
         }
-        if m.secrets.recipients.is_some() {
-            bail!(
-                "{}: age recipients (the master sealed to each of a team's keys) are not \
-                 supported yet; `passphrase = \"env:NAME\"` seals it under a passphrase",
-                at("[secrets] recipients")
-            );
-        }
-        if let Some(p) = &m.secrets.passphrase {
-            crate::custody::Passphrase::parse(p)
-                .map_err(|e| anyhow!("{} = {e}", at("[secrets] passphrase")))?;
+        let secrets = std::iter::once(("[secrets]".to_string(), &m.secrets)).chain(
+            m.stacks
+                .iter()
+                .filter_map(|(n, t)| Some((format!("[stacks.{n}.secrets]"), t.secrets.as_ref()?))),
+        );
+        for (table, t) in secrets {
+            if t.recipients.is_some() {
+                bail!(
+                    "{}: age recipients (the master sealed to each of a team's keys) are not \
+                     supported yet; `passphrase = \"env:NAME\"` seals it under a passphrase",
+                    at(&format!("{table} recipients"))
+                );
+            }
+            if let Some(p) = &t.passphrase {
+                crate::custody::Passphrase::parse(p)
+                    .map_err(|e| anyhow!("{} = {e}", at(&format!("{table} passphrase"))))?;
+            }
         }
         if let Some(v) = &m.io.wait
             && crate::store::parse_duration(v).is_none_or(|d| d.is_zero())
@@ -1332,17 +1344,36 @@ mod tests {
         use crate::custody::{Mixing, Passphrase};
         let m = manifest("[secrets]\npassphrase = \"env:DFORM_PASSPHRASE\"\n").unwrap();
         assert_eq!(
-            Mixing::of(Some(&m)).unwrap(),
+            Mixing::of(Some(&m), "app").unwrap(),
             Mixing::Passphrase(Passphrase::Env("DFORM_PASSPHRASE".into()))
         );
         let m = manifest("[secrets]\npassphrase = \"prompt\"\n").unwrap();
         assert_eq!(
-            Mixing::of(Some(&m)).unwrap(),
+            Mixing::of(Some(&m), "app").unwrap(),
             Mixing::Passphrase(Passphrase::Prompt)
         );
         assert_eq!(
-            Mixing::of(Some(&manifest("").unwrap())).unwrap(),
+            Mixing::of(Some(&manifest("").unwrap()), "app").unwrap(),
             Mixing::KeyFile
+        );
+        // A stack's own, in place of the project's.
+        let m = manifest(
+            "[secrets]\npassphrase = \"prompt\"\n\n[stacks.prod.secrets]\npassphrase = \
+             \"env:PROD_PASSPHRASE\"\n",
+        )
+        .unwrap();
+        assert_eq!(
+            Mixing::of(Some(&m), "prod").unwrap(),
+            Mixing::Passphrase(Passphrase::Env("PROD_PASSPHRASE".into()))
+        );
+        assert_eq!(
+            Mixing::of(Some(&m), "lab").unwrap(),
+            Mixing::Passphrase(Passphrase::Prompt)
+        );
+        let e = manifest("[stacks.prod.secrets]\npassphrase = \"x\"\n").unwrap_err();
+        assert!(
+            e.to_string().contains("[stacks.prod.secrets] passphrase"),
+            "{e}"
         );
         let e = manifest("[secrets]\npassphrase = \"file:x\"\n").unwrap_err();
         assert!(e.to_string().contains("[secrets] passphrase"), "{e}");
