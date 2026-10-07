@@ -579,6 +579,38 @@ fn a_zone_not_on_the_account_is_named() {
     assert_eq!(server.records().len(), 1);
 }
 
+/// A record's create first looks for one of its key in the zone (After
+/// R-123): the records of its name are asked at once, not one after
+/// another, so a name with several costs one round trip; one of another
+/// target is not taken for it.
+#[test]
+fn a_records_lookup_asks_the_names_records_at_once() {
+    let server = Server::start();
+    server.hosting(&["example.com"]);
+    for target in ["10.0.0.1", "10.0.0.2", "10.0.0.3", "10.0.0.4"] {
+        server.add_record("example.com", "www", "A", target);
+    }
+    let s = project(
+        "ovh-record-find",
+        "",
+        &format!(
+            "use ovh {{ endpoint = \"{}\", project = \"lab\" }}\n\
+             resource ovh.domain_record www {{\n  zone = \"example.com\"\n  subdomain = \"www\"\n  \
+             type = \"A\"\n  target = \"10.0.0.9\"\n}}\n",
+            server.endpoint
+        ),
+    );
+    server.slow(std::time::Duration::from_millis(200));
+    dform(&s, &server, &["apply", "main.df"]).success();
+    assert_eq!(server.records().len(), 5, "{:?}", server.records());
+    assert!(
+        server.most_at_once() >= 4,
+        "{} at once: {:?}",
+        server.most_at_once(),
+        server.calls()
+    );
+}
+
 /// A data source as a table: the program picks the region's Debian image.
 #[test]
 fn the_images_of_a_region_are_a_table() {

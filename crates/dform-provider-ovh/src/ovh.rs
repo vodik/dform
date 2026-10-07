@@ -888,20 +888,31 @@ impl Ovh {
                         Some(m) => anyhow!(m),
                         None => e.into(),
                     })?;
-                let mut found = None;
-                for id in ids
+                let ids: Vec<i64> = ids
                     .as_array()
                     .into_iter()
                     .flatten()
                     .filter_map(Json::as_i64)
-                {
-                    let Some(o) = a
-                        .client
-                        .get_opt(&format!("/domain/zone/{zone}/record/{id}"))?
-                    else {
-                        continue;
-                    };
-                    if s(&o, "target") == Some(k.target.as_str()) {
+                    .collect();
+                // Each record of the name asked at once: a name with
+                // several waits one round trip, not one per record.
+                let records: Vec<api::Result<Option<Json>>> = std::thread::scope(|scope| {
+                    let asks: Vec<_> = ids
+                        .iter()
+                        .map(|id| {
+                            let (client, zone) = (&a.client, &zone);
+                            scope.spawn(move || {
+                                client.get_opt(&format!("/domain/zone/{zone}/record/{id}"))
+                            })
+                        })
+                        .collect();
+                    asks.into_iter()
+                        .map(|h| h.join().expect("a record's GET does not panic"))
+                        .collect()
+                });
+                let mut found = None;
+                for (id, o) in ids.into_iter().zip(records) {
+                    if o?.is_some_and(|o| s(&o, "target") == Some(k.target.as_str())) {
                         found = Some(map::record_remote(&k.zone, id));
                         break;
                     }

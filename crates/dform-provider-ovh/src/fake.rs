@@ -321,6 +321,19 @@ impl Server {
         id
     }
 
+    /// Put a DNS record there as if made elsewhere: its id.
+    pub fn add_record(&self, zone: &str, subdomain: &str, typ: &str, target: &str) -> i64 {
+        let mut w = self.world();
+        w.next += 1;
+        let id = 5_000_000_000 + w.next as i64;
+        w.records.insert(
+            id,
+            json!({"id": id, "zone": zone, "subDomain": subdomain, "fieldType": typ,
+                   "target": target, "ttl": 0}),
+        );
+        id
+    }
+
     /// Put an S3 container there as if made elsewhere.
     pub fn add_container(&self, region: &str, name: &str) {
         let mut w = self.world();
