@@ -137,7 +137,7 @@ fn a_remote_backend_takes_the_stack_name() {
     assert_eq!(r.summary(), "plan: 0 changes, 1 later", "{}", r.stdout);
     assert!(
         r.stdout
-            .contains("  waits on  stack platform.cluster[env=staging]  "),
+            .contains("  waits on  stack platform.cluster[env=staging]\n"),
         "{}",
         r.stdout
     );

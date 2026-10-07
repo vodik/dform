@@ -113,6 +113,7 @@ fn why_takes_a_quoted_segment() {
         &s,
         &[
             "why",
+            "--tree",
             &format!("k8s.namespace[\"ns\"].metadata.annotations.\"{KEY}\""),
         ],
     )

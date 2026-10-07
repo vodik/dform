@@ -339,13 +339,21 @@ enum Run {
         #[command(flatten)]
         why: Ladder,
     },
-    /// A derivation: how a fact was derived, its rule, bindings and the facts
-    /// it read, recursively. Variables are allowed; every match is printed.
+    /// A derivation: how a value was made, one `= EXPRESSION   SITE`
+    /// step per expression it passed through (an attribute, an input); a
+    /// resource's header and each attribute's steps; any other fact's
+    /// rule, bindings and the facts it read, recursively. Variables are
+    /// allowed; every match is printed.
     Why {
         pattern: String,
         #[command(flatten)]
         target: Target,
-        /// Show every alternative derivation, not only the first.
+        /// A value's or a resource's whole derivation tree, not its
+        /// chain: each fact with the rule and bindings that derived it.
+        #[arg(long)]
+        tree: bool,
+        /// Show every alternative derivation, not only the first (a
+        /// tree).
         #[arg(long)]
         all: bool,
         /// Print the tree in the core's spelling: lowered rules (`r12:
@@ -674,6 +682,7 @@ enum Cmd {
     },
     Why {
         pattern: String,
+        tree: bool,
         all: bool,
         core: bool,
     },
@@ -1314,9 +1323,18 @@ fn run_cmd(r: Run) -> (Cmd, Option<Target>) {
         Run::Why {
             pattern,
             target,
+            tree,
             all,
             core,
-        } => (Cmd::Why { pattern, all, core }, Some(target)),
+        } => (
+            Cmd::Why {
+                pattern,
+                tree,
+                all,
+                core,
+            },
+            Some(target),
+        ),
         Run::WhyNot { pattern, target } => (Cmd::WhyNot { pattern }, Some(target)),
         Run::Query {
             pattern,
@@ -2022,13 +2040,28 @@ fn run_with(
                 *json,
                 &cli.table,
             )?,
-            Cmd::Why { pattern, all, core } => why_tree(
+            Cmd::Why {
                 pattern,
-                *all,
-                *core,
+                tree,
+                all,
+                core,
+            } => why_tree(
+                pattern,
+                WhyAs {
+                    tree: *tree || *all,
+                    all: *all,
+                    core: *core,
+                },
                 &x.res,
                 &x.redact,
                 ev.located.loaded.lowered.as_ref().map(|l| &l.signatures),
+                &ev.located
+                    .instance
+                    .key
+                    .iter()
+                    .map(|(k, _)| k.clone())
+                    .collect(),
+                site_root(&cli.files).as_deref(),
             )?,
             Cmd::WhyNot { pattern } => {
                 let waits = |t: &str| ev.evaluator.provider_wait(t);
@@ -2169,12 +2202,7 @@ fn run_with(
             let redact = query::Redactor::new(&res.facts, schema);
             report.because(&then, &crate::diff::snapshot(res, &redact, &addresses));
         };
-    // The project's root, else the program's directory: what a site's
-    // place is relative to.
-    let top = cli.files.first().and_then(|f| {
-        let f = std::path::absolute(f).ok()?;
-        crate::project::manifest_root(&f).or_else(|| f.parent().map(Path::to_path_buf))
-    });
+    let top = site_root(&cli.files);
     // What the plan empties since the last apply (R-80), less what this
     // apply's `--allow-empty` and the stack's `allow_empty` name.
     let mut allow_empty = match &cli.cmd {
@@ -2212,6 +2240,12 @@ fn run_with(
                    plan: &crate::provider::Plan,
                    res: &engine::EvalResult,
                    tick: usize| {
+        report.keys = located
+            .instance
+            .key
+            .iter()
+            .map(|(k, _)| k.clone())
+            .collect();
         report.explain(why, res, &query::Redactor::new(&res.facts, schema));
         if tick == 1 {
             because(report, plan, res);
@@ -3357,13 +3391,22 @@ fn log_retries(
 
 /// `dform why PATTERN`: the provenance tree of each fact of `res` that
 /// matches, redacted, in the program's own terms (`--core`: the core's).
-fn why_tree(
-    pattern: &str,
+/// How `why` prints: a value's chain, or the derivation `tree`, with
+/// `all` its alternatives, in the `core`'s spelling.
+struct WhyAs {
+    tree: bool,
     all: bool,
     core: bool,
+}
+
+fn why_tree(
+    pattern: &str,
+    WhyAs { tree, all, core }: WhyAs,
     res: &engine::EvalResult,
     redact: &query::Redactor,
     signatures: Option<&crate::infer::Signatures>,
+    stack_keys: &BTreeSet<String>,
+    top: Option<&Path>,
 ) -> Result<()> {
     let printed = query::printed(pattern, &res.facts);
     let cells = [crate::modules::INPUT, crate::modules::LET];
@@ -3438,11 +3481,163 @@ fn why_tree(
         }
         if core {
             print!("{}", printer.tree(id, focus.as_ref()));
+        } else if let (false, Some(text)) = (
+            tree,
+            why_chain(&printer, res, a, focus.as_ref(), stack_keys, top),
+        ) {
+            print!("{text}");
         } else {
             print!("{}", printer.source_tree(&res.rules, id, focus.as_ref()));
         }
     }
     Ok(())
+}
+
+/// What `why` prints of a value (R-122): an attribute's or a cell's head
+/// line and its chain, an object by its leaves; a resource's header,
+/// `ADDR  SITE`, and each attribute's. `None` for any other fact, which
+/// prints its tree.
+fn why_chain(
+    printer: &tree::Printer,
+    res: &engine::EvalResult,
+    a: &Atom,
+    focus: Option<&tree::Focus>,
+    stack_keys: &BTreeSet<String>,
+    top: Option<&Path>,
+) -> Option<String> {
+    let style = report::Style::PLAIN;
+    let relative = |at: &str| {
+        top.and_then(|t| report::relative_place(at, t))
+            .unwrap_or_else(|| at.to_string())
+    };
+    // `T NAME.path = value` per leaf of attribute fact `f` below `keys`,
+    // each with its chain; a cell's by its own name.
+    let leaves = |f: &Atom, head: &str, keys: &[String]| {
+        let mut items = Vec::new();
+        let Some(Term::Val(v)) = f.args.get(3) else {
+            return items;
+        };
+        let Some(v) = keys.iter().try_fold(v, |v, k| match v {
+            Value::Obj(m) => m.get(k),
+            _ => None,
+        }) else {
+            return items;
+        };
+        let mut found = Vec::new();
+        object_leaves(v, &mut keys.to_vec(), &mut found);
+        for (keys, leaf) in found {
+            let shown = printer.redact.surface(&leaf);
+            let path = keys
+                .iter()
+                .fold(head.to_string(), |p, k| crate::ir::path_join(&p, k));
+            let mut chain = printer.attr_chain(&res.rules, f, &keys, stack_keys);
+            for step in chain.iter_mut() {
+                step.at = relative(&step.at);
+            }
+            items.push((format!("{path} = {shown}"), shown, chain));
+        }
+        items
+    };
+    let name = |f: &Atom| -> Option<String> {
+        let [
+            Term::Val(Value::Str(t)),
+            Term::Val(Value::Str(n)),
+            Term::Val(Value::Str(p)),
+            ..,
+        ] = f.args.as_slice()
+        else {
+            return None;
+        };
+        Some(match t.as_str() {
+            crate::modules::INPUT | crate::modules::LET | crate::transform::OUTPUT => {
+                let scoped = match n.is_empty() {
+                    true => p.clone(),
+                    false => format!("{n}.{p}"),
+                };
+                format!(
+                    "{} {scoped}",
+                    if t == crate::modules::LET {
+                        "let"
+                    } else {
+                        t.as_str()
+                    }
+                )
+            }
+            _ => report::attribute(
+                &ir::Address {
+                    typ: t.clone(),
+                    name: n.clone(),
+                },
+                p,
+            ),
+        })
+    };
+    match a.pred.as_str() {
+        "attr" => {
+            let keys = focus.map(tree::Focus::keys).unwrap_or_default();
+            let items = leaves(a, &name(a)?, keys);
+            Some(report::chains_text(&items, "", style))
+        }
+        "want" => {
+            let [Term::Val(Value::Str(t)), Term::Val(Value::Str(n))] = a.args.as_slice() else {
+                return None;
+            };
+            let addr = ir::Address {
+                typ: t.clone(),
+                name: n.clone(),
+            };
+            let mut out = report::address(&addr);
+            if let Some(site) = printer.want_site(&res.rules, &addr) {
+                out.push_str(&format!("  {}", relative(&site.at)));
+                if !site.with.is_empty() {
+                    out.push_str(&format!("  with {}", site.with.join(", ")));
+                }
+            }
+            out.push('\n');
+            let mut items = Vec::new();
+            for f in res.facts.iter().filter(|f| f.pred == "attr") {
+                let [
+                    Term::Val(Value::Str(ft)),
+                    Term::Val(Value::Str(fname)),
+                    Term::Val(Value::Str(path)),
+                    _,
+                ] = f.args.as_slice()
+                else {
+                    continue;
+                };
+                if (ft, fname) == (t, n) {
+                    items.extend(leaves(f, path, &[]));
+                }
+            }
+            out.push_str(&report::chains_text(&items, "  ", style));
+            Some(out)
+        }
+        _ => None,
+    }
+}
+
+/// The project's root, else the program's directory: what a site's place
+/// is relative to.
+fn site_root(files: &[PathBuf]) -> Option<PathBuf> {
+    files.first().and_then(|f| {
+        let f = std::path::absolute(f).ok()?;
+        crate::project::manifest_root(&f).or_else(|| f.parent().map(Path::to_path_buf))
+    })
+}
+
+/// The leaves of value `v` below `keys`: an object's by its keys, any
+/// other value itself.
+fn object_leaves(v: &Value, keys: &mut Vec<String>, out: &mut Vec<(Vec<String>, Value)>) {
+    match v {
+        Value::Obj(m) if !m.is_empty() => {
+            for (k, x) in m {
+                keys.push(k.clone());
+                object_leaves(x, keys, out);
+                keys.pop();
+            }
+        }
+        v => out.push((keys.clone(), v.clone())),
+    }
 }
 
 /// A fact `why` explains, and the part of it the pattern named.

@@ -71,7 +71,12 @@ fn a_memo_survives_a_replan_and_is_gone_after_taint() {
     let r = run(&s, &[], &["plan", "p.df"]).success();
     assert_eq!(r.summary(), "stack p is up to date", "{}", r.stdout);
     // `why` says the value is a memo's and when it was kept.
-    let r = run(&s, &[], &["why", "db.user[\"app\"].password", "p.df"]).success();
+    let r = run(
+        &s,
+        &[],
+        &["why", "--tree", "db.user[\"app\"].password", "p.df"],
+    )
+    .success();
     assert!(
         r.stdout.contains("memo, first kept 2026-10-02T09:00:00Z"),
         "{}",

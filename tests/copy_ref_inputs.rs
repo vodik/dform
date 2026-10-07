@@ -148,7 +148,7 @@ fn why_explains_a_copys_output() {
     let s = Scratch::project("copy-ref-why");
     s.write("databases.df", DB);
     s.write("main.df", USER);
-    let r = s.run(&["why", "one.host", "main.df"]).success();
+    let r = s.run(&["why", "--tree", "one.host", "main.df"]).success();
     assert!(
         r.stdout
             .starts_with("output one.host = \"one.apps.svc\"\n  merged from 1 contribution\n")

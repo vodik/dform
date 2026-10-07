@@ -1,9 +1,47 @@
-//! `dform why`: the derivation tree read from the provenance circuit.
+//! `dform why`: a value's chain (R-122), and with `--tree` the
+//! derivation tree read from the provenance circuit.
 
 mod common;
 mod inspection_common;
 use common::{Scratch, repo};
 use inspection_common::{dform, golden};
+
+/// A value's chain (R-122): one `= EXPRESSION   SITE` step per expression
+/// its value passed through, following only what each reads, to the
+/// literal; what it beat after. A literal is its place on its line.
+#[test]
+fn why_a_value_prints_its_chain() {
+    let at = "examples/tour/stacks/tour.df env=prod";
+    let out = dform(at, &["why", "orders.backup_days"]);
+    assert_eq!(
+        out,
+        "db.postgres orders.backup_days = 14
+  = database.backup_days  stacks/tour.df:145
+  = 14                    stacks/tour.df:139
+  over 1 @default         stacks/tour.df:27
+"
+    );
+    let out = dform(
+        "examples/demo/stacks/dform.df env=prod",
+        &["why", "main.vpc.tags.team"],
+    );
+    assert_eq!(
+        out,
+        "net.vpc main.vpc.tags.team = \"platform\"  baseline.df:10\n"
+    );
+    // A resource: its header, and each attribute's chain; never the
+    // bindings of the whole rule, nor how many contributions merged.
+    let out = dform(at, &["why", "orders"]);
+    assert!(
+        out.starts_with("db.postgres orders  stacks/tour.df:143\n"),
+        "{out}"
+    );
+    assert!(
+        out.contains("\n  backup_days = 14\n    = database.backup_days  "),
+        "{out}"
+    );
+    assert!(!out.contains("merged from"), "{out}");
+}
 
 /// The ticket's Play line: ask why a tag exists, see the statement that
 /// added it (the baseline policy pack's `set r.tags`), as written, at its
@@ -14,6 +52,7 @@ fn why_a_tag_exists() {
         "examples/demo/stacks/dform.df env=prod",
         &[
             "why",
+            "--tree",
             r#"attr(net.vpc, "main.vpc", "tags.team", "platform")"#,
         ],
     );
@@ -69,7 +108,10 @@ fn why_takes_a_resource_by_its_path() {
         let out = dform(at, &["why", path]);
         assert_eq!(out, by_address, "{path}");
     }
-    assert!(by_address.starts_with("net.vpc main.vpc\n"), "{by_address}");
+    assert!(
+        by_address.starts_with("net.vpc main.vpc  network.df:19\n"),
+        "{by_address}"
+    );
 }
 
 /// H-16: an address as plan prints it is a `why` and a `query` argument.
@@ -78,7 +120,7 @@ fn why_takes_a_resource_by_its_path() {
 #[test]
 fn why_and_query_take_an_address_as_plan_prints_it() {
     let at = "examples/demo/stacks/dform.df env=prod";
-    let want = dform(at, &["why", r#"net.vpc["main.vpc"]"#]);
+    let want = dform(at, &["why", "--tree", r#"net.vpc["main.vpc"]"#]);
     assert!(
         want.starts_with(
             "net.vpc main.vpc\n  examples/demo/network.df:19  resource \
@@ -86,7 +128,7 @@ fn why_and_query_take_an_address_as_plan_prints_it() {
         ),
         "{want}"
     );
-    let tag = dform(at, &["why", r#"net.vpc["main.vpc"].tags.team"#]);
+    let tag = dform(at, &["why", "--tree", r#"net.vpc["main.vpc"].tags.team"#]);
     assert!(
         tag.contains(r#"set r.tags = { team: "platform" } where r in resource"#),
         "{tag}"
@@ -95,13 +137,13 @@ fn why_and_query_take_an_address_as_plan_prints_it() {
     assert!(cidr.contains("10.20.0.0/16"), "{cidr}");
     // The address as the plan prints it now, or its path alone (R-111).
     for arg in ["net.vpc main.vpc", "main.vpc"] {
-        let want = dform(at, &["why", arg]);
+        let want = dform(at, &["why", "--tree", arg]);
         assert!(
             want.starts_with("net.vpc main.vpc\n  examples/demo/network.df:19  "),
             "{arg}: {want}"
         );
     }
-    let tag = dform(at, &["why", "main.vpc.tags.team"]);
+    let tag = dform(at, &["why", "--tree", "main.vpc.tags.team"]);
     assert!(
         tag.contains(r#"set r.tags = { team: "platform" } where r in resource"#),
         "{tag}"
@@ -141,7 +183,7 @@ fn why_and_query_take_an_address_as_plan_prints_it() {
 fn why_an_attribute_shows_every_contribution() {
     let out = dform(
         "examples/demo/stacks/dform.df env=prod",
-        &["why", r#"attr(net.vpc, "main.vpc", "tags", X)"#],
+        &["why", "--tree", r#"attr(net.vpc, "main.vpc", "tags", X)"#],
     );
     assert!(out.contains("  merged from 2 contributions\n"), "{out}");
     assert!(
@@ -172,7 +214,7 @@ fn why_an_attribute_shows_every_contribution() {
 fn why_a_route_shows_the_statements_that_fired() {
     let out = dform(
         "examples/tour/stacks/tour.df",
-        &["why", r#"net.route["blue-to-green"]"#],
+        &["why", "--tree", r#"net.route["blue-to-green"]"#],
     );
     let start = "net.route blue-to-green
   examples/tour/stacks/tour.df:283  resource net.route \"${a}-to-${b}\" { .. } where reaches(a, b), a != b, network_of(b, v), dest = net.vpc[v].cidr
@@ -202,7 +244,7 @@ fn why_a_route_shows_the_statements_that_fired() {
 fn why_a_settings_read_shows_the_read() {
     let out = dform(
         "examples/tour/stacks/tour.df env=prod",
-        &["why", r#"db.postgres["orders"].backup_days"#],
+        &["why", "--tree", r#"db.postgres["orders"].backup_days"#],
     );
     assert!(
         out.contains(
@@ -401,7 +443,7 @@ fn why_labels_facts_injected_at_a_tick() {
 fn why_prints_a_braced_clause_on_one_line() {
     let out = dform(
         "examples/demo/stacks/dform.df env=prod",
-        &["why", r#"attr("iam.policy", P, "statements", S)"#],
+        &["why", "--tree", r#"attr("iam.policy", P, "statements", S)"#],
     );
     assert!(
         out.contains(
@@ -419,9 +461,10 @@ fn why_prints_a_braced_clause_on_one_line() {
     );
 }
 
-/// R-15: `plan --why` prints under each deformation the statement that
-/// derived it and one line per leaf of that derivation: the facts, the
-/// table rows, the inputs it rests on.
+/// R-15, R-122: `plan --why` prints under each attribute the chain of
+/// expressions its value passed through, each where it is written, the
+/// clause's binding where the expression reads it; nothing for the
+/// resource as a whole.
 #[test]
 fn plan_why_explains_each_deformation() {
     let out = dform("examples/tour/stacks/tour.df env=prod", &["plan", "--why"]);
@@ -429,25 +472,28 @@ fn plan_why_explains_each_deformation() {
         out.contains(
             "  + net.subnet private-us-test-1a          stacks/tour.df:104  with z = \"us-test-1a\", n = 1
       cidr = \"10.0.1.0/24\"                 inet.subnet(main.cidr, 8, n)
+        = inet.subnet(main.cidr, 8, n)     stacks/tour.df:106  with n = 1
       tags.team = \"shop\"                   stacks/tour.df:170
       visibility = \"private\"
       vpc = main
       zone = \"us-test-1a\"
-      by stacks/tour.df:104  resource net.subnet \"private-${z}\" { .. } where zone(z, n)
-      because stacks/tour.df:101  zone(\"us-test-1a\", 1)
-      because stacks/tour.df:46  net.vpc main.cidr = 10.0.0.0/16
+        = z                                stacks/tour.df:107
 "
         ),
         "{out}"
     );
-    // A value given on the command line is its flag.
-    assert!(out.contains("      because --set env=prod\n"), "{out}");
-    // At the default level, a line per change and attribute, no tree.
-    let plain = dform("examples/tour/stacks/tour.df env=prod", &["plan"]);
+    // A value written for a copy's input: the input, then where it is given.
     assert!(
-        !plain.contains("because") && !plain.contains("  by "),
-        "{plain}"
+        out.contains(
+            "        cidr = \"10.1.0.0/16\"               input blue.cidr = 10.1.0.0/16   \
+             stacks/tour.df:227\n          = cidr                           stacks/tour.df:218\n"
+        ),
+        "{out}"
     );
+    assert!(!out.contains("  by ") && !out.contains("because "), "{out}");
+    // At the default level, a line per change and attribute, no chain.
+    let plain = dform("examples/tour/stacks/tour.df env=prod", &["plan"]);
+    assert!(!plain.contains("\n        = "), "{plain}");
     golden("why_tour_prod_plan", &out);
 }
 
@@ -499,7 +545,7 @@ fn why_prints_a_refinement_as_a_check() {
         "p.df",
         "\nuse fake\nresource db.postgres main {\n  size = 1\n  backup_days = 7\n}\n",
     );
-    let out = why_in(&s, "p.df", &["db.postgres[\"main\"].backup_days"]);
+    let out = why_in(&s, "p.df", &["--tree", "db.postgres[\"main\"].backup_days"]);
     assert_eq!(
         out,
         "db.postgres main.backup_days = 7\n  merged from 1 contribution\n  ├─ 7   p.df:5\n  \
@@ -520,12 +566,16 @@ fn why_prints_the_statement_of_a_rule_that_reads_nothing() {
     );
 }
 
-/// `plan --why` prints a copy's frame as its statement, `resource network.vpc
-/// main`, not the core's `instance_of(..)` (R-65).
+/// `plan --why` follows a copy's input to where the copy is given it,
+/// `vpc_net = inet(cidrs.main)` at its `resource network.vpc main`, and
+/// prints no core fact (`instance_of(..)`, R-65).
 #[test]
-fn plan_why_prints_a_copy_as_its_resource_statement() {
+fn plan_why_follows_a_copys_input() {
     let out = dform("examples/demo/stacks/dform.df", &["plan", "--why"]);
-    assert!(out.contains("  resource network.vpc main\n"), "{out}");
+    assert!(
+        out.contains("          = vpc_net ") && out.contains("          = inet(cidrs.main) "),
+        "{out}"
+    );
     assert!(!out.contains("instance_of("), "{out}");
 }
 

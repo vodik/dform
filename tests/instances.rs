@@ -33,6 +33,7 @@ fn why_prints_a_copys_relations_in_its_frame() {
     let r = s
         .run(&[
             "why",
+            "--tree",
             "net.vpc[\"green.vpc\"].cidr",
             "main.df",
             "--set",
@@ -228,10 +229,16 @@ resource edge east { base = "10.1.0.0/16" }
         "{}",
         r.stdout
     );
-    // `why` takes the path the plan prints.
+    // `why` takes the path the plan prints, and follows the value through
+    // each copy's input to where it is given (R-122).
     let r = s.run(&["why", "east.left.vpc", "main.df"]).success();
     assert!(
-        r.stdout.starts_with("net.vpc east.left.vpc\n  main.df:5  "),
+        r.stdout.starts_with(
+            "net.vpc east.left.vpc  main.df:5\n  cidr = \"10.1.0.0/16\"\n    \
+             = vpc_net                  main.df:5\n    \
+             = base                     main.df:10\n    \
+             = \"10.1.0.0/16\"            main.df:12\n"
+        ),
         "{}",
         r.stdout
     );

@@ -366,9 +366,9 @@ fn strip_sgr(s: &str) -> String {
     out
 }
 
-/// R-15: an update is explained by the winning contribution to the
-/// attribute it changes, a delete by state alone; a secret input in an
-/// explanation prints as its label.
+/// R-15, R-122: an update's attribute by its chain, to the flag that gave
+/// the value; a delete by its lines alone; a secret input in a chain
+/// prints as its label.
 #[test]
 fn plan_why_explains_an_update_and_a_delete_and_redacts_a_secret() {
     let s = Scratch::new("sections-why");
@@ -392,17 +392,15 @@ fn plan_why_explains_an_update_and_a_delete_and_redacts_a_secret() {
     assert!(
         r.stdout.contains(
             "  ~ leaky.vault v                          p.df:3\n      password: (sensitive) → (sensitive)  --set pw=(sensitive \
-             input.pw)\n      by p.df:4  resource leaky.vault v { password = pw }\n      because \
-             --set pw=(sensitive input.pw)\n"
+             input.pw)\n        = pw                               p.df:4\n        \
+             = (sensitive input.pw) @override   --set pw=(sensitive input.pw)\n"
         ),
         "{}",
         r.stdout
     );
     assert!(
-        r.stdout.contains(
-            "  - leaky.oops o\n      password was \"plain\"\n      because no statement \
-             derives it now; state has it\n"
-        ),
+        r.stdout
+            .contains("  - leaky.oops o\n      password was \"plain\"\n"),
         "{}",
         r.stdout
     );

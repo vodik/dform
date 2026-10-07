@@ -66,6 +66,7 @@ fn an_indexed_default_writes_every_element_and_yields_to_its_own() {
             "--world",
             "w.json",
             "why",
+            "--tree",
             "attr(k8s.deployment, \"web\", \"spec\", V)",
             "main",
         ])

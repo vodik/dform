@@ -289,38 +289,31 @@ fn plan_json_why_explains_each_change() {
     let p = run(&["--why"]);
     let subnet = &p["ticks"][0]["changes"][0];
     assert_eq!(subnet["name"], "gke_subnet");
-    let why = subnet["why"].as_array().unwrap();
-    assert_eq!(why[0]["kind"], "rule");
-    // Relative to the project's root, as every site is.
-    assert_eq!(why[0]["at"], "stacks/gke_two_phase.df:38", "{}", why[0]);
-    assert!(
-        why[0]["text"]
-            .as_str()
-            .unwrap()
-            .starts_with("resource google.compute_subnetwork gke_subnet"),
-        "{}",
-        why[0]
-    );
-    // The settings block that gives the input it reads, where it is
-    // written (R-38).
-    assert!(
-        why.iter().any(|b| b["kind"] == "fact"
-            && b["at"].as_str().unwrap().ends_with("gke_two_phase.df:28")
-            && b["text"]
-                == "input gke = {control_plane_cidr: 172.16.3.96/28, subnet_cidr: 10.141.76.0/22}"),
+    // Each attribute's chain (R-122): the expression, then the settings
+    // block that gives the input it reads, each where it is written,
+    // relative to the project's root (R-38).
+    let cidr = &subnet["changes"][0];
+    assert_eq!(cidr["path"], "ip_cidr_range");
+    assert_eq!(
+        cidr["chain"],
+        json!([
+            {"expr": "gke.subnet_cidr", "at": "stacks/gke_two_phase.df:43"},
+            {"expr": "inet(\"10.141.76.0/22\")", "at": "stacks/gke_two_phase.df:28"},
+        ]),
         "{subnet}"
     );
+    assert!(subnet.get("why").is_none(), "{subnet}");
     // A change of a later tick is explained too.
     let pending = p["ticks"][1]["changes"].as_array().unwrap();
     assert!(
-        pending
-            .iter()
-            .all(|d| !d["why"].as_array().unwrap().is_empty()),
+        pending.iter().all(|d| d["changes"][0]["chain"]
+            .as_array()
+            .is_some_and(|c| !c.is_empty())),
         "{pending:?}"
     );
     let p = run(&[]);
     let subnet = &p["ticks"][0]["changes"][0];
-    assert!(subnet.get("why").is_none(), "{subnet}");
+    assert!(subnet["changes"][0].get("chain").is_none(), "{subnet}");
     assert_eq!(
         subnet["site"]["at"], "stacks/gke_two_phase.df:38",
         "{subnet}"

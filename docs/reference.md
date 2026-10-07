@@ -1057,16 +1057,25 @@ usage error.
   stacks/net.df:4 @default`), unless that write is in the change's own
   block. A secret by its label (`(sensitive random.password("db"))`), a
   long string whole.
-- `-vv` (`full`): `-v`, and under each change its derivation, `why`'s
-  tree compressed to one line per leaf. `by FILE:LINE` is the statement
-  that derived it; each `because` line is a leaf, the facts in between
-  dropped: a fact the program states at its `file:line`, a table's row at
-  its `path:line`, a `--set` or `--data` as its flag, an extern's answer,
-  a world fact, a fact found absent. A create is explained by its
-  `want`, an update (a drift, a replace) by the winning contributions to
-  each attribute it changes, a delete by state alone (`because no
-  statement derives it now; state has it`). Of several derivations the
-  one with the fewest leaves is shown.
+- `-vv` (`full`): `-v`, and under each attribute how its value was made
+  (R-122), the chain `why` prints: one `= EXPRESSION   SITE` step per
+  expression the value passed through, following only what that
+  expression reads (a copy's input to where the copy is given it, a
+  `let`, a settings block), until a literal, a key or a provider's
+  value; a clause's binding where the expression reads it, `= zone_index[z]
+  stacks/net.df:12  with z = "us-test-1a"`; a rank that is not normal,
+  `= "BHS5" @default`; then one `over VALUE @RANK   SITE` line per write
+  it beat. A key is never a step (the deployment line has it); a value
+  printed above is named, not repeated (a literal written where the
+  site column already says says nothing more); long strings elide.
+  Nothing is said of the resource as a whole.
+
+  ```
+  public_key = "ssh-ed25519 AAAA…"
+    = ssh_public_key                       k3s.df:23
+    = config.ssh_public_key                stacks/platform.df:24
+    = "ssh-ed25519 AAAA…"                  config.df:13
+  ```
 - `-q` (`none`): the bare diff for scripts, laid out as the plan was
   before it was grouped by tick (`definite:`, `pending on ?NULLS
   (resolves after tick N):`, `pending groups:`, `undetermined:`,
@@ -1103,16 +1112,15 @@ each kind, `ticks`, `approvals`, `undetermined`, `conflicts`), `ticks`
 `kind`: `group` with its `address`, `reads`, `instance`; `deny`,
 `refinement` with its `status`; `held` with its `changes`), `shadowed`,
 `conflicts`, `moved`, `denied` (`{text, message, address, site}`),
-`held_for_approval` and `apply`, the last line. A change is `{kind,
+`held_for_approval` and `apply`, the refusal line or `null`. A change is `{kind,
 address, type, name, changes}` (`address` in full, `T["A"]`, as the
 plan file has it), a replace with `create_first` and `immutable`, a
 deposed delete with `deposed: true`, a held one with `held`; from `line`
 it has its `site` (`{at, statement, entry, with, origin, rank, beat,
 beat_at}`) and
-`because`, and at `full` a `why` array of `{kind, at, text}` (`kind` is
-`rule` for the `by` line, else `fact`, `input`, `extern`, `world`, `plan`,
-`absent` or `state`; `at` the `file:line` when there is one). An attribute
-change is `{op, path, before, after}` with its `site` (`op` is `set`, or
+`because`. An attribute change is `{op, path, before, after}` with its
+`site`, and at `full` its `chain` (each step `{expr, at, with, rank,
+lost}`, as `-vv` prints it) (`op` is `set`, or
 `add`/`remove` for a set element, with its `leaves`); a null is `{"null":
 LABEL, "class": CLASS}` and a secret `{"sensitive": LABEL}`.
 
@@ -1608,69 +1616,75 @@ it names as the plan prints it (R-111), `google.sql_database_instance
 db.name`, an unknown the attribute it stands for after a `?`,
 `?k8s.service web.spec.clusterIP`.
 
-`dform why PATTERN` prints how a fact was derived, from the provenance
-circuit every evaluation records (proposal E §3, DR-10), in the program's
-own terms: each statement that fired, as written, at its `file:line` (a
-block shows the entry that fired, the rest elided as `..`; a used
-module's statement names its `use`, a copy's its `resource`), then `with` the statement's
-variables as they were bound, by their names in the source, and under them
-each computed term of the statement with its value: an interpolation, a
-function call, a read (`database.backup_days = 14`), a lookup
-(`zone_index[z] = 1`), an unknown as its `?` label. Under
-that are the facts the firing read, recursively, each spelled as the
-plan prints it (R-111): `net.vpc main` for a resource, a copy's
-`net.vpc blue.vpc`, `net.vpc main.cidr = 10.0.0.0/16` for an attribute, `input env = "prod"` and `let n = 3`
-for a cell, a relation as `zone("us-test-1a", 1)` (its facts after its
-signature, `decl zone(name: string, index: int)`, the columns as declared
-or inferred, when any has a type). An attribute or an
-input is `merged from N contributions`, each with its value, its rank when
-it is not normal (`@default`) and the statement that made it: an input's
-default, each `set` that gives it (`stacks/tour.df:139  set {
-database.backup_days = 14 .. } where env == "prod"`, a
-document's leaf by its `file:line`), `--set`. A fact given to the run says
-where it came from: its `file:line`, `--set env=prod`, the provider
-schema, the world, the plan for the facts the planner hands to the policy
-pass. Variables are allowed and every match is printed. A fact derived
-more than one way shows its first derivation and `... N more
-alternatives`; `--all` shows them all. `--core` prints the same tree in
-the core's spelling: the lowered rules by id (`by r17: head :- body`),
-their variables, facts as relations, the aggregate as `Σattr`. An address
-is a pattern too, as plan prints it or in full: `why 'net.vpc main.vpc'`,
-its path alone `why main.vpc`, or `why 'net.vpc["main.vpc"]'` explains
-the resource's `want`; `why main.vpc.cidr` (the longest prefix of the
-path that names a resource is the resource, the rest its attribute) or
-`why 'T["A"].path'` the attribute's `attr`. An input or a `let`
-is named as the stack reads it: `why replicas`, `why nodes.count` (a leaf
-of an object input, the contributions that give it), `why
-traefik.acme_email` (a used module's). An `attr`/`arg`
-pattern may name part of an object attribute, by dotted path or by object
-value, and then shows only the contributions that hold it:
+`dform why PATTERN` prints how a value was made (R-122): an attribute,
+or an input or `let`, as its line, `T NAME.path = VALUE`, and under it
+its chain, as `plan -vv` prints it under the attribute: each
+`= EXPRESSION   SITE` the value passed through, following only what the
+expression reads, then each write it beat (`over 1 @default`). A value
+written as the literal it is is one line, its place beside it. An object
+is its leaves, each its own chain. A resource is its header, `T NAME
+SITE` with the statement's bindings, then each attribute and its chain;
+nothing else of the resource:
 
 ```bash
-cargo run -- -C examples/demo why 'attr(net.vpc, "main.vpc", "tags.team", "platform")' dform env=prod
+cargo run -- -C examples/tour why orders.backup_days tour env=prod
+# db.postgres orders.backup_days = 14
+#   = database.backup_days  stacks/tour.df:145
+#   = 14                    stacks/tour.df:139
+#   over 1 @default         stacks/tour.df:27
+cargo run -- -C examples/demo why main.vpc.tags.team dform env=prod
+# net.vpc main.vpc.tags.team = "platform"  baseline.df:10
+```
+
+`--tree` prints the derivation instead, from the provenance circuit
+every evaluation records (proposal E §3, DR-10), in the program's own
+terms; any other fact (a relation's row, a `deny`, a `want` by its
+pattern) always prints so. Each statement that fired, as written, at its
+`file:line` (a block shows the entry that fired, the rest elided as
+`..`; a used module's statement names its `use`, a copy's its
+`resource`), then `with` the statement's variables as they were bound,
+by their names in the source, and under them each computed term of the
+statement with its value: an interpolation, a function call, a read
+(`database.backup_days = 14`), a lookup (`zone_index[z] = 1`), an
+unknown as its `?` label. Under that are the facts the firing read,
+recursively, each spelled as the plan prints it (R-111): `net.vpc main`
+for a resource, a copy's `net.vpc blue.vpc`, `net.vpc main.cidr =
+10.0.0.0/16` for an attribute, `input env = "prod"` and `let n = 3` for
+a cell, a relation as `zone("us-test-1a", 1)` (its facts after its
+signature, `decl zone(name: string, index: int)`, the columns as
+declared or inferred, when any has a type). An attribute or an input is
+`merged from N contributions`, each with its value, its rank when it is
+not normal (`@default`) and the statement that made it: an input's
+default, each `set` that gives it (`stacks/tour.df:139  set {
+database.backup_days = 14 .. } where env == "prod"`, a document's leaf
+by its `file:line`), `--set`. A fact given to the run says where it came
+from: its `file:line`, `--set env=prod`, the provider schema, the world,
+the plan for the facts the planner hands to the policy pass. Variables
+are allowed and every match is printed. A fact derived more than one way
+shows its first derivation and `... N more alternatives`; `--all` shows
+them all (a tree). `--core` prints the tree in the core's spelling: the
+lowered rules by id (`by r17: head :- body`), their variables, facts as
+relations, the aggregate as `Σattr`.
+
+An address is a pattern too, as plan prints it or in full: `why 'net.vpc
+main.vpc'`, its path alone `why main.vpc`, or `why 'net.vpc["main.vpc"]'`
+explains the resource; `why main.vpc.cidr` (the longest prefix of the
+path that names a resource is the resource, the rest its attribute) or
+`why 'T["A"].path'` the attribute. An input or a `let` is named as the
+stack reads it: `why replicas`, `why nodes.count` (a leaf of an object
+input), `why traefik.acme_email` (a used module's). An `attr`/`arg`
+pattern may name part of an object attribute, by dotted path or by
+object value, and then shows only the contributions that hold it:
+
+```bash
+cargo run -- -C examples/demo why --tree 'attr(net.vpc, "main.vpc", "tags.team", "platform")' dform env=prod
 # net.vpc main.vpc.tags = {component: "network", env: "prod", team: "platform"}
 #   merged from 2 contributions
 #   ├─ {team: "platform"}
 #   │    baseline.df:10  set r.tags = { team: "platform" } where r in resource   (use baseline)
 #   │    with r = net.vpc main.vpc
-#   │    └─ net.vpc main.vpc
-#   │         network.df:15  resource net.vpc vpc { .. }   (resource network.vpc main)
 #   ...
 #   └─ ... 1 other contribution (--all)
-cargo run -- -C examples/tour why orders.backup_days tour env=prod
-# db.postgres orders.backup_days = 14
-#   merged from 2 contributions
-#   ├─ type_refine("db.postgres", "backup_days", "range(1, 35)")   provider schema
-#   └─ 14
-#        stacks/tour.df:145  resource db.postgres orders { .. backup_days = database.backup_days .. }
-#        with database.backup_days = 14
-#        ├─ input database = {backup_days: 14, multi_az: true}
-#        │    merged from 4 contributions
-#        │    ├─ {backup_days: 1} @default   stacks/tour.df:27
-#        │    ├─ {multi_az: false} @default   stacks/tour.df:27
-#        │    ├─ {backup_days: 14}
-#        │    │    stacks/tour.df:139  set { database.backup_days = 14 .. } where env == "prod"
-#   ...
 ```
 
 `dform why-not PATTERN` (R-80) explains an absence: a resource address

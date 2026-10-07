@@ -34,6 +34,11 @@ pub struct Focus {
 }
 
 impl Focus {
+    /// The keys below the attribute's top-level path.
+    pub fn keys(&self) -> &[String] {
+        &self.keys
+    }
+
     fn holds(&self, v: &Value) -> bool {
         let mut at = v;
         for k in &self.keys {
@@ -1437,6 +1442,401 @@ fn value_site(
         }
     }
     own
+}
+
+/// One step of a value's provenance chain (R-122), `= EXPR   SITE`: the
+/// expression that wrote the value as the source writes it, where, the
+/// clause's bindings and the rank it won at; or a contribution it beat
+/// (`lost`).
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Step {
+    pub expr: String,
+    /// `file:line`, or the flag that gave the value (`--set env=prod`).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub at: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub with: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rank: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub lost: bool,
+}
+
+impl Printer<'_> {
+    /// The chain of the winning value of attribute fact `attr` (an
+    /// `attr/4`), at `keys` below it when they name part of an object:
+    /// one step per expression it passed through, following only what
+    /// each reads, until a literal, a key or a provider's value; then one
+    /// step per contribution it beat. Empty when no statement wrote it.
+    /// A stack key in `stack_keys` ends it: the deployment line has its
+    /// value.
+    pub fn attr_chain(
+        &self,
+        rules: &[RuleStmt],
+        attr: &Atom,
+        keys: &[String],
+        stack_keys: &BTreeSet<String>,
+    ) -> Vec<Step> {
+        let Some(id) = self.circuit.fact_id(&engine::circuit_fact(attr)) else {
+            return Vec::new();
+        };
+        let focus = (!keys.is_empty()).then(|| Focus {
+            keys: keys.to_vec(),
+            value: None,
+        });
+        self.chain(rules, id, focus.as_ref(), stack_keys)
+    }
+
+    /// The chain of fact node `id`'s value ([`Printer::attr_chain`]).
+    pub fn chain(
+        &self,
+        rules: &[RuleStmt],
+        id: NodeId,
+        focus: Option<&Focus>,
+        stack_keys: &BTreeSet<String>,
+    ) -> Vec<Step> {
+        let mut s = self.surface(rules);
+        let mut c = Compress {
+            out: Vec::new(),
+            sizes: BTreeMap::new(),
+        };
+        let (mut out, mut lost) = (Vec::new(), Vec::new());
+        let mut w = Chain {
+            out: &mut out,
+            lost: &mut lost,
+            keys: stack_keys,
+        };
+        winner_chain(&mut s, &mut c, id, focus, 0, &mut w);
+        // A binding is a step's when its expression reads it and no next
+        // step names its value (`= zone_index[z]  with z = "a"`); a key's
+        // value is the deployment line's.
+        let last = out.len().saturating_sub(1);
+        for (i, step) in out.iter_mut().enumerate() {
+            let reads: BTreeSet<&str> = step
+                .expr
+                .split(|ch: char| !(ch.is_alphanumeric() || ch == '_'))
+                .collect();
+            step.with.retain(|w| {
+                let name = w.split(" = ").next().unwrap_or_default();
+                i == last
+                    && reads.contains(name)
+                    && step.expr.trim() != name
+                    && !stack_keys.contains(name)
+            });
+        }
+        out.extend(lost);
+        out
+    }
+}
+
+/// A chain being walked: its steps, the writes they beat, and the stack
+/// keys that end it.
+struct Chain<'a> {
+    out: &'a mut Vec<Step>,
+    lost: &'a mut Vec<Step>,
+    keys: &'a BTreeSet<String>,
+}
+
+/// [`winner_site`], each step kept: the winning contribution's chain,
+/// and each one it beat into `lost`.
+fn winner_chain(
+    s: &mut Surface,
+    c: &mut Compress,
+    id: NodeId,
+    focus: Option<&Focus>,
+    depth: usize,
+    w: &mut Chain,
+) {
+    let circuit = s.p.circuit;
+    let View::Fact { alts, .. } = circuit.view(id) else {
+        return;
+    };
+    let Some(&alt) = alts.iter().min_by_key(|a| c.size(circuit, **a)) else {
+        return;
+    };
+    let View::Times { children, .. } = circuit.view(alt) else {
+        return;
+    };
+    let aggregate = children.iter().any(
+        |ch| matches!(circuit.view(*ch), View::Leaf(Leaf::Rule { id }) if id.starts_with('Σ')),
+    );
+    if !aggregate {
+        return value_chain(s, c, id, focus, None, depth, w);
+    }
+    let part = |v: &Value| -> Option<Value> {
+        let mut at = v;
+        for k in focus.map(|f| f.keys.as_slice()).unwrap_or_default() {
+            let Value::Obj(m) = at else { return None };
+            at = m.get(k)?;
+        }
+        Some(at.clone())
+    };
+    let mut contributions: Vec<(NodeId, &Fact)> = children
+        .iter()
+        .filter_map(|ch| match circuit.view(*ch) {
+            View::Fact { fact, .. } if fact.pred == "arg" && !is_check(fact) => Some((*ch, fact)),
+            _ => None,
+        })
+        .filter(|(_, f)| f.args.get(3).and_then(part).is_some())
+        .collect();
+    contributions.sort_by_key(|(_, f)| std::cmp::Reverse(rank_of(f).0));
+    let Some(&(win, fact)) = contributions.first() else {
+        return;
+    };
+    let (top, rank) = rank_of(fact);
+    let won = fact.args.get(3).and_then(part);
+    // What it beat: a lower rank's value, where it differs. An object's
+    // contributions at the winning rank merge; none of them lost.
+    for &(l, f) in &contributions[1..] {
+        let v = f.args.get(3).and_then(part);
+        if rank_of(f).0 == top || v == won || matches!(v, Some(Value::Obj(_))) {
+            continue;
+        }
+        if let (Some(site), Some(v)) = (site_of(s, c, l, depth + 1), v) {
+            let r = rank_of(f).1;
+            w.lost.push(Step {
+                expr: s.p.redact.text(&s.p.redact.surface(&v)),
+                at: place(&site),
+                with: Vec::new(),
+                rank: (r != "normal").then(|| r.to_string()),
+                lost: true,
+            });
+        }
+    }
+    let rank = (rank != "normal").then_some(rank);
+    value_chain(s, c, win, focus, rank, depth, w);
+}
+
+/// A site's place: `file:line`, or the flag that gave the value.
+fn place(site: &Site) -> String {
+    match site.at.is_empty() {
+        true => site.statement.clone(),
+        false => site.at.clone(),
+    }
+}
+
+/// [`value_site`], each step kept: the expression that wrote fact `id`,
+/// then the chain of the input or `let` it reads.
+fn value_chain(
+    s: &mut Surface,
+    c: &mut Compress,
+    id: NodeId,
+    focus: Option<&Focus>,
+    rank: Option<&str>,
+    depth: usize,
+    w: &mut Chain,
+) {
+    let circuit = s.p.circuit;
+    let Some(own) = site_of(s, c, id, depth) else {
+        return;
+    };
+    let View::Fact { fact, alts, .. } = circuit.view(id) else {
+        return;
+    };
+    let mut value = match fact.pred.as_str() {
+        "arg" | "attr" => fact.args.get(3),
+        _ => None,
+    };
+    let mut rhs = own
+        .entry
+        .as_deref()
+        .map(|e| e.split_once(" = ").map_or(e, |(_, r)| r).to_string());
+    if let (Some(f), Some(e)) = (focus.filter(|f| !f.keys.is_empty()), rhs.as_deref()) {
+        rhs = field_of(e, &f.keys).or_else(|| shorthand(e, &f.keys));
+    }
+    if let Some(f) = focus.filter(|f| !f.keys.is_empty()) {
+        value = f
+            .keys
+            .iter()
+            .try_fold(value, |v, k| match v {
+                Some(Value::Obj(m)) => Some(m.get(k)),
+                _ => None,
+            })
+            .flatten();
+    }
+    let expr = match (&rhs, value) {
+        (Some(r), _) => r.clone(),
+        (None, Some(v)) => s.p.redact.text(&s.p.redact.surface(v)),
+        (None, None) => own.statement.clone(),
+    };
+    w.out.push(Step {
+        expr,
+        at: place(&own),
+        with: own.with.clone(),
+        rank: rank.map(str::to_string),
+        lost: false,
+    });
+    if depth >= FOLLOW {
+        return;
+    }
+    let Some(&alt) = alts.iter().min_by_key(|a| c.size(circuit, **a)) else {
+        return;
+    };
+    let View::Times { children, .. } = circuit.view(alt) else {
+        return;
+    };
+    // What the entry reads, when it is a path (`config.region`), and the
+    // cell that passes the value on.
+    let read: Option<Vec<String>> = rhs.as_deref().and_then(|rhs| {
+        let plain = !rhs.is_empty()
+            && !rhs.contains(|c: char| c.is_whitespace() || "()[]{}$,\"".contains(c));
+        plain.then(|| crate::ir::path_keys(rhs))
+    });
+    let next = match value {
+        Some(v) => passed_cell(c, circuit, children, v, read.as_deref()),
+        None => None,
+    };
+    // An expression of one cell (`inet(cidrs.main)`): that cell's value.
+    let next = next.or_else(|| read_cell(c, circuit, children, rhs.as_deref()?));
+    // A stack key ends it: the deployment line says its value.
+    let key = |p: NodeId| match circuit.view(p) {
+        View::Fact { fact, .. } => {
+            fact.args.first().and_then(Value::as_str) == Some("input")
+                && fact.args.get(1).and_then(Value::as_str) == Some("")
+                && fact
+                    .args
+                    .get(2)
+                    .and_then(Value::as_str)
+                    .is_some_and(|n| w.keys.contains(n))
+        }
+        _ => false,
+    };
+    if let Some((p, keys)) = next.filter(|(p, _)| !key(*p)) {
+        let focus = (!keys.is_empty()).then_some(Focus { keys, value: None });
+        winner_chain(s, c, p, focus.as_ref(), depth + 1, w);
+    }
+}
+
+/// The one input or `let` cell among a firing's `children` that
+/// expression `e` reads, with the keys below it; `None` when it reads
+/// none, or several.
+fn read_cell(
+    c: &mut Compress,
+    circuit: &Circuit,
+    children: &[NodeId],
+    e: &str,
+) -> Option<(NodeId, Vec<String>)> {
+    let paths: Vec<Vec<String>> = code_of(e)
+        .split(|ch: char| !(ch.is_alphanumeric() || ch == '_' || ch == '.'))
+        .filter(|t| t.starts_with(|ch: char| ch.is_alphabetic() || ch == '_'))
+        .map(crate::ir::path_keys)
+        .collect();
+    let mut cells: Vec<NodeId> = children.to_vec();
+    for ch in children {
+        let View::Fact { fact, alts, .. } = circuit.view(*ch) else {
+            continue;
+        };
+        if matches!(fact.pred.as_str(), "attr" | "arg" | "want") {
+            continue;
+        }
+        if let Some(&alt) = alts.iter().min_by_key(|a| c.size(circuit, **a))
+            && let View::Times { children, .. } = circuit.view(alt)
+        {
+            cells.extend(children.iter().copied());
+        }
+    }
+    let mut found: Vec<(NodeId, Vec<String>)> = Vec::new();
+    for id in cells {
+        for p in &paths {
+            if let Some(rest) = cell_reads(circuit, id, p)
+                && !found.iter().any(|(x, _)| *x == id)
+            {
+                found.push((id, rest));
+            }
+        }
+    }
+    match found.as_slice() {
+        [one] => Some(one.clone()),
+        _ => None,
+    }
+}
+
+/// Expression `e` without its string literals' text, their
+/// interpolations kept: what it reads (`name` of `"${name}-gke"`).
+fn code_of(e: &str) -> String {
+    let mut out = String::new();
+    let (mut quoted, mut depth, mut escaped) = (false, 0usize, false);
+    let mut chars = e.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if quoted && depth == 0 {
+            match ch {
+                _ if escaped => escaped = false,
+                '\\' => escaped = true,
+                '"' => {
+                    quoted = false;
+                    out.push(' ');
+                }
+                '$' if chars.peek() == Some(&'{') => {
+                    chars.next();
+                    depth = 1;
+                    out.push(' ');
+                }
+                _ => {}
+            }
+            continue;
+        }
+        match ch {
+            '"' if depth == 0 => quoted = true,
+            '{' if depth > 0 => depth += 1,
+            '}' if depth > 0 => {
+                depth -= 1;
+                if depth == 0 {
+                    out.push(' ');
+                    continue;
+                }
+            }
+            _ => {}
+        }
+        out.push(ch);
+    }
+    out
+}
+
+/// When fact `id` is an input or `let` cell and `read` names it (or a
+/// path into it), the keys of `read` below the cell.
+fn cell_reads(circuit: &Circuit, id: NodeId, read: &[String]) -> Option<Vec<String>> {
+    let View::Fact { fact: f, .. } = circuit.view(id) else {
+        return None;
+    };
+    if f.pred != "attr"
+        || !matches!(
+            f.args.first().and_then(Value::as_str),
+            Some("input" | "let")
+        )
+    {
+        return None;
+    }
+    let name = crate::ir::path_keys(f.args.get(2)?.as_str()?);
+    let scoped: Vec<String> = match f.args.get(1)?.as_str()? {
+        "" => Vec::new(),
+        scope => scope
+            .split('.')
+            .map(str::to_string)
+            .chain(name.clone())
+            .collect(),
+    };
+    read.strip_prefix(name.as_slice())
+        .or_else(|| {
+            read.strip_prefix(scoped.as_slice())
+                .filter(|_| !scoped.is_empty())
+        })
+        .map(<[String]>::to_vec)
+}
+
+/// The variable a shorthand field of object literal `e` reads at `key`,
+/// `env` of `{ env, component: "network" }`.
+fn shorthand(e: &str, keys: &[String]) -> Option<String> {
+    let [k] = keys else { return None };
+    let parse = crate::syntax::parser::parse_term(e.trim());
+    let object = parse
+        .syntax()
+        .descendants()
+        .find(|n| n.kind() == SyntaxKind::OBJECT)?;
+    object
+        .children()
+        .filter(|n| n.kind() == SyntaxKind::OBJECT_FIELD)
+        .map(|f| f.text().to_string().trim().to_string())
+        .find(|t| t == k)
 }
 
 /// The expression object literal `e` gives at `keys` (`config.domain` of

@@ -34,7 +34,7 @@ use crate::stuck::{Sections, Stuck};
 use crate::value::{Value, null_owner};
 use serde_json::{Value as Json, json};
 use std::collections::{BTreeMap, BTreeSet};
-use tree::{Because, Site};
+use tree::Site;
 
 mod bare;
 pub mod table;
@@ -492,6 +492,9 @@ pub struct Line {
     pub leaves: Vec<Line>,
     /// Where its value was written (R-79, [`Report::explain`]).
     pub site: Option<Site>,
+    /// At `-vv`, how its value was made: each expression it passed
+    /// through, then what it beat (R-122, [`tree::Printer::attr_chain`]).
+    pub chain: Vec<tree::Step>,
 }
 
 #[derive(Debug, Clone)]
@@ -499,8 +502,6 @@ pub struct Deformation {
     pub kind: ActionKind,
     pub addr: Address,
     pub lines: Vec<Line>,
-    /// Why it is planned (`plan --why=full`, [`Report::explain`]).
-    pub why: Vec<Because>,
     /// Where it is derived (R-79): its `want`'s site; a delete's, where
     /// the last apply derived it.
     pub site: Option<Site>,
@@ -685,6 +686,8 @@ pub struct Report {
     pub warnings: Vec<crate::zset::Emptied>,
     /// The statements that derive no resource, each with why (R-120).
     pub not_planned: Vec<crate::zset::NotPlanned>,
+    /// The stack's keys: a value's chain ends at one (R-122).
+    pub keys: BTreeSet<String>,
 }
 
 /// What the report is built from.
@@ -864,6 +867,7 @@ pub fn report(i: &Input) -> Report {
         classes,
         tick: i.tick,
         why: Why::None,
+        keys: BTreeSet::new(),
         approvals: crate::approval::needs(&i.res.facts)
             .into_iter()
             .map(|(addr, reason)| Approval {
@@ -1291,6 +1295,7 @@ fn deformation(a: &Action, schema: &Schema, r: &Redactor, refs: &Refs) -> Deform
         ),
         leaves: vec![],
         site: None,
+        chain: Vec::new(),
     };
     let by_element = matches!(
         a.kind,
@@ -1357,13 +1362,13 @@ fn deformation(a: &Action, schema: &Schema, r: &Redactor, refs: &Refs) -> Deform
             after: Shown::Absent,
             leaves,
             site: None,
+            chain: Vec::new(),
         });
     }
     Deformation {
         kind: a.kind.clone(),
         addr: a.addr.clone(),
         lines,
-        why: Vec::new(),
         site: None,
         because: None,
         forces: match a.kind {
@@ -1764,9 +1769,6 @@ impl Report {
             .flat_map(|b| b.deformations.iter_mut());
         for d in self.definite.iter_mut().chain(pending) {
             if matches!(d.kind, ActionKind::Delete | ActionKind::DeleteDeposed) {
-                if why == Why::Full {
-                    d.why = explanation(&p, res, d);
-                }
                 continue;
             }
             d.site = p.want_site(rules, &d.addr);
@@ -1776,9 +1778,9 @@ impl Report {
                 .unwrap_or_default();
             for l in d.lines.iter_mut() {
                 l.site = attr_site(&p, rules, facts, &l.path);
-            }
-            if why == Why::Full {
-                d.why = explanation(&p, res, d);
+                if why == Why::Full {
+                    l.chain = attr_chain(&p, rules, facts, &l.path, &self.keys);
+                }
             }
         }
         for g in &mut self.groups {
@@ -1835,16 +1837,7 @@ impl Report {
     /// program's directory outside a project), whatever directory the run
     /// is in and however it named the program.
     pub fn relative_to(&mut self, top: &std::path::Path) {
-        let prefix = format!("{}/", top.display());
-        let place = |at: &str| -> Option<String> {
-            let (file, line) = at.rsplit_once(':')?;
-            if file.starts_with('<') {
-                return None;
-            }
-            let abs = std::path::absolute(file).ok()?;
-            let rest = abs.to_str()?.strip_prefix(&prefix)?;
-            Some(format!("{rest}:{line}"))
-        };
+        let place = |at: &str| relative_place(at, top);
         let fix = |s: &mut Option<Site>| {
             if let Some(s) = s
                 && let Some(at) = place(&s.at)
@@ -1860,10 +1853,10 @@ impl Report {
             fix(&mut d.site);
             for l in d.lines.iter_mut() {
                 fix(&mut l.site);
-            }
-            for b in d.why.iter_mut() {
-                if let Some(at) = b.at.as_deref().and_then(place) {
-                    b.at = Some(at);
+                for step in l.chain.iter_mut() {
+                    if let Some(at) = place(&step.at) {
+                        step.at = at;
+                    }
                 }
             }
         }
@@ -2400,9 +2393,9 @@ impl Report {
                 Some(s) => attr_text(d, l, s, self.why),
             };
             write_line(rows, &d.kind, l, &inner, style, self.why, right);
-        }
-        for b in &d.why {
-            rows.push(Row::plain(format!("{inner}{}", b.line())));
+            if self.why == Why::Full {
+                write_chain(rows, l, &format!("{inner}  "), self.why);
+            }
         }
         if let Some(b) = &d.because {
             let plain = format!("{inner}because {b}");
@@ -2410,6 +2403,105 @@ impl Report {
             rows.push(Row::new(&plain, painted));
         }
     }
+}
+
+/// Under attribute line `l`, at `-vv`, how its value was made (R-122):
+/// one `= EXPR   SITE` row per step, then `over EXPR   SITE` per write
+/// it beat. A value stated as the literal it is says nothing more.
+fn write_chain(rows: &mut Vec<Row>, l: &Line, indent: &str, why: Why) {
+    if let [only] = l.chain.as_slice()
+        && !only.lost
+        && only.with.is_empty()
+        && only.expr == l.after.said(why)
+    {
+        return;
+    }
+    rows.extend(chain_rows(&l.chain, indent));
+}
+
+/// The rows of a value's chain ([`write_chain`], `why`).
+fn chain_rows(chain: &[tree::Step], indent: &str) -> Vec<Row> {
+    let mut rows = Vec::new();
+    for step in chain {
+        let word = if step.lost { "over" } else { "=" };
+        let rank = step
+            .rank
+            .as_ref()
+            .map(|r| format!(" @{r}"))
+            .unwrap_or_default();
+        let left = format!("{indent}{word} {}{rank}", elide_literals(&step.expr));
+        let mut right = Vec::new();
+        if !step.with.is_empty() {
+            right.push(
+                format!("{}  with {}", step.at, step.with.join(", "))
+                    .trim()
+                    .to_string(),
+            );
+        }
+        if !step.at.is_empty() {
+            right.push(step.at.clone());
+        }
+        rows.push(Row::plain(left).with(right));
+    }
+    rows
+}
+
+/// Values and their chains as `why` prints them (R-122): each `head`
+/// (`path = value`) at `indent`, its steps under it, in one layout. A
+/// chain that only says the value (`shown`) again is left out.
+pub fn chains_text(
+    items: &[(String, String, Vec<tree::Step>)],
+    indent: &str,
+    style: Style,
+) -> String {
+    let mut rows = Vec::new();
+    for (head, shown, chain) in items {
+        let row = Row::plain(format!("{indent}{}", elide_literals(head)));
+        // A literal: its place on its line.
+        if let [only] = chain.as_slice()
+            && !only.lost
+            && only.with.is_empty()
+            && only.expr == *shown
+        {
+            rows.push(row.with(vec![only.at.clone()]));
+            continue;
+        }
+        rows.push(row);
+        rows.extend(chain_rows(chain, &format!("{indent}  ")));
+    }
+    layout(&rows, style)
+}
+
+/// `e` with each string literal past [`LONG`] characters elided.
+fn elide_literals(e: &str) -> String {
+    let mut out = String::new();
+    let mut rest = e;
+    while let Some(start) = rest.find('"') {
+        out.push_str(&rest[..start]);
+        let tail = &rest[start + 1..];
+        let mut end = None;
+        let mut escaped = false;
+        for (i, ch) in tail.char_indices() {
+            match ch {
+                '\\' if !escaped => escaped = true,
+                '"' if !escaped => {
+                    end = Some(i);
+                    break;
+                }
+                _ => escaped = false,
+            }
+        }
+        let Some(end) = end else {
+            out.push_str(&rest[start..]);
+            return out;
+        };
+        out.push('"');
+        out.push_str(&elide(&tail[..end]));
+        out.push('"');
+        rest = &tail[end + 1..];
+    }
+    out.push_str(rest);
+    out
 }
 
 /// Deny `text` over the plan (`MESSAGE`, or `MESSAGE ctx={..}`) as the
@@ -2589,6 +2681,27 @@ fn group_address(g: &Group) -> String {
 /// `path` (`tags.team` of `tags`, `statements[0].action` of
 /// `statements`), focused on the keys below it.
 fn attr_site(p: &tree::Printer, rules: &[RuleStmt], facts: &[&Atom], path: &str) -> Option<Site> {
+    let (a, keys, whole) = attr_holding(facts, path)?;
+    p.attr_site(rules, a, &keys, whole)
+}
+
+/// The chain of change path `path`'s value ([`attr_site`]'s fact).
+fn attr_chain(
+    p: &tree::Printer,
+    rules: &[RuleStmt],
+    facts: &[&Atom],
+    path: &str,
+    stack_keys: &BTreeSet<String>,
+) -> Vec<tree::Step> {
+    match attr_holding(facts, path) {
+        Some((a, keys, true)) => p.attr_chain(rules, a, &keys, stack_keys),
+        _ => Vec::new(),
+    }
+}
+
+/// The attribute fact of `facts` that holds change path `path`, the keys
+/// below it, and whether they reach the leaf.
+fn attr_holding<'a>(facts: &[&'a Atom], path: &str) -> Option<(&'a Atom, Vec<String>, bool)> {
     let segs = crate::ir::path_segments(path);
     for k in (1..=segs.len()).rev() {
         let last = segs[k - 1];
@@ -2613,10 +2726,23 @@ fn attr_site(p: &tree::Printer, rules: &[RuleStmt], facts: &[&Atom], path: &str)
                 false => vec![],
             };
             let whole = index.is_empty() && keys.len() == segs.len() - k;
-            return p.attr_site(rules, a, &keys, whole);
+            return Some((*a, keys, whole));
         }
     }
     None
+}
+
+/// Site `at` (`FILE:LINE`) relative to `top`, the project's root; `None`
+/// when it is not under it, or not a file's.
+pub fn relative_place(at: &str, top: &std::path::Path) -> Option<String> {
+    let prefix = format!("{}/", top.display());
+    let (file, line) = at.rsplit_once(':')?;
+    if file.starts_with('<') {
+        return None;
+    }
+    let abs = std::path::absolute(file).ok()?;
+    let rest = abs.to_str()?.strip_prefix(&prefix)?;
+    Some(format!("{rest}:{line}"))
 }
 
 /// One tick of the report.
@@ -2825,48 +2951,7 @@ impl Report {
             m.insert("site".into(), json!(d.site));
             m.insert("because".into(), json!(d.because));
         }
-        if self.why == Why::Full {
-            m.insert("why".into(), json!(d.why));
-        }
         Json::Object(m)
-    }
-}
-
-/// Why change `d` is planned ([`Report::explain`] at `Full`).
-fn explanation(p: &tree::Printer, res: &EvalResult, d: &Deformation) -> Vec<Because> {
-    let state = |text: &str| {
-        vec![Because {
-            kind: "state".into(),
-            at: None,
-            text: text.into(),
-        }]
-    };
-    match d.kind {
-        ActionKind::Delete => state("no statement derives it now; state has it"),
-        ActionKind::DeleteDeposed => state("deposed by its replacement"),
-        ActionKind::Noop | ActionKind::Create | ActionKind::Adopt => {
-            p.want(&res.rules, &d.addr).unwrap_or_default()
-        }
-        ActionKind::Update
-        | ActionKind::Drift
-        | ActionKind::Pending
-        | ActionKind::Replace { .. } => {
-            let mut out: Vec<Because> = Vec::new();
-            for l in &d.lines {
-                for b in p
-                    .attr(&res.rules, &res.facts, &d.addr, &l.path)
-                    .unwrap_or_default()
-                {
-                    if !out.contains(&b) {
-                        out.push(b);
-                    }
-                }
-            }
-            if out.is_empty() {
-                out = p.want(&res.rules, &d.addr).unwrap_or_default();
-            }
-            out
-        }
     }
 }
 
@@ -2893,6 +2978,9 @@ fn line_json(l: &Line, explained: bool) -> Json {
     }
     if explained && let Some(s) = &l.site {
         m.insert("site".into(), json!(s));
+    }
+    if !l.chain.is_empty() {
+        m.insert("chain".into(), json!(l.chain));
     }
     Json::Object(m)
 }

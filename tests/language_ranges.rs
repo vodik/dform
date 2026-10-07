@@ -76,7 +76,9 @@ fn why_shows_the_range_as_written() {
         r.stdout
     );
     assert!(r.stdout.contains("+ compute.vm web-1"), "{}", r.stdout);
-    let r = s.run(&["why", "compute.vm web-1", "p.df"]).success();
+    let r = s
+        .run(&["why", "--tree", "compute.vm web-1", "p.df"])
+        .success();
     assert!(
         r.stdout.contains("where pool(p, n), i in 0..n\n"),
         "{}",

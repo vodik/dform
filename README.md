@@ -55,7 +55,7 @@ tick 1  7 changes
 
 Every line of the plan says where it comes from, and only that: a
 value written by another file carries that file and line, `-v` adds how
-each value was computed and which writes lost, `-vv` the derivation.
+each value was computed and which writes lost, `-vv` each value's chain.
 The subnet block ends in a `where` clause, which makes it a rule: the
 clause is a query, and every answer is one subnet. `aws.availability_zone`
 is a table the provider answers, what Terraform calls a data source:
@@ -376,12 +376,24 @@ aws.subnet private-us-east-1c: no rule derives it
 
 The limit is stated rather than papered over: `why` explains what the
 program derived, `why-not` explains what one rule failed to derive, and
-neither invents a reason for something no rule mentions. The full
-derivation, down to the line of source or the row of a table, is one
-question away:
+neither invents a reason for something no rule mentions. Where a value
+came from is one question away, each expression it passed through to
+the literal at the end, and what it beat:
 
 ```
-$ dform why 'aws.route["blue-to-green"]'
+$ dform why k3s.admin.public_key
+ovh.ssh_key k3s.admin.public_key = "ssh-ed25519 AAAA…"
+  = ssh_public_key                         k3s.df:23
+  = config.ssh_public_key                  stacks/platform.df:24
+  = "ssh-ed25519 AAAA…"                    config.df:13
+```
+
+`plan -vv` prints the same chain under each attribute. The full
+derivation, down to the line of source or the row of a table, is
+`--tree`:
+
+```
+$ dform why --tree 'aws.route["blue-to-green"]'
 aws.route["blue-to-green"]
   stacks/network.df:58  resource aws.route "${a}-to-${b}" { .. } where reaches(a, b), a != b
   with a = "blue", b = "green"
@@ -806,8 +818,9 @@ only when the value was written outside its own block (a policy, a
 `(sensitive)`, a long string elided in the middle, and a `because` line
 says what moved since the last apply. `-v` adds how: the bindings, the
 expression behind each value, and the writes that lost with their ranks
-(`@normal over k3s.df:9 @default`); `-vv` expands each change into its
-derivation. `-q` is the bare diff for scripts, laid out as it was before
+(`@normal over k3s.df:9 @default`); `-vv` adds under each attribute the
+chain of expressions its value passed through, as `why` prints it. `-q`
+is the bare diff for scripts, laid out as it was before
 any of this. Colour is a hint and never the only carrier. `--json`
 carries the ticks, what each waits on, each change's kind, full address,
 site and `because` as fields.
@@ -1046,7 +1059,7 @@ without a digest, no public database) as denies.
 |---------------------------------------------|-------------------------------------------|-----------------------------------------------------------|
 |a resource per value only apply knows        |`-target`, then a second run by hand       |listed under `later`; apply runs a second tick             |
 |a tag on everything, overridable per resource|a variable threaded through every module   |`set r.tags.team = "platform" @default where r in resource`|
-|"why does this exist?"                       |read the source, guess                     |every plan line says; `dform why ADDR` for the derivation  |
+|"why does this exist?"                       |read the source, guess                     |every plan line says; `dform why ADDR` for each value      |
 |"why does this not exist?"                   |read the source, guess harder              |`dform why-not ADDR` names the condition that failed       |
 |"how many rounds will this apply take?"      |find out during the apply                  |the plan is grouped by tick, with what each tick waits on  |
 |rules about the change set itself            |plan JSON through an external policy engine|the plan is a table the program's own denies read          |

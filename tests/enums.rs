@@ -67,7 +67,7 @@ fn why_shows_the_type_as_the_leaf() {
         r.stdout
     );
     let r = s
-        .run(&["why", "compute.vm[\"web-prod\"]", "p.df"])
+        .run(&["why", "--tree", "compute.vm[\"web-prod\"]", "p.df"])
         .success();
     assert!(
         r.stdout.contains("where e in environment\n"),

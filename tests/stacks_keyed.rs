@@ -195,7 +195,9 @@ fn a_deployment_read_is_the_keyed_read_of_an_instance() {
         "\nuse fake\nuse stacks.app\nresource net.vpc edge { name = app[env=\"prod\"].url }\n",
     );
     s.run(&["apply", "app", "env=prod", "--yes"]).success();
-    let r = s.run(&["why", "net.vpc[\"edge\"].name", "web"]).success();
+    let r = s
+        .run(&["why", "--tree", "net.vpc[\"edge\"].name", "web"])
+        .success();
     assert!(
         r.stdout
             .contains("resource stacks.app app[env=prod]   published by app[env=prod]\n")

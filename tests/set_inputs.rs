@@ -69,7 +69,9 @@ fn a_leaf_that_is_no_input_is_a_deny() {
         r.stderr
     );
     s.write("config/prod.yaml", "db:\n  size: 3\n");
-    let r = s.run(&["why", "db.size", "p.df", "env=prod"]).success();
+    let r = s
+        .run(&["why", "--tree", "db.size", "p.df", "env=prod"])
+        .success();
     assert!(
         r.stdout
             .contains("p.df:7  set from yaml(\"config/${env}.yaml\")")

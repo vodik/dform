@@ -84,7 +84,8 @@ fn a_quoted_segment_round_trips_through_the_plan_file_and_the_world() {
             .run(&["dev", "--world", "w.json", "why", path, "main"])
             .success();
         assert!(
-            r.stdout.starts_with("net.vpc k3s.\"k8s-lab.vodik.xyz\"\n"),
+            r.stdout
+                .starts_with("net.vpc k3s.\"k8s-lab.vodik.xyz\"  k3s.df:9\n"),
             "{path}: {}",
             r.stdout
         );

@@ -339,7 +339,8 @@ fn an_object_input_is_a_block_of_fields() {
         "{}",
         r.stdout
     );
-    // `why` shows the leaf's layers: the default and the `--set`.
+    // `why` shows the leaf's chain: the `--set`, over the default
+    // (R-122).
     let r = s
         .run(&[
             "dev",
@@ -352,18 +353,10 @@ fn an_object_input_is_a_block_of_fields() {
             "nodes.count=2",
         ])
         .success();
-    assert!(
-        r.stdout
-            .starts_with("input nodes = {count: 2, flavor: \"b3-8\", pool: {size: 4}}\n"),
-        "{}",
-        r.stdout
+    assert_eq!(
+        r.stdout,
+        "input nodes.count = 2\n  = 2 @override    --set nodes.count=2\n  over 1 @default  p.df:4\n"
     );
-    assert!(
-        r.stdout.contains("{count: 1} @default   p.df:4"),
-        "{}",
-        r.stdout
-    );
-    assert!(r.stdout.contains("└─ --set nodes.count=2"), "{}", r.stdout);
     // A leaf is read as its type.
     let r = object_plan(&s, &["--set", "nodes.count=two"]).failure();
     assert!(

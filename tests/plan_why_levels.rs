@@ -1,8 +1,8 @@
 //! R-79, R-111: the plan's ladder on the demo and crud-api. The default
 //! (`--why=line`) is the plan grouped by tick, each change's site and each
 //! value written outside its block's; `-v` (`--why=how`) says how on the
-//! same lines; `-vv` (`--why=full`, `--why` alone) adds each change's
-//! derivation under it; `-q` (`--why=none`) is the bare diff as it was laid
+//! same lines; `-vv` (`--why=full`, `--why` alone) adds under each
+//! attribute the chain of expressions its value passed through (R-122); `-q` (`--why=none`) is the bare diff as it was laid
 //! out before (tests/golden/*.plan-bare.txt pins it byte for byte).
 
 mod common;
@@ -52,18 +52,23 @@ fn levels(example: &str) -> (String, String) {
     );
     assert_ne!(how, line);
 
-    // `-vv` adds the derivation's lines under each change, nothing else.
+    // `-vv` adds each value's chain under its attribute, nothing else: no
+    // line for the resource as a whole (R-122).
     let full = plan(&s, example, &["-vv"]);
     assert_eq!(plan(&s, example, &["--why=full"]), full);
     assert_eq!(plan(&s, example, &["--why"]), full);
     let derivation = |l: &str| {
         let t = l.trim_start();
-        t.starts_with("by ") || t.starts_with("because ")
+        t.starts_with("= ") || t.starts_with("over ")
     };
     let kept: Vec<&str> = full.lines().filter(|l| !derivation(l)).collect();
     assert_eq!(kept, how.lines().collect::<Vec<_>>(), "{full}");
     assert!(
-        full.lines().any(|l| l.trim_start().starts_with("by ")),
+        full.lines().any(|l| l.trim_start().starts_with("= ")),
+        "{full}"
+    );
+    assert!(
+        !full.lines().any(|l| l.trim_start().starts_with("by ")),
         "{full}"
     );
     assert!(full.lines().count() > line.lines().count(), "{full}");
