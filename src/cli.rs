@@ -1946,11 +1946,16 @@ fn run_with(
             | Cmd::Diff { .. }
             | Cmd::Explain { .. }
     );
+    // The audit log as the run began, read once: the guardrail and why
+    // since the last apply both read it.
+    let entries_read: std::cell::OnceCell<Option<Vec<serde_json::Value>>> =
+        std::cell::OnceCell::new();
+    let entries = || entries_read.get_or_init(|| audit.entries().ok()).as_ref();
     // What the last apply derived (R-80): the plan's guardrail compares
     // against it, and its policy pass reads it as `derived_at_last_apply`.
     let last_derived = match &cli.cmd {
         Cmd::Plan { .. } | Cmd::Apply { .. } | Cmd::Why { .. } | Cmd::Query { .. } => {
-            audit.entries().ok().and_then(|es| zset::Derived::last(&es))
+            entries().and_then(|es| zset::Derived::last(es))
         }
         _ => None,
     };
@@ -2189,39 +2194,42 @@ fn run_with(
     // apply's program evaluated again (`diff`'s reading), at the commit it
     // recorded or with the inputs it recorded. Only this executable can
     // evaluate it (not a test linking dform in).
-    let because =
-        |report: &mut report::Report, plan: &crate::provider::Plan, res: &engine::EvalResult| {
-            let dform = std::env::current_exe()
-                .ok()
-                .is_some_and(|e| e.file_stem().is_some_and(|s| s == "dform"));
-            if why == report::Why::None || !dform || cli.files.is_empty() {
-                return;
-            }
-            let addresses: Vec<ir::Address> = plan
-                .actions
-                .iter()
-                .filter(|a| !matches!(a.kind, ActionKind::Noop))
-                .map(|a| a.addr.clone())
-                .collect();
-            let keys: Vec<String> = stack_cfg.keys.iter().map(|(k, _)| k.clone()).collect();
-            let (Ok(entries), Ok(rerun)) = (audit.entries(), rerun_of(&cli, &instance.key, keys))
-            else {
-                return;
-            };
-            let then = crate::timing::time(
-                || "evaluated the last apply's program, for why".into(),
-                || {
-                    crate::diff::last_apply(
-                        &entries, &cli.files, &rerun, &cli.set, &cli.data, &addresses,
-                    )
-                },
-            );
-            let Some(then) = then else {
-                return;
-            };
-            let redact = query::Redactor::new(&res.facts, schema);
-            report.because(&then, &crate::diff::snapshot(res, &redact, &addresses));
+    let because = |report: &mut report::Report,
+                   plan: &crate::provider::Plan,
+                   res: &engine::EvalResult| {
+        let dform = std::env::current_exe()
+            .ok()
+            .is_some_and(|e| e.file_stem().is_some_and(|s| s == "dform"));
+        if why == report::Why::None || !dform || cli.files.is_empty() {
+            return;
+        }
+        let addresses: Vec<ir::Address> = plan
+            .actions
+            .iter()
+            .filter(|a| !matches!(a.kind, ActionKind::Noop))
+            .map(|a| a.addr.clone())
+            .collect();
+        if addresses.is_empty() {
+            return;
+        }
+        let keys: Vec<String> = stack_cfg.keys.iter().map(|(k, _)| k.clone()).collect();
+        let (Some(entries), Ok(rerun)) = (entries(), rerun_of(&cli, &instance.key, keys)) else {
+            return;
         };
+        let then = crate::timing::time(
+            || "evaluated the last apply's program, for why".into(),
+            || {
+                crate::diff::last_apply(
+                    entries, &cli.files, &rerun, &cli.set, &cli.data, &addresses,
+                )
+            },
+        );
+        let Some(then) = then else {
+            return;
+        };
+        let redact = query::Redactor::new(&res.facts, schema);
+        report.because(&then, &crate::diff::snapshot(res, &redact, &addresses));
+    };
     let top = site_root(&cli.files);
     // What the plan empties since the last apply (R-80), less what this
     // apply's `--allow-empty` and the stack's `allow_empty` name.
