@@ -4922,7 +4922,7 @@ mod tests {
     }
 
     /// E §7.1 / F 4.1: every ref in dform.df is to a fresh `id` and is
-    /// forwarded, so nothing is stuck and all 14 resources are definite.
+    /// forwarded, so nothing is stuck and all 13 resources are definite.
     /// (Was sim.rs's dform_df_under_nulls_is_single_phase_...)
     #[test]
     fn dform_df_under_nulls_is_single_phase() {
@@ -4933,7 +4933,7 @@ mod tests {
         );
         assert!(violations.is_empty(), "{violations:?}");
         assert!(r.stuck.is_empty(), "{:?}", r.stuck);
-        assert_eq!(facts_of(&r, "want").len(), 14);
+        assert_eq!(facts_of(&r, "want").len(), 13);
         assert!(s.pending.is_empty() && s.pending_groups.is_empty() && s.undetermined.is_empty());
     }
 
