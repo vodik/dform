@@ -154,7 +154,8 @@ message HandshakeResponse {
   // every argument free), "managed" (Query answers
   // provider.created(Type, Name, Key, Remote) with Type, Name and Key
   // bound: the object an Apply CREATE or REPLACE of address Name with
-  // idempotency key Key made, if it made one).
+  // idempotency key Key made, if it made one), "keep" (an Apply UPDATE
+  // leaves each `keep` path as the object has it).
   repeated string capabilities = 3;
   // The provider's build: its crate version and the git commit it was
   // built from (`0.1.0+1a2b3c4`). dform refuses one of its own built-in
@@ -327,6 +328,13 @@ message ApplyRequest {
   // know (DEADLINE_EXCEEDED, a crash, dform killed with it in flight) with
   // the same key, after asking for the object (the "managed" capability).
   string idempotency_key = 9;
+  // UPDATE: paths of `config` the provider leaves as the object has them,
+  // absent from `config` (R-164). dform sends one for a write-only secret
+  // a run without the deployment's master proved unchanged: it cannot
+  // send the value and the world never answers it. Only to a provider
+  // with the "keep" capability; one that cannot leave a path as it is
+  // refuses the call naming it.
+  repeated string keep = 10;
 }
 
 // `path` OP `value`: OP is one of eq, ne, len_ge, len_le, prefix, or a

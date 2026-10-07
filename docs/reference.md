@@ -1018,6 +1018,8 @@ use k8s { source = "bin/dform-provider-k8s" }        # an executable
 - Every object dform applies carries the label `dform.io/stack` (the
   deployment's name as a label value), and a Create's idempotency key rides
   on the annotation `dform.io/idempotency-key`; neither is configuration.
+  The provider has the `keep` capability: an update's `keep` path is
+  applied again as the cluster has it (R-164).
   The provider has the `managed` capability: a Create whose answer was lost
   (a generated name nobody knows yet) is found by listing the type with that
   label as the selector and matching the annotation, so the next run maps
@@ -2088,12 +2090,19 @@ derived secret says, in its site column:
 
 `secrets unchanged, a write-only one needs the key` is an update of an
 object whose write-only secret (a token in an instance's `user_data`) is
-unchanged: the update sends it whole, and the world never answers it.
-`plan --json` says the same in each deformation's `custody`.
+unchanged, where its provider cannot leave that attribute as it is: the
+world never answers it, so the update would send it whole. `plan --json`
+says the same in each deformation's `custody`.
 
 An apply without the master makes every change that sends no stand-in:
 an update of an object whose secrets are unchanged sends the world's own
-value of each (the provider's read of it), as a patch of the rest would.
+value of each (the provider's read of it), as a patch of the rest would,
+and names a write-only one in the Apply's `keep` (the provider leaves it
+as the object has it) when the provider has the `keep` capability: the
+mock, the Kubernetes provider (it applies the kept path again as the
+cluster has it, a Secret's `stringData` key from its `data`), the OVH
+provider (an instance's update never sends `user_data`), and an SDK
+provider with `Provider::KEEP` (docs/providers.md).
 It makes no change that needs the master, nor one that depends on one
 (what references it, the delete of what it references), and stops after
 the tick, exit 5, listing them:

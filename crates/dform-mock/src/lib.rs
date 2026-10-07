@@ -174,6 +174,8 @@ pub struct Call {
     pub assertions: Vec<Assertion>,
     /// A Create's or a Replace's idempotency key; empty for none.
     pub key: String,
+    /// An Update's paths left as the object has them (`keep`, R-164).
+    pub keep: Vec<String>,
 }
 
 /// `path` `op` `value` (F DR-13), checked after secrets are materialized.
@@ -894,8 +896,31 @@ impl FakeCloud {
         // A timed-out call takes effect in the world, but dform never
         // hears back.
         let answered = !self.chaos.timeout.contains(addr);
-        let doc = c.config;
+        let mut doc = c.config;
         self.world().map_err(refuse)?;
+        // `keep`: an update leaves each path as the object has it, a
+        // write-only one too (the world keeps it, though it never answers
+        // it).
+        if !c.keep.is_empty() {
+            let cur = match c.op {
+                pb::Op::Update => self
+                    .world_ref()
+                    .resources
+                    .get(&key(&addr.typ, &c.remote))
+                    .map(|rr| rr.attrs.clone()),
+                _ => None,
+            };
+            for p in &c.keep {
+                match cur.as_ref().and_then(|a| get_path(a, p)) {
+                    Some(v) => set_path(&mut doc, p, v.clone()),
+                    None => {
+                        return Err(Failed::Refused(format!(
+                            "apply {at}: keep {p}: the object has no value there to keep"
+                        )));
+                    }
+                }
+            }
+        }
         let materialized = match c.op {
             pb::Op::Delete => BTreeMap::new(),
             _ => self.materialize_doc(&at, &doc)?,
@@ -1375,9 +1400,15 @@ impl Handler for Mock {
                 Reply::Handshake(pb::HandshakeResponse {
                     protocol_version: VERSION,
                     name: backend::FAKECLOUD.into(),
-                    capabilities: ["resource", "fact", "inventory", "managed"]
+                    // `keep` but in a test of a provider that cannot
+                    // (`DFORM_TEST_FAKE_NO_KEEP`).
+                    capabilities: ["resource", "fact", "inventory", "managed", "keep"]
+                        .into_iter()
+                        .filter(|c| {
+                            *c != "keep" || std::env::var_os("DFORM_TEST_FAKE_NO_KEEP").is_none()
+                        })
                         .map(String::from)
-                        .to_vec(),
+                        .collect(),
                     version: backend::BUILD.into(),
                 })
             }
@@ -1572,6 +1603,7 @@ impl Mock {
             create_first: r.create_first,
             assertions,
             key: r.idempotency_key,
+            keep: r.keep,
         };
         let at = call.addr.to_string();
         let applied = self.cloud().apply(call);

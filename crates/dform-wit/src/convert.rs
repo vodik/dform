@@ -506,6 +506,7 @@ macro_rules! convert {
                         })
                         .collect(),
                     idempotency_key: r.idempotency_key.clone(),
+                    keep: r.keep.clone(),
                 }
             }
 
@@ -539,6 +540,7 @@ macro_rules! convert {
                         })
                         .collect(),
                     idempotency_key: r.idempotency_key.clone(),
+                    keep: r.keep.clone(),
                 })
             }
 

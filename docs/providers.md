@@ -131,6 +131,13 @@ fn main() -> std::process::ExitCode {
   replaces, a missing `required` attribute refuses. Import is a read.
 - `Provider::configure` gets the program's `use NAME { .. }` settings,
   each secret revealed into them, `{}` when the program writes none.
+- `const KEEP: bool = true` on the `Provider` says each `update` sends
+  only what `desired` holds, leaving an absent attribute as the object
+  has it. The provider then has the `keep` capability: an Apply update's
+  `keep` paths (a write-only secret a run without the deployment's master
+  proved unchanged, R-164) come filled from what Read answers, or absent
+  where it answers nothing. Without it a `keep` is refused, and dform
+  sends none: such an update needs the master.
 - `Typed::example::<R>(create, update, required)` gives `dform provider
   check` documents of the provider's own types to run its resource
   checks with.

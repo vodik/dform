@@ -1528,6 +1528,15 @@ impl Providers {
             .ok_or_else(|| anyhow!(crate::deployment::NO_PROVIDER))
     }
 
+    /// Whether the provider serving `typ` leaves a path an Apply update
+    /// names in `keep` as the object has it (the `keep` capability): then
+    /// a write-only secret proved unchanged without the master is kept,
+    /// not sent (R-164).
+    pub fn keeps(&self, typ: &str) -> bool {
+        self.link(self.route(typ))
+            .is_ok_and(|l| l.borrow().has("keep"))
+    }
+
     /// The link serving `typ`: the one whose schema declares it; else the
     /// configured provider its namespace names (a cluster's CRD, which the
     /// run's schema, loaded before the cluster was reached, lacks: the
@@ -1902,6 +1911,10 @@ impl Providers {
             ActionKind::Update | ActionKind::Drift => {
                 if !changed.is_empty() {
                     return changed;
+                }
+                // Its provider leaves the write-only one as it is.
+                if self.keeps(&a.addr.typ) {
+                    return Vec::new();
                 }
                 let wo = self.schema().write_only_of(&a.addr.typ);
                 self.proven(&a.addr)
@@ -2816,6 +2829,8 @@ impl Tick<'_> {
             }
         };
         let world = self.world.as_ref().expect("read above");
+        // The paths an update asks its provider to leave as they are.
+        let mut keep = Vec::new();
         let (op, remote, config, create_first) = match a.kind {
             ActionKind::Noop | ActionKind::Pending | ActionKind::Forget => {
                 unreachable!("returned above")
@@ -2869,11 +2884,14 @@ impl Tick<'_> {
                 }
                 // A run that does not hold the master (R-164): a leaf it
                 // proved unchanged holds a stand-in; the world's own value
-                // goes in its place, as if only the changes were sent.
+                // goes in its place, as if only the changes were sent. One
+                // the world does not answer (a write-only one) is kept by a
+                // provider that can leave it as it is.
                 if crate::secrets::standin::active()
                     && let Some(e) = state.get(addr)
                 {
                     let cur = world.get(&key(&addr.typ, &remote));
+                    let keeps = cloud.keeps(&addr.typ);
                     for p in e.derived.keys() {
                         if !get_path(&doc, p).is_some_and(crate::secrets::standin::carries) {
                             continue;
@@ -2881,6 +2899,10 @@ impl Tick<'_> {
                         match cur.and_then(|c| get_path(&c.attrs, p)) {
                             Some(v) if provider::marker(v).is_none() => {
                                 set_path(&mut doc, p, v.clone())
+                            }
+                            _ if keeps => {
+                                remove_path(&mut doc, p);
+                                keep.push(p.clone());
                             }
                             _ => {
                                 return Err(not_sent(
@@ -2945,6 +2967,7 @@ impl Tick<'_> {
             assertions,
             spans: Vec::new(),
             idempotency_key,
+            keep,
         };
         let link = cloud.route(&addr.typ);
         let ticket = cloud.links[link].borrow_mut().submit(req.clone());

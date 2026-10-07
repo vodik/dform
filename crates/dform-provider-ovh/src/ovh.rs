@@ -760,6 +760,17 @@ impl Ovh {
         let (remote, attrs, computed) = match op {
             pb::Op::Create => self.create(typ, &at, &config, key, &mut notes, &say)?,
             pb::Op::Update | pb::Op::Adopt => {
+                // `keep` (R-164): an update sends no write-only attribute
+                // (an instance's `user_data` is set at its creation only),
+                // so one is left as it is by not being sent; another path
+                // it cannot leave.
+                let wo = self.schema.write_only_of(typ);
+                if let Some(p) = r.keep.iter().find(|p| !wo.contains(&p.as_str())) {
+                    return Err(refused(
+                        &at,
+                        format!("keep {p}: only a write-only attribute is left as it is"),
+                    ));
+                }
                 self.update(typ, &at, &r.remote, &config, &mut notes, &say)?
             }
             pb::Op::Delete => {
@@ -1588,7 +1599,7 @@ impl Handler for Ovh {
                 Reply::Handshake(pb::HandshakeResponse {
                     protocol_version: VERSION,
                     name: PROVIDER.into(),
-                    capabilities: ["resource", "managed"].map(String::from).to_vec(),
+                    capabilities: ["resource", "managed", "keep"].map(String::from).to_vec(),
                     version: backend::BUILD.into(),
                 })
             }

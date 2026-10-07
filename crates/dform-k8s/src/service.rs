@@ -390,6 +390,25 @@ impl K8s {
             }
             pb::Op::Update | pb::Op::Adopt => {
                 let (ns, n) = parse_remote(kind, &req.remote, &c.namespace);
+                // `keep` (R-164): each path applied again as the object has
+                // it (a Secret's `stringData` key from its `data`), so the
+                // server-side apply leaves it untouched.
+                let kept;
+                let config = match req.keep.is_empty() {
+                    true => config,
+                    false => {
+                        let live = c
+                            .get(kind, ns, n)
+                            .await
+                            .map_err(|e| refused(&at, e))?
+                            .ok_or_else(|| {
+                                Failed::Refused(format!("{at}: {} is not there", req.remote))
+                            })?;
+                        kept = keep(config, &attrs(&live), &req.keep)
+                            .map_err(|e| Failed::Refused(format!("{at}: {e}")))?;
+                        &kept
+                    }
+                };
                 let obj = self
                     .manifest(kind, config, ns, n)
                     .map_err(|e| refused(&at, e))?;
@@ -722,6 +741,20 @@ fn has_marker(v: &Json) -> bool {
 }
 
 /// Five characters as the API server picks them for `generateName`.
+/// `config` with each `keep` path as the object has it (`live`, its
+/// attributes as Read answers them); an error naming a path the object
+/// has no value at.
+fn keep(config: &Json, live: &Json, keep: &[String]) -> std::result::Result<Json, String> {
+    let mut out = config.clone();
+    for p in keep {
+        match get_path(live, p) {
+            Some(v) => set_path(&mut out, p, v.clone()),
+            None => return Err(format!("keep {p}: the object has no value there to keep")),
+        }
+    }
+    Ok(out)
+}
+
 /// A generated name's suffix from an idempotency key: the same key, the
 /// same name.
 fn keyed_suffix(key: &str) -> String {
@@ -840,7 +873,12 @@ impl pb::provider_server::Provider for Service {
         Ok(Response::new(pb::HandshakeResponse {
             protocol_version: dform_grpc::spawn::VERSION,
             name: openapi::PROVIDER.into(),
-            capabilities: vec!["resource".into(), "managed".into(), "inventory".into()],
+            capabilities: vec![
+                "resource".into(),
+                "managed".into(),
+                "inventory".into(),
+                "keep".into(),
+            ],
             version: dform_core::plugin::backend::BUILD.into(),
         }))
     }
@@ -1147,6 +1185,25 @@ mod tests {
         assert_eq!(a, keyed_suffix("dform-0123"));
         assert_ne!(a, keyed_suffix("dform-0124"));
         assert_eq!(a.len(), 5);
+    }
+
+    /// A Secret's key kept (R-164): applied again as the cluster has it,
+    /// decoded from `data` (what `attrs` reads `stringData` as), the
+    /// rest of the update as sent.
+    #[test]
+    fn a_kept_secret_key_is_applied_as_the_object_has_it() {
+        let live = json!({"kind": "Secret", "apiVersion": "v1",
+            "metadata": {"name": "db", "namespace": "shop", "managedFields": [{
+                "manager": "dform", "operation": "Apply", "fieldsType": "FieldsV1",
+                "fieldsV1": {"f:stringData": {"f:password": {}}}}]},
+            "data": {"password": "aHVudGVyMg=="}});
+        let update = json!({"metadata": {"name": "db", "namespace": "shop",
+            "labels": {"team": "shop"}}});
+        let kept = keep(&update, &attrs(&live), &["stringData.password".into()]).unwrap();
+        assert_eq!(kept["stringData"]["password"], "hunter2");
+        assert_eq!(kept["metadata"]["labels"]["team"], "shop");
+        let e = keep(&update, &attrs(&live), &["stringData.token".into()]).unwrap_err();
+        assert!(e.contains("keep stringData.token"), "{e}");
     }
 
     #[test]

@@ -102,6 +102,15 @@ pub trait Provider: Sized + Send + 'static {
     const NAME: &'static str;
     /// Its build, for the handshake.
     const VERSION: &'static str = "0.0.0";
+    /// Whether each [`Lifecycle::update`] leaves an attribute absent from
+    /// `desired` as the object has it (it sends only what is there): then
+    /// the provider has the `keep` capability, and an Apply update's
+    /// `keep` paths (R-164: a write-only secret a run without the
+    /// deployment's master proved unchanged) are filled from what Read
+    /// answers, or left absent where it answers nothing (a write-only
+    /// one). Without it dform sends no `keep`, and such an update needs
+    /// the master.
+    const KEEP: bool = false;
     /// Configure from the provider block's settings (a program's
     /// `use NAME { .. }`, a secret among them revealed; `{}` when the
     /// program configures it with none, the engine's own keys never
@@ -410,7 +419,13 @@ impl<P: Provider> Typed<P> {
             )));
         }
         let k = self.kind(&r.r#type)?;
-        let desired = wire::from_doc_or_empty(r.config.as_ref()).map_err(Error::from)?;
+        let mut desired = wire::from_doc_or_empty(r.config.as_ref()).map_err(Error::from)?;
+        if let Some(p) = r.keep.first().filter(|_| !P::KEEP || op != pb::Op::Update) {
+            return Err(Error::Refused(format!(
+                "apply {}[{:?}]: keep {p}: this provider cannot leave an attribute as it is",
+                r.r#type, r.name
+            )));
+        }
         let progress = Progress::new(
             dform_core::ir::Address {
                 typ: r.r#type.clone(),
@@ -432,6 +447,12 @@ impl<P: Provider> Typed<P> {
             pb::Op::Update | pb::Op::Adopt => {
                 k.check(p, &desired)?;
                 let prior = found(p, &r.remote)?;
+                // `keep`: as Read answers it, else absent (`Provider::KEEP`).
+                for path in &r.keep {
+                    if let Some(v) = dform_core::provider::get_path(&prior, path) {
+                        dform_core::provider::set_path(&mut desired, path, v.clone());
+                    }
+                }
                 let obj = k.update(p, &r.remote, prior, desired, progress)?;
                 Ok((r.remote.clone(), obj))
             }
@@ -465,7 +486,10 @@ impl<P: Provider> Typed<P> {
             Call::Handshake(_) => Reply::Handshake(pb::HandshakeResponse {
                 protocol_version: VERSION,
                 name: P::NAME.to_string(),
-                capabilities: vec!["resource".to_string()],
+                capabilities: match P::KEEP {
+                    true => vec!["resource".to_string(), "keep".to_string()],
+                    false => vec!["resource".to_string()],
+                },
                 version: P::VERSION.to_string(),
             }),
             Call::Configure(r) => {

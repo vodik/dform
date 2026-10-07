@@ -388,3 +388,152 @@ fn configure_takes_the_programs_settings_only() {
     }
     assert_eq!(*SEEN.lock().unwrap(), [json!({}), json!({"region": "r"})]);
 }
+
+/// `Provider::KEEP` (R-164): an Apply update's `keep` path is left as the
+/// object has it: a provider whose update sends only what `desired`
+/// holds says `keep` in its handshake, and its update never sees the
+/// kept write-only secret; one that does not refuses a `keep`.
+#[test]
+fn keep_is_the_providers_promise() {
+    struct Vault;
+    static TOKENS: Mutex<BTreeMap<String, Token>> = Mutex::new(BTreeMap::new());
+    impl Provider for Vault {
+        const NAME: &'static str = "vault";
+        const KEEP: bool = true;
+        fn configure(_: &Json) -> Result<(Vault, Option<String>)> {
+            Ok((Vault, None))
+        }
+    }
+    #[derive(Resource, Serialize, Deserialize, Clone, Debug, PartialEq)]
+    #[dform(type = "vault.token")]
+    struct Token {
+        #[dform(required, force_new)]
+        name: String,
+        #[serde(default)]
+        label: String,
+        #[dform(sensitive, write_only)]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        secret: Option<String>,
+    }
+    impl Lifecycle<Vault> for Token {
+        fn read(_: &Vault, remote: &str) -> Result<Option<Token>> {
+            // The API never answers the secret.
+            Ok(TOKENS.lock().unwrap().get(remote).map(|t| Token {
+                secret: None,
+                ..t.clone()
+            }))
+        }
+        fn create(_: &Vault, desired: Token, _: &str, _: &Progress) -> Result<(String, Token)> {
+            TOKENS
+                .lock()
+                .unwrap()
+                .insert(desired.name.clone(), desired.clone());
+            Ok((desired.name.clone(), desired))
+        }
+        fn update(
+            _: &Vault,
+            remote: &str,
+            _: Token,
+            desired: Token,
+            _: &Progress,
+        ) -> Result<Token> {
+            // Only what `desired` holds is sent.
+            let mut all = TOKENS.lock().unwrap();
+            let t = all.get_mut(remote).unwrap();
+            t.label = desired.label.clone();
+            if let Some(s) = desired.secret {
+                t.secret = Some(s);
+            }
+            Ok(t.clone())
+        }
+        fn delete(_: &Vault, _: &str, _: &Progress) -> Result<()> {
+            Ok(())
+        }
+    }
+    let h = Typed::<Vault>::new().resource::<Token>();
+    let hs: pb::HandshakeResponse = call_any(
+        &h,
+        pb::HandshakeRequest {
+            protocol_version: dform_core::plugin::backend::VERSION,
+        },
+    );
+    assert!(hs.capabilities.contains(&"keep".to_string()), "{hs:?}");
+    let _: pb::ConfigureResponse = call_any(&h, pb::ConfigureRequest::default());
+    let apply = |op: pb::Op, config: Json, keep: &[&str]| pb::ApplyRequest {
+        op: op as i32,
+        r#type: "vault.token".into(),
+        name: "t".into(),
+        remote: "t".into(),
+        config: Some(wire::doc(&config)),
+        keep: keep.iter().map(|k| k.to_string()).collect(),
+        ..Default::default()
+    };
+    let _: pb::ApplyResponse = call_any(
+        &h,
+        apply(
+            pb::Op::Create,
+            json!({"name": "t", "label": "a", "secret": "s3cr3t"}),
+            &[],
+        ),
+    );
+    let _: pb::ApplyResponse = call_any(
+        &h,
+        apply(
+            pb::Op::Update,
+            json!({"name": "t", "label": "b"}),
+            &["secret"],
+        ),
+    );
+    let h2 = provider();
+    let hs: pb::HandshakeResponse = call(
+        &h2,
+        pb::HandshakeRequest {
+            protocol_version: dform_core::plugin::backend::VERSION,
+        },
+    );
+    assert!(!hs.capabilities.contains(&"keep".to_string()), "{hs:?}");
+    let _: pb::ConfigureResponse = call(&h2, pb::ConfigureRequest::default());
+    let e = h2
+        .handle(
+            pb::ApplyRequest {
+                op: pb::Op::Update as i32,
+                r#type: "acme.bucket".into(),
+                name: "logs".into(),
+                remote: "b-logs".into(),
+                config: Some(wire::doc(&json!({"name": "logs"}))),
+                keep: vec!["tags".into()],
+                ..Default::default()
+            }
+            .into(),
+            &silent,
+        )
+        .unwrap_err();
+    assert!(
+        e.to_string()
+            .contains("keep tags: this provider cannot leave an attribute as it is"),
+        "{e}"
+    );
+    fn call_any<P: Provider, R: TryFrom<Reply, Error = Reply>>(
+        h: &Typed<P>,
+        c: impl Into<Call>,
+    ) -> R {
+        R::try_from(h.handle(c.into(), &silent).unwrap()).unwrap()
+    }
+    // The update kept the secret the create wrote.
+    assert_eq!(
+        TOKENS.lock().unwrap()["t"].secret.as_deref(),
+        Some("s3cr3t")
+    );
+    let r: pb::ReadResponse = call_any(
+        &h,
+        pb::ReadRequest {
+            r#type: "vault.token".into(),
+            remote: "t".into(),
+            name: "t".into(),
+        },
+    );
+    assert_eq!(
+        wire::from_doc(r.attrs.as_ref().unwrap()).unwrap()["label"],
+        "b"
+    );
+}

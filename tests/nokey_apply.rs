@@ -231,9 +231,12 @@ fn state_holds_no_unkeyed_digest() {
 /// instance's user data, R-106): the world never answers it, so a run
 /// without the master proves it unchanged by its derivation digest, and
 /// plans no replace; an update of that object sends it whole, so it
-/// needs the master, while a new object that holds none is made.
+/// needs the master, while a new object that holds none is made. The
+/// provider here cannot leave it as it is (no `keep` capability:
+/// tests/keep_patch.rs is one that can).
 #[test]
 fn a_write_only_secret_is_proven_unchanged_without_the_master() {
+    const NK: (&str, &str) = ("DFORM_TEST_FAKE_NO_KEEP", "1");
     let s = Scratch::project("nokey-write-only");
     s.write(
         "dform.toml",
@@ -257,8 +260,8 @@ resource compute.vm a {{
         )
     };
     s.write("stacks/p.df", &program(1, ""));
-    run(&s, &[PASS], &["apply", "p"]).success();
-    let r = run(&s, &[], &["plan", "p"]).success();
+    run(&s, &[PASS, NK], &["apply", "p"]).success();
+    let r = run(&s, &[NK], &["plan", "p"]).success();
     assert_eq!(r.summary(), "stack p is up to date", "{}", r.stdout);
     // An object with no secret is made; an update of the one that holds
     // the token is not.
@@ -266,7 +269,7 @@ resource compute.vm a {{
         "stacks/p.df",
         &program(2, "resource compute.vm b {\n  name = \"b\"\n}\n"),
     );
-    let r = run(&s, &[], &["plan", "p"]).success();
+    let r = run(&s, &[NK], &["plan", "p"]).success();
     assert!(
         r.stdout
             .contains("secrets unchanged, a write-only one needs the key"),
@@ -274,7 +277,7 @@ resource compute.vm a {{
         r.stdout
     );
     assert!(!r.stdout.contains("replace"), "{}", r.stdout);
-    let r = run(&s, &[], &["apply", "p"]).stopped();
+    let r = run(&s, &[NK], &["apply", "p"]).stopped();
     assert!(
         r.stderr
             .contains("compute.vm a: user_data only the master derives"),
@@ -284,7 +287,7 @@ resource compute.vm a {{
     let w = s.json("dform.state/p/remote.json");
     assert!(w["resources"]["compute.vm::b"].is_object(), "{w}");
     assert_eq!(w["resources"]["compute.vm::a"]["attrs"]["weight"], 1, "{w}");
-    run(&s, &[PASS], &["apply", "p"]).success();
-    let r = run(&s, &[], &["plan", "p"]).success();
+    run(&s, &[PASS, NK], &["apply", "p"]).success();
+    let r = run(&s, &[NK], &["plan", "p"]).success();
     assert_eq!(r.summary(), "stack p is up to date", "{}", r.stdout);
 }
