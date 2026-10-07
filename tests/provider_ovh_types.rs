@@ -469,6 +469,76 @@ fn a_volume_from_an_image() {
     );
 }
 
+const NETWORK: &str = "ovh.network";
+
+/// A private network is made in its regions (`BUILDING`, then `ACTIVE`);
+/// it is renamed and added to a region in place, and replaced to leave
+/// one or to change its VLAN; the same name from another Create is
+/// refused; it is deleted.
+#[test]
+fn a_private_network_is_made_grown_and_deleted() {
+    let lab = Lab::new();
+    let doc = |regions: &[&str]| json!({"name": "lab", "vlan_id": 42, "regions": regions});
+    let n = lab.create(NETWORK, "lab", doc(&["BHS5"]));
+    assert_eq!(n.said, ["BUILDING", "ACTIVE"]);
+    assert_eq!(n.remote, "pn-1000123_42");
+    assert_eq!(n.attrs, doc(&["BHS5"]));
+    assert_eq!(n.computed["regions_status"], json!({"BHS5": "ACTIVE"}));
+
+    let both = doc(&["ca-east-tor", "BHS5"]);
+    let (paths, replaces) = lab.plan(NETWORK, Some(&n.attrs), &both);
+    assert!(!paths.is_empty() && !replaces, "{paths:?}");
+    let grown = lab.update(NETWORK, "lab", &n.remote, both);
+    assert_eq!(grown.attrs["regions"], json!(["BHS5", "ca-east-tor"]));
+    assert_eq!(lab.calls("POST", "/region"), 1);
+    assert!(lab.plan(NETWORK, Some(&grown.attrs), &doc(&["BHS5"])).1);
+    let mut vlan = doc(&["BHS5", "ca-east-tor"]);
+    vlan["vlan_id"] = json!(7);
+    assert!(lab.plan(NETWORK, Some(&grown.attrs), &vlan).1);
+    let mut renamed = doc(&["BHS5", "ca-east-tor"]);
+    renamed["name"] = json!("lab-2");
+    assert_eq!(
+        lab.plan(NETWORK, Some(&grown.attrs), &renamed),
+        (vec!["name".to_string()], false)
+    );
+
+    let again = lab
+        .apply(pb::Op::Create, NETWORK, "other", "", json!({"name": "lab"}))
+        .unwrap_err();
+    assert!(again.contains("already exists with this key"), "{again}");
+
+    let gone = lab.delete(NETWORK, "lab", &n.remote);
+    assert_eq!(gone.said, ["DELETING"]);
+    assert!(lab.server.networks().is_empty());
+}
+
+/// A project that is not on a vRack: a private network is refused at
+/// plan and at apply naming the network and what is missing, never with
+/// the API's text.
+#[test]
+fn a_private_network_needs_the_projects_vrack() {
+    let lab = Lab::new();
+    lab.server.no_vrack();
+    let doc = json!({"name": "lab"});
+    let at_plan = lab.plan_err(NETWORK, None, &doc);
+    assert!(
+        at_plan.starts_with("plan ovh.network[\"x\"]: project ")
+            && at_plan.contains("is not on a vRack")
+            && at_plan.contains("outside dform"),
+        "{at_plan}"
+    );
+    let at_apply = lab
+        .apply(pb::Op::Create, NETWORK, "lab", "", doc)
+        .unwrap_err();
+    assert!(
+        at_apply.contains("apply ovh.network[\\\"lab\\\"]: project ")
+            && at_apply.contains("is not on a vRack")
+            && !at_apply.contains("Your project is not attached"),
+        "{at_apply}"
+    );
+    assert!(lab.server.networks().is_empty());
+}
+
 fn ovh() -> String {
     common::exe("dform-provider-ovh")
 }

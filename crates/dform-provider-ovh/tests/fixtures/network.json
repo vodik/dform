@@ -1,0 +1,11 @@
+{
+  "id": "pn-1000123_42",
+  "name": "lab",
+  "vlanId": 42,
+  "type": "private",
+  "status": "ACTIVE",
+  "regions": [
+    {"region": "ca-east-tor", "status": "BUILDING", "openstackId": "4c1d2e3f-5a6b-4c7d-8e9f-0a1b2c3d4e5f"},
+    {"region": "BHS5", "status": "ACTIVE", "openstackId": "9e8d7c6b-5a4f-4e3d-2c1b-0a9f8e7d6c5b"}
+  ]
+}

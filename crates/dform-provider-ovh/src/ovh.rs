@@ -36,6 +36,7 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
+mod network;
 mod storage;
 mod user;
 mod volume;
@@ -48,6 +49,7 @@ pub const RECORD: &str = "ovh.domain_record";
 pub const CONTAINER: &str = "ovh.storage_container";
 pub const USER: &str = "ovh.cloud_project_user";
 pub const VOLUME: &str = "ovh.volume";
+pub const NETWORK: &str = "ovh.network";
 pub const REGION: &str = "ovh.region";
 pub const FLAVOR: &str = "ovh.flavor";
 pub const IMAGE: &str = "ovh.image";
@@ -92,6 +94,7 @@ enum Made {
     Container { region: String, name: String },
     User { description: String },
     Volume { name: String, region: String },
+    Network { name: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -129,6 +132,8 @@ pub struct Ovh {
     made: Mutex<BTreeMap<String, Made>>,
     /// Each region's flavors and images, as the API listed them.
     lists: Mutex<BTreeMap<String, Json>>,
+    /// Whether each project is on a vRack, once asked.
+    vrack: Mutex<BTreeMap<String, bool>>,
 }
 
 /// Why an Apply failed.
@@ -219,6 +224,7 @@ impl Ovh {
             state: RwLock::new(None),
             made: Mutex::new(BTreeMap::new()),
             lists: Mutex::new(BTreeMap::new()),
+            vrack: Mutex::new(BTreeMap::new()),
         }
     }
 
@@ -588,6 +594,10 @@ impl Ovh {
                 let (a, p) = self.project(&at)?;
                 self.read_volume(&a, &p, remote)?.map(|o| map::volume(&o))
             }
+            NETWORK => {
+                let (a, p) = self.project(&at)?;
+                self.read_network(&a, &p, remote)?.map(|o| map::network(&o))
+            }
             _ => bail!("{at}: the ovh provider has no type {typ}"),
         })
     }
@@ -640,7 +650,26 @@ impl Ovh {
             let size = |d: &Json| d.get("size").and_then(Json::as_i64);
             matches!((size(p), size(d)), (Some(was), Some(now)) if now < was)
         };
-        let replaces = replaces || (typ == VOLUME && prior.is_some_and(shrinks));
+        // A private network is added to a region in place; it leaves
+        // none.
+        let leaves = |p: &Json| {
+            let regions = |d: &Json| -> Vec<String> {
+                d.get("regions")
+                    .and_then(Json::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|r| r.as_str().map(str::to_string))
+                    .collect()
+            };
+            let now = regions(d);
+            d.get("regions").is_some() && regions(p).iter().any(|r| !now.contains(r))
+        };
+        let replaces = replaces
+            || (typ == VOLUME && prior.is_some_and(shrinks))
+            || (typ == NETWORK && prior.is_some_and(leaves));
+        if typ == NETWORK && prior.is_none() {
+            self.check_vrack(&at)?;
+        }
         Ok((changes, replaces))
     }
 
@@ -763,6 +792,7 @@ impl Ovh {
                 name: st("name")?,
                 region: st("region")?,
             },
+            NETWORK => Made::Network { name: st("name")? },
             _ => return None,
         })
     }
@@ -855,6 +885,19 @@ impl Ovh {
                     .flatten()
                     .filter(|o| !matches!(s(o, "status"), Some("deleted" | "deleting")))
                     .find(|o| s(o, "name") == Some(name) && s(o, "region") == Some(region))
+                    .and_then(|o| s(o, "id"))
+                    .map(str::to_string)
+            }
+            Made::Network { name } => {
+                let (a, p) = self.project("find a private network")?;
+                let list = a
+                    .client
+                    .get(&format!("/cloud/project/{p}/network/private"))?;
+                list.as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter(|o| s(o, "status") != Some("DELETING"))
+                    .find(|o| s(o, "name") == Some(name))
                     .and_then(|o| s(o, "id"))
                     .map(str::to_string)
             }
@@ -959,6 +1002,7 @@ impl Ovh {
             CONTAINER => self.create_container(at, config),
             USER => self.create_user(at, config, notes, say),
             VOLUME => self.create_volume(at, config, notes, say),
+            NETWORK => self.create_network(at, config, notes, say),
             _ => Err(refused(at, format!("the ovh provider has no type {typ}"))),
         }
     }
@@ -1114,6 +1158,7 @@ impl Ovh {
             CONTAINER => self.update_container(at, remote, &now.0, config)?,
             USER => self.update_user(at, remote, &now, config)?,
             VOLUME => self.update_volume(at, remote, config, notes, say)?,
+            NETWORK => self.update_network(at, remote, &now.0, config, notes, say)?,
             // Nothing of an SSH key changes in place (the schema replaces it).
             _ => {}
         }
@@ -1206,6 +1251,11 @@ impl Ovh {
                 self.delete_at(&a, at, &path, true, notes, say)?;
             }
             VOLUME => self.delete_volume(at, remote, notes, say)?,
+            NETWORK => {
+                let (a, p) = self.project_for(at)?;
+                let path = format!("/cloud/project/{p}/network/private/{}", escape(remote));
+                self.delete_at(&a, at, &path, true, notes, say)?;
+            }
             _ => return Err(refused(at, format!("the ovh provider has no type {typ}"))),
         }
         Ok(())

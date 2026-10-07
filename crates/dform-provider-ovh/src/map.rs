@@ -212,6 +212,44 @@ pub fn attached_to(o: &Json) -> Vec<String> {
         .collect()
 }
 
+/// A private network (`cloud.network.Network`): its regions by name,
+/// sorted, and each one's status. Its VLAN is the program's when it sets
+/// it and the API's otherwise, so it is also computed.
+pub fn network(o: &Json) -> (Json, Json) {
+    let mut regions: Vec<(&str, &str)> = o
+        .get("regions")
+        .and_then(Json::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|r| {
+            Some((
+                str_of(r, "region")?,
+                str_of(r, "status").unwrap_or_default(),
+            ))
+        })
+        .collect();
+    regions.sort();
+    let names: Vec<&str> = regions.iter().map(|(r, _)| *r).collect();
+    let vlan = o.get("vlanId").and_then(Json::as_i64).unwrap_or(0);
+    let attrs = json!({
+        "name": str_of(o, "name").unwrap_or_default(),
+        "vlan_id": vlan,
+        "regions": names,
+    });
+    let status: Map<String, Json> = regions
+        .iter()
+        .map(|(r, s)| (r.to_string(), json!(s)))
+        .collect();
+    let computed = json!({
+        "id": str_of(o, "id").unwrap_or_default(),
+        "status": str_of(o, "status").unwrap_or_default(),
+        "vlan_id": vlan,
+        "regions": names,
+        "regions_status": status,
+    });
+    (attrs, computed)
+}
+
 /// `ovh.flavor(+region, -name, -vcpus: int, -ram: bytes, -disk: bytes)`:
 /// the flavors offered in `region` (`cloud.flavor.Flavor[]`), available
 /// ones, a name once. The API counts RAM in MiB and disk in GiB, as
@@ -429,6 +467,20 @@ mod tests {
         );
         assert_eq!(computed["status"], "in-use");
         assert_eq!(computed["id"], "0d9e8f7a-6b5c-4d3e-2f1a-0b9c8d7e6f5a");
+    }
+
+    #[test]
+    fn a_private_network_and_its_regions() {
+        let (attrs, computed) = network(&fixture("network.json"));
+        assert_eq!(
+            attrs,
+            json!({"name": "lab", "vlan_id": 42, "regions": ["BHS5", "ca-east-tor"]})
+        );
+        assert_eq!(computed["id"], "pn-1000123_42");
+        assert_eq!(
+            computed["regions_status"],
+            json!({"BHS5": "ACTIVE", "ca-east-tor": "BUILDING"})
+        );
     }
 
     #[test]

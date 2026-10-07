@@ -114,6 +114,17 @@ type_attr("ovh.volume", "instance", "ref(ovh.instance)", [])
 type_attr("ovh.volume", "status", "string", ["computed"])
 type_replace("ovh.volume", "destroy_first")
 
+# A private network's key is its name; it is added to regions in place,
+# and leaves none (Plan replaces it). Its vRack is the account's.
+type_provider("ovh.network", "ovh")
+type_attr("ovh.network", "id", "string", ["computed", "id"])
+type_attr("ovh.network", "name", "string", ["required"])
+type_attr("ovh.network", "vlan_id", "int", ["optional_computed", "force_new"])
+type_attr("ovh.network", "regions", "set(string)", ["optional_computed"])
+type_attr("ovh.network", "status", "string", ["computed"])
+type_attr("ovh.network", "regions_status", "map(string)", ["computed"])
+type_replace("ovh.network", "destroy_first")
+
 type_doc("ovh.instance", "", "A Public Cloud instance of the project.")
 type_doc(
   "ovh.instance",
@@ -260,3 +271,25 @@ type_doc(
   "status",
   "`available`, or `in-use` attached; `creating`, `attaching`, `detaching` while it changes.",
 )
+type_doc(
+  "ovh.network",
+  "",
+  "A private network of the project: a VLAN of the vRack the project is on (the API's `/network/private`). The vRack is the account's, attached to the project in the OVH control panel, outside dform; a project without one is refused at plan.",
+)
+type_doc(
+  "ovh.network",
+  "name",
+  "The network's name, unique in the project: what a Create that timed out is found by. Changed in place.",
+)
+type_doc(
+  "ovh.network",
+  "vlan_id",
+  "Its VLAN in the vRack, 0 to 4000; 0 when not set. Changing it replaces the network.",
+)
+type_doc(
+  "ovh.network",
+  "regions",
+  "The regions it is in; every region of the project when not set. One added is added in place; one left replaces the network.",
+)
+type_doc("ovh.network", "status", "ACTIVE once it can be used; BUILDING while it is made.")
+type_doc("ovh.network", "regions_status", "Each region's status, by region.")
