@@ -171,6 +171,13 @@ pub fn run_tick(
                 break;
             }
             event(opts, Event::Started(&actions[i].addr));
+            // A forget (`lifecycle(r, "retain")`, R-154) calls no provider:
+            // state drops the object, and the world keeps it.
+            if matches!(actions[i].kind, ActionKind::Forget) {
+                state.remove(&actions[i].addr);
+                at_once.push_back(i);
+                continue;
+            }
             match tick.submit(i, actions[i], state) {
                 Ok(true) => in_flight += 1,
                 Ok(false) => at_once.push_back(i),
@@ -345,11 +352,16 @@ pub fn approve(
 /// wait for every other kind of action, and a delete waits for the deletes
 /// of the objects that depended on it (state's recorded dependencies).
 fn dag(actions: &[&Action], desired: &[Resource], state: &State) -> Vec<Vec<usize>> {
-    let is_delete = |a: &Action| matches!(a.kind, ActionKind::Delete | ActionKind::DeleteDeposed);
+    let is_delete = |a: &Action| {
+        matches!(
+            a.kind,
+            ActionKind::Delete | ActionKind::DeleteDeposed | ActionKind::Forget
+        )
+    };
     let deps: Vec<Vec<String>> = actions
         .iter()
         .map(|a| match a.kind {
-            ActionKind::Delete => state.get(&a.addr).map(|e| e.deps.clone()),
+            ActionKind::Delete | ActionKind::Forget => state.get(&a.addr).map(|e| e.deps.clone()),
             ActionKind::DeleteDeposed => state
                 .deposed
                 .get(&state::key(&a.addr))

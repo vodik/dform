@@ -3485,9 +3485,29 @@ fn run_with(
                             })
                             .collect();
                     let audit_failed = std::cell::RefCell::new(None);
+                    // What a forget drops from state (R-154): its remote id,
+                    // which the log keeps.
+                    let forgotten: std::collections::BTreeMap<ir::Address, String> = plan
+                        .actions
+                        .iter()
+                        .filter(|a| matches!(a.kind, ActionKind::Forget))
+                        .filter_map(|a| Some((a.addr.clone(), st.get(&a.addr)?.remote.clone())))
+                        .collect();
                     let on_action = |a: &crate::provider::Action,
                                      err: Option<&anyhow::Error>,
                                      st: &state::State| {
+                        if let Some(remote) = forgotten.get(&a.addr) {
+                            let e = serde_json::json!({
+                                "tick": tick,
+                                "address": a.addr.to_string(),
+                                "remote": remote,
+                                "why": "lifecycle retain",
+                            });
+                            if let Err(x) = audit.append("forgot", e) {
+                                audit_failed.borrow_mut().get_or_insert(x);
+                            }
+                            return;
+                        }
                         let mut e = serde_json::json!({
                             "tick": tick,
                             "action": zset::deformation_kind(&a.kind, false).unwrap_or("no-op"),

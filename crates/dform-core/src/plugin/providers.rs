@@ -2660,7 +2660,9 @@ impl Tick<'_> {
         };
         let world = self.world.as_ref().expect("read above");
         let (op, remote, config, create_first) = match a.kind {
-            ActionKind::Noop | ActionKind::Pending => unreachable!("returned above"),
+            ActionKind::Noop | ActionKind::Pending | ActionKind::Forget => {
+                unreachable!("returned above")
+            }
             ActionKind::Delete => match state.get(addr) {
                 None => {
                     self.answered(a.kind.clone(), addr, &Ok(None), state)?;
@@ -2975,7 +2977,10 @@ impl Tick<'_> {
                     Err(e) => Looked::Unknown(format!("reading it failed: {e:#}")),
                 }
             }
-            ActionKind::Replace { .. } | ActionKind::Noop | ActionKind::Pending => {
+            ActionKind::Replace { .. }
+            | ActionKind::Noop
+            | ActionKind::Pending
+            | ActionKind::Forget => {
                 Looked::Unknown("a replace is not sent again: the next apply looks".into())
             }
         }
@@ -3020,7 +3025,7 @@ impl Tick<'_> {
                 world.remove(&key(&addr.typ, &f.remote));
                 state.deposed.remove(&state::key(addr));
             }
-            ActionKind::Noop | ActionKind::Pending => {}
+            ActionKind::Noop | ActionKind::Pending | ActionKind::Forget => {}
         }
         Ok(resp)
     }
@@ -3189,7 +3194,9 @@ fn uncertain_from_here(a: &Action, addr: &Address, remote: &str, state: &mut Sta
         ActionKind::Update | ActionKind::Drift => Op::Update,
         ActionKind::Delete => Op::Delete,
         ActionKind::DeleteDeposed => Op::DeleteDeposed,
-        ActionKind::Adopt | ActionKind::Noop | ActionKind::Pending => return String::new(),
+        ActionKind::Adopt | ActionKind::Noop | ActionKind::Pending | ActionKind::Forget => {
+            return String::new();
+        }
     };
     let k = uncertain_key(&a.kind, addr);
     let key = match op {

@@ -889,25 +889,39 @@ impl Evaluator {
         };
         // A destroy's objects whose provider could not be configured have
         // no Delete in the plan: in a destroy nothing is made that could
-        // configure it later.
-        let unreachable: Vec<(Address, String)> = match self.destroy {
-            false => Vec::new(),
-            true => {
-                let planned: BTreeSet<&Address> = plan.actions.iter().map(|a| &a.addr).collect();
-                st.resources
-                    .keys()
-                    .filter_map(|k| state::parse_key(k))
-                    .filter(|a| !planned.contains(a))
-                    .map(|a| {
-                        let why = match self.provider_wait(&a.typ) {
-                            Some(on) => format!("its provider is not configured: {on}"),
-                            None => "its provider planned no delete".to_string(),
-                        };
-                        (a, why)
-                    })
-                    .collect()
+        // configure it later. One the program retains is forgotten all
+        // the same.
+        let mut unreachable: Vec<(Address, String)> = Vec::new();
+        if self.destroy {
+            let planned: BTreeSet<Address> = plan.actions.iter().map(|a| a.addr.clone()).collect();
+            for a in st.resources.keys().filter_map(|k| state::parse_key(k)) {
+                if planned.contains(&a) {
+                    continue;
+                }
+                if lifecycle.retain.contains(&a) {
+                    plan.actions.push(provider::Action {
+                        kind: provider::ActionKind::Delete,
+                        addr: a,
+                        changes: Vec::new(),
+                        on: BTreeSet::new(),
+                    });
+                    continue;
+                }
+                let why = match self.provider_wait(&a.typ) {
+                    Some(on) => format!("its provider is not configured: {on}"),
+                    None => "its provider planned no delete".to_string(),
+                };
+                unreachable.push((a, why));
             }
-        };
+        }
+        // `lifecycle(r, "retain")` (R-154): a delete of r forgets it.
+        for a in &mut plan.actions {
+            if matches!(a.kind, provider::ActionKind::Delete) && lifecycle.retain.contains(&a.addr)
+            {
+                a.kind = provider::ActionKind::Forget;
+                a.changes.clear();
+            }
+        }
         self.wait_on_providers(&mut plan, &resources, &mut sections, st)?;
         executor::hold_deposed(&mut plan, &resources, &sections);
         // The resource rules that may derive after a boundary (pending

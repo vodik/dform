@@ -555,7 +555,9 @@ impl Style {
 fn kind_paint(k: &ActionKind) -> Option<Paint> {
     match k {
         ActionKind::Create | ActionKind::Adopt => Some(Paint::Create),
-        ActionKind::Update | ActionKind::Drift | ActionKind::Pending => Some(Paint::Update),
+        ActionKind::Update | ActionKind::Drift | ActionKind::Pending | ActionKind::Forget => {
+            Some(Paint::Update)
+        }
         ActionKind::Delete | ActionKind::DeleteDeposed => Some(Paint::Delete),
         ActionKind::Replace { .. } => Some(Paint::Replace),
         ActionKind::Noop => None,
@@ -811,6 +813,9 @@ pub struct Report {
     /// is every delete's reason, so none says one.
     pub removing: bool,
 }
+
+/// A forget's note on its line (R-154).
+pub const FORGOTTEN: &str = "  forgotten, kept in the world  (lifecycle retain)";
 
 /// What the report is built from.
 pub struct Input<'a> {
@@ -1694,7 +1699,7 @@ pub fn marker_of(k: &ActionKind) -> &'static str {
     match k {
         ActionKind::Create => "+",
         ActionKind::Adopt => ">",
-        ActionKind::Update | ActionKind::Drift | ActionKind::Pending => "~",
+        ActionKind::Update | ActionKind::Drift | ActionKind::Pending | ActionKind::Forget => "~",
         ActionKind::Delete | ActionKind::DeleteDeposed => "-",
         ActionKind::Replace { .. } => "±",
         ActionKind::Noop => "=",
@@ -1711,6 +1716,7 @@ pub fn kind_name(k: &ActionKind) -> &'static str {
         ActionKind::Pending => "update",
         ActionKind::Replace { .. } => "replace",
         ActionKind::Delete | ActionKind::DeleteDeposed => "delete",
+        ActionKind::Forget => "forget",
         ActionKind::Noop => "no-op",
     }
 }
@@ -2060,15 +2066,17 @@ impl Report {
 
     /// The changes by kind, in summary order.
     fn kinds(&self) -> Vec<(&'static str, usize)> {
-        ["create", "update", "replace", "drift", "delete", "adopt"]
-            .into_iter()
-            .map(|k| {
-                (
-                    k,
-                    self.counted().filter(|d| kind_name(&d.kind) == k).count(),
-                )
-            })
-            .collect()
+        [
+            "create", "update", "replace", "drift", "delete", "adopt", "forget",
+        ]
+        .into_iter()
+        .map(|k| {
+            (
+                k,
+                self.counted().filter(|d| kind_name(&d.kind) == k).count(),
+            )
+        })
+        .collect()
     }
 
     /// How many changes the plan has, in every tick (the summary's count).
@@ -2562,6 +2570,7 @@ impl Report {
             }
             ActionKind::DeleteDeposed => "  (deposed)",
             ActionKind::Replace { create_first: true } => "  (the new one first)",
+            ActionKind::Forget => FORGOTTEN,
             _ => "",
         };
         let addr = address(&d.addr);
@@ -3563,7 +3572,7 @@ fn write_line(
                 ),
                 right,
             ),
-            ActionKind::Noop => {}
+            ActionKind::Noop | ActionKind::Forget => {}
         },
     }
 }

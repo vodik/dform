@@ -422,3 +422,29 @@ fn an_interrupted_destroy_says_the_next_destroy_resumes_it() {
         r.stdout
     );
 }
+
+/// An unreachable object the program retains is forgotten (R-154): the
+/// destroy completes, the cluster's object left where it is.
+#[test]
+fn a_retained_unreachable_object_is_forgotten() {
+    let s = scratch("destroy-unreachable-retained");
+    dev(&s, &["apply", "--yes"]).success();
+    let mut cloud = s.json("w.fakecloud.json");
+    cloud["resources"]
+        .as_object_mut()
+        .unwrap()
+        .remove("db.postgres::server")
+        .unwrap();
+    s.write("w.fakecloud.json", &cloud.to_string());
+    s.write("p.df", &format!("{PROG}lifecycle(ns, \"retain\")\n"));
+    let r = dev(&s, &["destroy", "--yes"]).success();
+    assert!(
+        r.stdout
+            .contains("  ~ k8s.namespace ns  forgotten, kept in the world  (lifecycle retain)"),
+        "{}",
+        r.stdout
+    );
+    assert!(!r.stdout.contains("unreachable"), "{}", r.stdout);
+    assert!(r.stdout.ends_with("destroy: complete\n"), "{}", r.stdout);
+    assert_eq!(objects(&s), ["k8s.namespace::ns"]);
+}

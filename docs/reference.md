@@ -1565,6 +1565,7 @@ at once by a rule that binds them with `in`:
 ```dform
 lifecycle(main, "prevent_destroy")                   # a delete or replace of it is a deny
 lifecycle(main, "create_before_destroy")             # replace creates first (type_replace either)
+lifecycle(libvirt.volume["data"], "retain")          # a delete forgets it: the world keeps it
 moved(net.vpc, "main.vpc", net.vpc["core.vpc"])  # rename without destroy
 ignore_changes(main, "tags.owner")                   # set on create, then ignored
 lifecycle(pg, "prevent_destroy") where env == "prod", pg in db.postgres   # every prod database
@@ -1582,13 +1583,26 @@ drops the path from the desired document and from the world's, and an
 update keeps the world's value there (or its absence). `prevent_destroy`
 blocks `plan` and `apply` with `lifecycle prevent_destroy: the plan would
 delete T["A"]`.
+`retain` (R-154; Terraform's `removed` block, Pulumi's `retainOnDelete`,
+a Kubernetes `Retain` policy) turns a planned delete of the object into a
+forget: no Delete is sent, state drops the object, the world keeps it,
+and the audit log records `forgot` with its address and remote id. It
+prints as its own change, `~ libvirt.volume data  forgotten, kept in the
+world  (lifecycle retain)` (`--json` kind `forget`, `deformation("forget",
+r, _)` to policy, so a deny over deletes does not see it), and counts as
+`1 forget`. Written by address it holds once no rule wants the object, the
+way dform lets go of something it made without removing it; a destroy
+honours it, and forgets an object whose provider cannot be configured.
+`prevent_destroy` and `retain` on one object is an error naming both.
+There is no imperative `state forget` for objects: retaining is said in
+the program, reviewed in the plan and logged.
 
 Policy over the plan. Once the plan is computed its deformations go back to
 the evaluator as facts and the program is evaluated once more (the policy
 pass): `deformation(Kind, r, Before)` per deformation, `r` the resource as a
 reference that prints as its address, `T["A"]` (`Kind` is
 `create`, `adopt`, `update`, `drift`, `pending`, `replace`, `delete`,
-`delete_deposed` or `remaining`; `Before` a digest of the world document it was planned
+`delete_deposed`, `forget` or `remaining`; `Before` a digest of the world document it was planned
 against, `absent` for none) and `world_digest(r, Now)`; and
 `derived_at_last_apply(rule, n)` (R-80), from the last apply's `derived`
 entry in the audit log: a rule that derived resources then, by its

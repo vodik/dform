@@ -31,18 +31,20 @@ impl Report {
     /// `plan: 3 changes (2 create, 1 update), 5 pending, 2 undetermined`:
     /// the definite changes counted, the rest pending.
     fn bare_summary(&self) -> String {
-        let kinds: Vec<(&str, usize)> = ["create", "update", "replace", "drift", "delete", "adopt"]
-            .into_iter()
-            .map(|k| {
-                let n = self
-                    .definite
-                    .iter()
-                    .filter(|d| kind_name(&d.kind) == k)
-                    .count();
-                (k, n)
-            })
-            .filter(|(_, n)| *n > 0)
-            .collect();
+        let kinds: Vec<(&str, usize)> = [
+            "create", "update", "replace", "drift", "delete", "adopt", "forget",
+        ]
+        .into_iter()
+        .map(|k| {
+            let n = self
+                .definite
+                .iter()
+                .filter(|d| kind_name(&d.kind) == k)
+                .count();
+            (k, n)
+        })
+        .filter(|(_, n)| *n > 0)
+        .collect();
         let n: usize = kinds.iter().map(|(_, n)| n).sum();
         let mut out = format!("plan: {n} change{}", if n == 1 { "" } else { "s" });
         if !kinds.is_empty() {
@@ -278,6 +280,7 @@ fn write_change(out: &mut String, d: &Deformation, indent: &str, style: Style) {
         }
         ActionKind::DeleteDeposed => "  (deposed)",
         ActionKind::Replace { .. } => "  (replace)",
+        ActionKind::Forget => crate::report::FORGOTTEN,
         _ => "",
     };
     let addr = d.addr.to_string();
@@ -340,7 +343,7 @@ fn write_line(out: &mut String, kind: &ActionKind, l: &Line, indent: &str, style
                 shown(&l.before),
                 shown(&l.after)
             )),
-            ActionKind::Noop => {}
+            ActionKind::Noop | ActionKind::Forget => {}
         },
     }
 }

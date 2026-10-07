@@ -44,6 +44,10 @@ use std::collections::{BTreeMap, BTreeSet};
 ///   lifecycle(r, create_before_destroy).  a replacement is created first
 ///                                         (where the schema's type_replace
 ///                                         allows either order)
+///   lifecycle(r, retain).                 a delete of r is a forget: no
+///                                         Delete call, state drops it and
+///                                         the world keeps it (R-154); r
+///                                         may be an address no rule wants
 ///   moved(T, Old, r).                     state's identity for the address
 ///                                         Old (text: it no longer exists)
 ///                                         is r's
@@ -57,6 +61,8 @@ use std::collections::{BTreeMap, BTreeSet};
 #[derive(Debug, Clone, Default)]
 pub struct Lifecycle {
     pub create_before_destroy: BTreeSet<Address>,
+    /// `lifecycle(r, "retain")`: a delete of r forgets it (R-154).
+    pub retain: BTreeSet<Address>,
     /// (old, new), applied to state before the diff.
     pub moved: Vec<(Address, Address)>,
     pub ignore_changes: BTreeMap<Address, Vec<String>>,
@@ -331,6 +337,8 @@ impl Lifecycle {
             true => instances.members(&addr, &wants),
             false => vec![addr],
         };
+        // What `prevent_destroy` names, against `retain` on the same object.
+        let mut prevent: BTreeSet<Address> = BTreeSet::new();
         for f in facts {
             match (f.pred.as_str(), f.args.as_slice()) {
                 ("lifecycle", [r, what]) => {
@@ -339,7 +347,10 @@ impl Lifecycle {
                     };
                     match what.as_str() {
                         // A deny the evaluator derives (`POLICY_RULES`).
-                        "prevent_destroy" => {}
+                        "prevent_destroy" => prevent.extend(each(addr)),
+                        // A copy's: each of its resources it still has; an
+                        // address the program no longer makes, itself.
+                        "retain" => out.retain.extend(each(addr)),
                         "create_before_destroy" => {
                             // On a copy: each of its resources whose type
                             // allows it.
@@ -362,7 +373,7 @@ impl Lifecycle {
                         }
                         other => bail!(
                             "lifecycle({addr}, {other}): unknown flag \
-                             (expected prevent_destroy or create_before_destroy)"
+                             (expected prevent_destroy, create_before_destroy or retain)"
                         ),
                     }
                 }
@@ -389,6 +400,15 @@ impl Lifecycle {
                 }
                 _ => {}
             }
+        }
+        // A delete of it would be refused and forgotten at once: which is
+        // meant is the program's to say.
+        if let Some(addr) = out.retain.intersection(&prevent).next() {
+            bail!(
+                "lifecycle({addr}, \"prevent_destroy\") and lifecycle({addr}, \"retain\") are \
+                 both written: a delete of it is refused by the first and forgets it by the \
+                 second; keep one"
+            );
         }
         Ok(out)
     }
@@ -466,7 +486,7 @@ fn provider_assertions(
 ///
 ///   deformation(Kind, r, Before)  one per deformation: Kind is create,
 ///                                 adopt, update, drift, pending, replace,
-///                                 delete, delete_deposed or remaining;
+///                                 delete, delete_deposed, forget or remaining;
 ///                                 Before the digest of the world document
 ///                                 it was planned against (`absent` for
 ///                                 none)
@@ -560,6 +580,7 @@ pub fn deformation_kind(k: &crate::provider::ActionKind, held: bool) -> Option<&
         ActionKind::Replace { .. } => "replace",
         ActionKind::Delete => "delete",
         ActionKind::DeleteDeposed => "delete_deposed",
+        ActionKind::Forget => "forget",
     })
 }
 
@@ -1359,6 +1380,7 @@ pub mod file {
             } => "replace",
             ActionKind::Replace { create_first: true } => "replace_create_first",
             ActionKind::DeleteDeposed => "delete_deposed",
+            ActionKind::Forget => "forget",
             ActionKind::Noop => "no-op",
         }
     }

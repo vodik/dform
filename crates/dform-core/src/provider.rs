@@ -28,6 +28,9 @@ pub enum ActionKind {
     Delete,
     /// Delete the object a `create_before_destroy` replacement deposed.
     DeleteDeposed,
+    /// A delete of an object `lifecycle(r, "retain")` keeps (R-154): no
+    /// provider call; state drops it and the world keeps it.
+    Forget,
     Noop,
 }
 
