@@ -601,7 +601,7 @@ impl Redactor {
                     .map(|(_, l)| l)
             {
                 let head = self.tokens(&s[..i], |v| self.secret(v));
-                return format!("{head}{flag}{k}={}", sensitive(&l));
+                return format!("{head}{flag}{k}={}", sensitive(l));
             }
         }
         self.tokens(s, |v| self.secret(v))
