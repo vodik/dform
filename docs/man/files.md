@@ -7,6 +7,4 @@
 | `dform.state/stacks.json` | the registry: where each applied deployment's objects are (a directory, or `s3://..`), for the stacks that read its outputs |
 | `dform.state/cache/` | what providers and trust roots fetch (the Kubernetes OpenAPI document, JWKS) |
 | `~/.config/dform/credentials/KIND/NAME` | the operator's credential `KIND:NAME` (under `$XDG_CONFIG_HOME`, or `DFORM_CREDENTIALS`) |
-| `~/.config/ovh/ovh.conf` | the OVH provider's credentials, after `/etc/ovh.conf` and `~/.ovh.conf`, a later file overriding an earlier one key by key |
-| `~/.ssh/id_ed25519`, `~/.ssh/id_ecdsa`, `~/.ssh/id_rsa` | the `ssh` provider's keys after the agent's, when unencrypted |
 | `~/.cache/dform/` | git mirrors, compiled wasm providers, the language server's read-only files (under `$XDG_CACHE_HOME`) |
