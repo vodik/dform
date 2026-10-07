@@ -95,6 +95,9 @@ struct Account {
     client: Client,
     /// The project's id (its `serviceName`), when one is configured.
     project: Option<String>,
+    /// dform's cache directory, where the ids of projects named by
+    /// description are kept ([`resolve_project`]).
+    cache: Option<std::path::PathBuf>,
 }
 
 /// A configured provider.
@@ -277,13 +280,21 @@ impl Ovh {
         let project = setting("project")?
             .or_else(|| env("OVH_CLOUD_PROJECT_SERVICE").filter(|v| !v.is_empty()));
         let client = Client::new(creds);
+        let cache = config
+            .get("cache")
+            .and_then(Json::as_str)
+            .map(std::path::PathBuf::from);
         let project = match project {
-            Some(p) => Some(resolve_project(&client, &p)?),
+            Some(p) => Some(resolve_project(&client, &p, cache.as_deref())?),
             None => None,
         };
         let account = project.clone();
         set(Configured {
-            account: Ok(Arc::new(Account { client, project })),
+            account: Ok(Arc::new(Account {
+                client,
+                project,
+                cache,
+            })),
             awaiting: false,
         });
         Ok(account)
@@ -304,6 +315,26 @@ impl Ovh {
             .unwrap_or_else(|e| e.into_inner())
             .insert(k, v.clone());
         Ok(v)
+    }
+
+    /// A region's flavors and images, both listed at once when either is
+    /// not yet: an instance is checked or read against both, and the API
+    /// is a round trip away. A failure is left for the one that asks.
+    fn list_region(&self, a: &Account, p: &str, region: &str) {
+        let lists = self.lists.lock().unwrap_or_else(|e| e.into_inner());
+        let missing: Vec<&str> = ["flavor", "image"]
+            .into_iter()
+            .filter(|w| !lists.contains_key(&format!("{w}/{region}")))
+            .collect();
+        drop(lists);
+        if missing.len() < 2 {
+            return;
+        }
+        std::thread::scope(|scope| {
+            for what in missing {
+                scope.spawn(move || self.list(a, p, what, region));
+            }
+        });
     }
 
     fn flavor_id(&self, a: &Account, p: &str, region: &str, name: &str) -> Result<String> {
@@ -365,6 +396,12 @@ impl Ovh {
             return None;
         }
         let region = s(o, "region").unwrap_or_default();
+        if ["flavor", "image"]
+            .iter()
+            .any(|k| o.get(k).and_then(|x| s(x, "name")).is_none())
+        {
+            self.list_region(a, p, region);
+        }
         let named = |what: &str, embedded: &str, id: &str| {
             o.get(embedded)
                 .and_then(|x| s(x, "name"))
@@ -457,6 +494,9 @@ impl Ovh {
         let (Some(region), flavor, image) = (s(d, "region"), s(d, "flavor"), s(d, "image")) else {
             return Ok(());
         };
+        if flavor.is_some() && image.is_some() {
+            self.list_region(&a, &p, region);
+        }
         if let Some(f) = flavor {
             self.flavor_id(&a, &p, region, f)
                 .map_err(|e| anyhow!("{at}: flavor: {e:#}"))?;
@@ -982,7 +1022,7 @@ impl Ovh {
         Ok(match pred {
             REGION => {
                 let a = self.account(&what)?;
-                let p = resolve_project(&a.client, input)?;
+                let p = resolve_project(&a.client, input, a.cache.as_deref())?;
                 let names = a.client.get(&format!("/cloud/project/{p}/region"))?;
                 let mut rows = Vec::new();
                 for n in names
@@ -1044,8 +1084,48 @@ impl Ovh {
 }
 
 /// The project `given` names: its id (`serviceName`), or the description
-/// or name it has in the console.
-pub fn resolve_project(client: &Client, given: &str) -> Result<String> {
+/// or name it has in the console. An id, or the id `cache` (dform's cache
+/// directory) kept for a description, costs one GET of that project,
+/// which must still answer to it; otherwise every project of the account
+/// is asked, and the id found is kept.
+pub fn resolve_project(
+    client: &Client,
+    given: &str,
+    cache: Option<&std::path::Path>,
+) -> Result<String> {
+    let file = cache.map(|c| c.join("ovh-projects.json"));
+    let mut kept: BTreeMap<String, String> = file
+        .as_ref()
+        .and_then(|f| std::fs::read(f).ok())
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or_default();
+    let key = format!("{} {given}", client.credentials().endpoint);
+    let is_id = given.len() == 32 && given.bytes().all(|b| b.is_ascii_hexdigit());
+    let guess = kept
+        .get(&key)
+        .cloned()
+        .or_else(|| is_id.then(|| given.to_string()));
+    if let Some(id) = guess
+        && let Ok(Some(p)) = client.get_opt(&format!("/cloud/project/{}", escape(&id)))
+        && (id == given || [s(&p, "description"), s(&p, "projectName")].contains(&Some(given)))
+    {
+        return Ok(id);
+    }
+    let id = resolve_listed(client, given)?;
+    if let Some(f) = &file
+        && id != given
+    {
+        kept.insert(key, id.clone());
+        if let Ok(bytes) = serde_json::to_vec_pretty(&kept) {
+            let _ = f.parent().map(std::fs::create_dir_all);
+            let _ = std::fs::write(f, bytes);
+        }
+    }
+    Ok(id)
+}
+
+/// `resolve_project` by listing the account's projects.
+fn resolve_listed(client: &Client, given: &str) -> Result<String> {
     let ids = client.get("/cloud/project")?;
     let ids: Vec<&str> = ids
         .as_array()
@@ -1056,9 +1136,20 @@ pub fn resolve_project(client: &Client, given: &str) -> Result<String> {
     if ids.contains(&given) {
         return Ok(given.to_string());
     }
+    // Each project's description, asked at once: an account with several
+    // waits one round trip, not one per project.
+    let projects: Vec<api::Result<Json>> = std::thread::scope(|scope| {
+        let asks: Vec<_> = ids
+            .iter()
+            .map(|id| scope.spawn(move || client.get(&format!("/cloud/project/{}", escape(id)))))
+            .collect();
+        asks.into_iter()
+            .map(|h| h.join().expect("a project's GET does not panic"))
+            .collect()
+    });
     let mut seen = Vec::new();
-    for id in &ids {
-        let p = client.get(&format!("/cloud/project/{}", escape(id)))?;
+    for (id, p) in ids.iter().zip(projects) {
+        let p = p?;
         let names = [s(&p, "description"), s(&p, "projectName")];
         if names.contains(&Some(given)) {
             return Ok(id.to_string());

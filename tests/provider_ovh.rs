@@ -373,6 +373,66 @@ fn a_project_is_found_by_its_description_and_credentials_are_named() {
     );
 }
 
+/// A project named by its description is looked up among the account's
+/// once; its id is kept in the cache, and a later run asks only that
+/// project, which must still answer to the name (R-123). A project named
+/// by its id is asked directly.
+#[test]
+fn a_project_named_by_description_is_listed_once_and_its_id_kept() {
+    let server = Server::start();
+    let key = "resource ovh.ssh_key k { name = \"k\", public_key = \"ssh-ed25519 A\" }\n";
+    let named = |p: &str| {
+        format!(
+            "use ovh {{ endpoint = \"{}\", project = \"{p}\" }}\n{key}",
+            server.endpoint
+        )
+    };
+    let s = project("ovh-project-kept", "", &named(fake::DESCRIPTION));
+    let asked = |server: &Server, from: usize| -> Vec<String> {
+        server.calls()[from..]
+            .iter()
+            .filter(|c| {
+                c.starts_with("GET /cloud/project")
+                    && !c.contains("/flavor")
+                    && !c.contains("/image")
+            })
+            .cloned()
+            .collect()
+    };
+    let one = format!("GET /cloud/project/{}", fake::PROJECT);
+    dform(&s, &server, &["plan", "main.df"]).success();
+    assert_eq!(
+        asked(&server, 0),
+        ["GET /cloud/project".to_string(), one.clone()]
+    );
+    let n = server.calls().len();
+    dform(&s, &server, &["plan", "main.df"]).success();
+    assert_eq!(asked(&server, n), [one.clone()]);
+    // A kept id that no longer answers to the name is looked up again.
+    let kept = s.path("dform.state/cache/ovh-projects.json");
+    let text = std::fs::read_to_string(&kept).unwrap();
+    std::fs::write(
+        &kept,
+        text.replace(fake::PROJECT, "ffffffffffffffffffffffffffffffff"),
+    )
+    .unwrap();
+    let n = server.calls().len();
+    dform(&s, &server, &["plan", "main.df"]).success();
+    assert_eq!(
+        asked(&server, n),
+        [
+            "GET /cloud/project/ffffffffffffffffffffffffffffffff".to_string(),
+            "GET /cloud/project".to_string(),
+            one.clone()
+        ]
+    );
+    // By id: that project, once.
+    s.write("main.df", &named(fake::PROJECT));
+    let n = server.calls().len();
+    dform(&s, &server, &["plan", "main.df"]).success();
+    assert_eq!(asked(&server, n), [one]);
+}
+
 /// A Create whose answer does not come within dform's timeout (R-81) is
 /// found by its key and adopted, not made twice; the record that reads
 /// the instance's address waits for it.
