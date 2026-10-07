@@ -1097,8 +1097,8 @@ attribute of it `.path` after it: the plan file, `--json`, state, `plan
 -q`'s apply order, `state show` and `dev graph` print it. Errors,
 `why`, `apply`'s progress lines and the audit log's retries say the
 printed one (`apply net.subnet a: ..`, `waiting on db.postgres
-d.endpoint`), and a value dform's own extern has not answered yet is its
-call (`ssh.read("10.0.0.5", "ubuntu", "/etc/k3s.yaml")`). Every
+d.endpoint`), and a document dform's own read has not answered yet is
+its location (`ssh://ubuntu@10.0.0.5/etc/k3s.yaml`, R-153). Every
 address the command line takes is read that way (`why`, `query`, `state
 show`, `state mv`, `dev show`, `--chaos`), and `why` also takes the
 printed one, so an address copied from a plan pastes into a command;
@@ -1243,9 +1243,9 @@ made; the plan itself says what it is.
   server still booting) is one, under `waits on  provider k8s
   kubeconfig = k3s.kubeconfig`, the setting as the source writes it,
   typed by the provider's static schema; one whose settings wait on what
-  dform's own extern has not answered (a host still booting) names the
-  call too, as the program writes it, `provider k8s  kubeconfig = raw,
-  ssh.read("10.0.0.5", "ubuntu", "/etc/rancher/k3s/k3s.yaml")`; one of
+  dform's own read has not answered (a host still booting) names the
+  location too, `provider k8s  kubeconfig = raw,
+  ssh://ubuntu@10.0.0.5/etc/rancher/k3s/k3s.yaml`; one of
   a kind no schema has yet (a cluster's CRD) under `waits on  provider
   k8s  schema`, its attributes as written, or under the CRD the program
   makes for it, `waits on  k8s.custom_resource_definition
@@ -1481,8 +1481,8 @@ run in a process group of their own, so the terminal's Ctrl-C reaches
 dform alone. A run started with SIGINT ignored (`nohup`, a background
 job) keeps ignoring it. Between ticks, on a
 terminal, the tick's wait is one line counting up (`tick 2` then `waits
-on  ssh.read("51.79.29.179", "ubuntu", "/etc/rancher/k3s/k3s.yaml")
-42s  not yet`); elsewhere it is the `waiting on .. since` line every 10s
+on  ssh://ubuntu@51.79.29.179/etc/rancher/k3s/k3s.yaml  42s  not
+yet`); elsewhere it is the `waiting on .. since` line every 10s
 (see "Timeouts, retries and waiting").
 
 A provider whose settings the program computes from what a tick makes
@@ -2209,8 +2209,8 @@ wait is the tick's own retry, bounded by the `wait` of the provider that
 answers what it waits on (the longest, for several), 10m unless dform.toml
 says: not the `timeout` that bounds each call, since a host that boots or
 a job that runs takes minutes while a call that hangs is wrong after one.
-A built-in's (`ssh.read` while a host boots) is set by its name,
-`[providers] ssh = { wait = "20m" }`. Past it the apply
+A location's read that is not there yet (a host that boots, R-153) waits
+under `[files] wait`. Past it the apply
 stops, the state consistent and nothing of the tick in flight: `apply
 stopped at tick 2: waited 2m on k8s.job["migrate-v42"].status.succeeded,
 still unknown (the provider's `wait` in dform.toml); state is
@@ -2222,18 +2222,22 @@ waiting on ...`. Every wait is a `wait` entry in the audit log.
 ```toml
 [providers]
 aws = { source = "aws", timeout = "2m", retries = 8, backoff = "500ms" }
-ssh = { wait = "20m" }      # a built-in: how long a tick waits on a host that boots (10m by default)
+
+[files]
+wait = "20m"      # how long a tick waits on a location not there yet (a host that boots; 10m by default)
 ```
 
 A provider's table also grants it what it may use beyond the host's own
-interfaces and the credentials it may open by name (R-13b;
-docs/providers.md, "Grants and credentials"):
+interfaces, the credentials it may open by name, and the locations it may
+read through the host (R-13b, R-153; docs/providers.md, "Grants and
+credentials"):
 
 ```toml
 [providers.k8s]
 source = "providers/k8s"
 allow = ["wasi:sockets"]          # wasi:filesystem, wasi:http, wasi:sockets
 credentials = ["kubeconfig:prod"] # KIND:NAME, applied by the host, never sent to the provider
+reads = ["https://github.com/*"]  # SCHEME://HOST/PATH patterns its files.read may take
 ```
 
 ## Chaos: failure and latency injection
@@ -2419,69 +2423,129 @@ nothing before it binds is a compile error. Evaluation is by rounds: every
 call the rules demand is asked once, then the program is evaluated again,
 until no call is new.
 
-`file`, `env`, `time` and `ssh` are built-in fact providers, declared like any
+`file`, `env` and `time` are built-in fact providers, declared like any
 provider and needing no `dform.toml` source:
 
 | provider | externs                                                   | answered by |
 |----------|-----------------------------------------------------------|-------------|
-| `file`   | `file.text(+path, -value: string)`, a path from the project root; the loaders, `yaml(path)` .. ("Documents") | dform |
+| `file`   | `file.text(+path, -value: string)`, a path from the project root; the loaders, `yaml(LOCATION)` .. ("Documents and tables") | dform |
 | `env`    | `env.var(+name, -value: secret(string))`; `env.var(NAME)` as a term reads it | dform |
 | `time`   | `time.now(-t: time)`, the current time in UTC; `time.now()` as a term reads it | dform |
-| `ssh`    | `ssh.read(+host, +user, +path, -content: secret(string))` over SFTP; `ssh.read(HOST, USER, PATH)` as a term reads it | dform |
 
-`ssh` reads a remote filesystem, and only reads: a read is pure, so
-there is no extern that runs a command. A file to manage, a package, a
-unit are resources of a provider whose apply runs what it must; a
-program that calls `ssh.run` is told so ("`ssh.run` is not a function:
-a command is a provider's apply").
+There is no `ssh` provider (R-153): a host's file is a location, read by
+a loader like any document, `text("ssh://ubuntu@10.0.0.5/etc/k3s.yaml")`
+("Locations and transports" below). `use ssh`, `ssh.read(..)` and
+`[providers] ssh` are errors naming the location. Nothing runs a command
+for a program: a file to manage, a package, a unit are resources of a
+provider whose apply runs what it must, and a program that calls
+`ssh.run` is told so ("`ssh.run` is not a function: a command is a
+provider's apply").
 
-`ssh` is an SSH client inside dform, never the `ssh` binary or the
-operator's ssh config. The host is an `ip` or a string, `NAME:PORT` for a
-port other than 22. The key is the operator's, never one in the program,
-and dform never asks for a passphrase: every key the agent
-(`SSH_AUTH_SOCK`) holds, then the unencrypted `~/.ssh/id_ed25519`,
-`~/.ssh/id_ecdsa` and `~/.ssh/id_rsa`. A key file with a passphrase is
-not decrypted; the agent uses such a key (`ssh-add`). `use ssh { key =
-"k3s-admin" }` names the key, offered first (a host hangs up after its
-`MaxAuthTries` refusals): the agent's key of that comment or SHA-256
-fingerprint, else the credential `ssh:k3s-admin`, an unencrypted
-OpenSSH private key in the operator's file
-`$XDG_CONFIG_HOME/dform/credentials/ssh/k3s-admin` (docs/providers.md,
-"Grants and credentials"); then the agent's other keys, and no
-`~/.ssh/id_*`. A refusal says what was offered and what was not, in one
-line, and what to do in the next:
+### Locations and transports
+
+A loader reads a location (R-153): a path from the project root (which
+is `file:`), or a uri whose scheme selects the transport. As in Emacs
+TRAMP, one syntax carries the method, the user and the host, and nothing
+remote is configured separately: `yaml("vendor/crds.yml")`,
+`yaml("git+https://github.com/traefik/traefik/docs/crds.yml?ref=v3.7.14")`
+and `text("ssh://ubuntu@${server.ip}/etc/rancher/k3s/k3s.yaml")` differ
+only in the string. The scheme rule: a scheme is dform's when the host
+already has its transport, and a provider's when its manifest declares
+it; any other is an error naming the schemes there are.
+
+| scheme | the transport |
+|--------|---------------|
+| `file:`, a bare path | the project's files |
+| `data:` | the bytes in the location (RFC 2397: `data:,a%20b`, `data:;base64,..`) |
+| `ssh://USER@HOST[:PORT]/PATH` | SFTP, over dform's SSH client |
+| `https://` | dform's HTTP client (the machine's CA and proxy); plain `http:` is refused |
+| `git+https://HOST/OWNER/REPO/PATH?ref=REF`, `git+ssh://USER@HOST/..` | the repository's mirror, at the commit the ref names |
+| `git+file:REPO/PATH?ref=REF` | a repository of the project, in place |
+| `s3://BUCKET/KEY` | the S3 client, the bucket's endpoint and region as dform.toml's backend naming it says (AWS's otherwise), the s3 backend's credentials |
+| a provider's (`gs://..`) | the provider whose manifest declares it, through the host |
+
+A repository's path ends at a segment ending in `.git`, else at `//`, else
+after two segments (`OWNER/REPO`, the forges' shape); the rest is the file.
+A remote repository is read from its mirror, cloned once (a bare
+`$XDG_CACHE_HOME/dform/git/HOST-OWNER/REPO.git`, every segment before the
+repository joined to the host with `-`) and fetched, never re-cloned,
+when the ref is not a commit or a tag the mirror holds (a tag does not
+move, as Go's module cache has it); a run holds a file lock on the mirror.
+The rows say the commit (`github.com/traefik/traefik@3b1c7e0:docs/crds.yml:12`,
+the plan file the whole of it), so `apply PLAN` reads what plan read, and a
+moved ref is said before the plan ("Documents and tables"). git is gix
+inside dform, never the `git` binary, over dform's HTTP or SSH client.
+
+A read the world has not reached yet is "not yet", not an error: an
+`ssh://` host that does not answer (the connection refused, no answer
+within 10s, no route) or a file it has not written, an `https://` (404)
+or `s3://` object that is not there yet. The document is an open null
+the apply waits on, printed as its location (`waits on
+ssh://ubuntu@51.79.29.179/etc/rancher/k3s/k3s.yaml`), until it is there
+or `[files] wait` runs out ("Timeouts, retries and waiting"); a part of
+it (`d.metadata`) waits with it. The program's own (`file:`, `data:`, a
+repository's file) is there or is an error.
+
+Credentials are the operator's, by name, never in the program:
+`[files] credentials` maps a location pattern (`*` any run of characters,
+matched against `SCHEME://HOST[:PORT]/PATH`; the longest that matches
+wins) to a credential (docs/providers.md, "Grants and credentials"):
+
+```toml
+[files]
+wait = "20m"
+credentials = { "ssh://51.79.*" = "ssh:k3s-admin", "https://git.example.com/*" = "bearer:git" }
+```
+
+SSH is a client inside dform, never the `ssh` binary or the operator's
+ssh config. The user is the location's (the local user when it names
+none). The key is never asked for a passphrase: the one `[files]
+credentials` names first (an `ssh:NAME` key: the agent's of that comment
+or SHA-256 fingerprint, else the credential's unencrypted OpenSSH file
+`$XDG_CONFIG_HOME/dform/credentials/ssh/NAME`), offered first because a
+host hangs up after its `MaxAuthTries` refusals; then every key the agent
+(`SSH_AUTH_SOCK`) holds; then, when none is named, the unencrypted
+`~/.ssh/id_ed25519`, `~/.ssh/id_ecdsa` and `~/.ssh/id_rsa`. A key file
+with a passphrase is not decrypted; the agent uses such a key (`ssh-add`).
+A refusal says what was offered and what was not, in one line, and what
+to do in the next:
 
 ```
 127.0.0.1:2222 refused ubuntu: no agent at SSH_AUTH_SOCK, and ~/.ssh/id_ed25519 has a passphrase
-  start an agent and `ssh-add`, or name an unencrypted deploy key: use ssh { key = "k3s-admin" }
+  start an agent and `ssh-add`, or name an unencrypted deploy key in dform.toml: [files] credentials = { "ssh://HOST/*" = "ssh:k3s-admin" }
 51.79.29.179 refused ubuntu: the agent offered 2 keys (simon@laptop, work) and the host accepted none
   add one of these keys to ubuntu's authorized_keys on 51.79.29.179, or `ssh-add` the key it holds
 51.79.29.179 refused ubuntu: the agent offered 1 key (simon@laptop) and the host accepted none, and the key "k3s-admin" is not in the agent and there is no ~/.config/dform/credentials/ssh/k3s-admin
   `ssh-add` it (its comment or SHA256 fingerprint names it), or put the unencrypted key at ~/.config/dform/credentials/ssh/k3s-admin
 ```
 
-A host's key is recorded in the deployment's state by the first
-apply that meets it (type, SHA-256 fingerprint, when) and checked on every
-contact after: a changed key is an error naming both fingerprints until
-`dform state forget-host HOST [TARGET]` forgets it. A host that does not
-answer yet (the connection refused, no answer within 10s, no route) and a
-`read` of a path that does not exist yet are "not yet": the answer is an
-open null, and an apply waits on it ("Timeouts, retries and waiting"),
-asking again until the host answers or the `ssh` provider's `wait`
-(`[providers] ssh = { wait = "20m" }`, 10m by default) runs out. An
-authentication failure, a changed host key, a file it may not read and a
-file that is not UTF-8 text are errors.
+A host's key is recorded in the deployment's state by the first apply
+that meets it (type, SHA-256 fingerprint, when; keyed `HOST`, or
+`HOST:PORT` off port 22) and checked on every contact after: a changed key
+is an error naming both fingerprints until `dform state forget-host HOST
+[TARGET]` forgets it. An authentication failure and a changed host key are
+errors.
+
+Secrecy is declared where a value is kept, never inferred from a scheme:
 
 ```dform
-use ssh
 # A k3s server's kubeconfig, once cloud-init has written it.
-let raw = ssh.read(server.public_ip, "ubuntu", "/etc/rancher/k3s/k3s.yaml")
+let raw: secret(string) = text("ssh://ubuntu@${server.public_ip}/etc/rancher/k3s/k3s.yaml")
+output kubeconfig: secret(string) = str.replace(raw, "127.0.0.1", server.public_ip)
 ```
 
-`ssh.read`'s content is a secret from the first answer: `query` and `why`
-print it by its call (`ssh.read["HOST,USER,PATH"]."4"`), and the plan
-file records its keyed digest (`inputs.answers`), never the bytes; `apply
-PLAN` reads it again and refuses the plan when the digest moved.
+A `let` declared `secret(T)` (or of an object type with a secret field) is
+a secret cell: a public place it reaches is the E0304 any secret's is, and
+a document read into it is not recorded in the plan file, only its keyed
+digest (`inputs.answers`, `"sensitive": "table.text.document/LOCATION#3"`);
+`apply PLAN` reads it again and refuses the plan when the digest moved.
+
+A provider reads a location through the host (`dform:host/files`, the
+gRPC `Host.Read`; docs/providers.md), the same transports, mirrors, known
+hosts and timeout as the program's: only what its `[providers.NAME]
+reads` patterns grant (`"https://github.com/*"`, `"s3://images/*"`),
+never a project file, and a scheme another provider declares is read by
+that provider through the host, never one provider another.
 
 `random` is not a provider: `random.password` and friends are std
 functions (below), and `use random` is an error saying so.
@@ -2556,18 +2620,20 @@ the resume and the controller compare the world with it the same way.
 
 ## Documents and tables
 
-Data that is not code is a document, loaded by the file provider's
-loaders, spelled bare: `yaml(path)`, `toml(path)`, `json(path)`, `csv(path)`
-(a list of objects by its header), each also over `git(repo, ref, path)`
-(R-39). A loader call is a value, `let net = toml("data/network.toml")`,
-read like any (`net.region`). `input p from DOC` destructures a document
+Data that is not code is a document, loaded by a loader, spelled bare:
+`yaml(LOCATION)`, `toml(LOCATION)`, `json(LOCATION)`, `csv(LOCATION)` (a
+list of objects by its header) and `text(LOCATION)` (the whole of it, a
+string), each over a location, a path from the project root or a uri
+whose scheme is a transport ("Locations and transports", R-39, R-153). A
+loader call is a value, `let net = toml("data/network.toml")`, read like
+any (`net.region`). `input p from DOC` destructures a document
 into rows of a relation, typed column by column as the relation's `decl`
 declares them (written once; `input p from ..` never re-spells the
 columns):
 
 ```dform
 input peering from csv("data/peerings.csv")
-input pins from yaml(git("ops.git", "env/${env}", "pins.yaml")) where env != "dev"
+input pins from yaml("git+https://github.com/acme/ops/pins.yaml?ref=env/${env}") where env != "dev"
 input az from toml("data/network.toml")                  # its [[az]] tables
 input link from toml("data/network.toml").peerings       # a selection
 input service from yaml("teams.yaml").teams[*].services  # every team's
@@ -2614,22 +2680,26 @@ The loader never reshapes: transforms belong in rules. Paths are relative
 to the declaring file; `peering(env: e, name: n)` reads a row by its
 columns' names.
 
-A table is an extern (see "Externs"): the source, `path` or `git(repo, ref,
-path)` with holes (`${env}`), is its bound input, so rules may compute it; a
-source that reads the table's own rows is the extern-in-a-recursive-rule
-compile error. The rows are its answers: the plan file records them, and
-`apply PLAN` reads none again. `why` names each row's line,
-`data/peerings.csv:3` (`ops.git@a9d0f11:pins.yaml:12` from git).
+A table is an extern (see "Externs"): the location, with holes
+(`${env}`), is its bound input, so rules may compute it; a location that
+reads the table's own rows is the extern-in-a-recursive-rule compile
+error. The rows are its answers: the plan file records them, and `apply
+PLAN` reads none again. `why` names each row's line,
+`data/peerings.csv:3` (`github.com/acme/ops@a9d0f11:pins.yaml:12` from a
+repository). A relation is read from what is there: a location not there
+yet is an error for it, where a document as a value waits.
 
-A git source's ref is resolved to a commit first (a ref that names none is
-an error naming the repository and the ref, never an empty table), and the
-rows are read at that commit (a bare repository works). The plan file holds
-the commit, so `apply PLAN` applies what plan saw even when the branch has
-moved since. State keeps the commit each deployment was last applied from,
-and a plan whose ref names another commit says so before the plan:
+A repository's ref (`?ref=`, a branch, a tag or a commit; `git(repo, ref,
+path)` is gone, an error naming the form) is resolved to a commit first (a
+ref that names none is an error naming the repository and the ref, never
+an empty table), and the rows are read at that commit (a bare repository
+works). Each row names the commit, the plan file the whole of it, so
+`apply PLAN` applies what plan saw even when the branch has moved since.
+State keeps the commit each deployment was last applied from, and a plan
+whose ref names another commit says so before the plan:
 
 ```
-pins: ops.git env/prod 3b1c7e0 -> a9d0f11
+pins: github.com/acme/ops env/prod 3b1c7e0 -> a9d0f11
 ```
 
 A deployment's settings document, `set from yaml("config/${env}.yaml")`

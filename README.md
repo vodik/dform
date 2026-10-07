@@ -659,7 +659,7 @@ decl peering(name: string, peer: string)
 decl pin(app: string, image: string)
 input az from network.az                         # the [[az]] tables
 input peering from network.peerings
-input pin from toml(git("ops.git", "env/${env}", "pins.toml"))
+input pin from toml("git+https://github.com/acme/ops/pins.toml?ref=env/${env}")
 ```
 
 ```toml

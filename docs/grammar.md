@@ -1221,12 +1221,14 @@ the scope's one namespace, so `use db` for a provider beside `use db`
 for a module, or beside a copy `db`, is the error two uses are. A `use`
 is a provider's when its path is one segment naming no module, stack or
 component of the program, and a provider: one `dform.toml`'s
-`[providers]` names, a built-in (`file`, `env`, `time`, `ssh`, the
+`[providers]` names, a built-in (`file`, `env`, `time`, the
 mock's `fake`, `gke`, `k8s`, and the namespace of a mock's types, `aws`
 of aws-mock's `aws.vpc`), a project's `providers/NAME/`, or one whose
 block names its `source`; any other is the error for a missing module,
 which says it is no provider either. `provider`, the statement of an
-earlier surface, is an error naming `use`.
+earlier surface, is an error naming `use`; so is `use ssh` and its
+`ssh.read(..)`, gone (R-153): a host's file is a location
+("Documents").
 
 `use P as A` imports the provider P under the name A (R-115), a second
 configuration of the same types: `use ovh as ca { endpoint = "ovh-ca" }`
@@ -1281,7 +1283,7 @@ any provider and needing no `dform.toml` source (`externs::BUILTINS`);
 dform answers them itself:
 
 ```
-use file         file.text(+path, -value: string); the loaders, `yaml(p)` .. ("Documents")
+use file         file.text(+path, -value: string); the loaders, `yaml(LOCATION)` .. ("Documents")
 use env          env.var(+name, -value: secret(string))
 use time         time.now(-t: time)
 ```
@@ -1379,20 +1381,52 @@ Two aliases of one name in one scope are an error listing both.
 
 ### Documents
 
-Data that is not code is a document (R-39), loaded by the file
-provider's loaders, spelled bare: `yaml(PATH)`, `toml(PATH)`,
-`json(PATH)` and `csv(PATH)` (a list of objects by its header, every cell
-text), each also over `git(REPO, REF, PATH)`, read at the commit the ref
-names, which the plan file records, so `apply PLAN` reads what plan read
-though the branch moved since. A path is a term (holes allowed: a hole is
-a content position, so it reads now), from the project root. A loader
-call is a value: `let net = toml("data/network.toml")`, then
+Data that is not code is a document (R-39), loaded by a loader, spelled
+bare, one per format: `yaml(LOCATION)`, `toml(LOCATION)`,
+`json(LOCATION)`, `csv(LOCATION)` (a list of objects by its header, every
+cell text) and `text(LOCATION)` (the whole of it, a string). A location
+(R-153) is a path from the project root, or a uri whose scheme selects
+the host's transport; the scheme, the user and the host are in it, and
+nothing remote is configured elsewhere (Emacs TRAMP's model):
+
+```
+yaml("vendor/traefik-crds.yml")                                   # a project file, `file:`
+yaml("git+https://github.com/traefik/traefik/docs/crds.yml?ref=v3.7.14")
+text("ssh://ubuntu@${server.ip}/etc/rancher/k3s/k3s.yaml")        # SFTP
+json("https://example.com/regions.json")
+toml("s3://config/net.toml")
+yaml("data:,a%3A%201")                                            # RFC 2397
+```
+
+The scheme rule, once: a scheme is dform's when the host already has
+its transport (`file:`, `data:`, `ssh://`, `https://`, `git+https://`
+and `git+ssh://` through the mirrors and `git+file:` in place, each at a
+`?ref=`, `s3://`), and a provider's when its manifest declares it
+(docs/providers.md); any other is an error naming those there are. A
+location is a term (holes allowed: a hole is a content position, so it
+reads now). A repository's file is read at the commit the ref names,
+which its rows name and the plan file records, so `apply PLAN` reads
+what plan read though the branch moved since; its repository ends at a
+segment ending in `.git`, else at `//`, else after `OWNER/REPO`.
+`git(REPO, REF, PATH)` is gone, an error naming the uri; so are `use ssh`
+and `ssh.read(..)`. What the world has not reached yet (a host booting, a
+file it has not written) is "not yet": the document is an open null an
+apply waits on, a part of it with it, printed as its location (`waits on
+ssh://ubuntu@HOST/etc/rancher/k3s/k3s.yaml`); a relation's rows are what
+is there, so none yet is an error for `input p from`. Secrecy is
+declared where the value is kept, never by the scheme: `let raw:
+secret(string) = text("ssh://..")` is a secret cell, and its read is
+recorded by its digest only. Credentials, grants and the wait are
+dform.toml's (docs/reference.md, "Locations and transports").
+
+A loader call is a value: `let net = toml("data/network.toml")`, then
 `net.region`, `net.az[0].name`. A YAML file that is a stream of
 documents (`---`, a vendored manifest) is the list of them, an empty
 document none: `d in yaml("crds.yml")` walks it, `yaml("crds.yml")[*]`
 selects each, and a relation read from it has a row per document, at
 the line it starts on; a file of one document is that document.
-`file.json` is gone; `file.text(PATH)` stays, the file's text.
+`file.json` is gone; `file.text(PATH)` stays, the relation form of a
+project file's text (`text(..)` is the loader, over any location).
 
 `input p from DOC [selector] [where B]` destructures a document into the
 relation `p`, by the columns of its `decl`, or with no `decl` by its first
@@ -1420,29 +1454,23 @@ program file; `facts(..)` is gone, an error that says so. A copy's
 relation input takes a document the same way, `p from DOC` in its
 resource's or `use`'s block.
 
-A loader's table lowers to externs (`src/tables.rs`), the source its bound
-inputs, the selector in the table's name. The declarations are the
+A loader's table lowers to an extern (`src/tables.rs`), the location its
+bound input, the selector in the table's name. The declarations are the
 compiler's: the same wherever the call stands (a used module, a
 component, a `let`), one per table, and no message names them (R-129):
 
 ```
 extern table.FORMAT.p(+path, -at, -col: type, ...)
-p(Col, ...) :- B, reads, Path = PATH', table.FORMAT.p(Path, At, Col, ...)
+p(Col, ...) :- B, reads, Path = LOCATION', table.FORMAT.p(Path, At, Col, ...)
 decl p(..) mixed
 ```
 
-from git, the ref resolved to a commit first:
-
-```
-extern table.git.p(+repo, +ref, -commit)
-p(Col, ...) :- reads, Repo = .., Ref = .., Path = .., table.git.p(Repo, Ref, Commit),
-               table.FORMAT.p(Repo, Commit, Path, At, Col, ...)
-```
-
-any other document value, `table.value.p(+doc, -at, -col, ..)`, answered
+(a repository's ref is resolved inside the read, its commit in each row's
+`At`, `REPO@COMMIT:PATH:LINE`); any other document value, `table.value.p(+doc, -at, -col, ..)`, answered
 in process; and a loader call as a value, `table.FORMAT.document(Path,
 At, V)`. The controller watches every file and ref a run's tables and
-documents read, and every program file.
+documents read, and every program file; a location read over a transport
+(`ssh://`, `https://`, `s3://`) is read again by every run, not polled.
 
 A document becomes a resource by `resource T NAME = VALUE [where B]`
 (R-126): the body is a value of the type, an object, in place of the
