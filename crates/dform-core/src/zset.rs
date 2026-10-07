@@ -1614,8 +1614,11 @@ pub mod file {
         }
 
         pub fn save(&self, path: &Path) -> Result<()> {
-            std::fs::write(path, serde_json::to_string_pretty(self)? + "\n")
-                .with_context(|| format!("write plan file {}", path.display()))
+            crate::store::write_atomic(
+                path,
+                (serde_json::to_string_pretty(self)? + "\n").as_bytes(),
+            )
+            .with_context(|| format!("write plan file {}", path.display()))
         }
 
         /// The differences between this file's delta and `current`, the

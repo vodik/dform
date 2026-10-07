@@ -2,7 +2,9 @@
 //! §2.8).
 //!
 //! The executor decides the order of the provider's per-resource Apply calls
-//! and when dform's own state is written. Persistence points:
+//! and when dform's own state is written (`persist`: the caller's; the
+//! command line logs each change of state to the audit log, its write-ahead
+//! log, and checkpoints the state per tick, `wal`). Persistence points:
 //!
 //! * after every Apply call that returns, answered or not: `identity` for a
 //!   create or adopt, its removal for a delete. A failure at action N leaves
@@ -57,7 +59,7 @@ use serde_json::Value as Json;
 use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
-/// Where state goes after every Apply call.
+/// Where state goes after every Apply call: durable when it returns.
 pub type Persist<'a> = &'a dyn Fn(&State) -> Result<()>;
 
 /// What the world holds per address as the executor last saw it: the

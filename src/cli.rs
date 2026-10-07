@@ -524,6 +524,10 @@ enum StateCommand {
     Show {
         #[arg(long = "address", value_name = "ADDR")]
         addr: Option<String>,
+        /// The state the audit log alone makes (its `state` entries from
+        /// the last whole one), not the state file's checkpoint.
+        #[arg(long = "from-log")]
+        from_log: bool,
         #[command(flatten)]
         target: Target,
     },
@@ -742,6 +746,7 @@ enum Cmd {
     Unlock,
     StateShow {
         addr: Option<String>,
+        from_log: bool,
     },
     Output {
         name: Option<String>,
@@ -1195,7 +1200,11 @@ fn resolve(args: Args) -> Result<Cli> {
             )
         }
         Command::State { cmd } => match cmd {
-            StateCommand::Show { addr, target } => (Cmd::StateShow { addr }, Some(target)),
+            StateCommand::Show {
+                addr,
+                from_log,
+                target,
+            } => (Cmd::StateShow { addr, from_log }, Some(target)),
             StateCommand::Taint { key, target, .. } => (Cmd::TaintMemo { key }, Some(target)),
             StateCommand::ForgetHost { host, target } => (Cmd::ForgetHost { host }, Some(target)),
             StateCommand::Mv { from, to, target } => (Cmd::StateMv { from, to }, Some(target)),
@@ -1847,19 +1856,16 @@ fn run_with(
     }
     let dep = located.dep.clone();
     // The deployment's audit log, beside its state.
-    let audit = dep
-        .audit(
-            cli.audit_sink
-                .clone()
-                .or(located.loaded.cfg.audit_sink.clone()),
-        )
-        .with_sink_timeout(
-            located
-                .loaded
-                .manifest
-                .as_ref()
-                .map_or(crate::audit::SINK_TIMEOUT, |m| m.audit_sink_timeout()),
-        );
+    let audit = dep.audit(
+        cli.audit_sink
+            .clone()
+            .or(located.loaded.cfg.audit_sink.clone()),
+        located
+            .loaded
+            .manifest
+            .as_ref()
+            .map_or(crate::audit::SINK_TIMEOUT, |m| m.audit_sink_timeout()),
+    );
     match &cli.cmd {
         Cmd::Log {
             verify,
@@ -1873,8 +1879,9 @@ fn run_with(
             println!("{}", dep.unlock()?);
             return Ok(Outcome::Done);
         }
-        Cmd::StateShow { addr } => {
-            return state_show(&dep, addr.as_deref(), &cli.table).map(|()| Outcome::Done);
+        Cmd::StateShow { addr, from_log } => {
+            return state_show(&dep, addr.as_deref(), *from_log, &cli.table)
+                .map(|()| Outcome::Done);
         }
         Cmd::Output { name, json } => {
             return print_output(
@@ -2775,7 +2782,12 @@ fn run_with(
             let mut approved: Option<crate::approval::Verified> = None;
             keep_memos(&mut st, externs, key)?;
             evaluator.ssh.keep(&mut st);
+            // A checkpoint of the state (`wal`): before a tick's first
+            // call and after its last, and where the apply stops. Between,
+            // each call's change of state goes to the log alone, before
+            // the next call (`record`).
             let persist = |st: &state::State| dep.save_state(st);
+            let record = |st: &state::State| dep.record(st);
             // Nothing is written, to state or the world, until the apply is
             // confirmed: the moves, the resolution of uncertain calls and the
             // in-flight record taken here are written with the tick's first.
@@ -3158,8 +3170,8 @@ fn run_with(
                     .iter()
                     .any(|a| !matches!(a.kind, ActionKind::Noop));
                 // Every apply is at least one tick of the fake world, also
-                // when there is nothing to do. State is written after every
-                // Apply call (`executor`).
+                // when there is nothing to do. Each Apply call's change of
+                // state is logged before the next call (`executor`, `wal`).
                 if tick == 1 || changed {
                     // Each action goes to the audit log: its result, its
                     // remote id, and a digest of its redacted diff.
@@ -3222,7 +3234,7 @@ fn run_with(
                     };
                     let opts = executor::Options {
                         parallel: parallel as usize,
-                        persist: &persist,
+                        persist: &record,
                         stop_after: stop_after.as_ref(),
                         on_action: Some(&on_action),
                         before_submit: Some(&fence),
@@ -3240,8 +3252,18 @@ fn run_with(
                     if let Some(e) = audit_failed.into_inner() {
                         return Err(e);
                     }
+                    // The tick's checkpoint, also of a tick that failed;
+                    // not of one chaos `stop-after` stopped as if dform
+                    // were killed: its calls' answers are in the log alone,
+                    // and the next run replays them.
+                    let killed = stop_after.as_ref().is_some_and(|left| left.get() == 0);
+                    let checkpoint = match killed {
+                        true => Ok(()),
+                        false => persist(&st),
+                    };
                     log_retries(&audit, &redact, backend, tick)?;
                     seen.extend(applied?);
+                    checkpoint?;
                     // The world as the executor saw it, keyed like a
                     // secret: a document may hold one.
                     let world: serde_json::Map<String, serde_json::Value> = seen
@@ -4778,7 +4800,9 @@ fn approve_entry(
     let digest = digest.unwrap_or_default();
     let Some(path) = token else {
         if needs.is_empty() {
-            return audit.append("approval", serde_json::json!({ "result": "not required" }));
+            return audit
+                .append("approval", serde_json::json!({ "result": "not required" }))
+                .map(drop);
         }
         let error = format!("{} an approval, and no --approval was given", list(needs));
         audit.append(
@@ -5524,15 +5548,30 @@ fn last_apply(entries: &[serde_json::Value]) -> LastApply {
 fn state_show(
     dep: &crate::store::Deployment,
     only: Option<&str>,
+    from_log: bool,
     o: &report::table::Options,
 ) -> Result<()> {
     use report::table::{Cell, Table};
     let only = only.map(ir::parse_resource_address).transpose()?;
     let (deployment, at) = (dep.name(), dep.locate(crate::store::STATE));
-    if !dep.has_state()? {
-        bail!("stack {deployment} has no state at {at}: it was never applied");
-    }
-    let st = dep.load_state()?;
+    let (st, rebuilt) = match from_log {
+        // The log alone (R-146): its `state` entries from the last whole
+        // one, the checkpoint not read.
+        true => match dep.state_from_log()? {
+            Some((st, n)) => (st, Some(n)),
+            None => bail!(
+                "stack {deployment}: the audit log {} holds no whole state to rebuild from \
+                 (it began before the state was logged, or there is none)",
+                dep.locate(crate::store::AUDIT)
+            ),
+        },
+        false => {
+            if !dep.has_state()? {
+                bail!("stack {deployment} has no state at {at}: it was never applied");
+            }
+            (dep.load_state()?, None)
+        }
+    };
     let mut objects = Table::new(["address", "provider", "remote"]);
     let mut push = |addr: String, deposed: bool, e: &state::StateEntry| {
         let addr = if deposed {
@@ -5564,7 +5603,13 @@ fn state_show(
         .iter()
         .for_each(|(k, e)| push(addr(k), false, e));
     st.deposed.iter().for_each(|(k, e)| push(addr(k), true, e));
-    println!("{deployment}: {at}");
+    match rebuilt {
+        Some(n) => println!(
+            "{deployment}: rebuilt from the log alone, {n} state entries: {}",
+            dep.locate(crate::store::AUDIT)
+        ),
+        None => println!("{deployment}: {at}"),
+    }
     print!("{}", objects.render(o));
     if !st.outputs.is_empty() || !st.secret_outputs.is_empty() {
         println!();

@@ -418,9 +418,21 @@ pub fn golden_file(path: &Path, got: &str, test: &str) {
     );
 }
 
+/// The state of the deployment whose checkpoint is `rel` in `s`, as a run
+/// reads it: the checkpoint with the audit log's `state` entries after it
+/// replayed (R-146). A run dform did not finish (killed, or chaos
+/// `stop-after`) left its last calls' answers in the log alone.
+#[allow(dead_code)]
+pub fn replayed(s: &Scratch, rel: &str) -> serde_json::Value {
+    let st = dform_core::store::Deployment::local(&s.path(rel), "test")
+        .load_state()
+        .unwrap();
+    serde_json::to_value(st).unwrap()
+}
+
 /// The addresses the mock's state `w.state.json` in `s` maps.
 pub fn identities(s: &Scratch) -> Vec<String> {
-    s.json("w.state.json")["resources"]
+    replayed(s, "w.state.json")["resources"]
         .as_object()
         .unwrap()
         .keys()

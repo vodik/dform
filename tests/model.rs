@@ -517,10 +517,7 @@ impl Log {
         let Some((req, remote)) = self.expect.take() else {
             return;
         };
-        let st: Json = std::fs::read(&self.state)
-            .ok()
-            .and_then(|b| serde_json::from_slice(&b).ok())
-            .unwrap_or(Json::Null);
+        let st = on_disk(&self.state);
         let key = format!("{}::{}", req.typ, req.name);
         let at = |section: &str| st[section][&key]["remote"].as_str().map(str::to_string);
         let ok = match req.op {
@@ -679,6 +676,17 @@ struct Ran {
     end_ticks: usize,
 }
 
+/// The state on disk as a run reads it: the checkpoint `p` with the audit
+/// log's entries after it replayed (R-146; a call's answer is in the log
+/// before the next call, the checkpoint once a tick).
+fn on_disk(p: &Path) -> Json {
+    dform::store::Deployment::local(p, "model")
+        .load_state()
+        .ok()
+        .and_then(|st| serde_json::to_value(st).ok())
+        .unwrap_or(Json::Null)
+}
+
 fn read_json(p: &Path) -> Json {
     std::fs::read(p)
         .ok()
@@ -802,7 +810,7 @@ impl Runner<'_> {
 
     fn orphans(&self, what: &str) -> Result<(), Failure> {
         let world = read_json(&self.path("w.json"));
-        let st = read_json(&self.path("w.state.json"));
+        let st = on_disk(&self.path("w.state.json"));
         // The Creates and Replaces state records as uncertain: what they
         // made is not mapped until an apply resolves them.
         let uncertain: Vec<(&str, &str)> = st["uncertain"]

@@ -32,22 +32,33 @@ fn a_full_apply_is_a_verifiable_chain() {
     s.write("p.df", PROG);
     mock(&s, &["apply"]).success();
     let es = entries(&s);
+    // Each change of state is logged before anything after it (R-146):
+    // the tick's in-flight record before its first call, each call's
+    // answer before its action entry, the end's state before `apply_end`.
     assert_eq!(
         kinds(&es),
         [
             "plan",
             "approval",
             "apply_start",
+            "state",
+            "state",
             "action",
+            "state",
             "action",
+            "state",
             "action",
             "tick",
+            "state",
             "apply_end"
         ]
     );
+    assert!(es[3]["full"].is_object(), "{}", es[3]);
+    assert!(es[4]["changes"].is_array(), "{}", es[4]);
     assert_eq!(es[1]["result"], "not required");
     assert!(es[0]["digest"].as_str().unwrap().starts_with("sha256:"));
     assert_eq!(es[2]["dform"], env!("CARGO_PKG_VERSION"));
+    let es: Vec<serde_json::Value> = es.into_iter().filter(|e| e["kind"] != "state").collect();
     let actions: Vec<(&str, &str, &str)> = es[3..6]
         .iter()
         .map(|e| {
@@ -71,26 +82,31 @@ fn a_full_apply_is_a_verifiable_chain() {
     assert!(es[6]["world"].as_str().unwrap().starts_with("hmac-sha256:"));
     assert_eq!(es[7]["result"], "ok");
     // Each entry names the one before.
-    for w in es.windows(2) {
+    for w in entries(&s).windows(2) {
         assert_eq!(w[1]["prev"], w[0]["hash"]);
     }
     let r = mock(&s, &["log", "verify"]).success();
     assert!(
         r.stdout
-            .contains("w.state.audit.jsonl: 8 entries, the chain holds"),
+            .contains("w.state.audit.jsonl: 13 entries, the chain holds"),
         "{}",
         r.stdout
     );
     // The text form, from an entry on.
-    let r = mock(&s, &["log", "--since", "7"]).success();
+    let r = mock(&s, &["log", "--since", "11"]).success();
     let lines: Vec<&str> = r.stdout.lines().collect();
-    assert_eq!(lines.len(), 2, "{}", r.stdout);
+    assert_eq!(lines.len(), 3, "{}", r.stdout);
     assert!(
         lines[0].contains(" tick tick=1 world=hmac-sha256:"),
         "{}",
         r.stdout
     );
-    assert!(lines[1].ends_with(" apply_end result=ok"), "{}", r.stdout);
+    assert!(
+        lines[1].contains(" state changes=[{\"at\":[\"in_flight\"],\"gone\":true}] fence=0"),
+        "{}",
+        r.stdout
+    );
+    assert!(lines[2].ends_with(" apply_end result=ok"), "{}", r.stdout);
 }
 
 #[test]
@@ -126,18 +142,24 @@ fn an_edited_entry_is_named() {
     s.write("p.df", PROG);
     mock(&s, &["apply"]).success();
     let log = s.read("w.state.audit.jsonl");
-    // The subnet's action (entry 5) claims another remote id.
+    // The subnet's action (entry n) claims another remote id.
     let lines: Vec<&str> = log.lines().collect();
-    let edited: serde_json::Value = serde_json::from_str(lines[4]).unwrap();
+    let i = lines
+        .iter()
+        .position(|l| l.contains("\"kind\":\"action\"") && l.contains("net.subnet"))
+        .unwrap();
+    let n = i + 1;
+    let edited: serde_json::Value = serde_json::from_str(lines[i]).unwrap();
     assert_eq!(edited["address"], "net.subnet[\"a\"]");
     let remote = edited["remote"].as_str().unwrap();
-    let forged = lines[4].replace(&format!("\"remote\":\"{remote}\""), "\"remote\":\"forged\"");
-    assert_ne!(forged, lines[4]);
-    s.write("w.state.audit.jsonl", &log.replace(lines[4], &forged));
+    let forged = lines[i].replace(&format!("\"remote\":\"{remote}\""), "\"remote\":\"forged\"");
+    assert_ne!(forged, lines[i]);
+    s.write("w.state.audit.jsonl", &log.replace(lines[i], &forged));
     let r = mock(&s, &["log", "verify"]).failure();
     assert!(
-        r.stderr
-            .contains("entry 5 (action) was altered: its hash does not match its content"),
+        r.stderr.contains(&format!(
+            "entry {n} (action) was altered: its hash does not match its content"
+        )),
         "{}",
         r.stderr
     );
@@ -145,14 +167,16 @@ fn an_edited_entry_is_named() {
     let without: Vec<&str> = lines
         .iter()
         .enumerate()
-        .filter(|(i, _)| *i != 4)
+        .filter(|(j, _)| *j != i)
         .map(|(_, l)| *l)
         .collect();
     s.write("w.state.audit.jsonl", &(without.join("\n") + "\n"));
     let r = mock(&s, &["log", "verify"]).failure();
     assert!(
-        r.stderr
-            .contains("entry 5 (action): its prev is not entry 4's hash"),
+        r.stderr.contains(&format!(
+            "entry {n} (state): its prev is not entry {}'s hash",
+            n - 1
+        )),
         "{}",
         r.stderr
     );

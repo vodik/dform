@@ -520,6 +520,25 @@ impl LocalStore {
         self.dir.join(format!("{}{key}", self.prefix))
     }
 
+    /// Remove the temporaries a write of `key` left when it was killed
+    /// before its rename ([`write_atomic`]).
+    fn sweep(&self, key: &str) {
+        let start = format!(".{}{key}.", self.prefix);
+        let dir = match self.dir.as_os_str().is_empty() {
+            true => Path::new("."),
+            false => self.dir.as_path(),
+        };
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for e in entries.flatten() {
+            let name = e.file_name().to_string_lossy().into_owned();
+            if name.starts_with(&start) && is_temporary(&name) {
+                let _ = std::fs::remove_file(e.path());
+            }
+        }
+    }
+
     fn mkdir(path: &Path) -> Result<()> {
         if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
             std::fs::create_dir_all(dir).with_context(|| format!("mkdir {}", dir.display()))?;
@@ -545,10 +564,13 @@ impl Store for LocalStore {
         }
     }
 
-    /// `IfMatch` is checked, then written: not atomic, but the local
-    /// backend's writers of one object are one at a time (its lock file,
-    /// or the audit log's `flock`). `IfAbsent` makes the file readable by
-    /// its owner only: it is the plan key.
+    /// Every write is whole: a temporary file beside the target, fsynced,
+    /// renamed over it ([`write_atomic`]), so a crash or a full disk
+    /// leaves the old content or the new, never a cut one. `IfMatch` is
+    /// checked, then written: the local backend's writers of one object
+    /// are one at a time (its lock, or the audit log's `flock`).
+    /// `IfAbsent` links the temporary in place, which fails when there is
+    /// a file, and makes it readable by its owner only: it is the plan key.
     fn put(&self, key: &str, bytes: &[u8], cond: &Cond) -> Result<Option<String>> {
         let path = self.path(key);
         LocalStore::mkdir(&path)?;
@@ -560,22 +582,11 @@ impl Store for LocalStore {
                 }
             }
             Cond::IfAbsent => {
-                let mut opts = std::fs::OpenOptions::new();
-                opts.write(true).create_new(true);
-                #[cfg(unix)]
-                std::os::unix::fs::OpenOptionsExt::mode(&mut opts, 0o600);
-                let mut f = match opts.open(&path) {
-                    Ok(f) => f,
-                    Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => return Ok(None),
-                    Err(e) => return Err(e).with_context(|| format!("write {}", path.display())),
-                };
-                use std::io::Write;
-                f.write_all(bytes)
-                    .with_context(|| format!("write {}", path.display()))?;
-                return Ok(Some(content_etag(bytes)));
+                return Ok(create_atomic(&path, bytes, 0o600)?.then(|| content_etag(bytes)));
             }
         }
-        std::fs::write(&path, bytes).with_context(|| format!("write {}", path.display()))?;
+        let before = (key == STATE).then_some("renamed");
+        write_atomic_at(&path, bytes, None, before)?;
         Ok(Some(content_etag(bytes)))
     }
 
@@ -588,6 +599,10 @@ impl Store for LocalStore {
             };
             for e in entries {
                 let e = e?;
+                // A write's temporary is no object (`write_atomic`).
+                if is_temporary(&e.file_name().to_string_lossy()) {
+                    continue;
+                }
                 let name = format!("{rel}{}", e.file_name().to_string_lossy());
                 if e.file_type()?.is_dir() {
                     walk(&e.path(), &format!("{name}/"), out)?;
@@ -657,6 +672,9 @@ impl Store for LocalStore {
             if !same_file(&f, &path) {
                 continue;
             }
+            // What a write killed between its temporary and its rename
+            // left: no one else writes the state while the lock is held.
+            self.sweep(STATE);
             if let Some(pid) = lock_holder(&path) {
                 eprintln!(
                     "note: stack {stack}: taking over the lock of pid {pid}, which no longer \
@@ -759,7 +777,7 @@ impl Store for LocalStore {
 
     /// The file is locked (`flock`) while it is read and written, so two
     /// processes appending (a `plan --out` beside an apply) do not fork an
-    /// audit log's chain.
+    /// audit log's chain; and synced before the lock is let go.
     fn append(&self, key: &str, line: &mut dyn FnMut(&[u8]) -> Vec<u8>) -> Result<()> {
         use std::io::{Read, Seek, Write};
         let path = self.path(key);
@@ -778,9 +796,128 @@ impl Store for LocalStore {
             .with_context(|| format!("read {}", path.display()))?;
         f.write_all(&line(&text))
             .with_context(|| format!("write {}", path.display()))?;
+        // Durable before it returns: the log is the state's (`wal`).
+        f.sync_data()
+            .with_context(|| format!("sync {}", path.display()))?;
         f.unlock()?;
         Ok(())
     }
+}
+
+/// Write `bytes` to `path` whole (R-138): a temporary file beside it
+/// (the same directory, so the same filesystem), written, fsynced and
+/// renamed over it, and the directory fsynced. A crash, a kill or a full
+/// disk leaves the old content or the new. The temporary is removed on
+/// every error path.
+pub fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
+    write_atomic_at(path, bytes, None, None)
+}
+
+/// [`write_atomic`]; `mode` the new file's permissions, `chaos` the point
+/// tests may stop the process at between the temporary and the rename
+/// ([`abort_at`]).
+fn write_atomic_at(
+    path: &Path,
+    bytes: &[u8],
+    mode: Option<u32>,
+    chaos: Option<&str>,
+) -> Result<()> {
+    let tmp = Temporary::write(path, bytes, mode)?;
+    if let Some(point) = chaos {
+        abort_at(point);
+    }
+    std::fs::rename(&tmp.0, path)
+        .with_context(|| format!("rename {} to {}", tmp.0.display(), path.display()))?;
+    tmp.keep();
+    sync_dir(path)
+}
+
+/// Create `path` with `bytes` whole unless there is a file there: the
+/// temporary is linked in place, which fails when one exists. `false`
+/// when one did.
+fn create_atomic(path: &Path, bytes: &[u8], mode: u32) -> Result<bool> {
+    let tmp = Temporary::write(path, bytes, Some(mode))?;
+    match std::fs::hard_link(&tmp.0, path) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => return Ok(false),
+        Err(e) => return Err(e).with_context(|| format!("write {}", path.display())),
+    }
+    drop(tmp);
+    sync_dir(path)?;
+    Ok(true)
+}
+
+/// Is a directory entry's name a write's temporary?
+fn is_temporary(name: &str) -> bool {
+    name.starts_with('.') && name.ends_with(".tmp")
+}
+
+/// A write's temporary file, removed when dropped unless kept (its path
+/// emptied).
+struct Temporary(PathBuf);
+
+impl Temporary {
+    /// `bytes` in a new temporary beside `path`, synced.
+    fn write(path: &Path, bytes: &[u8], mode: Option<u32>) -> Result<Temporary> {
+        use std::io::Write;
+        static N: AtomicUsize = AtomicUsize::new(0);
+        let dir = path.parent().unwrap_or(Path::new(""));
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let tmp = dir.join(format!(
+            ".{name}.{}.{}.tmp",
+            std::process::id(),
+            N.fetch_add(1, Ordering::Relaxed)
+        ));
+        let mut opts = std::fs::OpenOptions::new();
+        opts.write(true).create_new(true);
+        #[cfg(unix)]
+        if let Some(mode) = mode {
+            std::os::unix::fs::OpenOptionsExt::mode(&mut opts, mode);
+        }
+        #[cfg(not(unix))]
+        let _ = mode;
+        let mut f = opts
+            .open(&tmp)
+            .with_context(|| format!("write {}", tmp.display()))?;
+        let t = Temporary(tmp);
+        f.write_all(bytes)
+            .and_then(|()| f.sync_all())
+            .with_context(|| format!("write {}", t.0.display()))?;
+        Ok(t)
+    }
+
+    /// It was renamed: nothing to remove.
+    fn keep(mut self) {
+        self.0 = PathBuf::new();
+    }
+}
+
+impl Drop for Temporary {
+    fn drop(&mut self) {
+        if !self.0.as_os_str().is_empty() {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+}
+
+/// Make a rename or a new name in `path`'s directory durable.
+fn sync_dir(path: &Path) -> Result<()> {
+    #[cfg(unix)]
+    {
+        let dir = match path.parent() {
+            Some(d) if !d.as_os_str().is_empty() => d,
+            _ => Path::new("."),
+        };
+        std::fs::File::open(dir)
+            .and_then(|d| d.sync_all())
+            .with_context(|| format!("sync {}", dir.display()))?;
+    }
+    #[cfg(not(unix))]
+    let _ = path;
+    Ok(())
 }
 
 /// The pid a lock file names, for messages.
@@ -933,8 +1070,34 @@ struct Inner {
     lost: Mutex<Option<String>>,
     /// The thread renewing the lease, while a [`Guard`] holds it.
     renewer: Mutex<Option<std::thread::JoinHandle<()>>>,
+    /// The state as this run last read or logged it (`wal`).
+    wal: Mutex<Wal>,
+    /// The audit log's sink, which the state's entries go to as well.
+    sink: Mutex<(Option<String>, Duration)>,
     writes: AtomicUsize,
     submits: AtomicUsize,
+}
+
+/// The state as this run last read, logged or checkpointed it: what the
+/// next `state` entry is a change from.
+#[derive(Default)]
+struct Wal {
+    /// As JSON; `None` before it is read.
+    state: Option<serde_json::Value>,
+    /// The last log entry it includes.
+    pos: Option<crate::audit::Pos>,
+    /// The log reaches it: the next entry may be a change, else it is
+    /// written whole.
+    chained: bool,
+}
+
+/// The state a read found: the checkpoint with the log's entries after it
+/// replayed.
+struct Read {
+    state: serde_json::Value,
+    /// The checkpoint's ETag; `None` when there is none.
+    etag: Option<String>,
+    replayed: crate::wal::Replayed,
 }
 
 impl Deployment {
@@ -949,6 +1112,8 @@ impl Deployment {
                 lease: Mutex::new(None),
                 lost: Mutex::new(None),
                 renewer: Mutex::new(None),
+                wal: Mutex::new(Wal::default()),
+                sink: Mutex::new((None, crate::audit::SINK_TIMEOUT)),
                 writes: AtomicUsize::new(0),
                 submits: AtomicUsize::new(0),
             }),
@@ -977,50 +1142,155 @@ impl Deployment {
         self.inner.store.locate(key)
     }
 
-    /// Is there state?
+    /// Is there state: a checkpoint, or the log's entries of one a run
+    /// that died before its first checkpoint wrote?
     pub fn has_state(&self) -> Result<bool> {
-        Ok(self.inner.store.get(STATE)?.is_some())
+        if self.inner.store.get(STATE)?.is_some() {
+            return Ok(true);
+        }
+        Ok(self.read()?.replayed.entries > 0)
     }
 
-    /// The deployment's state; empty when there is none.
+    /// The deployment's state, empty when there is none: its checkpoint
+    /// with the log's `state` entries after it replayed (`wal`).
     pub fn load_state(&self) -> Result<State> {
-        let (st, etag) = match self.inner.store.get(STATE)? {
-            None => (
-                State {
-                    version: 1,
-                    ..State::default()
-                },
-                None,
-            ),
-            Some(o) => (
-                serde_json::from_slice(&o.bytes).context("parse state")?,
-                Some(o.etag),
-            ),
+        let read = self.read()?;
+        let st = serde_json::from_value(read.state.clone()).context("parse state")?;
+        *self.inner.etag.lock().expect("etag") = Some(read.etag);
+        *self.inner.wal.lock().expect("wal") = Wal {
+            state: Some(read.state),
+            pos: read.replayed.pos,
+            chained: read.replayed.chained,
         };
-        *self.inner.etag.lock().expect("etag") = Some(etag);
         Ok(st)
     }
 
-    /// Write the deployment's state. In a store that fences, only under
-    /// its lease ([`Deployment::lock`]), with the lease's fencing counter
-    /// in it, and only over the version this run last read or wrote.
+    /// `dform state show --from-log`: the state the log alone makes, from
+    /// its last whole `state` entry; `None` when it has none.
+    pub fn state_from_log(&self) -> Result<Option<(State, usize)>> {
+        let (tail, _) = self.wal_log().after(None)?;
+        let r = crate::wal::replay(serde_json::json!({}), None, 0, &tail, false);
+        if !r.chained {
+            return Ok(None);
+        }
+        let st = serde_json::from_value(r.state).context("parse state")?;
+        Ok(Some((st, r.entries)))
+    }
+
+    /// The checkpoint and the log after it, replayed.
+    fn read(&self) -> Result<Read> {
+        let empty = || {
+            serde_json::to_value(State {
+                version: 1,
+                ..State::default()
+            })
+        };
+        let (mut v, etag) = match self.inner.store.get(STATE)? {
+            None => (empty()?, None),
+            Some(o) => (
+                serde_json::from_slice::<serde_json::Value>(&o.bytes).context("parse state")?,
+                Some(o.etag),
+            ),
+        };
+        // The checkpoint's own fields, not the state's.
+        let (fence, pos) = match v.as_object_mut() {
+            Some(m) => (
+                m.remove("fence").and_then(|f| f.as_u64()).unwrap_or(0),
+                m.remove("log")
+                    .and_then(|p| serde_json::from_value::<crate::audit::Pos>(p).ok()),
+            ),
+            None => (0, None),
+        };
+        // A checkpoint the log does not reach (none, one from before the
+        // state had a log, or the log started again): its own, unless the
+        // log has a whole entry since.
+        let (tail, found) = self.wal_log().after(pos.as_ref())?;
+        let replayed = crate::wal::replay(v, pos, fence, &tail, found);
+        Ok(Read {
+            state: replayed.state.clone(),
+            etag,
+            replayed,
+        })
+    }
+
+    /// The log the state's entries go to: the audit log, its sink as this
+    /// run's ([`Deployment::audit`]).
+    fn wal_log(&self) -> crate::audit::Log {
+        let (sink, timeout) = self.inner.sink.lock().expect("sink").clone();
+        crate::audit::Log::new(self.inner.store.clone(), sink).with_sink_timeout(timeout)
+    }
+
+    /// Log what changed in the state since this run last read or logged
+    /// it, durably, before anything else is done (`wal`): after every Apply
+    /// call that answers. In a store that fences, only under this run's
+    /// lease, checked first, and with its fence in the entry. Nothing
+    /// changed, nothing is written.
+    pub fn record(&self, st: &State) -> Result<()> {
+        stall_at("DFORM_TEST_STALL_AT_WRITE", &self.inner.writes);
+        self.log_state(st)
+    }
+
+    fn log_state(&self, st: &State) -> Result<()> {
+        let inner = &self.inner;
+        let v = serde_json::to_value(st)?;
+        let mut wal = inner.wal.lock().expect("wal");
+        let fields = match (&wal.state, wal.chained) {
+            (Some(was), true) => {
+                let changes = crate::wal::diff(was, &v);
+                if changes.is_empty() {
+                    return Ok(());
+                }
+                serde_json::json!({ "changes": changes })
+            }
+            _ => serde_json::json!({ "full": v }),
+        };
+        let fence = match inner.store.fenced() {
+            true => self.check_lease()?,
+            false => 0,
+        };
+        let mut fields = fields;
+        fields["fence"] = fence.into();
+        let pos = self.wal_log().append("state", fields).with_context(|| {
+            format!(
+                "stack {}: the change of state was not logged, and nothing after it is done",
+                inner.name
+            )
+        })?;
+        abort_at("logged");
+        *wal = Wal {
+            state: Some(v),
+            pos: Some(pos),
+            chained: true,
+        };
+        Ok(())
+    }
+
+    /// Write the deployment's state: its change logged ([`Deployment::record`]),
+    /// then the checkpoint, written whole, saying the last log entry it
+    /// includes. In a store that fences, only under its lease
+    /// ([`Deployment::lock`]), with the lease's fencing counter in it, and
+    /// only over the version this run last read or wrote.
     pub fn save_state(&self, st: &State) -> Result<()> {
         let inner = &self.inner;
         stall_at("DFORM_TEST_STALL_AT_WRITE", &inner.writes);
+        self.log_state(st)?;
+        let mut v = serde_json::to_value(st)?;
+        if let (Some(m), Some(pos)) = (v.as_object_mut(), &inner.wal.lock().expect("wal").pos) {
+            m.insert("log".into(), serde_json::to_value(pos)?);
+        }
         if inner.store.fenced() {
-            self.save_fenced(st)?;
+            self.save_fenced(v)?;
         } else {
             inner
                 .store
-                .put(STATE, &serde_json::to_vec_pretty(st)?, &Cond::Any)?;
+                .put(STATE, &serde_json::to_vec_pretty(&v)?, &Cond::Any)?;
         }
         Ok(())
     }
 
-    fn save_fenced(&self, st: &State) -> Result<()> {
+    fn save_fenced(&self, mut v: serde_json::Value) -> Result<()> {
         let inner = &self.inner;
         let fence = self.check_lease()?;
-        let mut v = serde_json::to_value(st)?;
         if let Some(m) = v.as_object_mut() {
             m.insert("fence".into(), fence.into());
         }
@@ -1201,13 +1471,25 @@ impl Deployment {
         Ok(guard)
     }
 
-    /// Write the state once with the new lease's fencing counter in it, so
-    /// its ETag moves and a write of an earlier holder's is refused. The
-    /// state must be the version this run read, if it read one.
+    /// Mark the taking of the lease in the log (a `lease` entry, its
+    /// fence: what a stale holder logs after it is skipped on replay),
+    /// then write the state once with the new lease's fencing counter in
+    /// it, so its ETag moves and a write of an earlier holder's is
+    /// refused: a checkpoint of the log up to the `lease` entry. The state
+    /// must be the version this run read, if it read one, its log's
+    /// entries included.
     fn fence_state(&self) -> Result<()> {
         let inner = &self.inner;
-        let fence = inner.lease().as_ref().map_or(0, |l| l.fence);
+        let (fence, holder) = inner
+            .lease()
+            .as_ref()
+            .map_or((0, String::new()), |l| (l.fence, l.holder.clone()));
+        let lease = self.wal_log().append(
+            "lease",
+            serde_json::json!({ "fence": fence, "holder": holder }),
+        )?;
         let mut etag = inner.etag.lock().expect("etag");
+        let mut wal = inner.wal.lock().expect("wal");
         let changed = || {
             anyhow!(
                 "stack {}: its state {} changed since this run read it (another apply wrote \
@@ -1216,29 +1498,37 @@ impl Deployment {
                 inner.store.locate(STATE)
             )
         };
-        let Some(o) = inner.store.get(STATE)? else {
-            if matches!(&*etag, Some(Some(_))) {
-                return Err(changed());
-            }
-            return Ok(());
-        };
+        let now = self.read()?;
         if let Some(read) = &*etag
-            && read.as_deref() != Some(o.etag.as_str())
+            && (read != &now.etag || wal.state.as_ref() != Some(&now.state))
         {
             return Err(changed());
         }
-        let mut v: serde_json::Value = serde_json::from_slice(&o.bytes).context("parse state")?;
+        // Nothing to fence: no checkpoint, and no entry in the log.
+        if now.etag.is_none() && now.replayed.entries == 0 {
+            return Ok(());
+        }
+        let mut v = now.state.clone();
         if let Some(m) = v.as_object_mut() {
             m.insert("fence".into(), fence.into());
+            m.insert("log".into(), serde_json::to_value(&lease)?);
         }
-        match inner.store.put(
-            STATE,
-            &serde_json::to_vec_pretty(&v)?,
-            &Cond::IfMatch(o.etag),
-        )? {
+        let cond = match &now.etag {
+            Some(e) => Cond::IfMatch(e.clone()),
+            None => Cond::IfAbsent,
+        };
+        match inner
+            .store
+            .put(STATE, &serde_json::to_vec_pretty(&v)?, &cond)?
+        {
             Some(e) => {
                 if etag.is_some() {
                     *etag = Some(Some(e));
+                    *wal = Wal {
+                        state: Some(now.state),
+                        pos: Some(lease),
+                        chained: true,
+                    };
                 }
                 Ok(())
             }
@@ -1251,9 +1541,11 @@ impl Deployment {
         self.inner.store.break_lease(LOCK, &self.inner.name)
     }
 
-    /// The deployment's audit log; each entry also to `sink`.
-    pub fn audit(&self, sink: Option<String>) -> crate::audit::Log {
-        crate::audit::Log::new(self.inner.store.clone(), sink)
+    /// The deployment's audit log; each entry also to `sink`, given
+    /// `timeout` for each: the state's entries too.
+    pub fn audit(&self, sink: Option<String>, timeout: Duration) -> crate::audit::Log {
+        *self.inner.sink.lock().expect("sink") = (sink, timeout);
+        self.wal_log()
     }
 
     /// The deployment's plan key, made on first use.
@@ -1288,6 +1580,39 @@ fn stall_at(var: &str, count: &AtomicUsize) {
     let _ = std::fs::write(dir.join("stalled"), std::process::id().to_string());
     while !dir.join("resume").exists() {
         std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+/// Tests kill the process at a point of a state write
+/// (`DFORM_TEST_ABORT_AT=POINT:N`), as a `kill -9` would: `logged`, its Nth
+/// `state` entry durable in the log and nothing after it (between the log
+/// and the checkpoint, or mid-tick); `renamed`, its Nth checkpoint's
+/// temporary written and synced, not yet renamed over the state. The
+/// process is killed (SIGKILL to itself): no destructor runs, nothing is
+/// flushed.
+pub fn abort_at(point: &str) {
+    static COUNTS: Mutex<BTreeMap<String, usize>> = Mutex::new(BTreeMap::new());
+    let Some(spec) = std::env::var_os("DFORM_TEST_ABORT_AT") else {
+        return;
+    };
+    let spec = spec.to_string_lossy();
+    let Some((at, n)) = spec.split_once(':') else {
+        return;
+    };
+    if at != point {
+        return;
+    }
+    let mut counts = COUNTS.lock().unwrap_or_else(|e| e.into_inner());
+    let count = counts.entry(point.to_string()).or_default();
+    *count += 1;
+    if n.parse() == Ok(*count) {
+        #[cfg(unix)]
+        // SAFETY: kill takes a pid and a signal number and touches no
+        // memory.
+        unsafe {
+            libc::kill(libc::getpid(), libc::SIGKILL);
+        }
+        std::process::abort();
     }
 }
 

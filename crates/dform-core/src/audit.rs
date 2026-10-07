@@ -25,12 +25,19 @@
 //! open nulls: what, since when, how long, and how it ended; [`wait`]),
 //! `derived` (what a completed apply derived: each rule's resources and
 //! each relation's rows, `zset::Derived`; R-80), `apply_end`, `controller` (events, holds, releases), `rekey` and
-//! `handover`. Values are never written: a diff is a digest of its redacted
-//! form, where a sensitive leaf is already the stack's HMAC of it.
+//! `handover`; and the state's own, `state` (a change of state, written
+//! before the state is) and `lease` (a lease taken, and its fence) (R-146,
+//! `wal`). Values are never written but as state keeps them: a diff is a
+//! digest of its redacted form, where a sensitive leaf is already the
+//! stack's HMAC of it, and a `state` entry holds what the state file does,
+//! a sensitive leaf by its digest there too.
 //!
-//! Nothing reads the log as truth (DR-16): plan and apply read only what
-//! the last apply recorded, to say what changed since (R-79's `because`)
-//! and what a plan empties (R-80's guardrail), never to decide a change.
+//! The log is the state's write-ahead log (`wal`): the state object is a
+//! checkpoint of its `state` entries, and a run replays those after the
+//! checkpoint. Otherwise nothing reads the log as truth (DR-16): plan and
+//! apply read what the last apply recorded, to say what changed since
+//! (R-79's `because`) and what a plan empties (R-80's guardrail), never to
+//! decide a change.
 //! A sink (`--audit-sink CMD`, or the stack's `audit_sink = "CMD"`) gets
 //! each entry as a JSON line on its stdin (`sh -c CMD`, once per entry, in
 //! a process group of its own); a sink that fails is a warning, and the
@@ -122,11 +129,42 @@ impl Log {
         entries(&self.text()?.unwrap_or_default(), &self.locate())
     }
 
+    /// The entries after `pos` (each one when there is no position), and
+    /// whether the log reaches it: `false` when no entry is at `pos` (the
+    /// log was started again since), and then every entry. A line that is
+    /// not JSON (the end of an append a crash cut short) is skipped.
+    pub fn after(&self, pos: Option<&Pos>) -> Result<(Vec<Json>, bool)> {
+        // In segments, from the position's own.
+        if let Some(part) = pos.and_then(|p| p.part.as_deref())
+            && !self.store.appends_in_place()
+        {
+            let mut text = String::new();
+            for k in self.store.list(AUDIT_SEGMENTS)? {
+                if k.as_str() < part {
+                    continue;
+                }
+                if let Some(o) = self.store.get(&k)? {
+                    text.push_str(&String::from_utf8_lossy(&o.bytes));
+                    if !text.ends_with('\n') {
+                        text.push('\n');
+                    }
+                }
+            }
+            if let (tail, true) = tail(&text, pos) {
+                return Ok((tail, true));
+            }
+        }
+        Ok(tail(&self.text()?.unwrap_or_default(), pos))
+    }
+
     /// Append an entry of `kind` with `fields` (an object), chained to the
-    /// last one. The store appends without losing a concurrent entry (a
-    /// `plan --out` beside an apply), so the chain does not fork.
-    pub fn append(&self, kind: &str, fields: Json) -> Result<()> {
+    /// last one; where it went. The store appends without losing a
+    /// concurrent entry (a `plan --out` beside an apply), so the chain
+    /// does not fork, and the append is durable when this returns (the
+    /// local file fsynced; an object written whole).
+    pub fn append(&self, kind: &str, fields: Json) -> Result<Pos> {
         let mut written = String::new();
+        let mut at = Pos::default();
         let mut line = |text: &[u8]| {
             let text = String::from_utf8_lossy(text);
             let (seq, prev) = match text.lines().rev().find(|l| !l.trim().is_empty()) {
@@ -153,22 +191,75 @@ impl Log {
                 }
             }
             let hash = digest_of(&Json::Object(entry.clone()));
+            at = Pos {
+                seq,
+                hash: hash.clone(),
+                part: None,
+            };
             entry.insert("hash".into(), hash.into());
             written = canonical_json(&Json::Object(entry));
-            format!("{written}\n").into_bytes()
+            // A line a crash cut short stays a line of its own.
+            let sep = match text.is_empty() || text.ends_with('\n') {
+                true => "",
+                false => "\n",
+            };
+            format!("{sep}{written}\n").into_bytes()
         };
         if self.store.appends_in_place() {
             self.store.append(AUDIT, &mut line)?;
         } else {
-            self.append_segment(&mut line)?;
+            at.part = Some(self.append_segment(&mut line)?);
         }
         if let Some(cmd) = &self.sink
             && let Err(e) = send(cmd, &written, self.sink_timeout)
         {
             eprintln!("warning: audit sink `{cmd}`: {e:#}; the local log has the entry");
         }
-        Ok(())
+        Ok(at)
     }
+}
+
+/// Where an entry is in a log: its `seq` and `hash`, and in a log kept in
+/// segments, the segment's key. A checkpoint of the state records the
+/// last entry it includes (`wal`).
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Pos {
+    pub seq: u64,
+    pub hash: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub part: Option<String>,
+}
+
+impl Pos {
+    /// The position of entry `e` (its part unknown).
+    pub fn of(e: &Json) -> Option<Pos> {
+        Some(Pos {
+            seq: e["seq"].as_u64()?,
+            hash: e["hash"].as_str()?.to_string(),
+            part: None,
+        })
+    }
+}
+
+/// The entries of `text` after `pos`, read from the end, and whether one
+/// is at `pos`; every entry when none is.
+fn tail(text: &str, pos: Option<&Pos>) -> (Vec<Json>, bool) {
+    let mut out = Vec::new();
+    for l in text.lines().rev().filter(|l| !l.trim().is_empty()) {
+        let Ok(e) = serde_json::from_str::<Json>(l) else {
+            continue;
+        };
+        if let Some(p) = pos
+            && e["seq"].as_u64() == Some(p.seq)
+            && e["hash"].as_str() == Some(p.hash.as_str())
+        {
+            out.reverse();
+            return (out, true);
+        }
+        out.push(e);
+    }
+    out.reverse();
+    (out, false)
 }
 
 impl Log {
@@ -176,7 +267,7 @@ impl Log {
     /// once it holds [`SEGMENT`] entries; the first one continues a log
     /// from before segments), without losing a concurrent append: every
     /// write is conditional on what was read.
-    fn append_segment(&self, line: &mut dyn FnMut(&[u8]) -> Vec<u8>) -> Result<()> {
+    fn append_segment(&self, line: &mut dyn FnMut(&[u8]) -> Vec<u8>) -> Result<String> {
         let segment = |n: usize| format!("{AUDIT_SEGMENTS}{n:06}.jsonl");
         for _ in 0..20 {
             let last = self.store.list(AUDIT_SEGMENTS)?.pop();
@@ -211,7 +302,7 @@ impl Log {
                 }
             };
             if self.store.put(&key, &bytes, &cond)?.is_some() {
-                return Ok(());
+                return Ok(key);
             }
         }
         anyhow::bail!(

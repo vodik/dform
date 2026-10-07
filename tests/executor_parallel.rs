@@ -229,7 +229,10 @@ fn any_answer_order_ends_in_the_same_world() {
         );
         let mut w: serde_json::Value = serde_json::from_str(&s.read("w.json")).unwrap();
         w.as_object_mut().unwrap().remove("timeline");
-        (w, s.read("w.state.json"))
+        // Where the checkpoint is in the log differs by its entries' times.
+        let mut st = s.json("w.state.json");
+        st.as_object_mut().unwrap().remove("log");
+        (w, st)
     };
     let serial = world(None, "1");
     for seed in 0..8 {

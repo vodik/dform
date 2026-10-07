@@ -52,6 +52,7 @@ pub mod timing;
 pub mod transform;
 pub mod types;
 pub mod value;
+pub mod wal;
 pub mod watch;
 pub mod whynot;
 pub mod zset;

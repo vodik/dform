@@ -680,8 +680,7 @@ fn save_registry(root: &Path, r: BTreeMap<String, Entry>) -> Result<()> {
     let r: BTreeMap<String, Written> = r.into_iter().map(|(k, e)| (k, e.into())).collect();
     fs::create_dir_all(root).with_context(|| format!("mkdir {}", root.display()))?;
     let path = registry_path(root);
-    fs::write(&path, serde_json::to_vec_pretty(&r)?)
-        .with_context(|| format!("write {}", path.display()))
+    crate::store::write_atomic(&path, &serde_json::to_vec_pretty(&r)?)
 }
 
 /// A location as the registry keeps it: a directory absolute.

@@ -160,6 +160,18 @@ impl<'a> Project<'a> {
         serde_json::from_slice(&o.bytes).unwrap()
     }
 
+    /// The state as a run reads it: the checkpoint with the log's
+    /// entries after it replayed (R-146), without the checkpoint's own
+    /// fields.
+    fn replayed(&self) -> serde_json::Value {
+        let dep = dform_core::store::Deployment::new(
+            std::sync::Arc::new(self.store()),
+            "dform[env=staging]",
+            dform_core::store::LeaseTimes::default(),
+        );
+        serde_json::to_value(dep.load_state().unwrap()).unwrap()
+    }
+
     fn lease(&self) -> Option<serde_json::Value> {
         let o = self.store().get(LOCK).unwrap()?;
         Some(serde_json::from_slice(&o.bytes).unwrap())
@@ -318,6 +330,64 @@ fn stalled_apply(p: &Project, at: usize) -> (Child, String) {
         Path::new(&dir).join("stalled").exists()
     });
     (a, dir)
+}
+
+/// State is a checkpoint of the audit log in a bucket too (R-146): an
+/// apply killed (kill -9) after its in-flight record or a call's answer
+/// is in the log and before the checkpoint after it, once its lease
+/// expires, is taken over and resumed to the state an uninterrupted apply
+/// leaves; the stale holder's entries are its own fence's, replayed.
+#[test]
+fn a_run_killed_between_the_log_and_the_checkpoint_recovers() {
+    for t in &targets("a_run_killed_between_the_log_and_the_checkpoint_recovers") {
+        let base = Project::new(t, "wal-base");
+        base.run(APPLY).success();
+        let want = base.replayed();
+        assert!(want.get("in_flight").is_none(), "{}: {want}", t.what);
+        for at in ["logged:1", "logged:3"] {
+            let p = Project::new(t, "wal-killed");
+            let out = p
+                .command(APPLY, &[("DFORM_TEST_ABORT_AT", at)])
+                .output()
+                .unwrap();
+            use std::os::unix::process::ExitStatusExt;
+            assert_eq!(out.status.signal(), Some(9), "{} {at}: {out:?}", t.what);
+            let expires = p.lease().unwrap()["expires_ms"].as_u64().unwrap();
+            wait_for("the lease to expire", LEASE * 3, || {
+                dform_core::store::now_ms() > expires + 100
+            });
+            let b = p.run(APPLY).success();
+            assert!(
+                b.stdout.contains("apply: complete"),
+                "{} {at}: {}",
+                t.what,
+                b.stdout
+            );
+            assert_eq!(
+                without_deps(p.replayed()),
+                without_deps(want.clone()),
+                "{} {at}",
+                t.what
+            );
+            assert_eq!(p.state()["fence"], 2, "{} {at}", t.what);
+            let again = p.run(PLAN).success();
+            assert!(again.stdout.contains("is up to date"), "{} {at}", t.what);
+            p.run(&["log", "verify", "dform[env=staging]"]).success();
+        }
+    }
+}
+
+/// State without each object's recorded dependencies: a resumed apply
+/// records an object's reference to one an earlier apply made
+/// (`role = app_role`, the role made before the kill) as no dependency,
+/// with or without a kill in between (a resume's, not the log's).
+fn without_deps(mut st: serde_json::Value) -> serde_json::Value {
+    if let Some(rs) = st["resources"].as_object_mut() {
+        for r in rs.values_mut() {
+            r.as_object_mut().unwrap().remove("deps");
+        }
+    }
+    st
 }
 
 #[test]

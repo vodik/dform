@@ -234,7 +234,8 @@ bucket, its last apply (time, actor and the project's commit, from the
 audit log) and a saved plan not yet applied. `dform state show TARGET`
 prints the deployment's objects, one row per address with its provider
 and remote id, then its outputs as a key/value table (a secret output as
-`secret`: state keeps no bytes of it); `--address ADDR` only the one at `ADDR` (it, `state mv`, `log` and `stack unlock`
+`secret`: state keeps no bytes of it); `--from-log`, the state the audit
+log alone makes (see "State and its log"); `--address ADDR` only the one at `ADDR` (it, `state mv`, `log` and `stack unlock`
 need the deployment's key, not the program's other inputs); `dform state mv FROM TO TARGET` gives the
 object at the address `FROM` the address `TO`; `dform stack unlock TARGET` removes
 an apply lock no process holds (breaks an s3 backend's lease). `dform provider schema NAME` prints a
@@ -300,6 +301,36 @@ Storage, anything S3-compatible); the region defaults to `us-east-1`. In
 the value of its key `k`. The mock's world, the inventory and the cache
 stay under `dform.state/`: they are the provider's and the machine's, not
 state.
+
+### State and its log
+
+The audit log is the state's write-ahead log, and `state.json` a
+checkpoint of it. Every change of state is first appended to the log as
+a `state` entry and made durable (the local file fsynced, an object
+written whole) before anything after it happens: an Apply call's answer,
+the identity it made or removed, is in the log before the next call is
+made. A `state` entry is the whole state (the first of a deployment, or
+one whose checkpoint the log does not reach) or what changed since the
+entry before, with the fence of the lease it was written under (0 on the
+local backend). The checkpoint is written before a tick's first call and
+after its last, and where an apply stops, whole: on the local backend a
+temporary file in the same directory, fsynced and renamed over
+`state.json` (never truncated and rewritten; the plan key, the stack
+registry and a plan file likewise), in a bucket one conditional PUT. It
+records the last log entry it includes (`log`: its `seq` and `hash`, and
+in a bucket the segment it is in).
+
+A run reads the checkpoint and replays the log's `state` entries after
+it: an apply killed between a call's answer and the next checkpoint
+(kill -9, a power cut, a full disk) loses nothing the provider answered,
+and the next apply resumes from there as from any interrupted apply. A
+checkpoint the log does not reach (an apply killed before its first, or
+a log started again) is replayed from the log's last whole entry. Taking
+an s3 lease writes a `lease` entry with its fence; an entry written under
+a lower fence after it (a stale holder's, after a takeover) is skipped.
+`dform state show --from-log TARGET` prints the state the log alone
+makes. The log is kept whole: it is the history too (compaction, folding
+an old log into its checkpoint, is not done).
 
 State keys each resource by its type and address, `T::A`, A the
 resource's path (R-112: `net.vpc::main.vpc`, a quoted segment as
@@ -1674,8 +1705,15 @@ The kinds:
 - `apply_start`: who, dform's version, the git commit, the providers and
   the protocol version; from a dirty tree also `dirty: true` and the
   tracked files it had `modified`;
+- `state`: a change of state, written (and made durable) before anything
+  after it: `changes` (each `{at: PATH, to: VALUE}` or `{at: PATH, gone:
+  true}`) or the whole state (`full`), and the lease's `fence` (see "State
+  and its log"); what it holds is what `state.json` holds, a sensitive
+  leaf by its digest;
+- `lease`: an s3 lease taken: its `fence` and holder;
 - `action`: the kind, the address, the result (and the error), the remote
-  id, and a digest of the redacted diff;
+  id, and a digest of the redacted diff (after the `state` entry of its
+  answer);
 - `tick`: the world as the executor saw it, as an HMAC with the stack's key;
 - `retry`: a provider call sent again (R-81): the tick, the provider, the
   call, the attempt and its budget (`of`), the delay, and why the last

@@ -41,7 +41,9 @@ fn apply_after_a_crash_finishes_on(backend: Backend) {
         "{backend:?}: {}",
         r.stderr
     );
-    let st = s.json("w.state.json");
+    // Of the direct backends, the crash is dform's own: the answers before
+    // it are in the log, and replayed (R-146).
+    let st = common::replayed(&s, "w.state.json");
     assert_eq!(
         st["in_flight"]["remaining"]
             .as_object()
@@ -89,7 +91,9 @@ fn apply_after_a_stop_finishes_the_remaining_actions() {
             "{backend:?}: {}",
             r.stderr
         );
-        let st = s.json("w.state.json");
+        // Stopped as if killed: the answers are in the log, not yet in a
+        // checkpoint, and a run replays them (R-146).
+        let st = common::replayed(&s, "w.state.json");
         assert_eq!(
             st["resources"]
                 .as_object()

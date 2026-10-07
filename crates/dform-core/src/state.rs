@@ -136,15 +136,6 @@ impl State {
         Ok(st)
     }
 
-    pub fn save(&self, path: &Path) -> Result<()> {
-        if let Some(dir) = path.parent() {
-            fs::create_dir_all(dir).with_context(|| format!("mkdir {}", dir.display()))?;
-        }
-        let bytes = serde_json::to_vec_pretty(self)?;
-        fs::write(path, bytes).with_context(|| format!("write {}", path.display()))?;
-        Ok(())
-    }
-
     /// `dform state taint memo KEY`: forget the value `memo.first` keeps
     /// for `key`, so the next run keeps its candidate. Returns what it
     /// kept.
