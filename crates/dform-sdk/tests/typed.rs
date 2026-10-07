@@ -1,7 +1,7 @@
 //! A provider from Rust types: `#[derive(Resource)]` gives the schema,
 //! `Lifecycle` the calls, Plan comes from the schema (R-25).
 
-use dform_core::plugin::backend::{Call, Handler, Reply};
+use dform_core::plugin::backend::{Call, Handler, Reply, silent};
 use dform_core::plugin::{pb, wire};
 use dform_sdk::typed::Result;
 use dform_sdk::{Lifecycle, Provider, Resource, Typed};
@@ -71,7 +71,7 @@ fn provider() -> Typed<Acme> {
 }
 
 fn call<R: TryFrom<Reply, Error = Reply>>(h: &Typed<Acme>, c: impl Into<Call>) -> R {
-    R::try_from(h.handle(c.into()).unwrap()).unwrap()
+    R::try_from(h.handle(c.into(), &silent).unwrap()).unwrap()
 }
 
 #[test]
@@ -123,6 +123,7 @@ fn plan_comes_from_the_schema_and_apply_from_the_lifecycle() {
                 ..Default::default()
             }
             .into(),
+            &silent,
         )
         .unwrap_err();
     assert!(

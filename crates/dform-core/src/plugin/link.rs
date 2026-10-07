@@ -1,7 +1,8 @@
 //! One started provider: its handshake, and calls to it. A blocking call
 //! is a submit and a wait for its own ticket; an answer to another call
 //! that arrives meanwhile (an Apply in flight) is kept for whoever waits
-//! for it. Every call has the link's timeout ([`Timed`]), and a blocking
+//! for it, and so is an event a call in flight sends meanwhile
+//! ([`Link::take_events`]). Every call has the link's timeout ([`Timed`]), and a blocking
 //! call that failed in a way worth trying again is retried with backoff
 //! (R-81, [`super::policy`]); an Apply is the executor's to retry
 //! (`providers::Tick`).
@@ -27,6 +28,8 @@ pub struct Link {
     done: BTreeMap<Ticket, Result<Reply, CallError>>,
     /// The retries since they were last taken ([`Link::take_retries`]).
     retries: Vec<Retry>,
+    /// Events of calls in flight taken while waiting for another call.
+    events: Vec<(Ticket, pb::Event)>,
 }
 
 /// One failed call sent again: for the progress line and the audit log.
@@ -92,6 +95,7 @@ impl Link {
             policy,
             done: BTreeMap::new(),
             retries: Vec::new(),
+            events: Vec::new(),
         };
         let hs: pb::HandshakeResponse = link.call(pb::HandshakeRequest {
             protocol_version: VERSION,
@@ -168,22 +172,37 @@ impl Link {
         self.done.remove(&t)
     }
 
-    /// The next answer: one already taken, else the backend's next.
-    pub fn next_completed(&mut self) -> (Ticket, Result<Reply, CallError>) {
+    /// The next answer: one already taken, else the backend's next. The
+    /// events of calls in flight, those kept first, go to `events` as they
+    /// come.
+    pub fn next_completed(
+        &mut self,
+        events: &mut dyn FnMut(Ticket, pb::Event),
+    ) -> (Ticket, Result<Reply, CallError>) {
+        for (t, e) in self.take_events() {
+            events(t, e);
+        }
         if let Some(t) = self.done.keys().next().copied() {
             let r = self.done.remove(&t).expect("present");
             return (t, r);
         }
-        self.backend.next_completed()
+        self.backend.next_completed(events)
     }
 
-    /// Block until `t` is answered, keeping the answers to other calls.
+    /// The events of calls in flight kept while waiting for another.
+    pub fn take_events(&mut self) -> Vec<(Ticket, pb::Event)> {
+        std::mem::take(&mut self.events)
+    }
+
+    /// Block until `t` is answered, keeping the answers to other calls and
+    /// their events.
     pub fn wait(&mut self, t: Ticket) -> Result<Reply, CallError> {
         if let Some(r) = self.done.remove(&t) {
             return r;
         }
         loop {
-            let (got, r) = self.backend.next_completed();
+            let kept = &mut self.events;
+            let (got, r) = self.backend.next_completed(&mut |t, e| kept.push((t, e)));
             if got == t {
                 return r;
             }
@@ -271,7 +290,7 @@ pub fn gave_up(e: CallError, retries: u32) -> CallError {
 
 #[cfg(test)]
 mod tests {
-    use super::super::backend::{FAKECLOUD, Handler, KUBERNETES};
+    use super::super::backend::{FAKECLOUD, Handler, KUBERNETES, Progress};
     use super::super::queue::{Order, Queue};
     use super::*;
 
@@ -279,7 +298,7 @@ mod tests {
     struct Hello(&'static str, &'static str);
 
     impl Handler for Hello {
-        fn handle(&self, _: Call) -> Result<Reply, CallError> {
+        fn handle(&self, _: Call, _: Progress) -> Result<Reply, CallError> {
             Ok(Reply::Handshake(pb::HandshakeResponse {
                 protocol_version: VERSION,
                 name: self.0.into(),
@@ -314,10 +333,10 @@ mod tests {
     struct Busy(std::sync::atomic::AtomicU32);
 
     impl Handler for Busy {
-        fn handle(&self, call: Call) -> Result<Reply, CallError> {
+        fn handle(&self, call: Call, progress: Progress) -> Result<Reply, CallError> {
             use std::sync::atomic::Ordering;
             match call {
-                Call::Handshake(_) => Hello(FAKECLOUD, BUILD).handle(call),
+                Call::Handshake(_) => Hello(FAKECLOUD, BUILD).handle(call, progress),
                 Call::Read(_)
                     if self
                         .0

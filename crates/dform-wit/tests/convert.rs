@@ -43,3 +43,36 @@ fn a_malformed_tree_is_refused() {
             .contains("not after its parent")
     );
 }
+
+/// An Apply's event and a reveal's request and answer round-trip (R-130).
+#[test]
+fn an_event_and_a_reveal_round_trip() {
+    let e = pb::Event {
+        address: "ovh.instance[\"web\"]".into(),
+        status: Some("BUILD".into()),
+        message: None,
+    };
+    assert_eq!(c::from_event(&c::to_event(&e)), e);
+    let r = pb::RevealRequest {
+        held: Some(pb::Held {
+            provider: "fakecloud".into(),
+            deployment: "platform".into(),
+            r#type: "db.postgres".into(),
+            remote: "pg-1".into(),
+            path: "password".into(),
+            digest: "hmac-sha256:00".into(),
+        }),
+        lease: "lease-1".into(),
+    };
+    assert_eq!(
+        c::from_reveal_request(&c::to_reveal_request(&r)).unwrap(),
+        r
+    );
+    let a = pb::RevealResponse {
+        value: b"s3cret".to_vec(),
+    };
+    assert_eq!(
+        c::from_reveal_response(&c::to_reveal_response(&a)).unwrap(),
+        a
+    );
+}

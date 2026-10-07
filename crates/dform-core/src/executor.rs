@@ -97,6 +97,9 @@ pub enum Event<'a> {
     Finished(&'a Address),
     /// It failed: no new call starts after it.
     Failed(&'a Address, &'a anyhow::Error),
+    /// Its provider said how it goes (R-130): a status word to show beside
+    /// it as it is, and a message for the log.
+    Progress(&'a Address, &'a crate::plugin::pb::Event),
 }
 
 /// How an action ended: its error, if it failed; state as written after it.
@@ -178,7 +181,9 @@ pub fn run_tick(
             Some(i) => (i, Ok(()), false),
             None if tick.busy() => {
                 in_flight -= 1;
-                let (i, r) = tick.next_completed(state);
+                let (i, r) = tick.next_completed(state, &mut |i, e| {
+                    event(opts, Event::Progress(&actions[i].addr, &e));
+                });
                 (i, r, true)
             }
             None => break,

@@ -5,7 +5,7 @@
 //! `DEADLINE_EXCEEDED`, as dform-grpc's client classifies them.
 
 use crate::ovh::Ovh;
-use dform_core::plugin::backend::{Call, CallError, Handler, Reply};
+use dform_core::plugin::backend::{self, Call, Handler, Reply};
 use dform_grpc::pb;
 use std::sync::Arc;
 use tonic::{Request, Response, Status};
@@ -29,20 +29,10 @@ impl Service {
         let call = call.into();
         let method = call.method();
         let ovh = self.ovh.clone();
-        let reply = tokio::task::spawn_blocking(move || ovh.handle(call))
+        let reply = tokio::task::spawn_blocking(move || ovh.handle(call, &backend::silent))
             .await
             .map_err(|e| Status::internal(format!("the {method} call panicked: {e}")))?;
-        match reply {
-            Ok(reply) => R::try_from(reply).map(Response::new).map_err(|other| {
-                Status::internal(format!(
-                    "a {method} call answered with a {} reply",
-                    other.method()
-                ))
-            }),
-            Err(CallError::Refused(m)) => Err(Status::failed_precondition(m)),
-            Err(CallError::MaybeApplied(m)) => Err(Status::deadline_exceeded(m)),
-            Err(CallError::Crashed(m)) => Err(Status::unavailable(m)),
-        }
+        dform_grpc::server::answer(method, reply).map(Response::new)
     }
 }
 
@@ -78,11 +68,23 @@ impl pb::provider_server::Provider for Service {
         self.call(req.into_inner()).await
     }
 
-    async fn apply(&self, req: Request<pb::ApplyRequest>) -> Answer<pb::ApplyResponse> {
-        self.call(req.into_inner()).await
+    type ApplyStream = dform_grpc::server::ApplyStream;
+
+    /// What the API says of the object as it is made (an instance's
+    /// `BUILD`, then `ACTIVE`) streams before the result (R-130).
+    async fn apply(&self, req: Request<pb::ApplyRequest>) -> Answer<Self::ApplyStream> {
+        let ovh = self.ovh.clone();
+        Ok(Response::new(dform_grpc::server::apply_stream(
+            req.into_inner(),
+            move |call, progress| ovh.handle(call, progress),
+        )))
     }
 
     async fn import(&self, req: Request<pb::ImportRequest>) -> Answer<pb::ImportResponse> {
+        self.call(req.into_inner()).await
+    }
+
+    async fn reveal(&self, req: Request<pb::RevealRequest>) -> Answer<pb::RevealResponse> {
         self.call(req.into_inner()).await
     }
 }

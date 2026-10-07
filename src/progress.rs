@@ -233,6 +233,15 @@ impl Progress {
                 b.fail(a, &redact(&format!("{err:#}")));
                 *a
             }
+            // The provider's status word, beside the change as it says it
+            // (R-130); an event with none changes nothing shown.
+            Event::Progress(a, e) => {
+                let Some(status) = &e.status else { return };
+                if let Some(x) = b.entries.iter_mut().find(|x| x.addr == **a) {
+                    x.status = Some(redact(status));
+                }
+                *a
+            }
         };
         let i = b.entries.iter().position(|x| x.addr == *addr);
         let start = matches!(e, Event::Started(_));

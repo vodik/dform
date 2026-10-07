@@ -4,8 +4,11 @@
 //! runtime. `submit` spawns the call on it and returns; `next_completed`
 //! drives the runtime until some call has answered, so every call in
 //! flight runs at once (a plan's Plan calls, `--parallel`'s Apply calls).
-//! A call that fails because the process died says so, with its exit
-//! status (`CallError::Crashed`).
+//! An Apply's events (its stream, before its result: R-130) are told as
+//! they arrive. A call that fails because the process died says so, with
+//! its exit status (`CallError::Crashed`). Dropping the connection cancels
+//! every call in flight (the runtime goes, and each call's stream with
+//! it).
 
 use crate::pb;
 use crate::pb::provider_client::ProviderClient;
@@ -22,6 +25,12 @@ use tonic::transport::Channel;
 
 type Answer = std::result::Result<Reply, tonic::Status>;
 
+/// What a call spawned on the runtime sends back.
+enum Back {
+    Event(Ticket, pb::Event),
+    Answer(Ticket, Answer),
+}
+
 pub struct Conn {
     /// What was started, for messages.
     program: String,
@@ -37,9 +46,9 @@ pub struct Conn {
     /// Where it was dialed: a unix socket is removed once it is gone.
     address: String,
     next: u64,
-    /// Answers arrive here from the calls spawned on `rt`.
-    tx: mpsc::UnboundedSender<(Ticket, Answer)>,
-    rx: mpsc::UnboundedReceiver<(Ticket, Answer)>,
+    /// Events and answers arrive here from the calls spawned on `rt`.
+    tx: mpsc::UnboundedSender<Back>,
+    rx: mpsc::UnboundedReceiver<Back>,
     /// Calls refused before they were sent (the process had exited).
     refused: Vec<(Ticket, CallError)>,
 }
@@ -150,8 +159,9 @@ impl Conn {
     }
 }
 
-/// One call over gRPC; a server-streamed Query collected.
-async fn send(mut c: ProviderClient<Channel>, call: Call) -> Answer {
+/// One call over gRPC; a server-streamed Query collected, an Apply's
+/// events told to `event` as they come.
+async fn send(mut c: ProviderClient<Channel>, call: Call, event: impl Fn(pb::Event)) -> Answer {
     use tonic::Response;
     Ok(match call {
         Call::Handshake(r) => Reply::Handshake(c.handshake(r).await?.into_inner()),
@@ -167,8 +177,28 @@ async fn send(mut c: ProviderClient<Channel>, call: Call) -> Answer {
         }
         Call::Read(r) => Reply::Read(c.read(r).await?.into_inner()),
         Call::Plan(r) => Reply::Plan(c.plan(r).await?.into_inner()),
-        Call::Apply(r) => Reply::Apply(c.apply(r).await?.into_inner()),
+        Call::Apply(r) => {
+            use pb::apply_event::Kind;
+            let mut stream = c.apply(r).await.map(Response::into_inner)?;
+            loop {
+                match stream.message().await? {
+                    Some(pb::ApplyEvent {
+                        kind: Some(Kind::Event(e)),
+                    }) => event(e),
+                    Some(pb::ApplyEvent {
+                        kind: Some(Kind::Result(r)),
+                    }) => break Reply::Apply(r),
+                    Some(pb::ApplyEvent { kind: None }) => {}
+                    None => {
+                        return Err(tonic::Status::deadline_exceeded(
+                            "its Apply stream ended with no result; the call may have taken effect",
+                        ));
+                    }
+                }
+            }
+        }
         Call::Import(r) => Reply::Import(c.import(r).await?.into_inner()),
+        Call::Reveal(r) => Reply::Reveal(c.reveal(r).await?.into_inner()),
     })
 }
 
@@ -186,19 +216,33 @@ impl Provider for Conn {
         }
         let (client, tx) = (self.client.clone(), self.tx.clone());
         self.rt.spawn(async move {
-            let _ = tx.send((t, send(client, call).await));
+            let said = tx.clone();
+            let answer = send(client, call, move |e| {
+                let _ = said.send(Back::Event(t, e));
+            })
+            .await;
+            let _ = tx.send(Back::Answer(t, answer));
         });
         t
     }
 
-    fn next_completed(&mut self) -> (Ticket, std::result::Result<Reply, CallError>) {
+    fn next_completed(
+        &mut self,
+        events: &mut dyn FnMut(Ticket, pb::Event),
+    ) -> (Ticket, std::result::Result<Reply, CallError>) {
         if let Some((t, e)) = self.refused.pop() {
             return (t, Err(e));
         }
-        let (t, answer) = self
-            .rt
-            .block_on(self.rx.recv())
-            .expect("internal: the provider client's channel closed");
+        let (t, answer) = loop {
+            match self
+                .rt
+                .block_on(self.rx.recv())
+                .expect("internal: the provider client's channel closed")
+            {
+                Back::Event(t, e) => events(t, e),
+                Back::Answer(t, answer) => break (t, answer),
+            }
+        };
         if let Ok(Reply::Handshake(h)) = &answer {
             self.name = h.name.clone();
         }

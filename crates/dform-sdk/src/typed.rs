@@ -13,7 +13,7 @@
 //! retry policy sends it again (R-81).
 
 use dform_core::ir::Address;
-use dform_core::plugin::backend::{Call, CallError, Handler, Reply, VERSION};
+use dform_core::plugin::backend::{self, Call, CallError, Handler, Reply, VERSION};
 use dform_core::plugin::{pb, wire};
 use dform_core::schema::Schema;
 use serde::Serialize;
@@ -396,12 +396,23 @@ impl<P: Provider> Typed<P> {
                     None => pb::ImportResponse::default(),
                 })
             }
+            // A typed provider keeps no secret for another to read.
+            Call::Reveal(r) => {
+                let h = r.held.unwrap_or_default();
+                return Err(Error::Refused(format!(
+                    "reveal {} {}#{}: provider {} holds no secret",
+                    h.r#type,
+                    h.remote,
+                    h.path,
+                    P::NAME
+                )));
+            }
         })
     }
 }
 
 impl<P: Provider> Handler for Typed<P> {
-    fn handle(&self, call: Call) -> std::result::Result<Reply, CallError> {
+    fn handle(&self, call: Call, _: backend::Progress) -> std::result::Result<Reply, CallError> {
         self.answer(call).map_err(|e| match e {
             Error::Refused(m) => CallError::Refused(m),
             Error::MaybeApplied(m) => CallError::MaybeApplied(m),

@@ -16,8 +16,10 @@ host = ["dep:wasmtime"]
 guest = ["dep:wit-bindgen"]
 
 [dependencies]
-wasmtime = { version = "49", default-features = false, features = ["component-model", "runtime", "std"], optional = true }
-wit-bindgen = { version = "0.57", optional = true }
+# The provider's calls are async (the component model's async ABI,
+# R-130): wasmtime's `component-model-async`, wit-bindgen's `async`.
+wasmtime = { version = "49", default-features = false, features = ["component-model", "component-model-async", "runtime", "std"], optional = true }
+wit-bindgen = { version = "0.57", features = ["async", "async-spawn"], optional = true }
 
 [build-dependencies]
 # The proto's descriptor set, for tests/drift.rs.

@@ -1036,11 +1036,26 @@ impl pb::provider_server::Provider for Service {
         }))
     }
 
-    async fn apply(&self, req: Request<pb::ApplyRequest>) -> Reply<pb::ApplyResponse> {
+    type ApplyStream = dform_grpc::server::ApplyStream;
+
+    /// The result alone: a Kubernetes object is there once the API server
+    /// takes it (R-130's events are for a provider that waits).
+    async fn apply(&self, req: Request<pb::ApplyRequest>) -> Reply<Self::ApplyStream> {
         let k8s = self.k8s()?;
         let r = req.into_inner();
         let config = doc_of(r.config.as_ref())?.unwrap_or(Json::Null);
-        Ok(Response::new(k8s.apply(&r, &config).await?))
+        let result = k8s.apply(&r, &config).await.map_err(Status::from);
+        Ok(Response::new(dform_grpc::server::apply_answer(result)))
+    }
+
+    /// No kind of this provider is held for another to read: a secret in
+    /// an object is the program's, sent in its document.
+    async fn reveal(&self, req: Request<pb::RevealRequest>) -> Reply<pb::RevealResponse> {
+        let h = req.into_inner().held.unwrap_or_default();
+        Err(Status::failed_precondition(format!(
+            "reveal {} {}#{}: the k8s provider holds no secret",
+            h.r#type, h.remote, h.path
+        )))
     }
 
     async fn import(&self, req: Request<pb::ImportRequest>) -> Reply<pb::ImportResponse> {

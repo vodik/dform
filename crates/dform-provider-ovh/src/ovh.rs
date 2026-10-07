@@ -1183,7 +1183,11 @@ fn doc_of(v: Option<&pb::Value>) -> std::result::Result<Option<Json>, CallError>
 }
 
 impl Handler for Ovh {
-    fn handle(&self, call: backend::Call) -> std::result::Result<Reply, CallError> {
+    fn handle(
+        &self,
+        call: backend::Call,
+        _: backend::Progress,
+    ) -> std::result::Result<Reply, CallError> {
         use backend::Call as C;
         Ok(match call {
             C::Handshake(req) => {
@@ -1282,6 +1286,14 @@ impl Handler for Ovh {
                     None => pb::ImportResponse::default(),
                 },
             ),
+            // No type of this provider has a sensitive attribute.
+            C::Reveal(r) => {
+                let h = r.held.unwrap_or_default();
+                return Err(CallError::Refused(format!(
+                    "reveal {} {}#{}: the ovh provider holds no secret",
+                    h.r#type, h.remote, h.path
+                )));
+            }
         })
     }
 }

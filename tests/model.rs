@@ -618,10 +618,13 @@ impl Provider for Recorder {
         t
     }
 
-    fn next_completed(&mut self) -> (Ticket, Result<Reply, CallError>) {
+    fn next_completed(
+        &mut self,
+        events: &mut dyn FnMut(Ticket, pb::Event),
+    ) -> (Ticket, Result<Reply, CallError>) {
         let mut sh = shared();
         sh.log.check_expect();
-        let (t, r) = self.0.next_completed();
+        let (t, r) = self.0.next_completed(events);
         let log = &mut sh.log;
         if log.blocking.remove(&t) {
             return (t, r);

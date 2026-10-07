@@ -1303,7 +1303,11 @@ fn doc_of(v: Option<&pb::Value>) -> std::result::Result<Option<Json>, CallError>
 }
 
 impl Handler for Mock {
-    fn handle(&self, call: backend::Call) -> std::result::Result<Reply, CallError> {
+    fn handle(
+        &self,
+        call: backend::Call,
+        _: backend::Progress,
+    ) -> std::result::Result<Reply, CallError> {
         use backend::Call as C;
         if let Some(at) = &self.cloud().crashed {
             return Err(CallError::Crashed(format!(
@@ -1425,6 +1429,7 @@ impl Handler for Mock {
                     None => pb::ImportResponse::default(),
                 })
             }
+            C::Reveal(r) => Reply::Reveal(self.reveal(r)?),
         })
     }
 
@@ -1434,6 +1439,44 @@ impl Handler for Mock {
 }
 
 impl Mock {
+    /// A secret the mock holds (an extern's, or an object's attribute), for
+    /// the engine to configure another provider with (R-45): only with the
+    /// deployment's lease, and only one held by `fakecloud`.
+    fn reveal(&self, r: pb::RevealRequest) -> std::result::Result<pb::RevealResponse, CallError> {
+        let h = r.held.unwrap_or_default();
+        let at = format!("reveal {} {}#{}", h.r#type, h.remote, h.path);
+        if r.lease.is_empty() {
+            return Err(CallError::Refused(format!(
+                "{at}: refused without the deployment's lease (a reveal is the engine's call)"
+            )));
+        }
+        if h.provider != backend::FAKECLOUD {
+            return Err(CallError::Refused(format!(
+                "{at}: it is held by {}, not {}",
+                h.provider,
+                backend::FAKECLOUD
+            )));
+        }
+        let held = provider::Held {
+            provider: h.provider,
+            deployment: h.deployment,
+            typ: h.r#type,
+            remote: h.remote,
+            path: h.path,
+            digest: h.digest,
+        };
+        let v = self
+            .cloud()
+            .materialize_held(&held)
+            .map_err(|e| CallError::Refused(format!("{at}: {e:#}")))?;
+        Ok(pb::RevealResponse {
+            value: match v {
+                Json::String(s) => s.into_bytes(),
+                other => other.to_string().into_bytes(),
+            },
+        })
+    }
+
     fn apply(&self, r: pb::ApplyRequest) -> std::result::Result<pb::ApplyResponse, CallError> {
         let op = pb::Op::try_from(r.op).unwrap_or(pb::Op::Unspecified);
         if op == pb::Op::EndTick {

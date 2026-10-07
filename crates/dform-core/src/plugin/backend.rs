@@ -6,9 +6,10 @@
 //! messages themselves (`dform-wire`), with no mapping layer. The trait is
 //! synchronous and completion-based: [`Provider::submit`] returns at once
 //! with a [`Ticket`], and [`Provider::next_completed`] blocks until some
-//! submitted call has an answer. The executor stays single-threaded: it
-//! submits while actions are ready and fewer than `--parallel` are in
-//! flight, then takes the next completion.
+//! submitted call has an answer, telling its caller each [`pb::Event`] a
+//! call in flight sends meanwhile (an Apply's progress, R-130). The
+//! executor stays single-threaded: it submits while actions are ready and
+//! fewer than `--parallel` are in flight, then takes the next completion.
 //!
 //! Three backends implement it: the process backend (`dform-grpc`, a
 //! spawned executable over gRPC: the CLI's), and the direct and wire
@@ -130,6 +131,26 @@ methods! {
     Plan(pb::PlanRequest) -> pb::PlanResponse,
     Apply(pb::ApplyRequest) -> pb::ApplyResponse,
     Import(pb::ImportRequest) -> pb::ImportResponse,
+    Reveal(pb::RevealRequest) -> pb::RevealResponse,
+}
+
+/// Where a call says how it is going (R-130): an Apply's provider sends an
+/// event each time its own view of the object changes (a poll that saw a
+/// new status, a retry), never on a timer. Its answer is the reply, not an
+/// event.
+pub type Progress<'a> = &'a (dyn Fn(pb::Event) + Sync);
+
+/// A call nobody is told the progress of.
+pub fn silent(_: pb::Event) {}
+
+/// An event about `address`: its status word, as the provider's API says
+/// it, and a message for the log.
+pub fn event(address: impl Into<String>, status: Option<&str>, message: Option<&str>) -> pb::Event {
+    pb::Event {
+        address: address.into(),
+        status: status.map(str::to_string),
+        message: message.map(str::to_string),
+    }
 }
 
 /// A provider, reached through some transport.
@@ -138,8 +159,13 @@ pub trait Provider {
     fn submit(&mut self, call: Call) -> Ticket;
 
     /// Block until a submitted call has an answer: its ticket and the
-    /// answer. Only called with a call in flight.
-    fn next_completed(&mut self) -> (Ticket, Result<Reply, CallError>);
+    /// answer. Each event a call in flight sends meanwhile is given to
+    /// `events` with that call's ticket, as it comes. Only called with a
+    /// call in flight.
+    fn next_completed(
+        &mut self,
+        events: &mut dyn FnMut(Ticket, pb::Event),
+    ) -> (Ticket, Result<Reply, CallError>);
 
     /// Whether the provider is gone (its process exited). The end of a
     /// tick skips a provider that is.
@@ -151,7 +177,8 @@ pub trait Provider {
 /// A provider that answers one call at a time: what the direct and wire
 /// backends link in, and what the gRPC server adapter serves.
 pub trait Handler {
-    fn handle(&self, call: Call) -> Result<Reply, CallError>;
+    /// Answer `call`, saying how it goes on `progress` while it runs.
+    fn handle(&self, call: Call, progress: Progress) -> Result<Reply, CallError>;
 
     /// Whether the provider is gone (it crashed).
     fn is_dead(&self) -> bool {

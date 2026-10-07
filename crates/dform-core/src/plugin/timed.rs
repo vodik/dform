@@ -12,9 +12,13 @@
 //! call submitted while it waits reaches the backend once that answer is
 //! in, and while a call that timed out is still unanswered, the calls
 //! after it wait behind it: each one's timeout starts again when that
-//! late answer comes (they may time out first, if it never does).
+//! late answer comes (they may time out first, if it never does). An
+//! event a call sends while it runs crosses as it comes, and does not
+//! move its timeout: a call that keeps saying how it goes still has to
+//! answer in time.
 
 use super::backend::{Call, CallError, Provider, Reply, Ticket};
+use super::pb;
 use super::policy::{describe, show};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
@@ -24,6 +28,13 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 type Answer = (Ticket, Result<Reply, CallError>);
+
+/// What the thread sends back: an event of a call in flight, or an
+/// answer.
+enum Back {
+    Event(Ticket, pb::Event),
+    Answer(Answer),
+}
 
 /// What the message of a call dform took as timed out says, and nothing
 /// else's ([`timed_out`]).
@@ -48,7 +59,7 @@ pub struct Timed {
     what: String,
     timeout: Duration,
     cmds: Option<Sender<Cmd>>,
-    answers: Receiver<Answer>,
+    answers: Receiver<Back>,
     worker: Option<JoinHandle<()>>,
     next: u64,
     /// Submitted, not yet passed on.
@@ -72,7 +83,7 @@ impl Timed {
     /// `timeout`.
     pub fn new(what: String, backend: Box<dyn Provider + Send>, timeout: Duration) -> Timed {
         let (cmds, rx) = mpsc::channel::<Cmd>();
-        let (tx, answers) = mpsc::channel::<Answer>();
+        let (tx, answers) = mpsc::channel::<Back>();
         let dead = Arc::new(AtomicBool::new(false));
         let flag = dead.clone();
         let worker = std::thread::Builder::new()
@@ -124,7 +135,7 @@ impl Timed {
 fn serve(
     mut backend: Box<dyn Provider + Send>,
     rx: Receiver<Cmd>,
-    tx: Sender<Answer>,
+    tx: Sender<Back>,
     dead: Arc<AtomicBool>,
 ) {
     let mut ours: HashMap<Ticket, Ticket> = HashMap::new();
@@ -135,10 +146,14 @@ fn serve(
             }
             Cmd::Next if ours.is_empty() => {}
             Cmd::Next => {
-                let (t, r) = backend.next_completed();
+                let (t, r) = backend.next_completed(&mut |t, e| {
+                    if let Some(&t) = ours.get(&t) {
+                        let _ = tx.send(Back::Event(t, e));
+                    }
+                });
                 dead.store(backend.is_dead(), Ordering::SeqCst);
                 let Some(t) = ours.remove(&t) else { continue };
-                if tx.send((t, r)).is_err() {
+                if tx.send(Back::Answer((t, r))).is_err() {
                     return;
                 }
             }
@@ -165,7 +180,10 @@ impl Provider for Timed {
         t
     }
 
-    fn next_completed(&mut self) -> (Ticket, Result<Reply, CallError>) {
+    fn next_completed(
+        &mut self,
+        events: &mut dyn FnMut(Ticket, pb::Event),
+    ) -> (Ticket, Result<Reply, CallError>) {
         assert!(!self.live.is_empty(), "internal: no call in flight");
         self.flush();
         loop {
@@ -179,7 +197,12 @@ impl Provider for Timed {
                 .expect("a call is live");
             let wait = due.saturating_duration_since(Instant::now());
             match self.answers.recv_timeout(wait) {
-                Ok((t, r)) => {
+                Ok(Back::Event(t, e)) => {
+                    if self.live.contains_key(&t) {
+                        events(t, e);
+                    }
+                }
+                Ok(Back::Answer((t, r))) => {
                     self.asked -= 1;
                     if self.abandoned.remove(&t) {
                         if self.abandoned.is_empty() {
@@ -255,8 +278,7 @@ impl Drop for Timed {
 
 #[cfg(test)]
 mod tests {
-    use super::super::backend::Handler;
-    use super::super::pb;
+    use super::super::backend::{Handler, Progress};
     use super::super::queue::{Order, Queue};
     use super::*;
 
@@ -264,7 +286,7 @@ mod tests {
     struct Slow;
 
     impl Handler for Slow {
-        fn handle(&self, call: Call) -> Result<Reply, CallError> {
+        fn handle(&self, call: Call, _: Progress) -> Result<Reply, CallError> {
             let Call::Apply(r) = call else {
                 return Err(CallError::Refused("apply only".into()));
             };
@@ -301,7 +323,7 @@ mod tests {
     fn a_call_past_its_timeout_answers_maybe_applied() {
         let mut p = timed(300);
         let slow = p.submit(apply("450"));
-        let (t, r) = p.next_completed();
+        let (t, r) = p.next_completed(&mut |_, _| {});
         assert_eq!(t, slow);
         let Err(CallError::MaybeApplied(m)) = r else {
             panic!("{r:?}")
@@ -314,7 +336,7 @@ mod tests {
         assert!(timed_out(&CallError::MaybeApplied(m)));
         assert!(!timed_out(&CallError::MaybeApplied("timed out".into())));
         let fast = p.submit(apply("200"));
-        let (t, r) = p.next_completed();
+        let (t, r) = p.next_completed(&mut |_, _| {});
         assert_eq!(t, fast);
         assert!(r.is_ok(), "{r:?}");
     }
@@ -326,8 +348,8 @@ mod tests {
         let mut p = timed(5_000);
         let a = p.submit(apply("20"));
         let b = p.submit(apply("0"));
-        assert_eq!(p.next_completed().0, a);
-        assert_eq!(p.next_completed().0, b);
+        assert_eq!(p.next_completed(&mut |_, _| {}).0, a);
+        assert_eq!(p.next_completed(&mut |_, _| {}).0, b);
         assert!(!p.is_dead());
     }
 }

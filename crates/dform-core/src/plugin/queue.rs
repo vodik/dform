@@ -13,14 +13,19 @@
 //!   generator, and it is run as it is picked: property tests explore
 //!   interleavings with it.
 //!
+//! A call's events (an Apply's progress) are told as it runs, before its
+//! answer is taken.
+//!
 //! The wire backend encodes every call and every answer through prost and
 //! decodes it again, so what crosses is exactly what the protocol can
 //! carry; the direct backend hands the messages over as they are.
 
 use super::backend::{Call, CallError, Handler, Provider, Reply, Ticket};
+use super::pb;
 use prost::Message;
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap};
+use std::sync::Mutex;
 
 /// Which queued call answers next.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -81,12 +86,28 @@ impl<H: Handler> Queue<H> {
         z ^ (z >> 31)
     }
 
-    fn run(&self, call: Call) -> Result<Reply, CallError> {
-        if !self.wire {
-            return self.handler.handle(call);
+    /// Run `call`, its events told to `events` as `t`'s.
+    fn run(
+        &self,
+        t: Ticket,
+        call: Call,
+        events: &mut dyn FnMut(Ticket, pb::Event),
+    ) -> Result<Reply, CallError> {
+        let said = Mutex::new(Vec::new());
+        let progress = |e: pb::Event| said.lock().unwrap_or_else(|e| e.into_inner()).push(e);
+        let answer = match self.wire {
+            false => self.handler.handle(call, &progress),
+            true => across_call(&call)
+                .and_then(|call| self.handler.handle(call, &progress))
+                .and_then(|r| across_reply(&r)),
+        };
+        for e in said.into_inner().unwrap_or_else(|e| e.into_inner()) {
+            match self.wire {
+                false => events(t, e),
+                true => events(t, across(&e)?),
+            }
         }
-        let answer = self.handler.handle(across_call(&call)?);
-        answer.and_then(|r| across_reply(&r))
+        answer
     }
 }
 
@@ -98,17 +119,20 @@ impl<H: Handler> Provider for Queue<H> {
         t
     }
 
-    fn next_completed(&mut self) -> (Ticket, Result<Reply, CallError>) {
+    fn next_completed(
+        &mut self,
+        events: &mut dyn FnMut(Ticket, pb::Event),
+    ) -> (Ticket, Result<Reply, CallError>) {
         match self.order {
             Order::Seed(_) => {
                 assert!(!self.queued.is_empty(), "internal: no call in flight");
                 let k = (self.random() % self.queued.len() as u64) as usize;
                 let (t, call, _) = self.queued.swap_remove(k);
-                (t, self.run(call))
+                (t, self.run(t, call, events))
             }
             Order::Clock => {
                 for (t, call, start) in std::mem::take(&mut self.queued) {
-                    let answer = self.run(call);
+                    let answer = self.run(t, call, events);
                     let took = match &answer {
                         Ok(Reply::Apply(r)) => r.elapsed_ms,
                         _ => 0,
@@ -144,6 +168,7 @@ fn across_call(c: &Call) -> Result<Call, CallError> {
         Call::Plan(r) => Call::Plan(across(r)?),
         Call::Apply(r) => Call::Apply(across(r)?),
         Call::Import(r) => Call::Import(across(r)?),
+        Call::Reveal(r) => Call::Reveal(across(r)?),
     })
 }
 
@@ -159,13 +184,14 @@ fn across_reply(r: &Reply) -> Result<Reply, CallError> {
         Reply::Plan(r) => Reply::Plan(across(r)?),
         Reply::Apply(r) => Reply::Apply(across(r)?),
         Reply::Import(r) => Reply::Import(across(r)?),
+        Reply::Reveal(r) => Reply::Reveal(across(r)?),
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::plugin::pb;
+    use crate::plugin::backend::Progress;
     use std::cell::RefCell;
 
     /// Answers every Apply with the latency its name asks for, and fails
@@ -176,7 +202,7 @@ mod tests {
     }
 
     impl Handler for Clocked {
-        fn handle(&self, call: Call) -> Result<Reply, CallError> {
+        fn handle(&self, call: Call, _: Progress) -> Result<Reply, CallError> {
             let Call::Apply(r) = call else {
                 return Err(CallError::Refused("apply only".into()));
             };
@@ -199,7 +225,7 @@ mod tests {
     }
 
     fn answers(q: &mut Queue<Clocked>, n: usize) -> Vec<Ticket> {
-        (0..n).map(|_| q.next_completed().0).collect()
+        (0..n).map(|_| q.next_completed(&mut |_, _| {}).0).collect()
     }
 
     /// On the clock, the call that ends first answers first; a failure,

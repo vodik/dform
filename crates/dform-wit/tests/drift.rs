@@ -7,8 +7,12 @@
 //! message is a record of the same name, except `Value`, the variant
 //! `value`, whose `List`/`Obj` children are `node` indices; a `Value`
 //! field is a `tree`; `optional` is `option`, `repeated` is `list`, a map
-//! is a list of pairs; an enum loses its `*_UNSPECIFIED` case; a call
-//! answers `result<_, call-error>`, a server stream a list.
+//! is a list of pairs; an enum loses its `*_UNSPECIFIED` case; `bytes`
+//! is `list<u8>`; every call is an `async func` answering
+//! `result<_, call-error>`, a server stream of rows a list; a server
+//! stream of a message that is a oneof of an event and a `result` (Apply's
+//! `ApplyEvent`) is a `stream` of the event and a `future` of the result,
+//! and that message is the proto's alone.
 
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -16,10 +20,14 @@ use std::path::Path;
 use prost::Message;
 use prost_types::field_descriptor_proto::{Label, Type as Pt};
 use prost_types::{DescriptorProto, FieldDescriptorProto, FileDescriptorProto, FileDescriptorSet};
-use wit_parser::{InterfaceId, Resolve, Type, TypeDefKind, TypeId};
+use wit_parser::{FunctionKind, InterfaceId, Resolve, Type, TypeDefKind, TypeId};
 
 /// WIT types with no proto message: the encoding's own.
 const WIT_ONLY: &[&str] = &["tree", "node", "call-error"];
+
+/// Proto messages with no WIT type: a stream's messages that the WIT
+/// carries as a stream and a future.
+const PROTO_ONLY: &[&str] = &["ApplyEvent"];
 
 struct Contract {
     proto: FileDescriptorProto,
@@ -108,6 +116,12 @@ impl Contract {
             Pt::Int64 => Type::S64,
             Pt::Uint64 => Type::U64,
             Pt::Double => Type::F64,
+            Pt::Bytes => {
+                let Some(TypeDefKind::List(Type::U8)) = self.kind(ty) else {
+                    panic!("{at}: bytes in the proto, not list<u8> in the WIT");
+                };
+                return;
+            }
             Pt::Message | Pt::Enum => {
                 let want = match short(f.type_name()) {
                     "Value" if in_value => "node".to_string(),
@@ -161,6 +175,15 @@ impl Contract {
     }
 }
 
+/// The `result<OK, call-error>` a call answers: its ok type.
+fn ok_of<'a>(c: &'a Contract, ty: &'a Type, at: &str) -> &'a Type {
+    let Some(TypeDefKind::Result(r)) = c.kind(ty) else {
+        panic!("{at}: not a result");
+    };
+    assert_eq!(c.named(r.err.as_ref().unwrap()), Some("call-error"), "{at}");
+    r.ok.as_ref().unwrap()
+}
+
 #[test]
 fn the_calls_match() {
     let c = contract();
@@ -173,24 +196,54 @@ fn the_calls_match() {
     for m in &service.method {
         let at = format!("call {}", m.name());
         let f = &funcs[&kebab(m.name())];
+        assert_eq!(f.kind, FunctionKind::AsyncFreestanding, "{at}: not async");
         assert_eq!(f.params.len(), 1, "{at}");
         assert_eq!(
             c.named(&f.params[0].ty),
             Some(&*kebab(short(m.input_type()))),
             "{at}: its request"
         );
-        let Some(TypeDefKind::Result(r)) = f.result.as_ref().and_then(|t| c.kind(t)) else {
-            panic!("{at}: not a result");
-        };
-        assert_eq!(c.named(r.err.as_ref().unwrap()), Some("call-error"), "{at}");
-        let ok = r.ok.as_ref().unwrap();
-        let ok = if m.server_streaming() {
-            let Some(TypeDefKind::List(item)) = c.kind(ok) else {
-                panic!("{at}: a stream in the proto, not a list in the WIT");
-            };
-            item
-        } else {
-            ok
+        let result = f.result.as_ref().expect("an answer");
+        let output = c
+            .proto
+            .message_type
+            .iter()
+            .find(|d| d.name() == short(m.output_type()))
+            .unwrap();
+        let ok = match (m.server_streaming(), c.kind(result)) {
+            // An event stream: the oneof's other arm is the result, the
+            // WIT's future.
+            (true, Some(TypeDefKind::Tuple(t))) => {
+                assert!(PROTO_ONLY.contains(&output.name()), "{at}");
+                assert_eq!(t.types.len(), 2, "{at}: a stream and a future");
+                assert_eq!(output.oneof_decl.len(), 1, "{at}: one oneof");
+                let arm = |name: &str| {
+                    let f = output.field.iter().find(|f| f.name() == name);
+                    let f = f.unwrap_or_else(|| panic!("{at}: no `{name}` arm"));
+                    assert!(
+                        f.oneof_index.is_some(),
+                        "{at}: `{name}` is not of the oneof"
+                    );
+                    kebab(short(f.type_name()))
+                };
+                assert_eq!(output.field.len(), 2, "{at}: an event and a result");
+                let Some(TypeDefKind::Stream(Some(event))) = c.kind(&t.types[0]) else {
+                    panic!("{at}: not a stream first");
+                };
+                assert_eq!(c.named(event), Some(&*arm("event")), "{at}: its events");
+                let Some(TypeDefKind::Future(Some(done))) = c.kind(&t.types[1]) else {
+                    panic!("{at}: not a future second");
+                };
+                assert_eq!(c.named(ok_of(&c, done, &at)), Some(&*arm("result")), "{at}");
+                continue;
+            }
+            (true, _) => {
+                let Some(TypeDefKind::List(item)) = c.kind(ok_of(&c, result, &at)) else {
+                    panic!("{at}: a stream in the proto, not a list in the WIT");
+                };
+                item
+            }
+            (false, _) => ok_of(&c, result, &at),
         };
         assert_eq!(
             c.named(ok),
@@ -205,6 +258,9 @@ fn the_messages_match() {
     let c = contract();
     let mut proto_names = BTreeSet::new();
     for msg in &c.proto.message_type {
+        if PROTO_ONLY.contains(&msg.name()) {
+            continue;
+        }
         let name = kebab(msg.name());
         proto_names.insert(name.clone());
         let ty = c.wit_type(&name);

@@ -17,9 +17,9 @@
 // a sensitive computed value only ever as a Null of class SECRET, its label.
 //
 // The canonical contract is wit/dform-provider.wit (DESIGN.org R-13); this
-// file mirrors it for the gRPC bridge until the wasm bridge replaces it.
-// crates/dform-wit/tests/drift.rs fails when the two disagree on a call,
-// a message or a field: change both.
+// file is derived from it for a native provider, additively only: a call
+// or a field is added there first. crates/dform-wit/tests/drift.rs fails
+// when the two disagree on a call, a message or a field: change both.
 
 syntax = "proto3";
 
@@ -38,12 +38,19 @@ service Provider {
   rpc Read(ReadRequest) returns (ReadResponse);
   // Prior and desired document in, the diff and whether it replaces out.
   rpc Plan(PlanRequest) returns (PlanResponse);
-  // Execute one planned action; return the object as it now is. A call
-  // that fails with DEADLINE_EXCEEDED may have taken effect; any other
-  // failure changed nothing.
-  rpc Apply(ApplyRequest) returns (ApplyResponse);
+  // Execute one planned action. The provider sends an ApplyEvent with an
+  // `event` each time its view of the object changes, and last one with
+  // the `result`: the object as it now is. A call that fails with
+  // DEADLINE_EXCEEDED may have taken effect; any other failure changed
+  // nothing. dform cancels the call (it stopped, or the call ran past its
+  // timeout): a cancelled Apply may have taken effect, and a Create is
+  // found again by its idempotency key on resume.
+  rpc Apply(ApplyRequest) returns (stream ApplyEvent);
   // An object the engine does not manage yet, by remote id.
   rpc Import(ImportRequest) returns (ImportResponse);
+  // A secret this provider holds, for the engine to configure another
+  // provider with (R-45): refused without the deployment's lease.
+  rpc Reveal(RevealRequest) returns (RevealResponse);
 }
 
 // A value, as src/value.rs has it. A float is finite: NaN and the infinities
@@ -352,6 +359,39 @@ message ApplyResponse {
   uint64 elapsed_ms = 4;
   // What the provider wants the user to see.
   repeated string notes = 5;
+}
+
+// What a provider says while an Apply runs: its own view of the object
+// changed (a poll that saw a new status, a retry), never on a timer.
+// dform adds the elapsed time and prints `status` verbatim beside the
+// change; `message` goes to the log.
+message Event {
+  // The object as the provider names it, for the log.
+  string address = 1;
+  optional string status = 2;
+  optional string message = 3;
+}
+
+// One message of an Apply's stream: an event, or, last, the result. (The
+// WIT's stream of events and future of the result, in one stream.)
+message ApplyEvent {
+  oneof kind {
+    Event event = 1;
+    ApplyResponse result = 2;
+  }
+}
+
+message RevealRequest {
+  // The secret: an object this provider manages, the path in it.
+  Held held = 1;
+  // The deployment's lease, as the run that holds it names it: refused
+  // without one. Reveal is the engine's call, never a program's.
+  string lease = 2;
+}
+
+message RevealResponse {
+  // The secret's bytes, for the Configure call they are revealed into.
+  bytes value = 1;
 }
 
 message ImportRequest {

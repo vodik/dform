@@ -70,14 +70,7 @@ macro_rules! convert {
                             _ => w::NullClass::Open,
                         },
                         ty: n.ty.clone(),
-                        held: n.held.as_ref().map(|h| w::Held {
-                            provider: h.provider.clone(),
-                            deployment: h.deployment.clone(),
-                            type_: h.r#type.clone(),
-                            remote: h.remote.clone(),
-                            path: h.path.clone(),
-                            digest: h.digest.clone(),
-                        }),
+                        held: n.held.as_ref().map(to_held),
                     }),
                     Some(K::Float(f)) => w::Value::Float(*f),
                 };
@@ -162,14 +155,7 @@ macro_rules! convert {
                             w::NullClass::Secret => pb::NullClass::Secret,
                         } as i32,
                         ty: n.ty.clone(),
-                        held: n.held.as_ref().map(|h| pb::Held {
-                            provider: h.provider.clone(),
-                            deployment: h.deployment.clone(),
-                            r#type: h.type_.clone(),
-                            remote: h.remote.clone(),
-                            path: h.path.clone(),
-                            digest: h.digest.clone(),
-                        }),
+                        held: n.held.as_ref().map(from_held),
                     }),
                     w::Value::Float(f) => K::Float(*f),
                 };
@@ -607,6 +593,72 @@ macro_rules! convert {
                     name: r.name.clone(),
                     attrs: from_doc(&r.attrs)?,
                     computed: from_doc(&r.computed)?,
+                })
+            }
+
+            pub fn to_event(e: &pb::Event) -> w::Event {
+                w::Event {
+                    address: e.address.clone(),
+                    status: e.status.clone(),
+                    message: e.message.clone(),
+                }
+            }
+
+            pub fn from_event(e: &w::Event) -> pb::Event {
+                pb::Event {
+                    address: e.address.clone(),
+                    status: e.status.clone(),
+                    message: e.message.clone(),
+                }
+            }
+
+            fn to_held(h: &pb::Held) -> w::Held {
+                w::Held {
+                    provider: h.provider.clone(),
+                    deployment: h.deployment.clone(),
+                    type_: h.r#type.clone(),
+                    remote: h.remote.clone(),
+                    path: h.path.clone(),
+                    digest: h.digest.clone(),
+                }
+            }
+
+            fn from_held(h: &w::Held) -> pb::Held {
+                pb::Held {
+                    provider: h.provider.clone(),
+                    deployment: h.deployment.clone(),
+                    r#type: h.type_.clone(),
+                    remote: h.remote.clone(),
+                    path: h.path.clone(),
+                    digest: h.digest.clone(),
+                }
+            }
+
+            /// An absent held record is the empty one, which no provider
+            /// holds.
+            pub fn to_reveal_request(r: &pb::RevealRequest) -> w::RevealRequest {
+                w::RevealRequest {
+                    held: to_held(&r.held.clone().unwrap_or_default()),
+                    lease: r.lease.clone(),
+                }
+            }
+
+            pub fn from_reveal_request(r: &w::RevealRequest) -> R<pb::RevealRequest> {
+                Ok(pb::RevealRequest {
+                    held: Some(from_held(&r.held)),
+                    lease: r.lease.clone(),
+                })
+            }
+
+            pub fn to_reveal_response(r: &pb::RevealResponse) -> w::RevealResponse {
+                w::RevealResponse {
+                    value: r.value.clone(),
+                }
+            }
+
+            pub fn from_reveal_response(r: &w::RevealResponse) -> R<pb::RevealResponse> {
+                Ok(pb::RevealResponse {
+                    value: r.value.clone(),
                 })
             }
         }

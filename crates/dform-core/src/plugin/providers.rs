@@ -2423,11 +2423,16 @@ impl Tick<'_> {
     /// when the call answered; a call that may have taken effect without
     /// answering (a timeout) records none. Returns the call's id and its
     /// outcome. An answer a link already holds comes first; else the link
-    /// of the oldest call in flight is waited on.
-    pub fn next_completed(&mut self, state: &mut State) -> (usize, Result<()>) {
+    /// of the oldest call in flight is waited on. What a call in flight
+    /// says meanwhile goes to `events` with its call's id (R-130).
+    pub fn next_completed(
+        &mut self,
+        state: &mut State,
+        events: &mut dyn FnMut(usize, pb::Event),
+    ) -> (usize, Result<()>) {
         let cloud = self.cloud;
         let (f, answer) = loop {
-            let (mut f, answer) = self.take_answer();
+            let (mut f, answer) = self.take_answer(events);
             match self.again(&mut f, answer) {
                 None => self.in_flight.push(f),
                 Some(answer) => break (f, answer),
@@ -2457,9 +2462,43 @@ impl Tick<'_> {
     /// The next answered Apply call, out of `in_flight`: an answer a link
     /// already holds comes first; else the link of the oldest call in
     /// flight is waited on.
-    fn take_answer(&mut self) -> (InFlight, Result<Reply, CallError>) {
+    fn take_answer(
+        &mut self,
+        events: &mut dyn FnMut(usize, pb::Event),
+    ) -> (InFlight, Result<Reply, CallError>) {
         let cloud = self.cloud;
         assert!(self.busy(), "internal: no Apply call in flight");
+        let in_flight = &self.in_flight;
+        // The call an event is of, by its link and ticket; an event of a
+        // call no longer in flight is dropped.
+        let mut tell = |l: usize, t: Ticket, e: pb::Event| {
+            if let Some(f) = in_flight.iter().find(|f| f.link == l && f.ticket == t) {
+                // Its link is in a call: named by the address alone.
+                if crate::timing::enabled() {
+                    let says: Vec<&str> = [&e.status, &e.message]
+                        .into_iter()
+                        .flatten()
+                        .map(String::as_str)
+                        .collect();
+                    crate::timing::line(
+                        &format!(
+                            "apply {}: {}",
+                            crate::report::address(&f.addr),
+                            says.join(": ")
+                        ),
+                        std::time::Duration::ZERO,
+                    );
+                }
+                events(f.id, e);
+            }
+        };
+        // Those kept while a link waited for another call come first.
+        let links: BTreeSet<usize> = in_flight.iter().map(|f| f.link).collect();
+        for l in links {
+            for (t, e) in cloud.links[l].borrow_mut().take_events() {
+                tell(l, t, e);
+            }
+        }
         let held = self
             .in_flight
             .iter()
@@ -2472,7 +2511,9 @@ impl Tick<'_> {
             }
             None => {
                 let l = self.in_flight[0].link;
-                let (t, r) = cloud.links[l].borrow_mut().next_completed();
+                let (t, r) = cloud.links[l]
+                    .borrow_mut()
+                    .next_completed(&mut |t, e| tell(l, t, e));
                 let k = self
                     .in_flight
                     .iter()

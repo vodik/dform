@@ -3,13 +3,14 @@
 //
 // This package is the canonical contract. A provider is a component that
 // exports `provider`; the host instantiates it once per run (SDK state,
-// credentials, connection reuse) and calls it. `--parallel` on 0.2 is a
-// pool of N identically configured instances.
+// credentials, connection reuse) and calls it, several calls at once (the
+// component model's async ABI: WASI 0.3's).
 //
-// proto/dform/v1/provider.proto mirrors this file for the gRPC bridge
-// (crates/dform-grpc) until the wasm bridge passes `provider check`, then
-// goes. crates/dform-wit/tests/drift.rs checks that the two name the same
-// calls, the same messages and the same fields: neither changes alone.
+// proto/dform/v1/provider.proto is derived from this file for a native
+// provider over gRPC (crates/dform-grpc), additively only: a call or a
+// field is added here first. crates/dform-wit/tests/drift.rs checks that
+// the two name the same calls, the same messages and the same fields:
+// neither changes alone.
 //
 // The protocol carries facts, schema and documents, never rules. Plan and
 // Apply are per resource: the engine owns ordering, parallelism, state and
@@ -31,6 +32,15 @@
 //   absent document (attrs, computed, config) as the empty obj, as
 //   dform-core's `wire::from_doc_or_empty` does, and an absent value
 //   elsewhere, or a Value with no kind set, as a refusal.
+// - Every call is an `async func` (the component model's async ABI,
+//   WASI 0.3): the host calls into one instance concurrently, and a call
+//   in flight is a subtask the host may cancel. The proto's calls are
+//   the same calls; gRPC has always been concurrent.
+// - Apply answers a `stream<event>` and a `future` of its result; the
+//   proto's server stream of `ApplyEvent`s is the two in one: each
+//   message an `event`, the last one the result (`apply-event`, which
+//   the WIT does not need). A server stream of rows (Query) is a list.
+// - The proto's `bytes` is `list<u8>`.
 
 package dform:provider@1.0.0;
 
@@ -377,6 +387,37 @@ interface types {
     notes: list<string>,
   }
 
+  // What a provider says while an Apply runs (R-130): its own view of
+  // the object changed, each time it does (a poll that saw a new status,
+  // a retry of its API), never on a timer. The host adds the elapsed
+  // time and prints `status` verbatim beside the change (`BUILD`,
+  // `ACTIVE`); `message` goes to the log. An event is no answer: the
+  // call's result is.
+  record event {
+    // The object as the provider names it (`ovh.instance["web"]`), for
+    // the log: the host shows the event on its call's own line.
+    address: string,
+    // A word or two, as the provider's API says it.
+    status: option<string>,
+    message: option<string>,
+  }
+
+  record reveal-request {
+    // The secret: an object this provider manages, the path in it.
+    held: held,
+    // The deployment's lease, as the run that holds it names it: a
+    // provider refuses a reveal without one. Reveal is the engine's call,
+    // made inside another provider's Configure (R-45), never a
+    // program's.
+    lease: string,
+  }
+
+  record reveal-response {
+    // The secret's bytes. The host keeps them for the Configure call
+    // they are revealed into and for nothing else.
+    value: list<u8>,
+  }
+
   record import-request {
     %type: string,
     remote: string,
@@ -392,46 +433,60 @@ interface types {
 }
 
 // The calls, dform-core's `Call`/`Reply` pairs. Each answers its response
-// or why it has none.
+// or why it has none. Every call is async: the host has several in flight
+// on one instance (a plan's Plan calls, `--parallel`'s Apply calls) and
+// cancels one by cancelling its subtask; a provider that cannot take
+// another call yet applies backpressure.
 interface provider {
   use types.{
     call-error, handshake-request, handshake-response, configure-request,
     configure-response, schema-request, schema-response, query-request, row,
     read-request, read-response, plan-request, plan-response, apply-request,
-    apply-response, import-request, import-response,
+    apply-response, import-request, import-response, event, reveal-request,
+    reveal-response,
   };
 
   // Protocol version and capabilities. The first call.
-  handshake: func(request: handshake-request) -> result<handshake-response, call-error>;
+  handshake: async func(request: handshake-request) -> result<handshake-response, call-error>;
   // Credentials, region, endpoint: a provider-defined config object.
-  configure: func(request: configure-request) -> result<configure-response, call-error>;
+  configure: async func(request: configure-request) -> result<configure-response, call-error>;
   // The schema as facts: the engine injects them as EDB.
-  schema: func(request: schema-request) -> result<schema-response, call-error>;
+  schema: async func(request: schema-request) -> result<schema-response, call-error>;
   // An extern's answer: bound arguments in, rows out.
-  //
-  // On 0.3 (wasip3) the rows stream, as the proto's do:
-  //   query: async func(request: query-request) -> result<stream<row>, call-error>;
-  query: func(request: query-request) -> result<list<row>, call-error>;
-  // Refresh one object by its remote id.
-  read: func(request: read-request) -> result<read-response, call-error>;
+  query: async func(request: query-request) -> result<list<row>, call-error>;
+  // Refresh one object by its remote id. Request and answer: the host
+  // owns the retry cadence and the tick's budget, and an object not
+  // visible yet is `found: false`, an answer.
+  read: async func(request: read-request) -> result<read-response, call-error>;
   // Prior and desired document in, the diff and whether it replaces out.
-  plan: func(request: plan-request) -> result<plan-response, call-error>;
-  // Execute one planned action; return the object as it now is. A call
-  // that fails with maybe-applied (or crashed) may have taken effect; a
-  // refused one changed nothing.
+  plan: async func(request: plan-request) -> result<plan-response, call-error>;
+  // Execute one planned action. The provider writes an `event` to the
+  // stream each time its view of the object changes, and resolves the
+  // future with the object as it now is; it closes the stream when it
+  // resolves. A call that fails with maybe-applied (or crashed) may have
+  // taken effect; a refused one changed nothing.
   //
-  // On 0.2 it blocks the instance; the host runs concurrent applies on a
-  // pool of instances. On 0.3 (wasip3) one instance takes them all:
-  //   apply: async func(request: apply-request) -> future<result<apply-response, call-error>>;
-  apply: func(request: apply-request) -> result<apply-response, call-error>;
+  // Cancellation: the host drops the stream and the future (dform
+  // stopped, or the call ran past its timeout); the provider sees its
+  // next write refused and stops where it is. A cancelled Apply is one
+  // that may have taken effect: a Create is found again by its
+  // idempotency key on resume (the "managed" capability, R-44).
+  apply: async func(request: apply-request) -> tuple<stream<event>, future<result<apply-response, call-error>>>;
   // An object the engine does not manage yet, by remote id.
-  %import: func(request: import-request) -> result<import-response, call-error>;
+  %import: async func(request: import-request) -> result<import-response, call-error>;
+  // A secret this provider holds (a `held` null's object and path), for
+  // the engine to configure another provider with (R-45): refused
+  // without the deployment's lease, and by a provider that is not the
+  // holder or cannot reach the object, naming it and the path.
+  reveal: async func(request: reveal-request) -> result<reveal-response, call-error>;
 }
 
 // What a provider component is (not `world provider`: a world and an
-// interface of one package cannot share a name): it serves `provider` and reaches its API
-// through WASI 0.2 (0.2.12, the version wasmtime 49 ships; a component
-// built against any 0.2.x links). wasi:cli/imports brings what Rust std on
+// interface of one package cannot share a name): it serves `provider`
+// with the async ABI and reaches its API through WASI 0.2's imports
+// (0.2.12, the version wasmtime 49 ships; a component built against any
+// 0.2.x links), which a wasm32-wasip2 build links; 0.3's are the same
+// interfaces made async, for when the target is. wasi:cli/imports brings what Rust std on
 // wasm32-wasip2 links (environment, where credentials come from; stdio;
 // exit; clocks; random) together with wasi:filesystem (types, preopens)
 // and wasi:sockets (tcp, udp, ip-name-lookup); wasi:http/imports brings the

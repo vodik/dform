@@ -12,6 +12,7 @@ use dform_core::plugin::Launch;
 use dform_core::plugin::backend::{Call, CallError, Provider, Reply, Ticket};
 use dform_core::plugin::host::{self, Grants, Hosting, Manifest};
 use dform_core::plugin::link::Link;
+use dform_core::plugin::pb;
 use dform_core::plugin::source;
 use dform_grpc::client::{Conn, Process};
 use dform_grpc::spawn::{Env, FAKE_ENV, Program};
@@ -106,8 +107,11 @@ impl Provider for Native {
         self.conn.submit(call)
     }
 
-    fn next_completed(&mut self) -> (Ticket, Result<Reply, CallError>) {
-        self.conn.next_completed()
+    fn next_completed(
+        &mut self,
+        events: &mut dyn FnMut(Ticket, pb::Event),
+    ) -> (Ticket, Result<Reply, CallError>) {
+        self.conn.next_completed(events)
     }
 
     fn is_dead(&mut self) -> bool {
