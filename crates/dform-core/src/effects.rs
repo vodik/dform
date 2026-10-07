@@ -401,7 +401,7 @@ fn coeffect(a: &crate::ast::Atom, body: &[Lit]) -> Option<(Coeffect, String)> {
         }
         return Some((Coeffect::Reads, location(&glob(a.args.first()?))));
     }
-    let first = || a.args.first().map(&glob).unwrap_or_else(|| "*".to_string());
+    let first = || a.args.first().map(glob).unwrap_or_else(|| "*".to_string());
     Some(match pred {
         crate::syntax::resolve::ENV_VAR => (Coeffect::Needs, format!("secret {}", first())),
         crate::externs::TIME_NOW => (Coeffect::Reads, "clock".to_string()),

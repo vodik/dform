@@ -2327,16 +2327,14 @@ impl Providers {
         match existing.as_ref().and_then(|o| get_path(&o.attrs, attr)) {
             Some(v) => Ok(v.clone()),
             None => match ctx.strict {
-                Some(at) => {
-                    return Err(not_sent(
-                        at,
-                        &format!(
-                            "{} is still unknown ({} does not set {attr})",
-                            crate::report::attribute_label(&label),
-                            crate::report::address(&addr)
-                        ),
-                    ));
-                }
+                Some(at) => Err(not_sent(
+                    at,
+                    &format!(
+                        "{} is still unknown ({} does not set {attr})",
+                        crate::report::attribute_label(&label),
+                        crate::report::address(&addr)
+                    ),
+                )),
                 None => Ok(provider::null_json(&label)),
             },
         }

@@ -197,9 +197,7 @@ fn the_apply_that_moves_an_epochs_last_secret_retires_it() {
         "the memo holds epoch 1"
     );
     assert!(log(&s, "retired").is_empty());
-    for key in ["cookie"] {
-        run(&s, &[PASS], &["secrets", "rotate", "p", key]).success();
-    }
+    run(&s, &[PASS], &["secrets", "rotate", "p", "cookie"]).success();
     // Rotated, not applied: the epoch stays until the apply moves them.
     assert_eq!(record(&s)["earlier"][0]["epoch"], 1);
     let r = run(&s, &[PASS], &["plan", "p"]).success();

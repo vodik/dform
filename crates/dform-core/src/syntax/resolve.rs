@@ -3105,11 +3105,11 @@ impl<'u> Lowerer<'u> {
                 self.span(arg),
                 "`git(..)` is gone (R-153): a repository's file is a location",
             )
-            .with_help(format!(
+            .with_help(
                 "`io.read(\"git+https://HOST/OWNER/REPO/PATH?ref=TAG\")` (`git+ssh://` over \
-                     ssh, `git+file:REPO/PATH?ref=TAG` for a repository in the project), read at \
-                     the commit the ref names, which the plan file records"
-            ));
+                 ssh, `git+file:REPO/PATH?ref=TAG` for a repository in the project), read at \
+                 the commit the ref names, which the plan file records",
+            );
             self.diags.push(d);
             return Err(Skip);
         }

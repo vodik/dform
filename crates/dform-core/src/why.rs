@@ -42,9 +42,12 @@ pub struct Context<'a> {
     pub signatures: Option<&'a crate::infer::Signatures>,
     pub stack_keys: &'a BTreeSet<String>,
     pub top: Option<&'a Path>,
-    pub waits: &'a dyn Fn(&str) -> Option<String>,
-    pub when: Option<&'a dyn Fn(&str) -> Option<String>>,
+    pub waits: &'a Lookup<'a>,
+    pub when: Option<&'a Lookup<'a>>,
 }
+
+/// A text an address or a type maps to, when it has one.
+pub type Lookup<'a> = dyn Fn(&str) -> Option<String> + 'a;
 
 /// `dform why PATTERN`, as text.
 pub fn why(pattern: &str, how: As, cx: &Context) -> Result<String> {
