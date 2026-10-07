@@ -1079,6 +1079,8 @@ impl Located {
         // violates one, E0306), against the provider's schema.
         if let Some(l) = lowered {
             crate::secrets::check(l, backend.schema(), &secret_outputs)?;
+            // Where the pass found secrets, for the redactor (R-128).
+            base_extra.extend(crate::secrets::taint(l, backend.schema(), &secret_outputs));
             // A memo of a secret is kept sealed and recorded nowhere.
             externs.mark_secret(&crate::secrets::secret_memos(
                 l,

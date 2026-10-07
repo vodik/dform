@@ -318,16 +318,20 @@ impl Pass<'_> {
                 .is_empty()
                 .then(|| "?".to_string());
         };
-        // Is the path declared: sensitive, or a secret cell, or under one?
-        let declared = |p: &str| match s(typ) {
-            Some(t) if !crate::transform::is_pseudo_type(t) => self.schema.is_sensitive(t, p),
-            _ => self.attr_label(typ, addr, &Term::Val(Value::Str(p.into()))) == whole(),
-        };
         let p = p.trim_start_matches('.');
         label
             .iter()
             .map(|q| crate::types::dotted(p, q))
-            .find(|f| !declared(f))
+            .find(|f| !self.declared(typ, addr, f))
+    }
+
+    /// Is the path `p` of `T[A]` a declared place for a secret: sensitive
+    /// in the schema, or a secret cell, or under one?
+    fn declared(&self, typ: &Term, addr: &Term, p: &str) -> bool {
+        match s(typ) {
+            Some(t) if !crate::transform::is_pseudo_type(t) => self.schema.is_sensitive(t, p),
+            _ => self.attr_label(typ, addr, &Term::Val(Value::Str(p.into()))) == whole(),
+        }
     }
 
     fn position_label(&self, a: &Atom, i: usize) -> Label {
@@ -532,6 +536,90 @@ pub fn secret_memos(
             {
                 out.push(a.clone());
             }
+        }
+    }
+    out
+}
+
+/// `__secret_column(Pred, Col, Path)`: the column `Col` of `Pred` holds a
+/// secret at `Path` (`""` all of it), as the pass found (R-128).
+pub const SECRET_COLUMN: &str = "__secret_column";
+
+/// `__secret_path(T, P, Sub)`: what a rule writes at `T`'s path `P` holds
+/// a secret at `Sub` below it (`""` all of it): a secret reaches it
+/// through the rule (`data = { yaml: "key: ${signing}" }`; R-128).
+pub const SECRET_PATH: &str = "__secret_path";
+
+/// The predicates whose values are attribute cells: the redactor reads
+/// their secrets by cell (the schema's `sensitive`, `secret_cell`) and
+/// by what is written there (`__secret_path`), never by column, since
+/// one column holds every resource's values.
+const CELL_PREDS: [&str; 5] = ["arg", "attr", "world_attr", "cloud_attr", "cloud_computed"];
+
+/// What the pass knows that printing needs (R-128), as facts the
+/// `query::Redactor` reads beside the program's: every secret cell
+/// (`secret_cell`, a `let` holding a secret and a secret field of an
+/// input included), every secret column of a relation the program
+/// derives (`__secret_column`), and every attribute path a secret
+/// is written to (`__secret_path`). Output redacts a value by these,
+/// never by its text.
+pub fn taint(
+    lowered: &Lowered,
+    schema: &Schema,
+    outputs: &BTreeSet<(String, String)>,
+) -> Vec<Atom> {
+    let pass = fixpoint(lowered, schema, outputs);
+    let fact = |pred: &str, args: Vec<Value>| Atom {
+        pred: pred.into(),
+        args: args.into_iter().map(Term::Val).collect(),
+        record: None,
+        span: Span::default(),
+    };
+    let mut out: Vec<Atom> = pass
+        .cells
+        .iter()
+        .map(|(t, sc, k)| {
+            fact(
+                crate::transform::SECRET_CELL,
+                vec![
+                    Value::Str(t.clone()),
+                    Value::Str(sc.clone()),
+                    Value::Str(k.clone()),
+                ],
+            )
+        })
+        .collect();
+    for ((pred, col), label) in &pass.secret {
+        if CELL_PREDS.contains(&pred.as_str()) {
+            continue;
+        }
+        for p in label {
+            out.push(fact(
+                SECRET_COLUMN,
+                vec![
+                    Value::Str(pred.clone()),
+                    Value::Int(*col as i64),
+                    Value::Str(p.clone()),
+                ],
+            ));
+        }
+    }
+    for (head, body, _) in rules(&lowered.program) {
+        let Some(h) = head.filter(|h| h.pred == "arg") else {
+            continue;
+        };
+        let [typ, _, path, value, _] = h.args.as_slice() else {
+            continue;
+        };
+        let (Some(t), Some(p)) = (s(typ), s(path)) else {
+            continue;
+        };
+        let p = p.trim_start_matches('.');
+        for q in pass.term_label(value, &pass.body_vars(body)) {
+            out.push(fact(
+                SECRET_PATH,
+                vec![Value::Str(t.into()), Value::Str(p.into()), Value::Str(q)],
+            ));
         }
     }
     out

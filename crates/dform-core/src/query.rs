@@ -303,6 +303,22 @@ impl Redactor {
                 _ => None,
             })
             .collect();
+        // The parts of attribute values a secret is written to, by type
+        // and path (`secrets::taint`).
+        let mut paths: BTreeMap<(&str, &str), Vec<&str>> = BTreeMap::new();
+        for a in facts
+            .iter()
+            .filter(|a| a.pred == crate::secrets::SECRET_PATH)
+        {
+            if let [
+                Term::Val(Value::Str(t)),
+                Term::Val(Value::Str(p)),
+                Term::Val(Value::Str(sub)),
+            ] = a.args.as_slice()
+            {
+                paths.entry((t, p)).or_default().push(sub);
+            }
+        }
         for a in facts {
             if !VALUE_PREDS.contains(&a.pred.as_str()) || a.args.len() < 4 {
                 continue;
@@ -324,22 +340,20 @@ impl Redactor {
                 let addr = partition::fmt_bare(addr);
                 r.add(v, &crate::value::null_label(t, &addr, p));
             }
-            // A field its object type declares secret (`conn.password`).
-            for (_, _, k) in cells.iter().filter(|(ct, ca, _)| *ct == tv && *ca == addr) {
-                let Some(field) = k
-                    .as_str()
-                    .and_then(|k| k.strip_prefix(p)?.strip_prefix('.'))
-                else {
-                    continue;
-                };
-                if let Some(x) = field.split('.').try_fold(v, |v, f| match v {
-                    Value::Obj(m) => m.get(f),
-                    _ => None,
-                }) {
+            // A field its object type declares secret (`conn.password`),
+            // and where a rule writes a secret into the value (`data = {
+            // yaml: "key: ${signing}" }`): that part of it, whole.
+            let fields = cells
+                .iter()
+                .filter(|(ct, ca, _)| *ct == tv && *ca == addr)
+                .filter_map(|(_, _, k)| k.as_str()?.strip_prefix(p)?.strip_prefix('.'))
+                .chain(paths.get(&(t, p)).into_iter().flatten().copied());
+            for field in fields {
+                if let Some(x) = part(v, field) {
                     let addr = partition::fmt_bare(addr);
                     r.add(
                         x,
-                        &crate::value::null_label(t, &addr, &format!("{p}.{field}")),
+                        &crate::value::null_label(t, &addr, &crate::types::dotted(p, field)),
                     );
                 }
             }
@@ -388,15 +402,52 @@ impl Redactor {
                 r.add(c, &l);
             }
         }
+        // A column of a relation the program derives that the pass found
+        // secret (`leak(s) :- ..., s = format("pw=%s", p)`): its value at
+        // the secret path, by the relation's column when no secret it
+        // holds names it better.
+        let mut columns: BTreeMap<&str, Vec<(usize, &str)>> = BTreeMap::new();
+        for a in facts
+            .iter()
+            .filter(|a| a.pred == crate::secrets::SECRET_COLUMN)
+        {
+            if let [
+                Term::Val(Value::Str(p)),
+                Term::Val(Value::Int(c)),
+                Term::Val(Value::Str(path)),
+            ] = a.args.as_slice()
+            {
+                columns
+                    .entry(p.as_str())
+                    .or_default()
+                    .push((*c as usize, path.as_str()));
+            }
+        }
+        for a in facts {
+            let Some(cols) = columns.get(a.pred.as_str()) else {
+                continue;
+            };
+            for (c, path) in cols {
+                let Some(Term::Val(v)) = a.args.get(*c) else {
+                    continue;
+                };
+                if let Some(x) = part(v, path) {
+                    r.add(
+                        x,
+                        &format!("{}#{}", a.pred, crate::types::dotted(&c.to_string(), path)),
+                    );
+                }
+            }
+        }
         r
     }
 
+    /// `v` is a secret, as a whole: its parts are not, by themselves (a
+    /// plain word in a secret object prints where it is plain; R-128).
     fn add(&mut self, v: &Value, label: &str) {
         match v {
             Value::Null { .. } | Value::Bool(_) => {}
             Value::Str(s) if s.is_empty() => {}
-            Value::List(xs) => xs.iter().for_each(|x| self.add(x, label)),
-            Value::Obj(m) => m.values().for_each(|x| self.add(x, label)),
             _ => {
                 self.secrets
                     .entry(v.clone())
@@ -405,7 +456,9 @@ impl Redactor {
         }
     }
 
-    /// The label a value prints as, if it is (or contains) a secret.
+    /// The label a value prints as, if it is a secret: a secret marker, or
+    /// a value the program holds at a secret place, whole. Never by its
+    /// text: a value that contains a secret's bytes is not one (R-128).
     fn secret(&self, v: &Value) -> Option<String> {
         if let Value::Null {
             label,
@@ -415,14 +468,7 @@ impl Redactor {
         {
             return Some(label.clone());
         }
-        if let Some(l) = self.secrets.get(v) {
-            return Some(l.clone());
-        }
-        let Value::Str(s) = v else { return None };
-        self.secrets.iter().find_map(|(k, l)| match k {
-            Value::Str(k) if s.contains(k.as_str()) => Some(l.clone()),
-            _ => None,
-        })
+        self.secrets.get(v).cloned()
     }
 
     /// The call that derived `v`, when it is a secret `random.*` gave
@@ -527,17 +573,66 @@ impl Redactor {
         format!("{}({})", a.pred, args.join(", "))
     }
 
-    /// Any text that may quote a program literal (a rule's text): every
-    /// secret string in it replaced.
+    /// Any text that may quote a program literal (a rule's text, a flag
+    /// that gave a value): each string literal in it that is a secret, as
+    /// a whole, replaced, and a `--set k=v` whose value is one. The rest
+    /// is untouched, an address or a word that merely holds a secret's
+    /// bytes included (R-128).
     pub fn text(&self, s: &str) -> String {
-        let mut out = s.to_string();
-        for (k, l) in &self.secrets {
-            if let Value::Str(k) = k {
-                let shown = format!("(sensitive {})", crate::report::attribute_label(l));
-                out = out.replace(&format!("{k:?}"), &shown);
-                out = out.replace(k.as_str(), &shown);
+        // A flag's value, in its bare spelling, runs to the end of the
+        // text (`input --set k=v`).
+        for flag in ["--set ", "--data "] {
+            if let Some(i) = s.find(flag)
+                && let Some((k, v)) = s[i + flag.len()..].split_once('=')
+                && let Some(l) = self
+                    .secrets
+                    .iter()
+                    .find(|(x, _)| partition::fmt_bare(x) == v)
+                    .map(|(_, l)| l)
+            {
+                let head = self.tokens(&s[..i], |v| self.secret(v));
+                return format!("{head}{flag}{k}={}", sensitive(&l));
             }
         }
+        self.tokens(s, |v| self.secret(v))
+    }
+
+    /// `s` with each string literal `secret` labels replaced.
+    fn tokens(&self, s: &str, secret: impl Fn(&Value) -> Option<String>) -> String {
+        let mut out = String::with_capacity(s.len());
+        let mut rest = s;
+        while let Some(i) = rest.find('"') {
+            out.push_str(&rest[..i]);
+            let lit = &rest[i..];
+            // The literal's end: the next quote no backslash escapes.
+            let mut end = None;
+            let mut escaped = false;
+            for (j, c) in lit.char_indices().skip(1) {
+                match c {
+                    _ if escaped => escaped = false,
+                    '\\' => escaped = true,
+                    '"' => {
+                        end = Some(j + 1);
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+            let Some(end) = end else {
+                out.push_str(lit);
+                return out;
+            };
+            let (token, after) = lit.split_at(end);
+            match crate::syntax::resolve::unescape(token)
+                .ok()
+                .and_then(|v| secret(&Value::Str(v)))
+            {
+                Some(l) => out.push_str(&sensitive(&l)),
+                None => out.push_str(token),
+            }
+            rest = after;
+        }
+        out.push_str(rest);
         out
     }
 
@@ -556,6 +651,25 @@ impl Redactor {
             v => engine::value_to_json(v),
         }
     }
+}
+
+/// The part of `v` at the dotted `path` (`""` all of it); a key may hold
+/// a dot itself (`data."homeserver.yaml"`).
+fn part<'v>(v: &'v Value, path: &str) -> Option<&'v Value> {
+    if path.is_empty() {
+        return Some(v);
+    }
+    let Value::Obj(m) = v else { return None };
+    m.iter()
+        .find_map(|(k, x)| match path.strip_prefix(k.as_str())? {
+            "" => Some(x),
+            rest => part(x, rest.strip_prefix('.')?),
+        })
+}
+
+/// A secret in text, by its label: `(sensitive T.a.p)`.
+fn sensitive(label: &str) -> String {
+    format!("(sensitive {})", crate::report::attribute_label(label))
 }
 
 /// How `Redactor::spell` writes a value.
@@ -613,35 +727,112 @@ mod tests {
         );
     }
 
+    /// A schema of `type_attr` facts.
+    fn schema(src: &str) -> Schema {
+        let program = crate::parser::parse_program(src).unwrap();
+        let facts: Vec<Atom> = program
+            .statements
+            .iter()
+            .filter_map(|s| match s {
+                crate::ast::Stmt::Fact(a) => Some(a.clone()),
+                _ => None,
+            })
+            .collect();
+        Schema::from_facts(&facts).unwrap()
+    }
+
+    /// `src` evaluated with what the secret pass found (`secrets::taint`),
+    /// as a deployment evaluates it, and its redactor.
+    fn tainted(src: &str, schema: &Schema) -> (BTreeSet<Atom>, Redactor) {
+        let program = crate::parser::parse_program(src).unwrap();
+        let lowered = crate::transform::lower(&program).unwrap();
+        let taint = crate::secrets::taint(&lowered, schema, &Default::default());
+        let facts = engine::eval(&program, &taint).unwrap().0.facts;
+        let r = Redactor::new(&facts, schema);
+        (facts, r)
+    }
+
     #[test]
     fn a_secret_prints_as_its_size_wherever_it_is_forwarded() {
-        let schema = Schema::from_facts(
-            &crate::parser::parse_program("type_attr(\"v\", \"pw\", \"string\", [\"sensitive\"])")
-                .unwrap()
-                .statements
-                .iter()
-                .filter_map(|s| match s {
-                    crate::ast::Stmt::Fact(a) => Some(a.clone()),
-                    _ => None,
-                })
-                .collect::<Vec<_>>(),
-        )
-        .unwrap();
-        let f = facts(
+        let schema = schema("type_attr(\"v\", \"pw\", \"string\", [\"sensitive\"])");
+        let (f, r) = tainted(
             r#"want("v", "a")
 arg("v", "a", "pw", "hunter22", "normal")
                leak(s) where attr("v", "a", "pw", p), s = format("pw=%s", p)"#,
+            &schema,
         );
-        let r = Redactor::new(&f, &schema);
         let Query::Body { body, vars } = parse("leak(S)").unwrap() else {
             panic!()
         };
         let t = table(&body, &vars, &f).unwrap().result(&r);
         let out = t.render(&Default::default());
         assert_eq!(out, "S\nsecret(11 B)\n");
+        // By the column the pass found secret: the value is not the
+        // secret's, it holds it.
         assert_eq!(
             t.json(),
-            serde_json::json!([{"S": {"sensitive": "v[\"a\"].pw"}}])
+            serde_json::json!([{"S": {"sensitive": "leak#0"}}])
         );
+    }
+
+    /// R-128: a secret object is a secret as a whole; a plain word inside
+    /// it is not one elsewhere, as a value, inside a longer one, in an
+    /// address, or quoted in a rule's text.
+    #[test]
+    fn a_word_inside_a_secret_object_is_not_a_secret_elsewhere() {
+        let schema = schema(
+            "type_attr(\"k.secret\", \"data\", \"map\", [\"sensitive\"])\n\
+             type_attr(\"k.config\", \"name\", \"string\", [])",
+        );
+        let (_, r) = tainted(
+            r#"arg("k.secret", "synapse_db.creds", "data", {user: "synapse", pw: "hunter22"}, "normal")
+arg("k.config", "synapse", "name", "synapse-config", "normal")
+arg("k.config", "other", "name", "synapse", "normal")"#,
+            &schema,
+        );
+        let creds = Value::Obj(
+            [
+                ("user".to_string(), Value::Str("synapse".into())),
+                ("pw".to_string(), Value::Str("hunter22".into())),
+            ]
+            .into(),
+        );
+        assert_eq!(
+            r.surface(&creds),
+            "(sensitive k.secret synapse_db.creds.data)"
+        );
+        assert_eq!(r.cell(&creds), "secret(33 B)");
+        for plain in ["synapse", "synapse-config", "hunter22"] {
+            let v = Value::Str(plain.into());
+            assert!(!r.is_secret(&v), "{plain}");
+            assert_eq!(r.surface(&v), format!("{plain:?}"));
+        }
+        let text =
+            r#"k.secret synapse_db.creds  name = "synapse-config"  random.signing_key("synapse")"#;
+        assert_eq!(r.text(text), text);
+    }
+
+    /// The last line: a secret's exact bytes, as a whole value or a whole
+    /// literal in a rule's text or a flag, print as its label; text that
+    /// merely holds them is untouched.
+    #[test]
+    fn a_secret_whole_never_prints() {
+        let schema = schema("type_attr(\"v\", \"pw\", \"string\", [\"sensitive\"])");
+        let (_, r) = tainted(r#"arg("v", "a", "pw", "hunter22", "normal")"#, &schema);
+        let pw = Value::Str("hunter22".into());
+        assert_eq!(r.surface(&pw), "(sensitive v a.pw)");
+        assert_eq!(
+            r.surface(&Value::List(vec![pw.clone(), Value::Str("x".into())])),
+            "[(sensitive v a.pw), \"x\"]"
+        );
+        assert_eq!(r.json(&pw), serde_json::json!({"sensitive": "v[\"a\"].pw"}));
+        assert_eq!(r.text(r#"pw = "hunter22""#), "pw = (sensitive v a.pw)");
+        assert_eq!(
+            r.text("input --set pw=hunter22"),
+            "input --set pw=(sensitive v a.pw)"
+        );
+        for kept in [r#"pw = "hunter22-two""#, "hunter22", r#"v["hunter22x"]"#] {
+            assert_eq!(r.text(kept), kept);
+        }
     }
 }
