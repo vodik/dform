@@ -369,6 +369,9 @@ pub struct Options<'a> {
     /// What the last apply derived, for the policy pass
     /// (`zset::DERIVED_AT_LAST_APPLY`, R-80).
     pub last_apply: Vec<Atom>,
+    /// The deployment is being removed (`destroy`, R-149): no rule wants
+    /// anything, so the plan deletes every object state holds.
+    pub destroy: bool,
 }
 
 impl<'a> Options<'a> {
@@ -388,6 +391,7 @@ impl<'a> Options<'a> {
             blocking: false,
             policy: false,
             last_apply: Vec::new(),
+            destroy: false,
         }
     }
 }
@@ -449,6 +453,8 @@ pub struct Evaluator {
     /// The settings a secret reaches, by provider
     /// (`secrets::secret_settings`): printed `(sensitive)`.
     secret_settings: BTreeMap<String, BTreeSet<String>>,
+    /// Every plan is against an empty wanted set (`Options::destroy`).
+    destroy: bool,
 }
 
 impl Evaluator {
@@ -829,6 +835,15 @@ impl Evaluator {
             }
         };
         configured_from(&mut resources);
+        // A destroy (R-149) evaluates the program as ever: its providers
+        // are configured from the world, its denies run over the plan. It
+        // wants nothing, so every object state holds is a delete, in the
+        // order its recorded dependencies give.
+        let program_docs = self.destroy.then(|| std::mem::take(&mut resources));
+        let adopts = match self.destroy {
+            true => &[][..],
+            false => adopts,
+        };
         // A resource with a conflicting attribute is not planned: the
         // report shows the conflict, and the deny blocks an apply. Nor is
         // one whose provider has no schema of its type yet (R-110).
@@ -863,7 +878,10 @@ impl Evaluator {
             executor::hold_dependents(&mut plan, &docs, &replaced);
             (again, violations, docs)
         };
-        let mut sections = sections(&res, &resources, schema);
+        let mut sections = match self.destroy {
+            true => stuck::Sections::default(),
+            false => sections(&res, &resources, schema),
+        };
         self.wait_on_providers(&mut plan, &resources, &mut sections, st)?;
         executor::hold_deposed(&mut plan, &resources, &sections);
         // The resource rules that may derive after a boundary (pending
@@ -900,10 +918,11 @@ impl Evaluator {
         facts.extend(self.last_apply.iter().cloned());
         let (res, all) = self.evaluate_with(st, &replaced, &facts, None)?;
         let again = ir::compile_resources(res.facts.iter().cloned(), schema)?;
-        if again.len() != resources.len()
+        let wanted = program_docs.as_ref().unwrap_or(&resources);
+        if again.len() != wanted.len()
             || again
                 .iter()
-                .zip(&resources)
+                .zip(wanted)
                 .any(|(a, b)| a.addr != b.addr || a.attrs != b.attrs)
         {
             bail!(
@@ -1340,6 +1359,7 @@ impl Located {
             last: RefCell::new(None),
             configured: RefCell::new(Vec::new()),
             secret_settings,
+            destroy: opts.destroy,
         };
         let (mut res, mut violations) = evaluator.evaluate(&st)?;
         // moved/3 rewrites state's identity before the diff (E §3.4); round

@@ -770,7 +770,13 @@ pub struct Report {
     /// The apply resumes one interrupted: its tick's changes are what
     /// remained of it (R-122).
     pub resumed: bool,
+    /// The deployment is being removed (`destroy`, R-149): each delete
+    /// says so ([`REMOVED`]).
+    pub removing: bool,
 }
+
+/// Why a delete of `destroy` is planned (R-149).
+pub const REMOVED: &str = "no rule wants it: the deployment is being removed";
 
 /// What the report is built from.
 pub struct Input<'a> {
@@ -951,6 +957,7 @@ pub fn report(i: &Input) -> Report {
         why: Why::None,
         keys: BTreeSet::new(),
         resumed: false,
+        removing: false,
         approvals: crate::approval::needs(&i.res.facts)
             .into_iter()
             .map(|(addr, reason)| Approval {
@@ -2118,7 +2125,11 @@ impl Report {
                 n => format!("{n} denies"),
             });
         }
-        (!why.is_empty()).then(|| format!("apply: refused  {}", why.join(", ")))
+        let verb = match self.removing {
+            true => "destroy",
+            false => "apply",
+        };
+        (!why.is_empty()).then(|| format!("{verb}: refused  {}", why.join(", ")))
     }
 
     /// The `warning` section's lines (R-80), unindented: each rule the
@@ -2521,6 +2532,14 @@ impl Report {
             let painted = format!("{inner}{} {b}", style.paint(Paint::Because, "because"));
             rows.push(Row::new(&plain, painted));
         }
+        if self.removed(d) {
+            rows.push(Row::plain(format!("{inner}{REMOVED}")));
+        }
+    }
+
+    /// `d` is a delete of a deployment being removed.
+    fn removed(&self, d: &Deformation) -> bool {
+        self.removing && matches!(d.kind, ActionKind::Delete | ActionKind::DeleteDeposed)
     }
 }
 
@@ -3287,6 +3306,9 @@ impl Report {
         if explained {
             m.insert("site".into(), json!(d.site));
             m.insert("because".into(), json!(d.because));
+        }
+        if self.removed(d) {
+            m.insert("reason".into(), REMOVED.into());
         }
         Json::Object(m)
     }

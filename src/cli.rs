@@ -299,6 +299,10 @@ enum Run {
         /// Print the plan as one JSON document instead of text.
         #[arg(long)]
         json: bool,
+        /// The plan `destroy` would apply: every object of the
+        /// deployment's state deleted.
+        #[arg(long, conflicts_with = "out")]
+        destroy: bool,
         #[command(flatten)]
         why: Ladder,
     },
@@ -338,6 +342,26 @@ enum Run {
         /// `[stacks.NAME] allow_empty` names them for every apply.
         #[arg(long = "allow-empty", value_name = "RULE")]
         allow_empty: Vec<String>,
+        #[command(flatten)]
+        why: Ladder,
+    },
+    /// A report: remove a deployment (`destroy platform env=lab`), the
+    /// plan against an empty wanted set: every object its state holds is
+    /// deleted, dependents first, asked for as `apply` asks. Its state is
+    /// left empty and `stack list` no longer shows it; its audit log
+    /// stays. `plan --destroy` prints the plan.
+    Destroy {
+        #[command(flatten)]
+        target: Target,
+        /// A safety valve: stop after this many ticks.
+        #[arg(long = "max-ticks", default_value_t = 8)]
+        max_ticks: usize,
+        /// At most this many provider Apply calls in flight.
+        #[arg(long = "parallel", default_value_t = 1, value_parser = clap::value_parser!(u64).range(1..))]
+        parallel: u64,
+        /// Destroy without asking.
+        #[arg(long = "yes", short = 'y')]
+        yes: bool,
         #[command(flatten)]
         why: Ladder,
     },
@@ -666,6 +690,8 @@ enum Cmd {
     Plan {
         out: Option<PathBuf>,
         json: bool,
+        /// `plan --destroy`: the plan against an empty wanted set.
+        destroy: bool,
         why: report::Why,
     },
     Test,
@@ -681,6 +707,8 @@ enum Cmd {
         allow_empty: Vec<String>,
         /// What each change of the printed plan says of why.
         why: report::Why,
+        /// `destroy`: the deployment is removed (R-149).
+        destroy: bool,
     },
     Query {
         pattern: String,
@@ -981,7 +1009,9 @@ struct Dependency {
 /// program outside a project. A cycle is an error naming it.
 fn apply_order(cli: &Cli) -> Result<Vec<Dependency>> {
     let Cmd::Apply {
-        plan_file: None, ..
+        plan_file: None,
+        destroy: false,
+        ..
     } = &cli.cmd
     else {
         return Ok(Vec::new());
@@ -1267,7 +1297,14 @@ fn resolve(args: Args) -> Result<Cli> {
         bail!("--chaos is for apply");
     }
     // A plan file is `apply`'s target: its inputs name the program.
-    if let (Cmd::Apply { plan_file, .. }, Some(t)) = (&mut cli.cmd, &target)
+    if let (
+        Cmd::Apply {
+            plan_file,
+            destroy: false,
+            ..
+        },
+        Some(t),
+    ) = (&mut cli.cmd, &target)
         && let Some(f) = t.target.as_deref().filter(|f| f.ends_with(".json"))
     {
         if !t.keys.is_empty() {
@@ -1281,7 +1318,7 @@ fn resolve(args: Args) -> Result<Cli> {
     };
     // `apply` with no target applies the project: every stack under the
     // working directory, in dependency order, each confirmed on its own.
-    if let (Cmd::Apply { .. }, None, true, Some(p)) = (
+    if let (Cmd::Apply { destroy: false, .. }, None, true, Some(p)) = (
         &cli.cmd,
         &target.target,
         target.keys.is_empty(),
@@ -1317,11 +1354,13 @@ fn run_cmd(r: Run) -> (Cmd, Option<Target>) {
             target,
             out,
             json,
+            destroy,
             why,
         } => (
             Cmd::Plan {
                 out,
                 json,
+                destroy,
                 why: why.level(),
             },
             Some(target),
@@ -1344,6 +1383,27 @@ fn run_cmd(r: Run) -> (Cmd, Option<Target>) {
                 yes,
                 allow_empty,
                 why: why.level(),
+                destroy: false,
+            },
+            Some(target),
+        ),
+        Run::Destroy {
+            target,
+            max_ticks,
+            parallel,
+            yes,
+            why,
+        } => (
+            Cmd::Apply {
+                plan_file: None,
+                chaos: Vec::new(),
+                max_ticks,
+                parallel,
+                approval: None,
+                yes,
+                allow_empty: Vec::new(),
+                why: why.level(),
+                destroy: true,
             },
             Some(target),
         ),
@@ -1847,6 +1907,12 @@ fn run_with(
         _ => None,
     };
     let providers = loaded.providers.clone();
+    // `destroy` and `plan --destroy` (R-149): the plan against an empty
+    // wanted set.
+    let destroying = matches!(
+        cli.cmd,
+        Cmd::Plan { destroy: true, .. } | Cmd::Apply { destroy: true, .. }
+    );
     // What evaluates against providers starts the program's, and there is
     // no default.
     if matches!(
@@ -2187,6 +2253,7 @@ fn run_with(
             .as_ref()
             .map(zset::Derived::facts)
             .unwrap_or_default(),
+        destroy: destroying,
     };
     let mut ev = located.evaluate(
         read_outputs,
@@ -2363,6 +2430,7 @@ fn run_with(
             kept: &kept,
         });
         report.resumed = resuming.get() && tick == 1;
+        report.removing = destroying;
         report
     };
     // How much each printed change says of why (R-79).
@@ -2429,7 +2497,8 @@ fn run_with(
                    res: &engine::EvalResult,
                    because: &dyn Fn(&str) -> Option<String>|
      -> Vec<zset::Emptied> {
-        let Some(then) = &last_derived else {
+        // A destroy empties everything; its question says so.
+        let Some(then) = last_derived.as_ref().filter(|_| !destroying) else {
             return Vec::new();
         };
         let deleted: BTreeSet<String> = plan
@@ -3165,7 +3234,7 @@ fn run_with(
                     if !report.undeformed {
                         let n = report.changes();
                         still_held(session)?;
-                        if !confirm(n, false, &deployment, tick, cli.style)? {
+                        if !confirm(n, false, destroying, &deployment, tick, cli.style)? {
                             return Ok(declined(&deployment, tick));
                         }
                     }
@@ -3225,7 +3294,14 @@ fn run_with(
                     }
                     if new + planned > 0 && !yes {
                         still_held(session)?;
-                        if !confirm(new + planned, true, &deployment, tick, cli.style)? {
+                        if !confirm(
+                            new + planned,
+                            true,
+                            destroying,
+                            &deployment,
+                            tick,
+                            cli.style,
+                        )? {
                             return Ok(declined(&deployment, tick));
                         }
                     }
@@ -3284,6 +3360,9 @@ fn run_with(
                     if !modified.is_empty() {
                         e["dirty"] = true.into();
                         e["modified"] = modified.into();
+                    }
+                    if destroying {
+                        e["destroy"] = true.into();
                     }
                     audit.append("apply_start", e)?;
                 }
@@ -3420,6 +3499,47 @@ fn run_with(
                             "world": format!("hmac-sha256:{}", key.digest(canonical.as_bytes())),
                         }),
                     )?;
+                }
+                if !boundary && destroying {
+                    st.in_flight = None;
+                    let left: Vec<&String> = st.resources.keys().chain(st.deposed.keys()).collect();
+                    if !left.is_empty() {
+                        bail!(
+                            "destroy {deployment}: state still holds {} after the last tick",
+                            left.iter()
+                                .map(|k| k.as_str())
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        );
+                    }
+                    // The deployment is gone: its checkpoint is empty but
+                    // for the count of idempotency keys given out, so a
+                    // later apply never reuses one; the audit log keeps
+                    // its history (R-146) and says it was destroyed,
+                    // which `stack list` reads.
+                    st = state::State {
+                        version: st.version,
+                        keys: st.keys,
+                        ..Default::default()
+                    };
+                    persist(&st)?;
+                    audit.append(
+                        "destroyed",
+                        serde_json::json!({ "deployment": deployment, "who": crate::audit::who() }),
+                    )?;
+                    // What other stacks read of it goes with it: a reader
+                    // waits on it as on one never applied (R-121).
+                    if cli.world.is_none() && dep.store().get(store::OUTPUTS)?.is_some() {
+                        dep.store().delete(store::OUTPUTS)?;
+                    }
+                    match changed || tick > 1 {
+                        true => println!(
+                            "{}",
+                            cli.style.paint(report::Paint::Done, "destroy: complete")
+                        ),
+                        false => println!("destroy: nothing to do"),
+                    }
+                    break;
                 }
                 if !boundary {
                     st.in_flight = None;
@@ -4277,6 +4397,7 @@ fn run_controller(cli: Cli) -> Result<Outcome> {
             yes: true,
             allow_empty: Vec::new(),
             why: report::Why::None,
+            destroy: false,
         },
         ..cli
     };
@@ -4338,30 +4459,37 @@ fn run_controller(cli: Cli) -> Result<Outcome> {
     }
 }
 
-/// Ask on the terminal whether to apply `n` changes to `deployment`, or
-/// (`new`) tick `tick`, which adds what no plan listed: only `y` or `yes`
-/// proceeds.
+/// Ask on the terminal whether to apply `n` changes to `deployment`
+/// (`destroy`: to delete its `n` objects), or (`new`) tick `tick`, which
+/// adds what no plan listed: only `y` or `yes` proceeds.
 /// With no terminal to ask on, a refusal naming `--yes`, never a wait.
 /// Answered no, `false`: a decline, not an error.
 fn confirm(
     n: usize,
     new: bool,
+    destroy: bool,
     deployment: &str,
     tick: usize,
     style: report::Style,
 ) -> Result<bool> {
     use std::io::{IsTerminal, Write};
     let stdin = std::io::stdin();
+    let verb = match destroy {
+        true => "destroy",
+        false => "apply",
+    };
     if !stdin.is_terminal() {
         bail!(
-            "apply {deployment}: nothing to ask on at tick {tick} (stdin is not a terminal); \
-             pass --yes to apply without asking"
+            "{verb} {deployment}: nothing to ask on at tick {tick} (stdin is not a terminal); \
+             pass --yes to {verb} without asking"
         );
     }
-    let ask = match (new, n) {
-        (true, _) => format!("Apply tick {tick} to {deployment}?"),
-        (false, 1) => format!("Apply this change to {deployment}?"),
-        (false, _) => format!("Apply these {n} changes to {deployment}?"),
+    let ask = match (new, destroy, n) {
+        (true, _, _) => format!("Apply tick {tick} to {deployment}?"),
+        (false, true, 1) => format!("Destroy this object of {deployment}?"),
+        (false, true, _) => format!("Destroy these {n} objects of {deployment}?"),
+        (false, false, 1) => format!("Apply this change to {deployment}?"),
+        (false, false, _) => format!("Apply these {n} changes to {deployment}?"),
     };
     print!("{} [y/N] ", style.paint(report::Paint::Bold, &ask));
     std::io::stdout().flush()?;
@@ -5667,7 +5795,8 @@ fn stack_list(cli: &Cli) -> Result<()> {
             let entries = crate::audit::Log::new(store.clone(), None)
                 .entries()
                 .unwrap_or_default();
-            if entries.is_empty() && store.get(store::STATE)?.is_none() {
+            // A destroyed deployment is gone; its log stays (R-149).
+            if (entries.is_empty() && store.get(store::STATE)?.is_none()) || destroyed(&entries) {
                 continue;
             }
             any = true;
@@ -5687,6 +5816,20 @@ fn stack_list(cli: &Cli) -> Result<()> {
     }
     print!("{}", t.without_empty_columns().render(&cli.table));
     Ok(())
+}
+
+/// The audit log `entries` end in a `destroy` that completed: no apply
+/// started since (R-149).
+fn destroyed(entries: &[serde_json::Value]) -> bool {
+    entries
+        .iter()
+        .rev()
+        .find_map(|e| match e["kind"].as_str() {
+            Some("destroyed") => Some(true),
+            Some("apply_start") => Some(false),
+            _ => None,
+        })
+        .unwrap_or(false)
 }
 
 /// A deployment's last apply and pending saved plan, from its audit log.
@@ -6036,6 +6179,7 @@ const EXPERIMENTAL_COMMANDS: &[&str] = &["controller", "handover"];
 const COMMANDS: &[&str] = &[
     "plan",
     "apply",
+    "destroy",
     "why",
     "why-not",
     "query",
@@ -6066,6 +6210,7 @@ fn subcommands(noun: &str) -> &'static [&'static str] {
         "dev" => &[
             "plan",
             "apply",
+            "destroy",
             "why",
             "why-not",
             "query",

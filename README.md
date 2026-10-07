@@ -865,7 +865,10 @@ exists: a change made in the console shows as an update back, or as a
 deny if a policy says so. An apply that dies halfway resumes: each
 create carries an idempotency key, and the next `apply` says "resuming
 the apply interrupted at tick 2" and finishes it, after checking that
-the world did not move under the remaining actions.
+the world did not move under the remaining actions. `dform destroy
+TARGET` removes a deployment: the same plan against an empty wanted
+set, every object deleted dependents first, `prevent_destroy` a
+refusal; the audit log stays.
 
 **Plan files and approvals.** `plan --out plan.json` records everything
 the plan depended on. `apply plan.json` refuses if the world or the

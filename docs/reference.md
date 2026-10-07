@@ -195,6 +195,27 @@ the working directory, applies every one of them (each with its default
 key) in dependency order, each run headed and confirmed on its own; a
 `--set` no stack declares is an error.
 
+`dform destroy TARGET` removes a deployment: the plan against an empty
+wanted set. The program is evaluated as for `apply` (its providers
+configured, from the world when their settings read it), and every
+object its state holds is a delete, dependents first: what references
+an object, and an object of a provider configured from another (a
+cluster's objects, whose kubeconfig is read off the server), go before
+it, the reverse of create. Each delete says `no rule wants it: the
+deployment is being removed` (`--json`: `reason`). Denies over the plan
+run as for any plan, so `lifecycle(r, "prevent_destroy")` refuses it,
+naming the resource, and exits 4 (`destroy: refused  1 deny`). It asks
+`Destroy these N objects of platform[env=lab]? [y/N]`, `--yes` as for
+apply, and shows its progress and resumes after a stop as apply does
+(`--max-ticks`, `--parallel` too). After the last delete the
+deployment's state is an empty checkpoint (but for the count of
+idempotency keys it gave out), its published outputs are gone (a reader
+waits on it as on one never applied), the audit log stays, with a
+`destroyed` entry, and `stack list` no longer shows it until an apply
+makes it again. `destroy` runs on its target alone: not on the stacks it
+reads, nor, with no target, on the project. `plan --destroy TARGET`
+prints the same plan and applies nothing.
+
 ### Exit status
 
 Each status means one thing, the same for every command (the controller
@@ -215,7 +236,7 @@ too):
 
 | Commands | |
 |---|---|
-| `plan`, `apply`, `why`, `why-not`, `query`, `diff`, `test`, `fmt`, `log` | on a target |
+| `plan`, `apply`, `destroy`, `why`, `why-not`, `query`, `diff`, `test`, `fmt`, `log` | on a target |
 | `output TARGET [NAME]` | a deployment's outputs |
 | `stack list`, `stack rekey`, `stack unlock` | the project's stacks |
 | `state show`, `state taint`, `state forget-host`, `state mv` | a deployment's state |
@@ -246,7 +267,8 @@ curl "$(dform output app env=prod url)"   # the bare value
 dform output app env=prod zone            # prod-a<TAB>0, a row per line
 ```
 
-`dform stack list` is a result set, one row per deployment with state:
+`dform stack list` is a result set, one row per deployment with state
+(not one `destroy` removed):
 its stack (with its key) and file, where its state is when that is a
 bucket, its last apply (time, actor and the project's commit, from the
 audit log) and a saved plan not yet applied. `dform state show TARGET`
