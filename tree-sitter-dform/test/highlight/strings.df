@@ -1,0 +1,19 @@
+# An interpolation's body highlights as code: a call, an object literal,
+# a quantity; the string's text and quotes are a string (R-174).
+# (That no `@string` spans a hole is tests/treesit_agreement.rs's.)
+let init = "a ${yaml.encode({ foo: true, size: 500m })} b"
+#          ^ string
+#                                                      ^ string
+#                                                        ^ string
+#                    ^ function.call
+#                             ^ property
+#                                  ^ boolean
+#                                              ^ number
+#             ^ punctuation.special
+let doc = "#cloud-config
+${str.upper("x")} ${ n }Gi"
+#     ^ function.call
+#           ^ string
+#                ^ string
+#                    ^ variable
+#                       ^ string

@@ -121,6 +121,22 @@ indenting leaves its lines as written."
     (should (equal (buffer-string)
                    "resource t n {\n  a = \"x\n   y ${v}\n\"\n  b = 1\n}\n"))))
 
+(ert-deftest dform-ts-mode-test-interpolation-is-code ()
+  "An interpolation's body takes the faces code takes, not the string's;
+the string's text and quotes are a string, on every line (R-174)."
+  (dform-ts-mode-test--ensure-grammar)
+  (with-temp-buffer
+    (insert "let init = \"#cloud-config\n${yaml.encode({ foo: true, size: 500m })} b\"\n")
+    (let ((treesit-font-lock-level 4))
+      (dform-ts-mode))
+    (font-lock-ensure)
+    (should (eq (dform-ts-mode-test--face-at "#cloud") 'font-lock-string-face))
+    (should (eq (dform-ts-mode-test--face-at " b\"") 'font-lock-string-face))
+    (should (eq (dform-ts-mode-test--face-at "encode") 'font-lock-function-call-face))
+    (should (eq (dform-ts-mode-test--face-at "500m") 'font-lock-number-face))
+    (should-not (eq (dform-ts-mode-test--face-at "{ foo") 'font-lock-string-face))
+    (should-not (eq (dform-ts-mode-test--face-at "foo") 'font-lock-string-face))))
+
 (ert-deftest dform-ts-mode-test-patterns ()
   "A tuple pattern (R-58) indents like a bracket, and the aggregate
 `any' (R-59) is coloured as `count' is."

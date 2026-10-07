@@ -242,6 +242,31 @@ fn inside(n: Node, kinds: &[&str]) -> bool {
     std::iter::successors(n.parent(), |p| p.parent()).any(|p| kinds.contains(&p.kind()))
 }
 
+/// R-174: a string's `@string` is its text and its quotes, never the
+/// whole node, so an interpolation's body (a call, an object, a
+/// quantity) takes the faces code takes, in an editor that paints the
+/// first capture of a span too (Emacs's treesit).
+#[test]
+fn the_string_capture_leaves_an_interpolation_to_code() {
+    let src = "let init = \"a ${yaml.encode({ foo: true, size: 500m })} b\"\n\
+               let doc = \"#cloud-config\n${str.upper(\"x\")} ${n}Gi\"\n";
+    let tree = ts_parse(src);
+    let strings = captures(&tree, src, "string");
+    let text = |n: &Node| src[n.byte_range()].to_string();
+    assert!(
+        strings.iter().all(|n| !text(n).contains("${")),
+        "{:?}",
+        strings.iter().map(text).collect::<Vec<_>>()
+    );
+    for t in ["a ", " b", "\"", "x", "#cloud-config\n", " ", "Gi"] {
+        assert!(strings.iter().any(|n| text(n) == t), "{t:?}");
+    }
+    let calls = captures(&tree, src, "function.call");
+    assert!(calls.iter().any(|n| text(n) == "encode"));
+    let numbers = captures(&tree, src, "number");
+    assert!(numbers.iter().any(|n| text(n) == "500m"));
+}
+
 /// Proposal G, G-6: a dot in a field's value is a reference, in a rule body
 /// or a clause a read. tour.df, dform.df and pngu.df have both: `backup_days =
 /// database.backup_days` in a block, `a = network[ia].vpc` in a rule body.

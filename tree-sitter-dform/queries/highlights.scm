@@ -10,7 +10,10 @@
 
 ; --- literals ---------------------------------------------------------------
 
-(string) @string
+; A string's text and its quotes, not the whole node: an interpolation's
+; body is code and highlights as code (R-174).
+(string_content) @string
+(string "\"" @string)
 (escape_sequence) @string.escape
 (interpolation
   "${" @punctuation.special

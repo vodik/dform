@@ -156,7 +156,10 @@ apply-order edge, not its content read now (`docs/grammar.md'
 
    :language 'dform
    :feature 'string
-   '((string) @font-lock-string-face)
+   ;; A string's text and its quotes, not the whole node: an
+   ;; interpolation's body is code, which the other features paint (R-174).
+   '((string_content) @font-lock-string-face
+     (string "\"" @font-lock-string-face))
 
    :language 'dform
    :feature 'escape-sequence
