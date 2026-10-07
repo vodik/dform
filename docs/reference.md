@@ -2202,7 +2202,7 @@ shape is three keys: `random.signing_key("synapse")`,
 it signed) and `random.password("synapse-db")`: rotating one is one
 command and one plan line. A dependent system learns a new value through
 a resource of its own (a database role whose password the program sets,
-R-159), never through a trigger. The master is never rotated by a
+`postgres.role`, docs/providers/postgres.md), never through a trigger. The master is never rotated by a
 program: `dform secrets cycle` makes a new one and changes no value
 ("Master epochs"); `--new-master` ("The master") takes another and
 changes every derived value at once.

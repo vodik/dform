@@ -192,6 +192,10 @@ exit carries no code (`exit status: 1`). Its compiled code is cached in
 The fake provider is built both ways and passes `dform provider check`
 on both; tests/host_wasm.rs keeps them from drifting.
 
+| provider | written with | hosted | page |
+|---|---|---|---|
+| `postgres` (`crates/dform-provider-postgres`) | the SDK's typed layer | native only: it dials the server itself | docs/providers/postgres.md |
+
 ## Grants and credentials
 
 In `dform.toml`:
