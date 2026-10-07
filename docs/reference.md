@@ -2182,7 +2182,8 @@ from csv("zones.csv")`); `output p` hands a relation out, read
 row (docs/grammar.md "Inputs and outputs").
 
 The formats are `csv` (a header naming the columns), `json` and `yaml` (a
-list of objects), and `toml` (the rows as `[[peering]]` entries). A row has
+list of objects; a YAML stream of documents, `---`, is a list too, a row
+per document, as a loader call's value is the list of them), and `toml` (the rows as `[[peering]]` entries). A row has
 every column and nothing else; a cell is its column's type (a CSV cell is
 read as an `int`, a `bool` or an `inet` when the column is one, a string as
 an `inet` in any format), and a row that is not is an error naming the file

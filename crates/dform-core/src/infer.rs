@@ -1258,10 +1258,15 @@ pub fn document_columns(
             .context("a JSON table is a list of objects, one per row")?
             .into_iter()
             .next(),
-        "yaml" => serde_yaml::from_str::<Vec<Row>>(text)
-            .context("a YAML table is a list of mappings, one per row")?
-            .into_iter()
-            .next(),
+        "yaml" => match crate::tables::yaml_stream(text)? {
+            crate::tables::Stream::One(doc) => serde_yaml::from_value::<Vec<Row>>(doc),
+            crate::tables::Stream::Many(docs, _) => {
+                serde_yaml::from_value::<Vec<Row>>(serde_yaml::Value::Sequence(docs))
+            }
+        }
+        .context("a YAML table is a list of mappings, one per row")?
+        .into_iter()
+        .next(),
         "toml" => toml::from_str::<BTreeMap<String, Vec<Row>>>(text)
             .with_context(|| format!("a TOML table is its rows as `[[{table}]]`"))?
             .remove(table)

@@ -584,18 +584,26 @@ fn rows(format: &str, table: &str, text: &str) -> Result<Vec<Row>> {
                 .collect()
         }
         "yaml" => {
-            let doc: serde_yaml::Value = serde_yaml::from_str(text)?;
-            let serde_yaml::Value::Sequence(items) = doc else {
-                bail!("a YAML table is a list of mappings, one per row");
+            let (items, lines) = match yaml_stream(text)? {
+                // A stream of documents (`---`): a row per document, at
+                // the line it starts on.
+                Stream::Many(docs, starts) => (docs, starts),
+                Stream::One(serde_yaml::Value::Sequence(items)) => {
+                    // Block style: an item's line is the line its `- ` is on.
+                    let dashes: Vec<usize> = text
+                        .lines()
+                        .enumerate()
+                        .filter(|(_, l)| l == &"-" || l.starts_with("- "))
+                        .map(|(i, _)| i + 1)
+                        .collect();
+                    let lines = (dashes.len() == items.len()).then_some(dashes);
+                    (items, lines)
+                }
+                Stream::One(_) => bail!(
+                    "a YAML table is a list of mappings, one per row, or a stream of \
+                     mappings (`---`), one per document"
+                ),
             };
-            // Block style: an item's line is the line its `- ` is on.
-            let dashes: Vec<usize> = text
-                .lines()
-                .enumerate()
-                .filter(|(_, l)| l == &"-" || l.starts_with("- "))
-                .map(|(i, _)| i + 1)
-                .collect();
-            let lines = (dashes.len() == items.len()).then_some(dashes);
             items
                 .into_iter()
                 .enumerate()
@@ -664,7 +672,15 @@ fn rows(format: &str, table: &str, text: &str) -> Result<Vec<Row>> {
 pub fn document(format: &str, text: &str) -> Result<Value> {
     match format {
         "json" => present(json(&serde_json::from_str(text)?)?),
-        "yaml" => present(yaml(serde_yaml::from_str(text)?, text)?),
+        "yaml" => match yaml_stream(text)? {
+            Stream::One(doc) => present(yaml(doc, text)?),
+            // A stream of documents (`---`, a manifest): the list of them.
+            Stream::Many(docs, _) => Ok(Value::List(
+                docs.into_iter()
+                    .map(|d| present(yaml(d, text)?))
+                    .collect::<Result<_>>()?,
+            )),
+        },
         "toml" => toml_value(toml::from_str(text)?),
         f => bail!("unknown format {f}"),
     }
@@ -701,7 +717,7 @@ fn leaves(format: &str, text: &str) -> Result<Vec<(Option<usize>, String, Value)
             }
         }
         "yaml" => {
-            let serde_yaml::Value::Mapping(m) = serde_yaml::from_str(text)? else {
+            let Stream::One(serde_yaml::Value::Mapping(m)) = yaml_stream(text)? else {
                 bail!("a YAML document of inputs is a mapping");
             };
             let lines = yaml_key_lines(text);
@@ -838,6 +854,51 @@ fn yaml_key(k: &serde_yaml::Value) -> Result<String> {
         serde_yaml::Value::Bool(b) => Ok(b.to_string()),
         _ => bail!("a key is a string"),
     }
+}
+
+/// A YAML text: one document, or a stream of several (`---`), each with
+/// the line it starts on when the separators say. An empty document of a
+/// stream (`---` twice, a trailing `---`) is no document.
+pub enum Stream {
+    One(serde_yaml::Value),
+    Many(Vec<serde_yaml::Value>, Option<Vec<usize>>),
+}
+
+/// Read `text` as a YAML stream ([`Stream`]).
+pub fn yaml_stream(text: &str) -> Result<Stream> {
+    use serde::Deserialize;
+    let docs = serde_yaml::Deserializer::from_str(text)
+        .map(serde_yaml::Value::deserialize)
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    // Where each document starts: the first line, and the line after each
+    // `---`.
+    let mut starts = vec![1];
+    starts.extend(
+        text.lines()
+            .enumerate()
+            .filter(|(_, l)| *l == "---" || l.starts_with("--- "))
+            .map(|(i, _)| i + 2),
+    );
+    if text.lines().next().is_some_and(|l| l.starts_with("---")) {
+        starts.remove(0);
+    }
+    let starts = (starts.len() == docs.len()).then_some(starts);
+    let (docs, starts): (Vec<_>, Option<Vec<_>>) = match starts {
+        Some(s) => {
+            let (d, s): (Vec<_>, Vec<_>) = docs
+                .into_iter()
+                .zip(s)
+                .filter(|(d, _)| !d.is_null())
+                .unzip();
+            (d, Some(s))
+        }
+        None => (docs.into_iter().filter(|d| !d.is_null()).collect(), None),
+    };
+    Ok(match <[_; 1]>::try_from(docs) {
+        Ok([doc]) => Stream::One(doc),
+        Err(docs) if docs.is_empty() => Stream::One(serde_yaml::Value::Null),
+        Err(docs) => Stream::Many(docs, starts),
+    })
 }
 
 /// A YAML value; `None` for `null`. `text` is the document, for the line

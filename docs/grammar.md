@@ -1290,8 +1290,12 @@ names, which the plan file records, so `apply PLAN` reads what plan read
 though the branch moved since. A path is a term (holes allowed: a hole is
 a content position, so it reads now), from the project root. A loader
 call is a value: `let net = toml("data/network.toml")`, then
-`net.region`, `net.az[0].name`. `file.json` is gone; `file.text(PATH)`
-stays, the file's text.
+`net.region`, `net.az[0].name`. A YAML file that is a stream of
+documents (`---`, a vendored manifest) is the list of them, an empty
+document none: `d in yaml("crds.yml")` walks it, `yaml("crds.yml")[*]`
+selects each, and a relation read from it has a row per document, at
+the line it starts on; a file of one document is that document.
+`file.json` is gone; `file.text(PATH)` stays, the file's text.
 
 `input p from DOC [selector] [where B]` destructures a document into the
 relation `p`, by the columns of its `decl`, or with no `decl` by its first
