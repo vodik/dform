@@ -163,7 +163,7 @@ fn gke_one_zone_stops_after_tick_one() {
     assert_eq!(r.stdout.matches("plan: ").count(), 1, "{}", r.stdout);
     assert!(
         r.stderr
-            .contains("- cluster must be in at least two zones ctx={\"cluster\":\"pngu\"}")
+            .contains("- cluster must be in at least two zones  cluster = \"pngu\"")
             && r.stderr
                 .contains("; stopped after tick 1; ticks 1 to 1 were applied"),
         "{}",

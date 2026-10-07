@@ -126,7 +126,7 @@ fn a_secret_input_refinement_does_not_print_it() {
         .failure();
     assert!(
         r.stderr
-            .contains("input pw fails its refinement: len(pw) >= 12 ctx={}"),
+            .contains("input pw fails its refinement: len(pw) >= 12\n"),
         "{}",
         r.stderr
     );

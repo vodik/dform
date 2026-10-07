@@ -1,0 +1,36 @@
+//! After R-149: a run that refuses prints each violation as the plan's
+//! `!` line does, through one renderer (`report::violations`,
+//! `report::violation_line`): a deny's message, then its bindings as
+//! `key = value`, never the context's JSON.
+
+mod common;
+use common::Scratch;
+
+const PROG: &str = r#"
+use fake
+resource db.postgres main { size = 1 }
+deny "image not pinned" { image: "traefik:v3.7", size: s } where d in db.postgres, s = d.size
+"#;
+
+/// The plan's refusal names the deny and its bindings, as a program
+/// writes the values.
+#[test]
+fn a_refused_plan_prints_a_deny_by_its_bindings() {
+    let s = Scratch::new("violations-plan");
+    s.write("p.df", PROG);
+    let out = common::dform()
+        .args(["dev", "--world", "w.json", "plan", "p.df"])
+        .env("NO_COLOR", "1")
+        .current_dir(&s.dir)
+        .output()
+        .unwrap();
+    let r = common::Run::from(out);
+    assert!(!r.stderr.contains("ctx="), "{}", r.stderr);
+    assert!(
+        r.stderr.contains(
+            "constraint violations:\n- image not pinned  image = \"traefik:v3.7\", size = 1\n"
+        ),
+        "{}",
+        r.stderr
+    );
+}

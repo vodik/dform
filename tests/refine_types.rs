@@ -153,9 +153,13 @@ fn a_refinement_on_a_null_is_deferred_and_fires_after_the_boundary() {
     // One plan printed: no later tick was planned.
     assert_eq!(r.stdout.matches("plan: ").count(), 1, "{}", r.stdout);
     assert!(
-        r.stderr
-            .contains("constraint violations after tick 1:\n- refinement violated ctx={\"addr\":\"pngu\",\"at\":\"")
-            && r.stderr.contains("examples/refine/stacks/refine_gke.df:125:33\",\"constraint\":\"len_ge(3)\",\"path\":\"zones\"")
+        r.stderr.contains(
+            "constraint violations after tick 1:\n- ! google.container_cluster pngu.zones: \
+                       [\"us-east1-b\", \"us-east1-c\"] violates len_ge(3)\n"
+        ) && r.stderr.contains("refinement \"len_ge(3)\"  ")
+            && r.stderr
+                .contains("examples/refine/stacks/refine_gke.df:125\n")
+            && !r.stderr.contains("ctx=")
             && r.stderr
                 .contains("; stopped after tick 1; ticks 1 to 1 were applied"),
         "{}",

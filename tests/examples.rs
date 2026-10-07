@@ -124,7 +124,7 @@ const CASES: &[Case] = &[
             one(&["apply"], Apply::Completes),
             one(
                 &["apply", "--set", "zones=2"],
-                Apply::Stops("refinement violated"),
+                Apply::Stops("pngu.zones: [\"us-east1-b\", \"us-east1-c\"] violates len_ge(3)"),
             ),
         ],
     },

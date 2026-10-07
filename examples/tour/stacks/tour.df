@@ -160,7 +160,7 @@ resource db.postgres orders {
 #   $ dform plan --set public_db=true
 #   ~ db.postgres orders
 #     public: false → true
-#   - a database must not be public ctx={"database":"orders"}
+#   - a database must not be public  database = "orders"
 #   Error: blocked by constraints
 #
 # The plan shows the change it refuses (`~` is an update) and the rule

@@ -56,7 +56,7 @@ deny "tagged" { r: r } where r in db.postgres, has r.tags.team
     );
     let r = s.run(&["plan", "p"]).failure();
     assert!(
-        r.stderr.contains("- tagged ctx={\"r\":\"tagged\"}"),
+        r.stderr.contains("- tagged  r = \"tagged\""),
         "{}",
         r.stderr
     );
@@ -77,10 +77,6 @@ deny "no metadata" { r: r } where r in resource, not has r.metadata
 "#,
     );
     let r = s.run(&["plan", "p"]).failure();
-    assert!(
-        r.stderr.contains("no metadata ctx={\"r\":\"db\"}"),
-        "{}",
-        r.stderr
-    );
+    assert!(r.stderr.contains("no metadata  r = \"db\""), "{}", r.stderr);
     assert!(!r.stderr.contains("\"r\":\"ns\""), "{}", r.stderr);
 }

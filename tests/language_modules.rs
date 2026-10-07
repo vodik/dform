@@ -196,7 +196,7 @@ use fake
     .failure();
     assert!(
         r.stderr
-            .contains("input n of a fails its refinement: n <= 5 ctx={\"value\":9}"),
+            .contains("input n of a fails its refinement: n <= 5  value = 9"),
         "{}",
         r.stderr
     );

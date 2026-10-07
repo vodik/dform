@@ -1312,37 +1312,125 @@ pub fn violation_conflict(v: &str, r: &Redactor, why: Why, style: Style) -> Opti
     Some(diag_lines(&diag(&ctx, r), why, style, true))
 }
 
-/// A violation as a run that refuses says it: a reference to an address
-/// no rule wants (`transform::DANGLING_REF`) by what holds it and the
-/// address it names, which the plan lists under `not planned` when its
-/// statement derives nothing (R-120); any other as the evaluator words it.
-pub fn violation_line(v: &str, r: &Redactor) -> String {
-    let dangling = || -> Option<String> {
-        let (msg, ctx) = v.split_once(" ctx=")?;
-        if msg != crate::transform::DANGLING_REF {
-            return None;
-        }
-        let ctx: Json = serde_json::from_str(ctx).ok()?;
-        let s = |k: &str| ctx.get(k)?.as_str().map(str::to_string);
-        let to = Address {
-            typ: s("type")?,
-            name: s("addr")?,
-        };
-        let from = match (s("from_type"), s("from_name")) {
-            (Some(typ), Some(name)) => address(&Address { typ, name }),
-            _ => s("from")?,
-        };
-        let read = match s("path").filter(|p| !p.is_empty()) {
-            Some(p) => attribute(&to, &p),
-            None => address(&to),
-        };
-        let at = s("at").map(|a| format!(" ({a})")).unwrap_or_default();
-        Some(format!(
-            "{msg}: {from} reads {read}, and nothing derives {}{at}",
-            address(&to)
-        ))
+/// The violations a run that refuses prints under `constraint
+/// violations:`, on the plan, apply and destroy paths alike: each as the
+/// plan's `!` line, a conflict as the `conflicts` section prints it
+/// ([`violation_conflict`]), a deny as its message with its bindings in
+/// the site column, `key = value` as the program would write the value
+/// and never the context's JSON (After R-149), aligned across the lines;
+/// bindings too wide for the column go one to a line beneath it.
+pub fn violations(vs: &[String], r: &Redactor, style: Style) -> String {
+    let mut out = String::new();
+    let mut rows = Vec::new();
+    let flush = |rows: &mut Vec<Row>, out: &mut String| {
+        out.push_str(&layout(rows, style));
+        rows.clear();
     };
-    r.text(&dangling().unwrap_or_else(|| v.to_string()))
+    for v in vs {
+        if let Some(c) = violation_conflict(v, r, Why::Line, style) {
+            flush(&mut rows, &mut out);
+            out.push_str(&c);
+            continue;
+        }
+        let (message, bindings) = violation_parts(v, r);
+        let left = format!("  ! {message}");
+        let row = Row::new(&left, style.paint(Paint::Error, &left));
+        let joined = bindings.join(", ");
+        if left.chars().count() + 4 + joined.chars().count() <= WIDTH {
+            rows.push(row.with(vec![joined]));
+            continue;
+        }
+        rows.push(row);
+        for b in bindings {
+            rows.push(Row::plain(format!("      {}", style.paint(Paint::Dim, &b))));
+        }
+    }
+    flush(&mut rows, &mut out);
+    out
+}
+
+/// A violation's message and, for a deny with a context object, its
+/// bindings as `key = value` ([`violations`]).
+fn violation_parts(v: &str, r: &Redactor) -> (String, Vec<String>) {
+    if let Some(d) = dangling(v) {
+        return (r.text(&d), Vec::new());
+    }
+    let parsed = v
+        .split_once(" ctx=")
+        .and_then(|(msg, c)| Some((msg, serde_json::from_str::<Json>(c).ok()?)));
+    let Some((msg, ctx)) = parsed else {
+        return (r.text(v), Vec::new());
+    };
+    let bindings = match &ctx {
+        Json::Object(m) => m
+            .iter()
+            .map(|(k, x)| format!("{k} = {}", binding(x, r)))
+            .collect(),
+        x => vec![binding(x, r)],
+    };
+    (r.text(msg), bindings)
+}
+
+/// A value of a deny's context as the program would write it: a string
+/// quoted, a reference (`ref(T,N,A)` in the context) as the address it
+/// names, a secret as the plan says one ([`Redactor::surface`]).
+fn binding(x: &Json, r: &Redactor) -> String {
+    if let Json::String(s) = x
+        && let Some(inner) = s.strip_prefix("ref(").and_then(|s| s.strip_suffix(')'))
+        && let [typ, name, attr] = inner.splitn(3, ',').collect::<Vec<_>>()[..]
+    {
+        let a = Address {
+            typ: typ.to_string(),
+            name: name.to_string(),
+        };
+        return attribute(&a, attr);
+    }
+    r.surface(&json_to_value(x))
+}
+
+/// A violation as a run that refuses says it on one line: a reference
+/// to an address no rule wants (`transform::DANGLING_REF`) by what holds
+/// it and the address it names, which the plan lists under `not planned`
+/// when its statement derives nothing (R-120); a deny as its message and
+/// its bindings ([`violations`]); any other as the evaluator words it.
+pub fn violation_line(v: &str, r: &Redactor) -> String {
+    // A conflict (a refinement violated) as the `conflicts` section says
+    // it, its witnesses beneath.
+    if let Some(c) = violation_conflict(v, r, Why::Line, Style::PLAIN) {
+        return c.trim_start().trim_end().to_string();
+    }
+    let (message, bindings) = violation_parts(v, r);
+    match bindings.is_empty() {
+        true => message,
+        false => format!("{message}  {}", bindings.join(", ")),
+    }
+}
+
+/// A dangling reference's violation as [`violation_line`] says it.
+fn dangling(v: &str) -> Option<String> {
+    let (msg, ctx) = v.split_once(" ctx=")?;
+    if msg != crate::transform::DANGLING_REF {
+        return None;
+    }
+    let ctx: Json = serde_json::from_str(ctx).ok()?;
+    let s = |k: &str| ctx.get(k)?.as_str().map(str::to_string);
+    let to = Address {
+        typ: s("type")?,
+        name: s("addr")?,
+    };
+    let from = match (s("from_type"), s("from_name")) {
+        (Some(typ), Some(name)) => address(&Address { typ, name }),
+        _ => s("from")?,
+    };
+    let read = match s("path").filter(|p| !p.is_empty()) {
+        Some(p) => attribute(&to, &p),
+        None => address(&to),
+    };
+    let at = s("at").map(|a| format!(" ({a})")).unwrap_or_default();
+    Some(format!(
+        "{msg}: {from} reads {read}, and nothing derives {}{at}",
+        address(&to)
+    ))
 }
 
 /// Whether the violation `v` is a conflict the plan's `conflicts`
@@ -3583,6 +3671,34 @@ fn write_line(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// After R-149: a run that refuses prints a deny as the plan's `!`
+    /// line, its bindings `key = value` in the site column aligned across
+    /// the lines, a reference by its address, and never the context's
+    /// JSON; bindings too wide for the column go beneath it.
+    #[test]
+    fn a_violation_prints_its_bindings_never_its_json() {
+        let r = Redactor::new(&BTreeSet::new(), &Schema::default());
+        let vs = [
+            r#"image not pinned ctx={"image":"traefik:v3.7","replicas":2}"#.to_string(),
+            r#"no owner ctx={"of":"ref(net.vpc,main,)"}"#.to_string(),
+            "need the pngu namespace".to_string(),
+        ];
+        assert_eq!(
+            violations(&vs, &r, Style::PLAIN),
+            "  ! image not pinned  image = \"traefik:v3.7\", replicas = 2\n  \
+             ! no owner          of = net.vpc main\n  \
+             ! need the pngu namespace\n"
+        );
+        assert_eq!(
+            violation_line(&vs[0], &r),
+            "image not pinned  image = \"traefik:v3.7\", replicas = 2"
+        );
+        let wide = format!(r#"too wide ctx={{"a":"{}","b":1}}"#, "x".repeat(90));
+        let out = violations(&[wide], &r, Style::PLAIN);
+        assert!(out.starts_with("  ! too wide\n      a = \"xxx"), "{out}");
+        assert!(out.ends_with("\n      b = 1\n"), "{out}");
+    }
 
     fn a(t: &str, n: &str) -> Address {
         Address {

@@ -13,5 +13,5 @@ later
   deny "no nodepool in zone b"        adv2_rule3_coarse.df:24  until tick 2
 -- stderr --
 constraint violations:
-- namespace without deployment ctx={"ns":"pngu"}
+- namespace without deployment  ns = "pngu"
 Error: blocked by constraints

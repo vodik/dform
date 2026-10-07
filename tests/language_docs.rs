@@ -108,7 +108,7 @@ fn a_policy_can_require_docs() {
         .failure();
     let out = format!("{}{}", r.stdout, r.stderr);
     assert!(
-        out.contains("- a component has no owner ctx={\"component\":\"orphan\"}"),
+        out.contains("- a component has no owner  component = \"orphan\""),
         "{out}"
     );
     assert!(!out.contains("\"owned\""), "{out}");
