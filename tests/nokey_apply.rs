@@ -291,3 +291,41 @@ resource compute.vm a {{
     let r = run(&s, &[NK], &["plan", "p"]).success();
     assert_eq!(r.summary(), "stack p is up to date", "{}", r.stdout);
 }
+
+/// A secret changed in the world by someone else (the Secret's password
+/// edited in the cluster): a run with the master sees the drift; one
+/// without it cannot compare the world's value with one it does not
+/// derive, and says so, never "up to date" alone.
+#[test]
+fn a_secret_changed_outside_dform_is_drift_unknown_without_the_master() {
+    let s = applied("nokey-drift");
+    let path = "dform.state/crud_api/remote.json";
+    let mut w = s.json(path);
+    w["resources"]["k8s.secret::db_conn"]["attrs"]["stringData"]["PGPASSWORD"] =
+        "changed-elsewhere".into();
+    s.write(path, &serde_json::to_string_pretty(&w).unwrap());
+    let r = run(&s, &[PASS], &["plan"]).success();
+    assert!(
+        r.stdout.contains("~ k8s.secret db_conn") && r.stdout.contains("stringData.PGPASSWORD"),
+        "{}",
+        r.stdout
+    );
+    let r = run(&s, &[], &["plan"]).success();
+    assert_eq!(r.summary(), "stack crud_api is up to date", "{}", r.stdout);
+    assert!(
+        r.stderr.contains("crud_api: drift unknown without the key: ")
+            && r.stderr.contains("k8s.secret db_conn.stringData.PGPASSWORD")
+            && r.stderr.contains("compared with it only by a run with the master"),
+        "{}",
+        r.stderr
+    );
+    // A change of that object says it beside the change.
+    label(&s);
+    let r = run(&s, &[], &["plan"]).success();
+    assert!(
+        r.stdout.lines().any(|l| l.contains("~ k8s.secret db_conn")
+            && l.ends_with("secrets unchanged, drift unknown without the key")),
+        "{}",
+        r.stdout
+    );
+}

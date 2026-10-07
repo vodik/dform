@@ -2185,7 +2185,14 @@ compares in that form, and without the master stops the same way; a
 plan file keyed with the master is not applied without it. A secret
 output whose value changed cannot be published without the master: the
 apply stops after making its changes. A secret changed out of band in
-the world is seen by a run with the master, not by one without it. A
+the world (a Secret's password edited in the cluster) is seen by a run
+with the master, as drift; one without it cannot compare the world's
+value with one it does not derive, and says so rather than nothing:
+each such leaf on stderr (`crud_api: drift unknown without the key: 2
+secrets the world holds are compared with it only by a run with the
+master: google.sql_user crud_user.password, ..`), and a change of its
+object reads `secrets unchanged, drift unknown without the key` (a
+write-only one, which the world never answers, is compared by no run). A
 resource named by a `random.id` needs the master to plan: its name is a
 stand-in without it.
 

@@ -2751,6 +2751,8 @@ fn run_with(
     // An apply that resumes one interrupted: its first tick is what
     // remained (R-122).
     let resuming = std::cell::Cell::new(false);
+    // Said once a run: what a run without the master cannot compare.
+    let drift_said = std::cell::Cell::new(false);
     let report_of = |plan: &crate::provider::Plan,
                      res: &engine::EvalResult,
                      sections: &stuck::Sections,
@@ -2775,6 +2777,9 @@ fn run_with(
         // gone (`Report::explain`, After R-149 amendments 4 and 5).
         report.removing = destroying;
         custody_marks(&mut report, plan, backend);
+        if !drift_said.replace(true) {
+            drift_unknown(&deployment, plan, backend);
+        }
         report
     };
     // How much each printed change says of why (R-79).
@@ -5930,10 +5935,53 @@ fn custody_marks(
                 Some("secrets unchanged, a write-only one needs the key".into())
             }
             (false, _) => Some("secret changed, needs the key".into()),
+            // Unchanged in the program; the world's own value of one it
+            // answers is compared only by a run with the key.
+            (true, false) if !backend.answered(&a.addr, &proven).is_empty() => {
+                Some("secrets unchanged, drift unknown without the key".into())
+            }
             (true, false) => Some("secrets unchanged".into()),
             (true, true) => None,
         };
     }
+}
+
+/// What a run without the master cannot see (After R-164): a secret leaf
+/// it proved unchanged in the program whose value the world answers (a
+/// Secret's `stringData` key, not a write-only one) may have been changed
+/// in the world by someone else; only a run with the key compares it. Said
+/// on stderr, each leaf, so the plan never reads as "no drift".
+fn drift_unknown(
+    deployment: &str,
+    plan: &crate::provider::Plan,
+    backend: &crate::plugin::Providers,
+) {
+    if !crate::secrets::standin::active() {
+        return;
+    }
+    let leaves: Vec<String> = plan
+        .actions
+        .iter()
+        .flat_map(|a| {
+            backend
+                .answered(&a.addr, &backend.proven(&a.addr))
+                .into_iter()
+                .map(|p| crate::report::attribute(&a.addr, &p))
+        })
+        .collect();
+    if leaves.is_empty() {
+        return;
+    }
+    eprintln!(
+        "{deployment}: drift unknown without the key: {} the world holds {} compared with it only \
+         by a run with the master: {}",
+        match leaves.len() {
+            1 => "1 secret".to_string(),
+            n => format!("{n} secrets"),
+        },
+        if leaves.len() == 1 { "is" } else { "are" },
+        leaves.join(", ")
+    );
 }
 
 /// The actions of `plan` a run that does not hold the master cannot make

@@ -1878,6 +1878,21 @@ impl Providers {
         }
     }
 
+    /// Of `paths` of `addr`, those whose value the world answers (not a
+    /// write-only attribute's): one a run without the master proves
+    /// unchanged in the program, but cannot compare with the world.
+    pub fn answered(&self, addr: &Address, paths: &[String]) -> Vec<String> {
+        let wo = self.schema().write_only_of(&addr.typ);
+        paths
+            .iter()
+            .filter(|p| {
+                !wo.iter()
+                    .any(|w| p.as_str() == *w || p.starts_with(&format!("{w}.")))
+            })
+            .cloned()
+            .collect()
+    }
+
     /// The leaves of `addr` the last plan proved unchanged without the
     /// master (R-164), by path.
     pub fn proven(&self, addr: &Address) -> Vec<String> {
