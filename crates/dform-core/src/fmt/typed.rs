@@ -605,6 +605,7 @@ fn header(r: &SyntaxNode) -> Vec<SyntaxToken> {
     r.children_with_tokens()
         .filter_map(|e| e.into_token())
         .filter(|t| !t.kind().is_trivia())
+        .take_while(|t| t.kind() != EQ)
         .collect()
 }
 

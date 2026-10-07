@@ -712,6 +712,11 @@ pub const BODIES: &[(&str, Body)] = &[
         [Value::Str(name)] => Some(Value::Str(crate::ir::name_segment(name).into_owned())),
         _ => None,
     }),
+    // A resource's value body (R-126): an object, a document of the type.
+    (crate::ir::RESOURCE_BODY, |a| match a {
+        [v @ Value::Obj(_)] => Some(v.clone()),
+        _ => None,
+    }),
     // E DR-19: `declassify(V, Reason)` is `V`; the static pass reads it
     // as public, and `declassified/2` records it (`transform`).
     ("declassify", |a| match a {

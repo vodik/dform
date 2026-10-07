@@ -1591,7 +1591,7 @@
     "fields": {
       "body": {
         "multiple": false,
-        "required": true,
+        "required": false,
         "types": [
           {
             "type": "block",
@@ -1629,6 +1629,16 @@
         "types": [
           {
             "type": "dotted_name",
+            "named": true
+          }
+        ]
+      },
+      "value": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "_term",
             "named": true
           }
         ]

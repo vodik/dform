@@ -287,6 +287,18 @@ resource compute.vm web {
 }
 "#,
     ),
+    (
+        "stacks/vendored.df",
+        r#"use fake
+
+#| Machines as a manifest lists them: a resource per document (R-126).
+let manifest = [{ tags: { host: "a" } }, { tags: { host: "b" } }]
+
+resource compute.vm "${d.tags.host}" = d where d in manifest
+
+resource compute.vm pinned = { tags: { host: "pinned" } }
+"#,
+    ),
 ];
 
 pub fn modules_project() -> (crate::common::Scratch, PathBuf) {

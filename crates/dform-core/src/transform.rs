@@ -1160,13 +1160,62 @@ fn resource_to_stmts(r: Resource) -> Result<Vec<Stmt>> {
     )];
     for f in r.fields {
         let rank = f.rank.or(r.rank).unwrap_or(Rank::Normal);
+        // `resource T N = VALUE` with a value known only when the rule runs
+        // (R-126): a contribution per key of the object it is, `arg(T, N,
+        // P, V, Rank) :- body, X = __body(VALUE), member(X, K, V), P =
+        // __segment(K)` (`__body` is the value when it is an object).
+        let (path, value, body) = match f.key.is_empty() {
+            true => {
+                let used: BTreeSet<String> = count_vars_in_term(&Term::List(vec![
+                    r.typ.clone(),
+                    r.name.clone(),
+                    f.value.clone(),
+                ]))
+                .into_keys()
+                .chain(body.iter().flat_map(|l| count_vars_in_lit(l).into_keys()))
+                .collect();
+                let fresh = |base: &str| {
+                    (0..)
+                        .map(|i| format!("{base}{i}"))
+                        .find(|v| !used.contains(v))
+                        .unwrap_or_default()
+                };
+                let (x, k, v, p) = (
+                    fresh("Body"),
+                    fresh("BodyKey"),
+                    fresh("BodyValue"),
+                    fresh("BodyPath"),
+                );
+                let mut body = body.clone();
+                body.push(Lit::Eq(
+                    Term::Var(x.clone()),
+                    Term::Func {
+                        name: crate::ir::RESOURCE_BODY.into(),
+                        args: vec![f.value],
+                    },
+                ));
+                body.push(Lit::Pos(atom(
+                    "member",
+                    vec![Term::Var(x), Term::Var(k.clone()), Term::Var(v.clone())],
+                )));
+                body.push(Lit::Eq(
+                    Term::Var(p.clone()),
+                    Term::Func {
+                        name: crate::ir::NAME_SEGMENT.into(),
+                        args: vec![Term::Var(k)],
+                    },
+                ));
+                (Term::Var(p), Term::Var(v), body)
+            }
+            false => (str_term(&f.key), f.value, body.clone()),
+        };
         let head = Atom {
             pred: "arg".to_string(),
             args: vec![
                 r.typ.clone(),
                 r.name.clone(),
-                str_term(&f.key),
-                f.value,
+                path,
+                value,
                 str_term(rank.name()),
             ],
             record: None,

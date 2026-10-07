@@ -51,8 +51,13 @@ impl Names {
                     }
                 }
                 RESOURCE => {
-                    let ts: Vec<SyntaxToken> =
-                        tokens(&d).filter(|t| t.kind() != RANK).skip(1).collect();
+                    // The header: the type and the name, up to a value
+                    // body's `=` (R-126).
+                    let ts: Vec<SyntaxToken> = tokens(&d)
+                        .take_while(|t| t.kind() != EQ)
+                        .filter(|t| t.kind() != RANK)
+                        .skip(1)
+                        .collect();
                     if let Some((name, typ)) = ts.split_last() {
                         // A name the clause binds is the clause's variable.
                         let bound = d
@@ -310,7 +315,11 @@ impl Ctx {
     /// A header name is quoted only when it needs it: not a name, a
     /// keyword, a hole, or a name the clause binds.
     fn header(&mut self, n: &SyntaxNode) {
-        let Some(name) = tokens(n).filter(|t| t.kind() != RANK).last() else {
+        let Some(name) = tokens(n)
+            .take_while(|t| t.kind() != EQ)
+            .filter(|t| t.kind() != RANK)
+            .last()
+        else {
             return;
         };
         if name.kind() != STRING {

@@ -2008,17 +2008,39 @@
           ]
         },
         {
-          "type": "FIELD",
-          "name": "body",
-          "content": {
-            "type": "ALIAS",
-            "content": {
-              "type": "SYMBOL",
-              "name": "copy_block"
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "FIELD",
+              "name": "body",
+              "content": {
+                "type": "ALIAS",
+                "content": {
+                  "type": "SYMBOL",
+                  "name": "copy_block"
+                },
+                "named": true,
+                "value": "block"
+              }
             },
-            "named": true,
-            "value": "block"
-          }
+            {
+              "type": "SEQ",
+              "members": [
+                {
+                  "type": "STRING",
+                  "value": "="
+                },
+                {
+                  "type": "FIELD",
+                  "name": "value",
+                  "content": {
+                    "type": "SYMBOL",
+                    "name": "_term"
+                  }
+                }
+              ]
+            }
+          ]
         },
         {
           "type": "CHOICE",

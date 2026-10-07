@@ -1,0 +1,115 @@
+============================
+tests/syntax/ok/manifests.df
+============================
+
+# A resource whose body is a value of its type (R-126): an object written
+# out, which is the block of its entries, or a document a clause binds,
+# one resource per document of a manifest.
+use k8s
+
+let namespace = { metadata: { name: "apps" } }
+let manifest = [
+  { metadata: { name: "a", namespace: "apps" }, data: { mode: "fast" } },
+  { metadata: { name: "b", namespace: "apps" } },
+]
+
+resource k8s.namespace apps = namespace
+
+resource k8s.config_map settings = { metadata: { name: "settings", namespace: "apps" } }
+
+resource k8s.config_map "${d.metadata.name}" @default = d where d in manifest
+
+---
+
+(source_file
+  (comment)
+  (comment)
+  (comment)
+  (use
+    (dotted_name
+      (identifier)))
+  (let
+    (identifier)
+    (object
+      (object_field
+        (identifier)
+        (object
+          (object_field
+            (identifier)
+            (string
+              (string_content)))))))
+  (let
+    (identifier)
+    (list
+      (object
+        (object_field
+          (identifier)
+          (object
+            (object_field
+              (identifier)
+              (string
+                (string_content)))
+            (object_field
+              (identifier)
+              (string
+                (string_content)))))
+        (object_field
+          (identifier)
+          (object
+            (object_field
+              (identifier)
+              (string
+                (string_content))))))
+      (object
+        (object_field
+          (identifier)
+          (object
+            (object_field
+              (identifier)
+              (string
+                (string_content)))
+            (object_field
+              (identifier)
+              (string
+                (string_content))))))))
+  (resource
+    (dotted_name
+      (identifier)
+      (identifier))
+    (identifier)
+    (identifier))
+  (resource
+    (dotted_name
+      (identifier)
+      (identifier))
+    (identifier)
+    (object
+      (object_field
+        (identifier)
+        (object
+          (object_field
+            (identifier)
+            (string
+              (string_content)))
+          (object_field
+            (identifier)
+            (string
+              (string_content)))))))
+  (resource
+    (dotted_name
+      (identifier)
+      (identifier))
+    (string
+      (interpolation
+        (member_expression
+          (member_expression
+            (identifier)
+            (identifier))
+          (identifier))))
+    (rank)
+    (identifier)
+    (clause
+      (body
+        (in_literal
+          (identifier)
+          (identifier))))))

@@ -3728,12 +3728,13 @@ impl<'u> Lowerer<'u> {
     /// the program declares.
     fn block_stmt(&mut self, n: &SyntaxNode, scope: usize, outer: &Rc) -> L<Vec<Stmt>> {
         let span = self.span(n);
-        let block = node(n, BLOCK).ok_or(Skip)?;
+        let block = node(n, BLOCK);
         let header = self.header_token(n).ok_or(Skip)?;
         // Rows are a component's relation inputs (R-55); a type's
         // resource has attributes.
         if let Some(row) = block
-            .children()
+            .iter()
+            .flat_map(|b| b.children())
             .find(|c| matches!(c.kind(), RULE | FACT | INPUT_RELATION))
         {
             let typ = dotted_text(n, 1);
@@ -3748,7 +3749,10 @@ impl<'u> Lowerer<'u> {
         let mut rc = self.rc(n, scope, outer);
         let mut body = self.clauses(&mut rc, n)?;
         let mut reads = Vec::new();
-        let fields = self.wanting(Want::Schema, |l| l.fields(&mut rc, &block, &mut reads))?;
+        let fields = match &block {
+            Some(block) => self.wanting(Want::Schema, |l| l.fields(&mut rc, block, &mut reads))?,
+            None => self.value_body(&mut rc, n, &mut reads)?,
+        };
         let reads_at = body.len()..body.len() + reads.len();
         body.extend(reads);
         // The header: a string with holes is bound last, by `format`; a
@@ -3811,6 +3815,52 @@ impl<'u> Lowerer<'u> {
             reads: reads_at,
             span,
         })])
+    }
+
+    /// `resource T N = VALUE` (R-126): the body is a value of the type, a
+    /// document. An object written out is the block of its entries, one
+    /// per key, checked as a block's are; any other value is one
+    /// contribution at the root, an entry per key of the object it is when
+    /// the rule runs (`transform::resource_to_stmts`).
+    fn value_body(
+        &mut self,
+        rc: &mut Rc,
+        n: &SyntaxNode,
+        reads: &mut Vec<Lit>,
+    ) -> L<Vec<FieldAssign>> {
+        let t = terms(n).next().ok_or(Skip)?;
+        let span = self.span(&t);
+        let value = self.wanting(Want::Schema, |l| l.term(rc, &t, Pos::Value, reads))?;
+        let entry = |key: &str, value: Term| FieldAssign {
+            key: crate::ir::path_join("", key),
+            op: FieldOp::Assign,
+            value,
+            rank: None,
+            span,
+        };
+        Ok(match value {
+            Term::Obj(m) => m.into_iter().map(|(k, v)| entry(&k, v)).collect(),
+            Term::Val(Value::Obj(m)) => m
+                .into_iter()
+                .map(|(k, v)| entry(&k, Term::Val(v)))
+                .collect(),
+            Term::Val(_) | Term::List(_) => {
+                return self.error(
+                    span,
+                    format!(
+                        "the body of a resource is a value of its type, an object: not `{}`",
+                        t.text().to_string().trim()
+                    ),
+                );
+            }
+            value => vec![FieldAssign {
+                key: String::new(),
+                op: FieldOp::Assign,
+                value,
+                rank: None,
+                span,
+            }],
+        })
     }
 
     /// `set from DOC [@rank] [where B]` (R-38): every leaf of the document

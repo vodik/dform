@@ -3206,6 +3206,13 @@ fn eval_eq(
                         return Ok(None);
                     }
                     let args: Vec<String> = args.iter().map(partition::fmt_value).collect();
+                    if name == crate::ir::RESOURCE_BODY {
+                        bail!(
+                            "the body of a resource is a value of its type, an object: not {}{}",
+                            args.join(", "),
+                            at_suffix(rec.head.span)
+                        );
+                    }
                     bail!(
                         "{name}({}) is not defined for these arguments",
                         args.join(", ")

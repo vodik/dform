@@ -389,8 +389,12 @@ export default grammar({
       optional(field('rank', $.rank)),
       // A component's resource takes the rows of the relations it takes
       // (R-113); a provider's type's resource none, which the resolver
-      // says.
-      field('body', alias($.copy_block, $.block)),
+      // says. `= VALUE`: the body is a value of the type, a document
+      // (R-126).
+      choice(
+        field('body', alias($.copy_block, $.block)),
+        seq('=', field('value', $._term)),
+      ),
       optional($.clause),
     ),
 

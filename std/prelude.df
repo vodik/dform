@@ -132,6 +132,10 @@ internal fn __under(path: string, prefix: string, value: any) -> any? forwards
 #| example: __segment(format("s-%s", Zone))
 internal fn __segment(name: string) -> string forwards
 
+#| A resource's value body, the value when it is an object, else none, an error naming it (R-126). `resource T N = VALUE` with a value known only at run time lowers to it.
+#| example: __body(D)
+internal fn __body(value: any) -> any? forwards
+
 #| The value at a dotted path inside a value; `x.f` on a variable with no static type lowers to it.
 #| example: __path(X, "f")
 internal fn __path(value: any, path: string) -> any? forwards, forwards nulls

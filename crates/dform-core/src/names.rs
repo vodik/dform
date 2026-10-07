@@ -1553,8 +1553,10 @@ pub struct Header {
 }
 
 pub fn header(n: &SyntaxNode) -> Option<Header> {
+    // Up to a value body's `=` (R-126).
     let ts: Vec<SyntaxToken> = own_tokens(n)
         .into_iter()
+        .take_while(|t| t.kind() != SyntaxKind::EQ)
         .filter(|t| t.kind() != SyntaxKind::RANK)
         .collect();
     let (name, rest) = ts.split_last()?;

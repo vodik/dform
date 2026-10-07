@@ -918,6 +918,12 @@ impl<'a> Parser<'a> {
                     return p.err_expected("a resource name (a name or a string)");
                 }
                 p.eat(RANK);
+                // `= VALUE`: the body is a value of the type, a document
+                // (R-126).
+                if p.eat(EQ) {
+                    p.term()?;
+                    return p.opt_clause();
+                }
                 // A copy of a component takes the rows of the relations
                 // it takes (R-55, R-113); a provider's type, which the
                 // resolver says, none.

@@ -45,6 +45,10 @@ pub fn name_segment(name: &str) -> std::borrow::Cow<'_, str> {
 /// `__segment(format(..))`.
 pub const NAME_SEGMENT: &str = "__segment";
 
+/// The engine function a resource's value body is read through (R-126):
+/// the value when it is an object, else no value, the error naming it.
+pub const RESOURCE_BODY: &str = "__body";
+
 /// `name` written with the old separators of a scope, `/` (R-72) or `::`,
 /// outside a quoted segment: as it is written now (`blue/vpc` is
 /// `blue.vpc`, R-112); `None` when it has neither.

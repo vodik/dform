@@ -600,7 +600,7 @@ selector   := ("." SEG | "[" "*" "]")+                ; a path into a document (
 use        := "use" path ("as" NAME)? cblock? ("where" body)?
 component  := "component" NAME (":" type)? stmts   ; an item of a module, of a signature
 path       := NAME ("." NAME)*                    ; a/b.df from the root; std.x; a package mount
-resource   := "resource" DOTTED hname RANK? cblock ("where" body)?   ; DOTTED a type or a component
+resource   := "resource" DOTTED hname RANK? (cblock | "=" term) ("where" body)?   ; DOTTED a type or a component
 deny, warn := ("deny" | "warn") STRING object? ("where" body)?
 stmts      := "{" (stmt NL)* "}"
 
@@ -1344,6 +1344,31 @@ any other document value, `table.value.p(+doc, -at, -col, ..)`, answered
 in process; and a loader call as a value, `table.FORMAT.document(Path,
 At, V)`. The controller watches every file and ref a run's tables and
 documents read, and every program file.
+
+A document becomes a resource by `resource T NAME = VALUE [where B]`
+(R-126): the body is a value of the type, an object, in place of the
+block. An object written out is the block of its entries, checked as a
+block's are (`resource k8s.namespace apps = { metadata: { name: "apps" }
+}`); any other value is one contribution at the root of the resource, an
+entry per key of the object it is when the rule runs, so `set`, a
+baseline's `@default` and an `@override` contribute over it as over a
+block, and a value that is no object is an error naming it. A vendored
+manifest is one line, a resource per document:
+
+```
+resource k8s.custom_resource_definition "${d.metadata.name}" = d where {
+  d in yaml("vendor/traefik-crds.yml")
+}
+```
+
+The statement types the documents: one statement per kind, a manifest
+of one kind (or a selection of one, `where d in yaml(..), d.kind ==
+"Service"`). A manifest of mixed kinds, a chart's render, is not read
+by kind. The keys of a value known only at run time are not known to the
+evaluator's strata, so its rule writes every attribute of its type: a
+rule that reads one attribute of that type and writes another of it is a
+cycle (write the condition on another type, or give the resource a
+block).
 
 `set from DOC` is the table `set(path: string, value: any)`, every leaf
 of the document a row, read into `arg(input, "", Path, Value, Rank)`;

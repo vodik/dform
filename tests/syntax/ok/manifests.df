@@ -1,0 +1,16 @@
+# A resource whose body is a value of its type (R-126): an object written
+# out, which is the block of its entries, or a document a clause binds,
+# one resource per document of a manifest.
+use k8s
+
+let namespace = { metadata: { name: "apps" } }
+let manifest = [
+  { metadata: { name: "a", namespace: "apps" }, data: { mode: "fast" } },
+  { metadata: { name: "b", namespace: "apps" } },
+]
+
+resource k8s.namespace apps = namespace
+
+resource k8s.config_map settings = { metadata: { name: "settings", namespace: "apps" } }
+
+resource k8s.config_map "${d.metadata.name}" @default = d where d in manifest

@@ -92,3 +92,104 @@ fn a_stream_read_from_git_is_its_list() {
         "N\n\"middlewares.traefik.io\"\n\"tlsoptions.traefik.io\"\n"
     );
 }
+
+/// ConfigMaps as a vendored manifest lists them.
+const CONFIG_MAPS: &str = "\
+metadata:
+  name: settings
+  namespace: apps
+data:
+  mode: fast
+  size: small
+---
+metadata:
+  name: flags.v2
+  namespace: apps
+data:
+  beta: \"on\"
+";
+
+/// `resource T NAME = VALUE where ..`: a resource per document, the
+/// document its body, one contribution at the root: the rest of the
+/// program contributes over it as over a block (a baseline's `@default`,
+/// an `@override`), and a name holding a dot is one segment (R-112).
+/// Applied, the next plan has nothing to do.
+#[test]
+fn a_resource_per_document_of_a_manifest() {
+    let s = scratch("manifest-body");
+    s.write("cms.yml", CONFIG_MAPS);
+    s.write(
+        "p.df",
+        "\nuse k8s\n\
+         resource k8s.config_map \"${d.metadata.name}\" = d where d in yaml(\"cms.yml\")\n\
+         set r.metadata.labels.owner = \"ops\" @default where r in k8s\n\
+         set c.data.size = \"large\" @override where c in k8s.config_map\n",
+    );
+    let r = s.run(&["plan", "p.df"]).success();
+    for want in [
+        "  + k8s.config_map \"flags.v2\"  p.df:3\n      data.beta = \"on\"\n      \
+         data.size = \"large\"      p.df:5\n      metadata.labels.owner = \"ops\"\n      \
+         metadata.name = \"flags.v2\"\n      metadata.namespace = \"apps\"\n",
+        "  + k8s.config_map settings    p.df:3\n      data.mode = \"fast\"\n      \
+         data.size = \"large\"      p.df:5\n",
+    ] {
+        assert!(r.stdout.contains(want), "{want}\n{}", r.stdout);
+    }
+    s.run(&["apply", "--yes", "p.df"]).success();
+    let r = s.run(&["plan", "p.df"]).success();
+    assert_eq!(r.summary(), "stack p is up to date", "{}", r.stdout);
+}
+
+/// An object written out is the block of its entries, checked as a
+/// block's are; a value that is no object is an error, where the text
+/// says so and where the value is only known at run time.
+#[test]
+fn a_value_body_is_an_object_of_the_type() {
+    let s = scratch("manifest-typed");
+    s.write(
+        "p.df",
+        "\nuse k8s\n\
+         resource k8s.persistent_volume_claim c = { metadata: { name: \"c\" }, \
+         spec: { resources: { requests: { storage: \"lots\" } } } }\n",
+    );
+    let r = s.run(&["plan", "p.df"]).failure();
+    assert!(
+        r.stderr.contains(
+            "k8s.persistent_volume_claim[\"c\"].spec.resources.requests.storage is bytes: \
+             `lots` is not a quantity"
+        ),
+        "{}",
+        r.stderr
+    );
+    s.write("p.df", "\nuse k8s\nresource k8s.config_map c = [\"x\"]\n");
+    let r = s.run(&["plan", "p.df"]).failure();
+    assert!(
+        r.stderr
+            .contains("the body of a resource is a value of its type, an object: not `[\"x\"]`"),
+        "{}",
+        r.stderr
+    );
+    s.write(
+        "p.df",
+        "\nuse k8s\nlet docs = [\"x\"]\nresource k8s.config_map c = docs\n",
+    );
+    let r = s.run(&["plan", "p.df"]).failure();
+    assert!(
+        r.stderr.contains(
+            "the body of a resource is a value of its type, an object: not [\"x\"] (at p.df:4:"
+        ),
+        "{}",
+        r.stderr
+    );
+}
+
+/// `fmt` prints a value body back as written, a long one broken as any
+/// term is.
+#[test]
+fn fmt_keeps_a_value_body() {
+    let s = scratch("manifest-fmt");
+    let text = "use k8s\n\nresource k8s.config_map \"${d.metadata.name}\" @default = d where d in yaml(\"cms.yml\")\n";
+    s.write("p.df", text);
+    s.run(&["fmt", "p.df"]).success();
+    assert_eq!(s.read("p.df"), text);
+}
