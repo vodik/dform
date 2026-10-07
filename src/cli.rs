@@ -358,6 +358,10 @@ enum Run {
         /// At most this many provider Apply calls in flight.
         #[arg(long = "parallel", default_value_t = 1, value_parser = clap::value_parser!(u64).range(1..))]
         parallel: u64,
+        /// A signed approval of the digest `plan --destroy` prints, when
+        /// the policy says `requires_approval` of a delete.
+        #[arg(long = "approval")]
+        approval: Option<PathBuf>,
         /// Destroy without asking.
         #[arg(long = "yes", short = 'y')]
         yes: bool,
@@ -1390,6 +1394,7 @@ fn run_cmd(r: Run) -> (Cmd, Option<Target>) {
             target,
             max_ticks,
             parallel,
+            approval,
             yes,
             why,
         } => (
@@ -1398,7 +1403,7 @@ fn run_cmd(r: Run) -> (Cmd, Option<Target>) {
                 chaos: Vec::new(),
                 max_ticks,
                 parallel,
-                approval: None,
+                approval,
                 yes,
                 allow_empty: Vec::new(),
                 why: why.level(),
@@ -1745,6 +1750,11 @@ impl std::error::Error for Refused {}
 /// anything, is said last.
 fn run(cli: Cli, hook: Option<&mut controller::Hook>) -> Result<Outcome> {
     let mut session = None;
+    // What resumes an interrupted run: the command that was interrupted.
+    let verb = match cli.cmd {
+        Cmd::Apply { destroy: true, .. } => "destroy",
+        _ => "apply",
+    };
     let r = interrupted(run_with(cli, hook, &mut session));
     let Some(s) = session else {
         if let Ok(Outcome::Interrupted { signal }) = &r {
@@ -1787,7 +1797,7 @@ fn run(cli: Cli, hook: Option<&mut controller::Hook>) -> Result<Outcome> {
         eprintln!("{why}");
     }
     if let Outcome::Interrupted { .. } = outcome {
-        eprintln!("interrupted: the next apply resumes it");
+        eprintln!("interrupted: the next {verb} resumes it");
     }
     Ok(outcome)
 }
@@ -2312,7 +2322,9 @@ fn run_with(
         }
         .into())
     };
-    if opts.blocking {
+    // A destroy is refused by the denies over its plan, not by the
+    // program's own: it wants none of the resources they are about.
+    if opts.blocking && !destroying {
         blocked(&ev.violations, &ev.redact)?;
     }
     if explains {
@@ -2815,9 +2827,15 @@ fn run_with(
                 plan,
                 sections,
                 denies,
+                unreachable,
             } = policy
                 .take()
                 .ok_or_else(|| anyhow::anyhow!("internal: a plan without its policy pass"))??;
+            // Of a destroy, only the denies over its plan refuse it.
+            let violations = match destroying {
+                true => Vec::new(),
+                false => violations,
+            };
             let mut report = report_of(&plan, &res, &sections, 1, &moves, &denies);
             explain(&mut report, &plan, &res, 1);
             // The plan file, when one is written or the plan needs an
@@ -2857,6 +2875,12 @@ fn run_with(
                 }
                 .into();
                 j["key_defaults"] = serde_json::json!(instance.defaulted);
+                if !unreachable.is_empty() {
+                    j["unreachable"] = unreachable
+                        .iter()
+                        .map(|(a, why)| serde_json::json!({ "address": a.to_string(), "reason": why }))
+                        .collect();
+                }
                 if let Some(f) = &file {
                     j["needs_approval"] = serde_json::to_value(&f.needs_approval)?;
                     j["digest"] = serde_json::to_value(&f.digest)?;
@@ -2870,6 +2894,7 @@ fn run_with(
                 println!("{}", serde_json::to_string_pretty(&j)?);
             } else {
                 print!("{}", rendered(&report));
+                print!("{}", unreachable_text(&unreachable));
                 // The digest to approve, when a change is held for an
                 // approval (the bare diff lists those changes after it);
                 // a plan file's digest is on stderr beside its path.
@@ -3039,11 +3064,17 @@ fn run_with(
                     &observed,
                 );
                 let (after, denies) = evaluate_with(&st, &BTreeSet::new(), &facts, Some(f.tick))?;
+                // The program's own violations did not refuse it (a
+                // destroy's): only what the remaining actions add does.
+                let denies: Vec<String> = denies
+                    .into_iter()
+                    .filter(|d| !violations.contains(d))
+                    .collect();
                 if !denies.is_empty() {
                     let redact = query::Redactor::new(&after.facts, backend.schema());
                     eprintln!("constraint violations:");
                     for d in &denies {
-                        eprintln!("- {}", redact.text(d));
+                        eprintln!("- {}", report::violation_line(d, &redact));
                     }
                     persist(&st)?;
                     return Err(Refused::apply(
@@ -3089,6 +3120,7 @@ fn run_with(
                     mut plan,
                     sections,
                     denies,
+                    unreachable,
                 } = plan_for(res, &violations, resources, &adopts, &lifecycle, &st)?;
                 (res, resources) = (r, docs);
                 check_saved(&plan, &res, &sections, tick)?;
@@ -3233,12 +3265,15 @@ fn run_with(
                         }
                     }
                     show(&plan, &res, &sections, tick, &[], &denies);
+                    if tick == 1 {
+                        print!("{}", unreachable_text(&unreachable));
+                    }
                 }
                 if !denies.is_empty() {
                     let redact = query::Redactor::new(&res.facts, backend.schema());
                     eprintln!("constraint violations:");
                     for d in &denies {
-                        eprintln!("- {}", redact.text(d));
+                        eprintln!("- {}", report::violation_line(d, &redact));
                     }
                     let at = (tick > 1).then(|| {
                         format!(
@@ -3354,7 +3389,11 @@ fn run_with(
                         &needs,
                         digest.as_deref(),
                         approval.as_deref(),
-                        saved.is_some(),
+                        match (saved.is_some(), destroying) {
+                            (true, _) => Asked::File,
+                            (false, true) => Asked::Destroy,
+                            (false, false) => Asked::Apply,
+                        },
                         &mut approved,
                         &audit,
                         &|t: &str, d: &str| verify_token(t, &needs, d, &res.facts),
@@ -3394,6 +3433,9 @@ fn run_with(
                 // Kept in state: a sensitive leaf by its digest.
                 let observed = backend.stored_world(&backend.observe(&st)?);
                 executor::begin(&mut st, tick, &plan, &observed);
+                if let Some(f) = st.in_flight.as_mut() {
+                    f.destroy = destroying;
+                }
                 executor::mark_creates(
                     &mut st,
                     &deployment,
@@ -3527,7 +3569,17 @@ fn run_with(
                 }
                 if !boundary && destroying {
                     st.in_flight = None;
-                    let left: Vec<&String> = st.resources.keys().chain(st.deposed.keys()).collect();
+                    // What no Delete could reach stays in state: the
+                    // destroy stops there (exit 5); run again once their
+                    // provider can be configured, or retain them.
+                    let kept: BTreeSet<String> =
+                        unreachable.iter().map(|(a, _)| state::key(a)).collect();
+                    let left: Vec<&String> = st
+                        .resources
+                        .keys()
+                        .chain(st.deposed.keys())
+                        .filter(|k| !kept.contains(*k))
+                        .collect();
                     if !left.is_empty() {
                         bail!(
                             "destroy {deployment}: state still holds {} after the last tick",
@@ -3536,6 +3588,22 @@ fn run_with(
                                 .collect::<Vec<_>>()
                                 .join(", ")
                         );
+                    }
+                    if !unreachable.is_empty() {
+                        persist(&st)?;
+                        let n = match unreachable.len() {
+                            1 => "1 object".to_string(),
+                            n => format!("{n} objects"),
+                        };
+                        return Ok(Outcome::Stopped {
+                            tick,
+                            why: format!(
+                                "destroy {deployment}: stopped; {n} no Delete could reach \
+                                 stay in state (listed under `unreachable`): destroy again \
+                                 once their provider can be configured, or forget them with \
+                                 `lifecycle(r, \"retain\")`"
+                            ),
+                        });
                     }
                     // The deployment is gone: its checkpoint is empty but
                     // for the count of idempotency keys given out, so a
@@ -3765,16 +3833,25 @@ fn run_with(
                 for w in &next.warnings {
                     eprintln!("warning: {}", redact.text(w));
                 }
-                if !violations.is_empty() {
-                    eprintln!("constraint violations after tick {tick}:");
-                    for v in &violations {
-                        eprintln!("- {}", redact.text(v));
+                // A destroy is refused by what its held changes derive, not
+                // by the program's own violations.
+                let refusing: Vec<&String> = match destroying {
+                    false => violations.iter().collect(),
+                    true => {
+                        let (_, own) = evaluate(&st)?;
+                        violations.iter().filter(|v| !own.contains(v)).collect()
                     }
-                    let conflicts = violations.iter().filter(|v| report::is_conflict(v)).count();
+                };
+                if !refusing.is_empty() {
+                    eprintln!("constraint violations after tick {tick}:");
+                    for v in &refusing {
+                        eprintln!("- {}", report::violation_line(v, &redact));
+                    }
+                    let conflicts = refusing.iter().filter(|v| report::is_conflict(v)).count();
                     return Err(Refused::apply(
                         verb,
                         conflicts,
-                        violations.len() - conflicts,
+                        refusing.len() - conflicts,
                         Some(format!(
                             "stopped after tick {tick}; ticks 1 to {tick} were applied"
                         )),
@@ -4705,6 +4782,27 @@ fn keep_memos(
     crate::memo::keep(st, externs.memos(), key, &crate::memo::now())
 }
 
+/// A destroy's objects no Delete can reach ([`Planned::unreachable`]),
+/// as the plan says a change and its reason.
+fn unreachable_text(unreachable: &[(ir::Address, String)]) -> String {
+    if unreachable.is_empty() {
+        return String::new();
+    }
+    let mut out = String::from("\nunreachable  stay in state\n");
+    for (a, why) in unreachable {
+        out.push_str(&format!("  {}\n      {why}\n", report::address(a)));
+    }
+    out
+}
+
+/// What an approval is of: a plan file, an apply's plan, a destroy's.
+#[derive(Clone, Copy, PartialEq)]
+enum Asked {
+    File,
+    Apply,
+    Destroy,
+}
+
 /// A batch apply's approval, before its Apply calls: at tick 1 the token
 /// given (`--approval FILE`), verified (`verify`), or, with none, a
 /// refusal if anything needs one; at a later tick, a new deformation that
@@ -4716,7 +4814,7 @@ fn approve_entry(
     needs: &[(String, String)],
     digest: Option<&str>,
     token: Option<&Path>,
-    from_file: bool,
+    asked: Asked,
     approved: &mut Option<crate::approval::Verified>,
     audit: &crate::audit::Log,
     verify: &dyn Fn(&str, &str) -> Result<crate::approval::Verified>,
@@ -4769,13 +4867,23 @@ fn approve_entry(
             "approval",
             serde_json::json!({ "result": "refused", "digest": digest, "error": error }),
         )?;
-        let how = if from_file {
-            "apply it with --approval FILE, a signed approval of that digest"
-        } else {
-            "write the plan with `plan --out PLAN`, have its digest approved, and \
-             `apply PLAN --approval FILE`"
+        let (verb, how) = match asked {
+            Asked::File => (
+                "apply",
+                "apply it with --approval FILE, a signed approval of that digest",
+            ),
+            Asked::Apply => (
+                "apply",
+                "write the plan with `plan --out PLAN`, have its digest approved, and \
+                 `apply PLAN --approval FILE`",
+            ),
+            Asked::Destroy => (
+                "destroy",
+                "have that digest approved (`plan --destroy` prints it) and \
+                 `destroy --approval FILE`",
+            ),
         };
-        bail!("apply refused: {error}; the plan's digest is {digest}: {how}");
+        bail!("{verb} refused: {error}; the plan's digest is {digest}: {how}");
     };
     let text = std::fs::read_to_string(path)
         .map_err(|e| anyhow::anyhow!("read --approval {}: {e}", path.display()))?;
@@ -4794,7 +4902,11 @@ fn approve_entry(
                 "approval",
                 serde_json::json!({ "result": "refused", "digest": digest, "error": e.to_string() }),
             )?;
-            bail!("apply refused: {e}")
+            let verb = match asked {
+                Asked::Destroy => "destroy",
+                _ => "apply",
+            };
+            bail!("{verb} refused: {e}")
         }
     }
 }
@@ -5590,8 +5702,10 @@ fn state_show(
         println!();
         print!("{}", output_table(&st).pairs(o));
     }
-    if st.in_flight.is_some() {
-        println!("an apply was interrupted: the next apply resumes it");
+    match &st.in_flight {
+        Some(f) if f.destroy => println!("a destroy was interrupted: the next destroy resumes it"),
+        Some(_) => println!("an apply was interrupted: the next apply resumes it"),
+        None => {}
     }
     Ok(())
 }

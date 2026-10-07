@@ -78,6 +78,9 @@ pub struct KnownHost {
 pub struct InFlight {
     pub tick: usize,
     pub remaining: BTreeMap<String, Option<serde_json::Value>>,
+    /// Of a destroy (R-149): the next destroy resumes it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub destroy: bool,
 }
 
 /// An Apply call that may or may not have taken effect: in flight when dform

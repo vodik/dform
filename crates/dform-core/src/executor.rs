@@ -474,7 +474,11 @@ pub fn begin(state: &mut State, tick: usize, plan: &Plan, observed: &BTreeMap<Ad
         .filter(|a| !matches!(a.kind, ActionKind::Noop))
         .map(|a| (state::key(&a.addr), observed.get(&a.addr).cloned()))
         .collect();
-    state.in_flight = Some(InFlight { tick, remaining });
+    state.in_flight = Some(InFlight {
+        tick,
+        remaining,
+        destroy: false,
+    });
 }
 
 /// Give every Create and Replace of the tick (`actions`, the definite ones)

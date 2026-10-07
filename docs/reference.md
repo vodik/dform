@@ -202,12 +202,28 @@ object its state holds is a delete, dependents first: what references
 an object, and an object of a provider configured from another (a
 cluster's objects, whose kubeconfig is read off the server), go before
 it, the reverse of create. Each delete says `no rule wants it: the
-deployment is being removed` (`--json`: `reason`). Denies over the plan
-run as for any plan, so `lifecycle(r, "prevent_destroy")` refuses it,
-naming the resource, and exits 4 (`destroy: refused  1 deny`). It asks
-`Destroy these N objects of platform[env=lab]? [y/N]`, `--yes` as for
-apply, and shows its progress and resumes after a stop as apply does
-(`--max-ticks`, `--parallel` too). After the last delete the
+deployment is being removed` (`--json`: `reason`). What refuses it is
+what a deny binds to. A deny over the plan's changes binds to the
+destroy's deletes and refuses it as it would an apply that removed
+them: `lifecycle(r, "prevent_destroy")`, a `deny .. where
+deformation("delete", r, _), ..`, the world rules; it exits 4
+(`destroy: refused  1 deny`). A deny over the program's resources
+(`deny "image not pinned" .. where container(w, c), ..`) is about what
+the destroy no longer wants, and does not refuse it. dform.toml
+approvals gate it as an apply: a delete `requires_approval` holds is
+refused until `destroy --approval FILE` gives a signed approval of the
+digest `plan --destroy` prints. It asks `Destroy these N objects of
+platform[env=lab]? [y/N]`, `--yes` as for apply, and shows its progress
+and resumes after a stop as apply does (`--max-ticks`, `--parallel`
+too); an interrupted destroy says `the next destroy resumes it`. An
+object whose provider cannot be configured (the server its kubeconfig
+is read from is already gone, the read is refused) has no Delete to
+send: the plan lists it under `unreachable  stay in state` with why
+(`--json`: `unreachable`, each `{address, reason}`), the destroy deletes
+what the other providers hold, leaves it in state and exits 5
+(stopped); destroy again once its provider can be configured, or
+retain it (`lifecycle(r, "retain")`, "Lifecycle") to forget it. After
+the last delete the
 deployment's state is an empty checkpoint (but for the count of
 idempotency keys it gave out), its published outputs are gone (a reader
 waits on it as on one never applied), the audit log stays, with a
@@ -316,7 +332,7 @@ too):
 | 2 | usage: the command line is wrong (the argument parser's own) |
 | 3 | declined: a question was answered no; nothing of that tick was applied, and nothing is printed as an error |
 | 4 | refused by the program: its conflicts and denies, printed (`plan` and `apply` alike) |
-| 5 | stopped: a plan file or an approval applied what it showed and stopped before what it did not; state is consistent, and the next run resumes |
+| 5 | stopped: a plan file or an approval applied what it showed and stopped before what it did not, or a destroy deleted what it could reach and left what it could not (listed under `unreachable`); state is consistent, and the next run resumes |
 | 6 | locked: another run holds the stack (named, one line) |
 | 128 + N | stopped by signal N after the run unwound (130 for SIGINT, 143 for SIGTERM) |
 
@@ -1454,7 +1470,8 @@ bounded by its provider's `timeout`) and logs their answers, then ends
 the block with what never started `interrupted`, releases the lock,
 writes `apply_end` (`result: stopped`, `why: interrupted`, the signal),
 lets the providers end (their stdin closed) and says `interrupted: the
-next apply resumes it`; it exits 128 + the signal (130, 143) once all of
+next apply resumes it` (a destroy's: `the next destroy resumes it`, as
+`state show` says of it); it exits 128 + the signal (130, 143) once all of
 that is done. A second Ctrl-C quits at once (the signal's default),
 with every answer so far in the log. The same holds between ticks, in a
 wait, and at a `[y/N]` question (nothing of the tick asked about is

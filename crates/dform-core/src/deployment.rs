@@ -426,6 +426,11 @@ pub struct Planned {
     /// own evaluation (`lifecycle prevent_destroy`, a policy on
     /// `deformation/3`).
     pub denies: Vec<String>,
+    /// Of a destroy: the objects state holds that no Delete can reach,
+    /// each with why (their provider is not configured: the server its
+    /// kubeconfig is read from is already gone). They stay in state, and
+    /// the destroy stops.
+    pub unreachable: Vec<(Address, String)>,
 }
 
 /// What evaluates the program again, over the same providers and extern
@@ -882,6 +887,27 @@ impl Evaluator {
             true => stuck::Sections::default(),
             false => sections(&res, &resources, schema),
         };
+        // A destroy's objects whose provider could not be configured have
+        // no Delete in the plan: in a destroy nothing is made that could
+        // configure it later.
+        let unreachable: Vec<(Address, String)> = match self.destroy {
+            false => Vec::new(),
+            true => {
+                let planned: BTreeSet<&Address> = plan.actions.iter().map(|a| &a.addr).collect();
+                st.resources
+                    .keys()
+                    .filter_map(|k| state::parse_key(k))
+                    .filter(|a| !planned.contains(a))
+                    .map(|a| {
+                        let why = match self.provider_wait(&a.typ) {
+                            Some(on) => format!("its provider is not configured: {on}"),
+                            None => "its provider planned no delete".to_string(),
+                        };
+                        (a, why)
+                    })
+                    .collect()
+            }
+        };
         self.wait_on_providers(&mut plan, &resources, &mut sections, st)?;
         executor::hold_deposed(&mut plan, &resources, &sections);
         // The resource rules that may derive after a boundary (pending
@@ -940,6 +966,7 @@ impl Evaluator {
             plan,
             sections,
             denies,
+            unreachable,
         })
     }
 }
@@ -1007,7 +1034,25 @@ fn setting_text(span: Span, key: &str) -> Option<String> {
     let (_, text) = crate::diag::source_of(span)?;
     let block = text.get(span.start as usize..span.end as usize)?;
     let body = &block[block.find('{')? + 1..];
-    body.split(['\n', ','])
+    // The settings, split at the commas and lines between them, not
+    // those inside a call or a string (`format("kc@%s", server.ip)`).
+    let (mut depth, mut quoted, mut from) = (0i32, false, 0);
+    let mut entries = Vec::new();
+    for (i, c) in body.char_indices() {
+        match c {
+            '"' => quoted = !quoted,
+            '(' | '[' | '{' if !quoted => depth += 1,
+            ')' | ']' | '}' if !quoted => depth -= 1,
+            '\n' | ',' if !quoted && depth <= 0 => {
+                entries.push(&body[from..i]);
+                from = i + 1;
+            }
+            _ => {}
+        }
+    }
+    entries.push(&body[from..]);
+    entries
+        .into_iter()
         .filter_map(|e| e.split_once('='))
         .find(|(k, _)| k.trim() == key)
         .map(|(_, v)| v.trim().trim_end_matches('}').trim().to_string())
@@ -1401,7 +1446,10 @@ impl Located {
         for w in &res.warnings {
             obs.note(Note::Policy(redact.text(w)));
         }
-        let (compiled, policy) = if opts.blocking && !violations.is_empty() {
+        // A destroy wants nothing, so a deny over the program's resources
+        // has nothing to refuse; the denies over its plan (its deletes)
+        // still refuse it.
+        let (compiled, policy) = if opts.blocking && !opts.destroy && !violations.is_empty() {
             (Err(anyhow::anyhow!("blocked by constraints")), None)
         } else {
             let compiled = Compiled::of(&res, backend.schema());
