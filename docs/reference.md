@@ -2359,7 +2359,10 @@ The kinds:
 - `lease`: an s3 lease taken: its `fence` and holder;
 - `action`: the kind, the address, the result (and the error), the remote
   id, and a digest of the redacted diff (after the `state` entry of its
-  answer);
+  answer); an error is its one-line head, what happened (`apply net.vpc
+  main: refused, nothing changed`), and, when there is more, the whole
+  text (the provider's message, the site) under `detail`, in every
+  entry that has one (`retry`, `approval`, `apply_end` too);
 - `tick`: the world as the executor saw it, as an HMAC with the stack's key;
 - `retry`: a provider call sent again (R-81): the tick, the provider, the
   call, the attempt and its budget (`of`), the delay, and why the last

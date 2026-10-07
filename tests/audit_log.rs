@@ -127,7 +127,22 @@ fn a_failed_apply_and_its_resume_are_one_chain() {
         .collect();
     assert_eq!(failed.len(), 1, "{es:#?}");
     assert_eq!(failed[0]["address"], "compute.vm[\"app\"]");
-    assert!(failed[0]["error"].is_string());
+    // One line, what happened; the provider's message and the site under
+    // `detail` (After R-156).
+    assert_eq!(
+        failed[0]["error"],
+        "apply compute.vm app: refused, nothing changed"
+    );
+    let detail = failed[0]["detail"].as_str().unwrap_or_default();
+    assert!(
+        detail.starts_with("apply compute.vm app: refused, nothing changed\n  injected failure"),
+        "{detail}"
+    );
+    let end = es
+        .iter()
+        .find(|e| e["kind"] == "apply_end" && e["result"] == "failed")
+        .unwrap();
+    assert!(!end["error"].as_str().unwrap().contains('\n'), "{end}");
     let ends: Vec<&str> = es
         .iter()
         .filter(|e| e["kind"] == "apply_end")

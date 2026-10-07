@@ -1858,7 +1858,11 @@ fn run(cli: Cli, hook: Option<&mut controller::Hook>) -> Result<Outcome> {
             "signal": crate::interrupt::name(*signal),
         }),
         Ok(o) => serde_json::json!({ "result": o.word() }),
-        Err(e) => serde_json::json!({ "result": "failed", "error": e.to_string() }),
+        Err(e) => {
+            let mut end = serde_json::json!({ "result": "failed" });
+            crate::audit::error(&mut end, &e.to_string());
+            end
+        }
     };
     let logged = s.log.append("apply_end", end);
     let released = s.lock.release();
@@ -3953,7 +3957,7 @@ fn run_with(
                             "diff": diffs.get(&a.addr),
                         });
                         if let Some(err) = err {
-                            e["error"] = redact.text(&format!("{err:#}")).into();
+                            crate::audit::error(&mut e, &redact.text(&crate::diag::shape(err)));
                         }
                         if let Err(x) = audit.append("action", e) {
                             audit_failed.borrow_mut().get_or_insert(x);
@@ -5937,10 +5941,9 @@ fn approve_entry(
                 .map(drop);
         }
         let error = format!("{} an approval, and no --approval was given", list(needs));
-        audit.append(
-            "approval",
-            serde_json::json!({ "result": "refused", "digest": digest, "error": error }),
-        )?;
+        let mut entry = serde_json::json!({ "result": "refused", "digest": digest });
+        crate::audit::error(&mut entry, &error);
+        audit.append("approval", entry)?;
         let (verb, how) = match asked {
             Asked::File => (
                 "apply",
@@ -5972,10 +5975,9 @@ fn approve_entry(
             Ok(())
         }
         Err(e) => {
-            audit.append(
-                "approval",
-                serde_json::json!({ "result": "refused", "digest": digest, "error": e.to_string() }),
-            )?;
+            let mut entry = serde_json::json!({ "result": "refused", "digest": digest });
+            crate::audit::error(&mut entry, &e.to_string());
+            audit.append("approval", entry)?;
             let verb = match asked {
                 Asked::Destroy => "destroy",
                 _ => "apply",

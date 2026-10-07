@@ -415,19 +415,32 @@ impl Group {
     }
 }
 
+/// An entry's error (After R-156): `error` its one-line head, what
+/// happened (`apply net.vpc main: refused, nothing changed`), and, when
+/// there is more (the provider's message, the site, the causes), the
+/// whole text under `detail`. A reader of `error` gets one line.
+pub fn error(entry: &mut Json, text: &str) {
+    let mut lines = text.lines();
+    entry["error"] = lines.next().unwrap_or_default().into();
+    if lines.next().is_some() {
+        entry["detail"] = text.into();
+    }
+}
+
 /// A `retry` entry's fields: a provider call that failed in a way worth
 /// trying again, sent again after `delay` (R-81). `error` is why the last
 /// attempt failed, as the caller redacts it.
 pub fn retry(tick: usize, r: &crate::plugin::link::Retry, error: String) -> Json {
-    serde_json::json!({
+    let mut entry = serde_json::json!({
         "tick": tick,
         "provider": r.provider,
         "call": r.call,
         "attempt": r.attempt,
         "of": r.of,
         "delay_ms": r.delay.as_millis() as u64,
-        "error": error,
-    })
+    });
+    self::error(&mut entry, &error);
+    entry
 }
 
 /// A `wait` entry's fields: a tick waiting on the open nulls `on` (as
