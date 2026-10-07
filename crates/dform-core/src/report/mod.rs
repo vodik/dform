@@ -1755,26 +1755,29 @@ fn deformation(a: &Action, schema: &Schema, r: &Redactor, refs: &Refs) -> Deform
         ty.starts_with("ref(")
             || (path.ends_with(']') && (ty.starts_with("set(ref(") || ty.starts_with("list(ref(")))
     };
-    let leaf = |c: &Change, path: String| Line {
-        op: Op::Leaf,
-        path,
-        before: refs.shown(
-            &a.addr,
-            &c.path,
-            is_ref(&c.path),
-            shown(c.before.as_ref(), c.sensitive, schema, r),
-        ),
-        after: refs.shown(
-            &a.addr,
-            &c.path,
-            is_ref(&c.path),
-            shown(c.after.as_ref(), c.sensitive, schema, r),
-        ),
-        leaves: vec![],
-        site: None,
-        chain: Vec::new(),
-        value: None,
-        row: None,
+    let leaf = |c: &Change, path: String| {
+        let is_ref = is_ref(&c.path);
+        Line {
+            op: Op::Leaf,
+            path,
+            before: refs.shown(
+                &a.addr,
+                &c.path,
+                is_ref,
+                shown(c.before.as_ref(), c.sensitive, schema, r),
+            ),
+            after: refs.shown(
+                &a.addr,
+                &c.path,
+                is_ref,
+                shown(c.after.as_ref(), c.sensitive, schema, r),
+            ),
+            leaves: vec![],
+            site: None,
+            chain: Vec::new(),
+            value: None,
+            row: None,
+        }
     };
     let by_element = matches!(
         a.kind,
@@ -4004,16 +4007,13 @@ fn attr_holding<'a>(facts: &[&'a Atom], path: &str) -> Option<(&'a Atom, Vec<Str
     for k in (1..=segs.len()).rev() {
         let last = segs[k - 1];
         let index = crate::ir::segment_parts(last).1;
-        let raw = &last[..last.len() - index.len()];
-        let prefix = segs[..k - 1]
-            .iter()
-            .copied()
-            .chain([raw])
-            .collect::<Vec<_>>()
-            .join(".");
+        // The segments are `path`'s own, joined by dots: the prefix to
+        // `last`, its index left out, is a slice of it.
+        let start = last.as_ptr() as usize - path.as_ptr() as usize;
+        let prefix = &path[..start + last.len() - index.len()];
         let found = facts
             .iter()
-            .find(|a| matches!(a.args.get(2), Some(Term::Val(Value::Str(p))) if *p == prefix));
+            .find(|a| matches!(a.args.get(2), Some(Term::Val(Value::Str(p))) if p == prefix));
         if let Some(a) = found {
             let keys: Vec<String> = match index.is_empty() {
                 true => segs[k..]
