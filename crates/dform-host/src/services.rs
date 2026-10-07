@@ -122,12 +122,15 @@ impl Calls for Services {
         http::send(req, cred.as_deref(), via)
     }
 
-    fn exec(&self, on: &Target, argv: &[String], stdin: Option<&[u8]>) -> Result<Run, Failure> {
-        self.ssh.exec(on, argv, stdin)
+    fn files_read(&self, location: &str) -> Result<Vec<u8>, Failure> {
+        // The run's reader (its known hosts, mirrors, declared schemes),
+        // or, outside a run, one of the host's own.
+        let files = self.grants.files.get();
+        files.read_for(&self.grants, location)
     }
 
-    fn read(&self, on: &Target, path: &str) -> Result<Vec<u8>, Failure> {
-        self.ssh.read(on, path)
+    fn exec(&self, on: &Target, argv: &[String], stdin: Option<&[u8]>) -> Result<Run, Failure> {
+        self.ssh.exec(on, argv, stdin)
     }
 
     fn write(&self, on: &Target, path: &str, data: &[u8], mode: u32) -> Result<(), Error> {
@@ -144,10 +147,6 @@ impl Calls for Services {
 
     fn tunnel(&self, h: Handle) -> Option<Endpoint> {
         self.opened().tunnels.get(&h).map(|(e, _)| e.clone())
-    }
-
-    fn git_read(&self, repo: &str, rev: &str, path: &str) -> Result<Vec<u8>, Error> {
-        self.git.read(repo, rev, path)
     }
 
     fn git_commit(

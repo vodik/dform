@@ -12,9 +12,8 @@ use common::{Run, Scratch};
 /// server once it is up; the Traefik module's objects are the cluster's.
 const STACK: &str = r#"
 use fake
-use ssh
 resource db.postgres server { name = "server" }
-let raw = ssh.read(server.endpoint, "ubuntu", "/etc/rancher/k3s/k3s.yaml")
+let raw: secret(string) = text("ssh://ubuntu@${server.endpoint}/etc/rancher/k3s/k3s.yaml")
 use k8s { source = "./providers/k8s", kubeconfig = raw }
 use traefik
 "#;
@@ -128,22 +127,22 @@ fn an_unknown_type_is_an_error_unless_its_provider_is_configured_later() {
     );
 }
 
-/// A kubeconfig read from a host that has not answered yet (`ssh.read`
-/// says "not yet"): the provider waits on it, and `later` says both, the
-/// read as the program writes it (R-111), never its inputs split at their
-/// dots as if they were an address.
+/// A kubeconfig read from a host that has not answered yet (the
+/// `ssh://` read is "not yet"): the provider waits on it, and `later` says
+/// both, the read by its location (R-153), never split at its dots as if
+/// it were an address.
 #[test]
 fn a_provider_waiting_on_a_read_not_yet_answered_says_both() {
     let s = project();
     s.write(
         "stacks/p.df",
-        &STACK.replace("ssh.read(server.endpoint, ", "ssh.read(\"127.0.0.1:1\", "),
+        &STACK.replace("${server.endpoint}", "127.0.0.1:1"),
     );
     let r = dform(&s, &["plan", "p"]).success();
     assert!(
         r.stdout.contains(
-            "\n  waits on  provider k8s  kubeconfig = raw, ssh.read(\"127.0.0.1:1\", \
-             \"ubuntu\", \"/etc/rancher/k3s/k3s.yaml\")\n"
+            "\n  waits on  provider k8s  kubeconfig = raw, \
+             ssh://ubuntu@127.0.0.1:1/etc/rancher/k3s/k3s.yaml\n"
         ),
         "{}",
         r.stdout

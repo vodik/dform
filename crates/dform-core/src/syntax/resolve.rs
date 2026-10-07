@@ -2880,25 +2880,20 @@ impl<'u> Lowerer<'u> {
         })])
     }
 
-    /// A loader call as a term (R-39): `yaml(path)`, `toml`, `json`, `csv`
-    /// (a list of objects by its header), each also over `git(REPO, REF,
-    /// PATH)`, is the document, a value: `V` reading the file provider's
-    /// `table.FORMAT.document(Path, At, V)`, whose answer the plan file
-    /// records and the controller watches as a table's. `None` for any
-    /// other call, or a loader a relation of the program shadows.
+    /// A loader call as a term (R-39): `yaml(LOCATION)`, `toml`, `json`,
+    /// `csv` (a list of objects by its header), `text` (the whole of it, a
+    /// string), a location a path or a uri (R-153), is the document, a
+    /// value: `V` reading `table.FORMAT.document(Location, At, V)`, whose
+    /// answer the plan file records and the controller watches as a
+    /// table's. `None` for any other call, or a loader a relation of the
+    /// program shadows.
     fn loader_call(&mut self, rc: &mut Rc, n: &SyntaxNode, pre: &mut Vec<Lit>) -> Option<L<Term>> {
         let name = self.callee(n)?;
         if !crate::tables::FORMATS.contains(&name.as_str()) || self.decls.relations.contains(&name)
         {
             return None;
         }
-        let git = node(n, ARG_LIST)
-            .and_then(|l| terms(&l).next())
-            .is_some_and(|a| a.kind() == CALL && self.callee(&a).as_deref() == Some("git"));
-        let table = match git {
-            true => format!("{}.git", crate::tables::DOCUMENT),
-            false => crate::tables::DOCUMENT.to_string(),
-        };
+        let table = crate::tables::DOCUMENT.to_string();
         let v = var(&fresh(rc, &capitalise(&name)));
         let cols = vec![BindArg {
             input: false,
@@ -2949,9 +2944,9 @@ impl<'u> Lowerer<'u> {
         Ok(out)
     }
 
-    /// A table's source, `FORMAT(PATH)` or `FORMAT(git(REPO, REF, PATH))`,
-    /// read into `body` and asked of its externs there, their outputs
-    /// `outs`; the extern declarations.
+    /// A table's source, `FORMAT(LOCATION)`, a path or a uri (R-153),
+    /// read into `body` and asked of its extern there, its outputs `outs`;
+    /// the extern's declaration.
     fn table_body(
         &mut self,
         rc: &mut Rc,
@@ -2964,12 +2959,15 @@ impl<'u> Lowerer<'u> {
         let span = self.span(src);
         let formats = crate::tables::FORMATS;
         let bad = |l: &mut Self, what: &str| -> L<Vec<Stmt>> {
-            let d = Diagnostic::error(span, format!("{what}: a table's source is FORMAT(SOURCE)"))
-                .with_help(format!(
-                    "FORMAT is one of {}; SOURCE is a path, `\"data/p.csv\"`, or \
-                     `git(\"repo\", \"ref\", \"path\")`",
-                    formats.join(", ")
-                ));
+            let d = Diagnostic::error(
+                span,
+                format!("{what}: a table's source is FORMAT(LOCATION)"),
+            )
+            .with_help(format!(
+                "FORMAT is one of {}; LOCATION is a path, `\"data/p.csv\"`, or a uri, \
+                     `\"git+https://HOST/OWNER/REPO/PATH?ref=TAG\"`, `\"ssh://USER@HOST/PATH\"`",
+                formats.join(", ")
+            ));
             l.diags.push(d);
             Err(Skip)
         };
@@ -2982,82 +2980,47 @@ impl<'u> Lowerer<'u> {
             .map(|l| terms(&l).collect())
             .unwrap_or_default();
         let [arg] = args.as_slice() else {
-            return bad(self, &format!("{format} takes one source"));
+            return bad(self, &format!("{format} takes one location"));
         };
-        let git = arg.kind() == CALL && self.callee(arg).as_deref() == Some("git");
-        let parts: Vec<SyntaxNode> = if git {
-            node(arg, ARG_LIST)
-                .map(|l| terms(&l).collect())
-                .unwrap_or_default()
-        } else {
-            vec![arg.clone()]
-        };
-        if parts.len() != if git { 3 } else { 1 } {
-            return bad(self, "git takes a repository, a ref and a path");
+        if arg.kind() == CALL && self.callee(arg).as_deref() == Some("git") {
+            let d = Diagnostic::error(
+                self.span(arg),
+                "`git(..)` is gone (R-153): a repository's file is a location",
+            )
+            .with_help(format!(
+                "`{format}(\"git+https://HOST/OWNER/REPO/PATH?ref=TAG\")` (`git+ssh://` over \
+                     ssh, `git+file:REPO/PATH?ref=TAG` for a repository in the project), read at \
+                     the commit the ref names, which the plan file records"
+            ));
+            self.diags.push(d);
+            return Err(Skip);
         }
-        let names: &[&str] = if git {
-            &["repo", "ref", "path"]
-        } else {
-            &["path"]
-        };
-        let mut given = Vec::new();
-        for (t, name) in parts.iter().zip(names) {
-            let t = self.term(rc, t, Pos::Content, body)?;
-            let v = var(&fresh(rc, &capitalise(name)));
-            body.push(Lit::Eq(v.clone(), t));
-            given.push(v);
-        }
-        let plus = |name: &str| BindArg {
-            input: true,
-            name: name.into(),
-            ty: None,
-        };
-        let mut out = Vec::new();
-        let (mut ins, mut args) = (Vec::new(), Vec::new());
-        if git {
-            let commit = var(&fresh(rc, "Commit"));
-            let name = crate::tables::extern_name("git", table);
-            body.push(Lit::Pos(atom_at(
-                &name,
-                vec![given[0].clone(), given[1].clone(), commit.clone()],
-                span,
-            )));
-            out.push(Stmt::ExternFn(ExternFn {
-                name,
-                args: vec![
-                    plus("repo"),
-                    plus("ref"),
-                    BindArg {
-                        input: false,
-                        name: "commit".into(),
-                        ty: None,
-                    },
-                ],
-                span,
-            }));
-            ins.extend([plus("repo"), plus("commit"), plus("path")]);
-            args.extend([given[0].clone(), commit, given[2].clone()]);
-        } else {
-            ins.push(plus("path"));
-            args.push(given[0].clone());
-        }
+        let t = self.term(rc, arg, Pos::Content, body)?;
+        let given = var(&fresh(rc, "Path"));
+        body.push(Lit::Eq(given.clone(), t));
         let at = var(&fresh(rc, "At"));
-        args.push(at);
+        let mut args = vec![given, at];
         args.extend(outs);
-        ins.push(BindArg {
-            input: false,
-            name: "at".into(),
-            ty: None,
-        });
+        let mut ins = vec![
+            BindArg {
+                input: true,
+                name: "path".into(),
+                ty: None,
+            },
+            BindArg {
+                input: false,
+                name: "at".into(),
+                ty: None,
+            },
+        ];
         ins.extend(cols);
         let name = crate::tables::extern_name(&format, table);
         body.push(Lit::Pos(atom_at(&name, args, span)));
-        out.push(Stmt::ExternFn(ExternFn {
+        Ok(vec![Stmt::ExternFn(ExternFn {
             name,
             args: ins,
             span,
-        }));
-        Ok(out)
+        })])
     }
 
     /// `output k [: T] = t [where B]` (H-7): the declaration, when typed, and
@@ -4073,6 +4036,16 @@ impl<'u> Lowerer<'u> {
         } else {
             Stmt::Rule(RuleStmt { head, body })
         }];
+        // Declared secret (R-153): the cell is, each path of it that is
+        // (`modules::lets` scopes it).
+        for (q, _) in declared.iter().flat_map(crate::types::secret_fields) {
+            out.push(Stmt::Fact(Atom {
+                pred: crate::modules::SECRET_LET.into(),
+                args: vec![str_term(&name), str_term(&q)],
+                record: None,
+                span,
+            }));
+        }
         // The cell's type is its reader's column, `decl NAME(NAME: T)`, as
         // R-34 types a relation: once, at the first typed row. A resource
         // type is the reference's own (`value_type`).

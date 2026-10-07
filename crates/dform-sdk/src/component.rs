@@ -233,6 +233,10 @@ impl Calls for Imports {
         })
     }
 
+    fn files_read(&self, location: &str) -> Result<Vec<u8>, Failure> {
+        wh::files::read(location).map_err(failure)
+    }
+
     fn exec(&self, on: &Target, argv: &[String], stdin: Option<&[u8]>) -> Result<Run, Failure> {
         let r = wh::ssh::exec(&target(on), argv, stdin).map_err(failure)?;
         Ok(Run {
@@ -240,10 +244,6 @@ impl Calls for Imports {
             stdout: r.stdout,
             stderr: r.stderr,
         })
-    }
-
-    fn read(&self, on: &Target, path: &str) -> Result<Vec<u8>, Failure> {
-        wh::ssh::read(&target(on), path).map_err(failure)
     }
 
     fn write(&self, on: &Target, path: &str, data: &[u8], mode: u32) -> Result<(), h::Error> {
@@ -267,10 +267,6 @@ impl Calls for Imports {
 
     fn tunnel(&self, h: Handle) -> Option<Endpoint> {
         self.opened().tunnels.get(&h).map(|(_, e)| e.clone())
-    }
-
-    fn git_read(&self, repo: &str, rev: &str, path: &str) -> Result<Vec<u8>, h::Error> {
-        wh::git::read(repo, rev, path).map_err(error)
     }
 
     fn git_commit(

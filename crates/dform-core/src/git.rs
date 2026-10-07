@@ -529,12 +529,15 @@ struct Client {
     headers: Vec<(String, String)>,
 }
 
+/// An answer's headers, as lines, and its body.
+type Answer = (Vec<u8>, Box<dyn Read + Send>);
+
 /// A request, its body as written so far, and its answer once sent.
 #[derive(Default)]
 struct Pending {
     request: Option<ureq::http::request::Builder>,
     body: Vec<u8>,
-    answer: Option<std::io::Result<(Vec<u8>, Box<dyn Read + Send>)>>,
+    answer: Option<std::io::Result<Answer>>,
     agent: Option<ureq::Agent>,
 }
 

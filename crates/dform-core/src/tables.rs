@@ -1,26 +1,30 @@
-//! Tables: rows from CSV, JSON, YAML and TOML files as typed input
-//! relations. `input relation p(col: type, ...) from FORMAT(SOURCE)`
-//! lowers (`syntax::resolve`) to an extern, `table.FORMAT.p(+path, -at,
-//! -col, ...)`, and the rule `p(cols) :- reads, table.FORMAT.p(Path, _,
-//! cols)`: the source is the extern's bound input, so a rule may compute
-//! it, a table whose source reads its own rows is an extern in a recursive
-//! rule (a compile error), and the rows are answers like any extern's:
-//! recorded in the plan file and replayed by `apply PLAN`.
+//! Tables: rows from CSV, JSON, YAML and TOML documents as typed input
+//! relations, and documents as values (`text(..)` the whole of one as a
+//! string). `input relation p(col: type, ...) from FORMAT(LOCATION)`
+//! lowers (`syntax::resolve`) to an extern, `table.FORMAT.p(+location,
+//! -at, -col, ...)`, and the rule `p(cols) :- reads, table.FORMAT.p(L, _,
+//! cols)`: the location is the extern's bound input, so a rule may
+//! compute it, a table whose location reads its own rows is an extern in
+//! a recursive rule (a compile error), and the rows are answers like any
+//! extern's: recorded in the plan file and replayed by `apply PLAN`.
 //!
-//! A `git(repo, ref, path)` source is two externs: `table.git.p(+repo,
-//! +ref, -commit)` resolves the ref, and the rows are read at the commit,
-//! `table.FORMAT.p(+repo, +commit, +path, -at, ...)`. The plan file holds
-//! the commit, so `apply PLAN` reads what plan read though the branch has
-//! moved since; state keeps the commit each deployment was last applied
-//! from (`record`), and plan says when the ref has moved from it
-//! (`moved`).
+//! A location is a path from the project root or a uri whose scheme is a
+//! transport (R-153, `crate::files`). A repository's file
+//! (`git+https://HOST/OWNER/REPO/PATH?ref=TAG`) is read at the commit the
+//! ref names, which its rows name (`REPO@COMMIT:PATH:LINE`), so the plan
+//! file holds the commit and `apply PLAN` reads what plan read though the
+//! branch has moved since; state keeps the commit each deployment was
+//! last applied from (`record`), and plan says when the ref has moved
+//! from it (`moved`). A document that is not there yet (a host still
+//! booting) is an open null the apply waits on.
 //!
 //! A row is typed column by column (`inputs::has_type`; a CSV cell is read
 //! as its column's type). The loader never reshapes: a JSON or YAML table
 //! is a list of objects, a TOML one the `[[p]]` array of tables, a CSV one
 //! has a header naming the columns; every column is in every row, and
 //! nothing else is. Each row's `at` is where it is, `file:line`
-//! (`repo@commit:file:line` from git).
+//! (`repo@commit:file:line` from a repository, `LOCATION:line` from a
+//! transport).
 //!
 //! `set from FORMAT(SOURCE)` (R-38) is the table `set(path,
 //! value)`: every leaf of a mapping (a `path,value` CSV) is a contribution
@@ -28,6 +32,7 @@
 
 use crate::ast::{Atom, ExternFn, Lit, Program, RuleStmt, Span, Stmt, Term, TypeExpr, atom};
 use crate::externs::{self, Answer};
+use crate::files::{Files, Outcome};
 use crate::inputs::{has_type, type_text};
 use crate::partition::fmt_value;
 use crate::value::Value;
@@ -36,8 +41,9 @@ use anyhow::{Context, Result, anyhow, bail};
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
-pub const FORMATS: &[&str] = &["csv", "json", "yaml", "toml"];
+pub const FORMATS: &[&str] = &["csv", "json", "yaml", "toml", "text"];
 
 /// The table a `set from` document is (`set` is a keyword: no relation
 /// has its name).
@@ -144,6 +150,12 @@ fn parse_name(name: &str) -> Option<(&str, &str)> {
     name.strip_prefix(PREFIX)?.split_once('.')
 }
 
+/// Whether `pred` is a loader call's extern, a whole document as a value
+/// (`table.FORMAT.document`).
+pub fn is_document(pred: &str) -> bool {
+    parse_name(pred).is_some_and(|(f, t)| f != VALUE && t.split('|').next() == Some(DOCUMENT))
+}
+
 /// What a table extern reads, for messages: `input relation p`, `set`
 /// (`set from DOC`), `yaml document` (a loader's call, R-129).
 pub fn describe(name: &str) -> Option<String> {
@@ -158,16 +170,31 @@ pub fn describe(name: &str) -> Option<String> {
 /// a path (`path:line`) or a repository, commit and path
 /// (`repo@commit:path:line`).
 pub fn at(a: &Atom) -> Option<String> {
-    let ("csv" | "json" | "yaml" | "toml", _) = parse_name(&a.pred)? else {
+    let ("csv" | "json" | "yaml" | "toml" | "text", _) = parse_name(&a.pred)? else {
         return None;
     };
-    let s = |i: usize| a.args.get(i).and_then(Term::as_str);
-    let first = s(0)?;
-    [s(1), s(3)]
-        .into_iter()
-        .flatten()
-        .find(|at| at.starts_with(&format!("{first}:")) || at.starts_with(&format!("{first}@")))
-        .map(str::to_string)
+    // A row's line (`net.toml:7`, `teams.yaml:row 2`), or a repository's
+    // commit (`maps.git@3e58789:maps.yml`); a document's own place is its
+    // statement's.
+    let at = a.args.get(1).and_then(Term::as_str)?;
+    let lined = at.rsplit_once(':').is_some_and(|(_, l)| {
+        let l = l.strip_prefix("row ").unwrap_or(l);
+        !l.is_empty() && l.bytes().all(|b| b.is_ascii_digit())
+    });
+    lined.then(|| shown_at(at))
+}
+
+/// Where a row is as said to a reader: a repository's commit by its first
+/// seven digits (`ops.git@3b1c7e0:net.csv:4`). The row itself, and so the
+/// plan file, holds the whole commit read.
+pub fn shown_at(at: &str) -> String {
+    match commit_of(at) {
+        Some((repo, c)) if c.len() > 7 => {
+            let rest = &at[repo.len() + 1 + c.len()..];
+            format!("{repo}@{}{rest}", short(c))
+        }
+        _ => at.to_string(),
+    }
 }
 
 /// The line each document of a YAML stream a loader read starts on, by
@@ -186,9 +213,9 @@ pub fn document_line(at: &str, n: usize, i: usize) -> Option<usize> {
 /// The sources a run's tables read, for the controller (`sources`).
 #[derive(Default)]
 pub struct Tables {
-    /// (repository, commit) -> the ref that resolved to it.
-    refs: RefCell<BTreeMap<(PathBuf, String), String>>,
     read: RefCell<BTreeMap<(String, Source), String>>,
+    /// What reads a location (R-153).
+    files: Arc<Files>,
 }
 
 /// Paths resolve from the project root of the file the declaration is in
@@ -200,57 +227,70 @@ fn base(span: Span) -> PathBuf {
 }
 
 impl Tables {
+    /// A run's tables, read with `files` (its known hosts, its mirrors,
+    /// the schemes its providers declare).
+    pub fn with_files(files: Arc<Files>) -> Tables {
+        Tables {
+            files,
+            ..Tables::default()
+        }
+    }
+
     /// The answer to a table extern's call; `None` for any other extern.
     pub fn answer(&self, f: &ExternFn, inputs: &[Value]) -> Option<Result<Vec<Vec<Value>>>> {
         let (format, table) = parse_name(&f.name)?;
         if format == VALUE {
             return Some(self.value_rows(f, table, inputs));
         }
-        let strs: Option<Vec<&str>> = inputs.iter().map(Value::as_str).collect();
         let base = base(f.span);
-        Some(match (format, strs.as_deref()) {
-            ("git", Some([repo, rev])) => self.resolve(&base, repo, rev),
-            (_, Some([path])) => self.rows(f, format, table, inputs, || {
-                let p = base.join(path);
-                let text = std::fs::read_to_string(&p)
-                    .with_context(|| format!("table {table}: read {path}"))?;
-                Ok((text, path.to_string(), Source::File(p)))
+        let location = match inputs {
+            [Value::Str(s)] => s.clone(),
+            [Value::Uri(u)] => u.to_string(),
+            _ => {
+                return Some(Err(anyhow!(
+                    "{}: the source is a location, a string (a path or a uri)",
+                    f.name
+                )));
+            }
+        };
+        let read = match self.files.read(&location, &base) {
+            Ok(r) => r,
+            Err(e) => {
+                let what = describe(&f.name).unwrap_or_else(|| format!("table {table}"));
+                return Some(Err(e.context(what)));
+            }
+        };
+        Some(match read {
+            Outcome::Read(r) => self.rows(f, format, table, inputs, || {
+                let text = String::from_utf8(r.bytes)
+                    .map_err(|_| anyhow!("table {table}: {} is not UTF-8 text", r.shown))?;
+                Ok((text, r.shown, r.source))
             }),
-            (_, Some([repo, commit, path])) => self.rows(f, format, table, inputs, || {
-                let dir = base.join(repo);
-                let text = crate::git::Git::cache()
-                    .read(&dir.display().to_string(), commit, path)
-                    .map_err(|e| anyhow!(e.message))
-                    .and_then(|b| String::from_utf8(b).map_err(|_| anyhow!("not UTF-8 text")))
-                    .with_context(|| format!("table {table}: read {repo}@{commit}:{path}"))?;
-                let rev = self
-                    .refs
-                    .borrow()
-                    .get(&(dir.clone(), commit.to_string()))
-                    .cloned();
-                let shown = format!("{repo}@{}:{path}", short(commit));
-                let source = Source::Git {
-                    repo: dir,
-                    rev: rev.unwrap_or_else(|| commit.to_string()),
-                    path: path.to_string(),
-                };
-                Ok((text, shown, source))
-            }),
-            _ => Err(anyhow!("{}: the source is a string", f.name)),
+            // A document not there yet is an open null the apply waits on
+            // (R-81); a relation's rows are what is there, so none yet is
+            // an error.
+            Outcome::NotYet(why) => {
+                let (name, _) = table.split_once('|').unwrap_or((table, ""));
+                match name == DOCUMENT || name.starts_with("document.") {
+                    true => Ok(vec![externs::row(
+                        f,
+                        inputs,
+                        vec![
+                            Value::Str(location.clone()),
+                            Value::Null {
+                                label: crate::value::null_label(crate::files::READ, &location, "1"),
+                                class: crate::value::NullClass::Open,
+                                ty: String::new(),
+                            },
+                        ],
+                    )]),
+                    false => Err(anyhow!(
+                        "table {name}: {why}: a relation is read from what is there; read the \
+                         document as a value and the relation from it once it is"
+                    )),
+                }
+            }
         })
-    }
-
-    /// `table.git.p(repo, ref)`: the commit the ref names now.
-    fn resolve(&self, base: &Path, repo: &str, rev: &str) -> Result<Vec<Vec<Value>>> {
-        let dir = base.join(repo);
-        let commit = crate::git::resolve(&dir, rev).map_err(|e| {
-            anyhow!("git repository {repo}: ref {rev} does not name a commit ({e})")
-        })?;
-        self.refs
-            .borrow_mut()
-            .insert((dir, commit.clone()), rev.to_string());
-        let s = |x: &str| Value::Str(x.to_string());
-        Ok(vec![vec![s(repo), s(rev), s(&commit)]])
     }
 
     /// The rows of a table, read by `read` (its text, how rows name the
@@ -266,7 +306,11 @@ impl Tables {
         let (text, shown, source) = read()?;
         let stamp = match &source {
             Source::File(_) => watch::digest(text.as_bytes()),
-            Source::Git { .. } => inputs[1].as_str().unwrap_or_default().to_string(),
+            Source::Git { .. } => commit_of(&shown)
+                .map(|(_, c)| c)
+                .unwrap_or_default()
+                .to_string(),
+            Source::Location(_) => watch::REMOTE.to_string(),
         };
         let (name, selector) = table.split_once('|').unwrap_or((table, ""));
         self.read
@@ -461,6 +505,9 @@ fn selected_leaves(doc: Value, selector: &str) -> Result<Vec<(Option<usize>, Str
 /// A whole document as one value (a loader call, `yaml(path)`): a CSV one
 /// is a list of objects by its header, every cell text.
 pub fn document_of(format: &str, text: &str) -> Result<Value> {
+    if format == "text" {
+        return Ok(Value::Str(text.to_string()));
+    }
     if format != "csv" {
         return document(format, text);
     }
@@ -482,6 +529,14 @@ pub fn document_of(format: &str, text: &str) -> Result<Value> {
 
 fn short(commit: &str) -> &str {
     &commit[..commit.len().min(7)]
+}
+
+/// The repository and commit a repository's row was read at, from how it
+/// names where it is: `REPO@COMMIT:PATH[:LINE]`.
+fn commit_of(shown: &str) -> Option<(&str, &str)> {
+    let (repo, rest) = shown.rsplit_once('@')?;
+    let (c, _) = rest.split_once(':')?;
+    (c.len() >= 7 && c.bytes().all(|b| b.is_ascii_hexdigit())).then_some((repo, c))
 }
 
 /// A cell as the file holds it: CSV's text, or a document's value.
@@ -671,6 +726,7 @@ fn rows(format: &str, table: &str, text: &str) -> Result<Vec<Row>> {
                 })
                 .collect()
         }
+        "text" => bail!("a text document is one string: a relation reads csv, json, yaml or toml"),
         f => bail!("unknown format {f}"),
     }
 }
@@ -983,7 +1039,7 @@ fn toml_value(v: toml::Value) -> Result<Value> {
 pub fn expand_set_from(program: Program, declared: &mut [crate::inputs::Declared]) -> Program {
     let is_doc = |l: &Lit| {
         matches!(l, Lit::Pos(a) if parse_name(&a.pred).is_some_and(|(f, t)| {
-            f != "git" && t.split('|').next() == Some(SET_DOC)
+            f != VALUE && t.split('|').next() == Some(SET_DOC)
         }))
     };
     let stack = program.stack;
@@ -1186,54 +1242,65 @@ fn subst(a: &Atom, v: &str, t: &Term) -> Atom {
     Atom { args, ..a.clone() }
 }
 
-/// The commit of each git table call among `answers`: (table, repo, ref,
-/// commit).
-fn commits(answers: &[Answer]) -> Vec<(&str, &str, &str, &str)> {
+/// The commit of each read of a repository's file among `answers` (a
+/// `git+..` location's): (table, location, the repository as rows name
+/// it, the ref, commit).
+fn commits(answers: &[Answer]) -> Vec<(&str, &str, &str, String, &str)> {
     answers
         .iter()
         .filter_map(|a| {
-            let ("git", table) = parse_name(&a.pred)? else {
+            let (_, table) = parse_name(&a.pred)?;
+            let location = a.inputs.first()?.as_str()?;
+            if !location.starts_with("git+") {
+                return None;
+            }
+            let Value::Str(at) = a.rows.first()?.get(1)? else {
                 return None;
             };
-            let [_, _, Value::Str(c)] = a.rows.first()?.as_slice() else {
-                return None;
-            };
-            Some((
-                table,
-                a.inputs[0].as_str()?,
-                a.inputs[1].as_str()?,
-                c.as_str(),
-            ))
+            let rev = crate::uri::Uri::parse(location)
+                .ok()?
+                .query_pairs()
+                .remove("ref")?;
+            let table = table.split('|').next().unwrap_or(table);
+            let (repo, commit) = commit_of(at)?;
+            Some((table, location, repo, rev, commit))
         })
         .collect()
 }
 
-/// Each git table whose ref names another commit now than when the
-/// deployment was last applied (`applied`, from state):
+/// Each repository's file whose ref names another commit now than when
+/// the deployment was last applied (`applied`, from state):
 /// `peering: ops.git env/prod 3b1c7e0 -> a9d0f11`.
 pub fn moved(applied: &[Answer], now: &[Answer]) -> Vec<String> {
     let was = commits(applied);
     commits(now)
         .into_iter()
-        .filter_map(|(t, repo, rev, c)| {
-            let (_, _, _, old) = was
+        .filter_map(|(t, location, repo, rev, c)| {
+            let (.., old) = was
                 .iter()
-                .find(|(t2, r2, v2, _)| (*t2, *r2, *v2) == (t, repo, rev))?;
+                .find(|(t2, l2, ..)| (*t2, *l2) == (t, location))?;
             (*old != c).then(|| format!("{t}: {repo} {rev} {} -> {}", short(old), short(c)))
         })
         .collect()
 }
 
-/// Keep in `applied` (state's extern answers) the commits the apply read,
-/// replacing the ones before. They are not replayed: a table extern is not
-/// `persist`.
+/// Keep in `applied` (state's extern answers) the commit of each
+/// repository's file the apply read, replacing the ones before: the
+/// answer's location and where its rows were read (`REPO@COMMIT:PATH`),
+/// not its rows. They are not replayed: a table extern is not `persist`.
 pub fn record(applied: &mut Vec<Answer>, now: &[Answer]) {
-    for a in now
-        .iter()
-        .filter(|a| parse_name(&a.pred).is_some_and(|(f, _)| f == "git"))
-    {
+    for a in now.iter().filter(|a| {
+        a.inputs
+            .first()
+            .and_then(Value::as_str)
+            .is_some_and(|l| l.starts_with("git+"))
+    }) {
+        let Some(row) = a.rows.first() else { continue };
         applied.retain(|b| !(b.pred == a.pred && b.inputs == a.inputs));
-        applied.push(a.clone());
+        applied.push(Answer {
+            rows: vec![row.iter().take(2).cloned().collect()],
+            ..a.clone()
+        });
     }
 }
 

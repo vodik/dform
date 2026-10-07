@@ -60,7 +60,7 @@ pub fn mock_grants() -> Grants {
     Grants {
         provider: "fake".into(),
         allow: ["wasi:filesystem".to_string()].into(),
-        credentials: Default::default(),
+        ..Grants::default()
     }
 }
 

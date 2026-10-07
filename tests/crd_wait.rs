@@ -170,9 +170,8 @@ fn with_the_kubernetes_provider_the_kind_waits_on_its_crd() {
         "stacks/p.df",
         r#"
 use fake
-use ssh
 resource db.postgres server { name = "server" }
-let raw = ssh.read(server.endpoint, "ubuntu", "/etc/rancher/k3s/k3s.yaml")
+let raw: secret(string) = text("ssh://ubuntu@${server.endpoint}/etc/rancher/k3s/k3s.yaml")
 use k8s { source = "./providers/k8s", kubeconfig = raw }
 
 resource k8s.custom_resource_definition "${d.metadata.name}" = d where d in yaml("crds.yml")

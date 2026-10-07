@@ -15,11 +15,6 @@ pub mod policy;
 pub mod providers;
 pub mod queue;
 pub mod source;
-#[cfg(not(target_family = "wasm"))]
-pub mod ssh;
-#[cfg(target_family = "wasm")]
-#[path = "ssh_wasm.rs"]
-pub mod ssh;
 pub mod timed;
 pub mod wire;
 

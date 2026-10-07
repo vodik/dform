@@ -1,16 +1,18 @@
-//! The built-in `ssh` provider (`use ssh`): `ssh.read` over SFTP, against
-//! a real sshd each test starts on a free port with a throwaway host key,
+//! The `ssh://` transport (R-153): `text("ssh://USER@HOST/PATH")` over
+//! SFTP, and `git+ssh://` repositories through `git-upload-pack`, against a
+//! real sshd each test starts on a free port with a throwaway host key,
 //! and a client key in a scratch `HOME` (no agent). It only reads: a
 //! program that calls `ssh.run` is told a command is a provider's apply
-//! (R-151). A host that does not answer yet, and a file that is not
+//! (R-151); `use ssh` and `ssh.read` are gone, each an error naming the
+//! location. A host that does not answer yet, and a file that is not
 //! there yet, are "not yet": the apply waits (R-81). A host key is
 //! recorded by the first apply and checked after; a changed one is an
 //! error until `dform state forget-host`.
 //!
-//! Authentication never prompts (R-125): the agent's keys, then the key
-//! the program names or the unencrypted `~/.ssh/id_*`; a refusal says
-//! what was offered and what to do. The agent is russh's, served by the
-//! test on a unix socket.
+//! Authentication never prompts (R-125): the key dform.toml names for the
+//! location (`[files] credentials`), the agent's keys, then the
+//! unencrypted `~/.ssh/id_*`; a refusal says what was offered and what to
+//! do. The agent is russh's, served by the test on a unix socket.
 //!
 //! The one shell-out allowed in tests: the `sshd` binary. With none
 //! installed, each test says so and passes.
@@ -166,9 +168,9 @@ fn project(name: &str, port: u16) -> Scratch {
     s.write(
         "p.df",
         &format!(
-            "\nuse fake\nuse ssh\n\n\
+            "\nuse fake\n\n\
              let host = \"127.0.0.1:{port}\"\n\
-             let raw = ssh.read(host, \"{user}\", \"{dir}/k3s.yaml\")\n\
+             let raw: secret(string) = text(\"ssh://{user}@${{host}}{dir}/k3s.yaml\")\n\
              resource db.secret kube {{ password = raw }}\n",
             user = user(),
             dir = s.path("remote").display(),
@@ -196,6 +198,7 @@ fn run_with(s: &Scratch, agent: Option<&Path>, args: &[&str]) -> Run {
     cmd.args(yes(args))
         .current_dir(&s.dir)
         .env("HOME", s.path("home"))
+        .env("XDG_CACHE_HOME", s.path("home/.cache"))
         .env("DFORM_CREDENTIALS", s.path("creds"))
         .env("DFORM_WAIT_POLL_MS", "50");
     match agent {
@@ -217,9 +220,9 @@ fn state(s: &Scratch) -> serde_json::Value {
     s.json("dform.state/p/state.json")
 }
 
-/// `ssh.read`'s content never prints and the plan file holds only its
-/// digest. An apply of the plan file reads it again, and refuses the plan
-/// when it changed.
+/// What a host's file read into a secret holds never prints and the plan
+/// file holds only its digest. An apply of the plan file reads it again,
+/// and refuses the plan when it changed.
 #[test]
 fn reads_a_file() {
     let Some(bin) = sshd_binary() else { return };
@@ -236,7 +239,8 @@ fn reads_a_file() {
     s.write(
         "q.df",
         &format!(
-            "\nuse ssh\nkube(r) where r = ssh.read(\"127.0.0.1:{port}\", \"{}\", \"{}\")\n",
+            "\nuse fake\nlet raw: secret(string) = text(\"ssh://{}@127.0.0.1:{port}{}\")\n\
+             kube(r) where r = raw\n",
             user(),
             s.path("remote/k3s.yaml").display()
         ),
@@ -248,7 +252,7 @@ fn reads_a_file() {
         let r = run(&s, args).success();
         assert!(!r.stdout.contains("KUBE-SECRET"), "{args:?}: {}", r.stdout);
         assert!(
-            r.stdout.contains("secret(23 B)") || r.stdout.contains("ssh.read[\\\"127.0.0.1:"),
+            r.stdout.contains("secret(23 B)") || r.stdout.contains("sensitive"),
             "{args:?}: {}",
             r.stdout
         );
@@ -262,7 +266,10 @@ fn reads_a_file() {
         answers[0]["sensitive"]
             .as_str()
             .unwrap()
-            .starts_with("ssh.read/127.0.0.1:"),
+            .starts_with(&format!(
+                "table.text.document/ssh://{}@127.0.0.1:{port}/",
+                user()
+            )),
         "{file}"
     );
     assert!(answers[0]["digest"].is_string(), "{file}");
@@ -297,14 +304,14 @@ fn a_host_or_a_file_not_there_yet_is_waited_on() {
     let timeout = |t: &str| {
         s.write(
             "dform.toml",
-            &format!("[project]\nedition = \"2026\"\n\n[providers]\nssh = {{ wait = \"{t}\" }}\n"),
+            &format!("[project]\nedition = \"2026\"\n\n[files]\nwait = \"{t}\"\n"),
         )
     };
     timeout("1s");
     let r = run(&s, &["apply", "p.df"]).failure();
     assert!(r.stderr.contains("waiting on "), "{}", r.stderr);
-    // An extern's call as the program writes it (R-111).
-    assert!(r.stderr.contains("ssh.read(\"127.0.0.1:"), "{}", r.stderr);
+    // The location as the program reads it (R-153).
+    assert!(r.stderr.contains("ssh://"), "{}", r.stderr);
     assert!(r.stderr.contains("waited 1s on "), "{}", r.stderr);
     assert!(r.stderr.contains("still unknown"), "{}", r.stderr);
 
@@ -313,7 +320,8 @@ fn a_host_or_a_file_not_there_yet_is_waited_on() {
     std::fs::remove_file(s.path("remote/k3s.yaml")).unwrap();
     let r = run(&s, &["plan", "p.df"]).success();
     assert!(
-        r.stdout.contains("\n  waits on  ssh.read(\"127.0.0.1:"),
+        r.stdout
+            .contains(&format!("\n  waits on  ssh://{}@127.0.0.1:{port}/", user())),
         "{}",
         r.stdout
     );
@@ -337,7 +345,7 @@ fn a_host_or_a_file_not_there_yet_is_waited_on() {
     std::thread::sleep(Duration::from_millis(1500));
     s.write("remote/k3s.yaml", "token: KUBE-SECRET-LATE\n");
     let r = apply.join().unwrap().success();
-    assert!(r.stderr.contains("waiting on ssh.read("), "{}", r.stderr);
+    assert!(r.stderr.contains("waiting on ssh://"), "{}", r.stderr);
     for out in [&r.stdout, &r.stderr] {
         assert!(!out.contains("KUBE-SECRET"), "{out}");
     }
@@ -421,29 +429,62 @@ fn answered(r: &Run) {
     assert!(!r.stdout.contains("waits on"), "{}", r.stdout);
 }
 
-/// The provider reads; it runs no command (R-151). A program that calls
-/// `ssh.run` is told where a command belongs, at the call, with no host
-/// contacted.
+/// A read runs no command (R-151). A program that calls `ssh.run` is
+/// told where a command belongs, at the call, with no host contacted; the
+/// ssh provider (`use ssh`, `ssh.read`) and its `[providers] ssh` table
+/// are gone, each an error naming the location (R-153).
 #[test]
-fn ssh_run_is_not_a_function() {
+fn ssh_run_is_not_a_function_and_the_provider_is_gone() {
     let s = project("ssh-run", free_port());
     let p = s.read("p.df").replace(
-        "let raw = ",
-        "let out = ssh.run(host, \"root\", \"apt-get install -y k3s\")\nlet raw = ",
+        "let raw: ",
+        "let out = ssh.run(host, \"root\", \"apt-get install -y k3s\")\nlet raw: ",
     );
     s.write("p.df", &p);
     let r = run(&s, &["plan", "p.df"]).failure();
     assert!(
         r.stderr
-            .contains("p.df:6:11: `ssh.run` is not a function: a command is a provider's apply"),
+            .contains("p.df:5:11: `ssh.run` is not a function: a command is a provider's apply"),
         "{}",
         r.stderr
     );
     assert!(
-        r.stderr.contains("ssh.read(host, user, path)"),
+        r.stderr.contains("text(\"ssh://USER@HOST/PATH\")"),
         "{}",
         r.stderr
     );
+
+    s.write(
+        "p.df",
+        "\nuse ssh\nlet raw = ssh.read(\"h\", \"u\", \"/etc/k3s.yaml\")\n",
+    );
+    let r = run(&s, &["plan", "p.df"]).failure();
+    assert!(
+        r.stderr.contains("the ssh provider is gone (R-153)"),
+        "{}",
+        r.stderr
+    );
+    s.write(
+        "p.df",
+        "\nlet raw = ssh.read(\"h\", \"u\", \"/etc/k3s.yaml\")\n",
+    );
+    let r = run(&s, &["plan", "p.df"]).failure();
+    assert!(
+        r.stderr.contains("`ssh.read` is gone (R-153)"),
+        "{}",
+        r.stderr
+    );
+    assert!(
+        r.stderr.contains("text(\"ssh://USER@HOST/PATH\")"),
+        "{}",
+        r.stderr
+    );
+    s.write(
+        "dform.toml",
+        "[project]\nedition = \"2026\"\n\n[providers]\nssh = { timeout = \"10m\" }\n",
+    );
+    let r = run(&s, &["plan", "p.df"]).failure();
+    assert!(r.stderr.contains("[files] wait"), "{}", r.stderr);
 }
 
 /// An OpenSSH ed25519 key with the passphrase `blabla` (russh's own test
@@ -534,8 +575,8 @@ fn a_key_with_a_passphrase_is_used_through_the_agent() {
             "{host} refused {u}: no agent at SSH_AUTH_SOCK, and ~/.ssh/id_ed25519 has a passphrase",
             u = user()
         ),
-        "start an agent and `ssh-add`, or name an unencrypted deploy key: use ssh { key = \
-         \"k3s-admin\" }",
+        "start an agent and `ssh-add`, or name an unencrypted deploy key in dform.toml: [files] \
+         credentials = { \"ssh://HOST/*\" = \"ssh:k3s-admin\" }",
     );
 
     let sock = agent(&s, &[key(30), unlocked()]);
@@ -576,19 +617,21 @@ fn an_agent_whose_keys_the_host_refuses_says_which() {
     );
 }
 
-/// `use ssh { key = NAME }`: the credential `ssh:NAME`'s file, or the
-/// agent's key of that fingerprint (or comment), offered first (a host
-/// stops listening after `MaxAuthTries` refusals); neither is a refusal
-/// saying where it looked.
+/// `[files] credentials = { "ssh://HOST/*" = "ssh:NAME" }`: the
+/// credential `ssh:NAME`'s file, or the agent's key of that fingerprint
+/// (or comment), offered first (a host stops listening after
+/// `MaxAuthTries` refusals); neither is a refusal saying where it looked.
 #[test]
 fn a_named_key_is_the_agents_or_the_credentials() {
     let Some(bin) = sshd_binary() else { return };
     let port = free_port();
     let s = project("ssh-named", port);
     std::fs::remove_file(s.path("home/.ssh/id_ed25519")).unwrap();
-    let unnamed = s.read("p.df");
-    let p = unnamed.replace("use ssh\n", "use ssh { key = \"k3s-admin\" }\n");
-    s.write("p.df", &p);
+    let unnamed = s.read("dform.toml");
+    let named = |k: &str| {
+        format!("{unnamed}\n[files]\ncredentials = {{ \"ssh://127.0.0.1:*\" = \"ssh:{k}\" }}\n")
+    };
+    s.write("dform.toml", &named("k3s-admin"));
     let _sshd = Sshd::letting_in(
         &bin,
         &s,
@@ -626,8 +669,7 @@ fn a_named_key_is_the_agents_or_the_credentials() {
 
     // The agent's, among fifteen it holds that the host refuses, and the
     // host hangs up at the first refused.
-    let p = p.replace("k3s-admin", &fingerprint(&key(CLIENT)));
-    s.write("p.df", &p);
+    s.write("dform.toml", &named(&fingerprint(&key(CLIENT))));
     std::fs::remove_file(&sock).unwrap();
     let mut keys: Vec<PrivateKey> = (40..55).map(key).collect();
     keys.push(key(CLIENT));
@@ -636,7 +678,7 @@ fn a_named_key_is_the_agents_or_the_credentials() {
 
     // None named: the host hangs up before `~/.ssh/id_ed25519`, and the
     // refusal says so.
-    s.write("p.df", &unnamed);
+    s.write("dform.toml", &unnamed);
     write_private(&s.path("home/.ssh/id_ed25519"), &key(CLIENT));
     std::fs::remove_file(&sock).unwrap();
     let sock = agent(&s, &keys[..2]);
@@ -653,9 +695,81 @@ fn a_named_key_is_the_agents_or_the_credentials() {
     );
     assert!(
         r.stderr.contains(
-            "name the key the host holds, and it is offered first: use ssh { key = \"k3s-admin\" }"
+            "name the key the host holds in dform.toml, and it is offered first: [files] \
+             credentials = { \"ssh://HOST/*\" = \"ssh:k3s-admin\" }"
         ),
         "{}",
         r.stderr
+    );
+}
+
+/// A repository over ssh (`git+ssh://`, R-153): the host runs
+/// `git-upload-pack` (the test's sshd, the host's git), dform fetches its
+/// branches and tags into the mirror over the SSH client in process, and
+/// reads the file at the tag; the rows name the commit.
+#[test]
+fn a_repository_is_read_over_ssh() {
+    let Some(bin) = sshd_binary() else { return };
+    let git = |dir: &Path, args: &[&str]| {
+        Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .env("GIT_AUTHOR_NAME", "t")
+            .env("GIT_AUTHOR_EMAIL", "t@t")
+            .env("GIT_COMMITTER_NAME", "t")
+            .env("GIT_COMMITTER_EMAIL", "t@t")
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+    };
+    let port = free_port();
+    let s = project("ssh-git", port);
+    std::fs::create_dir_all(s.path("served")).unwrap();
+    if git(&s.path("served"), &["init", "-q", "--bare", "ops.git"]).is_none() {
+        eprintln!("skipped: no git to make the fixture with");
+        return;
+    }
+    git(&s.path("served"), &["clone", "-q", "ops.git", "work"]).unwrap();
+    let w = s.path("served/work");
+    std::fs::create_dir_all(w.join("docs")).unwrap();
+    std::fs::write(w.join("docs/vpcs.yml"), "name: a\n---\nname: b\n").unwrap();
+    git(&w, &["add", "."]).unwrap();
+    git(&w, &["commit", "-q", "-m", "vpcs"]).unwrap();
+    git(&w, &["tag", "v1.0.0"]).unwrap();
+    git(
+        &w,
+        &["push", "-q", "origin", "HEAD:refs/heads/main", "v1.0.0"],
+    )
+    .unwrap();
+    let commit = git(&w, &["rev-parse", "HEAD"]).unwrap();
+    s.write(
+        "p.df",
+        &format!(
+            "\nuse fake\n\
+             resource net.vpc \"${{d.name}}\" {{ cidr_block = \"10.0.0.0/16\" }} \
+             where d in yaml(\"git+ssh://{u}@127.0.0.1:{port}{repo}/docs/vpcs.yml?ref=v1.0.0\")\n",
+            u = user(),
+            repo = s.path("served/ops.git").display(),
+        ),
+    );
+    let _sshd = Sshd::start(&bin, &s, port, HOST_A);
+    let r = run(&s, &["plan", "--out", "plan.json", "p.df"]).success();
+    assert!(
+        r.stdout.contains("+ net.vpc a") && r.stdout.contains("+ net.vpc b"),
+        "{}",
+        r.stdout
+    );
+    // The plan file holds the commit read; the mirror is the cache's.
+    assert!(
+        s.read("plan.json").contains(&commit),
+        "{}",
+        s.read("plan.json")
+    );
+    let mirror = s.path("home/.cache/dform/git");
+    assert!(
+        std::fs::read_dir(&mirror).map(|d| d.count()).unwrap_or(0) == 1,
+        "{}",
+        mirror.display()
     );
 }

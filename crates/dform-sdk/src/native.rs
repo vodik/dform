@@ -28,6 +28,7 @@ impl h::manifest_server::Manifest for Declared {
     ) -> Result<tonic::Response<h::ManifestResponse>, tonic::Status> {
         Ok(tonic::Response::new(h::ManifestResponse {
             imports: self.0.clone(),
+            schemes: Vec::new(),
         }))
     }
 }
@@ -179,17 +180,21 @@ impl Calls for Grpc {
         conv::run(r)
     }
 
-    fn read(&self, on: &Target, path: &str) -> Result<Vec<u8>, Failure> {
-        let r = rpc!(
-            self,
-            read_file,
-            h::ReadFileRequest {
-                on: Some(conv::from_target(on)),
-                path: path.into(),
-            }
-        )?;
-        conv::to_failure(r.failure)?;
-        Ok(r.data)
+    fn files_read(&self, location: &str) -> Result<Vec<u8>, Failure> {
+        let req = h::ReadRequest {
+            location: location.into(),
+        };
+        let chunks = self.call(move |mut c| {
+            Box::pin(async move {
+                let mut s = c.read(req).await?.into_inner();
+                let mut out = Vec::new();
+                while let Some(chunk) = s.message().await? {
+                    out.push(chunk);
+                }
+                Ok(tonic::Response::new(out))
+            })
+        })?;
+        conv::read(chunks)
     }
 
     fn write(&self, on: &Target, path: &str, data: &[u8], mode: u32) -> Result<(), Error> {
@@ -223,20 +228,6 @@ impl Calls for Grpc {
 
     fn tunnel(&self, h: Handle) -> Option<Endpoint> {
         self.tunnels().get(&h).cloned()
-    }
-
-    fn git_read(&self, repo: &str, rev: &str, path: &str) -> Result<Vec<u8>, Error> {
-        let r = rpc!(
-            self,
-            git_read,
-            h::GitReadRequest {
-                repo: repo.into(),
-                rev: rev.into(),
-                path: path.into(),
-            }
-        )?;
-        conv::to_error(r.failure)?;
-        Ok(r.data)
     }
 
     fn git_commit(

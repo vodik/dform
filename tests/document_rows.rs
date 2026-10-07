@@ -114,7 +114,7 @@ fn a_document_read_from_git_says_its_commit() {
     s.write(
         "p.df",
         "\nuse k8s\nresource k8s.config_map \"${d.metadata.name}\" = d \
-         where d in yaml(git(\"maps.git\", \"main\", \"maps.yml\"))\n",
+         where d in yaml(\"git+file:maps.git/maps.yml?ref=main\")\n",
     );
     let r = s.run(&["plan", "p.df"]).success();
     let want = format!("      = maps.git@{}:maps.yml:8  (50 B)\n", &commit[..7]);

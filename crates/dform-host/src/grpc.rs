@@ -59,6 +59,21 @@ impl h::host_server::Host for Service {
             .await
     }
 
+    type ReadStream = tonic::codegen::tokio_stream::Iter<
+        std::vec::IntoIter<std::result::Result<h::ReadChunk, Status>>,
+    >;
+
+    async fn read(&self, r: Request<h::ReadRequest>) -> R<Self::ReadStream> {
+        let location = r.into_inner().location;
+        let chunks = self
+            .with(move |s| conv::chunks(s.files_read(&location)))
+            .await?
+            .into_inner();
+        Ok(Response::new(tonic::codegen::tokio_stream::iter(
+            chunks.into_iter().map(Ok).collect::<Vec<_>>(),
+        )))
+    }
+
     async fn exec(&self, r: Request<h::ExecRequest>) -> R<h::ExecResponse> {
         let r = r.into_inner();
         let on = conv::target(r.on);
@@ -68,8 +83,11 @@ impl h::host_server::Host for Service {
 
     async fn read_file(&self, r: Request<h::ReadFileRequest>) -> R<h::ReadFileResponse> {
         let r = r.into_inner();
+        // `ssh.read`, folded into `files.read` (R-153).
         let on = conv::target(r.on);
-        self.with(move |s| match s.read(&on, &r.path) {
+        let port = on.port.map(|p| format!(":{p}")).unwrap_or_default();
+        let location = format!("ssh://{}@{}{port}{}", on.user, on.host, r.path);
+        self.with(move |s| match s.files_read(&location) {
             Ok(data) => h::ReadFileResponse {
                 failure: None,
                 data,
@@ -113,13 +131,21 @@ impl h::host_server::Host for Service {
 
     async fn git_read(&self, r: Request<h::GitReadRequest>) -> R<h::GitReadResponse> {
         let r = r.into_inner();
-        self.with(move |s| match s.git_read(&r.repo, &r.rev, &r.path) {
+        // `git.read`, folded into `files.read` (R-153).
+        let repo = r.repo.split_once("://").map_or(r.repo.as_str(), |(_, x)| x);
+        let location = format!(
+            "git+https://{}//{}?ref={}",
+            repo.trim_end_matches('/'),
+            r.path,
+            r.rev
+        );
+        self.with(move |s| match s.files_read(&location) {
             Ok(data) => h::GitReadResponse {
                 failure: None,
                 data,
             },
-            Err(e) => h::GitReadResponse {
-                failure: Some(conv::from_error(e)),
+            Err(f) => h::GitReadResponse {
+                failure: Some(conv::from_failure(f)),
                 data: Vec::new(),
             },
         })

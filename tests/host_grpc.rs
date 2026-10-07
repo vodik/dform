@@ -3,7 +3,9 @@
 //! (`dform_sdk::native::Grpc`). A credential is opened by the name dform.toml
 //! grants and applied by the host, its value never crossing; one not
 //! granted is refused naming the provider and the credential; a failure's
-//! class and `not yet` cross as themselves.
+//! class and `not yet` cross as themselves. A location is read through
+//! `files.read` (`Host.Read`, R-153) as dform.toml grants it, a scheme a
+//! provider declares routed to that provider by the host.
 
 mod common;
 
@@ -21,6 +23,7 @@ fn grants(credentials: &[&str]) -> Grants {
         provider: "k8s".into(),
         allow: Default::default(),
         credentials: credentials.iter().map(|s| s.to_string()).collect(),
+        ..Grants::default()
     }
 }
 
@@ -115,9 +118,6 @@ impl Ssh for Booting {
     fn exec(&self, on: &Target, _: &[String], _: Option<&[u8]>) -> Result<Run, Failure> {
         Err(Failure::NotYet(format!("{} is booting", on.host)))
     }
-    fn read(&self, _: &Target, _: &str) -> Result<Vec<u8>, Failure> {
-        Err(Error::retryable("connection reset").into())
-    }
     fn write(&self, _: &Target, _: &str, _: &[u8], _: u32) -> Result<(), Error> {
         Err(Error::maybe_applied("timed out after sending"))
     }
@@ -139,10 +139,6 @@ fn failures_cross_with_their_class() {
     assert_eq!(
         c.exec(&on, &["true".into()], None).unwrap_err(),
         Failure::NotYet("node1 is booting".into())
-    );
-    assert_eq!(
-        c.read(&on, "/etc/x").unwrap_err(),
-        Failure::Error(Error::retryable("connection reset"))
     );
     assert_eq!(
         c.write(&on, "/etc/x", b"", 0o600).unwrap_err(),
@@ -193,4 +189,69 @@ fn a_provider_s_host_calls_run_at_once() {
             (200, "200 pair".to_string())
         );
     }
+}
+
+/// A provider declaring `gs` (as its manifest would): the run's reader
+/// routes `gs://` to it. This one answers one object and says the rest
+/// are not there yet.
+struct Gs;
+
+impl dform::files::Transport for Gs {
+    fn read(&self, at: &dform::uri::Uri, _: &dform::files::Files) -> Result<Vec<u8>, Failure> {
+        match at.path.as_str() {
+            "/cfg.yml" => Ok(b"from gs".to_vec()),
+            _ => Err(Failure::NotYet(format!("{at} is not written yet"))),
+        }
+    }
+}
+
+/// `files.read` over gRPC: a location the provider's grants name is read
+/// by the host and streams back (`Host.Read`); one they do not name is
+/// refused naming the provider, the location and the dform.toml key; a
+/// project file is never a provider's; a scheme another provider declares
+/// is read by that provider, through the host, its `not yet` crossing as
+/// itself.
+#[test]
+fn a_location_is_read_as_the_grants_allow() {
+    let files = std::sync::Arc::new(dform::files::Files::default());
+    files.declare("gs", "google", std::sync::Arc::new(Gs));
+    let mut g = grants(&[]);
+    g.reads = ["data:*", "gs://bucket/*", "file:*"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    g.files = dform::files::Shared(Some(files));
+    let (_h, c) = client(Services::new(g));
+    assert_eq!(c.files_read("data:,hello%20host").unwrap(), b"hello host");
+    let big = format!("data:;base64,{}", "QUFB".repeat(600_000));
+    assert_eq!(c.files_read(&big).unwrap().len(), 1_800_000);
+    assert_eq!(c.files_read("gs://bucket/cfg.yml").unwrap(), b"from gs");
+    assert_eq!(
+        c.files_read("gs://bucket/later.yml").unwrap_err(),
+        Failure::NotYet("gs://bucket/later.yml is not written yet".into())
+    );
+    let Failure::Error(e) = c.files_read("https://other.example/x").unwrap_err() else {
+        panic!("not an error")
+    };
+    assert_eq!(e.class, Class::Final);
+    assert!(
+        e.message
+            .contains("provider k8s is not granted a read of https://other.example/x")
+            && e.message.contains("[providers.k8s] reads"),
+        "{}",
+        e.message
+    );
+    let Failure::Error(e) = c.files_read("gs://other/cfg.yml").unwrap_err() else {
+        panic!("not an error")
+    };
+    assert!(
+        e.message
+            .contains("not granted a read of gs://other/cfg.yml"),
+        "{}",
+        e.message
+    );
+    let Failure::Error(e) = c.files_read("file:///etc/passwd").unwrap_err() else {
+        panic!("not an error")
+    };
+    assert!(e.message.contains("the project's"), "{}", e.message);
 }

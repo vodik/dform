@@ -138,11 +138,24 @@ fn let_key(a: &Atom) -> Option<&str> {
 /// `names` in an instance or an activation): a read of `k` is the
 /// collapsed cell, so two rows that agree are one value and two that
 /// disagree a conflict.
+/// `__secret_let(k, path)`: the `let k` is declared secret at `path`
+/// (`""` all of it), which [`lets`] makes the scope's `secret_cell`.
+pub const SECRET_LET: &str = "__secret_let";
+
 fn lets(stmts: Vec<Stmt>, scope: &str, names: Option<&Names>) -> Vec<Stmt> {
     let mut out = Vec::with_capacity(stmts.len());
     let mut keys: BTreeMap<String, Span> = BTreeMap::new();
+    // A `let` declared `secret(T)`, or of an object type with a secret
+    // field (`SECRET_LET`, R-153), is a secret cell, each such path of it.
+    let mut secret: Vec<(String, Span)> = Vec::new();
     for s in stmts {
         let (head, body) = match s {
+            Stmt::Fact(a) if a.pred == SECRET_LET => {
+                if let [Term::Val(Value::Str(k)), Term::Val(Value::Str(q))] = a.args.as_slice() {
+                    secret.push((crate::types::dotted(k, q), a.span));
+                }
+                continue;
+            }
             Stmt::Fact(a) if let_key(&a).is_some() => (a, Vec::new()),
             Stmt::Rule(r) if let_key(&r.head).is_some() => (r.head, r.body),
             other => {
@@ -161,6 +174,16 @@ fn lets(stmts: Vec<Stmt>, scope: &str, names: Option<&Names>) -> Vec<Stmt> {
             ..head
         };
         out.push(fact_or_rule(arg, body));
+    }
+    for (k, span) in &secret {
+        let root = k.split('.').next().unwrap_or(k);
+        if keys.contains_key(root) {
+            out.push(Stmt::Fact(atom(
+                crate::transform::SECRET_CELL,
+                vec![str_term(LET), str_term(scope), str_term(k)],
+                *span,
+            )));
+        }
     }
     for (k, span) in keys {
         let pred = names

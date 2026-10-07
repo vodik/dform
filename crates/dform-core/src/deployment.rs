@@ -438,9 +438,9 @@ pub struct Planned {
 pub struct Evaluator {
     pub backend: Rc<Providers>,
     pub externs: Externs<'static>,
-    /// `use ssh`'s host keys: what an apply keeps in state
-    /// (`plugin::ssh::Ssh::keep`).
-    pub ssh: Rc<crate::plugin::ssh::Ssh>,
+    /// The run's reader of locations (R-153): the SSH host keys it met,
+    /// which an apply keeps in state (`files::Files::keep`).
+    pub files: std::sync::Arc<crate::files::Files>,
     pub tables: Rc<tables::Tables>,
     /// The program with the policy rules.
     pub program: Program,
@@ -611,8 +611,8 @@ impl Evaluator {
                     on: BTreeSet::from([label.clone()]),
                 });
             }
-            // One waiting on what dform's own extern has not answered (the
-            // kubeconfig `ssh.read` reads from a host still booting) waits
+            // One waiting on what dform's own read has not answered (the
+            // kubeconfig `text("ssh://..")` reads from a host still booting) waits
             // on it through the provider: said as both.
             let waits = sections
                 .pending
@@ -987,7 +987,7 @@ impl Evaluator {
 
 /// The resources each provider's settings are made from, by the
 /// program's name of the provider: every resource attribute its
-/// `provider_config` row rests on (`kubeconfig = ssh.read(server.ip,
+/// `provider_config` row rests on (`kubeconfig = text("ssh://..${server.ip}
 /// ..)`: the server).
 fn settings_reads(res: &EvalResult) -> BTreeMap<String, BTreeSet<Address>> {
     let mut out: BTreeMap<String, BTreeSet<Address>> = BTreeMap::new();
@@ -1201,6 +1201,13 @@ impl Located {
         let dep = self.dep.clone();
         let reading = std::thread::spawn(move || dep.load_state());
         let started = crate::timing::span(|| "providers started and configured".into());
+        // The run's reader of locations (R-153): the program's loaders and
+        // the providers' host read through it, one mirror cache and one
+        // known-hosts store (state's, once read).
+        let files = std::sync::Arc::new(crate::files::Files::new(
+            crate::files::Settings::of(l.manifest.as_ref()),
+            Default::default(),
+        ));
         let backend = Rc::new(if l.starts_none() {
             Providers::none()
         } else {
@@ -1223,7 +1230,16 @@ impl Located {
                         .unwrap_or_default(),
                     // What dform.toml grants each provider, for the
                     // launcher (R-13b, R-143).
-                    grants: l.manifest.iter().flat_map(|m| m.grants()).collect(),
+                    grants: l
+                        .manifest
+                        .iter()
+                        .flat_map(|m| m.grants())
+                        .map(|(k, mut g)| {
+                            g.files = crate::files::Shared(Some(files.clone()));
+                            (k, g)
+                        })
+                        .collect(),
+                    files: files.clone(),
                     held: held.clone(),
                     worlds: outputs
                         .iter()
@@ -1236,7 +1252,7 @@ impl Located {
         drop(started);
         // Externs are asked on demand: a table's of its file, else of the
         // file provider, else of the providers.
-        let tables = Rc::new(tables::Tables::default());
+        let tables = Rc::new(tables::Tables::with_files(files.clone()));
         let mut st = reading
             .join()
             .map_err(|_| anyhow::anyhow!("internal: the state read panicked"))??;
@@ -1255,12 +1271,8 @@ impl Located {
                 false => None,
             },
         ));
-        // `use ssh`: the host keys state knows, and those met; the key the
-        // program names.
-        let ssh = Rc::new(crate::plugin::ssh::Ssh::new(
-            st.known_hosts.clone(),
-            crate::plugin::ssh::key_named(&self.program)?,
-        ));
+        // The SSH host keys state knows.
+        files.know(&st.known_hosts);
         let mut base_extra = self.set_facts.clone();
         base_extra.extend(opts.data.iter().cloned());
         base_extra.extend(stack::output_facts(&outputs, &l.deployed));
@@ -1299,7 +1311,7 @@ impl Located {
         let externs = {
             let (no_program, no_fns) = (Program::default(), vec![]);
             let program_dir = project::base_of(&l.files[0]);
-            let (tables, backend, ssh) = (tables.clone(), backend.clone(), ssh.clone());
+            let (tables, backend) = (tables.clone(), backend.clone());
             Externs::new(
                 lowered.map_or(&no_program, |l| &l.program),
                 lowered.map_or(&no_fns, |l| &l.extern_fns),
@@ -1314,9 +1326,6 @@ impl Located {
                         return r;
                     }
                     if let Some(r) = externs::time(f) {
-                        return r;
-                    }
-                    if let Some(r) = ssh.answer(f, inputs) {
                         return r;
                     }
                     if let Some(r) = memos.answer(f, inputs) {
@@ -1353,6 +1362,12 @@ impl Located {
             base_extra.extend(crate::secrets::taint(l, backend.schema(), &secret_outputs));
             // A memo of a secret is kept sealed and recorded nowhere.
             externs.mark_secret(&crate::secrets::secret_memos(
+                l,
+                backend.schema(),
+                &secret_outputs,
+            ));
+            // A document read into a secret `let` (R-153): its digest only.
+            externs.mark_secret(&crate::secrets::secret_reads(
                 l,
                 backend.schema(),
                 &secret_outputs,
@@ -1407,7 +1422,7 @@ impl Located {
         let evaluator = Evaluator {
             backend: backend.clone(),
             externs,
-            ssh,
+            files,
             tables: tables.clone(),
             program,
             base_extra,

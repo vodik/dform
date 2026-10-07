@@ -201,6 +201,38 @@ pub fn from_level(l: Level) -> i32 {
     }) as i32
 }
 
+/// How large a `ReadChunk` is.
+const CHUNK: usize = 1 << 20;
+
+/// A read's answer as `ReadChunk`s: its bytes in order (one chunk when
+/// empty), or the one failure.
+pub fn chunks(r: Result<Vec<u8>, Failure>) -> Vec<h::ReadChunk> {
+    match r {
+        Ok(data) if data.is_empty() => vec![h::ReadChunk::default()],
+        Ok(data) => data
+            .chunks(CHUNK)
+            .map(|c| h::ReadChunk {
+                failure: None,
+                data: c.to_vec(),
+            })
+            .collect(),
+        Err(f) => vec![h::ReadChunk {
+            failure: Some(from_failure(f)),
+            data: Vec::new(),
+        }],
+    }
+}
+
+/// `ReadChunk`s as the read's answer.
+pub fn read(chunks: Vec<h::ReadChunk>) -> Result<Vec<u8>, Failure> {
+    let mut out = Vec::new();
+    for c in chunks {
+        to_failure(c.failure)?;
+        out.extend(c.data);
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

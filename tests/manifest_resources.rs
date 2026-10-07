@@ -128,7 +128,7 @@ fn a_stream_read_from_git_is_its_list() {
     s.write(
         "p.df",
         "\nuse fake\ndecl walked(n: string)\n\
-         walked(n) where d in yaml(git(\"traefik.git\", \"v3.7.14\", \"crds.yml\")), \
+         walked(n) where d in yaml(\"git+file:traefik.git/crds.yml?ref=v3.7.14\"), \
          n = d.metadata.name\n",
     );
     let r = s.run(&["dev", "query", "walked(n)", "p.df"]).success();

@@ -120,8 +120,31 @@ interface http {
   send: func(req: request, auth: option<borrow<credential>>, via: option<borrow<tunnel>>) -> result<response, error>;
 }
 
+// Reading a location (R-153): one reader for every scheme, a location the
+// uri `files.read` takes. The host reads its own schemes (`data:`,
+// `ssh://USER@HOST/PATH` over SFTP, `https://`, `git+https://` and
+// `git+ssh://` at `?ref=` through its mirrors, `s3://BUCKET/KEY`) with the
+// operator's credentials by name, and routes a scheme a provider's
+// manifest declares to that provider: one cache, one known-hosts store,
+// one timeout policy, whoever reads. A read is refused, naming the
+// provider and the location, unless dform.toml grants it by scheme and
+// host pattern (`[providers.NAME] reads = ["https://github.com/*"]`). What
+// the world has not reached yet (a host still booting, an object not
+// written) is `not-yet`.
+//
+// A provider whose manifest declares schemes (`schemes = ["gs"]`) serves
+// this same interface for them; the host calls it there, never one
+// provider another.
+interface files {
+  use types.{not-yet-or-error};
+
+  // The bytes at `location`.
+  read: func(location: string) -> result<list<u8>, not-yet-or-error>;
+}
+
 // SSH, with keys from the agent. Commands are argv, never a shell string:
-// no quoting class, and the audit shows the real command.
+// no quoting class, and the audit shows the real command. A file is read
+// through `files` (`ssh://USER@HOST/PATH`).
 interface ssh {
   use types.{endpoint, tunnel, error, not-yet-or-error};
 
@@ -141,17 +164,16 @@ interface ssh {
 
   // Run `argv` on `on`. A host that does not answer yet is `not-yet`.
   exec: func(on: target, argv: list<string>, stdin: option<list<u8>>) -> result<run, not-yet-or-error>;
-  // Read the file `path` (SFTP). A file that does not exist yet is
-  // `not-yet`.
-  read: func(on: target, path: string) -> result<list<u8>, not-yet-or-error>;
   // Write `data` to `path` with `mode` (SFTP).
   write: func(on: target, path: string, data: list<u8>, mode: u32) -> result<_, error>;
   // Forward a connection through `via` to `to` (an API behind a bastion).
   forward: func(via: target, to: endpoint) -> result<tunnel, error>;
 }
 
-// Git, through the host's mirror in `$XDG_CACHE_HOME/dform/git/` (a local
-// path is read in place) and pushed with the host's keys.
+// Git: a commit, onto a local repository (pushing waits on gitoxide). A
+// repository's file is read through `files`
+// (`git+https://HOST/OWNER/REPO/PATH?ref=TAG`), from the host's mirror in
+// `$XDG_CACHE_HOME/dform/git/`.
 interface git {
   use types.{error};
 
@@ -160,8 +182,6 @@ interface git {
     data: list<u8>,
   }
 
-  // The blob at `path` in `repo` at `rev` (a branch, a tag, a commit).
-  read: func(repo: string, rev: string, path: string) -> result<list<u8>, error>;
   // Commit `files` onto `branch` of `repo` with `message`, and push it:
   // the new commit's id.
   commit: func(repo: string, branch: string, files: list<file>, message: string) -> result<string, error>;
@@ -192,6 +212,7 @@ world hosted-provider {
   import types;
   import secrets;
   import http;
+  import files;
   import ssh;
   import git;
   import log;
@@ -199,4 +220,11 @@ world hosted-provider {
   include wasi:http/imports@0.2.12;
 
   export dform:provider/provider@1.0.0;
+}
+
+// A provider whose manifest declares schemes (R-153): a hosted provider
+// that serves `files` for them, which the host calls for a read of one.
+world scheme-provider {
+  include hosted-provider;
+  export files;
 }

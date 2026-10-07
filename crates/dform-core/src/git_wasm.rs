@@ -28,3 +28,59 @@ pub fn show(_: &Path, commit: &str, rel: &str) -> anyhow::Result<Vec<u8>> {
 pub fn checkout(_: &Path, commit: &str, _: &Path) -> anyhow::Result<()> {
     anyhow::bail!("git {commit}: no git in a wasm build of dform-core")
 }
+
+/// The mirror directory of `url`: none, with no git.
+pub fn mirror_dir(_: &str) -> Option<std::path::PathBuf> {
+    None
+}
+
+use crate::plugin::host::{Error, GitFile};
+
+pub struct Pipe {
+    pub read: Box<dyn std::io::Read + Send>,
+    pub write: Box<dyn std::io::Write + Send>,
+}
+
+pub enum Via<'a> {
+    Https { headers: Vec<(String, String)> },
+    Ssh(&'a dyn Fn(&str) -> Result<Pipe, Error>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Fetched {
+    pub commit: String,
+    pub data: Vec<u8>,
+}
+
+/// No repository is read in a wasm build.
+pub struct Git;
+
+fn none(what: &str) -> Error {
+    Error::fatal(format!("git {what}: no git in a wasm build of dform-core"))
+}
+
+impl Git {
+    pub fn cache() -> Git {
+        Git
+    }
+
+    pub fn at(_: std::path::PathBuf) -> Git {
+        Git
+    }
+
+    pub fn mirror(&self, url: &str) -> Result<std::path::PathBuf, Error> {
+        Err(none(url))
+    }
+
+    pub fn read(&self, repo: &str, _: &str, _: &str) -> Result<Vec<u8>, Error> {
+        Err(none(repo))
+    }
+
+    pub fn read_remote(&self, url: &str, _: &str, _: &str, _: Via<'_>) -> Result<Fetched, Error> {
+        Err(none(url))
+    }
+
+    pub fn commit(&self, repo: &str, _: &str, _: Vec<GitFile>, _: &str) -> Result<String, Error> {
+        Err(none(repo))
+    }
+}

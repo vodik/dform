@@ -273,14 +273,6 @@ impl wh::ssh::Host for State {
         })
     }
 
-    fn read(
-        &mut self,
-        on: wh::ssh::Target,
-        path: String,
-    ) -> Result<Vec<u8>, wh::types::NotYetOrError> {
-        self.host.read(&target(on), &path).map_err(failure)
-    }
-
     fn write(
         &mut self,
         on: wh::ssh::Target,
@@ -314,16 +306,13 @@ impl wh::ssh::Host for State {
     }
 }
 
-impl wh::git::Host for State {
-    fn read(
-        &mut self,
-        repo: String,
-        rev: String,
-        path: String,
-    ) -> Result<Vec<u8>, wh::types::Error> {
-        self.host.git_read(&repo, &rev, &path).map_err(error)
+impl wh::files::Host for State {
+    fn read(&mut self, location: String) -> Result<Vec<u8>, wh::types::NotYetOrError> {
+        self.host.files_read(&location).map_err(failure)
     }
+}
 
+impl wh::git::Host for State {
     fn commit(
         &mut self,
         repo: String,
@@ -495,6 +484,7 @@ impl Instance {
         wh::types::add_to_linker::<State, HasSelf<State>>(&mut linker, |s| s)?;
         wh::secrets::add_to_linker::<State, HasSelf<State>>(&mut linker, |s| s)?;
         wh::http::add_to_linker::<State, HasSelf<State>>(&mut linker, |s| s)?;
+        wh::files::add_to_linker::<State, HasSelf<State>>(&mut linker, |s| s)?;
         wh::ssh::add_to_linker::<State, HasSelf<State>>(&mut linker, |s| s)?;
         wh::git::add_to_linker::<State, HasSelf<State>>(&mut linker, |s| s)?;
         wh::log::add_to_linker::<State, HasSelf<State>>(&mut linker, |s| s)?;

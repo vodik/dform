@@ -130,6 +130,8 @@ impl Mounts {
             || crate::schema::builtin(name).is_some()
             || crate::syntax::resolve::builtin_namespace(name)
             || self.root.join("providers").join(name).is_dir()
+            // Gone (R-153): the resolver says what replaces it.
+            || name == "ssh"
     }
 
     /// The file a path names: `a.b.c` is `a/b/c.df`, or the item `c` of

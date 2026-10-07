@@ -95,6 +95,9 @@ pub struct Config {
     /// `credentials`, R-13b), by its spec; a provider not named has none.
     /// Passed to the launcher as each starts ([`Launch::plugin`]).
     pub grants: BTreeMap<String, super::host::Grants>,
+    /// The run's reader of locations (R-153): a scheme a provider's
+    /// manifest declares is read through it, by that provider.
+    pub files: std::sync::Arc<crate::files::Files>,
 }
 
 /// A provider's `use`: the name it binds, the provider it starts and that

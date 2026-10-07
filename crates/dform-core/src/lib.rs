@@ -12,6 +12,7 @@ pub mod effects;
 pub mod engine;
 pub mod executor;
 pub mod externs;
+pub mod files;
 pub mod fmt;
 pub mod functions;
 #[cfg(not(target_family = "wasm"))]

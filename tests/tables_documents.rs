@@ -136,7 +136,7 @@ fn a_document_is_read_at_a_git_commit() {
     s.write(
         "p.df",
         "\nuse fake\n\
-         let pins = csv(git(\"ops.git\", \"main\", \"pins.csv\"))\n\
+         let pins = csv(\"git+file:ops.git/pins.csv?ref=main\")\n\
          resource compute.vm web { image = pins[0].image }\n",
     );
     let r = s

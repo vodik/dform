@@ -354,7 +354,7 @@ fn a_git_source_is_read_at_its_ref() {
             .replace(
                 "input env: enum(\"dev\", \"prod\") = \"dev\"\n",
                 "input env: enum(\"dev\", \"prod\") = \"dev\"\n\
-                 input release from csv(git(\"releases.git\", \"main\", \"web.csv\"))\n\
+                 input release from csv(\"git+file:releases.git/web.csv?ref=main\")\n\
                  decl release(image: string)\n",
             )
             .replace("where releases.release(image)", "where release(image)"),

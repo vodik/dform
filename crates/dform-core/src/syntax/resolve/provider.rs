@@ -28,13 +28,8 @@ use super::*;
 pub const ENV_VAR: &str = "env.var";
 
 /// The term calls of a built-in extern, its last column read: `env.var(N)`,
-/// `time.now()`, `memo.first(K, C)`, `ssh.read(H, U, P)`.
-const TERM_CALLS: [&str; 4] = [
-    ENV_VAR,
-    crate::externs::TIME_NOW,
-    crate::memo::FIRST,
-    crate::plugin::ssh::READ,
-];
+/// `time.now()`, `memo.first(K, C)`.
+const TERM_CALLS: [&str; 3] = [ENV_VAR, crate::externs::TIME_NOW, crate::memo::FIRST];
 
 /// A provider's `use` block's setting that is checked, not sent.
 const EXPECT_ACCOUNT: &str = "expect_account";
@@ -50,6 +45,15 @@ impl Lowerer<'_> {
                 "random.password, random.base64, random.id, random.uuid and \
                      random.signing_key are std functions (std/random.df): delete the \
                      `use random` statement and call them",
+            );
+            self.diags.push(d);
+            return Err(Skip);
+        }
+        if of == "ssh" {
+            let d = Diagnostic::error(span, "the ssh provider is gone (R-153)").with_help(
+                "a host's file is a location dform reads itself: \
+                 `text(\"ssh://USER@HOST/PATH\")`, or `yaml(..)` and the other loaders; \
+                 delete the `use ssh` statement",
             );
             self.diags.push(d);
             return Err(Skip);
@@ -233,9 +237,22 @@ impl Lowerer<'_> {
                 "`ssh.run` is not a function: a command is a provider's apply",
             )
             .with_help(
-                "the ssh provider reads a remote filesystem: `ssh.read(host, user, path)`; \
+                "a host's file is read as a location, `text(\"ssh://USER@HOST/PATH\")`; \
                  a file, a package or a unit to manage is a resource of a provider whose \
                  apply runs what it must",
+            );
+            self.diags.push(d);
+            return Some(Err(Skip));
+        }
+        if name == "ssh.read" {
+            let d = Diagnostic::error(
+                self.span(n),
+                "`ssh.read` is gone (R-153): a host's file is a location",
+            )
+            .with_help(
+                "`text(\"ssh://USER@HOST/PATH\")` (`text(\"ssh://ubuntu@${server.ip}/etc/\
+                 rancher/k3s/k3s.yaml\")`), or `yaml(..)`; declare its secrecy where it is \
+                 kept, `let raw: secret(string) = text(..)`",
             );
             self.diags.push(d);
             return Some(Err(Skip));
@@ -274,7 +291,6 @@ impl Lowerer<'_> {
         let want = match name {
             ENV_VAR => "one argument: the variable's name",
             crate::externs::TIME_NOW => "no argument",
-            crate::plugin::ssh::READ => "three arguments: the host, the user and the path",
             _ => "two arguments: the key and the candidate",
         };
         let ins = self.decls.externs[name].len() - 1;

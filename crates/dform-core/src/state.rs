@@ -54,7 +54,7 @@ pub struct State {
     pub instances: BTreeMap<String, String>,
     /// The host keys the built-in `ssh` provider has met, by host as the
     /// program names it (`10.0.0.5`, `db.example.com:2222`): recorded on
-    /// first contact, checked on every one after (`plugin::ssh`), reset by
+    /// first contact, checked on every one after (`files::ssh`), reset by
     /// `dform state forget-host HOST`.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub known_hosts: BTreeMap<String, KnownHost>,

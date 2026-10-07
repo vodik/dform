@@ -19,6 +19,9 @@ pub enum Source {
         rev: String,
         path: String,
     },
+    /// A location read over a transport (`ssh://`, `https://`, `s3://`,
+    /// R-153): read again by every run, not polled.
+    Location(String),
 }
 
 impl std::fmt::Display for Source {
@@ -28,6 +31,7 @@ impl std::fmt::Display for Source {
             Source::Git { repo, rev, path } => {
                 write!(f, "git {} {rev}:{path}", repo.display())
             }
+            Source::Location(l) => f.write_str(l),
         }
     }
 }
@@ -53,8 +57,13 @@ pub fn stamp(s: &Source) -> String {
         Source::Git { repo, rev, .. } => {
             crate::git::resolve(repo, rev).unwrap_or_else(|_| "missing".into())
         }
+        // Not polled: the same stamp a read records ([`REMOTE`]).
+        Source::Location(_) => REMOTE.into(),
     }
 }
+
+/// The stamp of a location read over a transport, which is not polled.
+pub const REMOTE: &str = "remote";
 
 /// A file's stamp: a digest of its contents.
 pub fn digest(bytes: &[u8]) -> String {

@@ -1,20 +1,14 @@
-//! `dform:host/ssh`: the host's SSH client, behind [`Ssh`]. The client
-//! itself is the built-in ssh provider's (`dform_core::plugin::ssh`, keys
-//! from the agent), wired in with [`wire`].
+//! `dform:host/ssh`: the host's SSH client, behind [`Ssh`], for what a
+//! provider's apply does on a host: `exec` (the one place a command runs,
+//! R-151), `write`, `forward`. A host's file is read through `files`
+//! (`ssh://USER@HOST/PATH`, `dform_core::files::ssh`, R-153), not here.
 //!
-//! `exec` is here for a provider's apply, the one place a command runs
-//! (R-151: no program calls one; the built-in provider only reads).
-//!
-//! TODO(landing, with the built-in ssh provider, `plugin/ssh.rs`): its
-//! russh client is private to its extern (`ssh.read`, over SFTP). Wiring
-//! it here needs from it: a session by host, user and port with its
-//! host-key check; exec with argv (quoted for the remote shell, which
-//! SSH's exec request always goes through) and stdin; SFTP read and
-//! write with a mode; a direct-tcpip channel behind a local
-//! listener for `forward`. Its "not yet" (no answer within
-//! `CONNECT_TIMEOUT`, refused, no route; a path that does not exist) maps
-//! to `Failure::NotYet`. Then `dform_host::ssh::wire(..)` with an adapter.
-//! Until then every call is refused naming this.
+//! TODO: wire these to `dform_core::files::ssh`'s session (its host-key
+//! check against the run's known hosts, its key order): exec with argv
+//! (quoted for the remote shell, which SSH's exec request always goes
+//! through) and stdin; SFTP write with a mode; a direct-tcpip channel
+//! behind a local listener for `forward`. No provider's apply calls them
+//! yet; until one does every call is refused naming this.
 
 use dform_core::plugin::host::{Endpoint, Error, Failure, Run, Target};
 use std::net::SocketAddr;
@@ -25,9 +19,6 @@ pub trait Ssh: Send + Sync {
     /// Run `argv` on `on`; a host that does not answer yet is
     /// `Failure::NotYet`.
     fn exec(&self, on: &Target, argv: &[String], stdin: Option<&[u8]>) -> Result<Run, Failure>;
-    /// Read `path` over SFTP; a file that does not exist yet is
-    /// `Failure::NotYet`.
-    fn read(&self, on: &Target, path: &str) -> Result<Vec<u8>, Failure>;
     fn write(&self, on: &Target, path: &str, data: &[u8], mode: u32) -> Result<(), Error>;
     /// Forward a local listener through `via` to `to`: where the host's
     /// HTTP client connects for a request sent `via` the tunnel. The
@@ -58,18 +49,15 @@ pub struct Unwired;
 
 fn unwired(on: &Target) -> Error {
     Error::fatal(format!(
-        "ssh to {}@{}: this dform's host has no SSH client wired yet (the built-in ssh \
-         provider's, at landing)",
+        "ssh to {}@{}: this dform's host has no SSH client wired for a provider's exec, \
+         write or forward yet (a host's file is read through files.read, \
+         `ssh://USER@HOST/PATH`)",
         on.user, on.host
     ))
 }
 
 impl Ssh for Unwired {
     fn exec(&self, on: &Target, _: &[String], _: Option<&[u8]>) -> Result<Run, Failure> {
-        Err(unwired(on).into())
-    }
-
-    fn read(&self, on: &Target, _: &str) -> Result<Vec<u8>, Failure> {
         Err(unwired(on).into())
     }
 

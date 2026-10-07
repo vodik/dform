@@ -427,6 +427,73 @@ impl S3Store {
     }
 }
 
+/// `s3://BUCKET/KEY` (R-153): a location read with this client, the
+/// bucket's endpoint and region as dform.toml's backend that names it
+/// says (`[defaults] backend = 's3("BUCKET", ..)'`, AWS's when none does),
+/// with the environment's credentials. An object not there yet is
+/// "not yet". The CLI registers it (`dform_core::files::register`).
+pub struct Reader;
+
+impl dform_core::files::Transport for Reader {
+    fn read(
+        &self,
+        at: &dform_core::uri::Uri,
+        files: &dform_core::files::Files,
+    ) -> std::result::Result<Vec<u8>, dform_core::plugin::host::Failure> {
+        use dform_core::plugin::host::{Error, Failure};
+        let bucket = at.host.clone().unwrap_or_default();
+        if bucket.is_empty() {
+            return Err(Error::fatal(format!("{at}: an s3 location is s3://BUCKET/KEY")).into());
+        }
+        let key = percent_encoding_free(at.path.trim_start_matches('/'));
+        // The bucket's endpoint and region, not its backend's prefix: the
+        // key is the location's.
+        let spec = match files.bucket(&bucket) {
+            Some(b) => S3Spec {
+                prefix: String::new(),
+                ..b.clone()
+            },
+            None => S3Spec {
+                bucket,
+                prefix: String::new(),
+                endpoint: None,
+                region: None,
+            },
+        };
+        let store = S3Store::open(&spec, "").map_err(|e| Error::fatal(format!("{at}: {e:#}")))?;
+        match store.get(&key) {
+            Ok(Some(o)) => Ok(o.bytes),
+            Ok(None) => Err(Failure::NotYet(format!("{at} is not there yet"))),
+            Err(e) => Err(Error::retryable(format!("{e:#}")).into()),
+        }
+    }
+}
+
+/// A key as the uri escapes it, unescaped (`%20` is a space).
+fn percent_encoding_free(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        let hex = |c: u8| (c as char).to_digit(16).map(|d| d as u8);
+        match (
+            b[i],
+            b.get(i + 1).copied().and_then(hex),
+            b.get(i + 2).copied().and_then(hex),
+        ) {
+            (b'%', Some(h), Some(l)) => {
+                out.push(h * 16 + l);
+                i += 3;
+            }
+            (c, _, _) => {
+                out.push(c);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

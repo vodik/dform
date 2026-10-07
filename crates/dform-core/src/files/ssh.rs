@@ -1,42 +1,37 @@
-//! The built-in `ssh` fact provider (`use ssh`): a remote filesystem read,
-//! the one extern dform answers itself, over an SSH client in process
-//! (russh; never the `ssh` binary, the operator's ssh config or PATH).
+//! `ssh://USER@HOST[:PORT]/PATH` (R-153): a host's file over SFTP, and
+//! `git-upload-pack` for a `git+ssh://` repository, through an SSH client
+//! in process (russh; never the `ssh` binary, the operator's ssh config or
+//! PATH). Nothing runs a command a program asked for (R-151): a file, a
+//! package or a unit to manage is a resource of a provider whose apply
+//! runs what it must.
 //!
-//! ```text
-//! ssh.read(+host, +user, +path, -content: secret(string))   SFTP
-//! ```
-//!
-//! A read is pure: it runs no command (R-151). A file to manage, a
-//! package, a unit are resources of a provider whose apply runs what it
-//! must, never a function a program calls.
-//!
-//! `host` is an `ip` or a string, `NAME` or `NAME:PORT` (22 when none).
-//! The key is the operator's, never one in the program, and never asked
-//! for: every key the agent (`SSH_AUTH_SOCK`) holds, then the key the
-//! program names (`use ssh { key = "k3s-admin" }`: an agent key by its
-//! comment or fingerprint, offered first, or the credential
-//! `ssh:k3s-admin`'s unencrypted file), else the unencrypted
-//! `~/.ssh/id_ed25519`, `id_ecdsa`, `id_rsa`. A key file with a passphrase
-//! is not decrypted: the agent uses such a key. A refusal says what was
-//! offered and what was not, and what to do.
+//! The user is the location's userinfo (the local user's name when it has
+//! none). The key is the operator's, never one in the program, and never
+//! asked for: the key dform.toml names for the location (`[files]
+//! credentials = { "ssh://10.0.0.*" = "ssh:k3s-admin" }`: an agent key by
+//! its comment or fingerprint, offered first, or the credential
+//! `ssh:k3s-admin`'s unencrypted file), then every key the agent
+//! (`SSH_AUTH_SOCK`) holds, else the unencrypted `~/.ssh/id_ed25519`,
+//! `id_ecdsa`, `id_rsa`. A key file with a passphrase is not decrypted: the
+//! agent uses such a key. A refusal says what was offered and what was
+//! not, and what to do.
 //!
 //! A host's key is recorded on first contact (`State::known_hosts`, kept
-//! by the apply, [`Ssh::keep`]) and checked on every contact after: a
+//! by the apply, `Files::keep`) and checked on every contact after: a
 //! changed key is an error naming both fingerprints, until `dform state
 //! forget-host HOST`.
 //!
 //! A host that does not answer yet (the connection refused, timed out
-//! after [`CONNECT_TIMEOUT`], no route) and a `read` of a path that does
-//! not exist yet (cloud-init still running) are "not yet": the answer's
-//! output column is an open null, which an apply waits on (R-81,
-//! `Externs::not_yet`). An authentication failure, a changed host key, a
-//! file that is not UTF-8 text are errors. Every answer is read again each run, as
-//! any extern's is; `memo.first` keeps one where wanted.
+//! after [`CONNECT_TIMEOUT`], no route) and a path that does not exist yet
+//! (cloud-init still running) are "not yet" (`Failure::NotYet`), which an
+//! apply waits on (R-81). An authentication failure, a changed host key
+//! are errors.
 
-use crate::ast::{ExternFn, Program, Stmt, Term};
+use crate::git::Pipe;
 use crate::plugin::credentials;
-use crate::state::{KnownHost, State};
-use crate::value::{NullClass, Value};
+use crate::plugin::host::{Error, Failure};
+use crate::state::KnownHost;
+use crate::uri::Uri;
 use anyhow::{Context, Result, anyhow, bail};
 use russh::Disconnect;
 use russh::client::{self, Handle};
@@ -46,13 +41,10 @@ use russh::keys::{HashAlg, PrivateKeyWithHashAlg, PublicKeyOrCertificate};
 use russh_sftp::client::SftpSession;
 use russh_sftp::client::error::Error as SftpError;
 use russh_sftp::protocol::StatusCode;
-use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-/// `ssh.read(+host, +user, +path, -content: secret(string))`.
-pub const READ: &str = "ssh.read";
 /// How long one attempt waits for the host to answer and agree a session;
 /// past it the host is "not yet" (an apply asks again within its wait).
 pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -61,172 +53,308 @@ pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 /// is an error.
 const CALL_TIMEOUT: Duration = Duration::from_secs(60);
 
-/// The `ssh` provider of one run: the host keys known (state's, and those
-/// met this run).
-#[derive(Debug, Default)]
-pub struct Ssh {
-    known: RefCell<BTreeMap<String, KnownHost>>,
-    /// The key the program names (`use ssh { key = .. }`).
-    key: Option<String>,
+/// Where a location says to connect.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Target {
+    /// The host's name or address, a v6 one without brackets.
+    pub name: String,
+    pub port: u16,
+    pub user: String,
+    /// How state keys the host: `HOST`, or `HOST:PORT` off port 22.
+    pub label: String,
+}
+
+/// The local user's name: the user of a location that names none.
+pub fn local_user() -> String {
+    std::env::var("USER")
+        .or_else(|_| std::env::var("LOGNAME"))
+        .unwrap_or_else(|_| "root".into())
+}
+
+impl Target {
+    pub fn of(u: &Uri) -> Result<Target, Failure> {
+        let host = u
+            .host_ascii()
+            .or_else(|| u.host.clone())
+            .filter(|h| !h.is_empty())
+            .ok_or_else(|| Error::fatal(format!("{u}: an ssh location names its host")))?;
+        let name = host
+            .trim_start_matches('[')
+            .trim_end_matches(']')
+            .to_string();
+        let port = u.port.unwrap_or(22);
+        let label = match u.port {
+            Some(p) => format!("{host}:{p}"),
+            None => host.clone(),
+        };
+        let user = u
+            .user
+            .as_deref()
+            .map(|s| {
+                percent_encoding::percent_decode_str(s)
+                    .decode_utf8_lossy()
+                    .into_owned()
+            })
+            .unwrap_or_else(local_user);
+        Ok(Target {
+            name,
+            port,
+            user,
+            label,
+        })
+    }
+
+    fn shown(&self) -> String {
+        format!("ssh://{}@{}", self.user, self.label)
+    }
 }
 
 /// What one call came to.
-enum Outcome {
-    Answered(String),
+enum Outcome<T> {
+    Answered(T),
     /// The host, or the file, is not there yet.
-    NotYet,
+    NotYet(String),
 }
 
-impl Ssh {
-    /// The provider, `known` the host keys state keeps, `key` the one the
-    /// program names ([`key_named`]).
-    pub fn new(known: BTreeMap<String, KnownHost>, key: Option<String>) -> Ssh {
-        Ssh {
-            known: RefCell::new(known),
-            key,
-        }
-    }
-
-    /// The answer to `ssh.read`; `None` for another extern.
-    pub fn answer(&self, f: &ExternFn, inputs: &[Value]) -> Option<Result<Vec<Vec<Value>>>> {
-        if f.name != READ {
-            return None;
-        }
-        let want = || anyhow!("{READ} takes the host (an ip or a string), the user and the path");
-        let [host, Value::Str(user), Value::Str(path)] = inputs else {
-            return Some(Err(want()));
-        };
-        let host = match host {
-            Value::Ip(n) => crate::value::u32_to_ipv4(*n),
-            Value::Str(s) => s.clone(),
-            _ => return Some(Err(want())),
-        };
-        Some(self.call(&host, user, path).map(|o| {
-            let out = match o {
-                Outcome::Answered(s) => Value::Str(s),
-                Outcome::NotYet => Value::Null {
-                    label: crate::externs::secret_label(&f.name, inputs, f.args.len() - 1),
-                    class: NullClass::Open,
-                    ty: String::new(),
-                },
-            };
-            vec![crate::externs::row(f, inputs, vec![out])]
-        }))
-    }
-
-    /// Keep in `st` each host key met this run that it does not know yet.
-    pub fn keep(&self, st: &mut State) {
-        for (h, k) in self.known.borrow().iter() {
-            st.known_hosts.entry(h.clone()).or_insert_with(|| k.clone());
-        }
-    }
-
-    fn call(&self, host: &str, user: &str, path: &str) -> Result<Outcome> {
-        let (name, port) = address(host)?;
-        let expect = self.known.borrow().get(host).cloned();
-        let seen = Arc::new(Mutex::new(None));
-        let handler = Client {
-            expect,
-            seen: seen.clone(),
-        };
-        let what = format!("{READ} {user}@{host}:{path}");
-        let named = self.key.as_deref();
-        // On a thread of its own, with a runtime of its own: the caller
-        // may be inside another (a controller's).
-        let out = std::thread::scope(|s| {
-            s.spawn(|| {
-                tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                    .context("ssh: start a runtime")?
-                    .block_on(session(&name, port, user, host, named, handler, path))
-            })
-            .join()
-            .unwrap_or_else(|_| Err(anyhow!("ssh: the client panicked")))
-        })
-        .with_context(|| what.clone())?;
-        // A host met for the first time: its key, from now on.
-        if let Some((key_type, fingerprint)) = seen.lock().ok().and_then(|s| s.clone()) {
-            self.known
-                .borrow_mut()
-                .entry(host.to_string())
-                .or_insert_with(|| KnownHost {
-                    key_type,
-                    fingerprint,
-                    when: crate::memo::now(),
-                });
-        }
-        Ok(out)
-    }
-}
-
-/// The key `use ssh { key = "NAME" }` names: a string, the name of an
-/// agent key (its comment or SHA-256 fingerprint) or of the credential
-/// `ssh:NAME`.
-pub fn key_named(program: &Program) -> Result<Option<String>> {
-    for st in crate::modules::reached(program) {
-        let head = match st {
-            Stmt::Fact(a) => a,
-            Stmt::Rule(r) => &r.head,
-            _ => continue,
-        };
-        let [Term::Val(Value::Str(n)), Term::Obj(settings)] = head.args.as_slice() else {
-            continue;
-        };
-        if head.pred != "provider_config" || n != "ssh" {
-            continue;
-        }
-        match settings.get("key") {
-            None => {}
-            Some(Term::Val(Value::Str(k))) if !k.is_empty() => return Ok(Some(k.clone())),
-            Some(_) => bail!(
-                "use ssh {{ key = .. }} takes a string: the name of a key in the agent (its \
-                 comment or SHA256 fingerprint) or of the credential ssh:NAME"
-            ),
-        }
-    }
-    Ok(None)
-}
-
-/// `NAME`, `NAME:PORT`, `[V6]:PORT`: the name and the port, 22 by default.
-fn address(host: &str) -> Result<(String, u16)> {
-    let port = |p: &str| {
-        p.parse::<u16>()
-            .map_err(|_| anyhow!("ssh: host {host:?}: {p:?} is not a port"))
+/// Run `go` on a session with `t` (connected, its key checked against
+/// `known` and recorded there when new, authenticated with `named` first),
+/// on a thread and a runtime of its own: the caller may be inside another
+/// (a controller's).
+fn with_session<T: Send>(
+    known: &Mutex<BTreeMap<String, KnownHost>>,
+    t: &Target,
+    named: Option<&str>,
+    go: impl for<'a> FnOnce(
+        &'a mut Handle<Client>,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<Outcome<T>>> + Send + 'a>,
+    > + Send,
+) -> Result<Outcome<T>> {
+    let expect = known
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(&t.label)
+        .cloned();
+    let seen = Arc::new(Mutex::new(None));
+    let handler = Client {
+        expect,
+        seen: seen.clone(),
     };
-    if let Some(rest) = host.strip_prefix('[') {
-        let (name, after) = rest
-            .split_once(']')
-            .ok_or_else(|| anyhow!("ssh: host {host:?}: no closing `]`"))?;
-        return Ok(match after.strip_prefix(':') {
-            Some(p) => (name.to_string(), port(p)?),
-            None => (name.to_string(), 22),
-        });
+    let out = std::thread::scope(|s| {
+        s.spawn(|| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .context("ssh: start a runtime")?
+                .block_on(async move {
+                    let Some(mut h) = session(t, named, handler).await? else {
+                        return Ok(Outcome::NotYet(format!(
+                            "{} does not answer yet",
+                            t.shown()
+                        )));
+                    };
+                    let out = go(&mut h).await;
+                    let _ = h.disconnect(Disconnect::ByApplication, "", "en").await;
+                    out
+                })
+        })
+        .join()
+        .unwrap_or_else(|_| Err(anyhow!("ssh: the client panicked")))
+    })?;
+    // A host met for the first time: its key, from now on.
+    if let Some((key_type, fingerprint)) = seen.lock().ok().and_then(|s| s.clone()) {
+        known
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .entry(t.label.clone())
+            .or_insert_with(|| KnownHost {
+                key_type,
+                fingerprint,
+                when: crate::memo::now(),
+            });
     }
-    match host.split_once(':') {
-        Some((name, p)) if !p.contains(':') => Ok((name.to_string(), port(p)?)),
-        _ => Ok((host.to_string(), 22)),
+    Ok(out)
+}
+
+/// The file at `path` on `t`, over SFTP.
+pub fn read(
+    known: &Mutex<BTreeMap<String, KnownHost>>,
+    t: &Target,
+    named: Option<&str>,
+    path: &str,
+) -> Result<Vec<u8>, Failure> {
+    let path = path.to_string();
+    let out = with_session(known, t, named, move |h| {
+        Box::pin(async move {
+            tokio::time::timeout(CALL_TIMEOUT, sftp_read(h, &path))
+                .await
+                .map_err(|_| anyhow!("did not finish within {}s", CALL_TIMEOUT.as_secs()))?
+        })
+    });
+    match out {
+        Ok(Outcome::Answered(b)) => Ok(b),
+        Ok(Outcome::NotYet(why)) => Err(Failure::NotYet(why)),
+        Err(e) => Err(Error::fatal(format!("{e:#}")).into()),
     }
 }
 
-/// Connect, check the host key, authenticate and read `path`.
+/// `command` running on `t` (`git-upload-pack 'PATH'`): its stdout to
+/// read and its stdin to write, bridged to the session's thread.
+pub fn pipe(
+    known: &Mutex<BTreeMap<String, KnownHost>>,
+    t: &Target,
+    named: Option<&str>,
+    command: &str,
+) -> Result<Pipe, Error> {
+    use std::sync::mpsc;
+    let (out_tx, out_rx) = mpsc::channel::<std::io::Result<Vec<u8>>>();
+    let (in_tx, in_rx) = tokio::sync::mpsc::unbounded_channel::<Option<Vec<u8>>>();
+    let (ready_tx, ready_rx) = mpsc::channel::<Result<(), String>>();
+    let (known_c, t_c, named_c, command) = (
+        // The session runs on past this call: its own copy of the keys,
+        // merged back when it has met the host.
+        Arc::new(Mutex::new(
+            known.lock().unwrap_or_else(|e| e.into_inner()).clone(),
+        )),
+        t.clone(),
+        named.map(str::to_string),
+        command.to_string(),
+    );
+    let known_back = known_c.clone();
+    std::thread::spawn(move || {
+        let ready = ready_tx.clone();
+        let r = with_session(&known_c, &t_c, named_c.as_deref(), move |h| {
+            Box::pin(async move {
+                let ch = h.channel_open_session().await?;
+                ch.exec(true, command.as_bytes()).await?;
+                let (mut rd, mut wr) = tokio::io::split(ch.into_stream());
+                let _ = ready.send(Ok(()));
+                let mut in_rx = in_rx;
+                let writer = async move {
+                    use tokio::io::AsyncWriteExt;
+                    while let Some(m) = in_rx.recv().await {
+                        match m {
+                            Some(b) => wr.write_all(&b).await?,
+                            None => break,
+                        }
+                    }
+                    wr.shutdown().await?;
+                    Ok::<_, std::io::Error>(())
+                };
+                let reader = async move {
+                    use tokio::io::AsyncReadExt;
+                    let mut buf = vec![0u8; 64 * 1024];
+                    loop {
+                        match rd.read(&mut buf).await {
+                            Ok(0) => break,
+                            Ok(n) => {
+                                if out_tx.send(Ok(buf[..n].to_vec())).is_err() {
+                                    break;
+                                }
+                            }
+                            Err(e) => {
+                                let _ = out_tx.send(Err(e));
+                                break;
+                            }
+                        }
+                    }
+                };
+                let (w, ()) = tokio::join!(writer, reader);
+                w?;
+                Ok(Outcome::Answered(()))
+            })
+        });
+        let _ = match r {
+            Ok(Outcome::Answered(())) => Ok(()),
+            Ok(Outcome::NotYet(why)) => ready_tx.send(Err(why)),
+            Err(e) => ready_tx.send(Err(format!("{e:#}"))),
+        };
+    });
+    match ready_rx.recv() {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => return Err(Error::fatal(format!("{}: {e}", t.shown()))),
+        Err(_) => return Err(Error::fatal(format!("{}: the session ended", t.shown()))),
+    }
+    // The host's key, met now, is kept.
+    let met = known_back.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    let mut k = known.lock().unwrap_or_else(|e| e.into_inner());
+    for (h, v) in met {
+        k.entry(h).or_insert(v);
+    }
+    Ok(Pipe {
+        read: Box::new(Reader {
+            rx: out_rx,
+            buf: Vec::new(),
+            at: 0,
+        }),
+        write: Box::new(Writer(in_tx)),
+    })
+}
+
+/// The remote command's stdout, as it arrives.
+struct Reader {
+    rx: std::sync::mpsc::Receiver<std::io::Result<Vec<u8>>>,
+    buf: Vec<u8>,
+    at: usize,
+}
+
+impl std::io::Read for Reader {
+    fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+        if self.at == self.buf.len() {
+            match self.rx.recv() {
+                Ok(Ok(b)) => {
+                    self.buf = b;
+                    self.at = 0;
+                }
+                Ok(Err(e)) => return Err(e),
+                Err(_) => return Ok(0),
+            }
+        }
+        let n = out.len().min(self.buf.len() - self.at);
+        out[..n].copy_from_slice(&self.buf[self.at..self.at + n]);
+        self.at += n;
+        Ok(n)
+    }
+}
+
+/// The remote command's stdin; dropped, it is closed.
+struct Writer(tokio::sync::mpsc::UnboundedSender<Option<Vec<u8>>>);
+
+impl std::io::Write for Writer {
+    fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+        self.0
+            .send(Some(b.to_vec()))
+            .map_err(|_| std::io::Error::from(std::io::ErrorKind::BrokenPipe))?;
+        Ok(b.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl Drop for Writer {
+    fn drop(&mut self) {
+        let _ = self.0.send(None);
+    }
+}
+
+/// Connect to `t`, check the host key and authenticate: `None` when the
+/// host is not there yet.
 async fn session(
-    name: &str,
-    port: u16,
-    user: &str,
-    host: &str,
+    t: &Target,
     named: Option<&str>,
     handler: Client,
-    path: &str,
-) -> Result<Outcome> {
+) -> Result<Option<Handle<Client>>> {
     let config = Arc::new(client::Config {
         inactivity_timeout: Some(CALL_TIMEOUT),
         ..Default::default()
     });
+    let (name, port, host) = (t.name.as_str(), t.port, t.label.as_str());
     let connect = client::connect(config, (name, port), handler);
     let mut h = match tokio::time::timeout(CONNECT_TIMEOUT, connect).await {
-        Err(_) => return Ok(Outcome::NotYet),
-        Ok(Err(Failure::HostKey { was, now })) => bail!(
+        Err(_) => return Ok(None),
+        Ok(Err(Refused::HostKey { was, now })) => bail!(
             "the host key of {host} changed: state recorded {} {} on {}, the host now offers \
              {} {}; if the host was rebuilt, `dform state forget-host {host}` and run again",
             was.key_type,
@@ -235,18 +363,14 @@ async fn session(
             now.0,
             now.1
         ),
-        Ok(Err(Failure::Ssh(e))) => match not_yet(&e) {
-            true => return Ok(Outcome::NotYet),
+        Ok(Err(Refused::Ssh(e))) => match not_yet(&e) {
+            true => return Ok(None),
             false => return Err(anyhow!(e).context(format!("connect to {name}:{port}"))),
         },
         Ok(Ok(h)) => h,
     };
-    authenticate(&mut h, user, host, named).await?;
-    let out = tokio::time::timeout(CALL_TIMEOUT, read(&h, path))
-        .await
-        .map_err(|_| anyhow!("did not finish within {}s", CALL_TIMEOUT.as_secs()))??;
-    let _ = h.disconnect(Disconnect::ByApplication, "", "en").await;
-    Ok(out)
+    authenticate(&mut h, &t.user, host, named).await?;
+    Ok(Some(h))
 }
 
 /// Whether a failure to connect is "not yet": the host is not up, or not
@@ -274,7 +398,7 @@ fn not_yet(e: &russh::Error) -> bool {
 /// The files tried when no key is named, in this order.
 const DEFAULT_KEYS: [&str; 3] = ["id_ed25519", "id_ecdsa", "id_rsa"];
 
-/// The key the program names first (`use ssh { key = NAME }`: the agent's
+/// The key dform.toml names first (`[files] credentials`, `ssh:NAME`: the agent's
 /// of that comment or fingerprint, else the credential `ssh:NAME`'s file),
 /// then every other key the agent holds, then, when none is named, the
 /// unencrypted `~/.ssh/id_*`. The named key goes first because a host
@@ -469,11 +593,12 @@ impl Tried {
         if self.hung_up {
             said.push("the host hung up after those (its MaxAuthTries)".to_string());
         }
-        let deploy_key = "name an unencrypted deploy key: use ssh { key = \"k3s-admin\" }";
+        let deploy_key = "name an unencrypted deploy key in dform.toml: [files] credentials = \
+                          { \"ssh://HOST/*\" = \"ssh:k3s-admin\" }";
         let todo = match (&self.missing, self.locked.first()) {
             (None, _) if self.hung_up && named.is_none() => {
-                "name the key the host holds, and it is offered first: use ssh { key = \
-                 \"k3s-admin\" }"
+                "name the key the host holds in dform.toml, and it is offered first: [files] \
+                 credentials = { \"ssh://HOST/*\" = \"ssh:k3s-admin\" }"
                     .to_string()
             }
             (Some(Some(path)), _) => format!(
@@ -540,7 +665,7 @@ fn show_key(comment: &str, key: &russh::keys::PublicKey) -> String {
 }
 
 /// The file at `path`, over SFTP; one that does not exist is "not yet".
-async fn read(h: &Handle<Client>, path: &str) -> Result<Outcome> {
+async fn sftp_read(h: &Handle<Client>, path: &str) -> Result<Outcome<Vec<u8>>> {
     let ch = h.channel_open_session().await?;
     ch.request_subsystem(true, "sftp").await?;
     let sftp = SftpSession::new(ch.into_stream())
@@ -549,14 +674,12 @@ async fn read(h: &Handle<Client>, path: &str) -> Result<Outcome> {
     let bytes = match sftp.read(path).await {
         Ok(b) => b,
         Err(SftpError::Status(s)) if s.status_code == StatusCode::NoSuchFile => {
-            return Ok(Outcome::NotYet);
+            return Ok(Outcome::NotYet(format!("{path} is not there yet")));
         }
         Err(e) => bail!("read {path}: {e}"),
     };
     let _ = sftp.close().await;
-    String::from_utf8(bytes)
-        .map(Outcome::Answered)
-        .map_err(|_| anyhow!("read {path}: not UTF-8 text"))
+    Ok(Outcome::Answered(bytes))
 }
 
 /// The client's side of the handshake: the host key checked against the
@@ -567,7 +690,7 @@ struct Client {
 }
 
 #[derive(Debug)]
-enum Failure {
+enum Refused {
     Ssh(russh::Error),
     /// The key recorded, and the one offered (type, fingerprint).
     HostKey {
@@ -576,16 +699,16 @@ enum Failure {
     },
 }
 
-impl From<russh::Error> for Failure {
+impl From<russh::Error> for Refused {
     fn from(e: russh::Error) -> Self {
-        Failure::Ssh(e)
+        Refused::Ssh(e)
     }
 }
 
 impl client::Handler for Client {
-    type Error = Failure;
+    type Error = Refused;
 
-    async fn check_server_key(&mut self, key: &PublicKeyOrCertificate) -> Result<bool, Failure> {
+    async fn check_server_key(&mut self, key: &PublicKeyOrCertificate) -> Result<bool, Refused> {
         let data = match key {
             PublicKeyOrCertificate::PublicKey { key, .. } => key.key_data(),
             PublicKeyOrCertificate::Certificate(c) => c.public_key(),
@@ -597,7 +720,7 @@ impl client::Handler for Client {
         if let Some(was) = &self.expect
             && was.fingerprint != now.1
         {
-            return Err(Failure::HostKey {
+            return Err(Refused::HostKey {
                 was: was.clone(),
                 now,
             });
@@ -614,15 +737,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn an_address_is_a_name_and_a_port() {
-        assert_eq!(address("10.0.0.5").unwrap(), ("10.0.0.5".into(), 22));
+    fn a_location_is_a_user_a_host_and_a_port() {
+        let t = |l: &str| Target::of(&Uri::parse(l).unwrap()).unwrap();
+        let a = t("ssh://ubuntu@10.0.0.5/etc/k3s.yaml");
         assert_eq!(
-            address("h.example:2222").unwrap(),
-            ("h.example".into(), 2222)
+            (a.name.as_str(), a.port, a.user.as_str()),
+            ("10.0.0.5", 22, "ubuntu")
         );
-        assert_eq!(address("[::1]:2200").unwrap(), ("::1".into(), 2200));
-        assert_eq!(address("::1").unwrap(), ("::1".into(), 22));
-        assert!(address("h:x").is_err());
+        assert_eq!(a.label, "10.0.0.5");
+        let b = t("ssh://u@h.example:2222/x");
+        assert_eq!((b.port, b.label.as_str()), (2222, "h.example:2222"));
+        let c = t("ssh://u@[::1]:2200/x");
+        assert_eq!((c.name.as_str(), c.label.as_str()), ("::1", "[::1]:2200"));
     }
 
     /// An agent's key is named by its comment or its SHA-256 fingerprint

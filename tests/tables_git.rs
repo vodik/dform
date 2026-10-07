@@ -10,7 +10,7 @@ use tables_common::{push, repo, scratch};
 
 const PROGRAM: &str = r#"
 
-input node from csv(git("ops.git", "main", "nodes.csv"))
+input node from csv("git+file:ops.git/nodes.csv?ref=main")
 
 decl node(name: string)
 
@@ -46,8 +46,9 @@ fn a_plan_file_pins_the_commit_the_branch_named() {
     assert_eq!(r.summary(), "plan: 1 change (1 create) over 1 tick");
     let plan = s.read("plan.json");
     assert!(plan.contains(&second), "{plan}");
+    // Each row says the whole commit it was read at.
     assert!(
-        plan.contains(&format!("ops.git@{}:nodes.csv:3", short(&second))),
+        plan.contains(&format!("ops.git@{second}:nodes.csv:3")),
         "{plan}"
     );
 
@@ -77,7 +78,7 @@ fn a_plan_file_pins_the_commit_the_branch_named() {
 #[test]
 fn a_ref_that_names_no_commit_is_an_error() {
     let (s, _) = setup("noref");
-    s.write("p.df", &PROGRAM.replace("\"main\"", "\"env/prod\""));
+    s.write("p.df", &PROGRAM.replace("ref=main", "ref=env/prod"));
     let r = s.run(&["plan", "p.df"]).failure();
     assert!(
         r.stderr
@@ -132,7 +133,7 @@ fn the_controller_takes_a_changed_file_as_an_input_event() {
     let s = scratch("controller-file");
     s.write(
         "p.df",
-        &PROGRAM.replace(r#"git("ops.git", "main", "nodes.csv")"#, r#""nodes.csv""#),
+        &PROGRAM.replace(r#""git+file:ops.git/nodes.csv?ref=main""#, r#""nodes.csv""#),
     );
     s.write("nodes.csv", "name\na\n");
     assert_eq!(once(&s)[0], "event start");

@@ -57,6 +57,7 @@ fn grants(allow: &[&str], credentials: &[&str]) -> Grants {
         provider: "fake".into(),
         allow: allow.iter().map(|s| s.to_string()).collect(),
         credentials: credentials.iter().map(|s| s.to_string()).collect(),
+        ..Grants::default()
     }
 }
 

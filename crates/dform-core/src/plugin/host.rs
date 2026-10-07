@@ -203,18 +203,17 @@ pub trait Calls: Send + Sync {
         auth: Option<Handle>,
         via: Option<Handle>,
     ) -> Result<HttpResponse, Error>;
+    /// `files.read` (R-153): the bytes at a location, refused unless
+    /// granted; not there yet is `Failure::NotYet`.
+    fn files_read(&self, location: &str) -> Result<Vec<u8>, Failure>;
     /// `ssh.exec`.
     fn exec(&self, on: &Target, argv: &[String], stdin: Option<&[u8]>) -> Result<Run, Failure>;
-    /// `ssh.read`.
-    fn read(&self, on: &Target, path: &str) -> Result<Vec<u8>, Failure>;
     /// `ssh.write`.
     fn write(&self, on: &Target, path: &str, data: &[u8], mode: u32) -> Result<(), Error>;
     /// `ssh.forward`: a tunnel.
     fn forward(&self, via: &Target, to: &Endpoint) -> Result<Handle, Error>;
     /// Where the tunnel `h` leads.
     fn tunnel(&self, h: Handle) -> Option<Endpoint>;
-    /// `git.read`.
-    fn git_read(&self, repo: &str, rev: &str, path: &str) -> Result<Vec<u8>, Error>;
     /// `git.commit`: the new commit's id.
     fn git_commit(
         &self,
@@ -228,10 +227,11 @@ pub trait Calls: Send + Sync {
 }
 
 /// The host's own interfaces, by the names a manifest and a grant use.
-pub const HOST_INTERFACES: [&str; 6] = [
+pub const HOST_INTERFACES: [&str; 7] = [
     "dform:host/types",
     "dform:host/secrets",
     "dform:host/http",
+    "dform:host/files",
     "dform:host/ssh",
     "dform:host/git",
     "dform:host/log",
@@ -304,6 +304,12 @@ pub struct Grants {
     pub allow: BTreeSet<String>,
     /// Credentials it may open, by name (`kubeconfig:prod`).
     pub credentials: BTreeSet<String>,
+    /// The locations it may read through the host (`dform:host/files`,
+    /// R-153), by pattern: `https://github.com/*`, `s3://state/*`.
+    pub reads: BTreeSet<String>,
+    /// The run's reader the host reads them with: its known hosts, its
+    /// mirrors, the transports the run's providers declare.
+    pub files: crate::files::Shared,
 }
 
 impl Grants {
@@ -423,6 +429,7 @@ mod tests {
             provider: "k8s".into(),
             allow: allow.iter().map(|s| s.to_string()).collect(),
             credentials: credentials.iter().map(|s| s.to_string()).collect(),
+            ..Grants::default()
         }
     }
 

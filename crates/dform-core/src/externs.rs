@@ -22,10 +22,10 @@
 //! built-in fact providers ([`BUILTINS`]): their externs are the
 //! compiler's own, and dform answers `file.text(+path, -value)` (paths
 //! from the program's project root, `project::base_of`), `env.var(+name,
-//! -value)`, `time.now(-t)` and `ssh`'s (`crate::plugin::ssh`) itself,
-//! with no `dform.toml` source; the
-//! loaders, `yaml(path)` and the rest, are its documents (`crate::tables`,
-//! R-39). `memo.first` is in scope with no provider's `use`. Other
+//! -value)` and `time.now(-t)` itself, with no `dform.toml` source; the
+//! loaders, `yaml(LOCATION)` and the rest, are its documents
+//! (`crate::tables`, R-39), read over a location's transport
+//! (`crate::files`, R-153). `memo.first` is in scope with no provider's `use`. Other
 //! externs are asked of the providers over the
 //! plugin protocol (Query; the mock answers from
 //! `providers/<name>/externs.df`).
@@ -587,14 +587,24 @@ impl<'a> Externs<'a> {
     }
 
     /// The secret answers of dform's own externs the last evaluation read
-    /// (`ssh.read`'s content, [`secret_columns`]), each by its label
+    /// ([`secret_columns`], a document read into a secret `let`), each by its label
     /// ([`secret_label`]): what the plan file records the digest of. A
     /// "not yet" (a null) is none.
     pub fn secret_answers(&self) -> Vec<(String, Value)> {
         let known = self.known.borrow();
+        let secret = self.secret_calls.borrow();
         let mut out = Vec::new();
         for c in self.demanded.borrow().iter() {
-            let cols = secret_columns(&c.pred);
+            let mut cols = secret_columns(&c.pred);
+            // A document read into a secret `let` (R-153): its value.
+            if cols.is_empty() && crate::tables::is_document(&c.pred) && secret.contains(c) {
+                cols = self
+                    .fns
+                    .get(&c.pred)
+                    .map(|f| f.args.len() - 1)
+                    .into_iter()
+                    .collect();
+            }
             for row in known.get(c).into_iter().flatten() {
                 for &col in &cols {
                     match row.get(col) {
@@ -717,22 +727,6 @@ pub const BUILTINS: &[Builtin] = &[
         in_process: true,
         always: false,
     },
-    // An SSH host's file (`plugin::ssh`): answered when the
-    // host answers, "not yet" (an open null) until then.
-    Builtin {
-        name: "ssh",
-        externs: &[(
-            crate::plugin::ssh::READ,
-            &[
-                (true, "host", "any"),
-                (true, "user", "string"),
-                (true, "path", "string"),
-                (false, "content", "secret(string)"),
-            ],
-        )],
-        in_process: true,
-        always: false,
-    },
     Builtin {
         name: "memo",
         externs: &[(
@@ -754,14 +748,17 @@ pub const TIME_NOW: &str = "time.now";
 /// Whether dform answers `pred` itself: an extern of an in-process
 /// built-in provider.
 pub fn in_process(pred: &str) -> bool {
+    // A location's read that is not there yet (R-153): dform's own.
+    if pred == crate::files::READ {
+        return true;
+    }
     pred.split_once('.')
         .and_then(|(h, _)| builtin(h))
         .is_some_and(|b| b.in_process && b.externs.iter().any(|(n, _)| *n == pred))
 }
 
 /// The secret columns (from 0) of an in-process built-in extern but
-/// `env.var` (which the redactor labels by its name): `ssh.read`'s
-/// content.
+/// `env.var` (which the redactor labels by its name).
 pub fn secret_columns(pred: &str) -> Vec<usize> {
     if pred == crate::syntax::resolve::ENV_VAR || !in_process(pred) {
         return Vec::new();
@@ -792,10 +789,22 @@ pub fn inputs_of(pred: &str, row: &[Value]) -> Vec<Value> {
 }
 
 /// An extern's call as a label names it ([`secret_label`],
-/// `pred/INPUTS#N`), as the program writes it: `ssh.read("127.0.0.1:22",
-/// "ubuntu", "/etc/k3s.yaml")`. The inputs are joined by `,`: a built-in
+/// `pred/INPUTS#N`), as the program writes it: `memo.first("k", "c")`,
+/// `text("ssh://ubuntu@10.0.0.5/etc/k3s.yaml")`. The inputs are joined by `,`: a built-in
 /// extern's that do not split into as many as it takes are said whole.
 pub fn call_text(pred: &str, inputs: &str) -> String {
+    // A location's read is said as the location (R-153), a loader's call
+    // as the loader's (`text("ssh://..")`).
+    if pred == crate::files::READ {
+        return inputs.to_string();
+    }
+    if crate::tables::is_document(pred)
+        && let Some(format) = pred
+            .strip_prefix("table.")
+            .and_then(|r| r.split('.').next())
+    {
+        return format!("{format}({})", crate::ir::string_literal(inputs));
+    }
     let n = builtin_extern(pred).map(|cols| cols.iter().filter(|(i, _, _)| *i).count());
     let parts: Vec<&str> = match (n, inputs.split(',').collect::<Vec<_>>()) {
         (Some(0), _) => Vec::new(),

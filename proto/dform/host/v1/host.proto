@@ -4,7 +4,7 @@
 // proto/dform/v1/provider.proto, which it does not change: a provider that
 // never calls back is untouched by it.
 //
-// Two services:
+// Three services:
 //
 // - `Host` is served by dform, one server per provider it starts. dform
 //   names where in the provider's environment, `DFORM_HOST` (`unix:///PATH`
@@ -14,7 +14,12 @@
 // - `Manifest` is served by a provider beside `Provider`: what it uses of
 //   the host and of the machine, which `dform provider check` prints beside
 //   what dform.toml grants. A provider that does not serve it (UNIMPLEMENTED)
-//   has an undeclared manifest.
+//   has an undeclared manifest. Its `schemes` are the location schemes it
+//   reads (R-153).
+// - `Files` is served by a provider whose manifest declares schemes: the
+//   WIT's `files` exported, which dform calls for a read of one of them
+//   (the program's `yaml("gs://..")`, or another provider's `Host.Read`,
+//   which dform mediates).
 //
 // A failure is a `Failure` in the response, never a gRPC status, so its
 // class (R-81's: final, retryable, maybe-applied) and `not-yet` travel as
@@ -30,15 +35,19 @@ service Host {
   rpc Open(OpenRequest) returns (OpenResponse);
   // http.send
   rpc Send(SendRequest) returns (SendResponse);
+  // files.read (R-153): the bytes at a location, in chunks.
+  rpc Read(ReadRequest) returns (stream ReadChunk);
   // ssh.exec
   rpc Exec(ExecRequest) returns (ExecResponse);
-  // ssh.read
+  // ssh.read, folded into files.read (R-153): `Read` of
+  // `ssh://USER@HOST:PORT/PATH`, which serves it.
   rpc ReadFile(ReadFileRequest) returns (ReadFileResponse);
   // ssh.write
   rpc WriteFile(WriteFileRequest) returns (WriteFileResponse);
   // ssh.forward
   rpc Forward(ForwardRequest) returns (ForwardResponse);
-  // git.read
+  // git.read, folded into files.read (R-153): `Read` of
+  // `git+https://HOST/OWNER/REPO//PATH?ref=REV`, which serves it.
   rpc GitRead(GitReadRequest) returns (GitReadResponse);
   // git.commit
   rpc GitCommit(GitCommitRequest) returns (GitCommitResponse);
@@ -48,6 +57,11 @@ service Host {
 
 service Manifest {
   rpc Manifest(ManifestRequest) returns (ManifestResponse);
+}
+
+service Files {
+  // files.read, of a scheme the provider declares.
+  rpc Read(ReadRequest) returns (stream ReadChunk);
 }
 
 // error-class, and not-yet-or-error's not-yet.
@@ -104,6 +118,18 @@ message Target {
   string host = 1;
   string user = 2;
   optional uint32 port = 3;
+}
+
+message ReadRequest {
+  // A uri: `ssh://USER@HOST/PATH`, `https://..`, `s3://BUCKET/KEY`.
+  string location = 1;
+}
+
+// A part of what was read, in order; a failure (or not-yet) is the one
+// chunk.
+message ReadChunk {
+  optional Failure failure = 1;
+  bytes data = 2;
 }
 
 message ExecRequest {
@@ -200,4 +226,6 @@ message ManifestResponse {
   // The interfaces it uses, unversioned: `dform:host/http`,
   // `wasi:sockets/tcp`.
   repeated string imports = 1;
+  // The location schemes it reads, served by its `Files` (`gs`).
+  repeated string schemes = 2;
 }

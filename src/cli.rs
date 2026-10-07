@@ -3044,7 +3044,7 @@ fn run_with(
             };
             let mut approved: Option<crate::approval::Verified> = None;
             keep_memos(&mut st, externs, key)?;
-            evaluator.ssh.keep(&mut st);
+            evaluator.files.keep(&mut st);
             // A checkpoint of the state (`wal`): before a tick's first
             // call and after its last, and where the apply stops. Between,
             // each call's change of state goes to the log alone, before
@@ -3685,7 +3685,7 @@ fn run_with(
                     // the evaluation refreshes). A --world fixture is not
                     // registered: everything stays beside the world file.
                     keep_memos(&mut st, externs, key)?;
-                    evaluator.ssh.keep(&mut st);
+                    evaluator.files.keep(&mut st);
                     crate::tables::record(&mut st.externs, &externs.recorded());
                     // The copies state still holds resources of (R-67).
                     let held: Vec<ir::Address> = st
@@ -3831,7 +3831,7 @@ fn run_with(
                         // Nothing of the tick was applied: the next apply
                         // plans it again, as an unattended stop does.
                         st.in_flight = None;
-                        evaluator.ssh.keep(&mut st);
+                        evaluator.files.keep(&mut st);
                         persist(&st)?;
                         crate::interrupt::check()?;
                         bail!(

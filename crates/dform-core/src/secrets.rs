@@ -423,6 +423,18 @@ fn fixpoint<'a>(
         pass.cells
             .insert((crate::transform::OUTPUT.into(), scope.clone(), k.clone()));
     }
+    // A `let` declared secret (`modules::lets`).
+    for st in &lowered.program.statements {
+        if let Stmt::Fact(a) = st
+            && a.pred == crate::transform::SECRET_CELL
+            && let [t, scope, k] = a.args.as_slice()
+            && s(t) == Some(crate::modules::LET)
+            && let (Some(scope), Some(k)) = (s(scope), s(k))
+        {
+            pass.cells
+                .insert((crate::modules::LET.into(), scope.into(), k.into()));
+        }
+    }
     for f in &lowered.extern_fns {
         for (i, b) in f.args.iter().enumerate() {
             if crate::externs::is_secret(b) {
@@ -533,6 +545,43 @@ pub fn secret_memos(
                 && a.pred == crate::memo::FIRST
                 && a.args.len() == 3
                 && pass.term_secret(&a.args[1], &vars)
+            {
+                out.push(a.clone());
+            }
+        }
+    }
+    out
+}
+
+/// The reads of a document (`table.FORMAT.document`, a loader's call)
+/// whose value a rule writes into a secret cell (`let raw:
+/// secret(string) = text("ssh://..")`, R-153): the plan file records no
+/// such read, only its digest (`Externs::secret_answers`), and the apply
+/// reads it again.
+pub fn secret_reads(
+    lowered: &Lowered,
+    schema: &Schema,
+    outputs: &BTreeSet<(String, String)>,
+) -> Vec<Atom> {
+    let pass = fixpoint(lowered, schema, outputs);
+    let mut out = Vec::new();
+    for (head, body, _) in rules(&lowered.program) {
+        let Some(h) = head else { continue };
+        let ("arg", [t, scope, k, ..]) = (h.pred.as_str(), h.args.as_slice()) else {
+            continue;
+        };
+        let (Some(t), Some(scope), Some(k)) = (s(t), s(scope), s(k)) else {
+            continue;
+        };
+        let secret = pass.cells.iter().any(|(ct, cs, ck)| {
+            ct == t && cs == scope && (ck == k || ck.starts_with(&format!("{k}.")))
+        });
+        if !secret {
+            continue;
+        }
+        for l in body {
+            if let Lit::Pos(a) = l
+                && crate::tables::is_document(&a.pred)
             {
                 out.push(a.clone());
             }

@@ -488,8 +488,8 @@ pub fn sections(
                         &o != addr
                             && (boundary.contains(&o)
                                 || pending.contains_key(&o)
-                                // An extern dform answers that said "not
-                                // yet" (`ssh.read` of a host still
+                                // A read dform answers that said "not
+                                // yet" (`ssh://` of a host still
                                 // booting): no tick fills it, the
                                 // answer does.
                                 || crate::externs::in_process(&o.0))

@@ -375,9 +375,8 @@ impl Redactor {
                 r.add(v, &format!("{}/{name}", a.pred));
             }
         }
-        // Another in-process extern's secret column (`ssh.read`'s
-        // content): by its call's label, `PRED/INPUTS#N`, from the first
-        // answer on.
+        // Another in-process extern's secret column: by its call's label,
+        // `PRED/INPUTS#N`, from the first answer on.
         for a in facts {
             for col in crate::externs::secret_columns(&a.pred) {
                 let vals: Option<Vec<Value>> = a

@@ -192,6 +192,9 @@ pub struct Manifest {
     /// `[packages.NAME]`: another project mounted at `NAME` (R-65).
     #[serde(default)]
     pub packages: BTreeMap<String, PackageEntry>,
+    /// `[files]`: how locations are read (R-153).
+    #[serde(default)]
+    pub files: FilesTable,
     /// The project root (the manifest's directory).
     #[serde(skip)]
     pub root: PathBuf,
@@ -210,6 +213,23 @@ pub struct Manifest {
 pub struct PackageEntry {
     /// The project's root, relative to this one's.
     pub path: String,
+}
+
+/// `[files]`: how a location is read (R-153, `crate::files`). Nothing
+/// remote is configured otherwise: the scheme, the user and the host are
+/// in the location.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FilesTable {
+    /// How long a tick waits on a read that is "not yet" (a host still
+    /// booting, a file not written yet): `20m`; else [`WAIT`].
+    pub wait: Option<String>,
+    /// A location pattern (`*` any run of characters, matched against
+    /// `SCHEME://HOST[:PORT]/PATH`) and the credential its reads use, by
+    /// name (`"ssh://10.0.0.*" = "ssh:k3s-admin"`, `"https://git.example/*"
+    /// = "bearer:git"`); the longest pattern that matches wins.
+    #[serde(default)]
+    pub credentials: BTreeMap<String, String>,
 }
 
 /// `[project]`.
@@ -270,6 +290,10 @@ pub struct ProviderTable {
     /// The credentials it may open by name (`["kubeconfig:prod"]`), which
     /// the host applies (`plugin::credentials`).
     pub credentials: Option<Vec<String>>,
+    /// The locations it may read through the host (`dform:host/files`,
+    /// R-153), by scheme and host pattern: `["https://github.com/*",
+    /// "s3://images/*"]`.
+    pub reads: Option<Vec<String>>,
 }
 
 impl ProviderEntry {
@@ -458,8 +482,48 @@ impl Manifest {
                 path.display()
             ),
         }
+        if m.providers.contains_key("ssh") {
+            bail!(
+                "{}: the ssh provider is gone (R-153): dform reads a host's file itself, \
+                 `text(\"ssh://USER@HOST/PATH\")`; how long a read waits on a host still \
+                 booting is `[files] wait`, its key `[files] credentials = {{ \
+                 \"ssh://HOST/*\" = \"ssh:NAME\" }}`",
+                at("[providers] ssh")
+            );
+        }
+        if let Some(v) = &m.files.wait
+            && crate::store::parse_duration(v).is_none_or(|d| d.is_zero())
+        {
+            bail!(
+                "{} = {v:?}: a duration, `500ms`, `30s` or `10m`",
+                at("[files] wait")
+            );
+        }
+        for (pattern, c) in &m.files.credentials {
+            if !pattern.contains("://") {
+                bail!(
+                    "{} {pattern:?}: a location pattern, `SCHEME://HOST/PATH` with `*` \
+                     (`\"ssh://10.0.0.*\"`, `\"https://git.example/*\"`)",
+                    at("[files] credentials")
+                );
+            }
+            // An agent's key may be named by its fingerprint (R-125).
+            if !c.starts_with("ssh:SHA256:") {
+                crate::plugin::credentials::parse_name(c)
+                    .map_err(|e| anyhow!("{} {pattern:?}: {e}", at("[files] credentials")))?;
+            }
+        }
         for (name, p) in &m.providers {
             if let ProviderEntry::Table(t) = p {
+                for r in t.reads.iter().flatten() {
+                    if !r.contains("://") {
+                        bail!(
+                            "{} {r:?}: a location pattern, `SCHEME://HOST/PATH` with `*` \
+                             (`\"https://github.com/*\"`)",
+                            at(&format!("[providers.{name}] reads"))
+                        );
+                    }
+                }
                 if t.source.is_some() && t.path.is_some() {
                     bail!(
                         "{}: a provider comes from its `source` or its `path`, not both",
@@ -709,6 +773,8 @@ impl Manifest {
                         provider: name.clone(),
                         allow: set(&t.allow),
                         credentials: set(&t.credentials),
+                        reads: set(&t.reads),
+                        ..Default::default()
                     },
                 ))
             })
@@ -716,9 +782,7 @@ impl Manifest {
     }
 
     /// `[providers.NAME] timeout`, if it says: how long one call to the
-    /// provider `name` may go unanswered, and how long a tick waits on
-    /// what it has not answered yet (R-122). A built-in's (`ssh`) is
-    /// named so too, its table holding only its policy.
+    /// provider `name` may go unanswered (R-81).
     pub fn provider_timeout(&self, name: &str) -> Option<std::time::Duration> {
         match self.providers.get(name)? {
             ProviderEntry::Table(t) => crate::store::parse_duration(t.timeout.as_deref()?),
@@ -729,7 +793,24 @@ impl Manifest {
     /// How long a tick waits on what each provider answers "not yet"
     /// (`[providers.NAME] wait`), by its name, where dform.toml says;
     /// else [`WAIT`].
+    /// A location's read that is "not yet" waits as `read`
+    /// (`crate::files::READ`), `[files] wait` (R-153).
     pub fn provider_waits(&self) -> BTreeMap<String, std::time::Duration> {
+        let files = self
+            .files
+            .wait
+            .as_deref()
+            .and_then(crate::store::parse_duration)
+            .map(|d| {
+                (
+                    crate::files::READ
+                        .split('.')
+                        .next()
+                        .unwrap_or_default()
+                        .to_string(),
+                    d,
+                )
+            });
         self.providers
             .iter()
             .filter_map(|(name, p)| match p {
@@ -739,7 +820,27 @@ impl Manifest {
                 )),
                 ProviderEntry::Source(_) => None,
             })
+            .chain(files)
             .collect()
+    }
+
+    /// The s3 buckets the backends name (`[defaults]`'s and each
+    /// stack's), with their endpoint and region: what an `s3://BUCKET/KEY`
+    /// location is read with (R-153). A bucket named by a key's value
+    /// (`{env}`) is none of them.
+    pub fn buckets(&self) -> BTreeMap<String, crate::store::S3Spec> {
+        let mut out = BTreeMap::new();
+        let all =
+            std::iter::once(&self.defaults.backend).chain(self.stacks.values().map(|t| &t.backend));
+        for b in all.flatten() {
+            let text = b.get_ref().replace("{stack}", "stack");
+            if let Ok(crate::stack::Backend::S3(spec)) = crate::stack::parse_backend(&text)
+                && !spec.bucket.contains('{')
+            {
+                out.entry(spec.bucket.clone()).or_insert(spec);
+            }
+        }
+        out
     }
 
     /// The default backend of `stack` (a `local` directory relative to
@@ -1146,7 +1247,7 @@ mod tests {
         use std::time::Duration;
         let m = manifest(
             "[providers]\nfake = { source = \"fake\", timeout = \"2m\", backoff = \"10ms\", \
-             retries = 2 }\nk8s = \"k8s\"\nssh = { timeout = \"5m\" }\n",
+             retries = 2 }\nk8s = \"k8s\"\n\n[files]\nwait = \"5m\"\n",
         )
         .unwrap();
         let fake = Policy {
@@ -1155,7 +1256,7 @@ mod tests {
             backoff: Duration::from_millis(10),
         };
         assert_eq!(m.policies(), BTreeMap::from([("fake".to_string(), fake)]));
-        assert_eq!(m.provider_timeout("ssh"), Some(Duration::from_secs(300)));
+        assert_eq!(m.provider_waits()["read"], Duration::from_secs(300));
         assert_eq!(m.provider_timeout("fake"), Some(Duration::from_secs(120)));
         assert_eq!(m.provider_timeout("k8s"), None);
         let e = manifest("[providers]\nfake = { source = \"fake\", timeout = \"soon\" }\n")
@@ -1163,6 +1264,31 @@ mod tests {
         assert!(e.to_string().contains("[providers.fake] timeout"), "{e}");
         let e = manifest("[stacks.app]\nwait = \"30m\"\n").unwrap_err();
         assert!(e.to_string().contains("wait"), "{e}");
+        // The ssh provider is gone (R-153): its wait is `[files] wait`.
+        let e = manifest("[providers]\nssh = { wait = \"10m\" }\n").unwrap_err();
+        assert!(e.to_string().contains("[files] wait"), "{e}");
+    }
+
+    /// `[files] credentials` names a credential per location pattern, and
+    /// `[providers.NAME] reads` grants a provider locations (R-153); the
+    /// s3 backends' buckets are what an `s3://` location is read with.
+    #[test]
+    fn a_manifest_says_how_locations_are_read() {
+        let m = manifest(
+            "[files]\ncredentials = { \"ssh://10.0.0.*\" = \"ssh:k3s-admin\" }\n\
+             [providers]\ngcp = { source = \"gcp\", reads = [\"https://github.com/*\"] }\n\
+             [defaults]\nbackend = 's3(\"state\", \"dform/{stack}\", {endpoint: \"http://h\", \
+             region: \"gra\"})'\n",
+        )
+        .unwrap();
+        assert_eq!(m.files.credentials["ssh://10.0.0.*"], "ssh:k3s-admin");
+        let (_, g) = m.grants().into_iter().next().unwrap();
+        assert!(g.reads.contains("https://github.com/*"));
+        assert_eq!(m.buckets()["state"].endpoint.as_deref(), Some("http://h"));
+        let e = manifest("[files]\ncredentials = { \"10.0.0.*\" = \"ssh:k\" }\n").unwrap_err();
+        assert!(e.to_string().contains("location pattern"), "{e}");
+        let e = manifest("[files]\ncredentials = { \"ssh://*\" = \"k\" }\n").unwrap_err();
+        assert!(e.to_string().contains("KIND:NAME"), "{e}");
     }
 
     /// `[providers.NAME] allow` and `credentials` grant a provider what it

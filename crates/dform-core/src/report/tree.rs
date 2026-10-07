@@ -1569,12 +1569,14 @@ fn place_in(at: &str, doc: &Value, v: &Value) -> Option<String> {
     if !locate(doc, v, &mut steps) {
         return None;
     }
-    let mut place = at.to_string();
+    // A repository's commit by its first digits (R-153).
+    let shown = crate::tables::shown_at(at);
+    let mut place = shown.clone();
     let mut rest = steps.as_slice();
     if let (Value::List(xs), [(Some(i), _), tail @ ..]) = (doc, rest)
         && let Some(line) = crate::tables::document_line(at, xs.len(), *i)
     {
-        place = format!("{at}:{line}");
+        place = format!("{shown}:{line}");
         rest = tail;
     }
     if !rest.is_empty() {

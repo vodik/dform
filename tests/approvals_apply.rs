@@ -313,13 +313,17 @@ fn a_git_table_is_read_at_the_planned_commit() {
     commit("a");
     s.write(
         "p.df",
-        "\n\ninput owner from csv(git(\"ops.git\", \"main\", \"owners.csv\"))\n\n\
+        "\n\ninput owner from csv(\"git+file:ops.git/owners.csv?ref=main\")\n\n\
          decl owner(name: string)\n\nresource net.vpc main {\ncidr = \"10.0.0.0/16\"\n\
          tags = { owners: [ n | owner(n) ] }\n}\nuse fake\n",
     );
     s.run(&["plan", "--out", "plan.json", "p.df"]).success();
     let file = s.read("plan.json");
-    assert!(file.contains("table.git.owner"), "{file}");
+    // The rows, at the commit they were read at (R-153).
+    assert!(
+        file.contains("table.csv.owner") && file.contains("ops.git@"),
+        "{file}"
+    );
     commit("a\nb");
     s.run(&["apply", "plan.json"]).success();
     let world = s.read("dform.state/p/remote.json");
