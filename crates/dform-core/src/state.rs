@@ -77,15 +77,61 @@ pub struct State {
 pub struct Secret {
     /// 1 for a key never rotated; each rotation adds one.
     pub generation: u32,
-    /// When it was last rotated: RFC 3339, UTC.
+    /// The master epoch the key derives from (R-165): pinned by `secrets
+    /// cycle` to the epoch it was on; none, the current one (a rotation
+    /// moves it there).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub epoch: Option<u32>,
+    /// When it was last rotated: RFC 3339, UTC; empty for a key a cycle
+    /// pinned and never rotated.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub rotated_at: String,
     /// Who rotated it, as the audit log names an actor (`DFORM_ACTOR`,
     /// else `user@host`): asserted, not verified.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub by: String,
     /// Rotated since the last apply that completed: the next plan carries
     /// the rotation (`rotated/3` to policy).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub pending: bool,
+}
+
+impl State {
+    /// `dform secrets cycle` (R-165): each of `keys` that derives from the
+    /// current epoch pinned to it, `epoch`, before the next becomes
+    /// current. The keys pinned.
+    pub fn pin(&mut self, keys: impl IntoIterator<Item = String>, epoch: u32) -> Vec<String> {
+        let mut out = Vec::new();
+        for k in keys {
+            let r = self.secrets.entry(k.clone()).or_insert_with(|| Secret {
+                generation: 1,
+                epoch: None,
+                rotated_at: String::new(),
+                by: String::new(),
+                pending: false,
+            });
+            if r.epoch.is_none() {
+                r.epoch = Some(epoch);
+                out.push(k);
+            }
+        }
+        out
+    }
+
+    /// The master epochs a secret still derives from (R-165): each pinned
+    /// key's, and each kept memo's seal's.
+    pub fn epochs_in_use(&self) -> std::collections::BTreeSet<u32> {
+        self.secrets
+            .values()
+            .filter_map(|s| s.epoch)
+            .chain(
+                self.memo
+                    .values()
+                    .filter(|m| !m.sealed.is_empty())
+                    .map(|m| m.epoch.unwrap_or(1)),
+            )
+            .collect()
+    }
 }
 
 impl Secret {
@@ -182,10 +228,10 @@ impl State {
         Ok(st)
     }
 
-    /// `dform secrets rotate KEY` (R-161): the key's next generation,
-    /// recorded as rotated now by `by`, and the value `memo.first` keeps
-    /// for it forgotten, so the next run keeps its candidate. Returns the
-    /// record and what the memo kept.
+    /// `dform secrets rotate KEY` (R-161): the key's next generation, on
+    /// the current master epoch (R-165), recorded as rotated now by `by`,
+    /// and the value `memo.first` keeps for it forgotten, so the next run
+    /// keeps its candidate. Returns the record and what the memo kept.
     pub fn rotate(
         &mut self,
         key: &str,
@@ -195,6 +241,7 @@ impl State {
         let generation = self.secrets.get(key).map_or(1, |s| s.generation) + 1;
         let s = Secret {
             generation,
+            epoch: None,
             rotated_at: now.to_string(),
             by: by.to_string(),
             pending: true,

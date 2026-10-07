@@ -86,6 +86,34 @@ pub struct Master {
     /// The key is a plain key file the passphrase is to seal
     /// ([`seal_key_file`]).
     pub unsealed: bool,
+    /// The epoch the master is (R-165): 1 until `dform secrets cycle`.
+    pub epoch: u32,
+    /// The earlier epochs' masters still kept, each by its id: a secret
+    /// derived on one keeps it until rotated. The keys when the run holds
+    /// the passphrase.
+    pub earlier: Vec<Epoch>,
+    /// The key every digest of a secret is keyed with (the plan file's,
+    /// a write-only attribute's, the audit log's): the first epoch's
+    /// master, carried sealed across the epochs after it, so a new epoch
+    /// changes no digest. The key itself before a cycle.
+    pub digest: Option<Key>,
+}
+
+/// An earlier epoch's master (R-165).
+#[derive(Clone)]
+pub struct Epoch {
+    pub epoch: u32,
+    pub id: String,
+    pub key: Option<Key>,
+}
+
+impl Epoch {
+    /// The `random.*` input key material of the epoch's master.
+    pub fn random(&self) -> Option<Vec<u8>> {
+        self.key
+            .as_ref()
+            .map(|k| crate::secrets::derived(k, "random master").to_vec())
+    }
 }
 
 impl std::fmt::Debug for Master {
@@ -118,10 +146,39 @@ impl Master {
         };
         Master {
             id: random.as_deref().map(id),
+            digest: key.clone(),
             key,
             random,
             source,
+            epoch: 1,
             ..Master::default()
+        }
+    }
+
+    /// Each master the run derives from, by epoch: the earlier ones and
+    /// the current; its id and its `random.*` input key material when the
+    /// run holds it. What `functions::random::set_epochs` takes.
+    pub fn epochs(&self) -> Vec<(u32, String, Option<Vec<u8>>)> {
+        let mut out: Vec<(u32, String, Option<Vec<u8>>)> = self
+            .earlier
+            .iter()
+            .map(|e| (e.epoch, e.id.clone(), e.random()))
+            .collect();
+        if let Some(id) = &self.id {
+            out.push((self.epoch.max(1), id.clone(), self.random.clone()));
+        }
+        out
+    }
+
+    /// The key of epoch `epoch`'s master, when the run holds it.
+    pub fn key_of(&self, epoch: u32) -> Option<&Key> {
+        match epoch == self.epoch.max(1) {
+            true => self.key.as_ref(),
+            false => self
+                .earlier
+                .iter()
+                .find(|e| e.epoch == epoch)
+                .and_then(|e| e.key.as_ref()),
         }
     }
 
@@ -131,7 +188,9 @@ impl Master {
         let (Some(was), Some(now)) = (applied, self.id.as_deref()) else {
             return Ok(());
         };
-        if was == now || self.accept {
+        // An earlier epoch's (R-165): `secrets cycle` wrote the new one and
+        // stopped before state said so.
+        if was == now || self.accept || self.earlier.iter().any(|e| e.id == was) {
             return Ok(());
         }
         let fix = match self.source.as_str() {
@@ -299,7 +358,38 @@ pub struct Record {
     /// The master sealed under a key scrypt mixes from the passphrase.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub passphrase: Option<Sealed>,
+    /// Which epoch this master is (R-165): 1 until `dform secrets cycle`.
+    #[serde(default = "first_epoch", skip_serializing_if = "is_first_epoch")]
+    pub epoch: u32,
+    /// The earlier epochs' masters a secret still derives from, each
+    /// sealed under the passphrase; one no secret derives from is retired
+    /// (deleted) by the apply that moves its last.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub earlier: Vec<EarlierRecord>,
+    /// The digest key (the first epoch's master), sealed under this
+    /// master (`secrets::seal`, [`DIGEST_ROOT`]): after a cycle.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub digest: String,
 }
+
+/// An earlier epoch in `state.master` (R-165).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct EarlierRecord {
+    pub epoch: u32,
+    pub id: String,
+    pub passphrase: Sealed,
+}
+
+fn first_epoch() -> u32 {
+    1
+}
+
+fn is_first_epoch(e: &u32) -> bool {
+    *e == 1
+}
+
+/// What the digest key is sealed as under a later epoch's master.
+const DIGEST_ROOT: &str = "dform digest root";
 
 /// A master sealed under a passphrase: XChaCha20-Poly1305 under
 /// scrypt(passphrase, salt), the master id the associated data.
@@ -536,6 +626,30 @@ pub fn resolve(
             match (&record, plain) {
                 (Some((r, _)), plain) if r.passphrase.is_some() => {
                     out.id = Some(r.id.clone());
+                    out.epoch = r.epoch;
+                    // The earlier epochs (R-165): their ids, and their keys
+                    // with the passphrase.
+                    for e in &r.earlier {
+                        let key = match &pass {
+                            Ok(p) => match open(&e.passphrase, &e.id, p)? {
+                                Some(k) if key_id(&k) == e.id => Some(k),
+                                _ => bail!(
+                                    "{deployment}: {}'s epoch {} (id {}) does not open with the \
+                                     passphrase from {}",
+                                    store.locate(MASTER),
+                                    e.epoch,
+                                    short(&e.id),
+                                    from.describe()
+                                ),
+                            },
+                            Err(_) => None,
+                        };
+                        out.earlier.push(Epoch {
+                            epoch: e.epoch,
+                            id: e.id.clone(),
+                            key,
+                        });
+                    }
                     // A key file a sealing left behind goes with the next
                     // apply ([`seal_key_file`]).
                     out.unsealed = plain.is_some();
@@ -578,6 +692,9 @@ pub fn resolve(
                             passphrase: Some(seal(&key, &id, p)?),
                             public: hex(&seal_pair(&key).1),
                             id,
+                            epoch: 1,
+                            earlier: Vec::new(),
+                            digest: String::new(),
                         };
                         let cond = match &record {
                             Some((_, etag)) => Cond::IfMatch(etag.clone()),
@@ -637,6 +754,9 @@ pub fn resolve(
                         id: key_id(k),
                         public: public.clone(),
                         passphrase: None,
+                        epoch: 1,
+                        earlier: Vec::new(),
+                        digest: String::new(),
                     },
                     Cond::IfAbsent,
                 ),
@@ -648,13 +768,121 @@ pub fn resolve(
         }
     }
     let of = Master::of(key, out.source.clone(), env);
+    // After a cycle the digest key is the first epoch's, sealed under the
+    // current master.
+    let digest = match (&record, &of.key) {
+        (Some((r, _)), Some(k)) if !r.digest.is_empty() => {
+            let b: [u8; 32] = crate::secrets::open(k, DIGEST_ROOT, &r.digest)?
+                .try_into()
+                .map_err(|_| anyhow::anyhow!("{deployment}: the digest key is not 32 bytes"))?;
+            Some(Key::from_bytes(b))
+        }
+        _ => of.digest,
+    };
     Ok(Master {
         id: of.id.or(out.id),
         key: of.key,
         random: of.random,
         source: of.source,
+        digest,
+        epoch: out.epoch.max(1),
         ..out
     })
+}
+
+/// `dform secrets cycle` (R-165): a new master, epoch N+1, sealed under the
+/// passphrase beside epoch N, which stays (sealed) while a secret derives
+/// from it; the digest key carried over. Its epoch and id.
+pub fn cycle(
+    store: &dyn crate::store::Store,
+    deployment: &str,
+    master: &Master,
+    mixing: &Mixing,
+) -> Result<(u32, String)> {
+    use crate::store::{Cond, MASTER};
+    let Mixing::Passphrase(from) = mixing else {
+        bail!(
+            "{deployment}: its master is the key file {}: an epoch is kept sealed beside the \
+             next, so cycling needs `[secrets] passphrase` in dform.toml (the next apply seals the \
+             key file)",
+            store.locate(crate::store::KEY)
+        );
+    };
+    let (Some(_), Some(digest)) = (&master.key, &master.digest) else {
+        bail!(
+            "{deployment}: cycling seals a new master and needs the current one ({})",
+            master.without.as_deref().unwrap_or("not held")
+        );
+    };
+    let Some((r, etag)) = load_record(store)? else {
+        bail!("{deployment}: {} is missing", store.locate(MASTER));
+    };
+    let Some(sealed) = r.passphrase.clone().filter(|_| !master.unsealed) else {
+        bail!(
+            "{deployment}: its master is not sealed yet: apply once with the passphrase, then \
+             cycle"
+        );
+    };
+    let pass = match from.read(deployment)? {
+        Ok(p) => p,
+        Err(why) => bail!("{deployment}: cycling needs the passphrase: {why}"),
+    };
+    let new = Key::from_bytes(random_bytes::<32>("the master")?);
+    let id = key_id(&new);
+    let mut earlier = r.earlier.clone();
+    earlier.push(EarlierRecord {
+        epoch: r.epoch,
+        id: r.id.clone(),
+        passphrase: sealed,
+    });
+    let next = Record {
+        version: 1,
+        passphrase: Some(seal(&new, &id, &pass)?),
+        public: hex(&seal_pair(&new).1),
+        epoch: r.epoch + 1,
+        earlier,
+        digest: crate::secrets::seal(&new, DIGEST_ROOT, &digest.bytes())?,
+        id: id.clone(),
+    };
+    if store
+        .put(MASTER, &record_bytes(&next), &Cond::IfMatch(etag))
+        .with_context(|| format!("write {}", store.locate(MASTER)))?
+        .is_none()
+    {
+        bail!(
+            "{deployment}: {} was written by another run meanwhile: run again",
+            store.locate(MASTER)
+        );
+    }
+    Ok((next.epoch, id))
+}
+
+/// Delete each earlier epoch no secret derives from (`keep` the epochs
+/// one does): what the apply that moves an epoch's last secret does
+/// (R-165). The epochs retired, with their ids.
+pub fn retire(
+    store: &dyn crate::store::Store,
+    keep: &std::collections::BTreeSet<u32>,
+) -> Result<Vec<(u32, String)>> {
+    use crate::store::{Cond, MASTER};
+    let Some((mut r, etag)) = load_record(store)? else {
+        return Ok(Vec::new());
+    };
+    let (kept, gone): (Vec<EarlierRecord>, Vec<EarlierRecord>) =
+        r.earlier.drain(..).partition(|e| keep.contains(&e.epoch));
+    if gone.is_empty() {
+        return Ok(Vec::new());
+    }
+    r.earlier = kept;
+    if store
+        .put(MASTER, &record_bytes(&r), &Cond::IfMatch(etag))
+        .with_context(|| format!("write {}", store.locate(MASTER)))?
+        .is_none()
+    {
+        // Another run's write meanwhile: the next apply retires it.
+        return Ok(Vec::new());
+    }
+    Ok(gone.into_iter().map(|e| (e.epoch, e.id)).collect())
 }
 
 /// Seal a master the backend keeps as a plain key file under the
@@ -683,6 +911,9 @@ pub fn seal_key_file(
             passphrase: Some(seal(key, &id, &pass)?),
             public: hex(&seal_pair(key).1),
             id,
+            epoch: 1,
+            earlier: Vec::new(),
+            digest: String::new(),
         };
         let cond = match record {
             Some((_, etag)) => Cond::IfMatch(etag),

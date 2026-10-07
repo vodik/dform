@@ -2167,6 +2167,20 @@ pub mod random {
         real: Option<Vec<u8>>,
         standin: Vec<u8>,
         deployment: String,
+        /// The epoch `real` is (R-165), and the earlier ones a secret
+        /// still derives from: each epoch's master and stand-in master.
+        epoch: u32,
+        earlier: std::collections::BTreeMap<u32, (Option<Vec<u8>>, Vec<u8>)>,
+    }
+
+    /// The public master a stand-in derives from, made from a master id.
+    fn standin_of(id: Option<&str>) -> Vec<u8> {
+        use sha2::Digest;
+        sha2::Sha256::new()
+            .chain_update(b"dform stand-in\0")
+            .chain_update(id.unwrap_or_default().as_bytes())
+            .finalize()
+            .to_vec()
     }
 
     thread_local! {
@@ -2186,6 +2200,9 @@ pub mod random {
         static BORN: RefCell<Option<String>> = const { RefCell::new(None) };
         /// The generation `derive` derives at: the call's.
         static GENERATION: std::cell::Cell<u32> = const { std::cell::Cell::new(1) };
+        /// The epoch `derive` derives from (R-165): the key's; 0 the
+        /// current one.
+        static EPOCH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
         /// Each key a `random.*` call derived for since the rotations were
         /// set, with its functions and whether one is a secret: what
         /// `dform secrets list` lists.
@@ -2249,20 +2266,40 @@ pub mod random {
     /// public master the master id `id` makes; with no `ikm` (a run that
     /// does not hold the master) the stand-in is the value.
     pub fn set_master(ikm: Option<Vec<u8>>, id: Option<&str>, deployment: &str) {
-        use sha2::Digest;
-        let standin = sha2::Sha256::new()
-            .chain_update(b"dform stand-in\0")
-            .chain_update(id.unwrap_or_default().as_bytes())
-            .finalize()
-            .to_vec();
         MASTER.with(|m| {
             *m.borrow_mut() = Some(Masters {
                 real: ikm,
-                standin,
+                standin: standin_of(id),
                 deployment: deployment.to_string(),
+                epoch: 1,
+                earlier: Default::default(),
             })
         });
         DERIVED.with(|d| d.borrow_mut().clear());
+    }
+
+    /// The deployment's masters by epoch (R-165, `custody::Master::epochs`):
+    /// each its id and, when the run holds it, its input key material. The
+    /// last is the current one, which `set_master` set; a key derives from
+    /// its record's epoch, the current one unless pinned.
+    pub fn set_epochs(epochs: &[(u32, String, Option<Vec<u8>>)]) {
+        MASTER.with(|m| {
+            let mut m = m.borrow_mut();
+            let Some(m) = m.as_mut() else { return };
+            let Some(((current, ..), earlier)) = epochs.split_last() else {
+                return;
+            };
+            m.epoch = *current;
+            m.earlier = earlier
+                .iter()
+                .map(|(e, id, ikm)| (*e, (ikm.clone(), standin_of(Some(id)))))
+                .collect();
+        });
+    }
+
+    /// The current epoch (R-165): 1 until `dform secrets cycle`.
+    pub fn current_epoch() -> u32 {
+        MASTER.with(|m| m.borrow().as_ref().map_or(1, |m| m.epoch))
     }
 
     /// The secrets derived on this thread since its master was set, each
@@ -2296,11 +2333,14 @@ pub mod random {
                 .ok()
                 .filter(|g| (1..=current).contains(g))?,
         };
+        let epoch = RECORDS.with(|r| r.borrow().get(key).and_then(|s| s.epoch).unwrap_or(0));
         let at = |standin: bool| {
             GENERATION.with(|g| g.set(generation));
+            EPOCH.with(|e| e.set(epoch));
             STANDIN.with(|s| s.set(standin));
             let v = f();
             STANDIN.with(|s| s.set(false));
+            EPOCH.with(|e| e.set(0));
             GENERATION.with(|g| g.set(1));
             v
         };
@@ -2322,12 +2362,12 @@ pub mod random {
         let record = RECORDS.with(|r| r.borrow().get(key).cloned());
         let label = match (asked, record) {
             (Some(_), _) => format!("random.{what}({key:?}, generation: {generation})"),
-            (None, Some(r)) => format!(
+            (None, Some(r)) if r.generation > 1 => format!(
                 "random.{what}({key:?}), {ROTATED}{generation}, rotated {} by {}",
                 r.day(),
                 r.by
             ),
-            (None, None) => format!("random.{what}({key:?})"),
+            (None, _) => format!("random.{what}({key:?})"),
         };
         if let (Value::Str(v), Value::Str(s)) = (&v, &standin) {
             crate::secrets::standin::register(v, &label, s);
@@ -2378,9 +2418,19 @@ pub mod random {
         MASTER.with(|m| {
             let m = m.borrow();
             let m = m.as_ref()?;
+            // The key's epoch's master (R-165): the current one unless the
+            // key is pinned to an earlier one.
+            let (real, standin) = match EPOCH.with(|e| e.get()) {
+                0 => (m.real.as_ref(), &m.standin),
+                e if e == m.epoch => (m.real.as_ref(), &m.standin),
+                e => {
+                    let (real, standin) = m.earlier.get(&e)?;
+                    (real.as_ref(), standin)
+                }
+            };
             let ikm = match STANDIN.with(|s| s.get()) {
-                true => &m.standin,
-                false => m.real.as_ref()?,
+                true => standin,
+                false => real?,
             };
             let deployment = &m.deployment;
             let mut info = Vec::new();
@@ -2649,6 +2699,7 @@ mod random_tests {
         let other = s(password(&[k("other")]));
         let rotated = crate::state::Secret {
             generation: 2,
+            epoch: None,
             rotated_at: "2026-10-07T09:00:00Z".into(),
             by: "alice".into(),
             pending: true,

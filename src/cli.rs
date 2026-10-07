@@ -623,6 +623,15 @@ enum SecretsCommand {
         #[arg(value_name = "TARGET K=V.. KEY", required = true, num_args = 1..)]
         words: Vec<String>,
     },
+    /// Make a new master, the next epoch, sealed under the passphrase
+    /// beside the current one (R-165). No value changes: each secret stays
+    /// on the epoch it was derived on until it is rotated, which moves it
+    /// to the new one; the apply that moves an epoch's last secret retires
+    /// it. Needs `[secrets] passphrase`, and the passphrase.
+    Cycle {
+        #[command(flatten)]
+        target: Target,
+    },
 }
 
 #[derive(Subcommand, Debug, Clone)]
@@ -802,6 +811,7 @@ enum Cmd {
     SecretsRotate {
         key: String,
     },
+    SecretsCycle,
     ForgetHost {
         host: String,
     },
@@ -1312,6 +1322,7 @@ fn resolve(args: Args) -> Result<Cli> {
                 };
                 (Cmd::SecretsRotate { key }, Some(target))
             }
+            SecretsCommand::Cycle { target } => (Cmd::SecretsCycle, Some(target)),
         },
         Command::Provider { cmd } => match cmd {
             ProviderCommand::Check { path } => (Cmd::ProviderCheck { path }, None),
@@ -2044,6 +2055,7 @@ fn run_with(
             | Cmd::Controller { .. }
             | Cmd::SecretsList { .. }
             | Cmd::SecretsRotate { .. }
+            | Cmd::SecretsCycle
     ) {
         loaded.require_provider()?;
     }
@@ -2236,7 +2248,11 @@ fn run_with(
     // What only reads the deployment's secrets: a query, a why, `secrets`.
     let reads = matches!(
         cli.cmd,
-        Cmd::Query { .. } | Cmd::Why { .. } | Cmd::SecretsList { .. } | Cmd::SecretsRotate { .. }
+        Cmd::Query { .. }
+            | Cmd::Why { .. }
+            | Cmd::SecretsList { .. }
+            | Cmd::SecretsRotate { .. }
+            | Cmd::SecretsCycle
     );
     let master = match &cli.cmd {
         Cmd::Plan { .. }
@@ -2244,7 +2260,8 @@ fn run_with(
         | Cmd::Query { .. }
         | Cmd::Why { .. }
         | Cmd::SecretsList { .. }
-        | Cmd::SecretsRotate { .. } => {
+        | Cmd::SecretsRotate { .. }
+        | Cmd::SecretsCycle => {
             // The key may be made now: a bucket is checked first, as for
             // any run that writes.
             if let (true, None, store::Location::S3(spec)) = (
@@ -2287,8 +2304,9 @@ fn run_with(
     // The key the run's digests are keyed with: a plan that writes a
     // file, and an apply. A plan file is checked in its own form: one
     // written without the master by digests anyone can compute (R-164).
+    // After a cycle it is the first epoch's master, carried (R-165).
     let key = match writes {
-        true => master.key.clone(),
+        true => master.digest.clone(),
         false => None,
     };
     if let (Some((path, f)), None) = (&saved, &key)
@@ -2414,6 +2432,7 @@ fn run_with(
             | Cmd::Explain { .. }
             | Cmd::SecretsList { .. }
             | Cmd::SecretsRotate { .. }
+            | Cmd::SecretsCycle
     );
     // The audit log as the run began, read once: the guardrail and why
     // since the last apply both read it.
@@ -2438,7 +2457,7 @@ fn run_with(
         cache: cli.world.is_none().then(|| cache.clone()),
         // A plan that makes no key digests with the one there is.
         digest_key: master
-            .key
+            .digest
             .as_ref()
             .map(|k| k.derive("provider digest").to_hex()),
         master: master.clone(),
@@ -2462,7 +2481,10 @@ fn run_with(
             Cmd::Plan { .. } | Cmd::Query { .. } | Cmd::Why { .. } | Cmd::Rekey { .. }
         ),
         policy: (explains
-            && !matches!(cli.cmd, Cmd::SecretsList { .. } | Cmd::SecretsRotate { .. }))
+            && !matches!(
+                cli.cmd,
+                Cmd::SecretsList { .. } | Cmd::SecretsRotate { .. } | Cmd::SecretsCycle
+            ))
             || matches!(cli.cmd, Cmd::Plan { .. }),
         last_apply: last_derived
             .as_ref()
@@ -2591,7 +2613,7 @@ fn run_with(
                     print!("{}", d.text(*why));
                 }
             }
-            Cmd::SecretsList { json } => {
+            Cmd::SecretsList { .. } | Cmd::SecretsRotate { .. } | Cmd::SecretsCycle => {
                 let born = born(entries());
                 let list = crate::secrets::inventory::of(
                     &x.res.facts,
@@ -2599,19 +2621,18 @@ fn run_with(
                     &ev.st,
                     ev.evaluator.backend.schema(),
                     born.as_deref(),
+                    master.epoch,
                 );
-                secrets_list(&deployment, &list, *json, &cli.table)?;
-            }
-            Cmd::SecretsRotate { key } => {
-                let born = born(entries());
-                let list = crate::secrets::inventory::of(
-                    &x.res.facts,
-                    &x.redact,
-                    &ev.st,
-                    ev.evaluator.backend.schema(),
-                    born.as_deref(),
-                );
-                secrets_rotate(&ev.located.dep, &list, &ev.st.memo, key, &audit)?;
+                let dep = &ev.located.dep;
+                match &cli.cmd {
+                    Cmd::SecretsList { json } => {
+                        secrets_list(&deployment, &list, master.epoch, *json, &cli.table)?
+                    }
+                    Cmd::SecretsRotate { key } => {
+                        secrets_rotate(dep, &list, &ev.st.memo, key, &audit)?
+                    }
+                    _ => secrets_cycle(dep, &list, &master, &mixing, &audit)?,
+                }
             }
             _ => unreachable!("explains is query, why, diff, __explain or secrets"),
         }
@@ -3031,6 +3052,7 @@ fn run_with(
         | Cmd::Complete { .. }
         | Cmd::SecretsList { .. }
         | Cmd::SecretsRotate { .. }
+        | Cmd::SecretsCycle
         | Cmd::ForgetHost { .. } => {
             unreachable!("handled before evaluation")
         }
@@ -3276,7 +3298,7 @@ fn run_with(
                 executor::approve(token, needs, roots, &expect, allowed)
             };
             let mut approved: Option<crate::approval::Verified> = None;
-            keep_memos(&mut st, externs, key)?;
+            keep_memos(&mut st, externs, &master)?;
             evaluator.files.keep(&mut st);
             // A checkpoint of the state (`wal`): before a tick's first
             // call and after its last, and where the apply stops. Between,
@@ -3956,9 +3978,23 @@ fn run_with(
                 }
                 if !boundary {
                     st.in_flight = None;
-                    // The rotations this apply carried are made (R-161).
+                    // The rotations this apply carried are made (R-161),
+                    // and an earlier master epoch no secret derives from
+                    // any more is retired (R-165).
                     for r in st.secrets.values_mut() {
                         r.pending = false;
+                    }
+                    let mut keep = st.epochs_in_use();
+                    keep.insert(master.epoch.max(1));
+                    for (epoch, id) in crate::custody::retire(dep.store().as_ref(), &keep)? {
+                        audit.append(
+                            "retired",
+                            serde_json::json!({
+                                "epoch": epoch,
+                                "id": id,
+                                "who": crate::audit::who(),
+                            }),
+                        )?;
                     }
                     // What this apply derived, for the next plan's
                     // guardrail and policy pass (R-80).
@@ -3977,7 +4013,7 @@ fn run_with(
                     // stacks to read (evaluated again only when it has any:
                     // the evaluation refreshes). A --world fixture is not
                     // registered: everything stays beside the world file.
-                    keep_memos(&mut st, externs, key)?;
+                    keep_memos(&mut st, externs, &master)?;
                     evaluator.files.keep(&mut st);
                     crate::tables::record(&mut st.externs, &externs.recorded());
                     // The copies state still holds resources of (R-67).
@@ -4893,7 +4929,8 @@ fn run_tests(
         let tables = crate::tables::Tables::default();
         // Nothing is kept and nothing applied: a memo answers its
         // candidate, `random.*` derive from a master of the test's own.
-        let memos = crate::memo::Memos::new(&state::State::default(), None);
+        let memos =
+            crate::memo::Memos::new(&state::State::default(), &crate::custody::Master::none());
         crate::functions::random::set_master(Some(b"dform test".to_vec()), None, stack);
         let externs =
             crate::externs::Externs::new(&lowered.program, &lowered.extern_fns, |f, ins| {
@@ -5043,11 +5080,20 @@ fn born(entries: Option<&Vec<serde_json::Value>>) -> Option<String> {
 fn secrets_list(
     deployment: &str,
     list: &[crate::secrets::inventory::Secret],
+    current: u32,
     json: bool,
     o: &report::table::Options,
 ) -> Result<()> {
     use report::table::{Cell, Table};
-    let mut t = Table::new(["key", "kind", "generation", "age", "read by", "lands"]);
+    let mut t = Table::new([
+        "key",
+        "kind",
+        "generation",
+        "epoch",
+        "age",
+        "read by",
+        "lands",
+    ]);
     for s in list {
         let generation = match s.kind {
             crate::secrets::inventory::Kind::Random | crate::secrets::inventory::Kind::Memo => {
@@ -5071,6 +5117,13 @@ fn secrets_list(
                 _ if generation.is_empty() => serde_json::Value::Null,
                 g => g.into(),
             }),
+            // The master epoch (R-165), once there is more than one.
+            Cell::text(match (s.epoch, current) {
+                (Some(e), c) if c > 1 && e < c => format!("{e} (earlier)"),
+                (Some(e), c) if c > 1 => e.to_string(),
+                _ => String::new(),
+            })
+            .with_json(s.epoch.into()),
             Cell::text(
                 s.since
                     .as_deref()
@@ -5091,7 +5144,18 @@ fn secrets_list(
         list.len(),
         if list.len() == 1 { "" } else { "s" }
     );
-    print!("{}", t.render(o));
+    print!("{}", t.without_empty_columns().render(o));
+    let earlier = list
+        .iter()
+        .filter(|s| s.epoch.is_some_and(|e| e < current))
+        .count();
+    if earlier > 0 {
+        println!(
+            "epoch {current} is current; {earlier} secret{} on an earlier epoch: rotate each to \
+             move it",
+            if earlier == 1 { "" } else { "s" }
+        );
+    }
     Ok(())
 }
 
@@ -5180,6 +5244,68 @@ fn secrets_rotate(
     println!(
         "rotated {key} of {deployment}: generation {}, by {who}; the next plan changes it",
         r.generation
+    );
+    lock.release()
+}
+
+/// `dform secrets cycle` (R-165): each `random.*` key pinned to the epoch
+/// it derives from, then a new master made the next epoch, recorded in
+/// state and the audit log. No value changes.
+fn secrets_cycle(
+    dep: &crate::store::Deployment,
+    list: &[crate::secrets::inventory::Secret],
+    master: &crate::custody::Master,
+    mixing: &crate::custody::Mixing,
+    audit: &crate::audit::Log,
+) -> Result<()> {
+    use crate::secrets::inventory::Kind;
+    let deployment = dep.name();
+    if !dep.has_state()? {
+        bail!("secrets cycle: {deployment} was never applied: its first apply makes its master");
+    }
+    let lock = dep.lock()?;
+    let mut st = dep.load_state()?;
+    let from = master.epoch.max(1);
+    // Pinned first: a key pinned to the epoch it derives from is the same
+    // value, so a cycle stopped here changes nothing.
+    let pinned = st.pin(
+        list.iter()
+            .filter(|s| s.kind == Kind::Random)
+            .map(|s| s.key.clone()),
+        from,
+    );
+    dep.save_state(&st)?;
+    let (epoch, id) = crate::custody::cycle(dep.store().as_ref(), deployment, master, mixing)?;
+    let was = st.master.replace(id.clone());
+    dep.save_state(&st)?;
+    audit.append(
+        "cycled",
+        serde_json::json!({
+            "from": was,
+            "to": id,
+            "epoch": epoch,
+            "pinned": pinned,
+            "who": crate::audit::who(),
+        }),
+    )?;
+    let on: Vec<&str> = list
+        .iter()
+        .filter(|s| matches!(s.kind, Kind::Random | Kind::Memo))
+        .map(|s| s.key.as_str())
+        .collect();
+    println!(
+        "cycled the master of {deployment}: epoch {epoch} (id {}) is current, for new secrets and \
+         each one rotated; {} stay{} on epoch {from} until rotated{}",
+        crate::custody::short(&id),
+        match on.len() {
+            1 => "1 secret".to_string(),
+            n => format!("{n} secrets"),
+        },
+        if on.len() == 1 { "s" } else { "" },
+        match on.is_empty() {
+            true => String::new(),
+            false => format!(": {}", on.join(", ")),
+        }
     );
     lock.release()
 }
@@ -5288,9 +5414,9 @@ fn place_of(cli: &Cli, name: &str) -> Result<(crate::stack::Place, PathBuf, stor
 fn keep_memos(
     st: &mut state::State,
     externs: &crate::externs::Externs,
-    key: Option<&crate::zset::file::Key>,
+    master: &crate::custody::Master,
 ) -> Result<()> {
-    crate::memo::keep(st, externs.memos(), key, &crate::memo::now())
+    crate::memo::keep(st, externs.memos(), master, &crate::memo::now())
 }
 
 /// The grant a plan prints (R-166): each secret output no provider holds,
@@ -5435,9 +5561,15 @@ fn open_sealed(
                 r.opened.insert(k.clone(), Value::Str(standin));
                 continue;
             };
-            match crate::custody::open_sealed(key, &label, sealed)
-                .and_then(|b| Ok(serde_json::from_slice::<Value>(&b)?))
-            {
+            // Sealed to the current epoch's key, or (a producer not applied
+            // since a cycle, R-165) an earlier one's.
+            let earlier = master.earlier.iter().rev().filter_map(|e| e.key.as_ref());
+            let plain = std::iter::once(key)
+                .chain(earlier)
+                .map(|k| crate::custody::open_sealed(k, &label, sealed))
+                .find(Result::is_ok)
+                .unwrap_or_else(|| crate::custody::open_sealed(key, &label, sealed));
+            match plain.and_then(|b| Ok(serde_json::from_slice::<Value>(&b)?)) {
                 Ok(v) => {
                     if let Value::Str(text) = &v {
                         crate::secrets::standin::register(text, &label, &standin);
@@ -6204,6 +6336,7 @@ fn needs_project(cli: &Cli) -> bool {
         | Cmd::StateMv { .. }
         | Cmd::SecretsList { .. }
         | Cmd::SecretsRotate { .. }
+        | Cmd::SecretsCycle
         | Cmd::ForgetHost { .. } => true,
         _ => false,
     }
@@ -6771,7 +6904,7 @@ fn subcommands(noun: &str) -> &'static [&'static str] {
     match noun {
         "stack" => &["list", "rekey", "handover", "unlock"],
         "state" => &["show", "forget-host", "mv"],
-        "secrets" => &["list", "rotate"],
+        "secrets" => &["list", "rotate", "cycle"],
         "provider" => &["check", "schema"],
         "controller" => &["run"],
         "log" => &["verify"],

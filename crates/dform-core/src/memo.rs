@@ -42,6 +42,9 @@ pub struct Kept {
     /// A secret: its seal (`secrets::seal`, bound to the key).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub sealed: String,
+    /// The master epoch it is sealed under (R-165): none, the first.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub epoch: Option<u32>,
 }
 
 thread_local! {
@@ -71,16 +74,16 @@ pub fn source(call: &str) -> String {
 /// The answers of `memo.first` for one run, from the state it starts with.
 pub struct Memos {
     kept: BTreeMap<String, Kept>,
-    /// The deployment's master, which opens a sealed one; `None` in a run
-    /// that does not hold it, where a sealed one answers its stand-in
-    /// (`secrets::standin`).
-    key: Option<crate::zset::file::Key>,
+    /// The deployment's master, each epoch's (R-165), which opens a
+    /// sealed one; none in a run that does not hold it, where a sealed one
+    /// answers its stand-in (`secrets::standin`).
+    master: crate::custody::Master,
     /// The first candidate of each key not kept, as this run answered it.
     given: RefCell<BTreeMap<String, Value>>,
 }
 
 impl Memos {
-    pub fn new(st: &State, key: Option<crate::zset::file::Key>) -> Memos {
+    pub fn new(st: &State, master: &crate::custody::Master) -> Memos {
         let when = st
             .memo
             .iter()
@@ -89,7 +92,7 @@ impl Memos {
         KEPT.with(|k| *k.borrow_mut() = when);
         Memos {
             kept: st.memo.clone(),
-            key,
+            master: master.clone(),
             given: RefCell::new(BTreeMap::new()),
         }
     }
@@ -142,7 +145,7 @@ impl Memos {
             format!("memo-{hex}")
         };
         let label = format!("{FIRST}({k:?})");
-        let Some(key) = &self.key else {
+        let Some(key) = self.master.key_of(m.epoch.unwrap_or(1)) else {
             // A run that does not hold the master: the stand-in.
             crate::secrets::standin::register(&standin, &label, &standin);
             return Ok(Value::Str(standin));
@@ -165,9 +168,12 @@ impl Memos {
 pub fn keep(
     st: &mut State,
     memos: Vec<(String, Value, bool)>,
-    key: Option<&crate::zset::file::Key>,
+    master: &crate::custody::Master,
     now: &str,
 ) -> Result<()> {
+    let key = master.key.as_ref();
+    // Sealed under the current epoch (R-165); the first is written as none.
+    let epoch = Some(master.epoch).filter(|e| *e > 1);
     for (k, v, secret) in memos {
         if st.memo.contains_key(&k) {
             continue;
@@ -183,11 +189,13 @@ pub fn keep(
                 kept: now.to_string(),
                 value: None,
                 sealed: crate::secrets::seal(key, &k, &serde_json::to_vec(&v)?)?,
+                epoch,
             },
             (false, _) => Kept {
                 kept: now.to_string(),
                 value: Some(v),
                 sealed: String::new(),
+                epoch: None,
             },
         };
         st.memo.insert(k, kept);

@@ -1290,10 +1290,12 @@ impl Located {
                 opts.master.id.as_deref(),
                 &self.deployment,
             );
+            // Each key from its epoch's master (R-165).
+            crate::functions::random::set_epochs(&opts.master.epochs());
         }
         // `memo.first`: what state keeps, a sealed one opened with the
         // deployment's key.
-        let memos = Rc::new(crate::memo::Memos::new(&st, opts.master.key.clone()));
+        let memos = Rc::new(crate::memo::Memos::new(&st, &opts.master));
         // The SSH host keys state knows.
         files.know(&st.known_hosts);
         let mut base_extra = self.set_facts.clone();

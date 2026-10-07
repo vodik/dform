@@ -100,10 +100,10 @@ pub fn rotation_facts(st: &crate::state::State) -> Vec<Atom> {
     let mut out = Vec::new();
     for (k, kind) in kinds {
         let r = st.secrets.get(&k);
-        let at = match (r, kind) {
-            (Some(r), _) => r.rotated_at.clone(),
-            (None, "memo") => st.memo[&k].kept.clone(),
-            (None, _) => born.unwrap_or(&now).to_string(),
+        let at = match r.filter(|r| !r.rotated_at.is_empty()) {
+            Some(r) => r.rotated_at.clone(),
+            None if kind == "memo" => st.memo[&k].kept.clone(),
+            None => born.unwrap_or(&now).to_string(),
         };
         let generation = r.map_or(1, |r| r.generation);
         out.push(atom(
@@ -1315,6 +1315,9 @@ pub mod inventory {
         pub kind: Kind,
         /// A `random.*` or memo key's generation (1 unless rotated).
         pub generation: u32,
+        /// The master epoch it derives from (R-165), or a memo is sealed
+        /// under; none for a given or held one.
+        pub epoch: Option<u32>,
         /// Since when it is what it is: rotated, kept, or (a key never
         /// rotated) its master first applied; RFC 3339.
         pub since: Option<String>,
@@ -1332,6 +1335,7 @@ pub mod inventory {
                 key: key.to_string(),
                 kind: Kind::Memo,
                 generation: 1,
+                epoch: None,
                 since: None,
                 lives: None,
                 cells: Vec::new(),
@@ -1396,13 +1400,15 @@ pub mod inventory {
     }
 
     /// The secrets of a run: `facts` its evaluation's, `redact` its
-    /// labels, `st` its state, `born` when its master was first applied.
+    /// labels, `st` its state, `born` when its master was first applied,
+    /// `current` its master's epoch.
     pub fn of(
         facts: &BTreeSet<Atom>,
         redact: &crate::query::Redactor,
         st: &crate::state::State,
         schema: &crate::schema::Schema,
         born: Option<&str>,
+        current: u32,
     ) -> Vec<Secret> {
         let mut out: BTreeMap<String, Secret> = BTreeMap::new();
         fn row<'a>(out: &'a mut BTreeMap<String, Secret>, key: &str, kind: Kind) -> &'a mut Secret {
@@ -1410,6 +1416,7 @@ pub mod inventory {
                 key: key.to_string(),
                 kind,
                 generation: 1,
+                epoch: None,
                 since: None,
                 lives: None,
                 cells: Vec::new(),
@@ -1583,7 +1590,17 @@ pub mod inventory {
         }
         for s in out.values_mut() {
             s.cells.sort();
-            if let Some(r) = st.secrets.get(&s.key) {
+            s.epoch = match s.kind {
+                Kind::Random => Some(
+                    st.secrets
+                        .get(&s.key)
+                        .and_then(|r| r.epoch)
+                        .unwrap_or(current),
+                ),
+                Kind::Memo => st.memo.get(&s.key).map(|m| m.epoch.unwrap_or(1)),
+                _ => None,
+            };
+            if let Some(r) = st.secrets.get(&s.key).filter(|r| !r.rotated_at.is_empty()) {
                 s.generation = r.generation;
                 s.since = Some(r.rotated_at.clone());
             } else {

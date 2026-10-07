@@ -239,7 +239,7 @@ prints the same plan and applies nothing.
 | `output TARGET [NAME]` | a deployment's outputs |
 | `stack list`, `stack rekey`, `stack unlock` | the project's stacks |
 | `state show`, `state forget-host`, `state mv` | a deployment's state |
-| `secrets list`, `secrets rotate` | a deployment's secrets |
+| `secrets list`, `secrets rotate`, `secrets cycle` | a deployment's secrets |
 | `provider check`, `provider schema` | providers |
 | `dev strata`, `dev graph`, `dev effects`, `dev --world W --inventory I --provider P --chaos C COMMAND` | the mock and the evaluator |
 | `doc [TARGET]` | the doc comments as Markdown, on stdout |
@@ -2156,8 +2156,9 @@ it signed) and `random.password("synapse-db")`: rotating one is one
 command and one plan line. A dependent system learns a new value through
 a resource of its own (a database role whose password the program sets,
 R-159), never through a trigger. The master is never rotated by a
-program: a new master is `--new-master` ("The master"), and every
-derived value changes with it.
+program: `dform secrets cycle` makes a new one and changes no value
+("Master epochs"); `--new-master` ("The master") takes another and
+changes every derived value at once.
 
 `RANDOM_MASTER` (tests, the editor) is taken only where state was applied
 with it, or nothing was applied ("Secret outputs across stacks"): a stale
@@ -2187,9 +2188,48 @@ running workload only when it restarts.
 
 Routine rotation is `secrets rotate` on a schedule, a policy over
 `secrets/4` saying when. Emergency rotation of one leaked secret is the
-same command, now. Offboarding someone who could open the master: rotate
-what they could derive (`secrets list` names it), in the order the
-dependents allow, and change the passphrase.
+same command, now. Emergency rotation of the master (a leaked
+passphrase and bucket, someone offboarded who could open it) is `secrets
+cycle`, then `secrets rotate` of each secret on the earlier epoch
+(`secrets list` names them), in the order the dependents allow, each
+reviewed as a plan, while the ones not moved yet keep working.
+
+### Master epochs
+
+`dform secrets cycle TARGET` makes a new master, the next epoch, and
+seals it under the passphrase in `state.master` beside the current one
+(`epoch`, and `earlier`: each earlier epoch's id and sealed master).
+Nothing changes: first each `random.*` key the program derives is pinned
+in state to the epoch it derives from (`secrets.KEY.epoch`), then the
+new master becomes current, state records its id, and the audit log a
+`cycled` entry (`from`, `to`, the `epoch`, the keys `pinned`, `who`). A
+key derives from its own epoch's master; a new key, and a rotated one,
+from the current. A memo is sealed under the epoch it was kept in, and
+opened with it. `secrets list` shows each secret's epoch, `1 (earlier)`
+for one not moved yet:
+
+```text
+$ dform secrets cycle crud_api
+cycled the master of crud_api: epoch 2 (id a9bcd8616e3b) is current, for new secrets and each one rotated; 1 secret stays on epoch 1 until rotated: crud-api-db
+$ dform plan crud_api
+stack crud_api is up to date
+```
+
+`secrets rotate KEY` moves one key to the current epoch (and its next
+generation): the plan changes that value alone. The apply that moves an
+epoch's last secret retires it: its sealed master is deleted from
+`state.master` and the audit log has a `retired` entry (the `epoch`, its
+`id`, `who`). A run without the passphrase still proves every secret
+unchanged: a stand-in derives from its own epoch's id. Every digest dform
+keeps of a secret (a write-only attribute's, a plan file's, the audit
+log's) stays keyed with the first epoch's master, carried sealed under
+each later one, so a cycle changes none: a write-only token in a
+server's `user_data` is not taken for a change, and the server not
+replaced. A secret output another stack sealed to this deployment is
+opened with the epoch it was sealed to until the producer's next apply
+seals it to the current one. A deployment whose master is a key file
+(no `[secrets] passphrase`) is not cycled: set the passphrase and apply
+first.
 
 ## The audit log
 
@@ -2241,6 +2281,10 @@ The kinds:
 - `rotated`: `dform secrets rotate`: the `key`, its `kind` (`random`,
   `memo`), its new `generation`, whether a `memo` was forgotten, and
   `who`;
+- `cycled`: `dform secrets cycle`: the master ids `from` and `to`, the
+  new `epoch`, the keys `pinned` to the earlier one, and `who`;
+- `retired`: the apply that moved an earlier master epoch's last secret:
+  the `epoch`, its `id`, and `who`;
 - `custody`: the apply that sealed a deployment's key file under the
   passphrase: `sealed` (`state.key`), `into` (`state.master`), the master
   `id`, and `who`;
