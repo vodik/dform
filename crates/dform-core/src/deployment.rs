@@ -1064,6 +1064,10 @@ impl Located {
         let held = stack::held(&outputs);
         // What dform.toml grants each provider, for the launcher (R-13b).
         plugin::host::register(l.manifest.iter().flat_map(|m| m.grants()));
+        // State is read while the providers start: one is a round trip to
+        // the backend, the other processes coming up (and a schema read).
+        let dep = self.dep.clone();
+        let reading = std::thread::spawn(move || dep.load_state());
         let started = crate::timing::span(|| "providers started and configured".into());
         let backend = Rc::new(if l.starts_none() {
             Providers::none()
@@ -1098,7 +1102,9 @@ impl Located {
         // Externs are asked on demand: a table's of its file, else of the
         // file provider, else of the providers.
         let tables = Rc::new(tables::Tables::default());
-        let mut st = self.dep.load_state()?;
+        let mut st = reading
+            .join()
+            .map_err(|_| anyhow::anyhow!("internal: the state read panicked"))??;
         // `random.*` derive from the deployment's master (R-60): made on
         // first use when it is the stack's key.
         if lowered.is_some_and(|l| crate::functions::random::called(&l.program)) {
