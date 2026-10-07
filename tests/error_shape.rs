@@ -11,7 +11,8 @@
 //! Code the message quotes for the reader to write (between backticks,
 //! `net.vpc["main"].cidr` in a help) is the source's syntax, not an
 //! address dform printed, and is not checked; nor is a source line a
-//! diagnostic quotes, nor the mock's own chaos log on its stderr.
+//! diagnostic quotes. The mock's own chaos log on its stderr says the
+//! address as the plan does too.
 
 mod common;
 use common::{Run, Scratch, repo};
@@ -22,13 +23,12 @@ fn stored_forms(text: &str) -> Vec<String> {
     let mut out = Vec::new();
     for line in text.lines() {
         // A source line a diagnostic quotes (`16 │ p(c) where ..`) is the
-        // program's text; the mock's own chaos log (`chaos: ..`, its
-        // stderr) is not dform's.
+        // program's text.
         let quoted = line
             .trim_start()
             .split_once(" │")
             .is_some_and(|(n, _)| n.chars().all(|c| c.is_ascii_digit()));
-        if quoted || line.starts_with("chaos: ") {
+        if quoted {
             continue;
         }
         // Drop what is between backticks.

@@ -20,7 +20,7 @@ fn a_read_lag_within_the_retry_budget_is_not_drift() {
     let r = mock(&s, &["plan"]).success();
     assert_eq!(
         r.stderr,
-        "retry net.vpc[\"main\"] read (2/3)\nretry net.vpc[\"main\"] read (3/3)\n"
+        "retry net.vpc main read (2/3)\nretry net.vpc main read (3/3)\n"
     );
     assert_eq!(r.stdout, "stack p is up to date\n");
 }
@@ -44,8 +44,8 @@ fn type_retry_sets_the_budget_per_type() {
     let r = mock(&s, &[&args[..], &["plan"]].concat()).success();
     assert_eq!(
         r.stderr,
-        "retry net.vpc[\"main\"] read (2/6)\nretry net.vpc[\"main\"] read (3/6)\n\
-         retry net.vpc[\"main\"] read (4/6)\nretry net.vpc[\"main\"] read (5/6)\n"
+        "retry net.vpc main read (2/6)\nretry net.vpc main read (3/6)\n\
+         retry net.vpc main read (4/6)\nretry net.vpc main read (5/6)\n"
     );
     assert!(
         r.stdout.ends_with("stack p is up to date\n"),
@@ -80,8 +80,7 @@ fn a_boundary_refresh_retries() {
     )
     .success();
     assert!(
-        r.stderr
-            .contains("retry db.postgres[\"main\"] read (2/5)\n"),
+        r.stderr.contains("retry db.postgres main read (2/5)\n"),
         "{}",
         r.stderr
     );

@@ -16,7 +16,8 @@
 //! | `timeout=T["N"]`               | Apply of T["N"] takes effect, then the call times out   |
 //! | `read-lag=T["N"]:K`            | the first K Reads of T["N"] after its Create miss it    |
 //! | `mutate=T["N"].PATH=JSON`      | once, after the first tick T["N"] exists at, the world  |
-//! |                                | sets its PATH to JSON                                   |
+//! |                                | sets its PATH to JSON (a computed PATH: the provider    |
+//! |                                | reports it so, as a cluster bumps a resourceVersion)    |
 //! | `latency=T["N"]:MS`            | Apply of T["N"] is recorded as taking MS (never slept)  |
 //! | `crash=T["N"]`                 | the provider dies as it is called to Apply T["N"]: exit |
 //! |                                | 137 as a process, gone from then on when linked in      |

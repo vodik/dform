@@ -32,7 +32,7 @@ fn a_mutation_under_a_pending_deformation_stops_before_tick_two() {
     .failure();
     assert!(
         r.stdout
-            .contains("chaos: mutate compute.vm[\"app\"].size = 2 after tick 0"),
+            .contains("chaos: mutate compute.vm app.size = 2 after tick 0"),
         "{}",
         r.stdout
     );

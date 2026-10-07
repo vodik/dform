@@ -150,8 +150,8 @@ fn read_lag_past_the_retry_budget_is_gone() {
     let r = mock(&s, &["plan"]).success();
     assert!(
         r.stderr.contains(
-            "retry net.vpc[\"main\"] read (2/3)\nretry net.vpc[\"main\"] read (3/3)\n\
-             read net.vpc[\"main\"]: nothing after 3 attempts; taken as gone\n"
+            "retry net.vpc main read (2/3)\nretry net.vpc main read (3/3)\n\
+             read net.vpc main: nothing after 3 attempts; taken as gone\n"
         ),
         "{}",
         r.stderr
@@ -182,7 +182,7 @@ fn mutate_changes_the_world_after_the_tick() {
     .success();
     assert!(
         r.stdout
-            .contains("chaos: mutate net.vpc[\"main\"].cidr = \"10.9.0.0/16\" after tick 0"),
+            .contains("chaos: mutate net.vpc main.cidr = \"10.9.0.0/16\" after tick 0"),
         "{}",
         r.stdout
     );
@@ -213,7 +213,7 @@ fn latency_is_recorded_not_slept() {
     assert!(started.elapsed().as_secs() < 30);
     assert!(
         r.stdout
-            .contains("chaos: latency net.vpc[\"main\"]: 60000ms (simulated, not slept)"),
+            .contains("chaos: latency net.vpc main: 60000ms (simulated, not slept)"),
         "{}",
         r.stdout
     );

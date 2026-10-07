@@ -2742,7 +2742,7 @@ file keeps a `tick` counter; every `apply` is one tick.
 | `crash=T["N"]` | the provider process dies (exit 137) as it is called to Apply `T["N"]`: the action fails, nothing after it runs, and the next `apply` resumes (the mock linked in, `dform-direct`, is gone from that call on instead) |
 | `stop-after=N` | dform itself stops, as if killed, once `N` Apply calls have returned (counted across the run's ticks), each persisted: nothing still in flight is waited for, the tick never ends, and the next `apply` resumes. The executor's knob, so it works with any provider |
 | `read-lag=T["N"]:K` | the first `K` Reads of `T["N"]` after it is created return nothing (eventual consistency) |
-| `mutate=T["N"].PATH=JSON` | once per run, after the first tick `T["N"]` exists at, the world sets its `PATH` to `JSON` (drift) |
+| `mutate=T["N"].PATH=JSON` | once per run, after the first tick `T["N"]` exists at, the world sets its `PATH` to `JSON` (drift); a computed `PATH` is what the provider reports from then on (a `resourceVersion` a cluster bumped) |
 | `latency=T["N"]:MS` | Apply of `T["N"]` takes `MS` on a simulated clock, reported, never slept; the world's `timeline` records each call's start and end |
 | `fresh-ids` | every Create mints new ids (the world keeps a `serial`), as a real cloud does; without it a destroy-first replacement under the same name gets its predecessor's id |
 | `delay=T["N"]:MS` | the first Apply of `T["N"]` in a run takes effect, then answers `MS` late, really slept: past a shorter `timeout` it times out (the one knob that sleeps) |
@@ -2757,9 +2757,11 @@ cargo run -- -C examples/demo dev --chaos 'mutate=net.vpc["main.vpc"].cidr="10.9
 
 Refresh reads every object state maps; a Read that returns nothing is retried
 up to the type's `type_retry(T, Attempts)` (a schema fact, default 3), each
-retry logged on stderr as `retry T["N"] read (2/3)`. A lag within that budget is
+retry logged on stderr as `retry T N read (2/3)`, the address as the plan
+prints it, as every line of the mock's chaos log says it (`chaos: crash
+during apply net.vpc main`). A lag within that budget is
 not drift; an object still missing after the last attempt is taken as gone
-(`read T["N"]: nothing after 3 attempts; taken as gone`).
+(`read T N: nothing after 3 attempts; taken as gone`).
 
 Addresses are written as the plan prints them, `T["N"]` (quote the spec for
 the shell), and must name a resource of the stack. The world is

@@ -34,7 +34,7 @@ fn a_crash_at_action_n_leaves_n_minus_one_identities() {
     let r = mock(&s, &["apply", "--chaos", "crash=compute.vm[\"app\"]"]).failure();
     assert!(
         r.stderr
-            .contains("chaos: crash during apply compute.vm[\"app\"]"),
+            .contains("chaos: crash during apply compute.vm app"),
         "{}",
         r.stderr
     );

@@ -38,6 +38,7 @@ use dform_core::plugin::providers::{CREATED, INVENTORY, Launch};
 use dform_core::plugin::queue::{Order, Queue};
 use dform_core::plugin::wire;
 use dform_core::provider::{self, Change, get_path, norm_path, set_path, short_hash};
+use dform_core::report;
 use dform_core::schema::Schema;
 use dform_core::value::{NullClass, Value};
 use serde::{Deserialize, Serialize};
@@ -517,7 +518,9 @@ impl FakeCloud {
             return Ok(None);
         };
         if let Some(lag) = rr.read_lag {
-            let at = addr.to_string();
+            // What the mock says on its own stderr, the address as the
+            // plan prints it.
+            let at = report::address(addr);
             for attempt in 2..=attempts.min(lag + 1) {
                 eprintln!("retry {at} read ({attempt}/{attempts})");
             }
@@ -846,17 +849,20 @@ impl FakeCloud {
     pub fn apply(&mut self, c: Call) -> Result<Applied, Failed> {
         let addr = &c.addr;
         let at = addr.to_string();
+        // The chaos log on the mock's own stderr and its notes say the
+        // address as the plan prints it.
+        let shown = report::address(addr);
         let refuse = |e: anyhow::Error| Failed::Refused(format!("{e:#}"));
         self.check_assertions(&at, &c)?;
         if self.chaos.crash.contains(addr) {
             if self.in_process {
-                eprintln!("chaos: crash during apply {at}: the provider is gone");
+                eprintln!("chaos: crash during apply {shown}: the provider is gone");
                 self.crashed = Some(at.clone());
                 return Err(Failed::Crashed(format!(
                     "the provider fakecloud exited during the call (chaos crash={at})"
                 )));
             }
-            eprintln!("chaos: crash during apply {at}: the process is killed");
+            eprintln!("chaos: crash during apply {shown}: the process is killed");
             std::process::exit(137);
         }
         if self.chaos.fail.contains(addr) {
@@ -877,12 +883,12 @@ impl FakeCloud {
         if let Some(ms) = self.chaos.delay.get(addr)
             && self.delayed.insert(addr.clone())
         {
-            eprintln!("chaos: apply {at} answers {ms}ms late");
+            eprintln!("chaos: apply {shown} answers {ms}ms late");
             out.delay_ms = *ms;
         }
         if let Some(ms) = self.chaos.latency.get(addr) {
             out.notes
-                .push(format!("latency {at}: {ms}ms (simulated, not slept)"));
+                .push(format!("latency {shown}: {ms}ms (simulated, not slept)"));
             out.elapsed_ms = *ms;
         }
         // A timed-out call takes effect in the world, but dform never
@@ -907,7 +913,7 @@ impl FakeCloud {
         let remote = match c.op {
             _ if made.is_some() => {
                 out.notes.push(format!(
-                    "apply {at}: idempotency key {} made {} already",
+                    "apply {shown}: idempotency key {} made {} already",
                     c.key,
                     made.as_deref().unwrap_or_default()
                 ));
@@ -1040,7 +1046,7 @@ impl FakeCloud {
             if self.mutated.contains(&i) {
                 continue;
             }
-            let at = addr.to_string();
+            let at = report::address(addr);
             let remote = remotes
                 .get(addr)
                 .cloned()
@@ -1048,11 +1054,16 @@ impl FakeCloud {
             let world = self.world.as_mut().expect("loaded");
             match world.resources.get_mut(&key(&addr.typ, &remote)) {
                 Some(rr) => {
-                    set_path(&mut rr.attrs, path, v.clone());
+                    // A computed value the provider reports otherwise
+                    // now (a new resourceVersion); else what was set.
+                    match get_path(&rr.computed, path).is_some() {
+                        true => set_path(&mut rr.computed, path, v.clone()),
+                        false => set_path(&mut rr.attrs, path, v.clone()),
+                    }
                     self.mutated.insert(i);
                     notes.push(format!(
                         "mutate {} = {v} after tick {}",
-                        addr.attr(path),
+                        report::attribute(addr, path),
                         world.tick
                     ));
                 }
