@@ -6415,11 +6415,16 @@ impl<'u> Lowerer<'u> {
             fmt.push_str(&s);
             Ok(())
         };
-        let Some(ps) = pieces(text) else {
-            return self.error(
-                span,
-                "an interpolation `${` is never closed; a literal `${` is `$${`",
-            );
+        let ps = match scan(text) {
+            Ok(ps) => ps,
+            Err(at) => {
+                let at = base + at as u32;
+                let span = self.span_of(rowan::TextRange::new(at.into(), (at + 2).into()));
+                return self.error(
+                    span,
+                    "an interpolation `${` is never closed; a literal `${` is `$${`",
+                );
+            }
         };
         for p in ps {
             match p {
@@ -8007,7 +8012,16 @@ pub enum Piece<'a> {
 /// The one interpolation scanner: the lowering, the binding check and
 /// `why`'s printer read a string through it.
 pub fn pieces(text: &str) -> Option<Vec<Piece<'_>>> {
-    let inner = text.get(1..text.len().checked_sub(1)?)?;
+    scan(text).ok()
+}
+
+/// `pieces`, or the byte offset in the token of the `${` that is never
+/// closed. A hole runs to its matching `}`, a string in it skipped whole
+/// with its own holes (`lexer::hole_end`, R-175).
+fn scan(text: &str) -> Result<Vec<Piece<'_>>, usize> {
+    let inner = (text.len().checked_sub(1))
+        .and_then(|e| text.get(1..e))
+        .ok_or(0usize)?;
     let bytes = inner.as_bytes();
     let mut out = Vec::new();
     let mut lit = String::new();
@@ -8021,7 +8035,7 @@ pub fn pieces(text: &str) -> Option<Vec<Piece<'_>>> {
                 } else {
                     i + 2
                 };
-                lit.push_str(inner.get(i..end.min(inner.len()))?);
+                lit.push_str(inner.get(i..end.min(inner.len())).ok_or(i)?);
                 i = end;
             }
             b'$' if bytes.get(i + 1) == Some(&b'$') && bytes.get(i + 2) == Some(&b'{') => {
@@ -8029,33 +8043,21 @@ pub fn pieces(text: &str) -> Option<Vec<Piece<'_>>> {
                 i += 3;
             }
             b'$' if bytes.get(i + 1) == Some(&b'{') => {
-                let mut depth = 1;
-                let mut j = i + 2;
-                while j < bytes.len() && depth > 0 {
-                    match bytes[j] {
-                        b'{' => depth += 1,
-                        b'}' => depth -= 1,
-                        _ => {}
-                    }
-                    j += 1;
-                }
-                if depth > 0 {
-                    return None;
-                }
+                let j = crate::lexer::hole_end(bytes, i + 2).ok_or(i + 1)?;
                 out.push(Piece::Text(std::mem::take(&mut lit)));
                 // +1: the opening quote.
                 out.push(Piece::Hole(&inner[i + 2..j - 1], i + 2 + 1));
                 i = j;
             }
             _ => {
-                let c = inner[i..].chars().next()?;
+                let c = inner[i..].chars().next().ok_or(i)?;
                 lit.push(c);
                 i += c.len_utf8();
             }
         }
     }
     out.push(Piece::Text(lit));
-    Some(out)
+    Ok(out)
 }
 
 /// A string literal's value: escapes `\"` `\\` `\n` `\t` `\u{...}`, and

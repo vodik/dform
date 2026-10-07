@@ -17,8 +17,9 @@ enum Tok {
     #[regex(r"[A-Za-z_][A-Za-z0-9_]*")]
     Ident,
     /// A string may span lines (R-61), and `\` at a line end joins it
-    /// with the next.
-    #[regex(r#""([^"\\]|\\.|\\\r?\n)*""#)]
+    /// with the next. A `${` in it opens a hole of code to its matching
+    /// `}`, whose strings are lexed the same way (R-175): `string_end`.
+    #[token("\"", string)]
     String,
     #[regex(r"[0-9]+")]
     Int,
@@ -84,6 +85,79 @@ enum Tok {
     Percent,
     #[token("|")]
     Pipe,
+}
+
+/// A string token: to its closing quote past every hole (`string_end`),
+/// or, when a hole is never closed, to the next unescaped quote as
+/// before holes nested, so the lowering reports the open `${` where it
+/// was written and the rest of the file lexes as it did.
+fn string(lx: &mut logos::Lexer<Tok>) -> bool {
+    let rest = &lx.source().as_bytes()[lx.span().start..];
+    match string_end(rest).or_else(|| plain_end(rest)) {
+        Some(end) => {
+            lx.bump(end - 1);
+            true
+        }
+        None => false,
+    }
+}
+
+/// The end of the string literal `src` starts with (`src[0]` is its
+/// quote): the byte after its closing quote. An escape is `\` and the
+/// character after it, `$${` is a literal `${`, and a `${` opens a hole
+/// that runs to its matching `}` (`hole_end`). `None` when the string or
+/// a hole in it is never closed.
+pub fn string_end(src: &[u8]) -> Option<usize> {
+    let mut i = 1;
+    while i < src.len() {
+        match src[i] {
+            b'\\' => i += 2,
+            b'"' => return Some(i + 1),
+            b'$' if src.get(i + 1) == Some(&b'$') && src.get(i + 2) == Some(&b'{') => i += 3,
+            b'$' if src.get(i + 1) == Some(&b'{') => i = hole_end(src, i + 2)?,
+            _ => i += 1,
+        }
+    }
+    None
+}
+
+/// The end of the hole whose code starts at `src[at]`, just after its
+/// `${`: the byte after the `}` that closes it. The code's braces nest,
+/// and a string in it is skipped whole (`string_end`), its own holes and
+/// braces included, so `"${f({ a: "}" })}"` is one hole (R-175).
+pub fn hole_end(src: &[u8], at: usize) -> Option<usize> {
+    let mut depth = 0usize;
+    let mut i = at;
+    while i < src.len() {
+        match src[i] {
+            b'"' => i += string_end(&src[i..])?,
+            b'{' => {
+                depth += 1;
+                i += 1;
+            }
+            b'}' if depth == 0 => return Some(i + 1),
+            b'}' => {
+                depth -= 1;
+                i += 1;
+            }
+            _ => i += 1,
+        }
+    }
+    None
+}
+
+/// The end of `src`'s string read to the next unescaped quote, holes
+/// ignored.
+fn plain_end(src: &[u8]) -> Option<usize> {
+    let mut i = 1;
+    while i < src.len() {
+        match src[i] {
+            b'\\' => i += 2,
+            b'"' => return Some(i + 1),
+            _ => i += 1,
+        }
+    }
+    None
 }
 
 fn kind(t: Tok) -> SyntaxKind {
@@ -292,6 +366,18 @@ mod tests {
         let text: String = toks.iter().map(|t| &src[t.start..t.end]).collect();
         assert_eq!(text, src);
         assert_eq!(toks.last().unwrap().kind, ERROR_TOKEN);
+    }
+
+    #[test]
+    fn a_string_in_a_hole_is_the_holes() {
+        assert_eq!(
+            kinds("\"a${f(\"b${\"c\"}\", \"}\")}d\" x"),
+            vec![STRING, IDENT]
+        );
+        assert_eq!(kinds("\"${ {a: \"x\"}.a }\n\" y"), vec![STRING, IDENT]);
+        // A hole never closed: the string ends at the next quote, as
+        // before holes nested, for the lowering to name the `${`.
+        assert_eq!(kinds("\"${f(\" x"), vec![STRING, IDENT]);
     }
 
     #[test]

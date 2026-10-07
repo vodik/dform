@@ -7,6 +7,13 @@ tests/syntax/ok/strings.df
 output note = "a long line, \
   continued"
 
+# A string in a hole is the hole's own (R-175): holes nest to any depth,
+# and a brace in an inner string is a character of it.
+output init = "#cloud-config
+${yaml.encode({ packages: ["nftables"], runcmd: ["${install} sh -s - ${"server"}", "echo }"] })}"
+
+let install = "curl -sfL https://get.k3s.io |"
+
 ---
 
 (source_file
@@ -17,4 +24,38 @@ output note = "a long line, \
     (string
       (string_content)
       (escape_sequence)
+      (string_content)))
+  (comment)
+  (comment)
+  (output
+    (identifier)
+    (string
+      (string_content)
+      (interpolation
+        (call
+          (member_expression
+            (identifier)
+            (identifier))
+          (arguments
+            (object
+              (object_field
+                (identifier)
+                (list
+                  (string
+                    (string_content))))
+              (object_field
+                (identifier)
+                (list
+                  (string
+                    (interpolation
+                      (identifier))
+                    (string_content)
+                    (interpolation
+                      (string
+                        (string_content))))
+                  (string
+                    (string_content))))))))))
+  (let
+    (identifier)
+    (string
       (string_content))))

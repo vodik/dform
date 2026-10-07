@@ -149,3 +149,37 @@ d("n-${x.}") where q(x)
 --------------------------------------------------------------------------------
 
 
+
+================================================================================
+A string in a hole nests (R-175)
+================================================================================
+
+let agent_init = "#cloud-config
+${yaml.encode({ runcmd: ["${install} sh -s - ${"server"}", "echo }"] })}"
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (let
+    (identifier)
+    (string
+      (string_content)
+      (interpolation
+        (call
+          (member_expression
+            (identifier)
+            (identifier))
+          (arguments
+            (object
+              (object_field
+                (identifier)
+                (list
+                  (string
+                    (interpolation
+                      (identifier))
+                    (string_content)
+                    (interpolation
+                      (string
+                        (string_content))))
+                  (string
+                    (string_content)))))))))))

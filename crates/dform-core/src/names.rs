@@ -104,23 +104,38 @@ impl Named<'_> {
 }
 
 /// The interpolation holes of a string token, each parsed as the term it
-/// is (`parser::parse_term`) with the byte of the file it starts at.
+/// is (`parser::parse_term`) with the byte of the file it starts at; a
+/// string inside a hole gives its own holes too (R-175).
 pub fn holes(t: &SyntaxToken) -> Vec<(rowan::TextSize, SyntaxNode)> {
-    let Some(pieces) = crate::syntax::resolve::pieces(t.text()) else {
-        return Vec::new();
+    let mut out = Vec::new();
+    holes_at(t.text(), usize::from(t.text_range().start()), &mut out);
+    out
+}
+
+/// `holes` of the string `text` starting at byte `base` of the file.
+fn holes_at(text: &str, base: usize, out: &mut Vec<(rowan::TextSize, SyntaxNode)>) {
+    let Some(pieces) = crate::syntax::resolve::pieces(text) else {
+        return;
     };
-    pieces
-        .into_iter()
-        .filter_map(|p| match p {
-            crate::syntax::resolve::Piece::Hole(src, at) => {
-                let lead = src.len() - src.trim_start().len();
-                let start = usize::from(t.text_range().start()) + at + lead;
-                let tree = crate::syntax::parser::parse_term(src.trim()).syntax();
-                Some((rowan::TextSize::from(u32::try_from(start).ok()?), tree))
-            }
-            _ => None,
-        })
-        .collect()
+    for p in pieces {
+        let crate::syntax::resolve::Piece::Hole(src, at) = p else {
+            continue;
+        };
+        let lead = src.len() - src.trim_start().len();
+        let start = base + at + lead;
+        let tree = crate::syntax::parser::parse_term(src.trim()).syntax();
+        let Ok(at) = u32::try_from(start) else {
+            continue;
+        };
+        for s in tree
+            .descendants_with_tokens()
+            .filter_map(|e| e.into_token())
+            .filter(|x| x.kind() == SyntaxKind::STRING)
+        {
+            holes_at(s.text(), start + usize::from(s.text_range().start()), out);
+        }
+        out.push((rowan::TextSize::from(at), tree));
+    }
 }
 
 /// One file, parsed.
@@ -1952,7 +1967,8 @@ s(x) where helper(x), shared(x)
                 "/p/stacks/s.df",
                 "use config\nresource k8s.secret config {}\nresource db.pg app { name = \"a\" }\n\
                  resource k8s.secret app {}\n\
-                 let x = config.base_domain\nlet y = app.conn\nlet z = \"${config.base_domain}\"\n",
+                 let x = config.base_domain\nlet y = app.conn\nlet z = \"${config.base_domain}\"\n\
+                 let w = \"${str.upper(\"a-${config.base_domain}\")}\"\n",
             ),
         ];
         let d = Decls::of_files(Path::new("/p"), &files);
@@ -1987,8 +2003,16 @@ s(x) where helper(x), shared(x)
                 true
             )
         );
-        // The let's references: its declaration, the read and the hole's.
+        // A hole in a string in a hole (R-175).
+        assert_eq!(
+            what("config.base_domain", 7, 2),
+            item(Symbol::Let(
+                Some("module config".into()),
+                "base_domain".into()
+            ))
+        );
+        // The let's references: its declaration, the read and the holes'.
         let sym = Symbol::Let(Some("module config".into()), "base_domain".into());
-        assert_eq!(d.occurrences(&files, &sym).len(), 3);
+        assert_eq!(d.occurrences(&files, &sym).len(), 4);
     }
 }

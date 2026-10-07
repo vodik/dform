@@ -78,7 +78,7 @@ body block (`where { }`) separate their entries by a newline or a comma.
 
 ```
 IDENT    := [A-Za-z_][A-Za-z0-9_]*       ; case decides nothing; "_" alone is the placeholder
-STRING   := "\"" ... "\""                ; may span lines; escapes \" \\ \n \t \u{hex}, \ at a line end joins; ${e} interpolates
+STRING   := "\"" ... "\""                ; may span lines; escapes \" \\ \n \t \u{hex}, \ at a line end joins; ${e} interpolates, holes nest
 INT      := [0-9]+                       ; -1 is unary minus applied to 1
 QUANTITY := [0-9]+ ("." [0-9]+)? [A-Za-z][A-Za-z0-9]*   ; 1Gi 500m 1h30m 1.5Gi (R-66)
           | [0-9]+ "." [0-9]+                           ; 0.5: a float (R-75); cores in a cpu position
@@ -132,7 +132,11 @@ A string is a string constant: every constant is quoted (`"prod"`,
 
 `"a${e}b"` interpolates the term `e` (H-13): it lowers to
 `str.format("a%sb", e)`. `$${` is a literal `${`; a lone `{`, `}` or `$` is
-itself. A hole may not hold a string (bind it first). A hole is a content
+itself. A hole runs to the `}` that matches its `${` and holds a term
+like any other, strings included (R-175): a string in a hole is lexed
+as its own, so its braces are its text and its holes nest to any depth,
+`"#cloud-config\n${yaml.encode({ runcmd: ["${install} sh -s - server"] })}"`.
+A hole never closed is an error at its `${`. A hole is a content
 position: a dot in it reads now (see "Reference or read"). A reference in
 a hole is its address, `T["A"]`, whether `in` types its variable or a
 reference column binds it untyped: `deny "${r}" where deformation(k, r,
