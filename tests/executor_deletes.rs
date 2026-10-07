@@ -161,6 +161,8 @@ tick 2  1 change
   ~ net.subnet a  p.df:4
       vpc_id = "net.vpc:main" → main
 stack p is up to date
+tick 2 differs from the plan shown:
+  - net.subnet a  update, no longer a change
 "#
     );
     let w = s.json("w.json");

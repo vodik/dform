@@ -158,10 +158,12 @@ fn drift_after_the_plan_is_refused() {
     assert!(!s.read("w.json").contains("db.postgres"), "applied anyway");
 }
 
-/// The chaos mock changes the database after tick 1: tick 2's refresh sees
-/// a change the file does not have, and apply stops there.
+/// The chaos mock changes the database after tick 1: tick 2's re-plan
+/// updates it again, which the file did not show, so the apply stops
+/// before tick 2 (exit 5), naming what differs, the state consistent
+/// (After R-156).
 #[test]
-fn a_world_mutated_between_ticks_is_refused_at_the_boundary() {
+fn a_world_mutated_between_ticks_stops_before_the_tick() {
     let s = two_ticks("planfile-mutate");
     let r = s
         .run(&[
@@ -172,20 +174,27 @@ fn a_world_mutated_between_ticks_is_refused_at_the_boundary() {
             "plan.json",
         ])
         .failure();
+    assert_eq!(r.code, Some(5), "{}\n{}", r.stdout, r.stderr);
     assert!(
-        r.stderr.contains("at tick 2 does not reproduce its delta"),
+        r.stdout.contains(
+            "tick 2 differs from the plan shown:\n  + db.postgres main  update again; it ran in \
+             tick 1\n"
+        ),
         "{}",
-        r.stderr
+        r.stdout
     );
     assert!(
         r.stderr.contains(
-            "update db.postgres main: changed again at tick 2; the plan file ran it in tick 1"
+            "apply stopped after tick 1: tick 2 differs from the plan it applies: db.postgres \
+             main; run apply again"
         ),
         "{}",
         r.stderr
     );
     // Tick 2 never ran: the vm still has the old host.
     assert!(s.read("w.json").contains("old.db.fake"));
+    let st: serde_json::Value = serde_json::from_str(&s.read("w.state.json")).unwrap();
+    assert!(st.get("in_flight").is_none(), "{st}");
 }
 
 #[test]

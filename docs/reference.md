@@ -142,7 +142,11 @@ which key values are defaults, `(env from its default)` (`plan --json`:
 shop[env=prod]? [y/N]` (`Apply this change to ..` for one); only `y` or
 `yes` proceeds. `--yes` (`-y`)
 applies without asking, as a script or CI does: with no terminal to ask on
-and no `--yes`, apply refuses at once, naming the flag. A plan that is up to date
+and no `--yes`, apply refuses at once, naming the flag. The one question
+covers every tick the plan shows: a later tick is planned again at its
+boundary (below) and applied without asking when it is the tick the plan
+showed: the same changes, the same values where the plan knew them (a
+value it did not know, `main.endpoint`, may be anything). A plan that is up to date
 asks nothing, nor does `apply plan.json` (the file was reviewed; approvals
 guard it). The one exception is the plan's `warning` (R-80): a rule the
 plan deletes everything of, or a relation it empties, since the last
@@ -158,21 +162,39 @@ tick, waits for the values it unblocks (within the provider's `wait`,
 see "Timeouts, retries and waiting"), plans the next, and asks before a
 tick whose plan holds what no earlier plan showed (a pending group's
 member: `iam.policy[?]` at tick 1, named once the endpoint it is built
-from exists; what `later` held for a provider's settings): its plan is
-printed, headed `tick 2  1 change`, then
-`Apply tick 2 to D? [y/N]`; and so on until nothing is `later`. `--yes`
-answers every question. A `n` is not an error: it stops the apply with
+from exists; what `later` held for a provider's settings), or that
+differs from the tick as the plan showed it (After R-156): a change
+added to it, another action, or a value the plan knew that is another
+now (a `resourceVersion` the cluster bumped when tick 1
+updated the object, an object the world changed after tick 1 that the
+tick changes again). Its plan is printed, headed `tick 2  1 change`,
+then what differs, a value as `shown → now`:
+
+```
+tick 2 differs from the plan shown:
+  ~ compute.vm app  rv = "115" → "200"
+  + db.postgres main  update again; it ran in tick 1
+Apply tick 2 to D? [y/N]
+```
+
+and so on until nothing is `later`. A change gone from the tick (`-
+net.subnet a  update, no longer a change`) is said there too, and not
+asked for: the tick does less than was shown. What was asked for is
+what the next boundary compares with. `--yes` answers every question, printing
+what differs. A `n` is not an error: it stops the apply with
 what the earlier ticks did in state, says nothing at tick 1 (nothing was
 applied) and, later, `apply D: not confirmed at tick 2; ticks 1 to 1 were
 applied, and the next apply resumes from there`, and exits 3 (see "Exit
 status"), the stack unlocked; the audit log's `apply_end` says `declined` and the `tick`, and
 the next apply resumes. (A run with no terminal on stdin, CI, never
 reaches a question: it is refused, naming `--yes`.) A plan file or an approval applies
-what it showed and nothing else: it stops before the first tick that
-would add something, after writing state: `apply stopped after tick 1:
-tick 2 adds 1 change the plan could not name (iam.policy[?] on
+what it showed and nothing else: it covers the ticks whose re-plan is
+the one it showed, and stops before the first tick that would add
+something or that differs, after writing state: `apply stopped after
+tick 1: tick 2 adds 1 change the plan could not name (iam.policy[?] on
 ?db.postgres["orders"].endpoint); run apply again to plan them against
-the world as it now is`. It exits 5, having applied what was approved and
+the world as it now is`, or `.. tick 2 differs from the plan it
+applies: compute.vm app.rv; ..`, what differs printed above it. It exits 5, having applied what was approved and
 nothing that was not printed, and `apply_end` says `stopped`; the next apply plans them as its
 tick 1, by name. There is no strict mode, no resource-level target and no
 flag for how long to wait: a plan that needs a second tick applies tick
@@ -337,7 +359,7 @@ too):
 | 2 | usage: the command line is wrong (the argument parser's own) |
 | 3 | declined: a question was answered no; nothing of that tick was applied, and nothing is printed as an error |
 | 4 | refused by the program: its conflicts and denies, printed (`plan` and `apply` alike) |
-| 5 | stopped: a plan file or an approval applied what it showed and stopped before what it did not, or a destroy deleted what it could reach and left what it could not (listed under `unreachable`), or an apply without the deployment's master made what it could and not what needs the master (listed); state is consistent, and the next run resumes |
+| 5 | stopped: a plan file or an approval applied what it showed and stopped before what it did not (a tick that adds a change, or whose re-plan differs from the one it showed), or a destroy deleted what it could reach and left what it could not (listed under `unreachable`), or an apply without the deployment's master made what it could and not what needs the master (listed); state is consistent, and the next run resumes |
 | 6 | locked: another run holds the stack (named, one line) |
 | 128 + N | stopped by signal N after the run unwound (130 for SIGINT, 143 for SIGTERM) |
 
@@ -1568,7 +1590,10 @@ provider k8s: configured after tick 1: kubeconfig = (sensitive)
 
 then plans the tick against it (a cluster's CRDs among them) and applies
 it: the question before tick 1 counted it, and a plan file holds it
-(its diff is checked against the file's as any tick's). What the plan
+(its diff is checked against the file's as any tick's). A value the
+plan showed in the clear that the provider's schema makes a secret is
+the same value when its digest is; it prints as `(sensitive)` from then
+on. What the plan
 had under `later` for a provider's settings, or listed as state has it
 (below), it prints and asks before as it asked before tick 1; `--yes`
 applies it. A plan file or an approval did not see that diff, so applying
@@ -1769,10 +1794,17 @@ allowed only where a pending group the file records derives it (its
 `want` unifies with the group's head, and a firing of the group's rule
 holds every binding the group recorded), and even then the apply stops
 before that tick, as every unattended apply does; and a deposed
-object's delete the tick after its `+/-` replacement. It prints the difference
-and stops before applying anything of that tick. So with a plan file, drift
-anywhere stops the run at the boundary, where a plain `apply` reports it and
-goes on. A sensitive value is compared by its digest: HMAC-SHA256 over its
+object's delete the tick after its `+/-` replacement. At tick 1 a
+difference refuses the file (`plan file .. is stale`, exit 1) before
+anything is applied. At a later tick's boundary the tick re-planned is
+compared with the tick as the file has it (see `apply`): one that
+differs is printed, `tick 2 differs from the plan shown:` and each
+difference, and the apply stops before it, exit 5, its state
+consistent, naming what differs (`apply stopped after tick 1: tick 2
+differs from the plan it applies: compute.vm app.rv; run apply again
+..`). So with a plan file, drift anywhere stops the run at the
+boundary, where a plain `apply` reports it, asks again when the tick
+differs, and goes on. A sensitive value is compared by its digest: HMAC-SHA256 over its
 bytes, keyed by the deployment's master (see "Secrets"), so a secret
 that changed
 between plan and apply is refused and the file never carries the bytes:
@@ -1781,7 +1813,7 @@ between plan and apply is refused and the file never carries the bytes:
 G=examples/gke/stacks/gke_two_phase.df
 cargo run -- dev --world w.json plan $G --out plan.json
 cargo run -- apply plan.json                          # tick 1; tick 2's nodepools it could not name
-# the world moves after tick 1: the file refuses
+# the world moves after tick 1: the apply stops before tick 2, exit 5
 cargo run -- dev --chaos 'mutate=google.container_cluster["pngu"].name="other"' apply plan.json
 ```
 

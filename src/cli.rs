@@ -2829,47 +2829,46 @@ fn run_with(
         explain(&mut report, plan, res, tick);
         print!("{}", rendered(&report))
     };
-    // `apply PLAN`: the delta re-evaluated at each tick must be the file's.
+    // `apply PLAN`: the delta re-evaluated at tick 1 must be the file's;
+    // a later tick's is compared at its boundary, which stops before a
+    // tick that differs (`zset::file::tick_differences`).
     let check_saved = |plan: &crate::provider::Plan,
                        res: &engine::EvalResult,
-                       sections: &stuck::Sections,
-                       tick: usize|
+                       sections: &stuck::Sections|
      -> Result<()> {
         let Some((path, saved)) = &saved else {
             return Ok(());
         };
-        let report = report_of(plan, res, sections, tick, &[], &[]);
+        let report = report_of(plan, res, sections, 1, &[], &[]);
         let redact = query::Redactor::new(&res.facts, schema);
         let key = file_key;
         let now = zset::file::delta(plan, sections, &report, schema, &redact, key);
-        let mut diff = saved.stale(&now, tick);
+        let mut diff = saved.stale(&now);
         // A secret answer the plan read (`ssh.read`), read again: by its
         // digest. One that is "not yet" now is waited on, not compared.
-        if tick == 1 {
-            let now: std::collections::BTreeMap<String, serde_json::Value> =
-                answer_inputs(externs, key)
-                    .into_iter()
-                    .filter_map(|a| {
-                        Some((
-                            a.get("sensitive")?.as_str()?.to_string(),
-                            a["digest"].clone(),
-                        ))
-                    })
-                    .collect();
-            for a in &saved.inputs.answers {
-                let Some(label) = a.get("sensitive").and_then(|l| l.as_str()) else {
-                    continue;
-                };
-                if now.get(label).is_some_and(|d| *d != a["digest"]) {
-                    diff.push(format!("{label}: changed since the plan"));
-                }
+        let now: std::collections::BTreeMap<String, serde_json::Value> =
+            answer_inputs(externs, key)
+                .into_iter()
+                .filter_map(|a| {
+                    Some((
+                        a.get("sensitive")?.as_str()?.to_string(),
+                        a["digest"].clone(),
+                    ))
+                })
+                .collect();
+        for a in &saved.inputs.answers {
+            let Some(label) = a.get("sensitive").and_then(|l| l.as_str()) else {
+                continue;
+            };
+            if now.get(label).is_some_and(|d| *d != a["digest"]) {
+                diff.push(format!("{label}: changed since the plan"));
             }
         }
         if diff.is_empty() {
             return Ok(());
         }
         eprintln!(
-            "plan file {} is stale: re-evaluation after refresh at tick {tick} does not reproduce its delta:",
+            "plan file {} is stale: re-evaluation after refresh does not reproduce its delta:",
             path.display()
         );
         for d in &diff {
@@ -3383,6 +3382,19 @@ fn run_with(
             // What the first tick's plan scheduled in a later tick, its
             // attributes as written (R-156): shown, so not asked again.
             let mut scheduled: BTreeSet<String> = BTreeSet::new();
+            // The delta of the plan this apply showed, or of the plan file
+            // it applies: a later tick's re-plan is compared with it, and
+            // what earlier ticks ran (After R-156).
+            let mut shown_delta: Vec<zset::file::Entry> = Vec::new();
+            let mut ran: BTreeSet<(String, String)> = BTreeSet::new();
+            let delta_of = |plan: &crate::provider::Plan,
+                            res: &engine::EvalResult,
+                            sections: &stuck::Sections,
+                            tick: usize| {
+                let report = report_of(plan, res, sections, tick, &[], &[]);
+                let redact = query::Redactor::new(&res.facts, schema);
+                zset::file::delta(plan, sections, &report, schema, &redact, file_key)
+            };
             // The providers the plan's own evaluation configured.
             evaluator.take_configured();
             loop {
@@ -3397,7 +3409,9 @@ fn run_with(
                     unreachable,
                 } = plan_for(res, &violations, resources, &adopts, &lifecycle, &st)?;
                 (res, resources) = (r, docs);
-                check_saved(&plan, &res, &sections, tick)?;
+                if tick == 1 {
+                    check_saved(&plan, &res, &sections)?;
+                }
                 // A provider the last tick made the settings of known (a
                 // kubeconfig read from the server it created) was
                 // configured at the boundary: said, a secret setting as
@@ -3607,6 +3621,7 @@ fn run_with(
                             new,
                             unnamed,
                             on_provider: false,
+                            differs: Vec::new(),
                         }));
                     }
                     // What `later` showed waiting on a provider, planned
@@ -3626,9 +3641,47 @@ fn run_with(
                             new: planned,
                             unnamed: Vec::new(),
                             on_provider: true,
+                            differs: Vec::new(),
                         }));
                     }
-                    if new + planned > 0 && !yes {
+                    // The tick as its boundary re-plans it, against the
+                    // tick as the plan shown had it (After R-156): the
+                    // same changes and values, a value the plan did not
+                    // know whatever it became. One that differs is
+                    // printed below the tick with what differs, and asked
+                    // for again; a plan file or an approval stops before
+                    // it, naming what differs.
+                    let now = delta_of(&plan, &res, &sections, tick);
+                    let differs =
+                        zset::file::tick_differences(&shown_delta, &now, tick, &ran, file_key);
+                    if !differs.is_empty() {
+                        println!("tick {tick} differs from the plan shown:");
+                        for d in &differs {
+                            println!("{}", d.line());
+                        }
+                    }
+                    // A change gone from the tick is said, not asked for:
+                    // the tick does less than was shown.
+                    let more = differs.iter().any(|d| d.mark != '-');
+                    if more && shown {
+                        st.in_flight = None;
+                        persist(&st)?;
+                        let mut names: Vec<String> = Vec::new();
+                        for n in differs.iter().map(|d| d.name()) {
+                            if !names.contains(&n) {
+                                names.push(n);
+                            }
+                        }
+                        return Ok(stopped(Stopped {
+                            tick: tick - 1,
+                            new: differs.len(),
+                            unnamed: Vec::new(),
+                            on_provider: false,
+                            differs: names,
+                        }));
+                    }
+                    let asked = new + planned > 0 || more;
+                    if asked && !yes {
                         still_held(session)?;
                         if !confirm(
                             new + planned,
@@ -3641,6 +3694,15 @@ fn run_with(
                             return Ok(declined(&deployment, tick));
                         }
                     }
+                    // What was asked for (or `--yes` applied) is what the
+                    // next boundary compares with.
+                    if asked {
+                        let key = |e: &zset::file::Entry| (e.typ.clone(), e.name.clone());
+                        let mut by: std::collections::BTreeMap<_, _> =
+                            shown_delta.drain(..).map(|e| (key(&e), e)).collect();
+                        by.extend(now.into_iter().map(|e| (key(&e), e)));
+                        shown_delta = by.into_values().collect();
+                    }
                 }
                 if tick == 1 {
                     scheduled = report_of(&plan, &res, &sections, tick, &[], &denies)
@@ -3649,6 +3711,12 @@ fn run_with(
                         .filter(|(t, _)| *t > 1)
                         .flat_map(|(_, xs)| xs)
                         .collect();
+                    // What the later ticks are compared with at their
+                    // boundaries: the plan file's delta, else this plan's.
+                    shown_delta = match &saved {
+                        Some((_, f)) => f.deformations.clone(),
+                        None => delta_of(&plan, &res, &sections, tick),
+                    };
                 }
                 listed.extend(addresses.into_iter().cloned());
                 on_provider = resources
@@ -3761,6 +3829,14 @@ fn run_with(
                 // tick.
                 let needing = needing_master(&plan, &resources, &st, backend);
                 plan.actions.retain(|a| !needing.contains_key(&a.addr));
+                ran.extend(
+                    plan.actions
+                        .iter()
+                        .filter(|a| {
+                            !matches!(a.kind, ActionKind::Noop) && waits_on(a, &sections).is_none()
+                        })
+                        .map(|a| (a.addr.typ.clone(), a.addr.name.clone())),
+                );
                 // Kept in state: a sensitive leaf by its digest.
                 let observed = backend.stored_world(&backend.observe(&st)?);
                 executor::begin(&mut st, tick, &plan, &observed);
@@ -4756,6 +4832,10 @@ struct Stopped {
     /// named but planned only now (R-45): the plan file or approval did
     /// not see their diff.
     on_provider: bool,
+    /// The tick re-planned at its boundary differs from the tick the plan
+    /// file or approval showed (After R-156): what it differs in, each an
+    /// address or an attribute as the plan prints it.
+    differs: Vec<String>,
 }
 
 impl std::fmt::Display for Stopped {
@@ -4766,6 +4846,10 @@ impl std::fmt::Display for Stopped {
             gs => format!(" ({})", gs.join("; ")),
         };
         let what = match self.on_provider {
+            _ if !self.differs.is_empty() => format!(
+                "differs from the plan it applies: {}",
+                self.differs.join(", ")
+            ),
             true => format!(
                 "plans {} change{s} `later` held for a provider's settings, which the \
                  approved plan did not show",

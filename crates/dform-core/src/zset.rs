@@ -1662,10 +1662,10 @@ pub mod file {
         }
 
         /// The differences between this file's delta and `current`, the
-        /// delta re-evaluated at the start of `tick`; empty when the file's
-        /// delta is reproduced. An address the file does not list is stale
-        /// at tick 1; at a later tick the stop rule stops before it.
-        pub fn stale(&self, current: &[Entry], tick: usize) -> Vec<String> {
+        /// delta re-evaluated at the start of tick 1; empty when the
+        /// file's delta is reproduced. A later tick is the boundary's
+        /// ([`tick_differences`]): it stops before a tick that differs.
+        pub fn stale(&self, current: &[Entry]) -> Vec<String> {
             let key = |e: &Entry| (e.typ.clone(), e.name.clone());
             let saved: BTreeMap<(String, String), &Entry> =
                 self.deformations.iter().map(|e| (key(e), e)).collect();
@@ -1678,32 +1678,10 @@ pub mod file {
                     name: k.1.clone(),
                 };
                 let at = report::address(&addr);
-                // The object a create_before_destroy replacement deposed
-                // is deleted the tick after.
-                let deposed = c.action == "delete_deposed"
-                    && saved
-                        .get(k)
-                        .is_some_and(|s| s.action == "replace_create_first");
-                if deposed {
-                    continue;
-                }
                 let Some(s) = saved.get(k) else {
-                    // An address the file does not list, at a later tick, is
-                    // the stop rule's (R-30): an unattended apply stops
-                    // before the tick that adds it, its state consistent.
-                    if tick == 1 {
-                        out.push(format!("{} {at}: not in the plan file", c.action));
-                    }
+                    out.push(format!("{} {at}: not in the plan file", c.action));
                     continue;
                 };
-                if s.tick.is_some_and(|t| t < tick) {
-                    out.push(format!(
-                        "{} {at}: changed again at tick {tick}; the plan file ran it in tick {}",
-                        c.action,
-                        s.tick.unwrap_or_default()
-                    ));
-                    continue;
-                }
                 if s.action != c.action {
                     out.push(format!(
                         "{at}: the plan file has {}, re-evaluation has {}",
@@ -1714,8 +1692,7 @@ pub mod file {
                 out.extend(leaf_differences(&addr, s, c));
             }
             for (k, s) in &saved {
-                // Deformations of earlier ticks have run.
-                if s.tick.is_some_and(|t| t < tick) || now.contains_key(k) {
+                if now.contains_key(k) {
                     continue;
                 }
                 let at = report::address(&crate::ir::Address {
@@ -1728,6 +1705,213 @@ pub mod file {
                 ));
             }
             out
+        }
+    }
+
+    /// One way a tick re-planned at its boundary differs from the tick
+    /// as the plan the apply showed (or a plan file, an approval) had it
+    /// (After R-156): a change added to the tick (`+`), one gone from it
+    /// (`-`), or the same change with another action or value (`~`).
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct Difference {
+        pub mark: char,
+        pub addr: crate::ir::Address,
+        /// The attribute a value difference is of.
+        pub path: Option<String>,
+        /// What differs, after the address: `cidr = "a" → "b"`, `not in
+        /// the plan shown`.
+        pub what: String,
+    }
+
+    impl Difference {
+        /// Its line under `tick N differs from the plan shown:`.
+        pub fn line(&self) -> String {
+            format!(
+                "  {} {}  {}",
+                self.mark,
+                report::address(&self.addr),
+                self.what
+            )
+        }
+
+        /// What it is about, as an error names it: the address, or the
+        /// attribute.
+        pub fn name(&self) -> String {
+            match &self.path {
+                Some(p) => report::attribute(&self.addr, p),
+                None => report::address(&self.addr),
+            }
+        }
+    }
+
+    /// What differs between tick `tick` as `shown` has it (the delta of
+    /// the plan the apply showed, or of the plan file it applies) and as
+    /// `now` has it (the delta re-planned at the tick's boundary): the
+    /// same changes, the same values where the shown plan knew them; a
+    /// value it did not know (a null) is not a difference whatever it
+    /// became, nor is a leaf the re-plan adds whose value is still
+    /// unknown. `ran`: what earlier ticks of this apply ran, which changes
+    /// again if it is in this tick. `key` the digests are keyed with: a
+    /// value shown in the clear that the re-plan holds as a secret (its
+    /// schema arrived at the boundary) is the same value when its digest
+    /// is the shown one's. Empty when the tick is as shown.
+    pub fn tick_differences(
+        shown: &[Entry],
+        now: &[Entry],
+        tick: usize,
+        ran: &std::collections::BTreeSet<(String, String)>,
+        key: Option<&Key>,
+    ) -> Vec<Difference> {
+        let same = |was: &Json, is: &Json| {
+            was == is
+                || match (sensitive(was), is.get("digest").and_then(Json::as_str), key) {
+                    (false, Some(d), Some(k)) => {
+                        k.digest(&serde_json::to_vec(was).unwrap_or_default()) == d
+                    }
+                    _ => false,
+                }
+        };
+        // Either side a secret: both said as one.
+        let pair = |was: &Json, is: &Json| match sensitive(was) || sensitive(is) {
+            true => (sensitive_text(was), sensitive_text(is)),
+            false => (leaf_text(was), leaf_text(is)),
+        };
+        let key = |e: &Entry| (e.typ.clone(), e.name.clone());
+        let shown: BTreeMap<(String, String), &Entry> = shown.iter().map(|e| (key(e), e)).collect();
+        let now: BTreeMap<(String, String), &Entry> = now.iter().map(|e| (key(e), e)).collect();
+        let address = |k: &(String, String)| crate::ir::Address {
+            typ: k.0.clone(),
+            name: k.1.clone(),
+        };
+        let mut out = Vec::new();
+        let mut push = |mark: char, k: &(String, String), path: Option<String>, what: String| {
+            out.push(Difference {
+                mark,
+                addr: address(k),
+                path,
+                what,
+            })
+        };
+        for (k, c) in now.iter().filter(|(_, c)| c.tick == Some(tick)) {
+            let s = shown.get(k);
+            // The object a create_before_destroy replacement deposed is
+            // deleted the tick after; the plan showed it so.
+            if c.action == "delete_deposed" && s.is_some_and(|s| s.action == "replace_create_first")
+            {
+                continue;
+            }
+            let Some(s) = s else {
+                push('+', k, None, format!("{}, not in the plan shown", c.action));
+                continue;
+            };
+            if ran.contains(k) {
+                let when = match s.tick {
+                    Some(t) => format!("tick {t}"),
+                    None => "an earlier tick".into(),
+                };
+                push(
+                    '+',
+                    k,
+                    None,
+                    format!("{} again; it ran in {when}", c.action),
+                );
+                continue;
+            }
+            if s.action != c.action {
+                push(
+                    '~',
+                    k,
+                    None,
+                    format!("{}, the plan shown has {}", c.action, s.action),
+                );
+                continue;
+            }
+            let was: BTreeMap<&str, &Leaf> =
+                s.changes.iter().map(|l| (l.path.as_str(), l)).collect();
+            let is: BTreeMap<&str, &Leaf> =
+                c.changes.iter().map(|l| (l.path.as_str(), l)).collect();
+            for (p, l) in &is {
+                let leaf = Some(p.to_string());
+                match was.get(p) {
+                    None if is_null(&l.after) => {}
+                    None => push(
+                        '~',
+                        k,
+                        leaf,
+                        format!("{p} = {}  (not in the plan shown)", leaf_text(&l.after)),
+                    ),
+                    Some(w) if !is_null(&w.after) && !same(&w.after, &l.after) => {
+                        let (a, b) = pair(&w.after, &l.after);
+                        push('~', k, leaf, format!("{p} = {a} → {b}"))
+                    }
+                    Some(w) if !same(&w.before, &l.before) => {
+                        let (a, b) = pair(&w.before, &l.before);
+                        push(
+                            '~',
+                            k,
+                            leaf,
+                            format!("{p} was {a} in the plan shown, is {b} now"),
+                        )
+                    }
+                    Some(_) => {}
+                }
+            }
+            for (p, w) in was.iter().filter(|(p, _)| !is.contains_key(*p)) {
+                push(
+                    '~',
+                    k,
+                    Some(p.to_string()),
+                    format!("{p} = {}  (no longer changed)", leaf_text(&w.after)),
+                );
+            }
+        }
+        for (k, s) in shown.iter().filter(|(_, s)| s.tick == Some(tick)) {
+            if ran.contains(k) {
+                continue;
+            }
+            match now.get(k).map(|c| c.tick) {
+                Some(Some(t)) if t == tick => {}
+                Some(Some(t)) => push('-', k, None, format!("{}, now in tick {t}", s.action)),
+                Some(None) => push('-', k, None, format!("{}, now later", s.action)),
+                None => push('-', k, None, format!("{}, no longer a change", s.action)),
+            }
+        }
+        out
+    }
+
+    fn sensitive(v: &Json) -> bool {
+        v.get("sensitive").is_some()
+    }
+
+    /// A value beside a secret, said as one: never in the clear.
+    fn sensitive_text(v: &Json) -> String {
+        match sensitive(v) {
+            true => leaf_text(v),
+            false => "(sensitive)".into(),
+        }
+    }
+
+    /// A leaf's value as a tick's difference says it: a null as what it
+    /// stands for (`?db.postgres main.endpoint`), a secret as
+    /// `(sensitive)` with the head of its digest, else its JSON.
+    fn leaf_text(v: &Json) -> String {
+        if is_null(v) {
+            let n = v["null"].as_str().unwrap_or_default();
+            return match crate::ir::parse_address(n) {
+                Ok((a, Some(p))) => format!("?{}", report::attribute(&a, &p)),
+                Ok((a, None)) => format!("?{}", report::address(&a)),
+                Err(_) => format!("?{n}"),
+            };
+        }
+        if sensitive(v) {
+            return match v.get("digest").and_then(Json::as_str) {
+                Some(d) => format!("(sensitive, digest {})", &d[..d.len().min(8)]),
+                None => "(sensitive)".into(),
+            };
+        }
+        match v {
+            Json::Null => "(none)".into(),
+            v => serde_json::to_string(v).unwrap_or_default(),
         }
     }
 
@@ -1878,6 +2062,85 @@ mod tests {
             .collect();
         assert_eq!(got["added"], Kind::Update);
         assert_eq!(got["stale"], Kind::Drift);
+    }
+
+    /// A tick re-planned at its boundary (After R-156): a value the plan
+    /// did not know is not a difference whatever it became; a value it
+    /// knew that is another now is; a clear value the re-plan holds as a
+    /// secret with the same digest is the same, and one with another
+    /// digest is said without its bytes.
+    #[test]
+    fn a_tick_differs_where_a_known_value_does() {
+        use file::{Entry, Leaf, tick_differences};
+        let key = file::Key::from_bytes([7; 32]);
+        let digest = |v: &serde_json::Value| key.digest(&serde_json::to_vec(v).unwrap());
+        let entry = |tick, leaves: &[(&str, serde_json::Value)]| Entry {
+            typ: "t".into(),
+            name: "a".into(),
+            action: "create".into(),
+            tick: Some(tick),
+            on: vec![],
+            changes: leaves
+                .iter()
+                .map(|(p, v)| Leaf {
+                    path: p.to_string(),
+                    before: serde_json::Value::Null,
+                    after: v.clone(),
+                })
+                .collect(),
+            dependents: vec![],
+        };
+        let null = serde_json::json!({"null": "t[\"b\"].id", "class": "fresh"});
+        let shown = [entry(
+            2,
+            &[
+                ("id", null),
+                ("rv", "115".into()),
+                ("token", "T".into()),
+                ("pw", "P".into()),
+            ],
+        )];
+        let secret =
+            |v: &str| serde_json::json!({"sensitive": "t/a#x", "digest": digest(&v.into())});
+        let now = [entry(
+            2,
+            &[
+                ("id", "b-1".into()),
+                ("rv", "200".into()),
+                ("token", secret("T")),
+                ("pw", secret("Q")),
+            ],
+        )];
+        let ran = BTreeSet::new();
+        let lines: Vec<String> = tick_differences(&shown, &now, 2, &ran, Some(&key))
+            .iter()
+            .map(|d| d.line())
+            .collect();
+        let q = &digest(&"Q".into())[..8];
+        assert_eq!(
+            lines,
+            [
+                format!("  ~ t a  pw = (sensitive) → (sensitive, digest {q})"),
+                "  ~ t a  rv = \"115\" → \"200\"".to_string(),
+            ]
+        );
+        assert!(tick_differences(&shown, &shown, 2, &ran, Some(&key)).is_empty());
+        // Gone from the tick, and a change it did not show.
+        let other = Entry {
+            name: "c".into(),
+            ..now[0].clone()
+        };
+        let lines: Vec<String> = tick_differences(&shown, &[other], 2, &ran, Some(&key))
+            .iter()
+            .map(|d| d.line())
+            .collect();
+        assert_eq!(
+            lines,
+            [
+                "  + t c  create, not in the plan shown",
+                "  - t a  create, no longer a change"
+            ]
+        );
     }
 
     /// The plan key's digest is HMAC-SHA256 (RFC 2104): the value Python's
