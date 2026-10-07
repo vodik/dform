@@ -22,10 +22,10 @@ type settings {
   network_name: string
   regional_proxy_cidr: inet
   gke: {
-    control_plane_cidr: inet check inet.prefix_len(control_plane_cidr) == 28 # checkable: lives in the cell
-    subnet_cidr: inet check inet.prefix_len(subnet_cidr) == 22
-    pods_cidr: inet check inet.prefix_len(pods_cidr) == 21
-    services_cidr: inet check inet.prefix_len(services_cidr) == 21
+    control_plane_cidr: inet check control_plane_cidr.bits == 28 # checkable: lives in the cell
+    subnet_cidr: inet check subnet_cidr.bits == 22
+    pods_cidr: inet check pods_cidr.bits == 21
+    services_cidr: inet check services_cidr.bits == 21
     static_ips: map({ type: enum("INTERNAL") }) # was a constraint rule
   }
 }
@@ -40,12 +40,12 @@ set {
   project_id = "renfry-dev-973682"
   project_name = "renfry-dev"
   network_name = "renfry-dev-network"
-  regional_proxy_cidr = inet("10.193.0.0/24")
+  regional_proxy_cidr = "10.193.0.0/24"
   gke = {
-    control_plane_cidr: inet("172.16.3.96/28"),
-    subnet_cidr: inet("10.141.76.0/22"),
-    pods_cidr: inet("10.141.80.0/21"),
-    services_cidr: inet("10.141.88.0/21"),
+    control_plane_cidr: "172.16.3.96/28",
+    subnet_cidr: "10.141.76.0/22",
+    pods_cidr: "10.141.80.0/21",
+    services_cidr: "10.141.88.0/21",
   }
 } where env == "dev"
 
@@ -53,12 +53,12 @@ set {
   project_id = "renfry-stg"
   project_name = "renfry-stg"
   network_name = "renfry-stg-network"
-  regional_proxy_cidr = inet("10.193.1.0/24")
+  regional_proxy_cidr = "10.193.1.0/24"
   gke = {
-    control_plane_cidr: inet("172.16.3.112/28"),
-    subnet_cidr: inet("10.141.100.0/22"),
-    pods_cidr: inet("10.141.104.0/21"),
-    services_cidr: inet("10.141.112.0/21"),
+    control_plane_cidr: "172.16.3.112/28",
+    subnet_cidr: "10.141.100.0/22",
+    pods_cidr: "10.141.104.0/21",
+    services_cidr: "10.141.112.0/21",
   }
 } where env == "stg"
 
@@ -83,7 +83,7 @@ project(id, name, region, net_id) where {
   setting(e, "project_name", name)
   setting(e, "region", region)
   setting(e, "network_name", net_name)
-  net_id = format("projects/%s/global/networks/%s", id, net_name)
+  net_id = str.format("projects/%s/global/networks/%s", id, net_name)
 }
 
 ########################################
@@ -94,12 +94,12 @@ resource google.compute_subnetwork gke_subnet {
   project = id
   region
   network = net_id
-  name = format("%s-gke-subnet", name)
+  name = str.format("%s-gke-subnet", name)
   ip_cidr_range = subnet_cidr
   subnet_private_access = true
   secondary_ranges = [
-    { range_name: format("%s-gke-pods-range", name), ip_cidr_range: pods_cidr },
-    { range_name: format("%s-gke-svc-range", name), ip_cidr_range: svc_cidr },
+    { range_name: str.format("%s-gke-pods-range", name), ip_cidr_range: pods_cidr },
+    { range_name: str.format("%s-gke-svc-range", name), ip_cidr_range: svc_cidr },
   ] # Keyed on .range_name per the google schema
 } where {
   project(id, name, region, net_id)
@@ -113,7 +113,7 @@ resource google.compute_subnetwork regional_proxy {
   project = id
   region
   network = net_id
-  name = format("%s-proxy", name)
+  name = str.format("%s-proxy", name)
   purpose = "REGIONAL_MANAGED_PROXY"
   role = "ACTIVE"
   ip_cidr_range = proxy_cidr
@@ -128,7 +128,7 @@ resource google.compute_network_peering "${p}" {
   project(id, _, _, net_id)
   e = env
   peering(e, peer_name, peer_net)
-  p = format("peering-%s", peer_name)
+  p = str.format("peering-%s", peer_name)
 }
 
 # One static address per declared static IP; the map explodes into rows.
@@ -144,7 +144,11 @@ resource google.compute_address "${s}" {
   name = ip_name
   address_type = type_
   subnetwork_id = ref(google.compute_subnetwork, "gke_subnet", "id")
-} where project(id, _, region, _), static_ip(ip_name, type_), s = format("static-ip-%s", ip_name)
+} where {
+  project(id, _, region, _)
+  static_ip(ip_name, type_)
+  s = str.format("static-ip-%s", ip_name)
+}
 
 ########################################
 # GKE: phase 1
@@ -155,12 +159,12 @@ resource gke.cluster pngu {
   env = e
   project_id = id
   project_name = name
-  name = format("%s-gke", name)
+  name = str.format("%s-gke", name)
   network_id = net_id
   subnetwork_id = ref(google.compute_subnetwork, "gke_subnet", "id")
   master_control_plane_cidr = cp_cidr
-  ip_range_pods = format("%s-gke-pods-range", name)
-  ip_range_services = format("%s-gke-svc-range", name)
+  ip_range_pods = str.format("%s-gke-pods-range", name)
+  ip_range_services = str.format("%s-gke-svc-range", name)
   enable_secret_manager_addon = true
   deletion_protection = false @default
 } where e = env, project(id, name, _, net_id), setting(e, "gke.control_plane_cidr", cp_cidr)
@@ -216,7 +220,7 @@ resource gke.nodepool "${np}" {
   zone = z
   min = 1
   max = 3
-} where attr("gke.cluster", "pngu", "zones", zs), member(zs, z), np = format("np-%s", z)
+} where attr("gke.cluster", "pngu", "zones", zs), member(zs, z), np = str.format("np-%s", z)
 
 # A policy that cannot be decided at plan time and says so: the aggregate
 # has a stuck instance, so it is undetermined, and the deny is reported as
@@ -366,12 +370,9 @@ output("project_id", id) where project(id, _, _, _)
             (refinement
               (body
                 (comparison
-                  (call
-                    (member_expression
-                      (identifier)
-                      (identifier))
-                    (arguments
-                      (identifier)))
+                  (member_expression
+                    (identifier)
+                    (identifier))
                   (integer)))))
           (comment)
           (attribute_declaration
@@ -383,12 +384,9 @@ output("project_id", id) where project(id, _, _, _)
             (refinement
               (body
                 (comparison
-                  (call
-                    (member_expression
-                      (identifier)
-                      (identifier))
-                    (arguments
-                      (identifier)))
+                  (member_expression
+                    (identifier)
+                    (identifier))
                   (integer)))))
           (attribute_declaration
             (block_path
@@ -399,12 +397,9 @@ output("project_id", id) where project(id, _, _, _)
             (refinement
               (body
                 (comparison
-                  (call
-                    (member_expression
-                      (identifier)
-                      (identifier))
-                    (arguments
-                      (identifier)))
+                  (member_expression
+                    (identifier)
+                    (identifier))
                   (integer)))))
           (attribute_declaration
             (block_path
@@ -415,12 +410,9 @@ output("project_id", id) where project(id, _, _, _)
             (refinement
               (body
                 (comparison
-                  (call
-                    (member_expression
-                      (identifier)
-                      (identifier))
-                    (arguments
-                      (identifier)))
+                  (member_expression
+                    (identifier)
+                    (identifier))
                   (integer)))))
           (attribute_declaration
             (block_path
@@ -491,42 +483,27 @@ output("project_id", id) where project(id, _, _, _)
           (string_content)))
       (set_entry
         (identifier)
-        (call
-          (identifier)
-          (arguments
-            (string
-              (string_content)))))
+        (string
+          (string_content)))
       (set_entry
         (identifier)
         (object
           (object_field
             (identifier)
-            (call
-              (identifier)
-              (arguments
-                (string
-                  (string_content)))))
+            (string
+              (string_content)))
           (object_field
             (identifier)
-            (call
-              (identifier)
-              (arguments
-                (string
-                  (string_content)))))
+            (string
+              (string_content)))
           (object_field
             (identifier)
-            (call
-              (identifier)
-              (arguments
-                (string
-                  (string_content)))))
+            (string
+              (string_content)))
           (object_field
             (identifier)
-            (call
-              (identifier)
-              (arguments
-                (string
-                  (string_content))))))))
+            (string
+              (string_content))))))
     (body
       (comparison
         (identifier)
@@ -548,42 +525,27 @@ output("project_id", id) where project(id, _, _, _)
           (string_content)))
       (set_entry
         (identifier)
-        (call
-          (identifier)
-          (arguments
-            (string
-              (string_content)))))
+        (string
+          (string_content)))
       (set_entry
         (identifier)
         (object
           (object_field
             (identifier)
-            (call
-              (identifier)
-              (arguments
-                (string
-                  (string_content)))))
+            (string
+              (string_content)))
           (object_field
             (identifier)
-            (call
-              (identifier)
-              (arguments
-                (string
-                  (string_content)))))
+            (string
+              (string_content)))
           (object_field
             (identifier)
-            (call
-              (identifier)
-              (arguments
-                (string
-                  (string_content)))))
+            (string
+              (string_content)))
           (object_field
             (identifier)
-            (call
-              (identifier)
-              (arguments
-                (string
-                  (string_content))))))))
+            (string
+              (string_content))))))
     (body
       (comparison
         (identifier)
@@ -683,7 +645,9 @@ output("project_id", id) where project(id, _, _, _)
       (comparison
         (identifier)
         (call
-          (identifier)
+          (member_expression
+            (identifier)
+            (identifier))
           (arguments
             (string
               (string_content))
@@ -713,7 +677,9 @@ output("project_id", id) where project(id, _, _, _)
         (block_path
           (identifier))
         (call
-          (identifier)
+          (member_expression
+            (identifier)
+            (identifier))
           (arguments
             (string
               (string_content))
@@ -734,7 +700,9 @@ output("project_id", id) where project(id, _, _, _)
             (object_field
               (identifier)
               (call
-                (identifier)
+                (member_expression
+                  (identifier)
+                  (identifier))
                 (arguments
                   (string
                     (string_content))
@@ -746,7 +714,9 @@ output("project_id", id) where project(id, _, _, _)
             (object_field
               (identifier)
               (call
-                (identifier)
+                (member_expression
+                  (identifier)
+                  (identifier))
                 (arguments
                   (string
                     (string_content))
@@ -813,7 +783,9 @@ output("project_id", id) where project(id, _, _, _)
         (block_path
           (identifier))
         (call
-          (identifier)
+          (member_expression
+            (identifier)
+            (identifier))
           (arguments
             (string
               (string_content))
@@ -900,7 +872,9 @@ output("project_id", id) where project(id, _, _, _)
         (comparison
           (identifier)
           (call
-            (identifier)
+            (member_expression
+              (identifier)
+              (identifier))
             (arguments
               (string
                 (string_content))
@@ -971,7 +945,7 @@ output("project_id", id) where project(id, _, _, _)
             (string
               (string_content))))))
     (clause
-      (body
+      (body_block
         (atom_literal
           (call
             (identifier)
@@ -989,7 +963,9 @@ output("project_id", id) where project(id, _, _, _)
         (comparison
           (identifier)
           (call
-            (identifier)
+            (member_expression
+              (identifier)
+              (identifier))
             (arguments
               (string
                 (string_content))
@@ -1024,7 +1000,9 @@ output("project_id", id) where project(id, _, _, _)
         (block_path
           (identifier))
         (call
-          (identifier)
+          (member_expression
+            (identifier)
+            (identifier))
           (arguments
             (string
               (string_content))
@@ -1054,7 +1032,9 @@ output("project_id", id) where project(id, _, _, _)
         (block_path
           (identifier))
         (call
-          (identifier)
+          (member_expression
+            (identifier)
+            (identifier))
           (arguments
             (string
               (string_content))
@@ -1063,7 +1043,9 @@ output("project_id", id) where project(id, _, _, _)
         (block_path
           (identifier))
         (call
-          (identifier)
+          (member_expression
+            (identifier)
+            (identifier))
           (arguments
             (string
               (string_content))
@@ -1345,7 +1327,9 @@ output("project_id", id) where project(id, _, _, _)
         (comparison
           (identifier)
           (call
-            (identifier)
+            (member_expression
+              (identifier)
+              (identifier))
             (arguments
               (string
                 (string_content))

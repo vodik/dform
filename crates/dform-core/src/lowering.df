@@ -75,7 +75,7 @@ internal fn __quantity(text: string, file: int, start: int, end: int) -> any?
 internal fn __under(path: string, prefix: string, value: any) -> any? forwards
 
 #| A resource's name as one segment of its address: quoted when it holds a dot, `"a.b"` (R-112). A header name with holes lowers to it.
-#| example: __segment(format("s-%s", Zone))
+#| example: __segment(str.format("s-%s", Zone))
 internal fn __segment(name: string) -> string forwards
 
 #| A resource's value body, the value when it is an object, else none, an error naming it (R-126). `resource T N = VALUE` with a value known only at run time lowers to it.

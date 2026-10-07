@@ -938,7 +938,7 @@ impl<'a> Parser<'a> {
                     Some(
                         "`settings` is gone (R-38): an input is given by `set`, `set db.size = 2 \
                          where env == \"prod\"`, several under one clause by `set { .. } where ..`, \
-                         a document's leaves by `set from yaml(..)`"
+                         a document's leaves by `set from yaml.decode(io.read(..))`"
                             .to_string(),
                     ),
                 );

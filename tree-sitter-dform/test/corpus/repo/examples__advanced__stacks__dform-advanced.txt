@@ -16,10 +16,10 @@ input env: enum("staging", "prod") = "staging"
 # List-valued inputs (human-friendly), the same in every environment.
 input tenants: list(string) = ["tenant_a", "tenant_b"]
 input mesh {
-  vpcs: list(any) = [
-    { name: "core_a", net: inet("10.210.0.0/16") },
-    { name: "core_b", net: inet("10.220.0.0/16") },
-    { name: "core_c", net: inet("10.230.0.0/16") },
+  vpcs: list({ name: string, net: inet }) = [
+    { name: "core_a", net: "10.210.0.0/16" },
+    { name: "core_b", net: "10.220.0.0/16" },
+    { name: "core_c", net: "10.230.0.0/16" },
   ]
 }
 # Peering intent.
@@ -35,13 +35,13 @@ decl mesh_allow_direct_route(from, to)
 use fake
 
 # Base IP space for tenants
-corp_net(inet("10.100.0.0/12"))
+corp_net("10.100.0.0/12")
 
 # Explode tenant list into a relation (Pattern A), with index.
 tenant(t, i) where t = tenants[i]
 
 # Shared services VPC (always exists)
-resource net.vpc shared { cidr = inet("10.200.0.0/16"), tags = { segment: "shared" } }
+resource net.vpc shared { cidr = "10.200.0.0/16", tags = { segment: "shared" } }
 
 # One VPC per tenant, with deterministic CIDRs derived from corp_net.
 resource net.vpc "${t}" {
@@ -204,9 +204,17 @@ warn "user is effectively admin (via group nesting)" { user: u } where in_group(
         (type
           (dotted_name
             (identifier))
-          (type
-            (dotted_name
-              (identifier))))
+          (record_type
+            (field_declaration
+              (identifier)
+              (type
+                (dotted_name
+                  (identifier))))
+            (field_declaration
+              (identifier)
+              (type
+                (dotted_name
+                  (identifier))))))
         (list
           (object
             (object_field
@@ -215,11 +223,8 @@ warn "user is effectively admin (via group nesting)" { user: u } where in_group(
                 (string_content)))
             (object_field
               (identifier)
-              (call
-                (identifier)
-                (arguments
-                  (string
-                    (string_content))))))
+              (string
+                (string_content))))
           (object
             (object_field
               (identifier)
@@ -227,11 +232,8 @@ warn "user is effectively admin (via group nesting)" { user: u } where in_group(
                 (string_content)))
             (object_field
               (identifier)
-              (call
-                (identifier)
-                (arguments
-                  (string
-                    (string_content))))))
+              (string
+                (string_content))))
           (object
             (object_field
               (identifier)
@@ -239,11 +241,8 @@ warn "user is effectively admin (via group nesting)" { user: u } where in_group(
                 (string_content)))
             (object_field
               (identifier)
-              (call
-                (identifier)
-                (arguments
-                  (string
-                    (string_content))))))))))
+              (string
+                (string_content))))))))
   (comment)
   (comment)
   (comment)
@@ -273,11 +272,8 @@ warn "user is effectively admin (via group nesting)" { user: u } where in_group(
     (call
       (identifier)
       (arguments
-        (call
-          (identifier)
-          (arguments
-            (string
-              (string_content)))))))
+        (string
+          (string_content)))))
   (comment)
   (rule
     (call
@@ -301,11 +297,8 @@ warn "user is effectively admin (via group nesting)" { user: u } where in_group(
       (field
         (block_path
           (identifier))
-        (call
-          (identifier)
-          (arguments
-            (string
-              (string_content)))))
+        (string
+          (string_content)))
       (field
         (block_path
           (identifier))

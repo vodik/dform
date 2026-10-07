@@ -9,9 +9,9 @@ key region: string = "us-east1"
 input relation: string = "an input named relation"
 input store { backup_days: int = 1 }
 input gke { static_ips: any }
-input seen from yaml("seen.yaml")[*].rows
-input peers from csv("peers.csv")
-input pinned from yaml(git("ops.git", "main", "pinned.yaml"))
+input seen from yaml.decode(io.read("seen.yaml"))[*].rows
+input peers from csv.decode(io.read("peers.csv"))
+input pinned from yaml.decode(io.read("git+https://github.com/acme/ops/pinned.yaml?ref=main"))
 decl seen(a: string, b: int)
 decl peers(env: enum("dev", "prod"), name: string)
 decl pinned(name: string)
@@ -63,7 +63,7 @@ q(1) where env("prod")
 
 set { store.backup_days = 3 } @default where env("prod")
 set { gke.static_ips = { "pngu-grpc": { type: "INTERNAL" } } } where env("prod")
-set from yaml("settings.yaml") @override where env("prod")
+set from yaml.decode(io.read("settings.yaml")) @override where env("prod")
 
 env("prod")
 p(x_) where {
@@ -140,31 +140,45 @@ x(i, a_) where vpc_inst(i), output(m[i], "vpc", a_)
   (input_relation
     (identifier)
     (call
-      (identifier)
+      (member_expression
+        (identifier)
+        (identifier))
       (arguments
-        (string
-          (string_content))))
+        (call
+          (member_expression
+            (identifier)
+            (identifier))
+          (arguments
+            (string
+              (string_content))))))
     (selector
       (identifier)))
   (input_relation
     (identifier)
     (call
-      (identifier)
+      (member_expression
+        (identifier)
+        (identifier))
       (arguments
-        (string
-          (string_content)))))
+        (call
+          (member_expression
+            (identifier)
+            (identifier))
+          (arguments
+            (string
+              (string_content)))))))
   (input_relation
     (identifier)
     (call
-      (identifier)
+      (member_expression
+        (identifier)
+        (identifier))
       (arguments
         (call
-          (identifier)
+          (member_expression
+            (identifier)
+            (identifier))
           (arguments
-            (string
-              (string_content))
-            (string
-              (string_content))
             (string
               (string_content)))))))
   (decl
@@ -564,10 +578,17 @@ x(i, a_) where vpc_inst(i), output(m[i], "vpc", a_)
               (string_content)))))))
   (set
     (call
-      (identifier)
+      (member_expression
+        (identifier)
+        (identifier))
       (arguments
-        (string
-          (string_content))))
+        (call
+          (member_expression
+            (identifier)
+            (identifier))
+          (arguments
+            (string
+              (string_content))))))
     (rank)
     (body
       (atom_literal

@@ -8,7 +8,7 @@ tests/fixtures/adversarial/adv4_variable_path_writer.df
 
 override(net.vpc, "main", "tags", { team: "x" })
 
-resource net.vpc main { cidr = inet("10.0.0.0/16"), tags = { env: "dev" } }
+resource net.vpc main { cidr = "10.0.0.0/16", tags = { env: "dev" } }
 
 arg(t, n, p, v) where override(t, n, p, v), want(t, n), arg(t, n, "cidr", _c)
 
@@ -45,11 +45,8 @@ use fake
       (field
         (block_path
           (identifier))
-        (call
-          (identifier)
-          (arguments
-            (string
-              (string_content)))))
+        (string
+          (string_content)))
       (field
         (block_path
           (identifier))

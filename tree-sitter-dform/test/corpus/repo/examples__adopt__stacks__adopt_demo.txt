@@ -13,8 +13,8 @@ input env: enum("staging", "prod") = "staging"
 use fake
 
 # network.df's input, per environment.
-set { network.vpc_net = inet("10.10.0.0/16") } where env == "staging"
-set { network.vpc_net = inet("10.20.0.0/16") } where env == "prod"
+set { network.vpc_net = "10.10.0.0/16" } where env == "staging"
+set { network.vpc_net = "10.20.0.0/16" } where env == "prod"
 
 # network.df, imported once, its input the settings': its VPC is
 # `network/vpc`.
@@ -72,11 +72,8 @@ set net.vpc["network.vpc"].owner_tag = cloud_ref(net.vpc, "existing-prod-vpc", "
         (member_expression
           (identifier)
           (identifier))
-        (call
-          (identifier)
-          (arguments
-            (string
-              (string_content))))))
+        (string
+          (string_content))))
     (body
       (comparison
         (identifier)
@@ -88,11 +85,8 @@ set net.vpc["network.vpc"].owner_tag = cloud_ref(net.vpc, "existing-prod-vpc", "
         (member_expression
           (identifier)
           (identifier))
-        (call
-          (identifier)
-          (arguments
-            (string
-              (string_content))))))
+        (string
+          (string_content))))
     (body
       (comparison
         (identifier)

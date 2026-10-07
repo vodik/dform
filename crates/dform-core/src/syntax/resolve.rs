@@ -3036,7 +3036,7 @@ impl<'u> Lowerer<'u> {
         )
         .with_help(
             "`use data.releases` reads data/releases.df, its relations `releases.p(..)`; rows \
-             from outside are a table, `input p from csv(\"data/p.csv\")`",
+             from outside are a table, `input p from csv.decode(io.read(\"data/p.csv\"))`",
         );
         self.diags.push(d);
         Err(Skip)

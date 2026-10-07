@@ -11,7 +11,7 @@ examples/demo/stacks/dform.df
 #| names the deployment, and without one the default is the deployment.
 #| owner: platform
 key env: environment = "staging"
-input cidrs { main: string = "10.50.0.0/16", peer: string = "10.60.0.0/16" }
+input cidrs { main: inet = "10.50.0.0/16", peer: inet = "10.60.0.0/16" }
 data("zone", "us-test-1a")
 data("zone", "us-test-1b")
 
@@ -26,7 +26,7 @@ iam_need("app", n.action, n.resource) where n = kubernetes.iam_need
 # `database.multi_az`), at the normal rank, over the inputs' defaults;
 # the modules used below take theirs from this block but in prod. A CIDR
 # is text in the document, made an inet where it is used.
-set from yaml("config/dform/${env}.yaml")
+set from yaml.decode(io.read("config/dform/${env}.yaml"))
 set {
   database.backup_days = 3
   database.multi_az = false
@@ -52,10 +52,10 @@ use stdlib_net
 # Copies of a component (Terraform module-like): network.df's `vpc`, once
 # per network. Inputs are declared by the component; each `k = v` here is
 # a contribution to one.
-resource network.vpc main { vpc_net = inet(cidrs.main) }
+resource network.vpc main { vpc_net = cidrs.main }
 
 # Dev is small: one network, no database, no cluster.
-resource network.vpc peer { vpc_net = inet(cidrs.peer) } where env != "dev"
+resource network.vpc peer { vpc_net = cidrs.peer } where env != "dev"
 
 # A module is imported once, its inputs bound by its block, rows included
 # (database.df's resources are `database/db`): main's private subnets.
@@ -94,7 +94,7 @@ resource net.vpc_peering "peer-${ia}-${ib}" {
 } where vpc_peer_pair(ia, ib, a, b), a in net.vpc, b in net.vpc
 
 #| Demo: allocate an IP from the main VPC.
-resource compute.vm bastion { private_ip = inet.host(inet(cidrs.main), 20) }
+resource compute.vm bastion { private_ip = inet.host(cidrs.main, 20) }
 
 # Policy, over every resource of a type (a copy's resources included).
 deny "prod db must be multi_az" where env == "prod", pg in db.postgres, not pg.multi_az
@@ -224,13 +224,20 @@ deny "dev has no peer network" where env == "dev", "peer.vpc" in net.vpc
   (comment)
   (set
     (call
-      (identifier)
+      (member_expression
+        (identifier)
+        (identifier))
       (arguments
-        (string
-          (string_content)
-          (interpolation
+        (call
+          (member_expression
+            (identifier)
             (identifier))
-          (string_content)))))
+          (arguments
+            (string
+              (string_content)
+              (interpolation
+                (identifier))
+              (string_content)))))))
   (set
     (set_block
       (set_entry
@@ -302,12 +309,9 @@ deny "dev has no peer network" where env == "dev", "peer.vpc" in net.vpc
       (field
         (block_path
           (identifier))
-        (call
+        (member_expression
           (identifier)
-          (arguments
-            (member_expression
-              (identifier)
-              (identifier)))))))
+          (identifier)))))
   (comment)
   (resource
     (dotted_name
@@ -318,12 +322,9 @@ deny "dev has no peer network" where env == "dev", "peer.vpc" in net.vpc
       (field
         (block_path
           (identifier))
-        (call
+        (member_expression
           (identifier)
-          (arguments
-            (member_expression
-              (identifier)
-              (identifier))))))
+          (identifier))))
     (clause
       (body
         (comparison
@@ -502,12 +503,9 @@ deny "dev has no peer network" where env == "dev", "peer.vpc" in net.vpc
             (identifier)
             (identifier))
           (arguments
-            (call
+            (member_expression
               (identifier)
-              (arguments
-                (member_expression
-                  (identifier)
-                  (identifier))))
+              (identifier))
             (integer))))))
   (comment)
   (check

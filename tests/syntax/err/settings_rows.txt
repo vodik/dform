@@ -1,6 +1,6 @@
 tests/syntax/err/settings_rows.df:5:1: expected a statement, found keyword `settings`
-  help: `settings` is gone (R-38): an input is given by `set`, `set db.size = 2 where env == "prod"`, several under one clause by `set { .. } where ..`, a document's leaves by `set from yaml(..)`
+  help: `settings` is gone (R-38): an input is given by `set`, `set db.size = 2 where env == "prod"`, several under one clause by `set { .. } where ..`, a document's leaves by `set from yaml.decode(io.read(..))`
 tests/syntax/err/settings_rows.df:6:1: expected a statement, found keyword `settings`
-  help: `settings` is gone (R-38): an input is given by `set`, `set db.size = 2 where env == "prod"`, several under one clause by `set { .. } where ..`, a document's leaves by `set from yaml(..)`
+  help: `settings` is gone (R-38): an input is given by `set`, `set db.size = 2 where env == "prod"`, several under one clause by `set { .. } where ..`, a document's leaves by `set from yaml.decode(io.read(..))`
 tests/syntax/err/settings_rows.df:7:1: expected a statement, found keyword `settings`
-  help: `settings` is gone (R-38): an input is given by `set`, `set db.size = 2 where env == "prod"`, several under one clause by `set { .. } where ..`, a document's leaves by `set from yaml(..)`
+  help: `settings` is gone (R-38): an input is given by `set`, `set db.size = 2 where env == "prod"`, several under one clause by `set { .. } where ..`, a document's leaves by `set from yaml.decode(io.read(..))`

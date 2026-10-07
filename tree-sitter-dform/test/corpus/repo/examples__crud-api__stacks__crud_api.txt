@@ -18,7 +18,7 @@ examples/crud-api/stacks/crud_api.df
 # schema and this project's providers/google), and
 # applies to a cluster with k8s = "providers/k8s" there. In
 # production the release comes from git, as a table:
-#   input release from csv(git("ops.git", "main", "releases.csv"))
+#   input release from csv.decode(io.read("git+https://github.com/acme/ops/releases.csv?ref=main"))
 # The live objects are read through the kubernetes provider's inventory
 # (`world.T[e].p`), named by remote id (`shop/crud-api`).
 
@@ -60,7 +60,7 @@ let released_image = "gcr.io/shop/crud-api@${digest}"
 let active = world.k8s.service["shop/crud-api"].spec.selector.color
 let live = world.k8s.deployment["shop/crud-api-${active}"]
 let live_image = live.spec.template.spec.containers[0].image
-let live_schema = int(live.metadata.labels.schema)
+let live_schema: int = live.metadata.labels.schema
 
 other("blue", "green")
 other("green", "blue")
@@ -316,7 +316,7 @@ deny "container requests more memory than its limit" { workload: w, container: c
 
 deny "image not pinned by digest" { workload: w, image: c.image } where {
   container(w, c)
-  not has oci.parse(c.image).digest
+  not oci.pinned(c.image)
 }
 
 # A secret's value belongs in a Secret (envFrom, valueFrom); a plain
@@ -610,16 +610,16 @@ auto_reconcile(t, a, p) where drift(t, a, p, _, _), owned_label(l), p == "metada
       (identifier)))
   (let
     (identifier)
-    (call
-      (identifier)
-      (arguments
+    (type
+      (dotted_name
+        (identifier)))
+    (member_expression
+      (member_expression
         (member_expression
-          (member_expression
-            (member_expression
-              (identifier)
-              (identifier))
-            (identifier))
-          (identifier)))))
+          (identifier)
+          (identifier))
+        (identifier))
+      (identifier)))
   (fact
     (call
       (identifier)
@@ -1903,17 +1903,15 @@ auto_reconcile(t, a, p) where drift(t, a, p, _, _), owned_label(l), p == "metada
             (identifier)
             (identifier))))
       (not_literal
-        (has_literal
-          (member_expression
-            (call
+        (atom_literal
+          (call
+            (member_expression
+              (identifier)
+              (identifier))
+            (arguments
               (member_expression
                 (identifier)
-                (identifier))
-              (arguments
-                (member_expression
-                  (identifier)
-                  (identifier))))
-            (identifier))))))
+                (identifier))))))))
   (comment)
   (comment)
   (comment)

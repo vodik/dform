@@ -525,7 +525,7 @@ pub fn reference_md(r: &Reference) -> String {
     )
 }
 
-/// The builtin a call's name is (`inet.subnet(..)`, `int(..)`), its
+/// The builtin a call's name is (`inet.subnet(..)`, `int.round(..)`), its
 /// whole dotted name.
 fn builtin(t: &SyntaxToken) -> Option<&'static Reference> {
     let chain = t.parent().filter(|c| c.kind() == SyntaxKind::CHAIN)?;

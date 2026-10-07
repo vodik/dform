@@ -29,7 +29,7 @@ set {
   gcp.project_name = "renfry-dev"
   gcp.region = "us-east1"
   gcp.network_name = "renfry-dev-network"
-  gke = { control_plane_cidr: inet("172.16.3.96/28"), subnet_cidr: inet("10.141.76.0/22") }
+  gke = { control_plane_cidr: "172.16.3.96/28", subnet_cidr: "10.141.76.0/22" }
 } where env == "dev"
 
 project(
@@ -242,18 +242,12 @@ deny "cluster must not be deletable" { cluster: c } where {
         (object
           (object_field
             (identifier)
-            (call
-              (identifier)
-              (arguments
-                (string
-                  (string_content)))))
+            (string
+              (string_content)))
           (object_field
             (identifier)
-            (call
-              (identifier)
-              (arguments
-                (string
-                  (string_content))))))))
+            (string
+              (string_content))))))
     (body
       (comparison
         (identifier)

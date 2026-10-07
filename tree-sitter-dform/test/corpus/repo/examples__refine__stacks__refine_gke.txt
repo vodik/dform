@@ -25,8 +25,8 @@ input zones: int = 3 check zones >= 1
 # The project and the cluster's networks, dev's below.
 input gcp { project_id: string, project_name: string, region: string, network_name: string }
 input gke {
-  control_plane_cidr: inet check inet.prefix_len(control_plane_cidr) == 28
-  subnet_cidr: inet check inet.prefix_len(subnet_cidr) == 22
+  control_plane_cidr: inet check control_plane_cidr.bits == 28
+  subnet_cidr: inet check subnet_cidr.bits == 22
 }
 
 use gke
@@ -40,7 +40,7 @@ set {
   gcp.project_name = "renfry-dev"
   gcp.region = "us-east1"
   gcp.network_name = "renfry-dev-network"
-  gke = { control_plane_cidr: inet("172.16.3.96/28"), subnet_cidr: inet("10.141.76.0/22") }
+  gke = { control_plane_cidr: "172.16.3.96/28", subnet_cidr: "10.141.76.0/22" }
 } where env == "dev"
 
 project(
@@ -126,7 +126,7 @@ deny "cluster must not be deletable" { cluster: c } where {
 }
 
 # A refinement the cluster meets only in three zones.
-type google.container_cluster { zones: list(string) check len(zones) >= 3 }
+type google.container_cluster { zones: list(string) check zones.len >= 3 }
 
 ---
 
@@ -212,12 +212,9 @@ type google.container_cluster { zones: list(string) check len(zones) >= 3 }
         (refinement
           (body
             (comparison
-              (call
-                (member_expression
-                  (identifier)
-                  (identifier))
-                (arguments
-                  (identifier)))
+              (member_expression
+                (identifier)
+                (identifier))
               (integer)))))
       (attribute_declaration
         (block_path
@@ -228,12 +225,9 @@ type google.container_cluster { zones: list(string) check len(zones) >= 3 }
         (refinement
           (body
             (comparison
-              (call
-                (member_expression
-                  (identifier)
-                  (identifier))
-                (arguments
-                  (identifier)))
+              (member_expression
+                (identifier)
+                (identifier))
               (integer)))))))
   (use
     (dotted_name
@@ -290,18 +284,12 @@ type google.container_cluster { zones: list(string) check len(zones) >= 3 }
         (object
           (object_field
             (identifier)
-            (call
-              (identifier)
-              (arguments
-                (string
-                  (string_content)))))
+            (string
+              (string_content)))
           (object_field
             (identifier)
-            (call
-              (identifier)
-              (arguments
-                (string
-                  (string_content))))))))
+            (string
+              (string_content))))))
     (body
       (comparison
         (identifier)
@@ -711,8 +699,7 @@ type google.container_cluster { zones: list(string) check len(zones) >= 3 }
         (refinement
           (body
             (comparison
-              (call
+              (member_expression
                 (identifier)
-                (arguments
-                  (identifier)))
+                (identifier))
               (integer))))))))

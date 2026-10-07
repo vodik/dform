@@ -1521,7 +1521,7 @@ deny for a leaf at any other path ("Giving inputs").
 
 A resource's header name is a string or a name. A string
 with holes (`"private-${z}"`) is the variable `Addr`, bound last in the
-body by `format`. A bare name is always the literal name (R-76):
+body by `str.format`. A bare name is always the literal name (R-76):
 `resource k8s.secret config` is the secret named "config", whatever
 `config` names in scope (a `let`, an input, a used module); reading it
 bare where `config` also names that is the error "Names" shows. A name

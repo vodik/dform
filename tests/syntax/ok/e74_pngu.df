@@ -140,7 +140,11 @@ resource google.compute_address "${s}" {
   name = ip_name
   address_type = type_
   subnetwork_id = ref(google.compute_subnetwork, "gke_subnet", "id")
-} where project(id, _, region, _), static_ip(ip_name, type_), s = str.format("static-ip-%s", ip_name)
+} where {
+  project(id, _, region, _)
+  static_ip(ip_name, type_)
+  s = str.format("static-ip-%s", ip_name)
+}
 
 ########################################
 # GKE: phase 1

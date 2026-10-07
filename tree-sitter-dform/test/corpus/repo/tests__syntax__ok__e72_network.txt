@@ -2,7 +2,7 @@
 tests/syntax/ok/e72_network.df
 ==============================
 
-input vpc_net: inet check inet.prefix_len(vpc_net) <= 20
+input vpc_net: inet check vpc_net.bits <= 20
 input zones: list(string) = ["us-test-1a", "us-test-1b"] # @default contribution
 output vpc: addr
 output private_subnet_ids: list(ref(net.subnet))
@@ -27,7 +27,7 @@ resource net.subnet "${sn}" {
   cidr = inet.subnet(net_, 4, i)
   zone = z
   visibility = "private"
-} where zone_index(z, i), attr(net.vpc, "vpc", "cidr", net_), sn = format("private_%s", z)
+} where zone_index(z, i), attr(net.vpc, "vpc", "cidr", net_), sn = str.format("private_%s", z)
 
 subnet_of(sn, "vpc") where want(net.subnet, sn)
 
@@ -42,12 +42,9 @@ subnet_of(sn, "vpc") where want(net.subnet, sn)
     (refinement
       (body
         (comparison
-          (call
-            (member_expression
-              (identifier)
-              (identifier))
-            (arguments
-              (identifier)))
+          (member_expression
+            (identifier)
+            (identifier))
           (integer)))))
   (input
     (identifier)
@@ -231,7 +228,9 @@ subnet_of(sn, "vpc") where want(net.subnet, sn)
         (comparison
           (identifier)
           (call
-            (identifier)
+            (member_expression
+              (identifier)
+              (identifier))
             (arguments
               (string
                 (string_content))

@@ -42,8 +42,8 @@ Declarations
 input env: enum("dev", "prod") = "dev"
 input replicas: int = 2 check replicas >= 1
 input seen from facts("seen.facts")
-input peers from csv("peers.csv") where env == "prod"
-input pinned from yaml(git("ops.git", "main", "pinned.yaml"))
+input peers from csv.decode(io.read("peers.csv")) where env == "prod"
+input pinned from yaml.decode(io.read(git("ops.git", "main", "pinned.yaml")))
 input zone
 input nodes {
   flavor: string = "b3-8"
@@ -99,10 +99,17 @@ let region: enum("a", "b") = "a"
   (input_relation
     (identifier)
     (call
-      (identifier)
+      (member_expression
+        (identifier)
+        (identifier))
       (arguments
-        (string
-          (string_content))))
+        (call
+          (member_expression
+            (identifier)
+            (identifier))
+          (arguments
+            (string
+              (string_content))))))
     (body
       (comparison
         (identifier)
@@ -111,17 +118,24 @@ let region: enum("a", "b") = "a"
   (input_relation
     (identifier)
     (call
-      (identifier)
+      (member_expression
+        (identifier)
+        (identifier))
       (arguments
         (call
-          (identifier)
+          (member_expression
+            (identifier)
+            (identifier))
           (arguments
-            (string
-              (string_content))
-            (string
-              (string_content))
-            (string
-              (string_content)))))))
+            (call
+              (identifier)
+              (arguments
+                (string
+                  (string_content))
+                (string
+                  (string_content))
+                (string
+                  (string_content)))))))))
   (input_relation
     (identifier))
   (input
@@ -690,7 +704,7 @@ A chain after a call reads its result (R-71)
 ================================================================================
 
 p(x) where q(y), x = str.split(y, ":")[0], not has oci.parse(y).digest, json.decode(y).a["b"].c
-input p from toml("x").peerings
+input p from toml.decode(io.read("x")).peerings
 
 --------------------------------------------------------------------------------
 
@@ -745,10 +759,17 @@ input p from toml("x").peerings
   (input_relation
     (identifier)
     (call
-      (identifier)
+      (member_expression
+        (identifier)
+        (identifier))
       (arguments
-        (string
-          (string_content))))
+        (call
+          (member_expression
+            (identifier)
+            (identifier))
+          (arguments
+            (string
+              (string_content))))))
     (selector
       (identifier))))
 
@@ -1040,7 +1061,7 @@ resource network blue {
   cidr = "10.0.0.0/16"
   zone("a", 0)
   zone(z, n) where az(z, n)
-  zone from csv("zones.csv") where env == "prod"
+  zone from csv.decode(io.read("zones.csv")) where env == "prod"
 }
 use zones { zone("b", 1) }
 
@@ -1080,10 +1101,17 @@ use zones { zone("b", 1) }
       (input_relation
         (identifier)
         (call
-          (identifier)
+          (member_expression
+            (identifier)
+            (identifier))
           (arguments
-            (string
-              (string_content))))
+            (call
+              (member_expression
+                (identifier)
+                (identifier))
+              (arguments
+                (string
+                  (string_content))))))
         (body
           (comparison
             (identifier)
