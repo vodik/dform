@@ -3831,7 +3831,7 @@ fn order(a: &Value, b: &Value) -> std::result::Result<Ordering, String> {
                 if x.dim() == y.dim() {
                     format!(
                         "{x} and {y} do not compare: a month's length depends on the date \
-                     (add both to a time with `time.add`)"
+                     (add both to a time, `t + d`)"
                     )
                 } else {
                     format!(

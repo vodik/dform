@@ -527,8 +527,10 @@ string in a `time` position (`let t: time = ".."`), RFC 3339 with an offset
 (`"2026-10-02T09:00:00Z"`, `Z` is UTC) or a date and time with a zone
 (`"2026-10-02T09:00[Europe/Paris]"`). It carries its zone, prints as
 `2026-10-02T09:00:00+02:00[Europe/Paris]`, and orders by its instant
-whatever the zones (`<`, `time.before`, `min`); `==` is the same instant
-in the same zone, as a value is equal only to itself. `t + d`, `t - d` and `time.add(t, d)` are
+whatever the zones (`<`, `min`); `==` is the same instant in the same
+zone, as a value is equal only to itself. `b - a` is the exact duration
+from `a` to `b`, in hours and smaller units (R-134: a type with operators
+has no functions for them). `t + d` and `t - d` are
 calendar-aware in the time's zone: a month is a calendar month (the 31st
 plus a month is the next month's last day), a day a calendar day across
 a DST change (23 or 25 hours). Zones are the tzdb built into dform
@@ -1305,7 +1307,7 @@ let created = memo.first("db-created", time.now())        # observed once
 # The rotation idiom: a creation time kept, compared with the clock.
 warn "rotate the database password" where {
   memo.first("db-created", time.now(), created)
-  time.before(time.add(created, 30d), time.now())
+  created + 30d < time.now()
 }
 ```
 
@@ -1864,13 +1866,13 @@ are written bare.
 | `ip`      | `ip.unspecified(a)`                                                       |
 | `str`     | `str.split(s, sep[, limit])`, `str.lower(s)`, `str.upper(s)`, `str.dedent(s)`, `str.trim(s)`, `str.replace(s, from, to)`, `str.starts_with(s, p)`, `str.ends_with(s, p)`, `str.contains(s, n)`, `str.format(fmt, args)`, `str.pad_left(s, w, pad)`, `str.pad_right(s, w, pad)`, `str.len(s)`, `str.slice(s, start[, end])` |
 | `list`    | `list.len(l)` (`len` in the prelude), `list.join(l, sep)`, `list.sort(l)`, `list.sort_by(l, field)`, `list.unique(l)`, `list.flatten(l)`, `list.zip(a, b)`, `list.min(l)`, `list.max(l)`, `list.sum(l)`, `list.contains(l, v)`, `list.first(l)`, `list.last(l)` |
-| `time`    | `time.format(t, layout)`, `time.in_zone(t, zone)`, `time.add(t, d)`, `time.until(a, b)`, `time.before(a, b)` |
+| `time`    | `time.format(t, layout)`, `time.in_zone(t, zone)`; operators `t + d`, `t - d`, `b - a`, `a < b` |
 | `duration`| `duration.total(d, unit)`                                                 |
 | `bytes`   | `bytes.to(q, unit)` (`"Mi"`: a whole number of them, else no value)      |
 | `cpu`     | `cpu.to(q, unit)` (`"m"` or `""` for cores)                               |
 | `random`  | `random.password(key[, length[, alphabet]])`, `random.bytes(key, length)`, `random.signing_key(key)` (secrets); `random.id(key[, length])`, `random.uuid(key)` |
 | `regex`   | `regex.match(s, re)`, `regex.capture(s, re, n)`, `regex.replace(s, re, with)` (`re` a `regex`-typed pattern, checked at compile time, R-31) |
-| `semver`  | `semver.satisfies(v, range)`, `semver.compare(a, b)`; fields `v.major`, `v.minor`, `v.patch`, `v.pre` |
+| `semver`  | `semver.satisfies(v, range)`; `a < b`; fields `v.major`, `v.minor`, `v.patch`, `v.pre` |
 | `oci`     | `oci.pinned(r)`, `oci.with_tag(r, t)`, `oci.with_digest(r, d)`, `oci.with_registry(r, host)` (`r` an `oci`, the OCI distribution reference `[registry/]repository[:tag][@digest]`, a string read as one; its parts are fields, `r.digest`; "Types") |
 | `hash`    | `hash.sha256(s)`, `hash.short(s, n)`                                      |
 | `base64`  | `base64.encode(s)`, `base64.decode(s)`                                    |

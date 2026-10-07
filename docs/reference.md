@@ -2464,7 +2464,7 @@ use time
 let created = memo.first("db-created", time.now())   # observed once
 warn "rotate the database password" where {
   memo.first("db-created", time.now(), created)
-  time.before(time.add(created, 30d), time.now())
+  created + 30d < time.now()
 }
 ```
 
@@ -2687,9 +2687,10 @@ GiB), so `storage = 20Gi` is one spelling for every provider. A `time`
 is a zoned instant, `"2026-10-02T09:00[Europe/Paris]"` or RFC 3339
 with an offset where a time is wanted (there are no constructors: a
 string is read as the type its position gives it, `let t: time = ".."`), compared by its instant; adding a duration is
-calendar-aware in its zone (`time.add(t, 1mo)`, `t + 1d` across a DST
-change is a calendar day). The rotation idiom: `deny "rotate the key" {
-key: k } where k in tls.key, time.before(time.add(k.issued, 90d), now)`,
+calendar-aware in its zone (`t + 1mo`, `t + 1d` across a DST change is
+a calendar day), `b - a` is the duration between two, and `a < b`
+compares them. The rotation idiom: `deny "rotate the key" { key: k }
+where k in tls.key, k.issued + 90d < now`,
 `now` an extern's answer, never a function's. `type NAME = TYPE` names a type anywhere a type is written;
 another module's alias is read through its name, `network.subnets`
 (docs/grammar.md "Type aliases"). A `--set` value is read as its input's type (an `inet` parses,
@@ -3292,7 +3293,7 @@ share: the time spent in the mock's calls.
 This is an MVP:
 
 - semi-naive evaluator with hash indexes (see Performance)
-- functions declared in `std/*.df` (docs/grammar.md "Functions"): the prelude's `int`, `float`, `format`, `len`, `ref`, `scoped`, `cloud_ref`, `declassify`; `inet.subnet`, `inet.host`, `inet.addr`, `inet.contains`, `inet.overlaps`, `ip.unspecified`, `str.split`, `str.lower`, `str.upper`, `str.dedent`, `str.trim`, `str.replace`, `str.starts_with`, `str.ends_with`, `str.contains`, `str.format`, `str.pad_left`, `str.pad_right`, `str.len`, `str.slice`, `list.len`, `list.join`, `list.sort`, `list.sort_by`, `list.unique`, `list.flatten`, `list.zip`, `list.min`, `list.max`, `list.sum`, `list.contains`, `list.first`, `list.last`, `time.format`, `time.in_zone`, `time.add`, `time.until`, `time.before`, `duration.total`, `bytes.to`, `cpu.to`, `regex.match`, `regex.capture`, `regex.replace`, `semver.satisfies`, `semver.compare`, `oci.pinned`, `oci.with_tag`, `oci.with_digest`, `oci.with_registry`, `hash.sha256`, `hash.short`, `base64.encode`, `base64.decode`, `url.join`, `url.with_scheme`, `url.with_host`, `url.with_port`, `url.with_path`, `url.with_query`, `url.encode`, `path.join`, `path.dir`, `path.base`, `path.ext`, `path.rel`, `path.clean`, `json.decode`, `json.encode`, `yaml.decode`, `yaml.encode`, `toml.decode`, `toml.encode`; arithmetic `+ - * / %`; aggregates `collect_*`, `count`, `sum`, `min`, `max`, `any`, `all`, bound in a body (`n = count(x)`)
+- functions declared in `std/*.df` (docs/grammar.md "Functions"): the prelude's `int`, `float`, `format`, `len`, `ref`, `scoped`, `cloud_ref`, `declassify`; `inet.subnet`, `inet.host`, `inet.addr`, `inet.contains`, `inet.overlaps`, `ip.unspecified`, `str.split`, `str.lower`, `str.upper`, `str.dedent`, `str.trim`, `str.replace`, `str.starts_with`, `str.ends_with`, `str.contains`, `str.format`, `str.pad_left`, `str.pad_right`, `str.len`, `str.slice`, `list.len`, `list.join`, `list.sort`, `list.sort_by`, `list.unique`, `list.flatten`, `list.zip`, `list.min`, `list.max`, `list.sum`, `list.contains`, `list.first`, `list.last`, `time.format`, `time.in_zone`, `duration.total`, `bytes.to`, `cpu.to`, `regex.match`, `regex.capture`, `regex.replace`, `semver.satisfies`, `oci.pinned`, `oci.with_tag`, `oci.with_digest`, `oci.with_registry`, `hash.sha256`, `hash.short`, `base64.encode`, `base64.decode`, `url.join`, `url.with_scheme`, `url.with_host`, `url.with_port`, `url.with_path`, `url.with_query`, `url.encode`, `path.join`, `path.dir`, `path.base`, `path.ext`, `path.rel`, `path.clean`, `json.decode`, `json.encode`, `yaml.decode`, `yaml.encode`, `toml.decode`, `toml.encode`; arithmetic `+ - * / %`; aggregates `collect_*`, `count`, `sum`, `min`, `max`, `any`, `all`, bound in a body (`n = count(x)`)
 - list helper predicate: `member(List, Item)` and `member(List, Index, Item)` (Index starts at 0)
 - safe(ish) negation: `not` requires the atom be ground at evaluation time
 

@@ -28,12 +28,14 @@ fn a_day_across_dst_and_a_month_at_the_31st() {
         "p.df",
         &program(
             "let eve: time = \"2026-10-24T12:00[Europe/Paris]\"\n\
-             next(t) where t = time.add(eve, 1d)\n\
-             gap(d) where d = time.until(eve, time.add(eve, 1d))\n\
+             let start: time = \"2026-01-31T00:00[UTC]\"\n\
+             let leap_start: time = \"2028-01-31T00:00[UTC]\"\n\
+             next(t) where t = eve + 1d\n\
+             gap(d) where d = (eve + 1d) - eve\n\
              op(t) where t = eve + 1d\n\
              back(t) where t = eve - 1mo\n\
-             feb(t) where t = time.add(\"2026-01-31T00:00[UTC]\", 1mo)\n\
-             leap(t) where t = time.add(\"2028-01-31T00:00[UTC]\", 1mo)\n",
+             feb(t) where t = start + 1mo\n\
+             leap(t) where t = leap_start + 1mo\n",
         ),
     );
     assert_eq!(
@@ -62,7 +64,7 @@ fn times_in_two_zones_compare_by_instant() {
              let utc: time = \"2026-10-02T08:30:00Z\"\n\
              let seven: time = \"2026-10-02T07:00:00Z\"\n\
              let india: time = \"2026-10-02T09:00:00+05:30\"\n\
-             first() where time.before(paris, utc)\n\
+             first() where paris < utc\n\
              later() where utc > paris\n\
              same() where time.in_zone(paris, \"UTC\") == seven\n\
              ny(t) where t = time.in_zone(paris, \"America/New_York\")\n\

@@ -9,7 +9,3 @@ package semver
 #| Whether the version satisfies the range (Cargo's syntax, `"^1.2"`, `">=1, <2"`); no value when the range is not valid.
 #| example: deny "chart too old" where not semver.satisfies(chart.version, "^2.0")
 fn satisfies(version: semver, range: string) -> bool?
-
-#| -1, 0 or 1 as `a` is before, the same as, or after `b`.
-#| example: deny "downgrade" where semver.compare(next.version, current.version) < 0
-fn compare(a: semver, b: semver) -> int

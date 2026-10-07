@@ -179,17 +179,21 @@ fn a_bad_regex_literal_is_a_compile_error() {
 }
 
 /// A `semver` is a type (R-134): its parts are fields, a string where
-/// one is wanted is read as one; `semver.satisfies`, `semver.compare`.
+/// one is wanted is read as one, versions compare with `<`;
+/// `semver.satisfies`.
 #[test]
 fn semver_functions_evaluate() {
     let src = r#"let v: semver = "1.2.3-rc.1"
 p(maj, pre) where maj = v.major, pre = v.pre
 s(ok) where ok = semver.satisfies("1.5.0", "^1.0")
-c(n) where n = semver.compare("2.0.0", "1.9.9")
+let next: semver = "2.0.0"
+c() where next > "1.9.9"
+pre() where v < "1.2.3"
 "#;
     assert_eq!(facts(src, "p"), [r#"p(1, "rc.1")"#]);
     assert_eq!(facts(src, "s"), ["s(true)"]);
-    assert_eq!(facts(src, "c"), ["c(1)"]);
+    assert_eq!(facts(src, "c"), ["c()"]);
+    assert_eq!(facts(src, "pre"), ["pre()"]);
 }
 
 /// `oci.pinned`, `oci.with_digest` (the OCI distribution
@@ -437,7 +441,7 @@ fn decode_reads_as_a_document_does() {
     let src = r#"whole(n, i) where n = json.decode("{\"a\": 2.0}").a, i = json.decode("2")
 frac(n) where n = yaml.decode("a: 1.5\n").a
 absent(k) where v = json.decode("{\"a\": 1, \"b\": null}"), k = len(v)
-when(t) where t = toml.decode("a = 2026-10-02T09:00:00Z\n").a, time.before(t, "2027-01-01T00:00:00Z")
+when(t) where t = toml.decode("a = 2026-10-02T09:00:00Z\n").a, t < "2027-01-01T00:00:00Z"
 "#;
     assert_eq!(facts(src, "whole"), ["whole(2.0, 2)"]);
     assert_eq!(facts(src, "frac"), ["frac(1.5)"]);
@@ -498,4 +502,28 @@ p(b, t, m) where b = net.bits, t = image.tag, m = v.minor
         err.contains("let net is an inet: \"x\" is not a network"),
         "{err}"
     );
+}
+
+/// A type with operators has no functions for them (R-134): `t + d`,
+/// `b - a`, `a < b` for times, `<` for versions; the functions they
+/// replace are errors naming the operator. A string beside a time is
+/// read as one.
+#[test]
+fn a_times_functions_are_its_operators() {
+    for (call, help) in [
+        ("time.add(t, 1d)", "`t + d`"),
+        ("time.until(a, b)", "`b - a`"),
+        ("time.before(a, b)", "`a < b`"),
+        ("semver.compare(a, b)", "`a < b`"),
+    ] {
+        let e = error(&format!("p(x) where x = {call}\n"));
+        assert!(e.contains(help), "{call}: {e}");
+    }
+    let src = r#"let a: time = "2026-10-02T09:00:00Z"
+let b: time = "2026-10-03T10:30:00Z"
+gap(d) where d = b - a
+text_gap(d) where d = "2026-10-03T10:30:00Z" - a
+"#;
+    assert_eq!(facts(src, "gap"), ["gap(25h30m)"]);
+    assert_eq!(facts(src, "text_gap"), ["text_gap(25h30m)"]);
 }

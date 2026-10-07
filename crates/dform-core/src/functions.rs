@@ -251,6 +251,11 @@ fn gone(name: &str) -> Option<String> {
             &["major", "minor", "patch", "pre"],
         ),
         "inet.prefix_len" => "a network's prefix length is its field `n.bits`".to_string(),
+        // Operators where a type has them (R-134).
+        "time.add" => "a time moves by a duration with `t + d` (and `t - d`)".to_string(),
+        "time.until" => "the duration from `a` to `b` is `b - a`".to_string(),
+        "time.before" => "a time before another is `a < b`".to_string(),
+        "semver.compare" => "versions compare with `<`, `==` and `>`: `a < b`".to_string(),
         "string" | "str" => {
             "a value's text is an interpolation, `\"${x}\"`; there are no constructors".to_string()
         }
@@ -661,23 +666,6 @@ pub const BODIES: &[(&str, Body)] = &[
     }),
     ("time.in_zone", |a| match a {
         [Value::Time(t), Value::Str(zone)] => t.in_zone(zone).map(Value::Time),
-        _ => None,
-    }),
-    ("time.add", |a| match a {
-        [
-            Value::Time(t),
-            Value::Quantity(crate::quantity::Quantity::Duration(d)),
-        ] => t.add(*d).map(Value::Time),
-        _ => None,
-    }),
-    ("time.until", |a| match a {
-        [Value::Time(x), Value::Time(y)] => x
-            .until(y)
-            .map(|d| Value::Quantity(crate::quantity::Quantity::Duration(d))),
-        _ => None,
-    }),
-    ("time.before", |a| match a {
-        [Value::Time(x), Value::Time(y)] => Some(Value::Bool(x.instant() < y.instant())),
         _ => None,
     }),
     ("duration.total", unit_of),
@@ -1107,14 +1095,6 @@ pub const BODIES: &[(&str, Body)] = &[
         }
         _ => None,
     }),
-    ("semver.compare", |a| match a {
-        [Value::Semver(x), Value::Semver(y)] => Some(Value::Int(match x.cmp(y) {
-            std::cmp::Ordering::Less => -1,
-            std::cmp::Ordering::Equal => 0,
-            std::cmp::Ordering::Greater => 1,
-        })),
-        _ => None,
-    }),
     // A predicate as well: a string that is no reference is not pinned.
     ("oci.pinned", |a| match a {
         [r] => Some(Value::Bool(as_oci(r).is_some_and(|r| r.digest.is_some()))),
@@ -1398,10 +1378,28 @@ fn unit_of(a: &[Value]) -> Option<Value> {
     }
 }
 
-/// `a + b` (`a - b`) of quantities of one dimension, or of a time and a
-/// duration (R-66, R-62); none across dimensions.
+/// `a + b` (`a - b`) of quantities of one dimension, of a time and a
+/// duration (R-66, R-62), and `b - a` of two times; none across
+/// dimensions.
 fn measured(a: &[Value], sub: bool) -> Option<Value> {
     use crate::quantity::{Quantity, add};
+    // A string beside a time or a duration is read as a time, as the
+    // other side of an operator gives a literal its type (R-134:
+    // `cert.not_after - now` over a string attribute).
+    let time = |v: &Value| match v {
+        Value::Str(_) => crate::value::read_typed("time", v).ok(),
+        v => Some(v.clone()),
+    };
+    match a {
+        [
+            x @ Value::Str(_),
+            y @ (Value::Time(_) | Value::Quantity(Quantity::Duration(_))),
+        ]
+        | [x @ Value::Time(_), y @ Value::Str(_)] => {
+            return measured(&[time(x)?, time(y)?], sub);
+        }
+        _ => {}
+    }
     match a {
         [Value::Quantity(x), Value::Quantity(y)] => add(x, y, sub).map(Value::Quantity),
         [Value::Time(t), Value::Quantity(Quantity::Duration(d))] => {
@@ -1409,6 +1407,10 @@ fn measured(a: &[Value], sub: bool) -> Option<Value> {
         }
         [Value::Quantity(Quantity::Duration(d)), Value::Time(t)] if !sub => {
             t.add(*d).map(Value::Time)
+        }
+        // `b - a`: the exact duration from `a` to `b` (R-134).
+        [Value::Time(b), Value::Time(a)] if sub => {
+            a.until(b).map(|d| Value::Quantity(Quantity::Duration(d)))
         }
         _ => None,
     }

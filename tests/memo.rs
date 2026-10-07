@@ -229,7 +229,7 @@ resource db.user app {
 }
 warn "rotate the password" where {
   memo.first("db-created", time.now(), created)
-  time.before(time.add(created, 30d), time.now())
+  created + 30d < time.now()
 }
 "#,
     );

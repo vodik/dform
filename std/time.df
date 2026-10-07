@@ -6,7 +6,11 @@
 # written as a string where one is wanted (a parameter, an attribute,
 # `let t: time = ".."`), RFC 3339 with an offset (`Z` is UTC) or a date
 # and time with a zone, `2026-10-02T09:00[Europe/Paris]`, read there, a
-# literal at compile time.
+# literal at compile time. A time has operators, not functions: `t + d`
+# and `t - d` move it by a duration in its zone (a month a calendar month,
+# the 31st plus a month the next month's last day; a day a calendar day
+# across a DST change), `b - a` is the exact duration from `a` to `b`, and
+# `a < b` compares instants whatever their zones.
 package time
 
 #| The time in a strftime layout, in its own zone; no value for a layout that does not format.
@@ -16,15 +20,3 @@ fn format(t: time, layout: string) -> string?
 #| The same instant read in another zone (an IANA name, `UTC`, or an offset `+02:00`); no value for a zone the tzdb does not have.
 #| example: let local = time.in_zone(t, "America/New_York")
 fn in_zone(t: time, zone: string) -> time?
-
-#| The time a duration later, in the time's zone: a month is a calendar month (the 31st plus a month is the next month's last day), a day a calendar day across a DST change; `t + d` lowers to it.
-#| example: let rotate_at = time.add(issued, 90d)
-fn add(t: time, d: duration) -> time?
-
-#| The exact duration from `a` to `b`, in hours and smaller units (negative when `b` is earlier).
-#| example: let age = time.until(issued, now)
-fn until(a: time, b: time) -> duration?
-
-#| Whether `a` is an earlier instant than `b`, whatever their zones; also a predicate.
-#| example: deny "expired" where time.before(cert.not_after, now)
-fn before(a: time, b: time) -> bool
