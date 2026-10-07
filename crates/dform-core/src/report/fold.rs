@@ -10,6 +10,7 @@
 use crate::fmt::value::Tree;
 use crate::partition::fmt_bare;
 use crate::value::Value;
+use std::collections::HashMap;
 
 /// One step of a printed path: a key, or a list's selector, with the
 /// text it is printed with (`.name`, `[name=traefik]`, `[0]`).
@@ -90,10 +91,51 @@ pub fn reach<'v>(v: &'v Value, toks: &[Tok]) -> Option<&'v Value> {
 /// element equal to the merged list's at that position (contributions'
 /// lists are joined), else by its own position when nothing is merged.
 pub fn reach_along<'v>(v: &'v Value, merged: Option<&Value>, toks: &[Tok]) -> Option<&'v Value> {
-    let Some((t, rest)) = toks.split_first() else {
-        return Some(v);
-    };
-    let (next, m) = match (&t.step, v) {
+    let mut cur = (v, merged);
+    for t in toks {
+        cur = step_along(cur.0, cur.1, t)?;
+    }
+    Some(cur.0)
+}
+
+/// What a prefix of paths into one value reached ([`reach_along_memo`]),
+/// by the prefix's text.
+pub type Reached<'v, 'm> = HashMap<String, Option<(&'v Value, Option<&'m Value>)>>;
+
+/// [`reach_along`] of many paths into one value from one place: what each
+/// prefix reaches is kept in `memo`, so a list's element is matched
+/// against the merged list's once, not once per leaf under it.
+pub fn reach_along_memo<'v, 'm>(
+    memo: &mut Reached<'v, 'm>,
+    v: &'v Value,
+    merged: Option<&'m Value>,
+    toks: &[Tok],
+) -> Option<&'v Value> {
+    let mut cur = (v, merged);
+    let mut key = String::new();
+    for t in toks {
+        key.push('\0');
+        key.push_str(&t.text);
+        let next = match memo.get(&key) {
+            Some(hit) => *hit,
+            None => {
+                let next = step_along(cur.0, cur.1, t);
+                memo.insert(key.clone(), next);
+                next
+            }
+        };
+        cur = next?;
+    }
+    Some(cur.0)
+}
+
+/// One step of [`reach_along`].
+fn step_along<'v, 'm>(
+    v: &'v Value,
+    merged: Option<&'m Value>,
+    t: &Tok,
+) -> Option<(&'v Value, Option<&'m Value>)> {
+    Some(match (&t.step, v) {
         (Step::Key(k), Value::Obj(m)) => {
             let k = crate::ir::segment_key(k);
             let merged = match merged {
@@ -117,8 +159,7 @@ pub fn reach_along<'v>(v: &'v Value, merged: Option<&Value>, toks: &[Tok]) -> Op
             (xs.iter().find(|x| keyed(x, pairs))?, merged)
         }
         _ => return None,
-    };
-    reach_along(next, m, rest)
+    })
 }
 
 /// Whether element `x` has the key fields `pairs` (`name=web`); a field

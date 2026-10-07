@@ -3686,15 +3686,21 @@ fn folded(
     });
     let paths: Vec<String> = lines.iter().map(|l| l.path.clone()).collect();
     let mut writers: Vec<Option<crate::circuit::NodeId>> = vec![None; paths.len()];
-    let mut by_attr: BTreeMap<&Atom, Vec<usize>> = BTreeMap::new();
+    // By the fact's address: an attribute fact compared as a key is its
+    // whole value compared, once per leaf.
+    let mut by_attr: BTreeMap<*const Atom, (&Atom, Vec<usize>)> = BTreeMap::new();
     for (i, l) in lines.iter().enumerate() {
         if l.op == Op::Leaf
             && let Some((a, _, _)) = attr_holding(facts, &l.path)
         {
-            by_attr.entry(a).or_default().push(i);
+            by_attr
+                .entry(a as *const Atom)
+                .or_insert_with(|| (a, Vec::new()))
+                .1
+                .push(i);
         }
     }
-    for (a, at) in by_attr {
+    for (a, at) in by_attr.into_values() {
         let held: Vec<String> = at.iter().map(|&i| paths[i].clone()).collect();
         for (i, w) in at.into_iter().zip(p.writers(a, &held)) {
             writers[i] = w;

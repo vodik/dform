@@ -1373,13 +1373,19 @@ impl Printer<'_> {
             [_, _, Term::Val(Value::Str(p)), Term::Val(v)] => (super::fold::tokens(p).len(), v),
             _ => return none(),
         };
+        // Each contribution followed to the leaves once per prefix: a
+        // list's element is matched against the merged list's once, not
+        // once per leaf under it (a CRD's `versions[0]` holds hundreds).
+        let mut memos: Vec<super::fold::Reached> =
+            vec![std::collections::HashMap::new(); contributions.len()];
         paths
             .iter()
             .map(|p| {
                 let toks = super::fold::tokens(p);
                 contributions
                     .iter()
-                    .filter(|(_, f)| holds(f, &toks, merged, top))
+                    .zip(memos.iter_mut())
+                    .filter_map(|(c, memo)| holds(memo, c.1, &toks, merged, top).then_some(c))
                     .max_by_key(|(id, f)| (rank_of(f).0, std::cmp::Reverse(*id)))
                     .map(|(id, _)| *id)
             })
@@ -1657,7 +1663,13 @@ fn contribution_focus(fact: &Fact, path: &str) -> Option<Focus> {
 
 /// Whether contribution `f` (an `arg/5`) holds the leaf at printed path
 /// `toks`: its path is a prefix, and its value has the rest.
-fn holds(f: &Fact, toks: &[super::fold::Tok], merged: &Value, top: usize) -> bool {
+fn holds<'v>(
+    memo: &mut super::fold::Reached<'v, 'v>,
+    f: &'v Fact,
+    toks: &[super::fold::Tok],
+    merged: &'v Value,
+    top: usize,
+) -> bool {
     use super::fold::Step;
     // The merged value where the contribution's path ends: a list's
     // element is found in a contribution by its value, not its position
@@ -1697,7 +1709,7 @@ fn holds(f: &Fact, toks: &[super::fold::Tok], merged: &Value, top: usize) -> boo
         return matches && super::fold::reach_along(content, elem, &toks[n + 1..]).is_some();
     }
     match prefix(at) {
-        Some(n) => super::fold::reach_along(v, merged_at(n), &toks[n..]).is_some(),
+        Some(n) => super::fold::reach_along_memo(memo, v, merged_at(n), &toks[n..]).is_some(),
         None => false,
     }
 }
