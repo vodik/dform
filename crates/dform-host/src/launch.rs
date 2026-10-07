@@ -9,7 +9,7 @@ use crate::grpc;
 use crate::services::Services;
 use anyhow::Result;
 use dform_core::plugin::Launch;
-use dform_core::plugin::backend::{Call, CallError, Provider, Reply, Ticket};
+use dform_core::plugin::backend::{Call, CallError, Provider, Reply, Stop, Ticket};
 use dform_core::plugin::host::{self, Grants, Hosting, Manifest};
 use dform_core::plugin::link::Link;
 use dform_core::plugin::pb;
@@ -117,6 +117,10 @@ impl Provider for Native {
     fn is_dead(&mut self) -> bool {
         self.conn.is_dead()
     }
+
+    fn stopper(&self) -> Option<Stop> {
+        self.conn.stopper()
+    }
 }
 
 /// The executable `exe`, with the host service at `DFORM_HOST`.
@@ -125,7 +129,7 @@ fn native(exe: &Path, grants: Grants) -> Result<Link> {
     let program = Program::exe(exe);
     let mut conn = Conn::start(&program, &Env::default().set(grpc::ENV, &served.address))?;
     let manifest = conn
-        .manifest()
+        .manifest()?
         .map(|imports| Manifest::of(imports.iter().map(String::as_str), false));
     let display = program.display();
     host::observe(

@@ -543,7 +543,10 @@ plugins"). dform starts it, reads one handshake line from its stdout,
 `dform-provider|1|tcp://127.0.0.1:PORT` (or `dform-provider|1|unix:///PATH`
 for a unix socket), and calls Handshake, Configure,
 Schema, Query, Read, Plan, Apply and Import on it; it exits when dform closes
-its stdin. Schema returns the schema as facts, Plan and Apply are per resource,
+its stdin. Its handshake line and its `Manifest` each have 20s; a provider
+dform is done with is killed and reaped, one still in a call that timed out
+included, so a hung provider outlives neither its run nor, in `dform
+controller`, the event that started it. Schema returns the schema as facts, Plan and Apply are per resource,
 and a sensitive computed value only ever crosses as its label. dform owns
 ordering, parallelism, state and crash safety: a provider that dies during an
 Apply is a failed action naming the resource, and the next `apply` resumes.

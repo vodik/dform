@@ -16,8 +16,15 @@
 //! event a call sends while it runs crosses as it comes, and does not
 //! move its timeout: a call that keeps saying how it goes still has to
 //! answer in time.
+//!
+//! The thread owns the backend, and a process backend owns its process:
+//! dropping a `Timed` stops the process first when a call is still stuck
+//! (its [`Provider::stopper`]), which fails that call and frees the
+//! thread, and then joins the thread, within [`JOIN`]. A call that timed
+//! out answered `MaybeApplied` already, which is what a provider stopped
+//! in the middle of it may have left; its late answer was dropped anyway.
 
-use super::backend::{Call, CallError, Provider, Reply, Ticket};
+use super::backend::{Call, CallError, Provider, Reply, Stop, Ticket};
 use super::pb;
 use super::policy::{describe, show};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -28,6 +35,10 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 type Answer = (Ticket, Result<Reply, CallError>);
+
+/// How long dropping a [`Timed`] waits for its thread to finish (the
+/// backend to drop: a process killed and reaped).
+const JOIN: Duration = Duration::from_secs(5);
 
 /// What the thread sends back: an event of a call in flight, or an
 /// answer.
@@ -76,6 +87,8 @@ pub struct Timed {
     asked: usize,
     /// Whether the backend said it is dead, as of its last answer.
     dead: Arc<AtomicBool>,
+    /// Stops the backend's process while the thread is stuck in a call.
+    stop: Option<Stop>,
 }
 
 impl Timed {
@@ -86,6 +99,7 @@ impl Timed {
         let (tx, answers) = mpsc::channel::<Back>();
         let dead = Arc::new(AtomicBool::new(false));
         let flag = dead.clone();
+        let stop = backend.stopper();
         let worker = std::thread::Builder::new()
             .name("dform-provider".into())
             .spawn(move || serve(backend, rx, tx, flag))
@@ -103,6 +117,7 @@ impl Timed {
             behind: BTreeSet::new(),
             asked: 0,
             dead,
+            stop,
         }
     }
 
@@ -266,14 +281,27 @@ impl Provider for Timed {
 
 impl Drop for Timed {
     /// The backend is dropped on its thread (a process backend stops its
-    /// process); waited for unless it is still in a call that timed out.
+    /// process). A thread still in a call (one that timed out) is freed by
+    /// stopping the backend's process first; then it is waited for, at
+    /// most [`JOIN`]. An in-process backend stuck in a call cannot be
+    /// stopped: its thread is left to finish when the call does.
     fn drop(&mut self) {
         self.cmds.take();
-        if let Some(w) = self.worker.take()
-            && self.asked == 0
-        {
-            let _ = w.join();
+        let Some(w) = self.worker.take() else { return };
+        if self.asked > 0 {
+            match self.stop.take() {
+                Some(stop) => stop(),
+                None => return,
+            }
         }
+        let deadline = Instant::now() + JOIN;
+        while !w.is_finished() {
+            if Instant::now() >= deadline {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let _ = w.join();
     }
 }
 

@@ -153,6 +153,10 @@ pub fn event(address: impl Into<String>, status: Option<&str>, message: Option<&
     }
 }
 
+/// Stops a provider's process from another thread than the one calling
+/// it ([`Provider::stopper`]).
+pub type Stop = Box<dyn FnOnce() + Send>;
+
 /// A provider, reached through some transport.
 pub trait Provider {
     /// Start `call`. Returns at once.
@@ -171,6 +175,15 @@ pub trait Provider {
     /// tick skips a provider that is.
     fn is_dead(&mut self) -> bool {
         false
+    }
+
+    /// How to stop the provider while a call to it is stuck: a process
+    /// backend's kills its process, which fails the stuck call (its
+    /// connection breaks) and so frees the thread waiting in
+    /// [`Provider::next_completed`]. `None` for a provider in this
+    /// process.
+    fn stopper(&self) -> Option<Stop> {
+        None
     }
 }
 

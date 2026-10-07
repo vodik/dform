@@ -6,7 +6,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use std::ffi::OsString;
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
-use std::process::{Child, ChildStdin, Command, Stdio};
+use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
 use std::time::Duration;
 
 /// The first stdout line of a provider: `dform-provider|VERSION|ADDRESS`.
@@ -19,8 +19,9 @@ pub const FAKE: &str = "dform-provider-fake";
 /// fake`.
 pub const FAKE_ENV: &str = "DFORM_PROVIDER_FAKE";
 
-/// How long a provider may take to print its handshake line.
-const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(20);
+/// How long a provider may take to print its handshake line, and to
+/// answer its `Manifest` (`Conn::manifest`).
+pub const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// A provider to start: an executable and its arguments.
 #[derive(Debug, Clone)]
@@ -93,10 +94,42 @@ impl Env {
     }
 }
 
+/// A provider's process, owned: dropping it kills and reaps the process,
+/// so no path between its spawn and its end (a failed handshake read, a
+/// failed dial, a connection dropped) leaves it running or a zombie.
+pub struct ChildGuard(Child);
+
+impl ChildGuard {
+    /// Its exit status, if it has exited (reaped: std keeps it, so a
+    /// `kill` after it signals no other process that took the pid).
+    pub fn try_wait(&mut self) -> Option<ExitStatus> {
+        self.0.try_wait().ok().flatten()
+    }
+
+    /// Kill the process (unless it has exited) and reap it.
+    pub fn kill(&mut self) -> Option<ExitStatus> {
+        if let Some(s) = self.try_wait() {
+            return Some(s);
+        }
+        let _ = self.0.kill();
+        self.0.wait().ok()
+    }
+
+    pub fn id(&self) -> u32 {
+        self.0.id()
+    }
+}
+
+impl Drop for ChildGuard {
+    fn drop(&mut self) {
+        self.kill();
+    }
+}
+
 /// A started provider: the process, its stdin (closing it asks it to
 /// exit), and the address its handshake named.
 pub struct Started {
-    pub child: Child,
+    pub child: ChildGuard,
     pub stdin: Option<ChildStdin>,
     pub address: String,
 }
@@ -109,13 +142,14 @@ pub fn start(program: &Program, env: &Env) -> Result<Started> {
     let mut cmd = Command::new(&program.exe);
     cmd.args(&program.args);
     env.apply(&mut cmd);
-    let mut child = cmd
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::inherit())
-        .spawn()
-        .with_context(|| format!("start provider {exe}"))?;
-    let stdout = child.stdout.take().expect("piped stdout");
+    let mut child = ChildGuard(
+        cmd.stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::inherit())
+            .spawn()
+            .with_context(|| format!("start provider {exe}"))?,
+    );
+    let stdout = child.0.stdout.take().expect("piped stdout");
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let mut lines = BufReader::new(stdout);
@@ -130,8 +164,6 @@ pub fn start(program: &Program, env: &Env) -> Result<Started> {
     let line = match rx.recv_timeout(HANDSHAKE_TIMEOUT) {
         Ok(r) => r.with_context(|| format!("read the handshake of provider {exe}"))?,
         Err(_) => {
-            let _ = child.kill();
-            let _ = child.wait();
             bail!(
                 "provider {} printed no handshake line in {}s",
                 exe,
@@ -142,15 +174,14 @@ pub fn start(program: &Program, env: &Env) -> Result<Started> {
     let address = match parse_handshake(&line) {
         Ok(a) => a,
         Err(e) => {
-            let _ = child.kill();
-            let status = child.wait().ok();
+            let status = child.kill();
             return Err(match (line.is_empty(), status) {
                 (true, Some(s)) => anyhow!("provider {} exited before its handshake ({s})", exe),
                 _ => e.context(format!("provider {exe}")),
             });
         }
     };
-    let stdin = child.stdin.take();
+    let stdin = child.0.stdin.take();
     Ok(Started {
         child,
         stdin,

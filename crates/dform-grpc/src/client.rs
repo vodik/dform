@@ -12,13 +12,14 @@
 
 use crate::pb;
 use crate::pb::provider_client::ProviderClient;
-use crate::spawn::{self, Env, Program, Started};
+use crate::spawn::{self, ChildGuard, Env, HANDSHAKE_TIMEOUT, Program, Started};
 use anyhow::{Context, Result};
 use dform_core::plugin::Launch;
-use dform_core::plugin::backend::{Call, CallError, Provider, Reply, Ticket};
+use dform_core::plugin::backend::{Call, CallError, Provider, Reply, Stop, Ticket};
 use dform_core::plugin::link::Link;
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStdin, ExitStatus};
+use std::process::{ChildStdin, ExitStatus};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tonic::transport::Channel;
@@ -40,7 +41,9 @@ pub struct Conn {
     client: ProviderClient<Channel>,
     /// The connection, for the provider's `Manifest` service.
     channel: Channel,
-    child: Child,
+    /// The process; shared with [`Provider::stopper`]'s handle, which
+    /// kills it from another thread while a call to it is stuck.
+    child: Arc<Mutex<ChildGuard>>,
     stdin: Option<ChildStdin>,
     exited: Option<ExitStatus>,
     /// Where it was dialed: a unix socket is removed once it is gone.
@@ -54,7 +57,8 @@ pub struct Conn {
 }
 
 impl Conn {
-    /// Start the provider `program`, with `env`, and dial it.
+    /// Start the provider `program`, with `env`, and dial it. A failure
+    /// after the process started kills and reaps it (`ChildGuard`).
     pub fn start(program: &Program, env: &Env) -> Result<Conn> {
         let Started {
             child,
@@ -78,7 +82,7 @@ impl Conn {
                 .max_decoding_message_size(usize::MAX)
                 .max_encoding_message_size(usize::MAX),
             channel,
-            child,
+            child: Arc::new(Mutex::new(child)),
             stdin,
             exited: None,
             address,
@@ -96,13 +100,32 @@ impl Conn {
     }
 
     /// What the provider says it uses (its `Manifest` service, R-13b):
-    /// `None` when it does not serve one.
-    pub fn manifest(&mut self) -> Option<Vec<String>> {
+    /// `None` when it does not serve one; an error when it does not
+    /// answer within the handshake's timeout.
+    pub fn manifest(&mut self) -> Result<Option<Vec<String>>> {
+        self.manifest_within(HANDSHAKE_TIMEOUT)
+    }
+
+    /// [`Conn::manifest`], waiting at most `timeout`.
+    pub fn manifest_within(&mut self, timeout: Duration) -> Result<Option<Vec<String>>> {
         let mut c = crate::host_pb::manifest_client::ManifestClient::new(self.channel.clone());
-        self.rt
-            .block_on(c.manifest(crate::host_pb::ManifestRequest {}))
-            .ok()
-            .map(|r| r.into_inner().imports)
+        let asked = async move {
+            tokio::time::timeout(timeout, c.manifest(crate::host_pb::ManifestRequest {})).await
+        };
+        match self.rt.block_on(asked) {
+            Ok(r) => Ok(r.ok().map(|r| r.into_inner().imports)),
+            Err(_) => anyhow::bail!(
+                "provider {} did not answer its Manifest in {}s",
+                self.program,
+                timeout.as_secs_f64()
+            ),
+        }
+    }
+
+    fn child(&self) -> std::sync::MutexGuard<'_, ChildGuard> {
+        // A guard's methods leave it whole whatever panics: poison says
+        // nothing about it.
+        self.child.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     /// Whether the process has exited, waiting up to `grace` for it.
@@ -112,7 +135,8 @@ impl Conn {
         }
         let deadline = std::time::Instant::now() + grace;
         loop {
-            if let Ok(Some(s)) = self.child.try_wait() {
+            let status = self.child().try_wait();
+            if let Some(s) = status {
                 self.exited = Some(s);
                 return Some(s);
             }
@@ -253,6 +277,13 @@ impl Provider for Conn {
     fn is_dead(&mut self) -> bool {
         self.exit_status(Duration::ZERO).is_some()
     }
+
+    fn stopper(&self) -> Option<Stop> {
+        let child = self.child.clone();
+        Some(Box::new(move || {
+            child.lock().unwrap_or_else(|e| e.into_inner()).kill();
+        }))
+    }
 }
 
 impl Drop for Conn {
@@ -260,10 +291,7 @@ impl Drop for Conn {
         // Closing stdin asks the provider to exit; it keeps nothing in
         // memory that is not already written.
         self.stdin.take();
-        if self.exited.is_none() {
-            let _ = self.child.kill();
-        }
-        let _ = self.child.wait();
+        self.child().kill();
         crate::transport::remove(&self.address);
     }
 }
