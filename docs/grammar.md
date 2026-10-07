@@ -1897,10 +1897,54 @@ unknown map beside them.
 
 ## Functions
 
-A function is pure and deterministic: a call is a term, evaluated when its
-arguments are ground; a partial function's call with no answer makes the
-literal that holds it fail, and any other call that has no value (an
-argument it does not take) is an error naming it ("Definedness"). Impurity enters only through externs. Every function is declared in
+A function is pure, or it is a coeffect: a read the context must
+satisfy. Nothing a function does changes the world; the world changes
+by the plan, the effects, which providers apply, the operator approves
+and the WAL logs. A pure function's call is a term, evaluated when its
+arguments are ground; a partial function's call with no answer makes
+the literal that holds it fail, and any other call that has no value
+(an argument it does not take) is an error naming it ("Definedness").
+A coeffect names what it reads, and the context satisfies it: a
+location by its scheme and host (`io.read`), a provider's data source
+(`ovh.image(..)`), a secret by its name, the clock (`time.now()`), a
+memo key (`memo.first`). The grants in dform.toml satisfy them (`[io]
+credentials`, `[providers.NAME] reads`, docs/reference.md); the plan
+file records what each resolved to (a commit, a digest, a row), so
+`apply PLAN` reads what plan read; and one the world cannot satisfy yet
+(a host still booting) is "not yet", an open null an apply waits on.
+`dform dev effects` lists a module's coeffects by kind and grant, a
+capability list a review reads. `random.*` are pure: a value is derived
+from its key, not drawn.
+
+Polymorphism lives in operators and fields, never in functions. An
+operator is a fixed piece of syntax over every type that has it; a
+type's parts are its fields (`u.host`, `n.bits`, `r.tag`, `xs.len`);
+and a function is monomorphic, named by its package, the type it is
+about, its subject first (`str.split(s, ",")`, `inet.subnet(n, 4,
+i)`). No bare name is a function: there is no prelude, and a call of
+one is `unknown function`, with the name meant (`len(x)` is `x.len`,
+`format` is `str.format`, `split` is `str.split`).
+
+| operator | types |
+|----------|-------|
+| `in`     | `list` (an element), an enum type (a value), a relation's type or a resource type (`r in T`), `inet` and `iprange` (an `ip`), `string` (a substring) |
+| `+ - * / %` | `int`, `float`, `bytes`, `cpu`, `duration`, `time` with `duration` |
+| `< <= > >=` | `int`, `float`, `bytes`, `cpu`, `duration`, `time`, `semver` |
+| `==`     | every type |
+| `${..}`  | every type with a text: `string`, `int`, `float`, `bool`, `bytes`, `cpu`, `duration`, `time`, `semver`, `ip`, `inet`, `iprange`, `uri`, `oci` |
+
+A type has an operator in the table or not at all: `+` on two strings is
+an error that names the interpolation (`"${a}${b}"`), `<` on two strings
+one that names the ordered types. `x in s` with `s` a string holds when
+`x` occurs in it; `a in n` with `n` an `inet` when the network holds the
+address, and with `n` an `iprange` when the range does; the right side's
+type decides, so a string read as a network is typed first (`let n:
+inet = cfg.net`). A field of a value is a part of it, never a
+computation over it but `len`: `xs.len` of a list, `s.len` of a string
+(its characters), `o.len` of an object (its keys; an object with a key
+named `len` reads that key).
+
+Every function is declared in
 a signature file shipped with dform, `std/*.df`, which the compiler, the
 language server (hover, completion, signature help)
 and the secrets pass read; the engine's bodies are looked up by the
