@@ -181,7 +181,12 @@ pub fn can_stick(head: &Atom, body: &[Lit], aggregates: &BTreeSet<String>) -> bo
 
 /// Any null at all.
 pub fn has_null(v: &Value) -> bool {
-    !nulls_in(v).is_empty()
+    match v {
+        Value::Null { .. } => true,
+        Value::List(xs) => xs.iter().any(has_null),
+        Value::Obj(m) => m.values().any(has_null),
+        _ => false,
+    }
 }
 
 /// An open or secret null: content unknown even under the Unique Name

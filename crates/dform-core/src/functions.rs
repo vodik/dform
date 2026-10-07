@@ -785,6 +785,35 @@ fn type_end(s: &str) -> usize {
 /// A function's body: its arguments' values to its value, or none.
 pub type Body = fn(&[Value]) -> Option<Value>;
 
+/// `__path(v, path)`: the part of `v` at `path`, followed through `v`
+/// itself and copied only where it ends (a 50 KB document read for its
+/// `metadata.name` copies the name).
+pub fn path_of(v: &Value, path: &str) -> Option<Value> {
+    use std::borrow::Cow;
+    // A part of a value not known yet (a document a host has not
+    // written, R-153) is not known yet either: the same null.
+    if let Value::Null { .. } = v {
+        return Some(v.clone());
+    }
+    let mut v: Cow<Value> = Cow::Borrowed(v);
+    for seg in crate::ir::path_keys(path) {
+        // A url's or an image reference's parts read as an object's
+        // (`u.host`, `r.digest`).
+        if let Value::Oci(r) = &*v {
+            v = Cow::Owned(crate::value::OciRef::parse(r).ok()?.parts());
+        }
+        if let Some(parts) = crate::value::parts(&v) {
+            v = Cow::Owned(parts);
+        }
+        v = match v {
+            Cow::Borrowed(Value::Obj(m)) => Cow::Borrowed(m.get(&seg)?),
+            Cow::Owned(Value::Obj(mut m)) => Cow::Owned(m.remove(&seg)?),
+            _ => return None,
+        };
+    }
+    Some(v.into_owned())
+}
+
 /// The body of the function `name` declares in `std/*.df`, by its
 /// qualified name; a test keeps every declared function's body in step.
 pub fn body(name: &str) -> Option<Body> {
@@ -966,27 +995,7 @@ pub const BODIES: &[(&str, Body)] = &[
         _ => None,
     }),
     ("__path", |a| match a {
-        // A part of a value not known yet (a document a host has not
-        // written, R-153) is not known yet either: the same null.
-        [v @ Value::Null { .. }, _] => Some(v.clone()),
-        [v, path] => {
-            let mut v = v.clone();
-            for seg in crate::ir::path_keys(path.as_str()?) {
-                // A url's or an image reference's parts read as an
-                // object's (`u.host`, `r.digest`).
-                if let Value::Oci(r) = &v {
-                    v = crate::value::OciRef::parse(r).ok()?.parts();
-                }
-                if let Some(parts) = crate::value::parts(&v) {
-                    v = parts;
-                }
-                let Value::Obj(mut m) = v else {
-                    return None;
-                };
-                v = m.remove(&seg)?;
-            }
-            Some(v)
-        }
+        [v, path] => path_of(v, path.as_str()?),
         _ => None,
     }),
     ("inet.subnet", |a| match a {

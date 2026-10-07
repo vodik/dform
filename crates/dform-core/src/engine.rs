@@ -2054,7 +2054,12 @@ fn blocked_by_null(t: &Term, state: &HashMap<String, Value>) -> Option<(String, 
             }
             let mut nulls = BTreeSet::new();
             for a in args {
-                nulls.extend(nulls_in(&eval_term(a, state)?));
+                // A bound variable's value is read where it is, not copied.
+                match a {
+                    Term::Var(x) => nulls.extend(nulls_in(state.get(x)?)),
+                    Term::Val(v) => nulls.extend(nulls_in(v)),
+                    a => nulls.extend(nulls_in(&eval_term(a, state)?)),
+                }
             }
             (!nulls.is_empty()).then(|| (name.clone(), nulls))
         }
@@ -2545,10 +2550,13 @@ fn eval_body(body: &[Lit], src: &Src, rec: &Rec) -> Result<Vec<Row>> {
     }];
     for (i, lit) in body.iter().enumerate() {
         let mut next = Vec::new();
+        // A literal that keeps or extends a row takes it: its bindings
+        // (a document among them) are moved on, not copied.
+        let rows = std::mem::take(&mut states);
         match lit {
             Lit::Pos(atom) => {
                 if atom.pred == "member" || atom.pred == "enumerate" {
-                    for row in &states {
+                    for row in &rows {
                         if !rec.any_blocked(&atom.args, &row.s) {
                             let mut out = Vec::new();
                             eval_member_like(atom, &row.s, &mut out, rec)?;
@@ -2560,11 +2568,11 @@ fn eval_body(body: &[Lit], src: &Src, rec: &Rec) -> Result<Vec<Row>> {
                         }
                     }
                 } else if ops::is_builtin_pred(&atom.pred) {
-                    for row in &states {
+                    for row in rows {
                         if !rec.any_blocked(&atom.args, &row.s)
                             && eval_builtin_pred(atom, &row.s, rec)? == Some(true)
                         {
-                            next.push(row.with(row.s.clone()));
+                            next.push(row);
                         }
                     }
                 } else {
@@ -2572,7 +2580,7 @@ fn eval_body(body: &[Lit], src: &Src, rec: &Rec) -> Result<Vec<Row>> {
                         src.body.op(i).read().ok_or_else(|| {
                             anyhow!("internal: {} is not a relation read", atom.pred)
                         })?;
-                    for row in &states {
+                    for row in &rows {
                         let s = &row.s;
                         if rec.any_blocked(&atom.args, s) {
                             continue;
@@ -2609,7 +2617,7 @@ fn eval_body(body: &[Lit], src: &Src, rec: &Rec) -> Result<Vec<Row>> {
                 }
             }
             Lit::Not(atom) => {
-                for row in &states {
+                for mut row in rows {
                     let s = &row.s;
                     if rec.any_blocked(&atom.args, s) {
                         continue;
@@ -2621,7 +2629,7 @@ fn eval_body(body: &[Lit], src: &Src, rec: &Rec) -> Result<Vec<Row>> {
                             _ => bail!("member/2 or member/3 expected"),
                         };
                         if holds {
-                            next.push(row.with(s.clone()));
+                            next.push(row);
                         }
                         continue;
                     }
@@ -2636,37 +2644,38 @@ fn eval_body(body: &[Lit], src: &Src, rec: &Rec) -> Result<Vec<Row>> {
                         if !rec.any_blocked(&atom.args, s)
                             && eval_builtin_pred(atom, s, rec)? == Some(false)
                         {
-                            next.push(row.with(s.clone()));
+                            next.push(row);
                         }
                         continue;
                     }
                     let grounded = ground_atom(atom, s)
                         .with_context(|| format!("unsafe negation: not {}(...)", atom.pred))?;
                     if eval_not(&grounded, src, s, rec) {
-                        let mut r = row.with(s.clone());
-                        r.absent.push(grounded);
-                        next.push(r);
+                        row.absent.push(grounded);
+                        next.push(row);
                     }
                 }
             }
             Lit::Eq(a, b) => {
-                for row in &states {
-                    if let Some(s2) = eval_eq(a, b, &row.s, rec)? {
-                        next.push(row.with(s2));
+                for mut row in rows {
+                    let s = std::mem::take(&mut row.s);
+                    if let Some(s2) = eval_eq(a, b, s, rec)? {
+                        row.s = s2;
+                        next.push(row);
                     }
                 }
             }
             Lit::Neq(a, b) => {
-                for row in &states {
-                    if let Some(s2) = eval_neq(a, b, &row.s, rec)? {
-                        next.push(row.with(s2));
+                for row in rows {
+                    if eval_neq(a, b, &row.s, rec)? {
+                        next.push(row);
                     }
                 }
             }
             Lit::Gt(a, b) | Lit::Ge(a, b) | Lit::Lt(a, b) | Lit::Le(a, b) => {
-                for row in &states {
+                for row in rows {
                     if eval_cmp(lit, a, b, &row.s, rec)? {
-                        next.push(row.with(row.s.clone()));
+                        next.push(row);
                     }
                 }
             }
@@ -3377,13 +3386,13 @@ fn instantiate_atom(atom: &Atom, state: &HashMap<String, Value>) -> Result<Atom>
 fn eval_eq(
     a: &Term,
     b: &Term,
-    state: &HashMap<String, Value>,
+    state: HashMap<String, Value>,
     rec: &Rec,
 ) -> Result<Option<HashMap<String, Value>>> {
-    if rec.any_blocked([a, b], state) {
+    if rec.any_blocked([a, b], &state) {
         return Ok(None);
     }
-    let mut out = state.clone();
+    let mut out = state;
     match (eval_term(a, &out), eval_term(b, &out)) {
         // Two numbers compare by value, an int with a float (R-75); a
         // join matches a value as it is.
@@ -3479,34 +3488,28 @@ fn failed_builtin(t: &Term, state: &HashMap<String, Value>) -> Option<(String, V
         .then(|| (name.clone(), vals))
 }
 
-fn eval_neq(
-    a: &Term,
-    b: &Term,
-    state: &HashMap<String, Value>,
-    rec: &Rec,
-) -> Result<Option<HashMap<String, Value>>> {
+fn eval_neq(a: &Term, b: &Term, state: &HashMap<String, Value>, rec: &Rec) -> Result<bool> {
     if rec.any_blocked([a, b], state) {
-        return Ok(None);
+        return Ok(false);
     }
     match (eval_term(a, state), eval_term(b, state)) {
         (Some(av), Some(bv)) => Ok(match crate::value::compare_numbers(&av, &bv) {
-            Some(o) if o.is_eq() => None,
-            Some(_) => Some(state.clone()),
+            Some(o) => !o.is_eq(),
             None => match crate::lattice::eq3(&av, &bv) {
-                Truth::False => Some(state.clone()),
-                Truth::True => None,
+                Truth::False => true,
+                Truth::True => false,
                 Truth::Unknown => {
                     let mut nulls = nulls_in(&av);
                     nulls.extend(nulls_in(&bv));
                     rec.stuck(state, nulls, "!= against an open/secret null");
-                    None
+                    false
                 }
             },
         }),
         (a_v, _) => {
             let t = if a_v.is_none() { a } else { b };
             if let Some(r) = side_unanswered(t, state, rec) {
-                return r.map(|()| None);
+                return r.map(|()| false);
             }
             bail!("unsafe !=: both sides must be ground")
         }
@@ -3891,6 +3894,15 @@ pub fn reference(name: &str, call: bool) -> Option<&'static Reference> {
 }
 
 fn eval_func(name: &str, args: &[Term], state: &HashMap<String, Value>) -> Option<Value> {
+    // A path into a bound value is followed in place: the value is not
+    // copied to be an argument (`__path` forwards nulls, its path is a
+    // string).
+    if name == "__path"
+        && let [Term::Var(x), path] = args
+        && let Some(Value::Str(path)) = eval_term(path, state)
+    {
+        return crate::functions::path_of(state.get(x)?, &path);
+    }
     let body = crate::functions::body(name)?;
     let mut vals = Vec::with_capacity(args.len());
     for a in args {
