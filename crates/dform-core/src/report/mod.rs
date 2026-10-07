@@ -38,6 +38,7 @@ use tree::Site;
 
 mod bare;
 pub mod fold;
+pub mod progress;
 pub mod table;
 pub mod tree;
 

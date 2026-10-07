@@ -61,6 +61,9 @@ wasm = ["dform-host/wasm"]
 anyhow = "1.0"
 clap = { version = "4.5", features = ["derive"] }
 libc = "0.2"
+# Apply's progress block (R-127): the cursor, a line's clear and the
+# terminal's width, nothing else (no events, no raw mode).
+crossterm = { version = "=0.29.0", default-features = false }
 serde_json = "1.0"
 dform-core = { path = "crates/dform-core" }
 dform-grpc = { path = "crates/dform-grpc" }

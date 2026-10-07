@@ -3118,16 +3118,39 @@ fn run_with(
                         }
                     };
                     let fence = || dep.check_fence();
+                    // The tick's block on stderr, filling in (R-127); a
+                    // controller's log line is its report.
+                    let mode = crate::progress::Mode::of_stderr(why == report::Why::None);
+                    let progress = hook.is_none().then(|| {
+                        let actions: Vec<&crate::provider::Action> = plan.actions.iter().collect();
+                        crate::progress::Progress::tick(
+                            report::progress::Block::new(tick, &actions),
+                            mode,
+                            match mode {
+                                crate::progress::Mode::Terminal => cli.style,
+                                _ => report::Style::default(),
+                            },
+                        )
+                    });
+                    let on_event = |e: executor::Event| {
+                        if let Some(p) = &progress {
+                            p.event(&e, &|t: &str| redact.text(t));
+                        }
+                    };
                     let opts = executor::Options {
                         parallel: parallel as usize,
                         persist: &persist,
                         stop_after: stop_after.as_ref(),
                         on_action: Some(&on_action),
                         before_submit: Some(&fence),
+                        on_event: Some(&on_event),
                     };
                     let applied = executor::run_tick(
                         backend, &resources, &adopts, &lifecycle, &mut st, &plan, &opts,
                     );
+                    if let Some(p) = progress {
+                        p.finish();
+                    }
                     for note in backend.take_notes() {
                         println!("chaos: {note}");
                     }
@@ -3278,8 +3301,16 @@ fn run_with(
                     let labels: Vec<String> = on.iter().map(|l| ir::label(l)).collect();
                     let budget = wait_budget(&on);
                     let mut w = crate::progress::Wait::new();
+                    // On a terminal, the wait is one line counting up
+                    // (R-127); elsewhere its lines say it every 10s.
+                    let mode = crate::progress::Mode::of_stderr(why == report::Why::None);
+                    let live = (mode == crate::progress::Mode::Terminal).then(|| {
+                        crate::progress::Progress::wait(tick, names.clone(), mode, cli.style)
+                    });
                     let resolved = loop {
-                        w.tick(&names);
+                        if live.is_none() {
+                            w.tick(&names);
+                        }
                         if w.elapsed() >= budget {
                             break false;
                         }
@@ -3294,6 +3325,9 @@ fn run_with(
                             break true;
                         }
                     };
+                    if let Some(l) = live {
+                        l.done();
+                    }
                     let redact = query::Redactor::new(&res.facts, schema);
                     log_retries(&audit, &redact, backend, tick)?;
                     let result = if resolved { "resolved" } else { "expired" };

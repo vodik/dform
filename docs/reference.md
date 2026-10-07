@@ -1200,6 +1200,40 @@ cargo run -- -C examples/gke apply                  # asks again at tick 2
 cargo run -- -C examples/gke apply --set zones=1   # one zone: stops after tick 1
 ```
 
+Once a tick is approved its block fills in on stderr (R-127), stdout
+keeping the plan and the questions. A change is its plan line's mark and
+address, then where it is: what it reads that the tick makes first
+(`waits on k3s.server.public_ip`), or the time its call has run, which
+ticking is the only sign of life (no spinner, no glyph); the provider's
+own status word would follow the time verbatim, once the Apply call
+streams one (it does not yet: the column is empty). On a terminal the
+block's lines change in place about once a second, the cursor moved back
+over the block's own lines and each cleared as it is written again, the
+header counting `1 done  1 running  1 waiting`:
+
+```
+tick 1  3 changes   1 done  1 running  1 waiting
+  + ovh.ssh_key k3s.admin                        0.8s
+  + ovh.instance k3s.server                      1m12s
+  + ovh.domain_record k3s."k8s-lab.vodik.xyz"    waits on k3s.server.public_ip
+```
+
+Elsewhere (a pipe, CI) the same lines are appended, one per change of
+state: a change's mark and address as its call starts, the line with its
+time once it answers, and the line again every 30s while it runs (a
+heartbeat; `DFORM_HEARTBEAT_MS` sets it); the tick ends with `tick 1
+done  1m50s`. `-q` prints only that end line. The first failure stops the
+tick: nothing new starts, what is in flight finishes, and the failed
+change's mark is `!`, its error's first line after its time (`tick 1
+failed  ..` ends it); several failures, each inline and every error in
+full below the block. Ctrl-C prints the block once more, what ran
+`interrupted`, and `interrupted: the next apply resumes it` (exit 130):
+state was written after every call that answered. Between ticks, on a
+terminal, the tick's wait is one line counting up (`tick 2` then `waits
+on  ssh.read("51.79.29.179", "ubuntu", "/etc/rancher/k3s/k3s.yaml")
+42s  not yet`); elsewhere it is the `waiting on .. since` line every 10s
+(see "Timeouts, retries and waiting").
+
 A provider whose settings the program computes from what a tick makes
 (`use k8s { kubeconfig = k3s.kubeconfig }`, the kubeconfig read over
 SSH from the server tick 1 creates) is configured at the boundary where

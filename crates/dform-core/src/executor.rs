@@ -82,6 +82,21 @@ pub struct Options<'a> {
     /// as the call's failure, and no call is made (the lease fence,
     /// `store::Deployment::check_fence`).
     pub before_submit: Option<&'a dyn Fn() -> Result<()>>,
+    /// Told each change of state of an action (R-127): apply's progress.
+    pub on_event: Option<&'a dyn Fn(Event)>,
+}
+
+/// A change of state of one of the tick's actions (R-127). A heartbeat
+/// is the progress driver's own: the walk blocks on the call it waits
+/// for, so its time ticks where it is printed.
+#[derive(Debug)]
+pub enum Event<'a> {
+    /// Its Apply call was submitted.
+    Started(&'a Address),
+    /// It answered.
+    Finished(&'a Address),
+    /// It failed: no new call starts after it.
+    Failed(&'a Address, &'a anyhow::Error),
 }
 
 /// How an action ended: its error, if it failed; state as written after it.
@@ -146,12 +161,14 @@ pub fn run_tick(
                 failed = Some(e);
                 break;
             }
+            event(opts, Event::Started(&actions[i].addr));
             match tick.submit(i, actions[i], state) {
                 Ok(true) => in_flight += 1,
                 Ok(false) => at_once.push_back(i),
                 Err(e) => {
                     (opts.persist)(state)?;
                     report_action(opts, actions[i], Some(&e), state);
+                    event(opts, Event::Failed(&actions[i].addr, &e));
                     spans.push((i, now, now));
                     failed = Some(e);
                 }
@@ -178,10 +195,12 @@ pub fn run_tick(
         spans.push((i, start_ms[i], end));
         match r {
             Ok(()) => {
+                event(opts, Event::Finished(&a.addr));
                 done[i] = true;
                 now = now.max(end);
             }
             Err(e) => {
+                event(opts, Event::Failed(&a.addr, &e));
                 failed.get_or_insert(e);
             }
         }
@@ -265,6 +284,13 @@ fn created(cloud: &Providers, addr: &Address, key: &str) -> Result<Option<String
 /// `approver_allowed(Who, D)`: may `Who` approve the deformation of `D`, an
 /// address as plan prints it?
 pub type Allowed<'a> = &'a dyn Fn(&str, &str) -> bool;
+
+/// Tell the progress hook of a change of state.
+fn event(opts: &Options, e: Event) {
+    if let Some(hook) = opts.on_event {
+        hook(e);
+    }
+}
 
 /// Tell the audit hook how `a` ended.
 fn report_action(opts: &Options, a: &Action, err: Option<&anyhow::Error>, state: &State) {
