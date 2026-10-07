@@ -239,6 +239,13 @@ pub fn fold<W: PartialEq>(paths: &[String], writers: &[Option<W>]) -> Vec<Group>
             continue;
         }
         match (mine.as_slice(), depth) {
+            // A list only this writer wrote, of one element: the list
+            // as it was written (`policies = [app_policy]`).
+            ([j], d) if d > 0 && positional => out.push(Group {
+                path: text(&toks[*j], d),
+                depth: d,
+                leaves: vec![*j],
+            }),
             ([j], _) => out.push(alone(*j)),
             (_, 0) => out.extend(mine.iter().map(|&j| alone(j))),
             _ => out.push(Group {
@@ -418,6 +425,23 @@ mod tests {
             printed,
             ["statements[0]", "statements[1]", "statements[2].action"]
         );
+    }
+
+    #[test]
+    fn a_list_of_one_element_one_writer_wrote_is_the_list() {
+        let ps = paths(&["policies[0]", "tags.team"]);
+        let g = fold(&ps, &[Some(1), Some(2)]);
+        let printed: Vec<&str> = g.iter().map(|g| g.path.as_str()).collect();
+        assert_eq!(printed, ["policies", "tags.team"]);
+        let values = [Tree::Leaf("p".into()), Tree::Leaf("t".into())];
+        assert_eq!(
+            assemble(&g[0], &ps, &values),
+            Tree::List(vec![Tree::Leaf("p".into())])
+        );
+        // Another writer's element beside it: each by its own line.
+        let g = fold(&paths(&["policies[0]", "policies[1]"]), &[Some(1), Some(2)]);
+        let printed: Vec<&str> = g.iter().map(|g| g.path.as_str()).collect();
+        assert_eq!(printed, ["policies[0]", "policies[1]"]);
     }
 
     #[test]

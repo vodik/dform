@@ -1502,17 +1502,29 @@ fn diag_lines(d: &Diag, why: Why, style: Style, conflict: bool) -> String {
 /// by position everywhere else.
 fn deformation(a: &Action, schema: &Schema, r: &Redactor, refs: &Refs) -> Deformation {
     let paths = relabel(a.changes.iter().map(|c| c.path.as_str()));
+    // Whether the schema types the leaf at `path` a reference: an
+    // element of a `set(ref(T))`, or a `ref(T)` field.
+    let is_ref = |path: &str| {
+        let ty = schema
+            .attr(&a.addr.typ, &schema_path(path))
+            .map(|s| s.ty.replace(' ', ""))
+            .unwrap_or_default();
+        ty.starts_with("ref(")
+            || (path.ends_with(']') && (ty.starts_with("set(ref(") || ty.starts_with("list(ref(")))
+    };
     let leaf = |c: &Change, path: String| Line {
         op: Op::Leaf,
         path,
         before: refs.shown(
             &a.addr,
             &c.path,
+            is_ref(&c.path),
             shown(c.before.as_ref(), c.sensitive, schema, r),
         ),
         after: refs.shown(
             &a.addr,
             &c.path,
+            is_ref(&c.path),
             shown(c.after.as_ref(), c.sensitive, schema, r),
         ),
         leaves: vec![],
@@ -1680,7 +1692,7 @@ impl<'a> Refs<'a> {
     /// program's document holds a reference prints as that resource; a
     /// uri the provider holds in its A-labels prints as the program wrote
     /// it when it is the program's, else as read, never decoded (R-134).
-    fn shown(&self, addr: &Address, path: &str, v: Shown) -> Shown {
+    fn shown(&self, addr: &Address, path: &str, is_ref: bool, v: Shown) -> Shown {
         let Shown::Value(Json::String(id)) = &v else {
             return v;
         };
@@ -1691,6 +1703,12 @@ impl<'a> Refs<'a> {
             .and_then(|d| walk(d, &path[top.len()..]));
         match (at, self.ids.get(id.as_str())) {
             (Some(Value::Ref { attr, .. }), Some(to)) if attr.is_empty() => Shown::Ref {
+                addr: to.clone(),
+                value: Json::String(id.clone()),
+            },
+            // A set's element the program no longer holds (R-158): the
+            // schema says it is a reference.
+            (None, Some(to)) if is_ref => Shown::Ref {
                 addr: to.clone(),
                 value: Json::String(id.clone()),
             },
@@ -2081,7 +2099,7 @@ impl Report {
                 }
             }
             for (l, site) in d.lines.iter_mut().zip(sites) {
-                l.site = site;
+                l.site = site.or_else(|| element_site(&p, rules, facts, l));
                 if why == Why::Full {
                     l.chain = attr_chain(&p, rules, facts, &l.path, &self.keys);
                 }
@@ -3326,6 +3344,7 @@ fn folded(
             _ => None,
         })
         .collect();
+    let sets = keyless_sets(&d.addr.typ, all);
     let values: Vec<crate::fmt::value::Tree> = lines
         .iter()
         .map(|l| crate::fmt::value::Tree::Leaf(whole(&l.after, why)))
@@ -3351,7 +3370,33 @@ fn folded(
                 }),
                 ..first.clone()
             },
-            ([_], _) => first.clone(),
+            // A scalar element of a set several writers add to is
+            // named by itself (R-158): `policies[app_policy]`.
+            // An element several writers add to says its own writer's
+            // site, which the attribute's winner does not.
+            ([i], Some(w))
+                if g.path == paths[*i] && first.site.is_none() && paths[*i].ends_with(']') =>
+            {
+                let site = p.contribution_site(rules, w, &paths[*i]);
+                let path = match set_element(&paths[*i], &sets) {
+                    Some(list) if scalar(&first.after) => {
+                        format!("{list}[{}]", first.after.said(why))
+                    }
+                    _ => first.path.clone(),
+                };
+                Line {
+                    path,
+                    site,
+                    ..first.clone()
+                }
+            }
+            ([i], _) if g.path == paths[*i] => match set_element(&paths[*i], &sets) {
+                Some(list) if scalar(&first.after) => Line {
+                    path: format!("{list}[{}]", first.after.said(why)),
+                    ..first.clone()
+                },
+                _ => first.clone(),
+            },
             (_, w) => Line {
                 op: Op::Leaf,
                 path: g.path.clone(),
@@ -3434,6 +3479,85 @@ fn whole(v: &Shown, why: Why) -> String {
 
 /// A printed path's schema path: its keys, no selectors
 /// (`spec.ports[name=web].protocol` is `spec.ports.protocol`).
+/// The keyless sets of type `typ`, by schema path: each attribute
+/// `type_attr` types `set(..)` or `type_lattice` declares a set, but a
+/// list keyed by `type_list_key`.
+fn keyless_sets(typ: &str, all: &BTreeSet<Atom>) -> BTreeSet<String> {
+    let mut keyed = BTreeSet::new();
+    let mut sets = BTreeSet::new();
+    for f in all {
+        let (Some(Term::Val(Value::Str(t))), Some(Term::Val(Value::Str(p))), Some(Term::Val(k))) =
+            (f.args.first(), f.args.get(1), f.args.get(2))
+        else {
+            continue;
+        };
+        if t != typ {
+            continue;
+        }
+        match (f.pred.as_str(), k) {
+            ("type_list_key", _) => {
+                keyed.insert(p.clone());
+            }
+            ("type_lattice", Value::Str(l)) if l == "set" => {
+                sets.insert(p.clone());
+            }
+            ("type_attr", Value::Str(ty)) if ty.split('(').next().map(str::trim) == Some("set") => {
+                sets.insert(p.clone());
+            }
+            _ => {}
+        }
+    }
+    &sets - &keyed
+}
+
+/// Where the element a set's update line adds was written (R-158), when
+/// several writers add to the set: its writer's site. The line's path is
+/// the set's, `policies[]`; the element is found in the program's value
+/// by what it prints as.
+fn element_site(p: &tree::Printer, rules: &[RuleStmt], facts: &[&Atom], l: &Line) -> Option<Site> {
+    let list = l.path.strip_suffix("[]")?;
+    if l.op != Op::Add || !scalar(&l.after) {
+        return None;
+    }
+    let (a, _, _) = attr_holding(facts, list)?;
+    let Some(Term::Val(Value::List(xs))) = a.args.get(3) else {
+        return None;
+    };
+    let want = l.after.said(Why::Line);
+    let printed = |v: &Value| match v {
+        Value::Ref { typ, name, attr } if attr.is_empty() => Shown::Ref {
+            addr: Address {
+                typ: typ.clone(),
+                name: name.clone(),
+            },
+            value: Json::Null,
+        }
+        .said(Why::Line),
+        Value::Str(s) => Shown::Value(Json::String(s.clone())).said(Why::Line),
+        _ => String::new(),
+    };
+    let i = xs.iter().position(|x| printed(x) == want)?;
+    let path = format!("{list}[{i}]");
+    let w = p.writers(a, std::slice::from_ref(&path)).pop().flatten()?;
+    p.contribution_site(rules, w, &path)
+}
+
+/// A value a set's element is named by (R-158): a string, a reference,
+/// an unknown; a number would read as a position.
+fn scalar(v: &Shown) -> bool {
+    matches!(
+        v,
+        Shown::Value(Json::String(_)) | Shown::Ref { .. } | Shown::Null { .. }
+    )
+}
+
+/// The list of printed path `path` when it is an element of one of
+/// `sets` and nothing below it: `policies` of `policies[2]`.
+fn set_element(path: &str, sets: &BTreeSet<String>) -> Option<String> {
+    let list = path.strip_suffix(']')?.rsplit_once('[')?.0;
+    (!list.contains('[') && sets.contains(&schema_path(list))).then(|| list.to_string())
+}
+
 fn schema_path(path: &str) -> String {
     fold::tokens(path)
         .into_iter()
@@ -3802,6 +3926,19 @@ fn write_line(
                 ("-", Paint::Delete, &l.before)
             };
             let painted_sign = style.paint(paint, sign);
+            // A scalar element of a keyless set is named by itself
+            // (R-158): `- policies[app_policy]`.
+            if l.leaves.is_empty()
+                && let Some(list) = l.path.strip_suffix("[]")
+            {
+                let (plain, painted) = (plain(v), painted(v));
+                push(
+                    format!("{indent}{sign} {list}[{plain}]"),
+                    format!("{indent}{painted_sign} {list}[{painted}]"),
+                    right,
+                );
+                return;
+            }
             if l.leaves.is_empty() {
                 push(
                     format!("{indent}{sign} {} = {}", l.path, plain(v)),
@@ -3855,6 +3992,15 @@ fn write_line(
                     _ => push(row.clone(), row, vec![]),
                 }
             }
+        }
+        // An element named by itself says no value (R-158).
+        Op::Leaf
+            if matches!(kind, ActionKind::Create | ActionKind::Adopt)
+                && scalar(&l.after)
+                && l.path.ends_with(&format!("[{}]", plain(&l.after))) =>
+        {
+            let text = format!("{indent}{}", l.path);
+            push(text.clone(), text, right);
         }
         Op::Leaf => match kind {
             ActionKind::Create | ActionKind::Adopt => push(

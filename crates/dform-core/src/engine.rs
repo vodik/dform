@@ -1456,7 +1456,8 @@ fn contribution(a: &Atom) -> Result<(GroupKey, Rank, Value, ElemOf)> {
 }
 
 /// `type_lattice(T, P, flat|map|set)` and `type_list_key(T, P, Keys)`
-/// facts, a keyed list's with its keys' `type_default(T, P.K, V)`.
+/// facts, a keyed list's with its keys' `type_default(T, P.K, V)`, and
+/// a set for each `type_attr(T, P, "set(..)", _)` that declares none.
 fn declared_lattices(facts: &[Atom]) -> Result<BTreeMap<(String, String), Lattice>> {
     let mut defaults: BTreeMap<(&str, &str), &Value> = BTreeMap::new();
     for a in facts.iter().filter(|a| a.pred == "type_default") {
@@ -1525,6 +1526,21 @@ fn declared_lattices(facts: &[Atom]) -> Result<BTreeMap<(String, String), Lattic
             bail!("path {t} {p} declares two lattices");
         }
         out.insert(key, lat);
+    }
+    // An attribute the schema types `set(T)` (R-158) is a set unless a
+    // lattice is declared on it: its contributions union, so several
+    // modules each add an element (`policies`, `peerings`, `routes`).
+    for a in facts.iter().filter(|a| a.pred == "type_attr") {
+        if let [
+            Term::Val(Value::Str(t)),
+            Term::Val(Value::Str(p)),
+            Term::Val(Value::Str(ty)),
+            ..,
+        ] = a.args.as_slice()
+            && ty.split('(').next().is_some_and(|k| k.trim() == "set")
+        {
+            out.entry((t.clone(), p.clone())).or_insert(Lattice::Set);
+        }
     }
     Ok(out)
 }

@@ -11,7 +11,7 @@ tick 1  7 changes
       name = "app"
       tags.team = "platform"                    baseline.df:10
   + iam.role identity.app_role                  identity.df:6
-      assume.principals[0] = "k8s.serviceaccount.app"
+      assume.principals = ["k8s.serviceaccount.app"]
       name = "app"
       tags.team = "platform"                    baseline.df:10
   + iam.role_policy_attachment identity.attach  identity.df:14

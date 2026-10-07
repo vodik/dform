@@ -76,7 +76,7 @@ fn a_providers_resources_wait_on_its_settings_under_later() {
         "  + k8s.deployment traefik.web",
         "  waits on  provider k8s  schema",
         "  + k8s.traefik.io.v1alpha1.middleware traefik.strip",
-        "      spec.stripPrefix.prefixes[0] = \"/a\"",
+        "      spec.stripPrefix.prefixes = [\"/a\"]",
     ] {
         assert!(later.contains(line), "{line}\n{}", r.stdout);
     }

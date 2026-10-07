@@ -2489,14 +2489,16 @@ impl Providers {
     }
 
     /// A document in the canonical form the Z-set compares: leaf path to
-    /// leaf value, keyed lists by key, sets sorted (`provider::flatten`),
+    /// leaf value, keyed lists by key, sets by content (`provider::flatten`),
     /// null and secret markers as labeled nulls of the schema's class. A
     /// secret held by another stack's object is where it is held and its
     /// digest: what the reader knows of it, definite, so a changed one
     /// updates and an unchanged one is no change.
     fn flat_value(&self, typ: &str, doc: &Json) -> Value {
         let mut leaves = BTreeMap::new();
-        provider::flatten(self.schema(), typ, doc, "", "", false, &mut leaves);
+        // A set's elements by content: one added beside the world's is
+        // an element more, whatever place it sorts to (R-158).
+        provider::flatten(self.schema(), typ, doc, "", "", true, &mut leaves);
         Value::Obj(
             leaves
                 .into_iter()

@@ -273,11 +273,15 @@ pub fn diff(
 ) -> Vec<Change> {
     let mut a = BTreeMap::new();
     let mut b = BTreeMap::new();
+    // A set's elements are matched by content between two documents; a
+    // create's or a delete's are by their place in the one there is, as
+    // the program's value holds them.
+    let both = before.is_some() && after.is_some();
     if let Some(v) = before {
-        flatten(schema, typ, v, "", "", true, &mut a);
+        flatten(schema, typ, v, "", "", both, &mut a);
     }
     if let Some(v) = after {
-        flatten(schema, typ, v, "", "", true, &mut b);
+        flatten(schema, typ, v, "", "", both, &mut b);
     }
     let paths: BTreeSet<&String> = a.keys().chain(b.keys()).collect();
     let mut out = Vec::new();
@@ -303,7 +307,7 @@ pub fn diff(
 /// compared as a set. Null and secret markers are leaves. `by_content`
 /// labels an element of a keyless set by a hash of its content,
 /// `ingress[#k3j2d]`, so a diff shows an element added or removed rather
-/// than every later index shifting; otherwise by its sorted position.
+/// than every later index shifting; otherwise by its position in `v`.
 /// An empty object is a leaf where the schema says `{}` is a value
 /// (`Schema::empty_is_present`); elsewhere it has no leaf, as absent.
 pub fn flatten(
@@ -354,7 +358,9 @@ pub fn flatten(
                 items.push((label, vv));
             }
             if is_set && keys.is_none() {
-                items.sort_by(|x, y| x.0.cmp(&y.0));
+                if by_content {
+                    items.sort_by(|x, y| x.0.cmp(&y.0));
+                }
                 for (i, it) in items.iter_mut().enumerate() {
                     it.0 = if by_content {
                         format!("#{}", short_hash(&it.0))

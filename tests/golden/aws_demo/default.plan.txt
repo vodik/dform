@@ -9,8 +9,8 @@ tick 1  7 changes
   + aws.security_group web  stacks/aws_demo.df:24
       egress = [{ from_port: 0, to_port: 0, protocol: "-1", cidr_blocks: ["0.0.0.0/0"] }]
       ingress = [
-        { from_port: 80, to_port: 80, protocol: "tcp", cidr_blocks: ["0.0.0.0/0"] },
         { from_port: 443, to_port: 443, protocol: "tcp", cidr_blocks: ["0.0.0.0/0"] },
+        { from_port: 80, to_port: 80, protocol: "tcp", cidr_blocks: ["0.0.0.0/0"] },
       ]
       name = "web"
       vpc_id = main
@@ -23,12 +23,12 @@ tick 1  7 changes
       instance_class = "db.t3.micro"
       password = (sensitive)
       skip_final_snapshot = true
-      vpc_security_group_ids[0] = web
+      vpc_security_group_ids = [web]
   + aws.instance web        stacks/aws_demo.df:34
       ami = "ami-0abcdef1234567890"
       instance_type = "t3.small"
       subnet_id = a
-      vpc_security_group_ids[0] = web
+      vpc_security_group_ids = [web]
   + aws.eip web             stacks/aws_demo.df:46
       domain = "vpc"
       instance = web

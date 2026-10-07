@@ -497,11 +497,16 @@ fn key_defaults(v: Value, defaults: &BTreeMap<String, Value>) -> Value {
 
 /// Set normal form: union modulo definite equality. Never conflicts, never
 /// stuck: two elements that *might* be equal are both kept until a null
-/// resolves, and the provider receives both.
+/// resolves, and the provider receives both. One writer's set keeps the
+/// order it was written in (R-158); a union of several is sorted, so the
+/// provider receives it in one order whatever order the writers came in.
 fn set_normalize(path: &str, items: Vec<(Value, Witnesses)>) -> Elem {
     if let Some(e) = null_collection(&items) {
         return e;
     }
+    // One contribution, however often joined: its witnesses are every
+    // item's.
+    let one = items.windows(2).all(|w| w[0].1 == w[1].1);
     let mut elems: Vec<Value> = Vec::new();
     let mut ws = Witnesses::new();
     for (v, w) in &items {
@@ -524,7 +529,9 @@ fn set_normalize(path: &str, items: Vec<(Value, Witnesses)>) -> Elem {
     if items.is_empty() {
         return Elem::Bottom;
     }
-    elems.sort();
+    if !one {
+        elems.sort();
+    }
     Elem::Val(Value::List(elems), ws)
 }
 
@@ -2515,12 +2522,14 @@ mod f_tests {
         let Elem::Val(Value::List(xs2), _) = &twice else {
             panic!()
         };
+        // R-158: a lone contribution keeps the order it was written in,
+        // its duplicates dropped.
         assert_eq!(
             xs1,
-            &vec![s("--a"), s("--z")],
+            &vec![s("--z"), s("--a")],
             "a lone contribution is normalized"
         );
-        assert_eq!(xs2, &vec![s("--a"), s("--z")]);
+        assert_eq!(xs2, &vec![s("--z"), s("--a")]);
         assert_eq!(one, twice, "Set lub is idempotent on one contribution");
     }
 

@@ -311,19 +311,51 @@ pub fn chain(
                     .fold(top.clone(), |p, k| crate::ir::path_join(&p, k))
             })
             .collect();
-        let writers = match f.args.first() {
-            Some(Term::Val(Value::Str(t)))
-                if ![
-                    crate::modules::INPUT,
-                    crate::modules::LET,
-                    crate::transform::OUTPUT,
-                ]
-                .contains(&t.as_str()) =>
-            {
-                printer.writers(f, &paths)
-            }
-            _ => vec![None; paths.len()],
+        let resource = matches!(f.args.first(), Some(Term::Val(Value::Str(t)))
+            if ![
+                crate::modules::INPUT,
+                crate::modules::LET,
+                crate::transform::OUTPUT,
+            ]
+            .contains(&t.as_str()));
+        let writers = match resource {
+            true => printer.writers(f, &paths),
+            false => vec![None; paths.len()],
         };
+        // A list several writers add to (a set, R-158) is said element by
+        // element, each with its own writer's chain.
+        let mut elem = vec![false; found.len()];
+        let (mut found, mut paths, mut writers) = (found, paths, writers);
+        if resource {
+            let mut i = 0;
+            while i < found.len() {
+                let Value::List(xs) = &found[i].1 else {
+                    i += 1;
+                    continue;
+                };
+                if xs.is_empty() || printer.redact.is_secret(&found[i].1) {
+                    i += 1;
+                    continue;
+                }
+                let at: Vec<String> = (0..xs.len())
+                    .map(|j| format!("{}[{j}]", paths[i]))
+                    .collect();
+                let ws = printer.writers(f, &at);
+                if ws.iter().all(|w| *w == ws[0]) {
+                    i += 1;
+                    continue;
+                }
+                let keys = found[i].0.clone();
+                let items: Vec<(Vec<String>, Value)> =
+                    xs.iter().map(|x| (keys.clone(), x.clone())).collect();
+                let n = items.len();
+                found.splice(i..=i, items);
+                paths.splice(i..=i, at);
+                writers.splice(i..=i, ws);
+                elem.splice(i..=i, vec![true; n]);
+                i += n;
+            }
+        }
         let printed = |p: &str| match head.strip_suffix(top.as_str()) {
             Some(addr) => format!("{addr}{p}"),
             None => p.to_string(),
@@ -355,7 +387,12 @@ pub fn chain(
             };
             if let [i] = g.leaves.as_slice() {
                 let (keys, leaf) = &found[*i];
-                let chain = relative_chain(printer.attr_chain(&res.rules, f, keys, stack_keys));
+                let chain = match (elem[*i], writers[*i]) {
+                    (true, Some(w)) => relative_chain(
+                        printer.contribution_chain(&res.rules, w, &paths[*i], stack_keys),
+                    ),
+                    _ => relative_chain(printer.attr_chain(&res.rules, f, keys, stack_keys)),
+                };
                 // A list is laid out as a fold is.
                 if matches!(leaf, Value::List(xs) if !xs.is_empty())
                     && !printer.redact.is_secret(leaf)
