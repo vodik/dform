@@ -90,6 +90,10 @@ internal fn __path(value: any, path: string) -> any? forwards, forwards nulls
 #| example: __known(V)
 internal fn __known(value: any) -> bool
 
+#| An object whose keys are computed: `{ "${k}": V }` lowers to it, each key then its value; no value for a key that is not a string or one given twice, and unknown while a key is.
+#| example: __object(str.format("%s-a", K), V)
+internal fn __object(key: string, value: any, ...) -> any? forwards, forwards nulls
+
 #| The number of elements of a list, keys of an object or characters of a string; `x.len` lowers to it (R-155).
 #| example: __len(Xs)
 internal fn __len(value: any) -> int

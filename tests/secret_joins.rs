@@ -2,6 +2,10 @@
 //! tests the secret against `known`'s rows as `p == "hunter2"` would, and is
 //! E0301 unless `secret.declassify` says why. A secret forwarded through
 //! a relation, bound once, is no test.
+//!
+//! An object's key may be computed, `{ "${k}": v }`: it interpolates like
+//! any string, and a key is a name printed wherever the object is, so a
+//! secret one is E0301; a secret value under a computed key is carried.
 
 mod common;
 use common::{Scratch, repo};
@@ -65,4 +69,41 @@ fn a_declassified_join_and_a_forward_stay_allowed() {
     assert!(out.contains("- leaked"), "{out}");
     assert!(!out.contains("E0301"), "{out}");
     assert!(out.contains("password = (sensitive)"), "{out}");
+}
+
+#[test]
+fn a_computed_key_interpolates() {
+    let r = run("resource leaky.vault v {\n  \
+         tags = { \"${k}-a\": \"1\", b: \"2\", k }\n  \
+         backup = { \"${k}\": pw }\n}\n")
+    .success();
+    for want in [
+        "tags = { b: \"2\", k: \"team\", team-a: \"1\" }",
+        "backup.team = (sensitive)",
+    ] {
+        assert!(r.stdout.contains(want), "{want}\n{}", r.stdout);
+    }
+    assert!(!r.stdout.contains("hunter2"), "{}", r.stdout);
+}
+
+#[test]
+fn a_secret_key_is_e0301() {
+    refused(
+        "resource leaky.vault v { backup = { \"${pw}\": \"1\" } }\n",
+        "E0301: an object's key over a secret",
+    );
+    refused(
+        "deny \"x\" { at: { \"x-${pw}\": 1 } } where k == \"team\"\n",
+        "E0301: an object's key over a secret",
+    );
+}
+
+#[test]
+fn two_keys_alike_have_no_value() {
+    let r = run("resource leaky.vault v { tags = { \"${k}\": \"1\", team: \"2\" } }\n").failure();
+    assert!(
+        r.stderr.contains("leaky.vault v.tags has no value"),
+        "{}",
+        r.stderr
+    );
 }

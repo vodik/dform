@@ -137,7 +137,10 @@ like any other, strings included (R-175): a string in a hole is lexed
 as its own, so its braces are its text and its holes nest to any depth,
 `"#cloud-config\n${yaml.encode({ runcmd: ["${install} sh -s - server"] })}"`.
 A hole never closed is an error at its `${`. A hole is a content
-position: a dot in it reads now (see "Reference or read"). A reference in
+position: a dot in it reads now (see "Reference or read"). An object's
+key interpolates too, `{ "${name}-a": v }`: the object is built when its
+keys are known, two keys alike give it no value, and a secret key is a
+read of the secret (E0301). A reference in
 a hole is its address, `T["A"]`, whether `in` types its variable or a
 reference column binds it untyped: `deny "${r}" where deformation(k, r,
 _), r in k8s` prints `k8s.namespace["ns"]`. A literal part may not contain

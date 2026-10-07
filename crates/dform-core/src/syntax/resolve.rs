@@ -6220,6 +6220,16 @@ impl<'u> Lowerer<'u> {
                 Ok(Term::List(out))
             }
             OBJECT => {
+                // A key with holes (`{ "${k}": v }`) is computed: the
+                // object is built at run time (`functions::OBJECT`).
+                let computed = n
+                    .children()
+                    .filter(|c| c.kind() == OBJECT_FIELD)
+                    .filter_map(|f| tokens(&f).next())
+                    .any(|k| k.kind() == STRING && !self.text && has_hole(k.text()));
+                if computed {
+                    return self.computed_object(rc, n, pos, pre);
+                }
                 let mut m = BTreeMap::new();
                 for f in n.children().filter(|c| c.kind() == OBJECT_FIELD) {
                     let k = tokens(&f).next().ok_or(Skip)?;
@@ -6411,6 +6421,49 @@ impl<'u> Lowerer<'u> {
 
     /// A string literal: `"a${e}b"` is `str.format("a%sb", e)` (H-13), `$${`
     /// is a literal `${`, and a brace is itself.
+    /// `{ "${k}": v, b: w }`: an object with a computed key, built at run
+    /// time, each key then its value (`functions::OBJECT`). A key is a
+    /// string term like any other: its holes are read now.
+    fn computed_object(
+        &mut self,
+        rc: &mut Rc,
+        n: &SyntaxNode,
+        pos: Pos,
+        pre: &mut Vec<Lit>,
+    ) -> L<Term> {
+        let mut args = Vec::new();
+        let mut keys = BTreeSet::new();
+        for f in n.children().filter(|c| c.kind() == OBJECT_FIELD) {
+            let k = tokens(&f).next().ok_or(Skip)?;
+            let key = match k.kind() {
+                STRING => self.string_term(rc, &k, pre)?,
+                _ => str_term(k.text()),
+            };
+            if let Term::Val(Value::Str(name)) = &key
+                && !keys.insert(name.clone())
+            {
+                return self.error(self.span(&f), format!("key `{name}` given twice"));
+            }
+            let v = match terms(&f).next() {
+                Some(t) => self.term(rc, &t, pos, pre)?,
+                // `{ a }` is `{ a: a }`.
+                None => {
+                    let c = Chain {
+                        head: k.text().to_string(),
+                        head_kind: k.kind(),
+                        call: None,
+                        range: k.text_range(),
+                        ops: Vec::new(),
+                    };
+                    let res = self.resolve(rc, &c, pre)?;
+                    self.realize(rc, res, pos, pre, self.span_of(k.text_range()))?
+                }
+            };
+            args.extend([key, v]);
+        }
+        Ok(func(crate::functions::OBJECT, args))
+    }
+
     fn string_term(&mut self, rc: &mut Rc, t: &SyntaxToken, pre: &mut Vec<Lit>) -> L<Term> {
         let text = t.text();
         if self.text || !text.contains("${") {

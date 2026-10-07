@@ -327,6 +327,21 @@ impl Pass<'_> {
                 all(!self.attr_label(&args[0], &args[1], &args[2]).is_empty()
                     || args.iter().any(|a| self.term_secret(a, vars)))
             }
+            // An object with computed keys: each value's label under its
+            // key when the key is a constant, all of it when it is not.
+            Term::Func { name, args } if name == crate::functions::OBJECT => {
+                let mut out = Label::new();
+                for kv in args.chunks(2) {
+                    let [k, v] = kv else { continue };
+                    let l = self.term_label(v, vars);
+                    match k {
+                        Term::Val(Value::Str(k)) => join(&mut out, under(l, k)),
+                        _ if !l.is_empty() => join(&mut out, whole()),
+                        _ => false,
+                    };
+                }
+                out
+            }
             // A field of a value: the part of its label under the field.
             Term::Func { name, args } if name == "__path" => match args.as_slice() {
                 [x, Term::Val(Value::Str(f))] => narrow(&self.term_label(x, vars), f),
@@ -1137,6 +1152,14 @@ fn inspecting(t: &Term, secret: &dyn Fn(&Term) -> bool) -> Option<String> {
     match t {
         // What is declassified may be inspected: the rule says so.
         Term::Func { name, .. } if name == DECLASSIFY => None,
+        // A computed key is a name, printed wherever the object is: a
+        // read of the secret. Its values are carried.
+        Term::Func { name, args } if name == crate::functions::OBJECT => {
+            if args.iter().step_by(2).any(secret) {
+                return Some(name.clone());
+            }
+            args.iter().find_map(|a| inspecting(a, secret))
+        }
         Term::Func { name, args } => {
             if !carries(name) && args.iter().any(secret) {
                 return Some(name.clone());

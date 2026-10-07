@@ -251,6 +251,10 @@ pub fn with_named(
 /// The lowering's functions a program writes as forms of the language
 /// (`ref(r)`, R-43; `cloud_ref(T, name, path)`): callable, but no part of
 /// the standard library's listing, `dform doc` or the editor (R-134).
+/// `{ "${k}": V }`: an object whose keys are computed, its keys and
+/// values in turn (lowering.df).
+pub const OBJECT: &str = "__object";
+
 pub const FORMS: &[&str] = &["ref", "cloud_ref"];
 
 /// Whether a program may call `name`: declared and not internal, or one
@@ -264,6 +268,7 @@ pub fn callable(name: &str) -> bool {
 pub fn shown_call(name: &str) -> String {
     match name {
         crate::ir::LEN => "`.len`".to_string(),
+        OBJECT => "an object's key".to_string(),
         n => format!("{n}()"),
     }
 }
@@ -936,6 +941,25 @@ pub const BODIES: &[(&str, Body)] = &[
         ] => Some(v.clone()),
         [v, Value::Str(ty)] => crate::value::read_typed(ty, v).ok(),
         _ => None,
+    }),
+    // `{ "${k}": V }` (After R-178): an object whose keys are computed.
+    (OBJECT, |a| {
+        if a.len() % 2 != 0 {
+            return None;
+        }
+        let mut m = BTreeMap::new();
+        for kv in a.chunks(2) {
+            let k = match &kv[0] {
+                Value::Str(k) => k.clone(),
+                // A key not known yet: neither is the object.
+                n @ Value::Null { .. } => return Some(n.clone()),
+                _ => return None,
+            };
+            if m.insert(k, kv[1].clone()).is_some() {
+                return None;
+            }
+        }
+        Some(Value::Obj(m))
     }),
     ("__known", |a| match a {
         [_] => Some(Value::Bool(true)),
