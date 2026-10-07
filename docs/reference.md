@@ -2210,7 +2210,11 @@ computes may read any). Each deployment's `state.master` publishes an
 X25519 public key its master derives; the producer seals the value to it
 (an ephemeral key, XChaCha20-Poly1305, bound to the output and the
 reader), and publishes the seals in `outputs.json` beside the label and
-the keyed digest. The reader's run opens its seal with its own master and
+the keyed digest. A seal's ephemeral key and nonce derive from the
+producer's master, the reader's key, the output and the value, so the
+same value sealed to the same reader is the same bytes: an apply of the
+producer that changes no output publishes the same `outputs.json`, and a
+reader's plan file of it stays fresh. The reader's run opens its seal with its own master and
 reads the value as it reads a secret input: in a provider's settings
 (`use k8s { kubeconfig = platform[env].kubeconfig }`) or a sensitive
 field. No stack reads another's master, and no provider holds the value.
@@ -2227,7 +2231,11 @@ seals to no one yet, so that apply says so (`apps[env=lab]:
 platform[env=lab].kubeconfig is held by no provider and not sealed to it
 yet: apply platform[env=lab] again ..`), registers the reader and makes
 its master; the next `dform apply apps env=lab` applies the platform
-first, which seals to it, and then the reader. Each apply that opens a
+first, which seals to it, and then the reader. That one extra run per new
+reader deployment stays: the value exists only in the producer's run,
+under its master, and the reader's key only from its first confirmed
+apply (making it at the reader's plan would be a write before any
+confirmation). Each apply that opens a
 seal writes an `opened` entry to the reader's log. A reader without its
 master cannot open its seal: it says so, the value is a stand-in, and a
 provider configured from it waits. A producer without its master

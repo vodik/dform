@@ -1570,14 +1570,41 @@ fn sealing_key(shared: &[u8; 32], ephemeral: &[u8; 32], public: &[u8; 32]) -> [u
 /// X25519 key's public half, a nonce, and XChaCha20-Poly1305 under the
 /// key their shared secret gives; base64. What a stack publishes of a
 /// secret output for each stack that reads it (R-166).
-pub fn seal_to(public: &[u8; 32], label: &str, plain: &[u8]) -> Result<String> {
+///
+/// With `seed` (a key the producer's master derives) the ephemeral key and
+/// the nonce derive from it, the reader's key, the label and the value:
+/// the same value sealed to the same reader is the same seal, so
+/// outputs.json does not change at every apply of the producer (a
+/// reader's plan file stays fresh), and a new value, or a reader's new
+/// master, a new one. Without, they are random.
+pub fn seal_to(
+    public: &[u8; 32],
+    label: &str,
+    plain: &[u8],
+    seed: Option<&[u8; 32]>,
+) -> Result<String> {
     use base64::Engine;
     use chacha20poly1305::aead::{Aead, Payload};
     use curve25519_dalek::montgomery::MontgomeryPoint;
-    let eph = random_bytes::<32>("a seal's ephemeral key")?;
+    let (eph, nonce) = match seed {
+        Some(seed) => {
+            use sha2::Digest;
+            let mut info = b"dform seal of ".to_vec();
+            info.extend_from_slice(public);
+            info.extend_from_slice(&sha2::Sha256::digest(label.as_bytes()));
+            info.extend_from_slice(&sha2::Sha256::digest(plain));
+            let b = crate::secrets::hkdf(b"dform sealed output", seed, &info, 32 + 24);
+            let eph: [u8; 32] = b[..32].try_into().expect("32 bytes");
+            let nonce: [u8; 24] = b[32..].try_into().expect("24 bytes");
+            (eph, nonce)
+        }
+        None => (
+            random_bytes::<32>("a seal's ephemeral key")?,
+            random_bytes::<24>("a seal's nonce")?,
+        ),
+    };
     let eph_public = MontgomeryPoint::mul_base_clamped(eph).to_bytes();
     let shared = MontgomeryPoint(*public).mul_clamped(eph).to_bytes();
-    let nonce = random_bytes::<24>("a seal's nonce")?;
     let ct = cipher(&sealing_key(&shared, &eph_public, public))
         .encrypt(
             (&nonce).into(),
@@ -1633,13 +1660,26 @@ mod tests {
     fn a_seal_opens_with_its_readers_master_and_label_only() {
         let a = Key::from_bytes([1; 32]);
         let b = Key::from_bytes([2; 32]);
-        let sealed = seal_to(&seal_pair(&a).1, "p#kc to a", b"kubeconfig").unwrap();
+        let sealed = seal_to(&seal_pair(&a).1, "p#kc to a", b"kubeconfig", None).unwrap();
         assert_eq!(
             open_sealed(&a, "p#kc to a", &sealed).unwrap(),
             b"kubeconfig"
         );
         assert!(open_sealed(&b, "p#kc to a", &sealed).is_err());
         assert!(open_sealed(&a, "p#kc to b", &sealed).is_err());
+        // Seeded: the same value to the same reader, the same seal; any
+        // other value or reader, another; each opens as before.
+        let seed = [7u8; 32];
+        let to = |k: &Key, label: &str, v: &[u8]| {
+            seal_to(&seal_pair(k).1, label, v, Some(&seed)).unwrap()
+        };
+        let one = to(&a, "p#kc to a", b"kubeconfig");
+        assert_eq!(one, to(&a, "p#kc to a", b"kubeconfig"));
+        assert_ne!(one, to(&a, "p#kc to a", b"kubeconfig 2"));
+        assert_ne!(one, to(&b, "p#kc to a", b"kubeconfig"));
+        assert_ne!(one, to(&a, "p#kc to b", b"kubeconfig"));
+        assert_eq!(open_sealed(&a, "p#kc to a", &one).unwrap(), b"kubeconfig");
+        assert!(open_sealed(&b, "p#kc to a", &one).is_err());
     }
 
     #[test]

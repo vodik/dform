@@ -313,9 +313,12 @@ fn a_secret_changed_outside_dform_is_drift_unknown_without_the_master() {
     let r = run(&s, &[], &["plan"]).success();
     assert_eq!(r.summary(), "stack crud_api is up to date", "{}", r.stdout);
     assert!(
-        r.stderr.contains("crud_api: drift unknown without the key: ")
-            && r.stderr.contains("k8s.secret db_conn.stringData.PGPASSWORD")
-            && r.stderr.contains("compared with it only by a run with the master"),
+        r.stderr
+            .contains("crud_api: drift unknown without the key: ")
+            && r.stderr
+                .contains("k8s.secret db_conn.stringData.PGPASSWORD")
+            && r.stderr
+                .contains("compared with it only by a run with the master"),
         "{}",
         r.stderr
     );

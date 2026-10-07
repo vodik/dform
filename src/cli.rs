@@ -4250,13 +4250,25 @@ fn run_with(
                         false => readers_of(&root, &deployment, &open_s3(&root, false))?,
                     };
                     let sealing = std::cell::RefCell::new(None);
+                    // The same value to the same reader seals the same: the
+                    // published outputs move only when a value or a reader
+                    // does.
+                    let seed = master
+                        .key
+                        .as_ref()
+                        .map(|k| crate::secrets::derived(k, "dform sealed output seed"));
                     let seal = |path: &str, v: &serde_json::Value| {
                         let mut out = std::collections::BTreeMap::new();
                         let plain = crate::approval::canonical_json(v);
                         for (r, public) in &readers {
                             let Some(public) = public else { continue };
                             let label = sealed_label(&deployment, path, r);
-                            match crate::custody::seal_to(public, &label, plain.as_bytes()) {
+                            match crate::custody::seal_to(
+                                public,
+                                &label,
+                                plain.as_bytes(),
+                                seed.as_ref(),
+                            ) {
                                 Ok(b) => {
                                     out.insert(r.clone(), b);
                                 }
