@@ -548,7 +548,13 @@ plan waits about one round trip to each API rather than one per object;
 and the Plan calls, also at once. A provider may add its own lookups
 (the OVH provider lists a region's flavors and images together, and
 looks up a project named by its description once, keeping its id in
-`dform.state/cache/ovh-projects.json`). `DFORM_LOG=debug` prints a line
+`dform.state/cache/ovh-projects.json`, and the server's clock offset
+beside it, so a later run signs its calls without asking the time). On
+the machine, a plan evaluates the program once and its policy pass again
+only for the rules that read the plan's deformation; a create made of a
+document prints the document's row and finds the sites of only the lines
+it prints; the Kubernetes provider reads a kind's schema from its cache
+when a run first asks for it. `DFORM_LOG=debug` prints a line
 on stderr for each phase of a run and each backend request and provider
 call, with the time since the run began and how long it took:
 
