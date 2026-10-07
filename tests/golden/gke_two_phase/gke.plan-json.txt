@@ -45,6 +45,7 @@ exit: ok
     }
   ],
   "moved": [],
+  "outcome": "done",
   "shadowed": [],
   "stack": "gke_two_phase",
   "summary": {

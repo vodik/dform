@@ -145,6 +145,9 @@ impl Drop for Scratch {
 
 pub struct Run {
     pub ok: bool,
+    /// The exit status (docs/reference.md "Exit status"); `None` when a
+    /// signal ended it.
+    pub code: Option<i32>,
     pub stdout: String,
     pub stderr: String,
 }
@@ -153,6 +156,7 @@ impl From<Output> for Run {
     fn from(o: Output) -> Self {
         Run {
             ok: o.status.success(),
+            code: o.status.code(),
             stdout: String::from_utf8_lossy(&o.stdout).into_owned(),
             stderr: String::from_utf8_lossy(&o.stderr).into_owned(),
         }
@@ -176,6 +180,20 @@ impl Run {
             !self.ok,
             "dform unexpectedly succeeded\nstdout:\n{}\nstderr:\n{}",
             self.stdout, self.stderr
+        );
+        self
+    }
+
+    /// A run that stopped (exit 5, R-147): a plan file or an approval
+    /// applied what it showed and stopped before what it did not.
+    #[track_caller]
+    pub fn stopped(self) -> Self {
+        assert_eq!(
+            self.code,
+            Some(5),
+            "dform did not stop\nstdout:\n{}\nstderr:\n{}",
+            self.stdout,
+            self.stderr
         );
         self
     }

@@ -286,6 +286,19 @@ impl std::fmt::Display for Held {
 
 impl std::error::Error for Held {}
 
+/// The local backend's lock is held by another run (the message names
+/// it): as [`Held`] is a lease's.
+#[derive(Debug)]
+pub struct Locked(pub String);
+
+impl std::fmt::Display for Locked {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for Locked {}
+
 /// The lease is no longer this holder's: it expired and was taken over, or
 /// was broken.
 #[derive(Debug)]
@@ -658,12 +671,13 @@ impl Store for LocalStore {
             match f.try_lock() {
                 Ok(()) => {}
                 Err(std::fs::TryLockError::WouldBlock) => {
-                    bail!(
+                    return Err(Locked(format!(
                         "stack {stack} is locked by another apply (pid {}): {}; \
                          wait for it, or `dform stack unlock {stack}` if no apply is running",
                         lock_holder(&path).unwrap_or_else(|| "unknown".into()),
                         path.display()
-                    );
+                    ))
+                    .into());
                 }
                 Err(std::fs::TryLockError::Error(e)) => {
                     return Err(e).with_context(|| format!("lock {}", path.display()));

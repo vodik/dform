@@ -99,7 +99,7 @@ fn audit_kinds(s: &Scratch) -> Vec<(String, String)> {
 /// `n`: no Apply call reaches the world, state is as the interrupted apply
 /// left it (the rename is not written either), and the audit log's plan
 /// ends `declined`. A decline is not an error: nothing is said after the
-/// answer, the exit is 0, and the stack is unlocked.
+/// answer, the exit is 3 (R-147), and the stack is unlocked.
 #[test]
 fn declining_a_resumed_apply_changes_nothing() {
     let s = interrupted();
@@ -112,7 +112,7 @@ fn declining_a_resumed_apply_changes_nothing() {
         "{before}"
     );
     assert_eq!(after.trim(), "", "nothing is said after the answer");
-    assert_eq!(code, 0);
+    assert_eq!(code, 3, "a decline exits 3 (R-147)");
     assert!(
         !s.path("w.state.lock").exists(),
         "the stack is still locked"
@@ -206,7 +206,7 @@ fn declining_at_a_later_tick_keeps_what_ran() {
     let s = Scratch::new("confirm-tick2-no");
     s.write("p.df", GROUP);
     let (said, code) = answers(&s, &["y", "n"]);
-    assert_eq!(code, 0);
+    assert_eq!(code, 3, "a decline exits 3 (R-147)");
     assert!(!said[2].contains("Error"), "{}", said[2]);
     assert!(
         !s.path("w.state.lock").exists(),
@@ -230,7 +230,7 @@ fn declining_at_a_later_tick_keeps_what_ran() {
     assert_eq!(end["tick"], 2);
 }
 
-/// `n` to a stack the target reads ends the command there, exit 0: the
+/// `n` to a stack the target reads ends the command there, exit 3: the
 /// reader is neither planned nor applied, and the declined stack is
 /// unlocked.
 #[test]
@@ -259,7 +259,7 @@ fn declining_a_dependency_stops_before_its_reader() {
         expectrl::process::unix::WaitStatus::Exited(_, code) => code,
         other => panic!("{other:?}"),
     };
-    assert_eq!(code, 0);
+    assert_eq!(code, 3, "a decline exits 3 (R-147)");
     let dir = s.path("dform.state/platform/env=lab");
     assert!(dir.join("state.audit.jsonl").exists(), "{}", dir.display());
     assert!(!dir.join("state.lock").exists(), "platform is still locked");

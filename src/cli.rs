@@ -56,6 +56,7 @@ fn launch() -> &'static dyn plugin::Launch {
 #[derive(Parser, Debug, Clone)]
 #[command(name = "dform")]
 #[command(about = "Facts + rules + constraints for infra", long_about = None)]
+#[command(after_help = "See dform(1), or `dform help CMD`, for the full documentation.")]
 struct Args {
     /// Run as if dform started in DIR: the project, its dform.state/ and
     /// discovery are DIR's.
@@ -814,21 +815,19 @@ pub fn main(
         _ => resolve(args).and_then(run_command),
     };
     crate::timing::finish();
-    match result {
-        // Stopped by a signal: 128 + its number, as a shell says it,
-        // once every destructor of the run has run.
-        Ok(Outcome::Interrupted { signal }) => {
-            std::process::ExitCode::from(128u8.saturating_add(signal as u8))
-        }
-        // A decline or a stop said what it had to (`run`).
-        Ok(_) => std::process::ExitCode::SUCCESS,
+    // Every exit goes through `exit_code`: a signal's 128 + its number
+    // once every destructor of the run has run; a decline or a stop said
+    // what it had to (`run`).
+    let outcome = match result {
+        Ok(o) => o,
         Err(e) => {
             use std::io::IsTerminal;
             let color = color.style(std::io::stderr().is_terminal()).color;
             eprint!("{}", crate::diag::report(&e, color));
-            std::process::ExitCode::FAILURE
+            Outcome::of_error(&e)
         }
-    }
+    };
+    std::process::ExitCode::from(exit_code(&outcome))
 }
 
 /// `dform __provider NAME`: serve the built-in provider NAME until stdin
@@ -1549,8 +1548,10 @@ struct Session {
     lock: crate::store::Guard,
 }
 
-/// How a run ended that did not fail. A decline and a stop are outcomes a
-/// person chose or a plan file bounds, not errors: the command exits 0.
+/// How a run ended: what the exit status says ([`exit_code`], R-147;
+/// docs/reference.md "Exit status"). A decline and a stop are outcomes a
+/// person chose or a plan file bounds, not errors: nothing is said as an
+/// error, and each has its own status.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Outcome {
     /// It ran to its end: an apply applied every tick.
@@ -1567,7 +1568,84 @@ pub enum Outcome {
     /// answers logged; the next apply resumes. `main` exits 128 +
     /// `signal`, after every destructor ran.
     Interrupted { signal: i32 },
+    /// The program refused the plan: its conflicts and denies, printed.
+    Refused { conflicts: usize, denies: usize },
+    /// Another run holds the stack's lock (named in the error).
+    Locked,
+    /// It failed (the error printed).
+    Failed,
 }
+
+impl Outcome {
+    /// The outcome of a run that ended in `e` (already printed): a
+    /// refusal or a held lock by their types, else a failure.
+    fn of_error(e: &anyhow::Error) -> Outcome {
+        if let Some(r) = e.downcast_ref::<Refused>() {
+            return Outcome::Refused {
+                conflicts: r.conflicts,
+                denies: r.denies,
+            };
+        }
+        if e.is::<store::Held>() || e.is::<store::Locked>() {
+            return Outcome::Locked;
+        }
+        Outcome::Failed
+    }
+
+    /// The word `--json` says it with (`outcome`).
+    pub fn word(&self) -> &'static str {
+        match self {
+            Outcome::Done => "done",
+            Outcome::Declined { .. } => "declined",
+            Outcome::Stopped { .. } => "stopped",
+            Outcome::Interrupted { .. } => "interrupted",
+            Outcome::Refused { .. } => "refused",
+            Outcome::Locked => "locked",
+            Outcome::Failed => "failed",
+        }
+    }
+}
+
+/// The exit status of a run that ended in `o` (docs/reference.md "Exit
+/// status"); 2, a usage error, is the argument parser's own.
+pub fn exit_code(o: &Outcome) -> u8 {
+    match o {
+        Outcome::Done => 0,
+        Outcome::Failed => 1,
+        Outcome::Declined { .. } => 3,
+        Outcome::Refused { .. } => 4,
+        Outcome::Stopped { .. } => 5,
+        Outcome::Locked => 6,
+        Outcome::Interrupted { signal } => 128u8.saturating_add(*signal as u8),
+    }
+}
+
+/// The program refused the plan (its conflicts and denies were printed):
+/// exit status 4. `what` is the message, as before R-147.
+#[derive(Debug)]
+pub struct Refused {
+    what: String,
+    conflicts: usize,
+    denies: usize,
+}
+
+impl Refused {
+    fn new(what: &str, conflicts: usize, denies: usize) -> Refused {
+        Refused {
+            what: what.to_string(),
+            conflicts,
+            denies,
+        }
+    }
+}
+
+impl std::fmt::Display for Refused {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str(&self.what)
+    }
+}
+
+impl std::error::Error for Refused {}
 
 /// One run of the command line. `hook`: controller mode's part of an apply
 /// (`controller::Hook`). An apply's end, whatever it is, goes to the audit
@@ -1595,6 +1673,7 @@ fn run(cli: Cli, hook: Option<&mut controller::Hook>) -> Result<Outcome> {
             "why": "interrupted",
             "signal": crate::interrupt::name(*signal),
         }),
+        Ok(o) => serde_json::json!({ "result": o.word() }),
         Err(e) => serde_json::json!({ "result": "failed", "error": e.to_string() }),
     };
     let logged = s.log.append("apply_end", end);
@@ -2124,7 +2203,7 @@ fn run_with(
             violations.iter().partition(|v| report::is_conflict(v));
         if !conflicts.is_empty() {
             eprintln!("conflicts");
-            for v in conflicts {
+            for v in &conflicts {
                 let shown =
                     report::violation_conflict(v, redact, report::Why::Line, report::Style::PLAIN);
                 eprint!(
@@ -2135,11 +2214,11 @@ fn run_with(
         }
         if !rest.is_empty() {
             eprintln!("constraint violations:");
-            for v in rest {
+            for v in &rest {
                 eprintln!("- {}", report::violation_line(v, redact));
             }
         }
-        bail!("blocked by constraints");
+        Err(Refused::new("blocked by constraints", conflicts.len(), rest.len()).into())
     };
     if opts.blocking {
         blocked(&ev.violations, &ev.redact)?;
@@ -2681,6 +2760,12 @@ fn run_with(
             if json {
                 let mut j = report.json();
                 j["deployment"] = serde_json::json!(deployment);
+                // How the plan ends, as its exit status says (R-147).
+                j["outcome"] = match violations.is_empty() && denies.is_empty() {
+                    true => Outcome::Done.word(),
+                    false => "refused",
+                }
+                .into();
                 j["key_defaults"] = serde_json::json!(instance.defaulted);
                 if let Some(f) = &file {
                     j["needs_approval"] = serde_json::to_value(&f.needs_approval)?;
@@ -2714,7 +2799,13 @@ fn run_with(
                 .collect();
             blocked(&unshown, &redact)?;
             if !violations.is_empty() || !denies.is_empty() {
-                bail!("blocked by constraints");
+                let conflicts = violations.iter().filter(|v| report::is_conflict(v)).count();
+                return Err(Refused::new(
+                    "blocked by constraints",
+                    conflicts,
+                    violations.len() - conflicts + denies.len(),
+                )
+                .into());
             }
             if let (Some(out), Some(file)) = (out, &file) {
                 file.save(&out)?;
@@ -2865,10 +2956,13 @@ fn run_with(
                         eprintln!("- {}", redact.text(d));
                     }
                     persist(&st)?;
-                    bail!(
+                    return Err(Refused::new(
                         "apply stopped: blocked by constraints on the remaining actions of the \
-                         interrupted apply; review `dform plan`, then apply again"
-                    );
+                         interrupted apply; review `dform plan`, then apply again",
+                        0,
+                        denies.len(),
+                    )
+                    .into());
                 }
             }
             // Ticks (E §2.7): each applies every definite deformation in
@@ -3050,10 +3144,15 @@ fn run_with(
                 if !denies.is_empty() {
                     let redact = query::Redactor::new(&res.facts, backend.schema());
                     eprintln!("constraint violations:");
-                    for d in denies {
-                        eprintln!("- {}", redact.text(&d));
+                    for d in &denies {
+                        eprintln!("- {}", redact.text(d));
                     }
-                    bail!("apply stopped at tick {tick}: blocked by constraints");
+                    return Err(Refused::new(
+                        &format!("apply stopped at tick {tick}: blocked by constraints"),
+                        0,
+                        denies.len(),
+                    )
+                    .into());
                 }
                 // A batch apply asks before it changes anything, unless
                 // `--yes` or it applies a reviewed plan file.
@@ -3526,7 +3625,13 @@ fn run_with(
                     for v in &violations {
                         eprintln!("- {}", redact.text(v));
                     }
-                    bail!("apply stopped after tick {tick}: blocked by constraints");
+                    let conflicts = violations.iter().filter(|v| report::is_conflict(v)).count();
+                    return Err(Refused::new(
+                        &format!("apply stopped after tick {tick}: blocked by constraints"),
+                        conflicts,
+                        violations.len() - conflicts,
+                    )
+                    .into());
                 }
                 resources = ir::compile_resources(next.facts.iter().cloned(), backend.schema())?;
                 adopts = ir::compile_adopts(next.facts.iter())?;
@@ -6157,5 +6262,64 @@ fn atom_kv(pred: &str, k: &str, v: Value) -> Atom {
         args: vec![Term::Val(Value::Str(k.to_string())), Term::Val(v)],
         record: None,
         span: Default::default(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every outcome has its own status (R-147); the match has no
+    /// wildcard, so a new outcome is a compile error here until it is
+    /// given one.
+    #[test]
+    fn each_outcome_has_its_own_exit_status() {
+        let all = [
+            Outcome::Done,
+            Outcome::Failed,
+            Outcome::Declined { tick: 1, why: None },
+            Outcome::Refused {
+                conflicts: 1,
+                denies: 1,
+            },
+            Outcome::Stopped {
+                tick: 1,
+                why: String::new(),
+            },
+            Outcome::Locked,
+            Outcome::Interrupted {
+                signal: libc::SIGINT,
+            },
+            Outcome::Interrupted {
+                signal: libc::SIGTERM,
+            },
+        ];
+        for o in &all {
+            match o {
+                Outcome::Done
+                | Outcome::Failed
+                | Outcome::Declined { .. }
+                | Outcome::Refused { .. }
+                | Outcome::Stopped { .. }
+                | Outcome::Locked
+                | Outcome::Interrupted { .. } => {}
+            }
+        }
+        let codes: Vec<u8> = all.iter().map(exit_code).collect();
+        assert_eq!(codes, [0, 1, 3, 4, 5, 6, 130, 143]);
+        let words: Vec<&str> = all.iter().map(Outcome::word).collect();
+        assert_eq!(
+            words,
+            [
+                "done",
+                "failed",
+                "declined",
+                "refused",
+                "stopped",
+                "locked",
+                "interrupted",
+                "interrupted"
+            ]
+        );
     }
 }
