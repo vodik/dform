@@ -74,7 +74,7 @@ fn a_tick_waits_until_the_world_reaches_the_value() {
     );
     assert!(r.stdout.contains("\ntick 3  1 change\n"), "{}", r.stdout);
     assert!(r.stdout.contains("+ net.vpc v"), "{}", r.stdout);
-    assert!(r.stdout.ends_with("apply: complete\n"), "{}", r.stdout);
+    assert!(!r.stdout.contains("apply: complete"), "{}", r.stdout);
     let w = waits(&s);
     assert_eq!(w.len(), 1, "{w:?}");
     assert_eq!(w[0]["result"], "resolved");

@@ -294,7 +294,7 @@ fn a_no_op_apply_keeps_a_memo_it_first_read() {
     );
     let now = [("DFORM_TEST_NOW", "2026-10-03T09:00:00Z")];
     let r = run(&s, &now, &["apply", "p.df"]).success();
-    assert!(r.stdout.contains("apply: nothing to do"), "{}", r.stdout);
+    assert!(r.stdout.ends_with("is up to date\n"), "{}", r.stdout);
     let state = s.read("dform.state/p/state.json");
     assert!(
         state.contains("\"pw\"") && state.contains("2026-10-03T09:00:00Z"),

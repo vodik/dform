@@ -3661,13 +3661,8 @@ fn run_with(
                     if cli.world.is_none() && dep.store().get(store::OUTPUTS)?.is_some() {
                         dep.store().delete(store::OUTPUTS)?;
                     }
-                    match changed || tick > 1 {
-                        true => println!(
-                            "{}",
-                            cli.style.paint(report::Paint::Done, "destroy: complete")
-                        ),
-                        false => println!("destroy: nothing to do"),
-                    }
+                    // No closing line: the block showed every change
+                    // finish, and the exit status says how it ended.
                     break;
                 }
                 if !boundary {
@@ -3739,19 +3734,14 @@ fn run_with(
                     {
                         crate::stack::register(&root, &deployment, location, stack_cfg.bootstrap)?;
                     }
+                    // No closing line: the block showed every change
+                    // finish, and the exit status says how it ended.
                     if let Some(h) = hook.as_deref_mut() {
                         h.finish(
                             &deployment,
                             undeformed,
                             &backend.stored_world(&backend.observe(&st)?),
                         )?;
-                    } else if changed || tick > 1 {
-                        println!(
-                            "{}",
-                            cli.style.paint(report::Paint::Done, "apply: complete")
-                        );
-                    } else {
-                        println!("apply: nothing to do");
                     }
                     break;
                 }

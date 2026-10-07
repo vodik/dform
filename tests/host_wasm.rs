@@ -140,7 +140,7 @@ fn an_apply_s_events_come_through_the_component_s_stream() {
         "{}",
         r.stderr
     );
-    assert!(r.stdout.ends_with("apply: complete\n"), "{}", r.stdout);
+    assert!(!r.stdout.contains("apply: complete"), "{}", r.stdout);
 }
 
 /// The component exits as it is called to Apply the third action: the
@@ -161,7 +161,7 @@ fn a_component_crash_mid_apply_fails_the_action_and_resume_finishes() {
     );
     assert_eq!(identities(&s), ["net.subnet::a", "net.vpc::main"]);
     let r = mock(&s, &["apply"]).success();
-    assert!(r.stdout.ends_with("apply: complete\n"), "{}", r.stdout);
+    assert!(!r.stdout.contains("apply: complete"), "{}", r.stdout);
 }
 
 /// A component that imports `wasi:sockets` is refused without the grant,

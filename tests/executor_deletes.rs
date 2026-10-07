@@ -148,7 +148,6 @@ tick 2  1 change
   ~ net.subnet a  p.df:4
       vpc_id: "net.vpc:main" → main
 stack p is up to date
-apply: complete
 "#
     );
     let w = s.json("w.json");
@@ -243,5 +242,5 @@ fn create_before_destroy_in_one_apply_takes_two_ticks() {
         "{}",
         r.stdout
     );
-    assert!(r.stdout.ends_with("apply: complete\n"), "{}", r.stdout);
+    assert!(!r.stdout.contains("apply: complete"), "{}", r.stdout);
 }

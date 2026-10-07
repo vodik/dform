@@ -126,7 +126,7 @@ fn a_kind_the_program_defines_waits_on_its_crd() {
 fn apply_makes_the_kind_the_tick_after_its_crd() {
     let s = scratch("crd-wait-apply", PROG);
     let r = dev(&s, &["apply", "--yes"]).success();
-    assert!(r.stdout.ends_with("apply: complete\n"), "{}", r.stdout);
+    assert!(!r.stdout.contains("apply: complete"), "{}", r.stdout);
     let w: serde_json::Value = serde_json::from_str(&s.read("w.json")).unwrap();
     let mw = &w["resources"]["k8s.traefik.middleware::large_upload"];
     assert_eq!(mw["attrs"]["metadata"]["name"], "large-upload", "{w}");

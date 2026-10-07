@@ -102,7 +102,7 @@ fn the_plan_deletes_every_object_dependents_first() {
 fn destroy_deletes_in_that_order_and_leaves_an_empty_state() {
     let s = applied("destroy-apply");
     let r = dev(&s, &["destroy", "--yes"]).success();
-    assert!(r.stdout.ends_with("destroy: complete\n"), "{}", r.stdout);
+    assert!(!r.stdout.contains("destroy: complete"), "{}", r.stdout);
     assert!(objects(&s).is_empty(), "{}", s.read("w.json"));
     // The calls in the order they were made.
     let calls: Vec<String> = s
@@ -127,7 +127,7 @@ fn destroy_deletes_in_that_order_and_leaves_an_empty_state() {
     // Nothing is left to destroy.
     let again = dev(&s, &["destroy", "--yes"]).success();
     assert!(
-        again.stdout.ends_with("destroy: nothing to do\n"),
+        again.stdout.ends_with("is up to date\n"),
         "{}",
         again.stdout
     );
@@ -248,7 +248,7 @@ fn a_deny_over_the_programs_resources_does_not_refuse_a_destroy() {
     let p = dev(&s, &["plan", "--destroy"]).success();
     assert!(!p.stderr.contains("a role named app"), "{}", p.stderr);
     let r = dev(&s, &["destroy", "--yes"]).success();
-    assert!(r.stdout.ends_with("destroy: complete\n"), "{}", r.stdout);
+    assert!(!r.stdout.contains("destroy: complete"), "{}", r.stdout);
     assert!(!r.stderr.contains("a role named app"), "{}", r.stderr);
     assert!(objects(&s).is_empty(), "{}", s.read("w.json"));
 }
@@ -396,7 +396,7 @@ fn an_approval_lets_a_held_destroy_through() {
         ])
         .success();
     assert!(r.stdout.contains("approved by alice"), "{}", r.stdout);
-    assert!(r.stdout.ends_with("destroy: complete\n"), "{}", r.stdout);
+    assert!(!r.stdout.contains("destroy: complete"), "{}", r.stdout);
 }
 
 /// A destroy killed mid-tick: `state show` says the next destroy, not the
@@ -445,6 +445,6 @@ fn a_retained_unreachable_object_is_forgotten() {
         r.stdout
     );
     assert!(!r.stdout.contains("unreachable"), "{}", r.stdout);
-    assert!(r.stdout.ends_with("destroy: complete\n"), "{}", r.stdout);
+    assert!(!r.stdout.contains("destroy: complete"), "{}", r.stdout);
     assert_eq!(objects(&s), ["k8s.namespace::ns"]);
 }

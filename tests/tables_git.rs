@@ -56,7 +56,7 @@ fn a_plan_file_pins_the_commit_the_branch_named() {
     let r = s.run(&["apply", "plan.json"]).success();
     assert!(r.stdout.contains("+ compute.vm b"), "{}", r.stdout);
     assert!(!r.stdout.contains("compute.vm c"), "{}", r.stdout);
-    assert!(r.stdout.contains("apply: complete"), "{}", r.stdout);
+    assert!(!r.stdout.contains("apply: complete"), "{}", r.stdout);
 
     // State has the commit apply read; the next plan reads the ref again.
     let r = s.run(&["plan", "p.df"]).success();

@@ -113,7 +113,7 @@ fn apply_asks_again_for_what_waited_on_the_provider() {
         "{}",
         said[1]
     );
-    assert!(said[2].ends_with("apply: complete\n"), "{}", said[2]);
+    assert!(!said[!2].contains("apply: complete"), "{}", said[2]);
     assert!(s.read("w.json").contains("k8s.namespace"));
 }
 
@@ -149,7 +149,7 @@ fn yes_applies_tick_two() {
     let s = scratch("tick2-yes");
     let r = dev(&s, &["apply", "--yes", "p.df"]).success();
     assert!(r.stdout.contains("tick 2  1 change"), "{}", r.stdout);
-    assert!(r.stdout.ends_with("apply: complete\n"), "{}", r.stdout);
+    assert!(!r.stdout.contains("apply: complete"), "{}", r.stdout);
     let c = audit(&s, "configure");
     assert_eq!(c.len(), 1, "{c:?}");
     assert_eq!(
@@ -219,7 +219,7 @@ fn the_boundary_waits_for_the_settings_then_configures() {
         r.stdout
     );
     assert!(r.stdout.contains("  + k8s.namespace ns"), "{}", r.stdout);
-    assert!(r.stdout.ends_with("apply: complete\n"), "{}", r.stdout);
+    assert!(!r.stdout.contains("apply: complete"), "{}", r.stdout);
     let w = audit(&s, "wait");
     assert_eq!(w.len(), 1, "{w:?}");
     assert_eq!(w[0]["result"], "resolved");
@@ -268,7 +268,7 @@ fn a_kind_served_after_the_boundary_is_planned_with_its_schema() {
         r.stdout
     );
     assert!(!tick2.contains("TOKEN-VALUE"), "{}", r.stdout);
-    assert!(r.stdout.ends_with("apply: complete\n"), "{}", r.stdout);
+    assert!(!r.stdout.contains("apply: complete"), "{}", r.stdout);
     let w: serde_json::Value = serde_json::from_str(&s.read("w.json")).unwrap();
     assert_eq!(
         w["resources"]["k8s.config_map::c"]["attrs"]["data"]["uid"], "uid-t",

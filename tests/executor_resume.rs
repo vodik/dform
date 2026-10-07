@@ -60,8 +60,7 @@ fn apply_after_a_crash_finishes_on(backend: Backend) {
          + compute.vm app  p.df:5\n      \
          subnet_id = \"net.subnet:a\"\n\
          resumed from the apply interrupted at tick 1:\n  \
-         compute.vm app  (retried with its idempotency key: nothing it made was found)\n\
-         apply: complete\n"
+         compute.vm app  (retried with its idempotency key: nothing it made was found)\n"
     );
     let st = s.json("w.state.json");
     assert!(st.get("in_flight").is_none(), "{st}");
@@ -183,5 +182,5 @@ fn apply_stops_when_the_world_changed_under_a_remaining_action() {
         "{}",
         r.stdout
     );
-    assert!(r.stdout.ends_with("apply: complete\n"), "{}", r.stdout);
+    assert!(!r.stdout.contains("apply: complete"), "{}", r.stdout);
 }

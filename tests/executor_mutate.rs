@@ -90,7 +90,7 @@ fn a_mutation_elsewhere_is_drift_and_the_run_continues() {
         "{}",
         r.stdout
     );
-    assert!(r.stdout.ends_with("apply: complete\n"), "{}", r.stdout);
+    assert!(!r.stdout.contains("apply: complete"), "{}", r.stdout);
     // The mutation lands once per run: the stack is now undeformed.
     let r = mock(&s, &["plan"]).success();
     assert!(

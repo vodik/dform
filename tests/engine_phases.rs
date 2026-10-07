@@ -132,7 +132,7 @@ fn gke_two_phase_applies_in_two_ticks() {
         "{}",
         r.stdout
     );
-    assert!(r.stdout.ends_with("apply: complete\n"), "{}", r.stdout);
+    assert!(!r.stdout.contains("apply: complete"), "{}", r.stdout);
     assert_eq!(
         world_resources(&s),
         [
@@ -147,10 +147,7 @@ fn gke_two_phase_applies_in_two_ticks() {
         ]
     );
     let again = gke(&s, "gke_two_phase.df", &["apply"]).success();
-    assert_eq!(
-        again.stdout,
-        "stack gke_two_phase is up to date\napply: nothing to do\n"
-    );
+    assert_eq!(again.stdout, "stack gke_two_phase is up to date\n");
 }
 
 /// The other branch of item 6: placed in one zone (`--set zones=1`), the

@@ -141,7 +141,6 @@ fn a_provider_configured_from_a_secret_applies_at_tick_two_and_the_bytes_stay_in
         "  + k8s.namespace ns",
         "  + k8s.config_map conf",
         "  + k8s.traefik.io.v1alpha1.middleware strip",
-        "apply: complete",
     ] {
         assert!(tick2.contains(line), "{line}\n{out}");
     }

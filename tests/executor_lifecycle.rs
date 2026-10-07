@@ -107,7 +107,7 @@ use fake
     );
     // plan does not write state; apply does.
     let r = mock(&s, &["apply"]).success();
-    assert!(r.stdout.ends_with("apply: nothing to do\n"), "{}", r.stdout);
+    assert!(r.stdout.ends_with("is up to date\n"), "{}", r.stdout);
     let st: serde_json::Value = serde_json::from_str(&s.read("w.state.json")).unwrap();
     assert_eq!(
         st["resources"]
@@ -154,7 +154,7 @@ fn ignore_changes_drops_the_path_from_both_sides() {
     let r = mock(&s, &["apply", "--why=none"]).success();
     assert!(
         r.stdout
-            .contains("~ net.vpc[\"main\"]\n  tags.team: \"a\" -> \"b\"\napply order:\n  tick 1\n    net.vpc[\"main\"]\napply: complete\n"),
+            .contains("~ net.vpc[\"main\"]\n  tags.team: \"a\" -> \"b\"\napply order:\n  tick 1\n    net.vpc[\"main\"]\n"),
         "{}",
         r.stdout
     );

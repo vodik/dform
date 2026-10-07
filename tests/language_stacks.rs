@@ -150,7 +150,7 @@ fn a_second_concurrent_apply_fails_cleanly() {
     );
     assert!(!lock.exists());
     let r = s.run(&["apply", "net.df"]).success();
-    assert!(r.stdout.contains("apply: nothing to do"), "{}", r.stdout);
+    assert!(r.stdout.ends_with("is up to date\n"), "{}", r.stdout);
 }
 
 /// A lock left by an apply that is gone (killed) is taken over: no one

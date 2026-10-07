@@ -209,7 +209,7 @@ fn a_refinement_on_a_secret_is_an_apply_assertion() {
     );
     assert!(!r.stderr.contains("hunter2") && !r.stdout.contains("hunter2"));
     let r = apply("correct-horse-battery-staple").success();
-    assert!(r.stdout.ends_with("apply: complete\n"), "{}", r.stdout);
+    assert!(!r.stdout.contains("apply: complete"), "{}", r.stdout);
 }
 
 /// E0306: a provider whose Schema does not declare `checks_refinements`

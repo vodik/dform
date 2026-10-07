@@ -69,7 +69,7 @@ fn the_mock_serves_a_unix_socket_and_dform_dials_it() {
             .into()
     };
     let r = run(&["apply"]).success();
-    assert!(r.stdout.ends_with("apply: complete\n"), "{}", r.stdout);
+    assert!(!r.stdout.contains("apply: complete"), "{}", r.stdout);
     let r = run(&["plan"]).success();
     assert_eq!(r.summary(), "stack p is up to date", "{}", r.stdout);
     assert_eq!(sockets(&tmp), Vec::<String>::new());

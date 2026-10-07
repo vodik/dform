@@ -90,7 +90,7 @@ fn a_secret_a_provider_holds_configures_another_and_stays_in_memory() {
     // Configure, and tick 2 makes what it serves.
     let r = dform(&s, &["apply", "p"]).success();
     assert!(
-        r.stdout.ends_with("apply: complete\n"),
+        !r.stdout.contains("apply: complete"),
         "{}\n{}",
         r.stdout,
         r.stderr

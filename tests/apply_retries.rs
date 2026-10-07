@@ -90,7 +90,7 @@ fn a_create_that_timed_out_is_adopted_not_made_twice() {
             "{state}"
         );
         assert!(state.get("uncertain").is_none(), "{state}");
-        assert!(r.stdout.contains("apply: complete"), "{}", r.stdout);
+        assert!(!r.stdout.contains("apply: complete"), "{}", r.stdout);
     }
 }
 
@@ -146,7 +146,7 @@ fn a_transient_refusal_is_retried_with_backoff() {
             "{backend:?}: {}",
             r.stderr
         );
-        assert!(r.stdout.contains("apply: complete"), "{}", r.stdout);
+        assert!(!r.stdout.contains("apply: complete"), "{}", r.stdout);
         let logged = retries(&s);
         assert_eq!(logged.len(), 2, "{backend:?}: {logged:?}");
         assert_eq!(logged[1]["call"], "Apply net.subnet a");

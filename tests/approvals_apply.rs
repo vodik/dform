@@ -177,7 +177,7 @@ fn apply_refuses_until_a_valid_token_for_the_plans_digest() {
         "{}",
         r.stdout
     );
-    assert!(r.stdout.contains("apply: complete"), "{}", r.stdout);
+    assert!(!r.stdout.contains("apply: complete"), "{}", r.stdout);
     assert!(world(&s).contains("10.1.0.0/16"), "{}", world(&s));
 }
 

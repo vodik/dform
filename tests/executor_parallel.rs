@@ -223,7 +223,7 @@ fn any_answer_order_ends_in_the_same_world() {
             &["dev", "--world", "w.json", "apply", "p.df"],
         );
         assert!(
-            r.stdout.ends_with("apply: nothing to do\n"),
+            r.stdout.ends_with("is up to date\n"),
             "seed {seed:?}: {}",
             r.stdout
         );

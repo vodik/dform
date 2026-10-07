@@ -309,7 +309,7 @@ fn two_concurrent_applies_one_is_refused() {
         std::fs::write(&release, "").unwrap();
         let a = finish(a).success();
         assert!(
-            a.stdout.contains("apply: complete"),
+            !a.stdout.contains("apply: complete"),
             "{}: {}",
             t.what,
             a.stdout
@@ -358,7 +358,7 @@ fn a_run_killed_between_the_log_and_the_checkpoint_recovers() {
             });
             let b = p.run(APPLY).success();
             assert!(
-                b.stdout.contains("apply: complete"),
+                !b.stdout.contains("apply: complete"),
                 "{} {at}: {}",
                 t.what,
                 b.stdout
@@ -407,7 +407,7 @@ fn a_killed_holders_lease_expires_and_a_second_run_takes_over_and_resumes() {
             b.stdout
         );
         assert!(
-            b.stdout.contains("apply: complete"),
+            !b.stdout.contains("apply: complete"),
             "{}: {}",
             t.what,
             b.stdout
@@ -494,7 +494,7 @@ fn a_stale_holders_state_write_is_refused_by_fencing() {
         std::fs::write(&release, "").unwrap();
         let b = finish(b).success();
         assert!(
-            b.stdout.contains("apply: complete"),
+            !b.stdout.contains("apply: complete"),
             "{}: {}",
             t.what,
             b.stdout
@@ -888,7 +888,7 @@ fn a_stale_holder_makes_no_provider_call() {
         std::fs::write(&release, "").unwrap();
         let b = finish(b).success();
         assert!(
-            b.stdout.contains("apply: complete"),
+            !b.stdout.contains("apply: complete"),
             "{}: {}",
             t.what,
             b.stdout

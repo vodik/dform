@@ -154,11 +154,7 @@ fn a_resource_rule_reading_a_stuck_helper_is_a_pending_group() {
         "{}",
         last.stdout
     );
-    assert!(
-        last.stdout.ends_with("apply: complete\n"),
-        "{}",
-        last.stdout
-    );
+    assert!(!last.stdout.contains("apply: complete"), "{}", last.stdout);
     let world = s.read("dform.state/bootstrap/remote.json");
     assert!(world.contains("\"dform-controller\""), "{world}");
 }

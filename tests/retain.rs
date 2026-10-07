@@ -111,7 +111,7 @@ fn a_destroy_forgets_what_the_program_retains() {
         p.stdout
     );
     let r = dev(&s, &["destroy", "--yes"]).success();
-    assert!(r.stdout.ends_with("destroy: complete\n"), "{}", r.stdout);
+    assert!(!r.stdout.contains("destroy: complete"), "{}", r.stdout);
     assert_eq!(keys(&s.json("w.json")), ["net.vpc::data"]);
     assert!(keys(&s.json("w.state.json")).is_empty());
     assert!(

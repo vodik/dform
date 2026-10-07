@@ -63,7 +63,7 @@ fn a_gate_on_a_resource_waits_the_tick_it_takes() {
     let r = dev(&s, &["apply", "--yes"]).success();
     let tick2 = r.stdout.split("\ntick 2").nth(1).unwrap_or("");
     assert!(tick2.contains("+ net.vpc web"), "{}", r.stdout);
-    assert!(r.stdout.ends_with("apply: complete\n"), "{}", r.stdout);
+    assert!(!r.stdout.contains("apply: complete"), "{}", r.stdout);
     let r = dev(&s, &["plan"]).success();
     assert!(r.stdout.contains("is up to date"), "{}", r.stdout);
 }

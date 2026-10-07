@@ -28,7 +28,7 @@ fn yes_applies_a_tick_the_plan_could_not_name() {
         "{}",
         r.stdout
     );
-    assert!(r.stdout.ends_with("apply: complete\n"), "{}", r.stdout);
+    assert!(!r.stdout.contains("apply: complete"), "{}", r.stdout);
     let state = s.read("dform.state/tour/env=prod/state.json");
     assert!(state.contains("iam.policy"), "{state}");
 }
@@ -62,7 +62,7 @@ fn a_plan_file_stops_before_a_tick_the_plan_could_not_name() {
         r.stdout
     );
     assert!(!r.stdout.contains("tick 2"), "{}", r.stdout);
-    assert!(r.stdout.ends_with("apply: complete\n"), "{}", r.stdout);
+    assert!(!r.stdout.contains("apply: complete"), "{}", r.stdout);
 }
 
 /// The controller is its own loop: it runs both ticks in one event.

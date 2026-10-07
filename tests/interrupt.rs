@@ -118,7 +118,7 @@ fn an_interrupt_stops_after_the_calls_in_flight_and_unwinds() {
     );
     assert!(!s.path("w.state.lock").exists(), "the lock is released");
     let r = common::mock(&s, &["apply"]).success();
-    assert!(r.stdout.contains("apply: complete"), "{}", r.stdout);
+    assert!(!r.stdout.contains("apply: complete"), "{}", r.stdout);
     assert_eq!(common::identities(&s).len(), 3);
 }
 

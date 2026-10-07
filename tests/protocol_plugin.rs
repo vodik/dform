@@ -48,7 +48,7 @@ fn a_provider_crash_mid_apply_fails_the_action_and_resume_finishes() {
         "{}",
         r.stdout
     );
-    assert!(r.stdout.ends_with("apply: complete\n"), "{}", r.stdout);
+    assert!(!r.stdout.contains("apply: complete"), "{}", r.stdout);
     let r = mock(&s, &["plan"]).success();
     assert_eq!(r.summary(), "stack p is up to date", "{}", r.stdout);
 }

@@ -179,7 +179,7 @@ fn an_interrupt_says_what_ran_and_the_next_apply_resumes() {
     );
     let r = common::Run::from(apply(&s, &[], &["--yes"]).output().unwrap()).success();
     assert!(
-        r.stdout.contains("apply: complete"),
+        !r.stdout.contains("apply: complete"),
         "{}{}",
         r.stdout,
         r.stderr

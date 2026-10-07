@@ -59,7 +59,7 @@ resource net.vpc main { cidr = "10.0.0.0/16" }
 # plan and asks before it changes anything:
 #
 #   $ dform apply
-#   apply: complete
+#   tick 2  done
 #
 # (It ran in two ticks, two rounds of changes, asking before each;
 # section 10 is why.) The unknown is now the network, which exists:
@@ -307,7 +307,6 @@ resource net.route "${a}-to-${b}" { from = a, to = b, destination = dest } where
 #   $ dform apply tour env=prod
 #   tick 2  1 change
 #   + iam.policy "connect-orders.db.fake"
-#   apply: complete
 #
 # Nobody approves a count of "unknown". `--yes` answers the question at
 # each tick; a plan file stops before what it did not show, and the next

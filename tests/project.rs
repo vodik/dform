@@ -247,7 +247,7 @@ fn dash_c_runs_from_a_directory() {
     let r = s
         .run_in("elsewhere", &["-C", "..", "apply", "net"])
         .success();
-    assert!(r.stdout.ends_with("apply: complete\n"), "{}", r.stdout);
+    assert!(!r.stdout.contains("apply: complete"), "{}", r.stdout);
     assert!(s.path("dform.state/net/state.json").exists());
     assert!(!s.path("elsewhere/dform.state").exists());
 }
