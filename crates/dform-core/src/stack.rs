@@ -1055,6 +1055,11 @@ pub struct SecretOutput {
     pub digest: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub held: Option<crate::provider::Held>,
+    /// The derivation digest of a value that derives (`random.*`, a sealed
+    /// memo; `secrets::standin`): a run that does not hold the master
+    /// keeps `digest` while it is the same (R-164).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub derived: String,
 }
 
 impl SecretOutput {
@@ -1203,6 +1208,9 @@ pub struct Outputs {
     /// The public outputs whose value is not known yet.
     pub pending: BTreeSet<String>,
     pub secret: BTreeMap<String, SecretOutput>,
+    /// The secret outputs whose value changed in a way only the master
+    /// can digest: a run that does not hold it cannot publish them.
+    pub unproven: Vec<String>,
 }
 
 impl Outputs {
@@ -1227,8 +1235,9 @@ pub fn outputs(
     world: &BTreeMap<crate::ir::Address, serde_json::Value>,
     state: &crate::state::State,
     deployment: &str,
-    digest: &dyn Fn(&[u8]) -> String,
+    digest: &dyn Fn(&[u8]) -> Option<String>,
 ) -> Outputs {
+    let unproven = std::cell::RefCell::new(Vec::new());
     let attrs: BTreeMap<(&str, &str, &str), &Value> = facts
         .iter()
         .filter(|a| a.pred == "attr")
@@ -1283,20 +1292,36 @@ pub fn outputs(
                 digest: String::new(),
             })
         });
-        let digest = known
-            .map(|v| {
-                let j = serde_json::to_value(&v).expect("a value serializes");
-                format!(
-                    "hmac-sha256:{}",
-                    digest(crate::approval::canonical_json(&j).as_bytes())
-                )
-            })
+        let j = known.map(|v| serde_json::to_value(&v).expect("a value serializes"));
+        let derived = j
+            .as_ref()
+            .and_then(crate::secrets::standin::digest)
             .unwrap_or_default();
+        let digest = match &j {
+            None => String::new(),
+            Some(j) => match digest(crate::approval::canonical_json(j).as_bytes()) {
+                Some(d) => format!("hmac-sha256:{d}"),
+                // A run without the master keeps what it can prove is
+                // still the value (R-164).
+                None => match state
+                    .secret_outputs
+                    .get(path)
+                    .filter(|p| !derived.is_empty() && p.derived == derived)
+                {
+                    Some(p) => p.digest.clone(),
+                    None => {
+                        unproven.borrow_mut().push(path.to_string());
+                        String::new()
+                    }
+                },
+            },
+        };
         SecretOutput {
             label: crate::value::null_label(crate::transform::OUTPUT, "", path),
             ty: ty.to_string(),
             held,
             digest,
+            derived,
         }
     };
     let mut out = Outputs::default();
@@ -1328,6 +1353,7 @@ pub fn outputs(
             }
         }
     }
+    out.unproven = unproven.into_inner();
     out
 }
 

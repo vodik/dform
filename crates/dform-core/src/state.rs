@@ -124,11 +124,19 @@ pub struct StateEntry {
     pub deps: Vec<String>,
     /// A write-only attribute's digest (R-106, `schema::WRITE_ONLY`), by
     /// path, of the value last applied: the API never answers it, so Plan
-    /// compares the program's value with this. Keyed with the stack's key
-    /// (`hmac-sha256:..`) when it has one, else `sha256:..`; never the
-    /// value.
+    /// compares the program's value with this. Keyed with the
+    /// deployment's master (`hmac-sha256:..`); a run that does not hold it
+    /// keeps what was there. Never the value, nor an unkeyed digest of it.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub written: BTreeMap<String, String>,
+    /// Each leaf at a secret path that holds a derived value (`random.*`,
+    /// a sealed memo's) as last applied, by path: the digest of the leaf
+    /// with each derived value replaced by its stand-in
+    /// (`secrets::standin::digest`), a function of public inputs. A run
+    /// that does not hold the master proves the leaf unchanged by it
+    /// (R-164).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub derived: BTreeMap<String, String>,
 }
 
 impl State {
@@ -206,15 +214,23 @@ impl State {
                 remote,
                 deps,
                 written: BTreeMap::new(),
+                derived: BTreeMap::new(),
             },
         );
     }
 
-    /// Record the digests of `addr`'s write-only attributes as applied
+    /// Record the digests of `addr`'s write-only attributes as applied, and
+    /// the derivation digests of its leaves that hold a derived value
     /// (no-op without an identity).
-    pub fn set_written(&mut self, addr: &Address, written: BTreeMap<String, String>) {
+    pub fn set_written(
+        &mut self,
+        addr: &Address,
+        written: BTreeMap<String, String>,
+        derived: BTreeMap<String, String>,
+    ) {
         if let Some(e) = self.resources.get_mut(&key(addr)) {
             e.written = written;
+            e.derived = derived;
         }
     }
 

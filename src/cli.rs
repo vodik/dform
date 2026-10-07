@@ -2215,12 +2215,6 @@ fn run_with(
                     new_master,
                 },
             )?;
-            if let (true, Some(why)) = (writes || derives, &m.without) {
-                bail!(
-                    "{deployment}: this run does not hold its master ({}): {why}",
-                    m.source
-                );
-            }
             // A query or a why only reads: it says what this master
             // derives, whatever state was applied with.
             m.accept |= matches!(cli.cmd, Cmd::Query { .. } | Cmd::Why { .. });
@@ -2236,11 +2230,34 @@ fn run_with(
             crate::custody::short(id)
         );
     }
+    // A run that does not hold the master (R-164) plans in full, each
+    // change that needs it marked, and an apply makes what needs it not.
+    if let Some(why) = &master.without {
+        eprintln!(
+            "{deployment}: planned without its master ({why}): a secret it derives is a \
+             stand-in, proven unchanged or marked `needs the key`"
+        );
+    }
+    // The key the run's digests are keyed with: a plan that writes a
+    // file, and an apply. A plan file is checked in its own form: one
+    // written without the master by digests anyone can compute (R-164).
     let key = match writes {
-        true => Some(master.key.clone().ok_or_else(|| {
-            anyhow::anyhow!("internal: a run that writes without the deployment's key")
-        })?),
+        true => master.key.clone(),
         false => None,
+    };
+    if let (Some((path, f)), None) = (&saved, &key)
+        && !f.unkeyed
+    {
+        bail!(
+            "plan file {}: its digests are keyed with {deployment}'s master, which this run does \
+             not hold ({}): apply it with the passphrase, or plan again without it",
+            path.display(),
+            master.without.as_deref().unwrap_or("no master")
+        );
+    }
+    let file_key: Option<&zset::file::Key> = match &saved {
+        Some((_, f)) if f.unkeyed => None,
+        _ => key.as_ref(),
     };
     let secret_inputs: BTreeSet<String> = located
         .loaded
@@ -2260,18 +2277,18 @@ fn run_with(
             digest: r.digest.clone(),
         })
         .collect();
-    let plan_inputs = |key: &zset::file::Key| -> Result<zset::file::Inputs> {
+    let plan_inputs = |key: Option<&zset::file::Key>| -> Result<zset::file::Inputs> {
         Ok(zset::file::Inputs {
             stack_outputs: outputs_read.clone(),
             ..plan_inputs(&cli, &files, &secret_inputs, key)?
         })
     };
     // What the plan file records, when one is written or read.
-    let inputs = match &key {
-        Some(k) => Some(plan_inputs(k)?),
-        None => None,
+    let inputs = match writes {
+        true => Some(plan_inputs(file_key)?),
+        false => None,
     };
-    if let (Some((path, saved)), Some(inputs), Some(k)) = (&saved, &inputs, &key) {
+    if let (Some((path, saved)), Some(inputs)) = (&saved, &inputs) {
         // The environment variables the plan read, as they are now.
         let labels = saved
             .inputs
@@ -2279,7 +2296,7 @@ fn run_with(
             .iter()
             .filter_map(|e| e.get("sensitive")?.as_str().map(str::to_string));
         let now = zset::file::Inputs {
-            env: env_inputs(labels, k),
+            env: env_inputs(labels, file_key),
             ..inputs.clone()
         };
         let diff = saved.input_differences(&now);
@@ -2577,6 +2594,7 @@ fn run_with(
         // A destroy's deletes say no reason; a plan's say why they are
         // gone (`Report::explain`, After R-149 amendments 4 and 5).
         report.removing = destroying;
+        custody_marks(&mut report, plan, backend);
         report
     };
     // How much each printed change says of why (R-79).
@@ -2709,9 +2727,7 @@ fn run_with(
         };
         let report = report_of(plan, res, sections, tick, &[], &[]);
         let redact = query::Redactor::new(&res.facts, schema);
-        let key = key
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("internal: no plan key"))?;
+        let key = file_key;
         let now = zset::file::delta(plan, sections, &report, schema, &redact, key);
         let mut diff = saved.stale(&now, tick);
         // A secret answer the plan read (`ssh.read`), read again: by its
@@ -2756,7 +2772,7 @@ fn run_with(
                         sections: &stuck::Sections,
                         resources: &[ir::Resource],
                         st: &state::State,
-                        key: &zset::file::Key,
+                        key: Option<&zset::file::Key>,
                         inputs: zset::file::Inputs|
      -> Result<zset::file::PlanFile> {
         let report = report_of(plan, res, sections, 1, &[], &[]);
@@ -2821,6 +2837,7 @@ fn run_with(
                 })
                 .collect(),
             digest: None,
+            unkeyed: key.is_none(),
             guarded: zset::file::guarded(res),
         })
     };
@@ -2952,9 +2969,9 @@ fn run_with(
             let needs = crate::approval::needs(&res.facts);
             let file = if out.is_some() || !needs.is_empty() {
                 let loaded;
-                let key = match &key {
-                    Some(k) => k,
-                    None => {
+                let key = match (writes, &key) {
+                    (true, k) => k.as_ref(),
+                    (false, _) => {
                         // The key may be made now: a bucket is checked
                         // first, as for any run that writes.
                         if let (None, store::Location::S3(spec)) = (&cli.world, &location) {
@@ -2968,9 +2985,8 @@ fn run_with(
                                     new_master,
                                 },
                             )?
-                            .key
-                            .ok_or_else(|| anyhow::anyhow!("internal: no key made"))?;
-                        &loaded
+                            .key;
+                        loaded.as_ref()
                     }
                 };
                 let inputs = match &inputs {
@@ -3111,9 +3127,9 @@ fn run_with(
             if let Some(h) = hook.as_deref_mut() {
                 h.flush()?;
             }
-            let key = key
-                .as_ref()
-                .ok_or_else(|| anyhow::anyhow!("internal: no plan key"))?;
+            // Without the master (R-164) the apply's digests are its plan
+            // file's form: derivation digests, labels.
+            let key = file_key;
             let inputs = inputs
                 .clone()
                 .ok_or_else(|| anyhow::anyhow!("internal: no plan inputs"))?;
@@ -3588,6 +3604,12 @@ fn run_with(
                         )?;
                     }
                 }
+                // A run that does not hold the master (R-164) makes no
+                // change that needs it, nor one that depends on one: they
+                // wait for an apply with it, and this one stops after the
+                // tick.
+                let needing = needing_master(&plan, &resources, &st, backend);
+                plan.actions.retain(|a| !needing.contains_key(&a.addr));
                 // Kept in state: a sensitive leaf by its digest.
                 let observed = backend.stored_world(&backend.observe(&st)?);
                 executor::begin(&mut st, tick, &plan, &observed);
@@ -3737,13 +3759,22 @@ fn run_with(
                         .map(|(a, d)| (state::key(a), d.clone().unwrap_or_default()))
                         .collect();
                     let canonical = crate::approval::canonical_json(&world.into());
+                    // Without the master there is no digest of it (R-164).
                     audit.append(
                         "tick",
                         serde_json::json!({
                             "tick": tick,
-                            "world": format!("hmac-sha256:{}", key.digest(canonical.as_bytes())),
+                            "world": key.map(|k| format!("hmac-sha256:{}", k.digest(canonical.as_bytes()))),
                         }),
                     )?;
+                }
+                if !needing.is_empty() {
+                    st.in_flight = None;
+                    persist(&st)?;
+                    return Ok(Outcome::Stopped {
+                        tick,
+                        why: needing_text(&deployment, &needing, master.without.as_deref()),
+                    });
                 }
                 if !boundary && destroying {
                     st.in_flight = None;
@@ -3848,11 +3879,26 @@ fn run_with(
                             &backend.observe(&st)?,
                             &st,
                             &deployment,
-                            &|b| key.digest(b),
+                            &|b| key.map(|k| k.digest(b)),
                         )
                     } else {
                         Default::default()
                     };
+                    // A secret output this run cannot digest (R-164): not
+                    // published; the apply stops, its changes made.
+                    if !outputs.unproven.is_empty() {
+                        persist(&st)?;
+                        return Ok(Outcome::Stopped {
+                            tick,
+                            why: format!(
+                                "apply {deployment}: stopped; the secret outputs {} changed, and \
+                                 only the deployment's master ({}) can publish them: apply \
+                                 again with it",
+                                outputs.unproven.join(", "),
+                                master.without.as_deref().unwrap_or("not held")
+                            ),
+                        });
+                    }
                     st.outputs = outputs.known.clone();
                     st.secret_outputs = outputs.secret.clone();
                     persist(&st)?;
@@ -4680,7 +4726,7 @@ fn run_tests(
         // Nothing is kept and nothing applied: a memo answers its
         // candidate, `random.*` derive from a master of the test's own.
         let memos = crate::memo::Memos::new(&state::State::default(), None);
-        crate::functions::random::set_master(b"dform test".to_vec(), stack);
+        crate::functions::random::set_master(Some(b"dform test".to_vec()), None, stack);
         let externs =
             crate::externs::Externs::new(&lowered.program, &lowered.extern_fns, |f, ins| {
                 if let Some(r) = tables.answer(f, ins) {
@@ -4942,9 +4988,135 @@ fn place_of(cli: &Cli, name: &str) -> Result<(crate::stack::Place, PathBuf, stor
 fn keep_memos(
     st: &mut state::State,
     externs: &crate::externs::Externs,
-    key: &crate::zset::file::Key,
+    key: Option<&crate::zset::file::Key>,
 ) -> Result<()> {
     crate::memo::keep(st, externs.memos(), key, &crate::memo::now())
+}
+
+/// Each change of `report` a run that does not hold the master plans,
+/// marked (R-164): `secret changed, needs the key` when it would send a
+/// stand-in, `secrets unchanged` when every secret leaf it derives was
+/// proven unchanged (`.., a write-only one needs the key` when an update
+/// would send one of those whole: the world does not answer it).
+fn custody_marks(
+    report: &mut report::Report,
+    plan: &crate::provider::Plan,
+    backend: &crate::plugin::Providers,
+) {
+    if !crate::secrets::standin::active() {
+        return;
+    }
+    for d in report.definite.iter_mut() {
+        let Some(a) = plan.actions.iter().find(|a| a.addr == d.addr) else {
+            continue;
+        };
+        let need = backend.needs_master(a, None);
+        let proven = backend.proven(&a.addr);
+        d.custody = match (need.is_empty(), proven.is_empty()) {
+            // An update sends a write-only secret whole, unchanged or not.
+            (false, _) if need.iter().all(|p| proven.contains(p)) => {
+                Some("secrets unchanged, a write-only one needs the key".into())
+            }
+            (false, _) => Some("secret changed, needs the key".into()),
+            (true, false) => Some("secrets unchanged".into()),
+            (true, true) => None,
+        };
+    }
+}
+
+/// The actions of `plan` a run that does not hold the master cannot make
+/// (R-164), each with the paths that need it (`Providers::needs_master`),
+/// and what depends on one (no paths): what references it, and the
+/// delete of what it references.
+fn needing_master(
+    plan: &crate::provider::Plan,
+    desired: &[ir::Resource],
+    st: &state::State,
+    backend: &crate::plugin::Providers,
+) -> std::collections::BTreeMap<ir::Address, Vec<String>> {
+    let mut out = std::collections::BTreeMap::new();
+    if !crate::secrets::standin::active() {
+        return out;
+    }
+    let doc = |a: &ir::Address| {
+        desired
+            .iter()
+            .find(|r| r.addr == *a)
+            .map(|r| crate::engine::value_to_json(&r.attrs))
+    };
+    for a in &plan.actions {
+        let paths = backend.needs_master(a, doc(&a.addr).as_ref());
+        if !paths.is_empty() {
+            out.insert(a.addr.clone(), paths);
+        }
+    }
+    let deps = |a: &ir::Address| -> BTreeSet<ir::Address> {
+        let mut d: BTreeSet<ir::Address> = desired
+            .iter()
+            .find(|r| r.addr == *a)
+            .map(|r| r.deps.clone())
+            .unwrap_or_default();
+        d.extend(
+            st.get(a)
+                .into_iter()
+                .flat_map(|e| e.deps.iter().filter_map(|k| state::parse_key(k))),
+        );
+        d
+    };
+    loop {
+        let more: Vec<ir::Address> = plan
+            .actions
+            .iter()
+            .filter(|a| !out.contains_key(&a.addr))
+            .filter(|a| match a.kind {
+                ActionKind::Noop | ActionKind::Pending => false,
+                ActionKind::Delete | ActionKind::DeleteDeposed | ActionKind::Forget => {
+                    out.keys().any(|n| deps(n).contains(&a.addr))
+                }
+                _ => deps(&a.addr).iter().any(|d| out.contains_key(d)),
+            })
+            .map(|a| a.addr.clone())
+            .collect();
+        if more.is_empty() {
+            return out;
+        }
+        for m in more {
+            out.insert(m, Vec::new());
+        }
+    }
+}
+
+/// Why a run that does not hold the master stopped: what it did not make.
+fn needing_text(
+    deployment: &str,
+    needing: &std::collections::BTreeMap<ir::Address, Vec<String>>,
+    without: Option<&str>,
+) -> String {
+    let n = match needing.len() {
+        1 => "1 change".to_string(),
+        n => format!("{n} changes"),
+    };
+    let mut out = format!(
+        "apply {deployment}: stopped; {n} need its master ({}), and were not made:",
+        without.unwrap_or("not held")
+    );
+    for (a, paths) in needing {
+        let what = match paths.as_slice() {
+            [] => "depends on one of these".to_string(),
+            [p] if p.is_empty() => "holds a secret only the master derives".to_string(),
+            ps => format!(
+                "{} only the master derives",
+                ps.iter()
+                    .filter(|p| !p.is_empty())
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        };
+        out.push_str(&format!("\n  {}: {what}", report::address(a)));
+    }
+    out.push_str("\nevery other change was made; apply again with the master to make these");
+    out
 }
 
 /// A destroy's objects no Delete can reach ([`Planned::unreachable`]),
@@ -5310,22 +5482,32 @@ fn print_query(
 /// left out.
 fn env_inputs(
     labels: impl Iterator<Item = String>,
-    key: &zset::file::Key,
+    key: Option<&zset::file::Key>,
 ) -> Vec<serde_json::Value> {
     labels
         .filter_map(|label| {
             let name = label.strip_prefix("env.var/")?;
             let v = std::env::var(name).ok()?;
-            Some(serde_json::json!({ "sensitive": label, "digest": key.digest(v.as_bytes()) }))
+            Some(keyed(&label, key, v.as_bytes()))
         })
         .collect()
+}
+
+/// A secret as a plan file records it: its label, and its digest keyed
+/// with the deployment's master; a run that does not hold it records the
+/// label alone, never an unkeyed digest (R-164).
+fn keyed(label: &str, key: Option<&zset::file::Key>, bytes: &[u8]) -> serde_json::Value {
+    match key {
+        Some(k) => serde_json::json!({ "sensitive": label, "digest": k.digest(bytes) }),
+        None => serde_json::json!({ "sensitive": label }),
+    }
 }
 
 /// The secret answers of dform's own externs (`ssh.read`) as a plan file
 /// records them: each label and its value's digest with the plan key.
 fn answer_inputs(
     externs: &crate::externs::Externs,
-    key: &zset::file::Key,
+    key: Option<&zset::file::Key>,
 ) -> Vec<serde_json::Value> {
     externs
         .secret_answers()
@@ -5335,7 +5517,7 @@ fn answer_inputs(
                 Value::Str(s) => s.clone().into_bytes(),
                 v => serde_json::to_vec(v).unwrap_or_default(),
             };
-            serde_json::json!({ "sensitive": label, "digest": key.digest(&bytes) })
+            keyed(&label, key, &bytes)
         })
         .collect()
 }
@@ -5347,7 +5529,7 @@ fn plan_inputs(
     cli: &Cli,
     files: &[PathBuf],
     secret: &BTreeSet<String>,
-    key: &zset::file::Key,
+    key: Option<&zset::file::Key>,
 ) -> Result<zset::file::Inputs> {
     let read =
         |f: &PathBuf| std::fs::read(f).map_err(|e| anyhow::anyhow!("read {}: {e}", f.display()));
@@ -5368,7 +5550,10 @@ fn plan_inputs(
             .map(|f| {
                 Ok(zset::file::KeyedDigest {
                     path: f.display().to_string(),
-                    digest: key.digest(&read(f)?),
+                    digest: match key {
+                        Some(k) => k.digest(&read(f)?),
+                        None => String::new(),
+                    },
                 })
             })
             .collect::<Result<_>>()?,
@@ -5383,13 +5568,16 @@ fn plan_inputs(
                             Some(f) => read(&PathBuf::from(f))?,
                             None => v.as_bytes().to_vec(),
                         };
-                        serde_json::json!({ "sensitive": label, "digest": key.digest(&bytes) })
+                        keyed(&label, key, &bytes)
                     }
                     // `k=@FILE`: the file's digest, keyed, as an
                     // `--input-file`'s.
                     Some((_, v)) if v.starts_with('@') => {
                         let bytes = read(&PathBuf::from(&v[1..]))?;
-                        serde_json::json!({ "set": kv, "digest": key.digest(&bytes) })
+                        match key {
+                            Some(k) => serde_json::json!({ "set": kv, "digest": k.digest(&bytes) }),
+                            None => serde_json::json!({ "set": kv }),
+                        }
                     }
                     _ => serde_json::Value::String(kv.clone()),
                 })

@@ -2075,8 +2075,19 @@ pub mod random {
     use crate::value::Value;
     use std::cell::RefCell;
 
+    /// A thread's masters: the deployment's (`None` in a run that does not
+    /// hold it) and the public one its stand-ins derive from
+    /// (`secrets::standin`).
+    struct Masters {
+        real: Option<Vec<u8>>,
+        standin: Vec<u8>,
+        deployment: String,
+    }
+
     thread_local! {
-        static MASTER: RefCell<Option<(Vec<u8>, String)>> = const { RefCell::new(None) };
+        static MASTER: RefCell<Option<Masters>> = const { RefCell::new(None) };
+        /// `derive` derives a stand-in.
+        static STANDIN: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
         /// The secrets this thread derived since its master was set, each
         /// by the call that derived it (`random.password("db")`): what the
         /// plan, `query` and `why` label one with.
@@ -2084,10 +2095,24 @@ pub mod random {
             const { RefCell::new(std::collections::BTreeMap::new()) };
     }
 
-    /// Derive this thread's `random.*` from `ikm` for `deployment` until
-    /// the next call.
-    pub fn set_master(ikm: Vec<u8>, deployment: &str) {
-        MASTER.with(|m| *m.borrow_mut() = Some((ikm, deployment.to_string())));
+    /// Derive this thread's `random.*` for `deployment` until the next
+    /// call: from `ikm`, the master's, and each value's stand-in from a
+    /// public master the master id `id` makes; with no `ikm` (a run that
+    /// does not hold the master) the stand-in is the value.
+    pub fn set_master(ikm: Option<Vec<u8>>, id: Option<&str>, deployment: &str) {
+        use sha2::Digest;
+        let standin = sha2::Sha256::new()
+            .chain_update(b"dform stand-in\0")
+            .chain_update(id.unwrap_or_default().as_bytes())
+            .finalize()
+            .to_vec();
+        MASTER.with(|m| {
+            *m.borrow_mut() = Some(Masters {
+                real: ikm,
+                standin,
+                deployment: deployment.to_string(),
+            })
+        });
         DERIVED.with(|d| d.borrow_mut().clear());
     }
 
@@ -2102,14 +2127,34 @@ pub mod random {
         })
     }
 
-    /// `v`, a secret derived by `random.WHAT(key, ..)`, labelled.
-    fn secret(what: &str, key: &str, v: Option<Value>) -> Option<Value> {
-        let v = v?;
-        DERIVED.with(|d| {
-            d.borrow_mut()
-                .entry(v.clone())
-                .or_insert_with(|| format!("random.{what}({key:?})"));
-        });
+    /// The value `f` derives for `random.WHAT(key, ..)`, its stand-in
+    /// registered (`secrets::standin`), and, a `secret` one, labelled.
+    fn derived_value(
+        what: &str,
+        key: &str,
+        secret: bool,
+        f: impl Fn() -> Option<Value>,
+    ) -> Option<Value> {
+        let standin = STANDIN.with(|s| {
+            s.set(true);
+            let v = f();
+            s.set(false);
+            v
+        })?;
+        let real = MASTER.with(|m| m.borrow().as_ref().map(|m| m.real.is_some()))?;
+        let v = match real {
+            true => f()?,
+            false => standin.clone(),
+        };
+        let label = format!("random.{what}({key:?})");
+        if let (Value::Str(v), Value::Str(s)) = (&v, &standin) {
+            crate::secrets::standin::register(v, &label, s);
+        }
+        if secret {
+            DERIVED.with(|d| {
+                d.borrow_mut().entry(v.clone()).or_insert(label);
+            });
+        }
         Some(v)
     }
 
@@ -2150,7 +2195,12 @@ pub mod random {
     fn derive(what: &str, key: &str, knobs: &[&str], len: usize) -> Option<Vec<u8>> {
         MASTER.with(|m| {
             let m = m.borrow();
-            let (ikm, deployment) = m.as_ref()?;
+            let m = m.as_ref()?;
+            let ikm = match STANDIN.with(|s| s.get()) {
+                true => &m.standin,
+                false => m.real.as_ref()?,
+            };
+            let deployment = &m.deployment;
             let mut info = Vec::new();
             for part in [what, deployment.as_str(), key].iter().chain(knobs) {
                 info.extend_from_slice(part.as_bytes());
@@ -2209,11 +2259,9 @@ pub mod random {
         }
         let set = alphabet(name)?;
         let n = length.to_string();
-        secret(
-            "password",
-            key,
-            chars("password", key, &[&n, name], length as usize, &set).map(Value::Str),
-        )
+        derived_value("password", key, true, || {
+            chars("password", key, &[&n, name], length as usize, &set).map(Value::Str)
+        })
     }
 
     /// `random.base64`: derived as `random.bytes` was (its derivation's
@@ -2226,14 +2274,12 @@ pub mod random {
         if !(1..=4096).contains(n) {
             return None;
         }
-        let b = derive("bytes", key, &[&n.to_string()], *n as usize)?;
-        secret(
-            "base64",
-            key,
+        derived_value("base64", key, true, || {
+            let b = derive("bytes", key, &[&n.to_string()], *n as usize)?;
             Some(Value::Str(
                 base64::engine::general_purpose::STANDARD.encode(b),
-            )),
-        )
+            ))
+        })
     }
 
     pub fn id(a: &[Value]) -> Option<Value> {
@@ -2245,24 +2291,28 @@ pub mod random {
         if !(1..=64).contains(&n) {
             return None;
         }
-        let b = derive("id", key, &[&n.to_string()], n as usize)?;
-        Some(Value::Str(b.iter().map(|x| format!("{x:02x}")).collect()))
+        derived_value("id", key, false, || {
+            let b = derive("id", key, &[&n.to_string()], n as usize)?;
+            Some(Value::Str(b.iter().map(|x| format!("{x:02x}")).collect()))
+        })
     }
 
     pub fn uuid(a: &[Value]) -> Option<Value> {
         let [Value::Str(key)] = a else { return None };
-        let mut b = derive("uuid", key, &[], 16)?;
-        b[6] = (b[6] & 0x0f) | 0x40;
-        b[8] = (b[8] & 0x3f) | 0x80;
-        let h: String = b.iter().map(|x| format!("{x:02x}")).collect();
-        Some(Value::Str(format!(
-            "{}-{}-{}-{}-{}",
-            &h[..8],
-            &h[8..12],
-            &h[12..16],
-            &h[16..20],
-            &h[20..]
-        )))
+        derived_value("uuid", key, false, || {
+            let mut b = derive("uuid", key, &[], 16)?;
+            b[6] = (b[6] & 0x0f) | 0x40;
+            b[8] = (b[8] & 0x3f) | 0x80;
+            let h: String = b.iter().map(|x| format!("{x:02x}")).collect();
+            Some(Value::Str(format!(
+                "{}-{}-{}-{}-{}",
+                &h[..8],
+                &h[8..12],
+                &h[12..16],
+                &h[16..20],
+                &h[20..]
+            )))
+        })
     }
 
     /// Synapse's signing key file: `ed25519 a_XXXX SEED`, the version four
@@ -2271,16 +2321,14 @@ pub mod random {
     pub fn signing_key(a: &[Value]) -> Option<Value> {
         use base64::Engine;
         let [Value::Str(key)] = a else { return None };
-        let version = chars("signing_key version", key, &[], 4, &ALNUM[..52])?;
-        let seed = derive("signing_key ed25519", key, &[], 32)?;
-        secret(
-            "signing_key",
-            key,
+        derived_value("signing_key", key, true, || {
+            let version = chars("signing_key version", key, &[], 4, &ALNUM[..52])?;
+            let seed = derive("signing_key ed25519", key, &[], 32)?;
             Some(Value::Str(format!(
                 "ed25519 a_{version} {}",
                 base64::engine::general_purpose::STANDARD_NO_PAD.encode(seed)
-            ))),
-        )
+            )))
+        })
     }
 }
 
@@ -2301,7 +2349,7 @@ mod random_tests {
     #[test]
     fn a_value_is_derived_from_the_master_and_every_knob() {
         let k = |x: &str| Value::Str(x.into());
-        set_master(b"m1".to_vec(), "app");
+        set_master(Some(b"m1".to_vec()), None, "app");
         let pw = s(password(&[k("db")]));
         assert!(pw.len() == 32 && pw.chars().all(|c| c.is_ascii_alphanumeric()));
         assert_eq!(pw, s(password(&[k("db")])));
@@ -2330,10 +2378,30 @@ mod random_tests {
                 && parts[2].len() == 43,
             "{sk}"
         );
-        set_master(b"m1".to_vec(), "app[env=prod]");
+        set_master(Some(b"m1".to_vec()), None, "app[env=prod]");
         assert_ne!(pw, s(password(&[k("db")])), "the deployment is in it");
-        set_master(b"m2".to_vec(), "app");
+        set_master(Some(b"m2".to_vec()), None, "app");
         assert_ne!(pw, s(password(&[k("db")])), "the master is in it");
+    }
+
+    /// A run that does not hold the master derives each value's stand-in:
+    /// the same shape, a function of the master id and the derivation's
+    /// inputs, never the value; a run that holds it derives the same
+    /// stand-in beside the value.
+    #[test]
+    fn without_the_master_a_value_is_its_stand_in() {
+        let k = |x: &str| Value::Str(x.into());
+        set_master(Some(b"m1".to_vec()), Some("id-1"), "app");
+        let pw = s(password(&[k("db")]));
+        set_master(None, Some("id-1"), "app");
+        let standin = s(password(&[k("db")]));
+        assert_ne!(pw, standin);
+        assert!(standin.len() == 32 && standin.chars().all(|c| c.is_ascii_alphanumeric()));
+        assert_eq!(standin, s(password(&[k("db")])), "stable");
+        set_master(None, Some("id-2"), "app");
+        assert_ne!(standin, s(password(&[k("db")])), "the master id is in it");
+        set_master(None, Some("id-1"), "app");
+        assert_ne!(standin, s(password(&[k("db-2")])), "the key is in it");
     }
 
     #[test]

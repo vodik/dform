@@ -213,6 +213,9 @@ pub struct Providers {
     /// [`Config::digest_key`]: what a sensitive leaf of a world document
     /// dform keeps is digested with ([`Providers::stored`]).
     digest_key: Option<crate::zset::file::Key>,
+    /// What the last plan proved unchanged without the master
+    /// ([`Providers::proven`]).
+    proven: RefCell<BTreeMap<Address, Vec<String>>>,
 }
 
 /// What a resource waits on before its provider plans it
@@ -875,6 +878,7 @@ impl Providers {
             held: RefCell::new(BTreeMap::new()),
             relearned: RefCell::new(BTreeSet::new()),
             digest_key: None,
+            proven: RefCell::new(BTreeMap::new()),
         }
     }
 
@@ -1772,35 +1776,140 @@ impl Providers {
     }
 
     /// The digest state keeps of a write-only value: keyed with the
-    /// stack's key, `hmac-sha256:..`, else `sha256:..`.
-    fn written_digest(&self, v: &Json) -> String {
+    /// deployment's master, `hmac-sha256:..`; none in a run that does not
+    /// hold it (never an unkeyed digest: a short password's is a table
+    /// lookup away from it, R-164).
+    fn written_digest(&self, v: &Json) -> Option<String> {
         let text = crate::approval::canonical_json(v);
-        match &self.digest_key {
-            Some(k) => format!("hmac-sha256:{}", k.digest(text.as_bytes())),
-            None => format!("sha256:{}", crate::approval::sha256_hex(text.as_bytes())),
-        }
+        let k = self.digest_key.as_ref()?;
+        Some(format!("hmac-sha256:{}", k.digest(text.as_bytes())))
     }
 
-    /// Whether `v` is the value whose digest is `kept`. A keyed digest with
-    /// no key to compare it by is taken as the same: no change is planned
-    /// that cannot be shown.
+    /// Whether `v` is the value whose digest is `kept`. A run that does
+    /// not hold the master cannot tell: the value is compared at apply (a
+    /// leaf it derives may still be proven unchanged, [`Providers::derived_before`]).
     fn written_matches(&self, v: &Json, kept: &str) -> bool {
         let text = crate::approval::canonical_json(v);
         match (kept.split_once(':'), &self.digest_key) {
             (Some(("hmac-sha256", d)), Some(k)) => k.digest(text.as_bytes()) == d,
-            (Some(("hmac-sha256", _)), None) => true,
-            (Some(("sha256", d)), _) => crate::approval::sha256_hex(text.as_bytes()) == d,
-            _ => true,
+            _ => false,
         }
     }
 
-    /// The digests of `doc`'s write-only attributes, by path.
-    fn written(&self, typ: &str, doc: &Json) -> BTreeMap<String, String> {
+    /// The digests of `doc`'s write-only attributes, by path; one this run
+    /// cannot digest keeps what `before` had.
+    fn written(
+        &self,
+        typ: &str,
+        doc: &Json,
+        before: &BTreeMap<String, String>,
+    ) -> BTreeMap<String, String> {
         self.schema()
             .write_only_of(typ)
             .into_iter()
-            .filter_map(|p| Some((p.to_string(), self.written_digest(get_path(doc, p)?))))
+            .filter_map(|p| {
+                let d = self
+                    .written_digest(get_path(doc, p)?)
+                    .or_else(|| before.get(p).cloned())?;
+                Some((p.to_string(), d))
+            })
             .collect()
+    }
+
+    /// The derivation digest of each leaf of `doc` that holds a derived
+    /// value (`secrets::standin::digest`), by path: an object's members
+    /// each, anything else (a string, a list) whole.
+    pub fn derivations(&self, doc: &Json) -> BTreeMap<String, String> {
+        fn walk(v: &Json, path: &str, out: &mut BTreeMap<String, String>) {
+            match v {
+                Json::Object(m) if provider::marker(v).is_none() => {
+                    for (k, x) in m {
+                        walk(x, &crate::ir::path_join(path, k), out);
+                    }
+                }
+                _ if !path.is_empty() => {
+                    if let Some(d) = crate::secrets::standin::digest(v) {
+                        out.insert(path.to_string(), d);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut out = BTreeMap::new();
+        walk(doc, "", &mut out);
+        out
+    }
+
+    /// In a run that does not hold the master (R-164): each leaf of `want`
+    /// whose derivation digest is the one state recorded at the last apply
+    /// is unchanged, so the world's side is taken to be it (the values
+    /// are the stand-ins of what was applied), and the leaf is proven
+    /// ([`Providers::proven`]). Any other leaf that holds a stand-in
+    /// differs: a change that needs the master.
+    fn derived_before(&self, addr: &Address, entry: &StateEntry, want: &Json, doc: &mut Json) {
+        if !crate::secrets::standin::active() {
+            return;
+        }
+        let mut proven = Vec::new();
+        for (path, d) in &entry.derived {
+            let Some(w) = get_path(want, path) else {
+                continue;
+            };
+            if crate::secrets::standin::digest(w).as_ref() == Some(d) {
+                set_path(doc, path, w.clone());
+                proven.push(path.clone());
+            }
+        }
+        if !proven.is_empty() {
+            self.proven.borrow_mut().insert(addr.clone(), proven);
+        }
+    }
+
+    /// The leaves of `addr` the last plan proved unchanged without the
+    /// master (R-164), by path.
+    pub fn proven(&self, addr: &Address) -> Vec<String> {
+        self.proven.borrow().get(addr).cloned().unwrap_or_default()
+    }
+
+    /// The paths of `a`'s changes a run that does not hold the master
+    /// cannot make (R-164): each whose value holds a stand-in, and every
+    /// one of a create's (or a replacement's) when its document `desired`
+    /// holds one; an update whose unchanged secret leaf only stands in,
+    /// where the world does not answer it (a write-only one), too. Empty
+    /// when the run holds the master.
+    pub fn needs_master(&self, a: &Action, desired: Option<&Json>) -> Vec<String> {
+        use crate::secrets::standin::carries;
+        if !crate::secrets::standin::active() {
+            return Vec::new();
+        }
+        let changed: Vec<String> = a
+            .changes
+            .iter()
+            .filter(|c| c.after.as_ref().is_some_and(carries))
+            .map(|c| c.path.clone())
+            .collect();
+        match a.kind {
+            ActionKind::Create | ActionKind::Adopt | ActionKind::Replace { .. } => {
+                match (changed.is_empty(), desired.is_some_and(carries)) {
+                    (true, true) => vec![String::new()],
+                    _ => changed,
+                }
+            }
+            ActionKind::Update | ActionKind::Drift => {
+                if !changed.is_empty() {
+                    return changed;
+                }
+                let wo = self.schema().write_only_of(&a.addr.typ);
+                self.proven(&a.addr)
+                    .into_iter()
+                    .filter(|p| {
+                        wo.iter()
+                            .any(|w| p.as_str() == *w || p.starts_with(&format!("{w}.")))
+                    })
+                    .collect()
+            }
+            _ => Vec::new(),
+        }
     }
 
     /// [`Providers::stored`] of each document.
@@ -2335,6 +2444,7 @@ impl Providers {
     ) -> Result<Plan> {
         let world = self.refresh(state)?;
         let adopt_map = state::adopt_map(adopts);
+        self.proven.borrow_mut().clear();
 
         // desired: the assembled documents, refs and nulls resolved as far
         // as the world allows.
@@ -2377,6 +2487,7 @@ impl Providers {
                 }
                 if let Some(want) = resolved.get(&addr) {
                     self.written_before(&addr.typ, entry, want, &mut doc);
+                    self.derived_before(&addr, entry, want, &mut doc);
                 }
                 before.insert(addr, doc);
             }
@@ -2740,6 +2851,29 @@ impl Tick<'_> {
                         }
                     }
                 }
+                // A run that does not hold the master (R-164): a leaf it
+                // proved unchanged holds a stand-in; the world's own value
+                // goes in its place, as if only the changes were sent.
+                if crate::secrets::standin::active()
+                    && let Some(e) = state.get(addr)
+                {
+                    let cur = world.get(&key(&addr.typ, &remote));
+                    for p in e.derived.keys() {
+                        if !get_path(&doc, p).is_some_and(crate::secrets::standin::carries) {
+                            continue;
+                        }
+                        match cur.and_then(|c| get_path(&c.attrs, p)) {
+                            Some(v) if provider::marker(v).is_none() => {
+                                set_path(&mut doc, p, v.clone())
+                            }
+                            _ => bail!(
+                                "apply {at}: {} holds a value only the deployment's master \
+                                 derives, and the world does not answer it",
+                                addr.attr(p)
+                            ),
+                        }
+                    }
+                }
                 (pb::Op::Update, remote, Some(doc), false)
             }
         };
@@ -2764,6 +2898,17 @@ impl Tick<'_> {
                 })
                 .collect(),
         };
+        // A stand-in never leaves the process (R-164): the executor is not
+        // given an action that would send one ([`Providers::needs_master`]).
+        if config
+            .as_ref()
+            .is_some_and(crate::secrets::standin::carries)
+        {
+            bail!(
+                "apply {at}: its document holds a value only the deployment's master derives, \
+                 which this run does not hold"
+            );
+        }
         let idempotency_key = uncertain_from_here(a, addr, &remote, state);
         let req = pb::ApplyRequest {
             op: op as i32,
@@ -3064,7 +3209,12 @@ impl Tick<'_> {
     /// applied with (R-106), in state beside it.
     fn record_written(&self, addr: &Address, state: &mut State) {
         if let Some(doc) = self.resolved.get(addr) {
-            state.set_written(addr, self.cloud.written(&addr.typ, doc));
+            let before = state
+                .get(addr)
+                .map(|e| e.written.clone())
+                .unwrap_or_default();
+            let written = self.cloud.written(&addr.typ, doc, &before);
+            state.set_written(addr, written, self.cloud.derivations(doc));
         }
     }
 

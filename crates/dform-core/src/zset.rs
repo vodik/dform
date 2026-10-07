@@ -1156,16 +1156,26 @@ pub mod file {
                 .map(|b| format!("{b:02x}"))
                 .collect()
         }
+    }
 
-        /// A redacted value as the file stores it: a sensitive one with the
-        /// digest of `bytes`, anything else as shown.
-        fn stored(&self, shown: report::Shown, bytes: impl FnOnce() -> Vec<u8>) -> Json {
-            match shown {
-                report::Shown::Sensitive(l) => {
-                    serde_json::json!({ "sensitive": l, "digest": self.digest(&bytes()) })
+    /// A redacted value as the file stores it: a sensitive one with the
+    /// digest of its bytes keyed with the deployment's master (`key`); in a
+    /// run that does not hold it, a derived one with its derivation digest
+    /// (`secrets::standin`, R-164) and any other with its label alone, never
+    /// an unkeyed digest. Anything else as shown.
+    pub fn stored(key: Option<&Key>, shown: report::Shown, value: impl FnOnce() -> Json) -> Json {
+        match (shown, key) {
+            (report::Shown::Sensitive(l), Some(k)) => serde_json::json!({
+                "sensitive": l,
+                "digest": k.digest(&serde_json::to_vec(&value()).unwrap_or_default()),
+            }),
+            (report::Shown::Sensitive(l), None) => {
+                match crate::secrets::standin::digest(&value()) {
+                    Some(d) => serde_json::json!({ "sensitive": l, "derived": d }),
+                    None => serde_json::json!({ "sensitive": l }),
                 }
-                s => s.json(),
             }
+            (s, _) => s.json(),
         }
     }
 
@@ -1193,6 +1203,11 @@ pub mod file {
         /// clause (R-104): a review sees a pair a refactor enabled.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         pub guarded: Vec<Guarded>,
+        /// Written by a run that does not hold the deployment's master
+        /// (R-164): its sensitive values carry a derivation digest or
+        /// their label alone, never a keyed digest ([`stored`]).
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        pub unkeyed: bool,
     }
 
     /// A name declared more than once, each under a clause (R-104), as
@@ -1290,6 +1305,8 @@ pub mod file {
     #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
     pub struct KeyedDigest {
         pub path: String,
+        /// Empty in a run that does not hold the master.
+        #[serde(default, skip_serializing_if = "String::is_empty")]
         pub digest: String,
     }
 
@@ -1395,7 +1412,7 @@ pub mod file {
         report: &Report,
         schema: &Schema,
         r: &Redactor,
-        key: &Key,
+        key: Option<&Key>,
     ) -> Vec<Entry> {
         let mut tick_of: BTreeMap<&str, usize> = BTreeMap::new();
         for (t, xs) in &report.ticks {
@@ -1416,11 +1433,11 @@ pub mod file {
         tick_of: &BTreeMap<&str, usize>,
         schema: &Schema,
         r: &Redactor,
-        key: &Key,
+        key: Option<&Key>,
     ) -> Entry {
         let side = |v: Option<&Json>, sensitive: bool| {
-            key.stored(report::shown(v, sensitive, schema, r), || {
-                serde_json::to_vec(&v).unwrap_or_default()
+            stored(key, report::shown(v, sensitive, schema, r), || {
+                v.cloned().unwrap_or(Json::Null)
             })
         };
         let name = a.addr.to_string();
@@ -1446,7 +1463,7 @@ pub mod file {
     /// The pending groups of one evaluation: its stuck resource rules and
     /// those that may derive after a boundary, each with its head, rule
     /// and null-free bindings, redacted.
-    pub fn groups(res: &EvalResult, r: &Redactor, key: &Key) -> Vec<Group> {
+    pub fn groups(res: &EvalResult, r: &Redactor, key: Option<&Key>) -> Vec<Group> {
         let stuck = res
             .stuck
             .iter()
@@ -1479,13 +1496,13 @@ pub mod file {
     fn redacted<'a>(
         bindings: impl Iterator<Item = (&'a String, &'a Value)>,
         r: &Redactor,
-        key: &Key,
+        key: Option<&Key>,
     ) -> BTreeMap<String, Json> {
         bindings
             .filter(|(_, v)| !crate::stuck::has_null(v))
             .map(|(k, v)| {
-                let j = key.stored(report::shown_value(v, r), || {
-                    serde_json::to_vec(&crate::engine::value_to_json(v)).unwrap_or_default()
+                let j = stored(key, report::shown_value(v, r), || {
+                    crate::engine::value_to_json(v)
                 });
                 (k.clone(), j)
             })
@@ -1496,7 +1513,7 @@ pub mod file {
     pub fn resolved(
         facts: &std::collections::BTreeSet<Atom>,
         r: &Redactor,
-        key: &Key,
+        key: Option<&Key>,
     ) -> Vec<Resolved> {
         facts
             .iter()
@@ -1504,8 +1521,8 @@ pub mod file {
             .filter_map(|a| match a.args.as_slice() {
                 [Term::Val(Value::Str(l)), Term::Val(v)] => Some(Resolved {
                     null: l.clone(),
-                    value: key.stored(report::shown_value(v, r), || {
-                        serde_json::to_vec(&crate::engine::value_to_json(v)).unwrap_or_default()
+                    value: stored(key, report::shown_value(v, r), || {
+                        crate::engine::value_to_json(v)
                     }),
                 }),
                 _ => None,

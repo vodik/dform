@@ -621,6 +621,11 @@ pub struct Deformation {
     pub site: Option<Site>,
     /// The leaf that changed since the last apply ([`Report::because`]).
     pub because: Option<String>,
+    /// Of a run that does not hold the deployment's master (R-164):
+    /// `secrets unchanged` (each secret leaf it derives proven so), or
+    /// `secret changed, needs the key` (an apply without it does not make
+    /// it), said in the site column.
+    pub custody: Option<String>,
     /// A replace: the changed paths the schema declares immutable.
     pub forces: Vec<String>,
     /// The lines as the plan prints them below `-vv` (R-124): each value
@@ -1609,6 +1614,7 @@ fn deformation(a: &Action, schema: &Schema, r: &Redactor, refs: &Refs) -> Deform
         lines,
         site: None,
         because: None,
+        custody: None,
         forces: match a.kind {
             ActionKind::Replace { .. } => forces(a, schema),
             _ => Vec::new(),
@@ -2790,6 +2796,11 @@ impl Report {
             },
             (_, None) => vec![],
         };
+        let right = match &d.custody {
+            Some(c) if right.is_empty() => vec![c.clone()],
+            Some(c) => right.into_iter().map(|r| format!("{r}  {c}")).collect(),
+            None => right,
+        };
         rows.push(Row::new(&plain, painted).with(right));
         // Keep plan output readable.
         let max = 40usize;
@@ -3883,6 +3894,9 @@ impl Report {
         if explained {
             m.insert("site".into(), json!(d.site));
             m.insert("because".into(), json!(d.because));
+            if let Some(c) = &d.custody {
+                m.insert("custody".into(), json!(c));
+            }
         }
         if let Some((_, why)) = &d.gone {
             let why = d.because.clone().unwrap_or_else(|| why.clone());

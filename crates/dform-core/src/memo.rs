@@ -15,8 +15,9 @@
 //!
 //! A secret candidate (the secrets pass says which sites:
 //! `secrets::secret_memos`) is kept sealed with a key derived from the
-//! stack's key (`state.key`, `secrets::seal`): state holds the seal, never
-//! the value, and the run that reads it opens it in memory.
+//! deployment's master (`custody`, `secrets::seal`): state holds the seal,
+//! never the value, and the run that reads it opens it in memory; a run
+//! that does not hold the master answers its stand-in.
 
 use crate::ast::ExternFn;
 use crate::state::State;
@@ -69,8 +70,9 @@ pub fn source(call: &str) -> String {
 /// The answers of `memo.first` for one run, from the state it starts with.
 pub struct Memos {
     kept: BTreeMap<String, Kept>,
-    /// The stack's key, which opens a sealed one; `None` when the
-    /// deployment has none yet (then nothing sealed is kept).
+    /// The deployment's master, which opens a sealed one; `None` in a run
+    /// that does not hold it, where a sealed one answers its stand-in
+    /// (`secrets::standin`).
     key: Option<crate::zset::file::Key>,
     /// The first candidate of each key not kept, as this run answered it.
     given: RefCell<BTreeMap<String, Value>>,
@@ -126,36 +128,62 @@ impl Memos {
         if let Some(v) = &m.value {
             return Ok(v.clone());
         }
+        // Its stand-in (R-164): a function of the key and the seal, which
+        // stay until the memo is tainted.
+        let standin = {
+            use sha2::Digest;
+            let d = sha2::Sha256::new()
+                .chain_update(k.as_bytes())
+                .chain_update([0])
+                .chain_update(m.sealed.as_bytes())
+                .finalize();
+            let hex: String = d.iter().take(16).map(|b| format!("{b:02x}")).collect();
+            format!("memo-{hex}")
+        };
+        let label = format!("{FIRST}({k:?})");
         let Some(key) = &self.key else {
-            anyhow::bail!(
-                "memo {k} is sealed with the stack's key (state.key), which this run does not have"
-            );
+            // A run that does not hold the master: the stand-in.
+            crate::secrets::standin::register(&standin, &label, &standin);
+            return Ok(Value::Str(standin));
         };
         let plain = crate::secrets::open(key, k, &m.sealed)?;
-        serde_json::from_slice(&plain).with_context(|| format!("memo {k}: the opened value"))
+        let v: Value = serde_json::from_slice(&plain)
+            .with_context(|| format!("memo {k}: the opened value"))?;
+        if let Value::Str(t) = &v {
+            crate::secrets::standin::register(t, &label, &standin);
+        }
+        Ok(v)
     }
 }
 
 /// Keep in `st` each memo the run answered that it does not have yet:
 /// `(key, value, secret)` ([`crate::externs::Externs::memos`]), a secret
-/// one sealed with the stack's key `key`. `now`: when, RFC 3339.
+/// one sealed with the deployment's master `key`. A run that does not
+/// hold it keeps no secret one, nor one that holds a stand-in: the next
+/// apply with the master does. `now`: when, RFC 3339.
 pub fn keep(
     st: &mut State,
     memos: Vec<(String, Value, bool)>,
-    key: &crate::zset::file::Key,
+    key: Option<&crate::zset::file::Key>,
     now: &str,
 ) -> Result<()> {
     for (k, v, secret) in memos {
         if st.memo.contains_key(&k) {
             continue;
         }
-        let kept = match secret {
-            true => Kept {
+        let kept = match (secret, key) {
+            (true, None) => continue,
+            (false, None)
+                if crate::secrets::standin::carries(&crate::engine::value_to_json(&v)) =>
+            {
+                continue;
+            }
+            (true, Some(key)) => Kept {
                 kept: now.to_string(),
                 value: None,
                 sealed: crate::secrets::seal(key, &k, &serde_json::to_vec(&v)?)?,
             },
-            false => Kept {
+            (false, _) => Kept {
                 kept: now.to_string(),
                 value: Some(v),
                 sealed: String::new(),

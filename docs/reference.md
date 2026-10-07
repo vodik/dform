@@ -333,7 +333,7 @@ too):
 | 2 | usage: the command line is wrong (the argument parser's own) |
 | 3 | declined: a question was answered no; nothing of that tick was applied, and nothing is printed as an error |
 | 4 | refused by the program: its conflicts and denies, printed (`plan` and `apply` alike) |
-| 5 | stopped: a plan file or an approval applied what it showed and stopped before what it did not, or a destroy deleted what it could reach and left what it could not (listed under `unreachable`); state is consistent, and the next run resumes |
+| 5 | stopped: a plan file or an approval applied what it showed and stopped before what it did not, or a destroy deleted what it could reach and left what it could not (listed under `unreachable`), or an apply without the deployment's master made what it could and not what needs the master (listed); state is consistent, and the next run resumes |
 | 6 | locked: another run holds the stack (named, one line) |
 | 128 + N | stopped by signal N after the run unwound (130 for SIGINT, 143 for SIGTERM) |
 
@@ -1941,6 +1941,65 @@ with the passphrase: a plan reads the key file as it is; the apply
 `into`, the master `id`, `who`). Nothing derived changes. A deployment
 whose `state.master` is sealed and whose dform.toml names no passphrase
 is refused, naming the setting.
+
+### Planning and applying without the master
+
+A run that does not hold the master (the passphrase not given: a second
+operator, a pull request's plan in CI) plans in full and derives
+nothing. Each `random.*` value, and a sealed memo's, is a stand-in: what
+the same derivation gives under a public master the master id makes, so
+it has the value's shape and depends on the derivation's inputs alone
+(the function, the deployment, the key, every knob, the master id), and
+it never leaves the process. Every apply records, beside each leaf that
+holds a derived value (`derived` in the resource's state entry), the
+digest of the leaf with each derived value replaced by its stand-in: a
+digest of public inputs, of no use to a guesser. A leaf holding a secret
+that is not derived (an input's, an environment variable's) has none.
+State holds ids, names, addresses, keyed digests and these, never a
+secret nor an unkeyed digest of one (a write-only attribute's digest is
+keyed with the master; a run without it keeps the one there).
+
+The plan says so on stderr (`crud_api: planned without its master
+(DFORM_PASSPHRASE is not set): ..`), and a leaf whose digest is the one
+state recorded is unchanged. Each change of an object that holds a
+derived secret says, in its site column:
+
+```text
+  ~ k8s.secret db_conn         stacks/crud_api.df:120  secrets unchanged
+      metadata.labels.team = <none> → "shop"
+  ~ google.sql_user crud_user  stacks/crud_api.df:92  secret changed, needs the key
+      password = (sensitive) → (sensitive)
+```
+
+`secrets unchanged, a write-only one needs the key` is an update of an
+object whose write-only secret (a token in an instance's `user_data`) is
+unchanged: the update sends it whole, and the world never answers it.
+`plan --json` says the same in each deformation's `custody`.
+
+An apply without the master makes every change that sends no stand-in:
+an update of an object whose secrets are unchanged sends the world's own
+value of each (the provider's read of it), as a patch of the rest would.
+It makes no change that needs the master, nor one that depends on one
+(what references it, the delete of what it references), and stops after
+the tick, exit 5, listing them:
+
+```text
+apply crud_api: stopped; 2 changes need its master (DFORM_PASSPHRASE is not set), and were not made:
+  google.sql_user crud_user: password only the master derives
+  k8s.secret db_conn: stringData.PGPASSWORD only the master derives
+every other change was made; apply again with the master to make these
+```
+
+A plan file written without the master is `unkeyed`: a derived value by
+its derivation digest (`{"sensitive": LABEL, "derived": ..}`), any other
+secret by its label alone. An apply of it, with or without the master,
+compares in that form, and without the master stops the same way; a
+plan file keyed with the master is not applied without it. A secret
+output whose value changed cannot be published without the master: the
+apply stops after making its changes. A secret changed out of band in
+the world is seen by a run with the master, not by one without it. A
+resource named by a `random.id` needs the master to plan: its name is a
+stand-in without it.
 
 `RANDOM_MASTER` in the environment is the `random.*` input key material
 itself, for tests and the editor. It is taken where state was applied

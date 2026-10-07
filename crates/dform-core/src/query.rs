@@ -569,6 +569,22 @@ impl Redactor {
         self.secrets.get(v).cloned()
     }
 
+    /// The secrets the run holds that are not derived (an input's, an
+    /// environment variable's, an extern's column), as text: those a
+    /// derivation digest must not say anything of (`secrets::standin`).
+    /// A value built from a derived one is not one of them.
+    pub fn sources(&self) -> Vec<String> {
+        self.secrets
+            .keys()
+            .filter(|v| !self.derived.contains_key(*v))
+            .filter_map(|v| match v {
+                Value::Str(s) => Some(s.clone()),
+                _ => None,
+            })
+            .filter(|s| !crate::secrets::standin::derived(s))
+            .collect()
+    }
+
     /// The call that derived `v`, when it is a secret `random.*` gave
     /// (`random.password("db")`).
     pub fn derived(&self, v: &Value) -> Option<&str> {

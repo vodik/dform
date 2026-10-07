@@ -1013,3 +1013,158 @@ mod held_tests {
         );
     }
 }
+
+/// Stand-ins (R-164): what a run that does not hold the master derives in
+/// place of each secret the master derives (a `random.*` value, a sealed
+/// memo's), and how it proves one unchanged without its value.
+///
+/// A stand-in is the value the same derivation gives under a public
+/// master made from the master id, so it has the value's shape and is a
+/// function of the derivation's inputs (the function, the deployment, the
+/// key, every knob, the master id) alone: public. A run with the master
+/// derives both and records, beside each secret leaf an apply wrote
+/// (`StateEntry::derived`), the digest of the leaf with every derived
+/// value in it replaced by its stand-in ([`digest`]). A run without the
+/// master derives the stand-ins only: a leaf whose digest is the one state
+/// recorded is unchanged, any other change of it needs the master. A
+/// stand-in never leaves the process but as such a digest: an action that
+/// would send one is not sent ([`carries`]).
+pub mod standin {
+    use std::collections::{BTreeMap, BTreeSet};
+    use std::sync::Mutex;
+
+    struct Registry {
+        /// Each derived value's text (a stand-in's own, in a run without
+        /// the master) -> its label and its stand-in's text.
+        derived: BTreeMap<String, (String, String)>,
+        /// The secrets of the run that are not derived (an input's, an
+        /// environment variable's): a leaf holding one has no digest, as
+        /// its digest would say something of it.
+        sources: BTreeSet<String>,
+        /// The run does not hold the master: its derived values are
+        /// stand-ins.
+        active: bool,
+    }
+
+    static REGISTRY: Mutex<Registry> = Mutex::new(Registry {
+        derived: BTreeMap::new(),
+        sources: BTreeSet::new(),
+        active: false,
+    });
+
+    fn registry() -> std::sync::MutexGuard<'static, Registry> {
+        REGISTRY.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// The run holds no master (`true`): what it derives are stand-ins.
+    pub fn set_active(active: bool) {
+        registry().active = active;
+    }
+
+    pub fn active() -> bool {
+        registry().active
+    }
+
+    /// `value`, derived as `label`, stands in as `standin`.
+    pub fn register(value: &str, label: &str, standin: &str) {
+        if value.is_empty() {
+            return;
+        }
+        registry()
+            .derived
+            .entry(value.to_string())
+            .or_insert_with(|| (label.to_string(), standin.to_string()));
+    }
+
+    /// The run's secrets that are not derived (`query::Redactor::sources`).
+    pub fn set_sources(sources: impl IntoIterator<Item = String>) {
+        registry().sources = sources.into_iter().filter(|s| !s.is_empty()).collect();
+    }
+
+    /// Whether `text` is or holds a derived value (or its stand-in).
+    pub fn derived(text: &str) -> bool {
+        let r = registry();
+        r.derived
+            .iter()
+            .any(|(v, (_, s))| text.contains(v.as_str()) || text.contains(s.as_str()))
+    }
+
+    /// The label of each derived value `text` holds, in a run without the
+    /// master (where a value is its stand-in).
+    pub fn labels(text: &str) -> Vec<String> {
+        let r = registry();
+        r.derived
+            .iter()
+            .filter(|(v, _)| text.contains(v.as_str()))
+            .map(|(_, (l, _))| l.clone())
+            .collect()
+    }
+
+    /// Whether `j` holds a stand-in a run without the master derived: what
+    /// it must never send.
+    pub fn carries(j: &serde_json::Value) -> bool {
+        let r = registry();
+        if !r.active {
+            return false;
+        }
+        fn walk(j: &serde_json::Value, f: &dyn Fn(&str) -> bool) -> bool {
+            match j {
+                serde_json::Value::String(s) => f(s),
+                serde_json::Value::Array(xs) => xs.iter().any(|x| walk(x, f)),
+                serde_json::Value::Object(m) => m.values().any(|x| walk(x, f)),
+                _ => false,
+            }
+        }
+        walk(j, &|s| r.derived.keys().any(|v| s.contains(v.as_str())))
+    }
+
+    /// The digest of the leaf `j` with each derived value in it replaced
+    /// by its stand-in, hex: `None` when it holds none, or holds a secret
+    /// that is not derived.
+    pub fn digest(j: &serde_json::Value) -> Option<String> {
+        let r = registry();
+        let mut hit = false;
+        fn walk(j: &serde_json::Value, r: &Registry, hit: &mut bool) -> Option<serde_json::Value> {
+            Some(match j {
+                serde_json::Value::String(s) => {
+                    let mut out = s.clone();
+                    // The longest first: one derived value may hold another.
+                    let mut vs: Vec<(&String, &String)> =
+                        r.derived.iter().map(|(v, (_, st))| (v, st)).collect();
+                    vs.sort_by_key(|(v, _)| std::cmp::Reverse(v.len()));
+                    for (v, st) in vs {
+                        if out.contains(v.as_str()) {
+                            *hit = true;
+                            out = out.replace(v.as_str(), st);
+                        }
+                    }
+                    if r.sources.iter().any(|x| out.contains(x.as_str())) {
+                        return None;
+                    }
+                    serde_json::Value::String(out)
+                }
+                serde_json::Value::Array(xs) => serde_json::Value::Array(
+                    xs.iter().map(|x| walk(x, r, hit)).collect::<Option<_>>()?,
+                ),
+                serde_json::Value::Object(m) => serde_json::Value::Object(
+                    m.iter()
+                        .map(|(k, x)| Some((k.clone(), walk(x, r, hit)?)))
+                        .collect::<Option<_>>()?,
+                ),
+                other => other.clone(),
+            })
+        }
+        let standin = walk(j, &r, &mut hit)?;
+        hit.then(|| {
+            crate::approval::sha256_hex(crate::approval::canonical_json(&standin).as_bytes())
+        })
+    }
+
+    /// Forget the run's registry (a test's, between deployments).
+    pub fn clear() {
+        let mut r = registry();
+        r.derived.clear();
+        r.sources.clear();
+        r.active = false;
+    }
+}

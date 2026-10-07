@@ -875,6 +875,11 @@ impl Evaluator {
                 .cloned()
                 .collect()
         };
+        // The run's secrets that are not derived: a leaf holding one has no
+        // derivation digest (`secrets::standin`, R-164).
+        crate::secrets::standin::set_sources(
+            crate::query::Redactor::new(&res.facts, schema).sources(),
+        );
         let mut plan = backend.plan(&asked(&res, &resources), adopts, lifecycle, st)?;
         let replaced = executor::replaced(&plan);
         let (res, violations, resources) = if replaced.is_empty() {
@@ -1263,11 +1268,15 @@ impl Located {
             .map_err(|_| anyhow::anyhow!("internal: the state read panicked"))??;
         // The master state was applied with, or `--new-master` (R-163).
         opts.master.check(&self.deployment, st.master.as_deref())?;
-        // `random.*` derive from the deployment's master (R-60).
-        if lowered.is_some_and(|l| crate::functions::random::called(&l.program))
-            && let Some(ikm) = &opts.master.random
-        {
-            crate::functions::random::set_master(ikm.clone(), &self.deployment);
+        // `random.*` derive from the deployment's master (R-60); a run that
+        // does not hold it derives stand-ins (R-164, `secrets::standin`).
+        crate::secrets::standin::set_active(opts.master.random.is_none());
+        if lowered.is_some_and(|l| crate::functions::random::called(&l.program)) {
+            crate::functions::random::set_master(
+                opts.master.random.clone(),
+                opts.master.id.as_deref(),
+                &self.deployment,
+            );
         }
         // `memo.first`: what state keeps, a sealed one opened with the
         // deployment's key.
