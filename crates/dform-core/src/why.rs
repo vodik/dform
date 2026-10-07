@@ -32,8 +32,10 @@ pub struct As {
 
 /// What `why` reads besides the evaluation: the relations' signatures,
 /// the stack's keys (a chain ends at one), the root sites are relative
-/// to, and what a resource of a type waits on before its provider plans
-/// it (R-110, `deployment::Evaluator::provider_wait`).
+/// to, what a resource of a type waits on before its provider plans
+/// it (R-110, `deployment::Evaluator::provider_wait`), and, when a plan
+/// was made, when the change or the group at an address runs
+/// (`report::Report::when`, After R-156).
 pub struct Context<'a> {
     pub res: &'a EvalResult,
     pub redact: &'a Redactor,
@@ -41,6 +43,7 @@ pub struct Context<'a> {
     pub stack_keys: &'a BTreeSet<String>,
     pub top: Option<&'a Path>,
     pub waits: &'a dyn Fn(&str) -> Option<String>,
+    pub when: Option<&'a dyn Fn(&str) -> Option<String>>,
 }
 
 /// `dform why PATTERN`, as text.
@@ -48,29 +51,58 @@ pub fn why(pattern: &str, how: As, cx: &Context) -> Result<String> {
     if let Some(message) = deny_message(pattern)? {
         return deny(&message, how, cx);
     }
+    // What the program does not derive yet, a resource rule the plan
+    // holds as a group: why not, and the tick it waits for.
+    let why_not = || -> Result<String> {
+        let mut out = crate::whynot::why_not(pattern, cx.res, cx.redact)?;
+        if let Some(w) = cx.when.and_then(|when| when(pattern.trim())) {
+            out.push_str(&cx.redact.text(&format!("{w}\n")));
+        }
+        Ok(out)
+    };
     let matched = match matches(pattern, &cx.res.facts) {
         Ok(m) => m,
         // What `why` cannot read as a fact may be a row `whynot` reads;
         // else its error names every form.
-        Err(_) => return crate::whynot::why_not(pattern, cx.res, cx.redact),
+        Err(_) => return why_not(),
     };
     if matched.is_empty() {
-        return crate::whynot::why_not(pattern, cx.res, cx.redact);
+        return why_not();
     }
     let mut out = derivations(&matched, how, cx)?;
-    // A resource `later` holds: what it waits on (R-110, R-121).
+    // A change the plan holds: the tick it runs in and what it waits on,
+    // or `later` for what no tick of the plan makes (R-110, R-121, R-156).
     let mut on: Vec<String> = Vec::new();
     for (a, _) in &matched {
-        if let Some(w) = crate::whynot::waiting(a, cx.res, cx.waits)
+        let w = match cx.when {
+            Some(when) => resource_of(a).and_then(|r| when(&r.to_string())),
+            None => {
+                crate::whynot::waiting(a, cx.res, cx.waits).map(|w| format!("later  waits on  {w}"))
+            }
+        };
+        if let Some(w) = w
             && !on.contains(&w)
         {
             on.push(w);
         }
     }
     for w in on {
-        out.push_str(&format!("later  waits on  {w}\n"));
+        out.push_str(&format!("{w}\n"));
     }
     Ok(cx.redact.text(&out))
+}
+
+/// The resource a `want` or an `attr` fact is of.
+fn resource_of(a: &Atom) -> Option<ir::Address> {
+    match (a.pred.as_str(), a.args.as_slice()) {
+        ("want" | "attr", [Term::Val(Value::Str(t)), Term::Val(Value::Str(n)), ..]) => {
+            Some(ir::Address {
+                typ: t.clone(),
+                name: n.clone(),
+            })
+        }
+        _ => None,
+    }
 }
 
 /// `dform why --json PATTERN` (R-176): one object per fact the pattern

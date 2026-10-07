@@ -2255,6 +2255,40 @@ fn written_text(s: &Site, d: &Deformation) -> Vec<String> {
 }
 
 impl Report {
+    /// When a change this plan holds runs, and what it waits on, as `why`
+    /// says it (After R-156): `tick 2  waits on  main.endpoint`; a resource
+    /// rule's group `tick 2+  ..`, its tick a lower bound (what it is
+    /// stuck on first); `later  waits on  ..` for what no tick of this plan
+    /// makes. `at`: a change's address, full or as the plan prints it, or
+    /// a group's. `None` for a change this tick makes, or none.
+    pub fn when(&self, at: &str) -> Option<String> {
+        let line = |tick: Option<usize>, plus: &str, on: &[String]| {
+            let when = match tick {
+                Some(t) => format!("tick {}{plus}", t + 1),
+                None => "later".into(),
+            };
+            let on = waited(&on.iter().cloned().collect()).join(", ");
+            match on.is_empty() {
+                true => when,
+                false => format!("{when}  waits on  {on}"),
+            }
+        };
+        let named = |full: &str, shown: String| full == at || shown == at;
+        for b in &self.pending {
+            if b.deformations
+                .iter()
+                .any(|d| named(&d.addr.to_string(), address(&d.addr)))
+            {
+                return Some(line(b.resolves_after, "", &b.on));
+            }
+        }
+        let g = self
+            .groups
+            .iter()
+            .find(|g| named(&g.pattern, address_text(&group_address(g))))?;
+        Some(line(g.resolves_after, "+", &g.on))
+    }
+
     /// Say why each change is planned, at level `why` (R-79), from the
     /// provenance of `res`, the evaluation the plan was made from: each
     /// entry where it is derived, with its bindings; each attribute it

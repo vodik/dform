@@ -97,7 +97,7 @@ fn why_names_the_provider_a_resource_waits_on() {
         r.stdout
             .starts_with("k8s.storage_class traefik.block  traefik.df:3")
             && r.stdout
-                .ends_with("\nlater  waits on  provider k8s  kubeconfig = raw\n"),
+                .ends_with("\ntick 2  waits on  provider k8s  kubeconfig = raw\n"),
         "{}",
         r.stdout
     );

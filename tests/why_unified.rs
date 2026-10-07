@@ -193,11 +193,8 @@ fn a_never_mentioned_address_says_so_and_stops() {
     );
 }
 
-/// A resource `later` holds: its chain, and what it waits on, as the
-/// plan's `later` says it.
-#[test]
-fn a_later_resource_gets_its_chain_and_its_wait() {
-    let s = Scratch::new("why-later");
+fn provider_scratch(name: &str, kubeconfig: &str) -> Scratch {
+    let s = Scratch::new(name);
     std::fs::create_dir_all(s.path("prov")).unwrap();
     std::os::unix::fs::symlink(
         common::exe("dform-provider-fake"),
@@ -206,27 +203,75 @@ fn a_later_resource_gets_its_chain_and_its_wait() {
     .unwrap();
     s.write(
         "p.df",
-        r#"
-use fake { source = "prov" }
-resource db.postgres server { name = "server" }
-let kc = str.format("kc@%s", server.endpoint)
-use k8s { kubeconfig = kc }
-resource k8s.namespace ns { metadata.name = "app" }
-"#,
+        &format!(
+            r#"
+use fake {{ source = "prov" }}
+resource db.postgres server {{ name = "server" }}
+let kc = str.format("kc@%s", {kubeconfig})
+use k8s {{ kubeconfig = kc }}
+resource k8s.namespace ns {{ metadata.name = "app" }}
+"#
+        ),
     );
+    s
+}
+
+/// A resource the plan puts in tick 2 (its provider configured from
+/// what tick 1 makes): its chain, and the tick it runs in with what it
+/// waits on, as the plan's tick says it (After R-156).
+#[test]
+fn a_held_resource_gets_its_chain_and_its_tick() {
+    let s = provider_scratch("why-tick2", "server.endpoint");
     let r = common::mock(&s, &["why", "k8s.namespace ns"]).success();
     assert!(
         r.stdout.starts_with("k8s.namespace ns  p.df:6\n")
             && r.stdout.contains("\n  metadata.name = \"app\" ")
             && r.stdout
-                .ends_with("\nlater  waits on  provider k8s  kubeconfig = kc\n"),
+                .ends_with("\ntick 2  waits on  provider k8s  kubeconfig = kc\n"),
         "{}",
         r.stdout
     );
     // Applied, the provider is configured: the chain alone.
     common::mock(&s, &["apply"]).success();
     let r = common::mock(&s, &["why", "k8s.namespace ns"]).success();
-    assert!(!r.stdout.contains("later"), "{}", r.stdout);
+    assert!(!r.stdout.contains("waits on"), "{}", r.stdout);
+}
+
+/// What no tick of the plan makes (a read that has not answered) is
+/// `later`'s.
+#[test]
+fn a_resource_no_tick_makes_is_later() {
+    let s = provider_scratch("why-later", "io.read(\"ssh://ubuntu@127.0.0.1:1/kc\")");
+    let r = common::mock(&s, &["why", "k8s.namespace ns"]).success();
+    assert!(
+        r.stdout
+            .ends_with("\nlater  waits on  provider k8s  kubeconfig = kc\n"),
+        "{}",
+        r.stdout
+    );
+}
+
+/// A resource rule the plan holds as a group: why not, and its tick,
+/// `tick 2+`: the first it can run in, what it is stuck on first.
+#[test]
+fn a_group_says_its_tick_as_a_lower_bound() {
+    let s = Scratch::new("why-group-tick");
+    s.write(
+        "p.df",
+        r#"
+resource db.postgres orders { size = 1 }
+resource iam.policy "connect-${host}" {
+  statements = [{ action: "db.connect", resource: host }]
+} where pg in db.postgres, host = pg.endpoint
+use fake
+"#,
+    );
+    let r = common::mock(&s, &["why", "iam.policy \"connect-${host}\""]).success();
+    assert!(
+        r.stdout.ends_with("\ntick 2+  waits on  orders.endpoint\n"),
+        "{}",
+        r.stdout
+    );
 }
 
 const DENIES: &str = r#"use fake

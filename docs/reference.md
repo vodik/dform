@@ -2625,10 +2625,17 @@ What no rule mentions gets one line and nothing invented:
 it`, and under it the address the program derives that is nearest in
 spelling, when one is within a third of its length in edits, `nearest:
 net.vpc main.vpc`. It names each address as the plan prints it (R-111).
-A resource `later` holds (its provider's settings not known yet, a
-deployment it reads not applied) is derived: its chain, then what it
-waits on, as the plan's `later` says it, `later  waits on  provider k8s
-kubeconfig = raw`. A deny is named by its message, `why 'deny "prod db
+A resource the plan holds is derived: its chain, then the tick it runs
+in and what it waits on, as the plan says it (After R-156): `tick 2
+waits on  provider k8s  kubeconfig = kc` for one whose wait a tick of
+the plan makes (a server tick 1 creates), `later  waits on  provider
+k8s  kubeconfig = raw` for one no tick makes (its provider's settings
+read from a host that has not answered, a deployment it reads not
+applied). A resource rule the plan holds as a group is not derived:
+why not, then its tick as a lower bound, `tick 2+  waits on
+orders.endpoint` (the tick after what it is stuck on first; what it
+reads then may hold it longer), as its tick's header says `3+
+changes`. A deny is named by its message, `why 'deny "prod db
 must be multi_az"'`: `holds` and each firing's derivation, or `does not
 hold` and, as for any row, which clause of it failed on what; a message
 no deny says, the nearest one that does. (`why-not`, its own command

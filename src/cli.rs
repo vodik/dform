@@ -2536,6 +2536,34 @@ fn run_with(
         blocked(&ev.violations, &ev.redact)?;
     }
     if explains {
+        // When each change the plan holds runs (After R-156): `why` says
+        // its tick, `later` only for what no tick of the plan makes.
+        let schedule = match (&cli.cmd, &ev.policy) {
+            (Cmd::Why { .. }, Some(Ok(p))) => {
+                let mut r = report::report(&report::Input {
+                    plan: &p.plan,
+                    res: &p.res,
+                    sections: &p.sections,
+                    program: &ev.evaluator.program,
+                    schema: ev.schema(),
+                    stack: &ev.located.loaded.stack,
+                    show_noop: false,
+                    tick: 1,
+                    moved: &[],
+                    denies: &p.denies,
+                    kept: &Default::default(),
+                });
+                // A group by the address its statement names, as the plan
+                // prints it.
+                r.explain(
+                    report::Why::Line,
+                    &p.res,
+                    &query::Redactor::new(&p.res.facts, ev.schema()),
+                );
+                Some(r)
+            }
+            _ => None,
+        };
         let x = ev.explained();
         match &cli.cmd {
             Cmd::Query { pattern, json } => print_query(
@@ -2555,6 +2583,7 @@ fn run_with(
                 json,
             } => {
                 let waits = |t: &str| ev.evaluator.provider_wait(t);
+                let when = |at: &str| schedule.as_ref().and_then(|r| r.when(at));
                 let keys = ev
                     .located
                     .instance
@@ -2570,6 +2599,9 @@ fn run_with(
                     stack_keys: &keys,
                     top: top.as_deref(),
                     waits: &waits,
+                    when: schedule
+                        .is_some()
+                        .then_some(&when as &dyn Fn(&str) -> Option<String>),
                 };
                 let how = crate::why::As {
                     tree: *tree || *all,
