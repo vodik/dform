@@ -319,6 +319,9 @@ impl Redactor {
                 paths.entry((t, p)).or_default().push(sub);
             }
         }
+        // A `let` holding a secret: by the secret it holds, when that has
+        // a label of its own (`random.signing_key("synapse")`).
+        let mut lets = Vec::new();
         for a in facts {
             if !VALUE_PREDS.contains(&a.pred.as_str()) || a.args.len() < 4 {
                 continue;
@@ -337,8 +340,11 @@ impl Redactor {
                 continue;
             };
             if schema.is_sensitive(t, p) || cells.contains(&(tv, addr, pv)) {
-                let addr = partition::fmt_bare(addr);
-                r.add(v, &crate::value::null_label(t, &addr, p));
+                let label = crate::value::null_label(t, &partition::fmt_bare(addr), p);
+                match t == crate::modules::LET {
+                    true => lets.push((v, label)),
+                    false => r.add(v, &label),
+                }
             }
             // A field its object type declares secret (`conn.password`),
             // and where a rule writes a secret into the value (`data = {
@@ -351,10 +357,11 @@ impl Redactor {
             for field in fields {
                 if let Some(x) = part(v, field) {
                     let addr = partition::fmt_bare(addr);
-                    r.add(
-                        x,
-                        &crate::value::null_label(t, &addr, &crate::types::dotted(p, field)),
-                    );
+                    let label = crate::value::null_label(t, &addr, &crate::types::dotted(p, field));
+                    match t == crate::modules::LET {
+                        true => lets.push((x, label)),
+                        false => r.add(x, &label),
+                    }
                 }
             }
         }
@@ -392,6 +399,9 @@ impl Redactor {
         for (v, l) in crate::functions::random::derived() {
             r.add(&v, &l);
             r.derived.insert(v, l);
+        }
+        for (v, l) in lets {
+            r.add(v, &l);
         }
         // A memo that keeps a secret: its candidate is one too, of the
         // same label (a new master's password, say, not kept).
