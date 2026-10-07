@@ -85,7 +85,7 @@ fn containers_diff_by_merge_key_not_index() {
     let r = s.run(&args(&["plan"])).success();
     assert!(
         r.stdout.contains(
-            r#"spec.template.spec.containers[name=sidecar].image: "envoy:1" → "envoy:2""#
+            r#"spec.template.spec.containers[name=sidecar].image = "envoy:1" → "envoy:2""#
         ),
         "{}",
         r.stdout

@@ -139,7 +139,7 @@ fn applies_and_converges_on_a_cluster() {
     let r = dform(&s, &kc, &["plan", "p.df"]).success();
     assert!(
         r.stdout.contains(
-            "spec.template.spec.containers[name=web].image: \"nginx:1.27\" → \"nginx:1.28\""
+            "spec.template.spec.containers[name=web].image = \"nginx:1.27\" → \"nginx:1.28\""
         ),
         "{}",
         r.stdout
@@ -240,7 +240,7 @@ fn the_k8s_demo_applies_and_converges() {
     assert!(
         r.stdout.contains("~ k8s.deployment[\"web\"]")
             && r.stdout.contains(
-                "spec.template.spec.containers[name=web].image: \"nginx:1.27\" → \"nginx:1.28\""
+                "spec.template.spec.containers[name=web].image = \"nginx:1.27\" → \"nginx:1.28\""
             ),
         "{}",
         r.stdout

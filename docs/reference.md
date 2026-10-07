@@ -1116,16 +1116,15 @@ tick 1  4 changes
   + k8s.namespace apps                         stacks/apps.df:26
   + k8s.secret synapse.homeserver              synapse.df:41
   ~ k8s.deployment synapse.server              synapse.df:52
-      spec.replicas: 1 → 2                     stacks/apps.df:14
-  - k8s.config_map synapse.legacy              synapse.df:60
-      data.mode was "legacy"
-      because data/apps.yaml no longer has the row app("legacy")
+      spec.replicas = 1 → 2                    stacks/apps.df:14
+  - k8s.config_map synapse.legacy              synapse.df:60  app(name): no row
+      data.mode = "legacy"
 
 tick 2  2 changes
   waits on  synapse.web.ip
   + ovh.domain_record "matrix.vodik.xyz"       synapse.df:135
       target = synapse.web.ip
-  ± k8s.persistent_volume_claim synapse.media  synapse.df:70  storageClassName is immutable
+  ± k8s.persistent_volume_claim synapse.media  synapse.df:70  storageClassName forces replace
 
 later
   k8s.job "migrate-v${schema}"                 one per release("crud_api", "schema", _)
@@ -1151,8 +1150,17 @@ made; the plan itself says what it is.
   its address as the source names it, the type and the path, a copy's
   scope in front (`+ ovh.ssh_key k3s.admin`, `+ net.vpc blue.vpc`, a
   name holding a dot one quoted segment, `k3s."k8s-lab.vodik.xyz"`),
-  then where it is derived, `FILE:LINE`. An attribute: `path = value`
-  (`path: before → after` in an update), then `FILE:LINE` only when the
+  then where it is derived, `FILE:LINE`; a delete, why the program no
+  longer derives it, in one line (R-150's why-not): the condition that
+  stopped holding with the bindings that made it false (`k3s.df:52
+  n < agents: agents = 1`), `not in the program` (with `(was FILE:LINE)`
+  when where the last apply derived it is known), a copy whose `use` is
+  gone (`use synapse removed`), or, when a create of its type in the same
+  plan has the same values, `renamed?  k3s.node is created with the same
+  values` (the fix is `state mv`); a destroy's deletes say nothing there,
+  the operation is the reason. An attribute: `path = value` (a delete's
+  the value it had; an update's the one line with two values, `path =
+  before → after`), then `FILE:LINE` only when the
   value was written outside the change's own block: a policy, a `set`, a
   `--set` (its flag), a copy's input, a config module's `let`,
   followed through the inputs and `let`s that pass it on. A value written
@@ -1318,13 +1326,19 @@ default, `-v`, `-vv`, or by name `--why=none|line|how|full` (`--why`
 alone is `full`). `-q` and `-v` together, or either with `--why`, are a
 usage error.
 
-- The default (`line`): the two shapes above. On a change's line, where
-  it is derived, `FILE:LINE` (a delete's where the last apply derived
-  it), and for a replace the paths the schema declares immutable. On an
-  attribute's, where its value was written when that is outside its own
-  block. Under the change, a `because` line: the leaf of the derivation
-  the last apply recorded that is false now (a delete: `because
-  data/azs.yaml no longer has the row az("us-east-1b", 2)`; an update:
+- The default (`line`): the two shapes above. On a change's line, the
+  rule and the binding, the kind choosing which (After R-149): a
+  create's `FILE:LINE` and the bindings that made this one whose value
+  its address does not show (`k3s.agent-3` shows `n = 3`), at most two
+  and then `…`, each long value elided (`network.df:24  with region =
+  "us-test-1"`); an update's `FILE:LINE` alone; a replace's with the
+  attribute that forces it (`storageClassName forces replace`, that
+  attribute first among its lines); a delete's why it is gone (see
+  above), none on a destroy. A column that does not fit the line falls
+  back to the site alone. On an attribute's, where its value was
+  written when that is outside its own block. Under a change other than
+  a delete, a `because` line: the leaf of the derivation the last apply
+  recorded that is false now (an update:
   `because input size is now 2 (was 1)`; a guard: `because input big is
   now false (was true)`), or for a create the leaf new since (`because
   data/azs.yaml:7 gained the row az("us-east-1c", 3)`). The last apply's
@@ -1332,8 +1346,7 @@ usage error.
   audit entry recorded, or the program now with the inputs it recorded
   when only they changed; with no apply, or nothing to compare, there is
   no `because`. Sites are relative to the project's root, whatever
-  directory the run is in. No other prose: no expression, no binding,
-  no rank.
+  directory the run is in. No other prose: no expression, no rank.
 - `-v` (`how`): the same lines, saying how. On a change's line, the
   statement's variables bound (`network.df:24  with z = "us-test-1a"`).
   On an attribute's, the write that won: a create's own entry by its

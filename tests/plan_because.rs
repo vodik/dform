@@ -73,10 +73,10 @@ fn a_removed_row_and_a_new_row_are_the_because() {
     git(&s, &["commit", "-qam", "two"]);
     let r = s.run(&["plan", "net"]).success();
     for want in [
-        "  + net.subnet private-us-test-1c  stacks/net.df:13\n      cidr = \"10.0.3.0/24\"\n",
+        "  + net.subnet private-us-test-1c  stacks/net.df:13  with n = 3\n      cidr = \"10.0.3.0/24\"\n",
         "      because data/zones.csv:3 gained the row zone(\"us-test-1c\", 3)\n",
-        "  - net.subnet private-us-test-1b  stacks/net.df:13\n",
-        "      because data/zones.csv no longer has the row zone(\"us-test-1b\", 2)\n",
+        "  - net.subnet private-us-test-1b  data/zones.csv no longer has the row \
+         zone(\"us-test-1b\", 2)\n",
     ] {
         assert!(r.stdout.contains(want), "{want}\n---\n{}", r.stdout);
     }
@@ -86,7 +86,9 @@ fn a_removed_row_and_a_new_row_are_the_because() {
         "  + net.subnet private-us-test-1c  stacks/net.df:13  with z = \"us-test-1c\", n = 3\n",
         "      cidr = \"10.0.3.0/24\"         inet.subnet(main.cidr, 8, n)\n",
         "      because data/zones.csv:3 gained the row zone(\"us-test-1c\", 3)\n",
-        "  - net.subnet private-us-test-1b  stacks/net.df:13  with z = \"us-test-1b\", n = 2\n",
+        // Too wide with its bindings: the reason alone.
+        "  - net.subnet private-us-test-1b  data/zones.csv no longer has the row \
+         zone(\"us-test-1b\", 2)\n",
     ] {
         assert!(r.stdout.contains(want), "{want}\n---\n{}", r.stdout);
     }
@@ -110,17 +112,17 @@ fn a_changed_input_and_a_guard_now_false_are_the_because() {
     let r = s.run(&["plan", "net", "--set", "size=2"]).success();
     assert!(
         r.stdout.contains(
-            "  ~ net.vpc main      stacks/net.df:11\n      size: 1 → 2     --set size=2\n      \
+            "  ~ net.vpc main      stacks/net.df:11\n      size = 1 → 2    --set size=2\n      \
              because input size is now 2 (was 1)\n"
         ),
         "{}",
         r.stdout
     );
     assert!(
-        r.stdout
-            .contains("  - net.subnet extra  stacks/net.df:19\n      cidr was \"10.0.200.0/24\"\n")
-            && r.stdout
-                .contains("      because input big is now false (was true)\n"),
+        r.stdout.contains(
+            "  - net.subnet extra  stacks/net.df:19  input big is now false (was true)\n      \
+             cidr = \"10.0.200.0/24\"\n"
+        ),
         "{}",
         r.stdout
     );
@@ -128,7 +130,7 @@ fn a_changed_input_and_a_guard_now_false_are_the_because() {
     let r = s.run(&["plan", "net", "-v", "--set", "size=2"]).success();
     assert!(
         r.stdout.contains(
-            "      size: 1 → 2     --set size=2  @override over stacks/net.df:4 @default\n"
+            "      size = 1 → 2    --set size=2  @override over stacks/net.df:4 @default\n"
         ),
         "{}",
         r.stdout

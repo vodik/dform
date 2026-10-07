@@ -2472,10 +2472,9 @@ fn run_with(
             kept: &kept,
         });
         report.resumed = resuming.get() && tick == 1;
+        // A destroy's deletes say no reason; a plan's say why they are
+        // gone (`Report::explain`, After R-149 amendments 4 and 5).
         report.removing = destroying;
-        // TODO(After R-149 amendment 4): a plan's delete reason is the
-        // address's why-not (R-150), r152-after's report entry, called
-        // here with `destroying` (a destroy's deletes say none).
         report
     };
     // How much each printed change says of why (R-79).

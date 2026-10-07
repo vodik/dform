@@ -154,7 +154,7 @@ fn ignore_changes_drops_the_path_from_both_sides() {
     let r = mock(&s, &["apply", "--why=none"]).success();
     assert!(
         r.stdout
-            .contains("~ net.vpc[\"main\"]\n  tags.team: \"a\" -> \"b\"\napply order:\n  tick 1\n    net.vpc[\"main\"]\n"),
+            .contains("~ net.vpc[\"main\"]\n  tags.team = \"a\" -> \"b\"\napply order:\n  tick 1\n    net.vpc[\"main\"]\n"),
         "{}",
         r.stdout
     );
@@ -240,7 +240,7 @@ fn ignore_changes_update_leaves_an_absent_path_absent() {
     );
     let r = mock(&s, &["apply", "--why=none"]).success();
     assert!(
-        r.stdout.contains("~ net.vpc[\"main\"]\n  size: 1 -> 2\n"),
+        r.stdout.contains("~ net.vpc[\"main\"]\n  size = 1 -> 2\n"),
         "{}",
         r.stdout
     );

@@ -95,9 +95,9 @@ fn a_quoted_segment_reads_one_key() {
     let r = mock(&s, &["plan", "--why=none"]).success();
     assert!(
         r.stdout
-            .contains("  metadata.labels.x: <none> -> \"one\"\n")
+            .contains("  metadata.labels.x = <none> -> \"one\"\n")
             && r.stdout.contains(&format!(
-                "  metadata.annotations.\"{KEY}\": \"letsencrypt\" -> <none>\n"
+                "  metadata.annotations.\"{KEY}\" = \"letsencrypt\" -> <none>\n"
             )),
         "{}",
         r.stdout

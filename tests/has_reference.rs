@@ -214,7 +214,10 @@ resource net.vpc bare { cidr = "10.2.0.0/16" } where not has cache.endpoint
     );
     for (addr, want) in [
         ("net.vpc web", "has cache: cache does not exist yet"),
-        ("net.vpc ep", "has cache.endpoint: cache.endpoint is not known yet"),
+        (
+            "net.vpc ep",
+            "has cache.endpoint: cache.endpoint is not known yet",
+        ),
         (
             "net.vpc bare",
             "not has cache.endpoint: cache.endpoint is not known yet",

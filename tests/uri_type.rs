@@ -233,7 +233,7 @@ fn a_provider_receives_a_labels_and_a_round_trip_is_no_change() {
     let r = mock(&s, &["plan"]).success();
     assert!(
         r.stdout.contains(
-            "link: \"https://xn--bcher-kva.example/shop\" → \"https://bücher.example/books\"  \
+            "link = \"https://xn--bcher-kva.example/shop\" → \"https://bücher.example/books\"  \
              https://xn--bcher-kva.example/books"
         ),
         "{}",

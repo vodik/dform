@@ -194,7 +194,7 @@ pub fn address_text(s: &str) -> String {
 const LONG: usize = 60;
 
 /// `s` with its middle elided when it is longer than [`LONG`].
-fn elide(s: &str) -> String {
+pub(crate) fn elide(s: &str) -> String {
     let n = s.chars().count();
     if n <= LONG {
         return s.to_string();
@@ -627,6 +627,11 @@ pub struct Deformation {
     /// one contribution wrote folded back to where the writers diverge
     /// ([`fold`]). Empty: [`Deformation::lines`] as they are.
     pub folded: Vec<Line>,
+    /// A plan's delete: why the program no longer derives it, for the
+    /// site column of its change line ([`Report::explain`], After R-149).
+    /// Where the rule that would derive it is written, and why it does
+    /// not.
+    pub gone: Option<(Option<String>, String)>,
 }
 
 #[derive(Debug, Clone)]
@@ -1597,6 +1602,7 @@ fn deformation(a: &Action, schema: &Schema, r: &Redactor, refs: &Refs) -> Deform
             _ => Vec::new(),
         },
         folded: Vec::new(),
+        gone: None,
     }
 }
 
@@ -2029,8 +2035,23 @@ impl Report {
             .pending
             .iter_mut()
             .flat_map(|b| b.deformations.iter_mut());
+        let created: Vec<(Address, BTreeSet<(String, String)>)> = self
+            .definite
+            .iter()
+            .filter(|d| matches!(d.kind, ActionKind::Create))
+            .map(|d| (d.addr.clone(), values(d, |l| &l.after)))
+            .collect();
+        let live = crate::zset::Instances::from_facts(&res.facts);
+        let removing = self.removing;
+        let instances = &self.instances;
         for d in self.definite.iter_mut().chain(pending) {
             if matches!(d.kind, ActionKind::Delete | ActionKind::DeleteDeposed) {
+                // A destroy's deletes need no reason: the operation is it.
+                // A deposed object is the one a replace left: no rule
+                // was ever to want it.
+                if !removing && matches!(d.kind, ActionKind::Delete) {
+                    d.gone = gone(d, &created, instances, &live, res, r);
+                }
                 continue;
             }
             d.site = p.want_site(rules, &d.addr);
@@ -2705,12 +2726,44 @@ impl Report {
                 let forces: Vec<String> = d
                     .forces
                     .iter()
-                    .map(|p| format!("{p} is immutable"))
+                    .map(|p| format!("{p} forces replace"))
                     .collect();
                 let both = at
                     .iter()
                     .flat_map(|at| forces.iter().map(move |f| format!("{at}  {f}")));
                 both.chain(forces.iter().cloned()).collect()
+            }
+            (ActionKind::Delete, _) if !self.removing => gone_column(d, self.why),
+            (ActionKind::Delete | ActionKind::DeleteDeposed, _) => vec![],
+            // A create: the bindings that made this one, those its address
+            // does not show (After R-149 amendment 5).
+            (ActionKind::Create | ActionKind::Adopt, Some(at)) if self.why == Why::Line => {
+                let s = d.site.as_ref().expect("a site");
+                // A value the body prints (an attribute, a document by
+                // its row) is said there.
+                let shown: BTreeSet<String> = values(d, |l| &l.after)
+                    .into_iter()
+                    .map(|(_, v)| v.trim_matches('"').to_string())
+                    .chain(
+                        d.folded
+                            .iter()
+                            .chain(&d.lines)
+                            .filter_map(|l| l.row.clone()),
+                    )
+                    .collect();
+                let with: Vec<String> = s
+                    .with
+                    .iter()
+                    .filter(|b| {
+                        !b.split_once(" = ")
+                            .is_some_and(|(_, v)| shown.contains(v.trim_matches('"')))
+                    })
+                    .cloned()
+                    .collect();
+                match terse(&with, &addr) {
+                    Some(w) => vec![format!("{at}  {w}"), at],
+                    None => vec![at],
+                }
             }
             (_, Some(at)) => match d.site.as_ref() {
                 // A line too long for its bindings keeps its place.
@@ -2727,7 +2780,19 @@ impl Report {
             true => &d.lines,
             false => &d.folded,
         };
-        for (i, l) in lines.iter().enumerate() {
+        // A replace: the attribute that forces it first (After R-149
+        // amendment 5).
+        let forced = |l: &Line| {
+            d.forces.iter().any(|p| {
+                l.path == *p
+                    || l.path
+                        .strip_prefix(p.as_str())
+                        .is_some_and(|r| r.starts_with('.') || r.starts_with('['))
+            })
+        };
+        let mut lines: Vec<&Line> = lines.iter().collect();
+        lines.sort_by_key(|l| !forced(l));
+        for (i, l) in lines.iter().copied().enumerate() {
             if i == max {
                 rows.push(Row::plain(format!(
                     "{inner}... ({} more changes)",
@@ -2744,11 +2809,133 @@ impl Report {
                 write_chain(rows, l, &format!("{inner}  "), self.why);
             }
         }
-        if let Some(b) = &d.because {
+        // A delete's reason is in its change line's site column (After
+        // R-149), a destroy's none: no line under its attributes.
+        if let Some(b) = d.because.as_ref().filter(|_| !is_delete(&d.kind)) {
             let plain = format!("{inner}because {b}");
             let painted = format!("{inner}{} {b}", style.paint(Paint::Because, "because"));
             rows.push(Row::new(&plain, painted));
         }
+    }
+}
+
+/// A change's bindings as the default level says them (After R-149
+/// amendment 5): only those whose value its address does not show
+/// (`k3s.agent-3` shows `n = 3`), each value elided as any long one, at
+/// most two and then `…`: `with zone = "us-test-1a", n = 3, …`.
+pub(crate) fn terse(with: &[String], addr: &str) -> Option<String> {
+    let shown: Vec<String> = with
+        .iter()
+        .filter(|b| match b.split_once(" = ") {
+            Some((_, v)) => !addr.contains(v.trim_matches('"')),
+            None => true,
+        })
+        .map(|b| match b.split_once(" = ") {
+            Some((k, v)) => format!("{k} = {}", elide(v)),
+            None => b.clone(),
+        })
+        .collect();
+    let mut out = shown.iter().take(2).cloned().collect::<Vec<_>>().join(", ");
+    if shown.len() > 2 {
+        out.push_str(", …");
+    }
+    (!out.is_empty()).then(|| format!("with {out}"))
+}
+
+/// A delete, of the object or of a deposed one.
+fn is_delete(k: &ActionKind) -> bool {
+    matches!(k, ActionKind::Delete | ActionKind::DeleteDeposed)
+}
+
+/// The leaves of `d` with the values `side` gives, as the plan prints
+/// them: what a rename guess compares.
+fn values(d: &Deformation, side: impl Fn(&Line) -> &Shown) -> BTreeSet<(String, String)> {
+    fn walk(ls: &[Line], side: &dyn Fn(&Line) -> &Shown, out: &mut BTreeSet<(String, String)>) {
+        for l in ls {
+            match l.leaves.is_empty() {
+                true => {
+                    out.insert((l.path.clone(), side(l).said(Why::Line)));
+                }
+                false => walk(&l.leaves, side, out),
+            }
+        }
+    }
+    let mut out = BTreeSet::new();
+    walk(&d.lines, &side, &mut out);
+    out
+}
+
+/// Why a plan deletes `d`, on one line (After R-149, R-150): a create of
+/// its type in the same plan with the same values is a rename guess
+/// (`renamed?  T b is created with the same values`, `state mv` the fix);
+/// a copy whose `use` the program no longer has (`use synapse removed`);
+/// else why the program no longer derives it ([`crate::whynot::gone`]),
+/// `not in the program` with where the last apply derived it when that is
+/// known.
+fn gone(
+    d: &Deformation,
+    created: &[(Address, BTreeSet<(String, String)>)],
+    instances: &crate::zset::Instances,
+    live: &crate::zset::Instances,
+    res: &EvalResult,
+    r: &Redactor,
+) -> Option<(Option<String>, String)> {
+    let mine = values(d, |l| &l.before);
+    if !mine.is_empty()
+        && let Some((a, _)) = created
+            .iter()
+            .find(|(a, vs)| a.typ == d.addr.typ && *vs == mine)
+    {
+        return Some((
+            None,
+            format!(
+                "renamed?  {} is created with the same values",
+                reference(a, "")
+            ),
+        ));
+    }
+    let wanted = live.enclosing(&d.addr);
+    if let Some(copy) = instances
+        .enclosing(&d.addr)
+        .into_iter()
+        .find(|c| !wanted.contains(c))
+    {
+        return Some((None, format!("use {} removed", copy.name)));
+    }
+    crate::whynot::gone(&d.addr.typ, &d.addr.name, res, r)
+}
+
+/// A delete's site column (After R-149): where the last apply derived
+/// it (else where the rule that would is), then why it is gone, the
+/// leaf the last apply rests on that is false now when the plan knows it
+/// (`because`), else the program's why-not; `not in the program  (was
+/// SITE)`; a rename guess alone. The reason alone when that is too
+/// wide, else the site;
+/// from `-v`, the site with the bindings the last apply derived it with.
+fn gone_column(d: &Deformation, how: Why) -> Vec<String> {
+    let Some((rule_at, why)) = &d.gone else {
+        return d
+            .site
+            .iter()
+            .map(|s| s.at.clone())
+            .filter(|a| !a.is_empty())
+            .collect();
+    };
+    // From `-v`, the bindings it was derived with.
+    let at = d
+        .site
+        .as_ref()
+        .map(|s| place_text(s, how))
+        .filter(|a| !a.is_empty())
+        .or_else(|| rule_at.clone());
+    if why.starts_with("renamed?") {
+        return vec![why.clone()];
+    }
+    let why = d.because.clone().unwrap_or_else(|| why.clone());
+    match at {
+        Some(at) if why == crate::whynot::NOT_IN_PROGRAM => vec![format!("{why}  (was {at})"), why],
+        Some(at) => vec![format!("{at}  {why}"), why, at],
+        None => vec![why],
     }
 }
 
@@ -3532,6 +3719,10 @@ impl Report {
             m.insert("site".into(), json!(d.site));
             m.insert("because".into(), json!(d.because));
         }
+        if let Some((_, why)) = &d.gone {
+            let why = d.because.clone().unwrap_or_else(|| why.clone());
+            m.insert("reason".into(), why.into());
+        }
         Json::Object(m)
     }
 }
@@ -3672,8 +3863,8 @@ fn write_line(
                 right,
             ),
             ActionKind::Delete | ActionKind::DeleteDeposed => push(
-                format!("{indent}{} was {}", l.path, plain(&l.before)),
-                format!("{indent}{} was {}", l.path, painted(&l.before)),
+                format!("{indent}{} = {}", l.path, plain(&l.before)),
+                format!("{indent}{} = {}", l.path, painted(&l.before)),
                 right,
             ),
             ActionKind::Update
@@ -3681,13 +3872,13 @@ fn write_line(
             | ActionKind::Pending
             | ActionKind::Replace { .. } => push(
                 format!(
-                    "{indent}{}: {} → {}",
+                    "{indent}{} = {} → {}",
                     l.path,
                     plain(&l.before),
                     plain(&l.after)
                 ),
                 format!(
-                    "{indent}{}: {} → {}",
+                    "{indent}{} = {} → {}",
                     l.path,
                     painted(&l.before),
                     painted(&l.after)

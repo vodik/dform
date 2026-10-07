@@ -156,7 +156,7 @@ fn read_lag_past_the_retry_budget_is_gone() {
     );
     assert!(r.stdout.contains("+ net.vpc main"), "{}", r.stdout);
     assert!(
-        r.stdout.contains("vpc: \"net.vpc:main\" → main"),
+        r.stdout.contains("vpc = \"net.vpc:main\" → main"),
         "{}",
         r.stdout
     );
@@ -195,8 +195,8 @@ fn mutate_changes_the_world_after_the_tick() {
     );
     assert!(
         r.stdout.contains(
-            "  ± net.vpc main  p.df:3  cidr is immutable\n      \
-             cidr: \"10.9.0.0/16\" → \"10.0.0.0/16\""
+            "  ± net.vpc main  p.df:3  cidr forces replace\n      \
+             cidr = \"10.9.0.0/16\" → \"10.0.0.0/16\""
         ),
         "{}",
         r.stdout

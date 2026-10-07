@@ -49,7 +49,7 @@ fn planning_prod_after_applying_staging_proposes_creates() {
         .success();
     assert!(
         size.stdout
-            .contains("~ net.vpc[\"main\"]\n  size: 1 -> 2\n"),
+            .contains("~ net.vpc[\"main\"]\n  size = 1 -> 2\n"),
         "{}",
         size.stdout
     );
@@ -288,7 +288,7 @@ fn rekey_lists_what_the_key_renames_and_moves_the_state() {
         .success();
     assert!(
         r.stdout
-            .contains("~ net.vpc[\"main\"]\n  name: \"main-staging\" -> \"main-stg\"\n"),
+            .contains("~ net.vpc[\"main\"]\n  name = \"main-staging\" -> \"main-stg\"\n"),
         "{}",
         r.stdout
     );

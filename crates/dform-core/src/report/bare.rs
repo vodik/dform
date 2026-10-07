@@ -332,13 +332,13 @@ fn write_line(out: &mut String, kind: &ActionKind, l: &Line, indent: &str, style
                 out.push_str(&format!("{indent}{} = {}\n", l.path, shown(&l.after)))
             }
             ActionKind::Delete | ActionKind::DeleteDeposed => {
-                out.push_str(&format!("{indent}{} was {}\n", l.path, shown(&l.before)))
+                out.push_str(&format!("{indent}{} = {}\n", l.path, shown(&l.before)))
             }
             ActionKind::Update
             | ActionKind::Drift
             | ActionKind::Pending
             | ActionKind::Replace { .. } => out.push_str(&format!(
-                "{indent}{}: {} -> {}\n",
+                "{indent}{} = {} -> {}\n",
                 l.path,
                 shown(&l.before),
                 shown(&l.after)

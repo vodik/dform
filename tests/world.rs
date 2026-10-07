@@ -40,7 +40,7 @@ fn editing_the_world_file_shows_drift_and_apply_writes_it_back() {
     assert!(r.stdout.contains("~ compute.vm bastion"), "{}", r.stdout);
     assert!(
         r.stdout
-            .contains("private_ip: \"10.50.0.99\" → \"10.50.0.21\""),
+            .contains("private_ip = \"10.50.0.99\" → \"10.50.0.21\""),
         "{}",
         r.stdout
     );

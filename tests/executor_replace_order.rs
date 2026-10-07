@@ -51,7 +51,7 @@ fn either_destroys_first_unless_lifecycle_says_otherwise() {
     let r = r.success();
     assert!(
         r.stdout
-            .contains("± net.subnet a  p.df:4  cidr is immutable"),
+            .contains("± net.subnet a  p.df:4  cidr forces replace"),
         "{}",
         r.stdout
     );
@@ -122,7 +122,7 @@ fn create_before_destroy_on_a_destroy_first_type_is_an_error() {
     assert!(
         r.success()
             .stdout
-            .contains("± net.subnet a  p.df:4  cidr is immutable"),
+            .contains("± net.subnet a  p.df:4  cidr forces replace"),
         "destroy_first without the fact"
     );
 }

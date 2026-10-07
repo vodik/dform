@@ -92,7 +92,7 @@ fn an_answer_is_asked_again() {
     answers(&s, "second");
     let r = s.run(&["plan", "p.df"]).success();
     assert!(
-        r.stdout.contains("password: \"pw-first\" → \"pw-second\""),
+        r.stdout.contains("password = \"pw-first\" → \"pw-second\""),
         "{}",
         r.stdout
     );

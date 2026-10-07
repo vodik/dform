@@ -31,7 +31,13 @@ use fake
         "\nresource compute.vm keep { size = 1 }\nuse fake\n",
     );
     let r = mock(&s, &["apply"]).success();
-    let order: Vec<&str> = r.stdout.lines().filter(|l| l.starts_with("  - ")).collect();
+    // Each delete's line, without why it is gone (After R-149).
+    let order: Vec<&str> = r
+        .stdout
+        .lines()
+        .filter(|l| l.starts_with("  - "))
+        .map(|l| l.trim_end_matches("not in the program").trim_end())
+        .collect();
     assert_eq!(
         order,
         [
@@ -82,7 +88,13 @@ use fake
     // still comes first.
     s.write("p.df", "\nuse fake\n");
     let r = mock(&s, &["apply"]).success();
-    let order: Vec<&str> = r.stdout.lines().filter(|l| l.starts_with("  - ")).collect();
+    // Each delete's line, without why it is gone (After R-149).
+    let order: Vec<&str> = r
+        .stdout
+        .lines()
+        .filter(|l| l.starts_with("  - "))
+        .map(|l| l.trim_end_matches("not in the program").trim_end())
+        .collect();
     assert_eq!(
         order[0], "  - iam.role_policy_attachment attach",
         "{}",
@@ -140,13 +152,13 @@ fn a_force_new_change_replaces_destroying_first() {
         r#"plan: 2 changes (1 update, 1 replace) over 2 ticks
 
 tick 1  1 change
-  ± net.vpc main  p.df:3  cidr is immutable
-      cidr: "10.0.0.0/16" → "10.1.0.0/16"
+  ± net.vpc main  p.df:3  cidr forces replace
+      cidr = "10.0.0.0/16" → "10.1.0.0/16"
 
 tick 2  1 change
   waits on  main
   ~ net.subnet a  p.df:4
-      vpc_id: "net.vpc:main" → main
+      vpc_id = "net.vpc:main" → main
 stack p is up to date
 "#
     );
@@ -191,8 +203,8 @@ fn create_before_destroy_deposes_the_old_object_until_dependents_move() {
     assert!(
         r.stdout.contains(
             "plan: 2 changes (1 update, 1 delete) over 1 tick\n\ntick 1  2 remaining, resumed\n  \
-             ~ net.subnet a  p.df:4\n      vpc_id: \"net.vpc:main\" → \"net.vpc:main-2\"\n  \
-             - net.vpc main  (deposed)\n      cidr was \"10.0.0.0/16\"\n"
+             ~ net.subnet a  p.df:4\n      vpc_id = \"net.vpc:main\" → \"net.vpc:main-2\"\n  \
+             - net.vpc main  (deposed)\n      cidr = \"10.0.0.0/16\"\n"
         ),
         "{}",
         r.stdout

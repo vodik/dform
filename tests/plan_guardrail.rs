@@ -242,7 +242,7 @@ fn a_deny_reads_what_the_last_apply_derived() {
     let r = s.run(&["plan", "net"]).failure();
     assert!(
         r.stdout
-            .contains("denied\n  the subnets lost their region  stacks/net.df:19\n"),
+            .contains("denied\n  the subnets lost their region    stacks/net.df:19\n"),
         "{}",
         r.stdout
     );

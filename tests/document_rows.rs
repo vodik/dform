@@ -38,7 +38,7 @@ fn an_update_says_the_leaves_that_change() {
     let r = s.run(&["plan", "p.df"]).success();
     assert!(
         r.stdout.contains(
-            "  ~ k8s.config_map settings  p.df:3\n      data.size: \"small\" → \"large\"\n"
+            "  ~ k8s.config_map settings  p.df:3\n      data.size = \"small\" → \"large\"\n"
         ),
         "{}",
         r.stdout

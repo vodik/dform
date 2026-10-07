@@ -98,7 +98,7 @@ fn a_memo_survives_a_replan_and_is_gone_after_taint() {
     assert!(!s.read("dform.state/p/state.json").contains("pw-first"));
     let r = run(&s, &[], &["plan", "p.df"]).success();
     assert!(
-        r.stdout.contains("password: \"pw-first\" → \"pw-second\""),
+        r.stdout.contains("password = \"pw-first\" → \"pw-second\""),
         "{}",
         r.stdout
     );

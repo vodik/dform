@@ -295,7 +295,7 @@ default(k, v) where project_default(k, v)
     );
     s.run(&["plan", "p", "--out", "plan.json"]).success();
     let r = s.run(&["apply", "plan.json"]).success();
-    assert!(r.stdout.contains("size: 1 → 2"), "{}", r.stdout);
+    assert!(r.stdout.contains("size = 1 → 2"), "{}", r.stdout);
     // The manifest as facts.
     let r = s.run(&["query", "pinned(N, C)", "p"]).success();
     assert!(r.stdout.contains(r#""cloud"  "^2.1""#), "{}", r.stdout);

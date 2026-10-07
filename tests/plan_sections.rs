@@ -99,7 +99,7 @@ fn a_keyless_set_diffs_by_element() {
     let r = aws(&s, "plan").success();
     assert!(
         r.stdout.contains(
-            "  ~ aws.security_group web  stacks/aws_demo.df:24\n      - ingress[]\n          cidr_blocks[0] was \"0.0.0.0/0\"\n          from_port was 22\n          protocol was \"tcp\"\n          to_port was 22\n"
+            "  ~ aws.security_group web  stacks/aws_demo.df:24\n      - ingress[]\n          cidr_blocks[0] = \"0.0.0.0/0\"\n          from_port = 22\n          protocol = \"tcp\"\n          to_port = 22\n"
         ),
         "{}",
         r.stdout
@@ -286,8 +286,8 @@ fn a_denied_replace_is_a_section() {
         r.stdout,
         "plan: 1 change (1 replace) over 1 tick, 1 denied\n\n\
          tick 1  1 change\n\
-         \x20 ± net.vpc main  p.df:2  cidr is immutable\n\
-         \x20     cidr: \"10.0.0.0/16\" → \"10.1.0.0/16\"\n\n\
+         \x20 ± net.vpc main  p.df:2  cidr forces replace\n\
+         \x20     cidr = \"10.0.0.0/16\" → \"10.1.0.0/16\"\n\n\
          denied\n\
          \x20 lifecycle prevent_destroy: the plan would replace net.vpc[\"main\"]  net.vpc main    p.df:4\n\n\
          apply: refused  1 deny\n"
@@ -391,16 +391,16 @@ fn plan_why_explains_an_update_and_a_delete_and_redacts_a_secret() {
     let r = run("SECOND-SECRET-456", &["plan", "--why"]).success();
     assert!(
         r.stdout.contains(
-            "  ~ leaky.vault v                          p.df:3\n      password: (sensitive) → (sensitive)  --set pw=(sensitive \
-             input.pw)\n        = pw                               p.df:4\n        \
-             = (sensitive input.pw) @override   --set pw=(sensitive input.pw)\n"
+            "  ~ leaky.vault v                           p.df:3\n      password = (sensitive) → (sensitive)  --set pw=(sensitive \
+             input.pw)\n        = pw                                p.df:4\n        \
+             = (sensitive input.pw) @override    --set pw=(sensitive input.pw)\n"
         ),
         "{}",
         r.stdout
     );
     assert!(
         r.stdout
-            .contains("  - leaky.oops o\n      password was \"plain\"\n"),
+            .contains("  - leaky.oops o                            not in the program\n      password = \"plain\"\n"),
         "{}",
         r.stdout
     );

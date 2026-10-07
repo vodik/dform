@@ -122,7 +122,7 @@ fn the_plan_groups_a_copys_resources_under_it() {
     let r = s.run(&["plan", "main.df"]).success();
     assert!(
         r.stdout
-            .contains("  - vpc green\n    - net.subnet green.a  main.df:8\n"),
+            .contains("  - vpc green\n    - net.subnet green.a  main.df:8  input env is now \"dev\" (was \"prod\")\n"),
         "{}",
         r.stdout
     );

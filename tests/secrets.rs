@@ -90,7 +90,7 @@ fn plan_and_apply_redact_the_labeled_secret_but_not_the_mislabeled_one() {
         r.stdout
     );
     assert!(
-        r.stdout.contains(r#"password: (sensitive) → (sensitive)"#),
+        r.stdout.contains(r#"password = (sensitive) → (sensitive)"#),
         "{}",
         r.stdout
     );

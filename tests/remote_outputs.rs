@@ -107,8 +107,9 @@ fn a_project_reads_another_projects_outputs_through_a_local_remote() {
     // Planned again, it reads the new value.
     let r = app.run(&["plan", "app"]).success();
     assert!(
-        r.stdout
-            .contains("name: \"https://prod.cluster.example\" → \"https://prod.cluster2.example\""),
+        r.stdout.contains(
+            "name = \"https://prod.cluster.example\" → \"https://prod.cluster2.example\""
+        ),
         "{}",
         r.stdout
     );

@@ -219,7 +219,7 @@ fn a_pending_update_applies_after_the_boundary() {
     assert!(
         r.stdout.contains(
             "tick 2  1 change\n  ~ compute.vm app  p.df:3\n      \
-             db_host: \"old.db.fake\" → \"main.db.fake\"\n"
+             db_host = \"old.db.fake\" → \"main.db.fake\"\n"
         ),
         "{}",
         r.stdout

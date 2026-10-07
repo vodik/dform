@@ -134,7 +134,7 @@ fn secrets_are_labels_and_print_redacted() {
     assert!(
         changed
             .stdout
-            .contains("master_password: (sensitive) → (sensitive)"),
+            .contains("master_password = (sensitive) → (sensitive)"),
         "{}",
         changed.stdout
     );

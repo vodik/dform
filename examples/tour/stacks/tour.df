@@ -159,7 +159,7 @@ resource db.postgres orders {
 #
 #   $ dform plan --set public_db=true
 #   ~ db.postgres orders
-#     public: false → true
+#     public = false → true
 #   - a database must not be public  database = "orders"
 #   Error: blocked by constraints
 #

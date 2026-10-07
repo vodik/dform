@@ -797,7 +797,7 @@ fn the_demo_applies_through_the_api_server() {
     let r = run(&["plan"]).success();
     assert!(
         r.stdout.contains(
-            "spec.template.spec.containers[name=web].image: \"nginx:1.27\" → \"nginx:1.28\""
+            "spec.template.spec.containers[name=web].image = \"nginx:1.27\" → \"nginx:1.28\""
         ),
         "{}",
         r.stdout
@@ -920,7 +920,7 @@ fn an_update_leaves_server_defaulted_fields_to_the_server() {
     );
     let r = run(&["plan"]).success();
     assert!(
-        r.stdout.contains("data.LOG_LEVEL: \"info\" → \"debug\""),
+        r.stdout.contains("data.LOG_LEVEL = \"info\" → \"debug\""),
         "{}",
         r.stdout
     );
@@ -1324,7 +1324,7 @@ fn an_empty_pod_selector_is_present() {
         r.stdout
     );
     assert!(
-        r.stdout.contains("spec.podSelector: <none> → {}"),
+        r.stdout.contains("spec.podSelector = <none> → {}"),
         "{}",
         r.stdout
     );
@@ -1414,7 +1414,7 @@ fn drift_from_a_kubectl_patch_is_planned_back() {
     let r = run(&["plan"]).success();
     assert!(
         r.stdout.contains("  ~ k8s.deployment web")
-            && r.stdout.contains("spec.replicas: <none> → 3"),
+            && r.stdout.contains("spec.replicas = <none> → 3"),
         "{}",
         r.stdout
     );

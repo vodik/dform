@@ -86,7 +86,7 @@ fn a_mutation_elsewhere_is_drift_and_the_run_continues() {
     );
     assert!(
         r.stdout
-            .contains("  ~ db.postgres main  p.df:2\n      size: 9 → 1\n"),
+            .contains("  ~ db.postgres main  p.df:2\n      size = 9 → 1\n"),
         "{}",
         r.stdout
     );

@@ -49,7 +49,7 @@ fn a_replace_updates_its_dependents_after_the_create() {
     assert!(
         r.stdout.contains(
             "tick 2  2 changes\n  waits on  main\n  \
-             ~ net.subnet a  p.df:4\n      vpc_id: \"net.vpc:main@1\" → main\n"
+             ~ net.subnet a  p.df:4\n      vpc_id = \"net.vpc:main@1\" → main\n"
         ),
         "{}",
         r.stdout
@@ -148,7 +148,7 @@ use fake
     assert!(
         r.stdout.contains(
             "tick 2  2 changes\n  waits on  d.endpoint\n  \
-             ~ net.subnet a   p.df:4\n      note: \"x\" → d.endpoint\n"
+             ~ net.subnet a   p.df:4\n      note = \"x\" → d.endpoint\n"
         ) && r.stdout.contains("  - net.vpc main  (deposed)\n"),
         "{}",
         r.stdout

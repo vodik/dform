@@ -90,8 +90,9 @@ fn the_plan_deletes_every_object_dependents_first() {
     );
     let order: Vec<&str> = r.stdout.lines().filter(|l| l.starts_with("  - ")).collect();
     assert_eq!(order, ORDER, "{}", r.stdout);
-    // The operation is every delete's reason: none says one.
+    // The operation is the reason (After R-149): no reason line, no `was`.
     assert!(!r.stdout.contains("no rule wants it"), "{}", r.stdout);
+    assert!(!r.stdout.contains(" was "), "{}", r.stdout);
     // A preview: nothing changed.
     assert_eq!(objects(&s), before);
     let j = dev(&s, &["plan", "--destroy", "--json"]).success();

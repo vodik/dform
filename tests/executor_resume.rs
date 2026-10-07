@@ -177,7 +177,7 @@ fn apply_stops_when_the_world_changed_under_a_remaining_action() {
     let r = mock(&s, &["apply"]).success();
     assert!(
         r.stdout.contains(
-            "  ~ net.subnet a  p.df:4\n      tags.owner: \"someone\" → <none>\n      tier: <none> → \"web\"\n"
+            "  ~ net.subnet a  p.df:4\n      tags.owner = \"someone\" → <none>\n      tier = <none> → \"web\"\n"
         ),
         "{}",
         r.stdout
