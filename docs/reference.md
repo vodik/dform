@@ -2151,7 +2151,12 @@ cargo run -- -C examples/demo dev graph --relation vpc_peer/2        # any binar
 `dform dev effects` prints a result set of `scope  effect  what`: per
 scope (the stack, each copy of a component, each module used), what it
 reads
-(inputs by name, world types, externs by name, another copy's outputs),
+(inputs by name, world types, another copy's outputs), its coeffects by
+kind and grant (R-155), a capability list a review reads: `reads
+ssh://*` (a location by scheme and host, `*` for a computed host; a
+project file by its path, `reads file:config/*.yaml`), `reads provider
+ovh` (a data source), `needs secret K3S_TOKEN` (`env.var`), `reads clock`
+(`time.now()`), `reads memo KEY` (`memo.first`); what it
 writes (cells as `(type, path)` partitions, `*` for a variable type or
 path, the input cells its `set`s give, another copy's input cells)
 and offers (its declared outputs, with their types); and for the stack,

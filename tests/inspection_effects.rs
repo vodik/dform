@@ -110,3 +110,35 @@ fn effects_show_relations_given_and_read_across_scopes() {
         assert!(out.contains(line), "{line}{out}");
     }
 }
+
+/// A module's coeffects by kind and grant (R-155), a capability list: a
+/// location by scheme and host (its host `*` when computed), a project
+/// file by its path, a secret by name, the clock, a memo key, a provider's
+/// data source.
+#[test]
+fn coeffects_are_listed_by_kind_and_grant() {
+    let s = common::Scratch::new("effects-coeffects");
+    s.write(
+        "p.df",
+        "\nuse fake\nuse time\nuse env\nextern kv.token(+name, -value)\n\
+         let ip = \"10.0.0.5\"\n\
+         let kc: secret(string) = io.read(\"ssh://ubuntu@${ip}/etc/k3s.yaml\")\n\
+         let crds = yaml.decode(io.read(\"git+https://github.com/traefik/traefik/crds.yml?ref=v3\"))\n\
+         let cfg = yaml.decode(io.read(\"config/${ip}.yaml\"))\n\
+         let tok = env.var(\"K3S_TOKEN\")\n\
+         let created = memo.first(\"created\", time.now())\n\
+         t(v) where kv.token(\"app\", v)\n",
+    );
+    let out = s.run(&["dev", "effects", "p.df"]).success().stdout;
+    for line in [
+        "stack  reads   ssh://*\n",
+        "stack  reads   git+https://github.com\n",
+        "stack  reads   file:config/*.yaml\n",
+        "stack  needs   secret K3S_TOKEN\n",
+        "stack  reads   clock\n",
+        "stack  reads   memo created\n",
+        "stack  reads   provider kv\n",
+    ] {
+        assert!(out.contains(line), "{line}{out}");
+    }
+}

@@ -69,7 +69,7 @@ fn effects_lists_none_of_a_used_stacks_effects() {
     let theirs = s.run(&["dev", "effects", "stacks/platform.df"]).success();
     for row in [
         "k3s",
-        "yaml.decode(io.read(..))",
+        "file:vendor/kubeconfig.yml",
         "k8s.config_map",
         "offers  ip",
     ] {

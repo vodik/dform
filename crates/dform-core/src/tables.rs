@@ -53,15 +53,6 @@ pub const DECODERS: &[&str] = &["csv", "json", "yaml", "toml"];
 /// formats' decoders over it, are what a table reads.
 pub const READ: &str = "io.read";
 
-/// How a program writes the read of `format`: `io.read(..)`, or
-/// `yaml.decode(io.read(..))`.
-pub fn written(format: &str) -> String {
-    match format {
-        "text" => format!("{READ}(..)"),
-        f => format!("{f}.decode({READ}(..))"),
-    }
-}
-
 /// The table a `set from` document is (`set` is a keyword: no relation
 /// has its name).
 pub const SET_DOC: &str = "set";

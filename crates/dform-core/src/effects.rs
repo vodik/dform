@@ -1,6 +1,11 @@
 //! `dform dev effects TARGET` (DESIGN.org R-11c): what each scope reads,
 //! writes and offers, read off the lowered program and the partition
-//! graph's path normalization. No evaluation: a variable-typed write
+//! graph's path normalization. Its coeffects (R-155), the reads the
+//! context satisfies, are listed by kind and grant, a capability list a
+//! review reads: `reads ssh://*` (a location by scheme and host, a
+//! project file by its path), `reads provider ovh` (a data source),
+//! `needs secret TOKEN` (`env.var`), `reads clock` (`time.now()`),
+//! `reads memo KEY` (`memo.first`). No evaluation: a variable-typed write
 //! (a non-constant type or path) prints `*` rather than guess what it
 //! would be once evaluated.
 //!
@@ -32,6 +37,8 @@ pub const STACK: &str = "stack";
 #[derive(Debug, Clone, Default)]
 pub struct ScopeEffects {
     pub reads: BTreeSet<String>,
+    /// A secret it needs by name (`env.var("TOKEN")`, R-155).
+    pub needs: BTreeSet<String>,
     pub writes: BTreeSet<String>,
     pub offers: BTreeMap<String, String>,
     /// Each guarded provider the scope uses (R-104), and where its
@@ -74,7 +81,17 @@ pub fn compute(program: &Program, schema: &Schema) -> Result<BTreeMap<String, Sc
                 Lit::Pos(a) | Lit::Not(a) => a,
                 _ => continue,
             };
-            if let Some(rd) = classify_read(&scope, a, &inputs_by_scope, &externs)
+            if externs.contains(a.pred.as_str()) {
+                if let Some((effect, what)) = coeffect(a, &r.body) {
+                    let entry = out.entry(scope.clone()).or_default();
+                    match effect {
+                        Coeffect::Reads => entry.reads.insert(what),
+                        Coeffect::Needs => entry.needs.insert(what),
+                    };
+                }
+                continue;
+            }
+            if let Some(rd) = classify_read(&scope, a, &inputs_by_scope)
                 .or_else(|| relations.read(&scope, &a.pred))
                 .or_else(|| rows_read(&scope, a))
             {
@@ -304,7 +321,6 @@ fn classify_read(
     scope: &str,
     a: &crate::ast::Atom,
     inputs_by_scope: &BTreeMap<String, BTreeSet<String>>,
-    externs: &BTreeSet<&str>,
 ) -> Option<String> {
     match (a.pred.as_str(), a.args.len()) {
         ("attr" | "attr_stuck", 4) | ("attr_conflict", 5) => {
@@ -331,15 +347,6 @@ fn classify_read(
             let t = const_str(&a.args[0])?;
             Some(format!("world {t}"))
         }
-        // A data source by the call a program writes: a table as its
-        // read (`yaml.decode(io.read(..))`, R-155), never the compiler's
-        // name (R-129).
-        (pred, _) if externs.contains(pred) => Some(
-            match pred.strip_prefix("table.").and_then(|r| r.split_once('.')) {
-                Some((format, _)) => crate::tables::written(format),
-                None => format!("{pred}(..)"),
-            },
-        ),
         // A module's own input, read through its renamed reader
         // (`m.i::k`, or `m.i.k` exported; bare `k` at the stack root).
         (pred, 1) => {
@@ -354,6 +361,86 @@ fn classify_read(
                 .map(|name| format!("input {name}"))
         }
         _ => None,
+    }
+}
+
+/// A coeffect's kind (R-155): a read the context satisfies, or a secret
+/// it must be given.
+enum Coeffect {
+    Reads,
+    Needs,
+}
+
+/// The coeffect an extern's call is, by kind and what grants it: a
+/// location by scheme and host (`ssh://*`, `git+https://github.com`) or a
+/// project file by its path (`file:config/*.yaml`), a provider's data
+/// source (`provider ovh`), a secret by name (`env.var`), the clock, a
+/// memo key; `None` for a table read from a value the program has.
+fn coeffect(a: &crate::ast::Atom, body: &[Lit]) -> Option<(Coeffect, String)> {
+    // A term as a pattern: a constant as it is, a hole `*`.
+    let glob = |t: &crate::ast::Term| -> String {
+        match t {
+            crate::ast::Term::Var(v) => body
+                .iter()
+                .find_map(|l| match l {
+                    Lit::Eq(crate::ast::Term::Var(x), u) | Lit::Eq(u, crate::ast::Term::Var(x))
+                        if x == v =>
+                    {
+                        Some(pattern(u))
+                    }
+                    _ => None,
+                })
+                .unwrap_or_else(|| "*".to_string()),
+            t => pattern(t),
+        }
+    };
+    let pred = a.pred.as_str();
+    if let Some((format, _)) = pred.strip_prefix("table.").and_then(|r| r.split_once('.')) {
+        if format == crate::tables::VALUE {
+            return None;
+        }
+        return Some((Coeffect::Reads, location(&glob(a.args.first()?))));
+    }
+    let first = || a.args.first().map(&glob).unwrap_or_else(|| "*".to_string());
+    Some(match pred {
+        crate::syntax::resolve::ENV_VAR => (Coeffect::Needs, format!("secret {}", first())),
+        crate::externs::TIME_NOW => (Coeffect::Reads, "clock".to_string()),
+        crate::memo::FIRST => (Coeffect::Reads, format!("memo {}", first())),
+        p => (
+            Coeffect::Reads,
+            format!("provider {}", p.split_once('.').map_or(p, |(h, _)| h)),
+        ),
+    })
+}
+
+/// A term as a pattern of its values: a string as it is, an
+/// interpolation's holes `*`, anything else `*`.
+fn pattern(t: &crate::ast::Term) -> String {
+    use crate::ast::Term;
+    match t {
+        Term::Val(crate::value::Value::Str(s)) => s.clone(),
+        Term::Func { name, args } if name == crate::ir::FORMAT => match args.first() {
+            Some(Term::Val(crate::value::Value::Str(t))) => t.replace("%s", "*"),
+            _ => "*".to_string(),
+        },
+        _ => "*".to_string(),
+    }
+}
+
+/// A location's grant (R-153): a uri by its scheme and host, its host `*`
+/// when computed (`ssh://*`), a project file by its path, `file:PATH`.
+fn location(glob: &str) -> String {
+    let Some((scheme, rest)) = glob.split_once("://") else {
+        return match glob.split_once(':') {
+            Some((scheme @ ("data" | "file" | "git+file"), _)) => format!("{scheme}:"),
+            _ => format!("file:{glob}"),
+        };
+    };
+    let authority = rest.split('/').next().unwrap_or_default();
+    let host = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
+    match host.contains('*') || host.is_empty() {
+        true => format!("{scheme}://*"),
+        false => format!("{scheme}://{host}"),
     }
 }
 

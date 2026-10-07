@@ -60,6 +60,37 @@ pub const SOURCES: &[(&str, &str)] = &[
     ("std/io.df", include_str!("../../../std/io.df")),
 ];
 
+/// The operators and the types each is over (R-155: polymorphism lives in
+/// operators and fields, never in functions), as docs/grammar.md's
+/// operator table writes them; `==` is over every type. The std audit
+/// checks the table against this and this against what the engine does.
+pub const OPERATORS: &[(&str, &[&str])] = &[
+    ("in", &["list", "string", "inet", "iprange"]),
+    ("+ -", &["int", "float", "bytes", "cpu", "duration", "time"]),
+    ("* /", &["int", "float", "bytes", "cpu", "duration"]),
+    ("%", &["int", "float"]),
+    (
+        "< <= > >=",
+        &["int", "float", "bytes", "cpu", "duration", "time", "semver"],
+    ),
+    (
+        "${..}",
+        &[
+            "string", "int", "float", "bool", "bytes", "cpu", "duration", "time", "semver", "ip",
+            "inet", "iprange", "uri", "oci",
+        ],
+    ),
+];
+
+/// A function's kind (R-155): pure, or a coeffect, a read the context
+/// satisfies. There is no third.
+pub fn kind(f: &Function) -> &'static str {
+    match f.coeffect {
+        true => "coeffect",
+        false => "pure",
+    }
+}
+
 /// The package of the lowering's own functions (crates/dform-core/src/
 /// lowering.df): bare, each `internal`, written by no program. Every
 /// other function is named by its package (R-155: no prelude).
@@ -1835,35 +1866,11 @@ mod tests {
                 || f.name == "hash.sha256"
                 || matches!(f.name.as_str(), "secret.declassify")
         };
-        // (6) Subject first, options last: a package about a type takes
-        // a value of it first (`str.*` a string, `inet.*` a network);
-        // optional parameters come last (`parse` refuses the rest), and
-        // the one variadic is `format`'s values after its template:
-        // `path.join` takes a list, as `list.join` does.
-        fn subject(p: &str) -> Option<&str> {
-            match p {
-                "str" | "path" | "regex" | "hash" | "base64" | "random" => Some("string"),
-                "inet" | "ip" | "time" | "oci" | "uri" | "semver" | "list" | "int" => Some(p),
-                _ => None,
-            }
-        }
+        // (6) Subject first (`std_has_no_bare_function_and_a_package_per_subject`),
+        // options last (`parse` refuses the rest), and the one variadic is
+        // `str.format`'s values after its template: `path.join` takes a
+        // list, as `list.join` does.
         for f in registry().functions().filter(|f| !f.internal) {
-            // A component's escape is about the text going into one; an
-            // int from a float is about the int it makes (`int.round`).
-            let escape = f.name == "uri.escape" || (f.package == "int" && f.ret == "int");
-            if let Some(want) = subject(&f.package).filter(|_| !escape) {
-                // Or a list of them, joined (`path.join`).
-                let first = f.params.first().map(|p| p.ty.as_str());
-                let list = format!("list({want})");
-                assert!(
-                    first == Some(want) || first == Some(list.as_str()),
-                    "{}: a function of the package {} takes its subject, a {want}, first ({}:{})",
-                    f.signature,
-                    f.package,
-                    f.file,
-                    f.line
-                );
-            }
             assert!(
                 !f.variadic || f.name == crate::ir::FORMAT,
                 "{}: a function takes a list, not any number of values ({}:{})",
@@ -1893,6 +1900,154 @@ mod tests {
                 f.signature, f.file, f.line
             );
         }
+    }
+
+    /// The std audit's rules of R-155: no bare function a program calls
+    /// (and a bare name of one resolves to none); every function in a
+    /// package named by its subject's type (or the format of the text a
+    /// decoder reads), its subject first; each function `pure` (a body)
+    /// or a `coeffect` (a read, no body), `io.read` the one coeffect of
+    /// std, `random.*` pure given their key.
+    #[test]
+    fn std_has_no_bare_function_and_a_package_per_subject() {
+        // The types a package's functions take first.
+        let subject = |f: &Function| -> &[&str] {
+            match f.package.as_str() {
+                "str" | "path" | "regex" | "hash" | "base64" | "random" | "io" => &["string"],
+                "inet" => &["inet"],
+                "ip" => &["ip"],
+                "time" => &["time"],
+                "oci" => &["oci"],
+                "uri" => &["uri"],
+                "semver" => &["semver"],
+                "list" => &["list"],
+                // An int's functions; an int from a float is about the int
+                // it makes (`int.round`).
+                "int" => &["int", "float"],
+                // A format's: a decode takes the text, an encode the value.
+                "json" | "yaml" | "toml" | "csv" => &["string", "any", "list"],
+                // A quantity is a bytes, a cpu or a duration; a secret any.
+                "quantity" | "secret" => &["any"],
+                p => panic!("{}: the package {p} names no subject's type", f.signature),
+            }
+        };
+        let r = registry();
+        for f in r.functions().filter(|f| !f.internal) {
+            assert!(
+                f.name.contains('.'),
+                "{}: no function is bare (R-155) ({}:{})",
+                f.signature,
+                f.file,
+                f.line
+            );
+            // Its subject, or a list of them (`path.join`); a list's
+            // functions take any list.
+            let first = f.params.first().map(|p| p.ty.as_str()).unwrap_or("");
+            let of = |t: &str| {
+                first == t
+                    || first
+                        .strip_prefix("list(")
+                        .and_then(|r| r.strip_suffix(')'))
+                        == Some(t)
+                    || (t == "list" && first.starts_with("list("))
+            };
+            // A component's escape is about the text going into one.
+            if f.name != "uri.escape" {
+                assert!(
+                    subject(f).iter().any(|t| of(t)),
+                    "{}: the package {} takes its subject first, one of {:?} ({}:{})",
+                    f.signature,
+                    f.package,
+                    subject(f),
+                    f.file,
+                    f.line
+                );
+            }
+            match kind(f) {
+                "pure" => assert!(body(&f.name).is_some(), "{}: pure, with a body", f.name),
+                _ => assert!(
+                    body(&f.name).is_none(),
+                    "{}: a coeffect has no body",
+                    f.name
+                ),
+            }
+            // A bare name of it is no function (`split`, `read`); an
+            // aggregate's (`min`, `sum`) is bound in a body.
+            let bare = f.name.rsplit('.').next().unwrap_or_default();
+            if !crate::partition::AGGREGATES.contains(&bare) {
+                let src = format!("p(x) where x = {bare}(\"a\")\n");
+                let e = crate::parser::parse_program(&src).unwrap_err().to_string();
+                assert!(
+                    e.contains(&format!("unknown function {bare}")),
+                    "{bare}: {e}"
+                );
+            }
+        }
+        let coeffects: Vec<&str> = r
+            .functions()
+            .filter(|f| f.coeffect)
+            .map(|f| f.name.as_str())
+            .collect();
+        assert_eq!(coeffects, ["io.read"]);
+        assert!(
+            r.functions()
+                .filter(|f| f.package == "random")
+                .all(|f| kind(f) == "pure")
+        );
+        // A third kind is no flag a signature file takes.
+        let e = Registry::load(&[("t.df", "package t\nfn f(a: int) -> int writes")]).unwrap_err();
+        assert!(e.contains("unknown flag `writes`"), "{e}");
+    }
+
+    /// docs/grammar.md's operator table is [`OPERATORS`]: each row's
+    /// operator and the types it names, outside its parentheses.
+    #[test]
+    fn the_operator_table_is_the_grammars() {
+        let grammar = include_str!("../../../docs/grammar.md");
+        let start = grammar
+            .find("| operator | types |")
+            .expect("the operator table");
+        let mut rows = Vec::new();
+        for line in grammar[start..].lines().skip(2) {
+            let Some(line) = line.strip_prefix('|') else {
+                break;
+            };
+            let cells: Vec<&str> = line.split('|').map(str::trim).collect();
+            let op = cells[0].trim_matches('`').to_string();
+            // The types: backquoted words, a parenthesis aside.
+            let mut text = String::new();
+            let mut depth = 0;
+            for c in cells[1].chars() {
+                match c {
+                    '(' => depth += 1,
+                    ')' => depth -= 1,
+                    c if depth == 0 => text.push(c),
+                    _ => {}
+                }
+            }
+            let mut types: Vec<String> = text
+                .split('`')
+                .skip(1)
+                .step_by(2)
+                .filter(|w| !w.is_empty() && w.chars().all(|c| c.is_ascii_lowercase()))
+                .map(String::from)
+                .collect();
+            types.sort();
+            types.dedup();
+            rows.push((op, types));
+        }
+        let mut want: Vec<(String, Vec<String>)> = OPERATORS
+            .iter()
+            .map(|(op, ts)| {
+                let mut ts: Vec<String> = ts.iter().map(|t| t.to_string()).collect();
+                ts.sort();
+                (op.to_string(), ts)
+            })
+            .collect();
+        want.push(("==".to_string(), Vec::new()));
+        rows.sort();
+        want.sort();
+        assert_eq!(rows, want);
     }
 
     /// The reverse: every body is declared somewhere (no orphan).

@@ -3930,7 +3930,7 @@ fn as_params(name: &str, vals: Vec<Value>) -> Vec<Value> {
 /// How two values order: numbers by value (an int with a float, R-75),
 /// quantities of one dimension, times by their instant; `Err` with why
 /// they do not.
-fn order(a: &Value, b: &Value) -> std::result::Result<Ordering, String> {
+pub(crate) fn order(a: &Value, b: &Value) -> std::result::Result<Ordering, String> {
     if let Some(o) = crate::value::compare_numbers(a, b) {
         return Ok(o);
     }
@@ -5292,5 +5292,102 @@ mod tests {
         let (r, _) = resumable.with(&[later]).unwrap();
         assert_eq!(r.stuck.len(), 1, "{:?}", r.stuck);
         assert_eq!(facts_of(&r, "strict").len(), 1);
+    }
+
+    /// The operator table (`functions::OPERATORS`, docs/grammar.md) is
+    /// what the engine implements (R-155): each operator is over the types
+    /// it lists and no other, a sample of each type tried.
+    #[test]
+    fn the_operators_are_over_the_types_the_table_lists() {
+        use crate::functions::{OPERATORS, body};
+        let read = |ty: &str, s: &str| crate::value::read_typed(ty, &Value::Str(s.into())).unwrap();
+        let samples: Vec<(&str, Value, Value)> = vec![
+            ("int", Value::Int(7), Value::Int(2)),
+            (
+                "float",
+                Value::Float(crate::value::Float::new(2.5).unwrap()),
+                Value::Float(crate::value::Float::new(0.5).unwrap()),
+            ),
+            ("bool", Value::Bool(true), Value::Bool(false)),
+            ("string", Value::Str("abc".into()), Value::Str("b".into())),
+            ("bytes", read("bytes", "1Gi"), read("bytes", "512Mi")),
+            ("cpu", read("cpu", "500m"), read("cpu", "250m")),
+            ("duration", read("duration", "1h"), read("duration", "30m")),
+            (
+                "time",
+                read("time", "2026-10-02T09:00:00Z"),
+                read("time", "2026-10-03T09:00:00Z"),
+            ),
+            ("semver", read("semver", "1.2.3"), read("semver", "2.0.0")),
+            ("ip", read("ip", "10.0.0.1"), read("ip", "10.0.0.2")),
+            (
+                "inet",
+                read("inet", "10.0.0.0/8"),
+                read("inet", "10.1.0.0/16"),
+            ),
+            (
+                "iprange",
+                read("iprange", "10.0.0.1-10.0.0.9"),
+                read("iprange", "10.0.0.2-10.0.0.3"),
+            ),
+            (
+                "uri",
+                read("uri", "https://example.com/a"),
+                read("uri", "https://example.com/b"),
+            ),
+            (
+                "oci",
+                read("oci", "ghcr.io/o/app:1"),
+                read("oci", "ghcr.io/o/app:2"),
+            ),
+            (
+                "list",
+                Value::List(vec![Value::Int(1)]),
+                Value::List(vec![Value::Int(2)]),
+            ),
+            (
+                "object",
+                Value::Obj([("a".to_string(), Value::Int(1))].into()),
+                Value::Obj(Default::default()),
+            ),
+        ];
+        let call = |f: &str, a: &[Value]| body(f).and_then(|b| b(a));
+        let int = Value::Int(2);
+        let duration = read("duration", "1h");
+        for (op, types) in OPERATORS {
+            for (ty, a, b) in &samples {
+                let has = match *op {
+                    "+ -" => {
+                        let b = if *ty == "time" { &duration } else { b };
+                        call("add", &[a.clone(), b.clone()]).is_some()
+                            && call("sub", &[a.clone(), b.clone()]).is_some()
+                    }
+                    "* /" => {
+                        let by = if matches!(a, Value::Quantity(_)) {
+                            &int
+                        } else {
+                            b
+                        };
+                        call("mul", &[a.clone(), by.clone()]).is_some()
+                            && call("div", &[a.clone(), by.clone()]).is_some()
+                    }
+                    "%" => call("mod", &[a.clone(), b.clone()]).is_some(),
+                    "< <= > >=" => order(a, b).is_ok(),
+                    "in" => match a {
+                        // A list's `in` is the membership a body enumerates.
+                        Value::List(_) => {
+                            facts_of(&run("p() where 1 in [1]").unwrap().0, "p") == ["p()"]
+                        }
+                        Value::Str(_) => holds(a, b).is_ok(),
+                        _ => holds(a, &read("ip", "10.0.0.2")).is_ok(),
+                    },
+                    "${..}" => {
+                        call(crate::ir::FORMAT, &[Value::Str("%s".into()), a.clone()]).is_some()
+                    }
+                    _ => unreachable!("{op}"),
+                };
+                assert_eq!(has, types.contains(ty), "`{op}` over {ty}");
+            }
+        }
     }
 }

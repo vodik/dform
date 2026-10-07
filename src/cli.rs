@@ -5065,6 +5065,7 @@ fn print_effects(
             ])
         };
         e.reads.iter().for_each(|r| row("reads", r.to_string()));
+        e.needs.iter().for_each(|n| row("needs", n.to_string()));
         e.writes.iter().for_each(|w| row("writes", w.to_string()));
         e.offers
             .iter()

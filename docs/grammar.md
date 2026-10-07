@@ -1939,15 +1939,17 @@ one is `unknown function`, with the name meant (`len(x)` is `x.len`,
 
 | operator | types |
 |----------|-------|
-| `in`     | `list` (an element), an enum type (a value), a relation's type or a resource type (`r in T`), `inet` and `iprange` (an `ip`), `string` (a substring) |
-| `+ - * / %` | `int`, `float`, `bytes`, `cpu`, `duration`, `time` with `duration` |
+| `in`     | `list` (an element), `string` (a substring), `inet` and `iprange` (an address); a type: an enum (a value), a resource type (`r in T`) |
+| `+ -`    | `int`, `float`, `bytes`, `cpu`, `duration`; `time` and a `duration`, `-` of two `time` |
+| `* /`    | `int`, `float`; `bytes`, `cpu`, `duration` by an `int` |
+| `%`      | `int`, `float` |
 | `< <= > >=` | `int`, `float`, `bytes`, `cpu`, `duration`, `time`, `semver` |
 | `==`     | every type |
-| `${..}`  | every type with a text: `string`, `int`, `float`, `bool`, `bytes`, `cpu`, `duration`, `time`, `semver`, `ip`, `inet`, `iprange`, `uri`, `oci` |
+| `${..}`  | `string`, `int`, `float`, `bool`, `bytes`, `cpu`, `duration`, `time`, `semver`, `ip`, `inet`, `iprange`, `uri`, `oci` (every type with a text: not a `list`, not an `object`) |
 
-A type has an operator in the table or not at all: `+` on two strings is
-an error that names the interpolation (`"${a}${b}"`), `<` on two strings
-one that names the ordered types. `x in s` with `s` a string holds when
+A type has an operator in the table or not at all: `+` or `<` on two
+strings is an error naming the types that have it (`"${a}${b}"` joins
+two strings). `x in s` with `s` a string holds when
 `x` occurs in it; `a in n` with `n` an `inet` when the network holds the
 address, and with `n` an `iprange` when the range does; the right side's
 type decides, so a string read as a network is typed first (`let n:
@@ -1969,14 +1971,17 @@ sigfile    := "package" NAME NL (DOC* fnsig NL)*
 fnsig      := "internal"? "fn" NAME "(" (param ("," param)* ("," "...")?)? ")" "->" type "?"? flags?
 param      := NAME "?"? ":" type             ; `?`: a call may leave it out (the last ones only)
 flags      := flag ("," flag)*
-flag       := "forwards" | "forwards" "nulls"
+flag       := "forwards" | "forwards" "nulls" | "reads"
 ```
 
 `?` marks a partial function: one with no answer for some valid input (a
 match that fails, an empty list, a text that is no document). `forwards`: a secret argument flows through
 to the result uninspected (otherwise a call over a secret is E0301).
 `forwards nulls`: a null argument is not a content position (Rule 2).
-`internal`: the lowering's own, not callable from a program. A `#|` doc
+`reads`: a coeffect, a read the context satisfies (`io.read`): it lowers
+to a table the host answers, never a body; every other function is pure.
+`internal`: the lowering's own, not callable from a program
+(crates/dform-core/src/lowering.df, the one file of bare names). A `#|` doc
 comment above a signature is its summary, and its `example:` key the
 example hover shows; `dform doc` renders every callable function, per
 signature file, after the project's items.
