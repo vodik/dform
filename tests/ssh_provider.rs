@@ -297,9 +297,7 @@ fn a_host_or_a_file_not_there_yet_is_waited_on() {
     let timeout = |t: &str| {
         s.write(
             "dform.toml",
-            &format!(
-                "[project]\nedition = \"2026\"\n\n[providers]\nssh = {{ timeout = \"{t}\" }}\n"
-            ),
+            &format!("[project]\nedition = \"2026\"\n\n[providers]\nssh = {{ wait = \"{t}\" }}\n"),
         )
     };
     timeout("1s");
