@@ -1843,6 +1843,29 @@ fn waited(on: &BTreeSet<String>) -> Vec<String> {
     out
 }
 
+/// The values `on` as [`waited`] says them, each resource's as the
+/// resource: `ns` for `ns.metadata.uid, ns.metadata.generation`.
+fn owners(on: &BTreeSet<String>) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for n in on {
+        let w = match crate::value::null_parts(n) {
+            Some((typ, name, _))
+                if extern_label(n).is_none()
+                    && !name.is_empty()
+                    && typ != crate::stack::UNAPPLIED
+                    && typ != crate::transform::OUTPUT =>
+            {
+                reference(&Address { typ, name }, "")
+            }
+            _ => label(n),
+        };
+        if !out.contains(&w) {
+            out.push(w);
+        }
+    }
+    out
+}
+
 /// The page width the right column folds at.
 pub const WIDTH: usize = 100;
 /// The right column starts here, unless every left column is narrower.
@@ -2563,9 +2586,17 @@ impl Report {
                 (Some(r), false) => format!("if {r}"),
                 (None, _) => format!("waits on {on}"),
             };
+            let mut right = both(site(&g.site), cond, &g.reason);
+            // Too many values for the column: the resources they are of.
+            if g.reads.is_none() {
+                let owners = owners(&g.on.iter().cloned().collect()).join(", ");
+                if owners != on {
+                    right.extend(both(site(&g.site), format!("waits on {owners}"), &g.reason));
+                }
+            }
             let plain = format!("  {pattern}");
             let painted = format!("  {}", style.paint(Paint::Warn, &pattern));
-            rows.push(Row::new(&plain, painted).with(both(site(&g.site), cond, &g.reason)));
+            rows.push(Row::new(&plain, painted).with(right));
         }
         for p in &self.policies {
             let on = waited(&p.on.iter().cloned().collect()).join(", ");

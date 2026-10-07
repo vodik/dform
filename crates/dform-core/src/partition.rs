@@ -828,10 +828,26 @@ fn answer_identity(rules: Vec<RuleStmt>, schema: &Schema) -> Vec<RuleStmt> {
                 let mut read = transform::identity_read(typ.clone(), addr.clone(), schema);
                 read.span = a.span;
                 if read.pred == "attr" {
-                    let v = Term::Var(format!("__Identity{n}"));
-                    n += 1;
+                    let mut v = Term::Var(format!("__Identity{n}"));
                     read.args[3] = v.clone();
+                    // An identity below the cell (`metadata.uid` of a
+                    // Kubernetes object): its field, so what waits on it
+                    // waits on the identity, not every computed field the
+                    // cell holds.
+                    let below = id_below(typ, &read.args[2], schema);
                     body.push(Lit::Pos(read));
+                    if let Some(rest) = below {
+                        let w = Term::Var(format!("__IdentityField{n}"));
+                        body.push(Lit::Eq(
+                            w.clone(),
+                            Term::Func {
+                                name: "__path".into(),
+                                args: vec![v, Term::Val(Value::Str(rest))],
+                            },
+                        ));
+                        v = w;
+                    }
+                    n += 1;
                     body.push(Lit::Pos(Atom {
                         pred: "__known".into(),
                         args: vec![v],
@@ -846,6 +862,17 @@ fn answer_identity(rules: Vec<RuleStmt>, schema: &Schema) -> Vec<RuleStmt> {
             r
         })
         .collect()
+}
+
+/// The path below the identity read's cell `cell` of the identity of
+/// `typ`, when its schema flags one there (`metadata.uid` of a
+/// Kubernetes object: `uid`).
+fn id_below(typ: &Term, cell: &Term, schema: &Schema) -> Option<String> {
+    let (t, cell) = (key_type(typ)?, cell.as_str()?);
+    schema.attrs.iter().find_map(|((at, p), spec)| {
+        let rest = p.strip_prefix(cell)?.strip_prefix('.')?;
+        (at == &t && spec.has("id") && spec.has("computed")).then(|| rest.to_string())
+    })
 }
 
 /// The schema's answer to `has`: `__type_has(T, P)` for every path `P` of
@@ -915,6 +942,31 @@ fn answer_has(
                 None => declared.iter().any(|(_, q)| q == p),
             }
     };
+    // Whether the value answers `a` over a computed attribute (its first
+    // segment computed in the type's schema, any type's when the type is
+    // not constant): it has a value once the provider reports it, so the
+    // test is undetermined while the value is unknown (`__known`).
+    let computed = |a: &Atom| -> bool {
+        let Some(top) = a.args[2]
+            .as_str()
+            .and_then(|p| crate::ir::path_segments(p).into_iter().next())
+        else {
+            return false;
+        };
+        let is = |t: &str| {
+            schema
+                .attrs
+                .get(&(t.to_string(), top.to_string()))
+                .is_some_and(|s| s.has("computed"))
+        };
+        match key_type(&a.args[0]) {
+            Some(t) => is(&t),
+            None => schema.attrs.keys().any(|(t, _)| is(t)),
+        }
+    };
+    let mut fresh = 0usize;
+    let mut helpers: Vec<RuleStmt> = Vec::new();
+    let mut patch: BTreeSet<String> = BTreeSet::new();
     let mut asked: BTreeSet<String> = BTreeSet::new();
     let mut out: Vec<RuleStmt> = Vec::with_capacity(rules.len());
     for mut r in rules {
@@ -930,6 +982,13 @@ fn answer_has(
                 _ => 0,
             };
             if !by_schema(&a, &r.head) {
+                if computed(&a) {
+                    let read: Vec<Lit> = lits.by_ref().take(n).collect();
+                    match l {
+                        Lit::Pos(_) => body.extend(known(read, &mut fresh)),
+                        _ => body.extend(not_known(read, &mut fresh, &mut helpers, &mut patch)),
+                    }
+                }
                 continue;
             }
             lits.by_ref().take(n).for_each(drop);
@@ -947,6 +1006,13 @@ fn answer_has(
         r.body = body;
         out.push(r);
     }
+    // A `not has` the resolver put in a helper: the helper's read waits.
+    for r in &mut out {
+        if patch.contains(&r.head.pred) {
+            r.body = known(std::mem::take(&mut r.body), &mut fresh);
+        }
+    }
+    out.extend(helpers);
     for (t, p) in &declared {
         if asked.contains(p) {
             facts.push(Atom {
@@ -961,6 +1027,85 @@ fn answer_has(
         }
     }
     (out, facts)
+}
+
+/// The literals of a `has r.p` that test it by value, with `__known` over
+/// the value they read: the attribute read's value, or the walk's end
+/// (`Has = __path(..)`), the last literal that binds one.
+fn known(mut read: Vec<Lit>, fresh: &mut usize) -> Vec<Lit> {
+    let at = read.iter().rposition(|l| match l {
+        Lit::Eq(Term::Var(_), _) => true,
+        Lit::Pos(a) => a.pred == "attr" && a.args.len() == 4,
+        _ => false,
+    });
+    let Some(at) = at else { return read };
+    let v = match &mut read[at] {
+        Lit::Eq(Term::Var(v), _) => Term::Var(v.clone()),
+        Lit::Pos(a) => match &a.args[3] {
+            Term::Var(v) => Term::Var(v.clone()),
+            _ => {
+                let v = Term::Var(format!("__Known{fresh}"));
+                *fresh += 1;
+                a.args[3] = v.clone();
+                v
+            }
+        },
+        _ => return read,
+    };
+    let span = match &read[at] {
+        Lit::Pos(a) => a.span,
+        _ => Default::default(),
+    };
+    read.insert(
+        at + 1,
+        Lit::Pos(Atom {
+            pred: "__known".into(),
+            args: vec![v],
+            record: None,
+            span,
+        }),
+    );
+    read
+}
+
+/// The literals of a `not has r.p` that test it by value, waiting while
+/// the value is unknown: `not attr(T, A, P, _)` becomes `not
+/// __has_known_N(..)` over a helper that reads the value and holds when
+/// it is known ([`known`]); a helper the resolver made (`not __neg_N(..)`)
+/// is named in `patch`, its read made to wait in place.
+fn not_known(
+    read: Vec<Lit>,
+    fresh: &mut usize,
+    helpers: &mut Vec<RuleStmt>,
+    patch: &mut BTreeSet<String>,
+) -> Vec<Lit> {
+    read.into_iter()
+        .map(|l| match l {
+            Lit::Not(a) if a.pred.starts_with("__neg_") => {
+                patch.insert(a.pred.clone());
+                Lit::Not(a)
+            }
+            Lit::Not(a) if a.pred == "attr" && a.args.len() == 4 => {
+                let mut vars = BTreeSet::new();
+                for t in &a.args {
+                    crate::externs::vars(t, &mut vars);
+                }
+                let args: Vec<Term> = vars.into_iter().map(Term::Var).collect();
+                let head = Atom {
+                    pred: format!("__has_known_{}", helpers.len()),
+                    args,
+                    record: None,
+                    span: a.span,
+                };
+                helpers.push(RuleStmt {
+                    head: head.clone(),
+                    body: known(vec![Lit::Pos(a)], fresh),
+                });
+                Lit::Not(head)
+            }
+            l => l,
+        })
+        .collect()
 }
 
 /// The types whose resources a negative cycle runs through, not split by

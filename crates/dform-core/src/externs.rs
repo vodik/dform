@@ -84,7 +84,8 @@ pub fn secret_label(pred: &str, inputs: &[Value], col: usize) -> String {
     crate::value::null_label(pred, &ins.join(","), &(col + 1).to_string())
 }
 
-fn vars(t: &Term, out: &mut BTreeSet<String>) {
+/// The variables of `t`, into `out`.
+pub(crate) fn vars(t: &Term, out: &mut BTreeSet<String>) {
     match t {
         Term::Var(v) => {
             out.insert(v.clone());

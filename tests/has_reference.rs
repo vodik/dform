@@ -102,3 +102,96 @@ fn has_an_id_is_an_error_naming_has_the_resource() {
         );
     }
 }
+
+/// `has r.p` of a computed attribute (After R-152): undetermined until the
+/// provider reports it, so what it gates waits on it and applies the tick
+/// after; `not has r.p` waits too, and once the value is known it does
+/// not hold.
+#[test]
+fn has_a_computed_attribute_waits_until_it_is_known() {
+    let s = Scratch::new("has-ref-computed");
+    s.write(
+        "p.df",
+        r#"
+use fake
+resource db.postgres cache { size = 1 }
+resource net.vpc web { cidr = "10.0.0.0/16" } where has cache.endpoint
+resource net.vpc bare { cidr = "10.1.0.0/16" } where not has cache.endpoint
+"#,
+    );
+    let r = dev(&s, &["plan"]).success();
+    let tick1 = r.stdout.split("\nlater\n").next().unwrap();
+    assert!(tick1.contains("+ db.postgres cache"), "{}", r.stdout);
+    assert!(!tick1.contains("net.vpc"), "{}", r.stdout);
+    assert!(
+        waits(&r.stdout, "net.vpc web", "cache.endpoint"),
+        "{}",
+        r.stdout
+    );
+    assert!(
+        waits(&r.stdout, "net.vpc bare", "cache.endpoint"),
+        "{}",
+        r.stdout
+    );
+    let r = dev(&s, &["apply", "--yes"]).success();
+    let tick2 = r.stdout.split("\ntick 2").nth(1).unwrap_or("");
+    assert!(tick2.contains("+ net.vpc web"), "{}", r.stdout);
+    assert!(!tick2.contains("net.vpc bare"), "{}", r.stdout);
+    let r = dev(&s, &["plan"]).success();
+    assert!(r.stdout.contains("is up to date"), "{}", r.stdout);
+}
+
+/// A Kubernetes object's identity is `metadata.uid`, below the cell
+/// (After R-152): `has ns` waits on it and says so, not on every computed
+/// field of `metadata` (a list too long for the column, printed as none).
+#[test]
+fn has_a_kubernetes_object_waits_on_its_uid() {
+    let s = Scratch::new("has-ref-k8s");
+    s.write(
+        "p.df",
+        r#"
+use k8s
+resource k8s.namespace ns { metadata.name = "a" }
+resource k8s.config_map gated { metadata.name = "b" } where has ns
+"#,
+    );
+    let r = dev(&s, &["--provider", "k8s", "plan"]).success();
+    assert!(
+        waits(&r.stdout, "k8s.config_map gated", "ns.metadata.uid"),
+        "{}",
+        r.stdout
+    );
+}
+
+/// A field of a computed object (After R-152): unknown while the object
+/// is, so a clause over it, `has` and `not has` of it wait on the object.
+#[test]
+fn a_field_of_a_computed_object_waits_on_it() {
+    let s = Scratch::new("has-ref-nested");
+    s.write(
+        "s.df",
+        r#"
+type_provider(x.box, "boxcloud")
+type_provider(y.box, "boxcloud")
+type_attr(x.box, "id", "string", ["computed", "id"])
+type_attr(x.box, "status", "object", ["computed"])
+"#,
+    );
+    s.write(
+        "p.df",
+        r#"
+resource x.box b { size = 1 }
+resource y.box eq { size = 2 } where b.status.ready == true
+resource y.box yes { size = 3 } where has b.status.ready
+resource y.box no { size = 4 } where not has b.status.ready
+"#,
+    );
+    let r = dev(&s, &["--provider", "s.df", "plan"]).success();
+    for name in ["eq", "yes", "no"] {
+        assert!(
+            waits(&r.stdout, &format!("y.box {name}"), "b.status"),
+            "{name}: {}",
+            r.stdout
+        );
+    }
+}
