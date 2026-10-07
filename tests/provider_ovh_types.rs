@@ -127,9 +127,24 @@ impl Lab {
         }
     }
 
-    /// Plan: the paths that change, and whether it replaces.
-    fn plan(&self, typ: &str, prior: Option<&Json>, desired: &Json) -> (Vec<String>, bool) {
-        let (changes, replaces) = self.ovh.plan(typ, "x", "", prior, Some(desired)).unwrap();
+    /// Plan against what Read or Apply answered (`attrs`, `computed`):
+    /// the paths that change, and whether it replaces. The prior is the
+    /// world's document as dform makes it: the configured attributes, and
+    /// an optional computed one's value where the program sets it.
+    fn plan(&self, typ: &str, prior: (&Json, &Json), desired: &Json) -> (Vec<String>, bool) {
+        let mut world = prior.0.clone();
+        for (path, _) in self.ovh.schema().optional_computed_of(typ) {
+            if desired.get(&path).is_some()
+                && world.get(&path).is_none()
+                && let Some(v) = prior.1.get(&path)
+            {
+                world[path.as_str()] = v.clone();
+            }
+        }
+        let (changes, replaces) = self
+            .ovh
+            .plan(typ, "x", "", Some(&world), Some(desired))
+            .unwrap();
         (changes.into_iter().map(|c| c.path).collect(), replaces)
     }
 
@@ -168,26 +183,27 @@ fn a_storage_container_is_made_changed_and_deleted() {
         json!({"region": "BHS5", "name": "lab-logs", "owner": user}),
     );
     assert_eq!(c.remote, "BHS5/lab-logs");
+    assert_eq!(c.attrs, json!({"region": "BHS5", "name": "lab-logs"}));
     assert_eq!(
-        c.attrs,
-        json!({"region": "BHS5", "name": "lab-logs", "versioning": false,
-               "owner": user})
+        (&c.computed["versioning"], &c.computed["owner"]),
+        (&json!(false), &json!(user))
     );
     assert_eq!(
         c.computed["virtual_host"],
         "lab-logs.s3.bhs5.io.cloud.ovh.net"
     );
-    let (attrs, _) = lab.read(CONTAINER, "logs", &c.remote).unwrap();
-    assert_eq!(attrs, c.attrs);
+    let (attrs, computed) = lab.read(CONTAINER, "logs", &c.remote).unwrap();
+    assert_eq!((&attrs, &computed), (&c.attrs, &c.computed));
+    // Nothing set that the API chose: nothing to do.
+    let (paths, _) = lab.plan(CONTAINER, (&attrs, &computed), &c.attrs);
+    assert!(paths.is_empty(), "{paths:?}");
 
-    // Versioning on, then off: `enabled`, then `suspended`, in place. (The
-    // owner the program does not set is the world's, as dform fills an
-    // optional computed attribute.)
+    // Versioning on, then off: `enabled`, then `suspended`, in place.
     let on = json!({"region": "BHS5", "name": "lab-logs", "versioning": true, "owner": user});
-    let (paths, replaces) = lab.plan(CONTAINER, Some(&attrs), &on);
+    let (paths, replaces) = lab.plan(CONTAINER, (&attrs, &computed), &on);
     assert_eq!((paths, replaces), (vec!["versioning".to_string()], false));
     let u = lab.update(CONTAINER, "logs", &c.remote, on);
-    assert_eq!(u.attrs["versioning"], true);
+    assert_eq!(u.computed["versioning"], true);
     let off = json!({"region": "BHS5", "name": "lab-logs", "versioning": false});
     lab.update(CONTAINER, "logs", &c.remote, off);
     assert_eq!(
@@ -218,8 +234,8 @@ fn a_storage_container_is_made_changed_and_deleted() {
     // A new name replaces it.
     let (_, replaces) = lab.plan(
         CONTAINER,
-        Some(&attrs),
-        &json!({"region": "BHS5", "name": "lab-logs-2", "owner": user}),
+        (&attrs, &computed),
+        &json!({"region": "BHS5", "name": "lab-logs-2"}),
     );
     assert!(replaces);
 
@@ -299,7 +315,7 @@ fn a_user_has_an_s3_credential_whose_secret_is_held() {
     // Roles in place: one PUT of their ids.
     let more = json!({"description": "backup",
                       "roles": ["volume_operator", "objectstore_operator"]});
-    let (paths, replaces) = lab.plan(USER, Some(&u.attrs), &more);
+    let (paths, replaces) = lab.plan(USER, (&u.attrs, &u.computed), &more);
     assert!(!paths.is_empty() && !replaces, "{paths:?}");
     let changed = lab.update(USER, "backup", &u.remote, more);
     assert_eq!(
@@ -310,7 +326,7 @@ fn a_user_has_an_s3_credential_whose_secret_is_held() {
     // The same roles in another order: nothing to do.
     let (paths, _) = lab.plan(
         USER,
-        Some(&changed.attrs),
+        (&changed.attrs, &changed.computed),
         &json!({"description": "backup",
                 "roles": ["volume_operator", "objectstore_operator"]}),
     );
@@ -318,7 +334,7 @@ fn a_user_has_an_s3_credential_whose_secret_is_held() {
     // A new description replaces it.
     let (_, replaces) = lab.plan(
         USER,
-        Some(&changed.attrs),
+        (&changed.attrs, &changed.computed),
         &json!({"description": "backup-2", "roles": ["objectstore_operator"]}),
     );
     assert!(replaces);
@@ -371,32 +387,38 @@ fn a_volume_is_attached_moved_grown_and_deleted() {
     };
     let v = lab.create(VOLUME, "data", doc(20, Some(&one)));
     assert_eq!(v.said, ["creating", "available", "attaching", "in-use"]);
-    assert_eq!(v.attrs, doc(20, Some(&one)));
-    assert_eq!(v.computed["status"], "in-use");
-    assert_eq!(lab.server.volumes()[0]["attachedTo"], json!([one]));
-    let (attrs, _) = lab.read(VOLUME, "data", &v.remote).unwrap();
-    assert_eq!(attrs, v.attrs);
     assert_eq!(
-        lab.plan(VOLUME, Some(&attrs), &doc(20, Some(&one))).0.len(),
-        0
+        v.attrs,
+        json!({"name": "data", "region": "BHS5", "size": 20, "instance": one})
     );
+    assert_eq!(v.computed["status"], "in-use");
+    assert_eq!(v.computed["type"], "high-speed");
+    assert_eq!(lab.server.volumes()[0]["attachedTo"], json!([one]));
+    let (attrs, computed) = lab.read(VOLUME, "data", &v.remote).unwrap();
+    assert_eq!(attrs, v.attrs);
+    let read = (&attrs, &computed);
+    assert_eq!(lab.plan(VOLUME, read, &doc(20, Some(&one))).0.len(), 0);
 
     // Bigger in place, smaller replaced, another region replaced.
     assert_eq!(
-        lab.plan(VOLUME, Some(&attrs), &doc(50, Some(&one))),
+        lab.plan(VOLUME, read, &doc(50, Some(&one))),
         (vec!["size".to_string()], false)
     );
-    assert!(lab.plan(VOLUME, Some(&attrs), &doc(10, Some(&one))).1);
+    assert!(lab.plan(VOLUME, read, &doc(10, Some(&one))).1);
     let mut moved = doc(20, Some(&one));
     moved["region"] = json!("ca-east-tor");
-    assert!(lab.plan(VOLUME, Some(&attrs), &moved).1);
+    assert!(lab.plan(VOLUME, read, &moved).1);
     let grown = lab.update(VOLUME, "data", &v.remote, doc(50, Some(&one)));
     assert_eq!(grown.attrs["size"], 50);
     assert_eq!(lab.calls("POST", "/upsize"), 1);
 
     // To the other instance: detached, then attached; then cleared.
     assert_eq!(
-        lab.plan(VOLUME, Some(&grown.attrs), &doc(50, Some(&two))),
+        lab.plan(
+            VOLUME,
+            (&grown.attrs, &grown.computed),
+            &doc(50, Some(&two))
+        ),
         (vec!["instance".to_string()], false)
     );
     let to_two = lab.update(VOLUME, "data", &v.remote, doc(50, Some(&two)));
@@ -482,23 +504,28 @@ fn a_private_network_is_made_grown_and_deleted() {
     let n = lab.create(NETWORK, "lab", doc(&["BHS5"]));
     assert_eq!(n.said, ["BUILDING", "ACTIVE"]);
     assert_eq!(n.remote, "pn-1000123_42");
-    assert_eq!(n.attrs, doc(&["BHS5"]));
+    assert_eq!(n.attrs, json!({"name": "lab"}));
+    assert_eq!(n.computed["regions"], json!(["BHS5"]));
+    assert_eq!(n.computed["vlan_id"], 42);
     assert_eq!(n.computed["regions_status"], json!({"BHS5": "ACTIVE"}));
 
     let both = doc(&["ca-east-tor", "BHS5"]);
-    let (paths, replaces) = lab.plan(NETWORK, Some(&n.attrs), &both);
+    let (paths, replaces) = lab.plan(NETWORK, (&n.attrs, &n.computed), &both);
     assert!(!paths.is_empty() && !replaces, "{paths:?}");
     let grown = lab.update(NETWORK, "lab", &n.remote, both);
-    assert_eq!(grown.attrs["regions"], json!(["BHS5", "ca-east-tor"]));
+    assert_eq!(grown.computed["regions"], json!(["BHS5", "ca-east-tor"]));
     assert_eq!(lab.calls("POST", "/region"), 1);
-    assert!(lab.plan(NETWORK, Some(&grown.attrs), &doc(&["BHS5"])).1);
+    assert!(
+        lab.plan(NETWORK, (&grown.attrs, &grown.computed), &doc(&["BHS5"]))
+            .1
+    );
     let mut vlan = doc(&["BHS5", "ca-east-tor"]);
     vlan["vlan_id"] = json!(7);
-    assert!(lab.plan(NETWORK, Some(&grown.attrs), &vlan).1);
+    assert!(lab.plan(NETWORK, (&grown.attrs, &grown.computed), &vlan).1);
     let mut renamed = doc(&["BHS5", "ca-east-tor"]);
     renamed["name"] = json!("lab-2");
     assert_eq!(
-        lab.plan(NETWORK, Some(&grown.attrs), &renamed),
+        lab.plan(NETWORK, (&grown.attrs, &grown.computed), &renamed),
         (vec!["name".to_string()], false)
     );
 
@@ -553,9 +580,13 @@ fn a_subnet_is_made_replaced_and_deleted() {
     let sub = lab.create(SUBNET, "lab", doc.clone());
     let (network, _) = sub.remote.split_once('/').unwrap();
     assert_eq!(network, net.remote);
-    let mut want = doc.clone();
-    want["no_gateway"] = json!(false);
+    let want = json!({"network": net.remote, "region": "BHS5", "range": "10.1.0.0/24",
+                      "start": "10.1.0.10", "end": "10.1.0.100"});
     assert_eq!(sub.attrs, want);
+    assert_eq!(
+        (&sub.computed["dhcp"], &sub.computed["no_gateway"]),
+        (&json!(true), &json!(false))
+    );
     assert_eq!(sub.computed["gateway_ip"], "10.1.0.1");
     let sent = lab
         .server
@@ -568,11 +599,12 @@ fn a_subnet_is_made_replaced_and_deleted() {
         json!({"region": "BHS5", "network": "10.1.0.0/24", "start": "10.1.0.10",
                "end": "10.1.0.100", "dhcp": true, "noGateway": false})
     );
-    let (attrs, _) = lab.read(SUBNET, "lab", &sub.remote).unwrap();
+    let (attrs, computed) = lab.read(SUBNET, "lab", &sub.remote).unwrap();
     assert_eq!(attrs, want);
-    let mut no_dhcp = want.clone();
+    assert!(lab.plan(SUBNET, (&attrs, &computed), &doc).0.is_empty());
+    let mut no_dhcp = doc.clone();
     no_dhcp["dhcp"] = json!(false);
-    assert!(lab.plan(SUBNET, Some(&attrs), &no_dhcp).1);
+    assert!(lab.plan(SUBNET, (&attrs, &computed), &no_dhcp).1);
 
     let again = lab
         .apply(pb::Op::Create, SUBNET, "other", "", doc)
@@ -588,6 +620,72 @@ fn a_subnet_is_made_replaced_and_deleted() {
     assert!(lab.read(SUBNET, "lab", &sub.remote).is_none());
     lab.delete(NETWORK, "lab", &net.remote);
     assert!(lab.read(SUBNET, "lab", &sub.remote).is_none());
+}
+
+/// An instance on a private network: made with an interface on the
+/// public network and one on the private network, by their OpenStack
+/// ids in its region; read back as the reference and its address there,
+/// by network. A network not in its region is refused naming the ones it
+/// is in.
+#[test]
+fn an_instance_joins_a_private_network() {
+    let lab = Lab::new();
+    lab.server.build_polls(0);
+    let net = lab.create(NETWORK, "lab", json!({"name": "lab", "regions": ["BHS5"]}));
+    lab.create(
+        SUBNET,
+        "lab",
+        json!({"network": net.remote, "region": "BHS5", "range": "10.1.0.0/24",
+               "start": "10.1.0.10", "end": "10.1.0.100"}),
+    );
+    let doc = |region: &str| {
+        json!({"name": "vm", "region": region, "flavor": "d2-2", "image": "Debian 13",
+               "networks": [net.remote]})
+    };
+    let vm = lab.create("ovh.instance", "vm", doc("BHS5"));
+    let sent = lab
+        .server
+        .seen()
+        .into_iter()
+        .find(|c| c.method == "POST" && c.path.ends_with("/instance"))
+        .unwrap();
+    assert_eq!(
+        sent.body["networks"],
+        json!([{"networkId": "ext-BHS5"}, {"networkId": "net-0-BHS5"}])
+    );
+    assert_eq!(vm.attrs["networks"], json!([net.remote]));
+    let ip = vm.computed["private_ips"][&net.remote].as_str().unwrap();
+    assert!(ip.starts_with("10.1.0."), "{ip}");
+    assert_eq!(vm.computed["private_ip"], ip);
+    assert!(vm.computed["public_ip"].is_string());
+    let (attrs, _) = lab.read("ovh.instance", "vm", &vm.remote).unwrap();
+    assert_eq!(attrs["networks"], json!([net.remote]));
+
+    let elsewhere = lab
+        .apply(pb::Op::Create, "ovh.instance", "far", "", {
+            let mut d = doc("ca-east-tor");
+            d["name"] = json!("far");
+            d
+        })
+        .unwrap_err();
+    assert!(
+        elsewhere.contains("network lab is not in region ca-east-tor (it is in BHS5)"),
+        "{elsewhere}"
+    );
+}
+
+/// Every file under `dir`.
+fn files(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut out = Vec::new();
+    for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+        let p = e.path();
+        if p.is_dir() {
+            out.extend(files(&p));
+        } else {
+            out.push(p);
+        }
+    }
+    out
 }
 
 fn ovh() -> String {
@@ -629,11 +727,27 @@ fn lab_program(server: &Server, image: &str) -> String {
         r#"
 use ovh {{ endpoint = "{}", project = "{}" }}
 
+resource ovh.network lab {{
+  name = "lab"
+  vlan_id = 42
+  regions = ["BHS5"]
+}}
+
+resource ovh.subnet lab {{
+  network = lab
+  region = "BHS5"
+  range = "10.42.0.0/24"
+  start = "10.42.0.10"
+  end = "10.42.0.200"
+  dhcp = true
+}}
+
 resource ovh.instance server {{
   name = "lab-server"
   region = "BHS5"
   flavor = "b2-7"
   image = "Ubuntu 24.04"
+  networks = [lab]
 }}
 
 resource ovh.volume data {{
@@ -644,6 +758,18 @@ resource ovh.volume data {{
   image = "{image}"
   instance = server
 }}
+
+resource ovh.cloud_project_user backup {{
+  description = "lab backups"
+  roles = ["objectstore_operator"]
+}}
+
+resource ovh.storage_container backups {{
+  region = "BHS5"
+  name = "lab-backups"
+  owner = backup
+  versioning = true
+}}
 "#,
         server.endpoint,
         fake::DESCRIPTION
@@ -651,17 +777,25 @@ resource ovh.volume data {{
 }
 
 /// R-157's done-when: the program plans, applies against the fake API,
-/// and plans clean; the volume's image, write-only, is kept as its digest
-/// in state (R-106), and a new one replaces the volume.
+/// and plans clean. The instance is on the private network, the volume
+/// attached to it, the container owned by the user, whose S3 secret is
+/// nowhere in dform's files; the volume's image, write-only, is kept as
+/// its digest in state (R-106), and a new one replaces the volume. An
+/// empty program deletes them all, each after what refers to it.
 #[test]
 fn a_program_with_every_type_plans_applies_and_plans_clean() {
     let server = Server::start();
     let s = project("ovh-types", &lab_program(&server, "Debian 13"));
     let plan = dform(&s, &server, &["plan", "main.df"]).success();
     for line in [
+        "+ ovh.network lab",
+        "+ ovh.subnet lab",
         "+ ovh.instance server",
         "+ ovh.volume data",
+        "+ ovh.cloud_project_user backup",
+        "+ ovh.storage_container backups",
         "instance = server",
+        "owner = backup",
     ] {
         assert!(plan.stdout.contains(line), "{line}\n{}", plan.stdout);
     }
@@ -669,13 +803,42 @@ fn a_program_with_every_type_plans_applies_and_plans_clean() {
 
     let applied = dform(&s, &server, &["apply", "main.df"]).success();
     // Each status the API gave, beside the change (R-130).
-    for line in ["+ ovh.volume data      0.0s  attaching", "in-use"] {
-        assert!(applied.stderr.contains(line), "{line}\n{}", applied.stderr);
+    for (change, status) in [
+        ("+ ovh.volume data", "attaching"),
+        ("+ ovh.network lab", "BUILDING"),
+        ("+ ovh.cloud_project_user backup", "creating"),
+    ] {
+        assert!(
+            applied
+                .stderr
+                .lines()
+                .any(|l| l.trim_start().starts_with(change) && l.ends_with(status)),
+            "{change} {status}\n{}",
+            applied.stderr
+        );
     }
-    let instance = server.instances()[0]["id"].clone();
+    let net = server.networks()[0]["id"].as_str().unwrap().to_string();
+    assert_eq!(server.subnets()[0]["cidr"], "10.42.0.0/24");
+    let instance = &server.instances()[0];
+    let private = instance["ipAddresses"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["type"] == "private")
+        .unwrap()
+        .clone();
+    assert_eq!(private["networkId"], "net-42-BHS5");
     let volume = &server.volumes()[0];
-    assert_eq!(volume["attachedTo"], json!([instance]));
+    assert_eq!(volume["attachedTo"], json!([instance["id"]]));
     assert_eq!(volume["size"], 20);
+    let user = &server.users()[0];
+    let id = user["id"].as_i64().unwrap();
+    let creds = server.s3_credentials(id);
+    assert_eq!(creds.len(), 1);
+    let container = &server.containers()[0];
+    assert_eq!(container["ownerId"], id);
+    assert_eq!(container["versioning"]["status"], "enabled");
+
     let state = s.read("dform.state/main/state.json");
     let st: Json = serde_json::from_str(&state).unwrap();
     let written = &st["resources"]["ovh.volume::data"]["written"]["image"];
@@ -684,9 +847,15 @@ fn a_program_with_every_type_plans_applies_and_plans_clean() {
         "{state}"
     );
     assert!(!state.contains("Debian"), "{state}");
+    for f in files(&s.path("dform.state")) {
+        let text = std::fs::read_to_string(&f).unwrap_or_default();
+        assert!(!text.contains(&creds[0].1), "{}: {text}", f.display());
+    }
 
     let again = dform(&s, &server, &["plan", "main.df"]).success();
     assert!(again.stdout.contains("is up to date"), "{}", again.stdout);
+    let json = dform(&s, &server, &["plan", "main.df", "--json"]).success();
+    assert!(!json.stdout.contains(&creds[0].1), "{}", json.stdout);
 
     // Another image replaces the volume.
     s.write("main.df", &lab_program(&server, "Ubuntu 24.04"));
@@ -696,4 +865,17 @@ fn a_program_with_every_type_plans_applies_and_plans_clean() {
         "{}",
         changed.stdout
     );
+
+    // Nothing left in the program: everything goes.
+    s.write(
+        "main.df",
+        &format!(
+            "use ovh {{ endpoint = \"{}\", project = \"lab\" }}\n",
+            server.endpoint
+        ),
+    );
+    dform(&s, &server, &["apply", "main.df"]).success();
+    assert!(server.instances().is_empty() && server.volumes().is_empty());
+    assert!(server.networks().is_empty() && server.subnets().is_empty());
+    assert!(server.users().is_empty() && server.containers().is_empty());
 }

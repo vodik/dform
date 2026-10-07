@@ -570,7 +570,8 @@ impl Ovh {
         };
         let flavor = named("flavor", "flavor", "flavorId");
         let image = named("image", "image", "imageId");
-        Some(map::instance(o, flavor.as_deref(), image.as_deref()))
+        let nets = self.private_networks(a, p, o);
+        Some(map::instance(o, flavor.as_deref(), image.as_deref(), &nets))
     }
 
     fn read_record(&self, a: &Account, remote: &str) -> Result<Option<(Json, Json)>> {
@@ -1096,6 +1097,9 @@ impl Ovh {
         if let Some(u) = user_data {
             body["userData"] = json!(u);
         }
+        if let Some(nets) = self.instance_networks(&a, &p, at, region, config)? {
+            body["networks"] = json!(nets);
+        }
         let o = a
             .client
             .post(&format!("/cloud/project/{p}/instance"), &body)
@@ -1202,10 +1206,10 @@ impl Ovh {
                     self.refresh_zone(&a, at, zone, &mut Vec::new());
                 }
             }
-            CONTAINER => self.update_container(at, remote, &now.0, config)?,
+            CONTAINER => self.update_container(at, remote, &now.1, config)?,
             USER => self.update_user(at, remote, &now, config)?,
             VOLUME => self.update_volume(at, remote, config, notes, say)?,
-            NETWORK => self.update_network(at, remote, &now.0, config, notes, say)?,
+            NETWORK => self.update_network(at, remote, &now, config, notes, say)?,
             // Nothing of an SSH key changes in place (the schema replaces it).
             _ => {}
         }

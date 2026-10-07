@@ -109,7 +109,7 @@ impl Ovh {
         &self,
         at: &str,
         remote: &str,
-        now: &Json,
+        now: &(Json, Json),
         config: &Json,
         notes: &mut Vec<String>,
         say: Say,
@@ -117,12 +117,13 @@ impl Ovh {
         let (a, p) = self.project_for(at)?;
         let path = network_path(&p, remote);
         let name = need(at, config, "name")?;
-        if s(now, "name") != Some(name) {
+        if s(&now.0, "name") != Some(name) {
             a.client
                 .put(&path, &json!({"name": name}))
                 .map_err(|e| failed(at, e))?;
         }
         let has: Vec<&str> = now
+            .1
             .get("regions")
             .and_then(Json::as_array)
             .into_iter()
@@ -243,5 +244,130 @@ impl Ovh {
         let (attrs, computed) = map::subnet(network, &o);
         let id = map::subnet_remote(network, s(&o, "id").unwrap_or_default());
         Ok((id, attrs, computed))
+    }
+}
+
+/// An instance's private networks (`networks = [lab]` on `ovh.instance`):
+/// made on them, its interfaces are the public network's and one on each,
+/// as the API takes them, by the networks' OpenStack ids in its region.
+impl Ovh {
+    /// The `networks` an instance's Create sends: none when the program
+    /// sets none (the public network alone, as the API makes it); else the
+    /// public network's first, then each private one's, in the instance's
+    /// region.
+    pub(super) fn instance_networks(
+        &self,
+        a: &Account,
+        p: &str,
+        at: &str,
+        region: &str,
+        config: &Json,
+    ) -> std::result::Result<Option<Vec<Json>>, Failed> {
+        let ids: Vec<&str> = match config.get("networks") {
+            None | Some(Json::Null) => return Ok(None),
+            Some(Json::Array(ns)) if ns.is_empty() => return Ok(None),
+            Some(Json::Array(ns)) => ns
+                .iter()
+                .map(|n| {
+                    n.as_str().ok_or_else(|| {
+                        refused(
+                            at,
+                            format!(
+                                "networks: {} is not a network's id",
+                                provider::fmt_value(Some(n))
+                            ),
+                        )
+                    })
+                })
+                .collect::<std::result::Result<_, _>>()?,
+            Some(v) => {
+                return Err(refused(
+                    at,
+                    format!("networks is {}, not a list", provider::fmt_value(Some(v))),
+                ));
+            }
+        };
+        let in_region = |net: &Json| -> Option<String> {
+            net.get("regions")?
+                .as_array()?
+                .iter()
+                .find(|r| s(r, "region") == Some(region))
+                .and_then(|r| s(r, "openstackId"))
+                .map(str::to_string)
+        };
+        let public = a
+            .client
+            .get(&format!("/cloud/project/{p}/network/public"))
+            .map_err(|e| failed(at, e))?;
+        let ext = public
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find_map(in_region)
+            .ok_or_else(|| refused(at, format!("region {region} has no public network")))?;
+        let mut out = vec![json!({"networkId": ext})];
+        for id in ids {
+            let net = self
+                .read_network(a, p, id)
+                .map_err(|e| failed(at, e))?
+                .ok_or_else(|| refused(at, format!("network {id} is not there")))?;
+            let os = in_region(&net).ok_or_else(|| {
+                let (_, computed) = map::network(&net);
+                refused(
+                    at,
+                    format!(
+                        "network {} is not in region {region} (it is in {})",
+                        s(&net, "name").unwrap_or(id),
+                        computed["regions"]
+                            .as_array()
+                            .into_iter()
+                            .flatten()
+                            .filter_map(Json::as_str)
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
+                )
+            })?;
+            out.push(json!({"networkId": os}));
+        }
+        Ok(Some(out))
+    }
+
+    /// The project's private networks by the OpenStack ids of their
+    /// regions, when the instance `o` has a private address (else none is
+    /// asked for).
+    pub(super) fn private_networks(
+        &self,
+        a: &Account,
+        p: &str,
+        o: &Json,
+    ) -> BTreeMap<String, String> {
+        let private = o
+            .get("ipAddresses")
+            .and_then(Json::as_array)
+            .into_iter()
+            .flatten()
+            .any(|x| s(x, "type") == Some("private"));
+        if !private {
+            return BTreeMap::new();
+        }
+        let Ok(list) = a.client.get(&format!("/cloud/project/{p}/network/private")) else {
+            return BTreeMap::new();
+        };
+        let mut out = BTreeMap::new();
+        for net in list.as_array().into_iter().flatten() {
+            let Some(id) = s(net, "id") else { continue };
+            for r in net
+                .get("regions")
+                .and_then(Json::as_array)
+                .into_iter()
+                .flatten()
+            {
+                if let Some(os) = s(r, "openstackId") {
+                    out.insert(os.to_string(), id.to_string());
+                }
+            }
+        }
+        out
     }
 }

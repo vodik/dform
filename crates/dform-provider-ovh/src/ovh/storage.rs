@@ -45,7 +45,8 @@ impl Ovh {
     }
 
     /// Versioning on is `enabled`; off again is `suspended`, as S3 has it
-    /// (a container that had it never goes back to `disabled`).
+    /// (a container that had it never goes back to `disabled`). `now` is
+    /// what Read computed.
     pub(super) fn update_container(
         &self,
         at: &str,

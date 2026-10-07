@@ -35,8 +35,11 @@ type_attr("ovh.instance", "ssh_key", "ref(ovh.ssh_key)", ["force_new"])
 # Write-only: the API never answers it; state keeps the digest of what was
 # applied, and a different one replaces the instance (R-106).
 type_attr("ovh.instance", "user_data", "string", ["sensitive", "force_new", "write_only"])
+# Its private networks: made on them, it has an interface on each.
+type_attr("ovh.instance", "networks", "set(ref(ovh.network))", ["force_new"])
 type_attr("ovh.instance", "public_ip", "ip", ["computed"])
 type_attr("ovh.instance", "private_ip", "ip", ["computed", "nullable"])
+type_attr("ovh.instance", "private_ips", "map(ip)", ["computed"])
 type_attr("ovh.instance", "status", "string", ["computed"])
 type_replace("ovh.instance", "destroy_first")
 
@@ -171,7 +174,17 @@ type_doc(
   "The cloud-init document the instance boots with. Changing it replaces the instance.",
 )
 type_doc("ovh.instance", "public_ip", "The instance's public IPv4 address, once it has one.")
+type_doc(
+  "ovh.instance",
+  "networks",
+  "The private networks it is on (`networks = [lab]`), each in its region and with a subnet there; the public network too. Changing them replaces the instance.",
+)
 type_doc("ovh.instance", "private_ip", "Its address on a private network, if it is on one.")
+type_doc(
+  "ovh.instance",
+  "private_ips",
+  "Its address on each private network, by the network's id (`server.private_ips[lab.id]`).",
+)
 type_doc("ovh.instance", "status", "ACTIVE once it runs; BUILD while it is made.")
 type_doc("ovh.ssh_key", "", "An SSH public key of the project, for its instances.")
 type_doc("ovh.ssh_key", "name", "The key's name, unique in the project.")

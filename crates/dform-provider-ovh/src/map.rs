@@ -14,7 +14,15 @@ fn str_of<'a>(o: &'a Json, k: &str) -> Option<&'a str> {
 /// given (the API answers ids; it embeds the objects when it can).
 /// `user_data` is not in the answer: the API keeps it write-only, so it is
 /// left out here (`Ovh::plan` compares it with what the provider sent).
-pub fn instance(o: &Json, flavor: Option<&str>, image: Option<&str>) -> (Json, Json) {
+/// `nets` names the private networks by the OpenStack id an address's
+/// `networkId` is: the instance's `networks` are those it has an address
+/// on, sorted, and `private_ips` its IPv4 address on each, by network.
+pub fn instance(
+    o: &Json,
+    flavor: Option<&str>,
+    image: Option<&str>,
+    nets: &std::collections::BTreeMap<String, String>,
+) -> (Json, Json) {
     let mut attrs = Map::new();
     let mut put = |k: &str, v: Option<&str>| {
         if let Some(v) = v {
@@ -56,6 +64,26 @@ pub fn instance(o: &Json, flavor: Option<&str>, image: Option<&str>) -> (Json, J
         "private_ip".into(),
         addr("private").map_or(Json::Null, |ip| json!(ip)),
     );
+    let mut private_ips = Map::new();
+    for a in o
+        .get("ipAddresses")
+        .and_then(Json::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|a| str_of(a, "type") == Some("private") && a.get("version") == Some(&json!(4)))
+    {
+        if let (Some(net), Some(ip)) = (
+            str_of(a, "networkId").and_then(|n| nets.get(n)),
+            str_of(a, "ip"),
+        ) {
+            private_ips.entry(net.clone()).or_insert(json!(ip));
+        }
+    }
+    if !private_ips.is_empty() {
+        let networks: Vec<&String> = private_ips.keys().collect();
+        attrs.insert("networks".into(), json!(networks));
+    }
+    computed.insert("private_ips".into(), Json::Object(private_ips));
     (Json::Object(attrs), Json::Object(computed))
 }
 
@@ -118,8 +146,9 @@ pub fn container_path(project: &str, remote: &str) -> String {
 /// An S3 container (`cloud.StorageContainer`). Its versioning is on when
 /// the API says `enabled` (off when `disabled` or `suspended`); its owner
 /// is the user's id, the reference `owner = user` names. Both are the
-/// program's when it sets them and the API's otherwise, so they are also
-/// computed.
+/// program's when it sets them and the API's otherwise (optional
+/// computed): they are computed values, which dform compares with the
+/// program's only where it sets them.
 pub fn container(o: &Json) -> (Json, Json) {
     let region = str_of(o, "region").unwrap_or_default();
     let name = str_of(o, "name").unwrap_or_default();
@@ -127,13 +156,12 @@ pub fn container(o: &Json) -> (Json, Json) {
         .get("versioning")
         .and_then(|v| str_of(v, "status"))
         .is_some_and(|s| s == "enabled");
-    let mut attrs = json!({"region": region, "name": name, "versioning": versioning});
+    let attrs = json!({"region": region, "name": name});
     let mut computed = json!({
         "id": container_remote(region, name),
         "versioning": versioning,
     });
     if let Some(owner) = o.get("ownerId").and_then(Json::as_i64) {
-        attrs["owner"] = json!(owner.to_string());
         computed["owner"] = json!(owner.to_string());
     }
     if let Some(h) = str_of(o, "virtualHost") {
@@ -177,27 +205,22 @@ pub fn user(o: &Json, access: Option<&str>) -> (Json, Json) {
 /// `bytes(gib)` takes it, and the instance it is attached to, the
 /// reference `instance = server` names. Its image and snapshot are not in
 /// the answer (write-only). Its type and description are the program's
-/// when it sets them and the API's otherwise, so they are also computed.
+/// when it sets them and the API's otherwise: computed values.
 pub fn volume(o: &Json) -> (Json, Json) {
     let mut attrs = json!({
         "name": str_of(o, "name").unwrap_or_default(),
         "region": str_of(o, "region").unwrap_or_default(),
         "size": o.get("size").and_then(Json::as_i64).unwrap_or(0),
-        "type": str_of(o, "type").unwrap_or_default(),
     });
     if let Some(i) = attached_to(o).first() {
         attrs["instance"] = json!(i);
     }
-    let mut computed = json!({
+    let computed = json!({
         "id": str_of(o, "id").unwrap_or_default(),
         "status": str_of(o, "status").unwrap_or_default(),
-        "type": attrs["type"],
+        "type": str_of(o, "type").unwrap_or_default(),
+        "description": str_of(o, "description").unwrap_or_default(),
     });
-    // No description is none, not an empty one.
-    if let Some(d) = str_of(o, "description").filter(|d| !d.is_empty()) {
-        attrs["description"] = json!(d);
-        computed["description"] = json!(d);
-    }
     (attrs, computed)
 }
 
@@ -213,8 +236,8 @@ pub fn attached_to(o: &Json) -> Vec<String> {
 }
 
 /// A private network (`cloud.network.Network`): its regions by name,
-/// sorted, and each one's status. Its VLAN is the program's when it sets
-/// it and the API's otherwise, so it is also computed.
+/// sorted, and each one's status. Its VLAN and regions are the program's
+/// when it sets them and the API's otherwise: computed values.
 pub fn network(o: &Json) -> (Json, Json) {
     let mut regions: Vec<(&str, &str)> = o
         .get("regions")
@@ -231,11 +254,7 @@ pub fn network(o: &Json) -> (Json, Json) {
     regions.sort();
     let names: Vec<&str> = regions.iter().map(|(r, _)| *r).collect();
     let vlan = o.get("vlanId").and_then(Json::as_i64).unwrap_or(0);
-    let attrs = json!({
-        "name": str_of(o, "name").unwrap_or_default(),
-        "vlan_id": vlan,
-        "regions": names,
-    });
+    let attrs = json!({"name": str_of(o, "name").unwrap_or_default()});
     let status: Map<String, Json> = regions
         .iter()
         .map(|(r, s)| (r.to_string(), json!(s)))
@@ -264,8 +283,8 @@ pub fn subnet_parts(remote: &str) -> (&str, &str) {
 /// A subnet of the private network `network` (`cloud.network.Subnet`):
 /// its region, range and pool as the API's first pool has them; no
 /// gateway when the API gives none. Whether it has DHCP and a gateway are
-/// the program's when it sets them and the API's otherwise, so they are
-/// also computed.
+/// the program's when it sets them and the API's otherwise: computed
+/// values.
 pub fn subnet(network: &str, o: &Json) -> (Json, Json) {
     let pool = o
         .get("ipPools")
@@ -284,14 +303,12 @@ pub fn subnet(network: &str, o: &Json) -> (Json, Json) {
         "range": str_of(o, "cidr").or_else(|| str_of(&pool, "network")).unwrap_or_default(),
         "start": str_of(&pool, "start").unwrap_or_default(),
         "end": str_of(&pool, "end").unwrap_or_default(),
-        "dhcp": dhcp,
-        "no_gateway": gateway.is_none(),
     });
     let computed = json!({
         "id": subnet_remote(network, str_of(o, "id").unwrap_or_default()),
+        "no_gateway": gateway.is_none(),
         "gateway_ip": gateway.unwrap_or(Json::Null),
         "dhcp": dhcp,
-        "no_gateway": attrs["no_gateway"],
     });
     (attrs, computed)
 }
@@ -412,7 +429,9 @@ mod tests {
 
     #[test]
     fn an_instance_as_the_schema_has_it() {
-        let (attrs, computed) = instance(&fixture("instance.json"), None, None);
+        let o = fixture("instance.json");
+        let none = Default::default();
+        let (attrs, computed) = instance(&o, None, None, &none);
         assert_eq!(
             attrs,
             json!({"name": "k8s-lab-server", "region": "ca-east-tor", "flavor": "b2-7",
@@ -421,14 +440,29 @@ mod tests {
         assert_eq!(
             computed,
             json!({"id": "6f8b2c1e-4a1d-4f7e-9d3c-2b1a0e9f8c7d", "status": "ACTIVE",
-                   "public_ip": "51.79.10.20", "private_ip": "10.0.0.12"})
+                   "public_ip": "51.79.10.20", "private_ip": "10.0.0.12",
+                   "private_ips": {}})
+        );
+        // Its private address is on a network the project has: the
+        // network, by its id, and the address on it.
+        let nets = [(
+            "a1b2c3d4e5f60718293a4b5c6d7e8f90".to_string(),
+            "pn-1000123_42".to_string(),
+        )]
+        .into();
+        let (attrs, computed) = instance(&o, None, None, &nets);
+        assert_eq!(attrs["networks"], json!(["pn-1000123_42"]));
+        assert_eq!(
+            computed["private_ips"],
+            json!({"pn-1000123_42": "10.0.0.12"})
         );
     }
 
     #[test]
     fn a_building_instance_has_no_address_yet() {
         let o = fixture("instance-building.json");
-        let (attrs, computed) = instance(&o, Some("b2-7"), Some("Ubuntu 24.04"));
+        let (attrs, computed) =
+            instance(&o, Some("b2-7"), Some("Ubuntu 24.04"), &Default::default());
         assert_eq!(attrs["flavor"], "b2-7");
         assert_eq!(attrs.get("ssh_key"), None);
         assert_eq!(computed.get("public_ip"), None);
@@ -467,11 +501,9 @@ mod tests {
     fn an_s3_container() {
         let (attrs, computed) = container(&fixture("container.json"));
         // Suspended versioning is off.
-        assert_eq!(
-            attrs,
-            json!({"region": "BHS", "name": "lab-backups", "versioning": false,
-                   "owner": "482913"})
-        );
+        assert_eq!(attrs, json!({"region": "BHS", "name": "lab-backups"}));
+        assert_eq!(computed["versioning"], false);
+        assert_eq!(computed["owner"], "482913");
         assert_eq!(computed["id"], "BHS/lab-backups");
         assert_eq!(
             computed["virtual_host"],
@@ -508,9 +540,9 @@ mod tests {
         assert_eq!(
             attrs,
             json!({"name": "lab-data", "region": "ca-east-tor", "size": 50,
-                   "type": "high-speed-gen2",
                    "instance": "6f8b2c1e-4a1d-4f7e-9d3c-2b1a0e9f8c7d"})
         );
+        assert_eq!(computed["type"], "high-speed-gen2");
         assert_eq!(computed["status"], "in-use");
         assert_eq!(computed["id"], "0d9e8f7a-6b5c-4d3e-2f1a-0b9c8d7e6f5a");
     }
@@ -518,10 +550,9 @@ mod tests {
     #[test]
     fn a_private_network_and_its_regions() {
         let (attrs, computed) = network(&fixture("network.json"));
-        assert_eq!(
-            attrs,
-            json!({"name": "lab", "vlan_id": 42, "regions": ["BHS5", "ca-east-tor"]})
-        );
+        assert_eq!(attrs, json!({"name": "lab"}));
+        assert_eq!(computed["vlan_id"], 42);
+        assert_eq!(computed["regions"], json!(["BHS5", "ca-east-tor"]));
         assert_eq!(computed["id"], "pn-1000123_42");
         assert_eq!(
             computed["regions_status"],
@@ -535,8 +566,11 @@ mod tests {
         assert_eq!(
             attrs,
             json!({"network": "pn-1000123_42", "region": "BHS5", "range": "10.0.0.0/24",
-                   "start": "10.0.0.10", "end": "10.0.0.200", "dhcp": true,
-                   "no_gateway": false})
+                   "start": "10.0.0.10", "end": "10.0.0.200"})
+        );
+        assert_eq!(
+            (&computed["dhcp"], &computed["no_gateway"]),
+            (&json!(true), &json!(false))
         );
         assert_eq!(
             computed["id"],
