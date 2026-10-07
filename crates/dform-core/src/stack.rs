@@ -807,7 +807,7 @@ fn transfer(
     for k in &keys {
         src.delete(k)?;
     }
-    drop(lock);
+    lock.release()?;
     if src.fenced() {
         src.delete(LOCK)?;
     }

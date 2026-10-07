@@ -135,7 +135,7 @@ pub trait Store: Send + Sync {
         renew(self, lease, ttl)
     }
 
-    /// Give `lease` up (a lease already lost is left alone).
+    /// Give `lease` up (one another holder took is left alone).
     fn release(&self, lease: &Lease) -> Result<()> {
         release(self, lease)
     }
@@ -369,23 +369,18 @@ fn renew<S: Store + ?Sized>(s: &S, lease: &mut Lease, ttl: Duration) -> Result<(
         expires_ms: now_ms() + ttl.as_millis() as u64,
         fence: lease.fence,
     };
-    match s.put(&lease.key, &rec.bytes(), &Cond::IfMatch(lease.etag.clone()))? {
-        Some(etag) => {
+    match put_own(s, lease, &rec)? {
+        Ok(etag) => {
             lease.etag = etag;
             lease.expires_ms = rec.expires_ms;
             Ok(())
         }
-        None => {
-            let now = s
-                .get(&lease.key)?
-                .and_then(|o| LeaseRecord::parse(&o.bytes, &s.locate(&lease.key)).ok());
-            Err(Lost {
-                at: s.locate(&lease.key),
-                fence: lease.fence,
-                now,
-            }
-            .into())
+        Err(now) => Err(Lost {
+            at: s.locate(&lease.key),
+            fence: lease.fence,
+            now,
         }
+        .into()),
     }
 }
 
@@ -395,8 +390,41 @@ fn release<S: Store + ?Sized>(s: &S, lease: &Lease) -> Result<()> {
         expires_ms: 0,
         fence: lease.fence,
     };
-    s.put(&lease.key, &rec.bytes(), &Cond::IfMatch(lease.etag.clone()))?;
+    // A lease no longer this holder's is left alone.
+    let _ = put_own(s, lease, &rec)?;
     Ok(())
+}
+
+/// Write `rec` over `lease`'s object while it is this holder's: the new
+/// ETag, or what holds it instead (`None`: the object is gone). A write
+/// refused over the ETag this holder last wrote, though the object still
+/// names this holder and counter, is one whose answer was lost after it
+/// landed (a timeout): it is written again over what is there.
+fn put_own<S: Store + ?Sized>(
+    s: &S,
+    lease: &Lease,
+    rec: &LeaseRecord,
+) -> Result<std::result::Result<String, Option<LeaseRecord>>> {
+    let mut etag = lease.etag.clone();
+    for _ in 0..3 {
+        if let Some(etag) = s.put(&lease.key, &rec.bytes(), &Cond::IfMatch(etag))? {
+            return Ok(Ok(etag));
+        }
+        let Some(o) = s.get(&lease.key)? else {
+            return Ok(Err(None));
+        };
+        let Ok(now) = LeaseRecord::parse(&o.bytes, &s.locate(&lease.key)) else {
+            return Ok(Err(None));
+        };
+        if now.holder != lease.holder || now.fence != lease.fence {
+            return Ok(Err(Some(now)));
+        }
+        etag = o.etag;
+    }
+    bail!(
+        "the lease {} changed under every write, though it still names this holder",
+        s.locate(&lease.key)
+    )
 }
 
 fn break_lease<S: Store + ?Sized>(s: &S, key: &str, stack: &str) -> Result<String> {
@@ -644,8 +672,13 @@ impl Store for LocalStore {
     }
 
     fn release(&self, lease: &Lease) -> Result<()> {
-        let _ = std::fs::remove_file(self.path(&lease.key));
-        Ok(())
+        let path = self.path(&lease.key);
+        match std::fs::remove_file(&path) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+                Err(e).with_context(|| format!("remove {}", path.display()))
+            }
+            _ => Ok(()),
+        }
     }
 
     /// Remove the lock file, unless its holder is running.
@@ -835,6 +868,8 @@ struct Inner {
     lease: Mutex<Option<Lease>>,
     /// Why the lease was lost, once the renewer found out.
     lost: Mutex<Option<String>>,
+    /// The thread renewing the lease, while a [`Guard`] holds it.
+    renewer: Mutex<Option<std::thread::JoinHandle<()>>>,
     writes: AtomicUsize,
     submits: AtomicUsize,
 }
@@ -850,6 +885,7 @@ impl Deployment {
                 etag: Mutex::new(None),
                 lease: Mutex::new(None),
                 lost: Mutex::new(None),
+                renewer: Mutex::new(None),
                 writes: AtomicUsize::new(0),
                 submits: AtomicUsize::new(0),
             }),
@@ -1010,7 +1046,7 @@ impl Deployment {
         if !self.inner.store.fenced() {
             return Ok(true);
         }
-        if self.inner.lease.lock().expect("lease").is_none() {
+        if self.inner.lease().is_none() {
             return Ok(false);
         }
         self.check_lease()
@@ -1023,13 +1059,13 @@ impl Deployment {
     /// taken over).
     fn check_lease(&self) -> Result<u64> {
         let inner = &self.inner;
-        if let Some(why) = inner.lost.lock().expect("lost").clone() {
+        if let Err(why) = inner.held() {
             bail!(
                 "stack {}: state write refused by fencing: {why}",
                 inner.name
             );
         }
-        let mut guard = inner.lease.lock().expect("lease");
+        let mut guard = inner.lease();
         let Some(lease) = guard.as_mut() else {
             bail!(
                 "internal: stack {}: state written without its lease",
@@ -1062,8 +1098,9 @@ impl Deployment {
         }
     }
 
-    /// Take the deployment's lock: one apply at a time. Held until the
-    /// guard drops; in a store that fences, renewed until then.
+    /// Take the deployment's lock: one apply at a time. Held until
+    /// [`Guard::release`], or the guard drops; in a store that fences,
+    /// renewed until then.
     pub fn lock(&self) -> Result<Guard> {
         let inner = &self.inner;
         let holder = format!("{} pid {}", crate::audit::who(), std::process::id());
@@ -1080,12 +1117,11 @@ impl Deployment {
                 inner.store.locate(LOCK)
             );
         }
-        *inner.lease.lock().expect("lease") = Some(lease);
+        *inner.lease() = Some(lease);
         *inner.lost.lock().expect("lost") = None;
         let mut guard = Guard {
             inner: self.inner.clone(),
             stop: None,
-            renewer: None,
         };
         if inner.store.fenced() {
             guard.renew_every(inner.times);
@@ -1106,12 +1142,7 @@ impl Deployment {
     /// state must be the version this run read, if it read one.
     fn fence_state(&self) -> Result<()> {
         let inner = &self.inner;
-        let fence = inner
-            .lease
-            .lock()
-            .expect("lease")
-            .as_ref()
-            .map_or(0, |l| l.fence);
+        let fence = inner.lease().as_ref().map_or(0, |l| l.fence);
         let mut etag = inner.etag.lock().expect("etag");
         let changed = || {
             anyhow!(
@@ -1196,53 +1227,156 @@ fn stall_at(var: &str, count: &AtomicUsize) {
     }
 }
 
-/// A deployment's lock, held until dropped. In a store that fences, a
-/// thread renews the lease every `lease_renewal` until then; dropping the
-/// guard stops the thread (at once: it waits on a channel the guard
-/// closes), joins it and releases the lease.
+impl Inner {
+    /// This run's lease. A renewer that panicked holding it leaves it as
+    /// it was, so a poisoned lock still holds the lease.
+    fn lease(&self) -> std::sync::MutexGuard<'_, Option<Lease>> {
+        self.lease.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Is the lease still this run's as far as this process knows: not
+    /// found lost, and its renewer running? The renewer returns only once
+    /// it recorded the lease lost, or when its guard stops it: finished
+    /// otherwise, it panicked, and nothing renews the lease any more.
+    fn held(&self) -> std::result::Result<(), String> {
+        let mut lost = self.lost.lock().expect("lost");
+        if let Some(why) = &*lost {
+            return Err(why.clone());
+        }
+        if self
+            .renewer
+            .lock()
+            .expect("renewer")
+            .as_ref()
+            .is_some_and(|r| r.is_finished())
+        {
+            let why = format!(
+                "the lease {} is no longer renewed: its renewer stopped",
+                self.store.locate(LOCK)
+            );
+            *lost = Some(why.clone());
+            return Err(why);
+        }
+        Ok(())
+    }
+}
+
+/// A deployment's lock, held until [`Guard::release`]. In a store that
+/// fences, a thread renews the lease every `lease_renewal` until then;
+/// releasing stops the thread (at once: it waits on a channel the guard
+/// closes), joins it and gives the lease up. A guard dropped unreleased
+/// (a panic, an early return) releases in its drop, and says so when that
+/// fails.
 pub struct Guard {
     inner: Arc<Inner>,
     stop: Option<mpsc::Sender<()>>,
-    renewer: Option<std::thread::JoinHandle<()>>,
 }
 
 impl Guard {
+    /// Is the lease still this run's, as far as this process knows (not
+    /// found lost by its renewer, the renewer running)? Asked before a
+    /// question that would hold the lease while a person reads the plan.
+    pub fn check(&self) -> Result<()> {
+        self.inner
+            .held()
+            .map_err(|why| anyhow!("stack {}: {why}", self.inner.name))
+    }
+
+    /// Give the lock up: stop the renewer and release the lease (a lease
+    /// another holder took is left alone).
+    pub fn release(mut self) -> Result<()> {
+        self.give_up()
+    }
+
+    fn give_up(&mut self) -> Result<()> {
+        let inner = &self.inner;
+        drop(self.stop.take());
+        let renewer = inner.renewer.lock().expect("renewer").take();
+        if let Some(r) = renewer
+            && r.join().is_err()
+        {
+            eprintln!(
+                "warning: stack {}: the lease renewer panicked; releasing the lease",
+                inner.name
+            );
+        }
+        // Released whether or not the lease was found lost: a release
+        // writes only over a lease that still names this holder, and one
+        // whose renewer died is still this run's until it expires.
+        let lease = inner.lease().take();
+        match lease {
+            Some(l) => inner.store.release(&l).with_context(|| {
+                format!(
+                    "stack {}: release the lease {}; it is held until it expires, or \
+                     `dform stack unlock {}`",
+                    inner.name,
+                    inner.store.locate(LOCK),
+                    inner.name
+                )
+            }),
+            None => Ok(()),
+        }
+    }
+
     fn renew_every(&mut self, times: LeaseTimes) {
         let (tx, rx) = mpsc::channel::<()>();
         let inner = self.inner.clone();
         let renewer = std::thread::Builder::new()
             .name("dform-lease".into())
             .spawn(move || {
-                while let Err(mpsc::RecvTimeoutError::Timeout) = rx.recv_timeout(times.renewal) {
-                    let mut lease = inner.lease.lock().expect("lease");
+                // A renewal that fails to reach the store says nothing of
+                // who holds the lease: it is tried again sooner, backing
+                // off to `lease_renewal`, and one past the expiry still
+                // renews it if no one took it over. Only a lease found
+                // another's (or gone) stops the renewer.
+                let mut wait = times.renewal;
+                let mut failing = false;
+                while let Err(mpsc::RecvTimeoutError::Timeout) = rx.recv_timeout(wait) {
+                    let mut lease = inner.lease();
                     let Some(l) = lease.as_mut() else {
                         return;
                     };
-                    if let Err(e) = inner.store.renew(l, times.duration) {
-                        eprintln!("warning: stack {}: {e:#}", inner.name);
-                        *inner.lost.lock().expect("lost") = Some(format!("{e:#}"));
-                        return;
+                    match inner.store.renew(l, times.duration) {
+                        Ok(()) => {
+                            if failing {
+                                eprintln!("note: stack {}: the lease is renewed again", inner.name);
+                            }
+                            failing = false;
+                            wait = times.renewal;
+                        }
+                        Err(e) if e.is::<Lost>() => {
+                            eprintln!("warning: stack {}: {e:#}", inner.name);
+                            *inner.lost.lock().expect("lost") = Some(format!("{e:#}"));
+                            return;
+                        }
+                        Err(e) => {
+                            if !failing {
+                                eprintln!(
+                                    "warning: stack {}: the lease {} was not renewed ({e:#}); \
+                                     trying again ({}s of it left)",
+                                    inner.name,
+                                    inner.store.locate(LOCK),
+                                    l.expires_ms.saturating_sub(now_ms()) / 1000
+                                );
+                                wait = times.renewal / 8;
+                            } else {
+                                wait = (wait * 2).min(times.renewal);
+                            }
+                            failing = true;
+                        }
                     }
                 }
             })
             .expect("spawn the lease renewer");
         self.stop = Some(tx);
-        self.renewer = Some(renewer);
+        *self.inner.renewer.lock().expect("renewer") = Some(renewer);
     }
 }
 
 impl Drop for Guard {
     fn drop(&mut self) {
-        drop(self.stop.take());
-        if let Some(r) = self.renewer.take() {
-            let _ = r.join();
-        }
-        let lease = self.inner.lease.lock().expect("lease").take();
-        let lost = self.inner.lost.lock().expect("lost").is_some();
-        if let Some(l) = lease
-            && !lost
-        {
-            let _ = self.inner.store.release(&l);
+        if let Err(e) = self.give_up() {
+            eprintln!("warning: {e:#}");
         }
     }
 }
@@ -1330,7 +1464,14 @@ mod tests {
         // A stalls: its renewer stops, its lease runs out.
         let mut ga = ga;
         drop(ga.stop.take());
-        ga.renewer.take().unwrap().join().unwrap();
+        ga.inner
+            .renewer
+            .lock()
+            .unwrap()
+            .take()
+            .unwrap()
+            .join()
+            .unwrap();
         std::thread::sleep(Duration::from_millis(250));
         // B takes the lease over; A wakes before B has written anything.
         let b = deployment(&store, 60_000);
