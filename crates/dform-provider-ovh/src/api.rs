@@ -1,7 +1,11 @@
 //! A signed client of the OVH API (`sign`), blocking, over `ureq`.
 //!
 //! Every call is signed with the server's clock: the difference to the
-//! local one is asked once (`GET /auth/time`). A failure names the method,
+//! local one is asked once (`GET /auth/time`) and kept in dform's cache
+//! beside the project ids (`ovh-projects.json`), so a run after the first
+//! asks it again only when a signed call is refused (After R-123): the
+//! clock moved, the offset is asked afresh and the call sent once more. A
+//! failure names the method,
 //! the path and the HTTP status (`HTTP 503`), so dform's retry policy
 //! (R-81, `plugin::policy::retryable`) tells a transient one (429, 5xx)
 //! from a refusal; a call that reached no answer is `Unreachable`, which
@@ -10,7 +14,9 @@
 use crate::config::Credentials;
 use crate::sign::signature;
 use serde_json::Value as Json;
-use std::sync::OnceLock;
+use std::collections::BTreeMap;
+use std::path::PathBuf;
+use std::sync::Mutex;
 use std::time::Duration;
 
 /// How long one HTTP request may take.
@@ -77,8 +83,37 @@ pub type Result<T> = std::result::Result<T, Error>;
 pub struct Client {
     creds: Credentials,
     agent: ureq::Agent,
-    /// Server time minus local time, in seconds, once asked.
-    delta: OnceLock<i64>,
+    /// Server time minus local time, in seconds, once known, and whether
+    /// it was read from the cache rather than asked in this run.
+    delta: Mutex<Option<(i64, bool)>>,
+    /// The cache file the offset is kept in (`ovh-projects.json`).
+    cache: Option<PathBuf>,
+}
+
+/// The file in dform's cache directory the project ids and the clock
+/// offset are kept in.
+pub const CACHE_FILE: &str = "ovh-projects.json";
+
+/// The cache file's entries: `"ENDPOINT NAME"` to a project's id, and
+/// `"ENDPOINT /auth/time"` to the clock offset in seconds.
+pub fn read_cache(file: &std::path::Path) -> BTreeMap<String, String> {
+    std::fs::read(file)
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or_default()
+}
+
+/// Write `key = value` into the cache file, keeping its other entries.
+pub fn write_cache(file: &std::path::Path, key: &str, value: &str) {
+    let mut kept = read_cache(file);
+    if kept.get(key).map(String::as_str) == Some(value) {
+        return;
+    }
+    kept.insert(key.to_string(), value.to_string());
+    if let Ok(bytes) = serde_json::to_vec_pretty(&kept) {
+        let _ = file.parent().map(std::fs::create_dir_all);
+        let _ = std::fs::write(file, bytes);
+    }
 }
 
 impl Client {
@@ -91,8 +126,21 @@ impl Client {
         Client {
             creds,
             agent,
-            delta: OnceLock::new(),
+            delta: Mutex::new(None),
+            cache: None,
         }
+    }
+
+    /// The client keeping its clock offset in dform's cache directory
+    /// `dir` (`None`: asked every run).
+    pub fn with_cache(mut self, dir: Option<&std::path::Path>) -> Client {
+        self.cache = dir.map(|d| d.join(CACHE_FILE));
+        self
+    }
+
+    /// The cache key of this endpoint's clock offset.
+    fn clock_key(&self) -> String {
+        format!("{} /auth/time", self.creds.endpoint)
     }
 
     pub fn credentials(&self) -> &Credentials {
@@ -106,11 +154,31 @@ impl Client {
             .unwrap_or(0)
     }
 
-    /// The server's time now, from its clock's offset (asked once).
+    /// The server's time now, from its clock's offset: known, kept in
+    /// the cache, or asked.
     fn timestamp(&self) -> Result<i64> {
-        if let Some(d) = self.delta.get() {
+        let known = *self.delta.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((d, _)) = known {
             return Ok(Self::now() + d);
         }
+        let cached = self.cache.as_deref().and_then(|f| {
+            read_cache(f)
+                .get(&self.clock_key())
+                .and_then(|v| v.parse::<i64>().ok())
+        });
+        let d = match cached {
+            Some(d) => {
+                let mut delta = self.delta.lock().unwrap_or_else(|e| e.into_inner());
+                delta.get_or_insert((d, true)).0
+            }
+            None => self.ask_time()?,
+        };
+        Ok(Self::now() + d)
+    }
+
+    /// Ask the server its time (`GET /auth/time`): the offset now known
+    /// and kept in the cache.
+    fn ask_time(&self) -> Result<i64> {
         let server = self
             .send("GET", "/auth/time", None, false)?
             .as_i64()
@@ -120,8 +188,12 @@ impl Client {
                 status: 200,
                 message: "the server's time is not a number".into(),
             })?;
-        let d = *self.delta.get_or_init(|| server - Self::now());
-        Ok(Self::now() + d)
+        let d = server - Self::now();
+        *self.delta.lock().unwrap_or_else(|e| e.into_inner()) = Some((d, false));
+        if let Some(f) = &self.cache {
+            write_cache(f, &self.clock_key(), &d.to_string());
+        }
+        Ok(d)
     }
 
     pub fn get(&self, path: &str) -> Result<Json> {
@@ -150,7 +222,31 @@ impl Client {
     }
 
     /// One call: `path` under the endpoint's URL (it carries its query).
+    /// A signed call the server refuses while its timestamp rests on an
+    /// offset read from the cache asks the server's time again, and is
+    /// sent once more when the offset moved.
     fn send(&self, method: &str, path: &str, body: Option<&Json>, signed: bool) -> Result<Json> {
+        let out = self.send_once(method, path, body, signed);
+        let refused = matches!(&out, Err(e) if matches!(e.status(), Some(400 | 401 | 403)));
+        let cached = *self.delta.lock().unwrap_or_else(|e| e.into_inner());
+        match cached {
+            Some((was, true)) if signed && refused => {
+                if self.ask_time()? == was {
+                    return out;
+                }
+                self.send_once(method, path, body, signed)
+            }
+            _ => out,
+        }
+    }
+
+    fn send_once(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<&Json>,
+        signed: bool,
+    ) -> Result<Json> {
         let url = format!("{}{path}", self.creds.url);
         let body = body.map(Json::to_string).unwrap_or_default();
         let unreachable = |why: String| Error::Unreachable {

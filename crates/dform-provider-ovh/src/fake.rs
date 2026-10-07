@@ -74,7 +74,16 @@ pub struct World {
     answering: usize,
     most: usize,
     connections: usize,
+    /// Its clock's offset from the local one, in seconds (`skew`): a
+    /// signed call stamped more than [`TIME_WINDOW`] away from it is
+    /// refused, as the real API refuses a stale timestamp.
+    skew: i64,
+    /// How many times `/auth/time` was asked.
+    times_asked: usize,
 }
+
+/// How far a signed call's timestamp may be from the fake's clock.
+const TIME_WINDOW: i64 = 30;
 
 pub struct Server {
     /// `http://127.0.0.1:PORT/1.0`, the provider's endpoint.
@@ -209,6 +218,17 @@ impl Server {
     /// second from Toronto); calls on separate connections overlap.
     pub fn slow(&self, latency: std::time::Duration) {
         self.world().latency = latency;
+    }
+
+    /// Its clock runs `secs` ahead of the local one (behind, negative).
+    pub fn skew(&self, secs: i64) {
+        self.world().skew = secs;
+    }
+
+    /// How many times its clock was asked (`GET /auth/time`), which
+    /// `calls` does not list.
+    pub fn times_asked(&self) -> usize {
+        self.world().times_asked
     }
 
     /// The most calls it has answered at once.
@@ -1324,11 +1344,13 @@ fn serve(conn: TcpStream, world: &Mutex<World>, base: &str) {
         let (status, answer) = {
             let mut w = world.lock().unwrap_or_else(|e| e.into_inner());
             let json_body = serde_json::from_str(&body).unwrap_or(Json::Null);
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0)
+                + w.skew;
             if path == "/auth/time" {
-                let now = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_secs())
-                    .unwrap_or(0);
+                w.times_asked += 1;
                 (200, json!(now))
             } else if let Some(why) = bad_signature(
                 &headers,
@@ -1337,6 +1359,12 @@ fn serve(conn: TcpStream, world: &Mutex<World>, base: &str) {
                 &body,
             ) {
                 (403, json!({"message": why}))
+            } else if headers
+                .get("x-ovh-timestamp")
+                .and_then(|t| t.parse::<i64>().ok())
+                .is_some_and(|t| (t - now).abs() > TIME_WINDOW)
+            {
+                (400, json!({"message": "Query out of time"}))
             } else if let Some(s) = w.fail_next(&format!("{method} {path}")) {
                 (s, json!({"message": "Service Unavailable"}))
             } else {

@@ -444,11 +444,11 @@ impl Ovh {
         };
         let project = setting("project")?
             .or_else(|| env("OVH_CLOUD_PROJECT_SERVICE").filter(|v| !v.is_empty()));
-        let client = Client::new(creds);
         let cache = config
             .get("cache")
             .and_then(Json::as_str)
             .map(std::path::PathBuf::from);
+        let client = Client::new(creds).with_cache(cache.as_deref());
         let project = match project {
             Some(p) => Some(resolve_project(&client, &p, cache.as_deref())?),
             None => None,
@@ -1492,12 +1492,8 @@ pub fn resolve_project(
     given: &str,
     cache: Option<&std::path::Path>,
 ) -> Result<String> {
-    let file = cache.map(|c| c.join("ovh-projects.json"));
-    let mut kept: BTreeMap<String, String> = file
-        .as_ref()
-        .and_then(|f| std::fs::read(f).ok())
-        .and_then(|b| serde_json::from_slice(&b).ok())
-        .unwrap_or_default();
+    let file = cache.map(|c| c.join(api::CACHE_FILE));
+    let kept = file.as_deref().map(api::read_cache).unwrap_or_default();
     let key = format!("{} {given}", client.credentials().endpoint);
     let is_id = given.len() == 32 && given.bytes().all(|b| b.is_ascii_hexdigit());
     let guess = kept
@@ -1514,11 +1510,7 @@ pub fn resolve_project(
     if let Some(f) = &file
         && id != given
     {
-        kept.insert(key, id.clone());
-        if let Ok(bytes) = serde_json::to_vec_pretty(&kept) {
-            let _ = f.parent().map(std::fs::create_dir_all);
-            let _ = std::fs::write(f, bytes);
-        }
+        api::write_cache(f, &key, &id);
     }
     Ok(id)
 }

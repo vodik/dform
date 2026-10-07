@@ -433,6 +433,37 @@ fn a_project_named_by_description_is_listed_once_and_its_id_kept() {
     assert_eq!(asked(&server, n), [one]);
 }
 
+/// The server's clock offset is asked once and kept beside the project
+/// ids (After R-123): a later run signs with the kept one and asks no
+/// `/auth/time`; when the server's clock has moved and it refuses a
+/// signed call, the offset is asked again and the call sent once more.
+#[test]
+fn the_clock_offset_is_kept_and_asked_again_when_refused() {
+    let server = Server::start();
+    let s = project(
+        "ovh-clock-kept",
+        "",
+        &format!(
+            "use ovh {{ endpoint = \"{}\", project = \"{}\" }}\n\
+             resource ovh.ssh_key k {{ name = \"k\", public_key = \"ssh-ed25519 A\" }}\n",
+            server.endpoint,
+            fake::PROJECT
+        ),
+    );
+    dform(&s, &server, &["plan", "main.df"]).success();
+    assert_eq!(server.times_asked(), 1);
+    let kept = s.read("dform.state/cache/ovh-projects.json");
+    assert!(kept.contains(" /auth/time\""), "{kept}");
+    dform(&s, &server, &["plan", "main.df"]).success();
+    assert_eq!(server.times_asked(), 1);
+    // The server's clock moves an hour: the kept offset is refused once.
+    server.skew(3600);
+    let r = dform(&s, &server, &["plan", "main.df"]).success();
+    assert_eq!(server.times_asked(), 2, "{}", r.stderr);
+    dform(&s, &server, &["plan", "main.df"]).success();
+    assert_eq!(server.times_asked(), 2);
+}
+
 /// An instance's create says each status the API gives while it polls,
 /// beside the change in apply's progress (R-130): `BUILD` while it is
 /// made, then `ACTIVE`.
