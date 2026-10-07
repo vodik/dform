@@ -49,6 +49,30 @@ pub struct S3Store {
     agent: ureq::Agent,
 }
 
+/// The process's one HTTP agent: every store of a run shares its pool of
+/// kept-alive connections, so a run that reads state, the plan key and
+/// the audit log of one bucket opens one TLS connection, not one each.
+fn agent() -> ureq::Agent {
+    static AGENT: std::sync::OnceLock<ureq::Agent> = std::sync::OnceLock::new();
+    AGENT
+        .get_or_init(|| {
+            ureq::Agent::config_builder()
+                .http_status_as_error(false)
+                .timeout_global(Some(Duration::from_secs(60)))
+                .build()
+                .new_agent()
+        })
+        .clone()
+}
+
+/// Read what is left of an answer's body, so its connection goes back to
+/// the agent's pool: ureq reuses a connection only once its body is read
+/// to the end, and an unread one (a 404's or a 412's error document) is
+/// closed.
+fn drain(mut resp: ureq::http::Response<ureq::Body>) {
+    let _ = resp.body_mut().with_config().limit(1 << 20).read_to_vec();
+}
+
 /// The credentials from the environment.
 pub fn credentials() -> Result<Credentials> {
     let get = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
@@ -107,17 +131,12 @@ impl S3Store {
             .filter(|p| !p.is_empty())
             .collect::<Vec<_>>()
             .join("/");
-        let agent = ureq::Agent::config_builder()
-            .http_status_as_error(false)
-            .timeout_global(Some(Duration::from_secs(60)))
-            .build()
-            .new_agent();
         Ok(S3Store {
             endpoint: spec.endpoint.clone(),
             bucket,
             creds,
             prefix,
-            agent,
+            agent: agent(),
         })
     }
 
@@ -217,7 +236,10 @@ impl S3Store {
             .send_empty()
             .map_err(|e| anyhow!("create bucket {}: {e}", self.bucket.name()))?;
         match resp.status().as_u16() {
-            200..=299 | 409 => Ok(()),
+            200..=299 | 409 => {
+                drain(resp);
+                Ok(())
+            }
             _ => Err(failure("create bucket", self.bucket.name(), resp)),
         }
     }
@@ -273,7 +295,10 @@ impl Store for S3Store {
                     .map_err(|e| anyhow!("s3 get {at}: {e}"))?;
                 Ok(Some(Object { bytes, etag }))
             }
-            404 => Ok(None),
+            404 => {
+                drain(resp);
+                Ok(None)
+            }
             _ => Err(failure("get", &at, resp)),
         }
     }
@@ -296,9 +321,16 @@ impl Store for S3Store {
         }
         let resp = req.send(bytes).map_err(|e| anyhow!("s3 put {at}: {e}"))?;
         match resp.status().as_u16() {
-            200..=299 => Ok(Some(etag(&resp, "put", &at)?)),
+            200..=299 => {
+                let etag = etag(&resp, "put", &at)?;
+                drain(resp);
+                Ok(Some(etag))
+            }
             // 409: a conditional write raced another one (AWS).
-            412 | 409 => Ok(None),
+            412 | 409 => {
+                drain(resp);
+                Ok(None)
+            }
             _ => Err(failure("put", &at, resp)),
         }
     }
@@ -356,7 +388,10 @@ impl Store for S3Store {
             .call()
             .map_err(|e| anyhow!("s3 delete {at}: {e}"))?;
         match resp.status().as_u16() {
-            200..=299 | 404 => Ok(()),
+            200..=299 | 404 => {
+                drain(resp);
+                Ok(())
+            }
             _ => Err(failure("delete", &at, resp)),
         }
     }
@@ -411,6 +446,25 @@ mod tests {
         s.delete(STATE).unwrap();
         s.delete(STATE).unwrap();
         assert_eq!(s.list("").unwrap(), [LOCK]);
+    }
+
+    #[test]
+    fn a_run_keeps_one_connection() {
+        let server = fake::Server::start();
+        let s = store(&server, "p", "app");
+        assert_eq!(s.get(STATE).unwrap(), None);
+        let e = s.put(STATE, b"one", &Cond::IfAbsent).unwrap().unwrap();
+        assert_eq!(s.put(STATE, b"two", &Cond::IfAbsent).unwrap(), None);
+        s.put(STATE, b"two", &Cond::IfMatch(e)).unwrap().unwrap();
+        s.get(STATE).unwrap().unwrap();
+        s.list("").unwrap();
+        s.delete(STATE).unwrap();
+        s.get(STATE).unwrap();
+        // Another store of the run (the plan key's, another stack's
+        // outputs) shares the connection.
+        store(&server, "q", "other").get(STATE).unwrap();
+        assert_eq!(server.requests().len(), 9);
+        assert_eq!(server.connections(), 1, "{:?}", server.requests());
     }
 
     #[test]

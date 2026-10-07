@@ -8,12 +8,22 @@
 use dform_core::store::{Cond, MemoryStore, Store};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
 /// A running server; it lives as long as the test process.
 pub struct Server {
     /// `http://127.0.0.1:PORT`.
     pub endpoint: String,
+    /// What it has served: how many connections, and each request as
+    /// `METHOD /bucket/key` (the query left out).
+    seen: Arc<Seen>,
+}
+
+#[derive(Default)]
+struct Seen {
+    connections: AtomicUsize,
+    requests: Mutex<Vec<String>>,
 }
 
 impl Server {
@@ -31,13 +41,30 @@ impl Server {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind the fake S3 server");
         let endpoint = format!("http://{}", listener.local_addr().expect("its address"));
         let objects = Arc::new(MemoryStore::new());
+        let seen = Arc::new(Seen::default());
+        let counted = seen.clone();
         std::thread::spawn(move || {
             for conn in listener.incoming().flatten() {
-                let objects = objects.clone();
-                std::thread::spawn(move || serve(conn, &objects, lax));
+                counted.connections.fetch_add(1, Ordering::SeqCst);
+                let (objects, seen) = (objects.clone(), counted.clone());
+                std::thread::spawn(move || serve(conn, &objects, &seen, lax));
             }
         });
-        Server { endpoint }
+        Server { endpoint, seen }
+    }
+
+    /// How many connections it has accepted.
+    pub fn connections(&self) -> usize {
+        self.seen.connections.load(Ordering::SeqCst)
+    }
+
+    /// The requests it has answered, `METHOD /bucket/key`, in order.
+    pub fn requests(&self) -> Vec<String> {
+        self.seen
+            .requests
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 }
 
@@ -87,7 +114,7 @@ fn error(status: u16, code: &str) -> Answer {
     }
 }
 
-fn serve(conn: TcpStream, objects: &MemoryStore, lax: bool) {
+fn serve(conn: TcpStream, objects: &MemoryStore, seen: &Seen, lax: bool) {
     let mut out = match conn.try_clone() {
         Ok(c) => c,
         Err(_) => return,
@@ -126,6 +153,11 @@ fn serve(conn: TcpStream, objects: &MemoryStore, lax: bool) {
             return;
         }
         let answer = handle(&method, &target, &header, &body, objects, lax);
+        let path = target.split_once('?').map_or(target.as_str(), |(p, _)| p);
+        seen.requests
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(format!("{method} {}", decode(path, false)));
         let reason = match answer.status {
             200 => "OK",
             204 => "No Content",
