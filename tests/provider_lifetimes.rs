@@ -114,7 +114,6 @@ fn a_link_dropped_with_a_call_stuck_stops_its_provider() {
     let _: pb::ConfigureResponse = link
         .call(pb::ConfigureRequest {
             config: Some(wire::doc(&config)),
-            ..Default::default()
         })
         .unwrap();
     let t = link.submit(pb::ApplyRequest {

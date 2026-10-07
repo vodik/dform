@@ -11,7 +11,8 @@
 //! (`interrupt`, R-137): the block says so above it, no new change
 //! starts, the calls in flight are awaited, and the block ends with what
 //! never started `interrupted`; the apply unwinds from there and says the
-//! next apply resumes it. Ctrl-C again quits at once.
+//! next apply (a destroy's: the next destroy) resumes it. Ctrl-C again
+//! quits at once.
 
 pub use dform_core::progress::*;
 

@@ -24,7 +24,8 @@ pub enum State {
     Done,
     /// Its error's first line.
     Failed(String),
-    /// Running when the apply was interrupted.
+    /// Never started: the apply was interrupted first (a running one is
+    /// awaited, and ends `Done` or `Failed`).
     Interrupted,
 }
 
