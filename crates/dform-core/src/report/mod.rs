@@ -1860,8 +1860,10 @@ impl Report {
                 .unwrap_or_default();
             // Each line's site, the lines under one attribute fact asked
             // together.
-            let mut asks: BTreeMap<*const Atom, (&Atom, Vec<(usize, (Vec<String>, bool))>)> =
-                BTreeMap::new();
+            // By the fact (its address): the fact, and each line's index,
+            // keys and whether they reach the leaf.
+            type Asked<'a> = (&'a Atom, Vec<(usize, (Vec<String>, bool))>);
+            let mut asks: BTreeMap<*const Atom, Asked> = BTreeMap::new();
             for (i, l) in d.lines.iter().enumerate() {
                 if let Some((a, keys, whole)) = attr_holding(facts, &l.path) {
                     asks.entry(a as *const Atom)
