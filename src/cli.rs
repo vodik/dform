@@ -2898,6 +2898,8 @@ fn run_with(
                 moved: &[(ir::Address, ir::Address)],
                 denies: &[String]| {
         let mut report = report_of(plan, res, sections, tick, moved, denies);
+        // Printed: the lines the default level folds away say no site.
+        report.every_site = false;
         explain(&mut report, plan, res, tick);
         print!("{}", rendered(&report))
     };
@@ -3149,6 +3151,7 @@ fn run_with(
                 false => violations,
             };
             let mut report = report_of(&plan, &res, &sections, 1, &moves, &denies);
+            report.every_site = json;
             explain(&mut report, &plan, &res, 1);
             // The plan file, when one is written or the plan needs an
             // approval: its digest is what an approver signs.

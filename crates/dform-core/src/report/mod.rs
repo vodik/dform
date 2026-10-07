@@ -937,6 +937,10 @@ pub struct Report {
     /// The deployment is being removed (`destroy`, R-149): the operation
     /// is every delete's reason, so none says one.
     pub removing: bool,
+    /// Every line of a change says its site ([`Report::explain`]), though
+    /// the default level prints a create folded (`plan --json` keeps
+    /// them all); else only the lines the fold prints find theirs.
+    pub every_site: bool,
 }
 
 /// A forget's note on its line (R-154).
@@ -1132,6 +1136,7 @@ pub fn report(i: &Input) -> Report {
         keys: BTreeSet::new(),
         resumed: false,
         removing: false,
+        every_site: true,
         approvals: crate::approval::needs(&i.res.facts)
             .into_iter()
             .map(|(addr, reason)| Approval {
@@ -2350,6 +2355,22 @@ impl Report {
                 .get(&(d.addr.typ.clone(), d.addr.name.clone()))
                 .map(Vec::as_slice)
                 .unwrap_or_default();
+            // A create the default level folds prints few of its lines
+            // (a document's are its row, R-131): each printed line's site
+            // is found as the fold prints it, unless every line says its
+            // own (`every_site`: `plan --json`).
+            let folds = why < Why::Full && matches!(d.kind, ActionKind::Create | ActionKind::Adopt);
+            if folds && !self.every_site {
+                let mut site = |l: &Line| {
+                    attr_holding(facts, &l.path)
+                        .and_then(|(a, keys, whole)| {
+                            p.attr_sites(rules, a, &[(keys, whole)]).pop().flatten()
+                        })
+                        .or_else(|| element_site(&p, rules, facts, l))
+                };
+                d.folded = folded(d, &p, rules, facts, &res.facts, why, &mut site);
+                continue;
+            }
             // Each line's site, the lines under one attribute fact asked
             // together.
             // By the fact (its address): the fact, and each line's index,
@@ -2377,8 +2398,10 @@ impl Report {
                     l.chain = attr_chain(&p, rules, facts, &l.path, &self.keys);
                 }
             }
-            if why < Why::Full && matches!(d.kind, ActionKind::Create | ActionKind::Adopt) {
-                d.folded = folded(d, &p, rules, facts, &res.facts, why);
+            if folds {
+                d.folded = folded(d, &p, rules, facts, &res.facts, why, &mut |l| {
+                    l.site.clone()
+                });
             }
         }
         for g in &mut self.groups {
@@ -3666,6 +3689,7 @@ fn folded(
     facts: &[&Atom],
     all: &BTreeSet<Atom>,
     why: Why,
+    site: &mut dyn FnMut(&Line) -> Option<Site>,
 ) -> Vec<Line> {
     // The lines in the order the program gave a list's elements.
     let mut lines: Vec<&Line> = d.lines.iter().collect();
@@ -3717,10 +3741,31 @@ fn folded(
         })
         .collect();
     let sets = keyless_sets(&d.addr.typ, all);
+    // A document value (R-131), at the default level: the leaves a
+    // contribution read whole from a loader's document are its row, said
+    // once (below), so their values are not laid out.
+    let mut rows: BTreeMap<crate::circuit::NodeId, Option<tree::DocRow>> = BTreeMap::new();
+    if why == Why::Line {
+        for w in writers.iter().flatten() {
+            rows.entry(*w).or_insert_with(|| p.document_row(rules, *w));
+        }
+    }
+    let in_row = |w: Option<crate::circuit::NodeId>| {
+        w.and_then(|w| rows.get(&w)).is_some_and(Option::is_some)
+    };
     let values: Vec<crate::fmt::value::Tree> = lines
         .iter()
-        .map(|l| crate::fmt::value::Tree::Leaf(whole(&l.after, why)))
+        .zip(&writers)
+        .map(|(l, w)| match in_row(*w) {
+            true => crate::fmt::value::Tree::Leaf(String::new()),
+            false => crate::fmt::value::Tree::Leaf(whole(&l.after, why)),
+        })
         .collect();
+    // A line as printed: its site found when it is (a leaf of its own).
+    let mut own = |l: &Line| Line {
+        site: site(l),
+        ..l.clone()
+    };
     // A leaf naming a host with a label that is not ASCII keeps its own
     // line, so its A-labels print beside it (R-134).
     let host = |l: &Line| matches!(&l.after, Shown::Value(Json::String(s)) if crate::uri::ascii_form(s).is_some());
@@ -3729,7 +3774,7 @@ fn folded(
             return g
                 .leaves
                 .iter()
-                .map(|&i| (writers[i], lines[i].clone()))
+                .map(|&i| (writers[i], own(lines[i])))
                 .collect::<Vec<_>>();
         }
         let w = writers[g.leaves[0]];
@@ -3746,10 +3791,12 @@ fn folded(
             // named by itself (R-158): `policies[app_policy]`.
             // An element several writers add to says its own writer's
             // site, which the attribute's winner does not.
-            ([i], Some(w))
-                if g.path == paths[*i] && first.site.is_none() && paths[*i].ends_with(']') =>
-            {
-                let site = p.contribution_site(rules, w, &paths[*i]);
+            ([i], Some(w)) if g.path == paths[*i] && paths[*i].ends_with(']') => {
+                let first = own(first);
+                let site = match first.site {
+                    Some(s) => Some(s),
+                    None => p.contribution_site(rules, w, &paths[*i]),
+                };
                 let path = match set_element(&paths[*i], &sets) {
                     Some(list) if scalar(&first.after) => {
                         format!("{list}[{}]", first.after.said(why))
@@ -3759,15 +3806,15 @@ fn folded(
                 Line {
                     path,
                     site,
-                    ..first.clone()
+                    ..first
                 }
             }
             ([i], _) if g.path == paths[*i] => match set_element(&paths[*i], &sets) {
                 Some(list) if scalar(&first.after) => Line {
                     path: format!("{list}[{}]", first.after.said(why)),
-                    ..first.clone()
+                    ..own(first)
                 },
-                _ => first.clone(),
+                _ => own(first),
             },
             (_, w) => Line {
                 op: Op::Leaf,
@@ -3777,7 +3824,7 @@ fn folded(
                 leaves: Vec::new(),
                 site: w.and_then(|w| p.contribution_site(rules, w, &g.path)),
                 chain: Vec::new(),
-                value: Some(fold::assemble(&g, &paths, &values)),
+                value: (!in_row(w)).then(|| fold::assemble(&g, &paths, &values)),
                 row: None,
             },
         };
@@ -3789,16 +3836,11 @@ fn folded(
     // A document value (R-131): the leaves a contribution read whole from
     // a loader's document are its row, said once; a value body's first,
     // as the resource's. A leaf another write made stays its own line.
-    let mut rows: BTreeMap<crate::circuit::NodeId, Option<tree::DocRow>> = BTreeMap::new();
     let mut said = BTreeSet::new();
     let mut body = Vec::new();
     let mut rest = Vec::new();
     for (w, l) in out {
-        let row = w.and_then(|w| {
-            rows.entry(w)
-                .or_insert_with(|| p.document_row(rules, w))
-                .clone()
-        });
+        let row = w.and_then(|w| rows.get(&w).cloned().flatten());
         let Some(row) = row else {
             rest.push(l);
             continue;
