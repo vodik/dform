@@ -32,6 +32,11 @@ pub struct Link {
     retries: Vec<Retry>,
     /// Events of calls in flight taken while waiting for another call.
     events: Vec<(Ticket, pb::Event)>,
+    /// The provider's types under the name a `use .. as` gives it
+    /// (R-115): what renames a call, and what renames its answer back.
+    rename: Option<(super::wire::Rename, super::wire::Rename)>,
+    /// The Queries in flight whose answer's first column is a type.
+    typed: std::collections::BTreeSet<Ticket>,
 }
 
 /// One failed call sent again: for the progress line and the audit log.
@@ -99,6 +104,8 @@ impl Link {
             done: BTreeMap::new(),
             retries: Vec::new(),
             events: Vec::new(),
+            rename: None,
+            typed: Default::default(),
         };
         let hs: pb::HandshakeResponse = link.call(pb::HandshakeRequest {
             protocol_version: VERSION,
@@ -156,8 +163,33 @@ impl Link {
         self.backend.is_dead()
     }
 
+    /// Serve the provider's types under another name (R-115): `out`
+    /// renames each call's (`ca.instance` to `ovh.instance`), its inverse
+    /// each answer's.
+    pub fn rename(&mut self, out: super::wire::Rename) {
+        self.rename = Some((out.inverse(), out));
+    }
+
     pub fn submit(&mut self, call: impl Into<Call>) -> Ticket {
-        self.backend.submit(call.into())
+        let call = call.into();
+        let Some((_, out)) = &self.rename else {
+            return self.backend.submit(call);
+        };
+        let typed = matches!(&call, Call::Query(q) if super::wire::Rename::typed(&q.pred));
+        let t = self.backend.submit(out.call(call));
+        if typed {
+            self.typed.insert(t);
+        }
+        t
+    }
+
+    /// An answer from the backend, its types as the program names them.
+    fn back(&mut self, t: Ticket, r: Result<Reply, CallError>) -> Result<Reply, CallError> {
+        let typed = self.typed.remove(&t);
+        match &self.rename {
+            Some((back, _)) => r.map(|r| back.reply(r, typed)),
+            None => r,
+        }
     }
 
     /// Send the calls submitted so far ([`Timed::flush`]).
@@ -189,7 +221,8 @@ impl Link {
             let r = self.done.remove(&t).expect("present");
             return (t, r);
         }
-        self.backend.next_completed(events)
+        let (t, r) = self.backend.next_completed(events);
+        (t, self.back(t, r))
     }
 
     /// The events of calls in flight kept while waiting for another.
@@ -206,6 +239,7 @@ impl Link {
         loop {
             let kept = &mut self.events;
             let (got, r) = self.backend.next_completed(&mut |t, e| kept.push((t, e)));
+            let r = self.back(got, r);
             if got == t {
                 return r;
             }

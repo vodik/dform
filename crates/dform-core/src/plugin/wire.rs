@@ -271,6 +271,210 @@ pub fn from_fact(f: &pb::Fact) -> Result<Atom> {
     })
 }
 
+/// A provider's types under another name (R-115): `use ovh as ca` serves
+/// `ovh.instance` as `ca.instance`. Applied at the link only
+/// ([`super::link::Link::rename`]), so the provider never learns of the
+/// name: a call's types go out as `Rename::new("ca", "ovh")` renames
+/// them, and its answer comes back through the [`Rename::inverse`]. A
+/// type is renamed where the protocol carries one: a request's and an
+/// answer's type, a Schema answer's facts, externs and examples, a typed
+/// Query's type column, an extern's name, and a null's label (`T/N#P`)
+/// and its holder's type. A value a program gives (a string that happens
+/// to start with `ovh.`) never is.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Rename {
+    from: String,
+    to: String,
+}
+
+impl Rename {
+    /// `from.X` is `to.X`.
+    pub fn new(from: impl Into<String>, to: impl Into<String>) -> Rename {
+        Rename {
+            from: from.into(),
+            to: to.into(),
+        }
+    }
+
+    pub fn inverse(&self) -> Rename {
+        Rename::new(self.to.clone(), self.from.clone())
+    }
+
+    /// A type or an extern's name: `from.X` as `to.X`, any other as it is.
+    pub fn name(&self, s: &str) -> String {
+        match s.strip_prefix(&self.from).and_then(|r| r.strip_prefix('.')) {
+            Some(rest) => format!("{}.{rest}", self.to),
+            None => s.to_string(),
+        }
+    }
+
+    /// An attribute's type as a schema writes it (`ref(from.X)`,
+    /// `list(ref(from.X))`): each type in it renamed.
+    pub fn text(&self, s: &str) -> String {
+        let mut out = String::new();
+        let mut rest = s;
+        let at_word = |out: &String| {
+            out.chars()
+                .last()
+                .is_none_or(|c| !(c.is_alphanumeric() || matches!(c, '_' | '.' | '-')))
+        };
+        while let Some(i) = rest.find(&format!("{}.", self.from)) {
+            out.push_str(&rest[..i]);
+            if at_word(&out) {
+                out.push_str(&self.to);
+            } else {
+                out.push_str(&self.from);
+            }
+            rest = &rest[i + self.from.len()..];
+        }
+        out.push_str(rest);
+        out
+    }
+
+    /// A value: each null's label (`T/N#P`, `pred#P`) and holder's type,
+    /// and each reference's type.
+    pub fn value(&self, v: &mut pb::Value) {
+        use pb::value::Kind;
+        match &mut v.kind {
+            Some(Kind::Null(n)) => {
+                n.label = self.name(&n.label);
+                if let Some(h) = &mut n.held {
+                    h.r#type = self.name(&h.r#type);
+                }
+            }
+            Some(Kind::Ref(r) | Kind::CloudRef(r)) => r.r#type = self.name(&r.r#type),
+            Some(Kind::List(l)) => l.items.iter_mut().for_each(|x| self.value(x)),
+            Some(Kind::Obj(o)) => o.fields.values_mut().for_each(|x| self.value(x)),
+            _ => {}
+        }
+    }
+
+    fn some(&self, v: &mut Option<pb::Value>) {
+        if let Some(v) = v {
+            self.value(v);
+        }
+    }
+
+    /// Whether a Query of `pred` binds or answers a type in its first
+    /// column: the inventory and `provider.created`.
+    pub fn typed(pred: &str) -> bool {
+        pred == super::providers::CREATED
+            || super::providers::INVENTORY.iter().any(|(p, _)| *p == pred)
+    }
+
+    /// A call, its types renamed.
+    pub fn call(&self, mut c: super::backend::Call) -> super::backend::Call {
+        use super::backend::Call;
+        match &mut c {
+            Call::Schema(r) => {
+                if let Some(t) = &mut r.types {
+                    t.names = t.names.iter().map(|n| self.name(n)).collect();
+                }
+            }
+            Call::Query(r) => {
+                if Self::typed(&r.pred)
+                    && let Some(pb::Value {
+                        kind: Some(pb::value::Kind::Str(t)),
+                    }) = r.inputs.first_mut()
+                {
+                    *t = self.name(t);
+                }
+                r.pred = self.name(&r.pred);
+                r.inputs.iter_mut().for_each(|v| self.value(v));
+            }
+            Call::Read(r) => r.r#type = self.name(&r.r#type),
+            Call::Plan(r) => {
+                r.r#type = self.name(&r.r#type);
+                self.some(&mut r.prior);
+                self.some(&mut r.desired);
+            }
+            Call::Apply(r) => {
+                r.r#type = self.name(&r.r#type);
+                self.some(&mut r.config);
+                r.assertions
+                    .iter_mut()
+                    .for_each(|a| self.some(&mut a.value));
+            }
+            Call::Import(r) => r.r#type = self.name(&r.r#type),
+            Call::Reveal(r) => {
+                if let Some(h) = &mut r.held {
+                    h.r#type = self.name(&h.r#type);
+                }
+            }
+            Call::Handshake(_) | Call::Configure(_) => {}
+        }
+        c
+    }
+
+    /// An answer, its types renamed; `typed`: the answer to a Query whose
+    /// first column is a type ([`Rename::typed`]).
+    pub fn reply(&self, mut r: super::backend::Reply, typed: bool) -> super::backend::Reply {
+        use super::backend::Reply;
+        match &mut r {
+            Reply::Schema(s) => self.schema(s),
+            Reply::Query(rows) => {
+                for row in rows {
+                    if typed
+                        && let Some(pb::Value {
+                            kind: Some(pb::value::Kind::Str(t)),
+                        }) = row.values.first_mut()
+                    {
+                        *t = self.name(t);
+                    }
+                    row.values.iter_mut().for_each(|v| self.value(v));
+                }
+            }
+            Reply::Read(x) => {
+                self.some(&mut x.attrs);
+                self.some(&mut x.computed);
+            }
+            Reply::Plan(x) => {
+                for c in &mut x.changes {
+                    self.some(&mut c.before);
+                    self.some(&mut c.after);
+                }
+            }
+            Reply::Apply(x) => {
+                self.some(&mut x.attrs);
+                self.some(&mut x.computed);
+            }
+            Reply::Import(x) => {
+                x.r#type = self.name(&x.r#type);
+                self.some(&mut x.attrs);
+                self.some(&mut x.computed);
+            }
+            Reply::Handshake(_) | Reply::Configure(_) | Reply::Reveal(_) => {}
+        }
+        r
+    }
+
+    /// A Schema answer: each fact's type (its first column: the type, or
+    /// an extern's name), an attribute's type (`ref(T)`), what a
+    /// `type_alias` names; each extern's name and each example's type.
+    pub fn schema(&self, s: &mut pb::SchemaResponse) {
+        use pb::value::Kind;
+        for f in &mut s.facts {
+            let pred = f.pred.clone();
+            for (i, a) in f.args.iter_mut().enumerate() {
+                let Some(Kind::Str(t)) = &mut a.kind else {
+                    continue;
+                };
+                *t = match (pred.as_str(), i) {
+                    (_, 0) | ("type_alias", 1) => self.name(t),
+                    ("type_attr", 2) => self.text(t),
+                    _ => continue,
+                };
+            }
+        }
+        for e in &mut s.externs {
+            e.pred = self.name(&e.pred);
+        }
+        for e in &mut s.examples {
+            e.r#type = self.name(&e.r#type);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -345,6 +549,54 @@ mod tests {
         assert_eq!(
             doc(&json!(u64::MAX)).kind,
             Some(Kind::Str(u64::MAX.to_string()))
+        );
+    }
+
+    /// A type is renamed where the protocol carries one, and a string a
+    /// program gives is not (R-115).
+    #[test]
+    fn a_rename_touches_types_only() {
+        use super::super::backend::{Call, Reply};
+        let out = Rename::new("ca", "ovh");
+        assert_eq!(out.name("ca.instance"), "ovh.instance");
+        assert_eq!(out.name("cat.instance"), "cat.instance");
+        assert_eq!(
+            out.name("ca.instance/x#password"),
+            "ovh.instance/x#password"
+        );
+        assert_eq!(out.text("list(ref(ca.network))"), "list(ref(ovh.network))");
+        assert_eq!(out.text("ref(orca.network)"), "ref(orca.network)");
+        let req = pb::ApplyRequest {
+            r#type: "ca.instance".into(),
+            config: Some(doc(
+                &json!({"host": "ca.example.com", "peer": {"$secret": "eu.vpc/p#id"}}),
+            )),
+            ..Default::default()
+        };
+        let Call::Apply(sent) = out.call(Call::Apply(req)) else {
+            unreachable!()
+        };
+        assert_eq!(sent.r#type, "ovh.instance");
+        let config = from_doc(sent.config.as_ref().unwrap()).unwrap();
+        assert_eq!(config["host"], "ca.example.com");
+        assert_eq!(config["peer"], json!({"$secret": "eu.vpc/p#id"}));
+        let back = out.inverse();
+        let rows = vec![pb::Row {
+            values: vec![
+                value(&Value::Str("ovh.instance".into())),
+                value(&Value::Str("ovh.x".into())),
+            ],
+        }];
+        let Reply::Query(rows) = back.reply(Reply::Query(rows), true) else {
+            unreachable!()
+        };
+        assert_eq!(
+            from_value(&rows[0].values[0]).unwrap(),
+            Value::Str("ca.instance".into())
+        );
+        assert_eq!(
+            from_value(&rows[0].values[1]).unwrap(),
+            Value::Str("ovh.x".into())
         );
     }
 }
