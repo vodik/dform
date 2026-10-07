@@ -4974,10 +4974,23 @@ mod tests {
     /// gke_two_phase_rule3_coarse_fires_spuriously.)
     #[test]
     fn gke_two_phase_sections_per_key() {
+        // The k8s objects are the k8s mock's; the client's token the gke
+        // mock's data source answers.
+        let k8s =
+            crate::schema::Schema::parse(crate::schema::builtin("k8s").unwrap(), "k8s").unwrap();
+        let answers = crate::parser::parse_program(crate::schema::builtin_answers("gke").unwrap())
+            .unwrap()
+            .statements
+            .into_iter()
+            .filter_map(|s| match s {
+                Stmt::Fact(a) => Some(a),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
         let (r, violations, s) = run_file(
             "examples/gke/stacks/gke_two_phase.df",
-            &crate::schema::gke(),
-            &[],
+            &crate::schema::gke().merge(k8s).unwrap(),
+            &answers,
         );
         assert!(violations.is_empty(), "{violations:?}");
         let pending: Vec<String> = s.pending.keys().map(|(t, a)| format!("{t} {a}")).collect();
