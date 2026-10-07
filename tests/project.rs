@@ -525,20 +525,25 @@ fn state_show_mv_and_unlock() {
         r.stderr
     );
 
-    // A lock whose holder is gone is removed; a running holder's is not.
+    // A lock no one holds is removed, whatever pid it names (a live one
+    // here: this test's); a held one is not.
     let lock = s.path("dform.state/net/state.lock");
-    std::fs::write(&lock, "999999999\n").unwrap();
+    std::fs::write(&lock, format!("{}\n", std::process::id())).unwrap();
     let r = s.run(&["stack", "unlock", "net"]).success();
     assert!(r.stdout.contains("stack net unlocked"), "{}", r.stdout);
     assert!(!lock.exists());
-    std::fs::write(&lock, format!("{}\n", std::process::id())).unwrap();
+    std::fs::write(&lock, "999999999\n").unwrap();
+    let held = std::fs::File::open(&lock).unwrap();
+    held.lock().unwrap();
     let r = s.run(&["stack", "unlock", "net"]).failure();
     assert!(
-        r.stderr.contains("is locked by a running apply"),
+        r.stderr
+            .contains("is locked by a running apply (pid 999999999)"),
         "{}",
         r.stderr
     );
     assert!(lock.exists());
+    drop(held);
 }
 
 #[test]

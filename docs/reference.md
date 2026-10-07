@@ -236,7 +236,7 @@ and remote id, then its outputs as a key/value table (a secret output as
 `secret`: state keeps no bytes of it); `--address ADDR` only the one at `ADDR` (it, `state mv`, `log` and `stack unlock`
 need the deployment's key, not the program's other inputs); `dform state mv FROM TO TARGET` gives the
 object at the address `FROM` the address `TO`; `dform stack unlock TARGET` removes
-an apply lock whose holder is gone (breaks an s3 backend's lease). `dform provider schema NAME` prints a
+an apply lock no process holds (breaks an s3 backend's lease). `dform provider schema NAME` prints a
 provider's schema facts. `dform doc` prints the project's doc comments
 (`#|` lines above an item, docs/grammar.md "Doc comments") as Markdown: per
 file, each documented item's kind and name, its first line, its
@@ -270,9 +270,14 @@ allow_empty = ["net.subnet"]      # optional: what a plan may empty without the
 ```
 
 Two programs never see each other's resources. `apply` holds the
-stack's lock, `<state dir>/state.lock` (the holder's pid): a second apply
-of the same stack while one runs fails naming the holder; a lock whose
-holder is gone (a killed apply) is taken over with a note.
+stack's lock, `<state dir>/state.lock`, locked with the kernel's file
+lock (`flock`), which ends with the process that holds it; the pid inside
+is for messages only. A second apply of the same stack while one runs
+fails naming the holder; a lock file a killed apply left is taken with a
+note, since no one holds its lock, and `dform stack unlock` removes one no
+process holds (it refuses one that is held, whatever pid it names). The
+local backend wants a local filesystem: a file lock over NFS is only as
+good as the server's; a shared backend is `s3(...)`.
 
 ### State backends
 

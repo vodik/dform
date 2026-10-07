@@ -153,7 +153,8 @@ fn a_second_concurrent_apply_fails_cleanly() {
     assert!(r.stdout.contains("apply: nothing to do"), "{}", r.stdout);
 }
 
-/// A lock left by an apply that is gone (killed) is taken over.
+/// A lock left by an apply that is gone (killed) is taken over: no one
+/// holds its `flock`.
 #[test]
 fn a_stale_lock_is_taken_over() {
     let s = Scratch::project("lang-stack-stale");
@@ -164,8 +165,9 @@ fn a_stale_lock_is_taken_over() {
     s.write("dform.state/net/state.lock", &format!("{pid}\n"));
     let r = s.run(&["apply", "net.df"]).success();
     assert!(
-        r.stderr
-            .contains(&format!("taking over the lock of pid {pid}, which is gone")),
+        r.stderr.contains(&format!(
+            "taking over the lock of pid {pid}, which no longer holds it"
+        )),
         "{}",
         r.stderr
     );

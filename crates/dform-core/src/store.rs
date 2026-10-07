@@ -53,7 +53,7 @@ pub const STATE: &str = "state.json";
 pub const KEY: &str = "state.key";
 /// The deployment's audit log (`audit`).
 pub const AUDIT: &str = "state.audit.jsonl";
-/// The deployment's lock: the local backend's pid file, else the lease.
+/// The deployment's lock: the local backend's locked file, else the lease.
 pub const LOCK: &str = "state.lock";
 /// The audit log's segments, in a store that does not append in place
 /// (`audit`): `state.audit/000001.jsonl`, ...
@@ -117,7 +117,7 @@ pub trait Store: Send + Sync {
     fn delete(&self, key: &str) -> Result<()>;
 
     /// Are state writes fenced by a lease? Not the local backend's: its
-    /// lock file is held by a live process, which never goes stale.
+    /// lock is the kernel's, held by a live process and gone with it.
     fn fenced(&self) -> bool {
         true
     }
@@ -494,6 +494,9 @@ fn content_etag(bytes: &[u8]) -> String {
 pub struct LocalStore {
     dir: PathBuf,
     prefix: String,
+    /// The lock files this store holds locked, by key: dropping one
+    /// unlocks it.
+    held: Mutex<BTreeMap<String, std::fs::File>>,
 }
 
 impl LocalStore {
@@ -505,7 +508,11 @@ impl LocalStore {
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
         let prefix = name.strip_suffix(STATE).unwrap_or_default().to_string();
-        LocalStore { dir, prefix }
+        LocalStore {
+            dir,
+            prefix,
+            held: Mutex::new(BTreeMap::new()),
+        }
     }
 
     /// The file of `key`.
@@ -615,93 +622,133 @@ impl Store for LocalStore {
         false
     }
 
-    /// The file `key`, created exclusively, holding the holder's pid. A
-    /// lock whose holder is gone (a killed apply) is taken over, with a
-    /// note.
+    /// The file `key`, locked (`flock`, the kernel's lock, which dies
+    /// with its holder): the open file is kept until [`Store::release`].
+    /// The pid written inside is for messages only. A file a killed apply
+    /// left is taken, since no one holds its lock, with a note.
     fn acquire(&self, key: &str, stack: &str, _holder: &str, _ttl: Duration) -> Result<Lease> {
+        use std::io::{Seek, Write};
         let path = self.path(key);
         LocalStore::mkdir(&path)?;
-        for _ in 0..2 {
-            match std::fs::OpenOptions::new()
+        // A file removed (released, or broken) between its open and its
+        // lock is not the lock any more: look again.
+        for _ in 0..20 {
+            let mut f = std::fs::OpenOptions::new()
+                .read(true)
                 .write(true)
-                .create_new(true)
+                .create(true)
+                .truncate(false)
                 .open(&path)
-            {
-                Ok(mut f) => {
-                    use std::io::Write;
-                    writeln!(f, "{}", std::process::id())
-                        .with_context(|| format!("write {}", path.display()))?;
-                    return Ok(Lease {
-                        key: key.to_string(),
-                        holder: std::process::id().to_string(),
-                        fence: 0,
-                        expires_ms: u64::MAX,
-                        etag: String::new(),
-                        took_over: None,
-                    });
-                }
-                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                    let holder = std::fs::read_to_string(&path).unwrap_or_default();
-                    let pid: Option<u32> = holder.trim().parse().ok();
-                    if let Some(pid) = pid
-                        && !alive(pid)
-                    {
-                        eprintln!(
-                            "note: stack {stack}: taking over the lock of pid {pid}, which is gone ({})",
-                            path.display()
-                        );
-                        let _ = std::fs::remove_file(&path);
-                        continue;
-                    }
+                .with_context(|| format!("lock {}", path.display()))?;
+            match f.try_lock() {
+                Ok(()) => {}
+                Err(std::fs::TryLockError::WouldBlock) => {
                     bail!(
                         "stack {stack} is locked by another apply (pid {}): {}; \
                          wait for it, or `dform stack unlock {stack}` if no apply is running",
-                        pid.map(|p| p.to_string())
-                            .unwrap_or_else(|| "unknown".into()),
+                        lock_holder(&path).unwrap_or_else(|| "unknown".into()),
                         path.display()
                     );
                 }
-                Err(e) => return Err(e).with_context(|| format!("lock {}", path.display())),
+                Err(std::fs::TryLockError::Error(e)) => {
+                    return Err(e).with_context(|| format!("lock {}", path.display()));
+                }
             }
+            if !same_file(&f, &path) {
+                continue;
+            }
+            if let Some(pid) = lock_holder(&path) {
+                eprintln!(
+                    "note: stack {stack}: taking over the lock of pid {pid}, which no longer \
+                     holds it ({})",
+                    path.display()
+                );
+            }
+            f.set_len(0)
+                .and_then(|()| f.rewind())
+                .and_then(|()| writeln!(f, "{}", std::process::id()))
+                .with_context(|| format!("write {}", path.display()))?;
+            self.held
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .insert(key.to_string(), f);
+            return Ok(Lease {
+                key: key.to_string(),
+                holder: std::process::id().to_string(),
+                fence: 0,
+                expires_ms: u64::MAX,
+                etag: String::new(),
+                took_over: None,
+            });
         }
-        bail!("stack {stack}: could not take the lock {}", path.display())
+        bail!(
+            "stack {stack}: could not take the lock {}: it was removed under every attempt",
+            path.display()
+        )
     }
 
     fn renew(&self, _lease: &mut Lease, _ttl: Duration) -> Result<()> {
         Ok(())
     }
 
+    /// The file is removed while it is still locked, then unlocked: a
+    /// taker that opened it before the removal finds it is not the file
+    /// at the path any more.
     fn release(&self, lease: &Lease) -> Result<()> {
         let path = self.path(&lease.key);
-        match std::fs::remove_file(&path) {
+        let held = self
+            .held
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&lease.key);
+        let Some(f) = held else {
+            return Ok(());
+        };
+        let removed = match std::fs::remove_file(&path) {
             Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
                 Err(e).with_context(|| format!("remove {}", path.display()))
             }
             _ => Ok(()),
-        }
+        };
+        let unlocked = f
+            .unlock()
+            .with_context(|| format!("unlock {}", path.display()));
+        removed.and(unlocked)
     }
 
-    /// Remove the lock file, unless its holder is running.
+    /// Remove the lock file, unless an apply holds its lock (whatever pid
+    /// the file names).
     fn break_lease(&self, key: &str, stack: &str) -> Result<String> {
         let path = self.path(key);
-        if !path.exists() {
-            return Ok(format!("stack {stack} is not locked"));
-        }
-        let holder = std::fs::read_to_string(&path).unwrap_or_default();
-        let pid: Option<u32> = holder.trim().parse().ok();
-        if let Some(pid) = pid
-            && alive(pid)
+        let f = match std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&path)
         {
-            bail!(
+            Ok(f) => f,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(format!("stack {stack} is not locked"));
+            }
+            Err(e) => return Err(e).with_context(|| format!("open {}", path.display())),
+        };
+        let pid = lock_holder(&path).unwrap_or_else(|| "unknown".into());
+        match f.try_lock() {
+            Ok(()) => {}
+            Err(std::fs::TryLockError::WouldBlock) => bail!(
                 "stack {stack} is locked by a running apply (pid {pid}): {}; stop it first",
                 path.display()
-            );
+            ),
+            Err(std::fs::TryLockError::Error(e)) => {
+                return Err(e).with_context(|| format!("lock {}", path.display()));
+            }
         }
-        std::fs::remove_file(&path).with_context(|| format!("remove {}", path.display()))?;
+        if same_file(&f, &path) {
+            std::fs::remove_file(&path).with_context(|| format!("remove {}", path.display()))?;
+        }
+        f.unlock()
+            .with_context(|| format!("unlock {}", path.display()))?;
         Ok(format!(
-            "stack {stack} unlocked (the lock of pid {} is gone): {}",
-            pid.map(|p| p.to_string())
-                .unwrap_or_else(|| "unknown".into()),
+            "stack {stack} unlocked (no apply held the lock of pid {pid}): {}",
             path.display()
         ))
     }
@@ -736,13 +783,29 @@ impl Store for LocalStore {
     }
 }
 
-/// Is process `pid` running? (Linux: `/proc/<pid>` exists.) Elsewhere
-/// every holder is taken as alive.
-fn alive(pid: u32) -> bool {
-    if !Path::new("/proc").exists() {
-        return true;
+/// The pid a lock file names, for messages.
+fn lock_holder(path: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let pid = text.trim();
+    (!pid.is_empty()).then(|| pid.to_string())
+}
+
+/// Is the open file `f` the one at `path` now (not removed or replaced
+/// since it was opened)?
+fn same_file(f: &std::fs::File, path: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        match (f.metadata(), std::fs::metadata(path)) {
+            (Ok(a), Ok(b)) => a.dev() == b.dev() && a.ino() == b.ino(),
+            _ => false,
+        }
     }
-    Path::new(&format!("/proc/{pid}")).exists()
+    #[cfg(not(unix))]
+    {
+        let _ = f;
+        path.exists()
+    }
 }
 
 /// A store in memory that keeps S3's rules: content ETags, conditional
