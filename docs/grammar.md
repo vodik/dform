@@ -1578,7 +1578,9 @@ operator follows it (`f(x) == 3` compares a call).
 value that is there, a resource's attribute its document sets (`not has
 p.spec.podSelector.matchLabels`: the policy selects every pod). A computed
 attribute has a value once the provider reports it; until then `has` over
-it is undetermined, as any read of it is. One exception (R-106): in a rule
+it, or over a field of it (`has b.status.ready`), is undetermined, as any
+read of it is: what it gates waits on it, `not has` too, and `why` says
+`has cache.endpoint: cache.endpoint is not known yet`. One exception (R-106): in a rule
 that writes under the path it tests, of a resource's attribute the
 provider's schema declares (one a program sets, or an object holding one),
 `has r.PATH` asks the schema whether the type has it, not the value:
@@ -1597,6 +1599,9 @@ identity is known: false while no rule wants it, undetermined from plan
 until the tick that creates it, so a block gated `where has warm_cache`
 waits on `warm_cache` and applies the tick after it, and `not has r`
 guards on its absence (R-152); `has r.id` is an error naming `has r`.
+A variable bound to a resource (`c in db.postgres`) is one: `has c`.
+A type whose identity is a field (a Kubernetes object's `metadata.uid`)
+waits on that field.
 
 A call of a function whose result is optional (`T?`: `regex.capture`
 of a text the pattern does not match, `list.first` of an empty list)

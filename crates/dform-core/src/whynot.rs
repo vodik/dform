@@ -372,6 +372,12 @@ impl WhyNot<'_> {
             .filter(|f| f.pred == "want")
             .map(|f| self.name(f))
             .map(|n| (edits(&name, &n), n))
+                // A `not has` waiting on a value: its helper is stuck, so
+                // the negation is undetermined though no row holds.
+                if let Some(t) = self.undetermined(rule, &a.known) {
+                    out.push_str(&format!("{inner}{}\n", self.redact.text(&t)));
+                    continue;
+                }
             .filter(|(d, _)| *d > 0 && *d <= name.chars().count() / 3)
             .min()
             .map(|(_, n)| n)
@@ -391,6 +397,13 @@ impl WhyNot<'_> {
             return;
         }
         let fixed: Vec<Option<&Value>> = bound
+                Lit::Pos(b) if b.pred == "__known" => {
+                    let line = match known_text(rule, lit, &a.known) {
+                        Some(t) => t,
+                        None => format!("{}: not known yet", self.atom_text(b)),
+                    };
+                    out.push_str(&format!("{inner}{}\n", self.redact.text(&line)));
+                }
             .args
             .iter()
             .map(|t| match t {
@@ -442,6 +455,37 @@ impl WhyNot<'_> {
             return;
         }
         let (pool, hide) = match agree.is_empty() {
+    /// The first `not h(..)` of a stuck `rule` whose helper `h` tests a
+    /// `has` (`partition::answer_has`), as the
+    /// program wrote it: `not has b.status.ready: b.status.ready is not
+    /// known yet`.
+    fn undetermined(&self, rule: &RuleStmt, known: &Env) -> Option<String> {
+        rule.body.iter().find_map(|l| {
+            let Lit::Not(b) = l else { return None };
+            // The negation is undetermined: the rule is stuck on it.
+            if !self
+                .res
+                .stuck
+                .iter()
+                .any(|s| s.head.pred == b.pred || s.head.pred == rule.head.pred)
+            {
+                return None;
+            }
+            let helper = self.res.rules.iter().find(|r| r.head.pred == b.pred)?;
+            let mut env = Env::new();
+            for (h, t) in helper.head.args.iter().zip(&b.args) {
+                if let (Term::Var(h), Some(v)) = (h, subst(t, known).ground()) {
+                    env.insert(h.clone(), v);
+                }
+            }
+            let lit = helper
+                .body
+                .iter()
+                .find(|l| matches!(l, Lit::Pos(a) if a.pred == "__known"))?;
+            known_text(helper, lit, &env).map(|t| format!("not {t}"))
+        })
+    }
+
             false => (agree, stated.clone()),
             true => (rows, vec![false; stated.len()]),
         };
@@ -607,7 +651,7 @@ fn attribute_text(typ: String, name: String, p: &str) -> String {
 
 /// A core variable by the name the source gave it: `AvailabilityZone` is
 /// `availability_zone` (`resolve::capitalise`, read backwards).
-fn source_name(v: &str) -> String {
+pub(crate) fn source_name(v: &str) -> String {
     let lead = v.len() - v.trim_start_matches('_').len();
     let mut out = v[..lead].to_string();
     for (i, c) in v[lead..].chars().enumerate() {
@@ -685,6 +729,68 @@ fn merge(a: &Env, b: &Env) -> Option<Env> {
         }
     }
     Some(out)
+/// A `has` the compiler made a `__known` over the value it reads
+/// (`partition::answer_identity`, `answer_has`), as the program wrote it,
+/// with why it fails: `has warm_cache: warm_cache does not exist yet` of
+/// a resource's identity, `has cache.endpoint: cache.endpoint is not
+/// known yet` of a computed attribute.
+fn known_text(rule: &RuleStmt, lit: &Lit, known: &Env) -> Option<String> {
+    let Lit::Pos(k) = lit else { return None };
+    let Some(Term::Var(mut v)) = k.args.first().cloned() else {
+        return None;
+    };
+    let identity = v.starts_with("__Identity");
+    let mut below: Vec<String> = Vec::new();
+    // Back through the walk to the attribute read that binds the value.
+    loop {
+        let step = rule.body.iter().find_map(|l| match l {
+            Lit::Eq(Term::Var(w), Term::Func { name, args }) if *w == v && name == "__path" => {
+                match args.as_slice() {
+                    [Term::Var(from), p] => Some(Err((from.clone(), p.as_str()?.to_string()))),
+                    _ => None,
+                }
+            }
+            Lit::Eq(Term::Var(w), Term::Var(from)) if *w == v => {
+                Some(Err((from.clone(), String::new())))
+            }
+            Lit::Pos(a)
+                if a.pred == "attr" && matches!(a.args.get(3), Some(Term::Var(w)) if *w == v) =>
+            {
+                Some(Ok(a.clone()))
+            }
+            _ => None,
+        })?;
+        match step {
+            Ok(read) => {
+                let val = |t: &Term| match t {
+                    Term::Val(Value::Str(s)) => Some(s.clone()),
+                    Term::Var(x) => known.get(x).and_then(|v| v.as_str().map(str::to_string)),
+                    _ => None,
+                };
+                let a = crate::ir::Address {
+                    typ: val(&read.args[0])?,
+                    name: val(&read.args[1])?,
+                };
+                if identity {
+                    let r = crate::report::reference(&a, "");
+                    return Some(format!("has {r}: {r} does not exist yet"));
+                }
+                let mut path = val(&read.args[2])?;
+                for p in below.iter().rev().filter(|p| !p.is_empty()) {
+                    path.push('.');
+                    path.push_str(p);
+                }
+                let r = crate::report::reference(&a, &path);
+                return Some(format!("has {r}: {r} is not known yet"));
+            }
+            Err((from, p)) => {
+                below.push(p);
+                v = from;
+            }
+        }
+    }
+}
+
 }
 
 /// The bindings under which term `t` (of a head) is `v`: a variable the

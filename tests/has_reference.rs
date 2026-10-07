@@ -195,3 +195,47 @@ resource y.box no { size = 4 } where not has b.status.ready
         );
     }
 }
+
+/// `why` of a gated resource says the `has` as the program wrote it
+/// (After R-152), never the compiler's `__known(__identity0)`: a
+/// resource's identity, a computed attribute, and under `not`.
+#[test]
+fn why_says_the_has_that_holds_a_block_back() {
+    let s = Scratch::new("has-ref-why");
+    s.write(
+        "p.df",
+        r#"
+use fake
+resource db.postgres cache { size = 1 }
+resource net.vpc web { cidr = "10.0.0.0/16" } where has cache
+resource net.vpc ep { cidr = "10.1.0.0/16" } where has cache.endpoint
+resource net.vpc bare { cidr = "10.2.0.0/16" } where not has cache.endpoint
+"#,
+    );
+    for (addr, want) in [
+        ("net.vpc web", "has cache: cache does not exist yet"),
+        ("net.vpc ep", "has cache.endpoint: cache.endpoint is not known yet"),
+        (
+            "net.vpc bare",
+            "not has cache.endpoint: cache.endpoint is not known yet",
+        ),
+    ] {
+        let r = dev(&s, &["why", addr]).success();
+        assert!(r.stdout.contains(want), "{addr}: {}", r.stdout);
+        assert!(!r.stdout.contains("__"), "{addr}: {}", r.stdout);
+    }
+}
+
+/// A variable bound to a resource is one (After R-152): `has c` with `c
+/// in db.postgres` waits on the cache's identity, not a value test.
+#[test]
+fn has_a_variable_bound_to_a_resource_is_its_identity() {
+    let s = Scratch::new("has-ref-var");
+    s.write(
+        "p.df",
+        "use fake\nresource db.postgres cache { size = 1 }\n\
+         resource net.vpc web { cidr = \"10.0.0.0/16\" } where c in db.postgres, has c\n",
+    );
+    let r = dev(&s, &["plan"]).success();
+    assert!(waits(&r.stdout, "net.vpc web", "cache"), "{}", r.stdout);
+}

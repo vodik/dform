@@ -2771,7 +2771,7 @@ fn eval_builtin_pred(
                 "`{}(..)`{}: `{}` is not bound here",
                 atom.pred,
                 at_suffix(atom.span),
-                source_name(&v)
+                crate::whynot::source_name(&v)
             );
         }
         if let Some(r) = side_unanswered(t, state, rec) {
@@ -2819,25 +2819,6 @@ fn unbound(t: &Term, state: &HashMap<String, Value>, out: &mut BTreeSet<String>)
         Term::Obj(m) => m.values().for_each(|x| unbound(x, state, out)),
         _ => {}
     }
-}
-
-/// A lowered variable as the source wrote it: `C` is `c`, `ImageRef`
-/// `image_ref` (`resolve::capitalise`, read backwards, as `whynot` reads
-/// it).
-fn source_name(v: &str) -> String {
-    let lead = v.len() - v.trim_start_matches('_').len();
-    let mut out = v[..lead].to_string();
-    for (i, c) in v[lead..].chars().enumerate() {
-        if c.is_uppercase() {
-            if i > 0 {
-                out.push('_');
-            }
-            out.extend(c.to_lowercase());
-        } else {
-            out.push(c);
-        }
-    }
-    out
 }
 
 fn eval_member_like(
