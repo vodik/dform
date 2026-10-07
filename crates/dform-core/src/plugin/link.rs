@@ -153,6 +153,11 @@ impl Link {
         self.backend.submit(call.into())
     }
 
+    /// Send the calls submitted so far ([`Timed::flush`]).
+    pub fn flush(&mut self) {
+        self.backend.flush();
+    }
+
     /// Whether the answer to `t` is in.
     pub fn has_answer(&self, t: Ticket) -> bool {
         self.done.contains_key(&t)

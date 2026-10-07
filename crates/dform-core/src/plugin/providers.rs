@@ -1601,9 +1601,36 @@ impl Providers {
         {
             return Ok(w.clone());
         }
-        let mut world = World::new();
+        // Every Read is sent before any answer is taken, to every provider,
+        // so a provider that can answers them at once: a plan waits one
+        // round trip to its API, not one per object. A Read that fails is
+        // sent again alone, under the provider's retry policy.
+        let mut sent = Vec::new();
         for (k, (addr, remote, i)) in mapped {
-            if let Some(o) = self.read(i, &addr, &remote)? {
+            let req = pb::ReadRequest {
+                r#type: addr.typ.clone(),
+                remote: remote.clone(),
+                name: addr.name.clone(),
+            };
+            let t = self.link(i)?.borrow_mut().submit(req);
+            sent.push((k, addr, remote, i, t));
+        }
+        for l in &self.links {
+            l.borrow_mut().flush();
+        }
+        let mut world = World::new();
+        for (k, addr, remote, i, t) in sent {
+            let answer = {
+                let mut link = self.links[i].borrow_mut();
+                link.wait(t)
+                    .and_then(|r| link.expect::<pb::ReadResponse>("Read", r))
+            };
+            let found = match answer {
+                Ok(r) if !r.found => None,
+                Ok(r) => Some(Self::object(r.attrs.as_ref(), r.computed.as_ref())?),
+                Err(_) => self.read(i, &addr, &remote)?,
+            };
+            if let Some(o) = found {
                 world.insert(k, o);
             }
         }
@@ -1704,6 +1731,9 @@ impl Providers {
             };
             let l = self.route(&addr.typ);
             submitted.push((i, l, self.link(l)?.borrow_mut().submit(req)));
+        }
+        for l in &self.links {
+            l.borrow_mut().flush();
         }
         for (i, l, t) in submitted {
             let mut link = self.links[l].borrow_mut();

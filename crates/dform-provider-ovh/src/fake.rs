@@ -46,6 +46,13 @@ pub struct World {
     failing: Vec<(String, Vec<u16>)>,
     pub seen: Vec<Seen>,
     build_polls: u32,
+    /// How long each call takes to answer (`slow`), as a far API's do.
+    latency: std::time::Duration,
+    /// Calls being answered now, the most there have been at once, and
+    /// the connections accepted.
+    answering: usize,
+    most: usize,
+    connections: usize,
 }
 
 pub struct Server {
@@ -89,6 +96,7 @@ impl Server {
         std::thread::spawn(move || {
             for conn in listener.incoming().flatten() {
                 let w = w.clone();
+                w.lock().unwrap_or_else(|e| e.into_inner()).connections += 1;
                 let base = base.clone();
                 std::thread::spawn(move || serve(conn, &w, &base));
             }
@@ -118,6 +126,22 @@ impl Server {
 
     fn world(&self) -> std::sync::MutexGuard<'_, World> {
         self.world.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Each call takes `latency` to answer (the real API's is about a
+    /// second from Toronto); calls on separate connections overlap.
+    pub fn slow(&self, latency: std::time::Duration) {
+        self.world().latency = latency;
+    }
+
+    /// The most calls it has answered at once.
+    pub fn most_at_once(&self) -> usize {
+        self.world().most
+    }
+
+    /// The connections it has accepted.
+    pub fn connections(&self) -> usize {
+        self.world().connections
     }
 
     /// How many reads a new instance stays BUILD for.
@@ -503,6 +527,13 @@ fn serve(conn: TcpStream, world: &Mutex<World>, base: &str) {
             })
             .collect();
         let path = decode(&path);
+        let latency = {
+            let mut w = world.lock().unwrap_or_else(|e| e.into_inner());
+            w.answering += 1;
+            w.most = w.most.max(w.answering);
+            w.latency
+        };
+        std::thread::sleep(latency);
         let (status, answer) = {
             let mut w = world.lock().unwrap_or_else(|e| e.into_inner());
             let json_body = serde_json::from_str(&body).unwrap_or(Json::Null);
@@ -530,6 +561,7 @@ fn serve(conn: TcpStream, world: &Mutex<World>, base: &str) {
                 w.answer(&method, &path, &query, &json_body)
             }
         };
+        world.lock().unwrap_or_else(|e| e.into_inner()).answering -= 1;
         let text = answer.to_string();
         let reason = if status < 300 { "OK" } else { "Error" };
         let resp = format!(

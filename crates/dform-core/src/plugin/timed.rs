@@ -104,6 +104,16 @@ impl Timed {
         self.what = what.to_string();
     }
 
+    /// Pass the calls submitted so far on to the backend now, rather than
+    /// when an answer is next asked for: calls to several providers then
+    /// run at once. They reach the backend in the order submitted, as
+    /// they would.
+    pub fn flush(&mut self) {
+        for (t, call) in std::mem::take(&mut self.batch) {
+            self.send(Cmd::Submit(t, Box::new(call)));
+        }
+    }
+
     fn send(&self, c: Cmd) -> bool {
         self.cmds.as_ref().is_some_and(|tx| tx.send(c).is_ok())
     }
@@ -157,9 +167,7 @@ impl Provider for Timed {
 
     fn next_completed(&mut self) -> (Ticket, Result<Reply, CallError>) {
         assert!(!self.live.is_empty(), "internal: no call in flight");
-        for (t, call) in std::mem::take(&mut self.batch) {
-            self.send(Cmd::Submit(t, Box::new(call)));
-        }
+        self.flush();
         loop {
             if self.asked == 0 && self.send(Cmd::Next) {
                 self.asked += 1;

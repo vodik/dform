@@ -174,7 +174,11 @@ fn serve(conn: TcpStream, objects: &MemoryStore, seen: &Seen, lax: bool) {
             head.push_str(&format!("ETag: {e}\r\n"));
         }
         head.push_str("\r\n");
-        if out.write_all(head.as_bytes()).is_err() || out.write_all(&answer.body).is_err() {
+        // One write: a head and a body written apart wait on the
+        // client's delayed ACK (Nagle), 40ms an answer.
+        let mut bytes = head.into_bytes();
+        bytes.extend_from_slice(&answer.body);
+        if out.write_all(&bytes).is_err() {
             return;
         }
     }
