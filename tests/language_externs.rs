@@ -55,7 +55,7 @@ fn externs_answer_on_demand() {
     let s = scratch();
     let r = s.run(&["plan", "p.df"]).success();
     for line in [
-        "json = { panels: [1, 2], title: \"pngu\" }",
+        "json = dash.json  (31 B)",
         "note = \"hello\"",
         "password = \"pw-first\"",
         "token = \"tk-first\"",

@@ -53,10 +53,7 @@ tick 1  8 changes
       project_name = "renfry-stg"               stacks/pngu.df:72
       subnetwork_id = gke_subnet
   + google.monitoring_dashboard pngu            stacks/pngu.df:206
-      dashboard_json = {
-        displayName: "pngu",
-        note: "stubbed; see terraform/modules/monitoring/dashboard-pngu.json",
-      }
+      dashboard_json = files/dashboard-pngu.json  (93 B)
       project = "renfry-stg"                    stacks/pngu.df:71
   + google.compute_address static-ip-pngu-grpc  stacks/pngu.df:172
       address_type = "INTERNAL"                 stacks/pngu.df:78

@@ -182,7 +182,9 @@ fn a_large_documents_leaves_are_explained_in_linear_time() {
         "use k8s\nresource k8s.config_map \"${d.metadata.name}\" = d where d in yaml(\"cms.yml\")\n",
     );
     let t = Instant::now();
-    let r = s.run(&["plan", "main.df"]).success();
+    // `-v`: the documents' leaves, where the default says their rows
+    // (R-131).
+    let r = s.run(&["plan", "-v", "main.df"]).success();
     let took = t.elapsed();
     assert!(
         r.stdout

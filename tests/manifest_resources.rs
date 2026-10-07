@@ -74,6 +74,51 @@ fn a_stream_of_documents_is_their_list() {
     assert!(r.stdout.contains("crds.yml:14"), "{}", r.stdout);
 }
 
+/// A CustomResourceDefinition made of a stream's document says the row it
+/// is, the file and the line its document starts on, and its size, not
+/// its content (R-131); `-v` lays out the content; `--json` and the plan
+/// file keep every leaf.
+#[test]
+fn a_resource_made_of_a_document_says_its_row() {
+    let s = scratch("manifest-rows");
+    let versions = "  scope: Namespaced\n  versions:\n    - name: v1alpha1\n";
+    s.write(
+        "crds.yml",
+        &STREAM.replace("  scope: Namespaced\n", versions),
+    );
+    s.write(
+        "p.df",
+        "\nuse k8s\n\
+         resource k8s.custom_resource_definition \"${d.metadata.name}\" = d \
+         where d in yaml(\"crds.yml\")\n",
+    );
+    let r = s.run(&["plan", "p.df"]).success();
+    assert!(
+        r.stdout.contains(
+            "  + k8s.custom_resource_definition \"middlewares.traefik.io\"  p.df:3\n      \
+             = crds.yml:2  (256 B)\n  \
+             + k8s.custom_resource_definition \"tlsoptions.traefik.io\"  p.df:3\n      \
+             = crds.yml:16  (253 B)\n"
+        ),
+        "{}",
+        r.stdout
+    );
+    let v = s.run(&["plan", "-v", "p.df"]).success();
+    assert!(
+        v.stdout.contains(
+            "      kind = \"CustomResourceDefinition\"\n      \
+             metadata.name = \"tlsoptions.traefik.io\"\n      spec = {\n        \
+             group: \"traefik.io\",\n        names: { kind: \"TLSOption\", plural: \"tlsoptions\" },\n"
+        ),
+        "{}",
+        v.stdout
+    );
+    let j = s.run(&["plan", "--json", "p.df"]).success();
+    assert!(j.stdout.contains("\"spec.names.plural\""), "{}", j.stdout);
+    s.run(&["plan", "--out", "plan.json", "p.df"]).success();
+    assert!(s.read("plan.json").contains("tlsoptions"));
+}
+
 /// The stream read from a repository at a ref, as Traefik's tag holds it.
 #[test]
 fn a_stream_read_from_git_is_its_list() {
@@ -125,14 +170,28 @@ fn a_resource_per_document_of_a_manifest() {
          set r.metadata.labels.owner = \"ops\" @default where r in k8s\n\
          set c.data.size = \"large\" @override where c in k8s.config_map\n",
     );
+    // A document the program modifies (R-131): its row, then the leaves
+    // other writes made.
     let r = s.run(&["plan", "p.df"]).success();
     for want in [
-        "  + k8s.config_map \"flags.v2\"  p.df:3\n      data.beta = \"on\"\n      \
+        "  + k8s.config_map \"flags.v2\"  p.df:3\n      = cms.yml:8  (72 B)\n      \
+         data.size = \"large\"      p.df:5\n      \
+         metadata.labels.owner = \"ops\"\n",
+        "  + k8s.config_map settings    p.df:3\n      = cms.yml:1  (89 B)\n      \
+         data.size = \"large\"      p.df:5\n",
+    ] {
+        assert!(r.stdout.contains(want), "{want}\n{}", r.stdout);
+    }
+    // `-v`: the document folded, as the source wrote it.
+    let r = s.run(&["plan", "-v", "p.df"]).success();
+    for want in [
+        "  + k8s.config_map \"flags.v2\"  p.df:3  with d = cms.yml:8  (72 B)\n      \
+         data.beta = \"on\"\n      \
          data.size = \"large\"      p.df:5\n      \
          metadata = { name: \"flags.v2\", namespace: \"apps\" }\n      \
          metadata.labels.owner = \"ops\"\n",
-        "  + k8s.config_map settings    p.df:3\n      data.mode = \"fast\"\n      \
-         data.size = \"large\"      p.df:5\n",
+        "  + k8s.config_map settings    p.df:3  with d = cms.yml:1  (89 B)\n      \
+         data.mode = \"fast\"\n      data.size = \"large\"      p.df:5\n",
     ] {
         assert!(r.stdout.contains(want), "{want}\n{}", r.stdout);
     }

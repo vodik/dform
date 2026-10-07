@@ -200,7 +200,7 @@ resource k8s.traefik.middleware large_upload {
     let r = Run::from(out).success();
     let (_, later) = r.stdout.split_once("\nlater").unwrap();
     assert!(
-        later.contains("        group: \"traefik.io\",")
+        later.contains("      = crds.yml:1  (285 B)\n")
             && later.contains(
                 "  waits on  k8s.custom_resource_definition \"middlewares.traefik.io\"\n  \
                  + k8s.traefik.middleware large_upload"

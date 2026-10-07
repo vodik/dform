@@ -1012,8 +1012,28 @@ made; the plan itself says what it is.
   adds elements to the list too, when each writer's elements are said by
   position (`statements[1] = { .. }  baseline.df:15`). Only a create
   folds: an update says the leaves that change. `-vv` says every leaf on
-  its own line, with its chain. The full address, `T["A"]`, is
-  the plan file's, `--json`'s and state's; `why`, `query` and `why-not`
+  its own line, with its chain.
+  A value a loader read says the row it is, not its content (R-131): a
+  resource whose body is a document (`resource T "${d.metadata.name}" =
+  d where d in yaml("vendor/crds.yml")`), and an attribute whose one
+  contribution is a document's value (`dashboard_json =
+  json("files/dash.json")`, `data = t.data` of a `t in yaml(..)`), print
+  the file, the line its document starts on in a `---` stream, the steps
+  into it when the value is part of one (`teams.yml .teams[2]`), and the
+  value's size as JSON. A body's row is the resource's, `= ROW`; a leaf
+  another write made inside it (a `set`, a policy) is its own line after
+  it, as above:
+
+  ```
+  + k8s.custom_resource_definition "middlewares.traefik.io"  traefik.df:89
+      = vendor/traefik-crds-v3.7.14.yml:412  (24.0 KB)
+  ```
+
+  `-v` lays the value out as R-124 folds it, and says a variable bound
+  to a document by its row (`with d = vendor/crds.yml:412  (24.0 KB)`, as
+  `why` does); `-vv` says its leaves; an update says the leaves that
+  change; `--json` and the plan file keep every leaf. The full address,
+  `T["A"]`, is the plan file's, `--json`'s and state's; `why`, `query` and `why-not`
   take it or the printed one (`why 'ovh.ssh_key k3s.admin'`, or its path
   alone, `why k3s.admin`, `why k3s.server.public_ip`).
 - `tick 1  K changes`: what this apply makes first. A change

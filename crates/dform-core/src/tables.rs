@@ -170,6 +170,19 @@ pub fn at(a: &Atom) -> Option<String> {
         .map(str::to_string)
 }
 
+/// The line each document of a YAML stream a loader read starts on, by
+/// how its rows name the file (`vendor/crds.yml`): the plan says a
+/// document value by its row, `vendor/crds.yml:412` (R-131).
+static STARTS: std::sync::Mutex<BTreeMap<String, Vec<usize>>> =
+    std::sync::Mutex::new(BTreeMap::new());
+
+/// The line document `i` of the `n` of the stream read at `at` starts
+/// on; `None` when no stream of `n` documents was read there.
+pub fn document_line(at: &str, n: usize, i: usize) -> Option<usize> {
+    let starts = STARTS.lock().ok()?;
+    starts.get(at).filter(|s| s.len() == n)?.get(i).copied()
+}
+
 /// The sources a run's tables read, for the controller (`sources`).
 #[derive(Default)]
 pub struct Tables {
@@ -266,6 +279,13 @@ impl Tables {
         // A loader call: the whole document, one row.
         if name == DOCUMENT || name.starts_with("document.") {
             let doc = document_of(format, &text).with_context(|| shown.clone())?;
+            if format == "yaml"
+                && text.contains("---")
+                && let Ok(Stream::Many(_, Some(starts))) = yaml_stream(&text)
+                && let Ok(mut all) = STARTS.lock()
+            {
+                all.insert(shown.clone(), starts);
+            }
             let outs = vec![Value::Str(shown.clone()), doc];
             return Ok(vec![externs::row(f, inputs, outs)]);
         }

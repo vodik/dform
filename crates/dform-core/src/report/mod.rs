@@ -566,6 +566,10 @@ pub struct Line {
     /// A fold (R-124): the value its leaves make, which one contribution
     /// wrote, printed in the formatter's layout.
     pub value: Option<crate::fmt::value::Tree>,
+    /// A document value (R-131): the row a loader read it from and its
+    /// size, `vendor/crds.yml:412  (24.0 KB)`, said in place of the value;
+    /// at the empty path, a value body's (the resource's whole body).
+    pub row: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -1376,6 +1380,7 @@ fn deformation(a: &Action, schema: &Schema, r: &Redactor, refs: &Refs) -> Deform
         site: None,
         chain: Vec::new(),
         value: None,
+        row: None,
     };
     let by_element = matches!(
         a.kind,
@@ -1444,6 +1449,7 @@ fn deformation(a: &Action, schema: &Schema, r: &Redactor, refs: &Refs) -> Deform
             site: None,
             chain: Vec::new(),
             value: None,
+            row: None,
         });
     }
     Deformation {
@@ -2911,32 +2917,87 @@ fn folded(
         .iter()
         .map(|l| crate::fmt::value::Tree::Leaf(whole(&l.after, why)))
         .collect();
-    fold::fold(&paths, &writers)
-        .into_iter()
-        .map(|g| {
-            let first = lines[g.leaves[0]];
-            match (g.leaves.as_slice(), writers[g.leaves[0]]) {
-                ([i], None) if defaults.contains(&schema_path(&paths[*i])) => Line {
-                    site: Some(Site {
-                        statement: "schema default".into(),
-                        ..Site::default()
-                    }),
-                    ..first.clone()
-                },
-                ([_], _) => first.clone(),
-                (_, w) => Line {
-                    op: Op::Leaf,
-                    path: g.path.clone(),
-                    before: Shown::Absent,
-                    after: Shown::Absent,
-                    leaves: Vec::new(),
-                    site: w.and_then(|w| p.contribution_site(rules, w, &g.path)),
-                    chain: Vec::new(),
-                    value: Some(fold::assemble(&g, &paths, &values)),
-                },
-            }
-        })
-        .collect()
+    let out = fold::fold(&paths, &writers).into_iter().map(|g| {
+        let w = writers[g.leaves[0]];
+        let first = lines[g.leaves[0]];
+        let line = match (g.leaves.as_slice(), w) {
+            ([i], None) if defaults.contains(&schema_path(&paths[*i])) => Line {
+                site: Some(Site {
+                    statement: "schema default".into(),
+                    ..Site::default()
+                }),
+                ..first.clone()
+            },
+            ([_], _) => first.clone(),
+            (_, w) => Line {
+                op: Op::Leaf,
+                path: g.path.clone(),
+                before: Shown::Absent,
+                after: Shown::Absent,
+                leaves: Vec::new(),
+                site: w.and_then(|w| p.contribution_site(rules, w, &g.path)),
+                chain: Vec::new(),
+                value: Some(fold::assemble(&g, &paths, &values)),
+                row: None,
+            },
+        };
+        (w, line)
+    });
+    if why != Why::Line {
+        return out.map(|(_, l)| l).collect();
+    }
+    // A document value (R-131): the leaves a contribution read whole from
+    // a loader's document are its row, said once; a value body's first,
+    // as the resource's. A leaf another write made stays its own line.
+    let mut rows: BTreeMap<crate::circuit::NodeId, Option<tree::DocRow>> = BTreeMap::new();
+    let mut said = BTreeSet::new();
+    let mut body = Vec::new();
+    let mut rest = Vec::new();
+    for (w, l) in out {
+        let row = w.and_then(|w| {
+            rows.entry(w)
+                .or_insert_with(|| p.document_row(rules, w))
+                .clone()
+        });
+        let Some(row) = row else {
+            rest.push(l);
+            continue;
+        };
+        let at = match row.body {
+            true => String::new(),
+            false => path(&row.path),
+        };
+        if !said.insert((at.clone(), row.at.clone())) {
+            continue;
+        }
+        let line = Line {
+            op: Op::Leaf,
+            path: at,
+            before: Shown::Absent,
+            after: Shown::Absent,
+            leaves: Vec::new(),
+            site: l.site,
+            chain: Vec::new(),
+            value: None,
+            row: Some(row.text()),
+        };
+        if row.body {
+            body.push(line);
+            continue;
+        }
+        // Before a leaf another write made inside it.
+        let under = |x: &Line| {
+            x.path
+                .strip_prefix(line.path.as_str())
+                .is_some_and(|r| r.starts_with(['.', '[']))
+        };
+        match rest.iter().position(under) {
+            Some(i) => rest.insert(i, line),
+            None => rest.push(line),
+        }
+    }
+    body.extend(rest);
+    body
 }
 
 /// A leaf's value inside a folded one: as the line says it, a string
@@ -3328,6 +3389,15 @@ fn write_line(
                     vec![],
                 );
             }
+        }
+        // A document value (R-131): its row; a value body's, the
+        // resource's (`= vendor/crds.yml:412  (24.0 KB)`).
+        Op::Leaf if let Some(row) = &l.row => {
+            let text = match l.path.is_empty() {
+                true => format!("{indent}= {row}"),
+                false => format!("{indent}{} = {row}", l.path),
+            };
+            push(text.clone(), text, right);
         }
         Op::Leaf if l.value.is_some() => {
             let head = format!("{} = ", l.path);
