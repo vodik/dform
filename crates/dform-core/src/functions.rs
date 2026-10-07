@@ -2330,11 +2330,6 @@ pub mod random {
         });
     }
 
-    /// The current epoch (R-165): 1 until `dform secrets cycle`.
-    pub fn current_epoch() -> u32 {
-        MASTER.with(|m| m.borrow().as_ref().map_or(1, |m| m.epoch))
-    }
-
     /// The secrets derived on this thread since its master was set, each
     /// with its label.
     pub fn derived() -> Vec<(Value, String)> {

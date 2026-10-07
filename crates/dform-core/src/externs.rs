@@ -57,23 +57,7 @@ pub struct Answer {
     pub held: BTreeMap<String, crate::provider::Held>,
 }
 
-impl Answer {
-    /// The labels of the secret nulls in its rows.
-    pub fn secret_labels(&self) -> Vec<String> {
-        self.rows
-            .iter()
-            .flatten()
-            .filter_map(|v| match v {
-                Value::Null {
-                    label,
-                    class: crate::value::NullClass::Secret,
-                    ..
-                } => Some(label.clone()),
-                _ => None,
-            })
-            .collect()
-    }
-}
+impl Answer {}
 
 /// The label of the secret an extern's call answers in column `col` (from
 /// 0): `pred/INPUTS#N`, `N` the column from 1.

@@ -357,28 +357,8 @@ impl State {
         }
     }
 
-    pub fn deposed_for_provider<'a>(
-        &'a self,
-        provider: &'a str,
-    ) -> impl Iterator<Item = (Address, &'a StateEntry)> + 'a {
-        self.deposed
-            .iter()
-            .filter(move |(_, e)| e.provider == provider)
-            .filter_map(|(k, e)| parse_key(k).map(|a| (a, e)))
-    }
-
     pub fn remove(&mut self, addr: &Address) {
         self.resources.remove(&key(addr));
-    }
-
-    pub fn entries_for_provider<'a>(
-        &'a self,
-        provider: &'a str,
-    ) -> impl Iterator<Item = (Address, &'a StateEntry)> + 'a {
-        self.resources
-            .iter()
-            .filter(move |(_, e)| e.provider == provider)
-            .filter_map(|(k, e)| parse_key(k).map(|a| (a, e)))
     }
 }
 
@@ -427,10 +407,6 @@ pub struct StackPaths {
     pub world: PathBuf,
     /// Discovery facts, shared by every stack: `<root>/inventory.json`.
     pub inventory: PathBuf,
-}
-
-pub fn stack_paths(root: &Path, stack: &str) -> StackPaths {
-    backend_paths(root, &root.join(stack))
 }
 
 /// The directory of a `local(DIR)` backend (a stack's, or a handover's):

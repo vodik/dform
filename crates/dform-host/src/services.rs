@@ -59,12 +59,6 @@ impl Services {
         self
     }
 
-    /// The same, with git's mirrors under `dir` (tests).
-    pub fn with_git_cache(mut self, dir: std::path::PathBuf) -> Services {
-        self.git = git::Git::at(dir);
-        self
-    }
-
     pub fn grants(&self) -> &Grants {
         &self.grants
     }

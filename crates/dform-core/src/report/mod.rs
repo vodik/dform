@@ -589,8 +589,6 @@ pub enum Paint {
     Warn,
     /// Addresses, section headers, witness names: bold.
     Bold,
-    /// `apply: complete`: bold green.
-    Done,
     /// The site column, `(sensitive)`: dim (R-111).
     Dim,
     /// `because`: cyan.
@@ -616,7 +614,6 @@ impl Style {
             Paint::Sensitive => "2",
             Paint::Warn => "33",
             Paint::Bold => "1",
-            Paint::Done => "1;32",
             Paint::Dim => "2",
             Paint::Because => "36",
             Paint::Held => "35",

@@ -273,12 +273,6 @@ impl Files {
         }
     }
 
-    /// The same, its mirrors under `dir` (tests).
-    pub fn with_git_cache(mut self, dir: PathBuf) -> Files {
-        self.git = Git::at(dir);
-        self
-    }
-
     /// The host keys state knows, read once state is.
     pub fn know(&self, known: &BTreeMap<String, KnownHost>) {
         let mut k = self.known.lock().unwrap_or_else(|e| e.into_inner());

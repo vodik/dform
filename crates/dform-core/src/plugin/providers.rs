@@ -855,17 +855,6 @@ impl Providers {
             && self.reached(typ).is_some()
     }
 
-    /// The providers of started, configured links, their schema loaded.
-    /// The first serves the types no schema declares.
-    pub fn from_links(links: Vec<Link>) -> Result<Providers> {
-        if links.is_empty() {
-            bail!("no providers");
-        }
-        let p = Self::deferred(links);
-        p.load_schema(None)?;
-        Ok(p)
-    }
-
     fn deferred(links: Vec<Link>) -> Providers {
         Providers {
             names: links.iter().map(|l| l.name.clone()).collect(),
@@ -1604,18 +1593,6 @@ impl Providers {
     /// written: a tick waits on what the world has not reached yet (R-81).
     pub fn reread(&self) {
         self.invalidate();
-    }
-
-    /// How long a tick waits on the open null `label` (R-122): the call
-    /// timeout of the provider whose object or extern answers it
-    /// (`[providers.NAME] timeout`). `None` for a built-in extern's
-    /// (`ssh.read`), which no provider of the stack answers.
-    pub fn wait_timeout(&self, label: &str) -> Option<std::time::Duration> {
-        let (typ, _) = crate::value::null_owner(label)?;
-        let l = self.loaded.get()?;
-        let i = (l.owner.get(&typ).or_else(|| l.externs.get(&typ)).copied())
-            .or_else(|| self.reached(&typ))?;
-        Some(self.link(i).ok()?.borrow().policy().timeout)
     }
 
     /// What a resource of `typ` waits on before its provider can plan it
