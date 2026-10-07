@@ -20,12 +20,14 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 /// How `why` prints: a value's chain, or the derivation `tree`, with
-/// `all` its alternatives, in the `core`'s spelling.
+/// `all` its alternatives, in the `core`'s spelling; a long value
+/// elided, or `whole` (`-vv`, R-176).
 #[derive(Debug, Clone, Copy, Default)]
 pub struct As {
     pub tree: bool,
     pub all: bool,
     pub core: bool,
+    pub whole: bool,
 }
 
 /// What `why` reads besides the evaluation: the relations' signatures,
@@ -69,6 +71,50 @@ pub fn why(pattern: &str, how: As, cx: &Context) -> Result<String> {
         out.push_str(&format!("later  waits on  {w}\n"));
     }
     Ok(cx.redact.text(&out))
+}
+
+/// `dform why --json PATTERN` (R-176): one object per fact the pattern
+/// names, `fact` as `why` heads it, `value` whole for a value (an
+/// attribute, a cell; a secret as `query --json` says it), and `text`,
+/// what `why -vv` prints of it; for what the program does not derive,
+/// `why_not`, and for a deny, `text`.
+pub fn why_json(pattern: &str, how: As, cx: &Context) -> Result<serde_json::Value> {
+    let how = As { whole: true, ..how };
+    if deny_message(pattern)?.is_some() {
+        return Ok(serde_json::json!({ "text": why(pattern, how, cx)? }));
+    }
+    let matched = match matches(pattern, &cx.res.facts) {
+        Ok(m) if !m.is_empty() => m,
+        _ => {
+            let text = crate::whynot::why_not(pattern, cx.res, cx.redact)?;
+            return Ok(serde_json::json!({ "why_not": text }));
+        }
+    };
+    let mut out = Vec::new();
+    for m in &matched {
+        let (a, focus) = m;
+        let keys = focus.as_ref().map(tree::Focus::keys).unwrap_or_default();
+        let fact = match head_name(a).filter(|_| a.pred == "attr") {
+            Some(n) => keys.iter().fold(n, |p, k| crate::ir::path_join(&p, k)),
+            None => cx.redact.surface_atom(a),
+        };
+        let mut o = serde_json::json!({ "fact": fact });
+        if a.pred == "attr"
+            && let Some(Term::Val(v)) = a.args.get(3)
+        {
+            let v = keys.iter().try_fold(v, |v, k| match v {
+                Value::Obj(m) => m.get(k),
+                _ => None,
+            });
+            if let Some(v) = v {
+                o["value"] = cx.redact.json(v);
+            }
+        }
+        let text = derivations(std::slice::from_ref(m), how, cx)?;
+        o["text"] = serde_json::Value::String(cx.redact.text(&text));
+        out.push(o);
+    }
+    Ok(serde_json::Value::Array(out))
 }
 
 /// The facts `pattern` names: an input's or a `let`'s cell by its name,
@@ -122,7 +168,16 @@ fn matches(pattern: &str, facts: &BTreeSet<Atom>) -> Result<Vec<Matched>> {
 
 /// Each fact of `matched` as `why` prints it: its chain, else its
 /// derivation tree, a relation's facts after its signature.
-fn derivations(matched: &[Matched], As { tree, all, core }: As, cx: &Context) -> Result<String> {
+fn derivations(
+    matched: &[Matched],
+    As {
+        tree,
+        all,
+        core,
+        whole,
+    }: As,
+    cx: &Context,
+) -> Result<String> {
     let res = cx.res;
     let printer = tree::Printer {
         circuit: &res.circuit,
@@ -157,7 +212,15 @@ fn derivations(matched: &[Matched], As { tree, all, core }: As, cx: &Context) ->
             out.push_str(&printer.tree(id, focus.as_ref()));
         } else if let (false, Some(text)) = (
             tree,
-            chain(&printer, res, a, focus.as_ref(), cx.stack_keys, cx.top),
+            chain(
+                &printer,
+                res,
+                a,
+                focus.as_ref(),
+                cx.stack_keys,
+                cx.top,
+                whole,
+            ),
         ) {
             out.push_str(&text);
         } else {
@@ -183,7 +246,7 @@ pub fn fact_text(
     let crate::circuit::View::Fact { fact, .. } = res.circuit.view(id) else {
         return printer.source_tree(&res.rules, id, None);
     };
-    chain(&printer, res, &fact.atom(), None, stack_keys, None)
+    chain(&printer, res, &fact.atom(), None, stack_keys, None, false)
         .unwrap_or_else(|| printer.source_tree(&res.rules, id, None))
 }
 
@@ -278,6 +341,7 @@ pub fn chain(
     focus: Option<&tree::Focus>,
     stack_keys: &BTreeSet<String>,
     top: Option<&Path>,
+    whole: bool,
 ) -> Option<String> {
     let style = report::Style::PLAIN;
     let relative = |at: &str| {
@@ -445,45 +509,11 @@ pub fn chain(
         }
         items
     };
-    let name = |f: &Atom| -> Option<String> {
-        let [
-            Term::Val(Value::Str(t)),
-            Term::Val(Value::Str(n)),
-            Term::Val(Value::Str(p)),
-            ..,
-        ] = f.args.as_slice()
-        else {
-            return None;
-        };
-        Some(match t.as_str() {
-            crate::modules::INPUT | crate::modules::LET | crate::transform::OUTPUT => {
-                let scoped = match n.is_empty() {
-                    true => p.clone(),
-                    false => format!("{n}.{p}"),
-                };
-                format!(
-                    "{} {scoped}",
-                    if t == crate::modules::LET {
-                        "let"
-                    } else {
-                        t.as_str()
-                    }
-                )
-            }
-            _ => report::attribute(
-                &ir::Address {
-                    typ: t.clone(),
-                    name: n.clone(),
-                },
-                p,
-            ),
-        })
-    };
     match a.pred.as_str() {
         "attr" => {
             let keys = focus.map(tree::Focus::keys).unwrap_or_default();
-            let items = leaves(a, &name(a)?, keys);
-            Some(report::chains_text(&items, "", style))
+            let items = leaves(a, &head_name(a)?, keys);
+            Some(report::chains_text(&items, "", style, whole))
         }
         "want" => {
             let [Term::Val(Value::Str(t)), Term::Val(Value::Str(n))] = a.args.as_slice() else {
@@ -516,11 +546,48 @@ pub fn chain(
                     items.extend(leaves(f, path, &[]));
                 }
             }
-            out.push_str(&report::chains_text(&items, "  ", style));
+            out.push_str(&report::chains_text(&items, "  ", style, whole));
             Some(out)
         }
         _ => None,
     }
+}
+
+/// The name `why` heads an attribute fact with: `let agent_init`,
+/// `input nodes`, `T NAME.path`.
+fn head_name(f: &Atom) -> Option<String> {
+    let [
+        Term::Val(Value::Str(t)),
+        Term::Val(Value::Str(n)),
+        Term::Val(Value::Str(p)),
+        ..,
+    ] = f.args.as_slice()
+    else {
+        return None;
+    };
+    Some(match t.as_str() {
+        crate::modules::INPUT | crate::modules::LET | crate::transform::OUTPUT => {
+            let scoped = match n.is_empty() {
+                true => p.clone(),
+                false => format!("{n}.{p}"),
+            };
+            format!(
+                "{} {scoped}",
+                if t == crate::modules::LET {
+                    "let"
+                } else {
+                    t.as_str()
+                }
+            )
+        }
+        _ => report::attribute(
+            &ir::Address {
+                typ: t.clone(),
+                name: n.clone(),
+            },
+            p,
+        ),
+    })
 }
 
 /// `leaf` put into object `v` at `keys`.

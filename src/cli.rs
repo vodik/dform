@@ -394,6 +394,14 @@ enum Run {
         /// head :- body`), core variables, facts as relations.
         #[arg(long)]
         core: bool,
+        /// `-vv`: a long value whole, not elided (a secret stays
+        /// `(sensitive)`); `-v` elides it as the default does.
+        #[arg(short = 'v', long = "verbose", action = clap::ArgAction::Count)]
+        verbose: u8,
+        /// Print one JSON document: each fact `why` names with its value
+        /// whole and what `why -vv` prints of it.
+        #[arg(long)]
+        json: bool,
     },
     /// A result set: query the final fact store, a predicate name (every
     /// fact of it) or body literals with variables, one column per
@@ -717,6 +725,9 @@ enum Cmd {
         tree: bool,
         all: bool,
         core: bool,
+        /// `-vv`: a long value whole (R-176).
+        whole: bool,
+        json: bool,
     },
     Diff {
         since: String,
@@ -1417,12 +1428,16 @@ fn run_cmd(r: Run) -> (Cmd, Option<Target>) {
             tree,
             all,
             core,
+            verbose,
+            json,
         } => (
             Cmd::Why {
                 pattern,
                 tree,
                 all,
                 core,
+                whole: verbose >= 2,
+                json,
             },
             Some(target),
         ),
@@ -2348,6 +2363,8 @@ fn run_with(
                 tree,
                 all,
                 core,
+                whole,
+                json,
             } => {
                 let waits = |t: &str| ev.evaluator.provider_wait(t);
                 let keys = ev
@@ -2370,8 +2387,14 @@ fn run_with(
                     tree: *tree || *all,
                     all: *all,
                     core: *core,
+                    whole: *whole,
                 };
-                print!("{}", crate::why::why(pattern, how, &cx)?);
+                if *json {
+                    let j = crate::why::why_json(pattern, how, &cx)?;
+                    println!("{}", serde_json::to_string_pretty(&j)?);
+                } else {
+                    print!("{}", crate::why::why(pattern, how, &cx)?);
+                }
             }
             Cmd::Explain { addresses } => {
                 let addresses = addresses
@@ -5092,7 +5115,15 @@ fn print_query(
     o: &report::table::Options,
 ) -> Result<()> {
     use report::table::{Cell, Table};
-    let tables: Vec<Table> = match query::parse(pattern)? {
+    // A `let`'s, an input's or an output's cell by its path (R-176),
+    // where no relation is so named (a `let k` is the relation `k` too).
+    let parsed = match query::parse(pattern)? {
+        query::Query::Pred(p) if !facts.iter().any(|a| a.pred == p) => {
+            query::cell(pattern, facts).unwrap_or(query::Query::Pred(p))
+        }
+        q => q,
+    };
+    let tables: Vec<Table> = match parsed {
         query::Query::Pred(pred) => {
             // One table per arity a predicate is used at.
             let mut by: std::collections::BTreeMap<usize, Table> = Default::default();

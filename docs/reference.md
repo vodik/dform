@@ -1996,7 +1996,14 @@ cargo run -- -C examples/demo query 'want(net.vpc, "main.vpc")'    # yes / no
 cargo run -- -C examples/demo query want                                    # every want fact
 cargo run -- -C examples/demo query 'net.vpc["main.vpc"]'          # its attributes: path, value
 cargo run -- -C examples/demo query 'net.vpc["main.vpc"].cidr'     # one attribute's value, laid out
+dform query synapse.agent_init                                     # a cell by its path: value
 ```
+
+A `let`, an input or an output is named by its path as `why` names it
+(R-176): `agent_init`, a used module's `synapse.agent_init`, a leaf of an
+object input `nodes.count`; the result set is its `value`, which
+`--json` carries whole. A name that is also a relation's (the program's
+own `let k` is the relation `k`) lists the relation's facts.
 
 A bare predicate's columns are its `decl`'s fields, a core relation's own
 (`want(type, address)`, `attr(type, address, path, value)`,
@@ -2045,6 +2052,25 @@ cargo run -- -C examples/tour why orders.backup_days tour env=prod
 cargo run -- -C examples/demo why main.vpc.tags.team dform env=prod
 # net.vpc main.vpc.tags.team = "platform"  baseline.df:10
 ```
+
+A long string is elided in its middle, at the default and at `-v`;
+`-vv` prints the value whole (R-176), a string's line breaks as lines,
+as a string that spans lines is written, its site after the closing
+quote, so a rendered document reads as it is:
+
+```bash
+dform why -vv synapse.agent_init
+# let synapse.agent_init = "#cloud-config
+# package_update: true
+# ..
+# "  synapse.df:2
+```
+
+A secret stays `(sensitive)` at every level. `--json` prints one object
+per fact the pattern names: `fact` as the head names it (`let
+synapse.agent_init`), `value` whole for an attribute or a cell (a secret
+as `query --json` spells it), and `text`, what `-vv` prints; what the
+program does not derive is `{"why_not": ..}`, a deny `{"text": ..}`.
 
 `--tree` prints the derivation instead, from the provenance circuit
 every evaluation records (proposal E §3, DR-10), in the program's own

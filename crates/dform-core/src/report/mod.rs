@@ -3012,8 +3012,10 @@ pub struct ChainItem {
 
 /// Values and their chains as `why` prints them (R-122): each `head`
 /// (`path = value`) at `indent`, its steps under it, in one layout. A
-/// chain that only says the value (`shown`) again is left out.
-pub fn chains_text(items: &[ChainItem], indent: &str, style: Style) -> String {
+/// chain that only says the value (`shown`) again is left out. A long
+/// string in a head is elided, or with `whole` (`why -vv`, R-176) printed
+/// whole, a line break in it as one (`whole_lines`).
+pub fn chains_text(items: &[ChainItem], indent: &str, style: Style, whole: bool) -> String {
     let mut rows = Vec::new();
     for it in items {
         // A literal: its place on its (first) line.
@@ -3040,15 +3042,54 @@ pub fn chains_text(items: &[ChainItem], indent: &str, style: Style) -> String {
             }
             continue;
         }
-        let row = Row::plain(format!("{indent}{}", elide_literals(&it.head)));
-        if let Some(at) = literal {
-            rows.push(row.with(vec![at]));
-            continue;
+        let (head, more) = match whole {
+            true => {
+                let mut lines = whole_lines(&it.head).into_iter();
+                (lines.next().unwrap_or_default(), lines.collect())
+            }
+            false => (elide_literals(&it.head), Vec::new()),
+        };
+        // A string's further lines are its text, not indented; the site
+        // follows its last.
+        let mut lines = vec![Row::plain(format!("{indent}{head}"))];
+        lines.extend(more.into_iter().map(Row::plain));
+        if let Some(at) = &literal
+            && let Some(last) = lines.pop()
+        {
+            lines.push(last.with(vec![at.clone()]));
         }
-        rows.push(row);
-        rows.extend(chain_rows(&it.chain, &format!("{indent}  ")));
+        rows.extend(lines);
+        if literal.is_none() {
+            rows.extend(chain_rows(&it.chain, &format!("{indent}  ")));
+        }
     }
     layout(&rows, style)
+}
+
+/// `e` whole, each `\n` in a string literal a line break (R-61's form of
+/// a string that spans lines): its lines.
+fn whole_lines(e: &str) -> Vec<String> {
+    let mut out = String::new();
+    let mut quoted = false;
+    let mut cs = e.chars();
+    while let Some(c) = cs.next() {
+        match c {
+            '"' => {
+                quoted = !quoted;
+                out.push(c);
+            }
+            '\\' if quoted => match cs.next() {
+                Some('n') => out.push('\n'),
+                Some(x) => {
+                    out.push(c);
+                    out.push(x);
+                }
+                None => out.push(c),
+            },
+            _ => out.push(c),
+        }
+    }
+    out.split('\n').map(str::to_string).collect()
 }
 
 /// `e` with each string literal past [`LONG`] characters elided.

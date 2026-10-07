@@ -119,6 +119,73 @@ pub fn printed(src: &str, facts: &BTreeSet<Atom>) -> Vec<(crate::ir::Address, Op
     Vec::new()
 }
 
+/// A cell by its path, as `why` takes it (R-176): a `let`'s, an input's
+/// or a copy's output, the program's own (`agent_init`) or a used
+/// module's or a copy's (`synapse.agent_init`), its scope the path's
+/// first segments; a path past a cell's name reads a field of its value
+/// (`nodes.count`). `None` when `src` names no cell `facts` hold.
+pub fn cell(src: &str, facts: &BTreeSet<Atom>) -> Option<Query> {
+    let src = src.trim();
+    if src.is_empty()
+        || !src
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.')
+    {
+        return None;
+    }
+    let segs: Vec<&str> = src.split('.').collect();
+    let s = |x: &str| Term::Val(Value::Str(x.to_string()));
+    let v = |x: &str| Term::Var(x.to_string());
+    let kinds = [
+        crate::modules::LET,
+        crate::modules::INPUT,
+        crate::transform::OUTPUT,
+    ];
+    let held = |kind: &str, scope: &str, name: &str| {
+        facts.iter().any(|a| {
+            a.pred == "attr" && a.args.len() == 4 && a.args[..3] == [s(kind), s(scope), s(name)]
+        })
+    };
+    // The whole path a cell's first, the program's own before a scope's
+    // (as `why` reads it), then the longest cell with a field path after.
+    for end in (1..=segs.len()).rev() {
+        for at in 0..end {
+            let (scope, name, field) = (
+                segs[..at].join("."),
+                segs[at..end].join("."),
+                segs[end..].join("."),
+            );
+            let Some(kind) = kinds.into_iter().find(|k| held(k, &scope, &name)) else {
+                continue;
+            };
+            let read = |value: Term| Atom {
+                pred: "attr".into(),
+                args: vec![s(kind), s(&scope), s(&name), value],
+                record: None,
+                span: Default::default(),
+            };
+            let body = match field.is_empty() {
+                true => vec![Lit::Pos(read(v("value")))],
+                false => vec![
+                    Lit::Pos(read(v("__Cell"))),
+                    Lit::Eq(
+                        v("value"),
+                        Term::Func {
+                            name: "__path".into(),
+                            args: vec![v("__Cell"), s(&field)],
+                        },
+                    ),
+                ],
+            };
+            return Some(Query::Body {
+                body,
+                vars: vec!["value".into()],
+            });
+        }
+    }
+    None
+}
+
 /// Address `addr`, or its attribute `path`, as a pattern: for `why` the
 /// resource is `want(T, A)`, for `query` every `attr(T, A, path, value)`.
 pub fn pattern(addr: &crate::ir::Address, path: Option<String>, why: bool) -> Query {
