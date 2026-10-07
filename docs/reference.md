@@ -654,6 +654,15 @@ type the program declares itself with a `type` block is the mock's to
 play. A mock playing several providers on one link (`use google`
 and `use k8s` on mock schemas) takes no settings from any of them.
 
+`use P as A` starts the provider P again under the name A (R-115):
+its own process (a mock schema under a second name is a mock link of
+its own, its world `remote.A.json`), configured by its own block, its
+types written `A.T` and renamed to P's at the link, so the provider
+never learns the name. `use ovh as ca { endpoint = "ovh-ca" }` beside
+`use ovh as eu { endpoint = "ovh-eu" }` deploys one program to two
+regions or accounts; state keys and the plan carry `ca.instance`. See
+grammar.md "Providers".
+
 A provider's `use` block's settings other than `source` configure the provider,
 and read like any rule reads: inputs, value names, tables and `env.var`.
 A keyed deployment configures its providers by its key:

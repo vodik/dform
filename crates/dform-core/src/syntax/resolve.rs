@@ -290,6 +290,10 @@ struct Decls {
     /// The `resource C n` statements whose type is a component (R-113):
     /// copies, by file and offset.
     copies: BTreeSet<(u32, u32)>,
+    /// Each provider a `use P as A` renames, and its names (R-115):
+    /// `ovh` -> `ca`, `eu`. `x in ovh.instance` ranges over `ca.instance`
+    /// and `eu.instance` too.
+    renamed: BTreeMap<String, BTreeSet<String>>,
 }
 
 const PROGRAM: usize = 0;
@@ -453,6 +457,21 @@ pub fn provider_use(n: &SyntaxNode, units: &[Unit], deployed: &[Deployed]) -> Op
         && !deployed.iter().any(|d| d.path == written)
         && !local_component())
     .then_some(written)
+}
+
+/// Each provider a `use P as A` of the program renames, and its names
+/// (R-115).
+fn renamed(units: &[Unit], deployed: &[Deployed]) -> BTreeMap<String, BTreeSet<String>> {
+    let mut out: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for u in units {
+        for n in u.root.descendants().filter(|n| n.kind() == USE) {
+            let (of, name) = use_parts(&n);
+            if of != name && provider_use(&n, units, deployed).is_some() {
+                out.entry(of).or_default().insert(name);
+            }
+        }
+    }
+    out
 }
 
 /// Whether `name` is the namespace of a built-in schema's types: `aws`
@@ -928,7 +947,21 @@ impl<'u> Lowerer<'u> {
             .filter(|n| !OPEN_NAMESPACES.contains(&n.as_str()))
             .collect();
         l.collect_aliases();
+        l.decls.renamed = renamed(units, deployed);
         l
+    }
+
+    /// The types `x in t` ranges over: `t`, and, `t` a provider's type
+    /// (`ovh.instance`), the same type under each name a `use .. as`
+    /// gives the provider (`ca.instance`, R-115).
+    fn covering(&self, t: &str) -> Vec<String> {
+        let mut out = vec![t.to_string()];
+        if let Some((ns, rest)) = t.split_once('.') {
+            for a in self.decls.renamed.get(ns).into_iter().flatten() {
+                out.push(format!("{a}.{rest}"));
+            }
+        }
+        out
     }
 
     /// Each scope's instances, their components' paths resolved, and
@@ -1986,7 +2019,13 @@ impl<'u> Lowerer<'u> {
                 rc.types.insert(lhs.head, var(&tv));
             } else if let Some(rhs) = ts.next().and_then(|t| Chain::of(&t)) {
                 if let Some(t) = self.chain_type(&rc, &rhs) {
-                    rc.types.insert(lhs.head, str_term(&t));
+                    // A type under several names (R-115): which one is
+                    // the resource's.
+                    let typ = match self.covering(&t).len() {
+                        1 => str_term(&t),
+                        _ => var(&fresh(&mut rc, "Type")),
+                    };
+                    rc.types.insert(lhs.head, typ);
                 } else if let Some(path) = self.component_of(&rc, &rhs) {
                     rc.instances.insert(lhs.head, path);
                 } else if let Some(ns) = self.namespace_of(&rc, &rhs) {
@@ -2750,6 +2789,7 @@ impl<'u> Lowerer<'u> {
         (self.file, self.offset) = (saved_file, saved_offset);
         Some(Config {
             name: st.name.clone(),
+            of: None,
             config,
             span: st.span,
         })
@@ -3480,15 +3520,6 @@ impl<'u> Lowerer<'u> {
         let (written, name) = use_parts(n);
         self.redeclared(n, &name)?;
         if provider_use(n, self.units, &self.decls.deployed).is_some() {
-            if name != written {
-                return self.error(
-                    span,
-                    format!(
-                        "`use {written} as {name}`: a provider's namespace is not renamed yet; \
-                         write `use {written}`"
-                    ),
-                );
-            }
             return self.provider(n, scope, outer);
         }
         if let Some(rest) = written.strip_prefix("std.") {
@@ -5168,7 +5199,7 @@ impl<'u> Lowerer<'u> {
                 )));
             }
         }
-        let typ = if any_type {
+        let mut typ = if any_type {
             let lhs = Chain::of(lhs_node).map(|c| c.head).unwrap_or_default();
             Some(match rc.types.get(&lhs) {
                 Some(t) => t.clone(),
@@ -5182,6 +5213,33 @@ impl<'u> Lowerer<'u> {
         let world = rhs
             .as_ref()
             .filter(|c| c.head == "world" && !c.ops.is_empty());
+        // `x in ovh.instance` with the provider also used as `ca` (R-115):
+        // a resource of `ovh.instance` or `ca.instance`, `__provider_type(
+        // "ovh.instance", Type), want(Type, x)`.
+        let mut renamed = None;
+        if let Some(Term::Val(Value::Str(t))) = typ.clone()
+            && world.is_none()
+            && self.covering(&t).len() > 1
+        {
+            let lhs = Chain::of(lhs_node).filter(Chain::is_bare).map(|c| c.head);
+            let tv = match lhs.as_ref().and_then(|h| rc.types.get(h)) {
+                Some(v @ Term::Var(_)) => v.clone(),
+                _ => var(&fresh(rc, "Type")),
+            };
+            for each in self.covering(&t) {
+                self.helpers.push(Stmt::Fact(atom_at(
+                    membership::PROVIDER_TYPE,
+                    vec![str_term(&t), str_term(&each)],
+                    span,
+                )));
+            }
+            renamed = Some(Lit::Pos(atom_at(
+                membership::PROVIDER_TYPE,
+                vec![str_term(&t), tv.clone()],
+                span,
+            )));
+            typ = Some(tv);
+        }
         if (typ.is_some() || world.is_some()) && lhs_node.kind() == TUPLE {
             return self.error(
                 span,
@@ -5225,6 +5283,9 @@ impl<'u> Lowerer<'u> {
                 && c.is_bare()
                 && Self::ref_bound(n, &c.head)
             {
+                if let Some(test) = renamed {
+                    return Ok(test);
+                }
                 let have = rc.types.get(&c.head).cloned().unwrap_or_else(|| t.clone());
                 return Ok(Lit::Eq(have, t.clone()));
             }
@@ -5237,6 +5298,7 @@ impl<'u> Lowerer<'u> {
                 )));
             }
             self.address_key(&lhs, span)?;
+            out.extend(renamed);
             return Ok(Lit::Pos(atom_at("want", vec![typ.unwrap(), lhs], span)));
         }
         let rhs = ts.get(1).ok_or(Skip)?;

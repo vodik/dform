@@ -69,11 +69,11 @@ pub struct Config {
     /// may mark what it creates with it, to find an object whose Create
     /// answer was lost (`provider.created`).
     pub stack: String,
-    /// The program's providers' `use NAME { .. }`: each one's spec (as
-    /// `specs` names it) -> NAME, so `provider_config(NAME, ..)` (what a
-    /// block's settings lower to) finds its link by the block's name as
-    /// well as by the provider's own.
-    pub blocks: BTreeMap<String, String>,
+    /// The program's providers' `use`s, by the name each binds, so
+    /// `provider_config(NAME, ..)` (what a block's settings lower to)
+    /// finds its link by the block's name as well as by the provider's
+    /// own; a name a `use .. as` gives is a link of its own (R-115).
+    pub blocks: Vec<Block>,
     /// The secrets of other stacks the run reads (their outputs) that a
     /// provider holds, by the label of the run's null: an Apply document
     /// carries each as its label and where it is held (`provider::Held`),
@@ -95,6 +95,24 @@ pub struct Config {
     /// `credentials`, R-13b), by its spec; a provider not named has none.
     /// Passed to the launcher as each starts ([`Launch::plugin`]).
     pub grants: BTreeMap<String, super::host::Grants>,
+}
+
+/// A provider's `use`: the name it binds, the provider it starts and that
+/// provider's spec (as `specs` names it). `use ovh as ca` is `{ name: ca,
+/// provider: ovh }`, a link of its own that serves `ovh`'s types as `ca.*`
+/// (R-115); `use ovh` is `{ name: ovh, provider: ovh }`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Block {
+    pub spec: String,
+    pub name: String,
+    pub provider: String,
+}
+
+impl Block {
+    /// Whether the `use` renames the provider: its link renames each call.
+    fn renames(&self) -> bool {
+        self.name != self.provider
+    }
 }
 
 /// How a run reaches its providers: a backend (`plugin::backend`). The
@@ -161,6 +179,10 @@ pub struct Providers {
     notes: RefCell<Vec<String>>,
     /// Each link's Configure document, as the engine first sent it.
     bases: Vec<Json>,
+    /// Each link's provider and the namespace of its types, when the
+    /// program names it: what shares a Schema answer between the names a
+    /// provider has (R-115).
+    shares: Vec<Option<Share>>,
     /// The links whose settings the program gives and has not yet (a
     /// null, or not evaluated): they serve no state entry.
     awaiting: RefCell<BTreeSet<usize>>,
@@ -198,6 +220,24 @@ pub enum ProviderWait {
     Settings(String),
     /// The provider's schema of the type: a kind its cluster serves.
     Schema(String),
+}
+
+/// What one link starts ([`Providers::start_deferred`]).
+struct Start {
+    spec: String,
+    /// The names the program's `use`s give it.
+    names: Vec<String>,
+    /// The `use .. as` it serves under its name (R-115).
+    rename: Option<Block>,
+}
+
+/// A link's schema is its provider's, the types in `namespace`: one
+/// Schema answer of a spec serves each link of it ([`Providers::load_schema`]).
+struct Share {
+    spec: String,
+    namespace: String,
+    /// The provider a `use .. as` renames (R-115).
+    of: Option<String>,
 }
 
 /// What the providers' Schema calls answered.
@@ -323,13 +363,44 @@ impl Providers {
         } else {
             specs.to_vec()
         };
-        let (mut mocks, mut plugins) = (Vec::new(), Vec::new());
+        // What each link starts: a spec, the names its `use`s bind, and
+        // how it renames the provider's types (`use ovh as ca`: a link of
+        // its own, R-115). Every mock schema no `use` renames is played
+        // by one mock link, the first.
+        let mut starts: Vec<Start> = Vec::new();
         for s in &specs {
-            match source::resolve(s) {
-                Source::Mock(m) => mocks.push(m),
-                Source::Plugin(p) => plugins.push(p),
+            let named: Vec<&Block> = cfg.blocks.iter().filter(|b| b.spec == *s).collect();
+            let plain: Vec<String> = named
+                .iter()
+                .filter(|b| !b.renames())
+                .map(|b| b.name.clone())
+                .collect();
+            if !plain.is_empty() || named.iter().all(|b| !b.renames()) {
+                starts.push(Start {
+                    spec: s.clone(),
+                    names: plain,
+                    rename: None,
+                });
+            }
+            for b in named.into_iter().filter(|b| b.renames()) {
+                starts.push(Start {
+                    spec: s.clone(),
+                    names: vec![b.name.clone()],
+                    rename: Some(b.clone()),
+                });
             }
         }
+        let shared = |st: &Start| {
+            st.rename.is_none() && matches!(source::resolve(&st.spec), Source::Mock(_))
+        };
+        let mocks: Vec<String> = starts
+            .iter()
+            .filter(|st| shared(st))
+            .filter_map(|st| match source::resolve(&st.spec) {
+                Source::Mock(m) => Some(m),
+                Source::Plugin(_) => None,
+            })
+            .collect();
         let path = |p: &PathBuf| json!(p.display().to_string());
         let base = json!({
             "world": path(&cfg.world),
@@ -354,20 +425,22 @@ impl Providers {
         let (mut links, mut bases, mut awaiting) = (Vec::new(), Vec::new(), BTreeSet::new());
         let mut accounts = BTreeMap::new();
         // Each block's link: the mock is the first when there is one, the
-        // plugins follow in order.
+        // others follow in order.
         let (mut blocks, mut mock_blocks) = (BTreeMap::new(), BTreeMap::new());
-        let block = |s: &String| cfg.blocks.get(s).cloned();
+        let mut shares = Vec::new();
         let mut next = usize::from(!mocks.is_empty());
-        for s in &specs {
-            match source::resolve(s) {
-                Source::Mock(m) => {
-                    blocks.extend(block(s).map(|b| (b, 0)));
-                    mock_blocks.extend(block(s).map(|b| (b, m)));
-                }
-                Source::Plugin(_) => {
-                    blocks.extend(block(s).map(|b| (b, next)));
-                    next += 1;
-                }
+        let mut own = Vec::new();
+        for st in &starts {
+            if shared(st) {
+                let Source::Mock(m) = source::resolve(&st.spec) else {
+                    unreachable!("a mock");
+                };
+                blocks.extend(st.names.iter().map(|b| (b.clone(), 0)));
+                mock_blocks.extend(st.names.iter().map(|b| (b.clone(), m.clone())));
+            } else {
+                blocks.extend(st.names.iter().map(|b| (b.clone(), next)));
+                own.push(st);
+                next += 1;
             }
         }
         let by_block = |i: usize, name: &str| {
@@ -380,10 +453,10 @@ impl Providers {
         if !mocks.is_empty() {
             let mut link =
                 crate::timing::time(|| "provider mock started".into(), || launch.mock())?;
-            if let Some(p) = specs
+            if let Some(p) = starts
                 .iter()
-                .filter(|s| matches!(source::resolve(s), Source::Mock(_)))
-                .find_map(policy_of)
+                .filter(|st| shared(st))
+                .find_map(|st| policy_of(&st.spec))
             {
                 link.set_policy(p);
             }
@@ -403,40 +476,70 @@ impl Providers {
             accounts.extend(configure(&mut link, config.clone())?.map(|a| (0, a)));
             links.push(link);
             bases.push(config);
+            shares.push(None);
         }
-        let plugin_specs: Vec<&String> = specs
-            .iter()
-            .filter(|s| matches!(source::resolve(s), Source::Plugin(_)))
-            .collect();
-        for (p, spec) in plugins.into_iter().zip(plugin_specs) {
-            let mut link = crate::timing::time(
-                || format!("provider {} started (spawn and handshake)", p.display()),
-                || {
-                    let none = super::host::Grants::none_for(&p);
-                    launch.plugin(&p, cfg.grants.get(spec).unwrap_or(&none))
-                },
-            )?;
-            if let Some(policy) = policy_of(spec) {
+        for st in own {
+            let mock = match source::resolve(&st.spec) {
+                Source::Mock(m) => Some(m),
+                Source::Plugin(_) => None,
+            };
+            let shown = match source::resolve(&st.spec) {
+                Source::Plugin(p) => p.display().to_string(),
+                Source::Mock(m) => m,
+            };
+            let mut link = match (&mock, source::resolve(&st.spec)) {
+                (Some(_), _) => {
+                    crate::timing::time(|| "provider mock started".into(), || launch.mock())?
+                }
+                (None, Source::Plugin(p)) => crate::timing::time(
+                    || format!("provider {} started (spawn and handshake)", p.display()),
+                    || {
+                        let none = super::host::Grants::none_for(&p);
+                        launch.plugin(&p, cfg.grants.get(&st.spec).unwrap_or(&none))
+                    },
+                )?,
+                (None, Source::Mock(_)) => unreachable!("a plugin"),
+            };
+            if let Some(policy) = policy_of(&st.spec) {
                 link.set_policy(policy);
+            }
+            // The provider's types under the `use`'s name, renamed at the
+            // link only: the provider never learns of it.
+            if let Some(b) = &st.rename {
+                link.rename(wire::Rename::new(b.name.clone(), b.provider.clone()));
             }
             let mut base = base.clone();
             let i = links.len();
             // A world file is one process's: the mock keeps its world in
             // memory and writes it whole. A second process (the mock as a
-            // plugin beside it) keeps its own, as a second cloud would.
-            if i > 0 {
-                base["world"] = path(&cfg.world.with_extension(format!("{}.json", link.name)));
+            // plugin beside it, a provider under a second name) keeps its
+            // own, as a second cloud would.
+            if i > 0 || st.rename.is_some() {
+                let name = st.rename.as_ref().map_or(&link.name, |b| &b.name);
+                base["world"] = path(&cfg.world.with_extension(format!("{name}.json")));
             }
             let mut config = base.clone();
+            if let Some(m) = &mock {
+                config["schemas"] = json!([m]);
+            }
             if by_block(i, &link.name) {
-                config["deferred"] = json!(true);
+                if mock.is_none() {
+                    config["deferred"] = json!(true);
+                }
                 awaiting.insert(i);
             }
-            let account = configure(&mut link, config)
-                .with_context(|| format!("configure provider {}", p.display()))?;
+            let account = configure(&mut link, config.clone())
+                .with_context(|| format!("configure provider {shown}"))?;
             accounts.extend(account.map(|a| (i, a)));
             links.push(link);
-            bases.push(base.clone());
+            bases.push(if mock.is_some() { config } else { base.clone() });
+            // Its schema is the provider's, under the name: asked once
+            // of the provider and shared by each name it has.
+            shares.push(st.names.first().map(|n| Share {
+                spec: st.spec.clone(),
+                namespace: n.clone(),
+                of: st.rename.as_ref().map(|b| b.provider.clone()),
+            }));
         }
         if links.is_empty() {
             bail!("no providers");
@@ -444,6 +547,7 @@ impl Providers {
         let p = Self::deferred(links);
         Ok(Providers {
             bases,
+            shares,
             by_program: awaiting.clone(),
             awaiting: RefCell::new(awaiting),
             blocks,
@@ -747,6 +851,7 @@ impl Providers {
             imported: RefCell::new(BTreeMap::new()),
             notes: RefCell::new(Vec::new()),
             bases: Vec::new(),
+            shares: Vec::new(),
             awaiting: RefCell::new(BTreeSet::new()),
             by_program: BTreeSet::new(),
             settings: RefCell::new(BTreeMap::new()),
@@ -787,8 +892,8 @@ impl Providers {
         Ok((of(&l.owner), of(&l.externs)))
     }
 
-    /// The link a program names: by the provider's own name, else by the
-    /// name of the `use` that selects it. A mock playing several
+    /// The link a program names: by the name of the `use` that selects
+    /// it, else by the provider's own name. A mock playing several
     /// providers on one link (`use google` and `use k8s` on the
     /// built-in schemas) is none of theirs: one's settings would
     /// configure the others' types too, so it plays them unconfigured.
@@ -802,8 +907,12 @@ impl Providers {
         if self.mock_blocks.contains_key(name) && played > 1 {
             return self.link_named(name);
         }
-        self.link_named(name)
-            .or_else(|| self.blocks.get(name).copied())
+        // A `use`'s name first: two names of one provider (R-115) are two
+        // links its handshake names alike.
+        self.blocks
+            .get(name)
+            .copied()
+            .or_else(|| self.link_named(name))
     }
 
     /// A provider's configuration is known before it answers anything: a
@@ -1170,11 +1279,40 @@ impl Providers {
         let types = scope.map(|s| pb::TypeFilter {
             names: s.iter().cloned().collect(),
         });
+        // Each spec's answer and the namespace it is in: a provider's
+        // other names take it renamed rather than ask again (R-115).
+        let mut asked: BTreeMap<&str, (pb::SchemaResponse, &str)> = BTreeMap::new();
         for (i, link) in self.links.iter().enumerate() {
-            let req = pb::SchemaRequest {
-                types: types.clone(),
+            let share = self.shares.get(i).and_then(Option::as_ref);
+            let resp = match share.and_then(|s| asked.get(s.spec.as_str())) {
+                Some((resp, ns)) => {
+                    let mut resp = resp.clone();
+                    let to = share.map_or(*ns, |s| s.namespace.as_str());
+                    wire::Rename::new(*ns, to).schema(&mut resp);
+                    resp
+                }
+                None => {
+                    // The types each name of the provider is asked for,
+                    // under this one's.
+                    let mut types = types.clone();
+                    if let (Some(t), Some(s)) = (&mut types, share) {
+                        let others = self.shares.iter().flatten();
+                        for o in others.filter(|o| o.spec == s.spec && o.namespace != s.namespace) {
+                            let r = wire::Rename::new(o.namespace.as_str(), s.namespace.as_str());
+                            let more: Vec<String> = t.names.iter().map(|n| r.name(n)).collect();
+                            t.names.extend(more);
+                        }
+                        t.names.sort();
+                        t.names.dedup();
+                    }
+                    let req = pb::SchemaRequest { types };
+                    let resp: pb::SchemaResponse = link.borrow_mut().call(req)?;
+                    if let Some(s) = share {
+                        asked.insert(&s.spec, (resp.clone(), &s.namespace));
+                    }
+                    resp
+                }
             };
-            let resp: pb::SchemaResponse = link.borrow_mut().call(req)?;
             let facts = resp
                 .facts
                 .iter()
@@ -1182,6 +1320,26 @@ impl Providers {
                 .collect::<Result<Vec<Atom>>>()?;
             let mut s = Schema::from_facts(&facts)
                 .with_context(|| format!("the schema of provider {}", self.names[i]))?;
+            // A provider takes another name only when its types are under
+            // its own (`ovh.instance`): one it names otherwise (the fake
+            // cloud's `net.vpc`) stays as it is under every name.
+            if let Some(Share {
+                namespace,
+                of: Some(of),
+                ..
+            }) = share
+                && let Some(t) = s
+                    .provider_of
+                    .keys()
+                    .chain(s.attrs.keys().map(|(t, _)| t))
+                    .find(|t| !t.starts_with(&format!("{namespace}.")))
+            {
+                bail!(
+                    "`use {of} as {namespace}`: provider {of} serves {t}, a type not named \
+                     under it, which no other name renames: only a provider whose types are \
+                     `{of}.T` takes another name"
+                );
+            }
             if resp.checks_refinements {
                 s.checks_refinements = s
                     .provider_of

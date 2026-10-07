@@ -359,8 +359,20 @@ pub struct OutputDecl {
 #[derive(Debug, Clone)]
 pub struct Config {
     pub name: String,
+    /// The provider a `use P as NAME` renames (R-115): `ovh` of `use ovh
+    /// as ca`, whose types the program writes `ca.instance`. `None` when
+    /// the name is the provider's own, and for a stack.
+    pub of: Option<String>,
     pub config: Vec<(String, Term, Span)>,
     pub span: Span,
+}
+
+impl Config {
+    /// The provider a provider's `use` starts: `ovh` of `use ovh as ca`
+    /// and of `use ovh`.
+    pub fn provider(&self) -> &str {
+        self.of.as_deref().unwrap_or(&self.name)
+    }
 }
 
 #[derive(Debug, Clone)]

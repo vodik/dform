@@ -91,7 +91,8 @@ fn a_used_builtin_provider_brings_its_externs() {
 /// One name per scope: a module, a copy and a provider share it, so
 /// `use fake` beside `use fake` is the error two uses are; a name
 /// that is neither a module nor a provider is the module error, saying
-/// so; a provider's namespace is not renamed yet.
+/// so; `use fake as cloud` is read (R-115), and refused because the
+/// fake cloud's types are not named under `fake`.
 #[test]
 fn a_provider_shares_the_scopes_one_namespace() {
     let s = Scratch::new("providers-use-twice");
@@ -114,7 +115,7 @@ fn a_provider_shares_the_scopes_one_namespace() {
     let r = s.run(&["plan", "q.df"]).failure();
     assert!(
         r.stderr
-            .contains("`use fake as cloud`: a provider's namespace is not renamed yet"),
+            .contains("`use fake as cloud`: provider fake serves"),
         "{}",
         r.stderr
     );

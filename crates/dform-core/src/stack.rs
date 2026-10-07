@@ -57,11 +57,13 @@ pub struct Stack {
     /// `role = bootstrap`: the stack creates what a controller runs in. It
     /// stays batch: `dform controller run` refuses it.
     pub bootstrap: bool,
-    /// Provider schemas, as `--provider` takes them: a name or a path.
+    /// Provider schemas, as `--provider` takes them: a name or a path,
+    /// each once.
     pub providers: Vec<String>,
-    /// Each `use NAME { .. }` block's spec (as in `providers`) ->
-    /// NAME: the block's settings configure the provider it selects.
-    pub provider_blocks: BTreeMap<String, String>,
+    /// Each provider's `use`, by the name it binds: its spec (as in
+    /// `providers`) and the provider it starts, so `use ovh as ca` and
+    /// `use ovh as eu` start the provider twice (R-115).
+    pub provider_blocks: Vec<crate::plugin::providers::Block>,
     /// `key env: T`, `key region: T`: the inputs that key the stack, in
     /// order.
     pub keys: Vec<(String, Span)>,
@@ -247,13 +249,13 @@ pub fn config(program: &Program) -> Result<Stack> {
         }
     }
     // A provider's `use` in a used module starts it as the stack's does
-    // (R-129): one provider per name, its source given by one `use` or
-    // none.
+    // (R-129): one provider per name (`use ovh as ca` names it `ca`,
+    // R-115), its source given by one `use` or none.
     let mut started: Vec<(&Config, String)> = Vec::new();
     for s in crate::modules::reached(program) {
         let Stmt::Provider(c) = s else { continue };
         // A built-in fact provider dform answers itself starts nothing.
-        if crate::externs::builtin(&c.name).is_some_and(|b| b.in_process) {
+        if crate::externs::builtin(c.provider()).is_some_and(|b| b.in_process) {
             continue;
         }
         let spec = provider(c, &mut diags);
@@ -273,8 +275,14 @@ pub fn config(program: &Program) -> Result<Stack> {
         }
     }
     for (c, spec) in started {
-        out.provider_blocks.insert(spec.clone(), c.name.clone());
-        out.providers.push(spec);
+        out.provider_blocks.push(crate::plugin::providers::Block {
+            spec: spec.clone(),
+            name: c.name.clone(),
+            provider: c.provider().to_string(),
+        });
+        if !out.providers.contains(&spec) {
+            out.providers.push(spec);
+        }
     }
     if let Some(c) = settings {
         out.name = Some(c.name.clone());
@@ -534,7 +542,7 @@ fn trust_root(at: Span, t: &Term) -> Option<crate::approval::TrustRoot> {
 /// `schema.df`, or a `.df` file); without `source`, its name
 /// (`plugin::source::resolve`).
 fn provider(c: &Config, diags: &mut Vec<Diagnostic>) -> String {
-    let mut spec = c.name.clone();
+    let mut spec = c.provider().to_string();
     for (k, v, span) in &c.config {
         match (k.as_str(), v.as_str()) {
             ("source", Some(src)) => {

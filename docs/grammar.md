@@ -1174,9 +1174,30 @@ component of the program, and a provider: one `dform.toml`'s
 mock's `fake`, `gke`, `k8s`, and the namespace of a mock's types, `aws`
 of aws-mock's `aws.vpc`), a project's `providers/NAME/`, or one whose
 block names its `source`; any other is the error for a missing module,
-which says it is no provider either. `use ovh as cloud` is not read yet
-(an error saying so). `provider`, the statement of an earlier surface,
-is an error naming `use`.
+which says it is no provider either. `provider`, the statement of an
+earlier surface, is an error naming `use`.
+
+`use P as A` imports the provider P under the name A (R-115), a second
+configuration of the same types: `use ovh as ca { endpoint = "ovh-ca" }`
+beside `use ovh as eu { endpoint = "ovh-eu" }` in one scope, `resource
+ca.instance x { .. }`, `ca.image(..)`; `use ovh` is `use ovh as ovh`.
+Each name starts its own process of P, with P's grants, credentials and
+`[providers.P]` policy, and is configured by its own block
+(`provider_config("ca", ..)`); two `use`s of one name are the conflict
+two `use`s are, two names are not. A type is renamed at the link only,
+so P never learns of A: P's schema is asked for once and served under
+each name (`ref(ovh.network)` reads `ref(ca.network)`), and its calls
+carry `ovh.instance`. What the program writes is what state, the plan
+and `why` print: `ca.instance x`, and the address `ca.instance["x"]`.
+`x in ca.instance` ranges over A's resources and `x in ovh.instance`
+over those of every name P has (`__provider_type("ovh.instance", T),
+want(T, x)`). A resource of one name reads another's as any reference
+(a peering across regions reads `peer = ref(ca_vpc)`, or
+`ca_vpc.cidr_block`), but an attribute typed `ref(ca.network)` takes
+`ca`'s. Only a provider whose types are named under it
+(`ovh.instance`, `aws.vpc`) takes another name: the fake cloud's
+`net.vpc` is refused, as is a provider dform answers itself (`use env
+as e`).
 
 A program with no provider's `use` starts none, and what evaluates it
 against providers (`plan`, `apply`, `query`, `why`, `test`) refuses it,

@@ -43,8 +43,10 @@ const EXPECT_ACCOUNT: &str = "expect_account";
 impl Lowerer<'_> {
     pub(super) fn provider(&mut self, n: &SyntaxNode, scope: usize, outer: &Rc) -> L<Vec<Stmt>> {
         let span = self.span(n);
-        let name = use_parts(n).0;
-        if name == "random" {
+        // `use ovh as ca` (R-115): the provider `ovh` under the name `ca`,
+        // its own process, settings and state, its types `ca.instance`.
+        let (of, name) = use_parts(n);
+        if of == "random" {
             let d = Diagnostic::error(span, "random is not a provider").with_help(
                 "random.password, random.bytes, random.id, random.uuid and \
                      random.signing_key are std functions (std/random.df): delete the \
@@ -52,6 +54,15 @@ impl Lowerer<'_> {
             );
             self.diags.push(d);
             return Err(Skip);
+        }
+        if of != name && crate::externs::builtin(&of).is_some_and(|b| b.in_process) {
+            return self.error(
+                span,
+                format!(
+                    "`use {of} as {name}`: {of} is answered by dform itself, with nothing to \
+                     configure twice: write `use {of}`"
+                ),
+            );
         }
         let block = node(n, BLOCK);
         let mut out = Vec::new();
@@ -165,6 +176,7 @@ impl Lowerer<'_> {
                     0,
                     Stmt::Provider(Config {
                         name: name.clone(),
+                        of: (of != name).then(|| of.clone()),
                         config: source,
                         span,
                     }),
@@ -181,15 +193,16 @@ impl Lowerer<'_> {
         Ok(out)
     }
 
-    /// The `use`s beside `n` that configure the provider `name`, in
-    /// source order. A provider is
+    /// The provider's `use`s beside `n` that bind `name` (`use ovh as
+    /// ca` binds `ca`), in source order. A name is
     /// declared once, or several times each under a clause (R-104); the
     /// scope's one namespace says so (`redeclared`).
     fn providers_named(&mut self, n: &SyntaxNode, name: &str) -> L<Vec<SyntaxNode>> {
         Ok(n.parent()
             .into_iter()
             .flat_map(|p| p.children())
-            .filter(|c| provider_use(c, self.units, &self.decls.deployed).as_deref() == Some(name))
+            .filter(|c| provider_use(c, self.units, &self.decls.deployed).is_some())
+            .filter(|c| use_parts(c).1 == name)
             .collect())
     }
 

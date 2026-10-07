@@ -1679,7 +1679,8 @@ pub fn value_of(raw: &str) -> Value {
 /// The manifest under the program's own statements: a provider named
 /// without a `source` takes the manifest's entry of that name.
 pub fn with_manifest(cfg: &mut stack::Stack, m: &Manifest) {
-    for p in &mut cfg.providers {
+    let blocks = cfg.provider_blocks.iter_mut().map(|b| &mut b.spec);
+    for p in cfg.providers.iter_mut().chain(blocks) {
         if !p.contains('/')
             && let Some(src) = m.provider_source(p)
         {

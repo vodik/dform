@@ -713,10 +713,11 @@ fn field_doc(p: &refs::Project, t: &SyntaxToken) -> Option<String> {
 /// definition to go to.
 fn run_time_type(files: &[Parsed], typ: &str) -> Option<String> {
     let ns = typ.split('.').next()?;
-    let declared = files
-        .iter()
-        .flat_map(|f| f.tree.descendants())
-        .any(|n| dform_core::syntax::resolve::maybe_provider_use(&n).is_some_and(|x| x == ns));
+    let declared = files.iter().flat_map(|f| f.tree.descendants()).any(|n| {
+        // `use ovh as ca` names the namespace `ca` (R-115).
+        dform_core::syntax::resolve::maybe_provider_use(&n).is_some()
+            && dform_core::syntax::resolve::use_parts(&n).1 == ns
+    });
     (declared && typ.contains('.'))
         .then(|| format!("resource type `{typ}`\n\ndeclared by provider {ns} at run time\n"))
 }

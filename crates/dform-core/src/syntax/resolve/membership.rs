@@ -21,6 +21,10 @@
 //!   after), is a type test as well, so a plan row of a deleted resource
 //!   binds: the column takes the reference apart as `ref("T", R, "")`,
 //!   which is the test.
+//! - `r in T`, `T` a provider's type (`ovh.instance`) whose provider a
+//!   `use ovh as ca` also names (R-115), is a resource of `T` or of the
+//!   same type under each such name: `__provider_type("ovh.instance",
+//!   Type), want(Type, R)`, one fact per name.
 
 use super::*;
 
@@ -30,6 +34,11 @@ pub(super) const ENUM: &str = "__enum";
 
 /// The relation of a namespace's types: `__namespace(NS, T)`.
 pub(super) const NAMESPACE: &str = "__namespace";
+
+/// The types `x in T` ranges over, `T` a provider's type that a `use ..
+/// as` also names otherwise (R-115): `__provider_type("ovh.instance",
+/// "ca.instance")`, and `T` itself.
+pub(super) const PROVIDER_TYPE: &str = "__provider_type";
 
 /// What the built-in schemas say of a type: its attribute paths, and the
 /// providers that serve it (`type_provider`).
