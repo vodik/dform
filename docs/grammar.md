@@ -2012,8 +2012,8 @@ computation over it but `len`: `xs.len` of a list, `s.len` of a string
 named `len`).
 
 Over a `secret(T)` every test is a read (R-178): `==`, `!=`, the
-orders, `in` on either side and `has` are E0301, `not` and `not has`
-E0302, unless the operand is `secret.declassify(v, why)`; `${..}` and
+orders, `in` on either side, `has` and a join (`pw(p), known(p)`)
+are E0301, `not` and `not has` E0302, unless the operand is `secret.declassify(v, why)`; `${..}` and
 arithmetic carry the secret into their result, which is a secret
 (docs/reference.md, "Secrets").
 

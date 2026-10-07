@@ -1856,7 +1856,7 @@ is a compile error with a span, before anything is evaluated:
 
 | code  | the secret reaches |
 |-------|--------------------|
-| E0301 | a test or an inspecting function: `==` (a binding's too, `pw(p), p == "x"`), `!=`, `<` and the orders, `in` either side, `has`, a builtin predicate, `len`, `split`, `inet_*`; a field's (`conn.password == ..`) and an interpolation's (`"${pw}!" == ..`) |
+| E0301 | a test or an inspecting function: `==` (a binding's too, `pw(p), p == "x"`), `!=`, `<` and the orders, `in` either side, `has`, a join (`pw(p), known(p)`), a builtin predicate, `len`, `split`, `inet_*`; a field's (`conn.password == ..`) and an interpolation's (`"${pw}!" == ..`) |
 | E0302 | a negated literal, `not has` included: absence leaks a bit |
 | E0303 | an aggregate other than `collect_*` (`count` leaks cardinality) |
 | E0304 | a public place: a resource attribute the schema does not mark `sensitive`, a setting, an output or input not declared `secret(T)`, a `deny`/`warn` |

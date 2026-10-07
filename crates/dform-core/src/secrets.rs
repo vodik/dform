@@ -16,8 +16,9 @@
 //!
 //! Then each rule is checked, each violation a compile error with a span:
 //!
-//! - E0301 a comparison, a builtin predicate or an inspecting function
-//!   (`len`, `split`, `inet_*`, ...) over a secret: comparing leaks a bit;
+//! - E0301 a comparison, a join (`pw(p), known(p)`), a builtin predicate
+//!   or an inspecting function (`len`, `split`, `inet_*`, ...) over a
+//!   secret: comparing leaks a bit;
 //! - E0302 a negated literal over a secret: absence leaks a bit;
 //! - E0303 an aggregate other than `collect_*` over a secret: `count`
 //!   leaks cardinality;
@@ -818,6 +819,29 @@ pub fn check(
                 }
             }
         }
+        // A join on a secret: a secret variable at two positions of the
+        // body's relations (`pw(p), known(p)`) tests the secret against
+        // the other's rows, as `p == "hunter2"` would; declassified, its
+        // value is public.
+        if !refinement {
+            let mut seen: BTreeSet<&str> = BTreeSet::new();
+            for l in body.iter() {
+                let Lit::Pos(a) = l else { continue };
+                if is_builtin_pred(&a.pred) || a.pred == crate::memo::FIRST {
+                    continue;
+                }
+                let mut here = Vec::new();
+                for (_, t) in a.args.iter().enumerate().filter(|(j, _)| binds(a, *j)) {
+                    pattern_vars(t, &mut here);
+                }
+                let at = if a.span.is_none() { *span } else { a.span };
+                for v in here {
+                    if !seen.insert(v) && vars.get(v).is_some_and(|l| !l.is_empty()) {
+                        diags.push(e0301(at, "a join"));
+                    }
+                }
+            }
+        }
         for (i, l) in body.iter().enumerate() {
             match l {
                 Lit::Neq(x, y) | Lit::Gt(x, y) | Lit::Ge(x, y) | Lit::Lt(x, y) | Lit::Le(x, y)
@@ -992,6 +1016,19 @@ fn term_vars(t: &Term, out: &mut BTreeSet<String>) {
         }
         Term::Func { args, .. } | Term::List(args) => args.iter().for_each(|a| term_vars(a, out)),
         Term::Obj(m) => m.values().for_each(|a| term_vars(a, out)),
+        _ => {}
+    }
+}
+
+/// The variables a pattern `t` binds, each occurrence (`_` none).
+fn pattern_vars<'t>(t: &'t Term, out: &mut Vec<&'t str>) {
+    match t {
+        Term::Var(v) => out.push(v),
+        Term::Func { name, .. } if name == DECLASSIFY => {}
+        Term::Func { args, .. } | Term::List(args) => {
+            args.iter().for_each(|a| pattern_vars(a, out))
+        }
+        Term::Obj(m) => m.values().for_each(|a| pattern_vars(a, out)),
         _ => {}
     }
 }
