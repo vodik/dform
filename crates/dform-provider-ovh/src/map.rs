@@ -250,6 +250,52 @@ pub fn network(o: &Json) -> (Json, Json) {
     (attrs, computed)
 }
 
+/// A subnet's remote id: `NETWORK/ID`, its network's id and its own (the
+/// API reaches a subnet under its network).
+pub fn subnet_remote(network: &str, id: &str) -> String {
+    format!("{network}/{id}")
+}
+
+/// The network's id and the subnet's in a subnet's remote id.
+pub fn subnet_parts(remote: &str) -> (&str, &str) {
+    remote.split_once('/').unwrap_or((remote, ""))
+}
+
+/// A subnet of the private network `network` (`cloud.network.Subnet`):
+/// its region, range and pool as the API's first pool has them; no
+/// gateway when the API gives none. Whether it has DHCP and a gateway are
+/// the program's when it sets them and the API's otherwise, so they are
+/// also computed.
+pub fn subnet(network: &str, o: &Json) -> (Json, Json) {
+    let pool = o
+        .get("ipPools")
+        .and_then(Json::as_array)
+        .and_then(|p| p.first())
+        .cloned()
+        .unwrap_or(Json::Null);
+    let dhcp = o
+        .get("dhcpEnabled")
+        .and_then(Json::as_bool)
+        .unwrap_or(false);
+    let gateway = o.get("gatewayIp").filter(|g| !g.is_null()).cloned();
+    let attrs = json!({
+        "network": network,
+        "region": str_of(&pool, "region").unwrap_or_default(),
+        "range": str_of(o, "cidr").or_else(|| str_of(&pool, "network")).unwrap_or_default(),
+        "start": str_of(&pool, "start").unwrap_or_default(),
+        "end": str_of(&pool, "end").unwrap_or_default(),
+        "dhcp": dhcp,
+        "no_gateway": gateway.is_none(),
+    });
+    let computed = json!({
+        "id": subnet_remote(network, str_of(o, "id").unwrap_or_default()),
+        "gateway_ip": gateway.unwrap_or(Json::Null),
+        "dhcp": dhcp,
+        "no_gateway": attrs["no_gateway"],
+    });
+    (attrs, computed)
+}
+
 /// `ovh.flavor(+region, -name, -vcpus: int, -ram: bytes, -disk: bytes)`:
 /// the flavors offered in `region` (`cloud.flavor.Flavor[]`), available
 /// ones, a name once. The API counts RAM in MiB and disk in GiB, as
@@ -480,6 +526,26 @@ mod tests {
         assert_eq!(
             computed["regions_status"],
             json!({"BHS5": "ACTIVE", "ca-east-tor": "BUILDING"})
+        );
+    }
+
+    #[test]
+    fn a_subnet_of_a_private_network() {
+        let (attrs, computed) = subnet("pn-1000123_42", &fixture("subnet.json"));
+        assert_eq!(
+            attrs,
+            json!({"network": "pn-1000123_42", "region": "BHS5", "range": "10.0.0.0/24",
+                   "start": "10.0.0.10", "end": "10.0.0.200", "dhcp": true,
+                   "no_gateway": false})
+        );
+        assert_eq!(
+            computed["id"],
+            "pn-1000123_42/7a6b5c4d-3e2f-4a1b-9c8d-7e6f5a4b3c2d"
+        );
+        assert_eq!(computed["gateway_ip"], "10.0.0.1");
+        assert_eq!(
+            subnet_parts(computed["id"].as_str().unwrap()),
+            ("pn-1000123_42", "7a6b5c4d-3e2f-4a1b-9c8d-7e6f5a4b3c2d")
         );
     }
 

@@ -539,6 +539,57 @@ fn a_private_network_needs_the_projects_vrack() {
     assert!(lab.server.networks().is_empty());
 }
 
+const SUBNET: &str = "ovh.subnet";
+
+/// A subnet is made in its network's region, read back by listing the
+/// network's, replaced by any change, refused to another Create of its
+/// range, and deleted (its network after it).
+#[test]
+fn a_subnet_is_made_replaced_and_deleted() {
+    let lab = Lab::new();
+    let net = lab.create(NETWORK, "lab", json!({"name": "lab", "regions": ["BHS5"]}));
+    let doc = json!({"network": net.remote, "region": "BHS5", "range": "10.1.0.0/24",
+                     "start": "10.1.0.10", "end": "10.1.0.100", "dhcp": true});
+    let sub = lab.create(SUBNET, "lab", doc.clone());
+    let (network, _) = sub.remote.split_once('/').unwrap();
+    assert_eq!(network, net.remote);
+    let mut want = doc.clone();
+    want["no_gateway"] = json!(false);
+    assert_eq!(sub.attrs, want);
+    assert_eq!(sub.computed["gateway_ip"], "10.1.0.1");
+    let sent = lab
+        .server
+        .seen()
+        .into_iter()
+        .find(|c| c.method == "POST" && c.path.ends_with("/subnet"))
+        .unwrap();
+    assert_eq!(
+        sent.body,
+        json!({"region": "BHS5", "network": "10.1.0.0/24", "start": "10.1.0.10",
+               "end": "10.1.0.100", "dhcp": true, "noGateway": false})
+    );
+    let (attrs, _) = lab.read(SUBNET, "lab", &sub.remote).unwrap();
+    assert_eq!(attrs, want);
+    let mut no_dhcp = want.clone();
+    no_dhcp["dhcp"] = json!(false);
+    assert!(lab.plan(SUBNET, Some(&attrs), &no_dhcp).1);
+
+    let again = lab
+        .apply(pb::Op::Create, SUBNET, "other", "", doc)
+        .unwrap_err();
+    assert!(again.contains("already exists with this key"), "{again}");
+    // A network with a subnet is not deleted: dform deletes the subnet
+    // first, as it refers to the network.
+    assert!(
+        lab.apply(pb::Op::Delete, NETWORK, "lab", &net.remote, Json::Null)
+            .is_err()
+    );
+    lab.delete(SUBNET, "lab", &sub.remote);
+    assert!(lab.read(SUBNET, "lab", &sub.remote).is_none());
+    lab.delete(NETWORK, "lab", &net.remote);
+    assert!(lab.read(SUBNET, "lab", &sub.remote).is_none());
+}
+
 fn ovh() -> String {
     common::exe("dform-provider-ovh")
 }

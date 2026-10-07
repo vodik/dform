@@ -125,6 +125,20 @@ type_attr("ovh.network", "status", "string", ["computed"])
 type_attr("ovh.network", "regions_status", "map(string)", ["computed"])
 type_replace("ovh.network", "destroy_first")
 
+# A subnet's key is its network, region and range; nothing of it changes
+# in place.
+type_provider("ovh.subnet", "ovh")
+type_attr("ovh.subnet", "id", "string", ["computed", "id"])
+type_attr("ovh.subnet", "network", "ref(ovh.network)", ["required", "force_new"])
+type_attr("ovh.subnet", "region", "string", ["required", "force_new"])
+type_attr("ovh.subnet", "range", "inet", ["required", "force_new"])
+type_attr("ovh.subnet", "start", "ip", ["required", "force_new"])
+type_attr("ovh.subnet", "end", "ip", ["required", "force_new"])
+type_attr("ovh.subnet", "dhcp", "bool", ["optional_computed", "force_new"])
+type_attr("ovh.subnet", "no_gateway", "bool", ["optional_computed", "force_new"])
+type_attr("ovh.subnet", "gateway_ip", "ip", ["computed", "nullable"])
+type_replace("ovh.subnet", "destroy_first")
+
 type_doc("ovh.instance", "", "A Public Cloud instance of the project.")
 type_doc(
   "ovh.instance",
@@ -293,3 +307,20 @@ type_doc(
 )
 type_doc("ovh.network", "status", "ACTIVE once it can be used; BUILDING while it is made.")
 type_doc("ovh.network", "regions_status", "Each region's status, by region.")
+type_doc(
+  "ovh.subnet",
+  "",
+  "A subnet of a private network in one region (the API's `/network/private/{id}/subnet`). Changing anything replaces it.",
+)
+type_doc("ovh.subnet", "network", "The private network it is of (`network = lab`).")
+type_doc("ovh.subnet", "region", "The region it is in, one of its network's.")
+type_doc("ovh.subnet", "range", "The network's range (`10.0.0.0/24`), what the API calls `network`.")
+type_doc("ovh.subnet", "start", "The first address of the pool instances are given.")
+type_doc("ovh.subnet", "end", "The last address of the pool.")
+type_doc("ovh.subnet", "dhcp", "Whether instances get their address by DHCP; not when not set.")
+type_doc(
+  "ovh.subnet",
+  "no_gateway",
+  "No default gateway on the subnet; it has one (its range's first address) when not set.",
+)
+type_doc("ovh.subnet", "gateway_ip", "The subnet's gateway, if it has one.")

@@ -191,3 +191,57 @@ fn regions(at: &str, config: &Json) -> std::result::Result<Option<Vec<String>>, 
         )),
     }
 }
+
+/// Subnets (`ovh.subnet`): the API's
+/// `/cloud/project/{p}/network/private/{id}/subnet/{subnet}`, a range of a
+/// private network in one region and the pool of it OpenStack hands out.
+/// It is its own object (it has an id), named by its network, region and
+/// range; nothing of it changes in place.
+impl Ovh {
+    /// A network's subnets; none when the network is gone.
+    pub(super) fn subnets(&self, a: &Account, p: &str, network: &str) -> api::Result<Vec<Json>> {
+        Ok(a.client
+            .get_opt(&format!("{}/subnet", network_path(p, network)))?
+            .and_then(|l| l.as_array().cloned())
+            .unwrap_or_default())
+    }
+
+    /// The API has no GET of one subnet: its network's are listed.
+    pub(super) fn read_subnet(
+        &self,
+        a: &Account,
+        p: &str,
+        remote: &str,
+    ) -> api::Result<Option<Json>> {
+        let (network, id) = map::subnet_parts(remote);
+        Ok(self
+            .subnets(a, p, network)?
+            .into_iter()
+            .find(|o| s(o, "id") == Some(id)))
+    }
+
+    pub(super) fn create_subnet(
+        &self,
+        at: &str,
+        config: &Json,
+    ) -> std::result::Result<(String, Json, Json), Failed> {
+        let (a, p) = self.project_for(at)?;
+        let network = need(at, config, "network")?;
+        let flag = |k: &str| config.get(k).and_then(Json::as_bool).unwrap_or(false);
+        let body = json!({
+            "region": need(at, config, "region")?,
+            "network": need(at, config, "range")?,
+            "start": need(at, config, "start")?,
+            "end": need(at, config, "end")?,
+            "dhcp": flag("dhcp"),
+            "noGateway": flag("no_gateway"),
+        });
+        let o = a
+            .client
+            .post(&format!("{}/subnet", network_path(&p, network)), &body)
+            .map_err(|e| failed(at, e))?;
+        let (attrs, computed) = map::subnet(network, &o);
+        let id = map::subnet_remote(network, s(&o, "id").unwrap_or_default());
+        Ok((id, attrs, computed))
+    }
+}

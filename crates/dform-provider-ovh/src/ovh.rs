@@ -50,6 +50,7 @@ pub const CONTAINER: &str = "ovh.storage_container";
 pub const USER: &str = "ovh.cloud_project_user";
 pub const VOLUME: &str = "ovh.volume";
 pub const NETWORK: &str = "ovh.network";
+pub const SUBNET: &str = "ovh.subnet";
 pub const REGION: &str = "ovh.region";
 pub const FLAVOR: &str = "ovh.flavor";
 pub const IMAGE: &str = "ovh.image";
@@ -88,13 +89,33 @@ type Say<'a> = &'a dyn Fn(&str, Option<&str>);
 /// How to find what a Create made, by the object's key.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Made {
-    Instance { name: String, region: String },
-    SshKey { name: String },
+    Instance {
+        name: String,
+        region: String,
+    },
+    SshKey {
+        name: String,
+    },
     Record(RecordKey),
-    Container { region: String, name: String },
-    User { description: String },
-    Volume { name: String, region: String },
-    Network { name: String },
+    Container {
+        region: String,
+        name: String,
+    },
+    User {
+        description: String,
+    },
+    Volume {
+        name: String,
+        region: String,
+    },
+    Network {
+        name: String,
+    },
+    Subnet {
+        network: String,
+        region: String,
+        range: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -598,6 +619,12 @@ impl Ovh {
                 let (a, p) = self.project(&at)?;
                 self.read_network(&a, &p, remote)?.map(|o| map::network(&o))
             }
+            SUBNET => {
+                let (a, p) = self.project(&at)?;
+                let (network, _) = map::subnet_parts(remote);
+                self.read_subnet(&a, &p, remote)?
+                    .map(|o| map::subnet(network, &o))
+            }
             _ => bail!("{at}: the ovh provider has no type {typ}"),
         })
     }
@@ -793,6 +820,11 @@ impl Ovh {
                 region: st("region")?,
             },
             NETWORK => Made::Network { name: st("name")? },
+            SUBNET => Made::Subnet {
+                network: st("network")?,
+                region: st("region")?,
+                range: st("range")?,
+            },
             _ => return None,
         })
     }
@@ -901,6 +933,20 @@ impl Ovh {
                     .and_then(|o| s(o, "id"))
                     .map(str::to_string)
             }
+            Made::Subnet {
+                network,
+                region,
+                range,
+            } => {
+                let (a, p) = self.project("find a subnet")?;
+                self.subnets(&a, &p, network)?
+                    .iter()
+                    .map(|o| map::subnet(network, o))
+                    .find(|(attrs, _)| {
+                        s(attrs, "region") == Some(region) && s(attrs, "range") == Some(range)
+                    })
+                    .and_then(|(_, computed)| s(&computed, "id").map(str::to_string))
+            }
         })
     }
 
@@ -1003,6 +1049,7 @@ impl Ovh {
             USER => self.create_user(at, config, notes, say),
             VOLUME => self.create_volume(at, config, notes, say),
             NETWORK => self.create_network(at, config, notes, say),
+            SUBNET => self.create_subnet(at, config),
             _ => Err(refused(at, format!("the ovh provider has no type {typ}"))),
         }
     }
@@ -1255,6 +1302,16 @@ impl Ovh {
                 let (a, p) = self.project_for(at)?;
                 let path = format!("/cloud/project/{p}/network/private/{}", escape(remote));
                 self.delete_at(&a, at, &path, true, notes, say)?;
+            }
+            SUBNET => {
+                let (a, p) = self.project_for(at)?;
+                let (network, id) = map::subnet_parts(remote);
+                let path = format!(
+                    "/cloud/project/{p}/network/private/{}/subnet/{}",
+                    escape(network),
+                    escape(id)
+                );
+                self.delete_at(&a, at, &path, false, notes, say)?;
             }
             _ => return Err(refused(at, format!("the ovh provider has no type {typ}"))),
         }
