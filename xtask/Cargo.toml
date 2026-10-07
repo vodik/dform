@@ -1,0 +1,13 @@
+# `cargo xtask TASK` (the alias is .cargo/config.toml's): the repository's
+# own tasks, in Rust.
+[package]
+name = "xtask"
+version = "0.1.0"
+license = "Apache-2.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+anyhow = "1.0"
+# The manual is made from the command line's definitions (`dform::man`).
+dform = { path = ".." }

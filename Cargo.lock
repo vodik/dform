@@ -575,6 +575,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1c133bc6a41be0d194c306b5506d15e6feeea7b1d6604bd3f8310dfb2ca96486"
 
 [[package]]
+name = "clap_mangen"
+version = "0.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "211d617eaa4b735c96c9e0228fcbdb5120ef623f2b8cb67ffb84c3e02dbc28a4"
+dependencies = [
+ "clap",
+ "roff",
+]
+
+[[package]]
 name = "clru"
 version = "0.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1171,6 +1181,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "clap_mangen",
  "crossterm",
  "dform-core",
  "dform-grpc",
@@ -4561,6 +4572,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "roff"
+version = "1.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "323c417e1d9665a65b263ec744ba09030cfb277e9daa0b018a4ab62e57bc8189"
+
+[[package]]
 name = "rowan"
 version = "0.16.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6927,6 +6944,14 @@ name = "xmlparser"
 version = "0.13.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "66fee0b777b0f5ac1c69bb06d361268faafa61cd4682ae064a171c16c433e9e4"
+
+[[package]]
+name = "xtask"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "dform",
+]
 
 [[package]]
 name = "yansi"

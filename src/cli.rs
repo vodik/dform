@@ -56,6 +56,7 @@ fn launch() -> &'static dyn plugin::Launch {
 #[command(name = "dform")]
 #[command(about = "Facts + rules + constraints for infra", long_about = None)]
 #[command(after_help = "See dform(1), or `dform help CMD`, for the full documentation.")]
+#[command(disable_help_subcommand = true)]
 struct Args {
     /// Run as if dform started in DIR: the project, its dform.state/ and
     /// discovery are DIR's.
@@ -236,6 +237,13 @@ enum Command {
         mock: Mock,
         #[command(subcommand)]
         cmd: DevCommand,
+    },
+    /// The manual: dform(1), or a command's page (`help stack list` is
+    /// dform-stack-list(1)), through $MANPAGER or $PAGER on a terminal and
+    /// as plain text otherwise.
+    Help {
+        #[arg(value_name = "COMMAND")]
+        cmd: Vec<String>,
     },
     /// Serve the language server protocol on stdin and stdout: diagnostics
     /// of the selected environment, a contributors hover and docs at
@@ -809,8 +817,11 @@ pub fn main(
     let color = args.inputs.color;
     // Ctrl-C and SIGTERM ask the run to stop and unwind (`interrupt`):
     // dform's own, not a provider's or the language server's.
-    let _signals = (!matches!(args.cmd, Command::ServeProvider { .. } | Command::Lsp))
-        .then(crate::interrupt::install);
+    let _signals = (!matches!(
+        args.cmd,
+        Command::ServeProvider { .. } | Command::Lsp | Command::Help { .. }
+    ))
+    .then(crate::interrupt::install);
     let result = match &args.cmd {
         Command::ServeProvider { name } => serve_provider(name).map(|()| Outcome::Done),
         Command::Lsp => dform_lsp::serve_stdio(dform_lsp::Options {
@@ -831,6 +842,7 @@ pub fn main(
             );
             Ok(Outcome::Done)
         }
+        Command::Help { cmd } => crate::man::help(cmd, terminal_width()).map(|()| Outcome::Done),
         _ => resolve(args).and_then(run_command),
     };
     crate::timing::finish();
@@ -850,6 +862,11 @@ pub fn main(
         }
     };
     std::process::ExitCode::from(exit_code(&outcome))
+}
+
+/// The command line's definitions, for the manual (`man`).
+pub fn command() -> clap::Command {
+    <Args as clap::CommandFactory>::command()
 }
 
 /// `dform __provider NAME`: serve the built-in provider NAME until stdin
@@ -1252,6 +1269,7 @@ fn resolve(args: Args) -> Result<Cli> {
         Command::ServeProvider { .. } => bail!("internal: `__provider` serves before a project"),
         Command::Lsp => bail!("internal: `lsp` serves before a project"),
         Command::Version => bail!("internal: `version` prints before a project"),
+        Command::Help { .. } => bail!("internal: `help` prints before a project"),
     };
     let inputs = args.inputs;
     let mut cli = Cli {
@@ -5823,6 +5841,7 @@ const COMMANDS: &[&str] = &[
     "init",
     "lsp",
     "dev",
+    "help",
 ];
 
 fn subcommands(noun: &str) -> &'static [&'static str] {

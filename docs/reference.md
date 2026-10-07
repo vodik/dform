@@ -216,24 +216,6 @@ makes it again. `destroy` runs on its target alone: not on the stacks it
 reads, nor, with no target, on the project. `plan --destroy TARGET`
 prints the same plan and applies nothing.
 
-### Exit status
-
-Each status means one thing, the same for every command (the controller
-too):
-
-| Status | Meaning |
-|---|---|
-| 0 | done: the command did what it was asked (`plan` produced a plan, with or without changes) |
-| 1 | failed: an error, printed |
-| 2 | usage: the command line is wrong (the argument parser's own) |
-| 3 | declined: a question was answered no; nothing of that tick was applied, and nothing is printed as an error |
-| 4 | refused by the program: its conflicts and denies, printed (`plan` and `apply` alike) |
-| 5 | stopped: a plan file or an approval applied what it showed and stopped before what it did not; state is consistent, and the next run resumes |
-| 6 | locked: another run holds the stack (named, one line) |
-| 128 + N | stopped by signal N after the run unwound (130 for SIGINT, 143 for SIGTERM) |
-
-`plan --json` says the same word in `outcome`: `done` or `refused`.
-
 | Commands | |
 |---|---|
 | `plan`, `apply`, `destroy`, `why`, `query`, `diff`, `test`, `fmt`, `log` | on a target |
@@ -246,6 +228,7 @@ too):
 | `init [NAME]` | make the working directory a project |
 | `completions zsh\|bash\|fish` | a completion script |
 | `lsp` | the language server, on stdin and stdout (see "Language server") |
+| `help [COMMAND..]` | the manual: dform(1), or the command's page (see "See also") |
 
 Controller mode (`controller run`, `stack handover`) is experimental:
 `DFORM_EXPERIMENTAL=1` lists it in `--help` and the completions, and
@@ -320,6 +303,84 @@ note, since no one holds its lock, and `dform stack unlock` removes one no
 process holds (it refuses one that is held, whatever pid it names). The
 local backend wants a local filesystem: a file lock over NFS is only as
 good as the server's; a shared backend is `s3(...)`.
+
+### Exit status
+
+<!-- man:exit-status: docs/man/exit-status.md, copied by `cargo xtask man` -->
+Each status means one thing, the same for every command (the controller
+too):
+
+| Status | Meaning |
+|---|---|
+| 0 | done: the command did what it was asked (`plan` produced a plan, with or without changes) |
+| 1 | failed: an error, printed |
+| 2 | usage: the command line is wrong (the argument parser's own) |
+| 3 | declined: a question was answered no; nothing of that tick was applied, and nothing is printed as an error |
+| 4 | refused by the program: its conflicts and denies, printed (`plan` and `apply` alike) |
+| 5 | stopped: a plan file or an approval applied what it showed and stopped before what it did not; state is consistent, and the next run resumes |
+| 6 | locked: another run holds the stack (named, one line) |
+| 128 + N | stopped by signal N after the run unwound (130 for SIGINT, 143 for SIGTERM) |
+
+`plan --json` says the same word in `outcome`: `done` or `refused`.
+<!-- /man:exit-status -->
+
+### Environment
+
+<!-- man:environment: docs/man/environment.md, copied by `cargo xtask man` -->
+| Variable | Meaning |
+|---|---|
+| `DFORM_LOG` | `debug`: a line on stderr for each phase of a run and each call it makes over the network, with its wall time |
+| `DFORM_ACTOR` | who acts, as the audit log records it (a CI job's OIDC subject); else `USER@HOST`, from `USER` or `LOGNAME` |
+| `DFORM_EXPERIMENTAL` | `1` lists the experimental commands (`controller`, `stack handover`) in `--help` and the completions; they run either way |
+| `DFORM_CREDENTIALS` | the directory of the operator's credential files, instead of `$XDG_CONFIG_HOME/dform/credentials` |
+| `DFORM_S3_ACCESS_KEY_ID`, `DFORM_S3_SECRET_ACCESS_KEY`, `DFORM_S3_SESSION_TOKEN` | the s3 state backend's credentials; else `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` and `AWS_SESSION_TOKEN`; only the environment, no profile file |
+| `DFORM_PROVIDER_TRANSPORT` | `unix`: a provider listens on a socket in the temporary directory instead of TCP on the loopback interface (providers inherit dform's environment) |
+| `DFORM_PROVIDER_FAKE` | an executable to run as the mock provider instead of dform's own |
+| `DFORM_K8S_OFFLINE` | set: the Kubernetes provider is offline, its schema the snapshot built into it; Read, Apply and Import fail naming why |
+| `KUBECONFIG` | the cluster the Kubernetes provider applies to; else `~/.kube/config`, else the pod's service account |
+| `OVH_ENDPOINT`, `OVH_APPLICATION_KEY`, `OVH_APPLICATION_SECRET`, `OVH_CONSUMER_KEY` | the OVH provider's credentials, over `ovh.conf`'s |
+| `DFORM_OVH_RESOLVER` | `IP:PORT`: the DNS server the OVH provider asks a zone's nameservers of, instead of the first `nameserver` of `/etc/resolv.conf` |
+| `SSH_AUTH_SOCK` | the agent whose keys the `ssh` provider offers first |
+| `NO_COLOR` | set and not empty: `--color=auto` colours nothing |
+| `XDG_CONFIG_HOME` | where the credential files (`dform/credentials/`) and OVH's `ovh/ovh.conf` are; default `~/.config` |
+| `XDG_CACHE_HOME` | where git mirrors, compiled wasm providers and the language server's read-only files are kept (`dform/`); default `~/.cache` |
+| `MANPAGER`, `PAGER` | the pager `dform help` runs on a terminal (`sh -c`), `MANPAGER` first; with neither the page is printed |
+<!-- /man:environment -->
+
+Variables a test sets (`DFORM_TEST_*`, the poll intervals) and those
+`dform-direct` reads are described where they are used.
+
+### Files
+
+<!-- man:files: docs/man/files.md, copied by `cargo xtask man` -->
+| File | |
+|---|---|
+| `dform.toml` | the project root: the nearest directory up from the working directory (or `-C DIR`) holding one; its providers, stacks and defaults |
+| `stacks/STACK.df` | a stack; every other `.df` file is a module, named by its path from the root |
+| `dform.state/` | at the project root, gitignored: per deployment its state, plan key and audit log, and the project's registry and cache |
+| `dform.state/STACK/state.json` | a deployment's state (`dform.state/STACK/K=V/` for a keyed stack's), with `state.key` (the plan key), `state.lock` (the apply lock), `state.audit.jsonl` (the audit log) and `outputs.json` (the published outputs) beside it |
+| `dform.state/stacks.json` | the registry: where each applied deployment's objects are (a directory, or `s3://..`), for the stacks that read its outputs |
+| `dform.state/cache/` | what providers and trust roots fetch (the Kubernetes OpenAPI document, JWKS) |
+| `~/.config/dform/credentials/KIND/NAME` | the operator's credential `KIND:NAME` (under `$XDG_CONFIG_HOME`, or `DFORM_CREDENTIALS`) |
+| `~/.config/ovh/ovh.conf` | the OVH provider's credentials, after `/etc/ovh.conf` and `~/.ovh.conf`, a later file overriding an earlier one key by key |
+| `~/.ssh/id_ed25519`, `~/.ssh/id_ecdsa`, `~/.ssh/id_rsa` | the `ssh` provider's keys after the agent's, when unencrypted |
+| `~/.cache/dform/` | git mirrors, compiled wasm providers, the language server's read-only files (under `$XDG_CACHE_HOME`) |
+<!-- /man:files -->
+
+### See also
+
+<!-- man:see-also: docs/man/see-also.md, copied by `cargo xtask man` -->
+Each command's page: `dform help COMMAND`, or dform-COMMAND(1)
+(dform-stack-list(1) for `stack list`). The language is docs/grammar.md
+and a project's layout docs/layout.md in dform's source; docs/reference.md
+describes every command at length, and docs/providers.md the provider
+protocol.
+<!-- /man:see-also -->
+
+`dform help [COMMAND..]` shows these sections in dform(1), and a command's
+page (`dform help stack list`), each generated from the command line's
+definitions by `cargo xtask man`, which writes them to `target/man/`;
+a package installs them under `share/man/man1/`.
 
 ### State backends
 

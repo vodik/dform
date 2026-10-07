@@ -18,6 +18,7 @@ members = [
     "crates/dform-sdk",
     "crates/dform-sdk-derive",
     "tree-sitter-dform",
+    "xtask",
 ]
 # `cargo build` and `cargo test` build the provider binaries the CLI spawns
 # and `dform-direct`, which tests and benches run; `cargo run` runs the CLI
@@ -77,6 +78,7 @@ dform-s3 = { path = "crates/dform-s3" }
 dform-mock = { path = "crates/dform-mock" }
 # `dform lsp`, the language server.
 dform-lsp = { path = "crates/dform-lsp" }
+clap_mangen = "0.3"
 
 [[bin]]
 name = "dform"
