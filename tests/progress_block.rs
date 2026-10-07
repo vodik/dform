@@ -3,8 +3,8 @@
 //! and address as it starts and with its time once it answered, a
 //! heartbeat line per running change, the tick's end line; a failure
 //! stops the tick, its line marked `!` with the error's first line; `-q`
-//! only the end; Ctrl-C the running change `interrupted`, and the next
-//! apply resumes it.
+//! only the end; Ctrl-C stops after the change in flight, what never
+//! started `interrupted`, and the next apply resumes it.
 
 mod common;
 use common::Scratch;
@@ -134,8 +134,9 @@ fn a_running_change_beats_and_quiet_says_only_the_end() {
     assert_eq!(block(&r.stderr), ["tick 1  done  T"], "{}", r.stderr);
 }
 
-/// Ctrl-C while a create runs: the change `interrupted`, the tick's end,
-/// what to do; the next apply resumes the tick.
+/// Ctrl-C while a create runs: said, the create awaited, what never
+/// started `interrupted`, the tick's end, what to do; the next apply
+/// resumes the tick.
 #[test]
 fn an_interrupt_says_what_ran_and_the_next_apply_resumes() {
     let s = project("progress-int");
@@ -148,8 +149,11 @@ fn an_interrupt_says_what_ran_and_the_next_apply_resumes() {
     let started = std::time::Instant::now();
     loop {
         std::thread::sleep(Duration::from_millis(100));
-        let state = std::fs::read_to_string(s.path("w.state.json")).unwrap_or_default();
-        if state.contains("net.vpc::main") || started.elapsed() > Duration::from_secs(20) {
+        // The vpc's answer is in the log (R-146): the subnet's create runs.
+        let log = std::fs::read_to_string(s.path("w.state.audit.jsonl")).unwrap_or_default();
+        if log.contains("\"address\":\"net.vpc[\\\"main\\\"]\"")
+            || started.elapsed() > Duration::from_secs(20)
+        {
             break;
         }
     }
@@ -162,8 +166,13 @@ fn an_interrupt_says_what_ran_and_the_next_apply_resumes() {
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert_eq!(out.status.code(), Some(130), "{stderr}");
     let lines = block(&stderr);
+    // The create in flight is awaited (R-137): it answers; what never
+    // started is interrupted.
     assert!(
-        lines.contains(&"  + net.subnet a  T  interrupted".to_string())
+        lines.contains(
+            &"Ctrl-C: stopping after the calls in flight; Ctrl-C again to quit now".to_string()
+        ) && lines.contains(&"  + net.subnet a  T  made".to_string())
+            && lines.contains(&"  + net.subnet b    interrupted".to_string())
             && lines.contains(&"tick 1  interrupted  T".to_string())
             && lines.last().unwrap() == "interrupted: the next apply resumes it",
         "{stderr}"

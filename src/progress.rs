@@ -7,14 +7,17 @@
 //! [`BEAT`] as a heartbeat; under `-q` only the tick's end. Between
 //! ticks, on a terminal, the tick's wait is one line counting up.
 //!
-//! Ctrl-C while a tick runs prints the block once more, its running
-//! change `interrupted`, and says the next apply resumes it: state was
-//! written after every call that answered.
+//! Ctrl-C (or SIGTERM) while a tick runs is a request to stop
+//! (`interrupt`, R-137): the block says so above it, no new change
+//! starts, the calls in flight are awaited, and the block ends with what
+//! never started `interrupted`; the apply unwinds from there and says the
+//! next apply resumes it. Ctrl-C again quits at once.
 
 pub use dform_core::progress::*;
 
 use crossterm::{QueueableCommand, cursor, terminal};
 use dform_core::executor::Event;
+use dform_core::interrupt;
 use dform_core::report::Style;
 use dform_core::report::progress::{Block, took};
 use std::io::Write;
@@ -47,13 +50,6 @@ impl Mode {
             _ => Mode::Lines,
         }
     }
-}
-
-/// Ctrl-C was pressed while a tick ran.
-static INTERRUPTED: AtomicBool = AtomicBool::new(false);
-
-extern "C" fn on_sigint(_: libc::c_int) {
-    INTERRUPTED.store(true, Ordering::SeqCst);
 }
 
 /// What is drawn: a tick's block, or the wait between ticks.
@@ -98,6 +94,11 @@ struct Inner {
     /// When each change's line was last printed (`Lines`).
     said: Vec<Instant>,
     beat: Duration,
+    /// A line to print once, above the block (on a terminal, at its next
+    /// redraw).
+    note: Option<String>,
+    /// The stop was said.
+    stopping: bool,
 }
 
 impl Inner {
@@ -112,6 +113,11 @@ impl Inner {
             .unwrap_or(100);
         if self.drawn > 0 {
             let _ = err.queue(cursor::MoveToPreviousLine(self.drawn as u16));
+        }
+        // Printed where the block began: the block is drawn below it.
+        if let Some(note) = self.note.take() {
+            let _ = err.queue(terminal::Clear(terminal::ClearType::CurrentLine));
+            let _ = writeln!(err, "{note}");
         }
         let lines = self.board.lines(self.style);
         let plain = self.board.lines(Style::default());
@@ -189,15 +195,9 @@ impl Progress {
             drawn: 0,
             said: vec![Instant::now(); n],
             beat,
+            note: None,
+            stopping: false,
         }));
-        INTERRUPTED.store(false, Ordering::SeqCst);
-        // SAFETY: the handler only stores to an atomic.
-        unsafe {
-            libc::signal(
-                libc::SIGINT,
-                on_sigint as extern "C" fn(libc::c_int) as libc::sighandler_t,
-            );
-        }
         if mode == Mode::Terminal {
             inner.lock().expect("progress").redraw();
         }
@@ -253,10 +253,27 @@ impl Progress {
     }
 
     /// The tick ended: the block as it ended, its end line, and, when
-    /// several changes failed, each error in full below it.
+    /// several changes failed, each error in full below it. Stopped by a
+    /// signal, what never started is `interrupted`.
     pub fn finish(mut self) {
         self.halt();
         let mut inner = self.inner.lock().expect("progress");
+        let (mode, style) = (inner.mode, inner.style);
+        if interrupt::requested().is_some()
+            && let Board::Tick(b) = &mut inner.board
+        {
+            for i in 0..b.entries.len() {
+                if matches!(
+                    b.entries[i].state,
+                    dform_core::report::progress::State::Waiting(_)
+                ) {
+                    b.entries[i].state = dform_core::report::progress::State::Interrupted;
+                    if mode == Mode::Lines {
+                        eprintln!("{}", b.line(i, style));
+                    }
+                }
+            }
+        }
         if inner.mode == Mode::Terminal {
             inner.redraw();
         }
@@ -280,10 +297,6 @@ impl Progress {
         if let Some(t) = self.thread.take() {
             let _ = t.join();
         }
-        // SAFETY: the default disposition again.
-        unsafe {
-            libc::signal(libc::SIGINT, libc::SIG_DFL);
-        }
     }
 }
 
@@ -294,14 +307,17 @@ impl Drop for Progress {
 }
 
 /// The driver's own clock: a redraw a second on a terminal, a heartbeat
-/// per running change every `beat` otherwise; Ctrl-C.
+/// per running change every `beat` otherwise; a stop asked for, said.
 fn watch(inner: &Mutex<Inner>, stop: &AtomicBool) {
     let mut drawn = Instant::now();
     while !stop.load(Ordering::SeqCst) {
         std::thread::sleep(Duration::from_millis(50));
         let mut g = inner.lock().expect("progress");
-        if INTERRUPTED.load(Ordering::SeqCst) {
-            interrupted(&mut g);
+        if let Some(sig) = interrupt::requested()
+            && !g.stopping
+        {
+            g.stopping = true;
+            stopping(&mut g, sig);
         }
         match g.mode {
             Mode::Terminal if drawn.elapsed() >= Duration::from_secs(1) => {
@@ -327,26 +343,18 @@ fn watch(inner: &Mutex<Inner>, stop: &AtomicBool) {
     }
 }
 
-/// Ctrl-C: the block once more, what ran interrupted, and out.
-fn interrupted(g: &mut Inner) -> ! {
-    if let Board::Tick(b) = &mut g.board {
-        b.interrupt();
-    }
+/// A stop was asked for: said once, above the block on a terminal.
+fn stopping(g: &mut Inner, sig: i32) {
+    let what = match sig {
+        libc::SIGINT => "Ctrl-C",
+        _ => interrupt::name(sig),
+    };
+    let note = format!("{what}: stopping after the calls in flight; Ctrl-C again to quit now");
     match g.mode {
-        Mode::Terminal => g.redraw(),
-        _ => {
-            if let Board::Tick(b) = &g.board {
-                for i in 0..b.entries.len() {
-                    if b.entries[i].state == dform_core::report::progress::State::Interrupted {
-                        eprintln!("{}", b.line(i, g.style));
-                    }
-                }
-            }
+        Mode::Terminal => {
+            g.note = Some(note);
+            g.redraw();
         }
+        _ => eprintln!("{note}"),
     }
-    if let Board::Tick(b) = &g.board {
-        eprintln!("{}", b.end());
-    }
-    eprintln!("interrupted: the next apply resumes it");
-    std::process::exit(130);
 }

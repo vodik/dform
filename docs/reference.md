@@ -1321,9 +1321,21 @@ done  1m50s`. `-q` prints only that end line. The first failure stops the
 tick: nothing new starts, what is in flight finishes, and the failed
 change's mark is `!`, its error's first line after its time (`tick 1
 failed  ..` ends it); several failures, each inline and every error in
-full below the block. Ctrl-C prints the block once more, what ran
-`interrupted`, and `interrupted: the next apply resumes it` (exit 130):
-state was written after every call that answered. Between ticks, on a
+full below the block. Ctrl-C (SIGINT) or SIGTERM asks the apply to
+stop: it says `Ctrl-C: stopping after the calls in flight; Ctrl-C again
+to quit now`, starts no new change, waits for the calls in flight (each
+bounded by its provider's `timeout`) and logs their answers, then ends
+the block with what never started `interrupted`, releases the lock,
+writes `apply_end` (`result: stopped`, `why: interrupted`, the signal),
+lets the providers end (their stdin closed) and says `interrupted: the
+next apply resumes it`; it exits 128 + the signal (130, 143) once all of
+that is done. A second Ctrl-C quits at once (the signal's default),
+with every answer so far in the log. The same holds between ticks, in a
+wait, and at a `[y/N]` question (nothing of the tick asked about is
+applied). A controller stops after its event the same way. Providers
+run in a process group of their own, so the terminal's Ctrl-C reaches
+dform alone. A run started with SIGINT ignored (`nohup`, a background
+job) keeps ignoring it. Between ticks, on a
 terminal, the tick's wait is one line counting up (`tick 2` then `waits
 on  ssh.read("51.79.29.179", "ubuntu", "/etc/rancher/k3s/k3s.yaml")
 42s  not yet`); elsewhere it is the `waiting on .. since` line every 10s

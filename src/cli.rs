@@ -33,11 +33,12 @@ use std::sync::Arc;
 
 /// The width of the terminal stdout is, if it is one.
 fn terminal_width() -> Option<usize> {
-    // SAFETY: TIOCGWINSZ writes a `winsize` into the one we pass, and
-    // fails (non-zero) when fd 1 is not a terminal.
-    let mut ws: libc::winsize = unsafe { std::mem::zeroed() };
-    let ok = unsafe { libc::ioctl(libc::STDOUT_FILENO, libc::TIOCGWINSZ, &mut ws) } == 0;
-    (ok && ws.ws_col > 0).then_some(ws.ws_col as usize)
+    use std::io::IsTerminal;
+    if !std::io::stdout().is_terminal() {
+        return None;
+    }
+    let (cols, _) = crossterm::terminal::size().ok()?;
+    (cols > 0).then_some(cols as usize)
 }
 
 /// How this run reaches its providers (`main`'s `launch`).
@@ -786,6 +787,10 @@ pub fn main(
     crate::timing::begin();
     let args = Args::parse_from(args);
     let color = args.inputs.color;
+    // Ctrl-C and SIGTERM ask the run to stop and unwind (`interrupt`):
+    // dform's own, not a provider's or the language server's.
+    let _signals = (!matches!(args.cmd, Command::ServeProvider { .. } | Command::Lsp))
+        .then(crate::interrupt::install);
     let result = match &args.cmd {
         Command::ServeProvider { name } => serve_provider(name).map(|()| Outcome::Done),
         Command::Lsp => dform_lsp::serve_stdio(dform_lsp::Options {
@@ -810,6 +815,11 @@ pub fn main(
     };
     crate::timing::finish();
     match result {
+        // Stopped by a signal: 128 + its number, as a shell says it,
+        // once every destructor of the run has run.
+        Ok(Outcome::Interrupted { signal }) => {
+            std::process::ExitCode::from(128u8.saturating_add(signal as u8))
+        }
         // A decline or a stop said what it had to (`run`).
         Ok(_) => std::process::ExitCode::SUCCESS,
         Err(e) => {
@@ -1552,6 +1562,11 @@ pub enum Outcome {
     /// A plan file or an approval applied its ticks to `tick` and stopped
     /// before one that adds what it did not show; `why` says so.
     Stopped { tick: usize, why: String },
+    /// SIGINT or SIGTERM asked it to stop (`interrupt`, R-137): no new
+    /// Apply call was made, the calls in flight were awaited and their
+    /// answers logged; the next apply resumes. `main` exits 128 +
+    /// `signal`, after every destructor ran.
+    Interrupted { signal: i32 },
 }
 
 /// One run of the command line. `hook`: controller mode's part of an apply
@@ -1560,8 +1575,11 @@ pub enum Outcome {
 /// anything, is said last.
 fn run(cli: Cli, hook: Option<&mut controller::Hook>) -> Result<Outcome> {
     let mut session = None;
-    let r = run_with(cli, hook, &mut session);
+    let r = interrupted(run_with(cli, hook, &mut session));
     let Some(s) = session else {
+        if let Ok(Outcome::Interrupted { signal }) = &r {
+            eprintln!("interrupted ({})", crate::interrupt::name(*signal));
+        }
         return r;
     };
     let end = match &r {
@@ -1572,6 +1590,11 @@ fn run(cli: Cli, hook: Option<&mut controller::Hook>) -> Result<Outcome> {
         Ok(Outcome::Stopped { tick, .. }) => {
             serde_json::json!({ "result": "stopped", "tick": tick })
         }
+        Ok(Outcome::Interrupted { signal }) => serde_json::json!({
+            "result": "stopped",
+            "why": "interrupted",
+            "signal": crate::interrupt::name(*signal),
+        }),
         Err(e) => serde_json::json!({ "result": "failed", "error": e.to_string() }),
     };
     let logged = s.log.append("apply_end", end);
@@ -1592,7 +1615,25 @@ fn run(cli: Cli, hook: Option<&mut controller::Hook>) -> Result<Outcome> {
     if let Outcome::Declined { why: Some(why), .. } | Outcome::Stopped { why, .. } = &outcome {
         eprintln!("{why}");
     }
+    if let Outcome::Interrupted { .. } = outcome {
+        eprintln!("interrupted: the next apply resumes it");
+    }
     Ok(outcome)
+}
+
+/// A run that a signal asked to stop is interrupted, however it unwound
+/// (the executor's refusal of the next call, a prompt, a wait); an error
+/// beside it, not the stop itself, is said as a warning.
+fn interrupted(r: Result<Outcome>) -> Result<Outcome> {
+    let Some(signal) = crate::interrupt::requested() else {
+        return r;
+    };
+    if let Err(e) = &r
+        && !e.is::<crate::interrupt::Interrupted>()
+    {
+        eprintln!("warning: {e:#}");
+    }
+    Ok(Outcome::Interrupted { signal })
 }
 
 fn run_with(
@@ -1615,7 +1656,7 @@ fn run_with(
         eprintln!("{EXPERIMENTAL}");
     }
     if let Cmd::Controller { .. } = cli.cmd {
-        return run_controller(cli).map(|()| Outcome::Done);
+        return run_controller(cli);
     }
     match &cli.cmd {
         Cmd::Handover { stack, to } => {
@@ -2853,6 +2894,8 @@ fn run_with(
             // The providers the plan's own evaluation configured.
             evaluator.take_configured();
             loop {
+                // Between ticks, a signal stops the apply here.
+                crate::interrupt::check()?;
                 let Planned {
                     res: r,
                     resources: docs,
@@ -3419,7 +3462,9 @@ fn run_with(
                         if w.elapsed() >= budget {
                             break false;
                         }
-                        std::thread::sleep(w.next_poll(budget));
+                        if crate::interrupt::sleep(w.next_poll(budget)) {
+                            break false;
+                        }
                         backend.reread();
                         externs.forget_not_yet();
                         let (next, _) = evaluate_with(&st, &BTreeSet::new(), &[], Some(tick))?;
@@ -3435,7 +3480,11 @@ fn run_with(
                     }
                     let redact = query::Redactor::new(&res.facts, schema);
                     log_retries(&audit, &redact, backend, tick)?;
-                    let result = if resolved { "resolved" } else { "expired" };
+                    let result = match (resolved, crate::interrupt::requested()) {
+                        (true, _) => "resolved",
+                        (false, Some(_)) => "interrupted",
+                        (false, None) => "expired",
+                    };
                     audit.append(
                         "wait",
                         crate::audit::wait(tick, &labels, w.since(), w.elapsed(), result),
@@ -3446,6 +3495,7 @@ fn run_with(
                         st.in_flight = None;
                         evaluator.ssh.keep(&mut st);
                         persist(&st)?;
+                        crate::interrupt::check()?;
                         bail!(
                             "apply stopped at tick {tick}: waited {} on {}, still unknown \
                              (the provider's `timeout` in dform.toml); state is consistent: \
@@ -4049,7 +4099,7 @@ impl deployment::Observer for Watch<'_> {
 /// `dform controller run`: a run per event (`controller::Hook`), until
 /// `--once` or `--max-events` says stop. A run that fails is logged and the
 /// controller goes on watching; the first one failing ends it.
-fn run_controller(cli: Cli) -> Result<()> {
+fn run_controller(cli: Cli) -> Result<Outcome> {
     let Cmd::Controller {
         poll,
         once,
@@ -4158,11 +4208,27 @@ fn run_controller(cli: Cli) -> Result<()> {
                 .open(path)?;
             writeln!(f, "{}", crate::diag::source_count())?;
         }
+        // SIGTERM (what systemd and Kubernetes send) or Ctrl-C: after the
+        // event, which stopped at its next Apply call, the lease released.
+        let stop = |signal: i32| {
+            controller::log(format_args!(
+                "controller {own}: {}: stopped",
+                crate::interrupt::name(signal)
+            ));
+            Ok(Outcome::Interrupted { signal })
+        };
+        if let Some(signal) = crate::interrupt::requested() {
+            return stop(signal);
+        }
         if once || max_events.is_some_and(|n| events >= n) {
-            return Ok(());
+            return Ok(Outcome::Done);
         }
         while !hook.changed() {
-            std::thread::sleep(std::time::Duration::from_millis(poll));
+            if crate::interrupt::sleep(std::time::Duration::from_millis(poll))
+                && let Some(signal) = crate::interrupt::requested()
+            {
+                return stop(signal);
+            }
         }
     }
 }
@@ -4179,7 +4245,7 @@ fn confirm(
     tick: usize,
     style: report::Style,
 ) -> Result<bool> {
-    use std::io::{BufRead, IsTerminal, Write};
+    use std::io::{IsTerminal, Write};
     let stdin = std::io::stdin();
     if !stdin.is_terminal() {
         bail!(
@@ -4194,19 +4260,49 @@ fn confirm(
     };
     print!("{} [y/N] ", style.paint(report::Paint::Bold, &ask));
     std::io::stdout().flush()?;
-    let mut answer = String::new();
-    stdin.lock().read_line(&mut answer)?;
+    let answer = answer()?;
     Ok(matches!(
         answer.trim().to_ascii_lowercase().as_str(),
         "y" | "yes"
     ))
 }
 
+/// A line from the terminal, the answer to a question. A signal while it
+/// waits (Ctrl-C at the prompt) is the stop it asks for (`interrupt`):
+/// nothing was applied for the question. The line is read on a thread of
+/// its own, which a stop leaves blocked on stdin until the process exits.
+fn answer() -> Result<String> {
+    use std::io::BufRead;
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::Builder::new()
+        .name("dform-prompt".into())
+        .spawn(move || {
+            let mut line = String::new();
+            let r = std::io::stdin().lock().read_line(&mut line).map(|_| line);
+            let _ = tx.send(r);
+        })?;
+    loop {
+        match rx.recv_timeout(std::time::Duration::from_millis(50)) {
+            Ok(line) => return Ok(line?),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                if crate::interrupt::requested().is_some() {
+                    // The prompt's line ends here, not the shell's.
+                    println!();
+                    crate::interrupt::check()?;
+                }
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                bail!("internal: the prompt's reader is gone")
+            }
+        }
+    }
+}
+
 /// Ask whether to apply a plan that empties `e` (R-80), on a terminal
 /// only: there is no `--yes` for it, only `--allow-empty`. Answered no,
 /// `false`.
 fn confirm_emptied(e: &zset::Emptied, deployment: &str, style: report::Style) -> Result<bool> {
-    use std::io::{BufRead, IsTerminal, Write};
+    use std::io::{IsTerminal, Write};
     let stdin = std::io::stdin();
     if !stdin.is_terminal() {
         bail!(
@@ -4220,8 +4316,7 @@ fn confirm_emptied(e: &zset::Emptied, deployment: &str, style: report::Style) ->
     let ask = format!("T{}. Apply it anyway?", &what[1..]);
     print!("{} [y/N] ", style.paint(report::Paint::Warn, &ask));
     std::io::stdout().flush()?;
-    let mut answer = String::new();
-    stdin.lock().read_line(&mut answer)?;
+    let answer = answer()?;
     Ok(matches!(
         answer.trim().to_ascii_lowercase().as_str(),
         "y" | "yes"

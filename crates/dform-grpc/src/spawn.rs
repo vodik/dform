@@ -142,6 +142,12 @@ pub fn start(program: &Program, env: &Env) -> Result<Started> {
     let mut cmd = Command::new(&program.exe);
     cmd.args(&program.args);
     env.apply(&mut cmd);
+    // A process group of its own: the terminal's Ctrl-C reaches dform
+    // alone, which stops after the calls in flight (`interrupt`, R-137);
+    // the provider ends when dform closes its stdin, or killed by its
+    // guard.
+    #[cfg(unix)]
+    std::os::unix::process::CommandExt::process_group(&mut cmd, 0);
     let mut child = ChildGuard(
         cmd.stdin(Stdio::piped())
             .stdout(Stdio::piped())

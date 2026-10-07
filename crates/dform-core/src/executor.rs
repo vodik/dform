@@ -161,7 +161,11 @@ pub fn run_tick(
             started[i] = true;
             start_ms[i] = now;
             seq[i] = started.iter().filter(|s| **s).count();
-            if let Err(e) = opts.before_submit.map_or(Ok(()), |check| check()) {
+            // No new call once a signal asked to stop (`interrupt`): the
+            // calls in flight are awaited below, and their answers kept.
+            let check = crate::interrupt::check()
+                .and_then(|()| opts.before_submit.map_or(Ok(()), |check| check()));
+            if let Err(e) = check {
                 started[i] = false;
                 failed = Some(e);
                 break;

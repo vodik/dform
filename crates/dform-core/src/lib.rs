@@ -20,6 +20,7 @@ pub mod graph;
 pub mod hooks;
 pub mod infer;
 pub mod inputs;
+pub mod interrupt;
 pub mod ir;
 pub mod lattice;
 pub mod lexer;
