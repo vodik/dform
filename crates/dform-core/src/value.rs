@@ -283,6 +283,37 @@ pub const VALUE_TYPES: &[&str] = &[
     "inet", "ip", "iprange", "uri", "oci", "semver", "time", "bytes", "cpu", "duration",
 ];
 
+/// The type a value is of, as a program writes it: `string`, `inet`,
+/// `bytes` (a quantity by its dimension), `list`.
+pub fn type_name(v: &Value) -> &'static str {
+    match v {
+        Value::Str(_) => "string",
+        Value::Int(_) => "int",
+        Value::Float(_) => "float",
+        Value::Bool(_) => "bool",
+        Value::List(_) => "list",
+        Value::Obj(_) => "object",
+        Value::Ip(_) => "ip",
+        Value::IpNet { .. } => "inet",
+        Value::IpRange { .. } => "iprange",
+        Value::Quantity(q) => q.dim().name(),
+        Value::Time(_) => "time",
+        Value::Uri(_) => "uri",
+        Value::Oci(_) => "oci",
+        Value::Semver(_) => "semver",
+        Value::Ref { .. } | Value::CloudRef { .. } => "ref",
+        Value::Null { .. } => "null",
+    }
+}
+
+/// `a string`, `an inet`: a type name with its article.
+pub fn article(ty: &str) -> String {
+    match ty.chars().next() {
+        Some('a' | 'e' | 'i' | 'o' | 'u') => format!("an {ty}"),
+        _ => format!("a {ty}"),
+    }
+}
+
 /// `v` read as the value type `ty` (one of [`VALUE_TYPES`]): a string
 /// parsed, a value of the type itself; or why it is not one. What a
 /// typed position does with a computed string at run time.

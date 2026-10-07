@@ -13,10 +13,6 @@ fn subnet(net: inet, bits: int, n: int) -> inet forwards
 #| example: let private_ip = inet.host(cfg.vpc_net, 20)
 fn host(net: inet, n: int) -> ip forwards
 
-#| Whether the network holds the address; also a predicate.
-#| example: inside(a) where inet.contains("10.0.0.0/8", a)
-fn contains(net: inet, addr: ip) -> bool
-
 #| Whether two networks share an address; also a predicate.
 #| example: deny "overlap" where inet.overlaps(a.cidr, b.cidr), a != b
 fn overlaps(a: inet, b: inet) -> bool

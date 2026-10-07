@@ -2405,7 +2405,7 @@ for byte, and a file with a syntax error is reported, not rewritten.
     and `input p from FORMAT("path")` takes its first document's columns.
     Uses that disagree are a compile error naming both, a string literal
     is read as its column's type (`"10.0.0.0/8"` in a column
-    `inet.contains` reads), and `n + 1` on a column of strings is an
+    `inet.subnet` reads), and `n + 1` on a column of strings is an
     error, not a silent non-match; a column declared `any` takes every
     type. The editor's hover prints the signature.
   - A `decl` of a relation no rule defines declares one a provider feeds
@@ -3429,7 +3429,7 @@ share: the time spent in the mock's calls.
 This is an MVP:
 
 - semi-naive evaluator with hash indexes (see Performance)
-- functions declared in `std/*.df` (docs/grammar.md "Functions"): the prelude's `int`, `float`, `format`, `len`, `to`, `declassify`; `inet.subnet`, `inet.host`, `inet.contains`, `inet.overlaps`, `int.range`, `ip.unspecified`, `str.split`, `str.lower`, `str.upper`, `str.dedent`, `str.trim`, `str.replace`, `str.starts_with`, `str.ends_with`, `str.contains`, `str.pad_left`, `str.pad_right`, `str.slice`, `list.join`, `list.sort`, `list.sort_by`, `list.unique`, `list.flatten`, `list.zip`, `list.min`, `list.max`, `list.sum`, `list.contains`, `list.first`, `list.last`, `time.format`, `time.in_zone`, `random.password`, `random.base64`, `random.id`, `random.uuid`, `random.signing_key`, `regex.match`, `regex.capture`, `regex.replace`, `semver.satisfies`, `oci.pinned`, `oci.with_tag`, `oci.with_digest`, `oci.with_registry`, `hash.sha256`, `base64.encode`, `base64.decode`, `uri.join`, `uri.with_scheme`, `uri.with_user`, `uri.with_password`, `uri.with_host`, `uri.with_port`, `uri.with_path`, `uri.with_query`, `uri.with_fragment`, `uri.escape`, `path.join`, `path.dir`, `path.base`, `path.ext`, `path.rel`, `path.clean`, `json.decode`, `json.encode`, `yaml.decode`, `yaml.encode`, `toml.decode`, `toml.encode`; arithmetic `+ - * / %`; aggregates `collect_*`, `count`, `sum`, `min`, `max`, `any`, `all`, bound in a body (`n = count(x)`)
+- functions declared in `std/*.df` (docs/grammar.md "Functions"): the prelude's `int`, `float`, `format`, `len`, `to`, `declassify`; `inet.subnet`, `inet.host`, `inet.overlaps`, `int.range`, `ip.unspecified`, `str.split`, `str.lower`, `str.upper`, `str.dedent`, `str.trim`, `str.replace`, `str.starts_with`, `str.ends_with`, `str.pad_left`, `str.pad_right`, `str.slice`, `list.join`, `list.sort`, `list.sort_by`, `list.unique`, `list.flatten`, `list.zip`, `list.min`, `list.max`, `list.sum`, `list.first`, `list.last`, `time.format`, `time.in_zone`, `random.password`, `random.base64`, `random.id`, `random.uuid`, `random.signing_key`, `regex.match`, `regex.capture`, `regex.replace`, `semver.satisfies`, `oci.pinned`, `oci.with_tag`, `oci.with_digest`, `oci.with_registry`, `hash.sha256`, `base64.encode`, `base64.decode`, `uri.join`, `uri.with_scheme`, `uri.with_user`, `uri.with_password`, `uri.with_host`, `uri.with_port`, `uri.with_path`, `uri.with_query`, `uri.with_fragment`, `uri.escape`, `path.join`, `path.dir`, `path.base`, `path.ext`, `path.rel`, `path.clean`, `json.decode`, `json.encode`, `yaml.decode`, `yaml.encode`, `toml.decode`, `toml.encode`; arithmetic `+ - * / %`; aggregates `collect_*`, `count`, `sum`, `min`, `max`, `any`, `all`, bound in a body (`n = count(x)`)
 - list helper predicate: `member(List, Item)` and `member(List, Index, Item)` (Index starts at 0)
 - safe(ish) negation: `not` requires the atom be ground at evaluation time
 

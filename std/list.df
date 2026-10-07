@@ -37,10 +37,6 @@ fn max(xs: list) -> any? forwards
 #| example: let total = list.sum(replica_counts)
 fn sum(xs: list) -> number
 
-#| Whether the list holds the value; also a predicate.
-#| example: deny "unknown zone" where not list.contains(allowed_zones, z)
-fn contains(xs: list, value: any) -> bool
-
 #| The first element; no value for an empty list.
 #| example: let primary = list.first(subnets)
 fn first(xs: list) -> any? forwards

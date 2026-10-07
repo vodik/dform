@@ -109,7 +109,7 @@ impl Function {
         }
     }
 
-    /// A function to bool is also a predicate: `inet.contains(n, a)` as a
+    /// A function to bool is also a predicate: `inet.overlaps(a, b)` as a
     /// body literal holds when the call is true.
     pub fn is_predicate(&self) -> bool {
         self.ret == "bool"
@@ -209,6 +209,16 @@ pub fn unknown(span: crate::ast::Span, name: &str) -> crate::diag::Diagnostic {
     }
 }
 
+/// Whether `name` is written as a function: one std declares, one it no
+/// longer has, or a name in a function package (`inet.contains`).
+pub fn is_function_name(name: &str) -> bool {
+    get(name).is_some()
+        || gone(name).is_some()
+        || name
+            .split_once('.')
+            .is_some_and(|(head, _)| registry().is_package(head))
+}
+
 /// What a program writes for a function std no longer has (R-133,
 /// R-134): there are no constructors, a type's parts are its fields.
 fn gone(name: &str) -> Option<String> {
@@ -254,6 +264,10 @@ fn gone(name: &str) -> Option<String> {
             &["major", "minor", "patch", "pre"],
         ),
         "inet.prefix_len" => "a network's prefix length is its field `n.bits`".to_string(),
+        // Membership is the operator `in` (R-155).
+        "inet.contains" => "an address in a network is `a in net`".to_string(),
+        "list.contains" => "a value in a list is `v in xs`".to_string(),
+        "str.contains" => "a substring of a string is `\"x\" in s`".to_string(),
         // Operators where a type has them (R-134).
         "time.add" => "a time moves by a duration with `t + d` (and `t - d`)".to_string(),
         "time.until" => "the duration from `a` to `b` is `b - a`".to_string(),
@@ -863,19 +877,6 @@ pub const BODIES: &[(&str, Body)] = &[
         }
         _ => None,
     }),
-    ("inet.contains", |a| match a {
-        [net, ip] => {
-            let (addr, prefix) = as_ipnet(net)?;
-            let n = as_ip_u32(ip)?;
-            let mask = if prefix == 0 {
-                0
-            } else {
-                u32::MAX << (32 - prefix as u32)
-            };
-            Some(Value::Bool((n & mask) == addr))
-        }
-        _ => None,
-    }),
     ("inet.overlaps", |a| match a {
         [x, y] => {
             let (a0, a1) = ipnet_range(x)?;
@@ -957,10 +958,6 @@ pub const BODIES: &[(&str, Body)] = &[
     }),
     ("str.ends_with", |a| match a {
         [Value::Str(s), Value::Str(p)] => Some(Value::Bool(s.ends_with(p.as_str()))),
-        _ => None,
-    }),
-    ("str.contains", |a| match a {
-        [Value::Str(s), Value::Str(n)] => Some(Value::Bool(s.contains(n.as_str()))),
         _ => None,
     }),
     ("str.pad_left", |a| match a {
@@ -1051,10 +1048,6 @@ pub const BODIES: &[(&str, Body)] = &[
             }
             _ => None,
         }),
-        _ => None,
-    }),
-    ("list.contains", |a| match a {
-        [Value::List(xs), v] => Some(Value::Bool(xs.contains(v))),
         _ => None,
     }),
     ("list.first", |a| match a {

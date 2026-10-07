@@ -33,10 +33,6 @@ fn starts_with(text: string, prefix: string) -> bool
 #| example: deny "bad suffix" where not str.ends_with(image, ":latest")
 fn ends_with(text: string, suffix: string) -> bool
 
-#| Whether the text holds `needle`; also a predicate.
-#| example: deny "no team tag" where not str.contains(tags, "team=")
-fn contains(text: string, needle: string) -> bool
-
 #| The text padded on the left with `pad` to at least `width` characters; an error when `pad` is empty.
 #| example: let n = str.pad_left("${i}", 3, "0")
 fn pad_left(text: string, width: int, pad: string) -> string forwards

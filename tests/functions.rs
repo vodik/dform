@@ -14,7 +14,7 @@ fn qualified_functions_evaluate() {
 sub(c) where net(n), c = inet.subnet(n, 8, 2)
 host(h) where net(n), h = inet.host(n, 1)
 size(p) where net(n), p = n.bits
-inside(a) where a = "10.50.3.4", net(n), inet.contains(n, a)
+inside(a) where a = "10.50.3.4", net(n), a in n
 words(w) where w = str.split("a,b", ",")
 joined(j) where j = list.join(["a", 1], "-")
 counted(a, b) where a = len([1, 2]), b = len("abc")
@@ -27,7 +27,7 @@ port(p) where p = int("8080") + 1
     assert_eq!(
         one(
             "inside",
-            "net(\"10.50.0.0/16\")\ninside(a) where a = \"10.50.3.4\", net(n), inet.contains(n, a)\n"
+            "decl net(n: inet)\nnet(\"10.50.0.0/16\")\ninside(a) where a = \"10.50.3.4\", net(n), a in n\n"
         ),
         [r#"inside("10.50.3.4")"#]
     );
@@ -220,7 +220,8 @@ fn str_additions_evaluate() {
 r(s) where s = str.replace("a_b_c", "_", "-")
 sw(b) where b = str.starts_with("web-1", "web-")
 ew(b) where b = str.ends_with("image:latest", ":latest")
-co(b) where b = str.contains("team=platform", "team=")
+co() where "team=" in "team=platform"
+nco() where not "x" in "team=platform"
 fo(s) where s = format("%s-%s", "a", "b")
 pl(s) where s = str.pad_left("7", 3, "0")
 pr(s) where s = str.pad_right("ab", 4, "-")
@@ -232,7 +233,8 @@ sl2(s) where s = str.slice("hello world", 0, 5)
     assert_eq!(facts(src, "r"), [r#"r("a-b-c")"#]);
     assert_eq!(facts(src, "sw"), ["sw(true)"]);
     assert_eq!(facts(src, "ew"), ["ew(true)"]);
-    assert_eq!(facts(src, "co"), ["co(true)"]);
+    assert_eq!(facts(src, "co"), ["co()"]);
+    assert_eq!(facts(src, "nco"), ["nco()"]);
     assert_eq!(facts(src, "fo"), [r#"fo("a-b")"#]);
     assert_eq!(facts(src, "pl"), [r#"pl("007")"#]);
     assert_eq!(facts(src, "pr"), [r#"pr("ab--")"#]);
@@ -252,7 +254,7 @@ zi(l) where l = list.zip([1, 2], ["a", "b", "c"])
 mn(n) where n = list.min([3, 1, 2])
 mx(n) where n = list.max([3, 1, 2])
 su(n) where n = list.sum([1, 2, 3])
-co(b) where b = list.contains([1, 2, 3], 2)
+co() where 2 in [1, 2, 3]
 fi(n) where n = list.first([1, 2, 3])
 la(n) where n = list.last([1, 2, 3])
 "#;
@@ -263,7 +265,7 @@ la(n) where n = list.last([1, 2, 3])
     assert_eq!(facts(src, "mn"), ["mn(1)"]);
     assert_eq!(facts(src, "mx"), ["mx(3)"]);
     assert_eq!(facts(src, "su"), ["su(6)"]);
-    assert_eq!(facts(src, "co"), ["co(true)"]);
+    assert_eq!(facts(src, "co"), ["co()"]);
     assert_eq!(facts(src, "fi"), ["fi(1)"]);
     assert_eq!(facts(src, "la"), ["la(3)"]);
     let src2 = "so(l) where l = list.sort_by([{name: \"b\"}, {name: \"a\"}], \"name\")\n";
@@ -521,4 +523,59 @@ fn the_prelude_is_what_has_no_type() {
     let e = error("p(x) where x = scoped(\"a\", \"b\")\n");
     assert!(e.contains("scoped is the lowering's"), "{e}");
     assert!(engine::reference("ref", true).is_none());
+}
+
+/// `in` is the one membership (R-155): an element of a list, a substring
+/// of a string, an address of an `inet` or an `iprange`, under `not`
+/// too; `inet.contains`, `list.contains` and `str.contains` are gone, an
+/// error naming `in` as a call and as a predicate.
+#[test]
+fn in_is_the_one_membership() {
+    let src = r#"let n: inet = "10.0.0.0/8"
+let r: iprange = "10.0.0.10-10.0.0.20"
+net_in() where "10.1.2.3" in n
+net_out() where not "11.1.2.3" in n
+range_in() where "10.0.0.15" in r
+range_out() where not "10.0.0.21" in r
+sub_in() where "ell" in "hello"
+sub_out() where not "z" in "hello"
+list_in() where 2 in [1, 2, 3]
+"#;
+    for p in [
+        "net_in",
+        "net_out",
+        "range_in",
+        "range_out",
+        "sub_in",
+        "sub_out",
+        "list_in",
+    ] {
+        assert_eq!(facts(src, p), [format!("{p}()")], "{p}");
+    }
+    // A type with no `in` names the ones that have it, and its text.
+    let program =
+        parse_program("let v: oci = \"ghcr.io/o/app:1\"\np() where \":\" in v\n").unwrap();
+    let e = format!("{:#}", engine::eval(&program, &[]).unwrap_err());
+    assert!(
+        e.contains("`in` takes a list, a string, an `inet` or an `iprange`")
+            && e.contains("its text is `\"${v}\"`"),
+        "{e}"
+    );
+    for (old, new) in [
+        ("inet.contains(n, \"10.0.0.1\")", "`a in net`"),
+        ("list.contains([1], 1)", "`v in xs`"),
+        ("str.contains(\"ab\", \"a\")", "`\"x\" in s`"),
+    ] {
+        let e = error(&format!(
+            "let n: inet = \"10.0.0.0/8\"\np(b) where b = {old}\n"
+        ));
+        assert!(e.contains(new), "{old}: {e}");
+        let program =
+            parse_program(&format!("let n: inet = \"10.0.0.0/8\"\nq() where {old}\n")).unwrap();
+        let e = format!("{:#}", engine::eval(&program, &[]).unwrap_err());
+        assert!(
+            e.contains("unknown function") && e.contains(new),
+            "{old}: {e}"
+        );
+    }
 }

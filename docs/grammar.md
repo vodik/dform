@@ -389,7 +389,7 @@ column and, with the provider's schema, an attribute read (`c = v.cidr`)
 type the column they reach; `input p from FORMAT("path")` with no `decl`
 takes its first document's columns. Two uses that disagree are an error
 naming both; a column with a type checks each literal against it, a
-string read as that type (`"10.0.0.0/8"` in a column `inet.contains`
+string read as that type (`"10.0.0.0/8"` in a column `inet.subnet`
 reads is a network; `"foo"` there is an error); literals of two kinds
 with nothing else are an error naming both; a column of string literals
 only is a string. `n + 1` on a column that is no number, and a
@@ -399,7 +399,8 @@ takes every type and joins nothing. Variables are never coerced, but a
 string column may hold the text of an `inet` or an `ip` a function reads,
 and a value type (an `oci`, a `uri`, an `inet`, an `ip`, a time, a
 quantity) given to a function's `string` parameter is its canonical print
-there (`not str.contains(c.image, ":")` over an `oci`).
+there (`str.starts_with(c.image, "ghcr.io/")` over an `oci`), and so is
+its interpolation (`":" in "${c.image}"`).
 The settled signature (`az(string, int)`, a `decl`'s or a rule head's
 column names where there are some) is what the editor's hover prints.
 
@@ -1984,7 +1985,7 @@ interpolation lowers to it), `inet.host` for an address in a network.
 (5) `forwards` by content: a function whose result is its arguments'
 content forwards a secret (`list.min`, `str.slice`, an encoder, a
 `with_*`); a judgment of one (a function to a bool or a number: `len`,
-`str.contains`, `oci.pinned`, `regex.match`) inspects it. (6) Subject
+`oci.pinned`, `regex.match`) inspects it. (6) Subject
 first, options last, and a list rather than any number of values
 (`path.join` as `list.join`), but `format`'s. (7) A type's package is its
 namespace: a function is named by its package, the type it is about
@@ -1999,11 +2000,11 @@ and checks (3), (5) and (6) where a signature says them.
 | package   | functions                                                                 |
 |-----------|---------------------------------------------------------------------------|
 | prelude   | `int(x)`, `float(x)`; `format(t, v, ...)`, `len(x)`, `to(q, unit)` (a quantity as a whole number of a unit, written as its literals write it: `"Gi"`, `"m"`, `"h"`), `declassify(v, why)`: what is about no one type (`ref(r)` and `cloud_ref(T, n, p)` are forms of the language, "References and their type") |
-| `inet`    | `inet.subnet(net, bits, n)`, `inet.host(net, n)`, `inet.contains(net, a)`, `inet.overlaps(a, b)`; fields `n.addr`, `n.bits` |
+| `inet`    | `inet.subnet(net, bits, n)`, `inet.host(net, n)`, `inet.overlaps(a, b)`; fields `n.addr`, `n.bits`; `a in n` |
 | `int`     | `int.range(lo, hi, step)` (what `i in lo..hi` enumerates)                 |
 | `ip`      | `ip.unspecified(a)`                                                       |
-| `str`     | `str.split(s, sep[, limit])`, `str.lower(s)`, `str.upper(s)`, `str.dedent(s)`, `str.trim(s)`, `str.replace(s, from, to)`, `str.starts_with(s, p)`, `str.ends_with(s, p)`, `str.contains(s, n)`, `str.pad_left(s, w, pad)`, `str.pad_right(s, w, pad)`, `str.slice(s, start[, end])` |
-| `list`    | `list.join(l, sep)`, `list.sort(l)`, `list.sort_by(l, field)`, `list.unique(l)`, `list.flatten(l)`, `list.zip(a, b)`, `list.min(l)`, `list.max(l)`, `list.sum(l)`, `list.contains(l, v)`, `list.first(l)`, `list.last(l)` |
+| `str`     | `str.split(s, sep[, limit])`, `str.lower(s)`, `str.upper(s)`, `str.dedent(s)`, `str.trim(s)`, `str.replace(s, from, to)`, `str.starts_with(s, p)`, `str.ends_with(s, p)`, `str.pad_left(s, w, pad)`, `str.pad_right(s, w, pad)`, `str.slice(s, start[, end])` |
+| `list`    | `list.join(l, sep)`, `list.sort(l)`, `list.sort_by(l, field)`, `list.unique(l)`, `list.flatten(l)`, `list.zip(a, b)`, `list.min(l)`, `list.max(l)`, `list.sum(l)`, `list.first(l)`, `list.last(l)` |
 | `time`    | `time.format(t, layout)`, `time.in_zone(t, zone)`; operators `t + d`, `t - d`, `b - a`, `a < b` |
 | `random`  | `random.password(key[, length[, alphabet]])`, `random.base64(key, length)`, `random.signing_key(key)` (secrets); `random.id(key[, length])`, `random.uuid(key)` |
 | `regex`   | `regex.match(s, re)`, `regex.capture(s, re, n)`, `regex.replace(s, re, with)` (`re` a `regex`-typed pattern, checked at compile time, R-31) |
@@ -2031,7 +2032,7 @@ public, so a name may carry one. A value that must be made once and kept
 whatever the master becomes is `memo.first(KEY, random.base64(KEY, 32))`
 ("Memo").
 
-A function to `bool` is also a predicate: `inet.contains(n, a)` as a body
+A function to `bool` is also a predicate: `inet.overlaps(a, b)` as a body
 literal holds when the call is true. Strings never coerce silently: a
 typed position reads one ("Types"), `int(s)` and `float(s)` convert a
 number's text. Arithmetic (`a + b`) lowers

@@ -496,7 +496,7 @@ deny "subnets overlap" { a: x, b: y } where {
 deny "database reachable from the internet" where {
   rule in aws.security_group_rule
   rule.to_port == 5432
-  inet.contains(rule.cidr_ipv4, "0.0.0.0")
+  "0.0.0.0" in rule.cidr_ipv4
 }
 ```
 

@@ -928,7 +928,12 @@ fn check_defined(
             let (Lit::Pos(a) | Lit::Not(a)) = lit else {
                 continue;
             };
-            if !is_defined(&a.pred) {
+            // A function std does not have, written as a predicate
+            // (`inet.contains(n, a)`): the function's error, naming what
+            // replaces it (R-155: `a in n`).
+            if !is_defined(&a.pred) && crate::functions::is_function_name(&a.pred) {
+                errors.push(crate::functions::unknown(a.span, &a.pred));
+            } else if !is_defined(&a.pred) {
                 errors.push(
                     diag::Diagnostic::error(
                         a.span,
@@ -2748,7 +2753,7 @@ fn eval_not(grounded: &Atom, src: &Src, s: &HashMap<String, Value>, rec: &Rec) -
     true
 }
 
-/// A builtin predicate (a function to bool, `str.contains(c.image, ":")`)
+/// A builtin predicate (a function to bool, `str.starts_with(c.image, "ghcr.io/")`)
 /// over the row: whether it holds, `None` when that is undetermined. An
 /// argument holding a null is a content position (Rule 2): the literal is
 /// stuck. A call in an argument that has no value (`oci.with_digest` of a
@@ -2863,6 +2868,12 @@ fn eval_member2(
         rec.stuck(state, nulls_in(&list_v), "member/2 over a null list");
         return Ok(());
     }
+    if let Some(held) = in_scalar(atom, &list_v, state, rec)? {
+        if held {
+            out.push(state.clone());
+        }
+        return Ok(());
+    }
     let items = match list_v {
         Value::List(items) => items,
         Value::Obj(_) => bail!(
@@ -2889,6 +2900,9 @@ fn eval_not_member2(atom: &Atom, state: &HashMap<String, Value>, rec: &Rec) -> R
         rec.stuck(state, nulls_in(&list_v), "not member/2 over a null list");
         return Ok(false);
     }
+    if let Some(held) = in_scalar(atom, &list_v, state, rec)? {
+        return Ok(!held);
+    }
     let Value::List(items) = list_v else {
         bail!("member/2 first argument must be a list");
     };
@@ -2910,6 +2924,88 @@ fn eval_not_member2(atom: &Atom, state: &HashMap<String, Value>, rec: &Rec) -> R
         return Ok(false);
     }
     Ok(true)
+}
+
+/// `x in e` over a value that is no list (R-155: `in` is the one
+/// membership): a substring of a string (`":" in image`), an address of
+/// an `inet` or an `iprange` (`a in net`). `None` for a list or an
+/// object, which enumerate; `Some(false)` while the item waits on a null
+/// (Rule 2), the literal stuck. The item is a test's, never bound here.
+fn in_scalar(
+    atom: &Atom,
+    coll: &Value,
+    state: &HashMap<String, Value>,
+    rec: &Rec,
+) -> Result<Option<bool>> {
+    if matches!(coll, Value::List(_) | Value::Obj(_)) {
+        return Ok(None);
+    }
+    let Some(item) = eval_term(&atom.args[1], state) else {
+        bail!(
+            "`x in {}` in `{}`: a {} holds a value given, it enumerates none; bind `x` first",
+            partition::fmt_value(coll),
+            rec.text,
+            crate::value::type_name(coll)
+        );
+    };
+    if stuck::has_null(&item) {
+        rec.stuck(state, nulls_in(&item), "`in` over a null");
+        return Ok(Some(false));
+    }
+    holds(coll, &item)
+        .map(Some)
+        .map_err(|e| anyhow!("`{}`: {e}", rec.text))
+}
+
+/// Whether `coll`, a value that is no list, holds `item` (`in`, R-155):
+/// a string a substring, an `inet` or an `iprange` an address (a string
+/// read as one); an error naming the types `in` takes for anything else.
+pub fn holds(coll: &Value, item: &Value) -> std::result::Result<bool, String> {
+    use crate::value::{Value as V, type_name};
+    let ip = |v: &Value| match v {
+        V::Ip(n) => Some(*n),
+        V::Str(s) => crate::value::ipv4_to_u32(s),
+        _ => None,
+    };
+    let addr = |what: &str| match ip(item) {
+        Some(n) => Ok(n),
+        None => Err(format!(
+            "{what} holds addresses, and {} is no `ip`",
+            partition::fmt_value(item)
+        )),
+    };
+    match coll {
+        V::Str(s) => match item {
+            V::Str(needle) => Ok(s.contains(needle.as_str())),
+            _ => Err(format!(
+                "a string holds strings, and {} is {}: interpolate it, `\"${{x}}\" in s`",
+                partition::fmt_value(item),
+                crate::value::article(type_name(item))
+            )),
+        },
+        V::IpNet { addr: base, prefix } => {
+            let n = addr("a network")?;
+            let mask = match prefix {
+                0 => 0,
+                p => u32::MAX << (32 - *p as u32),
+            };
+            Ok(n & mask == *base)
+        }
+        V::IpRange { start, end } => {
+            let n = addr("a range")?;
+            Ok(*start <= n && n <= *end)
+        }
+        v => Err(format!(
+            "`in` takes a list, a string, an `inet` or an `iprange`, and {} is {}{}",
+            partition::fmt_value(v),
+            crate::value::article(type_name(v)),
+            match v {
+                V::Oci(_) | V::Uri(_) | V::Time(_) | V::Quantity(_) | V::Semver(_) | V::Ip(_) =>
+                    ": its text is `\"${v}\"`",
+                _ => "",
+            }
+        )),
+    }
 }
 
 /// `not (k, v) in e`: no entry matches; a `_` in either pattern matches
@@ -3785,7 +3881,7 @@ fn eval_func(name: &str, args: &[Term], state: &HashMap<String, Value>) -> Optio
 /// `vals` as the parameters of the function `name` take them: a value type
 /// (`oci`, `uri`, `inet`, `ip`, `time`, a quantity) where a `string` is
 /// declared is its canonical text, as it is in a string column (R-133):
-/// `str.contains(c.image, ":")` over an `oci`; a string where a value type
+/// `str.starts_with(c.image, "ghcr.io/")` over an `oci`; a string where a value type
 /// is declared is read as one (R-134: `time.format(cert.not_after, ..)`
 /// over a string attribute), and left a string when it is not one, which
 /// the body answers nothing for.

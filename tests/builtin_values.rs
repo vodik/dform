@@ -1,7 +1,7 @@
 //! A value type (`oci`, `uri`, `inet`, `ip`, `time`, a quantity) given to
 //! a builtin's `string` parameter is its canonical print, as it is in a
-//! string column (After R-133): `not str.contains(c.image, ":")` over an
-//! `oci` image. A null there is a content position (the literal waits);
+//! string column (After R-133): `not str.starts_with(c.image, "ghcr.io/")` over an
+//! `oci` image, and so is its interpolation, `":" in "${c.image}"` (R-155). A null there is a content position (the literal waits);
 //! an argument with no value is a located error naming it.
 
 mod common;
@@ -59,15 +59,15 @@ const VALUES: &[(&str, &str, &str, &str, &str, &str)] = &[
     ("duration", "1m30s", "m30", "h", "1m", "^1m30s$"),
 ];
 
-/// `str.contains`, `str.starts_with` and `regex.match` over a value of
-/// each type read its print, positively and under `not`.
+/// `in` over its interpolation, `str.starts_with` and `regex.match` over
+/// a value of each type read its print, positively and under `not`.
 #[test]
 fn a_value_type_is_its_print_in_a_string_parameter() {
     for (ty, text, has, lacks, prefix, re) in VALUES {
         let src = format!(
             "let v: {ty} = \"{text}\"\n\
-             contains() where str.contains(v, \"{has}\")\n\
-             lacks() where not str.contains(v, \"{lacks}\")\n\
+             contains() where \"{has}\" in \"${{v}}\"\n\
+             lacks() where not \"{lacks}\" in \"${{v}}\"\n\
              starts() where str.starts_with(v, \"{prefix}\")\n\
              matches() where regex.match(v, \"{re}\")\n\
              nomatch() where not regex.match(v, \"^x\")\n\
@@ -85,7 +85,8 @@ fn a_value_type_is_its_print_in_a_string_parameter() {
     }
 }
 
-/// The program that failed `unsafe builtin predicate str.contains(...)`:
+/// The program that failed `unsafe builtin predicate str.contains(...)`
+/// (`in` since R-155):
 /// a deny over a resource's `oci` attribute checks its print, through the
 /// type check and the plan.
 #[test]
@@ -101,7 +102,7 @@ fn a_deny_over_an_oci_attribute_reads_its_print() {
         "\n\nlet base: oci = \"nginx\"\n\
          resource app.thing pinned { image = oci.with_tag(base, \"1.27\") }\n\
          resource app.thing floating { image = base }\n\
-         deny \"image not pinned: ${t}\" where t in app.thing, not str.contains(t.image, \":\")\n\
+         deny \"image not pinned: ${t}\" where t in app.thing, not \":\" in \"${t.image}\"\n\
          deny \"from ghcr: ${t}\" where t in app.thing, str.starts_with(t.image, \"ghcr.io/\")\n",
     );
     let r = s
@@ -125,13 +126,14 @@ fn a_deny_over_an_oci_attribute_reads_its_print() {
 }
 
 /// A null in a builtin's argument is a content position (Rule 2): a block
-/// gated on `str.contains` of a computed value waits for it, under `not`
+/// gated on `in` over a computed value waits for it, under `not`
 /// too, rather than failing the plan.
 #[test]
 fn a_builtin_over_a_computed_value_waits() {
     for clause in [
-        "str.contains(d.endpoint, \"db\")",
-        "not str.contains(d.endpoint, \"x\")",
+        "\"db\" in d.endpoint",
+        "not \"x\" in d.endpoint",
+        "str.starts_with(d.endpoint, \"db\")",
     ] {
         let s = Scratch::new("builtin-null");
         s.write(
@@ -166,7 +168,7 @@ fn an_unbound_argument_is_a_located_error() {
                 body: vec![
                     Lit::Pos(atom("q", vec![x()], span)),
                     Lit::Pos(atom(
-                        "str.contains",
+                        "str.starts_with",
                         vec![Term::Var("ImageRef".into()), str_term("a")],
                         span,
                     )),
@@ -179,5 +181,5 @@ fn an_unbound_argument_is_a_located_error() {
         .unwrap_err()
         .to_string();
     assert!(e.contains("`image_ref` is not bound here"), "{e}");
-    assert!(e.starts_with("`str.contains(..)`"), "{e}");
+    assert!(e.starts_with("`str.starts_with(..)`"), "{e}");
 }

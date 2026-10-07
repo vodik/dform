@@ -66,12 +66,12 @@ fn columns_are_inferred_through_rules() {
 fn a_function_types_the_columns_it_reads_and_writes() {
     let sigs = signatures(
         "net(\"10.0.0.0/8\")\n\
-         inside(n, a) where net(n), a = \"10.1.2.3\", inet.contains(n, a)\n\
+         host_of(n, h) where net(n), h = inet.host(n, 1)\n\
          subnet_of(s) where net(n), s = inet.subnet(n, 8, 1)\n",
     );
     assert_eq!(
         sigs,
-        ["inside(n: inet, a: ip)", "net(inet)", "subnet_of(s: inet)"]
+        ["host_of(n: inet, h: ip)", "net(inet)", "subnet_of(s: inet)"]
     );
 }
 
@@ -82,7 +82,7 @@ fn a_string_in_an_inet_column_is_read_as_one() {
     assert_eq!(
         facts(
             "net(\"10.0.0.0/8\")\nnet(\"192.168.0.0/16\")\n\
-             inside(n) where net(n), inet.contains(n, \"10.1.2.3\")\n",
+             inside(n) where net(n), inet.overlaps(n, \"10.1.2.0/24\")\n",
             "inside"
         ),
         ["inside(10.0.0.0/8)"]
@@ -116,7 +116,7 @@ fn two_typed_uses_that_disagree_name_both() {
 fn literals_are_checked_against_the_settled_type() {
     let e = error(
         "az(\"10.1.1.0/24\")\naz(4)\naz(\"foo\")\n\
-         inside(n) where az(n), inet.contains(n, \"10.1.1.1\")\n",
+         inside(n) where az(n), inet.overlaps(n, \"10.1.1.0/24\")\n",
     );
     assert!(
         e.contains("t.df:3:1: `az`'s column 1 is inet, not the int 4"),
@@ -196,8 +196,8 @@ fn an_undeclared_table_takes_its_first_sources_columns() {
         "\n\ninput zone from json(\"zones.json\")\ninput net from csv(\"nets.csv\")\n\n\
          use fake\n\n\
          next(z, i) where zone(z, n, _), i = n + 1\n\
-         inside(z) where zone(z, _, c), inet.contains(c, \"10.1.2.3\")\n\
-         named(n) where net(n, c), inet.contains(c, \"10.0.0.1\")\n",
+         inside(z) where zone(z, _, c), inet.overlaps(c, \"10.1.2.0/24\")\n\
+         named(n) where net(n, c), inet.overlaps(c, \"10.0.0.0/24\")\n",
     );
     let r = s.run(&["query", "next(z, i)", "p.df"]).success();
     assert!(r.stdout.contains("\"a\"  1\n\"b\"  2\n"), "{}", r.stdout);

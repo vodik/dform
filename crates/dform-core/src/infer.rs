@@ -1081,7 +1081,7 @@ impl Pass<'_> {
     fn settle(&mut self, r: usize, diags: &mut Vec<Diagnostic>) -> Option<Ty> {
         let mut hard = self.s.hard[r].clone();
         // A value type given to a builtin's `string` parameter is its print
-        // there (R-133: `str.contains(c.image, ":")` over an `oci`).
+        // there (R-133: `str.starts_with(c.image, "ghcr.io/")` over an `oci`).
         if hard.iter().any(|h| !h.prints && printed(&h.ty)) {
             hard.retain(|h| !h.prints);
         }

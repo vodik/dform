@@ -5,6 +5,6 @@ tests/syntax/err/column_types.df:4:1: `az`'s column 2 holds the int 1 here and s
   tests/syntax/err/column_types.df:5:1: the string "2" here
   help: one column has one type: write the int as one everywhere, or declare the column
 tests/syntax/err/column_types.df:12:1: `net`'s column 1 is an inet: "ten" is not a network (`a.b.c.d/n`)
-  tests/syntax/err/column_types.df:13:25: `net`'s column 1 is inet here (`inet.contains`'s argument `net`)
+  tests/syntax/err/column_types.df:13:1: `net`'s column 1 is inet here (`inet.host`'s argument `net`)
 tests/syntax/err/column_types.df:15:1: `n + 1`: `n` is string, and arithmetic is on numbers, quantities and times
 tests/syntax/err/column_types.df:17:1: `n > "0"`: `n` is int, not the string "0"
