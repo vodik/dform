@@ -90,7 +90,15 @@ replaces it; `id` computed. Its name is its key.
 `ovh.domain_record`: `zone`, `subdomain` (none for the apex), `type` (`A`,
 `AAAA`, `CNAME`, `TXT`, `SRV`, `MX`), `target`, `ttl` (0, the zone's
 default, when not set). Only `ttl` changes in place. The zone is refreshed
-after every change. Its remote id, and its `id`, is `ZONE/ID`.
+after every change. Its remote id, and its `id`, is `ZONE/ID`. A zone the
+account does not host (OVH answers 404 for `/domain/zone/{zone}`) is
+refused naming it, and where DNS says it is delegated, asked of the
+machine's resolver (the first `nameserver` of /etc/resolv.conf;
+`DFORM_OVH_RESOLVER=IP:PORT` names another):
+
+```
+apply ovh.domain_record["k8s"]: zone vodik.xyz is not hosted on this OVH account (its nameservers are ns1.digitalocean.com, ns2.digitalocean.com, ns3.digitalocean.com)
+```
 
 ## Data sources
 
@@ -134,7 +142,7 @@ databases are not in this provider yet.
 ## Testing
 
 `cargo test --test provider_ovh` runs it against a fake OVH API
-(`dform_provider_ovh::fake`). `OVH_INTEGRATION=1
+(`dform_provider_ovh::fake`, with a DNS resolver beside it). `OVH_INTEGRATION=1
 OVH_CLOUD_PROJECT_SERVICE=<project> cargo test --test provider_ovh
 the_real_account` lists the regions of the real account the machine's
 configuration names, and changes nothing.

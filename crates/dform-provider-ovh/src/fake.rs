@@ -4,13 +4,15 @@
 //! SSH key and DNS record endpoints the provider calls. It checks every
 //! signed call's signature against `APPLICATION_SECRET` and
 //! `CONSUMER_KEY`. A new instance is BUILD, with no address, for
-//! [`Server::build_polls`] reads, then ACTIVE.
+//! [`Server::build_polls`] reads, then ACTIVE. Every DNS zone is the
+//! account's until [`Server::hosting`] names them; beside it, a DNS
+//! resolver over UDP answers the NS records [`Server::delegated`] gives.
 
 use crate::sign::signature;
 use serde_json::{Value as Json, json};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::{BufRead, BufReader, Read, Write};
-use std::net::{TcpListener, TcpStream};
+use std::net::{TcpListener, TcpStream, UdpSocket};
 use std::sync::{Arc, Mutex};
 
 pub const APPLICATION_KEY: &str = "fake-application-key";
@@ -32,6 +34,10 @@ pub struct World {
     pub instances: BTreeMap<String, Json>,
     pub keys: BTreeMap<String, Json>,
     pub records: BTreeMap<i64, Json>,
+    /// The DNS zones the account hosts; every one when `None`.
+    zones: Option<BTreeSet<String>>,
+    /// The NS records the resolver answers, by zone.
+    nameservers: BTreeMap<String, Vec<String>>,
     /// Reads left before each BUILD instance is ACTIVE.
     building: BTreeMap<String, u32>,
     next: u64,
@@ -45,6 +51,8 @@ pub struct World {
 pub struct Server {
     /// `http://127.0.0.1:PORT/1.0`, the provider's endpoint.
     pub endpoint: String,
+    /// `127.0.0.1:PORT`, the DNS resolver's address.
+    pub resolver: String,
     pub world: Arc<Mutex<World>>,
 }
 
@@ -85,7 +93,27 @@ impl Server {
                 std::thread::spawn(move || serve(conn, &w, &base));
             }
         });
-        Server { endpoint, world }
+        let dns = UdpSocket::bind("127.0.0.1:0").expect("bind the fake resolver");
+        let resolver = dns.local_addr().expect("its address").to_string();
+        let w = world.clone();
+        std::thread::spawn(move || resolve(dns, &w));
+        Server {
+            endpoint,
+            resolver,
+            world,
+        }
+    }
+
+    /// The account hosts these DNS zones, and no other.
+    pub fn hosting(&self, zones: &[&str]) {
+        self.world().zones = Some(zones.iter().map(|z| z.to_string()).collect());
+    }
+
+    /// The resolver answers `zone`'s NS records with `ns`.
+    pub fn delegated(&self, zone: &str, ns: &[&str]) {
+        self.world()
+            .nameservers
+            .insert(zone.to_string(), ns.iter().map(|n| n.to_string()).collect());
     }
 
     fn world(&self) -> std::sync::MutexGuard<'_, World> {
@@ -147,6 +175,7 @@ impl Server {
             ("OVH_APPLICATION_SECRET", APPLICATION_SECRET.into()),
             ("OVH_CONSUMER_KEY", CONSUMER_KEY.into()),
             ("DFORM_OVH_POLL_MS", "1".into()),
+            ("DFORM_OVH_RESOLVER", self.resolver.clone()),
         ]
     }
 }
@@ -216,6 +245,12 @@ impl World {
         let q = |k: &str| query.get(k).map(String::as_str);
         match (method, segs.as_slice()) {
             ("GET", ["cloud", "project"]) => (200, json!([PROJECT])),
+            (_, ["domain", "zone", z, ..])
+                if self.zones.as_ref().is_some_and(|zs| !zs.contains(*z)) =>
+            {
+                not_found("This service")
+            }
+            ("GET", ["domain", "zone", z]) => (200, json!({"name": z, "dnssecSupported": true})),
             (_, ["cloud", "project", p, ..]) if *p != PROJECT => not_found("This service"),
             ("GET", ["cloud", "project", _]) => (
                 200,
@@ -524,4 +559,35 @@ fn bad_signature(
     let ts: i64 = h("x-ovh-timestamp").parse().unwrap_or(0);
     let want = signature(APPLICATION_SECRET, CONSUMER_KEY, method, url, body, ts);
     (h("x-ovh-signature") != want).then(|| "Invalid signature".to_string())
+}
+
+/// The fake resolver: each NS query answered from `nameservers`, an
+/// empty answer for a zone it does not know.
+fn resolve(sock: UdpSocket, world: &Mutex<World>) {
+    let mut buf = [0u8; 512];
+    while let Ok((n, from)) = sock.recv_from(&mut buf) {
+        let q = &buf[..n];
+        let Some((zone, after)) = crate::dns::name(q, 12) else {
+            continue;
+        };
+        let ns = world
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .nameservers
+            .get(&zone)
+            .cloned()
+            .unwrap_or_default();
+        let mut m = q[..after + 4].to_vec();
+        m[2] = 0x81;
+        m[3] = 0x80;
+        m[6..8].copy_from_slice(&(ns.len() as u16).to_be_bytes());
+        for host in ns {
+            let rdata = crate::dns::encode(&host).unwrap_or_default();
+            // The question's name; NS, IN, a TTL of an hour.
+            m.extend_from_slice(&[0xc0, 12, 0, 2, 0, 1, 0, 0, 0x0e, 0x10]);
+            m.extend_from_slice(&(rdata.len() as u16).to_be_bytes());
+            m.extend_from_slice(&rdata);
+        }
+        let _ = sock.send_to(&m, from);
+    }
 }

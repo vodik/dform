@@ -138,6 +138,25 @@ fn failed(at: &str, e: api::Error) -> Failed {
     }
 }
 
+/// A 404 under `/domain/zone/{zone}` when the account does not host the
+/// zone itself: says so, and where it is delegated when DNS answers.
+fn not_hosted(a: &Account, zone: &str, e: &api::Error) -> Option<String> {
+    if !e.is_not_found() {
+        return None;
+    }
+    let path = format!("/domain/zone/{}", escape(zone));
+    if !matches!(a.client.get_opt(&path), Ok(None)) {
+        return None;
+    }
+    Some(match crate::dns::nameservers(zone) {
+        Some(ns) => format!(
+            "zone {zone} is not hosted on this OVH account (its nameservers are {})",
+            ns.join(", ")
+        ),
+        None => format!("zone {zone} is not hosted on this OVH account"),
+    })
+}
+
 fn refused(at: &str, e: impl std::fmt::Display) -> Failed {
     Failed::Refused(format!("{at}: {e}"))
 }
@@ -556,11 +575,17 @@ impl Ovh {
             Made::Record(k) => {
                 let a = self.account("find a DNS record")?;
                 let zone = escape(&k.zone);
-                let ids = a.client.get(&format!(
-                    "/domain/zone/{zone}/record?fieldType={}&subDomain={}",
-                    escape(&k.typ),
-                    escape(&k.subdomain)
-                ))?;
+                let ids = a
+                    .client
+                    .get(&format!(
+                        "/domain/zone/{zone}/record?fieldType={}&subDomain={}",
+                        escape(&k.typ),
+                        escape(&k.subdomain)
+                    ))
+                    .map_err(|e| match not_hosted(&a, &k.zone, &e) {
+                        Some(m) => anyhow!(m),
+                        None => e.into(),
+                    })?;
                 let mut found = None;
                 for id in ids
                     .as_array()
@@ -668,7 +693,10 @@ impl Ovh {
                 let o = a
                     .client
                     .post(&format!("/domain/zone/{}/record", escape(zone)), &body)
-                    .map_err(|e| failed(at, e))?;
+                    .map_err(|e| match not_hosted(&a, zone, &e) {
+                        Some(m) => refused(at, m),
+                        None => failed(at, e),
+                    })?;
                 self.refresh_zone(&a, at, zone, notes);
                 let (attrs, computed) = map::record(&o);
                 let id = o.get("id").and_then(Json::as_i64).unwrap_or(0);

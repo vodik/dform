@@ -414,6 +414,52 @@ fn a_transient_failure_is_sent_again() {
     assert_eq!(names(&server.keys()), ["k"]);
 }
 
+/// A record in a zone the account does not host is refused naming the
+/// zone, and where DNS says it is delegated (R-125); nothing is made.
+#[test]
+fn a_zone_not_on_the_account_is_named() {
+    let server = Server::start();
+    server.hosting(&["example.com"]);
+    server.delegated(
+        "vodik.xyz",
+        &["ns1.digitalocean.com", "ns2.digitalocean.com"],
+    );
+    let program = |zone: &str| {
+        format!(
+            "use ovh {{ endpoint = \"{}\", project = \"lab\" }}\n\
+             resource ovh.domain_record k8s {{\n  zone = \"{zone}\"\n  subdomain = \"k8s-lab\"\n  \
+             type = \"A\"\n  target = \"51.79.29.179\"\n}}\n",
+            server.endpoint
+        )
+    };
+    let s = project("ovh-zone", "", &program("vodik.xyz"));
+    let r = dform(&s, &server, &["apply", "main.df"]).failure();
+    assert!(
+        r.stderr.contains(
+            "zone vodik.xyz is not hosted on this OVH account (its nameservers are \
+             ns1.digitalocean.com, ns2.digitalocean.com)"
+        ),
+        "{}",
+        r.stderr
+    );
+    assert!(!r.stderr.contains("HTTP 404"), "{}", r.stderr);
+    // A zone DNS does not know: the account's answer alone.
+    s.write("main.df", &program("nowhere.test"));
+    let r = dform(&s, &server, &["apply", "main.df"]).failure();
+    assert!(
+        r.stderr
+            .contains("zone nowhere.test is not hosted on this OVH account")
+            && !r.stderr.contains("nameservers"),
+        "{}",
+        r.stderr
+    );
+    assert!(server.records().is_empty(), "{:?}", server.records());
+    // The zone the account hosts: made.
+    s.write("main.df", &program("example.com"));
+    dform(&s, &server, &["apply", "main.df"]).success();
+    assert_eq!(server.records().len(), 1);
+}
+
 /// A data source as a table: the program picks the region's Debian image.
 #[test]
 fn the_images_of_a_region_are_a_table() {
