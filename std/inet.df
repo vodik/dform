@@ -5,17 +5,17 @@
 # `.bits` (its prefix length) read its parts.
 package inet
 
-#| The `n`th subnet of `net` with `bits` more prefix bits; no value past a /32.
+#| The `n`th subnet of `net` with `bits` more prefix bits; an error past a /32.
 #| example: let cidr = inet.subnet(vpc.cidr, 4, zone_index[z])
-fn subnet(net: inet, bits: int, n: int) -> inet?
+fn subnet(net: inet, bits: int, n: int) -> inet
 
-#| The network's `n`th usable host (network and broadcast excluded), no value past the last.
+#| The network's `n`th usable host (network and broadcast excluded), an error past the last.
 #| example: let private_ip = inet.host(cfg.vpc_net, 20)
-fn host(net: inet, n: int) -> ip?
+fn host(net: inet, n: int) -> ip
 
 #| The network's address `n` places after its base address.
 #| example: let first = inet.addr(net, 0)
-fn addr(net: inet, n: int) -> ip?
+fn addr(net: inet, n: int) -> ip
 
 #| Whether the network holds the address; also a predicate.
 #| example: inside(a) where inet.contains("10.0.0.0/8", a)

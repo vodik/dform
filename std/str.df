@@ -3,7 +3,7 @@ package str
 
 #| The text's parts between each `sep` (not empty); with `limit`, split at the first `limit` of them only, so at most `limit + 1` parts: `(repo, tag) = str.split(image, ":", 1)` matches an image with a tag.
 #| example: let parts = str.split("a,b", ",")
-fn split(text: string, sep: string, limit?: int) -> list(string)? forwards
+fn split(text: string, sep: string, limit?: int) -> list(string) forwards
 
 #| The text in lower case.
 #| example: let name = str.lower(team)
@@ -37,22 +37,22 @@ fn ends_with(text: string, suffix: string) -> bool
 #| example: deny "no team tag" where not str.contains(tags, "team=")
 fn contains(text: string, needle: string) -> bool
 
-#| The template with each `%s` replaced by the next of `args`, in order; no value when there are too few.
+#| The template with each `%s` replaced by the next of `args`, in order; an error when there are too few.
 #| example: let name = str.format("%s-%s", [env, zone])
-fn format(template: string, args: list) -> string? forwards
+fn format(template: string, args: list) -> string forwards
 
-#| The text padded on the left with `pad` to at least `width` characters; no value when `pad` is empty.
+#| The text padded on the left with `pad` to at least `width` characters; an error when `pad` is empty.
 #| example: let n = str.pad_left("${i}", 3, "0")
-fn pad_left(text: string, width: int, pad: string) -> string? forwards
+fn pad_left(text: string, width: int, pad: string) -> string forwards
 
-#| The text padded on the right with `pad` to at least `width` characters; no value when `pad` is empty.
+#| The text padded on the right with `pad` to at least `width` characters; an error when `pad` is empty.
 #| example: let row = str.pad_right(name, 20, " ")
-fn pad_right(text: string, width: int, pad: string) -> string? forwards
+fn pad_right(text: string, width: int, pad: string) -> string forwards
 
 #| The number of characters of the text; `len` in the prelude.
 #| example: let n = str.len(name)
 fn len(text: string) -> int
 
-#| The characters from `start` up to but not including `end` (to the end when left out); no value past the text's length or for an end before its start.
+#| The characters from `start` up to but not including `end` (to the end when left out); an error past the text's length or for an end before its start.
 #| example: let (repo, tag) = (str.slice(image, 0, i), str.slice(image, i + 1))
-fn slice(text: string, start: int, end?: int) -> string? forwards
+fn slice(text: string, start: int, end?: int) -> string forwards

@@ -6,28 +6,31 @@
 #
 #   fn NAME(PARAM: TYPE, ...) -> TYPE[?] [FLAG, ...]
 #
-# `?` after the result: partial, a call may have no value (the literal
-# does not hold). `forwards`: a secret argument flows through to the
-# result uninspected (the secrets pass, E0301). `forwards nulls`: a null
-# argument is not a content position (Rule 2). `internal`: the lowering's
-# own, not callable from a program.
+# `?` after the result: partial, a call of a valid input may have no
+# answer (the literal does not hold): a match that fails, a list that is
+# empty, a text that is no document (R-134). Every other function answers
+# every input it takes, and an input it does not (a bad unit, layout,
+# template, port) is an error at the call. `forwards`: a secret argument
+# flows through to the result uninspected (the secrets pass, E0301).
+# `forwards nulls`: a null argument is not a content position (Rule 2).
+# `internal`: the lowering's own, not callable from a program.
 package prelude
 
-#| An integer from its text or a float (toward zero; an integer is itself); strings never coerce silently.
+#| An integer from its text or a float (toward zero; an integer is itself); an error for text that is not one. Strings never coerce silently.
 #| example: let port = int(cfg.port)
-fn int(value: any) -> int?
+fn int(value: any) -> int
 
-#| A float from its text or an integer (a float is itself).
+#| A float from its text or an integer (a float is itself); an error for text that is not one.
 #| example: let ratio = float(cfg.ratio)
-fn float(value: any) -> float?
+fn float(value: any) -> float
 
-#| The template with each `%s` replaced by the next value's text; `"a${e}"` lowers to it.
+#| The template with each `%s` replaced by the next value's text; an error when there are fewer values than `%s`. `"a${e}"` lowers to it.
 #| example: let name = format("%s-%s", env, zone)
-fn format(template: string, value: any, ...) -> string? forwards
+fn format(template: string, value: any, ...) -> string forwards
 
 #| The number of elements of a list, keys of an object or characters of a string.
 #| example: let zones = len(subnet_ids)
-fn len(value: list) -> int?
+fn len(value: list) -> int
 
 #| A reference to an attribute of the program's own resource: an apply-order edge; `vpc.cidr` in a field lowers to it. `ref(r)`, one resource, is the reference written out where an attribute that is no `ref(T)` takes one (R-43).
 #| example: let vpc_cidr = ref(net.vpc, "vpc", "cidr")
@@ -59,13 +62,13 @@ internal fn sub(a: number, b: number) -> number forwards
 #| example: let bytes = gib * 1073741824
 internal fn mul(a: number, b: number) -> number forwards
 
-#| Integer division of two ints, else a float's; no value when `b` is 0; `a / b` lowers to it.
+#| Integer division of two ints, else a float's; an error when `b` is 0; `a / b` lowers to it.
 #| example: let half = n / 2
-internal fn div(a: number, b: number) -> number? forwards
+internal fn div(a: number, b: number) -> number forwards
 
-#| The remainder of a division, no value when `b` is 0; `a % b` lowers to it.
+#| The remainder of a division, an error when `b` is 0; `a % b` lowers to it.
 #| example: odd(n) where n % 2 == 1
-internal fn mod(a: number, b: number) -> number? forwards
+internal fn mod(a: number, b: number) -> number forwards
 
 # The lowering's own (E §2.5): a declared attribute's null, its label,
 # and a walk inside a value.
@@ -84,9 +87,9 @@ internal fn __null(
 #| example: __label(T, A, P)
 internal fn __label(type: string, name: string, path: string) -> string forwards nulls
 
-#| The value read as the value type `ty` (`inet`, `time`, `bytes`, ..): a string parsed, a value of the type itself; no value for a string that is not one, which is an error at the position. A typed position over a computed value lowers to it (`let n: inet = cfg.net`).
+#| The value read as the value type `ty` (`inet`, `time`, `bytes`, ..): a string parsed, a value of the type itself; an error at the position for a string that is not one. A typed position over a computed value lowers to it (`let n: inet = cfg.net`).
 #| example: __as(cfg.net, "inet")
-internal fn __as(value: any, ty: string) -> any? forwards, forwards nulls
+internal fn __as(value: any, ty: string) -> any forwards, forwards nulls
 
 #| A quantity literal with no reading of its own (`500m`) until its position's type reads it (R-66); it has no value.
 #| example: __quantity("500m", file, start, end)

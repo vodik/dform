@@ -246,7 +246,7 @@ fn signature_help_of_builtins_and_externs() {
         find(&stack, "cidrs.main, 20)", 11),
     );
     assert_eq!(
-        help["signatures"][0]["label"], "inet.host(net: inet, n: int) -> ip?",
+        help["signatures"][0]["label"], "inet.host(net: inet, n: int) -> ip",
         "{help}"
     );
     assert_eq!(help["activeParameter"], 1, "{help}");

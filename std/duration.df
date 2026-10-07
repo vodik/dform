@@ -5,6 +5,6 @@
 # string where a duration is wanted is read as one there.
 package duration
 
-#| The duration as a whole number of `unit` ("nanoseconds" .. "weeks", a day as 24 hours; "months", "years" for a duration of whole months); no value when it is not a whole number of them.
+#| The duration as a whole number of `unit` ("nanoseconds" .. "weeks", a day as 24 hours; "months", "years" for a duration of whole months); an error when it is not a whole number of them.
 #| example: let hours = duration.total(ttl, "hours")
-fn total(d: duration, unit: string) -> int?
+fn total(d: duration, unit: string) -> int

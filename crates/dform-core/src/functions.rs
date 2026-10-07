@@ -1635,7 +1635,7 @@ mod tests {
         let f = r.get("inet.subnet").unwrap();
         assert_eq!(
             f.signature,
-            "inet.subnet(net: inet, bits: int, n: int) -> inet?"
+            "inet.subnet(net: inet, bits: int, n: int) -> inet"
         );
         assert_eq!(f.file, "std/inet.df");
         assert!(!f.summary.is_empty() && f.example.contains("inet.subnet("));
@@ -1716,6 +1716,25 @@ mod tests {
         assert_eq!(wrapped[0].signature, line[0].signature);
         assert_eq!(wrapped[0].params, line[0].params);
         assert_eq!((wrapped[0].line, wrapped[1].line), (3, 7));
+    }
+
+    /// The std audit's rules, checked over every signature std/*.df
+    /// declares where a rule can be read off a signature (R-134).
+    ///
+    /// (3) `?` is for a valid input with no answer: a partial function's
+    /// summary says when it has no value, and any other function's says
+    /// none (what it does not take is an error, not a none).
+    #[test]
+    fn std_follows_the_audits_rules() {
+        for f in registry().functions().filter(|f| !f.internal) {
+            let says = f.summary.contains("no value");
+            assert_eq!(
+                f.partial, says,
+                "{}: `?` is for a valid input with no answer, said in the summary as \
+                 \"no value\" ({}:{})",
+                f.signature, f.file, f.line
+            );
+        }
     }
 
     /// The reverse: every body is declared somewhere (no orphan).

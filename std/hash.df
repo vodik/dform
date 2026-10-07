@@ -7,6 +7,6 @@ package hash
 #| example: let digest = hash.sha256(key)
 fn sha256(text: string) -> string
 
-#| The first `n` hex characters of the text's SHA-256; no value past 64.
+#| The first `n` hex characters of the text's SHA-256; an error past 64.
 #| example: let tag = hash.short(key, 8)
-fn short(text: string, n: int) -> string?
+fn short(text: string, n: int) -> string

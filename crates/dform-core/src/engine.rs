@@ -2773,6 +2773,9 @@ fn eval_builtin_pred(
                 source_name(&v)
             );
         }
+        if let Some(r) = side_unanswered(t, state, rec) {
+            r?;
+        }
         return Ok(Some(false));
     }
     if !forwards_nulls(&atom.pred) && vals.iter().any(stuck::has_null) {
@@ -2790,8 +2793,9 @@ fn eval_builtin_pred(
             at_suffix(atom.span),
             partition::fmt_value(&other)
         ),
+        None if crate::functions::get(&atom.pred).is_some_and(|f| f.partial) => Ok(Some(false)),
         None => bail!(
-            "`{}({})`{} has no answer",
+            "`{}({})`{} is not defined for these arguments",
             atom.pred,
             vals.iter()
                 .map(partition::fmt_value)
@@ -3168,7 +3172,9 @@ fn ground_atom(atom: &Atom, state: &HashMap<String, Value>) -> Result<Atom> {
 /// through.
 fn head_error(head: &Atom, state: &HashMap<String, Value>) -> Option<String> {
     enum NoValue {
-        Call(String),
+        /// A call that answered nothing, and whether its function is
+        /// partial (R-134: else its arguments are not ones it takes).
+        Call(String, bool),
         /// `__as(V, T)` (R-134): a typed position over a computed value
         /// that is not of the type.
         Typed(String, String),
@@ -3194,7 +3200,11 @@ fn head_error(head: &Atom, state: &HashMap<String, Value>) -> Option<String> {
                         .filter_map(|a| eval_term(a, state))
                         .map(|v| partition::fmt_term(&Term::Val(v)))
                         .collect();
-                    Some(NoValue::Call(format!("{name}({})", shown.join(", "))))
+                    let partial = crate::functions::get(name).is_none_or(|f| f.partial);
+                    Some(NoValue::Call(
+                        format!("{name}({})", shown.join(", ")),
+                        partial,
+                    ))
                 }
             },
             Term::List(xs) => xs.iter().find_map(|x| no_value(x, state)),
@@ -3222,11 +3232,14 @@ fn head_error(head: &Atom, state: &HashMap<String, Value>) -> Option<String> {
         .iter()
         .find_map(|t| no_value(t, state))
         .map(|n| match n {
-            NoValue::Call(call) => format!(
+            NoValue::Call(call, true) => format!(
                 "{at}: {call} answered nothing, so {what} has no value (the function's \
                  result is optional, `T?`): give it arguments it answers, or test it with \
                  `has` in a clause"
             ),
+            NoValue::Call(call, false) => {
+                format!("{at}: {call} is not defined for these arguments, so {what} has no value")
+            }
             NoValue::Typed(ty, why) => format!("{at}: {what} is {}: {why}", a_type(&ty)),
             NoValue::Unbound(v) => format!(
                 "internal error: {at}: the head of the rule for {what} leaves `{v}` unbound \
@@ -3295,30 +3308,48 @@ fn eval_eq(
                     return Ok(None);
                 }
                 if let Some((name, args)) = failed_builtin(t, &out) {
-                    // A tuple pattern against a partial function off its
-                    // domain is a test: the match fails (R-58). A name
-                    // bound to it alone is an error naming the call.
-                    let tuple = matches!(a, Term::List(_)) || matches!(b, Term::List(_));
-                    if tuple && crate::functions::get(&name).is_some_and(|f| f.partial) {
-                        return Ok(None);
-                    }
-                    let args: Vec<String> = args.iter().map(partition::fmt_value).collect();
                     if name == crate::ir::RESOURCE_BODY {
+                        let args: Vec<String> = args.iter().map(partition::fmt_value).collect();
                         bail!(
                             "the body of a resource is a value of its type, an object: not {}{}",
                             args.join(", "),
                             at_suffix(rec.head.span)
                         );
                     }
-                    bail!(
-                        "{name}({}) is not defined for these arguments",
-                        args.join(", ")
-                    );
+                    // A partial function's none (`T?`, R-134: a valid input
+                    // with no answer) fails the literal, a tuple pattern's
+                    // match included (R-58); any other function's is an
+                    // error at the rule naming the call.
+                    return unanswered(&name, &args, rec).map(|()| None);
                 }
             }
             bail!("unsafe equality: both sides unbound")
         }
     }
+}
+
+/// A call that answered nothing (R-134): `Ok` when the function is
+/// partial (`T?`), whose none is an answer, so the literal holding the
+/// call fails; else an error at the rule, the arguments not ones the
+/// function takes (a bad unit, layout, template or port).
+fn unanswered(name: &str, args: &[Value], rec: &Rec) -> Result<()> {
+    if crate::functions::get(name).is_none_or(|f| f.partial) {
+        return Ok(());
+    }
+    let args: Vec<String> = args.iter().map(partition::fmt_value).collect();
+    bail!(
+        "{name}({}) is not defined for these arguments{}",
+        args.join(", "),
+        at_suffix(rec.head.span)
+    )
+}
+
+/// A side of a comparison with no value: a call in it that answered
+/// nothing fails the literal, or is an error ([`unanswered`]); `None`
+/// when no call did.
+fn side_unanswered(t: &Term, state: &HashMap<String, Value>, rec: &Rec) -> Option<Result<()>> {
+    let (name, args) = failed_builtin(t, state)?;
+    Some(unanswered(&name, &args, rec))
 }
 
 /// A walk to a path the value does not have (`has x.f`, `x.f.g`, `some c
@@ -3368,7 +3399,13 @@ fn eval_neq(
                 }
             },
         }),
-        _ => bail!("unsafe !=: both sides must be ground"),
+        (a_v, _) => {
+            let t = if a_v.is_none() { a } else { b };
+            if let Some(r) = side_unanswered(t, state, rec) {
+                return r.map(|()| None);
+            }
+            bail!("unsafe !=: both sides must be ground")
+        }
     }
 }
 
@@ -3383,9 +3420,15 @@ fn eval_cmp(
         return Ok(false);
     }
     let Some(av) = eval_term(a, state) else {
+        if let Some(r) = side_unanswered(a, state, rec) {
+            return r.map(|()| false);
+        }
         bail!("unsafe comparison: left not ground");
     };
     let Some(bv) = eval_term(b, state) else {
+        if let Some(r) = side_unanswered(b, state, rec) {
+            return r.map(|()| false);
+        }
         bail!("unsafe comparison: right not ground");
     };
     // Rule 2: an ordering comparison is a content position.

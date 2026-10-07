@@ -13,10 +13,10 @@
 # `a < b` compares instants whatever their zones.
 package time
 
-#| The time in a strftime layout, in its own zone; no value for a layout that does not format.
+#| The time in a strftime layout, in its own zone; an error for a layout that does not format.
 #| example: let stamp = time.format(t, "%Y-%m-%d %H:%M %Z")
-fn format(t: time, layout: string) -> string?
+fn format(t: time, layout: string) -> string
 
-#| The same instant read in another zone (an IANA name, `UTC`, or an offset `+02:00`); no value for a zone the tzdb does not have.
+#| The same instant read in another zone (an IANA name, `UTC`, or an offset `+02:00`); an error for a zone the tzdb does not have.
 #| example: let local = time.in_zone(t, "America/New_York")
-fn in_zone(t: time, zone: string) -> time?
+fn in_zone(t: time, zone: string) -> time

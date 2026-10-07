@@ -8,17 +8,17 @@
 # 32), V)`.
 package random
 
-#| A password for `key`: `length` characters (32 by default) of `alphabet`, one of "alnum" (the default), "ascii" (printable, no space), "hex" or "base64"; no value for another alphabet or a length outside 1..1024. A secret.
+#| A password for `key`: `length` characters (32 by default) of `alphabet`, one of "alnum" (the default), "ascii" (printable, no space), "hex" or "base64"; an error for another alphabet or a length outside 1..1024. A secret.
 #| example: let pw = random.password("db-pw")
-fn password(key: string, length?: int, alphabet?: string) -> secret(string)?
+fn password(key: string, length?: int, alphabet?: string) -> secret(string)
 
 #| `length` bytes for `key` (1..4096), as base64 text: a key for something that takes raw bytes. A secret.
 #| example: let cookie = random.bytes("cookie-key", 32)
-fn bytes(key: string, length: int) -> secret(string)?
+fn bytes(key: string, length: int) -> secret(string)
 
 #| An identifier for `key`: `length` bytes (8 by default, 1..64) as hex. Public: a name may carry it.
 #| example: let bucket = "logs-${random.id("logs")}"
-fn id(key: string, length?: int) -> string?
+fn id(key: string, length?: int) -> string
 
 #| A UUID (version 4 in form) for `key`. Public.
 #| example: let tenant = random.uuid("tenant")

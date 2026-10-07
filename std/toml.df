@@ -8,6 +8,6 @@ package toml
 #| example: let cfg = toml.decode(body)
 fn decode(text: string) -> any? forwards
 
-#| The value as TOML text; no value for a reference, a null, or a value whose root is not an object.
+#| The value as TOML text; an error for a reference, a null, or a value whose root is not an object.
 #| example: let body = toml.encode(cfg)
-fn encode(value: any) -> string? forwards
+fn encode(value: any) -> string forwards

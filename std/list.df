@@ -3,27 +3,27 @@ package list
 
 #| The number of elements of a list, keys of an object or characters of a string; `len` in the prelude.
 #| example: let zones = list.len(subnet_ids)
-fn len(value: list) -> int?
+fn len(value: list) -> int
 
-#| The scalars' texts joined by `sep`; no value when one has no text.
+#| The scalars' texts joined by `sep`; an error when one has no text.
 #| example: let hosts = list.join(names, ",")
-fn join(parts: list, sep: string) -> string? forwards
+fn join(parts: list, sep: string) -> string forwards
 
 #| The list in its natural order (R-59: a comprehension's own order is its body's first relation's; `sort` is how a program asks for another).
 #| example: let ordered = list.sort(zones)
 fn sort(xs: list) -> list forwards
 
-#| The list of objects, ordered by `field`'s value; no value when one element lacks it.
+#| The list of objects, ordered by `field`'s value; an error when one element lacks it.
 #| example: let by_name = list.sort_by(subnets, "name")
-fn sort_by(xs: list, field: string) -> list? forwards
+fn sort_by(xs: list, field: string) -> list forwards
 
 #| The list with every value after its first occurrence dropped, in its original order.
 #| example: let azs = list.unique(zones)
 fn unique(xs: list) -> list forwards
 
-#| The elements of the list's lists, concatenated; no value when one element is not itself a list.
+#| The elements of the list's lists, concatenated; an error when one element is not itself a list.
 #| example: let all_subnets = list.flatten([public, private])
-fn flatten(xs: list) -> list? forwards
+fn flatten(xs: list) -> list forwards
 
 #| The two lists paired up, `[a_i, b_i]` for `i` up to the shorter one's length.
 #| example: let pairs = list.zip(names, ids)
@@ -37,9 +37,9 @@ fn min(xs: list) -> any?
 #| example: let busiest = list.max(replica_counts)
 fn max(xs: list) -> any?
 
-#| The sum of the list's numbers, a float if one is (R-75); no value when one is not a number.
+#| The sum of the list's numbers, a float if one is (R-75); an error when one is not a number.
 #| example: let total = list.sum(replica_counts)
-fn sum(xs: list) -> number?
+fn sum(xs: list) -> number
 
 #| Whether the list holds the value; also a predicate.
 #| example: deny "unknown zone" where not list.contains(allowed_zones, z)

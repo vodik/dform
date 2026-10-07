@@ -1542,12 +1542,16 @@ until the tick that creates it, so a block gated `where has warm_cache`
 waits on `warm_cache` and applies the tick after it, and `not has r`
 guards on its absence (R-152); `has r.id` is an error naming `has r`.
 
-A call of a function whose result is optional (`T?`, `oci.with_digest`
-over a tag rather than a digest) has no value where it answers none: in
-a clause the literal fails, as above; as a value that reaches a cell
-(an entry or a `let`, directly or inside an object or a list) it is an
-error at the entry naming the call and the attribute or `let` it was to
-give (R-119), never a value left out. A bare path in a block is the pun of its
+A call of a function whose result is optional (`T?`: `regex.capture`
+of a text the pattern does not match, `list.first` of an empty list)
+has no value where it answers none: in a clause the literal fails, as
+above, a binding and a comparison included; as a value that reaches a
+cell (an entry or a `let`, directly or inside an object or a list) it is
+an error at the entry naming the call and the attribute or `let` it was
+to give (R-119), never a value left out. Any other function answers
+every input it takes, and one it does not take (`oci.with_digest` of a
+tag, a bad unit, layout, template or port) is an error at the rule
+naming the call (R-134), never a quiet none. A bare path in a block is the pun of its
 last segment ("Statements"), not a test: `has` is the test.
 
 A `.p` or `[i]` after a call reads the call's result (R-71):
@@ -1829,9 +1833,9 @@ unknown map beside them.
 ## Functions
 
 A function is pure and deterministic: a call is a term, evaluated when its
-arguments are ground, and a call with no value (an argument of the wrong
-kind, a partial function off its domain) makes the literal that holds it
-fail. Impurity enters only through externs. Every function is declared in
+arguments are ground; a partial function's call with no answer makes the
+literal that holds it fail, and any other call that has no value (an
+argument it does not take) is an error naming it ("Definedness"). Impurity enters only through externs. Every function is declared in
 a signature file shipped with dform, `std/*.df`, which the compiler, the
 language server (hover, completion, signature help)
 and the secrets pass read; the engine's bodies are looked up by the
@@ -1847,7 +1851,8 @@ flags      := flag ("," flag)*
 flag       := "forwards" | "forwards" "nulls"
 ```
 
-`?` marks a partial function. `forwards`: a secret argument flows through
+`?` marks a partial function: one with no answer for some valid input (a
+match that fails, an empty list, a text that is no document). `forwards`: a secret argument flows through
 to the result uninspected (otherwise a call over a secret is E0301).
 `forwards nulls`: a null argument is not a content position (Rule 2).
 `internal`: the lowering's own, not callable from a program. A `#|` doc

@@ -96,7 +96,7 @@ fn the_reference_reads_std() {
     let r = engine::reference("inet.subnet", true).unwrap();
     assert_eq!(
         r.signature,
-        "inet.subnet(net: inet, bits: int, n: int) -> inet?"
+        "inet.subnet(net: inet, bits: int, n: int) -> inet"
     );
     assert!(r.example.contains("inet.subnet("), "{r:?}");
     assert!(engine::reference("add", true).is_none());
@@ -151,7 +151,7 @@ all(p) where p = str.split("a:b:c", ":")
     let r = engine::reference("str.split", true).unwrap();
     assert_eq!(
         r.signature,
-        "str.split(text: string, sep: string, limit?: int) -> list(string)?"
+        "str.split(text: string, sep: string, limit?: int) -> list(string)"
     );
 }
 
@@ -291,15 +291,11 @@ d(s) where s = base64.decode("aGVsbG8=")
 "#;
     assert_eq!(facts(src, "e"), [r#"e("aGVsbG8=")"#]);
     assert_eq!(facts(src, "d"), [r#"d("hello")"#]);
-    // Bad base64 has no value: `x = ..` with nothing else to bind `x`
-    // from is an error naming the call (engine.rs's `failed_builtin`).
-    let program = parse_program("p(x) where x = base64.decode(\"not base64!\")\n").unwrap();
-    let err = engine::eval(&program, &[]).unwrap_err();
-    assert!(
-        err.to_string()
-            .contains("is not defined for these arguments"),
-        "{err}"
-    );
+    // Bad base64 has no answer (`?`, R-134): the literal fails.
+    let src =
+        "p(x) where x = base64.decode(\"not base64!\")\nq() where not has base64.decode(\"!\").x\n";
+    assert!(facts(src, "p").is_empty());
+    assert_eq!(facts(src, "q"), ["q()"]);
 }
 
 /// A `url` literal is canonicalized and checked at compile time (R-31);
@@ -447,12 +443,38 @@ when(t) where t = toml.decode("a = 2026-10-02T09:00:00Z\n").a, t < "2027-01-01T0
     assert_eq!(facts(src, "frac"), ["frac(1.5)"]);
     assert_eq!(facts(src, "absent"), ["absent(1)"]);
     assert_eq!(facts(src, "when").len(), 1);
-    // A null element and a tag: no value, an error naming the call
-    // (engine.rs's `failed_builtin`).
+    // A null element and a tag: text that is no document has no answer
+    // (`?`), so the literal fails.
     for call in [r#"json.decode("[1, null]")"#, r#"yaml.decode("a: !x 1\n")"#] {
-        let program = parse_program(&format!("p(x) where x = {call}\n")).unwrap();
-        let err = engine::eval(&program, &[]).unwrap_err().to_string();
-        assert!(err.contains("is not defined for these arguments"), "{err}");
+        assert!(facts(&format!("p(x) where x = {call}\n"), "p").is_empty());
+    }
+}
+
+/// `?` is for a valid input with no answer (R-134 rule 3): a partial
+/// function's none fails its literal, wherever it stands; any other
+/// function's none is an input it does not take (a bad unit, layout,
+/// template or port), an error at the rule naming the call.
+#[test]
+fn a_total_functions_bad_input_is_an_error() {
+    let src = "p(x) where x = regex.capture(\"abc\", \"z(.)\", 1)\n\
+               q() where regex.capture(\"abc\", \"z(.)\", 1) == \"x\"\n";
+    assert!(facts(src, "p").is_empty() && facts(src, "q").is_empty());
+    for body in [
+        "x = str.pad_left(\"a\", 3, \"\")",
+        "str.pad_left(\"a\", 3, \"\") == x, x = \"b\"",
+        "x = bytes.to(1536Mi, \"Gi\")",
+        "x = time.in_zone(\"2026-10-02T09:00:00Z\", \"Mars/Olympus\")",
+        "semver.satisfies(\"1.0.0\", \"not a range\"), x = 1",
+    ] {
+        let program = parse_program(&format!("p(x) where {body}\n")).unwrap();
+        let err = engine::eval(&program, &[])
+            .err()
+            .unwrap_or_else(|| panic!("{body}: no error"))
+            .to_string();
+        assert!(
+            err.contains("is not defined for these arguments"),
+            "{body}: {err}"
+        );
     }
 }
 

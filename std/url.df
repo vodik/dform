@@ -9,23 +9,23 @@ fn join(base: string, segment: string) -> string
 
 #| The url with its scheme set.
 #| example: let secure = url.with_scheme(u, "https")
-fn with_scheme(u: url, scheme: string) -> url?
+fn with_scheme(u: url, scheme: string) -> url
 
 #| The url with its host set.
 #| example: let canary = url.with_host(u, "canary.${domain}")
-fn with_host(u: url, host: string) -> url?
+fn with_host(u: url, host: string) -> url
 
 #| The url with its port set.
 #| example: let direct = url.with_port(u, 8443)
-fn with_port(u: url, port: int) -> url?
+fn with_port(u: url, port: int) -> url
 
 #| The url with its path set.
 #| example: let health = url.with_path(u, "/healthz")
-fn with_path(u: url, path: string) -> url?
+fn with_path(u: url, path: string) -> url
 
 #| The url with its query set, replacing any it had.
 #| example: let paged = url.with_query(u, { page: "2" })
-fn with_query(u: url, query: object) -> url?
+fn with_query(u: url, query: object) -> url
 
 #| The text, percent-encoded for a URL path or query component.
 #| example: let safe = url.encode(team_name)

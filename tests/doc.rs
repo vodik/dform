@@ -29,7 +29,7 @@ fn dform_doc_renders_the_standard_library() {
     }
     assert!(
         md.contains(
-            "### function `inet.subnet`\n\n```dform\nfn inet.subnet(net: inet, bits: int, n: int) -> inet?\n```\n"
+            "### function `inet.subnet`\n\n```dform\nfn inet.subnet(net: inet, bits: int, n: int) -> inet\n```\n"
         ),
         "{md}"
     );

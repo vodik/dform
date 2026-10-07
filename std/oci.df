@@ -11,14 +11,14 @@ package oci
 #| example: deny "image not pinned by digest" where not oci.pinned(image)
 fn pinned(reference: oci) -> bool
 
-#| The reference with its tag set to `tag`; its digest, which pinned the old tag's content, is dropped. No value for a `tag` that is not one.
+#| The reference with its tag set to `tag`; its digest, which pinned the old tag's content, is dropped; an error for a `tag` that is not one.
 #| example: image: oci.with_tag("ghcr.io/element-hq/synapse", release)
-fn with_tag(reference: oci, tag: string) -> oci?
+fn with_tag(reference: oci, tag: string) -> oci
 
-#| The reference with its digest set to `digest`, its tag, if any, kept (the digest decides what is pulled); no value for a `digest` that is not one (`16.0.4` is a tag: `oci.with_tag`).
+#| The reference with its digest set to `digest`, its tag, if any, kept (the digest decides what is pulled); an error for a `digest` that is not one (`16.0.4` is a tag: `oci.with_tag`).
 #| example: let exact = oci.with_digest(image, "sha256:${sha}")
-fn with_digest(reference: oci, digest: string) -> oci?
+fn with_digest(reference: oci, digest: string) -> oci
 
-#| The reference with its registry set (`docker.io`, the default, is left out of its text); no value for a `registry` that is not `host[:port]`.
+#| The reference with its registry set (`docker.io`, the default, is left out of its text); an error for a `registry` that is not `host[:port]`.
 #| example: let mirrored = oci.with_registry(image, "registry.internal:5000")
-fn with_registry(reference: oci, registry: string) -> oci?
+fn with_registry(reference: oci, registry: string) -> oci

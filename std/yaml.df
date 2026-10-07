@@ -8,6 +8,6 @@ package yaml
 #| example: let cfg = yaml.decode(body)
 fn decode(text: string) -> any? forwards
 
-#| The value as YAML text; no value for a reference or a null.
+#| The value as YAML text; an error for a reference or a null.
 #| example: let body = yaml.encode(cfg)
-fn encode(value: any) -> string? forwards
+fn encode(value: any) -> string forwards
