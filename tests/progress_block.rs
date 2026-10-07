@@ -85,7 +85,9 @@ fn a_tick_says_each_change_of_state_and_stops_at_a_failure() {
             "  + net.vpc main",
             "  + net.vpc main  T",
             "  + net.subnet a",
-            "  + net.subnet a  T",
+            // The mock says it made the object and answers late (R-130).
+            "  + net.subnet a  T  made",
+            "  + net.subnet a  T  made",
             "  + net.subnet b",
             "  ! net.subnet b  T  apply net.subnet[\"b\"]: injected failure (chaos fail=net.subnet[\"b\"])",
             "tick 1  failed  T",
@@ -97,12 +99,10 @@ fn a_tick_says_each_change_of_state_and_stops_at_a_failure() {
     let took = r
         .stderr
         .lines()
-        .find(|l| l.starts_with("  + net.subnet a  "))
+        .filter(|l| l.starts_with("  + net.subnet a  "))
+        .last()
         .unwrap();
-    assert!(
-        !took.ends_with(" 0.0s") && !took.ends_with(" 0.1s"),
-        "{took}"
-    );
+    assert!(!took.contains(" 0.0s") && !took.contains(" 0.1s"), "{took}");
     // Stdout keeps the plan, no progress.
     assert!(!r.stdout.contains("tick 1  failed"), "{}", r.stdout);
 }

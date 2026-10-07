@@ -1306,7 +1306,7 @@ impl Handler for Mock {
     fn handle(
         &self,
         call: backend::Call,
-        _: backend::Progress,
+        progress: backend::Progress,
     ) -> std::result::Result<Reply, CallError> {
         use backend::Call as C;
         if let Some(at) = &self.cloud().crashed {
@@ -1415,7 +1415,7 @@ impl Handler for Mock {
                     requires_replace,
                 })
             }
-            C::Apply(r) => Reply::Apply(self.apply(r)?),
+            C::Apply(r) => Reply::Apply(self.apply(r, progress)?),
             C::Import(r) => {
                 let found = self.cloud().import(&r.r#type, &r.remote).map_err(invalid)?;
                 Reply::Import(match found {
@@ -1477,7 +1477,11 @@ impl Mock {
         })
     }
 
-    fn apply(&self, r: pb::ApplyRequest) -> std::result::Result<pb::ApplyResponse, CallError> {
+    fn apply(
+        &self,
+        r: pb::ApplyRequest,
+        progress: backend::Progress,
+    ) -> std::result::Result<pb::ApplyResponse, CallError> {
         let op = pb::Op::try_from(r.op).unwrap_or(pb::Op::Unspecified);
         if op == pb::Op::EndTick {
             let spans = r
@@ -1519,10 +1523,18 @@ impl Mock {
             assertions,
             key: r.idempotency_key,
         };
+        let at = call.addr.to_string();
         let applied = self.cloud().apply(call);
+        // Chaos `delay`: the object is made and the answer is late, which
+        // the mock says, as a cloud says an object is there but not ready.
         if let Ok(a) = &applied
             && a.delay_ms > 0
         {
+            progress(backend::event(
+                &at,
+                Some("made"),
+                Some(&format!("answers {}ms late (chaos delay)", a.delay_ms)),
+            ));
             std::thread::sleep(std::time::Duration::from_millis(a.delay_ms));
         }
         match applied {
