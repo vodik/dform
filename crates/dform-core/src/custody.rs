@@ -1478,10 +1478,13 @@ pub fn holders(
                 None => "the passphrase".into(),
             });
         }
-        out.extend(
-            a.into_iter()
-                .flat_map(|a| a.recipients.iter().map(|k| name(k))),
-        );
+        // By name, not by key: keys are random, the list is read by people.
+        let mut names: Vec<String> = a
+            .into_iter()
+            .flat_map(|a| a.recipients.iter().map(|k| name(k)))
+            .collect();
+        names.sort();
+        out.extend(names);
         out
     };
     let began = |epoch: u32| -> Option<String> {
