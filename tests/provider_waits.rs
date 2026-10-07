@@ -13,7 +13,7 @@ use common::{Run, Scratch};
 const STACK: &str = r#"
 use fake
 resource db.postgres server { name = "server" }
-let raw: secret(string) = text("ssh://ubuntu@${server.endpoint}/etc/rancher/k3s/k3s.yaml")
+let raw: secret(string) = io.read("ssh://ubuntu@${server.endpoint}/etc/rancher/k3s/k3s.yaml")
 use k8s { source = "./providers/k8s", kubeconfig = raw }
 use traefik
 "#;

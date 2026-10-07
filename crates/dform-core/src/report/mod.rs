@@ -3204,7 +3204,7 @@ fn attr_texts(d: &Deformation, l: &Line, s: &Site, why: Why) -> Vec<String> {
 
 /// Whether expression `e` reads anything: a name that is not an object's
 /// key (a variable, a function), or an interpolation. `{ team: "a" }`
-/// reads nothing; `db.name`, `json("f.json")` and `"shop-${env}"` do.
+/// reads nothing; `db.name`, `io.read("f.json")` and `"shop-${env}"` do.
 fn reads(e: &str) -> bool {
     let mut cs = e.chars().peekable();
     while let Some(c) = cs.next() {

@@ -2,13 +2,12 @@
 # in a recursive rule, never stated by the program. What binds a + argument
 # may be written after the extern (R-10): `reach(a, b)` below is asked once
 # `start(a)` binds `a`.
-use file {}
 extern next.hop(+from, -to)
 
 paths("a.txt")
-file.text("b.txt", "b")
-missing(p) where paths(p), not file.text(p, _)
+next.hop("b.txt", "b")
+missing(p) where paths(p), not next.hop(p, _)
 reach(a, b) where next.hop(a, b), start(a)
 reach(a, c) where reach(a, b), next.hop(b, c)
 start("x")
-arity(v) where paths(p), file.text(p, v, 1)
+arity(v) where paths(p), next.hop(p, v, 1)

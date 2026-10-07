@@ -55,7 +55,7 @@ gitignored `dform.state/`.
 The root is the nearest directory up from the working directory holding a
 `dform.toml`; `dform init [NAME]` makes one (and puts `dform.state/` in the
 nearest `.gitignore`). Every path a program states resolves from the project
-root: module paths, document and table sources, `file.text`, provider
+root: module paths, document and table sources (`io.read`), provider
 sources and trust roots. Outside a project, `plan` and the `dev`
 views run on a program file with no state; `apply`, `stack`,
 `state` and `log` refuse (a `dev --world` run keeps its state beside the
@@ -1022,7 +1022,7 @@ use k8s { source = "bin/dform-provider-k8s" }        # an executable
   in the program makes its CRD (middlewares.traefik.*)`. A manifest of
   CRDs is one statement (docs/grammar.md "Documents"):
   `resource k8s.custom_resource_definition "${d.metadata.name}" = d where
-  d in yaml("vendor/traefik-crds.yml")`.
+  d in yaml.decode(io.read("vendor/traefik-crds.yml"))`.
 - With no cluster in reach, or `DFORM_K8S_OFFLINE` set, the provider is
   offline: the schema is the checked-in snapshot of Kubernetes v1.36.0's
   document (`crates/dform-k8s/openapi-snapshot.json`, every kind of the
@@ -1202,11 +1202,11 @@ made; the plan itself says what it is.
   position (`statements[1] = { .. }  baseline.df:15`). Only a create
   folds: an update says the leaves that change. `-vv` says every leaf on
   its own line, with its chain.
-  A value a loader read says the row it is, not its content (R-131): a
+  A value a read decoded says the row it is, not its content (R-131): a
   resource whose body is a document (`resource T "${d.metadata.name}" =
-  d where d in yaml("vendor/crds.yml")`), and an attribute whose one
+  d where d in yaml.decode(io.read("vendor/crds.yml"))`), and an attribute whose one
   contribution is a document's value (`dashboard_json =
-  json("files/dash.json")`, `data = t.data` of a `t in yaml(..)`), print
+  json.decode(io.read("files/dash.json"))`, `data = t.data` of a `t in yaml.decode(io.read(..))`), print
   the file, the line its document starts on in a `---` stream, the steps
   into it when the value is part of one (`teams.yml .teams[2]`), and the
   value's size as JSON. A body's row is the resource's, `= ROW`; a leaf
@@ -2436,17 +2436,18 @@ nothing before it binds is a compile error. Evaluation is by rounds: every
 call the rules demand is asked once, then the program is evaluated again,
 until no call is new.
 
-`file`, `env` and `time` are built-in fact providers, declared like any
-provider and needing no `dform.toml` source:
+`env` and `time` are built-in fact providers, declared like any
+provider and needing no `dform.toml` source; a file is read by
+`io.read(LOCATION)`, the one read, a std function with no provider
+(R-155: `use file` and `file.text` are errors naming it):
 
 | provider | externs                                                   | answered by |
 |----------|-----------------------------------------------------------|-------------|
-| `file`   | `file.text(+path, -value: string)`, a path from the project root; the loaders, `yaml(LOCATION)` .. ("Documents and tables") | dform |
 | `env`    | `env.var(+name, -value: secret(string))`; `env.var(NAME)` as a term reads it | dform |
 | `time`   | `time.now(-t: time)`, the current time in UTC; `time.now()` as a term reads it | dform |
 
 There is no `ssh` provider (R-153): a host's file is a location, read by
-a loader like any document, `text("ssh://ubuntu@10.0.0.5/etc/k3s.yaml")`
+`io.read` like any document, `io.read("ssh://ubuntu@10.0.0.5/etc/k3s.yaml")`
 ("Locations and transports" below). `use ssh`, `ssh.read(..)` and
 `[providers] ssh` are errors naming the location. Nothing runs a command
 for a program: a file to manage, a package, a unit are resources of a
@@ -2456,12 +2457,12 @@ provider's apply").
 
 ### Locations and transports
 
-A loader reads a location (R-153): a path from the project root (which
+`io.read` reads a location (R-153): a path from the project root (which
 is `file:`), or a uri whose scheme selects the transport. As in Emacs
 TRAMP, one syntax carries the method, the user and the host, and nothing
-remote is configured separately: `yaml("vendor/crds.yml")`,
-`yaml("git+https://github.com/traefik/traefik/docs/crds.yml?ref=v3.7.14")`
-and `text("ssh://ubuntu@${server.ip}/etc/rancher/k3s/k3s.yaml")` differ
+remote is configured separately: `yaml.decode(io.read("vendor/crds.yml"))`,
+`yaml.decode(io.read("git+https://github.com/traefik/traefik/docs/crds.yml?ref=v3.7.14"))`
+and `io.read("ssh://ubuntu@${server.ip}/etc/rancher/k3s/k3s.yaml")` differ
 only in the string. The scheme rule: a scheme is dform's when the host
 already has its transport, and a provider's when its manifest declares
 it; any other is an error naming the schemes there are.
@@ -2543,7 +2544,7 @@ Secrecy is declared where a value is kept, never inferred from a scheme:
 
 ```dform
 # A k3s server's kubeconfig, once cloud-init has written it.
-let raw: secret(string) = text("ssh://ubuntu@${server.public_ip}/etc/rancher/k3s/k3s.yaml")
+let raw: secret(string) = io.read("ssh://ubuntu@${server.public_ip}/etc/rancher/k3s/k3s.yaml")
 output kubeconfig: secret(string) = str.replace(raw, "127.0.0.1", server.public_ip)
 ```
 
@@ -2563,8 +2564,8 @@ that provider through the host, never one provider another.
 `random` is not a provider: `random.password` and friends are std
 functions (below), and `use random` is an error saying so.
 
-A program that writes `extern file.text(..)` is told to write `provider
-file {}` instead; `extern` is the schema's word (provider schemas, the
+A program that writes `extern env.var(..)` is told to write `use env`
+instead; `extern` is the schema's word (provider schemas, the
 compiler's tests). Another provider's externs are, for now, still declared
 in the program until its schema is read at compile time (DESIGN.org R-24),
 and the mock answers them from `providers/<name>/externs.df` beside the
@@ -2633,23 +2634,25 @@ the resume and the controller compare the world with it the same way.
 
 ## Documents and tables
 
-Data that is not code is a document, loaded by a loader, spelled bare:
-`yaml(LOCATION)`, `toml(LOCATION)`, `json(LOCATION)`, `csv(LOCATION)` (a
-list of objects by its header) and `text(LOCATION)` (the whole of it, a
-string), each over a location, a path from the project root or a uri
-whose scheme is a transport ("Locations and transports", R-39, R-153). A
-loader call is a value, `let net = toml("data/network.toml")`, read like
-any (`net.region`). `input p from DOC` destructures a document
+Data that is not code is a document, read by `io.read(LOCATION)` (the
+whole of it, a string) and decoded by its format's package:
+`yaml.decode(io.read(LOCATION))`, `toml.decode(..)`, `json.decode(..)`,
+`csv.decode(..)` (a list of objects by its header), each over a location,
+a path from the project root or a uri whose scheme is a transport
+("Locations and transports", R-39, R-153, R-155). The decode of a read
+keeps the document's place, each row at its line. A read is a value, `let
+net = toml.decode(io.read("data/network.toml"))`, read like any
+(`net.region`). `input p from DOC` destructures a document
 into rows of a relation, typed column by column as the relation's `decl`
 declares them (written once; `input p from ..` never re-spells the
 columns):
 
 ```dform
-input peering from csv("data/peerings.csv")
-input pins from yaml("git+https://github.com/acme/ops/pins.yaml?ref=env/${env}") where env != "dev"
-input az from toml("data/network.toml")                  # its [[az]] tables
-input link from toml("data/network.toml").peerings       # a selection
-input service from yaml("teams.yaml").teams[*].services  # every team's
+input peering from csv.decode(io.read("data/peerings.csv"))
+input pins from yaml.decode(io.read("git+https://github.com/acme/ops/pins.yaml?ref=env/${env}")) where env != "dev"
+input az from toml.decode(io.read("data/network.toml"))                  # its [[az]] tables
+input link from toml.decode(io.read("data/network.toml")).peerings       # a selection
+input service from yaml.decode(io.read("teams.yaml")).teams[*].services  # every team's
 input vlan from vlans                                    # an input, a list of objects
 
 decl peering(env: enum("dev", "stg", "prod"), name: string, peer_network: string)
@@ -2672,24 +2675,24 @@ and facts the program states join them. A module takes a relation from
 its user with `input p` alone, and the user's `use` block (or its
 resource's, of a component)
 gives its rows (`zone("a", 0)`, `zone(z, n) where az(z, n)`, or `zone
-from csv("zones.csv")`); `output p` hands a relation out, read
+from csv.decode(io.read("zones.csv"))`); `output p` hands a relation out, read
 `copy.p(x, ..)`, `c[t].p(x, ..)` or `stack[k=v].p(x, ..)`, one fact per
 row (docs/grammar.md "Inputs and outputs").
 
 The formats are `csv` (a header naming the columns), `json` and `yaml` (a
 list of objects; a YAML stream of documents, `---`, is a list too, a row
-per document, as a loader call's value is the list of them), and `toml` (the rows as `[[peering]]` entries). A row has
+per document, as a read's value is the list of them), and `toml` (the rows as `[[peering]]` entries). A row has
 every column and nothing else; a cell is its column's type (a CSV cell is
 read as an `int`, a `bool` or an `inet` when the column is one, a string as
 an `inet` in any format), and a row that is not is an error naming the file
 and line: `data/peerings.csv:3: column env: "qa" is not enum(dev, stg,
 prod)`. A `secret` column is a compile error: rows are read in the clear.
-A document's values read one way here, in a loader call and in
-`json.decode`, `yaml.decode` and `toml.decode`: a number is an int (`2.0`
+A document's values read one way, in a table, in a read as a value and
+in `json.decode`, `yaml.decode` and `toml.decode` of a text in hand: a number is an int (`2.0`
 is `2`; a fraction is an error, a value's numbers are whole), a `null`
 member of an object is absent (a null elsewhere is an error), a YAML tag
 is an error naming its line, and a TOML datetime is a `time`.
-The loader never reshapes: transforms belong in rules. Paths are relative
+A read never reshapes: transforms belong in rules. Paths are relative
 to the declaring file; `peering(env: e, name: n)` reads a row by its
 columns' names.
 
@@ -2715,7 +2718,7 @@ whose ref names another commit says so before the plan:
 pins: github.com/acme/ops env/prod 3b1c7e0 -> a9d0f11
 ```
 
-A deployment's settings document, `set from yaml("config/${env}.yaml")`
+A deployment's settings document, `set from yaml.decode(io.read("config/${env}.yaml"))`
 in the stack, is read the same way, a leaf per input (see "Giving inputs").
 
 ## Escape hatches
@@ -2869,7 +2872,7 @@ line wins over both:
 set db.backup_days = 30 @override where env == "prod", region == "eu-west-1"
 set { db.multi_az = true, db.backup_days = 14 } where env == "prod"
 set { traefik.acme_email = "ops@example.com" } where env != "dev"   # a used module's input
-set from yaml("config/${env}.yaml")
+set from yaml.decode(io.read("config/${env}.yaml"))
 ```
 
 A `set`'s target is an input by its path: the program's own, a field of
@@ -3429,7 +3432,7 @@ share: the time spent in the mock's calls.
 This is an MVP:
 
 - semi-naive evaluator with hash indexes (see Performance)
-- functions declared in `std/*.df` (docs/grammar.md "Functions"): the prelude's `int`, `float`, `format`, `len`, `to`, `declassify`; `inet.subnet`, `inet.host`, `inet.overlaps`, `int.range`, `ip.unspecified`, `str.split`, `str.lower`, `str.upper`, `str.dedent`, `str.trim`, `str.replace`, `str.starts_with`, `str.ends_with`, `str.pad_left`, `str.pad_right`, `str.slice`, `list.join`, `list.sort`, `list.sort_by`, `list.unique`, `list.flatten`, `list.zip`, `list.min`, `list.max`, `list.sum`, `list.first`, `list.last`, `time.format`, `time.in_zone`, `random.password`, `random.base64`, `random.id`, `random.uuid`, `random.signing_key`, `regex.match`, `regex.capture`, `regex.replace`, `semver.satisfies`, `oci.pinned`, `oci.with_tag`, `oci.with_digest`, `oci.with_registry`, `hash.sha256`, `base64.encode`, `base64.decode`, `uri.join`, `uri.with_scheme`, `uri.with_user`, `uri.with_password`, `uri.with_host`, `uri.with_port`, `uri.with_path`, `uri.with_query`, `uri.with_fragment`, `uri.escape`, `path.join`, `path.dir`, `path.base`, `path.ext`, `path.rel`, `path.clean`, `json.decode`, `json.encode`, `yaml.decode`, `yaml.encode`, `toml.decode`, `toml.encode`; arithmetic `+ - * / %`; aggregates `collect_*`, `count`, `sum`, `min`, `max`, `any`, `all`, bound in a body (`n = count(x)`)
+- functions declared in `std/*.df` (docs/grammar.md "Functions"): the prelude's `int`, `float`, `format`, `len`, `to`, `declassify`; `inet.subnet`, `inet.host`, `inet.overlaps`, `int.range`, `ip.unspecified`, `str.split`, `str.lower`, `str.upper`, `str.dedent`, `str.trim`, `str.replace`, `str.starts_with`, `str.ends_with`, `str.pad_left`, `str.pad_right`, `str.slice`, `list.join`, `list.sort`, `list.sort_by`, `list.unique`, `list.flatten`, `list.zip`, `list.min`, `list.max`, `list.sum`, `list.first`, `list.last`, `time.format`, `time.in_zone`, `random.password`, `random.base64`, `random.id`, `random.uuid`, `random.signing_key`, `regex.match`, `regex.capture`, `regex.replace`, `semver.satisfies`, `oci.pinned`, `oci.with_tag`, `oci.with_digest`, `oci.with_registry`, `hash.sha256`, `base64.encode`, `base64.decode`, `uri.join`, `uri.with_scheme`, `uri.with_user`, `uri.with_password`, `uri.with_host`, `uri.with_port`, `uri.with_path`, `uri.with_query`, `uri.with_fragment`, `uri.escape`, `path.join`, `path.dir`, `path.base`, `path.ext`, `path.rel`, `path.clean`, `json.decode`, `json.encode`, `yaml.decode`, `yaml.encode`, `toml.decode`, `toml.encode`, `csv.decode`, `csv.encode`; the one read, `io.read` (a coeffect); arithmetic `+ - * / %`; aggregates `collect_*`, `count`, `sum`, `min`, `max`, `any`, `all`, bound in a body (`n = count(x)`)
 - list helper predicate: `member(List, Item)` and `member(List, Index, Item)` (Index starts at 0)
 - safe(ish) negation: `not` requires the atom be ground at evaluation time
 

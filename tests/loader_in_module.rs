@@ -1,4 +1,4 @@
-//! A loader's declaration is the compiler's (R-129): `yaml(..)` reads the
+//! A read's declaration is the compiler's (R-129): `yaml.decode(io.read(..))` reads the
 //! same wherever the call stands, a used module's resource clause, a
 //! component a copy makes, a `let`, and no message names what it lowers
 //! to. A provider's `use` stands in any module too: it configures the
@@ -38,7 +38,7 @@ fn a_loader_in_a_used_modules_clause() {
         "loader-module",
         "use k8s\nuse traefik\n",
         "resource k8s.config_map \"${d.metadata.name}\" = d where {\n  \
-         d in yaml(\"vendor/maps.yml\")\n}\n",
+         d in yaml.decode(io.read(\"vendor/maps.yml\"))\n}\n",
     );
     let r = s.run(&["plan", "platform"]);
     let r = r.success();
@@ -60,11 +60,11 @@ fn a_loader_in_a_component_a_copy_and_a_let() {
          resource traefik.maps one {}\nresource traefik.maps two {}\n\
          decl seen(n: string)\n\
          seen(n) where n = traefik.first\n\
-         seen(n) where d in yaml(\"vendor/maps.yml\"), n = \"stack.${d.metadata.name}\"\n",
-        "let first = yaml(\"vendor/maps.yml\")[0].metadata.name\n\n\
+         seen(n) where d in yaml.decode(io.read(\"vendor/maps.yml\")), n = \"stack.${d.metadata.name}\"\n",
+        "let first = yaml.decode(io.read(\"vendor/maps.yml\"))[0].metadata.name\n\n\
          component maps {\n  \
          resource k8s.config_map \"${d.metadata.name}\" = d where {\n    \
-         d in yaml(\"vendor/maps.yml\")\n  }\n}\n",
+         d in yaml.decode(io.read(\"vendor/maps.yml\"))\n  }\n}\n",
     );
     let r = s.run(&["plan", "platform"]);
     let r = r.success();
@@ -89,13 +89,13 @@ fn a_loaders_errors_in_a_module_name_no_compiler_word() {
     for (name, module, want) in [
         (
             "loader-args",
-            "decl p(n: string)\np(n) where d in yaml(\"vendor/maps.yml\", \"x\"), \
+            "decl p(n: string)\np(n) where d in yaml.decode(io.read(\"vendor/maps.yml\", \"x\")), \
              n = d.metadata.name\n",
-            "yaml takes one location",
+            "`io.read` takes one location",
         ),
         (
             "loader-own-rows",
-            "decl p(n: string)\np(n) where p(f), n = yaml(f).metadata.name\n",
+            "decl p(n: string)\np(n) where p(f), n = yaml.decode(io.read(f)).metadata.name\n",
             "yaml document: its source reads its own rows",
         ),
     ] {
@@ -115,7 +115,7 @@ fn a_loaders_errors_in_a_module_name_no_compiler_word() {
 fn a_provider_used_from_a_used_module() {
     let module = "use k8s { namespace = \"edge\" }\n\n\
                   resource k8s.config_map \"${d.metadata.name}\" = d where {\n  \
-                  d in yaml(\"vendor/maps.yml\")\n}\n";
+                  d in yaml.decode(io.read(\"vendor/maps.yml\"))\n}\n";
     for stack in [
         "use traefik\n",
         "use k8s { namespace = \"edge\" }\nuse traefik\n",
@@ -141,7 +141,7 @@ fn two_uses_that_disagree_are_a_conflict() {
         "use k8s { namespace = \"core\" }\nuse traefik\n",
         "use k8s { namespace = \"edge\" }\n\n\
          resource k8s.config_map \"${d.metadata.name}\" = d where {\n  \
-         d in yaml(\"vendor/maps.yml\")\n}\n",
+         d in yaml.decode(io.read(\"vendor/maps.yml\"))\n}\n",
     );
     let r = s.run(&["plan", "platform"]);
     let r = r.failure();
@@ -170,16 +170,15 @@ fn two_uses_name_one_source() {
 }
 
 /// A built-in provider's `use` in a component declares its data sources
-/// as one at a file's top level does (After R-129): `file.text` reads.
+/// as one at a file's top level does (After R-129): `time.now()` reads.
 #[test]
 fn a_builtin_providers_use_in_a_component() {
     let s = project(
         "provider-component",
         "use fake\nuse traefik\nresource traefik.edge one {}\n",
-        "component edge {\n  use file\n  \
-         resource db.postgres main { size = 1, note = t } where file.text(\"note.txt\", t)\n}\n",
+        "component edge {\n  use time\n  \
+         resource db.postgres main { size = 1, note = \"${t}\" } where t = time.now()\n}\n",
     );
-    s.write("note.txt", "hello");
     let r = s.run(&["plan", "platform"]).success();
-    assert!(r.stdout.contains("note = \"hello\""), "{}", r.stdout);
+    assert!(r.stdout.contains("note = \"20"), "{}", r.stdout);
 }

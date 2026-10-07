@@ -255,7 +255,7 @@ fn a_confusable_host_is_a_warning_at_every_level() {
     );
     s.write(
         "p.df",
-        "\ninput host: string = \"example.com\"\ninput site from csv(\"hosts.csv\")\nuse fake\n\
+        "\ninput host: string = \"example.com\"\ninput site from csv.decode(io.read(\"hosts.csv\"))\nuse fake\n\
          resource net.vpc main {\n  cidr = \"10.0.0.0/16\"\n  tags = { host }\n}\n\
          resource net.vpc shop {\n  cidr = \"10.1.0.0/16\"\n  tags = { host: h }\n} where site(_, h)\n\
          resource net.vpc books {\n  cidr = \"10.2.0.0/16\"\n  tags = { host: \"bücher.example\" }\n}\n",

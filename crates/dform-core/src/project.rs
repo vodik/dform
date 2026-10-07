@@ -485,7 +485,7 @@ impl Manifest {
         if m.providers.contains_key("ssh") {
             bail!(
                 "{}: the ssh provider is gone (R-153): dform reads a host's file itself, \
-                 `text(\"ssh://USER@HOST/PATH\")`; how long a read waits on a host still \
+                 `io.read(\"ssh://USER@HOST/PATH\")`; how long a read waits on a host still \
                  booting is `[files] wait`, its key `[files] credentials = {{ \
                  \"ssh://HOST/*\" = \"ssh:NAME\" }}`",
                 at("[providers] ssh")
@@ -584,7 +584,7 @@ impl Manifest {
                      `{{k}}` written `${{k}}`",
                     at(&format!("{table} config")),
                     c.get_ref(),
-                    c.get_ref().replace('{', "${")
+                    read_written(&c.get_ref().replace('{', "${"))
                 );
             }
             if let Some(b) = &t.backend
@@ -1140,6 +1140,22 @@ pub fn git_head(dir: &Path) -> Option<String> {
 /// repository.
 pub fn git_modified(dir: &Path) -> Vec<String> {
     crate::git::modified(dir)
+}
+
+/// A loader a stack's config named, `yaml("p")`, as the read a program
+/// writes for it (R-155): `yaml.decode(io.read("p"))`, `io.read("p")`
+/// for `text`; anything else as it is.
+fn read_written(config: &str) -> String {
+    let Some((f, rest)) = config.split_once('(') else {
+        return config.to_string();
+    };
+    match f.trim() {
+        "text" => format!("{}({rest}", crate::tables::READ),
+        f if crate::tables::DECODERS.contains(&f) => {
+            format!("{f}.decode({}({rest})", crate::tables::READ)
+        }
+        _ => config.to_string(),
+    }
 }
 
 #[cfg(test)]

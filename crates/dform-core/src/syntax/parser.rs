@@ -1762,7 +1762,8 @@ impl<'a> Parser<'a> {
     }
 
     /// The term after `from`, and a path into the document it is (R-39):
-    /// `toml("x").peerings`, `yaml("x")[*].items`, `d.teams[*].services`.
+    /// `toml.decode(io.read("x")).peerings`, `yaml.decode(io.read("x"))[*].items`,
+    /// `d.teams[*].services`.
     fn source_term(&mut self) -> P {
         self.selector = true;
         let t = self.term();

@@ -1,6 +1,7 @@
 //! Tables: rows from CSV, JSON, YAML and TOML documents as typed input
-//! relations, and documents as values (`text(..)` the whole of one as a
-//! string). `input relation p(col: type, ...) from FORMAT(LOCATION)`
+//! relations, and documents as values (`io.read(..)` the whole of one as a
+//! string, R-155). `input relation p(col: type, ...) from
+//! FORMAT.decode(io.read(LOCATION))`
 //! lowers (`syntax::resolve`) to an extern, `table.FORMAT.p(+location,
 //! -at, -col, ...)`, and the rule `p(cols) :- reads, table.FORMAT.p(L, _,
 //! cols)`: the location is the extern's bound input, so a rule may
@@ -19,14 +20,14 @@
 //! booting) is an open null the apply waits on.
 //!
 //! A row is typed column by column (`inputs::has_type`; a CSV cell is read
-//! as its column's type). The loader never reshapes: a JSON or YAML table
+//! as its column's type). A read never reshapes: a JSON or YAML table
 //! is a list of objects, a TOML one the `[[p]]` array of tables, a CSV one
 //! has a header naming the columns; every column is in every row, and
 //! nothing else is. Each row's `at` is where it is, `file:line`
 //! (`repo@commit:file:line` from a repository, `LOCATION:line` from a
 //! transport).
 //!
-//! `set from FORMAT(SOURCE)` (R-38) is the table `set(path,
+//! `set from FORMAT.decode(io.read(SOURCE))` (R-38) is the table `set(path,
 //! value)`: every leaf of a mapping (a `path,value` CSV) is a contribution
 //! to the input at its path ([`expand_set_from`]).
 
@@ -45,11 +46,27 @@ use std::sync::Arc;
 
 pub const FORMATS: &[&str] = &["csv", "json", "yaml", "toml", "text"];
 
+/// The formats a read decodes (R-155): `yaml.decode(io.read(LOCATION))`.
+pub const DECODERS: &[&str] = &["csv", "json", "yaml", "toml"];
+
+/// The one read (R-155): `io.read(LOCATION)`, a location's text, and the
+/// formats' decoders over it, are what a table reads.
+pub const READ: &str = "io.read";
+
+/// How a program writes the read of `format`: `io.read(..)`, or
+/// `yaml.decode(io.read(..))`.
+pub fn written(format: &str) -> String {
+    match format {
+        "text" => format!("{READ}(..)"),
+        f => format!("{f}.decode({READ}(..))"),
+    }
+}
+
 /// The table a `set from` document is (`set` is a keyword: no relation
 /// has its name).
 pub const SET_DOC: &str = "set";
 
-/// The table a loader call is, `yaml(path)` as a value: one row, the
+/// The table a read is, `yaml.decode(io.read(path))` as a value: one row, the
 /// whole document (`document.git` read at a commit). A keyword too.
 pub const DOCUMENT: &str = "document";
 
@@ -150,14 +167,14 @@ fn parse_name(name: &str) -> Option<(&str, &str)> {
     name.strip_prefix(PREFIX)?.split_once('.')
 }
 
-/// Whether `pred` is a loader call's extern, a whole document as a value
+/// Whether `pred` is a read's extern, a whole document as a value
 /// (`table.FORMAT.document`).
 pub fn is_document(pred: &str) -> bool {
     parse_name(pred).is_some_and(|(f, t)| f != VALUE && t.split('|').next() == Some(DOCUMENT))
 }
 
 /// What a table extern reads, for messages: `input relation p`, `set`
-/// (`set from DOC`), `yaml document` (a loader's call, R-129).
+/// (`set from DOC`), `yaml document` (a read's, R-129).
 pub fn describe(name: &str) -> Option<String> {
     Some(match parse_name(name)? {
         (_, SET_DOC) => "set".into(),
@@ -197,7 +214,7 @@ pub fn shown_at(at: &str) -> String {
     }
 }
 
-/// The line each document of a YAML stream a loader read starts on, by
+/// The line each document of a YAML stream a read decoded starts on, by
 /// how its rows name the file (`vendor/crds.yml`): the plan says a
 /// document value by its row, `vendor/crds.yml:412` (R-131).
 static STARTS: std::sync::Mutex<BTreeMap<String, Vec<usize>>> =
@@ -320,7 +337,7 @@ impl Tables {
             Some(l) => format!("{shown}:{l}"),
             None => format!("{shown}:row {n}"),
         };
-        // A loader call: the whole document, one row.
+        // A read: the whole document, one row.
         if name == DOCUMENT || name.starts_with("document.") {
             let doc = document_of(format, &text).with_context(|| shown.clone())?;
             if format == "yaml"
@@ -502,7 +519,7 @@ fn selected_leaves(doc: Value, selector: &str) -> Result<Vec<(Option<usize>, Str
     Ok(out)
 }
 
-/// A whole document as one value (a loader call, `yaml(path)`): a CSV one
+/// A whole document as one value (a read, `yaml.decode(io.read(path))`): a CSV one
 /// is a list of objects by its header, every cell text.
 pub fn document_of(format: &str, text: &str) -> Result<Value> {
     if format == "text" {
@@ -525,6 +542,37 @@ pub fn document_of(format: &str, text: &str) -> Result<Value> {
         ));
     }
     Ok(Value::List(out))
+}
+
+/// A list of objects as CSV text (`csv.encode`, R-155): a header of the
+/// first object's keys, a record per object; none when an object has
+/// other keys, or a cell is no scalar with a text (a list, an object, a
+/// reference, a null).
+pub fn csv_text(rows: &[Value]) -> Option<String> {
+    let mut w = csv::Writer::from_writer(Vec::new());
+    let mut header: Option<Vec<&String>> = None;
+    for r in rows {
+        let Value::Obj(m) = r else { return None };
+        let keys: Vec<&String> = m.keys().collect();
+        match &header {
+            None => {
+                w.write_record(&keys).ok()?;
+                header = Some(keys);
+            }
+            Some(h) if *h == keys => {}
+            Some(_) => return None,
+        }
+        let cells: Option<Vec<String>> = m
+            .values()
+            .map(|v| match v {
+                Value::List(_) | Value::Obj(_) | Value::Null { .. } => None,
+                Value::Ref { .. } | Value::CloudRef { .. } => None,
+                v => Some(crate::functions::value_to_string(v)),
+            })
+            .collect();
+        w.write_record(cells?).ok()?;
+    }
+    String::from_utf8(w.into_inner().ok()?).ok()
 }
 
 fn short(commit: &str) -> &str {
@@ -865,7 +913,7 @@ fn yaml_key_lines(text: &str) -> BTreeMap<String, usize> {
 }
 
 // One reading of a document's values, for a table's rows, `set from`,
-// a loader call and `json.decode`, `yaml.decode`, `toml.decode` alike
+// a read and `json.decode`, `yaml.decode`, `toml.decode` alike
 // (the url ticket's decisions): a number written as an integer is an
 // int, one with a fraction or an exponent a float (R-75: `2` is an int,
 // `1.5` and `2.0` floats; NaN and the infinities are errors); `null` is no value,

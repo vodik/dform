@@ -1,5 +1,5 @@
-tests/syntax/err/extern_in_program.df:3:1: file.text is the file provider's extern: a program does not declare it
-  tests/syntax/err/extern_in_program.df:2:1: the file provider is declared here
+tests/syntax/err/extern_in_program.df:3:1: env.var is the env provider's extern: a program does not declare it
+  tests/syntax/err/extern_in_program.df:2:1: the env provider is declared here
   help: delete the `extern` statement
-tests/syntax/err/extern_in_program.df:4:1: env.var is the env provider's extern: a program does not declare it
-  help: write `use env` instead
+tests/syntax/err/extern_in_program.df:4:1: memo.first is the memo provider's extern: a program does not declare it
+  help: `memo.first` is in scope with no `use`: delete the `extern` statement

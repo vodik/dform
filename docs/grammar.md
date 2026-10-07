@@ -170,7 +170,7 @@ a Kubernetes annotation is written and read as one leaf,
 label and the plan file print it as written, and `why` takes it back. `dform fmt` keeps the quoted segment, or folds it with its
 siblings into the object form (`metadata.annotations = { "a.b/c": "1",
 "d.e/f": "2" }`, "Formatting"). A selector's quoted step (`input p from
-json(..)."k"`, R-39) may still not hold `.`, `[` or `]`.
+json.decode(io.read(..))."k"`, R-39) may still not hold `.`, `[` or `]`.
 
 ### Doc comments
 
@@ -876,8 +876,8 @@ its uses (R-34); `input` and `output` name it and never re-spell its
 columns:
 
 - `input p from TERM [selector] [where B]`, in a stack, gives `p` rows
-  out of a document ("Documents"): a loader's, `csv("data/p.csv")`, a
-  selection into one, `toml("net.toml").peerings`, or any document value,
+  out of a document ("Documents"): a read, `csv.decode(io.read("data/p.csv"))`, a
+  selection into one, `toml.decode(io.read("net.toml")).peerings`, or any document value,
   an input or a `let`, read with the decl's columns and checked against
   their types. Several lines are one
   relation, their rows together, and facts the program states join
@@ -893,7 +893,7 @@ columns:
   its rows beside the values:
   `zone("a", 0)`, a rule over the user's relations `zone(z, n) where
   az(z, n)` (a row with a clause ends its line), or a table `zone from
-  csv("zones.csv") [where B]` with the module's columns. The rows are the
+  csv.decode(io.read("zones.csv")) [where B]` with the module's columns. The rows are the
   copy's own relation, written in the user's scope, and exist while the
   copy does. A relation the module does not take is an error naming
   those it does.
@@ -924,7 +924,7 @@ one, under a condition:
 set db.backup_days = 30 @override where env == "prod", region == "eu-west-1"
 set { db.multi_az = true, db.backup_days = 14 } where env == "prod"
 set { traefik.acme_email = "ops@example.com" } where env != "dev"
-set from yaml("config/${env}.yaml")
+set from yaml.decode(io.read("config/${env}.yaml"))
 ```
 
 A `set`'s target, alone or an entry of a block, is the program's own
@@ -951,7 +951,7 @@ where it is written.
 `set from DOC [@rank] [where B]` gives every leaf of a document to the
 input at its path, a leaf by its dotted path (`db: {backup_days: 14}` is
 `db.backup_days`; a CSV document has the columns `path` and `value`);
-the document is a loader call, a selection into one, or any document
+the document is a read, a selection into one, or any document
 value ("Documents"); a string is read as the input's type, as a typed
 position reads it (an `inet`, a quantity, a time, a `float`; a CSV cell as an `int` too).
 A leaf under a `map(T)` input is a key of it (`labels: {owner: ops}`
@@ -1279,12 +1279,12 @@ plan names with both sites, and the same configuration twice is one.
 
 A provider's `use` also brings its externs into scope, with their
 binding modes (DESIGN.org R-8): a program does not write `extern` for
-them. `file`, `env` and `time` are built-in fact providers, used like
-any provider and needing no `dform.toml` source (`externs::BUILTINS`);
-dform answers them itself:
+them. `env` and `time` are built-in fact providers, used like any
+provider and needing no `dform.toml` source (`externs::BUILTINS`);
+dform answers them itself (a file is read by `io.read`, no provider's,
+"Documents"):
 
 ```
-use file         file.text(+path, -value: string); the loaders, `yaml(LOCATION)` .. ("Documents")
 use env          env.var(+name, -value: secret(string))
 use time         time.now(-t: time)
 ```
@@ -1315,7 +1315,7 @@ names sorted, unless the API has an order of its own), so a program
 enumerates zones with a column and a plan never reshuffles. The aws mock
 answers it from `crates/dform-mock/schemas/aws-mock.externs.df`.
 
-`extern file.text(..)` in a program is an error naming the `use` to
+`extern env.var(..)` in a program is an error naming the `use` to
 write instead. `env.var(t)` as a term is the lookup `env.var[t]`,
 `time.now()` the lookup `time.now[]`; without its `use` either is an
 error that says to write it.
@@ -1382,21 +1382,26 @@ Two aliases of one name in one scope are an error listing both.
 
 ### Documents
 
-Data that is not code is a document (R-39), loaded by a loader, spelled
-bare, one per format: `yaml(LOCATION)`, `toml(LOCATION)`,
-`json(LOCATION)`, `csv(LOCATION)` (a list of objects by its header, every
-cell text) and `text(LOCATION)` (the whole of it, a string). A location
+Data that is not code is a document (R-39). It is read by the one read,
+`io.read(LOCATION)`, the location's text, a coeffect ("Functions"), and
+decoded by its format's package: `yaml.decode(io.read(LOCATION))`,
+`toml.decode(..)`, `json.decode(..)` and `csv.decode(..)` (a list of
+objects by its header, every cell text) (R-155). The composition is the
+loader: a decode over an `io.read` keeps the document's place, each row
+at its line (`crds.yml:412`), and the chain a plan or `why` prints ends
+in `io.read("..")`. `io` is read-only, and has no write: a write is an
+effect with no state to converge, so it is a provider's apply. A location
 (R-153) is a path from the project root, or a uri whose scheme selects
 the host's transport; the scheme, the user and the host are in it, and
 nothing remote is configured elsewhere (Emacs TRAMP's model):
 
 ```
-yaml("vendor/traefik-crds.yml")                                   # a project file, `file:`
-yaml("git+https://github.com/traefik/traefik/docs/crds.yml?ref=v3.7.14")
-text("ssh://ubuntu@${server.ip}/etc/rancher/k3s/k3s.yaml")        # SFTP
-json("https://example.com/regions.json")
-toml("s3://config/net.toml")
-yaml("data:,a%3A%201")                                            # RFC 2397
+yaml.decode(io.read("vendor/traefik-crds.yml"))       # a project file, `file:`
+yaml.decode(io.read("git+https://github.com/traefik/traefik/docs/crds.yml?ref=v3.7.14"))
+io.read("ssh://ubuntu@${server.ip}/etc/rancher/k3s/k3s.yaml")   # SFTP
+json.decode(io.read("https://example.com/regions.json"))
+toml.decode(io.read("s3://config/net.toml"))
+yaml.decode(io.read("data:,a%3A%201"))                # RFC 2397
 ```
 
 The scheme rule, once: a scheme is dform's when the host already has
@@ -1416,27 +1421,30 @@ apply waits on, a part of it with it, printed as its location (`waits on
 ssh://ubuntu@HOST/etc/rancher/k3s/k3s.yaml`); a relation's rows are what
 is there, so none yet is an error for `input p from`. Secrecy is
 declared where the value is kept, never by the scheme: `let raw:
-secret(string) = text("ssh://..")` is a secret cell, and its read is
+secret(string) = io.read("ssh://..")` is a secret cell, and its read is
 recorded by its digest only. Credentials, grants and the wait are
 dform.toml's (docs/reference.md, "Locations and transports").
 
-A loader call is a value: `let net = toml("data/network.toml")`, then
-`net.region`, `net.az[0].name`. A YAML file that is a stream of
+A read is a value: `let net = toml.decode(io.read("data/network.toml"))`,
+then `net.region`, `net.az[0].name`. A YAML file that is a stream of
 documents (`---`, a vendored manifest) is the list of them, an empty
-document none: `d in yaml("crds.yml")` walks it, `yaml("crds.yml")[*]`
-selects each, and a relation read from it has a row per document, at
-the line it starts on; a file of one document is that document.
-`file.json` is gone; `file.text(PATH)` stays, the relation form of a
-project file's text (`text(..)` is the loader, over any location).
+document none: `d in yaml.decode(io.read("crds.yml"))` walks it,
+`yaml.decode(io.read("crds.yml"))[*]` selects each, and a relation read
+from it has a row per document, at the line it starts on; a file of one
+document is that document. A decode of a value already in hand
+(`yaml.decode(raw)`, `raw` a `let` of an `io.read`) is the pure function:
+its value, with no place, and "not yet" while `raw` is. The loaders of
+before, `yaml(LOCATION)` and the rest, `text(..)`, and the `file`
+provider's `file.text(PATH)` are gone, an error naming the read.
 
 `input p from DOC [selector] [where B]` destructures a document into the
 relation `p`, by the columns of its `decl`, or with no `decl` by its first
 source's (R-34; "Inputs and outputs"):
 
 ```
-input az from toml("data/network.toml")                 # its [[az]] tables
-input peering from toml("data/network.toml").peerings    # a selection
-input service from yaml("teams.yaml").teams[*].services  # every team's
+input az from toml.decode(io.read("data/network.toml"))                 # its [[az]] tables
+input peering from toml.decode(io.read("data/network.toml")).peerings    # a selection
+input service from yaml.decode(io.read("teams.yaml")).teams[*].services  # every team's
 input vlan from vlans                                    # an input, list(vlan)
 ```
 
@@ -1455,7 +1463,7 @@ program file; `facts(..)` is gone, an error that says so. A copy's
 relation input takes a document the same way, `p from DOC` in its
 resource's or `use`'s block.
 
-A loader's table lowers to an extern (`src/tables.rs`), the location its
+A read's table lowers to an extern (`src/tables.rs`), the location its
 bound input, the selector in the table's name. The declarations are the
 compiler's: the same wherever the call stands (a used module, a
 component, a `let`), one per table, and no message names them (R-129):
@@ -1468,7 +1476,7 @@ decl p(..) mixed
 
 (a repository's ref is resolved inside the read, its commit in each row's
 `At`, `REPO@COMMIT:PATH:LINE`); any other document value, `table.value.p(+doc, -at, -col, ..)`, answered
-in process; and a loader call as a value, `table.FORMAT.document(Path,
+in process; and a read as a value, `table.FORMAT.document(Path,
 At, V)`. The controller watches every file and ref a run's tables and
 documents read, and every program file; a location read over a transport
 (`ssh://`, `https://`, `s3://`) is read again by every run, not polled.
@@ -1485,12 +1493,12 @@ manifest is one line, a resource per document:
 
 ```
 resource k8s.custom_resource_definition "${d.metadata.name}" = d where {
-  d in yaml("vendor/traefik-crds.yml")
+  d in yaml.decode(io.read("vendor/traefik-crds.yml"))
 }
 ```
 
 The statement types the documents: one statement per kind, a manifest
-of one kind (or a selection of one, `where d in yaml(..), d.kind ==
+of one kind (or a selection of one, `where d in yaml.decode(io.read(..)), d.kind ==
 "Service"`). A manifest of mixed kinds, a chart's render, is not read
 by kind. The keys of a value known only at run time are not known to the
 evaluator's strata, so its rule writes every attribute of its type: a
@@ -1629,7 +1637,7 @@ f(x).p` holds, never an evaluation error; a call of any other function
 with an input it does not take is the error it is anywhere. A call's result
 is never called (`f(x).g(y)` is an error: a function is named by a plain
 name), and after `from` a path after the call is the document's
-(`toml("x").peerings`, R-39). Precedence, loosest
+(`toml.decode(io.read("x")).peerings`, R-39). Precedence, loosest
 first: `+ -` (left), `* / %` (left), unary `-`. An aggregate (`count(x)`,
 `sum(x)`, `collect_set(x)`, ...) is bound in a body, `n = count(x)`
 ("Aggregates"). Named arguments
@@ -2014,7 +2022,8 @@ and checks (3), (5) and (6) where a signature says them.
 | `base64`  | `base64.encode(s)`, `base64.decode(s)`                                    |
 | `uri`     | `uri.join(u, segment)`, `uri.with_scheme(u, s)`, `uri.with_user(u, n)`, `uri.with_password(u, p)`, `uri.with_host(u, h)`, `uri.with_port(u, p)`, `uri.with_path(u, p)`, `uri.with_query(u, q)`, `uri.with_fragment(u, f)`, `uri.escape(s)`; fields `u.scheme`, `u.user`, `u.password`, `u.host`, `u.port`, `u.path`, `u.query`, `u.fragment` |
 | `path`    | `path.join(parts)`, `path.dir(p)`, `path.base(p)`, `path.ext(p)`, `path.rel(p, base)`, `path.clean(p)` (POSIX slashes, independent of the host) |
-| `json`, `yaml`, `toml` | `.decode(text)`, `.encode(value)`, on a document's text already in hand; the loader (`yaml(path)`, docs/layout.md) stays for reading one |
+| `json`, `yaml`, `toml`, `csv` | `.decode(text)`, `.encode(value)`; over `io.read(LOCATION)` a decode keeps the document's place, its rows at their lines ("Documents") |
+| `io`      | `io.read(location)`: the location's text, the one read, a coeffect; read-only, with no write: a write is an effect with no state to converge, so it is a provider's apply ("Documents") |
 
 `random.*` are derived, not drawn: each value is HKDF-SHA256 of the
 deployment's master secret (`RANDOM_MASTER` in the environment, else a
@@ -2085,7 +2094,7 @@ as it is.
 | `output p` (a stack's relation)           | `output p = [ [X, ..] \| p(X, ..) ]`, read by `s[k=v].p(x, ..)` as `member(Rows, [x, ..])` |
 | `input k { f: T = d }` (R-54)             | the leaf `k.f`'s `arg("input", S, "k.f", d, default)`, its check `k.f`'s refinement |
 | `decl p(a: t, b_c: t)`                    | record fields `a`, `b_c`                               |
-| `yaml(S)` (a loader, as a value)          | `V`, reading `table.yaml.document(S', At, V)`          |
+| `yaml.decode(io.read(S))` (a read, as a value) | `V`, reading `table.yaml.document(S', At, V)`          |
 | `input p from F(S) where B`               | `p(C) :- B, reads, Path = S', table.F.p(Path, At, C)` ("Documents") |
 | `input p from t`                          | `p(C) :- reads, Doc = t', table.value.p(Doc, At, C)`   |
 | `resource c n { p(t) where B }`           | `n::p(t') :- B, reads`, the copy's relation `p`        |

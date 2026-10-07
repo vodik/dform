@@ -1,6 +1,6 @@
 # TOML: functions on a `string`'s TOML text and a value's (docs/grammar.md
-# "Functions"). `toml(path)` (the loader) stays for a document; these
-# read and write the text of one already in hand.
+# "Functions"). Over `io.read(LOCATION)`, a decode keeps the document's
+# place, each row at its line: `toml.decode(io.read("data/net.toml"))`.
 package toml
 
 #| The value the text decodes to, read as a document is (a null member absent, a whole float an int);

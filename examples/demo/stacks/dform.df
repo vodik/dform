@@ -22,7 +22,7 @@ iam_need("app", n.action, n.resource) where n = kubernetes.iam_need
 # `database.multi_az`), at the normal rank, over the inputs' defaults;
 # the modules used below take theirs from this block but in prod. A CIDR
 # is text in the document, made an inet where it is used.
-set from yaml("config/dform/${env}.yaml")
+set from yaml.decode(io.read("config/dform/${env}.yaml"))
 set {
   database.backup_days = 3
   database.multi_az = false

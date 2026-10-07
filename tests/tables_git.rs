@@ -10,7 +10,7 @@ use tables_common::{push, repo, scratch};
 
 const PROGRAM: &str = r#"
 
-input node from csv("git+file:ops.git/nodes.csv?ref=main")
+input node from csv.decode(io.read("git+file:ops.git/nodes.csv?ref=main"))
 
 decl node(name: string)
 

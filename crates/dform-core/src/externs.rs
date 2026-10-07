@@ -18,14 +18,12 @@
 //! program writes where the value is read.
 //!
 //! A program does not declare an extern: `use NAME` brings the
-//! provider's into scope (DESIGN.org R-8). `file`, `env` and `time` are
+//! provider's into scope (DESIGN.org R-8). `env` and `time` are
 //! built-in fact providers ([`BUILTINS`]): their externs are the
-//! compiler's own, and dform answers `file.text(+path, -value)` (paths
-//! from the program's project root, `project::base_of`), `env.var(+name,
-//! -value)` and `time.now(-t)` itself, with no `dform.toml` source; the
-//! loaders, `yaml(LOCATION)` and the rest, are its documents
-//! (`crate::tables`, R-39), read over a location's transport
-//! (`crate::files`, R-153). `memo.first` is in scope with no provider's `use`. Other
+//! compiler's own, and dform answers `env.var(+name, -value)` and
+//! `time.now(-t)` itself, with no `dform.toml` source; `io.read(LOCATION)`
+//! and the decodes over it are documents (`crate::tables`, R-39, R-155),
+//! read over a location's transport (`crate::files`, R-153). `memo.first` is in scope with no provider's `use`. Other
 //! externs are asked of the providers over the
 //! plugin protocol (Query; the mock answers from
 //! `providers/<name>/externs.df`).
@@ -514,20 +512,22 @@ impl<'a> Externs<'a> {
             for c in new {
                 let f = &self.fns[&c.pred];
                 let rows = (self.ask)(f, &c.inputs).with_context(|| {
-                    match crate::tables::describe(&c.pred) {
-                        Some(t) => format!("{t} from {}", show(&c.inputs)),
-                        // The call and where it is written, as a
-                        // plan line says it (R-129 amendment).
-                        None => {
-                            let at = self
-                                .sites
-                                .iter()
-                                .find(|(_, a)| a.pred == c.pred)
-                                .and_then(|(_, a)| crate::diag::location(a.span))
-                                .map(|(f, l, _)| format!("  {f}:{l}"))
-                                .unwrap_or_default();
-                            format!("{}({}){at}", c.pred, show(&c.inputs))
+                    // The call and where it is written, as a plan line
+                    // says it (R-129 amendment): a document's as its read
+                    // (`io.read("note.txt")`, R-155).
+                    let at = self
+                        .sites
+                        .iter()
+                        .find(|(_, a)| a.pred == c.pred)
+                        .and_then(|(_, a)| crate::diag::location(a.span))
+                        .map(|(f, l, _)| format!("  {f}:{l}"))
+                        .unwrap_or_default();
+                    match (&c.inputs[..], crate::tables::describe(&c.pred)) {
+                        ([Value::Str(l)], Some(_)) if crate::tables::is_document(&c.pred) => {
+                            format!("{}{at}", call_text(&c.pred, l))
                         }
+                        (_, Some(t)) => format!("{t} from {}", show(&c.inputs)),
+                        (_, None) => format!("{}({}){at}", c.pred, show(&c.inputs)),
                     }
                 })?;
                 for r in &rows {
@@ -734,15 +734,6 @@ pub struct Builtin {
 /// The built-in fact providers.
 pub const BUILTINS: &[Builtin] = &[
     Builtin {
-        name: "file",
-        externs: &[(
-            "file.text",
-            &[(true, "path", "string"), (false, "value", "string")],
-        )],
-        in_process: true,
-        always: false,
-    },
-    Builtin {
         name: "env",
         externs: &[(
             "env.var",
@@ -822,11 +813,11 @@ pub fn inputs_of(pred: &str, row: &[Value]) -> Vec<Value> {
 
 /// An extern's call as a label names it ([`secret_label`],
 /// `pred/INPUTS#N`), as the program writes it: `memo.first("k", "c")`,
-/// `text("ssh://ubuntu@10.0.0.5/etc/k3s.yaml")`. The inputs are joined by `,`: a built-in
+/// `io.read("ssh://ubuntu@10.0.0.5/etc/k3s.yaml")`. The inputs are joined by `,`: a built-in
 /// extern's that do not split into as many as it takes are said whole.
 pub fn call_text(pred: &str, inputs: &str) -> String {
-    // A location's read is said as the location (R-153), a loader's call
-    // as the loader's (`text("ssh://..")`).
+    // A location's read is said as the location (R-153), a document's
+    // as the read a program writes (`yaml.decode(io.read("..")))`, R-155).
     if pred == crate::files::READ {
         return inputs.to_string();
     }
@@ -835,7 +826,15 @@ pub fn call_text(pred: &str, inputs: &str) -> String {
             .strip_prefix("table.")
             .and_then(|r| r.split('.').next())
     {
-        return format!("{format}({})", crate::ir::string_literal(inputs));
+        let read = format!(
+            "{}({})",
+            crate::tables::READ,
+            crate::ir::string_literal(inputs)
+        );
+        return match format {
+            "text" => read,
+            f => format!("{f}.decode({read})"),
+        };
     }
     let n = builtin_extern(pred).map(|cols| cols.iter().filter(|(i, _, _)| *i).count());
     let parts: Vec<&str> = match (n, inputs.split(',').collect::<Vec<_>>()) {
@@ -900,33 +899,6 @@ impl Builtin {
             })
             .collect()
     }
-}
-
-/// The `file` fact provider: `file.json(+path, -value)`, `file.text(+path,
-/// -value)`, a relative path from `base` (the program's project root, `project::base_of`). `None`
-/// for an extern it does not answer.
-pub fn file(
-    f: &ExternFn,
-    inputs: &[Value],
-    base: &std::path::Path,
-) -> Option<Result<Vec<Vec<Value>>>> {
-    let kind = f.name.strip_prefix("file.")?;
-    let one = |r: Result<Value>| r.map(|v| vec![row(f, inputs, vec![v])]);
-    Some(match (kind, inputs) {
-        ("text", [Value::Str(path)]) if f.args.len() == 2 => {
-            one(std::fs::read_to_string(base.join(path))
-                .with_context(|| format!("read {path}"))
-                .map(Value::Str))
-        }
-        ("text", _) => Err(anyhow::anyhow!(
-            "file.text is declared `extern file.text(+path, -value)`"
-        )),
-        _ => Err(anyhow::anyhow!(
-            "the file provider answers file.text, not {} (a document is read by its loader, \
-             `json(path)`, `yaml(path)`, `toml(path)`, `csv(path)`)",
-            f.name
-        )),
-    })
 }
 
 /// The built-in `env.var(+name, -value: secret(string))`: the process

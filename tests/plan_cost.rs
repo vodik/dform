@@ -179,7 +179,7 @@ fn a_large_documents_leaves_are_explained_in_linear_time() {
     s.write("cms.yml", &docs);
     s.write(
         "main.df",
-        "use k8s\nresource k8s.config_map \"${d.metadata.name}\" = d where d in yaml(\"cms.yml\")\n",
+        "use k8s\nresource k8s.config_map \"${d.metadata.name}\" = d where d in yaml.decode(io.read(\"cms.yml\"))\n",
     );
     let t = Instant::now();
     // `-v`: the documents' leaves, where the default says their rows

@@ -31,7 +31,7 @@ fn an_update_says_the_leaves_that_change() {
     s.write("maps.yml", MAPS);
     s.write(
         "p.df",
-        "\nuse k8s\nresource k8s.config_map \"${d.metadata.name}\" = d where d in yaml(\"maps.yml\")\n",
+        "\nuse k8s\nresource k8s.config_map \"${d.metadata.name}\" = d where d in yaml.decode(io.read(\"maps.yml\"))\n",
     );
     s.run(&["apply", "--yes", "p.df"]).success();
     s.write("maps.yml", &MAPS.replace("size: small", "size: large"));
@@ -61,9 +61,9 @@ fn a_selection_names_its_steps() {
     s.write(
         "p.df",
         "\nuse k8s\n\
-         resource k8s.config_map \"${t.metadata.name}\" = t where t in yaml(\"teams.yml\").teams\n\
+         resource k8s.config_map \"${t.metadata.name}\" = t where t in yaml.decode(io.read(\"teams.yml\")).teams\n\
          resource k8s.config_map whole {\n  metadata.name = \"whole\"\n  \
-         metadata.labels = yaml(\"labels.yml\")\n  data = yaml(\"teams.yml\").teams[0].data\n}\n\
+         metadata.labels = yaml.decode(io.read(\"labels.yml\"))\n  data = yaml.decode(io.read(\"teams.yml\")).teams[0].data\n}\n\
          set c.data.z = \"9\" where c in k8s.config_map\n",
     );
     let r = s.run(&["plan", "p.df"]).success();
@@ -86,7 +86,7 @@ fn why_points_at_the_row() {
     s.write("maps.yml", MAPS);
     s.write(
         "p.df",
-        "\nuse k8s\nresource k8s.config_map \"${d.metadata.name}\" = d where d in yaml(\"maps.yml\")\n",
+        "\nuse k8s\nresource k8s.config_map \"${d.metadata.name}\" = d where d in yaml.decode(io.read(\"maps.yml\"))\n",
     );
     let why = s.run(&["why", "k8s.config_map flags", "p.df"]).success();
     assert!(
@@ -114,7 +114,7 @@ fn a_document_read_from_git_says_its_commit() {
     s.write(
         "p.df",
         "\nuse k8s\nresource k8s.config_map \"${d.metadata.name}\" = d \
-         where d in yaml(\"git+file:maps.git/maps.yml?ref=main\")\n",
+         where d in yaml.decode(io.read(\"git+file:maps.git/maps.yml?ref=main\"))\n",
     );
     let r = s.run(&["plan", "p.df"]).success();
     let want = format!("      = maps.git@{}:maps.yml:8  (50 B)\n", &commit[..7]);

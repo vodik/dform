@@ -1,5 +1,5 @@
 //! Externs with binding patterns: asked on demand once their `+` arguments
-//! are ground, of the `file` provider (a loader, `json(p)`, among them) or
+//! are ground, of dform itself (a read, `json.decode(io.read(p))`, among them) or
 //! the mock (`externs.df`), recorded in the plan file; nothing keeps them
 //! (`memo.first` does: tests/memo.rs).
 
@@ -7,7 +7,6 @@ mod common;
 use common::{Scratch, repo};
 
 const P: &str = r#"
-use file
 use fake
 extern kv.password(+name, -value)
 extern kv.token(+name, -value)
@@ -15,7 +14,7 @@ dash("dash.json")
 resource mon.dashboard main {
   json = d
   note = t
-} where dash(p), d = json(p), file.text("note.txt", t)
+} where dash(p), d = json.decode(io.read(p)), t = io.read("note.txt")
 resource db.user app {
   password = pw
   token = tk
@@ -77,7 +76,7 @@ fn a_missing_file_is_an_error_naming_the_call() {
     std::fs::remove_file(s.path("note.txt")).unwrap();
     let r = s.run(&["plan", "p.df"]).failure();
     assert!(
-        r.stderr.contains("file.text(\"note.txt\")  p.df:") && r.stderr.contains("read note.txt"),
+        r.stderr.contains("io.read(\"note.txt\")  p.df:") && r.stderr.contains("read note.txt"),
         "{}",
         r.stderr
     );

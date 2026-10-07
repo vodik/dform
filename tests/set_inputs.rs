@@ -14,7 +14,7 @@ key env: enum("dev", "prod") = "dev"
 input db { size: int = 1, zone: string = "a" }
 use fake
 
-set from FORMAT("config/${env}.FORMAT")
+set from FORMAT.decode(io.read("config/${env}.FORMAT"))
 
 resource db.postgres main {
   size = db.size
@@ -74,7 +74,7 @@ fn a_leaf_that_is_no_input_is_a_deny() {
         .success();
     assert!(
         r.stdout
-            .contains("p.df:7  set from yaml(\"config/${env}.yaml\")")
+            .contains("p.df:7  set from yaml.decode(io.read(\"config/${env}.yaml\"))")
             && r.stdout.contains("   config/prod.yaml:2\n"),
         "{}",
         r.stdout
@@ -232,14 +232,15 @@ fn a_stack_config_names_set_from() {
     let r = s.run(&["plan", "--why=none", "p.df"]).failure();
     assert!(
         r.stderr.contains("a stack's config is gone (R-38)")
-            && r.stderr.contains("`set from yaml(\"config/${env}.yaml\")`"),
+            && r.stderr
+                .contains("`set from yaml.decode(io.read(\"config/${env}.yaml\"))`"),
         "{}",
         r.stderr
     );
 }
 
 /// `set from` takes any document (R-39): a selection into a loaded
-/// one, `toml("cfg.toml").prod`, or a `let` of one.
+/// one, `toml.decode(io.read("cfg.toml")).prod`, or a `let` of one.
 #[test]
 fn set_from_a_selection_or_a_let() {
     let s = scratch("from-select");
@@ -248,8 +249,8 @@ fn set_from_a_selection_or_a_let() {
         "p.df",
         "\nkey env: enum(\"dev\", \"prod\") = \"dev\"\n\
          input db { size: int = 1, zone: string = \"a\" }\nuse fake\n\
-         let cfg = toml(\"cfg.toml\")\n\
-         set from toml(\"cfg.toml\").prod where env == \"prod\"\n\
+         let cfg = toml.decode(io.read(\"cfg.toml\"))\n\
+         set from toml.decode(io.read(\"cfg.toml\")).prod where env == \"prod\"\n\
          set from cfg.dev where env == \"dev\"\n\
          resource db.postgres main { size = db.size }\n",
     );

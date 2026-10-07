@@ -2479,11 +2479,13 @@ impl<'u> Lowerer<'u> {
         span: Span,
     ) -> L<Vec<BindArg>> {
         let declare = format!("declare its columns: `decl {pred}(a: T, ..)`");
-        let format = self
-            .callee(src)
-            .filter(|f| crate::tables::FORMATS.contains(&f.as_str()) && node(n, SELECTOR).is_none())
-            .unwrap_or_default();
-        let args: Vec<SyntaxNode> = node(src, ARG_LIST)
+        if let Some(e) = self.old_loader(src) {
+            return e.map(|_| Vec::new());
+        }
+        let read = self.loader_of(src).filter(|_| node(n, SELECTOR).is_none());
+        let format = read.as_ref().map(|r| r.0.clone()).unwrap_or_default();
+        let args: Vec<SyntaxNode> = read
+            .and_then(|(_, r)| node(&r, ARG_LIST))
             .map(|l| terms(&l).collect())
             .unwrap_or_default();
         let path = match args.as_slice() {
@@ -2893,13 +2895,12 @@ impl<'u> Lowerer<'u> {
             .unwrap_or_default();
         let name = crate::tables::selected(table, &selector);
         self.reject_facts(&src)?;
-        // A loader, or a call that is no function: a table's source (the
-        // error names the formats).
+        // A read (`io.read`, a decode of one), or a call that is no
+        // function: a table's source (the error names the formats).
         let callee = (src.kind() == CALL).then(|| self.callee(&src)).flatten();
-        if callee.is_some_and(|c| {
-            crate::tables::FORMATS.contains(&c.as_str())
-                || crate::functions::registry().get(&c).is_none()
-        }) {
+        if self.loader_of(&src).is_some()
+            || callee.is_some_and(|c| crate::functions::registry().get(&c).is_none())
+        {
             return self.table_body(rc, &src, &name, cols, outs, body);
         }
         let doc = self.term(rc, &src, Pos::Content, body)?;
@@ -2931,21 +2932,22 @@ impl<'u> Lowerer<'u> {
         })])
     }
 
-    /// A loader call as a term (R-39): `yaml(LOCATION)`, `toml`, `json`,
-    /// `csv` (a list of objects by its header), `text` (the whole of it, a
-    /// string), a location a path or a uri (R-153), is the document, a
-    /// value: `V` reading `table.FORMAT.document(Location, At, V)`, whose
-    /// answer the plan file records and the controller watches as a
-    /// table's. `None` for any other call, or a loader a relation of the
-    /// program shadows.
+    /// A read as a term (R-39, R-155): `io.read(LOCATION)` (the whole of
+    /// it, a string) and a decode of one, `yaml.decode(io.read(LOCATION))`,
+    /// `toml`, `json`, `csv` (a list of objects by its header), a location
+    /// a path or a uri (R-153), is the document, a value: `V` reading
+    /// `table.FORMAT.document(Location, At, V)`, whose answer the plan file
+    /// records and the controller watches as a table's, and whose rows keep
+    /// their place (R-131). `None` for any other call; an old loader
+    /// (`yaml(..)`) no relation of the program names is an error naming
+    /// the composition.
     fn loader_call(&mut self, rc: &mut Rc, n: &SyntaxNode, pre: &mut Vec<Lit>) -> Option<L<Term>> {
-        let name = self.callee(n)?;
-        if !crate::tables::FORMATS.contains(&name.as_str()) || self.decls.relations.contains(&name)
-        {
-            return None;
+        if let Some(e) = self.old_loader(n) {
+            return Some(e);
         }
+        let (format, _) = self.loader_of(n)?;
         let table = crate::tables::DOCUMENT.to_string();
-        let v = var(&fresh(rc, &capitalise(&name)));
+        let v = var(&fresh(rc, &capitalise(&format)));
         let cols = vec![BindArg {
             input: false,
             name: "value".into(),
@@ -2963,6 +2965,64 @@ impl<'u> Lowerer<'u> {
                     v
                 }),
         )
+    }
+
+    /// A read's format and its `io.read(..)` call (R-155): `io.read(L)`
+    /// is `text`, `F.decode(io.read(L))` is `F` for a format the tables
+    /// read; `None` for any other term.
+    fn loader_of(&self, n: &SyntaxNode) -> Option<(String, SyntaxNode)> {
+        if n.kind() != CALL {
+            return None;
+        }
+        let name = self.callee(n)?;
+        if name == crate::tables::READ {
+            return Some(("text".to_string(), n.clone()));
+        }
+        let format = name.strip_suffix(".decode")?;
+        if !crate::tables::FORMATS.contains(&format) || format == "text" {
+            return None;
+        }
+        let list = node(n, ARG_LIST)?;
+        let args: Vec<SyntaxNode> = terms(&list).collect();
+        match args.as_slice() {
+            [a] if a.kind() == CALL && self.callee(a).as_deref() == Some(crate::tables::READ) => {
+                Some((format.to_string(), a.clone()))
+            }
+            _ => None,
+        }
+    }
+
+    /// `yaml(LOCATION)`, `text(..)` and the other loaders a program wrote
+    /// before R-155, when no relation of the program has the name: an
+    /// error naming the read and its decode.
+    fn old_loader(&mut self, n: &SyntaxNode) -> Option<L<Term>> {
+        if n.kind() != CALL {
+            return None;
+        }
+        let name = self.callee(n)?;
+        if !crate::tables::FORMATS.contains(&name.as_str()) || self.decls.relations.contains(&name)
+        {
+            return None;
+        }
+        let arg = node(n, ARG_LIST)
+            .and_then(|l| terms(&l).next())
+            .map(|a| a.text().to_string())
+            .unwrap_or_else(|| "LOCATION".to_string());
+        let read = format!("{}({arg})", crate::tables::READ);
+        let new = match name.as_str() {
+            "text" => read,
+            f => format!("{f}.decode({read})"),
+        };
+        let d = Diagnostic::error(
+            self.span(n),
+            format!("`{name}(..)` is gone (R-155): a location is read by `io.read`"),
+        )
+        .with_help(format!(
+            "`{new}`: `io.read` reads the text, a format's `decode` the document in it, its \
+             rows at their lines"
+        ));
+        self.diags.push(d);
+        Some(Err(Skip))
     }
 
     /// `from facts(..)` is gone (R-39): an error naming what replaces it.
@@ -3008,30 +3068,34 @@ impl<'u> Lowerer<'u> {
         body: &mut Vec<Lit>,
     ) -> L<Vec<Stmt>> {
         let span = self.span(src);
-        let formats = crate::tables::FORMATS;
         let bad = |l: &mut Self, what: &str| -> L<Vec<Stmt>> {
             let d = Diagnostic::error(
                 span,
-                format!("{what}: a table's source is FORMAT(LOCATION)"),
+                format!("{what}: a table's source is FORMAT.decode(io.read(LOCATION))"),
             )
             .with_help(format!(
                 "FORMAT is one of {}; LOCATION is a path, `\"data/p.csv\"`, or a uri, \
                      `\"git+https://HOST/OWNER/REPO/PATH?ref=TAG\"`, `\"ssh://USER@HOST/PATH\"`",
-                formats.join(", ")
+                crate::tables::DECODERS.join(", ")
             ));
             l.diags.push(d);
             Err(Skip)
         };
-        let format = match (src.kind(), self.callee(src)) {
-            (CALL, Some(f)) if formats.contains(&f.as_str()) => f,
-            (CALL, Some(f)) => return bad(self, &format!("unknown format {f}")),
+        if let Some(e) = self.old_loader(src) {
+            return e.map(|_| Vec::new());
+        }
+        let (format, read) = match (self.loader_of(src), self.callee(src)) {
+            (Some(r), _) => r,
+            (None, Some(f)) if src.kind() == CALL => {
+                return bad(self, &format!("unknown format {f}"));
+            }
             _ => return bad(self, "not a format"),
         };
-        let args: Vec<SyntaxNode> = node(src, ARG_LIST)
+        let args: Vec<SyntaxNode> = node(&read, ARG_LIST)
             .map(|l| terms(&l).collect())
             .unwrap_or_default();
         let [arg] = args.as_slice() else {
-            return bad(self, &format!("{format} takes one location"));
+            return bad(self, "`io.read` takes one location");
         };
         if arg.kind() == CALL && self.callee(arg).as_deref() == Some("git") {
             let d = Diagnostic::error(
@@ -3039,7 +3103,7 @@ impl<'u> Lowerer<'u> {
                 "`git(..)` is gone (R-153): a repository's file is a location",
             )
             .with_help(format!(
-                "`{format}(\"git+https://HOST/OWNER/REPO/PATH?ref=TAG\")` (`git+ssh://` over \
+                "`io.read(\"git+https://HOST/OWNER/REPO/PATH?ref=TAG\")` (`git+ssh://` over \
                      ssh, `git+file:REPO/PATH?ref=TAG` for a repository in the project), read at \
                      the commit the ref names, which the plan file records"
             ));

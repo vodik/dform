@@ -1,4 +1,4 @@
-//! The `ssh://` transport (R-153): `text("ssh://USER@HOST/PATH")` over
+//! The `ssh://` transport (R-153): `io.read("ssh://USER@HOST/PATH")` over
 //! SFTP, and `git+ssh://` repositories through `git-upload-pack`, against a
 //! real sshd each test starts on a free port with a throwaway host key,
 //! and a client key in a scratch `HOME` (no agent). It only reads: a
@@ -170,7 +170,7 @@ fn project(name: &str, port: u16) -> Scratch {
         &format!(
             "\nuse fake\n\n\
              let host = \"127.0.0.1:{port}\"\n\
-             let raw: secret(string) = text(\"ssh://{user}@${{host}}{dir}/k3s.yaml\")\n\
+             let raw: secret(string) = io.read(\"ssh://{user}@${{host}}{dir}/k3s.yaml\")\n\
              resource db.secret kube {{ password = raw }}\n",
             user = user(),
             dir = s.path("remote").display(),
@@ -239,7 +239,7 @@ fn reads_a_file() {
     s.write(
         "q.df",
         &format!(
-            "\nuse fake\nlet raw: secret(string) = text(\"ssh://{}@127.0.0.1:{port}{}\")\n\
+            "\nuse fake\nlet raw: secret(string) = io.read(\"ssh://{}@127.0.0.1:{port}{}\")\n\
              kube(r) where r = raw\n",
             user(),
             s.path("remote/k3s.yaml").display()
@@ -449,7 +449,7 @@ fn ssh_run_is_not_a_function_and_the_provider_is_gone() {
         r.stderr
     );
     assert!(
-        r.stderr.contains("text(\"ssh://USER@HOST/PATH\")"),
+        r.stderr.contains("io.read(\"ssh://USER@HOST/PATH\")"),
         "{}",
         r.stderr
     );
@@ -475,7 +475,7 @@ fn ssh_run_is_not_a_function_and_the_provider_is_gone() {
         r.stderr
     );
     assert!(
-        r.stderr.contains("text(\"ssh://USER@HOST/PATH\")"),
+        r.stderr.contains("io.read(\"ssh://USER@HOST/PATH\")"),
         "{}",
         r.stderr
     );
@@ -748,7 +748,7 @@ fn a_repository_is_read_over_ssh() {
         &format!(
             "\nuse fake\n\
              resource net.vpc \"${{d.name}}\" {{ cidr_block = \"10.0.0.0/16\" }} \
-             where d in yaml(\"git+ssh://{u}@127.0.0.1:{port}{repo}/docs/vpcs.yml?ref=v1.0.0\")\n",
+             where d in yaml.decode(io.read(\"git+ssh://{u}@127.0.0.1:{port}{repo}/docs/vpcs.yml?ref=v1.0.0\"))\n",
             u = user(),
             repo = s.path("served/ops.git").display(),
         ),

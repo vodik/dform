@@ -1,7 +1,8 @@
-//! Documents (R-39): a loader, `yaml(path)`, `toml`, `json`, `csv`, each
-//! also over `git(repo, ref, path)`, is a document value; `input p from
-//! TERM` reads a relation's rows out of one by column name, through a
-//! selector (`.name`, `[*]`), out of a loader call, a `let` or an input.
+//! Documents (R-39, R-155): a read, `io.read(LOCATION)`, and a decode of
+//! one, `yaml.decode(io.read(path))`, `toml`, `json`, `csv`, is a document
+//! value; `input p from TERM` reads a relation's rows out of one by column
+//! name, through a selector (`.name`, `[*]`), out of a read, a `let` or an
+//! input.
 
 mod common;
 mod tables_common;
@@ -20,10 +21,10 @@ fn a_toml_document_holds_several_relations() {
     );
     s.write(
         "p.df",
-        "\ninput az from toml(\"net.toml\")\n\
-         input peering from toml(\"net.toml\").peerings\n\
+        "\ninput az from toml.decode(io.read(\"net.toml\"))\n\
+         input peering from toml.decode(io.read(\"net.toml\")).peerings\n\
          decl az(name: string, index: int)\ndecl peering(name: string, peer: string)\n\
-         use fake\nlet net = toml(\"net.toml\")\n\
+         use fake\nlet net = toml.decode(io.read(\"net.toml\"))\n\
          resource net.subnet \"${n}-${net.region}\" { cidr = \"10.0.${i}.0/24\" } where az(n, i)\n\
          resource net.vpc_peering \"${n}\" { accepter_vpc = p } where peering(n, p)\n",
     );
@@ -54,7 +55,7 @@ fn a_selector_reads_rows_and_their_enclosing_objects() {
     );
     let program = |cols: &str| {
         format!(
-            "\ninput zone from yaml(\"regions.yaml\").regions[*].zones\n\
+            "\ninput zone from yaml.decode(io.read(\"regions.yaml\")).regions[*].zones\n\
              decl zone({cols})\nuse fake\n\
              resource net.subnet \"${{r}}-${{z}}\" {{ cidr = \"10.0.0.0/24\" }} where zone(r, z)\n"
         )
@@ -101,7 +102,7 @@ fn a_relation_is_read_from_an_input_or_a_let() {
         "\ninput vlans: list(any) = [{ id: 10, cidr: \"10.0.10.0/24\" }]\n\
          input vlan from vlans\ninput team from teams.teams\n\
          decl vlan(id: int, cidr: inet)\ndecl team(name: string, port: int)\nuse fake\n\
-         let teams = json(\"teams.json\")\n\
+         let teams = json.decode(io.read(\"teams.json\"))\n\
          resource net.subnet \"v${i}\" { cidr = c } where vlan(i, c)\n\
          resource compute.vm \"${n}\" { port = p } where team(n, p)\n",
     );
@@ -136,7 +137,7 @@ fn a_document_is_read_at_a_git_commit() {
     s.write(
         "p.df",
         "\nuse fake\n\
-         let pins = csv(\"git+file:ops.git/pins.csv?ref=main\")\n\
+         let pins = csv.decode(io.read(\"git+file:ops.git/pins.csv?ref=main\"))\n\
          resource compute.vm web { image = pins[0].image }\n",
     );
     let r = s
@@ -146,5 +147,54 @@ fn a_document_is_read_at_a_git_commit() {
     assert!(
         s.read("plan.json").contains(&commit),
         "the plan records the commit"
+    );
+}
+
+/// The one read (R-155): `io.read` is the text, a format's decode of it
+/// the document with its rows at their lines, a decode of a text in hand
+/// the pure function; the loaders of before, `text(..)` and `use file`
+/// are errors naming the read.
+#[test]
+fn a_read_is_io_read_and_a_decode_of_it() {
+    let s = scratch("doc-io-read");
+    s.write("hosts.csv", "name,port\nweb,80\ndb,5432\n");
+    s.write(
+        "p.df",
+        "\ninput host from csv.decode(io.read(\"hosts.csv\"))\n\
+         decl host(name: string, port: int)\nuse fake\n\
+         let text = io.read(\"hosts.csv\")\n\
+         let rows = csv.decode(text)\n\
+         let again = csv.encode(rows)\n\
+         first(n) where n = rows[0].name\n\
+         same() where again == text\n\
+         port(n, p) where host(n, p)\n",
+    );
+    let r = s.run(&["query", "first(N)", "p.df"]).success();
+    assert!(r.stdout.ends_with("\n\"web\"\n"), "{}", r.stdout);
+    let r = s.run(&["query", "same()", "p.df"]).success();
+    assert!(r.stdout.contains("yes"), "{}", r.stdout);
+    let r = s.run(&["why", "port(\"db\", P)", "p.df"]).success();
+    assert!(r.stdout.contains("hosts.csv:3"), "{}", r.stdout);
+    for (old, new) in [
+        ("csv(\"hosts.csv\")", "`csv.decode(io.read(\"hosts.csv\"))`"),
+        ("text(\"hosts.csv\")", "`io.read(\"hosts.csv\")`"),
+    ] {
+        s.write("p.df", &format!("\nuse fake\nlet t = {old}\n"));
+        let r = s.run(&["plan", "p.df"]).failure();
+        assert!(
+            r.stderr
+                .contains("is gone (R-155): a location is read by `io.read`")
+                && r.stderr.contains(new),
+            "{old}: {}",
+            r.stderr
+        );
+    }
+    s.write("p.df", "\nuse fake\nuse file\n");
+    let r = s.run(&["plan", "p.df"]).failure();
+    assert!(
+        r.stderr.contains("the file provider is gone (R-155)")
+            && r.stderr.contains("`io.read(\"PATH\")`"),
+        "{}",
+        r.stderr
     );
 }

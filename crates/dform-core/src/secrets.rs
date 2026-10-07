@@ -555,7 +555,7 @@ pub fn secret_memos(
 
 /// The reads of a document (`table.FORMAT.document`, a loader's call)
 /// whose value a rule writes into a secret cell (`let raw:
-/// secret(string) = text("ssh://..")`, R-153): the plan file records no
+/// secret(string) = io.read("ssh://..")`, R-153): the plan file records no
 /// such read, only its digest (`Externs::secret_answers`), and the apply
 /// reads it again.
 pub fn secret_reads(

@@ -11,7 +11,7 @@
 # Notes:
 # - This file models the intent/config surface area of the Terraform stack.
 # - External Terraform modules are represented as higher-level resources.
-# - The monitoring dashboard JSON is read by the loader `json(path)` from a stub,
+# - The monitoring dashboard JSON is read by `json.decode(io.read(path))` from a stub,
 #   files/dashboard-pngu.json (see terraform/modules/monitoring/dashboard-pngu.json).
 
 # The stack's key, typed: `dform plan pngu env=qa` is an error naming it.
@@ -34,7 +34,7 @@ input gke {
 }
 # The rows are data/peerings.csv's, typed column by column as `decl peering`
 # says: a row whose env is not one of these is an error naming its line.
-input peering from csv("data/peerings.csv")
+input peering from csv.decode(io.read("data/peerings.csv"))
 decl peering(env: environment, name: string, peer_network: string)
 output active_env = env
 output project_id = gcp.project_id
@@ -202,10 +202,10 @@ resource google.container_cluster pngu {
 # Resources (monitoring module intent)
 ########################################
 
-# The dashboard JSON is a file, a document `json(path)` reads.
+# The dashboard JSON is a file, a document `json.decode(io.read(path))` reads.
 resource google.monitoring_dashboard pngu {
   project = gcp.project_id
-  dashboard_json = json("files/dashboard-pngu.json")
+  dashboard_json = json.decode(io.read("files/dashboard-pngu.json"))
 }
 
 # Represents terraform-gcp-alert-metrics module invocation. No provider

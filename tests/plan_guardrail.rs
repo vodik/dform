@@ -13,8 +13,8 @@ use expectrl::{Eof, Expect, Session};
 /// `data/active.csv` is the whole join.
 const NET: &str = r#"
 
-input zone from csv("data/zones.csv")
-input active from csv("data/active.csv")
+input zone from csv.decode(io.read("data/zones.csv"))
+input active from csv.decode(io.read("data/active.csv"))
 
 decl zone(name: string, n: int, region: string)
 decl active(name: string)

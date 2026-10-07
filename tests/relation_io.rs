@@ -20,7 +20,7 @@ fn sources_and_stated_rows_are_one_relation() {
     s.write("b.yaml", "rows:\n  - x: b\n");
     s.write(
         "p.df",
-        "\ninput r from csv(\"a.csv\")\ninput r from yaml(\"b.yaml\").rows\n\
+        "\ninput r from csv.decode(io.read(\"a.csv\"))\ninput r from yaml.decode(io.read(\"b.yaml\")).rows\n\
          decl r(x: string)\nr(\"c\")\nuse fake\n",
     );
     let r = s.run(&["query", "r(x)", "p.df"]).success();
@@ -43,7 +43,7 @@ component subnets {
 "#;
 
 /// A component's relation input is its instance block's: rows written
-/// there, a rule over the user's relations, or a table `p from csv(..)`,
+/// there, a rule over the user's relations, or a table `p from csv.decode(io.read(..))`,
 /// its columns the component's `decl`; a copy with a clause has rows only
 /// while it holds.
 #[test]
@@ -56,7 +56,7 @@ fn a_components_relation_input_is_given_by_rows_and_by_from() {
             "\nkey env: enum(\"dev\", \"prod\") = \"dev\"\n{NET}\
              az(\"a\", 0)\naz(\"b\", 1)\n\
              resource subnets blue {{\n  cidr = \"10.0.0.0/16\"\n  zone(n, i) where az(n, i)\n  \
-             zone from csv(\"z.csv\")\n}}\n\
+             zone from csv.decode(io.read(\"z.csv\"))\n}}\n\
              resource subnets green {{\n  cidr = \"10.1.0.0/16\"\n  zone(\"x\", 9)\n}} \
              where env == \"prod\"\n\
              use fake\n"
@@ -142,7 +142,7 @@ fn a_used_modules_relation_input_is_its_blocks() {
     );
     s.write(
         "zones.df",
-        "\ninput zone from csv(\"z.csv\")\ndecl zone(name: string)\n",
+        "\ninput zone from csv.decode(io.read(\"z.csv\"))\ndecl zone(name: string)\n",
     );
     s.write("p.df", "\nuse zones\nuse fake\n");
     let r = plan(&s, "p.df").failure();

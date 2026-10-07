@@ -331,11 +331,12 @@ fn classify_read(
             let t = const_str(&a.args[0])?;
             Some(format!("world {t}"))
         }
-        // A data source by the call a program writes: a loader's table
-        // as its loader (`yaml(..)`), never the compiler's name (R-129).
+        // A data source by the call a program writes: a table as its
+        // read (`yaml.decode(io.read(..))`, R-155), never the compiler's
+        // name (R-129).
         (pred, _) if externs.contains(pred) => Some(
             match pred.strip_prefix("table.").and_then(|r| r.split_once('.')) {
-                Some((loader, _)) => format!("{loader}(..)"),
+                Some((format, _)) => crate::tables::written(format),
                 None => format!("{pred}(..)"),
             },
         ),

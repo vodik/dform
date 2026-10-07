@@ -4,4 +4,4 @@ key env: string = "dev"
 stack web[env] {}
 
 # A key is a value the target gives, not a relation.
-key peers(name: string) from csv("peers.csv")
+key peers(name: string) from csv.decode(io.read("peers.csv"))

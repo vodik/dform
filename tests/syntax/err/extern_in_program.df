@@ -1,5 +1,5 @@
 # A program declares the provider, not its extern (DESIGN.org R-8).
-use file {}
-extern file.text(+path, -value)
+use env {}
 extern env.var(+name, -value)
+extern memo.first(+key, +candidate, -value)
 token(t) where t = env.var("TOKEN")

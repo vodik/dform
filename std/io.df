@@ -1,0 +1,16 @@
+# Reading: the one read (R-155; docs/grammar.md "Functions", "Documents").
+# `io.read` is a coeffect: what it reads the context satisfies, a location
+# by its scheme and host (a path from the project root, `file:`, `data:`,
+# `ssh://`, `https://`, `git+https://`, `s3://`, a provider's scheme), the
+# credentials and the wait dform.toml's `[io]` grants. The plan file records
+# what it read (a repository's commit, a secret's digest), so `apply PLAN`
+# reads what plan read; what the world has not reached yet is "not yet", an
+# open null an apply waits on. A format's `decode` reads the document in
+# the text, and over an `io.read` keeps its rows at their lines:
+# `yaml.decode(io.read("vendor/crds.yml"))`. `io` is read-only: a write is
+# an effect with no state to converge, so it is a provider's apply.
+package io
+
+#| The location's text: a path from the project root or a uri whose scheme is a transport; an error for a scheme no transport has, a file that is not UTF-8 text, or a project file that is not there.
+#| example: let kubeconfig: secret(string) = io.read("ssh://ubuntu@${server.ip}/etc/rancher/k3s/k3s.yaml")
+fn read(location: string) -> string reads

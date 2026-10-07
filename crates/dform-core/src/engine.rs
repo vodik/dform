@@ -4453,14 +4453,14 @@ mod tests {
     }
 
     /// dform.df's inputs are their defaults, a block for the modules', and
-    /// each environment's document, `set from yaml("config/dform/${env}.yaml")`
+    /// each environment's document, `set from yaml.decode(io.read("config/dform/${env}.yaml"))`
     /// (R-38). Every environment compiles to exactly the resources the
     /// `set` blocks the documents say would.
     #[test]
     fn dform_df_set_from_matches_the_blocks() {
         let root = std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."));
         let src = std::fs::read_to_string(root.join("examples/demo/stacks/dform.df")).unwrap();
-        let from = "set from yaml(\"config/dform/${env}.yaml\")\n";
+        let from = "set from yaml.decode(io.read(\"config/dform/${env}.yaml\"))\n";
         assert!(src.contains(from));
         let blocks = "set {
               cidrs.main = \"10.20.0.0/16\"

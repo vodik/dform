@@ -193,7 +193,7 @@ fn an_undeclared_table_takes_its_first_sources_columns() {
     s.write("nets.csv", "name,cidr\na,10.0.0.0/16\n");
     s.write(
         "p.df",
-        "\n\ninput zone from json(\"zones.json\")\ninput net from csv(\"nets.csv\")\n\n\
+        "\n\ninput zone from json.decode(io.read(\"zones.json\"))\ninput net from csv.decode(io.read(\"nets.csv\"))\n\n\
          use fake\n\n\
          next(z, i) where zone(z, n, _), i = n + 1\n\
          inside(z) where zone(z, _, c), inet.overlaps(c, \"10.1.2.0/24\")\n\
@@ -208,7 +208,7 @@ fn an_undeclared_table_takes_its_first_sources_columns() {
     // A first source the compiler cannot read: declare the columns.
     s.write(
         "p.df",
-        "\n\ninput zone from json(\"missing.json\")\n\nuse fake\n",
+        "\n\ninput zone from json.decode(io.read(\"missing.json\"))\n\nuse fake\n",
     );
     let r = s.run(&["plan", "p.df"]).failure();
     assert!(

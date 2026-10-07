@@ -202,7 +202,7 @@ fn a_documents_decimal_is_a_float() {
     );
     s.write(
         "p.df",
-        "\ninput t from json(\"t.json\")\nuse fake\n\
+        "\ninput t from json.decode(io.read(\"t.json\"))\nuse fake\n\
          heavy(n) where t(n, r), r > 1.75\n",
     );
     let r = s.run(&["query", "t(N, R)", "p.df"]).success();

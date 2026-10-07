@@ -15,7 +15,7 @@ net.vpc main.vpc.tags = {component: "network", env: "prod", team: "platform"}
   │         │              ├─ {main: 10.50.0.0/16} @default   examples/demo/stacks/dform.df:10
   │         │              ├─ {peer: 10.60.0.0/16} @default   examples/demo/stacks/dform.df:10
   │         │              ├─ {main: 10.20.0.0/16}
-  │         │              │    examples/demo/stacks/dform.df:25  set from yaml("config/dform/${env}.yaml")
+  │         │              │    examples/demo/stacks/dform.df:25  set from yaml.decode(io.read("config/dform/${env}.yaml"))
   │         │              │    with "config/dform/${env}.yaml" = "config/dform/prod.yaml"
   │         │              │    ├─ input env = "prod"
   │         │              │    │    merged from 2 contributions
@@ -25,7 +25,7 @@ net.vpc main.vpc.tags = {component: "network", env: "prod", team: "platform"}
   │         │              │    │         └─ --set env=prod
   │         │              │    └─ table.yaml.set("config/dform/prod.yaml", "config/dform/prod.yaml:5", "cidrs.main", "10.20.0.0/16")   config/dform/prod.yaml:5
   │         │              └─ {peer: 10.21.0.0/16}
-  │         │                   examples/demo/stacks/dform.df:25  set from yaml("config/dform/${env}.yaml")
+  │         │                   examples/demo/stacks/dform.df:25  set from yaml.decode(io.read("config/dform/${env}.yaml"))
   │         │                   with "config/dform/${env}.yaml" = "config/dform/prod.yaml"
   │         │                   ├─ input env = "prod"   (see above)
   │         │                   └─ table.yaml.set("config/dform/prod.yaml", "config/dform/prod.yaml:6", "cidrs.peer", "10.21.0.0/16")   config/dform/prod.yaml:6

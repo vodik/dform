@@ -52,8 +52,16 @@ impl Lowerer<'_> {
         if of == "ssh" {
             let d = Diagnostic::error(span, "the ssh provider is gone (R-153)").with_help(
                 "a host's file is a location dform reads itself: \
-                 `text(\"ssh://USER@HOST/PATH\")`, or `yaml(..)` and the other loaders; \
-                 delete the `use ssh` statement",
+                 `io.read(\"ssh://USER@HOST/PATH\")`, a format's decode of it \
+                 (`yaml.decode(io.read(..))`); delete the `use ssh` statement",
+            );
+            self.diags.push(d);
+            return Err(Skip);
+        }
+        if of == "file" && !super::names_source(n) {
+            let d = Diagnostic::error(span, "the file provider is gone (R-155)").with_help(
+                "a project file's text is `io.read(\"PATH\")`, the one read, a std function \
+                 in scope with no `use`; delete the `use file` statement",
             );
             self.diags.push(d);
             return Err(Skip);
@@ -237,7 +245,7 @@ impl Lowerer<'_> {
                 "`ssh.run` is not a function: a command is a provider's apply",
             )
             .with_help(
-                "a host's file is read as a location, `text(\"ssh://USER@HOST/PATH\")`; \
+                "a host's file is read as a location, `io.read(\"ssh://USER@HOST/PATH\")`; \
                  a file, a package or a unit to manage is a resource of a provider whose \
                  apply runs what it must",
             );
@@ -250,9 +258,9 @@ impl Lowerer<'_> {
                 "`ssh.read` is gone (R-153): a host's file is a location",
             )
             .with_help(
-                "`text(\"ssh://USER@HOST/PATH\")` (`text(\"ssh://ubuntu@${server.ip}/etc/\
-                 rancher/k3s/k3s.yaml\")`), or `yaml(..)`; declare its secrecy where it is \
-                 kept, `let raw: secret(string) = text(..)`",
+                "`io.read(\"ssh://USER@HOST/PATH\")` (`io.read(\"ssh://ubuntu@${server.ip}/etc/\
+                 rancher/k3s/k3s.yaml\")`), or `yaml.decode(io.read(..))`; declare its secrecy \
+                 where it is kept, `let raw: secret(string) = io.read(..)`",
             );
             self.diags.push(d);
             return Some(Err(Skip));
@@ -395,6 +403,9 @@ impl Lowerer<'_> {
             Some((_, at)) => d
                 .with_label(at, format!("the {head} provider is declared here"))
                 .with_help("delete the `extern` statement"),
+            None if b.always => d.with_help(format!(
+                "`{name}` is in scope with no `use`: delete the `extern` statement"
+            )),
             None => d.with_help(format!("write `use {head}` instead")),
         };
         self.diags.push(d);

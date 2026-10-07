@@ -8,7 +8,7 @@ use common::Scratch;
 
 const NET: &str = r#"
 
-input zone from csv("data/zones.csv")
+input zone from csv.decode(io.read("data/zones.csv"))
 input size: int = 1
 input big: bool = false
 

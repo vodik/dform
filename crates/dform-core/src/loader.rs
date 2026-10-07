@@ -318,6 +318,12 @@ fn load_units(
                         && !path.contains('.')
                         && (mounts.provider(&path) || crate::syntax::resolve::names_source(&n)) => {
                 }
+                // The file provider is gone (R-155): the resolver says
+                // what reads a project file now.
+                Target::Missing(_)
+                    if n.kind() == USE
+                        && path == "file"
+                        && !crate::syntax::resolve::names_source(&n) => {}
                 Target::Missing(tried) => {
                     let tried: Vec<String> = tried.iter().map(|f| display_name(f)).collect();
                     let mut d = diag::Diagnostic::error(

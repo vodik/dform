@@ -14,7 +14,7 @@
 # schema and this project's providers/google), and
 # applies to a cluster with k8s = "providers/k8s" there. In
 # production the release comes from git, as a table:
-#   input release from csv("git+https://github.com/acme/ops/releases.csv?ref=main")
+#   input release from csv.decode(io.read("git+https://github.com/acme/ops/releases.csv?ref=main"))
 # The live objects are read through the kubernetes provider's inventory
 # (`world.T[e].p`), named by remote id (`shop/crud-api`).
 

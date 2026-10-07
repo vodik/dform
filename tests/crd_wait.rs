@@ -59,7 +59,7 @@ type_attr(k8s.traefik.middleware, \"spec.buffering.maxRequestBodyBytes\", \"int\
 const PROG: &str = r#"
 use k8s { kubeconfig = "kc", crds = { "middlewares.traefik.io": "mw.df" } }
 
-resource k8s.custom_resource_definition "${d.metadata.name}" = d where d in yaml("crds.yml")
+resource k8s.custom_resource_definition "${d.metadata.name}" = d where d in yaml.decode(io.read("crds.yml"))
 
 resource k8s.traefik.middleware large_upload {
   metadata = { name: "large-upload", namespace: "apps" }
@@ -142,7 +142,7 @@ fn apply_makes_the_kind_the_tick_after_its_crd() {
 #[test]
 fn a_kind_nothing_defines_is_an_error_naming_its_crd() {
     let prog = PROG.replace(
-        "resource k8s.custom_resource_definition \"${d.metadata.name}\" = d where d in yaml(\"crds.yml\")\n",
+        "resource k8s.custom_resource_definition \"${d.metadata.name}\" = d where d in yaml.decode(io.read(\"crds.yml\"))\n",
         "",
     );
     let s = scratch("crd-wait-none", &prog);
@@ -171,10 +171,10 @@ fn with_the_kubernetes_provider_the_kind_waits_on_its_crd() {
         r#"
 use fake
 resource db.postgres server { name = "server" }
-let raw: secret(string) = text("ssh://ubuntu@${server.endpoint}/etc/rancher/k3s/k3s.yaml")
+let raw: secret(string) = io.read("ssh://ubuntu@${server.endpoint}/etc/rancher/k3s/k3s.yaml")
 use k8s { source = "./providers/k8s", kubeconfig = raw }
 
-resource k8s.custom_resource_definition "${d.metadata.name}" = d where d in yaml("crds.yml")
+resource k8s.custom_resource_definition "${d.metadata.name}" = d where d in yaml.decode(io.read("crds.yml"))
 
 resource k8s.traefik.middleware large_upload {
   metadata = { name: "large-upload", namespace: "apps" }

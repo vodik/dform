@@ -683,12 +683,11 @@ fn program_paths_resolve_from_the_root() {
     s.write(
         "stacks/paths.df",
         r#"
-input peer from csv("data/peers.csv")
+input peer from csv.decode(io.read("data/peers.csv"))
 use data.tags
 decl peer(name: string)
 use cloud { source = "providers/cloud" }
-use file
-note(v) where v = file.text["data/note.txt"]
+note(v) where v = io.read("data/note.txt")
 resource x.thing "${n}" {
   label = "${n}-${g}-${v}"
 } where peer(name: n), tags.tag(g), note(v)

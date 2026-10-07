@@ -57,10 +57,10 @@ fn data_and_file_locations() {
     let s = Scratch::project("transport-data");
     s.write("vpcs.yml", "name: a\n---\nname: b\n");
     for loader in [
-        "yaml(\"vpcs.yml\")",
-        "yaml(\"file:vpcs.yml\")",
-        "yaml(\"data:,name%3A%20a%0A---%0Aname%3A%20b%0A\")",
-        "yaml(\"data:text/yaml;base64,bmFtZTogYQotLS0KbmFtZTogYgo=\")",
+        "yaml.decode(io.read(\"vpcs.yml\"))",
+        "yaml.decode(io.read(\"file:vpcs.yml\"))",
+        "yaml.decode(io.read(\"data:,name%3A%20a%0A---%0Aname%3A%20b%0A\"))",
+        "yaml.decode(io.read(\"data:text/yaml;base64,bmFtZTogYQotLS0KbmFtZTogYgo=\"))",
     ] {
         s.write("p.df", &vpcs(loader));
         let r = run(&s, &["plan", "p.df"]).success();
@@ -72,14 +72,14 @@ fn data_and_file_locations() {
     }
     s.write(
         "p.df",
-        "\nuse fake\nlet name = text(\"data:,blue\")\n\
+        "\nuse fake\nlet name = io.read(\"data:,blue\")\n\
          resource net.vpc \"${name}\" { cidr_block = \"10.0.0.0/16\" }\n",
     );
     let r = run(&s, &["plan", "p.df"]).success();
     assert!(r.stdout.contains("+ net.vpc blue"), "{}", r.stdout);
     s.write(
         "p.df",
-        "\ninput vpc from text(\"data:,a\")\ndecl vpc(name: string)\nuse fake\n",
+        "\ninput vpc from io.read(\"data:,a\")\ndecl vpc(name: string)\nuse fake\n",
     );
     let r = run(&s, &["plan", "p.df"]).failure();
     assert!(
@@ -93,7 +93,7 @@ fn data_and_file_locations() {
         ("ftp://h/x.yml", "no transport reads `ftp:`"),
         ("http://h/x.yml", "write `https:`"),
     ] {
-        s.write("p.df", &vpcs(&format!("yaml(\"{loc}\")")));
+        s.write("p.df", &vpcs(&format!("yaml.decode(io.read(\"{loc}\"))")));
         let r = run(&s, &["plan", "p.df"]).failure();
         assert!(r.stderr.contains(says), "{loc}: {}", r.stderr);
     }
@@ -139,7 +139,7 @@ fn a_tag_is_read_from_the_mirror() {
     s.write(
         "p.df",
         &vpcs(&format!(
-            "yaml(\"git+https://github.com/traefik/traefik/{crds}?ref=v3.7.14\")"
+            "yaml.decode(io.read(\"git+https://github.com/traefik/traefik/{crds}?ref=v3.7.14\"))"
         )),
     );
     let r = run(&s, &["plan", "--out", "plan.json", "p.df"]).success();
@@ -159,7 +159,7 @@ fn a_tag_is_read_from_the_mirror() {
     s.write(
         "p.df",
         &vpcs(&format!(
-            "yaml(\"git+https://git.invalid/traefik/traefik/{crds}?ref=main\")"
+            "yaml.decode(io.read(\"git+https://git.invalid/traefik/traefik/{crds}?ref=main\"))"
         )),
     );
     let r = run(&s, &["plan", "p.df"]).failure();
@@ -167,11 +167,14 @@ fn a_tag_is_read_from_the_mirror() {
     // No ref: said, with the form.
     s.write(
         "p.df",
-        &vpcs("yaml(\"git+https://github.com/traefik/traefik/x.yml\")"),
+        &vpcs("yaml.decode(io.read(\"git+https://github.com/traefik/traefik/x.yml\"))"),
     );
     let r = run(&s, &["plan", "p.df"]).failure();
     assert!(r.stderr.contains("add `?ref=TAG`"), "{}", r.stderr);
-    s.write("p.df", &vpcs("yaml(git(\"ops.git\", \"main\", \"x.yml\"))"));
+    s.write(
+        "p.df",
+        &vpcs("yaml.decode(io.read(git(\"ops.git\", \"main\", \"x.yml\")))"),
+    );
     let r = run(&s, &["plan", "p.df"]).failure();
     assert!(
         r.stderr.contains("`git(..)` is gone (R-153)")
@@ -213,7 +216,10 @@ fn an_s3_object_is_read_with_the_backends_endpoint() {
             fake_s3().endpoint
         ),
     );
-    s.write("p.df", &vpcs("yaml(\"s3://docs/vpcs/prod.yml\")"));
+    s.write(
+        "p.df",
+        &vpcs("yaml.decode(io.read(\"s3://docs/vpcs/prod.yml\"))"),
+    );
     let r = run(&s, &["plan", "p.df"]).success();
     assert!(
         r.stdout.contains("+ net.vpc a") && r.stdout.contains("+ net.vpc b"),
@@ -222,7 +228,7 @@ fn an_s3_object_is_read_with_the_backends_endpoint() {
     );
     s.write(
         "p.df",
-        "\nuse fake\nlet name = text(\"s3://docs/vpcs/later.txt\")\n\
+        "\nuse fake\nlet name = io.read(\"s3://docs/vpcs/later.txt\")\n\
          resource net.vpc \"x\" { cidr_block = name }\n",
     );
     let r = run(&s, &["plan", "p.df"]).success();
@@ -243,7 +249,7 @@ fn a_secret_read_is_recorded_by_its_digest() {
     s.write("token.txt", "TOKEN-VALUE");
     s.write(
         "p.df",
-        "\nuse fake\nlet raw: secret(string) = text(\"token.txt\")\n\
+        "\nuse fake\nlet raw: secret(string) = io.read(\"token.txt\")\n\
          resource net.vpc v { cidr_block = \"10.0.0.0/16\" }\noutput t: secret(string) = raw\n",
     );
     run(&s, &["plan", "--out", "plan.json", "p.df"]).success();
@@ -268,21 +274,21 @@ fn a_secret_read_is_recorded_by_its_digest() {
 
 /// A scheme a provider's manifest declares is read by that provider: the
 /// mock declares `mock` (as a google provider would `gs`), and a
-/// program's `yaml("mock://..")` reaches it through the host; its "not
+/// program's `yaml.decode(io.read("mock://.."))` reaches it through the host; its "not
 /// yet" is waited on as any read's.
 #[test]
 fn a_scheme_a_provider_declares_is_read_by_it() {
     let s = Scratch::project("transport-provider");
     s.write(
         "p.df",
-        "\nuse fake\nlet d = yaml(\"mock://alpha/x.yml\")\n\
+        "\nuse fake\nlet d = yaml.decode(io.read(\"mock://alpha/x.yml\"))\n\
          resource net.vpc \"${d.host}\" { cidr_block = \"10.0.0.0/16\" }\n",
     );
     let r = run(&s, &["plan", "p.df"]).success();
     assert!(r.stdout.contains("+ net.vpc alpha"), "{}", r.stdout);
     s.write(
         "p.df",
-        "\nuse fake\nlet d = yaml(\"mock://alpha/later/x.yml\")\n\
+        "\nuse fake\nlet d = yaml.decode(io.read(\"mock://alpha/later/x.yml\"))\n\
          resource net.vpc \"x\" { cidr_block = d.host }\n",
     );
     let r = run(&s, &["plan", "p.df"]).success();

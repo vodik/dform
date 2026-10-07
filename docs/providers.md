@@ -202,7 +202,7 @@ is never a provider's to read. A provider that reads a scheme of its own
 `Manifest`'s `schemes`; a `Handler`'s `schemes` and `read_location` in the
 SDK), and serves `files` for it (the gRPC `Files` service; the WIT world
 `scheme-provider` exports it): dform routes a read of the scheme to it, the
-program's (`yaml("gs://..")`) and another provider's alike, through the
+program's (`yaml.decode(io.read("gs://.."))`) and another provider's alike, through the
 host, never one provider to another; dform's own schemes are never a
 provider's.
 

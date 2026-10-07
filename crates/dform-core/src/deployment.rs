@@ -612,7 +612,7 @@ impl Evaluator {
                 });
             }
             // One waiting on what dform's own read has not answered (the
-            // kubeconfig `text("ssh://..")` reads from a host still booting) waits
+            // kubeconfig `io.read("ssh://..")` reads from a host still booting) waits
             // on it through the provider: said as both.
             let waits = sections
                 .pending
@@ -987,7 +987,7 @@ impl Evaluator {
 
 /// The resources each provider's settings are made from, by the
 /// program's name of the provider: every resource attribute its
-/// `provider_config` row rests on (`kubeconfig = text("ssh://..${server.ip}
+/// `provider_config` row rests on (`kubeconfig = io.read("ssh://..${server.ip}
 /// ..)`: the server).
 fn settings_reads(res: &EvalResult) -> BTreeMap<String, BTreeSet<Address>> {
     let mut out: BTreeMap<String, BTreeSet<Address>> = BTreeMap::new();
@@ -1310,16 +1310,12 @@ impl Located {
         let lowered = with_externs.as_ref();
         let externs = {
             let (no_program, no_fns) = (Program::default(), vec![]);
-            let program_dir = project::base_of(&l.files[0]);
             let (tables, backend) = (tables.clone(), backend.clone());
             Externs::new(
                 lowered.map_or(&no_program, |l| &l.program),
                 lowered.map_or(&no_fns, |l| &l.extern_fns),
                 move |f, inputs| {
                     if let Some(r) = tables.answer(f, inputs) {
-                        return r;
-                    }
-                    if let Some(r) = externs::file(f, inputs, &program_dir) {
                         return r;
                     }
                     if let Some(r) = externs::env(f, inputs) {

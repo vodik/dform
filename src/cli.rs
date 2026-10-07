@@ -4483,7 +4483,6 @@ fn run_tests(
         }
         false => Providers::start(launch(), providers, &plugin::Config::default())?,
     };
-    let program_dir = crate::project::base_of(&files[0]);
     let lowered = crate::transform::lower(program)?;
     crate::secrets::check(&lowered, backend.schema(), &Default::default())?;
     crate::refine::check(&lowered.program, backend.schema())?;
@@ -4541,9 +4540,6 @@ fn run_tests(
         let externs =
             crate::externs::Externs::new(&lowered.program, &lowered.extern_fns, |f, ins| {
                 if let Some(r) = tables.answer(f, ins) {
-                    return r;
-                }
-                if let Some(r) = crate::externs::file(f, ins, &program_dir) {
                     return r;
                 }
                 if let Some(r) = crate::externs::time(f) {

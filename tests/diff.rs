@@ -9,7 +9,7 @@ use serde_json::Value;
 
 const NET: &str = r#"
 
-input zone from csv("data/zones.csv")
+input zone from csv.decode(io.read("data/zones.csv"))
 
 decl zone(name: string, n: int)
 

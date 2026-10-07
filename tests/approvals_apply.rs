@@ -313,7 +313,7 @@ fn a_git_table_is_read_at_the_planned_commit() {
     commit("a");
     s.write(
         "p.df",
-        "\n\ninput owner from csv(\"git+file:ops.git/owners.csv?ref=main\")\n\n\
+        "\n\ninput owner from csv.decode(io.read(\"git+file:ops.git/owners.csv?ref=main\"))\n\n\
          decl owner(name: string)\n\nresource net.vpc main {\ncidr = \"10.0.0.0/16\"\n\
          tags = { owners: [ n | owner(n) ] }\n}\nuse fake\n",
     );

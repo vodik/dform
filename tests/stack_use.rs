@@ -23,7 +23,7 @@ const K3S: &str = r#"
 input host: string
 use k8s { namespace = "edge" }
 resource k8s.config_map "${d.metadata.name}" = d where {
-  d in yaml("vendor/kubeconfig.yml")
+  d in yaml.decode(io.read("vendor/kubeconfig.yml"))
 }
 "#;
 
@@ -67,7 +67,12 @@ fn effects_lists_none_of_a_used_stacks_effects() {
     let s = project("stack-use-effects");
     let mine = s.run(&["dev", "effects", "stacks/apps.df"]).success();
     let theirs = s.run(&["dev", "effects", "stacks/platform.df"]).success();
-    for row in ["k3s", "yaml(..)", "k8s.config_map", "offers  ip"] {
+    for row in [
+        "k3s",
+        "yaml.decode(io.read(..))",
+        "k8s.config_map",
+        "offers  ip",
+    ] {
         assert!(theirs.stdout.contains(row), "{row}:\n{}", theirs.stdout);
         assert!(!mine.stdout.contains(row), "{row}:\n{}", mine.stdout);
     }

@@ -66,7 +66,7 @@ stack       reads   net.vpc.id
 stack       reads   output database.iam_need
 stack       reads   output kubernetes.iam_need
 stack       reads   output main.private_subnet
-stack       reads   yaml(..)
+stack       reads   yaml.decode(io.read(..))
 stack       writes  (compute.vm, id)
 stack       writes  (compute.vm, private_ip)
 stack       writes  (db.postgres, endpoint)

@@ -51,6 +51,8 @@ pub const SOURCES: &[(&str, &str)] = &[
     ("std/json.df", include_str!("../../../std/json.df")),
     ("std/yaml.df", include_str!("../../../std/yaml.df")),
     ("std/toml.df", include_str!("../../../std/toml.df")),
+    ("std/csv.df", include_str!("../../../std/csv.df")),
+    ("std/io.df", include_str!("../../../std/io.df")),
 ];
 
 /// The package whose functions are written bare.
@@ -89,6 +91,10 @@ pub struct Function {
     pub forwards_nulls: bool,
     /// `internal`: the lowering's, not callable from a program.
     pub internal: bool,
+    /// `reads`: a coeffect, a read the context satisfies (R-155,
+    /// `io.read`): it lowers to a table the host answers, never a body.
+    /// Every other function is pure.
+    pub coeffect: bool,
     pub summary: String,
     pub example: String,
     /// `inet.subnet(net: inet, bits: int, n: int) -> inet?`
@@ -568,14 +574,15 @@ pub(crate) fn function(sig: &str) -> Result<Function, String> {
     if partial {
         rest = rest[1..].trim();
     }
-    let (mut forwards, mut forwards_nulls) = (false, false);
+    let (mut forwards, mut forwards_nulls, mut coeffect) = (false, false, false);
     for flag in rest.split(',').map(str::trim).filter(|s| !s.is_empty()) {
         match flag.split_whitespace().collect::<Vec<_>>().as_slice() {
             ["forwards"] => forwards = true,
             ["forwards", "nulls"] => forwards_nulls = true,
+            ["reads"] => coeffect = true,
             _ => {
                 return Err(format!(
-                    "unknown flag `{flag}` (`forwards`, `forwards nulls`)"
+                    "unknown flag `{flag}` (`forwards`, `forwards nulls`, `reads`)"
                 ));
             }
         }
@@ -590,6 +597,7 @@ pub(crate) fn function(sig: &str) -> Result<Function, String> {
         forwards,
         forwards_nulls,
         internal: false,
+        coeffect,
         summary: String::new(),
         example: String::new(),
         signature: String::new(),
@@ -1335,6 +1343,14 @@ pub const BODIES: &[(&str, Body)] = &[
             .map(Value::Str),
         _ => None,
     }),
+    ("csv.decode", |a| match a {
+        [Value::Str(s)] => crate::tables::document_of("csv", s).ok(),
+        _ => None,
+    }),
+    ("csv.encode", |a| match a {
+        [Value::List(rows)] => crate::tables::csv_text(rows).map(Value::Str),
+        _ => None,
+    }),
     ("toml.decode", |a| match a {
         [Value::Str(s)] => crate::tables::document("toml", s).ok(),
         _ => None,
@@ -1713,8 +1729,8 @@ mod tests {
         assert_eq!(
             r.packages(),
             [
-                "base64", "hash", "inet", "int", "ip", "json", "list", "oci", "path", "random",
-                "regex", "semver", "str", "time", "toml", "uri", "yaml"
+                "base64", "csv", "hash", "inet", "int", "io", "ip", "json", "list", "oci", "path",
+                "random", "regex", "semver", "str", "time", "toml", "uri", "yaml"
             ]
         );
     }
@@ -1752,7 +1768,7 @@ mod tests {
     /// one registry).
     #[test]
     fn every_declared_function_has_a_body() {
-        for f in registry().functions() {
+        for f in registry().functions().filter(|f| !f.coeffect) {
             assert!(
                 body(&f.name).is_some(),
                 "{} ({}:{}) has no body",
@@ -1799,7 +1815,9 @@ mod tests {
     #[test]
     fn std_follows_the_audits_rules() {
         let derives = |f: &Function| {
-            f.package == "random"
+            // A coeffect's value is what it reads, not its arguments'.
+            f.coeffect
+                || f.package == "random"
                 || f.name == "hash.sha256"
                 || matches!(
                     f.name.as_str(),

@@ -126,6 +126,9 @@ fn print_signature(f: &crate::functions::Function) -> String {
     if f.forwards_nulls {
         flags.push("forwards nulls");
     }
+    if f.coeffect {
+        flags.push("reads");
+    }
     if !flags.is_empty() {
         s.push(' ');
         s.push_str(&flags.join(", "));

@@ -479,7 +479,7 @@ the arithmetic is on networks:
 ```dform
 input vpc_net: inet = "10.0.0.0/16"
 decl az(name: string, index: int)
-input az from yaml("data/azs.yaml")
+input az from yaml.decode(io.read("data/azs.yaml"))
 
 resource aws.subnet "private-${availability_zone}" {
   cidr_block = inet.subnet(vpc_net, 4, n)          # the n-th /20 of the /16
@@ -637,7 +637,7 @@ condition, and `--set` on the command line wins over both:
 ```dform
 set { db.multi_az = true, db.backup_days = 14 } where env == "prod"
 set db.backup_days = 30 @override where env == "prod", region == "eu-west-1"
-set from yaml("config/${env}.yaml")
+set from yaml.decode(io.read("config/${env}.yaml"))
 ```
 
 The condition can be any subset of a composite key, or anything else the
@@ -653,13 +653,13 @@ destructured into relations, and the rows are facts like any other,
 each with a line `why` can point at:
 
 ```dform
-let network = toml("data/network.toml")
+let network = toml.decode(io.read("data/network.toml"))
 decl az(name: string, index: int)
 decl peering(name: string, peer: string)
 decl pin(app: string, image: string)
 input az from network.az                         # the [[az]] tables
 input peering from network.peerings
-input pin from toml("git+https://github.com/acme/ops/pins.toml?ref=env/${env}")
+input pin from toml.decode(io.read("git+https://github.com/acme/ops/pins.toml?ref=env/${env}"))
 ```
 
 ```toml

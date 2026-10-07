@@ -11,7 +11,7 @@ fn program(format: &str) -> String {
     format!(
         r#"
 
-input peering from {format}("data/p.{format}")
+input peering from {format}.decode(io.read("data/p.{format}"))
 
 decl peering(env: enum("dev", "prod"), name: string, port: int, cidr: inet, on: bool)
 
@@ -156,7 +156,7 @@ fn an_enum_a_missing_and_an_extra_column_are_errors() {
     let s = scratch("strict");
     s.write(
         "p.df",
-        "\ninput t from json(\"t.json\")\ndecl t(name: string)\nwarn \"${n}\" where t(n)\nuse fake\n",
+        "\ninput t from json.decode(io.read(\"t.json\"))\ndecl t(name: string)\nwarn \"${n}\" where t(n)\nuse fake\n",
     );
     s.write("t.json", "[{\"name\": 3}]");
     let r = s.run(&["plan", "p.df"]).failure();
@@ -176,7 +176,7 @@ fn why_names_the_row_and_a_computed_source_follows_its_input() {
         r#"
 
 input env: enum("dev", "prod") = "dev"
-input node from csv("data/${env}.csv")
+input node from csv.decode(io.read("data/${env}.csv"))
 
 decl node(name: string)
 
@@ -205,7 +205,7 @@ fn a_table_whose_source_reads_its_rows_is_a_compile_error() {
     let s = scratch("cycle");
     s.write(
         "p.df",
-        "\ninput t from csv(\"${src}\")\ndecl t(p: string)\nlet src = p where t(p)\nuse fake\n",
+        "\ninput t from csv.decode(io.read(\"${src}\"))\ndecl t(p: string)\nlet src = p where t(p)\nuse fake\n",
     );
     let r = s.run(&["plan", "p.df"]).failure();
     assert!(
@@ -228,7 +228,7 @@ fn a_tables_rows_and_stated_facts_are_one_relation() {
     let s = scratch("mixed");
     s.write(
         "p.df",
-        "\ninput t from csv(\"t.csv\")\ninput t from json(\"u.json\") where \"a\" != \"b\"\n\
+        "\ninput t from csv.decode(io.read(\"t.csv\"))\ninput t from json.decode(io.read(\"u.json\")) where \"a\" != \"b\"\n\
          decl t(p: string)\nt(\"x\")\nuse fake\n",
     );
     s.write("t.csv", "p\ny\n");
@@ -241,7 +241,7 @@ fn a_tables_rows_and_stated_facts_are_one_relation() {
     // second source and the stated fact are read with them.
     s.write(
         "p.df",
-        "\ninput t from csv(\"t.csv\")\ninput t from json(\"u.json\")\n\
+        "\ninput t from csv.decode(io.read(\"t.csv\"))\ninput t from json.decode(io.read(\"u.json\"))\n\
          t(\"x\")\nuse fake\n",
     );
     let r = s.run(&["query", "t(p)", "p.df"]).success();
@@ -263,7 +263,7 @@ fn a_documents_corners_read_as_json_decode_reads_them() {
     let s = scratch("corners");
     let table = |format: &str, decl: &str| {
         format!(
-            "\ninput t from {format}(\"t.{format}\")\ndecl t({decl})\n\
+            "\ninput t from {format}.decode(io.read(\"t.{format}\"))\ndecl t({decl})\n\
              warn \"${{n}}\" where t(n)\nuse fake\n"
         )
     };

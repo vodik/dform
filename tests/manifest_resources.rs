@@ -45,14 +45,14 @@ fn a_stream_of_documents_is_their_list() {
     s.write("one.yml", "metadata:\n  name: single\n");
     s.write(
         "p.df",
-        "\ninput crd from yaml(\"crds.yml\")\n\
-         input named from yaml(\"crds.yml\")[*].metadata\n\
+        "\ninput crd from yaml.decode(io.read(\"crds.yml\"))\n\
+         input named from yaml.decode(io.read(\"crds.yml\"))[*].metadata\n\
          decl crd(apiVersion: string, kind: string, metadata: any, spec: any)\n\
          decl named(name: string)\n\
          decl walked(n: string)\n\
-         walked(n) where d in yaml(\"crds.yml\"), n = d.metadata.name\n\
+         walked(n) where d in yaml.decode(io.read(\"crds.yml\")), n = d.metadata.name\n\
          decl single(n: string)\nuse fake\n\
-         single(n) where n = yaml(\"one.yml\").metadata.name\n",
+         single(n) where n = yaml.decode(io.read(\"one.yml\")).metadata.name\n",
     );
     let q = |goal: &str| s.run(&["dev", "query", goal, "p.df"]).success().stdout;
     assert_eq!(
@@ -90,7 +90,7 @@ fn a_resource_made_of_a_document_says_its_row() {
         "p.df",
         "\nuse k8s\n\
          resource k8s.custom_resource_definition \"${d.metadata.name}\" = d \
-         where d in yaml(\"crds.yml\")\n",
+         where d in yaml.decode(io.read(\"crds.yml\"))\n",
     );
     let r = s.run(&["plan", "p.df"]).success();
     assert!(
@@ -128,7 +128,7 @@ fn a_stream_read_from_git_is_its_list() {
     s.write(
         "p.df",
         "\nuse fake\ndecl walked(n: string)\n\
-         walked(n) where d in yaml(\"git+file:traefik.git/crds.yml?ref=v3.7.14\"), \
+         walked(n) where d in yaml.decode(io.read(\"git+file:traefik.git/crds.yml?ref=v3.7.14\")), \
          n = d.metadata.name\n",
     );
     let r = s.run(&["dev", "query", "walked(n)", "p.df"]).success();
@@ -166,7 +166,7 @@ fn a_resource_per_document_of_a_manifest() {
     s.write(
         "p.df",
         "\nuse k8s\n\
-         resource k8s.config_map \"${d.metadata.name}\" = d where d in yaml(\"cms.yml\")\n\
+         resource k8s.config_map \"${d.metadata.name}\" = d where d in yaml.decode(io.read(\"cms.yml\"))\n\
          set r.metadata.labels.owner = \"ops\" @default where r in k8s\n\
          set c.data.size = \"large\" @override where c in k8s.config_map\n",
     );
@@ -248,7 +248,7 @@ fn a_value_body_is_an_object_of_the_type() {
 #[test]
 fn fmt_keeps_a_value_body() {
     let s = scratch("manifest-fmt");
-    let text = "use k8s\n\nresource k8s.config_map \"${d.metadata.name}\" @default = d where d in yaml(\"cms.yml\")\n";
+    let text = "use k8s\n\nresource k8s.config_map \"${d.metadata.name}\" @default = d where d in yaml.decode(io.read(\"cms.yml\"))\n";
     s.write("p.df", text);
     s.run(&["fmt", "p.df"]).success();
     assert_eq!(s.read("p.df"), text);

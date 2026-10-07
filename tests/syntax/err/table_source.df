@@ -1,9 +1,9 @@
 # A table's columns are typed, and never secret; its source is FORMAT(LOCATION).
-input token from csv("tokens.csv")
+input token from csv.decode(io.read("tokens.csv"))
 input peers from xml("peers.xml")
-input pins from yaml(git("ops.git", "pins.yaml"))
-input dup from csv("dup.csv")
-input typo from csv("typo.csv")
+input pins from yaml.decode(io.read(git("ops.git", "pins.yaml")))
+input dup from csv.decode(io.read("dup.csv"))
+input typo from csv.decode(io.read("typo.csv"))
 
 decl token(name: string, value: secret(string))
 decl peers(name: string)
@@ -12,5 +12,5 @@ decl dup(name: string, name: int)
 decl typo(name: strng)
 
 component m {
-  input inner from csv("inner.csv")
+  input inner from csv.decode(io.read("inner.csv"))
 }

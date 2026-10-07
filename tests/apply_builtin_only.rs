@@ -1,5 +1,5 @@
-//! A program that names only built-in providers (`file`, `env`, `time`)
-//! starts no provider (R-26 leftover): the mock's `fake` schema is not
+//! A program that names only built-in providers (`env`, `time`) and reads
+//! files (`io.read`) starts no provider (R-26 leftover): the mock's `fake` schema is not
 //! started in its place, so its prelude does not expand into the program,
 //! and the audit log records no provider.
 
@@ -7,8 +7,8 @@ mod common;
 use common::Scratch;
 use serde_json::Value;
 
-const PROGRAM: &str = "\nuse file\nuse time\n\
-    now(t) where t = time.now()\nnote(x) where file.text(\"note.txt\", x)\n";
+const PROGRAM: &str = "\nuse time\n\
+    now(t) where t = time.now()\nnote(x) where x = io.read(\"note.txt\")\n";
 
 #[test]
 fn a_built_in_only_program_starts_no_fake() {

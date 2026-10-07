@@ -1,9 +1,9 @@
 tests/syntax/err/table_source.df:8:26: token: column value is a secret
   note: a table's rows are read in the clear and recorded in the plan file; a secret comes from a secret input, an extern's secret column or a std function such as `random.password`
-tests/syntax/err/table_source.df:3:18: unknown format xml: a table's source is FORMAT(LOCATION)
-  help: FORMAT is one of csv, json, yaml, toml, text; LOCATION is a path, `"data/p.csv"`, or a uri, `"git+https://HOST/OWNER/REPO/PATH?ref=TAG"`, `"ssh://USER@HOST/PATH"`
-tests/syntax/err/table_source.df:4:22: `git(..)` is gone (R-153): a repository's file is a location
-  help: `yaml("git+https://HOST/OWNER/REPO/PATH?ref=TAG")` (`git+ssh://` over ssh, `git+file:REPO/PATH?ref=TAG` for a repository in the project), read at the commit the ref names, which the plan file records
+tests/syntax/err/table_source.df:3:18: unknown format xml: a table's source is FORMAT.decode(io.read(LOCATION))
+  help: FORMAT is one of csv, json, yaml, toml; LOCATION is a path, `"data/p.csv"`, or a uri, `"git+https://HOST/OWNER/REPO/PATH?ref=TAG"`, `"ssh://USER@HOST/PATH"`
+tests/syntax/err/table_source.df:4:37: `git(..)` is gone (R-153): a repository's file is a location
+  help: `io.read("git+https://HOST/OWNER/REPO/PATH?ref=TAG")` (`git+ssh://` over ssh, `git+file:REPO/PATH?ref=TAG` for a repository in the project), read at the commit the ref names, which the plan file records
 tests/syntax/err/table_source.df:11:24: dup: two columns are named name
 tests/syntax/err/table_source.df:12:11: typo: column name: unknown type strng
 tests/syntax/err/table_source.df:15:3: a module's relation is given by its user: declare `input inner`, and its user writes `inner from ..` in the `use` block
