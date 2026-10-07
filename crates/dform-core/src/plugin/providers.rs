@@ -622,6 +622,11 @@ impl Providers {
             let Some(kept) = self.settings_of(v, &identity) else {
                 continue;
             };
+            // A stand-in is no setting (R-164): the provider waits for a
+            // run that holds the master.
+            if crate::secrets::standin::carries(&kept) {
+                continue;
+            }
             if self.settings.borrow().get(&i) == Some(&kept) {
                 continue;
             }
@@ -2318,8 +2323,9 @@ impl Providers {
     }
 
     /// A secret output of another stack in a resource's document must be
-    /// held by a provider (`Config::held`): its value is bytes that stack's
-    /// program had (an input's) otherwise, and nothing can read it here.
+    /// held by a provider (`Config::held`), or sealed to this deployment
+    /// and opened (its value then, not a null): otherwise nothing can read
+    /// it here.
     /// `verb` and `addr` name the resource, `path` the attribute.
     fn check_held(&self, verb: &str, addr: &Address, path: &str, v: &Value) -> Result<()> {
         let join = |k: &str| crate::ir::path_join(path, k);
@@ -2331,9 +2337,9 @@ impl Providers {
             } if !self.held.borrow().contains_key(label) => {
                 if let Some((name, _)) = crate::stack::deployment_output(label) {
                     bail!(
-                        "{verb} {}: {} is a secret output of {name} that no \
-                         provider holds (its value is not an attribute of a resource there), so \
-                         no provider can read it; output a resource's secret attribute instead",
+                        "{verb} {}: {} is a secret output of {name} that no provider holds, \
+                         and it is not sealed to this deployment: apply {name} again, which \
+                         seals it to each deployment of the project that reads it (R-166)",
                         addr.attr(path),
                         crate::ir::label(label)
                     );

@@ -2269,7 +2269,22 @@ fn run_with(
         .collect();
     // Other stacks' published outputs, read once, as facts; a plan file
     // records their digests, and an apply of it refuses when one moved.
-    let read_outputs = located.read_outputs(&open_s3(&root, false))?;
+    let mut read_outputs = located.read_outputs(&open_s3(&root, false))?;
+    // A secret output sealed to this deployment (R-166): opened with its
+    // master, its value read as a secret input's is; the apply's log says
+    // which.
+    let (opened, unsealed) = open_sealed(&mut read_outputs, &deployment, &master);
+    // A reader the producer does not seal to yet is one from its apply:
+    // registered, its master's public key published (made above), so the
+    // producer's next apply seals to it.
+    if let (Cmd::Apply { .. }, false, None) = (&cli.cmd, unsealed.is_empty(), &cli.world) {
+        crate::stack::register(
+            &root,
+            &deployment,
+            &located.location,
+            located.loaded.cfg.bootstrap,
+        )?;
+    }
     let outputs_read: Vec<zset::file::OutputsDigest> = read_outputs
         .iter()
         .map(|r| zset::file::OutputsDigest {
@@ -3029,6 +3044,16 @@ fn run_with(
             } else {
                 print!("{}", rendered(&report));
                 print!("{}", unreachable_text(&unreachable));
+                // Who each secret output no provider holds is sealed to:
+                // the grant (R-166).
+                let unheld = crate::stack::unheld_secret_outputs(
+                    &res.facts,
+                    &crate::stack::secret_output_types(program),
+                );
+                if !unheld.is_empty() && cli.world.is_none() {
+                    let readers = readers_of(&root, &deployment, &open_s3(&root, false))?;
+                    print!("{}", grants_text(&unheld, &readers));
+                }
                 // The digest to approve, when a change is held for an
                 // approval (the bare diff lists those changes after it);
                 // a plan file's digest is on stderr beside its path.
@@ -3571,6 +3596,15 @@ fn run_with(
                         e["destroy"] = true.into();
                     }
                     audit.append("apply_start", e)?;
+                    if !opened.is_empty() {
+                        audit.append(
+                            "opened",
+                            serde_json::json!({
+                                "outputs": opened,
+                                "who": crate::audit::who(),
+                            }),
+                        )?;
+                    }
                     // The master this apply derives with, as state records
                     // it (R-163): a new one is said in the log, and where
                     // it came from.
@@ -3872,6 +3906,30 @@ fn run_with(
                     // A secret one by its label and digest, never its
                     // value (E DR-19); a ref resolved, as the world is.
                     let secret_types = crate::stack::secret_output_types(program);
+                    // The project's deployments that read it: a secret
+                    // output no provider holds is sealed to each (R-166).
+                    let readers = match secret_types.is_empty() || cli.world.is_some() {
+                        true => Vec::new(),
+                        false => readers_of(&root, &deployment, &open_s3(&root, false))?,
+                    };
+                    let sealing = std::cell::RefCell::new(None);
+                    let seal = |path: &str, v: &serde_json::Value| {
+                        let mut out = std::collections::BTreeMap::new();
+                        let plain = crate::approval::canonical_json(v);
+                        for (r, public) in &readers {
+                            let Some(public) = public else { continue };
+                            let label = sealed_label(&deployment, path, r);
+                            match crate::custody::seal_to(public, &label, plain.as_bytes()) {
+                                Ok(b) => {
+                                    out.insert(r.clone(), b);
+                                }
+                                Err(e) => {
+                                    sealing.borrow_mut().get_or_insert(e);
+                                }
+                            }
+                        }
+                        out
+                    };
                     let outputs = if crate::stack::has_outputs(&res.facts) {
                         crate::stack::outputs(
                             &evaluate(&st)?.0.facts,
@@ -3880,10 +3938,34 @@ fn run_with(
                             &st,
                             &deployment,
                             &|b| key.map(|k| k.digest(b)),
+                            &seal,
                         )
                     } else {
                         Default::default()
                     };
+                    if let Some(e) = sealing.into_inner() {
+                        return Err(e);
+                    }
+                    // A grant that changed is said in the log: who may
+                    // now open which output.
+                    let grants = |o: &std::collections::BTreeMap<
+                        String,
+                        crate::stack::SecretOutput,
+                    >| {
+                        o.iter()
+                            .filter(|(_, x)| !x.sealed.is_empty())
+                            .map(|(k, x)| (k.clone(), x.sealed.keys().cloned().collect::<Vec<_>>()))
+                            .collect::<std::collections::BTreeMap<_, _>>()
+                    };
+                    if grants(&outputs.secret) != grants(&st.secret_outputs) {
+                        audit.append(
+                            "sealed",
+                            serde_json::json!({
+                                "outputs": grants(&outputs.secret),
+                                "who": crate::audit::who(),
+                            }),
+                        )?;
+                    }
                     // A secret output this run cannot digest (R-164): not
                     // published; the apply stops, its changes made.
                     if !outputs.unproven.is_empty() {
@@ -4991,6 +5073,165 @@ fn keep_memos(
     key: Option<&crate::zset::file::Key>,
 ) -> Result<()> {
     crate::memo::keep(st, externs.memos(), key, &crate::memo::now())
+}
+
+/// The grant a plan prints (R-166): each secret output no provider holds,
+/// and the deployments it is sealed to, `output kubeconfig  sealed to
+/// apps[env=lab]`; one whose master is not made yet is said so.
+fn grants_text(unheld: &[String], readers: &[(String, Option<[u8; 32]>)]) -> String {
+    if readers.is_empty() {
+        return String::new();
+    }
+    let to: Vec<String> = readers
+        .iter()
+        .map(|(r, public)| match public {
+            Some(_) => r.clone(),
+            None => format!("{r} (no master yet: applied once, it is sealed to by the next apply)"),
+        })
+        .collect();
+    let mut out = String::from("\n");
+    for k in unheld {
+        out.push_str(&format!("output {k}  sealed to {}\n", to.join(", ")));
+    }
+    out
+}
+
+/// What a secret output `path` of `deployment` sealed to `reader` is
+/// bound to (`custody::seal_to`'s label).
+fn sealed_label(deployment: &str, path: &str, reader: &str) -> String {
+    format!("{deployment}#{path} to {reader}")
+}
+
+/// The deployments of the project that read `own`'s outputs (R-166): each
+/// registered one whose program reads it (by name, or by one it computes,
+/// which may be any), with the public key its master publishes, when it
+/// has one. The grant is the reader's use: the producer's plan prints it.
+fn readers_of(
+    root: &Path,
+    own: &str,
+    s3: store::OpenS3,
+) -> Result<Vec<(String, Option<[u8; 32]>)>> {
+    let dir = root.parent().unwrap_or(Path::new("."));
+    let Some(project) = crate::project::Project::find(dir, env!("CARGO_PKG_VERSION"))? else {
+        return Ok(Vec::new());
+    };
+    let found = crate::project::discover(&project);
+    let own_stack = own.split_once('[').map_or(own, |(s, _)| s);
+    let mut loaded: std::collections::BTreeMap<PathBuf, Option<deployment::Loaded>> =
+        Default::default();
+    let mut out = Vec::new();
+    for (name, entry) in crate::stack::registry(root)? {
+        if name == own {
+            continue;
+        }
+        let (stack, key) = match name.strip_suffix(']').and_then(|n| n.split_once('[')) {
+            Some((s, k)) => (s.to_string(), k.to_string()),
+            None => (name.clone(), String::new()),
+        };
+        let [one] = found.named(&stack)[..] else {
+            continue;
+        };
+        let l = loaded.entry(one.file.clone()).or_insert_with(|| {
+            let t = deployment::Target {
+                files: vec![one.file.clone()],
+                input_files: Vec::new(),
+                providers: Vec::new(),
+            };
+            deployment::load(
+                &t,
+                env!("CARGO_PKG_VERSION"),
+                &|p: &Path| std::fs::read_to_string(p),
+                &mut deployment::Notes::default(),
+            )
+            .ok()
+        });
+        let Some(l) = l else { continue };
+        let given: Vec<Atom> = key
+            .split(',')
+            .filter_map(|kv| kv.split_once('='))
+            .map(|(k, v)| {
+                crate::ast::atom(
+                    "input",
+                    vec![
+                        crate::ast::str_term(k.trim()),
+                        crate::ast::str_term(v.trim()),
+                    ],
+                    Default::default(),
+                )
+            })
+            .collect();
+        let Ok(instance) = crate::stack::instance(&l.cfg, &l.stack, &l.program, &given) else {
+            continue;
+        };
+        let (names, any) = crate::stack::reads(&l.program, &l.deployed, &instance.key);
+        if names.contains(own) || any.contains(own_stack) {
+            let public = crate::custody::public_of(entry.state.open(s3)?.as_ref())?;
+            out.push((name, public));
+        }
+    }
+    Ok(out)
+}
+
+/// Open each secret output sealed to `deployment` among `read` with its
+/// master (R-166): its value goes in the read (`stack::Read::opened`).
+/// What was opened, by the deployment and output, and what no provider
+/// holds and is not sealed to it (said: its producer's next apply seals
+/// to it); a run without the master opens none and says so.
+fn open_sealed(
+    read: &mut [crate::stack::Read],
+    deployment: &str,
+    master: &crate::custody::Master,
+) -> (Vec<String>, Vec<String>) {
+    let mut opened = Vec::new();
+    let mut unsealed = Vec::new();
+    for r in read.iter_mut() {
+        let Some(p) = &r.published else { continue };
+        for (k, o) in &p.secret {
+            let Some(sealed) = o.sealed.get(deployment) else {
+                if o.held.is_none() && !o.digest.is_empty() {
+                    eprintln!(
+                        "{deployment}: {}.{k} is held by no provider and not sealed to it yet: \
+                         apply {} again, which seals it to {deployment} (a reader from its \
+                         first apply)",
+                        r.name, r.name
+                    );
+                    unsealed.push(format!("{}.{k}", r.name));
+                }
+                continue;
+            };
+            // Its stand-in (R-164): a function of its keyed digest, which
+            // stays while the value does; what a run without the master
+            // reads in its place.
+            let label = sealed_label(&p.deployment, k, deployment);
+            let standin = format!(
+                "sealed-{}",
+                &crate::approval::sha256_hex(format!("{label}\0{}", o.digest).as_bytes())[..32]
+            );
+            let Some(key) = &master.key else {
+                eprintln!(
+                    "{deployment}: {}.{k} is sealed to it: opening it needs its master ({})",
+                    r.name,
+                    master.without.as_deref().unwrap_or("not held")
+                );
+                crate::secrets::standin::register(&standin, &label, &standin);
+                r.opened.insert(k.clone(), Value::Str(standin));
+                continue;
+            };
+            match crate::custody::open_sealed(key, &label, sealed)
+                .and_then(|b| Ok(serde_json::from_slice::<Value>(&b)?))
+            {
+                Ok(v) => {
+                    if let Value::Str(text) = &v {
+                        crate::secrets::standin::register(text, &label, &standin);
+                    }
+                    r.opened.insert(k.clone(), v);
+                    opened.push(format!("{}.{k}", r.name));
+                }
+                Err(e) => eprintln!("warning: {}.{k}: {e:#}", r.name),
+            }
+        }
+    }
+    (opened, unsealed)
 }
 
 /// Each change of `report` a run that does not hold the master plans,

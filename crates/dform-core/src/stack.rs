@@ -1060,6 +1060,12 @@ pub struct SecretOutput {
     /// keeps `digest` while it is the same (R-164).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub derived: String,
+    /// A value no provider holds (a location's read, a derived secret),
+    /// sealed to each deployment of the project that reads it, by its
+    /// name (`custody::seal_to`, R-166): the stack is the unit of custody,
+    /// and the grant is the reader's use of it.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub sealed: BTreeMap<String, String>,
 }
 
 impl SecretOutput {
@@ -1091,7 +1097,7 @@ impl Published {
     /// copy's; `Name` as the reader names the deployment. A secret
     /// output's value is a secret null, a pending one's an open null, each
     /// labeled `output/Name#k` ([`deployment_output`]).
-    fn facts(&self, path: &str, name: &str) -> Vec<Atom> {
+    fn facts(&self, path: &str, name: &str, opened: &BTreeMap<String, Value>) -> Vec<Atom> {
         let s = |x: &str| Term::Val(Value::Str(x.to_string()));
         let fact = |k: &str, v: Value| {
             atom(
@@ -1120,7 +1126,11 @@ impl Published {
                 true => crate::value::NullClass::Open,
                 false => crate::value::NullClass::Secret,
             };
-            let x = null(k, class, &o.ty);
+            // One sealed to the reader, opened: its value (R-166).
+            let x = match opened.get(k) {
+                Some(v) => v.clone(),
+                None => null(k, class, &o.ty),
+            };
             match k.split_once('.') {
                 Some((top, rest))
                     if outputs
@@ -1236,6 +1246,7 @@ pub fn outputs(
     state: &crate::state::State,
     deployment: &str,
     digest: &dyn Fn(&[u8]) -> Option<String>,
+    seal: &dyn Fn(&str, &serde_json::Value) -> BTreeMap<String, String>,
 ) -> Outputs {
     let unproven = std::cell::RefCell::new(Vec::new());
     let attrs: BTreeMap<(&str, &str, &str), &Value> = facts
@@ -1316,12 +1327,26 @@ pub fn outputs(
                 },
             },
         };
+        // Held nowhere: sealed to each reader (R-166), never a stand-in; a
+        // run without the master keeps the seals of a value it proved
+        // the same.
+        let sealed = match (&j, &held) {
+            (Some(j), None) if !crate::secrets::standin::carries(j) => seal(path, j),
+            (Some(_), None) => state
+                .secret_outputs
+                .get(path)
+                .filter(|p| !derived.is_empty() && p.derived == derived)
+                .map(|p| p.sealed.clone())
+                .unwrap_or_default(),
+            _ => BTreeMap::new(),
+        };
         SecretOutput {
             label: crate::value::null_label(crate::transform::OUTPUT, "", path),
             ty: ty.to_string(),
             held,
             digest,
             derived,
+            sealed,
         }
     };
     let mut out = Outputs::default();
@@ -1354,6 +1379,55 @@ pub fn outputs(
         }
     }
     out.unproven = unproven.into_inner();
+    out
+}
+
+/// The secret outputs (`secret`: path -> T's name) whose value in an
+/// evaluation (`facts`) no provider holds: neither a ref to a resource's
+/// attribute nor a sensitive computed value's null. What a stack seals
+/// to the stacks that read it (R-166).
+pub fn unheld_secret_outputs(
+    facts: &BTreeSet<Atom>,
+    secret: &BTreeMap<String, String>,
+) -> Vec<String> {
+    let mut out = Vec::new();
+    for a in facts.iter().filter(|a| a.pred == "attr") {
+        let [
+            Term::Val(Value::Str(t)),
+            Term::Val(Value::Str(scope)),
+            Term::Val(Value::Str(k)),
+            Term::Val(v),
+        ] = a.args.as_slice()
+        else {
+            continue;
+        };
+        if t != crate::transform::OUTPUT || !scope.is_empty() {
+            continue;
+        }
+        let held = |v: &Value| {
+            matches!(
+                v,
+                Value::Ref { .. }
+                    | Value::Null {
+                        class: crate::value::NullClass::Secret,
+                        ..
+                    }
+            )
+        };
+        let prefix = format!("{k}.");
+        for path in secret.keys() {
+            let x = match path.strip_prefix(&prefix) {
+                Some(rest) => take_field(&mut v.clone(), rest),
+                None if path == k => Some(v.clone()),
+                None => None,
+            };
+            if x.is_some_and(|x| !held(&x)) {
+                out.push(path.clone());
+            }
+        }
+    }
+    out.sort();
+    out.dedup();
     out
 }
 
@@ -1492,6 +1566,9 @@ pub struct Read {
     /// or the project's own bucket deployment's): where the reader's mock
     /// finds a secret the deployment's objects hold.
     pub world: Option<PathBuf>,
+    /// Each secret output sealed to the reader, opened with its master
+    /// (R-166): its value, as an input's secret is.
+    pub opened: BTreeMap<String, Value>,
 }
 
 /// The digest of an outputs object as a plan records it.
@@ -1513,6 +1590,7 @@ pub fn read_published(loc: &Location, s3: OpenS3, name: &str, own: &str) -> Resu
             digest: outputs_digest(None),
             published: None,
             world: None,
+            opened: BTreeMap::new(),
         });
     };
     let p: Published =
@@ -1532,6 +1610,7 @@ pub fn read_published(loc: &Location, s3: OpenS3, name: &str, own: &str) -> Resu
             Location::Local(dir) => Some(dir.join(crate::state::WORLD)),
             Location::S3(_) => None,
         },
+        opened: BTreeMap::new(),
     })
 }
 
@@ -1834,7 +1913,7 @@ pub fn output_facts(read: &[Read], deployed: &[Deployed]) -> Vec<Atom> {
                 .iter()
                 .find(|d| d.name == base)
                 .map_or(base, |d| d.path.as_str());
-            Some(r.published.as_ref()?.facts(path, &r.name))
+            Some(r.published.as_ref()?.facts(path, &r.name, &r.opened))
         })
         .flatten()
         .collect()

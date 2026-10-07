@@ -554,7 +554,7 @@ fn a_secret_output_is_stored_by_label_and_digest_never_by_value() {
 /// provider reads it where the producer's provider holds it, inside Apply.
 /// The reader's field applies, a changed secret updates it, and neither
 /// run prints it. A secret the producer holds nowhere (an input's value)
-/// cannot cross, and the plan says so.
+/// crosses sealed to the reader (R-166).
 #[test]
 fn a_secret_output_reaches_a_sensitive_field_in_another_stack() {
     let schema = schema();
@@ -603,20 +603,17 @@ fn a_secret_output_reaches_a_sensitive_field_in_another_stack() {
     assert!(!r.stdout.contains("ROTATED"), "{}", r.stdout);
     assert_eq!(materialized(&s), "ROTATED-SECRET");
 
-    // An input's value is held nowhere: no provider can read it.
+    // An input's value no provider holds: prod's apply sealed it to app,
+    // which reads prod (R-166), and app opens it.
     s.write(
         "stacks/app.df",
         &s.read("stacks/app.df").replace("prod.pass", "prod.token"),
     );
-    let r = dev(&["plan", "app"]).failure();
-    assert!(
-        r.stderr.contains(
-            "plan leaky.vault[\"copy\"].backup: prod.token is a secret output of prod that no \
-             provider holds"
-        ),
-        "{}",
-        r.stderr
-    );
+    let r = dev(&["plan", "app"]).success();
+    assert!(r.stdout.contains("~ leaky.vault copy"), "{}", r.stdout);
+    for out in [&r.stdout, &r.stderr] {
+        assert!(!out.contains("ROTATED"), "{out}");
+    }
 }
 
 /// examples/crud-api's password, `random.password("crud-api-db")` (R-60):

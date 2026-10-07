@@ -610,9 +610,12 @@ stack, it travels to that stack's provider in the Apply document as its
 label and that reference (the protocol's `Null.held`), and the provider
 reads the value there inside the call; the bytes never pass through
 dform. A changed digest updates the reader's field. A secret output
-that is only bytes the program had (an input's value) is held nowhere,
-and a reader's plan that puts it in a field is refused ("... is a secret
-output of prod that no provider holds"). The mock reads a held secret
+that is only bytes the program had (a location's read, an input's value,
+a `random.*` one) is held by no provider: it is sealed to each stack that
+reads it (see "Secrets"), and a reader it is not sealed to yet is
+refused where a field takes it ("... is a secret output of prod that no
+provider holds, and it is not sealed to this deployment: apply prod
+again, .."). The mock reads a held secret
 from the producing deployment's world (a directory's; the project's own
 bucket deployments' too) and keeps what it read in the reader's world as
 `materialized`. `dform-provider-k8s` reads one its own objects hold from
@@ -2001,6 +2004,43 @@ the world is seen by a run with the master, not by one without it. A
 resource named by a `random.id` needs the master to plan: its name is a
 stand-in without it.
 
+### Secret outputs across stacks
+
+The stack is the unit of custody: its master, and whoever holds its
+passphrase. A secret output a provider holds (a resource's sensitive
+attribute) crosses to a reader by reference, as above. One no provider
+holds (the kubeconfig a `platform` stack reads off its server with
+`io.read("ssh://..")`, a `random.*` value) is sealed by the producer's
+apply to each deployment of the project that reads it: a reader is a
+deployment the registry has whose program reads this one (`use
+stacks.platform`, then `platform[env].kubeconfig`, by its key; a name it
+computes may read any). Each deployment's `state.master` publishes an
+X25519 public key its master derives; the producer seals the value to it
+(an ephemeral key, XChaCha20-Poly1305, bound to the output and the
+reader), and publishes the seals in `outputs.json` beside the label and
+the keyed digest. The reader's run opens its seal with its own master and
+reads the value as it reads a secret input: in a provider's settings
+(`use k8s { kubeconfig = platform[env].kubeconfig }`) or a sensitive
+field. No stack reads another's master, and no provider holds the value.
+
+The producer's plan prints the grant after its changes, and an apply
+whose grants changed writes a `sealed` audit entry:
+
+```text
+output kubeconfig  sealed to apps[env=lab]
+```
+
+A reader is one from its first apply: the producer's apply before it
+seals to no one yet, so that apply says so (`apps[env=lab]:
+platform[env=lab].kubeconfig is held by no provider and not sealed to it
+yet: apply platform[env=lab] again ..`), registers the reader and makes
+its master; the next `dform apply apps env=lab` applies the platform
+first, which seals to it, and then the reader. Each apply that opens a
+seal writes an `opened` entry to the reader's log. A reader without its
+master cannot open its seal: it says so, the value is a stand-in, and a
+provider configured from it waits. A producer without its master
+publishes a seal only of a value it can prove unchanged.
+
 `RANDOM_MASTER` in the environment is the `random.*` input key material
 itself, for tests and the editor. It is taken where state was applied
 with it, or where nothing was applied; beside a deployment's own key file
@@ -2049,6 +2089,11 @@ The kinds:
 - `configure`: a provider configured from the program's settings at a
   tick's boundary (R-45): the tick, the provider, the settings' keys
   (never their values);
+- `sealed`: an apply whose grants changed: each secret output no
+  provider holds and the deployments it is now `sealed` to (`outputs`),
+  and `who`;
+- `opened`: an apply that opened secret outputs sealed to it: which
+  (`outputs`, `DEPLOYMENT.OUTPUT`), and `who`;
 - `custody`: the apply that sealed a deployment's key file under the
   passphrase: `sealed` (`state.key`), `into` (`state.master`), the master
   `id`, and `who`;

@@ -292,6 +292,10 @@ pub struct Record {
     pub version: u32,
     /// The master id ([`id`]), as state records it.
     pub id: String,
+    /// The public key another stack seals an output to this deployment
+    /// with ([`seal_to`], R-166): X25519, which the master derives; hex.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub public: String,
     /// The master sealed under a key scrypt mixes from the passphrase.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub passphrase: Option<Sealed>,
@@ -572,6 +576,7 @@ pub fn resolve(
                         let r = Record {
                             version: 1,
                             passphrase: Some(seal(&key, &id, p)?),
+                            public: hex(&seal_pair(&key).1),
                             id,
                         };
                         let cond = match &record {
@@ -611,6 +616,37 @@ pub fn resolve(
             )
         });
     }
+    // The public key other stacks seal to (R-166), kept beside the master
+    // by a run that writes: a key file's deployment gets a record of its
+    // own, its id and public key only.
+    if let (true, Some(k)) = (want.make || want.new_master, &key) {
+        let public = hex(&seal_pair(k).1);
+        let fresh = load_record(store)?;
+        if fresh.as_ref().is_none_or(|(r, _)| r.public != public) {
+            let (r, cond) = match fresh {
+                Some((r, etag)) => (
+                    Record {
+                        public: public.clone(),
+                        ..r
+                    },
+                    Cond::IfMatch(etag),
+                ),
+                None => (
+                    Record {
+                        version: 1,
+                        id: key_id(k),
+                        public: public.clone(),
+                        passphrase: None,
+                    },
+                    Cond::IfAbsent,
+                ),
+            };
+            // Another run's write meanwhile is as good.
+            store
+                .put(MASTER, &record_bytes(&r), &cond)
+                .with_context(|| format!("write {}", store.locate(MASTER)))?;
+        }
+    }
     let of = Master::of(key, out.source.clone(), env);
     Ok(Master {
         id: of.id.or(out.id),
@@ -645,6 +681,7 @@ pub fn seal_key_file(
         let r = Record {
             version: 1,
             passphrase: Some(seal(key, &id, &pass)?),
+            public: hex(&seal_pair(key).1),
             id,
         };
         let cond = match record {
@@ -664,4 +701,147 @@ pub fn seal_key_file(
     }
     store.delete(KEY)?;
     Ok(true)
+}
+
+/// The X25519 key pair a master derives to be sealed to (R-166): its
+/// secret and its public half.
+pub fn seal_pair(k: &Key) -> ([u8; 32], [u8; 32]) {
+    let secret = crate::secrets::derived(k, "dform seal key");
+    let public = curve25519_dalek::montgomery::MontgomeryPoint::mul_base_clamped(secret).to_bytes();
+    (secret, public)
+}
+
+/// The public key a deployment's `state.master` publishes, when it has
+/// one.
+pub fn public_of(store: &dyn crate::store::Store) -> Result<Option<[u8; 32]>> {
+    let Some((r, _)) = load_record(store)? else {
+        return Ok(None);
+    };
+    Ok(unhex(&r.public).and_then(|b| b.try_into().ok()))
+}
+
+/// The key a seal of `ephemeral`'s to `public` is under, from their shared
+/// secret.
+fn sealing_key(shared: &[u8; 32], ephemeral: &[u8; 32], public: &[u8; 32]) -> [u8; 32] {
+    let mut salt = ephemeral.to_vec();
+    salt.extend_from_slice(public);
+    crate::secrets::hkdf(&salt, shared, b"dform sealed output", 32)
+        .try_into()
+        .expect("32 bytes")
+}
+
+/// `plain` sealed to the holder of `public`'s master for `label` (what it
+/// is: another label's seal does not open as this one): an ephemeral
+/// X25519 key's public half, a nonce, and XChaCha20-Poly1305 under the
+/// key their shared secret gives; base64. What a stack publishes of a
+/// secret output for each stack that reads it (R-166).
+pub fn seal_to(public: &[u8; 32], label: &str, plain: &[u8]) -> Result<String> {
+    use base64::Engine;
+    use chacha20poly1305::aead::{Aead, Payload};
+    use curve25519_dalek::montgomery::MontgomeryPoint;
+    let eph = random_bytes::<32>("a seal's ephemeral key")?;
+    let eph_public = MontgomeryPoint::mul_base_clamped(eph).to_bytes();
+    let shared = MontgomeryPoint(*public).mul_clamped(eph).to_bytes();
+    let nonce = random_bytes::<24>("a seal's nonce")?;
+    let ct = cipher(&sealing_key(&shared, &eph_public, public))
+        .encrypt(
+            (&nonce).into(),
+            Payload {
+                msg: plain,
+                aad: label.as_bytes(),
+            },
+        )
+        .map_err(|_| anyhow::anyhow!("{label}: seal"))?;
+    let mut b = eph_public.to_vec();
+    b.extend_from_slice(&nonce);
+    b.extend_from_slice(&ct);
+    Ok(base64::engine::general_purpose::STANDARD.encode(b))
+}
+
+/// What [`seal_to`] sealed for `label` to the master `k`; an error when it
+/// was sealed to another, for another label, or altered.
+pub fn open_sealed(k: &Key, label: &str, sealed: &str) -> Result<Vec<u8>> {
+    use base64::Engine;
+    use chacha20poly1305::aead::{Aead, Payload};
+    use curve25519_dalek::montgomery::MontgomeryPoint;
+    let b = base64::engine::general_purpose::STANDARD
+        .decode(sealed)
+        .map_err(|e| anyhow::anyhow!("{label}: the seal is not base64: {e}"))?;
+    if b.len() < 32 + 24 + 16 {
+        bail!("{label}: the seal is too short");
+    }
+    let (eph_public, rest) = b.split_at(32);
+    let (nonce, ct) = rest.split_at(24);
+    let eph_public: [u8; 32] = eph_public.try_into().expect("32 bytes");
+    let (secret, public) = seal_pair(k);
+    let shared = MontgomeryPoint(eph_public).mul_clamped(secret).to_bytes();
+    cipher(&sealing_key(&shared, &eph_public, &public))
+        .decrypt(
+            nonce.into(),
+            Payload {
+                msg: ct,
+                aad: label.as_bytes(),
+            },
+        )
+        .map_err(|_| {
+            anyhow::anyhow!(
+                "{label}: does not open with this deployment's master: sealed to another"
+            )
+        })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_seal_opens_with_its_readers_master_and_label_only() {
+        let a = Key::from_bytes([1; 32]);
+        let b = Key::from_bytes([2; 32]);
+        let sealed = seal_to(&seal_pair(&a).1, "p#kc to a", b"kubeconfig").unwrap();
+        assert_eq!(
+            open_sealed(&a, "p#kc to a", &sealed).unwrap(),
+            b"kubeconfig"
+        );
+        assert!(open_sealed(&b, "p#kc to a", &sealed).is_err());
+        assert!(open_sealed(&a, "p#kc to b", &sealed).is_err());
+    }
+
+    #[test]
+    fn a_passphrase_opens_its_seal_only() {
+        let k = Key::from_bytes([3; 32]);
+        let id = key_id(&k);
+        // `seal`'s, at a small cost for a unit test.
+        let s = Sealed {
+            kdf: "scrypt".into(),
+            log_n: 10,
+            r: 8,
+            p: 1,
+            salt: hex(&[5; 16]),
+            sealed: String::new(),
+        };
+        let s = {
+            use base64::Engine;
+            use chacha20poly1305::aead::{Aead, Payload};
+            let nonce = [9u8; 24];
+            let ct = cipher(&mixed(b"pass", &s).unwrap())
+                .encrypt(
+                    (&nonce).into(),
+                    Payload {
+                        msg: &k.bytes(),
+                        aad: id.as_bytes(),
+                    },
+                )
+                .unwrap();
+            let mut b = nonce.to_vec();
+            b.extend_from_slice(&ct);
+            Sealed {
+                sealed: base64::engine::general_purpose::STANDARD.encode(b),
+                ..s
+            }
+        };
+        assert_eq!(open(&s, &id, b"pass").unwrap().unwrap().bytes(), k.bytes());
+        assert!(open(&s, &id, b"other").unwrap().is_none());
+        assert!(open(&s, "another id", b"pass").unwrap().is_none());
+    }
 }

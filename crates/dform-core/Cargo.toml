@@ -66,6 +66,10 @@ chacha20poly1305 = "0.10"
 # A master sealed under a passphrase (src/custody.rs, R-164): scrypt mixes
 # the key from it; already in the tree through russh's key formats.
 scrypt = { version = "0.12", default-features = false }
+# A secret output sealed to the stacks that read it (src/custody.rs,
+# R-166): X25519 to each reader's public key, which its master derives;
+# the curve ed25519-dalek is built on, already in the tree.
+curve25519-dalek = { version = "4", default-features = false }
 hkdf = "0.12"
 # The plan key's digests (`zset::file::Key::digest`): HMAC-SHA256, the
 # same `hmac` the `hkdf` crate is built on.
