@@ -794,10 +794,17 @@ pub fn check(
             let Some(f) = fns.get(a.pred.as_str()) else {
                 continue;
             };
+            // What dform answers itself stays on the machine (`memo.first`
+            // of a secret candidate seals it, `env.var`); a location's read
+            // does not.
+            let location = crate::tables::is_document(&a.pred) || a.pred == crate::files::READ;
+            if crate::externs::in_process(&a.pred) && !location {
+                continue;
+            }
             for (t, b) in a.args.iter().zip(&f.args) {
                 if b.input && !crate::externs::is_secret(b) && secret(t) {
                     let at = if a.span.is_none() { *span } else { a.span };
-                    let what = match crate::tables::is_document(&a.pred) {
+                    let what = match location {
                         true => "a location".to_string(),
                         false => format!("{}'s argument `{}`", f.name, b.name),
                     };
