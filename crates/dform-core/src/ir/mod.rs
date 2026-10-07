@@ -154,8 +154,13 @@ pub fn compile_resources(
                     remove_path(&mut root, &p);
                 }
             }
-            let attrs = identities(Value::Obj(root), schema, &resolved);
+            // The references before their identities replace them: one to
+            // an object an earlier apply made is its id by now, and still
+            // an edge (its delete waits for this one's).
+            let root = Value::Obj(root);
             let mut deps = BTreeSet::new();
+            collect_deps(&root, &mut deps);
+            let attrs = identities(root, schema, &resolved);
             collect_deps(&attrs, &mut deps);
             deps.extend(extra_deps.remove(&addr).unwrap_or_default());
             deps.remove(&addr);

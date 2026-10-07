@@ -807,13 +807,28 @@ impl Evaluator {
         &self,
         res: EvalResult,
         violations: &[String],
-        resources: Vec<ir::Resource>,
+        mut resources: Vec<ir::Resource>,
         adopts: &[ir::Adopt],
         lifecycle: &zset::Lifecycle,
         st: &State,
     ) -> Result<Planned> {
         let backend = &self.backend;
         let schema = self.schema();
+        // An object depends on what its provider's settings are made from
+        // as on what it references: a delete of the server a kubeconfig
+        // is read from waits for the deletes of the cluster's objects.
+        let reads = settings_reads(&res);
+        let configured_from = |docs: &mut [ir::Resource]| {
+            for r in docs {
+                for (p, from) in &reads {
+                    if backend.serves(p, &r.addr.typ) {
+                        r.deps
+                            .extend(from.iter().filter(|a| **a != r.addr).cloned());
+                    }
+                }
+            }
+        };
+        configured_from(&mut resources);
         // A resource with a conflicting attribute is not planned: the
         // report shows the conflict, and the deny blocks an apply. Nor is
         // one whose provider has no schema of its type yet (R-110).
@@ -841,7 +856,8 @@ impl Evaluator {
             (res, violations.to_vec(), resources)
         } else {
             let (again, violations) = self.evaluate_with(st, &replaced, &[], None)?;
-            let docs = ir::compile_resources(again.facts.iter().cloned(), schema)?;
+            let mut docs = ir::compile_resources(again.facts.iter().cloned(), schema)?;
+            configured_from(&mut docs);
             plan =
                 backend.plan_retracting(&asked(&again, &docs), adopts, lifecycle, st, &replaced)?;
             executor::hold_dependents(&mut plan, &docs, &replaced);
@@ -907,6 +923,46 @@ impl Evaluator {
             denies,
         })
     }
+}
+
+/// The resources each provider's settings are made from, by the
+/// program's name of the provider: every resource attribute its
+/// `provider_config` row rests on (`kubeconfig = ssh.read(server.ip,
+/// ..)`: the server).
+fn settings_reads(res: &EvalResult) -> BTreeMap<String, BTreeSet<Address>> {
+    let mut out: BTreeMap<String, BTreeSet<Address>> = BTreeMap::new();
+    for a in res.facts.iter().filter(|a| a.pred == "provider_config") {
+        let (Some(Term::Val(Value::Str(name))), Some(root)) = (
+            a.args.first(),
+            res.circuit.fact_id(&engine::circuit_fact(a)),
+        ) else {
+            continue;
+        };
+        let mut seen: BTreeSet<NodeId> = BTreeSet::new();
+        let mut next = vec![root];
+        while let Some(id) = next.pop() {
+            if !seen.insert(id) {
+                continue;
+            }
+            match res.circuit.view(id) {
+                View::Fact { fact, alts, .. } => {
+                    if let ("attr", [Value::Str(typ), Value::Str(n), ..]) =
+                        (fact.pred.as_str(), fact.args.as_slice())
+                        && !transform::is_pseudo_type(typ)
+                    {
+                        out.entry(name.clone()).or_default().insert(Address {
+                            typ: typ.clone(),
+                            name: n.clone(),
+                        });
+                    }
+                    next.extend(alts);
+                }
+                View::Times { children, .. } => next.extend(children),
+                View::Leaf(_) | View::Dead => {}
+            }
+        }
+    }
+    out
 }
 
 /// The CRD among `crds` ([`crds_made`]) that defines `typ`.

@@ -53,6 +53,71 @@ use fake
     );
 }
 
+/// A reference by bare name to an object an earlier apply made is an
+/// edge as much as one to an object made in the same apply: its id is
+/// known by then, and state still records the dependency, so the delete
+/// waits for the dependent's.
+#[test]
+fn a_reference_to_an_object_an_earlier_apply_made_orders_its_delete() {
+    let s = Scratch::new("delete-order-later");
+    let first = r#"
+resource iam.role app_role { name = "app", assume = { principals: ["x"] } }
+resource iam.policy app_policy { name = "p", document = "{}" }
+use fake
+"#;
+    s.write("p.df", first);
+    mock(&s, &["apply"]).success();
+    s.write(
+        "p.df",
+        &format!(
+            "{first}resource iam.role_policy_attachment attach {{ role = app_role, policy = app_policy }}\n"
+        ),
+    );
+    mock(&s, &["apply"]).success();
+    assert_eq!(
+        s.json("w.state.json")["resources"]["iam.role_policy_attachment::attach"]["deps"],
+        serde_json::json!(["iam.policy::app_policy", "iam.role::app_role"])
+    );
+    // The attachment sorts first by name only after the role: its delete
+    // still comes first.
+    s.write("p.df", "\nuse fake\n");
+    let r = mock(&s, &["apply"]).success();
+    let order: Vec<&str> = r.stdout.lines().filter(|l| l.starts_with("  - ")).collect();
+    assert_eq!(
+        order[0], "  - iam.role_policy_attachment attach",
+        "{}",
+        r.stdout
+    );
+}
+
+/// An object of a provider configured from another object (a kubeconfig
+/// read off the server) depends on that object: state records it, and
+/// the server's delete waits for the cluster's objects'.
+#[test]
+fn an_object_depends_on_what_its_providers_settings_are_made_from() {
+    let s = Scratch::new("delete-order-configured");
+    std::fs::create_dir_all(s.path("prov")).unwrap();
+    std::os::unix::fs::symlink(
+        common::exe("dform-provider-fake"),
+        s.path("prov/dform-provider-fake"),
+    )
+    .unwrap();
+    s.write(
+        "p.df",
+        r#"
+use fake { source = "prov" }
+resource db.postgres server { name = "server" }
+use k8s { kubeconfig = format("kc@%s", server.endpoint) }
+resource k8s.namespace ns { metadata.name = "app" }
+"#,
+    );
+    mock(&s, &["apply"]).success();
+    assert_eq!(
+        s.json("w.state.json")["resources"]["k8s.namespace::ns"]["deps"],
+        serde_json::json!(["db.postgres::server"])
+    );
+}
+
 const NET: &str = r#"
 
 resource net.vpc main { cidr = "10.0.0.0/16" }
