@@ -2259,12 +2259,16 @@ impl Providers {
         match existing.as_ref().and_then(|o| get_path(&o.attrs, attr)) {
             Some(v) => Ok(v.clone()),
             None => match ctx.strict {
-                Some(at) => bail!(
-                    "apply {}: {} is still unknown ({} does not set {attr})",
-                    crate::report::address(at),
-                    crate::report::attribute_label(&label),
-                    crate::report::address(&addr)
-                ),
+                Some(at) => {
+                    return Err(not_sent(
+                        at,
+                        &format!(
+                            "{} is still unknown ({} does not set {attr})",
+                            crate::report::attribute_label(&label),
+                            crate::report::address(&addr)
+                        ),
+                    ));
+                }
                 None => Ok(provider::null_json(&label)),
             },
         }
@@ -2294,11 +2298,13 @@ impl Providers {
         }
         match (found, ctx.strict) {
             (Some(v), _) => Ok(v),
-            (None, Some(at)) => bail!(
-                "apply {}: {} is still unknown (its resource has not been created)",
-                crate::report::address(at),
-                crate::report::attribute_label(label)
-            ),
+            (None, Some(at)) => Err(not_sent(
+                at,
+                &format!(
+                    "{} is still unknown (its resource has not been created)",
+                    crate::report::attribute_label(label)
+                ),
+            )),
             (None, None) => Ok(provider::null_json(label)),
         }
     }
@@ -2769,6 +2775,12 @@ struct InFlight {
     retried: u32,
 }
 
+/// An Apply call dform does not send, and why (R-109): `apply T A: not
+/// sent`, the reason on its own line.
+fn not_sent(addr: &Address, why: &str) -> anyhow::Error {
+    crate::report::Failure::of("apply", addr, "not sent", why).into()
+}
+
 impl Tick<'_> {
     /// Submit the Apply call for `a`, as the executor's call `id`. Returns
     /// whether a call is in flight; an action that needs none (the delete
@@ -2776,7 +2788,6 @@ impl Tick<'_> {
     pub fn submit(&mut self, id: usize, a: &Action, state: &mut State) -> Result<bool> {
         let cloud = self.cloud;
         let addr = &a.addr;
-        let at = crate::report::address(addr);
         if matches!(a.kind, ActionKind::Noop | ActionKind::Pending) {
             return Ok(false);
         }
@@ -2789,7 +2800,7 @@ impl Tick<'_> {
                 let r = self
                     .desired
                     .get(addr)
-                    .ok_or_else(|| anyhow!("apply {at}: no desired resource"))?;
+                    .ok_or_else(|| not_sent(addr, "no desired resource"))?;
                 let ctx = Ctx {
                     cloud,
                     world: self.world.as_ref().expect("read above"),
@@ -2826,19 +2837,19 @@ impl Tick<'_> {
             ActionKind::Create => (pb::Op::Create, String::new(), Some(doc), false),
             ActionKind::Replace { create_first } => {
                 let Some(old) = state.get(addr).map(|e| e.remote.clone()) else {
-                    bail!("apply {at}: replace without a state entry");
+                    return Err(not_sent(addr, "replace without a state entry"));
                 };
                 (pb::Op::Replace, old, Some(doc), create_first)
             }
             ActionKind::Adopt => {
                 let Some(remote_name) = self.adopt_map.get(addr).cloned() else {
-                    bail!("apply {at}: adopt action missing adopt mapping");
+                    return Err(not_sent(addr, "adopt action missing adopt mapping"));
                 };
                 (pb::Op::Adopt, remote_name, Some(doc), false)
             }
             ActionKind::Update | ActionKind::Drift => {
                 let Some(remote) = state.get(addr).map(|e| e.remote.clone()) else {
-                    bail!("apply {at}: update without a state entry");
+                    return Err(not_sent(addr, "update without a state entry"));
                 };
                 let mut doc = doc;
                 // ignore_changes: the world keeps its value, or its absence.
@@ -2871,11 +2882,16 @@ impl Tick<'_> {
                             Some(v) if provider::marker(v).is_none() => {
                                 set_path(&mut doc, p, v.clone())
                             }
-                            _ => bail!(
-                                "apply {at}: {} holds a value only the deployment's master \
-                                 derives, and the world does not answer it",
-                                addr.attr(p)
-                            ),
+                            _ => {
+                                return Err(not_sent(
+                                    addr,
+                                    &format!(
+                                        "{} holds a value only the deployment's master \
+                                         derives, and the world does not answer it",
+                                        crate::report::attribute(addr, p)
+                                    ),
+                                ));
+                            }
                         }
                     }
                 }
@@ -2898,7 +2914,10 @@ impl Tick<'_> {
                         path: path.clone(),
                         op,
                         value: Some(wire::doc(&value)),
-                        message: format!("{} fails its refinement {c}", addr.attr(path)),
+                        message: format!(
+                            "{} fails its refinement {c}",
+                            crate::report::attribute(addr, path)
+                        ),
                     }
                 })
                 .collect(),
@@ -2909,10 +2928,11 @@ impl Tick<'_> {
             .as_ref()
             .is_some_and(crate::secrets::standin::carries)
         {
-            bail!(
-                "apply {at}: its document holds a value only the deployment's master derives, \
-                 which this run does not hold"
-            );
+            return Err(not_sent(
+                addr,
+                "its document holds a value only the deployment's master derives, which this \
+                 run does not hold",
+            ));
         }
         let idempotency_key = uncertain_from_here(a, addr, &remote, state);
         let req = pb::ApplyRequest {
@@ -3088,7 +3108,8 @@ impl Tick<'_> {
             attempt: f.retried,
             of: budget,
             delay,
-            error: e.to_string(),
+            // The provider's own naming of the change dropped (R-109).
+            error: crate::report::said_of(&f.addr, &e.to_string()),
         };
         link.retried(retry);
         std::thread::sleep(delay);
@@ -3270,7 +3291,6 @@ impl Tick<'_> {
         result: &std::result::Result<Option<pb::ApplyResponse>, CallError>,
         state: &mut State,
     ) -> Result<()> {
-        let at = crate::report::address(addr);
         if let Ok(Some(resp)) = result {
             self.elapsed.insert(addr.clone(), resp.elapsed_ms);
             self.cloud
@@ -3290,21 +3310,21 @@ impl Tick<'_> {
                 .map(|o| o.attrs.clone());
             self.returned.insert(addr.clone(), now);
         }
-        match result {
-            Ok(_) => Ok(()),
-            Err(CallError::Crashed(m)) => {
-                bail!("apply {at}: {m}; the change may have taken effect")
-            }
-            // A message that names the change already, as dform prints it
-            // or as a provider does (`apply T["A"]`), is not named twice.
-            Err(CallError::MaybeApplied(m))
-                if !m.starts_with(&format!("apply {at}"))
-                    && !m.starts_with(&format!("apply {addr}")) =>
-            {
-                bail!("apply {at}: {m}")
-            }
-            Err(e) => Err(anyhow!(e.clone())),
-        }
+        // In one shape (R-109): the change as the plan prints it and
+        // what happened, then the provider's message, its own naming of
+        // the change dropped.
+        let happened = match result {
+            Ok(_) => return Ok(()),
+            Err(CallError::Refused(_)) => "refused, nothing changed",
+            Err(CallError::MaybeApplied(_)) => "no answer; the change may have taken effect",
+            Err(CallError::Crashed(_)) => "the provider died; the change may have taken effect",
+        };
+        let m = result
+            .as_ref()
+            .err()
+            .map(|e| e.to_string())
+            .unwrap_or_default();
+        Err(crate::report::Failure::of("apply", addr, happened, &m).into())
     }
 
     /// How long the Apply call for `addr` took on its provider's clock

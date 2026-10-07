@@ -227,21 +227,28 @@ pub fn run_tick(
             if left.get() == 0 {
                 // As if dform were killed here: nothing in flight is
                 // waited for, and the tick never ends.
-                bail!(
-                    "apply {}: dform stopped after this Apply call returned \
-                     (chaos stop-after); the next apply resumes",
-                    crate::report::address(&a.addr)
-                );
+                return Err(crate::report::Failure::of(
+                    "apply",
+                    &a.addr,
+                    "dform stopped after this Apply call returned",
+                    "chaos stop-after; the next apply resumes",
+                )
+                .into());
             }
         }
     }
     if failed.is_none()
         && let Some(i) = started.iter().position(|s| !s)
     {
-        let a = crate::report::address(&actions[i].addr);
-        failed = Some(anyhow::anyhow!(
-            "apply {a}: its dependencies never finished (a cycle)"
-        ));
+        failed = Some(
+            crate::report::Failure::of(
+                "apply",
+                &actions[i].addr,
+                "not sent",
+                "its dependencies never finished (a cycle)",
+            )
+            .into(),
+        );
     }
     // The timeline in the order the calls started.
     spans.sort_by_key(|&(i, _, _)| seq[i]);

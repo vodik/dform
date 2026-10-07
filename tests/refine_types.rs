@@ -206,7 +206,8 @@ fn a_refinement_on_a_secret_is_an_apply_assertion() {
     let r = apply("hunter2").failure();
     assert!(
         r.stderr.contains(
-            "apply app.db[\"main\"]: assertion failed: app.db[\"main\"].password fails its refinement len_ge(16)"
+            "! apply app.db main: refused, nothing changed\n    assertion failed: app.db \
+             main.password fails its refinement len_ge(16)"
         ),
         "{}",
         r.stderr

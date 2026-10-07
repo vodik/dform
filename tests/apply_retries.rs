@@ -50,9 +50,9 @@ fn a_call_past_its_timeout_times_out() {
         let r = apply_on(&s, backend, &["delay=net.subnet[\"a\"]:500"]).failure();
         assert!(
             r.stderr.contains(
-                "Error: apply net.subnet a: the provider fakecloud did not answer the \
-                 Apply net.subnet a call within 300ms (its timeout); the call may have \
-                 taken effect\n"
+                "! apply net.subnet a: no answer; the change may have taken effect\n    \
+                 the provider fakecloud did not answer the Apply net.subnet a call within \
+                 300ms (its timeout); the call may have taken effect\n"
             ),
             "{backend:?}: {}",
             r.stderr
@@ -140,8 +140,8 @@ fn a_transient_refusal_is_retried_with_backoff() {
             r.stderr
                 .contains("retrying the Apply net.subnet a call in ")
                 && r.stderr.contains(
-                    "(retry 2 of 3): apply net.subnet[\"a\"]: Service Unavailable (503) \
-                 (chaos flaky=net.subnet[\"a\"], 2 of 2)\n"
+                    "(retry 2 of 3): Service Unavailable (503) \
+                 (chaos flaky=net.subnet a, 2 of 2)\n"
                 ),
             "{backend:?}: {}",
             r.stderr
@@ -165,8 +165,8 @@ fn past_the_retry_budget_the_apply_stops_naming_the_resource() {
     let r = apply_on(&s, Backend::Process, &["flaky=net.subnet[\"a\"]:5"]).failure();
     assert!(
         r.stderr.contains(
-            "Error: apply net.subnet[\"a\"]: Service Unavailable (503) (chaos \
-             flaky=net.subnet[\"a\"], 3 of 5) (gave up after 2 retries)\n"
+            "! apply net.subnet a: refused, nothing changed\n    Service Unavailable (503) \
+             (chaos flaky=net.subnet a, 3 of 5) (gave up after 2 retries)\n"
         ),
         "{}",
         r.stderr

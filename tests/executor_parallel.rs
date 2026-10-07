@@ -171,7 +171,8 @@ fn a_failure_stops_new_calls() {
             )
             .failure();
         assert!(
-            r.stderr.contains("apply net.vpc[\"b\"]: injected failure"),
+            r.stderr
+                .contains("! apply net.vpc b: refused, nothing changed\n    injected failure"),
             "{backend:?}: {}",
             r.stderr
         );

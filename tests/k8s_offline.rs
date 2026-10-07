@@ -968,9 +968,11 @@ fn a_field_another_manager_owns_fails_the_apply_naming_both() {
     assert!(r.stdout.contains("  ~ k8s.deployment web"), "{}", r.stdout);
     let r = run(&["apply"]).failure();
     assert!(
-        r.stderr.contains("apply k8s.deployment[\"web\"]")
-            && r.stderr
-                .contains(".spec.replicas is owned by field manager \"kubectl\""),
+        r.stderr.contains(
+            "! apply k8s.deployment web: refused, nothing changed\n    server-side apply"
+        ) && r
+            .stderr
+            .contains(".spec.replicas is owned by field manager \"kubectl\""),
         "{}\n{}",
         r.stdout,
         r.stderr

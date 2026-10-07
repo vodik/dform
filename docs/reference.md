@@ -1503,9 +1503,30 @@ time once it answers, and the line again every 30s while it runs (a
 heartbeat; `DFORM_HEARTBEAT_MS` sets it); the tick ends with `tick 1
 done  1m50s`. `-q` prints only that end line. The first failure stops the
 tick: nothing new starts, what is in flight finishes, and the failed
-change's mark is `!`, its error's first line after its time (`tick 1
-failed  ..` ends it); several failures, each inline and every error in
-full below the block. Ctrl-C (SIGINT) or SIGTERM asks the apply to
+change's mark is `!` with its time alone (`tick 1  failed  ..` ends the
+block). Each failure is said once, below the block, in full, in the one
+shape every error has (R-109): what happened, to the change as the plan
+prints it; the provider's or the rule's message on its own line (a
+provider's own naming of the change dropped, any mention of the address
+said as the plan says it); where the change is derived:
+
+```
+tick 1  failed  4.1s
+! apply ovh.domain_record k3s."k8s-lab.vodik.xyz": refused, nothing changed
+    zone vodik.xyz is not hosted on this OVH account
+    k3s.df:66
+Error: apply platform[env=lab]: tick 1 failed: ovh.domain_record k3s."k8s-lab.vodik.xyz"
+```
+
+What happened is `refused, nothing changed`, `no answer; the change may
+have taken effect`, `the provider died; the change may have taken
+effect`, or `not sent` (dform's own reason: a value still unknown, a
+value only the master derives); several failures each get their lines,
+and the run's last line names them. A data source's failure has the
+same shape, the call as the plan says it (`ssh.read("10.0.0.5",
+"ubuntu", "/etc/rancher/k3s/k3s.yaml") failed`), why, and where it is
+written. The marks are painted as the plan paints them on a terminal:
+`+` green, `~` yellow, `-` red, `!` red, nothing else. Ctrl-C (SIGINT) or SIGTERM asks the apply to
 stop: it says `Ctrl-C: stopping after the calls in flight; Ctrl-C again
 to quit now`, starts no new change, waits for the calls in flight (each
 bounded by its provider's `timeout`) and logs their answers, then ends

@@ -141,7 +141,7 @@ impl Inner {
     fn say(&mut self, i: usize, start: bool) {
         if let Board::Tick(b) = &self.board {
             match start {
-                true => eprintln!("{}", b.started(i)),
+                true => eprintln!("{}", b.started(i, self.style)),
                 false => eprintln!("{}", b.line(i, self.style)),
             }
             self.said[i] = Instant::now();
@@ -231,7 +231,7 @@ impl Progress {
                 *a
             }
             Event::Failed(a, err) => {
-                b.fail(a, &redact(&format!("{err:#}")));
+                b.fail(a, failure(a, err, redact));
                 *a
             }
             // The provider's status word, beside the change as it says it
@@ -253,10 +253,11 @@ impl Progress {
         }
     }
 
-    /// The tick ended: the block as it ended, its end line, and, when
-    /// several changes failed, each error in full below it. Stopped by a
-    /// signal, what never started is `interrupted`.
-    pub fn finish(mut self) {
+    /// The tick ended: the block as it ended, its end line, and each
+    /// failure in full below it, once (R-109's shape, the address as the
+    /// plan prints it). Stopped by a signal, what never started is
+    /// `interrupted`. The failed changes, in the order they failed.
+    pub fn finish(mut self) -> Vec<dform_core::ir::Address> {
         self.halt();
         let mut inner = self.inner.lock().expect("progress");
         let (mode, style) = (inner.mode, inner.style);
@@ -278,14 +279,14 @@ impl Progress {
         if inner.mode == Mode::Terminal {
             inner.redraw();
         }
-        if let Board::Tick(b) = &inner.board {
-            eprintln!("{}", b.end());
-            if b.errors.len() > 1 {
-                for (addr, e) in &b.errors {
-                    eprintln!("! {}: {e}", dform_core::report::address(addr));
-                }
-            }
+        let Board::Tick(b) = &inner.board else {
+            return Vec::new();
+        };
+        eprintln!("{}", b.end());
+        for line in b.failures(style) {
+            eprintln!("{line}");
         }
+        b.errors.iter().map(|(a, _)| a.clone()).collect()
     }
 
     /// The wait ended.
@@ -304,6 +305,25 @@ impl Progress {
 impl Drop for Progress {
     fn drop(&mut self) {
         self.halt();
+    }
+}
+
+/// A change's failure in R-109's shape, as it may be printed: the
+/// provider's or the core's, else the error as it is under `apply T A`.
+fn failure(
+    addr: &dform_core::ir::Address,
+    err: &anyhow::Error,
+    redact: &dyn Fn(&str) -> String,
+) -> dform_core::report::Failure {
+    use dform_core::report::Failure;
+    let f = match err.downcast_ref::<Failure>() {
+        Some(f) => f.clone(),
+        None => Failure::of("apply", addr, "failed", &format!("{err:#}")),
+    };
+    Failure {
+        what: redact(&f.what),
+        message: redact(&f.message),
+        site: f.site,
     }
 }
 

@@ -511,24 +511,33 @@ impl<'a> Externs<'a> {
             }
             for c in new {
                 let f = &self.fns[&c.pred];
-                let rows = (self.ask)(f, &c.inputs).with_context(|| {
-                    // The call and where it is written, as a plan line
-                    // says it (R-129 amendment): a document's as its read
-                    // (`io.read("note.txt")`, R-155).
-                    let at = self
+                let rows = (self.ask)(f, &c.inputs).map_err(|e| {
+                    if e.is::<crate::interrupt::Interrupted>() {
+                        return e;
+                    }
+                    // In one shape (R-109): the call as a plan line says
+                    // it (R-129 amendment), a document's as its read
+                    // (`io.read("note.txt")`, R-155); why; where it is
+                    // written.
+                    let site = self
                         .sites
                         .iter()
                         .find(|(_, a)| a.pred == c.pred)
                         .and_then(|(_, a)| crate::diag::location(a.span))
-                        .map(|(f, l, _)| format!("  {f}:{l}"))
-                        .unwrap_or_default();
-                    match (&c.inputs[..], crate::tables::describe(&c.pred)) {
+                        .map(|(f, l, _)| format!("{f}:{l}"));
+                    let what = match (&c.inputs[..], crate::tables::describe(&c.pred)) {
                         ([Value::Str(l)], Some(_)) if crate::tables::is_document(&c.pred) => {
-                            format!("{}{at}", call_text(&c.pred, l))
+                            call_text(&c.pred, l)
                         }
                         (_, Some(t)) => format!("{t} from {}", show(&c.inputs)),
-                        (_, None) => format!("{}({}){at}", c.pred, show(&c.inputs)),
+                        (_, None) => format!("{}({})", c.pred, show(&c.inputs)),
+                    };
+                    crate::report::Failure {
+                        what: format!("{what} failed"),
+                        message: format!("{e:#}"),
+                        site,
                     }
+                    .into()
                 })?;
                 for r in &rows {
                     if r.len() != f.args.len() {

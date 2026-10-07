@@ -37,7 +37,7 @@ fn apply_after_a_crash_finishes_on(backend: Backend) {
     .failure();
     assert!(
         r.stderr
-            .contains("apply compute.vm app: the provider fakecloud exited during the call"),
+            .contains("! apply compute.vm app: the provider died; the change may have taken effect\n    the provider fakecloud exited during the call"),
         "{backend:?}: {}",
         r.stderr
     );
@@ -84,8 +84,8 @@ fn apply_after_a_stop_finishes_the_remaining_actions() {
         let r = dform_on(&s, backend, &["apply", "--chaos", "stop-after=2"]).failure();
         assert!(
             r.stderr.contains(
-                "apply net.subnet a: dform stopped after this Apply call returned \
-                 (chaos stop-after)"
+                "Error: apply net.subnet a: dform stopped after this Apply call returned\n  \
+                 chaos stop-after; the next apply resumes"
             ),
             "{backend:?}: {}",
             r.stderr

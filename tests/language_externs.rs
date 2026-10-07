@@ -76,7 +76,9 @@ fn a_missing_file_is_an_error_naming_the_call() {
     std::fs::remove_file(s.path("note.txt")).unwrap();
     let r = s.run(&["plan", "p.df"]).failure();
     assert!(
-        r.stderr.contains("io.read(\"note.txt\")  p.df:") && r.stderr.contains("read note.txt"),
+        r.stderr.contains("Error: io.read(\"note.txt\") failed\n  ")
+            && r.stderr.contains("read note.txt")
+            && r.stderr.contains("\n  p.df:"),
         "{}",
         r.stderr
     );

@@ -2,7 +2,8 @@
 //! a terminal (these tests): a line per change of state, a change's mark
 //! and address as it starts and with its time once it answered, a
 //! heartbeat line per running change, the tick's end line; a failure
-//! stops the tick, its line marked `!` with the error's first line; `-q`
+//! stops the tick, its line marked `!` with its time, its error below the
+//! block; `-q`
 //! only the end; Ctrl-C stops after the change in flight, what never
 //! started `interrupted`, and the next apply resumes it.
 
@@ -89,8 +90,13 @@ fn a_tick_says_each_change_of_state_and_stops_at_a_failure() {
             "  + net.subnet a  T  made",
             "  + net.subnet a  T  made",
             "  + net.subnet b",
-            "  ! net.subnet b  T  injected failure (chaos fail=net.subnet[\"b\"])",
+            // The failure's mark and time; its error once, below the
+            // block, in full (R-109).
+            "  ! net.subnet b  T",
             "tick 1  failed  T",
+            "! apply net.subnet b: refused, nothing changed",
+            "    injected failure (chaos fail=net.subnet b)",
+            "    p.df:5",
         ],
         "{}",
         r.stderr

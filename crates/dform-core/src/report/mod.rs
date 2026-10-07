@@ -50,6 +50,112 @@ pub fn address(a: &Address) -> String {
     format!("{} {}", a.typ, path(&a.name))
 }
 
+/// An error in one shape (R-109): what happened, to what, with the
+/// address as the plan prints it (`apply ovh.domain_record
+/// k3s."k8s-lab.vodik.xyz": refused, nothing changed`); the provider's or
+/// the rule's message on its own line; where it is written
+/// (`k3s.df:66`), when that is known. Each on its own line, the second
+/// and third indented.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Failure {
+    pub what: String,
+    pub message: String,
+    pub site: Option<String>,
+}
+
+impl Failure {
+    /// The failure of `verb` on `addr` (`apply`), what happened said
+    /// after it, the message being a provider's: its own naming of the
+    /// address dropped from its front, and its every mention of the
+    /// address in the stored form (`T["A"]`) as the plan prints it.
+    pub fn of(verb: &str, addr: &Address, happened: &str, message: &str) -> Failure {
+        let at = address(addr);
+        let mut what = format!("{verb} {at}");
+        if !happened.is_empty() {
+            what.push_str(&format!(": {happened}"));
+        }
+        Failure {
+            what,
+            message: said_of(addr, message),
+            site: None,
+        }
+    }
+
+    /// The same, at `site`, unless it says one already.
+    pub fn at(mut self, site: Option<String>) -> Failure {
+        if self.site.is_none() {
+            self.site = site.filter(|s| !s.is_empty());
+        }
+        self
+    }
+
+    /// Its lines, each after `lead` (the first) or indented under it.
+    pub fn lines(&self, lead: &str) -> Vec<String> {
+        let mut out = vec![format!("{lead}{}", self.what)];
+        let pad = " ".repeat(lead.chars().count() + 2);
+        out.extend(
+            self.message
+                .lines()
+                .filter(|l| !l.trim().is_empty())
+                .map(|l| format!("{pad}{l}")),
+        );
+        out.extend(self.site.iter().map(|s| format!("{pad}{s}")));
+        out
+    }
+}
+
+impl std::fmt::Display for Failure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.lines("").join("\n"))
+    }
+}
+
+impl std::error::Error for Failure {}
+
+/// Where each of `addrs` is derived, `FILE:LINE` as the plan's site
+/// column says it (relative to `top`): a failure's third line (R-109).
+pub fn sites<'a>(
+    res: &EvalResult,
+    addrs: impl IntoIterator<Item = &'a Address>,
+    top: Option<&std::path::Path>,
+) -> BTreeMap<Address, String> {
+    let r = Redactor::default();
+    let p = tree::Printer {
+        circuit: &res.circuit,
+        redact: &r,
+        all: false,
+    };
+    addrs
+        .into_iter()
+        .filter_map(|a| {
+            let at = p.want_site(&res.rules, a)?.at;
+            let at = top.and_then(|t| relative_place(&at, t)).unwrap_or(at);
+            (!at.is_empty()).then(|| (a.clone(), at))
+        })
+        .collect()
+}
+
+/// A provider's message about `addr`, as dform prints it (R-109): its
+/// own naming of the change in front dropped (`apply T["A"]: `, as the
+/// mock, the Kubernetes and the OVH providers say it), and the address in
+/// the stored form wherever it says it, as the plan prints it.
+pub fn said_of(addr: &Address, message: &str) -> String {
+    let full = addr.to_string();
+    let at = address(addr);
+    let mut m = message.trim();
+    for front in [
+        format!("apply {full}: "),
+        format!("apply {at}: "),
+        format!("{full}: "),
+    ] {
+        if let Some(rest) = m.strip_prefix(&front) {
+            m = rest;
+            break;
+        }
+    }
+    m.replace(&full, &at)
+}
+
 /// A stored name as the source names it (R-112): its path, a copy's scope
 /// before it (`k3s.admin`), a segment holding a dot already quoted
 /// (`k3s."k8s-lab.vodik.xyz"`); a segment holding a space quoted too, and

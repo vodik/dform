@@ -22,7 +22,7 @@ fn fail_stops_before_the_action_and_keeps_what_came_before() {
     let r = mock(&s, &["apply", "--chaos", "fail=net.subnet[\"a\"]"]).failure();
     assert!(
         r.stderr
-            .contains("apply net.subnet[\"a\"]: injected failure"),
+            .contains("! apply net.subnet a: refused, nothing changed\n    injected failure"),
         "{}",
         r.stderr
     );
@@ -52,7 +52,9 @@ fn a_create_that_timed_out_is_found_not_created_again() {
     let s = stack("chaos-timeout");
     let r = mock(&s, &["apply", "--chaos", "timeout=net.subnet[\"a\"]"]).failure();
     assert!(
-        r.stderr.contains("apply net.subnet[\"a\"]: timed out"),
+        r.stderr.contains(
+            "! apply net.subnet a: no answer; the change may have taken effect\n    timed out"
+        ),
         "{}",
         r.stderr
     );

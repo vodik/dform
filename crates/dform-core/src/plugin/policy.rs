@@ -125,6 +125,20 @@ pub fn retryable(m: &str) -> bool {
     false
 }
 
+/// The resource a call is about: a Read's, a Plan's or an Apply's.
+pub fn address_of(call: &Call) -> Option<crate::ir::Address> {
+    let (typ, name) = match call {
+        Call::Read(r) => (&r.r#type, &r.name),
+        Call::Plan(r) => (&r.r#type, &r.name),
+        Call::Apply(r) => (&r.r#type, &r.name),
+        _ => return None,
+    };
+    (!typ.is_empty()).then(|| crate::ir::Address {
+        typ: typ.clone(),
+        name: name.clone(),
+    })
+}
+
 /// What a call is, for messages: its method and what it is about
 /// (`Read net.vpc["main"]`).
 pub fn describe(call: &Call) -> String {

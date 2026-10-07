@@ -3,12 +3,12 @@
 //! them, then its state: what it waits on, or the time it has run (the
 //! time ticking is the liveness signal: no spinner, no glyph), then the
 //! provider's own status word when it streams one (verbatim, else
-//! nothing). A failure's mark is `!`, the first line of its error in
-//! the right column. The driver (the `dform` binary's `progress`) prints
-//! it: redrawn in place on a terminal, a line per state change
-//! otherwise.
+//! nothing). A failure's mark is `!` with its time alone; its error is
+//! said once, in full, below the block ([`Block::failures`]), in R-109's
+//! shape. The driver (the `dform` binary's `progress`) prints it:
+//! redrawn in place on a terminal, a line per state change otherwise.
 
-use super::{Paint, Style, address, attribute_label, marker_of};
+use super::{Failure, Paint, Style, address, attribute_label, kind_paint, marker_of};
 use crate::ir::Address;
 use crate::provider::{Action, ActionKind, NULL_KEY, marker};
 use serde_json::Value as Json;
@@ -22,8 +22,8 @@ pub enum State {
     Waiting(Option<String>),
     Running,
     Done,
-    /// Its error's first line.
-    Failed(String),
+    /// Its call failed: said below the block.
+    Failed,
     /// Never started: the apply was interrupted first (a running one is
     /// awaited, and ends `Done` or `Failed`).
     Interrupted,
@@ -32,6 +32,7 @@ pub enum State {
 #[derive(Debug, Clone)]
 pub struct Entry {
     pub addr: Address,
+    kind: ActionKind,
     mark: &'static str,
     printed: String,
     pub state: State,
@@ -48,7 +49,9 @@ pub struct Block {
     pub entries: Vec<Entry>,
     started: Instant,
     /// Every failure's full error, in the order they came.
-    pub errors: Vec<(Address, String)>,
+    pub errors: Vec<(Address, Failure)>,
+    /// Where each change is derived (`k3s.df:66`), for its failure.
+    pub sites: std::collections::BTreeMap<Address, String>,
 }
 
 /// A duration as progress says it: `0.8s`, `42s`, `1m12s`, `1h3m`.
@@ -70,6 +73,7 @@ impl Block {
             .filter(|a| !matches!(a.kind, ActionKind::Noop | ActionKind::Pending))
             .map(|a| Entry {
                 addr: a.addr.clone(),
+                kind: a.kind.clone(),
                 mark: marker_of(&a.kind),
                 printed: address(&a.addr),
                 state: State::Waiting(reads(a)),
@@ -83,6 +87,7 @@ impl Block {
             entries,
             started: Instant::now(),
             errors: Vec::new(),
+            sites: Default::default(),
         }
     }
 
@@ -106,22 +111,31 @@ impl Block {
         }
     }
 
-    /// Its Apply call failed with `error`.
-    pub fn fail(&mut self, addr: &Address, error: &str) {
-        let first = error.lines().next().unwrap_or_default();
-        // The line names the address as the plan prints it: the error's
-        // own `apply T["A"]: ` in front says it again, in the core's form
-        // (After R-127).
-        let core = format!("{addr}: ");
-        let first = match first.find(&core) {
-            Some(i) if !first[..i].trim_end().contains(' ') => first[i + core.len()..].to_string(),
-            _ => first.to_string(),
-        };
+    /// Its Apply call failed with `error`: its line keeps its mark and
+    /// time; the error is said below the block, at where the change is
+    /// derived unless it says where.
+    pub fn fail(&mut self, addr: &Address, error: Failure) {
         if let Some(e) = self.entry(addr) {
-            e.state = State::Failed(first);
+            e.state = State::Failed;
             e.took = e.started.map(|s| s.elapsed());
         }
-        self.errors.push((addr.clone(), error.to_string()));
+        let error = error.at(self.sites.get(addr).cloned());
+        self.errors.push((addr.clone(), error));
+    }
+
+    /// The failures, each in full in R-109's shape, `! ` before its first
+    /// line: what the block says below it once the tick ends.
+    pub fn failures(&self, style: Style) -> Vec<String> {
+        let mut out = Vec::new();
+        for (_, f) in &self.errors {
+            for (i, l) in f.lines("! ").into_iter().enumerate() {
+                out.push(match i {
+                    0 => format!("{} {}", style.paint(Paint::Error, "!"), &l[2..]),
+                    _ => l,
+                });
+            }
+        }
+        out
     }
 
     /// The apply was interrupted: what runs is interrupted.
@@ -152,7 +166,7 @@ impl Block {
             (count(|s| *s == State::Done), "done"),
             (count(|s| *s == State::Running), "running"),
             (count(|s| matches!(s, State::Waiting(_))), "waiting"),
-            (count(|s| matches!(s, State::Failed(_))), "failed"),
+            (count(|s| *s == State::Failed), "failed"),
             (count(|s| *s == State::Interrupted), "interrupted"),
         ];
         let mut sep = "   ";
@@ -176,9 +190,19 @@ impl Block {
 
     /// Change `i`'s line as it starts: its mark and address alone (a
     /// line per change of state says it once; its time follows).
-    pub fn started(&self, i: usize) -> String {
+    pub fn started(&self, i: usize, style: Style) -> String {
         let e = &self.entries[i];
-        format!("  {} {}", e.mark, e.printed)
+        format!("  {} {}", self.mark(e, style), e.printed)
+    }
+
+    /// An entry's mark painted as the plan paints it (hints only: the
+    /// mark, never the line), `!` red once its call failed.
+    fn mark(&self, e: &Entry, style: Style) -> String {
+        match (&e.state, kind_paint(&e.kind)) {
+            (State::Failed, _) => style.paint(Paint::Error, "!"),
+            (_, Some(p)) => style.paint(p, e.mark),
+            (_, None) => e.mark.to_string(),
+        }
     }
 
     /// Change `i`'s line, its time as of now.
@@ -186,7 +210,7 @@ impl Block {
         let e = &self.entries[i];
         let col = self.column();
         let mark = match e.state {
-            State::Failed(_) => "!",
+            State::Failed => "!",
             _ => e.mark,
         };
         let left = format!("  {mark} {}", e.printed);
@@ -204,13 +228,10 @@ impl Block {
                 Some(s) => format!("{}  {s}", time(e)),
                 None => time(e),
             },
-            State::Failed(err) => format!("{}  {err}", time(e)),
+            State::Failed => time(e),
             State::Interrupted => format!("{}  interrupted", time(e)),
         };
-        let painted = match e.state {
-            State::Failed(_) => style.paint(Paint::Error, &left),
-            _ => left,
-        };
+        let painted = format!("  {} {}", self.mark(e, style), e.printed);
         match right.is_empty() {
             true => painted,
             false => format!("{painted}{pad}{}", style.paint(Paint::Dim, &right)),
@@ -226,10 +247,7 @@ impl Block {
 
     /// The tick's end: `tick 1  done  1m50s`, `tick 1  failed  ..`.
     pub fn end(&self) -> String {
-        let failed = self
-            .entries
-            .iter()
-            .any(|e| matches!(e.state, State::Failed(_)));
+        let failed = self.entries.iter().any(|e| e.state == State::Failed);
         let interrupted = self.entries.iter().any(|e| e.state == State::Interrupted);
         let word = match (failed, interrupted) {
             (true, _) => "failed",
@@ -251,7 +269,7 @@ impl Block {
             State::Waiting(_) => "waiting",
             State::Running => "running",
             State::Done => "done",
-            State::Failed(_) => "failed",
+            State::Failed => "failed",
             State::Interrupted => "interrupted",
         };
         let elapsed = e
@@ -303,6 +321,20 @@ mod tests {
     }
 
     #[test]
+    fn the_marks_are_painted_as_the_plan_paints_them() {
+        let a = action(ActionKind::Create, "net.vpc", "a");
+        let d = action(ActionKind::Delete, "net.vpc", "d");
+        let mut block = Block::new(1, &[&a, &d]);
+        let color = Style { color: true };
+        assert_eq!(block.started(0, color), "  \x1b[32m+\x1b[0m net.vpc a");
+        assert_eq!(block.started(1, color), "  \x1b[31m-\x1b[0m net.vpc d");
+        block.start(&a.addr);
+        block.fail(&a.addr, Failure::of("apply", &a.addr, "refused", "no"));
+        let line = block.line(0, color);
+        assert!(line.starts_with("  \x1b[31m!\x1b[0m net.vpc a"), "{line:?}");
+    }
+
+    #[test]
     fn a_duration_says_what_matters() {
         assert_eq!(took(Duration::from_millis(800)), "0.8s");
         assert_eq!(took(Duration::from_secs(42)), "42s");
@@ -323,15 +355,30 @@ mod tests {
             block.header(),
             "tick 1  3 changes   1 done  1 running  1 waiting"
         );
-        block.fail(&b.addr, "403 Forbidden\nmore");
+        block.sites.insert(b.addr.clone(), "k3s.df:40".into());
+        // The provider names the change in its own form: dform says it as
+        // the plan does, once, below the block.
+        block.fail(
+            &b.addr,
+            Failure::of(
+                "apply",
+                &b.addr,
+                "refused, nothing changed",
+                "apply ovh.instance[\"k3s.server\"]: 403 Forbidden",
+            ),
+        );
         let line = block.line(1, Style::default());
         assert!(line.starts_with("  ! ovh.instance k3s.server"), "{line}");
-        assert!(line.ends_with("  403 Forbidden"), "{line}");
-        // The error's own address in the core's form goes: the line has it.
-        block.fail(&b.addr, "apply ovh.instance[\"k3s.server\"]: 403 Forbidden");
-        let line = block.line(1, Style::default());
-        assert!(line.ends_with("  403 Forbidden"), "{line}");
-        assert!(!line.contains('['), "{line}");
+        assert!(line.ends_with("s"), "the mark and the time alone: {line}");
+        assert!(!line.contains("403"), "{line}");
+        assert_eq!(
+            block.failures(Style::default()),
+            [
+                "! apply ovh.instance k3s.server: refused, nothing changed",
+                "    403 Forbidden",
+                "    k3s.df:40",
+            ]
+        );
         assert!(block.end().starts_with("tick 1  failed  "));
     }
 }

@@ -3857,8 +3857,12 @@ fn run_with(
                     let mode = crate::progress::Mode::of_stderr(why == report::Why::None);
                     let progress = hook.is_none().then(|| {
                         let actions: Vec<&crate::provider::Action> = plan.actions.iter().collect();
+                        let mut block = report::progress::Block::new(tick, &actions);
+                        // A failure's site, where its change is derived (R-109).
+                        block.sites =
+                            report::sites(&res, actions.iter().map(|a| &a.addr), top.as_deref());
                         crate::progress::Progress::tick(
-                            report::progress::Block::new(tick, &actions),
+                            block,
                             mode,
                             match mode {
                                 crate::progress::Mode::Terminal => cli.style,
@@ -3882,9 +3886,22 @@ fn run_with(
                     let applied = executor::run_tick(
                         backend, &resources, &adopts, &lifecycle, &mut st, &plan, &opts,
                     );
-                    if let Some(p) = progress {
-                        p.finish();
-                    }
+                    let failed = progress.map(|p| p.finish()).unwrap_or_default();
+                    // A failure the block said in full below it is not
+                    // said again: the run ends naming what failed (R-109).
+                    let applied = match applied {
+                        Err(e) if !failed.is_empty() && e.is::<report::Failure>() => {
+                            Err(anyhow::anyhow!(
+                                "apply {deployment}: tick {tick} failed: {}",
+                                failed
+                                    .iter()
+                                    .map(report::address)
+                                    .collect::<Vec<_>>()
+                                    .join(", ")
+                            ))
+                        }
+                        applied => applied,
+                    };
                     for note in backend.take_notes() {
                         println!("chaos: {note}");
                     }

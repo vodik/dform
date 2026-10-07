@@ -290,7 +290,12 @@ impl Link {
                 attempt,
                 of: self.policy.retries,
                 delay,
-                error: e.to_string(),
+                // The provider's own naming of the resource as the plan
+                // prints it (R-109).
+                error: match policy::address_of(&call) {
+                    Some(a) => crate::report::said_of(&a, &e.to_string()),
+                    None => e.to_string(),
+                },
             });
             std::thread::sleep(delay);
         }
