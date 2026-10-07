@@ -1189,6 +1189,7 @@ dependencies = [
  "dform-lsp",
  "dform-mock",
  "dform-provider-ovh",
+ "dform-provider-postgres",
  "dform-s3",
  "dform-sdk",
  "expectrl",

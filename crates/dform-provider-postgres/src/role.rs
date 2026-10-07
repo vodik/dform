@@ -318,8 +318,8 @@ fn own_role(at: &str, user: &str) -> String {
     format!(
         "{at}: {user:?} is the role provider postgres connects as (user = {user:?}): \
          changing it (a password rotated, LOGIN taken away) or dropping it would lock the \
-         provider out mid-apply. Connect as a separate admin role the program does not \
-         manage, `use postgres {{ user = \"dform_admin\", password = .. }}` \
-         (docs/providers/postgres.md, \"The admin role\")"
+         provider out mid-apply. Connect as a separate admin role that no resource \
+         manages (`use postgres {{ user = .. }}`; docs/providers/postgres.md, \
+         \"The admin role\")"
     )
 }

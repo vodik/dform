@@ -109,6 +109,8 @@ russh = { version = "=0.64.1", default-features = false, features = ["ring", "rs
 tokio-stream = { version = "0.1", default-features = false, features = ["net"] }
 # tests/provider_ovh.rs: the OVH provider against a fake OVH API.
 dform-provider-ovh = { path = "crates/dform-provider-ovh", features = ["fake"] }
+# tests/provider_postgres.rs: the Postgres provider against a fake server.
+dform-provider-postgres = { path = "crates/dform-provider-postgres", features = ["fake"] }
 # tests/host_wasm.rs writes a component from its text; tests/host_grpc.rs
 # calls the host as a native SDK provider does.
 wat = "1"
