@@ -37,8 +37,7 @@ fn prevent_destroy_makes_a_delete_a_deny() {
     assert!(!r.stderr.contains("prevent_destroy"), "{}", r.stderr);
     let r = mock(&s, &["apply"]).failure();
     assert!(
-        r.stderr
-            .contains("apply stopped at tick 1: blocked by constraints"),
+        r.stderr.contains("apply: refused  1 deny\n"),
         "{}",
         r.stderr
     );

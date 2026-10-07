@@ -168,7 +168,7 @@ fn gke_one_zone_stops_after_tick_one() {
         r.stderr
             .contains("- cluster must be in at least two zones ctx={\"cluster\":\"pngu\"}")
             && r.stderr
-                .contains("apply stopped after tick 1: blocked by constraints"),
+                .contains("; stopped after tick 1; ticks 1 to 1 were applied"),
         "{}",
         r.stderr
     );

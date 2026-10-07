@@ -239,7 +239,7 @@ fn check(name: &str) {
                     !r.ok
                         && r.stderr.contains(why)
                         && r.stderr
-                            .contains("apply stopped after tick 1: blocked by constraints"),
+                            .contains("; stopped after tick 1; ticks 1 to 1 were applied"),
                     "{}: expected to stop on {why:?}\n{}{}",
                     at(&st.apply.join(" ")),
                     r.stdout,

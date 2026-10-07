@@ -851,7 +851,10 @@ pub fn main(
         Err(e) => {
             use std::io::IsTerminal;
             let color = color.style(std::io::stderr().is_terminal()).color;
-            eprint!("{}", crate::diag::report(&e, color));
+            match e.downcast_ref::<Refused>().filter(|r| r.footer) {
+                Some(r) => eprintln!("{r}"),
+                None => eprint!("{}", crate::diag::report(&e, color)),
+            }
             Outcome::of_error(&e)
         }
     };
@@ -1681,12 +1684,15 @@ pub fn exit_code(o: &Outcome) -> u8 {
 }
 
 /// The program refused the plan (its conflicts and denies were printed):
-/// exit status 4. `what` is the message, as before R-147.
+/// exit status 4. `what` is the message: a plan's as before R-147; an
+/// apply's its last line ([`Refused::apply`]).
 #[derive(Debug)]
 pub struct Refused {
     what: String,
     conflicts: usize,
     denies: usize,
+    /// `what` is an apply's last line, printed as it is (not an error's).
+    footer: bool,
 }
 
 impl Refused {
@@ -1695,6 +1701,37 @@ impl Refused {
             what: what.to_string(),
             conflicts,
             denies,
+            footer: false,
+        }
+    }
+
+    /// An apply's (`verb`: or a destroy's) refusal, said as the plan's
+    /// footer says it (R-122): `apply: refused  2 conflicts, 1 deny`,
+    /// then where it stopped (`at`) when that was not before its first
+    /// call.
+    fn apply(verb: &str, conflicts: usize, denies: usize, at: Option<String>) -> Refused {
+        let mut why = Vec::new();
+        if conflicts > 0 {
+            why.push(match conflicts {
+                1 => "1 conflict".to_string(),
+                n => format!("{n} conflicts"),
+            });
+        }
+        if denies > 0 {
+            why.push(match denies {
+                1 => "1 deny".to_string(),
+                n => format!("{n} denies"),
+            });
+        }
+        let what = format!("{verb}: refused  {}", why.join(", "));
+        Refused {
+            what: match at {
+                Some(at) => format!("{what}; {at}"),
+                None => what,
+            },
+            conflicts,
+            denies,
+            footer: true,
         }
     }
 }
@@ -1913,6 +1950,10 @@ fn run_with(
         cli.cmd,
         Cmd::Plan { destroy: true, .. } | Cmd::Apply { destroy: true, .. }
     );
+    let verb = match destroying {
+        true => "destroy",
+        false => "apply",
+    };
     // What evaluates against providers starts the program's, and there is
     // no default.
     if matches!(
@@ -2285,7 +2326,11 @@ fn run_with(
                 eprintln!("- {}", report::violation_line(v, redact));
             }
         }
-        Err(Refused::new("blocked by constraints", conflicts.len(), rest.len()).into())
+        Err(match &cli.cmd {
+            Cmd::Apply { .. } => Refused::apply(verb, conflicts.len(), rest.len(), None),
+            _ => Refused::new("blocked by constraints", conflicts.len(), rest.len()),
+        }
+        .into())
     };
     if opts.blocking {
         blocked(&ev.violations, &ev.redact)?;
@@ -3025,11 +3070,14 @@ fn run_with(
                         eprintln!("- {}", redact.text(d));
                     }
                     persist(&st)?;
-                    return Err(Refused::new(
-                        "apply stopped: blocked by constraints on the remaining actions of the \
-                         interrupted apply; review `dform plan`, then apply again",
+                    return Err(Refused::apply(
+                        verb,
                         0,
                         denies.len(),
+                        Some(format!(
+                            "on the remaining actions of the interrupted {verb}: review \
+                             `dform plan`, then {verb} again"
+                        )),
                     )
                     .into());
                 }
@@ -3216,12 +3264,13 @@ fn run_with(
                     for d in &denies {
                         eprintln!("- {}", redact.text(d));
                     }
-                    return Err(Refused::new(
-                        &format!("apply stopped at tick {tick}: blocked by constraints"),
-                        0,
-                        denies.len(),
-                    )
-                    .into());
+                    let at = (tick > 1).then(|| {
+                        format!(
+                            "stopped at tick {tick}; ticks 1 to {} were applied",
+                            tick - 1
+                        )
+                    });
+                    return Err(Refused::apply(verb, 0, denies.len(), at).into());
                 }
                 // A batch apply asks before it changes anything, unless
                 // `--yes` or it applies a reviewed plan file.
@@ -3746,10 +3795,13 @@ fn run_with(
                         eprintln!("- {}", redact.text(v));
                     }
                     let conflicts = violations.iter().filter(|v| report::is_conflict(v)).count();
-                    return Err(Refused::new(
-                        &format!("apply stopped after tick {tick}: blocked by constraints"),
+                    return Err(Refused::apply(
+                        verb,
                         conflicts,
                         violations.len() - conflicts,
+                        Some(format!(
+                            "stopped after tick {tick}; ticks 1 to {tick} were applied"
+                        )),
                     )
                     .into());
                 }

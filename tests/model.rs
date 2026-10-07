@@ -1011,7 +1011,7 @@ impl Runner<'_> {
         let ran = self.run(&["apply"], None)?;
         self.after(&ran, "the settling apply")?;
         match &ran.result {
-            Err(e) if e.contains("blocked by constraints") => return Ok(()),
+            Err(e) if e.contains("apply: refused  ") => return Ok(()),
             Err(e) => return Self::fail("settle", format!("the settling apply failed: {e}")),
             Ok(()) => {}
         }

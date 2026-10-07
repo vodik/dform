@@ -1215,7 +1215,10 @@ made; the plan itself says what it is.
 - `(drift: ...)` marks an update where a fresh null meets a value the
   world already has: the identity mapping is stale.
 - `apply: refused  2 conflicts, 1 deny`: the last line, only when there
-  is something to decide; a plan apply would make has none.
+  is something to decide; a plan apply would make has none. An apply
+  that refuses ends with the same line on stderr, and says where it
+  stopped when it had applied a tick: `apply: refused  1 deny; stopped
+  after tick 1; ticks 1 to 1 were applied`.
 - `stack NAME is up to date`: nothing to do, nothing stuck (the only line).
 
 How much each change says of why it is planned is a ladder (R-79,

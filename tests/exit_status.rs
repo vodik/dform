@@ -96,7 +96,11 @@ fn a_refusal_is_4() {
     assert_eq!(j["outcome"], "refused", "{j}");
     let r = mock(&s, &["apply"]);
     assert_eq!(r.code, Some(4), "{}", r.stderr);
-    assert!(r.stderr.contains("blocked by constraints"), "{}", r.stderr);
+    assert!(
+        r.stderr.ends_with("\napply: refused  1 deny\n"),
+        "{}",
+        r.stderr
+    );
 }
 
 /// A plan file stops before a change it could not name: 5.

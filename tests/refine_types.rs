@@ -157,7 +157,7 @@ fn a_refinement_on_a_null_is_deferred_and_fires_after_the_boundary() {
             .contains("constraint violations after tick 1:\n- refinement violated ctx={\"addr\":\"pngu\",\"at\":\"")
             && r.stderr.contains("examples/refine/stacks/refine_gke.df:125:33\",\"constraint\":\"len_ge(3)\",\"path\":\"zones\"")
             && r.stderr
-                .contains("apply stopped after tick 1: blocked by constraints"),
+                .contains("; stopped after tick 1; ticks 1 to 1 were applied"),
         "{}",
         r.stderr
     );

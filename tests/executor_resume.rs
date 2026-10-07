@@ -169,7 +169,7 @@ fn apply_stops_when_the_world_changed_under_a_remaining_action() {
     );
     assert!(
         r.stderr
-            .contains("apply stopped: blocked by constraints on the remaining actions"),
+            .contains("apply: refused  1 deny; on the remaining actions of the interrupted apply"),
         "{}",
         r.stderr
     );

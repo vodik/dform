@@ -57,7 +57,7 @@ fn a_mutation_under_a_pending_deformation_stops_before_tick_two() {
     );
     assert!(
         r.stderr
-            .contains("apply stopped after tick 1: blocked by constraints"),
+            .contains("; stopped after tick 1; ticks 1 to 1 were applied"),
         "{}",
         r.stderr
     );
