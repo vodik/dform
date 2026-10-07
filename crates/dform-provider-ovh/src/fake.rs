@@ -1,10 +1,14 @@
 //! A fake OVH API for tests, over HTTP/1.1 on 127.0.0.1: one project
 //! (`PROJECT`, described as `DESCRIPTION`), the regions `BHS5` and
 //! `ca-east-tor` with two flavors and two images each, and the instance,
-//! SSH key and DNS record endpoints the provider calls. It checks every
-//! signed call's signature against `APPLICATION_SECRET` and
-//! `CONSUMER_KEY`. A new instance is BUILD, with no address, for
-//! [`Server::build_polls`] reads, then ACTIVE. Every DNS zone is the
+//! SSH key, DNS record, S3 container, user, volume and private network
+//! endpoints the provider calls, answering as the API's models are
+//! shaped. It checks every signed call's signature against
+//! `APPLICATION_SECRET` and `CONSUMER_KEY`. A new instance is BUILD, with
+//! no address, for [`Server::build_polls`] reads, then ACTIVE; a volume,
+//! a user and a private network change status the same way (`creating`
+//! then `available`, `attaching` then `in-use`, `BUILDING` then
+//! `ACTIVE`). The project is on a vRack until [`Server::no_vrack`]. Every DNS zone is the
 //! account's until [`Server::hosting`] names them; beside it, a DNS
 //! resolver over UDP answers the NS records [`Server::delegated`] gives.
 
@@ -40,6 +44,23 @@ pub struct World {
     nameservers: BTreeMap<String, Vec<String>>,
     /// Reads left before each BUILD instance is ACTIVE.
     building: BTreeMap<String, u32>,
+    /// Each instance's interfaces as it was made: the networks' OpenStack
+    /// ids, the public one's included; none for the public network alone.
+    nics: BTreeMap<String, Vec<String>>,
+    /// S3 containers by region and name.
+    pub containers: BTreeMap<(String, String), Json>,
+    /// Users by id, and each one's S3 credentials (access, secret).
+    pub users: BTreeMap<i64, Json>,
+    pub s3: BTreeMap<i64, Vec<(String, String)>>,
+    pub volumes: BTreeMap<String, Json>,
+    pub networks: BTreeMap<String, Json>,
+    /// Subnets by their network's id.
+    pub subnets: BTreeMap<String, Vec<Json>>,
+    /// The project has no vRack (`no_vrack`).
+    no_vrack: bool,
+    /// Objects whose status changes after reads: `kind/id` to the reads
+    /// left and the fields it then has (`null`: it is gone).
+    settling: BTreeMap<String, (u32, Json)>,
     next: u64,
     /// Answer the next calls of a `METHOD /path` prefix with these
     /// statuses (`fail`).
@@ -81,6 +102,62 @@ fn image(region: &str, name: &str) -> Json {
 }
 
 const REGIONS: [&str; 2] = ["BHS5", "ca-east-tor"];
+
+/// The vRack the project is on.
+const VRACK: &str = "pn-1000123";
+
+/// The OpenStack roles a user may have (`cloud.user.RoleEnum`).
+const ROLES: [&str; 6] = [
+    "administrator",
+    "compute_operator",
+    "network_operator",
+    "objectstore_operator",
+    "volume_operator",
+    "infrastructure_supervisor",
+];
+
+/// A volume (`cloud.volume.Volume`), available.
+fn volume(id: &str, name: &str, region: &str, gib: i64, typ: &str, desc: &str, boot: bool) -> Json {
+    json!({"id": id, "name": name, "region": region, "size": gib, "type": typ,
+           "description": desc, "status": "available", "attachedTo": [],
+           "bootable": boot, "availabilityZone": "nova",
+           "creationDate": "2026-10-07T00:00:00Z",
+           "planCode": format!("volume.{typ}.consumption")})
+}
+
+/// An S3 container (`cloud.StorageContainer`), empty.
+fn container(region: &str, name: &str, owner: Option<i64>, versioning: &str) -> Json {
+    let host = format!("{name}.s3.{}.io.cloud.ovh.net", region.to_lowercase());
+    json!({"name": name, "region": region, "ownerId": owner,
+           "objectsCount": 0, "objectsSize": 0,
+           "createdAt": "2026-10-07T00:00:00Z",
+           "arn": format!("arn:aws:s3:::{name}"), "virtualHost": host,
+           "versioning": {"status": versioning},
+           "encryption": {"sseAlgorithm": "plaintext"}, "tags": {},
+           "objectLock": {"status": "disabled"}, "objects": []})
+}
+
+/// A role (`cloud.role.Role`).
+fn role(name: &str) -> Json {
+    json!({"id": format!("role-{name}"), "name": name,
+           "description": format!("{name} role"), "permissions": []})
+}
+
+/// The public network, in every region (`cloud.network.Network`).
+fn public_network() -> Json {
+    json!({"id": "ext-net", "name": "Ext-Net", "type": "public", "vlanId": null,
+           "status": "ACTIVE",
+           "regions": REGIONS.iter().map(|r| json!({"region": r, "status": "ACTIVE",
+                                                    "openstackId": format!("ext-{r}")}))
+                             .collect::<Vec<_>>()})
+}
+
+/// The first address of `cidr` plus `n`, IPv4.
+fn host_of(cidr: &str, n: u32) -> Option<String> {
+    let (addr, _) = cidr.split_once('/').unwrap_or((cidr, ""));
+    let a: std::net::Ipv4Addr = addr.parse().ok()?;
+    Some(std::net::Ipv4Addr::from(u32::from(a) + n).to_string())
+}
 
 impl Server {
     pub fn start() -> Server {
@@ -169,6 +246,69 @@ impl Server {
         self.world().records.values().cloned().collect()
     }
 
+    pub fn containers(&self) -> Vec<Json> {
+        self.world().containers.values().cloned().collect()
+    }
+
+    pub fn users(&self) -> Vec<Json> {
+        self.world().users.values().cloned().collect()
+    }
+
+    /// A user's S3 credentials, access and secret.
+    pub fn s3_credentials(&self, user: i64) -> Vec<(String, String)> {
+        self.world().s3.get(&user).cloned().unwrap_or_default()
+    }
+
+    pub fn volumes(&self) -> Vec<Json> {
+        self.world().volumes.values().cloned().collect()
+    }
+
+    pub fn networks(&self) -> Vec<Json> {
+        self.world().networks.values().cloned().collect()
+    }
+
+    pub fn subnets(&self) -> Vec<Json> {
+        self.world().subnets.values().flatten().cloned().collect()
+    }
+
+    /// The project is not on a vRack: a private network cannot be made.
+    pub fn no_vrack(&self) {
+        self.world().no_vrack = true;
+    }
+
+    /// Put a volume there as if made elsewhere.
+    pub fn add_volume(&self, name: &str, region: &str, gib: i64) -> String {
+        let mut w = self.world();
+        let id = w.id("volume");
+        let o = volume(&id, name, region, gib, "classic", "", false);
+        w.volumes.insert(id.clone(), o);
+        id
+    }
+
+    /// Put a user there as if made elsewhere, ready, with one S3
+    /// credential: its id.
+    pub fn add_user(&self, description: &str) -> i64 {
+        let mut w = self.world();
+        w.next += 1;
+        let id = 100_000 + w.next as i64;
+        w.users.insert(
+            id,
+            json!({"id": id, "username": format!("user-{id:x}"), "description": description,
+                   "status": "ok", "creationDate": "2026-10-07T00:00:00Z",
+                   "openstackId": format!("os-{id}"), "roles": [role("objectstore_operator")]}),
+        );
+        w.s3.insert(id, vec![(format!("AK{id}"), format!("sk-{id}"))]);
+        id
+    }
+
+    /// Put an S3 container there as if made elsewhere.
+    pub fn add_container(&self, region: &str, name: &str) {
+        let mut w = self.world();
+        let o = container(region, name, None, "disabled");
+        w.containers
+            .insert((region.to_string(), name.to_string()), o);
+    }
+
     /// The calls answered, `METHOD PATH`, in order.
     pub fn calls(&self) -> Vec<String> {
         self.world()
@@ -230,7 +370,7 @@ impl World {
         active: bool,
     ) -> Json {
         let ips = if active {
-            ips(self.instances.len() + 10)
+            self.addresses(id, self.instances.len() + 10)
         } else {
             json!([])
         };
@@ -243,6 +383,85 @@ impl World {
             "monthlyBilling": null, "planCode": format!("{flavor_name}.consumption"),
             "operationIds": [], "flavor": null, "image": null, "sshKey": null,
         })
+    }
+
+    /// An instance's addresses, the `n`th: the public network's, and one
+    /// on each private network it was made on, in its subnet's pool.
+    fn addresses(&self, id: &str, n: usize) -> Json {
+        let Some(nics) = self.nics.get(id) else {
+            return ips(n);
+        };
+        let mut out = Vec::new();
+        for nic in nics {
+            if nic.starts_with("ext-") {
+                out.extend(ips(n).as_array().cloned().unwrap_or_default());
+                continue;
+            }
+            let pool = self
+                .networks
+                .values()
+                .find(|net| {
+                    net["regions"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .any(|r| r["openstackId"] == nic.as_str())
+                })
+                .and_then(|net| self.subnets.get(net["id"].as_str().unwrap_or_default()))
+                .and_then(|subs| subs.first())
+                .and_then(|sub| sub["ipPools"][0]["start"].as_str().map(str::to_string));
+            let ip = pool
+                .and_then(|start| host_of(&start, n as u32))
+                .unwrap_or_else(|| format!("10.0.0.{n}"));
+            out.push(json!({"ip": ip, "type": "private", "version": 4,
+                            "networkId": nic, "gatewayIp": null}));
+        }
+        json!(out)
+    }
+
+    /// A status change `kind/id` makes after `build_polls` reads: at once
+    /// when it is 0.
+    fn settle(&mut self, what: String, then: Json) {
+        if self.build_polls == 0 {
+            self.settled(&what, then);
+        } else {
+            self.settling.insert(what, (self.build_polls, then));
+        }
+    }
+
+    /// A read of `kind/id`: one read nearer its next status.
+    fn read_settling(&mut self, what: &str) {
+        let Some((left, _)) = self.settling.get_mut(what) else {
+            return;
+        };
+        *left = left.saturating_sub(1);
+        if *left == 0
+            && let Some((_, then)) = self.settling.remove(what)
+        {
+            self.settled(what, then);
+        }
+    }
+
+    fn settled(&mut self, what: &str, then: Json) {
+        let (kind, id) = what.split_once('/').unwrap_or_default();
+        let slot = match kind {
+            "volume" => self.volumes.get_mut(id),
+            "network" => self.networks.get_mut(id),
+            "user" => id.parse().ok().and_then(|i: i64| self.users.get_mut(&i)),
+            _ => None,
+        };
+        let Some(o) = slot else { return };
+        if then.is_null() {
+            match kind {
+                "volume" => self.volumes.remove(id),
+                "network" => self.networks.remove(id),
+                _ => None,
+            };
+            return;
+        }
+        for (k, v) in then.as_object().into_iter().flatten() {
+            o[k] = v.clone();
+        }
     }
 
     fn flavors(region: &str) -> Json {
@@ -334,7 +553,42 @@ impl World {
                 if key.is_some_and(|k| !self.keys.contains_key(k)) {
                     return (400, json!({"message": "Invalid sshKeyId"}));
                 }
+                // `networks`: the public network's id and the private ones',
+                // in that region, as OpenStack names them.
+                let nics: Option<Vec<String>> =
+                    body.get("networks").and_then(Json::as_array).map(|ns| {
+                        ns.iter()
+                            .filter_map(|n| n["networkId"].as_str().map(str::to_string))
+                            .collect()
+                    });
+                for nic in nics.iter().flatten() {
+                    let public = *nic == format!("ext-{region}");
+                    let private = self.networks.values().find(|net| {
+                        net["regions"]
+                            .as_array()
+                            .into_iter()
+                            .flatten()
+                            .any(|r| r["openstackId"] == nic.as_str() && r["region"] == region)
+                    });
+                    if !public && private.is_none() {
+                        return (400, json!({"message": format!("Invalid networkId {nic}")}));
+                    }
+                    if let Some(net) = private
+                        && self
+                            .subnets
+                            .get(net["id"].as_str().unwrap_or_default())
+                            .is_none_or(|s| !s.iter().any(|s| s["ipPools"][0]["region"] == region))
+                    {
+                        return (
+                            400,
+                            json!({"message": format!("Network {nic} has no subnet in {region}")}),
+                        );
+                    }
+                }
                 let id = self.id("instance");
+                if let Some(nics) = nics {
+                    self.nics.insert(id.clone(), nics);
+                }
                 let active = self.build_polls == 0;
                 let o = self.instance(&id, s("name"), region, &flavor, &image, key, active);
                 if !active {
@@ -349,10 +603,10 @@ impl World {
                     *left = left.saturating_sub(1);
                     if *left == 0 {
                         self.building.remove(&id);
-                        let n = self.instances.len() + 10;
+                        let ips = self.addresses(&id, self.instances.len() + 10);
                         if let Some(o) = self.instances.get_mut(&id) {
                             o["status"] = json!("ACTIVE");
-                            o["ipAddresses"] = ips(n);
+                            o["ipAddresses"] = ips;
                         }
                     }
                 }
@@ -370,7 +624,22 @@ impl World {
             },
             ("DELETE", ["cloud", "project", _, "instance", id]) => {
                 match self.instances.remove(*id) {
-                    Some(_) => (200, Json::Null),
+                    Some(_) => {
+                        // Its volumes are detached as it goes.
+                        for v in self.volumes.values_mut() {
+                            if v["attachedTo"]
+                                .as_array()
+                                .into_iter()
+                                .flatten()
+                                .any(|x| x == *id)
+                            {
+                                v["attachedTo"] = json!([]);
+                                v["status"] = json!("available");
+                            }
+                        }
+                        self.nics.remove(*id);
+                        (200, Json::Null)
+                    }
                     None => not_found("Instance"),
                 }
             }
@@ -433,6 +702,524 @@ impl World {
                         (200, Json::Null)
                     }
                     _ => (405, json!({"message": "method"})),
+                }
+            }
+            // vRack and networks.
+            ("GET", ["cloud", "project", _, "vrack"]) => match self.no_vrack {
+                true => not_found("This vRack"),
+                false => (
+                    200,
+                    json!({"id": VRACK, "name": "vrack", "description": ""}),
+                ),
+            },
+            ("GET", ["cloud", "project", _, "network", "public"]) => {
+                (200, json!([public_network()]))
+            }
+            ("GET", ["cloud", "project", _, "network", "private"]) => (
+                200,
+                json!(self.networks.values().cloned().collect::<Vec<_>>()),
+            ),
+            ("POST", ["cloud", "project", _, "network", "private"]) => {
+                if self.no_vrack {
+                    return (
+                        400,
+                        json!({"message": "Your project is not attached to a vRack",
+                               "errorCode": "CLIENT_ERROR"}),
+                    );
+                }
+                let vlan = body.get("vlanId").and_then(Json::as_i64).unwrap_or(0);
+                if self.networks.values().any(|n| n["vlanId"] == vlan) {
+                    return (
+                        409,
+                        json!({"message": format!("vlanId {vlan} is already used")}),
+                    );
+                }
+                let regions: Vec<String> = match body.get("regions").and_then(Json::as_array) {
+                    Some(rs) => rs
+                        .iter()
+                        .filter_map(|r| r.as_str().map(str::to_string))
+                        .collect(),
+                    None => REGIONS.iter().map(|r| r.to_string()).collect(),
+                };
+                if let Some(r) = regions.iter().find(|r| !REGIONS.contains(&r.as_str())) {
+                    return (400, json!({"message": format!("Invalid region {r}")}));
+                }
+                let id = format!("{VRACK}_{vlan}");
+                let region = |r: &String, status: &str| {
+                    json!({"region": r, "status": status,
+                           "openstackId": format!("net-{vlan}-{r}")})
+                };
+                let o = json!({"id": id, "name": body["name"], "vlanId": vlan,
+                               "type": "private", "status": "BUILDING",
+                               "regions": regions.iter().map(|r| region(r, "BUILDING"))
+                                                 .collect::<Vec<_>>()});
+                self.networks.insert(id.clone(), o.clone());
+                let active: Vec<Json> = regions.iter().map(|r| region(r, "ACTIVE")).collect();
+                self.settle(
+                    format!("network/{id}"),
+                    json!({"status": "ACTIVE", "regions": active}),
+                );
+                (200, o)
+            }
+            ("GET", ["cloud", "project", _, "network", "private", id]) => {
+                self.read_settling(&format!("network/{id}"));
+                self.networks
+                    .get(*id)
+                    .cloned()
+                    .map_or_else(|| not_found("Network"), |o| (200, o))
+            }
+            ("PUT", ["cloud", "project", _, "network", "private", id]) => {
+                match self.networks.get_mut(*id) {
+                    Some(o) => {
+                        o["name"] = body["name"].clone();
+                        (200, Json::Null)
+                    }
+                    None => not_found("Network"),
+                }
+            }
+            ("POST", ["cloud", "project", _, "network", "private", id, "region"]) => {
+                let r = body["region"].as_str().unwrap_or_default().to_string();
+                if !REGIONS.contains(&r.as_str()) {
+                    return (400, json!({"message": format!("Invalid region {r}")}));
+                }
+                let Some(o) = self.networks.get_mut(*id) else {
+                    return not_found("Network");
+                };
+                let vlan = o["vlanId"].as_i64().unwrap_or(0);
+                if let Some(rs) = o["regions"].as_array_mut() {
+                    rs.push(json!({"region": r, "status": "ACTIVE",
+                                   "openstackId": format!("net-{vlan}-{r}")}));
+                }
+                (200, o.clone())
+            }
+            ("DELETE", ["cloud", "project", _, "network", "private", id]) => {
+                if !self.networks.contains_key(*id) {
+                    return not_found("Network");
+                }
+                if self.subnets.get(*id).is_some_and(|s| !s.is_empty()) {
+                    return (400, json!({"message": "The network still has subnets"}));
+                }
+                if let Some(o) = self.networks.get_mut(*id) {
+                    o["status"] = json!("DELETING");
+                }
+                self.settle(format!("network/{id}"), Json::Null);
+                (200, Json::Null)
+            }
+            ("GET", ["cloud", "project", _, "network", "private", id, "subnet"]) => {
+                match self.networks.contains_key(*id) {
+                    true => (
+                        200,
+                        json!(self.subnets.get(*id).cloned().unwrap_or_default()),
+                    ),
+                    false => not_found("Network"),
+                }
+            }
+            ("POST", ["cloud", "project", _, "network", "private", id, "subnet"]) => {
+                let Some(net) = self.networks.get(*id) else {
+                    return not_found("Network");
+                };
+                let region = body["region"].as_str().unwrap_or_default();
+                let active = net["regions"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .any(|r| r["region"] == region && r["status"] == "ACTIVE");
+                if !active {
+                    return (
+                        400,
+                        json!({"message": format!("Network {id} is not active in region {region}")}),
+                    );
+                }
+                let cidr = body["network"].as_str().unwrap_or_default();
+                let no_gw = body
+                    .get("noGateway")
+                    .and_then(Json::as_bool)
+                    .unwrap_or(false);
+                let gw = if no_gw { None } else { host_of(cidr, 1) };
+                let sid = self.id("subnet");
+                let o = json!({"id": sid, "cidr": cidr,
+                               "dhcpEnabled": body.get("dhcp").and_then(Json::as_bool).unwrap_or(false),
+                               "gatewayIp": gw,
+                               "ipPools": [{"dhcp": body["dhcp"], "start": body["start"],
+                                            "end": body["end"], "network": cidr,
+                                            "region": region}]});
+                self.subnets
+                    .entry(id.to_string())
+                    .or_default()
+                    .push(o.clone());
+                (200, o)
+            }
+            (
+                "DELETE",
+                [
+                    "cloud",
+                    "project",
+                    _,
+                    "network",
+                    "private",
+                    id,
+                    "subnet",
+                    sid,
+                ],
+            ) => {
+                let subs = self.subnets.entry(id.to_string()).or_default();
+                match subs.iter().position(|o| o["id"] == *sid) {
+                    Some(i) => {
+                        subs.remove(i);
+                        (200, Json::Null)
+                    }
+                    None => not_found("Subnet"),
+                }
+            }
+            // Users and their S3 credentials.
+            ("GET", ["cloud", "project", _, "role"]) => (
+                200,
+                json!({"roles": ROLES.iter().map(|r| role(r)).collect::<Vec<_>>(),
+                       "services": []}),
+            ),
+            ("GET", ["cloud", "project", _, "user"]) => {
+                let all: Vec<Json> = self
+                    .users
+                    .values()
+                    .map(|u| {
+                        let mut u = u.clone();
+                        u.as_object_mut().map(|m| m.remove("password"));
+                        u
+                    })
+                    .collect();
+                (200, json!(all))
+            }
+            ("POST", ["cloud", "project", _, "user"]) => {
+                let mut names: Vec<String> = body
+                    .get("roles")
+                    .and_then(Json::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|r| r.as_str().map(str::to_string))
+                    .collect();
+                names.extend(body.get("role").and_then(Json::as_str).map(str::to_string));
+                if let Some(r) = names.iter().find(|r| !ROLES.contains(&r.as_str())) {
+                    return (400, json!({"message": format!("Invalid role {r}")}));
+                }
+                self.next += 1;
+                let id = 100_000 + self.next as i64;
+                let o = json!({"id": id, "username": format!("user-{id:x}"),
+                               "description": body["description"], "status": "creating",
+                               "creationDate": "2026-10-07T00:00:00Z",
+                               "openstackId": format!("os-{id}"),
+                               "roles": names.iter().map(|r| role(r)).collect::<Vec<_>>(),
+                               "password": format!("pw-{id}")});
+                self.users.insert(id, o.clone());
+                self.settle(format!("user/{id}"), json!({"status": "ok"}));
+                (200, o)
+            }
+            (m, ["cloud", "project", _, "user", id, rest @ ..]) => {
+                let Ok(id) = id.parse::<i64>() else {
+                    return not_found("User");
+                };
+                if m == "GET" && rest.is_empty() {
+                    self.read_settling(&format!("user/{id}"));
+                }
+                let Some(u) = self.users.get(&id) else {
+                    return not_found("User");
+                };
+                let ready = u["status"] == "ok";
+                match (m, rest) {
+                    ("GET", []) => {
+                        let mut u = u.clone();
+                        u.as_object_mut().map(|m| m.remove("password"));
+                        (200, u)
+                    }
+                    ("DELETE", []) => {
+                        self.users.remove(&id);
+                        self.s3.remove(&id);
+                        (200, Json::Null)
+                    }
+                    ("PUT", ["role"]) => {
+                        let ids: Vec<&str> = body["rolesIds"]
+                            .as_array()
+                            .into_iter()
+                            .flatten()
+                            .filter_map(Json::as_str)
+                            .collect();
+                        let roles: Option<Vec<Json>> = ids
+                            .iter()
+                            .map(|i| {
+                                ROLES
+                                    .iter()
+                                    .find(|r| format!("role-{r}") == *i)
+                                    .map(|r| role(r))
+                            })
+                            .collect();
+                        let Some(roles) = roles else {
+                            return (400, json!({"message": "Invalid role id"}));
+                        };
+                        let u = self.users.get_mut(&id).expect("looked up");
+                        u["roles"] = json!(roles);
+                        (200, u.clone())
+                    }
+                    ("GET", ["s3Credentials"]) => (
+                        200,
+                        json!(
+                            self.s3
+                                .get(&id)
+                                .into_iter()
+                                .flatten()
+                                .map(|(a, _)| json!({"access": a, "userId": format!("os-{id}"),
+                                                 "tenantId": PROJECT}))
+                                .collect::<Vec<_>>()
+                        ),
+                    ),
+                    ("POST", ["s3Credentials"]) if !ready => {
+                        (400, json!({"message": format!("User {id} is not ready")}))
+                    }
+                    ("POST", ["s3Credentials"]) => {
+                        self.next += 1;
+                        let access = format!("AK{:014}", self.next);
+                        let secret = format!("sk-{id}-{}", self.next);
+                        self.s3
+                            .entry(id)
+                            .or_default()
+                            .push((access.clone(), secret.clone()));
+                        (
+                            200,
+                            json!({"access": access, "secret": secret,
+                                   "userId": format!("os-{id}"), "tenantId": PROJECT}),
+                        )
+                    }
+                    (m, ["s3Credentials", access, tail @ ..]) => {
+                        let creds = self.s3.entry(id).or_default();
+                        let Some(i) = creds.iter().position(|(a, _)| a == access) else {
+                            return not_found("Credential");
+                        };
+                        match (m, tail) {
+                            ("POST", ["secret"]) => (200, json!({"secret": creds[i].1})),
+                            ("DELETE", []) => {
+                                creds.remove(i);
+                                (200, Json::Null)
+                            }
+                            _ => (405, json!({"message": "method"})),
+                        }
+                    }
+                    _ => (404, json!({"message": format!("no route {method} {path}")})),
+                }
+            }
+            // S3 containers.
+            ("GET", ["cloud", "project", _, "region", r, "storage"]) => {
+                let all: Vec<Json> = self
+                    .containers
+                    .iter()
+                    .filter(|((cr, _), _)| cr == r)
+                    .map(|(_, c)| c.clone())
+                    .collect();
+                (200, json!(all))
+            }
+            ("POST", ["cloud", "project", _, "region", r, "storage"]) => {
+                if !REGIONS.contains(r) {
+                    return (400, json!({"message": format!("Invalid region {r}")}));
+                }
+                let name = body["name"].as_str().unwrap_or_default().to_string();
+                if self.containers.contains_key(&(r.to_string(), name.clone())) {
+                    return (
+                        409,
+                        json!({"message": format!("Container {name} already exists")}),
+                    );
+                }
+                let owner = match body.get("ownerId").and_then(Json::as_i64) {
+                    Some(o) if !self.users.contains_key(&o) => {
+                        return (400, json!({"message": format!("Invalid ownerId {o}")}));
+                    }
+                    Some(o) => o,
+                    None => match self.s3.keys().next() {
+                        Some(o) => *o,
+                        None => {
+                            return (400, json!({"message": "No S3 user found for the project"}));
+                        }
+                    },
+                };
+                let versioning = body["versioning"]["status"].as_str().unwrap_or("disabled");
+                let o = container(r, &name, Some(owner), versioning);
+                self.containers.insert((r.to_string(), name), o.clone());
+                (200, o)
+            }
+            (m, ["cloud", "project", _, "region", r, "storage", name]) => {
+                let k = (r.to_string(), name.to_string());
+                let Some(c) = self.containers.get_mut(&k) else {
+                    return not_found("Container");
+                };
+                match m {
+                    "GET" => (200, c.clone()),
+                    "PUT" => {
+                        if let Some(v) = body["versioning"]["status"].as_str() {
+                            if v == "disabled" && c["versioning"]["status"] != "disabled" {
+                                return (
+                                    400,
+                                    json!({"message": "Versioning cannot be disabled once enabled"}),
+                                );
+                            }
+                            c["versioning"]["status"] = json!(v);
+                        }
+                        (200, c.clone())
+                    }
+                    "DELETE" => {
+                        if c["objectsCount"].as_i64().unwrap_or(0) > 0 {
+                            return (409, json!({"message": "The container is not empty"}));
+                        }
+                        self.containers.remove(&k);
+                        (200, Json::Null)
+                    }
+                    _ => (405, json!({"message": "method"})),
+                }
+            }
+            // Volumes.
+            ("GET", ["cloud", "project", _, "volume"]) => {
+                let all: Vec<Json> = self
+                    .volumes
+                    .values()
+                    .filter(|v| q("region").is_none_or(|r| v["region"] == r))
+                    .cloned()
+                    .collect();
+                (200, json!(all))
+            }
+            ("POST", ["cloud", "project", _, "volume"]) => {
+                let s = |k: &str| body.get(k).and_then(Json::as_str).unwrap_or_default();
+                let region = s("region");
+                if !REGIONS.contains(&region) {
+                    return (400, json!({"message": format!("Invalid region {region}")}));
+                }
+                let typ = match s("type") {
+                    "" => "classic",
+                    t => t,
+                };
+                let types = [
+                    "classic",
+                    "classic-luks",
+                    "high-speed",
+                    "high-speed-luks",
+                    "high-speed-gen2",
+                    "high-speed-gen2-luks",
+                ];
+                if !types.contains(&typ) {
+                    return (
+                        400,
+                        json!({"message": format!("Invalid volume type {typ}")}),
+                    );
+                }
+                let size = body.get("size").and_then(Json::as_i64).unwrap_or(0);
+                if size < 1 {
+                    return (400, json!({"message": "size must be at least 1 GiB"}));
+                }
+                let image = s("imageId");
+                let images = Self::images(region);
+                if !image.is_empty()
+                    && !images
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .any(|i| i["id"] == image)
+                {
+                    return (400, json!({"message": "Invalid imageId"}));
+                }
+                let id = self.id("volume");
+                let mut o = volume(
+                    &id,
+                    s("name"),
+                    region,
+                    size,
+                    typ,
+                    s("description"),
+                    !image.is_empty(),
+                );
+                o["status"] = json!("creating");
+                self.volumes.insert(id.clone(), o.clone());
+                self.settle(format!("volume/{id}"), json!({"status": "available"}));
+                (200, o)
+            }
+            (m, ["cloud", "project", _, "volume", id, rest @ ..]) => {
+                let id = id.to_string();
+                if m == "GET" && rest.is_empty() {
+                    self.read_settling(&format!("volume/{id}"));
+                }
+                let Some(v) = self.volumes.get(&id).cloned() else {
+                    return not_found("Volume");
+                };
+                let status = v["status"].as_str().unwrap_or_default().to_string();
+                let instance = body
+                    .get("instanceId")
+                    .and_then(Json::as_str)
+                    .unwrap_or_default();
+                let refuse = |why: String| (400, json!({"message": why}));
+                match (m, rest) {
+                    ("GET", []) => (200, v),
+                    ("PUT", []) => {
+                        let o = self.volumes.get_mut(&id).expect("looked up");
+                        for k in ["name", "description"] {
+                            if let Some(x) = body.get(k) {
+                                o[k] = x.clone();
+                            }
+                        }
+                        (200, o.clone())
+                    }
+                    ("DELETE", []) if status == "in-use" => {
+                        refuse(format!("Volume {id} is attached to an instance"))
+                    }
+                    ("DELETE", []) => {
+                        self.volumes.get_mut(&id).expect("looked up")["status"] = json!("deleting");
+                        self.settle(format!("volume/{id}"), Json::Null);
+                        (200, Json::Null)
+                    }
+                    ("POST", ["attach"]) => {
+                        if status != "available" {
+                            return refuse(format!("Volume {id} is {status}, not available"));
+                        }
+                        let Some(i) = self.instances.get(instance) else {
+                            return not_found("Instance");
+                        };
+                        if i["region"] != v["region"] {
+                            return refuse("The instance is in another region".into());
+                        }
+                        let o = self.volumes.get_mut(&id).expect("looked up");
+                        o["status"] = json!("attaching");
+                        let o = o.clone();
+                        self.settle(
+                            format!("volume/{id}"),
+                            json!({"status": "in-use", "attachedTo": [instance]}),
+                        );
+                        (200, o)
+                    }
+                    ("POST", ["detach"]) => {
+                        if !v["attachedTo"]
+                            .as_array()
+                            .into_iter()
+                            .flatten()
+                            .any(|x| x == instance)
+                        {
+                            return refuse(format!("Volume {id} is not attached to {instance}"));
+                        }
+                        let o = self.volumes.get_mut(&id).expect("looked up");
+                        o["status"] = json!("detaching");
+                        let o = o.clone();
+                        self.settle(
+                            format!("volume/{id}"),
+                            json!({"status": "available", "attachedTo": []}),
+                        );
+                        (200, o)
+                    }
+                    ("POST", ["upsize"]) => {
+                        let size = body.get("size").and_then(Json::as_i64).unwrap_or(0);
+                        if size <= v["size"].as_i64().unwrap_or(0) {
+                            return refuse(
+                                "The new size must be greater than the current one".into(),
+                            );
+                        }
+                        let o = self.volumes.get_mut(&id).expect("looked up");
+                        o["status"] = json!("extending");
+                        o["size"] = json!(size);
+                        let o = o.clone();
+                        self.settle(format!("volume/{id}"), json!({"status": status}));
+                        (200, o)
+                    }
+                    _ => (404, json!({"message": format!("no route {method} {path}")})),
                 }
             }
             _ => (404, json!({"message": format!("no route {method} {path}")})),

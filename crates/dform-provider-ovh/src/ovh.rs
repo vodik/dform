@@ -36,11 +36,14 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
+mod storage;
+
 /// The provider's name, its types' namespace (R-36).
 pub const PROVIDER: &str = "ovh";
 pub const INSTANCE: &str = "ovh.instance";
 pub const SSH_KEY: &str = "ovh.ssh_key";
 pub const RECORD: &str = "ovh.domain_record";
+pub const CONTAINER: &str = "ovh.storage_container";
 pub const REGION: &str = "ovh.region";
 pub const FLAVOR: &str = "ovh.flavor";
 pub const IMAGE: &str = "ovh.image";
@@ -65,11 +68,10 @@ pub fn schema() -> Result<Schema> {
 const CREATE_WAIT: Duration = Duration::from_secs(15 * 60);
 const DELETE_WAIT: Duration = Duration::from_secs(5 * 60);
 
-/// How often an instance is polled while it is made or deleted:
+/// How often an object is polled while it is made, changed or deleted:
 /// `DFORM_OVH_POLL_MS`, else 5s.
-fn poll() -> Duration {
-    std::env::var("DFORM_OVH_POLL_MS")
-        .ok()
+fn poll_every(env: &dyn Fn(&str) -> Option<String>) -> Duration {
+    env("DFORM_OVH_POLL_MS")
         .and_then(|v| v.parse().ok())
         .map_or(Duration::from_secs(5), Duration::from_millis)
 }
@@ -83,6 +85,7 @@ enum Made {
     Instance { name: String, region: String },
     SshKey { name: String },
     Record(RecordKey),
+    Container { region: String, name: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -101,6 +104,8 @@ struct Account {
     /// dform's cache directory, where the ids of projects named by
     /// description are kept ([`resolve_project`]).
     cache: Option<std::path::PathBuf>,
+    /// How often an object is polled while it changes.
+    poll: Duration,
 }
 
 /// A configured provider.
@@ -190,6 +195,11 @@ fn need<'a>(at: &str, doc: &'a Json, k: &str) -> std::result::Result<&'a str, Fa
     }
 }
 
+/// A status as the API gives it, or `unknown`.
+fn status(o: &Json) -> String {
+    s(o, "status").unwrap_or("unknown").to_string()
+}
+
 impl Default for Ovh {
     fn default() -> Ovh {
         Ovh::new()
@@ -225,6 +235,112 @@ impl Ovh {
             .map_err(|why| anyhow!("{what}: no OVH account ({why})"))
     }
 
+    /// The account and its project, for an Apply.
+    fn project_for(&self, at: &str) -> std::result::Result<(Arc<Account>, String), Failed> {
+        self.project(at).map_err(|e| refused(at, format!("{e:#}")))
+    }
+
+    /// Poll the object at `path`, `last` as the API last answered it,
+    /// until its status is one of `done`; each status the API gives that
+    /// is not the last one's is said (R-130). A status in `failed` (an
+    /// `error`) stops it with a note: the object is kept in state, to be
+    /// replaced or deleted. Past `limit`, a note; a failed poll is asked
+    /// again.
+    #[allow(clippy::too_many_arguments)]
+    fn settle(
+        &self,
+        a: &Account,
+        at: &str,
+        path: &str,
+        mut last: Json,
+        done: &[&str],
+        failed: &[&str],
+        limit: Duration,
+        notes: &mut Vec<String>,
+        say: Say,
+    ) -> std::result::Result<Json, Failed> {
+        let start = Instant::now();
+        let mut said = status(&last);
+        say(&said, None);
+        while !done.contains(&said.as_str()) {
+            if failed.contains(&said.as_str()) {
+                notes.push(format!(
+                    "{at}: it is {said}; it is kept in state, to be replaced or deleted"
+                ));
+                break;
+            }
+            if start.elapsed() > limit {
+                notes.push(format!(
+                    "{at}: it is still {said} after {}s",
+                    limit.as_secs()
+                ));
+                break;
+            }
+            std::thread::sleep(a.poll);
+            match a.client.get_opt(path) {
+                Ok(Some(o)) => {
+                    if status(&o) != said {
+                        said = status(&o);
+                        say(&said, None);
+                    }
+                    last = o;
+                }
+                Ok(None) => {
+                    return Err(Failed::MaybeApplied(format!(
+                        "{at}: it went away while it changed"
+                    )));
+                }
+                Err(e) => say(&said, Some(&format!("a poll failed, asking again: {e:#}"))),
+            }
+        }
+        Ok(last)
+    }
+
+    /// DELETE `path` (gone already is done), then, when `wait`, poll it
+    /// until the API no longer answers it, saying each status it gives.
+    fn delete_at(
+        &self,
+        a: &Account,
+        at: &str,
+        path: &str,
+        wait: bool,
+        notes: &mut Vec<String>,
+        say: Say,
+    ) -> std::result::Result<(), Failed> {
+        match a.client.delete(path) {
+            Ok(_) => {}
+            Err(e) if e.is_not_found() => return Ok(()),
+            Err(e) => return Err(failed(at, e)),
+        }
+        let start = Instant::now();
+        let mut said = None;
+        while wait {
+            match a.client.get_opt(path) {
+                Ok(None) => break,
+                Ok(Some(o)) => {
+                    let now = status(&o);
+                    if matches!(now.as_str(), "deleted" | "DELETED") {
+                        break;
+                    }
+                    if said.as_ref() != Some(&now) {
+                        say(&now, None);
+                        said = Some(now);
+                    }
+                }
+                Err(_) => {}
+            }
+            if start.elapsed() > DELETE_WAIT {
+                notes.push(format!(
+                    "{at}: it is still being deleted after {}s",
+                    DELETE_WAIT.as_secs()
+                ));
+                break;
+            }
+            std::thread::sleep(a.poll);
+        }
+        Ok(())
+    }
+
     /// The account and its project.
     fn project(&self, what: &str) -> Result<(Arc<Account>, String)> {
         let a = self.account(what)?;
@@ -240,6 +356,18 @@ impl Ovh {
     /// Configure from `config` (dform's, with the program's `settings` the
     /// second time). The account's project id, for `expect_account`.
     pub fn configure(&self, config: &Json) -> Result<Option<String>> {
+        let env = |k: &str| std::env::var(k).ok();
+        self.configure_with(config, &env, &config::default_files())
+    }
+
+    /// `configure` with the environment `env` and the configuration files
+    /// `files` (a test's own, so no real `ovh.conf` is read).
+    pub fn configure_with(
+        &self,
+        config: &Json,
+        env: &dyn Fn(&str) -> Option<String>,
+        files: &[std::path::PathBuf],
+    ) -> Result<Option<String>> {
         let settings = config.get("settings").filter(|v| v.is_object());
         let deferred = config.get("deferred") == Some(&Json::Bool(true));
         let set = |c: Configured| {
@@ -262,12 +390,7 @@ impl Ovh {
                 ),
             }
         };
-        let env = |k: &str| std::env::var(k).ok();
-        let creds = config::resolve(
-            setting("endpoint")?.as_deref(),
-            &env,
-            &config::default_files(),
-        );
+        let creds = config::resolve(setting("endpoint")?.as_deref(), env, files);
         let creds = match (creds, settings) {
             (Ok(c), _) => c,
             // The program names the account: it cannot be reached.
@@ -297,6 +420,7 @@ impl Ovh {
                 client,
                 project,
                 cache,
+                poll: poll_every(env),
             })),
             awaiting: false,
         });
@@ -446,6 +570,10 @@ impl Ovh {
                 let a = self.account(&at)?;
                 self.read_record(&a, remote)?
             }
+            CONTAINER => {
+                let (a, p) = self.project(&at)?;
+                self.read_container(&a, &p, remote)?
+            }
             _ => bail!("{at}: the ovh provider has no type {typ}"),
         })
     }
@@ -593,6 +721,10 @@ impl Ovh {
                 typ: st("type")?,
                 target: st("target")?,
             }),
+            CONTAINER => Made::Container {
+                region: st("region")?,
+                name: st("name")?,
+            },
             _ => return None,
         })
     }
@@ -658,6 +790,11 @@ impl Ovh {
                 }
                 found
             }
+            Made::Container { region, name } => {
+                let (a, p) = self.project("find an S3 container")?;
+                self.read_container(&a, &p, &map::container_remote(region, name))?
+                    .map(|_| map::container_remote(region, name))
+            }
         })
     }
 
@@ -687,7 +824,7 @@ impl Ovh {
     ) -> std::result::Result<(String, Json, Json), Failed> {
         let made = self
             .key_of(typ, config)
-            .ok_or_else(|| refused(at, "its key (name, or zone, type and target) is not known"))?;
+            .ok_or_else(|| refused(at, "its key (what names it in the account) is not known"))?;
         // An object of the same key: this process's own (the same Create
         // sent again) is the answer; another is not taken over.
         let ours = !key.is_empty()
@@ -755,6 +892,7 @@ impl Ovh {
                 let id = o.get("id").and_then(Json::as_i64).unwrap_or(0);
                 Ok((map::record_remote(zone, id), attrs, computed))
             }
+            CONTAINER => self.create_container(at, config),
             _ => Err(refused(at, format!("the ovh provider has no type {typ}"))),
         }
     }
@@ -830,7 +968,7 @@ impl Ovh {
                 ));
                 break;
             }
-            std::thread::sleep(poll());
+            std::thread::sleep(a.poll);
             match a
                 .client
                 .get_opt(&format!("/cloud/project/{p}/instance/{}", escape(&id)))
@@ -905,6 +1043,7 @@ impl Ovh {
                     self.refresh_zone(&a, at, zone, &mut Vec::new());
                 }
             }
+            CONTAINER => self.update_container(at, remote, &now.0, config)?,
             // Nothing of an SSH key changes in place (the schema replaces it).
             _ => {}
         }
@@ -953,7 +1092,7 @@ impl Ovh {
                             ));
                             break;
                         }
-                        _ => std::thread::sleep(poll()),
+                        _ => std::thread::sleep(a.poll),
                     }
                 }
             }
@@ -985,6 +1124,11 @@ impl Ovh {
                     Err(e) => return Err(failed(at, e)),
                 }
                 self.refresh_zone(&a, at, zone, notes);
+            }
+            CONTAINER => {
+                let (a, p) = self.project_for(at)?;
+                let path = map::container_path(&p, remote);
+                self.delete_at(&a, at, &path, false, notes, say)?;
             }
             _ => return Err(refused(at, format!("the ovh provider has no type {typ}"))),
         }

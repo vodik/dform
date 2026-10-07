@@ -1,5 +1,9 @@
 # The OVHcloud provider's schema (`dform-provider-ovh`, R-44): Public
-# Cloud instances and SSH keys of one project, and DNS records of a zone.
+# Cloud instances, SSH keys, S3 containers, users, volumes and private
+# networks of one project, and DNS records of a zone. Each type is an
+# object the API gives an identity; a relationship whose state lives on
+# another object (a volume's attachment, an instance's networks, a user's
+# S3 credentials) is an attribute of that object.
 #
 #   type_attr(Type, Path, Ty, Flags).   Flags: required computed id sensitive
 #                                       nullable optional_computed force_new
@@ -54,6 +58,22 @@ type_attr("ovh.domain_record", "target", "string", ["required", "force_new"])
 type_attr("ovh.domain_record", "ttl", "int", ["optional_computed"])
 type_replace("ovh.domain_record", "either")
 
+# An S3 container's key is its region and name; only its versioning
+# changes in place.
+type_provider("ovh.storage_container", "ovh")
+type_attr("ovh.storage_container", "id", "string", ["computed", "id"])
+type_attr("ovh.storage_container", "region", "string", ["required", "force_new"])
+type_attr("ovh.storage_container", "name", "string", ["required", "force_new"])
+type_attr("ovh.storage_container", "versioning", "bool", ["optional_computed"])
+type_attr(
+  "ovh.storage_container",
+  "owner",
+  "ref(ovh.cloud_project_user)",
+  ["optional_computed", "force_new"],
+)
+type_attr("ovh.storage_container", "virtual_host", "string", ["computed"])
+type_replace("ovh.storage_container", "destroy_first")
+
 type_doc("ovh.instance", "", "A Public Cloud instance of the project.")
 type_doc(
   "ovh.instance",
@@ -104,4 +124,34 @@ type_doc(
   "ovh.domain_record",
   "ttl",
   "Seconds a resolver keeps it; 0, the zone's default, when not set. Changed in place.",
+)
+type_doc(
+  "ovh.storage_container",
+  "",
+  "An S3 object storage container of a region (the API's `/region/{r}/storage`).",
+)
+type_doc(
+  "ovh.storage_container",
+  "region",
+  "The region it is in (`BHS`, `ca-east-tor`). Changing it replaces the container.",
+)
+type_doc(
+  "ovh.storage_container",
+  "name",
+  "The container's name, unique in the region. Changing it replaces the container.",
+)
+type_doc(
+  "ovh.storage_container",
+  "versioning",
+  "Whether objects keep their versions; turned off again it is suspended. Changed in place.",
+)
+type_doc(
+  "ovh.storage_container",
+  "owner",
+  "The user that owns it (`owner = backup`); the project's first S3 user when not set. Changing it replaces the container.",
+)
+type_doc(
+  "ovh.storage_container",
+  "virtual_host",
+  "Its S3 virtual host (`NAME.s3.REGION.io.cloud.ovh.net`).",
 )

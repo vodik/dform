@@ -1,0 +1,16 @@
+{
+  "name": "lab-backups",
+  "region": "BHS",
+  "ownerId": 482913,
+  "objectsCount": 12,
+  "objectsSize": 73400320,
+  "createdAt": "2026-10-05T18:40:02Z",
+  "arn": "arn:aws:s3:::lab-backups",
+  "virtualHost": "lab-backups.s3.bhs.io.cloud.ovh.net",
+  "versioning": {"status": "suspended"},
+  "encryption": {"sseAlgorithm": "AES256"},
+  "objectLock": {"status": "disabled"},
+  "replication": {"rules": []},
+  "tags": {},
+  "objects": []
+}

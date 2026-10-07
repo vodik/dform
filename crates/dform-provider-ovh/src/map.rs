@@ -100,6 +100,48 @@ pub fn record(o: &Json) -> (Json, Json) {
     (Json::Object(attrs), computed)
 }
 
+/// An S3 container's remote id: `REGION/NAME`.
+pub fn container_remote(region: &str, name: &str) -> String {
+    format!("{region}/{name}")
+}
+
+/// The API's path of the S3 container `remote` names.
+pub fn container_path(project: &str, remote: &str) -> String {
+    let (region, name) = remote.split_once('/').unwrap_or((remote, ""));
+    format!(
+        "/cloud/project/{project}/region/{}/storage/{}",
+        crate::api::escape(region),
+        crate::api::escape(name)
+    )
+}
+
+/// An S3 container (`cloud.StorageContainer`). Its versioning is on when
+/// the API says `enabled` (off when `disabled` or `suspended`); its owner
+/// is the user's id, the reference `owner = user` names. Both are the
+/// program's when it sets them and the API's otherwise, so they are also
+/// computed.
+pub fn container(o: &Json) -> (Json, Json) {
+    let region = str_of(o, "region").unwrap_or_default();
+    let name = str_of(o, "name").unwrap_or_default();
+    let versioning = o
+        .get("versioning")
+        .and_then(|v| str_of(v, "status"))
+        .is_some_and(|s| s == "enabled");
+    let mut attrs = json!({"region": region, "name": name, "versioning": versioning});
+    let mut computed = json!({
+        "id": container_remote(region, name),
+        "versioning": versioning,
+    });
+    if let Some(owner) = o.get("ownerId").and_then(Json::as_i64) {
+        attrs["owner"] = json!(owner.to_string());
+        computed["owner"] = json!(owner.to_string());
+    }
+    if let Some(h) = str_of(o, "virtualHost") {
+        computed["virtual_host"] = json!(h);
+    }
+    (attrs, computed)
+}
+
 /// `ovh.flavor(+region, -name, -vcpus: int, -ram: bytes, -disk: bytes)`:
 /// the flavors offered in `region` (`cloud.flavor.Flavor[]`), available
 /// ones, a name once. The API counts RAM in MiB and disk in GiB, as
@@ -265,6 +307,26 @@ mod tests {
         let (apex, _) = record(&fixture("record-apex.json"));
         assert_eq!(apex.get("subdomain"), None);
         assert_eq!(apex["ttl"], 3600);
+    }
+
+    #[test]
+    fn an_s3_container() {
+        let (attrs, computed) = container(&fixture("container.json"));
+        // Suspended versioning is off.
+        assert_eq!(
+            attrs,
+            json!({"region": "BHS", "name": "lab-backups", "versioning": false,
+                   "owner": "482913"})
+        );
+        assert_eq!(computed["id"], "BHS/lab-backups");
+        assert_eq!(
+            computed["virtual_host"],
+            "lab-backups.s3.bhs.io.cloud.ovh.net"
+        );
+        assert_eq!(
+            container_path("p", "BHS/lab-backups"),
+            "/cloud/project/p/region/BHS/storage/lab-backups"
+        );
     }
 
     #[test]
