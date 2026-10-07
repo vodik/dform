@@ -168,7 +168,7 @@ fn a_component_crash_mid_apply_fails_the_action_and_resume_finishes() {
 /// naming the provider and the package, and admitted with it.
 #[test]
 fn wasi_sockets_needs_its_grant() {
-    use dform::plugin::host::{Grants, register};
+    use dform::plugin::host::Grants;
     let s = Scratch::new("host-wasm-sockets");
     // A component importing the network interface and exporting nothing:
     // admitted, it fails later, for want of the provider export.
@@ -180,16 +180,14 @@ fn wasi_sockets_needs_its_grant() {
     .unwrap();
     std::fs::write(s.path("net.wasm"), wasm).unwrap();
     let path = s.path("net.wasm");
-    let spec = path.display().to_string();
     let launch = dform_host::Launcher::Cli;
-    let start = || {
-        dform::plugin::Launch::plugin(&launch, &path)
+    let start = |grants: &Grants| {
+        dform::plugin::Launch::plugin(&launch, &path, grants)
             .err()
             .map(|e| format!("{e:#}"))
             .unwrap_or_default()
     };
-    register([(spec.clone(), Grants::none("net"))]);
-    let refused = start();
+    let refused = start(&Grants::none("net"));
     assert!(
         refused.contains("provider net imports wasi:sockets and is not granted it"),
         "{refused}"
@@ -197,8 +195,7 @@ fn wasi_sockets_needs_its_grant() {
     assert!(refused.contains("allow = [\"wasi:sockets\"]"), "{refused}");
     let mut granted = Grants::none("net");
     granted.allow.insert("wasi:sockets".into());
-    register([(spec, granted)]);
-    let admitted = start();
+    let admitted = start(&granted);
     assert!(!admitted.contains("not granted"), "{admitted}");
     assert!(admitted.contains("instantiate"), "{admitted}");
 }

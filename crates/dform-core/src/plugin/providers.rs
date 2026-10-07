@@ -91,6 +91,10 @@ pub struct Config {
     /// default. The mock's one link takes the first of its schemas' that
     /// has one.
     pub policies: BTreeMap<String, super::policy::Policy>,
+    /// What dform.toml grants each provider (`[providers.NAME] allow` and
+    /// `credentials`, R-13b), by its spec; a provider not named has none.
+    /// Passed to the launcher as each starts ([`Launch::plugin`]).
+    pub grants: BTreeMap<String, super::host::Grants>,
 }
 
 /// How a run reaches its providers: a backend (`plugin::backend`). The
@@ -99,8 +103,8 @@ pub struct Config {
 pub trait Launch {
     /// The mock provider, which plays every mock schema.
     fn mock(&self) -> Result<Link>;
-    /// The provider executable at `exe`.
-    fn plugin(&self, exe: &Path) -> Result<Link>;
+    /// The provider executable at `exe`, with what dform.toml grants it.
+    fn plugin(&self, exe: &Path, grants: &super::host::Grants) -> Result<Link>;
 }
 
 /// An object as Read, Apply or Import returns it: its configured
@@ -407,7 +411,10 @@ impl Providers {
         for (p, spec) in plugins.into_iter().zip(plugin_specs) {
             let mut link = crate::timing::time(
                 || format!("provider {} started (spawn and handshake)", p.display()),
-                || launch.plugin(&p),
+                || {
+                    let none = super::host::Grants::none_for(&p);
+                    launch.plugin(&p, cfg.grants.get(spec).unwrap_or(&none))
+                },
             )?;
             if let Some(policy) = policy_of(spec) {
                 link.set_policy(policy);

@@ -858,10 +858,20 @@ impl Server<'_> {
     }
 
     /// The full schema of `providers` (completion offers every type, not
-    /// only those the program names).
-    fn schema(&mut self, providers: &[String]) -> Option<&Schema> {
+    /// only those the program names), each started with what the dform.toml
+    /// of the workspace at `root` grants it (R-143).
+    fn schema(&mut self, root: &Path, providers: &[String]) -> Option<&Schema> {
         if !self.schemas.contains_key(providers) {
-            let s = Providers::start(self.launch, providers, &Default::default())
+            let grants = Project::find(root, self.opts.version)
+                .ok()
+                .flatten()
+                .map(|p| p.manifest.grants().into_iter().collect())
+                .unwrap_or_default();
+            let cfg = dform_core::plugin::Config {
+                grants,
+                ..Default::default()
+            };
+            let s = Providers::start(self.launch, providers, &cfg)
                 .ok()?
                 .schema()
                 .clone();
@@ -920,7 +930,7 @@ impl Server<'_> {
             Some(e) => (e.providers.clone(), Some(e.schema.clone())),
             None => (Vec::new(), None),
         };
-        let schema = match self.schema(&providers) {
+        let schema = match self.schema(&root, &providers) {
             Some(s) => s.clone(),
             None => scoped.unwrap_or_default(),
         };

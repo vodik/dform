@@ -581,7 +581,7 @@ impl Launch for Model {
         )
     }
 
-    fn plugin(&self, exe: &Path) -> anyhow::Result<Link> {
+    fn plugin(&self, exe: &Path, _: &dform::plugin::host::Grants) -> anyhow::Result<Link> {
         anyhow::bail!("the model links only the mock, not {}", exe.display())
     }
 }

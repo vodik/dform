@@ -2,15 +2,16 @@
 //! over gRPC (`dform-grpc`) with the `Host` service beside it, named in its
 //! environment; a component (`.wasm`) in the wasm host, with the same
 //! interfaces as imports (the `wasm` feature). Each is started with the
-//! grants dform.toml gives it (`plugin::host::grants_for`), and how it is
-//! hosted is recorded for `provider check` (`plugin::host::observe`).
+//! grants dform.toml gives it, as the run passes them (`Launch::plugin`),
+//! and how it is hosted is recorded on its link for `provider check`
+//! (`Link::hosting`).
 
 use crate::grpc;
 use crate::services::Services;
 use anyhow::Result;
 use dform_core::plugin::Launch;
 use dform_core::plugin::backend::{Call, CallError, Provider, Reply, Stop, Ticket};
-use dform_core::plugin::host::{self, Grants, Hosting, Manifest};
+use dform_core::plugin::host::{Grants, Hosting, Manifest};
 use dform_core::plugin::link::Link;
 use dform_core::plugin::pb;
 use dform_core::plugin::source;
@@ -71,12 +72,11 @@ impl Launch for Launcher {
         }
     }
 
-    fn plugin(&self, exe: &Path) -> Result<Link> {
-        let grants = host::grants_for(exe);
+    fn plugin(&self, exe: &Path, grants: &Grants) -> Result<Link> {
         if source::is_component(exe) {
-            return component(exe, grants);
+            return component(exe, grants.clone());
         }
-        native(exe, grants)
+        native(exe, grants.clone())
     }
 }
 
@@ -131,20 +131,17 @@ fn native(exe: &Path, grants: Grants) -> Result<Link> {
     let manifest = conn
         .manifest()?
         .map(|imports| Manifest::of(imports.iter().map(String::as_str), false));
-    let display = program.display();
-    host::observe(
-        &display,
-        Hosting {
-            host: "native",
-            manifest,
-            grants,
-        },
-    );
-    Link::start(
-        display,
+    let mut link = Link::start(
+        program.display(),
         Box::new(Native {
             conn,
             _host: served,
         }),
-    )
+    )?;
+    link.hosting = Some(Hosting {
+        host: "native",
+        manifest,
+        grants,
+    });
+    Ok(link)
 }

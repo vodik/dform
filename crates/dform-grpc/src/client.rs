@@ -324,7 +324,7 @@ impl Launch for Process {
         Conn::link(&self.mock_program()?, &Env::default())
     }
 
-    fn plugin(&self, exe: &Path) -> Result<Link> {
+    fn plugin(&self, exe: &Path, _: &dform_core::plugin::host::Grants) -> Result<Link> {
         Conn::link(&Program::exe(exe), &Env::default())
     }
 }

@@ -17,11 +17,14 @@
 //! `credentials` the credentials it may open by name ([`super::credentials`]).
 //! `dform provider check` prints both. A provider using `wasi:sockets`
 //! directly is allowed when granted, and gives up the host's TLS, retries,
-//! waits and audit for what it does there, in the open.
+//! waits and audit for what it does there, in the open. A run's grants are
+//! its dform.toml's, passed to each provider as it starts
+//! (`plugin::Config::grants`, `Launch::plugin`): two projects in one
+//! process (the language server's workspaces) each start theirs with
+//! their own (R-143).
 
-use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::collections::BTreeSet;
+use std::path::Path;
 use std::time::Duration;
 
 /// How a failed host call is handled: R-81's classes, as
@@ -312,6 +315,17 @@ impl Grants {
         }
     }
 
+    /// No grant, for the provider at `path` (one dform.toml names nowhere:
+    /// `provider check PATH` outside a project), named after its file.
+    pub fn none_for(path: &Path) -> Grants {
+        Grants::none(
+            &path
+                .file_stem()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_default(),
+        )
+    }
+
     /// Refuse a manifest that uses a grantable package this does not
     /// grant, naming the provider and the package.
     pub fn admit(&self, manifest: &Manifest) -> Result<(), String> {
@@ -389,72 +403,15 @@ impl Grants {
     }
 }
 
-/// The grants of the run's providers, by source path: dform.toml is read
-/// after the backend is chosen, so the launcher finds a provider's grants
-/// here by the path it starts ([`grants_for`]).
-static GRANTS: Mutex<BTreeMap<PathBuf, Grants>> = Mutex::new(BTreeMap::new());
-
-fn canonical(p: &Path) -> PathBuf {
-    p.canonicalize().unwrap_or_else(|_| p.to_path_buf())
-}
-
-/// Record the grants of providers by their sources (`--provider` specs,
-/// as [`crate::project::Manifest::provider_source`] gives them): a
-/// directory source is recorded as the plugin it resolves to.
-pub fn register(grants: impl IntoIterator<Item = (String, Grants)>) {
-    let mut g = GRANTS.lock().unwrap_or_else(|e| e.into_inner());
-    for (spec, grant) in grants {
-        let path = match super::source::resolve(&spec) {
-            super::source::Source::Plugin(p) => p,
-            super::source::Source::Mock(_) => continue,
-        };
-        g.insert(canonical(&path), grant);
-    }
-}
-
-/// The grants recorded for the provider at `path`; none when dform.toml
-/// names it nowhere (`provider check PATH` outside a project), named after
-/// its file.
-pub fn grants_for(path: &Path) -> Grants {
-    let g = GRANTS.lock().unwrap_or_else(|e| e.into_inner());
-    g.get(&canonical(path)).cloned().unwrap_or_else(|| {
-        Grants::none(
-            &path
-                .file_stem()
-                .map(|s| s.to_string_lossy().to_string())
-                .unwrap_or_default(),
-        )
-    })
-}
-
 /// What `provider check` prints about how a provider is hosted: which
-/// host ran it, its manifest and grants. The launcher records it for the
-/// program it started ([`observe`]).
+/// host ran it, its manifest and grants. The launcher records it on the
+/// link it started (`Link::hosting`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Hosting {
     /// `wasm` or `native`.
     pub host: &'static str,
     pub manifest: Option<Manifest>,
     pub grants: Grants,
-}
-
-static HOSTED: Mutex<BTreeMap<String, Hosting>> = Mutex::new(BTreeMap::new());
-
-/// Record how the provider `program` (a link's `program`) is hosted.
-pub fn observe(program: &str, h: Hosting) {
-    HOSTED
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .insert(program.to_string(), h);
-}
-
-/// How the provider `program` is hosted, if a launcher said.
-pub fn hosting(program: &str) -> Option<Hosting> {
-    HOSTED
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .get(program)
-        .cloned()
 }
 
 #[cfg(test)]

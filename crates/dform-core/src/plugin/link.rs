@@ -21,6 +21,8 @@ pub struct Link {
     pub capabilities: Vec<String>,
     /// What was started, for messages.
     pub program: String,
+    /// How the launcher hosted it, for `provider check` (R-13b).
+    pub hosting: Option<super::host::Hosting>,
     backend: Timed,
     /// Its timeout, retries and backoff.
     policy: Policy,
@@ -92,6 +94,7 @@ impl Link {
             capabilities: Vec::new(),
             backend: Timed::new(program.clone(), backend, policy.timeout),
             program,
+            hosting: None,
             policy,
             done: BTreeMap::new(),
             retries: Vec::new(),

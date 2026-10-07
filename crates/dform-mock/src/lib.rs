@@ -1587,7 +1587,7 @@ impl Launch for Linked {
         )
     }
 
-    fn plugin(&self, exe: &std::path::Path) -> Result<Link> {
+    fn plugin(&self, exe: &std::path::Path, _: &dform_core::plugin::host::Grants) -> Result<Link> {
         bail!(
             "provider {}: a plugin executable needs the process backend; this backend \
              links only the mock",

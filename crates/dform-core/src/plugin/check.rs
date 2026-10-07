@@ -6,8 +6,9 @@
 //! that serves its own schema (a real API's) instead of the one it is given
 //! is checked with the documents its Schema offers as `examples`; one that
 //! does neither stops after Schema, with that as the deviation. A provider
-//! a launcher hosted (`plugin::host::observe`) has `host` lines: the host,
-//! the interfaces its manifest imports, and its grants.
+//! a launcher hosted (`Link::hosting`) has `host` lines: the host, the
+//! interfaces its manifest imports, and its grants (none: a provider is
+//! checked outside any project's dform.toml).
 
 use super::backend::CallError;
 use super::link::Link;
@@ -94,7 +95,7 @@ pub fn run(launch: &dyn Launch, path: &str) -> Result<(Vec<String>, usize)> {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).with_context(|| format!("mkdir {}", dir.display()))?;
     let start = || match source::resolve(path) {
-        Source::Plugin(p) => launch.plugin(&p),
+        Source::Plugin(p) => launch.plugin(&p, &super::host::Grants::none_for(&p)),
         Source::Mock(_) => launch.mock(),
     };
     let out = suite(start, &dir);
@@ -132,7 +133,7 @@ fn suite(start: impl FnOnce() -> Result<Link>, dir: &Path) -> Result<(Vec<String
     );
     // How it is hosted (R-13b): which host ran it, what its manifest says
     // it uses, and what dform.toml grants it.
-    if let Some(h) = super::host::hosting(&conn.borrow().program) {
+    if let Some(h) = &conn.borrow().hosting {
         for l in h.grants.describe(h.manifest.as_ref()) {
             r.lines.push(format!("host  {}: {l}", h.host));
         }

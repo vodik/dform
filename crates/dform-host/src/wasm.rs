@@ -866,14 +866,11 @@ impl Drop for Wasm {
 /// The component at `path`, started with `grants` and shaken hands with.
 pub fn link(path: &Path, grants: Grants) -> Result<Link> {
     let (w, manifest) = Wasm::start(path, grants.clone())?;
-    let program = path.display().to_string();
-    h::observe(
-        &program,
-        Hosting {
-            host: "wasm",
-            manifest: Some(manifest),
-            grants,
-        },
-    );
-    Link::start(program, Box::new(w))
+    let mut link = Link::start(path.display().to_string(), Box::new(w))?;
+    link.hosting = Some(Hosting {
+        host: "wasm",
+        manifest: Some(manifest),
+        grants,
+    });
+    Ok(link)
 }

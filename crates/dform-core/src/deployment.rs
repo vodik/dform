@@ -1062,8 +1062,6 @@ impl Located {
         let lowered = l.lowered.as_ref();
         let secret_outputs = stack::secret_outputs(&outputs);
         let held = stack::held(&outputs);
-        // What dform.toml grants each provider, for the launcher (R-13b).
-        plugin::host::register(l.manifest.iter().flat_map(|m| m.grants()));
         // State is read while the providers start: one is a round trip to
         // the backend, the other processes coming up (and a schema read).
         let dep = self.dep.clone();
@@ -1089,6 +1087,9 @@ impl Located {
                         .as_ref()
                         .map(|m| m.policies())
                         .unwrap_or_default(),
+                    // What dform.toml grants each provider, for the
+                    // launcher (R-13b, R-143).
+                    grants: l.manifest.iter().flat_map(|m| m.grants()).collect(),
                     held: held.clone(),
                     worlds: outputs
                         .iter()
