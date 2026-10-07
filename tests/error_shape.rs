@@ -200,3 +200,45 @@ fn every_provider_failure_prints_the_plans_address() {
     }
     assert!(found.is_empty(), "{}", found.join("\n"));
 }
+
+/// An error outside the apply loop (a state that does not parse, a plan
+/// file that is not there or not JSON) is in the same shape: what
+/// happened, then what caused it indented under it, never anyhow's
+/// `Caused by:` list (After R-156).
+#[test]
+fn an_error_outside_apply_has_no_caused_by_list() {
+    let s = Scratch::new("error-shape-chain");
+    s.write(
+        "p.df",
+        "use fake\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\n",
+    );
+    s.write("w.state.json", "nope");
+    s.write("bad.json", "{");
+    let run = |args: &[&str]| {
+        Run::from(
+            common::dform()
+                .args(args)
+                .current_dir(&s.dir)
+                .output()
+                .unwrap(),
+        )
+        .failure()
+    };
+    for (args, said) in [
+        (
+            &["dev", "--world", "w.json", "plan", "p.df"][..],
+            "Error: parse state\n    expected ident at line 1 column 2\n",
+        ),
+        (
+            &["apply", "missing.json"][..],
+            "Error: read plan file missing.json\n    No such file or directory (os error 2)\n",
+        ),
+        (
+            &["apply", "bad.json"][..],
+            "Error: parse plan file bad.json\n    EOF while parsing an object at line 1 column 1\n",
+        ),
+    ] {
+        let r = run(args);
+        assert_eq!(r.stderr, said, "{args:?}");
+    }
+}

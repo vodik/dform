@@ -325,11 +325,32 @@ impl Diagnostics {
     }
 }
 
-/// Print an error: diagnostics through ariadne, anything else as anyhow's
-/// chain. Returns the text printed.
+/// Print an error: diagnostics through ariadne, anything else in the
+/// one shape ([`shape`]). Returns the text printed.
 pub fn report(err: &anyhow::Error, color: bool) -> String {
     match err.chain().find_map(|e| e.downcast_ref::<Diagnostics>()) {
         Some(d) => d.render(color),
-        None => format!("Error: {err:?}\n"),
+        None => format!("Error: {}\n", shape(err)),
     }
+}
+
+/// An error in the one shape every error has (R-109): what happened on
+/// its first line, then what caused it, each cause on its own lines
+/// indented under it, never anyhow's `Caused by:` list. A cause the line
+/// before already ends with (a context that says its cause) is said
+/// once.
+pub fn shape(err: &anyhow::Error) -> String {
+    let mut chain = err.chain().map(|e| e.to_string());
+    let mut out = chain.next().unwrap_or_default();
+    let mut last = out.clone();
+    for cause in chain {
+        if !last.ends_with(&cause) {
+            for line in cause.lines().filter(|l| !l.trim().is_empty()) {
+                out.push_str("\n    ");
+                out.push_str(line);
+            }
+        }
+        last = cause;
+    }
+    out
 }

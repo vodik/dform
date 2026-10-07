@@ -1550,7 +1550,11 @@ value only the master derives); several failures each get their lines,
 and the run's last line names them. A data source's failure has the
 same shape, the call as the plan says it (`ssh.read("10.0.0.5",
 "ubuntu", "/etc/rancher/k3s/k3s.yaml") failed`), why, and where it is
-written. The marks are painted as the plan paints them on a terminal:
+written. Any other error, of any command (a state that does not parse,
+a plan file that is not there), says what happened on its `Error:` line
+and what caused it on the lines under it, indented (`Error: parse
+state` / `    expected ident at line 1 column 2`), never a `Caused by:`
+list. The marks are painted as the plan paints them on a terminal:
 `+` green, `~` yellow, `-` red, `!` red, nothing else. Ctrl-C (SIGINT) or SIGTERM asks the apply to
 stop: it says `Ctrl-C: stopping after the calls in flight; Ctrl-C again
 to quit now`, starts no new change, waits for the calls in flight (each
