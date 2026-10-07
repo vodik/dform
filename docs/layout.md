@@ -13,8 +13,8 @@ config/<stack>/<key>.yaml   per-deployment settings: `set from yaml.decode(io.re
 data/<table>.csv            tables (`input p from csv.decode(io.read(...))`)
 providers/<name>/           a local provider: a plugin executable, or a
                             schema (and externs) the mock plays
-dform.state/                state: per deployment, audit logs, plan keys,
-                            cache/; gitignored (a plan key is a secret)
+dform.state/                state: per deployment, audit logs, masters,
+                            cache/; gitignored (a key file is a secret)
 ```
 
 - `dform.toml` marks the root: the nearest directory up from the working
@@ -74,8 +74,9 @@ dform.state/                state: per deployment, audit logs, plan keys,
   (`csv.decode(io.read("data/peerings.csv"))`, `set from yaml.decode(io.read("config/dform/${env}.yaml"))`),
   `file.*` externs, input relations from files, a provider's `source` and a
   trust root.
-- `dform.state/` is gitignored: each deployment's plan key (`state.key`,
-  the HMAC key of its plan files and audit log) is a secret.
+- `dform.state/` is gitignored: each deployment's master (the key file
+  `state.key` without `[secrets]`; sealed in `state.master` with it) is
+  its secrets' root (docs/reference.md "Secrets").
 
 The lints: a file that is not a stack with a `key` is an error, and so is
 a resource of a stack.

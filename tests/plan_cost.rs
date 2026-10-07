@@ -31,7 +31,8 @@ fn project(name: &str, server: &Server) -> Scratch {
         &format!(
             "[project]\nedition = \"2026\"\n\n[providers]\novh = {{ path = \"{}\" }}\n\n\
              [defaults]\nbackend = 's3(\"dform\", \"{prefix}/{{stack}}\", \
-             {{endpoint: \"{}\", region: \"us-east-1\"}})'\n",
+             {{endpoint: \"{}\", region: \"us-east-1\"}})'\n\n\
+             [secrets]\npassphrase = \"env:DFORM_TEST_PASSPHRASE\"\n",
             ovh(),
             s3().endpoint
         ),
@@ -75,6 +76,7 @@ fn dform(s: &Scratch, server: &Server, args: &[&str]) -> Run {
         .env("DFORM_S3_ACCESS_KEY_ID", "fake")
         .env("DFORM_S3_SECRET_ACCESS_KEY", "fake")
         .env("DFORM_LOG", "debug")
+        .env("DFORM_TEST_PASSPHRASE", "plan cost")
         .env_remove("OVH_CLOUD_PROJECT_SERVICE");
     for (k, v) in server.env() {
         c.env(k, v);

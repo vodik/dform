@@ -125,3 +125,77 @@ fn another_random_master_is_refused() {
     let r = run(&s, &other, &["plan"]).success();
     assert_eq!(r.summary(), "stack crud_api is up to date", "{}", r.stdout);
 }
+
+const PASS: (&str, &str) = ("DFORM_TEST_PASSPHRASE", "correct horse battery staple");
+
+/// examples/crud-api whose dform.toml keeps each master sealed under the
+/// passphrase in `DFORM_TEST_PASSPHRASE`.
+fn sealed(name: &str) -> Scratch {
+    let s = Scratch::new(name);
+    common::copy_dir(&repo().join("examples/crud-api"), &s.dir);
+    let _ = std::fs::remove_dir_all(s.path("dform.state"));
+    passphrase(&s);
+    s
+}
+
+fn passphrase(s: &Scratch) {
+    let toml = s.read("dform.toml") + "\n[secrets]\npassphrase = \"env:DFORM_TEST_PASSPHRASE\"\n";
+    s.write("dform.toml", &toml);
+}
+
+/// With `[secrets] passphrase`, the backend holds the master sealed
+/// (`state.master`: its id, the salt and the sealed bytes), never a key
+/// file; the passphrase opens it, another is refused by name.
+#[test]
+fn a_passphrase_seals_the_master() {
+    let s = sealed("custody-passphrase");
+    run(&s, &[PASS], &["apply"]).success();
+    assert!(!s.path("dform.state/crud_api/state.key").exists());
+    let record = s.json("dform.state/crud_api/state.master");
+    let state = s.json("dform.state/crud_api/state.json");
+    assert_eq!(record["id"], state["master"], "{record}");
+    let sealed = &record["passphrase"];
+    assert_eq!(sealed["kdf"], "scrypt", "{record}");
+    assert!(
+        sealed["salt"].as_str().is_some_and(|s| s.len() == 32)
+            && sealed["sealed"].as_str().is_some(),
+        "{record}"
+    );
+    let r = run(&s, &[PASS], &["plan"]).success();
+    assert_eq!(r.summary(), "stack crud_api is up to date", "{}", r.stdout);
+    let wrong = [("DFORM_TEST_PASSPHRASE", "Tr0ub4dor&3")];
+    let r = run(&s, &wrong, &["plan"]).failure();
+    assert!(
+        r.stderr
+            .contains("the passphrase from env:DFORM_TEST_PASSPHRASE does not open"),
+        "{}",
+        r.stderr
+    );
+}
+
+/// A deployment whose master is a key file keeps it until the first apply
+/// that has the passphrase: that seals it (the same master, so no derived
+/// secret changes), removes the file, and says so in the audit log.
+#[test]
+fn the_first_apply_with_the_passphrase_seals_the_key_file() {
+    let s = applied("custody-migrate");
+    let pw = password(&s);
+    let id = s.json("dform.state/crud_api/state.json")["master"].clone();
+    passphrase(&s);
+    // A plan reads the key file as it is.
+    let r = run(&s, &[PASS], &["plan"]).success();
+    assert_eq!(r.summary(), "stack crud_api is up to date", "{}", r.stdout);
+    assert!(s.path("dform.state/crud_api/state.key").exists());
+    run(&s, &[PASS], &["apply"]).success();
+    assert!(!s.path("dform.state/crud_api/state.key").exists());
+    let record = s.json("dform.state/crud_api/state.master");
+    assert_eq!(record["id"], id, "the same master: {record}");
+    assert_eq!(password(&s), pw);
+    let c = entries(&s, "custody");
+    assert!(
+        c.len() == 1 && c[0]["sealed"] == "state.key" && c[0]["id"] == id,
+        "{c:?}"
+    );
+    let r = run(&s, &[PASS], &["plan"]).success();
+    assert_eq!(r.summary(), "stack crud_api is up to date", "{}", r.stdout);
+}

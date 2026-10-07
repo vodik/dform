@@ -116,3 +116,12 @@ dform-sdk = { path = "crates/dform-sdk" }
 tonic = "0.13"
 # tests/apply_confirm.rs answers the confirmation prompt on a pty.
 expectrl = "0.9.0"
+
+# scrypt mixes a master's key from its passphrase on every run that opens
+# it (R-164): optimized in a debug build too, or each run of a test takes
+# seconds.
+[profile.dev.package.scrypt]
+opt-level = 3
+
+[profile.dev.package.salsa20]
+opt-level = 3

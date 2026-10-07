@@ -1233,6 +1233,7 @@ dependencies = [
  "rowan",
  "russh",
  "russh-sftp",
+ "scrypt",
  "semver",
  "serde",
  "serde_json",

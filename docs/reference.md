@@ -365,8 +365,8 @@ Variables a test sets (`DFORM_TEST_*`, the poll intervals) and those
 |---|---|
 | `dform.toml` | the project root: the nearest directory up from the working directory (or `-C DIR`) holding one; its providers, stacks and defaults |
 | `stacks/STACK.df` | a stack; every other `.df` file is a module, named by its path from the root |
-| `dform.state/` | at the project root, gitignored: per deployment its state, plan key and audit log, and the project's registry and cache |
-| `dform.state/STACK/state.json` | a deployment's state (`dform.state/STACK/K=V/` for a keyed stack's), with `state.key` (the plan key), `state.lock` (the apply lock), `state.audit.jsonl` (the audit log) and `outputs.json` (the published outputs) beside it |
+| `dform.state/` | at the project root, gitignored: per deployment its state, its master (sealed, or a key file) and audit log, and the project's registry and cache |
+| `dform.state/STACK/state.json` | a deployment's state (`dform.state/STACK/K=V/` for a keyed stack's), with `state.master` (its master sealed under `[secrets] passphrase`) or `state.key` (its master in the clear, without `[secrets]`), `state.lock` (the apply lock), `state.audit.jsonl` (the audit log) and `outputs.json` (the published outputs) beside it |
 | `dform.state/stacks.json` | the registry: where each applied deployment's objects are (a directory, or `s3://..`), for the stacks that read its outputs |
 | `dform.state/cache/` | what providers and trust roots fetch (the Kubernetes OpenAPI document, JWKS) |
 | `~/.config/dform/credentials/KIND/NAME` | the operator's credential `KIND:NAME` (under `$XDG_CONFIG_HOME`, or `DFORM_CREDENTIALS`) |
@@ -396,7 +396,9 @@ deployment's files in a directory. `backend = 's3("BUCKET", "PREFIX",
 (a keyed stack's deployment under `PREFIX/<k>=<v>`, unless the backend
 names the key, `s3("acme", "shop/{env}")`, and each deployment is where it
 says): the state (identity,
-in-flight and uncertain records, outputs), the plan key `state.key`, the
+in-flight and uncertain records, outputs), the master sealed
+(`state.master`; a bucket never holds the key file `state.key`: see
+"Secrets"), the
 audit log (in segments, `state.audit/000001.jsonl`, ...: see "The audit
 log"), the lease `state.lock`, the published outputs `outputs.json` and the
 controller's memo `controller.json` (and its `approvals/` drop directory
@@ -422,7 +424,7 @@ entry before, with the fence of the lease it was written under (0 on the
 local backend). The checkpoint is written before a tick's first call and
 after its last, and where an apply stops, whole: on the local backend a
 temporary file in the same directory, fsynced and renamed over
-`state.json` (never truncated and rewritten; the plan key, the stack
+`state.json` (never truncated and rewritten; the key file, the stack
 registry and a plan file likewise), in a bucket one conditional PUT. It
 records the last log entry it includes (`log`: its `seq` and `hash`, and
 in a bucket the segment it is in).
@@ -495,8 +497,8 @@ must agree on the time to well within a lease: expiry is wall-clock.
 `[defaults] lease_duration` and `lease_renewal` (`500ms`, `30s`, `2m`; 60s
 and 20s by default) set the lease; the renewal must be shorter.
 
-Before it writes to a bucket (a `plan` too, when it makes the plan key
-for a plan that needs an approval), dform checks once that the server keeps the
+Before it writes to a bucket (a `plan` too, when it makes the
+deployment's master), dform checks once that the server keeps the
 conditions (a probe object under the prefix: written with `If-None-Match:
 *`, written over with each condition, deleted) and refuses a server that
 ignores `If-Match` or `If-None-Match`, naming which; a pass is remembered
@@ -511,7 +513,7 @@ stack's prefix), and other stacks read its outputs (the registry records
 `s3://BUCKET/PREFIX/state.json` with the endpoint and region).
 
 What a plan costs over the network: its reads of the deployment's objects
-(the plan key, the audit log, the state; the state while the providers
+(the master, the audit log, the state; the state while the providers
 start), over one kept-alive connection to the backend, and no write
 unless `--out` asks for a plan file; then, per provider, one Configure
 and one Read of each object state maps, every Read sent at once, so a
@@ -524,7 +526,7 @@ on stderr for each phase of a run and each backend request and provider
 call, with the time since the run began and how long it took:
 
 ```text
-dform:    0.022s       2.2ms  s3 get s3://dform/app/state.key
+dform:    0.022s       2.2ms  s3 get s3://dform/app/state.master
 dform:    0.969s     606.7ms  provider ovh: Configure
 dform:    1.575s     605.8ms  provider ovh: Read ovh.instance lab-0
 dform:    1.612s    1611.8ms  finished
@@ -598,7 +600,7 @@ is published as pending, and its reader has a null (`?stack_output/net#c`)
 that its resources wait on until a later apply publishes the value. An
 output declared `secret(T)` is recorded and
 published as its label (`output/#k`) and the keyed digest of its value
-(`hmac-sha256:..`, the deployment's plan key), never its value (E DR-19):
+(`hmac-sha256:..`, keyed with the deployment's master), never its value (E DR-19):
 a reader gets a secret null, and using it in a public place is the static
 secret error (E0304). A secret output that is a resource's attribute
 (`output pw = db.user.main.password`, or a sensitive computed value) is
@@ -643,7 +645,8 @@ outputs. The package's other files are modules like this project's:
 
 `dform.state/` (every path below, and the registry) is at the project
 root, so the project's stacks share it wherever in the project dform runs
-from. It is gitignored: it holds each deployment's plan key.
+from. It is gitignored: it holds each deployment's master (a key file, or
+sealed).
 
 - Core state (Terraform-style address -> remote mapping, outputs): `dform.state/<stack>/state.json`
   (a keyed stack's deployment: `dform.state/<stack>/<k>=<v>/state.json`), and
@@ -773,7 +776,7 @@ Kubernetes provider"). `env.var("NAME")` is the built-in `env` provider's
 extern (`use env`), answering the
 process environment's variable as a `secret(string)`: never persisted, and
 recorded in the plan file only by its label and its value's digest keyed
-with the stack's plan key (`inputs.env`: `{"sensitive": "env.var/NAME",
+with the deployment's master (`inputs.env`: `{"sensitive": "env.var/NAME",
 "digest": ..}`, as a secret `--set`), so `apply PLAN` with the variable
 changed or unset is a stale plan naming it; an unset one is an error
 naming it. A provider's
@@ -1702,8 +1705,8 @@ object's delete the tick after its `+/-` replacement. It prints the difference
 and stops before applying anything of that tick. So with a plan file, drift
 anywhere stops the run at the boundary, where a plain `apply` reports it and
 goes on. A sensitive value is compared by its digest: HMAC-SHA256 over its
-bytes, keyed by 32 random bytes the stack keeps beside its state
-(`state.key`, made on the first `plan --out`), so a secret that changed
+bytes, keyed by the deployment's master (see "Secrets"), so a secret
+that changed
 between plan and apply is refused and the file never carries the bytes:
 
 ```bash
@@ -1903,6 +1906,42 @@ shows every derived secret changing, stderr says why (`new master
 as the first apply of a deployment does. `query` and `why` take the run's
 master as it is: they only read.
 
+### Custody: where the master is kept
+
+A master beside the state is the state's secrets in the clear: whoever
+can read the backend (every engineer who plans, CI, a copy of the
+bucket) derives every generated secret, and every one not generated yet.
+So the backend keeps a master only as dform.toml's `[secrets]` says:
+
+```toml
+[secrets]
+passphrase = "env:DFORM_PASSPHRASE"   # or "prompt": asked on the terminal
+```
+
+- With `[secrets] passphrase`, the backend holds `state.master`: the
+  master id, a salt, and the master sealed (XChaCha20-Poly1305) under a
+  key scrypt mixes from the passphrase and the salt (2^17, 8, 1, as
+  Pulumi's passphrase provider mixes its stack key). The passphrase comes
+  from a variable (`env:NAME`: fnox, `op run` or a CI secret may set it)
+  or the terminal (`prompt`, asked once per run, not echoed). Another
+  passphrase is refused by name (`the passphrase from env:DFORM_PASSPHRASE
+  does not open s3://../state.master (id 3f2a9c1b0d4e)`); a copy of the
+  bucket opens nothing without it.
+- Without it the master is the key file `state.key`, on a local backend
+  only (a directory on the operator's machine, the one-person case): a
+  new deployment in a bucket with no `[secrets]` is refused before
+  anything is made (`a new master would be the key file s3://../state.key,
+  in the bucket beside the state ..`), and a deployment whose key file is
+  already in a bucket is said on every run until it is sealed.
+
+To seal a deployment's key file, set `[secrets] passphrase` and apply
+with the passphrase: a plan reads the key file as it is; the apply
+(once confirmed) seals the same master into `state.master`, removes
+`state.key`, and writes a `custody` entry to the audit log (`sealed`,
+`into`, the master `id`, `who`). Nothing derived changes. A deployment
+whose `state.master` is sealed and whose dform.toml names no passphrase
+is refused, naming the setting.
+
 `RANDOM_MASTER` in the environment is the `random.*` input key material
 itself, for tests and the editor. It is taken where state was applied
 with it, or where nothing was applied; beside a deployment's own key file
@@ -1951,6 +1990,9 @@ The kinds:
 - `configure`: a provider configured from the program's settings at a
   tick's boundary (R-45): the tick, the provider, the settings' keys
   (never their values);
+- `custody`: the apply that sealed a deployment's key file under the
+  passphrase: `sealed` (`state.key`), `into` (`state.master`), the master
+  `id`, and `who`;
 - `master`: an apply whose master is not the one state recorded (the
   first apply, `--new-master`): `from` and `to` (the ids), its `source`,
   whether it `made` the key, and `who` (see "Secrets");
@@ -2696,7 +2738,7 @@ names the secret columns (`QueryRequest.secret`), and the provider
 answers each with where it holds the value: a SECRET null whose `held`
 names the provider, the deployment, the extern and its inputs, the
 column, and the value's keyed digest (with a key derived from the
-deployment's plan key, `digest_key` at Configure). The run has a secret
+deployment's master, `digest_key` at Configure). The run has a secret
 null, labeled `kv.password/app#2` (the extern, its inputs, the column from
 1); a sensitive field it reaches goes to the provider in the Apply
 document as that label and where it is held, and the provider reads the

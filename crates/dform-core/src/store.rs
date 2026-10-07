@@ -5,7 +5,8 @@
 //! `dform-s3`'s, the objects of a bucket under a prefix; dform-core has no
 //! network stack, and the command line wires the S3 store in.
 //!
-//! A deployment's objects: [`STATE`], [`KEY`] (its master), [`AUDIT`]
+//! A deployment's objects: [`STATE`], [`KEY`] (its master in the clear,
+//! a local backend's) or [`MASTER`] (its master sealed), [`AUDIT`]
 //! (and, where a store cannot append in place, its segments under
 //! [`AUDIT_SEGMENTS`]), [`LOCK`], [`OUTPUTS`] (what other stacks read),
 //! and the controller's [`MEMO`], [`PENDING`] and drop directory
@@ -51,6 +52,9 @@ use std::time::Duration;
 pub const STATE: &str = "state.json";
 /// The deployment's key file: its master (`custody`, `zset::file::Key`).
 pub const KEY: &str = "state.key";
+/// The deployment's master as the backend keeps it under a passphrase
+/// (`custody::Record`): its id, and the master sealed, never in the clear.
+pub const MASTER: &str = "state.master";
 /// The deployment's audit log (`audit`).
 pub const AUDIT: &str = "state.audit.jsonl";
 /// The deployment's lock: the local backend's locked file, else the lease.
@@ -120,6 +124,13 @@ pub trait Store: Send + Sync {
     /// lock is the kernel's, held by a live process and gone with it.
     fn fenced(&self) -> bool {
         true
+    }
+
+    /// Is it the machine's own disk (the local backend), where a key file
+    /// beside the state is the operator's like any file of theirs; a
+    /// bucket is shared with whoever may read the state (`custody`).
+    fn local(&self) -> bool {
+        false
     }
 
     /// Take the lease at `key` for `holder` for `ttl`; `stack` names the
@@ -655,6 +666,10 @@ impl Store for LocalStore {
 
     fn fenced(&self) -> bool {
         false
+    }
+
+    fn local(&self) -> bool {
+        true
     }
 
     /// The file `key`, locked (`flock`, the kernel's lock, which dies
@@ -1643,11 +1658,16 @@ impl Deployment {
 
     /// The deployment's master (`custody`): its key file read, one made
     /// only for a deployment with no state (`want`), or on `--new-master`.
-    pub fn master(&self, want: crate::custody::Want) -> Result<crate::custody::Master> {
+    pub fn master(
+        &self,
+        mixing: &crate::custody::Mixing,
+        want: crate::custody::Want,
+    ) -> Result<crate::custody::Master> {
         crate::custody::resolve(
             self.inner.store.as_ref(),
             &self.inner.name,
             &|| self.applied(),
+            mixing,
             want,
         )
     }

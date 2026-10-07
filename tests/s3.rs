@@ -19,6 +19,10 @@ use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
+/// The passphrase each deployment's master is sealed under (R-164): the
+/// bucket never holds a master in the clear.
+const PASSPHRASE: &str = "s3 test passphrase";
+
 /// The lease the tests' projects take: short, so an expiry is quick.
 const LEASE: Duration = Duration::from_secs(2);
 
@@ -86,7 +90,8 @@ impl<'a> Project<'a> {
         toml.push_str(&format!(
             "\n[defaults]\nbackend = 's3(\"{}\", \"{prefix}/{{stack}}\", \
              {{endpoint: \"{}\", region: \"us-east-1\"}})'\n\
-             lease_duration = \"{}ms\"\nlease_renewal = \"500ms\"\n",
+             lease_duration = \"{}ms\"\nlease_renewal = \"500ms\"\n\n\
+             [secrets]\npassphrase = \"env:DFORM_TEST_PASSPHRASE\"\n",
             t.bucket,
             t.endpoint,
             LEASE.as_millis()
@@ -131,7 +136,8 @@ impl<'a> Project<'a> {
         c.args(common::yes(args))
             .current_dir(&self.s.dir)
             .env("DFORM_S3_ACCESS_KEY_ID", &self.t.id)
-            .env("DFORM_S3_SECRET_ACCESS_KEY", &self.t.secret);
+            .env("DFORM_S3_SECRET_ACCESS_KEY", &self.t.secret)
+            .env("DFORM_TEST_PASSPHRASE", PASSPHRASE);
         for (k, v) in env {
             c.env(k, v);
         }
@@ -254,12 +260,18 @@ fn plan_and_apply_of_the_demo_keep_state_in_the_bucket() {
         let keys = p.store().list("").unwrap();
         for k in [
             "state.json",
-            "state.key",
+            "state.master",
             "state.audit/000001.jsonl",
             "state.lock",
         ] {
             assert!(keys.iter().any(|x| x == k), "{}: {k} in {keys:?}", t.what);
         }
+        // The master is sealed, never a key file in the bucket (R-164).
+        assert!(
+            !keys.iter().any(|x| x == "state.key"),
+            "{}: {keys:?}",
+            t.what
+        );
         // The audit log is in segments: an entry rewrites the last one only.
         assert!(
             !keys.iter().any(|x| x == "state.audit.jsonl"),
@@ -342,7 +354,12 @@ fn a_run_killed_between_the_log_and_the_checkpoint_recovers() {
     for t in &targets("a_run_killed_between_the_log_and_the_checkpoint_recovers") {
         let base = Project::new(t, "wal-base");
         base.run(APPLY).success();
-        let want = base.replayed();
+        // Each project's deployment has a master of its own (R-163).
+        let unmastered = |mut v: serde_json::Value| {
+            v.as_object_mut().unwrap().remove("master");
+            v
+        };
+        let want = unmastered(base.replayed());
         assert!(want.get("in_flight").is_none(), "{}: {want}", t.what);
         for at in ["logged:1", "logged:3"] {
             let p = Project::new(t, "wal-killed");
@@ -363,7 +380,7 @@ fn a_run_killed_between_the_log_and_the_checkpoint_recovers() {
                 t.what,
                 b.stdout
             );
-            assert_eq!(p.replayed(), want, "{} {at}", t.what);
+            assert_eq!(unmastered(p.replayed()), want, "{} {at}", t.what);
             assert_eq!(p.state()["fence"], 2, "{} {at}", t.what);
             let again = p.run(PLAN).success();
             assert!(again.stdout.contains("is up to date"), "{} {at}", t.what);
@@ -622,7 +639,7 @@ fn rekey_moves_an_s3_deployment_in_the_bucket() {
         );
         let moved = p.bucket("dform/env=dev");
         let keys = moved.list("").unwrap();
-        for k in ["state.json", "state.key", "state.audit/000001.jsonl"] {
+        for k in ["state.json", "state.master", "state.audit/000001.jsonl"] {
             assert!(keys.iter().any(|x| x == k), "{}: {k} in {keys:?}", t.what);
         }
         let now: serde_json::Value =
@@ -982,6 +999,113 @@ fn a_project_reads_another_projects_outputs_through_its_s3_backend() {
             "{}: {}",
             t.what,
             r.stdout
+        );
+    }
+}
+
+/// R-164: the bucket never holds a master in the clear. A new deployment
+/// in a bucket with no `[secrets] passphrase` is refused before anything
+/// is made; with one, no object in the bucket and no file under
+/// dform.state holds the master (as bytes or hex) or a derived secret, and
+/// a copy of the bucket opens nothing without the passphrase.
+#[test]
+fn the_bucket_never_holds_the_master_nor_a_derived_secret() {
+    for t in &targets("the_bucket_never_holds_the_master_nor_a_derived_secret") {
+        let setup = |s: &Scratch| {
+            s.write(
+                "stacks/p.df",
+                "use fake\nresource db.secret v {\n  password = random.password(\"db\")\n}\n",
+            );
+            s.write(
+                "providers/fake/schema.df",
+                &(std::fs::read_to_string(
+                    common::repo().join("crates/dform-mock/schemas/fake.df"),
+                )
+                .unwrap()
+                    + "type_provider(db.secret, \"fakecloud\")\n\
+                       type_attr(db.secret, \"password\", \"string\", [\"sensitive\"])\n"),
+            );
+        };
+        let p = Project::of(t, "custody", setup);
+        p.run(&["apply", "p"]).success();
+        let world: serde_json::Value =
+            serde_json::from_str(&p.s.read("dform.state/p/remote.json")).unwrap();
+        let pw = world["resources"]["db.secret::v"]["attrs"]["password"]
+            .as_str()
+            .unwrap_or_else(|| panic!("{}: {world}", t.what))
+            .to_string();
+        let store = p.bucket("p");
+        let keys = store.list("").unwrap();
+        assert!(
+            !keys.iter().any(|k| k == "state.key"),
+            "{}: {keys:?}",
+            t.what
+        );
+        let record: dform_core::custody::Record =
+            serde_json::from_slice(&store.get("state.master").unwrap().unwrap().bytes).unwrap();
+        let master = dform_core::custody::unseal(&record, PASSPHRASE.as_bytes())
+            .unwrap()
+            .expect("the passphrase opens it")
+            .bytes();
+        assert!(
+            dform_core::custody::unseal(&record, b"not the passphrase")
+                .unwrap()
+                .is_none(),
+            "{}",
+            t.what
+        );
+        let hex: String = master.iter().map(|b| format!("{b:02x}")).collect();
+        let mut files: Vec<(String, Vec<u8>)> = Vec::new();
+        for k in store.list("").unwrap() {
+            files.push((k.clone(), store.get(&k).unwrap().unwrap().bytes));
+        }
+        fn local(dir: &Path, out: &mut Vec<(String, Vec<u8>)>) {
+            for e in std::fs::read_dir(dir).unwrap() {
+                let p = e.unwrap().path();
+                if p.is_dir() {
+                    local(&p, out);
+                } else if p.file_name().is_some_and(|n| n != "remote.json") {
+                    out.push((p.display().to_string(), std::fs::read(&p).unwrap()));
+                }
+            }
+        }
+        local(&p.s.path("dform.state"), &mut files);
+        assert!(files.len() > 3, "{}: {files:?}", t.what);
+        for (at, bytes) in &files {
+            let text = String::from_utf8_lossy(bytes);
+            assert!(
+                !bytes.windows(32).any(|w| w == master) && !text.contains(&hex),
+                "{}: {at} holds the master",
+                t.what
+            );
+            assert!(!text.contains(&pw), "{}: {at} holds the password", t.what);
+        }
+
+        // Without a passphrase setting, a new deployment's master would
+        // be a key file in the bucket: refused, nothing made.
+        let bare = Project::of(t, "custody-bare", setup);
+        let toml = bare.s.read("dform.toml");
+        let toml = toml.replace(
+            "[secrets]\npassphrase = \"env:DFORM_TEST_PASSPHRASE\"\n",
+            "",
+        );
+        bare.s.write("dform.toml", &toml);
+        let r = bare.run(&["apply", "p"]).failure();
+        assert!(
+            r.stderr.contains("a new master would be the key file")
+                && r.stderr.contains("[secrets] passphrase"),
+            "{}: {}",
+            t.what,
+            r.stderr
+        );
+        assert!(
+            bare.bucket("p")
+                .list("")
+                .unwrap()
+                .iter()
+                .all(|k| k != "state.key"),
+            "{}",
+            t.what
         );
     }
 }

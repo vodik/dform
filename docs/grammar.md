@@ -1400,7 +1400,7 @@ and the next apply keeps it. `why` names a kept value's source as
 
 A memo whose candidate is a secret (the secrets pass decides, per
 literal) keeps a secret: state holds it sealed with a key derived from
-the stack's key file (`state.key`, which moves with the state), the run
+the deployment's master (docs/reference.md "Secrets"), the run
 that reads it opens it in memory, and neither the plan file nor any
 output carries it in the clear. A memo of a public candidate is kept as
 it is, readable in `state show`.

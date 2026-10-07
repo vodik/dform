@@ -102,6 +102,7 @@ impl Bucket {
             .current_dir(&s.dir)
             .env("DFORM_S3_ACCESS_KEY_ID", &self.id)
             .env("DFORM_S3_SECRET_ACCESS_KEY", &self.secret)
+            .env("DFORM_TEST_PASSPHRASE", "bootstrap")
             .output()
             .unwrap();
         Run::from(out)
@@ -187,7 +188,9 @@ fn bootstrap_handover_and_the_controller_runs_the_workload() {
     );
 
     // The workload was planned from its default place; hand it over to
-    // the bucket.
+    // the bucket, which keeps its master sealed (R-164).
+    let toml = s.read("dform.toml") + "\n[secrets]\npassphrase = \"env:DFORM_TEST_PASSPHRASE\"\n";
+    s.write("dform.toml", &toml);
     let b = Bucket::new("bootstrap");
     let to = b.term("workload");
     let r = b
@@ -219,7 +222,7 @@ fn bootstrap_handover_and_the_controller_runs_the_workload() {
         ]
     );
     let keys = b.store("workload").list("").unwrap();
-    for k in ["state.json", "state.key", "controller.json"] {
+    for k in ["state.json", "state.master", "controller.json"] {
         assert!(keys.iter().any(|x| x == k), "{k} in {keys:?}");
     }
     let world = "dform.state/workload/remote.json";

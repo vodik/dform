@@ -195,6 +195,9 @@ pub struct Manifest {
     /// `[io]`: how locations are read (R-153, R-155).
     #[serde(default)]
     pub io: IoTable,
+    /// `[secrets]`: who holds each deployment's master (R-164).
+    #[serde(default)]
+    pub secrets: SecretsTable,
     /// `[files]`, `[io]`'s name before R-155: an error naming `[io]`.
     #[serde(default)]
     files: Option<toml::Value>,
@@ -234,6 +237,18 @@ pub struct IoTable {
     /// = "bearer:git"`); the longest pattern that matches wins.
     #[serde(default)]
     pub credentials: BTreeMap<String, String>,
+}
+
+/// `[secrets]`: how each deployment's master is kept (R-164,
+/// `crate::custody`, docs/reference.md "Secrets"). Without it the master
+/// is a key file beside the state, which only a local backend may hold.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SecretsTable {
+    /// Where the passphrase the master is sealed under comes from:
+    /// `"env:NAME"` (a variable: fnox, `op run` or CI may set it) or
+    /// `"prompt"` (the terminal).
+    pub passphrase: Option<String>,
 }
 
 /// `[project]`.
@@ -500,6 +515,10 @@ impl Manifest {
                 "{}: `[files]` is `[io]` (R-155), its keys the same: `wait`, `credentials`",
                 at("[files]")
             );
+        }
+        if let Some(p) = &m.secrets.passphrase {
+            crate::custody::Passphrase::parse(p)
+                .map_err(|e| anyhow!("{} = {e}", at("[secrets] passphrase")))?;
         }
         if let Some(v) = &m.io.wait
             && crate::store::parse_duration(v).is_none_or(|d| d.is_zero())

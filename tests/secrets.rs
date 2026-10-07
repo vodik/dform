@@ -508,7 +508,7 @@ fn a_secret_output_is_stored_by_label_and_digest_never_by_value() {
         "dform.toml",
         &format!(
             "[project]\nedition = \"2026\"\n\n[defaults]\nbackend = 's3(\"dform-test\", \"secrets/{{stack}}\", \
-             {{endpoint: \"{}\", region: \"us-east-1\"}})'\n",
+             {{endpoint: \"{}\", region: \"us-east-1\"}})'\n\n[secrets]\npassphrase = \"env:DFORM_TEST_PASSPHRASE\"\n",
             server.endpoint
         ),
     );
@@ -527,6 +527,7 @@ fn a_secret_output_is_stored_by_label_and_digest_never_by_value() {
         .current_dir(&s.dir)
         .env("DFORM_S3_ACCESS_KEY_ID", "fake")
         .env("DFORM_S3_SECRET_ACCESS_KEY", "fake")
+        .env("DFORM_TEST_PASSPHRASE", "secrets")
         .output()
         .unwrap();
     common::Run::from(r).success();

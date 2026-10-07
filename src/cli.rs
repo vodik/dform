@@ -2195,6 +2195,8 @@ fn run_with(
             ..
         }
     );
+    // Who holds it: dform.toml's `[secrets]` (R-164).
+    let mixing = crate::custody::Mixing::of(located.loaded.manifest.as_ref())?;
     let master = match &cli.cmd {
         Cmd::Plan { .. } | Cmd::Apply { .. } | Cmd::Query { .. } | Cmd::Why { .. } => {
             // The key may be made now: a bucket is checked first, as for
@@ -2206,10 +2208,19 @@ fn run_with(
             ) {
                 open_s3(&root, true)(spec)?;
             }
-            let mut m = dep.master(crate::custody::Want {
-                make: writes || derives,
-                new_master,
-            })?;
+            let mut m = dep.master(
+                &mixing,
+                crate::custody::Want {
+                    make: writes || derives,
+                    new_master,
+                },
+            )?;
+            if let (true, Some(why)) = (writes || derives, &m.without) {
+                bail!(
+                    "{deployment}: this run does not hold its master ({}): {why}",
+                    m.source
+                );
+            }
             // A query or a why only reads: it says what this master
             // derives, whatever state was applied with.
             m.accept |= matches!(cli.cmd, Cmd::Query { .. } | Cmd::Why { .. });
@@ -2950,10 +2961,13 @@ fn run_with(
                             open_s3(&root, true)(spec)?;
                         }
                         loaded = dep
-                            .master(crate::custody::Want {
-                                make: true,
-                                new_master,
-                            })?
+                            .master(
+                                &mixing,
+                                crate::custody::Want {
+                                    make: true,
+                                    new_master,
+                                },
+                            )?
                             .key
                             .ok_or_else(|| anyhow::anyhow!("internal: no key made"))?;
                         &loaded
@@ -3560,6 +3574,18 @@ fn run_with(
                             }),
                         )?;
                         st.master = Some(id.clone());
+                    }
+                    // A plain key file the passphrase now seals (R-164).
+                    if crate::custody::seal_key_file(dep.store().as_ref(), &master, &mixing)? {
+                        audit.append(
+                            "custody",
+                            serde_json::json!({
+                                "sealed": store::KEY,
+                                "into": store::MASTER,
+                                "id": master.id,
+                                "who": crate::audit::who(),
+                            }),
+                        )?;
                     }
                 }
                 // Kept in state: a sensitive leaf by its digest.

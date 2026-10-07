@@ -35,10 +35,10 @@ fn killed_at(s: &Scratch, at: &str) -> common::Run {
 /// The state and the world's objects an apply leaves.
 fn outcome(s: &Scratch) -> (serde_json::Value, serde_json::Value) {
     let world = s.json("w.json");
-    (
-        common::replayed(s, "w.state.json"),
-        world["resources"].clone(),
-    )
+    // Each scratch deployment has a master of its own (R-163).
+    let mut st = common::replayed(s, "w.state.json");
+    st.as_object_mut().unwrap().remove("master");
+    (st, world["resources"].clone())
 }
 
 /// The temporaries of a write left in the directory.
