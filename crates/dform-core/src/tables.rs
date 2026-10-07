@@ -1038,8 +1038,8 @@ fn toml_value(v: toml::Value) -> Result<Value> {
 /// Each of those inputs is one the program gives (`Declared::given`).
 pub fn expand_set_from(program: Program, declared: &mut [crate::inputs::Declared]) -> Program {
     let is_doc = |l: &Lit| {
-        matches!(l, Lit::Pos(a) if parse_name(&a.pred).is_some_and(|(f, t)| {
-            f != VALUE && t.split('|').next() == Some(SET_DOC)
+        matches!(l, Lit::Pos(a) if parse_name(&a.pred).is_some_and(|(_, t)| {
+            t.split('|').next() == Some(SET_DOC)
         }))
     };
     let stack = program.stack;

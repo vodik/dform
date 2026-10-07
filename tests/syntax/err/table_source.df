@@ -1,4 +1,4 @@
-# A table's columns are typed, and never secret; its source is FORMAT(SOURCE).
+# A table's columns are typed, and never secret; its source is FORMAT(LOCATION).
 input token from csv("tokens.csv")
 input peers from xml("peers.xml")
 input pins from yaml(git("ops.git", "pins.yaml"))

@@ -7,7 +7,7 @@ input store { backup_days: int = 1 }
 input gke { static_ips: any }
 input seen from yaml("seen.yaml")[*].rows
 input peers from csv("peers.csv")
-input pinned from yaml(git("ops.git", "main", "pinned.yaml"))
+input pinned from yaml("git+https://github.com/acme/ops/pinned.yaml?ref=main")
 decl seen(a: string, b: int)
 decl peers(env: enum("dev", "prod"), name: string)
 decl pinned(name: string)

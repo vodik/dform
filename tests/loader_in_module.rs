@@ -108,7 +108,7 @@ fn a_loaders_errors_in_a_module_name_no_compiler_word() {
             "loader-args",
             "decl p(n: string)\np(n) where d in yaml(\"vendor/maps.yml\", \"x\"), \
              n = d.metadata.name\n",
-            "yaml takes one source",
+            "yaml takes one location",
         ),
         (
             "loader-own-rows",
