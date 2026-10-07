@@ -217,3 +217,71 @@ resource k8s.traefik.middleware large_upload {
         r.stdout
     );
 }
+
+/// A Kubernetes provider the environment configures (its kubeconfig, or
+/// none: offline) serves a cluster's kinds as one the program configures
+/// does (After R-126): the Middleware waits on the CRD the program makes,
+/// and with no CRD it is the error naming the one it lacks, not a type no
+/// provider declares.
+#[test]
+fn a_provider_the_environment_configures_waits_on_the_crd_too() {
+    let plan = |name: &str, prog: &str| {
+        let s = Scratch::project(name);
+        s.write("crds.yml", CRDS);
+        s.write("stacks/p.df", prog);
+        std::fs::create_dir_all(s.path("providers/k8s")).unwrap();
+        std::os::unix::fs::symlink(
+            common::exe("dform-provider-k8s"),
+            s.path("providers/k8s/dform-provider-k8s"),
+        )
+        .unwrap();
+        let out = common::dform()
+            .args(["plan", "p"])
+            .current_dir(&s.dir)
+            .env("DFORM_K8S_OFFLINE", "1")
+            .env("NO_COLOR", "1")
+            .env_remove("KUBERNETES_SERVICE_HOST")
+            .output()
+            .unwrap();
+        Run::from(out)
+    };
+    let prog = r#"
+use k8s { source = "./providers/k8s" }
+
+resource k8s.custom_resource_definition "${d.metadata.name}" = d where d in yaml.decode(io.read("crds.yml"))
+
+resource k8s.traefik.middleware large_upload {
+  metadata = { name: "large-upload", namespace: "apps" }
+  spec.buffering.maxRequestBodyBytes = 536870912
+}
+"#;
+    let r = plan("crd-wait-env", prog).success();
+    assert_eq!(
+        r.summary(),
+        "plan: 3 changes (3 create) over 2 ticks",
+        "{}",
+        r.stdout
+    );
+    assert!(
+        r.stdout.contains(
+            "\ntick 2  1 change\n  waits on  k8s.custom_resource_definition \
+             \"middlewares.traefik.io\"\n  + k8s.traefik.middleware large_upload"
+        ),
+        "{}",
+        r.stdout
+    );
+    let none = prog.replace(
+        "resource k8s.custom_resource_definition \"${d.metadata.name}\" = d where d in yaml.decode(io.read(\"crds.yml\"))\n",
+        "",
+    );
+    let r = plan("crd-wait-env-none", &none).failure();
+    assert!(
+        r.stderr.contains(
+            "stacks/p.df:5:1: k8s.traefik.middleware large_upload: the cluster has no kind \
+             traefik.middleware and nothing in the program makes its CRD \
+             (middlewares.traefik.*)"
+        ),
+        "{}",
+        r.stderr
+    );
+}

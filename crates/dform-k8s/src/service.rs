@@ -961,7 +961,21 @@ impl pb::provider_server::Provider for Service {
             None if config.get("deferred") == Some(&Json::Bool(true)) => {
                 K8s::deferred(cache, stack.as_deref()).map_err(invalid)?
             }
-            None => K8s::configure(cache).await.map_err(invalid)?,
+            // The cluster the environment names: its document fetched
+            // again until it serves the kinds dform expects (R-126).
+            None => {
+                let deadline = std::time::Instant::now() + KIND_WAIT;
+                loop {
+                    let k = K8s::configure(cache.clone()).await.map_err(invalid)?;
+                    if k.cluster.is_err()
+                        || kinds.iter().all(|t| k.derived.kinds.contains_key(*t))
+                        || std::time::Instant::now() >= deadline
+                    {
+                        break k;
+                    }
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                }
+            }
         };
         let k8s = K8s {
             stack: stack.or(k8s.stack),

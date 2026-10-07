@@ -800,10 +800,11 @@ impl Providers {
         Ok(super::credentials::Secret::new(r.value))
     }
 
-    /// The kinds of `types` (none in any schema, a provider the program
-    /// configures their namespace's) a CRD the program made defines
-    /// (R-126): each such provider is configured again with the settings it
-    /// has, told the kinds (`kinds`, which it may wait a moment for the
+    /// The kinds of `types` (none in any schema, their namespace's
+    /// provider one the program configures or a cluster's, [`Providers::reached`]) a
+    /// CRD the program made defines (R-126): each such provider is
+    /// configured again with the settings it has (none, one the environment
+    /// configures), told the kinds (`kinds`, which it may wait a moment for the
     /// cluster to serve), and what it serves now learned. Each kind is
     /// asked for once a run. Whether the schema learned any.
     pub fn relearn(&self, types: &BTreeSet<String>) -> Result<bool> {
@@ -812,10 +813,12 @@ impl Providers {
             if self.relearned.borrow().contains(t) || self.schema().knows_type(t) {
                 continue;
             }
-            let Some(i) = t.split_once('.').and_then(|(ns, _)| self.link_for(ns)) else {
+            // A provider the program configures, with the settings it
+            // has; one the environment configures, as it was.
+            let Some(i) = self.reached(t) else {
                 continue;
             };
-            if self.settings.borrow().contains_key(&i) {
+            if self.settings.borrow().contains_key(&i) || !self.by_program.contains(&i) {
                 by_link.entry(i).or_default().push(t.clone());
             }
         }
@@ -823,7 +826,9 @@ impl Providers {
         for (i, kinds) in by_link {
             self.relearned.borrow_mut().extend(kinds.iter().cloned());
             let mut config = self.bases.get(i).cloned().unwrap_or_else(|| json!({}));
-            config["settings"] = self.settings.borrow()[&i].clone();
+            if let Some(settings) = self.settings.borrow().get(&i) {
+                config["settings"] = settings.clone();
+            }
             config["kinds"] = json!(kinds);
             configure(&mut self.links[i].borrow_mut(), config)
                 .with_context(|| format!("configure provider {} again", self.names[i]))?;
@@ -1162,7 +1167,15 @@ impl Providers {
             };
             // A kind of a provider the program configures is known once
             // the provider is (R-110): the plan lists it under `later`.
-            if owner.contains_key(typ) || own.contains(typ.as_str()) || self.waits(typ).is_some() {
+            // Nor is a kind its namespace's cluster may serve once a CRD
+            // is made, however the provider is configured (R-126): the
+            // plan waits on the CRD the program makes, or names the one it
+            // lacks.
+            if owner.contains_key(typ)
+                || own.contains(typ.as_str())
+                || self.waits(typ).is_some()
+                || self.reached(typ).is_some()
+            {
                 continue;
             }
             let by = crate::schema::declaring(typ);
@@ -1566,11 +1579,21 @@ impl Providers {
         self.reached(typ).unwrap_or(self.fallback)
     }
 
-    /// The provider the program configures, its settings arrived, that
-    /// `typ`'s namespace names.
+    /// The provider `typ`'s namespace names, configured, that the program
+    /// configures (its settings arrived) or that serves a cluster's kinds
+    /// whatever configures it (its schema has the namespace's
+    /// `custom_resource_definition`: a CRD extends it, R-126).
     fn reached(&self, typ: &str) -> Option<usize> {
-        let i = self.link_for(typ.split_once('.')?.0)?;
-        (self.by_program.contains(&i) && !self.awaiting.borrow().contains(&i)).then_some(i)
+        let ns = typ.split_once('.')?.0;
+        let i = self.link_for(ns)?;
+        let cluster = || {
+            self.loaded()
+                .owner
+                .get(&format!("{ns}.custom_resource_definition"))
+                == Some(&i)
+        };
+        ((self.by_program.contains(&i) || cluster()) && !self.awaiting.borrow().contains(&i))
+            .then_some(i)
     }
 
     fn link_named(&self, name: &str) -> Option<usize> {

@@ -1063,7 +1063,10 @@ use k8s { source = "bin/dform-provider-k8s" }        # an executable
   in the program makes its CRD (middlewares.traefik.*)`. A manifest of
   CRDs is one statement (docs/grammar.md "Documents"):
   `resource k8s.custom_resource_definition "${d.metadata.name}" = d where
-  d in yaml.decode(io.read("vendor/traefik-crds.yml"))`.
+  d in yaml.decode(io.read("vendor/traefik-crds.yml"))`. This holds
+  however the provider is configured: by the program's `use k8s { .. }`,
+  or by the environment (`KUBECONFIG`, `~/.kube/config`, offline), whose
+  cluster's document is fetched again the same way.
 - With no cluster in reach, or `DFORM_K8S_OFFLINE` set, the provider is
   offline: the schema is the checked-in snapshot of Kubernetes v1.36.0's
   document (`crates/dform-k8s/openapi-snapshot.json`, every kind of the
