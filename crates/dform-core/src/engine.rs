@@ -199,14 +199,20 @@ pub fn eval_at(
 
 /// An evaluation that can be continued with more given facts: the policy
 /// pass (E §2.8), which hands the plan's deformation back to the program.
-/// Only the strata from the first one that reads those facts are
-/// evaluated again, over a copy of the store (indexes included) as it was
-/// before that stratum.
+/// The rules that read those facts, and those that read what they derive,
+/// run after every other rule (their strata in order, R-123), so the
+/// policy pass evaluates only them again, over a copy of the store
+/// (indexes included) as the others left it. A program where that is not
+/// sound (one of them contributes to an attribute, or a rule reads
+/// `stuck/4`) runs the strata from the first such rule's again instead.
 pub struct Resumable {
     c: Compiled,
-    /// The first stratum a rule reading a later predicate is in.
+    /// The first stratum a rule evaluated again is in.
     at: usize,
     state: State,
+    /// The rules evaluated again, by index: those reading the later
+    /// predicates, and their readers; `None`: every rule from `at`.
+    again: Option<Vec<bool>>,
 }
 
 /// `eval`, keeping what `Resumable::with` needs to evaluate again with
@@ -218,28 +224,85 @@ pub fn eval_resumable(
     later: &[&str],
 ) -> Result<(EvalResult, Vec<String>, Resumable)> {
     let (c, mut st) = start(program, extra_facts, None)?;
-    let reads_later = |body: &[Lit]| {
-        body.iter().any(|l| match l {
-            Lit::Pos(a) | Lit::Not(a) => later.contains(&a.pred.as_str()),
-            _ => false,
-        })
+    let again = reading(&c, later);
+    let first = |of: &dyn Fn(usize) -> bool| {
+        (0..c.rules.len())
+            .filter(|&i| of(i))
+            .filter_map(|i| c.rule_strata[i].first().copied())
+            .min()
+            .unwrap_or(c.fixes.len())
     };
-    let at = (0..c.rules.len())
-        .filter(|&i| reads_later(&c.rules[i].body))
-        .filter_map(|i| c.rule_strata[i].first().copied())
-        .min()
-        .unwrap_or(c.fixes.len());
-    run_strata(&c, &mut st, 0..at)?;
-    let state = st.clone();
-    run(&c, &mut st, at)?;
+    let (at, state) = match &again {
+        Some(again) => {
+            let rest: Vec<bool> = again.iter().map(|a| !a).collect();
+            run_only(&c, &mut st, 0, Some(&rest))?;
+            (first(&|i| again[i]), st.clone())
+        }
+        None => {
+            let reads_later = |body: &[Lit]| {
+                body.iter().any(|l| match l {
+                    Lit::Pos(a) | Lit::Not(a) => later.contains(&a.pred.as_str()),
+                    _ => false,
+                })
+            };
+            let at = first(&|i| reads_later(&c.rules[i].body));
+            run_strata(&c, &mut st, 0..at, None)?;
+            (at, st.clone())
+        }
+    };
+    run_only(&c, &mut st, at, again.as_deref())?;
     let (res, violations) = finish(&c, st)?;
-    Ok((res, violations, Resumable { c, at, state }))
+    Ok((
+        res,
+        violations,
+        Resumable {
+            c,
+            at,
+            state,
+            again,
+        },
+    ))
+}
+
+/// The rules that read a predicate of `later`, or one such a rule
+/// derives, by index ([`Resumable`]); `None` when evaluating them after
+/// the others is not the same evaluation: one contributes to an
+/// attribute (the aggregate the others read), or a rule reads `stuck/4`,
+/// which every rule's stuck instances make.
+fn reading(c: &Compiled, later: &[&str]) -> Option<Vec<bool>> {
+    if c.stuck_at.is_some() {
+        return None;
+    }
+    let mut preds: BTreeSet<&str> = later.iter().copied().collect();
+    let mut again = vec![false; c.rules.len()];
+    loop {
+        let mut grew = false;
+        for (i, r) in c.rules.iter().enumerate() {
+            let reads = r.body.iter().any(|l| match l {
+                Lit::Pos(a) | Lit::Not(a) => preds.contains(a.pred.as_str()),
+                _ => false,
+            });
+            if again[i] || !reads {
+                continue;
+            }
+            if r.head.pred == "arg" {
+                return None;
+            }
+            again[i] = true;
+            grew |= preds.insert(r.head.pred.as_str());
+        }
+        if !grew {
+            break;
+        }
+    }
+    Some(again)
 }
 
 impl Resumable {
     /// The evaluation with `more` given facts as well: the same result as
     /// `eval` with `more` appended to the given facts, except that their
-    /// circuit nodes come after those of the strata below the first reader.
+    /// circuit nodes, and those of the rules evaluated again, come after
+    /// the others'.
     pub fn with(&self, more: &[Atom]) -> Result<(EvalResult, Vec<String>)> {
         self.with_at(more, None)
     }
@@ -252,7 +315,7 @@ impl Resumable {
             let leaf = given_leaf(&g, &self.c.externs, tick);
             st.prov.given(g, leaf);
         }
-        run(&self.c, &mut st, self.at)?;
+        run_only(&self.c, &mut st, self.at, self.again.as_deref())?;
         finish(&self.c, st)
     }
 }
@@ -445,7 +508,12 @@ fn start(
 /// Evaluate every stratum from `from`, then collapse what is left of the
 /// attribute aggregate.
 fn run(c: &Compiled, st: &mut State, from: usize) -> Result<()> {
-    run_strata(c, st, from..c.fixes.len())?;
+    run_only(c, st, from, None)
+}
+
+/// [`run`], only the rules `only` marks (`None`: every rule).
+fn run_only(c: &Compiled, st: &mut State, from: usize, only: Option<&[bool]>) -> Result<()> {
+    run_strata(c, st, from..c.fixes.len(), only)?;
     let State {
         prov,
         origins,
@@ -459,8 +527,14 @@ fn run(c: &Compiled, st: &mut State, from: usize) -> Result<()> {
     attrs.check_complete()
 }
 
-/// Evaluate strata `range` in order.
-fn run_strata(c: &Compiled, st: &mut State, range: std::ops::Range<usize>) -> Result<()> {
+/// Evaluate strata `range` in order, only the rules `only` marks (`None`:
+/// every rule).
+fn run_strata(
+    c: &Compiled,
+    st: &mut State,
+    range: std::ops::Range<usize>,
+    only: Option<&[bool]>,
+) -> Result<()> {
     let State {
         prov,
         origins,
@@ -472,7 +546,11 @@ fn run_strata(c: &Compiled, st: &mut State, range: std::ops::Range<usize>) -> Re
     let known: &RefCell<stuck::Known> = known;
     let (rules, plans) = (&c.rules, &c.plans);
     for s in range {
-        let fix = &c.fixes[s];
+        let mut fix = std::borrow::Cow::Borrowed(&c.fixes[s]);
+        if let Some(only) = only {
+            fix.to_mut().rules.retain(|&i| only[i]);
+        }
+        let fix = &*fix;
         // Attribute groups whose contributors all sit below this stratum
         // are complete: collapse them before any rule here reads them.
         let ready = attrs.emit_ready(s, prov, origins, &known.borrow(), c.sigma)?;
@@ -5333,6 +5411,52 @@ mod tests {
         let (r, _) = resumable.with(&[later]).unwrap();
         assert_eq!(r.stuck.len(), 1, "{:?}", r.stuck);
         assert_eq!(facts_of(&r, "strict").len(), 1);
+    }
+
+    /// The policy pass evaluates again only the rules that read its facts
+    /// and those that read what they derive (After R-123): the others ran
+    /// once, and the result is one evaluation's with every fact given.
+    #[test]
+    fn a_resumed_evaluation_runs_only_the_readers_of_its_facts_again() {
+        let program = crate::parser::parse_program(
+            r#"decl later(a)
+               decl base(a)
+               decl quiet(a)
+               decl loud(a)
+               decl loudest(a)
+               base(x) where x in [1, 2, 3]
+               quiet(x) where base(x), not later(x)
+               loud(x) where later(x), base(x)
+               loudest(x) where loud(x), x > 1
+               deny "quiet three" where quiet(3)"#,
+        )
+        .unwrap();
+        let (first, violations, resumable) = eval_resumable(&program, &[], &["later"]).unwrap();
+        assert_eq!(facts_of(&first, "quiet").len(), 3);
+        assert_eq!(violations.len(), 1);
+        let again: Vec<String> = resumable
+            .again
+            .as_ref()
+            .expect("split")
+            .iter()
+            .zip(resumable.c.rules.iter())
+            .filter(|(a, _)| **a)
+            .map(|(_, r)| r.head.pred.clone())
+            .collect();
+        assert_eq!(again, ["quiet", "loud", "loudest", "deny"]);
+        let later = |n: i64| Atom {
+            pred: "later".into(),
+            args: vec![Term::Val(Value::Int(n))],
+            record: None,
+            span: Default::default(),
+        };
+        let more = [later(2), later(3)];
+        let (r, violations) = resumable.with(&more).unwrap();
+        let (whole, whole_violations) = eval(&program, &more).unwrap();
+        assert_eq!(r.facts, whole.facts);
+        assert_eq!(violations, whole_violations);
+        assert!(violations.is_empty());
+        assert_eq!(facts_of(&r, "loudest").len(), 2);
     }
 
     /// The operator table (`functions::OPERATORS`, docs/grammar.md) is
