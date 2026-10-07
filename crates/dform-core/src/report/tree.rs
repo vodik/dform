@@ -515,8 +515,13 @@ impl Surface<'_, '_> {
                 format!("{} = {}", cell(t, a, p), r.surface(v))
             }
             ("arg", [Value::Str(t), Value::Str(a), Value::Str(p), v, rank]) => {
-                if let Some((p, v)) = self.element(t, p, v) {
-                    return format!("{} = {}{}", cell(t, a, &p), r.surface(v), rank_text(rank));
+                if let Some((p, content)) = self.element(t, p, v) {
+                    return format!(
+                        "{} = {}{}",
+                        cell(t, a, &p),
+                        self.content_text(v, content),
+                        rank_text(rank)
+                    );
                 }
                 format!("{} = {}{}", cell(t, a, p), r.surface(v), rank_text(rank))
             }
@@ -557,8 +562,8 @@ impl Surface<'_, '_> {
     fn contribution_text(&self, f: &Fact) -> String {
         match f.args.as_slice() {
             [Value::Str(t), _, Value::Str(p), v, rank] if f.pred == "arg" => {
-                if let Some((p, v)) = self.element(t, p, v) {
-                    return format!("{p} = {}{}", self.p.redact.surface(v), rank_text(rank));
+                if let Some((p, content)) = self.element(t, p, v) {
+                    return format!("{p} = {}{}", self.content_text(v, content), rank_text(rank));
                 }
                 format!("{}{}", self.p.redact.surface(v), rank_text(rank))
             }
@@ -568,6 +573,16 @@ impl Surface<'_, '_> {
             // A refinement is a check on the value, not a contribution.
             [.., Value::Str(c)] if is_check(f) => format!("check {c}"),
             _ => self.fact_text(f),
+        }
+    }
+
+    /// An element write's content: `(sensitive)` when the write is a
+    /// secret's and the content is no secret by itself (R-124 amendment 2).
+    fn content_text(&self, write: &Value, content: &Value) -> String {
+        let r = self.p.redact;
+        match r.is_secret(write) && !r.is_secret(content) {
+            true => "(sensitive)".into(),
+            false => r.surface(content),
         }
     }
 
@@ -1761,7 +1776,15 @@ fn winner_chain(
         if let (Some(site), Some(v)) = (site_of(s, c, l, depth + 1), v) {
             let r = rank_of(f).1;
             w.lost.push(Step {
-                expr: s.p.redact.text(&s.p.redact.surface(&v)),
+                expr: match f.args.get(3) {
+                    Some(whole) => super::surface_in(
+                        s.p.redact,
+                        whole,
+                        focus.map(|f| f.keys.as_slice()).unwrap_or_default(),
+                        &v,
+                    ),
+                    None => s.p.redact.surface(&v),
+                },
                 at: place(&site),
                 with: Vec::new(),
                 rank: (r != "normal").then(|| r.to_string()),
@@ -1845,9 +1868,34 @@ fn value_chain(
             })
             .flatten();
     }
+    // The value is a secret's, or a part of one: its expression says no
+    // literal (R-124 amendment 2).
+    let secret = match (value, fact.pred.as_str(), fact.args.get(3)) {
+        (Some(v), "arg" | "attr", Some(whole)) => {
+            s.p.redact.is_secret(v)
+                || super::surface_in(
+                    s.p.redact,
+                    whole,
+                    focus.map(|f| f.keys.as_slice()).unwrap_or_default(),
+                    v,
+                ) == "(sensitive)"
+        }
+        (Some(v), ..) => s.p.redact.is_secret(v),
+        _ => false,
+    };
     let expr = match (&rhs, value) {
+        (Some(r), _) if secret => super::masked(r),
         (Some(r), _) => r.clone(),
-        (None, Some(v)) => s.p.redact.text(&s.p.redact.surface(v)),
+        // A plain leaf of a secret object is `(sensitive)` too.
+        (None, Some(v)) => match (fact.pred.as_str(), fact.args.get(3)) {
+            ("arg" | "attr", Some(whole)) => super::surface_in(
+                s.p.redact,
+                whole,
+                focus.map(|f| f.keys.as_slice()).unwrap_or_default(),
+                v,
+            ),
+            _ => s.p.redact.surface(v),
+        },
         (None, None) => own.statement.clone(),
     };
     w.out.push(Step {

@@ -3556,6 +3556,16 @@ fn why_chain(
             chain
         };
         let surface = |v: &Value| printer.redact.surface(v);
+        // A plain leaf of a secret object is `(sensitive)` (R-124
+        // amendment 2): its value is no secret elsewhere.
+        let whole = match f.args.get(3) {
+            Some(Term::Val(w)) => w,
+            _ => v,
+        };
+        let hidden = |keys: &[String], leaf: &Value| {
+            !printer.redact.is_secret(leaf)
+                && report::surface_in(printer.redact, whole, keys, leaf) == "(sensitive)"
+        };
         for g in report::fold::fold(&paths, &writers) {
             let laid = |v: &Value| {
                 crate::fmt::value::Tree::of(v, &|v| {
@@ -3570,6 +3580,7 @@ fn why_chain(
                 // A list is laid out as a fold is.
                 if matches!(leaf, Value::List(xs) if !xs.is_empty())
                     && !printer.redact.is_secret(leaf)
+                    && !hidden(keys, leaf)
                 {
                     items.push(report::ChainItem {
                         head: format!("{} = ", printed(&paths[*i])),
@@ -3579,7 +3590,10 @@ fn why_chain(
                     });
                     continue;
                 }
-                let shown = surface(leaf);
+                let shown = match hidden(keys, leaf) {
+                    true => "(sensitive)".to_string(),
+                    false => surface(leaf),
+                };
                 items.push(report::ChainItem {
                     head: format!("{} = {shown}", printed(&paths[*i])),
                     shown,
@@ -3588,8 +3602,13 @@ fn why_chain(
                 });
                 continue;
             }
-            let values: Vec<crate::fmt::value::Tree> =
-                found.iter().map(|(_, leaf)| laid(leaf)).collect();
+            let values: Vec<crate::fmt::value::Tree> = found
+                .iter()
+                .map(|(keys, leaf)| match hidden(keys, leaf) {
+                    true => crate::fmt::value::Tree::Leaf("(sensitive)".into()),
+                    false => laid(leaf),
+                })
+                .collect();
             let w = writers[g.leaves[0]].expect("a fold has its writer");
             // The part of the value the fold prints, as a chain's step
             // that is the literal itself says it.

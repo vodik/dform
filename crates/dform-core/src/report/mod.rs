@@ -250,6 +250,72 @@ pub fn shown(v: Option<&Json>, sensitive: bool, schema: &Schema, r: &Redactor) -
     }
 }
 
+/// `v`, the part of `whole` at `keys`, as `why` and a chain print it: a
+/// plain leaf of a secret object (`data.user = "synapse"` in a Secret's
+/// data, a literal written into a part a secret is written to) is
+/// `(sensitive)`, though its value is no secret elsewhere; a secret by its
+/// label; a value not known yet, and any other, as the program writes it
+/// (R-124 amendment 2, R-128).
+pub fn surface_in(r: &Redactor, whole: &Value, keys: &[String], v: &Value) -> String {
+    let mut at = Some(whole);
+    let mut hidden = false;
+    for k in keys {
+        let Some(x) = at else { break };
+        hidden |= r.is_secret(x);
+        at = match x {
+            Value::Obj(m) => m.get(k),
+            _ => None,
+        };
+    }
+    // A value not known yet is the reference it is, as the plan says it.
+    match hidden && !r.is_secret(v) && !matches!(v, Value::Null { .. }) {
+        true => "(sensitive)".into(),
+        false => r.surface(v),
+    }
+}
+
+/// Expression `e` as written where its value is a secret's (R-124
+/// amendment 2): a literal is `(sensitive)`; in one that reads something,
+/// each string literal outside a call's arguments (`{ user: "synapse",
+/// password: random.password("db") }` says `{ user: (sensitive),
+/// password: random.password("db") }`).
+pub fn masked(e: &str) -> String {
+    if !reads(e) {
+        return "(sensitive)".into();
+    }
+    let mut out = String::new();
+    let mut open: Vec<char> = Vec::new();
+    let mut cs = e.chars().peekable();
+    while let Some(c) = cs.next() {
+        match c {
+            '(' | '[' | '{' => open.push(c),
+            ')' | ']' | '}' => {
+                open.pop();
+            }
+            '"' => {
+                let mut lit = String::from('"');
+                let mut esc = false;
+                for d in cs.by_ref() {
+                    lit.push(d);
+                    match d {
+                        '\\' if !esc => esc = true,
+                        '"' if !esc => break,
+                        _ => esc = false,
+                    }
+                }
+                match open.last() == Some(&'(') {
+                    true => out.push_str(&lit),
+                    false => out.push_str("(sensitive)"),
+                }
+                continue;
+            }
+            _ => {}
+        }
+        out.push(c);
+    }
+    out
+}
+
 /// Redact a fact store value: [`Redactor::json`], one side of a line.
 pub fn shown_value(v: &Value, r: &Redactor) -> Shown {
     match r.json(v) {
@@ -2620,6 +2686,39 @@ fn attr_text(d: &Deformation, l: &Line, s: &Site, why: Why) -> Vec<String> {
     if matches!(d.kind, ActionKind::Delete | ActionKind::DeleteDeposed) {
         return vec![];
     }
+    let texts = attr_texts(d, l, s, why);
+    // An expression written into a secret says no literal (R-124
+    // amendment 2).
+    match (&l.after, &l.before) {
+        (Shown::Sensitive(_), _) | (_, Shown::Sensitive(_)) => {
+            texts.iter().map(|t| masked_text(t)).collect()
+        }
+        _ => texts,
+    }
+}
+
+/// A site column's text with its expression [`masked`]: the part before
+/// three spaces (`EXPR   FILE:LINE`), or all of it when it is no place.
+fn masked_text(t: &str) -> String {
+    let place = |x: &str| {
+        x.trim()
+            .rsplit_once(':')
+            .is_some_and(|(_, n)| n.chars().all(|c| c.is_ascii_digit()))
+    };
+    match t.split_once("   ") {
+        Some((e, rest)) => format!("{}   {rest}", masked(e)),
+        None if place(t)
+            || t.trim().is_empty()
+            || t.starts_with('@')
+            || t.starts_with("schema default") =>
+        {
+            t.to_string()
+        }
+        None => masked(t),
+    }
+}
+
+fn attr_texts(d: &Deformation, l: &Line, s: &Site, why: Why) -> Vec<String> {
     let own = d.site.as_ref().is_some_and(|h| match (&h.stmt, &s.stmt) {
         (Some((hf, first)), Some((sf, line))) => {
             hf == sf && (first == line || (first..=&h.last).contains(&line))

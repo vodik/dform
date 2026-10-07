@@ -164,3 +164,39 @@ fn a_placeholder_null_is_no_write_beaten() {
     );
     assert!(!full.contains(" over ?"), "{full}");
 }
+
+/// A plain value written into a secret object is no secret elsewhere,
+/// but `why` and the `-vv` chain say it `(sensitive)` there, as the plan
+/// does, and say no literal of the expression that wrote it (R-124
+/// amendment 2).
+#[test]
+fn a_plain_leaf_of_a_secret_object_is_sensitive() {
+    let s = Scratch::project("fold-secret");
+    s.write(
+        "dform.toml",
+        "[project]\nedition = \"2026\"\n\n[providers]\nk8s = \"k8s\"\n",
+    );
+    s.write(
+        "main.df",
+        "use k8s\n\nresource k8s.secret creds {\n  metadata.name = \"creds\"\n  \
+         stringData = { user: \"synapse\", password: random.password(\"db\") }\n}\n",
+    );
+    let full = run(&s, &["plan", "-vv", "main"]);
+    let why = run(&s, &["why", "k8s.secret creds", "main"]);
+    let leaf = run(&s, &["why", "creds.stringData.user", "main"]);
+    for out in [&full, &why, &leaf] {
+        assert!(!out.contains("synapse"), "{out}");
+    }
+    assert!(
+        why.contains("  stringData = { password: (sensitive k8s.secret creds.stringData.password), user: (sensitive) }\n"),
+        "{why}"
+    );
+    assert!(
+        full.contains("{ user: (sensitive), password: random.password(\"db\") }"),
+        "{full}"
+    );
+    assert_eq!(
+        leaf,
+        "k8s.secret creds.stringData.user = (sensitive)  main.df:5\n"
+    );
+}
