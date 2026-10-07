@@ -510,11 +510,14 @@ against the stack's trust root: `apply --approval FILE`.
 
 **Providers.** A provider is a process dform starts and speaks gRPC to,
 or a wasm component behind `--features wasm`; HTTP, SSH and git are the
-host's, with credentials granted by name in `dform.toml`. Kubernetes
-(its schema from the cluster's OpenAPI document), OVH and Postgres are
-real; the fake cloud and the AWS- and Google-shaped mocks run the
+host's, with credentials granted by name in `dform.toml`. Three are
+real: Kubernetes (its schema from the cluster's OpenAPI document), OVH,
+and Postgres (`postgres.role`, `postgres.database`, configured from a
+connection; a password rotation is one `ALTER ROLE` with a SCRAM
+verifier). The fake cloud and the AWS- and Google-shaped mocks run the
 examples. `dform provider check` runs the conformance suite;
-`docs/providers.md` is the protocol and the SDK.
+`docs/providers.md` is the protocol and the SDK, `docs/providers/` each
+provider.
 
 **The editor.** `dform lsp` gives diagnostics, hover with each term's
 value for a deployment and who wrote it, completion, references, rename,
