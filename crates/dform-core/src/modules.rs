@@ -1215,7 +1215,7 @@ fn module_stmts(scope: &str, iface: &Interface, body: Vec<Stmt>) -> Vec<Stmt> {
         // the copy itself (`""`), which scoping makes its own name.
         if matches!(&decl.ty, Some(TypeExpr::Name(t)) if t == "addr") {
             value = Term::Func {
-                name: "scoped".into(),
+                name: crate::ir::SCOPED.into(),
                 args: vec![str_term(""), value],
             };
         }
@@ -1244,7 +1244,7 @@ fn rows_of(o: &OutputDecl) -> Stmt {
         .zip(&refs)
         .map(|(v, r)| match r {
             true => Term::Func {
-                name: "scoped".into(),
+                name: crate::ir::SCOPED.into(),
                 args: vec![str_term(""), v.clone()],
             },
             false => v.clone(),
@@ -1812,7 +1812,7 @@ fn prefix_scope(scope: &str, inner: Term) -> Term {
         Term::Val(Value::Str(s)) => str_term(&join_scope(scope, &s)),
         Term::Func { ref name, .. } if name == ABSOLUTE => inner,
         t => Term::Func {
-            name: "format".into(),
+            name: crate::ir::FORMAT.into(),
             args: vec![str_term(&format!("{scope}.%s")), t],
         },
     }
@@ -1832,13 +1832,13 @@ fn rewrite_term(term: Term, sc: Sc) -> Term {
             body: body.into_iter().map(|l| rewrite_lit(l, sc)).collect(),
         },
         // A name a copy inside this one scoped: its scope is relative.
-        Term::Func { name, mut args } if name == "scoped" && args.len() == 2 => {
+        Term::Func { name, mut args } if name == crate::ir::SCOPED && args.len() == 2 => {
             args[0] = prefix_scope(sc.name, args[0].clone());
             args[1] = rewrite_term(args[1].clone(), sc);
             Term::Func { name, args }
         }
         Term::Func { name, args } => {
-            let is_ref = name == "ref" && args.len() == 3;
+            let is_ref = name == crate::ir::REF && args.len() == 3;
             let args = args
                 .into_iter()
                 .enumerate()
@@ -1860,12 +1860,12 @@ fn rewrite_term(term: Term, sc: Sc) -> Term {
 /// its own: a variable ranges over every resource its user sees.
 fn scoped_term(sc: Sc, name: Term) -> Term {
     match name {
-        Term::Func { name: ref f, .. } if f == "scoped" => rewrite_term(name, sc),
+        Term::Func { name: ref f, .. } if f == crate::ir::SCOPED => rewrite_term(name, sc),
         Term::Func { name: ref f, .. } if f == ABSOLUTE => name,
         Term::Val(Value::Str(s)) if crate::ir::is_scoped(&s) => Term::Val(Value::Str(s)),
         name if !sc.vars && !matches!(name, Term::Val(_)) => rewrite_term(name, sc),
         name => Term::Func {
-            name: "scoped".to_string(),
+            name: crate::ir::SCOPED.to_string(),
             args: vec![str_term(sc.name), rewrite_term(name, sc)],
         },
     }
@@ -1973,7 +1973,7 @@ mod tests {
                 assert_eq!(
                     scoped_term(sc, str_term(local)),
                     Term::Func {
-                        name: "scoped".to_string(),
+                        name: crate::ir::SCOPED.to_string(),
                         args: vec![str_term("m"), str_term(local)],
                     }
                 );

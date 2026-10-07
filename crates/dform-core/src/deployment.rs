@@ -1049,7 +1049,7 @@ fn setting_text(span: Span, key: &str) -> Option<String> {
     let block = text.get(span.start as usize..span.end as usize)?;
     let body = &block[block.find('{')? + 1..];
     // The settings, split at the commas and lines between them, not
-    // those inside a call or a string (`format("kc@%s", server.ip)`).
+    // those inside a call or a string (`str.format("kc@%s", server.ip)`).
     let (mut depth, mut quoted, mut from) = (0i32, false, 0);
     let mut entries = Vec::new();
     for (i, c) in body.char_indices() {

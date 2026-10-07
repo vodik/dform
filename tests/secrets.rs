@@ -379,7 +379,7 @@ fn a_sensitive_leaf_changed_between_plan_and_apply_is_refused() {
 }
 
 /// E DR-19: a secret reaches a public output only through
-/// `declassify(V, Reason)`, which lowers its label and derives
+/// `secret.declassify(V, Reason)`, which lowers its label and derives
 /// `declassified(Site, Reason)` for policy to deny.
 #[test]
 fn a_secret_reaches_a_public_output_only_through_declassify() {
@@ -401,7 +401,7 @@ fn a_secret_reaches_a_public_output_only_through_declassify() {
 
     s.write(
         "p.df",
-        &prog("n = declassify(p.len, \"its length is public\")", ""),
+        &prog("n = secret.declassify(p.len, \"its length is public\")", ""),
     );
     let r = s
         .run(&common::on(
@@ -427,7 +427,7 @@ fn a_secret_reaches_a_public_output_only_through_declassify() {
     s.write(
         "p.df",
         &prog(
-            "n = declassify(p.len, \"its length is public\")",
+            "n = secret.declassify(p.len, \"its length is public\")",
             "deny \"declassified at ${at}: ${r}\" where declassified(at, r)\n",
         ),
     );

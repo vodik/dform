@@ -38,7 +38,7 @@ fn refused(body: &str, want: &str) {
 /// secret output; its own refinement may inspect it.
 #[test]
 fn a_secret_flows_to_sensitive_places() {
-    let r = run("resource leaky.vault v {\n  password = p\n} where pw(p)\noutput token: secret(string) = p where pw(p)\nresource leaky.vault w {\n  backup = q\n} where pw(p), q = format(\"pw:%s\", p)\n")
+    let r = run("resource leaky.vault v {\n  password = p\n} where pw(p)\noutput token: secret(string) = p where pw(p)\nresource leaky.vault w {\n  backup = q\n} where pw(p), q = str.format(\"pw:%s\", p)\n")
     .success();
     assert!(r.stdout.contains("password = (sensitive)"), "{}", r.stdout);
     assert!(!r.stdout.contains("hunter2"), "{}", r.stdout);

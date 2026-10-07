@@ -666,7 +666,7 @@ fn deny_rules(
         (
             "reason".to_string(),
             Term::Func {
-                name: "format".into(),
+                name: crate::ir::FORMAT.into(),
                 args: vec![str_term(&format!("%s does not satisfy {text}")), v.clone()],
             },
         ),

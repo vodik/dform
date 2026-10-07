@@ -1002,7 +1002,7 @@ impl Providers {
                         }
                         .attr(attr),
                     ),
-                    Term::Func { name, args } if name == "ref" => match args.as_slice() {
+                    Term::Func { name, args } if name == crate::ir::REF => match args.as_slice() {
                         [Term::Val(Value::Str(t)), Term::Val(Value::Str(n)), p]
                             if types.contains(t) =>
                         {

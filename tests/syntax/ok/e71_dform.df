@@ -88,7 +88,7 @@ vpc_peer(a_, b) where {
 resource net.vpc_peering "${peer}" {
   requester_vpc_id = ref(net.vpc, a_, "id")
   accepter_vpc_id = ref(net.vpc, b, "id")
-} where vpc_peer_inst(i_a, i_b), vpc_peer(a_, b), peer = format("peer-%s-%s", i_a, i_b)
+} where vpc_peer_inst(i_a, i_b), vpc_peer(a_, b), peer = str.format("peer-%s-%s", i_a, i_b)
 
 # A bastion with an address carved from the main VPC. The setting is a
 # constant, so inet_host is not stuck; only subnet_id carries a null.

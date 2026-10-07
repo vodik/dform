@@ -794,7 +794,7 @@ pub fn is_schema_pred(pred: &str) -> bool {
 /// symbol they hold, and the type of every ref. `None` when a rule reads a
 /// per-type schema predicate for a type it does not spell out
 /// (`type_attr(T, ...)`), or wants a resource whose type is not a constant
-/// in the rule's head (built at runtime, `T = format("k8s.%s", K)`): such
+/// in the rule's head (built at runtime, `T = str.format("k8s.%s", K)`): such
 /// a program sees the whole schema.
 pub fn named_types(program: &crate::ast::Program, facts: &[Atom]) -> Option<BTreeSet<String>> {
     use crate::ast::Lit;

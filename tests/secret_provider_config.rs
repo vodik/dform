@@ -21,7 +21,7 @@ const STACK: &str = r#"
 use env
 use fake { source = "prov" }
 resource db.postgres server { name = "server" }
-let kc = format("%s@%s", env.var("R45_KUBECONFIG"), server.endpoint)
+let kc = str.format("%s@%s", env.var("R45_KUBECONFIG"), server.endpoint)
 use k8s { kubeconfig = kc, account = kc, expect_account = kc, schemas = ["crd.df"] }
 resource k8s.namespace ns { metadata.name = "app" }
 resource k8s.config_map conf {

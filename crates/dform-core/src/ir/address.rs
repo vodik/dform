@@ -53,6 +53,20 @@ pub const RESOURCE_BODY: &str = "__body";
 /// string's characters or an object's keys, counted.
 pub const LEN: &str = "__len";
 
+/// The lowering's reference to an attribute of a resource of the program,
+/// `__ref(T, A, P)`, and with one argument the reference written out,
+/// `__ref(__ref(T, A, ""))` (R-43): no program writes it (R-155).
+pub const REF: &str = "__ref";
+
+/// A name inside a used module or a copy, `__scoped(scope, name)` (R-112).
+pub const SCOPED: &str = "__scoped";
+
+/// A reference to an object of the world, `cloud_ref(T, n, p)` lowered.
+pub const CLOUD_REF: &str = "__cloud_ref";
+
+/// What an interpolation lowers to, `"a-${x}"` is `str.format("a-%s", x)`.
+pub const FORMAT: &str = "str.format";
+
 /// `name` written with the old separators of a scope, `/` (R-72) or `::`,
 /// outside a quoted segment: as it is written now (`blue/vpc` is
 /// `blue.vpc`, R-112); `None` when it has neither.

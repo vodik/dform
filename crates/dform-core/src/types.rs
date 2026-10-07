@@ -134,13 +134,14 @@ impl std::fmt::Display for Ty {
 /// A reference as it lowers: `ref(T, A, "")`, its type and address.
 fn reference(t: &Term) -> Option<(&str, &Term)> {
     match t {
-        Term::Func { name, args } if name == "ref" && args.len() == 3 => match (&args[0], &args[2])
-        {
-            (Term::Val(Value::Str(typ)), Term::Val(Value::Str(p))) if p.is_empty() => {
-                Some((typ, &args[1]))
+        Term::Func { name, args } if name == crate::ir::REF && args.len() == 3 => {
+            match (&args[0], &args[2]) {
+                (Term::Val(Value::Str(typ)), Term::Val(Value::Str(p))) if p.is_empty() => {
+                    Some((typ, &args[1]))
+                }
+                _ => None,
             }
-            _ => None,
-        },
+        }
         _ => None,
     }
 }
@@ -148,7 +149,7 @@ fn reference(t: &Term) -> Option<(&str, &Term)> {
 /// `ref(r)` written out: `ref(ref(T, A, ""))`.
 fn explicit(t: &Term) -> Option<&Term> {
     match t {
-        Term::Func { name, args } if name == "ref" && args.len() == 1 => Some(&args[0]),
+        Term::Func { name, args } if name == crate::ir::REF && args.len() == 1 => Some(&args[0]),
         _ => None,
     }
 }
@@ -556,14 +557,28 @@ pub fn at_run_time(ty: &Ty, t: Term) -> Term {
             _ => t,
         };
     };
-    if !crate::value::VALUE_TYPES.contains(&s.as_str()) {
+    // A number's text is read at an `int` or a `float` position too
+    // (R-155: no `int(s)`), but for what is a number already.
+    let number = s == "int" || s == "float";
+    if !crate::value::VALUE_TYPES.contains(&s.as_str()) && !number {
+        return t;
+    }
+    // A call whose result is typed is checked as it is; what may be a
+    // number's text is a variable or a read of a value (`cfg.port`).
+    let typed = |t: &Term| match t {
+        Term::Func { name, .. } => {
+            crate::functions::get(name).is_none_or(|f| !matches!(f.ret.as_str(), "any" | "any?"))
+        }
+        _ => false,
+    };
+    if number && typed(&t) {
         return t;
     }
     match &t {
         Term::Func { name, .. }
             if matches!(
                 name.as_str(),
-                AS | AMBIGUOUS | "ref" | "cloud_ref" | "scoped"
+                AS | AMBIGUOUS | crate::ir::REF | crate::ir::CLOUD_REF | crate::ir::SCOPED
             ) =>
         {
             t

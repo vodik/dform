@@ -1054,7 +1054,7 @@ a kubeconfig held as a secret, and a world read of a live object.
 Plan never invents a computed value. The evaluator mints one labeled null
 `?T["N"].attr` per wanted resource and computed attribute (proposal E §2.5), at
 normal rank for `computed` and at `@default` for `optional_computed`, so a
-program's own value wins. A `ref(T, N, Attr)` to such an attribute reads that
+program's own value wins. A reference to such an attribute, `T["N"].attr`, reads that
 cell: the null, or the program's value. Once `N` exists, the world's value
 replaces the null before anything is derived (round 0, through the state's
 identity mapping), so a steady-state stack shows no nulls. Apply mints ids,
@@ -1725,7 +1725,7 @@ The redactor works by taint, never by text (R-128). A value prints as a
 secret because of where it is or where it came from: a `sensitive` path, a
 cell declared `secret(T)` (an input, an output, a field of an object type),
 a `let` or a relation's column the secret pass found a secret reaches
-(`signed(s) where s = format("key=%s", signing)` prints `(sensitive
+(`signed(s) where s = str.format("key=%s", signing)` prints `(sensitive
 signed#0)`), an attribute's part a rule writes a secret into, or a secret
 an extern, `env.var` or `random.*` gave. A secret object is one secret
 and prints once (`secret(63 B)` in a result set); a plain value inside it
@@ -1769,13 +1769,13 @@ digest, the rest of the object by value, and the reader's
 
 An input's own refinement (`input pw: secret(string) check pw.len >=
 12`) is where a secret may be checked; its deny does not print the value.
-`declassify(V, Reason)` is the one way a secret leaves on purpose: its
+`secret.declassify(V, Reason)` is the one way a secret leaves on purpose: its
 value is `V`, public to the pass (what is inside it may be inspected), and
 the rule also derives `declassified(Site, Reason)`, `Site` where the rule
 is written, for a policy to read or deny:
 
 ```dform
-output pw_len = declassify(pw.len, "its length is public")
+output pw_len = secret.declassify(pw.len, "its length is public")
 deny "declassified at ${at}: ${r}" where declassified(at, r)
 ```
 
@@ -3432,7 +3432,7 @@ share: the time spent in the mock's calls.
 This is an MVP:
 
 - semi-naive evaluator with hash indexes (see Performance)
-- functions declared in `std/*.df` (docs/grammar.md "Functions"): the prelude's `int`, `float`, `format`, `len`, `to`, `declassify`; `inet.subnet`, `inet.host`, `inet.overlaps`, `int.range`, `ip.unspecified`, `str.split`, `str.lower`, `str.upper`, `str.dedent`, `str.trim`, `str.replace`, `str.starts_with`, `str.ends_with`, `str.pad_left`, `str.pad_right`, `str.slice`, `list.join`, `list.sort`, `list.sort_by`, `list.unique`, `list.flatten`, `list.zip`, `list.min`, `list.max`, `list.sum`, `list.first`, `list.last`, `time.format`, `time.in_zone`, `random.password`, `random.base64`, `random.id`, `random.uuid`, `random.signing_key`, `regex.match`, `regex.capture`, `regex.replace`, `semver.satisfies`, `oci.pinned`, `oci.with_tag`, `oci.with_digest`, `oci.with_registry`, `hash.sha256`, `base64.encode`, `base64.decode`, `uri.join`, `uri.with_scheme`, `uri.with_user`, `uri.with_password`, `uri.with_host`, `uri.with_port`, `uri.with_path`, `uri.with_query`, `uri.with_fragment`, `uri.escape`, `path.join`, `path.dir`, `path.base`, `path.ext`, `path.rel`, `path.clean`, `json.decode`, `json.encode`, `yaml.decode`, `yaml.encode`, `toml.decode`, `toml.encode`, `csv.decode`, `csv.encode`; the one read, `io.read` (a coeffect); arithmetic `+ - * / %`; aggregates `collect_*`, `count`, `sum`, `min`, `max`, `any`, `all`, bound in a body (`n = count(x)`)
+- functions declared in `std/*.df` (docs/grammar.md "Functions"): none bare (R-155); `inet.subnet`, `inet.host`, `inet.overlaps`, `int.range`, `int.trunc`, `int.round`, `int.floor`, `int.ceil`, `quantity.to`, `secret.declassify`, `ip.unspecified`, `str.format`, `str.split`, `str.lower`, `str.upper`, `str.dedent`, `str.trim`, `str.replace`, `str.starts_with`, `str.ends_with`, `str.pad_left`, `str.pad_right`, `str.slice`, `list.join`, `list.sort`, `list.sort_by`, `list.unique`, `list.flatten`, `list.zip`, `list.min`, `list.max`, `list.sum`, `list.first`, `list.last`, `time.format`, `time.in_zone`, `random.password`, `random.base64`, `random.id`, `random.uuid`, `random.signing_key`, `regex.match`, `regex.capture`, `regex.replace`, `semver.satisfies`, `oci.pinned`, `oci.with_tag`, `oci.with_digest`, `oci.with_registry`, `hash.sha256`, `base64.encode`, `base64.decode`, `uri.join`, `uri.with_scheme`, `uri.with_user`, `uri.with_password`, `uri.with_host`, `uri.with_port`, `uri.with_path`, `uri.with_query`, `uri.with_fragment`, `uri.escape`, `path.join`, `path.dir`, `path.base`, `path.ext`, `path.rel`, `path.clean`, `json.decode`, `json.encode`, `yaml.decode`, `yaml.encode`, `toml.decode`, `toml.encode`, `csv.decode`, `csv.encode`; the one read, `io.read` (a coeffect); operators `in`, `+ - * / %`, `< <= > >=`, `==` and the field `x.len` (docs/grammar.md "Functions"); aggregates `collect_*`, `count`, `sum`, `min`, `max`, `any`, `all`, bound in a body (`n = count(x)`)
 - list helper predicate: `member(List, Item)` and `member(List, Index, Item)` (Index starts at 0)
 - safe(ish) negation: `not` requires the atom be ground at evaluation time
 

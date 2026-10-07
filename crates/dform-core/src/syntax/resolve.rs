@@ -4205,7 +4205,10 @@ impl<'u> Lowerer<'u> {
         };
         match got {
             Some(typ) => {
-                let r = func("ref", vec![str_term(&typ), value.clone(), str_term("")]);
+                let r = func(
+                    crate::ir::REF,
+                    vec![str_term(&typ), value.clone(), str_term("")],
+                );
                 match crate::types::mismatch(ty, &r) {
                     Some(why) => self.error(span, format!("let {name} {why}")),
                     None => Ok(value),
@@ -5519,7 +5522,12 @@ impl<'u> Lowerer<'u> {
         let addr = self.resource_addr(rc.scope, name);
         let candidates = types
             .iter()
-            .map(|t| func("ref", vec![str_term(t), addr.clone(), str_term("")]))
+            .map(|t| {
+                func(
+                    crate::ir::REF,
+                    vec![str_term(t), addr.clone(), str_term("")],
+                )
+            })
             .collect();
         Some(crate::types::ambiguous_ref(name, span, candidates))
     }
@@ -5790,14 +5798,20 @@ impl<'u> Lowerer<'u> {
         }
         if let Some(path) = rc.instances.get(&c.head).cloned() {
             let v = self.var_named(rc, &c.head, span);
-            return Some(func("ref", vec![str_term(&path), var(&v), str_term("")]));
+            return Some(func(
+                crate::ir::REF,
+                vec![str_term(&path), var(&v), str_term("")],
+            ));
         }
         if rc.vars.contains_key(&c.head) || self.resource(rc.scope, &c.head).is_some() {
             return None;
         }
         let (at, path) = self.instance_in(rc.scope, &c.head)?;
         let name = self.scope_term(rc.scope, at, str_term(&c.head));
-        Some(func("ref", vec![str_term(&path), name, str_term("")]))
+        Some(func(
+            crate::ir::REF,
+            vec![str_term(&path), name, str_term("")],
+        ))
     }
 
     fn ref_term(&mut self, rc: &mut Rc, n: &SyntaxNode, pos: Pos, pre: &mut Vec<Lit>) -> L<Term> {
@@ -5820,11 +5834,11 @@ impl<'u> Lowerer<'u> {
             && self.resource(rc.scope, &c.head).is_some()
         {
             let (typ, addr) = self.reference(rc, &c, pre, span)?;
-            return Ok(func("ref", vec![typ, addr, str_term("")]));
+            return Ok(func(crate::ir::REF, vec![typ, addr, str_term("")]));
         }
         match self.resolve(rc, &c, pre)? {
             Res::Ref { typ, addr, path } if path.is_empty() => {
-                Ok(func("ref", vec![typ, addr, str_term("")]))
+                Ok(func(crate::ir::REF, vec![typ, addr, str_term("")]))
             }
             res => {
                 if c.is_bare() && matches!(res, Res::Val(Term::Var(_))) {
@@ -5907,7 +5921,7 @@ impl<'u> Lowerer<'u> {
     ) -> L<Term> {
         let arg = terms(list).next().ok_or(Skip)?;
         match self.ref_term(rc, &arg, Pos::Content, pre)? {
-            r @ Term::Func { .. } => Ok(func("ref", vec![r])),
+            r @ Term::Func { .. } => Ok(func(crate::ir::REF, vec![r])),
             _ => self.error(
                 span,
                 "`ref(r)` takes a resource: its name in scope, `T[\"a\"]`, or a variable `in T`",
@@ -6114,7 +6128,7 @@ impl<'u> Lowerer<'u> {
                         return Ok(t);
                     }
                     let (typ, addr) = self.reference(rc, &c, pre, span)?;
-                    return Ok(func("ref", vec![typ, addr, str_term("")]));
+                    return Ok(func(crate::ir::REF, vec![typ, addr, str_term("")]));
                 }
                 let res = self.resolve(rc, &c, pre)?;
                 if let Res::Ref { path, .. } = &res
@@ -6153,6 +6167,13 @@ impl<'u> Lowerer<'u> {
                 self.check_function(&name, span);
                 let args = self.bind(false, |l| l.args(rc, n, Pos::Content, pre))?;
                 self.check_aggregated(&name, &args, span);
+                // `cloud_ref(T, name, path)`, a form of the language, is
+                // the lowering's `__cloud_ref` (R-155).
+                let name = match name.as_str() {
+                    "cloud_ref" => crate::ir::CLOUD_REF.to_string(),
+                    "ref" => crate::ir::REF.to_string(),
+                    _ => name,
+                };
                 let args = self.typed_args(&name, args, span)?;
                 Ok(Term::Func { name, args })
             }
@@ -6353,7 +6374,7 @@ impl<'u> Lowerer<'u> {
         Ok(func("int.range", vec![lo, hi, Term::Val(Value::Int(1))]))
     }
 
-    /// A string literal: `"a${e}b"` is `format("a%sb", e)` (H-13), `$${`
+    /// A string literal: `"a${e}b"` is `str.format("a%sb", e)` (H-13), `$${`
     /// is a literal `${`, and a brace is itself.
     fn string_term(&mut self, rc: &mut Rc, t: &SyntaxToken, pre: &mut Vec<Lit>) -> L<Term> {
         let text = t.text();
@@ -6400,7 +6421,7 @@ impl<'u> Lowerer<'u> {
         }
         let mut all = vec![str_term(&fmt)];
         all.extend(args);
-        Ok(func("format", all))
+        Ok(func(crate::ir::FORMAT, all))
     }
 
     /// An interpolation hole: a term, read now (a content position).
@@ -6698,7 +6719,7 @@ impl<'u> Lowerer<'u> {
                 None => {
                     let name = fresh(rc, &capitalise(&pred));
                     let mark = func(crate::modules::ABSOLUTE, vec![var(&name)]);
-                    let whole = func("ref", vec![str_term(&typ), mark, str_term("")]);
+                    let whole = func(crate::ir::REF, vec![str_term(&typ), mark, str_term("")]);
                     pre.push(Lit::Pos(atom_at(&pred, vec![whole], span)));
                     rc.values.insert(key, name.clone());
                     var(&name)
@@ -6987,7 +7008,10 @@ impl<'u> Lowerer<'u> {
                     let path = self.segs(rc, &ops[1..], pre)?;
                     return Ok(Some(Res::Ref {
                         typ: str_term(&types[0]),
-                        addr: func("scoped", vec![scope, str_term(&crate::ir::name_segment(x))]),
+                        addr: func(
+                            crate::ir::SCOPED,
+                            vec![scope, str_term(&crate::ir::name_segment(x))],
+                        ),
                         path,
                     }));
                 }
@@ -7202,7 +7226,7 @@ impl<'u> Lowerer<'u> {
                     None => {
                         let holes = text(vec!["%s".to_string(); keys.len()]);
                         func(
-                            "format",
+                            crate::ir::FORMAT,
                             std::iter::once(str_term(&holes)).chain(values).collect(),
                         )
                     }
@@ -7456,14 +7480,14 @@ impl<'u> Lowerer<'u> {
             Res::Type(t) => Ok(str_term(&t)),
             Res::Var { var: v, path } => self.path_of(rc, v, path, pre, span),
             Res::Ref { typ, addr, path } if path.is_empty() => Ok(match pos {
-                Pos::Value => func("ref", vec![typ, addr, str_term("")]),
+                Pos::Value => func(crate::ir::REF, vec![typ, addr, str_term("")]),
                 _ => addr,
             }),
             Res::Ref { typ, addr, path } if pos != Pos::Content => {
                 let Some(p) = path_string(&path) else {
                     return self.error(span, "a reference's path is constant");
                 };
-                Ok(func("ref", vec![typ, addr, str_term(&p)]))
+                Ok(func(crate::ir::REF, vec![typ, addr, str_term(&p)]))
             }
             Res::Ref { typ, addr, path } => {
                 let Seg::F(first) = &path[0] else {
@@ -7493,7 +7517,7 @@ impl<'u> Lowerer<'u> {
                     // A typed output holds an address: given as a value, it
                     // is the reference (R-43).
                     Some(typ) if pos == Pos::Value && path.is_empty() => {
-                        Ok(func("ref", vec![typ, v, str_term("")]))
+                        Ok(func(crate::ir::REF, vec![typ, v, str_term("")]))
                     }
                     _ => self.path_of(rc, v, path, pre, span),
                 }
@@ -7885,7 +7909,7 @@ fn bound_vars(body: &[Lit]) -> BTreeSet<String> {
                 // A relation's column takes a reference apart (R-42).
                 for t in &a.args {
                     if let Term::Func { name, args } = t
-                        && name == "ref"
+                        && name == crate::ir::REF
                     {
                         args.iter().for_each(|t| pattern(t, &mut out));
                     }
@@ -8188,10 +8212,10 @@ mod tests {
         );
         assert_eq!(
             got[2],
-            "resource \"net.subnet\" Addr { vpc = ref(\"net.vpc\", \"vpc\", \"\"), \
+            "resource \"net.subnet\" Addr { vpc = __ref(\"net.vpc\", \"vpc\", \"\"), \
              cidr = inet.subnet(Cidr, 4, ZoneIndex), zone = Z, visibility = \"private\" } :- \
              data(\"zone\", Z), attr(\"net.vpc\", \"vpc\", \"cidr\", Cidr), \
-             zone_index(Z, ZoneIndex), Addr = __segment(format(\"private-%s\", Z))"
+             zone_index(Z, ZoneIndex), Addr = __segment(str.format(\"private-%s\", Z))"
         );
     }
 
@@ -8212,7 +8236,7 @@ mod tests {
         assert_eq!(
             got[got.len() - 1],
             "resource \"net.subnet\" Addr { zone = Zone, meta.zone = Zone, tags = Tags } \
-             :- data(\"zone\", Zone), tags(Tags), Addr = __segment(format(\"s-%s\", Zone))"
+             :- data(\"zone\", Zone), tags(Tags), Addr = __segment(str.format(\"s-%s\", Zone))"
         );
         let ranked = parse("let tags = {}\nresource net.vpc v {\n  tags @default\n}\n")
             .unwrap()
@@ -8235,9 +8259,9 @@ mod tests {
         assert_eq!(
             &got[1..],
             [
-                "resource \"k8s.deployment\" \"a\" { namespace = ref(\"k8s.namespace\", \"web\", \"name\") } :- ",
+                "resource \"k8s.deployment\" \"a\" { namespace = __ref(\"k8s.namespace\", \"web\", \"name\") } :- ",
                 "resource \"k8s.deployment\" \"b\" { namespace = Ns } :- attr(\"k8s.namespace\", \"web\", \"name\", Ns)",
-                "p(ref(\"k8s.namespace\", \"web\", \"name\"), X) :- attr(\"k8s.namespace\", \"web\", \"name\", X)",
+                "p(__ref(\"k8s.namespace\", \"web\", \"name\"), X) :- attr(\"k8s.namespace\", \"web\", \"name\", X)",
             ]
         );
     }
@@ -8257,8 +8281,8 @@ mod tests {
             &got[1..],
             [
                 "let(\"pg\", \"main\", \"normal\")",
-                "resource \"net.vpc\" \"v\" { cidr = ref(\"db.pg\", Pg, \"net.cidr\"), name = \
-                 format(\"%s-vpc\", Name) } :- pg(Pg), attr(\"db.pg\", Pg, \"name\", Name)",
+                "resource \"net.vpc\" \"v\" { cidr = __ref(\"db.pg\", Pg, \"net.cidr\"), name = \
+                 str.format(\"%s-vpc\", Name) } :- pg(Pg), attr(\"db.pg\", Pg, \"name\", Name)",
                 "deny(\"x\") :- pg(Pg), attr(\"db.pg\", Pg, \"size\", Size), Size > 3",
             ]
         );
@@ -8352,7 +8376,7 @@ mod tests {
             got[0],
             "module m { resource \"net.vpc\" \"vpc\" { size = N } :- n(N); output vpc = None; \
              output vpc = Some(\"\\\"vpc\\\"\"); output ids = None; \
-             output ids = Some(\"[ref(\\\"net.vpc\\\", \\\"vpc\\\", \\\"\\\")]\") }"
+             output ids = Some(\"[__ref(\\\"net.vpc\\\", \\\"vpc\\\", \\\"\\\")]\") }"
         );
         assert_eq!(
             &got[3..],
@@ -8374,9 +8398,9 @@ mod tests {
         assert_eq!(
             &got[..],
             [
-                "p(format(\"{x} $${x} %s%\", X)) :- q(X)",
+                "p(str.format(\"{x} $${x} %s%\", X)) :- q(X)",
                 "r(V) :- file.json(\"a.json\", V)",
-                "s(Y) :- q(X), Y = format(\"n-%s\", X), Name = format(\"n-%s\", X), want(\"net.route\", Name)",
+                "s(Y) :- q(X), Y = str.format(\"n-%s\", X), Name = str.format(\"n-%s\", X), want(\"net.route\", Name)",
             ]
         );
     }

@@ -1978,7 +1978,7 @@ impl Rec<'_> {
     fn blocked(&self, t: &Term, state: &HashMap<String, Value>) -> bool {
         match blocked_by_null(t, state) {
             Some((name, nulls)) => {
-                let why = if name == "scoped" || name == "ref" {
+                let why = if name == crate::ir::SCOPED || name == crate::ir::REF {
                     "resource address carries a null".to_string()
                 } else {
                     format!(
@@ -3180,7 +3180,7 @@ fn unify_term(pat: &Term, fv: &Value, out: &mut HashMap<String, Value>, rec: &Re
             // Special pattern unification for scoped(Scope, LocalName).
             // This allows rules to join on component-scoped resources while still
             // binding LocalName variables.
-            if name == "scoped" && args.len() == 2 {
+            if name == crate::ir::SCOPED && args.len() == 2 {
                 let Some(Value::Str(scope)) = eval_term(&args[0], out) else {
                     return Ok(false);
                 };
@@ -3205,7 +3205,7 @@ fn unify_term(pat: &Term, fv: &Value, out: &mut HashMap<String, Value>, rec: &Re
             }
             // `ref(T, A, P)` as a pattern takes a reference apart (R-42):
             // `deformation(k, ref("aws.vpc", A, ""), _)` binds `A`.
-            if name == "ref"
+            if name == crate::ir::REF
                 && args.len() == 3
                 && let Value::Ref { typ, name, attr } = fv
                 && eval_term(pat, out).is_none()
@@ -4565,12 +4565,16 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("`s + 1`: `s` is string"), "{err}");
-        let err = run("n(x) where x = int(\"abc\") + 1")
+        let err = run("n(x) where x = int.trunc(\"abc\") + 1")
             .unwrap_err()
             .to_string();
-        assert!(err.contains("int(\"abc\") is not defined"), "{err}");
-        let (r, _) = run("s(\"10\")
-             explicit(x) where s(s), x = int(s) + 1
+        assert!(
+            err.contains("`int.trunc`'s argument `f` is float, not the string \"abc\""),
+            "{err}"
+        );
+        let (r, _) = run("let ten = \"10\"
+             let n: int = ten
+             explicit(x) where x = n + 1
              text(t) where t = \"${14}\"
              sizes(a, b, c) where xs = [\"x\", \"y\"], s = \"héllo\", o = {k: 1}, a = xs.len, b = s.len, c = o.len
              cases(l, u) where l = str.lower(\"AbC\"), u = str.upper(\"AbC\")
@@ -4880,7 +4884,7 @@ mod tests {
     fn format_over_a_computed_ref_is_stuck() {
         let (r, violations) = run_with(
             "resource net.vpc v { cidr = \"10.0.0.0/16\" }
-             resource net.subnet s { name = format(\"%s-x\", ref(net.vpc, \"v\", \"id\")) }",
+             resource net.subnet s { name = str.format(\"%s-x\", ref(net.vpc, \"v\", \"id\")) }",
             &crate::schema::fake().facts,
         )
         .unwrap();
@@ -4898,7 +4902,7 @@ mod tests {
                 && stuck[0].contains("[\"net.vpc/v#id\"]"),
             "{stuck:?}"
         );
-        assert_eq!(r.stuck[0].reason, "builtin format() over a null");
+        assert_eq!(r.stuck[0].reason, "builtin str.format() over a null");
     }
 
     /// E §7.1 / F 4.1: every ref in dform.df is to a fresh `id` and is

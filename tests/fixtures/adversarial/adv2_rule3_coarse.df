@@ -8,7 +8,7 @@ resource google.container_cluster pngu { name = "pngu-gke" }
 resource google.container_node_pool "${np}" {
   cluster = ref("google.container_cluster", "pngu", "id")
   zone = z
-} where arg("google.container_cluster", "pngu", "zones", zs), z in zs, np = format("np-%s", z)
+} where arg("google.container_cluster", "pngu", "zones", zs), z in zs, np = str.format("np-%s", z)
 
 resource k8s.namespace pngu { name = "pngu" }
 

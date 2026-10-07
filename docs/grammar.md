@@ -131,7 +131,7 @@ A string is a string constant: every constant is quoted (`"prod"`,
 `type_lattice(iam.policy, "statements", "set")`.
 
 `"a${e}b"` interpolates the term `e` (H-13): it lowers to
-`format("a%sb", e)`. `$${` is a literal `${`; a lone `{`, `}` or `$` is
+`str.format("a%sb", e)`. `$${` is a literal `${`; a lone `{`, `}` or `$` is
 itself. A hole may not hold a string (bind it first). A hole is a content
 position: a dot in it reads now (see "Reference or read"). A reference in
 a hole is its address, `T["A"]`, whether `in` types its variable or a
@@ -420,8 +420,8 @@ statically:
 | `k` (`let k = R`, `R` a reference) | `R`'s                    | `R`'s                          |
 
 `T[e]` is relative to the scope (H-10): inside a component it is
-`scoped("n", e)`, `n` the copy; in a module, a constant is the module's
-own (`scoped("m", "x")`) and a variable any resource its user sees; at the
+`__scoped("n", e)`, `n` the copy; in a module, a constant is the module's
+own (`__scoped("m", "x")`) and a variable any resource its user sees; at the
 top level and in CLI arguments it is the full address, which pastes
 unchanged from `plan` (H-16): `net.vpc["main.vpc"]`. A resource in scope is written by its
 name: `T["n"]` for a resource `n` in scope, and `T.n`, are errors naming
@@ -456,7 +456,7 @@ or by a resource type holds references.
 A number is an `int` (a whole `i64`) or a `float` (R-75: an `f64`).
 An integer literal is an int, `2`; a decimal literal is a float, `0.5`,
 `2.0`. A float is finite: NaN and the infinities are errors where a
-float is read (`--set`, a document, `float("nan")`, a division by
+float is read (`--set`, a document, `"nan"` at a `float` position, a division by
 zero), never values. It prints as the shortest decimal that reads back
 as the same float, with a fraction always (`0.1`, `2.0`), in the plan,
 `"${f}"`; JSON, state and a provider get a JSON number.
@@ -464,8 +464,11 @@ as the same float, with a fraction always (`0.1`, `2.0`), in the plan,
 Arithmetic on two ints is an int, and `int / int` stays integer
 division (`7 / 2` is `3`); with a float on either side the int is
 promoted and the result is a float (`7 / 2.0` is `3.5`, `1 + 0.5` is
-`1.5`). `int(x)` converts a float toward zero or a string's text, and
-`float(x)` an int or a string's text; nothing converts silently.
+`1.5`). An int from a float is named by how it rounds, `int.trunc(f)`,
+`int.round(f)` (a half away from zero), `int.floor(f)`, `int.ceil(f)`; a
+float from an int, and a number from its text, is a typed position's
+read, `let f: float = n`, `let port: int = cfg.port` (R-155); nothing
+converts silently.
 Comparison is by value across the two: `1 == 1.0`, `1 < 1.5`, exactly
 (no rounding of a large int). A join matches a value as it is, so a
 relation's int column does not join a float one; `sum`, `min` and
@@ -1987,32 +1990,38 @@ them: `t + d`, `b - a`, `a < b` for times, `<` for versions. (3) `?` is
 only for a valid input with no answer (`regex.capture`, `path.rel`, the
 decoders, `list.min`, `list.max`, `list.first`, `list.last`); an input a
 function does not take (a bad unit, layout, template or port) is an
-error at the call. (4) One name per idea: `to(q, unit)` for every
-quantity, `x.len` for every length, one `format` (its values after the template, as an
-interpolation lowers to it), `inet.host` for an address in a network.
+error at the call. (4) One name per idea: `quantity.to(q, unit)` for every
+quantity, `x.len` for every length, one `str.format` (its values after the
+template, as an interpolation lowers to it), `inet.host` for an address
+in a network, `in` for every membership.
 (5) `forwards` by content: a function whose result is its arguments'
 content forwards a secret (`list.min`, `str.slice`, an encoder, a
 `with_*`); a judgment of one (a function to a bool or a number, or `.len`:
 `oci.pinned`, `regex.match`) inspects it. (6) Subject
 first, options last, and a list rather than any number of values
-(`path.join` as `list.join`), but `format`'s. (7) A type's package is its
-namespace: a function is named by its package, the type it is about
-(`inet.subnet`, `uri.with_host`), and the prelude keeps only what is
-about no one type, `int`, `float`, `format`, `to`, `declassify`
-(`ref` and `cloud_ref` are forms of the language, listed nowhere). (8) A
+(`path.join` as `list.join`), but `str.format`'s. (7) A type's package is
+its namespace: a function is named by its package, the type it is about
+(`inet.subnet`, `uri.with_host`, `quantity.to`, `secret.declassify`), and
+nothing is bare: there is no prelude (R-155). `ref(r)` and `cloud_ref(T,
+n, p)` are forms of the language, listed nowhere; the lowering's own
+(`__ref`, `__scoped`, `__path`, `add`) no program writes. (8) A
 uri is RFC 3986's generic syntax, the type `uri`, never a browser's url.
 (9) A host is held as written and equal by its A-labels: IDNA is the
 provider boundary's to encode ("Types"). A test reads every signature
-and checks (3), (5) and (6) where a signature says them.
+and checks (3), (5) and (6) where a signature says them, that no
+function a program calls is bare, that each is `pure` or a coeffect
+(`reads`), and that the operator table above is what the types
+implement.
 
 | package   | functions                                                                 |
 |-----------|---------------------------------------------------------------------------|
-| prelude   | `int(x)`, `float(x)`; `format(t, v, ...)`, `to(q, unit)` (a quantity as a whole number of a unit, written as its literals write it: `"Gi"`, `"m"`, `"h"`), `declassify(v, why)`: what is about no one type (`ref(r)` and `cloud_ref(T, n, p)` are forms of the language, "References and their type") |
 | `inet`    | `inet.subnet(net, bits, n)`, `inet.host(net, n)`, `inet.overlaps(a, b)`; fields `n.addr`, `n.bits`; `a in n` |
-| `int`     | `int.range(lo, hi, step)` (what `i in lo..hi` enumerates)                 |
+| `int`     | `int.range(lo, hi, step)` (what `i in lo..hi` enumerates); `int.trunc(f)`, `int.round(f)`, `int.floor(f)`, `int.ceil(f)` (an int from a float, named by how it rounds) |
+| `quantity` | `quantity.to(q, unit)` (a quantity as a whole number of a unit, written as its literals write it: `"Gi"`, `"m"`, `"h"`) |
+| `secret`  | `secret.declassify(v, why)` (the one way a secret leaves on purpose)      |
 | `ip`      | `ip.unspecified(a)`                                                       |
-| `str`     | `str.split(s, sep[, limit])`, `str.lower(s)`, `str.upper(s)`, `str.dedent(s)`, `str.trim(s)`, `str.replace(s, from, to)`, `str.starts_with(s, p)`, `str.ends_with(s, p)`, `str.pad_left(s, w, pad)`, `str.pad_right(s, w, pad)`, `str.slice(s, start[, end])` |
-| `list`    | `list.join(l, sep)`, `list.sort(l)`, `list.sort_by(l, field)`, `list.unique(l)`, `list.flatten(l)`, `list.zip(a, b)`, `list.min(l)`, `list.max(l)`, `list.sum(l)`, `list.first(l)`, `list.last(l)` |
+| `str`     | `str.format(t, v, ...)`, `str.split(s, sep[, limit])`, `str.lower(s)`, `str.upper(s)`, `str.dedent(s)`, `str.trim(s)`, `str.replace(s, from, to)`, `str.starts_with(s, p)`, `str.ends_with(s, p)`, `str.pad_left(s, w, pad)`, `str.pad_right(s, w, pad)`, `str.slice(s, start[, end])`; `"x" in s`, `s.len` |
+| `list`    | `list.join(l, sep)`, `list.sort(l)`, `list.sort_by(l, field)`, `list.unique(l)`, `list.flatten(l)`, `list.zip(a, b)`, `list.min(l)`, `list.max(l)`, `list.sum(l)`, `list.first(l)`, `list.last(l)`; `v in l`, `l.len` |
 | `time`    | `time.format(t, layout)`, `time.in_zone(t, zone)`; operators `t + d`, `t - d`, `b - a`, `a < b` |
 | `random`  | `random.password(key[, length[, alphabet]])`, `random.base64(key, length)`, `random.signing_key(key)` (secrets); `random.id(key[, length])`, `random.uuid(key)` |
 | `regex`   | `regex.match(s, re)`, `regex.capture(s, re, n)`, `regex.replace(s, re, with)` (`re` a `regex`-typed pattern, checked at compile time, R-31) |
@@ -2043,18 +2052,18 @@ whatever the master becomes is `memo.first(KEY, random.base64(KEY, 32))`
 
 A function to `bool` is also a predicate: `inet.overlaps(a, b)` as a body
 literal holds when the call is true. Strings never coerce silently: a
-typed position reads one ("Types"), `int(s)` and `float(s)` convert a
-number's text. Arithmetic (`a + b`) lowers
-to the prelude's internal `add`, `sub`, `mul`, `div`, `mod`, and an
-interpolation to `format`.
+typed position reads one ("Types"), a number's text at an `int` or a
+`float` position too. Arithmetic (`a + b`) lowers to the lowering's
+`add`, `sub`, `mul`, `div`, `mod` (crates/dform-core/src/lowering.df), an
+interpolation to `str.format`, and `x.len` to `__len`.
 
 A dotted name's first segment names one thing: a type namespace (`net`), a
-provider's externs (`file`), a function package (`inet`), a module, a
+provider's externs (`env`), a function package (`inet`), a module, a
 component or a copy (`config`, `network`, `blue`), or the root `world`.
 Two declarations
-that claim one head are an error naming both. No function shares a name
-with a type but the conversions `int` and `float` (the type `inet` and
-the package `inet`).
+that claim one head are an error naming both. A package shares its name
+with the type it is about (the type `inet` and the package `inet`), and
+no function is a type's name: there are no constructors.
 
 ## What lowers to what
 
@@ -2073,7 +2082,7 @@ as it is.
 | `use p { k = t, expect_account = a }` | `provider_config("p", {k: t'}) :- reads`, `provider_expect_account("p", a') :- reads` ("Providers") |
 | `env.var(t)`                              | `V`, reading `env.var(t', V)`                          |
 | `resource T n { f = t } where B`          | `resource T n { f = t' } :- B, reads`                  |
-| `resource T "a-${e}" { .. }`              | name `Addr`, `Addr = format("a-%s", e')` last          |
+| `resource T "a-${e}" { .. }`              | name `Addr`, `Addr = str.format("a-%s", e')` last          |
 | `set { k = t } @r where B`                | each entry a `set`: `arg("input", "", "k", t', r) :- B, reads` (`m.k`, a used module's: `arg("input", "m", "k", ..)`) |
 | `set from F(S) @r where B`                | `arg("input", S, "p", V, r) :- B, reads, Path = S', table.F.set(Path, At, "p", V)` per input path `p`; a deny for any other ("Giving inputs") |
 | `resource c n { k = t } where B`, `c` a component | the copy `n` of `c` with `k = t'` :- B, reads; it exists while `B` holds |
@@ -2082,7 +2091,7 @@ as it is.
 | `--set k=v`                               | `input("k", v)`, read as `arg("input", S, "k", V, override) :- input("k", V)` (a key's: normal) |
 | `set n.k = v [where B]`                   | the copy `n`'s input `k`'s contribution                |
 | `deny "m" {o} where B`                    | `deny("m", {o}) :- B` (`warn` the same)                |
-| `deny "a ${x}" where B`                   | `deny(M, ..) :- B, M = format("a %s", X)`              |
+| `deny "a ${x}" where B`                   | `deny(M, ..) :- B, M = str.format("a %s", X)`              |
 | `set R.p = t @r where B` (`+=`: `arg_add`) | `arg(T, A, "p", t', r) :- B, reads`                   |
 | `set R.l[k].p = t @r where B` (`l` keyed) | `arg(T, A, "l[]", [k', {p: t'}], r) :- B, reads`, the body's reads of `R`'s attribute `attr_base(..)` |
 | `set c.p = t where .., c in R.l`          | `set R.l[c].p = t`: the key is `c`'s key fields        |
@@ -2099,15 +2108,15 @@ as it is.
 | `input p from t`                          | `p(C) :- reads, Doc = t', table.value.p(Doc, At, C)`   |
 | `resource c n { p(t) where B }`           | `n::p(t') :- B, reads`, the copy's relation `p`        |
 | `enum("a", "b")` in a type                | `enum(a, b)`                                           |
-| `"a${e}b"`                                | `format("a%sb", e')`                                   |
+| `"a${e}b"`                                | `str.format("a%sb", e')`                                   |
 | `k` (value name)                          | `V`, reading `k(V)`                                    |
 | `x.f.g` (a value)                         | `__path(X, "f.g")`                                     |
 | `e[i]` (a list value)                     | `V`, reading `member(e', i, V)`                        |
 | `pattern = e[i]`                          | `member(e', i, pattern)`                               |
 | `p[a, b]`, `ext[a]`                       | `V`, reading `p(a', b', V)`, `ext(a', V)`              |
-| `R.p` (whole value)                       | `ref(T, A, "p")`                                       |
-| `R` (a value given: an entry, an output, a `let`) | `ref(T, A, "")`; in a document, the provider's id of `T[A]` |
-| `ref(R)`                                  | `ref(ref(T, A, ""))`: the reference, written out       |
+| `R.p` (whole value)                       | `__ref(T, A, "p")`                                       |
+| `R` (a value given: an entry, an output, a `let`) | `__ref(T, A, "")`; in a document, the provider's id of `T[A]` |
+| `ref(R)`                                  | `__ref(__ref(T, A, ""))`: the reference, written out       |
 | `R.p.q` (content)                         | `V`, reading `attr(T, A, "p", V)`; `__path(V, "q")`    |
 | `n.k`, `c[e].k`                           | `V`, reading `output("n", "k", V)`; `instance_of("c", "", E), output(E, "k", V)` |
 | `m.x` (`use m`; a value, a resource)      | `V`, reading `m::x(V)`; `T["m.x"]`                     |
@@ -2119,12 +2128,12 @@ as it is.
 | `has R.p`, `not has R.p`                  | `attr(T, A, "p", _)`, `not attr(T, A, "p", _)`        |
 | `has x.f`, `has R.p.q` (a walk)           | `Has = __path(X, "f")` after the read; `not` of it through a helper |
 | `k == c`, `k`, `has k`                    | `k(c)`, `k(true)`, `k(_)`                              |
-| `lifecycle(r, "f")`, `deformation(k, r, _)` (a column that takes a resource) | `r` as `ref(T, A, "")`: a value in a fact or head, taken apart in a body; `r` with no static type is the reference itself |
-| `r == n`, `r != T[e]` (a resource on either side) | `R = ref(T, "n", "")`, `R != ref(T, e', "")`; a typed `r` is `ref(T, R, "")` |
+| `lifecycle(r, "f")`, `deformation(k, r, _)` (a column that takes a resource) | `r` as `__ref(T, A, "")`: a value in a fact or head, taken apart in a body; `r` with no static type is the reference itself |
+| `r == n`, `r != T[e]` (a resource on either side) | `R = __ref(T, "n", "")`, `R != __ref(T, e', "")`; a typed `r` is `__ref(T, R, "")` |
 | `x in T`, `x in resource`, `R in T`       | `want(T, x)`, `want(Type, x)`, `want(T, A)`            |
 | `x in E` (`E` an enum type)               | `__enum("E", L), member(L, X)`, the fact `__enum("E", [values])` at `E`'s declaration |
 | `r in NS` (`NS` a provider's namespace)   | `__namespace("NS", Type), want(Type, R)` (a type test, `r` bound), a fact `__namespace("NS", T)` per type |
-| `"n-${e}" in T`                           | `Name = format(..), want(T, Name)`                     |
+| `"n-${e}" in T`                           | `Name = str.format(..), want(T, Name)`                     |
 | `x in world.T`                            | `cloud_exists(T, x)`                                   |
 | `x in e`                                  | `member(e', x)`                                        |
 | `(k, v) in e`                             | `member(e', K, V)`: an object's keys, a list's indexes |
@@ -2151,7 +2160,7 @@ an input `k` the cell `n::k(V) :- attr(input, "n", k, V)` with its default
 at `@default`, its resources `n.x`, its writes needing no grant (ranks
 decide); a top-level input also takes `--set`. A copy inside a copy puts
 the outer scope in front (`edge.left.vpc`). `extern p(+a, -b)` is asked
-on demand, and `declassify(v, "reason")` lowers a secret's label
+on demand, and `secret.declassify(v, "reason")` lowers a secret's label
 (E DR-19).
 
 A refinement (`check`, R-1) names the attribute or input by its own name,

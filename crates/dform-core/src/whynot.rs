@@ -671,7 +671,7 @@ impl WhyNot<'_> {
             Term::Var(v) => source_name(v),
             Term::Wildcard => "_".into(),
             // An interpolated string as written.
-            Term::Func { name, args } if name == "format" => match args.split_first() {
+            Term::Func { name, args } if name == crate::ir::FORMAT => match args.split_first() {
                 Some((Term::Val(Value::Str(f)), rest)) => {
                     let mut out = String::from("\"");
                     let mut parts = f.split("%s");
@@ -884,7 +884,7 @@ fn merge(a: &Env, b: &Env) -> Option<Env> {
 }
 
 /// The bindings under which term `t` (of a head) is `v`: a variable the
-/// body defines as a call (`Addr = format("private-%s", Z)`) is read
+/// body defines as a call (`Addr = str.format("private-%s", Z)`) is read
 /// through it; an interpolation backwards, each way it splits; a copy's
 /// scope stripped. A call that cannot be read backwards binds nothing
 /// (the body says).
@@ -914,7 +914,7 @@ fn unify(t: &Term, v: &Value, body: &[Lit]) -> Vec<Env> {
                     .collect(),
             }
         }
-        Term::Func { name, args } if name == "scoped" => {
+        Term::Func { name, args } if name == crate::ir::SCOPED => {
             let [Term::Val(scope), inner] = args.as_slice() else {
                 return vec![Env::new()];
             };
@@ -934,7 +934,7 @@ fn unify(t: &Term, v: &Value, body: &[Lit]) -> Vec<Env> {
                 body,
             )
         }
-        Term::Func { name, args } if name == "format" => {
+        Term::Func { name, args } if name == crate::ir::FORMAT => {
             let (Some(Term::Val(Value::Str(f))), Value::Str(s)) = (args.first(), v) else {
                 return vec![Env::new()];
             };

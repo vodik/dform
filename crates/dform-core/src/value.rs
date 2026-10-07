@@ -347,6 +347,18 @@ pub fn read_typed(ty: &str, v: &Value) -> Result<Value, String> {
         ("oci", Value::Str(s)) => parse_oci(s),
         ("semver", Value::Str(s)) => Version::parse(s).map(Value::Semver),
         ("time", Value::Str(s)) => crate::time::Time::parse(s).map(Value::Time),
+        // A number from its text, or an int widened (R-155: there is no
+        // `int(s)` or `float(i)`; a typed position reads one).
+        ("int", Value::Int(_)) | ("float", Value::Float(_)) => Ok(v.clone()),
+        ("int", Value::Str(s)) => s
+            .trim()
+            .parse()
+            .map(Value::Int)
+            .map_err(|_| format!("{s:?} is not an int")),
+        ("float", Value::Int(i)) => Float::new(*i as f64)
+            .map(Value::Float)
+            .ok_or_else(|| format!("{i} is not a float")),
+        ("float", Value::Str(s)) => Float::parse(s).map(Value::Float),
         (_, Value::Str(s)) if dim.is_some() => {
             crate::quantity::read(dim.unwrap_or(Dim::Bytes), s).map(Value::Quantity)
         }

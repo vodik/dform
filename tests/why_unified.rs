@@ -209,7 +209,7 @@ fn a_later_resource_gets_its_chain_and_its_wait() {
         r#"
 use fake { source = "prov" }
 resource db.postgres server { name = "server" }
-let kc = format("kc@%s", server.endpoint)
+let kc = str.format("kc@%s", server.endpoint)
 use k8s { kubeconfig = kc }
 resource k8s.namespace ns { metadata.name = "app" }
 "#,

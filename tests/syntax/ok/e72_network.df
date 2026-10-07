@@ -23,6 +23,6 @@ resource net.subnet "${sn}" {
   cidr = inet.subnet(net_, 4, i)
   zone = z
   visibility = "private"
-} where zone_index(z, i), attr(net.vpc, "vpc", "cidr", net_), sn = format("private_%s", z)
+} where zone_index(z, i), attr(net.vpc, "vpc", "cidr", net_), sn = str.format("private_%s", z)
 
 subnet_of(sn, "vpc") where want(net.subnet, sn)

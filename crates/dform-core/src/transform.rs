@@ -454,14 +454,14 @@ fn check_mixed(program: &Program) -> Result<()> {
     }
 }
 
-/// E DR-19: a rule that uses `declassify(V, Reason)` also derives
+/// E DR-19: a rule that uses `secret.declassify(V, Reason)` also derives
 /// `declassified(Site, Reason)` from its body, `Site` where the rule is
 /// written (`file:line:col`), so a policy can read and deny it.
 fn declassified(mut program: Program) -> Program {
     fn reasons(t: &Term, out: &mut Vec<Term>) {
         match t {
             Term::Func { name, args } => {
-                if name == "declassify" && args.len() == 2 {
+                if name == crate::secrets::DECLASSIFY && args.len() == 2 {
                     out.push(args[1].clone());
                 }
                 args.iter().for_each(|a| reasons(a, out));
@@ -1297,7 +1297,7 @@ fn unread_field_reports(r: &Resource, n: &mut usize) -> Vec<Stmt> {
             .all(|v| bound.contains(v));
         let resource = if names_bound {
             Term::Func {
-                name: "format".into(),
+                name: crate::ir::FORMAT.into(),
                 args: vec![str_term("%s.%s"), r.typ.clone(), r.name.clone()],
             }
         } else {
@@ -1890,7 +1890,7 @@ fn dangling_ref_deny(head: &Atom, read: &Atom, path: &str, mut body: Vec<Lit>) -
     let (typ, addr) = (read.args[0].clone(), read.args[1].clone());
     let from = if head.pred == "arg" && head.args.len() == 5 {
         Term::Func {
-            name: "format".into(),
+            name: crate::ir::FORMAT.into(),
             args: vec![
                 str_term("%s.%s"),
                 head.args[0].clone(),
@@ -1953,7 +1953,7 @@ fn dangling_ref_deny(head: &Atom, read: &Atom, path: &str, mut body: Vec<Lit>) -
 /// address.
 fn references(t: &Term, out: &mut Vec<(Term, Term)>) {
     match t {
-        Term::Func { name, args } if name == "ref" && args.len() == 3 => {
+        Term::Func { name, args } if name == crate::ir::REF && args.len() == 3 => {
             if let (Term::Val(Value::Str(_)), Term::Val(Value::Str(p))) = (&args[0], &args[2])
                 && p.is_empty()
             {
@@ -2025,7 +2025,7 @@ fn rewrite_term_refs(
     reads: &mut Vec<(Atom, String)>,
 ) -> Term {
     match t {
-        Term::Func { name, args } if name == "ref" && args.len() == 3 => {
+        Term::Func { name, args } if name == crate::ir::REF && args.len() == 3 => {
             if let (Term::Val(Value::Str(typ)), Term::Val(Value::Str(path))) = (&args[0], &args[2])
             {
                 let class = schema

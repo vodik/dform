@@ -3,8 +3,9 @@
 //! provider's schema facts; resource types after `resource`; a module
 //! component's resource's inputs and, after `copy.`, its outputs.
 //! A type's or path's documentation is its `type_doc`. Elsewhere a word
-//! completes to the builtins and keywords it starts (`engine::references`),
-//! a package's name and a dot (`inet.su`) to its functions.
+//! completes to the builtins, keywords and function packages it starts
+//! (`engine::references`; no function is bare, R-155), a package's name
+//! and a dot (`inet.su`) to its functions.
 
 use crate::nav;
 use dform_core::ast::{Atom, Term};
@@ -313,10 +314,28 @@ pub fn complete(
     builtins(&word, None)
 }
 
-/// The builtins and keywords `word` starts; with `replaced`, a dotted
-/// word's range, each replaces the whole word (a client's word ends at
-/// the dot).
+/// The builtins, keywords and function packages `word` starts; with
+/// `replaced`, a dotted word's range, each replaces the whole word (a
+/// client's word ends at the dot).
 fn builtins(word: &str, replaced: Option<lsp_types::Range>) -> Vec<CompletionItem> {
+    let registry = dform_core::functions::registry();
+    let packages = registry
+        .packages()
+        .into_iter()
+        .filter(|p| !word.contains('.') && p.starts_with(word))
+        .map(|p| {
+            let fns: Vec<&str> = registry
+                .functions()
+                .filter(|f| f.package == p && !f.internal)
+                .map(|f| f.name.as_str())
+                .collect();
+            item(
+                p.to_string(),
+                CompletionItemKind::MODULE,
+                format!("package {p}"),
+                Some(fns.join(", ")),
+            )
+        });
     engine::references()
         .iter()
         .filter(|r| r.name.starts_with(word))
@@ -336,6 +355,7 @@ fn builtins(word: &str, replaced: Option<lsp_types::Range>) -> Vec<CompletionIte
             }
             i
         })
+        .chain(packages)
         .collect()
 }
 

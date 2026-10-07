@@ -1617,7 +1617,7 @@ pub fn reads(
                     .map(|(_, v)| v.clone()),
                 _ => None,
             }),
-            Term::Func { name: f, args } if f == "format" => {
+            Term::Func { name: f, args } if f == crate::ir::FORMAT => {
                 let (Some(Term::Val(Value::Str(fmt))), rest) = (args.first(), &args[1..]) else {
                     return None;
                 };

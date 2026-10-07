@@ -59,7 +59,7 @@ fn an_unknown_function_names_its_call() {
     );
     assert!(
         r.stderr
-            .contains("the functions are declassify, float, format, int, len, to and"),
+            .contains("a function is named by its package, the type it is about: base64,"),
         "{}",
         r.stderr
     );

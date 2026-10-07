@@ -96,7 +96,7 @@ impl Addr {
     /// variable the body equates to one of these; `format(..)` with its
     /// literal text, an argument that is not a literal any text;
     /// `scoped(S, N)` with its scope. `None` when the text does not fix
-    /// it, or fixes nothing (`format("%s", N)`).
+    /// it, or fixes nothing (`str.format("%s", N)`).
     pub fn of(t: &Term, body: &[Lit]) -> Option<Addr> {
         let globs = addr_globs(t, body, 4)?;
         let any = |g: &Vec<String>| g.len() > 1 && g.iter().all(String::is_empty);
@@ -115,7 +115,7 @@ fn addr_globs(t: &Term, body: &[Lit], depth: usize) -> Option<Vec<Vec<String>>> 
             }
             _ => None,
         }),
-        Term::Func { name, args } if name == "format" => {
+        Term::Func { name, args } if name == crate::ir::FORMAT => {
             let fmt = args.first()?.as_str()?;
             let mut glob = vec![String::new()];
             for (i, part) in fmt.split("%s").enumerate() {
@@ -156,7 +156,7 @@ fn addr_globs(t: &Term, body: &[Lit], depth: usize) -> Option<Vec<Vec<String>>> 
             }
             Some(out)
         }
-        Term::Func { name, args } if name == "scoped" && args.len() == 2 => {
+        Term::Func { name, args } if name == crate::ir::SCOPED && args.len() == 2 => {
             let scope = args[0].as_str()?;
             let prefix = crate::ir::scoped(scope, "");
             let mut out = Vec::new();
@@ -436,7 +436,9 @@ fn type_keyed(pred: &str) -> bool {
 fn key_type(t: &Term) -> Option<String> {
     match t {
         Term::Val(Value::Ref { typ, .. }) => Some(typ.clone()),
-        Term::Func { name, args } if name == "ref" && args.len() == 3 => const_str(&args[0]),
+        Term::Func { name, args } if name == crate::ir::REF && args.len() == 3 => {
+            const_str(&args[0])
+        }
         t => const_str(t),
     }
 }

@@ -1,6 +1,8 @@
 //! Floats (R-75): a decimal literal is a `float`, an integer literal an
 //! `int`; arithmetic promotes an int to a float when the two mix, and
-//! `int / int` stays an int; `int(x)` and `float(x)` convert; numbers
+//! `int / int` stays an int; `int.trunc`, `int.round`, `int.floor` and
+//! `int.ceil` make an int of a float, a `float` position a float of an int
+//! or a number's text (R-155); numbers
 //! compare by value; a document's `1.5` is a float; `--set` reads by the
 //! declared type; NaN and the infinities are errors where a float is read.
 
@@ -16,20 +18,19 @@ fn eval_error(src: &str) -> String {
         .to_string()
 }
 
-/// NaN and the infinities are no float: `float("nan")`, a division by
-/// zero, an overflow are a call with no value, as an int's division by
-/// zero is.
+/// NaN and the infinities are no float: `"nan"` read at a `float`
+/// position is an error there, and a division by zero, an overflow are a
+/// call with no value, as an int's division by zero is.
 #[test]
 fn nan_and_infinity_are_no_value() {
+    for text in ["nan", "inf"] {
+        let e = eval_error(&format!("let t = \"{text}\"\nlet f: float = t\n"));
+        assert!(
+            e.contains(&format!("\"{text}\" is not a finite number")),
+            "{e}"
+        );
+    }
     for (src, want) in [
-        (
-            "x(v) where v = float(\"nan\")\n",
-            "float(\"nan\") is not defined",
-        ),
-        (
-            "x(v) where v = float(\"inf\")\n",
-            "float(\"inf\") is not defined",
-        ),
         ("x(v) where v = 1.0 / 0\n", "div(1.0, 0) is not defined"),
         ("x(v) where v = 1 / 0\n", "div(1, 0) is not defined"),
     ] {
@@ -61,10 +62,14 @@ neg(x) where x = 0 - 1.25
 
 #[test]
 fn int_and_float_convert_and_numbers_compare_by_value() {
-    let src = r#"i(x) where x = int(2.75)
-n(x) where x = int(0 - 2.75)
-f(x) where x = float(2)
-s(x) where x = float("1.25")
+    let src = r#"let two: float = 2
+let decimal = "1.25"
+let parsed: float = decimal
+i(x) where x = int.trunc(2.75)
+n(x) where x = int.trunc(0 - 2.75)
+r(a, b, c, d) where a = int.round(2.5), b = int.round(0 - 2.5), c = int.floor(0 - 2.5), d = int.ceil(2.1)
+f(x) where x = two
+s(x) where x = parsed
 eq() where 1 == 1.0
 ne() where 1 != 1.0
 lt() where 1 < 1.5
@@ -74,6 +79,7 @@ text(t, u) where t = "r=${0.5}", u = "${1.5}"
 "#;
     assert_eq!(facts(src, "i"), ["i(2)"]);
     assert_eq!(facts(src, "n"), ["n(-2)"]);
+    assert_eq!(facts(src, "r"), ["r(3, -3, -3, 3)"]);
     assert_eq!(facts(src, "f"), ["f(2.0)"]);
     assert_eq!(facts(src, "s"), ["s(1.25)"]);
     assert_eq!(facts(src, "eq"), ["eq()"]);

@@ -549,7 +549,7 @@ resource aws.iam_user "u-${db.master_password}"             # E0305: addresses a
 
 Two more are refused the same way: `not` over a secret, because absence
 leaks a bit, and `count` over one, because cardinality does.
-`declassify(v, reason)` is the one way past, and it has to say why.
+`secret.declassify(v, reason)` is the one way past, and it has to say why.
 
 The useful consequence is what state does not hold. A plan and an apply
 read attribute values from the provider every run, so state maps each

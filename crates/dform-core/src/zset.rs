@@ -900,7 +900,7 @@ pub fn not_planned(
                         && r.head.args.iter().zip(&f.args).all(|(h, v)| match h {
                             Term::Var(_) => !exact,
                             // A copy's own resource, `scoped(n, name)`.
-                            Term::Func { name, args } if name == "scoped" => {
+                            Term::Func { name, args } if name == crate::ir::SCOPED => {
                                 match (args.as_slice(), v) {
                                     (
                                         [Term::Val(Value::Str(n)), Term::Val(Value::Str(a))],

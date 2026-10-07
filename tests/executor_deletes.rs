@@ -119,7 +119,7 @@ fn an_object_depends_on_what_its_providers_settings_are_made_from() {
         r#"
 use fake { source = "prov" }
 resource db.postgres server { name = "server" }
-use k8s { kubeconfig = format("kc@%s", server.endpoint) }
+use k8s { kubeconfig = str.format("kc@%s", server.endpoint) }
 resource k8s.namespace ns { metadata.name = "app" }
 "#,
     );

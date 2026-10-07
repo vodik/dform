@@ -151,4 +151,4 @@ tick 1  19 changes
       tags.team = "shop"                   stacks/tour.df:170
 
 later
-  iam.policy "connect-${host}"             waits on orders.endpoint  (builtin format() over a null)
+  iam.policy "connect-${host}"             stacks/tour.df:318  waits on orders.endpoint

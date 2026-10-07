@@ -45,7 +45,7 @@ resource kube.secret homeserver {
   name = "synapse-config"
   data = { "homeserver.yaml": "signing: ${signing}" }
 }
-signed(s) where s = format("key=%s", signing)
+signed(s) where s = str.format("key=%s", signing)
 "#;
 
 fn project(name: &str) -> Scratch {

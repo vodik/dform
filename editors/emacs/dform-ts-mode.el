@@ -212,9 +212,8 @@ apply-order edge, not its content read now (`docs/grammar.md'
    `((call
       function: (identifier) @font-lock-builtin-face
       (:match ,(rx bos (or "count" "sum" "min" "max" "any" "all"
-                           "collect_set" "collect_list" "int" "float"
-                           "format" "to" "ref"
-                           "cloud_ref" "declassify" "attr"
+                           "collect_set" "collect_list" "ref"
+                           "cloud_ref" "attr"
                            "want" "arg" "output" "input" "cloud_attr"
                            "cloud_exists")
                    eos)

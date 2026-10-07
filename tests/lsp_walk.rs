@@ -180,6 +180,11 @@ fn walk(name: &str, root: &Path, every_token: bool) -> Vec<String> {
                     What::Name(Symbol::Predicate(_, p), _) => {
                         dform_core::names::is_builtin_relation(p)
                     }
+                    // A form of the language (`cloud_ref`, R-155): the
+                    // lowering's, declared nowhere a program reads.
+                    What::Name(Symbol::Function(f), _) => {
+                        dform_core::functions::FORMS.contains(&f.as_str())
+                    }
                     // A word, or a directory in a path.
                     What::Other => {
                         WORDS.contains(&t.text())

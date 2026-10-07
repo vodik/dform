@@ -20,13 +20,21 @@ fn dform_doc_renders_the_standard_library() {
     );
     let md = String::from_utf8(out.stdout).unwrap();
     // The project's items first, then one section per signature file.
-    let std = md
-        .find("\n## std/prelude.df\n")
-        .expect("the prelude's section");
+    let std = md.find("\n## std/inet.df\n").expect("the first section");
     assert!(md[..std].contains("### input `env`"), "{md}");
+    // Every signature file with a callable function: no prelude (R-155),
+    // nor the lowering's file, all internal.
     for (file, _) in SOURCES {
-        assert!(md.contains(&format!("\n## {file}\n")), "{file} in\n{md}");
+        let callable = registry()
+            .functions()
+            .any(|f| f.file == *file && !f.internal);
+        assert_eq!(
+            md.contains(&format!("\n## {file}\n")),
+            callable,
+            "{file} in\n{md}"
+        );
     }
+    assert!(!md.contains("prelude"), "{md}");
     assert!(
         md.contains(
             "### function `inet.subnet`\n\n```dform\nfn inet.subnet(net: inet, bits: int, n: int) -> inet\n```\n"

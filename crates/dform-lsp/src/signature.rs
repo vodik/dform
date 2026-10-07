@@ -175,7 +175,7 @@ mod tests {
 
     #[test]
     fn parameters_split_at_top_level_commas() {
-        let format = engine::reference("format", true).unwrap().signature;
+        let format = engine::reference("str.format", true).unwrap().signature;
         assert_eq!(
             params(format),
             vec!["template: string", "value: any", "..."]

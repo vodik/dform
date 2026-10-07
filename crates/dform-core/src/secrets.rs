@@ -27,8 +27,8 @@
 //! - E0305 a secret reaching a resource address (`want`, `arg`, `ref`,
 //!   `scoped`): names are printed everywhere.
 //!
-//! `declassify(V, Reason)` is the one way out: its value is public, and
-//! what is inside it may be inspected (`declassify(len(Pw), "...")`). The
+//! `secret.declassify(V, Reason)` is the one way out: its value is public, and
+//! what is inside it may be inspected (`secret.declassify(pw.len, "...")`). The
 //! lowering derives `declassified(Site, Reason)` for policy to read.
 //!
 //! An input's own refinement (`input pw: secret(string) where ...`) is the
@@ -49,9 +49,9 @@ fn carries(name: &str) -> bool {
     COLLECT.contains(&name) || crate::functions::get(name).is_some_and(|f| f.forwards)
 }
 
-/// `declassify(V, Reason)`: `V`, public (`transform` derives
+/// `secret.declassify(V, Reason)`: `V`, public (`transform` derives
 /// `declassified/2` beside the rule for policy).
-const DECLASSIFY: &str = "declassify";
+pub const DECLASSIFY: &str = "secret.declassify";
 
 /// Aggregates that only collect: their result is secret, nothing leaks.
 const COLLECT: &[&str] = &["collect_set", "collect_list"];
@@ -213,7 +213,7 @@ impl Pass<'_> {
                     .map(|(_, y)| y.as_str()),
                 k,
             ),
-            Term::Func { name, .. } if name == "format" => {
+            Term::Func { name, .. } if name == crate::ir::FORMAT => {
                 label_at(self.outputs.iter().map(|(_, y)| y.as_str()), k)
             }
             _ => Label::new(),
@@ -234,7 +234,7 @@ impl Pass<'_> {
             Term::Func { name, .. } if name == DECLASSIFY => Label::new(),
             // A function whose value is a secret (`-> secret(T)`).
             Term::Func { name, .. } if returns_secret(name) => whole(),
-            Term::Func { name, args } if name == "ref" && args.len() == 3 => {
+            Term::Func { name, args } if name == crate::ir::REF && args.len() == 3 => {
                 all(!self.attr_label(&args[0], &args[1], &args[2]).is_empty()
                     || args.iter().any(|a| self.term_secret(a, vars)))
             }
@@ -860,8 +860,8 @@ fn names_secret(t: &Term, secret: &dyn Fn(&Term) -> bool) -> bool {
     match t {
         Term::Func { name, .. } if name == DECLASSIFY => false,
         Term::Func { name, args } => {
-            (name == "ref" && args.len() == 3 && secret(&args[1]))
-                || (name == "scoped" && args.iter().any(secret))
+            (name == crate::ir::REF && args.len() == 3 && secret(&args[1]))
+                || (name == crate::ir::SCOPED && args.iter().any(secret))
                 || args.iter().any(|a| names_secret(a, secret))
         }
         Term::List(xs) => xs.iter().any(|a| names_secret(a, secret)),

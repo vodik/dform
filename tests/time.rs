@@ -101,7 +101,7 @@ fn durations_parse_print_and_total() {
          let three_quarters: duration = 45m\n\
          let a_month: duration = \"P1M\"\n\
          iso(d) where d = iso_form\n\
-         ttl_hours(n) where n = to(ttl, \"h\")\n\
+         ttl_hours(n) where n = quantity.to(ttl, \"h\")\n\
          long() where ttl > 1d\n\
          minutes(d) where d = 90m + 0s\n\
          twice(d) where d = 2 * three_quarters\n\

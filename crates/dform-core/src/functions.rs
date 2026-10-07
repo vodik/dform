@@ -11,12 +11,15 @@
 //! ```
 //!
 //! A function is named by its package, the type it is about
-//! (`inet.subnet`); the prelude's are bare (`int(s)`, `format`). `?` after
+//! (`inet.subnet`, `str.format`); there is no prelude and no bare function
+//! (R-155) but the lowering's own (`add`, `__path`), which no program
+//! writes. `?` after
 //! the result marks a partial function, `forwards` one a secret flows
 //! through uninspected (`secrets`, E0301), `forwards nulls` one whose null
 //! arguments are not content positions (Rule 2), and `internal` the
-//! lowering's own (`add`, `__path`), which a program may not call. Purity
-//! is not a flag: every function is pure, impurity enters through externs.
+//! lowering's own (`add`, `__path`), which a program may not call. A
+//! function is pure, or a coeffect, `reads` (`io.read`): a read the
+//! context satisfies, lowered to a table, never a body.
 //! The bodies are this module's ([`body`], [`BODIES`]), which the engine
 //! looks up by the qualified name; a test keeps the two in step.
 //!
@@ -33,7 +36,7 @@ use crate::value::Value;
 
 /// The signature files, by the path they are shipped at.
 pub const SOURCES: &[(&str, &str)] = &[
-    ("std/prelude.df", include_str!("../../../std/prelude.df")),
+    ("lowering.df", include_str!("lowering.df")),
     ("std/inet.df", include_str!("../../../std/inet.df")),
     ("std/int.df", include_str!("../../../std/int.df")),
     ("std/ip.df", include_str!("../../../std/ip.df")),
@@ -51,19 +54,16 @@ pub const SOURCES: &[(&str, &str)] = &[
     ("std/json.df", include_str!("../../../std/json.df")),
     ("std/yaml.df", include_str!("../../../std/yaml.df")),
     ("std/toml.df", include_str!("../../../std/toml.df")),
+    ("std/quantity.df", include_str!("../../../std/quantity.df")),
+    ("std/secret.df", include_str!("../../../std/secret.df")),
     ("std/csv.df", include_str!("../../../std/csv.df")),
     ("std/io.df", include_str!("../../../std/io.df")),
 ];
 
-/// The package whose functions are written bare.
-pub const PRELUDE: &str = "prelude";
-
-/// Type names a prelude function may share only as that type's
-/// constructor (`inet(s) -> inet`).
-const TYPE_NAMES: &[&str] = &[
-    "int", "string", "bool", "inet", "ip", "iprange", "list", "any", "ref", "secret", "symbol",
-    "addr", "bytes", "cpu", "duration", "time", "uri", "oci", "semver", "float",
-];
+/// The package of the lowering's own functions (crates/dform-core/src/
+/// lowering.df): bare, each `internal`, written by no program. Every
+/// other function is named by its package (R-155: no prelude).
+pub const LOWERING: &str = "lowering";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Param {
@@ -76,7 +76,8 @@ pub struct Param {
 /// One declared function.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Function {
-    /// The name a call is written with: `inet.subnet`, or bare in the prelude.
+    /// The name a call is written with: `inet.subnet`, or bare for the
+    /// lowering's own (`add`, `__path`).
     pub name: String,
     pub package: String,
     pub params: Vec<Param>,
@@ -192,7 +193,7 @@ pub fn unknown(span: crate::ast::Span, name: &str) -> crate::diag::Diagnostic {
             None => d.with_help(f.summary.clone()),
         };
     }
-    if let Some(help) = gone(name) {
+    if let Some(help) = gone(name).or_else(|| name.strip_prefix("to_").and_then(gone)) {
         return Diagnostic::error(span, format!("unknown function {name}")).with_help(help);
     }
     let meant = name
@@ -209,18 +210,10 @@ pub fn unknown(span: crate::ast::Span, name: &str) -> crate::diag::Diagnostic {
     let d = Diagnostic::error(span, format!("unknown function {name}"));
     match meant {
         Some(m) => d.with_help(format!("the function is `{m}`")),
-        None => {
-            let prelude: Vec<&str> = r
-                .functions()
-                .filter(|f| f.package == PRELUDE && !f.internal)
-                .map(|f| f.name.as_str())
-                .collect();
-            d.with_help(format!(
-                "the functions are {} and the packages {} (std/*.df)",
-                prelude.join(", "),
-                r.packages().join(", ")
-            ))
-        }
+        None => d.with_help(format!(
+            "a function is named by its package, the type it is about: {} (std/*.df)",
+            r.packages().join(", ")
+        )),
     }
 }
 
@@ -279,6 +272,20 @@ fn gone(name: &str) -> Option<String> {
             &["major", "minor", "patch", "pre"],
         ),
         "inet.prefix_len" => "a network's prefix length is its field `n.bits`".to_string(),
+        // No prelude (R-155): every function is named by its package.
+        "int" => "an int from a float is named by how it rounds, `int.trunc(f)`, \
+                  `int.round(f)`, `int.floor(f)`, `int.ceil(f)`; from a string's text, a typed \
+                  position reads it, `let n: int = s`"
+            .to_string(),
+        "float" => "an int is a float where one is wanted, `let f: float = n`; a string's text \
+                    likewise, `let f: float = s`"
+            .to_string(),
+        "format" => "a template is `str.format(\"%s-%s\", a, b)`, or an interpolation, \
+                     `\"${a}-${b}\"`"
+            .to_string(),
+        "to" => "a quantity in a unit is `quantity.to(q, unit)`".to_string(),
+        "declassify" => "a secret leaves on purpose by `secret.declassify(v, reason)`".to_string(),
+        "scoped" => "a name in a used module or a copy is `m.x`, `copy.x`".to_string(),
         // Membership is the operator `in` (R-155).
         "inet.contains" => "an address in a network is `a in net`".to_string(),
         "list.contains" => "a value in a list is `v in xs`".to_string(),
@@ -292,10 +299,9 @@ fn gone(name: &str) -> Option<String> {
         "len" | "list.len" | "str.len" => {
             "the length of a list, an object or a string is its field `x.len`".to_string()
         }
-        "str.format" => "a template is `format(\"%s-%s\", a, b)`, its values after it".to_string(),
         "bytes.to" | "cpu.to" | "duration.total" => {
-            "a quantity in a unit is `to(q, unit)`, the unit as its literals write it (`\"Gi\"`, \
-             `\"m\"`, `\"h\"`)"
+            "a quantity in a unit is `quantity.to(q, unit)`, the unit as its literals write it \
+             (`\"Gi\"`, `\"m\"`, `\"h\"`)"
                 .to_string()
         }
         "inet.addr" => "a network's `n`th usable host is `inet.host(net, n)`, its base address \
@@ -358,17 +364,6 @@ impl Registry {
                 by_name.insert(f.name.clone(), f);
             }
         }
-        for p in packages.keys() {
-            if let Some(f) = by_name.get(p.as_str()).filter(|f| f.package == PRELUDE)
-                && f.ret != *p
-            {
-                return Err(format!(
-                    "{}:{}: {p} is a package and a function: only a constructor of the \
-                     type {p} may share its name",
-                    f.file, f.line
-                ));
-            }
-        }
         Ok(Registry { by_name })
     }
 
@@ -381,13 +376,14 @@ impl Registry {
         self.by_name.values()
     }
 
-    /// The function packages, the prelude aside: the heads of qualified names.
+    /// The function packages, the lowering's aside: the heads of qualified
+    /// names.
     pub fn packages(&self) -> Vec<&str> {
         let mut out: Vec<&str> = self
             .by_name
             .values()
             .map(|f| f.package.as_str())
-            .filter(|p| *p != PRELUDE)
+            .filter(|p| *p != LOWERING)
             .collect();
         out.sort();
         out.dedup();
@@ -396,7 +392,7 @@ impl Registry {
 
     /// Whether `head` names a function package (`inet` in `inet.subnet`).
     pub fn is_package(&self, head: &str) -> bool {
-        head != PRELUDE && self.by_name.values().any(|f| f.package == head)
+        head != LOWERING && self.by_name.values().any(|f| f.package == head)
     }
 }
 
@@ -468,17 +464,20 @@ pub fn parse(file: &str, text: &str) -> Result<Vec<Function>, String> {
         let sig = sig.replace(", )", ")");
         let mut f = function(&sig).map_err(err)?;
         f.internal = internal;
-        f.name = if package == PRELUDE {
+        // The lowering's own are bare and written by no program; every
+        // other function is named by its package (R-155).
+        if package == LOWERING && !internal {
+            return Err(err(format!(
+                "{} is the lowering's: a function a program calls is named by its \
+                 package, in std/*.df",
+                f.name
+            )));
+        }
+        f.name = if package == LOWERING {
             f.name
         } else {
             format!("{package}.{}", f.name)
         };
-        if package == PRELUDE && TYPE_NAMES.contains(&f.name.as_str()) && f.ret != f.name {
-            return Err(err(format!(
-                "{} is a type: a function of that name is its constructor, `-> {}`",
-                f.name, f.name
-            )));
-        }
         f.package = package.clone();
         f.file = file.to_string();
         f.line = line;
@@ -703,24 +702,12 @@ pub const BODIES: &[(&str, Body)] = &[
     ("mod", |a| {
         num2(a, |x, y| (y != 0).then(|| x % y), |x, y| x % y)
     }),
-    // Constructors (DESIGN.org "Silent string-to-int coercion"):
-    // conversions are explicit and named by their type.
-    ("int", |a| match a {
-        [Value::Int(i)] => Some(Value::Int(*i)),
-        // Toward zero; none past an int's range.
-        [Value::Float(f)] => {
-            let t = f.get().trunc();
-            (t >= i64::MIN as f64 && t < i64::MAX as f64).then_some(Value::Int(t as i64))
-        }
-        [Value::Str(s)] => s.trim().parse().ok().map(Value::Int),
-        _ => None,
-    }),
-    ("float", |a| match a {
-        [f @ Value::Float(_)] => Some(f.clone()),
-        [Value::Int(i)] => crate::value::Float::new(*i as f64).map(Value::Float),
-        [Value::Str(s)] => crate::value::Float::parse(s).ok().map(Value::Float),
-        _ => None,
-    }),
+    // An int from a float, named by how it rounds (R-155; DESIGN.org
+    // "Silent string-to-int coercion"): none past an int's range.
+    ("int.trunc", |a| rounded(a, f64::trunc)),
+    ("int.round", |a| rounded(a, f64::round)),
+    ("int.floor", |a| rounded(a, f64::floor)),
+    ("int.ceil", |a| rounded(a, f64::ceil)),
     // An ambiguous quantity no position read has no value; the compiler
     // says so where the schema is known (`types::read`).
     (crate::types::AMBIGUOUS, |_| None),
@@ -732,20 +719,25 @@ pub const BODIES: &[(&str, Body)] = &[
         [Value::Time(t), Value::Str(zone)] => t.in_zone(zone).map(Value::Time),
         _ => None,
     }),
-    ("to", unit_of),
-    ("format", |a| {
+    ("quantity.to", unit_of),
+    (crate::ir::FORMAT, |a| {
         let fmt = a.first()?.as_str()?;
         let mut out = String::new();
         let mut parts = fmt.split("%s");
         out.push_str(parts.next().unwrap_or(""));
         for (i, p) in parts.enumerate() {
-            out.push_str(&value_to_string(a.get(i + 1)?));
+            // A list and an object have no text (R-155: `${..}` is over
+            // the types that have one).
+            match a.get(i + 1)? {
+                Value::List(_) | Value::Obj(_) => return None,
+                v => out.push_str(&value_to_string(v)),
+            }
             out.push_str(p);
         }
         Some(Value::Str(out))
     }),
     (crate::ir::LEN, len_of),
-    ("ref", |a| match a {
+    (crate::ir::REF, |a| match a {
         [Value::Str(t), Value::Str(n), Value::Str(p)] => Some(Value::Ref {
             typ: t.clone(),
             name: n.clone(),
@@ -755,7 +747,7 @@ pub const BODIES: &[(&str, Body)] = &[
         [r @ Value::Ref { .. }] => Some(r.clone()),
         _ => None,
     }),
-    ("cloud_ref", |a| match a {
+    (crate::ir::CLOUD_REF, |a| match a {
         [Value::Str(t), Value::Str(n), Value::Str(p)] => Some(Value::CloudRef {
             typ: t.clone(),
             name: n.clone(),
@@ -765,7 +757,7 @@ pub const BODIES: &[(&str, Body)] = &[
     }),
     // A name that is already an address (another copy's resource, read
     // through its output) is itself (R-65).
-    ("scoped", |a| match a {
+    (crate::ir::SCOPED, |a| match a {
         [_, Value::Str(name)] if crate::ir::is_scoped(name) => Some(Value::Str(name.clone())),
         [scope, name] => Some(Value::Str(crate::ir::scoped(
             &value_to_string(scope),
@@ -784,13 +776,13 @@ pub const BODIES: &[(&str, Body)] = &[
         [v @ Value::Obj(_)] => Some(v.clone()),
         _ => None,
     }),
-    // E DR-19: `declassify(V, Reason)` is `V`; the static pass reads it
-    // as public, and `declassified/2` records it (`transform`).
-    ("declassify", |a| match a {
+    // E DR-19: `secret.declassify(V, Reason)` is `V`; the static pass
+    // reads it as public, and `declassified/2` records it (`transform`).
+    ("secret.declassify", |a| match a {
         [v, _] => Some(v.clone()),
         _ => None,
     }),
-    // The prelude's null for (T, A, P) (E §2.5): class and type come
+    // The lowering's null for (T, A, P) (E §2.5): class and type come
     // from the schema row the rule was expanded from.
     ("__null", |a| match a {
         [t, n, p, class, ty] => Some(Value::Null {
@@ -1420,6 +1412,19 @@ pub(crate) fn value_to_string(v: &Value) -> String {
     }
 }
 
+/// `int.trunc` and its kin: the float rounded by `f` as an int (an int
+/// is itself); none past an int's range.
+fn rounded(a: &[Value], f: fn(f64) -> f64) -> Option<Value> {
+    match a {
+        [Value::Int(i)] => Some(Value::Int(*i)),
+        [Value::Float(x)] => {
+            let t = f(x.get());
+            (t >= i64::MIN as f64 && t < i64::MAX as f64).then_some(Value::Int(t as i64))
+        }
+        _ => None,
+    }
+}
+
 fn len_of(a: &[Value]) -> Option<Value> {
     match a {
         [Value::List(xs)] => Some(Value::Int(xs.len() as i64)),
@@ -1718,19 +1723,21 @@ mod tests {
         );
         assert_eq!(f.file, "std/inet.df");
         assert!(!f.summary.is_empty() && f.example.contains("inet.subnet("));
-        let f = r.get("format").unwrap();
+        let f = r.get("str.format").unwrap();
         assert!(f.variadic && f.forwards && f.takes(3) && !f.takes(0));
         assert!(
             r.get("__path")
                 .is_some_and(|f| f.internal && f.forwards && f.forwards_nulls)
         );
-        assert!(callable("int") && !callable("add") && !callable("to_int"));
+        assert!(callable("int.round") && !callable("int") && !callable("add"));
         assert!(callable("ref") && callable("cloud_ref") && !callable("scoped"));
+        assert!(!callable(crate::ir::REF) && !callable(crate::ir::SCOPED));
         assert_eq!(
             r.packages(),
             [
                 "base64", "csv", "hash", "inet", "int", "io", "ip", "json", "list", "oci", "path",
-                "random", "regex", "semver", "str", "time", "toml", "uri", "yaml"
+                "quantity", "random", "regex", "secret", "semver", "str", "time", "toml", "uri",
+                "yaml"
             ]
         );
     }
@@ -1755,13 +1762,20 @@ mod tests {
         assert!(bad("package p\nfn f(a) -> int").contains("has no type"));
         assert!(bad("package p\nfn f(a: int) -> int sometimes").contains("unknown flag"));
         assert!(bad("package p\nfn f(a: int) -> int\nfn f(b: int) -> int").contains("twice"));
-        assert!(bad("package prelude\nfn inet(s: string) -> string").contains("constructor"));
-        assert!(Registry::load(&[("t.df", "package prelude\nfn inet(s: string) -> inet")]).is_ok());
+        // No bare function but the lowering's own (R-155).
+        assert!(bad("package lowering\nfn geo(s: string) -> string").contains("the lowering's"));
+        assert!(
+            Registry::load(&[(
+                "t.df",
+                "package lowering\ninternal fn __geo(s: string) -> string"
+            )])
+            .is_ok()
+        );
         let two = Registry::load(&[
-            ("a.df", "package prelude\nfn geo(s: string) -> string"),
+            ("a.df", "package geo\nfn area(a: int) -> int"),
             ("b.df", "package geo\nfn distance(a: int, b: int) -> int"),
         ]);
-        assert!(two.unwrap_err().contains("only a constructor"));
+        assert!(two.unwrap_err().contains("also declared"));
     }
 
     /// Every function `std/*.df` declares has a body (DESIGN.org R-6:
@@ -1819,10 +1833,7 @@ mod tests {
             f.coeffect
                 || f.package == "random"
                 || f.name == "hash.sha256"
-                || matches!(
-                    f.name.as_str(),
-                    "ref" | "scoped" | "cloud_ref" | "declassify"
-                )
+                || matches!(f.name.as_str(), "secret.declassify")
         };
         // (6) Subject first, options last: a package about a type takes
         // a value of it first (`str.*` a string, `inet.*` a network);
@@ -1837,8 +1848,9 @@ mod tests {
             }
         }
         for f in registry().functions().filter(|f| !f.internal) {
-            // A component's escape is about the text going into one.
-            let escape = f.name == "uri.escape";
+            // A component's escape is about the text going into one; an
+            // int from a float is about the int it makes (`int.round`).
+            let escape = f.name == "uri.escape" || (f.package == "int" && f.ret == "int");
             if let Some(want) = subject(&f.package).filter(|_| !escape) {
                 // Or a list of them, joined (`path.join`).
                 let first = f.params.first().map(|p| p.ty.as_str());
@@ -1853,7 +1865,7 @@ mod tests {
                 );
             }
             assert!(
-                !f.variadic || f.name == "format",
+                !f.variadic || f.name == crate::ir::FORMAT,
                 "{}: a function takes a list, not any number of values ({}:{})",
                 f.signature,
                 f.file,

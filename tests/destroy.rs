@@ -16,7 +16,7 @@ use expectrl::{Eof, Expect, Session};
 const PROG: &str = r#"
 use fake { source = "prov" }
 resource db.postgres server { name = "server" }
-use k8s { kubeconfig = format("kc@%s", server.endpoint) }
+use k8s { kubeconfig = str.format("kc@%s", server.endpoint) }
 resource k8s.namespace ns { metadata.name = "app" }
 resource iam.role app_role { name = "app", assume = { principals: ["x"] } }
 resource iam.policy app_policy { name = "p", document = "{}" }
@@ -304,7 +304,7 @@ fn a_destroy_deletes_what_it_can_reach_and_stops_on_the_rest() {
         .unwrap();
     s.write("w.fakecloud.json", &cloud.to_string());
     let unreachable = "\nunreachable  stay in state\n  k8s.namespace ns\n      its provider is \
-                       not configured: provider k8s  kubeconfig = format(\"kc@%s\", \
+                       not configured: provider k8s  kubeconfig = str.format(\"kc@%s\", \
                        server.endpoint)\n";
     let p = dev(&s, &["plan", "--destroy"]).success();
     assert!(p.stdout.contains(unreachable), "{}", p.stdout);

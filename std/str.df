@@ -44,3 +44,7 @@ fn pad_right(text: string, width: int, pad: string) -> string forwards
 #| The characters from `start` up to but not including `end` (to the end when left out); an error past the text's length or for an end before its start.
 #| example: let (repo, tag) = (str.slice(image, 0, i), str.slice(image, i + 1))
 fn slice(text: string, start: int, end?: int) -> string forwards
+
+#| The template with each `%s` replaced by the next value's text; an error when there are fewer values than `%s`, or a value with no text (a list, an object). `"a-${e}"` lowers to it.
+#| example: let name = str.format("%s-%s", env, zone)
+fn format(template: string, value: any, ...) -> string forwards

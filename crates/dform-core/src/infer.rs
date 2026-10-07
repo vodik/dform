@@ -403,7 +403,7 @@ impl Pass<'_> {
         let Term::Func { name, args } = t else {
             return None;
         };
-        if name == "ref" && args.len() == 3 {
+        if name == crate::ir::REF && args.len() == 3 {
             return match &args[0] {
                 Term::Val(Value::Str(typ)) => Some((Ty::Ref(typ.clone()), "a reference".into())),
                 _ => None,

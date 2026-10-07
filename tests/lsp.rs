@@ -449,15 +449,25 @@ fn completion_reads_the_schema_and_the_modules() {
     // Its exported relation too (R-55).
     assert_eq!(outputs, vec!["vpc", "private_subnet"], "{outputs:?}");
 
-    // A plain word: the builtins it starts, their signatures.
-    let typed = format!("{original}\ny = declass");
+    // A package's name and a dot: its functions, their signatures; a
+    // plain word, the packages it starts (no function is bare, R-155).
+    let typed = format!("{original}\ny = secret.declass");
     c.change(&stack, 3, &typed);
     let n = typed.lines().count() as u32;
-    let items = c.at("textDocument/completion", &stack, (n - 1, 11));
-    assert_eq!(labels(&items), vec!["declassify"], "{items}");
+    let items = c.at("textDocument/completion", &stack, (n - 1, 18));
+    assert_eq!(labels(&items), vec!["secret.declassify"], "{items}");
     assert_eq!(
         items[0]["detail"],
-        "declassify(value: any, reason: string) -> any"
+        "secret.declassify(value: any, reason: string) -> any"
+    );
+    let typed = format!("{original}\ny = secr");
+    c.change(&stack, 4, &typed);
+    let n = typed.lines().count() as u32;
+    let items = c.at("textDocument/completion", &stack, (n - 1, 8));
+    assert_eq!(
+        labels(&items),
+        vec!["secret.declassify", "secret"],
+        "{items}"
     );
 
     c.shutdown();
@@ -1461,20 +1471,13 @@ fn hover_on_a_typed_let_shows_its_type() {
 }
 
 /// The editors' builtin names (tree-sitter's highlights and the Emacs
-/// mode) are the registry's: the aggregates, the prelude's functions
-/// (std/prelude.df, no internal one) and the core relations a body reads.
+/// mode) are the registry's: the aggregates, no function (none is bare,
+/// R-155), and the core relations a body reads.
 #[test]
 fn the_editors_builtins_are_the_registrys() {
-    use dform_core::functions::{PRELUDE, registry};
     let mut want: Vec<String> = dform_core::partition::AGGREGATES
         .iter()
         .map(|s| s.to_string())
-        .chain(
-            registry()
-                .functions()
-                .filter(|f| f.package == PRELUDE && !f.internal)
-                .map(|f| f.name.clone()),
-        )
         // The language's forms the lowering owns (R-134): no function of
         // the listing, still a call to highlight.
         .chain(dform_core::functions::FORMS.iter().map(|s| s.to_string()))

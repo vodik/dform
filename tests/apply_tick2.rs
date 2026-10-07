@@ -18,7 +18,7 @@ const PROG: &str = r#"
 use env
 use fake { source = "prov" }
 resource db.postgres server { name = "server" }
-let kc = format("%s@%s", env.var("R45_KUBECONFIG"), server.endpoint)
+let kc = str.format("%s@%s", env.var("R45_KUBECONFIG"), server.endpoint)
 use k8s { kubeconfig = kc }
 resource k8s.namespace ns { metadata.name = "app" }
 "#;

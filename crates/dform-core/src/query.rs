@@ -434,7 +434,7 @@ impl Redactor {
             }
         }
         // A column of a relation the program derives that the pass found
-        // secret (`leak(s) :- ..., s = format("pw=%s", p)`): its value at
+        // secret (`leak(s) :- ..., s = str.format("pw=%s", p)`): its value at
         // the secret path, by the relation's column when no secret it
         // holds names it better.
         let mut columns: BTreeMap<&str, Vec<(usize, &str)>> = BTreeMap::new();
@@ -789,7 +789,7 @@ mod tests {
         let (f, r) = tainted(
             r#"want("v", "a")
 arg("v", "a", "pw", "hunter22", "normal")
-               leak(s) where attr("v", "a", "pw", p), s = format("pw=%s", p)"#,
+               leak(s) where attr("v", "a", "pw", p), s = str.format("pw=%s", p)"#,
             &schema,
         );
         let Query::Body { body, vars } = parse("leak(S)").unwrap() else {

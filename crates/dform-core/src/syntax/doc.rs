@@ -258,7 +258,7 @@ pub fn markdown(title: &str, files: &[(String, SyntaxNode)]) -> String {
 }
 
 /// The standard library as `dform doc` renders it after a project's
-/// items: per signature file (std/*.df, the prelude first), each callable
+/// items: per signature file (std/*.df), each callable
 /// function's signature, summary and example, from the registry.
 pub fn std_markdown() -> String {
     let registry = crate::functions::registry();

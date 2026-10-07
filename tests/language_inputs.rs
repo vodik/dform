@@ -17,7 +17,7 @@ resource net.vpc main {
 } where env(e), replicas(r), owner(o)
 resource net.subnet "${s}" {
   cidr = n
-} where nets(ns), n = ns[i], s = format("s%s", i)
+} where nets(ns), n = ns[i], s = str.format("s%s", i)
 use fake
 "#;
 
@@ -136,7 +136,7 @@ fn a_component_input_of_the_wrong_type_is_a_violation() {
     let s = Scratch::project("lang-inputs-module");
     s.write(
         "p.df",
-        "\ncomponent m {\n  input n: int\n  resource net.vpc v {\n    n = n_\n  } where n(n_)\n}\nresource m a { n = format(\"%s\", \"three\") }\nuse fake\n",
+        "\ncomponent m {\n  input n: int\n  resource net.vpc v {\n    n = n_\n  } where n(n_)\n}\nresource m a { n = str.format(\"%s\", \"three\") }\nuse fake\n",
     );
     let r = s
         .run(&["dev", "--world", "w.json", "plan", "p.df"])

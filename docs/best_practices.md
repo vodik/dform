@@ -160,11 +160,11 @@ decl mesh_allow_direct_route(from, to)
 
 ## Convert Explicitly
 
-Arithmetic takes integers; `"10" + 1` is an error, not `11`. Convert with
-`int(s)`, write a value's text as an interpolation, `"${x}"`, and shape
-strings and lists with
-`len`, `str.lower`, `str.upper`, `str.split(S, Sep)` and `list.join(List,
-Sep)` (docs/grammar.md "Functions").
+Arithmetic takes integers; `"10" + 1` is an error, not `11`. Convert at a
+typed position, `let n: int = s`, round a float by name, `int.round(f)`,
+write a value's text as an interpolation, `"${x}"`, and shape strings and
+lists with `x.len`, `str.lower`, `str.upper`, `str.split(S, Sep)` and
+`list.join(List, Sep)` (docs/grammar.md "Functions").
 
 ## Use Stratified Negation for Defaults
 

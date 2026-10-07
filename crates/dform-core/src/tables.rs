@@ -1212,7 +1212,7 @@ pub fn expand_set_from(program: Program, declared: &mut [crate::inputs::Declared
         )));
         let names: Vec<&str> = inputs.iter().map(|(p, _, _)| *p).collect();
         let message = Term::Func {
-            name: "format".into(),
+            name: crate::ir::FORMAT.into(),
             args: vec![
                 s(&format!(
                     "%s: %s is not an input{} ({})",
@@ -1250,9 +1250,9 @@ pub fn expand_set_from(program: Program, declared: &mut [crate::inputs::Declared
 
 /// A document's leaf `v` read as the input's type `ty`: a value type
 /// (a CIDR, a quantity, a time, R-134) as a typed position reads it, a
-/// float by `float` (from an int too); and a CSV cell, all text, as an
-/// int too. The variable it binds and the literal that binds it; none
-/// where the leaf is taken as it is.
+/// float as a `float` position reads it (from an int too); and a CSV cell,
+/// all text, as an int too. The variable it binds and the literal that
+/// binds it; none where the leaf is taken as it is.
 fn read_leaf(ty: &TypeExpr, v: &str, csv: bool) -> Option<(String, Lit)> {
     let TypeExpr::Name(n) = ty else {
         return None;
@@ -1264,14 +1264,7 @@ fn read_leaf(ty: &TypeExpr, v: &str, csv: bool) -> Option<(String, Lit)> {
         let var = Term::Var(v.to_string());
         let l = Lit::Eq(
             Term::Var(parsed.clone()),
-            if value_type {
-                crate::types::at_run_time(&crate::types::Ty::parse(n), var)
-            } else {
-                Term::Func {
-                    name: n.clone(),
-                    args: vec![var],
-                }
-            },
+            crate::types::at_run_time(&crate::types::Ty::parse(n), var),
         );
         (parsed, l)
     })

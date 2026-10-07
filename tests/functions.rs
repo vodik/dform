@@ -18,7 +18,6 @@ inside(a) where a = "10.50.3.4", net(n), a in n
 words(w) where w = str.split("a,b", ",")
 joined(j) where j = list.join(["a", 1], "-")
 counted(a, b) where xs = [1, 2], s = "abc", a = xs.len, b = s.len
-port(p) where p = int("8080") + 1
 "#,
         "sub",
     );
@@ -32,7 +31,10 @@ port(p) where p = int("8080") + 1
         [r#"inside("10.50.3.4")"#]
     );
     assert_eq!(
-        one("port", "port(p) where p = int(\"8080\") + 1\n"),
+        one(
+            "port",
+            "let t = \"8080\"\nlet n: int = t\nport(p) where p = n + 1\n"
+        ),
         ["port(8081)"]
     );
     assert_eq!(
@@ -50,7 +52,7 @@ port(p) where p = int("8080") + 1
 fn a_function_missing_from_std_does_not_resolve() {
     for (call, meant) in [
         ("inet_subnet(\"10.0.0.0/8\", 8, 1)", Some("inet.subnet")),
-        ("to_int(\"1\")", Some("int")),
+        ("to_int(\"1\")", None),
         ("split(\"a,b\", \",\")", Some("str.split")),
         ("cidrsubnet(\"10.0.0.0/8\", 8, 1)", None),
         ("gref(\"a\", \"b\", \"c\")", None),
@@ -64,6 +66,12 @@ fn a_function_missing_from_std_does_not_resolve() {
             assert!(e.contains(&format!("the function is `{m}`")), "{e}");
         }
     }
+    // A conversion's old name says how a value of the type is had (R-155).
+    let e = error("p(x) where x = to_int(\"1\")\n");
+    assert!(
+        e.contains("`int.trunc(f)`") && e.contains("`let n: int = s`"),
+        "{e}"
+    );
 }
 
 /// Arithmetic is the lowering's: `a + b`, not `add(a, b)`.
@@ -222,7 +230,7 @@ sw(b) where b = str.starts_with("web-1", "web-")
 ew(b) where b = str.ends_with("image:latest", ":latest")
 co() where "team=" in "team=platform"
 nco() where not "x" in "team=platform"
-fo(s) where s = format("%s-%s", "a", "b")
+fo(s) where s = str.format("%s-%s", "a", "b")
 pl(s) where s = str.pad_left("7", 3, "0")
 pr(s) where s = str.pad_right("ab", 4, "-")
 ln(n) where s = "hello", n = s.len
@@ -372,8 +380,8 @@ fn a_total_functions_bad_input_is_an_error() {
     for body in [
         "x = str.pad_left(\"a\", 3, \"\")",
         "str.pad_left(\"a\", 3, \"\") == x, x = \"b\"",
-        "x = to(1536Mi, \"Gi\")",
-        "x = to(1536Mi, \"GB\")",
+        "x = quantity.to(1536Mi, \"Gi\")",
+        "x = quantity.to(1536Mi, \"GB\")",
         "x = time.in_zone(\"2026-10-02T09:00:00Z\", \"Mars/Olympus\")",
         "semver.satisfies(\"1.0.0\", \"not a range\"), x = 1",
     ] {
@@ -461,18 +469,18 @@ text_gap(d) where d = "2026-10-03T10:30:00Z" - a
     assert_eq!(facts(src, "text_gap"), ["text_gap(25h30m)"]);
 }
 
-/// One name per idea (R-134 rule 4): `to(q, unit)` for every quantity,
+/// One name per idea (R-134 rule 4): `quantity.to(q, unit)` for every quantity,
 /// its unit as its literals write it; one `len`; one `format`, its values
 /// after the template; the names they replace are errors naming them.
 #[test]
 fn one_name_per_idea() {
     let src = r#"let ttl: duration = 36h
 let millis: cpu = 1500m
-g(n) where n = to(3Gi, "Gi")
-h(n) where n = to(ttl, "h")
-m(n) where n = to(millis, "m")
+g(n) where n = quantity.to(3Gi, "Gi")
+h(n) where n = quantity.to(ttl, "h")
+m(n) where n = quantity.to(millis, "m")
 l(a, b, c) where xs = [1], s = "ab", o = { x: 1 }, a = xs.len, b = s.len, c = o.len
-f(s) where s = format("%s:%s", "a", 1)
+f(s) where s = str.format("%s:%s", "a", 1)
 "#;
     assert_eq!(facts(src, "g"), ["g(3)"]);
     assert_eq!(facts(src, "h"), ["h(36)"]);
@@ -483,11 +491,18 @@ f(s) where s = format("%s:%s", "a", 1)
     assert_eq!(facts(keyed, "k"), ["k(2, 7)"]);
     assert_eq!(facts(src, "f"), [r#"f("a:1")"#]);
     for (call, help) in [
-        ("bytes.to(1Gi, \"Mi\")", "`to(q, unit)`"),
-        ("duration.total(1h, \"hours\")", "`to(q, unit)`"),
+        ("bytes.to(1Gi, \"Mi\")", "`quantity.to(q, unit)`"),
+        ("duration.total(1h, \"hours\")", "`quantity.to(q, unit)`"),
         ("list.len([1])", "`x.len`"),
         ("len([1])", "`x.len`"),
-        ("str.format(\"%s\", [1])", "`format(\"%s-%s\", a, b)`"),
+        ("format(\"%s\", 1)", "`str.format(\"%s-%s\", a, b)`"),
+        ("to(1Gi, \"Mi\")", "`quantity.to(q, unit)`"),
+        (
+            "int(2.5)",
+            "`int.trunc(f)`, `int.round(f)`, `int.floor(f)`, `int.ceil(f)`",
+        ),
+        ("float(2)", "`let f: float = n`"),
+        ("declassify(\"a\", \"b\")", "`secret.declassify(v, reason)`"),
         ("hash.short(\"a\", 8)", "`str.slice(hash.sha256(s), 0, n)`"),
         ("inet.addr(\"10.0.0.0/8\", 1)", "`inet.host(net, n)`"),
         ("random.bytes(\"k\", 32)", "`random.base64(key, length)`"),
@@ -510,19 +525,28 @@ r(s) where s = path.rel("/etc/dform/prod.yaml", "/etc")
     assert!(e.contains("path.join"), "{e}");
 }
 
-/// The prelude keeps only what is about no one type (R-134 rule 7):
-/// `ref` and `cloud_ref` are forms of the language, written as before but
-/// listed nowhere; `scoped` is the lowering's own.
+/// There is no prelude (R-155): every function a program calls is named
+/// by its package; the lowering's own (`__ref`, `__scoped`, `__cloud_ref`,
+/// `add`) are no program's to write, and `scoped(..)` says what a program
+/// writes instead. `ref(..)` and `cloud_ref(T, n, p)` stay forms of the
+/// language, lowered to `__ref` and `__cloud_ref`, listed nowhere.
 #[test]
-fn the_prelude_is_what_has_no_type() {
-    let prelude: Vec<&str> = dform_core::functions::registry()
+fn there_is_no_prelude() {
+    let bare: Vec<&str> = dform_core::functions::registry()
         .functions()
-        .filter(|f| f.package == "prelude" && !f.internal)
+        .filter(|f| !f.internal && !f.name.contains('.'))
         .map(|f| f.name.as_str())
         .collect();
-    assert_eq!(prelude, ["declassify", "float", "format", "int", "to"]);
+    assert!(bare.is_empty(), "{bare:?}");
     let e = error("p(x) where x = scoped(\"a\", \"b\")\n");
-    assert!(e.contains("scoped is the lowering's"), "{e}");
+    assert!(
+        e.contains("unknown function scoped") && e.contains("`m.x`"),
+        "{e}"
+    );
+    for internal in ["__scoped", "__ref", "__cloud_ref"] {
+        let e = error(&format!("p(x) where x = {internal}(\"a\", \"b\", \"c\")\n"));
+        assert!(e.contains(&format!("{internal} is the lowering's")), "{e}");
+    }
     assert!(engine::reference("ref", true).is_none());
 }
 

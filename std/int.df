@@ -1,6 +1,26 @@
-# Integers: functions about an `int` (docs/grammar.md "Functions").
+# Integers: functions about an `int` (docs/grammar.md "Functions"). An
+# int from a float is named by how it rounds (R-155): `int.trunc`,
+# `int.round`, `int.floor`, `int.ceil`; a float from an int is the int, at
+# a typed position (`let f: float = n`); an int from a string's text is a
+# typed position too (`let port: int = cfg.port`).
 package int
 
 #| The integers from `lo` up to but not including `hi`, `step` apart (down when `step` is negative); an error when `step` is 0. `i in lo..hi` enumerates `int.range(lo, hi, 1)`.
 #| example: let even = int.range(0, 10, 2)
 fn range(lo: int, hi: int, step: int) -> list(int) forwards
+
+#| The float toward zero as an int (an int is itself); an error past an int's range.
+#| example: let whole = int.trunc(ratio * 10)
+fn trunc(f: float) -> int
+
+#| The float to the nearest int, a half away from zero (an int is itself); an error past an int's range.
+#| example: let replicas = int.round(load * 1.5)
+fn round(f: float) -> int
+
+#| The greatest int not above the float (an int is itself); an error past an int's range.
+#| example: let shards = int.floor(size / 2.5)
+fn floor(f: float) -> int
+
+#| The least int not below the float (an int is itself); an error past an int's range.
+#| example: let nodes = int.ceil(pods / 30.0)
+fn ceil(f: float) -> int
