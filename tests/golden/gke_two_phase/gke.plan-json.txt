@@ -77,8 +77,8 @@ exit: ok
               "path": "ip_cidr_range",
               "site": {
                 "at": "stacks/gke_two_phase.df:28",
-                "entry": "gke = { control_plane_cidr: inet(\"172.16.3.96/28\"), subnet_cidr: inet(\"10.141.76.0/22\") }",
-                "statement": "set { .. gke = { control_plane_cidr: inet(\"172.16.3.96/28\"), subnet_cidr: inet(\"10.141.76.0/22\") } } where env == \"dev\""
+                "entry": "gke = { control_plane_cidr: \"172.16.3.96/28\", subnet_cidr: \"10.141.76.0/22\" }",
+                "statement": "set { .. gke = { control_plane_cidr: \"172.16.3.96/28\", subnet_cidr: \"10.141.76.0/22\" } } where env == \"dev\""
               }
             },
             {
@@ -202,8 +202,8 @@ exit: ok
               "path": "master_control_plane_cidr",
               "site": {
                 "at": "stacks/gke_two_phase.df:28",
-                "entry": "gke = { control_plane_cidr: inet(\"172.16.3.96/28\"), subnet_cidr: inet(\"10.141.76.0/22\") }",
-                "statement": "set { .. gke = { control_plane_cidr: inet(\"172.16.3.96/28\"), subnet_cidr: inet(\"10.141.76.0/22\") } } where env == \"dev\""
+                "entry": "gke = { control_plane_cidr: \"172.16.3.96/28\", subnet_cidr: \"10.141.76.0/22\" }",
+                "statement": "set { .. gke = { control_plane_cidr: \"172.16.3.96/28\", subnet_cidr: \"10.141.76.0/22\" } } where env == \"dev\""
               }
             },
             {

@@ -102,7 +102,6 @@ tick 1  19 changes
           = z                              stacks/tour.df:223
   + net.vpc main                           stacks/tour.df:46
       cidr = "10.0.0.0/16"
-        = inet("10.0.0.0/16")              stacks/tour.df:46
       tags.team = "shop"                   stacks/tour.df:170
   + net.vpc_peering main-blue              stacks/tour.df:255  with t = "blue", v = "blue.vpc"
       accepter_vpc = blue.vpc              net.vpc[v]

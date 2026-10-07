@@ -1,4 +1,4 @@
-input vpc_net: inet check inet.prefix_len(vpc_net) <= 20
+input vpc_net: inet check vpc_net.bits <= 20
 input zones: list(string) = ["us-test-1a", "us-test-1b"] # @default contribution
 output vpc: addr
 output private_subnet_ids: list(ref(net.subnet))

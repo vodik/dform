@@ -43,7 +43,7 @@ use fake
 # and the plan is the difference between that and the world. (The plan's
 # first line, `deployment: tour[env=dev]`, is section 4.)
 
-resource net.vpc main { cidr = inet("10.0.0.0/16") }
+resource net.vpc main { cidr = "10.0.0.0/16" }
 
 # 2. A resource that points at another
 #

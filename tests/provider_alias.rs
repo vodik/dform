@@ -138,7 +138,7 @@ resource east.vpc a {
 
 resource east.subnet "z-${zone}" {
   vpc_id = a
-  cidr_block = inet.subnet(inet(a.cidr_block), 8, n)
+  cidr_block = inet.subnet(a.cidr_block, 8, n)
   availability_zone = zone
 } where east.availability_zone("available", zone, n)
 "#,

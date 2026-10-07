@@ -1,15 +1,15 @@
-# Semantic versions: functions about a version string, Cargo's syntax
-# (docs/grammar.md "Functions").
+# Semantic versions: functions about a `semver` (docs/grammar.md
+# "Functions"). A `semver` is a version in Cargo's syntax, `1.2.3-rc.1`:
+# a string where one is wanted (a parameter, an attribute, `let v:
+# semver = ".."`) is read as one there, a literal at compile time. It
+# orders by precedence (`a < b`), prints canonically, and `.major`,
+# `.minor`, `.patch` and `.pre` (absent: none) read its parts.
 package semver
 
-#| The version's major, minor and patch numbers and its pre-release tag; no value for text that is not a semantic version.
-#| example: let v = semver.parse(image_tag)
-fn parse(text: string) -> { major: int, minor: int, patch: int, pre: string? }?
-
-#| Whether the version satisfies the range (Cargo's syntax, `"^1.2"`, `">=1, <2"`); no value when either is not valid semver.
+#| Whether the version satisfies the range (Cargo's syntax, `"^1.2"`, `">=1, <2"`); no value when the range is not valid.
 #| example: deny "chart too old" where not semver.satisfies(chart.version, "^2.0")
-fn satisfies(version: string, range: string) -> bool?
+fn satisfies(version: semver, range: string) -> bool?
 
-#| -1, 0 or 1 as `a` is before, the same as, or after `b`; no value when either is not a semantic version.
+#| -1, 0 or 1 as `a` is before, the same as, or after `b`.
 #| example: deny "downgrade" where semver.compare(next.version, current.version) < 0
-fn compare(a: string, b: string) -> int?
+fn compare(a: semver, b: semver) -> int

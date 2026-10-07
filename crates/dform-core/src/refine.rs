@@ -221,12 +221,15 @@ pub fn of_type(t: &TypeExpr) -> Option<Constraint> {
 /// checkable table and the rest (which lowers to a deny). A literal fits
 /// when it reads the value alone: `lo <= x <= hi` (both bounds: a range;
 /// one alone does not fit), `x == v`, `x in [..]`, `len(x) OP n`,
-/// `inet.prefix_len(x) OP n`, `matches(x, "re")`. The split is sound because a
+/// `x.bits OP n` (a network's prefix length), `matches(x, "re")`. The split is sound because a
 /// `check` is a conjunction: `not (A, B)` is `not A` or `not B`, and a
 /// literal that fits shares no variable with the rest.
 pub fn split(body: &[Lit], names: &[&str]) -> (Vec<Constraint>, Vec<Lit>) {
     let is_self = |t: &Term| matches!(t, Term::Val(Value::Str(s)) if names.contains(&s.as_str()));
     let of_self = |t: &Term, f: &str| matches!(t, Term::Func { name, args } if name == f && args.len() == 1 && is_self(&args[0]));
+    // `x.bits`: a network's prefix length, its field (R-134), named by
+    // its text as the value is.
+    let bits = |t: &Term| matches!(t, Term::Val(Value::Str(s)) if s.strip_suffix(".bits").is_some_and(|n| names.contains(&n)));
     let int = |t: &Term| match t {
         Term::Val(Value::Int(n)) => Some(*n),
         _ => None,
@@ -249,12 +252,8 @@ pub fn split(body: &[Lit], names: &[&str]) -> (Vec<Constraint>, Vec<Lit>) {
             Lit::Gt(a, b) => (a, Op::Gt, b),
             _ => return None,
         };
-        let mentions = |t: &Term| {
-            is_self(t)
-                || of_self(t, "len")
-                || of_self(t, "list.len")
-                || of_self(t, "inet.prefix_len")
-        };
+        let mentions =
+            |t: &Term| is_self(t) || of_self(t, "len") || of_self(t, "list.len") || bits(t);
         if mentions(a) {
             Some((a.clone(), op, b.clone()))
         } else if mentions(b) {
@@ -492,6 +491,12 @@ pub fn lower_types(program: &Program) -> Result<Program> {
         let mut leaves = Vec::new();
         flatten(attrs, "", &mut leaves);
         let paths: BTreeSet<String> = leaves.iter().map(|(p, _)| p.clone()).collect();
+        // Each attribute's declared type: a value type's value is read as
+        // one where the rest reads it (R-134: `net.bits` of an `inet`).
+        let types: BTreeMap<String, crate::types::Ty> = leaves
+            .iter()
+            .filter_map(|(p, a)| Some((p.clone(), crate::types::of_expr(a.ty.as_ref()?))))
+            .collect();
         let mut n = 0;
         for (path, a) in leaves {
             if let Some(f) = a.flags.first() {
@@ -516,7 +521,9 @@ pub fn lower_types(program: &Program) -> Result<Program> {
             }
             if !rest.is_empty() {
                 n += 1;
-                out.extend(deny_rules(name, &path, &names, &rest, &paths, n, a.span));
+                out.extend(deny_rules(
+                    name, &path, &names, &rest, &paths, &types, n, a.span,
+                ));
             }
         }
     }
@@ -585,33 +592,47 @@ fn read_attr(typ: &str, addr: &Term, path: &str, v: &Term, n: usize, span: Span)
 /// every other attribute of the block `R` names are read, and
 /// `deny("refinement violated", {...}) :- reads, not ok(A, V)` with
 /// `ok(A, V) :- reads, R`.
+#[allow(clippy::too_many_arguments)]
 fn deny_rules(
     typ: &str,
     path: &str,
     names: &[&str],
     rest: &[Lit],
     paths: &BTreeSet<String>,
+    types: &BTreeMap<String, crate::types::Ty>,
     n: usize,
     span: Span,
 ) -> Vec<Stmt> {
     let addr = Term::Var("__RefineAddr".into());
     let v = Term::Var("__RefineValue".into());
+    let typed = |p: &str, t: &Term| match types.get(p) {
+        Some(ty) => crate::types::at_run_time(ty, t.clone()),
+        None => t.clone(),
+    };
     let mut reads = read_attr(typ, &addr, path, &v, 0, span);
-    let mut subst: BTreeMap<String, Term> =
-        names.iter().map(|s| (s.to_string(), v.clone())).collect();
+    let mut subst: BTreeMap<String, Term> = names
+        .iter()
+        .map(|s| (s.to_string(), typed(path, &v)))
+        .collect();
     // Another attribute of the block, named by its path.
     let mut named: BTreeSet<String> = BTreeSet::new();
     for l in rest {
         lit_strs(l, &mut named);
     }
-    let others: Vec<String> = named
+    // `wide.bits` names the attribute `wide` (R-134: a field of it).
+    let others: BTreeSet<String> = named
         .into_iter()
+        .map(|s| match s.split_once('.') {
+            Some((h, _)) if !paths.contains(&s) && paths.contains(h) => h.to_string(),
+            _ => s,
+        })
         .filter(|s| paths.contains(s) && !subst.contains_key(s))
         .collect();
+    let others: Vec<String> = others.into_iter().collect();
     for (i, other) in others.iter().enumerate() {
         let w = Term::Var(format!("__RefineOther{i}"));
         reads.extend(read_attr(typ, &addr, other, &w, i + 1, span));
-        subst.insert(other.clone(), w);
+        subst.insert(other.clone(), typed(other, &w));
     }
     let body: Vec<Lit> = rest.iter().map(|l| subst_lit(l, &subst)).collect();
     // The attribute (and each other one named) printed as written, not as
@@ -691,7 +712,19 @@ fn lit_strs(l: &Lit, out: &mut BTreeSet<String>) {
 
 fn subst_term(t: &Term, s: &BTreeMap<String, Term>) -> Term {
     match t {
-        Term::Val(Value::Str(x)) => s.get(x).cloned().unwrap_or_else(|| t.clone()),
+        Term::Val(Value::Str(x)) => match s.get(x) {
+            Some(v) => v.clone(),
+            // A field of the value, `net.bits` (R-134): read off it, or,
+            // where the names print as written, as written.
+            None => match x.split_once('.').and_then(|(h, f)| Some((s.get(h)?, h, f))) {
+                Some((Term::Var(v), h, _)) if v == h => Term::Var(x.clone()),
+                Some((v, _, f)) => Term::Func {
+                    name: "__path".into(),
+                    args: vec![v.clone(), Term::Val(Value::Str(f.to_string()))],
+                },
+                None => t.clone(),
+            },
+        },
         Term::Func { name, args } => Term::Func {
             name: name.clone(),
             args: args.iter().map(|a| subst_term(a, s)).collect(),
@@ -990,7 +1023,7 @@ mod tests {
         let (cs, rest) = split(&lits("1 <= days, days <= 35"), &["days"]);
         assert_eq!(cs, vec![Constraint::Range(1, 35)]);
         assert!(rest.is_empty());
-        let (cs, rest) = split(&lits("inet.prefix_len(cidr) == 28"), &["cidr"]);
+        let (cs, rest) = split(&lits("cidr.bits == 28"), &["cidr"]);
         assert_eq!(
             cs,
             vec![Constraint::PrefixLenLe(28), Constraint::PrefixLenGe(28)]

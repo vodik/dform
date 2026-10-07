@@ -21,42 +21,6 @@ fn int(value: any) -> int?
 #| example: let ratio = float(cfg.ratio)
 fn float(value: any) -> float?
 
-#| A scalar's text; lists, objects, references and nulls have none.
-#| example: let label = string(replicas)
-fn string(value: any) -> string? forwards
-
-#| A network from its CIDR text.
-#| example: let vpc_net = inet("10.50.0.0/16")
-fn inet(cidr: string) -> inet?
-
-#| An IPv4 address from its dotted text.
-#| example: let gw = ip("10.0.0.1")
-fn ip(text: string) -> ip?
-
-#| A bytes quantity from its text (`"512Mi"`) or a literal; a bare integer is bytes.
-#| example: let size = bytes(cfg.disk)
-fn bytes(value: any) -> bytes?
-
-#| A cpu quantity from its text or a literal: `cpu(500m)` reads `500m` as millicores where nothing else gives its type; an integer is cores.
-#| example: let limit = cpu(500m)
-fn cpu(value: any) -> cpu?
-
-#| A duration from its text (`"1h30m"`, `"P1M"`) or a literal: `duration(30m)` reads `30m` as minutes where nothing else gives its type.
-#| example: let grace = duration(30m)
-fn duration(value: any) -> duration?
-
-#| A time from RFC 3339 with an offset, or with a zone (`"2026-10-02T09:00[Europe/Paris]"`); a literal is checked at compile time.
-#| example: let launch = time("2026-10-02T09:00[Europe/Paris]")
-fn time(text: string) -> time?
-
-#| A url from its text, parsed and printed canonically; a literal is checked at compile time.
-#| example: let base = url(cfg.public_baseurl)
-fn url(text: string) -> url?
-
-#| The range of addresses between two, in either order.
-#| example: let pool = iprange(ip("10.0.0.10"), ip("10.0.0.99"))
-fn iprange(a: ip, b: ip) -> iprange
-
 #| The template with each `%s` replaced by the next value's text; `"a${e}"` lowers to it.
 #| example: let name = format("%s-%s", env, zone)
 fn format(template: string, value: any, ...) -> string? forwards
@@ -119,6 +83,10 @@ internal fn __null(
 #| The label a null of an attribute path carries.
 #| example: __label(T, A, P)
 internal fn __label(type: string, name: string, path: string) -> string forwards nulls
+
+#| The value read as the value type `ty` (`inet`, `time`, `bytes`, ..): a string parsed, a value of the type itself; no value for a string that is not one, which is an error at the position. A typed position over a computed value lowers to it (`let n: inet = cfg.net`).
+#| example: __as(cfg.net, "inet")
+internal fn __as(value: any, ty: string) -> any? forwards, forwards nulls
 
 #| A quantity literal with no reading of its own (`500m`) until its position's type reads it (R-66); it has no value.
 #| example: __quantity("500m", file, start, end)

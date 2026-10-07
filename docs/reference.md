@@ -2318,7 +2318,7 @@ for byte, and a file with a syntax error is reported, not rewritten.
     variables (`v`); `let n = count(s) where s in aws.subnet` is one group
     (docs/grammar.md "Aggregates").
   - expression terms: `ib = ia + 1` lowers to `IB = add(IA, 1)`; a
-    call's result is read in place, `not has semver.parse(c.version).pre`,
+    call's result is read in place, `not has json.decode(c.body).pre`,
     `str.split(s, ":")[0]`.
   - binding (docs/grammar.md "Bodies"): `=` binds the side no other
     literal binds, `in` binds its left, a relation its free variables, an
@@ -2666,26 +2666,27 @@ normal one, `--set replicas=3` an `@override` that wins over both (and
 target gives instead (`dform plan app env=prod`), and its value names the
 deployment (see "Keyed stacks"); `--set` of one is an error. `--input-file FILE.df`
 (repeatable) gives inputs as facts, one per input, `env(prod).
-allowed_cidrs([inet("10.0.0.0/8")]).`, each a normal contribution stated
+allowed_cidrs(["10.0.0.0/8"]).`, each a normal contribution stated
 where the file states it, like a `set`'s; the plan file records each input file's digest.
 
-Types are `int`, `string`, `bool`, `inet`, the quantities `bytes`, `cpu`
-and `duration`, `time`, `enum(a, b, ...)`, `list(T)`, `set(T)` and objects
+Types are `int`, `string`, `bool`, `inet`, `ip`, `iprange`, `url`, `oci`,
+`semver`, the quantities `bytes`, `cpu` and `duration`, `time`, `enum(a, b, ...)`, `list(T)`, `set(T)` and objects
 `{ k: T }` (`addr`, `ref(...)` and `any` are unchecked). A quantity is a
 number with its unit, one token (`512Mi`, `1.5Gi`, `500m`, `2`, `1h30m`,
 `30d`): bytes take binary units only (`20GB` is an error naming `20Gi`),
 a cpu is cores or millicores, `m` is millicores in a cpu position and
 minutes in a duration one (`500m` where nothing gives a type is an error
-naming both; `cpu(500m)`, `duration(30m)` say which). It compares, sums
+naming both; a typed `let`, `let limit: cpu = 500m`, says which). It compares, sums
 and takes a `min`/`max` in its base unit (`limits.memory > 2Gi`),
 scales by a number (`512Mi * 2`), adds only within its dimension, over
 its own dimension is a number (`limits.cpu / requests.cpu <= 4`), and
 prints canonically (`1536Mi`, `2`, `1h30m`), which is also what `"${q}"`
-and `string(q)` give. A provider takes it in the form its schema gives
+gives. A provider takes it in the form its schema gives
 the attribute (`bytes(quantity)` Kubernetes's string, `bytes(gib)` whole
 GiB), so `storage = 20Gi` is one spelling for every provider. A `time`
-is a zoned instant, `time("2026-10-02T09:00[Europe/Paris]")` or RFC 3339
-with an offset, compared by its instant; adding a duration is
+is a zoned instant, `"2026-10-02T09:00[Europe/Paris]"` or RFC 3339
+with an offset where a time is wanted (there are no constructors: a
+string is read as the type its position gives it, `let t: time = ".."`), compared by its instant; adding a duration is
 calendar-aware in its zone (`time.add(t, 1mo)`, `t + 1d` across a DST
 change is a calendar day). The rotation idiom: `deny "rotate the key" {
 key: k } where k in tls.key, time.before(time.add(k.issued, 90d), now)`,
@@ -2768,13 +2769,13 @@ schema's `type_refine(T, Path, C)` fact refines a value:
 
 ```dform
 input db { backup_days: int = 3 check 1 <= backup_days <= 35 }
-input gke { control_plane_cidr: inet check inet.prefix_len(control_plane_cidr) == 28 }
+input gke { control_plane_cidr: inet check control_plane_cidr.bits == 28 }
 type google.container_cluster { zones: list(string) check len(zones) >= 3 }
 ```
 
 A `check` over the value alone that fits the checkable table is a
 constraint in the attribute's cell: `lo <= x <= hi` is `range(Lo, Hi)`,
-`inet.prefix_len(x) <= N` (`>=`, `==`) is `prefix_len_le(N)` / `prefix_len_ge(N)`,
+`x.bits <= N` (`>=`, `==`) is `prefix_len_le(N)` / `prefix_len_ge(N)`,
 `len(x) <= N` is `len_le(N)` / `len_ge(N)`, `x in [..]` or `x == v` is
 `enum([..])`, `matches(x, "re")` is `regex("re")`; a `type` block's `int`,
 `string`, `bool`, `inet` or `enum(...)` is a type check. A schema writes
@@ -2794,7 +2795,7 @@ materialized, and a provider whose Schema does not declare
 `checks_refinements` makes it a compile error (E0306). Anything else (one
 bound alone, another attribute, a user predicate) lowers to a deny with the
 refinement's place, the attribute and the others it names read as their
-values (`inet.prefix_len(net) >= inet.prefix_len(wide)`); a call to a function the
+values (`net.bits >= wide.bits`); a call to a function the
 evaluator does not have, or a `matches` pattern that does not compile, is
 a compile error there; a secret input's refinement is always one, and it does
 not print the value. A `type` block's flags are not supported yet (they
@@ -2834,7 +2835,7 @@ component vpc {
 
 # stacks/dform.df
 use baseline
-resource network.vpc main { vpc_net = inet(cidrs.main) }
+resource network.vpc main { vpc_net = cidrs.main }
 use database {
   backup_days = 14
   subnet(s) where main.private_subnet(s)     # rows of its relation
@@ -3291,7 +3292,7 @@ share: the time spent in the mock's calls.
 This is an MVP:
 
 - semi-naive evaluator with hash indexes (see Performance)
-- functions declared in `std/*.df` (docs/grammar.md "Functions"): the prelude's constructors `int`, `string`, `inet`, `ip`, `iprange`, `bytes`, `cpu`, `duration`, `time`, `url` and `format`, `len`, `ref`, `scoped`, `cloud_ref`, `declassify`; `inet.subnet`, `inet.host`, `inet.addr`, `inet.contains`, `inet.overlaps`, `inet.prefix_len`, `ip.unspecified`, `str.split`, `str.lower`, `str.upper`, `str.dedent`, `str.trim`, `str.replace`, `str.starts_with`, `str.ends_with`, `str.contains`, `str.format`, `str.pad_left`, `str.pad_right`, `str.len`, `str.slice`, `list.len`, `list.join`, `list.sort`, `list.sort_by`, `list.unique`, `list.flatten`, `list.zip`, `list.min`, `list.max`, `list.sum`, `list.contains`, `list.first`, `list.last`, `time.parse`, `time.format`, `time.in_zone`, `time.add`, `time.until`, `time.before`, `duration.parse`, `duration.total`, `bytes.to`, `cpu.to`, `regex.match`, `regex.capture`, `regex.replace`, `semver.parse`, `semver.satisfies`, `semver.compare`, `oci.pinned`, `oci.with_tag`, `oci.with_digest`, `oci.with_registry`, `hash.sha256`, `hash.short`, `base64.encode`, `base64.decode`, `url.parse`, `url.join`, `url.with_scheme`, `url.with_host`, `url.with_port`, `url.with_path`, `url.with_query`, `url.encode`, `path.join`, `path.dir`, `path.base`, `path.ext`, `path.rel`, `path.clean`, `json.decode`, `json.encode`, `yaml.decode`, `yaml.encode`, `toml.decode`, `toml.encode`; arithmetic `+ - * / %`; aggregates `collect_*`, `count`, `sum`, `min`, `max`, `any`, `all`, bound in a body (`n = count(x)`)
+- functions declared in `std/*.df` (docs/grammar.md "Functions"): the prelude's `int`, `float`, `format`, `len`, `ref`, `scoped`, `cloud_ref`, `declassify`; `inet.subnet`, `inet.host`, `inet.addr`, `inet.contains`, `inet.overlaps`, `ip.unspecified`, `str.split`, `str.lower`, `str.upper`, `str.dedent`, `str.trim`, `str.replace`, `str.starts_with`, `str.ends_with`, `str.contains`, `str.format`, `str.pad_left`, `str.pad_right`, `str.len`, `str.slice`, `list.len`, `list.join`, `list.sort`, `list.sort_by`, `list.unique`, `list.flatten`, `list.zip`, `list.min`, `list.max`, `list.sum`, `list.contains`, `list.first`, `list.last`, `time.format`, `time.in_zone`, `time.add`, `time.until`, `time.before`, `duration.total`, `bytes.to`, `cpu.to`, `regex.match`, `regex.capture`, `regex.replace`, `semver.satisfies`, `semver.compare`, `oci.pinned`, `oci.with_tag`, `oci.with_digest`, `oci.with_registry`, `hash.sha256`, `hash.short`, `base64.encode`, `base64.decode`, `url.join`, `url.with_scheme`, `url.with_host`, `url.with_port`, `url.with_path`, `url.with_query`, `url.encode`, `path.join`, `path.dir`, `path.base`, `path.ext`, `path.rel`, `path.clean`, `json.decode`, `json.encode`, `yaml.decode`, `yaml.encode`, `toml.decode`, `toml.encode`; arithmetic `+ - * / %`; aggregates `collect_*`, `count`, `sum`, `min`, `max`, `any`, `all`, bound in a body (`n = count(x)`)
 - list helper predicate: `member(List, Item)` and `member(List, Index, Item)` (Index starts at 0)
 - safe(ish) negation: `not` requires the atom be ground at evaluation time
 

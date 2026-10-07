@@ -29,17 +29,21 @@ pub enum Value {
     /// (`2026-10-02T09:00:00+02:00[Europe/Paris]`).
     Time(crate::time::Time),
     /// A url (the url ticket): its canonical text, parsed at the edge
-    /// (`url(s)`, a literal in a `url` position), so two spellings of one
+    /// (a string in a `url` position), so two spellings of one
     /// url are equal and a url never equals a string. `.scheme`, `.host`,
     /// `.port`, `.path`, `.query`, `.fragment` read its components.
     Url(String),
     /// A container image reference (R-133): its canonical text,
     /// `[registry/]repository[:tag][@digest]`, parsed at the edge
-    /// (`oci(s)`, a literal in an `oci` position) as a url is, so two
+    /// (a string in an `oci` position) as a url is, so two
     /// spellings of one reference are equal and an `oci` never equals a
     /// string. `.registry`, `.repository`, `.tag`, `.digest` read its
     /// parts ([`OciRef`]).
     Oci(String),
+    /// A semantic version (R-134), Cargo's syntax: ordered by precedence,
+    /// so `a < b` compares versions; `.major`, `.minor`, `.patch`, `.pre`
+    /// read its parts.
+    Semver(Version),
     Ref {
         typ: String,
         name: String,
@@ -210,9 +214,131 @@ impl Value {
             Value::Quantity(q) => Some(q.to_string()),
             Value::Time(t) => Some(t.to_string()),
             Value::Url(u) | Value::Oci(u) => Some(u.clone()),
+            Value::Semver(v) => Some(v.to_string()),
             _ => None,
         }
     }
+}
+
+/// A semantic version (`1.2.3-rc.1`), ordered by precedence.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Version(pub semver::Version);
+
+impl Version {
+    /// `text` read as a version, or why it is not one.
+    pub fn parse(text: &str) -> Result<Version, String> {
+        semver::Version::parse(text.trim())
+            .map(Version)
+            .map_err(|e| format!("{text:?} is not a semantic version ({e})"))
+    }
+
+    /// Its parts as an object: `major`, `minor`, `patch`, and `pre` where
+    /// it has a pre-release tag.
+    pub fn parts(&self) -> Value {
+        let v = &self.0;
+        let mut m = BTreeMap::new();
+        m.insert("major".to_string(), Value::Int(v.major as i64));
+        m.insert("minor".to_string(), Value::Int(v.minor as i64));
+        m.insert("patch".to_string(), Value::Int(v.patch as i64));
+        if !v.pre.is_empty() {
+            m.insert("pre".to_string(), Value::Str(v.pre.to_string()));
+        }
+        Value::Obj(m)
+    }
+}
+
+impl std::fmt::Display for Version {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl Serialize for Version {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(&self.0.to_string())
+    }
+}
+
+impl<'de> Deserialize<'de> for Version {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Version, D::Error> {
+        let s = String::deserialize(d)?;
+        Version::parse(&s).map_err(serde::de::Error::custom)
+    }
+}
+
+/// The value types a string is read as where one is wanted (R-31, R-134):
+/// a typed `let`, a parameter, an attribute, an input.
+pub const VALUE_TYPES: &[&str] = &[
+    "inet", "ip", "iprange", "url", "oci", "semver", "time", "bytes", "cpu", "duration",
+];
+
+/// `v` read as the value type `ty` (one of [`VALUE_TYPES`]): a string
+/// parsed, a value of the type itself; or why it is not one. What a
+/// typed position does with a computed string at run time.
+pub fn read_typed(ty: &str, v: &Value) -> Result<Value, String> {
+    use crate::quantity::{Dim, Quantity};
+    let dim = match ty {
+        "bytes" => Some(Dim::Bytes),
+        "cpu" => Some(Dim::Cpu),
+        "duration" => Some(Dim::Duration),
+        _ => None,
+    };
+    match (ty, v) {
+        ("inet", Value::IpNet { .. })
+        | ("ip", Value::Ip(_))
+        | ("iprange", Value::IpRange { .. })
+        | ("url", Value::Url(_))
+        | ("oci", Value::Oci(_))
+        | ("semver", Value::Semver(_))
+        | ("time", Value::Time(_)) => Ok(v.clone()),
+        (_, Value::Quantity(q)) if Some(q.dim()) == dim => Ok(v.clone()),
+        ("inet", Value::Str(s)) => parse_ipnet(s)
+            .map(|(addr, prefix)| Value::IpNet { addr, prefix })
+            .ok_or_else(|| format!("{s:?} is not a network (`a.b.c.d/n`)")),
+        ("ip", Value::Str(s)) => ipv4_to_u32(s)
+            .map(Value::Ip)
+            .ok_or_else(|| format!("{s:?} is not an address (`a.b.c.d`)")),
+        ("iprange", Value::Str(s)) => parse_iprange(s)
+            .map(|(start, end)| Value::IpRange { start, end })
+            .ok_or_else(|| format!("{s:?} is not a range of addresses (`a.b.c.d-e.f.g.h`)")),
+        ("url", Value::Str(s)) => parse_url(s).map_err(|e| format!("{s:?} is not a url ({e})")),
+        ("oci", Value::Str(s)) => parse_oci(s),
+        ("semver", Value::Str(s)) => Version::parse(s).map(Value::Semver),
+        ("time", Value::Str(s)) => crate::time::Time::parse(s).map(Value::Time),
+        (_, Value::Str(s)) if dim.is_some() => {
+            crate::quantity::read(dim.unwrap_or(Dim::Bytes), s).map(Value::Quantity)
+        }
+        // An integer is bytes or cores; a decimal cores (`0.5` is `500m`).
+        ("bytes", Value::Int(n)) => Ok(Value::Quantity(Quantity::Bytes(*n))),
+        ("cpu", Value::Int(n)) => n
+            .checked_mul(1000)
+            .map(|m| Value::Quantity(Quantity::Cpu(m)))
+            .ok_or_else(|| format!("{n} cores is past the largest cpu")),
+        ("cpu", Value::Float(f)) => {
+            crate::quantity::read(Dim::Cpu, &f.to_string()).map(Value::Quantity)
+        }
+        _ => Err(format!("{} is not one", crate::partition::fmt_value(v))),
+    }
+}
+
+/// The parts of a network or a version as an object: what `.bits` on
+/// an `inet` and `.major` on a `semver` read (R-134).
+pub fn parts(v: &Value) -> Option<Value> {
+    match v {
+        Value::IpNet { addr, prefix } => Some(Value::Obj(BTreeMap::from([
+            ("addr".to_string(), Value::Ip(*addr)),
+            ("bits".to_string(), Value::Int(i64::from(*prefix))),
+        ]))),
+        Value::Semver(s) => Some(s.parts()),
+        _ => None,
+    }
+}
+
+/// `a.b.c.d-e.f.g.h`: a range of addresses, in either order.
+pub fn parse_iprange(s: &str) -> Option<(u32, u32)> {
+    let (a, b) = s.split_once('-')?;
+    let (a, b) = (ipv4_to_u32(a.trim())?, ipv4_to_u32(b.trim())?);
+    Some(if a <= b { (a, b) } else { (b, a) })
 }
 
 /// `text` read as a url: its canonical text, or why it is not one.
@@ -259,7 +385,7 @@ pub struct OciRef {
     pub digest: Option<String>,
 }
 
-/// What `oci(..)` and an `oci`-typed position say a reference is.
+/// What an `oci`-typed position says a reference is.
 pub const OCI_GRAMMAR: &str = "`[registry/]repository[:tag][@digest]`";
 
 impl OciRef {

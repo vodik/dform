@@ -154,8 +154,8 @@ pub fn type_text(t: &TypeExpr) -> String {
 pub fn check_type(t: &TypeExpr) -> Result<(), String> {
     match t {
         TypeExpr::Name(n) => match n.as_str() {
-            "int" | "float" | "number" | "string" | "bool" | "inet" | "symbol" | "addr" | "any"
-            | "bytes" | "cpu" | "duration" | "time" | "url" | "oci" => Ok(()),
+            "int" | "float" | "number" | "string" | "bool" | "symbol" | "addr" | "any" => Ok(()),
+            n if crate::value::VALUE_TYPES.contains(&n) => Ok(()),
             _ => Err(format!("unknown type {n}")),
         },
         TypeExpr::Apply(n, args) => match (n.as_str(), args.as_slice()) {
@@ -188,13 +188,9 @@ pub fn has_type(t: &TypeExpr, v: &Value) -> bool {
             "number" => matches!(v, Value::Int(_) | Value::Float(_)),
             "string" | "symbol" | "addr" => matches!(v, Value::Str(_)),
             "bool" => matches!(v, Value::Bool(_)),
-            "inet" => matches!(v, Value::IpNet { .. }),
-            "bytes" | "cpu" | "duration" => {
-                matches!(v, Value::Quantity(q) if q.dim().name() == n.as_str())
+            n if crate::value::VALUE_TYPES.contains(&n) => {
+                !matches!(v, Value::Str(_)) && crate::value::read_typed(n, v).is_ok()
             }
-            "time" => matches!(v, Value::Time(_)),
-            "url" => matches!(v, Value::Url(_)),
-            "oci" => matches!(v, Value::Oci(_)),
             _ => true,
         },
         TypeExpr::Apply(n, args) => match (n.as_str(), args.as_slice()) {
@@ -239,22 +235,12 @@ pub fn coerce(t: &TypeExpr, v: Value) -> Value {
         (TypeExpr::Name(n), Value::Int(i)) if n == "float" => {
             crate::value::Float::new(i as f64).map_or(Value::Int(i), Value::Float)
         }
-        (TypeExpr::Name(n), Value::Str(s)) if n == "inet" => match crate::value::parse_ipnet(&s) {
-            Some((addr, prefix)) => Value::IpNet { addr, prefix },
-            None => Value::Str(s),
-        },
-        // A quantity or a time from its text, as a literal reads (R-66).
-        (TypeExpr::Name(n), v @ (Value::Str(_) | Value::Int(_))) if crate::types::measured(n) => {
-            match crate::types::literal(
-                &crate::types::Ty::parse(n),
-                crate::ast::Term::Val(v.clone()),
-            ) {
-                Ok(crate::ast::Term::Val(r)) => r,
-                _ => v,
-            }
-        }
-        (TypeExpr::Name(n), Value::Str(s)) if n == "oci" => {
-            crate::value::parse_oci(&s).unwrap_or(Value::Str(s))
+        // A value type from its text, as a literal reads (R-31, R-66);
+        // left as it is when it is not one, which the type check reports.
+        (TypeExpr::Name(n), v @ (Value::Str(_) | Value::Int(_) | Value::Float(_)))
+            if crate::value::VALUE_TYPES.contains(&n.as_str()) =>
+        {
+            crate::value::read_typed(n, &v).unwrap_or(v)
         }
         (TypeExpr::Name(n), Value::Int(i)) if n == "string" => Value::Str(i.to_string()),
         (TypeExpr::Name(n), Value::Float(f)) if n == "string" => Value::Str(f.to_string()),

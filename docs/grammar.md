@@ -458,7 +458,7 @@ An integer literal is an int, `2`; a decimal literal is a float, `0.5`,
 float is read (`--set`, a document, `float("nan")`, a division by
 zero), never values. It prints as the shortest decimal that reads back
 as the same float, with a fraction always (`0.1`, `2.0`), in the plan,
-`string(f)` and `"${f}"`; JSON, state and a provider get a JSON number.
+`"${f}"`; JSON, state and a provider get a JSON number.
 
 Arithmetic on two ints is an int, and `int / int` stays integer
 division (`7 / 2` is `3`); with a float on either side the int is
@@ -501,14 +501,14 @@ first (`1.5h` is an error naming `1h30m`); in a string a duration may be
 ISO 8601 (`"P1M"`). A bare integer is bytes in a `bytes` position and
 cores in a `cpu` one; in a `duration` position it is an error (`30s`).
 Every quantity prints canonically, in the largest unit that divides
-exactly, so equal values print alike; `string(q)` and `"${q}"` give
-that.
+exactly, so equal values print alike; `"${q}"` gives that.
 
 `m` is millicores in a `cpu` position and minutes in a `duration` one, so
 `500m` is read by its position: an attribute, an input, a function's
-parameter, or the other side of an operator (`1h + 30m`, `cpu(1) >
-500m`). Where nothing gives it a type the literal is an error naming
-both readings; `cpu(500m)` and `duration(30m)` say which. A bare
+parameter, or the other side of an operator (`1h + 30m`, `c > 500m`
+where `c` is a cpu). Where nothing gives it a type the literal is an
+error naming both readings, and a typed `let` says which, `let limit:
+cpu = 500m`. A bare
 fraction, `0.5`, is a float ("Numbers"), read as cores where a `cpu`
 is wanted (`0.5` is `500m`, and so is `c > 0.5` where `c` is a cpu).
 
@@ -523,7 +523,7 @@ durations compare with a day taken as 24 hours; months compare only with
 months (`1mo` and `30d` do not, a month's length depends on the date).
 
 A `time` (R-62) is a zoned instant, the Temporal model: written as a
-string in a `time` position or to `time(..)`, RFC 3339 with an offset
+string in a `time` position (`let t: time = ".."`), RFC 3339 with an offset
 (`"2026-10-02T09:00:00Z"`, `Z` is UTC) or a date and time with a zone
 (`"2026-10-02T09:00[Europe/Paris]"`). It carries its zone, prints as
 `2026-10-02T09:00:00+02:00[Europe/Paris]`, and orders by its instant
@@ -546,25 +546,24 @@ is then one spelling for every provider; a value its form cannot hold
 provider sends back at such an attribute is read the same way.
 
 A `url` is a value, like `inet`: written as a string in a `url`
-position or to `url(..)`, parsed there, and held canonically (its scheme
+position (`let base: url = ".."`), parsed there, and held canonically (its scheme
 and host lower-case, a default port dropped, its path and query
 percent-encoded consistently), so two spellings of one url are equal.
-A url never equals a string: `url("https://h") == "https://h/"` is
-false; write `url(..)` on the string side. It prints as its canonical
+A url never equals a string: `base == "https://h/"` is false; give the
+string a `url` position (a typed `let`). It prints as its canonical
 text in the plan, the plan file, state and JSON. `u.scheme`, `u.host`,
 `u.port` (absent: the scheme's default), `u.path`, `u.query` (an
 object of its pairs) and `u.fragment` (absent: none) read its parts.
 `url.with_scheme`, `url.with_host`, `url.with_port`, `url.with_path`
-and `url.with_query` change one part and give a url; `url.parse` breaks
-every part out as a plain object (a string argument read as a url);
-`url.join` and `url.encode` work on strings.
+and `url.with_query` change one part and give a url; `url.join` and
+`url.encode` work on strings.
 
 An `oci` is a container image reference, a value as a url is (R-133):
 the OCI distribution reference `[registry/]repository[:tag][@digest]`,
 written as a string where an `oci` is wanted (a parameter, an
 attribute typed `oci`, `let base: oci = "ghcr.io/element-hq/synapse"`)
 and parsed there, a literal at compile time with an error naming the
-grammar. There is no constructor. It is held in Docker's familiar
+grammar. It is held in Docker's familiar
 form, so two spellings of one reference are equal: the default
 registry (`docker.io`, `index.docker.io`) is left out, and with it
 `library/` (`docker.io/library/nginx:1.27` is `nginx:1.27`). It never
@@ -578,13 +577,32 @@ tag's content), `oci.with_digest` sets the digest and keeps the tag,
 and none for a tag, digest or registry that is not one. `oci.pinned(r)`
 is `has r.digest`. Where a string is wanted, an attribute typed
 `string` (Kubernetes's `image`) or an interpolation, an `oci` is its
-text: `image: oci.with_tag(base, release)`. A `regex` is a parameter
-type only (`regex.match`'s pattern): a string whose text is checked
-as a pattern at compile time.
+text: `image: oci.with_tag(base, release)`. A `semver` is a value the
+same way (R-134): a version in Cargo's syntax, `1.2.3-rc.1`, written as
+a string where one is wanted (`semver.satisfies`'s version, `let v:
+semver = cfg.version`), ordered by precedence (`v < "2.0.0"`), its parts
+`v.major`, `v.minor`, `v.patch` and `v.pre` (absent: none). An `inet`'s
+parts are `n.addr` (its base address, an `ip`) and `n.bits` (its prefix
+length); an `iprange` is written `10.0.0.10-10.0.0.99`. A `regex` is a
+parameter type only (`regex.match`'s pattern): a string whose text is
+checked as a pattern at compile time.
+
+There are no constructors (R-134): a value of a type is made by writing
+a string where the type is wanted, and the type comes from the position
+or from inference carrying it back from where the value lands (R-34): a
+resource attribute the schema types, a function's parameter, an input's
+or a `let`'s declared type, a field read like `net.bits`. A literal there
+is checked at compile time; a computed string (a document's cell, an
+output, `cfg.net`) is read as the type at run time, and one that is not
+of it is an error at the position naming the type and the text
+(`let net is an inet: "x" is not a network`). Where inference cannot
+type a value that is only printed or compared, the annotation is the
+hint: `let base: url = ".."`, never a call. A string compared with `<`
+to a time, a version or a quantity is read as the other side's type.
 
 A literal in a position whose type is known is checked as that type at
 compile time (R-31, Postgres's unknown-literal rule): a schema attribute's
-type (`inet`, `int`, `float`, `number`, `bool`, `url`, `oci`, `enum(..)`, `ref(T)`), an input's declared
+type (`inet`, `int`, `float`, `number`, `bool`, `url`, `oci`, `semver`, `enum(..)`, `ref(T)`), an input's declared
 type for its default and a copy's value, a function's parameter.
 `cidr_block = "10.0.0/16"` in an `inet` attribute, `vpc = "main"` in a
 `ref(net.vpc)` one and `subnets = [main]` (a `ref(net.vpc)` where
@@ -903,8 +921,8 @@ where it is written.
 input at its path, a leaf by its dotted path (`db: {backup_days: 14}` is
 `db.backup_days`; a CSV document has the columns `path` and `value`);
 the document is a loader call, a selection into one, or any document
-value ("Documents"); a string is read as the input's type by its
-constructor (an `inet`, a quantity, a time, a `float`; a CSV cell as an `int` too).
+value ("Documents"); a string is read as the input's type, as a typed
+position reads it (an `inet`, a quantity, a time, a `float`; a CSV cell as an `int` too).
 A leaf under a `map(T)` input is a key of it (`labels: {owner: ops}`
 gives `labels.owner`), read as `T`, beside the keys other ranks give.
 A leaf at a path that is no input is a deny naming the file and line and
@@ -1709,7 +1727,7 @@ body binds the names it shares with it.
 - An unbound operand is an error at it: "`y` is unbound at this `<`; bind
   it with `=`, `in`, or a relation first". A name no literal binds is
   `unknown name y` (a string meant, unquoted).
-- `==` never binds: `parsed == semver.parse(c.version)` with nothing else
+- `==` never binds: `parsed == json.decode(c.body)` with nothing else
   binding `parsed` is "`parsed` is unbound at this `==`; `=` binds, `==`
   compares".
 - `=` with both sides bound by the other literals is "both sides are
@@ -1840,23 +1858,23 @@ are written bare.
 
 | package   | functions                                                                 |
 |-----------|---------------------------------------------------------------------------|
-| prelude   | the constructors `int(s)`, `string(x)`, `inet(s)`, `ip(s)`, `iprange(a, b)`, `bytes(x)`, `cpu(x)`, `duration(x)`, `time(s)`, `url(s)` (a literal argument read at compile time); `format(t, v, ...)`, `len(x)`, `ref(T, n, p)`, `scoped(s, n)`, `cloud_ref(T, n, p)`, `declassify(v, why)` |
-| `inet`    | `inet.subnet(net, bits, n)`, `inet.host(net, n)`, `inet.addr(net, n)`, `inet.contains(net, a)`, `inet.overlaps(a, b)`, `inet.prefix_len(net)` |
+| prelude   | `int(x)`, `float(x)`; `format(t, v, ...)`, `len(x)`, `ref(T, n, p)`, `scoped(s, n)`, `cloud_ref(T, n, p)`, `declassify(v, why)` |
+| `inet`    | `inet.subnet(net, bits, n)`, `inet.host(net, n)`, `inet.addr(net, n)`, `inet.contains(net, a)`, `inet.overlaps(a, b)`; fields `n.addr`, `n.bits` |
 | `int`     | `int.range(lo, hi, step)` (what `i in lo..hi` enumerates)                 |
 | `ip`      | `ip.unspecified(a)`                                                       |
 | `str`     | `str.split(s, sep[, limit])`, `str.lower(s)`, `str.upper(s)`, `str.dedent(s)`, `str.trim(s)`, `str.replace(s, from, to)`, `str.starts_with(s, p)`, `str.ends_with(s, p)`, `str.contains(s, n)`, `str.format(fmt, args)`, `str.pad_left(s, w, pad)`, `str.pad_right(s, w, pad)`, `str.len(s)`, `str.slice(s, start[, end])` |
 | `list`    | `list.len(l)` (`len` in the prelude), `list.join(l, sep)`, `list.sort(l)`, `list.sort_by(l, field)`, `list.unique(l)`, `list.flatten(l)`, `list.zip(a, b)`, `list.min(l)`, `list.max(l)`, `list.sum(l)`, `list.contains(l, v)`, `list.first(l)`, `list.last(l)` |
-| `time`    | `time.parse(s)`, `time.format(t, layout)`, `time.in_zone(t, zone)`, `time.add(t, d)`, `time.until(a, b)`, `time.before(a, b)` |
-| `duration`| `duration.parse(s)`, `duration.total(d, unit)`                            |
+| `time`    | `time.format(t, layout)`, `time.in_zone(t, zone)`, `time.add(t, d)`, `time.until(a, b)`, `time.before(a, b)` |
+| `duration`| `duration.total(d, unit)`                                                 |
 | `bytes`   | `bytes.to(q, unit)` (`"Mi"`: a whole number of them, else no value)      |
 | `cpu`     | `cpu.to(q, unit)` (`"m"` or `""` for cores)                               |
 | `random`  | `random.password(key[, length[, alphabet]])`, `random.bytes(key, length)`, `random.signing_key(key)` (secrets); `random.id(key[, length])`, `random.uuid(key)` |
 | `regex`   | `regex.match(s, re)`, `regex.capture(s, re, n)`, `regex.replace(s, re, with)` (`re` a `regex`-typed pattern, checked at compile time, R-31) |
-| `semver`  | `semver.parse(s)`, `semver.satisfies(v, range)`, `semver.compare(a, b)`   |
+| `semver`  | `semver.satisfies(v, range)`, `semver.compare(a, b)`; fields `v.major`, `v.minor`, `v.patch`, `v.pre` |
 | `oci`     | `oci.pinned(r)`, `oci.with_tag(r, t)`, `oci.with_digest(r, d)`, `oci.with_registry(r, host)` (`r` an `oci`, the OCI distribution reference `[registry/]repository[:tag][@digest]`, a string read as one; its parts are fields, `r.digest`; "Types") |
 | `hash`    | `hash.sha256(s)`, `hash.short(s, n)`                                      |
 | `base64`  | `base64.encode(s)`, `base64.decode(s)`                                    |
-| `url`     | `url.parse(s)`, `url.join(base, segment)`, `url.with_scheme(u, s)`, `url.with_host(u, h)`, `url.with_port(u, p)`, `url.with_path(u, p)`, `url.with_query(u, q)`, `url.encode(s)` |
+| `url`     | `url.join(base, segment)`, `url.with_scheme(u, s)`, `url.with_host(u, h)`, `url.with_port(u, p)`, `url.with_path(u, p)`, `url.with_query(u, q)`, `url.encode(s)` |
 | `path`    | `path.join(a, b, ...)`, `path.dir(p)`, `path.base(p)`, `path.ext(p)`, `path.rel(from, to)`, `path.clean(p)` (POSIX slashes, independent of the host) |
 | `json`, `yaml`, `toml` | `.decode(text)`, `.encode(value)`, on a document's text already in hand; the loader (`yaml(path)`, docs/layout.md) stays for reading one |
 
@@ -1877,8 +1895,9 @@ whatever the master becomes is `memo.first(KEY, random.bytes(KEY, 32))`
 ("Memo").
 
 A function to `bool` is also a predicate: `inet.contains(n, a)` as a body
-literal holds when the call is true. Conversions are constructors named
-by their type; strings never coerce silently. Arithmetic (`a + b`) lowers
+literal holds when the call is true. Strings never coerce silently: a
+typed position reads one ("Types"), `int(s)` and `float(s)` convert a
+number's text. Arithmetic (`a + b`) lowers
 to the prelude's internal `add`, `sub`, `mul`, `div`, `mod`, and an
 interpolation to `format`.
 
@@ -1886,8 +1905,8 @@ A dotted name's first segment names one thing: a type namespace (`net`), a
 provider's externs (`file`), a function package (`inet`), a module, a
 component or a copy (`config`, `network`, `blue`), or the root `world`.
 Two declarations
-that claim one head are an error naming both. A constructor is the one
-function that may share a name with a type (`inet(s)`, the type `inet`,
+that claim one head are an error naming both. No function shares a name
+with a type but the conversions `int` and `float` (the type `inet` and
 the package `inet`).
 
 ## What lowers to what
@@ -2067,9 +2086,7 @@ The normal forms:
   order, `input` then `decl` then `output`, before its own body (R-11a);
 - in a project, a literal in a typed position is in its shortest
   spelling: a string in a `bytes`, `cpu` or `duration` position that reads
-  as one loses its quotes (`"2Gi"` is `2Gi`, `"500m"` is `500m`), and an
-  `inet`, `ip` or `time` constructor of a string in a position of its type
-  is dropped (`inet("10.0.0.0/16")` is `"10.0.0.0/16"`). The positions are
+  as one loses its quotes (`"2Gi"` is `2Gi`, `"500m"` is `500m`). The positions are
   a schema attribute (in a block, or a `set`, through a variable over a
   keyed list's elements too), an input's default, a component's
   resource's or a `use`'s entry for an input, a function's typed parameter, and a

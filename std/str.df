@@ -42,7 +42,7 @@ fn contains(text: string, needle: string) -> bool
 fn format(template: string, args: list) -> string? forwards
 
 #| The text padded on the left with `pad` to at least `width` characters; no value when `pad` is empty.
-#| example: let n = str.pad_left(string(i), 3, "0")
+#| example: let n = str.pad_left("${i}", 3, "0")
 fn pad_left(text: string, width: int, pad: string) -> string? forwards
 
 #| The text padded on the right with `pad` to at least `width` characters; no value when `pad` is empty.

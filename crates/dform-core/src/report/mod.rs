@@ -2794,8 +2794,6 @@ fn attr_texts(d: &Deformation, l: &Line, s: &Site, why: Why) -> Vec<String> {
                     && !rhs.starts_with("(sensitive")
                     && reads(rhs)
                     && !after.contains(rhs.as_str())
-                    // A typed literal: `inet("10.0.0.0/16")`.
-                    && !rhs.ends_with(&format!("({after})"))
             });
         let beat = beat_text(s, d);
         return match rhs {

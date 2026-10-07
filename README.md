@@ -496,16 +496,18 @@ deny "subnets overlap" { a: x, b: y } where {
 deny "database reachable from the internet" where {
   rule in aws.security_group_rule
   rule.to_port == 5432
-  inet.contains(rule.cidr_ipv4, ip("0.0.0.0"))
+  inet.contains(rule.cidr_ipv4, "0.0.0.0")
 }
 ```
 
 A literal takes the type its position expects, as in Postgres:
 `cidr_block = "10.0.0.0/16"` is an `inet` because the schema says so,
 and a literal that does not parse is an error at that line. Types are
-inferred where they are not declared. `inet.subnet`, `inet.host`,
-`inet.contains`, `inet.overlaps` and `inet.prefix_len` are the network
-arithmetic; `ip`, `inet`, `int` and `string` parse text on purpose;
+inferred where they are not declared, and there are no constructors: a
+string becomes a network where an `inet` is wanted, an attribute, a
+parameter, `let net: inet = cfg.net`. `inet.subnet`, `inet.host`,
+`inet.contains`, `inet.overlaps` and a network's fields `n.addr` and
+`n.bits` are the network arithmetic;
 quantities are values too, a number and its unit in one token: `memory
 = 512Mi` is `bytes`, `cpu = 500m` a `cpu` (millicores, because the
 schema says cpu; `m` is minutes where it says duration), compared in
@@ -516,8 +518,8 @@ zone, a month a month and a day a day across DST;
 `enum`, `list`, `set`, `ref(T)` and `secret(T)` are the other types,
 and `type environment = enum("dev", "staging", "prod")` names one. A
 `check` refines any of them, `input replicas: int = 2 check 1 <=
-replicas <= 10`, `cidr_block: inet check inet.prefix_len(cidr_block) <=
-24` in a schema, and a check is a policy: it is a `deny` over the
+replicas <= 10`, `cidr_block: inet check cidr_block.bits <= 24` in a
+schema, and a check is a policy: it is a `deny` over the
 value, checked at compile time for a literal, at evaluation for a
 computed value, and by the provider after apply for a secret, with
 `why` explaining a failure like any deny.
@@ -527,7 +529,7 @@ on demand, with binding modes: `aws.availability_zone["available"]`,
 `aws.ami[filter]`, `time.now()`. Functions are pure and qualified by the
 type they are about, `inet.subnet`, `str.split`, `regex.match`,
 `oci.with_tag`, declared in signature files you can jump to from the
-editor; constructors are named by their type, `int(s)`, `inet(s)`. A
+editor. A
 generated secret is a function too: `random.password("db")` derives the
 same value every run from the deployment's own secret, so nothing is
 stored; what must be kept is kept on purpose, `memo.first("db-created",

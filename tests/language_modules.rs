@@ -302,7 +302,7 @@ fn dform_df_peers_each_edge_with_its_own_pair() {
     common::copy_dir(&common::repo().join("examples/demo"), &s.dir);
     let third = r#"
 resource network.vpc third {
-  vpc_net = inet("10.70.0.0/16")
+  vpc_net = "10.70.0.0/16"
 }
 vpc_peer_inst("main", "third")
 "#;
@@ -372,8 +372,8 @@ use fake
 use config
 use modules.lan
 
-resource lan.vpc main { range = inet("10.1.0.0/16") }
-resource modules.lan.vpc spare { range = inet("10.2.0.0/16") }
+resource lan.vpc main { range = "10.1.0.0/16" }
+resource modules.lan.vpc spare { range = "10.2.0.0/16" }
 use postgres
 
 tiers(t) where config.tier(t)

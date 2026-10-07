@@ -18,10 +18,10 @@ type settings {
   network_name: string
   regional_proxy_cidr: inet
   gke: {
-    control_plane_cidr: inet check inet.prefix_len(control_plane_cidr) == 28 # checkable: lives in the cell
-    subnet_cidr: inet check inet.prefix_len(subnet_cidr) == 22
-    pods_cidr: inet check inet.prefix_len(pods_cidr) == 21
-    services_cidr: inet check inet.prefix_len(services_cidr) == 21
+    control_plane_cidr: inet check control_plane_cidr.bits == 28 # checkable: lives in the cell
+    subnet_cidr: inet check subnet_cidr.bits == 22
+    pods_cidr: inet check pods_cidr.bits == 21
+    services_cidr: inet check services_cidr.bits == 21
     static_ips: map({ type: enum("INTERNAL") }) # was a constraint rule
   }
 }
@@ -36,12 +36,12 @@ set {
   project_id = "renfry-dev-973682"
   project_name = "renfry-dev"
   network_name = "renfry-dev-network"
-  regional_proxy_cidr = inet("10.193.0.0/24")
+  regional_proxy_cidr = "10.193.0.0/24"
   gke = {
-    control_plane_cidr: inet("172.16.3.96/28"),
-    subnet_cidr: inet("10.141.76.0/22"),
-    pods_cidr: inet("10.141.80.0/21"),
-    services_cidr: inet("10.141.88.0/21"),
+    control_plane_cidr: "172.16.3.96/28",
+    subnet_cidr: "10.141.76.0/22",
+    pods_cidr: "10.141.80.0/21",
+    services_cidr: "10.141.88.0/21",
   }
 } where env == "dev"
 
@@ -49,12 +49,12 @@ set {
   project_id = "renfry-stg"
   project_name = "renfry-stg"
   network_name = "renfry-stg-network"
-  regional_proxy_cidr = inet("10.193.1.0/24")
+  regional_proxy_cidr = "10.193.1.0/24"
   gke = {
-    control_plane_cidr: inet("172.16.3.112/28"),
-    subnet_cidr: inet("10.141.100.0/22"),
-    pods_cidr: inet("10.141.104.0/21"),
-    services_cidr: inet("10.141.112.0/21"),
+    control_plane_cidr: "172.16.3.112/28",
+    subnet_cidr: "10.141.100.0/22",
+    pods_cidr: "10.141.104.0/21",
+    services_cidr: "10.141.112.0/21",
   }
 } where env == "stg"
 

@@ -1510,6 +1510,7 @@ pub fn fmt_value(v: &Value) -> String {
         Value::Quantity(q) => q.to_string(),
         Value::Time(t) => t.to_string(),
         Value::Url(u) | Value::Oci(u) => u.clone(),
+        Value::Semver(v) => v.to_string(),
     }
 }
 

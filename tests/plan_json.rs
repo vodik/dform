@@ -298,7 +298,7 @@ fn plan_json_why_explains_each_change() {
         cidr["chain"],
         json!([
             {"expr": "gke.subnet_cidr", "at": "stacks/gke_two_phase.df:43"},
-            {"expr": "inet(\"10.141.76.0/22\")", "at": "stacks/gke_two_phase.df:28"},
+            {"expr": "\"10.141.76.0/22\"", "at": "stacks/gke_two_phase.df:28"},
         ]),
         "{subnet}"
     );

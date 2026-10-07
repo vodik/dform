@@ -260,14 +260,14 @@ fn fmt_puns_an_entry_whose_value_is_its_name() {
 
 /// In a project, a literal in a typed position is in its shortest
 /// spelling, the providers' schemas read from their schema files with no
-/// provider started (R-52, amended): a quantity's string loses its quotes,
-/// an `inet` constructor of its own text goes. Outside a project, with no
+/// provider started (R-52, amended): a quantity's string loses its quotes.
+/// Outside a project, with no
 /// schema, no literal changes.
 #[test]
 fn fmt_writes_a_typed_literal_in_its_shortest_spelling() {
     let src = "use k8s\n\nresource k8s.deployment d {\n  spec.replicas = 1\n  \
                spec.template.spec.containers = [{ name: \"a\", resources: { limits: { memory: \"2Gi\" } } }]\n}\n\
-               component c {\n  input cidr: inet\n}\nresource c a { cidr = inet(\"10.1.0.0/16\") }\n";
+               component c {\n  input cidr: inet\n}\nresource c a { cidr = \"10.1.0.0/16\" }\n";
     let want = "use k8s\n\nresource k8s.deployment d {\n  spec.replicas = 1\n  \
                 spec.template.spec.containers = [{ name: \"a\", resources: { limits: { memory: 2Gi } } }]\n}\n\
                 component c {\n  input cidr: inet\n}\nresource c a { cidr = \"10.1.0.0/16\" }\n";

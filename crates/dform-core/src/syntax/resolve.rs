@@ -5756,25 +5756,24 @@ impl<'u> Lowerer<'u> {
                 .get(i)
                 .or(if f.variadic { f.params.last() } else { None });
             let ty = match p.map(|p| crate::types::Ty::parse(&p.ty)) {
-                // A quantity's or time's constructor reads a literal as its
-                // type, at compile time (R-66, R-62): `cpu(500m)`,
-                // `time("2026-13-01")` is an error here.
-                _ if i == 0 && crate::types::measured(name) => {
-                    crate::types::Ty::Scalar(name.to_string())
-                }
                 Some(t @ crate::types::Ty::Scalar(_)) if p.is_some_and(|p| p.ty != "string") => t,
                 _ => {
                     out.push(a);
                     continue;
                 }
             };
+            // A literal is read as the parameter's type at compile time; a
+            // computed value is the body's to read (`engine::as_params`).
+            let a = match a {
+                Term::Val(_) => a,
+                Term::Func { ref name, .. } if name == crate::types::AMBIGUOUS => a,
+                a => {
+                    out.push(a);
+                    continue;
+                }
+            };
             match crate::types::literal(&ty, a) {
                 Ok(a) => out.push(a),
-                // A constructor's literal: what is wrong with its text.
-                Err(why) if i == 0 && crate::types::measured(name) => {
-                    let why = why.strip_prefix(&format!("is {name}: ")).unwrap_or(&why);
-                    return self.error(span, format!("not a {name}: {why}"));
-                }
                 Err(why) => {
                     let p = p.map(|p| p.name.as_str()).unwrap_or("");
                     return self.error(span, format!("`{name}`'s argument `{p}` {why}"));

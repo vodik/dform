@@ -8,11 +8,11 @@ use common::{error, facts};
 
 #[test]
 fn a_field_of_a_call() {
-    let src = r#"version("1.2.3-rc.1")
-version("1.2.3")
-pre(v, p) where version(v), p = semver.parse(v).pre
+    let src = r#"image("ghcr.io/o/app:1.2")
+image("ghcr.io/o/app")
+tag(i, t) where image(i), t = oci.with_registry(i, "r.example").tag
 "#;
-    assert_eq!(facts(src, "pre"), [r#"pre("1.2.3-rc.1", "rc.1")"#]);
+    assert_eq!(facts(src, "tag"), [r#"tag("ghcr.io/o/app:1.2", "1.2")"#]);
 }
 
 #[test]
@@ -38,23 +38,23 @@ second(d, v) where doc(d), v = json.decode(d).a.b[1].c
 
 #[test]
 fn has_and_not_has_a_field_of_a_call() {
-    let src = r#"version("1.2.3-rc.1")
-version("1.2.3")
-prerelease(v) where version(v), has semver.parse(v).pre
-release(v) where version(v), not has semver.parse(v).pre
+    let src = r#"image("ghcr.io/o/app:1.2")
+image("ghcr.io/o/app")
+tagged(i) where image(i), has oci.with_registry(i, "r.example").tag
+untagged(i) where image(i), not has oci.with_registry(i, "r.example").tag
 "#;
-    assert_eq!(facts(src, "prerelease"), [r#"prerelease("1.2.3-rc.1")"#]);
-    assert_eq!(facts(src, "release"), [r#"release("1.2.3")"#]);
+    assert_eq!(facts(src, "tagged"), [r#"tagged("ghcr.io/o/app:1.2")"#]);
+    assert_eq!(facts(src, "untagged"), [r#"untagged("ghcr.io/o/app")"#]);
 }
 
 /// The chain reads what the rebinding reads: one rule written both ways
 /// derives the same rows.
 #[test]
 fn a_chain_after_a_call_is_the_rebinding() {
-    let src = r#"version("1.2.3-rc.1")
-version("2.0.0")
-a(v, m) where version(v), m = semver.parse(v).major
-b(v, m) where version(v), p = semver.parse(v), m = p.major
+    let src = r#"net("10.0.0.0/8")
+net("192.168.0.0/16")
+a(n, m) where net(n), m = inet.subnet(n, 8, 1).bits
+b(n, m) where net(n), p = inet.subnet(n, 8, 1), m = p.bits
 "#;
     let a: Vec<String> = facts(src, "a").iter().map(|f| f[1..].to_string()).collect();
     let b: Vec<String> = facts(src, "b").iter().map(|f| f[1..].to_string()).collect();

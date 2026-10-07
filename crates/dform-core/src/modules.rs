@@ -610,6 +610,13 @@ pub fn expand(program: &Program) -> Result<Expanded> {
         }
     }
 
+    // What a `set`, a `use` block or a copy gives a typed input is read as
+    // its type (R-31, R-134): a literal now, a computed value at run time.
+    for s in &mut expanded {
+        if let Stmt::Fact(h) | Stmt::Rule(RuleStmt { head: h, .. }) = s {
+            read_input(h, &cx.declared);
+        }
+    }
     let expanded = expanded.into_iter().map(unmark_stmt).collect::<Vec<_>>();
     if cx.diags.is_empty() {
         Ok(Expanded {
@@ -623,6 +630,83 @@ pub fn expand(program: &Program) -> Result<Expanded> {
         })
     } else {
         Err(Diagnostics(cx.diags).into())
+    }
+}
+
+/// `arg(input, scope, k, V, ..)` with `V` read as the declared type of
+/// the input `k` of `scope`, or of the fields of `V` the inputs under `k`
+/// declare (`gke = { subnet_cidr: "10.0.0.0/22" }`).
+fn read_input(h: &mut Atom, declared: &[Declared]) {
+    if h.pred != "arg" || h.args.len() < 4 {
+        return;
+    }
+    let (Term::Val(Value::Str(t)), Term::Val(Value::Str(scope)), Term::Val(Value::Str(k))) =
+        (&h.args[0], &h.args[1], &h.args[2])
+    else {
+        return;
+    };
+    if t != INPUT {
+        return;
+    }
+    let (scope, k) = (scope.clone(), k.clone());
+    for d in declared.iter().filter(|d| d.scope == scope) {
+        let rest = match d.decl.name.strip_prefix(k.as_str()) {
+            Some("") => "",
+            Some(r) if r.starts_with('.') => &r[1..],
+            _ => continue,
+        };
+        read_typed_at(&mut h.args[3], rest, &d.decl.ty);
+    }
+}
+
+/// The term at `path` inside `t` read as `ty` ([`read_input`]).
+fn read_typed_at(t: &mut Term, path: &str, ty: &TypeExpr) {
+    if path.is_empty() {
+        match t {
+            Term::Val(v) => *t = Term::Val(crate::inputs::coerce(ty, v.clone())),
+            Term::Var(_) | Term::Func { .. } => {
+                let v = std::mem::replace(t, Term::Wildcard);
+                *t = crate::types::at_run_time(&crate::types::of_expr(ty), v);
+            }
+            Term::List(xs) => {
+                if let TypeExpr::Apply(n, inner) = ty
+                    && (n == "list" || n == "set")
+                    && let [inner] = inner.as_slice()
+                {
+                    xs.iter_mut().for_each(|x| read_typed_at(x, "", inner));
+                }
+            }
+            Term::Obj(m) => {
+                if let TypeExpr::Object(fs) = ty {
+                    for (k, ft) in fs {
+                        if let Some(x) = m.get_mut(k) {
+                            read_typed_at(x, "", ft);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+        return;
+    }
+    let (seg, rest) = path.split_once('.').unwrap_or((path, ""));
+    match t {
+        Term::Obj(m) => {
+            if let Some(x) = m.get_mut(seg) {
+                read_typed_at(x, rest, ty);
+            }
+        }
+        Term::Val(Value::Obj(m)) => {
+            if let Some(x) = m.get_mut(seg) {
+                let mut held = Term::Val(std::mem::replace(x, Value::Bool(false)));
+                read_typed_at(&mut held, rest, ty);
+                *x = match held {
+                    Term::Val(v) => v,
+                    _ => Value::Bool(false),
+                };
+            }
+        }
+        _ => {}
     }
 }
 
@@ -1266,6 +1350,19 @@ pub(crate) fn subst_lit(l: &Lit, name: &str, v: &Term) -> Lit {
 fn subst_term(t: &Term, name: &str, v: &Term) -> Term {
     match t {
         Term::Val(Value::Str(s)) if s == name => v.clone(),
+        // A field of the value, `net.bits` (R-134): renamed with it, read
+        // off it, or where the name prints as written, as written.
+        Term::Val(Value::Str(s)) if s.strip_prefix(name).is_some_and(|r| r.starts_with('.')) => {
+            let field = &s[name.len() + 1..];
+            match v {
+                Term::Val(Value::Str(n)) => Term::Val(Value::Str(format!("{n}.{field}"))),
+                Term::Var(n) if n == name => Term::Var(s.clone()),
+                v => Term::Func {
+                    name: "__path".into(),
+                    args: vec![v.clone(), Term::Val(Value::Str(field.to_string()))],
+                },
+            }
+        }
         Term::Func { name: f, args } => Term::Func {
             name: f.clone(),
             args: args.iter().map(|a| subst_term(a, name, v)).collect(),

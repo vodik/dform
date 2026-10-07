@@ -10,11 +10,11 @@ use dform_core::parser::parse_program;
 #[test]
 fn qualified_functions_evaluate() {
     let got = facts(
-        r#"net(inet("10.50.0.0/16"))
+        r#"net("10.50.0.0/16")
 sub(c) where net(n), c = inet.subnet(n, 8, 2)
 host(h) where net(n), h = inet.host(n, 1)
-size(p) where net(n), p = inet.prefix_len(n)
-inside(a) where a = ip("10.50.3.4"), net(n), inet.contains(n, a)
+size(p) where net(n), p = n.bits
+inside(a) where a = "10.50.3.4", net(n), inet.contains(n, a)
 words(w) where w = str.split("a,b", ",")
 joined(j) where j = list.join(["a", 1], "-")
 counted(a, b) where a = len([1, 2]), b = list.len("abc")
@@ -27,9 +27,9 @@ port(p) where p = int("8080") + 1
     assert_eq!(
         one(
             "inside",
-            "net(inet(\"10.50.0.0/16\"))\ninside(a) where a = ip(\"10.50.3.4\"), net(n), inet.contains(n, a)\n"
+            "net(\"10.50.0.0/16\")\ninside(a) where a = \"10.50.3.4\", net(n), inet.contains(n, a)\n"
         ),
-        ["inside(10.50.3.4)"]
+        [r#"inside("10.50.3.4")"#]
     );
     assert_eq!(
         one("port", "port(p) where p = int(\"8080\") + 1\n"),
@@ -49,10 +49,7 @@ port(p) where p = int("8080") + 1
 #[test]
 fn a_function_missing_from_std_does_not_resolve() {
     for (call, meant) in [
-        (
-            "inet_subnet(inet(\"10.0.0.0/8\"), 8, 1)",
-            Some("inet.subnet"),
-        ),
+        ("inet_subnet(\"10.0.0.0/8\", 8, 1)", Some("inet.subnet")),
         ("to_int(\"1\")", Some("int")),
         ("split(\"a,b\", \",\")", Some("str.split")),
         ("cidrsubnet(\"10.0.0.0/8\", 8, 1)", None),
@@ -181,14 +178,16 @@ fn a_bad_regex_literal_is_a_compile_error() {
     );
 }
 
-/// `semver.parse`, `semver.satisfies`, `semver.compare`.
+/// A `semver` is a type (R-134): its parts are fields, a string where
+/// one is wanted is read as one; `semver.satisfies`, `semver.compare`.
 #[test]
 fn semver_functions_evaluate() {
-    let src = r#"p(maj) where v = semver.parse("1.2.3-rc.1"), maj = v.major
+    let src = r#"let v: semver = "1.2.3-rc.1"
+p(maj, pre) where maj = v.major, pre = v.pre
 s(ok) where ok = semver.satisfies("1.5.0", "^1.0")
 c(n) where n = semver.compare("2.0.0", "1.9.9")
 "#;
-    assert_eq!(facts(src, "p"), ["p(1)"]);
+    assert_eq!(facts(src, "p"), [r#"p(1, "rc.1")"#]);
     assert_eq!(facts(src, "s"), ["s(true)"]);
     assert_eq!(facts(src, "c"), ["c(1)"]);
 }
@@ -305,15 +304,17 @@ d(s) where s = base64.decode("aGVsbG8=")
 /// `inet` does; `url.join` and `url.encode` are about strings.
 #[test]
 fn url_functions_evaluate() {
-    let src = r#"u(x) where x = url("https://example.com/a")
+    let src = r#"let a: url = "https://example.com/a"
+let p: url = "https://h.example.com:8080/x?a=1"
+u(x) where x = a
 j(x) where x = url.join("https://example.com/a", "b")
-sc(x) where x = url.with_scheme(url("http://h/p"), "https")
-ho(x) where x = url.with_host(url("http://h/p"), "other")
-po(x) where x = url.with_port(url("http://h/p"), 8080)
-pa(x) where x = url.with_path(url("http://h/p"), "/q")
-qu(x) where x = url.with_query(url("http://h/p"), { a: "1" })
+sc(x) where x = url.with_scheme("http://h/p", "https")
+ho(x) where x = url.with_host("http://h/p", "other")
+po(x) where x = url.with_port("http://h/p", 8080)
+pa(x) where x = url.with_path("http://h/p", "/q")
+qu(x) where x = url.with_query("http://h/p", { a: "1" })
 en(x) where x = url.encode("a b/c")
-pr(h) where p = url.parse("https://h.example.com:8080/x?a=1"), h = p.host
+pr(h) where h = p.host
 "#;
     assert_eq!(facts(src, "u"), [r#"u(https://example.com/a)"#]);
     assert_eq!(facts(src, "j"), [r#"j("https://example.com/a/b")"#]);
@@ -332,11 +333,16 @@ pr(h) where p = url.parse("https://h.example.com:8080/x?a=1"), h = p.host
 /// JSON carries its canonical text.
 #[test]
 fn a_url_is_a_value() {
-    let src = r#"same() where url("HTTPS://Example.COM:443") == url("https://example.com/")
-text() where url("https://example.com/") == "https://example.com/"
-parts(s, h, p, a, q, f) where u = url("http://h.example.com:8080/a/b?x=1#top"), s = u.scheme, h = u.host, p = u.port, a = u.path, q = u.query.x, f = u.fragment
-noport(p) where u = url("https://h/"), p = u.port
-enc(j) where j = json.encode({ u: url("https://h") })
+    let src = r#"let shouting: url = "HTTPS://Example.COM:443"
+let plain: url = "https://example.com/"
+let full: url = "http://h.example.com:8080/a/b?x=1#top"
+let bare: url = "https://h/"
+let home: url = "https://h"
+same() where shouting == plain
+text() where plain == "https://example.com/"
+parts(s, h, p, a, q, f) where s = full.scheme, h = full.host, p = full.port, a = full.path, q = full.query.x, f = full.fragment
+noport(p) where p = bare.port
+enc(j) where j = json.encode({ u: home })
 "#;
     assert_eq!(facts(src, "same"), ["same()"]);
     assert!(facts(src, "text").is_empty());
@@ -348,10 +354,8 @@ enc(j) where j = json.encode({ u: url("https://h") })
     assert_eq!(facts(src, "enc"), [r#"enc("{\"u\":\"https://h/\"}")"#]);
 }
 
-/// A bad url literal in a `url`-typed position is a compile error.
-/// `url(text: string)`'s own literal, like `inet`'s and `ip`'s, is a
-/// string argument: checked where its position's type is `url`
-/// (`with_scheme`'s `u`), not at the bare constructor's own call.
+/// A bad url literal in a `url`-typed position is a compile error
+/// (`with_scheme`'s `u`).
 #[test]
 fn a_bad_url_literal_is_a_compile_error() {
     let e = error("p(x) where x = url.with_scheme(\"not a url\", \"https\")\n");
@@ -433,7 +437,7 @@ fn decode_reads_as_a_document_does() {
     let src = r#"whole(n, i) where n = json.decode("{\"a\": 2.0}").a, i = json.decode("2")
 frac(n) where n = yaml.decode("a: 1.5\n").a
 absent(k) where v = json.decode("{\"a\": 1, \"b\": null}"), k = len(v)
-when(t) where t = toml.decode("a = 2026-10-02T09:00:00Z\n").a, time.before(t, time("2027-01-01T00:00:00Z"))
+when(t) where t = toml.decode("a = 2026-10-02T09:00:00Z\n").a, time.before(t, "2027-01-01T00:00:00Z")
 "#;
     assert_eq!(facts(src, "whole"), ["whole(2.0, 2)"]);
     assert_eq!(facts(src, "frac"), ["frac(1.5)"]);
@@ -446,4 +450,52 @@ when(t) where t = toml.decode("a = 2026-10-02T09:00:00Z\n").a, time.before(t, ti
         let err = engine::eval(&program, &[]).unwrap_err().to_string();
         assert!(err.contains("is not defined for these arguments"), "{err}");
     }
+}
+
+/// There are no constructors (R-134): a call of one is an error that
+/// says how a string becomes the type, a typed position or a typed
+/// `let`; `X.parse` and `string(x)` likewise.
+#[test]
+fn a_constructor_is_an_error_naming_the_typed_position() {
+    for (call, help) in [
+        ("inet(\"10.0.0.0/8\")", "`let n: inet = \"10.0.0.0/16\"`"),
+        ("ip(\"10.0.0.1\")", "`let a: ip = \"10.0.0.1\"`"),
+        ("time(\"2026-10-02T09:00:00Z\")", "`let t: time ="),
+        ("duration(\"P1M\")", "`let d: duration = 30m`"),
+        ("bytes(\"1Gi\")", "`let b: bytes ="),
+        ("cpu(\"500m\")", "`let c: cpu = 500m`"),
+        ("url(\"https://h\")", "`let u: url ="),
+        ("semver.parse(\"1.2.3\")", "`v.major`"),
+        ("time.parse(\"2026-10-02T09:00:00Z\")", "`let t: time ="),
+        ("inet.prefix_len(\"10.0.0.0/8\")", "`n.bits`"),
+        ("string(1)", "`\"${x}\"`"),
+    ] {
+        let e = error(&format!("p(x) where x = {call}\n"));
+        let name = call.split('(').next().unwrap();
+        assert!(e.contains(&format!("unknown function {name}")), "{e}");
+        assert!(e.contains(help), "{call}: {e}");
+    }
+}
+
+/// A typed `let` over a computed string reads it as the type at run time
+/// (R-134, the R-133 carry-over): the only way a computed string becomes
+/// a value of a type, and one that is not of it is an error naming the
+/// `let`.
+#[test]
+fn a_typed_let_reads_a_computed_string_at_run_time() {
+    let src = r#"let cfg = { net: "10.5.0.0/16", image: "ghcr.io/o/app:1.2", v: "1.2.3", bad: "x" }
+let net: inet = cfg.net
+let image: oci = cfg.image
+let v: semver = cfg.v
+p(b, t, m) where b = net.bits, t = image.tag, m = v.minor
+"#;
+    assert_eq!(facts(src, "p"), [r#"p(16, "1.2", 2)"#]);
+    let program =
+        parse_program("let cfg = { bad: \"x\" }\nlet net: inet = cfg.bad\nq(n) where n = net\n")
+            .unwrap();
+    let err = engine::eval(&program, &[]).unwrap_err().to_string();
+    assert!(
+        err.contains("let net is an inet: \"x\" is not a network"),
+        "{err}"
+    );
 }

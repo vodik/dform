@@ -1881,6 +1881,7 @@ pub fn value_to_json(v: &Value) -> serde_json::Value {
         Value::Quantity(q) => serde_json::Value::String(q.to_string()),
         Value::Time(t) => serde_json::Value::String(t.to_string()),
         Value::Url(u) | Value::Oci(u) => serde_json::Value::String(u.clone()),
+        Value::Semver(v) => serde_json::Value::String(v.to_string()),
     }
 }
 
@@ -3168,6 +3169,9 @@ fn ground_atom(atom: &Atom, state: &HashMap<String, Value>) -> Result<Atom> {
 fn head_error(head: &Atom, state: &HashMap<String, Value>) -> Option<String> {
     enum NoValue {
         Call(String),
+        /// `__as(V, T)` (R-134): a typed position over a computed value
+        /// that is not of the type.
+        Typed(String, String),
         Unbound(String),
     }
     fn no_value(t: &Term, state: &HashMap<String, Value>) -> Option<NoValue> {
@@ -3178,6 +3182,12 @@ fn head_error(head: &Atom, state: &HashMap<String, Value>) -> Option<String> {
             Term::Var(v) => Some(NoValue::Unbound(v.clone())),
             Term::Func { name, args } => match args.iter().find_map(|a| no_value(a, state)) {
                 Some(inner) => Some(inner),
+                None if name == crate::types::AS => {
+                    let v = eval_term(&args[0], state)?;
+                    let ty = eval_term(&args[1], state)?.as_str()?.to_string();
+                    let why = crate::value::read_typed(&ty, &v).err()?;
+                    Some(NoValue::Typed(ty, why))
+                }
                 None => {
                     let shown: Vec<String> = args
                         .iter()
@@ -3217,11 +3227,20 @@ fn head_error(head: &Atom, state: &HashMap<String, Value>) -> Option<String> {
                  result is optional, `T?`): give it arguments it answers, or test it with \
                  `has` in a clause"
             ),
+            NoValue::Typed(ty, why) => format!("{at}: {what} is {}: {why}", a_type(&ty)),
             NoValue::Unbound(v) => format!(
                 "internal error: {at}: the head of the rule for {what} leaves `{v}` unbound \
                  (a compiler bug: please report it with the program)"
             ),
         })
+}
+
+/// `an inet`, `a time`: a type with its article.
+fn a_type(ty: &str) -> String {
+    match ty.chars().next() {
+        Some('a' | 'e' | 'i' | 'o' | 'u') => format!("an {ty}"),
+        _ => format!("a {ty}"),
+    }
 }
 
 fn instantiate_atom(atom: &Atom, state: &HashMap<String, Value>) -> Result<Atom> {
@@ -3741,7 +3760,10 @@ fn eval_func(name: &str, args: &[Term], state: &HashMap<String, Value>) -> Optio
 /// `vals` as the parameters of the function `name` take them: a value type
 /// (`oci`, `url`, `inet`, `ip`, `time`, a quantity) where a `string` is
 /// declared is its canonical text, as it is in a string column (R-133):
-/// `str.contains(c.image, ":")` over an `oci`.
+/// `str.contains(c.image, ":")` over an `oci`; a string where a value type
+/// is declared is read as one (R-134: `time.format(cert.not_after, ..)`
+/// over a string attribute), and left a string when it is not one, which
+/// the body answers nothing for.
 fn as_params(name: &str, vals: Vec<Value>) -> Vec<Value> {
     let Some(f) = crate::functions::get(name) else {
         return vals;
@@ -3757,10 +3779,17 @@ fn as_params(name: &str, vals: Vec<Value>) -> Vec<Value> {
         .map(|(i, v)| match (ty(i), &v) {
             (
                 Some("string"),
-                Value::Quantity(_) | Value::Time(_) | Value::Url(_) | Value::Oci(_),
+                Value::Quantity(_)
+                | Value::Time(_)
+                | Value::Url(_)
+                | Value::Oci(_)
+                | Value::Semver(_),
             ) => v.typed_text().map_or(v, Value::Str),
             (Some("string"), Value::Ip(_) | Value::IpNet { .. } | Value::IpRange { .. }) => {
                 Value::Str(partition::fmt_value(&v))
+            }
+            (Some(ty), Value::Str(_)) if crate::value::VALUE_TYPES.contains(&ty) => {
+                crate::value::read_typed(ty, &v).unwrap_or(v)
             }
             _ => v,
         })
@@ -3774,8 +3803,29 @@ fn order(a: &Value, b: &Value) -> std::result::Result<Ordering, String> {
     if let Some(o) = crate::value::compare_numbers(a, b) {
         return Ok(o);
     }
+    // A string against a time or a version is read as one, as the other
+    // side of an operator gives a quantity literal its type (R-134: `v <
+    // "2.0.0"`, `t < "2027-01-01T00:00:00Z"`).
+    let typed = |v: &Value| match v {
+        Value::Time(_) => Some("time"),
+        Value::Semver(_) => Some("semver"),
+        Value::Quantity(q) => Some(q.dim().name()),
+        _ => None,
+    };
+    match (a, b) {
+        (Value::Str(_), t) if typed(t).is_some() => {
+            let a = crate::value::read_typed(typed(t).unwrap_or_default(), a)?;
+            return order(&a, b);
+        }
+        (t, Value::Str(_)) if typed(t).is_some() => {
+            let b = crate::value::read_typed(typed(t).unwrap_or_default(), b)?;
+            return order(a, &b);
+        }
+        _ => {}
+    }
     match (a, b) {
         (Value::Time(x), Value::Time(y)) => Ok(x.instant().cmp(&y.instant())),
+        (Value::Semver(x), Value::Semver(y)) => Ok(x.cmp(y)),
         (Value::Quantity(x), Value::Quantity(y)) => {
             crate::quantity::compare(x, y).ok_or_else(|| {
                 if x.dim() == y.dim() {
@@ -3792,7 +3842,7 @@ fn order(a: &Value, b: &Value) -> std::result::Result<Ordering, String> {
                 }
             })
         }
-        _ => Err("comparison only supports numbers, quantities and times".to_string()),
+        _ => Err("comparison only supports numbers, quantities, times and versions".to_string()),
     }
 }
 
@@ -4390,7 +4440,7 @@ mod tests {
         assert!(err.contains("int(\"abc\") is not defined"), "{err}");
         let (r, _) = run("s(\"10\")
              explicit(x) where s(s), x = int(s) + 1
-             text(t) where t = string(14)
+             text(t) where t = \"${14}\"
              sizes(a, b, c) where a = len([\"x\", \"y\"]), b = len(\"héllo\"), c = list.len({k: 1})
              cases(l, u) where l = str.lower(\"AbC\"), u = str.upper(\"AbC\")
              parts(p) where p = str.split(\"a,b,c\", \",\")

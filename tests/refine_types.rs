@@ -256,8 +256,8 @@ fn a_refinement_names_its_attribute_by_name() {
             "\ntype app.thing {{
   name: string check len(name) <= 3
   code: string check len(code) != 2
-  net: string check inet.prefix_len(net) >= inet.prefix_len(wide)
-  wide: string
+  net: inet check net.bits >= wide.bits
+  wide: inet
 }}
 resource app.thing a {{
   name = x
@@ -287,7 +287,7 @@ n(\"{name}\")
     let r = plan(&s, &src("abc", "10.0.0.0/28")).failure();
     assert!(
         r.stdout.contains(
-            "! app.thing a.net: 10.0.0.0/24 does not satisfy inet.prefix_len(net) >= inet.prefix_len(wide)  p.df:"
+            "! app.thing a.net: 10.0.0.0/24 does not satisfy net.bits >= wide.bits  p.df:"
         ),
         "{}",
         r.stdout

@@ -16,7 +16,7 @@ input peering from {format}("data/p.{format}")
 decl peering(env: enum("dev", "prod"), name: string, port: int, cidr: inet, on: bool)
 
 resource net.vpc "v-${{name}}" {{
-  cidr = string(c)
+  cidr = "${{c}}"
   port = port
 }} where peering(env: "dev", name: name, port: port, cidr: c, on: true)
 use fake

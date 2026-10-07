@@ -84,7 +84,7 @@ fn an_object_is_entered_by_a_pattern() {
     assert!(e.contains("`(k, v) in l` takes each key and value"), "{e}");
     let e = lower_error("bad(x) where x in { a: 1 }\n");
     assert!(e.contains("`{..}` is an object"), "{e}");
-    let e = lower_error("bad(x) where o = url.parse(\"https://h\"), x in o\n");
+    let e = lower_error("bad(x) where o = { a: 1 }, x in o\n");
     assert!(e.contains("`o` is an object"), "{e}");
     // A column of lists and objects is decided row by row, as before.
     let program = parse_program(

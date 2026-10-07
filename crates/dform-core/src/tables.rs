@@ -987,7 +987,7 @@ fn toml_value(v: toml::Value) -> Result<Value> {
 /// input the scope gives, `P` its path and the head its cell (R-38): in the
 /// stack (`S` is `""`) every input it addresses but a key, its own and its used
 /// modules' (`db.backup_days`, `traefik.acme_email`), in a module its own;
-/// a string read as the input's type by its constructor (`inet(V)`). A
+/// a string read as the input's type (`__as(V, "inet")`, R-134). A
 /// map input (`labels: map(string)`) has a second rule, for the leaves
 /// under it: the key's entry at the input's path (`inputs::map_entry_lits`),
 /// so it stays one cell. A leaf at any other path is a deny naming it,
@@ -1157,25 +1157,29 @@ pub fn expand_set_from(program: Program, declared: &mut [crate::inputs::Declared
     }
 }
 
-/// A document's leaf `v` read as the input's type `ty` by its
-/// constructor: a CIDR, a quantity, a time, a float (from an int too);
-/// and a CSV cell, all text, as an int too. The variable it binds and
-/// the literal that binds it; none where the leaf is taken as it is.
+/// A document's leaf `v` read as the input's type `ty`: a value type
+/// (a CIDR, a quantity, a time, R-134) as a typed position reads it, a
+/// float by `float` (from an int too); and a CSV cell, all text, as an
+/// int too. The variable it binds and the literal that binds it; none
+/// where the leaf is taken as it is.
 fn read_leaf(ty: &TypeExpr, v: &str, csv: bool) -> Option<(String, Lit)> {
     let TypeExpr::Name(n) = ty else {
         return None;
     };
-    let read = matches!(
-        n.as_str(),
-        "inet" | "ip" | "float" | "bytes" | "cpu" | "duration" | "time"
-    ) || (csv && n == "int");
+    let value_type = crate::value::VALUE_TYPES.contains(&n.as_str());
+    let read = value_type || n == "float" || (csv && n == "int");
     read.then(|| {
         let parsed = format!("{v}__{n}");
+        let var = Term::Var(v.to_string());
         let l = Lit::Eq(
             Term::Var(parsed.clone()),
-            Term::Func {
-                name: n.clone(),
-                args: vec![Term::Var(v.to_string())],
+            if value_type {
+                crate::types::at_run_time(&crate::types::Ty::parse(n), var)
+            } else {
+                Term::Func {
+                    name: n.clone(),
+                    args: vec![var],
+                }
             },
         );
         (parsed, l)

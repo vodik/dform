@@ -715,7 +715,7 @@ impl Decls {
             }
             // A field of an object, a named argument, a column of a `decl`.
             SyntaxKind::OBJECT_FIELD | SyntaxKind::NAMED_ARG | SyntaxKind::BIND_ARG => What::Key,
-            // What a dot reads off a call's value, `url.parse(s).host`.
+            // What a dot reads off a call's value, `str.split(s, ":")[0]`.
             SyntaxKind::CALL_CHAIN => What::Path,
             _ => What::Other,
         }
@@ -1736,7 +1736,7 @@ component network {
   output vpc: net.vpc = vpc
   q(x) where zone_index[x] = 1, vpc.cidr == x
 }
-resource network main { vpc_net = inet(cfg.a) }
+resource network main { vpc_net = cfg.a }
 resource compute.vm bastion { private_ip = 1 }
 p(a) where a = net.vpc["main.vpc"].cidr, c = main.vpc, b = network[a].vpc, bastion.cidr == 1, bastion in compute.vm
 zone_index("a", 0)

@@ -18,7 +18,11 @@ fn quantities_compare_and_aggregate_across_units() {
     s.write(
         "p.df",
         &program(
-            "size(\"a\", 512Mi)\n\
+            "let two: cpu = 2\n\
+             let quarter: cpu = 250m\n\
+             let millis: cpu = 2000m\n\
+             let some: cpu = 1500m\n\
+             size(\"a\", 512Mi)\n\
              size(\"b\", 1Gi)\n\
              size(\"c\", 1.5Gi)\n\
              total(n) where n = sum(x), size(_, x)\n\
@@ -26,12 +30,12 @@ fn quantities_compare_and_aggregate_across_units() {
              most(n) where n = max(x), size(_, x)\n\
              big(k) where size(k, x), x > 1000Mi\n\
              same() where 2048Mi == 2Gi\n\
-             cores() where cpu(2000m) == cpu(2)\n\
+             cores() where millis == two\n\
              half(x) where x = 1Gi / 2\n\
-             ratio(r) where r = cpu(1) / cpu(250m)\n\
+             ratio(r) where r = two / quarter\n\
              scaled(x) where x = 3 * 512Mi + 26Mi\n\
              label(l) where l = \"limit ${1536Mi}\"\n\
-             text(t) where t = string(cpu(1500m))\n\
+             text(t) where t = \"${some}\"\n\
              mib(n) where n = bytes.to(1.5Gi, \"Mi\")\n",
         ),
     );
@@ -40,7 +44,7 @@ fn quantities_compare_and_aggregate_across_units() {
         ("least(n)", "512Mi"),
         ("most(n)", "1536Mi"),
         ("half(x)", "512Mi"),
-        ("ratio(r)", "4"),
+        ("ratio(r)", "8"),
         ("scaled(x)", "1562Mi"),
         ("label(l)", "\"limit 1536Mi\""),
         ("text(t)", "\"1500m\""),
@@ -85,7 +89,8 @@ fn m_is_read_by_its_position_and_alone_is_an_error() {
     assert!(
         r.stderr.contains(
             "p.df:3:19: `500m` is millicores in a cpu position and minutes in a duration \
-             position, and this position has no type: write `cpu(500m)` or `duration(500m)`"
+             position, and this position has no type: give it one, `let c: cpu = 500m` or `let d: \
+             duration = 500m`"
         ),
         "{}",
         r.stderr

@@ -565,13 +565,13 @@ fn why_prints_the_statement_of_a_rule_that_reads_nothing() {
 }
 
 /// `plan --why` follows a copy's input to where the copy is given it,
-/// `vpc_net = inet(cidrs.main)` at its `resource network.vpc main`, and
+/// `vpc_net = cidrs.main` at its `resource network.vpc main`, and
 /// prints no core fact (`instance_of(..)`, R-65).
 #[test]
 fn plan_why_follows_a_copys_input() {
     let out = dform("examples/demo/stacks/dform.df", &["plan", "--why"]);
     assert!(
-        out.contains("          = vpc_net ") && out.contains("          = inet(cidrs.main) "),
+        out.contains("          = vpc_net ") && out.contains("          = cidrs.main "),
         "{out}"
     );
     assert!(!out.contains("instance_of("), "{out}");

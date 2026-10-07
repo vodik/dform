@@ -161,7 +161,8 @@ decl mesh_allow_direct_route(from, to)
 ## Convert Explicitly
 
 Arithmetic takes integers; `"10" + 1` is an error, not `11`. Convert with
-the constructors `int(s)` and `string(x)`, and shape strings and lists with
+`int(s)`, write a value's text as an interpolation, `"${x}"`, and shape
+strings and lists with
 `len`, `str.lower`, `str.upper`, `str.split(S, Sep)` and `list.join(List,
 Sep)` (docs/grammar.md "Functions").
 

@@ -2,10 +2,8 @@
 //! position has a type the compiler reads a literal as, the literal is
 //! written in its shortest spelling. A string in a `bytes`, `cpu` or
 //! `duration` position that reads as one loses its quotes (`"2Gi"` is
-//! `2Gi`, `"500m"` `500m`); in an `inet`, `ip` or `time` position a
-//! constructor of a string is dropped (`inet("10.0.0.0/16")` is
-//! `"10.0.0.0/16"`). A literal that does not read as its type is left for
-//! the compiler to report.
+//! `2Gi`, `"500m"` `500m`). A literal that does not read as its type is
+//! left for the compiler to report.
 //!
 //! The positions, each one the compiler reads a literal at as its type
 //! (`types::literal`, `types::read`):
@@ -114,10 +112,6 @@ fn words(n: &SyntaxNode) -> impl Iterator<Item = SyntaxToken> + '_ {
         .filter(|t| t.kind() == IDENT || t.kind().is_keyword())
 }
 
-fn text(n: &SyntaxNode) -> String {
-    n.text().to_string().trim().to_string()
-}
-
 /// A dotted name's text without its spaces: `k8s.deployment`.
 fn dotted(n: &SyntaxNode) -> String {
     n.descendants_with_tokens()
@@ -165,18 +159,6 @@ fn unquotes(dim: &str, t: &str, ambiguous: bool) -> bool {
     }
 }
 
-/// Whether `s`, the argument of the constructor `ty`, reads as one and
-/// prints back as written: the string is the same value in the position.
-fn canonical(ty: &str, s: &str) -> bool {
-    use crate::value;
-    match ty {
-        "inet" => value::parse_ipnet(s).is_some_and(|(a, p)| value::ipnet_to_string(a, p) == s),
-        "ip" => value::ipv4_to_u32(s).is_some_and(|a| value::u32_to_ipv4(a) == s),
-        "time" => crate::time::Time::parse(s).is_ok_and(|t| t.to_string() == s),
-        _ => false,
-    }
-}
-
 struct Ctx<'a> {
     typing: &'a Typing,
     edits: Vec<(usize, usize, String)>,
@@ -214,27 +196,6 @@ impl Ctx<'_> {
                     && unquotes(s, &t, ambiguous)
                 {
                     self.put(term, t);
-                }
-            }
-            Ty::Scalar(s) if matches!(s.as_str(), "inet" | "ip" | "time") => {
-                if term.kind() != CALL {
-                    return;
-                }
-                let Some(callee) = term.children().find(|c| c.kind() == CHAIN) else {
-                    return;
-                };
-                let Some(args) = term.children().find(|c| c.kind() == ARG_LIST) else {
-                    return;
-                };
-                let args: Vec<SyntaxNode> = args.children().collect();
-                if dotted(&callee) != *s {
-                    return;
-                }
-                if let [a] = args.as_slice()
-                    && let Some(t) = plain_string(a)
-                    && canonical(s, &t)
-                {
-                    self.put(term, text(a));
                 }
             }
             _ => {}
@@ -508,12 +469,6 @@ impl Ctx<'_> {
             self.atom(c, &name);
             return;
         };
-        if matches!(
-            name.as_str(),
-            "bytes" | "cpu" | "duration" | "time" | "inet" | "ip"
-        ) {
-            return;
-        }
         let Some(args) = c.children().find(|x| x.kind() == ARG_LIST) else {
             return;
         };
@@ -730,23 +685,13 @@ mod tests {
         assert_eq!(fmt(src), want);
     }
 
-    /// An input's default, an instance's entry for its component's input,
-    /// a function's typed parameter: a constructor of a string that is
-    /// the value as written is dropped.
+    /// An input's default in a quantity's type: its string loses its quotes.
     #[test]
-    fn a_redundant_constructor_is_dropped() {
+    fn a_quantity_default_loses_its_quotes() {
         let src = "input size: bytes = \"512Mi\"\ninput ttl: duration = \"30d\"\n\
-                   input net: inet = inet(\"10.0.0.0/16\")\ninput host: inet = inet(\"10.0.0.1/16\")\n\n\
-                   component c {\n  input cidr: inet\n}\n\
-                   resource c a { cidr = inet(\"10.1.0.0/16\") }\n\
-                   let s = inet.subnet(inet(\"10.0.0.0/16\"), 8, 1)\n\
-                   let t = inet.subnet(inet(net), 8, 1)\n";
+                   input net: inet = \"10.0.0.0/16\"\n";
         let want = "input size: bytes = 512Mi\ninput ttl: duration = 30d\n\
-                    input net: inet = \"10.0.0.0/16\"\ninput host: inet = inet(\"10.0.0.1/16\")\n\n\
-                    component c {\n  input cidr: inet\n}\n\
-                    resource c a { cidr = \"10.1.0.0/16\" }\n\
-                    let s = inet.subnet(\"10.0.0.0/16\", 8, 1)\n\
-                    let t = inet.subnet(inet(net), 8, 1)\n";
+                    input net: inet = \"10.0.0.0/16\"\n";
         assert_eq!(fmt(src), want);
     }
 
@@ -756,8 +701,8 @@ mod tests {
     #[test]
     fn a_typed_column_takes_the_short_spelling() {
         let src = "decl r(net: inet, size: bytes, n: cpu, s: string)\n\
-                   r(inet(\"10.0.0.0/16\"), \"2Gi\", \"500m\", \"2Gi\")\n\
-                   r(size: \"1Gi\", net: inet(\"10.1.0.0/16\"), n: \"2\", s: \"x\")\n";
+                   r(\"10.0.0.0/16\", \"2Gi\", \"500m\", \"2Gi\")\n\
+                   r(size: \"1Gi\", net: \"10.1.0.0/16\", n: \"2\", s: \"x\")\n";
         let want = "decl r(net: inet, size: bytes, n: cpu, s: string)\n\
                     r(\"10.0.0.0/16\", 2Gi, \"500m\", \"2Gi\")\n\
                     r(size: 1Gi, net: \"10.1.0.0/16\", n: \"2\", s: \"x\")\n";

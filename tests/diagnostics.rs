@@ -58,7 +58,8 @@ fn an_unknown_function_names_its_call() {
         r.stderr
     );
     assert!(
-        r.stderr.contains("the functions are bytes, cloud_ref,"),
+        r.stderr
+            .contains("the functions are cloud_ref, declassify,"),
         "{}",
         r.stderr
     );

@@ -2140,7 +2140,7 @@ fn value_chain(
         Some(v) => passed_cell(c, circuit, children, v, read.as_deref()),
         None => None,
     };
-    // An expression of one cell (`inet(cidrs.main)`): that cell's value.
+    // An expression of one cell (`str.lower(cidrs.main)`): that cell's value.
     let next = next.or_else(|| read_cell(c, circuit, children, rhs.as_deref()?));
     // A stack key ends it: the deployment line says its value.
     let key = |p: NodeId| match circuit.view(p) {

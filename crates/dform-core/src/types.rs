@@ -67,8 +67,8 @@ impl Ty {
         let s = s.trim();
         let Some((head, rest)) = s.split_once('(') else {
             return match s {
-                "string" | "int" | "float" | "number" | "bool" | "inet" | "ip" | "bytes"
-                | "cpu" | "duration" | "time" | "url" | "oci" | "regex" => {
+                "string" | "int" | "float" | "number" | "bool" | "inet" | "ip" | "iprange"
+                | "bytes" | "cpu" | "duration" | "time" | "url" | "oci" | "semver" | "regex" => {
                     Ty::Scalar(s.to_string())
                 }
                 _ => Ty::Any,
@@ -176,6 +176,7 @@ fn shown_literal(v: &Value) -> String {
         Value::Time(t) => format!("the time {t}"),
         Value::Url(u) => format!("the url {u}"),
         Value::Oci(r) => format!("the image reference {r}"),
+        Value::Semver(v) => format!("the version {v}"),
         v => crate::partition::fmt_value(v),
     }
 }
@@ -412,6 +413,7 @@ pub fn mismatch(ty: &Ty, t: &Term) -> Option<String> {
                 ("url", Value::Str(x)) => url::Url::parse(x).is_ok(),
                 ("oci", Value::Oci(_)) => true,
                 ("oci", Value::Str(x)) => crate::value::OciRef::parse(x).is_ok(),
+                ("iprange" | "semver", v) => crate::value::read_typed(s, v).is_ok(),
                 ("regex", Value::Str(x)) => regex::Regex::new(x).is_ok(),
                 // A null is not known yet; a computed value fits its type.
                 (_, Value::Null { .. }) => true,
@@ -429,6 +431,15 @@ pub fn mismatch(ty: &Ty, t: &Term) -> Option<String> {
                 ("oci", Value::Str(x)) => {
                     format!("is an oci: {}", crate::value::parse_oci(x).unwrap_err())
                 }
+                ("iprange" | "semver", Value::Str(_)) => format!(
+                    "is {}: {}",
+                    if s == "iprange" {
+                        "an iprange"
+                    } else {
+                        "a semver"
+                    },
+                    crate::value::read_typed(s, v).unwrap_err()
+                ),
                 ("regex", Value::Str(x)) => format!(
                     "is a regex: {x:?} is not a valid pattern ({})",
                     regex::Regex::new(x).unwrap_err()
@@ -533,11 +544,48 @@ pub fn literal(ty: &Ty, t: Term) -> Result<Term, String> {
     Ok(read_as(ty, t))
 }
 
+/// A computed term (a variable, a call) where a value type is wanted,
+/// read as one when it has a value (R-134: there are no constructors, so
+/// `let n: inet = cfg.net` is how a computed string becomes a network):
+/// `__as(t, "inet")`, which a string that is not one leaves with no
+/// value, an error at the position. A reference, an ambiguous quantity
+/// (read by [`read`]) and what already reads it are left as they are.
+pub fn at_run_time(ty: &Ty, t: Term) -> Term {
+    let Ty::Scalar(s) = ty else {
+        return match ty {
+            Ty::Secret(inner) => at_run_time(inner, t),
+            _ => t,
+        };
+    };
+    if !crate::value::VALUE_TYPES.contains(&s.as_str()) {
+        return t;
+    }
+    match &t {
+        Term::Func { name, .. }
+            if matches!(
+                name.as_str(),
+                AS | AMBIGUOUS | "ref" | "cloud_ref" | "scoped"
+            ) =>
+        {
+            t
+        }
+        Term::Var(_) | Term::Func { .. } => Term::Func {
+            name: AS.to_string(),
+            args: vec![t, Term::Val(Value::Str(s.clone()))],
+        },
+        _ => t,
+    }
+}
+
+/// The internal function a typed position over a computed value lowers
+/// to ([`at_run_time`]).
+pub const AS: &str = "__as";
+
 fn read_as(ty: &Ty, t: Term) -> Term {
     match (ty, t) {
         (Ty::Scalar(s), t) if ty.measured() => match measure(s, &t) {
             Some(Ok(v)) => Term::Val(v),
-            _ => t,
+            _ => at_run_time(ty, t),
         },
         (Ty::Scalar(s), Term::Val(Value::Int(i))) if s == "float" => {
             Term::Val(crate::value::Float::new(i as f64).map_or(Value::Int(i), Value::Float))
@@ -562,7 +610,11 @@ fn read_as(ty: &Ty, t: Term) -> Term {
         (Ty::Scalar(s), Term::Val(Value::Str(x))) if s == "oci" => {
             Term::Val(crate::value::parse_oci(&x).unwrap_or(Value::Str(x)))
         }
+        (Ty::Scalar(s), Term::Val(v @ Value::Str(_))) if s == "iprange" || s == "semver" => {
+            Term::Val(crate::value::read_typed(s, &v).unwrap_or(v))
+        }
         (Ty::Secret(inner), t) => read_as(inner, t),
+        (Ty::Scalar(_), t @ (Term::Var(_) | Term::Func { .. })) => at_run_time(ty, t),
         (Ty::List(inner), Term::List(xs)) => {
             Term::List(xs.into_iter().map(|x| read_as(inner, x)).collect())
         }
@@ -711,6 +763,13 @@ fn read_at(schema: &Schema, typ: &str, path: &str, t: &mut Term) -> Result<(), (
             }
             let v = std::mem::replace(t, Term::Wildcard);
             *t = read_as(&ty, v);
+            return Ok(());
+        }
+        // A computed value where a value type is wanted is read as one
+        // at run time (R-134); a literal is `check`'s.
+        if matches!(t, Term::Var(_) | Term::Func { .. }) {
+            let v = std::mem::replace(t, Term::Wildcard);
+            *t = at_run_time(&ty, v);
             return Ok(());
         }
     }

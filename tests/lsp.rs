@@ -243,7 +243,7 @@ fn signature_help_of_builtins_and_externs() {
     let help = c.at(
         "textDocument/signatureHelp",
         &stack,
-        find(&stack, "cidrs.main), 20)", 12),
+        find(&stack, "cidrs.main, 20)", 11),
     );
     assert_eq!(
         help["signatures"][0]["label"], "inet.host(net: inet, n: int) -> ip?",
@@ -450,12 +450,15 @@ fn completion_reads_the_schema_and_the_modules() {
     assert_eq!(outputs, vec!["vpc", "private_subnet"], "{outputs:?}");
 
     // A plain word: the builtins it starts, their signatures.
-    let typed = format!("{original}\ny = iprang");
+    let typed = format!("{original}\ny = declass");
     c.change(&stack, 3, &typed);
     let n = typed.lines().count() as u32;
-    let items = c.at("textDocument/completion", &stack, (n - 1, 10));
-    assert_eq!(labels(&items), vec!["iprange"], "{items}");
-    assert_eq!(items[0]["detail"], "iprange(a: ip, b: ip) -> iprange");
+    let items = c.at("textDocument/completion", &stack, (n - 1, 11));
+    assert_eq!(labels(&items), vec!["declassify"], "{items}");
+    assert_eq!(
+        items[0]["detail"],
+        "declassify(value: any, reason: string) -> any"
+    );
 
     c.shutdown();
 }
@@ -705,7 +708,7 @@ fn quick_fix_declares_a_predicate_mixed() {
     );
     assert!(
         texts[0].contains(
-            "input cidrs { main: string = \"10.50.0.0/16\", peer: string = \"10.60.0.0/16\" }\n\
+            "input cidrs { main: inet = \"10.50.0.0/16\", peer: inet = \"10.60.0.0/16\" }\n\
              decl q(a) mixed\n"
         ),
         "{}",
@@ -1070,11 +1073,7 @@ fn prepare_rename_refuses_what_is_not_the_programs() {
     let text = std::fs::read_to_string(&network).unwrap();
     assert!(text.contains("input cidr_block: inet") && text.contains("cidr = cidr_block"));
     let text = std::fs::read_to_string(&stack).unwrap();
-    assert_eq!(
-        text.matches("{ cidr_block = inet(cidrs").count(),
-        2,
-        "{text}"
-    );
+    assert_eq!(text.matches("{ cidr_block = cidrs").count(), 2, "{text}");
     let edit = rename(
         &mut c,
         &stack,
@@ -1921,14 +1920,14 @@ fn hover_gives_a_reads_value_and_its_provenance() {
             .unwrap_or_default()
             .to_string()
     };
-    let text = hover(&stack, "inet(cidrs.main)", 11);
+    let text = hover(&stack, "= cidrs.main }", 8);
     for want in [
         "**cidrs.main** = `\"10.50.0.0/16\"`",
         // In the formatter's layout, as plan, why and query print it.
-        "**input cidrs** = `{ main: \"10.50.0.0/16\", peer: \"10.60.0.0/16\" }`",
+        "**input cidrs** = `{ main: 10.50.0.0/16, peer: 10.60.0.0/16 }`",
         "winning rank: default",
-        "- rank default: `{main: \"10.50.0.0/16\"}` by stacks/dform.df:10:15",
-        "input cidrs.main = \"10.50.0.0/16\"  stacks/dform.df:10\n",
+        "- rank default: `{main: 10.50.0.0/16}` by stacks/dform.df:10:15",
+        "input cidrs.main = 10.50.0.0/16  stacks/dform.df:10\n",
     ] {
         assert!(text.contains(want), "{want} in {text}");
     }

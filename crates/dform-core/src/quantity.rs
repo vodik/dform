@@ -300,12 +300,13 @@ pub fn ambiguous(text: &str) -> String {
     if text.ends_with('m') {
         format!(
             "`{text}` is millicores in a cpu position and minutes in a duration position, and \
-             this position has no type: write `cpu({text})` or `duration({text})`"
+             this position has no type: give it one, `let c: cpu = {text}` or `let d: duration = \
+             {text}`"
         )
     } else {
         format!(
             "`{text}` is a number with a fraction, which only a cpu position reads (cores): \
-             write `cpu({text})`, or the millicores `{}`",
+             give it one, `let c: cpu = {text}`, or write the millicores `{}`",
             Number::of(text)
                 .and_then(|n| n.times(1000))
                 .map_or("Nm".to_string(), |m| format!("{m}m"))

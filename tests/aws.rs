@@ -123,7 +123,7 @@ resource aws.vpc main {
 
 resource aws.subnet "private-${availability_zone}" {
   vpc_id = main
-  cidr_block = inet.subnet(inet(main.cidr_block), 8, n)
+  cidr_block = inet.subnet(main.cidr_block, 8, n)
   availability_zone
 } where aws.availability_zone("available", availability_zone, n)
 "#;
@@ -153,7 +153,7 @@ fn a_data_source_is_a_table_with_an_index() {
         let want = format!(
             "  + aws.subnet private-{zone}  main.df:9  with availability_zone = \"{zone}\", \
              n = {}\n      availability_zone = \"{zone}\"\n      cidr_block = \"{cidr}\"   \
-             inet.subnet(inet(main.cidr_block), 8, n)\n",
+             inet.subnet(main.cidr_block, 8, n)\n",
             &cidr[5..6]
         );
         assert!(r.stdout.contains(&want), "{want}\n{}", r.stdout);

@@ -63,7 +63,7 @@ pub const PRELUDE: &str = "prelude";
 /// constructor (`inet(s) -> inet`).
 const TYPE_NAMES: &[&str] = &[
     "int", "string", "bool", "inet", "ip", "iprange", "list", "any", "ref", "secret", "symbol",
-    "addr", "bytes", "cpu", "duration", "time", "url",
+    "addr", "bytes", "cpu", "duration", "time", "url", "oci", "semver", "float",
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -174,14 +174,8 @@ pub fn unknown(span: crate::ast::Span, name: &str) -> crate::diag::Diagnostic {
             None => d.with_help(f.summary.clone()),
         };
     }
-    // `oci.parse` went with R-133: a string in an `oci` position is one,
-    // and its parts are fields.
-    if name == "oci.parse" {
-        return Diagnostic::error(span, format!("unknown function {name}")).with_help(
-            "a string where an `oci` is wanted is read as one (`let r: oci = \"ghcr.io/o/app:1\"`, \
-             a parameter or an attribute typed `oci`); its parts are its fields, `r.registry`, \
-             `r.repository`, `r.tag`, `r.digest`",
-        );
+    if let Some(help) = gone(name) {
+        return Diagnostic::error(span, format!("unknown function {name}")).with_help(help);
     }
     let meant = name
         .split_once('_')
@@ -209,6 +203,66 @@ pub fn unknown(span: crate::ast::Span, name: &str) -> crate::diag::Diagnostic {
                 r.packages().join(", ")
             ))
         }
+    }
+}
+
+/// What a program writes for a function std no longer has (R-133,
+/// R-134): there are no constructors, a type's parts are its fields.
+fn gone(name: &str) -> Option<String> {
+    // The type, a name for a value of it, an example and its fields.
+    let typed = |ty: &str, x: &str, example: &str, fields: &[&str]| {
+        let fields = if fields.is_empty() {
+            String::new()
+        } else {
+            let fs: Vec<String> = fields.iter().map(|f| format!("`{x}.{f}`")).collect();
+            format!("; its parts are fields, {}", fs.join(", "))
+        };
+        format!(
+            "there are no constructors: a string where {} is wanted is read as one, a \
+             parameter, an attribute or an input typed `{ty}`, or a typed `let`, `let {x}: \
+             {ty} = {example}`{fields}",
+            article(ty)
+        )
+    };
+    Some(match name {
+        "inet" => typed("inet", "n", "\"10.0.0.0/16\"", &["addr", "bits"]),
+        "ip" => typed("ip", "a", "\"10.0.0.1\"", &[]),
+        "iprange" => typed("iprange", "r", "\"10.0.0.10-10.0.0.99\"", &[]),
+        "time" | "time.parse" => typed("time", "t", "\"2026-10-02T09:00[Europe/Paris]\"", &[]),
+        "duration" | "duration.parse" => typed("duration", "d", "30m", &[]),
+        "bytes" => typed("bytes", "b", "\"512Mi\"", &[]),
+        "cpu" => typed("cpu", "c", "500m", &[]),
+        "url" | "url.parse" => typed(
+            "url",
+            "u",
+            "\"https://example.com\"",
+            &["scheme", "host", "port", "path", "query", "fragment"],
+        ),
+        "oci" | "oci.parse" => typed(
+            "oci",
+            "r",
+            "\"ghcr.io/o/app:1\"",
+            &["registry", "repository", "tag", "digest"],
+        ),
+        "semver" | "semver.parse" => typed(
+            "semver",
+            "v",
+            "\"1.2.3\"",
+            &["major", "minor", "patch", "pre"],
+        ),
+        "inet.prefix_len" => "a network's prefix length is its field `n.bits`".to_string(),
+        "string" | "str" => {
+            "a value's text is an interpolation, `\"${x}\"`; there are no constructors".to_string()
+        }
+        _ => return None,
+    })
+}
+
+/// `an inet`, `a time`.
+fn article(ty: &str) -> String {
+    match ty.chars().next() {
+        Some('a' | 'e' | 'i' | 'o' | 'u') => format!("an `{ty}`"),
+        _ => format!("a `{ty}`"),
     }
 }
 
@@ -598,40 +652,9 @@ pub const BODIES: &[(&str, Body)] = &[
         [Value::Str(s)] => crate::value::Float::parse(s).ok().map(Value::Float),
         _ => None,
     }),
-    ("string", |a| match a {
-        [v] => scalar_text(v).map(Value::Str),
-        _ => None,
-    }),
-    ("ip", |a| match a {
-        [Value::Str(s)] => crate::value::ipv4_to_u32(s).map(Value::Ip),
-        _ => None,
-    }),
-    ("inet", |a| match a {
-        [Value::Str(s)] => {
-            let (addr, prefix) = crate::value::parse_ipnet(s)?;
-            Some(Value::IpNet { addr, prefix })
-        }
-        _ => None,
-    }),
-    // Quantities and times (R-66, R-62): a value of the type is itself,
-    // its text is read, an integer is bytes or cores.
-    ("bytes", |a| quantity_of(a, crate::quantity::Dim::Bytes)),
-    ("cpu", |a| quantity_of(a, crate::quantity::Dim::Cpu)),
-    ("duration", |a| {
-        quantity_of(a, crate::quantity::Dim::Duration)
-    }),
-    ("time", |a| match a {
-        [t @ Value::Time(_)] => Some(t.clone()),
-        [Value::Str(s)] => crate::time::Time::parse(s).ok().map(Value::Time),
-        _ => None,
-    }),
     // An ambiguous quantity no position read has no value; the compiler
     // says so where the schema is known (`types::read`).
     (crate::types::AMBIGUOUS, |_| None),
-    ("time.parse", |a| match a {
-        [Value::Str(s)] => crate::time::Time::parse(s).ok().map(Value::Time),
-        _ => None,
-    }),
     ("time.format", |a| match a {
         [Value::Time(t), Value::Str(layout)] => t.format(layout).map(Value::Str),
         _ => None,
@@ -657,23 +680,9 @@ pub const BODIES: &[(&str, Body)] = &[
         [Value::Time(x), Value::Time(y)] => Some(Value::Bool(x.instant() < y.instant())),
         _ => None,
     }),
-    ("duration.parse", |a| match a {
-        [Value::Str(s)] => crate::quantity::read_duration(s)
-            .ok()
-            .map(|d| Value::Quantity(crate::quantity::Quantity::Duration(d))),
-        _ => None,
-    }),
     ("duration.total", unit_of),
     ("bytes.to", unit_of),
     ("cpu.to", unit_of),
-    ("iprange", |a| match a {
-        [x, y] => {
-            let (sa, sb) = (as_ip_u32(x)?, as_ip_u32(y)?);
-            let (start, end) = if sa <= sb { (sa, sb) } else { (sb, sa) };
-            Some(Value::IpRange { start, end })
-        }
-        _ => None,
-    }),
     ("format", |a| {
         let fmt = a.first()?.as_str()?;
         let mut out = String::new();
@@ -761,6 +770,18 @@ pub const BODIES: &[(&str, Body)] = &[
         }
         _ => None,
     }),
+    // A typed position over a computed value (R-134): a string read as
+    // the type, a value of it itself; none for one that is not, which
+    // the position reports (`engine::head_error`).
+    ("__as", |a| match a {
+        // A reference is read when the apply resolves it.
+        [
+            v @ (Value::Ref { .. } | Value::CloudRef { .. } | Value::Null { .. }),
+            _,
+        ] => Some(v.clone()),
+        [v, Value::Str(ty)] => crate::value::read_typed(ty, v).ok(),
+        _ => None,
+    }),
     ("__known", |a| match a {
         [_] => Some(Value::Bool(true)),
         _ => None,
@@ -776,6 +797,9 @@ pub const BODIES: &[(&str, Body)] = &[
                 }
                 if let Value::Oci(r) = &v {
                     v = crate::value::OciRef::parse(r).ok()?.parts();
+                }
+                if let Some(parts) = crate::value::parts(&v) {
+                    v = parts;
                 }
                 let Value::Obj(mut m) = v else {
                     return None;
@@ -851,10 +875,6 @@ pub const BODIES: &[(&str, Body)] = &[
             let (b0, b1) = ipnet_range(y)?;
             Some(Value::Bool(a0 <= b1 && b0 <= a1))
         }
-        _ => None,
-    }),
-    ("inet.prefix_len", |a| match a {
-        [net] => as_ipnet(net).map(|(_, p)| Value::Int(p as i64)),
         _ => None,
     }),
     ("ip.unspecified", |a| match a {
@@ -1080,38 +1100,19 @@ pub const BODIES: &[(&str, Body)] = &[
         )),
         _ => None,
     }),
-    ("semver.parse", |a| match a {
-        [Value::Str(s)] => {
-            let v = semver::Version::parse(s).ok()?;
-            let mut m = BTreeMap::new();
-            m.insert("major".to_string(), Value::Int(v.major as i64));
-            m.insert("minor".to_string(), Value::Int(v.minor as i64));
-            m.insert("patch".to_string(), Value::Int(v.patch as i64));
-            if !v.pre.is_empty() {
-                m.insert("pre".to_string(), Value::Str(v.pre.to_string()));
-            }
-            Some(Value::Obj(m))
-        }
-        _ => None,
-    }),
     ("semver.satisfies", |a| match a {
-        [Value::Str(v), Value::Str(range)] => {
-            let v = semver::Version::parse(v).ok()?;
+        [Value::Semver(v), Value::Str(range)] => {
             let req = semver::VersionReq::parse(range).ok()?;
-            Some(Value::Bool(req.matches(&v)))
+            Some(Value::Bool(req.matches(&v.0)))
         }
         _ => None,
     }),
     ("semver.compare", |a| match a {
-        [Value::Str(x), Value::Str(y)] => {
-            let x = semver::Version::parse(x).ok()?;
-            let y = semver::Version::parse(y).ok()?;
-            Some(Value::Int(match x.cmp(&y) {
-                std::cmp::Ordering::Less => -1,
-                std::cmp::Ordering::Equal => 0,
-                std::cmp::Ordering::Greater => 1,
-            }))
-        }
+        [Value::Semver(x), Value::Semver(y)] => Some(Value::Int(match x.cmp(y) {
+            std::cmp::Ordering::Less => -1,
+            std::cmp::Ordering::Equal => 0,
+            std::cmp::Ordering::Greater => 1,
+        })),
         _ => None,
     }),
     // A predicate as well: a string that is no reference is not pinned.
@@ -1178,15 +1179,6 @@ pub const BODIES: &[(&str, Body)] = &[
                 .ok()?;
             String::from_utf8(bytes).ok().map(Value::Str)
         }
-        _ => None,
-    }),
-    ("url", |a| match a {
-        [u @ Value::Url(_)] => Some(u.clone()),
-        [Value::Str(s)] => crate::value::parse_url(s).ok(),
-        _ => None,
-    }),
-    ("url.parse", |a| match a {
-        [v] => crate::value::url_parts(&as_url(v)?),
         _ => None,
     }),
     ("url.join", |a| match a {
@@ -1384,6 +1376,7 @@ pub(crate) fn value_to_string(v: &Value) -> String {
         Value::Quantity(q) => q.to_string(),
         Value::Time(t) => t.to_string(),
         Value::Url(u) | Value::Oci(u) => u.clone(),
+        Value::Semver(v) => v.to_string(),
     }
 }
 
@@ -1392,23 +1385,6 @@ fn len_of(a: &[Value]) -> Option<Value> {
         [Value::List(xs)] => Some(Value::Int(xs.len() as i64)),
         [Value::Obj(m)] => Some(Value::Int(m.len() as i64)),
         [Value::Str(s)] => Some(Value::Int(s.chars().count() as i64)),
-        _ => None,
-    }
-}
-
-/// A constructor's quantity: one of its dimension is itself, a string is
-/// read, an integer is bytes or cores.
-fn quantity_of(a: &[Value], dim: crate::quantity::Dim) -> Option<Value> {
-    use crate::quantity::{Dim, Quantity, read};
-    match (a, dim) {
-        ([Value::Quantity(q)], d) if q.dim() == d => Some(Value::Quantity(*q)),
-        ([Value::Str(s)], d) => read(d, s).ok().map(Value::Quantity),
-        // A decimal is cores (`cpu(0.5)` is `500m`).
-        ([Value::Float(f)], Dim::Cpu) => read(Dim::Cpu, &f.to_string()).ok().map(Value::Quantity),
-        ([Value::Int(n)], Dim::Bytes) => Some(Value::Quantity(Quantity::Bytes(*n))),
-        ([Value::Int(n)], Dim::Cpu) => n
-            .checked_mul(1000)
-            .map(|m| Value::Quantity(Quantity::Cpu(m))),
         _ => None,
     }
 }
@@ -1529,7 +1505,9 @@ fn scalar_text(v: &Value) -> Option<String> {
         Value::Int(i) => Some(i.to_string()),
         Value::Float(f) => Some(f.to_string()),
         Value::Bool(b) => Some(b.to_string()),
-        Value::Quantity(_) | Value::Time(_) | Value::Url(_) | Value::Oci(_) => v.typed_text(),
+        Value::Quantity(_) | Value::Time(_) | Value::Url(_) | Value::Oci(_) | Value::Semver(_) => {
+            v.typed_text()
+        }
         Value::Ip(_) | Value::IpNet { .. } | Value::IpRange { .. } => {
             Some(crate::partition::fmt_value(v))
         }
@@ -1679,12 +1657,13 @@ mod tests {
     /// out in full, found past its balanced braces.
     #[test]
     fn an_object_return_type_is_one_type() {
-        let f = registry().get("url.parse").unwrap();
-        assert_eq!(
-            f.ret,
-            "{ scheme: string, host: string, port: int?, path: string, query: object, fragment: string? }"
-        );
-        assert!(f.partial);
+        let f = parse(
+            "t.df",
+            "package t\nfn f(a: string) -> { scheme: string, port: int?, query: object }?\n",
+        )
+        .unwrap();
+        assert_eq!(f[0].ret, "{ scheme: string, port: int?, query: object }");
+        assert!(f[0].partial);
     }
 
     #[test]
@@ -1735,7 +1714,6 @@ mod tests {
         assert_eq!(wrapped[0].signature, line[0].signature);
         assert_eq!(wrapped[0].params, line[0].params);
         assert_eq!((wrapped[0].line, wrapped[1].line), (3, 7));
-        assert_eq!(registry().get("url.parse").unwrap().params.len(), 1);
     }
 
     /// The reverse: every body is declared somewhere (no orphan).

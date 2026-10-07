@@ -255,7 +255,7 @@ set { nodes.count = 2 } where env == "prod"
 
 use config
 use fake
-let base = inet("10.0.0.0/16")
+let base: inet = "10.0.0.0/16"
 resource net.vpc main { cidr = "${base}" }
 
 resource net.subnet main {
@@ -282,7 +282,7 @@ resource databases.postgres app_db {
 }
 
 resource compute.vm web {
-  private_ip = inet.host(inet("10.0.0.0/24"), 10)
+  private_ip = inet.host("10.0.0.0/24", 10)
   tags = { host: app_db.conn.host, domain: config.base_domain }
 }
 "#,

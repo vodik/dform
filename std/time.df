@@ -2,12 +2,12 @@
 # "Functions"). Zones are the tzdb bundled into dform, never the host's:
 # `dform version` prints its release. The current time is no function
 # (a function is pure): it is `time.now()`, the extern of the built-in
-# `time` provider (`use time`), read again every run (R-60).
+# `time` provider (`use time`), read again every run (R-60). A time is
+# written as a string where one is wanted (a parameter, an attribute,
+# `let t: time = ".."`), RFC 3339 with an offset (`Z` is UTC) or a date
+# and time with a zone, `2026-10-02T09:00[Europe/Paris]`, read there, a
+# literal at compile time.
 package time
-
-#| A time from RFC 3339 with an offset (`Z` is UTC) or a date and time with a zone, `2026-10-02T09:00[Europe/Paris]`; no value for any other text. `time(s)` is the same, checked at compile time for a literal.
-#| example: let expiry = time.parse(cert.not_after)
-fn parse(text: string) -> time?
 
 #| The time in a strftime layout, in its own zone; no value for a layout that does not format.
 #| example: let stamp = time.format(t, "%Y-%m-%d %H:%M %Z")

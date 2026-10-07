@@ -7,7 +7,7 @@
 #| names the deployment, and without one the default is the deployment.
 #| owner: platform
 key env: environment = "staging"
-input cidrs { main: string = "10.50.0.0/16", peer: string = "10.60.0.0/16" }
+input cidrs { main: inet = "10.50.0.0/16", peer: inet = "10.60.0.0/16" }
 data("zone", "us-test-1a")
 data("zone", "us-test-1b")
 
@@ -48,10 +48,10 @@ use stdlib_net
 # Copies of a component (Terraform module-like): network.df's `vpc`, once
 # per network. Inputs are declared by the component; each `k = v` here is
 # a contribution to one.
-resource network.vpc main { vpc_net = inet(cidrs.main) }
+resource network.vpc main { vpc_net = cidrs.main }
 
 # Dev is small: one network, no database, no cluster.
-resource network.vpc peer { vpc_net = inet(cidrs.peer) } where env != "dev"
+resource network.vpc peer { vpc_net = cidrs.peer } where env != "dev"
 
 # A module is imported once, its inputs bound by its block, rows included
 # (database.df's resources are `database/db`): main's private subnets.
@@ -90,7 +90,7 @@ resource net.vpc_peering "peer-${ia}-${ib}" {
 } where vpc_peer_pair(ia, ib, a, b), a in net.vpc, b in net.vpc
 
 #| Demo: allocate an IP from the main VPC.
-resource compute.vm bastion { private_ip = inet.host(inet(cidrs.main), 20) }
+resource compute.vm bastion { private_ip = inet.host(cidrs.main, 20) }
 
 # Policy, over every resource of a type (a copy's resources included).
 deny "prod db must be multi_az" where env == "prod", pg in db.postgres, not pg.multi_az

@@ -70,7 +70,7 @@ ne() where 1 != 1.0
 lt() where 1 < 1.5
 gt() where 2.5 > 2
 big() where 9007199254740993 > 9007199254740992.0
-text(t, u) where t = "r=${0.5}", u = string(1.5)
+text(t, u) where t = "r=${0.5}", u = "${1.5}"
 "#;
     assert_eq!(facts(src, "i"), ["i(2)"]);
     assert_eq!(facts(src, "n"), ["n(-2)"]);

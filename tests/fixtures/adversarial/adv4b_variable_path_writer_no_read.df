@@ -3,13 +3,10 @@
 
 override(net.vpc, "main", "tags", { team: "x" })
 
-resource net.vpc main { cidr = inet("10.0.0.0/16"), tags = { env: "dev" } }
+resource net.vpc main { cidr = "10.0.0.0/16", tags = { env: "dev" } }
 
 arg(t, n, p, v) where override(t, n, p, v), want(t, n)
 
-deny "vpc without cidr" { vpc: n } where {
-  n in net.vpc
-  not arg(net.vpc, n, "cidr", inet("10.0.0.0/16"))
-}
+deny "vpc without cidr" { vpc: n } where n in net.vpc, not arg(net.vpc, n, "cidr", "10.0.0.0/16")
 
 use fake

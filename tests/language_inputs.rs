@@ -94,14 +94,14 @@ fn a_refinement_on_an_input_is_a_deny() {
 }
 
 /// An input file holds one fact per input; its values are program terms,
-/// so lists and `inet(...)` work, and a value of the wrong type is a
+/// read as the inputs' types (a list of networks), and a value of the wrong type is a
 /// violation naming the input.
 #[test]
 fn an_input_file_gives_inputs_as_facts() {
     let s = scratch();
     s.write(
         "prod.df",
-        "\nenv(\"prod\")\nowner(\"ops\")\nnets([inet(\"10.0.0.0/24\"), inet(\"10.0.1.0/24\")])\n",
+        "\nenv(\"prod\")\nowner(\"ops\")\nnets([\"10.0.0.0/24\", \"10.0.1.0/24\"])\n",
     );
     let r = plan(&s, &["--input-file", "prod.df"]).success();
     assert!(r.stdout.contains("env = \"prod\""), "{}", r.stdout);

@@ -10,7 +10,7 @@ name_of("a")
 both(n) where count_of(n), name_of(n)
 net("10.0.0.0/8")
 net("ten")
-inside(n) where net(n), inet.contains(n, ip("10.1.2.3"))
+inside(n) where net(n), inet.contains(n, "10.1.2.3")
 label("a", "1")
 next(k, m) where label(k, n), m = n + 1
 size("a", 1)

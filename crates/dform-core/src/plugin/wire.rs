@@ -70,7 +70,7 @@ pub fn value(v: &Value) -> pb::Value {
         // A provider reads a quantity, a time or a url as its canonical
         // text; an attribute's schema renders it before it gets there
         // (`render`).
-        Value::Quantity(_) | Value::Time(_) | Value::Url(_) | Value::Oci(_) => {
+        Value::Quantity(_) | Value::Time(_) | Value::Url(_) | Value::Oci(_) | Value::Semver(_) => {
             Kind::Str(v.typed_text().unwrap_or_default())
         }
         Value::Null {

@@ -27,13 +27,13 @@ fn a_day_across_dst_and_a_month_at_the_31st() {
     s.write(
         "p.df",
         &program(
-            "let eve = time(\"2026-10-24T12:00[Europe/Paris]\")\n\
+            "let eve: time = \"2026-10-24T12:00[Europe/Paris]\"\n\
              next(t) where t = time.add(eve, 1d)\n\
              gap(d) where d = time.until(eve, time.add(eve, 1d))\n\
              op(t) where t = eve + 1d\n\
              back(t) where t = eve - 1mo\n\
-             feb(t) where t = time.add(time(\"2026-01-31T00:00[UTC]\"), 1mo)\n\
-             leap(t) where t = time.add(time(\"2028-01-31T00:00[UTC]\"), 1mo)\n",
+             feb(t) where t = time.add(\"2026-01-31T00:00[UTC]\", 1mo)\n\
+             leap(t) where t = time.add(\"2028-01-31T00:00[UTC]\", 1mo)\n",
         ),
     );
     assert_eq!(
@@ -58,15 +58,17 @@ fn times_in_two_zones_compare_by_instant() {
     s.write(
         "p.df",
         &program(
-            "let paris = time(\"2026-10-02T09:00[Europe/Paris]\")\n\
-             let utc = time(\"2026-10-02T08:30:00Z\")\n\
+            "let paris: time = \"2026-10-02T09:00[Europe/Paris]\"\n\
+             let utc: time = \"2026-10-02T08:30:00Z\"\n\
+             let seven: time = \"2026-10-02T07:00:00Z\"\n\
+             let india: time = \"2026-10-02T09:00:00+05:30\"\n\
              first() where time.before(paris, utc)\n\
              later() where utc > paris\n\
-             same() where time.in_zone(paris, \"UTC\") == time(\"2026-10-02T07:00:00Z\")\n\
+             same() where time.in_zone(paris, \"UTC\") == seven\n\
              ny(t) where t = time.in_zone(paris, \"America/New_York\")\n\
              stamp(x) where x = time.format(paris, \"%Y-%m-%d %H:%M %Z\")\n\
              earliest(t) where t = min(x), x in [utc, paris]\n\
-             offset(t) where t = time(\"2026-10-02T09:00:00+05:30\")\n",
+             offset(t) where t = india\n",
         ),
     );
     assert!(query(&s, "first()").success().stdout.contains("yes"));
@@ -93,12 +95,15 @@ fn durations_parse_print_and_total() {
     s.write(
         "p.df",
         "\n\ninput ttl: duration = \"PT36H\"\n\n\
-         iso(d) where d = duration.parse(\"P1Y2M3DT4H5M\")\n\
+         let iso_form: duration = \"P1Y2M3DT4H5M\"\n\
+         let three_quarters: duration = 45m\n\
+         let a_month: duration = \"P1M\"\n\
+         iso(d) where d = iso_form\n\
          ttl_hours(n) where n = duration.total(ttl, \"hours\")\n\
          long() where ttl > 1d\n\
          minutes(d) where d = 90m + 0s\n\
-         twice(d) where d = 2 * duration(45m)\n\
-         month(d) where d = duration(\"P1M\")\n\
+         twice(d) where d = 2 * three_quarters\n\
+         month(d) where d = a_month\n\
          use fake\n",
     );
     assert_eq!(one(&s, "iso(d)"), "1y2mo3d4h5m");
@@ -110,18 +115,17 @@ fn durations_parse_print_and_total() {
 }
 
 /// A time literal is checked where it is written (R-31): a month 13 is an
-/// error at the literal, in a constructor and in an input's default.
+/// error at the literal, in a typed `let` and in an input's default.
 #[test]
 fn a_bad_time_literal_is_a_compile_error() {
     let s = Scratch::new("time-bad");
     s.write(
         "p.df",
-        &program("t(x) where x = time(\"2026-13-01T00:00:00Z\")\n"),
+        &program("let t: time = \"2026-13-01T00:00:00Z\"\nx(y) where y = t\n"),
     );
-    let r = query(&s, "t(x)").failure();
+    let r = query(&s, "x(y)").failure();
     assert!(
-        r.stderr
-            .contains("p.df:3:16: not a time: `2026-13-01T00:00:00Z`"),
+        r.stderr.contains("let t is time: `2026-13-01T00:00:00Z`"),
         "{}",
         r.stderr
     );

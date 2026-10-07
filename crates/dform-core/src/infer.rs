@@ -418,8 +418,8 @@ impl Pass<'_> {
     }
 
     /// Every call inside `t`: a variable argument takes the parameter's
-    /// type (a package function's: a conversion such as `inet(s)` takes
-    /// what it converts), and an arithmetic operation is checked.
+    /// type (a package function's), and an arithmetic operation is
+    /// checked.
     fn calls(&mut self, rule: usize, t: &Term, span: Span) {
         match t {
             Term::Func { name, args } => {
@@ -686,6 +686,8 @@ fn kind(v: &Value) -> Option<Ty> {
         Value::Time(_) => s("time"),
         Value::Url(_) => s("url"),
         Value::Oci(_) => s("oci"),
+        Value::Semver(_) => s("semver"),
+        Value::IpRange { .. } => s("iprange"),
         _ => None,
     }
 }
@@ -715,7 +717,8 @@ fn compatible(a: &Ty, b: &Ty) -> bool {
 /// wanted: an `oci`, a `url`, a network or an address, a time, a quantity.
 fn printed(ty: &Ty) -> bool {
     matches!(ty, Ty::Scalar(s) if matches!(s.as_str(),
-        "oci" | "url" | "inet" | "ip" | "iprange" | "time" | "bytes" | "cpu" | "duration"))
+        "oci" | "url" | "inet" | "ip" | "iprange" | "time" | "bytes" | "cpu" | "duration"
+        | "semver"))
 }
 
 /// `int`, `float`, `number` (either).
@@ -726,7 +729,7 @@ fn number(ty: &str) -> bool {
 /// `narrow` is read from a string: an `inet`, an `ip`, an image
 /// reference (R-133: and is its text where a string is wanted).
 fn text_of(string: &str, narrow: &str) -> bool {
-    string == "string" && matches!(narrow, "inet" | "ip" | "oci")
+    string == "string" && matches!(narrow, "inet" | "ip" | "iprange" | "oci" | "semver")
 }
 
 /// The more telling of two compatible types: an enum over a string, a
@@ -1222,7 +1225,8 @@ impl Inferred {
         let read = |ty: Option<&Ty>, t: &mut Term| {
             let Some(ty) = ty else { return };
             let wanted = matches!(ty, Ty::Scalar(s) if matches!(s.as_str(),
-                "inet" | "ip" | "float" | "bytes" | "cpu" | "duration" | "time"));
+                "inet" | "ip" | "iprange" | "float" | "bytes" | "cpu" | "duration" | "time"
+                | "semver"));
             if !wanted || !matches!(t, Term::Val(_)) {
                 return;
             }
