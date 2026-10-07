@@ -9,9 +9,11 @@
 //! With the `wasm` feature (experimental), [`wasm`] runs a component
 //! provider in wasmtime with the same interfaces as its imports.
 
-pub mod git;
+/// The host's git is dform's (`dform_core::git`, R-103).
+pub use dform_core::git;
 pub mod grpc;
-pub mod http;
+/// The host's HTTP is dform's one client (`dform_core::http`, R-103).
+pub use dform_core::http;
 pub mod launch;
 pub mod services;
 pub mod ssh;

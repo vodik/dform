@@ -218,7 +218,10 @@ impl Tables {
             }),
             (_, Some([repo, commit, path])) => self.rows(f, format, table, inputs, || {
                 let dir = base.join(repo);
-                let text = git(&dir, &["show", &format!("{commit}:{path}")])
+                let text = crate::git::Git::cache()
+                    .read(&dir.display().to_string(), commit, path)
+                    .map_err(|e| anyhow!(e.message))
+                    .and_then(|b| String::from_utf8(b).map_err(|_| anyhow!("not UTF-8 text")))
                     .with_context(|| format!("table {table}: read {repo}@{commit}:{path}"))?;
                 let rev = self
                     .refs
@@ -240,12 +243,9 @@ impl Tables {
     /// `table.git.p(repo, ref)`: the commit the ref names now.
     fn resolve(&self, base: &Path, repo: &str, rev: &str) -> Result<Vec<Vec<Value>>> {
         let dir = base.join(repo);
-        let commit = git(
-            &dir,
-            &["rev-parse", "--verify", &format!("{rev}^{{commit}}")],
-        )
-        .map(|c| c.trim().to_string())
-        .map_err(|e| anyhow!("git repository {repo}: ref {rev} does not name a commit ({e})"))?;
+        let commit = crate::git::resolve(&dir, rev).map_err(|e| {
+            anyhow!("git repository {repo}: ref {rev} does not name a commit ({e})")
+        })?;
         self.refs
             .borrow_mut()
             .insert((dir, commit.clone()), rev.to_string());
@@ -482,19 +482,6 @@ pub fn document_of(format: &str, text: &str) -> Result<Value> {
 
 fn short(commit: &str) -> &str {
     &commit[..commit.len().min(7)]
-}
-
-fn git(repo: &Path, args: &[&str]) -> Result<String> {
-    let out = std::process::Command::new("git")
-        .arg("-C")
-        .arg(repo)
-        .args(args)
-        .output()
-        .context("run git")?;
-    if !out.status.success() {
-        bail!("{}", String::from_utf8_lossy(&out.stderr).trim());
-    }
-    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
 /// A cell as the file holds it: CSV's text, or a document's value.

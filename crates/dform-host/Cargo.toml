@@ -25,13 +25,6 @@ dform-wire = { path = "../dform-wire" }
 serde_json = "1.0"
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "net", "macros", "io-util", "time", "sync"] }
 tonic = "0.13"
-# http.send: blocking HTTP over rustls, the machine's CA (the platform
-# verifier) and proxy, client certificates from a credential.
-ureq = { version = "3", default-features = false, features = ["rustls", "platform-verifier"] }
-# git.read and git.commit: pure-Rust git into the XDG cache (house rules:
-# no shell-outs).
-# No network transport: gix's reqwest one links aws-lc-rs beside ring.
-gix = { version = "0.88", default-features = false, features = ["sha1", "revision"] }
 # The component host (`wasm`).
 # `async` and `component-model-async`: the provider's calls are async
 # (R-130), several in flight on one instance.

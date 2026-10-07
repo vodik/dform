@@ -14,10 +14,17 @@ pub mod executor;
 pub mod externs;
 pub mod fmt;
 pub mod functions;
+#[cfg(not(target_family = "wasm"))]
+pub mod git;
+#[cfg(target_family = "wasm")]
+#[path = "git_wasm.rs"]
+pub mod git;
 pub mod graph;
 #[cfg(feature = "test-hooks")]
 #[doc(hidden)]
 pub mod hooks;
+#[cfg(not(target_family = "wasm"))]
+pub mod http;
 pub mod infer;
 pub mod inputs;
 pub mod interrupt;

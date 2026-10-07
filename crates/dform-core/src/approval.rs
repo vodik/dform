@@ -313,6 +313,35 @@ pub fn load_roots(
     Ok(out)
 }
 
+/// `url`'s body, through dform's HTTP client (R-103: no `curl`), within
+/// [`JWKS_TIMEOUT`]; a status that is no success is an error naming it.
+#[cfg(not(target_family = "wasm"))]
+fn fetch(url: &str) -> Result<String> {
+    let r = crate::http::send(
+        crate::plugin::host::HttpRequest {
+            method: "GET".into(),
+            url: url.to_string(),
+            timeout: Some(JWKS_TIMEOUT),
+            ..Default::default()
+        },
+        None,
+        None,
+    )
+    .map_err(|e| anyhow::anyhow!("fetch {}", e.message))?;
+    if !(200..300).contains(&r.status) {
+        bail!("fetch {url}: the server answered {}", r.status);
+    }
+    String::from_utf8(r.body).map_err(|_| anyhow::anyhow!("fetch {url}: not UTF-8 text"))
+}
+
+#[cfg(target_family = "wasm")]
+fn fetch(url: &str) -> Result<String> {
+    bail!("fetch {url}: no HTTP client in a wasm build of dform-core")
+}
+
+/// How long a JWKS fetch may take.
+const JWKS_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
+
 fn cached_fetch(url: &str, cache_dir: &Path) -> Result<String> {
     let cache = cache_dir.join(format!("jwks-{}.json", &sha256_hex(url.as_bytes())[..16]));
     let age = std::fs::metadata(&cache)
@@ -326,17 +355,7 @@ fn cached_fetch(url: &str, cache_dir: &Path) -> Result<String> {
         return std::fs::read_to_string(&cache)
             .with_context(|| format!("read {}", cache.display()));
     }
-    let fetched = std::process::Command::new("curl")
-        .args(["-fsSL", "--max-time", "20", url])
-        .output()
-        .context("run curl")
-        .and_then(|o| {
-            if o.status.success() {
-                Ok(String::from_utf8_lossy(&o.stdout).into_owned())
-            } else {
-                bail!("fetch {url}: {}", String::from_utf8_lossy(&o.stderr).trim())
-            }
-        });
+    let fetched = fetch(url);
     match fetched {
         Ok(text) => {
             std::fs::create_dir_all(cache_dir)
@@ -733,5 +752,48 @@ mod tests {
         let other = ed25519_dalek::SigningKey::from_bytes(&[8; 32]);
         let e = verify(&jwt, &roots(&other), &expect).unwrap_err();
         assert!(e.to_string().contains("does not verify"), "{e}");
+    }
+
+    /// A one-request HTTP server on the loopback answering `status` with
+    /// `body`.
+    fn serve_once(status: u16, body: &'static str) -> String {
+        use std::io::{BufRead, BufReader, Write};
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = l.local_addr().unwrap();
+        std::thread::spawn(move || {
+            let (s, _) = l.accept().unwrap();
+            let mut r = BufReader::new(s.try_clone().unwrap());
+            loop {
+                let mut line = String::new();
+                r.read_line(&mut line).unwrap();
+                if line == "\r\n" || line.is_empty() {
+                    break;
+                }
+            }
+            let mut s = s;
+            write!(
+                s,
+                "HTTP/1.1 {status} X\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                body.len()
+            )
+            .unwrap();
+        });
+        format!("http://{addr}/jwks.json")
+    }
+
+    /// A JWKS URL is fetched by dform's HTTP client (R-103: no `curl`) and
+    /// kept in the cache; a status that is no success is an error naming
+    /// it.
+    #[test]
+    fn a_jwks_url_is_fetched_and_cached() {
+        let dir = std::env::temp_dir().join(format!("dform-jwks-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let url = serve_once(200, r#"{"keys":[]}"#);
+        assert_eq!(cached_fetch(&url, &dir).unwrap(), r#"{"keys":[]}"#);
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
+        let url = serve_once(404, "no");
+        let e = cached_fetch(&url, &dir.join("other")).unwrap_err();
+        assert!(e.to_string().contains("answered 404"), "{e}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

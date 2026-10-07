@@ -1031,37 +1031,14 @@ pub fn format_file(path: &Path, src: &str, version: &str) -> Result<String> {
 
 /// The git commit the directory `dir` is at, when it is in a repository.
 pub fn git_head(dir: &Path) -> Option<String> {
-    let out = std::process::Command::new("git")
-        .args(["rev-parse", "HEAD"])
-        .current_dir(dir)
-        .stderr(std::process::Stdio::null())
-        .output()
-        .ok()?;
-    out.status
-        .success()
-        .then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
-        .filter(|s| !s.is_empty())
+    crate::git::head(dir)
 }
 
-/// The tracked files under `dir` modified since the commit (`git status`):
-/// empty when the tree is clean or not a repository.
+/// The tracked files under `dir` modified since the commit (`git status`),
+/// from the repository's root: empty when the tree is clean or not a
+/// repository.
 pub fn git_modified(dir: &Path) -> Vec<String> {
-    let Ok(out) = std::process::Command::new("git")
-        .args(["status", "--porcelain", "--untracked-files=no", "--", "."])
-        .current_dir(dir)
-        .stderr(std::process::Stdio::null())
-        .output()
-    else {
-        return Vec::new();
-    };
-    if !out.status.success() {
-        return Vec::new();
-    }
-    String::from_utf8_lossy(&out.stdout)
-        .lines()
-        .filter_map(|l| l.get(3..))
-        .map(str::to_string)
-        .collect()
+    crate::git::modified(dir)
 }
 
 #[cfg(test)]

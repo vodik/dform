@@ -1,11 +1,14 @@
-//! `http.send`: HTTP with TLS by the host. The machine's CA (the platform
-//! verifier) and proxy (`HTTPS_PROXY`, `NO_PROXY`); a credential applied
-//! by its parts (headers, a client certificate, its own CA); a tunnel by
-//! resolving the URL's host to the tunnel's local end, so TLS still
-//! verifies the name the URL gives.
+//! dform's one HTTP client (R-103): the host's `http.send`, an `https://`
+//! location's read (`crate::files`), git over https (`crate::git`) and the
+//! JWKS an approval is verified against (`crate::approval`). TLS with the
+//! machine's CA (the platform verifier) and proxy (`HTTPS_PROXY`,
+//! `NO_PROXY`); a credential applied by its parts (headers, a client
+//! certificate, its own CA); a tunnel by resolving the URL's host to the
+//! tunnel's local end, so TLS still verifies the name the URL gives. No
+//! `curl`, no second TLS stack.
 
-use dform_core::plugin::credentials::Credential;
-use dform_core::plugin::host::{Error, HttpRequest, HttpResponse};
+use crate::plugin::credentials::Credential;
+use crate::plugin::host::{Error, HttpRequest, HttpResponse};
 use std::net::SocketAddr;
 use std::time::Duration;
 use ureq::tls::{Certificate, ClientCert, PemItem, PrivateKey, RootCerts, TlsConfig};
@@ -72,7 +75,7 @@ fn tls(cred: Option<&Credential>) -> Result<TlsConfig, Error> {
 /// The class of a transport failure: one before the request was sent
 /// changed nothing and is worth sending again; a timeout after may have
 /// taken effect.
-fn failure(url: &str, e: ureq::Error) -> Error {
+pub fn failure(url: &str, e: ureq::Error) -> Error {
     use ureq::Error as E;
     let m = format!("{url}: {e}");
     match e {
@@ -84,12 +87,14 @@ fn failure(url: &str, e: ureq::Error) -> Error {
     }
 }
 
-/// Send `req` with `cred` applied, through `via` when given.
-pub fn send(
-    req: HttpRequest,
+/// The client for `cred`'s TLS (its CA, its client certificate), through
+/// `via` when given, each request at most `timeout` long. A status the
+/// server answered is a response, not an error.
+pub fn agent(
     cred: Option<&Credential>,
     via: Option<SocketAddr>,
-) -> Result<HttpResponse, Error> {
+    timeout: Duration,
+) -> Result<ureq::Agent, Error> {
     let config = ureq::Agent::config_builder()
         .tls_config(tls(cred)?)
         .proxy(if via.is_some() {
@@ -98,16 +103,25 @@ pub fn send(
             ureq::Proxy::try_from_env()
         })
         .http_status_as_error(false)
-        .timeout_global(Some(req.timeout.unwrap_or(TIMEOUT)))
+        .timeout_global(Some(timeout))
         .build();
-    let agent = match via {
+    Ok(match via {
         None => ureq::Agent::new_with_config(config),
         Some(addr) => ureq::Agent::with_parts(
             config,
             ureq::unversioned::transport::DefaultConnector::new(),
             Through(addr),
         ),
-    };
+    })
+}
+
+/// Send `req` with `cred` applied, through `via` when given.
+pub fn send(
+    req: HttpRequest,
+    cred: Option<&Credential>,
+    via: Option<SocketAddr>,
+) -> Result<HttpResponse, Error> {
+    let agent = agent(cred, via, req.timeout.unwrap_or(TIMEOUT))?;
     let method = ureq::http::Method::from_bytes(req.method.to_ascii_uppercase().as_bytes())
         .map_err(|_| Error::fatal(format!("{}: no HTTP method {:?}", req.url, req.method)))?;
     let mut b = ureq::http::Request::builder()
@@ -150,7 +164,7 @@ pub fn send(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dform_core::plugin::credentials::Secret;
+    use crate::plugin::credentials::Secret;
     use std::io::{BufRead, BufReader, Write};
 
     /// A one-request HTTP server on the loopback: answers 200 with the
@@ -228,7 +242,7 @@ mod tests {
         .unwrap_err();
         assert_eq!(
             e.class,
-            dform_core::plugin::host::Class::Retryable,
+            crate::plugin::host::Class::Retryable,
             "{}",
             e.message
         );

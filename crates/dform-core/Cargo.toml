@@ -78,4 +78,17 @@ hmac = "0.12"
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
 russh = { version = "=0.64.1", default-features = false, features = ["ring", "rsa"] }
 russh-sftp = "=3.0.1"
-tokio = { version = "1", features = ["rt", "net", "time"] }
+tokio = { version = "1", features = ["rt", "net", "time", "sync", "io-util"] }
+# Git without the `git` binary (R-103, house rules): the program's own
+# repository (HEAD, what is modified, a tree at a commit for `diff
+# --since`, the controller's watch) and the mirrors a `git+https://` or
+# `git+ssh://` location is read through (src/git.rs). Fetched over the
+# HTTP client below (gix-transport's `http-client`, the trait only: no
+# curl, no reqwest, no second TLS stack) and over russh; gix's own ssh
+# and file transports, which spawn programs, are never used.
+gix = { version = "0.88", default-features = false, features = ["sha1", "revision", "status", "blocking-network-client"] }
+gix-transport = { version = "0.60", default-features = false, features = ["http-client"] }
+# The one HTTP client (R-103): `https://` locations, git over https, the
+# JWKS an approval is verified against. Blocking, rustls with the
+# machine's CA (the platform verifier), as dform-host's and dform-s3's.
+ureq = { version = "3", default-features = false, features = ["rustls", "platform-verifier"] }

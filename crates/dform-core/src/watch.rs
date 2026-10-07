@@ -8,9 +8,7 @@
 //! is an input event.
 
 use crate::ast::Span;
-use anyhow::{Context, Result, bail};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 /// Where a source is.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
@@ -44,23 +42,6 @@ pub struct Relation {
     pub span: Span,
 }
 
-fn git(repo: &Path, args: &[&str]) -> Result<String> {
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(repo)
-        .args(args)
-        .output()
-        .context("run git")?;
-    if !out.status.success() {
-        bail!(
-            "git {}: {}",
-            args.join(" "),
-            String::from_utf8_lossy(&out.stderr).trim()
-        );
-    }
-    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
-}
-
 /// What changes when a source's facts may have: a digest of a file's
 /// contents (a missing file stamps as missing), the commit a git ref names.
 pub fn stamp(s: &Source) -> String {
@@ -70,13 +51,7 @@ pub fn stamp(s: &Source) -> String {
             Err(_) => "missing".into(),
         },
         Source::Git { repo, rev, .. } => {
-            match git(
-                repo,
-                &["rev-parse", "--verify", &format!("{rev}^{{commit}}")],
-            ) {
-                Ok(c) => c.trim().to_string(),
-                Err(_) => "missing".into(),
-            }
+            crate::git::resolve(repo, rev).unwrap_or_else(|_| "missing".into())
         }
     }
 }

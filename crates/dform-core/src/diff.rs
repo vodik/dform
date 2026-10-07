@@ -323,12 +323,9 @@ pub fn program_of(apply: &Apply, files: &[PathBuf], top: &Path) -> (Program, Opt
         .map(|f| {
             let dir = f.parent().filter(|d| !d.as_os_str().is_empty());
             let name = f.file_name()?.to_str()?;
-            git(
-                dir.unwrap_or(Path::new(".")),
-                &["show", &format!("{commit}:./{name}")],
-            )
-            .ok()
-            .map(|b| crate::zset::file::fnv64(&b))
+            crate::git::show(dir.unwrap_or(Path::new(".")), commit, name)
+                .ok()
+                .map(|b| crate::zset::file::fnv64(&b))
         })
         .collect();
     let short = &commit[..commit.len().min(12)];
@@ -348,7 +345,7 @@ pub fn program_of(apply: &Apply, files: &[PathBuf], top: &Path) -> (Program, Opt
     if then.is_none() || at_commit == then {
         // The commit is the program now when nothing under the project
         // moved since.
-        let clean = git(top, &["status", "--porcelain", "--", "."]).is_ok_and(|o| o.is_empty());
+        let clean = crate::git::clean(top);
         if clean && crate::project::git_head(top).as_deref() == Some(commit.as_str()) {
             return (Program::Now, None);
         }
@@ -363,24 +360,6 @@ pub fn program_of(apply: &Apply, files: &[PathBuf], top: &Path) -> (Program, Opt
             "the program had changes not committed at this apply: explained as committed at {short}"
         )),
     )
-}
-
-fn git(dir: &Path, args: &[&str]) -> Result<Vec<u8>> {
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(dir)
-        .args(args)
-        .stderr(Stdio::piped())
-        .output()
-        .context("run git")?;
-    if !out.status.success() {
-        bail!(
-            "git {}: {}",
-            args.join(" "),
-            String::from_utf8_lossy(&out.stderr).trim()
-        );
-    }
-    Ok(out.stdout)
 }
 
 /// A scratch directory, removed when dropped.
@@ -410,28 +389,8 @@ pub fn at_commit(
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
     let scratch = Scratch(dir);
-    let mut archive = Command::new("git")
-        .arg("-C")
-        .arg(&r.top)
-        .args(["archive", "--format=tar", &format!("{commit}:./")])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .context("run git archive")?;
-    let tar = Command::new("tar")
-        .arg("-x")
-        .arg("-C")
-        .arg(&scratch.0)
-        .stdin(archive.stdout.take().context("git archive: no output")?)
-        .status()
-        .context("run tar")?;
-    let archived = archive.wait_with_output().context("run git archive")?;
-    if !archived.status.success() || !tar.success() {
-        bail!(
-            "read the project at {commit}: {}",
-            String::from_utf8_lossy(&archived.stderr).trim()
-        );
-    }
+    // The project's tree at the commit, written out (no archive, no tar).
+    crate::git::checkout(&r.top, commit, &scratch.0)?;
     explain_in(r, &scratch.0, apply, addresses)
 }
 
