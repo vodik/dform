@@ -2223,7 +2223,7 @@ answers what it waits on (the longest, for several), 10m unless dform.toml
 says: not the `timeout` that bounds each call, since a host that boots or
 a job that runs takes minutes while a call that hangs is wrong after one.
 A location's read that is not there yet (a host that boots, R-153) waits
-under `[files] wait`. Past it the apply
+under `[io] wait`. Past it the apply
 stops, the state consistent and nothing of the tick in flight: `apply
 stopped at tick 2: waited 2m on k8s.job["migrate-v42"].status.succeeded,
 still unknown (the provider's `wait` in dform.toml); state is
@@ -2236,7 +2236,7 @@ waiting on ...`. Every wait is a `wait` entry in the audit log.
 [providers]
 aws = { source = "aws", timeout = "2m", retries = 8, backoff = "500ms" }
 
-[files]
+[io]
 wait = "20m"      # how long a tick waits on a location not there yet (a host that boots; 10m by default)
 ```
 
@@ -2496,24 +2496,24 @@ within 10s, no route) or a file it has not written, an `https://` (404)
 or `s3://` object that is not there yet. The document is an open null
 the apply waits on, printed as its location (`waits on
 ssh://ubuntu@51.79.29.179/etc/rancher/k3s/k3s.yaml`), until it is there
-or `[files] wait` runs out ("Timeouts, retries and waiting"); a part of
+or `[io] wait` runs out ("Timeouts, retries and waiting"); a part of
 it (`d.metadata`) waits with it. The program's own (`file:`, `data:`, a
 repository's file) is there or is an error.
 
 Credentials are the operator's, by name, never in the program:
-`[files] credentials` maps a location pattern (`*` any run of characters,
+`[io] credentials` maps a location pattern (`*` any run of characters,
 matched against `SCHEME://HOST[:PORT]/PATH`; the longest that matches
 wins) to a credential (docs/providers.md, "Grants and credentials"):
 
 ```toml
-[files]
+[io]
 wait = "20m"
 credentials = { "ssh://51.79.*" = "ssh:k3s-admin", "https://git.example.com/*" = "bearer:git" }
 ```
 
 SSH is a client inside dform, never the `ssh` binary or the operator's
 ssh config. The user is the location's (the local user when it names
-none). The key is never asked for a passphrase: the one `[files]
+none). The key is never asked for a passphrase: the one `[io]
 credentials` names first (an `ssh:NAME` key: the agent's of that comment
 or SHA-256 fingerprint, else the credential's unencrypted OpenSSH file
 `$XDG_CONFIG_HOME/dform/credentials/ssh/NAME`), offered first because a
@@ -2526,7 +2526,7 @@ to do in the next:
 
 ```
 127.0.0.1:2222 refused ubuntu: no agent at SSH_AUTH_SOCK, and ~/.ssh/id_ed25519 has a passphrase
-  start an agent and `ssh-add`, or name an unencrypted deploy key in dform.toml: [files] credentials = { "ssh://HOST/*" = "ssh:k3s-admin" }
+  start an agent and `ssh-add`, or name an unencrypted deploy key in dform.toml: [io] credentials = { "ssh://HOST/*" = "ssh:k3s-admin" }
 51.79.29.179 refused ubuntu: the agent offered 2 keys (simon@laptop, work) and the host accepted none
   add one of these keys to ubuntu's authorized_keys on 51.79.29.179, or `ssh-add` the key it holds
 51.79.29.179 refused ubuntu: the agent offered 1 key (simon@laptop) and the host accepted none, and the key "k3s-admin" is not in the agent and there is no ~/.config/dform/credentials/ssh/k3s-admin
@@ -2554,7 +2554,7 @@ a document read into it is not recorded in the plan file, only its keyed
 digest (`inputs.answers`, `"sensitive": "table.text.document/LOCATION#3"`);
 `apply PLAN` reads it again and refuses the plan when the digest moved.
 
-A provider reads a location through the host (`dform:host/files`, the
+A provider reads a location through the host (`dform:host/io`, the
 gRPC `Host.Read`; docs/providers.md), the same transports, mirrors, known
 hosts and timeout as the program's: only what its `[providers.NAME]
 reads` patterns grant (`"https://github.com/*"`, `"s3://images/*"`),

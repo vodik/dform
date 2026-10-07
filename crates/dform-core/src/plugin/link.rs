@@ -24,7 +24,7 @@ pub struct Link {
     /// How the launcher hosted it, for `provider check` (R-13b).
     pub hosting: Option<super::host::Hosting>,
     /// The location schemes its manifest declares (R-153), and its
-    /// reader of them (its `Files` service): the run's reader routes a
+    /// reader of them (its `Io` service): the run's reader routes a
     /// read of one to it.
     pub schemes: Vec<String>,
     pub reader: Option<std::sync::Arc<dyn crate::files::Transport>>,

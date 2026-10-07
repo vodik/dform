@@ -10,7 +10,7 @@
 //! error until `dform state forget-host`.
 //!
 //! Authentication never prompts (R-125): the key dform.toml names for the
-//! location (`[files] credentials`), the agent's keys, then the
+//! location (`[io] credentials`), the agent's keys, then the
 //! unencrypted `~/.ssh/id_*`; a refusal says what was offered and what to
 //! do. The agent is russh's, served by the test on a unix socket.
 //!
@@ -304,7 +304,7 @@ fn a_host_or_a_file_not_there_yet_is_waited_on() {
     let timeout = |t: &str| {
         s.write(
             "dform.toml",
-            &format!("[project]\nedition = \"2026\"\n\n[files]\nwait = \"{t}\"\n"),
+            &format!("[project]\nedition = \"2026\"\n\n[io]\nwait = \"{t}\"\n"),
         )
     };
     timeout("1s");
@@ -484,7 +484,7 @@ fn ssh_run_is_not_a_function_and_the_provider_is_gone() {
         "[project]\nedition = \"2026\"\n\n[providers]\nssh = { timeout = \"10m\" }\n",
     );
     let r = run(&s, &["plan", "p.df"]).failure();
-    assert!(r.stderr.contains("[files] wait"), "{}", r.stderr);
+    assert!(r.stderr.contains("[io] wait"), "{}", r.stderr);
 }
 
 /// An OpenSSH ed25519 key with the passphrase `blabla` (russh's own test
@@ -575,7 +575,7 @@ fn a_key_with_a_passphrase_is_used_through_the_agent() {
             "{host} refused {u}: no agent at SSH_AUTH_SOCK, and ~/.ssh/id_ed25519 has a passphrase",
             u = user()
         ),
-        "start an agent and `ssh-add`, or name an unencrypted deploy key in dform.toml: [files] \
+        "start an agent and `ssh-add`, or name an unencrypted deploy key in dform.toml: [io] \
          credentials = { \"ssh://HOST/*\" = \"ssh:k3s-admin\" }",
     );
 
@@ -617,7 +617,7 @@ fn an_agent_whose_keys_the_host_refuses_says_which() {
     );
 }
 
-/// `[files] credentials = { "ssh://HOST/*" = "ssh:NAME" }`: the
+/// `[io] credentials = { "ssh://HOST/*" = "ssh:NAME" }`: the
 /// credential `ssh:NAME`'s file, or the agent's key of that fingerprint
 /// (or comment), offered first (a host stops listening after
 /// `MaxAuthTries` refusals); neither is a refusal saying where it looked.
@@ -629,7 +629,7 @@ fn a_named_key_is_the_agents_or_the_credentials() {
     std::fs::remove_file(s.path("home/.ssh/id_ed25519")).unwrap();
     let unnamed = s.read("dform.toml");
     let named = |k: &str| {
-        format!("{unnamed}\n[files]\ncredentials = {{ \"ssh://127.0.0.1:*\" = \"ssh:{k}\" }}\n")
+        format!("{unnamed}\n[io]\ncredentials = {{ \"ssh://127.0.0.1:*\" = \"ssh:{k}\" }}\n")
     };
     s.write("dform.toml", &named("k3s-admin"));
     let _sshd = Sshd::letting_in(
@@ -695,7 +695,7 @@ fn a_named_key_is_the_agents_or_the_credentials() {
     );
     assert!(
         r.stderr.contains(
-            "name the key the host holds in dform.toml, and it is offered first: [files] \
+            "name the key the host holds in dform.toml, and it is offered first: [io] \
              credentials = { \"ssh://HOST/*\" = \"ssh:k3s-admin\" }"
         ),
         "{}",

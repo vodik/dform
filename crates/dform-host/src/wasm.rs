@@ -306,9 +306,9 @@ impl wh::ssh::Host for State {
     }
 }
 
-impl wh::files::Host for State {
+impl wh::io::Host for State {
     fn read(&mut self, location: String) -> Result<Vec<u8>, wh::types::NotYetOrError> {
-        self.host.files_read(&location).map_err(failure)
+        self.host.io_read(&location).map_err(failure)
     }
 }
 
@@ -484,7 +484,7 @@ impl Instance {
         wh::types::add_to_linker::<State, HasSelf<State>>(&mut linker, |s| s)?;
         wh::secrets::add_to_linker::<State, HasSelf<State>>(&mut linker, |s| s)?;
         wh::http::add_to_linker::<State, HasSelf<State>>(&mut linker, |s| s)?;
-        wh::files::add_to_linker::<State, HasSelf<State>>(&mut linker, |s| s)?;
+        wh::io::add_to_linker::<State, HasSelf<State>>(&mut linker, |s| s)?;
         wh::ssh::add_to_linker::<State, HasSelf<State>>(&mut linker, |s| s)?;
         wh::git::add_to_linker::<State, HasSelf<State>>(&mut linker, |s| s)?;
         wh::log::add_to_linker::<State, HasSelf<State>>(&mut linker, |s| s)?;

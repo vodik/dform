@@ -120,8 +120,8 @@ interface http {
   send: func(req: request, auth: option<borrow<credential>>, via: option<borrow<tunnel>>) -> result<response, error>;
 }
 
-// Reading a location (R-153): one reader for every scheme, a location the
-// uri `files.read` takes. The host reads its own schemes (`data:`,
+// Reading a location (R-153, R-155): one reader for every scheme, a
+// location the uri `io.read` takes, as a program's `io.read` does. The host reads its own schemes (`data:`,
 // `ssh://USER@HOST/PATH` over SFTP, `https://`, `git+https://` and
 // `git+ssh://` at `?ref=` through its mirrors, `s3://BUCKET/KEY`) with the
 // operator's credentials by name, and routes a scheme a provider's
@@ -134,8 +134,10 @@ interface http {
 //
 // A provider whose manifest declares schemes (`schemes = ["gs"]`) serves
 // this same interface for them; the host calls it there, never one
-// provider another.
-interface files {
+// provider another. `io` is read-only: a write is an effect with no state
+// to converge, a provider's apply (`ssh.write`, below, is the host's for
+// one), never a program's.
+interface io {
   use types.{not-yet-or-error};
 
   // The bytes at `location`.
@@ -144,7 +146,7 @@ interface files {
 
 // SSH, with keys from the agent. Commands are argv, never a shell string:
 // no quoting class, and the audit shows the real command. A file is read
-// through `files` (`ssh://USER@HOST/PATH`).
+// through `io` (`ssh://USER@HOST/PATH`).
 interface ssh {
   use types.{endpoint, tunnel, error, not-yet-or-error};
 
@@ -171,7 +173,7 @@ interface ssh {
 }
 
 // Git: a commit, onto a local repository (pushing waits on gitoxide). A
-// repository's file is read through `files`
+// repository's file is read through `io`
 // (`git+https://HOST/OWNER/REPO/PATH?ref=TAG`), from the host's mirror in
 // `$XDG_CACHE_HOME/dform/git/`.
 interface git {
@@ -212,7 +214,7 @@ world hosted-provider {
   import types;
   import secrets;
   import http;
-  import files;
+  import io;
   import ssh;
   import git;
   import log;
@@ -223,8 +225,8 @@ world hosted-provider {
 }
 
 // A provider whose manifest declares schemes (R-153): a hosted provider
-// that serves `files` for them, which the host calls for a read of one.
+// that serves `io` for them, which the host calls for a read of one.
 world scheme-provider {
   include hosted-provider;
-  export files;
+  export io;
 }

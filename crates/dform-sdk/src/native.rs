@@ -18,7 +18,7 @@ use tonic::transport::Channel;
 
 /// Serve `handler` over gRPC, declaring `uses` (it runs as the user: a
 /// declaration, not a sandbox) and the location schemes it reads
-/// (`Handler::schemes`, served as `Files`, R-153), until stdin closes.
+/// (`Handler::schemes`, served as `Io`, R-153, R-155), until stdin closes.
 pub fn serve<H: Handler + Send + Sync + 'static>(handler: H, uses: &[&str]) -> Result<()> {
     let handler = std::sync::Arc::new(handler);
     let schemes = handler.schemes();
@@ -33,7 +33,7 @@ pub fn serve<H: Handler + Send + Sync + 'static>(handler: H, uses: &[&str]) -> R
     dform_grpc::server::serve_declaring(Shared(handler), declares)
 }
 
-/// A handler held twice: by the protocol's service and by `Files`.
+/// A handler held twice: by the protocol's service and by `Io`.
 struct Shared<H>(std::sync::Arc<H>);
 
 impl<H: Handler> Handler for Shared<H> {
@@ -181,7 +181,7 @@ impl Calls for Grpc {
         conv::run(r)
     }
 
-    fn files_read(&self, location: &str) -> Result<Vec<u8>, Failure> {
+    fn io_read(&self, location: &str) -> Result<Vec<u8>, Failure> {
         let req = h::ReadRequest {
             location: location.into(),
         };

@@ -15,9 +15,9 @@ reach it, is a call to the host (`wit/host/dform-host.wit`, `dform:host`):
 | interface | what it does |
 |---|---|
 | `http` | a request with TLS by the host: the machine's CA and proxy (`HTTPS_PROXY`, `NO_PROXY`), a credential applied (a header, a client certificate and its CA), optionally through a tunnel |
-| `files` | `read` a location, whatever its scheme: `ssh://USER@HOST/PATH`, `https://`, `git+https://HOST/OWNER/REPO/PATH?ref=TAG` through a mirror in `$XDG_CACHE_HOME/dform/git/<host>-<owner>/<repo>.git/`, `s3://BUCKET/KEY`, a scheme another provider declares (R-153; docs/reference.md, "Locations and transports"); as dform.toml grants |
-| `ssh` | `exec` (argv, never a shell string), `write` a file, `forward` a port to a tunnel; keys from the operator's agent (a file is read through `files`) |
-| `git` | a commit onto a branch of a local repository (a file is read through `files`) |
+| `io` | `read` a location, whatever its scheme (read-only: a write is a provider's apply, R-155): `ssh://USER@HOST/PATH`, `https://`, `git+https://HOST/OWNER/REPO/PATH?ref=TAG` through a mirror in `$XDG_CACHE_HOME/dform/git/<host>-<owner>/<repo>.git/`, `s3://BUCKET/KEY`, a scheme another provider declares (R-153; docs/reference.md, "Locations and transports"); as dform.toml grants |
+| `ssh` | `exec` (argv, never a shell string), `write` a file, `forward` a port to a tunnel; keys from the operator's agent (a file is read through `io`) |
+| `git` | a commit onto a branch of a local repository (a file is read through `io`) |
 | `secrets` | open a credential by name: a handle, never the value |
 | `log` | a line shown with dform's own output |
 
@@ -190,7 +190,7 @@ source = "providers/k8s"
 allow = ["wasi:sockets"]
 # Credentials it may open by name, KIND:NAME.
 credentials = ["kubeconfig:prod"]
-# Locations its files.read may take, SCHEME://HOST/PATH with `*`.
+# Locations its io.read may take, SCHEME://HOST/PATH with `*`.
 reads = ["https://github.com/*"]
 ```
 
@@ -200,7 +200,8 @@ matches it to [providers.k8s] reads in dform.toml`. A project's own file
 is never a provider's to read. A provider that reads a scheme of its own
 (`gs://`) declares it, `schemes = ["gs"]` in its manifest (the gRPC
 `Manifest`'s `schemes`; a `Handler`'s `schemes` and `read_location` in the
-SDK), and serves `files` for it (the gRPC `Files` service; the WIT world
+SDK), and serves `io` for it (the gRPC `Io` service, and `Files`, its name
+before R-155; the WIT world
 `scheme-provider` exports it): dform routes a read of the scheme to it, the
 program's (`yaml.decode(io.read("gs://.."))`) and another provider's alike, through the
 host, never one provider to another; dform's own schemes are never a
@@ -222,7 +223,7 @@ A credential is a name; its kind says how the host applies it:
 | `header` | `NAME: VALUE` | that header |
 | `tls` | PEM: a certificate chain and its key | the TLS session's client certificate |
 | `kubeconfig` | a kubeconfig | its current context's token or client certificate, and its cluster's CA; its server is the credential's `endpoint` |
-| `ssh` | an unencrypted OpenSSH private key, in the operator's file only (or an agent's key by its comment or fingerprint) | by dform's SSH client for an `ssh://` or `git+ssh://` location, never to an HTTP call: `[files] credentials = { "ssh://HOST/*" = "ssh:NAME" }` (docs/reference.md, "Locations and transports") |
+| `ssh` | an unencrypted OpenSSH private key, in the operator's file only (or an agent's key by its comment or fingerprint) | by dform's SSH client for an `ssh://` or `git+ssh://` location, never to an HTTP call: `[io] credentials = { "ssh://HOST/*" = "ssh:NAME" }` (docs/reference.md, "Locations and transports") |
 
 The value comes from the program (`use k8s { kubeconfig =
 cluster.kubeconfig }` registers the secret under the name the grant
@@ -248,16 +249,16 @@ host  wasm: credentials: kubeconfig:prod
 
 - `ssh.exec`, `ssh.write` and `ssh.forward` are not wired to dform's SSH
   client yet (no provider's apply calls them); every such call is refused
-  saying so. A host's file is read through `files`.
+  saying so. A host's file is read through `io`.
 - `git.commit` writes to a local repository; pushing to a remote is
   refused (gitoxide has no push yet). A remote is read through its
   mirror, fetched over dform's HTTP client or its SSH client.
-- `files.read` answers a `list<u8>` in a component and a stream of chunks
+- `io.read` answers a `list<u8>` in a component and a stream of chunks
   over gRPC; a component's `stream<u8>` waits on the host interfaces'
-  move to WASI 0.3's async, with the rest of `dform:host`. `files.write`
-  waits on a provider that manages files.
+  move to WASI 0.3's async, with the rest of `dform:host`. `io` has no
+  write, and will not (R-155): a write is an effect with no state to
+  converge, a provider's apply.
 - A wasm component cannot declare a scheme yet: the wasm host does not
-  call a component's `files` export (a native provider's `Files` is
-  called).
+  call a component's `io` export (a native provider's `Io` is called).
 - A component's calls have an epoch deadline of an hour, a backstop
   under the provider's `timeout`, which answers the engine first.

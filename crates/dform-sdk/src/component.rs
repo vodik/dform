@@ -233,8 +233,8 @@ impl Calls for Imports {
         })
     }
 
-    fn files_read(&self, location: &str) -> Result<Vec<u8>, Failure> {
-        wh::files::read(location).map_err(failure)
+    fn io_read(&self, location: &str) -> Result<Vec<u8>, Failure> {
+        wh::io::read(location).map_err(failure)
     }
 
     fn exec(&self, on: &Target, argv: &[String], stdin: Option<&[u8]>) -> Result<Run, Failure> {

@@ -203,9 +203,9 @@ pub trait Calls: Send + Sync {
         auth: Option<Handle>,
         via: Option<Handle>,
     ) -> Result<HttpResponse, Error>;
-    /// `files.read` (R-153): the bytes at a location, refused unless
+    /// `io.read` (R-153, R-155): the bytes at a location, refused unless
     /// granted; not there yet is `Failure::NotYet`.
-    fn files_read(&self, location: &str) -> Result<Vec<u8>, Failure>;
+    fn io_read(&self, location: &str) -> Result<Vec<u8>, Failure>;
     /// `ssh.exec`.
     fn exec(&self, on: &Target, argv: &[String], stdin: Option<&[u8]>) -> Result<Run, Failure>;
     /// `ssh.write`.
@@ -231,7 +231,7 @@ pub const HOST_INTERFACES: [&str; 7] = [
     "dform:host/types",
     "dform:host/secrets",
     "dform:host/http",
-    "dform:host/files",
+    "dform:host/io",
     "dform:host/ssh",
     "dform:host/git",
     "dform:host/log",
@@ -304,7 +304,7 @@ pub struct Grants {
     pub allow: BTreeSet<String>,
     /// Credentials it may open, by name (`kubeconfig:prod`).
     pub credentials: BTreeSet<String>,
-    /// The locations it may read through the host (`dform:host/files`,
+    /// The locations it may read through the host (`dform:host/io`,
     /// R-153), by pattern: `https://github.com/*`, `s3://state/*`.
     pub reads: BTreeSet<String>,
     /// The run's reader the host reads them with: its known hosts, its

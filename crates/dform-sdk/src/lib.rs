@@ -2,7 +2,7 @@
 //!
 //! A provider written against it does protocol logic only and never
 //! touches a socket or a credential: it calls the host
-//! ([`host()`]`.http.request(..)`, `.files.read(..)`, `.ssh.exec(..)`,
+//! ([`host()`]`.http.request(..)`, `.io.read(..)`, `.ssh.exec(..)`,
 //! `.secrets.open(..)`, `.log.info(..)`), and dform does the transport,
 //! with TLS, the operator's credentials by name, retries and audit. The
 //! same source builds two ways:
@@ -83,7 +83,7 @@ impl Calls for Absent {
     ) -> Result<Response, Error> {
         Err(Error::fatal(&self.0))
     }
-    fn files_read(&self, _: &str) -> Result<Vec<u8>, Failure> {
+    fn io_read(&self, _: &str) -> Result<Vec<u8>, Failure> {
         Err(Error::fatal(&self.0).into())
     }
     fn exec(&self, _: &Target, _: &[String], _: Option<&[u8]>) -> Result<Run, Failure> {
@@ -109,7 +109,7 @@ impl Calls for Absent {
 /// The host's interfaces.
 pub struct Host {
     pub http: Http,
-    pub files: Files,
+    pub io: Io,
     pub ssh: Ssh,
     pub git: Git,
     pub secrets: Secrets,
@@ -120,7 +120,7 @@ pub struct Host {
 pub fn host() -> &'static Host {
     static HOST: Host = Host {
         http: Http(()),
-        files: Files(()),
+        io: Io(()),
         ssh: Ssh(()),
         git: Git(()),
         secrets: Secrets(()),
@@ -259,21 +259,22 @@ impl Http {
     }
 }
 
-/// `dform:host/files` (R-153): a location read by the host, whatever its
-/// scheme (`ssh://USER@HOST/PATH`, `https://..`,
+/// `dform:host/io` (R-153, R-155): a location read by the host, whatever
+/// its scheme (`ssh://USER@HOST/PATH`, `https://..`,
 /// `git+https://HOST/OWNER/REPO/PATH?ref=TAG`, `s3://BUCKET/KEY`), as
-/// dform.toml grants it (`[providers.NAME] reads`).
-pub struct Files(());
+/// dform.toml grants it (`[providers.NAME] reads`). Read-only: a write is
+/// the provider's apply.
+pub struct Io(());
 
-impl Files {
+impl Io {
     /// The bytes at `location`; not there yet is `Failure::NotYet`.
     pub fn read(&self, location: &str) -> Result<Vec<u8>, Failure> {
-        calls().files_read(location)
+        calls().io_read(location)
     }
 }
 
 /// `dform:host/ssh`, keys from the operator's agent. A host's file is
-/// read through [`Files`].
+/// read through [`Io`].
 pub struct Ssh(());
 
 impl Ssh {
@@ -308,7 +309,7 @@ impl Ssh {
     }
 }
 
-/// `dform:host/git`. A repository's file is read through [`Files`].
+/// `dform:host/git`. A repository's file is read through [`Io`].
 pub struct Git(());
 
 impl Git {

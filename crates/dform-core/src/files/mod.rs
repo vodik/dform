@@ -20,11 +20,11 @@
 //! | a provider's (`gs`, ..)   | the provider that declares it, through the host            |
 //!
 //! [`Files`] is one run's reader: the program's loaders call it, and so
-//! does the host for a provider (`dform:host/files`), so there is one
+//! does the host for a provider (`dform:host/io`), so there is one
 //! mirror cache, one known-hosts store and one timeout policy. A provider
 //! reads only what dform.toml grants it (`[providers.NAME] reads`, by
 //! scheme and host pattern); the program reads what it names, as it reads
-//! its own files. Credentials are by name (`[files] credentials`, a
+//! its own files. Credentials are by name (`[io] credentials`, a
 //! location pattern to a credential), never in the program.
 //!
 //! A read the world has not reached yet is "not yet", not an error: an
@@ -46,7 +46,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 /// What a read that is "not yet" waits under, as its null's label
 /// (`read.location/LOCATION#1`): the plan prints it as the location, and
-/// `[files] wait` bounds the wait (`Manifest::provider_waits`' `read`).
+/// `[io] wait` bounds the wait (`Manifest::provider_waits`' `read`).
 pub const READ: &str = "read.location";
 
 /// The schemes dform reads itself.
@@ -145,10 +145,10 @@ pub enum Outcome {
     NotYet(String),
 }
 
-/// What dform.toml says of reading: `[files]`, and the s3 backends.
+/// What dform.toml says of reading: `[io]`, and the s3 backends.
 #[derive(Debug, Clone, Default)]
 pub struct Settings {
-    /// `[files] credentials`: a location pattern and the credential its
+    /// `[io] credentials`: a location pattern and the credential its
     /// reads use, the longest pattern first.
     pub credentials: Vec<(String, String)>,
     /// The s3 backends' buckets, by name: their endpoint and region.
@@ -160,12 +160,11 @@ impl Settings {
         let Some(m) = m else {
             return Settings::default();
         };
-        let mut credentials: Vec<(String, String)> = m
-            .files
-            .credentials
-            .iter()
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect();
+        let mut credentials: Vec<(String, String)> =
+            m.io.credentials
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect();
         credentials.sort_by_key(|(p, _)| std::cmp::Reverse(p.len()));
         Settings {
             credentials,
@@ -307,7 +306,7 @@ impl Files {
         self.settings.buckets.get(name)
     }
 
-    /// The credential `[files] credentials` gives `u`: the longest pattern
+    /// The credential `[io] credentials` gives `u`: the longest pattern
     /// that matches.
     pub fn credential_for(&self, u: &Uri) -> Option<&str> {
         let text = pattern_text(u);
@@ -368,7 +367,7 @@ impl Files {
         }
     }
 
-    /// A provider's read of `text` (`dform:host/files`): a uri its grants
+    /// A provider's read of `text` (`dform:host/io`): a uri its grants
     /// name by scheme and host pattern, through the same transports.
     pub fn read_for(&self, grants: &Grants, text: &str) -> Result<Vec<u8>, Failure> {
         let u = match location(text) {
@@ -461,7 +460,7 @@ impl Files {
         ssh::read(&self.known, &t, named.as_deref(), &decoded(&u.path))
     }
 
-    /// The key `[files] credentials` names for an ssh location: `ssh:NAME`
+    /// The key `[io] credentials` names for an ssh location: `ssh:NAME`
     /// is the key NAME (the agent's by comment or fingerprint, else the
     /// credential's file).
     #[cfg(not(target_family = "wasm"))]
@@ -471,7 +470,7 @@ impl Files {
             Some(c) => match c.split_once(':') {
                 Some(("ssh", n)) => Ok(Some(n.to_string())),
                 _ => Err(Error::fatal(format!(
-                    "{u}: [files] credentials names {c} for it, which is no SSH key: write \
+                    "{u}: [io] credentials names {c} for it, which is no SSH key: write \
                      ssh:NAME"
                 ))
                 .into()),

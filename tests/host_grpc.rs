@@ -4,7 +4,7 @@
 //! grants and applied by the host, its value never crossing; one not
 //! granted is refused naming the provider and the credential; a failure's
 //! class and `not yet` cross as themselves. A location is read through
-//! `files.read` (`Host.Read`, R-153) as dform.toml grants it, a scheme a
+//! `io.read` (`Host.Read`, R-153, R-155) as dform.toml grants it, a scheme a
 //! provider declares routed to that provider by the host.
 
 mod common;
@@ -205,7 +205,7 @@ impl dform::files::Transport for Gs {
     }
 }
 
-/// `files.read` over gRPC: a location the provider's grants name is read
+/// `io.read` over gRPC: a location the provider's grants name is read
 /// by the host and streams back (`Host.Read`); one they do not name is
 /// refused naming the provider, the location and the dform.toml key; a
 /// project file is never a provider's; a scheme another provider declares
@@ -222,15 +222,15 @@ fn a_location_is_read_as_the_grants_allow() {
         .collect();
     g.files = dform::files::Shared(Some(files));
     let (_h, c) = client(Services::new(g));
-    assert_eq!(c.files_read("data:,hello%20host").unwrap(), b"hello host");
+    assert_eq!(c.io_read("data:,hello%20host").unwrap(), b"hello host");
     let big = format!("data:;base64,{}", "QUFB".repeat(600_000));
-    assert_eq!(c.files_read(&big).unwrap().len(), 1_800_000);
-    assert_eq!(c.files_read("gs://bucket/cfg.yml").unwrap(), b"from gs");
+    assert_eq!(c.io_read(&big).unwrap().len(), 1_800_000);
+    assert_eq!(c.io_read("gs://bucket/cfg.yml").unwrap(), b"from gs");
     assert_eq!(
-        c.files_read("gs://bucket/later.yml").unwrap_err(),
+        c.io_read("gs://bucket/later.yml").unwrap_err(),
         Failure::NotYet("gs://bucket/later.yml is not written yet".into())
     );
-    let Failure::Error(e) = c.files_read("https://other.example/x").unwrap_err() else {
+    let Failure::Error(e) = c.io_read("https://other.example/x").unwrap_err() else {
         panic!("not an error")
     };
     assert_eq!(e.class, Class::Final);
@@ -241,7 +241,7 @@ fn a_location_is_read_as_the_grants_allow() {
         "{}",
         e.message
     );
-    let Failure::Error(e) = c.files_read("gs://other/cfg.yml").unwrap_err() else {
+    let Failure::Error(e) = c.io_read("gs://other/cfg.yml").unwrap_err() else {
         panic!("not an error")
     };
     assert!(
@@ -250,7 +250,7 @@ fn a_location_is_read_as_the_grants_allow() {
         "{}",
         e.message
     );
-    let Failure::Error(e) = c.files_read("file:///etc/passwd").unwrap_err() else {
+    let Failure::Error(e) = c.io_read("file:///etc/passwd").unwrap_err() else {
         panic!("not an error")
     };
     assert!(e.message.contains("the project's"), "{}", e.message);

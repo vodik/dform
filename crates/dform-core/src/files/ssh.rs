@@ -7,7 +7,7 @@
 //!
 //! The user is the location's userinfo (the local user's name when it has
 //! none). The key is the operator's, never one in the program, and never
-//! asked for: the key dform.toml names for the location (`[files]
+//! asked for: the key dform.toml names for the location (`[io]
 //! credentials = { "ssh://10.0.0.*" = "ssh:k3s-admin" }`: an agent key by
 //! its comment or fingerprint, offered first, or the credential
 //! `ssh:k3s-admin`'s unencrypted file), then every key the agent
@@ -398,7 +398,7 @@ fn not_yet(e: &russh::Error) -> bool {
 /// The files tried when no key is named, in this order.
 const DEFAULT_KEYS: [&str; 3] = ["id_ed25519", "id_ecdsa", "id_rsa"];
 
-/// The key dform.toml names first (`[files] credentials`, `ssh:NAME`: the agent's
+/// The key dform.toml names first (`[io] credentials`, `ssh:NAME`: the agent's
 /// of that comment or fingerprint, else the credential `ssh:NAME`'s file),
 /// then every other key the agent holds, then, when none is named, the
 /// unencrypted `~/.ssh/id_*`. The named key goes first because a host
@@ -593,11 +593,11 @@ impl Tried {
         if self.hung_up {
             said.push("the host hung up after those (its MaxAuthTries)".to_string());
         }
-        let deploy_key = "name an unencrypted deploy key in dform.toml: [files] credentials = \
+        let deploy_key = "name an unencrypted deploy key in dform.toml: [io] credentials = \
                           { \"ssh://HOST/*\" = \"ssh:k3s-admin\" }";
         let todo = match (&self.missing, self.locked.first()) {
             (None, _) if self.hung_up && named.is_none() => {
-                "name the key the host holds in dform.toml, and it is offered first: [files] \
+                "name the key the host holds in dform.toml, and it is offered first: [io] \
                  credentials = { \"ssh://HOST/*\" = \"ssh:k3s-admin\" }"
                     .to_string()
             }

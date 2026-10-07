@@ -66,7 +66,7 @@ impl h::host_server::Host for Service {
     async fn read(&self, r: Request<h::ReadRequest>) -> R<Self::ReadStream> {
         let location = r.into_inner().location;
         let chunks = self
-            .with(move |s| conv::chunks(s.files_read(&location)))
+            .with(move |s| conv::chunks(s.io_read(&location)))
             .await?
             .into_inner();
         Ok(Response::new(tonic::codegen::tokio_stream::iter(
@@ -87,7 +87,7 @@ impl h::host_server::Host for Service {
         let on = conv::target(r.on);
         let port = on.port.map(|p| format!(":{p}")).unwrap_or_default();
         let location = format!("ssh://{}@{}{port}{}", on.user, on.host, r.path);
-        self.with(move |s| match s.files_read(&location) {
+        self.with(move |s| match s.io_read(&location) {
             Ok(data) => h::ReadFileResponse {
                 failure: None,
                 data,
@@ -139,7 +139,7 @@ impl h::host_server::Host for Service {
             r.path,
             r.rev
         );
-        self.with(move |s| match s.files_read(&location) {
+        self.with(move |s| match s.io_read(&location) {
             Ok(data) => h::GitReadResponse {
                 failure: None,
                 data,

@@ -329,7 +329,7 @@ impl Git {
         if remote(repo) {
             return Err(Error::fatal(format!(
                 "git {repo}: a remote repository is read as a location, \
-                 `git+https://HOST/OWNER/REPO/PATH?ref=REF` (dform:host/files)"
+                 `git+https://HOST/OWNER/REPO/PATH?ref=REF` (dform:host/io)"
             )));
         }
         let r = Self::open_local(repo)?;

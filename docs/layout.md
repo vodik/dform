@@ -29,9 +29,10 @@ dform.state/                state: per deployment, audit logs, plan keys,
   `approvals`, `audit_sink`, `isolated`; a term is a string,
   `{stack}` the stack's name and `{k}` its key `k`'s value), `[defaults]`
   (the same settings for every stack whose table does not say, and an s3
-  backend's `lease_duration` and `lease_renewal`), `[files]` (how a
-  location is read, R-153: `timeout`, the wait on one not there yet, and
-  `credentials`, a location pattern to a credential by name),
+  backend's `lease_duration` and `lease_renewal`), `[io]` (how a
+  location is read, the grants a program's `io.read` is satisfied by,
+  R-153, R-155: `wait`, the wait on one not there yet, and `credentials`,
+  a location pattern to a credential by name),
   `[discovery]` (`exclude` globs) and `[packages.NAME]` (another project mounted at
   `NAME`, `path = "../infra"`: its modules are `infra.config`, its stacks
   `infra.stacks.platform`, read through the backend its `dform.toml`

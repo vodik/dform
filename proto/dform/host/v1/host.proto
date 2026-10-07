@@ -4,7 +4,7 @@
 // proto/dform/v1/provider.proto, which it does not change: a provider that
 // never calls back is untouched by it.
 //
-// Three services:
+// Four services:
 //
 // - `Host` is served by dform, one server per provider it starts. dform
 //   names where in the provider's environment, `DFORM_HOST` (`unix:///PATH`
@@ -16,10 +16,13 @@
 //   what dform.toml grants. A provider that does not serve it (UNIMPLEMENTED)
 //   has an undeclared manifest. Its `schemes` are the location schemes it
 //   reads (R-153).
-// - `Files` is served by a provider whose manifest declares schemes: the
-//   WIT's `files` exported, which dform calls for a read of one of them
-//   (the program's `yaml("gs://..")`, or another provider's `Host.Read`,
-//   which dform mediates).
+// - `Io` is served by a provider whose manifest declares schemes: the
+//   WIT's `io` exported, which dform calls for a read of one of them (the
+//   program's `io.read("gs://..")`, or another provider's `Host.Read`,
+//   which dform mediates) (R-155).
+// - `Files` is `Io` under the name it had before R-155, kept so a
+//   provider built then still serves its schemes: a provider serves both,
+//   dform calls `Io`, and `Files` when a provider has no `Io`.
 //
 // A failure is a `Failure` in the response, never a gRPC status, so its
 // class (R-81's: final, retryable, maybe-applied) and `not-yet` travel as
@@ -35,18 +38,18 @@ service Host {
   rpc Open(OpenRequest) returns (OpenResponse);
   // http.send
   rpc Send(SendRequest) returns (SendResponse);
-  // files.read (R-153): the bytes at a location, in chunks.
+  // io.read (R-153, R-155): the bytes at a location, in chunks.
   rpc Read(ReadRequest) returns (stream ReadChunk);
   // ssh.exec
   rpc Exec(ExecRequest) returns (ExecResponse);
-  // ssh.read, folded into files.read (R-153): `Read` of
+  // ssh.read, folded into io.read (R-153): `Read` of
   // `ssh://USER@HOST:PORT/PATH`, which serves it.
   rpc ReadFile(ReadFileRequest) returns (ReadFileResponse);
   // ssh.write
   rpc WriteFile(WriteFileRequest) returns (WriteFileResponse);
   // ssh.forward
   rpc Forward(ForwardRequest) returns (ForwardResponse);
-  // git.read, folded into files.read (R-153): `Read` of
+  // git.read, folded into io.read (R-153): `Read` of
   // `git+https://HOST/OWNER/REPO//PATH?ref=REV`, which serves it.
   rpc GitRead(GitReadRequest) returns (GitReadResponse);
   // git.commit
@@ -59,8 +62,14 @@ service Manifest {
   rpc Manifest(ManifestRequest) returns (ManifestResponse);
 }
 
+service Io {
+  // io.read, of a scheme the provider declares.
+  rpc Read(ReadRequest) returns (stream ReadChunk);
+}
+
+// `Io` by its name before R-155.
 service Files {
-  // files.read, of a scheme the provider declares.
+  // io.read, of a scheme the provider declares.
   rpc Read(ReadRequest) returns (stream ReadChunk);
 }
 

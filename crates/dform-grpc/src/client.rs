@@ -39,13 +39,13 @@ pub struct Declared {
     pub schemes: Vec<String>,
 }
 
-/// A provider's `Files` service, by where it listens.
-struct FilesClient {
+/// A provider's `Io` service (R-155), by where it listens.
+struct IoClient {
     address: String,
     program: String,
 }
 
-impl dform_core::files::Transport for FilesClient {
+impl dform_core::files::Transport for IoClient {
     fn read(
         &self,
         at: &dform_core::uri::Uri,
@@ -64,13 +64,21 @@ impl dform_core::files::Transport for FilesClient {
                 let channel = crate::transport::dial(&address)
                     .await
                     .map_err(|e| e.to_string())?;
-                let mut c = crate::host_pb::files_client::FilesClient::new(channel)
+                let req = crate::host_pb::ReadRequest { location };
+                let mut io = crate::host_pb::io_client::IoClient::new(channel.clone())
                     .max_decoding_message_size(usize::MAX);
-                let mut s = c
-                    .read(crate::host_pb::ReadRequest { location })
-                    .await
-                    .map_err(|e| e.message().to_string())?
-                    .into_inner();
+                // A provider built before R-155 serves `Files` alone.
+                let mut s = match io.read(req.clone()).await {
+                    Err(e) if e.code() == tonic::Code::Unimplemented => {
+                        crate::host_pb::files_client::FilesClient::new(channel)
+                            .max_decoding_message_size(usize::MAX)
+                            .read(req)
+                            .await
+                    }
+                    r => r,
+                }
+                .map_err(|e| e.message().to_string())?
+                .into_inner();
                 let mut out = Vec::new();
                 while let Some(chunk) = s.message().await.map_err(|e| e.message().to_string())? {
                     out.push(chunk);
@@ -144,8 +152,8 @@ impl Conn {
     }
 
     /// Start the provider `program`, with `env`, dial it and shake hands;
-    /// the schemes its manifest declares are read through its `Files`
-    /// (R-153).
+    /// the schemes its manifest declares are read through its `Io`
+    /// (R-153, R-155).
     pub fn link(program: &Program, env: &Env) -> Result<Link> {
         let mut conn = Conn::start(program, env)?;
         let schemes = conn
@@ -163,11 +171,11 @@ impl Conn {
         Ok(link)
     }
 
-    /// A reader of the schemes the provider declares: its `Files`
-    /// service, dialed for each read (the connection's own runtime runs
+    /// A reader of the schemes the provider declares: its `Io` service,
+    /// dialed for each read (the connection's own runtime runs
     /// only while dform waits on a call).
     pub fn reader(&self) -> std::sync::Arc<dyn dform_core::files::Transport> {
-        std::sync::Arc::new(FilesClient {
+        std::sync::Arc::new(IoClient {
             address: self.address.clone(),
             program: self.program.clone(),
         })

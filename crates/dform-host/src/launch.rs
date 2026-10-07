@@ -146,7 +146,7 @@ fn native(exe: &Path, grants: Grants) -> Result<Link> {
         manifest,
         grants,
     });
-    // The schemes it declares are read through its `Files` (R-153).
+    // The schemes it declares are read through its `Io` (R-153, R-155).
     if !schemes.is_empty() {
         link.schemes = schemes;
         link.reader = Some(reader);

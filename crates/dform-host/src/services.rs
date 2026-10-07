@@ -122,7 +122,7 @@ impl Calls for Services {
         http::send(req, cred.as_deref(), via)
     }
 
-    fn files_read(&self, location: &str) -> Result<Vec<u8>, Failure> {
+    fn io_read(&self, location: &str) -> Result<Vec<u8>, Failure> {
         // The run's reader (its known hosts, mirrors, declared schemes),
         // or, outside a run, one of the host's own.
         let files = self.grants.files.get();

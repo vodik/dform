@@ -357,3 +357,73 @@ fn call_error_is_core_call_error() {
         .collect();
     assert_eq!(cases, variants);
 }
+
+/// Proto services of the host with no WIT interface a provider exports:
+/// what dform serves (`Host`), what a provider declares (`Manifest`), and
+/// `Io` by its name before R-155 (`Files`), kept so a provider built then
+/// still serves its schemes.
+const HOST_PROTO_ONLY: &[&str] = &["Host", "Manifest", "Files"];
+
+/// `io` -> `Io`, `read-file` -> `ReadFile`.
+fn pascal(s: &str) -> String {
+    s.split('-')
+        .map(|w| {
+            let mut c = w.chars();
+            c.next()
+                .map(|f| f.to_ascii_uppercase().to_string() + c.as_str())
+                .unwrap_or_default()
+        })
+        .collect()
+}
+
+/// The host's contract (wit/host, proto/dform/host/v1/host.proto): each
+/// interface a provider exports to the host (`world scheme-provider`,
+/// beyond `hosted-provider`) is a service of the host proto by its name,
+/// its functions the service's calls (R-155: `io`, never `files`), and
+/// the proto has no other service but those [`HOST_PROTO_ONLY`] names.
+#[test]
+fn the_hosts_exports_are_its_services() {
+    let set = FileDescriptorSet::decode(&include_bytes!(concat!(env!("OUT_DIR"), "/host.fds"))[..])
+        .unwrap();
+    let proto = set
+        .file
+        .into_iter()
+        .find(|f| f.name() == "dform/host/v1/host.proto")
+        .unwrap();
+    let mut resolve = Resolve::new();
+    let wit = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../wit/host");
+    let (pkg, _) = resolve.push_dir(&wit).unwrap();
+    let world = resolve.packages[pkg].worlds["scheme-provider"];
+    let mut exported = BTreeSet::new();
+    for (key, item) in &resolve.worlds[world].exports {
+        let wit_parser::WorldItem::Interface { id, .. } = item else {
+            continue;
+        };
+        let iface = &resolve.interfaces[*id];
+        if iface.package != Some(pkg) {
+            continue;
+        }
+        let name = iface
+            .name
+            .clone()
+            .unwrap_or_else(|| resolve.name_world_key(key));
+        let service = pascal(&name);
+        let s = proto
+            .service
+            .iter()
+            .find(|s| s.name() == service)
+            .unwrap_or_else(|| panic!("the WIT's `{name}` has no proto service `{service}`"));
+        let wit_calls: BTreeSet<String> = iface.functions.keys().map(|f| pascal(f)).collect();
+        let proto_calls: BTreeSet<String> = s.method.iter().map(|m| m.name().to_string()).collect();
+        assert_eq!(wit_calls, proto_calls, "{name}'s calls");
+        exported.insert(service);
+    }
+    assert!(exported.contains("Io"), "{exported:?}");
+    for s in &proto.service {
+        assert!(
+            exported.contains(s.name()) || HOST_PROTO_ONLY.contains(&s.name()),
+            "the proto service {} is no WIT interface's",
+            s.name()
+        );
+    }
+}
