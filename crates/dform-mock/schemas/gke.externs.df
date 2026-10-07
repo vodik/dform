@@ -1,0 +1,6 @@
+# The gke mock's answer to its data source,
+# google.client_config(+project, -access_token: secret(string)): the token
+# the client's credentials give in a project, which configures the `k8s`
+# provider.
+
+google.client_config("renfry-dev-973682", "ya29.mock-access-token")

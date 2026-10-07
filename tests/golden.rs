@@ -86,7 +86,7 @@ const CASES: &[Case] = &[
         ..case("adopt_demo", "prod", "examples/adopt/stacks/adopt_demo.df")
     },
     Case {
-        providers: &["gke"],
+        providers: &["gke", "k8s"],
         ..case(
             "adv2_rule3_coarse",
             "default",

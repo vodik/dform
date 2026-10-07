@@ -966,6 +966,7 @@ pub fn builtin(name: &str) -> Option<&'static str> {
 pub fn builtin_answers(name: &str) -> Option<&'static str> {
     Some(match name {
         "aws-mock" => include_str!("../../dform-mock/schemas/aws-mock.externs.df"),
+        "gke" => include_str!("../../dform-mock/schemas/gke.externs.df"),
         _ => return None,
     })
 }
@@ -1026,20 +1027,21 @@ mod tests {
     fn gke_schema_classes_match_the_hand_written_one() {
         let s = gke();
         assert_eq!(
-            s.class_of("google.client_config", "access_token"),
+            s.class_of("google.secret_manager_secret_version", "secret_data"),
             Some(NullClass::Secret)
         );
-        assert_eq!(s.class_of("k8s.namespace", "uid"), Some(NullClass::Fresh));
+        assert_eq!(
+            s.class_of("google.container_cluster", "id"),
+            Some(NullClass::Fresh)
+        );
         assert_eq!(
             s.class_of("google.container_cluster", "zones"),
             Some(NullClass::Open)
         );
-        assert_eq!(
-            s.provider_of.get("k8s.secret").map(String::as_str),
-            Some("k8s")
-        );
+        // The k8s types are the k8s mock's, not this one's.
+        assert_eq!(s.provider_of.get("k8s.secret"), None);
         assert_eq!(s.provider_of.get("google.client_config"), None);
-        assert_eq!(s.computed.len(), 17);
+        assert_eq!(s.computed.len(), 10);
     }
 
     /// `name`, `metadata.name` and `bucket` name every type's objects; a

@@ -20,7 +20,7 @@ exit: ok
       ],
       "reason": "reads undetermined aggregate zone_count",
       "site": {
-        "at": "stacks/gke_two_phase.df:99",
+        "at": "stacks/gke_two_phase.df:100",
         "statement": "deny \"cluster must be in at least two zones\" { cluster: \"pngu\" } where \"pngu\" in google.container_cluster, zone_count(n), n < 2"
       },
       "status": "undetermined"
@@ -395,28 +395,14 @@ exit: ok
           "because": null,
           "changes": [
             {
-              "after": "gcr.io/renfry/api:1.42",
-              "before": null,
-              "op": "set",
-              "path": "image",
-              "site": {
-                "at": "stacks/gke_two_phase.df:80",
-                "entry": "image = \"gcr.io/renfry/api:1.42\"",
-                "statement": "resource k8s.deployment api { .. image = \"gcr.io/renfry/api:1.42\" .. } where ns = k8s.namespace[\"pngu\"].name",
-                "with": [
-                  "ns = \"pngu\""
-                ]
-              }
-            },
-            {
               "after": "pngu",
               "before": null,
               "op": "set",
-              "path": "namespace",
+              "path": "metadata.namespace",
               "site": {
-                "at": "stacks/gke_two_phase.df:79",
-                "entry": "namespace = ns",
-                "statement": "resource k8s.deployment api { namespace = ns .. } where ns = k8s.namespace[\"pngu\"].name",
+                "at": "stacks/gke_two_phase.df:78",
+                "entry": "metadata.namespace = ns",
+                "statement": "resource k8s.deployment api { metadata.namespace = ns .. } where ns = k8s.namespace[\"pngu\"].metadata.name",
                 "with": [
                   "ns = \"pngu\""
                 ]
@@ -426,11 +412,67 @@ exit: ok
               "after": 3,
               "before": null,
               "op": "set",
-              "path": "replicas",
+              "path": "spec.replicas",
+              "site": {
+                "at": "stacks/gke_two_phase.df:79",
+                "entry": "spec.replicas = 3",
+                "statement": "resource k8s.deployment api { .. spec.replicas = 3 .. } where ns = k8s.namespace[\"pngu\"].metadata.name",
+                "with": [
+                  "ns = \"pngu\""
+                ]
+              }
+            },
+            {
+              "after": "api",
+              "before": null,
+              "op": "set",
+              "path": "spec.selector.matchLabels.app",
+              "site": {
+                "at": "stacks/gke_two_phase.df:80",
+                "entry": "spec.selector.matchLabels = { app: \"api\" }",
+                "statement": "resource k8s.deployment api { .. spec.selector.matchLabels = { app: \"api\" } .. } where ns = k8s.namespace[\"pngu\"].metadata.name",
+                "with": [
+                  "ns = \"pngu\""
+                ]
+              }
+            },
+            {
+              "after": "api",
+              "before": null,
+              "op": "set",
+              "path": "spec.template.metadata.labels.app",
               "site": {
                 "at": "stacks/gke_two_phase.df:81",
-                "entry": "replicas = 3",
-                "statement": "resource k8s.deployment api { .. replicas = 3 } where ns = k8s.namespace[\"pngu\"].name",
+                "entry": "spec.template.metadata.labels = { app: \"api\" }",
+                "statement": "resource k8s.deployment api { .. spec.template.metadata.labels = { app: \"api\" } .. } where ns = k8s.namespace[\"pngu\"].metadata.name",
+                "with": [
+                  "ns = \"pngu\""
+                ]
+              }
+            },
+            {
+              "after": "gcr.io/renfry/api:1.42",
+              "before": null,
+              "op": "set",
+              "path": "spec.template.spec.containers[name=api].image",
+              "site": {
+                "at": "stacks/gke_two_phase.df:82",
+                "entry": "spec.template.spec.containers = [{ name: \"api\", image: \"gcr.io/renfry/api:1.42\" }]",
+                "statement": "resource k8s.deployment api { .. spec.template.spec.containers = [{ name: \"api\", image: \"gcr.io/renfry/api:1.42\" }] } where ns = k8s.namespace[\"pngu\"].metadata.name",
+                "with": [
+                  "ns = \"pngu\""
+                ]
+              }
+            },
+            {
+              "after": "api",
+              "before": null,
+              "op": "set",
+              "path": "spec.template.spec.containers[name=api].name",
+              "site": {
+                "at": "stacks/gke_two_phase.df:82",
+                "entry": "spec.template.spec.containers = [{ name: \"api\", image: \"gcr.io/renfry/api:1.42\" }]",
+                "statement": "resource k8s.deployment api { .. spec.template.spec.containers = [{ name: \"api\", image: \"gcr.io/renfry/api:1.42\" }] } where ns = k8s.namespace[\"pngu\"].metadata.name",
                 "with": [
                   "ns = \"pngu\""
                 ]
@@ -440,8 +482,8 @@ exit: ok
           "kind": "create",
           "name": "api",
           "site": {
-            "at": "stacks/gke_two_phase.df:78",
-            "statement": "resource k8s.deployment api { .. } where ns = k8s.namespace[\"pngu\"].name",
+            "at": "stacks/gke_two_phase.df:77",
+            "statement": "resource k8s.deployment api { .. } where ns = k8s.namespace[\"pngu\"].metadata.name",
             "with": [
               "ns = \"pngu\""
             ]
@@ -456,18 +498,18 @@ exit: ok
               "after": "pngu",
               "before": null,
               "op": "set",
-              "path": "name",
+              "path": "metadata.name",
               "site": {
-                "at": "stacks/gke_two_phase.df:75",
-                "entry": "name = \"pngu\"",
-                "statement": "k8s.namespace pngu.name = \"pngu\""
+                "at": "stacks/gke_two_phase.df:74",
+                "entry": "metadata.name = \"pngu\"",
+                "statement": "k8s.namespace pngu.metadata = {name: \"pngu\"}"
               }
             }
           ],
           "kind": "create",
           "name": "pngu",
           "site": {
-            "at": "stacks/gke_two_phase.df:75",
+            "at": "stacks/gke_two_phase.df:74",
             "statement": "k8s.namespace pngu"
           },
           "type": "k8s.namespace"
@@ -484,9 +526,9 @@ exit: ok
               "op": "set",
               "path": "data.password",
               "site": {
-                "at": "stacks/gke_two_phase.df:86",
+                "at": "stacks/gke_two_phase.df:87",
                 "entry": "data = { password: google.secret_manager_secret_version[\"db_pw\"].secret_data }",
-                "statement": "resource k8s.secret db_credentials { .. data = { password: google.secret_manager_secret_version[\"db_pw\"].secret_data } } where ns = k8s.namespace[\"pngu\"].name",
+                "statement": "resource k8s.secret db_credentials { .. data = { password: google.secret_manager_secret_version[\"db_pw\"].secret_data } } where ns = k8s.namespace[\"pngu\"].metadata.name",
                 "with": [
                   "ns = \"pngu\""
                 ]
@@ -496,11 +538,11 @@ exit: ok
               "after": "pngu",
               "before": null,
               "op": "set",
-              "path": "namespace",
+              "path": "metadata.namespace",
               "site": {
-                "at": "stacks/gke_two_phase.df:85",
-                "entry": "namespace = ns",
-                "statement": "resource k8s.secret db_credentials { namespace = ns .. } where ns = k8s.namespace[\"pngu\"].name",
+                "at": "stacks/gke_two_phase.df:86",
+                "entry": "metadata.namespace = ns",
+                "statement": "resource k8s.secret db_credentials { metadata.namespace = ns .. } where ns = k8s.namespace[\"pngu\"].metadata.name",
                 "with": [
                   "ns = \"pngu\""
                 ]
@@ -510,8 +552,8 @@ exit: ok
           "kind": "create",
           "name": "db_credentials",
           "site": {
-            "at": "stacks/gke_two_phase.df:84",
-            "statement": "resource k8s.secret db_credentials { .. } where ns = k8s.namespace[\"pngu\"].name",
+            "at": "stacks/gke_two_phase.df:85",
+            "statement": "resource k8s.secret db_credentials { .. } where ns = k8s.namespace[\"pngu\"].metadata.name",
             "with": [
               "ns = \"pngu\""
             ]
@@ -535,7 +577,7 @@ exit: ok
           "reads": null,
           "reason": "member/2 over a null list",
           "site": {
-            "at": "stacks/gke_two_phase.df:90",
+            "at": "stacks/gke_two_phase.df:91",
             "statement": "resource google.container_node_pool \"np-${z}\" { .. } where z in google.container_cluster[\"pngu\"].zones"
           }
         }

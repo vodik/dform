@@ -128,7 +128,14 @@ fn gke(s: &Scratch, extra: &[&str]) -> Run {
     let prog = repo().join("examples/refine/stacks/refine_gke.df");
     s.run(&common::on(
         prog.to_str().unwrap(),
-        &["--provider", "gke", "--world", "w.json"],
+        &[
+            "--provider",
+            "gke",
+            "--provider",
+            "k8s",
+            "--world",
+            "w.json",
+        ],
         extra,
     ))
 }
@@ -158,7 +165,7 @@ fn a_refinement_on_a_null_is_deferred_and_fires_after_the_boundary() {
                        [\"us-east1-b\", \"us-east1-c\"] violates len_ge(3)\n"
         ) && r.stderr.contains("refinement \"len_ge(3)\"  ")
             && r.stderr
-                .contains("examples/refine/stacks/refine_gke.df:125\n")
+                .contains("examples/refine/stacks/refine_gke.df:126\n")
             && !r.stderr.contains("ctx=")
             && r.stderr
                 .contains("; stopped after tick 1; ticks 1 to 1 were applied"),

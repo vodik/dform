@@ -32,7 +32,15 @@ resource pool two {}
 }
 
 fn dform(s: &Scratch, cmd: &[&str]) -> common::Run {
-    let mut args = vec!["dev", "--provider", "gke", "--world", "w.json"];
+    let mut args = vec![
+        "dev",
+        "--provider",
+        "gke",
+        "--provider",
+        "k8s",
+        "--world",
+        "w.json",
+    ];
     args.extend_from_slice(cmd);
     args.push("p.df");
     s.run(&args).failure()

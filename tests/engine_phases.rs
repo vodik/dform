@@ -32,19 +32,21 @@ tick 2  3+ changes
   waits on  pngu.ca_certificate
             pngu.endpoint
             pngu.zones
-  + k8s.deployment api                              stacks/gke_two_phase.df:78
-      image = "gcr.io/renfry/api:1.42"
-      namespace = "pngu"
-      replicas = 3
-  + k8s.namespace pngu                              stacks/gke_two_phase.df:75
-      name = "pngu"
-  + k8s.secret db_credentials                       stacks/gke_two_phase.df:84
+  + k8s.deployment api                              stacks/gke_two_phase.df:77
+      metadata.namespace = "pngu"
+      spec.replicas = 3
+      spec.selector.matchLabels.app = "api"
+      spec.template.metadata.labels.app = "api"
+      spec.template.spec.containers[name=api] = { name: "api", image: "gcr.io/renfry/api:1.42" }
+  + k8s.namespace pngu                              stacks/gke_two_phase.df:74
+      metadata.name = "pngu"
+  + k8s.secret db_credentials                       stacks/gke_two_phase.df:85
       data.password = (sensitive)
-      namespace = "pngu"
-  google.container_node_pool "np-${z}"              stacks/gke_two_phase.df:90  waits on pngu.zones
+      metadata.namespace = "pngu"
+  google.container_node_pool "np-${z}"              stacks/gke_two_phase.df:91  waits on pngu.zones
 
 later
-  deny "cluster must be in at least two zones"      stacks/gke_two_phase.df:99  until tick 2
+  deny "cluster must be in at least two zones"      stacks/gke_two_phase.df:100  until tick 2
 "#;
 
 /// Three definite, three pending on the kubernetes provider's configuration,
@@ -59,6 +61,8 @@ fn gke_two_phase_plans_in_sections() {
             "dev",
             "--provider",
             "gke",
+            "--provider",
+            "k8s",
             "--world",
             "w.json",
             "plan",
@@ -97,7 +101,14 @@ fn gke(s: &Scratch, file: &str, extra: &[&str]) -> common::Run {
     let prog = repo().join("examples/gke/stacks").join(file);
     s.run(&common::on(
         prog.to_str().unwrap(),
-        &["--provider", "gke", "--world", "w.json"],
+        &[
+            "--provider",
+            "gke",
+            "--provider",
+            "k8s",
+            "--world",
+            "w.json",
+        ],
         extra,
     ))
 }

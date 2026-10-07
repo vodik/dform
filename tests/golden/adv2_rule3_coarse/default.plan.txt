@@ -6,7 +6,7 @@ tick 1  2 changes
   + google.container_cluster pngu     adv2_rule3_coarse.df:6
       name = "pngu-gke"
   + k8s.namespace pngu                adv2_rule3_coarse.df:13
-      name = "pngu"
+      metadata.name = "pngu"
 
 tick 2  ? changes
   waits on  pngu.zones

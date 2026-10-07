@@ -20,7 +20,14 @@ fn gke(s: &Scratch, extra: &[&str], cmd: &str) -> common::Run {
     }
     s.run(&common::on(
         &prog,
-        &["--provider", "gke", "--world", "w.json"],
+        &[
+            "--provider",
+            "gke",
+            "--provider",
+            "k8s",
+            "--world",
+            "w.json",
+        ],
         &[cmd],
     ))
 }
@@ -63,7 +70,7 @@ deny "no nodepool in zone z" {pool: n} where n in google.container_node_pool, ar
     let r = gke(&s, &["extra.df"], "plan").success();
     assert!(
         r.stdout.contains(
-            "  deny \"no nodepool in zone z\"                      p.df:112  maybe tick 2\n"
+            "  deny \"no nodepool in zone z\"                      p.df:113  maybe tick 2\n"
         ),
         "{}",
         r.stdout
@@ -313,7 +320,14 @@ fn color_is_a_rendering_of_the_same_text() {
                 .join("examples/gke/stacks/gke_two_phase.df")
                 .to_str()
                 .unwrap(),
-            &["--provider", "gke", "--world", "w.json"],
+            &[
+                "--provider",
+                "gke",
+                "--provider",
+                "k8s",
+                "--world",
+                "w.json",
+            ],
             &["plan", "--color", flag],
         ))
         .success()
@@ -341,7 +355,14 @@ fn color_is_a_rendering_of_the_same_text() {
                 .join("examples/gke/stacks/gke_two_phase.df")
                 .to_str()
                 .unwrap(),
-            &["--provider", "gke", "--world", "w.json"],
+            &[
+                "--provider",
+                "gke",
+                "--provider",
+                "k8s",
+                "--world",
+                "w.json",
+            ],
             &["plan", "--json", "--color", "always"],
         ))
         .success()

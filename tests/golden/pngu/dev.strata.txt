@@ -1,16 +1,11 @@
 exit: ok
 -- stdout --
-== examples/pngu/stacks/pngu.df: 145 nodes, 290 edges (93 negative), 8 strata
+== examples/pngu/stacks/pngu.df: 127 nodes, 251 edges (80 negative), 8 strata
 stratum  node
-0        (arg, google.client_config, access_token)
 0        (arg, google.secret_manager_secret_version, secret_data)
 0        (arg, input, env)
-0        (want, google.client_config)
 0        (want, google.container_node_pool)
 0        (want, google.secret_manager_secret_version)
-0        (want, k8s.deployment)
-0        (want, k8s.namespace)
-0        (want, k8s.secret)
 0        identity
 0        input
 0        resolve
@@ -20,13 +15,6 @@ stratum  node
 0        type_refine
 0        world_attr
 1        (arg, google.container_node_pool, id)
-1        (arg, k8s.deployment, id)
-1        (arg, k8s.deployment, uid)
-1        (arg, k8s.namespace, id)
-1        (arg, k8s.namespace, uid)
-1        (arg, k8s.secret, id)
-1        (arg, k8s.secret, uid)
-1        (attr, google.client_config, access_token)
 1        (attr, google.secret_manager_secret_version, secret_data)
 1        (attr, input, env)
 1        peering
@@ -34,12 +22,6 @@ stratum  node
 2        (arg, input, gke)
 2        (arg, output, active_env)
 2        (attr, google.container_node_pool, id)
-2        (attr, k8s.deployment, id)
-2        (attr, k8s.deployment, uid)
-2        (attr, k8s.namespace, id)
-2        (attr, k8s.namespace, uid)
-2        (attr, k8s.secret, id)
-2        (attr, k8s.secret, uid)
 2        env
 3        (attr, input, gcp)
 3        (attr, input, gke)
@@ -147,5 +129,5 @@ stratum  node
 6        (arg, google.container_cluster, subnetwork_id)
 7        (attr, google.compute_address, subnetwork_id)
 7        (attr, google.container_cluster, subnetwork_id)
-(145 rows)
+(127 rows)
 -- stderr --

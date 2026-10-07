@@ -1,7 +1,7 @@
 # adv2: Rule 3 coarseness. One rule with head `want` is stuck (the nodepool,
 # on ?google.container_cluster/pngu#zones). An UNRELATED negation over `want` and an
 # UNRELATED aggregate over `want` must not become undetermined.
-# Run with --provider gke.
+# Run with --provider gke --provider k8s.
 
 resource google.container_cluster pngu { name = "pngu-gke" }
 
@@ -10,7 +10,7 @@ resource google.container_node_pool "${np}" {
   zone = z
 } where arg("google.container_cluster", "pngu", "zones", zs), z in zs, np = str.format("np-%s", z)
 
-resource k8s.namespace pngu { name = "pngu" }
+resource k8s.namespace pngu { metadata.name = "pngu" }
 
 # Unrelated negation over want (different type): decidable now.
 deny "namespace without deployment" { ns: n } where n in k8s.namespace, not n in k8s.deployment

@@ -1,6 +1,6 @@
 # C's two-phase GKE / kubernetes stack (E §7.4), in the current syntax.
-# Run with the gke mock schema, which makes the cluster's zones, endpoint and
-# ca open nulls until the cluster exists. Two ticks.
+# Run with the gke and k8s mock schemas: the cluster's zones, endpoint and
+# ca are open nulls until the cluster exists. Two ticks.
 #
 # E §2.7 worked example item 6, both branches: the cluster is placed in
 # `zones` zones, two by default. With one (`--set zones=1`) its zones come
@@ -62,29 +62,30 @@ resource google.container_cluster pngu {
   deletion_protection = true
 } where project(id, name, _, net_id)
 
-# Provider configured from phase-1 nulls (two open, one secret).
-provider_config(
-  "k8s",
-  {
-    host: google.container_cluster["pngu"].endpoint,
-    ca: google.container_cluster["pngu"].ca_certificate,
-    token: google.client_config["current"].access_token,
-  },
-)
+# The k8s provider, configured from phase-1 nulls (two open) and the
+# client's token, a secret the data source answers: its objects wait for
+# the tick after the cluster's.
+use k8s {
+  host = google.container_cluster["pngu"].endpoint
+  ca = google.container_cluster["pngu"].ca_certificate
+  token = google.client_config[gcp.project_id]
+}
 
-resource k8s.namespace pngu { name = "pngu" }
+resource k8s.namespace pngu { metadata.name = "pngu" }
 
 # A read in the clause is an attr join (the value now), not a reference.
 resource k8s.deployment api {
-  namespace = ns
-  image = "gcr.io/renfry/api:1.42"
-  replicas = 3
-} where ns = k8s.namespace["pngu"].name
+  metadata.namespace = ns
+  spec.replicas = 3
+  spec.selector.matchLabels = { app: "api" }
+  spec.template.metadata.labels = { app: "api" }
+  spec.template.spec.containers = [{ name: "api", image: "gcr.io/renfry/api:1.42" }]
+} where ns = k8s.namespace["pngu"].metadata.name
 
 resource k8s.secret db_credentials {
-  namespace = ns
+  metadata.namespace = ns
   data = { password: google.secret_manager_secret_version["db_pw"].secret_data }
-} where ns = k8s.namespace["pngu"].name
+} where ns = k8s.namespace["pngu"].metadata.name
 
 # One nodepool per zone: member over an open null is a content position.
 resource google.container_node_pool "np-${z}" {
