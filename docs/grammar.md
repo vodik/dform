@@ -1892,8 +1892,32 @@ comment above a signature is its summary, and its `example:` key the
 example hover shows; `dform doc` renders every callable function, per
 signature file, after the project's items.
 
-A function is named by its package, the type it is about; the prelude's
-are written bare.
+The standard library follows nine rules (R-134), so that knowing how
+one package works says how the others do. (1) A value of a type is made
+by writing a string where the type is wanted, never by a call: there are
+no constructors, and a type's parts are its fields (`n.bits`, `v.major`,
+`u.host`, `r.digest`). (2) A type with operators has no functions for
+them: `t + d`, `b - a`, `a < b` for times, `<` for versions. (3) `?` is
+only for a valid input with no answer (`regex.capture`, `path.rel`, the
+decoders, `list.min`, `list.max`, `list.first`, `list.last`); an input a
+function does not take (a bad unit, layout, template or port) is an
+error at the call. (4) One name per idea: `to(q, unit)` for every
+quantity, one `len`, one `format` (its values after the template, as an
+interpolation lowers to it), `inet.host` for an address in a network.
+(5) `forwards` by content: a function whose result is its arguments'
+content forwards a secret (`list.min`, `str.slice`, an encoder, a
+`with_*`); a judgment of one (a function to a bool or a number: `len`,
+`str.contains`, `oci.pinned`, `regex.match`) inspects it. (6) Subject
+first, options last, and a list rather than any number of values
+(`path.join` as `list.join`), but `format`'s. (7) A type's package is its
+namespace: a function is named by its package, the type it is about
+(`inet.subnet`, `uri.with_host`), and the prelude keeps only what is
+about no one type, `int`, `float`, `format`, `len`, `to`, `declassify`
+(`ref` and `cloud_ref` are forms of the language, listed nowhere). (8) A
+uri is RFC 3986's generic syntax, the type `uri`, never a browser's url.
+(9) A host is held as written and equal by its A-labels: IDNA is the
+provider boundary's to encode ("Types"). A test reads every signature
+and checks (3), (5) and (6) where a signature says them.
 
 | package   | functions                                                                 |
 |-----------|---------------------------------------------------------------------------|
