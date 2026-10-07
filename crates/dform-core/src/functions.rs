@@ -761,6 +761,10 @@ pub const BODIES: &[(&str, Body)] = &[
         }
         _ => None,
     }),
+    ("__known", |a| match a {
+        [_] => Some(Value::Bool(true)),
+        _ => None,
+    }),
     ("__path", |a| match a {
         [v, path] => {
             let mut v = v.clone();

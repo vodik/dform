@@ -139,3 +139,7 @@ internal fn __body(value: any) -> any? forwards
 #| The value at a dotted path inside a value; `x.f` on a variable with no static type lowers to it.
 #| example: __path(X, "f")
 internal fn __path(value: any, path: string) -> any? forwards, forwards nulls
+
+#| Whether a value is known: true of every value; over a null, undetermined, as any content position (Rule 2). `has r` of a resource lowers to it over the resource's identity (R-152).
+#| example: __known(V)
+internal fn __known(value: any) -> bool

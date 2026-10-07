@@ -4792,8 +4792,25 @@ impl<'u> Lowerer<'u> {
                 out.push(if n.kind() == LIT_IN { lit } else { negate(lit) });
             }
             LIT_HAS => {
-                let c = terms(n).next().and_then(|t| Chain::read(&t)).ok_or(Skip)?;
+                let t = terms(n).next().ok_or(Skip)?;
+                let c = Chain::read(&t).ok_or(Skip)?;
+                if self.bare_resource(rc, &c) {
+                    let (typ, addr) = self.reference(rc, &c, out, span)?;
+                    out.push(Lit::Pos(atom_at(IDENTITY, vec![typ, addr], span)));
+                    return Ok(());
+                }
                 let res = self.resolve(rc, &c, out)?;
+                match &res {
+                    Res::Ref { typ, addr, path } if path.is_empty() => {
+                        let a = atom_at(IDENTITY, vec![typ.clone(), addr.clone()], span);
+                        out.push(Lit::Pos(a));
+                        return Ok(());
+                    }
+                    Res::Ref { path, .. } if is_identity(path) => {
+                        return self.has_identity(&t, span);
+                    }
+                    _ => {}
+                }
                 let start = out.len();
                 let marked = has_atom(&res, span);
                 match self.read_atom(rc, &res, Term::Wildcard, span) {
@@ -4849,8 +4866,15 @@ impl<'u> Lowerer<'u> {
                 out.push(negate(lit));
                 return Ok(());
             }
+            // `not has r` of a resource: a helper over its identity.
+            LIT_HAS
+                if terms(n)
+                    .next()
+                    .and_then(|t| Chain::read(&t))
+                    .is_some_and(|c| self.bare_resource(rc, &c)) => {}
             LIT_TRUTH | LIT_HAS => {
-                let c = terms(n).next().and_then(|t| Chain::read(&t)).ok_or(Skip)?;
+                let t = terms(n).next().ok_or(Skip)?;
+                let c = Chain::read(&t).ok_or(Skip)?;
                 let value = if n.kind() == LIT_HAS {
                     Term::Wildcard
                 } else {
@@ -4858,6 +4882,15 @@ impl<'u> Lowerer<'u> {
                 };
                 let mut pre = Vec::new();
                 let res = self.resolve(rc, &c, &mut pre)?;
+                match &res {
+                    Res::Ref { path, .. } if n.kind() == LIT_HAS && path.is_empty() => {
+                        return self.neg_helper(rc, n, out, span);
+                    }
+                    Res::Ref { path, .. } if n.kind() == LIT_HAS && is_identity(path) => {
+                        return self.has_identity(&t, span);
+                    }
+                    _ => {}
+                }
                 let marked = (n.kind() == LIT_HAS)
                     .then(|| has_atom(&res, span))
                     .flatten();
@@ -5772,6 +5805,40 @@ impl<'u> Lowerer<'u> {
                 "`ref(r)` takes a resource: its name in scope, `T[\"a\"]`, or a variable `in T`",
             ),
         }
+    }
+
+    /// Whether the bare name `c` is a resource in scope, not a variable, a
+    /// type or a value name: `has warm_cache`.
+    fn bare_resource(&self, rc: &Rc, c: &Chain) -> bool {
+        c.is_bare()
+            && c.head != "_"
+            && !rc.vars.contains_key(&c.head)
+            && !rc.types.contains_key(&c.head)
+            && !self.is_value(rc.scope, &c.head)
+            && self.resource(rc.scope, &c.head).is_some()
+    }
+
+    /// `has x.id`: an error naming `has x` (R-152), which asks whether the
+    /// resource's identity is known.
+    fn has_identity<T>(&mut self, n: &SyntaxNode, span: Span) -> L<T> {
+        let text = n.text().to_string();
+        let r = text
+            .trim()
+            .strip_suffix(&format!(".{}", crate::schema::IDENTITY))
+            .unwrap_or("r")
+            .to_string();
+        let d = Diagnostic::error(
+            span,
+            format!(
+                "`has {}`: a program does not read an id; write `has {r}`",
+                text.trim()
+            ),
+        )
+        .with_help(format!(
+            "`has {r}` holds once `{r}` exists: its identity is known (R-152)"
+        ));
+        self.diags.push(d);
+        Err(Skip)
     }
 
     /// `x.id`: an error naming the reference (R-43). A program never reads
@@ -7525,6 +7592,15 @@ fn mark_has(out: &mut Vec<Lit>, start: usize, marked: Option<Atom>, negated: boo
     a.args
         .push(Term::Val(Value::Int((out.len() - start) as i64)));
     out.insert(start, if negated { Lit::Not(a) } else { Lit::Pos(a) });
+}
+
+/// `has r` of a resource (R-152): `__identity(T, A)`, which the compiler
+/// makes a read of the resource's identity (`partition::IDENTITY`).
+const IDENTITY: &str = crate::partition::IDENTITY;
+
+/// A path that reads a resource's id: `r.id`.
+fn is_identity(path: &[Seg]) -> bool {
+    matches!(path.first(), Some(Seg::F(f)) if f == crate::schema::IDENTITY)
 }
 
 /// `has r.PATH` of a resource's attribute (a path of fields):

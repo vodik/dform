@@ -1009,6 +1009,19 @@ resource by its address, `vpc = main`, before it exists and after
 error naming `x`, and `ref(x)` writes the reference out where an attribute
 that is no `ref(T)` needs the id as text.
 
+An order with no value passed along is a clause on the resource's
+existence (R-152): `has r` holds once `r`'s identity is known, so
+
+```dform
+resource db.postgres warm_cache { size = 1 }
+resource k8s.deployment web { .. } where has warm_cache
+```
+
+plans `web` under `later  waits on warm_cache` and applies it the tick
+after the cache, as a read of a value the cache computes would.
+`not has r` holds while no rule wants `r`; once one does it waits on
+`r`, and fails once `r` exists.
+
 The plan, `why`, `query`, `diff` and the editor's hints print an address
 as the source names it (R-111): its type and its path, a copy's scope in
 front, `net.vpc edge.left.vpc`, a value referring to it by the path

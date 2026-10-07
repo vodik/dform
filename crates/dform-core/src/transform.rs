@@ -1867,7 +1867,7 @@ pub fn rewrite_computed_refs(
 /// declare an `id` (`k8s.namespace`, whose reference a copy's input takes,
 /// R-120): then the top of its first computed attribute, minted the same
 /// way (`metadata`); a type with none, its `want`.
-fn identity_read(typ: Term, addr: Term, schema: &Schema) -> Atom {
+pub(crate) fn identity_read(typ: Term, addr: Term, schema: &Schema) -> Atom {
     let cell = match &typ {
         Term::Val(Value::Str(t)) if schema.attr(t, crate::schema::IDENTITY).is_none() => schema
             .computed_of(t)

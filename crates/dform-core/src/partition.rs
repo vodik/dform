@@ -543,6 +543,7 @@ pub fn compile(program: &Program, given: &[Atom]) -> Result<Compiled> {
     }
     let schema = schema_of(given, &facts)?;
     let (rules, facts) = answer_has(rules, facts, &schema);
+    let rules = answer_identity(rules, &schema);
     transform::check_computed_writes(&rules, &facts, &schema)?;
     let (mut rules, facts) = transform::rewrite_computed_refs(rules, facts, &schema);
     rules.extend(transform::computed_prelude(&schema));
@@ -785,6 +786,68 @@ fn source_pattern(r: &RuleStmt, at: usize, split: &BTreeSet<String>) -> Node {
 /// `has r.PATH` of a resource's attribute, as the resolver marks it:
 /// `__has(T, A, "PATH", N)` before the N literals that test it by value.
 pub const HAS: &str = "__has";
+/// `has r` of a resource (R-152), as the resolver writes it:
+/// `__identity(T, A)`.
+pub const IDENTITY: &str = "__identity";
+
+/// Answer each `has r` of a resource (R-152): it holds once the resource's
+/// identity is known. `__identity(T, A)` becomes the read a reference to
+/// it joins (`transform::identity_read`: its `id`, else the top of its
+/// first computed attribute) with `__known` over the value, a content
+/// position, so before the resource exists the literal is stuck and what
+/// it gates waits on the resource, as a read of any computed value of it
+/// does; a type with no computed attribute has an identity once it is
+/// wanted. Under `not` the resolver puts it in a helper, so `not has r`
+/// waits too.
+fn answer_identity(rules: Vec<RuleStmt>, schema: &Schema) -> Vec<RuleStmt> {
+    let mut n = 0usize;
+    rules
+        .into_iter()
+        .map(|mut r| {
+            if !r
+                .body
+                .iter()
+                .any(|l| matches!(l, Lit::Pos(a) if a.pred == IDENTITY))
+            {
+                return r;
+            }
+            let mut body = Vec::with_capacity(r.body.len() + 1);
+            for l in std::mem::take(&mut r.body) {
+                let Lit::Pos(a) = &l else {
+                    body.push(l);
+                    continue;
+                };
+                let [typ, addr] = a.args.as_slice() else {
+                    body.push(l);
+                    continue;
+                };
+                if a.pred != IDENTITY {
+                    body.push(l);
+                    continue;
+                }
+                let mut read = transform::identity_read(typ.clone(), addr.clone(), schema);
+                read.span = a.span;
+                if read.pred == "attr" {
+                    let v = Term::Var(format!("__Identity{n}"));
+                    n += 1;
+                    read.args[3] = v.clone();
+                    body.push(Lit::Pos(read));
+                    body.push(Lit::Pos(Atom {
+                        pred: "__known".into(),
+                        args: vec![v],
+                        record: None,
+                        span: a.span,
+                    }));
+                } else {
+                    body.push(Lit::Pos(read));
+                }
+            }
+            r.body = body;
+            r
+        })
+        .collect()
+}
+
 /// The schema's answer to `has`: `__type_has(T, P)` for every path `P` of
 /// a configurable attribute of `T` and every object above one.
 pub const TYPE_HAS: &str = "__type_has";

@@ -1516,6 +1516,12 @@ no OVH instance), and does not read the cell it writes, which a value
 test would (a cycle). Over a type that is not constant, each resource's
 type answers.
 
+`has r` of a resource (its name in scope, `T[e]`) holds once its
+identity is known: false while no rule wants it, undetermined from plan
+until the tick that creates it, so a block gated `where has warm_cache`
+waits on `warm_cache` and applies the tick after it, and `not has r`
+guards on its absence (R-152); `has r.id` is an error naming `has r`.
+
 A call of a function whose result is optional (`T?`, `oci.with_digest`
 over a tag rather than a digest) has no value where it answers none: in
 a clause the literal fails, as above; as a value that reaches a cell
