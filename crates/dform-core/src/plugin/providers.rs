@@ -174,6 +174,9 @@ pub struct Providers {
     mock_blocks: BTreeMap<String, String>,
     /// The account each link's last Configure reported, if it tells.
     accounts: RefCell<BTreeMap<usize, String>>,
+    /// A link whose reported account is a secret revealed into its
+    /// settings: that secret's label, which a message prints instead.
+    secret_accounts: RefCell<BTreeMap<usize, String>>,
     /// Where each secret the run knows of is held, by its label:
     /// [`Config::held`], an extern's secret column as its provider answered
     /// it ([`Providers::query_extern`]).
@@ -452,40 +455,75 @@ impl Providers {
     /// Configure each provider the program configures
     /// (`provider_config(Name, Settings)` in `facts`) whose settings are
     /// known now and changed: Configure again with them as `settings`.
-    /// Settings holding a null (a cluster not created yet) wait. The
-    /// providers configured, by the name the program gives them: then
-    /// what was read is read again. The settings go to the provider in
-    /// that call and are kept here only to tell a change (never written,
-    /// printed or digested: a kubeconfig may be among them, R-45).
+    /// Settings holding a null (a cluster not created yet) wait. A secret
+    /// another provider holds (a resource's sensitive computed attribute,
+    /// another stack's held output, an extern's secret column) is revealed
+    /// by that provider into this call (R-45, the `Reveal` call): once the
+    /// object that holds it exists. The providers configured, by the name
+    /// the program gives them: then what was read is read again. The
+    /// settings go to the provider in that call and are kept here only to
+    /// tell a change, a revealed secret as its label and where it is held
+    /// (never written, printed or digested: a kubeconfig may be among
+    /// them).
     pub fn configure_from<'a>(
         &self,
         facts: impl IntoIterator<Item = &'a Atom>,
     ) -> Result<Vec<String>> {
+        let facts: Vec<&Atom> = facts.into_iter().collect();
+        // The object each address maps to, for a secret its attribute holds.
+        let identity: BTreeMap<(String, String), String> = facts
+            .iter()
+            .filter(|a| a.pred == "identity")
+            .filter_map(|a| match a.args.as_slice() {
+                [
+                    Term::Val(Value::Str(t)),
+                    Term::Val(Value::Str(n)),
+                    Term::Val(Value::Str(r)),
+                ] => Some(((t.clone(), n.clone()), r.clone())),
+                _ => None,
+            })
+            .collect();
         let mut changed = Vec::new();
-        for a in facts.into_iter().filter(|a| a.pred == "provider_config") {
+        for a in facts.iter().filter(|a| a.pred == "provider_config") {
             let [Term::Val(Value::Str(name)), Term::Val(v)] = a.args.as_slice() else {
                 continue;
             };
             let Some(i) = self.link_for(name) else {
                 continue;
             };
-            let Some(settings) = known_json(v) else {
+            // What the settings are kept as, and what goes to the provider.
+            let Some(kept) = self.settings_of(v, &identity) else {
                 continue;
             };
-            if self.settings.borrow().get(&i) == Some(&settings) {
+            if self.settings.borrow().get(&i) == Some(&kept) {
                 continue;
             }
+            let mut shown = Vec::new();
+            let settings = self
+                .revealed(v, &identity, &mut shown)
+                .with_context(|| format!("configure provider {name}"))?;
             let mut config = self.bases.get(i).cloned().unwrap_or_else(|| json!({}));
-            config["settings"] = settings.clone();
+            config["settings"] = settings;
             let account = configure(&mut self.links[i].borrow_mut(), config)
                 .with_context(|| format!("configure provider {name} from provider_config"))?;
+            // An account that is a revealed secret prints as its label.
+            let secret = account.as_ref().and_then(|a| {
+                shown
+                    .iter()
+                    .find(|(_, s)| s.expose() == a.as_bytes())
+                    .map(|(l, _)| l.clone())
+            });
+            match secret {
+                Some(l) => self.secret_accounts.borrow_mut().insert(i, l),
+                None => self.secret_accounts.borrow_mut().remove(&i),
+            };
             let mut accounts = self.accounts.borrow_mut();
             match account {
                 Some(a) => accounts.insert(i, a),
                 None => accounts.remove(&i),
             };
             drop(accounts);
-            self.settings.borrow_mut().insert(i, settings);
+            self.settings.borrow_mut().insert(i, kept);
             self.awaiting.borrow_mut().remove(&i);
             if self.loaded.get().is_some() {
                 self.learn(i)
@@ -497,6 +535,138 @@ impl Providers {
             self.invalidate();
         }
         Ok(changed)
+    }
+
+    /// Where the secret labeled `label` is held, and the provider that
+    /// holds it: an extern's or another stack's, as it was answered; a
+    /// resource's sensitive attribute (`T/N#P`), by the provider serving
+    /// `T`, once the object exists (`identity`).
+    fn holder(
+        &self,
+        label: &str,
+        identity: &BTreeMap<(String, String), String>,
+    ) -> Option<(usize, provider::Held)> {
+        if let Some(h) = self.held.borrow().get(label) {
+            return Some((self.link_named(&h.provider)?, h.clone()));
+        }
+        let (typ, name, path) = crate::value::null_parts(label)?;
+        let remote = identity.get(&(typ.clone(), name))?;
+        let i = self.route(&typ);
+        let deployment = self.bases.get(i)?.get("stack")?.as_str()?.to_string();
+        Some((
+            i,
+            provider::Held {
+                provider: self.links[i].borrow().name.clone(),
+                deployment,
+                typ,
+                remote: remote.clone(),
+                path,
+                digest: String::new(),
+            },
+        ))
+    }
+
+    /// Settings as they are kept to tell a change: every value as it is,
+    /// a secret as its label and where it is held. `None` while one is not
+    /// known yet: an open null, a secret no provider holds yet.
+    fn settings_of(
+        &self,
+        v: &Value,
+        identity: &BTreeMap<(String, String), String>,
+    ) -> Option<Json> {
+        Some(match v {
+            Value::Null {
+                label,
+                class: NullClass::Secret,
+                ..
+            } => provider::held_json(label, &self.holder(label, identity)?.1),
+            Value::List(xs) => Json::Array(
+                xs.iter()
+                    .map(|x| self.settings_of(x, identity))
+                    .collect::<Option<_>>()?,
+            ),
+            Value::Obj(m) => Json::Object(
+                m.iter()
+                    .map(|(k, x)| Some((k.clone(), self.settings_of(x, identity)?)))
+                    .collect::<Option<_>>()?,
+            ),
+            other => known_json(other)?,
+        })
+    }
+
+    /// Settings as Configure takes them: each secret revealed by the
+    /// provider that holds it, its bytes in this document only (and in
+    /// `shown`, by its label, zeroed when dropped). Only called with
+    /// settings [`Providers::settings_of`] knows.
+    fn revealed(
+        &self,
+        v: &Value,
+        identity: &BTreeMap<(String, String), String>,
+        shown: &mut Vec<(String, super::credentials::Secret)>,
+    ) -> Result<Json> {
+        Ok(match v {
+            Value::Null {
+                label,
+                class: NullClass::Secret,
+                ..
+            } => {
+                let (i, held) = self.holder(label, identity).ok_or_else(|| {
+                    anyhow!("no provider holds the secret {}", crate::ir::label(label))
+                })?;
+                let bytes = self.reveal(i, &held, label)?;
+                let text = std::str::from_utf8(bytes.expose()).map_err(|_| {
+                    anyhow!(
+                        "the secret {} that provider {} revealed is not text",
+                        crate::ir::label(label),
+                        held.provider
+                    )
+                })?;
+                let text = json!(text);
+                shown.push((label.clone(), bytes));
+                text
+            }
+            Value::List(xs) => Json::Array(
+                xs.iter()
+                    .map(|x| self.revealed(x, identity, shown))
+                    .collect::<Result<_>>()?,
+            ),
+            Value::Obj(m) => Json::Object(
+                m.iter()
+                    .map(|(k, x)| Ok((k.clone(), self.revealed(x, identity, shown)?)))
+                    .collect::<Result<_>>()?,
+            ),
+            other => known_json(other).ok_or_else(|| anyhow!("a setting is not known yet"))?,
+        })
+    }
+
+    /// The secret `held` names, from provider `i`, which holds it: under
+    /// this run's holder identity (`WHO pid PID`, as the deployment's lease
+    /// names its holder), which a provider refuses a reveal without.
+    fn reveal(
+        &self,
+        i: usize,
+        held: &provider::Held,
+        label: &str,
+    ) -> Result<super::credentials::Secret> {
+        let req = pb::RevealRequest {
+            held: Some(pb::Held {
+                provider: held.provider.clone(),
+                deployment: held.deployment.clone(),
+                r#type: held.typ.clone(),
+                remote: held.remote.clone(),
+                path: held.path.clone(),
+                digest: held.digest.clone(),
+            }),
+            lease: format!("{} pid {}", crate::audit::who(), std::process::id()),
+        };
+        let r: pb::RevealResponse = self.links[i].borrow_mut().call(req).with_context(|| {
+            format!(
+                "provider {} reveals the secret {}",
+                held.provider,
+                crate::ir::label(label)
+            )
+        })?;
+        Ok(super::credentials::Secret::new(r.value))
     }
 
     /// The kinds of `types` (none in any schema, a provider the program
@@ -576,6 +746,7 @@ impl Providers {
             blocks: BTreeMap::new(),
             mock_blocks: BTreeMap::new(),
             accounts: RefCell::new(BTreeMap::new()),
+            secret_accounts: RefCell::new(BTreeMap::new()),
             held: RefCell::new(BTreeMap::new()),
             relearned: RefCell::new(BTreeSet::new()),
             digest_key: None,
@@ -932,9 +1103,14 @@ impl Providers {
                 }
             }
         }
-        let reported = |got: &String| match secrets.iter().find(|(v, _)| v == got) {
-            Some((_, label)) => format!("{label} (a secret)"),
-            None => got.clone(),
+        let reported = |i: usize, got: &String| {
+            if let Some(label) = self.secret_accounts.borrow().get(&i) {
+                return format!("{} (a secret)", crate::ir::label(label));
+            }
+            match secrets.iter().find(|(v, _)| v == got) {
+                Some((_, label)) => format!("{label} (a secret)"),
+                None => got.clone(),
+            }
         };
         let mut wrong = Vec::new();
         for a in facts.into_iter().filter(|a| a.pred == EXPECT_ACCOUNT) {
@@ -961,7 +1137,7 @@ impl Providers {
                 Some(got) => wrong.push(format!(
                     "provider {name} reports account {}, but the program expects {shown} \
                      (expect_account)",
-                    reported(got)
+                    reported(i, got)
                 )),
                 None => wrong.push(format!(
                     "provider {name} reports no account, but the program expects {shown} \

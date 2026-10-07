@@ -1245,8 +1245,10 @@ keeping the plan and the questions. A change is its plan line's mark and
 address, then where it is: what it reads that the tick makes first
 (`waits on k3s.server.public_ip`), or the time its call has run, which
 ticking is the only sign of life (no spinner, no glyph); the provider's
-own status word would follow the time verbatim, once the Apply call
-streams one (it does not yet: the column is empty). On a terminal the
+own status word follows the time verbatim, as its Apply streams it
+(R-130: the call's events, each time the provider's view of the object
+changes, never on a timer; an OVH instance says `BUILD`, then `ACTIVE`;
+an event's message goes to `DFORM_LOG=debug`). On a terminal the
 block's lines change in place about once a second, the cursor moved back
 over the block's own lines and each cleared as it is written again, the
 header counting `1 done  1 running  1 waiting`:
@@ -1254,7 +1256,7 @@ header counting `1 done  1 running  1 waiting`:
 ```
 tick 1  3 changes   1 done  1 running  1 waiting
   + ovh.ssh_key k3s.admin                        0.8s
-  + ovh.instance k3s.server                      1m12s
+  + ovh.instance k3s.server                      1m12s  BUILD
   + ovh.domain_record k3s."k8s-lab.vodik.xyz"    waits on k3s.server.public_ip
 ```
 
@@ -1295,7 +1297,13 @@ provider's settings, which the approved plan did not show; the next apply
 plans them as its tick 1. The settings go to the provider in its
 Configure call only: they are not in state, the plan file, the audit log
 (a `configure` entry names the provider, the tick and the settings' keys)
-or any output. Settings that no wait brings stop the apply at that tick,
+or any output. A setting that is a secret another provider holds (a
+managed cluster's kubeconfig, a sensitive computed attribute: the
+program has only its label) is revealed by that provider into this
+Configure call once the object that holds it exists (the protocol's
+`Reveal`, R-45): the bytes are in dform's memory for the call and
+nowhere else, and an account the provider reports that equals them
+prints as the secret's label. Settings that no wait brings stop the apply at that tick,
 `nothing definite to apply, still waiting on .. provider k8s (kubeconfig
 from k3s.kubeconfig)`.
 
