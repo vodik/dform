@@ -1162,6 +1162,21 @@ impl Providers {
                 [] => "no known provider schema declares it".to_string(),
                 by => format!("declared by: {}", by.join(", ")),
             };
+            // A relationship that is an attribute of one side (R-158).
+            if let Some((t, p)) = crate::schema::instead(typ) {
+                diags.push(
+                    crate::diag::Diagnostic::error(
+                        r.span,
+                        format!("{typ} is no resource: it is {t}'s attribute {p}"),
+                    )
+                    .with_help(format!(
+                        "write `{p} = [..]` in the {t}'s block, or add to it from \
+                         anywhere with `set R.{p} = [..] where ..`: each write adds its \
+                         elements"
+                    )),
+                );
+                continue;
+            }
             let mut d = crate::diag::Diagnostic::error(r.span, format!("{who} {typ}; {known}"));
             for c in &blocks {
                 d = d.with_label(c.span, format!("provider {}", c.name));

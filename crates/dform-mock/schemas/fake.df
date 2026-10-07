@@ -15,26 +15,24 @@
 type_provider(net.vpc, "fakecloud")
 type_provider(net.subnet, "fakecloud")
 type_provider(net.vpc_peering, "fakecloud")
-type_provider(net.route, "fakecloud")
+type_provider(net.route_table, "fakecloud")
 type_provider(compute.vm, "fakecloud")
 type_provider("db.postgres", "fakecloud")
 type_provider(k8s.cluster, "fakecloud")
 type_provider(k8s.nodepool, "fakecloud")
 type_provider("iam.role", "fakecloud")
 type_provider("iam.policy", "fakecloud")
-type_provider("iam.role_policy_attachment", "fakecloud")
 
 type_attr(net.vpc, "id", "string", ["computed", "id"])
 type_attr(net.subnet, "id", "string", ["computed", "id"])
 type_attr(net.vpc_peering, "id", "string", ["computed", "id"])
-type_attr(net.route, "id", "string", ["computed", "id"])
+type_attr(net.route_table, "id", "string", ["computed", "id"])
 type_attr(compute.vm, "id", "string", ["computed", "id"])
 type_attr("db.postgres", "id", "string", ["computed", "id"])
 type_attr(k8s.cluster, "id", "string", ["computed", "id"])
 type_attr(k8s.nodepool, "id", "string", ["computed", "id"])
 type_attr("iam.role", "id", "string", ["computed", "id"])
 type_attr("iam.policy", "id", "string", ["computed", "id"])
-type_attr("iam.role_policy_attachment", "id", "string", ["computed", "id"])
 
 type_attr(net.vpc, "cidr", "string", ["force_new"])
 type_attr(net.subnet, "cidr", "string", ["force_new"])
@@ -53,8 +51,21 @@ type_attr(net.vpc_peering, "accepter_vpc", "ref(net.vpc)", [])
 type_attr("db.postgres", "subnets", "list(ref(net.subnet))", [])
 type_attr(k8s.cluster, "subnets", "list(ref(net.subnet))", [])
 type_attr(k8s.nodepool, "cluster", "ref(k8s.cluster)", [])
-type_attr("iam.role_policy_attachment", "role", "ref(iam.role)", [])
-type_attr("iam.role_policy_attachment", "policy", "ref(iam.policy)", [])
+type_attr(net.route_table, "vpc", "ref(net.vpc)", [])
+
+# A relationship whose state lives on one side is an attribute of that
+# side, not a resource (R-158): a role's policies, a route table's
+# routes. Each is a set: every contribution adds its elements, so several
+# modules each add one to the same role.
+type_attr("iam.role", "policies", "set(ref(iam.policy))", [])
+type_attr(net.route_table, "routes", "set", [])
+type_attr(net.route_table, "routes.destination", "inet", ["required"])
+type_attr(net.route_table, "routes.target", "ref(net.vpc)", ["required"])
+
+# The types those attributes replace: writing one is an error that names
+# the attribute (`type_instead(Gone, Type, Path)`).
+type_instead("iam.role_policy_attachment", "iam.role", "policies")
+type_instead(net.route, net.route_table, "routes")
 
 # How a replacement is ordered: a vpc may be replaced either way (destroy
 # first unless lifecycle create_before_destroy says otherwise).
@@ -101,10 +112,11 @@ type_doc(
 type_doc(net.vpc_peering, "", "A peering connection between two networks.")
 type_doc(net.vpc_peering, "requester_vpc", "The network that requests the peering.")
 type_doc(net.vpc_peering, "accepter_vpc", "The network that accepts the peering.")
-type_doc(net.route, "", "A route between two networks.")
-type_doc(net.route, "from", "The network the route leaves from.")
-type_doc(net.route, "to", "The network the route reaches.")
-type_doc(net.route, "destination", "The CIDR range the route sends to `to`.")
+type_doc(net.route_table, "", "A network's routes: where traffic leaving it goes.")
+type_doc(net.route_table, "vpc", "The network whose traffic the table routes.")
+type_doc(net.route_table, "routes", "The routes: each a destination range and the network it goes to.")
+type_doc(net.route_table, "routes.destination", "The CIDR range the route sends to its target.")
+type_doc(net.route_table, "routes.target", "The network the route reaches.")
 type_doc(compute.vm, "", "A virtual machine.")
 type_doc(compute.vm, "private_ip", "The machine's address inside its network.")
 type_doc("db.postgres", "", "A managed PostgreSQL database.")
@@ -133,6 +145,7 @@ type_doc(k8s.nodepool, "max", "The most nodes the pool scales up to.")
 type_doc("iam.role", "", "An identity workloads assume.")
 type_doc("iam.role", "name", "The role's name, unique in the account.")
 type_doc("iam.role", "assume", "Who may assume the role: `{ principals: [...] }`.")
+type_doc("iam.role", "policies", "The policies whose permissions the role has.")
 type_doc("iam.policy", "", "A set of permissions.")
 type_doc("iam.policy", "name", "The policy's name, unique in the account.")
 type_doc(
@@ -140,6 +153,3 @@ type_doc(
   "statements",
   "The policy's statements: each an effect, actions and resources.",
 )
-type_doc("iam.role_policy_attachment", "", "Grants a policy's permissions to a role.")
-type_doc("iam.role_policy_attachment", "role", "The role.")
-type_doc("iam.role_policy_attachment", "policy", "The policy.")

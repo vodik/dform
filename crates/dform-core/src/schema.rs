@@ -906,6 +906,14 @@ pub const BUILTINS: [&str; 4] = ["fake", "gke", "k8s", "aws-mock"];
 /// each `providers/<name>/schema.df` under the working directory, by name.
 /// What an error about an undeclared type suggests.
 pub fn declaring(typ: &str) -> Vec<String> {
+    known_schemas()
+        .into_iter()
+        .filter(|n| load_provider(n).is_ok_and(|s| s.knows_type(typ)))
+        .collect()
+}
+
+/// The built-in schemas' names and each `providers/<name>/schema.df`'s.
+fn known_schemas() -> BTreeSet<String> {
     let mut names: BTreeSet<String> = BUILTINS.iter().map(|n| n.to_string()).collect();
     if let Ok(entries) = std::fs::read_dir("providers") {
         names.extend(
@@ -916,9 +924,27 @@ pub fn declaring(typ: &str) -> Vec<String> {
         );
     }
     names
-        .into_iter()
-        .filter(|n| load_provider(n).is_ok_and(|s| s.knows_type(typ)))
-        .collect()
+}
+
+/// A schema's `type_instead(Gone, Type, Path)` (R-158): `Gone` is no
+/// resource type, a relationship whose state lives on one side, and is
+/// written as attribute `Path` of `Type` (`iam.role_policy_attachment`
+/// is `iam.role`'s `policies`). The first known schema's that says so.
+pub fn instead(typ: &str) -> Option<(String, String)> {
+    known_schemas().into_iter().find_map(|n| {
+        load_provider(&n)
+            .ok()?
+            .facts
+            .iter()
+            .find_map(|f| match f.args.as_slice() {
+                [
+                    Term::Val(Value::Str(g)),
+                    Term::Val(Value::Str(t)),
+                    Term::Val(Value::Str(p)),
+                ] if f.pred == "type_instead" && g == typ => Some((t.clone(), p.clone())),
+                _ => None,
+            })
+    })
 }
 
 /// Schemas shipped with the binary, by provider name
@@ -988,12 +1014,12 @@ mod tests {
         assert_eq!(s.class_of("net.vpc", "id"), Some(NullClass::Fresh));
         assert_eq!(s.class_of("db.postgres", "endpoint"), Some(NullClass::Open));
         assert_eq!(s.class_of("k8s.cluster", "ca_cert"), Some(NullClass::Open));
-        assert_eq!(s.types().len(), 11);
+        assert_eq!(s.types().len(), 10);
         assert_eq!(
-            s.provider_of.get("net.route").map(String::as_str),
+            s.provider_of.get("net.route_table").map(String::as_str),
             Some("fakecloud")
         );
-        assert_eq!(s.computed.len(), 14);
+        assert_eq!(s.computed.len(), 13);
     }
 
     #[test]

@@ -404,6 +404,23 @@ its interpolation (`":" in "${c.image}"`).
 The settled signature (`az(string, int)`, a `decl`'s or a rule head's
 column names where there are some) is what the editor's hover prints.
 
+**Sets** (R-158). A type is an API object with identity; a relationship
+whose state lives on one side is an attribute of that side, a reference or
+a set of them, and the order of applies comes from the reference: a role's
+policies are `iam.role`'s `policies`, not an attachment resource. An
+attribute the schema types `set(T)` is a set: each contribution adds its
+elements, so several modules each add one to the same role (`set
+r.policies = [access] where r in iam.role, r.name == role.name`), and a
+union never conflicts. A rank applies per contribution: an `@override`
+set replaces the others, a `@default` one yields to any normal one.
+Elements are equal by value, references by address; the provider
+receives the union as one list, in one order whatever order the writers
+came in (one writer's in the order it wrote). The plan prints one
+writer's set as written (`policies = [app_policy]`) and several writers'
+one element per line with its site (`policies[app_policy]  identity.df:8`);
+an element added or removed is an update of the set
+(`- policies[app_policy]`), and `why` says each element by its writer.
+
 ### References and their type
 
 A reference is a pair (type, address). A dot on a reference needs its type

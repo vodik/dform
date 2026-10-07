@@ -7,7 +7,7 @@
 # sources: no type_provider.
 
 type_provider("google.compute_subnetwork", "google")
-type_provider("google.compute_network_peering", "google")
+type_provider("google.compute_network", "google")
 type_provider("google.compute_address", "google")
 type_provider("google.monitoring_dashboard", "google")
 type_provider("google.container_cluster", "google")
@@ -17,7 +17,7 @@ type_provider(k8s.deployment, "k8s")
 type_provider(k8s.secret, "k8s")
 
 type_attr("google.compute_subnetwork", "id", "string", ["computed", "id"])
-type_attr("google.compute_network_peering", "id", "string", ["computed", "id"])
+type_attr("google.compute_network", "id", "string", ["computed", "id"])
 type_attr("google.compute_address", "id", "string", ["computed", "id"])
 type_attr("google.monitoring_dashboard", "id", "string", ["computed", "id"])
 type_attr("google.container_cluster", "id", "string", ["computed", "id"])
@@ -28,6 +28,15 @@ type_attr("google.container_node_pool", "id", "string", ["computed", "id"])
 type_attr("google.container_cluster", "subnetwork_id", "ref(google.compute_subnetwork)", [])
 type_attr("google.compute_address", "subnetwork_id", "ref(google.compute_subnetwork)", [])
 type_attr("google.container_node_pool", "cluster", "ref(google.container_cluster)", [])
+
+# A network's peerings are its attribute, not resources (R-158): GCP keeps
+# them on the network (networks.addPeering). A set: each contribution adds
+# its peerings. The peer is its self link, a network of another project
+# as often as not.
+type_attr("google.compute_network", "peerings", "set", [])
+type_attr("google.compute_network", "peerings.name", "string", ["required"])
+type_attr("google.compute_network", "peerings.peer_network", "string", ["required"])
+type_instead("google.compute_network_peering", "google.compute_network", "peerings")
 
 type_attr(k8s.namespace, "id", "string", ["computed", "id"])
 type_attr(k8s.namespace, "uid", "string", ["computed", "id"])
@@ -161,11 +170,12 @@ type_doc(
   "role",
   "ACTIVE or BACKUP, for a REGIONAL_MANAGED_PROXY subnetwork.",
 )
-type_doc("google.compute_network_peering", "", "A peering from one VPC network to another.")
-type_doc("google.compute_network_peering", "project", "The project of the local network.")
-type_doc("google.compute_network_peering", "name", "The peering's name.")
-type_doc("google.compute_network_peering", "network", "The local network's self link.")
-type_doc("google.compute_network_peering", "peer_network", "The peer network's self link.")
+type_doc("google.compute_network", "", "A VPC network: its subnetworks are regional, it is global.")
+type_doc("google.compute_network", "project", "The project the network is in.")
+type_doc("google.compute_network", "name", "The network's name, unique in the project.")
+type_doc("google.compute_network", "peerings", "The networks it peers with: each a name and the peer's self link.")
+type_doc("google.compute_network", "peerings.name", "The peering's name.")
+type_doc("google.compute_network", "peerings.peer_network", "The peer network's self link.")
 type_doc("google.compute_address", "", "A static IP address.")
 type_doc("google.compute_address", "project", "The project the address is in.")
 type_doc("google.compute_address", "region", "The region the address is in.")
