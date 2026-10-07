@@ -70,6 +70,9 @@ scrypt = { version = "0.12", default-features = false }
 # R-166): X25519 to each reader's public key, which its master derives;
 # the curve ed25519-dalek is built on, already in the tree.
 curve25519-dalek = { version = "4", default-features = false }
+# A master sealed to a team's age recipients (src/custody.rs, After
+# R-164): X25519 recipients, the identities the operators hold.
+age = { version = "0.11", default-features = false }
 hkdf = "0.12"
 # The plan key's digests (`zset::file::Key::digest`): HMAC-SHA256, the
 # same `hmac` the `hkdf` crate is built on.

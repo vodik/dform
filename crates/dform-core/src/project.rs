@@ -249,9 +249,34 @@ pub struct SecretsTable {
     /// `"env:NAME"` (a variable: fnox, `op run` or CI may set it) or
     /// `"prompt"` (the terminal).
     pub passphrase: Option<String>,
-    /// Age recipients, a team's mixing (the master sealed to each): not
-    /// yet, refused naming `passphrase`.
-    pub recipients: Option<Vec<String>>,
+    /// Age recipients, a team's mixing (the master sealed to each, which
+    /// each opens with its identity): `["age1..", ..]`, or named, `{ alice
+    /// = "age1..", ci = "age1.." }`.
+    pub recipients: Option<Recipients>,
+}
+
+/// `[secrets] recipients`: a list of age public keys, or a table of them
+/// by name.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+pub enum Recipients {
+    Keys(Vec<String>),
+    Named(BTreeMap<String, String>),
+}
+
+impl SecretsTable {
+    /// The recipients, each checked.
+    pub fn recipients(&self) -> Result<Vec<crate::custody::Recipient>> {
+        use crate::custody::Recipient;
+        match &self.recipients {
+            None => Ok(Vec::new()),
+            Some(Recipients::Keys(k)) => k.iter().map(|k| Recipient::parse(None, k)).collect(),
+            Some(Recipients::Named(m)) => m
+                .iter()
+                .map(|(n, k)| Recipient::parse(Some(n), k))
+                .collect(),
+        }
+    }
 }
 
 /// `[project]`.
@@ -530,13 +555,8 @@ impl Manifest {
                 .filter_map(|(n, t)| Some((format!("[stacks.{n}.secrets]"), t.secrets.as_ref()?))),
         );
         for (table, t) in secrets {
-            if t.recipients.is_some() {
-                bail!(
-                    "{}: age recipients (the master sealed to each of a team's keys) are not \
-                     supported yet; `passphrase = \"env:NAME\"` seals it under a passphrase",
-                    at(&format!("{table} recipients"))
-                );
-            }
+            t.recipients()
+                .map_err(|e| anyhow!("{}: {e}", at(&format!("{table} recipients"))))?;
             if let Some(p) = &t.passphrase {
                 crate::custody::Passphrase::parse(p)
                     .map_err(|e| anyhow!("{} = {e}", at(&format!("{table} passphrase"))))?;
@@ -1337,24 +1357,25 @@ mod tests {
     }
 
     /// `[secrets] passphrase` says where the passphrase a master is sealed
-    /// under comes from (R-164): a variable or the terminal; recipients
-    /// are not yet.
+    /// under comes from (R-164): a variable or the terminal; `recipients`
+    /// the age keys it is sealed to.
     #[test]
     fn a_manifest_says_who_holds_the_master() {
         use crate::custody::{Mixing, Passphrase};
         let m = manifest("[secrets]\npassphrase = \"env:DFORM_PASSPHRASE\"\n").unwrap();
         assert_eq!(
-            Mixing::of(Some(&m), "app").unwrap(),
-            Mixing::Passphrase(Passphrase::Env("DFORM_PASSPHRASE".into()))
+            Mixing::of(Some(&m), "app").unwrap().passphrase,
+            Some(Passphrase::Env("DFORM_PASSPHRASE".into()))
         );
         let m = manifest("[secrets]\npassphrase = \"prompt\"\n").unwrap();
         assert_eq!(
-            Mixing::of(Some(&m), "app").unwrap(),
-            Mixing::Passphrase(Passphrase::Prompt)
+            Mixing::of(Some(&m), "app").unwrap().passphrase,
+            Some(Passphrase::Prompt)
         );
-        assert_eq!(
-            Mixing::of(Some(&manifest("").unwrap()), "app").unwrap(),
-            Mixing::KeyFile
+        assert!(
+            Mixing::of(Some(&manifest("").unwrap()), "app")
+                .unwrap()
+                .key_file()
         );
         // A stack's own, in place of the project's.
         let m = manifest(
@@ -1363,12 +1384,12 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            Mixing::of(Some(&m), "prod").unwrap(),
-            Mixing::Passphrase(Passphrase::Env("PROD_PASSPHRASE".into()))
+            Mixing::of(Some(&m), "prod").unwrap().passphrase,
+            Some(Passphrase::Env("PROD_PASSPHRASE".into()))
         );
         assert_eq!(
-            Mixing::of(Some(&m), "lab").unwrap(),
-            Mixing::Passphrase(Passphrase::Prompt)
+            Mixing::of(Some(&m), "lab").unwrap().passphrase,
+            Some(Passphrase::Prompt)
         );
         let e = manifest("[stacks.prod.secrets]\npassphrase = \"x\"\n").unwrap_err();
         assert!(
@@ -1377,8 +1398,23 @@ mod tests {
         );
         let e = manifest("[secrets]\npassphrase = \"file:x\"\n").unwrap_err();
         assert!(e.to_string().contains("[secrets] passphrase"), "{e}");
+        // Age recipients, listed or named; a key that is not one refused.
+        const KEY: &str = "age1ql3z7hjy54pw3hyww5ayyfg7zqgvc7w3j2elw8zmrj2kg5sfn9aqmcac8p";
+        let m = manifest(&format!("[secrets]\nrecipients = [\"{KEY}\"]\n")).unwrap();
+        let r = Mixing::of(Some(&m), "app").unwrap().recipients;
+        assert_eq!((r[0].name.as_deref(), r[0].key.as_str()), (None, KEY));
+        let m = manifest(&format!(
+            "[secrets]\nrecipients = {{ alice = \"{KEY}\" }}\n"
+        ))
+        .unwrap();
+        let r = Mixing::of(Some(&m), "app").unwrap().recipients;
+        assert_eq!(r[0].describe(), "alice");
         let e = manifest("[secrets]\nrecipients = [\"age1x\"]\n").unwrap_err();
-        assert!(e.to_string().contains("not supported yet"), "{e}");
+        assert!(
+            e.to_string().contains("[secrets] recipients")
+                && e.to_string().contains("not an age recipient"),
+            "{e}"
+        );
     }
 
     /// `[io] credentials` names a credential per location pattern, and

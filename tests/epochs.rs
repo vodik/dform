@@ -247,7 +247,7 @@ fn a_key_file_is_not_cycled() {
     let r = run(&s, &[], &["secrets", "cycle", "p"]).failure();
     assert!(
         r.stderr
-            .contains("so cycling needs `[secrets] passphrase` in dform.toml"),
+            .contains("so cycling needs `[secrets] passphrase` or `recipients` in dform.toml"),
         "{}",
         r.stderr
     );

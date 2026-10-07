@@ -373,6 +373,7 @@ too):
 |---|---|
 | `DFORM_LOG` | `debug`: a line on stderr for each phase of a run and each call it makes over the network, with its wall time |
 | `DFORM_ACTOR` | who acts, as the audit log records it (a CI job's OIDC subject); else `USER@HOST`, from `USER` or `LOGNAME` |
+| `AGE_IDENTITY` | an age identity (`AGE-SECRET-KEY-1..`), or the path of a file of them, that opens a master sealed to `[secrets] recipients` (see "Secrets") |
 | `DFORM_CREDENTIALS` | the directory of the operator's credential files, instead of `$XDG_CONFIG_HOME/dform/credentials` |
 | `DFORM_S3_ACCESS_KEY_ID`, `DFORM_S3_SECRET_ACCESS_KEY`, `DFORM_S3_SESSION_TOKEN` | the s3 state backend's credentials; else `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` and `AWS_SESSION_TOKEN`; only the environment, no profile file |
 | `NO_COLOR` | set and not empty: `--color=auto` colours nothing |
@@ -392,10 +393,10 @@ Variables a test sets (`DFORM_TEST_*`, the poll intervals) and those
 | `dform.toml` | the project root: the nearest directory up from the working directory (or `-C DIR`) holding one; its providers, stacks and defaults |
 | `stacks/STACK.df` | a stack; every other `.df` file is a module, named by its path from the root |
 | `dform.state/` | at the project root, gitignored: per deployment its state, its master (sealed, or a key file) and audit log, and the project's registry and cache |
-| `dform.state/STACK/state.json` | a deployment's state (`dform.state/STACK/K=V/` for a keyed stack's), with `state.master` (its master sealed under `[secrets] passphrase`) or `state.key` (its master in the clear, without `[secrets]`), `state.lock` (the apply lock), `state.audit.jsonl` (the audit log) and `outputs.json` (the published outputs) beside it |
+| `dform.state/STACK/state.json` | a deployment's state (`dform.state/STACK/K=V/` for a keyed stack's), with `state.master` (its master sealed under `[secrets] passphrase` and to its `recipients`) or `state.key` (its master in the clear, without `[secrets]`), `state.lock` (the apply lock), `state.audit.jsonl` (the audit log) and `outputs.json` (the published outputs) beside it |
 | `dform.state/stacks.json` | the registry: where each applied deployment's objects are (a directory, or `s3://..`), for the stacks that read its outputs |
 | `dform.state/cache/` | what providers and trust roots fetch (the Kubernetes OpenAPI document, JWKS) |
-| `~/.config/dform/credentials/KIND/NAME` | the operator's credential `KIND:NAME` (under `$XDG_CONFIG_HOME`, or `DFORM_CREDENTIALS`) |
+| `~/.config/dform/credentials/KIND/NAME` | the operator's credential `KIND:NAME` (under `$XDG_CONFIG_HOME`, or `DFORM_CREDENTIALS`); `age/NAME` an age identity that opens a master sealed to its recipient |
 | `~/.cache/dform/` | git mirrors, compiled wasm providers, the language server's read-only files (under `$XDG_CACHE_HOME`) |
 <!-- /man:files -->
 
@@ -2051,6 +2052,55 @@ passphrase = "env:DFORM_PASSPHRASE"   # or "prompt": asked on the terminal
   in the bucket beside the state ..`), and a deployment whose key file is
   already in a bucket is said on every run until it is sealed.
 
+A team seals each master to its members' age keys instead, or beside
+the passphrase (SOPS's recipients, Pulumi's secrets providers):
+
+```toml
+[secrets]
+recipients = { alice = "age1ql3z7hjy54pw3hyww5ayyfg7zqgvc7w3j2elw8zmrj2kg5sfn9aqmcac8p",
+               bob   = "age1lggyhqrw2nlhcxprm67z43rta597azn8gknawjehu9d9dl0jq3yqqvfafg" }
+passphrase = "env:DFORM_PASSPHRASE"   # optional: CI's, beside the members'
+```
+
+(`recipients = ["age1..", ..]` lists them unnamed.) `state.master` then
+holds, beside the master id, an age file (X25519, the `age` crate) whose
+payload is the master, sealed to every recipient at once, and their keys
+and names (public). Each member opens it with their own identity: the
+variable `AGE_IDENTITY` (the identity itself, `AGE-SECRET-KEY-1..`, or the
+path of a file of them, as `age-keygen` writes), else each file under
+the operator's credentials `age/` (`~/.config/dform/credentials/age/NAME`,
+an identity a line, `#` a comment). An identity is tried before the
+passphrase, so `prompt` asks only a run no identity opened. A run that
+opens neither plans without the master, saying why (`no age identity it
+is sealed to (AGE_IDENTITY tried)`). A new master needs only the
+recipients' public keys to be sealed: anyone may make one.
+
+A recipient added to or removed from dform.toml is sealed to, or no
+longer, by the next apply that holds the master (the master and every
+earlier epoch's, sealed again; nothing derived changes), which writes a
+`recipients` audit entry; the plan says so first:
+
+```text
+crud_api: the next apply seals it to carol; no longer to bob (dform.toml's [secrets]); sealing
+to a recipient no longer revokes what it opened before: `dform secrets cycle` makes a master it
+never held, and each secret moves to it as it is rotated
+```
+
+Sealing to someone no longer revokes nothing they opened before (SOPS's
+`updatekeys` the same): offboarding is the recipient removed, `secrets
+cycle`, and `secrets rotate` of what they could derive. `secrets list`
+ends with that list, each epoch the deployment keeps, who opens it now,
+and who was removed since it began (from the audit log):
+
+```text
+master epoch 2 (current, id a9bcd8616e3b): opens with alice, carol
+master epoch 1 (earlier, id 3f2a9c1b0d4e): opens with alice, carol
+  could also be opened by bob (removed 2026-10-07T21:40:00Z): each secret on it is theirs until rotated off it
+```
+
+A KMS (AWS KMS, GCP KMS, Vault transit) is one more seal of the same
+shape in `state.master`, beside `passphrase` and `age`: not yet.
+
 The stack is the unit of custody: `[stacks.NAME.secrets]` takes the
 place of the project's `[secrets]` for the stack `NAME`'s deployments
 (the whole table, not merged), so prod's team holds prod's passphrase
@@ -2410,6 +2460,10 @@ The kinds:
 - `custody`: the apply that sealed a deployment's key file under the
   passphrase: `sealed` (`state.key`), `into` (`state.master`), the master
   `id`, and `who`;
+- `recipients`: the apply that sealed the master to other age
+  recipients (a new master's first, dform.toml's list changed): the ones
+  `added` and `removed` (each `key` and `name`), the `passphrase`
+  `added` or `removed`, the master `id`, and `who`;
 - `master`: an apply whose master is not the one state recorded (the
   first apply, `--new-master`): `from` and `to` (the ids), its `source`,
   whether it `made` the key, and `who` (see "Secrets");

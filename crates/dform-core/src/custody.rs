@@ -22,6 +22,7 @@
 
 use crate::zset::file::Key;
 use anyhow::{Context, Result, bail};
+use std::collections::BTreeMap;
 
 /// The master id of the `random.*` input key material `ikm`: an HMAC of
 /// it, hex. Public.
@@ -83,8 +84,7 @@ pub struct Master {
     /// Why the run has no key though the deployment has a master (a
     /// passphrase not given): `None` when it has it.
     pub without: Option<String>,
-    /// The key is a plain key file the passphrase is to seal
-    /// ([`seal_key_file`]).
+    /// The key is a plain key file the mixing is to seal ([`reseal`]).
     pub unsealed: bool,
     /// The epoch the master is (R-165): 1 until `dform secrets cycle`.
     pub epoch: u32,
@@ -97,6 +97,75 @@ pub struct Master {
     /// master, carried sealed across the epochs after it, so a new epoch
     /// changes no digest. The key itself before a cycle.
     pub digest: Option<Key>,
+    /// What the next apply changes of how the master is sealed, when
+    /// dform.toml says otherwise than `state.master` ([`reseal`]).
+    pub reseal: Option<Reseal>,
+}
+
+/// How `state.master`'s seals differ from what the mixing says: a key
+/// file to seal, recipients to add or to remove (their keys), the
+/// passphrase to add (`Some(true)`) or to drop (`Some(false)`).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Reseal {
+    pub key_file: bool,
+    pub added: Vec<Recipient>,
+    pub removed: Vec<Recipient>,
+    pub passphrase: Option<bool>,
+}
+
+impl Reseal {
+    fn of(r: Option<&Record>, mixing: &Mixing, key_file: bool) -> Option<Reseal> {
+        let had: Vec<Recipient> = r
+            .and_then(|r| r.age.as_ref())
+            .map(AgeSealed::named)
+            .unwrap_or_default();
+        let want = mixing.keys();
+        let out = Reseal {
+            key_file,
+            added: mixing
+                .recipients
+                .iter()
+                .filter(|x| !had.iter().any(|h| h.key == x.key))
+                .cloned()
+                .collect(),
+            removed: had.into_iter().filter(|h| !want.contains(&h.key)).collect(),
+            passphrase: match (
+                r.is_some_and(|r| r.passphrase.is_some()),
+                mixing.passphrase.is_some(),
+            ) {
+                (false, true) => Some(true),
+                (true, false) => Some(false),
+                _ => None,
+            },
+        };
+        (out != Reseal::default()).then_some(out)
+    }
+
+    /// As the plan says it: `seals it to alice, ci; no longer to bob`.
+    pub fn describe(&self) -> String {
+        let names = |rs: &[Recipient]| {
+            rs.iter()
+                .map(Recipient::describe)
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        let mut out = Vec::new();
+        if self.key_file {
+            out.push("seals the key file".to_string());
+        }
+        if !self.added.is_empty() {
+            out.push(format!("seals it to {}", names(&self.added)));
+        }
+        if !self.removed.is_empty() {
+            out.push(format!("no longer to {}", names(&self.removed)));
+        }
+        match self.passphrase {
+            Some(true) => out.push("seals it under the passphrase (a run that has it)".into()),
+            Some(false) => out.push("no longer under the passphrase".into()),
+            None => {}
+        }
+        out.join("; ")
+    }
 }
 
 /// An earlier epoch's master (R-165).
@@ -208,17 +277,57 @@ impl Master {
     }
 }
 
-/// How a deployment's master is kept: dform.toml's `[secrets]`.
+/// How a deployment's master is kept: dform.toml's `[secrets]` (the
+/// stack's `[stacks.NAME.secrets]`, else the project's). With neither a
+/// passphrase nor a recipient the master is the key file `state.key`
+/// beside the state, on the machine's disk: a local backend's only.
+/// Otherwise the backend holds it in `state.master` sealed, never in the
+/// clear: under a key scrypt mixes from the passphrase and a salt, and to
+/// each age recipient (a team's keys), each of which opens it.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub enum Mixing {
-    /// No `[secrets]`: the master is the key file `state.key` beside the
-    /// state, on the machine's disk: a local backend's only.
-    #[default]
-    KeyFile,
-    /// `[secrets] passphrase`: the backend holds the master sealed under a
-    /// key scrypt mixes from the passphrase and a salt (`state.master`),
-    /// never in the clear.
-    Passphrase(Passphrase),
+pub struct Mixing {
+    /// `[secrets] passphrase`.
+    pub passphrase: Option<Passphrase>,
+    /// `[secrets] recipients`.
+    pub recipients: Vec<Recipient>,
+}
+
+/// An age recipient the master is sealed to: an X25519 public key
+/// (`age1..`), and the name dform.toml gives it (`recipients = { alice =
+/// "age1.." }`), if any.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Recipient {
+    pub name: Option<String>,
+    pub key: String,
+}
+
+impl Recipient {
+    /// `key` (`age1..`), named `name`.
+    pub fn parse(name: Option<&str>, key: &str) -> Result<Recipient> {
+        key.parse::<age::x25519::Recipient>()
+            .map_err(|e| anyhow::anyhow!("{key:?} is not an age recipient (age1..): {e}"))?;
+        Ok(Recipient {
+            name: name.map(String::from),
+            key: key.to_string(),
+        })
+    }
+
+    /// As messages name it: its name, else its key shortened.
+    pub fn describe(&self) -> String {
+        match &self.name {
+            Some(n) => n.clone(),
+            None => short_key(&self.key),
+        }
+    }
+}
+
+/// An age public key as messages print it: `age1` and its first and last
+/// six characters.
+pub fn short_key(key: &str) -> String {
+    match key.len() > 20 {
+        true => format!("{}..{}", &key[..10], &key[key.len() - 6..]),
+        false => key.to_string(),
+    }
 }
 
 /// Where the passphrase comes from: `env:NAME` (a variable, which fnox,
@@ -271,17 +380,337 @@ impl Mixing {
     /// The mixing a project's dform.toml names for the stack `stack`: its
     /// `[stacks.NAME.secrets]`, else the project's `[secrets]`.
     pub fn of(manifest: Option<&crate::project::Manifest>, stack: &str) -> Result<Mixing> {
-        let table = manifest.map(|m| {
+        let Some(table) = manifest.map(|m| {
             m.stacks
                 .get(stack)
                 .and_then(|t| t.secrets.as_ref())
                 .unwrap_or(&m.secrets)
-        });
-        match table.and_then(|t| t.passphrase.as_deref()) {
-            Some(p) => Ok(Mixing::Passphrase(Passphrase::parse(p)?)),
-            None => Ok(Mixing::KeyFile),
+        }) else {
+            return Ok(Mixing::default());
+        };
+        Ok(Mixing {
+            passphrase: table
+                .passphrase
+                .as_deref()
+                .map(Passphrase::parse)
+                .transpose()?,
+            recipients: table.recipients()?,
+        })
+    }
+
+    /// The master is the key file: no `[secrets]`.
+    pub fn key_file(&self) -> bool {
+        self.passphrase.is_none() && self.recipients.is_empty()
+    }
+
+    /// The recipients' keys, sorted: what a seal to them records.
+    fn keys(&self) -> Vec<String> {
+        let mut k: Vec<String> = self.recipients.iter().map(|r| r.key.clone()).collect();
+        k.sort();
+        k.dedup();
+        k
+    }
+
+    /// The recipient `key` as dform.toml names it, else shortened.
+    pub fn name_of(&self, key: &str) -> String {
+        self.recipients
+            .iter()
+            .find(|r| r.key == key)
+            .map_or_else(|| short_key(key), Recipient::describe)
+    }
+
+    /// As messages say who opens the master: `the passphrase from
+    /// env:NAME`, `age alice, ci`, or both.
+    pub fn describe(&self) -> String {
+        let mut out = Vec::new();
+        if let Some(p) = &self.passphrase {
+            out.push(format!("the passphrase from {}", p.describe()));
+        }
+        if !self.recipients.is_empty() {
+            out.push(format!(
+                "age {}",
+                self.recipients
+                    .iter()
+                    .map(Recipient::describe)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
+        out.join(" or ")
+    }
+}
+
+/// The age identities this run holds, and where each came from: the
+/// variable `AGE_IDENTITY` (an identity, `AGE-SECRET-KEY-1..`, or the path
+/// of a file of them), then each file of the operator's credentials
+/// `age/NAME` (`$XDG_CONFIG_HOME/dform/credentials/age/NAME`, R-171), one
+/// identity a line, `#` a comment.
+pub fn identities() -> Result<Vec<(age::x25519::Identity, String)>> {
+    fn parse(text: &str, from: &str, out: &mut Vec<(age::x25519::Identity, String)>) -> Result<()> {
+        for (i, line) in text.lines().enumerate() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            let id = line.parse::<age::x25519::Identity>().map_err(|e| {
+                anyhow::anyhow!(
+                    "{from}:{}: not an age identity (AGE-SECRET-KEY-1..): {e}",
+                    i + 1
+                )
+            })?;
+            out.push((id, from.to_string()));
+        }
+        Ok(())
+    }
+    let mut out = Vec::new();
+    if let Some(v) = std::env::var("AGE_IDENTITY").ok().filter(|v| !v.is_empty()) {
+        match v.trim_start().starts_with("AGE-SECRET-KEY-") {
+            true => parse(&v, "AGE_IDENTITY", &mut out)?,
+            false => {
+                let text = std::fs::read_to_string(&v)
+                    .with_context(|| format!("read AGE_IDENTITY's file {v}"))?;
+                parse(&text, &v, &mut out)?
+            }
         }
     }
+    if let Some(dir) = crate::plugin::credentials::dir().map(|d| d.join("age"))
+        && let Ok(files) = std::fs::read_dir(&dir)
+    {
+        let mut files: Vec<_> = files.filter_map(|f| Some(f.ok()?.path())).collect();
+        files.sort();
+        for f in files.into_iter().filter(|f| f.is_file()) {
+            let text = std::fs::read_to_string(&f)
+                .with_context(|| format!("read the age identity {}", f.display()))?;
+            parse(
+                &text,
+                &format!(
+                    "age:{}",
+                    f.file_name().unwrap_or_default().to_string_lossy()
+                ),
+                &mut out,
+            )?;
+        }
+    }
+    Ok(out)
+}
+
+/// What opens a sealed master in this run: the passphrase (read when
+/// first needed: `prompt` asks only when no identity opened it) and the
+/// age identities.
+struct Opener<'a> {
+    deployment: &'a str,
+    mixing: &'a Mixing,
+    pass: std::cell::OnceCell<std::result::Result<Vec<u8>, String>>,
+    identities: Vec<(age::x25519::Identity, String)>,
+}
+
+impl<'a> Opener<'a> {
+    fn new(deployment: &'a str, mixing: &'a Mixing) -> Result<Opener<'a>> {
+        Ok(Opener {
+            deployment,
+            mixing,
+            pass: std::cell::OnceCell::new(),
+            identities: identities()?,
+        })
+    }
+
+    /// The passphrase, or why there is none; `None` when the mixing names
+    /// none.
+    fn pass(&self) -> Result<Option<&std::result::Result<Vec<u8>, String>>> {
+        let Some(from) = &self.mixing.passphrase else {
+            return Ok(None);
+        };
+        if self.pass.get().is_none() {
+            let _ = self.pass.set(from.read(self.deployment)?);
+        }
+        Ok(self.pass.get())
+    }
+
+    /// The master `passphrase` and `age` seal for `id` (`what` it is, as
+    /// messages say it), opened: by an identity, else the passphrase;
+    /// `None` when this run has neither. A passphrase that does not open
+    /// it is refused.
+    fn open(
+        &self,
+        passphrase: Option<&Sealed>,
+        sealed: Option<&AgeSealed>,
+        id: &str,
+        what: &str,
+    ) -> Result<Option<Key>> {
+        let checked = |k: Key| -> Result<Option<Key>> {
+            match key_id(&k) == id {
+                true => Ok(Some(k)),
+                false => bail!(
+                    "{}: {what} opens to a master whose id is not its own: it was altered",
+                    self.deployment
+                ),
+            }
+        };
+        if let Some(a) = sealed
+            && let Some(k) = open_age(a, &self.identities)?
+        {
+            return checked(k);
+        }
+        if let (Some(s), Some(Ok(p))) = (passphrase, self.pass()?) {
+            return match open(s, id, p)? {
+                Some(k) => checked(k),
+                None => bail!(
+                    "{}: the passphrase from {} does not open {what} (id {}): not the passphrase \
+                     it was sealed with",
+                    self.deployment,
+                    self.mixing
+                        .passphrase
+                        .as_ref()
+                        .map_or_else(String::new, Passphrase::describe),
+                    short(id)
+                ),
+            };
+        }
+        Ok(None)
+    }
+
+    /// Why this run cannot open the record `r`.
+    fn why(&self, r: Option<&Record>) -> Result<String> {
+        let mut why = Vec::new();
+        if let Some(Err(w)) = self.pass()? {
+            why.push(w.clone());
+        }
+        if r.is_some_and(|r| r.passphrase.is_none()) && self.mixing.passphrase.is_some() {
+            why.push("it is not sealed under the passphrase yet".into());
+        }
+        if !self.mixing.recipients.is_empty() || r.is_some_and(|r| r.age.is_some()) {
+            why.push(match self.identities.is_empty() {
+                true => "no age identity (AGE_IDENTITY, or a credential age:NAME)".into(),
+                false => format!(
+                    "no age identity it is sealed to ({} tried)",
+                    self.identities
+                        .iter()
+                        .map(|(_, f)| f.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            });
+        }
+        Ok(why.join("; "))
+    }
+
+    /// Whether this run has a means to open a master.
+    fn able(&self) -> Result<bool> {
+        Ok(!self.identities.is_empty() || matches!(self.pass()?, Some(Ok(_))))
+    }
+}
+
+/// A master sealed to age recipients: their keys, sorted, and the age
+/// file (base64) whose payload is the master.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct AgeSealed {
+    pub recipients: Vec<String>,
+    /// The name dform.toml gives each recipient, by key: what a message
+    /// names one removed since by.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub names: std::collections::BTreeMap<String, String>,
+    pub sealed: String,
+}
+
+impl AgeSealed {
+    /// The recipients, each with its name.
+    fn named(&self) -> Vec<Recipient> {
+        self.recipients
+            .iter()
+            .map(|k| Recipient {
+                name: self.names.get(k).cloned(),
+                key: k.clone(),
+            })
+            .collect()
+    }
+}
+
+/// `key` sealed to `recipients` (their `age1..` keys, sorted).
+fn seal_age(
+    key: &Key,
+    recipients: &[String],
+    names: BTreeMap<String, String>,
+) -> Result<AgeSealed> {
+    use base64::Engine;
+    use std::io::Write;
+    let parsed: Vec<age::x25519::Recipient> = recipients
+        .iter()
+        .map(|r| {
+            r.parse()
+                .map_err(|e| anyhow::anyhow!("{r:?} is not an age recipient: {e}"))
+        })
+        .collect::<Result<_>>()?;
+    let enc = age::Encryptor::with_recipients(parsed.iter().map(|r| r as &dyn age::Recipient))
+        .map_err(|e| anyhow::anyhow!("seal the master to its recipients: {e}"))?;
+    let mut out = Vec::new();
+    let mut w = enc.wrap_output(&mut out)?;
+    w.write_all(&key.bytes())?;
+    w.finish()?;
+    Ok(AgeSealed {
+        recipients: recipients.to_vec(),
+        names,
+        sealed: base64::engine::general_purpose::STANDARD.encode(out),
+    })
+}
+
+/// The master `s` seals, opened with one of `identities`; `None` when it
+/// is sealed to none of them.
+fn open_age(s: &AgeSealed, identities: &[(age::x25519::Identity, String)]) -> Result<Option<Key>> {
+    use base64::Engine;
+    use std::io::Read;
+    if identities.is_empty() {
+        return Ok(None);
+    }
+    let b = base64::engine::general_purpose::STANDARD
+        .decode(&s.sealed)
+        .map_err(|e| anyhow::anyhow!("the master sealed to age recipients is not base64: {e}"))?;
+    let d = age::Decryptor::new(&b[..])
+        .map_err(|e| anyhow::anyhow!("the master sealed to age recipients: {e}"))?;
+    let mut r = match d.decrypt(identities.iter().map(|(i, _)| i as &dyn age::Identity)) {
+        Ok(r) => r,
+        Err(age::DecryptError::NoMatchingKeys) => return Ok(None),
+        Err(e) => bail!("the master sealed to age recipients: {e}"),
+    };
+    let mut plain = Vec::new();
+    r.read_to_end(&mut plain)?;
+    let bytes: [u8; 32] = plain
+        .as_slice()
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("the master sealed to age recipients is not 32 bytes"))?;
+    Ok(Some(Key::from_bytes(bytes)))
+}
+
+/// The seals of a master `key` (id `id`) as `mixing` says, `kept` the
+/// ones it has (the same master's): one kept where it is still what the
+/// mixing says, a new one otherwise; the passphrase's only when this run
+/// has it (else the next run that has it adds it).
+fn seals(
+    key: &Key,
+    id: &str,
+    opener: &Opener,
+    kept: (Option<&Sealed>, Option<&AgeSealed>),
+) -> Result<(Option<Sealed>, Option<AgeSealed>)> {
+    let passphrase = match (&opener.mixing.passphrase, kept.0) {
+        (None, _) => None,
+        (Some(_), Some(s)) => Some(s.clone()),
+        (Some(_), None) => match opener.pass()? {
+            Some(Ok(p)) => Some(seal(key, id, p)?),
+            _ => None,
+        },
+    };
+    let keys = opener.mixing.keys();
+    let names: BTreeMap<String, String> = opener
+        .mixing
+        .recipients
+        .iter()
+        .filter_map(|r| Some((r.key.clone(), r.name.clone()?)))
+        .collect();
+    let sealed = match kept.1 {
+        _ if keys.is_empty() => None,
+        Some(a) if a.recipients == keys => Some(AgeSealed { names, ..a.clone() }),
+        _ => Some(seal_age(key, &keys, names)?),
+    };
+    Ok((passphrase, sealed))
 }
 
 /// The passphrase asked on the terminal, once a process: with no terminal,
@@ -365,11 +794,14 @@ pub struct Record {
     /// The master sealed under a key scrypt mixes from the passphrase.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub passphrase: Option<Sealed>,
+    /// The master sealed to the age recipients.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub age: Option<AgeSealed>,
     /// Which epoch this master is (R-165): 1 until `dform secrets cycle`.
     #[serde(default = "first_epoch", skip_serializing_if = "is_first_epoch")]
     pub epoch: u32,
     /// The earlier epochs' masters a secret still derives from, each
-    /// sealed under the passphrase; one no secret derives from is retired
+    /// sealed as the current one is; one no secret derives from is retired
     /// (deleted) by the apply that moves its last.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub earlier: Vec<EarlierRecord>,
@@ -384,7 +816,17 @@ pub struct Record {
 pub struct EarlierRecord {
     pub epoch: u32,
     pub id: String,
-    pub passphrase: Sealed,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub passphrase: Option<Sealed>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub age: Option<AgeSealed>,
+}
+
+impl Record {
+    /// The backend holds the master sealed, not as a key file.
+    pub fn sealed(&self) -> bool {
+        self.passphrase.is_some() || self.age.is_some()
+    }
 }
 
 fn first_epoch() -> u32 {
@@ -535,10 +977,12 @@ fn record_bytes(r: &Record) -> Vec<u8> {
 
 /// The master of the deployment whose objects are `store`'s, kept as
 /// `mixing` says: `applied` says whether it was ever applied with one. A
-/// master is read (a sealed one opened with the passphrase); one is made
-/// only for a deployment never applied (`want.make`), or when
-/// `--new-master` asks for it. A run that has no passphrase has no key:
-/// `Master::without` says why.
+/// master is read (a sealed one opened with an age identity or the
+/// passphrase); one is made only for a deployment never applied
+/// (`want.make`), or when `--new-master` asks for it. A run that can open
+/// none has no key: `Master::without` says why. One whose seals are not
+/// what the mixing says (a recipient added or removed, a key file to
+/// seal) says so in `Master::reseal`, which the next apply writes.
 pub fn resolve(
     store: &dyn crate::store::Store,
     deployment: &str,
@@ -559,9 +1003,9 @@ pub fn resolve(
              value and every secret digest derives from it. Restore it from a backup of the state \
              (state and key go together), or run with --new-master to make a new one and change \
              every derived secret on purpose",
-            match mixing {
-                Mixing::KeyFile => store.locate(KEY),
-                Mixing::Passphrase(_) => store.locate(MASTER),
+            match mixing.key_file() {
+                true => store.locate(KEY),
+                false => store.locate(MASTER),
             }
         )
     };
@@ -570,164 +1014,151 @@ pub fn resolve(
         accept: want.new_master,
         ..Master::default()
     };
-    let key = match mixing {
-        Mixing::KeyFile => {
-            if let Some((r, _)) = record.as_ref().filter(|(r, _)| r.passphrase.is_some()) {
-                bail!(
-                    "{deployment}: {} holds its master sealed with a passphrase (id {}), and \
-                     dform.toml names none: add `[secrets] passphrase = \"env:NAME\"` (or \
-                     \"prompt\")",
-                    store.locate(MASTER),
-                    short(&r.id)
-                );
-            }
-            out.source = format!("the key file {}", store.locate(KEY));
-            match plain {
-                Some(k) => {
-                    if !store.local() {
-                        static SAID: std::sync::Once = std::sync::Once::new();
-                        SAID.call_once(|| {
-                            eprintln!(
-                                "warning: {deployment}'s master is the key file {}, in the bucket \
-                                 beside the state: read access to the state is read access to \
-                                 every derived secret. Set `[secrets] passphrase` in dform.toml; \
-                                 the next apply seals it",
-                                store.locate(KEY)
-                            )
-                        });
-                    }
-                    Some(k)
-                }
-                None if applied()? && !want.new_master => return Err(missing()),
-                None if want.make || want.new_master => {
-                    if !store.local() {
-                        bail!(
-                            "{deployment}: a new master would be the key file {}, in the bucket \
-                             beside the state, where read access to the state is read access to \
-                             every derived secret: set `[secrets] passphrase = \"env:NAME\"` (or \
-                             \"prompt\") in dform.toml, and the bucket keeps it sealed",
+    let key = if mixing.key_file() {
+        if let Some((r, _)) = record.as_ref().filter(|(r, _)| r.sealed()) {
+            bail!(
+                "{deployment}: {} holds its master sealed (id {}), and dform.toml names neither \
+                 a passphrase nor recipients: add `[secrets] passphrase = \"env:NAME\"` (or \
+                 \"prompt\"), or `recipients = [\"age1..\"]`",
+                store.locate(MASTER),
+                short(&r.id)
+            );
+        }
+        out.source = format!("the key file {}", store.locate(KEY));
+        match plain {
+            Some(k) => {
+                if !store.local() {
+                    static SAID: std::sync::Once = std::sync::Once::new();
+                    SAID.call_once(|| {
+                        eprintln!(
+                            "warning: {deployment}'s master is the key file {}, in the bucket \
+                             beside the state: read access to the state is read access to \
+                             every derived secret. Set `[secrets] passphrase` (or `recipients`) \
+                             in dform.toml; the next apply seals it",
                             store.locate(KEY)
-                        );
+                        )
+                    });
+                }
+                Some(k)
+            }
+            None if applied()? && !want.new_master => return Err(missing()),
+            None if want.make || want.new_master => {
+                if !store.local() {
+                    bail!(
+                        "{deployment}: a new master would be the key file {}, in the bucket \
+                         beside the state, where read access to the state is read access to \
+                         every derived secret: set `[secrets] passphrase = \"env:NAME\"` (or \
+                         \"prompt\", or `recipients = [\"age1..\"]`) in dform.toml, and the \
+                         bucket keeps it sealed",
+                        store.locate(KEY)
+                    );
+                }
+                let key = fresh()?;
+                match store
+                    .put(KEY, &key.bytes(), &Cond::IfAbsent)
+                    .with_context(|| format!("write the key {}", store.locate(KEY)))?
+                {
+                    Some(_) => {
+                        out.made = true;
+                        Some(key)
                     }
-                    let key = fresh()?;
+                    // Made by another run meanwhile: that one is the key.
+                    None => {
+                        Some(Key::load(store)?.ok_or_else(|| {
+                            anyhow::anyhow!("the key {}: gone", store.locate(KEY))
+                        })?)
+                    }
+                }
+            }
+            None => None,
+        }
+    } else {
+        let opener = Opener::new(deployment, mixing)?;
+        out.source = format!("{} sealed for {}", store.locate(MASTER), mixing.describe());
+        match (&record, plain) {
+            (Some((r, _)), plain) if r.sealed() => {
+                out.id = Some(r.id.clone());
+                out.epoch = r.epoch;
+                // The earlier epochs (R-165): their ids, and their keys
+                // when the run opens them.
+                for e in &r.earlier {
+                    let what = format!("{}'s epoch {}", store.locate(MASTER), e.epoch);
+                    let key = opener.open(e.passphrase.as_ref(), e.age.as_ref(), &e.id, &what)?;
+                    out.earlier.push(Epoch {
+                        epoch: e.epoch,
+                        id: e.id.clone(),
+                        key,
+                    });
+                }
+                // A key file a sealing left behind goes with the next
+                // apply ([`reseal`]).
+                out.unsealed = plain.is_some();
+                let key = opener.open(
+                    r.passphrase.as_ref(),
+                    r.age.as_ref(),
+                    &r.id,
+                    &store.locate(MASTER),
+                )?;
+                if key.is_none() {
+                    out.without = Some(opener.why(Some(r))?);
+                }
+                out.reseal = Reseal::of(Some(r), mixing, out.unsealed);
+                key
+            }
+            // Sealed by the next apply that can.
+            (_, Some(k)) => {
+                out.source = format!("the key file {}", store.locate(KEY));
+                out.unsealed = true;
+                out.reseal = Reseal::of(None, mixing, true);
+                Some(k)
+            }
+            (_, None) if applied()? && !want.new_master => return Err(missing()),
+            (_, None) if want.make || want.new_master => {
+                // A new master, sealed as the mixing says: to the
+                // recipients needs only their public keys, under the
+                // passphrase needs it.
+                let key = fresh()?;
+                let id = key_id(&key);
+                let (passphrase, age) = seals(&key, &id, &opener, (None, None))?;
+                if passphrase.is_none() && age.is_none() {
+                    out.without = Some(opener.why(None)?);
+                    None
+                } else {
+                    let r = Record {
+                        version: 1,
+                        passphrase,
+                        age,
+                        public: hex(&seal_pair(&key).1),
+                        id,
+                        epoch: 1,
+                        earlier: Vec::new(),
+                        digest: String::new(),
+                    };
+                    let cond = match &record {
+                        Some((_, etag)) => Cond::IfMatch(etag.clone()),
+                        None => Cond::IfAbsent,
+                    };
                     match store
-                        .put(KEY, &key.bytes(), &Cond::IfAbsent)
-                        .with_context(|| format!("write the key {}", store.locate(KEY)))?
+                        .put(MASTER, &record_bytes(&r), &cond)
+                        .with_context(|| format!("write {}", store.locate(MASTER)))?
                     {
                         Some(_) => {
                             out.made = true;
+                            out.reseal = Reseal::of(Some(&r), mixing, false);
                             Some(key)
                         }
-                        // Made by another run meanwhile: that one is the key.
-                        None => Some(Key::load(store)?.ok_or_else(|| {
-                            anyhow::anyhow!("the key {}: gone", store.locate(KEY))
-                        })?),
+                        None => bail!(
+                            "{deployment}: {} was written by another run meanwhile: run again",
+                            store.locate(MASTER)
+                        ),
                     }
                 }
-                None => None,
             }
-        }
-        Mixing::Passphrase(from) => {
-            let pass = from.read(deployment)?;
-            out.source = format!("{} sealed with {}", store.locate(MASTER), from.describe());
-            match (&record, plain) {
-                (Some((r, _)), plain) if r.passphrase.is_some() => {
-                    out.id = Some(r.id.clone());
-                    out.epoch = r.epoch;
-                    // The earlier epochs (R-165): their ids, and their keys
-                    // with the passphrase.
-                    for e in &r.earlier {
-                        let key = match &pass {
-                            Ok(p) => match open(&e.passphrase, &e.id, p)? {
-                                Some(k) if key_id(&k) == e.id => Some(k),
-                                _ => bail!(
-                                    "{deployment}: {}'s epoch {} (id {}) does not open with the \
-                                     passphrase from {}",
-                                    store.locate(MASTER),
-                                    e.epoch,
-                                    short(&e.id),
-                                    from.describe()
-                                ),
-                            },
-                            Err(_) => None,
-                        };
-                        out.earlier.push(Epoch {
-                            epoch: e.epoch,
-                            id: e.id.clone(),
-                            key,
-                        });
-                    }
-                    // A key file a sealing left behind goes with the next
-                    // apply ([`seal_key_file`]).
-                    out.unsealed = plain.is_some();
-                    let sealed = r.passphrase.as_ref().expect("matched");
-                    match &pass {
-                        Ok(p) => match open(sealed, &r.id, p)? {
-                            Some(k) if key_id(&k) == r.id => Some(k),
-                            Some(_) => bail!(
-                                "{deployment}: {} opens to a master whose id is not its own: it \
-                                 was altered",
-                                store.locate(MASTER)
-                            ),
-                            None => bail!(
-                                "{deployment}: the passphrase from {} does not open {} (id {}): \
-                                 not the passphrase it was sealed with",
-                                from.describe(),
-                                store.locate(MASTER),
-                                short(&r.id)
-                            ),
-                        },
-                        Err(why) => {
-                            out.without = Some(why.clone());
-                            None
-                        }
-                    }
+            (_, None) => {
+                if !opener.able()? {
+                    out.without = Some(opener.why(None)?);
                 }
-                // Sealed by the next apply that has the passphrase.
-                (_, Some(k)) => {
-                    out.source = format!("the key file {}", store.locate(KEY));
-                    out.unsealed = true;
-                    Some(k)
-                }
-                (_, None) if applied()? && !want.new_master => return Err(missing()),
-                (_, None) => match &pass {
-                    Ok(p) if want.make || want.new_master => {
-                        let key = fresh()?;
-                        let id = key_id(&key);
-                        let r = Record {
-                            version: 1,
-                            passphrase: Some(seal(&key, &id, p)?),
-                            public: hex(&seal_pair(&key).1),
-                            id,
-                            epoch: 1,
-                            earlier: Vec::new(),
-                            digest: String::new(),
-                        };
-                        let cond = match &record {
-                            Some((_, etag)) => Cond::IfMatch(etag.clone()),
-                            None => Cond::IfAbsent,
-                        };
-                        match store
-                            .put(MASTER, &record_bytes(&r), &cond)
-                            .with_context(|| format!("write {}", store.locate(MASTER)))?
-                        {
-                            Some(_) => {
-                                out.made = true;
-                                Some(key)
-                            }
-                            None => bail!(
-                                "{deployment}: {} was written by another run meanwhile: run \
-                                 again",
-                                store.locate(MASTER)
-                            ),
-                        }
-                    }
-                    Ok(_) => None,
-                    Err(why) => {
-                        out.without = Some(why.clone());
-                        None
-                    }
-                },
+                None
             }
         }
     };
@@ -761,6 +1192,7 @@ pub fn resolve(
                         id: key_id(k),
                         public: public.clone(),
                         passphrase: None,
+                        age: None,
                         epoch: 1,
                         earlier: Vec::new(),
                         digest: String::new(),
@@ -797,8 +1229,8 @@ pub fn resolve(
     })
 }
 
-/// `dform secrets cycle` (R-165): a new master, epoch N+1, sealed under the
-/// passphrase beside epoch N, which stays (sealed) while a secret derives
+/// `dform secrets cycle` (R-165): a new master, epoch N+1, sealed as the
+/// mixing says beside epoch N, which stays (sealed) while a secret derives
 /// from it; the digest key carried over. Its epoch and id.
 pub fn cycle(
     store: &dyn crate::store::Store,
@@ -807,14 +1239,14 @@ pub fn cycle(
     mixing: &Mixing,
 ) -> Result<(u32, String)> {
     use crate::store::{Cond, MASTER};
-    let Mixing::Passphrase(from) = mixing else {
+    if mixing.key_file() {
         bail!(
             "{deployment}: its master is the key file {}: an epoch is kept sealed beside the \
-             next, so cycling needs `[secrets] passphrase` in dform.toml (the next apply seals the \
-             key file)",
+             next, so cycling needs `[secrets] passphrase` or `recipients` in dform.toml (the \
+             next apply seals the key file)",
             store.locate(crate::store::KEY)
         );
-    };
+    }
     let (Some(_), Some(digest)) = (&master.key, &master.digest) else {
         bail!(
             "{deployment}: cycling seals a new master and needs the current one ({})",
@@ -824,27 +1256,30 @@ pub fn cycle(
     let Some((r, etag)) = load_record(store)? else {
         bail!("{deployment}: {} is missing", store.locate(MASTER));
     };
-    let Some(sealed) = r.passphrase.clone().filter(|_| !master.unsealed) else {
+    if !r.sealed() || master.unsealed {
         bail!(
-            "{deployment}: its master is not sealed yet: apply once with the passphrase, then \
-             cycle"
+            "{deployment}: its master is not sealed yet: apply once with the passphrase (or an \
+             age identity), then cycle"
         );
-    };
-    let pass = match from.read(deployment)? {
-        Ok(p) => p,
-        Err(why) => bail!("{deployment}: cycling needs the passphrase: {why}"),
-    };
+    }
+    let opener = Opener::new(deployment, mixing)?;
+    if let Some(Err(why)) = opener.pass()? {
+        bail!("{deployment}: cycling needs the passphrase: {why}");
+    }
     let new = Key::from_bytes(random_bytes::<32>("the master")?);
     let id = key_id(&new);
+    let (passphrase, age) = seals(&new, &id, &opener, (None, None))?;
     let mut earlier = r.earlier.clone();
     earlier.push(EarlierRecord {
         epoch: r.epoch,
         id: r.id.clone(),
-        passphrase: sealed,
+        passphrase: r.passphrase.clone(),
+        age: r.age.clone(),
     });
     let next = Record {
         version: 1,
-        passphrase: Some(seal(&new, &id, &pass)?),
+        passphrase,
+        age,
         public: hex(&seal_pair(&new).1),
         epoch: r.epoch + 1,
         earlier,
@@ -892,53 +1327,215 @@ pub fn retire(
     Ok(gone.into_iter().map(|e| (e.epoch, e.id)).collect())
 }
 
-/// Seal a master the backend keeps as a plain key file under the
-/// passphrase (`mixing`), and remove the file: what the first apply that
-/// has the passphrase does (R-164). Whether it did.
-pub fn seal_key_file(
+/// Seal the master as `mixing` says, what the apply after a change of
+/// dform.toml's `[secrets]` does: a plain key file sealed (the same
+/// master, so nothing derived changes) and removed (R-164), the master
+/// and each earlier epoch sealed again to the recipients now named (After
+/// R-164). A recipient removed is sealed to no longer, which revokes
+/// nobody who opened it before: `secrets cycle` makes a master they never
+/// held. What it did, when it did anything; nothing when this run does
+/// not hold every epoch's master.
+pub fn reseal(
     store: &dyn crate::store::Store,
+    deployment: &str,
     master: &Master,
     mixing: &Mixing,
-) -> Result<bool> {
+) -> Result<Option<Reseal>> {
     use crate::store::{Cond, KEY, MASTER};
-    let (Mixing::Passphrase(from), true, Some(key)) = (mixing, master.unsealed, &master.key) else {
-        return Ok(false);
+    let (true, Some(key), false) = (master.reseal.is_some(), &master.key, mixing.key_file()) else {
+        return Ok(None);
     };
-    let Ok(pass) = from.read("")? else {
-        return Ok(false);
-    };
+    if master.earlier.iter().any(|e| e.key.is_none()) {
+        return Ok(None);
+    }
+    let opener = Opener::new(deployment, mixing)?;
     let id = key_id(key);
     let record = load_record(store)?;
-    let sealed = record
-        .as_ref()
-        .is_some_and(|(r, _)| r.passphrase.is_some() && r.id == id);
-    if !sealed {
-        let r = Record {
-            version: 1,
-            passphrase: Some(seal(key, &id, &pass)?),
-            public: hex(&seal_pair(key).1),
-            id,
-            epoch: 1,
-            earlier: Vec::new(),
-            digest: String::new(),
-        };
-        let cond = match record {
-            Some((_, etag)) => Cond::IfMatch(etag),
-            None => Cond::IfAbsent,
-        };
-        if store
-            .put(MASTER, &record_bytes(&r), &cond)
-            .with_context(|| format!("write {}", store.locate(MASTER)))?
-            .is_none()
-        {
-            bail!(
-                "{} was written by another run while the key file was being sealed: run again",
-                store.locate(MASTER)
-            );
-        }
+    let current = record.as_ref().filter(|(r, _)| r.sealed() && r.id == id);
+    let (passphrase, age) = seals(
+        key,
+        &id,
+        &opener,
+        current.map_or((None, None), |(r, _)| {
+            (r.passphrase.as_ref(), r.age.as_ref())
+        }),
+    )?;
+    if passphrase.is_none() && age.is_none() {
+        return Ok(None);
     }
-    store.delete(KEY)?;
-    Ok(true)
+    let mut earlier = Vec::new();
+    for e in master.earlier.iter() {
+        let was = current.and_then(|(r, _)| r.earlier.iter().find(|x| x.epoch == e.epoch));
+        let k = e.key.as_ref().expect("checked above");
+        let (p, a) = seals(
+            k,
+            &e.id,
+            &opener,
+            was.map_or((None, None), |w| (w.passphrase.as_ref(), w.age.as_ref())),
+        )?;
+        earlier.push(EarlierRecord {
+            epoch: e.epoch,
+            id: e.id.clone(),
+            passphrase: p,
+            age: a,
+        });
+    }
+    let r = Record {
+        version: 1,
+        passphrase,
+        age,
+        public: hex(&seal_pair(key).1),
+        id: id.clone(),
+        epoch: current.map_or(1, |(r, _)| r.epoch),
+        earlier,
+        digest: current.map(|(r, _)| r.digest.clone()).unwrap_or_default(),
+    };
+    let done = Reseal::of(current.map(|(r, _)| r), mixing, master.unsealed).map(|d| Reseal {
+        // What could not be done yet (the passphrase without it) stays.
+        passphrase: match (d.passphrase, &r.passphrase) {
+            (Some(true), None) => None,
+            (p, _) => p,
+        },
+        ..d
+    });
+    if current.is_some_and(|(c, _)| *c == r) && !master.unsealed {
+        return Ok(None);
+    }
+    let cond = match record {
+        Some((_, etag)) => Cond::IfMatch(etag),
+        None => Cond::IfAbsent,
+    };
+    if store
+        .put(MASTER, &record_bytes(&r), &cond)
+        .with_context(|| format!("write {}", store.locate(MASTER)))?
+        .is_none()
+    {
+        bail!(
+            "{} was written by another run while the master was being sealed: run again",
+            store.locate(MASTER)
+        );
+    }
+    if master.unsealed {
+        store.delete(KEY)?;
+    }
+    Ok(Some(done.unwrap_or_default()))
+}
+
+/// Who opens one epoch of a deployment's master, and who could: what
+/// `secrets list` prints, the offboarding list (R-165, After R-164).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Holders {
+    pub epoch: u32,
+    pub id: String,
+    pub current: bool,
+    /// What opens it now: `the passphrase (env:NAME)`, each recipient.
+    pub opens: Vec<String>,
+    /// Each recipient removed since the epoch began, with when: it could
+    /// open it, and may have kept it.
+    pub could: Vec<(String, String)>,
+}
+
+/// The holders of each epoch `state.master` keeps, current first; `log`
+/// the deployment's audit log (`recipients` entries say who was removed
+/// when, `cycled` ones when each epoch began). Empty for a key file.
+pub fn holders(
+    store: &dyn crate::store::Store,
+    mixing: &Mixing,
+    log: &[serde_json::Value],
+) -> Result<Vec<Holders>> {
+    let Some((r, _)) = load_record(store)? else {
+        return Ok(Vec::new());
+    };
+    if !r.sealed() {
+        return Ok(Vec::new());
+    }
+    // A key's name: dform.toml's, the record's, else the one the log gave
+    // it when added.
+    let known: BTreeMap<&String, &String> = std::iter::once(&r.age)
+        .chain(r.earlier.iter().map(|e| &e.age))
+        .flatten()
+        .flat_map(|a| a.names.iter())
+        .collect();
+    let name = |key: &str| -> String {
+        if mixing.recipients.iter().any(|x| x.key == key) {
+            return mixing.name_of(key);
+        }
+        if let Some(n) = known.get(&key.to_string()) {
+            return n.to_string();
+        }
+        log.iter()
+            .filter(|e| e["kind"] == "recipients")
+            .flat_map(|e| e["added"].as_array().cloned().unwrap_or_default())
+            .find(|a| a["key"] == key)
+            .and_then(|a| a["name"].as_str().map(String::from))
+            .unwrap_or_else(|| short_key(key))
+    };
+    let opens = |p: Option<&Sealed>, a: Option<&AgeSealed>| -> Vec<String> {
+        let mut out = Vec::new();
+        if p.is_some() {
+            out.push(match &mixing.passphrase {
+                Some(from) => format!("the passphrase ({})", from.describe()),
+                None => "the passphrase".into(),
+            });
+        }
+        out.extend(
+            a.into_iter()
+                .flat_map(|a| a.recipients.iter().map(|k| name(k))),
+        );
+        out
+    };
+    let began = |epoch: u32| -> Option<String> {
+        log.iter()
+            .find(|e| e["kind"] == "cycled" && e["epoch"] == epoch)
+            .and_then(|e| e["time"].as_str().map(String::from))
+    };
+    let removed: Vec<(String, String)> = log
+        .iter()
+        .filter(|e| e["kind"] == "recipients")
+        .flat_map(|e| {
+            let at = e["time"].as_str().unwrap_or_default().to_string();
+            e["removed"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(move |x| Some((x["key"].as_str()?.to_string(), at.clone())))
+        })
+        .collect();
+    let could = |epoch: u32, now: &[String]| -> Vec<(String, String)> {
+        let from = began(epoch);
+        let mut out: Vec<(String, String)> = Vec::new();
+        for (k, at) in &removed {
+            let n = name(k);
+            if now.contains(&n) || out.iter().any(|(x, _)| *x == n) {
+                continue;
+            }
+            if from.as_deref().is_none_or(|f| at.as_str() >= f) {
+                out.push((n, at.clone()));
+            }
+        }
+        out
+    };
+    let mut out = Vec::new();
+    let now = opens(r.passphrase.as_ref(), r.age.as_ref());
+    out.push(Holders {
+        epoch: r.epoch,
+        id: r.id.clone(),
+        current: true,
+        could: could(r.epoch, &now),
+        opens: now,
+    });
+    for e in r.earlier.iter().rev() {
+        let now = opens(e.passphrase.as_ref(), e.age.as_ref());
+        out.push(Holders {
+            epoch: e.epoch,
+            id: e.id.clone(),
+            current: false,
+            could: could(e.epoch, &now),
+            opens: now,
+        });
+    }
+    Ok(out)
 }
 
 /// The X25519 key pair a master derives to be sealed to (R-166): its

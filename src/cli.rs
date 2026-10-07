@@ -2298,6 +2298,29 @@ fn run_with(
             crate::custody::short(id)
         );
     }
+    // dform.toml's `[secrets]` says otherwise than `state.master`: the next
+    // apply that holds the master seals it again (After R-164).
+    if let (Some(r), Some(_), Cmd::Plan { .. } | Cmd::Apply { .. }) =
+        (&master.reseal, &master.key, &cli.cmd)
+        && (!r.added.is_empty() || !r.removed.is_empty() || r.passphrase.is_some())
+    {
+        let when = match cli.cmd {
+            Cmd::Apply { .. } => "this apply",
+            _ => "the next apply",
+        };
+        eprintln!(
+            "{deployment}: {when} {} (dform.toml's [secrets]){}",
+            r.describe(),
+            match r.removed.is_empty() {
+                true => "",
+                false => {
+                    "; sealing to a recipient no longer revokes what it opened before: \
+                     `dform secrets cycle` makes a master it never held, and each secret moves \
+                     to it as it is rotated"
+                }
+            }
+        );
+    }
     // A run that does not hold the master (R-164) plans in full, each
     // change that needs it marked, and an apply makes what needs it not.
     if let Some(why) = &master.without {
@@ -2663,7 +2686,13 @@ fn run_with(
                 let dep = &ev.located.dep;
                 match &cli.cmd {
                     Cmd::SecretsList { json } => {
-                        secrets_list(&deployment, &list, master.epoch, *json, &cli.table)?
+                        secrets_list(&deployment, &list, master.epoch, *json, &cli.table)?;
+                        if !*json {
+                            let log = entries().cloned().unwrap_or_default();
+                            for h in crate::custody::holders(dep.store().as_ref(), &mixing, &log)? {
+                                print_holders(&h);
+                            }
+                        }
                     }
                     Cmd::SecretsRotate { key } => {
                         secrets_rotate(dep, &list, &ev.st.memo, key, &audit)?
@@ -3847,17 +3876,54 @@ fn run_with(
                         )?;
                         st.master = Some(id.clone());
                     }
-                    // A plain key file the passphrase now seals (R-164).
-                    if crate::custody::seal_key_file(dep.store().as_ref(), &master, &mixing)? {
+                    // A new master sealed to recipients: who could open it
+                    // from the start (the offboarding list's first entry).
+                    if master.made && !mixing.recipients.is_empty() {
                         audit.append(
-                            "custody",
+                            "recipients",
                             serde_json::json!({
-                                "sealed": store::KEY,
-                                "into": store::MASTER,
+                                "added": recipients_json(&mixing.recipients),
+                                "removed": [],
                                 "id": master.id,
                                 "who": crate::audit::who(),
                             }),
                         )?;
+                    }
+                    // A plain key file now sealed (R-164); the master sealed
+                    // again to the recipients dform.toml names now.
+                    if let Some(done) =
+                        crate::custody::reseal(dep.store().as_ref(), &deployment, &master, &mixing)?
+                    {
+                        if done.key_file {
+                            audit.append(
+                                "custody",
+                                serde_json::json!({
+                                    "sealed": store::KEY,
+                                    "into": store::MASTER,
+                                    "id": master.id,
+                                    "who": crate::audit::who(),
+                                }),
+                            )?;
+                        }
+                        if !done.added.is_empty()
+                            || !done.removed.is_empty()
+                            || done.passphrase.is_some()
+                        {
+                            audit.append(
+                                "recipients",
+                                serde_json::json!({
+                                    "added": recipients_json(&done.added),
+                                    "removed": recipients_json(&done.removed),
+                                    "passphrase": done.passphrase.map(|p| match p {
+                                        true => "added",
+                                        false => "removed",
+                                    }),
+                                    "id": master.id,
+                                    "epoch": master.epoch,
+                                    "who": crate::audit::who(),
+                                }),
+                            )?;
+                        }
                     }
                 }
                 // A run that does not hold the master (R-164) makes no
@@ -5308,6 +5374,42 @@ fn secrets_list(
         );
     }
     Ok(())
+}
+
+/// Who opens an epoch of the master, and who could: `secrets list`'s
+/// lines after the table, the offboarding list.
+fn print_holders(h: &crate::custody::Holders) {
+    let which = match h.current {
+        true => "current",
+        false => "earlier",
+    };
+    println!(
+        "master epoch {} ({which}, id {}): opens with {}",
+        h.epoch,
+        crate::custody::short(&h.id),
+        match h.opens.is_empty() {
+            true => "nothing dform.toml names".to_string(),
+            false => h.opens.join(", "),
+        }
+    );
+    if !h.could.is_empty() {
+        println!(
+            "  could also be opened by {} (removed since it began): each secret on it is theirs \
+             until rotated off it",
+            h.could
+                .iter()
+                .map(|(n, at)| format!("{n} (removed {at})"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    }
+}
+
+/// Recipients as an audit entry names them: `{key, name}`.
+fn recipients_json(rs: &[crate::custody::Recipient]) -> serde_json::Value {
+    rs.iter()
+        .map(|r| serde_json::json!({ "key": r.key, "name": r.name }))
+        .collect()
 }
 
 /// `dform secrets rotate KEY` (R-161): the key's generation moves on (a
