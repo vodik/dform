@@ -12,6 +12,7 @@ pub mod spawn;
 pub mod transport;
 
 /// The protocol's messages (`dform-wire`) and its service.
+#[allow(clippy::result_large_err)] // tonic's own error type
 pub mod pb {
     pub use dform_wire::*;
     tonic::include_proto!("dform.v1");

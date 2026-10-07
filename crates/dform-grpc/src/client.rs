@@ -28,7 +28,7 @@ type Answer = std::result::Result<Reply, tonic::Status>;
 /// What a call spawned on the runtime sends back.
 enum Back {
     Event(Ticket, pb::Event),
-    Answer(Ticket, Answer),
+    Answer(Ticket, Box<Answer>),
 }
 
 pub struct Conn {
@@ -161,6 +161,7 @@ impl Conn {
 
 /// One call over gRPC; a server-streamed Query collected, an Apply's
 /// events told to `event` as they come.
+#[allow(clippy::result_large_err)] // tonic's own error type
 async fn send(mut c: ProviderClient<Channel>, call: Call, event: impl Fn(pb::Event)) -> Answer {
     use tonic::Response;
     Ok(match call {
@@ -221,7 +222,7 @@ impl Provider for Conn {
                 let _ = said.send(Back::Event(t, e));
             })
             .await;
-            let _ = tx.send(Back::Answer(t, answer));
+            let _ = tx.send(Back::Answer(t, Box::new(answer)));
         });
         t
     }
@@ -240,7 +241,7 @@ impl Provider for Conn {
                 .expect("internal: the provider client's channel closed")
             {
                 Back::Event(t, e) => events(t, e),
-                Back::Answer(t, answer) => break (t, answer),
+                Back::Answer(t, answer) => break (t, *answer),
             }
         };
         if let Ok(Reply::Handshake(h)) = &answer {

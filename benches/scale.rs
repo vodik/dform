@@ -159,9 +159,13 @@ struct Timed<H>(H);
 static IN_PROVIDER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 impl<H: Handler> Handler for Timed<H> {
-    fn handle(&self, call: Call) -> Result<Reply, CallError> {
+    fn handle(
+        &self,
+        call: Call,
+        progress: dform::plugin::backend::Progress,
+    ) -> Result<Reply, CallError> {
         let start = Instant::now();
-        let r = self.0.handle(call);
+        let r = self.0.handle(call, progress);
         IN_PROVIDER.fetch_add(
             start.elapsed().as_nanos() as u64,
             std::sync::atomic::Ordering::Relaxed,

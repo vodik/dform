@@ -407,7 +407,7 @@ fn a_project_named_by_description_is_listed_once_and_its_id_kept() {
     );
     let n = server.calls().len();
     dform(&s, &server, &["plan", "main.df"]).success();
-    assert_eq!(asked(&server, n), [one.clone()]);
+    assert_eq!(asked(&server, n), std::slice::from_ref(&one));
     // A kept id that no longer answers to the name is looked up again.
     let kept = s.path("dform.state/cache/ovh-projects.json");
     let text = std::fs::read_to_string(&kept).unwrap();

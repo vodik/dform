@@ -99,8 +99,7 @@ fn a_tick_says_each_change_of_state_and_stops_at_a_failure() {
     let took = r
         .stderr
         .lines()
-        .filter(|l| l.starts_with("  + net.subnet a  "))
-        .last()
+        .rfind(|l| l.starts_with("  + net.subnet a  "))
         .unwrap();
     assert!(!took.contains(" 0.0s") && !took.contains(" 0.1s"), "{took}");
     // Stdout keeps the plan, no progress.

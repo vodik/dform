@@ -33,7 +33,7 @@ type Answer = (Ticket, Result<Reply, CallError>);
 /// answer.
 enum Back {
     Event(Ticket, pb::Event),
-    Answer(Answer),
+    Answer(Box<Answer>),
 }
 
 /// What the message of a call dform took as timed out says, and nothing
@@ -153,7 +153,7 @@ fn serve(
                 });
                 dead.store(backend.is_dead(), Ordering::SeqCst);
                 let Some(t) = ours.remove(&t) else { continue };
-                if tx.send(Back::Answer((t, r))).is_err() {
+                if tx.send(Back::Answer(Box::new((t, r)))).is_err() {
                     return;
                 }
             }
@@ -202,7 +202,8 @@ impl Provider for Timed {
                         events(t, e);
                     }
                 }
-                Ok(Back::Answer((t, r))) => {
+                Ok(Back::Answer(answer)) => {
+                    let (t, r) = *answer;
                     self.asked -= 1;
                     if self.abandoned.remove(&t) {
                         if self.abandoned.is_empty() {
