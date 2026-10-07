@@ -378,14 +378,28 @@ fn secret_paths(o: &OutputDecl) -> Vec<String> {
         .collect()
 }
 
-/// Every definition of the program, by path, wherever it stands.
-fn definitions<'a>(stmts: &'a [Stmt], out: &mut BTreeMap<String, &'a crate::ast::Module>) {
+/// Every statement of `stmts` and of the definitions (modules and
+/// components) nested in them, depth first.
+pub fn nested(stmts: &[Stmt]) -> Vec<&Stmt> {
+    let mut out = Vec::new();
     for s in stmts {
+        out.push(s);
         if let Stmt::Module(m) = s {
-            out.insert(m.name.clone(), m);
-            definitions(&m.body, out);
+            out.extend(nested(&m.body));
         }
     }
+    out
+}
+
+/// Every definition of the program, by path, wherever it stands.
+pub fn definitions(stmts: &[Stmt]) -> BTreeMap<&str, &crate::ast::Module> {
+    nested(stmts)
+        .into_iter()
+        .filter_map(|s| match s {
+            Stmt::Module(m) => Some((m.name.as_str(), m)),
+            _ => None,
+        })
+        .collect()
 }
 
 /// The program's statements and those of every module a `use` imports and
@@ -393,8 +407,7 @@ fn definitions<'a>(stmts: &'a [Stmt], out: &mut BTreeMap<String, &'a crate::ast:
 /// declaration of the deployment may stand (a provider's `use` and its
 /// settings, R-129). A definition no statement reaches is left out.
 pub fn reached(program: &Program) -> Vec<&Stmt> {
-    let mut defs = BTreeMap::new();
-    definitions(&program.statements, &mut defs);
+    let defs = definitions(&program.statements);
     let mut out = Vec::new();
     let mut seen = BTreeSet::new();
     let mut todo: Vec<&[Stmt]> = vec![&program.statements];
@@ -414,7 +427,7 @@ pub fn reached(program: &Program) -> Vec<&Stmt> {
 
 /// The expansion's state.
 struct Cx<'a> {
-    defs: BTreeMap<String, &'a crate::ast::Module>,
+    defs: BTreeMap<&'a str, &'a crate::ast::Module>,
     diags: Vec<Diagnostic>,
     declared: Vec<Declared>,
     secret_outputs: Vec<(String, String)>,
@@ -456,10 +469,8 @@ fn join_scope(scope: &str, rest: &str) -> String {
 }
 
 pub fn expand(program: &Program) -> Result<Expanded> {
-    let mut defs = BTreeMap::new();
-    definitions(&program.statements, &mut defs);
     let mut cx = Cx {
-        defs,
+        defs: definitions(&program.statements),
         diags: Vec::new(),
         declared: Vec::new(),
         secret_outputs: Vec::new(),
@@ -1979,5 +1990,60 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// `nested` walks every definition's body, `definitions` names them by
+    /// path wherever they stand, and `reached` keeps the bodies a `use`
+    /// or a copy reaches, each once (R-129).
+    #[test]
+    fn reached_walks_the_bodies_a_use_reaches_once() {
+        let fact = |p: &str| Stmt::Fact(crate::ast::atom(p, vec![], Span::default()));
+        let module = |name: &str, body: Vec<Stmt>| {
+            Stmt::Module(crate::ast::Module {
+                name: name.into(),
+                component: false,
+                body,
+                span: Span::default(),
+            })
+        };
+        let using = |module: &str| {
+            Stmt::Use(crate::ast::Instance {
+                module: module.into(),
+                name: module.into(),
+                inputs: vec![],
+                rows: vec![],
+                body: None,
+                clause: None,
+                span: Span::default(),
+            })
+        };
+        let program = Program {
+            statements: vec![
+                fact("top"),
+                module("a", vec![fact("in_a"), module("a.b", vec![fact("in_b")])]),
+                module("unused", vec![fact("in_unused")]),
+                using("a.b"),
+                using("a.b"),
+            ],
+            stack: None,
+        };
+        let preds = |stmts: Vec<&Stmt>| -> Vec<String> {
+            stmts
+                .into_iter()
+                .filter_map(|s| match s {
+                    Stmt::Fact(a) => Some(a.pred.clone()),
+                    _ => None,
+                })
+                .collect()
+        };
+        assert_eq!(
+            preds(nested(&program.statements)),
+            ["top", "in_a", "in_b", "in_unused"]
+        );
+        assert_eq!(
+            definitions(&program.statements).keys().collect::<Vec<_>>(),
+            [&"a", &"a.b", &"unused"]
+        );
+        assert_eq!(preds(reached(&program)), ["top", "in_b"]);
     }
 }

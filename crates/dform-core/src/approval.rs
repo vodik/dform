@@ -157,16 +157,14 @@ pub fn needs(facts: &std::collections::BTreeSet<crate::ast::Atom>) -> Vec<(Strin
 /// fact)? When it does, an approver must satisfy it for every resource
 /// that needs the approval.
 pub fn restricts_approvers(program: &crate::ast::Program) -> bool {
-    fn any(stmts: &[crate::ast::Stmt]) -> bool {
-        use crate::ast::Stmt;
-        stmts.iter().any(|s| match s {
+    use crate::ast::Stmt;
+    crate::modules::nested(&program.statements)
+        .into_iter()
+        .any(|s| match s {
             Stmt::Fact(a) => a.pred == "approver_allowed",
             Stmt::Rule(r) => r.head.pred == "approver_allowed",
-            Stmt::Module(m) => any(&m.body),
             _ => false,
         })
-    }
-    any(&program.statements)
 }
 
 /// Does `approver_allowed(who, d)` hold in `facts`? `d` is the address as

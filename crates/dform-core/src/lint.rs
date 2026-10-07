@@ -849,17 +849,14 @@ fn long_bodies(program: &Program) -> Vec<String> {
 
 /// The source files of `stmts`' spans, modules' bodies included.
 fn source_files(stmts: &[Stmt], out: &mut BTreeSet<u32>) {
-    for s in stmts {
+    for s in crate::modules::nested(stmts) {
         let span = match s {
             Stmt::Fact(a) => a.span,
             Stmt::Rule(r) => r.head.span,
             Stmt::Resource(r) => r.span,
             Stmt::Output(o) => o.span,
             Stmt::Instance(i) | Stmt::Use(i) => i.span,
-            Stmt::Module(m) => {
-                source_files(&m.body, out);
-                m.span
-            }
+            Stmt::Module(m) => m.span,
             _ => continue,
         };
         if !span.is_none() {

@@ -194,22 +194,13 @@ fn rows_read(scope: &str, a: &crate::ast::Atom) -> Option<String> {
 /// Each `instance` and `use`'s relation inputs and exported relations,
 /// from its component's or module's interface.
 fn relations(program: &Program) -> Relations {
-    let mut defs = Vec::new();
-    fn definitions<'a>(stmts: &'a [Stmt], out: &mut Vec<&'a crate::ast::Module>) {
-        for s in stmts {
-            if let Stmt::Module(m) = s {
-                out.push(m);
-                definitions(&m.body, out);
-            }
-        }
-    }
-    definitions(&program.statements, &mut defs);
+    let defs = crate::modules::definitions(&program.statements);
     let mut out = Relations::default();
     for s in &program.statements {
         let (Stmt::Instance(u) | Stmt::Use(u)) = s else {
             continue;
         };
-        let Some(m) = defs.iter().find(|m| m.name == u.module) else {
+        let Some(m) = defs.get(u.module.as_str()) else {
             continue;
         };
         for st in &m.body {
@@ -460,17 +451,8 @@ fn offered(o: &crate::ast::OutputDecl) -> String {
 /// that is declared but never given a value is still offered.
 fn collect_offers(program: &Program, out: &mut BTreeMap<String, ScopeEffects>) {
     let mut module_outputs: BTreeMap<String, Vec<(String, String)>> = BTreeMap::new();
-    let mut defs = Vec::new();
-    fn definitions<'a>(stmts: &'a [Stmt], out: &mut Vec<&'a crate::ast::Module>) {
-        for s in stmts {
-            if let Stmt::Module(m) = s {
-                out.push(m);
-                definitions(&m.body, out);
-            }
-        }
-    }
-    definitions(&program.statements, &mut defs);
-    for m in defs {
+    let defs = crate::modules::definitions(&program.statements);
+    for m in defs.into_values() {
         let mut outs = Vec::new();
         for st in &m.body {
             if let Stmt::Output(o) = st

@@ -293,52 +293,6 @@ fn configure(link: &mut Link, config: Json) -> Result<Option<String>> {
     Ok(r.account)
 }
 
-/// Every statement of `stmts` and of the modules and components defined
-/// in them, depth first.
-fn statements_in(stmts: &[crate::ast::Stmt]) -> Vec<&crate::ast::Stmt> {
-    let mut out = Vec::new();
-    for s in stmts {
-        out.push(s);
-        if let crate::ast::Stmt::Module(m) = s {
-            out.extend(statements_in(&m.body));
-        }
-    }
-    out
-}
-
-/// The resources a program makes: its own, and those of every module a
-/// `use` imports and every component a `resource` (an instance) copies,
-/// each module's once. A module no statement reaches is left out.
-fn reached_resources(program: &crate::ast::Program) -> Vec<&crate::ast::Resource> {
-    use crate::ast::Stmt;
-    let modules: BTreeMap<&str, &crate::ast::Module> = statements_in(&program.statements)
-        .into_iter()
-        .filter_map(|s| match s {
-            Stmt::Module(m) => Some((m.name.as_str(), m)),
-            _ => None,
-        })
-        .collect();
-    let mut out = Vec::new();
-    let mut seen = BTreeSet::new();
-    let mut todo: Vec<&[Stmt]> = vec![&program.statements];
-    while let Some(stmts) = todo.pop() {
-        for s in stmts {
-            match s {
-                Stmt::Resource(r) => out.push(r),
-                Stmt::Use(u) | Stmt::Instance(u) => {
-                    if let Some(m) = modules.get(u.module.as_str())
-                        && seen.insert(u.module.as_str())
-                    {
-                        todo.push(&m.body);
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
-    out
-}
-
 impl Providers {
     /// Start the providers `specs` name (`--provider` or the providers'
     /// `use`s; none is the mock's `fake` schema): every mock schema in
@@ -1133,7 +1087,7 @@ impl Providers {
         // The types the program declares itself (a `type` block, a
         // `type_*` row), in any module: the mock plays them with the
         // program's shape.
-        let own: BTreeSet<&str> = statements_in(&program.statements)
+        let own: BTreeSet<&str> = crate::modules::nested(&program.statements)
             .into_iter()
             .filter_map(|s| match s {
                 Stmt::Pending(p) => {
@@ -1150,7 +1104,11 @@ impl Providers {
         let mut diags = Vec::new();
         // The program's resources and those of each module it uses and
         // each component it makes a resource of (R-113), once each.
-        for r in reached_resources(program) {
+        let reached = crate::modules::reached(program);
+        for r in reached.into_iter().filter_map(|s| match s {
+            Stmt::Resource(r) => Some(r),
+            _ => None,
+        }) {
             let Term::Val(Value::Str(typ)) = &r.typ else {
                 continue;
             };

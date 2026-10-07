@@ -127,16 +127,7 @@ fn outputs(program: &Program) -> BTreeMap<(String, String), TypeExpr> {
             })
             .collect()
     };
-    let mut modules: BTreeMap<&str, &crate::ast::Module> = BTreeMap::new();
-    fn definitions<'a>(stmts: &'a [Stmt], out: &mut BTreeMap<&'a str, &'a crate::ast::Module>) {
-        for s in stmts {
-            if let Stmt::Module(m) = s {
-                out.insert(&m.name, m);
-                definitions(&m.body, out);
-            }
-        }
-    }
-    definitions(&program.statements, &mut modules);
+    let modules = crate::modules::definitions(&program.statements);
     let mut out = BTreeMap::new();
     for (k, t) in typed(&program.statements) {
         out.insert((String::new(), k), t);
