@@ -807,13 +807,10 @@ pub struct Report {
     /// The apply resumes one interrupted: its tick's changes are what
     /// remained of it (R-122).
     pub resumed: bool,
-    /// The deployment is being removed (`destroy`, R-149): each delete
-    /// says so ([`REMOVED`]).
+    /// The deployment is being removed (`destroy`, R-149): the operation
+    /// is every delete's reason, so none says one.
     pub removing: bool,
 }
-
-/// Why a delete of `destroy` is planned (R-149).
-pub const REMOVED: &str = "no rule wants it: the deployment is being removed";
 
 /// What the report is built from.
 pub struct Input<'a> {
@@ -2624,14 +2621,6 @@ impl Report {
             let painted = format!("{inner}{} {b}", style.paint(Paint::Because, "because"));
             rows.push(Row::new(&plain, painted));
         }
-        if self.removed(d) {
-            rows.push(Row::plain(format!("{inner}{REMOVED}")));
-        }
-    }
-
-    /// `d` is a delete of a deployment being removed.
-    fn removed(&self, d: &Deformation) -> bool {
-        self.removing && matches!(d.kind, ActionKind::Delete | ActionKind::DeleteDeposed)
     }
 }
 
@@ -3411,9 +3400,6 @@ impl Report {
         if explained {
             m.insert("site".into(), json!(d.site));
             m.insert("because".into(), json!(d.because));
-        }
-        if self.removed(d) {
-            m.insert("reason".into(), REMOVED.into());
         }
         Json::Object(m)
     }

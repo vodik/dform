@@ -1,7 +1,7 @@
 //! `dform destroy TARGET` (R-149): the plan against an empty wanted set.
 //! Every object state holds is a delete, dependents first (a provider
 //! configured from the world included: the cluster's objects before the
-//! server their kubeconfig is read from), each saying why; a
+//! server their kubeconfig is read from), none with a reason; a
 //! `prevent_destroy` is a refusal; it asks as apply asks; a stop resumes.
 //! Afterwards the deployment's state is empty and `stack list` omits it;
 //! its audit log stays. `plan --destroy` prints the plan.
@@ -78,7 +78,7 @@ const ORDER: [&str; 5] = [
 ];
 
 #[test]
-fn the_plan_deletes_every_object_dependents_first_and_says_why() {
+fn the_plan_deletes_every_object_dependents_first() {
     let s = applied("destroy-plan");
     let before = objects(&s);
     let r = dev(&s, &["plan", "--destroy"]).success();
@@ -90,23 +90,12 @@ fn the_plan_deletes_every_object_dependents_first_and_says_why() {
     );
     let order: Vec<&str> = r.stdout.lines().filter(|l| l.starts_with("  - ")).collect();
     assert_eq!(order, ORDER, "{}", r.stdout);
-    assert_eq!(
-        r.stdout
-            .matches("\n      no rule wants it: the deployment is being removed\n")
-            .count(),
-        5,
-        "{}",
-        r.stdout
-    );
+    // The operation is every delete's reason: none says one.
+    assert!(!r.stdout.contains("no rule wants it"), "{}", r.stdout);
     // A preview: nothing changed.
     assert_eq!(objects(&s), before);
     let j = dev(&s, &["plan", "--destroy", "--json"]).success();
-    assert!(
-        j.stdout
-            .contains("\"reason\": \"no rule wants it: the deployment is being removed\""),
-        "{}",
-        j.stdout
-    );
+    assert!(!j.stdout.contains("\"reason\""), "{}", j.stdout);
 }
 
 #[test]

@@ -201,8 +201,8 @@ configured, from the world when their settings read it), and every
 object its state holds is a delete, dependents first: what references
 an object, and an object of a provider configured from another (a
 cluster's objects, whose kubeconfig is read off the server), go before
-it, the reverse of create. Each delete says `no rule wants it: the
-deployment is being removed` (`--json`: `reason`). What refuses it is
+it, the reverse of create. The operation is every delete's reason:
+none says one. What refuses it is
 what a deny binds to. A deny over the plan's changes binds to the
 destroy's deletes and refuses it as it would an apply that removed
 them: `lifecycle(r, "prevent_destroy")`, a `deny .. where
