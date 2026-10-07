@@ -102,6 +102,37 @@ pub struct Param {
     pub ty: String,
     /// `name?: T`: a call may leave it out (the last parameters only).
     pub optional: bool,
+    /// `name?: T = LITERAL`: what the parameter is when a call names a
+    /// later one and leaves this out (`random.password("db", generation:
+    /// 1)`); an int, a bool or a quoted string.
+    pub default: Option<String>,
+}
+
+impl Param {
+    /// The default's value.
+    pub fn default_value(&self) -> Option<crate::value::Value> {
+        use crate::value::Value;
+        let d = self.default.as_deref()?;
+        if let Ok(i) = d.parse::<i64>() {
+            return Some(Value::Int(i));
+        }
+        match d {
+            "true" => return Some(Value::Bool(true)),
+            "false" => return Some(Value::Bool(false)),
+            _ => {}
+        }
+        let s = d.strip_prefix('"')?.strip_suffix('"')?;
+        Some(Value::Str(s.to_string()))
+    }
+
+    /// As a signature writes it: `length?: int = 32`.
+    pub fn text(&self) -> String {
+        let q = if self.optional { "?" } else { "" };
+        match &self.default {
+            Some(d) => format!("{}{q}: {} = {d}", self.name, self.ty),
+            None => format!("{}{q}: {}", self.name, self.ty),
+        }
+    }
 }
 
 /// One declared function.
@@ -172,6 +203,49 @@ pub fn registry() -> &'static Registry {
 /// The declared function `name` (internal ones included).
 pub fn get(name: &str) -> Option<&'static Function> {
     registry().get(name)
+}
+
+/// A call's arguments with its named ones (`random.password("db",
+/// generation: 1)`) put where `f` declares them: each names a parameter
+/// the positional ones do not give, and a parameter left out before it
+/// takes its declared default; an error says which is wrong.
+pub fn with_named(
+    f: &Function,
+    positional: Vec<crate::ast::Term>,
+    named: Vec<(String, crate::ast::Term)>,
+) -> Result<Vec<crate::ast::Term>, String> {
+    use crate::ast::Term;
+    let mut at: Vec<Option<Term>> = positional.into_iter().map(Some).collect();
+    for (k, t) in named {
+        let Some(i) = f.params.iter().position(|p| p.name == k) else {
+            let names: Vec<&str> = f.params.iter().map(|p| p.name.as_str()).collect();
+            return Err(format!(
+                "`{}` has no parameter `{k}`: its parameters are {}",
+                f.name,
+                names.join(", ")
+            ));
+        };
+        if at.len() <= i {
+            at.resize(i + 1, None);
+        }
+        if at[i].is_some() {
+            return Err(format!("`{}`'s `{k}` is given twice", f.name));
+        }
+        at[i] = Some(t);
+    }
+    at.into_iter()
+        .zip(&f.params)
+        .map(|(t, p)| match t {
+            Some(t) => Ok(t),
+            None => p.default_value().map(Term::Val).ok_or_else(|| {
+                format!(
+                    "`{}`'s `{}` is left out before a named argument, and has no default: give \
+                     it (`{}`)",
+                    f.name, p.name, f.signature
+                )
+            }),
+        })
+        .collect()
 }
 
 /// The lowering's functions a program writes as forms of the language
@@ -523,10 +597,7 @@ pub fn parse(file: &str, text: &str) -> Result<Vec<Function>, String> {
         let params: Vec<String> = f
             .params
             .iter()
-            .map(|p| {
-                let q = if p.optional { "?" } else { "" };
-                format!("{}{q}: {}", p.name, p.ty)
-            })
+            .map(Param::text)
             .chain(f.variadic.then(|| "...".to_string()))
             .collect();
         f.signature = format!(
@@ -574,6 +645,11 @@ pub(crate) fn function(sig: &str) -> Result<Function, String> {
             Some(n) => (n, true),
             None => (n, false),
         };
+        let (t, default) = match t.split_once('=') {
+            Some((t, d)) if optional => (t.trim(), Some(d.trim().to_string())),
+            Some(_) => return Err(format!("`{n}` has a default: only an optional one may")),
+            None => (t, None),
+        };
         if !crate::lexer::is_word(n) || t.is_empty() {
             return Err(format!("`{p}` is not `name: type`"));
         }
@@ -582,11 +658,18 @@ pub(crate) fn function(sig: &str) -> Result<Function, String> {
                 "`{n}` follows an optional parameter: only the last ones may be left out"
             ));
         }
-        params.push(Param {
+        let param = Param {
             name: n.to_string(),
             ty: t.to_string(),
             optional,
-        });
+            default,
+        };
+        if param.default.is_some() && param.default_value().is_none() {
+            return Err(format!(
+                "`{n}`'s default is an int, a bool or a quoted string"
+            ));
+        }
+        params.push(param);
     }
     let rest = sig[close + 1..].trim();
     let rest = rest
@@ -982,6 +1065,8 @@ pub const BODIES: &[(&str, Body)] = &[
     ("random.id", crate::functions::random::id),
     ("random.uuid", crate::functions::random::uuid),
     ("random.signing_key", crate::functions::random::signing_key),
+    ("random.verify_key", crate::functions::random::verify_key),
+    ("random.generation", crate::functions::random::generation),
     ("str.trim", |a| match a {
         [Value::Str(s)] => Some(Value::Str(s.trim().to_string())),
         _ => None,
@@ -2093,6 +2178,70 @@ pub mod random {
         /// plan, `query` and `why` label one with.
         static DERIVED: RefCell<std::collections::BTreeMap<Value, String>> =
             const { RefCell::new(std::collections::BTreeMap::new()) };
+        /// The deployment's rotations, by key (R-161, `State::secrets`).
+        static RECORDS: RefCell<std::collections::BTreeMap<String, crate::state::Secret>> =
+            const { RefCell::new(std::collections::BTreeMap::new()) };
+        /// When the deployment's master was first applied (its log's
+        /// `master` entry): a key never rotated is as old (R-161).
+        static BORN: RefCell<Option<String>> = const { RefCell::new(None) };
+        /// The generation `derive` derives at: the call's.
+        static GENERATION: std::cell::Cell<u32> = const { std::cell::Cell::new(1) };
+        /// Each key a `random.*` call derived for since the rotations were
+        /// set, with its functions and whether one is a secret: what
+        /// `dform secrets list` lists.
+        static CALLS: RefCell<std::collections::BTreeMap<String, Called>> =
+            const { RefCell::new(std::collections::BTreeMap::new()) };
+    }
+
+    /// What a rotated secret's label says after its call: `generation N,
+    /// rotated DAY by WHO` follows it (R-161), and the plan prints it at
+    /// every level.
+    pub const ROTATED: &str = "generation ";
+
+    /// What a run's calls derived for one key.
+    #[derive(Debug, Clone, Default, PartialEq, Eq)]
+    pub struct Called {
+        /// `password`, `signing_key`, ...
+        pub functions: std::collections::BTreeSet<String>,
+        /// One of them is a secret (`password`, `base64`, `signing_key`).
+        pub secret: bool,
+        /// The secret values derived (a stand-in's, in a run without the
+        /// master): where they reach is where the key is read.
+        pub values: std::collections::BTreeSet<Value>,
+    }
+
+    /// Derive this thread's `random.*` with the deployment's rotations
+    /// (R-161): each key at its generation, 1 for one never rotated.
+    pub fn set_secrets(records: &std::collections::BTreeMap<String, crate::state::Secret>) {
+        RECORDS.with(|r| *r.borrow_mut() = records.clone());
+        CALLS.with(|c| c.borrow_mut().clear());
+    }
+
+    /// When the deployment's master was first applied, from its log: the
+    /// age of a key never rotated (`secrets/4`).
+    pub fn set_born(born: Option<String>) {
+        BORN.with(|b| *b.borrow_mut() = born);
+    }
+
+    pub fn born() -> Option<String> {
+        BORN.with(|b| b.borrow().clone())
+    }
+
+    /// The keys this thread's calls derived for since the rotations were
+    /// set.
+    pub fn calls() -> std::collections::BTreeMap<String, Called> {
+        CALLS.with(|c| c.borrow().clone())
+    }
+
+    /// `key`'s current generation: 1 unless rotated.
+    pub fn generation_of(key: &str) -> u32 {
+        RECORDS.with(|r| r.borrow().get(key).map_or(1, |s| s.generation))
+    }
+
+    /// `random.generation(key)`: the key's current generation, public.
+    pub fn generation(a: &[Value]) -> Option<Value> {
+        let [Value::Str(key)] = a else { return None };
+        Some(Value::Int(generation_of(key).into()))
     }
 
     /// Derive this thread's `random.*` for `deployment` until the next
@@ -2127,26 +2276,59 @@ pub mod random {
         })
     }
 
-    /// The value `f` derives for `random.WHAT(key, ..)`, its stand-in
-    /// registered (`secrets::standin`), and, a `secret` one, labelled.
+    /// The value `f` derives for `random.WHAT(key, ..)` at the generation
+    /// `asked` (the key's current one when `None`), its stand-in
+    /// registered (`secrets::standin`), and, a `secret` one, labelled: a
+    /// rotated one with its reason (`random.password("db"), generation 2,
+    /// rotated 2026-10-07 by simon`). A generation past the current one is
+    /// no input it takes.
     fn derived_value(
         what: &str,
         key: &str,
+        asked: Option<i64>,
         secret: bool,
         f: impl Fn() -> Option<Value>,
     ) -> Option<Value> {
-        let standin = STANDIN.with(|s| {
-            s.set(true);
+        let current = generation_of(key);
+        let generation = match asked {
+            None => current,
+            Some(g) => u32::try_from(g)
+                .ok()
+                .filter(|g| (1..=current).contains(g))?,
+        };
+        let at = |standin: bool| {
+            GENERATION.with(|g| g.set(generation));
+            STANDIN.with(|s| s.set(standin));
             let v = f();
-            s.set(false);
+            STANDIN.with(|s| s.set(false));
+            GENERATION.with(|g| g.set(1));
             v
-        })?;
+        };
+        let standin = at(true)?;
         let real = MASTER.with(|m| m.borrow().as_ref().map(|m| m.real.is_some()))?;
         let v = match real {
-            true => f()?,
+            true => at(false)?,
             false => standin.clone(),
         };
-        let label = format!("random.{what}({key:?})");
+        CALLS.with(|c| {
+            let mut c = c.borrow_mut();
+            let e = c.entry(key.to_string()).or_default();
+            e.functions.insert(what.to_string());
+            e.secret |= secret;
+            if secret {
+                e.values.insert(v.clone());
+            }
+        });
+        let record = RECORDS.with(|r| r.borrow().get(key).cloned());
+        let label = match (asked, record) {
+            (Some(_), _) => format!("random.{what}({key:?}, generation: {generation})"),
+            (None, Some(r)) => format!(
+                "random.{what}({key:?}), {ROTATED}{generation}, rotated {} by {}",
+                r.day(),
+                r.by
+            ),
+            (None, None) => format!("random.{what}({key:?})"),
+        };
         if let (Value::Str(v), Value::Str(s)) = (&v, &standin) {
             crate::secrets::standin::register(v, &label, s);
         }
@@ -2206,6 +2388,12 @@ pub mod random {
                 info.extend_from_slice(part.as_bytes());
                 info.push(0);
             }
+            // A rotated key's generation (R-161); generation 1 adds
+            // nothing, so a key never rotated derives what it always did.
+            let generation = GENERATION.with(|g| g.get());
+            if generation > 1 {
+                info.extend_from_slice(format!("generation\0{generation}\0").as_bytes());
+            }
             Some(crate::secrets::hkdf(b"dform random", ikm, &info, len))
         })
     }
@@ -2247,7 +2435,21 @@ pub mod random {
         })
     }
 
+    /// A call's arguments and its `generation` (R-161), the parameter
+    /// after the `n` others: none when it is left out.
+    fn generation_arg(a: &[Value], n: usize) -> Option<(&[Value], Option<i64>)> {
+        match a.len() {
+            l if l <= n => Some((a, None)),
+            l if l == n + 1 => match &a[n] {
+                Value::Int(g) => Some((&a[..n], Some(*g))),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
     pub fn password(a: &[Value]) -> Option<Value> {
+        let (a, generation) = generation_arg(a, 3)?;
         let (key, length, name) = match a {
             [Value::Str(k)] => (k, 32, "alnum"),
             [Value::Str(k), Value::Int(n)] => (k, *n, "alnum"),
@@ -2259,7 +2461,7 @@ pub mod random {
         }
         let set = alphabet(name)?;
         let n = length.to_string();
-        derived_value("password", key, true, || {
+        derived_value("password", key, generation, true, || {
             chars("password", key, &[&n, name], length as usize, &set).map(Value::Str)
         })
     }
@@ -2268,13 +2470,14 @@ pub mod random {
     /// name kept, so a rename is no rotation).
     pub fn base64(a: &[Value]) -> Option<Value> {
         use base64::Engine;
+        let (a, generation) = generation_arg(a, 2)?;
         let [Value::Str(key), Value::Int(n)] = a else {
             return None;
         };
         if !(1..=4096).contains(n) {
             return None;
         }
-        derived_value("base64", key, true, || {
+        derived_value("base64", key, generation, true, || {
             let b = derive("bytes", key, &[&n.to_string()], *n as usize)?;
             Some(Value::Str(
                 base64::engine::general_purpose::STANDARD.encode(b),
@@ -2283,6 +2486,7 @@ pub mod random {
     }
 
     pub fn id(a: &[Value]) -> Option<Value> {
+        let (a, generation) = generation_arg(a, 2)?;
         let (key, n) = match a {
             [Value::Str(k)] => (k, 8),
             [Value::Str(k), Value::Int(n)] => (k, *n),
@@ -2291,15 +2495,16 @@ pub mod random {
         if !(1..=64).contains(&n) {
             return None;
         }
-        derived_value("id", key, false, || {
+        derived_value("id", key, generation, false, || {
             let b = derive("id", key, &[&n.to_string()], n as usize)?;
             Some(Value::Str(b.iter().map(|x| format!("{x:02x}")).collect()))
         })
     }
 
     pub fn uuid(a: &[Value]) -> Option<Value> {
+        let (a, generation) = generation_arg(a, 1)?;
         let [Value::Str(key)] = a else { return None };
-        derived_value("uuid", key, false, || {
+        derived_value("uuid", key, generation, false, || {
             let mut b = derive("uuid", key, &[], 16)?;
             b[6] = (b[6] & 0x0f) | 0x40;
             b[8] = (b[8] & 0x3f) | 0x80;
@@ -2315,18 +2520,45 @@ pub mod random {
         })
     }
 
+    /// The version and the seed of `key`'s ed25519 signing key, at the
+    /// generation `derive` derives at.
+    fn ed25519(key: &str) -> Option<(String, Vec<u8>)> {
+        let version = chars("signing_key version", key, &[], 4, &ALNUM[..52])?;
+        let seed = derive("signing_key ed25519", key, &[], 32)?;
+        Some((version, seed))
+    }
+
     /// Synapse's signing key file: `ed25519 a_XXXX SEED`, the version four
     /// letters and the 32-byte seed unpadded base64 (what
     /// `generate_signing_key` writes).
     pub fn signing_key(a: &[Value]) -> Option<Value> {
         use base64::Engine;
+        let (a, generation) = generation_arg(a, 1)?;
         let [Value::Str(key)] = a else { return None };
-        derived_value("signing_key", key, true, || {
-            let version = chars("signing_key version", key, &[], 4, &ALNUM[..52])?;
-            let seed = derive("signing_key ed25519", key, &[], 32)?;
+        derived_value("signing_key", key, generation, true, || {
+            let (version, seed) = ed25519(key)?;
             Some(Value::Str(format!(
                 "ed25519 a_{version} {}",
                 base64::engine::general_purpose::STANDARD_NO_PAD.encode(seed)
+            )))
+        })
+    }
+
+    /// The public half of `random.signing_key(key)` (R-161): `ed25519
+    /// a_XXXX KEY`, the verify key unpadded base64, as Synapse publishes
+    /// one (`old_signing_keys`). Public: it is what remote servers verify
+    /// with.
+    pub fn verify_key(a: &[Value]) -> Option<Value> {
+        use base64::Engine;
+        let (a, generation) = generation_arg(a, 1)?;
+        let [Value::Str(key)] = a else { return None };
+        derived_value("verify_key", key, generation, false, || {
+            let (version, seed) = ed25519(key)?;
+            let seed: [u8; 32] = seed.try_into().ok()?;
+            let public = ed25519_dalek::SigningKey::from_bytes(&seed).verifying_key();
+            Some(Value::Str(format!(
+                "ed25519 a_{version} {}",
+                base64::engine::general_purpose::STANDARD_NO_PAD.encode(public.as_bytes())
             )))
         })
     }
@@ -2404,8 +2636,129 @@ mod random_tests {
         assert_ne!(standin, s(password(&[k("db-2")])), "the key is in it");
     }
 
+    /// A key's generation (R-161) is one more input: generation 1 is the
+    /// value a key never rotated always had, each later one another, and
+    /// an earlier one is asked for by name; a generation past the current
+    /// one is none.
+    #[test]
+    fn a_generation_is_in_the_derivation() {
+        let k = |x: &str| Value::Str(x.into());
+        set_master(Some(b"m1".to_vec()), None, "app");
+        set_secrets(&Default::default());
+        let first = s(password(&[k("db")]));
+        let other = s(password(&[k("other")]));
+        let rotated = crate::state::Secret {
+            generation: 2,
+            rotated_at: "2026-10-07T09:00:00Z".into(),
+            by: "alice".into(),
+            pending: true,
+        };
+        set_secrets(&[("db".to_string(), rotated)].into_iter().collect());
+        let second = s(password(&[k("db")]));
+        assert_ne!(first, second);
+        assert_eq!(
+            other,
+            s(password(&[k("other")])),
+            "another key is as it was"
+        );
+        let at = |g| password(&[k("db"), Value::Int(32), k("alnum"), Value::Int(g)]);
+        assert_eq!(first, s(at(1)));
+        assert_eq!(second, s(at(2)));
+        assert!(at(3).is_none() && at(0).is_none());
+        assert!(
+            derived()
+                .iter()
+                .any(|(_, l)| l
+                    == "random.password(\"db\"), generation 2, rotated 2026-10-07 by alice"),
+            "{:?}",
+            derived()
+        );
+        assert_eq!(generation(&[k("db")]), Some(Value::Int(2)));
+        assert_eq!(generation(&[k("other")]), Some(Value::Int(1)));
+    }
+
+    /// `random.verify_key` is the public half of `random.signing_key`, at
+    /// the same generation.
+    #[test]
+    fn a_verify_key_is_its_signing_keys_public_half() {
+        use base64::Engine;
+        let k = |x: &str| Value::Str(x.into());
+        set_master(Some(b"m1".to_vec()), None, "app");
+        set_secrets(&Default::default());
+        let signing = s(signing_key(&[k("synapse")]));
+        let verify = s(verify_key(&[k("synapse")]));
+        let (sv, seed) = signing.rsplit_once(' ').unwrap();
+        let (vv, public) = verify.rsplit_once(' ').unwrap();
+        assert_eq!(sv, vv, "the same version");
+        let seed: [u8; 32] = base64::engine::general_purpose::STANDARD_NO_PAD
+            .decode(seed)
+            .unwrap()
+            .try_into()
+            .unwrap();
+        let want = ed25519_dalek::SigningKey::from_bytes(&seed).verifying_key();
+        assert_eq!(
+            base64::engine::general_purpose::STANDARD_NO_PAD.encode(want.as_bytes()),
+            public
+        );
+        assert_eq!(verify, s(verify_key(&[k("synapse"), Value::Int(1)])));
+    }
+
     #[test]
     fn with_no_master_there_is_no_value() {
         assert!(password(&[Value::Str("db".into())]).is_none());
+    }
+}
+
+#[cfg(test)]
+mod named_tests {
+    use crate::ast::Term;
+    use crate::value::Value;
+
+    fn v(x: Value) -> Term {
+        Term::Val(x)
+    }
+
+    /// A named argument goes where its parameter is; one left out before
+    /// it takes its default, or is an error naming it.
+    #[test]
+    fn a_named_argument_takes_its_parameters_place() {
+        let f = super::get("random.password").unwrap();
+        let key = v(Value::Str("db".into()));
+        let got = super::with_named(
+            f,
+            vec![key.clone()],
+            vec![("generation".into(), v(Value::Int(1)))],
+        )
+        .unwrap();
+        assert_eq!(
+            got,
+            vec![
+                key.clone(),
+                v(Value::Int(32)),
+                v(Value::Str("alnum".into())),
+                v(Value::Int(1))
+            ]
+        );
+        let e = super::with_named(
+            f,
+            vec![key.clone()],
+            vec![("nope".into(), v(Value::Int(1)))],
+        )
+        .unwrap_err();
+        assert!(
+            e.contains("`random.password` has no parameter `nope`"),
+            "{e}"
+        );
+        let e = super::with_named(
+            f,
+            vec![key.clone(), v(Value::Int(8))],
+            vec![("length".into(), v(Value::Int(1)))],
+        )
+        .unwrap_err();
+        assert!(e.contains("`length` is given twice"), "{e}");
+        let b = super::get("random.base64").unwrap();
+        let e = super::with_named(b, vec![key], vec![("generation".into(), v(Value::Int(1)))])
+            .unwrap_err();
+        assert!(e.contains("`random.base64`'s `length` is left out"), "{e}");
     }
 }

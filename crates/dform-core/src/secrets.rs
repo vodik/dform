@@ -53,6 +53,78 @@ fn carries(name: &str) -> bool {
 /// `declassified/2` beside the rule for policy).
 pub const DECLASSIFY: &str = "secret.declassify";
 
+/// `secrets(Key, Kind, Generation, RotatedAt)` (R-161): each secret the
+/// deployment derives (`random`) or keeps (`memo`), by its key, at its
+/// generation, rotated at a time (a key never rotated: when its
+/// deployment's master was first applied, `born`; now for a deployment
+/// not applied yet). A policy reads its age through the clock: `deny ..
+/// where secrets(k, _, _, at), now = time.now(), now - at > 90d`.
+pub const SECRETS: &str = "secrets";
+
+/// `rotated(Key, Generation, By)` (R-161): a rotation the plan carries,
+/// recorded by `dform secrets rotate` and not applied yet; `By` the
+/// asserted actor. What an approval policy reads.
+pub const ROTATED: &str = "rotated";
+
+/// The rows of `secrets/4` and `rotated/3` for a run of `st`: the keys
+/// its `random.*` calls derived for (`functions::random::calls`), the
+/// memos it keeps, and every key rotated.
+pub fn rotation_facts(st: &crate::state::State) -> Vec<Atom> {
+    let now = crate::memo::now();
+    let born = crate::functions::random::born();
+    let born = born.as_deref();
+    let time = |t: &str| {
+        crate::time::Time::parse(t)
+            .map(Value::Time)
+            .unwrap_or_else(|_| Value::Str(t.to_string()))
+    };
+    let s = |x: &str| Term::Val(Value::Str(x.to_string()));
+    let atom = |pred: &str, args: Vec<Term>| Atom {
+        pred: pred.into(),
+        args,
+        record: None,
+        span: Default::default(),
+    };
+    let mut kinds: BTreeMap<String, &str> = BTreeMap::new();
+    for (k, c) in crate::functions::random::calls() {
+        if c.secret {
+            kinds.insert(k, "random");
+        }
+    }
+    for k in st.memo.keys() {
+        kinds.insert(k.clone(), "memo");
+    }
+    for k in st.secrets.keys() {
+        kinds.entry(k.clone()).or_insert("random");
+    }
+    let mut out = Vec::new();
+    for (k, kind) in kinds {
+        let r = st.secrets.get(&k);
+        let at = match (r, kind) {
+            (Some(r), _) => r.rotated_at.clone(),
+            (None, "memo") => st.memo[&k].kept.clone(),
+            (None, _) => born.unwrap_or(&now).to_string(),
+        };
+        let generation = r.map_or(1, |r| r.generation);
+        out.push(atom(
+            SECRETS,
+            vec![
+                s(&k),
+                s(kind),
+                Term::Val(Value::Int(generation.into())),
+                Term::Val(time(&at)),
+            ],
+        ));
+        if let Some(r) = r.filter(|r| r.pending) {
+            out.push(atom(
+                ROTATED,
+                vec![s(&k), Term::Val(Value::Int(r.generation.into())), s(&r.by)],
+            ));
+        }
+    }
+    out
+}
+
 /// Aggregates that only collect: their result is secret, nothing leaks.
 const COLLECT: &[&str] = &["collect_set", "collect_list"];
 
@@ -1166,5 +1238,364 @@ pub mod standin {
         r.derived.clear();
         r.sources.clear();
         r.active = false;
+    }
+}
+
+/// A deployment's secrets, as `dform secrets list` lists them (R-161):
+/// each by its key, where it comes from, its generation and age, and the
+/// cells that read it, each with how a new value lands there. Never a
+/// value: a secret is matched by the values the run holds, and named.
+pub mod inventory {
+    use crate::ast::{Atom, Term};
+    use crate::value::Value;
+    use std::collections::{BTreeMap, BTreeSet};
+
+    /// Where a secret comes from.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+    pub enum Kind {
+        /// `random.*`: derived from the master, rotated by its generation.
+        Random,
+        /// `memo.first`: kept in state, rotated by forgetting it.
+        Memo,
+        /// An input or an environment variable: the operator gives it.
+        Given,
+        /// A provider, another stack or a location holds it.
+        Held,
+    }
+
+    impl Kind {
+        pub fn word(self) -> &'static str {
+            match self {
+                Kind::Random => "random",
+                Kind::Memo => "memo",
+                Kind::Given => "given",
+                Kind::Held => "held",
+            }
+        }
+    }
+
+    /// How a new value lands in a cell.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+    pub enum Lands {
+        Update,
+        /// The attribute is `force_new`: the object is replaced.
+        Replace,
+        /// A replace `lifecycle prevent_destroy` refuses.
+        Refused,
+    }
+
+    impl Lands {
+        pub fn words(self) -> &'static str {
+            match self {
+                Lands::Update => "update",
+                Lands::Replace => "forces replace",
+                Lands::Refused => "refused by prevent_destroy",
+            }
+        }
+    }
+
+    /// A cell that reads a secret: the attribute's address and path.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+    pub struct Cell {
+        pub typ: String,
+        pub name: String,
+        pub path: String,
+        pub lands: Lands,
+    }
+
+    impl std::fmt::Display for Cell {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "{} {}.{}", self.typ, self.name, self.path)
+        }
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct Secret {
+        pub key: String,
+        pub kind: Kind,
+        /// A `random.*` or memo key's generation (1 unless rotated).
+        pub generation: u32,
+        /// Since when it is what it is: rotated, kept, or (a key never
+        /// rotated) its master first applied; RFC 3339.
+        pub since: Option<String>,
+        /// A given or held secret: where it lives, as `rotate` says it.
+        pub lives: Option<String>,
+        pub cells: Vec<Cell>,
+        /// The values: matched, never printed.
+        values: BTreeSet<Value>,
+    }
+
+    impl Secret {
+        /// A memo state keeps that is no secret: rotated as one.
+        pub fn memo(key: &str) -> Secret {
+            Secret {
+                key: key.to_string(),
+                kind: Kind::Memo,
+                generation: 1,
+                since: None,
+                lives: None,
+                cells: Vec::new(),
+                values: BTreeSet::new(),
+            }
+        }
+
+        /// How a new value lands, at worst: none when nothing reads it.
+        pub fn lands(&self) -> Option<Lands> {
+            self.cells.iter().map(|c| c.lands).max()
+        }
+    }
+
+    /// How long ago `since` (RFC 3339) was, as a listing says it: `3d`,
+    /// `5h`, `40m`, `now`.
+    pub fn age(since: &str) -> String {
+        let (Ok(then), Ok(now)) = (
+            since.parse::<jiff::Timestamp>(),
+            crate::memo::now().parse::<jiff::Timestamp>(),
+        ) else {
+            return String::new();
+        };
+        match now.as_second() - then.as_second() {
+            s if s < 60 => "now".into(),
+            s if s < 3600 => format!("{}m", s / 60),
+            s if s < 86400 => format!("{}h", s / 3600),
+            s => format!("{}d", s / 86400),
+        }
+    }
+
+    /// The paths inside `v` (`.a.b`, `[0]`) where `secret` is or is in a
+    /// string; "" for `v` itself.
+    fn reaches(v: &Value, secret: &Value, at: String, out: &mut Vec<String>) {
+        let hit = match (v, secret) {
+            (Value::Str(s), Value::Str(x)) => !x.is_empty() && s.contains(x.as_str()),
+            _ => v == secret,
+        };
+        if hit {
+            out.push(at);
+            return;
+        }
+        match v {
+            Value::Obj(m) => {
+                for (k, x) in m {
+                    reaches(x, secret, crate::ir::path_join(&at, k), out);
+                }
+            }
+            Value::List(xs) => {
+                for (i, x) in xs.iter().enumerate() {
+                    reaches(x, secret, format!("{at}[{i}]"), out);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn text(t: &Term) -> Option<&str> {
+        match t {
+            Term::Val(Value::Str(s)) => Some(s),
+            _ => None,
+        }
+    }
+
+    /// The secrets of a run: `facts` its evaluation's, `redact` its
+    /// labels, `st` its state, `born` when its master was first applied.
+    pub fn of(
+        facts: &BTreeSet<Atom>,
+        redact: &crate::query::Redactor,
+        st: &crate::state::State,
+        schema: &crate::schema::Schema,
+        born: Option<&str>,
+    ) -> Vec<Secret> {
+        let mut out: BTreeMap<String, Secret> = BTreeMap::new();
+        fn row<'a>(out: &'a mut BTreeMap<String, Secret>, key: &str, kind: Kind) -> &'a mut Secret {
+            let e = out.entry(key.to_string()).or_insert_with(|| Secret {
+                key: key.to_string(),
+                kind,
+                generation: 1,
+                since: None,
+                lives: None,
+                cells: Vec::new(),
+                values: BTreeSet::new(),
+            });
+            // A memo of a random candidate is the memo: its value is kept.
+            if (e.kind, kind) == (Kind::Random, Kind::Memo) {
+                e.kind = Kind::Memo;
+            }
+            e
+        }
+        for (k, c) in crate::functions::random::calls() {
+            if c.secret {
+                row(&mut out, &k, Kind::Random).values.extend(c.values);
+            }
+        }
+        let secret = |v: &Value| redact.labelled().any(|(x, _)| x == v);
+        for a in facts.iter().filter(|a| a.pred == crate::memo::FIRST) {
+            if let [k, _, Term::Val(v)] = a.args.as_slice()
+                && let Some(k) = text(k)
+                && (secret(v) || st.memo.get(k).is_some_and(|m| !m.sealed.is_empty()))
+            {
+                row(&mut out, k, Kind::Memo).values.insert(v.clone());
+            }
+        }
+        for (k, m) in &st.memo {
+            if !m.sealed.is_empty() {
+                row(&mut out, k, Kind::Memo);
+            }
+        }
+        for k in st.secrets.keys() {
+            row(&mut out, k, Kind::Random);
+        }
+        // What the operator gives: a secret input (`secret_cell(input, ..)`)
+        // and a secret environment variable.
+        let inputs: BTreeSet<(&Value, &Value)> = facts
+            .iter()
+            .filter(|a| a.pred == crate::transform::SECRET_CELL)
+            .filter_map(|a| match a.args.as_slice() {
+                [Term::Val(t), Term::Val(s), Term::Val(k)]
+                    if t.as_str() == Some(crate::modules::INPUT) =>
+                {
+                    Some((s, k))
+                }
+                _ => None,
+            })
+            .collect();
+        for a in facts.iter().filter(|a| a.pred == "attr") {
+            if let [
+                Term::Val(t),
+                Term::Val(scope),
+                Term::Val(k),
+                Term::Val(v),
+                ..,
+            ] = a.args.as_slice()
+                && t.as_str() == Some(crate::modules::INPUT)
+                && inputs.contains(&(scope, k))
+                && let Some(name) = k.as_str()
+            {
+                let s = row(&mut out, name, Kind::Given);
+                s.lives.get_or_insert_with(|| {
+                    format!("the input {name}: --set, an input file or a settings block")
+                });
+                s.values.insert(v.clone());
+            }
+        }
+        for a in facts
+            .iter()
+            .filter(|a| a.pred == crate::syntax::resolve::ENV_VAR)
+        {
+            if let [Term::Val(Value::Str(name)), Term::Val(v)] = a.args.as_slice() {
+                let s = row(&mut out, name, Kind::Given);
+                s.lives
+                    .get_or_insert_with(|| format!("the environment variable {name}"));
+                s.values.insert(v.clone());
+            }
+        }
+        let known: BTreeSet<Value> = out.values().flat_map(|s| s.values.clone()).collect();
+        // The rest of the run's secrets, by their labels.
+        let mut held_at: BTreeSet<(String, String, String)> = BTreeSet::new();
+        for (v, label) in redact.labelled() {
+            if known.contains(v) {
+                continue;
+            }
+            let (kind, key, lives) = if let Some((t, a, p)) = crate::value::null_parts(label) {
+                match t.as_str() {
+                    crate::modules::LET | crate::modules::INPUT => continue,
+                    t if schema
+                        .attr(t, &crate::provider::norm_path(&p))
+                        .is_some_and(|x| x.has("computed") || x.has("optional_computed")) =>
+                    {
+                        held_at.insert((t.to_string(), a.clone(), p.clone()));
+                        (
+                            Kind::Held,
+                            label.to_string(),
+                            format!("{t} {a}, its provider"),
+                        )
+                    }
+                    t if schema.attr(t, &crate::provider::norm_path(&p)).is_some() => continue,
+                    _ => (Kind::Held, label.to_string(), format!("{t} {a}")),
+                }
+            } else {
+                (Kind::Held, label.to_string(), label.to_string())
+            };
+            let s = row(&mut out, &key, kind);
+            s.lives.get_or_insert(lives);
+            s.values.insert(v.clone());
+        }
+        // `lifecycle(r, "prevent_destroy")`.
+        let prevent: BTreeSet<crate::ir::Address> = facts
+            .iter()
+            .filter(|a| a.pred == "lifecycle")
+            .filter_map(|a| match a.args.as_slice() {
+                [r, w] if text(w) == Some("prevent_destroy") => crate::zset::referenced(r),
+                _ => None,
+            })
+            .collect();
+        // Each resource attribute a secret reaches.
+        for a in facts.iter().filter(|a| a.pred == "attr") {
+            let [
+                Term::Val(tv),
+                Term::Val(addr),
+                Term::Val(pv),
+                Term::Val(v),
+                ..,
+            ] = a.args.as_slice()
+            else {
+                continue;
+            };
+            let (Some(t), Some(p)) = (tv.as_str(), pv.as_str()) else {
+                continue;
+            };
+            if [crate::modules::LET, crate::modules::INPUT].contains(&t) {
+                continue;
+            }
+            let name = crate::partition::fmt_bare(addr);
+            if held_at.contains(&(t.to_string(), name.clone(), p.to_string())) {
+                continue;
+            }
+            for s in out.values_mut() {
+                for x in &s.values {
+                    let mut at = Vec::new();
+                    reaches(v, x, String::new(), &mut at);
+                    for sub in at {
+                        let path = match sub.as_str() {
+                            "" => p.to_string(),
+                            s if s.starts_with('[') => format!("{p}{s}"),
+                            s => crate::types::dotted(p, s),
+                        };
+                        let addr = crate::ir::Address {
+                            typ: t.to_string(),
+                            name: name.clone(),
+                        };
+                        let lands = match schema.forces_new(t, &crate::provider::norm_path(&path)) {
+                            false => Lands::Update,
+                            true if prevent.contains(&addr) => Lands::Refused,
+                            true => Lands::Replace,
+                        };
+                        let c = Cell {
+                            typ: t.to_string(),
+                            name: name.clone(),
+                            path,
+                            lands,
+                        };
+                        if !s.cells.contains(&c) {
+                            s.cells.push(c);
+                        }
+                    }
+                }
+            }
+        }
+        for s in out.values_mut() {
+            s.cells.sort();
+            if let Some(r) = st.secrets.get(&s.key) {
+                s.generation = r.generation;
+                s.since = Some(r.rotated_at.clone());
+            } else {
+                s.since = match s.kind {
+                    Kind::Memo => st.memo.get(&s.key).map(|m| m.kept.clone()),
+                    Kind::Random => born.map(str::to_string),
+                    _ => None,
+                };
+            }
+        }
+        let mut v: Vec<Secret> = out.into_values().collect();
+        v.sort_by(|a, b| (a.kind, &a.key).cmp(&(b.kind, &b.key)));
+        v
     }
 }

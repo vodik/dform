@@ -587,6 +587,8 @@ pub const PROVIDER_PREDS: &[&str] = &[
     "identity",
     "deformation",
     "derived_at_last_apply",
+    crate::secrets::SECRETS,
+    crate::secrets::ROTATED,
     "in_instance",
     "world_digest",
     "may_derive",

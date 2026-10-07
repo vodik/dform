@@ -214,6 +214,11 @@ enum Command {
         #[command(subcommand)]
         cmd: StateCommand,
     },
+    /// A deployment's secrets: list them, rotate one (R-161).
+    Secrets {
+        #[command(subcommand)]
+        cmd: SecretsCommand,
+    },
     /// Provider tools.
     Provider {
         #[command(subcommand)]
@@ -575,15 +580,6 @@ enum StateCommand {
         #[command(flatten)]
         target: Target,
     },
-    /// Forget the value `memo.first` keeps for KEY (`taint memo KEY`): the
-    /// next run keeps its candidate instead.
-    Taint {
-        #[arg(value_parser = ["memo"])]
-        kind: String,
-        key: String,
-        #[command(flatten)]
-        target: Target,
-    },
     /// Forget the host key `use ssh` recorded for HOST (as the
     /// program names it, `10.0.0.5` or `name:2222`): the next contact
     /// records the key the host offers then. For a host rebuilt with a new
@@ -601,6 +597,31 @@ enum StateCommand {
         to: String,
         #[command(flatten)]
         target: Target,
+    },
+}
+
+#[derive(Subcommand, Debug, Clone)]
+enum SecretsCommand {
+    /// A result set: every secret the deployment's program holds, by key:
+    /// its kind (random, memo, given, held), generation, age, the cells
+    /// that read it and how a new value lands there (update, forces
+    /// replace, refused by prevent_destroy). Never a value.
+    List {
+        #[command(flatten)]
+        target: Target,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Rotate one secret, KEY after the deployment (`rotate apps env=lab
+    /// synapse-db`): a `random.*` key's generation moves on, a memo
+    /// forgets what it keeps, recorded in state and the audit log with who
+    /// and when. The next plan changes exactly that value, with the
+    /// reason. A given or held secret is rotated where it lives: rotate
+    /// says where, and fails.
+    Rotate {
+        /// [TARGET] [K=V..] KEY
+        #[arg(value_name = "TARGET K=V.. KEY", required = true, num_args = 1..)]
+        words: Vec<String>,
     },
 }
 
@@ -775,7 +796,10 @@ enum Cmd {
         max_events: Option<usize>,
         max_ticks: usize,
     },
-    TaintMemo {
+    SecretsList {
+        json: bool,
+    },
+    SecretsRotate {
         key: String,
     },
     ForgetHost {
@@ -1274,9 +1298,20 @@ fn resolve(args: Args) -> Result<Cli> {
                 from_log,
                 target,
             } => (Cmd::StateShow { addr, from_log }, Some(target)),
-            StateCommand::Taint { key, target, .. } => (Cmd::TaintMemo { key }, Some(target)),
             StateCommand::ForgetHost { host, target } => (Cmd::ForgetHost { host }, Some(target)),
             StateCommand::Mv { from, to, target } => (Cmd::StateMv { from, to }, Some(target)),
+        },
+        Command::Secrets { cmd } => match cmd {
+            SecretsCommand::List { target, json } => (Cmd::SecretsList { json }, Some(target)),
+            SecretsCommand::Rotate { mut words } => {
+                let key = words.pop().expect("clap: one word at least");
+                let mut words = words.into_iter();
+                let target = Target {
+                    target: words.next(),
+                    keys: words.collect(),
+                };
+                (Cmd::SecretsRotate { key }, Some(target))
+            }
         },
         Command::Provider { cmd } => match cmd {
             ProviderCommand::Check { path } => (Cmd::ProviderCheck { path }, None),
@@ -2007,6 +2042,8 @@ fn run_with(
             | Cmd::Why { .. }
             | Cmd::Show { .. }
             | Cmd::Controller { .. }
+            | Cmd::SecretsList { .. }
+            | Cmd::SecretsRotate { .. }
     ) {
         loaded.require_provider()?;
     }
@@ -2165,7 +2202,6 @@ fn run_with(
             )
             .map(|()| Outcome::Done);
         }
-        Cmd::TaintMemo { key } => return taint_memo(&dep, key, &audit).map(|()| Outcome::Done),
         Cmd::ForgetHost { host } => return forget_host(&dep, host, &audit).map(|()| Outcome::Done),
         Cmd::StateMv { from, to } => {
             return state_mv(&dep, from, to, &audit).map(|()| Outcome::Done);
@@ -2197,8 +2233,18 @@ fn run_with(
     );
     // Who holds it: dform.toml's `[secrets]` (R-164).
     let mixing = crate::custody::Mixing::of(located.loaded.manifest.as_ref())?;
+    // What only reads the deployment's secrets: a query, a why, `secrets`.
+    let reads = matches!(
+        cli.cmd,
+        Cmd::Query { .. } | Cmd::Why { .. } | Cmd::SecretsList { .. } | Cmd::SecretsRotate { .. }
+    );
     let master = match &cli.cmd {
-        Cmd::Plan { .. } | Cmd::Apply { .. } | Cmd::Query { .. } | Cmd::Why { .. } => {
+        Cmd::Plan { .. }
+        | Cmd::Apply { .. }
+        | Cmd::Query { .. }
+        | Cmd::Why { .. }
+        | Cmd::SecretsList { .. }
+        | Cmd::SecretsRotate { .. } => {
             // The key may be made now: a bucket is checked first, as for
             // any run that writes.
             if let (true, None, store::Location::S3(spec)) = (
@@ -2215,9 +2261,9 @@ fn run_with(
                     new_master,
                 },
             )?;
-            // A query or a why only reads: it says what this master
-            // derives, whatever state was applied with.
-            m.accept |= matches!(cli.cmd, Cmd::Query { .. } | Cmd::Why { .. });
+            // A query, a why or `secrets` only reads: it says what this
+            // master derives, whatever state was applied with.
+            m.accept |= reads;
             m
         }
         _ => crate::custody::Master::none(),
@@ -2362,7 +2408,12 @@ fn run_with(
     // refuses. Any other run is blocked by a violation.
     let explains = matches!(
         cli.cmd,
-        Cmd::Query { .. } | Cmd::Why { .. } | Cmd::Diff { .. } | Cmd::Explain { .. }
+        Cmd::Query { .. }
+            | Cmd::Why { .. }
+            | Cmd::Diff { .. }
+            | Cmd::Explain { .. }
+            | Cmd::SecretsList { .. }
+            | Cmd::SecretsRotate { .. }
     );
     // The audit log as the run began, read once: the guardrail and why
     // since the last apply both read it.
@@ -2410,13 +2461,17 @@ fn run_with(
             cli.cmd,
             Cmd::Plan { .. } | Cmd::Query { .. } | Cmd::Why { .. } | Cmd::Rekey { .. }
         ),
-        policy: explains || matches!(cli.cmd, Cmd::Plan { .. }),
+        policy: (explains
+            && !matches!(cli.cmd, Cmd::SecretsList { .. } | Cmd::SecretsRotate { .. }))
+            || matches!(cli.cmd, Cmd::Plan { .. }),
         last_apply: last_derived
             .as_ref()
             .map(zset::Derived::facts)
             .unwrap_or_default(),
         destroy: destroying,
     };
+    // A key never rotated is as old as its master (R-161, `secrets/4`).
+    crate::functions::random::set_born(born(entries()));
     let mut ev = located.evaluate(
         read_outputs,
         &opts,
@@ -2536,7 +2591,29 @@ fn run_with(
                     print!("{}", d.text(*why));
                 }
             }
-            _ => unreachable!("explains is query, why, diff or __explain"),
+            Cmd::SecretsList { json } => {
+                let born = born(entries());
+                let list = crate::secrets::inventory::of(
+                    &x.res.facts,
+                    &x.redact,
+                    &ev.st,
+                    ev.evaluator.backend.schema(),
+                    born.as_deref(),
+                );
+                secrets_list(&deployment, &list, *json, &cli.table)?;
+            }
+            Cmd::SecretsRotate { key } => {
+                let born = born(entries());
+                let list = crate::secrets::inventory::of(
+                    &x.res.facts,
+                    &x.redact,
+                    &ev.st,
+                    ev.evaluator.backend.schema(),
+                    born.as_deref(),
+                );
+                secrets_rotate(&ev.located.dep, &list, &ev.st.memo, key, &audit)?;
+            }
+            _ => unreachable!("explains is query, why, diff, __explain or secrets"),
         }
         return Ok(Outcome::Done);
     }
@@ -2952,7 +3029,8 @@ fn run_with(
         | Cmd::Init { .. }
         | Cmd::Completions { .. }
         | Cmd::Complete { .. }
-        | Cmd::TaintMemo { .. }
+        | Cmd::SecretsList { .. }
+        | Cmd::SecretsRotate { .. }
         | Cmd::ForgetHost { .. } => {
             unreachable!("handled before evaluation")
         }
@@ -3065,12 +3143,16 @@ fn run_with(
                 }
             }
             // The report listed the conflicts and the denies over the plan
-            // (R-111): stderr names only what it did not, once.
-            let unshown: Vec<String> = violations
+            // (R-111): stderr names only what it did not, once. An up to
+            // date plan lists none (a secret's age, R-161, denies one).
+            let mut unshown: Vec<String> = violations
                 .iter()
                 .filter(|v| !report::is_conflict(v))
                 .cloned()
                 .collect();
+            if report.undeformed && !json {
+                unshown.extend(denies.iter().cloned());
+            }
             blocked(&unshown, &redact)?;
             if !violations.is_empty() || !denies.is_empty() {
                 let conflicts = violations.iter().filter(|v| report::is_conflict(v)).count();
@@ -3874,6 +3956,10 @@ fn run_with(
                 }
                 if !boundary {
                     st.in_flight = None;
+                    // The rotations this apply carried are made (R-161).
+                    for r in st.secrets.values_mut() {
+                        r.pending = false;
+                    }
                     // What this apply derived, for the next plan's
                     // guardrail and policy pass (R-80).
                     let relations: BTreeSet<String> = located
@@ -4942,27 +5028,159 @@ fn run_tests(
     Ok(())
 }
 
-/// `dform state taint memo KEY`: forget what `memo.first` keeps for KEY in
-/// the deployment's state, under its lock.
-fn taint_memo(dep: &crate::store::Deployment, key: &str, audit: &crate::audit::Log) -> Result<()> {
+/// When the deployment's master was first applied, from its audit log: its
+/// first `master` entry, else (a deployment applied before they were
+/// logged) its first apply.
+fn born(entries: Option<&Vec<serde_json::Value>>) -> Option<String> {
+    let es = entries?;
+    es.iter()
+        .find(|e| e["kind"] == "master")
+        .or_else(|| es.iter().find(|e| e["kind"] == "apply_start"))
+        .and_then(|e| e["time"].as_str().map(str::to_string))
+}
+
+/// `dform secrets list` (R-161): each secret by key, never a value.
+fn secrets_list(
+    deployment: &str,
+    list: &[crate::secrets::inventory::Secret],
+    json: bool,
+    o: &report::table::Options,
+) -> Result<()> {
+    use report::table::{Cell, Table};
+    let mut t = Table::new(["key", "kind", "generation", "age", "read by", "lands"]);
+    for s in list {
+        let generation = match s.kind {
+            crate::secrets::inventory::Kind::Random | crate::secrets::inventory::Kind::Memo => {
+                s.generation.to_string()
+            }
+            _ => String::new(),
+        };
+        let cells: Vec<String> = s.cells.iter().map(|c| c.to_string()).collect();
+        let read = match cells.is_empty() {
+            true => s
+                .lives
+                .clone()
+                .map(|l| format!("(lives in {l})"))
+                .unwrap_or_default(),
+            false => cells.join(", "),
+        };
+        t.push(vec![
+            Cell::text(s.key.clone()),
+            Cell::text(s.kind.word()),
+            Cell::text(generation.clone()).with_json(match s.generation {
+                _ if generation.is_empty() => serde_json::Value::Null,
+                g => g.into(),
+            }),
+            Cell::text(
+                s.since
+                    .as_deref()
+                    .map(crate::secrets::inventory::age)
+                    .unwrap_or_default(),
+            )
+            .with_json(s.since.clone().into()),
+            Cell::text(read).with_json(cells.into()),
+            Cell::text(s.lands().map(|l| l.words()).unwrap_or_default()),
+        ]);
+    }
+    if json {
+        println!("{}", serde_json::to_string_pretty(&t.json())?);
+        return Ok(());
+    }
+    println!(
+        "{deployment}: {} secret{}",
+        list.len(),
+        if list.len() == 1 { "" } else { "s" }
+    );
+    print!("{}", t.render(o));
+    Ok(())
+}
+
+/// `dform secrets rotate KEY` (R-161): the key's generation moves on (a
+/// memo forgets what it keeps), in state under its lock and in the audit
+/// log; what reads it, and how a new value lands there, said first.
+fn secrets_rotate(
+    dep: &crate::store::Deployment,
+    list: &[crate::secrets::inventory::Secret],
+    kept: &std::collections::BTreeMap<String, crate::memo::Kept>,
+    key: &str,
+    audit: &crate::audit::Log,
+) -> Result<()> {
+    use crate::secrets::inventory::Kind;
     let deployment = dep.name();
+    // A memo state keeps that is no secret (a time, a name) is forgotten
+    // the same way.
+    let plain;
+    let found = match list.iter().find(|s| s.key == key) {
+        Some(s) => Some(s),
+        None if kept.contains_key(key) => {
+            plain = crate::secrets::inventory::Secret::memo(key);
+            Some(&plain)
+        }
+        None => None,
+    };
+    let Some(s) = found else {
+        let keys: Vec<&str> = list
+            .iter()
+            .filter(|s| matches!(s.kind, Kind::Random | Kind::Memo))
+            .map(|s| s.key.as_str())
+            .collect();
+        bail!(
+            "secrets rotate {key}: {deployment} has no secret {key} (its keys: {}); a key the \
+             program no longer derives is no secret to rotate",
+            match keys.is_empty() {
+                true => "none".to_string(),
+                false => keys.join(", "),
+            }
+        );
+    };
+    if let (Kind::Given | Kind::Held, lives) = (s.kind, &s.lives) {
+        bail!(
+            "secrets rotate {key}: {key} is {} in {deployment}, and lives in {}: rotate it \
+             there, then plan",
+            s.kind.word(),
+            lives.as_deref().unwrap_or("its source")
+        );
+    }
     if !dep.has_state()? {
         bail!(
-            "taint memo {key}: stack {deployment} has no state at {}",
-            dep.locate(store::STATE)
+            "secrets rotate {key}: {deployment} was never applied: its secrets are new at its \
+             first apply"
         );
     }
     let lock = dep.lock()?;
     let mut st = dep.load_state()?;
-    if st.taint_memo(key).is_none() {
-        bail!("taint memo {key}: stack {deployment} keeps no memo {key}");
+    let who = crate::audit::who();
+    let (r, memo) = st.rotate(key, &crate::memo::now(), &who);
+    // What the next plan changes, and how (R-161's blast radius).
+    println!(
+        "rotating {key} of {deployment} ({}): generation {} -> {}",
+        s.kind.word(),
+        r.generation - 1,
+        r.generation
+    );
+    for c in &s.cells {
+        println!("  {c}  {}", c.lands.words());
+    }
+    if memo.is_some() {
+        println!("  forgot what memo.first keeps: the next apply keeps its candidate");
+    } else if s.cells.is_empty() {
+        println!("  (nothing reads it)");
     }
     dep.save_state(&st)?;
     audit.append(
-        "state_taint",
-        serde_json::json!({ "memo": key, "who": crate::audit::who() }),
+        "rotated",
+        serde_json::json!({
+            "key": key,
+            "kind": s.kind.word(),
+            "generation": r.generation,
+            "memo": memo.is_some(),
+            "who": who,
+        }),
     )?;
-    println!("tainted memo {key} of stack {deployment}: the next apply keeps a new value");
+    println!(
+        "rotated {key} of {deployment}: generation {}, by {who}; the next plan changes it",
+        r.generation
+    );
     lock.release()
 }
 
@@ -5984,7 +6202,8 @@ fn needs_project(cli: &Cli) -> bool {
         | Cmd::StateShow { .. }
         | Cmd::Output { .. }
         | Cmd::StateMv { .. }
-        | Cmd::TaintMemo { .. }
+        | Cmd::SecretsList { .. }
+        | Cmd::SecretsRotate { .. }
         | Cmd::ForgetHost { .. } => true,
         _ => false,
     }
@@ -6539,6 +6758,7 @@ const COMMANDS: &[&str] = &[
     "output",
     "stack",
     "state",
+    "secrets",
     "provider",
     "controller",
     "completions",
@@ -6550,7 +6770,8 @@ const COMMANDS: &[&str] = &[
 fn subcommands(noun: &str) -> &'static [&'static str] {
     match noun {
         "stack" => &["list", "rekey", "handover", "unlock"],
-        "state" => &["show", "taint", "forget-host", "mv"],
+        "state" => &["show", "forget-host", "mv"],
+        "secrets" => &["list", "rotate"],
         "provider" => &["check", "schema"],
         "controller" => &["run"],
         "log" => &["verify"],

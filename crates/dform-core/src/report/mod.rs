@@ -392,6 +392,15 @@ impl Shown {
             Shown::Sensitive(Some(l)) if why >= Why::How => {
                 format!("(sensitive {})", printed_attribute(l))
             }
+            // A rotated secret says why it changes at every level (R-161).
+            Shown::Sensitive(Some(l)) if why > Why::None => {
+                match l.split_once(&format!(", {}", crate::functions::random::ROTATED)) {
+                    Some((_, r)) => {
+                        format!("(sensitive, {}{r})", crate::functions::random::ROTATED)
+                    }
+                    None => "(sensitive)".into(),
+                }
+            }
             Shown::Sensitive(_) => "(sensitive)".into(),
             Shown::Ref { addr, .. } => reference(addr, ""),
             Shown::Value(Json::String(s)) if why == Why::Line => {

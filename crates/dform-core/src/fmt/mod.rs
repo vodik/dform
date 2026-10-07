@@ -112,7 +112,7 @@ fn print_signature(f: &crate::functions::Function) -> String {
     let params: Vec<String> = f
         .params
         .iter()
-        .map(|p| format!("{}{}: {}", p.name, if p.optional { "?" } else { "" }, p.ty))
+        .map(crate::functions::Param::text)
         .chain(f.variadic.then(|| "...".to_string()))
         .collect();
     let mut s = format!("{}({}) -> {}", f.name, params.join(", "), f.ret);

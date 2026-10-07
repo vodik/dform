@@ -6174,7 +6174,13 @@ impl<'u> Lowerer<'u> {
                 {
                     return self.ref_call(rc, &list, pre, span);
                 }
-                if node(n, ARG_LIST).is_some_and(|l| node(&l, NAMED_ARG).is_some()) {
+                let named: Vec<(String, SyntaxNode)> = node(n, ARG_LIST)
+                    .into_iter()
+                    .flat_map(|l| l.children().filter(|c| c.kind() == NAMED_ARG))
+                    .filter_map(|a| Some((word_text(&a, 0), terms(&a).next()?)))
+                    .collect();
+                let declared = crate::functions::get(&name).filter(|f| !f.internal);
+                if !named.is_empty() && declared.is_none() {
                     return self.error(
                         span,
                         format!(
@@ -6184,7 +6190,17 @@ impl<'u> Lowerer<'u> {
                     );
                 }
                 self.check_function(&name, span);
-                let args = self.bind(false, |l| l.args(rc, n, Pos::Content, pre))?;
+                let mut args = self.bind(false, |l| l.args(rc, n, Pos::Content, pre))?;
+                if let (false, Some(f)) = (named.is_empty(), declared) {
+                    let mut given = Vec::new();
+                    for (k, t) in named {
+                        given.push((k, self.bind(false, |l| l.term(rc, &t, Pos::Content, pre))?));
+                    }
+                    args = match crate::functions::with_named(f, args, given) {
+                        Ok(a) => a,
+                        Err(why) => return self.error(span, why),
+                    };
+                }
                 self.check_aggregated(&name, &args, span);
                 // `cloud_ref(T, name, path)`, a form of the language, is
                 // the lowering's `__cloud_ref` (R-155).

@@ -1,7 +1,8 @@
 //! `memo.first(+key: string, +candidate, -value)` (R-60): the one way a
 //! value is kept across runs. The first candidate ever given for a key is
 //! kept in the deployment's state and is the value on every later run,
-//! whatever the candidate then; `dform state taint memo KEY` forgets it.
+//! whatever the candidate then; `dform secrets rotate DEPLOYMENT KEY`
+//! forgets it (R-161).
 //!
 //! ```text
 //! memo.first("db-created", time.now(), created)      # a creation time
@@ -129,7 +130,7 @@ impl Memos {
             return Ok(v.clone());
         }
         // Its stand-in (R-164): a function of the key and the seal, which
-        // stay until the memo is tainted.
+        // stay until the memo is rotated.
         let standin = {
             use sha2::Digest;
             let d = sha2::Sha256::new()

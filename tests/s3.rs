@@ -768,10 +768,11 @@ resource db.user app {
 } where kv.password("app", candidate), memo.first("app-pw", candidate, pw)
 "#;
 
-/// `state taint memo` finds an s3 stack's state through its program's backend.
+/// `secrets rotate` of a memo finds an s3 stack's state through its
+/// program's backend.
 #[test]
-fn taint_forgets_an_answer_in_the_bucket() {
-    for t in &targets("taint_forgets_an_answer_in_the_bucket") {
+fn rotate_forgets_an_answer_in_the_bucket() {
+    for t in &targets("rotate_forgets_an_answer_in_the_bucket") {
         let p = Project::of(t, "taint", |s| {
             s.write("stacks/p.df", PERSISTED);
             s.write(
@@ -792,11 +793,15 @@ fn taint_forgets_an_answer_in_the_bucket() {
             String::from_utf8(p.bucket("p").get(STATE).unwrap().unwrap().bytes).unwrap()
         };
         assert!(state(&p).contains("pw-first"), "{}", t.what);
-        let r = p.run(&["state", "taint", "memo", "app-pw", "p"]).success();
-        assert_eq!(
-            r.stdout, "tainted memo app-pw of stack p: the next apply keeps a new value\n",
-            "{}",
-            t.what
+        let r = p.run(&["secrets", "rotate", "p", "app-pw"]).success();
+        assert!(
+            r.stdout.contains(
+                "  forgot what memo.first keeps: the next apply keeps its candidate\nrotated \
+                 app-pw of p: generation 2"
+            ),
+            "{}: {}",
+            t.what,
+            r.stdout
         );
         assert!(!state(&p).contains("pw-first"), "{}", t.what);
     }

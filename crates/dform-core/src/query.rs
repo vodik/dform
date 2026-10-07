@@ -540,6 +540,12 @@ impl Redactor {
         r
     }
 
+    /// Each secret value the run holds, with its label (`dform secrets
+    /// list`, R-161): never printed, only matched.
+    pub fn labelled(&self) -> impl Iterator<Item = (&Value, &str)> {
+        self.secrets.iter().map(|(v, l)| (v, l.as_str()))
+    }
+
     /// `v` is a secret, as a whole: its parts are not, by themselves (a
     /// plain word in a secret object prints where it is plain; R-128).
     fn add(&mut self, v: &Value, label: &str) {

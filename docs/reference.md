@@ -238,7 +238,8 @@ prints the same plan and applies nothing.
 | `plan`, `apply`, `destroy`, `why`, `query`, `diff`, `test`, `fmt`, `log` | on a target |
 | `output TARGET [NAME]` | a deployment's outputs |
 | `stack list`, `stack rekey`, `stack unlock` | the project's stacks |
-| `state show`, `state taint`, `state forget-host`, `state mv` | a deployment's state |
+| `state show`, `state forget-host`, `state mv` | a deployment's state |
+| `secrets list`, `secrets rotate` | a deployment's secrets |
 | `provider check`, `provider schema` | providers |
 | `dev strata`, `dev graph`, `dev effects`, `dev --world W --inventory I --provider P --chaos C COMMAND` | the mock and the evaluator |
 | `doc [TARGET]` | the doc comments as Markdown, on stdout |
@@ -507,7 +508,7 @@ Storage and any other S3-compatible service is taken on that check.
 
 Every command takes an s3 stack as it takes a local one: `plan`, `apply`,
 `stack rekey` (it moves the deployment's objects between prefixes, or
-between a bucket and a directory), `state taint`, `state show`, `state mv`, `log`,
+between a bucket and a directory), `secrets`, `state show`, `state mv`, `log`,
 `stack unlock` and `stack list` (which lists the deployments under the
 stack's prefix), and other stacks read its outputs (the registry records
 `s3://BUCKET/PREFIX/state.json` with the endpoint and region).
@@ -2061,6 +2062,135 @@ with it, or where nothing was applied; beside a deployment's own key file
 a run says so once on stderr (`warning: RANDOM_MASTER is set: ..`), and
 refuses it when the ids differ.
 
+### Rotation
+
+A secret is rotated one at a time, by its key, as an operation, not a
+change of code: `dform secrets rotate TARGET KEY` (`secrets rotate apps
+env=lab synapse-db`). It takes the deployment's lock and records in
+state, under `secrets`, the key's next generation, when and by whom
+(`DFORM_ACTOR`, else `user@host`: the actor as asserted, not verified),
+and writes a `rotated` entry to the audit log. A `random.*` value
+derives with its key's generation (1 for a key never rotated, which is
+the value it always had), so the next plan changes exactly the cells
+that read that key, with the reason, at every level of the plan:
+
+```text
+$ dform secrets rotate crud_api crud-api-db
+rotating crud-api-db of crud_api (random): generation 1 -> 2
+  google.sql_user crud_user.password  update
+  k8s.secret db_conn.stringData.PGPASSWORD  update
+rotated crud-api-db of crud_api: generation 2, by simon@host; the next plan changes it
+$ dform plan crud_api
+plan: 2 changes (2 update) over 1 tick
+
+tick 1  2 changes
+  ~ google.sql_user crud_user  stacks/crud_api.df:92
+      password = (sensitive) → (sensitive, generation 2, rotated 2026-10-07 by simon@host)
+  ~ k8s.secret db_conn         stacks/crud_api.df:120
+      stringData.PGPASSWORD = (sensitive) → (sensitive, generation 2, rotated 2026-10-07 by simon@host)
+```
+
+(`-v` adds the call, `(sensitive random.password("crud-api-db"),
+generation 2, ..)`.) The rotation is then reviewed and applied like any
+change: the apply that completes it clears it from the plan's policy
+facts. A memo is rotated by forgetting what `memo.first` keeps: the next
+apply keeps its candidate (a `random.*` candidate of the same key moves
+with the generation; one of another key does not). A secret the
+operator gives (an input, an environment variable) or that something
+else holds (a provider's computed attribute, another stack's output) is
+rotated where it lives: `rotate` says where and exits 1. Changing a key
+in the program (`"db-pw"` to `"db-pw-2"`) is a different secret, not a
+rotation.
+
+`rotate` first prints what reads the key and how a new value lands
+there, the blast radius: `update`, `forces replace` (the attribute is
+`force_new`: a k3s token in `user_data` replaces every server it is in),
+or `refused by prevent_destroy`. `dform secrets list TARGET` prints the
+same for every secret of the deployment, never a value:
+
+```text
+$ dform secrets list platform env=lab
+platform[env=lab]: 3 secrets
+key        kind    generation  age  read by                                           lands
+k3s-token  random  1           41d  ovh.instance lab-server.user_data, ..             forces replace
+synapse    random  2           3d   k8s.secret synapse.stringData.signing_key         update
+admin-pw   given                    k8s.secret forgejo.stringData.password            update
+```
+
+A kind is `random`, `memo`, `given` or `held`; the age of a key never
+rotated is its master's, from the audit log's first `master` entry;
+`--json` gives the same rows. Policy reads them as `secrets(Key, Kind,
+Generation, RotatedAt)`, a key's `random` or `memo` row with the time it
+was rotated (or its master first applied), so an age is a rule over the
+clock, and the rotations a plan carries as `rotated(Key, Generation,
+By)`, for an approval:
+
+```dform
+use time
+warn "${k} is older than 90 days" where {
+  secrets(k, "random", _, at)
+  now = time.now()
+  now - at > 90d
+}
+requires_approval(r, "rotates ${k}") where rotated(k, _, _), deformation(_, r, _)
+```
+
+Some rotations need the old value to stay valid for a while. Each
+`random.*` takes `generation:` for an earlier value, and
+`random.verify_key(key)` is the public half of `random.signing_key(key)`,
+so Synapse's signing key rotates with its old verify key still published,
+in the program:
+
+```dform
+let g = random.generation("synapse")
+let previous = random.verify_key("synapse", generation: g - 1)   # where g > 1
+```
+
+`previous` is `ed25519 a_XXXX KEY`, what homeserver.yaml's
+`old_signing_keys` lists under `ed25519:a_XXXX` with its `expired_ts`;
+and a database whose role cannot take a new password in
+place alternates two users, each at its own generation. The Synapse
+shape is three keys: `random.signing_key("synapse")`,
+`random.base64("synapse-macaroon", 32)` (rotating it logs out the tokens
+it signed) and `random.password("synapse-db")`: rotating one is one
+command and one plan line. A dependent system learns a new value through
+a resource of its own (a database role whose password the program sets,
+R-159), never through a trigger. The master is never rotated by a
+program: a new master is `--new-master` ("The master"), and every
+derived value changes with it.
+
+`RANDOM_MASTER` (tests, the editor) is taken only where state was applied
+with it, or nothing was applied ("Secret outputs across stacks"): a stale
+one in a shell is refused, not a silent rotation of everything.
+
+### A secret's lifecycle
+
+Where a secret comes from decides who rotates it:
+
+| origin | in dform | rotated by |
+|---|---|---|
+| generated by the tool | `random.*`, a `memo.first` of one | `secrets rotate`: a generation, or a memo forgotten |
+| issued by a cloud or a system | a provider's computed sensitive attribute (`held`), a location's read | the issuer: a new resource (create before destroy), or the system's own command |
+| held by a manager | an input or an environment variable a manager fills (fnox, `op run`) | the manager |
+| typed by a human | an input (`--set`, an input file) | the human, into the manager |
+
+Where it rests, and what a compromise of each place yields: the backend
+holds state, the audit log and the outputs, which hold names, ids and
+keyed digests, never a secret, and the master sealed under the
+passphrase ("Custody"): a copy of the bucket without the passphrase
+derives nothing. A Kubernetes Secret holds the value base64 in etcd,
+encrypted at rest only with k3s's `--secrets-encryption`. An instance's
+`user_data` is readable by anything on the node that reaches the
+metadata service, and by anyone with the cloud API's read. A workload
+reads it from its environment or a file. A change of a Secret reaches a
+running workload only when it restarts.
+
+Routine rotation is `secrets rotate` on a schedule, a policy over
+`secrets/4` saying when. Emergency rotation of one leaked secret is the
+same command, now. Offboarding someone who could open the master: rotate
+what they could derive (`secrets list` names it), in the order the
+dependents allow, and change the passphrase.
+
 ## The audit log
 
 Every deployment has an append-only audit log beside its state,
@@ -2108,6 +2238,9 @@ The kinds:
   and `who`;
 - `opened`: an apply that opened secret outputs sealed to it: which
   (`outputs`, `DEPLOYMENT.OUTPUT`), and `who`;
+- `rotated`: `dform secrets rotate`: the `key`, its `kind` (`random`,
+  `memo`), its new `generation`, whether a `memo` was forgotten, and
+  `who`;
 - `custody`: the apply that sealed a deployment's key file under the
   passphrase: `sealed` (`state.key`), `into` (`state.master`), the master
   `id`, and `who`;
@@ -2819,8 +2952,8 @@ What must stay the same across runs is kept by `memo.first(+key: string,
 +candidate, -value)`, a built-in relation in scope with no `use`
 (docs/grammar.md "Memo"): the first candidate ever given for a
 key is the value on every later run. An apply keeps what it read in the
-deployment's state; a plan keeps nothing. `dform state taint memo KEY
-[TARGET]` forgets one, so the next run gives its candidate again, and
+deployment's state; a plan keeps nothing. `dform secrets rotate
+[TARGET] KEY` forgets one, so the next run gives its candidate again, and
 `why` names a kept value `memo, first kept <when>`:
 
 ```dform
@@ -2833,20 +2966,25 @@ warn "rotate the database password" where {
 ```
 
 ```bash
-dform state taint memo db-created    # the next apply keeps a new time
+dform secrets rotate db-created    # the next apply keeps a new time
 ```
 
 Generated secrets are std functions, derived rather than drawn:
 `random.password(key[, length[, alphabet]])` (32 alphanumerics by
 default; `"ascii"`, `"hex"`, `"base64"`), `random.base64(key, length)`
 (base64 text) and `random.signing_key(key)` (ed25519 in Synapse's format)
-return `secret(string)`; `random.id(key[, length])` and
-`random.uuid(key)` are public. Each is HKDF-SHA256 of the deployment's
+return `secret(string)`; `random.id(key[, length])`,
+`random.uuid(key)` and `random.verify_key(key)` (the signing key's
+public half) are public. Each is HKDF-SHA256 of the deployment's
 master (see "Secrets"; `RANDOM_MASTER` in the environment for tests),
-with the function, the deployment, the key and every knob in
-the derivation: the same on every run, stored nowhere, and a new value
-when a knob, the key or the master changes (rotate with a new key,
-`"db-pw-2"`). A value that must be made once and survive a change of
+with the function, the deployment, the key, every knob and the key's
+generation in the derivation: the same on every run, stored nowhere, and
+a new value when a knob, the key, its generation or the master changes.
+`dform secrets rotate TARGET KEY` moves a key's generation on ("Secrets",
+"Rotation"); a key changed in the program is a different secret. Each
+takes `generation:`, the key's current one by default, for an earlier
+value (`random.verify_key("synapse", generation: 1)`), and
+`random.generation(key)` is the current one, public. A value that must be made once and survive a change of
 master is `memo.first(KEY, random.base64(KEY, 32))`: a memo of a secret
 candidate is kept sealed with a key derived from the stack's key, never in
 state in the clear, and opened in memory by the run that reads it.

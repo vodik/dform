@@ -1393,8 +1393,8 @@ warn "rotate the database password" where {
 
 Within a run the first call of a key answers every other one, so two
 sites agree. A plan keeps nothing; an apply keeps what it read in the
-deployment's state when it completes a tick. `dform state taint memo KEY
-[TARGET]` forgets a kept value: the next run gives the candidate again,
+deployment's state when it completes a tick. `dform secrets rotate
+[TARGET] KEY` forgets a kept value: the next run gives the candidate again,
 and the next apply keeps it. `why` names a kept value's source as
 `memo, first kept <when>`.
 
@@ -1690,7 +1690,11 @@ first: `+ -` (left), `* / %` (left), unary `-`. An aggregate (`count(x)`,
 `sum(x)`, `collect_set(x)`, ...) is bound in a body, `n = count(x)`
 ("Aggregates"). Named arguments
 (`project(id: i)`) are for a relation declared with named columns; they
-lower to a record pattern.
+lower to a record pattern. In a call of a function they name its
+parameters (`random.password("db", generation: 1)`): each goes where the
+signature declares it, after the positional ones, and an optional
+parameter left out before it takes its declared default (`length?: int =
+32`); one with no default must be given.
 
 Membership (H-9): `x in e` for a list, `x in T` for a type, `x in
 resource` for any, `r in NS` for any resource of a provider's namespace,

@@ -1,29 +1,41 @@
 # Generated values: functions about a key (R-60; docs/grammar.md
 # "Functions", "Memo"). Not random at all: each is derived by HKDF from
 # the deployment's master (docs/reference.md "Secrets"; `RANDOM_MASTER` in
-# the environment for tests) with the deployment, the function, the key
-# and every knob, so a value is the same on every run and a changed knob
-# (or master) is a new value. Nothing is stored. A value that must be made once
-# and kept whatever the master becomes is `memo.first(KEY, random.base64(KEY,
-# 32), V)`.
+# the environment for tests) with the deployment, the function, the key,
+# every knob and the key's generation, so a value is the same on every run
+# and a changed knob (or master) is a new value. Nothing is stored. A key's
+# generation is 1 until `dform secrets rotate DEPLOYMENT KEY` moves it on
+# (R-161); `generation:` asks for an earlier one, for an overlap window
+# (the verify key a rotated signing key still publishes, the user a
+# rotated database password alternates with). A value that must be made
+# once and kept whatever the master becomes is `memo.first(KEY,
+# random.base64(KEY, 32), V)`.
 package random
 
-#| A password for `key`: `length` characters (32 by default) of `alphabet`, one of "alnum" (the default), "ascii" (printable, no space), "hex" or "base64"; an error for another alphabet or a length outside 1..1024. A secret.
+#| A password for `key`: `length` characters (32 by default) of `alphabet`, one of "alnum" (the default), "ascii" (printable, no space), "hex" or "base64"; an error for another alphabet or a length outside 1..1024. At the key's `generation`, its current one by default. A secret.
 #| example: let pw = random.password("db-pw")
-fn password(key: string, length?: int, alphabet?: string) -> secret(string)
+fn password(key: string, length?: int = 32, alphabet?: string = "alnum", generation?: int) -> secret(string)
 
 #| `length` bytes for `key` (1..4096), as base64 text: a key for something that takes raw bytes. A secret.
 #| example: let cookie = random.base64("cookie-key", 32)
-fn base64(key: string, length: int) -> secret(string)
+fn base64(key: string, length: int, generation?: int) -> secret(string)
 
 #| An identifier for `key`: `length` bytes (8 by default, 1..64) as hex. Public: a name may carry it.
 #| example: let bucket = "logs-${random.id("logs")}"
-fn id(key: string, length?: int) -> string
+fn id(key: string, length?: int = 8, generation?: int) -> string
 
 #| A UUID (version 4 in form) for `key`. Public.
 #| example: let tenant = random.uuid("tenant")
-fn uuid(key: string) -> string
+fn uuid(key: string, generation?: int) -> string
 
 #| An ed25519 signing key for `key` in Synapse's format, `ed25519 a_XXXX SEED` (the seed unpadded base64). A secret.
 #| example: let signing = random.signing_key("synapse")
-fn signing_key(key: string) -> secret(string)
+fn signing_key(key: string, generation?: int) -> secret(string)
+
+#| The public half of `random.signing_key(key)` at the same generation: `ed25519 a_XXXX KEY`, the verify key unpadded base64. Public: what a rotated key's `old_signing_keys` publishes.
+#| example: let verify = random.verify_key("synapse")
+fn verify_key(key: string, generation?: int) -> string
+
+#| The generation of `key` in this deployment: 1 until `dform secrets rotate` moves it on (R-161). Public.
+#| example: let g = random.generation("synapse")
+fn generation(key: string) -> int

@@ -63,6 +63,36 @@ pub struct State {
     /// before it plans (R-163).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub master: Option<String>,
+    /// Each secret rotated by `dform secrets rotate` (R-161), by its key
+    /// (`random.password("db")`'s `db`, a memo's): its generation, an
+    /// input of what `random.*` derives for the key, and who rotated it
+    /// when. A key with no record is at generation 1.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub secrets: BTreeMap<String, Secret>,
+}
+
+/// A secret's rotation (R-161): what `secrets rotate` records, and the
+/// audit log's `rotated` entry repeats.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Secret {
+    /// 1 for a key never rotated; each rotation adds one.
+    pub generation: u32,
+    /// When it was last rotated: RFC 3339, UTC.
+    pub rotated_at: String,
+    /// Who rotated it, as the audit log names an actor (`DFORM_ACTOR`,
+    /// else `user@host`): asserted, not verified.
+    pub by: String,
+    /// Rotated since the last apply that completed: the next plan carries
+    /// the rotation (`rotated/3` to policy).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub pending: bool,
+}
+
+impl Secret {
+    /// The day it was rotated, as a plan's reason says it.
+    pub fn day(&self) -> &str {
+        self.rotated_at.get(..10).unwrap_or(&self.rotated_at)
+    }
 }
 
 /// A host's key as first met: its type (`ssh-ed25519`), its SHA-256
@@ -152,11 +182,25 @@ impl State {
         Ok(st)
     }
 
-    /// `dform state taint memo KEY`: forget the value `memo.first` keeps
-    /// for `key`, so the next run keeps its candidate. Returns what it
-    /// kept.
-    pub fn taint_memo(&mut self, key: &str) -> Option<crate::memo::Kept> {
-        self.memo.remove(key)
+    /// `dform secrets rotate KEY` (R-161): the key's next generation,
+    /// recorded as rotated now by `by`, and the value `memo.first` keeps
+    /// for it forgotten, so the next run keeps its candidate. Returns the
+    /// record and what the memo kept.
+    pub fn rotate(
+        &mut self,
+        key: &str,
+        now: &str,
+        by: &str,
+    ) -> (Secret, Option<crate::memo::Kept>) {
+        let generation = self.secrets.get(key).map_or(1, |s| s.generation) + 1;
+        let s = Secret {
+            generation,
+            rotated_at: now.to_string(),
+            by: by.to_string(),
+            pending: true,
+        };
+        self.secrets.insert(key.to_string(), s.clone());
+        (s, self.memo.remove(key))
     }
 
     /// `dform state forget-host HOST`: forget the key recorded for `host`,

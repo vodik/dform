@@ -1,6 +1,6 @@
 //! `memo.first(+key, +candidate, -value)` (R-60): the first candidate given
 //! for a key is kept in state by the apply and is the value on every later
-//! run; `dform state taint memo KEY` forgets it. A secret candidate is
+//! run; `dform secrets rotate DEPLOYMENT KEY` forgets it (R-161). A secret candidate is
 //! kept sealed with the stack's key, never in the clear. `time.now()` is
 //! the `time` provider's extern, read again every run.
 
@@ -53,9 +53,9 @@ resource db.user app {
 "#;
 
 /// A memo survives a re-plan whatever the candidate becomes, and is gone
-/// after `state taint memo KEY`: the next run keeps its candidate.
+/// after `secrets rotate D KEY`: the next run keeps its candidate.
 #[test]
-fn a_memo_survives_a_replan_and_is_gone_after_taint() {
+fn a_memo_survives_a_replan_and_is_gone_after_a_rotation() {
     let s = project("memo-plain", PLAIN);
     answers(&s, "first");
     let now = [("DFORM_TEST_NOW", "2026-10-02T09:00:00Z")];
@@ -83,17 +83,21 @@ fn a_memo_survives_a_replan_and_is_gone_after_taint() {
         r.stdout
     );
 
-    let r = run(&s, &[], &["state", "taint", "memo", "other", "p"]).failure();
+    let r = run(&s, &[], &["secrets", "rotate", "p", "other"]).failure();
     assert!(
         r.stderr
-            .contains("taint memo other: stack p keeps no memo other"),
+            .contains("secrets rotate other: p has no secret other (its keys: none)"),
         "{}",
         r.stderr
     );
-    let r = run(&s, &[], &["state", "taint", "memo", "app-pw", "p"]).success();
-    assert_eq!(
-        r.stdout,
-        "tainted memo app-pw of stack p: the next apply keeps a new value\n"
+    let r = run(&s, &[], &["secrets", "rotate", "p", "app-pw"]).success();
+    assert!(
+        r.stdout.starts_with(
+            "rotating app-pw of p (memo): generation 1 -> 2\n  forgot what memo.first keeps: \
+             the next apply keeps its candidate\nrotated app-pw of p: generation 2, by "
+        ),
+        "{}",
+        r.stdout
     );
     assert!(!s.read("dform.state/p/state.json").contains("pw-first"));
     let r = run(&s, &[], &["plan", "p.df"]).success();
@@ -140,7 +144,7 @@ resource db.secret v {
 /// A secret memo (`memo.first(K, random.password(K), V)`) is kept sealed:
 /// no byte of it is under dform.state, in a plan file or in any output; a
 /// new master derives another candidate, and the kept one stays until the
-/// memo is tainted.
+/// memo is rotated.
 #[test]
 fn a_secret_memo_is_kept_sealed_never_in_the_clear() {
     let s = project("memo-secret", SECRET);
@@ -200,9 +204,10 @@ fn a_secret_memo_is_kept_sealed_never_in_the_clear() {
         assert!(!text.contains(&pw), "{what}:\n{text}");
     }
 
-    // Tainted, the next apply keeps the new master's candidate, which no
+    // Rotated, the next apply keeps the new master's candidate, which no
     // output of the runs before showed either.
-    run(&s, &[], &["state", "taint", "memo", "db-pw", "p"]).success();
+    let r = run(&s, &[], &["secrets", "rotate", "p", "db-pw"]).success();
+    assert!(!r.stdout.contains(&pw), "{}", r.stdout);
     let r = run(&s, &second, &["plan", "--new-master", "p.df"]).success();
     assert!(r.summary().contains("1 update"), "{}", r.stdout);
     assert!(!r.stdout.contains(&pw), "{}", r.stdout);

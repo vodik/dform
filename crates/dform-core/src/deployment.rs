@@ -976,6 +976,7 @@ impl Evaluator {
         ));
         facts.extend(may_derive);
         facts.extend(self.last_apply.iter().cloned());
+        facts.extend(crate::secrets::rotation_facts(st));
         let (res, all) = self.evaluate_with(st, &replaced, &facts, None)?;
         let again = ir::compile_resources(res.facts.iter().cloned(), schema)?;
         let wanted = program_docs.as_ref().unwrap_or(&resources);
@@ -1281,6 +1282,8 @@ impl Located {
         // `random.*` derive from the deployment's master (R-60); a run that
         // does not hold it derives stand-ins (R-164, `secrets::standin`).
         crate::secrets::standin::set_active(opts.master.random.is_none());
+        // Each key at its generation (R-161).
+        crate::functions::random::set_secrets(&st.secrets);
         if lowered.is_some_and(|l| crate::functions::random::called(&l.program)) {
             crate::functions::random::set_master(
                 opts.master.random.clone(),
