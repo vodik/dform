@@ -258,3 +258,88 @@ fn one_use_of_a_provider_is_as_before() {
             .contains("aws.vpc::a")
     );
 }
+
+/// The mock linked in, counting the Schema calls each link is sent.
+struct Counting(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+
+/// A provider that counts the Schema calls it is sent.
+struct Count<P> {
+    inner: P,
+    schemas: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl<P: dform::plugin::backend::Provider> dform::plugin::backend::Provider for Count<P> {
+    fn submit(&mut self, call: dform::plugin::backend::Call) -> dform::plugin::backend::Ticket {
+        if matches!(call, dform::plugin::backend::Call::Schema(_)) {
+            self.schemas
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+        self.inner.submit(call)
+    }
+
+    fn next_completed(
+        &mut self,
+        events: &mut dyn FnMut(dform::plugin::backend::Ticket, dform::plugin::pb::Event),
+    ) -> (
+        dform::plugin::backend::Ticket,
+        Result<dform::plugin::backend::Reply, dform::plugin::backend::CallError>,
+    ) {
+        self.inner.next_completed(events)
+    }
+}
+
+impl dform::plugin::Launch for Counting {
+    fn mock(&self) -> anyhow::Result<dform::plugin::link::Link> {
+        use dform::plugin::queue::{Order, Queue};
+        dform::plugin::link::Link::start(
+            "the mock",
+            Box::new(Count {
+                inner: Queue::new(dform_mock::Mock::linked(), Order::Clock, false),
+                schemas: self.0.clone(),
+            }),
+        )
+    }
+
+    fn plugin(
+        &self,
+        exe: &std::path::Path,
+        _: &dform::plugin::host::Grants,
+    ) -> anyhow::Result<dform::plugin::link::Link> {
+        anyhow::bail!("no plugin here: {}", exe.display())
+    }
+}
+
+/// Two names of one provider are two links, its schema asked of one and
+/// served under each name; the provider's own names are none of theirs.
+#[test]
+fn the_schema_is_asked_once_and_served_under_each_name() {
+    use dform::plugin::providers::{Block, Config, Providers};
+    let s = Scratch::new("alias-schema");
+    let schemas = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let block = |name: &str| Block {
+        spec: "aws-mock".into(),
+        name: name.into(),
+        provider: "aws".into(),
+    };
+    let p = Providers::start(
+        &Counting(schemas.clone()),
+        &["aws-mock".to_string()],
+        &Config {
+            world: s.path("w.json"),
+            inventory: s.path("inventory.json"),
+            blocks: vec![block("east"), block("west")],
+            ..Config::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(p.names().len(), 2);
+    assert_eq!(schemas.load(std::sync::atomic::Ordering::SeqCst), 1);
+    let schema = p.schema();
+    assert!(schema.knows_type("east.vpc") && schema.knows_type("west.subnet"));
+    assert!(!schema.knows_type("aws.vpc"));
+    assert_eq!(
+        schema.attr("west.subnet", "vpc_id").map(|a| a.ty.as_str()),
+        Some("ref(west.vpc)")
+    );
+    assert!(schema.externs.contains_key("east.availability_zone"));
+}
