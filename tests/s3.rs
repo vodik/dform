@@ -363,31 +363,13 @@ fn a_run_killed_between_the_log_and_the_checkpoint_recovers() {
                 t.what,
                 b.stdout
             );
-            assert_eq!(
-                without_deps(p.replayed()),
-                without_deps(want.clone()),
-                "{} {at}",
-                t.what
-            );
+            assert_eq!(p.replayed(), want, "{} {at}", t.what);
             assert_eq!(p.state()["fence"], 2, "{} {at}", t.what);
             let again = p.run(PLAN).success();
             assert!(again.stdout.contains("is up to date"), "{} {at}", t.what);
             p.run(&["log", "verify", "dform[env=staging]"]).success();
         }
     }
-}
-
-/// State without each object's recorded dependencies: a resumed apply
-/// records an object's reference to one an earlier apply made
-/// (`role = app_role`, the role made before the kill) as no dependency,
-/// with or without a kill in between (a resume's, not the log's).
-fn without_deps(mut st: serde_json::Value) -> serde_json::Value {
-    if let Some(rs) = st["resources"].as_object_mut() {
-        for r in rs.values_mut() {
-            r.as_object_mut().unwrap().remove("deps");
-        }
-    }
-    st
 }
 
 #[test]
