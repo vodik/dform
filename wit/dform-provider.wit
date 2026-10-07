@@ -187,6 +187,17 @@ interface types {
     // built from (`0.1.0+1a2b3c4`). dform refuses one of its own built-in
     // providers (`fakecloud`, `kubernetes`) whose build is not its own.
     version: string,
+    // The settings a program's `use` block gives it (`kubeconfig`), each
+    // with whether its value is sensitive: a secret the program writes to
+    // one not declared sensitive is refused at compile time (E0304).
+    // Empty: the provider declares none, and any setting is passed as
+    // written.
+    settings: list<setting-decl>,
+  }
+
+  record setting-decl {
+    name: string,
+    sensitive: bool,
   }
 
   record configure-request {

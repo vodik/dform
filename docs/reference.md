@@ -1859,7 +1859,7 @@ is a compile error with a span, before anything is evaluated:
 | E0301 | a test or an inspecting function: `==` (a binding's too, `pw(p), p == "x"`), `!=`, `<` and the orders, `in` either side, `has`, a join (`pw(p), known(p)`), a builtin predicate, `len`, `split`, `inet_*`; a field's (`conn.password == ..`) and an interpolation's (`"${pw}!" == ..`) |
 | E0302 | a negated literal, `not has` included: absence leaks a bit |
 | E0303 | an aggregate other than `collect_*` (`count` leaks cardinality) |
-| E0304 | a public place: a resource attribute the schema does not mark `sensitive`, a setting, an output or input not declared `secret(T)`, a `deny`/`warn` |
+| E0304 | a public place: a resource attribute the schema does not mark `sensitive`, a provider's setting it does not declare sensitive (when it declares its settings), an output or input not declared `secret(T)`, a `deny`/`warn` |
 | E0305 | a resource address (`want`, a resource name, `ref`, `scoped`) |
 | E0306 | what a coeffect is asked with, sent off the machine at plan: a location (`io.read("https://x/${pw}")`), an extern's `+` column not declared `+x: secret(T)` (R-167) |
 

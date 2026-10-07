@@ -491,6 +491,7 @@ impl<P: Provider> Typed<P> {
                     false => vec!["resource".to_string()],
                 },
                 version: P::VERSION.to_string(),
+                settings: Vec::new(),
             }),
             Call::Configure(r) => {
                 let config = wire::from_doc_or_empty(r.config.as_ref()).map_err(Error::from)?;

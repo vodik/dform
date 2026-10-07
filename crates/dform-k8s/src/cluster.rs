@@ -17,6 +17,19 @@ use std::time::Duration;
 /// works offline.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 
+/// The settings [`Cluster::configured`] reads, each with whether its value
+/// is sensitive: what the handshake declares, so a program's secret goes
+/// only where the provider keeps it in memory (E0304).
+pub const SETTINGS: [(&str, bool); 7] = [
+    ("kubeconfig", true),
+    ("host", false),
+    ("ca", false),
+    ("token", true),
+    ("client_certificate", false),
+    ("client_key", true),
+    ("namespace", false),
+];
+
 pub struct Cluster {
     client: kube::Client,
     /// The kubeconfig context's namespace (`default` without one).

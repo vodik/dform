@@ -228,6 +228,14 @@ macro_rules! convert {
                     name: r.name.clone(),
                     capabilities: r.capabilities.clone(),
                     version: r.version.clone(),
+                    settings: r
+                        .settings
+                        .iter()
+                        .map(|s| w::SettingDecl {
+                            name: s.name.clone(),
+                            sensitive: s.sensitive,
+                        })
+                        .collect(),
                 }
             }
 
@@ -237,6 +245,14 @@ macro_rules! convert {
                     name: r.name.clone(),
                     capabilities: r.capabilities.clone(),
                     version: r.version.clone(),
+                    settings: r
+                        .settings
+                        .iter()
+                        .map(|s| pb::SettingDecl {
+                            name: s.name.clone(),
+                            sensitive: s.sensitive,
+                        })
+                        .collect(),
                 })
             }
 

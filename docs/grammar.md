@@ -1311,7 +1311,10 @@ naming the fix (`dev --provider` runs it anyway). A provider's `source`
 is a constant (the stack reads it to start the provider; without one,
 dform.toml's `[providers]` entry of the name). Every other setting is
 the provider's own, which its schema may declare; one it does not is
-passed to Configure as written. Each is a term, read like a rule's
+passed to Configure as written. A provider that declares its settings
+(its handshake's `settings`, a mock's `provider_setting` rows) says which
+are sensitive, `kubeconfig` and `token` of `k8s`: a secret written to any
+other is E0304, the help naming those it may go to. Each is a term, read like a rule's
 (inputs, value names, tables, `env.var`), and the block lowers to one
 rule for them all, plus one for `expect_account`:
 

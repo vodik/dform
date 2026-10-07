@@ -76,3 +76,29 @@ fn an_event_and_a_reveal_round_trip() {
         a
     );
 }
+
+/// A handshake's declared settings, each with its sensitive flag, cross
+/// the WIT as the proto has them (a component provider declares them too).
+#[test]
+fn a_handshake_carries_its_settings() {
+    let hs = pb::HandshakeResponse {
+        protocol_version: 1,
+        name: "kubernetes".into(),
+        capabilities: vec!["resource".into()],
+        version: "0.1.0".into(),
+        settings: vec![
+            pb::SettingDecl {
+                name: "kubeconfig".into(),
+                sensitive: true,
+            },
+            pb::SettingDecl {
+                name: "namespace".into(),
+                sensitive: false,
+            },
+        ],
+    };
+    assert_eq!(
+        c::from_handshake_response(&c::to_handshake_response(&hs)).unwrap(),
+        hs
+    );
+}

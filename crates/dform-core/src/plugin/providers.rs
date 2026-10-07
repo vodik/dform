@@ -1390,6 +1390,23 @@ impl Providers {
             for e in resp.externs.iter().map(|e| &e.pred).chain(s.externs.keys()) {
                 externs.entry(e.clone()).or_insert(i);
             }
+            // The settings its handshake declares, under each name the
+            // program gives it.
+            let declared = &link.borrow().settings;
+            if !declared.is_empty() {
+                let names = self
+                    .blocks
+                    .iter()
+                    .filter(|&(_, &j)| j == i)
+                    .map(|(b, _)| b.clone())
+                    .chain([self.names[i].clone()]);
+                for n in names {
+                    s.settings
+                        .entry(n)
+                        .or_default()
+                        .extend(declared.iter().cloned());
+                }
+            }
             schema = schema.merge(s)?;
         }
         let loaded = Loaded {

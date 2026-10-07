@@ -169,3 +169,78 @@ fn the_engine_api_holds_them_as_the_command_line_does() {
         held("provider k8s  kubeconfig = db.postgres[\"absent\"].endpoint")
     );
 }
+
+/// A provider declares the settings its `use` block gives it, each
+/// sensitive or not (`provider_setting` in a mock's schema, `settings` in a
+/// plugin's handshake): a secret goes only to a sensitive one, E0304
+/// elsewhere, the help naming those it may go to. A provider declaring
+/// none takes any.
+fn settings_plan(s: &Scratch, block: &str, plugin: bool) -> common::Run {
+    let block = match plugin {
+        true => block.replacen("use k8s {", "use k8s { source = \"./providers/k8s\",", 1),
+        false => block.to_string(),
+    };
+    s.write(
+        "p.df",
+        &format!(
+            "input pw: secret(string) = \"opensesame\"\n{block}\n\
+             resource k8s.namespace n {{ metadata.name = \"a\" }}\n"
+        ),
+    );
+    if plugin && !s.path("providers/k8s").exists() {
+        std::fs::create_dir_all(s.path("providers/k8s")).unwrap();
+        std::os::unix::fs::symlink(
+            common::exe("dform-provider-k8s"),
+            s.path("providers/k8s/dform-provider-k8s"),
+        )
+        .unwrap();
+    }
+    let out = common::dform()
+        .args(["dev", "--world", "w.json", "plan", "p.df"])
+        .current_dir(&s.dir)
+        .env("DFORM_K8S_OFFLINE", "1")
+        .env_remove("KUBERNETES_SERVICE_HOST")
+        .env_remove("KUBERNETES_SERVICE_PORT")
+        .output()
+        .unwrap();
+    common::Run::from(out)
+}
+
+#[test]
+fn a_secret_goes_only_to_a_setting_declared_sensitive() {
+    let help = "provider k8s's sensitive settings: ";
+    for plugin in [false, true] {
+        let s = Scratch::new("use-block-sensitive");
+        let r = settings_plan(&s, "use k8s { host = pw }", plugin).failure();
+        assert!(
+            r.stderr.contains(
+                "E0304: a secret reaches provider k8s's setting host, not declared sensitive"
+            ) && r.stderr.contains(help)
+                && r.stderr.contains("kubeconfig")
+                && r.stderr.contains("token"),
+            "plugin={plugin}\n{}",
+            r.stderr
+        );
+        let r = settings_plan(&s, "use k8s { cluster_name = pw }", plugin).failure();
+        assert!(
+            r.stderr.contains(
+                "E0304: a secret reaches provider k8s's setting cluster_name, which it does not declare"
+            ),
+            "plugin={plugin}\n{}",
+            r.stderr
+        );
+        // Where the provider keeps it: no E0304 (the plugin, offline,
+        // may refuse the kubeconfig's text at Configure).
+        let r = settings_plan(&s, "use k8s { kubeconfig = pw, host = \"h\" }", plugin);
+        assert!(!r.stderr.contains("E0304"), "plugin={plugin}\n{}", r.stderr);
+    }
+    // The fake cloud declares no setting: it takes any.
+    let s = Scratch::new("use-block-undeclared");
+    s.write(
+        "p.df",
+        "input pw: secret(string) = \"opensesame\"\nuse fake { region = pw }\n\
+         resource net.vpc v { cidr = \"10.0.0.0/16\" }\n",
+    );
+    let r = s.run(&["dev", "--world", "w.json", "plan", "p.df"]);
+    assert!(!r.stderr.contains("E0304"), "{}", r.stderr);
+}

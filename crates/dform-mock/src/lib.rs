@@ -1410,6 +1410,9 @@ impl Handler for Mock {
                         .map(String::from)
                         .collect(),
                     version: backend::BUILD.into(),
+                    // Each schema it plays declares its own
+                    // (`provider_setting`).
+                    settings: Vec::new(),
                 })
             }
             C::Configure(req) => {

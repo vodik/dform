@@ -161,6 +161,17 @@ message HandshakeResponse {
   // built from (`0.1.0+1a2b3c4`). dform refuses one of its own built-in
   // providers (`fakecloud`, `kubernetes`) whose build is not its own.
   string version = 4;
+  // The settings a program's `use` block gives it (`kubeconfig`), each
+  // with whether its value is sensitive: a secret the program writes to
+  // one not declared sensitive is refused at compile time (E0304).
+  // Empty: the provider declares none, and any setting is passed as
+  // written.
+  repeated SettingDecl settings = 5;
+}
+
+message SettingDecl {
+  string name = 1;
+  bool sensitive = 2;
 }
 
 message ConfigureRequest {

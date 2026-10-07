@@ -1601,6 +1601,14 @@ impl Handler for Ovh {
                     name: PROVIDER.into(),
                     capabilities: ["resource", "managed", "keep"].map(String::from).to_vec(),
                     version: backend::BUILD.into(),
+                    // What names the account; the keys are the OVH SDK's
+                    // configuration's, never a setting (R-44).
+                    settings: ["endpoint", "project"]
+                        .map(|name| pb::SettingDecl {
+                            name: name.into(),
+                            sensitive: false,
+                        })
+                        .to_vec(),
                 })
             }
             C::Configure(req) => {

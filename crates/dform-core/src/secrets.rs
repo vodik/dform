@@ -23,7 +23,8 @@
 //! - E0303 an aggregate other than `collect_*` over a secret: `count`
 //!   leaks cardinality;
 //! - E0304 a secret reaching a public place: a resource attribute the
-//!   schema does not mark `sensitive`, a setting, an output not declared
+//!   schema does not mark `sensitive`, a provider's setting it does not
+//!   declare sensitive (when it declares its settings), an output not declared
 //!   `secret(T)`, an input not declared `secret(T)`, a `deny`/`warn`;
 //! - E0305 a secret reaching a resource address (`want`, `arg`, `ref`,
 //!   `scoped`): names are printed everywhere;
@@ -1002,6 +1003,41 @@ pub fn check(
                     h.span,
                     format!("E0304: a secret reaches {place}"),
                 ));
+            }
+            // A setting the provider declares, not sensitive, or one it
+            // does not declare: the provider may print or keep it.
+            ("provider_config", 2)
+                if let [name, Term::Obj(settings)] = h.args.as_slice()
+                    && let Some(name) = s(name)
+                    && let Some(declared) = schema.settings.get(name) =>
+            {
+                for k in settings.keys().filter(|k| secret(&settings[*k])) {
+                    if declared.get(k) == Some(&true) {
+                        continue;
+                    }
+                    let what = match declared.contains_key(k) {
+                        true => "not declared sensitive",
+                        false => "which it does not declare",
+                    };
+                    let sensitive: Vec<&str> = declared
+                        .iter()
+                        .filter(|(_, s)| **s)
+                        .map(|(k, _)| k.as_str())
+                        .collect();
+                    let help = match sensitive.as_slice() {
+                        [] => format!("provider {name} declares no sensitive setting"),
+                        ks => format!("provider {name}'s sensitive settings: {}", ks.join(", ")),
+                    };
+                    diags.push(
+                        Diagnostic::error(
+                            h.span,
+                            format!(
+                                "E0304: a secret reaches provider {name}'s setting {k}, {what}"
+                            ),
+                        )
+                        .with_help(help),
+                    );
+                }
             }
             ("deny" | "warn", _) if !refinement && h.args.iter().any(secret) => {
                 diags.push(Diagnostic::error(

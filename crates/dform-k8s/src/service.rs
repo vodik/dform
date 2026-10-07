@@ -880,6 +880,13 @@ impl pb::provider_server::Provider for Service {
                 "keep".into(),
             ],
             version: dform_core::plugin::backend::BUILD.into(),
+            settings: crate::cluster::SETTINGS
+                .iter()
+                .map(|&(name, sensitive)| pb::SettingDecl {
+                    name: name.into(),
+                    sensitive,
+                })
+                .collect(),
         }))
     }
 

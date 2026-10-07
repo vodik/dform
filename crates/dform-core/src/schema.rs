@@ -280,10 +280,20 @@ pub struct Schema {
     /// -distribution"`, `"-vcpus: int"`), so a program reads one with no
     /// `extern` line of its own.
     pub externs: BTreeMap<String, crate::ast::ExternFn>,
+    /// The settings each provider declares a program's `use` block gives
+    /// it, by provider name, each with whether its value is sensitive: a
+    /// secret written to one that is not is E0304 (`secrets::check`). A
+    /// provider declaring none takes any. From `provider_setting(Provider,
+    /// Name, Flags)` and a provider's handshake.
+    pub settings: BTreeMap<String, BTreeMap<String, bool>>,
 }
 
 /// A schema's data source declaration (R-106): `extern_decl(Pred, Sig)`.
 pub const EXTERN_DECL: &str = "extern_decl";
+
+/// A schema's provider setting: `provider_setting(Provider, Name, Flags)`,
+/// `Flags` `["sensitive"]` or `[]` ([`Schema::settings`]).
+pub const PROVIDER_SETTING: &str = "provider_setting";
 
 /// `extern_decl(pred, sig)`'s declaration: each column `+name` or
 /// `-name`, then `: type` if it is typed.
@@ -661,6 +671,16 @@ impl Schema {
                     };
                     s.externs.insert(p.clone(), extern_decl(p, sig)?);
                 }
+                PROVIDER_SETTING => {
+                    let [Value::Str(p), Value::Str(n), Value::List(flags)] = args.as_slice() else {
+                        return Err(bad());
+                    };
+                    let sensitive = flags.iter().any(|f| f.as_str() == Some("sensitive"));
+                    s.settings
+                        .entry(p.clone())
+                        .or_default()
+                        .insert(n.clone(), sensitive);
+                }
                 _ => {}
             }
             s.facts.push(Atom {
@@ -737,6 +757,9 @@ impl Schema {
                 bail!("extern_decl({p}) declared by two schemas");
             }
             self.externs.insert(p, f);
+        }
+        for (p, s) in other.settings {
+            self.settings.entry(p).or_default().extend(s);
         }
         Ok(self)
     }

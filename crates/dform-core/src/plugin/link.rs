@@ -19,6 +19,9 @@ pub struct Link {
     /// The name the provider's handshake gave: what state records.
     pub name: String,
     pub capabilities: Vec<String>,
+    /// The settings its handshake declares, each with whether its value is
+    /// sensitive ([`crate::schema::Schema::settings`]).
+    pub settings: Vec<(String, bool)>,
     /// What was started, for messages.
     pub program: String,
     /// How the launcher hosted it, for `provider check` (R-13b).
@@ -102,6 +105,7 @@ impl Link {
         let mut link = Link {
             name: String::new(),
             capabilities: Vec::new(),
+            settings: Vec::new(),
             backend: Timed::new(program.clone(), backend, policy.timeout),
             program,
             hosting: None,
@@ -128,6 +132,11 @@ impl Link {
         link.backend.set_name(&hs.name);
         link.name = hs.name;
         link.capabilities = hs.capabilities;
+        link.settings = hs
+            .settings
+            .into_iter()
+            .map(|s| (s.name, s.sensitive))
+            .collect();
         Ok(link)
     }
 
@@ -353,6 +362,7 @@ mod tests {
                 name: self.0.into(),
                 capabilities: vec!["resource".into()],
                 version: self.1.into(),
+                settings: Vec::new(),
             }))
         }
     }
