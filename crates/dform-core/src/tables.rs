@@ -145,10 +145,11 @@ fn parse_name(name: &str) -> Option<(&str, &str)> {
 }
 
 /// What a table extern reads, for messages: `input relation p`, `set`
-/// (`set from DOC`).
+/// (`set from DOC`), `yaml document` (a loader's call, R-129).
 pub fn describe(name: &str) -> Option<String> {
     Some(match parse_name(name)? {
         (_, SET_DOC) => "set".into(),
+        (f, t) if t.strip_suffix(".git").unwrap_or(t) == DOCUMENT => format!("{f} document"),
         (_, t) => format!("input relation {t}"),
     })
 }

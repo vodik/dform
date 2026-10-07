@@ -1175,7 +1175,11 @@ expect_account = t            provider_expect_account("p", t') :- reads
 A setting is a content position: a dot in it reads now. A block takes no
 `+=` and no rank; a setting given twice is an error. A clause starts the
 provider only where it holds ("Guarded declarations"): `use fake {
-region = "eu-west-1" } where cloud == "aws"`.
+region = "eu-west-1" } where cloud == "aws"`. A provider's `use` stands
+in any module a stack reaches and configures the provider for the
+deployment, as the stack's own would (R-129): one configuration per
+provider, so two `use`s that configure it differently are a conflict the
+plan names with both sites, and the same configuration twice is one.
 
 A provider's `use` also brings its externs into scope, with their
 binding modes (DESIGN.org R-8): a program does not write `extern` for
@@ -1324,7 +1328,9 @@ relation input takes a document the same way, `p from DOC` in its
 resource's or `use`'s block.
 
 A loader's table lowers to externs (`src/tables.rs`), the source its bound
-inputs, the selector in the table's name:
+inputs, the selector in the table's name. The declarations are the
+compiler's: the same wherever the call stands (a used module, a
+component, a `let`), one per table, and no message names them (R-129):
 
 ```
 extern table.FORMAT.p(+path, -at, -col: type, ...)

@@ -228,12 +228,18 @@ pub fn check(program: &Program, fns: &[ExternFn]) -> Result<()> {
                             _ => None,
                         })
                     {
-                        let msg = match crate::tables::describe(&f.name) {
-                            Some(t) => format!("{t}: its source reads its own rows"),
-                            None => format!("extern {} in a recursive rule", f.name),
+                        let (msg, asked) = match crate::tables::describe(&f.name) {
+                            Some(t) => (
+                                format!("{t}: its source reads its own rows"),
+                                "a source is read once it is known",
+                            ),
+                            None => (
+                                format!("extern {} in a recursive rule", f.name),
+                                "an extern is asked once its inputs are complete",
+                            ),
                         };
                         diags.push(Diagnostic::error(a.span, msg).with_note(format!(
-                            "{} depends on itself through {p}; an extern is asked once its inputs are complete",
+                            "{} depends on itself through {p}; {asked}",
                             h.pred
                         )));
                     }

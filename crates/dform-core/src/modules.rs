@@ -273,9 +273,12 @@ fn exclusive_copies(stmts: &[Stmt]) -> Vec<Stmt> {
 }
 
 /// Predicates a module may never make private: the compiler's, the
-/// provider's and the policy heads.
+/// provider's and the policy heads, and a provider's settings: a
+/// provider's `use` in a module configures it for the deployment (R-129).
 fn is_shared(pred: &str) -> bool {
     crate::loader::is_core_pred(pred)
+        || pred == "provider_config"
+        || pred == crate::plugin::providers::EXPECT_ACCOUNT
 }
 
 /// The relation a copy is recorded in (R-65): `instance_of(Path, User,
@@ -360,6 +363,30 @@ fn definitions<'a>(stmts: &'a [Stmt], out: &mut BTreeMap<String, &'a crate::ast:
             definitions(&m.body, out);
         }
     }
+}
+
+/// The program's statements and those of every module a `use` imports and
+/// every component a `resource` copies, each definition's once: where a
+/// declaration of the deployment may stand (a provider's `use` and its
+/// settings, R-129). A definition no statement reaches is left out.
+pub fn reached(program: &Program) -> Vec<&Stmt> {
+    let mut defs = BTreeMap::new();
+    definitions(&program.statements, &mut defs);
+    let mut out = Vec::new();
+    let mut seen = BTreeSet::new();
+    let mut todo: Vec<&[Stmt]> = vec![&program.statements];
+    while let Some(stmts) = todo.pop() {
+        for s in stmts {
+            if let Stmt::Use(u) | Stmt::Instance(u) = s
+                && let Some(&m) = defs.get(u.module.as_str())
+                && seen.insert(u.module.as_str())
+            {
+                todo.push(&m.body);
+            }
+            out.push(s);
+        }
+    }
+    out
 }
 
 /// The expansion's state.

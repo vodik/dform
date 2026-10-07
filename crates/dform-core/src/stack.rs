@@ -240,19 +240,41 @@ pub fn config(program: &Program) -> Result<Stack> {
     let mut diags = Vec::new();
     let settings = program.stack.as_ref();
     for s in &program.statements {
-        match s {
-            Stmt::Input(i) if i.key => out.keys.push((i.name.clone(), i.span)),
-            Stmt::Provider(c) => {
-                // A built-in fact provider dform answers itself starts nothing.
-                if crate::externs::builtin(&c.name).is_some_and(|b| b.in_process) {
-                    continue;
-                }
-                let spec = provider(c, &mut diags);
-                out.provider_blocks.insert(spec.clone(), c.name.clone());
-                out.providers.push(spec);
-            }
-            _ => {}
+        if let Stmt::Input(i) = s
+            && i.key
+        {
+            out.keys.push((i.name.clone(), i.span));
         }
+    }
+    // A provider's `use` in a used module starts it as the stack's does
+    // (R-129): one provider per name, its source given by one `use` or
+    // none.
+    let mut started: Vec<(&Config, String)> = Vec::new();
+    for s in crate::modules::reached(program) {
+        let Stmt::Provider(c) = s else { continue };
+        // A built-in fact provider dform answers itself starts nothing.
+        if crate::externs::builtin(&c.name).is_some_and(|b| b.in_process) {
+            continue;
+        }
+        let spec = provider(c, &mut diags);
+        match started.iter_mut().find(|(f, _)| f.name == c.name) {
+            None => started.push((c, spec)),
+            Some(_) if c.config.is_empty() => {}
+            Some((first, before)) if first.config.is_empty() => (*first, *before) = (c, spec),
+            Some((first, before)) if *before != spec => diags.push(
+                Diagnostic::error(
+                    c.span,
+                    format!("provider {}: two `use`s name another source", c.name),
+                )
+                .with_label(first.span, "the other `use`")
+                .with_help("one provider is started by its source: give it in one `use`"),
+            ),
+            Some(_) => {}
+        }
+    }
+    for (c, spec) in started {
+        out.provider_blocks.insert(spec.clone(), c.name.clone());
+        out.providers.push(spec);
     }
     if let Some(c) = settings {
         out.name = Some(c.name.clone());

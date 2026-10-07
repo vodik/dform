@@ -201,10 +201,8 @@ impl Loaded {
     /// A run that starts providers needs one: a program with no
     /// provider's `use`, run with no `--provider`, starts none (R-26).
     pub fn require_provider(&self) -> Result<()> {
-        let named = self
-            .program
-            .statements
-            .iter()
+        let named = crate::modules::reached(&self.program)
+            .into_iter()
             .any(|s| matches!(s, Stmt::Provider(_)));
         if self.providers.is_empty() && !named {
             bail!(NO_PROVIDER);
@@ -485,7 +483,7 @@ impl Evaluator {
                 externs.eval_resumable(program, &extra, zset::POLICY_INPUTS)?;
             // A provider the program configures, its settings now known,
             // is configured, and what it serves read again.
-            let configured = backend.configure_from(&res.facts)?;
+            let configured = backend.configure_from(agreed(&res.facts))?;
             // A kind a CRD the program made defines, served now (R-126).
             let learned = self.learn_made_kinds(&res, st)?;
             if !configured.is_empty() || learned {
@@ -525,7 +523,7 @@ impl Evaluator {
             // made known (a kubeconfig read from the server it created) is
             // configured now, and the program evaluated again over what it
             // serves (R-45).
-            let configured = backend.configure_from(&res.facts)?;
+            let configured = backend.configure_from(agreed(&res.facts))?;
             // So is a kind the CRD the last tick made defines (R-126).
             let learned = self.learn_made_kinds(&res, st)?;
             if !configured.is_empty() || learned {
@@ -541,6 +539,7 @@ impl Evaluator {
             (res, violations)
         };
         violations.extend(inputs::violations(&res.facts, &self.declared));
+        violations.extend(disagreements(&res.facts).into_values());
         Ok((res, violations))
     }
 
@@ -733,28 +732,30 @@ impl Evaluator {
 
     /// The expression setting `key` of provider `name` is written as.
     fn setting_source(&self, name: &str, key: &str) -> Option<String> {
-        self.program.statements.iter().find_map(|s| {
-            let head = match s {
-                Stmt::Rule(r) => &r.head,
-                Stmt::Fact(a) => a,
-                _ => return None,
-            };
-            match head.args.as_slice() {
-                [Term::Val(Value::Str(n)), Term::Obj(_)]
-                    if head.pred == "provider_config" && n == name =>
-                {
-                    setting_text(head.span, key)
+        crate::modules::reached(&self.program)
+            .into_iter()
+            .find_map(|s| {
+                let head = match s {
+                    Stmt::Rule(r) => &r.head,
+                    Stmt::Fact(a) => a,
+                    _ => return None,
+                };
+                match head.args.as_slice() {
+                    [Term::Val(Value::Str(n)), Term::Obj(_)]
+                        if head.pred == "provider_config" && n == name =>
+                    {
+                        setting_text(head.span, key)
+                    }
+                    _ => None,
                 }
-                _ => None,
-            }
-        })
+            })
     }
 
     /// `provider NAME  KEY = EXPR, ..`: a provider block's settings (its
     /// `provider_config` row) as the program writes them.
     fn settings_label(&self, name: &str) -> String {
         let mut from: Vec<String> = Vec::new();
-        for s in &self.program.statements {
+        for s in crate::modules::reached(&self.program) {
             let head = match s {
                 Stmt::Rule(r) => &r.head,
                 Stmt::Fact(a) => a,
@@ -1697,12 +1698,60 @@ fn inventory(explicit: &Option<PathBuf>, world: &Option<PathBuf>, default: &Path
     default.to_path_buf()
 }
 
+/// The `provider_config` rows of the providers whose `use`s agree: two
+/// that configure one provider differently configure it with neither
+/// ([`disagreements`]).
+fn agreed(facts: &BTreeSet<Atom>) -> impl Iterator<Item = &Atom> {
+    let split = disagreements(facts);
+    facts.iter().filter(move |a| {
+        a.pred != "provider_config"
+            || !matches!(a.args.first(), Some(Term::Val(Value::Str(n))) if split.contains_key(n))
+    })
+}
+
+/// A provider configured by two `use`s (the stack's and a used module's,
+/// or two modules') that disagree (R-129), by name: the conflict, naming
+/// the first setting they differ at and both sites, never a value (a
+/// setting may be a secret). The same configuration twice is one row.
+fn disagreements(facts: &BTreeSet<Atom>) -> BTreeMap<String, String> {
+    let mut by: BTreeMap<&str, Vec<&Atom>> = BTreeMap::new();
+    for a in facts.iter().filter(|a| a.pred == "provider_config") {
+        if let [Term::Val(Value::Str(n)), Term::Val(Value::Obj(_))] = a.args.as_slice() {
+            by.entry(n).or_default().push(a);
+        }
+    }
+    let site = |a: &Atom| crate::diag::at(a.span).unwrap_or_else(|| "a `use`".to_string());
+    let mut out = BTreeMap::new();
+    for (name, rows) in by {
+        let [a, b, ..] = rows.as_slice() else {
+            continue;
+        };
+        let (Term::Val(Value::Obj(x)), Term::Val(Value::Obj(y))) = (&a.args[1], &b.args[1]) else {
+            continue;
+        };
+        let key = x
+            .keys()
+            .chain(y.keys())
+            .find(|k| x.get(*k) != y.get(*k))
+            .cloned()
+            .unwrap_or_default();
+        out.insert(
+            name.to_string(),
+            format!(
+                "provider {name}: two configurations disagree at {key}: {} and {}",
+                site(a),
+                site(b)
+            ),
+        );
+    }
+    out
+}
+
 /// The providers the program configures itself: the constant names of
 /// its `provider_config(Name, Settings)` facts and rules.
 fn provider_configs(program: &Program) -> BTreeSet<String> {
-    program
-        .statements
-        .iter()
+    crate::modules::reached(program)
+        .into_iter()
         .filter_map(|st| match st {
             Stmt::Fact(a) => Some(a),
             Stmt::Rule(r) => Some(&r.head),

@@ -117,17 +117,12 @@ fn spanned(span: Span, msg: impl Into<String>) -> anyhow::Error {
 }
 
 /// E §6 statements with no lowering yet are errors naming their ticket,
-/// and an interface statement (`input`, `output`)
-/// where it has no meaning is an error naming where it belongs.
+/// in a module's body too. A declaration stands anywhere: a provider's
+/// `use` and a loader's own declaration in a module are the deployment's
+/// (R-129).
 fn reject_pending(stmts: &[Stmt]) -> Result<()> {
-    #[derive(Clone, Copy, PartialEq)]
-    enum At {
-        Top,
-        Module,
-    }
-    fn walk(stmts: &[Stmt], at: At, diags: &mut Vec<Diagnostic>) {
+    fn walk(stmts: &[Stmt], diags: &mut Vec<Diagnostic>) {
         for s in stmts {
-            let misplaced = |span, what: &str| Diagnostic::error(span, what.to_string());
             match s {
                 Stmt::Pending(p) => {
                     let (what, ticket) = p.kind.describe();
@@ -136,21 +131,13 @@ fn reject_pending(stmts: &[Stmt]) -> Result<()> {
                             .with_note(format!("it parses; its semantics land with {ticket}")),
                     );
                 }
-                Stmt::Module(d) => walk(&d.body, At::Module, diags),
-                Stmt::ExternFn(e) if at != At::Top => diags.push(misplaced(
-                    e.span,
-                    "`extern` belongs at the top of the program",
-                )),
-                Stmt::Provider(c) if at != At::Top => diags.push(misplaced(
-                    c.span,
-                    "a provider's `use` belongs at the top of the program",
-                )),
+                Stmt::Module(d) => walk(&d.body, diags),
                 _ => {}
             }
         }
     }
     let mut diags = Vec::new();
-    walk(stmts, At::Top, &mut diags);
+    walk(stmts, &mut diags);
     if diags.is_empty() {
         Ok(())
     } else {
@@ -1088,6 +1075,9 @@ fn drop_metadata(program: &Program) -> (Program, BTreeSet<Extern>, Vec<crate::as
             Stmt::Extern(e) => {
                 externs.insert(e.clone());
             }
+            // A loader's declaration stands at each call (R-129): one is
+            // the table's.
+            Stmt::ExternFn(f) if fns.iter().any(|g: &crate::ast::ExternFn| g.name == f.name) => {}
             Stmt::ExternFn(f) => {
                 externs.insert(Extern {
                     pred: f.name.clone(),

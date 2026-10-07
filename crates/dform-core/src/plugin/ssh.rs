@@ -182,7 +182,7 @@ enum Op {
 /// agent key (its comment or SHA-256 fingerprint) or of the credential
 /// `ssh:NAME`.
 pub fn key_named(program: &Program) -> Result<Option<String>> {
-    for st in &program.statements {
+    for st in crate::modules::reached(program) {
         let head = match st {
             Stmt::Fact(a) => a,
             Stmt::Rule(r) => &r.head,
