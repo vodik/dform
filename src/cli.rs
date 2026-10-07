@@ -2146,13 +2146,16 @@ fn run_with(
     // The copies state remembers as the run starts: a removed copy's
     // deletes print under it (R-67).
     let kept = st.instances.clone();
+    // An apply that resumes one interrupted: its first tick is what
+    // remained (R-122).
+    let resuming = std::cell::Cell::new(false);
     let report_of = |plan: &crate::provider::Plan,
                      res: &engine::EvalResult,
                      sections: &stuck::Sections,
                      tick: usize,
                      moved: &[(ir::Address, ir::Address)],
                      denies: &[String]| {
-        report::report(&report::Input {
+        let mut report = report::report(&report::Input {
             plan,
             res,
             sections,
@@ -2164,7 +2167,9 @@ fn run_with(
             moved,
             denies,
             kept: &kept,
-        })
+        });
+        report.resumed = resuming.get() && tick == 1;
+        report
     };
     // How much each printed change says of why (R-79).
     let why = match &cli.cmd {
@@ -2702,18 +2707,8 @@ fn run_with(
                 print_moves(&moves);
             }
             let resumed = st.in_flight.take();
+            resuming.set(resumed.is_some());
             if let Some(f) = &resumed {
-                let names: Vec<String> = f
-                    .remaining
-                    .keys()
-                    .filter_map(|k| state::parse_key(k))
-                    .map(|a| report::address(&a))
-                    .collect();
-                println!(
-                    "resuming the apply interrupted at tick {}; remaining: {}",
-                    f.tick,
-                    names.join(", ")
-                );
                 // The remaining deformations come back as facts with the
                 // documents they were planned against, as the held ones do
                 // at a boundary: the evaluator derives the deny when the

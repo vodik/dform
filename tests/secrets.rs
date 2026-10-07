@@ -752,8 +752,7 @@ fn kept_world_documents_hold_a_sensitive_leaf_by_its_digest() {
     assert!(!state.contains("KEPT-SECRET"), "{state}");
     let r = dev(&["apply", "s", "--set", "pw=SECOND-KEPT-SECRET"]).success();
     assert!(
-        r.stdout
-            .contains("resuming the apply interrupted at tick 1"),
+        r.stdout.contains("\ntick 1  1 remaining, resumed\n"),
         "{}",
         r.stdout
     );

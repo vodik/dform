@@ -54,8 +54,7 @@ fn apply_after_a_crash_finishes_on(backend: Backend) {
     let r = dform_on(&s, backend, &["apply"]).success();
     assert_eq!(
         r.stdout,
-        "resuming the apply interrupted at tick 1; remaining: compute.vm app\n\
-         plan: 1 change (1 create) over 1 tick\n\ntick 1  1 change\n  \
+        "plan: 1 change (1 create) over 1 tick\n\ntick 1  1 remaining, resumed\n  \
          + compute.vm app  p.df:5\n      \
          subnet_id = \"net.subnet:a\"\n\
          resumed from the apply interrupted at tick 1:\n  \
@@ -114,9 +113,8 @@ fn apply_after_a_stop_finishes_the_remaining_actions() {
         assert!(w.get("tick").is_none(), "{backend:?}: {w}");
         let r = dform_on(&s, backend, &["apply"]).success();
         assert!(
-            r.stdout.starts_with(
-                "resuming the apply interrupted at tick 1; remaining: compute.vm app\n"
-            ),
+            r.stdout
+                .contains("\ntick 1  1 remaining, resumed\n  + compute.vm app  "),
             "{backend:?}: {}",
             r.stdout
         );

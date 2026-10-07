@@ -349,8 +349,7 @@ fn a_killed_holders_lease_expires_and_a_second_run_takes_over_and_resumes() {
             b.stderr
         );
         assert!(
-            b.stdout
-                .contains("resuming the apply interrupted at tick 1"),
+            b.stdout.contains(" remaining, resumed\n"),
             "{}: {}",
             t.what,
             b.stdout
@@ -387,7 +386,7 @@ fn unlock_breaks_a_killed_holders_lease() {
         assert!(u.stdout.contains("is broken"), "{}: {}", t.what, u.stdout);
         let b = p.run(APPLY).success();
         assert!(
-            b.stdout.contains("resuming the apply"),
+            b.stdout.contains(" remaining, resumed\n"),
             "{}: {}",
             t.what,
             b.stdout

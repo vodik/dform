@@ -126,7 +126,7 @@ fn create_before_destroy_deposes_the_old_object_until_dependents_move() {
     let r = mock(&s, &["apply"]).success();
     assert!(
         r.stdout.contains(
-            "plan: 2 changes (1 update, 1 delete) over 1 tick\n\ntick 1  2 changes\n  \
+            "plan: 2 changes (1 update, 1 delete) over 1 tick\n\ntick 1  2 remaining, resumed\n  \
              ~ net.subnet a  p.df:4\n      vpc_id: \"net.vpc:main\" → \"net.vpc:main-2\"\n  \
              - net.vpc main  (deposed)\n      cidr was \"10.0.0.0/16\"\n"
         ),

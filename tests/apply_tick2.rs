@@ -134,10 +134,8 @@ fn declining_tick_two_keeps_tick_one() {
     assert!(!s.read("w.json").contains("k8s.namespace"));
     let r = dev(&s, &["apply", "--yes", "p.df"]).success();
     assert!(
-        r.stdout.starts_with(
-            "resuming the apply interrupted at tick 1; remaining: k8s.namespace ns\n\
-             plan: 1 change (1 create) over 1 tick\n"
-        ),
+        r.stdout
+            .starts_with("plan: 1 change (1 create) over 1 tick\n\ntick 1  1 remaining, resumed\n"),
         "{}",
         r.stdout
     );

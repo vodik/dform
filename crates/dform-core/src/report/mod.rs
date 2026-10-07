@@ -688,6 +688,9 @@ pub struct Report {
     pub not_planned: Vec<crate::zset::NotPlanned>,
     /// The stack's keys: a value's chain ends at one (R-122).
     pub keys: BTreeSet<String>,
+    /// The apply resumes one interrupted: its tick's changes are what
+    /// remained of it (R-122).
+    pub resumed: bool,
 }
 
 /// What the report is built from.
@@ -868,6 +871,7 @@ pub fn report(i: &Input) -> Report {
         tick: i.tick,
         why: Why::None,
         keys: BTreeSet::new(),
+        resumed: false,
         approvals: crate::approval::needs(&i.res.facts)
             .into_iter()
             .map(|(addr, reason)| Approval {
@@ -2066,7 +2070,10 @@ impl Report {
         let mut rows: Vec<Row> = vec![Row::plain(self.summary())];
         for (t, s) in self.sections() {
             rows.push(Row::plain(String::new()));
-            let head = format!("tick {t}  {}", count(s.changes.len(), "change"));
+            let head = match self.resumed && t == self.tick {
+                true => format!("tick {t}  {} remaining, resumed", s.changes.len()),
+                false => format!("tick {t}  {}", count(s.changes.len(), "change")),
+            };
             rows.push(Row::new(&head, bold(&head)));
             for (i, w) in waited(&s.waits).into_iter().enumerate() {
                 let lead = if i == 0 {

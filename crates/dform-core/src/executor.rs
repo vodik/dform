@@ -573,9 +573,9 @@ pub fn resolve_uncertain(cloud: &Providers, state: &mut State) -> Result<Vec<Str
 }
 
 /// What `plan` carries over from an interrupted apply, for the plan shown
-/// before apply asks: the actions `resumed` (the in-flight record it took)
-/// still lists, and each Create or Replace that `resolve_uncertain` found
-/// made nothing, to be sent again with its idempotency key. Empty when
+/// before apply asks: each Create or Replace that `resolve_uncertain`
+/// found made nothing, to be sent again with its idempotency key (what
+/// `resumed` still lists is the plan's tick itself, R-122). Empty when
 /// there is none; else a header and a line per address, in plan order.
 pub fn carried_over(resumed: Option<&InFlight>, state: &State, plan: &Plan) -> String {
     let mut out = String::new();
@@ -585,13 +585,14 @@ pub fn carried_over(resumed: Option<&InFlight>, state: &State, plan: &Plan) -> S
         .filter(|a| !matches!(a.kind, ActionKind::Noop))
     {
         let k = state::key(&a.addr);
-        let remaining = resumed.is_some_and(|f| f.remaining.contains_key(&k));
         let retried = matches!(a.kind, ActionKind::Create | ActionKind::Replace { .. })
             && state.uncertain.get(&k).is_some_and(|u| {
                 matches!(u.op, UncertainOp::Create | UncertainOp::Replace { .. })
                     && !u.key.is_empty()
             });
-        if !remaining && !retried {
+        // What remained is the plan's tick, headed `resumed` (R-122); a
+        // create sent again under its key says so.
+        if !retried {
             continue;
         }
         if out.is_empty() {

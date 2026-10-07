@@ -545,7 +545,7 @@ impl Evaluator {
     /// the program gives and this evaluation does not know (a kubeconfig
     /// read from a server still booting), as `provider k8s (kubeconfig
     /// from k3s.kubeconfig)`; one of a kind no schema has yet, a cluster's
-    /// CRD, as `provider k8s for its schema`, created as written, untyped.
+    /// CRD, as `provider k8s  schema`, created as written, untyped.
     /// A resource already waiting on a null keeps what it waits on.
     fn wait_on_providers(
         &self,

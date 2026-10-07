@@ -44,7 +44,7 @@ fn a_provider_crash_mid_apply_fails_the_action_and_resume_finishes() {
     let r = mock(&s, &["apply"]).success();
     assert!(
         r.stdout
-            .contains("resuming the apply interrupted at tick 1; remaining: compute.vm app"),
+            .contains("\ntick 1  1 remaining, resumed\n  + compute.vm app  "),
         "{}",
         r.stdout
     );

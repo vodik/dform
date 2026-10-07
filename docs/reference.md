@@ -1289,11 +1289,13 @@ cargo run -- -C examples/demo dev --chaos 'latency=net.vpc["main.vpc"]:100' \
 An apply that fails or is killed can be resumed: before a tick's first Apply
 call its deformations are written to state as in flight, each with the world
 document it was planned against, and each answered call takes its action out.
-The next `apply` prints `resuming the apply interrupted at tick N; remaining:
-...`, refreshes, and finishes the remaining actions, listed after the plan
-under `resumed from the apply interrupted at tick N:`, each create its
-idempotency key found nothing for marked `(retried with its idempotency
-key: nothing it made was found)`, before it asks; if the world changed
+The next `apply` refreshes and finishes the remaining actions: its plan's
+first tick is what remained, headed `tick 1  10 remaining, resumed`, one
+change line per remaining change (those done are not listed), then the
+question a fresh apply asks; each create its idempotency key found
+nothing for is listed after the plan under `resumed from the apply
+interrupted at tick N:`, marked `(retried with its idempotency key:
+nothing it made was found)`, before it asks; if the world changed
 under one of them it prints the change and stops before any Apply call, on
 the deny the policy pass derives from `deformation(remaining, ...)` (run
 `apply` again to plan against the world as it now is).
