@@ -1814,8 +1814,8 @@ is a compile error with a span, before anything is evaluated:
 
 | code  | the secret reaches |
 |-------|--------------------|
-| E0301 | a comparison, a builtin predicate or an inspecting function (`len`, `split`, `inet_*`) |
-| E0302 | a negated literal |
+| E0301 | a test or an inspecting function: `==` (a binding's too, `pw(p), p == "x"`), `!=`, `<` and the orders, `in` either side, `has`, a builtin predicate, `len`, `split`, `inet_*`; a field's (`conn.password == ..`) and an interpolation's (`"${pw}!" == ..`) |
+| E0302 | a negated literal, `not has` included: absence leaks a bit |
 | E0303 | an aggregate other than `collect_*` (`count` leaks cardinality) |
 | E0304 | a public place: a resource attribute the schema does not mark `sensitive`, a setting, an output or input not declared `secret(T)`, a `deny`/`warn` |
 | E0305 | a resource address (`want`, a resource name, `ref`, `scoped`) |
@@ -1835,6 +1835,16 @@ component's output, and another stack's: the producer records and
 publishes each secret field by its label (`output/#conn.password`) and
 digest, the rest of the object by value, and the reader's
 `prod.conn.password` is a secret null as a whole secret output's is.
+
+Every operator over a secret is a read of it (R-178): `deny "weak"
+where pw == "hunter2"` is E0301, as `pw.len < 12` is, because a
+comparison answers one bit at a time; `has pw` is E0301 and `not has pw`
+E0302, because presence is a bit too. A `forwards` function
+(`str.format`, an interpolation) carries a secret uninspected, so
+`password = "${pw}!"` into a sensitive attribute is no test, and comparing
+its result is. `secret.declassify(pw, "why")` is the way to test one on
+purpose. A field of an object that is not secret (`conn.host`) is tested
+freely.
 
 An input's own refinement (`input pw: secret(string) check pw.len >=
 12`) is where a secret may be checked; its deny does not print the value.

@@ -1651,6 +1651,10 @@ no OVH instance), and does not read the cell it writes, which a value
 test would (a cycle). Over a type that is not constant, each resource's
 type answers.
 
+`has` over a secret (`has pw`, `has conn.password`) is a read of it, as
+any test is: E0301, and `not has pw` E0302 (docs/reference.md,
+"Secrets").
+
 `has r` of a resource (its name in scope, `T[e]`) holds once its
 identity is known: false while no rule wants it, undetermined from plan
 until the tick that creates it, so a block gated `where has warm_cache`
@@ -2006,6 +2010,12 @@ inet = cfg.net`). A field of a value is a part of it, never a
 computation over it but `len`: `xs.len` of a list, `s.len` of a string
 (its characters), `o.len` of an object (its keys; `o."len"` reads a key
 named `len`).
+
+Over a `secret(T)` every test is a read (R-178): `==`, `!=`, the
+orders, `in` on either side and `has` are E0301, `not` and `not has`
+E0302, unless the operand is `secret.declassify(v, why)`; `${..}` and
+arithmetic carry the secret into their result, which is a secret
+(docs/reference.md, "Secrets").
 
 Every function is declared in
 a signature file shipped with dform, `std/*.df`, which the compiler, the

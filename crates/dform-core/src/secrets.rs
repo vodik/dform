@@ -265,7 +265,20 @@ impl Pass<'_> {
             // The resource itself, of a type the program does not fix
             // (`r in resource`, `r in k8s`): its address, never a secret.
             (None, Some("")) => Label::new(),
-            (None, _) => all(self
+            // A path of a type the program does not fix: secret where
+            // any type's is, at it, under it or above it.
+            (None, Some(p)) => {
+                let p = p.trim_start_matches('.');
+                let near = |q: &str| {
+                    q == p || q.starts_with(&format!("{p}.")) || p.starts_with(&format!("{q}."))
+                };
+                all(self.schema.facts.iter().any(|f| {
+                    f.pred == "type_attr"
+                        && s(&f.args[1]).is_some_and(near)
+                        && self.flag(f, "sensitive")
+                }))
+            }
+            (None, None) => all(self
                 .schema
                 .facts
                 .iter()
@@ -417,10 +430,6 @@ impl Pass<'_> {
                 .cloned()
                 .unwrap_or_default(),
         }
-    }
-
-    fn position_secret(&self, a: &Atom, i: usize) -> bool {
-        !self.position_label(a, i).is_empty()
     }
 }
 
@@ -761,7 +770,7 @@ pub fn check(
         let vars = pass.body_vars(body);
         let refinement = is_refinement(*head);
         let secret = |t: &Term| pass.term_secret(t, &vars);
-        for l in body.iter() {
+        for (i, l) in body.iter().enumerate() {
             match l {
                 Lit::Neq(x, y) | Lit::Gt(x, y) | Lit::Ge(x, y) | Lit::Lt(x, y) | Lit::Le(x, y)
                     if !refinement && (secret(x) || secret(y)) =>
@@ -775,12 +784,21 @@ pub fn check(
                             diags.push(e0301(*span, &crate::functions::shown_call(&f)));
                         }
                     }
-                    // A test between two terms, neither a fresh variable.
-                    if !matches!(x, Term::Var(_))
-                        && !matches!(y, Term::Var(_))
-                        && (secret(x) || secret(y))
-                    {
+                    if !(secret(x) || secret(y)) {
+                        continue;
+                    }
+                    // A test: both sides bound by the rest of the body
+                    // (`pw(p), p == "hunter2"`), not a binding of either.
+                    let bound = bound_without(body, i);
+                    let mut both = BTreeSet::new();
+                    term_vars(x, &mut both);
+                    term_vars(y, &mut both);
+                    if both.is_subset(&bound) {
                         diags.push(e0301(*span, "an equality test"));
+                    } else if definedness(x, y, body, i, *head) {
+                        // `has conn.password`: a walk into a secret bound
+                        // to a name nothing reads, for whether it is there.
+                        diags.push(e0301(*span, "a definedness test (`has`)"));
                     }
                 }
                 Lit::Pos(a) if !refinement && is_builtin_pred(&a.pred) => {
@@ -788,9 +806,30 @@ pub fn check(
                         diags.push(e0301(a.span, &format!("{}/{}", a.pred, a.args.len())));
                     }
                 }
+                // A value written at a secret position is matched against
+                // it (`pw == "hunter2"` lowers to `pw("hunter2")`); `_`
+                // there asks whether it is set (`has pw`).
+                Lit::Pos(a) if !refinement && a.pred != crate::memo::FIRST => {
+                    let at = if a.span.is_none() { *span } else { a.span };
+                    for (j, t) in a.args.iter().enumerate() {
+                        let l = pass.position_label(a, j);
+                        if l.is_empty() {
+                            continue;
+                        }
+                        if matches!(t, Term::Wildcard) && l.contains("") {
+                            diags.push(e0301(at, "a definedness test (`has`)"));
+                        } else if matches_secret(t, &l) {
+                            diags.push(e0301(at, "an equality test"));
+                        }
+                    }
+                }
                 Lit::Not(a) if !refinement => {
+                    // `not has pw` too: `_` at a secret position asks
+                    // whether it is set.
                     let bound_secret = a.args.iter().enumerate().any(|(i, t)| {
-                        secret(t) || (pass.position_secret(a, i) && !matches!(t, Term::Wildcard))
+                        let l = pass.position_label(a, i);
+                        secret(t)
+                            || (!l.is_empty() && (!matches!(t, Term::Wildcard) || l.contains("")))
                     });
                     if bound_secret {
                         diags.push(Diagnostic::error(
@@ -895,6 +934,95 @@ pub fn check(
         diags.dedup_by(|a, b| a.render(false) == b.render(false));
         Err(Diagnostics(diags).into())
     }
+}
+
+/// The variables of `t`.
+fn term_vars(t: &Term, out: &mut BTreeSet<String>) {
+    match t {
+        Term::Var(v) => {
+            out.insert(v.clone());
+        }
+        Term::Func { args, .. } | Term::List(args) => args.iter().for_each(|a| term_vars(a, out)),
+        Term::Obj(m) => m.values().for_each(|a| term_vars(a, out)),
+        _ => {}
+    }
+}
+
+/// The variables `body` binds without its literal `skip`: a positive
+/// literal binds its own, an equality one side's once the other's are.
+fn bound_without(body: &[Lit], skip: usize) -> BTreeSet<String> {
+    let mut bound = BTreeSet::new();
+    loop {
+        let n = bound.len();
+        for (i, l) in body.iter().enumerate() {
+            match l {
+                _ if i == skip => {}
+                Lit::Pos(a) => a.args.iter().for_each(|t| term_vars(t, &mut bound)),
+                Lit::Eq(x, y) => {
+                    for (p, q) in [(x, y), (y, x)] {
+                        let mut vq = BTreeSet::new();
+                        term_vars(q, &mut vq);
+                        if vq.is_subset(&bound) {
+                            term_vars(p, &mut bound);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        if bound.len() == n {
+            return bound;
+        }
+    }
+}
+
+/// Whether a pattern `t` at a position labelled `l` compares a secret
+/// with something: a value, a call or a list where a secret is (a
+/// variable or `_` binds it; an object pattern, field by field).
+fn matches_secret(t: &Term, l: &Label) -> bool {
+    match t {
+        Term::Var(_) | Term::Wildcard => false,
+        Term::Obj(m) => m.iter().any(|(k, x)| matches_secret(x, &narrow(l, k))),
+        Term::Func { name, .. } if name == DECLASSIFY => false,
+        _ => !l.is_empty(),
+    }
+}
+
+/// `has x.f` over a secret, as the resolver writes it: `V = __path(X,
+/// "f")` with `V` read nowhere else.
+fn definedness(x: &Term, y: &Term, body: &[Lit], skip: usize, head: Option<&Atom>) -> bool {
+    let (Term::Var(v), Term::Func { name, .. }) = (x, y) else {
+        return false;
+    };
+    // The resolver's name for it (`fresh(rc, "Has")`).
+    let has = v
+        .strip_prefix("Has")
+        .is_some_and(|n| n.chars().all(|c| c.is_ascii_digit()));
+    if name != "__path" || !has {
+        return false;
+    }
+    let mut seen = BTreeSet::new();
+    for t in head.iter().flat_map(|h| &h.args) {
+        term_vars(t, &mut seen);
+    }
+    for (i, l) in body.iter().enumerate() {
+        if i == skip {
+            continue;
+        }
+        match l {
+            Lit::Pos(a) | Lit::Not(a) => a.args.iter().for_each(|t| term_vars(t, &mut seen)),
+            Lit::Eq(p, q)
+            | Lit::Neq(p, q)
+            | Lit::Gt(p, q)
+            | Lit::Ge(p, q)
+            | Lit::Lt(p, q)
+            | Lit::Le(p, q) => {
+                term_vars(p, &mut seen);
+                term_vars(q, &mut seen);
+            }
+        }
+    }
+    !seen.contains(v)
 }
 
 fn e0301(span: Span, what: &str) -> Diagnostic {
