@@ -1065,8 +1065,8 @@ impl Deployment {
                 inner.name
             );
         }
-        let mut guard = inner.lease();
-        let Some(lease) = guard.as_mut() else {
+        // Copied out: the lock is not held across the store's calls.
+        let Some(mut lease) = inner.lease().clone() else {
             bail!(
                 "internal: stack {}: state written without its lease",
                 inner.name
@@ -1082,10 +1082,11 @@ impl Deployment {
                 if r.expires_ms <= now_ms() {
                     inner
                         .store
-                        .renew(lease, inner.times.duration)
+                        .renew(&mut lease, inner.times.duration)
                         .with_context(|| {
                             format!("stack {}: state write refused by fencing", inner.name)
                         })?;
+                    inner.renewed(&lease);
                 }
                 Ok(lease.fence)
             }
@@ -1234,6 +1235,17 @@ impl Inner {
         self.lease.lock().unwrap_or_else(|e| e.into_inner())
     }
 
+    /// Keep `l`'s renewal, made on a copy of the lease: its ETag and
+    /// expiry, while the lease is still that one.
+    fn renewed(&self, l: &Lease) {
+        if let Some(cur) = self.lease().as_mut()
+            && cur.fence == l.fence
+        {
+            cur.etag = l.etag.clone();
+            cur.expires_ms = l.expires_ms;
+        }
+    }
+
     /// Is the lease still this run's as far as this process knows: not
     /// found lost, and its renewer running? The renewer returns only once
     /// it recorded the lease lost, or when its guard stops it: finished
@@ -1291,7 +1303,11 @@ impl Guard {
     fn give_up(&mut self) -> Result<()> {
         let inner = &self.inner;
         drop(self.stop.take());
-        let renewer = inner.renewer.lock().expect("renewer").take();
+        let renewer = inner
+            .renewer
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take();
         if let Some(r) = renewer
             && r.join().is_err()
         {
@@ -1332,12 +1348,14 @@ impl Guard {
                 let mut wait = times.renewal;
                 let mut failing = false;
                 while let Err(mpsc::RecvTimeoutError::Timeout) = rx.recv_timeout(wait) {
-                    let mut lease = inner.lease();
-                    let Some(l) = lease.as_mut() else {
+                    // The lease is copied out and its renewal written
+                    // back: the lock is not held across the store's call.
+                    let Some(mut l) = inner.lease().clone() else {
                         return;
                     };
-                    match inner.store.renew(l, times.duration) {
+                    match inner.store.renew(&mut l, times.duration) {
                         Ok(()) => {
+                            inner.renewed(&l);
                             if failing {
                                 eprintln!("note: stack {}: the lease is renewed again", inner.name);
                             }

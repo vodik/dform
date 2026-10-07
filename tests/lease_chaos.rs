@@ -23,6 +23,8 @@ enum Fault {
     LandsUnanswered,
     /// The store panics (a bug in a client library).
     Panics,
+    /// The write takes 2s, and lands.
+    Slow,
 }
 
 /// The memory store, its next `n` writes of the lease object that renew or
@@ -85,6 +87,10 @@ impl Store for Chaos {
                 bail!("PUT {key}: timed out")
             }
             Fault::Panics => panic!("the store's client panicked"),
+            Fault::Slow => {
+                std::thread::sleep(Duration::from_secs(2));
+                self.objects.put(key, bytes, cond)
+            }
         }
     }
 
@@ -151,6 +157,26 @@ fn a_renewal_whose_answer_was_lost_is_still_this_holders() {
     std::thread::sleep(Duration::from_millis(500));
     g.check().unwrap();
     a.save_state(&State::default()).unwrap();
+    g.release().unwrap();
+    assert_eq!(store.record().holder, "");
+}
+
+/// The renewer holds no lock across the store's call: a state write
+/// beside a renewal that hangs goes through at once.
+#[test]
+fn a_hanging_renewal_does_not_hold_up_a_state_write() {
+    let store = Chaos::new();
+    let a = deployment(&store, 400);
+    a.load_state().unwrap();
+    let g = a.lock().unwrap();
+    store.inject(Fault::Slow, 1);
+    until("a renewal hangs", || {
+        store.faulted.load(Ordering::SeqCst) == 1
+    });
+    let start = std::time::Instant::now();
+    a.save_state(&State::default()).unwrap();
+    let took = start.elapsed();
+    assert!(took < Duration::from_millis(1000), "{took:?}");
     g.release().unwrap();
     assert_eq!(store.record().holder, "");
 }
