@@ -595,3 +595,22 @@ r(s) where s = path.rel("/etc/dform/prod.yaml", "/etc")
     let e = error("p(x) where x = path.join(\"a\", \"b\")\n");
     assert!(e.contains("path.join"), "{e}");
 }
+
+/// The prelude keeps only what is about no one type (R-134 rule 7):
+/// `ref` and `cloud_ref` are forms of the language, written as before but
+/// listed nowhere; `scoped` is the lowering's own.
+#[test]
+fn the_prelude_is_what_has_no_type() {
+    let prelude: Vec<&str> = dform_core::functions::registry()
+        .functions()
+        .filter(|f| f.package == "prelude" && !f.internal)
+        .map(|f| f.name.as_str())
+        .collect();
+    assert_eq!(
+        prelude,
+        ["declassify", "float", "format", "int", "len", "to"]
+    );
+    let e = error("p(x) where x = scoped(\"a\", \"b\")\n");
+    assert!(e.contains("scoped is the lowering's"), "{e}");
+    assert!(engine::reference("ref", true).is_none());
+}

@@ -214,7 +214,7 @@ apply-order edge, not its content read now (`docs/grammar.md'
       (:match ,(rx bos (or "count" "sum" "min" "max" "any" "all"
                            "collect_set" "collect_list" "int" "float"
                            "format" "len" "to" "ref"
-                           "scoped" "cloud_ref" "declassify" "attr"
+                           "cloud_ref" "declassify" "attr"
                            "want" "arg" "output" "input" "cloud_attr"
                            "cloud_exists")
                    eos)

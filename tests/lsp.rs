@@ -1475,6 +1475,9 @@ fn the_editors_builtins_are_the_registrys() {
                 .filter(|f| f.package == PRELUDE && !f.internal)
                 .map(|f| f.name.clone()),
         )
+        // The language's forms the lowering owns (R-134): no function of
+        // the listing, still a call to highlight.
+        .chain(dform_core::functions::FORMS.iter().map(|s| s.to_string()))
         .chain(
             [
                 "attr",

@@ -136,9 +136,15 @@ pub fn get(name: &str) -> Option<&'static Function> {
     registry().get(name)
 }
 
-/// Whether a program may call `name`: declared and not internal.
+/// The lowering's functions a program writes as forms of the language
+/// (`ref(r)`, R-43; `cloud_ref(T, name, path)`): callable, but no part of
+/// the standard library's listing, `dform doc` or the editor (R-134).
+pub const FORMS: &[&str] = &["ref", "cloud_ref"];
+
+/// Whether a program may call `name`: declared and not internal, or one
+/// of the [`FORMS`].
 pub fn callable(name: &str) -> bool {
-    get(name).is_some_and(|f| !f.internal)
+    get(name).is_some_and(|f| !f.internal) || FORMS.contains(&name)
 }
 
 /// Whether `name` is a builtin predicate: a function to bool.
@@ -1623,6 +1629,7 @@ mod tests {
                 .is_some_and(|f| f.internal && f.forwards && f.forwards_nulls)
         );
         assert!(callable("int") && !callable("add") && !callable("to_int"));
+        assert!(callable("ref") && callable("cloud_ref") && !callable("scoped"));
         assert_eq!(
             r.packages(),
             [

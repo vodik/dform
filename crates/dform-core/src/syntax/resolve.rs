@@ -5751,7 +5751,7 @@ impl<'u> Lowerer<'u> {
         };
         // A call takes the arguments its signature declares (R-134: no
         // function takes any number of values but `format`).
-        let lowering = f.internal || matches!(name, "ref" | "scoped" | "cloud_ref");
+        let lowering = f.internal;
         if !lowering && !f.takes(args.len()) {
             return self.error(
                 span,

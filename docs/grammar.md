@@ -1865,7 +1865,7 @@ are written bare.
 
 | package   | functions                                                                 |
 |-----------|---------------------------------------------------------------------------|
-| prelude   | `int(x)`, `float(x)`; `format(t, v, ...)`, `len(x)`, `to(q, unit)` (a quantity as a whole number of a unit, written as its literals write it: `"Gi"`, `"m"`, `"h"`), `ref(T, n, p)`, `scoped(s, n)`, `cloud_ref(T, n, p)`, `declassify(v, why)` |
+| prelude   | `int(x)`, `float(x)`; `format(t, v, ...)`, `len(x)`, `to(q, unit)` (a quantity as a whole number of a unit, written as its literals write it: `"Gi"`, `"m"`, `"h"`), `declassify(v, why)`: what is about no one type (`ref(r)` and `cloud_ref(T, n, p)` are forms of the language, "References and their type") |
 | `inet`    | `inet.subnet(net, bits, n)`, `inet.host(net, n)`, `inet.contains(net, a)`, `inet.overlaps(a, b)`; fields `n.addr`, `n.bits` |
 | `int`     | `int.range(lo, hi, step)` (what `i in lo..hi` enumerates)                 |
 | `ip`      | `ip.unspecified(a)`                                                       |
