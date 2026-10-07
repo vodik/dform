@@ -4,7 +4,7 @@
 use dform_core::plugin::backend::{Call, Handler, Reply, silent};
 use dform_core::plugin::{pb, wire};
 use dform_sdk::typed::Result;
-use dform_sdk::{Lifecycle, Provider, Resource, Typed};
+use dform_sdk::{Lifecycle, Progress, Provider, Resource, Typed};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value as Json, json};
 use std::collections::BTreeMap;
@@ -43,7 +43,16 @@ impl Lifecycle<Acme> for Bucket {
     fn read(p: &Acme, remote: &str) -> Result<Option<Bucket>> {
         Ok(p.buckets.lock().unwrap().get(remote).cloned())
     }
-    fn create(p: &Acme, mut desired: Bucket, _key: &str) -> Result<(String, Bucket)> {
+    fn create(
+        p: &Acme,
+        mut desired: Bucket,
+        _key: &str,
+        progress: &Progress,
+    ) -> Result<(String, Bucket)> {
+        // As an API answers a create: there, not ready, then ready.
+        progress.status("PROVISIONING");
+        progress.message("waiting for the bucket to be ready");
+        progress.status("READY");
         let id = format!("b-{}", desired.name);
         desired.id = Some(id.clone());
         p.buckets
@@ -52,7 +61,13 @@ impl Lifecycle<Acme> for Bucket {
             .insert(id.clone(), desired.clone());
         Ok((id, desired))
     }
-    fn update(p: &Acme, remote: &str, prior: Bucket, mut desired: Bucket) -> Result<Bucket> {
+    fn update(
+        p: &Acme,
+        remote: &str,
+        prior: Bucket,
+        mut desired: Bucket,
+        _: &Progress,
+    ) -> Result<Bucket> {
         desired.id = prior.id;
         p.buckets
             .lock()
@@ -60,7 +75,7 @@ impl Lifecycle<Acme> for Bucket {
             .insert(remote.to_string(), desired.clone());
         Ok(desired)
     }
-    fn delete(p: &Acme, remote: &str) -> Result<()> {
+    fn delete(p: &Acme, remote: &str, _: &Progress) -> Result<()> {
         p.buckets.lock().unwrap().remove(remote);
         Ok(())
     }
@@ -193,4 +208,43 @@ fn plan_comes_from_the_schema_and_apply_from_the_lifecycle() {
         },
     );
     assert!(!r.found);
+}
+
+/// What a lifecycle function says on its `Progress` reaches the Apply's
+/// sink, in order, each event naming the object (R-130).
+#[test]
+fn a_create_says_how_it_goes_on_the_apply_sink() {
+    let h = provider();
+    let _: pb::ConfigureResponse = call(&h, pb::ConfigureRequest::default());
+    let said = Mutex::new(Vec::new());
+    let sink = |e: pb::Event| said.lock().unwrap().push(e);
+    let r = h.handle(
+        pb::ApplyRequest {
+            op: pb::Op::Create as i32,
+            r#type: "acme.bucket".into(),
+            name: "logs".into(),
+            config: Some(wire::doc(&json!({"name": "logs"}))),
+            ..Default::default()
+        }
+        .into(),
+        &sink,
+    );
+    assert!(matches!(r, Ok(Reply::Apply(_))), "{r:?}");
+    let said = said.into_inner().unwrap();
+    let words: Vec<(Option<&str>, Option<&str>)> = said
+        .iter()
+        .map(|e| (e.status.as_deref(), e.message.as_deref()))
+        .collect();
+    assert_eq!(
+        words,
+        [
+            (Some("PROVISIONING"), None),
+            (None, Some("waiting for the bucket to be ready")),
+            (Some("READY"), None),
+        ]
+    );
+    assert!(
+        said.iter().all(|e| e.address == r#"acme.bucket["logs"]"#),
+        "{said:?}"
+    );
 }

@@ -29,7 +29,7 @@ pub use dform_core::plugin::pb;
 pub use dform_sdk_derive::Resource;
 
 pub mod typed;
-pub use typed::{Lifecycle, Provider, Resource, Typed};
+pub use typed::{Lifecycle, Progress, Provider, Resource, Typed};
 
 #[cfg(not(target_family = "wasm"))]
 pub mod native;

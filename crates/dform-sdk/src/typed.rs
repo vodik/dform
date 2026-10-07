@@ -7,6 +7,10 @@
 //! the lifecycle, Import is a read. An attribute the schema marks
 //! `computed` is returned as computed; the rest as configured.
 //!
+//! Create, update and delete are told a [`Progress`]: each time the object's
+//! status as the API gives it changes (a poll that saw `BUILD` turn
+//! `ACTIVE`), say so, and dform prints it beside the change (R-130).
+//!
 //! An error from a lifecycle function refuses the call; one the host said
 //! may have taken effect (a timeout) is `MaybeApplied`, so dform looks
 //! before it sends it again; a transient one says `retryable:`, so dform's
@@ -95,16 +99,47 @@ pub trait Provider: Sized + Send + 'static {
     fn configure(settings: &Json) -> Result<(Self, Option<String>)>;
 }
 
+/// Where an Apply says how it goes (R-130), as its object's status
+/// changes: a provider says so each time it sees a new one (a poll), never
+/// on a timer; dform adds the time it has run.
+pub struct Progress<'a> {
+    address: String,
+    sink: backend::Progress<'a>,
+}
+
+impl<'a> Progress<'a> {
+    /// The progress of the object at `address` (`type["name"]`), told to
+    /// `sink`.
+    pub fn new(address: impl Into<String>, sink: backend::Progress<'a>) -> Progress<'a> {
+        Progress {
+            address: address.into(),
+            sink,
+        }
+    }
+
+    /// The object's status, as the API says it (`BUILD`): dform prints it
+    /// beside the change as it is.
+    pub fn status(&self, status: &str) {
+        (self.sink)(backend::event(&self.address, Some(status), None));
+    }
+
+    /// Something for the log (a retry, and why).
+    pub fn message(&self, message: &str) {
+        (self.sink)(backend::event(&self.address, None, Some(message)));
+    }
+}
+
 /// One resource type's lifecycle.
 pub trait Lifecycle<P: Provider>: Resource {
     /// The object `remote`, if it exists.
     fn read(p: &P, remote: &str) -> Result<Option<Self>>;
     /// Create it; `key` is unique to this intended creation (pass it to
     /// an API that takes a client token). Its remote id and what it is.
-    fn create(p: &P, desired: Self, key: &str) -> Result<(String, Self)>;
+    fn create(p: &P, desired: Self, key: &str, progress: &Progress) -> Result<(String, Self)>;
     /// Change `remote` from `prior` to `desired`.
-    fn update(p: &P, remote: &str, prior: Self, desired: Self) -> Result<Self>;
-    fn delete(p: &P, remote: &str) -> Result<()>;
+    fn update(p: &P, remote: &str, prior: Self, desired: Self, progress: &Progress)
+    -> Result<Self>;
+    fn delete(p: &P, remote: &str, progress: &Progress) -> Result<()>;
 }
 
 /// An object as the protocol has it: configured and computed.
@@ -113,9 +148,22 @@ type Object = (Json, Json);
 /// One resource type, its type erased.
 trait Kind<P>: Send + Sync {
     fn read(&self, p: &P, remote: &str) -> Result<Option<Json>>;
-    fn create(&self, p: &P, desired: Json, key: &str) -> Result<(String, Json)>;
-    fn update(&self, p: &P, remote: &str, prior: Json, desired: Json) -> Result<Json>;
-    fn delete(&self, p: &P, remote: &str) -> Result<()>;
+    fn create(
+        &self,
+        p: &P,
+        desired: Json,
+        key: &str,
+        progress: &Progress,
+    ) -> Result<(String, Json)>;
+    fn update(
+        &self,
+        p: &P,
+        remote: &str,
+        prior: Json,
+        desired: Json,
+        progress: &Progress,
+    ) -> Result<Json>;
+    fn delete(&self, p: &P, remote: &str, progress: &Progress) -> Result<()>;
 }
 
 struct K<R>(std::marker::PhantomData<fn() -> R>);
@@ -133,23 +181,37 @@ impl<P: Provider, R: Lifecycle<P> + 'static> Kind<P> for K<R> {
         R::read(p, remote)?.map(|r| to_json(&r)).transpose()
     }
 
-    fn create(&self, p: &P, desired: Json, key: &str) -> Result<(String, Json)> {
-        let (remote, r) = R::create(p, from_json(R::TYPE, desired)?, key)?;
+    fn create(
+        &self,
+        p: &P,
+        desired: Json,
+        key: &str,
+        progress: &Progress,
+    ) -> Result<(String, Json)> {
+        let (remote, r) = R::create(p, from_json(R::TYPE, desired)?, key, progress)?;
         Ok((remote, to_json(&r)?))
     }
 
-    fn update(&self, p: &P, remote: &str, prior: Json, desired: Json) -> Result<Json> {
+    fn update(
+        &self,
+        p: &P,
+        remote: &str,
+        prior: Json,
+        desired: Json,
+        progress: &Progress,
+    ) -> Result<Json> {
         let r = R::update(
             p,
             remote,
             from_json(R::TYPE, prior)?,
             from_json(R::TYPE, desired)?,
+            progress,
         )?;
         to_json(&r)
     }
 
-    fn delete(&self, p: &P, remote: &str) -> Result<()> {
-        R::delete(p, remote)
+    fn delete(&self, p: &P, remote: &str, progress: &Progress) -> Result<()> {
+        R::delete(p, remote, progress)
     }
 }
 
@@ -286,7 +348,7 @@ impl<P: Provider> Typed<P> {
         })
     }
 
-    fn apply(&self, r: pb::ApplyRequest) -> Result<pb::ApplyResponse> {
+    fn apply(&self, r: pb::ApplyRequest, sink: backend::Progress) -> Result<pb::ApplyResponse> {
         let op = pb::Op::try_from(r.op).unwrap_or(pb::Op::Unspecified);
         if op == pb::Op::EndTick {
             return Ok(pb::ApplyResponse::default());
@@ -299,25 +361,35 @@ impl<P: Provider> Typed<P> {
         }
         let k = self.kind(&r.r#type)?;
         let desired = wire::from_doc_or_empty(r.config.as_ref()).map_err(Error::from)?;
+        let progress = Progress::new(
+            dform_core::ir::Address {
+                typ: r.r#type.clone(),
+                name: r.name.clone(),
+            }
+            .to_string(),
+            sink,
+        );
+        let progress = &progress;
         let found = |p: &P, remote: &str| -> Result<Json> {
             k.read(p, remote)?
                 .ok_or_else(|| Error::Refused(format!("{} {remote:?} does not exist", r.r#type)))
         };
         let (remote, obj) = self.with(|p| match op {
-            pb::Op::Create => k.create(p, desired, &r.idempotency_key),
+            pb::Op::Create => k.create(p, desired, &r.idempotency_key, progress),
             pb::Op::Update | pb::Op::Adopt => {
                 let prior = found(p, &r.remote)?;
-                Ok((r.remote.clone(), k.update(p, &r.remote, prior, desired)?))
+                let obj = k.update(p, &r.remote, prior, desired, progress)?;
+                Ok((r.remote.clone(), obj))
             }
             pb::Op::Delete => {
-                k.delete(p, &r.remote)?;
+                k.delete(p, &r.remote, progress)?;
                 Ok((String::new(), Json::Null))
             }
             pb::Op::Replace => {
                 if !r.create_first {
-                    k.delete(p, &r.remote)?;
+                    k.delete(p, &r.remote, progress)?;
                 }
-                k.create(p, desired, &r.idempotency_key)
+                k.create(p, desired, &r.idempotency_key, progress)
             }
             pb::Op::Unspecified | pb::Op::EndTick => {
                 Err(Error::Refused("an Apply call with no op".into()))
@@ -333,7 +405,7 @@ impl<P: Provider> Typed<P> {
         })
     }
 
-    fn answer(&self, call: Call) -> Result<Reply> {
+    fn answer(&self, call: Call, progress: backend::Progress) -> Result<Reply> {
         Ok(match call {
             Call::Handshake(_) => Reply::Handshake(pb::HandshakeResponse {
                 protocol_version: VERSION,
@@ -379,7 +451,7 @@ impl<P: Provider> Typed<P> {
                 })
             }
             Call::Plan(r) => Reply::Plan(self.plan(r)?),
-            Call::Apply(r) => Reply::Apply(self.apply(r)?),
+            Call::Apply(r) => Reply::Apply(self.apply(r, progress)?),
             Call::Import(r) => {
                 let k = self.kind(&r.r#type)?;
                 Reply::Import(match self.with(|p| k.read(p, &r.remote))? {
@@ -412,8 +484,12 @@ impl<P: Provider> Typed<P> {
 }
 
 impl<P: Provider> Handler for Typed<P> {
-    fn handle(&self, call: Call, _: backend::Progress) -> std::result::Result<Reply, CallError> {
-        self.answer(call).map_err(|e| match e {
+    fn handle(
+        &self,
+        call: Call,
+        progress: backend::Progress,
+    ) -> std::result::Result<Reply, CallError> {
+        self.answer(call, progress).map_err(|e| match e {
             Error::Refused(m) => CallError::Refused(m),
             Error::MaybeApplied(m) => CallError::MaybeApplied(m),
         })

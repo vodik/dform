@@ -46,7 +46,7 @@ serde_json = "1"
 ```rust
 // src/lib.rs
 use dform_sdk::typed::Result;
-use dform_sdk::{host, Lifecycle, Provider, Request, Resource, Typed};
+use dform_sdk::{host, Lifecycle, Progress, Provider, Request, Resource, Typed};
 use serde::{Deserialize, Serialize};
 
 struct Acme {
@@ -87,9 +87,13 @@ impl Lifecycle<Acme> for Bucket {
         }
         Ok(Some(serde_json::from_slice(&r.body)?))
     }
-    fn create(p: &Acme, desired: Bucket, key: &str) -> Result<(String, Bucket)> { /* .. */ }
-    fn update(p: &Acme, remote: &str, prior: Bucket, desired: Bucket) -> Result<Bucket> { /* .. */ }
-    fn delete(p: &Acme, remote: &str) -> Result<()> { /* .. */ }
+    fn create(p: &Acme, desired: Bucket, key: &str, progress: &Progress) -> Result<(String, Bucket)> {
+        // .. POST it, then poll until it is ready, saying each status seen:
+        progress.status("PROVISIONING");
+        /* .. */
+    }
+    fn update(p: &Acme, remote: &str, prior: Bucket, desired: Bucket, progress: &Progress) -> Result<Bucket> { /* .. */ }
+    fn delete(p: &Acme, remote: &str, progress: &Progress) -> Result<()> { /* .. */ }
 }
 
 dform_sdk::provider!(
@@ -116,6 +120,14 @@ fn main() -> std::process::ExitCode {
 - `Lifecycle` is the four calls. Plan is not written: the SDK diffs
   leaf by leaf with the schema, a change to a `force_new` path replaces,
   a missing `required` attribute refuses. Import is a read.
+- Create, update and delete get a `Progress`: `progress.status("BUILD")`
+  each time the object's status as the API gives it changes (a poll that
+  saw a new one), `progress.message(..)` for the log. dform prints the
+  status beside the change in apply's progress, as it is, with the time
+  the call has run; say it when your view changes, never on a timer.
+  Over gRPC it is the Apply's stream of events, in a component the
+  `stream<event>` its `apply` answers (R-130). A `Handler` gets the same
+  sink as `handle`'s second argument.
 - An error refuses the call. One the host classed `maybe-applied` is
   `MaybeApplied` (dform looks before it sends it again); a `retryable`
   one says so, and dform's retry policy sends it again.
