@@ -18,7 +18,7 @@
 - Delete code the ticket says to delete; do not leave the old path behind a flag.
 - Rust 2024 edition, rustfmt defaults, no clippy warnings on files you touch.
 - Error messages name the resource address and attribute path; never just "conflict".
-- Nothing is added to crates/dform-grpc (DESIGN.org R-13): it is the frozen native bridge until the wasm bridge passes `provider check`.
+- crates/dform-grpc and proto/ change additively only, derived from the WIT (DESIGN.org R-13, R-130): wit/dform-provider.wit is the one definition, a call or a field is added there first, and crates/dform-wit/tests/drift.rs keeps the proto equal to it.
 - Decisions of the 2026-10-01 review are DESIGN.org "Review of 2026-10-01: decisions" (R-1 to R-14); a ticket that cites one follows it.
 - After each fan-out round lands, one consolidation pass (WORK.org "Consolidation pass after each round") runs before the next round starts: duplicated helpers, parallel implementations and copied test utilities are merged to one, with no behaviour change.
 - No shell-outs: git, ssh, http and archives are in-process libraries (gix, russh, the HTTP client). The only `Command::new` allowed are the provider launcher and the configured audit sink (`sh -c`), because the operator asked for a command there.
