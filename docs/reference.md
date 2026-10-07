@@ -353,6 +353,26 @@ between a bucket and a directory), `state taint`, `state show`, `state mv`, `log
 stack's prefix), and other stacks read its outputs (the registry records
 `s3://BUCKET/PREFIX/state.json` with the endpoint and region).
 
+What a plan costs over the network: its reads of the deployment's objects
+(the plan key, the audit log, the state; the state while the providers
+start), over one kept-alive connection to the backend, and no write
+unless `--out` asks for a plan file; then, per provider, one Configure
+and one Read of each object state maps, every Read sent at once, so a
+plan waits about one round trip to each API rather than one per object;
+and the Plan calls, also at once. A provider may add its own lookups
+(the OVH provider lists a region's flavors and images together, and
+looks up a project named by its description once, keeping its id in
+`dform.state/cache/ovh-projects.json`). `DFORM_LOG=debug` prints a line
+on stderr for each phase of a run and each backend request and provider
+call, with the time since the run began and how long it took:
+
+```text
+dform:    0.022s       2.2ms  s3 get s3://dform/app/state.key
+dform:    0.969s     606.7ms  provider ovh: Configure
+dform:    1.575s     605.8ms  provider ovh: Read ovh.instance lab-0
+dform:    1.612s    1611.8ms  finished
+```
+
 ### Keyed stacks: one deployment per key value
 
 `key env: T` (and `key region: T`, a composite key in source order)
