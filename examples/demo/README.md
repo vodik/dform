@@ -2,7 +2,7 @@
 The demo: modules used by their paths, a component copied twice, policy
 packs, per-environment config, a keyed stack.
 ```bash
-dform plan                      # dform[env=staging]: 14 creates
+dform plan                      # dform[env=staging]: 13 creates
 dform apply dform env=staging   # keyed: apply names the deployment; one tick
 dform plan dform env=prod       # its own deployment: creates
 dform test dform                # the denies, in every env
