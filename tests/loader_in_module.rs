@@ -167,3 +167,22 @@ fn two_uses_that_disagree_are_a_conflict() {
                 stacks/platform.df:1:1 and traefik.df:1:1";
     assert!(r.stderr.contains(want), "{want}\n{}", r.stderr);
 }
+
+/// A provider is started by one source: two `use`s naming two are an
+/// error naming both.
+#[test]
+fn two_uses_name_one_source() {
+    let s = project(
+        "provider-sources",
+        "use fake { source = \"providers/a\" }\nuse traefik\n",
+        "use fake { source = \"providers/b\" }\n",
+    );
+    let r = s.run(&["plan", "platform"]).failure();
+    assert!(
+        r.stderr
+            .contains("traefik.df:1:1: provider fake: two `use`s name another source"),
+        "{}",
+        r.stderr
+    );
+    assert!(r.stderr.contains("the other `use`"), "{}", r.stderr);
+}
