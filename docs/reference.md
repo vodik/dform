@@ -103,6 +103,7 @@ backend = 'local("state/{stack}")'   # or 's3("bucket", "dform/{stack}", {...})'
 lease_duration = "60s"               # an s3 backend's lease (the default)
 lease_renewal = "20s"                # how often its holder renews it (the default)
 audit_sink_timeout = "30s"           # how long an audit sink may take per entry (the default)
+audit_sink_entries = "audit"         # what a sink gets: "audit" (the default) or "all", the state's entries too
 
 [stacks.shop]                        # stacks/shop.df
 backend = 's3("acme-state", "shop/{env}")'
@@ -1962,7 +1963,9 @@ authoritative. The sink runs in a process group of its own and gets
 group (whatever `sh -c` started goes too) and the apply goes on with a
 warning ("did not finish in 30s; it was stopped"): a sink never holds the
 apply, nor its lock or lease. One that exits and leaves something
-holding its stdin is treated the same way at the end of the budget.
+holding its stdin is treated the same way at the end of the budget. A
+sink gets every entry but the state's own (`state`, one per Apply call,
+and `lease`), unless `[defaults] audit_sink_entries = "all"`.
 
 ## Asking the fact store
 

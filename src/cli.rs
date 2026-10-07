@@ -2096,6 +2096,11 @@ fn run_with(
             .manifest
             .as_ref()
             .map_or(crate::audit::SINK_TIMEOUT, |m| m.audit_sink_timeout()),
+        located
+            .loaded
+            .manifest
+            .as_ref()
+            .is_some_and(|m| m.audit_sink_all()),
     );
     match &cli.cmd {
         Cmd::Log {

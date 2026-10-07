@@ -47,3 +47,52 @@ fn a_sink_that_hangs_is_stopped_with_its_group() {
     }
     mock(&s, &["log", "verify"]).success();
 }
+
+/// The kinds of the entries a `cat >> sink.jsonl` sink got.
+fn sunk(s: &Scratch) -> std::collections::BTreeSet<String> {
+    s.read("sink.jsonl")
+        .lines()
+        .map(|l| {
+            serde_json::from_str::<serde_json::Value>(l).unwrap()["kind"]
+                .as_str()
+                .unwrap()
+                .to_string()
+        })
+        .collect()
+}
+
+/// The sink gets the entries it did before the log became the state's
+/// (R-146): not `state` nor `lease`, one more per Apply call, unless
+/// `[defaults] audit_sink_entries = "all"`.
+#[test]
+fn a_sink_gets_the_states_entries_only_when_asked() {
+    let s = Scratch::project("audit-sink-entries");
+    s.write("p.df", PROG);
+    let sink = format!("cat >> {}", s.path("sink.jsonl").display());
+    mock(&s, &["--audit-sink", &sink, "apply"]).success();
+    let kinds = sunk(&s);
+    assert!(
+        kinds.contains("action") && kinds.contains("apply_end"),
+        "{kinds:?}"
+    );
+    assert!(!kinds.contains("state"), "{kinds:?}");
+    let all = Scratch::project("audit-sink-entries-all");
+    all.write(
+        "dform.toml",
+        "[project]\nedition = \"2026\"\n\n[defaults]\naudit_sink_entries = \"all\"\n",
+    );
+    all.write("p.df", PROG);
+    let sink = format!("cat >> {}", all.path("sink.jsonl").display());
+    mock(&all, &["--audit-sink", &sink, "apply"]).success();
+    assert!(sunk(&all).contains("state"), "{:?}", sunk(&all));
+    all.write(
+        "dform.toml",
+        "[project]\nedition = \"2026\"\n\n[defaults]\naudit_sink_entries = \"some\"\n",
+    );
+    let r = mock(&all, &["plan"]).failure();
+    assert!(
+        r.stderr.contains("audit_sink_entries = \"some\": `audit`"),
+        "{}",
+        r.stderr
+    );
+}

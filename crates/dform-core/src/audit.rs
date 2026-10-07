@@ -44,7 +44,9 @@
 //! local log stays authoritative. A sink that does not finish within
 //! `[defaults] audit_sink_timeout` ([`SINK_TIMEOUT`]) is killed with its
 //! group (what `sh` started goes too), and that is a warning as well: a
-//! sink never holds the apply, nor its lease.
+//! sink never holds the apply, nor its lease. It gets the state's own
+//! entries (`state`, `lease`; one per Apply call) only under `[defaults]
+//! audit_sink_entries = "all"`.
 
 use crate::approval::{canonical_json, digest_of, now, rfc3339};
 use crate::store::{AUDIT, AUDIT_SEGMENTS, Cond, LocalStore, Store};
@@ -68,7 +70,13 @@ pub struct Log {
     store: Arc<dyn Store>,
     sink: Option<String>,
     sink_timeout: Duration,
+    /// The sink gets the state's own entries too ([`STATE_KINDS`]).
+    sink_all: bool,
 }
+
+/// The state's own entries (`wal`): a sink gets them only when dform.toml
+/// says `[defaults] audit_sink_entries = "all"`.
+pub const STATE_KINDS: &[&str] = &["state", "lease"];
 
 impl Log {
     /// The log in `store`; each entry also goes to `sink` when there is
@@ -78,12 +86,20 @@ impl Log {
             store,
             sink,
             sink_timeout: SINK_TIMEOUT,
+            sink_all: false,
         }
     }
 
     /// The same log, its sink given `timeout` for each entry.
     pub fn with_sink_timeout(mut self, timeout: Duration) -> Log {
         self.sink_timeout = timeout;
+        self
+    }
+
+    /// The same log, its sink given every entry (`all`), the state's own
+    /// too, or all but those.
+    pub fn with_sink_entries(mut self, all: bool) -> Log {
+        self.sink_all = all;
         self
     }
 
@@ -221,6 +237,7 @@ impl Log {
             at.part = Some(self.append_segment(&mut line)?);
         }
         if let Some(cmd) = &self.sink
+            && (self.sink_all || !STATE_KINDS.contains(&kind))
             && let Err(e) = send(cmd, &written, self.sink_timeout)
         {
             eprintln!("warning: audit sink `{cmd}`: {e:#}; the local log has the entry");

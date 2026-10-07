@@ -323,6 +323,9 @@ pub struct Defaults {
     /// How long an audit sink may take over one entry (`30s`) before it
     /// is killed, its process group with it (`audit`).
     pub audit_sink_timeout: Option<String>,
+    /// Which entries an audit sink gets: `audit` (the default: every
+    /// entry but the state's own, `state` and `lease`) or `all`.
+    pub audit_sink_entries: Option<String>,
 }
 
 /// `[stacks.NAME]`: a stack's operational settings (docs/grammar.md
@@ -536,6 +539,14 @@ impl Manifest {
                 );
             }
         }
+        if let Some(v) = &m.defaults.audit_sink_entries
+            && !matches!(v.as_str(), "audit" | "all")
+        {
+            bail!(
+                "{} = {v:?}: `audit` (every entry but the state's own, the default) or `all`",
+                at("[defaults] audit_sink_entries")
+            );
+        }
         let t = m.lease_times();
         if t.renewal >= t.duration {
             bail!(
@@ -592,6 +603,7 @@ impl Manifest {
             ("lease_duration", &self.defaults.lease_duration),
             ("lease_renewal", &self.defaults.lease_renewal),
             ("audit_sink_timeout", &self.defaults.audit_sink_timeout),
+            ("audit_sink_entries", &self.defaults.audit_sink_entries),
         ] {
             if let Some(v) = v {
                 out.push(atom("project_default", vec![s(k), s(v)]));
@@ -760,6 +772,12 @@ impl Manifest {
             .as_deref()
             .and_then(crate::store::parse_duration)
             .unwrap_or(crate::audit::SINK_TIMEOUT)
+    }
+
+    /// Whether an audit sink gets every entry (`[defaults]
+    /// audit_sink_entries = "all"`), the state's own too.
+    pub fn audit_sink_all(&self) -> bool {
+        self.defaults.audit_sink_entries.as_deref() == Some("all")
     }
 
     /// The lease's duration and renewal interval (an `s3` backend's).

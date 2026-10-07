@@ -232,11 +232,18 @@ fn secrets_never_appear() {
 }
 
 #[test]
-fn a_sink_gets_every_entry_and_its_failure_is_a_warning() {
+fn a_sink_gets_the_audit_entries_and_its_failure_is_a_warning() {
     let s = Scratch::project("audit-sink");
     s.write("p.df", PROG);
     mock(&s, &["--audit-sink", "cat >> sink.jsonl", "apply"]).success();
-    assert_eq!(s.read("sink.jsonl"), s.read("w.state.audit.jsonl"));
+    // Every entry but the state's own (`[defaults] audit_sink_entries`).
+    let audit: String = s
+        .read("w.state.audit.jsonl")
+        .lines()
+        .filter(|l| !l.contains("\"kind\":\"state\"") && !l.contains("\"kind\":\"lease\""))
+        .map(|l| format!("{l}\n"))
+        .collect();
+    assert_eq!(s.read("sink.jsonl"), audit);
     s.write("p.df", &PROG.replace("10.0.1.0/24", "10.0.2.0/24"));
     let r = mock(&s, &["--audit-sink", "exit 3", "apply"]).success();
     assert!(

@@ -1163,7 +1163,7 @@ struct Inner {
     /// The state as this run last read or logged it (`wal`).
     wal: Mutex<Wal>,
     /// The audit log's sink, which the state's entries go to as well.
-    sink: Mutex<(Option<String>, Duration)>,
+    sink: Mutex<(Option<String>, Duration, bool)>,
     writes: AtomicUsize,
     submits: AtomicUsize,
 }
@@ -1203,7 +1203,7 @@ impl Deployment {
                 lost: Mutex::new(None),
                 renewer: Mutex::new(None),
                 wal: Mutex::new(Wal::default()),
-                sink: Mutex::new((None, crate::audit::SINK_TIMEOUT)),
+                sink: Mutex::new((None, crate::audit::SINK_TIMEOUT, false)),
                 writes: AtomicUsize::new(0),
                 submits: AtomicUsize::new(0),
             }),
@@ -1306,8 +1306,10 @@ impl Deployment {
     /// The log the state's entries go to: the audit log, its sink as this
     /// run's ([`Deployment::audit`]).
     fn wal_log(&self) -> crate::audit::Log {
-        let (sink, timeout) = self.inner.sink.lock().expect("sink").clone();
-        crate::audit::Log::new(self.inner.store.clone(), sink).with_sink_timeout(timeout)
+        let (sink, timeout, all) = self.inner.sink.lock().expect("sink").clone();
+        crate::audit::Log::new(self.inner.store.clone(), sink)
+            .with_sink_timeout(timeout)
+            .with_sink_entries(all)
     }
 
     /// Log what changed in the state since this run last read or logged
@@ -1632,9 +1634,10 @@ impl Deployment {
     }
 
     /// The deployment's audit log; each entry also to `sink`, given
-    /// `timeout` for each: the state's entries too.
-    pub fn audit(&self, sink: Option<String>, timeout: Duration) -> crate::audit::Log {
-        *self.inner.sink.lock().expect("sink") = (sink, timeout);
+    /// `timeout` for each, the state's own entries only when `all`. The
+    /// log the state is written to carries the same sink.
+    pub fn audit(&self, sink: Option<String>, timeout: Duration, all: bool) -> crate::audit::Log {
+        *self.inner.sink.lock().expect("sink") = (sink, timeout, all);
         self.wal_log()
     }
 
