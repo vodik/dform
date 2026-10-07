@@ -858,7 +858,7 @@ pub fn infer(
                 n,
                 types::of_expr(ty),
                 e.span,
-                format!("extern {}'s column {}", e.name, b.name),
+                format!("{}'s column {}", e.name, b.name),
             );
         }
     }

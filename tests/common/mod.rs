@@ -119,13 +119,42 @@ impl Scratch {
         let dir = self.path(rel);
         std::fs::create_dir_all(&dir).unwrap();
         let out = dform().args(yes(args)).current_dir(&dir).output().unwrap();
-        Run::from(out)
+        self.plain(Run::from(out))
     }
 
     /// Run the command line `ARGS` over `backend`.
     pub fn run_on<S: AsRef<std::ffi::OsStr>>(&self, backend: Backend, args: &[S]) -> Run {
         let mut c = backend.command();
-        Run::from(c.args(yes(args)).current_dir(&self.dir).output().unwrap())
+        self.plain(Run::from(
+            c.args(yes(args)).current_dir(&self.dir).output().unwrap(),
+        ))
+    }
+
+    /// `r`, after checking it says no compiler word its program did not
+    /// write (R-129): `extern` reaches a user only from a program that
+    /// declares one.
+    #[track_caller]
+    fn plain(&self, r: Run) -> Run {
+        let word = |t: &str| {
+            t.match_indices("extern").any(|(i, _)| {
+                let ident = |c: char| c.is_alphanumeric() || c == '_';
+                !t[..i].ends_with(ident) && !t[i + 6..].starts_with(ident)
+            })
+        };
+        if !word(&r.stdout) && !word(&r.stderr) {
+            return r;
+        }
+        let mut files = Vec::new();
+        df_files(&self.dir, true, &mut files);
+        let written = files
+            .iter()
+            .any(|f| std::fs::read_to_string(f).is_ok_and(|t| word(&t)));
+        assert!(
+            written,
+            "a message names `extern`, which the program does not:\n{}{}",
+            r.stdout, r.stderr
+        );
+        r
     }
 }
 

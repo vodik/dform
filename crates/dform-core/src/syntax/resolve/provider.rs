@@ -342,14 +342,20 @@ impl Lowerer<'_> {
     }
 
     /// The program's providers' `use`s: name and span, the first of a
-    /// name.
+    /// name; a component's as a file's (After R-129).
     fn provider_blocks(&self) -> Vec<(String, Span)> {
         let mut out: Vec<(String, Span)> = Vec::new();
         for u in self.units {
-            for (c, name) in u
+            let components = u
                 .root
                 .children()
-                .filter_map(|c| provider_use(&c, self.units, &self.decls.deployed).map(|n| (c, n)))
+                .filter(|c| c.kind() == COMPONENT)
+                .filter_map(|c| node(&c, STMT_BLOCK))
+                .flat_map(|b| b.children().collect::<Vec<_>>());
+            for (c, name) in
+                u.root.children().chain(components).filter_map(|c| {
+                    provider_use(&c, self.units, &self.decls.deployed).map(|n| (c, n))
+                })
             {
                 if out.iter().any(|(n, _)| *n == name) {
                     continue;

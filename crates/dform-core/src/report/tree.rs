@@ -350,7 +350,7 @@ fn leaf_text(l: &Leaf) -> String {
         Leaf::Schema { span } => format!("provider schema {span}"),
         Leaf::World { event } => format!("world {event}"),
         Leaf::Plan { fact, tick } => format!("{} {fact}", plan_text(*tick)),
-        Leaf::Extern { call } => format!("extern {call}"),
+        Leaf::Extern { call } => call.clone(),
         Leaf::Rule { id } => format!("by {id}"),
         Leaf::Absent { pattern } => format!("not {pattern}   (absent)"),
     }
@@ -900,7 +900,7 @@ impl Surface<'_, '_> {
 /// One line of a deformation's explanation: the statement that derived it
 /// (`kind` "rule"), or one leaf under it: a fact the program or a table
 /// states ("fact"), a `--set` or `--data` ("input"), an extern's answer
-/// ("extern"), a world fact ("world"), a fact of the plan ("plan"), a
+/// ("answered"), a world fact ("world"), a fact of the plan ("plan"), a
 /// fact found absent ("absent"), or what state alone says ("state").
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Because {
@@ -1173,7 +1173,7 @@ impl Compress {
                 Because::new("fact", Some(at.to_string()), format!("{text}{origin}"))
             }
             Leaf::Input { source } => Because::new("input", None, r.text(source)),
-            Leaf::Extern { .. } => Because::new("extern", None, text.to_string()),
+            Leaf::Extern { .. } => Because::new("answered", None, text.to_string()),
             Leaf::World { .. } => Because::new("world", None, text.to_string()),
             Leaf::Plan { tick, .. } => {
                 Because::new("plan", None, format!("{text}   ({})", plan_text(*tick)))

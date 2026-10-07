@@ -6,7 +6,7 @@
 //! naming both.
 
 mod common;
-use common::{Run, Scratch};
+use common::Scratch;
 
 /// ConfigMaps as a vendored manifest lists them.
 const MAPS: &str = "\
@@ -30,21 +30,6 @@ fn project(name: &str, stack: &str, module: &str) -> Scratch {
     s
 }
 
-/// What the run said holds no compiler word the program did not write.
-#[track_caller]
-fn plain(s: &Scratch, r: &Run) {
-    let mut sources = String::new();
-    for f in ["stacks/platform.df", "traefik.df"] {
-        sources.push_str(&s.read(f));
-    }
-    for out in [&r.stdout, &r.stderr] {
-        assert!(
-            sources.contains("extern") || !out.contains("extern"),
-            "a message names `extern`:\n{out}"
-        );
-    }
-}
-
 /// The loader in a used module's resource clause, as traefik.df vendors
 /// Traefik's CRDs: a resource per document, under the module's name.
 #[test]
@@ -56,7 +41,6 @@ fn a_loader_in_a_used_modules_clause() {
          d in yaml(\"vendor/maps.yml\")\n}\n",
     );
     let r = s.run(&["plan", "platform"]);
-    plain(&s, &r);
     let r = r.success();
     for want in [
         "  + k8s.config_map traefik.a  traefik.df:1\n      = vendor/maps.yml:1  (42 B)\n",
@@ -83,7 +67,6 @@ fn a_loader_in_a_component_a_copy_and_a_let() {
          d in yaml(\"vendor/maps.yml\")\n  }\n}\n",
     );
     let r = s.run(&["plan", "platform"]);
-    plain(&s, &r);
     let r = r.success();
     for want in [
         "  + traefik.maps one\n    + k8s.config_map one.a",
@@ -118,9 +101,10 @@ fn a_loaders_errors_in_a_module_name_no_compiler_word() {
     ] {
         let s = project(name, "use k8s\nuse traefik\n", module);
         let r = s.run(&["plan", "platform"]);
-        plain(&s, &r);
         let r = r.failure();
         assert!(r.stderr.contains(want), "{want}\n{}", r.stderr);
+        // A module's own relation by the name the program gives it.
+        assert!(!r.stderr.contains("::"), "{}", r.stderr);
     }
 }
 
@@ -138,7 +122,6 @@ fn a_provider_used_from_a_used_module() {
     ] {
         let s = project("provider-module", stack, module);
         let r = s.run(&["plan", "platform"]);
-        plain(&s, &r);
         let r = r.success();
         assert_eq!(
             r.summary(),
@@ -161,7 +144,6 @@ fn two_uses_that_disagree_are_a_conflict() {
          d in yaml(\"vendor/maps.yml\")\n}\n",
     );
     let r = s.run(&["plan", "platform"]);
-    plain(&s, &r);
     let r = r.failure();
     let want = "provider k8s: two configurations disagree at namespace: \
                 stacks/platform.df:1:1 and traefik.df:1:1";
@@ -185,4 +167,19 @@ fn two_uses_name_one_source() {
         r.stderr
     );
     assert!(r.stderr.contains("the other `use`"), "{}", r.stderr);
+}
+
+/// A built-in provider's `use` in a component declares its data sources
+/// as one at a file's top level does (After R-129): `file.text` reads.
+#[test]
+fn a_builtin_providers_use_in_a_component() {
+    let s = project(
+        "provider-component",
+        "use fake\nuse traefik\nresource traefik.edge one {}\n",
+        "component edge {\n  use file\n  \
+         resource db.postgres main { size = 1, note = t } where file.text(\"note.txt\", t)\n}\n",
+    );
+    s.write("note.txt", "hello");
+    let r = s.run(&["plan", "platform"]).success();
+    assert!(r.stdout.contains("note = \"hello\""), "{}", r.stdout);
 }

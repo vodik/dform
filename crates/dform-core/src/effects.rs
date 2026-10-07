@@ -331,7 +331,14 @@ fn classify_read(
             let t = const_str(&a.args[0])?;
             Some(format!("world {t}"))
         }
-        (pred, _) if externs.contains(pred) => Some(format!("extern {pred}")),
+        // A data source by the call a program writes: a loader's table
+        // as its loader (`yaml(..)`), never the compiler's name (R-129).
+        (pred, _) if externs.contains(pred) => Some(
+            match pred.strip_prefix("table.").and_then(|r| r.split_once('.')) {
+                Some((loader, _)) => format!("{loader}(..)"),
+                None => format!("{pred}(..)"),
+            },
+        ),
         // A module's own input, read through its renamed reader
         // (`m.i::k`, or `m.i.k` exported; bare `k` at the stack root).
         (pred, 1) => {

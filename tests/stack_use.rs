@@ -67,7 +67,7 @@ fn effects_lists_none_of_a_used_stacks_effects() {
     let s = project("stack-use-effects");
     let mine = s.run(&["dev", "effects", "stacks/apps.df"]).success();
     let theirs = s.run(&["dev", "effects", "stacks/platform.df"]).success();
-    for row in ["k3s", "table.yaml", "k8s.config_map", "offers  ip"] {
+    for row in ["k3s", "yaml(..)", "k8s.config_map", "offers  ip"] {
         assert!(theirs.stdout.contains(row), "{row}:\n{}", theirs.stdout);
         assert!(!mine.stdout.contains(row), "{row}:\n{}", mine.stdout);
     }

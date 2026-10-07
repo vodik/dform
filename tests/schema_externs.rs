@@ -75,8 +75,7 @@ resource ovh.instance db {{
     ));
     let r = dform(&s, &server, &["plan", "main.df"]).failure();
     assert!(
-        r.stderr
-            .contains("extern ovh.image takes 4 arguments, not 2"),
+        r.stderr.contains("ovh.image takes 4 arguments, not 2") && !r.stderr.contains("extern"),
         "{}",
         r.stderr
     );

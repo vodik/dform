@@ -183,9 +183,12 @@ pub fn check(program: &Program, fns: &[ExternFn]) -> Result<()> {
         for l in body {
             match l {
                 Lit::Not(a) if by.contains_key(a.pred.as_str()) => diags.push(
-                    Diagnostic::error(a.span, format!("extern {} under `not`", a.pred)).with_note(
-                        "an extern answers what exists; its absence is not known, so it cannot be negated",
-                    ),
+                    Diagnostic::error(a.span, format!("{} under `not`", called(&a.pred)))
+                        .with_note(format!(
+                            "{} answers what exists; its absence is not known, so it cannot be \
+                             negated",
+                            called(&a.pred)
+                        )),
                 ),
                 Lit::Pos(a) if by.contains_key(a.pred.as_str()) => {
                     let f = by[a.pred.as_str()];
@@ -193,8 +196,8 @@ pub fn check(program: &Program, fns: &[ExternFn]) -> Result<()> {
                         diags.push(Diagnostic::error(
                             a.span,
                             format!(
-                                "extern {} takes {} arguments, not {}",
-                                f.name,
+                                "{} takes {} arguments, not {}",
+                                called(&f.name),
                                 f.args.len(),
                                 a.args.len()
                             ),
@@ -211,11 +214,15 @@ pub fn check(program: &Program, fns: &[ExternFn]) -> Result<()> {
                                 Diagnostic::error(
                                     a.span,
                                     format!(
-                                        "extern {}: +{} is not bound ({v} is unbound before it)",
-                                        f.name, b.name
+                                        "{}: +{} is not bound ({v} is unbound before it)",
+                                        called(&f.name),
+                                        b.name
                                     ),
                                 )
-                                .with_help("bind it with a literal before the extern"),
+                                .with_help(format!(
+                                    "bind it with a literal before {}",
+                                    called(&f.name)
+                                )),
                             );
                         }
                     }
@@ -235,13 +242,14 @@ pub fn check(program: &Program, fns: &[ExternFn]) -> Result<()> {
                                 "a source is read once it is known",
                             ),
                             None => (
-                                format!("extern {} in a recursive rule", f.name),
-                                "an extern is asked once its inputs are complete",
+                                format!("{} in a recursive rule", f.name),
+                                "a data source is asked once its inputs are complete",
                             ),
                         };
                         diags.push(Diagnostic::error(a.span, msg).with_note(format!(
-                            "{} depends on itself through {p}; {asked}",
-                            h.pred
+                            "{} depends on itself through {}; {asked}",
+                            program_name(&h.pred),
+                            program_name(p)
                         )));
                     }
                     a.args.iter().for_each(|t| vars(t, &mut bound));
@@ -269,15 +277,28 @@ pub fn check(program: &Program, fns: &[ExternFn]) -> Result<()> {
     }
 }
 
+/// A data source as a message names it (R-129: the word `extern` never
+/// reaches a user): a loader's table by what it reads (`yaml document`),
+/// any other by its name (`ovh.image`).
+fn called(name: &str) -> String {
+    crate::tables::describe(name).unwrap_or_else(|| name.to_string())
+}
+
+/// A relation as the program names it: a module's private one by its
+/// module and name (`traefik.p`), not the compiler's `traefik::p`.
+fn program_name(pred: &str) -> String {
+    pred.replace("::", ".")
+}
+
 fn defined_here(a: &Atom, f: &ExternFn) -> Diagnostic {
     Diagnostic::error(
         a.span,
         format!(
-            "extern {} is answered by its provider; the program may not state it",
-            f.name
+            "{} is answered by its provider; the program may not state it",
+            called(&f.name)
         ),
     )
-    .with_label(f.span, "declared extern here")
+    .with_label(f.span, "declared here")
 }
 
 /// Is column `b` secret-typed (`-value: secret(T)`)?
@@ -492,18 +513,28 @@ impl<'a> Externs<'a> {
             }
             for c in new {
                 let f = &self.fns[&c.pred];
-                let rows =
-                    (self.ask)(f, &c.inputs).with_context(|| {
-                        match crate::tables::describe(&c.pred) {
-                            Some(t) => format!("{t} from {}", show(&c.inputs)),
-                            None => format!("extern {}({})", c.pred, show(&c.inputs)),
+                let rows = (self.ask)(f, &c.inputs).with_context(|| {
+                    match crate::tables::describe(&c.pred) {
+                        Some(t) => format!("{t} from {}", show(&c.inputs)),
+                        // The call and where it is written, as a
+                        // plan line says it (R-129 amendment).
+                        None => {
+                            let at = self
+                                .sites
+                                .iter()
+                                .find(|(_, a)| a.pred == c.pred)
+                                .and_then(|(_, a)| crate::diag::location(a.span))
+                                .map(|(f, l, _)| format!("  {f}:{l}"))
+                                .unwrap_or_default();
+                            format!("{}({}){at}", c.pred, show(&c.inputs))
                         }
-                    })?;
+                    }
+                })?;
                 for r in &rows {
                     if r.len() != f.args.len() {
                         bail!(
-                            "extern {}: an answer has {} columns, the declaration {}",
-                            c.pred,
+                            "{}: an answer has {} columns, the declaration {}",
+                            called(&c.pred),
                             r.len(),
                             f.args.len()
                         );
@@ -513,7 +544,7 @@ impl<'a> Externs<'a> {
             }
         }
         bail!(
-            "externs: calls did not settle after 64 rounds (an extern's output feeding its own input?)"
+            "data sources: calls did not settle after 64 rounds (a call's output feeding its own input?)"
         )
     }
 

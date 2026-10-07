@@ -58,11 +58,11 @@ pub fn provenance(key: &str) -> String {
 }
 
 /// How `why` names where an extern's fact came from (its leaf's `call`):
-/// a memo's provenance, else "extern".
+/// a memo's provenance, else "answered" (R-129: never `extern`).
 pub fn source(call: &str) -> String {
     match call.split_once("): memo, ") {
         Some((head, rest)) if head.starts_with(FIRST) => format!("memo, {rest}"),
-        _ => "extern".into(),
+        _ => "answered".into(),
     }
 }
 
