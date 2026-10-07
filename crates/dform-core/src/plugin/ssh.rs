@@ -8,8 +8,14 @@
 //! ```
 //!
 //! `host` is an `ip` or a string, `NAME` or `NAME:PORT` (22 when none).
-//! The key is the operator's: the agent's (`SSH_AUTH_SOCK`) first, then
-//! `~/.ssh/id_ed25519` and `~/.ssh/id_rsa`; never one in the program.
+//! The key is the operator's, never one in the program, and never asked
+//! for: every key the agent (`SSH_AUTH_SOCK`) holds, then the key the
+//! program names (`use ssh { key = "k3s-admin" }`: an agent key by its
+//! comment or fingerprint, offered first, or the credential
+//! `ssh:k3s-admin`'s unencrypted file), else the unencrypted
+//! `~/.ssh/id_ed25519`, `id_ecdsa`, `id_rsa`. A key file with a passphrase
+//! is not decrypted: the agent uses such a key. A refusal says what was
+//! offered and what was not, and what to do.
 //!
 //! A host's key is recorded on first contact (`State::known_hosts`, kept
 //! by the apply, [`Ssh::keep`]) and checked on every contact after: a
@@ -24,7 +30,8 @@
 //! command that fails are errors. Every answer is read again each run, as
 //! any extern's is; `memo.first` keeps one where wanted.
 
-use crate::ast::ExternFn;
+use crate::ast::{ExternFn, Program, Stmt, Term};
+use crate::plugin::credentials;
 use crate::state::{KnownHost, State};
 use crate::value::{NullClass, Value};
 use anyhow::{Context, Result, anyhow, bail};
@@ -59,6 +66,8 @@ const CALL_TIMEOUT: Duration = Duration::from_secs(60);
 #[derive(Debug, Default)]
 pub struct Ssh {
     known: RefCell<BTreeMap<String, KnownHost>>,
+    /// The key the program names (`use ssh { key = .. }`).
+    key: Option<String>,
 }
 
 /// What one call came to.
@@ -69,10 +78,12 @@ enum Outcome {
 }
 
 impl Ssh {
-    /// The provider, `known` the host keys state keeps.
-    pub fn new(known: BTreeMap<String, KnownHost>) -> Ssh {
+    /// The provider, `known` the host keys state keeps, `key` the one the
+    /// program names ([`key_named`]).
+    pub fn new(known: BTreeMap<String, KnownHost>, key: Option<String>) -> Ssh {
         Ssh {
             known: RefCell::new(known),
+            key,
         }
     }
 
@@ -132,6 +143,7 @@ impl Ssh {
             Op::Read(p) => format!("{READ} {user}@{host}:{p}"),
             Op::Run(c) => format!("{RUN} {user}@{host} `{c}`"),
         };
+        let named = self.key.as_deref();
         // On a thread of its own, with a runtime of its own: the caller
         // may be inside another (a controller's).
         let out = std::thread::scope(|s| {
@@ -140,7 +152,7 @@ impl Ssh {
                     .enable_all()
                     .build()
                     .context("ssh: start a runtime")?
-                    .block_on(session(&name, port, user, host, handler, &op))
+                    .block_on(session(&name, port, user, host, named, handler, &op))
             })
             .join()
             .unwrap_or_else(|_| Err(anyhow!("ssh: the client panicked")))
@@ -164,6 +176,34 @@ impl Ssh {
 enum Op {
     Read(String),
     Run(String),
+}
+
+/// The key `use ssh { key = "NAME" }` names: a string, the name of an
+/// agent key (its comment or SHA-256 fingerprint) or of the credential
+/// `ssh:NAME`.
+pub fn key_named(program: &Program) -> Result<Option<String>> {
+    for st in &program.statements {
+        let head = match st {
+            Stmt::Fact(a) => a,
+            Stmt::Rule(r) => &r.head,
+            _ => continue,
+        };
+        let [Term::Val(Value::Str(n)), Term::Obj(settings)] = head.args.as_slice() else {
+            continue;
+        };
+        if head.pred != "provider_config" || n != "ssh" {
+            continue;
+        }
+        match settings.get("key") {
+            None => {}
+            Some(Term::Val(Value::Str(k))) if !k.is_empty() => return Ok(Some(k.clone())),
+            Some(_) => bail!(
+                "use ssh {{ key = .. }} takes a string: the name of a key in the agent (its \
+                 comment or SHA256 fingerprint) or of the credential ssh:NAME"
+            ),
+        }
+    }
+    Ok(None)
 }
 
 /// `NAME`, `NAME:PORT`, `[V6]:PORT`: the name and the port, 22 by default.
@@ -193,6 +233,7 @@ async fn session(
     port: u16,
     user: &str,
     host: &str,
+    named: Option<&str>,
     handler: Client,
     op: &Op,
 ) -> Result<Outcome> {
@@ -218,7 +259,7 @@ async fn session(
         },
         Ok(Ok(h)) => h,
     };
-    authenticate(&mut h, user, host).await?;
+    authenticate(&mut h, user, host, named).await?;
     let out = tokio::time::timeout(CALL_TIMEOUT, run(&h, op))
         .await
         .map_err(|_| anyhow!("did not finish within {}s", CALL_TIMEOUT.as_secs()))??;
@@ -248,66 +289,264 @@ fn not_yet(e: &russh::Error) -> bool {
     }
 }
 
-/// The agent's keys first, then `~/.ssh/id_ed25519` and `~/.ssh/id_rsa`.
-async fn authenticate(h: &mut Handle<Client>, user: &str, host: &str) -> Result<()> {
-    let mut tried: Vec<String> = Vec::new();
-    if let Ok(mut agent) = AgentClient::connect_env().await {
-        let ids = agent.request_identities().await.unwrap_or_default();
-        for id in ids {
-            let AgentIdentity::PublicKey { key, comment } = id else {
-                continue;
-            };
+/// The files tried when no key is named, in this order.
+const DEFAULT_KEYS: [&str; 3] = ["id_ed25519", "id_ecdsa", "id_rsa"];
+
+/// The key the program names first (`use ssh { key = NAME }`: the agent's
+/// of that comment or fingerprint, else the credential `ssh:NAME`'s file),
+/// then every other key the agent holds, then, when none is named, the
+/// unencrypted `~/.ssh/id_*`. The named key goes first because a host
+/// hangs up after a few refusals (`MaxAuthTries`). Never a prompt: a key
+/// with a passphrase is the agent's to use, and its file is not decrypted.
+async fn authenticate(
+    h: &mut Handle<Client>,
+    user: &str,
+    host: &str,
+    named: Option<&str>,
+) -> Result<()> {
+    let mut tried = Tried::default();
+    let home = std::env::home_dir().unwrap_or_default();
+    let mut agent = match AgentClient::connect_env().await {
+        Ok(a) => Some(a),
+        Err(e) => {
+            if std::env::var_os("SSH_AUTH_SOCK").is_some() {
+                tried.agent = Agent::Silent(e.to_string());
+            }
+            None
+        }
+    };
+    let mut ids = Vec::new();
+    if let Some(a) = agent.as_mut() {
+        match a.request_identities().await {
+            Ok(all) => {
+                tried.agent = Agent::Held;
+                ids = all
+                    .into_iter()
+                    .filter_map(|id| match id {
+                        AgentIdentity::PublicKey { key, comment } => Some((key, comment)),
+                        _ => None,
+                    })
+                    .collect();
+            }
+            Err(e) => tried.agent = Agent::Silent(e.to_string()),
+        }
+    }
+    let in_agent = named.is_some_and(|n| ids.iter().any(|(k, c)| names(n, c, k)));
+    if let Some(n) = named {
+        ids.sort_by_key(|(k, c)| !names(n, c, k));
+    }
+    // The named key's file, when it is not the agent's.
+    let mut files: Vec<(String, std::path::PathBuf)> = Vec::new();
+    match named {
+        Some(_) if in_agent => {}
+        // A fingerprint names an agent's key only.
+        Some(n) if n.starts_with("SHA256:") => tried.missing = Some(None),
+        Some(n) => {
+            let path = credentials::file(&format!("ssh:{n}"))?;
+            match path.exists() {
+                true => files.push((tilde(&home, &path), path)),
+                false => tried.missing = Some(Some(tilde(&home, &path))),
+            }
+        }
+        None => {}
+    }
+    if try_files(h, user, &files, &mut tried).await? {
+        return Ok(());
+    }
+    if let Some(a) = agent.as_mut() {
+        for (key, comment) in ids {
+            if tried.hung_up {
+                break;
+            }
             let hash = match key.algorithm().is_rsa() {
                 true => h.best_supported_rsa_hash().await.ok().flatten().flatten(),
                 false => None,
             };
-            tried.push(format!("the agent's {}", show_key(&comment, &key)));
-            if let Ok(r) = h
-                .authenticate_publickey_with(user, key, hash, &mut agent)
-                .await
-                && r.success()
-            {
-                return Ok(());
+            tried.offered.push(show_key(&comment, &key));
+            match h.authenticate_publickey_with(user, key, hash, a).await {
+                Ok(r) if r.success() => return Ok(()),
+                Ok(_) => {}
+                // Closed: the host stops listening after its MaxAuthTries.
+                Err(_) => tried.hung_up = h.is_closed(),
             }
         }
     }
-    let home = std::env::home_dir().unwrap_or_default();
-    for file in ["id_ed25519", "id_rsa"] {
-        let path = home.join(".ssh").join(file);
-        if !path.exists() {
-            continue;
+    if named.is_none() {
+        let files: Vec<_> = DEFAULT_KEYS
+            .iter()
+            .map(|f| (format!("~/.ssh/{f}"), home.join(".ssh").join(f)))
+            .filter(|(_, p)| p.exists())
+            .collect();
+        if try_files(h, user, &files, &mut tried).await? {
+            return Ok(());
         }
-        let key = match russh::keys::load_secret_key(&path, None) {
+    }
+    bail!("{}", tried.refusal(host, user, named))
+}
+
+/// Offer each unencrypted key file in turn; one with a passphrase is
+/// noted, not decrypted. Whether the host accepted one.
+async fn try_files(
+    h: &mut Handle<Client>,
+    user: &str,
+    files: &[(String, std::path::PathBuf)],
+    tried: &mut Tried,
+) -> Result<bool> {
+    for (shown, path) in files {
+        let text = std::fs::read_to_string(path).with_context(|| format!("read {shown}"))?;
+        let key = match russh::keys::decode_secret_key(&text, None) {
             Ok(k) => k,
-            Err(e) => {
-                tried.push(format!(
-                    "~/.ssh/{file} (not read: {e}; a key with a passphrase is used through the agent)"
-                ));
+            Err(russh::keys::Error::KeyIsEncrypted) => {
+                tried.locked.push(shown.clone());
                 continue;
             }
+            Err(e) => bail!("{shown} is not a private key dform reads: {e}"),
         };
+        if tried.hung_up {
+            continue;
+        }
         let hash = match key.algorithm().is_rsa() {
             true => h.best_supported_rsa_hash().await.ok().flatten().flatten(),
             false => None,
         };
-        tried.push(format!("~/.ssh/{file}"));
-        let r = h
-            .authenticate_publickey(user, PrivateKeyWithHashAlg::new(Arc::new(key), hash))
-            .await
-            .with_context(|| format!("authenticate as {user} with ~/.ssh/{file}"))?;
-        if r.success() {
-            return Ok(());
+        tried.refused.push(shown.clone());
+        let key = PrivateKeyWithHashAlg::new(Arc::new(key), hash);
+        match h.authenticate_publickey(user, key).await {
+            Ok(r) if r.success() => return Ok(true),
+            Ok(_) => {}
+            Err(_) if h.is_closed() => tried.hung_up = true,
+            Err(e) => {
+                return Err(e).with_context(|| format!("authenticate as {user} with {shown}"));
+            }
         }
     }
-    match tried.is_empty() {
-        true => bail!(
-            "no key to authenticate as {user} at {host}: no agent (SSH_AUTH_SOCK) and no \
-             ~/.ssh/id_ed25519 or ~/.ssh/id_rsa"
-        ),
-        false => bail!(
-            "{host} refused {user}: authentication failed with {}",
-            tried.join(", ")
-        ),
+    Ok(false)
+}
+
+/// What an authentication offered, and what it could not.
+#[derive(Default)]
+struct Tried {
+    agent: Agent,
+    /// The agent's keys offered, by comment (else fingerprint).
+    offered: Vec<String>,
+    /// Key files offered.
+    refused: Vec<String>,
+    /// Key files with a passphrase: not offered.
+    locked: Vec<String>,
+    /// The named key, when it is not in the agent and not on disk: its
+    /// file (none for a fingerprint).
+    missing: Option<Option<String>>,
+    /// The host closed the connection after refusing some.
+    hung_up: bool,
+}
+
+/// What the agent was.
+#[derive(Default)]
+enum Agent {
+    /// No `SSH_AUTH_SOCK`.
+    #[default]
+    None,
+    /// `SSH_AUTH_SOCK` names one that did not answer.
+    Silent(String),
+    /// It answered with the keys it holds (`Tried::offered`).
+    Held,
+}
+
+impl Tried {
+    /// The refusal: what was offered and what was not, in one line, and
+    /// one line of what to do.
+    fn refusal(&self, host: &str, user: &str, named: Option<&str>) -> String {
+        let n = self.offered.len();
+        let mut said = vec![match &self.agent {
+            Agent::None => "no agent at SSH_AUTH_SOCK".to_string(),
+            Agent::Silent(e) => format!("the agent at SSH_AUTH_SOCK did not answer ({e})"),
+            Agent::Held if n == 0 => "the agent holds no keys".to_string(),
+            Agent::Held => format!(
+                "the agent offered {n} key{} ({}) and the host accepted none",
+                if n == 1 { "" } else { "s" },
+                self.offered.join(", ")
+            ),
+        }];
+        if !self.refused.is_empty() {
+            said.push(format!("the host did not accept {}", prose(&self.refused)));
+        }
+        match self.locked.as_slice() {
+            [] => {}
+            [one] => said.push(format!("{one} has a passphrase")),
+            many => said.push(format!("{} have passphrases", prose(many))),
+        }
+        if let (Some(k), Some(file)) = (named, &self.missing) {
+            said.push(match file {
+                Some(path) => format!("the key {k:?} is not in the agent and there is no {path}"),
+                None => format!("the key {k:?} is not in the agent"),
+            });
+        } else if named.is_none() && self.refused.is_empty() && self.locked.is_empty() {
+            let files: Vec<String> = DEFAULT_KEYS.iter().map(|f| format!("~/.ssh/{f}")).collect();
+            said.push(format!("there is no {}", prose_or(&files)));
+        }
+        if self.hung_up {
+            said.push("the host hung up after those (its MaxAuthTries)".to_string());
+        }
+        let deploy_key = "name an unencrypted deploy key: use ssh { key = \"k3s-admin\" }";
+        let todo = match (&self.missing, self.locked.first()) {
+            (None, _) if self.hung_up && named.is_none() => {
+                "name the key the host holds, and it is offered first: use ssh { key = \
+                 \"k3s-admin\" }"
+                    .to_string()
+            }
+            (Some(Some(path)), _) => format!(
+                "`ssh-add` it (its comment or SHA256 fingerprint names it), or put the \
+                 unencrypted key at {path}"
+            ),
+            (Some(None), _) => "`ssh-add` it".to_string(),
+            _ if n == 0 && self.refused.is_empty() => match (&self.agent, self.locked.first()) {
+                (Agent::Held, Some(f)) => {
+                    format!("`ssh-add {f}`: a key with a passphrase is used through the agent")
+                }
+                (Agent::Held, None) => format!("`ssh-add` the key the host holds, or {deploy_key}"),
+                _ => format!("start an agent and `ssh-add`, or {deploy_key}"),
+            },
+            (None, Some(f)) => format!(
+                "`ssh-add {f}`, or add one of these keys to {user}'s authorized_keys on {host}"
+            ),
+            (None, None) => format!(
+                "add one of these keys to {user}'s authorized_keys on {host}, or `ssh-add` the \
+                 key it holds"
+            ),
+        };
+        format!("{host} refused {user}: {}\n  {todo}", said.join(", and "))
+    }
+}
+
+/// Whether the agent's key is the one `name` names: by its comment or its
+/// SHA-256 fingerprint.
+fn names(name: &str, comment: &str, key: &russh::keys::PublicKey) -> bool {
+    comment == name || key.fingerprint(HashAlg::Sha256).to_string() == name
+}
+
+/// `path` under `home` as `~/..`.
+fn tilde(home: &std::path::Path, path: &std::path::Path) -> String {
+    match path.strip_prefix(home) {
+        Ok(rest) if !home.as_os_str().is_empty() => format!("~/{}", rest.display()),
+        _ => path.display().to_string(),
+    }
+}
+
+/// A list as prose: `a`, `a and b`, `a, b and c`.
+fn prose(items: &[String]) -> String {
+    prose_with(items, "and")
+}
+
+/// `a`, `a or b`, `a, b or c`.
+fn prose_or(items: &[String]) -> String {
+    prose_with(items, "or")
+}
+
+fn prose_with(items: &[String], conj: &str) -> String {
+    match items {
+        [] => String::new(),
+        [one] => one.clone(),
+        [init @ .., last] => format!("{} {conj} {last}", init.join(", ")),
     }
 }
 
@@ -438,6 +677,20 @@ mod tests {
         assert_eq!(address("[::1]:2200").unwrap(), ("::1".into(), 2200));
         assert_eq!(address("::1").unwrap(), ("::1".into(), 22));
         assert!(address("h:x").is_err());
+    }
+
+    /// An agent's key is named by its comment or its SHA-256 fingerprint
+    /// (a test agent keeps no comments: the comment is checked here).
+    #[test]
+    fn a_key_is_named_by_its_comment_or_fingerprint() {
+        use russh::keys::ssh_key::private::Ed25519Keypair;
+        let k = russh::keys::PrivateKey::from(Ed25519Keypair::from_seed(&[3; 32]));
+        let fp = k.public_key().fingerprint(HashAlg::Sha256).to_string();
+        assert!(names("k3s-admin", "k3s-admin", k.public_key()));
+        assert!(names(&fp, "", k.public_key()));
+        assert!(!names("k3s-admin", "laptop", k.public_key()));
+        assert_eq!(show_key("laptop", k.public_key()), "laptop");
+        assert_eq!(show_key("", k.public_key()), fp);
     }
 
     #[test]

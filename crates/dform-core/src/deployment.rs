@@ -1104,8 +1104,12 @@ impl Located {
                 false => None,
             },
         ));
-        // `use ssh`: the host keys state knows, and those met.
-        let ssh = Rc::new(crate::plugin::ssh::Ssh::new(st.known_hosts.clone()));
+        // `use ssh`: the host keys state knows, and those met; the key the
+        // program names.
+        let ssh = Rc::new(crate::plugin::ssh::Ssh::new(
+            st.known_hosts.clone(),
+            crate::plugin::ssh::key_named(&self.program)?,
+        ));
         let mut base_extra = self.set_facts.clone();
         base_extra.extend(opts.data.iter().cloned());
         base_extra.extend(stack::output_facts(&outputs, &l.deployed));

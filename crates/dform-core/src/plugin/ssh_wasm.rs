@@ -17,8 +17,13 @@ pub const RUN: &str = "ssh.run";
 #[derive(Debug, Default)]
 pub struct Ssh;
 
+/// No key: there is no SSH client in a component.
+pub fn key_named(_: &crate::ast::Program) -> Result<Option<String>> {
+    Ok(None)
+}
+
 impl Ssh {
-    pub fn new(_: BTreeMap<String, KnownHost>) -> Ssh {
+    pub fn new(_: BTreeMap<String, KnownHost>, _: Option<String>) -> Ssh {
         Ssh
     }
 

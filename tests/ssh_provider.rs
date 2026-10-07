@@ -6,6 +6,11 @@
 //! recorded by the first apply and checked after; a changed one is an
 //! error until `dform state forget-host`.
 //!
+//! Authentication never prompts (R-125): the agent's keys, then the key
+//! the program names or the unencrypted `~/.ssh/id_*`; a refusal says
+//! what was offered and what to do. The agent is russh's, served by the
+//! test on a unix socket.
+//!
 //! The one shell-out allowed in tests: the `sshd` binary. With none
 //! installed, each test says so and passes.
 
@@ -13,7 +18,7 @@ mod common;
 use common::{Run, Scratch, dform, repo, yes};
 use russh::keys::ssh_key::LineEnding;
 use russh::keys::ssh_key::private::Ed25519Keypair;
-use russh::keys::{HashAlg, PrivateKey};
+use russh::keys::{HashAlg, PrivateKey, PublicKey};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
@@ -71,15 +76,35 @@ struct Sshd {
 
 impl Sshd {
     fn start(bin: &Path, s: &Scratch, port: u16, host_seed: u8) -> Sshd {
+        Sshd::letting_in(
+            bin,
+            s,
+            port,
+            host_seed,
+            &[key(CLIENT).public_key().clone()],
+            "",
+        )
+    }
+
+    /// An sshd that lets in the keys `authorized`, `extra` more of its
+    /// configuration.
+    fn letting_in(
+        bin: &Path,
+        s: &Scratch,
+        port: u16,
+        host_seed: u8,
+        authorized: &[PublicKey],
+        extra: &str,
+    ) -> Sshd {
         let dir = s.path("sshd");
         std::fs::create_dir_all(&dir).unwrap();
         let host_key = dir.join(format!("host_key_{host_seed}"));
         write_private(&host_key, &key(host_seed));
-        std::fs::write(
-            dir.join("authorized_keys"),
-            key(CLIENT).public_key().to_openssh().unwrap() + "\n",
-        )
-        .unwrap();
+        let lines: Vec<String> = authorized
+            .iter()
+            .map(|k| k.to_openssh().unwrap() + "\n")
+            .collect();
+        std::fs::write(dir.join("authorized_keys"), lines.concat()).unwrap();
         let config = dir.join("sshd_config");
         std::fs::write(
             &config,
@@ -87,7 +112,7 @@ impl Sshd {
                 "Port {port}\nListenAddress 127.0.0.1\nHostKey {}\nPidFile none\n\
                  AuthorizedKeysFile {}\nStrictModes no\nUsePAM no\n\
                  PasswordAuthentication no\nKbdInteractiveAuthentication no\n\
-                 PubkeyAuthentication yes\nSubsystem sftp internal-sftp\nLogLevel ERROR\n",
+                 PubkeyAuthentication yes\nSubsystem sftp internal-sftp\nLogLevel ERROR\n{extra}",
                 host_key.display(),
                 dir.join("authorized_keys").display(),
             ),
@@ -163,15 +188,23 @@ fn project(name: &str, port: u16) -> Scratch {
 
 /// `dform ARGS` in `s`, its `home` as HOME and no agent.
 fn run(s: &Scratch, args: &[&str]) -> Run {
-    let out = dform()
-        .args(yes(args))
+    run_with(s, None, args)
+}
+
+/// `dform ARGS` in `s`, its `home` as HOME, `creds` its credentials, and
+/// the agent at `agent`, if any.
+fn run_with(s: &Scratch, agent: Option<&Path>, args: &[&str]) -> Run {
+    let mut cmd = dform();
+    cmd.args(yes(args))
         .current_dir(&s.dir)
         .env("HOME", s.path("home"))
-        .env_remove("SSH_AUTH_SOCK")
-        .env("DFORM_WAIT_POLL_MS", "50")
-        .output()
-        .unwrap();
-    Run::from(out)
+        .env("DFORM_CREDENTIALS", s.path("creds"))
+        .env("DFORM_WAIT_POLL_MS", "50");
+    match agent {
+        Some(a) => cmd.env("SSH_AUTH_SOCK", a),
+        None => cmd.env_remove("SSH_AUTH_SOCK"),
+    };
+    Run::from(cmd.output().unwrap())
 }
 
 /// The objects state maps.
@@ -370,11 +403,18 @@ fn an_authentication_failure_is_an_error() {
     write_private(&s.path("home/.ssh/id_ed25519"), &key(CLIENT + 1));
     let _sshd = Sshd::start(&bin, &s, port, HOST_A);
     let r = run(&s, &["plan", "p.df"]).failure();
-    assert!(
-        r.stderr
-            .contains("authentication failed with ~/.ssh/id_ed25519"),
-        "{}",
-        r.stderr
+    refused(
+        &r,
+        &format!(
+            "127.0.0.1:{port} refused {u}: no agent at SSH_AUTH_SOCK, and the host did not \
+             accept ~/.ssh/id_ed25519",
+            u = user()
+        ),
+        &format!(
+            "add one of these keys to {u}'s authorized_keys on 127.0.0.1:{port}, or `ssh-add` \
+             the key it holds",
+            u = user()
+        ),
     );
 }
 
@@ -389,4 +429,218 @@ fn a_failing_command_is_an_error() {
     let r = run(&s, &["plan", "p.df"]).failure();
     assert!(r.stderr.contains("exited with status 1"), "{}", r.stderr);
     assert!(r.stderr.contains("No such file"), "{}", r.stderr);
+}
+
+/// An OpenSSH ed25519 key with the passphrase `blabla` (russh's own test
+/// key): what an operator's `~/.ssh/id_ed25519` usually is.
+const LOCKED: &str = "-----BEGIN OPENSSH PRIVATE KEY-----
+b3BlbnNzaC1rZXktdjEAAAAACmFlczI1Ni1jYmMAAAAGYmNyeXB0AAAAGAAAABDLGyfA39
+J2FcJygtYqi5ISAAAAEAAAAAEAAAAzAAAAC3NzaC1lZDI1NTE5AAAAIN+Wjn4+4Fcvl2Jl
+KpggT+wCRxpSvtqqpVrQrKN1/A22AAAAkOHDLnYZvYS6H9Q3S3Nk4ri3R2jAZlQlBbUos5
+FkHpYgNw65KCWCTXtP7ye2czMC3zjn2r98pJLobsLYQgRiHIv/CUdAdsqbvMPECB+wl/UQ
+e+JpiSq66Z6GIt0801skPh20jxOO3F52SoX1IeO5D5PXfZrfSZlw6S8c7bwyp2FHxDewRx
+7/wNsnDM0T7nLv/Q==
+-----END OPENSSH PRIVATE KEY-----
+";
+
+/// The key [`LOCKED`] holds, as `ssh-add` gives it to the agent.
+fn unlocked() -> PrivateKey {
+    russh::keys::decode_secret_key(LOCKED, Some("blabla")).unwrap()
+}
+
+/// `r` failed with the refusal `line` and, on the next line, `todo`.
+fn refused(r: &Run, line: &str, todo: &str) {
+    let mut lines = r.stderr.lines().map(str::trim);
+    assert!(
+        lines.any(|l| l.ends_with(line)) && lines.next() == Some(todo),
+        "{line}\n{todo}\n---\n{}",
+        r.stderr
+    );
+}
+
+/// An agent (russh's) on a unix socket in `s`, holding `keys`; it serves
+/// until the test process ends.
+fn agent(s: &Scratch, keys: &[PrivateKey]) -> PathBuf {
+    let sock = s.path("agent.sock");
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let listener = {
+        let _g = rt.enter();
+        tokio::net::UnixListener::bind(&sock).unwrap()
+    };
+    std::thread::spawn(move || {
+        rt.block_on(russh::keys::agent::server::serve(
+            tokio_stream::wrappers::UnixListenerStream::new(listener),
+            (),
+        ))
+    });
+    let keys = keys.to_vec();
+    let path = sock.clone();
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(async move {
+            let mut c = russh::keys::agent::client::AgentClient::connect_uds(&path)
+                .await
+                .unwrap();
+            for k in &keys {
+                c.add_identity(k, &[]).await.unwrap();
+            }
+        });
+    sock
+}
+
+/// The operator's key has a passphrase and is in their agent: the agent
+/// signs, the file is never decrypted. With no agent, the refusal says
+/// so and what to do, in two lines.
+#[test]
+fn a_key_with_a_passphrase_is_used_through_the_agent() {
+    let Some(bin) = sshd_binary() else { return };
+    let port = free_port();
+    let s = project("ssh-agent", port);
+    s.write("home/.ssh/id_ed25519", LOCKED);
+    let _sshd = Sshd::letting_in(
+        &bin,
+        &s,
+        port,
+        HOST_A,
+        &[unlocked().public_key().clone()],
+        "",
+    );
+
+    let r = run(&s, &["plan", "p.df"]).failure();
+    let host = format!("127.0.0.1:{port}");
+    refused(
+        &r,
+        &format!(
+            "{host} refused {u}: no agent at SSH_AUTH_SOCK, and ~/.ssh/id_ed25519 has a passphrase",
+            u = user()
+        ),
+        "start an agent and `ssh-add`, or name an unencrypted deploy key: use ssh { key = \
+         \"k3s-admin\" }",
+    );
+
+    let sock = agent(&s, &[key(30), unlocked()]);
+    let r = run_with(&s, Some(&sock), &["plan", "p.df"]).success();
+    assert!(r.stdout.contains("10.7.0.0/16"), "{}", r.stdout);
+}
+
+/// An agent whose keys the host does not hold: the refusal names each it
+/// offered, and the key file not read.
+#[test]
+fn an_agent_whose_keys_the_host_refuses_says_which() {
+    let Some(bin) = sshd_binary() else { return };
+    let port = free_port();
+    let s = project("ssh-agent-refused", port);
+    s.write("home/.ssh/id_ed25519", LOCKED);
+    let _sshd = Sshd::start(&bin, &s, port, HOST_A);
+    let sock = agent(&s, &[key(30), key(31)]);
+    let r = run_with(&s, Some(&sock), &["plan", "p.df"]).failure();
+    // The agent's order is its own; a key with no comment is shown by its
+    // fingerprint.
+    let (a, b) = (fingerprint(&key(30)), fingerprint(&key(31)));
+    let offered = match r.stderr.find(&a) < r.stderr.find(&b) {
+        true => format!("{a}, {b}"),
+        false => format!("{b}, {a}"),
+    };
+    refused(
+        &r,
+        &format!(
+            "127.0.0.1:{port} refused {u}: the agent offered 2 keys ({offered}) and the host \
+             accepted none, and ~/.ssh/id_ed25519 has a passphrase",
+            u = user(),
+        ),
+        &format!(
+            "`ssh-add ~/.ssh/id_ed25519`, or add one of these keys to {u}'s authorized_keys on \
+             127.0.0.1:{port}",
+            u = user(),
+        ),
+    );
+}
+
+/// `use ssh { key = NAME }`: the credential `ssh:NAME`'s file, or the
+/// agent's key of that fingerprint (or comment), offered first (a host
+/// stops listening after `MaxAuthTries` refusals); neither is a refusal
+/// saying where it looked.
+#[test]
+fn a_named_key_is_the_agents_or_the_credentials() {
+    let Some(bin) = sshd_binary() else { return };
+    let port = free_port();
+    let s = project("ssh-named", port);
+    std::fs::remove_file(s.path("home/.ssh/id_ed25519")).unwrap();
+    let unnamed = s.read("p.df");
+    let p = unnamed.replace("use ssh\n", "use ssh { key = \"k3s-admin\" }\n");
+    s.write("p.df", &p);
+    let _sshd = Sshd::letting_in(
+        &bin,
+        &s,
+        port,
+        HOST_A,
+        &[key(CLIENT).public_key().clone()],
+        "MaxAuthTries 1\n",
+    );
+
+    // Neither in the agent nor on disk.
+    let sock = agent(&s, &[key(30)]);
+    let r = run_with(&s, Some(&sock), &["plan", "p.df"]).failure();
+    let creds = s.path("creds/ssh/k3s-admin");
+    refused(
+        &r,
+        &format!(
+            "127.0.0.1:{port} refused {u}: the agent offered 1 key ({fp}) and the host accepted \
+             none, and the key \"k3s-admin\" is not in the agent and there is no {creds}",
+            u = user(),
+            fp = fingerprint(&key(30)),
+            creds = creds.display(),
+        ),
+        &format!(
+            "`ssh-add` it (its comment or SHA256 fingerprint names it), or put the unencrypted \
+             key at {}",
+            creds.display()
+        ),
+    );
+
+    // The credential's file.
+    std::fs::create_dir_all(s.path("creds/ssh")).unwrap();
+    write_private(&creds, &key(CLIENT));
+    run_with(&s, Some(&sock), &["plan", "p.df"]).success();
+    std::fs::remove_file(&creds).unwrap();
+
+    // The agent's, among fifteen it holds that the host refuses, and the
+    // host hangs up at the first refused.
+    let p = p.replace("k3s-admin", &fingerprint(&key(CLIENT)));
+    s.write("p.df", &p);
+    std::fs::remove_file(&sock).unwrap();
+    let mut keys: Vec<PrivateKey> = (40..55).map(key).collect();
+    keys.push(key(CLIENT));
+    let sock = agent(&s, &keys);
+    run_with(&s, Some(&sock), &["plan", "p.df"]).success();
+
+    // None named: the host hangs up before `~/.ssh/id_ed25519`, and the
+    // refusal says so.
+    s.write("p.df", &unnamed);
+    write_private(&s.path("home/.ssh/id_ed25519"), &key(CLIENT));
+    std::fs::remove_file(&sock).unwrap();
+    let sock = agent(&s, &keys[..2]);
+    let r = run_with(&s, Some(&sock), &["plan", "p.df"]).failure();
+    let line = r
+        .stderr
+        .lines()
+        .find(|l| l.contains("refused"))
+        .unwrap_or("");
+    assert!(
+        line.ends_with("and the host hung up after those (its MaxAuthTries)"),
+        "{}",
+        r.stderr
+    );
+    assert!(
+        r.stderr.contains(
+            "name the key the host holds, and it is offered first: use ssh { key = \"k3s-admin\" }"
+        ),
+        "{}",
+        r.stderr
+    );
 }

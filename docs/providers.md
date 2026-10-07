@@ -184,6 +184,7 @@ A credential is a name; its kind says how the host applies it:
 | `header` | `NAME: VALUE` | that header |
 | `tls` | PEM: a certificate chain and its key | the TLS session's client certificate |
 | `kubeconfig` | a kubeconfig | its current context's token or client certificate, and its cluster's CA; its server is the credential's `endpoint` |
+| `ssh` | an unencrypted OpenSSH private key, in the operator's file only | by the built-in `ssh` provider, never to an HTTP call: `use ssh { key = "NAME" }` (docs/reference.md, "Externs") |
 
 The value comes from the program (`use k8s { kubeconfig =
 cluster.kubeconfig }` registers the secret under the name the grant

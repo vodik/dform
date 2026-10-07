@@ -13,6 +13,7 @@
 //! | `header`     | `NAME: VALUE`                     | that header                             |
 //! | `tls`        | PEM: a certificate chain and key  | the TLS session's client certificate    |
 //! | `kubeconfig` | a kubeconfig (its current context)| its user's token or client certificate, its cluster's CA; its server is the credential's endpoint |
+//! | `ssh`        | an unencrypted OpenSSH private key | by the `ssh` provider (`use ssh { key = "NAME" }`), never to an HTTP call; only the operator's file ([`file`]) |
 //!
 //! Where a value comes from: the program (`provider k8s { kubeconfig =
 //! cluster.kubeconfig }` registers the secret under the name the host
@@ -67,9 +68,10 @@ pub enum Kind {
     Header,
     Tls,
     Kubeconfig,
+    Ssh,
 }
 
-pub const KINDS: [&str; 5] = ["bearer", "basic", "header", "tls", "kubeconfig"];
+pub const KINDS: [&str; 6] = ["bearer", "basic", "header", "tls", "kubeconfig", "ssh"];
 
 /// `KIND:NAME`, checked.
 pub fn parse_name(name: &str) -> Result<(Kind, &str)> {
@@ -85,6 +87,7 @@ pub fn parse_name(name: &str) -> Result<(Kind, &str)> {
         "header" => Kind::Header,
         "tls" => Kind::Tls,
         "kubeconfig" => Kind::Kubeconfig,
+        "ssh" => Kind::Ssh,
         _ => bail!(
             "the credential {name:?} has the kind {kind:?}: expected one of {}",
             KINDS.join(", ")
@@ -144,14 +147,22 @@ pub fn dir() -> Option<PathBuf> {
     Some(config.join("dform").join("credentials"))
 }
 
+/// The operator's file of the credential `name` (`KIND:NAME`):
+/// `KIND/NAME` under [`dir`]. It may not exist.
+pub fn file(name: &str) -> Result<PathBuf> {
+    parse_name(name)?;
+    let (kind, file) = name.split_once(':').unwrap_or_default();
+    let dir = dir().ok_or_else(|| anyhow!("no credential directory (HOME is not set)"))?;
+    Ok(dir.join(kind).join(file))
+}
+
 /// The value of the credential `name`: the program's, else the operator's
 /// file.
-fn value(name: &str, kind: &str, file: &str) -> Result<Secret> {
+fn value(name: &str) -> Result<Secret> {
     if let Some(v) = PROVIDED.lock().unwrap_or_else(|e| e.into_inner()).get(name) {
         return Ok(v.clone());
     }
-    let dir = dir().ok_or_else(|| anyhow!("no credential directory (HOME is not set)"))?;
-    let path = dir.join(kind).join(file);
+    let path = file(name)?;
     let bytes = std::fs::read(&path).map_err(|e| {
         anyhow!(
             "no value for the credential {name}: the program gives none and {} cannot be read \
@@ -164,9 +175,8 @@ fn value(name: &str, kind: &str, file: &str) -> Result<Secret> {
 
 /// Load the credential `name` (`KIND:NAME`) as the host applies it.
 pub fn load(name: &str) -> Result<Credential> {
-    let (kind, file) = parse_name(name)?;
-    let kind_name = name.split_once(':').map_or("", |(k, _)| k);
-    let v = value(name, kind_name, file)?;
+    let (kind, _) = parse_name(name)?;
+    let v = value(name)?;
     let mut c = Credential {
         name: name.to_string(),
         ..Credential::default()
@@ -209,6 +219,10 @@ pub fn load(name: &str) -> Result<Credential> {
             c.client_cert = Some((v.clone(), v.clone()));
         }
         Kind::Kubeconfig => kubeconfig(name, v.text(name)?, &mut c)?,
+        Kind::Ssh => bail!(
+            "the credential {name} is an SSH key: the ssh provider uses it (`use ssh {{ key = .. \
+             }}`), never an HTTP call"
+        ),
     }
     Ok(c)
 }
@@ -289,6 +303,10 @@ mod tests {
         assert!(parse_name("prod").is_err());
         assert!(parse_name("ftp:x").is_err());
         assert!(parse_name("bearer:../x").is_err());
+        assert_eq!(
+            parse_name("ssh:k3s-admin").unwrap(),
+            (Kind::Ssh, "k3s-admin")
+        );
     }
 
     /// A program's value is applied by its kind; it never prints.

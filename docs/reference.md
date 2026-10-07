@@ -2061,10 +2061,30 @@ provider and needing no `dform.toml` source:
 
 `ssh` is an SSH client inside dform, never the `ssh` binary or the
 operator's ssh config. The host is an `ip` or a string, `NAME:PORT` for a
-port other than 22. The key is the operator's: the agent's
-(`SSH_AUTH_SOCK`) first, then `~/.ssh/id_ed25519` and `~/.ssh/id_rsa`
-(a key with a passphrase is used through the agent); never one in the
-program. A host's key is recorded in the deployment's state by the first
+port other than 22. The key is the operator's, never one in the program,
+and dform never asks for a passphrase: every key the agent
+(`SSH_AUTH_SOCK`) holds, then the unencrypted `~/.ssh/id_ed25519`,
+`~/.ssh/id_ecdsa` and `~/.ssh/id_rsa`. A key file with a passphrase is
+not decrypted; the agent uses such a key (`ssh-add`). `use ssh { key =
+"k3s-admin" }` names the key, offered first (a host hangs up after its
+`MaxAuthTries` refusals): the agent's key of that comment or SHA-256
+fingerprint, else the credential `ssh:k3s-admin`, an unencrypted
+OpenSSH private key in the operator's file
+`$XDG_CONFIG_HOME/dform/credentials/ssh/k3s-admin` (docs/providers.md,
+"Grants and credentials"); then the agent's other keys, and no
+`~/.ssh/id_*`. A refusal says what was offered and what was not, in one
+line, and what to do in the next:
+
+```
+127.0.0.1:2222 refused ubuntu: no agent at SSH_AUTH_SOCK, and ~/.ssh/id_ed25519 has a passphrase
+  start an agent and `ssh-add`, or name an unencrypted deploy key: use ssh { key = "k3s-admin" }
+51.79.29.179 refused ubuntu: the agent offered 2 keys (simon@laptop, work) and the host accepted none
+  add one of these keys to ubuntu's authorized_keys on 51.79.29.179, or `ssh-add` the key it holds
+51.79.29.179 refused ubuntu: the agent offered 1 key (simon@laptop) and the host accepted none, and the key "k3s-admin" is not in the agent and there is no ~/.config/dform/credentials/ssh/k3s-admin
+  `ssh-add` it (its comment or SHA256 fingerprint names it), or put the unencrypted key at ~/.config/dform/credentials/ssh/k3s-admin
+```
+
+A host's key is recorded in the deployment's state by the first
 apply that meets it (type, SHA-256 fingerprint, when) and checked on every
 contact after: a changed key is an error naming both fingerprints until
 `dform state forget-host HOST [TARGET]` forgets it. A host that does not

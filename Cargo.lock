@@ -1175,6 +1175,7 @@ dependencies = [
  "rusty-s3",
  "serde_json",
  "tokio",
+ "tokio-stream",
  "tree-sitter",
  "tree-sitter-dform",
  "wat",
