@@ -396,7 +396,10 @@ only is a string. `n + 1` on a column that is no number, and a
 comparison of two types that are never equal, are errors, not a silent
 non-match. A column declared `any` (`decl release(key, value: any)`)
 takes every type and joins nothing. Variables are never coerced, but a
-string column may hold the text of an `inet` or an `ip` a function reads.
+string column may hold the text of an `inet` or an `ip` a function reads,
+and a value type (an `oci`, a `url`, an `inet`, an `ip`, a time, a
+quantity) given to a function's `string` parameter is its canonical print
+there (`not str.contains(c.image, ":")` over an `oci`).
 The settled signature (`az(string, int)`, a `decl`'s or a rule head's
 column names where there are some) is what the editor's hover prints.
 

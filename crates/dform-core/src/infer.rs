@@ -186,6 +186,9 @@ struct Hard {
     /// The column it was given to, when it was given to one (not to a
     /// variable).
     col: Option<Col>,
+    /// A builtin's `string` parameter: a value type is given to it as its
+    /// print (R-133), so beside one it constrains nothing.
+    prints: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -271,6 +274,10 @@ impl Solver {
     }
 
     fn hard(&mut self, n: usize, ty: Ty, span: Span, what: String) {
+        self.typed(n, ty, span, what, false);
+    }
+
+    fn typed(&mut self, n: usize, ty: Ty, span: Span, what: String, prints: bool) {
         if ty == Ty::Any {
             return;
         }
@@ -281,6 +288,7 @@ impl Solver {
             span,
             what,
             col,
+            prints,
         });
     }
 }
@@ -456,8 +464,9 @@ impl Pass<'_> {
             let ty = Ty::parse(&p.ty);
             if matches!(ty, Ty::Scalar(_)) {
                 let n = self.var(rule, v);
-                self.s
-                    .hard(n, ty, span, format!("`{name}`'s argument `{}`", p.name));
+                let prints = p.ty == "string";
+                let what = format!("`{name}`'s argument `{}`", p.name);
+                self.s.typed(n, ty, span, what, prints);
             }
         }
     }
@@ -700,6 +709,13 @@ fn compatible(a: &Ty, b: &Ty) -> bool {
         (Ty::Scalar(x), Ty::Scalar(y)) => x == y,
         _ => false,
     }
+}
+
+/// A value type with a canonical print, given as it where a string is
+/// wanted: an `oci`, a `url`, a network or an address, a time, a quantity.
+fn printed(ty: &Ty) -> bool {
+    matches!(ty, Ty::Scalar(s) if matches!(s.as_str(),
+        "oci" | "url" | "inet" | "ip" | "iprange" | "time" | "bytes" | "cpu" | "duration"))
 }
 
 /// `int`, `float`, `number` (either).
@@ -1060,7 +1076,12 @@ impl Pass<'_> {
     /// Settle the node `r`: its type, or the errors that say why it has
     /// none.
     fn settle(&mut self, r: usize, diags: &mut Vec<Diagnostic>) -> Option<Ty> {
-        let hard = self.s.hard[r].clone();
+        let mut hard = self.s.hard[r].clone();
+        // A value type given to a builtin's `string` parameter is its print
+        // there (R-133: `str.contains(c.image, ":")` over an `oci`).
+        if hard.iter().any(|h| !h.prints && printed(&h.ty)) {
+            hard.retain(|h| !h.prints);
+        }
         let lits = self.s.lits[r].clone();
         let col = self.s.cols[r]
             .iter()

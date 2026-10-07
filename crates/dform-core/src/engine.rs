@@ -2535,7 +2535,8 @@ fn eval_body(body: &[Lit], src: &Src, rec: &Rec) -> Result<Vec<Row>> {
                     }
                 } else if ops::is_builtin_pred(&atom.pred) {
                     for row in &states {
-                        if !rec.any_blocked(&atom.args, &row.s) && eval_builtin_pred(atom, &row.s)?
+                        if !rec.any_blocked(&atom.args, &row.s)
+                            && eval_builtin_pred(atom, &row.s, rec)? == Some(true)
                         {
                             next.push(row.with(row.s.clone()));
                         }
@@ -2604,8 +2605,11 @@ fn eval_body(body: &[Lit], src: &Src, rec: &Rec) -> Result<Vec<Row>> {
                         bail!("negation not supported for enumerate/3");
                     }
                     if ops::is_builtin_pred(&atom.pred) {
-                        // Negation-as-failure for builtin predicates is just boolean negation.
-                        if !eval_builtin_pred(atom, s)? {
+                        // Negation-as-failure for builtin predicates is just boolean
+                        // negation; a call over a null is undetermined either way.
+                        if !rec.any_blocked(&atom.args, s)
+                            && eval_builtin_pred(atom, s, rec)? == Some(false)
+                        {
                             next.push(row.with(s.clone()));
                         }
                         continue;
@@ -2742,18 +2746,92 @@ fn eval_not(grounded: &Atom, src: &Src, s: &HashMap<String, Value>, rec: &Rec) -
     true
 }
 
-fn eval_builtin_pred(atom: &Atom, state: &HashMap<String, Value>) -> Result<bool> {
-    // Builtin predicates are functions that return Bool.
-    let Some(v) = eval_func(&atom.pred, &atom.args, state) else {
-        bail!("unsafe builtin predicate {}(...)", atom.pred);
-    };
-    match v {
-        Value::Bool(b) => Ok(b),
-        other => bail!(
-            "builtin predicate {} returned non-bool: {other:?}",
-            atom.pred
+/// A builtin predicate (a function to bool, `str.contains(c.image, ":")`)
+/// over the row: whether it holds, `None` when that is undetermined. An
+/// argument holding a null is a content position (Rule 2): the literal is
+/// stuck. A call in an argument that has no value (`oci.with_digest` of a
+/// tag) fails the literal, as its binding would.
+fn eval_builtin_pred(
+    atom: &Atom,
+    state: &HashMap<String, Value>,
+    rec: &Rec,
+) -> Result<Option<bool>> {
+    let mut vals = Vec::with_capacity(atom.args.len());
+    for t in &atom.args {
+        if let Some(v) = eval_term(t, state) {
+            vals.push(v);
+            continue;
+        }
+        let mut free = BTreeSet::new();
+        unbound(t, state, &mut free);
+        if let Some(v) = free.into_iter().next() {
+            bail!(
+                "`{}(..)`{}: `{}` is not bound here",
+                atom.pred,
+                at_suffix(atom.span),
+                source_name(&v)
+            );
+        }
+        return Ok(Some(false));
+    }
+    if !forwards_nulls(&atom.pred) && vals.iter().any(stuck::has_null) {
+        let nulls = vals.iter().flat_map(nulls_in).collect();
+        rec.stuck(state, nulls, format!("builtin {}() over a null", atom.pred));
+        return Ok(None);
+    }
+    let body = crate::functions::body(&atom.pred)
+        .ok_or_else(|| anyhow!("internal: no body for the builtin {}", atom.pred))?;
+    match body(&as_params(&atom.pred, vals.clone())) {
+        Some(Value::Bool(b)) => Ok(Some(b)),
+        Some(other) => bail!(
+            "`{}(..)`{} is not true or false: {}",
+            atom.pred,
+            at_suffix(atom.span),
+            partition::fmt_value(&other)
+        ),
+        None => bail!(
+            "`{}({})`{} has no answer",
+            atom.pred,
+            vals.iter()
+                .map(partition::fmt_value)
+                .collect::<Vec<_>>()
+                .join(", "),
+            at_suffix(atom.span)
         ),
     }
+}
+
+/// The variables of `t` with no value in `state`.
+fn unbound(t: &Term, state: &HashMap<String, Value>, out: &mut BTreeSet<String>) {
+    match t {
+        Term::Var(v) if !state.contains_key(v) => {
+            out.insert(v.clone());
+        }
+        Term::Func { args: xs, .. } | Term::List(xs) => {
+            xs.iter().for_each(|x| unbound(x, state, out));
+        }
+        Term::Obj(m) => m.values().for_each(|x| unbound(x, state, out)),
+        _ => {}
+    }
+}
+
+/// A lowered variable as the source wrote it: `C` is `c`, `ImageRef`
+/// `image_ref` (`resolve::capitalise`, read backwards, as `whynot` reads
+/// it).
+fn source_name(v: &str) -> String {
+    let lead = v.len() - v.trim_start_matches('_').len();
+    let mut out = v[..lead].to_string();
+    for (i, c) in v[lead..].chars().enumerate() {
+        if c.is_uppercase() {
+            if i > 0 {
+                out.push('_');
+            }
+            out.extend(c.to_lowercase());
+        } else {
+            out.push(c);
+        }
+    }
+    out
 }
 
 fn eval_member_like(
@@ -3657,7 +3735,36 @@ fn eval_func(name: &str, args: &[Term], state: &HashMap<String, Value>) -> Optio
     if !forwards_nulls(name) && vals.iter().any(stuck::has_null) {
         return None;
     }
-    body(&vals)
+    body(&as_params(name, vals))
+}
+
+/// `vals` as the parameters of the function `name` take them: a value type
+/// (`oci`, `url`, `inet`, `ip`, `time`, a quantity) where a `string` is
+/// declared is its canonical text, as it is in a string column (R-133):
+/// `str.contains(c.image, ":")` over an `oci`.
+fn as_params(name: &str, vals: Vec<Value>) -> Vec<Value> {
+    let Some(f) = crate::functions::get(name) else {
+        return vals;
+    };
+    let ty = |i: usize| {
+        f.params
+            .get(i)
+            .or_else(|| f.params.last().filter(|_| f.variadic))
+            .map(|p| p.ty.as_str())
+    };
+    vals.into_iter()
+        .enumerate()
+        .map(|(i, v)| match (ty(i), &v) {
+            (
+                Some("string"),
+                Value::Quantity(_) | Value::Time(_) | Value::Url(_) | Value::Oci(_),
+            ) => v.typed_text().map_or(v, Value::Str),
+            (Some("string"), Value::Ip(_) | Value::IpNet { .. } | Value::IpRange { .. }) => {
+                Value::Str(partition::fmt_value(&v))
+            }
+            _ => v,
+        })
+        .collect()
 }
 
 /// How two values order: numbers by value (an int with a float, R-75),
