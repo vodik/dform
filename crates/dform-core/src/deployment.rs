@@ -29,7 +29,7 @@ use crate::schema::{self, Schema};
 use crate::stack::{self, Instance};
 use crate::state::{self, State};
 use crate::store::{self, Location, OpenS3};
-use crate::value::Value;
+use crate::value::{NullClass, Value};
 use crate::watch::Relation;
 use crate::{executor, lint, loader, provider, report, stuck, tables, transform, zset};
 use anyhow::{Context, Result, bail};
@@ -580,21 +580,33 @@ impl Evaluator {
     /// it at the tick after the CRD's, once its provider serves the kind
     /// ([`Evaluator::learn_made_kinds`]). One nothing makes, of a provider
     /// whose cluster was reached, is an error naming the CRD it lacks.
+    ///
+    /// A provider the program configures whose settings this evaluation
+    /// derives no row of (`unset`: a setting reads what has no row yet)
+    /// holds the resources of the types its schema gives it, whatever
+    /// link serves them: one mock playing several schemas is configured
+    /// by none of them, so [`Providers::waits`] cannot say.
     fn wait_on_providers(
         &self,
         plan: &mut provider::Plan,
         resources: &[ir::Resource],
         sections: &mut stuck::Sections,
         st: &State,
+        unset: &BTreeSet<String>,
     ) -> Result<()> {
         let crds = crds_made(resources);
+        let unset_of = |typ: &str| {
+            let p = self.schema().provider_of.get(typ)?;
+            unset.contains(p).then(|| self.settings_label(p))
+        };
         for r in resources {
             let typ = &r.addr.typ;
             // A kind no schema has: its provider's cluster serves it once
             // reached (R-110), or does not, reached (R-126).
             let schema_wait = matches!(self.backend.waits(typ), Some(ProviderWait::Schema(_)))
                 || self.backend.unserved(typ);
-            let label = match (self.provider_wait(typ), crd_of(&crds, typ)) {
+            let waits = self.provider_wait(typ).or_else(|| unset_of(typ));
+            let label = match (waits, crd_of(&crds, typ)) {
                 (_, Some(crd)) if schema_wait => report::address(crd),
                 (Some(label), _) => label,
                 (None, _) if schema_wait => bail!(self.no_crd(&r.addr)),
@@ -942,7 +954,8 @@ impl Evaluator {
                 a.changes.clear();
             }
         }
-        self.wait_on_providers(&mut plan, &resources, &mut sections, st)?;
+        let unset = unconfigured(&self.program, &res.facts, &resources, st);
+        self.wait_on_providers(&mut plan, &resources, &mut sections, st, &unset)?;
         executor::hold_deposed(&mut plan, &resources, &sections);
         // The resource rules that may derive after a boundary (pending
         // groups), for the plan's policy pass.
@@ -1956,6 +1969,58 @@ fn disagreements(facts: &BTreeSet<Atom>) -> BTreeMap<String, String> {
         );
     }
     out
+}
+
+/// The providers the program configures whose settings this evaluation
+/// does not know: no `provider_config` row of theirs derives (a setting
+/// reads a row nothing has made), or the row holds a value a tick makes
+/// (a cluster's endpoint), or a secret an object the program makes holds
+/// before that object exists. What a provider link awaits
+/// ([`Providers::waits`]), said of the program alone, so a link that
+/// plays several providers (one mock, several schemas) holds what each
+/// serves as a provider of its own would.
+fn unconfigured(
+    program: &Program,
+    facts: &BTreeSet<Atom>,
+    resources: &[ir::Resource],
+    st: &State,
+) -> BTreeSet<String> {
+    let made: BTreeSet<(&str, &str)> = resources
+        .iter()
+        .map(|r| (r.addr.typ.as_str(), r.addr.name.as_str()))
+        .collect();
+    let unknown = |l: &String, class: NullClass| match class {
+        NullClass::Secret => crate::value::null_owner(l).is_some_and(|(t, n)| {
+            made.contains(&(t.as_str(), n.as_str()))
+                && st.get(&Address { typ: t, name: n }).is_none()
+        }),
+        NullClass::Open | NullClass::Fresh => true,
+    };
+    fn nulls(v: &Value, out: &mut Vec<(String, NullClass)>) {
+        match v {
+            Value::Null { label, class, .. } => out.push((label.clone(), *class)),
+            Value::List(xs) => xs.iter().for_each(|x| nulls(x, out)),
+            Value::Obj(m) => m.values().for_each(|x| nulls(x, out)),
+            _ => {}
+        }
+    }
+    let known: BTreeSet<&str> = agreed(facts)
+        .filter(|a| a.pred == "provider_config")
+        .filter_map(|a| match a.args.as_slice() {
+            [Term::Val(Value::Str(n)), Term::Val(v)] => {
+                let mut out = Vec::new();
+                nulls(v, &mut out);
+                out.iter()
+                    .all(|(l, c)| !unknown(l, *c))
+                    .then_some(n.as_str())
+            }
+            _ => None,
+        })
+        .collect();
+    provider_configs(program)
+        .into_iter()
+        .filter(|p| !known.contains(p.as_str()))
+        .collect()
 }
 
 /// The providers the program configures itself: the constant names of
