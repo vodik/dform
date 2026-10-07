@@ -128,8 +128,9 @@ fn a_resource_per_document_of_a_manifest() {
     let r = s.run(&["plan", "p.df"]).success();
     for want in [
         "  + k8s.config_map \"flags.v2\"  p.df:3\n      data.beta = \"on\"\n      \
-         data.size = \"large\"      p.df:5\n      metadata.labels.owner = \"ops\"\n      \
-         metadata.name = \"flags.v2\"\n      metadata.namespace = \"apps\"\n",
+         data.size = \"large\"      p.df:5\n      \
+         metadata = { name: \"flags.v2\", namespace: \"apps\" }\n      \
+         metadata.labels.owner = \"ops\"\n",
         "  + k8s.config_map settings    p.df:3\n      data.mode = \"fast\"\n      \
          data.size = \"large\"      p.df:5\n",
     ] {

@@ -248,7 +248,16 @@ pub fn fold<W: PartialEq>(paths: &[String], writers: &[Option<W>]) -> Vec<Group>
             }),
         }
     }
-    out.sort_by_key(|g| g.leaves.first().copied());
+    // A value where its path's leaves begin, before a leaf another
+    // writer made inside it: `metadata = { .. }`, then
+    // `metadata.labels.owner = ..`.
+    out.sort_by_key(|g| {
+        let first = g.leaves.first().copied().unwrap_or_default();
+        let at = (0..paths.len())
+            .find(|&j| toks[j].len() >= g.depth && toks[j][..g.depth] == toks[first][..g.depth])
+            .unwrap_or(first);
+        (at, g.depth, first)
+    });
     out
 }
 
@@ -383,6 +392,15 @@ mod tests {
         let g = fold(&ps, &[Some(1), Some(1), Some(2)]);
         let printed: Vec<&str> = g.iter().map(|g| g.path.as_str()).collect();
         assert_eq!(printed, ["tags", "tags.team"]);
+        // A value comes before a leaf another writer made inside it.
+        let ps = paths(&[
+            "metadata.labels.owner",
+            "metadata.name",
+            "metadata.namespace",
+        ]);
+        let g = fold(&ps, &[Some(2), Some(1), Some(1)]);
+        let printed: Vec<&str> = g.iter().map(|g| g.path.as_str()).collect();
+        assert_eq!(printed, ["metadata", "metadata.labels.owner"]);
     }
 
     #[test]
