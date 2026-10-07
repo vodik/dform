@@ -168,33 +168,27 @@ impl Kind {
     }
 }
 
-/// `k8s.apps.v1.deployment`, `k8s.core.v1.config_map`.
-pub fn type_name(group: &str, version: &str, kind: &str) -> String {
-    let group = if group.is_empty() { "core" } else { group };
-    format!(
-        "k8s.{}.{}.{}",
-        group.replace('-', "_"),
-        version,
-        snake(kind)
-    )
-}
+/// A kind's type and the snake_case of its kind: the core's, which a
+/// CRD the program makes is matched by (R-126).
+pub use dform_core::crd::{snake, type_name};
 
-/// `HorizontalPodAutoscaler` -> `horizontal_pod_autoscaler`,
-/// `CSIDriver` -> `csi_driver`.
-fn snake(kind: &str) -> String {
-    let cs: Vec<char> = kind.chars().collect();
-    let mut out = String::new();
-    for (i, c) in cs.iter().enumerate() {
-        if c.is_uppercase() && i > 0 {
-            let prev = cs[i - 1];
-            let next_lower = cs.get(i + 1).is_some_and(|n| n.is_lowercase());
-            if prev.is_lowercase() || prev.is_ascii_digit() || (prev.is_uppercase() && next_lower) {
-                out.push('_');
-            }
-        }
-        out.extend(c.to_lowercase());
-    }
-    out
+/// The groups of the static schema (the snapshot's): a kind of any other
+/// is a cluster's own (a CRD's), served under its short name too.
+fn static_groups() -> &'static std::collections::BTreeSet<String> {
+    static GROUPS: std::sync::OnceLock<std::collections::BTreeSet<String>> =
+        std::sync::OnceLock::new();
+    GROUPS.get_or_init(|| {
+        let doc: Json = serde_json::from_str(SNAPSHOT).unwrap_or_default();
+        doc.get("paths")
+            .and_then(Json::as_object)
+            .into_iter()
+            .flat_map(|m| m.keys())
+            .map(|gv| match gv.strip_prefix("apis/") {
+                Some(g) => g.split('/').next().unwrap_or("").to_string(),
+                None => String::new(),
+            })
+            .collect()
+    })
 }
 
 /// The short names and the types they stand for: the mock's, and
@@ -326,8 +320,38 @@ pub fn derive(doc: &Json, aliases: &[(String, String)]) -> Result<Derived> {
             kinds.insert(typ, kind);
         }
     }
+    // A cluster's own kind (a group the static schema has not, a CRD's)
+    // is served under `k8s.<the group's first label>.<kind>` too, at its
+    // preferred version (`k8s.traefik.middleware`), when no other kind
+    // takes that name (R-126, `dform_core::crd`).
+    let taken: std::collections::BTreeSet<&str> = aliases
+        .iter()
+        .flat_map(|(a, t)| [a.as_str(), t.as_str()])
+        .chain(kinds.keys().map(String::as_str))
+        .collect();
+    let mut by_short: BTreeMap<String, Vec<(&String, &Kind)>> = BTreeMap::new();
+    for (typ, k) in &kinds {
+        if !k.group.is_empty() && !static_groups().contains(&k.group) {
+            by_short
+                .entry(dform_core::crd::short_name(&k.group, &k.kind))
+                .or_default()
+                .push((typ, k));
+        }
+    }
+    let mut crd_aliases = Vec::new();
+    for (short, typs) in &by_short {
+        let one_kind = typs
+            .iter()
+            .all(|(_, k)| (&k.group, &k.kind) == (&typs[0].1.group, &typs[0].1.kind));
+        let version = dform_core::crd::preferred(typs.iter().map(|(_, k)| k.version.as_str()));
+        if let (true, false, Some(v)) = (one_kind, taken.contains(short.as_str()), version)
+            && let Some((typ, _)) = typs.iter().find(|(_, k)| k.version == v)
+        {
+            crd_aliases.push((short.clone(), (*typ).clone()));
+        }
+    }
     let mut alias_facts = Vec::new();
-    for (alias, target) in aliases {
+    for (alias, target) in aliases.iter().chain(&crd_aliases) {
         let Some(kind) = kinds.get(target).cloned() else {
             continue;
         };
@@ -987,8 +1011,13 @@ mod tests {
         let full = derive(&doc, &aliases().unwrap()).unwrap();
         let ext = extension(&full, &base).unwrap();
         let mw = "k8s.traefik.io.v1alpha1.middleware";
-        assert_eq!(ext.kinds.keys().collect::<Vec<_>>(), vec![mw]);
+        // A cluster's own kind is served under its group's first label too
+        // (R-126), as a CRD the program makes names it.
+        let short = "k8s.traefik.middleware";
+        assert_eq!(ext.kinds.keys().collect::<Vec<_>>(), vec![mw, short]);
+        assert_eq!(ext.kinds[short], ext.kinds[mw]);
         assert!(ext.schema.attr(mw, "spec.holderIdentity").is_some());
+        assert!(ext.schema.attr(short, "spec.holderIdentity").is_some());
         assert!(base.kind(mw).is_err());
 
         let dir = std::env::temp_dir().join(format!("dform-k8s-ext-{}", std::process::id()));

@@ -14,7 +14,10 @@
 //! known (`Cluster::configured`), when the cluster's CRDs are cached
 //! (`dform.state/cache/schema/<deployment>/k8s.json`) and served from then
 //! on: dform plans a CRD-typed object against them at that tick, untyped
-//! in its own schema until the next run loads the cache.
+//! in its own schema until the next run loads the cache. A Configure that
+//! names `kinds` (a CRD the program made at the last tick defines them,
+//! R-126) fetches the cluster's document again until it serves them,
+//! within [`KIND_WAIT`].
 //!
 //! Remote ids are `NAMESPACE/NAME` (`NAME` for a cluster-scoped kind).
 //! Read and Import GET the object. Plan validates the document, then
@@ -52,6 +55,9 @@ const OPENAPI_CACHE: &str = "k8s-openapi.json";
 const DELETE_WAIT: Duration = Duration::from_secs(60);
 /// How long a destroy-first replacement waits for the old object to go.
 const REPLACE_WAIT: Duration = Duration::from_secs(120);
+/// How long a Configure that names the kinds dform expects (a CRD made at
+/// the last tick, R-126) waits for the cluster to serve them.
+const KIND_WAIT: Duration = Duration::from_secs(30);
 
 /// A configured provider.
 pub struct K8s {
@@ -859,10 +865,34 @@ impl pb::provider_server::Provider for Service {
         // the run already has, the cluster it names.
         let settings = config.get("settings").cloned().unwrap_or(Json::Null);
         let configured = Cluster::configured(&settings).await.map_err(invalid)?;
-        if let (Some(c), Some(dir), Some(s)) = (&configured, &cache, &stack)
-            && let Err(e) = K8s::extend(c, dir, s).await
-        {
-            eprintln!("dform-provider-k8s: the cluster's schema is not cached: {e:#}");
+        // The kinds dform expects the cluster to serve now (R-126): a CRD
+        // the program made at the last tick defines them, and the API
+        // server publishes a new kind a moment after it accepts the CRD.
+        let kinds: Vec<&str> = config
+            .get("kinds")
+            .and_then(Json::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Json::as_str)
+            .collect();
+        if let (Some(c), Some(dir), Some(s)) = (&configured, &cache, &stack) {
+            let deadline = std::time::Instant::now() + KIND_WAIT;
+            loop {
+                if let Err(e) = K8s::extend(c, dir, s).await {
+                    eprintln!("dform-provider-k8s: the cluster's schema is not cached: {e:#}");
+                }
+                let served = || -> Result<bool> {
+                    let k = K8s::deferred(cache.clone(), Some(s))?;
+                    Ok(kinds.iter().all(|t| k.derived.kinds.contains_key(*t)))
+                };
+                if kinds.is_empty()
+                    || served().map_err(invalid)?
+                    || std::time::Instant::now() >= deadline
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_secs(1)).await;
+            }
         }
         // The cluster reached: the static schema extended by the kinds it
         // serves (just cached), so a CRD the run's schema lacks is planned

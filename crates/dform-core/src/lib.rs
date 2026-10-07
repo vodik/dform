@@ -4,6 +4,7 @@ pub mod audit;
 pub mod chaos;
 pub mod circuit;
 pub mod controller;
+pub mod crd;
 pub mod deployment;
 pub mod diag;
 pub mod diff;
