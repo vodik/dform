@@ -449,7 +449,10 @@ resource unknown, `vpc = ?net.vpc["main"]`, and after it the resource,
 the reference. `ref(r)` writes the reference out where an attribute that
 is no `ref(T)` needs the id as text (a bridged provider's `string`). An
 input or output of a module or component typed `ref(T)`, `list(ref(T))`
-or by a resource type holds references.
+or by a resource type holds references. An input that is one (`input
+role: iam.role`) is the resource, as a `let` of one is: `set
+role.policies = [..]` writes the role's attribute, `role.name` and `has
+role.name` read it, and `r == role` compares addresses.
 
 ### Numbers
 

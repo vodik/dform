@@ -739,3 +739,41 @@ fn an_unbound_input_of_a_used_module_is_a_stack_inputs_error() {
         r.stderr
     );
 }
+
+/// A module given a resource (`input role: iam.role`) writes and reads
+/// it through the input (for R-158): `set role.tags` is the role's
+/// attribute, not the input's field; `has role.name` and `role.name` read
+/// the role; `r == role` compares addresses, so of the roles only the one
+/// given matches, and `r != role` every other.
+#[test]
+fn a_module_writes_through_an_input_that_is_a_reference() {
+    let s = Scratch::project("lang-modules-ref-input");
+    s.write(
+        "m.df",
+        "\ninput role: iam.role\nset role.tags = { team: \"x\" }\n\
+         resource iam.policy \"eq-${n}\" { name = n } where r in iam.role, r == role, n = r.name\n\
+         resource iam.policy \"ne-${n}\" { name = n } where r in iam.role, r != role, n = r.name\n\
+         resource iam.policy has { name = role.name } where has role.name\n",
+    );
+    s.write(
+        "stacks/p.df",
+        "\nuse fake\nresource iam.role app { name = \"app\" }\n\
+         resource iam.role other { name = \"other\" }\nuse m { role = app }\n",
+    );
+    let r = s.run(&["plan", "--why=none", "p"]).success();
+    for want in [
+        "+ iam.role[\"app\"]\n  name = \"app\"\n  tags.team = \"x\"\n",
+        "+ iam.policy[\"m.eq-app\"]\n",
+        "+ iam.policy[\"m.ne-other\"]\n",
+        "+ iam.policy[\"m.has\"]\n  name = \"app\"\n",
+    ] {
+        assert!(r.stdout.contains(want), "{want}\n{}", r.stdout);
+    }
+    for not in [
+        "m.eq-other",
+        "m.ne-app",
+        "+ iam.role[\"other\"]\n  name = \"other\"\n  tags",
+    ] {
+        assert!(!r.stdout.contains(not), "{not}\n{}", r.stdout);
+    }
+}

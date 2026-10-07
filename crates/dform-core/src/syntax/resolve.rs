@@ -4438,10 +4438,14 @@ impl<'u> Lowerer<'u> {
     fn set_target(&mut self, rc: &mut Rc, c: &Chain, body: &mut Vec<Lit>, span: Span) -> L<Target> {
         let scope = rc.scope;
         // A stack input, set by name, or a field of an object input by its
-        // path (R-54).
+        // path (R-54); a field of an input that is a reference is the
+        // referenced resource's attribute (`set role.policies` in a module
+        // given `input role: iam.role`), as a `let` of one's is.
+        let through_ref = !c.ops.is_empty() && self.input_ref(scope, &c.head).is_some();
         if c.ops.iter().all(|o| matches!(o, Op::Field(_)))
             && self.is_value(scope, &c.head)
             && self.find_let(scope, &c.head).is_none()
+            && !through_ref
         {
             return Ok(Target::Input(c.fields().join(".")));
         }
@@ -5151,7 +5155,18 @@ impl<'u> Lowerer<'u> {
                 return self.pattern_eq(rc, p, c, out);
             }
         }
-        if ts.len() == 2 && matches!(ops.as_slice(), [EQ | EQ2]) {
+        // An input that is a reference (`input role: iam.role`) compares
+        // as the resource it names, not as its relation's row: `r == role`
+        // compares addresses.
+        let refs = ts.len() == 2
+            && ts.iter().any(|t| {
+                Chain::of(t).is_some_and(|c| {
+                    c.is_bare()
+                        && !rc.vars.contains_key(&c.head)
+                        && self.input_ref(rc.scope, &c.head).is_some()
+                })
+            });
+        if ts.len() == 2 && matches!(ops.as_slice(), [EQ | EQ2]) && !refs {
             for (r, v) in [(&ts[0], &ts[1]), (&ts[1], &ts[0])] {
                 let Some(c) = Chain::of(r) else { continue };
                 let mut rc2 = rc.clone();
@@ -5213,7 +5228,7 @@ impl<'u> Lowerer<'u> {
         // so does the other side (R-42).
         if ts.len() == 2
             && matches!(ops.as_slice(), [EQ | EQ2 | NEQ])
-            && ts.iter().any(|t| self.names_resource(rc, t))
+            && (refs || ts.iter().any(|t| self.names_resource(rc, t)))
         {
             let mut lowered = Vec::new();
             for (i, t) in ts.iter().enumerate() {
