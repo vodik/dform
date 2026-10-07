@@ -76,9 +76,11 @@ fn a_value_one_write_made_is_one_laid_out_line() {
     let s = project("fold-traefik");
     let plan = run(&s, &["plan", "main"]);
     let want = r#"  + kube.deployment traefik            main.df:5
-      metadata = { labels: { app: "traefik" }, name: "traefik" }
+      metadata = { name: "traefik", labels: { app: "traefik" } }
       metadata.labels.owner = "simon"  main.df:28
       spec.template.spec.containers[name=traefik] = {
+        name: "traefik",
+        image: "traefik:v3.1",
         args: [
           "--entrypoints.web.address=:80",
           "--entrypoints.websecure.address=:443",
@@ -89,8 +91,6 @@ fn a_value_one_write_made_is_one_laid_out_line() {
           "--certificatesresolvers.letsencrypt.acme.tlschallenge=true",
           "--api.dashboard=true",
         ],
-        image: "traefik:v3.1",
-        name: "traefik",
       }
 "#;
     assert!(plan.contains(want), "{plan}");
@@ -130,10 +130,10 @@ fn why_and_query_fold_the_same_way() {
     let why = run(&s, &["why", "kube.deployment traefik", "main"]);
     assert!(
         why.contains(
-            "  metadata = { labels: { app: \"traefik\" }, name: \"traefik\" }\n    \
+            "  metadata = { name: \"traefik\", labels: { app: \"traefik\" } }\n    \
              = { name: \"traefik\", labels: { app: \"traefik\" } }  main.df:6\n  \
              metadata.labels.owner = \"simon\"     main.df:28\n  \
-             spec.template.spec.containers = [{  main.df:7\n    args: [\n"
+             spec.template.spec.containers = [{  main.df:7\n    name: \"traefik\",\n"
         ),
         "{why}"
     );
@@ -143,7 +143,7 @@ fn why_and_query_fold_the_same_way() {
     );
     assert_eq!(
         q,
-        "{ labels: { app: \"traefik\", owner: \"simon\" }, name: \"traefik\" }\n"
+        "{ name: \"traefik\", labels: { app: \"traefik\", owner: \"simon\" } }\n"
     );
 }
 
@@ -188,7 +188,7 @@ fn a_plain_leaf_of_a_secret_object_is_sensitive() {
         assert!(!out.contains("synapse"), "{out}");
     }
     assert!(
-        why.contains("  stringData = { password: (sensitive k8s.secret creds.stringData.password), user: (sensitive) }\n"),
+        why.contains("  stringData = { user: (sensitive), password: (sensitive k8s.secret creds.stringData.password) }\n"),
         "{why}"
     );
     assert!(

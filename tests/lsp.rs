@@ -59,7 +59,7 @@ fn hover_shows_every_contribution_and_why_prints_the_derivation() {
     // each value's chain.
     assert!(
         text.contains(
-            "net.vpc main.vpc.tags = { component: \"network\", env: \"staging\" }\n  \
+            "net.vpc main.vpc.tags = { env: \"staging\", component: \"network\" }\n  \
              = { env, component: \"network\" }        network.df:19\n\
              net.vpc main.vpc.tags.team = \"platform\"  baseline.df:10\n"
         ),
@@ -74,7 +74,7 @@ fn hover_shows_every_contribution_and_why_prints_the_derivation() {
     let why = why.as_str().unwrap();
     assert!(
         why.starts_with(
-            "net.vpc main.vpc.tags = { component: \"network\", env: \"staging\" }\n  \
+            "net.vpc main.vpc.tags = { env: \"staging\", component: \"network\" }\n  \
              = { env, component: \"network\" }        network.df:19\n"
         ),
         "{why}"

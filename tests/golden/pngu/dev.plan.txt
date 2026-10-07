@@ -22,8 +22,8 @@ tick 1  7 changes
       project = "renfry-dev-973682"                 stacks/pngu.df:54
       region = "us-east1"                           stacks/pngu.df:56
       secondary_ranges = [
-        { ip_cidr_range: "10.141.80.0/21", range_name: "renfry-dev-gke-pods-range" },
-        { ip_cidr_range: "10.141.88.0/21", range_name: "renfry-dev-gke-svc-range" },
+        { range_name: "renfry-dev-gke-pods-range", ip_cidr_range: "10.141.80.0/21" },
+        { range_name: "renfry-dev-gke-svc-range", ip_cidr_range: "10.141.88.0/21" },
       ]
       subnet_private_access = true
   + google.compute_subnetwork regional_proxy        stacks/pngu.df:153

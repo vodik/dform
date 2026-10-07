@@ -12,10 +12,10 @@ tick 1  8 changes
       name = "crud-api-dev"
       region = "us-east1"                       stacks/crud_api.df:22
       settings = {
+        tier: "db-f1-micro",
         availability_type: "ZONAL",
         backup_configuration: { enabled: true, point_in_time_recovery_enabled: true },
         ip_configuration: { ipv4_enabled: false, private_network: vpc },
-        tier: "db-f1-micro",
       }
   + google.sql_user crud_user                   stacks/crud_api.df:92
       instance = "crud-api-dev"
@@ -35,10 +35,10 @@ tick 1  8 changes
   + k8s.secret db_conn                          stacks/crud_api.df:120
       metadata = { name: "crud-api-db", namespace: "shop" }
       stringData = {
-        PGDATABASE: (sensitive),
         PGHOST: db.private_ip_address,
-        PGPASSWORD: (sensitive),
         PGUSER: (sensitive),
+        PGDATABASE: (sensitive),
+        PGPASSWORD: (sensitive),
       }
   + k8s.job migrate-v42                         stacks/crud_api.df:134
       metadata.labels = { app: "crud-api", schema: "42" }
@@ -46,17 +46,17 @@ tick 1  8 changes
       metadata.namespace = "shop"
       spec.backoffLimit = 2
       spec.template.spec = {
+        restartPolicy: "Never",
         containers: [{
+          name: "migrate",
+          image: "gcr.io/shop/crud-api@sha256:9f2c4d0e8a7b6c5d4e3f2a1b0c9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d",
           args: ["migrate", "--to", "42"],
           envFrom: [{ secretRef: { name: "crud-api-db" } }],
-          image: "gcr.io/shop/crud-api@sha256:9f2c4d0e8a7b6c5d4e3f2a1b0c9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d",
-          name: "migrate",
           resources: {
-            limits: { cpu: "500m", memory: "256Mi" },
             requests: { cpu: "100m", memory: "128Mi" },
+            limits: { cpu: "500m", memory: "256Mi" },
           },
         }],
-        restartPolicy: "Never",
       }
 
 later

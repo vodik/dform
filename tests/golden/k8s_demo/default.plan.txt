@@ -8,10 +8,10 @@ tick 1  4 changes
       metadata.name = "shop"
   + k8s.service web            stacks/k8s_demo.df:34
       metadata = { name: "web", namespace: "shop" }
-      spec.ports[port=80,protocol=TCP] = { port: 80, protocol: "TCP", targetPort: 8080 }
+      spec.ports[port=80,protocol=TCP] = { port: 80, targetPort: 8080, protocol: "TCP" }
       spec.selector.app = "web"
   + k8s.config_map web_config  stacks/k8s_demo.df:16
-      data = { LOG_LEVEL: "info", MODE: "production" }
+      data = { MODE: "production", LOG_LEVEL: "info" }
       metadata = { generateName: "web-config-", namespace: "shop" }
   + k8s.deployment web         stacks/k8s_demo.df:21
       metadata = { name: "web", namespace: "shop" }
@@ -19,9 +19,9 @@ tick 1  4 changes
       spec.selector.matchLabels.app = "web"
       spec.template.metadata.labels.app = "web"
       spec.template.spec.containers[name=web] = {
-        envFrom: [{ configMapRef: { name: web_config.metadata.name } }],
-        image: "nginx:1.27",
         name: "web",
+        image: "nginx:1.27",
         ports: [{ containerPort: 8080, protocol: "TCP" }],
+        envFrom: [{ configMapRef: { name: web_config.metadata.name } }],
       }
 -- stderr --

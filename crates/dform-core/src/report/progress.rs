@@ -108,7 +108,15 @@ impl Block {
 
     /// Its Apply call failed with `error`.
     pub fn fail(&mut self, addr: &Address, error: &str) {
-        let first = error.lines().next().unwrap_or_default().to_string();
+        let first = error.lines().next().unwrap_or_default();
+        // The line names the address as the plan prints it: the error's
+        // own `apply T["A"]: ` in front says it again, in the core's form
+        // (After R-127).
+        let core = format!("{addr}: ");
+        let first = match first.find(&core) {
+            Some(i) if !first[..i].trim_end().contains(' ') => first[i + core.len()..].to_string(),
+            _ => first.to_string(),
+        };
         if let Some(e) = self.entry(addr) {
             e.state = State::Failed(first);
             e.took = e.started.map(|s| s.elapsed());
@@ -319,6 +327,11 @@ mod tests {
         let line = block.line(1, Style::default());
         assert!(line.starts_with("  ! ovh.instance k3s.server"), "{line}");
         assert!(line.ends_with("  403 Forbidden"), "{line}");
+        // The error's own address in the core's form goes: the line has it.
+        block.fail(&b.addr, "apply ovh.instance[\"k3s.server\"]: 403 Forbidden");
+        let line = block.line(1, Style::default());
+        assert!(line.ends_with("  403 Forbidden"), "{line}");
+        assert!(!line.contains('['), "{line}");
         assert!(block.end().starts_with("tick 1  failed  "));
     }
 }

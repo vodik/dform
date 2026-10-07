@@ -134,6 +134,9 @@ pub fn lower_stack(
     stack: Option<&StackSource>,
     deployed: &[Deployed],
 ) -> Result<Program, Vec<Diagnostic>> {
+    if mode == Mode::Program {
+        units.iter().for_each(|u| field_orders(&u.root));
+    }
     let mut l = Lowerer::new(units, entries, deployed, mode == Mode::Text);
     l.text = mode == Mode::Text;
     l.any_type = mode == Mode::Pattern;
@@ -158,6 +161,54 @@ pub fn lower_stack(
         })
     } else {
         Err(l.diags)
+    }
+}
+
+/// Remember the order `root` writes objects' fields in
+/// (`fmt::value::remember`): each object literal's keys, and a block's
+/// entries' keys under each path they share (`metadata.name`,
+/// `metadata.labels.app` write `name` before `labels`).
+fn field_orders(root: &SyntaxNode) {
+    for n in root.descendants() {
+        match n.kind() {
+            OBJECT => {
+                let keys = n
+                    .children()
+                    .filter(|c| c.kind() == OBJECT_FIELD)
+                    .filter_map(|f| tokens(&f).next())
+                    .map(|k| match k.kind() {
+                        STRING => string_value(k.text()).unwrap_or_else(|_| k.text().into()),
+                        _ => k.text().to_string(),
+                    })
+                    .collect();
+                crate::fmt::value::remember(keys);
+            }
+            BLOCK => {
+                let mut under: Vec<(Vec<String>, Vec<String>)> = Vec::new();
+                for a in n.children().filter(|c| c.kind() == ASSIGN) {
+                    let Some(path) = a
+                        .children()
+                        .find(|c| c.kind() == CHAIN || c.kind() == BLOCK_PATH)
+                    else {
+                        continue;
+                    };
+                    let text = path.text().to_string();
+                    let segs: Vec<String> = crate::ir::path_keys(text.trim());
+                    for i in 0..segs.len() {
+                        let (at, key) = (segs[..i].to_vec(), segs[i].clone());
+                        match under.iter_mut().find(|(p, _)| *p == at) {
+                            Some((_, ks)) if ks.contains(&key) => {}
+                            Some((_, ks)) => ks.push(key),
+                            None => under.push((at, vec![key])),
+                        }
+                    }
+                }
+                for (_, ks) in under {
+                    crate::fmt::value::remember(ks);
+                }
+            }
+            _ => {}
+        }
     }
 }
 

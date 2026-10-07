@@ -124,6 +124,28 @@ pub fn printed(src: &str, facts: &BTreeSet<Atom>) -> Vec<(crate::ir::Address, Op
 pub fn pattern(addr: &crate::ir::Address, path: Option<String>, why: bool) -> Query {
     let s = |x: &str| Term::Val(Value::Str(x.to_string()));
     let v = |x: &str| Term::Var(x.to_string());
+    // Below the top attribute (After R-124): the attribute holds the
+    // object, and the value is the field read out of it.
+    if !why
+        && let Some(p) = &path
+        && let [top, rest @ ..] = crate::ir::path_segments(p).as_slice()
+        && !rest.is_empty()
+    {
+        let read = Atom {
+            pred: "attr".into(),
+            args: vec![s(&addr.typ), s(&addr.name), s(top), v("__Top")],
+            record: None,
+            span: Default::default(),
+        };
+        let field = Term::Func {
+            name: "__path".into(),
+            args: vec![v("__Top"), s(&rest.join("."))],
+        };
+        return Query::Body {
+            body: vec![Lit::Pos(read), Lit::Eq(v("value"), field)],
+            vars: vec!["value".into()],
+        };
+    }
     let (pred, args) = match (path, why) {
         (Some(p), _) => ("attr", vec![s(&addr.typ), s(&addr.name), s(&p), v("value")]),
         (None, true) => ("want", vec![s(&addr.typ), s(&addr.name)]),

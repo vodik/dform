@@ -129,3 +129,15 @@ fn a_row_prints_a_reference_as_its_address() {
     );
     assert!(!facts.contains("ref("), "{facts}");
 }
+
+/// An address's path below its top attribute reads the field out of the
+/// attribute's object (After R-124): before, no `attr` row was at it and
+/// the query said nothing.
+#[test]
+fn a_path_below_the_top_attribute_is_its_field() {
+    let out = dform(
+        "examples/demo/stacks/dform.df",
+        &["query", r#"net.vpc["main.vpc"].tags.team"#],
+    );
+    assert_eq!(out, "\"platform\"\n");
+}

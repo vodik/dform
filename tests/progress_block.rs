@@ -89,7 +89,7 @@ fn a_tick_says_each_change_of_state_and_stops_at_a_failure() {
             "  + net.subnet a  T  made",
             "  + net.subnet a  T  made",
             "  + net.subnet b",
-            "  ! net.subnet b  T  apply net.subnet[\"b\"]: injected failure (chaos fail=net.subnet[\"b\"])",
+            "  ! net.subnet b  T  injected failure (chaos fail=net.subnet[\"b\"])",
             "tick 1  failed  T",
         ],
         "{}",

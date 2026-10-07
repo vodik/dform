@@ -114,7 +114,7 @@ fn the_demo_plans_at_each_level() {
         line.contains(
             "  + network.vpc main\n    + net.vpc main.vpc                          network.df:19\n        \
              cidr = \"10.50.0.0/16\"                   stacks/dform.df:10\n        \
-             tags = { component: \"network\", env: \"staging\" }\n"
+             tags = { env: \"staging\", component: \"network\" }\n"
         ) && line.contains("        vpc = main.vpc\n"),
         "{line}"
     );

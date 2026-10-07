@@ -86,7 +86,7 @@ fn the_demo_plans_the_same_against_the_real_provider_offline() {
     assert!(
         r.stdout.contains("+ k8s.apps.v1.deployment api")
             && r.stdout.contains(
-                "spec.template.spec.containers[name=api] = { image: \"api:1\", name: \"api\" }"
+                "spec.template.spec.containers[name=api] = { name: \"api\", image: \"api:1\" }"
             ),
         "{}",
         r.stdout
