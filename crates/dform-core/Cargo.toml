@@ -48,6 +48,10 @@ semver = "1"
 # written in NFC (`unicode-normalization`, idna's own dependency).
 idna = "1"
 unicode-normalization = "0.1"
+# A host label that mixes scripts, or that is wholly in a script confusable
+# with Latin, is a plan warning (R-134, UTS 39's mixed-script and
+# confusable detection; its `unicode-script` is its own dependency).
+unicode-security = "0.1"
 # `uri.escape` (std/uri.df): percent-encoding, depended on directly for
 # its `AsciiSet`.
 percent-encoding = "2"

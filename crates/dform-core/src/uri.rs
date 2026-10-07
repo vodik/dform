@@ -416,6 +416,92 @@ impl<'de> Deserialize<'de> for Uri {
     }
 }
 
+/// The host a value's text names: a uri's (with an authority), or the
+/// text itself when it is a host name, dot-separated labels of letters,
+/// digits, `-` and `_` in any script (a DNS record's name, an ingress
+/// host, `--set host=`); none for other text. Syntax, not a guess: the
+/// same text is a host wherever it is printed.
+fn host_of(text: &str) -> Option<String> {
+    if let Ok(u) = Uri::parse(text)
+        && u.host.as_deref().is_some_and(|h| !h.is_empty())
+    {
+        return u.host;
+    }
+    let name = text.strip_suffix('.').unwrap_or(text);
+    let label = |l: &str| {
+        l == "*"
+            || (!l.is_empty()
+                && l.chars()
+                    .all(|c| c.is_alphanumeric() || c == '-' || c == '_'))
+    };
+    (name.contains('.') && name.split('.').all(label)).then(|| name.to_lowercase())
+}
+
+/// A text naming a host with a label that is not ASCII, in the form a
+/// provider receives it: the uri with its host's A-labels, or the host
+/// name's (`bücher.example` is `xn--bcher-kva.example`). What the plan
+/// prints beside it, at every level (R-134: a plan is a review surface,
+/// and no heuristic decides when the A-labels show).
+pub fn ascii_form(text: &str) -> Option<String> {
+    if text.is_ascii() {
+        return None;
+    }
+    let host = host_of(text)?;
+    if host.is_ascii() {
+        return None;
+    }
+    let ascii = idna::domain_to_ascii(&host).ok()?;
+    Some(match Uri::parse(text) {
+        Ok(u) if u.host.is_some() => u.ascii(),
+        _ => ascii,
+    })
+}
+
+/// The labels of the host a text names that a reader may mistake for
+/// others (UTS 39), each with why: one that mixes scripts (`pаypal`, a
+/// Cyrillic `а` among Latin letters), or one wholly in a script whose
+/// letters look Latin (`рау`, all Cyrillic). What the plan warns of.
+pub fn confusable_labels(text: &str) -> Vec<(String, String)> {
+    use unicode_security::MixedScript;
+    use unicode_security::mixed_script::AugmentedScriptSet;
+    let Some(host) = host_of(text).filter(|h| !h.is_ascii()) else {
+        return Vec::new();
+    };
+    let scripts = |l: &str| {
+        let mut names: Vec<String> = Vec::new();
+        for c in l.chars() {
+            let set = AugmentedScriptSet::for_char(c);
+            if set.is_all() {
+                continue;
+            }
+            let n = set.to_string();
+            if !names.contains(&n) {
+                names.push(n);
+            }
+        }
+        names
+    };
+    host.split('.')
+        .filter(|l| !l.is_ascii())
+        .filter_map(|l| {
+            let names = scripts(l);
+            if !l.is_single_script() {
+                return Some((l.to_string(), format!("mixes {}", names.join(" and "))));
+            }
+            let skeleton: String = unicode_security::skeleton(l).collect();
+            (skeleton.is_ascii() && !names.iter().any(|n| n == "Latin")).then(|| {
+                (
+                    l.to_string(),
+                    format!(
+                        "is {} that reads as the Latin `{skeleton}`",
+                        names.join(" and ")
+                    ),
+                )
+            })
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -480,6 +566,42 @@ mod tests {
         assert_eq!(a.ascii(), "https://xn--bcher-kva.example/x");
         assert_eq!(a, b);
         assert_eq!(b.to_string(), "https://xn--bcher-kva.example/x");
+    }
+
+    /// A host with a label that is not ASCII has its A-label form, a uri
+    /// and a bare name alike; an ASCII one, or text that names no host,
+    /// has none.
+    #[test]
+    fn a_unicode_host_has_its_ascii_form() {
+        assert_eq!(
+            ascii_form("https://bücher.example/x").as_deref(),
+            Some("https://xn--bcher-kva.example/x")
+        );
+        assert_eq!(
+            ascii_form("bücher.example").as_deref(),
+            Some("xn--bcher-kva.example")
+        );
+        assert_eq!(ascii_form("example.com"), None);
+        assert_eq!(ascii_form("a bücher example"), None);
+        assert_eq!(ascii_form("München"), None);
+    }
+
+    /// A label mixing scripts, or wholly in one confusable with Latin, is
+    /// confusable; a Unicode label in one script that reads as itself is
+    /// not.
+    #[test]
+    fn a_confusable_label_is_found() {
+        let mixed = confusable_labels("p\u{430}ypal.com");
+        assert_eq!(mixed.len(), 1, "{mixed:?}");
+        assert!(
+            mixed[0].1.contains("Latin") && mixed[0].1.contains("Cyrillic"),
+            "{mixed:?}"
+        );
+        let whole = confusable_labels("https://\u{440}\u{430}\u{443}.example/");
+        assert_eq!(whole.len(), 1, "{whole:?}");
+        assert!(whole[0].1.contains("reads as the Latin `pay`"), "{whole:?}");
+        assert!(confusable_labels("bücher.example").is_empty());
+        assert!(confusable_labels("пример.рф").is_empty());
     }
 
     #[test]

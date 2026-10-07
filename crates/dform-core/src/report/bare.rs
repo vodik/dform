@@ -145,6 +145,15 @@ impl Report {
                 out.push_str(&format!("  {line}\n"));
             }
         }
+        // A confusable host label is a warning at every level (R-134).
+        let confusable = self.confusable_lines();
+        if !confusable.is_empty() {
+            out.push_str(&style.paint(Paint::Warn, "warning: a host a reader may mistake"));
+            out.push('\n');
+            for line in confusable {
+                out.push_str(&format!("  {line}\n"));
+            }
+        }
         for (title, ds) in [("shadowed", &self.shadowed), ("conflicts", &self.conflicts)] {
             if ds.is_empty() {
                 continue;

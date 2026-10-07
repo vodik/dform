@@ -370,7 +370,9 @@ impl Shown {
     pub fn text(&self) -> String {
         match self {
             Shown::Absent => "<none>".into(),
-            Shown::Value(Json::String(s)) => crate::partition::quote(s),
+            Shown::Value(Json::String(s)) => {
+                format!("{}{}", crate::partition::quote(s), host_ascii_text(s))
+            }
             Shown::Value(v) => serde_json::to_string(v).unwrap_or_else(|_| "<unprintable>".into()),
             Shown::Null { label, .. } => format!("?{label}"),
             Shown::Sensitive(Some(l)) => format!("(sensitive {l})"),
@@ -392,7 +394,13 @@ impl Shown {
             }
             Shown::Sensitive(_) => "(sensitive)".into(),
             Shown::Ref { addr, .. } => reference(addr, ""),
-            Shown::Value(Json::String(s)) if why == Why::Line => crate::partition::quote(&elide(s)),
+            Shown::Value(Json::String(s)) if why == Why::Line => {
+                format!(
+                    "{}{}",
+                    crate::partition::quote(&elide(s)),
+                    host_ascii_text(s)
+                )
+            }
             _ => self.text(),
         }
     }
@@ -405,6 +413,35 @@ impl Shown {
             Shown::Sensitive(l) => json!({ "sensitive": l }),
             Shown::Ref { value, .. } => value.clone(),
         }
+    }
+}
+
+/// A host with a label that is not ASCII prints both forms (R-134): the
+/// text as written, then two spaces and its A-labels, what a provider
+/// receives (`"bücher.example"  xn--bcher-kva.example`); at every level,
+/// and carried by no colour. Empty for any other text.
+fn host_ascii_text(s: &str) -> String {
+    crate::uri::ascii_form(s)
+        .map(|a| format!("  {a}"))
+        .unwrap_or_default()
+}
+
+/// The host labels in a value a reader may mistake for others (R-134,
+/// UTS 39): `host label "pаypal" mixes Latin and Cyrillic  ATTRIBUTE  SITE`,
+/// for every string inside it.
+fn confusables_in(v: &Json, attr: &str, at: &str, out: &mut Vec<String>) {
+    match v {
+        Json::String(s) => {
+            for (label, why) in crate::uri::confusable_labels(s) {
+                let line = format!("host label {label:?} {why}  {attr}{at}");
+                if !out.contains(&line) {
+                    out.push(line);
+                }
+            }
+        }
+        Json::Array(xs) => xs.iter().for_each(|x| confusables_in(x, attr, at, out)),
+        Json::Object(m) => m.values().for_each(|x| confusables_in(x, attr, at, out)),
+        _ => {}
     }
 }
 
@@ -1519,7 +1556,7 @@ impl<'a> Refs<'a> {
                         ids.push((t, r, v));
                     }
                 }
-                ("attr", [t, a, p, Term::Val(v)]) if holds_ref(v) => {
+                ("attr", [t, a, p, Term::Val(v)]) if holds_ref(v) || holds_uri(v) => {
                     if let (Some(t), Some(a), Some(p)) = (s(t), s(a), s(p)) {
                         desired.insert((t, a, p), v);
                     }
@@ -1544,7 +1581,9 @@ impl<'a> Refs<'a> {
     }
 
     /// `v`, a side of the change at `path` of `addr`: an id where the
-    /// program's document holds a reference prints as that resource.
+    /// program's document holds a reference prints as that resource; a
+    /// uri the provider holds in its A-labels prints as the program wrote
+    /// it when it is the program's, else as read, never decoded (R-134).
     fn shown(&self, addr: &Address, path: &str, v: Shown) -> Shown {
         let Shown::Value(Json::String(id)) = &v else {
             return v;
@@ -1559,8 +1598,22 @@ impl<'a> Refs<'a> {
                 addr: to.clone(),
                 value: Json::String(id.clone()),
             },
+            (Some(Value::Uri(u)), _) if u.ascii() == *id => {
+                Shown::Value(Json::String(u.to_string()))
+            }
             _ => v,
         }
+    }
+}
+
+/// Whether a value holds a uri: its host is the program's spelling,
+/// the provider's its A-labels ([`Refs::shown`]).
+fn holds_uri(v: &Value) -> bool {
+    match v {
+        Value::Uri(u) => u.unicode_host(),
+        Value::List(xs) => xs.iter().any(holds_uri),
+        Value::Obj(m) => m.values().any(holds_uri),
+        _ => false,
     }
 }
 
@@ -2132,6 +2185,44 @@ impl Report {
         (!why.is_empty()).then(|| format!("{verb}: refused  {}", why.join(", ")))
     }
 
+    /// The host labels the plan's values hold that a reader may mistake for
+    /// others (R-134): each with its attribute and where it was written;
+    /// a warning at every level, `-q` included.
+    pub fn confusable_lines(&self) -> Vec<String> {
+        fn walk(l: &Line, addr: &Address, prefix: &str, out: &mut Vec<String>) {
+            let path = match prefix.is_empty() {
+                true => l.path.clone(),
+                false => format!("{prefix}.{}", l.path),
+            };
+            let at = l
+                .site
+                .as_ref()
+                .filter(|s| !s.at.is_empty())
+                .map(|s| format!("  {}", s.at))
+                .unwrap_or_default();
+            let attr = attribute(addr, &path);
+            for v in [&l.after, &l.before] {
+                if let Shown::Value(j) = v {
+                    confusables_in(j, &attr, &at, out);
+                }
+            }
+            for x in &l.leaves {
+                walk(x, addr, &path, out);
+            }
+        }
+        let mut out = Vec::new();
+        let all = self
+            .definite
+            .iter()
+            .chain(self.pending.iter().flat_map(|b| b.deformations.iter()));
+        for d in all {
+            for l in &d.lines {
+                walk(l, &d.addr, "", &mut out);
+            }
+        }
+        out
+    }
+
     /// The `warning` section's lines (R-80), unindented: each rule the
     /// plan deletes every resource of, with what it deletes and the leaf
     /// that changed since the last apply; each relation it empties.
@@ -2238,11 +2329,12 @@ impl Report {
                 rows.push(Row::new(&plain, painted).with(right));
             }
         }
-        if !self.warnings.is_empty() {
+        let confusable = self.confusable_lines();
+        if !self.warnings.is_empty() || !confusable.is_empty() {
             rows.push(Row::plain(String::new()));
             let head = "warning";
             rows.push(Row::new(head, style.paint(Paint::Warn, head)));
-            for line in self.warning_lines() {
+            for line in self.warning_lines().into_iter().chain(confusable) {
                 rows.push(Row::plain(format!("  {line}")));
             }
         }
@@ -2934,7 +3026,17 @@ fn folded(
         .iter()
         .map(|l| crate::fmt::value::Tree::Leaf(whole(&l.after, why)))
         .collect();
-    let out = fold::fold(&paths, &writers).into_iter().map(|g| {
+    // A leaf naming a host with a label that is not ASCII keeps its own
+    // line, so its A-labels print beside it (R-134).
+    let host = |l: &Line| matches!(&l.after, Shown::Value(Json::String(s)) if crate::uri::ascii_form(s).is_some());
+    let out = fold::fold(&paths, &writers).into_iter().flat_map(|g| {
+        if g.leaves.len() > 1 && g.leaves.iter().any(|&i| host(lines[i])) {
+            return g
+                .leaves
+                .iter()
+                .map(|&i| (writers[i], lines[i].clone()))
+                .collect::<Vec<_>>();
+        }
         let w = writers[g.leaves[0]];
         let first = lines[g.leaves[0]];
         let line = match (g.leaves.as_slice(), w) {
@@ -2958,7 +3060,7 @@ fn folded(
                 row: None,
             },
         };
-        (w, line)
+        vec![(w, line)]
     });
     if why != Why::Line {
         return out.map(|(_, l)| l).collect();
@@ -3246,6 +3348,11 @@ impl Report {
                 .collect::<Vec<_>>()
                 .into();
         }
+        // Host labels a reader may mistake for others (R-134).
+        let confusable = self.confusable_lines();
+        if !confusable.is_empty() {
+            j["confusable_hosts"] = confusable.into();
+        }
         // What the plan empties (R-80), only when it empties something.
         if !self.warnings.is_empty() {
             j["warnings"] = self
@@ -3323,6 +3430,13 @@ fn line_json(l: &Line, explained: bool) -> Json {
     m.insert("path".into(), json!(l.path));
     m.insert("before".into(), l.before.json());
     m.insert("after".into(), l.after.json());
+    // A host with a label that is not ASCII, in the form a provider
+    // receives it (R-134).
+    if let Shown::Value(Json::String(s)) = &l.after
+        && let Some(a) = crate::uri::ascii_form(s)
+    {
+        m.insert("host_ascii".into(), json!(a));
+    }
     if !l.leaves.is_empty() {
         m.insert(
             "leaves".into(),

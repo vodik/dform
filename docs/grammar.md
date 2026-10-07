@@ -573,6 +573,21 @@ and `u.fragment` read its parts. `uri.with_scheme`, `uri.with_user`,
 as `uri.join` appends a path segment; `uri.escape` escapes a string for
 a part. `url`, in a type or a call, is an error naming `uri`.
 
+A host is IDNA's to encode, at the edge, as a quantity's unit is
+(R-134): a uri's host is held as written (its Unicode form, NFC,
+lower-case) and printed so everywhere (the plan, `why`, state), and two
+hosts are equal by their A-labels (UTS 46), so `bücher.example` and
+`xn--bcher-kva.example` are one host and never a replace. The A-labels
+cross the provider boundary only: a provider receives and holds
+`https://xn--bcher-kva.example/`, never the Unicode form, and what it
+holds, read back, prints as the program wrote it when it is the
+program's host, else as read, never decoded (a name from the world may be
+a homograph). The plan is the review surface: a value naming a host with
+a label that is not ASCII prints both forms on its line at every level,
+and a label that mixes scripts, or that is wholly in a script confusable
+with Latin (UTS 39), is a warning naming it ("Reports" in
+docs/reference.md).
+
 An `oci` is a container image reference, a value as a uri is (R-133):
 the OCI distribution reference `[registry/]repository[:tag][@digest]`,
 written as a string where an `oci` is wanted (a parameter, an

@@ -165,3 +165,134 @@ fn a_uri_typed_attribute_checks_its_literal() {
     let r = run("resource app.thing t { link = \"nope\" }\n").failure();
     assert!(r.stderr.contains("is a uri"), "{}", r.stderr);
 }
+
+/// IDNA is a wire encoding (R-134): a host is held and printed as
+/// written and equal by its A-labels, so `bücher.example` and
+/// `xn--bcher-kva.example` are one host.
+#[test]
+fn a_unicode_host_is_one_host_with_its_a_labels() {
+    let src = r#"let written: uri = "https://Bücher.example/shop"
+let wire: uri = "https://xn--bcher-kva.example/shop"
+same() where written == wire
+host(h) where h = written.host
+text(t) where t = "${written}"
+"#;
+    assert_eq!(facts(src, "same"), ["same()"]);
+    assert_eq!(facts(src, "host"), [r#"host("bücher.example")"#]);
+    assert_eq!(
+        facts(src, "text"),
+        [r#"text("https://bücher.example/shop")"#]
+    );
+}
+
+fn mock(s: &common::Scratch, args: &[&str]) -> common::Run {
+    s.run(&common::on(
+        "p.df",
+        &["--provider", "schema.df", "--world", "w.json"],
+        args,
+    ))
+}
+
+/// The provider receives the A-labels and never the Unicode form; what
+/// it holds, read back, is the program's host, so a second plan changes
+/// nothing; the plan prints both forms of the host, uncoloured.
+#[test]
+fn a_provider_receives_a_labels_and_a_round_trip_is_no_change() {
+    let s = common::Scratch::new("uri-idna");
+    s.write(
+        "schema.df",
+        "\ntype_provider(app.thing, \"mock\")\n\
+         type_attr(app.thing, \"link\", \"uri\", [])\n",
+    );
+    s.write(
+        "p.df",
+        "\nresource app.thing t { link = \"https://bücher.example/shop\" }\n",
+    );
+    let r = mock(&s, &["plan"]).success();
+    assert!(
+        r.stdout
+            .contains("link = \"https://bücher.example/shop\"  https://xn--bcher-kva.example/shop"),
+        "{}",
+        r.stdout
+    );
+    assert!(!r.stdout.contains('\u{1b}'), "{}", r.stdout);
+    mock(&s, &["apply", "--yes"]).success();
+    let world = std::fs::read_to_string(s.dir.join("w.json")).unwrap();
+    assert!(
+        world.contains("xn--bcher-kva.example") && !world.contains("bücher"),
+        "{world}"
+    );
+    let r = mock(&s, &["plan"]).success();
+    assert!(r.stdout.contains("up to date"), "{}", r.stdout);
+    // A host read back that is not the program's prints as read, never
+    // decoded: the change from the world's to the program's.
+    s.write(
+        "p.df",
+        "\nresource app.thing t { link = \"https://bücher.example/books\" }\n",
+    );
+    let r = mock(&s, &["plan"]).success();
+    assert!(
+        r.stdout.contains(
+            "link: \"https://xn--bcher-kva.example/shop\" → \"https://bücher.example/books\"  \
+             https://xn--bcher-kva.example/books"
+        ),
+        "{}",
+        r.stdout
+    );
+}
+
+/// A plan is the review surface (R-134): a host with a label that is not
+/// ASCII prints both forms at every level, `-q` and `--json` included,
+/// and a label mixing scripts, or wholly in one confusable with Latin, is
+/// a warning naming it and its attribute, kept at `-q`; the same for a
+/// `--set`, a document's row and a literal.
+#[test]
+fn a_confusable_host_is_a_warning_at_every_level() {
+    let s = common::Scratch::new("uri-confusable");
+    s.write(
+        "hosts.csv",
+        "name,host\nshop,\u{440}\u{430}\u{443}.example\n",
+    );
+    s.write(
+        "p.df",
+        "\ninput host: string = \"example.com\"\ninput site from csv(\"hosts.csv\")\nuse fake\n\
+         resource net.vpc main {\n  cidr = \"10.0.0.0/16\"\n  tags = { host }\n}\n\
+         resource net.vpc shop {\n  cidr = \"10.1.0.0/16\"\n  tags = { host: h }\n} where site(_, h)\n\
+         resource net.vpc books {\n  cidr = \"10.2.0.0/16\"\n  tags = { host: \"bücher.example\" }\n}\n",
+    );
+    let cyrillic_a = "ex\u{430}mple.com";
+    let set = format!("host={cyrillic_a}");
+    for level in [&[][..], &["-q"][..], &["-vv"][..]] {
+        let mut args = vec!["plan", "p.df", "--set", &set];
+        args.extend_from_slice(level);
+        let r = s.run(&args).success();
+        let out = &r.stdout;
+        assert!(
+            out.contains(&format!("\"{cyrillic_a}\"  xn--exmple-4nf.com")),
+            "{level:?}: {out}"
+        );
+        assert!(
+            out.contains("\"bücher.example\"  xn--bcher-kva.example"),
+            "{level:?}: {out}"
+        );
+        assert!(
+            out.contains(
+                "host label \"ex\u{430}mple\" mixes Latin and Cyrillic  net.vpc main.tags.host"
+            ),
+            "{level:?}: {out}"
+        );
+        assert!(
+            out.contains("host label \"\u{440}\u{430}\u{443}\" is Cyrillic that reads as the Latin `pay`  net.vpc shop.tags.host"),
+            "{level:?}: {out}"
+        );
+        assert!(!out.contains("host label \"bücher\""), "{level:?}: {out}");
+        assert!(!out.contains('\u{1b}'), "{level:?}: {out}");
+    }
+    let r = s.run(&["plan", "p.df", "--json", "--set", &set]).success();
+    assert!(
+        r.stdout.contains("\"host_ascii\": \"xn--exmple-4nf.com\"")
+            && r.stdout.contains("\"confusable_hosts\""),
+        "{}",
+        r.stdout
+    );
+}

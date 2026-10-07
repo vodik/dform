@@ -763,11 +763,17 @@ fn read_at(schema: &Schema, typ: &str, path: &str, t: &mut Term) -> Result<(), (
             *t = read_as(&ty, v);
             return Ok(());
         }
-        // A computed value where a value type is wanted is read as one
-        // at run time (R-134); a literal is `check`'s.
-        if matches!(t, Term::Var(_) | Term::Func { .. }) {
+        // A value where a value type is wanted is read as one (R-134): a
+        // literal now (`check` says why one is not), a computed value at
+        // run time.
+        if let Ty::Scalar(s) = &ty
+            && crate::value::VALUE_TYPES.contains(&s.as_str())
+        {
             let v = std::mem::replace(t, Term::Wildcard);
-            *t = at_run_time(&ty, v);
+            *t = match v {
+                Term::Var(_) | Term::Func { .. } => at_run_time(&ty, v),
+                v => read_as(&ty, v),
+            };
             return Ok(());
         }
     }

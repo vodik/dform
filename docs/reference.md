@@ -1257,7 +1257,19 @@ made; the plan itself says what it is.
   green)`, by its path, `green.vpc_net`). What each apply derived is the audit log's `derived`
   entry; a plan with no apply before it warns of nothing. `--json`
   carries them as `warnings` (each `{rule, statement, relation, deletes,
-  rows_at_last_apply, because}`), only when there is one.
+  rows_at_last_apply, because}`), only when there is one. A host label a
+  reader may mistake for another (R-134, UTS 39) is one too, at every
+  level, `-q` included: one that mixes scripts (`host label "exаmple"
+  mixes Latin and Cyrillic  net.vpc main.tags.host  p.df:6`) or one
+  wholly in a script whose letters read as Latin (`"рау" is Cyrillic that
+  reads as the Latin `pay``), whatever the value came from (a literal,
+  `--set`, a document's row, a provider's read); `--json` carries them as
+  `confusable_hosts`. No colour carries it, nor the A-labels: a value
+  naming a host with a label that is not ASCII (a uri's, or a host name's)
+  prints both forms on its line at every level, `host = "bücher.example"
+  xn--bcher-kva.example`, the second what the provider receives, and
+  `--json` gives it as the change's `host_ascii`; such a value is never
+  folded into its object's line.
 - `denied`: denies over the plan itself (`lifecycle prevent_destroy: the
   plan would replace T["A"]`, the message as the rule wrote it), each
   with the change its firing read (`net.vpc main`) and where it is
@@ -2671,7 +2683,12 @@ where the file states it, like a `set`'s; the plan file records each input file'
 
 Types are `int`, `string`, `bool`, `inet`, `ip`, `iprange`, `uri`, `oci`,
 `semver`, the quantities `bytes`, `cpu` and `duration`, `time`, `enum(a, b, ...)`, `list(T)`, `set(T)` and objects
-`{ k: T }` (`addr`, `ref(...)` and `any` are unchecked). A quantity is a
+`{ k: T }` (`addr`, `ref(...)` and `any` are unchecked). A `uri` is RFC
+3986's generic syntax (`postgres://user@db:5432/x`, `mailto:ops@example.com`),
+its host held as written and equal by its A-labels, sent to a provider
+in them (`bücher.example` is `xn--bcher-kva.example` on the wire); a host
+read back prints as read, never decoded, unless it is the program's own.
+A quantity is a
 number with its unit, one token (`512Mi`, `1.5Gi`, `500m`, `2`, `1h30m`,
 `30d`): bytes take binary units only (`20GB` is an error naming `20Gi`),
 a cpu is cores or millicores, `m` is millicores in a cpu position and
