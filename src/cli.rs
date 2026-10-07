@@ -16,7 +16,6 @@ use crate::partition;
 use crate::plugin::{self, Providers};
 use crate::provider::ActionKind;
 use crate::query;
-use crate::report::tree;
 use crate::report::{self, waits_on};
 use crate::schema;
 use crate::state;
@@ -367,9 +366,14 @@ enum Run {
     },
     /// A derivation: how a value was made, one `= EXPRESSION   SITE`
     /// step per expression it passed through (an attribute, an input); a
-    /// resource's header and each attribute's steps; any other fact's
-    /// rule, bindings and the facts it read, recursively. Variables are
-    /// allowed; every match is printed.
+    /// resource's header and each attribute's steps, and what it waits on
+    /// when `later` holds it; any other fact's rule, bindings and the
+    /// facts it read, recursively. Variables are allowed; every match is
+    /// printed. What the program does not derive (an address, an
+    /// attribute, a row), why not: each rule that could have, the first
+    /// condition of it that failed and the nearest rows or name.
+    /// `why 'deny "MESSAGE"'`: whether that deny holds, and if not, which
+    /// clause failed on what.
     Why {
         pattern: String,
         #[command(flatten)]
@@ -386,16 +390,6 @@ enum Run {
         /// head :- body`), core variables, facts as relations.
         #[arg(long)]
         core: bool,
-    },
-    /// A derivation that did not happen: for an address, an attribute or
-    /// a row the program does not derive, each rule that could have, and
-    /// the first condition of it that failed with the nearest rows that
-    /// would have passed (`why-not 'net.subnet["private-us-east-1c"]'`).
-    #[command(name = "why-not")]
-    WhyNot {
-        pattern: String,
-        #[command(flatten)]
-        target: Target,
     },
     /// A result set: query the final fact store, a predicate name (every
     /// fact of it) or body literals with variables, one column per
@@ -719,9 +713,6 @@ enum Cmd {
         tree: bool,
         all: bool,
         core: bool,
-    },
-    WhyNot {
-        pattern: String,
     },
     Diff {
         since: String,
@@ -1425,7 +1416,6 @@ fn run_cmd(r: Run) -> (Cmd, Option<Target>) {
             },
             Some(target),
         ),
-        Run::WhyNot { pattern, target } => (Cmd::WhyNot { pattern }, Some(target)),
         Run::Query {
             pattern,
             target,
@@ -1964,7 +1954,6 @@ fn run_with(
             | Cmd::Apply { .. }
             | Cmd::Query { .. }
             | Cmd::Why { .. }
-            | Cmd::WhyNot { .. }
             | Cmd::Show { .. }
             | Cmd::Controller { .. }
     ) {
@@ -2227,11 +2216,7 @@ fn run_with(
     // refuses. Any other run is blocked by a violation.
     let explains = matches!(
         cli.cmd,
-        Cmd::Query { .. }
-            | Cmd::Why { .. }
-            | Cmd::WhyNot { .. }
-            | Cmd::Diff { .. }
-            | Cmd::Explain { .. }
+        Cmd::Query { .. } | Cmd::Why { .. } | Cmd::Diff { .. } | Cmd::Explain { .. }
     );
     // The audit log as the run began, read once: the guardrail and why
     // since the last apply both read it.
@@ -2268,26 +2253,16 @@ fn run_with(
         check_types: matches!(cli.cmd, Cmd::Plan { .. } | Cmd::Apply { .. }) || hook.is_some(),
         discover_all: explains,
         whole_schema: match &cli.cmd {
-            Cmd::Query { pattern, .. } | Cmd::Why { pattern, .. } | Cmd::WhyNot { pattern } => {
-                reads_schema(pattern)
-            }
+            Cmd::Query { pattern, .. } | Cmd::Why { pattern, .. } => reads_schema(pattern),
             _ => false,
         },
         collisions: matches!(
             cli.cmd,
-            Cmd::Plan { .. }
-                | Cmd::Apply { .. }
-                | Cmd::Query { .. }
-                | Cmd::Why { .. }
-                | Cmd::WhyNot { .. }
+            Cmd::Plan { .. } | Cmd::Apply { .. } | Cmd::Query { .. } | Cmd::Why { .. }
         ),
         blocking: !matches!(
             cli.cmd,
-            Cmd::Plan { .. }
-                | Cmd::Query { .. }
-                | Cmd::Why { .. }
-                | Cmd::WhyNot { .. }
-                | Cmd::Rekey { .. }
+            Cmd::Plan { .. } | Cmd::Query { .. } | Cmd::Why { .. } | Cmd::Rekey { .. }
         ),
         policy: explains || matches!(cli.cmd, Cmd::Plan { .. }),
         last_apply: last_derived
@@ -2351,30 +2326,30 @@ fn run_with(
                 tree,
                 all,
                 core,
-            } => why_tree(
-                pattern,
-                WhyAs {
-                    tree: *tree || *all,
-                    all: *all,
-                    core: *core,
-                },
-                &x.res,
-                &x.redact,
-                ev.located.loaded.lowered.as_ref().map(|l| &l.signatures),
-                &ev.located
+            } => {
+                let waits = |t: &str| ev.evaluator.provider_wait(t);
+                let keys = ev
+                    .located
                     .instance
                     .key
                     .iter()
                     .map(|(k, _)| k.clone())
-                    .collect(),
-                site_root(&cli.files).as_deref(),
-            )?,
-            Cmd::WhyNot { pattern } => {
-                let waits = |t: &str| ev.evaluator.provider_wait(t);
-                print!(
-                    "{}",
-                    crate::whynot::why_not(pattern, &x.res, &x.redact, &waits)?
-                )
+                    .collect();
+                let top = site_root(&cli.files);
+                let cx = crate::why::Context {
+                    res: &x.res,
+                    redact: &x.redact,
+                    signatures: ev.located.loaded.lowered.as_ref().map(|l| &l.signatures),
+                    stack_keys: &keys,
+                    top: top.as_deref(),
+                    waits: &waits,
+                };
+                let how = crate::why::As {
+                    tree: *tree || *all,
+                    all: *all,
+                    core: *core,
+                };
+                print!("{}", crate::why::why(pattern, how, &cx)?);
             }
             Cmd::Explain { addresses } => {
                 let addresses = addresses
@@ -2405,7 +2380,7 @@ fn run_with(
                     print!("{}", d.text(*why));
                 }
             }
-            _ => unreachable!("explains is query, why, why-not, diff or __explain"),
+            _ => unreachable!("explains is query, why, diff or __explain"),
         }
         return Ok(Outcome::Done);
     }
@@ -2732,11 +2707,7 @@ fn run_with(
                 println!("- {}", r.addr);
             }
         }
-        Cmd::Query { .. }
-        | Cmd::Why { .. }
-        | Cmd::WhyNot { .. }
-        | Cmd::Diff { .. }
-        | Cmd::Explain { .. } => {
+        Cmd::Query { .. } | Cmd::Why { .. } | Cmd::Diff { .. } | Cmd::Explain { .. } => {
             unreachable!("explained before")
         }
         Cmd::Show { addr } => {
@@ -3850,329 +3821,6 @@ fn log_retries(
     Ok(())
 }
 
-/// `dform why PATTERN`: the provenance tree of each fact of `res` that
-/// matches, redacted, in the program's own terms (`--core`: the core's).
-/// How `why` prints: a value's chain, or the derivation `tree`, with
-/// `all` its alternatives, in the `core`'s spelling.
-struct WhyAs {
-    tree: bool,
-    all: bool,
-    core: bool,
-}
-
-fn why_tree(
-    pattern: &str,
-    WhyAs { tree, all, core }: WhyAs,
-    res: &engine::EvalResult,
-    redact: &query::Redactor,
-    signatures: Option<&crate::infer::Signatures>,
-    stack_keys: &BTreeSet<String>,
-    top: Option<&Path>,
-) -> Result<()> {
-    let printed = query::printed(pattern, &res.facts);
-    let cells = [crate::modules::INPUT, crate::modules::LET];
-    let matched = match input_cell(pattern, &cells, &res.facts)? {
-        Some(m) => m,
-        // An address as the plan prints it, `ovh.ssh_key k3s.admin`, or
-        // its path, `k3s.admin` (R-111).
-        None if !printed.is_empty() => {
-            let mut out = Vec::new();
-            for (addr, path) in printed {
-                let query::Query::Body { body, .. } = query::pattern(&addr, path, true) else {
-                    continue;
-                };
-                if let [crate::ast::Lit::Pos(pat)] = body.as_slice() {
-                    out.extend(tree::find(pat, &res.facts)?);
-                }
-            }
-            out
-        }
-        None => {
-            let parsed = match query::address(pattern, true)? {
-                Some(q) => q,
-                None => query::parse(pattern)?,
-            };
-            let query::Query::Body { body, .. } = parsed else {
-                bail!(
-                    "why: expected an address such as 'net.vpc main' or \
-                     'net.vpc[\"main\"].cidr', an input such as 'nodes.count', or a fact \
-                     pattern such as 'want(net.vpc, N)', got '{pattern}'"
-                );
-            };
-            let [crate::ast::Lit::Pos(pat)] = body.as_slice() else {
-                bail!("why: expected one fact pattern, got '{pattern}'");
-            };
-            tree::find(pat, &res.facts)?
-        }
-    };
-    // A copy's output, `synapse_db.conn` (R-120), when no resource is so
-    // named.
-    let matched = match matched.is_empty() {
-        true => input_cell(pattern, &[crate::transform::OUTPUT], &res.facts)?.unwrap_or_default(),
-        false => matched,
-    };
-    if matched.is_empty() {
-        bail!("why: no fact matches {pattern}");
-    }
-    let printer = tree::Printer {
-        circuit: &res.circuit,
-        redact,
-        all,
-    };
-    // A relation's facts follow its signature, its columns as declared or
-    // inferred (R-34), as `decl` writes them: once, before the first, when
-    // any column has a type.
-    let mut typed = BTreeSet::new();
-    for (i, (a, focus)) in matched.iter().enumerate() {
-        let Some(id) = res.circuit.fact_id(&engine::circuit_fact(a)) else {
-            bail!("internal: no provenance for {}", partition::fmt_atom(a));
-        };
-        if i > 0 {
-            println!();
-        }
-        if !core
-            && let Some(sig) = signatures.and_then(|s| s.get(&(a.pred.clone(), a.args.len())))
-            && sig
-                .columns
-                .iter()
-                .any(|c| c.ty.as_ref().is_some_and(|t| *t != crate::types::Ty::Any))
-            && typed.insert(&a.pred)
-        {
-            println!("decl {sig}");
-        }
-        if core {
-            print!("{}", printer.tree(id, focus.as_ref()));
-        } else if let (false, Some(text)) = (
-            tree,
-            why_chain(&printer, res, a, focus.as_ref(), stack_keys, top),
-        ) {
-            print!("{text}");
-        } else {
-            print!("{}", printer.source_tree(&res.rules, id, focus.as_ref()));
-        }
-    }
-    Ok(())
-}
-
-/// What `why` prints of a value (R-122): an attribute's or a cell's head
-/// line and its chain, an object by its leaves; a resource's header,
-/// `ADDR  SITE`, and each attribute's. `None` for any other fact, which
-/// prints its tree.
-fn why_chain(
-    printer: &tree::Printer,
-    res: &engine::EvalResult,
-    a: &Atom,
-    focus: Option<&tree::Focus>,
-    stack_keys: &BTreeSet<String>,
-    top: Option<&Path>,
-) -> Option<String> {
-    let style = report::Style::PLAIN;
-    let relative = |at: &str| {
-        top.and_then(|t| report::relative_place(at, t))
-            .unwrap_or_else(|| at.to_string())
-    };
-    // `T NAME.path = value` per leaf of attribute fact `f` below `keys`,
-    // each with its chain; a cell's by its own name. The leaves one
-    // contribution wrote fold to one value where the writers diverge
-    // (R-124), with that contribution's chain.
-    let leaves = |f: &Atom, head: &str, keys: &[String]| {
-        let mut items = Vec::new();
-        let (Some(Term::Val(v)), Some(Term::Val(Value::Str(top)))) = (f.args.get(3), f.args.get(2))
-        else {
-            return items;
-        };
-        let Some(v) = keys.iter().try_fold(v, |v, k| match v {
-            Value::Obj(m) => m.get(k),
-            _ => None,
-        }) else {
-            return items;
-        };
-        let mut found = Vec::new();
-        object_leaves(v, &mut keys.to_vec(), &mut found);
-        // Each leaf's path from the resource (`spec.replicas`), and the
-        // contribution that wrote it.
-        let paths: Vec<String> = found
-            .iter()
-            .map(|(keys, _)| {
-                keys.iter()
-                    .fold(top.clone(), |p, k| crate::ir::path_join(&p, k))
-            })
-            .collect();
-        let writers = match f.args.first() {
-            Some(Term::Val(Value::Str(t)))
-                if ![
-                    crate::modules::INPUT,
-                    crate::modules::LET,
-                    crate::transform::OUTPUT,
-                ]
-                .contains(&t.as_str()) =>
-            {
-                printer.writers(f, &paths)
-            }
-            _ => vec![None; paths.len()],
-        };
-        let printed = |p: &str| match head.strip_suffix(top.as_str()) {
-            Some(addr) => format!("{addr}{p}"),
-            None => p.to_string(),
-        };
-        let relative_chain = |mut chain: Vec<tree::Step>| {
-            for step in chain.iter_mut() {
-                step.at = relative(&step.at);
-            }
-            chain
-        };
-        let surface = |v: &Value| printer.redact.surface(v);
-        // A plain leaf of a secret object is `(sensitive)` (R-124
-        // amendment 2): its value is no secret elsewhere.
-        let whole = match f.args.get(3) {
-            Some(Term::Val(w)) => w,
-            _ => v,
-        };
-        let hidden = |keys: &[String], leaf: &Value| {
-            !printer.redact.is_secret(leaf)
-                && report::surface_in(printer.redact, whole, keys, leaf) == "(sensitive)"
-        };
-        for g in report::fold::fold(&paths, &writers) {
-            let laid = |v: &Value| {
-                crate::fmt::value::Tree::of(v, &|v| {
-                    let open =
-                        matches!(v, Value::Obj(_) | Value::List(_)) && !printer.redact.is_secret(v);
-                    (!open).then(|| surface(v))
-                })
-            };
-            if let [i] = g.leaves.as_slice() {
-                let (keys, leaf) = &found[*i];
-                let chain = relative_chain(printer.attr_chain(&res.rules, f, keys, stack_keys));
-                // A list is laid out as a fold is.
-                if matches!(leaf, Value::List(xs) if !xs.is_empty())
-                    && !printer.redact.is_secret(leaf)
-                    && !hidden(keys, leaf)
-                {
-                    items.push(report::ChainItem {
-                        head: format!("{} = ", printed(&paths[*i])),
-                        shown: surface(leaf),
-                        chain,
-                        value: Some(laid(leaf)),
-                    });
-                    continue;
-                }
-                let shown = match hidden(keys, leaf) {
-                    true => "(sensitive)".to_string(),
-                    false => surface(leaf),
-                };
-                items.push(report::ChainItem {
-                    head: format!("{} = {shown}", printed(&paths[*i])),
-                    shown,
-                    chain,
-                    value: None,
-                });
-                continue;
-            }
-            let values: Vec<crate::fmt::value::Tree> = found
-                .iter()
-                .map(|(keys, leaf)| match hidden(keys, leaf) {
-                    true => crate::fmt::value::Tree::Leaf("(sensitive)".into()),
-                    false => laid(leaf),
-                })
-                .collect();
-            let w = writers[g.leaves[0]].expect("a fold has its writer");
-            // The part of the value the fold prints, as a chain's step
-            // that is the literal itself says it.
-            let mut part = Value::Obj(Default::default());
-            for &i in &g.leaves {
-                let (keys, leaf) = &found[i];
-                let below = &keys[(g.depth - report::fold::tokens(top).len()).min(keys.len())..];
-                nest(&mut part, below, leaf.clone());
-            }
-            items.push(report::ChainItem {
-                head: format!("{} = ", printed(&g.path)),
-                shown: surface(&part),
-                chain: relative_chain(
-                    printer.contribution_chain(&res.rules, w, &g.path, stack_keys),
-                ),
-                value: Some(report::fold::assemble(&g, &paths, &values)),
-            });
-        }
-        items
-    };
-    let name = |f: &Atom| -> Option<String> {
-        let [
-            Term::Val(Value::Str(t)),
-            Term::Val(Value::Str(n)),
-            Term::Val(Value::Str(p)),
-            ..,
-        ] = f.args.as_slice()
-        else {
-            return None;
-        };
-        Some(match t.as_str() {
-            crate::modules::INPUT | crate::modules::LET | crate::transform::OUTPUT => {
-                let scoped = match n.is_empty() {
-                    true => p.clone(),
-                    false => format!("{n}.{p}"),
-                };
-                format!(
-                    "{} {scoped}",
-                    if t == crate::modules::LET {
-                        "let"
-                    } else {
-                        t.as_str()
-                    }
-                )
-            }
-            _ => report::attribute(
-                &ir::Address {
-                    typ: t.clone(),
-                    name: n.clone(),
-                },
-                p,
-            ),
-        })
-    };
-    match a.pred.as_str() {
-        "attr" => {
-            let keys = focus.map(tree::Focus::keys).unwrap_or_default();
-            let items = leaves(a, &name(a)?, keys);
-            Some(report::chains_text(&items, "", style))
-        }
-        "want" => {
-            let [Term::Val(Value::Str(t)), Term::Val(Value::Str(n))] = a.args.as_slice() else {
-                return None;
-            };
-            let addr = ir::Address {
-                typ: t.clone(),
-                name: n.clone(),
-            };
-            let mut out = report::address(&addr);
-            if let Some(site) = printer.want_site(&res.rules, &addr) {
-                out.push_str(&format!("  {}", relative(&site.at)));
-                if !site.with.is_empty() {
-                    out.push_str(&format!("  with {}", site.with.join(", ")));
-                }
-            }
-            out.push('\n');
-            let mut items = Vec::new();
-            for f in res.facts.iter().filter(|f| f.pred == "attr") {
-                let [
-                    Term::Val(Value::Str(ft)),
-                    Term::Val(Value::Str(fname)),
-                    Term::Val(Value::Str(path)),
-                    _,
-                ] = f.args.as_slice()
-                else {
-                    continue;
-                };
-                if (ft, fname) == (t, n) {
-                    items.extend(leaves(f, path, &[]));
-                }
-            }
-            out.push_str(&report::chains_text(&items, "  ", style));
-            Some(out)
-        }
-        _ => None,
-    }
-}
-
 /// The project's root, else the program's directory: what a site's place
 /// is relative to.
 fn site_root(files: &[PathBuf]) -> Option<PathBuf> {
@@ -4180,79 +3828,6 @@ fn site_root(files: &[PathBuf]) -> Option<PathBuf> {
         let f = std::path::absolute(f).ok()?;
         crate::project::manifest_root(&f).or_else(|| f.parent().map(Path::to_path_buf))
     })
-}
-
-/// `leaf` put into object `v` at `keys`.
-fn nest(v: &mut Value, keys: &[String], leaf: Value) {
-    let Some((k, rest)) = keys.split_first() else {
-        *v = leaf;
-        return;
-    };
-    if let Value::Obj(m) = v {
-        let at = m
-            .entry(k.clone())
-            .or_insert_with(|| Value::Obj(Default::default()));
-        nest(at, rest, leaf);
-    }
-}
-
-/// The leaves of value `v` below `keys`: an object's by its keys, any
-/// other value itself.
-fn object_leaves(v: &Value, keys: &mut Vec<String>, out: &mut Vec<(Vec<String>, Value)>) {
-    match v {
-        Value::Obj(m) if !m.is_empty() => {
-            for (k, x) in m {
-                keys.push(k.clone());
-                object_leaves(x, keys, out);
-                keys.pop();
-            }
-        }
-        v => out.push((keys.clone(), v.clone())),
-    }
-}
-
-/// A fact `why` explains, and the part of it the pattern named.
-type Matched = (Atom, Option<tree::Focus>);
-
-/// `why NAME`: the cell of one of `kinds` (an input, a `let`, an output)
-/// by the name the stack reads it by (R-54, R-55): `replicas`, a leaf of
-/// an object input `nodes.count`, a used module's `synapse.replicas`, a
-/// copy's output `synapse_db.conn` (R-120). The stack's own name first,
-/// then a used module's or a copy's, its scope the name's first segments.
-fn input_cell(
-    pattern: &str,
-    kinds: &[&str],
-    facts: &BTreeSet<Atom>,
-) -> Result<Option<Vec<Matched>>> {
-    let plain = !pattern.is_empty()
-        && pattern
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.');
-    if !plain {
-        return Ok(None);
-    }
-    let s = |x: &str| Term::Val(Value::Str(x.to_string()));
-    let mut splits = vec![("", pattern)];
-    splits.extend(
-        pattern
-            .match_indices('.')
-            .map(|(i, _)| (&pattern[..i], &pattern[i + 1..])),
-    );
-    for kind in kinds {
-        for (scope, path) in &splits {
-            let pat = Atom {
-                pred: "attr".into(),
-                args: vec![s(kind), s(scope), s(path), Term::Var("value".into())],
-                record: None,
-                span: Default::default(),
-            };
-            let found = tree::find(&pat, facts)?;
-            if !found.is_empty() {
-                return Ok(Some(found));
-            }
-        }
-    }
-    Ok(None)
 }
 
 /// How `diff` evaluates the program at an earlier commit: this executable,
@@ -6233,7 +5808,6 @@ const COMMANDS: &[&str] = &[
     "apply",
     "destroy",
     "why",
-    "why-not",
     "query",
     "diff",
     "test",
@@ -6264,7 +5838,6 @@ fn subcommands(noun: &str) -> &'static [&'static str] {
             "apply",
             "destroy",
             "why",
-            "why-not",
             "query",
             "diff",
             "test",

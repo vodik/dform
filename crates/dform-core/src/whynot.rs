@@ -1,5 +1,6 @@
-//! `dform why-not ADDR` (R-80): why the program does not derive a
-//! resource, an attribute or a row. Prior art: Soufflé's explainnegation.
+//! `dform why X` of what the program does not derive (R-80, R-150: what
+//! was `why-not`): why not, for a resource, an attribute or a row.
+//! Prior art: Soufflé's explainnegation.
 //!
 //! The rules whose head could produce the thing are found by unifying it
 //! with each head: the type and the name's shape, an interpolated name
@@ -13,9 +14,10 @@
 //! the program derives (a copy's guard, a relation of its own), why that
 //! rule did not, one level further in.
 //!
-//! The limit is stated rather than papered over: `why-not` explains what
-//! one rule failed to derive, and says so when no rule mentions the thing
-//! at all; it invents no reason.
+//! The limit is stated rather than papered over: it explains what one
+//! rule failed to derive, and says so when no rule mentions the thing at
+//! all, naming the nearest address the program does derive; it invents
+//! no reason.
 
 use crate::ast::{Atom, Lit, RuleStmt, Term};
 use crate::engine::{self, EvalResult};
@@ -35,31 +37,24 @@ const SPLITS: usize = 16;
 
 type Env = BTreeMap<String, Value>;
 
-/// What `why-not PATTERN` prints: an address (`T["A"]`), an attribute
-/// (`T["A"].path`) or a relation's row with constants (`zone("x", n)`).
-/// `waits`: what a resource of a type waits on before its provider plans
-/// it (R-110, `deployment::Evaluator::provider_wait`), which a derived
-/// resource's answer names, since the plan does not show it in a tick.
-pub fn why_not(
-    pattern: &str,
-    res: &EvalResult,
-    redact: &Redactor,
-    waits: &dyn Fn(&str) -> Option<String>,
-) -> Result<String> {
+/// What `why PATTERN` prints of what is not derived: an address
+/// (`T["A"]`), an attribute (`T["A"].path`) or a relation's row with
+/// constants (`zone("x", n)`).
+pub fn why_not(pattern: &str, res: &EvalResult, redact: &Redactor) -> Result<String> {
     let atom = match query::address(pattern, true)? {
         Some(query::Query::Body { body, .. }) => match body.as_slice() {
             [Lit::Pos(a)] => a.clone(),
-            _ => bail!("why-not: expected one address, got '{pattern}'"),
+            _ => bail!("why: expected one address, got '{pattern}'"),
         },
         _ => match query::parse(pattern) {
             Ok(query::Query::Body { body, .. }) => match body.as_slice() {
                 [Lit::Pos(a)] => a.clone(),
-                _ => bail!("why-not: expected one fact pattern, got '{pattern}'"),
+                _ => bail!("why: expected one fact pattern, got '{pattern}'"),
             },
             _ => bail!(
-                "why-not: expected an address such as 'net.subnet[\"private-a\"]' or \
-                 'net.subnet[\"private-a\"].cidr', or a row such as 'zone(\"us-east-1c\", n)', \
-                 got '{pattern}'"
+                "why: expected an address such as 'net.subnet[\"private-a\"]' or \
+                 'net.subnet[\"private-a\"].cidr', a row such as 'zone(\"us-east-1c\", n)', \
+                 or a deny such as 'deny \"MESSAGE\"', got '{pattern}'"
             ),
         },
     };
@@ -75,22 +70,7 @@ pub fn why_not(
     let mut out = String::new();
     let name = w.name(&atom);
     if !engine::query(&[Lit::Pos(atom.clone())], &res.facts)?.is_empty() {
-        let waiting = match (atom.pred.as_str(), atom.args.first()) {
-            ("want" | "attr", Some(Term::Val(Value::Str(t)))) => {
-                waits(t).or_else(|| unapplied(&atom, res))
-            }
-            _ => None,
-        };
-        match waiting {
-            Some(on) => out.push_str(&format!(
-                "{name}: it is derived, and waits on {on}: the plan lists it under `later`; \
-                 `dform why '{pattern}'` explains it\n"
-            )),
-            None => out.push_str(&format!(
-                "{name}: it is derived; `dform why '{pattern}'` explains it\n"
-            )),
-        }
-        return Ok(redact.text(&out));
+        return Ok(redact.text(&format!("{name}: it is derived\n")));
     }
     // An attribute of a resource the program does not want: the resource.
     if atom.pred == "attr"
@@ -110,6 +90,21 @@ pub fn why_not(
     }
     w.explain(&atom, "", 0, &mut BTreeSet::new(), &mut out)?;
     Ok(redact.text(&out))
+}
+
+/// What the resource of fact `a` (its `want`, or an attribute of it)
+/// waits on before a tick plans it: its provider's settings (`waits`,
+/// R-110), or a deployment it reads that has not been applied (R-121);
+/// as `later` names it.
+pub fn waiting(
+    a: &Atom,
+    res: &EvalResult,
+    waits: &dyn Fn(&str) -> Option<String>,
+) -> Option<String> {
+    match (a.pred.as_str(), a.args.first()) {
+        ("want" | "attr", Some(Term::Val(Value::Str(t)))) => waits(t).or_else(|| unapplied(a, res)),
+        _ => None,
+    }
 }
 
 /// Why the program derives no resource `typ` `name`, on one line (R-120):
@@ -144,9 +139,25 @@ pub fn reason(typ: &str, name: &str, res: &EvalResult, redact: &Redactor) -> Opt
     Some(redact.text(line))
 }
 
+/// The edit distance between `a` and `b`, by characters (Levenshtein).
+pub fn edits(a: &str, b: &str) -> usize {
+    let b: Vec<char> = b.chars().collect();
+    let mut row: Vec<usize> = (0..=b.len()).collect();
+    for (i, ca) in a.chars().enumerate() {
+        let mut prev = row[0];
+        row[0] = i + 1;
+        for (j, cb) in b.iter().enumerate() {
+            let cur = row[j + 1];
+            row[j + 1] = (prev + usize::from(ca != *cb)).min(row[j] + 1).min(cur + 1);
+            prev = cur;
+        }
+    }
+    row[b.len()]
+}
+
 /// The deployments not applied yet (R-121) whose outputs the attributes
 /// of the resource `atom` names hold, as `later` names them: `stack
-/// platform[env=lab], which has not been applied`.
+/// platform[env=lab]`.
 fn unapplied(atom: &Atom, res: &EvalResult) -> Option<String> {
     let [t, a, ..] = atom.args.as_slice() else {
         return None;
@@ -167,13 +178,7 @@ fn unapplied(atom: &Atom, res: &EvalResult) -> Option<String> {
         }
     }
     let on: Vec<String> = on.into_iter().map(|n| format!("stack {n}")).collect();
-    (!on.is_empty()).then(|| {
-        format!(
-            "{}, which {} not been applied",
-            on.join(", "),
-            if on.len() == 1 { "has" } else { "have" }
-        )
-    })
+    (!on.is_empty()).then(|| on.join(", "))
 }
 
 struct WhyNot<'a> {
@@ -233,6 +238,12 @@ impl WhyNot<'_> {
             out.push_str(&format!("{pad}{line}\n"));
             if depth == 0 && !matches!(atom.pred.as_str(), "want" | "attr") {
                 self.nearest(atom, atom, &format!("{pad}  "), out);
+            }
+            if depth == 0
+                && atom.pred == "want"
+                && let Some(near) = self.nearest_address(atom)
+            {
+                out.push_str(&format!("{pad}  nearest: {near}\n"));
             }
             return Ok(());
         }
@@ -348,6 +359,22 @@ impl WhyNot<'_> {
             .iter()
             .filter(|f| f.pred == pred && f.args.len() == arity)
             .collect()
+    }
+
+    /// The address the program derives whose printed name is nearest
+    /// `want`'s (a typo, a type's namespace), when one is near: within a
+    /// third of its length in edits.
+    fn nearest_address(&self, want: &Atom) -> Option<String> {
+        let name = self.name(want);
+        self.res
+            .facts
+            .iter()
+            .filter(|f| f.pred == "want")
+            .map(|f| self.name(f))
+            .map(|n| (edits(&name, &n), n))
+            .filter(|(d, _)| *d > 0 && *d <= name.chars().count() / 3)
+            .min()
+            .map(|(_, n)| n)
     }
 
     /// `nearest: ROW, ..`: the rows of `bound`'s relation that differ

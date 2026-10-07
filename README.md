@@ -365,11 +365,11 @@ that won each changed attribute, and, since the last apply, what moved
 to cause it: the row that appeared, the input that changed, the guard
 that stopped holding. A delete says what used to derive the resource
 and which of those facts is gone. For the thing that is not there,
-`why-not` names the rule that could have produced it and the first
+`why` names the rule that could have produced it and the first
 condition that failed, with the nearest rows that would have passed:
 
 ```
-$ dform why-not 'aws.subnet["private-us-east-1c"]'
+$ dform why 'aws.subnet["private-us-east-1c"]'
 aws.subnet private-us-east-1c: no rule derives it
   shop.df:8  resource aws.subnet "private-${availability_zone}" { .. } where aws.availability_zone("available", availability_zone, n)
     aws.availability_zone("available", "us-east-1c", n): no row
@@ -377,8 +377,8 @@ aws.subnet private-us-east-1c: no rule derives it
 ```
 
 The limit is stated rather than papered over: `why` explains what the
-program derived, `why-not` explains what one rule failed to derive, and
-neither invents a reason for something no rule mentions. Where a value
+program derived, and what one rule failed to derive, and invents no
+reason for something no rule mentions. Where a value
 came from is one question away, each expression it passed through to
 the literal at the end, and what it beat:
 
@@ -876,9 +876,9 @@ inputs moved. `apply --approval` verifies a signed digest offline
 against the stack's trust root. `dform verify plan.json` recomputes the
 plan from the file alone, with no cloud access.
 
-**why, why-not, query, diff.** `dform why ADDR` explains a resource;
-`dform why 'deny(m)'` explains a refusal; `dform why-not ADDR` explains
-an absence, and `plan` warns when a change would delete everything a
+**why, query, diff.** `dform why ADDR` explains a resource, or its
+absence; `dform why 'deny "MESSAGE"'` says whether a deny holds and
+why. `plan` warns when a change would delete everything a
 rule derived at the last apply, or empty a relation that had rows then,
 naming the rule and the row that went, so a broken join and a deliberate
 delete do not look alike; `apply` asks for that on its own, also under
@@ -1065,7 +1065,7 @@ without a digest, no public database) as denies.
 |a resource per value only apply knows        |`-target`, then a second run by hand       |listed under `later`; apply runs a second tick             |
 |a tag on everything, overridable per resource|a variable threaded through every module   |`set r.tags.team = "platform" @default where r in resource`|
 |"why does this exist?"                       |read the source, guess                     |every plan line says; `dform why ADDR` for each value      |
-|"why does this not exist?"                   |read the source, guess harder              |`dform why-not ADDR` names the condition that failed       |
+|"why does this not exist?"                   |read the source, guess harder              |`dform why ADDR` names the condition that failed           |
 |"how many rounds will this apply take?"      |find out during the apply                  |the plan is grouped by tick, with what each tick waits on  |
 |rules about the change set itself            |plan JSON through an external policy engine|the plan is a table the program's own denies read          |
 |routes from reachability                     |write them out, keep them in sync          |a recursive rule                                           |

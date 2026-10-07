@@ -55,10 +55,13 @@ fn hover_shows_every_contribution_and_why_prints_the_derivation() {
         "{text}"
     );
     assert!(text.contains("baseline.df:10:1, use baseline"), "{text}");
-    // The derivation in the source form, as `dform why` prints it.
+    // The derivation as `dform why` prints it (R-150: the same entry):
+    // each value's chain.
     assert!(
         text.contains(
-            "  merged from 2 contributions\n  ├─ {component: \"network\", env: \"staging\"}\n"
+            "net.vpc main.vpc.tags = { component: \"network\", env: \"staging\" }\n  \
+             = { env, component: \"network\" }        network.df:19\n\
+             net.vpc main.vpc.tags.team = \"platform\"  baseline.df:10\n"
         ),
         "{text}"
     );
@@ -71,7 +74,8 @@ fn hover_shows_every_contribution_and_why_prints_the_derivation() {
     let why = why.as_str().unwrap();
     assert!(
         why.starts_with(
-            "net.vpc main.vpc.tags = {component: \"network\", env: \"staging\", team: \"platform\"}\n  merged from 2 contributions\n"
+            "net.vpc main.vpc.tags = { component: \"network\", env: \"staging\" }\n  \
+             = { env, component: \"network\" }        network.df:19\n"
         ),
         "{why}"
     );
@@ -1924,7 +1928,7 @@ fn hover_gives_a_reads_value_and_its_provenance() {
         "**input cidrs** = `{ main: \"10.50.0.0/16\", peer: \"10.60.0.0/16\" }`",
         "winning rank: default",
         "- rank default: `{main: \"10.50.0.0/16\"}` by stacks/dform.df:10:15",
-        "input cidrs = {main: \"10.50.0.0/16\", peer: \"10.60.0.0/16\"}",
+        "input cidrs.main = \"10.50.0.0/16\"  stacks/dform.df:10\n",
     ] {
         assert!(text.contains(want), "{want} in {text}");
     }

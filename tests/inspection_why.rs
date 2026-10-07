@@ -296,13 +296,11 @@ fn why_prints_one_alternative_unless_all() {
         "{all}"
     );
 
-    let none = s
-        .run(&["dev", "--world", "w.json", "why", "s(7)", "p.df"])
-        .failure();
+    // What is not derived: why not (R-150).
+    let none = why(&["s(7)"]);
     assert!(
-        none.stderr.contains("no fact matches s(7)"),
-        "{}",
-        none.stderr
+        none.starts_with("s(7): no rule derives it\n  p.df:6  s(x) where r(x), not t(x)\n"),
+        "{none}"
     );
 }
 

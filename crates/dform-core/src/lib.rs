@@ -55,5 +55,6 @@ pub mod types;
 pub mod value;
 pub mod wal;
 pub mod watch;
+pub mod why;
 pub mod whynot;
 pub mod zset;

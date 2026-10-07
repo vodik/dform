@@ -165,6 +165,8 @@ pub struct Evaluated {
     pub redact: Redactor,
     /// The collision lint's findings over the program's own evaluation.
     pub collisions: Vec<Collision>,
+    /// The stack's keys: a value's chain ends at one (`why`).
+    pub keys: BTreeSet<String>,
     /// The circuit read upward: per fact node, the fact nodes derived
     /// from it; per rule id, the fact nodes it derived.
     index: OnceCell<Index>,
@@ -467,6 +469,13 @@ fn run_noted(
         program,
         redact: explained.redact,
         collisions: std::mem::take(&mut ev.collisions),
+        keys: ev
+            .located
+            .instance
+            .key
+            .iter()
+            .map(|(k, _)| k.clone())
+            .collect(),
         index: OnceCell::new(),
     })
 }

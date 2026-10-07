@@ -842,7 +842,7 @@ pub fn relative_place(top: &std::path::Path, at: &str) -> Option<String> {
 #[derive(Debug, Clone, PartialEq)]
 pub struct NotPlanned {
     pub addr: Address,
-    /// The deepest condition `why-not` names (`input one.namespace is not
+    /// The deepest condition `why` names (`input one.namespace is not
     /// set`).
     pub reason: String,
     /// Its report's rule (`r12`), whose place is the statement's.

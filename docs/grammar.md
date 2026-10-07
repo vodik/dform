@@ -1010,7 +1010,7 @@ its type declares (R-120). A resource statement whose own clause holds
 and that derives no resource (an input of its copy with no value, a
 `let` with no row, an attribute nothing sets) is never silently absent:
 the plan lists it under `not planned` with why, the deepest condition
-`why-not` names, on one line (`input one.namespace is not set`); a
+`why` names, on one line (`input one.namespace is not set`); a
 statement held back by its own clause is quiet. `why NAME.k` explains a
 copy's output as it does an input or a `let`.
 
@@ -1129,7 +1129,7 @@ served from what the deployment published rather than evaluated (R-73).
 An output not published yet is `?platform[env=e].out`. A deployment that
 has not been applied has published nothing: what reads it waits on it,
 listed under `later` as `waits on  stack platform[env=e]` with its
-attributes as written, and `why-not` says it has not been applied
+attributes as written, and `why` says it waits on it
 (R-121); a deployment that has published and lacks the output finds no
 row, as any absent output. Such a read is what
 `apply X` applies first (R-30), a key the target does not give at its

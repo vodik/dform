@@ -202,17 +202,12 @@ fn up(e: &Evaluated, n: NodeId) -> Vec<NodeId> {
     }
 }
 
-/// `dform why`'s text for each fact node, one after another: the source
-/// form, as the command prints it.
+/// `dform why`'s text for each fact node, one after another: the same
+/// entry (`why::fact_text`), a value's chain, else its derivation.
 pub fn why_text(e: &Evaluated, facts: &[NodeId]) -> String {
-    let printer = tree::Printer {
-        circuit: &e.res.circuit,
-        redact: &e.redact,
-        all: false,
-    };
     facts
         .iter()
-        .map(|n| printer.source_tree(&e.res.rules, *n, None))
+        .map(|n| dform_core::why::fact_text(&e.res, &e.redact, *n, &e.keys))
         .collect::<Vec<_>>()
         .join("\n")
 }

@@ -236,7 +236,7 @@ too):
 
 | Commands | |
 |---|---|
-| `plan`, `apply`, `destroy`, `why`, `why-not`, `query`, `diff`, `test`, `fmt`, `log` | on a target |
+| `plan`, `apply`, `destroy`, `why`, `query`, `diff`, `test`, `fmt`, `log` | on a target |
 | `output TARGET [NAME]` | a deployment's outputs |
 | `stack list`, `stack rekey`, `stack unlock` | the project's stacks |
 | `state show`, `state taint`, `state forget-host`, `state mv` | a deployment's state |
@@ -1016,7 +1016,7 @@ alone, `main.vpc`. The full address is the source term that names it,
 `T["A"]` (`A` the path, a copy's scope included: `n.x`, `edge.left.vpc`), an
 attribute of it `.path` after it: the plan file, `--json`, state, `plan
 -q`'s apply order, `state show` and `dev graph` print it. Errors,
-`why-not`, `apply`'s progress lines and the audit log's retries say the
+`why`, `apply`'s progress lines and the audit log's retries say the
 printed one (`apply net.subnet a: ..`, `waiting on db.postgres
 d.endpoint`), and a value dform's own extern has not answered yet is its
 call (`ssh.read("10.0.0.5", "ubuntu", "/etc/k3s.yaml")`). Every
@@ -1135,7 +1135,7 @@ made; the plan itself says what it is.
   to a document by its row (`with d = vendor/crds.yml:412  (24.0 KB)`, as
   `why` does); `-vv` says its leaves; an update says the leaves that
   change; `--json` and the plan file keep every leaf. The full address,
-  `T["A"]`, is the plan file's, `--json`'s and state's; `why`, `query` and `why-not`
+  `T["A"]`, is the plan file's, `--json`'s and state's; `why` and `query`
   take it or the printed one (`why 'ovh.ssh_key k3s.admin'`, or its path
   alone, `why k3s.admin`, `why k3s.server.public_ip`).
 - `tick 1  K changes`: what this apply makes first. A change
@@ -1172,7 +1172,7 @@ made; the plan itself says what it is.
   makes for it, `waits on  k8s.custom_resource_definition
   "middlewares.traefik.io"` (R-126); one reading a deployment not
   applied yet under `waits on  stack platform[env=lab]`. The summary
-  counts them, `, N later`, and `why-not` names what such a resource
+  counts them, `, N later`, and `why` names what such a resource
   waits on. A type whose namespace names no provider is the compile
   error it always was.
 - `warning` (R-80): what the plan empties since the last apply: a
@@ -1976,16 +1976,17 @@ cargo run -- -C examples/demo why --tree 'attr(net.vpc, "main.vpc", "tags.team",
 #   └─ ... 1 other contribution (--all)
 ```
 
-`dform why-not PATTERN` (R-80) explains an absence: a resource address
-(`T["A"]`), an attribute (`T["A"].path`, an attribute of a resource not
-derived explains the resource) or a relation's row with constants
-(`zone("us-east-1c", n)`). It finds the rules whose head could produce
+What the program does not derive, `why` explains why not (R-80, R-150:
+there is one `why`, and what the pattern names decides): a resource
+address (`T["A"]`), an attribute (`T["A"].path`, an attribute of a
+resource not derived explains the resource) or a relation's row with
+constants (`zone("us-east-1c", n)`). It finds the rules whose head could produce
 it, by type and by the name's shape: an interpolated name is read
 backwards (`"private-${z}"` against `"private-us-east-1c"` binds `z`), a
 copy's scope is stripped, an attribute is matched by its path or the
 attribute it is under. With what the address fixes bound, each such
 rule's body is evaluated left to right against the final fact store,
-and for each rule `why-not` prints its statement at `file:line` and the
+and for each rule `why` prints its statement at `file:line` and the
 first condition no row satisfies, with the bindings substituted:
 a relation's literal says `no row` and `nearest:` up to three rows of the
 same relation that differ in the fewest columns the literal fixes (the
@@ -1996,12 +1997,21 @@ that exists; a row a rule of the program derives (a copy's guard,
 `resource network.vpc peer: not made`, a relation of its own) is
 followed one level in, up to three, with the rule that did not derive it.
 What no rule mentions gets one line and nothing invented:
-`no rule derives aws.subnet x: no resource aws.subnet is named like
-it`; what is derived says so and points at `why`. It names each address
-as the plan prints it (R-111).
+`no rule derives aws.vpc main.vpc: no resource aws.vpc is named like
+it`, and under it the address the program derives that is nearest in
+spelling, when one is within a third of its length in edits, `nearest:
+net.vpc main.vpc`. It names each address as the plan prints it (R-111).
+A resource `later` holds (its provider's settings not known yet, a
+deployment it reads not applied) is derived: its chain, then what it
+waits on, as the plan's `later` says it, `later  waits on  provider k8s
+kubeconfig = raw`. A deny is named by its message, `why 'deny "prod db
+must be multi_az"'`: `holds` and each firing's derivation, or `does not
+hold` and, as for any row, which clause of it failed on what; a message
+no deny says, the nearest one that does. (`why-not`, its own command
+before, is gone.)
 
 ```bash
-cargo run -- -C examples/demo why-not 'net.vpc["peer.vpc"]' dform env=dev
+cargo run -- -C examples/demo why 'net.vpc["peer.vpc"]' dform env=dev
 # net.vpc peer.vpc: no rule derives it
 #   network.df:19  resource net.vpc vpc { .. }   (resource network.vpc peer)
 #     resource network.vpc peer: not made

@@ -84,18 +84,14 @@ fn a_providers_resources_wait_on_its_settings_under_later() {
 }
 
 #[test]
-fn why_not_names_the_provider_a_resource_waits_on() {
+fn why_names_the_provider_a_resource_waits_on() {
     let s = project();
-    let r = dform(
-        &s,
-        &["why-not", "k8s.storage_class[\"traefik.block\"]", "p"],
-    )
-    .success();
+    let r = dform(&s, &["why", "k8s.storage_class[\"traefik.block\"]", "p"]).success();
     assert!(
-        r.stdout.starts_with(
-            "k8s.storage_class traefik.block: it is derived, and waits on provider k8s  \
-             kubeconfig = raw: the plan lists it under `later`"
-        ),
+        r.stdout
+            .starts_with("k8s.storage_class traefik.block  traefik.df:3")
+            && r.stdout
+                .ends_with("\nlater  waits on  provider k8s  kubeconfig = raw\n"),
         "{}",
         r.stdout
     );

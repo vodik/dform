@@ -1,7 +1,7 @@
 //! A read of another stack's output before that deployment is applied
 //! (`platform[env].ingress_ip`) waits on it (R-121): the reader lists under
 //! `later` as `waits on  stack platform[env=lab]`, its attributes as
-//! written, and `why-not` says the deployment has not been applied. Once it
+//! written, and `why` says the deployment has not been applied. Once it
 //! is, the reader plans with the value; a deployment that has published
 //! and lacks the output is no wait.
 
@@ -48,10 +48,10 @@ fn a_read_of_a_deployment_not_applied_waits_on_it() {
         "{}",
         r.stdout
     );
-    let r = s.run(&["why-not", "net.vpc rec", "apps"]).success();
+    let r = s.run(&["why", "net.vpc rec", "apps"]).success();
     assert!(
         r.stdout
-            .contains("waits on stack platform[env=lab], which has not been applied"),
+            .ends_with("\nlater  waits on  stack platform[env=lab]\n"),
         "{}",
         r.stdout
     );
