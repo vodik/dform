@@ -185,41 +185,43 @@ pub struct Opened {
 
 /// The host's interfaces as calls: `dform:host`'s `secrets`, `http`,
 /// `ssh`, `git` and `log`. dform serves them (`dform-host`); a provider
-/// built with the SDK calls them over its transport.
-pub trait Calls: Send {
+/// built with the SDK calls them over its transport. A provider's
+/// handlers run at once, so its calls do: each takes `&self`, and an
+/// implementation holds no lock across a call's I/O (R-142).
+pub trait Calls: Send + Sync {
     /// `secrets.open`: the credential `name` (`KIND:NAME`), refused unless
     /// granted.
-    fn open(&mut self, name: &str) -> Result<Opened, Error>;
+    fn open(&self, name: &str) -> Result<Opened, Error>;
     /// `http.send`, with the credential `auth` applied and through the
     /// tunnel `via`.
     fn send(
-        &mut self,
+        &self,
         req: HttpRequest,
         auth: Option<Handle>,
         via: Option<Handle>,
     ) -> Result<HttpResponse, Error>;
     /// `ssh.exec`.
-    fn exec(&mut self, on: &Target, argv: &[String], stdin: Option<&[u8]>) -> Result<Run, Failure>;
+    fn exec(&self, on: &Target, argv: &[String], stdin: Option<&[u8]>) -> Result<Run, Failure>;
     /// `ssh.read`.
-    fn read(&mut self, on: &Target, path: &str) -> Result<Vec<u8>, Failure>;
+    fn read(&self, on: &Target, path: &str) -> Result<Vec<u8>, Failure>;
     /// `ssh.write`.
-    fn write(&mut self, on: &Target, path: &str, data: &[u8], mode: u32) -> Result<(), Error>;
+    fn write(&self, on: &Target, path: &str, data: &[u8], mode: u32) -> Result<(), Error>;
     /// `ssh.forward`: a tunnel.
-    fn forward(&mut self, via: &Target, to: &Endpoint) -> Result<Handle, Error>;
+    fn forward(&self, via: &Target, to: &Endpoint) -> Result<Handle, Error>;
     /// Where the tunnel `h` leads.
     fn tunnel(&self, h: Handle) -> Option<Endpoint>;
     /// `git.read`.
-    fn git_read(&mut self, repo: &str, rev: &str, path: &str) -> Result<Vec<u8>, Error>;
+    fn git_read(&self, repo: &str, rev: &str, path: &str) -> Result<Vec<u8>, Error>;
     /// `git.commit`: the new commit's id.
     fn git_commit(
-        &mut self,
+        &self,
         repo: &str,
         branch: &str,
         files: Vec<GitFile>,
         message: &str,
     ) -> Result<String, Error>;
     /// `log.log`.
-    fn log(&mut self, level: Level, message: &str);
+    fn log(&self, level: Level, message: &str);
 }
 
 /// The host's own interfaces, by the names a manifest and a grant use.

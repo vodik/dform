@@ -3,7 +3,7 @@
 //! names in the provider's environment (`DFORM_HOST`). It runs on a thread
 //! of its own, so a provider calling back while dform waits on its answer
 //! is served; each call runs on the blocking pool (the host's HTTP, git and
-//! SSH clients block).
+//! SSH clients block), at once with the provider's others (R-142).
 
 use crate::services::Services;
 use anyhow::{Context, Result};
@@ -11,22 +11,22 @@ use dform_core::plugin::host::Calls;
 use dform_grpc::host as conv;
 use dform_grpc::host_pb as h;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use tonic::{Request, Response, Status};
 
 /// The environment variable naming where the host listens.
 pub const ENV: &str = "DFORM_HOST";
 
-struct Service(Arc<Mutex<Services>>);
+struct Service(Arc<Services>);
 
 impl Service {
     #[allow(clippy::result_large_err)] // tonic's own error type
     async fn with<T: Send + 'static>(
         &self,
-        f: impl FnOnce(&mut Services) -> T + Send + 'static,
+        f: impl FnOnce(&Services) -> T + Send + 'static,
     ) -> Result<Response<T>, Status> {
         let s = self.0.clone();
-        tokio::task::spawn_blocking(move || f(&mut s.lock().unwrap_or_else(|e| e.into_inner())))
+        tokio::task::spawn_blocking(move || f(&s))
             .await
             .map(Response::new)
             .map_err(|e| Status::internal(format!("the host call failed: {e}")))
@@ -176,7 +176,7 @@ pub fn serve(services: Services) -> Result<Served> {
     let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
     let (ready, listening) = std::sync::mpsc::channel::<std::io::Result<()>>();
     let path = socket.clone();
-    let service = Service(Arc::new(Mutex::new(services)));
+    let service = Service(Arc::new(services));
     let thread = std::thread::Builder::new()
         .name("dform-host".into())
         .spawn(move || {

@@ -1,12 +1,13 @@
-//! The server adapter: a provider that answers one call at a time (a
+//! The server adapter: a provider that answers a call at a time (a
 //! `Handler`, such as the mock) served over gRPC (`transport::serve`).
 //! A refusal is `FAILED_PRECONDITION`, a call that may have taken effect
 //! `DEADLINE_EXCEEDED`, as the client classifies them back.
 //!
-//! An Apply runs on tokio's blocking pool, so what it says while it runs
-//! (its progress events, R-130) streams as it says it, and a slow one
-//! holds up no other call; its stream ends with its result. The other
-//! calls are answered where they arrive.
+//! Every call runs on tokio's blocking pool, so the calls dform sends at
+//! once (a refresh's Reads, a plan's Plans, `--parallel`'s Applies) run at
+//! once and a slow one holds up no other (R-142); an Apply's progress
+//! events (R-130) stream as it says them, and its stream ends with its
+//! result.
 
 use crate::pb;
 use dform_core::plugin::backend::{self, Call, CallError, Handler, Reply};
@@ -85,14 +86,22 @@ impl<H: Handler + Send + Sync + 'static> Adapter<H> {
         }
     }
 
+    /// `call` on the blocking pool: the transport's runtime is a single
+    /// thread, and a handler blocks (on its own I/O, on the host), so the
+    /// calls dform sends at once run at once.
     #[allow(clippy::result_large_err)] // tonic's own error type
-    fn call<R>(&self, call: impl Into<Call>) -> Result<Response<R>, Status>
+    async fn call<R>(&self, call: impl Into<Call>) -> Result<Response<R>, Status>
     where
-        R: TryFrom<Reply, Error = Reply>,
+        R: TryFrom<Reply, Error = Reply> + Send + 'static,
     {
         let call = call.into();
         let method = call.method();
-        answer(method, self.handler.handle(call, &backend::silent)).map(Response::new)
+        let handler = self.handler.clone();
+        let answered = move || answer(method, handler.handle(call, &backend::silent));
+        tokio::task::spawn_blocking(answered)
+            .await
+            .map_err(|e| Status::internal(format!("the {method} call failed: {e}")))?
+            .map(Response::new)
     }
 }
 
@@ -101,15 +110,15 @@ type Reply_<T> = Result<Response<T>, Status>;
 #[tonic::async_trait]
 impl<H: Handler + Send + Sync + 'static> pb::provider_server::Provider for Adapter<H> {
     async fn handshake(&self, req: Request<pb::HandshakeRequest>) -> Reply_<pb::HandshakeResponse> {
-        self.call(req.into_inner())
+        self.call(req.into_inner()).await
     }
 
     async fn configure(&self, req: Request<pb::ConfigureRequest>) -> Reply_<pb::ConfigureResponse> {
-        self.call(req.into_inner())
+        self.call(req.into_inner()).await
     }
 
     async fn schema(&self, req: Request<pb::SchemaRequest>) -> Reply_<pb::SchemaResponse> {
-        self.call(req.into_inner())
+        self.call(req.into_inner()).await
     }
 
     type QueryStream = tonic::codegen::tokio_stream::Iter<
@@ -117,17 +126,17 @@ impl<H: Handler + Send + Sync + 'static> pb::provider_server::Provider for Adapt
     >;
 
     async fn query(&self, req: Request<pb::QueryRequest>) -> Reply_<Self::QueryStream> {
-        let rows: Response<Vec<pb::Row>> = self.call(req.into_inner())?;
+        let rows: Response<Vec<pb::Row>> = self.call(req.into_inner()).await?;
         let rows: Vec<_> = rows.into_inner().into_iter().map(Ok).collect();
         Ok(Response::new(tonic::codegen::tokio_stream::iter(rows)))
     }
 
     async fn read(&self, req: Request<pb::ReadRequest>) -> Reply_<pb::ReadResponse> {
-        self.call(req.into_inner())
+        self.call(req.into_inner()).await
     }
 
     async fn plan(&self, req: Request<pb::PlanRequest>) -> Reply_<pb::PlanResponse> {
-        self.call(req.into_inner())
+        self.call(req.into_inner()).await
     }
 
     type ApplyStream = ApplyStream;
@@ -141,11 +150,11 @@ impl<H: Handler + Send + Sync + 'static> pb::provider_server::Provider for Adapt
     }
 
     async fn import(&self, req: Request<pb::ImportRequest>) -> Reply_<pb::ImportResponse> {
-        self.call(req.into_inner())
+        self.call(req.into_inner()).await
     }
 
     async fn reveal(&self, req: Request<pb::RevealRequest>) -> Reply_<pb::RevealResponse> {
-        self.call(req.into_inner())
+        self.call(req.into_inner()).await
     }
 }
 

@@ -447,3 +447,44 @@ pub fn controller_log(stdout: &str) -> Vec<String> {
 pub fn repo() -> &'static Path {
     Path::new(env!("CARGO_MANIFEST_DIR"))
 }
+
+/// An HTTP server on the loopback that answers a request only once
+/// another is open at the same time: `200 pair` to both, or `503 alone`
+/// to one that waited `budget` with none beside it. Two requests sent at
+/// once both succeed only if nothing between the sender and the server
+/// serializes them (R-142).
+pub fn answers_in_pairs(budget: std::time::Duration) -> std::net::SocketAddr {
+    use std::io::{BufRead, BufReader, Write};
+    use std::sync::{Arc, Condvar, Mutex};
+    let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = l.local_addr().unwrap();
+    let open = Arc::new((Mutex::new(0usize), Condvar::new()));
+    std::thread::spawn(move || {
+        for s in l.incoming().flatten() {
+            let open = open.clone();
+            std::thread::spawn(move || {
+                let mut r = BufReader::new(s.try_clone().unwrap());
+                loop {
+                    let mut line = String::new();
+                    if r.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                        break;
+                    }
+                }
+                let (n, cv) = &*open;
+                let mut n = n.lock().unwrap();
+                *n += 1;
+                cv.notify_all();
+                let (n, _) = cv.wait_timeout_while(n, budget, |n| *n < 2).unwrap();
+                let body = if *n >= 2 { "200 pair" } else { "503 alone" };
+                drop(n);
+                let mut s = s;
+                let _ = write!(
+                    s,
+                    "HTTP/1.1 {body}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+            });
+        }
+    });
+    addr
+}

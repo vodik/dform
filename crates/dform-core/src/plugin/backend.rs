@@ -15,8 +15,8 @@
 //! spawned executable over gRPC: the CLI's), and the direct and wire
 //! backends ([`super::queue`], a provider linked in, the second encoding
 //! and decoding every message through prost). A provider that answers
-//! calls one at a time implements [`Handler`]; the queue and the gRPC
-//! server adapter serve one.
+//! each call as a function of it implements [`Handler`]; the queue and
+//! the gRPC server adapter serve one.
 
 use super::pb;
 
@@ -187,8 +187,9 @@ pub trait Provider {
     }
 }
 
-/// A provider that answers one call at a time: what the direct and wire
-/// backends link in, and what the gRPC server adapter serves.
+/// A provider that answers each call as a function of it: what the direct
+/// and wire backends link in, and what the gRPC server adapter serves,
+/// which calls `handle` from several threads at once (R-142).
 pub trait Handler {
     /// Answer `call`, saying how it goes on `progress` while it runs.
     fn handle(&self, call: Call, progress: Progress) -> Result<Reply, CallError>;

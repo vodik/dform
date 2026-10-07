@@ -1189,6 +1189,7 @@ dependencies = [
  "serde_json",
  "tokio",
  "tokio-stream",
+ "tonic",
  "tree-sitter",
  "tree-sitter-dform",
  "wat",

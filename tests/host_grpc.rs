@@ -5,6 +5,8 @@
 //! granted is refused naming the provider and the credential; a failure's
 //! class and `not yet` cross as themselves.
 
+mod common;
+
 use dform::plugin::credentials::{Secret, provide};
 use dform::plugin::host::{
     Calls, Class, Endpoint, Error, Failure, Grants, HttpRequest, Run, Target,
@@ -31,7 +33,7 @@ fn client(services: Services) -> (dform_host::grpc::Served, dform_sdk::native::G
 
 #[test]
 fn a_credential_not_granted_is_refused_naming_both() {
-    let (_h, mut c) = client(Services::new(grants(&["kubeconfig:prod"])));
+    let (_h, c) = client(Services::new(grants(&["kubeconfig:prod"])));
     let e = c.open("kubeconfig:staging").unwrap_err();
     assert_eq!(e.class, Class::Final);
     assert!(
@@ -86,7 +88,7 @@ fn a_granted_credential_is_applied_by_the_host() {
         "bearer:host-grpc-test",
         Secret::new(b"t0ken-value".to_vec()),
     );
-    let (_h, mut c) = client(Services::new(grants(&["bearer:host-grpc-test"])));
+    let (_h, c) = client(Services::new(grants(&["bearer:host-grpc-test"])));
     let opened = c.open("bearer:host-grpc-test").unwrap();
     assert!(!format!("{opened:?}").contains("t0ken"));
     let (addr, t) = echo_auth();
@@ -110,16 +112,16 @@ fn a_granted_credential_is_applied_by_the_host() {
 struct Booting;
 
 impl Ssh for Booting {
-    fn exec(&mut self, on: &Target, _: &[String], _: Option<&[u8]>) -> Result<Run, Failure> {
+    fn exec(&self, on: &Target, _: &[String], _: Option<&[u8]>) -> Result<Run, Failure> {
         Err(Failure::NotYet(format!("{} is booting", on.host)))
     }
-    fn read(&mut self, _: &Target, _: &str) -> Result<Vec<u8>, Failure> {
+    fn read(&self, _: &Target, _: &str) -> Result<Vec<u8>, Failure> {
         Err(Error::retryable("connection reset").into())
     }
-    fn write(&mut self, _: &Target, _: &str, _: &[u8], _: u32) -> Result<(), Error> {
+    fn write(&self, _: &Target, _: &str, _: &[u8], _: u32) -> Result<(), Error> {
         Err(Error::maybe_applied("timed out after sending"))
     }
-    fn forward(&mut self, _: &Target, _: &Endpoint) -> Result<SocketAddr, Error> {
+    fn forward(&self, _: &Target, _: &Endpoint) -> Result<SocketAddr, Error> {
         Err(Error::fatal("no route"))
     }
 }
@@ -128,7 +130,7 @@ impl Ssh for Booting {
 /// wait and retries read them).
 #[test]
 fn failures_cross_with_their_class() {
-    let (_h, mut c) = client(Services::new(grants(&[])).with_ssh(Box::new(Booting)));
+    let (_h, c) = client(Services::new(grants(&[])).with_ssh(Box::new(Booting)));
     let on = Target {
         host: "node1".into(),
         user: "root".into(),
@@ -156,4 +158,39 @@ fn failures_cross_with_their_class() {
         )
         .unwrap_err();
     assert_eq!(e, Error::fatal("no route"));
+}
+
+/// Two calls of one provider to its host run at once: neither its client
+/// nor the host holds a lock across a call's I/O (R-142). The server answers only once both
+/// requests are open; before, the second waited for the first, which
+/// waited for the second, and was answered `503 alone`.
+#[test]
+fn a_provider_s_host_calls_run_at_once() {
+    let (_h, c) = client(Services::new(grants(&[])));
+    let c = std::sync::Arc::new(c);
+    let addr = common::answers_in_pairs(std::time::Duration::from_secs(3));
+    let calls: Vec<_> = (0..2)
+        .map(|_| {
+            let c = c.clone();
+            std::thread::spawn(move || {
+                c.send(
+                    HttpRequest {
+                        method: "GET".into(),
+                        url: format!("http://{addr}/"),
+                        ..HttpRequest::default()
+                    },
+                    None,
+                    None,
+                )
+                .unwrap()
+            })
+        })
+        .collect();
+    for c in calls {
+        let r = c.join().unwrap();
+        assert_eq!(
+            (r.status, String::from_utf8_lossy(&r.body).to_string()),
+            (200, "200 pair".to_string())
+        );
+    }
 }

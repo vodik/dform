@@ -109,5 +109,8 @@ dform-provider-ovh = { path = "crates/dform-provider-ovh", features = ["fake"] }
 # calls the host as a native SDK provider does.
 wat = "1"
 dform-sdk = { path = "crates/dform-sdk" }
+# tests/provider_parallel.rs serves an SDK provider's adapter in-process
+# and calls it (the version dform-grpc links).
+tonic = "0.13"
 # tests/apply_confirm.rs answers the confirmation prompt on a pty.
 expectrl = "0.9.0"

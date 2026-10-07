@@ -150,6 +150,11 @@ names it in the provider's environment as `DFORM_HOST`
 unchanged); the SDK dials it. The provider also serves `Manifest`, what
 `uses = [..]` declares. A native provider runs as the user: its grants
 and its manifest are a declaration and a convention, not a sandbox.
+dform sends calls at once (a refresh's Reads, a plan's Plans,
+`--parallel`'s Applies); natively the SDK runs each on a thread of its
+own, and the host calls they make run at once too, so a `Handler` (or a
+`Lifecycle`) is called from several threads at once and keeps any state
+of its own behind its own lock (it is `Send + Sync`).
 
 **Component** (experimental): `cargo build --target wasm32-wasip2
 --features component` makes `target/wasm32-wasip2/debug/<crate>.wasm`, a

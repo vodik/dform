@@ -19,6 +19,7 @@ use dform_core::plugin::host::{
 use dform_core::plugin::pb;
 use std::cell::OnceCell;
 use std::collections::BTreeMap;
+use std::sync::Mutex;
 
 pub mod bindings {
     wit_bindgen::generate!({
@@ -159,9 +160,13 @@ fn target(t: &Target) -> wh::ssh::Target {
 }
 
 /// The host's calls as the component's imports. The credentials and
-/// tunnels it opened are held here, by handle.
+/// tunnels it opened are held here, by handle, locked only to insert or
+/// look one up.
 #[derive(Default)]
-pub struct Imports {
+pub struct Imports(Mutex<Held>);
+
+#[derive(Default)]
+struct Held {
     credentials: BTreeMap<Handle, wh::types::Credential>,
     tunnels: BTreeMap<Handle, (wh::types::Tunnel, Endpoint)>,
     next: Handle,
@@ -169,9 +174,16 @@ pub struct Imports {
 
 // SAFETY: a component is single-threaded; the resource handles are never
 // touched from another thread.
-unsafe impl Send for Imports {}
+unsafe impl Send for Held {}
 
 impl Imports {
+    fn opened(&self) -> std::sync::MutexGuard<'_, Held> {
+        // An insert or a lookup: a panic leaves the maps whole.
+        self.0.lock().unwrap_or_else(|e| e.into_inner())
+    }
+}
+
+impl Held {
     fn handle(&mut self) -> Handle {
         self.next += 1;
         self.next
@@ -179,22 +191,27 @@ impl Imports {
 }
 
 impl Calls for Imports {
-    fn open(&mut self, name: &str) -> Result<Opened, h::Error> {
+    fn open(&self, name: &str) -> Result<Opened, h::Error> {
         let c = wh::secrets::open(name).map_err(error)?;
         let endpoint = c.endpoint();
-        let handle = self.handle();
-        self.credentials.insert(handle, c);
+        let mut o = self.opened();
+        let handle = o.handle();
+        o.credentials.insert(handle, c);
         Ok(Opened { handle, endpoint })
     }
 
     fn send(
-        &mut self,
+        &self,
         req: HttpRequest,
         auth: Option<Handle>,
         via: Option<Handle>,
     ) -> Result<HttpResponse, h::Error> {
-        let auth = auth.and_then(|a| self.credentials.get(&a));
-        let via = via.and_then(|v| self.tunnels.get(&v)).map(|(t, _)| t);
+        // Held across the import, which borrows the resources: a
+        // component is single-threaded, and an instance is not entered
+        // again while it waits on a synchronous import.
+        let o = self.opened();
+        let auth = auth.and_then(|a| o.credentials.get(&a));
+        let via = via.and_then(|v| o.tunnels.get(&v)).map(|(t, _)| t);
         let r = wh::http::send(
             &wh::http::Request {
                 method: req.method,
@@ -216,7 +233,7 @@ impl Calls for Imports {
         })
     }
 
-    fn exec(&mut self, on: &Target, argv: &[String], stdin: Option<&[u8]>) -> Result<Run, Failure> {
+    fn exec(&self, on: &Target, argv: &[String], stdin: Option<&[u8]>) -> Result<Run, Failure> {
         let r = wh::ssh::exec(&target(on), argv, stdin).map_err(failure)?;
         Ok(Run {
             status: r.status,
@@ -225,15 +242,15 @@ impl Calls for Imports {
         })
     }
 
-    fn read(&mut self, on: &Target, path: &str) -> Result<Vec<u8>, Failure> {
+    fn read(&self, on: &Target, path: &str) -> Result<Vec<u8>, Failure> {
         wh::ssh::read(&target(on), path).map_err(failure)
     }
 
-    fn write(&mut self, on: &Target, path: &str, data: &[u8], mode: u32) -> Result<(), h::Error> {
+    fn write(&self, on: &Target, path: &str, data: &[u8], mode: u32) -> Result<(), h::Error> {
         wh::ssh::write(&target(on), path, data, mode).map_err(error)
     }
 
-    fn forward(&mut self, via: &Target, to: &Endpoint) -> Result<Handle, h::Error> {
+    fn forward(&self, via: &Target, to: &Endpoint) -> Result<Handle, h::Error> {
         let t = wh::ssh::forward(
             &target(via),
             &wh::types::Endpoint {
@@ -242,21 +259,22 @@ impl Calls for Imports {
             },
         )
         .map_err(error)?;
-        let handle = self.handle();
-        self.tunnels.insert(handle, (t, to.clone()));
+        let mut o = self.opened();
+        let handle = o.handle();
+        o.tunnels.insert(handle, (t, to.clone()));
         Ok(handle)
     }
 
     fn tunnel(&self, h: Handle) -> Option<Endpoint> {
-        self.tunnels.get(&h).map(|(_, e)| e.clone())
+        self.opened().tunnels.get(&h).map(|(_, e)| e.clone())
     }
 
-    fn git_read(&mut self, repo: &str, rev: &str, path: &str) -> Result<Vec<u8>, h::Error> {
+    fn git_read(&self, repo: &str, rev: &str, path: &str) -> Result<Vec<u8>, h::Error> {
         wh::git::read(repo, rev, path).map_err(error)
     }
 
     fn git_commit(
-        &mut self,
+        &self,
         repo: &str,
         branch: &str,
         files: Vec<GitFile>,
@@ -272,7 +290,7 @@ impl Calls for Imports {
         wh::git::commit(repo, branch, &files, message).map_err(error)
     }
 
-    fn log(&mut self, level: Level, message: &str) {
+    fn log(&self, level: Level, message: &str) {
         use wh::log::Level as L;
         wh::log::log(
             match level {

@@ -16,10 +16,10 @@
 //!   stable; wasip3 is the intent and changes nothing here.
 //!
 //! [`provider!`] is the entry point for either. A provider is a
-//! [`Handler`] (the protocol's calls, one at a time); [`typed::Typed`]
-//! makes one from Rust types: `#[derive(Resource)]` for the schema,
-//! [`typed::Lifecycle`] for read, create, update and delete, plan derived
-//! from the schema. docs/providers.md is the guide.
+//! [`Handler`] (the protocol's calls, answered at once as dform sends
+//! them); [`typed::Typed`] makes one from Rust types: `#[derive(Resource)]`
+//! for the schema, [`typed::Lifecycle`] for read, create, update and
+//! delete, plan derived from the schema. docs/providers.md is the guide.
 
 pub use dform_core::plugin::backend::{CallError, Handler};
 pub use dform_core::plugin::host::{
@@ -38,18 +38,16 @@ pub mod native;
 pub mod component;
 
 use dform_core::plugin::host::{Calls, Handle, HttpRequest};
-use std::sync::{Mutex, MutexGuard, OnceLock};
+use std::sync::OnceLock;
 use std::time::Duration;
 
 /// The host this provider runs under.
-static CALLS: OnceLock<Mutex<Box<dyn Calls>>> = OnceLock::new();
+static CALLS: OnceLock<Box<dyn Calls>> = OnceLock::new();
 
-/// The transport's calls, connected on first use.
-fn calls() -> MutexGuard<'static, Box<dyn Calls>> {
-    CALLS
-        .get_or_init(|| Mutex::new(connect()))
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
+/// The transport's calls, connected on first use. Handlers call it at
+/// once: nothing here is locked across a call.
+fn calls() -> &'static dyn Calls {
+    CALLS.get_or_init(connect).as_ref()
 }
 
 #[cfg(not(target_family = "wasm"))]
@@ -74,39 +72,39 @@ fn connect() -> Box<dyn Calls> {
 pub(crate) struct Absent(pub String);
 
 impl Calls for Absent {
-    fn open(&mut self, _: &str) -> Result<dform_core::plugin::host::Opened, Error> {
+    fn open(&self, _: &str) -> Result<dform_core::plugin::host::Opened, Error> {
         Err(Error::fatal(&self.0))
     }
     fn send(
-        &mut self,
+        &self,
         _: HttpRequest,
         _: Option<Handle>,
         _: Option<Handle>,
     ) -> Result<Response, Error> {
         Err(Error::fatal(&self.0))
     }
-    fn exec(&mut self, _: &Target, _: &[String], _: Option<&[u8]>) -> Result<Run, Failure> {
+    fn exec(&self, _: &Target, _: &[String], _: Option<&[u8]>) -> Result<Run, Failure> {
         Err(Error::fatal(&self.0).into())
     }
-    fn read(&mut self, _: &Target, _: &str) -> Result<Vec<u8>, Failure> {
+    fn read(&self, _: &Target, _: &str) -> Result<Vec<u8>, Failure> {
         Err(Error::fatal(&self.0).into())
     }
-    fn write(&mut self, _: &Target, _: &str, _: &[u8], _: u32) -> Result<(), Error> {
+    fn write(&self, _: &Target, _: &str, _: &[u8], _: u32) -> Result<(), Error> {
         Err(Error::fatal(&self.0))
     }
-    fn forward(&mut self, _: &Target, _: &Endpoint) -> Result<Handle, Error> {
+    fn forward(&self, _: &Target, _: &Endpoint) -> Result<Handle, Error> {
         Err(Error::fatal(&self.0))
     }
     fn tunnel(&self, _: Handle) -> Option<Endpoint> {
         None
     }
-    fn git_read(&mut self, _: &str, _: &str, _: &str) -> Result<Vec<u8>, Error> {
+    fn git_read(&self, _: &str, _: &str, _: &str) -> Result<Vec<u8>, Error> {
         Err(Error::fatal(&self.0))
     }
-    fn git_commit(&mut self, _: &str, _: &str, _: Vec<GitFile>, _: &str) -> Result<String, Error> {
+    fn git_commit(&self, _: &str, _: &str, _: Vec<GitFile>, _: &str) -> Result<String, Error> {
         Err(Error::fatal(&self.0))
     }
-    fn log(&mut self, level: Level, message: &str) {
+    fn log(&self, level: Level, message: &str) {
         eprintln!("{level:?}: {message}");
     }
 }

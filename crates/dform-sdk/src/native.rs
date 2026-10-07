@@ -13,6 +13,7 @@ use dform_grpc::host as conv;
 use dform_grpc::host_pb as h;
 use std::collections::BTreeMap;
 use std::future::Future;
+use std::sync::Mutex;
 use tonic::transport::Channel;
 
 /// What a native provider says it uses (it runs as the user: a
@@ -75,13 +76,14 @@ pub fn connect() -> Box<dyn Calls> {
     }
 }
 
-/// The `Host` service, called from a provider's handler. The handler runs
-/// inside the protocol server's runtime, so each call runs on this
-/// client's own runtime and is waited for from here.
+/// The `Host` service, called from a provider's handlers, at once: each
+/// call runs on this client's own runtime, on a clone of its client, and
+/// is waited for from the handler's thread. Only the tunnels it forwarded
+/// are behind a lock, taken to insert or look one up.
 pub struct Grpc {
     rt: tokio::runtime::Runtime,
     client: h::host_client::HostClient<Channel>,
-    tunnels: BTreeMap<Handle, Endpoint>,
+    tunnels: Mutex<BTreeMap<Handle, Endpoint>>,
 }
 
 impl Grpc {
@@ -98,8 +100,13 @@ impl Grpc {
             client: h::host_client::HostClient::new(channel)
                 .max_decoding_message_size(usize::MAX)
                 .max_encoding_message_size(usize::MAX),
-            tunnels: BTreeMap::new(),
+            tunnels: Mutex::new(BTreeMap::new()),
         })
+    }
+
+    fn tunnels(&self) -> std::sync::MutexGuard<'_, BTreeMap<Handle, Endpoint>> {
+        // An insert or a lookup: a panic leaves the map whole.
+        self.tunnels.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     fn call<T: Send + 'static>(
@@ -140,7 +147,7 @@ macro_rules! rpc {
 }
 
 impl Calls for Grpc {
-    fn open(&mut self, name: &str) -> Result<Opened, Error> {
+    fn open(&self, name: &str) -> Result<Opened, Error> {
         let r = rpc!(self, open, h::OpenRequest { name: name.into() })?;
         conv::to_error(r.failure)?;
         Ok(Opened {
@@ -150,7 +157,7 @@ impl Calls for Grpc {
     }
 
     fn send(
-        &mut self,
+        &self,
         req: HttpRequest,
         auth: Option<Handle>,
         via: Option<Handle>,
@@ -159,7 +166,7 @@ impl Calls for Grpc {
         conv::response(r)
     }
 
-    fn exec(&mut self, on: &Target, argv: &[String], stdin: Option<&[u8]>) -> Result<Run, Failure> {
+    fn exec(&self, on: &Target, argv: &[String], stdin: Option<&[u8]>) -> Result<Run, Failure> {
         let r = rpc!(
             self,
             exec,
@@ -172,7 +179,7 @@ impl Calls for Grpc {
         conv::run(r)
     }
 
-    fn read(&mut self, on: &Target, path: &str) -> Result<Vec<u8>, Failure> {
+    fn read(&self, on: &Target, path: &str) -> Result<Vec<u8>, Failure> {
         let r = rpc!(
             self,
             read_file,
@@ -185,7 +192,7 @@ impl Calls for Grpc {
         Ok(r.data)
     }
 
-    fn write(&mut self, on: &Target, path: &str, data: &[u8], mode: u32) -> Result<(), Error> {
+    fn write(&self, on: &Target, path: &str, data: &[u8], mode: u32) -> Result<(), Error> {
         let r = rpc!(
             self,
             write_file,
@@ -199,7 +206,7 @@ impl Calls for Grpc {
         conv::to_error(r.failure)
     }
 
-    fn forward(&mut self, via: &Target, to: &Endpoint) -> Result<Handle, Error> {
+    fn forward(&self, via: &Target, to: &Endpoint) -> Result<Handle, Error> {
         let r = rpc!(
             self,
             forward,
@@ -210,15 +217,15 @@ impl Calls for Grpc {
             }
         )?;
         conv::to_error(r.failure)?;
-        self.tunnels.insert(r.tunnel, to.clone());
+        self.tunnels().insert(r.tunnel, to.clone());
         Ok(r.tunnel)
     }
 
     fn tunnel(&self, h: Handle) -> Option<Endpoint> {
-        self.tunnels.get(&h).cloned()
+        self.tunnels().get(&h).cloned()
     }
 
-    fn git_read(&mut self, repo: &str, rev: &str, path: &str) -> Result<Vec<u8>, Error> {
+    fn git_read(&self, repo: &str, rev: &str, path: &str) -> Result<Vec<u8>, Error> {
         let r = rpc!(
             self,
             git_read,
@@ -233,7 +240,7 @@ impl Calls for Grpc {
     }
 
     fn git_commit(
-        &mut self,
+        &self,
         repo: &str,
         branch: &str,
         files: Vec<GitFile>,
@@ -253,7 +260,7 @@ impl Calls for Grpc {
         Ok(r.commit)
     }
 
-    fn log(&mut self, level: Level, message: &str) {
+    fn log(&self, level: Level, message: &str) {
         let req = h::LogRequest {
             level: conv::from_level(level),
             message: message.into(),

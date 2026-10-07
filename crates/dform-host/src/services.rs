@@ -10,16 +10,32 @@ use dform_core::plugin::host::{
 };
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
+use std::sync::{Arc, Mutex};
 
-/// One provider's host: its grants, the credentials it opened and the
-/// tunnels it forwarded, by handle.
+/// One provider's host: its grants and clients, which its calls only
+/// read, and the credentials it opened and the tunnels it forwarded, by
+/// handle. Its calls run at once (R-142): the handles are locked only to
+/// insert or look one up, never across a call's I/O.
 pub struct Services {
     grants: Grants,
-    credentials: BTreeMap<Handle, Credential>,
-    tunnels: BTreeMap<Handle, (Endpoint, SocketAddr)>,
-    next: Handle,
+    opened: Mutex<Held>,
     ssh: Box<dyn ssh::Ssh>,
     git: git::Git,
+}
+
+/// What a provider's calls opened, by handle.
+struct Held {
+    credentials: BTreeMap<Handle, Arc<Credential>>,
+    tunnels: BTreeMap<Handle, (Endpoint, SocketAddr)>,
+    next: Handle,
+}
+
+impl Held {
+    fn handle(&mut self) -> Handle {
+        let h = self.next;
+        self.next += 1;
+        h
+    }
 }
 
 impl Services {
@@ -27,9 +43,11 @@ impl Services {
     pub fn new(grants: Grants) -> Services {
         Services {
             grants,
-            credentials: BTreeMap::new(),
-            tunnels: BTreeMap::new(),
-            next: 1,
+            opened: Mutex::new(Held {
+                credentials: BTreeMap::new(),
+                tunnels: BTreeMap::new(),
+                next: 1,
+            }),
             ssh: ssh::client(),
             git: git::Git::cache(),
         }
@@ -51,15 +69,14 @@ impl Services {
         &self.grants
     }
 
-    fn handle(&mut self) -> Handle {
-        let h = self.next;
-        self.next += 1;
-        h
+    fn opened(&self) -> std::sync::MutexGuard<'_, Held> {
+        // Each use is one insert or lookup: a panic leaves the maps whole.
+        self.opened.lock().unwrap_or_else(|e| e.into_inner())
     }
 }
 
 impl Calls for Services {
-    fn open(&mut self, name: &str) -> Result<Opened, Error> {
+    fn open(&self, name: &str) -> Result<Opened, Error> {
         self.grants.credential(name)?;
         let c = credentials::load(name).map_err(|e| {
             Error::fatal(format!(
@@ -68,66 +85,73 @@ impl Calls for Services {
             ))
         })?;
         let endpoint = c.endpoint.clone();
-        let handle = self.handle();
-        self.credentials.insert(handle, c);
+        let mut o = self.opened();
+        let handle = o.handle();
+        o.credentials.insert(handle, Arc::new(c));
         Ok(Opened { handle, endpoint })
     }
 
     fn send(
-        &mut self,
+        &self,
         req: HttpRequest,
         auth: Option<Handle>,
         via: Option<Handle>,
     ) -> Result<HttpResponse, Error> {
-        let cred = match auth {
-            None => None,
-            Some(h) => Some(
-                self.credentials
-                    .get(&h)
-                    .ok_or_else(|| Error::fatal(format!("no credential {h} is open")))?,
-            ),
+        let (cred, via) = {
+            let o = self.opened();
+            let cred = match auth {
+                None => None,
+                Some(h) => Some(
+                    o.credentials
+                        .get(&h)
+                        .cloned()
+                        .ok_or_else(|| Error::fatal(format!("no credential {h} is open")))?,
+                ),
+            };
+            let via = match via {
+                None => None,
+                Some(h) => Some(
+                    o.tunnels
+                        .get(&h)
+                        .map(|(_, a)| *a)
+                        .ok_or_else(|| Error::fatal(format!("no tunnel {h} is open")))?,
+                ),
+            };
+            (cred, via)
         };
-        let via = match via {
-            None => None,
-            Some(h) => Some(
-                self.tunnels
-                    .get(&h)
-                    .map(|(_, a)| *a)
-                    .ok_or_else(|| Error::fatal(format!("no tunnel {h} is open")))?,
-            ),
-        };
-        http::send(req, cred, via)
+        http::send(req, cred.as_deref(), via)
     }
 
-    fn exec(&mut self, on: &Target, argv: &[String], stdin: Option<&[u8]>) -> Result<Run, Failure> {
+    fn exec(&self, on: &Target, argv: &[String], stdin: Option<&[u8]>) -> Result<Run, Failure> {
         self.ssh.exec(on, argv, stdin)
     }
 
-    fn read(&mut self, on: &Target, path: &str) -> Result<Vec<u8>, Failure> {
+    fn read(&self, on: &Target, path: &str) -> Result<Vec<u8>, Failure> {
         self.ssh.read(on, path)
     }
 
-    fn write(&mut self, on: &Target, path: &str, data: &[u8], mode: u32) -> Result<(), Error> {
+    fn write(&self, on: &Target, path: &str, data: &[u8], mode: u32) -> Result<(), Error> {
         self.ssh.write(on, path, data, mode)
     }
 
-    fn forward(&mut self, via: &Target, to: &Endpoint) -> Result<Handle, Error> {
+    fn forward(&self, via: &Target, to: &Endpoint) -> Result<Handle, Error> {
         let local = self.ssh.forward(via, to)?;
-        let h = self.handle();
-        self.tunnels.insert(h, (to.clone(), local));
+        let mut o = self.opened();
+        let h = o.handle();
+        o.tunnels.insert(h, (to.clone(), local));
         Ok(h)
     }
 
     fn tunnel(&self, h: Handle) -> Option<Endpoint> {
-        self.tunnels.get(&h).map(|(e, _)| e.clone())
+        self.opened().tunnels.get(&h).map(|(e, _)| e.clone())
     }
 
-    fn git_read(&mut self, repo: &str, rev: &str, path: &str) -> Result<Vec<u8>, Error> {
+    fn git_read(&self, repo: &str, rev: &str, path: &str) -> Result<Vec<u8>, Error> {
         self.git.read(repo, rev, path)
     }
 
     fn git_commit(
-        &mut self,
+        &self,
         repo: &str,
         branch: &str,
         files: Vec<GitFile>,
@@ -136,7 +160,7 @@ impl Calls for Services {
         self.git.commit(repo, branch, files, message)
     }
 
-    fn log(&mut self, level: Level, message: &str) {
+    fn log(&self, level: Level, message: &str) {
         let level = match level {
             Level::Debug => "debug",
             Level::Info => "info",
