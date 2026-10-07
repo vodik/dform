@@ -433,6 +433,34 @@ fn a_project_named_by_description_is_listed_once_and_its_id_kept() {
     assert_eq!(asked(&server, n), [one]);
 }
 
+/// An instance's create says each status the API gives while it polls,
+/// beside the change in apply's progress (R-130): `BUILD` while it is
+/// made, then `ACTIVE`.
+#[test]
+fn an_instance_create_says_build_then_active() {
+    let server = Server::start();
+    server.build_polls(2);
+    let s = project("ovh-events", "", &program(&server, "x", "b2-7"));
+    let r = dform(&s, &server, &["apply", "main.df"]).success();
+    let words: Vec<&str> = r
+        .stderr
+        .lines()
+        .filter(|l| l.starts_with("  + ovh.instance server  "))
+        .filter_map(|l| l.rsplit("  ").next())
+        .collect();
+    assert_eq!(words.first(), Some(&"BUILD"), "{}", r.stderr);
+    assert_eq!(words.last(), Some(&"ACTIVE"), "{}", r.stderr);
+    // A key, made at once, says nothing beside its time.
+    assert!(
+        r.stderr
+            .lines()
+            .filter(|l| l.starts_with("  + ovh.ssh_key admin  "))
+            .all(|l| l.ends_with('s')),
+        "{}",
+        r.stderr
+    );
+}
+
 /// A Create whose answer does not come within dform's timeout (R-81) is
 /// found by its key and adopted, not made twice; the record that reads
 /// the instance's address waits for it.

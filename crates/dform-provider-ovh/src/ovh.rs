@@ -74,6 +74,9 @@ fn poll() -> Duration {
         .map_or(Duration::from_secs(5), Duration::from_millis)
 }
 
+/// Says the object's status as the API gives it, and a message.
+type Say<'a> = &'a dyn Fn(&str, Option<&str>);
+
 /// How to find what a Create made, by the object's key.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Made {
@@ -510,7 +513,11 @@ impl Ovh {
 
     // Apply.
 
-    fn apply(&self, r: &pb::ApplyRequest) -> std::result::Result<pb::ApplyResponse, Failed> {
+    fn apply(
+        &self,
+        r: &pb::ApplyRequest,
+        progress: backend::Progress,
+    ) -> std::result::Result<pb::ApplyResponse, Failed> {
         let op = pb::Op::try_from(r.op).unwrap_or(pb::Op::Unspecified);
         if op == pb::Op::EndTick {
             return Ok(pb::ApplyResponse::default());
@@ -526,11 +533,16 @@ impl Ovh {
         };
         let key = r.idempotency_key.as_str();
         let mut notes = Vec::new();
+        // What the API says of the object as it changes (R-130).
+        let addr = address(typ, &r.name).to_string();
+        let say = |status: &str, message: Option<&str>| {
+            progress(backend::event(&addr, Some(status), message));
+        };
         let (remote, attrs, computed) = match op {
-            pb::Op::Create => self.create(typ, &at, &config, key, &mut notes)?,
+            pb::Op::Create => self.create(typ, &at, &config, key, &mut notes, &say)?,
             pb::Op::Update | pb::Op::Adopt => self.update(typ, &at, &r.remote, &config)?,
             pb::Op::Delete => {
-                self.delete(typ, &at, &r.remote, &mut notes)?;
+                self.delete(typ, &at, &r.remote, &mut notes, &say)?;
                 return Ok(pb::ApplyResponse {
                     notes,
                     ..Default::default()
@@ -551,9 +563,9 @@ impl Ovh {
                     ));
                 }
                 if !r.create_first || same {
-                    self.delete(typ, &at, &r.remote, &mut notes)?;
+                    self.delete(typ, &at, &r.remote, &mut notes, &say)?;
                 }
-                self.create(typ, &at, &config, key, &mut notes)?
+                self.create(typ, &at, &config, key, &mut notes, &say)?
             }
             _ => return Err(refused(&at, "no operation")),
         };
@@ -671,6 +683,7 @@ impl Ovh {
         config: &Json,
         key: &str,
         notes: &mut Vec<String>,
+        say: Say,
     ) -> std::result::Result<(String, Json, Json), Failed> {
         let made = self
             .key_of(typ, config)
@@ -701,7 +714,7 @@ impl Ovh {
                 .insert(key.to_string(), made);
         }
         match typ {
-            INSTANCE => self.create_instance(at, config, notes),
+            INSTANCE => self.create_instance(at, config, notes, say),
             SSH_KEY => {
                 let (a, p) = self
                     .project(at)
@@ -763,6 +776,7 @@ impl Ovh {
         at: &str,
         config: &Json,
         notes: &mut Vec<String>,
+        say: Say,
     ) -> std::result::Result<(String, Json, Json), Failed> {
         let (a, p) = self
             .project(at)
@@ -792,8 +806,13 @@ impl Ovh {
             .post(&format!("/cloud/project/{p}/instance"), &body)
             .map_err(|e| failed(at, e))?;
         let id = s(&o, "id").unwrap_or_default().to_string();
-        // Wait for it to run: until then it has no address.
+        // Wait for it to run: until then it has no address. Each status
+        // the API gives that is not the last one's is said (`BUILD`,
+        // `ACTIVE`).
         let start = Instant::now();
+        let status = |o: &Json| s(o, "status").unwrap_or("unknown").to_string();
+        let mut said = status(&o);
+        say(&said, None);
         let mut last = o;
         while s(&last, "status") != Some("ACTIVE") {
             if s(&last, "status") == Some("ERROR") {
@@ -816,14 +835,20 @@ impl Ovh {
                 .client
                 .get_opt(&format!("/cloud/project/{p}/instance/{}", escape(&id)))
             {
-                Ok(Some(o)) => last = o,
+                Ok(Some(o)) => {
+                    if status(&o) != said {
+                        said = status(&o);
+                        say(&said, None);
+                    }
+                    last = o;
+                }
                 Ok(None) => {
                     return Err(Failed::MaybeApplied(format!(
                         "{at}: instance {id} went away while it was made"
                     )));
                 }
                 // A failed poll is no answer about the instance: ask again.
-                Err(_) => {}
+                Err(e) => say(&said, Some(&format!("a poll failed, asking again: {e:#}"))),
             }
         }
         let (attrs, computed) = self
@@ -893,6 +918,7 @@ impl Ovh {
         at: &str,
         remote: &str,
         notes: &mut Vec<String>,
+        say: Say,
     ) -> std::result::Result<(), Failed> {
         let gone_already = |e: &api::Error| e.is_not_found();
         match typ {
@@ -907,8 +933,17 @@ impl Ovh {
                     Err(e) => return Err(failed(at, e)),
                 }
                 let start = Instant::now();
+                let mut said = None;
                 loop {
-                    match a.client.get_opt(&path) {
+                    let got = a.client.get_opt(&path);
+                    if let Ok(Some(o)) = &got
+                        && let Some(now) = s(o, "status")
+                        && said.as_deref() != Some(now)
+                    {
+                        say(now, None);
+                        said = Some(now.to_string());
+                    }
+                    match got {
                         Ok(None) => break,
                         Ok(Some(o)) if matches!(s(&o, "status"), Some("DELETED")) => break,
                         _ if start.elapsed() > DELETE_WAIT => {
@@ -1186,7 +1221,7 @@ impl Handler for Ovh {
     fn handle(
         &self,
         call: backend::Call,
-        _: backend::Progress,
+        progress: backend::Progress,
     ) -> std::result::Result<Reply, CallError> {
         use backend::Call as C;
         Ok(match call {
@@ -1273,7 +1308,7 @@ impl Handler for Ovh {
                     requires_replace,
                 })
             }
-            C::Apply(r) => Reply::Apply(self.apply(&r)?),
+            C::Apply(r) => Reply::Apply(self.apply(&r, progress)?),
             C::Import(r) => Reply::Import(
                 match self.read(&r.r#type, &r.remote, "").map_err(invalid)? {
                     Some((attrs, computed)) => pb::ImportResponse {
