@@ -1583,12 +1583,16 @@ naming the call (R-134), never a quiet none. A bare path in a block is the pun o
 last segment ("Statements"), not a test: `has` is the test.
 
 A `.p` or `[i]` after a call reads the call's result (R-71):
-`semver.parse(v).pre`, `str.split(s, ":")[0]`, `json.decode(t).a[0].b`,
-anywhere a chain stands, `has` and `not` included, so `not has
-semver.parse(c.version).pre` reads "no pre-release". It is the call bound to a
-variable and the path read from it, `p = semver.parse(v), p.pre`; a
-call with no value fails the literal as the binding would, and under `not`
-the binding is inside what is negated. A call's result
+`oci.with_registry(i, r).tag`, `str.split(s, ":")[0]`,
+`json.decode(t).a[0].b`, anywhere a chain stands, `has` and `not`
+included, so `not has json.decode(c.body).pre` reads "no pre-release".
+It is the call bound to a variable and the path read from it, `p =
+json.decode(c.body), p.pre`. A partial call with no answer (R-134 rule
+3: `json.decode` of text that is no JSON, `list.first` of an empty
+list) fails the literal as the binding would, and under `not` the
+binding is inside what is negated: `has f(x).p` is false and `not has
+f(x).p` holds, never an evaluation error; a call of any other function
+with an input it does not take is the error it is anywhere. A call's result
 is never called (`f(x).g(y)` is an error: a function is named by a plain
 name), and after `from` a path after the call is the document's
 (`toml("x").peerings`, R-39). Precedence, loosest

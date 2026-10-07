@@ -79,3 +79,26 @@ fn a_call_after_a_call_is_not_a_function() {
     let e = error("p(x) where q(y), x = str.split(y, \":\")(1)\nq(\"a\")\n");
     assert!(e.contains("a function is named by a plain name"), "{e}");
 }
+
+/// A partial call with no answer under `has` (R-134, the R-133
+/// carry-over): `has f(x).p` is false and `not has f(x).p` holds, never
+/// "not defined for these arguments"; a total function's bad input is an
+/// error under `has` as anywhere.
+#[test]
+fn has_of_a_call_with_no_answer_is_false() {
+    let src = r#"list([])
+list([{ "x": 1 }])
+some(l) where list(l), has list.first(l).x
+none(l) where list(l), not has list.first(l).x
+"#;
+    assert_eq!(facts(src, "some"), [r#"some([{x: 1}])"#]);
+    assert_eq!(facts(src, "none"), ["none([])"]);
+    let program = dform_core::parser::parse_program(
+        "img(\"nginx\")\np(i) where img(i), not has oci.with_tag(i, \"no tag!\").digest\n",
+    )
+    .unwrap();
+    let err = dform_core::engine::eval(&program, &[])
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("is not defined for these arguments"), "{err}");
+}
