@@ -4911,7 +4911,7 @@ impl<'u> Lowerer<'u> {
                     ) =>
                     {
                         let t = self.realize(rc, res, Pos::Content, out, span)?;
-                        let v = fresh(rc, "Has");
+                        let v = fresh(rc, HAS_VAR);
                         out.push(Lit::Eq(var(&v), t));
                         rc.outer.insert(v);
                     }
@@ -7833,6 +7833,18 @@ fn mark_has(out: &mut Vec<Lit>, start: usize, marked: Option<Atom>, negated: boo
     out.insert(start, if negated { Lit::Not(a) } else { Lit::Pos(a) });
 }
 
+/// The variable `has x.f` of a value's field binds its walk to,
+/// `Has' = __path(X, "f")`, read nowhere else: the mark the secret pass
+/// knows the test by (`secrets`, E0301). The apostrophe is in no name a
+/// program's variable lowers to.
+pub const HAS_VAR: &str = "Has'";
+
+/// Whether `v` is a `has` walk's variable ([`HAS_VAR`]).
+pub fn is_has_var(v: &str) -> bool {
+    v.strip_prefix(HAS_VAR)
+        .is_some_and(|n| n.chars().all(|c| c.is_ascii_digit()))
+}
+
 /// `has r` of a resource (R-152): `__identity(T, A)`, which the compiler
 /// makes a read of the resource's identity (`partition::IDENTITY`).
 const IDENTITY: &str = crate::partition::IDENTITY;
@@ -8520,9 +8532,9 @@ mod tests {
         assert_eq!(
             &got[1..],
             [
-                "c(X) :- q(X), Has = __path(X, \"limits\")",
+                "c(X) :- q(X), Has' = __path(X, \"limits\")",
                 "n(X) :- q(X), not __neg_0(X)",
-                "__neg_0(X) :- q(X), Has = __path(X, \"limits\")",
+                "__neg_0(X) :- q(X), Has' = __path(X, \"limits\")",
                 "r(1) :- not __neg_1()",
                 "__neg_1() :- attr(\"db.pg\", \"d\", \"s\", S), __path(S, \"a\") = 2",
             ]

@@ -882,7 +882,7 @@ pub fn check(
                     term_vars(y, &mut both);
                     if both.is_subset(&bound) {
                         diags.push(e0301(*span, "an equality test"));
-                    } else if definedness(x, y, body, i, *head) {
+                    } else if definedness(x, y) {
                         // `has conn.password`: a walk into a secret bound
                         // to a name nothing reads, for whether it is there.
                         diags.push(e0301(*span, "a definedness test (`has`)"));
@@ -1098,41 +1098,14 @@ fn matches_secret(t: &Term, l: &Label) -> bool {
     }
 }
 
-/// `has x.f` over a secret, as the resolver writes it: `V = __path(X,
-/// "f")` with `V` read nowhere else.
-fn definedness(x: &Term, y: &Term, body: &[Lit], skip: usize, head: Option<&Atom>) -> bool {
-    let (Term::Var(v), Term::Func { name, .. }) = (x, y) else {
-        return false;
-    };
-    // The resolver's name for it (`fresh(rc, "Has")`).
-    let has = v
-        .strip_prefix("Has")
-        .is_some_and(|n| n.chars().all(|c| c.is_ascii_digit()));
-    if name != "__path" || !has {
-        return false;
-    }
-    let mut seen = BTreeSet::new();
-    for t in head.iter().flat_map(|h| &h.args) {
-        term_vars(t, &mut seen);
-    }
-    for (i, l) in body.iter().enumerate() {
-        if i == skip {
-            continue;
-        }
-        match l {
-            Lit::Pos(a) | Lit::Not(a) => a.args.iter().for_each(|t| term_vars(t, &mut seen)),
-            Lit::Eq(p, q)
-            | Lit::Neq(p, q)
-            | Lit::Gt(p, q)
-            | Lit::Ge(p, q)
-            | Lit::Lt(p, q)
-            | Lit::Le(p, q) => {
-                term_vars(p, &mut seen);
-                term_vars(q, &mut seen);
-            }
-        }
-    }
-    !seen.contains(v)
+/// `has x.f` over a secret, as the resolver marks it: `V = __path(X,
+/// "f")` with `V` its `has` variable (`resolve::HAS_VAR`).
+fn definedness(x: &Term, y: &Term) -> bool {
+    matches!(
+        (x, y),
+        (Term::Var(v), Term::Func { name, .. })
+            if name == "__path" && crate::syntax::resolve::is_has_var(v)
+    )
 }
 
 fn e0301(span: Span, what: &str) -> Diagnostic {
