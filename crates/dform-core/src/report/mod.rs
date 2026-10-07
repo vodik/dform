@@ -3248,7 +3248,10 @@ impl Report {
         let mut summary = serde_json::Map::new();
         summary.insert("changes".into(), json!(self.changes()));
         for (k, n) in self.kinds() {
-            summary.insert(k.into(), json!(n));
+            // A forget is counted only where there is one (R-154).
+            if k != "forget" || n > 0 {
+                summary.insert(k.into(), json!(n));
+            }
         }
         summary.insert("no_op".into(), json!(self.noops));
         summary.insert("ticks".into(), json!(self.sections().len()));
