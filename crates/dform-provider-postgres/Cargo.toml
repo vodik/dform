@@ -1,0 +1,55 @@
+[package]
+name = "dform-provider-postgres"
+version = "0.1.0"
+license = "Apache-2.0"
+edition = "2024"
+publish = false
+
+# The Postgres provider (R-159), written with the SDK: roles and databases
+# read over SQL and applied with CREATE, ALTER and DROP. Native only: it
+# dials the server itself (tokio-postgres), directly or through the
+# Kubernetes API's port-forward to a ClusterIP service.
+[features]
+# `fake`: a Postgres server in the test process (`src/fake.rs`) speaking
+# the wire protocol's startup, SCRAM, TLS and simple query, and a
+# Kubernetes API that port-forwards to it, for tests.
+fake = ["dep:sha1"]
+
+[dependencies]
+anyhow = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+dform-sdk = { path = "../dform-sdk" }
+tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "time", "macros"] }
+# The client: the simple query protocol only, so every statement is text
+# the provider quotes itself (`sql`).
+tokio-postgres = { version = "0.7", default-features = false, features = ["runtime"] }
+# SASLprep of a password, as the server applies it to make a verifier.
+stringprep = "0.1"
+# TLS (`tls`): rustls over ring, the machine's roots for verify-*.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring"] }
+rustls-native-certs = "0.8"
+# The SCRAM-SHA-256 verifier (`scram`): computed here, never the
+# plaintext on the wire.
+hmac = "0.13"
+sha2 = "0.11"
+pbkdf2 = { version = "0.13", default-features = false, features = ["hmac"] }
+base64 = "0.22"
+getrandom = "0.3"
+# The port-forward (`forward`): a ClusterIP service reached through the
+# Kubernetes API, as `kubectl port-forward` does, in process.
+kube = { version = "4.2", features = ["ws"] }
+k8s-openapi = { version = "0.28", features = ["latest"] }
+# The fake Kubernetes API's WebSocket handshake (`fake::kube`).
+sha1 = { version = "0.10", optional = true }
+
+[dev-dependencies]
+dform-provider-postgres = { path = ".", features = ["fake"] }
+# tests/fake.rs calls the provider as dform does.
+dform-core = { path = "../dform-core" }
+
+# `dform_sdk::provider!` also writes the component's exports, under the
+# `component` feature on wasm; this provider is native only.
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("component"))'] }
