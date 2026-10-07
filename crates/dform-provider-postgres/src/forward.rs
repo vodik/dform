@@ -83,7 +83,7 @@ async fn opened(f: &Forward, port: u16) -> Result<Opened> {
     };
     let pod = listed.items.iter().find(|p| ready(p)).ok_or_else(|| {
         anyhow!(
-            "retryable: {at}: no ready pod ({} selected by {label})",
+            "{at}: no ready pod ({} selected by {label})",
             listed.items.len()
         )
     })?;
