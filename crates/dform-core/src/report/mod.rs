@@ -1858,8 +1858,27 @@ impl Report {
                 .get(&(d.addr.typ.clone(), d.addr.name.clone()))
                 .map(Vec::as_slice)
                 .unwrap_or_default();
-            for l in d.lines.iter_mut() {
-                l.site = attr_site(&p, rules, facts, &l.path);
+            // Each line's site, the lines under one attribute fact asked
+            // together.
+            let mut asks: BTreeMap<*const Atom, (&Atom, Vec<(usize, (Vec<String>, bool))>)> =
+                BTreeMap::new();
+            for (i, l) in d.lines.iter().enumerate() {
+                if let Some((a, keys, whole)) = attr_holding(facts, &l.path) {
+                    asks.entry(a as *const Atom)
+                        .or_insert_with(|| (a, Vec::new()))
+                        .1
+                        .push((i, (keys, whole)));
+                }
+            }
+            let mut sites: Vec<Option<tree::Site>> = vec![None; d.lines.len()];
+            for (a, lines) in asks.into_values() {
+                let (at, asked): (Vec<usize>, Vec<(Vec<String>, bool)>) = lines.into_iter().unzip();
+                for (i, site) in at.into_iter().zip(p.attr_sites(rules, a, &asked)) {
+                    sites[i] = site;
+                }
+            }
+            for (l, site) in d.lines.iter_mut().zip(sites) {
+                l.site = site;
                 if why == Why::Full {
                     l.chain = attr_chain(&p, rules, facts, &l.path, &self.keys);
                 }
@@ -2938,14 +2957,6 @@ fn schema_path(path: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join(".")
-}
-
-/// The site of the attribute fact of `facts` that holds change path
-/// `path` (`tags.team` of `tags`, `statements[0].action` of
-/// `statements`), focused on the keys below it.
-fn attr_site(p: &tree::Printer, rules: &[RuleStmt], facts: &[&Atom], path: &str) -> Option<Site> {
-    let (a, keys, whole) = attr_holding(facts, path)?;
-    p.attr_site(rules, a, &keys, whole)
 }
 
 /// The chain of change path `path`'s value ([`attr_site`]'s fact).

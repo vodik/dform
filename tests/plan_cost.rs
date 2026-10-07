@@ -156,3 +156,43 @@ fn a_plan_reads_over_one_connection_writes_nothing_and_calls_its_provider_at_onc
         );
     }
 }
+
+/// A large document as a resource's body (After R-126): each of its
+/// leaves' why is found once per statement, not once per leaf with the
+/// whole document rendered again. Four config maps of 1500 entries plan
+/// in about 2s on a debug build; finding each leaf's why afresh took 70s.
+#[test]
+fn a_large_documents_leaves_are_explained_in_linear_time() {
+    let s = Scratch::project("plan-cost-manifest");
+    s.write("dform.toml", "[project]\nedition = \"2026\"\n");
+    let mut docs = String::new();
+    for d in 0..4 {
+        docs.push_str(&format!(
+            "---\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: cm{d}\ndata:\n"
+        ));
+        for i in 0..1500 {
+            docs.push_str(&format!(
+                "  key{i:04}: \"value number {i} of document {d}, long enough to print\"\n"
+            ));
+        }
+    }
+    s.write("cms.yml", &docs);
+    s.write(
+        "main.df",
+        "use k8s\nresource k8s.config_map \"${d.metadata.name}\" = d where d in yaml(\"cms.yml\")\n",
+    );
+    let t = Instant::now();
+    let r = s.run(&["plan", "main.df"]).success();
+    let took = t.elapsed();
+    assert!(
+        r.stdout
+            .contains("key1499: \"value number 1499 of document 3"),
+        "{}",
+        &r.stdout[..r.stdout.len().min(2000)]
+    );
+    assert!(
+        took < Duration::from_secs(30),
+        "the plan took {took:?} (loadavg {})",
+        std::fs::read_to_string("/proc/loadavg").unwrap_or_default()
+    );
+}

@@ -369,13 +369,7 @@ impl Printer<'_> {
     ///
     /// [`tree`]: Printer::tree
     pub fn source_tree(&self, rules: &[RuleStmt], root: NodeId, focus: Option<&Focus>) -> String {
-        let mut s = Surface {
-            p: self,
-            rules,
-            w: Walk::default(),
-            files: BTreeMap::new(),
-            list_keys: Default::default(),
-        };
+        let mut s = self.surface(rules);
         s.fact(root, "", "", false, focus);
         s.w.out
     }
@@ -389,6 +383,10 @@ struct Surface<'a, 'b> {
     files: BTreeMap<String, SyntaxNode>,
     /// The keyed lists' keys, `type_list_key(T, L, Keys)`, read once.
     list_keys: std::cell::OnceCell<BTreeMap<(String, String), Vec<String>>>,
+    /// Each fact node's site at a depth ([`site_of`]), found once: the
+    /// leaves of one large value (a manifest's document) share their
+    /// statement, whose bindings print the whole value.
+    sites: std::collections::HashMap<(NodeId, usize), Option<Site>>,
 }
 
 impl Surface<'_, '_> {
@@ -939,13 +937,7 @@ impl Printer<'_> {
     /// winning contributions, each its statement and leaves; with a focus,
     /// only the contributions that hold the focused part.
     pub fn because(&self, rules: &[RuleStmt], root: NodeId, focus: Option<&Focus>) -> Vec<Because> {
-        let mut s = Surface {
-            p: self,
-            rules,
-            w: Walk::default(),
-            files: BTreeMap::new(),
-            list_keys: Default::default(),
-        };
+        let mut s = self.surface(rules);
         let mut c = Compress {
             out: Vec::new(),
             sizes: BTreeMap::new(),
@@ -999,13 +991,7 @@ impl Printer<'_> {
     /// with its place: the rows `diff` compares between two evaluations.
     /// Resources, attributes and contributions are the plan's, not rows.
     pub fn stated(&self, rules: &[RuleStmt]) -> Vec<Because> {
-        let s = Surface {
-            p: self,
-            rules,
-            w: Walk::default(),
-            files: BTreeMap::new(),
-            list_keys: Default::default(),
-        };
+        let s = self.surface(rules);
         let c = self.circuit;
         let mut out = Vec::new();
         for f in c.facts() {
@@ -1257,6 +1243,7 @@ impl Printer<'_> {
             w: Walk::default(),
             files: BTreeMap::new(),
             list_keys: Default::default(),
+            sites: Default::default(),
         }
     }
 
@@ -1304,17 +1291,37 @@ impl Printer<'_> {
         keys: &[String],
         whole: bool,
     ) -> Option<Site> {
-        let id = self.circuit.fact_id(&engine::circuit_fact(attr))?;
+        self.attr_sites(rules, attr, &[(keys.to_vec(), whole)])
+            .pop()
+            .flatten()
+    }
+
+    /// [`Printer::attr_site`] of each of `asks` (keys, whole) below one
+    /// attribute fact: the fact is found once, and the sites its leaves
+    /// share are found once.
+    pub fn attr_sites(
+        &self,
+        rules: &[RuleStmt],
+        attr: &Atom,
+        asks: &[(Vec<String>, bool)],
+    ) -> Vec<Option<Site>> {
+        let Some(id) = self.circuit.fact_id(&engine::circuit_fact(attr)) else {
+            return vec![None; asks.len()];
+        };
         let mut s = self.surface(rules);
         let mut c = Compress {
             out: Vec::new(),
             sizes: BTreeMap::new(),
         };
-        let focus = (!keys.is_empty()).then(|| Focus {
-            keys: keys.to_vec(),
-            value: None,
-        });
-        winner_site(&mut s, &mut c, id, focus.as_ref(), !whole, 0)
+        asks.iter()
+            .map(|(keys, whole)| {
+                let focus = (!keys.is_empty()).then(|| Focus {
+                    keys: keys.clone(),
+                    value: None,
+                });
+                winner_site(&mut s, &mut c, id, focus.as_ref(), !whole, 0)
+            })
+            .collect()
     }
 }
 
@@ -2181,6 +2188,16 @@ fn passed_cell(
 /// its shortest firing; through a firing of a rule the compiler wrote, the
 /// first fact it read that has one.
 fn site_of(s: &mut Surface, c: &mut Compress, id: NodeId, depth: usize) -> Option<Site> {
+    if let Some(site) = s.sites.get(&(id, depth)) {
+        return site.clone();
+    }
+    let site = site_found(s, c, id, depth);
+    s.sites.insert((id, depth), site.clone());
+    site
+}
+
+/// [`site_of`], found.
+fn site_found(s: &mut Surface, c: &mut Compress, id: NodeId, depth: usize) -> Option<Site> {
     let circuit = s.p.circuit;
     let View::Fact { fact, alts, .. } = circuit.view(id) else {
         return None;
