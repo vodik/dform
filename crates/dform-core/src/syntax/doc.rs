@@ -217,6 +217,26 @@ pub fn header(n: &SyntaxNode) -> String {
     if n.kind() == TYPE_ALIAS && n.children().any(|c| c.kind() == SIGNATURE) {
         return text.trim().to_string();
     }
+    // A let with parameters (R-187): its name, parameters and type, on
+    // one line however they are laid out.
+    if n.kind() == LET
+        && let Some(params) = n.children().find(|c| c.kind() == PARAMS)
+    {
+        let end = n
+            .children()
+            .find(|c| c.kind() == TYPE_EXPR)
+            .unwrap_or(params)
+            .text_range()
+            .end()
+            - n.text_range().start();
+        let head = &text[..usize::from(end)];
+        let words: Vec<&str> = head.split_whitespace().collect();
+        return words
+            .join(" ")
+            .replace("( ", "(")
+            .replace(" )", ")")
+            .replace(",)", ")");
+    }
     let line = text.lines().next().unwrap_or("").trim_end();
     let line = line.strip_suffix('{').unwrap_or(line).trim_end();
     line.strip_suffix(" if").unwrap_or(line).to_string()
