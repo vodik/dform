@@ -35,6 +35,7 @@ use crate::ast::{Atom, Term};
 use crate::ir::{Address, Adopt, Resource};
 use crate::provider::{self, Action, ActionKind, Change, Plan, get_path, remove_path, set_path};
 use crate::schema::Schema;
+use crate::spell;
 use crate::state::{self, State, StateEntry};
 use crate::value::{NullClass, Value};
 use crate::zset::{self, Lifecycle};
@@ -1211,7 +1212,7 @@ impl Providers {
             for k in settings.get(name).into_iter().flatten() {
                 if let Some(v) = given.get(k) {
                     let label = crate::value::null_label("provider", name, k);
-                    secrets.push((crate::partition::fmt_bare(v), label));
+                    secrets.push((spell::bare(v), label));
                 }
             }
         }
@@ -1235,7 +1236,7 @@ impl Providers {
             if self.awaiting.borrow().contains(&i) {
                 continue;
             }
-            let want = crate::partition::fmt_bare(want);
+            let want = spell::bare(want);
             let shown = if secret.contains(name) {
                 format!(
                     "{} (a secret)",

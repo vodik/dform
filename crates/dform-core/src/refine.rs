@@ -34,6 +34,7 @@ use crate::ast::{
 use crate::diag::{Diagnostic, Diagnostics};
 use crate::lattice::{Constraint, Truth};
 use crate::schema::Schema;
+use crate::spell;
 use crate::value::Value;
 use anyhow::Result;
 use std::collections::{BTreeMap, BTreeSet};
@@ -65,10 +66,7 @@ impl fmt::Display for Constraint {
             Constraint::OneOf(vs) => write!(
                 f,
                 "enum([{}])",
-                vs.iter()
-                    .map(crate::partition::fmt_value)
-                    .collect::<Vec<_>>()
-                    .join(", ")
+                vs.iter().map(spell::value).collect::<Vec<_>>().join(", ")
             ),
         }
     }
@@ -649,7 +647,7 @@ fn deny_rules(
         .collect();
     let text = rest
         .iter()
-        .map(|l| crate::partition::fmt_written(&subst_lit(l, &named)))
+        .map(|l| spell::written(&subst_lit(l, &named)))
         .collect::<Vec<_>>()
         .join(", ");
     let ok = atom(
@@ -802,7 +800,7 @@ impl Stated {
             Some(a) => format!(
                 "{ATTR_REFINE}({}, {}, {}, {})",
                 self.typ,
-                crate::partition::fmt_value(a),
+                spell::value(a),
                 self.path,
                 self.constraint
             ),
@@ -924,7 +922,7 @@ pub fn check(program: &Program, schema: &Schema) -> Result<()> {
                     head.span,
                     format!(
                         "{} violates the refinement {} of {typ} .{}",
-                        crate::partition::fmt_value(v),
+                        spell::value(v),
                         r.constraint,
                         r.path
                     ),

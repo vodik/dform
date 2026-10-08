@@ -8,7 +8,7 @@ mod common;
 use common::error;
 use dform_core::engine;
 use dform_core::parser::parse_file;
-use dform_core::partition::fmt_atom;
+use dform_core::spell;
 
 /// A program file's (`parse_program` reads core text, which the check
 /// leaves alone).
@@ -18,7 +18,7 @@ fn facts(src: &str, pred: &str) -> Vec<String> {
     r.facts
         .iter()
         .filter(|a| a.pred == pred)
-        .map(fmt_atom)
+        .map(spell::atom)
         .collect()
 }
 

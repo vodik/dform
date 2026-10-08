@@ -1144,7 +1144,7 @@ mod tests {
             .facts
             .iter()
             .filter(|f| f.pred == "type_default")
-            .map(dform_core::partition::fmt_atom)
+            .map(dform_core::spell::atom)
             .collect();
         for want in [
             r#"type_default("k8s.core.v1.service", "spec.ports.protocol", "TCP")"#,

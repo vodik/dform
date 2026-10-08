@@ -23,6 +23,7 @@ use crate::ast::{Atom, Lit, RuleStmt, Term};
 use crate::engine::{self, EvalResult};
 use crate::query::{self, Redactor};
 use crate::report::tree::Printer;
+use crate::spell;
 use crate::value::Value;
 use anyhow::{Result, bail};
 use std::collections::{BTreeMap, BTreeSet};
@@ -340,10 +341,7 @@ impl<'a> WhyNot<'a> {
     ) -> Result<()> {
         let rules = &self.res.rules;
         let id = format!("r{i}");
-        if !self
-            .seen
-            .insert(format!("{id} {}", crate::partition::fmt_atom(atom)))
-        {
+        if !self.seen.insert(format!("{id} {}", spell::atom(atom))) {
             return Ok(());
         }
         let mut best: Option<Attempt> = None;
@@ -694,7 +692,7 @@ impl<'a> WhyNot<'a> {
                     out.push('"');
                     out
                 }
-                _ => crate::partition::fmt_term(t),
+                _ => spell::term(t),
             },
             Term::Func { name, args } => format!(
                 "{name}({})",
@@ -710,7 +708,7 @@ impl<'a> WhyNot<'a> {
                     .collect::<Vec<_>>()
                     .join(", ")
             ),
-            t => crate::partition::fmt_term(t),
+            t => spell::term(t),
         }
     }
 

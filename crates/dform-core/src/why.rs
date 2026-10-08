@@ -11,9 +11,10 @@
 use crate::ast::{Atom, Lit, Term};
 use crate::engine::{self, EvalResult};
 use crate::ir;
-use crate::partition;
+
 use crate::query::{self, Redactor};
 use crate::report::{self, tree};
+use crate::spell;
 use crate::value::Value;
 use anyhow::{Result, bail};
 use std::collections::BTreeSet;
@@ -302,7 +303,7 @@ fn derivations(
     let mut typed = BTreeSet::new();
     for (i, (a, focus)) in matched.iter().enumerate() {
         let Some(id) = res.circuit.fact_id(&engine::circuit_fact(a)) else {
-            bail!("internal: no provenance for {}", partition::fmt_atom(a));
+            bail!("internal: no provenance for {}", spell::atom(a));
         };
         if i > 0 {
             out.push('\n');
@@ -394,7 +395,7 @@ fn deny(message: &str, how: As, cx: &Context) -> Result<String> {
         .filter(|a| matches!(a.args.first(), Some(Term::Val(Value::Str(m))) if m == message))
         .map(|a| (a.clone(), None))
         .collect();
-    let quoted = crate::partition::fmt_value(&Value::Str(message.to_string()));
+    let quoted = spell::value(&Value::Str(message.to_string()));
     if !held.is_empty() {
         let mut out = format!("deny {quoted}: holds\n");
         out.push_str(&derivations(&held, how, cx)?);
@@ -435,7 +436,7 @@ fn deny(message: &str, how: As, cx: &Context) -> Result<String> {
         })
         .min();
     if let Some((_, m)) = near {
-        let m = crate::partition::fmt_value(&Value::Str(m.clone()));
+        let m = spell::value(&Value::Str(m.clone()));
         out.push_str(&format!("  nearest: deny {m}\n"));
     }
     Ok(cx.redact.text(&out))

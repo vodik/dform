@@ -32,6 +32,7 @@ use crate::ast::{
     Span, Stmt, Term, TypeExpr, str_term, var,
 };
 use crate::diag::Diagnostic;
+use crate::spell;
 use crate::value::Value;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -7478,9 +7479,7 @@ impl<'u> Lowerer<'u> {
                     let v = self.bind(true, |l| l.term(rc, t, Pos::Content, pre))?;
                     values.push(match v {
                         Term::Val(Value::Str(s)) => str_term(&crate::stack::escape(&s)),
-                        Term::Val(v) => {
-                            str_term(&crate::stack::escape(&crate::partition::fmt_bare(&v)))
-                        }
+                        Term::Val(v) => str_term(&crate::stack::escape(&spell::bare(&v))),
                         v => v,
                     });
                 }
@@ -8397,7 +8396,7 @@ pub fn unescape(lit: &str) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use crate::ast::{Lit, Stmt, Term};
-    use crate::partition::{fmt_atom, fmt_lit, fmt_rule, fmt_term};
+    use crate::spell;
 
     #[test]
     fn a_core_variable_reads_as_the_source_name() {
@@ -8408,7 +8407,7 @@ mod tests {
     }
 
     fn lits(ls: &[Lit]) -> String {
-        ls.iter().map(fmt_lit).collect::<Vec<_>>().join(", ")
+        ls.iter().map(spell::lit).collect::<Vec<_>>().join(", ")
     }
 
     /// Every statement as the core prints it, one per line.
@@ -8417,34 +8416,38 @@ mod tests {
             .iter()
             .filter_map(|s| {
                 Some(match s {
-                    Stmt::Rule(r) => fmt_rule(r),
-                    Stmt::Fact(a) => fmt_atom(a),
+                    Stmt::Rule(r) => spell::rule(r),
+                    Stmt::Fact(a) => spell::atom(a),
                     Stmt::Resource(r) => {
                         let fields = r
                             .fields
                             .iter()
-                            .map(|f| format!("{} = {}", f.key, fmt_term(&f.value)))
+                            .map(|f| format!("{} = {}", f.key, spell::term(&f.value)))
                             .collect::<Vec<_>>()
                             .join(", ");
                         let body = r.body.as_deref().map(lits).unwrap_or_default();
                         format!(
                             "resource {} {} {{ {fields} }} :- {body}",
-                            fmt_term(&r.typ),
-                            fmt_term(&r.name)
+                            spell::term(&r.typ),
+                            spell::term(&r.name)
                         )
                     }
                     Stmt::Instance(i) => {
                         let inputs = i
                             .inputs
                             .iter()
-                            .map(|(k, v, _)| format!("{k} = {}", fmt_term(v)))
+                            .map(|(k, v, _)| format!("{k} = {}", spell::term(v)))
                             .collect::<Vec<_>>()
                             .join(", ");
                         let body = i.body.as_deref().map(lits).unwrap_or_default();
                         format!("instance {} {} {{ {inputs} }} :- {body}", i.module, i.name)
                     }
                     Stmt::Output(o) => {
-                        format!("output {} = {:?}", o.name, o.value.as_ref().map(fmt_term))
+                        format!(
+                            "output {} = {:?}",
+                            o.name,
+                            o.value.as_ref().map(spell::term)
+                        )
                     }
                     Stmt::Module(m) => {
                         format!("module {} {{ {} }}", m.name, show(&m.body).join("; "))

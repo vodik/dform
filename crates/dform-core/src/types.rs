@@ -29,6 +29,7 @@ use crate::diag::{Diagnostic, Diagnostics};
 use crate::ir::Address;
 use crate::quantity::{self, Dim};
 use crate::schema::Schema;
+use crate::spell;
 use crate::value::Value;
 use anyhow::Result;
 
@@ -188,7 +189,7 @@ fn shown_literal(v: &Value) -> String {
         Value::Uri(u) => format!("the uri {u}"),
         Value::Oci(r) => format!("the image reference {r}"),
         Value::Semver(v) => format!("the version {v}"),
-        v => crate::partition::fmt_value(v),
+        v => spell::value(v),
     }
 }
 
@@ -1007,7 +1008,7 @@ pub fn operands(op: &str, a: Term, b: Term) -> Result<(Term, Term), String> {
     };
     let shown = |t: &Term| match ambiguous(t) {
         Some(s) => s.to_string(),
-        None => crate::partition::fmt_term(t),
+        None => spell::term(t),
     };
     let written = format!("`{} {op} {}`", shown(&a), shown(&b));
     let op = match op {

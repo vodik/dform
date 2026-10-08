@@ -12,6 +12,7 @@
 //! successor and is a discrete type's only (an int's, an ip's). A
 //! discrete range is held with its end in it, so `0..3` is `0..=2`.
 
+use crate::spell;
 use crate::value::{Value, article, type_name, u32_to_ipv4};
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
@@ -148,7 +149,7 @@ impl Range {
                 return Err(format!(
                     "{} is a string, and a string has no order: read it as the range's type \
                      first (`let x: ip = ..`)",
-                    crate::partition::fmt_value(x)
+                    spell::value(x)
                 ));
             }
             (Value::Str(_), x) => self.read(type_name(x))?,
@@ -271,9 +272,7 @@ impl std::fmt::Display for Range {
         let end = |v: &Value| match v {
             Value::Str(s) => format!("{s:?}"),
             Value::Ip(n) => u32_to_ipv4(*n),
-            v => v
-                .typed_text()
-                .unwrap_or_else(|| crate::partition::fmt_value(v)),
+            v => v.typed_text().unwrap_or_else(|| spell::value(v)),
         };
         let op = if self.inclusive { "..=" } else { ".." };
         write!(f, "{}{op}{}", end(&self.start), end(&self.end))

@@ -1458,7 +1458,7 @@ impl Ovh {
         // Asked before the program's settings came: not yet (an open null
         // in each output column), asked again once they have.
         if self.configured().is_ok_and(|c| c.awaiting) {
-            let ins = dform_core::partition::fmt_bare(&inputs[0]);
+            let ins = dform_core::spell::bare(&inputs[0]);
             return Ok(vec![
                 binding
                     .iter()

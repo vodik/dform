@@ -1048,7 +1048,7 @@ fn schema_of(conn: &mut dform::plugin::link::Link, types: Option<&[&str]>) -> Ve
     let resp: pb::SchemaResponse = conn.call(req).unwrap();
     resp.facts
         .iter()
-        .map(|f| dform::partition::fmt_atom(&wire::from_fact(f).unwrap()))
+        .map(|f| dform::spell::atom(&wire::from_fact(f).unwrap()))
         .collect()
 }
 

@@ -6,7 +6,7 @@
 mod common;
 use common::Scratch;
 use dform::parser::parse_file;
-use dform::partition::fmt_atom;
+use dform::spell;
 
 fn facts(src: &str, pred: &str) -> Vec<String> {
     let p = parse_file("t.df", &format!("\n{src}")).unwrap_or_else(|e| panic!("{e:#}"));
@@ -14,7 +14,7 @@ fn facts(src: &str, pred: &str) -> Vec<String> {
     r.facts
         .iter()
         .filter(|a| a.pred == pred)
-        .map(fmt_atom)
+        .map(spell::atom)
         .collect()
 }
 

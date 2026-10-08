@@ -43,10 +43,10 @@ use dform_core::circuit::Leaf;
 use dform_core::engine::{self, EvalResult};
 use dform_core::hooks::{self, Rule3};
 use dform_core::ir::{self, Address, Resource};
-use dform_core::partition::{fmt_atom, fmt_value};
 use dform_core::plugin::{Config, Providers};
 use dform_core::provider::json_to_value;
 use dform_core::report::{self, Report};
+use dform_core::spell;
 use dform_core::state::State;
 use dform_core::stuck;
 use dform_core::value::{Value, null_label};
@@ -862,7 +862,7 @@ fn subst_text(
     let mut out = pattern.to_string();
     for (label, null) in nulls {
         if let Some(v) = by.get(label) {
-            out = out.replace(&fmt_value(null), &fmt_value(v));
+            out = out.replace(&spell::value(null), &spell::value(v));
         }
     }
     out
@@ -932,7 +932,7 @@ fn check_source(src: &str, choices: &[u8]) -> Result<(), TestCaseError> {
     properties(&first, &second, &by).map_err(|e| {
         let resolved: Vec<String> = by
             .iter()
-            .map(|(l, v)| format!("?{l} := {}", fmt_value(v)))
+            .map(|(l, v)| format!("?{l} := {}", spell::value(v)))
             .collect();
         fail(format!("{e}\nresolved: {}", resolved.join(", ")))
     })
@@ -961,9 +961,9 @@ fn properties(first: &Planned, second: &Planned, by: &BTreeMap<String, Value>) -
                 "property 1: {}.{} was definite; its document changed beyond substitution:\n  before {}\n  expected {}\n  after {}",
                 d.addr.typ,
                 d.addr.name,
-                fmt_value(before),
-                fmt_value(&want),
-                fmt_value(after)
+                spell::value(before),
+                spell::value(&want),
+                spell::value(after)
             ));
         }
     }
@@ -1012,10 +1012,10 @@ fn properties(first: &Planned, second: &Planned, by: &BTreeMap<String, Value>) -
         if !groups.iter().any(|g| stuck::patterns_unify(g, w)) {
             return Err(anyhow!(
                 "property 3: {} is wanted after resolution and was in no pending group (groups: {})",
-                fmt_atom(w),
+                spell::atom(w),
                 groups
                     .iter()
-                    .map(|g| fmt_atom(g))
+                    .map(|g| spell::atom(g))
                     .collect::<Vec<_>>()
                     .join(", ")
             ));
@@ -1024,7 +1024,7 @@ fn properties(first: &Planned, second: &Planned, by: &BTreeMap<String, Value>) -
 
     // 4. Negations the first plan decided do not flip; the program's own
     // facts survive.
-    let printed2: BTreeSet<String> = second.res.facts.iter().map(fmt_atom).collect();
+    let printed2: BTreeSet<String> = second.res.facts.iter().map(spell::atom).collect();
     let mut nulls = BTreeMap::new();
     for a in &first.res.facts {
         for t in &a.args {
@@ -1042,7 +1042,7 @@ fn properties(first: &Planned, second: &Planned, by: &BTreeMap<String, Value>) -
                 if let Leaf::Absent { pattern } = leaf
                     && !pattern.starts_with("resolved(")
                 {
-                    decided.entry(pattern).or_insert_with(|| fmt_atom(a));
+                    decided.entry(pattern).or_insert_with(|| spell::atom(a));
                 }
             }
         }
@@ -1060,8 +1060,8 @@ fn properties(first: &Planned, second: &Planned, by: &BTreeMap<String, Value>) -
         if !second.res.facts.contains(&now) {
             return Err(anyhow!(
                 "property 4: {} was derived and {} is not after resolution",
-                fmt_atom(a),
-                fmt_atom(&now)
+                spell::atom(a),
+                spell::atom(&now)
             ));
         }
     }

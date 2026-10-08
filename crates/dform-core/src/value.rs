@@ -1,3 +1,4 @@
+use crate::spell;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -402,7 +403,7 @@ pub fn read_typed(ty: &str, v: &Value) -> Result<Value, String> {
         ("cpu", Value::Float(f)) => {
             crate::quantity::read(Dim::Cpu, &f.to_string()).map(Value::Quantity)
         }
-        _ => Err(format!("{} is not one", crate::partition::fmt_value(v))),
+        _ => Err(format!("{} is not one", spell::value(v))),
     }
 }
 

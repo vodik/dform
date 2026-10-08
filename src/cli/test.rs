@@ -4,8 +4,9 @@ use super::run_inputs::{build_extra_facts, split_kv};
 use super::{Cli, Outcome, launch};
 use crate::ast::Term;
 use crate::plugin::{self, Providers};
+use crate::spell;
 use crate::value::Value;
-use crate::{deployment, engine, inputs, ir, partition, query, report, schema, state, zset};
+use crate::{deployment, engine, inputs, ir, query, report, schema, state, zset};
 use anyhow::{Result, bail};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -175,7 +176,7 @@ impl<'a> Space<'a> {
 
     /// The command that plans the combination `pairs`.
     fn reproduce(&self, pairs: &[(String, Value)]) -> String {
-        let text = |(k, v): &(String, Value)| (k.clone(), partition::fmt_bare(v));
+        let text = |(k, v): &(String, Value)| (k.clone(), spell::bare(v));
         let (on_target, set): (Vec<_>, Vec<_>) = pairs
             .iter()
             .map(text)
@@ -343,7 +344,7 @@ impl Matrix {
             .columns
             .iter()
             .map(|c| match pairs.iter().find(|(k, _)| k == c) {
-                Some((_, v)) => report::table::Cell::text(partition::fmt_bare(v)),
+                Some((_, v)) => report::table::Cell::text(spell::bare(v)),
                 None => report::table::Cell::text("-"),
             })
             .collect();

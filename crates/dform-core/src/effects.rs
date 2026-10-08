@@ -24,6 +24,7 @@ use crate::inputs::Declared;
 use crate::modules;
 use crate::partition::{self, const_str};
 use crate::schema::Schema;
+use crate::spell;
 use crate::transform;
 use anyhow::Result;
 use std::collections::{BTreeMap, BTreeSet};
@@ -138,7 +139,7 @@ fn guarded_providers(program: &Program) -> BTreeSet<String> {
             }
             Some(cs) => out.extend(cs.into_iter().map(|c| format!("{name} when {c}"))),
             None => {
-                let body: Vec<String> = r.body.iter().map(partition::fmt_lit).collect();
+                let body: Vec<String> = r.body.iter().map(spell::lit).collect();
                 out.insert(format!("{name} where {}", body.join(", ")));
             }
         }

@@ -22,8 +22,8 @@
 
 use crate::ast::{Atom, Lit, Term};
 use crate::lattice::{Truth, eq3, nulls_in};
-use crate::partition::fmt_atom;
 use crate::schema::Schema;
+use crate::spell;
 use crate::value::{NullClass, Value, null_owner};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
@@ -57,7 +57,7 @@ impl Stuck {
                     .rule
                     .map(|r| Value::Int(r as i64))
                     .unwrap_or(Value::Int(-1))),
-                v(Value::Str(fmt_atom(&self.head))),
+                v(Value::Str(spell::atom(&self.head))),
                 v(Value::Obj(self.bindings.clone().into_iter().collect())),
                 v(Value::List(
                     self.nulls.iter().cloned().map(Value::Str).collect(),
@@ -116,8 +116,8 @@ impl MayDerive {
         } else {
             "which is stuck"
         };
-        let reads = crate::modules::private_text(&self.reads, &fmt_atom, " ")
-            .unwrap_or_else(|| fmt_atom(&self.reads));
+        let reads = crate::modules::private_text(&self.reads, &spell::atom, " ")
+            .unwrap_or_else(|| spell::atom(&self.reads));
         format!("reads {reads}, {what}")
     }
 
@@ -128,7 +128,7 @@ impl MayDerive {
             pred: MAY_DERIVE.into(),
             args: vec![
                 v(Value::Int(self.rule as i64)),
-                v(Value::Str(fmt_atom(&self.head))),
+                v(Value::Str(spell::atom(&self.head))),
                 v(Value::List(
                     self.nulls.iter().cloned().map(Value::Str).collect(),
                 )),
@@ -416,7 +416,7 @@ pub fn sections(
             .collect();
         blocking.extend(nulls.iter().cloned());
         stuck_cells
-            .entry((t.clone(), crate::partition::fmt_bare(n)))
+            .entry((t.clone(), spell::bare(n)))
             .or_default()
             .extend(nulls);
     }
@@ -522,14 +522,14 @@ pub fn sections(
         match s.head.pred.as_str() {
             "want" => pending_groups.push(format!(
                 "{} x unknown, on {}  ({})",
-                fmt_atom(&s.head),
+                spell::atom(&s.head),
                 s.nulls_text(),
                 s.reason
             )),
             "deny" => {
                 let msg = match s.head.args.first() {
                     Some(Term::Val(Value::Str(m))) => m.clone(),
-                    _ => fmt_atom(&s.head),
+                    _ => spell::atom(&s.head),
                 };
                 undetermined.push(format!(
                     "deny \"{msg}\" on {}  ({})",
@@ -543,7 +543,7 @@ pub fn sections(
     for m in may_derive.iter().filter(|m| m.head.pred == "want") {
         pending_groups.push(format!(
             "{} x unknown, on {}  ({})",
-            fmt_atom(&m.head),
+            spell::atom(&m.head),
             m.nulls_text(),
             m.reason()
         ));

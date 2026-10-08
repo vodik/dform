@@ -1385,7 +1385,7 @@ pub mod file {
     }
 
     pub fn world_digest(world_facts: &[Atom]) -> String {
-        let mut lines: Vec<String> = world_facts.iter().map(crate::partition::fmt_atom).collect();
+        let mut lines: Vec<String> = world_facts.iter().map(crate::spell::atom).collect();
         lines.sort();
         fnv64(lines.join("\n").as_bytes())
     }
@@ -1486,7 +1486,7 @@ pub mod file {
             let g = Group {
                 pattern: report::group_pattern(head),
                 on: nulls.iter().cloned().collect(),
-                head: crate::partition::fmt_atom(head),
+                head: crate::spell::atom(head),
                 rule: format!("r{rule}"),
                 bindings: bindings
                     .map(|b| redacted(b.iter(), r, key))

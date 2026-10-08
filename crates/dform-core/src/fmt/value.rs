@@ -8,6 +8,7 @@
 //! quoted whole, a reference by its address, a secret redacted).
 
 use super::doc::{Doc, concat, group, if_break, indent, line, nil, print, propagate, text};
+use crate::spell;
 use crate::value::Value;
 
 /// A value to lay out: its leaves already spelled.
@@ -33,7 +34,7 @@ impl Tree {
                     .collect(),
             ),
             Value::List(xs) => Tree::List(xs.iter().map(|x| Tree::of(x, leaf)).collect()),
-            v => Tree::Leaf(crate::partition::fmt_value(v)),
+            v => Tree::Leaf(spell::value(v)),
         }
     }
 
@@ -194,7 +195,7 @@ pub fn key_text(k: &str) -> String {
         && cs.all(|c| c.is_ascii_alphanumeric() || c == '_');
     match name {
         true => k.to_string(),
-        false => crate::partition::quote(k),
+        false => spell::quote(k),
     }
 }
 

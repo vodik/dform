@@ -36,6 +36,7 @@
 
 use crate::ast::{Atom, Config, Program, Span, Stmt, Term, atom};
 use crate::diag::{self, Diagnostic, Diagnostics};
+use crate::spell;
 use crate::store::{Deployment, Location, OpenS3, S3Spec, Store};
 use crate::syntax::resolve::Deployed;
 use crate::value::Value;
@@ -427,7 +428,7 @@ pub fn instance(cfg: &Stack, stack: &str, program: &Program, set: &[Atom]) -> Re
             defaulted.push(k.clone());
         }
         match named.or_else(default) {
-            Some(v) => key.push((k.clone(), crate::partition::fmt_bare(&v))),
+            Some(v) => key.push((k.clone(), spell::bare(&v))),
             None => diags.push(
                 Diagnostic::error(
                     *span,

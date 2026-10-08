@@ -52,6 +52,7 @@
 //! do not the provider picks a value at Apply.
 
 use crate::ast::{Atom, Stmt, Term};
+use crate::spell;
 use crate::value::{NullClass, Value};
 use anyhow::{Context, Result, anyhow, bail};
 use std::collections::{BTreeMap, BTreeSet};
@@ -209,14 +210,14 @@ impl Render {
             format!(
                 "is {}, not {}",
                 dim.map_or("time", Dim::name),
-                crate::partition::fmt_value(v)
+                spell::value(v)
             )
         };
         let whole = |n: Option<i64>, unit: &str, v: &Value| {
             n.map(Value::Int).ok_or_else(|| {
                 format!(
                     "is sent to the provider in whole {unit}, and {} is not",
-                    crate::partition::fmt_value(v)
+                    spell::value(v)
                 )
             })
         };

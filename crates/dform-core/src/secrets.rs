@@ -2144,7 +2144,7 @@ pub mod inventory {
                     let loc = loc
                         .as_str()
                         .map(str::to_string)
-                        .unwrap_or_else(|| crate::partition::fmt_bare(loc));
+                        .unwrap_or_else(|| crate::spell::bare(loc));
                     let s = self.row(&loc, Kind::Managed);
                     s.lives
                         .get_or_insert_with(|| format!("{loc}, its secret manager"));
@@ -2223,7 +2223,7 @@ pub mod inventory {
                 if [crate::modules::LET, crate::modules::INPUT].contains(&t) {
                     continue;
                 }
-                let name = crate::partition::fmt_bare(addr);
+                let name = crate::spell::bare(addr);
                 if held_at.contains(&(t.to_string(), name.clone(), p.to_string())) {
                     continue;
                 }

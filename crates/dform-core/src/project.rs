@@ -1492,7 +1492,7 @@ mod tests {
             m.backend("app"),
             Some(crate::stack::Backend::Local(PathBuf::from("state/app")))
         );
-        let facts: Vec<String> = m.facts().iter().map(crate::partition::fmt_atom).collect();
+        let facts: Vec<String> = m.facts().iter().map(crate::spell::atom).collect();
         assert_eq!(
             facts,
             [

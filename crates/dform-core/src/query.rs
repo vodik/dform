@@ -14,8 +14,9 @@
 
 use crate::ast::{Atom, Lit, Term};
 use crate::engine;
-use crate::partition;
+
 use crate::schema::Schema;
+use crate::spell;
 use crate::value::{NullClass, Value};
 use anyhow::{Result, bail};
 use std::collections::{BTreeMap, BTreeSet};
@@ -414,7 +415,7 @@ impl Redactor {
                 continue;
             };
             if schema.is_sensitive(t, p) || cells.contains(&(tv, addr, pv)) {
-                let label = crate::value::null_label(t, &partition::fmt_bare(addr), p);
+                let label = crate::value::null_label(t, &spell::bare(addr), p);
                 match t == crate::modules::LET {
                     true => lets.push((v, label)),
                     false => r.add(v, &label),
@@ -430,7 +431,7 @@ impl Redactor {
                 .chain(paths.get(&(t, p)).into_iter().flatten().copied());
             for field in fields {
                 if let Some(x) = part(v, field) {
-                    let addr = partition::fmt_bare(addr);
+                    let addr = spell::bare(addr);
                     let label = crate::value::null_label(t, &addr, &crate::types::dotted(p, field));
                     match t == crate::modules::LET {
                         true => lets.push((x, label)),
@@ -586,7 +587,7 @@ impl Redactor {
         self.secret(v).is_some()
     }
 
-    /// `partition::fmt_value`, with secrets as `(sensitive T["A"].p)` and
+    /// `spell::value`, with secrets as `(sensitive T["A"].p)` and
     /// nulls as `?T["A"].p` (`ir::label`).
     pub fn fmt(&self, v: &Value) -> String {
         self.spell(v, Spelling::Core)
@@ -611,7 +612,7 @@ impl Redactor {
             return match (how, v) {
                 (Spelling::Cell, Value::Null { .. }) => "secret(?)".into(),
                 (Spelling::Cell, Value::Str(s)) => format!("secret({})", size(s.len())),
-                (Spelling::Cell, v) => format!("secret({})", size(partition::fmt_value(v).len())),
+                (Spelling::Cell, v) => format!("secret({})", size(spell::value(v).len())),
                 (Spelling::Core, _) => format!("(sensitive {})", crate::ir::label(&l)),
                 _ => format!("(sensitive {})", crate::report::attribute_label(&l)),
             };
@@ -649,7 +650,7 @@ impl Redactor {
                 crate::ir::string_literal(name),
                 crate::ir::string_literal(attr)
             ),
-            v => partition::fmt_value(v),
+            v => spell::value(v),
         }
     }
 
@@ -659,7 +660,7 @@ impl Redactor {
             .iter()
             .map(|t| match t {
                 Term::Val(v) => self.fmt(v),
-                t => partition::fmt_term(t),
+                t => spell::term(t),
             })
             .collect();
         format!("{}({})", a.pred, args.join(", "))
@@ -672,7 +673,7 @@ impl Redactor {
             .iter()
             .map(|t| match t {
                 Term::Val(v) => self.surface(v),
-                t => partition::fmt_term(t),
+                t => spell::term(t),
             })
             .collect();
         format!("{}({})", a.pred, args.join(", "))
@@ -692,7 +693,7 @@ impl Redactor {
                 && let Some(l) = self
                     .secrets
                     .iter()
-                    .find(|(x, _)| partition::fmt_bare(x) == v)
+                    .find(|(x, _)| spell::bare(x) == v)
                     .map(|(_, l)| l)
             {
                 let head = self.tokens(&s[..i], |v| self.secret(v));

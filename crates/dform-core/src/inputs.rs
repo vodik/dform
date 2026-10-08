@@ -14,6 +14,7 @@
 
 use crate::ast::{Atom, InputDecl, Program, Span, Stmt, Term, TypeExpr};
 use crate::diag::{Diagnostic, Diagnostics};
+use crate::spell;
 use crate::value::Value;
 use anyhow::Result;
 use std::collections::BTreeSet;
@@ -353,7 +354,7 @@ pub fn violations(facts: &BTreeSet<Atom>, declared: &[Declared]) -> Vec<String> 
                 out.push(format!(
                     "{}: {} is not {}",
                     d.who(),
-                    crate::partition::fmt_bare(x),
+                    spell::bare(x),
                     type_text(&d.decl.ty)
                 ));
             }
@@ -379,7 +380,7 @@ pub fn violations(facts: &BTreeSet<Atom>, declared: &[Declared]) -> Vec<String> 
                 fields.dedup();
                 out.push(format!(
                     "{who}: {} is not an object (its fields: {})",
-                    crate::partition::fmt_bare(v),
+                    spell::bare(v),
                     fields.join(", ")
                 ));
                 continue;
@@ -550,7 +551,7 @@ fn object_value(k: &str, v: Value, leaves: &[&Declared]) -> Result<Value> {
         anyhow::bail!(
             "--set {k}={}: input {k} is an object of {}: give a field, `--set {k}.FIELD=v`, \
              or a document, `--set {k}=@FILE`",
-            crate::partition::fmt_bare(&v),
+            spell::bare(&v),
             fields.join(", ")
         );
     };
@@ -578,7 +579,7 @@ fn object_value(k: &str, v: Value, leaves: &[&Declared]) -> Result<Value> {
         if !has_type(&d.decl.ty, &x) {
             anyhow::bail!(
                 "--set {k}: {a} = {} is not {}",
-                crate::partition::fmt_bare(&x),
+                spell::bare(&x),
                 type_text(&d.decl.ty)
             );
         }
@@ -622,7 +623,7 @@ pub fn set_facts(declared: &[Declared], set: &[(String, Value)]) -> Result<Vec<A
                     .unwrap_or_default();
                 anyhow::bail!(
                     "--set {k}={}: input {k} is {}{why}",
-                    crate::partition::fmt_bare(&v),
+                    spell::bare(&v),
                     type_text(&d.decl.ty)
                 );
             }
@@ -639,7 +640,7 @@ pub fn set_facts(declared: &[Declared], set: &[(String, Value)]) -> Result<Vec<A
                     if !has_type(t, &v) {
                         anyhow::bail!(
                             "--set {k}={}: input {} is {}",
-                            crate::partition::fmt_bare(&v),
+                            spell::bare(&v),
                             d.address.as_deref().unwrap_or_default(),
                             type_text(&d.decl.ty)
                         );

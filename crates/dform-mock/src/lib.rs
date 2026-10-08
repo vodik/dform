@@ -82,7 +82,7 @@ pub struct Span {
 /// inputs and an open null in every other column, labeled
 /// `PRED/INPUTS#N` (`N` the column from 1).
 fn not_yet_row(pred: &str, plus: &[bool], inputs: &[Value]) -> Vec<Value> {
-    let ins: Vec<String> = inputs.iter().map(dform_core::partition::fmt_bare).collect();
+    let ins: Vec<String> = inputs.iter().map(dform_core::spell::bare).collect();
     let mut given = inputs.iter();
     plus.iter()
         .enumerate()
@@ -450,7 +450,7 @@ impl FakeCloud {
                     if a.args.len() != plus.len() {
                         bail!(
                             "the mock's answer {} has {} columns, the extern {}",
-                            dform_core::partition::fmt_atom(a),
+                            dform_core::spell::atom(a),
                             a.args.len(),
                             plus.len()
                         );
@@ -1249,7 +1249,7 @@ fn ground_row(a: &Atom) -> Result<Vec<Value>> {
         .ok_or_else(|| {
             anyhow!(
                 "the mock's answer {} is not ground",
-                dform_core::partition::fmt_atom(a)
+                dform_core::spell::atom(a)
             )
         })
 }

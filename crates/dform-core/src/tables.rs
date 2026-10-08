@@ -39,7 +39,7 @@ use crate::ast::{Atom, ExternFn, Lit, Program, RuleStmt, Span, Stmt, Term, TypeE
 use crate::externs::{self, Answer};
 use crate::files::{Files, Outcome};
 use crate::inputs::{has_type, type_text};
-use crate::partition::fmt_value;
+use crate::spell;
 use crate::value::Value;
 use crate::watch::{self, Relation, Source};
 use anyhow::{Context, Result, anyhow, bail};
@@ -395,10 +395,7 @@ impl Tables {
             let file = crate::custody::given::parse(&text, &shown)?;
             let rows = crate::custody::given::rows(&file, &shown);
             crate::custody::given::note(crate::custody::given::Read {
-                location: inputs
-                    .first()
-                    .map(crate::partition::fmt_bare)
-                    .unwrap_or_default(),
+                location: inputs.first().map(spell::bare).unwrap_or_default(),
                 shown: shown.clone(),
                 path: on_disk,
                 file: Some(file),
@@ -538,7 +535,7 @@ fn typed_rows(
                 bail!(
                     "{at}: column {}: {} is not {}",
                     c.name,
-                    fmt_value(&v),
+                    spell::value(&v),
                     type_text(t)
                 );
             }
@@ -566,7 +563,11 @@ fn selected_rows(doc: Value, selector: &str, text: bool) -> Result<Vec<Row>> {
         .enumerate()
         .map(|(i, (v, ctx))| {
             let Value::Obj(m) = v else {
-                bail!("row {}: a row is an object, not {}", i + 1, fmt_value(&v));
+                bail!(
+                    "row {}: a row is an object, not {}",
+                    i + 1,
+                    spell::value(&v)
+                );
             };
             let cells = m
                 .into_iter()
@@ -597,7 +598,10 @@ fn selected_leaves(doc: Value, selector: &str) -> Result<Vec<(Option<usize>, Str
     let mut out = Vec::new();
     for (v, _) in select(doc, selector)? {
         let Value::Obj(m) = v else {
-            bail!("a document of inputs is a mapping, not {}", fmt_value(&v));
+            bail!(
+                "a document of inputs is a mapping, not {}",
+                spell::value(&v)
+            );
         };
         for (k, v) in m {
             flatten(&mut out, None, k, v);

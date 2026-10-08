@@ -32,6 +32,7 @@
 
 use crate::ast::{Atom, Extern, Lit, Program, RuleStmt, Stmt, Term};
 use crate::schema::Schema;
+use crate::spell;
 use crate::transform;
 use crate::value::Value;
 use anyhow::Result;
@@ -74,7 +75,7 @@ pub struct Addr(Vec<Vec<String>>);
 
 impl fmt::Display for Addr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let alts: Vec<String> = self.0.iter().map(|g| quote(&g.join("*"))).collect();
+        let alts: Vec<String> = self.0.iter().map(|g| spell::quote(&g.join("*"))).collect();
         write!(f, "{}", alts.join("|"))
     }
 }
@@ -1837,152 +1838,6 @@ pub fn stratify(g: &Graph) -> Verdict {
     Verdict::Stratified { strata }
 }
 
-// ---------------------------------------------------------------------------
-// Pretty printing (no spans exist; rule text is the diagnostic)
-// ---------------------------------------------------------------------------
-
-pub fn fmt_term(t: &Term) -> String {
-    match t {
-        Term::Val(v) => fmt_value(v),
-        Term::Var(v) => v.clone(),
-        Term::Wildcard => "_".into(),
-        // `x.len` (R-155), as the program writes it.
-        Term::Func { name, args } if name == crate::ir::LEN && args.len() == 1 => {
-            format!("{}.len", fmt_term(&args[0]))
-        }
-        Term::Func { name, args } => format!(
-            "{name}({})",
-            args.iter().map(fmt_term).collect::<Vec<_>>().join(", ")
-        ),
-        Term::List(xs) => format!(
-            "[{}]",
-            xs.iter().map(fmt_term).collect::<Vec<_>>().join(", ")
-        ),
-        Term::Obj(m) => format!(
-            "{{{}}}",
-            m.iter()
-                .map(|(k, v)| format!("{k}: {}", fmt_term(v)))
-                .collect::<Vec<_>>()
-                .join(", ")
-        ),
-        Term::ListComp { item, .. } => format!("[{} | ...]", fmt_term(item)),
-    }
-}
-
-/// A string as the literal `fmt` writes for it (grammar.md "Strings"):
-/// quoted, `\\` `\"` `\n` `\t` escaped, any other control character as
-/// `\u{..}`, and `${` as `$${`. The plan, `query` and `why` print a string
-/// value so, on one line.
-pub fn quote(s: &str) -> String {
-    let mut out = String::with_capacity(s.len() + 2);
-    out.push('"');
-    for c in s.chars() {
-        match c {
-            '\\' => out.push_str("\\\\"),
-            '"' => out.push_str("\\\""),
-            '\n' => out.push_str("\\n"),
-            '\t' => out.push_str("\\t"),
-            c if c.is_control() => out.push_str(&format!("\\u{{{:x}}}", c as u32)),
-            c => out.push(c),
-        }
-    }
-    out.push('"');
-    out.replace("${", "$${")
-}
-
-/// A value with a string bare, unquoted, and anything else as
-/// [`fmt_value`]: how a key's value, a label's part or a value inside a
-/// message prints (`name=api`).
-pub fn fmt_bare(v: &Value) -> String {
-    match v {
-        Value::Str(s) => s.clone(),
-        v => fmt_value(v),
-    }
-}
-
-pub fn fmt_value(v: &Value) -> String {
-    match v {
-        Value::Str(s) => quote(s),
-        Value::Int(i) => i.to_string(),
-        Value::Float(f) => f.to_string(),
-        Value::Bool(b) => b.to_string(),
-        Value::List(xs) => format!(
-            "[{}]",
-            xs.iter().map(fmt_value).collect::<Vec<_>>().join(", ")
-        ),
-        Value::Obj(m) => format!(
-            "{{{}}}",
-            m.iter()
-                .map(|(k, v)| format!("{k}: {}", fmt_value(v)))
-                .collect::<Vec<_>>()
-                .join(", ")
-        ),
-        Value::Ip(n) => crate::value::u32_to_ipv4(*n),
-        Value::IpNet { addr, prefix } => crate::value::ipnet_to_string(*addr, *prefix),
-        Value::Range(r) => r.to_string(),
-        Value::Ref { typ, name, attr } => format!("ref({typ}, {name}, {attr})"),
-        Value::CloudRef { typ, name, attr } => format!("cloud_ref({typ}, {name}, {attr})"),
-        Value::Null { label, class, .. } => format!("?{label}:{class:?}"),
-        Value::Quantity(q) => q.to_string(),
-        Value::Time(t) => t.to_string(),
-        Value::Uri(u) => u.to_string(),
-        Value::Oci(u) => u.clone(),
-        Value::Semver(v) => v.to_string(),
-    }
-}
-
-pub fn fmt_atom(a: &Atom) -> String {
-    format!(
-        "{}({})",
-        a.pred,
-        a.args.iter().map(fmt_term).collect::<Vec<_>>().join(", ")
-    )
-}
-
-pub fn fmt_lit(l: &Lit) -> String {
-    match l {
-        Lit::Pos(a) => fmt_atom(a),
-        Lit::Not(a) => format!("not {}", fmt_atom(a)),
-        Lit::Eq(a, b) => format!("{} = {}", fmt_term(a), fmt_term(b)),
-        Lit::Neq(a, b) => format!("{} != {}", fmt_term(a), fmt_term(b)),
-        Lit::Gt(a, b) => format!("{} > {}", fmt_term(a), fmt_term(b)),
-        Lit::Ge(a, b) => format!("{} >= {}", fmt_term(a), fmt_term(b)),
-        Lit::Lt(a, b) => format!("{} < {}", fmt_term(a), fmt_term(b)),
-        Lit::Le(a, b) => format!("{} <= {}", fmt_term(a), fmt_term(b)),
-    }
-}
-
-/// A clause as the program writes it, for a message: membership is
-/// `x in r` and `x not in r`, not the relation it lowers to.
-pub fn fmt_written(l: &Lit) -> String {
-    match l {
-        Lit::Pos(a) | Lit::Not(a) if a.pred == "member" && a.args.len() == 2 => {
-            let not = if matches!(l, Lit::Not(_)) { " not" } else { "" };
-            format!("{}{not} in {}", fmt_term(&a.args[1]), fmt_term(&a.args[0]))
-        }
-        l => fmt_lit(l),
-    }
-}
-
-pub fn fmt_rule(r: &RuleStmt) -> String {
-    let body = r.body.iter().map(fmt_lit).collect::<Vec<_>>().join(", ");
-    if body.is_empty() {
-        fmt_atom(&r.head)
-    } else {
-        format!("{} :- {}", fmt_atom(&r.head), body)
-    }
-}
-
-/// A short, cropped rule text for reports.
-pub fn rule_short(r: &RuleStmt) -> String {
-    let s = fmt_rule(r);
-    if s.len() > 140 {
-        format!("{}...", &s[..140])
-    } else {
-        s
-    }
-}
-
 pub fn report(name: &str, g: &Graph, v: &Verdict) -> String {
     let mut out = String::new();
     out.push_str(&format!(
@@ -2020,7 +1875,7 @@ pub fn report(name: &str, g: &Graph, v: &Verdict) -> String {
             ));
             for e in negative_edges {
                 let rule = match e.rule {
-                    Some(i) => format!("rule #{i}: {}", rule_short(&g.rules[i])),
+                    Some(i) => format!("rule #{i}: {}", spell::rule_short(&g.rules[i])),
                     None => "prelude".into(),
                 };
                 out.push_str(&format!(
@@ -2048,8 +1903,8 @@ pub fn cycle_error(g: &Graph, scc: &BTreeSet<Node>, negative_edges: &[Edge]) -> 
             Some(i) => {
                 let r = &g.rules[i];
                 match crate::diag::place(r.head.span) {
-                    Some(at) => format!("{} (at {at})", fmt_rule(r)),
-                    None => fmt_rule(r),
+                    Some(at) => format!("{} (at {at})", spell::rule(r)),
+                    None => spell::rule(r),
                 }
             }
             None => "(compiler-generated)".into(),
@@ -2192,13 +2047,5 @@ mod tests {
             println!("{r}");
             assert_eq!(matches!(v, Verdict::Stratified { .. }), expect_ok, "{file}");
         }
-    }
-
-    #[test]
-    fn fmt_bare_leaves_a_string_unquoted_and_nothing_else() {
-        assert_eq!(fmt_bare(&Value::Str("api".into())), "api");
-        assert_eq!(fmt_value(&Value::Str("api".into())), "\"api\"");
-        let list = Value::List(vec![Value::Str("a".into()), Value::Int(1)]);
-        assert_eq!(fmt_bare(&list), "[\"a\", 1]");
     }
 }

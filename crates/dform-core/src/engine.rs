@@ -6,6 +6,7 @@ use crate::ir::store::{Store, TupleId, Window};
 use crate::lattice::{self, Collapsed, Lattice, Rank, RankedContribution, Shadowed, Witnesses};
 use crate::lattice::{Truth, nulls_in};
 use crate::partition::{self, Node};
+use crate::spell;
 use crate::stuck::{self, Stuck};
 use crate::transform;
 use crate::value::Value;
@@ -41,7 +42,7 @@ pub fn circuit_fact(a: &Atom) -> circuit::Fact {
             .iter()
             .map(|t| match t {
                 Term::Val(v) => v.clone(),
-                other => Value::Str(partition::fmt_term(other)),
+                other => Value::Str(spell::term(other)),
             })
             .collect(),
     )
@@ -115,7 +116,7 @@ impl Prov {
 
     fn absent(&mut self, a: &Atom) -> NodeId {
         self.circuit.leaf(Leaf::Absent {
-            pattern: partition::fmt_atom(a),
+            pattern: spell::atom(a),
         })
     }
 
@@ -128,7 +129,7 @@ impl Prov {
 /// `tick`: the apply tick the planner injected its facts at (`None`: the
 /// plan).
 fn given_leaf(a: &Atom, externs: &BTreeSet<crate::ast::Extern>, tick: Option<usize>) -> Leaf {
-    let text = partition::fmt_atom(a);
+    let text = spell::atom(a);
     if let Some(event) = crate::stack::published(a) {
         return Leaf::World { event };
     }
@@ -138,7 +139,7 @@ fn given_leaf(a: &Atom, externs: &BTreeSet<crate::ast::Extern>, tick: Option<usi
             let flag = if a.pred == "input" { "set" } else { "data" };
             let kv = match a.args.as_slice() {
                 [Term::Val(k), Term::Val(v)] => {
-                    format!("{}={}", partition::fmt_bare(k), partition::fmt_bare(v))
+                    format!("{}={}", spell::bare(k), spell::bare(v))
                 }
                 _ => text,
             };
@@ -374,7 +375,7 @@ fn start(
             bail!(
                 "{} is derived by the attribute aggregate; contribute with arg instead: {}{}",
                 r.head.pred,
-                partition::fmt_rule(r),
+                spell::rule(r),
                 at_suffix(r.head.span)
             );
         }
@@ -386,7 +387,7 @@ fn start(
                 } else {
                     "may_derive/3"
                 },
-                partition::fmt_rule(r),
+                spell::rule(r),
                 at_suffix(r.head.span)
             );
         }
@@ -396,7 +397,7 @@ fn start(
             bail!(
                 "{} must be a fact, not a rule: {}{}",
                 r.head.pred,
-                partition::fmt_rule(r),
+                spell::rule(r),
                 at_suffix(r.head.span)
             );
         }
@@ -457,7 +458,7 @@ fn start(
         }
     }
 
-    let rule_text: Vec<String> = rules.iter().map(partition::fmt_rule).collect();
+    let rule_text: Vec<String> = rules.iter().map(spell::rule).collect();
     origins.rules = rule_text
         .iter()
         .zip(&rules)
@@ -1106,7 +1107,7 @@ impl Origins {
             .into_iter()
             .flatten()
             .map(|o| match o {
-                Origin::Fact(span) => with_place(partition::fmt_atom(a), *span),
+                Origin::Fact(span) => with_place(spell::atom(a), *span),
                 Origin::Rule(i) => self.rules[*i].clone(),
             })
             .collect();
@@ -1382,7 +1383,7 @@ impl AttrAggregate {
                 bindings: BTreeMap::new(),
                 nulls,
                 reason,
-                text: format!("attr({typ}, {}, {path}, _)", partition::fmt_value(addr)),
+                text: format!("attr({typ}, {}, {path}, _)", spell::value(addr)),
             };
             let any = Atom {
                 pred: "attr".into(),
@@ -1413,7 +1414,7 @@ impl AttrAggregate {
                              is not written by its key; declare the field that names an element, \
                              type_list_key({typ}, \"{list}\", [\"FIELD\"]), or write the whole \
                              list\n  in: {}",
-                            partition::fmt_value(addr),
+                            spell::value(addr),
                             origins.of(*t, a).join("; ")
                         );
                     }
@@ -1489,7 +1490,7 @@ impl AttrAggregate {
             bail!(
                 "internal: attribute {} {} {} gained a contribution after it was collapsed",
                 key.0,
-                partition::fmt_value(&key.1),
+                spell::value(&key.1),
                 key.2
             );
         }
@@ -1529,21 +1530,21 @@ fn contribution(a: &Atom) -> Result<(GroupKey, Rank, Value, ElemOf)> {
     let (Some(typ), Some(path)) = (vals[0].as_str(), vals[2].as_str()) else {
         bail!(
             "contribution {} needs a string type and path",
-            partition::fmt_atom(a)
+            spell::atom(a)
         );
     };
     let Some(rank) = parse_rank(vals[4]) else {
         bail!(
             "contribution {}: rank must be default, normal or override",
-            partition::fmt_atom(a)
+            spell::atom(a)
         );
     };
     if let Some(list) = path.strip_suffix(transform::ELEM) {
         let Value::List(kv) = vals[3] else {
-            bail!("internal: element write {}", partition::fmt_atom(a));
+            bail!("internal: element write {}", spell::atom(a));
         };
         let [k, v] = kv.as_slice() else {
-            bail!("internal: element write {}", partition::fmt_atom(a));
+            bail!("internal: element write {}", spell::atom(a));
         };
         let top = list.split('.').next().unwrap_or(list).to_string();
         let group = (typ.to_string(), vals[1].clone(), top);
@@ -1591,11 +1592,7 @@ fn declared_lattices(facts: &[Atom]) -> Result<BTreeMap<(String, String), Lattic
             Term::Val(k),
         ] = a.args.as_slice()
         else {
-            bail!(
-                "{}/3 expects (Type, Path, ...): {}",
-                a.pred,
-                partition::fmt_atom(a)
-            );
+            bail!("{}/3 expects (Type, Path, ...): {}", a.pred, spell::atom(a));
         };
         let lat = match (a.pred.as_str(), k) {
             ("type_lattice", Value::Str(k)) if k == "flat" => Lattice::Flat,
@@ -1614,11 +1611,7 @@ fn declared_lattices(facts: &[Atom]) -> Result<BTreeMap<(String, String), Lattic
                 defaults: key_defaults(t, p, std::slice::from_ref(k)),
                 elem: Box::new(Lattice::Map(Box::new(Lattice::Flat))),
             },
-            _ => bail!(
-                "{}: unknown lattice {}",
-                partition::fmt_atom(a),
-                partition::fmt_value(k)
-            ),
+            _ => bail!("{}: unknown lattice {}", spell::atom(a), spell::value(k)),
         };
         let key = (t.clone(), p.clone());
         if out.get(&key).is_some_and(|l| *l != lat) {
@@ -1671,7 +1664,7 @@ fn declared_refinements(store: &Store) -> Result<Vec<(TupleId, crate::refine::St
         let Some(r) = crate::refine::Stated::of(a) else {
             continue;
         };
-        let r = r.map_err(|e| anyhow!("{}: {e}", partition::fmt_atom(a)))?;
+        let r = r.map_err(|e| anyhow!("{}: {e}", spell::atom(a)))?;
         if !is_sensitive(&r.typ, &r.path) {
             out.push((t as TupleId, r));
         }
@@ -1847,7 +1840,7 @@ impl Collapse<'_> {
                 ("value", Value::Str(r.constraint.to_string())),
                 (
                     "from",
-                    Value::List(vec![Value::Str(with_place(partition::fmt_atom(a), a.span))]),
+                    Value::List(vec![Value::Str(with_place(spell::atom(a), a.span))]),
                 ),
             ]);
         }
@@ -1951,10 +1944,7 @@ impl Collapse<'_> {
             ("constraint", Value::Str(constraint.to_string())),
             (
                 "reason",
-                Value::Str(format!(
-                    "{} violates {constraint}",
-                    partition::fmt_value(&value)
-                )),
+                Value::Str(format!("{} violates {constraint}", spell::value(&value))),
             ),
             ("value", value),
             (
@@ -2500,10 +2490,7 @@ fn eval_rule_collect(
             Err(msg) => Atom {
                 pred: "deny".into(),
                 args: vec![
-                    Term::Val(Value::Str(format!(
-                        "{}: {msg}",
-                        partition::fmt_atom(&key_pat)
-                    ))),
+                    Term::Val(Value::Str(format!("{}: {msg}", spell::atom(&key_pat)))),
                     Term::Val(obj(vec![
                         ("pred", Value::Str(rule.head.pred.clone())),
                         ("group", Value::List(key)),
@@ -2555,7 +2542,7 @@ fn fold(name: &str, kind: AggKind, items: Vec<Value>) -> std::result::Result<Val
                 let Value::Quantity(q) = v else {
                     return Err(format!(
                         "{name}() over {}, which is not a quantity",
-                        partition::fmt_value(v)
+                        spell::value(v)
                     ));
                 };
                 total = Some(match total {
@@ -2581,7 +2568,7 @@ fn fold(name: &str, kind: AggKind, items: Vec<Value>) -> std::result::Result<Val
                     v => {
                         return Err(format!(
                             "{name}() over {}, which is not a number",
-                            partition::fmt_value(v)
+                            spell::value(v)
                         ));
                     }
                 };
@@ -2611,12 +2598,12 @@ fn fold(name: &str, kind: AggKind, items: Vec<Value>) -> std::result::Result<Val
                 let Value::Int(n) = v else {
                     return Err(format!(
                         "{name}() over {}, which is not an int",
-                        partition::fmt_value(v)
+                        spell::value(v)
                     ));
                 };
                 total = total
                     .checked_add(*n)
-                    .ok_or_else(|| format!("{name}() overflows at {}", partition::fmt_value(v)))?;
+                    .ok_or_else(|| format!("{name}() overflows at {}", spell::value(v)))?;
             }
             Ok(Value::Int(total))
         }
@@ -2630,15 +2617,15 @@ fn fold(name: &str, kind: AggKind, items: Vec<Value>) -> std::result::Result<Val
                 if !matches!(v, Value::Int(_) | Value::Str(_)) {
                     return Err(format!(
                         "{name}() over {}, which is neither an int nor a string",
-                        partition::fmt_value(v)
+                        spell::value(v)
                     ));
                 }
             }
             if std::mem::discriminant(first) != std::mem::discriminant(last) {
                 return Err(format!(
                     "{name}() over {} and {}, an int and a string",
-                    partition::fmt_value(first),
-                    partition::fmt_value(last)
+                    spell::value(first),
+                    spell::value(last)
                 ));
             }
             let v = if kind == AggKind::Min { first } else { last };
@@ -2650,7 +2637,7 @@ fn fold(name: &str, kind: AggKind, items: Vec<Value>) -> std::result::Result<Val
                 let Value::Bool(b) = v else {
                     return Err(format!(
                         "{name}() over {}, which is not a bool",
-                        partition::fmt_value(v)
+                        spell::value(v)
                     ));
                 };
                 bools.push(*b);
@@ -2964,7 +2951,7 @@ fn eval_not(grounded: &Atom, src: &Src, s: &HashMap<String, Value>, rec: &Rec) -
             nulls,
             format!(
                 "not {}: {} has a stuck instance that may derive it",
-                partition::fmt_atom(grounded),
+                spell::atom(grounded),
                 grounded.pred
             ),
         );
@@ -3024,16 +3011,13 @@ fn eval_builtin_pred(
             "`{}(..)`{} is not true or false: {}",
             atom.pred,
             at_suffix(atom.span),
-            partition::fmt_value(&other)
+            spell::value(&other)
         ),
         None if crate::functions::get(&atom.pred).is_some_and(|f| f.partial) => Ok(Some(false)),
         None => bail!(
             "`{}({})`{} is not defined for these arguments",
             atom.pred,
-            vals.iter()
-                .map(partition::fmt_value)
-                .collect::<Vec<_>>()
-                .join(", "),
+            vals.iter().map(spell::value).collect::<Vec<_>>().join(", "),
             at_suffix(atom.span)
         ),
     }
@@ -3120,7 +3104,7 @@ fn eval_member2(
         Value::Obj(_) => bail!(
             "`x in e` over an object, {}, in `{}`: an object's entries are matched by a \
              pattern, `(key, value) in e` (R-58)",
-            partition::fmt_value(&list_v),
+            spell::value(&list_v),
             rec.text
         ),
         _ => bail!("member/2 first argument must be a list"),
@@ -3184,7 +3168,7 @@ fn in_scalar(
     let Some(item) = eval_term(&atom.args[1], state) else {
         bail!(
             "`x in {}` in `{}`: a {} holds a value given, it enumerates none; bind `x` first",
-            partition::fmt_value(coll),
+            spell::value(coll),
             rec.text,
             crate::value::type_name(coll)
         );
@@ -3213,7 +3197,7 @@ pub fn holds(coll: &Value, item: &Value) -> std::result::Result<bool, String> {
         Some(n) => Ok(n),
         None => Err(format!(
             "{what} holds addresses, and {} is no `ip`",
-            partition::fmt_value(item)
+            spell::value(item)
         )),
     };
     match coll {
@@ -3221,7 +3205,7 @@ pub fn holds(coll: &Value, item: &Value) -> std::result::Result<bool, String> {
             V::Str(needle) => Ok(s.contains(needle.as_str())),
             _ => Err(format!(
                 "a string holds strings, and {} is {}: interpolate it, `\"${{x}}\" in s`",
-                partition::fmt_value(item),
+                spell::value(item),
                 crate::value::article(type_name(item))
             )),
         },
@@ -3236,7 +3220,7 @@ pub fn holds(coll: &Value, item: &Value) -> std::result::Result<bool, String> {
         V::Range(r) => r.holds(item),
         v => Err(format!(
             "`in` takes a list, a string, an `inet` or a range, and {} is {}{}",
-            partition::fmt_value(v),
+            spell::value(v),
             crate::value::article(type_name(v)),
             match v {
                 V::Oci(_) | V::Uri(_) | V::Time(_) | V::Quantity(_) | V::Semver(_) | V::Ip(_) =>
@@ -3515,7 +3499,7 @@ fn head_error(head: &Atom, state: &HashMap<String, Value>) -> Option<String> {
                     let shown: Vec<String> = args
                         .iter()
                         .filter_map(|a| eval_term(a, state))
-                        .map(|v| partition::fmt_term(&Term::Val(v)))
+                        .map(|v| spell::term(&Term::Val(v)))
                         .collect();
                     let partial = crate::functions::get(name).is_none_or(|f| f.partial);
                     Some(NoValue::Call(
@@ -3626,7 +3610,7 @@ fn eval_eq(
                 }
                 if let Some((name, args)) = failed_builtin(t, &out) {
                     if name == crate::ir::RESOURCE_BODY {
-                        let args: Vec<String> = args.iter().map(partition::fmt_value).collect();
+                        let args: Vec<String> = args.iter().map(spell::value).collect();
                         bail!(
                             "`resource T NAME = VALUE` takes an object, a value of the type: not {}{}",
                             args.join(", "),
@@ -3653,7 +3637,7 @@ fn unanswered(name: &str, args: &[Value], rec: &Rec) -> Result<()> {
     if crate::functions::get(name).is_none_or(|f| f.partial) {
         return Ok(());
     }
-    let args: Vec<String> = args.iter().map(partition::fmt_value).collect();
+    let args: Vec<String> = args.iter().map(spell::value).collect();
     bail!(
         "{name}({}) is not defined for these arguments{}",
         args.join(", "),
@@ -4149,9 +4133,7 @@ fn as_params(name: &str, vals: Vec<Value>) -> Vec<Value> {
                 | Value::Semver(_)
                 | Value::Range(_),
             ) => v.typed_text().map_or(v, Value::Str),
-            (Some("string"), Value::Ip(_) | Value::IpNet { .. }) => {
-                Value::Str(partition::fmt_value(&v))
-            }
+            (Some("string"), Value::Ip(_) | Value::IpNet { .. }) => Value::Str(spell::value(&v)),
             (Some(ty), Value::Str(_)) if crate::value::is_value_type(ty) => {
                 crate::value::read_typed(ty, &v).unwrap_or(v)
             }
@@ -4229,7 +4211,7 @@ mod tests {
         r.facts
             .iter()
             .filter(|a| a.pred == pred)
-            .map(partition::fmt_atom)
+            .map(spell::atom)
             .collect()
     }
 
@@ -4613,7 +4595,7 @@ mod tests {
         assert!(violations.is_empty());
         assert_eq!(
             facts_of(&r, "seen"),
-            vec![format!("seen({})", partition::fmt_value(&null))]
+            vec![format!("seen({})", spell::value(&null))]
         );
     }
 
@@ -4736,14 +4718,7 @@ mod tests {
             )
             .unwrap()
             .iter()
-            .map(|r| {
-                format!(
-                    "{} {} {}",
-                    r.addr.typ,
-                    r.addr.name,
-                    partition::fmt_value(&r.attrs)
-                )
-            })
+            .map(|r| format!("{} {} {}", r.addr.typ, r.addr.name, spell::value(&r.attrs)))
             .collect();
             (docs, violations, r.warnings)
         };
@@ -4954,7 +4929,7 @@ mod tests {
         // assemble drops computed paths and a zone the provider will pick.
         let doc = |n: &str| {
             let d = docs.iter().find(|d| d.addr.name == n).unwrap();
-            partition::fmt_value(&d.attrs)
+            spell::value(&d.attrs)
         };
         assert_eq!(doc("a"), "{size: 1}");
         assert_eq!(doc("b"), "{zone: \"z1\"}");
@@ -5285,7 +5260,7 @@ mod tests {
             .map(|m| {
                 format!(
                     "{} {} ({})",
-                    partition::fmt_atom(&m.head),
+                    spell::atom(&m.head),
                     m.nulls_text(),
                     m.reason()
                 )
@@ -5356,9 +5331,9 @@ mod tests {
         let f = r
             .facts
             .iter()
-            .find(|a| partition::fmt_atom(a) == fact)
+            .find(|a| spell::atom(a) == fact)
             .unwrap_or_else(|| {
-                let all: Vec<String> = r.facts.iter().map(partition::fmt_atom).collect();
+                let all: Vec<String> = r.facts.iter().map(spell::atom).collect();
                 panic!("no fact {fact} in {all:?}")
             });
         r.circuit
@@ -5381,7 +5356,7 @@ mod tests {
             assert!(
                 r.circuit.has(&circuit_fact(a)),
                 "no node: {}",
-                partition::fmt_atom(a)
+                spell::atom(a)
             );
         }
         assert_eq!(r.circuit.facts().len(), r.facts.len());
@@ -5483,8 +5458,8 @@ mod tests {
                 let f = s.fact();
                 format!(
                     "seen({}, {})",
-                    partition::fmt_term(&f.args[0]),
-                    partition::fmt_term(&f.args[1])
+                    spell::term(&f.args[0]),
+                    spell::term(&f.args[1])
                 )
             })
             .collect();

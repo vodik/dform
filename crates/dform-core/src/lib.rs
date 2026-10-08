@@ -52,6 +52,7 @@ pub mod refine;
 pub mod report;
 pub mod schema;
 pub mod secrets;
+pub mod spell;
 pub mod stack;
 pub mod state;
 pub mod store;

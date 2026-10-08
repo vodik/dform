@@ -212,7 +212,7 @@ fn schema_rows(
         .iter()
         .map(|f| wire::from_fact(f).unwrap())
         .collect();
-    let typ = |a: &dform::ast::Atom| dform::partition::fmt_term(&a.args[0]);
+    let typ = |a: &dform::ast::Atom| dform::spell::term(&a.args[0]);
     (
         facts
             .iter()

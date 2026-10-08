@@ -5,8 +5,9 @@
 use super::evaluated::Evaluated;
 use super::{Cli, Cmd, Outcome};
 use crate::ast::{Atom, Term};
+use crate::spell;
 use crate::value::Value;
-use crate::{deployment, ir, partition, query, report, schema};
+use crate::{deployment, ir, query, report, schema};
 use anyhow::Result;
 use std::path::Path;
 
@@ -106,7 +107,7 @@ impl Query {
                             .iter()
                             .map(|t| match t {
                                 Term::Val(v) => Cell::value(v, redact),
-                                t => Cell::text(partition::fmt_term(t)),
+                                t => Cell::text(spell::term(t)),
                             })
                             .collect(),
                     );

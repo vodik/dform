@@ -16,6 +16,7 @@
 
 use crate::ast::{Program, Span, Stmt, Term};
 use crate::diag::{Diagnostic, Diagnostics};
+use crate::spell;
 use crate::value::Value;
 use anyhow::{Context, Result, bail};
 use std::collections::BTreeMap;
@@ -135,7 +136,7 @@ impl Matrix {
                     ])
                     .into());
                 }
-                given.insert(path.clone(), crate::partition::fmt_bare(v));
+                given.insert(path.clone(), spell::bare(v));
             }
             if let Some(c) = res.facts.iter().find(|a| {
                 a.pred == "attr_conflict"
@@ -143,7 +144,7 @@ impl Matrix {
                         [Term::Val(Value::Str(t)), Term::Val(Value::Str(n)), ..] if t == typ && n == name)
             }) {
                 let path = match c.args.get(2) {
-                    Some(Term::Val(v)) => crate::partition::fmt_bare(v),
+                    Some(Term::Val(v)) => spell::bare(v),
                     _ => String::new(),
                 };
                 return Err(Diagnostics(vec![

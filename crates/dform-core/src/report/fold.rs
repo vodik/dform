@@ -8,7 +8,7 @@
 //! its own line beside it.
 
 use crate::fmt::value::Tree;
-use crate::partition::fmt_bare;
+use crate::spell;
 use crate::value::Value;
 use std::collections::HashMap;
 
@@ -168,7 +168,7 @@ pub fn keyed(x: &Value, pairs: &[(String, String)]) -> bool {
     let Value::Obj(m) = x else { return false };
     pairs
         .iter()
-        .all(|(k, want)| m.get(k).is_none_or(|v| fmt_bare(v) == *want))
+        .all(|(k, want)| m.get(k).is_none_or(|v| spell::bare(v) == *want))
 }
 
 /// Where the leaf at `toks` sits in value `v`, to order leaves by: a

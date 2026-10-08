@@ -14,6 +14,7 @@
 //! Nothing here touches the evaluator. The tests are the point: they run the
 //! four seam-1 cases and check order independence under every permutation.
 
+use crate::spell;
 use crate::value::{NullClass, Value};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -2221,7 +2222,7 @@ fn keyed_overlay(
                 format!(
                     "{path} is keyed by ({}): `{}` does not name one element",
                     keys.join(", "),
-                    crate::partition::fmt_value(&w.key)
+                    spell::value(&w.key)
                 ),
             );
         };
@@ -2241,7 +2242,7 @@ fn keyed_overlay(
                         format!(
                             "{path}[{}]: the element written there has {f} = {}",
                             key_label(keys, &k),
-                            crate::partition::fmt_value(x)
+                            spell::value(x)
                         ),
                     );
                 }
@@ -2336,7 +2337,7 @@ fn keyed_overlay(
 fn key_label(keys: &[String], k: &[Value]) -> String {
     keys.iter()
         .zip(k)
-        .map(|(f, v)| format!("{f}={}", crate::partition::fmt_bare(v)))
+        .map(|(f, v)| format!("{f}={}", spell::bare(v)))
         .collect::<Vec<_>>()
         .join(",")
 }

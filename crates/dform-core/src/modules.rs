@@ -36,6 +36,7 @@ use crate::ast::{
 };
 use crate::diag::{self, Diagnostic, Diagnostics};
 use crate::inputs::Declared;
+use crate::spell;
 use crate::value::Value;
 use anyhow::Result;
 use std::collections::{BTreeMap, BTreeSet};
@@ -1316,7 +1317,7 @@ pub fn refinement(i: &InputDecl, scope: &str) -> Vec<Stmt> {
     let named = Term::Var(i.name.clone());
     let text = rest
         .iter()
-        .map(|l| crate::partition::fmt_written(&subst_lit(l, &i.name, &named)))
+        .map(|l| spell::written(&subst_lit(l, &i.name, &named)))
         .collect::<Vec<_>>()
         .join(", ");
     let who = if scope.is_empty() {

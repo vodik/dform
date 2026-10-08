@@ -1034,6 +1034,6 @@ mod tests {
     #[test]
     fn a_fact_prints_as_its_ground_atom() {
         let f = Fact::new("p", vec![s("a"), Value::Int(1)]);
-        assert_eq!(crate::partition::fmt_atom(&f.atom()), "p(\"a\", 1)");
+        assert_eq!(crate::spell::atom(&f.atom()), "p(\"a\", 1)");
     }
 }

@@ -16,8 +16,8 @@ use crate::ast::{Atom, Lit, RuleStmt, Term};
 use crate::circuit::{Circuit, Fact, Leaf, NodeId, View};
 use crate::engine;
 use crate::ir::Address;
-use crate::partition::fmt_bare;
 use crate::query::Redactor;
+use crate::spell;
 use crate::syntax::resolve::{Piece, capitalise, pieces};
 use crate::syntax::{SyntaxElement, SyntaxKind, SyntaxNode};
 use crate::value::Value;
@@ -616,11 +616,11 @@ impl Surface<'_, '_> {
         let label = match (keys.get(&(t.to_string(), list.to_string())), k) {
             (Some(ks), Value::Obj(m)) => ks
                 .iter()
-                .map(|f| Some(format!("{f}={}", fmt_bare(m.get(f)?))))
+                .map(|f| Some(format!("{f}={}", spell::bare(m.get(f)?))))
                 .collect::<Option<Vec<_>>>()?
                 .join(","),
-            (Some(ks), k) if ks.len() == 1 => format!("{}={}", ks[0], fmt_bare(k)),
-            _ => fmt_bare(k),
+            (Some(ks), k) if ks.len() == 1 => format!("{}={}", ks[0], spell::bare(k)),
+            _ => spell::bare(k),
         };
         Some((format!("{list}[{label}]"), content))
     }
@@ -646,7 +646,7 @@ impl Surface<'_, '_> {
             _ => None,
         };
         match fact {
-            Some(f) if crate::partition::fmt_atom(&f.atom()) == pattern => self.fact_text(&f),
+            Some(f) if spell::atom(&f.atom()) == pattern => self.fact_text(&f),
             _ => self.p.redact.text(pattern),
         }
     }
@@ -1696,7 +1696,7 @@ fn holds<'v>(
         };
         let matches = match k {
             Value::Obj(_) => super::fold::keyed(k, pairs),
-            k => matches!(pairs.as_slice(), [(_, want)] if fmt_bare(k) == *want),
+            k => matches!(pairs.as_slice(), [(_, want)] if spell::bare(k) == *want),
         };
         let elem = merged_at(n + 1);
         return matches && super::fold::reach_along(content, elem, &toks[n + 1..]).is_some();
@@ -3208,7 +3208,7 @@ impl Cx<'_> {
                         Value::Ref { typ, name, attr } => {
                             out.push_str(&crate::ir::Address { typ, name }.attr(&attr))
                         }
-                        v => out.push_str(&crate::partition::fmt_value(&v)),
+                        v => out.push_str(&spell::value(&v)),
                     }
                 }
             }

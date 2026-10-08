@@ -26,10 +26,10 @@
 use crate::ast::{Atom, Program, RuleStmt, Term};
 use crate::engine::EvalResult;
 use crate::ir::Address;
-use crate::partition::{fmt_atom, fmt_bare, fmt_value};
 use crate::provider::{Action, ActionKind, Change, NULL_KEY, Plan, json_to_value, marker};
 use crate::query::Redactor;
 use crate::schema::Schema;
+use crate::spell;
 use crate::stuck::{Sections, Stuck};
 use crate::value::{Value, null_owner};
 use serde_json::{Value as Json, json};
@@ -525,7 +525,7 @@ impl Shown {
         match self {
             Shown::Absent => "<none>".into(),
             Shown::Value(Json::String(s)) => {
-                format!("{}{}", crate::partition::quote(s), host_ascii_text(s))
+                format!("{}{}", spell::quote(s), host_ascii_text(s))
             }
             Shown::Value(v) => serde_json::to_string(v).unwrap_or_else(|_| "<unprintable>".into()),
             Shown::Null { label, .. } => format!("?{label}"),
@@ -558,11 +558,7 @@ impl Shown {
             Shown::Sensitive(_) => "(sensitive)".into(),
             Shown::Ref { addr, .. } => reference(addr, ""),
             Shown::Value(Json::String(s)) if why == Why::Line => {
-                format!(
-                    "{}{}",
-                    crate::partition::quote(&elide(s)),
-                    host_ascii_text(s)
-                )
+                format!("{}{}", spell::quote(&elide(s)), host_ascii_text(s))
             }
             _ => self.text(),
         }
@@ -1513,8 +1509,8 @@ fn groups(
         .iter()
         .filter(|m| m.head.pred == "want")
         .map(|m| {
-            let reads = crate::modules::private_text(&m.reads, &fmt_atom, " ")
-                .unwrap_or_else(|| fmt_atom(&m.reads));
+            let reads = crate::modules::private_text(&m.reads, &spell::atom, " ")
+                .unwrap_or_else(|| spell::atom(&m.reads));
             (
                 &m.head,
                 m.nulls.iter().cloned().collect(),
@@ -1553,19 +1549,19 @@ pub fn group_pattern(head: &Atom) -> String {
         [Term::Val(Value::Str(t)), a] => match a {
             Term::Val(v) => Address {
                 typ: t.clone(),
-                name: fmt_value(v).trim_matches('"').to_string(),
+                name: spell::value(v).trim_matches('"').to_string(),
             }
             .to_string(),
             _ => format!("{t}[?]"),
         },
-        _ => fmt_atom(head),
+        _ => spell::atom(head),
     }
 }
 
 fn deny_message(head: &Atom) -> String {
     match head.args.first() {
         Some(Term::Val(Value::Str(m))) => m.clone(),
-        _ => fmt_atom(head),
+        _ => spell::atom(head),
     }
 }
 
@@ -1609,7 +1605,7 @@ fn policies(
         }
         let (on, reads, rule) = found.entry(message).or_default();
         on.extend(m.nulls.iter().cloned());
-        reads.push(fmt_atom(&m.reads));
+        reads.push(spell::atom(&m.reads));
         rule.get_or_insert(m.rule);
     }
     let mut may: Vec<Policy> = Vec::new();
@@ -1666,7 +1662,7 @@ fn deferred(
             .iter()
             .filter_map(|n| n.as_str().map(str::to_string))
             .collect();
-        let addr = fmt_bare(addr);
+        let addr = spell::bare(addr);
         out.push(Policy {
             message: format!(
                 "{c} of {}",
@@ -1719,7 +1715,7 @@ fn diags(res: &EvalResult, r: &Redactor, pred: &str, msg: &str) -> Vec<Diag> {
 fn diag(ctx: &BTreeMap<String, Value>, r: &Redactor) -> Diag {
     let s = |k: &str| match ctx.get(k) {
         Some(Value::Str(s)) => s.clone(),
-        Some(v) => fmt_value(v),
+        Some(v) => spell::value(v),
         None => String::new(),
     };
     let witnesses = match ctx.get("witnesses") {
@@ -3932,7 +3928,7 @@ fn denied(p: &tree::Printer, res: &EvalResult, text: &str) -> Denied {
                                 }
                                 .to_string(),
                             ),
-                            Some(v) => Some(fmt_bare(v)),
+                            Some(v) => Some(spell::bare(v)),
                             None => None,
                         }
                     }
@@ -4309,7 +4305,7 @@ fn folded(
 /// whole (no elision inside a laid-out value).
 fn whole(v: &Shown, why: Why) -> String {
     match v {
-        Shown::Value(Json::String(s)) => crate::partition::quote(s),
+        Shown::Value(Json::String(s)) => spell::quote(s),
         v => v.said(why),
     }
 }
@@ -5032,7 +5028,7 @@ mod tests {
         assert_eq!(line.chars().count(), LONG + 2, "{line}");
         assert!(line.starts_with("\"ssh-ed25519 AAAA") && line.ends_with("AA simon@framework\""));
         assert!(line.contains('…'), "{line}");
-        assert_eq!(v.said(Why::How), crate::partition::quote(&key));
+        assert_eq!(v.said(Why::How), spell::quote(&key));
         let short = Shown::Value(Json::String("b2-7".into()));
         assert_eq!(short.said(Why::Line), "\"b2-7\"");
     }

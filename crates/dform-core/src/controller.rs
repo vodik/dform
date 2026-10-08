@@ -36,6 +36,7 @@
 use crate::ast::{Atom, Span, Term};
 use crate::ir::Address;
 use crate::provider::{ActionKind, Plan};
+use crate::spell;
 use crate::store::{DROPS, MEMO, PENDING, Store};
 use crate::value::Value;
 use crate::watch::{self, Relation};
@@ -483,8 +484,8 @@ impl Hook {
                     } else {
                         d.addr.attr(&d.path)
                     },
-                    crate::partition::fmt_value(&d.before),
-                    crate::partition::fmt_value(&d.after),
+                    spell::value(&d.before),
+                    spell::value(&d.after),
                 ));
             }
         }

@@ -16,7 +16,7 @@ fn facts(src: &str, pred: &str) -> Vec<String> {
     r.facts
         .iter()
         .filter(|a| a.pred == pred)
-        .map(dform_core::partition::fmt_atom)
+        .map(dform_core::spell::atom)
         .collect()
 }
 

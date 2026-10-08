@@ -1,8 +1,9 @@
 //! Provider tools: `dform provider check` and `dform provider schema`.
 
 use super::{Outcome, launch};
-use crate::partition;
+
 use crate::plugin::{self, Providers};
+use crate::spell;
 use anyhow::{Result, bail};
 
 /// `dform provider check PATH`: the conformance suite.
@@ -43,7 +44,7 @@ impl ProviderSchema {
             &plugin::Config::default(),
         )?;
         for a in &backend.schema().facts {
-            println!("{}", partition::fmt_atom(a));
+            println!("{}", spell::atom(a));
         }
         Ok(Outcome::Done)
     }

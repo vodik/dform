@@ -31,6 +31,7 @@
 use crate::ast::{Atom, BindArg, ExternFn, Lit, Program, Span, Stmt, Term, TypeExpr};
 use crate::diag::{Diagnostic, Diagnostics};
 use crate::engine::{self, EvalResult};
+use crate::spell;
 use crate::value::Value;
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
@@ -62,7 +63,7 @@ impl Answer {}
 /// The label of the secret an extern's call answers in column `col` (from
 /// 0): `pred/INPUTS#N`, `N` the column from 1.
 pub fn secret_label(pred: &str, inputs: &[Value], col: usize) -> String {
-    let ins: Vec<String> = inputs.iter().map(crate::partition::fmt_bare).collect();
+    let ins: Vec<String> = inputs.iter().map(spell::bare).collect();
     crate::value::null_label(pred, &ins.join(","), &(col + 1).to_string())
 }
 
@@ -718,10 +719,7 @@ impl<'a> Externs<'a> {
 }
 
 fn show(vs: &[Value]) -> String {
-    vs.iter()
-        .map(crate::partition::fmt_value)
-        .collect::<Vec<_>>()
-        .join(", ")
+    vs.iter().map(spell::value).collect::<Vec<_>>().join(", ")
 }
 
 /// The rows of a call: the `+` columns are the inputs, the `-` columns each

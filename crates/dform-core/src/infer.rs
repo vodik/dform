@@ -30,6 +30,7 @@
 
 use crate::ast::{Atom, Decl, ExternFn, Lit, Program, Span, Stmt, Term, TypeExpr};
 use crate::diag::{Diagnostic, Diagnostics};
+use crate::spell;
 use crate::types::{self, Ty};
 use crate::value::Value;
 use anyhow::Result;
@@ -889,7 +890,7 @@ fn is_any(t: Option<&TypeExpr>) -> bool {
 fn shown_term(t: &Term) -> String {
     match t {
         Term::Var(v) => shown_var(v),
-        t => crate::partition::fmt_term(t),
+        t => spell::term(t),
     }
 }
 
@@ -1190,7 +1191,7 @@ fn shown(v: &Value) -> String {
         Value::Int(i) => format!("the int {i}"),
         Value::Float(f) => format!("the float {f}"),
         Value::Bool(b) => format!("the bool {b}"),
-        v => format!("`{}`", crate::partition::fmt_value(v)),
+        v => format!("`{}`", spell::value(v)),
     }
 }
 

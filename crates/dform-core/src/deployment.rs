@@ -26,6 +26,7 @@ use crate::plugin::{self, Launch, Providers};
 use crate::project::{self, Manifest};
 use crate::query::Redactor;
 use crate::schema::{self, Schema};
+use crate::spell;
 use crate::stack::{self, Instance};
 use crate::state::{self, State};
 use crate::store::{self, Location, OpenS3};
@@ -786,7 +787,7 @@ impl Evaluator {
             for (k, v) in settings {
                 let shown = match secret.is_some_and(|s| s.contains(k)) {
                     true => "(sensitive)".to_string(),
-                    false => crate::partition::fmt_bare(v),
+                    false => spell::bare(v),
                 };
                 let from = match how {
                     true => self.setting_source(name, k),
@@ -1982,7 +1983,7 @@ pub fn written(res: &EvalResult, id: NodeId) -> Option<At> {
 fn text_of(v: Option<&Value>) -> String {
     match v {
         Some(Value::Str(s)) => s.clone(),
-        Some(v) => crate::partition::fmt_value(v),
+        Some(v) => spell::value(v),
         None => String::new(),
     }
 }

@@ -32,6 +32,7 @@
 use std::collections::BTreeMap;
 use std::sync::LazyLock;
 
+use crate::spell;
 use crate::value::Value;
 
 /// The signature files, by the path they are shipped at.
@@ -1751,7 +1752,7 @@ fn scalar_text(v: &Value) -> Option<String> {
         | Value::Oci(_)
         | Value::Semver(_)
         | Value::Range(_) => v.typed_text(),
-        Value::Ip(_) | Value::IpNet { .. } => Some(crate::partition::fmt_value(v)),
+        Value::Ip(_) | Value::IpNet { .. } => Some(spell::value(v)),
         _ => None,
     }
 }

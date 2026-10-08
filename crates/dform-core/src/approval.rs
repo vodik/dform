@@ -19,6 +19,7 @@
 //! * The approval service is not dform's: [`sign_dsse`] and [`sign_jwt`]
 //!   are what the example signer (`dform-approve`) and the tests use.
 
+use crate::spell;
 use anyhow::{Context, Result, bail};
 use base64::Engine;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
@@ -135,7 +136,7 @@ fn text(t: &crate::ast::Term) -> String {
             name: name.clone(),
         }
         .attr(attr),
-        crate::ast::Term::Val(v) => crate::partition::fmt_value(v),
+        crate::ast::Term::Val(v) => spell::value(v),
         t => format!("{t:?}"),
     }
 }

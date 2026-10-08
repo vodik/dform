@@ -18,6 +18,7 @@ use crate::circuit::{self, Circuit, Leaf, NodeId, View};
 use crate::engine::EvalResult;
 use crate::ir::Address;
 use crate::schema::Schema;
+use crate::spell;
 use crate::transform;
 use crate::value::Value;
 use std::collections::{BTreeMap, BTreeSet};
@@ -38,7 +39,7 @@ impl Named {
         format!(
             "{} = {}",
             self.addr.attr(&self.path),
-            crate::partition::fmt_value(&self.value)
+            spell::value(&self.value)
         )
     }
 }
@@ -676,7 +677,7 @@ pub fn combinations(inputs: &[(&String, &Vec<Value>)]) -> Vec<BTreeMap<String, V
 /// `cloud == "aws", env == "dev"`.
 pub fn combination_text(c: &BTreeMap<String, Value>) -> String {
     c.iter()
-        .map(|(k, v)| format!("{k} == {}", crate::partition::fmt_value(v)))
+        .map(|(k, v)| format!("{k} == {}", spell::value(v)))
         .collect::<Vec<_>>()
         .join(", ")
 }

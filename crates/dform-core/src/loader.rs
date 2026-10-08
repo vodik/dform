@@ -799,7 +799,7 @@ mod tests {
                 s => vec![s.clone()],
             })
             .filter_map(|s| match s {
-                Stmt::Fact(a) => Some(crate::partition::fmt_atom(&a)),
+                Stmt::Fact(a) => Some(crate::spell::atom(&a)),
                 _ => None,
             })
             .collect();

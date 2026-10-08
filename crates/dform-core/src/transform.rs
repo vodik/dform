@@ -3,6 +3,7 @@ use crate::ast::{
 };
 use crate::diag::{self, Diagnostic, Diagnostics};
 use crate::schema::Schema;
+use crate::spell;
 use crate::value::{NullClass, Value};
 use anyhow::{Result, bail};
 use std::collections::{BTreeMap, BTreeSet};
@@ -1306,16 +1307,13 @@ fn unread_field_reports(r: &Resource, n: &mut usize) -> Vec<Stmt> {
         } else {
             str_term(&format!(
                 "{}.{}",
-                crate::partition::fmt_term(&r.typ).trim_matches('"'),
-                crate::partition::fmt_term(&r.name).trim_matches('"')
+                spell::term(&r.typ).trim_matches('"'),
+                spell::term(&r.name).trim_matches('"')
             ))
         };
         let mut ctx = BTreeMap::from([
             ("resource".to_string(), resource),
-            (
-                "read".to_string(),
-                str_term(&crate::partition::fmt_atom(read)),
-            ),
+            ("read".to_string(), str_term(&spell::atom(read))),
         ]);
         if let Some(at) = diag::place(read.span) {
             ctx.insert("at".to_string(), str_term(&at));
@@ -1584,8 +1582,8 @@ pub fn computed_prelude(schema: &Schema) -> Vec<RuleStmt> {
 pub fn check_computed_writes(rules: &[RuleStmt], facts: &[Atom], schema: &Schema) -> Result<()> {
     let heads = rules
         .iter()
-        .map(|r| (&r.head, crate::partition::fmt_rule(r)))
-        .chain(facts.iter().map(|a| (a, crate::partition::fmt_atom(a))));
+        .map(|r| (&r.head, spell::rule(r)))
+        .chain(facts.iter().map(|a| (a, spell::atom(a))));
     let mut errors = Vec::new();
     for (h, text) in heads {
         if h.pred != "arg" || h.args.len() != 5 {
@@ -1604,8 +1602,8 @@ pub fn check_computed_writes(rules: &[RuleStmt], facts: &[Atom], schema: &Schema
                         name: a.clone(),
                     }
                     .to_string(),
-                    Term::Val(v) => format!("{t}[{}]", crate::partition::fmt_value(v)),
-                    other => format!("{t}[{}]", crate::partition::fmt_term(other)),
+                    Term::Val(v) => format!("{t}[{}]", spell::value(v)),
+                    other => format!("{t}[{}]", spell::term(other)),
                 };
                 errors.push(
                     Diagnostic::error(
@@ -1700,7 +1698,7 @@ pub fn computed_reads(statements: &[Stmt], schema: &Schema) -> Vec<(Span, String
                 Term::Val(Value::Str(a)) => crate::ir::scope_split(a)
                     .map_or(a.as_str(), |(_, n)| n)
                     .to_string(),
-                other => format!("{t}[{}]", crate::partition::fmt_term(other)),
+                other => format!("{t}[{}]", spell::term(other)),
             };
             Some((a.span, at, path))
         });

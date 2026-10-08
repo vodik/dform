@@ -8,7 +8,7 @@
 mod common;
 use common::Scratch;
 use dform::parser::parse_file;
-use dform::partition::fmt_atom;
+use dform::spell;
 use dform::transform;
 
 fn program(src: &str) -> String {
@@ -37,7 +37,7 @@ fn facts(src: &str, pred: &str) -> Vec<String> {
     r.facts
         .iter()
         .filter(|a| a.pred == pred)
-        .map(fmt_atom)
+        .map(spell::atom)
         .collect()
 }
 
