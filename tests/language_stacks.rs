@@ -133,6 +133,8 @@ fn a_second_concurrent_apply_fails_cleanly() {
     }
     assert!(lock.exists(), "the first apply took the lock");
     let r = s.run(&["apply", "net.df"]).failure();
+    // A held lock is its own exit status (R-147).
+    assert_eq!(r.code, Some(6), "{}", r.stderr);
     assert!(
         r.stderr.contains(&format!(
             "stack net is locked by another apply (pid {})",
