@@ -3046,18 +3046,22 @@ A name is read in the scope it names (R-184): `why NAME` the stack's,
 `why 'volume["forgejo_backup"].tag'`), `why MODULE.NAME` a used
 module's. What the scope declares, a resource, an input, a `let`, an
 output, prints as above. A copy reads what its component does not
-declare from its user, a module from the stack, and `why` says so before
-the chain: `env in volume forgejo_backup: the stack's key env
-stacks/apps.df:1`. What the copy's module declares is private to the
-module, and nothing is one line saying what reads it:
+declare from the scope around the component, the instance of its module
+it was taken from, then the stack (R-186), a module from the stack, and
+`why` says whose before the chain: `repository in volume forgejo_backup:
+module backups's k8s.secret backups.repository  backups.df:3`, `env in
+volume forgejo_backup: the stack's key env  stacks/apps.df:1`. A name
+nothing in reach declares is one line saying what reads it:
 
 ```
-repository in volume forgejo_backup: no such name in this copy; the module's resource is backups.repository (backups.df:25), read it as backups.repository
+nothing in volume forgejo_backup: no such name in this copy
 ```
 
 The language server's hover on a name read bare in a component's body
 says, per copy the deployment makes, what it reads there in the same
-words.
+words, and for a name the component's own declaration shadows, both:
+"`tag` here is component volume's input tag; it shadows module
+backups's input tag, read as `super.tag`".
 
 `dform dev graph` prints Graphviz DOT, nodes and edges sorted:
 

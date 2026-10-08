@@ -123,7 +123,8 @@ declarations, where the position is fixed: `from`, `check`,
 sensitive nullable`). `module`, `policy`, `import` and `export` are
 words of an earlier surface: each is an error that names what to write
 (R-65).
-Roots: `world`.
+Roots: `world`, the inventory, and `super`, the scope around a component
+(R-186, "Components"): never a name in a term.
 
 ### Strings and interpolation
 
@@ -278,7 +279,7 @@ first (rule, then component, then file, then program):
    resource, a live object) reads through it (H-6);
 3. `world.T[e]`;
 4. a resource of that name in scope (a component's own resources, then
-   the program's);
+   those of the scopes around it, its module's and the program's);
 5. a copy (`n.k`, its output), a stack a `use` binds (`s[k=v].out`), a
    component's copies (`c[e].k`, `m.c[e].k`, or by its path from the
    root), a used module's item (`m.x`);
@@ -1134,8 +1135,9 @@ statement that closes it.
 (the path's last segment unless `as` names it):
 
 - its rules and denies run over what the importing scope sees; a name
-  the module does not define reads outward, its user's (`env` in a policy
-  pack is the stack's);
+  the module's body does not define reads outward, its user's (`env` in a
+  policy pack is the stack's); its components' bodies read the module's
+  instance instead ("Components");
 - its items read as `n.x`: a `let` or an input (`config.region`), a
   relation (`n.p(..)`), an output (`n.k`), a resource (`n.x`, the address
   `T["n.x"]`), a type alias (`n.T`), a component (`n.c`, a type to make
@@ -1174,7 +1176,27 @@ attributes, read `NAME.k` as `server.public_ip` is, its resources are
 ranges over the resources of `c` the scope makes, `instance_of(c, user,
 name)` joined to their outputs, and `x in c` binds them ("Membership");
 `blue in c` holds for one in scope. A resource of a component inside
-another is scoped under it (`edge.left.vpc`). The names a scope's `use`s
+another is scoped under it (`edge.left.vpc`).
+
+A component is an item of its module as a Rust `fn` is (R-186): its
+body reads a name bare from its own scope (its inputs, `let`s and
+resources), then from the scope around it (the module's `let`s, inputs,
+resources and relations; for a component inside another, the enclosing
+component's first), then the stack's, and never from the copy's user.
+The scope is lexical and by instance: a copy reads the items of the
+module instance it was taken from, the one its statement stands in or
+the one a `use` binds, so under `use backups as a` and `use backups as
+b`, `resource a.volume x` reads `a.repository` and never `b`'s. A copy
+by its path with no `use` of the module reads no instance, and a read
+of the module's items in its body is the error at the read naming the
+`use`. `super.x` is `x` as the scope around the component reads it, for
+a name the component's own shadows (`super.repository`, one scope out
+per `super`); a declaration that shadows one around it is a warning
+naming both. A module's body has no scope around it: a module never
+reaches its user and takes what it needs as an input, so `super` there
+is an error saying so, and there is no root scope. In its own file a
+module reads itself by its name too (`backups.repository`), the instance
+the read is in. The names a scope's `use`s
 and its components' resources bind are one namespace, a name in it
 declared once or under a clause each ("Guarded declarations"). Such a
 resource takes no rank, and a provider's type's resource takes no
