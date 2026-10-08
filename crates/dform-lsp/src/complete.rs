@@ -1,7 +1,9 @@
 //! Schema completion: a resource block's attribute paths (with their type,
 //! flags and refinements) and an enum attribute's values, from the
 //! provider's schema facts; resource types after `resource`; a module
-//! component's resource's inputs and, after `copy.`, its outputs.
+//! component's resource's inputs and, after `copy.`, its outputs; after a
+//! spread's `..` (R-199), the names whose value is what the literal takes,
+//! an object's or a list's.
 //! A type's or path's documentation is its `type_doc`. Elsewhere a word
 //! completes to the builtins, keywords and function packages it starts
 //! (`reference::references`; no function is bare, R-155), a package's name
@@ -198,6 +200,23 @@ pub fn complete(
                     ty,
                     Some(format!("a field of input {input}")),
                 )
+            })
+            .collect();
+    }
+
+    // `{ ..b`, `[..x`: a spread, the names of the literal's kind.
+    if let Some(prefix) = word.strip_prefix("..")
+        && !prefix.contains('.')
+        && let Some(kind) = literal_around(text, at - word.len())
+    {
+        let range = crate::text::range(text, at - prefix.len(), at);
+        return spreadable(root, kind, at)
+            .into_iter()
+            .filter(|(n, _)| n.starts_with(prefix))
+            .map(|(n, detail)| {
+                let mut i = item(n.clone(), CompletionItemKind::VARIABLE, detail, None);
+                i.text_edit = Some(CompletionTextEdit::Edit(TextEdit { range, new_text: n }));
+                i
             })
             .collect();
     }
@@ -399,4 +418,79 @@ fn input_fields(root: &SyntaxNode, input: &str, path: &[&str]) -> Option<Vec<(St
         })
         .collect();
     (!out.is_empty()).then_some(out)
+}
+
+/// The literal a spread at byte `at` leads an entry of: the innermost
+/// bracket open before it, `{` an object's (`SyntaxKind::OBJECT`) or `[`
+/// a list's (`SyntaxKind::LIST`).
+fn literal_around(text: &str, at: usize) -> Option<SyntaxKind> {
+    let mut depth = 0usize;
+    for c in text[..at].chars().rev() {
+        match c {
+            '}' | ']' | ')' => depth += 1,
+            '{' | '[' | '(' if depth > 0 => depth -= 1,
+            '{' => return Some(SyntaxKind::OBJECT),
+            '[' => return Some(SyntaxKind::LIST),
+            _ => {}
+        }
+    }
+    None
+}
+
+/// The names a spread into a literal of `kind` takes: each `let` whose
+/// value is written as one, and each input declared as one (an object
+/// input's fields, `{..}`, `map(T)`; `list(T)`), with what it is; not
+/// the statement at `at`, which is being written.
+fn spreadable(root: &SyntaxNode, kind: SyntaxKind, at: usize) -> Vec<(String, String)> {
+    let word = |n: &SyntaxNode| {
+        n.children_with_tokens()
+            .filter_map(|e| e.into_token())
+            .find(|t| t.kind() == SyntaxKind::IDENT)
+            .map(|t| t.text().to_string())
+    };
+    let typed = |ty: &str| match ty.trim_start() {
+        t if t.starts_with('{') || t.starts_with("map") => Some(SyntaxKind::OBJECT),
+        t if t.starts_with("list") => Some(SyntaxKind::LIST),
+        _ => None,
+    };
+    let mut out = Vec::new();
+    let here = |n: &SyntaxNode| n.text_range().contains_inclusive((at as u32).into());
+    for n in root.descendants().filter(|n| !here(n)) {
+        let (is, what) = match n.kind() {
+            SyntaxKind::LET => {
+                let ty = n.children().find(|c| c.kind() == SyntaxKind::TYPE_EXPR);
+                let value = n.children().find(|c| c.kind() != SyntaxKind::TYPE_EXPR);
+                let is = match (&ty, value.map(|v| v.kind())) {
+                    (Some(t), _) => typed(&t.text().to_string()),
+                    (None, Some(SyntaxKind::OBJECT)) => Some(SyntaxKind::OBJECT),
+                    (None, Some(SyntaxKind::LIST | SyntaxKind::COMPREHENSION)) => {
+                        Some(SyntaxKind::LIST)
+                    }
+                    _ => None,
+                };
+                (is, "let")
+            }
+            SyntaxKind::INPUT => {
+                let is = match n.children().find(|c| c.kind() == SyntaxKind::TYPE_EXPR) {
+                    Some(t) => typed(&t.text().to_string()),
+                    None => n
+                        .children()
+                        .any(|c| c.kind() == SyntaxKind::ATTR_DECL)
+                        .then_some(SyntaxKind::OBJECT),
+                };
+                (is, "input")
+            }
+            _ => continue,
+        };
+        if is == Some(kind)
+            && let Some(name) = word(&n)
+        {
+            let shape = match kind {
+                SyntaxKind::OBJECT => "an object",
+                _ => "a list",
+            };
+            out.push((name, format!("{what}, {shape}")));
+        }
+    }
+    out
 }

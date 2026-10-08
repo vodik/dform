@@ -1453,6 +1453,30 @@ fn completion_offers_input_fields_and_relation_outputs() {
     assert_eq!(rels, ["zone"], "{rels:?}");
 }
 
+/// After a spread's `..` (R-199), completion offers the names whose value
+/// the literal takes: an object's in an object, a list's in a list.
+#[test]
+fn completion_after_a_spread_offers_names_of_the_literals_kind() {
+    let s = common::Scratch::project("lsp-spread");
+    let file = s.write(
+        "stacks/app.df",
+        "\ninput nodes { flavor: string = \"b2\" }\ninput zones: list(string) = [\"a\"]\n\
+         let base = { team: \"web\" }\nlet ports = [80]\nlet name = \"x\"\nuse fake\n",
+    );
+    let root = std::fs::canonicalize(&s.dir).unwrap();
+    let file = std::fs::canonicalize(&file).unwrap();
+    let mut c = Client::start(&root, json!({}));
+    c.open(&file);
+    let original = std::fs::read_to_string(&file).unwrap();
+    let typed = format!("{original}let o = {{ ..\nlet l = [..po\n");
+    c.change(&file, 2, &typed);
+    let n = typed.lines().count() as u32;
+    let objects = labels(&c.at("textDocument/completion", &file, (n - 2, 12)));
+    assert_eq!(objects, ["nodes", "base"], "{objects:?}");
+    let lists = labels(&c.at("textDocument/completion", &file, (n - 1, 13)));
+    assert_eq!(lists, ["ports"], "{lists:?}");
+}
+
 /// A typed `let` (R-74): hover on a read shows its declaration, the type
 /// with it.
 #[test]
