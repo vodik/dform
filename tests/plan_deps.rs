@@ -160,3 +160,33 @@ fn a_stack_is_named_by_its_full_name_or_its_short_one() {
         list.stdout
     );
 }
+
+/// `--json` nests the same: the tree's summary, each deployment's line,
+/// and its own plan document under it.
+#[test]
+fn json_nests_each_deployment_s_plan() {
+    let s = project("deps-json");
+    let r = s.run(&["plan", "apps", "env=lab", "--json"]).success();
+    let j: serde_json::Value = serde_json::from_str(&r.stdout).expect(&r.stdout);
+    assert_eq!(
+        j["summary"],
+        "plan: 3 changes (3 create); 1 create after stacks.platform[env=lab] is applied",
+        "{j:#}"
+    );
+    let names: Vec<&str> = j["deployments"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|d| d["deployment"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        names,
+        ["stacks.platform[env=lab]", "stacks.apps[env=lab]"],
+        "{j:#}"
+    );
+    assert_eq!(
+        j["deployments"][1]["plan"]["deployment"], "stacks.apps[env=lab]",
+        "{j:#}"
+    );
+    assert_eq!(j["outcome"], "done", "{j:#}");
+}

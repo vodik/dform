@@ -62,10 +62,18 @@ impl Plan {
             cx.cli
                 .held
                 .outputs(planned_outputs(&cx, &planned, &st, &evaluator)?);
+            cx.cli.held.tally(report.tally());
         }
         let file = self.file(&cx, &located, &r, &planned, &st)?;
         if self.json {
-            self.print_json(&located, &report, &planned, &violations, file.as_ref())?;
+            self.print_json(
+                &cx.cli.held,
+                &located,
+                &report,
+                &planned,
+                &violations,
+                file.as_ref(),
+            )?;
         } else {
             self.print_text(&cx, &r, &report, &planned, file.as_ref(), &evaluator)?;
         }
@@ -171,6 +179,7 @@ impl Plan {
     /// (R-147).
     fn print_json(
         &self,
+        held: &super::Held,
         located: &deployment::Located,
         report: &report::Report,
         planned: &Planned,
@@ -202,7 +211,11 @@ impl Plan {
         if !guarded.is_empty() {
             j["guarded"] = serde_json::to_value(&guarded)?;
         }
-        println!("{}", serde_json::to_string_pretty(&j)?);
+        // A tree's deployment's document nests in the tree's (R-200).
+        match held.is_held() {
+            true => held.json(j),
+            false => println!("{}", serde_json::to_string_pretty(&j)?),
+        }
         Ok(())
     }
 
@@ -219,7 +232,6 @@ impl Plan {
         evaluator: &deployment::Evaluator,
     ) -> Result<()> {
         let held = &cx.cli.held;
-        held.tally(report.tally());
         held.print(&r.rendered(report));
         held.print(&unreachable_text(&planned.unreachable));
         // Who each secret output no provider holds is sealed to: the grant

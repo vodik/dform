@@ -63,7 +63,6 @@ pub(super) fn target(
     };
     match cmd {
         Cmd::Plan(Plan {
-            json: false,
             out: None,
             destroy: false,
             ..
@@ -81,8 +80,8 @@ pub(super) fn target(
              (`dform destroy STACK K=V`)"
         ),
         Cmd::Plan(_) => bail!(
-            "plan {shown}: --json, --out and --destroy plan one deployment; name it (`dform \
-             plan STACK K=V --json`)"
+            "plan {shown}: --out and --destroy plan one deployment; name it (`dform plan STACK \
+             K=V --out plan.json`)"
         ),
         Cmd::Effects(_) => bail!(
             "dev effects {shown}: --json says one stack's effects; name it (`dform dev effects \
@@ -286,6 +285,8 @@ struct Planned {
     node: report::deployments::Deployed,
     tally: Option<report::Tally>,
     error: Option<anyhow::Error>,
+    /// Its `plan --json` document.
+    json: Option<serde_json::Value>,
 }
 
 impl Tree<'_> {
@@ -335,6 +336,7 @@ impl Tree<'_> {
                     node,
                     tally: None,
                     error: None,
+                    json: None,
                 });
                 continue;
             }
@@ -408,6 +410,7 @@ impl Tree<'_> {
                 node,
                 tally: held.tally,
                 error,
+                json: held.json,
             });
         }
         let mut tally = report::Tally::default();
@@ -417,6 +420,9 @@ impl Tree<'_> {
             }
         }
         let nodes: Vec<_> = planned.iter().map(|p| p.node.clone()).collect();
+        if p.json {
+            return self.print_json(&tally, planned);
+        }
         match nodes.is_empty() {
             true => println!(
                 "stacks: {} lists no deployment",
@@ -434,6 +440,40 @@ impl Tree<'_> {
                 (o, _) => o,
             };
         }
+        Ok(outcome)
+    }
+
+    /// `plan --json` of the tree: its summary, then each deployment's
+    /// line and its own document under `plan` (R-200); the outcome the
+    /// worst of theirs, each error said on stderr.
+    fn print_json(&self, tally: &report::Tally, planned: Vec<Planned>) -> Result<Outcome> {
+        let mut deployments = Vec::new();
+        let mut outcome = Outcome::Done;
+        for p in planned {
+            let mut j = serde_json::json!({
+                "deployment": p.node.name,
+                "mark": report::marker_of(&p.node.kind),
+                "site": p.node.site,
+                "state": p.node.state,
+                "plan": p.json,
+            });
+            if let Some(e) = &p.error {
+                j["error"] = format!("{e:#}").into();
+                say(self.cli, e);
+                outcome = match (outcome, Outcome::of_error(e)) {
+                    (Outcome::Failed, _) | (_, Outcome::Failed) => Outcome::Failed,
+                    (Outcome::Done, o) => o,
+                    (o, _) => o,
+                };
+            }
+            deployments.push(j);
+        }
+        let j = serde_json::json!({
+            "summary": tally.text(),
+            "outcome": outcome.word(),
+            "deployments": deployments,
+        });
+        println!("{}", serde_json::to_string_pretty(&j)?);
         Ok(outcome)
     }
 

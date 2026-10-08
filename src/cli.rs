@@ -103,6 +103,8 @@ struct HeldPlan {
     text: String,
     tally: Option<report::Tally>,
     outputs: Option<crate::stack::Outputs>,
+    /// `plan --json`'s document.
+    json: Option<serde_json::Value>,
 }
 
 impl Held {
@@ -136,6 +138,11 @@ impl Held {
     /// What the plan's headline counts.
     fn tally(&self, tally: report::Tally) {
         self.with(|h| h.tally = Some(tally));
+    }
+
+    /// `plan --json`'s document, held for the tree's.
+    fn json(&self, json: serde_json::Value) {
+        self.with(|h| h.json = Some(json));
     }
 
     /// The plan's outputs, for the plans that read them (R-200).

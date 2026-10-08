@@ -245,8 +245,10 @@ fn a_provider_held_by_its_connection_plans_provisionally() {
             ("mw".to_string(), false),
         ]
     );
-    let j: serde_json::Value =
+    let tree: serde_json::Value =
         serde_json::from_str(&s.run(&["plan", "apps", "--json"]).success().stdout).unwrap();
+    // apps's own document, under its line in the tree (R-200).
+    let j = &tree["deployments"][1]["plan"];
     let held: Vec<bool> = j["later"]
         .as_array()
         .unwrap()

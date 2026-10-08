@@ -36,14 +36,12 @@ impl Cli {
     /// program outside a project. A cycle is an error naming it.
     /// `plan X` in a project: the deployments X reads and theirs, each
     /// before its readers, then X (R-200), what `apply X` applies. Empty
-    /// when X reads none, and for a plan written out (`--out`, `--json`),
-    /// the bare diff, a destroy, a world fixture or a program outside a
-    /// project.
+    /// when X reads none, and for a plan file (`--out`), the bare diff, a
+    /// destroy, a world fixture or a program outside a project.
     pub(super) fn plan_order(&self) -> Result<Vec<Dependency>> {
         // The bare diff (`-q`) is a script's: one deployment's, as it was.
         let Cmd::Plan(super::plan::Plan {
             out: None,
-            json: false,
             destroy: false,
             why,
             ..

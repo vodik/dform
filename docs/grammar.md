@@ -335,6 +335,22 @@ test; they do not bind.
 
 ### Paths
 
+A thing's name is its path from the project root, and the module path
+is its namespace, for every kind (R-200): a provider's type
+(`ovh.instance`, the item `instance` of `ovh`), a component (`k3s.node`,
+defined in k3s.df; one defined in the stack's own file is bare, as its
+resources are), a stack (`stacks.platform` for stacks/platform.df,
+`infra.platform` for infra/platform.df), a deployment (its stack's name
+and its key, `stacks.platform[env=lab]`), a resource (`k3s.agent-0.vm`),
+a `let`, an input, a relation. State, the plan file, `--json`, `why` and
+`stack list` say the full name; a short name, its last segments, is
+legal wherever it names one thing (a target, `dform plan platform
+env=lab`; a keyed read, `platform[env].kubeconfig`; `why sub`), and one
+that names several is an error naming each by its full name. The plan
+prints the path tree: lines that share a prefix (a deployment, a used
+module's instance, a copy) group under one header line, each keeping its
+full name.
+
 There is one grammar for a dotted name (R-112): a path, segments joined
 by `.`, read from its first segment as "Names" says. A value is
 `config.region`, a copy's output `blue.cidr`, a deployment's
@@ -1410,8 +1426,9 @@ file; one in any other module is an error. `stack`, the statement of an
 earlier surface, is an error that says so.
 
 `use stacks.platform` binds the stack's deployments, which the tool made:
-`platform[env=e].out` reads one deployment's output, each key given once,
-and `platform.out` reads an unkeyed stack's. It is the keyed read of a
+`platform[env=e].out` (or by its full name, `stacks.platform[env=e].out`)
+reads one deployment's output, each key given once, and `platform.out`
+reads an unkeyed stack's. It is the keyed read of a
 copy's output (`network[t].out`): a deployment is a copy of its
 stack named by its key, `instance_of("stacks.platform", "",
 "platform[env=e]"), output("platform[env=e]", "out", V)`, those facts

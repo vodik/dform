@@ -216,8 +216,10 @@ stacks.platform[env=lab]` under `later`, counted in the headline as
 `1 create after stacks.platform[env=lab] is applied`. A dependency that
 is up to date is one line; one whose plan fails or is refused stops the
 chain there, what reads it `not planned`, and the run exits with its
-status. A stack that reads none plans alone, as before; so do `-q`,
-`--json`, `--out` and `--destroy`, which plan the one deployment named:
+status. `--json` nests the same: `summary`, `outcome`, and per deployment
+its `deployment`, `mark`, `site`, `state` and its own document under
+`plan`. A stack that reads none plans alone, as before; so do `-q`,
+`--out` and `--destroy`, which plan the one deployment named:
 
 ```
 $ dform plan apps env=lab
@@ -303,7 +305,8 @@ plan: 5 changes (4 create, 1 update); policy: 6 hold
   ..
 ```
 
-(`plan --json`, `--out` and `--destroy` plan one deployment: name it.)
+(`plan --out` and `--destroy` plan one deployment: name it; `--json`
+nests as `plan X`'s does.)
 `apply` applies them in that order, each headed `== NAME` and asked for on its own (`--yes`
 answers every question); a dependency declined, stopped or failed ends
 the run before its readers, with its exit status, and a refused plan
