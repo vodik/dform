@@ -357,7 +357,22 @@ pub struct Instance {
     pub body: Option<Vec<Lit>>,
     /// The clause alone, `where B`: what the copy exists under.
     pub clause: Option<Vec<Lit>>,
+    /// A copy of a module's component named through a `use` of it
+    /// (`a.volume` under `use backups as a`): the instance of the module
+    /// whose items the component's body reads bare (R-186).
+    pub via: Option<Via>,
     pub span: Span,
+}
+
+/// The module instance a copy's component was named through (R-186):
+/// the module's path, the name its `use` binds, and that instance's
+/// scope as the copy's user reads it (`"a"`, or `__scope("a")` for a
+/// `use` outside the user's body).
+#[derive(Debug, Clone)]
+pub struct Via {
+    pub module: String,
+    pub name: String,
+    pub scope: Term,
 }
 
 #[derive(Debug, Clone)]

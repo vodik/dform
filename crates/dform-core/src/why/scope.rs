@@ -2,11 +2,13 @@
 //! name (the stack's) or `SCOPE.NAME`, SCOPE a copy of a component
 //! (`forgejo_backup.repository`, or as `c[t]` reads it,
 //! `volume["forgejo_backup"].repository`) or a used module, answered
-//! from what the evaluation made. A copy reads its own names, then its
-//! user's; what its module declares is private to the module, read
-//! through it (`backups.repository`). A module reads its own, then its
-//! user's. The language server's hover on a name in a component says the
-//! same, per copy ([`in_component`]).
+//! from what the evaluation made. A copy reads its own names, then those
+//! of the scope around its component (R-186): the instance of its module
+//! it was taken from (`backups.repository`, under `use backups as a`
+//! `a.repository`), or the copy of the component around it, then the
+//! stack's; never its user's. A module reads its own, then its user's.
+//! The language server's hover on a name in a component says the same,
+//! per copy ([`in_component`]).
 
 use crate::ast::{Atom, Term};
 use crate::engine::EvalResult;
@@ -27,26 +29,20 @@ enum Scope {
 }
 
 /// A copy of a component, `instance_of(path, user, name)`: its scope
-/// (`forgejo_backup`), its component's path (`backups.volume`), the
-/// scope that made it (`""` the stack).
+/// (`forgejo_backup`), its component's path (`backups.volume`), and the
+/// scope its component's body reads around it (`__lexical_of`): the
+/// module instance (`backups`) or the copy around it; `None` the stack.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Copy {
     name: String,
     path: String,
-    user: String,
+    lexical: Option<String>,
 }
 
 impl Copy {
     /// The component's name, its path's last segment (`volume`).
     fn component(&self) -> &str {
         self.path.rsplit('.').next().unwrap_or(&self.path)
-    }
-
-    /// The module the component is an item of, by the name its `use`
-    /// binds: its path's segment before the component's (`backups`).
-    fn module(&self) -> Option<&str> {
-        let (m, _) = self.path.rsplit_once('.')?;
-        m.rsplit('.').next()
     }
 
     /// Whether it is a copy of the component `c` (a path, or its last
@@ -93,21 +89,38 @@ impl<'a> Names<'a> {
         stack_keys: &'a BTreeSet<String>,
         top: Option<&'a Path>,
     ) -> Names<'a> {
+        let strs = |a: &Atom| match a.args.as_slice() {
+            [
+                Term::Val(Value::Str(x)),
+                Term::Val(Value::Str(y)),
+                Term::Val(Value::Str(z)),
+            ] => Some((x.clone(), y.clone(), z.clone())),
+            _ => None,
+        };
+        let lexical: Vec<(String, String)> = res
+            .facts
+            .iter()
+            .filter(|a| a.pred == crate::modules::LEXICAL_OF)
+            .filter_map(strs)
+            .map(|(user, name, scope)| (join(&user, &name), scope))
+            .collect();
         let copies = res
             .facts
             .iter()
             .filter(|a| a.pred == crate::modules::INSTANCE_OF)
-            .filter_map(|a| match a.args.as_slice() {
-                [
-                    Term::Val(Value::Str(path)),
-                    Term::Val(Value::Str(user)),
-                    Term::Val(Value::Str(name)),
-                ] => Some(Copy {
-                    name: join(user, name),
-                    path: path.clone(),
-                    user: user.clone(),
-                }),
-                _ => None,
+            .filter_map(strs)
+            .map(|(path, user, name)| {
+                let name = join(&user, &name);
+                let lexical = lexical
+                    .iter()
+                    .find(|(c, _)| *c == name)
+                    .map(|(_, s)| s.clone())
+                    .filter(|s| !s.is_empty());
+                Copy {
+                    name,
+                    path,
+                    lexical,
+                }
             })
             .collect();
         Names {
@@ -240,16 +253,17 @@ impl<'a> Names<'a> {
                 if let Some(d) = self.own(&c.name, n) {
                     return Resolved::Own(d);
                 }
-                // What the component's module declares is private to it
-                // (R-183).
-                if let Some(d) = c.module().and_then(|m| self.own(m, n)) {
-                    return Resolved::Private(d);
-                }
-                let outer = self.scope(&c.user).unwrap_or(Scope::Stack);
+                // The scope around the component, lexically (R-186).
+                let outer = match &c.lexical {
+                    Some(s) => match self.copy(s) {
+                        Some(c) => Scope::Copy(c.clone()),
+                        None => Scope::Module(s.clone()),
+                    },
+                    None => Scope::Stack,
+                };
                 match self.resolve(&outer, n) {
-                    Resolved::Own(d) | Resolved::Outward(_, d) => {
-                        Resolved::Outward(format!("{}'s", describe(&outer)), d)
-                    }
+                    Resolved::Own(d) => Resolved::Outward(format!("{}'s", describe(&outer)), d),
+                    Resolved::Outward(whose, d) => Resolved::Outward(whose, d),
                     _ => Resolved::Nothing(None),
                 }
             }
@@ -292,10 +306,8 @@ impl<'a> Names<'a> {
 enum Resolved {
     /// What the scope itself declares.
     Own(Denoted),
-    /// What its user's scope declares, read outward, by whose.
+    /// What a scope around it declares, read outward, by whose.
     Outward(String, Denoted),
-    /// What the copy's module declares, private to it.
-    Private(Denoted),
     /// Nothing; the name another scope declares, by whose.
     Nothing(Option<(String, Denoted)>),
 }
@@ -337,10 +349,6 @@ fn answer(scope: &Scope, n: &str, resolved: Resolved) -> (String, Option<String>
     match resolved {
         Resolved::Own(d) => (format!("{lead}: {}", d.line()), None),
         Resolved::Outward(whose, d) => (format!("{lead}: {whose} {}", d.line()), Some(d.qualified)),
-        Resolved::Private(d) => (
-            format!("{lead}: no such name {here}; {}", read("the module's", &d)),
-            None,
-        ),
         Resolved::Nothing(Some((whose, d))) => (
             format!(
                 "{lead}: no such name {here}; {}",

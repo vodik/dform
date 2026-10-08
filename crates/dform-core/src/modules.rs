@@ -41,7 +41,10 @@ use crate::value::Value;
 use anyhow::Result;
 use std::collections::{BTreeMap, BTreeSet};
 
+mod lexical;
 mod named;
+
+pub use lexical::{LEXICAL, LEXICAL_OF, lexical_name, lexical_pred, lexical_term};
 
 /// The attribute aggregate's pseudo-type for inputs: `(input, Scope, key)`,
 /// scope `""` for the stack's own.
@@ -325,6 +328,12 @@ pub const ROWS: &str = "__rows";
 /// takes the mark off once done.
 pub const ABSOLUTE: &str = "__scope";
 
+/// Whether a module or a copy keeps `pred` its own when it defines it:
+/// every relation but the shared ones and the records of copies.
+pub fn is_private(pred: &str) -> bool {
+    !is_shared(pred) && pred != INSTANCE_OF && pred != ROWS && pred != LEXICAL_OF
+}
+
 /// How predicate names are renamed in one copy or activation.
 struct Names {
     /// Predicate name -> its private name (`n::p`; `n.inner::p` for the
@@ -343,7 +352,7 @@ impl Names {
     fn private(scope: &str, defined: BTreeMap<String, (usize, Span)>) -> Names {
         let map = defined
             .into_keys()
-            .filter(|p| !is_shared(p) && p != INSTANCE_OF && p != ROWS)
+            .filter(|p| is_private(p))
             .map(|p| {
                 let n = private_name(scope, &p);
                 (p, n)
@@ -520,8 +529,16 @@ pub fn expand(program: &Program) -> Result<Expanded> {
             other => out.push(other.clone()),
         }
     }
-    // The program's own `let`s.
-    let mut expanded = lets(out, "", None);
+    // The program's own `let`s; what a component reads of the program's
+    // values and relations (R-186).
+    let stack = lexical::Lexical {
+        body: "",
+        via: None,
+    };
+    let mut expanded: Vec<Stmt> = lets(out, "", None)
+        .into_iter()
+        .map(|s| stack.stmt(s))
+        .collect();
     // `instance_of` (and a copy's private one) is a fact for a copy with
     // no clause and a rule for one with, and `secret_cell` a fact of a
     // secret `let` and a rule of a copy named by its clause (R-191),
@@ -786,6 +803,7 @@ impl Cx<'_> {
     /// scope `n`, recorded in `instance_of`; or `use m [as n] { k = V }
     /// where B`, a module's (`used`): one mechanism (R-65).
     fn instance(&mut self, u: &crate::ast::Instance, at: &str, used: bool) -> Vec<Stmt> {
+        let site = self.expanding.last().cloned();
         let Some(def) = self.enter(&u.module, u.span) else {
             return Vec::new();
         };
@@ -811,6 +829,13 @@ impl Cx<'_> {
         instance_inputs(kind, u, scope, &iface, flat, &mut out, &mut self.diags);
         let body = self.body(&body, &abs);
         self.expanding.pop();
+        // What the components inside read of this definition's items is
+        // this instance's own (R-186).
+        let own = lexical::Lexical {
+            body: &u.module,
+            via: None,
+        };
+        let body = body.into_iter().map(|s| own.stmt(s)).collect();
         let stmts = module_stmts(scope, &iface, body);
         let mut defined = BTreeMap::new();
         defined_preds(&stmts, &mut defined);
@@ -860,6 +885,9 @@ impl Cx<'_> {
             .collect();
         let mut copy = lets(stmts, scope, Some(&names));
         copy.extend(input_readers(scope, &iface.inputs, &names));
+        if !used {
+            self.reached(u, site.as_deref(), &mut copy);
+        }
         for o in iface.outputs.values() {
             self.secret_outputs
                 .extend(secret_paths(o).into_iter().map(|k| (abs.clone(), k)));
@@ -910,6 +938,68 @@ impl Cx<'_> {
         copy.extend(self.secret_cells(scope, &abs, u.span));
         let copy = gate(copy, &u.module, scope, u.clause.as_deref(), true, u.span);
         self.by_clause(scope, &abs, name, out, copy)
+    }
+
+    /// The copy `u`'s reads of its module's items, or an enclosing
+    /// component's, as the instance it was taken from has them (R-186):
+    /// the one a `use` binds (`a.volume`), or the one it is expanded
+    /// inside (`site`), recorded in `__lexical_of` for `why`. A read no
+    /// instance holds (a copy by its path with no `use`) is an error at
+    /// the read.
+    fn reached(&mut self, u: &crate::ast::Instance, site: Option<&str>, copy: &mut Vec<Stmt>) {
+        let parent = u.module.rsplit_once('.').map(|(p, _)| p);
+        let scope = match &u.via {
+            Some(via) => {
+                let by = lexical::Lexical {
+                    body: &via.module,
+                    via: Some(via),
+                };
+                *copy = std::mem::take(copy)
+                    .into_iter()
+                    .map(|s| by.stmt(s))
+                    .collect();
+                Some(via.scope.clone())
+            }
+            None if parent.is_some() && parent == site => Some(str_term("")),
+            None => None,
+        };
+        if let Some(scope) = scope {
+            copy.push(Stmt::Fact(atom(
+                LEXICAL_OF,
+                vec![str_term(""), str_term(&u.name), scope],
+                u.span,
+            )));
+        }
+        let expanding = &self.expanding;
+        let open = |b: &str| b.is_empty() || expanding.iter().any(|p| p == b);
+        if let Some((body, name, span)) = lexical::unreached(copy, &open) {
+            let kind = match self.defs.get(body.as_str()).is_some_and(|d| d.component) {
+                true => "component",
+                false => "module",
+            };
+            let help = match kind {
+                "module" => format!(
+                    "`use {body}` beside the copy: `resource {} {}` then reads that instance's \
+                     `{name}`",
+                    u.module, u.name
+                ),
+                _ => {
+                    format!("make the copy inside component {body}'s body, whose `{name}` it reads")
+                }
+            };
+            let d = Diagnostic::error(
+                span,
+                format!(
+                    "`{name}` is an item of {kind} {body}, and the copy {} of {} is made outside \
+                     every instance of {body}: a component reads the items of the instance it is \
+                     taken from",
+                    u.name, u.module
+                ),
+            )
+            .with_label(u.span, format!("the copy {}", u.name))
+            .with_help(help);
+            self.diags.push(d);
+        }
     }
 
     /// A copy named by its clause (R-191), expanded under the scope its
@@ -1879,6 +1969,14 @@ fn rewrite_atom(mut atom: Atom, sc: Sc) -> Atom {
             let (k, v) = (args.next().unwrap(), args.next().unwrap());
             atom.args = vec![str_term(sc.name), k, v];
         }
+        // A copy inside this one's lexical instance (R-186): its user's
+        // scope and the instance's are relative.
+        (LEXICAL_OF, 3) => {
+            let mut args: Vec<Term> = atom.args.into_iter().map(t).collect();
+            args[0] = prefix_scope(sc.name, args[0].clone());
+            args[2] = prefix_scope(sc.name, args[2].clone());
+            atom.args = args;
+        }
         // A copy inside this one's record, or a secret cell of its scope:
         // its user's scope is relative.
         (INSTANCE_OF, 3) | (crate::transform::SECRET_CELL, 3) => {
@@ -1912,7 +2010,7 @@ fn prefix_scope(scope: &str, inner: Term) -> Term {
 
 fn rewrite_term(term: Term, sc: Sc) -> Term {
     match term {
-        Term::Func { ref name, .. } if name == ABSOLUTE => term,
+        Term::Func { ref name, .. } if name == ABSOLUTE || lexical::is_mark(&term) => term,
         Term::List(xs) => Term::List(xs.into_iter().map(|t| rewrite_term(t, sc)).collect()),
         Term::Obj(m) => Term::Obj(
             m.into_iter()
@@ -1954,6 +2052,7 @@ fn scoped_term(sc: Sc, name: Term) -> Term {
     match name {
         Term::Func { name: ref f, .. } if f == crate::ir::SCOPED => rewrite_term(name, sc),
         Term::Func { name: ref f, .. } if f == ABSOLUTE => name,
+        _ if lexical::is_mark(&name) => name,
         Term::Val(Value::Str(s)) if crate::ir::is_scoped(&s) => Term::Val(Value::Str(s)),
         name if !sc.vars && !matches!(name, Term::Val(_)) => rewrite_term(name, sc),
         name => Term::Func {
@@ -2085,6 +2184,7 @@ mod tests {
                 rows: vec![],
                 body: None,
                 clause: None,
+                via: None,
                 span: Span::default(),
             })
         };

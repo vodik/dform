@@ -101,7 +101,11 @@ impl Named<'_> {
 
     fn term(&self, t: Term) -> Term {
         match t {
-            Term::Func { ref name, .. } if name == super::ABSOLUTE => t,
+            Term::Func { ref name, .. }
+                if name == super::ABSOLUTE || super::lexical::is_mark(&t) =>
+            {
+                t
+            }
             Term::Val(Value::Str(s)) => match self.under(&s) {
                 Some(rest) => self.scope_term(rest, Vec::new()),
                 None => Term::Val(Value::Str(s)),

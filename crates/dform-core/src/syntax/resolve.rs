@@ -29,7 +29,7 @@ use super::{SyntaxNode, SyntaxToken, tokens};
 use crate::ast::{
     Atom, AttrDecl, BindArg, Config, Decl, Extern, ExternFn, FieldAssign, FieldOp, InputDecl,
     Instance, Lit, Module, OutputDecl, Pending, PendingKind, Program, Rank, Resource, RuleStmt,
-    Span, Stmt, Term, TypeExpr, str_term, var,
+    Span, Stmt, Term, TypeExpr, Via, str_term, var,
 };
 use crate::diag::Diagnostic;
 use crate::spell;
@@ -1267,6 +1267,54 @@ impl<'u> Lowerer<'u> {
         }
     }
 
+    /// A `warn` for each name the component `n`, its body the scope
+    /// `inner`, declares that the scope around it declares too (R-186):
+    /// a bare read in the body is the component's, `super.x` the other.
+    fn shadows(&self, n: &SyntaxNode, inner: usize) -> Vec<Stmt> {
+        let name_of = |s: &SyntaxNode| match s.kind() {
+            INPUT | LET => Some(word_text(s, 1)),
+            RESOURCE if !self.is_copy(s) => self.static_header(s),
+            _ => None,
+        };
+        let (Some(around), Some(body)) = (n.parent(), node(n, STMT_BLOCK)) else {
+            return Vec::new();
+        };
+        let theirs: Vec<(String, SyntaxNode)> = around
+            .children()
+            .filter_map(|s| Some((name_of(&s)?, s)))
+            .collect();
+        let parent = self.decls.scopes[inner].parent.unwrap_or(PROGRAM);
+        let outer = match self.decls.entries.contains(&parent) {
+            true => PROGRAM,
+            false => parent,
+        };
+        let (component, outer) = (self.scope_name(inner), self.scope_name(outer));
+        let at = |n: &SyntaxNode| crate::diag::at(self.span(n)).unwrap_or_default();
+        let mut seen = BTreeSet::new();
+        let mut out = Vec::new();
+        for s in body.children() {
+            let Some(x) = name_of(&s) else { continue };
+            let Some((_, o)) = theirs.iter().find(|(y, _)| *y == x) else {
+                continue;
+            };
+            if !seen.insert(x.clone()) {
+                continue;
+            }
+            let msg = format!(
+                "`{x}` in {component} ({}) shadows {outer}'s `{x}` ({}): a bare read in the \
+                 component is its own; read {outer}'s as super.{x}",
+                at(&s),
+                at(o)
+            );
+            out.push(Stmt::Fact(atom_at(
+                "warn",
+                vec![str_term(&msg)],
+                self.span(&s),
+            )));
+        }
+        out
+    }
+
     fn new_scope(&mut self, parent: usize) -> usize {
         self.decls.scopes.push(Scope {
             parent: Some(parent),
@@ -1549,46 +1597,241 @@ impl<'u> Lowerer<'u> {
 
     /// The address of the resource `name` in scope, as a read in `scope`
     /// writes it: the body's own is relative (expansion scopes it), its
-    /// user's marked as written (`scope_term`).
+    /// user's marked as written (`scope_term`), an enclosing body's its
+    /// instance's (`lexical`).
     fn resource_addr(&self, scope: usize, name: &str) -> Term {
-        let declared = self
-            .chain_of(scope)
-            .into_iter()
-            .find(|s| self.decls.scopes[*s].resources.contains_key(name))
-            .unwrap_or(scope);
-        self.scope_term(scope, declared, str_term(&crate::ir::name_segment(name)))
+        self.resource_addr_from(scope, scope, name)
     }
 
-    /// A resource `name` read in a component's body that the module file
-    /// around the component declares (R-183): private to the module, as
-    /// its `let`s are, so the read is an error saying to read it through
-    /// the module (`backups.repository`). Read bare, it would name the
-    /// copy's user's resource of that name.
-    fn module_private(&mut self, scope: usize, name: &str, span: Span) -> L<()> {
-        let Some(declared) = self
-            .chain_of(scope)
+    /// [`Self::resource_addr`] of `name` looked up from `from` outward:
+    /// `super.x` looks up from the enclosing scope (R-186).
+    fn resource_addr_from(&self, scope: usize, from: usize, name: &str) -> Term {
+        let declared = self
+            .chain_of(from)
             .into_iter()
             .find(|s| self.decls.scopes[*s].resources.contains_key(name))
-        else {
-            return Ok(());
-        };
-        if self.own_scopes(scope).contains(&declared) {
-            return Ok(());
+            .unwrap_or(from);
+        let segment = crate::ir::name_segment(name);
+        match self.lexical(scope, declared) {
+            Some(body) if !body.is_empty() => crate::modules::lexical_term(&body, &segment),
+            _ => self.scope_term(scope, declared, str_term(&segment)),
         }
-        let Some(module) = self
+    }
+
+    /// The definition whose body `declared` is, when a read in `scope`
+    /// reaches it past the body `scope` is in (R-186): a component reads
+    /// its module's items bare, and an enclosing component's, as a Rust
+    /// `fn` reads its module's; expansion makes the read the instance's
+    /// the copy was taken from (`modules::lexical_pred`). The program's,
+    /// `""`, read in a component: no copy around it takes the name. `None`
+    /// for the body's own, and for the program's read in a module's body,
+    /// which reads its user's.
+    fn lexical(&self, scope: usize, declared: usize) -> Option<String> {
+        let own = self.own_scopes(scope);
+        if own.contains(&declared) {
+            return None;
+        }
+        let body = |s: usize| self.decls.modules.iter().find(|(_, m)| m.scope == s);
+        if declared == PROGRAM {
+            let in_component = own
+                .last()
+                .and_then(|b| body(*b))
+                .is_some_and(|(_, m)| m.component);
+            return in_component.then(String::new);
+        }
+        body(declared).map(|(p, _)| p.clone())
+    }
+
+    /// The relation a read of the value `name` in `scope` is, looked up
+    /// from `from` outward: its name, or an enclosing body's item marked
+    /// for expansion (`lexical`).
+    fn value_pred(&self, scope: usize, from: usize, name: &str) -> String {
+        let declared = self
+            .chain_of(from)
+            .into_iter()
+            .find(|s| self.decls.scopes[*s].values.contains(name));
+        match declared.and_then(|d| self.lexical(scope, d)) {
+            Some(body) => crate::modules::lexical_pred(&body, name),
+            None => name.to_string(),
+        }
+    }
+
+    /// The relation `p` called in `scope`, looked up from `from` outward:
+    /// an enclosing body's own relation marked as [`Self::value_pred`]
+    /// marks a value; anything else by its name.
+    fn relation_pred(&self, scope: usize, from: usize, p: &str) -> String {
+        if !crate::modules::is_private(p) {
+            return p.to_string();
+        }
+        let declared = self.chain_of(from).into_iter().find(|s| {
+            let sc = &self.decls.scopes[*s];
+            sc.arities.contains_key(p) || sc.relation_inputs.contains(p)
+        });
+        match declared.and_then(|d| self.lexical(scope, d)) {
+            Some(body) => crate::modules::lexical_pred(&body, p),
+            None => p.to_string(),
+        }
+    }
+
+    /// The scope `super` names in `scope` (R-186): the one around the
+    /// component the read is in, one level per `super`, the program's for
+    /// a component of the stack's file. A module's body has none: a
+    /// module never reaches its user.
+    /// `outer` counts the `super`s before this one: `super.super.x` past a
+    /// component's module is the module's error too.
+    fn super_scope(&mut self, scope: usize, item: &str, outer: usize, span: Span) -> L<usize> {
+        let body = self.own_scopes(scope).last().copied().unwrap_or(PROGRAM);
+        let module = self
             .decls
             .modules
             .iter()
-            .find(|(_, m)| m.scope == declared && !m.component)
-            .map(|(p, _)| p.clone())
-        else {
-            return Ok(());
+            .find(|(_, m)| m.scope == body)
+            .map(|(p, m)| (p.clone(), m.component));
+        match module {
+            Some((_, true)) => {}
+            Some((path, false)) => {
+                let help = match self.is_value(body, item) || self.resource(body, item).is_some() {
+                    true => format!(
+                        "read module {path}'s own as `{}{item}`",
+                        "super.".repeat(outer)
+                    ),
+                    false => format!(
+                        "a module never reaches its user: declare `input {item}: TYPE` in it and \
+                         give it in the `use`, `use {path} {{ {item} = .. }}`"
+                    ),
+                };
+                let d = Diagnostic::error(
+                    span,
+                    format!("`super` in module {path}: a module's body has no enclosing scope"),
+                )
+                .with_help(help);
+                self.diags.push(d);
+                return Err(Skip);
+            }
+            None => {
+                let d = Diagnostic::error(
+                    span,
+                    "`super` at the stack's top level: it names the scope around a component",
+                )
+                .with_help(format!("read `{item}` bare"));
+                self.diags.push(d);
+                return Err(Skip);
+            }
+        }
+        let parent = self.decls.scopes[body].parent.unwrap_or(PROGRAM);
+        Ok(match self.decls.entries.contains(&parent) {
+            true => PROGRAM,
+            false => parent,
+        })
+    }
+
+    /// The scope a chain's leading `super`s name and the chain after
+    /// them (`super.repository.metadata.name`: the module's scope and
+    /// `repository.metadata.name`).
+    fn super_chain(&mut self, rc: &Rc, c: &Chain, span: Span) -> L<(usize, Chain)> {
+        let supers = c
+            .ops
+            .iter()
+            .take_while(|o| matches!(o, Op::Field(f) if f == "super"))
+            .count();
+        let Some(Op::Field(item)) = c.ops.get(supers) else {
+            return self.error(
+                span,
+                "`super` is the scope around this component: read an item of it, `super.NAME`",
+            );
         };
-        let n = module.rsplit('.').next().unwrap_or(&module);
-        let d = Diagnostic::error(span, format!("{name} is private to module {module}"))
-            .with_help(format!("read it as {n}.{name}"));
-        self.diags.push(d);
-        Err(Skip)
+        let mut from = rc.scope;
+        for outer in 0..=supers {
+            from = self.super_scope(from, item, outer, span)?;
+        }
+        let rest = Chain {
+            head: item.clone(),
+            head_kind: IDENT,
+            call: None,
+            range: c.range,
+            ops: c.ops[supers + 1..].to_vec(),
+        };
+        Ok((from, rest))
+    }
+
+    /// `super.x.path` (R-186): what the scope around this component reads
+    /// `x` as, a value or a resource, when the component's own `x` shadows
+    /// it.
+    fn super_read(&mut self, rc: &mut Rc, c: &Chain, pre: &mut Vec<Lit>, span: Span) -> L<Res> {
+        let (from, rest) = self.super_chain(rc, c, span)?;
+        if let Some(r) = self.item_read(rc, from, true, &rest, pre, span)? {
+            return Ok(r);
+        }
+        let (x, around) = (&rest.head, self.scope_name(from));
+        self.error(
+            span,
+            format!("`super.{x}`: {around} has no value or resource `{x}`"),
+        )
+    }
+
+    /// The value or the resource `c.head` of the scope `from` (and, when
+    /// `outward`, the scopes around it), read in `rc.scope` with `c`'s
+    /// path: `super.x` and a module's read of itself by its name (R-186).
+    /// `None` when it declares neither.
+    fn item_read(
+        &mut self,
+        rc: &mut Rc,
+        from: usize,
+        outward: bool,
+        c: &Chain,
+        pre: &mut Vec<Lit>,
+        span: Span,
+    ) -> L<Option<Res>> {
+        let x = c.head.as_str();
+        let here = &self.decls.scopes[from];
+        if (outward && self.is_value(from, x)) || here.values.contains(x) {
+            return self.value(rc, from, c, pre, span).map(Some);
+        }
+        let types = match outward {
+            true => self.resource(from, x),
+            false => here.resources.get(x).cloned(),
+        };
+        let Some(types) = types else {
+            return Ok(None);
+        };
+        if types.len() > 1 {
+            return self.ambiguous(x, &types, span).map(Some);
+        }
+        let path = self.segs(rc, &c.ops, pre)?;
+        Ok(Some(Res::Ref {
+            typ: str_term(&types[0]),
+            addr: self.resource_addr_from(rc.scope, from, x),
+            path,
+        }))
+    }
+
+    /// The scope of the module `h` names when the read in `scope` is in
+    /// that module's own file and no `use` there binds `h`: `backups` in
+    /// backups.df reads the module itself, the instance the read is in.
+    fn self_module(&self, scope: usize, h: &str) -> Option<usize> {
+        let module = self.decls.modules.get(h).filter(|m| !m.component)?;
+        for s in self.chain_of(scope) {
+            if self.decls.scopes[s].uses.contains_key(h) {
+                return None;
+            }
+            if s == module.scope {
+                return Some(s);
+            }
+        }
+        None
+    }
+
+    /// A scope as a message names it: `module backups`, `component
+    /// backups.volume`, `the stack`.
+    fn scope_name(&self, scope: usize) -> String {
+        self.decls
+            .modules
+            .iter()
+            .find(|(_, m)| m.scope == scope)
+            .map_or("the stack".to_string(), |(p, m)| match m.component {
+                true => format!("component {p}"),
+                false => format!("module {p}"),
+            })
     }
 
     /// The instance `name` in scope: the scope that declares it and its
@@ -2412,7 +2655,8 @@ impl<'u> Lowerer<'u> {
                 if let Some(t) = node(n, TYPE_EXPR) {
                     self.check_signature(n, &t, scope);
                 }
-                let body = self.stmts(node(n, STMT_BLOCK), inner, outer);
+                let mut body = self.stmts(node(n, STMT_BLOCK), inner, outer);
+                body.extend(self.shadows(n, inner));
                 one(Stmt::Module(Module {
                     name: path,
                     component: true,
@@ -3916,7 +4160,33 @@ impl<'u> Lowerer<'u> {
                 ),
             );
         }
-        self.copy(n, scope, outer, module, name).map(|c| vec![c])
+        let via = self.via(scope, &written, &module);
+        let mut copy = self.copy(n, scope, outer, module, name)?;
+        if let Stmt::Instance(u) = &mut copy {
+            u.via = via;
+        }
+        Ok(vec![copy])
+    }
+
+    /// The module instance the component `component`, written `written`
+    /// in `scope`, is named through (R-186): `a.volume` under `use backups
+    /// as a`, the component an item of that module. Its body reads that
+    /// instance's items bare.
+    fn via(&self, scope: usize, written: &str, component: &str) -> Option<Via> {
+        let (head, _) = written.split_once('.')?;
+        let (parent, _) = component.rsplit_once('.')?;
+        let declared = self.chain_of(scope).into_iter().find(|s| {
+            let sc = &self.decls.scopes[*s];
+            sc.components.contains_key(head) || sc.uses.contains_key(head)
+        })?;
+        if self.decls.scopes[declared].uses.get(head)? != parent {
+            return None;
+        }
+        Some(Via {
+            module: parent.to_string(),
+            name: head.to_string(),
+            scope: self.scope_term(scope, declared, str_term(head)),
+        })
     }
 
     /// One copy of the component `module`, named `name`, its inputs the
@@ -3973,6 +4243,7 @@ impl<'u> Lowerer<'u> {
             rows,
             body: (!body.is_empty()).then_some(body),
             clause: (!clause.is_empty()).then_some(clause),
+            via: None,
             span,
         }))
     }
@@ -5728,7 +5999,6 @@ impl<'u> Lowerer<'u> {
                 _ => return self.ambiguous(&c.head, &types, span),
             };
             let typ = typ.clone();
-            self.module_private(rc.scope, &c.head, span)?;
             return Ok((str_term(&typ), self.resource_addr(rc.scope, &c.head)));
         }
         match self.resolve(rc, c, out)? {
@@ -5792,6 +6062,31 @@ impl<'u> Lowerer<'u> {
                 return self.error(span, format!("the module {path} has no relation `{p}`"));
             }
             pred = format!("{m}::{p}");
+        } else if let Some(c) = n.children().find_map(|c| Chain::of(&c))
+            && c.head == "super"
+        {
+            // `super.p(..)`: the relation of the scope around this
+            // component (R-186).
+            let (from, rest) = self.super_chain(rc, &c, span)?;
+            let p = &rest.head;
+            let known = self.chain_of(from).into_iter().any(|s| {
+                let sc = &self.decls.scopes[s];
+                sc.arities.contains_key(p) || sc.relation_inputs.contains(p)
+            });
+            if !rest.ops.is_empty() || !known {
+                let around = self.scope_name(from);
+                return self.error(span, format!("`super.{p}`: {around} has no relation `{p}`"));
+            }
+            pred = self.relation_pred(rc.scope, from, p);
+        } else if let Some((m, p)) = pred.split_once('.')
+            && let Some(from) = self.self_module(rc.scope, m)
+            && self.decls.scopes[from].arities.contains_key(p)
+        {
+            // The module's own relation by its name, in its file: the
+            // instance's the read is in (R-186).
+            pred = self.relation_pred(rc.scope, from, p);
+        } else if !pred.contains('.') {
+            pred = self.relation_pred(rc.scope, rc.scope, &pred);
         }
         let list = node(n, ARG_LIST);
         let named: Vec<SyntaxNode> = list
@@ -6881,6 +7176,10 @@ impl<'u> Lowerer<'u> {
                  name it (`env.p`)",
             );
         }
+        // `super.x`: the scope around this component (R-186).
+        if h == "super" && !rc.vars.contains_key(h) {
+            return self.super_read(rc, c, pre, span);
+        }
         // A copy whose `instance` is the error reads nothing, and says so
         // there.
         if !rc.vars.contains_key(h) && self.unbound_instance(rc.scope, h) {
@@ -6917,7 +7216,7 @@ impl<'u> Lowerer<'u> {
             };
         if !rc.vars.contains_key(h) {
             if self.is_value(rc.scope, h) && own != Some(true) {
-                return self.value(rc, c, pre, span);
+                return self.value(rc, rc.scope, c, pre, span);
             }
             // `settings.x` names a resource called `settings` in scope; a
             // settings row, `settings[e]`, is gone (R-38).
@@ -6941,7 +7240,6 @@ impl<'u> Lowerer<'u> {
                 if types.len() > 1 {
                     return self.ambiguous(h, &types, span);
                 }
-                self.module_private(rc.scope, h, span)?;
                 let path = self.segs(rc, &c.ops, pre)?;
                 return Ok(Res::Ref {
                     typ: str_term(&types[0]),
@@ -7036,20 +7334,29 @@ impl<'u> Lowerer<'u> {
 
     /// A value name: `k(V)`, read once per rule. A `let` holding a
     /// reference (H-6) reads through it: `cfg.x` is `cfg(E), setting(E,
-    /// "x", V)`.
-    fn value(&mut self, rc: &mut Rc, c: &Chain, pre: &mut Vec<Lit>, span: Span) -> L<Res> {
-        let pred = c.head.clone();
+    /// "x", V)`. Looked up from `from` outward: `rc.scope`, or the scope
+    /// `super` names.
+    fn value(
+        &mut self,
+        rc: &mut Rc,
+        from: usize,
+        c: &Chain,
+        pre: &mut Vec<Lit>,
+        span: Span,
+    ) -> L<Res> {
+        let name = c.head.clone();
+        let pred = self.value_pred(rc.scope, from, &name);
         // An input typed `ref(T)` holds the reference itself: a dot reads
         // through it, the address taken out of the reference (R-101). It
         // is its user's, so no copy's scope goes in front of it.
         if !c.is_bare()
-            && let Some(typ) = self.input_ref(rc.scope, &pred)
+            && let Some(typ) = self.input_ref(from, &name)
         {
             let key = format!("ref {pred}");
             let addr = match rc.values.get(&key) {
                 Some(v) => var(v),
                 None => {
-                    let name = fresh(rc, &capitalise(&pred));
+                    let name = fresh(rc, &capitalise(&name));
                     let mark = func(crate::modules::ABSOLUTE, vec![var(&name)]);
                     let whole = func(crate::ir::REF, vec![str_term(&typ), mark, str_term("")]);
                     pre.push(Lit::Pos(atom_at(&pred, vec![whole], span)));
@@ -7064,7 +7371,7 @@ impl<'u> Lowerer<'u> {
                 path,
             });
         }
-        let ty = match self.value_type(rc.scope, &pred) {
+        let ty = match self.value_type(from, &name) {
             Ok(t) => t,
             Err(e) => return self.error(span, e),
         };
@@ -7077,10 +7384,10 @@ impl<'u> Lowerer<'u> {
         let key = match rc.values.get(&pred) {
             Some(v) => var(v),
             None => {
-                let name = fresh(rc, &capitalise(&pred));
-                pre.push(Lit::Pos(atom_at(&pred, vec![var(&name)], span)));
-                rc.values.insert(pred.clone(), name.clone());
-                var(&name)
+                let v = fresh(rc, &capitalise(&name));
+                pre.push(Lit::Pos(atom_at(&pred, vec![var(&v)], span)));
+                rc.values.insert(pred.clone(), v.clone());
+                var(&v)
             }
         };
         match ty {
@@ -7232,8 +7539,25 @@ impl<'u> Lowerer<'u> {
     ) -> L<Option<Res>> {
         let h = c.head.as_str();
         // Inside a module's file the module reads itself by its own name
-        // (`backups.repository` in its component), under the name its
-        // user's `use` binds it to (`use backups as b`).
+        // (`backups.repository` in its component): its value or resource
+        // is the one of the instance the read is in, as a bare read's is
+        // (R-186).
+        if let Some(from) = self.self_module(rc.scope, h)
+            && let Some(Op::Field(x)) = c.ops.first()
+        {
+            let rest = Chain {
+                head: x.clone(),
+                head_kind: IDENT,
+                call: None,
+                range: c.range,
+                ops: c.ops[1..].to_vec(),
+            };
+            if let Some(r) = self.item_read(rc, from, false, &rest, pre, span)? {
+                return Ok(Some(r));
+            }
+        }
+        // Its other items under the name its user's `use` binds it to
+        // (`use backups as b`).
         let alias = self.alias_in(rc.scope, h);
         let h = alias.as_deref().unwrap_or(h);
         if let Some(Op::Field(x)) = c.ops.first() {
@@ -7897,7 +8221,8 @@ impl<'u> Lowerer<'u> {
                 let v = match rc.values.get(&pred) {
                     Some(v) => var(v),
                     None => {
-                        let name = fresh(rc, &capitalise(&pred));
+                        let base = crate::modules::lexical_name(&pred).unwrap_or(&pred);
+                        let name = fresh(rc, &capitalise(base));
                         pre.push(Lit::Pos(atom_at(&pred, vec![var(&name)], span)));
                         rc.values.insert(pred.clone(), name.clone());
                         var(&name)
