@@ -1269,9 +1269,12 @@ pub fn report(i: &Input) -> Report {
         instances: crate::zset::Instances::from_facts(&i.res.facts).with(i.kept),
         warnings: Vec::new(),
         not_planned,
+        // Said once, by the plan an apply shows first, not again at each
+        // boundary.
         kept: definite
             .iter()
-            .filter(|a| !i.show_noop && matches!(a.kind, ActionKind::Noop) && !a.kept().is_empty())
+            .filter(|_| i.tick == 1 && !i.show_noop)
+            .filter(|a| matches!(a.kind, ActionKind::Noop) && !a.kept().is_empty())
             .map(|a| deformation(a, i.schema, &r, &refs))
             .collect(),
     }

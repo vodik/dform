@@ -346,3 +346,30 @@ fn why_says_the_programs_value_and_the_objects() {
     let r = run(&s, NOW, &["why", "vm.zone", "p"]).success();
     assert!(!r.stdout.contains("kept"), "{}", r.stdout);
 }
+
+/// An apply of several ticks says what it keeps once, with the plan it
+/// shows first, not again at each boundary.
+#[test]
+fn an_apply_says_what_it_keeps_once() {
+    let s = project("bootstrap-ticks");
+    let net = |cidr: &str| {
+        format!(
+            "{BOTH}resource net.vpc main {{ cidr = \"{cidr}\" }}\nresource net.subnet s {{ vpc = \
+             main, tier = \"web\" }}\n"
+        )
+    };
+    program(&s, Server::default(), &net("10.0.0.0/16"));
+    run(&s, NOW, &["apply", "p"]).success();
+    let changed = Server {
+        note: "n2",
+        ..Server::default()
+    };
+    program(&s, changed, &net("10.1.0.0/16"));
+    let r = run(&s, NOW, &["apply", "p"]).success();
+    assert_eq!(
+        r.stdout.matches("note differs (bootstrap): kept").count(),
+        1,
+        "{}",
+        r.stdout
+    );
+}
