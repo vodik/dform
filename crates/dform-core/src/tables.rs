@@ -58,8 +58,9 @@ pub const READ: &str = "io.read";
 pub const SET_DOC: &str = "set";
 
 /// The table a read is, `yaml.decode(io.read(path))` as a value: one row, the
-/// whole document (`document.git` read at a commit). A keyword too.
-pub const DOCUMENT: &str = "document";
+/// whole document. Not a word, so no relation of a program is named so
+/// (`input document from ..` reads its rows, not this).
+pub const DOCUMENT: &str = "@document";
 
 /// The format of a table read from a value (an input, a `let`, a
 /// selection into a document) rather than a file: `table.value.p(+doc,
@@ -169,7 +170,13 @@ fn parse_name(name: &str) -> Option<(&str, &str)> {
 /// Whether `pred` is a read's extern, a whole document as a value
 /// (`table.FORMAT.document`).
 pub fn is_document(pred: &str) -> bool {
-    parse_name(pred).is_some_and(|(f, t)| f != VALUE && t.split('|').next() == Some(DOCUMENT))
+    parse_name(pred).is_some_and(|(f, t)| f != VALUE && is_read(t.split('|').next().unwrap_or(t)))
+}
+
+/// Whether a table's name (its selector cut) is a read's, [`DOCUMENT`]
+/// (`@document.git` read at a commit).
+fn is_read(name: &str) -> bool {
+    name.strip_suffix(".git").unwrap_or(name) == DOCUMENT
 }
 
 /// What a table extern reads, for messages: `input relation p`, `set`
@@ -177,7 +184,7 @@ pub fn is_document(pred: &str) -> bool {
 pub fn describe(name: &str) -> Option<String> {
     Some(match parse_name(name)? {
         (_, SET_DOC) => "set".into(),
-        (f, t) if t.strip_suffix(".git").unwrap_or(t) == DOCUMENT => format!("{f} document"),
+        (f, t) if is_read(t) => format!("{f} document"),
         (_, t) => format!("input relation {t}"),
     })
 }
@@ -287,7 +294,7 @@ impl Tables {
             // an error.
             Outcome::NotYet(why) => {
                 let (name, _) = table.split_once('|').unwrap_or((table, ""));
-                match name == DOCUMENT || name.starts_with("document.") {
+                match is_read(name) {
                     true => Ok(vec![externs::row(
                         f,
                         inputs,
@@ -337,7 +344,7 @@ impl Tables {
             None => format!("{shown}:row {n}"),
         };
         // A read: the whole document, one row.
-        if name == DOCUMENT || name.starts_with("document.") {
+        if is_read(name) {
             let doc = document_of(format, &text).with_context(|| shown.clone())?;
             if format == "yaml"
                 && text.contains("---")

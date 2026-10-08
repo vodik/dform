@@ -1530,7 +1530,7 @@ fn documents<'c>(
         let View::Fact { fact, alts, .. } = circuit.view(*ch) else {
             continue;
         };
-        if is_document(&fact.pred) {
+        if crate::tables::is_document(&fact.pred) {
             out.push(fact);
             continue;
         }
@@ -1544,13 +1544,6 @@ fn documents<'c>(
         }
     }
     out
-}
-
-/// Whether `pred` is a loader's document, `table.FORMAT.document`.
-fn is_document(pred: &str) -> bool {
-    pred.strip_prefix("table.")
-        .and_then(|r| r.split_once('.'))
-        .is_some_and(|(_, t)| t.strip_suffix(".git").unwrap_or(t) == crate::tables::DOCUMENT)
 }
 
 /// Whether `v` is an object or a list with something in it: a value a
@@ -3058,20 +3051,22 @@ impl Cx<'_> {
         if !structured(v) {
             return None;
         }
-        self.found().filter(|a| is_document(&a.pred)).find_map(|a| {
-            let [.., at, doc] = a.args.as_slice() else {
-                return None;
-            };
-            let (Some(at), Some(doc)) = (self.bound(at), self.bound(doc)) else {
-                return None;
-            };
-            let Value::Str(at) = &*at else {
-                return None;
-            };
-            let at = place_in(at, &doc, v)?;
-            let size = serde_json::to_vec(&engine::value_to_json(v)).map_or(0, |b| b.len());
-            Some(format!("{at}  ({})", crate::query::size(size)))
-        })
+        self.found()
+            .filter(|a| crate::tables::is_document(&a.pred))
+            .find_map(|a| {
+                let [.., at, doc] = a.args.as_slice() else {
+                    return None;
+                };
+                let (Some(at), Some(doc)) = (self.bound(at), self.bound(doc)) else {
+                    return None;
+                };
+                let Value::Str(at) = &*at else {
+                    return None;
+                };
+                let at = place_in(at, &doc, v)?;
+                let size = serde_json::to_vec(&engine::value_to_json(v)).map_or(0, |b| b.len());
+                Some(format!("{at}  ({})", crate::query::size(size)))
+            })
     }
 
     /// [`Cx::core`], a variable's or a literal's value borrowed.

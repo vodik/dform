@@ -240,7 +240,7 @@ fn a_secret_read_is_recorded_by_its_digest() {
     let plan = s.read("plan.json");
     assert!(!plan.contains("TOKEN-VALUE"), "{plan}");
     assert!(
-        plan.contains("\"sensitive\": \"table.text.document/token.txt#3\""),
+        plan.contains("\"sensitive\": \"table.text.@document/token.txt#3\""),
         "{plan}"
     );
     s.write(

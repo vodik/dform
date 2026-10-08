@@ -1531,8 +1531,9 @@ decl p(..) mixed
 
 (a repository's ref is resolved inside the read, its commit in each row's
 `At`, `REPO@COMMIT:PATH:LINE`); any other document value, `table.value.p(+doc, -at, -col, ..)`, answered
-in process; and a read as a value, `table.FORMAT.document(Path,
-At, V)`. The controller watches every file and ref a run's tables and
+in process; and a read as a value, `table.FORMAT.@document(Path,
+At, V)` (not a word: a relation the program names `document` is its
+own). The controller watches every file and ref a run's tables and
 documents read, and every program file; a location read over a transport
 (`ssh://`, `https://`, `s3://`) is read again by every run, not polled.
 
@@ -2179,7 +2180,7 @@ as it is.
 | `output p` (a stack's relation)           | `output p = [ [X, ..] \| p(X, ..) ]`, read by `s[k=v].p(x, ..)` as `member(Rows, [x, ..])` |
 | `input k { f: T = d }` (R-54)             | the leaf `k.f`'s `arg("input", S, "k.f", d, default)`, its check `k.f`'s refinement |
 | `decl p(a: t, b_c: t)`                    | record fields `a`, `b_c`                               |
-| `yaml.decode(io.read(S))` (a read, as a value) | `V`, reading `table.yaml.document(S', At, V)`          |
+| `yaml.decode(io.read(S))` (a read, as a value) | `V`, reading `table.yaml.@document(S', At, V)`         |
 | `input p from F(S) where B`               | `p(C) :- B, reads, Path = S', table.F.p(Path, At, C)` ("Documents") |
 | `input p from t`                          | `p(C) :- reads, Doc = t', table.value.p(Doc, At, C)`   |
 | `resource c n { p(t) where B }`           | `n::p(t') :- B, reads`, the copy's relation `p`        |

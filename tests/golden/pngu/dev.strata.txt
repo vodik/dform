@@ -11,7 +11,7 @@ stratum  node
 0        resolve
 0        resolved
 0        table.csv.peering
-0        table.json.document
+0        table.json.@document
 0        type_refine
 0        world_attr
 1        (arg, google.container_node_pool, id)

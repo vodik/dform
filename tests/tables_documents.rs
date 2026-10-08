@@ -198,3 +198,28 @@ fn a_read_is_io_read_and_a_decode_of_it() {
         r.stderr
     );
 }
+
+/// A relation named `document` is the program's own: its rows are read
+/// from the file, and a read of another file as a value beside it is the
+/// whole of that one (a read's table is no name a relation can have).
+#[test]
+fn a_relation_named_document_is_not_a_read() {
+    let s = scratch("doc-named-document");
+    s.write("rows.yml", "- name: a\n- name: b\n");
+    s.write("doc.yml", "x: 1\n");
+    s.write(
+        "p.df",
+        "input document from yaml.decode(io.read(\"rows.yml\"))\nuse fake\n\
+         decl document(name: string)\nlet d = yaml.decode(io.read(\"doc.yml\"))\n\
+         resource net.vpc \"${n}\" { cidr_block = \"10.0.0.0/16\" } where document(n)\n\
+         resource net.vpc other { cidr_block = \"10.${d.x}.0.0/16\" }\n",
+    );
+    let r = s.run(&["plan", "--why=none", "p.df"]).success();
+    for want in [
+        "+ net.vpc[\"a\"]",
+        "+ net.vpc[\"b\"]",
+        "+ net.vpc[\"other\"]\n  cidr_block = \"10.1.0.0/16\"",
+    ] {
+        assert!(r.stdout.contains(want), "{want}: {}", r.stdout);
+    }
+}

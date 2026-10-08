@@ -267,7 +267,7 @@ fn reads_a_file() {
             .as_str()
             .unwrap()
             .starts_with(&format!(
-                "table.text.document/ssh://{}@127.0.0.1:{port}/",
+                "table.text.@document/ssh://{}@127.0.0.1:{port}/",
                 user()
             )),
         "{file}"

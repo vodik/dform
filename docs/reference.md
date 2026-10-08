@@ -3216,7 +3216,7 @@ output kubeconfig: secret(string) = str.replace(raw, "127.0.0.1", server.public_
 A `let` declared `secret(T)` (or of an object type with a secret field) is
 a secret cell: a public place it reaches is the E0304 any secret's is, and
 a document read into it is not recorded in the plan file, only its keyed
-digest (`inputs.answers`, `"sensitive": "table.text.document/LOCATION#3"`);
+digest (`inputs.answers`, `"sensitive": "table.text.@document/LOCATION#3"`);
 `apply PLAN` reads it again and refuses the plan when the digest moved.
 
 A provider reads a location through the host (`dform:host/io`, the
