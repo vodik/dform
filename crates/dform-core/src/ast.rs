@@ -47,6 +47,23 @@ pub fn atom(pred: &str, args: Vec<Term>, span: Span) -> Atom {
 }
 
 impl Term {
+    /// The term with each variable `env` binds replaced by its value.
+    pub fn subst(&self, env: &std::collections::BTreeMap<String, Value>) -> Term {
+        match self {
+            Term::Var(x) => match env.get(x) {
+                Some(v) => Term::Val(v.clone()),
+                None => self.clone(),
+            },
+            Term::Func { name, args } => Term::Func {
+                name: name.clone(),
+                args: args.iter().map(|a| a.subst(env)).collect(),
+            },
+            Term::List(xs) => Term::List(xs.iter().map(|a| a.subst(env)).collect()),
+            Term::Obj(m) => Term::Obj(m.iter().map(|(k, a)| (k.clone(), a.subst(env))).collect()),
+            t => t.clone(),
+        }
+    }
+
     pub fn is_var(&self) -> bool {
         matches!(self, Term::Var(_))
     }
@@ -513,6 +530,11 @@ pub enum Lit {
 }
 
 impl Lit {
+    /// The literal with each variable `env` binds replaced by its value.
+    pub fn subst(&self, env: &std::collections::BTreeMap<String, Value>) -> Lit {
+        self.clone().map_terms(|t| t.subst(env))
+    }
+
     /// `self` with its atom passed through `atom`, or each side of its
     /// comparison through `term`.
     pub fn map(self, atom: impl FnOnce(Atom) -> Atom, mut term: impl FnMut(Term) -> Term) -> Lit {

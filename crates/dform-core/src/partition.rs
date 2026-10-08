@@ -718,19 +718,10 @@ fn per_type(rules: &[RuleStmt], facts: &[Atom], graph: &Graph) -> Option<Vec<Rul
             let env = BTreeMap::from([(t.clone(), Value::Str(typ))]);
             out.push(RuleStmt {
                 head: Atom {
-                    args: r
-                        .head
-                        .args
-                        .iter()
-                        .map(|a| crate::whynot::subst(a, &env))
-                        .collect(),
+                    args: r.head.args.iter().map(|a| a.subst(&env)).collect(),
                     ..r.head.clone()
                 },
-                body: r
-                    .body
-                    .iter()
-                    .map(|l| crate::whynot::subst_lit(l, &env))
-                    .collect(),
+                body: r.body.iter().map(|l| l.subst(&env)).collect(),
             });
         }
     }

@@ -406,7 +406,7 @@ impl WhyNot<'_> {
                 continue;
             };
             let lit = &rule.body[k];
-            let bound = subst_lit(lit, &a.known);
+            let bound = lit.subst(&a.known);
             match &bound {
                 Lit::Pos(b) if b.pred == "__known" => {
                     let line = match known_text(rule, lit, &a.known) {
@@ -485,7 +485,7 @@ impl WhyNot<'_> {
             let helper = self.res.rules.iter().find(|r| r.head.pred == b.pred)?;
             let mut env = Env::new();
             for (h, t) in helper.head.args.iter().zip(&b.args) {
-                if let (Term::Var(h), Some(v)) = (h, subst(t, known).ground()) {
+                if let (Term::Var(h), Some(v)) = (h, t.subst(known).ground()) {
                     env.insert(h.clone(), v);
                 }
             }
@@ -1013,7 +1013,7 @@ fn splits(s: &str, pieces: &[&str]) -> Vec<Vec<String>> {
 /// Evaluate `rule`'s body with `seed` bound, literal by literal: the
 /// first prefix no row satisfies.
 fn attempt(rule: &RuleStmt, seed: Env, facts: &BTreeSet<Atom>) -> Attempt {
-    let body: Vec<Lit> = rule.body.iter().map(|l| subst_lit(l, &seed)).collect();
+    let body: Vec<Lit> = rule.body.iter().map(|l| l.subst(&seed)).collect();
     let mut known = seed.clone();
     for k in 0..body.len() {
         let answers = match engine::query(&body[..=k], facts) {
@@ -1041,26 +1041,6 @@ fn attempt(rule: &RuleStmt, seed: Env, facts: &BTreeSet<Atom>) -> Attempt {
         seed,
         failed: None,
         known,
-    }
-}
-
-pub(crate) fn subst_lit(l: &Lit, env: &Env) -> Lit {
-    l.clone().map_terms(|t| subst(&t, env))
-}
-
-pub(crate) fn subst(t: &Term, env: &Env) -> Term {
-    match t {
-        Term::Var(x) => match env.get(x) {
-            Some(v) => Term::Val(v.clone()),
-            None => t.clone(),
-        },
-        Term::Func { name, args } => Term::Func {
-            name: name.clone(),
-            args: args.iter().map(|a| subst(a, env)).collect(),
-        },
-        Term::List(xs) => Term::List(xs.iter().map(|a| subst(a, env)).collect()),
-        Term::Obj(m) => Term::Obj(m.iter().map(|(k, a)| (k.clone(), subst(a, env))).collect()),
-        t => t.clone(),
     }
 }
 
