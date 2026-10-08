@@ -173,7 +173,7 @@ fn a_tick_that_adds_an_address_asks_again() {
         said[1]
     );
     assert!(
-        said[1].ends_with("Apply tick 2 to p? [y/N] "),
+        said[1].ends_with("tick 2  1 change   apply? [y/N] "),
         "{}",
         said[1]
     );

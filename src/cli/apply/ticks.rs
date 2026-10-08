@@ -714,6 +714,10 @@ impl<'a, 'h> Ticks<'a, 'h> {
     /// report, so its header says which tick the report is of.
     fn print(&self, t: &Tick) {
         let (tick, p, why) = (self.tick, &t.planned, self.r.why());
+        // Apart from the block above it.
+        if why != report::Why::None && tick > 1 {
+            println!();
+        }
         if why == report::Why::None && (tick > 1 || t.boundary) {
             println!("tick {tick}:");
         } else if why != report::Why::None && tick > 1 {
@@ -797,7 +801,6 @@ impl<'a, 'h> Ticks<'a, 'h> {
         // What the tick adds to the plan shown is shown: its plan, then
         // what differs, above the question.
         if (new + planned > 0 || more) && !self.replanned(t) {
-            println!();
             self.print(t);
         }
         if new > 0 && self.shown {

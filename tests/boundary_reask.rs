@@ -107,7 +107,8 @@ fn a_tick_that_differs_is_asked_again_with_what_differs() {
         said[1]
     );
     assert!(
-        said[1].ends_with(&format!("{DIFFERS}Apply tick 2 to p? [y/N] ")),
+        // Asked on the tick's header line (R-206).
+        said[1].ends_with(&format!("{DIFFERS}tick 2  1 change   apply? [y/N] ")),
         "{}",
         said[1]
     );

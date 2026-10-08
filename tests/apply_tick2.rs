@@ -142,7 +142,7 @@ fn a_plan_file_applies_the_tick_it_showed() {
 /// The server's endpoint not there yet after tick 1 (chaos `not-ready`, a
 /// host still booting): the tick waits on it, then configures the
 /// provider and applies what waited on it. The tick that only waits
-/// prints its header.
+/// prints its header (`-v`: a later tick's plan is printed; R-206).
 #[test]
 fn the_boundary_waits_for_the_settings_then_configures() {
     let s = scratch("tick2-waits");
@@ -153,6 +153,7 @@ fn the_boundary_waits_for_the_settings_then_configures() {
             "not-ready=db.postgres[\"server\"].endpoint:3",
             "apply",
             "--yes",
+            "-v",
             "p.df",
         ],
     )
@@ -173,7 +174,7 @@ fn the_boundary_waits_for_the_settings_then_configures() {
     );
     assert!(
         r.stdout
-            .contains("provider k8s: configured after tick 2: kubeconfig = (sensitive)\n"),
+            .contains("provider k8s: configured after tick 2: kubeconfig = (sensitive)"),
         "{}",
         r.stdout
     );
@@ -215,13 +216,15 @@ fn a_kind_served_after_the_boundary_is_planned_with_its_schema() {
             )
         ),
     );
-    let r = dev(&s, &["apply", "--yes", "p.df"]).success();
+    // `-v`: tick 2's plan, as the boundary planned it with the schema it
+    // learned, is printed (R-206: without it, tick 2 is its block).
+    let r = dev(&s, &["apply", "--yes", "-v", "p.df"]).success();
     let (_, tick2) = r
         .stdout
         .split_once("provider k8s: configured after tick 1: ")
         .unwrap_or_else(|| panic!("{}", r.stdout));
     assert!(
-        tick2.contains("  + k8s.example.io.v1.token t  p.df:8\n")
+        tick2.contains("  + k8s.example.io.v1.token t  ")
             && tick2.contains("      spec.value = (sensitive)\n"),
         "{}",
         r.stdout

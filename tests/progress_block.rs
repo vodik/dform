@@ -1,11 +1,13 @@
-//! R-127: apply's progress is the tick's block filling in, on stderr. Not
-//! a terminal (these tests): a line per change of state, a change's mark
-//! and address as it starts and with its time once it answered, a
-//! heartbeat line per running change, the tick's end line; a failure
-//! stops the tick, its line marked `!` with its time, its error below the
-//! block; `-q`
-//! only the end; Ctrl-C stops after the change in flight, what never
-//! started `interrupted`, and the next apply resumes it.
+//! R-127, R-206: apply's progress is the tick's block filling in, on
+//! stderr. Not a terminal (these tests; `--yes` too): no bar, a line per
+//! change of state, a change's mark and address as it starts and with
+//! its call's word and time once it answered (`made 0.3s`), a heartbeat
+//! line per running change (`making 0.6s`), the tick's end line (`tick 1
+//! done 0.9s`); a failure stops the tick, its line marked `!`, `failed`
+//! and its time, its error below the block; `-q` only the end; Ctrl-C
+//! stops after the change in flight, what never started `interrupted`,
+//! and the next apply resumes it. The terminal's block is
+//! tests/apply_block.rs's.
 
 mod common;
 use common::Scratch;
@@ -81,18 +83,20 @@ fn a_tick_says_each_change_of_state_and_stops_at_a_failure() {
     assert_eq!(
         block(&r.stderr),
         [
+            "",
             "tick 1  3 changes",
             "  + net.vpc main",
-            "  + net.vpc main  T",
+            "  + net.vpc main  made T",
             "  + net.subnet a",
-            // The mock says it made the object and answers late (R-130).
-            "  + net.subnet a  T  made",
-            "  + net.subnet a  T  made",
+            // The mock says it made the object and answers late (R-130):
+            // its word while the call runs, then the call's once over.
+            "  + net.subnet a  made T",
+            "  + net.subnet a  made T",
             "  + net.subnet b",
             // The failure's mark and time; its error once, below the
             // block, in full (R-109).
-            "  ! net.subnet b  T",
-            "tick 1  failed  T",
+            "  ! net.subnet b  failed T",
+            "tick 1  failed T",
             "! apply net.subnet b: refused, nothing changed",
             "    injected failure (chaos fail=net.subnet b)",
             "    p.df:5",
@@ -128,7 +132,7 @@ fn a_running_change_beats_and_quiet_says_only_the_end() {
         .count();
     assert!(beats >= 3, "{}", r.stderr);
     assert!(
-        block(&r.stderr).contains(&"tick 1  done  T".to_string()),
+        block(&r.stderr).contains(&"tick 1  done T".to_string()),
         "{}",
         r.stderr
     );
@@ -136,7 +140,7 @@ fn a_running_change_beats_and_quiet_says_only_the_end() {
     let s = project("progress-quiet");
     let out = apply(&s, &[], &["--yes", "-q"]).output().unwrap();
     let r = common::Run::from(out).success();
-    assert_eq!(block(&r.stderr), ["tick 1  done  T"], "{}", r.stderr);
+    assert_eq!(block(&r.stderr), ["tick 1  done T"], "{}", r.stderr);
 }
 
 /// Ctrl-C while a create runs (chaos `interrupt`, the stop a signal asks
@@ -158,9 +162,9 @@ fn an_interrupt_says_what_ran_and_the_next_apply_resumes() {
     assert!(
         lines.contains(
             &"Ctrl-C: stopping after the calls in flight; Ctrl-C again to quit now".to_string()
-        ) && lines.contains(&"  + net.subnet a  T  made".to_string())
-            && lines.contains(&"  + net.subnet b    interrupted".to_string())
-            && lines.contains(&"tick 1  interrupted  T".to_string())
+        ) && lines.contains(&"  + net.subnet a  made T".to_string())
+            && lines.contains(&"  + net.subnet b  interrupted".to_string())
+            && lines.contains(&"tick 1  interrupted T".to_string())
             && lines.last().unwrap() == "interrupted: the next apply resumes it",
         "{stderr}"
     );

@@ -222,8 +222,14 @@ fn a_pending_update_applies_after_the_boundary() {
         "p.df",
         "\nresource db.postgres main { size = 1 }\nresource compute.vm app { db_host = ref(db.postgres, \"main\", \"endpoint\") }\nuse fake\n",
     );
+    // `-v`: tick 2's plan, re-derived at the boundary, is printed with the
+    // value it now knows (R-206: without it, tick 2 is its block).
     let r = s
-        .run(&common::on("p.df", &["--world", "w.json"], &["apply"]))
+        .run(&common::on(
+            "p.df",
+            &["--world", "w.json"],
+            &["apply", "-v"],
+        ))
         .success();
     assert!(
         r.stdout
@@ -232,10 +238,9 @@ fn a_pending_update_applies_after_the_boundary() {
         r.stdout
     );
     assert!(
-        r.stdout.contains(
-            "tick 2  1 change\n  ~ compute.vm app  p.df:3\n      \
-             db_host = \"old.db.fake\" → \"main.db.fake\"\n"
-        ),
+        r.stdout
+            .split_once("plan: 1 change (1 update) over 1 tick\n\ntick 2  1 change\n")
+            .is_some_and(|(_, t)| t.contains("db_host = \"old.db.fake\" → \"main.db.fake\"")),
         "{}",
         r.stdout
     );

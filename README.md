@@ -184,7 +184,7 @@ plan: 1 change (1 create) over 1 tick
 
 tick 2  1 change
   + iam.policy "connect-orders.db.fake"  stacks/tour.df:323  with pg = db.postgres orders
-Apply tick 2 to tour[env=prod]? [y/N]
+tick 2  1 change   apply? [y/N]
 ```
 
 A provider's settings are values like any other, so a cluster and what

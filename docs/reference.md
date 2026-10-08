@@ -183,7 +183,7 @@ then what differs, a value as `shown → now`:
 tick 2 differs from the plan shown:
   ~ compute.vm app  rv = "115" → "200"
   + db.postgres main  update again; it ran in tick 1
-Apply tick 2 to D? [y/N]
+tick 2  1 change   apply? [y/N]
 ```
 
 and so on until nothing is `later`. A change gone from the tick (`-
@@ -1742,41 +1742,74 @@ cargo run -- -C examples/gke apply                  # asks again at tick 2
 cargo run -- -C examples/gke apply --set zones=1   # one zone: stops after tick 1
 ```
 
-Once a tick is approved its block fills in on stderr (R-127), stdout
-keeping the plan and the questions. A change is its plan line's mark and
-address, then where it is: what it reads that the tick makes first
-(`waits on k3s.server.public_ip`), or the time its call has run, which
-ticking is the only sign of life (no spinner, no glyph); the provider's
-own status word follows the time verbatim, as its Apply streams it
-(R-130: the call's events, each time the provider's view of the object
-changes, never on a timer; an OVH instance says `BUILD`, then `ACTIVE`;
-an event's message goes to `DFORM_LOG=debug`). On a terminal the
-block's lines change in place about once a second, the cursor moved back
-over the block's own lines and each cleared as it is written again, the
-header counting `1 done  1 running  1 waiting`:
+Once a tick is approved its block fills in on stderr (R-127, R-206),
+stdout keeping the plan and the questions. Its lines are the plan's
+lines (one printer: a copy's and a used module's changes nested under
+its header as the plan nests them, each by its full name), with where
+the change is in place of its site: what it reads that the tick makes
+first (`waits on k3s.server.public_ip`), or its call's word and time,
+`making 0.8s` dim while the call runs, `made 1.1s` once it answered
+(`updated`, `deleted`, `replaced`, `adopted`, `kept` for a forget). The
+time ticking is the only sign of life (no spinner); while the call runs
+the provider's own status word stands in for `making`, verbatim, as its
+Apply streams it (R-130: the call's events, each time the provider's
+view of the object changes, never on a timer; an OVH instance says
+`BUILD`, then `ACTIVE`; an event's message goes to `DFORM_LOG=debug`).
+On a terminal the block's lines change in place about once a second,
+the cursor moved back over the block's own lines and each cleared as it
+is written again; its header carries a fill bar, the calls answered over
+the tick's calls (a fill, never a spinner), and the time the tick has
+run, then `done` and its time once the tick ends:
 
 ```
-tick 1  3 changes   1 done  1 running  1 waiting
-  + ovh.ssh_key k3s.admin                        0.8s
-  + ovh.instance k3s.server                      1m12s  BUILD
-  + ovh.domain_record k3s."k8s-lab.vodik.xyz"    waits on k3s.server.public_ip
+tick 1  3 changes                        ━━━━━━━━░░░░  2 of 3  3.1s
+  ~ k8s.deployment forgejo.server        updated 1.1s
+  + k8s.secret synapse.homeserver        making 2.4s
+  + k8s.service synapse_db.svc           waits on synapse_db.db.id
+
+tick 1  3 changes                        ━━━━━━━━━━━━  done 4.2s
+  ~ k8s.deployment forgejo.server        updated 1.1s
+  + k8s.secret synapse.homeserver        made 3.0s
+  + k8s.service synapse_db.svc           made 0.2s
 ```
 
-Elsewhere (a pipe, CI) the same lines are appended, one per change of
-state: a change's mark and address as its call starts, the line with its
-time once it answers, and the line again every 30s while it runs (a
-heartbeat; `DFORM_HEARTBEAT_MS` sets it); the tick ends with `tick 1
-done  1m50s`. `-q` prints only that end line. The first failure stops the
-tick: nothing new starts, what is in flight finishes, and the failed
-change's mark is `!` with its time alone (`tick 1  failed  ..` ends the
-block). Each failure is said once, below the block, in full, in the one
-shape every error has (R-109): what happened, to the change as the plan
+Under each tick a boundary follows, the policy block (see "Policy") as
+the boundary re-checked it: the count, what it was before the tick when
+it moved (each word the line says already left out), then each policy
+that does not hold, as the plan's block says it. A policy that fails
+there is its line, its mark red, above the refusal that stops the
+apply:
+
+```
+policy after tick 1   14 hold · 1 undetermined   (was 12 · 1 fails · 2)
+  undetermined  pod may run as root             baseline.df:76  1 undetermined
+    k8s.stateful_set synapse_db.db              until spec.template.spec.securityContext is known (tick 2)
+```
+
+A later tick is its block: its plan, which the boundary re-derived, is
+printed only where it adds to the plan shown (asked again, above), and
+under `-v` (`-q` prints each tick's bare plan, as scripts read it). A
+tick that asks does so on its header line, `tick 2  1 change   apply?
+[y/N]`, which the block's header takes the place of once answered.
+
+Under `--yes`, and wherever stdout or stderr is not a terminal (a pipe,
+CI), there is no bar: the block's header, then a line per change of
+state, appended: a change's mark and name as its call starts, the line
+with its word and time once it answers (and again when the provider
+says a new status word), the line again every 30s while it runs (a
+heartbeat; `DFORM_HEARTBEAT_MS` sets it), a copy's header once before
+its first change; the tick ends with `tick 1  done 1m50s`. `-q` prints
+only that end line. The first failure stops the tick: nothing new
+starts, what is in flight finishes, and the failed change's mark is `!`,
+its word `failed` with its time (`tick 1  failed ..` ends the block).
+Each failure is said once, below the block, in full, in the one shape
+every error has (R-109): what happened, to the change as the plan
 prints it; the provider's or the rule's message on its own line (a
 provider's own naming of the change dropped, any mention of the address
 said as the plan says it); where the change is derived:
 
 ```
-tick 1  failed  4.1s
+tick 1  failed 4.1s
 ! apply ovh.domain_record k3s."k8s-lab.vodik.xyz": refused, nothing changed
     zone vodik.xyz is not hosted on this OVH account
     k3s.df:66
@@ -1795,7 +1828,8 @@ a plan file that is not there), says what happened on its `Error:` line
 and what caused it on the lines under it, indented (`Error: parse
 state` / `    expected ident at line 1 column 2`), never a `Caused by:`
 list. The marks are painted as the plan paints them on a terminal:
-`+` green, `~` yellow, `-` red, `!` red, nothing else. Ctrl-C (SIGINT) or SIGTERM asks the apply to
+`+` green, `~` yellow, `-` red, `!` red, a policy's `fails` red; nothing
+else is coloured. Ctrl-C (SIGINT) or SIGTERM asks the apply to
 stop: it says `Ctrl-C: stopping after the calls in flight; Ctrl-C again
 to quit now`, starts no new change, waits for the calls in flight (each
 bounded by its provider's `timeout`) and logs their answers, then ends

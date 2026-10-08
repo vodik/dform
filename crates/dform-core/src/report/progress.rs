@@ -332,9 +332,9 @@ impl Block {
     /// time), then each line of its tree.
     fn rows(&self, style: Style, bar: bool) -> Vec<Row> {
         let head = self.title();
-        let mut header = Row::new(&head, style.paint(Paint::Bold, &head)).aligned();
+        let mut header = Row::new(&head, style.paint(Paint::Bold, &head));
         if bar {
-            header = header.with(vec![self.progress()]).set();
+            header = header.with(vec![self.progress()]).set().aligned();
         }
         let mut rows = vec![header];
         for (depth, item) in &self.tree {

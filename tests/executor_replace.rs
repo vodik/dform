@@ -55,12 +55,8 @@ fn a_replace_updates_its_dependents_after_the_create() {
         r.stdout
     );
     let r = mock(&s, &["apply", "--chaos", "fresh-ids"]).success();
-    assert!(
-        r.stdout
-            .contains("plan: 2 changes (2 update) over 1 tick\n\ntick 2  2 changes\n"),
-        "{}",
-        r.stdout
-    );
+    // Tick 2 is its block (R-206).
+    assert!(r.stderr.contains("\ntick 2  2 changes\n"), "{}", r.stderr);
     let (new, subnets) = ids(&s, "main");
     assert_ne!(new, old);
     assert_eq!(subnets, [new.clone(), new], "{}", r.stdout);
@@ -87,24 +83,23 @@ fn create_before_destroy_moves_dependents_before_the_deposed_delete() {
         ),
     );
     let r = mock(&s, &["apply", "--chaos", "fresh-ids"]).success();
+    // Tick 2's block says each call as it starts (R-206), in the order
+    // the calls are made.
     let tick2 = r
-        .stdout
+        .stderr
         .split("tick 2  3 changes\n")
         .nth(1)
         .unwrap_or_default();
     let order: Vec<&str> = tick2
         .lines()
         .filter(|l| l.starts_with("  ~ ") || l.starts_with("  - "))
+        .filter(|l| l.split_whitespace().count() == 3)
         .collect();
     assert_eq!(
         order,
-        [
-            "  ~ net.subnet a  p.df:4",
-            "  ~ net.subnet b  p.df:5",
-            "  - net.vpc main  (deposed)"
-        ],
+        ["  ~ net.subnet a", "  ~ net.subnet b", "  - net.vpc main"],
         "{}",
-        r.stdout
+        r.stderr
     );
     let (new, subnets) = ids(&s, "main-2");
     assert_eq!(subnets, [new.clone(), new], "{}", r.stdout);
