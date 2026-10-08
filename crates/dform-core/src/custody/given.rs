@@ -277,11 +277,13 @@ impl Plain {
             Plain::Bool(false) => ("bool", b"False".to_vec()),
         }
     }
+}
 
-    /// As a program reads it.
-    pub fn value(&self) -> crate::value::Value {
+/// A value as a program reads it.
+impl From<&Plain> for crate::value::Value {
+    fn from(p: &Plain) -> Self {
         use crate::value::Value;
-        match self {
+        match p {
             Plain::Str(s) => Value::Str(s.clone()),
             Plain::Int(i) => Value::Int(*i),
             Plain::Float(f) => {
@@ -904,7 +906,7 @@ pub fn rows(f: &File, shown: &str) -> Result<Vec<(Option<usize>, String, crate::
                 let s = standin(shown, &name, f.given(&name).map_or(1, |g| g.generation));
                 crate::secrets::standin::register(v, &label(shown, &name), &s);
             }
-            out.push((l.line, name, p.value()));
+            out.push((l.line, name, (&p).into()));
         }
     }
     Ok(out)
