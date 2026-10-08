@@ -48,6 +48,7 @@ fn program(name: &str, src: &str, program_file: bool, mode: Mode) -> Result<Prog
         file,
         root: parse.syntax(),
         path: None,
+        project: false,
     }];
     resolve::lower(&units, &[0], program_file, mode).map_err(|d| Diagnostics(d).into())
 }

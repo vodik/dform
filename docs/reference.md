@@ -64,10 +64,11 @@ views run on a program file with no state; `apply`, `stack`,
 `state` and `log` refuse (a `dev --world` run keeps its state beside the
 world file, and runs anywhere). A stack is a file, named after itself:
 `stacks/shop.df` is the stack `shop`. With no `stacks/` directory the
-root's `.df` files are the stacks, so `dform.toml` beside `shop.df` is a
+root's `.df` files are the stacks (but `project.df`), so `dform.toml` beside `shop.df` is a
 project with one stack; any file runs by path, named after itself. A
 file that is not a stack with a `key` is an error, and so is a
-resource of a stack. `docs/layout.md` has the convention; every
+resource of a stack anywhere but in the project module, `project.df`,
+which lists the deployments (below). `docs/layout.md` has the convention; every
 example under `examples/` follows it, and test-only programs are under
 `tests/fixtures/`.
 Each example's `README.md` says what it shows and lists the commands to
@@ -130,9 +131,11 @@ values belong to the target; other inputs stay `--set`, and `--set` of a
 key is an error. `--set k=@FILE` reads FILE (YAML, JSON or TOML by its
 extension, or a `.df` file of the one fact `k(value)`) as the input's
 value, parsed as its type the way a YAML cell is: how the outside gives an
-object or a list; a plan file records the file's digest. With no target it
-is the one stack under the working directory, else the stacks are listed
-and dform exits non-zero. A key the
+object or a list; a plan file records the file's digest. With no target
+`plan`, `apply` and `test` run on the project module's deployments when
+the project has one (below); otherwise, and for every other command, no
+target is the one stack under the working directory, else the stacks
+are listed and dform exits non-zero. A key the
 target does not name is its input's default, for `plan` and `apply` alike;
 both print the deployment first, `deployment: shop[env=dev]`, `-v` adding
 which key values are defaults, `(env from its default)` (`plan --json`:
@@ -217,9 +220,55 @@ input (one none declares is the target's error); `--input-file` is the
 target's. A plan file,
 a `--world` fixture and a program outside a project apply only
 themselves. `apply` with no target, in a project of several stacks under
-the working directory, applies every one of them (each with its default
-key) in dependency order, each run headed and confirmed on its own; a
-`--set` no stack declares is an error.
+the working directory and no project module, applies every one of them
+(each with its default key) in dependency order, each run headed and
+confirmed on its own; a `--set` no stack declares is an error.
+
+Which deployments a project has is code: the project module,
+`project.df` at the root, makes each a resource of its stack's type, its
+key's values the attributes (docs/grammar.md "Deployed modules"):
+
+```dform
+resource stacks.platform lab { env = "lab" }
+resource stacks.platform prod { env = "prod" }
+resource stacks.apps "${e}" { env = e } where e in ["lab", "prod"]
+```
+
+With no target, `plan`, `apply` and `test` run on it; a file that is no
+stack and makes resources of stacks, named as the target (`dform plan
+envs/lab.df`), is one too. Each deployment it lists, and each one those
+read that it does not (said `(not listed: a listed deployment reads
+it)`), runs in dependency order as `apply X` runs X's (R-30): its own
+plan, question, state, lock and `[secrets]`, a `--set` going to each
+whose stack declares the input. `plan` says first the `stacks:` lines,
+one per deployment with its state, then each one's plan headed `== NAME`:
+
+```
+stacks: project.df's deployments, in apply order; each one's plan follows
+  platform[env=lab]   up to date
+  apps[env=lab]       1 change (1 update) over 1 tick
+  platform[env=prod]  never applied, 4 changes (4 create) over 1 tick
+  apps[env=prod]      never applied, 0 changes, 1 later
+  apps[env=old]       removed from project.df: the next apply destroys it, 2 changes (2 delete) over 1 tick
+```
+
+(`plan --json`, `--out` and `--destroy` plan one deployment: name it.)
+`apply` applies them in that order, each asked for on its own (`--yes`
+answers every question); a dependency declined, stopped or failed ends
+the run before its readers, with its exit status, and a refused plan
+exits 4 as any. What the module's applies made is kept in
+`dform.state/project.json`: a deployment an apply of the module made
+that the module no longer lists is removed, and the next apply, after
+the others, destroys it, readers first, each a `destroy` with its own
+question (`Destroy these N objects of apps[env=old]?`) that
+`prevent_destroy` refuses and `retain` forgets; it stays the project's
+until its destroy is done. A deployment the module never listed (one
+applied by its target) is the target's, never destroyed by the
+project's apply. `test` tests each deployment it lists, its key pinned,
+headed `== NAME`, and fails naming those that failed. `stack list` says
+which deployments the module lists (`listed project.df`, `removed from
+project.df`), one it lists that has no state yet as `never` applied. It
+replaces Terraform's workspaces and a directory tree per environment.
 
 `dform destroy TARGET` removes a deployment: the plan against an empty
 wanted set. The program is evaluated as for `apply` (its providers
@@ -255,12 +304,14 @@ idempotency keys it gave out), its published outputs are gone (a reader
 waits on it as on one never applied), the audit log stays, with a
 `destroyed` entry, and `stack list` no longer shows it until an apply
 makes it again. `destroy` runs on its target alone: not on the stacks it
-reads, nor, with no target, on the project. `plan --destroy TARGET`
+reads, and with no target it is an error naming the project module's
+deployments (a target is required; removing a deployment from
+project.df is the project's way). `plan --destroy TARGET`
 prints the same plan and applies nothing.
 
 | Commands | |
 |---|---|
-| `plan`, `apply`, `destroy`, `why`, `query`, `diff`, `test`, `fmt`, `log` | on a target |
+| `plan`, `apply`, `destroy`, `why`, `query`, `diff`, `test`, `fmt`, `log` | on a target; `plan`, `apply` and `test` with none on project.df's deployments |
 | `output TARGET [NAME]` | a deployment's outputs |
 | `stack list`, `stack rekey`, `stack unlock` | the project's stacks |
 | `state show`, `state forget-host`, `state mv` | a deployment's state |
@@ -293,8 +344,8 @@ dform output app env=prod zone            # prod-a<TAB>0, a row per line
 ```
 
 `dform stack list` is a result set, one row per deployment with state
-(not one `destroy` removed):
-its stack (with its key) and file, where its state is when that is a
+(not one `destroy` removed) and per deployment project.df lists:
+its stack (with its key) and file, whether project.df lists it, where its state is when that is a
 bucket, its last apply (time, actor and the project's commit, from the
 audit log) and a saved plan not yet applied. `dform state show TARGET`
 prints the deployment's objects, one row per address with its provider

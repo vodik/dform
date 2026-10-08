@@ -314,8 +314,18 @@ fn load_units(
                         };
                         edges.push((i, j, span));
                     }
-                    Target::Stack(d) if !loaded.deployed.iter().any(|x| x.path == d.path) => {
-                        loaded.deployed.push(d);
+                    Target::Stack(d) => {
+                        // An entry file that is no stack making a resource
+                        // of one is a project module (R-114); in any other
+                        // file the resolver says a stack is `use`d.
+                        if loaded.entries.contains(&i)
+                            && !crate::project::is_stack_file(&mounts.root, &loaded.files[i])
+                        {
+                            loaded.units[i].project = true;
+                        }
+                        if !loaded.deployed.iter().any(|x| x.path == d.path) {
+                            loaded.deployed.push(d);
+                        }
                     }
                     _ => {}
                 }
@@ -543,6 +553,13 @@ pub fn program_files(entry_files: &[PathBuf]) -> Result<Vec<PathBuf>> {
     Ok(load_units(entry_files, &|p| fs::read_to_string(p))?.files)
 }
 
+/// Whether `file` is a project module (R-114): a file that is no stack
+/// and makes resources of stacks, the project's deployments.
+pub fn is_project_module(file: &Path) -> bool {
+    load_units(&[file.to_path_buf()], &|p| fs::read_to_string(p))
+        .is_ok_and(|l| l.units.first().is_some_and(|u| u.project))
+}
+
 /// Parse `abs` (canonical) into a unit: an entry file, or with `module`
 /// the module that path names.
 fn load_unit(
@@ -587,6 +604,7 @@ fn load_unit(
         file,
         root: crate::syntax::SyntaxNode::new_root(green),
         path: module,
+        project: false,
     });
     Ok(i)
 }

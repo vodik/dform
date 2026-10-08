@@ -1260,10 +1260,38 @@ attributes as written, and `why` says it waits on it
 row, as any absent output. Such a read is what
 `apply X` applies first (R-30), a key the target does not give at its
 default; a deployment named by a key the program computes may be any of
-the stack's, and every one there is is applied first. A program never
-makes a resource of a stack ("stacks.platform is deployed by the tool;
-`use` it"), and its `use`
+the stack's, and every one there is is applied first. A stack or a
+module never makes a resource of a stack ("stacks.platform is deployed
+by the tool; `use` it"): the project module does. A stack's `use`
 takes no block and no clause.
+
+Which deployments a project has is code too (R-114). The project module,
+`project.df` at the root (or a file that is no stack and makes resources
+of stacks, named as the target: `dform plan envs/lab.df`), makes each
+deployment a resource of its stack's type, whose attributes are its
+key's values:
+
+```dform
+type environment = enum("lab", "prod")
+resource stacks.platform "${e}" { env = e } where e in environment
+resource stacks.apps lab { env = "lab" }
+```
+
+It is evaluated on its own, with no provider and no state, so clauses,
+ranges and `let`s work as anywhere; its resources are of stacks and
+nothing else (`net.vpc is no stack: a project module's resources are
+deployments of stacks`), a field is a key of the stack (`region` is not
+a key of the stack platform), a key it leaves out is its default as a
+target's is, and a deployment is listed once. `plan`, `apply` and
+`test` with no target run on it: each deployment it lists, and those
+they read (R-30), in dependency order, each a run of its own with its
+own plan, question, state and `[secrets]`, as its target's run is
+(docs/reference.md "Targets and commands"). A deployment it does not
+list is a target of its own, as before: nothing is forced. One an apply
+of the module made that the module lists no more is removed: the next
+apply destroys it after the others, readers first, as `destroy` does
+(its question, `prevent_destroy`, `retain`). It replaces Terraform's
+workspaces and a directory per environment.
 
 ### Stack settings
 

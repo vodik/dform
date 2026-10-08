@@ -35,6 +35,7 @@ pub mod lattice;
 pub mod lexer;
 pub mod lint;
 pub mod loader;
+pub mod matrix;
 pub mod memo;
 pub mod modules;
 pub mod names;

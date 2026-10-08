@@ -93,9 +93,10 @@ const CASES: &[Case] = &[
         name: "decl",
         stacks: &[one(&["apply"], Apply::Completes)],
     },
+    // project.df's deployments: plan and apply with no target (R-114).
     Case {
         name: "demo",
-        stacks: &[one(&["apply", "dform", "env=staging"], Apply::Completes)],
+        stacks: &[one(&["apply"], Apply::Completes)],
     },
     // Two zones by default; one shows the deny at the boundary.
     Case {
@@ -280,6 +281,35 @@ fn crud_api() {
 #[test]
 fn decl() {
     check("decl");
+}
+
+/// The demo's plan with no target is its project.df's: a `stacks:` line
+/// per environment, then each one's plan.
+#[test]
+fn demo_plans_its_matrix() {
+    let s = Scratch::in_target("examples", "demo-matrix");
+    copy_dir(&repo().join("examples/demo"), &s.dir);
+    let r = s.run(&["plan"]).success();
+    let states: Vec<&str> = r.stdout.lines().skip(1).take(3).collect();
+    assert_eq!(
+        states,
+        [
+            "  dform[env=dev]      never applied, 6 changes (6 create) over 1 tick",
+            "  dform[env=staging]  never applied, 13 changes (13 create) over 1 tick",
+            "  dform[env=prod]     never applied, 13 changes (13 create) over 1 tick",
+        ],
+        "{}",
+        r.stdout
+    );
+    let heads: Vec<&str> = r.stdout.lines().filter(|l| l.starts_with("== ")).collect();
+    assert_eq!(
+        heads,
+        [
+            "== dform[env=dev]",
+            "== dform[env=staging]",
+            "== dform[env=prod]"
+        ]
+    );
 }
 
 #[test]

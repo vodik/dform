@@ -30,6 +30,8 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+mod matrix;
+
 /// The width of the terminal stdout is, if it is one.
 fn terminal_width() -> Option<usize> {
     use std::io::IsTerminal;
@@ -161,7 +163,9 @@ struct Mock {
 
 /// What a command runs on: a stack by name (`infra`), a program file
 /// (`stacks/infra.df`), or a deployment (`shop.app[env=prod]`, or
-/// `shop.app env=prod`). None: the one stack under the current directory.
+/// `shop.app env=prod`). None: the one stack under the current directory;
+/// for plan, apply and test in a project with a project.df, the
+/// deployments it lists.
 #[derive(clap::Args, Debug, Clone, Default)]
 struct Target {
     /// A stack name, a .df file, or a deployment `NAME[K=V,...]`.
@@ -750,6 +754,59 @@ struct Cli {
     /// `apply` with no target in a project of several stacks: every one,
     /// in dependency order (`run_command`).
     every_stack: Vec<PathBuf>,
+    /// The project module `plan`, `apply` or `test` runs on (R-114): with
+    /// no target, the root's project.df.
+    matrix: Option<PathBuf>,
+    /// Where a plan's text goes.
+    held: Held,
+}
+
+/// Where a plan's text goes: stdout, or held for the project's plan
+/// (R-114), which says each deployment's state before their plans.
+#[derive(Debug, Clone, Default)]
+struct Held(Option<Arc<std::sync::Mutex<HeldPlan>>>);
+
+/// A plan held: its text, and its summary line (`plan: 3 changes ..`).
+#[derive(Debug, Default)]
+struct HeldPlan {
+    text: String,
+    summary: Option<String>,
+}
+
+impl Held {
+    fn new() -> Held {
+        Held(Some(Arc::default()))
+    }
+
+    /// `text` to stdout, or held.
+    fn print(&self, text: &str) {
+        match &self.0 {
+            Some(h) => h
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .text
+                .push_str(text),
+            None => print!("{text}"),
+        }
+    }
+
+    /// The plan's summary line.
+    fn summary(&self, summary: String) {
+        if let Some(h) = &self.0 {
+            h.lock().unwrap_or_else(|e| e.into_inner()).summary = Some(summary);
+        }
+    }
+
+    /// What was held: the text and the summary, if a plan was made.
+    fn take(&self) -> (String, Option<String>) {
+        match &self.0 {
+            Some(h) => {
+                let mut h = h.lock().unwrap_or_else(|e| e.into_inner());
+                (std::mem::take(&mut h.text), h.summary.take())
+            }
+            None => (String::new(), None),
+        }
+    }
 }
 
 /// What a run does.
@@ -977,6 +1034,9 @@ pub fn run_in_process(
 /// ([`apply_order`]), each a run of its own; one declined or stopped ends
 /// the command there, before the stacks that read it.
 fn run_command(cli: Cli) -> Result<Outcome> {
+    if let Some(module) = cli.matrix.clone() {
+        return matrix::run(cli, &module);
+    }
     let order = apply_order(&cli)?;
     if order.is_empty() {
         return run(cli, None);
@@ -1088,6 +1148,11 @@ struct Dependency {
     file: PathBuf,
     keys: Vec<(String, String)>,
     inputs: BTreeSet<String>,
+    /// Its whole key, a key `keys` leaves out at its default.
+    key: Vec<(String, String)>,
+    /// One of the roots the order was asked for, not a deployment one of
+    /// them reads.
+    root: bool,
 }
 
 /// `apply X` in a project: the deployments of the project's stacks X
@@ -1119,6 +1184,17 @@ fn apply_order(cli: &Cli) -> Result<Vec<Dependency>> {
         [one] => vec![(one.clone(), cli.keys.clone())],
         _ => return Ok(Vec::new()),
     };
+    let mut order = order_of(&roots)?;
+    if order.len() == 1 && cli.every_stack.is_empty() {
+        order.clear();
+    }
+    Ok(order)
+}
+
+/// The deployments of `roots`, each a stack's file and the key values a
+/// target gives, and those they read (R-30), each before its readers, in
+/// the roots' order otherwise. A cycle is an error naming it.
+fn order_of(roots: &[(PathBuf, Vec<(String, String)>)]) -> Result<Vec<Dependency>> {
     if roots.is_empty() {
         return Ok(Vec::new());
     }
@@ -1131,7 +1207,7 @@ fn apply_order(cli: &Cli) -> Result<Vec<Dependency>> {
     // reads that are this project's.
     let reads = |file: &Path,
                  keys: &[(String, String)]|
-     -> Result<(String, BTreeSet<String>, Vec<Dependency>)> {
+     -> Result<(crate::stack::Instance, BTreeSet<String>, Vec<Dependency>)> {
         let t = deployment::Target {
             files: vec![file.to_path_buf()],
             input_files: Vec::new(),
@@ -1182,7 +1258,7 @@ fn apply_order(cli: &Cli) -> Result<Vec<Dependency>> {
             let [one] = found.named(&stack)[..] else {
                 continue;
             };
-            let keys = key
+            let keys: Vec<(String, String)> = key
                 .split(',')
                 .filter(|kv| !kv.is_empty())
                 .map(|kv| {
@@ -1194,8 +1270,10 @@ fn apply_order(cli: &Cli) -> Result<Vec<Dependency>> {
             deps.push(Dependency {
                 name,
                 file: one.file.clone(),
+                key: keys.clone(),
                 keys,
                 inputs: BTreeSet::new(),
+                root: false,
             });
         }
         let inputs = loaded
@@ -1207,11 +1285,14 @@ fn apply_order(cli: &Cli) -> Result<Vec<Dependency>> {
                 _ => None,
             })
             .collect();
-        Ok((instance.name(), inputs, deps))
+        Ok((instance, inputs, deps))
     };
     let mut order: Vec<Dependency> = Vec::new();
     let mut path: Vec<String> = Vec::new();
-    type Reads<'a> = dyn Fn(&Path, &[(String, String)]) -> Result<(String, BTreeSet<String>, Vec<Dependency>)>
+    type Reads<'a> = dyn Fn(
+            &Path,
+            &[(String, String)],
+        ) -> Result<(crate::stack::Instance, BTreeSet<String>, Vec<Dependency>)>
         + 'a;
     fn visit(
         mut d: Dependency,
@@ -1240,18 +1321,22 @@ fn apply_order(cli: &Cli) -> Result<Vec<Dependency>> {
         order.push(d);
         Ok(())
     }
-    for (file, keys) in &roots {
-        let (name, inputs, _) = reads(file, keys)?;
+    for (file, keys) in roots {
+        let (instance, inputs, _) = reads(file, keys)?;
         let target = Dependency {
-            name,
+            name: instance.name(),
             file: file.clone(),
             keys: keys.clone(),
             inputs,
+            key: instance.key,
+            root: true,
         };
+        // A root another root read first is a root still.
+        if let Some(d) = order.iter_mut().find(|d| d.name == target.name) {
+            d.root = true;
+            continue;
+        }
         visit(target, &reads, &mut order, &mut path)?;
-    }
-    if order.len() == 1 && cli.every_stack.is_empty() {
-        order.clear();
     }
     Ok(order)
 }
@@ -1392,6 +1477,8 @@ fn resolve(args: Args) -> Result<Cli> {
         },
         table: Default::default(),
         every_stack: Vec::new(),
+        matrix: None,
+        held: Held::default(),
     };
     cli.table = report::table::Options {
         width: terminal_width().unwrap_or(report::table::Options::PLAIN.width),
@@ -1422,6 +1509,12 @@ fn resolve(args: Args) -> Result<Cli> {
     let Some(target) = target else {
         return Ok(cli);
     };
+    // The project module (R-114): with no target, the root's project.df;
+    // a target that is one.
+    if let Some(module) = matrix::target(&cli.cmd, project.as_ref(), &target)? {
+        cli.matrix = Some(module);
+        return Ok(cli);
+    }
     // `apply` with no target applies the project: every stack under the
     // working directory, in dependency order, each confirmed on its own.
     if let (Cmd::Apply { destroy: false, .. }, None, true, Some(p)) = (
@@ -2201,10 +2294,10 @@ fn run_with(
     {
         let verbose = matches!(&cli.cmd,
             Cmd::Plan { why, .. } | Cmd::Apply { why, .. } if *why >= report::Why::How);
-        match verbose {
-            true => println!("deployment: {}", located.instance.describe()),
-            false => println!("deployment: {}", located.instance.name()),
-        }
+        cli.held.print(&match verbose {
+            true => format!("deployment: {}\n", located.instance.describe()),
+            false => format!("deployment: {}\n", located.instance.name()),
+        });
     }
     let dep = located.dep.clone();
     // The deployment's audit log, beside its state.
@@ -3336,8 +3429,9 @@ fn run_with(
                 }
                 println!("{}", serde_json::to_string_pretty(&j)?);
             } else {
-                print!("{}", rendered(&report));
-                print!("{}", unreachable_text(&unreachable));
+                cli.held.summary(report.summary());
+                cli.held.print(&rendered(&report));
+                cli.held.print(&unreachable_text(&unreachable));
                 // Who each secret output no provider holds is sealed to:
                 // the grant (R-166).
                 let unheld = crate::stack::unheld_secret_outputs(
@@ -3346,16 +3440,19 @@ fn run_with(
                 );
                 if !unheld.is_empty() && cli.world.is_none() {
                     let readers = readers_of(&root, &deployment, &open_s3(&root, false))?;
-                    print!("{}", grants_text(&unheld, &readers));
+                    cli.held.print(&grants_text(&unheld, &readers));
                 }
                 // The digest to approve, when a change is held for an
                 // approval (the bare diff lists those changes after it);
                 // a plan file's digest is on stderr beside its path.
                 if let Some(f) = file.as_ref().filter(|f| !f.needs_approval.is_empty()) {
                     if why == report::Why::None {
-                        print!("{}", needs_text(&f.needs_approval));
+                        cli.held.print(&needs_text(&f.needs_approval));
                     }
-                    println!("plan digest: {}", f.digest.as_deref().unwrap_or_default());
+                    cli.held.print(&format!(
+                        "plan digest: {}\n",
+                        f.digest.as_deref().unwrap_or_default()
+                    ));
                 }
             }
             // The report listed the conflicts and the denies over the plan
@@ -7168,10 +7265,14 @@ fn stack_list(cli: &Cli) -> Result<()> {
         return Ok(());
     }
     let registry = crate::stack::registry(&cli.root)?;
+    // The project module's deployments (R-114): the matrix is the source
+    // of which there are, the registry of where each one's state is.
+    let (listed, label) = matrix::listed(&project, &cli.root);
     let mut t = Table::new([
         "stack",
         "file",
         "deployment",
+        "listed",
         "state",
         "applied",
         "by",
@@ -7186,10 +7287,16 @@ fn stack_list(cli: &Cli) -> Result<()> {
             format!("[{}]", s.keys.join(", "))
         };
         let row = |deployment: &str, state: String, last: LastApply| {
+            let listed = match listed.get(deployment) {
+                Some(true) => label.clone(),
+                Some(false) => format!("removed from {label}"),
+                None => String::new(),
+            };
             [
                 format!("{}{key}", s.name),
                 s.file.display().to_string(),
                 deployment.to_string(),
+                listed,
                 state,
                 last.applied,
                 last.by,
@@ -7261,6 +7368,15 @@ fn stack_list(cli: &Cli) -> Result<()> {
                 deployments.push((name.clone(), e.state.clone()));
             }
         }
+        // A deployment the module lists that has no state yet.
+        let mut unapplied: Vec<&String> = listed
+            .iter()
+            .filter(|(n, l)| {
+                **l && n.split_once('[').map_or(n.as_str(), |(st, _)| st) == s.name
+                    && !deployments.iter().any(|(d, _)| d == *n)
+            })
+            .map(|(n, _)| n)
+            .collect();
         let mut any = false;
         for (name, location) in deployments {
             let store = match location.open(&opener) {
@@ -7276,6 +7392,9 @@ fn stack_list(cli: &Cli) -> Result<()> {
                 .unwrap_or_default();
             // A destroyed deployment is gone; its log stays (R-149).
             if (entries.is_empty() && store.get(store::STATE)?.is_none()) || destroyed(&entries) {
+                if let Some((n, true)) = listed.get_key_value(&name) {
+                    unapplied.push(n);
+                }
                 continue;
             }
             any = true;
@@ -7284,6 +7403,16 @@ fn stack_list(cli: &Cli) -> Result<()> {
                 None => shown(&location),
             };
             t.push(row(&name, state, last_apply(&entries)));
+        }
+        unapplied.sort();
+        unapplied.dedup();
+        for name in unapplied {
+            any = true;
+            let never = LastApply {
+                applied: "never".into(),
+                ..Default::default()
+            };
+            t.push(row(name, String::new(), never));
         }
         if !any {
             let none = LastApply {

@@ -1,0 +1,473 @@
+//! `plan`, `apply` and `test` on the project module (R-114): each
+//! deployment it lists, and those they read, in dependency order; a
+//! deployment the project's apply made that it no longer lists is
+//! destroyed.
+
+use super::{Cli, Cmd, Dependency, Held, Outcome, Refused, Target};
+use crate::matrix::{Kept, Made, Matrix};
+use crate::report;
+use anyhow::{Result, bail};
+use std::path::{Path, PathBuf};
+
+/// The project module a command runs on: with no target, the root's
+/// project.df for `plan`, `apply` and `test`; a target that is a project
+/// module. `destroy` takes a target always: it removes one deployment.
+pub(super) fn target(
+    cmd: &Cmd,
+    project: Option<&crate::project::Project>,
+    t: &Target,
+) -> Result<Option<PathBuf>> {
+    let module = match (&t.target, t.keys.is_empty()) {
+        (None, true) => {
+            let module = project.and_then(|p| crate::matrix::module_at(&p.root));
+            if let Cmd::Apply { destroy: true, .. } = cmd {
+                let listed = match &module {
+                    Some(m) => match Matrix::load(m) {
+                        Ok(m) if !m.listed.is_empty() => {
+                            let names: Vec<String> = m.listed.iter().map(|l| l.target()).collect();
+                            format!("; the project lists {}", names.join(", "))
+                        }
+                        _ => String::new(),
+                    },
+                    None => String::new(),
+                };
+                bail!(
+                    "destroy needs a target: it removes one deployment, named \
+                     (`dform destroy STACK K=V`){listed}"
+                );
+            }
+            match module {
+                Some(m) => m,
+                None => return Ok(None),
+            }
+        }
+        (Some(f), true)
+            if f.ends_with(".df")
+                && Path::new(f).is_file()
+                && crate::loader::is_project_module(Path::new(f)) =>
+        {
+            PathBuf::from(f)
+        }
+        _ => return Ok(None),
+    };
+    let shown = match &t.target {
+        Some(f) => f.clone(),
+        None => crate::project::PROJECT_MODULE.to_string(),
+    };
+    match cmd {
+        Cmd::Plan {
+            json: false,
+            out: None,
+            destroy: false,
+            ..
+        }
+        | Cmd::Apply {
+            plan_file: None,
+            destroy: false,
+            ..
+        }
+        | Cmd::Test => Ok(Some(module)),
+        Cmd::Apply { destroy: true, .. } => bail!(
+            "destroy {shown}: a project module lists deployments; destroy removes one, named \
+             (`dform destroy STACK K=V`)"
+        ),
+        Cmd::Plan { .. } => bail!(
+            "plan {shown}: --json, --out and --destroy plan one deployment; name it (`dform \
+             plan STACK K=V --json`)"
+        ),
+        // Another command with no target runs on the stack under the
+        // working directory, as in a project with no project module.
+        _ if t.target.is_none() => Ok(None),
+        _ => bail!("{shown} is a project module, no stack: name one deployment"),
+    }
+}
+
+/// `plan`, `apply` or `test` on the project module `module`.
+pub(super) fn run(cli: Cli, module: &Path) -> Result<Outcome> {
+    let project = crate::project::Project::require(Path::new("."), env!("CARGO_PKG_VERSION"))?;
+    let matrix = Matrix::load(module)?;
+    let found = crate::project::discover(&project);
+    for w in &found.warnings {
+        eprintln!("warning: {w}");
+    }
+    found.check()?;
+    // The module as the project names it, its path from the root.
+    let label = std::fs::canonicalize(module)
+        .ok()
+        .and_then(|m| {
+            let root = std::fs::canonicalize(&project.root).ok()?;
+            Some(m.strip_prefix(root).ok()?.display().to_string())
+        })
+        .unwrap_or_else(|| module.display().to_string());
+    let file_of = |stack: &str| match found.named(stack)[..] {
+        [one] => Some(one.file.clone()),
+        _ => None,
+    };
+    let mut roots = Vec::new();
+    for l in &matrix.listed {
+        let Some(file) = file_of(&l.stack) else {
+            bail!(
+                "{label}: {} lists a deployment of no stack of the project",
+                l.target()
+            );
+        };
+        roots.push((file, l.key.clone()));
+    }
+    let order = super::order_of(&roots)?;
+    // What an apply of the module made that it lists no more: destroyed,
+    // readers first.
+    let mut gone = Vec::new();
+    for (name, kept) in Made::load(&cli.root)?.of(&label) {
+        if order.iter().any(|d| d.name == name) {
+            continue;
+        }
+        let Some(file) = file_of(&kept.stack) else {
+            bail!(
+                "{name}: {label} lists it no more, and the project has no stack {}: its destroy \
+                 needs its program; restore the stack's file, destroy {name}, then remove it",
+                kept.stack
+            );
+        };
+        gone.push((name, file, kept.key));
+    }
+    let removed = {
+        let roots: Vec<_> = gone
+            .iter()
+            .map(|(_, f, k)| (f.clone(), k.clone()))
+            .collect();
+        let mut order = super::order_of(&roots)?;
+        order.retain(|d| gone.iter().any(|(n, _, _)| *n == d.name));
+        order.reverse();
+        order
+    };
+    if !cli.input_files.is_empty() {
+        bail!("--input-file gives one deployment's inputs: name it as the target");
+    }
+    // A `--set` goes to each deployment's stack that declares the input;
+    // one none declares is an error.
+    let input = |kv: &String| {
+        kv.split_once('=')
+            .map_or(kv.as_str(), |(k, _)| k)
+            .to_string()
+    };
+    if let Some(kv) = cli.user_set.iter().find(|kv| {
+        !order
+            .iter()
+            .chain(&removed)
+            .any(|d| d.inputs.contains(&input(kv)))
+    }) {
+        bail!(
+            "--set {kv}: no stack {label} lists declares input {}",
+            input(kv)
+        );
+    }
+    let of = |d: &Dependency, cmd: Cmd| {
+        let mut dep = cli.clone();
+        dep.cmd = cmd;
+        dep.matrix = None;
+        dep.user_set = cli
+            .user_set
+            .iter()
+            .filter(|kv| d.inputs.contains(&input(kv)))
+            .cloned()
+            .collect();
+        dep.set = dep.user_set.clone();
+        dep.set
+            .extend(d.key.iter().map(|(k, v)| format!("{k}={v}")));
+        dep.keys = d.key.clone();
+        dep.files = vec![d.file.clone()];
+        dep
+    };
+    match &cli.cmd {
+        Cmd::Plan { .. } => plan(&cli, &label, &order, &removed, &of),
+        Cmd::Apply { .. } => apply(&cli, &label, &order, &removed, &of),
+        Cmd::Test => test(&cli, &label, &order, &of),
+        _ => bail!("internal: a project module runs plan, apply and test"),
+    }
+}
+
+type For<'a> = dyn Fn(&Dependency, Cmd) -> Cli + 'a;
+
+/// The `== NAME` line a deployment's run is headed by.
+fn head(cli: &Cli, name: &str, note: &str) {
+    let line = match note {
+        "" => format!("== {name}"),
+        n => format!("== {name}  {n}"),
+    };
+    println!("{}", cli.style.paint(report::Paint::Bold, &line));
+}
+
+/// Say `e`, a deployment's run's error, as `main` would.
+fn say(cli: &Cli, e: &anyhow::Error) {
+    use std::io::IsTerminal;
+    match e.downcast_ref::<Refused>().filter(|r| r.footer) {
+        Some(r) => eprintln!("{r}"),
+        None => eprint!(
+            "{}",
+            crate::diag::report(e, cli.style.color && std::io::stderr().is_terminal())
+        ),
+    }
+}
+
+/// Whether the deployment `name` has been applied and not destroyed since.
+fn applied(cli: &Cli, name: &str) -> bool {
+    let Ok(registry) = crate::stack::registry(&cli.root) else {
+        return false;
+    };
+    let Some(entry) = registry.get(name) else {
+        return false;
+    };
+    let opener = super::open_s3(&cli.root, false);
+    let Ok(store) = entry.state.open(&opener) else {
+        return true;
+    };
+    let entries = crate::audit::Log::new(store, None)
+        .entries()
+        .unwrap_or_default();
+    !super::destroyed(&entries)
+}
+
+/// The project's plan: a `stacks:` line per deployment with its state,
+/// then each one's plan, in apply order, and the destroy of each removed.
+fn plan(
+    cli: &Cli,
+    label: &str,
+    order: &[Dependency],
+    removed: &[Dependency],
+    of: &For,
+) -> Result<Outcome> {
+    let Cmd::Plan {
+        out,
+        json,
+        why,
+        new_master,
+        ..
+    } = &cli.cmd
+    else {
+        bail!("internal: a plan");
+    };
+    let destroy = Cmd::Plan {
+        out: out.clone(),
+        json: *json,
+        destroy: true,
+        why: *why,
+        new_master: *new_master,
+    };
+    struct Planned {
+        name: String,
+        state: String,
+        text: String,
+        result: Result<Outcome>,
+    }
+    let mut planned = Vec::new();
+    let runs = order
+        .iter()
+        .map(|d| (d, cli.cmd.clone(), false))
+        .chain(removed.iter().map(|d| (d, destroy.clone(), true)));
+    for (d, cmd, gone) in runs {
+        let mut dep = of(d, cmd);
+        dep.held = Held::new();
+        let result = super::run(dep.clone(), None);
+        let (text, summary) = dep.held.take();
+        let state = match (&result, summary) {
+            (Err(e), _) => match Outcome::of_error(e) {
+                Outcome::Refused { .. } => "refused".to_string(),
+                _ => "failed".to_string(),
+            },
+            (Ok(_), None) => "planned".to_string(),
+            (Ok(_), Some(summary)) => {
+                let rest = summary.strip_prefix("plan: ").unwrap_or(&summary);
+                match (gone, rest == "0 changes") {
+                    (true, true) => format!("removed from {label}: nothing is left to destroy"),
+                    (true, false) => {
+                        format!("removed from {label}: the next apply destroys it, {rest}")
+                    }
+                    (false, _) if !applied(cli, &d.name) => format!("never applied, {rest}"),
+                    (false, true) => "up to date".to_string(),
+                    (false, false) => rest.to_string(),
+                }
+            }
+        };
+        let state = match d.root || gone {
+            true => state,
+            false => format!("{state}  (not listed: a listed deployment reads it)"),
+        };
+        planned.push(Planned {
+            name: d.name.clone(),
+            state,
+            text,
+            result,
+        });
+    }
+    match planned.is_empty() {
+        true => println!("stacks: {label} lists no deployment"),
+        false => println!("stacks: {label}'s deployments, in apply order; each one's plan follows"),
+    }
+    let width = planned.iter().map(|p| p.name.len()).max().unwrap_or(0);
+    for p in &planned {
+        println!("  {:width$}  {}", p.name, p.state);
+    }
+    let mut outcome = Outcome::Done;
+    for p in planned {
+        println!();
+        head(cli, &p.name, "");
+        print!("{}", p.text);
+        match p.result {
+            Ok(_) => {}
+            Err(e) => {
+                say(cli, &e);
+                // The worst of them: a failure, else the first refusal.
+                outcome = match (outcome, Outcome::of_error(&e)) {
+                    (Outcome::Failed, _) | (_, Outcome::Failed) => Outcome::Failed,
+                    (Outcome::Done, o) => o,
+                    (o, _) => o,
+                };
+            }
+        }
+    }
+    Ok(outcome)
+}
+
+/// The project's apply: each deployment in apply order, planned,
+/// confirmed and applied in turn, then the destroy of each removed; the
+/// first that does not end done ends the run there.
+fn apply(
+    cli: &Cli,
+    label: &str,
+    order: &[Dependency],
+    removed: &[Dependency],
+    of: &For,
+) -> Result<Outcome> {
+    let Cmd::Apply {
+        chaos,
+        max_ticks,
+        parallel,
+        approval,
+        yes,
+        why,
+        ..
+    } = &cli.cmd
+    else {
+        bail!("internal: an apply");
+    };
+    let destroy = Cmd::Apply {
+        plan_file: None,
+        chaos: chaos.clone(),
+        max_ticks: *max_ticks,
+        parallel: *parallel,
+        approval: approval.clone(),
+        yes: *yes,
+        allow_empty: Vec::new(),
+        why: *why,
+        destroy: true,
+        new_master: false,
+    };
+    let named: Vec<String> = order
+        .iter()
+        .map(|d| match d.root {
+            true => d.name.clone(),
+            false => format!("{} (not listed: a listed deployment reads it)", d.name),
+        })
+        .collect();
+    let mut line = match named.is_empty() {
+        true => format!("stacks: {label} lists no deployment"),
+        false => format!(
+            "stacks: {label}'s deployments, in apply order: {}",
+            named.join(", then ")
+        ),
+    };
+    if !removed.is_empty() {
+        let gone: Vec<&str> = removed.iter().map(|d| d.name.as_str()).collect();
+        line.push_str(&format!(
+            "; then, removed from it, destroyed: {}",
+            gone.join(", then ")
+        ));
+    }
+    println!("{line}; each is planned, confirmed and applied in turn");
+    for d in order {
+        head(cli, &d.name, "");
+        match super::run(of(d, cli.cmd.clone()), None)? {
+            Outcome::Done => {}
+            o => return Ok(o),
+        }
+        if d.root {
+            let stack = crate::state::stack_name(&d.file);
+            let kept = Kept {
+                stack,
+                key: d.key.clone(),
+            };
+            Made::record(&cli.root, label, &d.name, Some(kept))?;
+        }
+    }
+    for d in removed {
+        head(cli, &d.name, &format!("removed from {label}"));
+        match super::run(of(d, destroy.clone()), None)? {
+            Outcome::Done => Made::record(&cli.root, label, &d.name, None)?,
+            o => return Ok(o),
+        }
+    }
+    Ok(Outcome::Done)
+}
+
+/// The project's test: each deployment it lists, its key pinned.
+fn test(cli: &Cli, label: &str, order: &[Dependency], of: &For) -> Result<Outcome> {
+    let listed: Vec<&Dependency> = order.iter().filter(|d| d.root).collect();
+    match listed.is_empty() {
+        true => println!("stacks: {label} lists no deployment"),
+        false => println!("stacks: {label}'s deployments, each tested with its key"),
+    }
+    let mut failed = Vec::new();
+    for d in &listed {
+        head(cli, &d.name, "");
+        if let Err(e) = super::run(of(d, Cmd::Test), None) {
+            say(cli, &e);
+            failed.push(d.name.as_str());
+        }
+    }
+    if !failed.is_empty() {
+        bail!(
+            "test: {} of {label}'s {} deployments failed: {}",
+            failed.len(),
+            listed.len(),
+            failed.join(", ")
+        );
+    }
+    Ok(Outcome::Done)
+}
+
+/// The project module's deployments for `stack list`, by name: `true`
+/// for one it lists, `false` for one an apply of it made that it lists
+/// no more; and the module's name. Empty with no project module (a
+/// module that does not load is warned of).
+pub(super) fn listed(
+    project: &crate::project::Project,
+    state_root: &Path,
+) -> (std::collections::BTreeMap<String, bool>, String) {
+    let mut out = std::collections::BTreeMap::new();
+    let label = crate::project::PROJECT_MODULE.to_string();
+    let Some(module) = crate::matrix::module_at(&project.root) else {
+        return (out, label);
+    };
+    let found = crate::project::discover(project);
+    let listed = Matrix::load(&module).and_then(|m| {
+        let roots: Vec<_> = m
+            .listed
+            .iter()
+            .filter_map(|l| match found.named(&l.stack)[..] {
+                [one] => Some((one.file.clone(), l.key.clone())),
+                _ => None,
+            })
+            .collect();
+        super::order_of(&roots)
+    });
+    match listed {
+        Ok(order) => out.extend(order.into_iter().filter(|d| d.root).map(|d| (d.name, true))),
+        Err(e) => eprintln!("warning: {label}: {e:#}"),
+    }
+    if let Ok(made) = Made::load(state_root) {
+        for name in made.of(&label).into_keys() {
+            out.entry(name).or_insert(false);
+        }
+    }
+    (out, label)
+}

@@ -1035,8 +1035,13 @@ impl Discovered {
 /// The directory a project's stacks are in (docs/layout.md).
 pub const STACKS_DIR: &str = "stacks";
 
+/// The project module at the root (R-114): the deployments `plan` and
+/// `apply` with no target make, resources of the stacks' types.
+pub const PROJECT_MODULE: &str = "project.df";
+
 /// Is `file` a stack of the project rooted at `root` (R-29, R-65): a
-/// `.df` directly under `stacks/`, or, with no `stacks/`, at the root.
+/// `.df` directly under `stacks/`, or, with no `stacks/`, at the root but
+/// the project module.
 pub fn is_stack_file(root: &Path, file: &Path) -> bool {
     let Ok(rel) = file.strip_prefix(root) else {
         return false;
@@ -1044,7 +1049,7 @@ pub fn is_stack_file(root: &Path, file: &Path) -> bool {
     let parts: Vec<_> = rel.components().collect();
     match root.join(STACKS_DIR).is_dir() {
         true => parts.len() == 2 && parts[0].as_os_str() == STACKS_DIR,
-        false => parts.len() == 1,
+        false => parts.len() == 1 && parts[0].as_os_str() != PROJECT_MODULE,
     }
 }
 

@@ -1,0 +1,8 @@
+# The demo's deployments (R-114): which there are is code. `dform plan`
+# with no target says each one's state and plans each; `dform apply`
+# applies each, confirmed on its own. A deployment this file does not
+# list is still a target of its own; `dform plan dform env=staging` plans
+# one.
+resource stacks.dform dev { env = "dev" }
+resource stacks.dform staging { env = "staging" }
+resource stacks.dform prod { env = "prod" }

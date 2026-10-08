@@ -55,6 +55,9 @@ pub struct Unit {
     /// The module the file is, by its path (`config`, `modules.net`); `None`
     /// for an entry file, the program's own top level.
     pub path: Option<String>,
+    /// The file is a project module (R-114): its resources are of stacks'
+    /// types, each a deployment the tool makes.
+    pub project: bool,
 }
 
 /// A stack a `use` names (R-65): deployed by the tool, never lowered into
@@ -321,6 +324,8 @@ struct Decls {
     modules: BTreeMap<String, ModDecl>,
     /// The stacks the program's `use`s name.
     deployed: Vec<Deployed>,
+    /// The project modules' source ids (R-114).
+    project: BTreeSet<u32>,
     /// Resource types: every resource header's, every `type` block's, every
     /// `type_*` fact's, and the built-in provider schemas'.
     types: BTreeSet<String>,
@@ -964,6 +969,7 @@ impl<'u> Lowerer<'u> {
             want: Want::Nothing,
         };
         l.decls.deployed = deployed.to_vec();
+        l.decls.project = units.iter().filter(|u| u.project).map(|u| u.file).collect();
         for (i, u) in units.iter().enumerate() {
             let scope = l.new_scope(PROGRAM);
             l.decls.files.insert(u.file, scope);
@@ -1093,7 +1099,12 @@ impl<'u> Lowerer<'u> {
                 sc.components.contains_key(head) || sc.uses.contains_key(head)
             });
             let typed = schema_types().contains(&typ) || self.decls.types.contains(&typ);
-            let copy = (bound || !typed)
+            // A project module's resource of a stack is a deployment
+            // (R-114), a resource of the stack's type.
+            let deployment = self.decls.project.contains(&file)
+                && self.decls.deployed.iter().any(|d| d.path == full);
+            let copy = !deployment
+                && (bound || !typed)
                 && (self.decls.modules.contains_key(&full)
                     || self.decls.deployed.iter().any(|d| d.path == full)
                     || self.signature(decl, &typ).is_some());
@@ -2346,6 +2357,7 @@ impl<'u> Lowerer<'u> {
             USE => self.use_stmt(n, scope, outer),
             LET => self.let_stmt(n, scope, outer),
             SET => self.set(n, scope, outer),
+            RESOURCE if self.decls.project.contains(&self.file) => self.deployment(n, scope, outer),
             RESOURCE if self.is_copy(n) => self.instance(n, scope, outer),
             RESOURCE => self.block_stmt(n, scope, outer),
             RULE | FACT => self.rule(n, scope, outer),
@@ -3739,6 +3751,43 @@ impl<'u> Lowerer<'u> {
             Stmt::Instance(u) => Ok(vec![Stmt::Use(u)]),
             _ => unreachable!("a copy"),
         }
+    }
+
+    /// `resource stacks.S NAME { k = v } [where B]` in a project module
+    /// (R-114): a deployment of the stack S, a resource of its type whose
+    /// attributes are its key's values. A project module makes nothing
+    /// else.
+    fn deployment(&mut self, n: &SyntaxNode, scope: usize, outer: &Rc) -> L<Vec<Stmt>> {
+        let written = dotted_text(n, 1);
+        if self.decls.deployed.iter().any(|d| d.path == written) {
+            return self.block_stmt(n, scope, outer);
+        }
+        let stacks: Vec<String> = self
+            .decls
+            .deployed
+            .iter()
+            .map(|d| format!("`{}`", d.path))
+            .collect();
+        let d = Diagnostic::error(
+            self.span(n),
+            format!(
+                "{written} is no stack: a project module's resources are deployments of stacks"
+            ),
+        )
+        .with_help(format!(
+            "make a deployment of a stack by its path, `resource {} NAME {{ KEY = VALUE }}`; \
+             what else is made is a stack's",
+            self.decls
+                .deployed
+                .first()
+                .map_or("stacks.NAME", |d| d.path.as_str())
+        ));
+        let d = match stacks.is_empty() {
+            true => d,
+            false => d.with_note(format!("the stacks it deploys: {}", stacks.join(", "))),
+        };
+        self.diags.push(d);
+        Err(Skip)
     }
 
     /// `resource PATH NAME { k = v } [where B]` of a component (R-113,
@@ -8336,6 +8385,7 @@ mod tests {
             file: file_id,
             root: parse.syntax(),
             path: None,
+            project: false,
         }];
         super::lower(&units, &[0], file, super::Mode::Program)
             .map_err(|d| crate::diag::Diagnostics(d).into())

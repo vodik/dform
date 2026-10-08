@@ -218,6 +218,7 @@ The words, with Terraform's nearest:
 | **stack** | a file under `stacks/`, deployed with its own state | root module |
 | **key** | an input that selects the deployment: one state per value | `terraform.workspace` |
 | **deployment** | a stack at one key, `shop[env=prod]` | workspace |
+| **project module** | `project.df`: the deployments, each a resource of its stack's type | workspaces, a directory per environment |
 | **input**, **let**, **output** | a value given from outside; computed; published | variable, local, output |
 | **set** | a write into any cell from anywhere, at a rank | none |
 | **set(T)** | an attribute every writer adds elements to (a role's policies) | an attachment resource |
@@ -488,7 +489,12 @@ that on its own.
 stacks.platform` and `platform[env].kubeconfig`; `dform apply apps
 env=lab` applies platform first, each with its own plan, question and
 state, and a plan of apps before platform is applied shows its outputs
-as values not known yet. `dform stack list` is every deployment, its
+as values not known yet. Which deployments there are is code:
+`project.df` lists them, `resource stacks.platform lab { env = "lab" }`,
+with clauses and ranges as anywhere; `dform plan` with no target says
+each one's state and plans each, `dform apply` applies them in
+dependency order, and one the file no longer lists is destroyed by the
+next apply. `dform stack list` is every deployment, its
 last apply and by whom; `dform output` its outputs; `state show` and
 `state mv` its objects. A deployment holds a lock while it applies;
 its audit log is hash-chained, and `dform log` prints it.

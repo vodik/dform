@@ -6,6 +6,8 @@ named by its path from the root (R-65).
 
 ```
 dform.toml                  the project root (`dform init` writes one)
+project.df                  the project module: the deployments, each a
+                            resource of its stack's type (R-114)
 stacks/<stack>.df           one stack per file, named after it
 <name>.df, <dir>/<name>.df  modules: `config.df` is the module
                             `config`, `modules/net.df` is `modules.net`
@@ -41,8 +43,8 @@ dform.state/                state: per deployment, audit logs, masters,
   reads it as `project_provider(Name, Constraint)`, `project_default(Key,
   Value)` and `project_stack(Name, Key, Value)`.
 - A stack is a file, named after itself: discovery takes `stacks/*.df`,
-  or, in a project with no `stacks/`, the root's `.df` files (a one-file
-  project is `dform.toml` beside `shop.df`). Any file runs by path, named
+  or, in a project with no `stacks/`, the root's `.df` files but
+  `project.df` (a one-file project is `dform.toml` beside `shop.df`). Any file runs by path, named
   after itself. A `[stacks.NAME]` no file is is an error. A directory
   holding its own `dform.toml` is another project, not walked.
 - A stack's keys are its `key` statements: `key env: environment` makes
@@ -61,6 +63,14 @@ dform.state/                state: per deployment, audit logs, masters,
   uses: `use stacks.platform` binds to its deployments, and no program
   makes a resource of it. A module named like the standard library's (`str.df`,
   `list.df`) is an error: `std` is in every scope already.
+- `project.df` is the project module: which deployments the project
+  has, `resource stacks.platform lab { env = "lab" }` per deployment,
+  with clauses and ranges as anywhere. `dform plan` and `dform apply`
+  with no target run on it, in dependency order; a deployment it does
+  not list is a target of its own; one an apply of it made that it no
+  longer lists, the next apply destroys (docs/grammar.md "Deployed
+  modules"). It is the matrix of environments a Terraform project keeps
+  as workspaces or a directory each.
 - A keyed stack's settings document is one file per deployment under
   `config/<stack>/`, named by the key's value, `set from
   yaml.decode(io.read("config/dform/${env}.yaml"))` in the stack: `config/dform/prod.yaml`
@@ -79,7 +89,7 @@ dform.state/                state: per deployment, audit logs, masters,
   its secrets' root (docs/reference.md "Secrets").
 
 The lints: a file that is not a stack with a `key` is an error, and so is
-a resource of a stack.
+a resource of a stack anywhere but in the project module.
 
 ## This repository
 
@@ -89,7 +99,7 @@ Every example is a project under `examples/<name>/`, with its own
 | project                | what it shows                                             |
 |------------------------|-----------------------------------------------------------|
 | `examples/tour`        | start here: a tutorial, read top to bottom                |
-| `examples/demo`        | the demo: modules, a component, per-env config            |
+| `examples/demo`        | the demo: modules, a component, per-env config, matrix   |
 | `examples/pngu`        | a GKE stack, its peerings a CSV table                     |
 | `examples/advanced`    | transitive closure: reachability, routes, group membership|
 | `examples/adopt`       | adopting an existing resource from inventory              |
