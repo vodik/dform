@@ -269,17 +269,33 @@ several, and never an error for a key that is not there.
 | `p[a, b]`       | relation or extern `p`  | every column but the last         | `p(a, b, V)`                         |
 | `e[i]`          | a list value            | index (a fresh `i` enumerates)    | `member(e, i, V)`                    |
 
+Scope is lexical (R-186, R-205): a name resolves in the scope it is
+written in, then the enclosing scopes of the same file's nesting, never
+through a `use`. A component reads its own names, then those of the
+component or module around it; a module reads only what its file
+declares; a stack's files read the stack's keys, inputs and the rest of
+its top level, its own scope. What a module or a component needs from
+its user it takes as an input, a value (`input env: T`) or a relation
+(`input p`), which the `use` or the copy gives (`use baseline { env }`).
+A module's read of a name it does not declare that its user does is an
+error at the read naming both fixes, once per name and file: "`env` is
+not declared in module baseline: a module reads only what it declares",
+help "take it as an input: `input env: enum(\"lab\", \"prod\")` in
+baseline.df, and give it in the use: `use baseline { env }`".
+
 A name followed by `(` is a relation, a builtin or an extern; `m.p(..)`
 is the relation `p` of the module `m` a `use` brings. Any other chain
 `name (.seg | [terms])*` is resolved from its first name, innermost scope
-first (rule, then component, then file, then program):
+first (rule, then component, then file, then, in a stack's file, the
+program):
 
 1. a typed variable (`x` after `x in T`): a reference;
 2. a value name: a read of `k(V)`; a `let` whose value is a reference (a
    resource, a live object) reads through it (H-6);
 3. `world.T[e]`;
 4. a resource of that name in scope (a component's own resources, then
-   those of the scopes around it, its module's and the program's);
+   those of the scopes around it in its file: its module's, or in a
+   stack's file the program's);
 5. a copy (`n.k`, its output), a stack a `use` binds (`s[k=v].out`), a
    component's copies (`c[e].k`, `m.c[e].k`, or by its path from the
    root), a used module's item (`m.x`);
@@ -302,10 +318,10 @@ resource, so rename one. The resource reads by its type, `T["n"]`, which
 H-10 allows here. A component and a stack are read only by a copy
 (`c[t]`, `s[k=v]`), which a resource never is, so they share a name with
 a resource unambiguously. Inside a module's or a component's body, what
-the body declares wins over what its user's scope brings in (R-101):
+the body declares wins over a name of the module's own (R-101):
 traefik.df's own `resource k8s.namespace traefik` is what
-`traefik.metadata.name` reads there, though its user's `use traefik`
-names the module; the error stands where both are one scope's own.
+`traefik.metadata.name` reads there, though `traefik` also names the
+module; the error stands where both are one scope's own.
 
 A bare name (no `.` or `[`) is a variable unless it is a value name. A
 variable may not take the name of a resource, a module, a copy, a
@@ -1210,10 +1226,15 @@ statement that closes it.
 `use m [as n] [{ k = v }] [where B]` imports the module once under `n`
 (the path's last segment unless `as` names it):
 
-- its rules and denies run over what the importing scope sees; a name
-  the module's body does not define reads outward, its user's (`env` in a
-  policy pack is the stack's); its components' bodies read the module's
-  instance instead ("Components");
+- its rules and denies run over what the importing scope sees (`x in
+  resource` ranges over every resource, the user's too); its names are
+  its file's alone, so a name its body does not declare is no read of
+  its user's: a policy pack keyed by the stack's `env` declares `input
+  env: enum("lab", "prod")` and the stack gives it, `use baseline { env
+  }` (the pun for `env = env`); a relation of the user's it takes as
+  `input p` with its `decl`, given rows in the block (`use stdlib_net {
+  vpc_peer(a, b) where vpc_peer(a, b) }`); its components' bodies read
+  the module's instance ("Components");
 - its items read as `n.x`: a `let` or an input (`config.region`), a
   relation (`n.p(..)`), an output (`n.k`), a resource (`n.x`, the address
   `T["n.x"]`), a type alias (`n.T`), a component (`n.c`, a type to make
@@ -1228,7 +1249,7 @@ statement that closes it.
 `use` twice of one name in a scope is an error unless each has a clause
 ("Guarded declarations"), and so is `use` of a component; from two
 scopes (a stack, and a component it makes a resource of) it is two
-imports, each reading its own user's names.
+imports, each given its inputs by its own `use`.
 
 ### Components
 
@@ -1258,7 +1279,9 @@ A component is an item of its module as a Rust `fn` is (R-186): its
 body reads a name bare from its own scope (its inputs, `let`s and
 resources), then from the scope around it (the module's `let`s, inputs,
 resources and relations; for a component inside another, the enclosing
-component's first), then the stack's, and never from the copy's user.
+component's first), then, for a component of a stack's file, the
+stack's; never from the copy's user, and a component of a module's file
+reads nothing past its module (R-205).
 The scope is lexical and by instance: a copy reads the items of the
 module instance it was taken from, the one its statement stands in or
 the one a `use` binds, so under `use backups as a` and `use backups as
@@ -2654,8 +2677,8 @@ A formatted file prints back byte for byte.
   ("Bodies").
 - An `output` with a body, or whose value reads, is the rule
   `output(k, t') :- B, reads`, in a module or a component too.
-- A module reads its user's names outward, so it lowers only through the
-  programs that use it (R-65).
+- A module reads only its own file's names (R-205), but it lowers through
+  the programs that use it (R-65): its inputs are given there.
 - (R-65) A stack is a file under `stacks/` or one `[stacks.NAME]` names,
   for `use`; discovery keeps its fallback (with no `stacks/`, the root's
   files are the stacks).

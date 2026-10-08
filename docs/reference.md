@@ -4138,8 +4138,11 @@ a name (`database`, `main`):
   is an object;
 - with a clause, the copy or the import exists only while it holds.
 
-A name a module does not define reads outward, its user's: `env` in a
-policy pack is the stack's. A module used from two stacks runs in both,
+A module reads only what its file declares (R-205), never its user's
+names: a policy pack keyed by the stack's `env` declares `input env`
+and the stack gives it, `use baseline { env }`; a read of a name the
+user declares and the module does not is an error naming the input and
+the `use`. A module used from two stacks runs in both,
 each in its own state. A resource of a module, `use` of a component and
 a resource of a stack are errors naming what to write.
 

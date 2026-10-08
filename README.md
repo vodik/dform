@@ -358,7 +358,9 @@ its items read as `config.x`. A module with resources is stamped once by
 its `use`, its inputs in the block: `use k3s { name = "k8s-${env}",
 agents }`. A component is a type with inputs and outputs, made by
 `resource network blue { cidr = "10.1.0.0/16" }`; its resources stay
-visible to policy. A declaration with a clause exists only where it
+visible to policy. Scope is lexical: a module reads only what its file
+declares, and takes what it needs from its user as an input (`use
+baseline { env }`). A declaration with a clause exists only where it
 holds (`use backups { .. } where backup`).
 
 **Providers.** `use` imports a provider's types and configures it; its
