@@ -668,3 +668,37 @@ fn secrets_as_a_loader_names_the_form() {
         r.stderr
     );
 }
+
+/// A `secret(T)` field of a used module's object input is given by the
+/// file at its dotted path (`backups.destination.secret_key`, nested in
+/// the file), the object's other fields as the program gives them.
+#[test]
+fn a_secret_field_of_an_object_input_is_given() {
+    let s = project("given-field", PASSPHRASE);
+    s.write(
+        "backups.df",
+        "input destination { bucket: string = \"b\", secret_key: secret(string) = \"none\" }\n",
+    );
+    s.write(
+        "stacks/p.df",
+        r#"input admin: secret(string) = "a"
+use fake
+use backups
+set from secrets.decode(io.read("secrets/p.json"))
+resource db.secret app {
+  admin = admin
+  token = "${backups.destination.bucket}/${backups.destination.secret_key}"
+}
+"#,
+    );
+    set(&s, "backups.destination.secret_key", "s3cr3t").success();
+    let f: serde_json::Value = s.json("secrets/p.json");
+    assert!(
+        f["backups"]["destination"]["secret_key"]
+            .as_str()
+            .unwrap()
+            .starts_with("ENC[")
+    );
+    run(&s, &["apply", "p"]).success();
+    assert_eq!(world(&s)["token"], "b/s3cr3t");
+}
