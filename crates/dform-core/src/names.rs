@@ -2044,6 +2044,50 @@ component outer {
         );
     }
 
+    /// A module's file reads its own names and never its user's (R-205):
+    /// `env` in baseline.df is its input, not the stack's key; the stack's
+    /// `env` given in the `use` is the stack's.
+    #[test]
+    fn a_module_file_reads_no_name_of_its_user() {
+        let file = |path: &str, src: &str| Parsed::new(PathBuf::from(path), src.into());
+        let files = vec![
+            file(
+                "/p/baseline.df",
+                "input env: string
+warn \"w\" where env == \"prod\", region == \"eu\"\n",
+            ),
+            file(
+                "/p/stacks/s.df",
+                "key env: string = \"lab\"\nlet region = \"eu\"\nuse baseline { env = env }\n",
+            ),
+        ];
+        let d = Decls::of_files(Path::new("/p"), &files);
+        let what = |f: usize, needle: &str, nth: usize| {
+            let at = files[f].text.match_indices(needle).nth(nth).unwrap().0;
+            d.at(&files, &files[f].path, at).map(|a| a.what)
+        };
+        assert_eq!(
+            what(0, "env ==", 0),
+            Some(What::Name(
+                Symbol::Value(Some("module baseline".into()), "env".into()),
+                false
+            ))
+        );
+        // The stack's `region` is no name in the module.
+        assert!(
+            !matches!(
+                what(0, "region", 0),
+                Some(What::Name(Symbol::Let(None, _), _))
+            ),
+            "{:?}",
+            what(0, "region", 0)
+        );
+        assert_eq!(
+            what(1, "env }", 0),
+            Some(What::Name(Symbol::Value(None, "env".into()), false))
+        );
+    }
+
     /// Two module files that define a relation of the same name: each
     /// module's is its own (R-65), read from the stack as `m.p(..)`.
     #[test]

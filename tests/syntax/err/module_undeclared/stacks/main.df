@@ -1,0 +1,5 @@
+key env: environment = "lab"
+input region: string = "eu"
+type environment = enum("lab", "prod")
+peer("a")
+use baseline

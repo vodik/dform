@@ -1,0 +1,6 @@
+tests/syntax/err/module_undeclared/baseline.df:3:19: `env` is not declared in module baseline: a module reads only what it declares
+  help: take it as an input: `input env: enum("lab", "prod")` in tests/syntax/err/module_undeclared/baseline.df, and give it in the use: `use baseline { env }`
+tests/syntax/err/module_undeclared/baseline.df:4:37: `region` is not declared in module baseline: a module reads only what it declares
+  help: take it as an input: `input region: string` in tests/syntax/err/module_undeclared/baseline.df, and give it in the use: `use baseline { region }`
+tests/syntax/err/module_undeclared/baseline.df:5:21: `peer` is not declared in module baseline: a module reads only what it declares
+  help: take it as an input: `decl peer(c1: T)` and `input peer` in tests/syntax/err/module_undeclared/baseline.df, and give it in the use: `use baseline { peer(x1) where peer(x1) }`

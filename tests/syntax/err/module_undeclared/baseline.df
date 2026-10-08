@@ -1,0 +1,5 @@
+# R-205: a module reads only what it declares. Each name the stack
+# declares and the module reads is an error once, at its first read.
+warn "prod" where env == "prod"
+warn "eu prod" where env == "prod", region == "eu"
+warn "peered" where peer(_)
