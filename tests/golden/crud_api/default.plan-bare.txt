@@ -70,11 +70,11 @@ undetermined:
 ? deny "cutover to a color with unready pods" on ?k8s.job["migrate-v42"].status.succeeded, decided after tick 1  (reads undetermined aggregate attr)
 ? deny "migration failed; the rollout is held" on ?k8s.job["migrate-v42"].status.conditions, decided after tick 1  (member/2 over a null list)
 ? deny "a rollout runs a schema the migration has not reached" on ?k8s.job["migrate-v42"].status.succeeded, may derive after tick 1  (reads run(_, _, 42) with a stuck instance)
-? deny "container memory limit above 2Gi" on ?k8s.job["migrate-v42"].status.succeeded, may derive after tick 1  (reads container("blue.deploy", _), container("green.deploy", _) with a stuck instance)
-? deny "container requests more memory than its limit" on ?k8s.job["migrate-v42"].status.succeeded, may derive after tick 1  (reads container("blue.deploy", _), container("green.deploy", _) with a stuck instance)
-? deny "container without resource limits" on ?k8s.job["migrate-v42"].status.succeeded, may derive after tick 1  (reads container("blue.deploy", _), container("green.deploy", _) with a stuck instance)
-? deny "image not pinned by digest" on ?k8s.job["migrate-v42"].status.succeeded, may derive after tick 1  (reads container("blue.deploy", _), container("green.deploy", _) with a stuck instance)
-? deny "plaintext secret in env" on ?k8s.job["migrate-v42"].status.succeeded, may derive after tick 1  (reads container("blue.deploy", _), container("green.deploy", _) with a stuck instance)
+? deny "container memory limit above 2Gi" on ?k8s.job["migrate-v42"].status.succeeded, may derive after tick 1  (reads container(k8s.deployment blue.deploy, _), container(k8s.deployment green.deploy, _) with a stuck instance)
+? deny "container requests more memory than its limit" on ?k8s.job["migrate-v42"].status.succeeded, may derive after tick 1  (reads container(k8s.deployment blue.deploy, _), container(k8s.deployment green.deploy, _) with a stuck instance)
+? deny "container without resource limits" on ?k8s.job["migrate-v42"].status.succeeded, may derive after tick 1  (reads container(k8s.deployment blue.deploy, _), container(k8s.deployment green.deploy, _) with a stuck instance)
+? deny "image not pinned by digest" on ?k8s.job["migrate-v42"].status.succeeded, may derive after tick 1  (reads container(k8s.deployment blue.deploy, _), container(k8s.deployment green.deploy, _) with a stuck instance)
+? deny "plaintext secret in env" on ?k8s.job["migrate-v42"].status.succeeded, may derive after tick 1  (reads container(k8s.deployment blue.deploy, _), container(k8s.deployment green.deploy, _) with a stuck instance)
 apply order:
   tick 1
     google.compute_network["vpc"]

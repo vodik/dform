@@ -233,6 +233,7 @@ fn an_instance_input_literal_is_checked() {
 }
 
 /// `r == main` compares references; `s.vpc == main` reads a reference.
+/// The row is the subnet, a reference (R-185).
 #[test]
 fn references_compare_as_references() {
     let s = Scratch::new("r43-compare");
@@ -253,6 +254,7 @@ fn references_compare_as_references() {
             &["query", "in_main(s)"],
         ))
         .success();
-    assert!(q.stdout.contains("\"a\""), "{}", q.stdout);
-    assert!(!q.stdout.contains("\"b\""), "{}", q.stdout);
+    // `in_main`'s column holds the subnet itself (R-185).
+    assert!(q.stdout.contains("net.subnet a"), "{}", q.stdout);
+    assert!(!q.stdout.contains("net.subnet b"), "{}", q.stdout);
 }

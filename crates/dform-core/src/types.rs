@@ -40,7 +40,9 @@ pub const AMBIGUOUS: &str = "__quantity";
 /// A schema attribute's type, as `type_attr` writes it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Ty {
-    /// `ref(T)`: a reference to a `T`.
+    /// `ref(T)`: a reference to a `T`; `ref(T1 | T2)`, to one of several
+    /// (R-185: a relation's column a rule per type fills), its types
+    /// sorted and joined by ` | `.
     Ref(String),
     /// `list(T)`, `set(T)`.
     List(Box<Ty>),
@@ -61,6 +63,18 @@ pub enum Ty {
 }
 
 impl Ty {
+    /// The types a reference type's text names: `T`, or each of `T1 | T2`.
+    pub fn ref_types(text: &str) -> impl Iterator<Item = &str> {
+        text.split('|').map(str::trim)
+    }
+
+    /// `ref(a | b)`: a reference to one of the types of `a` or of `b`.
+    pub fn ref_union(a: &str, b: &str) -> Ty {
+        let types: std::collections::BTreeSet<&str> =
+            Ty::ref_types(a).chain(Ty::ref_types(b)).collect();
+        Ty::Ref(types.into_iter().collect::<Vec<_>>().join(" | "))
+    }
+
     /// Read a type's text: `ref(net.vpc)`, `list(ref(net.subnet))`,
     /// `enum("a", "b")`, `inet`, `bytes(gib)` (a quantity and how the
     /// provider takes it, `schema::Render`).
@@ -354,7 +368,7 @@ pub fn mismatch(ty: &Ty, t: &Term) -> Option<String> {
     if let Some((typ, addr)) = explicit(t).and_then(reference).or_else(|| reference(t)) {
         let written = explicit(t).is_some();
         return match ty {
-            Ty::Ref(want) if want != typ => {
+            Ty::Ref(want) if !Ty::ref_types(want).any(|w| w == typ) => {
                 Some(format!("takes a ref({want}), got {}", shown_ref(typ, addr)))
             }
             Ty::Ref(_) | Ty::Any => None,
@@ -835,6 +849,48 @@ fn read_stmt(s: &mut Stmt, schema: &Schema, diags: &mut Vec<Diagnostic>) {
                 read_stmt(s, schema, diags);
             }
         }
+        // A `set` through a variable of several types (R-185: `set
+        // w.spec.x = v where workload(w)`, `workload` of deployments and
+        // stateful sets): read as each, which must agree.
+        Stmt::Rule(r)
+            if r.head.pred == "arg"
+                && matches!(r.head.args.len(), 4 | 5)
+                && matches!(r.head.args[0], Term::Var(_)) =>
+        {
+            let types = row_types(&r.head.args[0], &r.body);
+            let Term::Val(Value::Str(path)) = &r.head.args[2] else {
+                return;
+            };
+            let mut read: Option<Term> = None;
+            for typ in &types {
+                let mut v = r.head.args[3].clone();
+                if let Err((path, why)) = read_at(schema, typ, path, &mut v) {
+                    diags.push(Diagnostic::error(
+                        r.head.span,
+                        format!("{typ}.{path} {why}"),
+                    ));
+                    return;
+                }
+                match &read {
+                    Some(first) if *first != v => {
+                        diags.push(Diagnostic::error(
+                            r.head.span,
+                            format!(
+                                "{path} is read one way for {} and another for {typ}: write \
+                                 it once per type",
+                                types[0]
+                            ),
+                        ));
+                        return;
+                    }
+                    Some(_) => {}
+                    None => read = Some(v),
+                }
+            }
+            if let Some(v) = read {
+                r.head.args[3] = v;
+            }
+        }
         // `arg(T, A, P, V, R)`, or `arg(T, A, P, V)` of a `set` with no
         // rank until the transform gives it one.
         Stmt::Fact(head) | Stmt::Rule(crate::ast::RuleStmt { head, .. })
@@ -855,6 +911,26 @@ fn read_stmt(s: &mut Stmt, schema: &Schema, diags: &mut Vec<Diagnostic>) {
         }
         _ => {}
     }
+}
+
+/// The types a rule's type variable `typ` may be, by the `member([T1,
+/// T2], typ)` its body binds it with (`columns::row_types`).
+fn row_types(typ: &Term, body: &[Lit]) -> Vec<String> {
+    body.iter()
+        .find_map(|l| match l {
+            Lit::Pos(a) if a.pred == "member" && a.args.get(1) == Some(typ) => match &a.args[0] {
+                Term::List(xs) => xs
+                    .iter()
+                    .map(|x| match x {
+                        Term::Val(Value::Str(t)) => Some(t.clone()),
+                        _ => None,
+                    })
+                    .collect(),
+                _ => None,
+            },
+            _ => None,
+        })
+        .unwrap_or_default()
 }
 
 /// Read the value at `path` of a `typ`, and what it holds at nested

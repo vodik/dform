@@ -304,6 +304,15 @@ struct Member {
     span: Span,
 }
 
+/// `x.p` on a variable (`__path(X, "p")`), checked once the columns are
+/// settled: a field is read of an object (R-185).
+struct Field {
+    rule: usize,
+    var: String,
+    path: String,
+    span: Span,
+}
+
 /// One rule's variables.
 #[derive(Default)]
 struct Vars(BTreeMap<String, usize>);
@@ -315,6 +324,7 @@ struct Pass<'a> {
     schema: Option<&'a crate::schema::Schema>,
     checks: Vec<Check>,
     members: Vec<Member>,
+    fields: Vec<Field>,
     /// Each rule's (statement's) variables.
     vars: Vec<Vars>,
     /// A rule head's variable names per column, for the signature.
@@ -415,6 +425,16 @@ impl Pass<'_> {
     fn calls(&mut self, rule: usize, t: &Term, span: Span) {
         match t {
             Term::Func { name, args } => {
+                if let ("__path", [Term::Var(v), Term::Val(Value::Str(path))]) =
+                    (name.as_str(), args.as_slice())
+                {
+                    self.fields.push(Field {
+                        rule,
+                        var: v.clone(),
+                        path: path.clone(),
+                        span,
+                    });
+                }
                 if let Some(op) = arithmetic(name)
                     && let [a, b] = args.as_slice()
                 {
@@ -699,7 +719,7 @@ fn compatible(a: &Ty, b: &Ty) -> bool {
         // Numbers compare by value (R-75).
         (Ty::Scalar(x), Ty::Scalar(y)) if number(x) && number(y) => true,
         (Ty::List(x), Ty::List(y)) | (Ty::Map(x), Ty::Map(y)) => compatible(x, y),
-        (Ty::Ref(x), Ty::Ref(y)) => x == y,
+        (Ty::Ref(x), Ty::Ref(y)) => Ty::ref_types(x).any(|t| Ty::ref_types(y).any(|u| t == u)),
         (Ty::Scalar(x), Ty::Scalar(y)) => x == y,
         _ => false,
     }
@@ -711,6 +731,21 @@ fn printed(ty: &Ty) -> bool {
     matches!(ty, Ty::Scalar(s) if matches!(s.as_str(),
         "oci" | "uri" | "inet" | "ip" | "time" | "bytes" | "cpu" | "duration"
         | "semver") || crate::range::element(s).is_some())
+}
+
+/// A type whose values have no fields to read: a string, a number, a
+/// bool, an address, a quantity or a time, a list, a reference. A uri, an
+/// image reference, a network, a version and a range have their parts.
+fn fieldless(ty: &Ty) -> bool {
+    match ty {
+        Ty::Secret(t) => fieldless(t),
+        Ty::Scalar(s) => {
+            !matches!(s.as_str(), "uri" | "oci" | "inet" | "semver")
+                && crate::range::element(s).is_none()
+        }
+        Ty::Enum(_) | Ty::List(_) | Ty::Ref(_) => true,
+        Ty::Map(_) | Ty::Any => false,
+    }
 }
 
 /// `int`, `float`, `number` (either).
@@ -788,6 +823,7 @@ pub fn infer(
         schema,
         checks: Vec::new(),
         members: Vec::new(),
+        fields: Vec::new(),
         vars: Vec::new(),
         head_names: BTreeMap::new(),
     };
@@ -863,7 +899,12 @@ pub fn infer(
             Stmt::Rule(r) => {
                 p.atom(i, &r.head);
                 for (k, t) in r.head.args.iter().enumerate() {
-                    if let Term::Var(v) = t
+                    // A reference column's variable (R-185): `ref(T, W, "")`.
+                    let named = match t {
+                        Term::Func { name, args } if name == crate::ir::REF => args.get(1),
+                        t => Some(t),
+                    };
+                    if let Some(Term::Var(v)) = named
                         && !untyped(&r.head.pred)
                     {
                         p.head_names
@@ -1017,6 +1058,12 @@ impl Pass<'_> {
                 );
             }
         }
+        let fields = std::mem::take(&mut self.fields);
+        for f in &fields {
+            if let Some(d) = self.field_of(f, &settled) {
+                diags.push(d);
+            }
+        }
         if !diags.is_empty() {
             return Err(Diagnostics(diags).into());
         }
@@ -1070,6 +1117,44 @@ impl Pass<'_> {
         })
     }
 
+    /// `x.p` where `x` joins a relation's column whose type has no fields
+    /// (a string, a number, a list, a reference): the error naming the
+    /// column and its type, where it read nothing at run time (R-185).
+    fn field_of(&mut self, f: &Field, settled: &BTreeMap<usize, Option<Ty>>) -> Option<Diagnostic> {
+        let n = *self.vars[f.rule].0.get(&f.var)?;
+        let r = self.s.find(n);
+        let ty = settled.get(&r).cloned().flatten()?;
+        if !fieldless(&ty) {
+            return None;
+        }
+        let col = self.s.cols[r]
+            .iter()
+            .filter(|c| !untyped(&c.0) && function(&c.0).is_none())
+            .min_by_key(|c| (self.declared.get(&c.0).is_none(), c.0.contains("::")))?;
+        let col = shown_col(col, self.declared, &self.head_names);
+        let x = shown_var(&f.var);
+        let first = crate::ir::path_keys(&f.path).into_iter().next()?;
+        let read = format!("{x}.{}", f.path);
+        let help = match &ty {
+            Ty::Ref(t) => format!(
+                "bind it by its type where the column is filled, `{x} in {}`: the column then \
+                 holds the resource, and `{read}` reads its attribute",
+                Ty::ref_types(t).next().unwrap_or(t)
+            ),
+            _ => format!(
+                "a resource's attributes are read through a reference: bind one by its type \
+                 where the column is filled (`{x} in k8s.deployment`), and `{read}` reads it"
+            ),
+        };
+        Some(
+            Diagnostic::error(
+                f.span,
+                format!("`{read}`: `{x}` is {ty} ({col}), which has no field `{first}`"),
+            )
+            .with_help(help),
+        )
+    }
+
     /// Settle the node `r`: its type, or the errors that say why it has
     /// none.
     fn settle(&mut self, r: usize, diags: &mut Vec<Diagnostic>) -> Option<Ty> {
@@ -1092,6 +1177,15 @@ impl Pass<'_> {
         for h in hard {
             match &from {
                 None => from = Some(h),
+                // A column a rule per type fills holds a reference to any
+                // of them (R-185): `ref(k8s.deployment | k8s.stateful_set)`.
+                Some(f) if matches!((&f.ty, &h.ty), (Ty::Ref(_), Ty::Ref(_))) => {
+                    let (Ty::Ref(a), Ty::Ref(b)) = (&f.ty, &h.ty) else {
+                        unreachable!("matched");
+                    };
+                    let ty = Ty::ref_union(a, b);
+                    from = Some(Hard { ty, ..f.clone() });
+                }
                 Some(f) if compatible(&f.ty, &h.ty) => {
                     let ty = narrower(f.ty.clone(), &h.ty);
                     from = Some(Hard { ty, ..f.clone() });

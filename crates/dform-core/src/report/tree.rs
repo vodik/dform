@@ -3021,14 +3021,20 @@ impl Cx<'_> {
 
     /// The type `want(T, var)` in the rule's body gives `var`.
     fn want_type(&self, var: &str) -> Option<Value> {
+        let named = |t: &Term| matches!(t, Term::Var(x) if x == var);
         self.rule.and_then(|r| {
             r.body.iter().find_map(|l| match l {
-                Lit::Pos(a)
-                    if a.pred == "want"
-                        && matches!(a.args.get(1), Some(Term::Var(x)) if x == var) =>
-                {
+                Lit::Pos(a) if a.pred == "want" && a.args.get(1).is_some_and(named) => {
                     self.core(&a.args[0])
                 }
+                // A relation's reference column taken apart (R-185):
+                // `workload(ref(T, W, ""))`.
+                Lit::Pos(a) => a.args.iter().find_map(|t| match t {
+                    Term::Func { name, args } if name == crate::ir::REF && args.len() == 3 => {
+                        named(&args[1]).then(|| self.core(&args[0])).flatten()
+                    }
+                    _ => None,
+                }),
                 _ => None,
             })
         })

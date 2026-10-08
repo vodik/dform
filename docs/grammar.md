@@ -431,6 +431,11 @@ and a value type (an `oci`, a `uri`, an `inet`, an `ip`, a time, a
 quantity) given to a function's `string` parameter is its canonical print
 there (`str.starts_with(c.image, "ghcr.io/")` over an `oci`), and so is
 its interpolation (`":" in "${c.image}"`).
+A column a head fills with a resource is a reference, `ref(T)`, the union
+of the types where rules give it several (`workload(w:
+ref(k8s.deployment | k8s.stateful_set))`, "References and their type");
+a dot on a variable of a column with no fields is an error, not a read
+of nothing.
 The settled signature (`az(string, int)`, a `decl`'s or a rule head's
 column names where there are some) is what the editor's hover prints.
 
@@ -484,6 +489,32 @@ dot on a variable with no static type is field access on a value:
 reference column binds with no `in` (`deformation(k, r, _)`) is a
 reference of no known type, and `r.p` on it is an error that says to bind
 it with `r in T` (R-43).
+
+A reference is a reference everywhere (R-185). A program's own relation
+has a reference column where a rule's head writes a variable `in` types
+(`workload(w) where w in k8s.deployment`), one `x in resource` or `x in
+NS` binds, one another reference column binds, or a resource by its name:
+the column holds the reference, never its address alone, and is typed
+`ref(T)`, or `ref(k8s.deployment | k8s.stateful_set)` where a rule per
+type fills it. A body that reads the relation has the variable as that
+resource, typed by the column (by each row's own type where it holds
+several), so `w.spec.template.spec` reads the attribute and `set
+w.spec.template.spec.containers[_].resources.requests = {..} @default
+where workload(w)` writes each row's resource: one statement for every
+type the relation holds, where `k8s.deployment[_]` takes one. A literal
+in such a column (`workload("web")`) is an error naming the column and
+its type. A relation a copy exports or its user gives (`output p`,
+`input p`) keeps its rows as addresses: the module's boundary scopes
+them.
+
+A field is read of an object. `x.p` where `x`'s column is a type with no
+fields (a string, a number, a bool, a list, a reference read through a
+value) is an error naming the column, its type and the fix; at run time,
+where nothing typed it (a document's field), a field of a value that is
+not an object is an error at the rule naming the read and the value,
+never a literal that does not hold, so a deny over it cannot pass
+without checking. A field an object does not have is no value
+("Definedness").
 
 A program never reads an id (R-43). A reference is the resource, and
 where an attribute identifies another resource the provider's schema

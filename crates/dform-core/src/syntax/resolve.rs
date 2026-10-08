@@ -39,6 +39,7 @@ use std::collections::{BTreeMap, BTreeSet};
 mod aggregate;
 mod alias;
 mod binding;
+mod columns;
 mod each;
 pub use each::each_var;
 mod heads;
@@ -330,6 +331,12 @@ struct Decls {
     /// Resource types: every resource header's, every `type` block's, every
     /// `type_*` fact's, and the built-in provider schemas'.
     types: BTreeSet<String>,
+    /// Every rule and fact statement `collect` found, with the scope it is
+    /// lowered in: what `find_ref_columns` reads.
+    rules: Vec<(usize, SyntaxNode)>,
+    /// The program relations' reference columns (R-185), by relation and
+    /// arity, then index.
+    refs: BTreeMap<(columns::RelKey, usize), BTreeMap<usize, columns::RefColumn>>,
     /// First segments of the types: no variable may take one.
     namespaces: BTreeSet<String>,
     /// The namespaces whose every type the compiler knows: the built-in
@@ -1039,6 +1046,7 @@ impl<'u> Lowerer<'u> {
             .collect();
         l.collect_aliases();
         l.decls.renamed = renamed(units, deployed);
+        l.find_ref_columns();
         l
     }
 
@@ -1396,6 +1404,7 @@ impl<'u> Lowerer<'u> {
                     }
                 }
                 RULE | FACT => {
+                    self.decls.rules.push((outer, n.clone()));
                     if let Some(h) = n.children().find(|c| c.kind() == CALL)
                         && let Some(name) = self.callee(&h)
                     {
@@ -2207,6 +2216,7 @@ impl<'u> Lowerer<'u> {
                 }
             }
         }
+        self.ref_column_vars(n, scope, &mut rc);
         rc
     }
 
@@ -5833,6 +5843,18 @@ impl<'u> Lowerer<'u> {
                 }
                 args
             }
+            // A program relation's reference column (R-185): a resource
+            // there is the reference, as in the plan's relations.
+            None if !self
+                .ref_columns(
+                    rc.scope,
+                    &pred,
+                    list.as_ref().map_or(0, |l| terms(l).count()),
+                )
+                .is_empty() =>
+            {
+                self.ref_args(rc, &pred, list.as_ref(), pos, pre)?
+            }
             // In a body an argument is a pattern (R-58): `pair((a, b))`;
             // a relation of several named columns takes one object
             // pattern, `zone({ name, index })`, its record pattern.
@@ -8684,7 +8706,9 @@ mod tests {
         );
         assert_eq!(
             got.last().unwrap(),
-            "p(X) :- want(\"acme.widget\", X), attr(\"acme.widget\", X, \"size\", Size), Size > 1"
+            // `p`'s column holds the widget itself (R-185).
+            "p(__ref(\"acme.widget\", X, \"\")) :- want(\"acme.widget\", X), attr(\"acme.widget\", \
+             X, \"size\", Size), Size > 1"
         );
     }
 

@@ -1624,7 +1624,8 @@ fn policies(
         }
         let (on, reads, rule) = found.entry(message).or_default();
         on.extend(m.nulls.iter().cloned());
-        reads.push(spell::atom(&m.reads));
+        // A reference column's row by its address (R-185).
+        reads.push(crate::query::Redactor::default().surface_atom(&m.reads));
         rule.get_or_insert(m.rule);
     }
     let mut may: Vec<Policy> = Vec::new();
