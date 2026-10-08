@@ -1708,7 +1708,7 @@ fn collapse_group(
     origins: &Origins,
     store: &Store,
 ) -> Vec<Atom> {
-    let (typ, addr, path) = key;
+    let path = &key.2;
     let cells: Vec<RankedContribution> = contribs
         .iter()
         .enumerate()
@@ -1737,70 +1737,19 @@ fn collapse_group(
             witness: (first_ref + i) as u32,
         })
         .collect();
-    let refinement_of = |w: u32| refs.get((w as usize).checked_sub(first_ref)?);
-    let head = |pred: &str, rest: Vec<Value>| Atom {
-        pred: pred.into(),
-        args: [str_term(typ), Term::Val(addr.clone()), str_term(path)]
-            .into_iter()
-            .chain(rest.into_iter().map(Term::Val))
-            .collect(),
-        record: None,
-        span: Default::default(),
-    };
-    let witness = |w: u32| {
-        if let Some((t, r)) = refinement_of(w) {
-            let a = store.get(*t);
-            return obj(vec![
-                ("rank", Value::Str("refinement".into())),
-                ("value", Value::Str(r.constraint.to_string())),
-                (
-                    "from",
-                    Value::List(vec![Value::Str(with_place(partition::fmt_atom(a), a.span))]),
-                ),
-            ]);
-        }
-        let (t, r, v) = match contribs.get(w as usize) {
-            Some((t, r, v)) => (t, r, v),
-            None => {
-                let (t, r, _, _, v) = &elems[w as usize - contribs.len()];
-                (t, r, v)
-            }
-        };
-        obj(vec![
-            ("rank", Value::Str(rank_name(*r).into())),
-            ("value", v.clone()),
-            (
-                "from",
-                Value::List(
-                    origins
-                        .of(*t, store.get(*t))
-                        .into_iter()
-                        .map(Value::Str)
-                        .collect(),
-                ),
-            ),
-        ])
-    };
-    let witnesses = |ws: &Witnesses| Value::List(ws.iter().map(|w| witness(*w)).collect());
-    let ctx = |extra: Vec<(&str, Value)>| {
-        let mut kv = vec![
-            ("type", Value::Str(typ.clone())),
-            ("addr", addr.clone()),
-            ("path", Value::Str(path.clone())),
-        ];
-        kv.extend(extra);
-        obj(kv)
-    };
-    let policy = |pred: &str, msg: &str, ctx: Value| Atom {
-        pred: pred.into(),
-        args: vec![str_term(msg), Term::Val(ctx)],
-        record: None,
-        span: Default::default(),
-    };
-    let mut out = Vec::new();
     let below = lattice::Below {
         lattices: Some(nested),
         elems: &writes,
+    };
+    let mut cell = Collapse {
+        key,
+        contribs,
+        elems,
+        refs,
+        first_ref,
+        origins,
+        store,
+        out: Vec::new(),
     };
     let shadowed = match lattice::lub_ranked_refined(lat, path, &cells, &refinements, below) {
         Collapsed::Bottom => vec![],
@@ -1810,25 +1759,7 @@ fn collapse_group(
             deferred,
             ..
         } => {
-            out.push(head("attr", vec![value]));
-            for d in deferred {
-                let nulls = lattice::nulls_in(&d.value);
-                out.push(Atom {
-                    pred: crate::refine::DEFERRED.into(),
-                    args: [
-                        Value::Str(typ.clone()),
-                        addr.clone(),
-                        Value::Str(d.path),
-                        Value::Str(d.constraint.to_string()),
-                        Value::List(nulls.into_iter().map(Value::Str).collect()),
-                    ]
-                    .into_iter()
-                    .map(Term::Val)
-                    .collect(),
-                    record: None,
-                    span: Default::default(),
-                });
-            }
+            cell.value(value, deferred);
             shadowed
         }
         Collapsed::Violated {
@@ -1839,46 +1770,13 @@ fn collapse_group(
             refinement,
             shadowed,
         } => {
-            let first = |w: &Witnesses| {
-                w.iter()
-                    .next()
-                    .map(|w| witness(*w))
-                    .unwrap_or(Value::Obj(BTreeMap::new()))
-            };
-            out.push(head("attr_conflict", vec![first(&ws), first(&refinement)]));
-            let place = refinement
-                .iter()
-                .find_map(|w| refinement_of(*w))
-                .and_then(|(t, _)| diag::place(store.get(*t).span))
-                .unwrap_or_default();
-            let mut kv = vec![
-                ("type", Value::Str(typ.clone())),
-                ("addr", addr.clone()),
-                ("path", Value::Str(at.clone())),
-                ("constraint", Value::Str(constraint.to_string())),
-                (
-                    "reason",
-                    Value::Str(format!(
-                        "{} violates {constraint}",
-                        partition::fmt_value(&value)
-                    )),
-                ),
-                ("value", value),
-                (
-                    "witnesses",
-                    witnesses(&ws.union(&refinement).copied().collect()),
-                ),
-            ];
-            if !place.is_empty() {
-                kv.push(("at", Value::Str(place)));
-            }
-            out.push(policy("deny", crate::refine::VIOLATED, obj(kv)));
+            cell.violated(at, constraint, value, &ws, &refinement);
             shadowed
         }
         Collapsed::Stuck {
             nulls, shadowed, ..
         } => {
-            out.push(head(
+            cell.out.push(cell.head(
                 "attr_stuck",
                 vec![Value::List(nulls.into_iter().map(Value::Str).collect())],
             ));
@@ -1892,25 +1790,203 @@ fn collapse_group(
             shadowed,
             ..
         } => {
-            let first = |w: &Witnesses| {
-                w.iter()
-                    .next()
-                    .map(|w| witness(*w))
-                    .unwrap_or(Value::Obj(BTreeMap::new()))
-            };
-            out.push(head("attr_conflict", vec![first(&a.1), first(&b.1)]));
-            out.push(policy(
-                "deny",
-                "conflicting attribute contributions",
-                ctx(vec![
-                    ("reason", Value::Str(reason)),
-                    ("witnesses", witnesses(&ws)),
-                ]),
-            ));
+            cell.conflict(&a.1, &b.1, reason, &ws);
             shadowed
         }
     };
     for sh in shadowed {
+        cell.shadowed(sh);
+    }
+    cell.out
+}
+
+/// A cell being collapsed, its witnesses numbered: the contributions', the
+/// element writes' after them, the refinements' last; and its facts.
+struct Collapse<'a> {
+    key: &'a GroupKey,
+    contribs: &'a [Contribution],
+    elems: &'a [ElemContribution],
+    refs: &'a [&'a (TupleId, crate::refine::Stated)],
+    /// The witness of the first refinement.
+    first_ref: usize,
+    origins: &'a Origins,
+    store: &'a Store,
+    out: Vec<Atom>,
+}
+
+impl Collapse<'_> {
+    /// A fact of the cell: `pred(T, A, P, rest..)`.
+    fn head(&self, pred: &str, rest: Vec<Value>) -> Atom {
+        let (typ, addr, path) = self.key;
+        Atom {
+            pred: pred.into(),
+            args: [str_term(typ), Term::Val(addr.clone()), str_term(path)]
+                .into_iter()
+                .chain(rest.into_iter().map(Term::Val))
+                .collect(),
+            record: None,
+            span: Default::default(),
+        }
+    }
+
+    /// The refinement witness `w` is, if it is one.
+    fn refinement_of(&self, w: u32) -> Option<&(TupleId, crate::refine::Stated)> {
+        self.refs
+            .get((w as usize).checked_sub(self.first_ref)?)
+            .copied()
+    }
+
+    /// The witness `w` as a policy's context says it: its rank, its value
+    /// and where it is from.
+    fn witness(&self, w: u32) -> Value {
+        let store = self.store;
+        if let Some((t, r)) = self.refinement_of(w) {
+            let a = store.get(*t);
+            return obj(vec![
+                ("rank", Value::Str("refinement".into())),
+                ("value", Value::Str(r.constraint.to_string())),
+                (
+                    "from",
+                    Value::List(vec![Value::Str(with_place(partition::fmt_atom(a), a.span))]),
+                ),
+            ]);
+        }
+        let (t, r, v) = match self.contribs.get(w as usize) {
+            Some((t, r, v)) => (t, r, v),
+            None => {
+                let (t, r, _, _, v) = &self.elems[w as usize - self.contribs.len()];
+                (t, r, v)
+            }
+        };
+        obj(vec![
+            ("rank", Value::Str(rank_name(*r).into())),
+            ("value", v.clone()),
+            (
+                "from",
+                Value::List(
+                    self.origins
+                        .of(*t, store.get(*t))
+                        .into_iter()
+                        .map(Value::Str)
+                        .collect(),
+                ),
+            ),
+        ])
+    }
+
+    fn witnesses(&self, ws: &Witnesses) -> Value {
+        Value::List(ws.iter().map(|w| self.witness(*w)).collect())
+    }
+
+    /// The first of `ws`, or an empty object.
+    fn first(&self, ws: &Witnesses) -> Value {
+        ws.iter()
+            .next()
+            .map(|w| self.witness(*w))
+            .unwrap_or(Value::Obj(BTreeMap::new()))
+    }
+
+    /// A policy's context of the cell: its type, address and path, then
+    /// `extra`.
+    fn ctx(&self, extra: Vec<(&str, Value)>) -> Value {
+        let (typ, addr, path) = self.key;
+        let mut kv = vec![
+            ("type", Value::Str(typ.clone())),
+            ("addr", addr.clone()),
+            ("path", Value::Str(path.clone())),
+        ];
+        kv.extend(extra);
+        obj(kv)
+    }
+
+    /// The cell's value, and a refinement whose value it does not know yet,
+    /// deferred.
+    fn value(&mut self, value: Value, deferred: Vec<lattice::Deferred>) {
+        let (typ, addr, _) = self.key;
+        self.out.push(self.head("attr", vec![value]));
+        for d in deferred {
+            let nulls = lattice::nulls_in(&d.value);
+            self.out.push(Atom {
+                pred: crate::refine::DEFERRED.into(),
+                args: [
+                    Value::Str(typ.clone()),
+                    addr.clone(),
+                    Value::Str(d.path),
+                    Value::Str(d.constraint.to_string()),
+                    Value::List(nulls.into_iter().map(Value::Str).collect()),
+                ]
+                .into_iter()
+                .map(Term::Val)
+                .collect(),
+                record: None,
+                span: Default::default(),
+            });
+        }
+    }
+
+    /// A value that violates a refinement at `at`: the conflict, and a deny
+    /// naming the refinement's place.
+    fn violated(
+        &mut self,
+        at: String,
+        constraint: crate::lattice::Constraint,
+        value: Value,
+        ws: &Witnesses,
+        refinement: &Witnesses,
+    ) {
+        let (typ, addr, _) = self.key;
+        self.out.push(self.head(
+            "attr_conflict",
+            vec![self.first(ws), self.first(refinement)],
+        ));
+        let place = refinement
+            .iter()
+            .find_map(|w| self.refinement_of(*w))
+            .and_then(|(t, _)| diag::place(self.store.get(*t).span))
+            .unwrap_or_default();
+        let mut kv = vec![
+            ("type", Value::Str(typ.clone())),
+            ("addr", addr.clone()),
+            ("path", Value::Str(at)),
+            ("constraint", Value::Str(constraint.to_string())),
+            (
+                "reason",
+                Value::Str(format!(
+                    "{} violates {constraint}",
+                    partition::fmt_value(&value)
+                )),
+            ),
+            ("value", value),
+            (
+                "witnesses",
+                self.witnesses(&ws.union(refinement).copied().collect()),
+            ),
+        ];
+        if !place.is_empty() {
+            kv.push(("at", Value::Str(place)));
+        }
+        self.out
+            .push(policy_fact("deny", crate::refine::VIOLATED, obj(kv)));
+    }
+
+    /// Contributions that conflict: the conflict, and a deny naming every
+    /// witness.
+    fn conflict(&mut self, a: &Witnesses, b: &Witnesses, reason: String, ws: &Witnesses) {
+        self.out
+            .push(self.head("attr_conflict", vec![self.first(a), self.first(b)]));
+        let ctx = self.ctx(vec![
+            ("reason", Value::Str(reason)),
+            ("witnesses", self.witnesses(ws)),
+        ]);
+        self.out.push(policy_fact(
+            "deny",
+            "conflicting attribute contributions",
+            ctx,
+        ));
+    }
+
+    /// A disagreement at a losing rank, overridden: a warning.
+    fn shadowed(&mut self, sh: Shadowed) {
         let (rank, what, ws) = match sh {
             Shadowed::Stuck {
                 rank,
@@ -1935,17 +2011,27 @@ fn collapse_group(
                 witnesses,
             } => (rank, format!("{reason} at {path}"), witnesses),
         };
-        out.push(policy(
+        let ctx = self.ctx(vec![
+            ("rank", Value::Str(rank_name(rank).into())),
+            ("reason", Value::Str(what)),
+            ("witnesses", self.witnesses(&ws)),
+        ]);
+        self.out.push(policy_fact(
             "warn",
             "attr_shadowed: contributions at a losing rank disagree and are overridden",
-            ctx(vec![
-                ("rank", Value::Str(rank_name(rank).into())),
-                ("reason", Value::Str(what)),
-                ("witnesses", witnesses(&ws)),
-            ]),
+            ctx,
         ));
     }
-    out
+}
+
+/// A policy fact: `deny(msg, ctx)` or `warn(msg, ctx)`.
+fn policy_fact(pred: &str, msg: &str, ctx: Value) -> Atom {
+    Atom {
+        pred: pred.into(),
+        args: vec![str_term(msg), Term::Val(ctx)],
+        record: None,
+        span: Default::default(),
+    }
 }
 
 pub(crate) fn format_policy_fact(a: &Atom) -> Result<String> {
