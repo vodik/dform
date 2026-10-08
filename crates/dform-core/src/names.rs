@@ -8,8 +8,9 @@
 //! `use` or an `instance` names declares at its top is that module's
 //! (`module a.b`), read by its user as `m.x`; what a component declares
 //! is the component's (`component c`), read through its copies as `n.k`
-//! or `c[e].k`. A name a body does not declare reads outward: its
-//! component's, its file's, then the program's.
+//! or `c[e].k`. A name a body does not declare reads outward through its
+//! own file: its component's, then its file's, a stack's file's the
+//! program's; never through a `use` (R-205).
 
 use crate::syntax::{SyntaxKind, SyntaxNode, SyntaxToken};
 use std::collections::{BTreeMap, BTreeSet};
@@ -450,12 +451,12 @@ impl Decls {
     }
 
     /// The scopes a name at `n` is looked up in, innermost first: its
-    /// component's and each component's around it, its module file's,
-    /// the program's (R-186).
+    /// component's and each component's around it (R-186), then its module
+    /// file's, or in a stack's file the program's. A module never reads
+    /// its user's (R-205).
     pub fn scopes(&self, n: &SyntaxNode) -> Vec<Scope> {
         let mut out: Vec<Scope> = component_scopes(n).into_iter().map(Some).collect();
-        out.extend(self.file_scope(n).map(Some));
-        out.push(None);
+        out.push(self.file_scope(n));
         out
     }
 

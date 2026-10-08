@@ -679,8 +679,6 @@ pub fn is_core_pred(pred: &str) -> bool {
             | "cloud_attr"
             | "cloud_computed"
             | "member"
-            | "env"
-            | "has_env"
             | "attr"
             | "attr_conflict"
             | "attr_stuck"

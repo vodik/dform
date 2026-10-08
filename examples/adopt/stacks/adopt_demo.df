@@ -14,7 +14,7 @@ set { network.vpc_net = "10.20.0.0/16" } where env == "prod"
 
 # network.df, imported once, its input the settings': its VPC is
 # `network/vpc`.
-use network
+use network { env }
 
 # Adopt the VPC from inventory, but manage it under the local name `network/vpc`.
 adopt(net.vpc["network.vpc"], "existing-prod-vpc") where {

@@ -1,4 +1,6 @@
 input vpc_net: inet
+#| The deployment's environment: a tag on the VPC.
+input env: enum("staging", "prod")
 #| The private subnets, one row each.
 decl private_subnet(subnet: net.subnet)
 output vpc: net.vpc = vpc

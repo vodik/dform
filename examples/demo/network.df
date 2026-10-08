@@ -9,6 +9,8 @@
 component vpc {
   #| The VPC's IPv4 range; each zone's subnet is a /20 of it.
   input vpc_net: inet
+  #| The deployment's environment, the stack's key: a tag on the VPC.
+  input env: enum("dev", "staging", "prod")
   decl private_subnet(subnet: net.subnet)
   #| The network's VPC, for peering.
   output vpc: net.vpc = vpc

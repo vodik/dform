@@ -1,6 +1,9 @@
-# The baseline every stack applies, `use baseline`: a team tag, audit
-# sinks, no public database. `env` is the using stack's; its input is the
-# stack's to give, by its path (config/dform/prod.yaml's `baseline.audit`).
+# The baseline every stack applies, `use baseline { env }`: a team tag,
+# audit sinks, no public database. A module reads only what it declares:
+# `env` is an input the using stack gives, `audit` the stack's to give by
+# its path (config/dform/prod.yaml's `baseline.audit`).
+#| The deployment's environment.
+input env: enum("dev", "staging", "prod")
 input audit { enabled: bool = false, sinks: list(string) = ["s3"] }
 # Lattices for paths several authors contribute to. Object paths such as
 # `tags` are maps by default; a list is one value unless declared a set.

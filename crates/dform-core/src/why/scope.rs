@@ -6,7 +6,8 @@
 //! of the scope around its component (R-186): the instance of its module
 //! it was taken from (`backups.repository`, under `use backups as a`
 //! `a.repository`), or the copy of the component around it, then the
-//! stack's; never its user's. A module reads its own, then its user's.
+//! stack's for a component of the stack's file; never its user's. A
+//! module reads only its own (R-205).
 //! The language server's hover on a name in a component says the same,
 //! per copy ([`in_component`]).
 
@@ -242,12 +243,10 @@ impl<'a> Names<'a> {
                 Some(d) => Resolved::Own(d),
                 None => Resolved::Nothing(self.elsewhere(n)),
             },
+            // A module reads only what it declares (R-205).
             Scope::Module(m) => match self.own(m, n) {
                 Some(d) => Resolved::Own(d),
-                None => match self.own("", n) {
-                    Some(d) => Resolved::Outward("the stack's".into(), d),
-                    None => Resolved::Nothing(None),
-                },
+                None => Resolved::Nothing(None),
             },
             Scope::Copy(c) => {
                 if let Some(d) = self.own(&c.name, n) {
@@ -259,6 +258,9 @@ impl<'a> Names<'a> {
                         Some(c) => Scope::Copy(c.clone()),
                         None => Scope::Module(s.clone()),
                     },
+                    // A component of a module's file has none past its
+                    // module (R-205); the stack's file's, the stack.
+                    None if c.path.contains('.') => return Resolved::Nothing(None),
                     None => Scope::Stack,
                 };
                 match self.resolve(&outer, n) {

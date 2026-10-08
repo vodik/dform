@@ -49,6 +49,7 @@ mod pattern;
 mod provider;
 mod singleton;
 mod spread;
+mod undeclared;
 pub use provider::ENV_VAR;
 
 /// One parsed file of a program.
@@ -1028,7 +1029,10 @@ impl<'u> Lowerer<'u> {
             l.decls.files.insert(u.file, scope);
             match &u.path {
                 // A module's file is its own scope (R-65).
+                // A module's file is its own scope (R-65), with none around
+                // it: a module never reads its user's names (R-205).
                 Some(path) if !entries.contains(&i) => {
+                    l.decls.scopes[scope].parent = None;
                     l.decls.paths.insert(u.file, path.clone());
                     l.decls.modules.insert(
                         path.clone(),
@@ -7316,6 +7320,7 @@ impl<'u> Lowerer<'u> {
                 None => self.shared_name(rc.scope, c, span)?,
             };
         if !rc.vars.contains_key(h) {
+            self.undeclared(rc, h, span)?;
             if self.is_value(rc.scope, h) && own != Some(true) {
                 return self.value(rc, rc.scope, c, pre, span);
             }
