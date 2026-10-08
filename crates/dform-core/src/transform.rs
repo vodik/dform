@@ -329,7 +329,7 @@ fn attr_read(a: Atom) -> Result<Atom> {
     if a.pred == "arg" && a.args.len() == 5 {
         return Err(spanned(
             a.span,
-            "arg/5 in a rule body reads raw contributions; read the collapsed attr(T, A, P, V) instead",
+            "arg/5 after `where` reads raw contributions; read the collapsed attr(T, A, P, V) instead",
         ));
     }
     let Some((typ, addr, path, value)) = contribution_parts(&a) else {
@@ -342,7 +342,7 @@ fn attr_read(a: Atom) -> Result<Atom> {
         return Err(spanned(
             a.span,
             format!(
-                "{}(..., {p:?}, ...) in a rule body: read the top-level attribute and destructure it",
+                "{}(..., {p:?}, ...) after `where`: read the top-level attribute and destructure it",
                 a.pred
             ),
         ));
@@ -669,7 +669,7 @@ fn rewrite_atom_records(
         return Err(spanned(
             atom.span,
             format!(
-                "wildcards not allowed in fact/head for predicate '{}'",
+                "`_` is no value: not in a fact, nor left of `where`, of '{}'",
                 atom.pred
             ),
         ));
@@ -884,7 +884,7 @@ fn rewrite_term_listcomps(
                     // Var appears outside this comprehension.
                     if !body_vars.contains_key(v) {
                         bail!(
-                            "comprehension free var '{v}' must be bound in the comprehension body"
+                            "`{v}` in a comprehension is given its values inside it, after its `|`"
                         );
                     }
                     key_vars.push(v.clone());

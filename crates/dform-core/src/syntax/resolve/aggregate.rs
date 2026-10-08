@@ -58,7 +58,7 @@ impl Lowerer<'_> {
         if self.nested > 0 {
             return self.error(
                 span,
-                "an aggregate is bound at the top of a rule's body, not inside `not { }` or a \
+                "an aggregate is named at the top of a clause, not inside `not { }` or a \
                  comprehension",
             );
         }
@@ -179,15 +179,17 @@ impl Lowerer<'_> {
                 Diagnostic::error(
                     a.span,
                     format!(
-                        "`{}` aggregates {}, which the body does not bind",
+                        "`{}` aggregates {}, which nothing after `where` gives values",
                         a.text,
                         names.join(", ")
                     ),
                 )
-                .with_help(
-                    "an aggregate folds what the rest of the body binds: write the literal \
-                     that binds it, `n = count(s), s in aws.subnet`",
-                ),
+                .with_help(format!(
+                    "give {} values in the same clause, `{}, {} in ..`",
+                    names.join(", "),
+                    a.text,
+                    names[0].trim_matches('`'),
+                )),
             );
             out.extend(missing);
         }

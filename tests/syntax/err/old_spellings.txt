@@ -37,7 +37,7 @@ tests/syntax/err/old_spellings.df:22:12: expected a literal, found `some`
 tests/syntax/err/old_spellings.df:23:23: expected a term, found `.`
   help: a path that is data is a string (`"cidr"`, H-12); a `.` is member access
 tests/syntax/err/old_spellings.df:24:13: expected the end of the term, found `{`
-  help: a record atom `p{a: x}` is spelled with named arguments, `p(a: x)`
+  help: a relation's named columns are written `p(a: x)`, not `p{a: x}`
 tests/syntax/err/old_spellings.df:26:3: expected an entry or `}`, found `for`
   help: a block's clause follows the block (R-1): `resource t a { .. } where q(x)`
 tests/syntax/err/old_spellings.df:29:1: expected a statement, found `/`

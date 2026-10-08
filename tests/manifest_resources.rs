@@ -224,8 +224,9 @@ fn a_value_body_is_an_object_of_the_type() {
     s.write("p.df", "\nuse k8s\nresource k8s.config_map c = [\"x\"]\n");
     let r = s.run(&["plan", "p.df"]).failure();
     assert!(
-        r.stderr
-            .contains("the body of a resource is a value of its type, an object: not `[\"x\"]`"),
+        r.stderr.contains(
+            "`resource T NAME = VALUE` takes an object, a value of the type: not `[\"x\"]`"
+        ),
         "{}",
         r.stderr
     );
@@ -236,7 +237,7 @@ fn a_value_body_is_an_object_of_the_type() {
     let r = s.run(&["plan", "p.df"]).failure();
     assert!(
         r.stderr.contains(
-            "the body of a resource is a value of its type, an object: not [\"x\"] (at p.df:4:"
+            "`resource T NAME = VALUE` takes an object, a value of the type: not [\"x\"] (at p.df:4:"
         ),
         "{}",
         r.stderr

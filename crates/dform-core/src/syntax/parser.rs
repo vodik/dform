@@ -249,7 +249,7 @@ impl<'a> Parser<'a> {
     fn star_step(&mut self) -> P {
         self.error_here(
             "expected a term, found `*`: `[*]` is no step, every element is `[_]`".into(),
-            Some("`_` binds each anonymously, as in an atom: `teams[_].services`".into()),
+            Some("`[_]` takes each element: `teams[_].services`".into()),
         );
         Err(Bail)
     }
@@ -414,13 +414,13 @@ impl<'a> Parser<'a> {
         match self.nth(0) {
             NEWLINE => {
                 return Some(
-                    "a newline ends a statement: a body of several lines is `where { .. }`, one \
+                    "a newline ends a statement: a clause of several lines is `where { .. }`, one \
                      literal per line; a long term wraps inside brackets"
                         .to_string(),
                 );
             }
             NECK => {
-                return Some("a rule is `head where body`: `:-` is spelled `where`".to_string());
+                return Some("`:-` is spelled `where`: `p(x) where q(x)`".to_string());
             }
             DOT if matches!(self.raw(1), EOF) || self.on_new_line_at(1) => {
                 return Some(
@@ -979,7 +979,9 @@ impl<'a> Parser<'a> {
                 {
                     Some(h.to_string())
                 } else if matches!(k, IF_KW | WHERE_KW) {
-                    Some("`where` goes on the line of the head it guards, after it".to_string())
+                    Some(
+                        "`where` goes on the line of the statement it guards, after it".to_string(),
+                    )
                 } else if term_name(k) && matches!(self.raw(1), EQ | PLUS_EQ) {
                     Some(format!("a value is `let {text} = t`"))
                 } else if term_name(k) && matches!(self.raw(1), DOT | L_BRACKET) {
@@ -1778,7 +1780,7 @@ impl<'a> Parser<'a> {
             let msg = format!("expected the end of the term, found {}", self.found());
             self.error_here(
                 msg,
-                Some("a record atom `p{a: x}` is spelled with named arguments, `p(a: x)`".into()),
+                Some("a relation's named columns are written `p(a: x)`, not `p{a: x}`".into()),
             );
             return Err(Bail);
         }

@@ -252,7 +252,7 @@ pub fn parse(src: &str) -> Result<Query> {
     let program = crate::parser::parse_pattern(&format!("query__(0) where {src}"))
         .map_err(|e| anyhow::anyhow!("cannot parse query '{src}': {e:#}"))?;
     let [crate::ast::Stmt::Rule(r)] = program.statements.as_slice() else {
-        bail!("cannot parse query '{src}': expected body literals");
+        bail!("cannot parse query '{src}': expected literals, `p(x), q(x)`");
     };
     let mut vars = Vec::new();
     for lit in &r.body {

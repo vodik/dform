@@ -1,7 +1,7 @@
-tests/syntax/err/aggregate_binding.df:4:12: `count` is an aggregate: it is bound in a body, `n = count(x)`
-  help: `p(k, n) where n = count(x), B` folds per group of the head's other variables; `let n = count(x) where B` over one group
-tests/syntax/err/aggregate_binding.df:5:25: `count(x)` aggregates `x`, which the body does not bind
-  help: an aggregate folds what the rest of the body binds: write the literal that binds it, `n = count(s), s in aws.subnet`
-tests/syntax/err/aggregate_binding.df:6:15: `sum(y)` aggregates `y`, which the body does not bind
-  help: an aggregate folds what the rest of the body binds: write the literal that binds it, `n = count(s), s in aws.subnet`
-tests/syntax/err/aggregate_binding.df:7:41: an aggregate is bound at the top of a rule's body, not inside `not { }` or a comprehension
+tests/syntax/err/aggregate_binding.df:4:12: `count` is an aggregate: name its result after `where`, `n = count(x)`
+  help: `p(k, n) where n = count(x), ..` gives one `n` per `k`; `let n = count(x) where ..` gives one in all
+tests/syntax/err/aggregate_binding.df:5:25: `count(x)` aggregates `x`, which nothing after `where` gives values
+  help: give `x` values in the same clause, `count(x), x in ..`
+tests/syntax/err/aggregate_binding.df:6:15: `sum(y)` aggregates `y`, which nothing after `where` gives values
+  help: give `y` values in the same clause, `sum(y), y in ..`
+tests/syntax/err/aggregate_binding.df:7:41: an aggregate is named at the top of a clause, not inside `not { }` or a comprehension

@@ -1,5 +1,5 @@
 tests/syntax/err/table_source.df:8:26: token: column value is a secret
-  note: a table's rows are read in the clear and recorded in the plan file; a secret comes from a secret input, an extern's secret column or a std function such as `random.password`
+  note: a table's rows are read in the clear and recorded in the plan file; a secret comes from a secret input, a data source's secret column or a std function such as `random.password`
 tests/syntax/err/table_source.df:3:18: unknown format xml: a table's source is FORMAT.decode(io.read(LOCATION))
   help: FORMAT is one of csv, json, yaml, toml; LOCATION is a path, `"data/p.csv"`, or a uri, `"git+https://HOST/OWNER/REPO/PATH?ref=TAG"`, `"ssh://USER@HOST/PATH"`
 tests/syntax/err/table_source.df:4:37: `git(..)` is gone (R-153): a repository's file is a location

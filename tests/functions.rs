@@ -79,7 +79,7 @@ fn a_function_missing_from_std_does_not_resolve() {
 fn internal_functions_are_not_callable() {
     let e = error("p(x) where x = add(1, 2)\n");
     assert!(
-        e.contains("add is the lowering's") && e.contains("a + b"),
+        e.contains("add is dform's own") && e.contains("a + b"),
         "{e}"
     );
     assert_eq!(facts("p(x) where x = 1 + 2\n", "p"), ["p(3)"]);
@@ -545,7 +545,7 @@ fn there_is_no_prelude() {
     );
     for internal in ["__scoped", "__ref", "__cloud_ref"] {
         let e = error(&format!("p(x) where x = {internal}(\"a\", \"b\", \"c\")\n"));
-        assert!(e.contains(&format!("{internal} is the lowering's")), "{e}");
+        assert!(e.contains(&format!("{internal} is dform's own")), "{e}");
     }
     assert!(engine::reference("ref", true).is_none());
 }

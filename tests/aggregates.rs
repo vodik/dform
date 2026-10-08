@@ -143,12 +143,12 @@ fn an_empty_group_derives_nothing() {
 fn an_aggregate_of_an_unbound_name_is_an_error() {
     let e = error("subnet(\"a\", \"v\")\np(v, n) where n = count(x), subnet(_, v)\n");
     assert!(
-        e.contains("`count(x)` aggregates `x`, which the body does not bind"),
+        e.contains("`count(x)` aggregates `x`, which nothing after `where` gives values"),
         "{e}"
     );
     let e = error("let n = sum(x) where subnet(_, _)\n");
     assert!(
-        e.contains("`sum(x)` aggregates `x`, which the body does not bind"),
+        e.contains("`sum(x)` aggregates `x`, which nothing after `where` gives values"),
         "{e}"
     );
 }
@@ -164,13 +164,13 @@ fn an_aggregate_elsewhere_is_an_error() {
     ] {
         let e = error(src);
         assert!(
-            e.contains("`count` is an aggregate: it is bound in a body, `n = count(x)`"),
+            e.contains("`count` is an aggregate: name its result after `where`, `n = count(x)`"),
             "{src}: {e}"
         );
     }
     let e = error("q(1)\np(x) where q(x), not { n = count(y), q(y) }\n");
     assert!(
-        e.contains("an aggregate is bound at the top of a rule's body"),
+        e.contains("an aggregate is named at the top of a clause"),
         "{e}"
     );
 }

@@ -1793,7 +1793,7 @@ the fold, and what it reads of the body is part of the group too
 `v` and `m`). Two aggregates in one body fold over the same body, group
 by group. What an aggregate folds is bound by the rest of the body:
 `n = count(x)` with no literal binding `x` is an error, "`count(x)`
-aggregates `x`, which the body does not bind". An aggregate anywhere else
+aggregates `x`, which nothing after `where` gives values". An aggregate anywhere else
 (a head, a field, an argument, inside `not { }` or a comprehension) is an
 error naming the body form.
 

@@ -1,2 +1,2 @@
 tests/syntax/err/star_step.df:2:61: expected a term, found `*`: `[*]` is no step, every element is `[_]`
-  help: `_` binds each anonymously, as in an atom: `teams[_].services`
+  help: `[_]` takes each element: `teams[_].services`

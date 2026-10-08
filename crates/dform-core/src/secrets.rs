@@ -1003,12 +1003,12 @@ pub fn check(
                                 "whether `{x}` is there is a bit of it: test `{p}` of a public \
                                  value, or of `secret.declassify({x}, \"why\")` if that bit \
                                  may be known",
-                                p = crate::report::relation_name(&a.pred),
+                                p = a.pred.rsplit("::").next().unwrap_or(&a.pred),
                             ),
                             (None, None) => format!(
                                 "whether a secret is there is a bit of it: test `{}` of a \
                                  public value",
-                                crate::report::relation_name(&a.pred),
+                                a.pred.rsplit("::").next().unwrap_or(&a.pred),
                             ),
                         };
                         diags.push(

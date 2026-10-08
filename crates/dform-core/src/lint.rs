@@ -833,7 +833,7 @@ fn long_bodies(program: &Program) -> Vec<String> {
                 .map(|a| format!("{a}: "))
                 .unwrap_or_default();
             out.push(format!(
-                "{loc}a body of {n} literals: name the join, a relation of the literals that \
+                "{loc}a clause of {n} literals: name the join, a relation of the literals that \
                  find one thing (as the tour's `network_of`), and read it here"
             ));
         }
@@ -874,7 +874,7 @@ fn lint_lowered(program: &Program, cli_keys: &[String]) -> Vec<String> {
     }
     produced
         .difference(&read)
-        .map(|key| format!("input(\"{key}\", _) is set but no rule body reads it"))
+        .map(|key| format!("input {key} is set but nothing reads it"))
         .collect()
 }
 
@@ -975,7 +975,7 @@ mod tests {
         let long: Vec<&String> = warnings.iter().filter(|w| w.contains("literals")).collect();
         assert_eq!(long.len(), 1, "{warnings:?}");
         assert!(
-            long[0].starts_with("long.df:5:12: a body of 6 literals: name the join"),
+            long[0].starts_with("long.df:5:12: a clause of 6 literals: name the join"),
             "{}",
             long[0]
         );

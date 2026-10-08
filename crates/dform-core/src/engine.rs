@@ -3511,7 +3511,7 @@ fn eval_eq(
                     if name == crate::ir::RESOURCE_BODY {
                         let args: Vec<String> = args.iter().map(partition::fmt_value).collect();
                         bail!(
-                            "the body of a resource is a value of its type, an object: not {}{}",
+                            "`resource T NAME = VALUE` takes an object, a value of the type: not {}{}",
                             args.join(", "),
                             at_suffix(rec.head.span)
                         );

@@ -277,7 +277,7 @@ impl Lowerer<'_> {
         if !TERM_CALLS.contains(&name.as_str()) {
             return Some(self.error(
                 span,
-                format!("{name} is a relation: read it as `{name}[..]` or in a body"),
+                format!("{name} is a relation: read it as `{name}[..]` or after `where`"),
             ));
         }
         if !self.decls.externs.contains_key(&name) {

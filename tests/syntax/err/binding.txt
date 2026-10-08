@@ -3,6 +3,6 @@ tests/syntax/err/binding.df:3:36: `z` is unbound at this `=`; bind it with `=`, 
 tests/syntax/err/binding.df:4:27: `image` is unbound at this `==`; `=` binds, `==` compares
   help: bind it with `image = ..`, `in`, or a relation; a string is quoted: "image"
 tests/syntax/err/binding.df:5:27: both sides are bound; write `==`
-  help: `=` binds a name the body does not bind otherwise; `==` compares two bound terms
+  help: `x` and `y` have their values already: `==` compares; `=` gives a value to a name nothing else does
 tests/syntax/err/binding.df:6:30: both sides are bound; write `==`
-  help: `=` binds a name the body does not bind otherwise; `==` compares two bound terms
+  help: `x` has its value already: `==` compares; `=` gives a value to a name nothing else does

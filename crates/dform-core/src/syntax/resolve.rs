@@ -2834,7 +2834,7 @@ impl<'u> Lowerer<'u> {
                 let d = Diagnostic::error(at, format!("{pred}: column {name} is a secret"))
                     .with_note(
                         "a table's rows are read in the clear and recorded in the plan file; \
-                         a secret comes from a secret input, an extern's secret column or a std function such as `random.password`",
+                         a secret comes from a secret input, a data source's secret column or a std function such as `random.password`",
                     );
                 self.diags.push(d);
                 return Err(Skip);
@@ -3989,7 +3989,7 @@ impl<'u> Lowerer<'u> {
                 return self.error(
                     span,
                     format!(
-                        "the body of a resource is a value of its type, an object: not `{}`",
+                        "`resource T NAME = VALUE` takes an object, a value of the type: not `{}`",
                         t.text().to_string().trim()
                     ),
                 );
@@ -4077,7 +4077,7 @@ impl<'u> Lowerer<'u> {
             return self.error(
                 span,
                 format!(
-                    "`{}` is another copy's relation, read in a body; its rows are its own",
+                    "`{}` is another copy's relation, read after `where`; its rows are its own",
                     c.fields().join(".")
                 ),
             );
@@ -4089,7 +4089,11 @@ impl<'u> Lowerer<'u> {
             if head.pred != "arg" || head.args.len() != 4 || head.record.is_some() {
                 return self.error(
                     span,
-                    "a rank applies to an `arg(T, A, Path, Value)` head only",
+                    format!(
+                        "a rank orders the writes to one attribute, `set r.p = v @override`: \
+                         `{}` is a relation, whose rows are not ranked",
+                        head.pred.rsplit("::").next().unwrap_or(&head.pred)
+                    ),
                 );
             }
             head.args.push(str_term(rank.name()));
@@ -5602,7 +5606,10 @@ impl<'u> Lowerer<'u> {
             .collect();
         if !named.is_empty() {
             if list.iter().any(|l| terms(l).next().is_some()) {
-                return self.error(span, "an atom's arguments are all positional or all named");
+                return self.error(
+                    span,
+                    "a relation's arguments are all positional or all named",
+                );
             }
             let mut fields = BTreeMap::new();
             for f in named {
@@ -6077,11 +6084,14 @@ impl<'u> Lowerer<'u> {
             self.diags.push(
                 Diagnostic::error(
                     span,
-                    format!("`{name}` is an aggregate: it is bound in a body, `n = {name}(x)`"),
+                    format!(
+                        "`{name}` is an aggregate: name its result after `where`, `n = \
+                         {name}(x)`"
+                    ),
                 )
                 .with_help(format!(
-                    "`p(k, n) where n = {name}(x), B` folds per group of the head's other \
-                     variables; `let n = {name}(x) where B` over one group"
+                    "`p(k, n) where n = {name}(x), ..` gives one `n` per `k`; `let n = \
+                     {name}(x) where ..` gives one in all"
                 )),
             );
             return;
@@ -6397,7 +6407,7 @@ impl<'u> Lowerer<'u> {
                     ),
                 )
                 .with_help(format!(
-                    "write `i in {}` in a body, or `int.range(lo, hi, step)` for a list",
+                    "write `i in {}` after `where`, or `int.range(lo, hi, step)` for a list",
                     n.text()
                 ));
                 self.diags.push(d);

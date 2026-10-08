@@ -139,12 +139,24 @@ impl Lowerer<'_> {
                     .all(|m| m.binds.iter().all(|b| without.contains(b)))
                 {
                     let span = self.span_of(eq.text_range() + rowan::TextSize::from(offset));
+                    let names: BTreeSet<String> = s
+                        .modes
+                        .iter()
+                        .flat_map(|m| m.binds.iter().map(|b| format!("`{b}`")))
+                        .collect();
+                    let names: Vec<String> = names.into_iter().collect();
                     self.diags.push(
                         Diagnostic::error(span, "both sides are bound; write `==`")
-                            .with_help(
-                                "`=` binds a name the body does not bind otherwise; `==` \
-                                 compares two bound terms",
-                            )
+                            .with_help(format!(
+                                "{} {} already: `==` compares; `=` gives a value to a name \
+                                 nothing else does",
+                                names.join(" and "),
+                                if names.len() == 1 {
+                                    "has its value"
+                                } else {
+                                    "have their values"
+                                }
+                            ))
                             .with_fix("write `==`", vec![(span, "==".to_string())]),
                     );
                 }

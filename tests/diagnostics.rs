@@ -71,8 +71,9 @@ fn an_unknown_function_names_its_call() {
     );
     let r = plan("\nenv(\"prod\")\nq(count(x)) where env(x)\nuse fake\n").failure();
     assert!(
-        r.stderr
-            .contains("p.df:3:3: `count` is an aggregate: it is bound in a body, `n = count(x)`"),
+        r.stderr.contains(
+            "p.df:3:3: `count` is an aggregate: name its result after `where`, `n = count(x)`"
+        ),
         "{}",
         r.stderr
     );

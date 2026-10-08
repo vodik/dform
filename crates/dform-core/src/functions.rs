@@ -296,7 +296,7 @@ pub fn unknown(span: crate::ast::Span, name: &str) -> crate::diag::Diagnostic {
         };
         let d = Diagnostic::error(
             span,
-            format!("{name} is the lowering's, not a function a program calls"),
+            format!("{name} is dform's own, not a function a program calls"),
         );
         return match op {
             Some(op) => d.with_help(format!("write `a {op} b`")),
