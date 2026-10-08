@@ -393,7 +393,7 @@ impl Tables {
         }
         if format == SECRETS {
             let file = crate::custody::given::parse(&text, &shown)?;
-            let rows = crate::custody::given::rows(&file, &shown);
+            let rows = file.rows(&shown);
             crate::custody::given::note(crate::custody::given::Read {
                 location: inputs.first().map(spell::bare).unwrap_or_default(),
                 shown: shown.clone(),

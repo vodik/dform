@@ -137,6 +137,308 @@ pub struct Given {
 }
 
 impl File {
+    /// Who opens `f`, as messages say it: `sealed to alice, bob and the
+    /// deployment's master`, `names` naming a recipient.
+    pub fn sealed_to(&self, names: &dyn Fn(&str) -> String) -> String {
+        let mut to: Vec<String> = self
+            .recipients()
+            .iter()
+            .filter(|r| self.stack_key() != Some(r.as_str()))
+            .map(|r| names(r))
+            .collect();
+        to.sort();
+        if self.stack_key().is_some() {
+            to.push("the deployment's master".into());
+        }
+        match to.split_last() {
+            None => "sealed to no one".into(),
+            Some((last, [])) => format!("sealed to {last}"),
+            Some((last, rest)) => format!("sealed to {} and {last}", rest.join(", ")),
+        }
+    }
+
+    /// The data key, opened by one of `identities`; `None` when the file is
+    /// sealed to none of them.
+    pub fn data_key(
+        &self,
+        identities: &[(age::x25519::Identity, String)],
+    ) -> Result<Option<[u8; 32]>> {
+        use std::io::Read;
+        for a in &self.meta.age {
+            let r = age::armor::ArmoredReader::new(a.enc.as_bytes());
+            let d = age::Decryptor::new(r).map_err(|e| {
+                anyhow!(
+                    "the data key sealed to {}: {e}",
+                    super::short_key(&a.recipient)
+                )
+            })?;
+            let mut r = match d.decrypt(identities.iter().map(|(i, _)| i as &dyn age::Identity)) {
+                Ok(r) => r,
+                Err(age::DecryptError::NoMatchingKeys) => continue,
+                Err(e) => bail!(
+                    "the data key sealed to {}: {e}",
+                    super::short_key(&a.recipient)
+                ),
+            };
+            let mut plain = Vec::new();
+            r.read_to_end(&mut plain)?;
+            return Ok(Some(
+                plain
+                    .try_into()
+                    .map_err(|_| anyhow!("the data key is not 32 bytes"))?,
+            ));
+        }
+        Ok(None)
+    }
+
+    /// Every value of `self`, opened with its data key `key`, the MAC checked:
+    /// by dotted path, in order. A value in the clear is an error naming it.
+    pub fn open(&self, key: &[u8; 32], shown: &str) -> Result<Vec<(Leaf, Plain)>> {
+        let mut out = Vec::new();
+        for l in &self.leaves {
+            let at = match l.line {
+                Some(n) => format!("{shown}:{n}"),
+                None => shown.to_string(),
+            };
+            let sealed = match &l.raw {
+                Raw::Sealed(s) => s,
+                Raw::Plain(_) => bail!(
+                    "{at}: {} is in the clear: a given secret is sealed (`dform secrets set` seals it)",
+                    l.name()
+                ),
+            };
+            let p = decrypt(key, sealed, &aad(&l.path), &format!("{at}: {}", l.name()))?;
+            out.push((l.clone(), p));
+        }
+        let want = decrypt(
+            key,
+            &self.meta.mac,
+            &self.meta.lastmodified,
+            &format!("{shown}: its MAC"),
+        )?;
+        if want != Plain::Str(mac_of(out.iter().map(|(_, p)| p))) {
+            bail!("{shown}: its MAC is not its values': a value was altered, added or removed");
+        }
+        Ok(out)
+    }
+
+    /// `self` (opened: `values`, under `key`; a new file has none) with the value
+    /// at `path` set to `plain` (`None`: removed), sealed `to`, by `who` at
+    /// `now`. A value not changed keeps its ciphertext, and the data key is
+    /// kept unless a recipient was removed: then a new one seals every value
+    /// again.
+    pub fn with(
+        &self,
+        (values, key): (&[(Leaf, Plain)], Option<[u8; 32]>),
+        path: &str,
+        plain: Option<Plain>,
+        to: &To,
+        (who, now): (&str, &str),
+    ) -> Result<File> {
+        let all = to.all();
+        if all.is_empty() {
+            bail!("there is no one to seal it to: no recipient, and no key of the deployment's");
+        }
+        let removed = self.recipients().iter().any(|r| !all.contains(r));
+        let fresh = key.is_none() || removed;
+        if fresh && !self.foreign().is_empty() && !self.leaves.is_empty() {
+            bail!(
+                "its data key is also sealed to {} (SOPS's), which dform cannot seal a new one to: \
+                 remove the recipient with sops, or those keys",
+                self.foreign().join(", ")
+            );
+        }
+        let key = match (key, fresh) {
+            (Some(k), false) => k,
+            _ => super::random_bytes::<32>("a data key")?,
+        };
+        let segs: Vec<String> = path.split('.').map(String::from).collect();
+        // The values after the change, by path.
+        let mut next: BTreeMap<Vec<String>, (Plain, Option<String>)> = values
+            .iter()
+            .map(|(l, p)| {
+                let kept = match (&l.raw, fresh) {
+                    (Raw::Sealed(s), false) => Some(s.clone()),
+                    _ => None,
+                };
+                (l.path.clone(), (p.clone(), kept))
+            })
+            .collect();
+        let mut dform = self.meta.dform.clone().unwrap_or_default();
+        match plain {
+            Some(p) => {
+                if let Some(clash) = next
+                    .keys()
+                    .find(|k| **k != segs && (k.starts_with(&segs) || segs.starts_with(k)))
+                {
+                    bail!(
+                        "{path} and {} would both be values, one inside the other",
+                        clash.join(".")
+                    );
+                }
+                next.insert(segs.clone(), (p, None));
+                let generation = dform.given.get(path).map_or(1, |g| g.generation + 1);
+                dform.given.insert(
+                    path.to_string(),
+                    Given {
+                        generation,
+                        at: now.to_string(),
+                        by: who.to_string(),
+                    },
+                );
+            }
+            None => {
+                next.remove(&segs);
+                dform.given.remove(path);
+            }
+        }
+        dform.stack_key = to.stack_key.clone();
+        let mut leaves = Vec::new();
+        for (p, (plain, kept)) in &next {
+            let sealed = match kept {
+                Some(s) => s.clone(),
+                None => encrypt(&key, plain, &aad(p))?,
+            };
+            leaves.push(Leaf {
+                path: p.clone(),
+                raw: Raw::Sealed(sealed),
+                line: None,
+            });
+        }
+        let lastmodified = now.to_string();
+        let mac = encrypt(
+            &key,
+            &Plain::Str(mac_of(next.values().map(|(p, _)| p))),
+            &lastmodified,
+        )?;
+        let age = all
+            .iter()
+            .map(|r| match self.meta.age.iter().find(|a| &a.recipient == r) {
+                Some(a) if !fresh => Ok(a.clone()),
+                _ => seal_key(&key, r),
+            })
+            .collect::<Result<_>>()?;
+        Ok(File {
+            leaves,
+            meta: Meta {
+                age,
+                lastmodified,
+                mac,
+                unencrypted_suffix: UNENCRYPTED.into(),
+                version: VERSION.into(),
+                dform: Some(dform),
+                other: match fresh {
+                    true => BTreeMap::new(),
+                    false => self.meta.other.clone(),
+                },
+            },
+        })
+    }
+
+    /// `self` as the file holds it: pretty JSON, its values by path (sorted, as
+    /// its MAC is over them), then the `sops` block.
+    pub fn text(&self) -> Result<String> {
+        let mut top = serde_json::Map::new();
+        for l in &self.leaves {
+            let Raw::Sealed(s) = &l.raw else {
+                bail!("{} is in the clear", l.name());
+            };
+            let (last, parents) = l.path.split_last().expect("a path has a segment");
+            let mut at = &mut top;
+            for p in parents {
+                at = at
+                    .entry(p.clone())
+                    .or_insert_with(|| serde_json::Value::Object(Default::default()))
+                    .as_object_mut()
+                    .ok_or_else(|| anyhow!("{} is inside a value", l.name()))?;
+            }
+            at.insert(last.clone(), serde_json::Value::String(s.clone()));
+        }
+        top.insert(META.into(), serde_json::to_value(&self.meta)?);
+        let mut s = serde_json::to_string_pretty(&serde_json::Value::Object(top))?;
+        s.push('\n');
+        Ok(s)
+    }
+
+    /// Why no identity of `ids` opens `self`, as a message ends.
+    pub fn why_not(
+        &self,
+        ids: &[(age::x25519::Identity, String)],
+        names: &dyn Fn(&str) -> String,
+    ) -> String {
+        let f = self;
+        let to: Vec<String> = f
+            .recipients()
+            .iter()
+            .map(|r| match f.stack_key() == Some(r.as_str()) {
+                true => "the deployment's master".to_string(),
+                false => names(r),
+            })
+            .collect();
+        format!(
+            "it is sealed to {}, and this run holds {}",
+            match to.is_empty() {
+                true => "no one".to_string(),
+                false => to.join(", "),
+            },
+            match ids.is_empty() {
+                true => "no age identity (AGE_IDENTITY, or a credential age:NAME)".to_string(),
+                false => format!(
+                    "none of them ({} tried)",
+                    ids.iter()
+                        .map(|(_, f)| f.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            }
+        )
+    }
+
+    /// The rows of the file `f` read at `shown` (`set from
+    /// secrets.decode(..)`): each value's line, dotted path and value; in a
+    /// run without the master, each value's stand-in.
+    pub fn rows(&self, shown: &str) -> Result<Vec<(Option<usize>, String, crate::value::Value)>> {
+        let f = self;
+        use crate::value::Value;
+        let at = |l: &Leaf| match l.line {
+            Some(n) => format!("{shown}:{n}"),
+            None => shown.to_string(),
+        };
+        for l in &f.leaves {
+            if let Raw::Plain(_) = l.raw {
+                bail!(
+                    "{}: {} is in the clear: a given secret is sealed; `dform secrets set` seals it",
+                    at(l),
+                    l.name()
+                );
+            }
+        }
+        let mut out = Vec::new();
+        if crate::secrets::standin::active() {
+            // No master: each value by its stand-in, as any secret it derives.
+            for l in &f.leaves {
+                let name = l.name();
+                let s = l.standin(f, shown);
+                crate::secrets::standin::register(&s, &label(shown, &name), &s);
+                out.push((l.line, name, Value::Str(s)));
+            }
+        } else {
+            let ids = identities()?;
+            let Some(key) = f.data_key(&ids)? else {
+                bail!("{shown}: {}", f.why_not(&ids, &|r| super::short_key(r)));
+            };
+            for (l, p) in f.open(&key, shown)? {
+                let name = l.name();
+                if let Plain::Str(v) = &p {
+                    let s = l.standin(f, shown);
+                    crate::secrets::standin::register(v, &label(shown, &name), &s);
+                }
+                out.push((l.line, name, (&p).into()));
+            }
+        }
+        Ok(out)
+    }
+
     /// The record of the value at `path`.
     pub fn given(&self, path: &str) -> Option<&Given> {
         self.meta.dform.as_ref()?.given.get(path)
@@ -462,26 +764,6 @@ pub fn to_master(mixing: &super::Mixing) -> bool {
     mixing.passphrase.is_some() || mixing.recipients.is_empty()
 }
 
-/// Who opens `f`, as messages say it: `sealed to alice, bob and the
-/// deployment's master`, `names` naming a recipient.
-pub fn sealed_to(f: &File, names: &dyn Fn(&str) -> String) -> String {
-    let mut to: Vec<String> = f
-        .recipients()
-        .iter()
-        .filter(|r| f.stack_key() != Some(r.as_str()))
-        .map(|r| names(r))
-        .collect();
-    to.sort();
-    if f.stack_key().is_some() {
-        to.push("the deployment's master".into());
-    }
-    match to.split_last() {
-        None => "sealed to no one".into(),
-        Some((last, [])) => format!("sealed to {last}"),
-        Some((last, rest)) => format!("sealed to {} and {last}", rest.join(", ")),
-    }
-}
-
 /// A value given for `name`, read as its input's type `ty` (the type
 /// inside `secret(..)`): an int, a float or a bool by its text, anything
 /// else a string.
@@ -544,71 +826,6 @@ pub fn ask(what: &str) -> Result<String> {
     Ok(text)
 }
 
-/// The data key, opened by one of `identities`; `None` when the file is
-/// sealed to none of them.
-pub fn data_key(
-    f: &File,
-    identities: &[(age::x25519::Identity, String)],
-) -> Result<Option<[u8; 32]>> {
-    use std::io::Read;
-    for a in &f.meta.age {
-        let r = age::armor::ArmoredReader::new(a.enc.as_bytes());
-        let d = age::Decryptor::new(r).map_err(|e| {
-            anyhow!(
-                "the data key sealed to {}: {e}",
-                super::short_key(&a.recipient)
-            )
-        })?;
-        let mut r = match d.decrypt(identities.iter().map(|(i, _)| i as &dyn age::Identity)) {
-            Ok(r) => r,
-            Err(age::DecryptError::NoMatchingKeys) => continue,
-            Err(e) => bail!(
-                "the data key sealed to {}: {e}",
-                super::short_key(&a.recipient)
-            ),
-        };
-        let mut plain = Vec::new();
-        r.read_to_end(&mut plain)?;
-        return Ok(Some(
-            plain
-                .try_into()
-                .map_err(|_| anyhow!("the data key is not 32 bytes"))?,
-        ));
-    }
-    Ok(None)
-}
-
-/// Every value of `f`, opened with its data key `key`, the MAC checked:
-/// by dotted path, in order. A value in the clear is an error naming it.
-pub fn open(f: &File, key: &[u8; 32], shown: &str) -> Result<Vec<(Leaf, Plain)>> {
-    let mut out = Vec::new();
-    for l in &f.leaves {
-        let at = match l.line {
-            Some(n) => format!("{shown}:{n}"),
-            None => shown.to_string(),
-        };
-        let sealed = match &l.raw {
-            Raw::Sealed(s) => s,
-            Raw::Plain(_) => bail!(
-                "{at}: {} is in the clear: a given secret is sealed (`dform secrets set` seals it)",
-                l.name()
-            ),
-        };
-        let p = decrypt(key, sealed, &aad(&l.path), &format!("{at}: {}", l.name()))?;
-        out.push((l.clone(), p));
-    }
-    let want = decrypt(
-        key,
-        &f.meta.mac,
-        &f.meta.lastmodified,
-        &format!("{shown}: its MAC"),
-    )?;
-    if want != Plain::Str(mac_of(out.iter().map(|(_, p)| p))) {
-        bail!("{shown}: its MAC is not its values': a value was altered, added or removed");
-    }
-    Ok(out)
-}
-
 /// The data key sealed to `recipient` (`age1..`): an armored age file.
 fn seal_key(key: &[u8; 32], recipient: &str) -> Result<AgeKey> {
     use std::io::Write;
@@ -644,144 +861,6 @@ impl To {
         all.dedup();
         all
     }
-}
-
-/// `f` (opened: `values`, under `key`; a new file has none) with the value
-/// at `path` set to `plain` (`None`: removed), sealed `to`, by `who` at
-/// `now`. A value not changed keeps its ciphertext, and the data key is
-/// kept unless a recipient was removed: then a new one seals every value
-/// again.
-pub fn with(
-    f: &File,
-    (values, key): (&[(Leaf, Plain)], Option<[u8; 32]>),
-    path: &str,
-    plain: Option<Plain>,
-    to: &To,
-    (who, now): (&str, &str),
-) -> Result<File> {
-    let all = to.all();
-    if all.is_empty() {
-        bail!("there is no one to seal it to: no recipient, and no key of the deployment's");
-    }
-    let removed = f.recipients().iter().any(|r| !all.contains(r));
-    let fresh = key.is_none() || removed;
-    if fresh && !f.foreign().is_empty() && !f.leaves.is_empty() {
-        bail!(
-            "its data key is also sealed to {} (SOPS's), which dform cannot seal a new one to: \
-             remove the recipient with sops, or those keys",
-            f.foreign().join(", ")
-        );
-    }
-    let key = match (key, fresh) {
-        (Some(k), false) => k,
-        _ => super::random_bytes::<32>("a data key")?,
-    };
-    let segs: Vec<String> = path.split('.').map(String::from).collect();
-    // The values after the change, by path.
-    let mut next: BTreeMap<Vec<String>, (Plain, Option<String>)> = values
-        .iter()
-        .map(|(l, p)| {
-            let kept = match (&l.raw, fresh) {
-                (Raw::Sealed(s), false) => Some(s.clone()),
-                _ => None,
-            };
-            (l.path.clone(), (p.clone(), kept))
-        })
-        .collect();
-    let mut dform = f.meta.dform.clone().unwrap_or_default();
-    match plain {
-        Some(p) => {
-            if let Some(clash) = next
-                .keys()
-                .find(|k| **k != segs && (k.starts_with(&segs) || segs.starts_with(k)))
-            {
-                bail!(
-                    "{path} and {} would both be values, one inside the other",
-                    clash.join(".")
-                );
-            }
-            next.insert(segs.clone(), (p, None));
-            let generation = dform.given.get(path).map_or(1, |g| g.generation + 1);
-            dform.given.insert(
-                path.to_string(),
-                Given {
-                    generation,
-                    at: now.to_string(),
-                    by: who.to_string(),
-                },
-            );
-        }
-        None => {
-            next.remove(&segs);
-            dform.given.remove(path);
-        }
-    }
-    dform.stack_key = to.stack_key.clone();
-    let mut leaves = Vec::new();
-    for (p, (plain, kept)) in &next {
-        let sealed = match kept {
-            Some(s) => s.clone(),
-            None => encrypt(&key, plain, &aad(p))?,
-        };
-        leaves.push(Leaf {
-            path: p.clone(),
-            raw: Raw::Sealed(sealed),
-            line: None,
-        });
-    }
-    let lastmodified = now.to_string();
-    let mac = encrypt(
-        &key,
-        &Plain::Str(mac_of(next.values().map(|(p, _)| p))),
-        &lastmodified,
-    )?;
-    let age = all
-        .iter()
-        .map(|r| match f.meta.age.iter().find(|a| &a.recipient == r) {
-            Some(a) if !fresh => Ok(a.clone()),
-            _ => seal_key(&key, r),
-        })
-        .collect::<Result<_>>()?;
-    Ok(File {
-        leaves,
-        meta: Meta {
-            age,
-            lastmodified,
-            mac,
-            unencrypted_suffix: UNENCRYPTED.into(),
-            version: VERSION.into(),
-            dform: Some(dform),
-            other: match fresh {
-                true => BTreeMap::new(),
-                false => f.meta.other.clone(),
-            },
-        },
-    })
-}
-
-/// `f` as the file holds it: pretty JSON, its values by path (sorted, as
-/// its MAC is over them), then the `sops` block.
-pub fn text(f: &File) -> Result<String> {
-    let mut top = serde_json::Map::new();
-    for l in &f.leaves {
-        let Raw::Sealed(s) = &l.raw else {
-            bail!("{} is in the clear", l.name());
-        };
-        let (last, parents) = l.path.split_last().expect("a path has a segment");
-        let mut at = &mut top;
-        for p in parents {
-            at = at
-                .entry(p.clone())
-                .or_insert_with(|| serde_json::Value::Object(Default::default()))
-                .as_object_mut()
-                .ok_or_else(|| anyhow!("{} is inside a value", l.name()))?;
-        }
-        at.insert(last.clone(), serde_json::Value::String(s.clone()));
-    }
-    top.insert(META.into(), serde_json::to_value(&f.meta)?);
-    let mut s = serde_json::to_string_pretty(&serde_json::Value::Object(top))?;
-    s.push('\n');
-    Ok(s)
 }
 
 /// What a run without the master reads in place of the value at `path`
@@ -850,83 +929,6 @@ pub fn identities() -> Result<Vec<(age::x25519::Identity, String)>> {
         ids.push((identity_of(&k), "the deployment's master".into()));
     }
     Ok(ids)
-}
-
-/// Why no identity of `ids` opens `f`, as a message ends.
-pub fn why_not(
-    f: &File,
-    ids: &[(age::x25519::Identity, String)],
-    names: &dyn Fn(&str) -> String,
-) -> String {
-    let to: Vec<String> = f
-        .recipients()
-        .iter()
-        .map(|r| match f.stack_key() == Some(r.as_str()) {
-            true => "the deployment's master".to_string(),
-            false => names(r),
-        })
-        .collect();
-    format!(
-        "it is sealed to {}, and this run holds {}",
-        match to.is_empty() {
-            true => "no one".to_string(),
-            false => to.join(", "),
-        },
-        match ids.is_empty() {
-            true => "no age identity (AGE_IDENTITY, or a credential age:NAME)".to_string(),
-            false => format!(
-                "none of them ({} tried)",
-                ids.iter()
-                    .map(|(_, f)| f.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ),
-        }
-    )
-}
-
-/// The rows of the file `f` read at `shown` (`set from
-/// secrets.decode(..)`): each value's line, dotted path and value; in a
-/// run without the master, each value's stand-in.
-pub fn rows(f: &File, shown: &str) -> Result<Vec<(Option<usize>, String, crate::value::Value)>> {
-    use crate::value::Value;
-    let at = |l: &Leaf| match l.line {
-        Some(n) => format!("{shown}:{n}"),
-        None => shown.to_string(),
-    };
-    for l in &f.leaves {
-        if let Raw::Plain(_) = l.raw {
-            bail!(
-                "{}: {} is in the clear: a given secret is sealed; `dform secrets set` seals it",
-                at(l),
-                l.name()
-            );
-        }
-    }
-    let mut out = Vec::new();
-    if crate::secrets::standin::active() {
-        // No master: each value by its stand-in, as any secret it derives.
-        for l in &f.leaves {
-            let name = l.name();
-            let s = l.standin(f, shown);
-            crate::secrets::standin::register(&s, &label(shown, &name), &s);
-            out.push((l.line, name, Value::Str(s)));
-        }
-    } else {
-        let ids = identities()?;
-        let Some(key) = data_key(f, &ids)? else {
-            bail!("{shown}: {}", why_not(f, &ids, &|r| super::short_key(r)));
-        };
-        for (l, p) in open(f, &key, shown)? {
-            let name = l.name();
-            if let Plain::Str(v) = &p {
-                let s = l.standin(f, shown);
-                crate::secrets::standin::register(v, &label(shown, &name), &s);
-            }
-            out.push((l.line, name, (&p).into()));
-        }
-    }
-    Ok(out)
 }
 
 /// A given secret's label, as a plan names it without its value.

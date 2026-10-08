@@ -148,14 +148,14 @@ impl<'a, 'h> Inventory<'a, 'h> {
             None => (Vec::new(), None),
             Some(f) => {
                 let ids = given::identities()?;
-                let Some(k) = given::data_key(f, &ids)? else {
+                let Some(k) = f.data_key(&ids)? else {
                     bail!(
                         "secrets {verb} {name}: {}: {}",
                         read.shown,
-                        given::why_not(f, &ids, &|r| mixing.name_of(r))
+                        f.why_not(&ids, &|r| mixing.name_of(r))
                     );
                 };
-                (given::open(f, &k, &read.shown)?, Some(k))
+                (f.open(&k, &read.shown)?, Some(k))
             }
         };
         if remove && !values.iter().any(|(l, _)| l.name() == name) {
@@ -184,8 +184,7 @@ impl<'a, 'h> Inventory<'a, 'h> {
             _ => None,
         };
         let who = crate::audit::who();
-        let next = given::with(
-            &file,
+        let next = file.with(
             (&values, key),
             name,
             plain,
@@ -197,7 +196,7 @@ impl<'a, 'h> Inventory<'a, 'h> {
                 .with_context(|| format!("make the directory of {}", read.shown))?;
         }
         let tmp = path.with_extension("json.tmp");
-        std::fs::write(&tmp, given::text(&next)?)
+        std::fs::write(&tmp, next.text()?)
             .and_then(|()| std::fs::rename(&tmp, path))
             .with_context(|| format!("write {}", read.shown))?;
         self.log_given(name, read, &next, remove, &who)
@@ -301,7 +300,7 @@ impl<'a, 'h> Inventory<'a, 'h> {
                 "sealed {name} of {deployment} into {} (generation {g}), {}; commit it: the next plan \
                  reads it",
                 read.shown,
-                crate::custody::given::sealed_to(next, &|k| mixing.name_of(k))
+                next.sealed_to(&|k| mixing.name_of(k))
             ),
             None => println!(
                 "removed {name} of {deployment} from {}; commit it: the next plan reads it",
@@ -596,7 +595,7 @@ fn given_rows(
             s.lives = Some(format!(
                 "{}, {}",
                 r.shown,
-                crate::custody::given::sealed_to(f, &|k| mixing.name_of(k))
+                f.sealed_to(&|k| mixing.name_of(k))
             ));
             if let Some(g) = f.given(&name) {
                 s.generation = g.generation;
@@ -619,7 +618,7 @@ fn print_given_file(r: &crate::custody::given::Read, mixing: &crate::custody::Mi
             r.shown,
             f.leaves.len(),
             if f.leaves.len() == 1 { "" } else { "s" },
-            crate::custody::given::sealed_to(f, &|k| mixing.name_of(k))
+            f.sealed_to(&|k| mixing.name_of(k))
         ),
     }
 }
