@@ -1304,7 +1304,9 @@ fn not_known(
             Lit::Not(a) if a.pred == "attr" && a.args.len() == 4 => {
                 let mut vars = BTreeSet::new();
                 for t in &a.args {
-                    crate::externs::vars(t, &mut vars);
+                    t.for_each_var(&mut |v| {
+                        vars.insert(v.to_string());
+                    });
                 }
                 let args: Vec<Term> = vars.into_iter().map(Term::Var).collect();
                 let head = Atom {

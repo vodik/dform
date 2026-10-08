@@ -313,14 +313,9 @@ fn flows_into<'r>(r: &'r RuleStmt, terms: &[&'r Term]) -> Vec<Source<'r>> {
 }
 
 fn term_vars<'t>(t: &'t Term, out: &mut BTreeSet<&'t str>) {
-    match t {
-        Term::Var(v) => {
-            out.insert(v);
-        }
-        Term::Func { args, .. } | Term::List(args) => args.iter().for_each(|a| term_vars(a, out)),
-        Term::Obj(m) => m.values().for_each(|a| term_vars(a, out)),
-        Term::Val(_) | Term::Wildcard | Term::ListComp { .. } => {}
-    }
+    t.for_each_var(&mut |v| {
+        out.insert(v);
+    });
 }
 
 /// The `(type, address, path)` of every ref in `v`.

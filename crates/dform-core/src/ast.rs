@@ -51,6 +51,20 @@ impl Term {
         matches!(self, Term::Var(_))
     }
 
+    /// `f` of each variable in `self`, left to right, at every
+    /// occurrence; a list comprehension's variables are its own and are
+    /// not visited.
+    pub fn for_each_var<'t>(&'t self, f: &mut impl FnMut(&'t str)) {
+        match self {
+            Term::Var(v) => f(v),
+            Term::Func { args, .. } | Term::List(args) => {
+                args.iter().for_each(|a| a.for_each_var(f))
+            }
+            Term::Obj(m) => m.values().for_each(|a| a.for_each_var(f)),
+            Term::Val(_) | Term::Wildcard | Term::ListComp { .. } => {}
+        }
+    }
+
     /// The text of a string literal term; none for any other term.
     pub fn as_str(&self) -> Option<&str> {
         match self {
@@ -498,6 +512,23 @@ pub enum Lit {
     Le(Term, Term),
 }
 
+impl Lit {
+    /// The terms a literal reads: an atom's arguments, a comparison's two
+    /// sides.
+    pub fn terms(&self) -> impl Iterator<Item = &Term> {
+        let (args, sides): (&[Term], Option<[&Term; 2]>) = match self {
+            Lit::Pos(a) | Lit::Not(a) => (&a.args, None),
+            Lit::Eq(x, y)
+            | Lit::Neq(x, y)
+            | Lit::Gt(x, y)
+            | Lit::Ge(x, y)
+            | Lit::Lt(x, y)
+            | Lit::Le(x, y) => (&[], Some([x, y])),
+        };
+        args.iter().chain(sides.into_iter().flatten())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -518,5 +549,32 @@ mod tests {
         );
         let var = Term::List(vec![s("x"), Term::Var("X".into())]);
         assert_eq!(var.ground(), None);
+    }
+
+    /// A literal's terms are its atom's arguments or its two sides; their
+    /// variables are visited at each occurrence, a comprehension's not.
+    #[test]
+    fn a_literals_variables_are_its_terms_variables() {
+        let f = Term::Func {
+            name: "f".into(),
+            args: vec![
+                var("A"),
+                Term::Obj(BTreeMap::from([("k".to_string(), var("B"))])),
+                Term::ListComp {
+                    item: Box::new(var("C")),
+                    body: vec![],
+                },
+            ],
+        };
+        let lits = [
+            Lit::Pos(atom("p", vec![var("A"), Term::Wildcard], Span::default())),
+            Lit::Eq(var("A"), f),
+        ];
+        let mut seen = Vec::new();
+        for l in &lits {
+            l.terms()
+                .for_each(|t| t.for_each_var(&mut |v| seen.push(v)));
+        }
+        assert_eq!(seen, ["A", "A", "A", "B"]);
     }
 }

@@ -1069,27 +1069,10 @@ pub(crate) fn subst(t: &Term, env: &Env) -> Term {
 }
 
 fn lit_vars(l: &Lit, out: &mut BTreeSet<String>) {
-    fn term(t: &Term, out: &mut BTreeSet<String>) {
-        match t {
-            Term::Var(x) => {
-                out.insert(x.clone());
-            }
-            Term::Func { args, .. } | Term::List(args) => args.iter().for_each(|a| term(a, out)),
-            Term::Obj(m) => m.values().for_each(|a| term(a, out)),
-            _ => {}
-        }
-    }
-    match l {
-        Lit::Pos(a) | Lit::Not(a) => a.args.iter().for_each(|t| term(t, out)),
-        Lit::Eq(x, y)
-        | Lit::Neq(x, y)
-        | Lit::Gt(x, y)
-        | Lit::Ge(x, y)
-        | Lit::Lt(x, y)
-        | Lit::Le(x, y) => {
-            term(x, out);
-            term(y, out);
-        }
+    for t in l.terms() {
+        t.for_each_var(&mut |v| {
+            out.insert(v.to_string());
+        });
     }
 }
 

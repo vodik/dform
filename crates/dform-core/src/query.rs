@@ -265,31 +265,16 @@ pub fn parse(src: &str) -> Result<Query> {
 }
 
 fn lit_vars(l: &Lit, out: &mut Vec<String>) {
-    match l {
-        Lit::Pos(a) | Lit::Not(a) => a.args.iter().for_each(|t| term_vars(t, out)),
-        Lit::Eq(a, b)
-        | Lit::Neq(a, b)
-        | Lit::Gt(a, b)
-        | Lit::Ge(a, b)
-        | Lit::Lt(a, b)
-        | Lit::Le(a, b) => {
-            term_vars(a, out);
-            term_vars(b, out);
-        }
-    }
+    l.terms().for_each(|t| term_vars(t, out));
 }
 
+/// The named variables of `t`, each once, in order.
 fn term_vars(t: &Term, out: &mut Vec<String>) {
-    match t {
-        Term::Var(v) => {
-            if !v.starts_with('_') && !out.contains(v) {
-                out.push(v.clone());
-            }
+    t.for_each_var(&mut |v| {
+        if !v.starts_with('_') && !out.iter().any(|o| o == v) {
+            out.push(v.to_string());
         }
-        Term::Func { args, .. } | Term::List(args) => args.iter().for_each(|a| term_vars(a, out)),
-        Term::Obj(m) => m.values().for_each(|a| term_vars(a, out)),
-        Term::Val(_) | Term::Wildcard | Term::ListComp { .. } => {}
-    }
+    });
 }
 
 /// The columns of the core's relations a bare predicate may name.

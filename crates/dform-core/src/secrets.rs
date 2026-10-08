@@ -1061,14 +1061,9 @@ pub fn check(
 
 /// The variables of `t`.
 fn term_vars(t: &Term, out: &mut BTreeSet<String>) {
-    match t {
-        Term::Var(v) => {
-            out.insert(v.clone());
-        }
-        Term::Func { args, .. } | Term::List(args) => args.iter().for_each(|a| term_vars(a, out)),
-        Term::Obj(m) => m.values().for_each(|a| term_vars(a, out)),
-        _ => {}
-    }
+    t.for_each_var(&mut |v| {
+        out.insert(v.to_string());
+    });
 }
 
 /// The variables a pattern `t` binds, each occurrence (`_` none).

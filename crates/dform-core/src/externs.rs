@@ -67,15 +67,10 @@ pub fn secret_label(pred: &str, inputs: &[Value], col: usize) -> String {
 }
 
 /// The variables of `t`, into `out`.
-pub(crate) fn vars(t: &Term, out: &mut BTreeSet<String>) {
-    match t {
-        Term::Var(v) => {
-            out.insert(v.clone());
-        }
-        Term::Func { args, .. } | Term::List(args) => args.iter().for_each(|a| vars(a, out)),
-        Term::Obj(m) => m.values().for_each(|a| vars(a, out)),
-        _ => {}
-    }
+fn vars(t: &Term, out: &mut BTreeSet<String>) {
+    t.for_each_var(&mut |v| {
+        out.insert(v.to_string());
+    });
 }
 
 /// The rules and constraints of a lowered program, as (head, body, span).
