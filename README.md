@@ -344,7 +344,13 @@ set { agents = 1, sizes.synapse = 100Gi } where env == "prod"
 
 A `key` selects the deployment: `env` gives one state per value, named
 by the target, `dform plan platform env=prod`. A `set` writes an input
-under a condition, over its default; `--set` wins over both.
+under a condition, over its default; `--set` wins over both. A value
+lives in code (`set .. where env == ..`), in a document others keep
+(`set from yaml.decode(..)`), or, a secret someone types, in a file
+per deployment sealed to its recipients, written by `dform secrets set`
+and committed: `set from secrets.decode(io.read("secrets/${env}.json"))`.
+`--set` is for a one-off, and audited; a `.env` is the backend's and
+the providers', never the program's.
 
 **Modules and components.** Every `.df` file is a module named by its
 path; `use config` imports it, its rules run over what you can see,
