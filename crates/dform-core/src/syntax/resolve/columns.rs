@@ -238,12 +238,12 @@ impl Lowerer<'_> {
                     let Some(t) = node(b, TYPE_EXPR) else {
                         continue;
                     };
-                    let types: BTreeSet<String> = match self.resource_type(&t) {
+                    let types: BTreeSet<String> = match self.resource_type(scope, &t) {
                         Some(typ) => BTreeSet::from([typ]),
                         None if dotted_text(&t, 0) == "ref" => t
                             .descendants()
                             .filter(|x| x.kind() == TYPE_EXPR)
-                            .filter_map(|x| self.resource_type(&x))
+                            .filter_map(|x| self.resource_type(scope, &x))
                             .collect(),
                         None => continue,
                     };

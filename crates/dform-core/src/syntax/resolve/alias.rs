@@ -167,25 +167,8 @@ impl Lowerer<'_> {
 
     /// `alias`, and where the alias is declared (its statement).
     pub(super) fn alias_def(&mut self, at: &SyntaxNode, name: &str) -> Option<(TypeExpr, Span)> {
-        if self.aliases.defs.is_empty() {
-            return None;
-        }
         let scope = self.scope_of_node(at);
-        let ids = match name.rsplit_once('.') {
-            // Another module's alias, by its path or a name in scope for
-            // it (R-65): its own, not what is visible there.
-            Some((m, alias)) => {
-                let path = self.module_path_of(scope, m);
-                let at = self.decls.modules.get(&path)?.scope;
-                self.aliases
-                    .visible
-                    .get(&at)
-                    .and_then(|v| v.get(alias))
-                    .cloned()
-                    .unwrap_or_default()
-            }
-            None => self.aliases_at(scope, name),
-        };
+        let ids = self.alias_ids(scope, name);
         // Two in scope: reported once, by `duplicate_aliases`.
         let &id = ids.iter().next()?;
         let span = self.aliases.defs[id].span;
@@ -196,6 +179,50 @@ impl Lowerer<'_> {
             .expand_alias(id)
             .unwrap_or_else(|| TypeExpr::Name(name.to_string()));
         Some((t, span))
+    }
+
+    /// The aliases `name`, written in `scope`, names: one in scope there,
+    /// or another module's by a name a `use` there binds or its path from
+    /// the root (R-65), its own, not what is visible there. Lexical: a
+    /// module another file uses is not in scope here (R-208).
+    fn alias_ids(&self, scope: usize, name: &str) -> BTreeSet<usize> {
+        if self.aliases.defs.is_empty() {
+            return BTreeSet::new();
+        }
+        match name.rsplit_once('.') {
+            Some((m, alias)) => {
+                let path = self.module_path_of(scope, m);
+                self.decls
+                    .modules
+                    .get(&path)
+                    .and_then(|d| self.aliases.visible.get(&d.scope)?.get(alias))
+                    .cloned()
+                    .unwrap_or_default()
+            }
+            None => self.aliases_at(scope, name),
+        }
+    }
+
+    /// Whether `name`, written in `scope`, is a type alias: a dotted name
+    /// is one before it is a resource type (`types.environment`).
+    pub(super) fn names_alias(&self, scope: usize, name: &str) -> bool {
+        !self.alias_ids(scope, name).is_empty()
+    }
+
+    /// An output typed by an alias by path holds a value, not a
+    /// reference: `collect` met it before the aliases were known.
+    pub(super) fn unalias_outputs(&mut self) {
+        for scope in 0..self.decls.scopes.len() {
+            let aliased: Vec<String> = self.decls.scopes[scope]
+                .outputs
+                .iter()
+                .filter(|(_, t)| t.as_deref().is_some_and(|t| self.names_alias(scope, t)))
+                .map(|(k, _)| k.clone())
+                .collect();
+            for k in aliased {
+                self.decls.scopes[scope].outputs.insert(k, None);
+            }
+        }
     }
 
     fn expand_alias(&mut self, id: usize) -> Option<TypeExpr> {

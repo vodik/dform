@@ -223,11 +223,18 @@ impl Decls {
     /// file's its own (R-65).
     pub fn of_files(root: &Path, files: &[Parsed]) -> Decls {
         let mut d = Decls::default();
+        let named = std::fs::read_to_string(root.join(crate::project::MANIFEST))
+            .ok()
+            .and_then(|t| {
+                crate::project::Manifest::parse(&root.join(crate::project::MANIFEST), &t).ok()
+            })
+            .map(|m| m.stacks)
+            .unwrap_or_default();
         for f in files {
             let Some(p) = module_path(root, &f.path) else {
                 continue;
             };
-            if f.path.parent() == Some(root.join(crate::project::STACKS_DIR).as_path()) {
+            if crate::project::is_stack(root, &f.path, &named) {
                 d.stacks.insert(p.clone());
             }
             d.roots.push((f.tree.clone(), p.clone()));

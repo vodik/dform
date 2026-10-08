@@ -576,7 +576,10 @@ impl<'a> Parser<'a> {
             let start = self.pos;
             self.stmt_start = self.toks.get(start).map_or(self.src.len(), |t| t.start);
             let header = header_stmt(self.nth(0)) && !self.at_head();
-            if !in_block && !header && !self.at_edition() {
+            // A type alias may stand among the header's lines (R-208): an
+            // input's type is often one the file declares.
+            let alias = self.nth(0) == TYPE_KW && self.raw(2) == EQ;
+            if !in_block && !header && !alias && !self.at_edition() {
                 body.get_or_insert(self.stmt_start);
             }
             let misplaced = body
@@ -2280,6 +2283,14 @@ mod tests {
                 "a key is a scalar value, `key env: environment`; a relation or an object is not a key"
             ]
         );
+    }
+
+    /// A type alias may stand among the header's lines (R-208).
+    #[test]
+    fn a_type_alias_stands_in_the_header() {
+        let src = "type environment = enum(\"lab\", \"prod\")\ninput env: environment\n\
+                   type env2 = environment\nkey k: env2\nuse config\n";
+        assert!(errors(src).is_empty(), "{:?}", errors(src));
     }
 
     /// A file is its header, then its body (R-27): a header

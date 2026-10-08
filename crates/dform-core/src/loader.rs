@@ -85,6 +85,8 @@ struct Mounts {
     packages: BTreeMap<String, PathBuf>,
     /// The providers `dform.toml` names (`[providers]`).
     providers: BTreeSet<String>,
+    /// The stacks `dform.toml` names (`[stacks.NAME]`).
+    stacks: BTreeMap<String, crate::project::StackTable>,
 }
 
 /// What a path names.
@@ -139,6 +141,7 @@ impl Mounts {
                 project: false,
                 packages: BTreeMap::new(),
                 providers: BTreeSet::new(),
+                stacks: BTreeMap::new(),
             });
         };
         let path = root.join(crate::project::MANIFEST);
@@ -147,6 +150,7 @@ impl Mounts {
         Ok(Mounts {
             packages: manifest.package_roots(),
             providers: manifest.providers.keys().cloned().collect(),
+            stacks: manifest.stacks,
             root,
             project: true,
         })
@@ -164,6 +168,12 @@ impl Mounts {
             || self.root.join("providers").join(name).is_dir()
             // Gone (R-153): the resolver says what replaces it.
             || name == "ssh"
+    }
+
+    /// Whether `file` is a stack of this project (`project::is_stack`).
+    fn is_stack(&self, file: &Path) -> bool {
+        let root = fs::canonicalize(&self.root).unwrap_or_else(|_| self.root.clone());
+        self.project && crate::project::is_stack(&root, file, &self.stacks)
     }
 
     /// The file a path names: `a.b.c` is `a/b/c.df`, or the item `c` of
@@ -185,22 +195,17 @@ impl Mounts {
         let found = fs::canonicalize(&found).unwrap_or(found);
         let base = fs::canonicalize(&base).unwrap_or(base);
         // A stack is a file under stacks/ (R-65), or one dform.toml's
-        // `[stacks.NAME]` names.
-        let under_stacks = found
-            .parent()
-            .is_some_and(|d| d == base.join(crate::project::STACKS_DIR));
-        let named = || {
-            let stem = crate::state::stack_name(&found);
-            found.parent() == Some(base.as_path())
-                && std::fs::read_to_string(base.join(crate::project::MANIFEST))
-                    .ok()
-                    .and_then(|t| {
-                        crate::project::Manifest::parse(&base.join(crate::project::MANIFEST), &t)
-                            .ok()
-                    })
-                    .is_some_and(|m| m.stacks.contains_key(&stem))
+        // `[stacks.NAME]` names (`project::is_stack`).
+        let stack = match prefix {
+            None => self.is_stack(&found),
+            Some(_) => std::fs::read_to_string(base.join(crate::project::MANIFEST))
+                .ok()
+                .and_then(|t| {
+                    crate::project::Manifest::parse(&base.join(crate::project::MANIFEST), &t).ok()
+                })
+                .is_some_and(|m| crate::project::is_stack(&base, &found, &m.stacks)),
         };
-        if project && (under_stacks || named()) {
+        if project && stack {
             let keys = fs::read_to_string(&found)
                 .ok()
                 .map(|text| crate::syntax::parser::parse(&text))
@@ -225,7 +230,7 @@ fn load_units(
     entry_files: &[PathBuf],
     read: &dyn Fn(&Path) -> std::io::Result<String>,
 ) -> Result<Loaded> {
-    use crate::syntax::SyntaxKind::{COMPONENT, RESOURCE, USE};
+    use crate::syntax::SyntaxKind::{COMPONENT, RESOURCE, TYPE_EXPR, USE};
     let mut loaded = Loaded {
         units: Vec::new(),
         entries: Vec::new(),
@@ -279,6 +284,24 @@ fn load_units(
                 _ => {}
             }
         }
+        // A type named by a module's path (R-208), `types.environment`
+        // with no `use types`, is that module's: it is loaded, so the type
+        // resolves in this file whatever else the program loads. Lexical:
+        // a name the file binds is its own.
+        for n in root.descendants().filter(|n| n.kind() == TYPE_EXPR) {
+            let Some(module) = crate::syntax::resolve::type_module(&n) else {
+                continue;
+            };
+            if local.contains(module.split('.').next().unwrap_or_default()) {
+                continue;
+            }
+            if let Target::File(module, f) = mounts.lookup(&module)
+                && f != loaded.files[i]
+                && !loaded.files.contains(&f)
+            {
+                load_unit(&f, Some(module), read, &mut loaded)?;
+            }
+        }
         for n in root.descendants() {
             let path = match n.kind() {
                 USE => crate::syntax::resolve::use_parts(&n).0,
@@ -318,9 +341,7 @@ fn load_units(
                         // An entry file that is no stack making a resource
                         // of one is a project module (R-114); in any other
                         // file the resolver says a stack is `use`d.
-                        if loaded.entries.contains(&i)
-                            && !crate::project::is_stack_file(&mounts.root, &loaded.files[i])
-                        {
+                        if loaded.entries.contains(&i) && !mounts.is_stack(&loaded.files[i]) {
                             loaded.units[i].project = true;
                         }
                         if !loaded.deployed.iter().any(|x| x.path == d.path) {

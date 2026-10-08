@@ -662,6 +662,16 @@ pub fn bound_token(n: &SyntaxNode) -> Option<SyntaxToken> {
     }
 }
 
+/// The module a type names by its path, `types` of `types.environment`
+/// or `modules.net` of `ref(modules.net.vpc)`: what the loader loads so
+/// the type resolves without a `use` (R-208). `None` for a type of one
+/// word.
+pub fn type_module(n: &SyntaxNode) -> Option<String> {
+    let path = dotted_text(n, 0);
+    let (module, _) = path.rsplit_once('.')?;
+    (!builtin_type(&path)).then(|| module.to_string())
+}
+
 /// Is an `INPUT` node a `key` (R-29)?
 pub fn is_key(n: &SyntaxNode) -> bool {
     tokens(n).next().is_some_and(|t| t.kind() == KEY_KW)
@@ -1076,6 +1086,7 @@ impl<'u> Lowerer<'u> {
             .filter(|n| !OPEN_NAMESPACES.contains(&n.as_str()))
             .collect();
         l.collect_aliases();
+        l.unalias_outputs();
         l.decls.renamed = renamed(units, deployed);
         l.find_ref_columns();
         l
@@ -1357,7 +1368,7 @@ impl<'u> Lowerer<'u> {
                     self.decls.scopes[decl].relation_outputs.insert(k);
                 }
                 OUTPUT_DECL => {
-                    let ty = node(&n, TYPE_EXPR).and_then(|t| self.resource_type(&t));
+                    let ty = node(&n, TYPE_EXPR).and_then(|t| self.resource_type(decl, &t));
                     let k = word_text(&n, 1);
                     if let Some(t) = node(&n, TYPE_EXPR) {
                         let text = t.text().to_string().replace(char::is_whitespace, "");
@@ -1515,13 +1526,15 @@ impl<'u> Lowerer<'u> {
         header_name(n)
     }
 
-    /// `T` in `output k: T` when it names a resource type.
-    fn resource_type(&self, t: &SyntaxNode) -> Option<String> {
+    /// `T` in `output k: T`, written in `scope`, when it names a resource
+    /// type: a dotted name that is no type alias (`types.environment` is
+    /// one by its module's path, R-208).
+    fn resource_type(&self, scope: usize, t: &SyntaxNode) -> Option<String> {
         if node(t, TYPE_EXPR).is_some() {
             return None;
         }
         let name = dotted_text(t, 0);
-        name.contains('.').then_some(name)
+        (name.contains('.') && !self.names_alias(scope, &name)).then_some(name)
     }
 
     // --- scopes -------------------------------------------------------------
@@ -1987,7 +2000,7 @@ impl<'u> Lowerer<'u> {
     /// (by name in scope or `T[e]`), a live object, or another `let`
     /// holding one.
     fn term_vtype(&self, scope: usize, t: &SyntaxNode, depth: usize) -> Option<VType> {
-        match declared_ref(t) {
+        match declared_ref(t).filter(|typ| !self.names_alias(scope, typ)) {
             Some(typ) => Some(VType::Ref(typ)),
             None => self.written_vtype(scope, t, depth),
         }
@@ -2513,6 +2526,59 @@ impl<'u> Lowerer<'u> {
         (!local && !resource && namespace && !c.ops.is_empty()).then_some(name)
     }
 
+    /// `key NAME` in the module `path`, a file the program loads, not the
+    /// one the tool runs (R-208): the error at its line, its help the
+    /// input to declare (the key's own type text) and the `use` to give it
+    /// in, labelled where the module is used.
+    fn key_in_module<T>(&mut self, n: &SyntaxNode, name: &str, path: &str, span: Span) -> L<T> {
+        let ty = node(n, TYPE_EXPR).map_or_else(|| "TYPE".to_string(), |t| t.text().to_string());
+        let site = self.decls.scopes.iter().find_map(|sc| {
+            sc.bound.values().flatten().find_map(|(_, is_use, stmt)| {
+                (*is_use && sc.uses.values().any(|p| p == path) && use_parts(stmt).0 == path)
+                    .then(|| stmt.clone())
+            })
+        });
+        let used = site.as_ref().map_or_else(
+            || path.rsplit('.').next().unwrap_or(path).to_string(),
+            |u| use_parts(u).1,
+        );
+        let shown = match used == path.rsplit('.').next().unwrap_or(path) {
+            true => path.to_string(),
+            false => format!("{path} as {used}"),
+        };
+        let mut d = Diagnostic::error(
+            span,
+            format!(
+                "`key {name}` in a file that is not an entrypoint: a key is a deployment's \
+                 identity; a module takes `input {name}` instead"
+            ),
+        )
+        .with_help(format!(
+            "declare `input {name}: {ty}` here, and give it in the use: `use {shown} {{ {name} }}`"
+        ));
+        if let Some(u) = &site
+            && let Some(file) = self.file_of_node(u)
+        {
+            d = d.with_label(
+                Span {
+                    file,
+                    start: u.text_range().start().into(),
+                    end: u.text_range().end().into(),
+                    origin: 0,
+                },
+                format!("{path} is used here, not deployed"),
+            );
+        }
+        self.diags.push(d);
+        Err(Skip)
+    }
+
+    /// The `diag` source id of the file a node of the program is in.
+    fn file_of_node(&self, n: &SyntaxNode) -> Option<u32> {
+        let root = n.ancestors().last()?;
+        self.units.iter().find(|u| u.root == root).map(|u| u.file)
+    }
+
     fn stmt1(&mut self, n: &SyntaxNode, scope: usize, outer: &Rc) -> L<Vec<Stmt>> {
         let span = self.span(n);
         let one = |s: Stmt| Ok(vec![s]);
@@ -2526,15 +2592,8 @@ impl<'u> Lowerer<'u> {
                     None => crate::inputs::fields_type(&fields),
                 };
                 let key = is_key(n);
-                if key && let Some(path) = self.decls.paths.get(&self.file) {
-                    return self.error(
-                        span,
-                        format!(
-                            "key {name} in {path}, which is not a stack: a key selects a \
-                             deployment, and only a stack is deployed; a component's inputs \
-                             are `input`"
-                        ),
-                    );
+                if key && let Some(path) = self.decls.paths.get(&self.file).cloned() {
+                    return self.key_in_module(n, &name, &path, span);
                 }
                 if key && n.parent().is_some_and(|p| p.kind() != SOURCE_FILE) {
                     return self.error(
@@ -3611,7 +3670,7 @@ impl<'u> Lowerer<'u> {
         // The declaration, once per scope (an output may have several rows);
         // with no type written, any.
         let ty = match node(n, TYPE_EXPR) {
-            Some(t) => match self.resource_type(&t) {
+            Some(t) => match self.resource_type(scope, &t) {
                 Some(_) => TypeExpr::Name("addr".to_string()),
                 None => self.type_expr(&t),
             },

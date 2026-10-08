@@ -32,6 +32,9 @@ struct Unit {
     start: usize,
     end: usize,
     rank: Option<u8>,
+    /// A type alias, which may stand among the header's lines (R-208):
+    /// it neither begins the body nor moves.
+    alias: bool,
 }
 
 fn units(root: &SyntaxNode) -> Vec<Unit> {
@@ -80,6 +83,7 @@ fn units(root: &SyntaxNode) -> Vec<Unit> {
             start,
             end,
             rank: rank(n),
+            alias: n.kind() == TYPE_ALIAS && !n.children().any(|c| c.kind() == SIGNATURE),
         });
     }
     out
@@ -94,6 +98,7 @@ fn reordered_span(units: &[Unit], src: &str, prefix_end: usize, end: usize) -> O
     let mut seen_body = false;
     let mut last = 0u8;
     let ordered = units.iter().all(|u| match u.rank {
+        None if u.alias => true,
         None => {
             seen_body = true;
             true

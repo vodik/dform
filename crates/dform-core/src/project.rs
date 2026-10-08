@@ -1145,8 +1145,8 @@ impl Discovered {
         }
     }
 
-    /// Fails listing the errors (a module file with a `key`, a
-    /// `[stacks.NAME]` no file is), if there are any.
+    /// Fails listing the errors (a `[stacks.NAME]` no file is), if there
+    /// are any.
     pub fn check(&self) -> Result<()> {
         if self.errors.is_empty() {
             return Ok(());
@@ -1162,48 +1162,45 @@ pub const STACKS_DIR: &str = "stacks";
 /// `apply` with no target make, resources of the stacks' types.
 pub const PROJECT_MODULE: &str = "project.df";
 
-/// Is `file` a stack of the project rooted at `root` (R-29, R-65): a
-/// `.df` directly under `stacks/`, or, with no `stacks/`, at the root but
-/// the project module.
-pub fn is_stack_file(root: &Path, file: &Path) -> bool {
+/// Is `file` a stack of the project rooted at `root`, whose dform.toml
+/// names the stacks `named` (R-29, R-65, R-208): a `.df` directly under
+/// `stacks/`, or one at the root a `[stacks.NAME]` names. The one
+/// definition discovery, the loader and the language server share; any
+/// other file is a module, an entrypoint only when the tool is pointed at
+/// it directly.
+pub fn is_stack(root: &Path, file: &Path, named: &BTreeMap<String, StackTable>) -> bool {
     let Ok(rel) = file.strip_prefix(root) else {
         return false;
     };
     let parts: Vec<_> = rel.components().collect();
-    match root.join(STACKS_DIR).is_dir() {
-        true => parts.len() == 2 && parts[0].as_os_str() == STACKS_DIR,
-        false => parts.len() == 1 && parts[0].as_os_str() != PROJECT_MODULE,
+    match parts.as_slice() {
+        [dir, _] => dir.as_os_str() == STACKS_DIR,
+        [one] => {
+            one.as_os_str() != PROJECT_MODULE && named.contains_key(&crate::state::stack_name(file))
+        }
+        _ => false,
     }
 }
 
-/// Walk `project` for its stacks: `stacks/*.df`, or, with no `stacks/`,
-/// the root's `.df` files, each named after itself. Files are named
-/// relative to the working directory when under it (as diagnostics name
-/// them).
+/// Walk `project` for its stacks ([`is_stack`]): `stacks/*.df` and the
+/// root files `[stacks.NAME]` names, each named after itself. Files are
+/// named relative to the working directory when under it (as
+/// diagnostics name them). A `key` in another file is the resolver's
+/// error, at its line, in the run that loads the file (R-208).
 pub fn discover(project: &Project) -> Discovered {
     let mut files = Vec::new();
     let exclude = project.manifest.discovery.exclude.as_slice();
     walk(&project.root, &project.root, exclude, &mut files);
     files.sort();
-    let in_dir = project.root.join(STACKS_DIR).is_dir();
     let mut out = Discovered::default();
     for f in files {
-        let stack = is_stack_file(&project.root, &f);
-        let keys = std::fs::read_to_string(&f)
-            .ok()
-            .map(|text| crate::syntax::parser::parse(&text))
-            .filter(|p| p.errors.is_empty())
-            .map(|p| crate::syntax::resolve::key_names(&p.syntax()))
-            .unwrap_or_default();
-        if !keys.is_empty() && !stack {
-            out.errors.push(format!(
-                "{}: a file that is not a stack has a `key`; a key selects a stack's \
-                 deployment, so it is declared in the stack's own file, stacks/<name>.df \
-                 (docs/layout.md)",
-                display(&f),
-            ));
-        }
-        if stack {
+        if is_stack(&project.root, &f, &project.manifest.stacks) {
+            let keys = std::fs::read_to_string(&f)
+                .ok()
+                .map(|text| crate::syntax::parser::parse(&text))
+                .filter(|p| p.errors.is_empty())
+                .map(|p| crate::syntax::resolve::key_names(&p.syntax()))
+                .unwrap_or_default();
             out.stacks.push(Found {
                 name: crate::state::stack_name(&f),
                 path: module_path(&project.root, &f)
@@ -1215,12 +1212,9 @@ pub fn discover(project: &Project) -> Discovered {
     }
     for name in project.manifest.stacks.keys() {
         if out.named(name).is_empty() {
-            let file = match in_dir {
-                true => format!("{STACKS_DIR}/{name}.df"),
-                false => format!("{name}.df"),
-            };
             out.errors.push(format!(
-                "{}: [stacks.{name}] names no stack: there is no {file}",
+                "{}: [stacks.{name}] names no stack: there is no {STACKS_DIR}/{name}.df \
+                 and no {name}.df",
                 display(&project.root.join(MANIFEST)),
             ));
         }
