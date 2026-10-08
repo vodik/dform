@@ -565,21 +565,23 @@ fn a_private_network_needs_the_projects_vrack() {
 
 const SUBNET: &str = "ovh.subnet";
 
-/// A subnet is made in its network's region, read back by listing the
-/// network's, replaced by any change, refused to another Create of its
-/// range, and deleted (its network after it).
+/// A subnet is made in its network's region with the pool the program
+/// writes, its ends the API's `start` and `end`; read back by listing the
+/// network's, the pool computed; replaced by any change, a new pool too;
+/// refused to another Create of its range, and deleted (its network
+/// after it).
 #[test]
 fn a_subnet_is_made_replaced_and_deleted() {
     let lab = Lab::new();
     let net = lab.create(NETWORK, "lab", json!({"name": "lab", "regions": ["BHS5"]}));
     let doc = json!({"network": net.remote, "region": "BHS5", "range": "10.1.0.0/24",
-                     "start": "10.1.0.10", "end": "10.1.0.100", "dhcp": true});
+                     "pool": "10.1.0.10-10.1.0.100", "dhcp": true});
     let sub = lab.create(SUBNET, "lab", doc.clone());
     let (network, _) = sub.remote.split_once('/').unwrap();
     assert_eq!(network, net.remote);
-    let want = json!({"network": net.remote, "region": "BHS5", "range": "10.1.0.0/24",
-                      "start": "10.1.0.10", "end": "10.1.0.100"});
+    let want = json!({"network": net.remote, "region": "BHS5", "range": "10.1.0.0/24"});
     assert_eq!(sub.attrs, want);
+    assert_eq!(sub.computed["pool"], "10.1.0.10-10.1.0.100");
     assert_eq!(
         (&sub.computed["dhcp"], &sub.computed["no_gateway"]),
         (&json!(true), &json!(false))
@@ -598,10 +600,18 @@ fn a_subnet_is_made_replaced_and_deleted() {
     );
     let (attrs, computed) = lab.read(SUBNET, "lab", &sub.remote).unwrap();
     assert_eq!(attrs, want);
+    assert_eq!(computed["pool"], "10.1.0.10-10.1.0.100");
     assert!(lab.plan(SUBNET, (&attrs, &computed), &doc).0.is_empty());
     let mut no_dhcp = doc.clone();
     no_dhcp["dhcp"] = json!(false);
     assert!(lab.plan(SUBNET, (&attrs, &computed), &no_dhcp).1);
+    // The API changes no pool in place: a new one replaces the subnet.
+    let mut wider = doc.clone();
+    wider["pool"] = json!("10.1.0.10-10.1.0.200");
+    assert_eq!(
+        lab.plan(SUBNET, (&attrs, &computed), &wider),
+        (vec!["pool".to_string()], true)
+    );
 
     let again = lab
         .apply(pb::Op::Create, SUBNET, "other", "", doc)
@@ -615,8 +625,132 @@ fn a_subnet_is_made_replaced_and_deleted() {
     );
     lab.delete(SUBNET, "lab", &sub.remote);
     assert!(lab.read(SUBNET, "lab", &sub.remote).is_none());
+    // The replacement: made again with the new pool.
+    let sub = lab.create(SUBNET, "lab", wider);
+    assert_eq!(sub.computed["pool"], "10.1.0.10-10.1.0.200");
+    lab.delete(SUBNET, "lab", &sub.remote);
     lab.delete(NETWORK, "lab", &net.remote);
     assert!(lab.read(SUBNET, "lab", &sub.remote).is_none());
+}
+
+/// A subnet the program gives no pool: Plan says the one it is given,
+/// the range's hosts after the gateway (from the first host without
+/// one) to the last before broadcast, as the OVH console fills it in;
+/// Create sends its ends, and the program plans clean against what Read
+/// answers.
+#[test]
+fn a_subnets_pool_defaults_to_its_ranges_hosts() {
+    let lab = Lab::new();
+    let net = lab.create(NETWORK, "lab", json!({"name": "lab", "regions": ["BHS5"]}));
+    let doc = json!({"network": net.remote, "region": "BHS5", "range": "10.42.0.0/24",
+                     "dhcp": true});
+    let (changes, _) = lab.ovh.plan(SUBNET, "lab", "", None, Some(&doc)).unwrap();
+    let pool = changes.iter().find(|c| c.path == "pool").unwrap();
+    assert_eq!(
+        (&pool.before, &pool.after),
+        (&None, &Some(json!("10.42.0.2-10.42.0.254")))
+    );
+    let sub = lab.create(SUBNET, "lab", doc.clone());
+    let posted = |n: usize| {
+        lab.server
+            .seen()
+            .into_iter()
+            .filter(|c| c.method == "POST" && c.path.ends_with("/subnet"))
+            .nth(n)
+            .unwrap()
+            .body
+    };
+    assert_eq!(
+        (&posted(0)["start"], &posted(0)["end"]),
+        (&json!("10.42.0.2"), &json!("10.42.0.254"))
+    );
+    assert_eq!(sub.computed["pool"], "10.42.0.2-10.42.0.254");
+    let (attrs, computed) = lab.read(SUBNET, "lab", &sub.remote).unwrap();
+    // An existing subnet's pool is not planned again.
+    assert!(lab.plan(SUBNET, (&attrs, &computed), &doc).0.is_empty());
+    lab.delete(SUBNET, "lab", &sub.remote);
+
+    // Without a gateway the pool starts at the first host.
+    let mut bare = doc.clone();
+    bare["no_gateway"] = json!(true);
+    let (changes, _) = lab.ovh.plan(SUBNET, "lab", "", None, Some(&bare)).unwrap();
+    assert!(
+        changes
+            .iter()
+            .any(|c| c.path == "pool" && c.after == Some(json!("10.42.0.1-10.42.0.254"))),
+        "{changes:?}"
+    );
+    lab.create(SUBNET, "lab", bare);
+    assert_eq!(
+        (&posted(1)["start"], &posted(1)["end"]),
+        (&json!("10.42.0.1"), &json!("10.42.0.254"))
+    );
+}
+
+/// The API's `start` and `end` are not attributes: Plan refuses each,
+/// naming `pool` and the pool they spell. A pool outside the range's
+/// hosts, or holding the gateway, is refused; so is a range with no host
+/// for one.
+#[test]
+fn a_subnets_pool_is_one_attribute_inside_its_range() {
+    let lab = Lab::new();
+    let doc = |extra: Json| {
+        let mut d = json!({"network": "pn-1", "region": "BHS5", "range": "10.42.0.0/24"});
+        for (k, v) in extra.as_object().unwrap() {
+            d[k] = v.clone();
+        }
+        d
+    };
+    let start = lab.plan_err(
+        SUBNET,
+        None,
+        &doc(json!({"start": "10.42.0.10", "end": "10.42.0.200"})),
+    );
+    assert_eq!(
+        start,
+        "plan ovh.subnet[\"x\"]: start is not an attribute of ovh.subnet: the pool's first and \
+         last address are one, `pool = \"10.42.0.10-10.42.0.200\"`"
+    );
+    let end = lab.plan_err(SUBNET, None, &doc(json!({"end": "10.42.0.200"})));
+    assert!(
+        end.contains("end is not an attribute of ovh.subnet")
+            && end.contains("`pool = \"FIRST-LAST\"`"),
+        "{end}"
+    );
+    let outside = lab.plan_err(SUBNET, None, &doc(json!({"pool": "10.42.0.10-10.42.1.20"})));
+    assert!(
+        outside.ends_with(
+            "pool 10.42.0.10-10.42.1.20 is not in range 10.42.0.0/24: its hosts are \
+             10.42.0.2-10.42.0.254"
+        ),
+        "{outside}"
+    );
+    let gateway = lab.plan_err(SUBNET, None, &doc(json!({"pool": "10.42.0.1-10.42.0.9"})));
+    assert!(
+        gateway.ends_with(
+            "pool 10.42.0.1-10.42.0.9 holds the subnet's gateway, 10.42.0.1: its hosts are \
+             10.42.0.2-10.42.0.254 (or no_gateway = true)"
+        ),
+        "{gateway}"
+    );
+    assert!(
+        lab.ovh
+            .plan(
+                SUBNET,
+                "x",
+                "",
+                None,
+                Some(&doc(
+                    json!({"pool": "10.42.0.1-10.42.0.9", "no_gateway": true})
+                ))
+            )
+            .is_ok()
+    );
+    let tiny = lab.plan_err(SUBNET, None, &doc(json!({"range": "10.42.0.0/31"})));
+    assert!(
+        tiny.ends_with("range 10.42.0.0/31 has no host for a pool"),
+        "{tiny}"
+    );
 }
 
 /// An instance on a private network: made with an interface on the
@@ -633,7 +767,7 @@ fn an_instance_joins_a_private_network() {
         SUBNET,
         "lab",
         json!({"network": net.remote, "region": "BHS5", "range": "10.1.0.0/24",
-               "start": "10.1.0.10", "end": "10.1.0.100"}),
+               "pool": "10.1.0.10-10.1.0.100"}),
     );
     let doc = |region: &str| {
         json!({"name": "vm", "region": region, "flavor": "d2-2", "image": "Debian 13",
@@ -734,8 +868,6 @@ resource ovh.subnet lab {{
   network = lab
   region = "BHS5"
   range = "10.42.0.0/24"
-  start = "10.42.0.10"
-  end = "10.42.0.200"
   dhcp = true
 }}
 
@@ -793,6 +925,8 @@ fn a_program_with_every_type_plans_applies_and_plans_clean() {
         "+ ovh.storage_container backups",
         "instance = server",
         "owner = backup",
+        // The subnet's pool, which the program leaves out.
+        "pool = \"10.42.0.2-10.42.0.254\"",
     ] {
         assert!(plan.stdout.contains(line), "{line}\n{}", plan.stdout);
     }
@@ -816,6 +950,11 @@ fn a_program_with_every_type_plans_applies_and_plans_clean() {
     }
     assert_eq!(server.networks()[0]["id"], "pn-1000123_42");
     assert_eq!(server.subnets()[0]["cidr"], "10.42.0.0/24");
+    let pool = &server.subnets()[0]["ipPools"][0];
+    assert_eq!(
+        (&pool["start"], &pool["end"]),
+        (&json!("10.42.0.2"), &json!("10.42.0.254"))
+    );
     let instance = &server.instances()[0];
     let private = instance["ipAddresses"]
         .as_array()
@@ -875,4 +1014,49 @@ fn a_program_with_every_type_plans_applies_and_plans_clean() {
     assert!(server.instances().is_empty() && server.volumes().is_empty());
     assert!(server.networks().is_empty() && server.subnets().is_empty());
     assert!(server.users().is_empty() && server.containers().is_empty());
+}
+
+/// A program that writes the API's `start` and `end` on a subnet is
+/// refused at plan, naming `pool`; one that writes `pool` plans it.
+#[test]
+fn a_program_writes_a_subnets_pool() {
+    let server = Server::start();
+    let program = |pool: &str| {
+        format!(
+            "use ovh {{ endpoint = \"{}\", project = \"{}\" }}\n\n\
+             resource ovh.network lab {{ name = \"lab\", regions = [\"BHS5\"] }}\n\n\
+             resource ovh.subnet lab {{\n  network = lab\n  region = \"BHS5\"\n  \
+             range = \"10.42.0.0/24\"\n{pool}}}\n",
+            server.endpoint,
+            fake::DESCRIPTION
+        )
+    };
+    let s = project(
+        "ovh-subnet-pool",
+        &program("  start = \"10.42.0.10\"\n  end = \"10.42.0.200\"\n"),
+    );
+    let refused = dform(&s, &server, &["plan", "main.df"]).failure();
+    assert!(
+        refused.stderr.contains(
+            "start is not an attribute of ovh.subnet: the pool's first and last address are \
+             one, `pool = \"10.42.0.10-10.42.0.200\"`"
+        ),
+        "{}",
+        refused.stderr
+    );
+    s.write("main.df", &program("  pool = \"10.42.0.10-10.42.0.200\"\n"));
+    let plan = dform(&s, &server, &["plan", "main.df"]).success();
+    assert!(
+        plan.stdout.contains("pool = \"10.42.0.10-10.42.0.200\""),
+        "{}",
+        plan.stdout
+    );
+    dform(&s, &server, &["apply", "main.df"]).success();
+    let pool = &server.subnets()[0]["ipPools"][0];
+    assert_eq!(
+        (&pool["start"], &pool["end"]),
+        (&json!("10.42.0.10"), &json!("10.42.0.200"))
+    );
+    let again = dform(&s, &server, &["plan", "main.df"]).success();
+    assert!(again.stdout.contains("is up to date"), "{}", again.stdout);
 }

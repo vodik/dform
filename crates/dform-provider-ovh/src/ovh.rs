@@ -663,6 +663,10 @@ impl Ovh {
         if typ == INSTANCE {
             self.check_instance(&at, d)?;
         }
+        let pool = match typ {
+            SUBNET => network::check_subnet(&at, d)?,
+            _ => None,
+        };
         // A bootable volume's image is the region's, as an instance's is.
         if typ == VOLUME
             && let (Some(region), Some(image)) = (s(d, "region"), s(d, "image"))
@@ -674,7 +678,19 @@ impl Ovh {
         // An instance's user data is write-only (R-106): the API never
         // answers it, and dform compares it with the digest state keeps,
         // giving the program's value in `prior` when it is the same.
-        let changes = diff(&self.schema, typ, prior, Some(d));
+        let mut changes = diff(&self.schema, typ, prior, Some(d));
+        // A subnet made without a pool is given the range's hosts: the
+        // plan says which.
+        if prior.is_none()
+            && let Some(pool) = pool
+        {
+            changes.push(provider::Change {
+                path: "pool".into(),
+                before: None,
+                after: Some(Json::String(pool)),
+                sensitive: false,
+            });
+        }
         let replaces = prior.is_some()
             && changes
                 .iter()

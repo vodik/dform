@@ -229,11 +229,19 @@ impl Ovh {
         let (a, p) = self.project_for(at)?;
         let network = need(at, config, "network")?;
         let flag = |k: &str| config.get(k).and_then(Json::as_bool).unwrap_or(false);
+        let range = need(at, config, "range")?;
+        let pool = match s(config, "pool") {
+            Some(p) => p.to_string(),
+            None => map::default_pool(range, flag("no_gateway"))
+                .ok_or_else(|| refused(at, format!("range {range} has no host for a pool")))?,
+        };
+        let (start, end) = map::pool_ends(&pool)
+            .ok_or_else(|| refused(at, format!("pool {pool} is not a range of addresses")))?;
         let body = json!({
             "region": need(at, config, "region")?,
-            "network": need(at, config, "range")?,
-            "start": need(at, config, "start")?,
-            "end": need(at, config, "end")?,
+            "network": range,
+            "start": start,
+            "end": end,
             "dhcp": flag("dhcp"),
             "noGateway": flag("no_gateway"),
         });
@@ -245,6 +253,51 @@ impl Ovh {
         let id = map::subnet_remote(network, s(&o, "id").unwrap_or_default());
         Ok((id, attrs, computed))
     }
+}
+
+/// A subnet's document as Plan sees it: its pool written as `pool`, not
+/// as the API's `start` and `end`, inside its range's hosts and without
+/// its gateway. The pool it is given when the program sets none
+/// (`map::default_pool`).
+pub(super) fn check_subnet(at: &str, d: &Json) -> Result<Option<String>> {
+    if let Some(k) = ["start", "end"].into_iter().find(|k| d.get(*k).is_some()) {
+        let pool = match (s(d, "start"), s(d, "end")) {
+            (Some(a), Some(b)) => map::pool_text(a, b),
+            _ => map::pool_text("FIRST", "LAST"),
+        };
+        bail!(
+            "{at}: {k} is not an attribute of ovh.subnet: the pool's first and last address are one, `pool = \"{pool}\"`"
+        );
+    }
+    let Some(range) = s(d, "range") else {
+        return Ok(None);
+    };
+    let no_gateway = d.get("no_gateway").and_then(Json::as_bool).unwrap_or(false);
+    let Some((first, last)) = map::pool_hosts(range, no_gateway) else {
+        bail!("{at}: range {range} has no host for a pool");
+    };
+    // A pool not known yet (a null) is checked at Apply.
+    let pool = match d.get("pool") {
+        None => return Ok(map::default_pool(range, no_gateway)),
+        Some(p) => p.as_str().unwrap_or_default(),
+    };
+    let Some((a, b)) = dform_core::value::parse_iprange(pool) else {
+        return Ok(None);
+    };
+    let ip = dform_core::value::u32_to_ipv4;
+    let hosts = map::pool_text(&ip(first), &ip(last));
+    // The gateway is the range's first host, the one before `first`.
+    let gateway = first - 1;
+    if !no_gateway && a <= gateway && gateway <= b {
+        bail!(
+            "{at}: pool {pool} holds the subnet's gateway, {}: its hosts are {hosts} (or no_gateway = true)",
+            ip(gateway)
+        );
+    }
+    if a < first || b > last {
+        bail!("{at}: pool {pool} is not in range {range}: its hosts are {hosts}");
+    }
+    Ok(None)
 }
 
 /// An instance's private networks (`networks = [lab]` on `ovh.instance`):

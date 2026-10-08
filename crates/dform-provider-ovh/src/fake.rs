@@ -863,6 +863,13 @@ impl World {
                         json!({"message": format!("Network {id} is not active in region {region}")}),
                     );
                 }
+                // The pool's ends are required, as the API has them.
+                if let Some(k) = ["start", "end"].into_iter().find(|k| !body[*k].is_string()) {
+                    return (
+                        400,
+                        json!({"message": format!("[{k}] Property is mandatory")}),
+                    );
+                }
                 let cidr = body["network"].as_str().unwrap_or_default();
                 let no_gw = body
                     .get("noGateway")

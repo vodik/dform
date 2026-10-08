@@ -280,11 +280,50 @@ pub fn subnet_parts(remote: &str) -> (&str, &str) {
     remote.split_once('/').unwrap_or((remote, ""))
 }
 
+/// A pool as an `iprange` is written (`10.0.0.2-10.0.0.254`): its first
+/// and last address.
+pub fn pool_text(start: &str, end: &str) -> String {
+    format!("{start}-{end}")
+}
+
+/// The ends of a pool the program writes (an `iprange`, `A-B`), first
+/// and last.
+pub fn pool_ends(pool: &str) -> Option<(String, String)> {
+    let (a, b) = dform_core::value::parse_iprange(pool)?;
+    Some((
+        dform_core::value::u32_to_ipv4(a),
+        dform_core::value::u32_to_ipv4(b),
+    ))
+}
+
+/// The hosts of `range` a pool may hold, first and last: neither its
+/// network's address nor its broadcast, nor its gateway (the first
+/// host) when it has one. None when that leaves none (a `/31`, a `/32`,
+/// a `/30` with a gateway has one).
+pub fn pool_hosts(range: &str, no_gateway: bool) -> Option<(u32, u32)> {
+    let (net, prefix) = dform_core::value::parse_ipnet(range)?;
+    let size = 1u64 << (32 - u32::from(prefix));
+    let first = u64::from(net) + if no_gateway { 1 } else { 2 };
+    let last = u64::from(net) + size - 2;
+    (size >= 4 && first <= last).then(|| (first as u32, last as u32))
+}
+
+/// The pool a subnet of `range` is given when the program sets none, as
+/// the OVH console fills it in: every host of the range after its
+/// gateway, to the last before broadcast.
+pub fn default_pool(range: &str, no_gateway: bool) -> Option<String> {
+    let (a, b) = pool_hosts(range, no_gateway)?;
+    Some(pool_text(
+        &dform_core::value::u32_to_ipv4(a),
+        &dform_core::value::u32_to_ipv4(b),
+    ))
+}
+
 /// A subnet of the private network `network` (`cloud.network.Subnet`):
-/// its region, range and pool as the API's first pool has them; no
-/// gateway when the API gives none. Whether it has DHCP and a gateway are
-/// the program's when it sets them and the API's otherwise: computed
-/// values.
+/// its region and range as the API's first pool has them; no gateway when
+/// the API gives none. Its pool (the API's `start` and `end`), whether it
+/// has DHCP and a gateway are the program's when it sets them and the
+/// API's otherwise: computed values.
 pub fn subnet(network: &str, o: &Json) -> (Json, Json) {
     let pool = o
         .get("ipPools")
@@ -301,11 +340,13 @@ pub fn subnet(network: &str, o: &Json) -> (Json, Json) {
         "network": network,
         "region": str_of(&pool, "region").unwrap_or_default(),
         "range": str_of(o, "cidr").or_else(|| str_of(&pool, "network")).unwrap_or_default(),
-        "start": str_of(&pool, "start").unwrap_or_default(),
-        "end": str_of(&pool, "end").unwrap_or_default(),
     });
     let computed = json!({
         "id": subnet_remote(network, str_of(o, "id").unwrap_or_default()),
+        "pool": pool_text(
+            str_of(&pool, "start").unwrap_or_default(),
+            str_of(&pool, "end").unwrap_or_default()
+        ),
         "no_gateway": gateway.is_none(),
         "gateway_ip": gateway.unwrap_or(Json::Null),
         "dhcp": dhcp,
@@ -565,9 +606,9 @@ mod tests {
         let (attrs, computed) = subnet("pn-1000123_42", &fixture("subnet.json"));
         assert_eq!(
             attrs,
-            json!({"network": "pn-1000123_42", "region": "BHS5", "range": "10.0.0.0/24",
-                   "start": "10.0.0.10", "end": "10.0.0.200"})
+            json!({"network": "pn-1000123_42", "region": "BHS5", "range": "10.0.0.0/24"})
         );
+        assert_eq!(computed["pool"], "10.0.0.10-10.0.0.200");
         assert_eq!(
             (&computed["dhcp"], &computed["no_gateway"]),
             (&json!(true), &json!(false))
@@ -580,6 +621,36 @@ mod tests {
         assert_eq!(
             subnet_parts(computed["id"].as_str().unwrap()),
             ("pn-1000123_42", "7a6b5c4d-3e2f-4a1b-9c8d-7e6f5a4b3c2d")
+        );
+    }
+
+    /// A subnet's pool when the program sets none: the range's hosts
+    /// after its gateway (the first host), or from the first host without
+    /// one, to the last before broadcast; none where that leaves none.
+    #[test]
+    fn a_subnets_default_pool() {
+        assert_eq!(
+            default_pool("10.42.0.0/24", false).as_deref(),
+            Some("10.42.0.2-10.42.0.254")
+        );
+        assert_eq!(
+            default_pool("10.42.0.0/24", true).as_deref(),
+            Some("10.42.0.1-10.42.0.254")
+        );
+        assert_eq!(
+            default_pool("10.0.0.0/16", false).as_deref(),
+            Some("10.0.0.2-10.0.255.254")
+        );
+        assert_eq!(
+            default_pool("10.0.0.0/30", false).as_deref(),
+            Some("10.0.0.2-10.0.0.2")
+        );
+        assert_eq!(default_pool("10.0.0.0/31", true), None);
+        assert_eq!(default_pool("10.0.0.0/32", true), None);
+        assert_eq!(default_pool("not a range", false), None);
+        assert_eq!(
+            pool_ends("10.0.0.9-10.0.0.3"),
+            Some(("10.0.0.3".into(), "10.0.0.9".into()))
         );
     }
 

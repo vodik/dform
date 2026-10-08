@@ -129,14 +129,15 @@ type_attr("ovh.network", "regions_status", "map(string)", ["computed"])
 type_replace("ovh.network", "destroy_first")
 
 # A subnet's key is its network, region and range; nothing of it changes
-# in place.
+# in place. Its pool is the DHCP pool, its first and last address (the
+# API's `start` and `end`); when not set, Plan gives it the range's usable
+# hosts, as the OVH console does.
 type_provider("ovh.subnet", "ovh")
 type_attr("ovh.subnet", "id", "string", ["computed", "id"])
 type_attr("ovh.subnet", "network", "ref(ovh.network)", ["required", "force_new"])
 type_attr("ovh.subnet", "region", "string", ["required", "force_new"])
 type_attr("ovh.subnet", "range", "inet", ["required", "force_new"])
-type_attr("ovh.subnet", "start", "ip", ["required", "force_new"])
-type_attr("ovh.subnet", "end", "ip", ["required", "force_new"])
+type_attr("ovh.subnet", "pool", "iprange", ["optional_computed", "force_new"])
 type_attr("ovh.subnet", "dhcp", "bool", ["optional_computed", "force_new"])
 type_attr("ovh.subnet", "no_gateway", "bool", ["optional_computed", "force_new"])
 type_attr("ovh.subnet", "gateway_ip", "ip", ["computed", "nullable"])
@@ -328,8 +329,11 @@ type_doc(
 type_doc("ovh.subnet", "network", "The private network it is of (`network = lab`).")
 type_doc("ovh.subnet", "region", "The region it is in, one of its network's.")
 type_doc("ovh.subnet", "range", "The network's range (`10.0.0.0/24`), what the API calls `network`.")
-type_doc("ovh.subnet", "start", "The first address of the pool instances are given.")
-type_doc("ovh.subnet", "end", "The last address of the pool.")
+type_doc(
+  "ovh.subnet",
+  "pool",
+  "The addresses instances are given, both ends in it (`10.42.0.2-10.42.0.254`); the range's hosts after its gateway when not set. Changing it replaces the subnet.",
+)
 type_doc("ovh.subnet", "dhcp", "Whether instances get their address by DHCP; not when not set.")
 type_doc(
   "ovh.subnet",
