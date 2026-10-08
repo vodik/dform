@@ -1655,7 +1655,12 @@ impl Handler for Ovh {
                 Reply::Handshake(pb::HandshakeResponse {
                     protocol_version: VERSION,
                     name: PROVIDER.into(),
-                    capabilities: ["resource", "managed", "keep"].map(String::from).to_vec(),
+                    // `offline`: its Plan with no credentials checks the
+                    // schema and the networks, all but what the account
+                    // offers (a flavor, an image, a vRack) (R-188).
+                    capabilities: ["resource", "managed", "keep", "offline"]
+                        .map(String::from)
+                        .to_vec(),
                     version: backend::BUILD.into(),
                     // What names the account; the keys are the OVH SDK's
                     // configuration's, never a setting (R-44).

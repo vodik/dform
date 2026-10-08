@@ -917,15 +917,7 @@ impl Evaluator {
         {
             bail!(self.no_crd(&r.addr));
         }
-        let asked = |res: &EvalResult, docs: &[ir::Resource]| -> Vec<ir::Resource> {
-            let conflicted = report::conflicted(res);
-            docs.iter()
-                .filter(|r| !conflicted.contains(&r.addr))
-                .filter(|r| !matches!(backend.waits(&r.addr.typ), Some(ProviderWait::Schema(_))))
-                .filter(|r| !backend.unserved(&r.addr.typ))
-                .cloned()
-                .collect()
-        };
+        let asked = |res: &EvalResult, docs: &[ir::Resource]| asked(backend, res, docs);
         // The run's secrets that are not derived: a leaf holding one has no
         // derivation digest (`secrets::standin`, R-164).
         crate::secrets::standin::set_sources(
@@ -1481,6 +1473,7 @@ impl Located {
                     .filter(|r| held.values().any(|h| h.deployment == r.name))
                     .filter_map(|r| Some((r.name.clone(), r.world.clone()?)))
                     .collect(),
+                no_credentials: false,
                 held,
             },
         )
@@ -2157,6 +2150,20 @@ fn disagreements(facts: &BTreeSet<Atom>) -> BTreeMap<String, String> {
         );
     }
     out
+}
+
+/// The resources of `docs` (of evaluation `res`) a provider's Plan is
+/// asked of: not one with a conflicting attribute, nor one whose
+/// provider has no schema of its type yet (R-110) or whose cluster does
+/// not serve its kind (R-126).
+pub fn asked(backend: &Providers, res: &EvalResult, docs: &[ir::Resource]) -> Vec<ir::Resource> {
+    let conflicted = report::conflicted(res);
+    docs.iter()
+        .filter(|r| !conflicted.contains(&r.addr))
+        .filter(|r| !matches!(backend.waits(&r.addr.typ), Some(ProviderWait::Schema(_))))
+        .filter(|r| !backend.unserved(&r.addr.typ))
+        .cloned()
+        .collect()
 }
 
 /// A provider's refusal of a change (`report::Failure`), its third line

@@ -4000,10 +4000,21 @@ the deployments it holds in, and no axis (R-38). More than 4096 combinations is 
 It asks no registry and no provider for data: `oci.resolve` answers the
 digest this machine last resolved, else a stand-in derived from the
 reference (so `oci.pinned` holds), a location a provider's scheme names
-is not read, so what reads it is undetermined, and a provider the
-program's `use` block configures is left unconfigured; each is said once,
-in a `note:` line above the matrix. dform's own transports (`https://`,
-`ssh://`, git) read as plan's do.
+is not read, so what reads it is undetermined, and no provider is
+configured: one the program's `use` block configures is left so, and one
+that would read its credentials from the environment or its files is not
+given them; each is said once, in a `note:` line above the matrix.
+dform's own transports (`https://`, `ssh://`, git) read as plan's do.
+
+Each combination's resources then go to their providers' Plan, as
+`plan` sends them, with no credentials (R-188): a provider whose Plan
+answers so as it would with them (the `offline` capability: the k8s
+provider against its OpenAPI snapshot, the OVH and SDK providers' own
+checks, the mock; a provider built with a fake of its API answers from
+it) is asked, and its refusal fails the combination at the resource's
+site in the plan's words. A provider that does not declare `offline` is
+not asked, and said once: `note: ovh's Plan not run: no offline schema
+and no fake`. There is no flag: a test never holds credentials.
 
 ```dform
 deny "prod keeps 14 days of db backups" where env == "prod", not db.postgres["database.main.db"].backup_days == 14
@@ -4012,9 +4023,10 @@ deny "dev has no database" where env == "dev", _ in db.postgres
 
 It prints a result set, a row per combination: its inputs, then `ok` or
 `denied` (or `error`, for one that does not compile, that reads what
-nothing derives (R-194), or whose plan would refuse a resource for an
-attribute its schema requires and the program leaves unset (R-184),
-each said as the plan says it). Each that failed
+nothing derives (R-194), whose plan would refuse a resource for an
+attribute its schema requires and the program leaves unset (R-184), or
+whose provider's Plan refuses a resource (R-188), each said as the plan
+says it). Each that failed
 follows as the command that plans it with its denies (or its error),
 each with its doc comment (`#|` above the deny: the test's doc) beside
 it; it exits non-zero if any failed:

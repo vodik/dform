@@ -167,6 +167,13 @@ fn main() -> std::process::ExitCode {
   proved unchanged, R-164) come filled from what Read answers, or absent
   where it answers nothing. Without it a `keep` is refused, and dform
   sends none: such an update needs the master.
+- A typed provider has the `offline` capability: its Plan with no
+  credentials checks the desired document against its schema, as with
+  them but for `Lifecycle::check`, so `dform test` asks it (R-188). A
+  provider of its own declares `offline` in its handshake when its Plan
+  answers with no credentials as it would with them (from a schema it
+  holds, or a fake of its API); one that does not is not asked under
+  test, which says so.
 - `Typed::example::<R>(create, update, required)` gives `dform provider
   check` documents of the provider's own types to run its resource
   checks with.

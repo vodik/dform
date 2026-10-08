@@ -495,10 +495,15 @@ impl<P: Provider> Typed<P> {
             Call::Handshake(_) => Reply::Handshake(pb::HandshakeResponse {
                 protocol_version: VERSION,
                 name: P::NAME.to_string(),
+                // `offline`: its Plan with no credentials is its schema's,
+                // as with them but for `Lifecycle::check` (R-188).
                 capabilities: match P::KEEP {
-                    true => vec!["resource".to_string(), "keep".to_string()],
-                    false => vec!["resource".to_string()],
-                },
+                    true => vec!["resource", "keep", "offline"],
+                    false => vec!["resource", "offline"],
+                }
+                .into_iter()
+                .map(String::from)
+                .collect(),
                 version: P::VERSION.to_string(),
                 settings: Vec::new(),
             }),

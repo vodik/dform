@@ -880,11 +880,14 @@ impl pb::provider_server::Provider for Service {
         Ok(Response::new(pb::HandshakeResponse {
             protocol_version: dform_grpc::spawn::VERSION,
             name: openapi::PROVIDER.into(),
+            // `offline`: deferred, it plans against its OpenAPI snapshot
+            // (R-188).
             capabilities: vec![
                 "resource".into(),
                 "managed".into(),
                 "inventory".into(),
                 "keep".into(),
+                "offline".into(),
             ],
             version: dform_core::plugin::backend::BUILD.into(),
             settings: crate::cluster::SETTINGS

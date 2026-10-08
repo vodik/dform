@@ -1395,14 +1395,28 @@ impl Handler for Mock {
                     protocol_version: VERSION,
                     name: backend::FAKECLOUD.into(),
                     // `keep` but in a test of a provider that cannot
-                    // (`DFORM_TEST_FAKE_NO_KEEP`).
-                    capabilities: ["resource", "fact", "inventory", "managed", "keep"]
-                        .into_iter()
-                        .filter(|c| {
-                            *c != "keep" || std::env::var_os("DFORM_TEST_FAKE_NO_KEEP").is_none()
-                        })
-                        .map(String::from)
-                        .collect(),
+                    // (`DFORM_TEST_FAKE_NO_KEEP`); `offline`, a fake
+                    // itself, but in a test of a provider whose Plan needs
+                    // its credentials (`DFORM_TEST_FAKE_NO_OFFLINE`).
+                    capabilities: [
+                        "resource",
+                        "fact",
+                        "inventory",
+                        "managed",
+                        "keep",
+                        "offline",
+                    ]
+                    .into_iter()
+                    .filter(|c| {
+                        let off = |v: &str| std::env::var_os(v).is_some();
+                        match *c {
+                            "keep" => !off("DFORM_TEST_FAKE_NO_KEEP"),
+                            "offline" => !off("DFORM_TEST_FAKE_NO_OFFLINE"),
+                            _ => true,
+                        }
+                    })
+                    .map(String::from)
+                    .collect(),
                     version: backend::BUILD.into(),
                     // Each schema it plays declares its own
                     // (`provider_setting`).

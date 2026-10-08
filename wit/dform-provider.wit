@@ -181,7 +181,9 @@ interface types {
     // provider.created(Type, Name, Key, Remote) with Type, Name and Key
     // bound: the object an apply create or replace of address Name with
     // idempotency key Key made, if it made one), "keep" (an Apply update
-    // leaves each `keep` path as the object has it).
+    // leaves each `keep` path as the object has it), "offline" (Plan, with
+    // no credentials, answers as it would with them: from a schema it
+    // holds, or a fake of its API; `dform test` asks it so).
     capabilities: list<string>,
     // The provider's build: its crate version and the git commit it was
     // built from (`0.1.0+1a2b3c4`). dform refuses one of its own built-in

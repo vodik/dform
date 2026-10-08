@@ -99,6 +99,10 @@ pub struct Config {
     /// The run's reader of locations (R-153): a scheme a provider's
     /// manifest declares is read through it, by that provider.
     pub files: std::sync::Arc<crate::files::Files>,
+    /// No provider reaches its credentials (`dform test`, R-188): every
+    /// one started from an executable is told its settings come later,
+    /// as a provider the program configures is, and none come.
+    pub no_credentials: bool,
 }
 
 /// A provider's `use`: the name it binds, the provider it starts and that
@@ -441,7 +445,7 @@ impl<'a> Starting<'a> {
         if let Some(m) = &mock {
             config["schemas"] = json!([m]);
         }
-        if self.by_block(i, &link.name) {
+        if self.by_block(i, &link.name) || (cfg.no_credentials && mock.is_none()) {
             config["deferred"] = json!(true);
             self.awaiting.insert(i);
         }
@@ -1654,24 +1658,38 @@ impl Providers {
     /// schema (a cluster's CRD, served once the cluster is reached), until
     /// its settings arrive ([`Providers::route`]).
     pub fn waits(&self, typ: &str) -> Option<ProviderWait> {
-        let name = |i: usize| {
-            self.blocks
-                .iter()
-                .find(|&(_, &j)| j == i)
-                .map(|(b, _)| b.clone())
-                .unwrap_or_else(|| self.names[i].clone())
-        };
         if let Some(&i) = self.loaded().owner.get(typ) {
             return self
                 .awaiting
                 .borrow()
                 .contains(&i)
-                .then(|| ProviderWait::Settings(name(i)));
+                .then(|| ProviderWait::Settings(self.block_name(i)));
         }
         let ns = typ.split_once('.')?.0;
         let i = self.link_for(ns)?;
         (self.by_program.contains(&i) && self.awaiting.borrow().contains(&i))
-            .then(|| ProviderWait::Schema(name(i)))
+            .then(|| ProviderWait::Schema(self.block_name(i)))
+    }
+
+    /// Link `i` by the name the program's `use` gives it, else its own.
+    fn block_name(&self, i: usize) -> String {
+        self.blocks
+            .iter()
+            .find(|&(_, &j)| j == i)
+            .map(|(b, _)| b.clone())
+            .unwrap_or_else(|| self.names[i].clone())
+    }
+
+    /// Whether the provider serving `typ` plans it with no credentials as
+    /// with them (the `offline` capability, R-188): against a schema it
+    /// holds or a fake of its API. `Err` names the provider whose Plan
+    /// needs them.
+    pub fn plans_offline(&self, typ: &str) -> std::result::Result<(), String> {
+        let i = self.route(typ);
+        match self.link(i).is_ok_and(|l| l.borrow().has("offline")) {
+            true => Ok(()),
+            false => Err(self.block_name(i)),
+        }
     }
 
     /// A write happened: the next refresh Reads again.

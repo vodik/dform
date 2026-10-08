@@ -17,10 +17,11 @@ pub(super) struct Test;
 impl Test {
     /// The program's denies over its input space (`testing::space`), each
     /// combination evaluated against an empty mock world (the provider's
-    /// schema, no world, no state). A result set (R-63): a row per
-    /// combination, its inputs and its result. A combination fails when
-    /// anything is denied or it does not compile, printed after the
-    /// matrix as the command that plans it.
+    /// schema, no world, no state) and its resources asked of their
+    /// providers' Plan with no credentials (R-188). A result set (R-63): a
+    /// row per combination, its inputs and its result. A combination fails
+    /// when anything is denied, it does not compile or a Plan refuses it,
+    /// printed after the matrix as the command that plans it.
     pub(super) fn run(&self, cli: &Cli, loaded: &deployment::Loaded) -> Result<Outcome> {
         let space = Space::new(cli, loaded)?;
         // What the target and `--set` pin, as given.
@@ -83,6 +84,8 @@ struct Space<'a> {
     reader: std::sync::Arc<crate::files::Files>,
     /// Whether an image's digest was stood in (no registry is asked).
     images: std::cell::Cell<bool>,
+    /// The providers whose Plan was not asked: it needs credentials.
+    unplanned: std::cell::RefCell<BTreeSet<String>>,
     /// The key inputs, given on the target rather than by `--set`.
     keys: BTreeSet<String>,
     /// Each deny's doc comment, by its message.
@@ -112,8 +115,10 @@ impl<'a> Space<'a> {
                 let grants = cli.manifest.iter().flat_map(|m| m.grants());
                 let config = plugin::Config {
                     // What the program configures is left unconfigured: a
-                    // test configures no provider, so what it serves waits.
+                    // test configures no provider, so what it serves waits;
+                    // nor does one reach its credentials (R-188).
                     configured: deployment::provider_configs(program),
+                    no_credentials: true,
                     grants: grants
                         .map(|(k, mut g)| {
                             g.files = crate::files::Shared(Some(reader.clone()));
@@ -150,6 +155,7 @@ impl<'a> Space<'a> {
             backend,
             reader,
             images: std::cell::Cell::new(false),
+            unplanned: Default::default(),
             keys,
             docs: deny_docs(program),
         })
@@ -248,7 +254,8 @@ impl<'a> Space<'a> {
         // What the plan refuses before any provider is asked (R-184): a
         // resource that leaves unset what its schema requires.
         let schema = backend.schema();
-        let unset: Vec<String> = ir::compile_resources(res.facts.iter().cloned(), schema)?
+        let resources = ir::compile_resources(res.facts.iter().cloned(), schema)?;
+        let unset: Vec<String> = resources
             .iter()
             .filter_map(|r| {
                 let m = schema.unset_message(&r.addr.typ, &engine::value_to_json(&r.attrs))?;
@@ -259,9 +266,41 @@ impl<'a> Space<'a> {
         if !unset.is_empty() {
             bail!(unset.join("\n"));
         }
+        self.plan(&res, &resources)?;
         violations.extend(inputs::violations(&res.facts, &lowered.inputs));
         let redact = query::Redactor::new(&res.facts, backend.schema());
         Ok(violations.iter().map(|v| redact.text(v)).collect())
+    }
+
+    /// Each provider's Plan of what the combination makes, asked with no
+    /// credentials (R-188): one that answers as it would with them
+    /// (`offline`: the k8s provider against its snapshot, a fake) is
+    /// asked; a refusal is the combination's error, at the resource's
+    /// site in the plan's words. One that would need them is not, and
+    /// said once ([`Space::notes`]).
+    fn plan(&self, res: &engine::EvalResult, resources: &[ir::Resource]) -> Result<()> {
+        let backend = &self.backend;
+        let offline: Vec<ir::Resource> = resources
+            .iter()
+            .filter(|r| match backend.plans_offline(&r.addr.typ) {
+                Ok(()) => true,
+                Err(p) => {
+                    self.unplanned.borrow_mut().insert(p);
+                    false
+                }
+            })
+            .cloned()
+            .collect();
+        let asked = deployment::asked(backend, res, &offline);
+        backend
+            .plan(
+                &asked,
+                &[],
+                &zset::Lifecycle::default(),
+                &state::State::default(),
+            )
+            .map_err(|e| deployment::with_site(e, res))?;
+        Ok(())
     }
 
     /// A deny's line, with its doc comment beside it.
@@ -284,6 +323,9 @@ impl<'a> Space<'a> {
                 "note: no registry is asked: an image's digest is the one this machine last \
                  resolved, else a stand-in"
             );
+        }
+        for p in self.unplanned.borrow().iter() {
+            println!("note: {p}'s Plan not run: no offline schema and no fake");
         }
         let stood = self.reader.stood_in();
         if !stood.is_empty() {
