@@ -51,6 +51,10 @@ use std::collections::{BTreeMap, BTreeSet};
 ///   moved(T, Old, r).                     state's identity for the address
 ///                                         Old (text: it no longer exists)
 ///                                         is r's
+///   lifecycle(r, bootstrap, Path).        Path is given at creation only:
+///                                         a create (and a replace) sends
+///                                         it; once r exists a differing
+///                                         value is kept, and said (R-198)
 ///   ignore_changes(r, Path).              Path is dropped from both sides
 ///                                         once r exists; a create sets it
 ///
@@ -65,9 +69,33 @@ pub struct Lifecycle {
     pub retain: BTreeSet<Address>,
     /// (old, new), applied to state before the diff.
     pub moved: Vec<(Address, Address)>,
-    pub ignore_changes: BTreeMap<Address, Vec<String>>,
+    /// The attributes given at creation only, by address and path: once
+    /// the object exists the path is dropped from both sides (R-198).
+    pub at_create: BTreeMap<Address, BTreeMap<String, AtCreate>>,
     /// (path, refinement) per address, for its Apply `assertions`.
     pub assertions: BTreeMap<Address, Vec<(String, crate::lattice::Constraint)>>,
+}
+
+/// Why an attribute is given at creation only, which says whether a
+/// difference kept once the object exists is printed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AtCreate {
+    /// `lifecycle(r, "bootstrap", Path)`: the program's value, needed when
+    /// the object is made (a first boot's user data); a difference is kept
+    /// and the plan says so (R-198).
+    Bootstrap,
+    /// `ignore_changes(r, Path)`: another writer's once the object exists
+    /// (a scanner's tag, an autoscaler's count); kept, silently.
+    Ignored,
+}
+
+impl AtCreate {
+    pub fn word(self) -> &'static str {
+        match self {
+            AtCreate::Bootstrap => "bootstrap",
+            AtCreate::Ignored => "ignore_changes",
+        }
+    }
 }
 
 /// The program's copies (R-67): a component is a resource type the
@@ -252,8 +280,25 @@ pub fn ref_column(pred: &str, arity: usize) -> Option<usize> {
         ("world_digest" | "requires_approval" | "lifecycle" | "adopt" | "ignore_changes", 2) => {
             Some(0)
         }
+        ("lifecycle", 3) => Some(0),
         _ => None,
     }
+}
+
+/// Whether `pred`, one of [`REF_RELATIONS`], takes `n` arguments; the
+/// error names each shape it takes.
+pub fn ref_arity(pred: &str, n: usize) -> Result<(), String> {
+    let shapes: Vec<&(&str, usize, &str)> =
+        REF_RELATIONS.iter().filter(|(p, ..)| *p == pred).collect();
+    if shapes.iter().any(|(_, arity, _)| *arity == n) {
+        return Ok(());
+    }
+    let or = |each: Vec<String>| each.join(" or ");
+    Err(format!(
+        "`{pred}` takes {} arguments: {} (R-42)",
+        or(shapes.iter().map(|(_, a, _)| a.to_string()).collect()),
+        or(shapes.iter().map(|(.., s)| format!("`{s}`")).collect()),
+    ))
 }
 
 /// The arity of each relation `ref_column` knows, with its shape for the
@@ -267,6 +312,11 @@ pub const REF_RELATIONS: &[(&str, usize, &str)] = &[
         "requires_approval(resource, reason)",
     ),
     ("lifecycle", 2, "lifecycle(resource, \"prevent_destroy\")"),
+    (
+        "lifecycle",
+        3,
+        "lifecycle(resource, \"bootstrap\", \"path\")",
+    ),
     ("adopt", 2, "adopt(resource, \"remote-name\")"),
     ("ignore_changes", 2, "ignore_changes(resource, \"path\")"),
     ("moved", 3, "moved(T, \"old-address\", resource)"),
@@ -341,6 +391,32 @@ impl Lifecycle {
         let mut prevent: BTreeSet<Address> = BTreeSet::new();
         for f in facts {
             match (f.pred.as_str(), f.args.as_slice()) {
+                ("lifecycle", [r, what, path]) => {
+                    let Some(addr) = referenced(r) else {
+                        bail!(
+                            "{}: lifecycle takes the resource first, as its name in scope, \
+                             `T[\"a\"]` or a variable (R-42)",
+                            crate::spell::atom(f)
+                        );
+                    };
+                    let (Some(what), Some(path)) = (text(what), text(path)) else {
+                        bail!(
+                            "{}: an attribute's lifecycle is a word and its path, \
+                             lifecycle({addr}, \"bootstrap\", \"user_data\")",
+                            crate::spell::atom(f)
+                        );
+                    };
+                    let how = match what.as_str() {
+                        "bootstrap" => AtCreate::Bootstrap,
+                        other => bail!(
+                            "lifecycle({addr}, {other:?}, {path:?}): unknown word for an \
+                             attribute (expected bootstrap)"
+                        ),
+                    };
+                    for addr in each(addr) {
+                        out.given_at_create(addr, &path, how)?;
+                    }
+                }
                 ("lifecycle", [r, what]) => {
                     let (Some(addr), Some(what)) = (referenced(r), text(what)) else {
                         bail!("lifecycle expects a resource and a flag, got {f:?}");
@@ -371,6 +447,10 @@ impl Lifecycle {
                                 out.create_before_destroy.insert(addr);
                             }
                         }
+                        "bootstrap" => bail!(
+                            "lifecycle({addr}, \"bootstrap\"): bootstrap is said of an \
+                             attribute; name it, lifecycle({addr}, \"bootstrap\", \"user_data\")"
+                        ),
                         other => bail!(
                             "lifecycle({addr}, {other}): unknown flag \
                              (expected prevent_destroy, create_before_destroy or retain)"
@@ -392,10 +472,7 @@ impl Lifecycle {
                         bail!("ignore_changes expects a resource and a path, got {f:?}");
                     };
                     for addr in each(addr) {
-                        out.ignore_changes
-                            .entry(addr)
-                            .or_default()
-                            .push(path.clone());
+                        out.given_at_create(addr, &path, AtCreate::Ignored)?;
                     }
                 }
                 _ => {}
@@ -411,6 +488,36 @@ impl Lifecycle {
             );
         }
         Ok(out)
+    }
+
+    /// `path` of `addr` is given at creation only, `how`; one path is said
+    /// one way.
+    fn given_at_create(&mut self, addr: Address, path: &str, how: AtCreate) -> Result<()> {
+        let paths = self.at_create.entry(addr.clone()).or_default();
+        match paths.insert(path.to_string(), how) {
+            Some(was) if was != how => {
+                let fact = |w: AtCreate| match w {
+                    AtCreate::Bootstrap => format!("lifecycle({addr}, \"bootstrap\", {path:?})"),
+                    AtCreate::Ignored => format!("ignore_changes({addr}, {path:?})"),
+                };
+                bail!(
+                    "{} and {} are both written: a difference there is said by the first and \
+                     silent by the second; keep one",
+                    fact(AtCreate::Bootstrap),
+                    fact(AtCreate::Ignored)
+                )
+            }
+            _ => Ok(()),
+        }
+    }
+
+    /// The paths of `addr` given at creation only, with why.
+    pub fn at_create_of(&self, addr: &Address) -> impl Iterator<Item = (&String, AtCreate)> {
+        self.at_create
+            .get(addr)
+            .into_iter()
+            .flatten()
+            .map(|(p, h)| (p, *h))
     }
 
     /// Whether a replacement of `addr` is created before the old object is
@@ -1210,6 +1317,44 @@ pub mod file {
         /// their label alone, never a keyed digest ([`stored`]).
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         pub unkeyed: bool,
+        /// Each value given at an object's creation only that differs
+        /// from what it was made with (R-198): kept, no change; values
+        /// redacted as a change's are.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        pub kept: Vec<Kept>,
+    }
+
+    /// A value given at creation only that the plan keeps (R-198).
+    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+    pub struct Kept {
+        #[serde(rename = "type")]
+        pub typ: String,
+        pub name: String,
+        pub path: String,
+        pub before: Json,
+        pub after: Json,
+    }
+
+    /// The values `plan` keeps of objects given at their creation only
+    /// (R-198), redacted as a delta's.
+    pub fn kept(plan: &Plan, schema: &Schema, r: &Redactor, key: Option<&Key>) -> Vec<Kept> {
+        let side = |v: Option<&Json>, sensitive: bool| {
+            stored(key, report::shown(v, sensitive, schema, r), || {
+                v.cloned().unwrap_or(Json::Null)
+            })
+        };
+        plan.actions
+            .iter()
+            .flat_map(|a| {
+                a.kept().iter().map(|c| Kept {
+                    typ: a.addr.typ.clone(),
+                    name: a.addr.name.clone(),
+                    path: c.path.clone(),
+                    before: side(c.before.as_ref(), c.sensitive),
+                    after: side(c.after.as_ref(), c.sensitive),
+                })
+            })
+            .collect()
     }
 
     /// A name declared more than once, each under a clause (R-104), as
@@ -1457,8 +1602,8 @@ pub mod file {
             provisional: !on.is_empty() && on.iter().all(|l| sections.provisional.contains(l)),
             on,
             changes: a
-                .changes
-                .iter()
+                .sent()
+                .into_iter()
                 .map(|c| Leaf {
                     path: c.path.clone(),
                     before: side(c.before.as_ref(), c.sensitive),

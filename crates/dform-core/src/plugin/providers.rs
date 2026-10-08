@@ -1875,6 +1875,43 @@ impl Providers {
         }
     }
 
+    /// Of an object that exists, each attribute `lifecycle` says is given
+    /// at its creation only is dropped from both sides, `want` the
+    /// program's and `doc` the world's (R-198): not compared, so neither a
+    /// change nor, at a `force_new` path, a replace. A create (no world
+    /// side) sends it. Of a `bootstrap` one, a value that differs from
+    /// what the object was made with is kept: the plan says so.
+    fn at_create(
+        &self,
+        addr: &Address,
+        lifecycle: &Lifecycle,
+        want: &mut Json,
+        doc: &mut Json,
+    ) -> Vec<Change> {
+        // One attribute's leaves in the canonical form the Z-set compares.
+        let flat = |d: &Json, p: &str| {
+            let mut only = json!({});
+            if let Some(v) = get_path(d, p) {
+                set_path(&mut only, p, v.clone());
+            }
+            self.flat_value(&addr.typ, &only)
+        };
+        let mut kept = Vec::new();
+        for (p, how) in lifecycle.at_create_of(addr) {
+            if how == zset::AtCreate::Bootstrap && flat(want, p) != flat(doc, p) {
+                kept.push(Change {
+                    path: p.clone(),
+                    before: get_path(doc, p).cloned(),
+                    after: get_path(want, p).cloned(),
+                    sensitive: self.schema().is_sensitive(&addr.typ, p),
+                });
+            }
+            remove_path(doc, p);
+            remove_path(want, p);
+        }
+        kept
+    }
+
     /// The digest state keeps of a write-only value: keyed with the
     /// deployment's master, `hmac-sha256:..`; none in a run that does not
     /// hold it (never an unkeyed digest: a short password's is a table
@@ -2615,24 +2652,22 @@ impl Providers {
         // is gone is no row (a desired one is created again); one no longer
         // desired is deleted from state with nothing to delete.
         let mut before: BTreeMap<Address, Json> = BTreeMap::new();
+        let mut kept: BTreeMap<Address, Vec<Change>> = BTreeMap::new();
         for (addr, entry) in self.entries(&state.resources) {
             if let Some(cur) = world.get(&key(&addr.typ, &entry.remote)) {
                 let mut doc = match resolved.get(&addr) {
                     Some(d) => self.world_doc(&addr.typ, cur, d),
                     None => cur.attrs.clone(),
                 };
-                // ignore_changes: an object that exists ignores changes at
-                // the path, so it is dropped from both sides. A create (no
-                // world side) sets it.
-                if let Some(want) = resolved.get_mut(&addr) {
-                    for p in lifecycle.ignore_changes.get(&addr).into_iter().flatten() {
-                        remove_path(&mut doc, p);
-                        remove_path(want, p);
-                    }
-                }
                 if let Some(want) = resolved.get(&addr) {
                     self.written_before(&addr.typ, entry, want, &mut doc);
                     self.derived_before(&addr, entry, want, &mut doc);
+                }
+                if let Some(want) = resolved.get_mut(&addr) {
+                    let k = self.at_create(&addr, lifecycle, want, &mut doc);
+                    if !k.is_empty() {
+                        kept.insert(addr.clone(), k);
+                    }
                 }
                 before.insert(addr, doc);
             }
@@ -2732,9 +2767,10 @@ impl Providers {
             };
             actions.push(Action {
                 kind,
-                addr,
+                addr: addr.clone(),
                 changes,
                 on,
+                kept: kept.remove(&addr).unwrap_or_default(),
             });
         }
 
@@ -2749,6 +2785,7 @@ impl Providers {
                         addr,
                         changes,
                         on: BTreeSet::new(),
+                        kept: Vec::new(),
                     },
                     deps,
                 )
@@ -2908,6 +2945,31 @@ struct InFlight {
     retried: u32,
 }
 
+/// The strings inside a document value.
+fn strings(v: &Json) -> Vec<&str> {
+    match v {
+        Json::String(s) => vec![s.as_str()],
+        Json::Array(xs) => xs.iter().flat_map(strings).collect(),
+        Json::Object(m) => m.values().flat_map(strings).collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// `now`'s entries at `path` or under it as `was` has them: what an
+/// update that did not send `path` leaves recorded of it.
+fn keep_under(now: &mut BTreeMap<String, String>, was: &BTreeMap<String, String>, path: &str) {
+    let under = |k: &str| {
+        k.strip_prefix(path)
+            .is_some_and(|r| r.is_empty() || r.starts_with('.') || r.starts_with('['))
+    };
+    now.retain(|k, _| !under(k));
+    now.extend(
+        was.iter()
+            .filter(|(k, _)| under(k))
+            .map(|(k, v)| (k.clone(), v.clone())),
+    );
+}
+
 /// An Apply call dform does not send, and why (R-109): `apply T A: not
 /// sent`, the reason on its own line.
 fn not_sent(addr: &Address, why: &str) -> anyhow::Error {
@@ -2987,17 +3049,25 @@ impl Tick<'_> {
                     return Err(not_sent(addr, "update without a state entry"));
                 };
                 let mut doc = doc;
-                // ignore_changes: the world keeps its value, or its absence.
+                // What is given at creation only: the world keeps its
+                // value, or its absence; a write-only one, which the world
+                // never answers, its provider leaves as the object has it
+                // when it can (R-198).
                 if let Some(cur) = world.get(&key(&addr.typ, &remote)) {
-                    for p in self
-                        .lifecycle
-                        .ignore_changes
-                        .get(addr)
-                        .into_iter()
-                        .flatten()
-                    {
+                    let (keeps, wo) = (
+                        cloud.keeps(&addr.typ),
+                        cloud.schema().write_only_of(&addr.typ),
+                    );
+                    for (p, _) in self.lifecycle.at_create_of(addr) {
                         match get_path(&cur.attrs, p) {
                             Some(v) => set_path(&mut doc, p, v.clone()),
+                            None if keeps
+                                && wo.contains(&p.as_str())
+                                && get_path(&doc, p).is_some() =>
+                            {
+                                remove_path(&mut doc, p);
+                                keep.push(p.clone());
+                            }
                             None => remove_path(&mut doc, p),
                         }
                     }
@@ -3352,14 +3422,14 @@ impl Tick<'_> {
                     Providers::object(resp.attrs.as_ref(), resp.computed.as_ref())?,
                 );
                 state.set(addr, provider.clone(), resp.remote.clone());
-                self.record_written(addr, state);
+                self.record_written(addr, state, true);
             }
             ActionKind::Update | ActionKind::Drift => {
                 world.insert(
                     key(&addr.typ, &f.remote),
                     Providers::object(resp.attrs.as_ref(), resp.computed.as_ref())?,
                 );
-                self.record_written(addr, state);
+                self.record_written(addr, state, false);
             }
             ActionKind::Delete => {
                 world.remove(&key(&addr.typ, &f.remote));
@@ -3375,16 +3445,42 @@ impl Tick<'_> {
     }
 
     /// The digests of the write-only attributes `addr`'s object was just
-    /// applied with (R-106), in state beside it.
-    fn record_written(&self, addr: &Address, state: &mut State) {
-        if let Some(doc) = self.resolved.get(addr) {
-            let before = state
-                .get(addr)
-                .map(|e| e.written.clone())
-                .unwrap_or_default();
-            let written = self.cloud.written(&addr.typ, doc, &before);
-            state.set_written(addr, written, self.cloud.derivations(doc));
+    /// applied with (R-106), in state beside it; of one just `made`, the
+    /// secret generations its values given at creation only read
+    /// (R-198). An update sent none of those: what state had of them
+    /// stays.
+    fn record_written(&self, addr: &Address, state: &mut State, made: bool) {
+        let Some(doc) = self.resolved.get(addr) else {
+            return;
+        };
+        let was = state.get(addr).cloned();
+        let before = was.as_ref().map(|e| e.written.clone()).unwrap_or_default();
+        let mut written = self.cloud.written(&addr.typ, doc, &before);
+        let mut derived = self.cloud.derivations(doc);
+        let given: Vec<&String> = self.lifecycle.at_create_of(addr).map(|(p, _)| p).collect();
+        match (made, was) {
+            (true, _) => {
+                let made_with = given
+                    .iter()
+                    .filter_map(|p| {
+                        let mut gens = BTreeMap::new();
+                        for text in get_path(doc, p).map(strings).unwrap_or_default() {
+                            gens.extend(crate::functions::random::generations_in(text));
+                        }
+                        (!gens.is_empty()).then(|| ((*p).clone(), gens))
+                    })
+                    .collect();
+                state.set_made_with(addr, made_with);
+            }
+            (false, Some(was)) => {
+                for p in given {
+                    keep_under(&mut written, &was.written, p);
+                    keep_under(&mut derived, &was.derived, p);
+                }
+            }
+            (false, None) => {}
         }
+        state.set_written(addr, written, derived);
     }
 
     /// A call that may have taken effect without answering: what it

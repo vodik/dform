@@ -793,6 +793,9 @@ pub struct Deformation {
     /// Where the rule that would derive it is written, and why it does
     /// not.
     pub gone: Option<(Option<String>, String)>,
+    /// Each attribute given at creation only whose value differs from
+    /// what the object was made with: kept, and said ([`KEPT`], R-198).
+    pub kept: Vec<Line>,
 }
 
 #[derive(Debug, Clone)]
@@ -1039,10 +1042,18 @@ pub struct Report {
     /// the default level prints a create folded (`plan --json` keeps
     /// them all); else only the lines the fold prints find theirs.
     pub every_site: bool,
+    /// The objects the plan leaves as they are but for a value given at
+    /// their creation only that differs ([`Deformation::kept`], R-198):
+    /// no change, each said under its address.
+    pub kept: Vec<Deformation>,
 }
 
 /// A forget's note on its line (R-154).
 pub const FORGOTTEN: &str = "  forgotten, kept in the world  (lifecycle retain)";
+
+/// What a line says of a value given at creation only that differs from
+/// the object's (R-198): `user_data differs (bootstrap): kept`.
+pub const KEPT: &str = "(bootstrap): kept";
 
 /// What the report is built from.
 pub struct Input<'a> {
@@ -1258,6 +1269,11 @@ pub fn report(i: &Input) -> Report {
         instances: crate::zset::Instances::from_facts(&i.res.facts).with(i.kept),
         warnings: Vec::new(),
         not_planned,
+        kept: definite
+            .iter()
+            .filter(|a| !i.show_noop && matches!(a.kind, ActionKind::Noop) && !a.kept().is_empty())
+            .map(|a| deformation(a, i.schema, &r, &refs))
+            .collect(),
     }
 }
 
@@ -2032,7 +2048,8 @@ fn diag_lines(d: &Diag, why: Why, style: Style, conflict: bool) -> String {
 /// hash of its content (`[#k3j2d]`); it prints as `[]` in an update and
 /// by position everywhere else.
 fn deformation(a: &Action, schema: &Schema, r: &Redactor, refs: &Refs) -> Deformation {
-    let paths = relabel(a.changes.iter().map(|c| c.path.as_str()));
+    let sent = a.sent();
+    let paths = relabel(sent.iter().map(|c| c.path.as_str()));
     // Whether the schema types the leaf at `path` a reference: an
     // element of a `set(ref(T))`, or a `ref(T)` field.
     let is_ref = |path: &str| {
@@ -2074,7 +2091,7 @@ fn deformation(a: &Action, schema: &Schema, r: &Redactor, refs: &Refs) -> Deform
     let mut lines = Vec::new();
     // Element prefix -> (its display path, its changes), in first-seen order.
     let mut elements: Vec<(String, String, ElementChanges)> = Vec::new();
-    for (c, shown_path) in a.changes.iter().zip(paths) {
+    for (c, shown_path) in sent.into_iter().zip(paths) {
         let Some((list, elem, rest)) = by_element
             .then(|| element_of(&a.addr.typ, &c.path, schema))
             .flatten()
@@ -2150,6 +2167,7 @@ fn deformation(a: &Action, schema: &Schema, r: &Redactor, refs: &Refs) -> Deform
         },
         folded: Vec::new(),
         gone: None,
+        kept: a.kept().iter().map(|c| leaf(c, c.path.clone())).collect(),
     }
 }
 
@@ -2733,6 +2751,9 @@ impl Report {
                 });
             }
         }
+        for d in &mut self.kept {
+            d.site = p.want_site(rules, &d.addr);
+        }
         for g in &mut self.groups {
             g.site = g
                 .rule
@@ -2810,6 +2831,7 @@ impl Report {
                 }
             }
         }
+        self.kept.iter_mut().for_each(|d| fix(&mut d.site));
         self.groups.iter_mut().for_each(|g| fix(&mut g.site));
         self.policies.iter_mut().for_each(|p| fix(&mut p.site));
         self.approvals.iter_mut().for_each(|a| fix(&mut a.site));
@@ -3145,6 +3167,9 @@ impl Report {
         let bold = |s: &str| style.paint(Paint::Bold, s);
         let mut out = moved_text(&self.moved);
         if self.undeformed && !self.show_noop {
+            let mut rows = Vec::new();
+            self.write_kept(&mut rows, style);
+            out.push_str(&layout(&rows, style));
             out.push_str(&format!("stack {} is up to date\n", self.stack));
             return out;
         }
@@ -3187,6 +3212,10 @@ impl Report {
                 rows.push(Row::new(&plain, painted));
             }
             self.write_groups(&mut rows, &s.groups, style);
+        }
+        if !self.kept.is_empty() {
+            rows.push(Row::plain(String::new()));
+            self.write_kept(&mut rows, style);
         }
         if self.has_later() {
             rows.push(Row::plain(String::new()));
@@ -3291,6 +3320,14 @@ impl Report {
             out.push('\n');
         }
         out
+    }
+
+    /// The objects left as they are but for a value given at their
+    /// creation only (R-198), each `=` with what it keeps.
+    fn write_kept(&self, rows: &mut Vec<Row>, style: Style) {
+        for d in &self.kept {
+            self.write_change(rows, d, "", style);
+        }
     }
 
     /// `later`'s rows: each group no tick of this plan decides, each
@@ -3564,6 +3601,9 @@ impl Report {
             if self.why == Why::Full {
                 write_chain(rows, l, &format!("{inner}  "), self.why);
             }
+        }
+        for l in &d.kept {
+            write_kept(rows, l, &inner, style, self.why);
         }
         // A delete's reason is in its change line's site column (After
         // R-149), a destroy's none: no line under its attributes.
@@ -4690,6 +4730,12 @@ impl Report {
         if !confusable.is_empty() {
             j["confusable_hosts"] = confusable.into();
         }
+        // The values given at creation only it keeps (R-198), only when
+        // it keeps one.
+        let kept = self.kept_json();
+        if !kept.is_empty() {
+            j["kept"] = kept.into();
+        }
         // What the plan empties (R-80), only when it empties something.
         if !self.warnings.is_empty() {
             j["warnings"] = self
@@ -4709,6 +4755,28 @@ impl Report {
                 .into();
         }
         j
+    }
+
+    /// Each value given at creation only the plan keeps (R-198): of an
+    /// object it leaves as it is, or one it changes otherwise.
+    fn kept_json(&self) -> Vec<Json> {
+        let pending = self.pending.iter().flat_map(|b| b.deformations.iter());
+        let ds = self.kept.iter().chain(&self.definite).chain(pending);
+        ds.flat_map(|d| {
+            d.kept.iter().map(move |l| {
+                json!({
+                    "address": d.addr.to_string(),
+                    "type": d.addr.typ,
+                    "name": d.addr.name,
+                    "path": l.path,
+                    "before": l.before.json(),
+                    "after": l.after.json(),
+                    "lifecycle": "bootstrap",
+                    "site": d.site.as_ref().filter(|_| self.why != Why::None),
+                })
+            })
+        })
+        .collect()
     }
 
     fn change_json(&self, d: &Deformation) -> Json {
@@ -4811,6 +4879,33 @@ fn diag_json(d: &Diag) -> Json {
             "from": w.from,
         })).collect::<Vec<_>>(),
     })
+}
+
+/// A value given at creation only that differs from the object's (R-198):
+/// `user_data differs (bootstrap): kept`; from `-v` the two values, the
+/// object's first.
+fn write_kept(rows: &mut Vec<Row>, l: &Line, indent: &str, style: Style, why: Why) {
+    let (plain, painted) = match why >= Why::How {
+        true => (
+            format!(
+                "{indent}{} = {} → {}  {KEPT}",
+                l.path,
+                l.before.said(why),
+                l.after.said(why)
+            ),
+            format!(
+                "{indent}{} = {} → {}  {KEPT}",
+                l.path,
+                style.said(&l.before, why),
+                style.said(&l.after, why)
+            ),
+        ),
+        false => {
+            let text = format!("{indent}{} differs {KEPT}", l.path);
+            (text.clone(), text)
+        }
+    };
+    rows.push(Row::new(&plain, painted));
 }
 
 fn write_line(

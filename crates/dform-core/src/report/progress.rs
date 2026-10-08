@@ -317,6 +317,7 @@ mod tests {
             },
             changes: Vec::new(),
             on: Default::default(),
+            kept: Vec::new(),
         }
     }
 

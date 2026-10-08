@@ -5809,18 +5809,15 @@ impl<'u> Lowerer<'u> {
             });
         }
         let args = match crate::zset::REF_RELATIONS.iter().find(|(p, ..)| *p == pred) {
-            Some((_, arity, shape)) => {
+            Some(_) => {
                 let list: Vec<SyntaxNode> = list
                     .as_ref()
                     .map(|l| terms(l).collect())
                     .unwrap_or_default();
-                if list.len() != *arity {
-                    return self.error(
-                        span,
-                        format!("`{pred}` takes {arity} arguments: `{shape}` (R-42)"),
-                    );
+                if let Err(e) = crate::zset::ref_arity(&pred, list.len()) {
+                    return self.error(span, e);
                 }
-                let at = crate::zset::ref_column(&pred, *arity);
+                let at = crate::zset::ref_column(&pred, list.len());
                 let mut args = Vec::new();
                 for (i, t) in list.iter().enumerate() {
                     args.push(if Some(i) == at {

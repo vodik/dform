@@ -2318,6 +2318,23 @@ pub mod random {
         CALLS.with(|c| c.borrow().clone())
     }
 
+    /// Each secret key whose derived value `text` holds, at its current
+    /// generation: what an attribute is made with (R-198).
+    pub fn generations_in(text: &str) -> std::collections::BTreeMap<String, u32> {
+        CALLS.with(|c| {
+            c.borrow()
+                .iter()
+                .filter(|(_, c)| c.secret)
+                .filter(|(_, c)| {
+                    c.values
+                        .iter()
+                        .any(|v| matches!(v, Value::Str(x) if !x.is_empty() && text.contains(x.as_str())))
+                })
+                .map(|(k, _)| (k.clone(), generation_of(k)))
+                .collect()
+        })
+    }
+
     /// `key`'s current generation: 1 unless rotated.
     fn generation_of(key: &str) -> u32 {
         RECORDS.with(|r| r.borrow().get(key).map_or(1, |s| s.generation))

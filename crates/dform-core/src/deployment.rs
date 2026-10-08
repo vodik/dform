@@ -652,6 +652,7 @@ impl Evaluator {
                     addr: r.addr.clone(),
                     changes,
                     on: BTreeSet::from([label.clone()]),
+                    kept: Vec::new(),
                 });
             } else if let Some(a) = plan.actions.iter_mut().find(|a| a.addr == r.addr) {
                 a.on.insert(label.clone());
@@ -1009,6 +1010,7 @@ impl Evaluator {
                     addr: a,
                     changes: Vec::new(),
                     on: BTreeSet::new(),
+                    kept: Vec::new(),
                 });
                 continue;
             }

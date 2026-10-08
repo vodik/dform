@@ -832,6 +832,7 @@ mod tests {
                 addr,
                 changes: Vec::new(),
                 on: BTreeSet::new(),
+                kept: Vec::new(),
             }],
         };
         let needs = [(r#"net.vpc["main"]"#.to_string(), "every change".to_string())];

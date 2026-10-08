@@ -137,6 +137,33 @@ pub struct Action {
     pub changes: Vec<Change>,
     /// Pending: the nulls the comparison waits on.
     pub on: std::collections::BTreeSet<String>,
+    /// Of an object that exists, each attribute given at creation only
+    /// (`lifecycle(r, "bootstrap", P)`) whose value differs from what it
+    /// was made with: no change, kept, and said (R-198). A replace makes
+    /// the object again, so it sends them: changes that force nothing
+    /// ([`Action::sent`]).
+    pub kept: Vec<Change>,
+}
+
+impl Action {
+    /// What the action sends that differs from the world: its changes,
+    /// and a replace's values given at creation only, in path order.
+    pub fn sent(&self) -> Vec<&Change> {
+        let mut out: Vec<&Change> = self.changes.iter().collect();
+        if let ActionKind::Replace { .. } = self.kind {
+            out.extend(&self.kept);
+            out.sort_by(|a, b| a.path.cmp(&b.path));
+        }
+        out
+    }
+
+    /// The values given at creation only it keeps: none of a replace's.
+    pub fn kept(&self) -> &[Change] {
+        match self.kind {
+            ActionKind::Replace { .. } => &[],
+            _ => &self.kept,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

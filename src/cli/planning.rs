@@ -407,6 +407,7 @@ impl<'a> Reporter<'a> {
                 .collect(),
             digest: None,
             unkeyed: key.is_none(),
+            kept: zset::file::kept(plan, self.schema(), &redact, key),
             guarded: zset::file::guarded(res),
         })
     }

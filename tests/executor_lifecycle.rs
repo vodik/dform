@@ -368,19 +368,21 @@ use fake
     );
 }
 
-/// A lifecycle fact in the old (type, address) shape, or with an address
-/// as text, is an error that names the shape.
+/// A lifecycle fact of another arity, or with an address as text, is an
+/// error that names the shapes; one in the old (type, address) shape
+/// says the resource comes first.
 #[test]
 fn a_lifecycle_fact_takes_a_resource_not_text() {
     let s = Scratch::new("lifecycle-text");
     s.write(
         "p.df",
-        "\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\nlifecycle(net.vpc, \"main\", \"prevent_destroy\")\nadopt(\"main\", \"vpc-1\")\n",
+        "\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\nlifecycle(main, \"bootstrap\", \"cidr\", \"x\")\nadopt(\"main\", \"vpc-1\")\n",
     );
     let r = mock(&s, &["plan"]).failure();
     assert!(
         r.stderr.contains(
-            "`lifecycle` takes 2 arguments: `lifecycle(resource, \"prevent_destroy\")` (R-42)"
+            "`lifecycle` takes 2 or 3 arguments: `lifecycle(resource, \"prevent_destroy\")` or \
+             `lifecycle(resource, \"bootstrap\", \"path\")` (R-42)"
         ),
         "{}",
         r.stderr
@@ -388,6 +390,19 @@ fn a_lifecycle_fact_takes_a_resource_not_text() {
     assert!(
         r.stderr
             .contains("a resource here, not a value: its name in scope, `T[\"a\"]`, or a variable"),
+        "{}",
+        r.stderr
+    );
+    s.write(
+        "p.df",
+        "\nresource net.vpc main { cidr = \"10.0.0.0/16\" }\nlifecycle(net.vpc, \"main\", \"prevent_destroy\")\nuse fake\n",
+    );
+    let r = mock(&s, &["plan"]).failure();
+    assert!(
+        r.stderr.contains(
+            "lifecycle(\"net.vpc\", \"main\", \"prevent_destroy\"): lifecycle takes the \
+             resource first, as its name in scope, `T[\"a\"]` or a variable (R-42)"
+        ),
         "{}",
         r.stderr
     );

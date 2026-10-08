@@ -52,6 +52,7 @@ impl Report {
         let header = |s: &str| format!("{}\n", bold(s));
         let mut out = moved_text(&self.moved);
         if self.undeformed && !self.show_noop {
+            self.write_bare(&mut out, &self.kept, style);
             out.push_str(&format!("stack {} is up to date\n", self.stack));
             return out;
         }
@@ -60,6 +61,11 @@ impl Report {
         if !self.definite.is_empty() {
             out.push_str(&header("definite:"));
             self.write_bare(&mut out, &self.definite, style);
+        }
+        // What is left as it is but for a value given at creation (R-198).
+        if !self.kept.is_empty() {
+            out.push_str(&header("kept:"));
+            self.write_bare(&mut out, &self.kept, style);
         }
         for b in &self.pending {
             let after = b
@@ -278,6 +284,13 @@ fn write_change(out: &mut String, d: &Deformation, indent: &str, style: Style) {
             break;
         }
         write_line(out, &d.kind, l, &inner, style);
+    }
+    for l in &d.kept {
+        out.push_str(&format!(
+            "{inner}{} differs {}\n",
+            l.path,
+            crate::report::KEPT
+        ));
     }
 }
 

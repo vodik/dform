@@ -213,6 +213,13 @@ pub struct StateEntry {
     /// (R-164).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub derived: BTreeMap<String, String>,
+    /// Each attribute given at the object's creation only (R-198,
+    /// `lifecycle(r, "bootstrap", P)`) that read a `random.*` secret, by
+    /// path: the generation of each key it was made with (R-161). An
+    /// update keeps it; `secrets list` names the objects made with one
+    /// older than the key's.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub made_with: BTreeMap<String, BTreeMap<String, u32>>,
 }
 
 impl State {
@@ -306,8 +313,21 @@ impl State {
                 deps,
                 written: BTreeMap::new(),
                 derived: BTreeMap::new(),
+                made_with: BTreeMap::new(),
             },
         );
+    }
+
+    /// Record the generations of the secrets `addr`'s attributes given at
+    /// creation only were made with (no-op without an identity).
+    pub fn set_made_with(
+        &mut self,
+        addr: &Address,
+        made_with: BTreeMap<String, BTreeMap<String, u32>>,
+    ) {
+        if let Some(e) = self.resources.get_mut(&key(addr)) {
+            e.made_with = made_with;
+        }
     }
 
     /// Record the digests of `addr`'s write-only attributes as applied, and
