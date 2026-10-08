@@ -1249,12 +1249,17 @@ mod tests {
         assert!(!glob("stacks/?.df", "stacks/ab.df"));
     }
 
+    /// `text`, its edition added, loaded as a project's dform.toml from a
+    /// directory of its own under the build's (the test binary's profile
+    /// directory, `tmp/`): never one another test shares, never /tmp.
     fn manifest(text: &str) -> Result<Manifest> {
-        let dir = std::env::temp_dir().join(format!(
-            "dform-manifest-{}-{}",
-            std::process::id(),
-            text.len()
-        ));
+        static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let exe = std::env::current_exe().unwrap();
+        let profile = exe.parent().and_then(Path::parent).unwrap();
+        let n = N.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let dir = profile
+            .join("tmp")
+            .join(format!("dform-manifest-{}-{n}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let text = match text.strip_prefix("[project]\n") {
             Some(rest) => format!("[project]\nedition = \"2026\"\n{rest}"),
