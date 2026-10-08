@@ -3,7 +3,7 @@
 //!
 //! ```ignore
 //! #[derive(Resource, Serialize, Deserialize)]
-//! #[dform(type = "acme.bucket", replace = "destroy_first", retry = 3)]
+//! #[dform(type = "acme.bucket", replace = "destroy_first", retry = 3, lookup = "name")]
 //! struct Bucket {
 //!     #[dform(required, force_new)] name: String,
 //!     #[dform(list_key = "name")] rules: Vec<Rule>,
@@ -19,7 +19,9 @@
 //! `computed`, `id`, `sensitive`, `force_new`, `optional_computed`,
 //! `nullable`, `write_only` (R-106: the API takes it and never answers
 //! it; state keeps its digest), `name_like`. `list_key = "a,b"` is a `type_list_key`; the struct's
-//! `replace` a `type_replace`, its `retry` a `type_retry`.
+//! `replace` a `type_replace`, its `retry` a `type_retry`, its `lookup =
+//! "a,b"` a `type_lookup` (R-195: what a Create that timed out is found
+//! by, each one of the struct's fields).
 
 use proc_macro::TokenStream;
 use quote::quote;
@@ -80,6 +82,7 @@ pub fn derive_resource(input: TokenStream) -> TokenStream {
 fn expand(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
     let ident = &input.ident;
     let (mut typ, mut replace, mut retry) = (None::<String>, None::<String>, None::<u32>);
+    let mut lookup = None::<LitStr>;
     for a in input.attrs.iter().filter(|a| a.path().is_ident("dform")) {
         a.parse_nested_meta(|m| {
             if m.path.is_ident("type") {
@@ -92,8 +95,10 @@ fn expand(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
                 replace = Some(v);
             } else if m.path.is_ident("retry") {
                 retry = Some(m.value()?.parse::<LitInt>()?.base10_parse()?);
+            } else if m.path.is_ident("lookup") {
+                lookup = Some(m.value()?.parse::<LitStr>()?);
             } else {
-                return Err(m.error("expected type, replace or retry"));
+                return Err(m.error("expected type, replace, retry or lookup"));
             }
             Ok(())
         })?;
@@ -111,9 +116,11 @@ fn expand(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
         ));
     };
     let mut lines = Vec::new();
+    let mut names = Vec::new();
     for f in &fields.named {
         let name = f.ident.as_ref().expect("named").to_string();
         let name = name.strip_prefix("r#").unwrap_or(&name).to_string();
+        names.push(name.clone());
         let mut flags = Vec::new();
         let mut ty = ty_of(&f.ty);
         let mut key = None;
@@ -156,6 +163,21 @@ fn expand(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
     }
     if let Some(n) = retry {
         lines.push(format!("type_retry({}, {n})", quoted(&typ)));
+    }
+    if let Some(l) = lookup {
+        let attrs: Vec<String> = l.value().split(',').map(|x| x.trim().to_string()).collect();
+        if let Some(a) = attrs.iter().find(|a| !names.contains(a)) {
+            return Err(syn::Error::new_spanned(
+                &l,
+                format!("lookup: {a} is not a field of {ident}"),
+            ));
+        }
+        let attrs: Vec<String> = attrs.iter().map(|a| quoted(a)).collect();
+        lines.push(format!(
+            "type_lookup({}, [{}])",
+            quoted(&typ),
+            attrs.join(", ")
+        ));
     }
     let facts = lines.join("\n");
     let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();

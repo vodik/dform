@@ -960,7 +960,7 @@ impl Schema {
 }
 
 /// Schema predicates with a row per type (the type in the first column).
-pub const PER_TYPE: [&str; 8] = [
+pub const PER_TYPE: [&str; 9] = [
     "type_attr",
     "type_doc",
     "type_list_key",
@@ -968,6 +968,7 @@ pub const PER_TYPE: [&str; 8] = [
     "type_retry",
     "type_replace",
     "type_mint",
+    "type_lookup",
     crate::refine::TYPE_REFINE,
 ];
 

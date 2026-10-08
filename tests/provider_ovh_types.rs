@@ -1096,3 +1096,42 @@ fn a_program_writes_a_subnets_pool() {
     let ends = dform(&s, &server, &["plan", "main.df"]).success();
     assert!(ends.stdout.contains("is up to date"), "{}", ends.stdout);
 }
+
+/// A run is given the `type_lookup` rows of the types it names, as it is
+/// their `type_attr` rows, and no other type's: the provider's Schema
+/// answer to a request naming two types, and the rows dform injects of
+/// what it learned (`Schema::facts_for`).
+#[test]
+fn a_run_is_given_the_lookups_of_the_types_it_names() {
+    let named = ["ovh.instance", "ovh.ssh_key"];
+    let ovh = Ovh::new();
+    let req = pb::SchemaRequest {
+        types: Some(pb::TypeFilter {
+            names: named.map(String::from).to_vec(),
+        }),
+    };
+    let Ok(Reply::Schema(answer)) = ovh.handle(Call::Schema(req), &|_| {}) else {
+        panic!("Schema answers");
+    };
+    let served: Vec<String> = answer
+        .facts
+        .iter()
+        .filter(|f| f.pred == "type_lookup")
+        .map(|f| {
+            dform_core::value::Value::try_from(&f.args[0])
+                .unwrap()
+                .as_str()
+                .unwrap()
+                .to_string()
+        })
+        .collect();
+    assert_eq!(served, named);
+    let injected: Vec<String> = ovh
+        .schema()
+        .facts_for(&named.map(String::from).into_iter().collect())
+        .iter()
+        .filter(|f| f.pred == "type_lookup")
+        .filter_map(|f| f.args[0].as_str().map(str::to_string))
+        .collect();
+    assert_eq!(injected, named);
+}

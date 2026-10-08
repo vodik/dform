@@ -118,7 +118,8 @@ fn main() -> std::process::ExitCode {
   `nullable`, `write_only` (the API takes it and never answers it: a
   password; dform keeps its digest in state and a changed one is a
   change, R-106), `name_like`; `list_key = "name"`. On the struct: `type`
-  (required), `replace`, `retry`. A computed field is an `Option` with
+  (required), `replace`, `retry`, `lookup = "name,region"` (its
+  `type_lookup`, below). A computed field is an `Option` with
   `#[serde(default)]`: the engine's desired document does not have it.
   An `optional_computed` one is answered as computed (dform compares it
   only where the program writes it), so leave it out of what Read

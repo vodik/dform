@@ -927,6 +927,7 @@ type_list_key(k8s.deployment, "spec.template.spec.containers", ["name"])  # list
 type_mint(db.postgres, "endpoint", "{name}.db.fake")        # optional: how the mock mints it
 type_retry(db.postgres, 5)                                  # optional: Read attempts (default 3)
 type_replace(k8s.deployment, "create_first")                # optional: create_first, destroy_first, either (default)
+type_lookup(ovh.instance, ["name", "region"])               # optional: what a Create that timed out is found by (the provider's)
 type_doc(net.vpc, "cidr", "The network's IPv4 range.")      # optional: a path's description ("" the type's)
 extern_decl("ovh.image", "+region, -name, -id, -distribution")  # a data source, no `extern` line needed
 ```

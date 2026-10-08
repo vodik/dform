@@ -30,8 +30,8 @@ use std::sync::Mutex;
 pub trait Resource: Serialize + DeserializeOwned {
     /// `provider.type`.
     const TYPE: &'static str;
-    /// Its `type_attr` (and `type_list_key`, `type_replace`, `type_retry`)
-    /// facts, as `.df` text.
+    /// Its `type_attr` (and `type_list_key`, `type_replace`, `type_retry`,
+    /// `type_lookup`) facts, as `.df` text.
     const FACTS: &'static str;
 }
 

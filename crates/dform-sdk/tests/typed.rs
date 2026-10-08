@@ -28,7 +28,7 @@ impl Provider for Acme {
 }
 
 #[derive(Resource, Serialize, Deserialize, Clone, Debug, PartialEq)]
-#[dform(type = "acme.bucket", replace = "destroy_first")]
+#[dform(type = "acme.bucket", replace = "destroy_first", lookup = "name")]
 struct Bucket {
     #[dform(required, force_new)]
     name: String,
@@ -113,6 +113,10 @@ fn the_derive_gives_the_schema() {
     );
     assert!(
         facts.contains("type_replace(\"acme.bucket\", \"destroy_first\")"),
+        "{facts}"
+    );
+    assert!(
+        facts.contains("type_lookup(\"acme.bucket\", [\"name\"])"),
         "{facts}"
     );
     let s: pb::SchemaResponse = call(&h, pb::SchemaRequest::default());
