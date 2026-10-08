@@ -318,7 +318,8 @@ pun `vpc`, also inside the component that declares it; a `set`, a `let`,
 an input of a copy, any other output, an element of a list or object there,
 a comprehension's item), a column that takes a resource (the plan's
 `deformation(kind, r, before)` and `world_digest(r, now)`,
-`requires_approval(r, reason)`, `lifecycle(r, what)`, `adopt(r, remote)`,
+`requires_approval(r, reason)`, `lifecycle(r, what)` and an attribute's
+`lifecycle(r, what, "path")` (R-198), `adopt(r, remote)`,
 `ignore_changes(r, path)`, the last of `moved(T, "old-address", r)`), and
 either side of `==` or `!=` with a resource on the other (R-43). `T[e]`
 and a typed variable are references in the same places.
@@ -1847,8 +1848,9 @@ resource `blue` of it in scope. A component is a type the program
 defines, and its resource is addressed as any is, `network["blue"]`:
 in a reference column (`lifecycle`, `requires_approval`, `deformation`)
 a copy's name or such an `x` is the copy. `lifecycle(blue,
-"prevent_destroy")` and `ignore_changes` or `create_before_destroy` on a
-copy are on each of its resources; the plan gives a copy a `deformation`
+"prevent_destroy")` and `ignore_changes`, `lifecycle(blue, "bootstrap",
+"user_data")` or `create_before_destroy` on a copy are on each of its
+resources; the plan gives a copy a `deformation`
 row of its own (`delete` once the program wants none of its resources,
 `create` when one is created, else `update`) and says which resources are
 in it, `in_instance(r, i)`, so a policy over the plan reads a copy as a

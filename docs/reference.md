@@ -1354,7 +1354,11 @@ made; the plan itself says what it is.
   every later index shifting. A copy
   (R-67) prints as its own entry, `+ network blue`, in bold, its resources
   indented under it with their full paths (`+ net.vpc blue.vpc`), a copy
-  inside it nested again, inside the tick they run in.
+  inside it nested again, inside the tick they run in. A value given at
+  the object's creation only that differs from the object's is a line
+  of its own, `user_data differs (bootstrap): kept` (R-198, "Lifecycle"),
+  under the change; an object with nothing else to change is listed `=`
+  after the ticks, or above `stack NAME is up to date`.
 - `tick N  K changes`: changes held until what a tick before makes is
   known, `waits on` each value (an output of a resource tick N-1 makes, a
   field of the world), provider (`provider k8s  kubeconfig =
@@ -1467,7 +1471,8 @@ made; the plan itself says what it is.
   that refuses ends with the same line on stderr, and says where it
   stopped when it had applied a tick: `apply: refused  1 deny; stopped
   after tick 1; ticks 1 to 1 were applied`.
-- `stack NAME is up to date`: nothing to do, nothing stuck (the only line).
+- `stack NAME is up to date`: nothing to do, nothing stuck (the only line
+  but for a `moved` and a value kept at creation, R-198).
 
 How much each change says of why it is planned is a ladder (R-79,
 R-111), the same on `plan`, `apply` and `diff --since`: `-q`, the
@@ -1779,6 +1784,7 @@ at once by a rule that binds them with `in`:
 lifecycle(main, "prevent_destroy")                   # a delete or replace of it is a deny
 lifecycle(main, "create_before_destroy")             # replace creates first (type_replace either)
 lifecycle(libvirt.volume["data"], "retain")          # a delete forgets it: the world keeps it
+lifecycle(vm, "bootstrap", "user_data")              # sent at creation; a difference after is kept, and said
 moved(net.vpc, "main.vpc", net.vpc["core.vpc"])  # rename without destroy
 ignore_changes(main, "tags.owner")                   # set on create, then ignored
 lifecycle(pg, "prevent_destroy") where env == "prod", pg in db.postgres   # every prod database
@@ -1809,6 +1815,44 @@ honours it, and forgets an object whose provider cannot be configured.
 `prevent_destroy` and `retain` on one object is an error naming both.
 There is no imperative `state forget` for objects: retaining is said in
 the program, reviewed in the plan and logged.
+
+A lifecycle word is said of the object, `lifecycle(r, "retain")`, or of
+one of its attributes, by its path, `lifecycle(r, "bootstrap",
+"user_data")` (R-198; one fact per attribute). `bootstrap` says the value
+matters when the object is made and never after: a first boot's cloud-init
+holding a k3s token or a Tailscale auth key, which a rotation would
+otherwise turn into replacing every server it is in. A create sends it,
+and a replace for another reason sends the program's value as a line of
+the replace that forces nothing. Once the object exists the attribute is
+not compared (as an `ignore_changes` path is not): a differing value is
+no change, and a `force_new` one no replace; an update for another reason
+leaves it as the object has it (a write-only one by its provider's
+`keep`). Where it differs from what the object was made with, the plan
+says so once, under the resource, never silently:
+
+```text
+$ dform plan k3s env=lab
+= ovh.instance k3s.server.vm  stacks/k3s.df:40
+    user_data differs (bootstrap): kept
+stack k3s[env=lab] is up to date
+```
+
+An object with other changes says it among them (`~`, `user_data differs
+(bootstrap): kept` after its changed lines); one left as it is is listed
+`=` above the summary's `up to date`, or after the ticks. `-v` prints both
+values, the object's first (`note = "n1" → "n2"  (bootstrap): kept`, a
+secret `(sensitive)`); `why R.user_data` says the program's value where it
+is written and then the object's, `kept (bootstrap): the object's =
+(sensitive)  made by apply 12 at TIME by WHO`. `--json` and the plan file
+list each under `kept` (`type`, `name`, `path`, `before`, `after`, values
+redacted as a change's). A secret read there reaches new objects only:
+`secrets list` and `secrets rotate` say it lands `new objects only
+(bootstrap)`, and state records, per such attribute, the generation of
+each `random.*` key the object was made with, so the listing names the
+objects made with an older one ("Rotation"). `lifecycle(r, "bootstrap",
+P)` and `ignore_changes(r, P)` on one path is an error naming both: the
+first says a difference, the second keeps it silent (a value another
+writer owns once the object exists).
 
 Policy over the plan. Once the plan is computed its deformations go back to
 the evaluator as facts and the program is evaluated once more (the policy
@@ -2481,7 +2525,9 @@ rotation.
 `rotate` first prints what reads the key and how a new value lands
 there, the blast radius: `update`, `forces replace` (the attribute is
 `force_new`: a k3s token in `user_data` replaces every server it is in),
-or `refused by prevent_destroy`. `dform secrets list TARGET` prints the
+`refused by prevent_destroy`, or `new objects only (bootstrap)` (the
+attribute is given at creation only, `lifecycle(r, "bootstrap", P)`: the
+servers that exist keep the token they were made with, "Lifecycle"). `dform secrets list TARGET` prints the
 same for every secret of the deployment, never a value:
 
 ```text
@@ -2493,6 +2539,12 @@ synapse    random  2           3d   k8s.secret synapse.stringData.signing_key   
 admin-pw   given   1           12d  k8s.secret forgejo.stringData.password            update
 secrets/lab.json: 1 given secret, sealed to alice, bob and the deployment's master
 ```
+
+An object made with an older generation of a key at an attribute given
+at its creation only (R-198) is named under the table, `k3s-token: made
+with generation 2 (current 3): ovh.instance lab-server user_data`
+(`--json`: `made with`, each address, path and generation), until a
+replace makes it again.
 
 A kind is `random`, `memo`, `given`, `held` or `managed` (a given
 secret's generation and age are its file's; a managed one's generation is
