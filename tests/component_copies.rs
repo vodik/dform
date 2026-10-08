@@ -79,6 +79,60 @@ fn its_resources_read_through_the_component() {
     );
 }
 
+/// `why` on a resource of a copy names the copy and the row of its
+/// clause; its input reads as `agent-1.index`.
+#[test]
+fn why_names_the_row_of_the_clause() {
+    let s = nodes("copies-why");
+    let r = s.run(&["why", "agent-1.volume", "main.df"]).success();
+    assert!(
+        r.stdout.starts_with(
+            "net.subnet agent-1.volume  main.df:9\n  in node agent-1  main.df:15  with i = 1, \
+             agents = 2\n"
+        ),
+        "{}",
+        r.stdout
+    );
+    let r = s
+        .run(&["why", "node[\"agent-1\"].index", "main.df"])
+        .success();
+    assert!(
+        r.stdout.starts_with("input agent-1.index = 1\n"),
+        "{}",
+        r.stdout
+    );
+}
+
+/// Why a copy's resource is not planned names the copy its row named,
+/// never the header's template or the compiler's names: two rows that
+/// name one copy and disagree on its input leave it unset.
+#[test]
+fn why_not_names_the_copy_of_the_row() {
+    let s = nodes("copies-why-not");
+    s.write(
+        "main.df",
+        &NODES.replace("\"agent-${i}\"", "\"agent-${i % 1}\""),
+    );
+    let r = s.run(&["plan", "main.df"]).failure();
+    assert!(
+        r.stdout
+            .contains("net.vpc agent-0.instance   main.df:8  input agent-0.index is not set\n"),
+        "{}",
+        r.stdout
+    );
+    let r = s
+        .run(&["why", "net.vpc agent-0.instance", "main.df"])
+        .success();
+    assert!(
+        r.stdout
+            .contains("    index(index) (in agent-0): not derived\n")
+            && !r.stdout.contains("__")
+            && !r.stdout.contains("::"),
+        "{}",
+        r.stdout
+    );
+}
+
 /// A row that goes is a delete of its copy: its resources, the volume
 /// before the instance it references.
 #[test]

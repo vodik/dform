@@ -423,8 +423,11 @@ impl<'a> WhyNot<'a> {
                     (true, false) => "not derived",
                     (false, _) => "no row",
                 };
-                self.out
-                    .push_str(&format!("{inner}{}: {none}\n", self.written.atom(b)));
+                // A copy's own relation by its name there (R-73), the
+                // copy a clause named by its row's name (R-191).
+                let read = crate::modules::private_text(b, &|a| self.written.atom(a), " ")
+                    .unwrap_or_else(|| self.written.atom(b));
+                self.out.push_str(&format!("{inner}{read}: {none}\n"));
                 let rows = self.rows(&b.pred, b.args.len());
                 if !rows.is_empty() || !derived {
                     self.nearest(b, written, &inner);
@@ -801,16 +804,24 @@ fn unify(t: &Term, v: &Value, body: &[Lit]) -> Vec<Env> {
                     .collect(),
             }
         }
+        // A scope a copy's clause names (R-191) is read as any term: each
+        // way the address splits into a scope and a name below it.
         Term::Func { name, args } if name == crate::ir::SCOPED => {
-            let [Term::Val(scope), inner] = args.as_slice() else {
+            let [scope, inner] = args.as_slice() else {
                 return vec![Env::new()];
             };
             let Value::Str(s) = v else { return vec![] };
-            let prefix = crate::ir::scoped(&crate::functions::value_to_string(scope), "");
-            match s.strip_prefix(&prefix) {
-                Some(rest) => unify(inner, &Value::Str(rest.to_string()), body),
-                None => vec![],
+            let segs = crate::ir::path_segments(s);
+            let mut out = Vec::new();
+            for k in 1..segs.len() {
+                let (at, rest) = (segs[..k].join("."), segs[k..].join("."));
+                for a in unify(scope, &Value::Str(at), body) {
+                    for b in unify(inner, &Value::Str(rest.clone()), body) {
+                        out.extend(merge(&a, &b));
+                    }
+                }
             }
+            out
         }
         // A header name's segment (R-112) is its name, quoted or not.
         Term::Func { name, args } if name == crate::ir::NAME_SEGMENT && args.len() == 1 => {

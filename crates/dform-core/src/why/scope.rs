@@ -401,10 +401,14 @@ pub(super) fn normal(pattern: &str, res: &EvalResult) -> Option<String> {
 /// why-not answers it.
 pub(super) fn why_name(pattern: &str, cx: &super::Context) -> Option<(String, Option<String>)> {
     let res = cx.res;
+    // A segment is a name, or a copy's name its clause gave (`agent-0`,
+    // R-191).
     let plain = !pattern.is_empty()
-        && pattern
-            .split('.')
-            .all(|s| !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'));
+        && pattern.split('.').all(|s| {
+            !s.is_empty()
+                && s.chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+        });
     if !plain
         || res.facts.iter().any(|a| a.pred == pattern)
         || res.rules.iter().any(|r| r.head.pred == pattern)

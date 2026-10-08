@@ -528,6 +528,7 @@ impl Chains<'_> {
             }
         }
         out.push('\n');
+        out.push_str(&self.copies_of(n));
         let mut items = Vec::new();
         for f in res.facts.iter().filter(|f| f.pred == "attr") {
             let [
@@ -545,6 +546,39 @@ impl Chains<'_> {
         }
         out.push_str(&report::chains_text(&items, "  ", style, whole));
         Some(out)
+    }
+
+    /// The copies named by their clause (R-191) a resource named `name`
+    /// is inside, outermost first, each with the row of its clause:
+    /// `  in node agent-1  k3s.df:12  with i = 1`.
+    fn copies_of(&self, name: &str) -> String {
+        let (printer, res) = (self.printer, self.res);
+        let mut copies: Vec<(ir::Address, &Atom)> = res
+            .facts
+            .iter()
+            .filter_map(|a| Some((crate::modules::copy_by_clause(a)?, a)))
+            .filter(|(c, _)| {
+                name.strip_prefix(c.name.as_str())
+                    .is_some_and(|r| r.starts_with('.'))
+            })
+            .collect();
+        copies.sort_by_key(|(c, _)| c.name.len());
+        let mut out = String::new();
+        for (copy, a) in copies {
+            out.push_str(&format!("  in {}", report::address(&copy)));
+            let site = printer
+                .circuit
+                .fact_id(&engine::circuit_fact(a))
+                .and_then(|id| printer.site(&res.rules, id));
+            if let Some(site) = site {
+                out.push_str(&format!("  {}", self.relative(&site.at)));
+                if !site.with.is_empty() {
+                    out.push_str(&format!("  with {}", site.with.join(", ")));
+                }
+            }
+            out.push('\n');
+        }
+        out
     }
 
     /// `T NAME.path = value` per leaf of attribute fact `f` below `keys`,
@@ -808,10 +842,11 @@ fn input_cell(
     kinds: &[&str],
     facts: &BTreeSet<Atom>,
 ) -> Result<Option<Vec<Matched>>> {
+    // A scope may be a copy's name its clause gave (`agent-0`, R-191).
     let plain = !pattern.is_empty()
         && pattern
             .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.');
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-'));
     if !plain {
         return Ok(None);
     }
