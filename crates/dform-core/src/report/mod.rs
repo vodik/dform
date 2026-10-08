@@ -93,7 +93,7 @@ impl Failure {
     /// of `message` one error said at the resource's site as the
     /// compiler says one (R-184): `backups.df:53, k8s.cron_job
     /// forgejo_backup.job: spec.jobTemplate.spec.template is unset
-    /// (required: ..)`.
+    /// (required: ..)`; a last line `help: ..` is the fix, under them.
     pub fn located(addr: &Address, message: String) -> Failure {
         Failure {
             what: address(addr),
@@ -125,9 +125,12 @@ impl Failure {
                 .message
                 .lines()
                 .enumerate()
-                .map(|(i, l)| {
-                    let lead = if i == 0 { lead } else { &pad };
-                    format!("{lead}{at}{}: {l}", self.what)
+                .map(|(i, l)| match l.strip_prefix("help: ") {
+                    Some(h) => format!("{pad}  help: {h}"),
+                    None => {
+                        let lead = if i == 0 { lead } else { &pad };
+                        format!("{lead}{at}{}: {l}", self.what)
+                    }
                 })
                 .collect();
         }

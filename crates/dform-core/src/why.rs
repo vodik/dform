@@ -224,7 +224,7 @@ pub fn why_json(pattern: &str, how: As, cx: &Context) -> Result<serde_json::Valu
     for m in &matched {
         let (a, focus) = m;
         let keys = focus.as_ref().map(tree::Focus::keys).unwrap_or_default();
-        let fact = match head_name(a).filter(|_| a.pred == "attr") {
+        let fact = match head_name(a, cx.stack_keys).filter(|_| a.pred == "attr") {
             Some(n) => keys.iter().fold(n, |p, k| crate::ir::path_join(&p, k)),
             None => cx.redact.surface_atom(a),
         };
@@ -506,7 +506,7 @@ pub fn chain(
     match a.pred.as_str() {
         "attr" => {
             let keys = focus.map(tree::Focus::keys).unwrap_or_default();
-            let items = c.leaves(a, &head_name(a)?, keys);
+            let items = c.leaves(a, &head_name(a, stack_keys)?, keys);
             Some(report::chains_text(&items, "", style, whole))
         }
         "want" => c.want(a, whole),
@@ -805,8 +805,8 @@ fn attr_value<'f>(f: &'f Atom, keys: &[String]) -> Option<(&'f Value, &'f String
 }
 
 /// The name `why` heads an attribute fact with: `let agent_init`,
-/// `input nodes`, `T NAME.path`.
-fn head_name(f: &Atom) -> Option<String> {
+/// `input nodes`, a stack's key `key env`, `T NAME.path`.
+fn head_name(f: &Atom, stack_keys: &BTreeSet<String>) -> Option<String> {
     let [
         Term::Val(Value::Str(t)),
         Term::Val(Value::Str(n)),
@@ -822,14 +822,13 @@ fn head_name(f: &Atom) -> Option<String> {
                 true => p.clone(),
                 false => format!("{n}.{p}"),
             };
-            format!(
-                "{} {scoped}",
-                if t == crate::modules::LET {
-                    "let"
-                } else {
-                    t.as_str()
-                }
-            )
+            // A stack's key is one, as `why NAME`'s scope answer says it.
+            let kind = match t.as_str() {
+                crate::modules::LET => "let",
+                crate::modules::INPUT if n.is_empty() && stack_keys.contains(p) => "key",
+                t => t,
+            };
+            format!("{kind} {scoped}")
         }
         _ => report::attribute(
             &ir::Address {

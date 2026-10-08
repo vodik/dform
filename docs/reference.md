@@ -3035,10 +3035,11 @@ cargo run -- -C examples/demo why 'net.vpc["peer.vpc"]' dform env=dev
 
 A resource that leaves unset an attribute its schema requires is
 refused by the plan at the resource's site, before its provider is
-asked (R-184), one line per attribute:
+asked (R-184), one line per attribute, and under them the fix:
 
 ```
 Error: backups.df:53, k8s.cron_job forgejo_backup.job: spec.jobTemplate.spec.template is unset (required: describes the pod that will be created when executing a job)
+  help: give it in the resource's block: spec.jobTemplate.spec.template = ..
 ```
 
 A required path binds where the nearest path above it the schema

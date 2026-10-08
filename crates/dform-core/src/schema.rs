@@ -604,16 +604,23 @@ impl Schema {
     }
 
     /// What a resource of `typ` whose document is `doc` leaves unset
-    /// that the schema requires, a line each ([`Schema::unset`]); `None`
-    /// when nothing.
+    /// that the schema requires, a line each ([`Schema::unset`]), and
+    /// last the fix, `help: give it in the resource's block:
+    /// spec.selector = ..`; `None` when nothing.
     pub fn unset_message(&self, typ: &str, doc: &serde_json::Value) -> Option<String> {
         let unset = self.unset_required(typ, doc);
         (!unset.is_empty()).then(|| {
-            unset
-                .iter()
-                .map(|p| self.unset(typ, p))
-                .collect::<Vec<_>>()
-                .join("\n")
+            let it = match unset.len() {
+                1 => "it",
+                _ => "them",
+            };
+            let writes: Vec<String> = unset.iter().map(|p| format!("{p} = ..")).collect();
+            let mut lines: Vec<String> = unset.iter().map(|p| self.unset(typ, p)).collect();
+            lines.push(format!(
+                "help: give {it} in the resource's block: {}",
+                writes.join(", ")
+            ));
+            lines.join("\n")
         })
     }
 
@@ -1317,7 +1324,10 @@ mod tests {
         assert_eq!(unset(doc.clone()), ["spec.job.template"]);
         assert_eq!(
             s.unset_message("t.c", &doc).as_deref(),
-            Some("spec.job.template is unset (required: describes the pod)")
+            Some(
+                "spec.job.template is unset (required: describes the pod)\n\
+                 help: give it in the resource's block: spec.job.template = .."
+            )
         );
         let held = serde_json::json!({"spec": {"job": {"$null": "t.c#x"}}, "run": image});
         assert!(unset(held).is_empty());

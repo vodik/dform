@@ -84,8 +84,15 @@ fn a_required_attribute_left_unset_is_an_error_at_the_resources_site() {
             "real: {real}\n{}",
             r.stderr
         );
-        let r = run(&s, &["why", "forgejo_backup.job", "apps"]).success();
         let path = unset.split_once(" is unset").unwrap().0;
+        assert!(
+            r.stderr.contains(&format!(
+                "{unset}\n  help: give it in the resource's block: {path} = ..\n"
+            )),
+            "real: {real}\n{}",
+            r.stderr
+        );
+        let r = run(&s, &["why", "forgejo_backup.job", "apps"]).success();
         let doc = unset
             .split_once("(required")
             .unwrap()

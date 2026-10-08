@@ -89,7 +89,7 @@ fn a_name_in_a_scope_is_what_the_scope_reads() {
     assert!(
         env.starts_with(
             "env in volume forgejo_backup: the stack's key env  stacks/apps.df:1\n\
-             input env = \"lab\""
+             key env = \"lab\""
         ),
         "{env}"
     );
