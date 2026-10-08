@@ -232,6 +232,52 @@ struct Pass<'a> {
 }
 
 impl Pass<'_> {
+    /// What to write instead of inspecting the secret in `terms` (E0301):
+    /// a check where an input that is a secret is declared, when the
+    /// secret is that input's; else declassifying it, when what the
+    /// inspection tells is public.
+    fn inspect_fix(&self, lowered: &Lowered, body: &[Lit], vars: &Vars, terms: &[&Term]) -> String {
+        let x = terms.iter().find_map(|t| secret_var(t, vars));
+        // The input whose read binds a secret variable of `terms`.
+        let input = body.iter().find_map(|l| {
+            let Lit::Pos(a) = l else { return None };
+            let k = input_of(lowered, a)?;
+            let mut holds = false;
+            a.args[0].for_each_var(&mut |v| {
+                holds |= terms.iter().any(|t| {
+                    let mut here = false;
+                    t.for_each_var(&mut |w| here |= w == v);
+                    here
+                }) && vars.get(v).is_some_and(|l| !l.is_empty());
+            });
+            holds.then_some(k)
+        });
+        match input {
+            Some(d) => input_check(d),
+            None => format!(
+                "carry it uninspected to an attribute marked sensitive, {}",
+                declassified(&x)
+            ),
+        }
+    }
+
+    /// The attributes of `t` the schema marks sensitive, said for a help.
+    fn sensitive_attrs(&self, t: &str) -> String {
+        let attrs: Vec<&str> = self
+            .schema
+            .facts
+            .iter()
+            .filter(|f| {
+                f.pred == "type_attr" && s(&f.args[0]) == Some(t) && self.flag(f, "sensitive")
+            })
+            .filter_map(|f| s(&f.args[1]))
+            .collect();
+        match attrs.as_slice() {
+            [] => format!("{t} marks no attribute sensitive: write it to a type that does"),
+            ps => format!("write it to one {t} marks sensitive: {}", ps.join(", ")),
+        }
+    }
+
     /// The label of `attr(T, A, P, _)`.
     fn attr_label(&self, typ: &Term, addr: &Term, path: &Term) -> Label {
         let all = |b: bool| if b { whole() } else { Label::new() };
@@ -821,16 +867,29 @@ pub fn check(
             for (t, b) in a.args.iter().zip(&f.args) {
                 if b.input && !crate::externs::is_secret(b) && secret(t) {
                     let at = if a.span.is_none() { *span } else { a.span };
-                    let what = match location {
-                        true => "a location".to_string(),
-                        false => format!("{}'s argument `{}`", f.name, b.name),
+                    let (what, fix) = match location {
+                        true => (
+                            "a location".to_string(),
+                            "a credential is named, never written into the location: \
+                             `[io] credentials` in dform.toml gives it to the transport"
+                                .to_string(),
+                        ),
+                        false => (
+                            format!("{}'s argument `{}`", f.name, b.name),
+                            format!(
+                                "{} is asked with `{}` as it is: pass a public value, {}",
+                                f.name,
+                                b.name,
+                                declassified(&secret_var(t, &vars))
+                            ),
+                        ),
                     };
                     diags.push(
                         Diagnostic::error(
                             at,
                             format!("E0306: a secret reaches {what}, which is sent over the network and printed"),
                         )
-                        .with_help("credentials are by name: [io] credentials in dform.toml"),
+                        .with_help(fix),
                     );
                 }
             }
@@ -853,7 +912,8 @@ pub fn check(
                 let at = if a.span.is_none() { *span } else { a.span };
                 for v in here {
                     if !seen.insert(v) && vars.get(v).is_some_and(|l| !l.is_empty()) {
-                        diags.push(e0301(at, "a join"));
+                        let fix = pass.inspect_fix(lowered, body, &vars, &[&Term::Var(v.into())]);
+                        diags.push(e0301(at, "a join", fix));
                     }
                 }
             }
@@ -863,13 +923,14 @@ pub fn check(
                 Lit::Neq(x, y) | Lit::Gt(x, y) | Lit::Ge(x, y) | Lit::Lt(x, y) | Lit::Le(x, y)
                     if !refinement && (secret(x) || secret(y)) =>
                 {
-                    diags.push(e0301(*span, "a comparison"));
+                    let fix = pass.inspect_fix(lowered, body, &vars, &[x, y]);
+                    diags.push(e0301(*span, "a comparison", fix));
                 }
                 Lit::Eq(x, y) if !refinement => {
                     // `X = f(Secret)`: a function that inspects it.
                     for t in [x, y] {
                         if let Some(f) = inspecting(t, &|t| secret(t)) {
-                            diags.push(e0301(*span, &crate::functions::shown_call(&f)));
+                            diags.push(call_e0301(*span, &f, t, &vars));
                         }
                     }
                     if !(secret(x) || secret(y)) {
@@ -881,17 +942,20 @@ pub fn check(
                     let mut both = BTreeSet::new();
                     term_vars(x, &mut both);
                     term_vars(y, &mut both);
+                    let fix = || pass.inspect_fix(lowered, body, &vars, &[x, y]);
                     if both.is_subset(&bound) {
-                        diags.push(e0301(*span, "an equality test"));
+                        diags.push(e0301(*span, "an equality test", fix()));
                     } else if definedness(x, y) {
                         // `has conn.password`: a walk into a secret bound
                         // to a name nothing reads, for whether it is there.
-                        diags.push(e0301(*span, "a definedness test (`has`)"));
+                        diags.push(e0301(*span, "a definedness test (`has`)", fix()));
                     }
                 }
                 Lit::Pos(a) if !refinement && is_builtin_pred(&a.pred) => {
                     if a.args.iter().any(&secret) {
-                        diags.push(e0301(a.span, &format!("{}/{}", a.pred, a.args.len())));
+                        let args: Vec<&Term> = a.args.iter().collect();
+                        let fix = pass.inspect_fix(lowered, body, &vars, &args);
+                        diags.push(e0301(a.span, &format!("{}/{}", a.pred, a.args.len()), fix));
                     }
                 }
                 // A value written at a secret position is matched against
@@ -904,10 +968,17 @@ pub fn check(
                         if l.is_empty() {
                             continue;
                         }
+                        let fix = || match input_of(lowered, a) {
+                            Some(d) => input_check(d),
+                            None => format!(
+                                "carry it uninspected to an attribute marked sensitive, {}",
+                                declassified(&None)
+                            ),
+                        };
                         if matches!(t, Term::Wildcard) && l.contains("") {
-                            diags.push(e0301(at, "a definedness test (`has`)"));
+                            diags.push(e0301(at, "a definedness test (`has`)", fix()));
                         } else if matches_secret(t, &l) {
-                            diags.push(e0301(at, "an equality test"));
+                            diags.push(e0301(at, "an equality test", fix()));
                         }
                     }
                 }
@@ -920,13 +991,36 @@ pub fn check(
                             || (!l.is_empty() && (!matches!(t, Term::Wildcard) || l.contains("")))
                     });
                     if bound_secret {
-                        diags.push(Diagnostic::error(
-                            a.span,
-                            format!(
-                                "E0302: `not {}(...)` over a secret: its absence leaks a bit",
-                                a.pred
+                        let x = a.args.iter().find_map(|t| secret_var(t, &vars));
+                        let fix = match (&x, input_of(lowered, a)) {
+                            (_, Some(d)) => format!(
+                                "whether input `{k}` is given is a bit of it: give it a \
+                                 default, `input {k}: {t} = ..`, and leave the test out",
+                                k = d.decl.name,
+                                t = crate::inputs::type_text(&d.decl.ty),
                             ),
-                        ));
+                            (Some(x), None) => format!(
+                                "whether `{x}` is there is a bit of it: test `{p}` of a public \
+                                 value, or of `secret.declassify({x}, \"why\")` if that bit \
+                                 may be known",
+                                p = crate::report::relation_name(&a.pred),
+                            ),
+                            (None, None) => format!(
+                                "whether a secret is there is a bit of it: test `{}` of a \
+                                 public value",
+                                crate::report::relation_name(&a.pred),
+                            ),
+                        };
+                        diags.push(
+                            Diagnostic::error(
+                                a.span,
+                                format!(
+                                    "E0302: `not {}(...)` over a secret: its absence leaks a bit",
+                                    a.pred
+                                ),
+                            )
+                            .with_help(fix),
+                        );
                     }
                 }
                 _ => {}
@@ -942,25 +1036,47 @@ pub fn check(
                 )
                 && args.iter().any(&secret)
             {
-                diags.push(Diagnostic::error(
-                    h.span,
-                    format!("E0303: {name}() over a secret leaks it; only collect_* may aggregate a secret"),
-                ));
+                let x = args
+                    .iter()
+                    .find_map(|t| secret_var(t, &vars))
+                    .unwrap_or_else(|| "x".into());
+                diags.push(
+                    Diagnostic::error(
+                        h.span,
+                        format!("E0303: {name}() over a secret leaks it; only collect_* may aggregate a secret"),
+                    )
+                    .with_help(format!(
+                        "`collect_list({x})` gathers the secrets and is one; {name}() a public \
+                         value of the same rows instead"
+                    )),
+                );
             }
             if let Some(f) = inspecting(t, &|t| secret(t))
                 && !COLLECT.contains(&f.as_str())
             {
-                diags.push(e0301(h.span, &crate::functions::shown_call(&f)));
+                diags.push(call_e0301(h.span, &f, t, &vars));
             }
         }
         // E0305: a name.
         let named = |t: &Term| secret(t) || names_secret(t, &|t| secret(t));
         let addr = crate::zset::address_arg(h);
         if addr.is_some_and(named) || h.args.iter().any(|t| names_secret(t, &|t| secret(t))) {
-            diags.push(Diagnostic::error(
-                h.span,
-                "E0305: a secret reaches a resource address; names are printed everywhere",
-            ));
+            // The secret as a relation of the body gives it, by its name.
+            let x = body.iter().find_map(|l| match l {
+                Lit::Pos(a) => a.args.iter().find_map(|t| secret_var(t, &vars)),
+                _ => None,
+            });
+            diags.push(
+                Diagnostic::error(
+                    h.span,
+                    "E0305: a secret reaches a resource address; names are printed everywhere",
+                )
+                .with_help(format!(
+                    "an address is kept in state and printed in every plan: name the resource \
+                     by a public value (a key, a label){}",
+                    x.map(|x| format!(", not `{x}`")).unwrap_or_default()
+                )),
+            );
         }
         // E0304: a public place.
         match (h.pred.as_str(), h.args.len()) {
@@ -974,14 +1090,28 @@ pub fn check(
                         .unwrap_or_default()
                 };
                 let scope = s(&h.args[1]).unwrap_or_default();
-                let place = match (s(&h.args[0]), Some(leak.as_str())) {
+                // A cell the program declares: say to declare it secret,
+                // the whole of it or the field.
+                let declare = |what: &str, p: &str, ty: Option<&crate::ast::TypeExpr>| {
+                    let t = ty.map_or("T".to_string(), crate::inputs::type_text);
+                    match p.split_once('.') {
+                        None => format!("declare it secret: `{what} {p}: secret({t})`"),
+                        Some((k, f)) => format!(
+                            "declare the field secret in `{what} {k}`'s type: `{f}: secret({t})`"
+                        ),
+                    }
+                };
+                let (place, fix) = match (s(&h.args[0]), Some(leak.as_str())) {
                     (Some(crate::transform::OUTPUT), Some(p)) => {
                         let (k, rest) = p.split_once('.').unwrap_or((p, ""));
                         let ty = lowered
                             .output_types
                             .get(&(scope.to_string(), k.to_string()))
                             .and_then(|t| crate::types::field(t, rest));
-                        format!("output {p}, not declared secret(T){}", its(ty))
+                        (
+                            format!("output {p}, not declared secret(T){}", its(ty)),
+                            declare("output", p, ty),
+                        )
                     }
                     (Some(crate::modules::INPUT), Some(p)) => {
                         let ty = lowered.inputs.iter().find_map(|d| {
@@ -993,16 +1123,35 @@ pub fn check(
                                 .then(|| crate::types::field(&d.decl.ty, rest))
                                 .flatten()
                         });
-                        format!("input {p}, not declared secret(T){}", its(ty))
+                        (
+                            format!("input {p}, not declared secret(T){}", its(ty)),
+                            declare("input", p, ty),
+                        )
                     }
-                    (Some(t), Some("?")) => format!("{t} at a path the program computes"),
-                    (Some(t), Some(p)) => format!("{t} .{p}, not marked sensitive in the schema"),
-                    _ => "an attribute path the program computes".to_string(),
+                    (Some(t), Some("?")) => (
+                        format!("{t} at a path the program computes"),
+                        format!(
+                            "a computed path may be any of {t}'s: name the path; {}",
+                            pass.sensitive_attrs(t)
+                        ),
+                    ),
+                    (Some(t), Some(p)) => (
+                        format!("{t} .{p}, not marked sensitive in the schema"),
+                        format!(
+                            "{t} .{p} is printed in every plan; {}",
+                            pass.sensitive_attrs(t)
+                        ),
+                    ),
+                    _ => (
+                        "an attribute path the program computes".to_string(),
+                        "write it at a path the program names, one the schema marks sensitive"
+                            .to_string(),
+                    ),
                 };
-                diags.push(Diagnostic::error(
-                    h.span,
-                    format!("E0304: a secret reaches {place}"),
-                ));
+                diags.push(
+                    Diagnostic::error(h.span, format!("E0304: a secret reaches {place}"))
+                        .with_help(fix),
+                );
             }
             // A setting the provider declares, not sensitive, or one it
             // does not declare: the provider may print or keep it.
@@ -1040,13 +1189,24 @@ pub fn check(
                 }
             }
             ("deny" | "warn", _) if !refinement && h.args.iter().any(secret) => {
-                diags.push(Diagnostic::error(
-                    h.span,
-                    format!(
-                        "E0304: a secret reaches a {} message or context, which is printed",
-                        h.pred
-                    ),
-                ));
+                let x = h.args.iter().find_map(|t| secret_var(t, &vars));
+                diags.push(
+                    Diagnostic::error(
+                        h.span,
+                        format!(
+                            "E0304: a secret reaches a {} message or context, which is printed",
+                            h.pred
+                        ),
+                    )
+                    .with_help(match x {
+                        Some(x) => format!(
+                            "say what is wrong without the value: name `{x}`, never print it"
+                        ),
+                        None => "say what is wrong without the value: name the secret, never \
+                                 print it"
+                            .to_string(),
+                    }),
+                );
             }
             _ => {}
         }
@@ -1139,12 +1299,70 @@ fn definedness(x: &Term, y: &Term) -> bool {
     )
 }
 
-fn e0301(span: Span, what: &str) -> Diagnostic {
+/// E0301 at `span`, `what` inspecting a secret, with the fix that
+/// applies there ([`Pass::inspect_fix`]).
+fn e0301(span: Span, what: &str, fix: String) -> Diagnostic {
     Diagnostic::error(
         span,
         format!("E0301: {what} over a secret: inspecting a secret leaks it"),
     )
-    .with_help("check it at the input: `input k: secret(T) where ...`, or leave it to the provider")
+    .with_help(fix)
+}
+
+/// E0301 for the call of `f` in `t` over a secret: what it returns is
+/// public only if the program says so.
+fn call_e0301(span: Span, f: &str, t: &Term, vars: &Vars) -> Diagnostic {
+    let shown = crate::functions::shown_call(f);
+    let x = secret_var(t, vars).unwrap_or_else(|| "VALUE".into());
+    e0301(
+        span,
+        &shown,
+        format!(
+            "{shown} reads the secret's value: give it `secret.declassify({x}, \"why\")` if \
+             what it returns may be public"
+        ),
+    )
+}
+
+/// The secret variable of `t` (the first whose value is secret), by the
+/// name the program wrote.
+fn secret_var(t: &Term, vars: &Vars) -> Option<String> {
+    let mut out = None;
+    t.for_each_var(&mut |v| {
+        if out.is_none() && vars.get(v).is_some_and(|l| !l.is_empty()) {
+            out = Some(crate::whynot::source_name(v));
+        }
+    });
+    out
+}
+
+/// The input `a` reads, `k(V)` (`scope::k(V)` in a copy), when it is
+/// one the program declares.
+fn input_of<'l>(lowered: &'l Lowered, a: &Atom) -> Option<&'l crate::inputs::Declared> {
+    if a.args.len() != 1 {
+        return None;
+    }
+    lowered.inputs.iter().find(|d| match d.scope.as_str() {
+        "" => a.pred == d.decl.name,
+        sc => a.pred.strip_prefix(sc).and_then(|r| r.strip_prefix("::")) == Some(&d.decl.name),
+    })
+}
+
+/// Check the input `d` where it is declared (E0301's fix when the secret
+/// is an input's).
+fn input_check(d: &crate::inputs::Declared) -> String {
+    format!(
+        "check it where it is declared, `input {}: {} check ..`: the check runs and prints no \
+         value",
+        d.decl.name,
+        crate::inputs::type_text(&d.decl.ty)
+    )
+}
+
+/// The way a secret leaves on purpose, said of `x`.
+fn declassified(x: &Option<String>) -> String {
+    let x = x.as_deref().unwrap_or("VALUE");
+    format!("or `secret.declassify({x}, \"why\")` if it is public")
 }
 
 fn is_builtin_pred(p: &str) -> bool {

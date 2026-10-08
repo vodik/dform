@@ -860,26 +860,26 @@ pub fn check(program: &Program, schema: &Schema) -> Result<()> {
         if !e0306.insert((r.typ.clone(), r.path.clone(), site)) {
             continue;
         }
+        let provider = schema
+            .provider_of
+            .get(&r.typ)
+            .map(String::as_str)
+            .unwrap_or("(none)");
         let msg = format!(
             "E0306: a refinement on sensitive path {} .{} cannot be checked by the engine, \
-             and provider {} does not check refinements",
-            r.typ,
-            r.path,
-            schema
-                .provider_of
-                .get(&r.typ)
-                .map(String::as_str)
-                .unwrap_or("(none)")
+             and provider {provider} does not check refinements",
+            r.typ, r.path,
         );
         let d = match r.span {
             Some(at) => Diagnostic::error(at, msg),
             None => Diagnostic::error(Span::default(), msg)
                 .with_note(format!("the provider schema states {}", r.describe())),
         };
-        diags.push(d.with_help(
-            "a secret is checked where it is materialized: the provider's Schema must declare \
-             checks_refinements",
-        ));
+        diags.push(d.with_help(format!(
+            "dform never reads {} .{} to check it: provider {provider} checks it once its \
+             schema declares `checks_refinements`; else leave the check out",
+            r.typ, r.path,
+        )));
     }
     for s in &program.statements {
         let head = match s {
