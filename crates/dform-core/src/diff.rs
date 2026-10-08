@@ -187,6 +187,21 @@ pub fn applies(entries: &[Json]) -> Vec<Apply> {
     out
 }
 
+/// The last of `applies` that made the object at `address` (`T["A"]`):
+/// created, replaced or adopted it.
+pub fn made_by<'a>(applies: &'a [Apply], address: &str) -> Option<&'a Apply> {
+    applies.iter().rev().find(|a| {
+        a.actions.iter().any(|x| {
+            x.address == address
+                && x.result == "ok"
+                && matches!(
+                    x.action.as_str(),
+                    "create" | "replace" | "replace_create_first" | "adopt"
+                )
+        })
+    })
+}
+
 /// The first of `applies` at or after `since`: a sequence number (a
 /// number), a git commit an apply recorded (hex, a prefix of four or more),
 /// or a time (RFC 3339, or a prefix of one: `2026-09-28`).

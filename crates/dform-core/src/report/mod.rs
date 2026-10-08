@@ -2641,6 +2641,20 @@ impl Report {
         Some(line(g.resolves_after, "+", &g.on))
     }
 
+    /// The object's value of `path` of `addr`, given at its creation only,
+    /// where the plan keeps it (R-198): `"n1"`, `(sensitive)`.
+    pub fn kept_value(&self, addr: &Address, path: &str) -> Option<String> {
+        let pending = self.pending.iter().flat_map(|b| b.deformations.iter());
+        self.kept
+            .iter()
+            .chain(&self.definite)
+            .chain(pending)
+            .filter(|d| d.addr == *addr)
+            .flat_map(|d| &d.kept)
+            .find(|l| l.path == path)
+            .map(|l| l.before.said(Why::Line))
+    }
+
     /// Say why each change is planned, at level `why` (R-79), from the
     /// provenance of `res`, the evaluation the plan was made from: each
     /// entry where it is derived, with its bindings; each attribute it

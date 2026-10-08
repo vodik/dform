@@ -315,3 +315,34 @@ fn a_rotation_reaches_new_objects_and_the_list_names_older_ones() {
     let r = run(&s, NOW, &["secrets", "list", "p"]).success();
     assert!(!r.stdout.contains("made with"), "{}", r.stdout);
 }
+
+/// `why` of an attribute the plan keeps says both values: the program's
+/// where it is written, and the object's, by the apply that made it.
+#[test]
+fn why_says_the_programs_value_and_the_objects() {
+    let s = project("bootstrap-why");
+    run(&s, NOW, &["apply", "p"]).success();
+    program(
+        &s,
+        Server {
+            note: "n2",
+            ..Server::default()
+        },
+        BOTH,
+    );
+    let r = run(&s, NOW, &["why", "vm.note", "p"]).success();
+    // The log's time is the clock's.
+    let (head, by) = r
+        .stdout
+        .split_once(" at ")
+        .unwrap_or_else(|| panic!("{}", r.stdout));
+    assert_eq!(
+        head,
+        "compute.vm vm.note = \"n2\"  stacks/p.df:6\nkept (bootstrap): the object's = \"n1\"  \
+         made by apply 3"
+    );
+    assert!(by.ends_with("Z by alice\n"), "{}", r.stdout);
+    // What the program has as the object has it: nothing to say.
+    let r = run(&s, NOW, &["why", "vm.zone", "p"]).success();
+    assert!(!r.stdout.contains("kept"), "{}", r.stdout);
+}

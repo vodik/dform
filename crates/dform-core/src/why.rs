@@ -40,7 +40,8 @@ pub struct As {
 /// to, what a resource of a type waits on before its provider plans
 /// it (R-110, `deployment::Evaluator::provider_wait`), and, when a plan
 /// was made, when the change or the group at an address runs
-/// (`report::Report::when`, After R-156).
+/// (`report::Report::when`, After R-156), and what the object an
+/// attribute is given to at its creation only was made with (R-198).
 pub struct Context<'a> {
     pub res: &'a EvalResult,
     /// The providers' schema, for what a resource leaves unset that it
@@ -52,6 +53,9 @@ pub struct Context<'a> {
     pub top: Option<&'a Path>,
     pub waits: &'a Lookup<'a>,
     pub when: Option<&'a Lookup<'a>>,
+    /// Of an attribute given at creation only whose value the plan keeps
+    /// (R-198), the object's value and where it was made.
+    pub kept: Option<&'a dyn Fn(&ir::Address, &str) -> Option<String>>,
 }
 
 /// A text an address or a type maps to, when it has one.
@@ -139,6 +143,23 @@ pub fn why(pattern: &str, how: As, cx: &Context) -> Result<String> {
     }
     for w in on {
         out.push_str(&format!("{w}\n"));
+    }
+    // An attribute given at creation only whose value differs from the
+    // object's: the object's, and where it was made (R-198).
+    let mut kept: Vec<String> = Vec::new();
+    for (a, _) in matched.iter().filter(|(a, _)| a.pred == "attr") {
+        let (Some(addr), Some(Term::Val(Value::Str(path)))) = (resource_of(a), a.args.get(2))
+        else {
+            continue;
+        };
+        if let Some(k) = cx.kept.and_then(|kept| kept(&addr, path))
+            && !kept.contains(&k)
+        {
+            kept.push(k);
+        }
+    }
+    for k in kept {
+        out.push_str(&format!("{k}\n"));
     }
     Ok(cx.redact.text(&out))
 }

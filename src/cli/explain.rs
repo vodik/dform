@@ -271,6 +271,18 @@ impl Why {
             .map(|(k, _)| k.clone())
             .collect();
         let top = super::planning::site_root(&run.cx.cli.files);
+        // What an object was made with, where the plan keeps a value given
+        // at its creation (R-198): the object's value, and the apply that
+        // made it.
+        let applies = crate::diff::applies(&run.cx.audit.entries().unwrap_or_default());
+        let kept = |a: &ir::Address, path: &str| {
+            let value = schedule?.kept_value(a, path)?;
+            let made = match crate::diff::made_by(&applies, &a.to_string()) {
+                Some(m) => format!("made by apply {} at {} by {}", m.seq, m.time, m.who),
+                None => "as it was made".to_string(),
+            };
+            Some(format!("kept (bootstrap): the object's = {value}  {made}"))
+        };
         let cx = crate::why::Context {
             res: &x.res,
             schema: Some(ev.schema()),
@@ -282,6 +294,7 @@ impl Why {
             when: schedule
                 .is_some()
                 .then_some(&when as &dyn Fn(&str) -> Option<String>),
+            kept: Some(&kept),
         };
         let how = crate::why::As {
             tree: self.tree || self.all,
