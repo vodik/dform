@@ -864,42 +864,42 @@ impl<'a> Graph<'a> {
     }
 
     /// The types the edges `n` reaches give its value at `q`, each with
-    /// the first edge that gave it.
-    fn types_at(&mut self, n: usize, q: &[Seg], by: &Links) -> Vec<(Ty, Edge)> {
-        self.types_within(n, q, by, 0)
-    }
-
-    /// [`Self::types_at`], `depth` sums deep (`a + b` asks `b`).
-    fn types_within(&mut self, n: usize, q: &[Seg], by: &Links, depth: usize) -> Vec<(Ty, Edge)> {
-        let mut out: Vec<(Ty, Edge)> = Vec::new();
+    /// the first edge that gave it; what a sum's other side gives only
+    /// where nothing else gives one (`base + 50m`, but `t + 1d` leaves the
+    /// time `t` a time).
+    fn types_at(&mut self, n: usize, q: &[Seg], by: &Links, depth: usize) -> Vec<(Ty, Edge)> {
+        let mut strong: Vec<(Ty, Edge)> = Vec::new();
+        let mut weak: Vec<(Ty, Edge)> = Vec::new();
+        let add = |out: &mut Vec<(Ty, Edge)>, ty: Ty, e: Edge| {
+            if !out.iter().any(|(t, _)| *t == ty) {
+                out.push((ty, e));
+            }
+        };
         let mut seen = BTreeSet::new();
         let mut todo = vec![(self.find(n), q.to_vec())];
         while let Some((r, q)) = todo.pop() {
             if !seen.insert((r, q.clone())) || q.len() > 32 {
                 continue;
             }
-            let mut found: Vec<(Ty, Edge)> = Vec::new();
             for e in self.edges[r].clone() {
                 match e.shape {
+                    // A side of a sum is the other's type, a duration
+                    // beside a time.
                     Shape::Like(m) if depth < 4 => {
-                        for (ty, e) in self.types_within(m, &q, by, depth + 1) {
+                        for (ty, e) in self.types_at(m, &q, by, depth + 1) {
                             let ty = match ty {
                                 Ty::Scalar(t) if t == "time" => Ty::Scalar("duration".into()),
                                 ty => ty,
                             };
-                            found.push((ty, e));
+                            add(&mut weak, ty, e);
                         }
                     }
+                    Shape::Like(_) => {}
                     _ => {
                         if let Some(ty) = e.shape.at(self.schema, &q) {
-                            found.push((ty, e.at(&q)));
+                            add(&mut strong, ty, e.at(&q));
                         }
                     }
-                }
-            }
-            for (ty, e) in found {
-                if !out.iter().any(|(t, _)| *t == ty) {
-                    out.push((ty, e));
                 }
             }
             for (whole, path) in by.wholes.get(&r).into_iter().flatten() {
@@ -913,7 +913,7 @@ impl<'a> Graph<'a> {
                 }
             }
         }
-        out
+        if strong.is_empty() { weak } else { strong }
     }
 
     fn readings(&mut self) -> Vec<Reading> {
@@ -929,7 +929,7 @@ impl<'a> Graph<'a> {
         (0..self.sites.len())
             .map(|i| {
                 let (n, q) = (self.sites[i].node, self.sites[i].path.clone());
-                let mut ts = self.types_at(n, &q, &by).into_iter();
+                let mut ts = self.types_at(n, &q, &by, 0).into_iter();
                 match (ts.next(), ts.next()) {
                     (None, _) => Reading::Untyped,
                     (Some((t, e)), None) => Reading::At(t, e),
