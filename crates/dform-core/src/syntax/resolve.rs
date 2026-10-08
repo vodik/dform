@@ -1538,7 +1538,7 @@ impl<'u> Lowerer<'u> {
         };
         let n = module.rsplit('.').next().unwrap_or(&module);
         let d = Diagnostic::error(span, format!("{name} is private to module {module}"))
-            .with_help(format!("read it as {n}.{name}, after `use {module}`"));
+            .with_help(format!("read it as {n}.{name}"));
         self.diags.push(d);
         Err(Skip)
     }
@@ -1569,6 +1569,23 @@ impl<'u> Lowerer<'u> {
         self.chain_of(scope)
             .into_iter()
             .find_map(|s| self.decls.scopes[s].uses.get(name).cloned())
+    }
+
+    /// The name a `use` in scope binds the module `path` to, when `scope`
+    /// is in that module's file and `path` is bound by no `use` of its
+    /// own name (`use backups as b`: `b`).
+    fn alias_in(&self, scope: usize, path: &str) -> Option<String> {
+        let module = self.decls.modules.get(path)?;
+        let chain = self.chain_of(scope);
+        if !chain.contains(&module.scope) || self.use_in(scope, path).is_some() {
+            return None;
+        }
+        chain.into_iter().find_map(|s| {
+            let uses = &self.decls.scopes[s].uses;
+            uses.iter()
+                .find(|(_, p)| *p == path)
+                .map(|(n, _)| n.clone())
+        })
     }
 
     /// The component `name` reads as in scope: its path.
@@ -7115,6 +7132,11 @@ impl<'u> Lowerer<'u> {
         span: Span,
     ) -> L<Option<Res>> {
         let h = c.head.as_str();
+        // Inside a module's file the module reads itself by its own name
+        // (`backups.repository` in its component), under the name its
+        // user's `use` binds it to (`use backups as b`).
+        let alias = self.alias_in(rc.scope, h);
+        let h = alias.as_deref().unwrap_or(h);
         if let Some(Op::Field(x)) = c.ops.first() {
             self.alternatives_agree(rc.scope, h, x, span)?;
         }

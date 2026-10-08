@@ -202,9 +202,33 @@ fn a_modules_resource_read_bare_in_its_component_is_private_to_it() {
     assert!(
         r.stderr
             .contains("backups.df:18:40: repository is private to module backups")
-            && r.stderr
-                .contains("Help: read it as backups.repository, after `use backups`"),
+            && r.stderr.contains("Help: read it as backups.repository\n"),
         "{}",
+        r.stderr
+    );
+}
+
+/// Inside the module's own file a component reads the module by its own
+/// name, `backups.repository`, whatever name the user's `use` gives it
+/// (`use backups as b`).
+#[test]
+fn a_component_reads_its_module_by_its_name_under_an_alias() {
+    let s = project(
+        "held-reads-alias",
+        false,
+        "backups.repository.metadata.name",
+    );
+    let apps = apps(false)
+        .replace("use backups {", "use backups as b {")
+        .replace("resource backups.volume", "resource b.volume");
+    s.write("stacks/apps.df", &apps);
+    let r = run(&s, &["plan", "apps"]);
+    assert!(
+        r.ok && r
+            .stdout
+            .contains("envFrom: [{ secretRef: { name: \"restic\" } }]"),
+        "{}\n{}",
+        r.stdout,
         r.stderr
     );
 }
