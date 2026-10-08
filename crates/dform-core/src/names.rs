@@ -51,6 +51,35 @@ pub enum Symbol {
     File(String),
 }
 
+impl Symbol {
+    /// The scope a value, a let, a resource, an output or a relation is
+    /// declared in.
+    pub fn scope(&self) -> Option<&Scope> {
+        match self {
+            Symbol::Predicate(s, _)
+            | Symbol::Value(s, _)
+            | Symbol::Field(s, ..)
+            | Symbol::Let(s, _)
+            | Symbol::Resource(s, ..)
+            | Symbol::Output(s, _) => Some(s),
+            _ => None,
+        }
+    }
+
+    /// `module backups's k8s.secret repository`, `the stack's input env`:
+    /// a let, an input or a resource as a line names it.
+    fn whose(&self) -> Option<String> {
+        let (scope, what, name) = match self {
+            Symbol::Let(s, n) => (s, "let".to_string(), n),
+            Symbol::Value(s, n) => (s, "input".to_string(), n),
+            Symbol::Resource(s, t, n) => (s, t.clone(), n),
+            _ => return None,
+        };
+        let scope = scope.as_deref().unwrap_or("the stack");
+        Some(format!("{scope}'s {what} {name}"))
+    }
+}
+
 /// What a name token is.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum What {
@@ -421,13 +450,47 @@ impl Decls {
     }
 
     /// The scopes a name at `n` is looked up in, innermost first: its
-    /// component's, its module file's, the program's.
+    /// component's and each component's around it, its module file's,
+    /// the program's (R-186).
     pub fn scopes(&self, n: &SyntaxNode) -> Vec<Scope> {
-        let mut out: Vec<Scope> = Vec::new();
-        out.extend(component_scope(n).map(Some));
+        let mut out: Vec<Scope> = component_scopes(n).into_iter().map(Some).collect();
         out.extend(self.file_scope(n).map(Some));
         out.push(None);
         out
+    }
+
+    /// The let, the input or the resource `name` read at `at` past its
+    /// `skip` innermost scopes: `super.x` skips one (R-186).
+    fn item_from(&self, at: &SyntaxNode, skip: usize, name: &str) -> Option<Symbol> {
+        let scopes = self.scopes(at);
+        scopes.get(skip..)?.iter().find_map(|s| {
+            let key = (s.clone(), name.to_string());
+            if self.lets.contains(&key) {
+                return Some(Symbol::Let(s.clone(), name.to_string()));
+            }
+            if self.values.contains(&key) {
+                return Some(Symbol::Value(s.clone(), name.to_string()));
+            }
+            let t = self.resources.get(&key)?.first()?;
+            Some(Symbol::Resource(s.clone(), t.clone(), name.to_string()))
+        })
+    }
+
+    /// A bare `name` at `at` that the component's own declaration shadows
+    /// (R-186), both named: what it reads there, and what `super.name`
+    /// reads.
+    pub fn shadowed(&self, at: &SyntaxNode, name: &str) -> Option<String> {
+        let inner = component_scopes(at).into_iter().next()?;
+        let own = self.item_from(at, 0, name)?;
+        if own.scope() != Some(&Some(inner)) {
+            return None;
+        }
+        let outer = self.item_from(at, 1, name)?;
+        Some(format!(
+            "`{name}` here is {}; it shadows {}, read as `super.{name}`",
+            own.whose()?,
+            outer.whose()?
+        ))
     }
 
     /// The value, let or output `name` seen from `at`: the innermost
@@ -911,6 +974,21 @@ impl Decls {
                 _ => What::Path,
             };
         }
+        // `super.x`: what the scope around the component reads `x` as, one
+        // scope per `super` (R-186).
+        if name0 == "super" {
+            let supers = (0..)
+                .take_while(|i| {
+                    name_at(2 * i).as_deref() == Some("super") && (*i == 0 || dot(2 * i - 1))
+                })
+                .count();
+            let x = name_at(2 * supers).filter(|_| dot(2 * supers - 1));
+            return match x.and_then(|x| self.item_from(at, supers, &x)) {
+                Some(s) if k == 2 * supers => What::Name(s, false),
+                Some(_) if k > 2 * supers => What::Path,
+                _ => What::Other,
+            };
+        }
         // 3: `world.T[e]`.
         if name0 == "world" {
             return match k {
@@ -1383,10 +1461,15 @@ fn token_at(root: &SyntaxNode, at: usize) -> Option<SyntaxToken> {
 
 /// The innermost component `node` is in (itself included).
 fn component_scope(node: &SyntaxNode) -> Scope {
-    node.ancestors().find_map(|a| {
-        (a.kind() == SyntaxKind::COMPONENT)
-            .then(|| Some(format!("component {}", declared_name(&a)?.text())))?
-    })
+    component_scopes(node).into_iter().next()
+}
+
+/// The components `node` is in (itself included), innermost first.
+fn component_scopes(node: &SyntaxNode) -> Vec<String> {
+    node.ancestors()
+        .filter(|a| a.kind() == SyntaxKind::COMPONENT)
+        .filter_map(|a| Some(format!("component {}", declared_name(&a)?.text())))
+        .collect()
 }
 
 fn last_segment(path: &str) -> &str {
@@ -1869,6 +1952,58 @@ s(x) where helper(x), shared(x)
 
     /// A module's own resource wins a read in its body over its user's
     /// `use` of the module's name (R-101), as the resolver reads it.
+    #[test]
+    fn super_reads_the_scope_around_the_component() {
+        let src = r#"
+input tag: string = "m"
+component outer {
+  input tag: string = "o"
+  let x = "x"
+  component inner {
+    resource net.vpc v { cidr = "${tag}-${super.tag}-${super.super.tag}-${x}" }
+  }
+}
+"#;
+        let files = vec![Parsed::new(PathBuf::from("/b.df"), src.into())];
+        let d = Decls::of_files(Path::new("/"), &files);
+        let lines = |sym: &Symbol| -> Vec<u32> {
+            d.occurrences(&files, sym)
+                .into_iter()
+                .map(|n| line(&n.file.text, n.range.start().into()))
+                .collect()
+        };
+        // A bare `tag` and `super.tag` in `inner` are outer's; two
+        // `super`s the stack's, as is the bare read past both components
+        // (`x` is outer's let).
+        let outer = Some("component outer".to_string());
+        assert_eq!(
+            lines(&Symbol::Value(outer.clone(), "tag".into())),
+            vec![3, 6, 6]
+        );
+        assert_eq!(lines(&Symbol::Value(None, "tag".into())), vec![1, 6]);
+        assert_eq!(lines(&Symbol::Let(outer, "x".into())), vec![4, 6]);
+        // A component's own `tag` shadows the stack's: the hover names
+        // both.
+        let outer_read = Parsed::new(
+            PathBuf::from("/c.df"),
+            "input tag: string = \"m\"\ncomponent c {\n  input tag: string\n  let y = tag\n}\n"
+                .into(),
+        );
+        let d = Decls::of_files(Path::new("/"), std::slice::from_ref(&outer_read));
+        let read = outer_read
+            .tree
+            .descendants()
+            .find(|n| n.kind() == SyntaxKind::CHAIN && n.text() == "tag")
+            .unwrap();
+        assert_eq!(
+            d.shadowed(&read, "tag").as_deref(),
+            Some(
+                "`tag` here is component c's input tag; it shadows the stack's input tag, read \
+                 as `super.tag`"
+            )
+        );
+    }
+
     #[test]
     fn a_modules_own_resource_wins_over_its_users_use() {
         let file = |path: &str, src: &str| Parsed::new(PathBuf::from(path), src.into());

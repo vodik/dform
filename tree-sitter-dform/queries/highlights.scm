@@ -73,8 +73,9 @@
     "cloud_ref" "attr" "want" "arg" "output" "input" "cloud_attr"
     "cloud_exists"))
 
+; The roots: the inventory, and the scope around a component (R-186).
 ((identifier) @variable.builtin
-  (#any-of? @variable.builtin "world"))
+  (#any-of? @variable.builtin "world" "super"))
 
 ; A dot in a field-value position is a reference (proposal G, G-6): the
 ; value is the attribute itself, an apply-order edge, not its content read

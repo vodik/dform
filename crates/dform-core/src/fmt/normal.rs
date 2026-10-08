@@ -30,7 +30,7 @@ impl Names {
     fn of(root: &SyntaxNode) -> Names {
         let mut n = Names::default();
         n.declared
-            .extend(["settings", "world", "true", "false", "_"].map(String::from));
+            .extend(["settings", "world", "super", "true", "false", "_"].map(String::from));
         // A component signature's inputs (R-104) are no scope's names.
         for d in root
             .descendants()
