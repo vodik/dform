@@ -78,7 +78,7 @@ fn a_mutation_elsewhere_is_drift_and_the_run_continues() {
     .success();
     assert!(
         r.stdout.contains(
-            "drift after tick 1:\n~ db.postgres main\n  size: 1 -> 9\n\
+            "drift after tick 1:\n~ db.postgres main\n  size: 1 -> 9\n\n\
              plan: 2 changes (2 update) over 1 tick\n\ntick 2  2 changes\n"
         ),
         "{}",

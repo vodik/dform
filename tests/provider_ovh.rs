@@ -606,27 +606,34 @@ fn the_clock_offset_is_kept_and_asked_again_when_refused() {
 
 /// An instance's create says each status the API gives while it polls,
 /// beside the change in apply's progress (R-130): `BUILD` while it is
-/// made, then `ACTIVE`.
+/// made, then `ACTIVE`, each with its time; `made` once the call
+/// answered (R-206).
 #[test]
 fn an_instance_create_says_build_then_active() {
     let server = Server::start();
     server.build_polls(2);
     let s = project("ovh-events", "", &program(&server, "x", "b2-7"));
     let r = dform(&s, &server, &["apply", "main.df"]).success();
-    let words: Vec<&str> = r
+    let mut words: Vec<&str> = r
         .stderr
         .lines()
         .filter(|l| l.starts_with("  + ovh.instance server  "))
-        .filter_map(|l| l.rsplit("  ").next())
+        .filter_map(|l| l.rsplit("  ").next()?.split(' ').next())
         .collect();
-    assert_eq!(words.first(), Some(&"BUILD"), "{}", r.stderr);
-    assert_eq!(words.last(), Some(&"ACTIVE"), "{}", r.stderr);
-    // A key, made at once, says nothing beside its time.
+    // A word said again (a heartbeat) is the same word.
+    words.dedup();
+    assert_eq!(
+        words.as_slice(),
+        ["BUILD", "ACTIVE", "made"],
+        "{}",
+        r.stderr
+    );
+    // A key, made at once, says its call's word and time.
     assert!(
         r.stderr
             .lines()
             .filter(|l| l.starts_with("  + ovh.ssh_key admin  "))
-            .all(|l| l.ends_with('s')),
+            .all(|l| l.contains(" made ") && l.ends_with('s')),
         "{}",
         r.stderr
     );

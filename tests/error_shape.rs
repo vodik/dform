@@ -151,10 +151,11 @@ fn a_refused_apply_is_said_once_in_three_lines() {
         "{}",
         r.stderr
     );
-    // The inline line keeps its mark and time.
+    // The inline line keeps its mark and time (nested under the module
+    // it is in, as the plan nests it).
     let inline = lines
         .iter()
-        .find(|l| l.starts_with(&format!("  ! {at}")))
+        .find(|l| l.trim_start().starts_with(&format!("! {at}")))
         .unwrap_or_else(|| panic!("{}", r.stderr));
     assert!(!inline.contains("injected"), "{}", r.stderr);
     // The message once.

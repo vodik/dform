@@ -29,8 +29,8 @@ fn apply(s: &Scratch, backend: common::Backend, chaos: &str, env: &[(&str, &str)
 }
 
 /// The delayed create's line says `made` once its provider said so, and
-/// keeps it when the create is done; the change it did not delay says
-/// nothing beside its time.
+/// `made` when the create is done (R-206: the call's word, then its
+/// time).
 #[test]
 fn a_status_the_provider_says_is_shown_beside_its_change() {
     for backend in BACKENDS {
@@ -42,10 +42,13 @@ fn a_status_the_provider_says_is_shown_beside_its_change() {
             .lines()
             .filter(|l| l.starts_with("  + net.subnet a  "))
             .collect();
-        // Said as it came (it may beat once more), then done: each with
-        // its time, then the word.
+        // Said as it came (it may beat once more), then done: each the
+        // word, then its time.
         assert!(
-            lines.len() >= 2 && lines.iter().all(|l| l.ends_with("s  made")),
+            lines.len() >= 2
+                && lines
+                    .iter()
+                    .all(|l| l.contains("  made ") && l.ends_with('s')),
             "{backend:?}\n{}",
             r.stderr
         );
