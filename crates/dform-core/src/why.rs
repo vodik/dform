@@ -455,27 +455,202 @@ pub fn chain(
     top: Option<&Path>,
     whole: bool,
 ) -> Option<String> {
-    let style = report::Style::PLAIN;
-    let relative = |at: &str| {
-        top.and_then(|t| report::relative_place(at, t))
-            .unwrap_or_else(|| at.to_string())
+    let c = Chains {
+        printer,
+        res,
+        stack_keys,
+        top,
     };
-    // `T NAME.path = value` per leaf of attribute fact `f` below `keys`,
-    // each with its chain; a cell's by its own name. The leaves one
-    // contribution wrote fold to one value where the writers diverge
-    // (R-124), with that contribution's chain.
-    let leaves = |f: &Atom, head: &str, keys: &[String]| {
+    let style = report::Style::PLAIN;
+    match a.pred.as_str() {
+        "attr" => {
+            let keys = focus.map(tree::Focus::keys).unwrap_or_default();
+            let items = c.leaves(a, &head_name(a)?, keys);
+            Some(report::chains_text(&items, "", style, whole))
+        }
+        "want" => c.want(a, whole),
+        _ => None,
+    }
+}
+
+/// The chains of a value's leaves, as `why` prints them: the run's
+/// evaluation, its printer, and where sites are relative to.
+struct Chains<'a> {
+    printer: &'a tree::Printer<'a>,
+    res: &'a engine::EvalResult,
+    stack_keys: &'a BTreeSet<String>,
+    top: Option<&'a Path>,
+}
+
+/// An attribute fact's leaves below some keys: each leaf's keys and
+/// value, its path from the resource (`spec.replicas`), the contribution
+/// that wrote it, and whether it is an element of a list several writers
+/// add to.
+struct Leaves {
+    found: Vec<(Vec<String>, Value)>,
+    paths: Vec<String>,
+    writers: Vec<Option<crate::circuit::NodeId>>,
+    elem: Vec<bool>,
+}
+
+impl Chains<'_> {
+    /// A site relative to the project's root.
+    fn relative(&self, at: &str) -> String {
+        self.top
+            .and_then(|t| report::relative_place(at, t))
+            .unwrap_or_else(|| at.to_string())
+    }
+
+    fn relative_chain(&self, mut chain: Vec<tree::Step>) -> Vec<tree::Step> {
+        for step in chain.iter_mut() {
+            step.at = self.relative(&step.at);
+        }
+        chain
+    }
+
+    /// A resource's chains (`want`): its site, then each attribute's
+    /// leaves.
+    fn want(&self, a: &Atom, whole: bool) -> Option<String> {
+        let (printer, res) = (self.printer, self.res);
+        let style = report::Style::PLAIN;
+        let [Term::Val(Value::Str(t)), Term::Val(Value::Str(n))] = a.args.as_slice() else {
+            return None;
+        };
+        let addr = ir::Address {
+            typ: t.clone(),
+            name: n.clone(),
+        };
+        let mut out = report::address(&addr);
+        if let Some(site) = printer.want_site(&res.rules, &addr) {
+            out.push_str(&format!("  {}", self.relative(&site.at)));
+            if !site.with.is_empty() {
+                out.push_str(&format!("  with {}", site.with.join(", ")));
+            }
+        }
+        out.push('\n');
         let mut items = Vec::new();
-        let (Some(Term::Val(v)), Some(Term::Val(Value::Str(top)))) = (f.args.get(3), f.args.get(2))
-        else {
-            return items;
+        for f in res.facts.iter().filter(|f| f.pred == "attr") {
+            let [
+                Term::Val(Value::Str(ft)),
+                Term::Val(Value::Str(fname)),
+                Term::Val(Value::Str(path)),
+                _,
+            ] = f.args.as_slice()
+            else {
+                continue;
+            };
+            if (ft, fname) == (t, n) {
+                items.extend(self.leaves(f, path, &[]));
+            }
+        }
+        out.push_str(&report::chains_text(&items, "  ", style, whole));
+        Some(out)
+    }
+
+    /// `T NAME.path = value` per leaf of attribute fact `f` below `keys`,
+    /// each with its chain; a cell's by its own name. The leaves one
+    /// contribution wrote fold to one value where the writers diverge
+    /// (R-124), with that contribution's chain.
+    fn leaves(&self, f: &Atom, head: &str, keys: &[String]) -> Vec<report::ChainItem> {
+        let (printer, res, stack_keys) = (self.printer, self.res, self.stack_keys);
+        let Some((v, top)) = attr_value(f, keys) else {
+            return Vec::new();
         };
-        let Some(v) = keys.iter().try_fold(v, |v, k| match v {
-            Value::Obj(m) => m.get(k),
-            _ => None,
-        }) else {
-            return items;
+        let Leaves {
+            found,
+            paths,
+            writers,
+            elem,
+        } = self.found(f, v, top, keys);
+        let mut items = Vec::new();
+        let printed = |p: &str| match head.strip_suffix(top.as_str()) {
+            Some(addr) => format!("{addr}{p}"),
+            None => p.to_string(),
         };
+        let surface = |v: &Value| printer.redact.surface(v);
+        // A plain leaf of a secret object is `(sensitive)` (R-124
+        // amendment 2): its value is no secret elsewhere.
+        let whole = match f.args.get(3) {
+            Some(Term::Val(w)) => w,
+            _ => v,
+        };
+        let hidden = |keys: &[String], leaf: &Value| {
+            !printer.redact.is_secret(leaf)
+                && report::surface_in(printer.redact, whole, keys, leaf) == "(sensitive)"
+        };
+        for g in report::fold::fold(&paths, &writers) {
+            let laid = |v: &Value| {
+                crate::fmt::value::Tree::of(v, &|v| {
+                    let open =
+                        matches!(v, Value::Obj(_) | Value::List(_)) && !printer.redact.is_secret(v);
+                    (!open).then(|| surface(v))
+                })
+            };
+            if let [i] = g.leaves.as_slice() {
+                let (keys, leaf) = &found[*i];
+                let chain = match (elem[*i], writers[*i]) {
+                    (true, Some(w)) => self.relative_chain(
+                        printer.contribution_chain(&res.rules, w, &paths[*i], stack_keys),
+                    ),
+                    _ => self.relative_chain(printer.attr_chain(&res.rules, f, keys, stack_keys)),
+                };
+                // A list is laid out as a fold is.
+                if matches!(leaf, Value::List(xs) if !xs.is_empty())
+                    && !printer.redact.is_secret(leaf)
+                    && !hidden(keys, leaf)
+                {
+                    items.push(report::ChainItem {
+                        head: format!("{} = ", printed(&paths[*i])),
+                        shown: surface(leaf),
+                        chain,
+                        value: Some(laid(leaf)),
+                    });
+                    continue;
+                }
+                let shown = match hidden(keys, leaf) {
+                    true => "(sensitive)".to_string(),
+                    false => surface(leaf),
+                };
+                items.push(report::ChainItem {
+                    head: format!("{} = {shown}", printed(&paths[*i])),
+                    shown,
+                    chain,
+                    value: None,
+                });
+                continue;
+            }
+            let values: Vec<crate::fmt::value::Tree> = found
+                .iter()
+                .map(|(keys, leaf)| match hidden(keys, leaf) {
+                    true => crate::fmt::value::Tree::Leaf("(sensitive)".into()),
+                    false => laid(leaf),
+                })
+                .collect();
+            let w = writers[g.leaves[0]].expect("a fold has its writer");
+            // The part of the value the fold prints, as a chain's step
+            // that is the literal itself says it.
+            let mut part = Value::Obj(Default::default());
+            for &i in &g.leaves {
+                let (keys, leaf) = &found[i];
+                let below = &keys[(g.depth - report::fold::tokens(top).len()).min(keys.len())..];
+                nest(&mut part, below, leaf.clone());
+            }
+            items.push(report::ChainItem {
+                head: format!("{} = ", printed(&g.path)),
+                shown: surface(&part),
+                chain: self
+                    .relative_chain(printer.contribution_chain(&res.rules, w, &g.path, stack_keys)),
+                value: Some(report::fold::assemble(&g, &paths, &values)),
+            });
+        }
+        items
+    }
+
+    /// The leaves of `v`, attribute fact `f`'s value at `top` below `keys`;
+    /// a list several writers add to (a set, R-158) said element by element,
+    /// each with its own writer.
+    fn found(&self, f: &Atom, v: &Value, top: &str, keys: &[String]) -> Leaves {
+        let printer = self.printer;
         let mut found = Vec::new();
         object_leaves(v, &mut keys.to_vec(), &mut found);
         // Each leaf's path from the resource (`spec.replicas`), and the
@@ -484,7 +659,7 @@ pub fn chain(
             .iter()
             .map(|(keys, _)| {
                 keys.iter()
-                    .fold(top.clone(), |p, k| crate::ir::path_join(&p, k))
+                    .fold(top.to_string(), |p, k| crate::ir::path_join(&p, k))
             })
             .collect();
         let resource = matches!(f.args.first(), Some(Term::Val(Value::Str(t)))
@@ -532,137 +707,26 @@ pub fn chain(
                 i += n;
             }
         }
-        let printed = |p: &str| match head.strip_suffix(top.as_str()) {
-            Some(addr) => format!("{addr}{p}"),
-            None => p.to_string(),
-        };
-        let relative_chain = |mut chain: Vec<tree::Step>| {
-            for step in chain.iter_mut() {
-                step.at = relative(&step.at);
-            }
-            chain
-        };
-        let surface = |v: &Value| printer.redact.surface(v);
-        // A plain leaf of a secret object is `(sensitive)` (R-124
-        // amendment 2): its value is no secret elsewhere.
-        let whole = match f.args.get(3) {
-            Some(Term::Val(w)) => w,
-            _ => v,
-        };
-        let hidden = |keys: &[String], leaf: &Value| {
-            !printer.redact.is_secret(leaf)
-                && report::surface_in(printer.redact, whole, keys, leaf) == "(sensitive)"
-        };
-        for g in report::fold::fold(&paths, &writers) {
-            let laid = |v: &Value| {
-                crate::fmt::value::Tree::of(v, &|v| {
-                    let open =
-                        matches!(v, Value::Obj(_) | Value::List(_)) && !printer.redact.is_secret(v);
-                    (!open).then(|| surface(v))
-                })
-            };
-            if let [i] = g.leaves.as_slice() {
-                let (keys, leaf) = &found[*i];
-                let chain = match (elem[*i], writers[*i]) {
-                    (true, Some(w)) => relative_chain(
-                        printer.contribution_chain(&res.rules, w, &paths[*i], stack_keys),
-                    ),
-                    _ => relative_chain(printer.attr_chain(&res.rules, f, keys, stack_keys)),
-                };
-                // A list is laid out as a fold is.
-                if matches!(leaf, Value::List(xs) if !xs.is_empty())
-                    && !printer.redact.is_secret(leaf)
-                    && !hidden(keys, leaf)
-                {
-                    items.push(report::ChainItem {
-                        head: format!("{} = ", printed(&paths[*i])),
-                        shown: surface(leaf),
-                        chain,
-                        value: Some(laid(leaf)),
-                    });
-                    continue;
-                }
-                let shown = match hidden(keys, leaf) {
-                    true => "(sensitive)".to_string(),
-                    false => surface(leaf),
-                };
-                items.push(report::ChainItem {
-                    head: format!("{} = {shown}", printed(&paths[*i])),
-                    shown,
-                    chain,
-                    value: None,
-                });
-                continue;
-            }
-            let values: Vec<crate::fmt::value::Tree> = found
-                .iter()
-                .map(|(keys, leaf)| match hidden(keys, leaf) {
-                    true => crate::fmt::value::Tree::Leaf("(sensitive)".into()),
-                    false => laid(leaf),
-                })
-                .collect();
-            let w = writers[g.leaves[0]].expect("a fold has its writer");
-            // The part of the value the fold prints, as a chain's step
-            // that is the literal itself says it.
-            let mut part = Value::Obj(Default::default());
-            for &i in &g.leaves {
-                let (keys, leaf) = &found[i];
-                let below = &keys[(g.depth - report::fold::tokens(top).len()).min(keys.len())..];
-                nest(&mut part, below, leaf.clone());
-            }
-            items.push(report::ChainItem {
-                head: format!("{} = ", printed(&g.path)),
-                shown: surface(&part),
-                chain: relative_chain(
-                    printer.contribution_chain(&res.rules, w, &g.path, stack_keys),
-                ),
-                value: Some(report::fold::assemble(&g, &paths, &values)),
-            });
+        Leaves {
+            found,
+            paths,
+            writers,
+            elem,
         }
-        items
-    };
-    match a.pred.as_str() {
-        "attr" => {
-            let keys = focus.map(tree::Focus::keys).unwrap_or_default();
-            let items = leaves(a, &head_name(a)?, keys);
-            Some(report::chains_text(&items, "", style, whole))
-        }
-        "want" => {
-            let [Term::Val(Value::Str(t)), Term::Val(Value::Str(n))] = a.args.as_slice() else {
-                return None;
-            };
-            let addr = ir::Address {
-                typ: t.clone(),
-                name: n.clone(),
-            };
-            let mut out = report::address(&addr);
-            if let Some(site) = printer.want_site(&res.rules, &addr) {
-                out.push_str(&format!("  {}", relative(&site.at)));
-                if !site.with.is_empty() {
-                    out.push_str(&format!("  with {}", site.with.join(", ")));
-                }
-            }
-            out.push('\n');
-            let mut items = Vec::new();
-            for f in res.facts.iter().filter(|f| f.pred == "attr") {
-                let [
-                    Term::Val(Value::Str(ft)),
-                    Term::Val(Value::Str(fname)),
-                    Term::Val(Value::Str(path)),
-                    _,
-                ] = f.args.as_slice()
-                else {
-                    continue;
-                };
-                if (ft, fname) == (t, n) {
-                    items.extend(leaves(f, path, &[]));
-                }
-            }
-            out.push_str(&report::chains_text(&items, "  ", style, whole));
-            Some(out)
-        }
-        _ => None,
     }
+}
+
+/// Attribute fact `f`'s value below `keys`, and its path.
+fn attr_value<'f>(f: &'f Atom, keys: &[String]) -> Option<(&'f Value, &'f String)> {
+    let (Some(Term::Val(v)), Some(Term::Val(Value::Str(top)))) = (f.args.get(3), f.args.get(2))
+    else {
+        return None;
+    };
+    let v = keys.iter().try_fold(v, |v, k| match v {
+        Value::Obj(m) => m.get(k),
+        _ => None,
+    })?;
+    Some((v, top))
 }
 
 /// The name `why` heads an attribute fact with: `let agent_init`,
