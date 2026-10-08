@@ -1313,7 +1313,7 @@ impl Providers {
             let facts = resp
                 .facts
                 .iter()
-                .map(wire::from_fact)
+                .map(Atom::try_from)
                 .collect::<Result<Vec<Atom>>>()?;
             let mut s = Schema::from_facts(&facts)
                 .with_context(|| format!("the schema of provider {}", self.names[i]))?;
@@ -1440,7 +1440,7 @@ impl Providers {
         let facts = resp
             .facts
             .iter()
-            .map(wire::from_fact)
+            .map(Atom::try_from)
             .collect::<Result<Vec<Atom>>>()?
             .into_iter()
             .filter(|f| match f.args.first() {
@@ -1654,7 +1654,7 @@ impl Providers {
         let rows: Vec<pb::Row> = self.link(i)?.borrow_mut().call(pb::QueryRequest {
             pred: f.name.clone(),
             input: plus,
-            inputs: inputs.iter().map(wire::value).collect(),
+            inputs: inputs.iter().map(pb::Value::from).collect(),
             secret: secret.clone(),
         })?;
         let mut out = Vec::new();
@@ -1662,7 +1662,7 @@ impl Providers {
             let mut row = Vec::new();
             for (c, v) in r.values.iter().enumerate() {
                 if !secret.get(c).copied().unwrap_or(false) {
-                    row.push(wire::from_value(v)?);
+                    row.push(Value::try_from(v)?);
                     continue;
                 }
                 let held = match &v.kind {
@@ -1943,11 +1943,11 @@ impl Providers {
         let rows: Vec<pb::Row> = self.link(i)?.borrow_mut().call(pb::QueryRequest {
             pred: pred.to_string(),
             input: plus.to_vec(),
-            inputs: inputs.iter().map(wire::value).collect(),
+            inputs: inputs.iter().map(pb::Value::from).collect(),
             secret: Vec::new(),
         })?;
         rows.iter()
-            .map(|r| r.values.iter().map(wire::from_value).collect())
+            .map(|r| r.values.iter().map(Value::try_from).collect())
             .collect()
     }
 

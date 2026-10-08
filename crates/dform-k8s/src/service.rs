@@ -1012,7 +1012,7 @@ impl pb::provider_server::Provider for Service {
             ];
             facts.push(pb::Fact {
                 pred: dform_core::schema::PROVIDER_SETTING.into(),
-                args: args.iter().map(wire::value).collect(),
+                args: args.iter().map(pb::Value::from).collect(),
             });
         }
         Ok(Response::new(pb::SchemaResponse {
@@ -1037,7 +1037,7 @@ impl pb::provider_server::Provider for Service {
                     tonic::codegen::tokio_stream::iter(Vec::new()),
                 ));
             }
-            let typ = match (r.input.first(), r.inputs.first().map(wire::from_value)) {
+            let typ = match (r.input.first(), r.inputs.first().map(Value::try_from)) {
                 (Some(true), Some(Ok(Value::Str(t)))) => Some(t),
                 _ => None,
             };
@@ -1048,7 +1048,7 @@ impl pb::provider_server::Provider for Service {
                 .into_iter()
                 .map(|row| {
                     Ok(pb::Row {
-                        values: row.iter().map(wire::value).collect(),
+                        values: row.iter().map(pb::Value::from).collect(),
                     })
                 })
                 .collect::<Vec<_>>();
@@ -1064,7 +1064,7 @@ impl pb::provider_server::Provider for Service {
         let args = r
             .inputs
             .iter()
-            .map(wire::from_value)
+            .map(Value::try_from)
             .collect::<Result<Vec<_>>>()
             .map_err(invalid)?;
         let [Value::Str(typ), Value::Str(name), Value::Str(key)] = args.as_slice() else {
@@ -1076,7 +1076,7 @@ impl pb::provider_server::Provider for Service {
             .created(typ, name, key)
             .await
             .map_err(|e| Status::unavailable(format!("{e:#}")))?;
-        let s = |x: &str| wire::value(&Value::Str(x.to_string()));
+        let s = |x: &str| pb::Value::from(&Value::Str(x.to_string()));
         let rows = found
             .map(|remote| {
                 Ok(pb::Row {

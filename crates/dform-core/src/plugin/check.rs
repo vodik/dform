@@ -162,7 +162,7 @@ fn suite(start: impl FnOnce() -> Result<Link>, dir: &Path) -> Result<(Vec<String
         let facts = resp
             .facts
             .iter()
-            .map(wire::from_fact)
+            .map(crate::ast::Atom::try_from)
             .collect::<Result<Vec<_>>>()?;
         Ok((Schema::from_facts(&facts)?, resp))
     });
@@ -229,13 +229,13 @@ fn suite(start: impl FnOnce() -> Result<Link>, dir: &Path) -> Result<(Vec<String
                 pb::QueryRequest {
                     pred: "check.lookup".into(),
                     input: vec![true, false],
-                    inputs: vec![wire::value(&Value::Str(input.into()))],
+                    inputs: vec![pb::Value::from(&Value::Str(input.into()))],
                     secret: Vec::new(),
                 },
             )
             .and_then(|rows| {
                 rows.iter()
-                    .map(|row| row.values.iter().map(wire::from_value).collect())
+                    .map(|row| row.values.iter().map(Value::try_from).collect())
                     .collect::<Result<Vec<Vec<Value>>>>()
             })
         };
@@ -509,7 +509,7 @@ fn apply_keyed(
 
 /// `provider.created(Type, "a", Key, Remote)`: the remote ids it answers.
 fn made_by(conn: &Conn, typ: &str, key: &str) -> Result<Vec<String>> {
-    let s = |x: &str| wire::value(&Value::Str(x.into()));
+    let s = |x: &str| pb::Value::from(&Value::Str(x.into()));
     let rows: Vec<pb::Row> = call(
         conn,
         pb::QueryRequest {
@@ -524,7 +524,7 @@ fn made_by(conn: &Conn, typ: &str, key: &str) -> Result<Vec<String>> {
             match row
                 .values
                 .iter()
-                .map(wire::from_value)
+                .map(Value::try_from)
                 .collect::<Result<Vec<_>>>()?
                 .as_slice()
             {

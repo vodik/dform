@@ -7,7 +7,7 @@ use dform_core::plugin::{pb, wire};
 
 #[test]
 fn a_value_round_trips_through_its_tree() {
-    let v = wire::value(&dform_core::value::Value::List(vec![]));
+    let v = pb::Value::from(&dform_core::value::Value::List(vec![]));
     assert_eq!(c::from_tree(&c::to_tree(&v)).unwrap(), v);
     let doc = wire::doc(&serde_json::json!({"a": [1, 0.5, "x", {"b": true}], "c": null}));
     let t = c::to_tree(&doc);

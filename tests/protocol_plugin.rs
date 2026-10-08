@@ -200,7 +200,8 @@ fn schema_rows(
     conn: &mut Link,
     types: Option<&[&str]>,
 ) -> (std::collections::BTreeSet<String>, usize) {
-    use dform::plugin::{pb, wire};
+    use dform::ast::Atom;
+    use dform::plugin::pb;
     let req = pb::SchemaRequest {
         types: types.map(|t| pb::TypeFilter {
             names: t.iter().map(|s| s.to_string()).collect(),
@@ -210,7 +211,7 @@ fn schema_rows(
     let facts: Vec<_> = resp
         .facts
         .iter()
-        .map(|f| wire::from_fact(f).unwrap())
+        .map(|f| Atom::try_from(f).unwrap())
         .collect();
     let typ = |a: &dform::ast::Atom| dform::spell::term(&a.args[0]);
     (

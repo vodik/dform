@@ -1689,14 +1689,14 @@ impl Handler for Ovh {
                 let inputs = q
                     .inputs
                     .iter()
-                    .map(wire::from_value)
+                    .map(Value::try_from)
                     .collect::<Result<Vec<_>>>()
                     .map_err(invalid)?;
                 let rows = self.query(&q.pred, &q.input, &inputs).map_err(invalid)?;
                 Reply::Query(
                     rows.iter()
                         .map(|row| pb::Row {
-                            values: row.iter().map(wire::value).collect(),
+                            values: row.iter().map(pb::Value::from).collect(),
                         })
                         .collect(),
                 )

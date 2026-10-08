@@ -1039,7 +1039,8 @@ fn offline_provider(s: &Scratch, dir: &str) -> dform::plugin::link::Link {
 
 /// A Schema answer's facts, spelled.
 fn schema_of(conn: &mut dform::plugin::link::Link, types: Option<&[&str]>) -> Vec<String> {
-    use dform::plugin::{pb, wire};
+    use dform::ast::Atom;
+    use dform::plugin::pb;
     let req = pb::SchemaRequest {
         types: types.map(|t| pb::TypeFilter {
             names: t.iter().map(|s| s.to_string()).collect(),
@@ -1048,7 +1049,7 @@ fn schema_of(conn: &mut dform::plugin::link::Link, types: Option<&[&str]>) -> Ve
     let resp: pb::SchemaResponse = conn.call(req).unwrap();
     resp.facts
         .iter()
-        .map(|f| dform::spell::atom(&wire::from_fact(f).unwrap()))
+        .map(|f| dform::spell::atom(&Atom::try_from(f).unwrap()))
         .collect()
 }
 

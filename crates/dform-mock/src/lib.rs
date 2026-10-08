@@ -641,7 +641,7 @@ impl FakeCloud {
             let mut values = Vec::new();
             for (c, v) in row.iter().enumerate() {
                 if !secret.get(c).copied().unwrap_or(false) {
-                    values.push(wire::value(v));
+                    values.push(pb::Value::from(v));
                     continue;
                 }
                 let j = dform_core::engine::value_to_json(v);
@@ -1443,7 +1443,7 @@ impl Handler for Mock {
                 let inputs = q
                     .inputs
                     .iter()
-                    .map(wire::from_value)
+                    .map(Value::try_from)
                     .collect::<Result<Vec<_>>>()
                     .map_err(invalid)?;
                 let mut cloud = self.cloud();

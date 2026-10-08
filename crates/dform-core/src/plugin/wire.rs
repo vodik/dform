@@ -1,6 +1,7 @@
 //! Values, documents and facts as the protocol's messages.
 //!
-//! A value maps one to one (`value`, `from_value`). A document is JSON in
+//! A value maps one to one (`From<&Value> for pb::Value`, `TryFrom<&pb::Value>
+//! for Value`), and a fact so (`TryFrom` both ways). A document is JSON in
 //! the engine and the fake: its null and secret markers (`provider::marker`)
 //! travel as `Null` messages, a float as `Float`, and a number beyond `i64`
 //! or a JSON `null` as a string. The value model has no float: the engine
@@ -14,11 +15,13 @@ use crate::value::{NullClass, Value};
 use anyhow::{Result, anyhow, bail};
 use serde_json::Value as Json;
 
-pub fn class(c: NullClass) -> pb::NullClass {
-    match c {
-        NullClass::Fresh => pb::NullClass::Fresh,
-        NullClass::Open => pb::NullClass::Open,
-        NullClass::Secret => pb::NullClass::Secret,
+impl From<NullClass> for pb::NullClass {
+    fn from(c: NullClass) -> pb::NullClass {
+        match c {
+            NullClass::Fresh => pb::NullClass::Fresh,
+            NullClass::Open => pb::NullClass::Open,
+            NullClass::Secret => pb::NullClass::Secret,
+        }
     }
 }
 
@@ -43,52 +46,56 @@ fn pb_ref(typ: &str, name: &str, attr: &str) -> pb::Ref {
     }
 }
 
-pub fn value(v: &Value) -> pb::Value {
-    use pb::value::Kind;
-    msg(match v {
-        Value::Str(s) => Kind::Str(s.clone()),
-        Value::Int(i) => Kind::Int(*i),
-        Value::Float(f) => Kind::Float(f.get()),
-        Value::Bool(b) => Kind::Bool(*b),
-        Value::List(xs) => Kind::List(pb::List {
-            items: xs.iter().map(value).collect(),
-        }),
-        Value::Obj(m) => Kind::Obj(pb::Obj {
-            fields: m.iter().map(|(k, x)| (k.clone(), value(x))).collect(),
-        }),
-        Value::Ip(n) => Kind::Ip(*n),
-        Value::IpNet { addr, prefix } => Kind::IpNet(pb::IpNet {
-            addr: *addr,
-            prefix: u32::from(*prefix),
-        }),
-        // A range of addresses is the wire's own; another range is its
-        // canonical text, which the provider's schema reads (R-180).
-        Value::Range(r) => match (&r.start, &r.end) {
-            (Value::Ip(start), Value::Ip(end)) if r.inclusive => Kind::IpRange(pb::IpRange {
-                start: *start,
-                end: *end,
+impl From<&Value> for pb::Value {
+    fn from(v: &Value) -> pb::Value {
+        use pb::value::Kind;
+        msg(match v {
+            Value::Str(s) => Kind::Str(s.clone()),
+            Value::Int(i) => Kind::Int(*i),
+            Value::Float(f) => Kind::Float(f.get()),
+            Value::Bool(b) => Kind::Bool(*b),
+            Value::List(xs) => Kind::List(pb::List {
+                items: xs.iter().map(pb::Value::from).collect(),
             }),
-            _ => Kind::Str(r.to_string()),
-        },
-        Value::Ref { typ, name, attr } => Kind::Ref(pb_ref(typ, name, attr)),
-        Value::CloudRef { typ, name, attr } => Kind::CloudRef(pb_ref(typ, name, attr)),
-        // A provider reads a quantity, a time or a uri as its canonical
-        // text, a uri's host in its A-labels (R-134); an attribute's
-        // schema renders it before it gets there (`render`).
-        Value::Quantity(_) | Value::Time(_) | Value::Uri(_) | Value::Oci(_) | Value::Semver(_) => {
-            Kind::Str(v.wire_text().unwrap_or_default())
-        }
-        Value::Null {
-            label,
-            class: c,
-            ty,
-        } => Kind::Null(pb::Null {
-            label: label.clone(),
-            class: class(*c) as i32,
-            ty: ty.clone(),
-            held: None,
-        }),
-    })
+            Value::Obj(m) => Kind::Obj(pb::Obj {
+                fields: m.iter().map(|(k, x)| (k.clone(), x.into())).collect(),
+            }),
+            Value::Ip(n) => Kind::Ip(*n),
+            Value::IpNet { addr, prefix } => Kind::IpNet(pb::IpNet {
+                addr: *addr,
+                prefix: u32::from(*prefix),
+            }),
+            // A range of addresses is the wire's own; another range is its
+            // canonical text, which the provider's schema reads (R-180).
+            Value::Range(r) => match (&r.start, &r.end) {
+                (Value::Ip(start), Value::Ip(end)) if r.inclusive => Kind::IpRange(pb::IpRange {
+                    start: *start,
+                    end: *end,
+                }),
+                _ => Kind::Str(r.to_string()),
+            },
+            Value::Ref { typ, name, attr } => Kind::Ref(pb_ref(typ, name, attr)),
+            Value::CloudRef { typ, name, attr } => Kind::CloudRef(pb_ref(typ, name, attr)),
+            // A provider reads a quantity, a time or a uri as its canonical
+            // text, a uri's host in its A-labels (R-134); an attribute's
+            // schema renders it before it gets there (`render`).
+            Value::Quantity(_)
+            | Value::Time(_)
+            | Value::Uri(_)
+            | Value::Oci(_)
+            | Value::Semver(_) => Kind::Str(v.wire_text().unwrap_or_default()),
+            Value::Null {
+                label,
+                class: c,
+                ty,
+            } => Kind::Null(pb::Null {
+                label: label.clone(),
+                class: pb::NullClass::from(*c) as i32,
+                ty: ty.clone(),
+                held: None,
+            }),
+        })
+    }
 }
 
 /// A float as the engine holds it (R-75): NaN and the infinities are no
@@ -97,53 +104,59 @@ fn float(f: f64) -> Result<crate::value::Float> {
     crate::value::Float::new(f).ok_or_else(|| anyhow!("{f} is not a finite number"))
 }
 
-pub fn from_value(v: &pb::Value) -> Result<Value> {
-    use pb::value::Kind;
-    let Some(k) = &v.kind else {
-        bail!("an empty value");
-    };
-    Ok(match k {
-        Kind::Str(s) => Value::Str(s.clone()),
-        Kind::Int(i) => Value::Int(*i),
-        Kind::Bool(b) => Value::Bool(*b),
-        Kind::List(l) => Value::List(l.items.iter().map(from_value).collect::<Result<_>>()?),
-        Kind::Obj(o) => Value::Obj(
-            o.fields
-                .iter()
-                .map(|(k, x)| Ok((k.clone(), from_value(x)?)))
-                .collect::<Result<_>>()?,
-        ),
-        Kind::Ip(n) => Value::Ip(*n),
-        Kind::IpNet(n) => Value::IpNet {
-            addr: n.addr,
-            prefix: u8::try_from(n.prefix)
-                .ok()
-                .filter(|p| *p <= 32)
-                .ok_or_else(|| anyhow!("an ip_net with prefix {}", n.prefix))?,
-        },
-        Kind::IpRange(r) => crate::range::Range {
-            start: Value::Ip(r.start),
-            end: Value::Ip(r.end),
-            inclusive: true,
-        }
-        .into(),
-        Kind::Ref(r) => Value::Ref {
-            typ: r.r#type.clone(),
-            name: r.name.clone(),
-            attr: r.attr.clone(),
-        },
-        Kind::CloudRef(r) => Value::CloudRef {
-            typ: r.r#type.clone(),
-            name: r.name.clone(),
-            attr: r.attr.clone(),
-        },
-        Kind::Null(n) => Value::Null {
-            label: n.label.clone(),
-            class: from_class(n.class)?,
-            ty: n.ty.clone(),
-        },
-        Kind::Float(f) => Value::Float(float(*f)?),
-    })
+impl TryFrom<&pb::Value> for Value {
+    type Error = anyhow::Error;
+
+    fn try_from(v: &pb::Value) -> Result<Value> {
+        use pb::value::Kind;
+        let Some(k) = &v.kind else {
+            bail!("an empty value");
+        };
+        Ok(match k {
+            Kind::Str(s) => Value::Str(s.clone()),
+            Kind::Int(i) => Value::Int(*i),
+            Kind::Bool(b) => Value::Bool(*b),
+            Kind::List(l) => {
+                Value::List(l.items.iter().map(Value::try_from).collect::<Result<_>>()?)
+            }
+            Kind::Obj(o) => Value::Obj(
+                o.fields
+                    .iter()
+                    .map(|(k, x)| Ok((k.clone(), Value::try_from(x)?)))
+                    .collect::<Result<_>>()?,
+            ),
+            Kind::Ip(n) => Value::Ip(*n),
+            Kind::IpNet(n) => Value::IpNet {
+                addr: n.addr,
+                prefix: u8::try_from(n.prefix)
+                    .ok()
+                    .filter(|p| *p <= 32)
+                    .ok_or_else(|| anyhow!("an ip_net with prefix {}", n.prefix))?,
+            },
+            Kind::IpRange(r) => crate::range::Range {
+                start: Value::Ip(r.start),
+                end: Value::Ip(r.end),
+                inclusive: true,
+            }
+            .into(),
+            Kind::Ref(r) => Value::Ref {
+                typ: r.r#type.clone(),
+                name: r.name.clone(),
+                attr: r.attr.clone(),
+            },
+            Kind::CloudRef(r) => Value::CloudRef {
+                typ: r.r#type.clone(),
+                name: r.name.clone(),
+                attr: r.attr.clone(),
+            },
+            Kind::Null(n) => Value::Null {
+                label: n.label.clone(),
+                class: from_class(n.class)?,
+                ty: n.ty.clone(),
+            },
+            Kind::Float(f) => Value::Float(float(*f)?),
+        })
+    }
 }
 
 /// A document: markers as nulls (a `$null` one of class open: the class is
@@ -244,38 +257,47 @@ pub fn schema_facts(
         Some(t) => schema
             .facts_for(&t.names.iter().cloned().collect())
             .iter()
-            .map(fact)
+            .map(pb::Fact::try_from)
             .collect(),
-        None => schema.facts.iter().map(fact).collect(),
+        None => schema.facts.iter().map(pb::Fact::try_from).collect(),
     }
 }
 
-pub fn fact(a: &Atom) -> Result<pb::Fact> {
-    let ground = |t: &Term| {
-        t.ground()
-            .ok_or_else(|| anyhow!("a fact's arguments are ground, found {t:?}"))
-    };
-    Ok(pb::Fact {
-        pred: a.pred.clone(),
-        args: a
-            .args
-            .iter()
-            .map(|t| ground(t).map(|v| value(&v)))
-            .collect::<Result<_>>()?,
-    })
+impl TryFrom<&Atom> for pb::Fact {
+    type Error = anyhow::Error;
+
+    /// A fact as the protocol carries it: its arguments ground.
+    fn try_from(a: &Atom) -> Result<pb::Fact> {
+        let ground = |t: &Term| {
+            t.ground()
+                .ok_or_else(|| anyhow!("a fact's arguments are ground, found {t:?}"))
+        };
+        Ok(pb::Fact {
+            pred: a.pred.clone(),
+            args: a
+                .args
+                .iter()
+                .map(|t| ground(t).map(|v| pb::Value::from(&v)))
+                .collect::<Result<_>>()?,
+        })
+    }
 }
 
-pub fn from_fact(f: &pb::Fact) -> Result<Atom> {
-    Ok(Atom {
-        pred: f.pred.clone(),
-        args: f
-            .args
-            .iter()
-            .map(|v| from_value(v).map(Term::Val))
-            .collect::<Result<_>>()?,
-        record: None,
-        span: Default::default(),
-    })
+impl TryFrom<&pb::Fact> for Atom {
+    type Error = anyhow::Error;
+
+    fn try_from(f: &pb::Fact) -> Result<Atom> {
+        Ok(Atom {
+            pred: f.pred.clone(),
+            args: f
+                .args
+                .iter()
+                .map(|v| Value::try_from(v).map(Term::Val))
+                .collect::<Result<_>>()?,
+            record: None,
+            span: Default::default(),
+        })
+    }
 }
 
 /// A provider's types under another name (R-115): `use ovh as ca` serves
@@ -526,7 +548,7 @@ mod tests {
             .into_iter()
             .collect(),
         );
-        assert_eq!(from_value(&value(&v)).unwrap(), v);
+        assert_eq!(Value::try_from(&pb::Value::from(&v)).unwrap(), v);
     }
 
     #[test]
@@ -550,14 +572,14 @@ mod tests {
                 panic!("{j} crosses as {w:?}");
             };
             assert_eq!(from_doc(&w).unwrap(), j);
-            let v = from_value(&w).unwrap();
+            let v = Value::try_from(&w).unwrap();
             assert_eq!(v, Value::Float(crate::value::Float::new(f).unwrap()));
-            assert_eq!(from_value(&value(&v)).unwrap(), v);
+            assert_eq!(Value::try_from(&pb::Value::from(&v)).unwrap(), v);
         }
         let nan = pb::Value {
             kind: Some(Kind::Float(f64::NAN)),
         };
-        assert!(from_value(&nan).is_err() && from_doc(&nan).is_err());
+        assert!(Value::try_from(&nan).is_err() && from_doc(&nan).is_err());
         assert_eq!(
             doc(&json!(u64::MAX)).kind,
             Some(Kind::Str(u64::MAX.to_string()))
@@ -595,19 +617,19 @@ mod tests {
         let back = out.inverse();
         let rows = vec![pb::Row {
             values: vec![
-                value(&Value::Str("ovh.instance".into())),
-                value(&Value::Str("ovh.x".into())),
+                pb::Value::from(&Value::Str("ovh.instance".into())),
+                pb::Value::from(&Value::Str("ovh.x".into())),
             ],
         }];
         let Reply::Query(rows) = back.reply(Reply::Query(rows), true) else {
             unreachable!()
         };
         assert_eq!(
-            from_value(&rows[0].values[0]).unwrap(),
+            Value::try_from(&rows[0].values[0]).unwrap(),
             Value::Str("ca.instance".into())
         );
         assert_eq!(
-            from_value(&rows[0].values[1]).unwrap(),
+            Value::try_from(&rows[0].values[1]).unwrap(),
             Value::Str("ovh.x".into())
         );
     }
