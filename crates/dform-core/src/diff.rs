@@ -328,7 +328,7 @@ pub fn program_of(apply: &Apply, files: &[PathBuf], top: &Path) -> (Program, Opt
                 .map(|b| crate::zset::file::fnv64(&b))
         })
         .collect();
-    let short = &commit[..commit.len().min(12)];
+    let short = crate::report::short_id(commit);
     // The apply recorded its tree dirty: say so, by the files.
     if !apply.dirty.is_empty() {
         if same_now {
@@ -384,7 +384,7 @@ pub fn at_commit(
     let dir = std::env::temp_dir().join(format!(
         "dform-diff-{}-{}",
         std::process::id(),
-        &commit[..commit.len().min(12)]
+        crate::report::short_id(commit)
     ));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
@@ -657,7 +657,7 @@ pub fn diff(
                         Some(format!(
                             "the program at {} could not be evaluated ({e:#}): explained by the \
                              program now",
-                            &c[..c.len().min(12)]
+                            crate::report::short_id(c)
                         )),
                     ),
                 },
@@ -806,15 +806,11 @@ fn marker(action: &str) -> &'static str {
     }
 }
 
-fn short(c: &str) -> &str {
-    &c[..c.len().min(12)]
-}
-
 fn apply_line(a: &Apply) -> String {
     let at = a
         .commit
         .as_deref()
-        .map(|c| format!(" at {}", short(c)))
+        .map(|c| format!(" at {}", crate::report::short_id(c)))
         .unwrap_or_default();
     let result = if a.result.is_empty() {
         "running or interrupted"

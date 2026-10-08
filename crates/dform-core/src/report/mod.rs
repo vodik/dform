@@ -295,6 +295,12 @@ pub fn address_text(s: &str) -> String {
     }
 }
 
+/// An id as messages print it (a commit, a master's): its first 12
+/// characters.
+pub fn short_id(id: &str) -> &str {
+    &id[..id.len().min(12)]
+}
+
 /// Past this many characters a string elides its middle at the default
 /// level (R-111): a public key, a digest.
 const LONG: usize = 60;
@@ -4559,6 +4565,12 @@ mod tests {
 
     /// Past 60 characters a string elides its middle at the default
     /// level, and prints whole from `-v`.
+    #[test]
+    fn an_id_prints_its_first_twelve_characters() {
+        assert_eq!(short_id("3e58789c0ffee5150aa"), "3e58789c0ffe");
+        assert_eq!(short_id("3e58"), "3e58");
+    }
+
     #[test]
     fn a_long_string_elides_its_middle_by_default() {
         let key = format!("ssh-ed25519 {} simon@framework", "A".repeat(68));

@@ -38,11 +38,6 @@ pub fn id(ikm: &[u8]) -> String {
         .collect()
 }
 
-/// A master id as messages print it: its first 12 hex digits.
-pub fn short(id: &str) -> &str {
-    &id[..id.len().min(12)]
-}
-
 /// `n` bytes from the system's random source.
 pub fn random_bytes<const N: usize>(what: &str) -> Result<[u8; N]> {
     use std::io::Read;
@@ -271,8 +266,8 @@ impl Master {
              was applied with (id {}): every random.* value and every secret digest would \
              change. {fix}, or run with --new-master to take this master and change them all",
             self.source,
-            short(now),
-            short(was),
+            crate::report::short_id(now),
+            crate::report::short_id(was),
         )
     }
 }
@@ -562,7 +557,7 @@ impl<'a> Opener<'a> {
                         .passphrase
                         .as_ref()
                         .map_or_else(String::new, Passphrase::describe),
-                    short(id)
+                    crate::report::short_id(id)
                 ),
             };
         }
@@ -1021,7 +1016,7 @@ pub fn resolve(
                  a passphrase nor recipients: add `[secrets] passphrase = \"env:NAME\"` (or \
                  \"prompt\"), or `recipients = [\"age1..\"]`",
                 store.locate(MASTER),
-                short(&r.id)
+                crate::report::short_id(&r.id)
             );
         }
         out.source = format!("the key file {}", store.locate(KEY));

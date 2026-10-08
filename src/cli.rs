@@ -2296,7 +2296,7 @@ fn run_with(
             "new master (--new-master): random.* derive from {} (id {}); every value derived \
              from another master changes",
             master.source,
-            crate::custody::short(id)
+            crate::report::short_id(id)
         );
     }
     // dform.toml's `[secrets]` says otherwise than `state.master`: the next
@@ -5407,7 +5407,7 @@ fn print_holders(h: &crate::custody::Holders) {
     println!(
         "master epoch {} ({which}, id {}): opens with {}",
         h.epoch,
-        crate::custody::short(&h.id),
+        crate::report::short_id(&h.id),
         match h.opens.is_empty() {
             true => "nothing dform.toml names".to_string(),
             false => h.opens.join(", "),
@@ -5570,7 +5570,7 @@ fn secrets_cycle(
     println!(
         "cycled the master of {deployment}: epoch {epoch} (id {}) is current, for new secrets and \
          each one rotated; {} stay{} on epoch {from} until rotated{}",
-        crate::custody::short(&id),
+        crate::report::short_id(&id),
         match on.len() {
             1 => "1 secret".to_string(),
             n => format!("{n} secrets"),
@@ -6944,7 +6944,7 @@ fn last_apply(entries: &[serde_json::Value]) -> LastApply {
                 by: field(e, "who"),
                 commit: e["commit"]
                     .as_str()
-                    .map(|c| c[..c.len().min(12)].to_string())
+                    .map(|c| crate::report::short_id(c).to_string())
                     .unwrap_or_default(),
                 result: end,
                 pending: String::new(),
