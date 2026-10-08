@@ -225,6 +225,36 @@ fn a_reference_compared_with_a_string_at_run_time_is_an_error() {
     }
 }
 
+/// The direct join where the type is a variable, `x in resource, x.vpc
+/// == "main"`, reads the cell by its string: a reference there is the
+/// same error at the rule, where it was a deny that never held. A string
+/// cell still joins, and `not x.vpc == ..` keeps its meaning: no cell
+/// equal to the string.
+#[test]
+fn a_direct_join_with_a_string_at_run_time_is_an_error() {
+    let s = scratch(
+        "refs-through-join",
+        &format!("{NETS}\ndeny \"main\" {{ r: x }} where x in resource, x.vpc == \"main\"\n"),
+    );
+    let r = mock(&s, &["plan"]).failure();
+    assert!(
+        r.stderr.contains(
+            "`x.vpc == \"main\"` compares a reference, net.vpc main, with the string \"main\""
+        ),
+        "{}",
+        r.stderr
+    );
+    s.write(
+        "p.df",
+        &(s.read("p.df")
+            .replace("x.vpc == \"main\"", "has x.vpc, not x.vpc == \"main\"")
+            + "deny \"cidr\" { r: x } where x in resource, x.cidr == \"10.1.0.0/16\"\n"),
+    );
+    let r = mock(&s, &["plan"]).failure();
+    assert!(r.stderr.contains("- main  r = \"a\"\n"), "{}", r.stderr);
+    assert!(r.stderr.contains("- cidr  r = \"other\"\n"), "{}", r.stderr);
+}
+
 /// The reviewer's shape: a `set` of `cpu: 100m` through `x in resource`
 /// reads the quantity as the attribute it writes takes it (cpu), where it
 /// was "this position has no type".

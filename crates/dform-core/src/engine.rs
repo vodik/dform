@@ -461,6 +461,11 @@ fn start(
             prov.store.index(&rel, &key);
         }
     }
+    for r in rules.iter().zip(&plans) {
+        for (rel, key) in string_cells(&r.0.body, &r.1.body) {
+            prov.store.index(&rel, &key);
+        }
+    }
 
     let rule_text: Vec<String> = rules.iter().map(spell::rule).collect();
     origins.rules = rule_text
@@ -949,6 +954,9 @@ pub fn query(body: &[Lit], facts: &BTreeSet<Atom>) -> Result<Vec<Answer>> {
         for key in keys {
             store.index(&rel, &key);
         }
+    }
+    for (rel, key) in string_cells(body, &plan) {
+        store.index(&rel, &key);
     }
     // Only the relations the body reads: an extern's demand asks this of
     // every fact of an evaluation, a manifest's documents among them.
@@ -2789,6 +2797,7 @@ fn eval_body(body: &[Lit], src: &Src, rec: &Rec) -> Result<Vec<Row>> {
                             }
                         }
                         let key = probe(atom, read, s);
+                        let before = next.len();
                         for t in src.store.candidates(
                             &read.rel,
                             &read.key,
@@ -2802,6 +2811,11 @@ fn eval_body(body: &[Lit], src: &Src, rec: &Rec) -> Result<Vec<Row>> {
                                 r.order.push(Choice::Tuple(t));
                                 next.push(r);
                             }
+                        }
+                        if next.len() == before
+                            && let Some(cell) = string_cell(atom, read)
+                        {
+                            reference_at_string_cell(atom, &cell, s, src, src.win[i], rec)?;
                         }
                     }
                 }
@@ -3674,6 +3688,82 @@ fn eval_eq(
     }
 }
 
+/// A read `attr(T, X, P, "s")` whose type is a variable (`x in resource,
+/// x.vpc == "main"`), its value a string the index looks up: the key that
+/// finds the cell without its value (R-204). Where the type is known the
+/// compiler says a reference is never a string; here only the cell can.
+fn string_cell(atom: &Atom, read: &ops::Read) -> Option<ops::Key> {
+    let [Term::Var(_), _, _, Term::Val(Value::Str(_))] = atom.args.as_slice() else {
+        return None;
+    };
+    if atom.pred != "attr" || read.scan_all {
+        return None;
+    }
+    let key: ops::Key = read.key.iter().copied().filter(|&c| c != 3).collect();
+    (key.len() < read.key.len() && !key.is_empty()).then_some(key)
+}
+
+/// The indexes [`string_cell`] reads through, for a body and its plan.
+fn string_cells(body: &[Lit], plan: &ops::Body) -> Vec<(ops::Rel, ops::Key)> {
+    body.iter()
+        .enumerate()
+        .filter_map(|(i, l)| match l {
+            Lit::Pos(a) => {
+                let read = plan.op(i).read()?;
+                Some((read.rel.clone(), string_cell(a, read)?))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// `attr(T, X, P, "s")` matched nothing under `s`: when the cell holds a
+/// reference, the error a comparison of a reference with a string is,
+/// never a join that silently does not hold.
+fn reference_at_string_cell(
+    atom: &Atom,
+    cell: &ops::Key,
+    s: &HashMap<String, Value>,
+    src: &Src,
+    w: Window,
+    rec: &Rec,
+) -> Result<()> {
+    let probe: Option<Vec<Value>> = cell
+        .iter()
+        .map(|&c| match &atom.args[c] {
+            Term::Val(v) => Some(v.clone()),
+            Term::Var(x) => s.get(x).cloned(),
+            _ => None,
+        })
+        .collect();
+    let Some(probe) = probe.filter(|p| !p.iter().any(stuck::has_null)) else {
+        return Ok(());
+    };
+    let rel = ops::Rel::of(atom);
+    let mut open = atom.clone();
+    open.args[3] = Term::Wildcard;
+    for t in src.store.candidates(&rel, cell, Some(&probe), false, w) {
+        let fact = src.store.get(t);
+        let Some(Term::Val(v @ Value::Ref { .. })) = fact.args.get(3) else {
+            continue;
+        };
+        if unify_atom(&open, fact, s, rec)?.is_none() {
+            continue;
+        }
+        let (Term::Var(x), Term::Val(Value::Str(path)), b) =
+            (&atom.args[1], &atom.args[2], &atom.args[3])
+        else {
+            continue;
+        };
+        let read = format!("{}.{path}", crate::syntax::resolve::source_name(x));
+        let Term::Val(bv) = b else { continue };
+        if let Some(e) = ref_and_string_written(&read, v, "==", &spell::term(b), bv, rec) {
+            return Err(e);
+        }
+    }
+    Ok(())
+}
+
 /// A reference compared with a string, `a OP b` (`==`, `!=`, `in` an
 /// element of `b`): never equal, so an error at the rule naming both,
 /// never a literal that silently does not hold. The compiler says so
@@ -3687,6 +3777,25 @@ fn ref_and_string(
     bv: &Value,
     rec: &Rec,
 ) -> Option<anyhow::Error> {
+    fn shown(t: &Term) -> String {
+        match t {
+            Term::Var(x) => crate::syntax::resolve::source_name(x),
+            Term::List(xs) => format!("[{}]", xs.iter().map(shown).collect::<Vec<_>>().join(", ")),
+            t => spell::term(t),
+        }
+    }
+    ref_and_string_written(&shown(a), av, op, &shown(b), bv, rec)
+}
+
+/// [`ref_and_string`] with both sides as the program wrote them.
+fn ref_and_string_written(
+    a: &str,
+    av: &Value,
+    op: &str,
+    b: &str,
+    bv: &Value,
+    rec: &Rec,
+) -> Option<anyhow::Error> {
     let ((typ, name), text) = match (av, bv) {
         (Value::Ref { typ, name, attr }, Value::Str(s))
         | (Value::Str(s), Value::Ref { typ, name, attr })
@@ -3696,13 +3805,6 @@ fn ref_and_string(
         }
         _ => return None,
     };
-    fn shown(t: &Term) -> String {
-        match t {
-            Term::Var(x) => crate::syntax::resolve::source_name(x),
-            Term::List(xs) => format!("[{}]", xs.iter().map(shown).collect::<Vec<_>>().join(", ")),
-            t => spell::term(t),
-        }
-    }
     let reference = crate::report::address(&crate::ir::Address {
         typ: typ.clone(),
         name: name.clone(),
@@ -3720,10 +3822,8 @@ fn ref_and_string(
     let d = diag::Diagnostic::error(
         rec.head.span,
         format!(
-            "`{} {op} {}` compares a reference, {reference}, with the string {text:?}: a \
-             reference is never a string",
-            shown(a),
-            shown(b)
+            "`{a} {op} {b}` compares a reference, {reference}, with the string {text:?}: a \
+             reference is never a string"
         ),
     )
     .with_help(help);
