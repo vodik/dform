@@ -1266,6 +1266,7 @@ dependencies = [
  "dform-mock",
  "dform-provider-ovh",
  "dform-provider-postgres",
+ "dform-provider-vault",
  "dform-s3",
  "dform-sdk",
  "expectrl",
@@ -1481,6 +1482,17 @@ dependencies = [
  "tokio",
  "tokio-postgres",
  "tokio-rustls",
+]
+
+[[package]]
+name = "dform-provider-vault"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "dform-provider-vault",
+ "dform-sdk",
+ "percent-encoding",
+ "serde_json",
 ]
 
 [[package]]

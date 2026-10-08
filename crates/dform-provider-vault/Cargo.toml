@@ -1,0 +1,29 @@
+[package]
+name = "dform-provider-vault"
+version = "0.1.0"
+license = "Apache-2.0"
+edition = "2024"
+publish = false
+
+# The Vault provider (R-172), written with the SDK: a scheme provider, no
+# resources. It declares `vault://` and reads a KV v2 secret, with its
+# version, through the host's HTTP client: the token is a credential by
+# name the host applies, so its value never reaches the provider.
+[features]
+# `fake`: a Vault server in the test process (`src/fake.rs`) speaking the
+# KV v2 read, versions and AppRole login, for tests.
+fake = []
+
+[dependencies]
+anyhow = "1.0"
+serde_json = "1.0"
+dform-sdk = { path = "../dform-sdk" }
+percent-encoding = "2"
+
+[dev-dependencies]
+dform-provider-vault = { path = ".", features = ["fake"] }
+
+# `dform_sdk::provider!` also writes the component's exports, under the
+# `component` feature on wasm; this provider is native only for now.
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("component"))'] }
