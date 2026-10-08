@@ -2,8 +2,9 @@
 //! writes and refinements joined in the path's lattice, and the cell's facts: the value, a
 //! conflict or a violated refinement with its deny, a stuck disagreement, a shadowed warning.
 
+use super::contributions::{Contribution, ElemContribution, GroupKey, Origins, rank_name};
 use super::errors::with_place;
-use super::{Contribution, ElemContribution, GroupKey, Origins, policy_fact, rank_name};
+use super::policy_fact;
 use crate::ast::{Atom, Term, str_term};
 use crate::diag;
 use crate::ir::store::{Store, TupleId};
