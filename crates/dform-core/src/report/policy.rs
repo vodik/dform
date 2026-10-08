@@ -7,7 +7,9 @@
 //! the rest as one `N hold` line; holding policies are the block's count
 //! (`-v` lists everything).
 
-use super::{Address, Paint, Policy, Row, Style, Why, address, label, until_text, violation_parts};
+use super::{
+    Address, Paint, Policy, Row, Style, Why, address, label, layout, until_text, violation_parts,
+};
 use crate::ast::{Lit, Program, Stmt, Term};
 use crate::engine::EvalResult;
 use crate::query::Redactor;
@@ -441,6 +443,57 @@ pub(super) fn rows(lines: &[Line], why: Why, style: Style) -> Vec<Row> {
     rows
 }
 
+/// The block under a tick an apply ran (R-206), the policies as the
+/// boundary after it re-checked them: `policy after tick 1   14 hold · 1
+/// undetermined`, then each that does not hold as the plan's block says
+/// it (a policy that fails there its line with its mark red). `was`, the
+/// count before the tick, follows when the count moved, each word the
+/// line says already left out: `(was 12 · 1 fails · 2)`.
+pub fn after(
+    tick: usize,
+    lines: &[Line],
+    was: Option<(usize, usize, usize)>,
+    why: Why,
+    style: Style,
+) -> String {
+    let mut rows = rows(lines, why, style);
+    if rows.is_empty() {
+        return String::new();
+    }
+    let now = count(lines);
+    let head = format!(
+        "policy after tick {tick}   {}",
+        tally_text(now.0, now.1, now.2)
+    );
+    let mut header = Row::new(&head, style.paint(Paint::Bold, &head));
+    if let Some(was) = was.filter(|w| *w != now) {
+        header = header.with(vec![format!("(was {})", was_text(now, was))]);
+    }
+    rows[0] = header;
+    layout(&rows, style)
+}
+
+/// The count before, each part's word left out where the count now says
+/// it: `12 · 1 fails · 2` against `14 hold · 1 undetermined`.
+fn was_text(now: (usize, usize, usize), was: (usize, usize, usize)) -> String {
+    let parts: Vec<String> = [
+        (was.0, now.0, "hold"),
+        (was.1, now.1, "fails"),
+        (was.2, now.2, "undetermined"),
+    ]
+    .into_iter()
+    .filter(|(n, _, _)| *n > 0)
+    .map(|(n, said, w)| match said > 0 {
+        true => n.to_string(),
+        false => format!("{n} {w}"),
+    })
+    .collect();
+    match parts.is_empty() {
+        true => "0 hold".to_string(),
+        false => parts.join(" · "),
+    }
+}
+
 impl Line {
     /// The line as `--json` says it: its mark, text, site and tally, and
     /// what is under it.
@@ -460,5 +513,64 @@ impl Line {
                 "until": until,
             })).collect::<Vec<_>>(),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_count_before_leaves_out_the_words_the_line_says() {
+        assert_eq!(was_text((14, 0, 1), (12, 1, 2)), "12 · 1 fails · 2");
+        assert_eq!(was_text((2, 0, 0), (1, 0, 1)), "1 · 1 undetermined");
+    }
+
+    #[test]
+    fn the_block_after_a_tick_says_the_count_and_what_it_was() {
+        let line = |fails: usize, undetermined: usize| Line {
+            text: "the vm reads an endpoint".into(),
+            at: "p.df:7".into(),
+            holds: vec![],
+            hold: 1,
+            fails: (0..fails)
+                .map(|_| (Some("compute.vm app".into()), "db_host = \"x\"".into()))
+                .collect(),
+            undetermined: (0..undetermined)
+                .map(|_| {
+                    (
+                        "compute.vm app".into(),
+                        "until db_host is known (tick 2)".into(),
+                    )
+                })
+                .collect(),
+        };
+        let held = Line {
+            undetermined: vec![],
+            ..line(0, 0)
+        };
+        let text = after(
+            1,
+            &[held.clone()],
+            Some((0, 0, 1)),
+            Why::Line,
+            Style::default(),
+        );
+        assert_eq!(text, "policy after tick 1   1 hold  (was 1 undetermined)\n");
+        // Unmoved, no `was`.
+        let text = after(2, &[held], Some((1, 0, 0)), Why::Line, Style::default());
+        assert_eq!(text, "policy after tick 2   1 hold\n");
+        // A policy that fails at the boundary: its line, its mark red.
+        let text = after(
+            1,
+            &[line(1, 0)],
+            Some((0, 0, 1)),
+            Why::Line,
+            Style { color: true },
+        );
+        assert!(
+            text.contains("\x1b[31mfails\x1b[0m  the vm reads an endpoint"),
+            "{text}"
+        );
     }
 }

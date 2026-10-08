@@ -6,8 +6,9 @@ use crate::{report, zset};
 use anyhow::{Result, bail};
 
 /// Ask on the terminal whether to apply `n` changes to `deployment`
-/// (`destroy`: to delete its `n` objects), or (`new`) tick `tick`, which
-/// adds what no plan listed: only `y` or `yes` proceeds.
+/// (`destroy`: to delete its `n` objects), or (`new`) tick `tick`, of `n`
+/// changes, which adds to the plan shown: asked on the tick's header line,
+/// `tick 2  1 change   apply? [y/N]` (R-206). Only `y` or `yes` proceeds.
 /// With no terminal to ask on, a refusal naming `--yes`, never a wait.
 /// Answered no, `false`: a decline, not an error.
 pub(super) fn confirm(
@@ -30,7 +31,7 @@ pub(super) fn confirm(
         );
     }
     let ask = match (new, destroy, n) {
-        (true, _, _) => format!("Apply tick {tick} to {deployment}?"),
+        (true, _, _) => format!("{}   {verb}?", report::progress::title(tick, n)),
         (false, true, 1) => format!("Destroy this object of {deployment}?"),
         (false, true, _) => format!("Destroy these {n} objects of {deployment}?"),
         (false, false, 1) => format!("Apply this change to {deployment}?"),

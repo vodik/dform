@@ -1,10 +1,12 @@
-//! Apply's progress on stderr (R-127), as the block `report::progress`
-//! renders: on a terminal its lines change in place, about once a
-//! second, by moving the cursor over the block's own lines and clearing
-//! each as it is written again (`crossterm` for the cursor, the clear and
-//! the width; nothing else of the screen is touched); otherwise one line
-//! per change of state, and a running change's line again every
-//! [`BEAT`] as a heartbeat; under `-q` only the tick's end. Between
+//! Apply's progress on stderr (R-127, R-206), as the block
+//! `report::progress` renders: on a terminal its lines change in place,
+//! about once a second, by moving the cursor over the block's own lines
+//! and clearing each as it is written again (`crossterm` for the cursor,
+//! the clear and the width; nothing else of the screen is touched), its
+//! header's bar filling; under `--yes` or with no terminal, no bar: one
+//! line per change of state (a change as its call starts, then once it
+//! answered), a running change's line again every [`BEAT`] as a
+//! heartbeat, and the tick's end; under `-q` only the tick's end. Between
 //! ticks, on a terminal, the tick's wait is one line counting up.
 //!
 //! Ctrl-C (or SIGTERM) while a tick runs is a request to stop
@@ -20,7 +22,7 @@ use crossterm::{QueueableCommand, cursor, terminal};
 use dform_core::executor::Event;
 use dform_core::interrupt;
 use dform_core::report::Style;
-use dform_core::report::progress::{Block, took};
+use dform_core::report::progress::{Block, State, took};
 use std::io::Write;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -49,6 +51,17 @@ impl Mode {
             (true, _) => Mode::Quiet,
             (_, true) => Mode::Terminal,
             _ => Mode::Lines,
+        }
+    }
+
+    /// The mode of a tick's block, at `quiet`: drawn in place where the
+    /// apply asks on a terminal (stdout and stderr both one), else under
+    /// `yes` (nobody watches it fill: a log) a line per change of state.
+    pub fn of_block(quiet: bool, yes: bool) -> Mode {
+        use std::io::IsTerminal;
+        match Mode::of_stderr(quiet) {
+            Mode::Terminal if yes || !std::io::stdout().is_terminal() => Mode::Lines,
+            m => m,
         }
     }
 }
@@ -94,6 +107,8 @@ struct Inner {
     drawn: usize,
     /// When each change's line was last printed (`Lines`).
     said: Vec<Instant>,
+    /// The headers printed (`Lines`): each once, before its first change.
+    headers: Vec<usize>,
     beat: Duration,
     /// A line to print once, above the block (on a terminal, at its next
     /// redraw).
@@ -140,9 +155,12 @@ impl Inner {
     /// address; after, with its time.
     fn say(&mut self, i: usize, start: bool) {
         if let Board::Tick(b) = &self.board {
-            match start {
-                true => eprintln!("{}", b.started(i, self.style)),
-                false => eprintln!("{}", b.line(i, self.style)),
+            let lines = match start {
+                true => b.started(i, self.style, &mut self.headers),
+                false => b.line(i, self.style, &mut self.headers),
+            };
+            for l in lines {
+                eprintln!("{l}");
             }
             self.said[i] = Instant::now();
         }
@@ -157,15 +175,25 @@ pub struct Progress {
 }
 
 impl Progress {
-    /// Start printing tick `block`.
-    pub fn tick(block: Block, mode: Mode, style: Style) -> Progress {
+    /// Start printing tick `block`; on a terminal over the `asked` lines
+    /// above it (the tick's question, asked on its header line: the
+    /// header with its bar takes its place).
+    pub fn tick(block: Block, mode: Mode, style: Style, asked: usize) -> Progress {
         let n = block.entries.len();
         let header = block.title();
-        let p = Progress::start(Board::Tick(block), mode, style, n);
+        // Apart from what is above it, unless it takes the question's
+        // place.
+        let drawn = match mode {
+            Mode::Terminal => asked,
+            _ => 0,
+        };
+        if mode != Mode::Quiet && drawn == 0 {
+            eprintln!();
+        }
         if mode == Mode::Lines {
             eprintln!("{header}");
         }
-        p
+        Progress::start(Board::Tick(block), mode, style, n, drawn)
     }
 
     /// Start printing the wait before tick `tick` on `on` (a terminal
@@ -180,10 +208,10 @@ impl Progress {
             Mode::Terminal => Mode::Terminal,
             _ => Mode::Quiet,
         };
-        Progress::start(board, mode, style, 0)
+        Progress::start(board, mode, style, 0, 0)
     }
 
-    fn start(board: Board, mode: Mode, style: Style, n: usize) -> Progress {
+    fn start(board: Board, mode: Mode, style: Style, n: usize, drawn: usize) -> Progress {
         let beat = std::env::var("DFORM_HEARTBEAT_MS")
             .ok()
             .and_then(|ms| ms.parse().ok())
@@ -193,8 +221,9 @@ impl Progress {
             board,
             mode,
             style,
-            drawn: 0,
+            drawn,
             said: vec![Instant::now(); n],
+            headers: Vec::new(),
             beat,
             note: None,
             stopping: false,
@@ -260,7 +289,7 @@ impl Progress {
     pub fn finish(mut self) -> Vec<dform_core::ir::Address> {
         self.halt();
         let mut inner = self.inner.lock().expect("progress");
-        let (mode, style) = (inner.mode, inner.style);
+        let style = inner.style;
         // A stop asked for since the clock last looked: said before the
         // block ends.
         if let Some(sig) = interrupt::requested()
@@ -269,28 +298,41 @@ impl Progress {
             inner.stopping = true;
             stopping(&mut inner, sig);
         }
-        if interrupt::requested().is_some()
-            && let Board::Tick(b) = &mut inner.board
-        {
-            for i in 0..b.entries.len() {
-                if matches!(
-                    b.entries[i].state,
-                    dform_core::report::progress::State::Waiting(_)
-                ) {
-                    b.entries[i].state = dform_core::report::progress::State::Interrupted;
-                    if mode == Mode::Lines {
-                        eprintln!("{}", b.line(i, style));
+        let Inner {
+            board,
+            headers,
+            mode,
+            ..
+        } = &mut *inner;
+        if let Board::Tick(b) = board {
+            b.end();
+            if interrupt::requested().is_some() {
+                let waiting: Vec<usize> = (0..b.entries.len())
+                    .filter(|i| matches!(b.entries[*i].state, State::Waiting(_)))
+                    .collect();
+                b.interrupt();
+                if *mode == Mode::Lines {
+                    for i in waiting {
+                        for l in b.line(i, style, headers) {
+                            eprintln!("{l}");
+                        }
                     }
                 }
             }
         }
-        if inner.mode == Mode::Terminal {
-            inner.redraw();
+        // On a terminal the header says how the tick ended; elsewhere its
+        // own line does.
+        match inner.mode {
+            Mode::Terminal => inner.redraw(),
+            _ => {
+                if let Board::Tick(b) = &inner.board {
+                    eprintln!("{}", b.ended());
+                }
+            }
         }
         let Board::Tick(b) = &inner.board else {
             return Vec::new();
         };
-        eprintln!("{}", b.end());
         for line in b.failures(style) {
             eprintln!("{line}");
         }
@@ -357,8 +399,7 @@ fn watch(inner: &Mutex<Inner>, stop: &AtomicBool) {
                 let due: Vec<usize> = match &g.board {
                     Board::Tick(b) => (0..b.entries.len())
                         .filter(|&i| {
-                            b.entries[i].state == dform_core::report::progress::State::Running
-                                && g.said[i].elapsed() >= g.beat
+                            b.entries[i].state == State::Running && g.said[i].elapsed() >= g.beat
                         })
                         .collect(),
                     Board::Wait { .. } => Vec::new(),

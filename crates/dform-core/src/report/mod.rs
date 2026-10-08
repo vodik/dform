@@ -1105,6 +1105,18 @@ pub struct Report {
 /// k3s` (R-200), as `why` names the scope.
 const MODULE: &str = "module";
 
+/// One line of a tick's tree ([`Report::outline`]).
+#[derive(Debug, Clone)]
+pub enum Node<'r> {
+    /// A copy, or a used module's instance (`module k3s`), the changes
+    /// after it at a deeper level its own; `kind` gives its mark.
+    Header {
+        addr: Address,
+        kind: ActionKind,
+    },
+    Change(&'r Deformation),
+}
+
 /// The scopes of `addrs` that are no copy (a used module's instance) and
 /// hold two or more of them: what the plan's tree groups under a header.
 fn shared_modules<'a>(
@@ -2565,6 +2577,13 @@ struct Row {
     /// The right column is what the line says (a deny's wait): when none
     /// fits beside it, the shortest goes on the line below.
     keep: bool,
+    /// The right column is said, not a note: unpainted (an apply's
+    /// status once its call answered, R-206), where a site is dim.
+    set: bool,
+    /// The right column starts after it also while it has none: a line
+    /// whose right column comes and goes (an apply's change) moves no
+    /// other line's.
+    aligned: bool,
 }
 
 impl Row {
@@ -2574,6 +2593,8 @@ impl Row {
             width: plain.chars().count(),
             right: Vec::new(),
             keep: false,
+            set: false,
+            aligned: false,
         }
     }
 
@@ -2583,6 +2604,8 @@ impl Row {
             left: s,
             right: Vec::new(),
             keep: false,
+            set: false,
+            aligned: false,
         }
     }
 
@@ -2596,6 +2619,18 @@ impl Row {
         self.keep = true;
         self
     }
+
+    /// The right column unpainted.
+    fn set(mut self) -> Row {
+        self.set = true;
+        self
+    }
+
+    /// The right column after it, whether it has one now or not.
+    fn aligned(mut self) -> Row {
+        self.aligned = true;
+        self
+    }
 }
 
 /// The rows, the right column aligned across them and dim (R-111); a
@@ -2604,7 +2639,7 @@ impl Row {
 fn layout(rows: &[Row], style: Style) -> String {
     let col = rows
         .iter()
-        .filter(|r| !r.right.is_empty() && r.width + 2 <= COLUMN)
+        .filter(|r| (r.aligned || !r.right.is_empty()) && r.width + 2 <= COLUMN)
         .map(|r| r.width + 2)
         .max()
         .unwrap_or(0);
@@ -2614,7 +2649,10 @@ fn layout(rows: &[Row], style: Style) -> String {
         let at = col.max(r.width + 2);
         if let Some(x) = r.right.iter().find(|x| at + x.chars().count() <= WIDTH) {
             out.push_str(&" ".repeat(at - r.width));
-            out.push_str(&style.paint(Paint::Dim, x));
+            match r.set {
+                true => out.push_str(x),
+                false => out.push_str(&style.paint(Paint::Dim, x)),
+            }
         } else if let Some(x) = r.right.last().filter(|_| r.keep) {
             let indent = r.left.len() - r.left.trim_start().len() + 4;
             out.push('\n');
@@ -3188,7 +3226,7 @@ impl Report {
                     provisional_text(&s.provisional)
                 )));
             }
-            self.write_level(&mut rows, &s.changes, None, "  ", style);
+            self.write_level(&mut rows, &s.changes, "  ", style);
             for a in &s.deposed {
                 let addr = address(a);
                 let plain = format!("  - {addr}  (deposed)");
@@ -3347,7 +3385,7 @@ impl Report {
             if let Some(keys) = &b.provisional {
                 rows.push(Row::plain(format!("  {}", provisional_text(keys))));
             }
-            self.write_level(rows, &ds, None, "  ", style);
+            self.write_level(rows, &ds, "  ", style);
         }
     }
 
@@ -3426,16 +3464,48 @@ impl Report {
 
     /// Changes in order, a copy's under it (R-67): `+ network blue` at
     /// the place of its first resource, the resources indented beneath, a
-    /// copy inside it nested again. The copy's marker is its `deformation`
-    /// row's kind (`zset::Instances::row_kind`): `-` when the program wants
-    /// none of its resources, `+` when one is created, else `~`.
-    fn write_level(
-        &self,
-        rows: &mut Vec<Row>,
-        ds: &[&Deformation],
+    /// copy inside it nested again.
+    fn write_level(&self, rows: &mut Vec<Row>, ds: &[&Deformation], indent: &str, style: Style) {
+        self.walk_level(ds, None, 0, &mut |depth, node| {
+            let indent = format!("{indent}{}", "  ".repeat(depth));
+            match node {
+                Node::Header { addr, kind } => {
+                    let addr = address(&addr);
+                    let plain = format!("{indent}{} {addr}", marker_of(&kind));
+                    let painted = format!(
+                        "{indent}{} {}",
+                        style.marker(&kind),
+                        style.paint(Paint::Bold, &addr)
+                    );
+                    rows.push(Row::new(&plain, painted));
+                }
+                Node::Change(d) => self.write_change(rows, d, &indent, style),
+            }
+        });
+    }
+
+    /// The tree of this report's tick (R-200, the path tree): each change
+    /// in order, each copy and each used module's instance two or more of
+    /// them share a header at the place of its first, what is in it one
+    /// level deeper. The plan prints it with sites ([`Report::render`]),
+    /// the apply with each call's status (R-206, `progress::Block`).
+    pub fn outline(&self) -> Vec<(usize, Node<'_>)> {
+        let ds: Vec<&Deformation> = self.definite.iter().collect();
+        let mut out = Vec::new();
+        self.walk_level(&ds, None, 0, &mut |depth, node| out.push((depth, node)));
+        out
+    }
+
+    /// The changes `ds` under `outer` at `depth`, each copy's header with
+    /// its kind: its `deformation` row's (`zset::Instances::row_kind`),
+    /// `-` when the program wants none of its resources, `+` when one is
+    /// created, else `~`.
+    fn walk_level<'r>(
+        &'r self,
+        ds: &[&'r Deformation],
         outer: Option<&Address>,
-        indent: &str,
-        style: Style,
+        depth: usize,
+        f: &mut dyn FnMut(usize, Node<'r>),
     ) {
         // The scopes the changes here share: each copy, and a used
         // module's instance two or more of them are in (R-200: the plan
@@ -3454,7 +3524,7 @@ impl Report {
         let mut done: BTreeSet<Address> = BTreeSet::new();
         for d in ds {
             let Some(copy) = under(d) else {
-                self.write_change(rows, d, indent, style);
+                f(depth, Node::Change(d));
                 continue;
             };
             if !done.insert(copy.clone()) {
@@ -3474,15 +3544,14 @@ impl Report {
                 "create" => ActionKind::Create,
                 _ => ActionKind::Update,
             };
-            let addr = address(&copy);
-            let plain = format!("{indent}{} {addr}", marker_of(&kind));
-            let painted = format!(
-                "{indent}{} {}",
-                style.marker(&kind),
-                style.paint(Paint::Bold, &addr)
+            f(
+                depth,
+                Node::Header {
+                    addr: copy.clone(),
+                    kind,
+                },
             );
-            rows.push(Row::new(&plain, painted));
-            self.write_level(rows, &members, Some(&copy), &format!("{indent}  "), style);
+            self.walk_level(&members, Some(&copy), depth + 1, f);
         }
     }
 

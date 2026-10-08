@@ -63,6 +63,14 @@ pub(super) struct Ticks<'a, 'h> {
     /// earlier ticks ran (After R-156).
     shown_delta: Vec<zset::file::Entry>,
     ran: BTreeSet<(String, String)>,
+    /// The policy block's count as the last plan or boundary left it
+    /// (holds, fails, undetermined): what the next boundary's says it
+    /// was (R-206).
+    policy: Option<(usize, usize, usize)>,
+    /// The lines of the question just asked above the next block (a
+    /// later tick's, on its header line): on a terminal the block's
+    /// header takes their place.
+    asked: std::cell::Cell<usize>,
 }
 
 /// One tick's plan, and what the tick made of it.
@@ -147,6 +155,8 @@ impl<'a, 'h> Ticks<'a, 'h> {
             scheduled: BTreeSet::new(),
             shown_delta: Vec::new(),
             ran: BTreeSet::new(),
+            policy: None,
+            asked: std::cell::Cell::new(0),
         })
     }
 
@@ -303,6 +313,7 @@ impl<'a, 'h> Ticks<'a, 'h> {
                 .check_saved(&planned.plan, &planned.res, &planned.sections)?;
         }
         self.say_configured(&planned.res)?;
+        self.policy_after(&planned);
         let mut t = self.decide(planned)?;
         if let Some(o) = self.show(&t)? {
             return Ok(Next::Done(o));
@@ -563,7 +574,7 @@ impl<'a, 'h> Ticks<'a, 'h> {
     fn show(&mut self, t: &Tick) -> Result<Option<Outcome>> {
         let tick = self.tick;
         let p = &t.planned;
-        if self.hook.is_none() {
+        if self.hook.is_none() && self.replanned(t) {
             self.print(t);
         }
         if !p.denies.is_empty() {
@@ -640,6 +651,64 @@ impl<'a, 'h> Ticks<'a, 'h> {
         Ok(None)
     }
 
+    /// Whether a tick's plan is printed as the tick starts: tick 1's, a
+    /// refused one's, and under `-q` (the bare form scripts read) and
+    /// `-v` every later one's too. Otherwise a later tick is its block, its
+    /// plan printed only where it adds to the plan shown (R-206,
+    /// [`Ticks::confirm_later`]).
+    fn replanned(&self, t: &Tick) -> bool {
+        let why = self.r.why();
+        self.tick == 1
+            || why == report::Why::None
+            || why >= report::Why::How
+            || !t.planned.denies.is_empty()
+    }
+
+    /// The policy block under the tick before (R-206): the policies as
+    /// this tick's plan, which the boundary re-derived, has them, and the
+    /// count the last one had. Tick 1's plan prints its own block: its
+    /// count is what the first boundary's says it was.
+    fn policy_after(&mut self, p: &Planned) {
+        if self.hook.is_some() || self.r.why() == report::Why::None {
+            return;
+        }
+        let tick = self.tick;
+        let mut report = self
+            .r
+            .report(&p.plan, &p.res, &p.sections, tick, &[], &p.denies);
+        if tick > 1 {
+            self.r.explain(&mut report, &p.plan, &p.res, tick);
+            let (why, style) = (self.r.why(), self.cx.cli.style);
+            let after = report::policy::after(tick - 1, &report.policy, self.policy, why, style);
+            if !after.is_empty() {
+                print!("\n{after}");
+            }
+        }
+        self.policy = Some(report::policy::count(&report.policy));
+    }
+
+    /// The policy block of a boundary that refuses the next tick (R-206):
+    /// the failing policy's line, its mark red, above the refusal.
+    fn policy_refused(&self, res: &engine::EvalResult) -> Result<()> {
+        if self.hook.is_some() || self.r.why() == report::Why::None {
+            return Ok(());
+        }
+        let (tick, backend) = (self.tick, self.backend());
+        let docs = ir::compile_resources(res.facts.iter().cloned(), backend.schema())?;
+        let sections = deployment::sections(res, &docs, backend.schema());
+        let plan = crate::provider::Plan {
+            actions: Vec::new(),
+        };
+        let mut report = self.r.report(&plan, res, &sections, tick + 1, &[], &[]);
+        self.r.explain(&mut report, &plan, res, tick + 1);
+        let (why, style) = (self.r.why(), self.cx.cli.style);
+        let after = report::policy::after(tick, &report.policy, self.policy, why, style);
+        if !after.is_empty() {
+            print!("\n{after}");
+        }
+        Ok(())
+    }
+
     /// A batch apply's tick printed: its plan, under `tick N:` at the bare
     /// level; a later tick that only waits has no section of its own in the
     /// report, so its header says which tick the report is of.
@@ -713,6 +782,24 @@ impl<'a, 'h> Ticks<'a, 'h> {
             .iter()
             .filter(|a| !self.listed.contains(**a))
             .count();
+        // What `later` showed waiting on a provider, planned now against
+        // it: asked for as tick 1 was, unless `--yes`; a plan file or an
+        // approval did not see it.
+        let planned = addresses
+            .iter()
+            .filter(|a| self.on_provider.contains(**a) && !self.scheduled.contains(&a.to_string()))
+            .count();
+        let now = self.r.delta(&p.plan, &p.res, &p.sections, tick, self.key());
+        let differs = self.differs(&now);
+        // A change gone from the tick is said, not asked for: the tick does
+        // less than was shown.
+        let more = differs.iter().any(|d| d.mark != '-');
+        // What the tick adds to the plan shown is shown: its plan, then
+        // what differs, above the question.
+        if (new + planned > 0 || more) && !self.replanned(t) {
+            println!();
+            self.print(t);
+        }
         if new > 0 && self.shown {
             let unnamed = std::mem::take(&mut self.unnamed);
             return self
@@ -725,13 +812,6 @@ impl<'a, 'h> Ticks<'a, 'h> {
                 })
                 .map(Some);
         }
-        // What `later` showed waiting on a provider, planned now against
-        // it: asked for as tick 1 was, unless `--yes`; a plan file or an
-        // approval did not see it.
-        let planned = addresses
-            .iter()
-            .filter(|a| self.on_provider.contains(**a) && !self.scheduled.contains(&a.to_string()))
-            .count();
         if planned > 0 && self.shown {
             return self
                 .stop(Stopped {
@@ -743,11 +823,12 @@ impl<'a, 'h> Ticks<'a, 'h> {
                 })
                 .map(Some);
         }
-        let now = self.r.delta(&p.plan, &p.res, &p.sections, tick, self.key());
-        let differs = self.differs(&now);
-        // A change gone from the tick is said, not asked for: the tick does
-        // less than was shown.
-        let more = differs.iter().any(|d| d.mark != '-');
+        if !differs.is_empty() {
+            println!("tick {tick} differs from the plan shown:");
+            for d in &differs {
+                println!("{}", d.line());
+            }
+        }
         if more && self.shown {
             let mut names: Vec<String> = Vec::new();
             for n in differs.iter().map(|d| d.name()) {
@@ -768,8 +849,16 @@ impl<'a, 'h> Ticks<'a, 'h> {
         let asked = new + planned > 0 || more;
         if asked && !self.args.yes {
             self.still_held()?;
+            // Asked on the tick's header line, `tick 2  1 change   apply?`:
+            // its block's header takes its place.
+            let n = p
+                .plan
+                .actions
+                .iter()
+                .filter(|a| report::progress::is_call(a) && waits_on(a, &p.sections).is_none())
+                .count();
             if !confirm(
-                new + planned,
+                n,
                 true,
                 self.args.destroy,
                 self.deployment(),
@@ -778,6 +867,7 @@ impl<'a, 'h> Ticks<'a, 'h> {
             )? {
                 return Ok(Some(declined(self.deployment(), tick)));
             }
+            self.asked.set(1);
         }
         // What was asked for (or `--yes` applied) is what the next boundary
         // compares with.
@@ -796,16 +886,7 @@ impl<'a, 'h> Ticks<'a, 'h> {
     /// printed below the tick with what differs, and asked for again; a
     /// plan file or an approval stops before it, naming what differs.
     fn differs(&self, now: &[zset::file::Entry]) -> Vec<zset::file::Difference> {
-        let tick = self.tick;
-        let differs =
-            zset::file::tick_differences(&self.shown_delta, now, tick, &self.ran, self.key());
-        if !differs.is_empty() {
-            println!("tick {tick} differs from the plan shown:");
-            for d in &differs {
-                println!("{}", d.line());
-            }
-        }
-        differs
+        zset::file::tick_differences(&self.shown_delta, now, self.tick, &self.ran, self.key())
     }
 
     /// The apply stopped before a tick, the state consistent.
@@ -1141,12 +1222,17 @@ impl<'a, 'h> Ticks<'a, 'h> {
             .collect()
     }
 
-    /// The tick's block on stderr (R-127): its actions, each failure's site
-    /// where its change is derived (R-109).
+    /// The tick's block on stderr (R-127, R-206): its actions as the
+    /// plan's tree nests them, each failure's site where its change is
+    /// derived (R-109); under `--yes`, a line per change of state.
     fn progress(&self, p: &Planned) -> crate::progress::Progress {
-        let mode = crate::progress::Mode::of_stderr(self.r.why() == report::Why::None);
+        let mode =
+            crate::progress::Mode::of_block(self.r.why() == report::Why::None, self.args.yes);
         let actions: Vec<&crate::provider::Action> = p.plan.actions.iter().collect();
-        let mut block = report::progress::Block::new(self.tick, &actions);
+        let report = self
+            .r
+            .report(&p.plan, &p.res, &p.sections, self.tick, &[], &p.denies);
+        let mut block = report::progress::Block::new(self.tick, &actions).nested(&report.outline());
         block.sites = report::sites(
             &p.res,
             actions.iter().map(|a| &a.addr),
@@ -1159,6 +1245,7 @@ impl<'a, 'h> Ticks<'a, 'h> {
                 crate::progress::Mode::Terminal => self.cx.cli.style,
                 _ => report::Style::default(),
             },
+            self.asked.take(),
         )
     }
 
@@ -1564,6 +1651,7 @@ impl<'a, 'h> Ticks<'a, 'h> {
             }
         };
         if !refusing.is_empty() {
+            self.policy_refused(&next)?;
             eprintln!("constraint violations after tick {tick}:");
             for v in &refusing {
                 eprintln!("- {}", report::violation_line(v, &redact));
