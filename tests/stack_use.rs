@@ -50,7 +50,12 @@ fn a_used_stacks_reads_run_in_it_not_in_its_user() {
     assert!(r.stderr.contains("vendor/kubeconfig.yml"), "{}", r.stderr);
     // The user reads the deployment's output, and runs none of it.
     let r = s.run(&["plan", "apps"]).success();
-    assert_eq!(r.summary(), "plan: 0 changes, 1 later", "{}", r.stdout);
+    assert_eq!(
+        r.summary(),
+        "plan: 1 create after platform[env=lab] is applied",
+        "{}",
+        r.stdout
+    );
     assert!(
         r.stdout.contains("waits on  stack platform[env=lab]"),
         "{}",

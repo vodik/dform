@@ -103,7 +103,7 @@ fn a_held_resources_written_attribute_reads_inside_a_literal() {
         let r = run(&s, &["plan", "apps"]).success();
         assert_eq!(
             r.summary(),
-            "plan: 0 changes, 3 later",
+            "plan: 3 creates after platform[env=lab] is applied",
             "real: {real}\n{}",
             r.stdout
         );
@@ -140,7 +140,7 @@ fn a_held_resources_computed_attribute_is_one_unknown_leaf_of_the_literal() {
         let r = run(&s, &["plan", "apps"]).success();
         assert_eq!(
             r.summary(),
-            "plan: 0 changes, 3 later",
+            "plan: 3 creates after platform[env=lab] is applied",
             "real: {real}\n{}",
             r.stdout
         );

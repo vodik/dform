@@ -248,7 +248,7 @@ stacks: project.df's deployments, in apply order; each one's plan follows
   platform[env=lab]   up to date
   apps[env=lab]       1 change (1 update) over 1 tick
   platform[env=prod]  never applied, 4 changes (4 create) over 1 tick
-  apps[env=prod]      never applied, 0 changes, 1 later
+  apps[env=prod]      never applied, 1 create after platform[env=prod] is applied
   apps[env=old]       removed from project.df: the next apply destroys it, 2 changes (2 delete) over 1 tick
 ```
 
@@ -1252,7 +1252,18 @@ answerable; it is planned again as ticks report and asked for then (see
 made; the plan itself says what it is.
 
 - The summary counts the changes the ticks hold, by kind, the ticks, and
-  then the denies, approvals, undetermined policies and conflicts.
+  then the denies, approvals, undetermined policies and conflicts. What
+  `later` holds is counted after it by kind and by what it waits on
+  outside the plan, followed through what that is made from (a
+  provider's settings, the CRD a resource waits on, a value of a held
+  object), one clause per wait in `later`'s order, then its
+  undetermined denies and checks the same way, `until then` when they
+  wait on what the clause before does (R-193): `plan: 21 creates after
+  platform[env=lab] is applied; 6 denies undetermined until then`, or
+  `plan: 3 changes (3 create) over 1 tick; 1 create waiting on
+  ssh://ubuntu@10.0.0.5/etc/rancher/k3s/k3s.yaml`. A plan whose every
+  change is `later`'s never says `0 changes`; objects `later` lists as
+  state has them are `N later` (`plan: 0 changes, 3 later`).
 - `moved T["Old"] -> T["New"]` lines come first, one per `moved/3` rename
   of state.
 - Every other line is one of two shapes (R-111). A change: its mark, then
@@ -1376,8 +1387,13 @@ made; the plan itself says what it is.
   "middlewares.traefik.io"` (R-126); one reading a deployment not
   applied yet under `waits on  stack platform[env=lab]`. When a tick of
   the plan makes what they wait on, they are that tick's instead. The summary
-  counts them, `, N later`, and `why` names what such a resource
-  waits on. A type whose namespace names no provider is the compile
+  counts them by what they wait on (above), and `why` names what such a resource
+  waits on. A deny or check `later` holds always says what it waits on:
+  the values it reads, the resources they are of when those do not fit
+  beside it (`waits on web`), on the line below when nothing does. A
+  `not { .. }` over a value holding what a server computes waits only
+  when its body reads it: `not p.securityContext.runAsNonRoot == true`
+  over a pod spec the program wrote is decided before the cluster exists. A type whose namespace names no provider is the compile
   error it always was.
 - `warning` (R-80): what the plan empties since the last apply: a
   rule the plan deletes every resource of that it derived at the last

@@ -147,7 +147,9 @@ fn a_provider_waiting_on_a_read_not_yet_answered_says_both() {
     );
     let r = dform(&s, &["plan", "p"]).success();
     assert!(
-        r.summary().ends_with(", 4 later")
+        r.summary()
+            == "plan: 1 change (1 create) over 1 tick; 4 creates waiting on \
+                ssh://ubuntu@127.0.0.1:1/etc/rancher/k3s/k3s.yaml"
             && r.stdout.contains(
                 "\nlater\n  waits on  provider k8s  kubeconfig = raw, \
              ssh://ubuntu@127.0.0.1:1/etc/rancher/k3s/k3s.yaml\n"

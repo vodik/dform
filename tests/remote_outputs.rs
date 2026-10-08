@@ -135,7 +135,12 @@ fn a_remote_backend_takes_the_stack_name() {
     );
     // Staging is not applied: what reads it waits on it (R-121).
     let r = app.run(&["plan", "app"]).success();
-    assert_eq!(r.summary(), "plan: 0 changes, 1 later", "{}", r.stdout);
+    assert_eq!(
+        r.summary(),
+        "plan: 1 create after platform.cluster[env=staging] is applied",
+        "{}",
+        r.stdout
+    );
     assert!(
         r.stdout
             .contains("  waits on  stack platform.cluster[env=staging]\n"),

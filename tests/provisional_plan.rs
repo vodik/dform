@@ -93,3 +93,43 @@ fn a_deny_under_later_always_says_what_it_waits_on() {
         );
     }
 }
+
+/// The summary counts what `later` holds by kind and by what it waits
+/// on, followed to the deployment not applied yet, one clause per wait
+/// in `later`'s order, never `0 changes`; the denies waiting on the same
+/// say `until then`.
+#[test]
+fn the_summary_counts_what_later_holds_by_what_it_waits_on() {
+    let s = project(
+        "provisional-summary",
+        "deny \"pod without cluster dns\" { workload: w } where pod(w, p), \
+         p.dnsPolicy == \"None\"\n",
+    );
+    let r = plan(&s).success();
+    assert_eq!(
+        r.summary(),
+        "plan: 3 creates after platform[env=lab] is applied; 2 denies undetermined until then",
+        "{}",
+        r.stdout
+    );
+    s.write(
+        "stacks/dns.df",
+        "key env: enum(\"lab\", \"prod\") = \"lab\"\nuse fake\n\
+         resource net.vpc zone { cidr = \"10.0.0.0/16\" }\noutput zone = zone.id\n",
+    );
+    let apps = s.read("stacks/apps.df");
+    s.write(
+        "stacks/apps.df",
+        &format!(
+            "{apps}use fake\nuse stacks.dns\nresource db.postgres records {{ name = dns[env].zone }}\n"
+        ),
+    );
+    let r = plan(&s).success();
+    assert_eq!(
+        r.summary(),
+        "plan: 3 creates after platform[env=lab] is applied; 1 create after dns[env=lab] is \
+         applied; 2 denies undetermined until platform[env=lab] is applied",
+        "{}",
+        r.stdout
+    );
+}

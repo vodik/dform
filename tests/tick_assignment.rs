@@ -176,7 +176,9 @@ fn a_provider_configured_from_outside_the_plan_is_later() {
     );
     let r = dev(&s, &["plan"]).success();
     assert!(
-        r.summary().ends_with("over 1 tick, 4 later"),
+        r.summary().starts_with(
+            "plan: 3 changes (3 create) over 1 tick; 4 creates waiting on provider k8s"
+        ),
         "{}",
         r.stdout
     );

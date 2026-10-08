@@ -804,6 +804,48 @@ pub struct PendingBlock {
     pub on: Vec<String>,
     pub resolves_after: Option<usize>,
     pub deformations: Vec<Deformation>,
+    /// What it waits on outside this plan, as the summary says it
+    /// (R-193): `platform[env=lab]` for a kubeconfig read from it.
+    pub until: BTreeSet<Until>,
+}
+
+/// What a held change, or an undetermined deny, waits on outside this
+/// plan, followed through what its waits are made from (R-193): a
+/// deployment not applied yet, or a wait the plan cannot follow further
+/// (a read that said "not yet", a provider configured from outside).
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Until {
+    Applied(String),
+    Waits(String),
+}
+
+/// `after platform[env=lab] is applied`, `waiting on provider k8s  schema`:
+/// what `until` waits on, as the summary's clause ends.
+fn until_text(until: &BTreeSet<Until>) -> String {
+    let stacks: Vec<&str> = until
+        .iter()
+        .filter_map(|u| match u {
+            Until::Applied(s) => Some(s.as_str()),
+            Until::Waits(_) => None,
+        })
+        .collect();
+    let waits: Vec<&str> = until
+        .iter()
+        .filter_map(|u| match u {
+            Until::Waits(w) => Some(w.as_str()),
+            Until::Applied(_) => None,
+        })
+        .collect();
+    let mut out = Vec::new();
+    match stacks.as_slice() {
+        [] => {}
+        [s] => out.push(format!("after {s} is applied")),
+        [rest @ .., last] => out.push(format!("after {} and {last} are applied", rest.join(", "))),
+    }
+    if !waits.is_empty() {
+        out.push(format!("waiting on {}", waits.join(", ")));
+    }
+    out.join(", ")
 }
 
 #[derive(Debug, Clone)]
@@ -837,6 +879,9 @@ pub struct Policy {
     /// The deny's rule (`r12`), and where it is written.
     pub rule: Option<String>,
     pub site: Option<Site>,
+    /// What it waits on outside this plan ([`Until`]), when no tick of
+    /// it decides it.
+    pub until: BTreeSet<Until>,
 }
 
 /// A deny over the plan, the row of the plan it matched and where it is
@@ -1092,12 +1137,20 @@ pub fn report(i: &Input) -> Report {
             .or_default()
             .push(deformation(a, i.schema, &r, &refs));
     }
+    let follow = Follow::new(i, &held, &tick_of);
     let pending: Vec<PendingBlock> = by_nulls
         .into_iter()
-        .map(|(on, deformations)| PendingBlock {
-            resolves_after: resolves(&on, &tick_of),
-            on,
-            deformations,
+        .map(|(on, deformations)| {
+            let resolves_after = resolves(&on, &tick_of);
+            PendingBlock {
+                until: match resolves_after {
+                    Some(_) => BTreeSet::new(),
+                    None => follow.until(&on),
+                },
+                resolves_after,
+                on,
+                deformations,
+            }
         })
         .collect();
 
@@ -1105,6 +1158,9 @@ pub fn report(i: &Input) -> Report {
     let not_planned = crate::zset::not_planned(i.res, &r);
     let mut policies = policies(i, &tick_of, &resolves);
     policies.extend(deferred(i.res, &tick_of, &resolves));
+    for p in policies.iter_mut().filter(|p| p.after.is_none()) {
+        p.until = follow.until(&p.on);
+    }
 
     let mut ticks: BTreeMap<usize, Vec<String>> = BTreeMap::new();
     let mut unscheduled = Vec::new();
@@ -1193,6 +1249,101 @@ pub fn report(i: &Input) -> Report {
         instances: crate::zset::Instances::from_facts(&i.res.facts).with(i.kept),
         warnings: Vec::new(),
         not_planned,
+    }
+}
+
+/// What the waits of what no tick of this plan makes are made from
+/// (R-193): a provider's wait, the values its settings hold; a change
+/// `later` holds (a CRD), its own waits; a value of one, the same; until
+/// a deployment not applied yet, or what the plan cannot follow.
+struct Follow<'a> {
+    i: &'a Input<'a>,
+    /// The waits of each held change no tick makes, by its full and its
+    /// printed address and by its key.
+    later: BTreeMap<String, Vec<String>>,
+    by_key: BTreeMap<(String, String), Vec<String>>,
+}
+
+impl<'a> Follow<'a> {
+    fn new(
+        i: &'a Input<'a>,
+        held: &[&Action],
+        tick_of: &BTreeMap<(String, String), usize>,
+    ) -> Follow<'a> {
+        let mut later = BTreeMap::new();
+        let mut by_key = BTreeMap::new();
+        for a in held {
+            let key = (a.addr.typ.clone(), a.addr.name.clone());
+            if tick_of.contains_key(&key) {
+                continue;
+            }
+            let on = waits_on(a, i.sections).unwrap_or_default();
+            later.insert(a.addr.to_string(), on.clone());
+            later.insert(address(&a.addr), on.clone());
+            by_key.insert(key, on);
+        }
+        Follow { i, later, by_key }
+    }
+
+    fn until(&self, on: &[String]) -> BTreeSet<Until> {
+        let (mut seen, mut out) = (BTreeSet::new(), BTreeSet::new());
+        for l in on {
+            self.walk(l, &mut seen, &mut out);
+        }
+        out
+    }
+
+    fn walk(&self, l: &str, seen: &mut BTreeSet<String>, out: &mut BTreeSet<Until>) {
+        if !seen.insert(l.to_string()) {
+            return;
+        }
+        let waits = |l: &str| Until::Waits(waited(&BTreeSet::from([l.to_string()])).concat());
+        if let Some(rest) = l.strip_prefix("provider ") {
+            let name = rest.split_once("  ").map_or(rest, |(n, _)| n);
+            let nulls = self.settings_nulls(name);
+            if nulls.is_empty() {
+                out.insert(Until::Waits(l.to_string()));
+            }
+            for n in nulls {
+                self.walk(&n, seen, out);
+            }
+            return;
+        }
+        if let Some(on) = self.later.get(l) {
+            for x in on {
+                self.walk(x, seen, out);
+            }
+            return;
+        }
+        match crate::value::null_parts(l) {
+            Some((typ, name, _)) if typ == crate::stack::UNAPPLIED => {
+                out.insert(Until::Applied(name));
+            }
+            Some((typ, name, _)) if self.by_key.contains_key(&(typ.clone(), name.clone())) => {
+                for x in &self.by_key[&(typ, name)] {
+                    self.walk(x, seen, out);
+                }
+            }
+            _ => {
+                out.insert(waits(l));
+            }
+        }
+    }
+
+    /// The nulls provider `name`'s settings hold, as its `provider_config`
+    /// row has them.
+    fn settings_nulls(&self, name: &str) -> BTreeSet<String> {
+        self.i
+            .res
+            .facts
+            .iter()
+            .filter(|a| a.pred == "provider_config")
+            .filter_map(|a| match a.args.as_slice() {
+                [Term::Val(Value::Str(n)), Term::Val(v)] if n == name => Some(v),
+                _ => None,
+            })
+            .flat_map(crate::lattice::nulls_in)
+            .collect()
     }
 }
 
@@ -1408,6 +1559,7 @@ fn policies(
             refinement: false,
             rule: s.rule.map(|r| format!("r{r}")),
             site: None,
+            until: BTreeSet::new(),
         };
         if !out
             .iter()
@@ -1447,6 +1599,7 @@ fn policies(
             refinement: false,
             rule: rule.map(|r| format!("r{r}")),
             site: None,
+            until: BTreeSet::new(),
         });
     }
     may.sort_by(|a, b| a.message.cmp(&b.message));
@@ -1502,6 +1655,7 @@ fn deferred(
             refinement: true,
             rule: None,
             site: None,
+            until: BTreeSet::new(),
         });
     }
     out
@@ -2698,51 +2852,147 @@ impl Report {
         out
     }
 
-    /// `plan: 5 changes (3 create, 2 update) over 2 ticks, 1 approval, 1 undetermined`
+    /// `plan: 5 changes (3 create, 2 update) over 2 ticks, 1 approval, 1 undetermined`;
+    /// what `later` holds, by kind and by what it waits on (R-193): `plan:
+    /// 21 creates after platform[env=lab] is applied; 6 denies undetermined
+    /// until then`, never `0 changes` while `later` holds a change.
     pub fn summary(&self) -> String {
-        let mut out = changes_text(self.changes(), &self.kinds());
-        let ticks = self
-            .sections()
-            .values()
-            .filter(|s| {
-                !s.deposed.is_empty()
-                    || !s.groups.is_empty()
-                    || s.changes
-                        .iter()
-                        .any(|d| !matches!(d.kind, ActionKind::Noop))
-            })
-            .count();
-        if ticks > 0 {
-            out.push_str(&format!(" over {}", count(ticks, "tick")));
+        let later = self.later_clauses();
+        let mut head = Vec::new();
+        if self.changes() > 0 || later.is_empty() {
+            let mut out = changes_text(self.changes(), &self.kinds());
+            let ticks = self
+                .sections()
+                .values()
+                .filter(|s| {
+                    !s.deposed.is_empty()
+                        || !s.groups.is_empty()
+                        || s.changes
+                            .iter()
+                            .any(|d| !matches!(d.kind, ActionKind::Noop))
+                })
+                .count();
+            if ticks > 0 {
+                out.push_str(&format!(" over {}", count(ticks, "tick")));
+            }
+            head.push(out.trim_start_matches("plan: ").to_string());
         }
         if self.show_noop {
-            out.push_str(&format!(", {} no-op", self.noops));
+            head.push(format!("{} no-op", self.noops));
         }
         if !self.denies.is_empty() {
-            out.push_str(&format!(", {} denied", self.denies.len()));
+            head.push(format!("{} denied", self.denies.len()));
         }
         if !self.approvals.is_empty() {
-            out.push_str(&format!(", {}", count(self.approvals.len(), "approval")));
+            head.push(count(self.approvals.len(), "approval"));
         }
-        if !self.policies.is_empty() {
-            out.push_str(&format!(", {} undetermined", self.policies.len()));
+        // An undetermined policy `later` names in a clause is said there.
+        let undetermined = match later.is_empty() {
+            true => self.policies.len(),
+            false => self.policies.iter().filter(|p| p.after.is_some()).count(),
+        };
+        if undetermined > 0 {
+            head.push(format!("{undetermined} undetermined"));
         }
         if !self.not_planned.is_empty() {
-            out.push_str(&format!(", {} not planned", self.not_planned.len()));
+            head.push(format!("{} not planned", self.not_planned.len()));
         }
-        // Changes held on what no tick of this plan makes (a provider
-        // waiting on its settings, R-110), listed under `later`.
-        let later: usize = self
+        // Held objects `later` lists as state has them, no change of
+        // theirs known yet (R-177): after the clauses when there are.
+        let held = self
             .pending
             .iter()
             .filter(|b| b.resolves_after.is_none())
-            .map(|b| b.deformations.len())
-            .sum();
-        if later > 0 {
-            out.push_str(&format!(", {later} later"));
+            .flat_map(|b| b.deformations.iter())
+            .filter(|d| later.is_empty() || matches!(d.kind, ActionKind::Noop))
+            .count();
+        let held = (held > 0).then(|| format!("{held} later"));
+        if later.is_empty() {
+            head.extend(held.clone());
         }
         if !self.conflicts.is_empty() {
-            out.push_str(&format!(", {}", count(self.conflicts.len(), "conflict")));
+            head.push(count(self.conflicts.len(), "conflict"));
+        }
+        let mut parts = Vec::new();
+        if !head.is_empty() {
+            parts.push(head.join(", "));
+        }
+        if !later.is_empty() {
+            parts.extend(later);
+            parts.extend(held);
+        }
+        format!("plan: {}", parts.join("; "))
+    }
+
+    /// The summary's clauses for what `later` holds (R-193): its changes
+    /// by kind and by what they wait on outside the plan, in `later`'s
+    /// order (`21 creates after platform[env=lab] is applied`), then its
+    /// undetermined denies and checks by the same (`6 denies undetermined
+    /// until then`, `then` the clause before). None when `later` holds no
+    /// change.
+    fn later_clauses(&self) -> Vec<String> {
+        let mut changes: Vec<(String, Vec<&Deformation>)> = Vec::new();
+        for b in self.pending.iter().filter(|b| b.resolves_after.is_none()) {
+            let ds = b
+                .deformations
+                .iter()
+                .filter(|d| !matches!(d.kind, ActionKind::Noop));
+            let until = until_text(&b.until);
+            match changes.iter_mut().find(|(u, _)| *u == until) {
+                Some((_, x)) => x.extend(ds),
+                None => changes.push((until, ds.collect())),
+            }
+        }
+        changes.retain(|(_, ds)| !ds.is_empty());
+        let mut out: Vec<String> = changes
+            .iter()
+            .map(|(until, ds)| {
+                let kinds: Vec<String> = by_kind(ds.iter().copied())
+                    .into_iter()
+                    .filter(|(_, n)| *n > 0)
+                    .map(|(k, n)| count(n, k))
+                    .collect();
+                format!("{} {until}", kinds.join(", "))
+                    .trim_end()
+                    .to_string()
+            })
+            .collect();
+        if out.is_empty() {
+            return out;
+        }
+        let mut policies: Vec<(String, usize, usize)> = Vec::new();
+        for p in self.policies.iter().filter(|p| p.after.is_none()) {
+            let until = until_text(&p.until);
+            let i = match policies.iter().position(|(u, _, _)| *u == until) {
+                Some(i) => i,
+                None => {
+                    policies.push((until, 0, 0));
+                    policies.len() - 1
+                }
+            };
+            match p.refinement {
+                true => policies[i].2 += 1,
+                false => policies[i].1 += 1,
+            }
+        }
+        let last = changes.last().map(|(u, _)| u.clone());
+        for (until, denies, checks) in policies {
+            let when = match until.strip_prefix("after ") {
+                _ if Some(&until) == last.as_ref() => " until then".to_string(),
+                Some(rest) => format!(" until {rest}"),
+                None if until.is_empty() => String::new(),
+                None => format!(", {until}"),
+            };
+            for (n, what) in [(denies, "deny"), (checks, "check")] {
+                if n > 0 {
+                    let what = match n {
+                        1 => what.to_string(),
+                        _ if what == "deny" => "denies".to_string(),
+                        _ => format!("{what}s"),
+                    };
+                    out.push(format!("{n} {what} undetermined{when}"));
+                }
+            }
         }
         out
     }

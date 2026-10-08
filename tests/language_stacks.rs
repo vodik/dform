@@ -195,7 +195,7 @@ resource net.subnet a {
     let r = s.run(&["plan", "app.df"]).success();
     assert_eq!(
         r.summary(),
-        "plan: 0 changes, 1 undetermined, 1 later",
+        "plan: 1 create after net is applied; 1 check undetermined until then",
         "{}",
         r.stdout
     );
@@ -250,7 +250,7 @@ resource net.subnet a {
     let r = s.run_in("elsewhere", &["plan", "app.df"]).success();
     assert_eq!(
         r.summary(),
-        "plan: 0 changes, 1 undetermined, 1 later",
+        "plan: 1 create after net is applied; 1 check undetermined until then",
         "{}",
         r.stdout
     );

@@ -145,7 +145,11 @@ fn objects_of_a_provider_waiting_on_a_read_are_listed_under_later() {
     s.write("p.df", &program(NOT_YET));
     let r = dev(&s, &["plan"]).success();
     let all = format!("{}{}", r.stdout, r.stderr);
-    assert_eq!(r.summary(), "plan: 0 changes, 3 later", "{all}");
+    assert_eq!(
+        r.summary(),
+        "plan: 1 create waiting on ssh://ubuntu@127.0.0.1:1/etc/rancher/k3s/k3s.yaml; 2 later",
+        "{all}"
+    );
     let (_, later) = r.stdout.split_once("\nlater\n").expect(&all);
     for line in [
         "  waits on  provider k8s  kubeconfig = io.read(\"ssh://ubuntu@127.0.0.1:1/etc/rancher/k3s/k3s.yaml\"), ssh://ubuntu@127.0.0.1:1/etc/rancher/k3s/k3s.yaml\n",
@@ -176,7 +180,8 @@ fn the_boundary_reads_them_once_the_provider_is_configured() {
     let p = dev(&s, &["plan"]).success();
     assert_eq!(
         p.summary(),
-        "plan: 1 change (1 create) over 1 tick, 3 later",
+        "plan: 1 change (1 create) over 1 tick; 1 create waiting on provider k8s  \
+         kubeconfig = str.format(\"kc@%s\", server.endpoint); 2 later",
         "{}",
         p.stdout
     );

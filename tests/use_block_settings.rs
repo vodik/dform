@@ -105,7 +105,10 @@ fn an_open_setting_holds_the_providers_objects_on_every_path() {
             }
             let out = plan(backend, ABSENT, plugin);
             assert!(
-                out.starts_with("plan: 1 change (1 create) over 1 tick, 1 later\n"),
+                out.starts_with(
+                    "plan: 1 change (1 create) over 1 tick; 1 create waiting on provider k8s  \
+                     kubeconfig = db.postgres[\"absent\"].endpoint\n"
+                ),
                 "{backend:?} plugin={plugin}\n{out}"
             );
             assert!(out.ends_with(LATER), "{backend:?} plugin={plugin}\n{out}");

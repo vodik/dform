@@ -70,9 +70,9 @@ fn plan_with_no_target_says_each_deployments_state_then_plans_each() {
         states(&r.stdout),
         [
             "platform[env=lab] never applied, 1 change (1 create) over 1 tick",
-            "apps[env=lab] never applied, 0 changes, 1 later",
+            "apps[env=lab] never applied, 1 create after platform[env=lab] is applied",
             "platform[env=prod] never applied, 1 change (1 create) over 1 tick",
-            "apps[env=prod] never applied, 0 changes, 1 later",
+            "apps[env=prod] never applied, 1 create after platform[env=prod] is applied",
         ],
         "{}",
         r.stdout
@@ -88,8 +88,10 @@ fn plan_with_no_target_says_each_deployments_state_then_plans_each() {
         ]
     );
     assert!(
-        r.stdout
-            .contains("== apps[env=lab]\ndeployment: apps[env=lab]\nplan: 0 changes, 1 later"),
+        r.stdout.contains(
+            "== apps[env=lab]\ndeployment: apps[env=lab]\nplan: 1 create after \
+                 platform[env=lab] is applied"
+        ),
         "{}",
         r.stdout
     );
@@ -292,7 +294,7 @@ fn a_deployment_the_matrix_does_not_list_is_a_target_of_its_own() {
         states(&r.stdout),
         [
             "platform[env=lab] never applied, 1 change (1 create) over 1 tick (not listed: a listed deployment reads it)",
-            "apps[env=lab] never applied, 0 changes, 1 later",
+            "apps[env=lab] never applied, 1 create after platform[env=lab] is applied",
         ],
         "{}",
         r.stdout

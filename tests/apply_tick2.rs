@@ -180,8 +180,9 @@ fn the_boundary_waits_for_the_settings_then_configures() {
     );
     // Tick 2 only waits: its header says which tick the report is of.
     assert!(
-        r.stdout
-            .contains("tick 2  0 changes\nplan: 0 changes, 1 later\n"),
+        r.stdout.contains(
+            "tick 2  0 changes\nplan: 1 create waiting on provider k8s  kubeconfig = kc\n"
+        ),
         "{}",
         r.stdout
     );

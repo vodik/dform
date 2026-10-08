@@ -54,7 +54,12 @@ fn a_use_gives_an_object_input_another_stacks_object_output() {
             ),
         );
         let r = s.run(&["plan", "apps"]).success();
-        assert_eq!(r.summary(), "plan: 0 changes, 1 later", "{}", r.stdout);
+        assert_eq!(
+            r.summary(),
+            "plan: 1 create after platform[env=lab] is applied",
+            "{}",
+            r.stdout
+        );
         assert!(
             r.stdout.contains("waits on  stack platform[env=lab]"),
             "{}",

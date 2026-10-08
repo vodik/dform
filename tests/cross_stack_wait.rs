@@ -36,7 +36,12 @@ fn project(name: &str) -> Scratch {
 fn a_read_of_a_deployment_not_applied_waits_on_it() {
     let s = project("cross-wait");
     let r = s.run(&["plan", "apps"]).success();
-    assert_eq!(r.summary(), "plan: 0 changes, 1 later", "{}", r.stdout);
+    assert_eq!(
+        r.summary(),
+        "plan: 1 create after platform[env=lab] is applied",
+        "{}",
+        r.stdout
+    );
     assert!(
         r.stdout.contains(
             "later\n  \
