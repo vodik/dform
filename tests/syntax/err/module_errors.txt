@@ -6,5 +6,5 @@ tests/syntax/err/module_errors.df:12:1: input main.vpc_net is required and has n
 tests/syntax/err/module_errors.df:13:1: input peer.vpc_net is required and has no value
   tests/syntax/err/module_errors.df:4:3: vpc_net: inet declared here
   help: give it in the block, `{ vpc_net = ... }`, or give it a default
-tests/syntax/err/module_errors.df:15:24: zone_index/2 is private to component network
+tests/syntax/err/module_errors.df:15:24: zone_index is private to component network
   help: pass the value through an output of component network, `output zone_index = ...`, and read it as INSTANCE.zone_index

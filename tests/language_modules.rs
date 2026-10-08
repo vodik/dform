@@ -61,7 +61,7 @@ use fake
     .failure();
     assert!(
         r.stderr
-            .contains("p.df:6:14: size/1 is private to component m"),
+            .contains("p.df:6:14: size is private to component m"),
         "{}",
         r.stderr
     );
@@ -234,7 +234,7 @@ use fake
         .failure();
     assert!(
         r.stderr
-            .contains("p.df:5:15: team/1 is private to module tags"),
+            .contains("p.df:5:15: team is private to module tags"),
         "{}",
         r.stderr
     );

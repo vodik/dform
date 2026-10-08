@@ -551,10 +551,7 @@ pub fn expand(program: &Program) -> Result<Expanded> {
             && !defined.contains_key(&a.pred)
             && !externs.contains(a.pred.as_str())
         {
-            let d = Diagnostic::error(
-                a.span,
-                format!("{}/{} is private to {owner}", a.pred, a.args.len()),
-            );
+            let d = Diagnostic::error(a.span, format!("{} is private to {owner}", a.pred));
             cx.diags.push(match help {
                 Some(h) => d.with_help(h.clone()),
                 None => d,
