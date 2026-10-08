@@ -828,25 +828,107 @@ pub fn check(
     schema: &Schema,
     outputs: &BTreeSet<(String, String)>,
 ) -> Result<()> {
-    let pass = fixpoint(lowered, schema, outputs);
-    let rs = rules(&lowered.program);
-    let fns: BTreeMap<&str, &crate::ast::ExternFn> = lowered
-        .extern_fns
-        .iter()
-        .map(|f| (f.name.as_str(), f))
-        .collect();
-    // An extern's `+` column is asked with, not answered: it binds nothing.
-    let binds = |a: &Atom, i: usize| {
-        fns.get(a.pred.as_str())
+    let mut checker = Checker::new(lowered, schema, outputs);
+    for (head, body, span) in rules(&lowered.program) {
+        checker.rule(head, body, span);
+    }
+    checker.into_result()
+}
+
+/// The checks of every rule of a lowered program, what they found so far.
+struct Checker<'a> {
+    lowered: &'a Lowered,
+    schema: &'a Schema,
+    pass: Pass<'a>,
+    /// The program's externs, by name.
+    fns: BTreeMap<&'a str, &'a crate::ast::ExternFn>,
+    diags: Vec<Diagnostic>,
+}
+
+/// A rule being checked: what its body's variables hold of a secret.
+struct Rule<'r> {
+    body: &'r [Lit],
+    span: Span,
+    vars: Vars,
+    /// A refinement's rule tests the value it refines, by design.
+    refinement: bool,
+}
+
+impl<'a> Checker<'a> {
+    fn new(
+        lowered: &'a Lowered,
+        schema: &'a Schema,
+        outputs: &'a BTreeSet<(String, String)>,
+    ) -> Checker<'a> {
+        Checker {
+            lowered,
+            schema,
+            pass: fixpoint(lowered, schema, outputs),
+            fns: lowered
+                .extern_fns
+                .iter()
+                .map(|f| (f.name.as_str(), f))
+                .collect(),
+            diags: Vec::new(),
+        }
+    }
+
+    /// What the checks found: each error once.
+    fn into_result(mut self) -> Result<()> {
+        if self.diags.is_empty() {
+            return Ok(());
+        }
+        self.diags
+            .dedup_by(|a, b| a.render(false) == b.render(false));
+        Err(Diagnostics(self.diags).into())
+    }
+
+    /// An extern's `+` column is asked with, not answered: it binds nothing.
+    fn binds(&self, a: &Atom, i: usize) -> bool {
+        self.fns
+            .get(a.pred.as_str())
             .and_then(|f| f.args.get(i))
             .is_none_or(|b| !b.input)
-    };
+    }
 
-    let mut diags = Vec::new();
-    for (head, body, span) in &rs {
-        let vars = pass.body_vars(body);
-        let refinement = is_refinement(*head);
-        let secret = |t: &Term| pass.term_secret(t, &vars);
+    /// Whether `t` holds a secret in the rule `r`.
+    fn secret(&self, r: &Rule, t: &Term) -> bool {
+        self.pass.term_secret(t, &r.vars)
+    }
+
+    /// What to write instead of inspecting the secret in `terms` (E0301).
+    fn inspect_fix(&self, r: &Rule, terms: &[&Term]) -> String {
+        self.pass.inspect_fix(self.lowered, r.body, &r.vars, terms)
+    }
+
+    /// Every check of one rule.
+    fn rule(&mut self, head: Option<&Atom>, body: &[Lit], span: Span) {
+        let r = Rule {
+            body,
+            span,
+            vars: self.pass.body_vars(body),
+            refinement: is_refinement(head),
+        };
+        self.coeffects(&r);
+        if !r.refinement {
+            self.joins(&r);
+        }
+        for (i, l) in body.iter().enumerate() {
+            self.literal(&r, i, l);
+        }
+        let Some(h) = head else { return };
+        self.aggregates(&r, h);
+        self.address(&r, h);
+        self.public_place(&r, h);
+    }
+
+    /// E0306: what a coeffect is asked with is sent off the machine at
+    /// plan (a location's host and path, a data source's argument),
+    /// unless its column is declared `+x: secret(T)` (R-167).
+    fn coeffects(&mut self, r: &Rule) {
+        let (body, span, vars, fns) = (r.body, &r.span, &r.vars, &self.fns);
+        let secret = |t: &Term| self.secret(r, t);
+        let mut diags = Vec::new();
         // E0306: what a coeffect is asked with is sent off the machine at
         // plan (a location's host and path, a data source's argument),
         // unless its column is declared `+x: secret(T)` (R-167).
@@ -894,48 +976,59 @@ pub fn check(
                 }
             }
         }
-        // A join on a secret: a secret variable at two positions of the
-        // body's relations (`pw(p), known(p)`) tests the secret against
-        // the other's rows, as `p == "hunter2"` would; declassified, its
-        // value is public.
-        if !refinement {
-            let mut seen: BTreeSet<&str> = BTreeSet::new();
-            for l in body.iter() {
-                let Lit::Pos(a) = l else { continue };
-                if is_builtin_pred(&a.pred) || a.pred == crate::memo::FIRST {
-                    continue;
-                }
-                let mut here = Vec::new();
-                for (_, t) in a.args.iter().enumerate().filter(|(j, _)| binds(a, *j)) {
-                    pattern_vars(t, &mut here);
-                }
-                let at = if a.span.is_none() { *span } else { a.span };
-                for v in here {
-                    if !seen.insert(v) && vars.get(v).is_some_and(|l| !l.is_empty()) {
-                        let fix = pass.inspect_fix(lowered, body, &vars, &[&Term::Var(v.into())]);
-                        diags.push(e0301(at, "a join", fix));
-                    }
+        self.diags.extend(diags);
+    }
+
+    /// A join on a secret: a secret variable at two positions of the body's
+    /// relations (`pw(p), known(p)`) tests the secret against the other's
+    /// rows, as `p == "hunter2"` would; declassified, its value is public.
+    fn joins(&mut self, r: &Rule) {
+        let (body, span, vars) = (r.body, &r.span, &r.vars);
+        let mut seen: BTreeSet<&str> = BTreeSet::new();
+        for l in body.iter() {
+            let Lit::Pos(a) = l else { continue };
+            if is_builtin_pred(&a.pred) || a.pred == crate::memo::FIRST {
+                continue;
+            }
+            let mut here = Vec::new();
+            for (_, t) in a.args.iter().enumerate().filter(|(j, _)| self.binds(a, *j)) {
+                pattern_vars(t, &mut here);
+            }
+            let at = if a.span.is_none() { *span } else { a.span };
+            for v in here {
+                if !seen.insert(v) && vars.get(v).is_some_and(|l| !l.is_empty()) {
+                    let fix = self.inspect_fix(r, &[&Term::Var(v.into())]);
+                    self.diags.push(e0301(at, "a join", fix));
                 }
             }
         }
-        for (i, l) in body.iter().enumerate() {
-            match l {
-                Lit::Neq(x, y) | Lit::Gt(x, y) | Lit::Ge(x, y) | Lit::Lt(x, y) | Lit::Le(x, y)
-                    if !refinement && (secret(x) || secret(y)) =>
-                {
-                    let fix = pass.inspect_fix(lowered, body, &vars, &[x, y]);
-                    diags.push(e0301(*span, "a comparison", fix));
+    }
+
+    /// The body's `i`th literal `l`: a comparison, an equality test, a
+    /// builtin or a function that inspects a secret (E0301); a value
+    /// matched at a secret position; a negation over one (E0302).
+    fn literal(&mut self, r: &Rule, i: usize, l: &Lit) {
+        let (lowered, body, span, vars, refinement) =
+            (self.lowered, r.body, &r.span, &r.vars, r.refinement);
+        let pass = &self.pass;
+        let binds = |a: &Atom, j: usize| self.binds(a, j);
+        let secret = |t: &Term| self.secret(r, t);
+        let mut diags = Vec::new();
+        match l {
+            Lit::Neq(x, y) | Lit::Gt(x, y) | Lit::Ge(x, y) | Lit::Lt(x, y) | Lit::Le(x, y)
+                if !refinement && (secret(x) || secret(y)) =>
+            {
+                let fix = pass.inspect_fix(lowered, body, &vars, &[x, y]);
+                diags.push(e0301(*span, "a comparison", fix));
+            }
+            Lit::Eq(x, y) if !refinement => {
+                // `X = f(Secret)`: a function that inspects it.
+                for t in [x, y] {
+                    if let Some(f) = inspecting(t, &|t| secret(t)) {
+                        diags.push(call_e0301(*span, &f, t, &vars));
+                    }
                 }
-                Lit::Eq(x, y) if !refinement => {
-                    // `X = f(Secret)`: a function that inspects it.
-                    for t in [x, y] {
-                        if let Some(f) = inspecting(t, &|t| secret(t)) {
-                            diags.push(call_e0301(*span, &f, t, &vars));
-                        }
-                    }
-                    if !(secret(x) || secret(y)) {
-                        continue;
-                    }
+                if secret(x) || secret(y) {
                     // A test: both sides bound by the rest of the body
                     // (`pw(p), p == "hunter2"`), not a binding of either.
                     let bound = bound_without(body, i, &binds);
@@ -951,83 +1044,89 @@ pub fn check(
                         diags.push(e0301(*span, "a definedness test (`has`)", fix()));
                     }
                 }
-                Lit::Pos(a) if !refinement && is_builtin_pred(&a.pred) => {
-                    if a.args.iter().any(&secret) {
-                        let args: Vec<&Term> = a.args.iter().collect();
-                        let fix = pass.inspect_fix(lowered, body, &vars, &args);
-                        diags.push(e0301(a.span, &format!("{}/{}", a.pred, a.args.len()), fix));
+            }
+            Lit::Pos(a) if !refinement && is_builtin_pred(&a.pred) => {
+                if a.args.iter().any(&secret) {
+                    let args: Vec<&Term> = a.args.iter().collect();
+                    let fix = pass.inspect_fix(lowered, body, &vars, &args);
+                    diags.push(e0301(a.span, &format!("{}/{}", a.pred, a.args.len()), fix));
+                }
+            }
+            // A value written at a secret position is matched against
+            // it (`pw == "hunter2"` lowers to `pw("hunter2")`); `_`
+            // there asks whether it is set (`has pw`).
+            Lit::Pos(a) if !refinement && a.pred != crate::memo::FIRST => {
+                let at = if a.span.is_none() { *span } else { a.span };
+                for (j, t) in a.args.iter().enumerate() {
+                    let l = pass.position_label(a, j);
+                    if l.is_empty() {
+                        continue;
+                    }
+                    let fix = || match input_of(lowered, a) {
+                        Some(d) => input_check(d),
+                        None => format!(
+                            "carry it uninspected to an attribute marked sensitive, {}",
+                            declassified(&None)
+                        ),
+                    };
+                    if matches!(t, Term::Wildcard) && l.contains("") {
+                        diags.push(e0301(at, "a definedness test (`has`)", fix()));
+                    } else if matches_secret(t, &l) {
+                        diags.push(e0301(at, "an equality test", fix()));
                     }
                 }
-                // A value written at a secret position is matched against
-                // it (`pw == "hunter2"` lowers to `pw("hunter2")`); `_`
-                // there asks whether it is set (`has pw`).
-                Lit::Pos(a) if !refinement && a.pred != crate::memo::FIRST => {
-                    let at = if a.span.is_none() { *span } else { a.span };
-                    for (j, t) in a.args.iter().enumerate() {
-                        let l = pass.position_label(a, j);
-                        if l.is_empty() {
-                            continue;
-                        }
-                        let fix = || match input_of(lowered, a) {
-                            Some(d) => input_check(d),
-                            None => format!(
-                                "carry it uninspected to an attribute marked sensitive, {}",
-                                declassified(&None)
-                            ),
-                        };
-                        if matches!(t, Term::Wildcard) && l.contains("") {
-                            diags.push(e0301(at, "a definedness test (`has`)", fix()));
-                        } else if matches_secret(t, &l) {
-                            diags.push(e0301(at, "an equality test", fix()));
-                        }
-                    }
-                }
-                Lit::Not(a) if !refinement => {
-                    // `not has pw` too: `_` at a secret position asks
-                    // whether it is set.
-                    let bound_secret = a.args.iter().enumerate().any(|(i, t)| {
-                        let l = pass.position_label(a, i);
-                        secret(t)
-                            || (!l.is_empty() && (!matches!(t, Term::Wildcard) || l.contains("")))
-                    });
-                    if bound_secret {
-                        let x = a.args.iter().find_map(|t| secret_var(t, &vars));
-                        let fix = match (&x, input_of(lowered, a)) {
-                            (_, Some(d)) => format!(
-                                "whether input `{k}` is given is a bit of it: give it a \
+            }
+            Lit::Not(a) if !refinement => {
+                // `not has pw` too: `_` at a secret position asks
+                // whether it is set.
+                let bound_secret = a.args.iter().enumerate().any(|(i, t)| {
+                    let l = pass.position_label(a, i);
+                    secret(t) || (!l.is_empty() && (!matches!(t, Term::Wildcard) || l.contains("")))
+                });
+                if bound_secret {
+                    let x = a.args.iter().find_map(|t| secret_var(t, &vars));
+                    let fix = match (&x, input_of(lowered, a)) {
+                        (_, Some(d)) => format!(
+                            "whether input `{k}` is given is a bit of it: give it a \
                                  default, `input {k}: {t} = ..`, and leave the test out",
-                                k = d.decl.name,
-                                t = crate::inputs::type_text(&d.decl.ty),
-                            ),
-                            (Some(x), None) => format!(
-                                "whether `{x}` is there is a bit of it: test `{p}` of a public \
+                            k = d.decl.name,
+                            t = crate::inputs::type_text(&d.decl.ty),
+                        ),
+                        (Some(x), None) => format!(
+                            "whether `{x}` is there is a bit of it: test `{p}` of a public \
                                  value, or of `secret.declassify({x}, \"why\")` if that bit \
                                  may be known",
-                                p = a.pred.rsplit("::").next().unwrap_or(&a.pred),
-                            ),
-                            (None, None) => format!(
-                                "whether a secret is there is a bit of it: test `{}` of a \
+                            p = a.pred.rsplit("::").next().unwrap_or(&a.pred),
+                        ),
+                        (None, None) => format!(
+                            "whether a secret is there is a bit of it: test `{}` of a \
                                  public value",
-                                a.pred.rsplit("::").next().unwrap_or(&a.pred),
+                            a.pred.rsplit("::").next().unwrap_or(&a.pred),
+                        ),
+                    };
+                    diags.push(
+                        Diagnostic::error(
+                            a.span,
+                            format!(
+                                "E0302: `not {}(...)` over a secret: its absence leaks a bit",
+                                a.pred
                             ),
-                        };
-                        diags.push(
-                            Diagnostic::error(
-                                a.span,
-                                format!(
-                                    "E0302: `not {}(...)` over a secret: its absence leaks a bit",
-                                    a.pred
-                                ),
-                            )
-                            .with_help(fix),
-                        );
-                    }
+                        )
+                        .with_help(fix),
+                    );
                 }
-                _ => {}
             }
+            _ => {}
         }
-        let Some(h) = head else { continue };
-        // E0303: an aggregate that is not a collect.
+        self.diags.extend(diags);
+    }
+
+    /// E0303: an aggregate that is not a collect; a function of the head
+    /// that inspects a secret.
+    fn aggregates(&mut self, r: &Rule, h: &Atom) {
+        let vars = &r.vars;
+        let secret = |t: &Term| self.secret(r, t);
+        let mut diags = Vec::new();
         for t in &h.args {
             if let Term::Func { name, args } = t
                 && matches!(
@@ -1057,7 +1156,14 @@ pub fn check(
                 diags.push(call_e0301(h.span, &f, t, &vars));
             }
         }
-        // E0305: a name.
+        self.diags.extend(diags);
+    }
+
+    /// E0305: a secret reaches a resource's name.
+    fn address(&mut self, r: &Rule, h: &Atom) {
+        let (body, vars) = (r.body, &r.vars);
+        let secret = |t: &Term| self.secret(r, t);
+        let mut diags = Vec::new();
         let named = |t: &Term| secret(t) || names_secret(t, &|t| secret(t));
         let addr = crate::zset::address_arg(h);
         if addr.is_some_and(named) || h.args.iter().any(|t| names_secret(t, &|t| secret(t))) {
@@ -1078,7 +1184,18 @@ pub fn check(
                 )),
             );
         }
-        // E0304: a public place.
+        self.diags.extend(diags);
+    }
+
+    /// E0304: a secret reaches a public place: an input, an output or an
+    /// attribute not declared secret, a provider's setting not declared
+    /// sensitive, a deny's message.
+    fn public_place(&mut self, r: &Rule, h: &Atom) {
+        let (lowered, schema, vars, refinement) =
+            (self.lowered, self.schema, &r.vars, r.refinement);
+        let pass = &self.pass;
+        let secret = |t: &Term| self.secret(r, t);
+        let mut diags = Vec::new();
         match (h.pred.as_str(), h.args.len()) {
             ("arg", 5)
                 if let Some(leak) =
@@ -1210,12 +1327,7 @@ pub fn check(
             }
             _ => {}
         }
-    }
-    if diags.is_empty() {
-        Ok(())
-    } else {
-        diags.dedup_by(|a, b| a.render(false) == b.render(false));
-        Err(Diagnostics(diags).into())
+        self.diags.extend(diags);
     }
 }
 
