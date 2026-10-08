@@ -1191,8 +1191,10 @@ by its path with no `use` of the module reads no instance, and a read
 of the module's items in its body is the error at the read naming the
 `use`. `super.x` is `x` as the scope around the component reads it, for
 a name the component's own shadows (`super.repository`, one scope out
-per `super`); a declaration that shadows one around it is a warning
-naming both. A module's body has no scope around it: a module never
+per `super`); a declaration that shadows one of its module or of the
+component around it is a warning naming both (the stack's are not: an
+input named like the stack's is how a stack passes it, `replicas =
+replicas`). A module's body has no scope around it: a module never
 reaches its user and takes what it needs as an input, so `super` there
 is an error saying so, and there is no root scope. In its own file a
 module reads itself by its name too (`backups.repository`), the instance

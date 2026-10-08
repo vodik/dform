@@ -1268,8 +1268,9 @@ impl<'u> Lowerer<'u> {
     }
 
     /// A `warn` for each name the component `n`, its body the scope
-    /// `inner`, declares that the scope around it declares too (R-186):
-    /// a bare read in the body is the component's, `super.x` the other.
+    /// `inner`, declares that the module or the component around it
+    /// declares too (R-186): a bare read in the body is the component's,
+    /// `super.x` the other.
     fn shadows(&self, n: &SyntaxNode, inner: usize) -> Vec<Stmt> {
         let name_of = |s: &SyntaxNode| match s.kind() {
             INPUT | LET => Some(word_text(s, 1)),
@@ -1283,11 +1284,13 @@ impl<'u> Lowerer<'u> {
             .children()
             .filter_map(|s| Some((name_of(&s)?, s)))
             .collect();
-        let parent = self.decls.scopes[inner].parent.unwrap_or(PROGRAM);
-        let outer = match self.decls.entries.contains(&parent) {
-            true => PROGRAM,
-            false => parent,
-        };
+        // The stack's names are not warned of: a component of the stack's
+        // file taking an input named like the stack's is how the stack
+        // passes it (`replicas = replicas`).
+        let outer = self.decls.scopes[inner].parent.unwrap_or(PROGRAM);
+        if self.decls.entries.contains(&outer) {
+            return Vec::new();
+        }
         let (component, outer) = (self.scope_name(inner), self.scope_name(outer));
         let at = |n: &SyntaxNode| crate::diag::at(self.span(n)).unwrap_or_default();
         let mut seen = BTreeSet::new();
