@@ -950,33 +950,10 @@ impl Evaluator {
             true => stuck::Sections::default(),
             false => sections(&res, &resources, schema),
         };
-        // A destroy's objects whose provider could not be configured have
-        // no Delete in the plan: in a destroy nothing is made that could
-        // configure it later. One the program retains is forgotten all
-        // the same.
-        let mut unreachable: Vec<(Address, String)> = Vec::new();
-        if self.destroy {
-            let planned: BTreeSet<Address> = plan.actions.iter().map(|a| a.addr.clone()).collect();
-            for a in st.resources.keys().filter_map(|k| state::parse_key(k)) {
-                if planned.contains(&a) {
-                    continue;
-                }
-                if lifecycle.retain.contains(&a) {
-                    plan.actions.push(provider::Action {
-                        kind: provider::ActionKind::Delete,
-                        addr: a,
-                        changes: Vec::new(),
-                        on: BTreeSet::new(),
-                    });
-                    continue;
-                }
-                let why = match self.provider_wait(&a.typ) {
-                    Some(on) => format!("its provider is not configured: {on}"),
-                    None => "its provider planned no delete".to_string(),
-                };
-                unreachable.push((a, why));
-            }
-        }
+        let unreachable = match self.destroy {
+            true => self.unreachable(&mut plan, lifecycle, st),
+            false => Vec::new(),
+        };
         // `lifecycle(r, "retain")` (R-154): a delete of r forgets it.
         for a in &mut plan.actions {
             if matches!(a.kind, provider::ActionKind::Delete) && lifecycle.retain.contains(&a.addr)
@@ -998,43 +975,12 @@ impl Evaluator {
             .collect();
         let instances = zset::Instances::from_facts(&res.facts).with(&st.instances);
         drop(res);
-        let observed = backend.observe(st)?;
-        let before = observed
-            .iter()
-            .map(|(a, d)| (a.clone(), Some(d.clone())))
-            .collect();
-        let mut facts = zset::deformation_facts(
-            plan.actions.iter().filter_map(|a| {
-                let held = report::waits_on(a, &sections).is_some();
-                Some((zset::deformation_kind(&a.kind, held)?, &a.addr))
-            }),
-            &before,
-            &observed,
-        );
-        facts.extend(zset::instance_facts(
-            plan.actions.iter().filter_map(|a| {
-                let held = report::waits_on(a, &sections).is_some();
-                Some((zset::deformation_kind(&a.kind, held)?, &a.addr))
-            }),
-            &instances,
-        ));
+        let mut facts = self.deformation_facts(&plan, &sections, &instances, st)?;
         facts.extend(may_derive);
         facts.extend(self.last_apply.iter().cloned());
         facts.extend(crate::secrets::rotation_facts(st));
         let (res, all) = self.evaluate_with(st, &replaced, &facts, None)?;
-        let again = ir::compile_resources(res.facts.iter().cloned(), schema)?;
-        let wanted = program_docs.as_ref().unwrap_or(&resources);
-        if again.len() != wanted.len()
-            || again
-                .iter()
-                .zip(wanted)
-                .any(|(a, b)| a.addr != b.addr || a.attrs != b.attrs)
-        {
-            bail!(
-                "a resource rule reads deformation/3 or world_digest/2: the plan would \
-                 depend on itself (only policy may read the deformation)"
-            );
-        }
+        unchanged_by_policy(&res, program_docs.as_ref().unwrap_or(&resources), schema)?;
         let denies = all
             .into_iter()
             .filter(|v| !violations.contains(v))
@@ -1048,6 +994,87 @@ impl Evaluator {
             unreachable,
         })
     }
+
+    /// A destroy's objects whose provider could not be configured have no
+    /// Delete in the plan: in a destroy nothing is made that could
+    /// configure it later. One the program retains is forgotten all the
+    /// same (a Delete, made a Forget below).
+    fn unreachable(
+        &self,
+        plan: &mut provider::Plan,
+        lifecycle: &zset::Lifecycle,
+        st: &State,
+    ) -> Vec<(Address, String)> {
+        let mut unreachable = Vec::new();
+        let planned: BTreeSet<Address> = plan.actions.iter().map(|a| a.addr.clone()).collect();
+        for a in st.resources.keys().filter_map(|k| state::parse_key(k)) {
+            if planned.contains(&a) {
+                continue;
+            }
+            if lifecycle.retain.contains(&a) {
+                plan.actions.push(provider::Action {
+                    kind: provider::ActionKind::Delete,
+                    addr: a,
+                    changes: Vec::new(),
+                    on: BTreeSet::new(),
+                });
+                continue;
+            }
+            let why = match self.provider_wait(&a.typ) {
+                Some(on) => format!("its provider is not configured: {on}"),
+                None => "its provider planned no delete".to_string(),
+            };
+            unreachable.push((a, why));
+        }
+        unreachable
+    }
+
+    /// The plan as facts for its policy pass: each deformation with the
+    /// documents it was planned against, and each copy's.
+    fn deformation_facts(
+        &self,
+        plan: &provider::Plan,
+        sections: &stuck::Sections,
+        instances: &zset::Instances,
+        st: &State,
+    ) -> Result<Vec<Atom>> {
+        let observed = self.backend.observe(st)?;
+        let before = observed
+            .iter()
+            .map(|(a, d)| (a.clone(), Some(d.clone())))
+            .collect();
+        let deformations = || {
+            plan.actions.iter().filter_map(|a| {
+                let held = report::waits_on(a, sections).is_some();
+                Some((zset::deformation_kind(&a.kind, held)?, &a.addr))
+            })
+        };
+        let mut facts = zset::deformation_facts(deformations(), &before, &observed);
+        facts.extend(zset::instance_facts(deformations(), instances));
+        Ok(facts)
+    }
+}
+
+/// The policy pass derives the resources the plan was made of: a resource
+/// rule that reads the deformation would make the plan depend on itself.
+fn unchanged_by_policy(
+    res: &EvalResult,
+    wanted: &[ir::Resource],
+    schema: &crate::schema::Schema,
+) -> Result<()> {
+    let again = ir::compile_resources(res.facts.iter().cloned(), schema)?;
+    if again.len() != wanted.len()
+        || again
+            .iter()
+            .zip(wanted)
+            .any(|(a, b)| a.addr != b.addr || a.attrs != b.attrs)
+    {
+        bail!(
+            "a resource rule reads deformation/3 or world_digest/2: the plan would \
+             depend on itself (only policy may read the deformation)"
+        );
+    }
+    Ok(())
 }
 
 /// The resources each provider's settings are made from, by the
