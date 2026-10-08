@@ -55,11 +55,14 @@ pub struct Context<'a> {
     pub when: Option<&'a Lookup<'a>>,
     /// Of an attribute given at creation only whose value the plan keeps
     /// (R-198), the object's value and where it was made.
-    pub kept: Option<&'a dyn Fn(&ir::Address, &str) -> Option<String>>,
+    pub kept: Option<&'a AttrLookup<'a>>,
 }
 
 /// A text an address or a type maps to, when it has one.
 pub type Lookup<'a> = dyn Fn(&str) -> Option<String> + 'a;
+
+/// A text an attribute of a resource maps to, when it has one.
+pub type AttrLookup<'a> = dyn Fn(&ir::Address, &str) -> Option<String> + 'a;
 
 /// `dform why PATTERN`, as text.
 pub fn why(pattern: &str, how: As, cx: &Context) -> Result<String> {
