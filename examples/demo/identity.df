@@ -1,5 +1,7 @@
-# A component with no inputs: its file declares resources. `iam_need` is
-# the stack's relation, read outward.
+# A module of resources. `iam_need` is a relation it takes: the stack
+# gives its rows in the `use`.
+input iam_need
+decl iam_need(role: string, action: string, resource: string)
 
 #| The app's role, and one policy of every permission the stack's other
 #| components need. The role holds its policies: a relationship whose

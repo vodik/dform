@@ -6165,6 +6165,7 @@ impl<'u> Lowerer<'u> {
             // instance's the read is in (R-186).
             pred = self.relation_pred(rc.scope, from, p);
         } else if !pred.contains('.') {
+            self.undeclared_relation(rc, &pred, span)?;
             pred = self.relation_pred(rc.scope, rc.scope, &pred);
         }
         let list = node(n, ARG_LIST);

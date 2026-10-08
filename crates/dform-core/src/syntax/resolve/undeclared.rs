@@ -9,10 +9,38 @@ use super::*;
 
 /// What a module's user declares a name as: the input the module takes
 /// it by.
-struct UserDecl {
-    /// The type the module's input is declared with, as the user's
-    /// declaration writes it (an alias expanded).
-    ty: String,
+enum UserDecl {
+    /// A value or a resource: the type the module's input is declared
+    /// with, as the user's declaration writes it (an alias expanded).
+    Value(String),
+    /// A relation, of this many columns: `input p` and its `decl`.
+    Relation(usize),
+}
+
+impl UserDecl {
+    /// `input env: T` in FILE; `decl p(..)` and `input p` in FILE.
+    fn declare(&self, h: &str) -> String {
+        match self {
+            UserDecl::Value(ty) => format!("`input {h}: {ty}`"),
+            UserDecl::Relation(n) => {
+                let cols: Vec<String> = (1..=*n).map(|i| format!("c{i}: T")).collect();
+                format!("`decl {h}({})` and `input {h}`", cols.join(", "))
+            }
+        }
+    }
+
+    /// What the `use` or the copy gives: the value by its name, the rows
+    /// by a rule over the user's.
+    fn give(&self, h: &str) -> String {
+        match self {
+            UserDecl::Value(_) => h.to_string(),
+            UserDecl::Relation(n) => {
+                let vs: Vec<String> = (1..=*n).map(|i| format!("x{i}")).collect();
+                let vs = vs.join(", ");
+                format!("{h}({vs}) where {h}({vs})")
+            }
+        }
+    }
 }
 
 impl Lowerer<'_> {
@@ -20,22 +48,39 @@ impl Lowerer<'_> {
     /// module's file, nothing there declares `h`, and the module's user
     /// does: the module would read its user's (R-205).
     pub(super) fn undeclared(&mut self, rc: &Rc, h: &str, span: Span) -> L<()> {
-        let Some(module) = self.module_of(rc.scope) else {
-            return Ok(());
-        };
         if self.declares(rc.scope, h) {
             return Ok(());
         }
+        self.not_declared(rc.scope, h, false, span)
+    }
+
+    /// The error for the relation `p` called in `rc.scope`, as
+    /// [`Self::undeclared`]: a module's call of its user's relation.
+    pub(super) fn undeclared_relation(&mut self, rc: &Rc, p: &str, span: Span) -> L<()> {
+        let defines = self.chain_of(rc.scope).into_iter().any(|s| {
+            let sc = &self.decls.scopes[s];
+            sc.arities.contains_key(p) || sc.relation_inputs.contains(p)
+        });
+        if defines || !crate::modules::is_private(p) || self.decls.externs.contains_key(p) {
+            return Ok(());
+        }
+        self.not_declared(rc.scope, p, true, span)
+    }
+
+    fn not_declared(&mut self, scope: usize, h: &str, relation: bool, span: Span) -> L<()> {
+        let Some(module) = self.module_of(scope) else {
+            return Ok(());
+        };
         // The body the read is in: a component's input is given in each
         // copy, a module's in its `use`.
-        let body = self.own_scopes(rc.scope).last().copied().unwrap_or(PROGRAM);
+        let body = self.own_scopes(scope).last().copied().unwrap_or(PROGRAM);
         let component = self
             .decls
             .modules
             .iter()
             .find(|(_, m)| m.scope == body && m.component)
             .map(|(p, _)| p.clone());
-        let Some(user) = self.user_decl(&module, component.as_deref(), h) else {
+        let Some(user) = self.user_decl(&module, component.as_deref(), h, relation) else {
             return Ok(());
         };
         let file = self.module_file(&module);
@@ -50,9 +95,10 @@ impl Lowerer<'_> {
                     ),
                 )
                 .with_help(format!(
-                    "take it as an input: `input {h}: {}` in component {name} ({file}), and give \
-                     it in each copy: `resource {c} NAME {{ {h} }}`",
-                    user.ty
+                    "take it as an input: {} in component {name} ({file}), and give it in each \
+                     copy: `resource {c} NAME {{ {} }}`",
+                    user.declare(h),
+                    user.give(h)
                 ))
             }
             None => Diagnostic::error(
@@ -63,9 +109,10 @@ impl Lowerer<'_> {
                 ),
             )
             .with_help(format!(
-                "take it as an input: `input {h}: {}` in {file}, and give it in the use: `use \
-                 {module} {{ {h} }}`",
-                user.ty
+                "take it as an input: {} in {file}, and give it in the use: `use {module} {{ {} \
+                 }}`",
+                user.declare(h),
+                user.give(h)
             )),
         };
         // Each name once per file: its first read says it.
@@ -117,7 +164,13 @@ impl Lowerer<'_> {
     /// What the module's users declare `h` as: the stack's top level, each
     /// scope that `use`s the module or copies the component, out to its
     /// own file's.
-    fn user_decl(&self, module: &str, component: Option<&str>, h: &str) -> Option<UserDecl> {
+    fn user_decl(
+        &self,
+        module: &str,
+        component: Option<&str>,
+        h: &str,
+        relation: bool,
+    ) -> Option<UserDecl> {
         let uses = |s: &Scope| {
             s.uses.values().any(|p| p == module)
                 || component.is_some_and(|c| s.instances.values().any(|p| p == c))
@@ -127,17 +180,21 @@ impl Lowerer<'_> {
         for user in users {
             for s in self.chain_of(user) {
                 let sc = &self.decls.scopes[s];
+                if relation {
+                    match sc.arities.get(h).and_then(|a| a.first()) {
+                        Some(n) => return Some(UserDecl::Relation(*n)),
+                        None => continue,
+                    }
+                }
                 if let Some(n) = sc.input_nodes.get(h) {
                     let ty = node(n, TYPE_EXPR).map_or("TYPE".into(), |t| self.unaliased(&t));
-                    return Some(UserDecl { ty });
+                    return Some(UserDecl::Value(ty));
                 }
                 if sc.values.contains(h) {
-                    return Some(UserDecl { ty: "TYPE".into() });
+                    return Some(UserDecl::Value("TYPE".into()));
                 }
                 if let Some(types) = sc.resources.get(h) {
-                    return Some(UserDecl {
-                        ty: format!("ref({})", types[0]),
-                    });
+                    return Some(UserDecl::Value(format!("ref({})", types[0])));
                 }
             }
         }

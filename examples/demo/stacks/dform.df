@@ -43,7 +43,9 @@ type environment = enum("dev", "staging", "prod")
 # by their paths from the project root. Their rules and denies run over
 # what this stack sees.
 use baseline { env }
-use stdlib_net
+use stdlib_net {
+  vpc_peer(a, b) where vpc_peer(a, b)
+}
 
 # Copies of a component (Terraform module-like): network.df's `vpc`, once
 # per network. Inputs are declared by the component; each `k = v` here is
@@ -68,7 +70,9 @@ use kubernetes {
   subnet(s) where main.private_subnet(s)
 } where env != "dev"
 
-use identity
+use identity {
+  iam_need(r, a, x) where iam_need(r, a, x)
+}
 
 #| VPC peering intent: define edges between network instances.
 vpc_peer_inst("main", "peer")
