@@ -1576,9 +1576,18 @@ fn rounded(a: &[Value], f: fn(f64) -> f64) -> Option<Value> {
 
 fn len_of(a: &[Value]) -> Option<Value> {
     match a {
-        [Value::List(xs)] => Some(Value::Int(xs.len() as i64)),
-        [Value::Obj(m)] => Some(Value::Int(m.len() as i64)),
-        [Value::Str(s)] => Some(Value::Int(s.chars().count() as i64)),
+        [v] => len(v).map(Value::Int),
+        _ => None,
+    }
+}
+
+/// `.len` of a value: a list's elements, an object's fields, a string's
+/// characters; none of anything else.
+pub(crate) fn len(v: &Value) -> Option<i64> {
+    match v {
+        Value::List(xs) => Some(xs.len() as i64),
+        Value::Obj(m) => Some(m.len() as i64),
+        Value::Str(s) => Some(s.chars().count() as i64),
         _ => None,
     }
 }
@@ -1861,6 +1870,16 @@ fn encodable(v: &Value) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `.len` and a refinement's `len` are one: characters, elements,
+    /// fields.
+    #[test]
+    fn len_counts_characters_elements_and_fields() {
+        assert_eq!(len(&Value::Str("héllo".into())), Some(5));
+        assert_eq!(len(&Value::List(vec![Value::Int(1)])), Some(1));
+        assert_eq!(len(&Value::Obj(Default::default())), Some(0));
+        assert_eq!(len(&Value::Int(3)), None);
+    }
 
     #[test]
     fn the_shipped_files_load() {

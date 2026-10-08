@@ -620,12 +620,7 @@ impl Constraint {
             Value::Str(s) => crate::value::parse_ipnet(s).map(|(_, p)| p),
             _ => None,
         };
-        let len = |v: &Value| match v {
-            Value::Str(s) => Some(s.chars().count() as i64),
-            Value::List(xs) => Some(xs.len() as i64),
-            Value::Obj(m) => Some(m.len() as i64),
-            _ => None,
-        };
+        let len = crate::functions::len;
         let ok = match (self, v) {
             (Constraint::IsInt, Value::Int(_)) => true,
             (Constraint::IsStr, Value::Str(_)) => true,
