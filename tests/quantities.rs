@@ -183,8 +183,8 @@ fn one_spelling_renders_per_schema() {
         .failure();
     assert!(
         r.stderr.contains(
-            "aws.db_instance[\"db\"].allocated_storage is sent to the provider in whole GiB, \
-             and 1536Mi is not"
+            "Error: main.df:6, aws.db_instance db: allocated_storage is sent to the provider in \
+             whole GiB, and 1536Mi is not"
         ),
         "{}",
         r.stderr

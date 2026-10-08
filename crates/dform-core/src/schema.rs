@@ -420,6 +420,28 @@ impl Schema {
         if let Some(r) = self.attr(typ, path).and_then(AttrSpec::render) {
             return r.apply(v).map_err(|why| (path.to_string(), why));
         }
+        // A quantity where the schema takes an int (a CRD's `integer`) is
+        // its number in its base unit, `quantity.to(q, "")`: bytes,
+        // whole cores (R-190).
+        if let Value::Quantity(q) = v
+            && self.attr(typ, path).is_some_and(|a| a.kind() == "int")
+        {
+            return q.in_unit("").map(Value::Int).ok_or_else(|| {
+                let text = spell::value(v);
+                let why = match q.dim() {
+                    crate::quantity::Dim::Duration => format!(
+                        "is an int, and the duration {text} has no one unit an int means\n\
+                         help: write it in the unit the field takes: quantity.to({text}, \"s\")"
+                    ),
+                    _ => format!(
+                        "is an int, which takes a cpu in whole cores, and {text} is not\n\
+                         help: write its millicores if the field takes them: \
+                         quantity.to({text}, \"m\")"
+                    ),
+                };
+                (path.to_string(), why)
+            });
+        }
         let join = |k: &str| crate::ir::path_join(path, k);
         Ok(match v {
             Value::Obj(m) => Value::Obj(
@@ -1300,6 +1322,53 @@ mod tests {
     /// required path binds where the nearest declared path above it is
     /// written (a CronJob's template where its job spec is), at the top
     /// where none is declared; under a value a tick makes, not at all.
+    #[test]
+    fn a_quantity_at_an_int_is_its_number_in_its_base_unit() {
+        use crate::quantity::{Dim, read};
+        let s = Schema::parse(
+            "type_attr(\"t.c\", \"spec.max\", \"int\", [])\n\
+             type_attr(\"t.c\", \"spec.mem\", \"bytes\", [])\n",
+            "test",
+        )
+        .unwrap();
+        let at = |path: &str, dim: Dim, q: &str| {
+            let v = Value::Quantity(read(dim, q).unwrap());
+            let doc = Value::Obj(
+                [(
+                    "spec".to_string(),
+                    Value::Obj([(path.to_string(), v)].into()),
+                )]
+                .into(),
+            );
+            s.render("t.c", &doc).map(|d| match d {
+                Value::Obj(m) => match &m["spec"] {
+                    Value::Obj(m) => m[path].clone(),
+                    _ => unreachable!(),
+                },
+                _ => unreachable!(),
+            })
+        };
+        assert_eq!(at("max", Dim::Bytes, "512Mi"), Ok(Value::Int(512 << 20)));
+        assert_eq!(at("max", Dim::Cpu, "2"), Ok(Value::Int(2)));
+        assert_eq!(
+            at("mem", Dim::Bytes, "512Mi"),
+            Ok(Value::Str("512Mi".into()))
+        );
+        let (path, why) = at("max", Dim::Cpu, "1500m").unwrap_err();
+        assert_eq!(path, "spec.max");
+        assert!(
+            why.contains(
+                "help: write its millicores if the field takes them: quantity.to(1500m, \"m\")"
+            ),
+            "{why}"
+        );
+        let (_, why) = at("max", Dim::Duration, "90s").unwrap_err();
+        assert!(
+            why.ends_with("help: write it in the unit the field takes: quantity.to(1m30s, \"s\")"),
+            "{why}"
+        );
+    }
+
     #[test]
     fn a_required_path_binds_where_its_declared_parent_is_written() {
         let s = Schema::parse(

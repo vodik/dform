@@ -657,6 +657,17 @@ is then one spelling for every provider; a value its form cannot hold
 (`1536Mi` as whole GiB) is a plan error naming the attribute, and what a
 provider sends back at such an attribute is read the same way.
 
+At an attribute the schema types `int` (a CRD's `integer`) a quantity
+is its number in its base unit, `quantity.to(q, "")` (R-190): `512Mi`
+goes as `536870912`, a cpu as whole cores; a cpu that is not a whole
+number of cores, and a duration (no one unit an int means), are a plan
+error naming the attribute and `quantity.to` in the unit the field
+takes. In a document dform encodes (`yaml.encode`, `json.encode`,
+`toml.encode`) a quantity is printed as dform prints it, `50Mi`; a
+format that spells sizes another way gets its spelling from a string
+the program writes, `max_upload_size: "${quantity.to(size, "Mi")}M"`
+(Synapse's `M` being a MiB).
+
 A `uri` is a value, like `inet` (R-134): RFC 3986's generic syntax, the
 same for every scheme, not a browser's WHATWG url. What a program holds
 is `s3://bucket/key`, `postgres://user:pw@host:5432/db`,

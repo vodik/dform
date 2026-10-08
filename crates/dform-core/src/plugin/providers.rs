@@ -2543,7 +2543,9 @@ impl Providers {
         let attrs = self
             .schema()
             .render(&r.addr.typ, &r.attrs)
-            .map_err(|(path, why)| anyhow!("{} {why}", r.addr.attr(&path)))?;
+            .map_err(|(path, why)| {
+                crate::report::Failure::located(&r.addr, format!("{path} {why}"))
+            })?;
         self.resolve_value(ctx, &attrs)
     }
 

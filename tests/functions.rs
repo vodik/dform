@@ -346,6 +346,18 @@ te(s) where s = toml.encode({ a: 1 })
     assert!(ye[0].contains("a: 1"), "{ye:?}");
 }
 
+/// `yaml.encode` prints a quantity as dform does (`50Mi`, R-190); a format
+/// that spells it another way (Synapse's `max_upload_size: 50M`, its M a
+/// MiB) gets it from `quantity.to` in a string the program writes.
+#[test]
+fn a_quantity_encodes_as_dform_prints_it() {
+    let src = r#"ye(s) where s = yaml.encode({ max_upload_size: 50Mi })
+yt(s) where s = yaml.encode({ max_upload_size: "${quantity.to(50Mi, "Mi")}M" })
+"#;
+    assert_eq!(facts(src, "ye"), [r#"ye("max_upload_size: 50Mi\n")"#]);
+    assert_eq!(facts(src, "yt"), [r#"yt("max_upload_size: 50M\n")"#]);
+}
+
 /// `json.decode`, `yaml.decode` and `toml.decode` read as a table's
 /// document does: a number is an int or a float as written (R-75), a null
 /// member is absent, a null element and a YAML tag leave no value, a TOML
