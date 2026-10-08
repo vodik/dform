@@ -48,6 +48,7 @@ pub mod provider;
 pub mod quantity;
 pub mod query;
 pub mod range;
+pub mod reference;
 pub mod refine;
 pub mod report;
 pub mod schema;

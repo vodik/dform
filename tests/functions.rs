@@ -101,14 +101,14 @@ fn a_head_two_things_claim_is_an_error() {
 /// Hover and signature help read the declarations.
 #[test]
 fn the_reference_reads_std() {
-    let r = engine::reference("inet.subnet", true).unwrap();
+    let r = dform_core::reference::reference("inet.subnet", true).unwrap();
     assert_eq!(
         r.signature,
         "inet.subnet(net: inet, bits: int, n: int) -> inet"
     );
     assert!(r.example.contains("inet.subnet("), "{r:?}");
-    assert!(engine::reference("add", true).is_none());
-    assert!(engine::reference("to_int", true).is_none());
+    assert!(dform_core::reference::reference("add", true).is_none());
+    assert!(dform_core::reference::reference("to_int", true).is_none());
 }
 
 /// `str.dedent` (R-61): a string literal that spans lines keeps what is
@@ -156,7 +156,7 @@ all(p) where p = str.split("a:b:c", ":")
     assert_eq!(facts(src, "s1"), [r#"s1(["a", "b:c"])"#]);
     assert_eq!(facts(src, "s9"), [r#"s9(["a", "b", "c"])"#]);
     assert_eq!(facts(src, "all"), [r#"all(["a", "b", "c"])"#]);
-    let r = engine::reference("str.split", true).unwrap();
+    let r = dform_core::reference::reference("str.split", true).unwrap();
     assert_eq!(
         r.signature,
         "str.split(text: string, sep: string, limit?: int) -> list(string)"
@@ -547,7 +547,7 @@ fn there_is_no_prelude() {
         let e = error(&format!("p(x) where x = {internal}(\"a\", \"b\", \"c\")\n"));
         assert!(e.contains(&format!("{internal} is dform's own")), "{e}");
     }
-    assert!(engine::reference("ref", true).is_none());
+    assert!(dform_core::reference::reference("ref", true).is_none());
 }
 
 /// `in` is the one membership (R-155): an element of a list, a substring

@@ -2,12 +2,12 @@
 //! a call of a builtin (`inet.subnet(`) or of an extern the project
 //! declares (`dns.lookup(`, or its lookup `dns.lookup[`), the call's
 //! signature and the argument the cursor is in. Builtins are
-//! `engine::references`'s; an extern's parameters are its declaration's,
+//! `reference::references`'s; an extern's parameters are its declaration's,
 //! its documentation its doc comment. Read off the tokens, so a call being
 //! typed (no `)` yet) has one too.
 
-use dform_core::engine::{self, RefKind};
 use dform_core::lexer;
+use dform_core::reference::{self, RefKind};
 use dform_core::syntax::doc;
 use dform_core::syntax::{SyntaxKind, SyntaxNode};
 use lsp_types::{
@@ -122,7 +122,7 @@ pub fn help(text: &str, at: usize, trees: &[SyntaxNode]) -> Option<SignatureHelp
     let (label, documentation) = match extern_decl(trees, &name) {
         Some((label, description)) => (label, description.map(markdown)),
         None => {
-            let r = engine::reference(&name, true).filter(|r| r.kind != RefKind::Keyword)?;
+            let r = reference::reference(&name, true).filter(|r| r.kind != RefKind::Keyword)?;
             let doc = format!("{}\n\n```dform\n{}\n```", r.summary, r.example);
             (r.signature.to_string(), Some(markdown(doc)))
         }
@@ -175,7 +175,7 @@ mod tests {
 
     #[test]
     fn parameters_split_at_top_level_commas() {
-        let format = engine::reference("str.format", true).unwrap().signature;
+        let format = reference::reference("str.format", true).unwrap().signature;
         assert_eq!(
             params(format),
             vec!["template: string", "value: any", "..."]

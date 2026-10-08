@@ -4,12 +4,12 @@
 //! component's resource's inputs and, after `copy.`, its outputs.
 //! A type's or path's documentation is its `type_doc`. Elsewhere a word
 //! completes to the builtins, keywords and function packages it starts
-//! (`engine::references`; no function is bare, R-155), a package's name
+//! (`reference::references`; no function is bare, R-155), a package's name
 //! and a dot (`inet.su`) to its functions.
 
 use crate::nav;
 use dform_core::ast::{Atom, Term};
-use dform_core::engine::{self, RefKind};
+use dform_core::reference::{self, RefKind};
 use dform_core::schema::Schema;
 use dform_core::syntax::{SyntaxKind, SyntaxNode};
 use dform_core::value::Value;
@@ -336,7 +336,7 @@ fn builtins(word: &str, replaced: Option<lsp_types::Range>) -> Vec<CompletionIte
                 Some(fns.join(", ")),
             )
         });
-    engine::references()
+    reference::references()
         .iter()
         .filter(|r| r.name.starts_with(word))
         .map(|r| {

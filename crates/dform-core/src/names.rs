@@ -1335,7 +1335,7 @@ impl Decls {
 /// declares: the compiler's, the engine's or a provider's (`deformation`,
 /// `drift`), an aggregate.
 pub fn is_builtin_relation(name: &str) -> bool {
-    crate::loader::is_core_pred(name) || crate::engine::reference(name, true).is_some()
+    crate::loader::is_core_pred(name) || crate::reference::reference(name, true).is_some()
 }
 
 /// The signature line of a function or a package in `std/*.df`.

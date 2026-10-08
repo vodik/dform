@@ -13,9 +13,10 @@ use crate::analysis::Evaluated;
 use crate::{cells, refs};
 use dform_core::ast::{Atom, Lit, Span, Stmt, Term};
 use dform_core::circuit::{Leaf, NodeId, View};
-use dform_core::engine::{self, Reference};
+use dform_core::engine;
 use dform_core::lattice::Rank;
 use dform_core::names::{self, Parsed, Symbol, What};
+use dform_core::reference::{self, Reference};
 use dform_core::report::tree;
 use dform_core::syntax::doc;
 use dform_core::syntax::{SyntaxKind, SyntaxNode, SyntaxToken};
@@ -356,7 +357,7 @@ pub fn hover_at(p: &refs::Project, path: &Path, at: usize) -> Option<String> {
             .parent()
             .is_some_and(|n| matches!(n.kind(), SyntaxKind::CHAIN | SyntaxKind::BLOCK_PATH));
         return (!as_name)
-            .then(|| engine::reference(t.text(), false))
+            .then(|| reference::reference(t.text(), false))
             .flatten()
             .map(reference_md);
     }
@@ -564,7 +565,7 @@ fn builtin(t: &SyntaxToken) -> Option<&'static Reference> {
         .filter(|x| !x.kind().is_trivia())
         .map(|x| x.text().to_string())
         .collect();
-    engine::reference(&name, true)
+    reference::reference(&name, true)
 }
 
 /// The statement a declaration's name token stands in.
