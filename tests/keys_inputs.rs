@@ -330,3 +330,24 @@ fn a_type_line_stands_in_the_header() {
     let p = dform::syntax::parser::parse(CONFIG);
     assert!(p.errors.is_empty(), "{:?}", p.errors);
 }
+
+/// Not yet: the label of a module input nothing gives prints the type as
+/// the resolver expanded it, `enum(lab, prod)`, not as written,
+/// `config.environment` (an alias is transparent by the time `inputs`
+/// sees the declaration; the written text needs the declaration's span
+/// read back, or the alias carried on `InputDecl`, which is ast.rs).
+#[test]
+#[ignore = "the required-input label prints the alias expanded (ast.rs carries no alias name)"]
+fn the_required_input_label_names_the_alias() {
+    let s = project("ki-label");
+    s.write(
+        "stacks/platform.df",
+        "key env: config.environment\nuse fake\nuse k3s\n",
+    );
+    let r = s.run(&["plan", "platform", "env=lab"]).failure();
+    assert!(
+        r.stderr.contains("env: config.environment declared here"),
+        "{}",
+        r.stderr
+    );
+}
