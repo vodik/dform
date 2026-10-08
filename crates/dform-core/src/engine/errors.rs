@@ -3,9 +3,10 @@
 //! call that answered nothing, a field read of what has no fields; and the place a message
 //! names.
 
+use super::Src;
 use super::builtins::{eval_func, eval_term};
+use super::nulls::Rec;
 use super::unify::unify_atom;
-use super::{Rec, Src};
 use crate::ast::{Atom, Lit, RuleStmt, Span, Term};
 use crate::diag;
 use crate::ir::ops;

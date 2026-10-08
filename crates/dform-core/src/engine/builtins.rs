@@ -5,8 +5,8 @@ use super::errors::{
     at_suffix, failed_builtin, missing_walk, not_an_object, ref_and_string, side_unanswered,
     unanswered,
 };
+use super::nulls::{Rec, forwards_nulls, spreads};
 use super::unify::bind_term;
-use super::{Rec, forwards_nulls, spreads};
 use crate::ast::{Atom, Lit, Term};
 use crate::lattice::{Truth, nulls_in};
 use crate::spell;

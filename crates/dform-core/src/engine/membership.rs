@@ -1,9 +1,9 @@
 //! Membership, `x in e`: a list's or an object's entries enumerated, a scalar's
 //! (a string, an `inet`, a range) tested, and their negations.
 
-use super::Rec;
 use super::builtins::eval_term;
 use super::errors::{missing_walk, ref_and_string};
+use super::nulls::Rec;
 use super::unify::unify_term;
 use crate::ast::{Atom, Term};
 use crate::lattice::{Truth, nulls_in};
