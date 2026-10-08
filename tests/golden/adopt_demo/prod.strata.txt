@@ -68,7 +68,7 @@ stratum  node
 6        (arg, net.subnet, zone)
 6        (want, net.subnet)
 6        __field_read_0
-6        deny
+6        __unanswered
 7        (attr, net.subnet, cidr)
 7        (attr, net.subnet, id)
 7        (attr, net.subnet, visibility)

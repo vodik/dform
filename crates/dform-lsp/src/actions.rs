@@ -12,7 +12,7 @@ use crate::analysis::{self, Evaluated, Outcome, Reader, Where};
 use dform_core::ast::Term;
 use dform_core::syntax::{SyntaxKind, SyntaxNode};
 use dform_core::value::Value;
-use dform_core::{engine, ir, stack, transform};
+use dform_core::{engine, ir, report, stack};
 use rowan::TextSize;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -75,7 +75,7 @@ pub fn compiled(outcome: &Outcome) -> Vec<Action> {
 /// The fixes of the diagnostics evaluation `e` of the stack at `stack`
 /// found.
 pub fn evaluated(e: &Evaluated, stack: &Path, read: Reader) -> Vec<Action> {
-    let mut out = dangling_refs(e, read);
+    let mut out = unanswered_reads(e, read);
     out.extend(collisions(e, stack, read));
     out.extend(required(e, read));
     out
@@ -153,28 +153,17 @@ fn resource_block(root: &SyntaxNode, at: usize) -> Option<SyntaxNode> {
         .find(|n| n.kind() == SyntaxKind::BLOCK)
 }
 
-/// A ref to an address no rule wants: guard the resource block that holds
-/// it on the address being wanted (`} where "other" in net.vpc`), in its
-/// clause. Offered where the address is written as it is (the block has
-/// no clause, or names it quoted).
-fn dangling_refs(e: &Evaluated, read: Reader) -> Vec<Action> {
+/// A read of an address no rule wants (R-194): guard the resource block
+/// that holds it on the address being wanted (`} where "other" in
+/// net.vpc`), in its clause. Offered where the address is written as it
+/// is (the block has no clause, or names it quoted).
+fn unanswered_reads(e: &Evaluated, read: Reader) -> Vec<Action> {
     let mut out = Vec::new();
     for a in &e.res.facts {
-        if a.pred != "deny" {
-            continue;
-        }
-        let (Some(Term::Val(Value::Str(m))), Some(Term::Val(Value::Obj(ctx)))) =
-            (a.args.first(), a.args.get(1))
-        else {
+        let Some(u) = report::Unanswered::of(a) else {
             continue;
         };
-        if m != transform::DANGLING_REF {
-            continue;
-        }
-        let (Some(Value::Str(typ)), Some(Value::Str(addr))) = (ctx.get("type"), ctx.get("addr"))
-        else {
-            continue;
-        };
+        let (typ, addr) = (&u.to.typ, &u.to.name);
         let Some(at) = place(e, a, read) else {
             continue;
         };
@@ -224,7 +213,7 @@ fn dangling_refs(e: &Evaluated, read: Reader) -> Vec<Action> {
         out.push(
             Action::new(
                 format!("guard the block on {typ} {addr} existing: `{lit}`"),
-                transform::DANGLING_REF.to_string(),
+                e.redact.text(&u.message()),
                 Some(at),
             )
             .edit(&file, at_edit, at_edit, insert),

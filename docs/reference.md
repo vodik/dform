@@ -4011,9 +4011,10 @@ deny "dev has no database" where env == "dev", _ in db.postgres
 ```
 
 It prints a result set, a row per combination: its inputs, then `ok` or
-`denied` (or `error`, for one that does not compile, or whose plan would
-refuse a resource for an attribute its schema requires and the program
-leaves unset, said as the plan says it, R-184). Each that failed
+`denied` (or `error`, for one that does not compile, that reads what
+nothing derives (R-194), or whose plan would refuse a resource for an
+attribute its schema requires and the program leaves unset (R-184),
+each said as the plan says it). Each that failed
 follows as the command that plans it with its denies (or its error),
 each with its doc comment (`#|` above the deny: the test's doc) beside
 it; it exits non-zero if any failed:
@@ -4189,8 +4190,9 @@ examples/demo an evaluation takes about 30 ms in a release build.
   unknown name (quote it), `=` with both sides bound (write `==`), a predicate with both facts and rules (`decl
   p(a, b) mixed`), the collision lint (interpolate the key into the name, or
   say `isolated = true` on the stack), a required attribute nothing sets
-  (a typed placeholder in the resource's block) and a ref to an address
-  no rule wants (guard the block on it: `} where "other" in net.vpc`). An edit
+  (a typed placeholder in the resource's block) and a read of an address
+  no rule wants, the error at the read (guard the block on it: `} where
+  "other" in net.vpc`). An edit
   to a formatted file leaves it formatted.
 - *References* of a predicate, an input or value name (a `{ k }` field
   included) and an object input's field (`nodes.count`), a `let` or type

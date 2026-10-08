@@ -305,7 +305,9 @@ impl<'h> Evaluated<'h> {
         )?;
         // A destroy is refused by the denies over its plan, not by the
         // program's own: it wants none of the resources they are about.
+        // A read of what nothing derives is an error before them (R-194).
         if opts.blocking && !cx.cli.cmd.destroys() {
+            crate::report::Unanswered::check(&ev.res.facts)?;
             cx.cli.cmd.blocked(&ev.violations, &ev.redact)?;
         }
         Ok(Evaluated { cx, ev, hook })

@@ -1825,9 +1825,6 @@ pub fn violations(vs: &[String], r: &Redactor, style: Style) -> String {
 /// A violation's message and, for a deny with a context object, its
 /// bindings as `key = value` ([`violations`]).
 fn violation_parts(v: &str, r: &Redactor) -> (String, Vec<String>) {
-    if let Some(d) = dangling(v) {
-        return (r.text(&d), Vec::new());
-    }
     let parsed = v
         .split_once(" ctx=")
         .and_then(|(msg, c)| Some((msg, serde_json::from_str::<Json>(c).ok()?)));
@@ -1861,11 +1858,9 @@ fn binding(x: &Json, r: &Redactor) -> String {
     r.surface(&json_to_value(x))
 }
 
-/// A violation as a run that refuses says it on one line: a reference
-/// to an address no rule wants (`transform::DANGLING_REF`) by what holds
-/// it and the address it names, which the plan lists under `not planned`
-/// when its statement derives nothing (R-120); a deny as its message and
-/// its bindings ([`violations`]); any other as the evaluator words it.
+/// A violation as a run that refuses says it on one line: a deny as its
+/// message and its bindings ([`violations`]); any other as the evaluator
+/// words it.
 pub fn violation_line(v: &str, r: &Redactor) -> String {
     // A conflict (a refinement violated) as the `conflicts` section says
     // it, its witnesses beneath.
@@ -1879,42 +1874,31 @@ pub fn violation_line(v: &str, r: &Redactor) -> String {
     }
 }
 
-/// A dangling reference's violation as [`violation_line`] says it.
-fn dangling(v: &str) -> Option<String> {
-    let d = Dangling::of(v)?;
-    let from = match &d.holder {
-        Some(a) => address(a),
-        None => d.from.clone(),
-    };
-    Some(format!(
-        "{}: {from} reads {}, and nothing derives {}{}",
-        crate::transform::DANGLING_REF,
-        d.read(),
-        address(&d.to),
-        d.at.as_ref().map(|a| format!(" ({a})")).unwrap_or_default()
-    ))
-}
-
-/// A dangling reference's violation taken apart: the resource whose
-/// contribution holds it and the attribute it writes (else what holds
-/// it, as words), what it reads, and where it is written.
-pub struct Dangling {
+/// A contribution's read of a row that does not exist (R-194): a ref to
+/// an address no rule wants (`transform::UNANSWERED`), taken apart: the
+/// resource whose contribution holds it and the attribute it writes (else
+/// what holds it, as words), what it reads, and where it is written.
+pub struct Unanswered {
     pub holder: Option<Address>,
     attr: Option<String>,
     from: String,
-    to: Address,
+    pub to: Address,
     path: Option<String>,
     at: Option<String>,
 }
 
-impl Dangling {
-    pub fn of(v: &str) -> Option<Dangling> {
-        let (msg, ctx) = v.split_once(" ctx=")?;
-        if msg != crate::transform::DANGLING_REF {
+impl Unanswered {
+    pub fn of(a: &Atom) -> Option<Unanswered> {
+        if a.pred != crate::transform::UNANSWERED {
             return None;
         }
-        let ctx: Json = serde_json::from_str(ctx).ok()?;
-        let s = |k: &str| ctx.get(k)?.as_str().map(str::to_string);
+        let Some(Term::Val(Value::Obj(ctx))) = a.args.first() else {
+            return None;
+        };
+        let s = |k: &str| match ctx.get(k)? {
+            Value::Str(s) => Some(s.clone()),
+            _ => None,
+        };
         let holder = match (s("from_type"), s("from_name")) {
             (Some(typ), Some(name)) => Some(Address { typ, name }),
             _ => None,
@@ -1923,7 +1907,7 @@ impl Dangling {
             Some(_) => String::new(),
             None => s("from")?,
         };
-        Some(Dangling {
+        Some(Unanswered {
             holder,
             attr: s("attr"),
             from,
@@ -1936,6 +1920,26 @@ impl Dangling {
         })
     }
 
+    /// Each such read in `facts`, as [`Unanswered::message`] says it,
+    /// once each, in order.
+    pub fn messages<'a>(facts: impl IntoIterator<Item = &'a Atom>) -> Vec<String> {
+        let said: BTreeSet<String> = facts
+            .into_iter()
+            .filter_map(Unanswered::of)
+            .map(|u| u.message())
+            .collect();
+        said.into_iter().collect()
+    }
+
+    /// A run that derives such a read refuses it, before any provider is
+    /// asked: each at its site.
+    pub fn check<'a>(facts: impl IntoIterator<Item = &'a Atom>) -> anyhow::Result<()> {
+        match Unanswered::messages(facts).as_slice() {
+            [] => Ok(()),
+            said => Err(anyhow::anyhow!(said.join("\n"))),
+        }
+    }
+
     /// What the reference reads: the attribute, else the resource.
     fn read(&self) -> String {
         match &self.path {
@@ -1946,7 +1950,7 @@ impl Dangling {
 
     /// The read as an error at its site (R-119's form): it answered
     /// nothing, so the holder's attribute has no value.
-    pub fn unanswered(&self) -> String {
+    pub fn message(&self) -> String {
         let what = match (&self.holder, &self.attr) {
             (Some(h), Some(a)) => attribute(h, a),
             (Some(h), None) => address(h),

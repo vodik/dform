@@ -87,7 +87,7 @@ fn a_module_input_binds_a_reference() {
 /// under `not planned` with why, never silently absent: here the copy's
 /// input reads a row nobody states, and what reads its output follows. A
 /// statement held back by its own clause is quiet. A reference to one of
-/// them names it.
+/// them is an error at the read (R-194).
 #[test]
 fn a_statement_that_derives_nothing_is_listed_with_why() {
     let s = Scratch::project("copy-ref-not-planned");
@@ -127,16 +127,12 @@ fn a_statement_that_derives_nothing_is_listed_with_why() {
          data = { x: ghost.metadata.name } }\n",
     );
     let r = s.run(&["plan", "main.df"]).failure();
-    assert!(
+    assert_eq!(
+        r.stderr,
+        "Error: main.df:4:73: k8s.secret ghost.metadata.name answered nothing, so \
+         k8s.config_map cm.data.x has no value: nothing derives k8s.secret ghost\n",
+        "{}",
         r.stdout
-            .contains("  k8s.secret ghost     main.df:3  names(1, names): no row\n")
-            && r.stderr.contains(
-                "ref to an address no rule wants: k8s.config_map cm reads \
-                 k8s.secret ghost.metadata.name, and nothing derives k8s.secret ghost"
-            ),
-        "{}\n{}",
-        r.stdout,
-        r.stderr
     );
 }
 

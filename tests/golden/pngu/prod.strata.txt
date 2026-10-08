@@ -1,6 +1,6 @@
 exit: ok
 -- stdout --
-== examples/pngu/stacks/pngu.df: 127 nodes, 251 edges (80 negative), 8 strata
+== examples/pngu/stacks/pngu.df: 128 nodes, 251 edges (80 negative), 8 strata
 stratum  node
 0        (arg, google.secret_manager_secret_version, secret_data)
 0        (arg, input, env)
@@ -76,6 +76,7 @@ stratum  node
 4        (want, google.compute_subnetwork)
 4        (want, google.container_cluster)
 4        (want, google.monitoring_dashboard)
+4        deny
 4        gcp
 4        gke
 4        provider_config
@@ -124,10 +125,10 @@ stratum  node
 5        (attr, google.monitoring_dashboard, project)
 5        (attr, output, project_id)
 5        __not_planned
-5        deny
+5        __unanswered
 6        (arg, google.compute_address, subnetwork_id)
 6        (arg, google.container_cluster, subnetwork_id)
 7        (attr, google.compute_address, subnetwork_id)
 7        (attr, google.container_cluster, subnetwork_id)
-(127 rows)
+(128 rows)
 -- stderr --

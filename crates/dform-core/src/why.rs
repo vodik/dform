@@ -114,14 +114,8 @@ pub fn why(pattern: &str, how: As, cx: &Context) -> Result<String> {
     let holders: BTreeSet<ir::Address> =
         matched.iter().filter_map(|(a, _)| resource_of(a)).collect();
     let mut unset: Vec<String> = Vec::new();
-    for d in cx.res.facts.iter().filter(|a| a.pred == "deny") {
-        let Some(d) = engine::format_policy_fact(d)
-            .ok()
-            .and_then(|v| report::Dangling::of(&v))
-        else {
-            continue;
-        };
-        let line = format!("no value  {}", d.unanswered());
+    for d in cx.res.facts.iter().filter_map(report::Unanswered::of) {
+        let line = format!("no value  {}", d.message());
         if d.holder.is_some_and(|h| holders.contains(&h)) && !unset.contains(&line) {
             unset.push(line);
         }

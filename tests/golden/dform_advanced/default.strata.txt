@@ -1,6 +1,6 @@
 exit: ok
 -- stdout --
-== examples/advanced/stacks/dform-advanced.df: 81 nodes, 171 edges (57 negative), 6 strata
+== examples/advanced/stacks/dform-advanced.df: 82 nodes, 171 edges (57 negative), 6 strata
 stratum  node
 0        (arg, input, env)
 0        (arg, input, mesh)
@@ -78,10 +78,11 @@ stratum  node
 4        (arg, net.route_table, vpc)
 4        (arg, net.vpc_peering, accepter_vpc)
 4        (arg, net.vpc_peering, requester_vpc)
+4        __unanswered
 4        deny
 5        (attr, net.route_table, routes)
 5        (attr, net.route_table, vpc)
 5        (attr, net.vpc_peering, accepter_vpc)
 5        (attr, net.vpc_peering, requester_vpc)
-(81 rows)
+(82 rows)
 -- stderr --

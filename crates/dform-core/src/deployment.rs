@@ -933,7 +933,7 @@ impl Evaluator {
         );
         let mut plan = backend
             .plan(&asked(&res, &resources), adopts, lifecycle, st)
-            .map_err(|e| with_site(e, &res, violations))?;
+            .map_err(|e| with_site(e, &res))?;
         let replaced = executor::replaced(&plan);
         let (res, violations, resources) = if replaced.is_empty() {
             (res, violations.to_vec(), resources)
@@ -1692,6 +1692,14 @@ impl Evaluator {
         st: &State,
         opts: &Options,
     ) -> (Result<Compiled>, Option<Result<Planned>>) {
+        // A read of what nothing derives is an error at its site before
+        // any provider is asked (R-194); a destroy wants nothing.
+        if !opts.destroy
+            && let Err(e) = report::Unanswered::check(&res.facts)
+        {
+            let policy = opts.policy.then(|| Err(anyhow::anyhow!("{e}")));
+            return (Err(e), policy);
+        }
         if opts.blocking && !opts.destroy && !violations.is_empty() {
             return (Err(anyhow::anyhow!("blocked by constraints")), None);
         }
@@ -1859,7 +1867,13 @@ impl Explained {
     /// reads as related), a violation nothing accounts for (an input of the
     /// wrong type) at the top, and why no plan could be made.
     pub fn problems(&self, _program: &Program) -> Vec<Problem> {
-        let mut out: Vec<Problem> = self.error.iter().flat_map(of_error).collect();
+        // A read of what nothing derives at the rule that holds it, not
+        // the run's error that says them all at the top (R-194).
+        let unanswered = self.unanswered();
+        let mut out: Vec<Problem> = match unanswered.is_empty() {
+            true => self.error.iter().flat_map(of_error).collect(),
+            false => unanswered,
+        };
         let denied: BTreeSet<String> = self
             .res
             .facts
@@ -1886,6 +1900,29 @@ impl Explained {
             out.push(Problem {
                 severity,
                 message: self.redact.text(&text),
+                at: at.unwrap_or(At::Top),
+                related,
+                fixes: Vec::new(),
+            });
+        }
+        out
+    }
+
+    /// Each read of what nothing derives (`report::Unanswered`), where
+    /// the rule that holds it is.
+    fn unanswered(&self) -> Vec<Problem> {
+        let mut out = Vec::new();
+        for a in &self.res.facts {
+            let Some(u) = report::Unanswered::of(a) else {
+                continue;
+            };
+            let Some(id) = self.res.circuit.fact_id(&engine::circuit_fact(a)) else {
+                continue;
+            };
+            let (at, related) = provenance(&self.res, id);
+            out.push(Problem {
+                severity: Severity::Error,
+                message: self.redact.text(&u.message()),
                 at: at.unwrap_or(At::Top),
                 related,
                 fixes: Vec::new(),
@@ -2123,23 +2160,10 @@ fn disagreements(facts: &BTreeSet<Atom>) -> BTreeMap<String, String> {
 }
 
 /// A provider's refusal of a change (`report::Failure`), its third line
-/// where the program derives the change (R-109). A contribution of the
-/// resource that reads what nothing derives answered nothing, so the
-/// document the provider refused lacks what it gives (the deny
-/// `violations` holds, R-183): that read is the error, at its site, in
-/// R-119's form, not the provider's word on what it found missing.
-fn with_site(e: anyhow::Error, res: &EvalResult, violations: &[String]) -> anyhow::Error {
+/// where the program derives the change (R-109).
+pub fn with_site(e: anyhow::Error, res: &EvalResult) -> anyhow::Error {
     match e.downcast::<report::Failure>() {
         Ok(f) => {
-            let unanswered: BTreeSet<String> = violations
-                .iter()
-                .filter_map(|v| report::Dangling::of(v))
-                .filter(|d| d.holder.is_some() && d.holder == f.addr)
-                .map(|d| d.unanswered())
-                .collect();
-            if !unanswered.is_empty() {
-                return anyhow::anyhow!(unanswered.into_iter().collect::<Vec<_>>().join("\n"));
-            }
             let site = f
                 .addr
                 .as_ref()

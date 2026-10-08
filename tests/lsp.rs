@@ -788,7 +788,8 @@ fn quick_fix_sets_a_required_attribute() {
     );
 }
 
-/// A ref to an address no rule wants: the block guarded on it.
+/// A read of an address no rule wants is an error at the read (R-194):
+/// the block guarded on it.
 #[test]
 fn quick_fix_guards_a_dangling_ref() {
     let (_s, root) = example("demo");
@@ -797,11 +798,28 @@ fn quick_fix_guards_a_dangling_ref() {
     let edited = format!(
         "{text}\nresource net.subnet extra {{\n  cidr = \"10.0.1.0/24\"\n  vpc_id = ref(net.vpc, \"other\", \"id\")\n}}\n"
     );
+    let message = "net.vpc other.id answered nothing, so net.subnet extra.vpc_id has no \
+                   value: nothing derives net.vpc other";
+    // At the read, not the top of the file.
+    std::fs::write(&stack, &edited).unwrap();
+    let mut c = Client::start(&root, json!({}));
+    c.open(&stack);
+    let ds = c.diagnostics(&stack);
+    let d = ds
+        .iter()
+        .find(|d| d["message"].as_str().unwrap().contains(message))
+        .unwrap_or_else(|| panic!("{ds:?}"));
+    let line = edited
+        .lines()
+        .position(|l| l.contains("vpc_id = ref(net.vpc, \"other\""))
+        .unwrap();
+    assert_eq!(d["range"]["start"]["line"], line, "{d}");
+    drop(c);
     let texts = quick_fix(
         &root,
         &stack,
         &edited,
-        "ref to an address no rule wants",
+        message,
         "guard the block on net.vpc other existing",
     );
     assert!(

@@ -1,14 +1,15 @@
-//! A `ref(T, A, P)` to an address no rule wants is a deny, not a silently
-//! missing field (ticket "A ref to an address nothing wants drops the field
-//! silently").
+//! A `ref(T, A, P)` to an address no rule wants is an error at the read's
+//! site (R-194), not a silently missing field (ticket "A ref to an address
+//! nothing wants drops the field silently") nor a deny listed after a plan
+//! that shows the resource without it.
 
 mod common;
 use common::{Scratch, repo};
 
-const MSG: &str = "ref to an address no rule wants";
+const MSG: &str = "answered nothing";
 
 #[test]
-fn a_ref_to_an_unwanted_address_is_denied() {
+fn a_ref_to_an_unwanted_address_is_an_error_at_the_read() {
     let s = Scratch::new("dangling-ref");
     s.write(
         "p.df",
@@ -20,16 +21,14 @@ use fake
 "#,
     );
     let r = s.run(&["plan", "p.df"]).failure();
-    // What holds the reference, what it reads, and where (R-120).
-    assert!(
-        r.stderr.contains(&format!(
-            "{MSG}: net.subnet a reads net.vpc other.id, and nothing derives net.vpc other \
-             (p.df:4:47)"
-        )),
-        "{}",
-        r.stderr
+    // Where the read is, what it reads, the attribute it leaves without a
+    // value, and why (R-119's form); no plan is printed.
+    assert_eq!(
+        r.stderr,
+        "Error: p.df:4:47: net.vpc other.id answered nothing, so net.subnet a.vpc_id has no \
+         value: nothing derives net.vpc other\n"
     );
-    assert!(r.stderr.contains("blocked by constraints"), "{}", r.stderr);
+    assert!(r.stdout.is_empty(), "{}", r.stdout);
 }
 
 #[test]
@@ -50,9 +49,9 @@ use fake
 
 /// The case the ticket names: dform.df in stg planned a peering between two
 /// VPCs no rule wanted. The demo now guards the peering on both VPCs existing,
-/// so the guarded program is not blocked; the unguarded shape is kept here.
+/// so the guarded program is not refused; the unguarded shape is kept here.
 #[test]
-fn a_peering_between_unwanted_vpcs_is_blocked() {
+fn a_peering_between_unwanted_vpcs_is_refused() {
     let s = Scratch::new("dangling-ref-peering");
     s.write(
         "p.df",
@@ -73,10 +72,11 @@ use fake
 "#,
     );
     let r = s.run(&["plan", "p.df"]).failure();
-    assert!(r.stderr.contains(MSG), "{}", r.stderr);
     assert!(
-        r.stderr
-            .contains("net.vpc_peering peer_main_peer reads net.vpc main.id"),
+        r.stderr.contains(
+            "p.df:11:3: net.vpc main.id answered nothing, so net.vpc_peering \
+             peer_main_peer.requester_vpc_id has no value: nothing derives net.vpc main\n"
+        ),
         "{}",
         r.stderr
     );

@@ -1797,7 +1797,7 @@ pub fn rewrite_computed_refs(
     let mut out_rules = Vec::new();
     let mut out_facts = Vec::new();
     // After every rule, so a rule's index (its id in `why`) does not move.
-    let mut dangling = Vec::new();
+    let mut unanswered = Vec::new();
     let rules = facts
         .into_iter()
         .map(|f| RuleStmt {
@@ -1812,7 +1812,8 @@ pub fn rewrite_computed_refs(
         // the resource's identity as a read of it would, so it holds once
         // the resource is wanted and is pending while that may derive; the
         // value stays the reference (`ir::compile_resources` gives the
-        // provider the id). To an address no rule wants it is the same deny.
+        // provider the id). To an address no rule wants it is the same
+        // error.
         let mut wants = Vec::new();
         if head.pred == "arg" && head.args.len() == 5 {
             let mut to = Vec::new();
@@ -1827,12 +1828,12 @@ pub fn rewrite_computed_refs(
         }
         let body_only = rewrite_body_refs(r.body, schema, &mut n);
         for read in &wants {
-            dangling.push(dangling_ref_deny(&head, read, "", body_only.clone()));
+            unanswered.push(unanswered_read(&head, read, "", body_only.clone()));
         }
         // A ref to an address no rule wants would make the attr join empty
-        // and the field vanish: it is a deny instead.
+        // and the field vanish: it is an error at the read instead (R-194).
         for (read, path) in &head_reads {
-            dangling.push(dangling_ref_deny(&head, read, path, body_only.clone()));
+            unanswered.push(unanswered_read(&head, read, path, body_only.clone()));
         }
         let mut body = body_only;
         body.extend(head_reads.iter().map(|(read, _)| Lit::Pos(read.clone())));
@@ -1858,7 +1859,7 @@ pub fn rewrite_computed_refs(
         }
         out_rules.push(RuleStmt { head, body });
     }
-    out_rules.extend(dangling);
+    out_rules.extend(unanswered);
     (out_rules, out_facts)
 }
 
@@ -1882,12 +1883,15 @@ pub(crate) fn identity_read(typ: Term, addr: Term, schema: &Schema) -> Atom {
     }
 }
 
-/// `deny("ref to an address no rule wants", {type, addr, path, from, at})
-/// :- Body, not want(T, A).` for one ref `read` (`attr(T, A, P0, V)`) in
-/// the head of a rule with `body`. `from` names what holds the ref: the
-/// resource `T.A` for a contribution, else the head's predicate; `at` is
-/// where that is written.
-fn dangling_ref_deny(head: &Atom, read: &Atom, path: &str, mut body: Vec<Lit>) -> RuleStmt {
+/// `__unanswered({type, addr, path, from, at}) :- Body, not want(T, A).`
+/// for one ref `read` (`attr(T, A, P0, V)`) in the head of a rule with
+/// `body`: a read of a row that does not exist, which a run refuses at its
+/// site before any provider is asked (R-194, `report::Unanswered`). `from`
+/// names what holds the ref: the resource `T.A` for a contribution, else
+/// the head's predicate; `at` is where that is written. A row that may
+/// still derive (`want` undetermined) leaves it undetermined: an open null
+/// a later tick fills is no such read.
+fn unanswered_read(head: &Atom, read: &Atom, path: &str, mut body: Vec<Lit>) -> RuleStmt {
     let (typ, addr) = (read.args[0].clone(), read.args[1].clone());
     let from = if head.pred == "arg" && head.args.len() == 5 {
         Term::Func {
@@ -1903,7 +1907,7 @@ fn dangling_ref_deny(head: &Atom, read: &Atom, path: &str, mut body: Vec<Lit>) -
     };
     // As early as the address is bound: the rest of the body may be stuck
     // on a null (member over a computed list) for an address that is
-    // wanted, and that must not make this deny undetermined.
+    // wanted, and that must not make this read undetermined.
     let need: BTreeSet<String> = count_vars_in_term(&typ)
         .into_keys()
         .chain(count_vars_in_term(&addr).into_keys())
@@ -1958,7 +1962,7 @@ fn dangling_ref_deny(head: &Atom, read: &Atom, path: &str, mut body: Vec<Lit>) -
     RuleStmt {
         head: Atom {
             span: head.span,
-            ..atom("deny", vec![str_term(DANGLING_REF), Term::Obj(ctx)])
+            ..atom(UNANSWERED, vec![Term::Obj(ctx)])
         },
         body,
     }
@@ -1981,8 +1985,9 @@ fn references(t: &Term, out: &mut Vec<(Term, Term)>) {
     }
 }
 
-/// The deny message for a ref to an address no rule wants.
-pub const DANGLING_REF: &str = "ref to an address no rule wants";
+/// `__unanswered(Ctx)`: a contribution's read of an address no rule
+/// wants ([`unanswered_read`]).
+pub const UNANSWERED: &str = "__unanswered";
 
 fn rewrite_body_refs(body: Vec<Lit>, schema: &Schema, n: &mut usize) -> Vec<Lit> {
     let mut out = Vec::new();

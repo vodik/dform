@@ -243,6 +243,8 @@ impl<'a> Space<'a> {
         // Quantity and time literals read as their attributes' types (R-66).
         crate::types::read(&mut p, backend.schema())?;
         let (res, mut violations) = externs.eval(&p, &extra)?;
+        // A read of what nothing derives (R-194).
+        report::Unanswered::check(&res.facts)?;
         // What the plan refuses before any provider is asked (R-184): a
         // resource that leaves unset what its schema requires.
         let schema = backend.schema();

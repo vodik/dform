@@ -1,6 +1,6 @@
 exit: ok
 -- stdout --
-== examples/gke/stacks/gke_two_phase.df: 190 nodes, 1101 edges (298 negative), 8 strata
+== examples/gke/stacks/gke_two_phase.df: 191 nodes, 1101 edges (298 negative), 8 strata
 stratum  node
 0        (arg, google.secret_manager_secret_version, secret_data)
 0        (arg, input, env)
@@ -181,6 +181,7 @@ stratum  node
 6        (arg, google.container_node_pool, min)
 6        (arg, google.container_node_pool, zone)
 6        (want, google.container_node_pool)
+6        __unanswered
 6        deny
 6        provider_config
 6        zone_count
@@ -192,5 +193,5 @@ stratum  node
 7        (attr, google.container_node_pool, min)
 7        (attr, google.container_node_pool, zone)
 7        __not_planned
-(190 rows)
+(191 rows)
 -- stderr --

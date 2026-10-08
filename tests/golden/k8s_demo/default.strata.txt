@@ -61,7 +61,7 @@ stratum  node
 1        (arg, k8s.stateful_set, status)
 1        (attr, k8s.config_map, data)
 1        __not_planned
-1        deny
+1        __unanswered
 2        (attr, k8s.cron_job, metadata)
 2        (attr, k8s.cron_job, spec)
 2        (attr, k8s.cron_job, status)

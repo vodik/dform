@@ -1749,6 +1749,14 @@ A variable bound to a resource (`c in db.postgres`) is one: `has c`.
 A type whose identity is a field (a Kubernetes object's `metadata.uid`)
 waits on that field.
 
+A value read from a resource no rule wants (`vpc = other`,
+`other.cidr`, `other`'s clause false) has no row to answer it, so where
+it reaches a cell it is an error at the read naming the attribute it
+leaves without a value, in plan, apply, `test` and the editor before
+any provider is asked (R-194, R-119's form), while a read of a value
+not known yet (a computed attribute, or a resource whose clause waits on
+one) is an unknown the plan carries until the tick that makes it.
+
 A call of a function whose result is optional (`T?`: `regex.capture`
 of a text the pattern does not match, `list.first` of an empty list)
 has no value where it answers none: in a clause the literal fails, as

@@ -2024,7 +2024,7 @@ fn policy_fact(pred: &str, msg: &str, ctx: Value) -> Atom {
     }
 }
 
-pub(crate) fn format_policy_fact(a: &Atom) -> Result<String> {
+fn format_policy_fact(a: &Atom) -> Result<String> {
     if a.args.is_empty() {
         bail!("policy fact must have at least a message argument");
     }

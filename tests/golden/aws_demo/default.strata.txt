@@ -153,7 +153,7 @@ stratum  node
 1        (attr, aws.subnet, cidr_block)
 1        (attr, aws.vpc, tags)
 1        __not_planned
-1        deny
+1        __unanswered
 2        (attr, aws.db_instance, address)
 2        (attr, aws.db_instance, allocated_storage)
 2        (attr, aws.db_instance, arn)

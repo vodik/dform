@@ -1552,6 +1552,10 @@ impl<'a, 'h> Ticks<'a, 'h> {
         for w in &next.warnings {
             eprintln!("warning: {}", redact.text(w));
         }
+        // What the tick made known may leave a read with no row (R-194).
+        if !self.args.destroy {
+            report::Unanswered::check(&next.facts)?;
+        }
         let refusing: Vec<&String> = match self.args.destroy {
             false => violations.iter().collect(),
             true => {
