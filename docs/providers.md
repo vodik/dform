@@ -131,6 +131,23 @@ fn main() -> std::process::ExitCode {
   replaces, a missing `required` attribute refuses. Import is a read.
 - `Provider::configure` gets the program's `use NAME { .. }` settings,
   each secret revealed into them, `{}` when the program writes none.
+  Until they are known (a kubeconfig another deployment outputs), the
+  provider is configured `deferred` and still asked to Plan, against
+  the schema it serves offline. A setting that only reaches what the
+  provider serves, and says nothing of what it makes, is its connection:
+  its schema says so with a `provider_setting(NAME, SETTING,
+  ["connection"])` fact (`["sensitive", "connection"]` for a secret
+  one). The k8s provider's are `kubeconfig`, `host`, `ca`, `token`,
+  `client_certificate` and `client_key`, not `namespace` (an object's
+  default). When every setting a provider waits on is its connection,
+  the plan shows its objects as planned, documents and diffs, under
+  `later` marked `provisional: planned against the offline schema;
+  planned again once kubeconfig is known`, counts them, and records
+  the mark in the plan file; the run that has the settings plans them
+  again against what they reach (R-193). A provider that flags none
+  has every setting as its connection: its offline plan is the only
+  one there is until then. One that waits on another setting (the
+  namespace) holds its objects without the mark.
 - `const KEEP: bool = true` on the `Provider` says each `update` sends
   only what `desired` holds, leaving an absent attribute as the object
   has it. The provider then has the `keep` capability: an Apply update's

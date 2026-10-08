@@ -383,6 +383,10 @@ pub struct Sections {
     pub pending: BTreeMap<(String, String), BTreeSet<String>>,
     pub pending_groups: Vec<String>,
     pub undetermined: Vec<String>,
+    /// The waits on a provider's connection whose resources it planned
+    /// against its offline schema (R-193): `provider k8s  kubeconfig =
+    /// ..`, said `provisional` where the plan shows them.
+    pub provisional: BTreeSet<String>,
 }
 
 /// E §2.7 phase assignment. A resource is held when its document carries a
@@ -552,6 +556,7 @@ pub fn sections(
         pending,
         pending_groups,
         undetermined,
+        provisional: BTreeSet::new(),
     }
 }
 

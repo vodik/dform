@@ -52,6 +52,7 @@ tick 2  1 change
 const LATER: &str = "\
 later
   waits on  provider k8s  kubeconfig = db.postgres[\"absent\"].endpoint
+  provisional: planned against the offline schema; planned again once kubeconfig is known
   + k8s.namespace ns    p.df:5
 ";
 

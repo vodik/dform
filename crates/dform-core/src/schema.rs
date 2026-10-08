@@ -286,13 +286,20 @@ pub struct Schema {
     /// provider declaring none takes any. From `provider_setting(Provider,
     /// Name, Flags)` and a provider's handshake.
     pub settings: BTreeMap<String, BTreeMap<String, bool>>,
+    /// The settings each provider says reach what it serves rather than
+    /// say what it makes (`kubeconfig`, a `host`): flag `connection` of
+    /// `provider_setting`. Until they are known the provider plans
+    /// against its offline schema, provisionally (R-193); one that flags
+    /// none counts every setting so ([`Schema::connects`]).
+    pub connection: BTreeMap<String, BTreeSet<String>>,
 }
 
 /// A schema's data source declaration (R-106): `extern_decl(Pred, Sig)`.
 pub const EXTERN_DECL: &str = "extern_decl";
 
 /// A schema's provider setting: `provider_setting(Provider, Name, Flags)`,
-/// `Flags` `["sensitive"]` or `[]` ([`Schema::settings`]).
+/// `Flags` drawn from `sensitive` ([`Schema::settings`]) and `connection`
+/// ([`Schema::connection`]).
 pub const PROVIDER_SETTING: &str = "provider_setting";
 
 /// `extern_decl(pred, sig)`'s declaration: each column `+name` or
@@ -786,6 +793,9 @@ impl Schema {
                         return Err(bad());
                     };
                     let sensitive = flags.iter().any(|f| f.as_str() == Some("sensitive"));
+                    if flags.iter().any(|f| f.as_str() == Some("connection")) {
+                        s.connection.entry(p.clone()).or_default().insert(n.clone());
+                    }
                     s.settings
                         .entry(p.clone())
                         .or_default()
@@ -871,7 +881,20 @@ impl Schema {
         for (p, s) in other.settings {
             self.settings.entry(p).or_default().extend(s);
         }
+        for (p, s) in other.connection {
+            self.connection.entry(p).or_default().extend(s);
+        }
         Ok(self)
+    }
+
+    /// Whether `keys`, settings of provider `p` not known yet, are all its
+    /// connection ([`Schema::connection`]): every one is, when it flags
+    /// none.
+    pub fn connects(&self, p: &str, keys: &BTreeSet<String>) -> bool {
+        match self.connection.get(p) {
+            Some(c) if !c.is_empty() => keys.is_subset(c),
+            _ => true,
+        }
     }
 
     /// The facts to inject into a run whose program and given facts name

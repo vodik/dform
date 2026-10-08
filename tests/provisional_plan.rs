@@ -133,3 +133,134 @@ fn the_summary_counts_what_later_holds_by_what_it_waits_on() {
         r.stdout
     );
 }
+
+const MIDDLEWARE: &str = "resource k8s.traefik.middleware mw {\n  metadata = { name: \"mw\", \
+                          namespace: apps.metadata.name }\n  spec.headers.stsSeconds = 3\n}\n";
+
+const PROVISIONAL: &str = "  waits on  provider k8s  kubeconfig = platform[env].kubeconfig\n  \
+     provisional: planned against the offline schema; planned again once kubeconfig is known\n";
+
+/// The k8s provider held by its connection alone (the mock flags
+/// `kubeconfig` so, as the real one does) planned its objects against
+/// its offline schema: the group says it is provisional, each create
+/// shows its document; a kind no schema has (a CRD's) still waits on the
+/// provider's schema, and is no provisional plan; the plan file and
+/// `--json` carry the mark.
+#[test]
+fn a_provider_held_by_its_connection_plans_provisionally() {
+    let s = project("provisional-group", MIDDLEWARE);
+    let r = plan(&s).success();
+    assert_eq!(
+        r.summary(),
+        "plan: 4 creates after platform[env=lab] is applied",
+        "{}",
+        r.stdout
+    );
+    let (_, later) = r.stdout.split_once("\nlater\n").expect(&r.stdout);
+    let (provisional, schema) = later
+        .split_once("  waits on  provider k8s  schema\n")
+        .expect(later);
+    assert!(
+        provisional.starts_with(PROVISIONAL)
+            && provisional.contains(
+                "  + k8s.deployment web         stacks/apps.df:6\n      \
+                 metadata = { name: \"web\", namespace: \"apps\" }\n"
+            ),
+        "{}",
+        r.stdout
+    );
+    assert!(
+        schema.starts_with("  + k8s.traefik.middleware mw") && !schema.contains("provisional"),
+        "{}",
+        r.stdout
+    );
+    s.run(&["plan", "apps", "--out", "p.json"]).success();
+    let marked = |j: &serde_json::Value| -> Vec<(String, bool)> {
+        j.as_array()
+            .unwrap()
+            .iter()
+            .map(|e| {
+                let name = e["name"].as_str().or(e["on"][0]["null"].as_str());
+                let mark = e["provisional"].as_bool().unwrap_or(false);
+                (name.unwrap_or_default().to_string(), mark)
+            })
+            .collect()
+    };
+    assert_eq!(
+        marked(&s.json("p.json")["deformations"]),
+        [
+            ("apps".to_string(), true),
+            ("api".to_string(), true),
+            ("web".to_string(), true),
+            ("mw".to_string(), false),
+        ]
+    );
+    let j: serde_json::Value =
+        serde_json::from_str(&s.run(&["plan", "apps", "--json"]).success().stdout).unwrap();
+    let held: Vec<bool> = j["later"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|l| l["kind"] == "held")
+        .map(|l| l["provisional"].as_bool().unwrap())
+        .collect();
+    assert_eq!(held, [true, false], "{j:#}");
+}
+
+/// A provider that also waits on a setting that says what it makes (the
+/// default namespace) is no provisional plan: its objects wait as ever.
+#[test]
+fn a_provider_held_by_more_than_its_connection_is_not_provisional() {
+    let s = project("provisional-namespace", "");
+    s.write(
+        "stacks/platform.df",
+        &format!("{PLATFORM}output namespace = server.endpoint\n"),
+    );
+    let apps = s.read("stacks/apps.df").replace(
+        "kubeconfig = platform[env].kubeconfig }",
+        "kubeconfig = platform[env].kubeconfig, namespace = platform[env].namespace }",
+    );
+    s.write("stacks/apps.df", &apps);
+    let r = plan(&s).success();
+    assert!(
+        r.stdout
+            .contains("\nlater\n  waits on  provider k8s  kubeconfig = ")
+            && !r.stdout.contains("provisional"),
+        "{}",
+        r.stdout
+    );
+}
+
+/// The real provider, offline, plans against its snapshot (R-110): the
+/// same provisional group, a Traefik Middleware still waiting on the
+/// schema its cluster will serve.
+#[test]
+fn the_k8s_provider_plans_provisionally_against_its_snapshot() {
+    let s = project("provisional-k8s", MIDDLEWARE);
+    std::fs::create_dir_all(s.path("providers/k8s")).unwrap();
+    std::os::unix::fs::symlink(
+        common::exe("dform-provider-k8s"),
+        s.path("providers/k8s/dform-provider-k8s"),
+    )
+    .unwrap();
+    let apps = s.read("stacks/apps.df").replace(
+        "use k8s { kubeconfig",
+        "use k8s { source = \"./providers/k8s\", kubeconfig",
+    );
+    s.write("stacks/apps.df", &apps);
+    let mut c = common::dform();
+    c.args(["plan", "apps"])
+        .current_dir(&s.dir)
+        .env_remove("KUBERNETES_SERVICE_HOST")
+        .env_remove("KUBERNETES_SERVICE_PORT")
+        .env("DFORM_K8S_OFFLINE", "1");
+    let r = Run::from(c.output().unwrap()).success();
+    let (_, later) = r.stdout.split_once("\nlater\n").expect(&r.stdout);
+    assert!(
+        later.starts_with(PROVISIONAL)
+            && later.contains("      spec.selector.matchLabels.app = \"web\"\n")
+            && later.contains("  waits on  provider k8s  schema\n  + k8s.traefik.middleware mw"),
+        "{}",
+        r.stdout
+    );
+}

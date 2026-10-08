@@ -807,6 +807,9 @@ pub struct PendingBlock {
     /// What it waits on outside this plan, as the summary says it
     /// (R-193): `platform[env=lab]` for a kubeconfig read from it.
     pub until: BTreeSet<Until>,
+    /// Planned against its provider's offline schema while its
+    /// connection waits (R-193): the settings it waits on, `kubeconfig`.
+    pub provisional: Option<Vec<String>>,
 }
 
 /// What a held change, or an undetermined deny, waits on outside this
@@ -817,6 +820,15 @@ pub struct PendingBlock {
 pub enum Until {
     Applied(String),
     Waits(String),
+}
+
+/// The line under a provisional block's header (R-193).
+fn provisional_text(keys: &[String]) -> String {
+    let keys = match keys {
+        [] => "its connection".to_string(),
+        keys => keys.join(", "),
+    };
+    format!("provisional: planned against the offline schema; planned again once {keys} is known")
 }
 
 /// `after platform[env=lab] is applied`, `waiting on provider k8s  schema`:
@@ -1147,6 +1159,7 @@ pub fn report(i: &Input) -> Report {
                     Some(_) => BTreeSet::new(),
                     None => follow.until(&on),
                 },
+                provisional: provisional(&on, i.sections),
                 resolves_after,
                 on,
                 deformations,
@@ -1250,6 +1263,23 @@ pub fn report(i: &Input) -> Report {
         warnings: Vec::new(),
         not_planned,
     }
+}
+
+/// Whether a held block waits only on providers' connections, which
+/// planned it against their offline schemas (R-193): the settings, as
+/// the waits name them (`kubeconfig` of `provider k8s  kubeconfig = ..`).
+fn provisional(on: &[String], sections: &Sections) -> Option<Vec<String>> {
+    if on.is_empty() || !on.iter().all(|l| sections.provisional.contains(l)) {
+        return None;
+    }
+    let mut keys: Vec<String> = on
+        .iter()
+        .filter_map(|l| l.split_once("  ").map(|(_, s)| s))
+        .flat_map(|s| s.split(", "))
+        .filter_map(|kv| kv.split_once(" = ").map(|(k, _)| k.to_string()))
+        .collect();
+    keys.dedup();
+    Some(keys)
 }
 
 /// What the waits of what no tick of this plan makes are made from
@@ -3303,6 +3333,9 @@ impl Report {
             let on = waited(&b.on.iter().cloned().collect()).join(", ");
             // A header like a tick's (R-111).
             rows.push(Row::plain(format!("  waits on  {on}")));
+            if let Some(keys) = &b.provisional {
+                rows.push(Row::plain(format!("  {}", provisional_text(keys))));
+            }
             self.write_level(rows, &ds, None, "  ", style);
         }
     }
@@ -4532,6 +4565,7 @@ impl Report {
             later.push(json!({
                 "kind": "held",
                 "on": nulls(&mut b.on.iter()),
+                "provisional": b.provisional.is_some(),
                 "changes": changes(&ds),
             }));
         }

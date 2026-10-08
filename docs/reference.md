@@ -1378,7 +1378,23 @@ made; the plan itself says what it is.
   from a host that has not answered, no resource of the plan behind it)
   is one, under `waits on  provider k8s  kubeconfig = k3s.kubeconfig`,
   the setting as the source writes it, typed by the provider's static
-  schema; one whose settings wait on what dform's own read has not
+  schema. When the settings it waits on are all its connection
+  (docs/providers.md: `kubeconfig`, not `namespace`), the provider
+  planned them against its offline schema (the k8s snapshot), and the
+  header's next line says so, the changes under it as a tick's, each
+  with its document (R-193):
+
+  ```
+  later
+    waits on  provider k8s  kubeconfig = platform[env].kubeconfig
+    provisional: planned against the offline schema; planned again once kubeconfig is known
+    + k8s.namespace apps                      stacks/apps.df:26
+        metadata.name = "apps"
+  ```
+
+  `plan --json` says it of the group (`"provisional": true`), the plan
+  file of each change, and `apply PLAN` names it beside a change the
+  re-plan against the cluster no longer reproduces. One whose settings wait on what dform's own read has not
   answered names the location too, `provider k8s  kubeconfig = raw,
   ssh://ubuntu@10.0.0.5/etc/rancher/k3s/k3s.yaml`; one of a kind no
   schema has yet (a cluster's CRD) under `waits on  provider k8s
@@ -1547,7 +1563,7 @@ each kind, `ticks`, `approvals`, `undetermined`, `conflicts`), `ticks`
 resource rules the tick before decides, each as `later` has one),
 `later` (each with a
 `kind`: `group` with its `address`, `reads`, `instance`; `deny`,
-`refinement` with its `status`; `held` with its `changes`), `shadowed`,
+`refinement` with its `status`; `held` with its `changes` and `provisional`), `shadowed`,
 `conflicts`, `moved`, `denied` (`{text, message, address, site}`),
 `held_for_approval` and `apply`, the refusal line or `null`. A change is `{kind,
 address, type, name, changes}` (`address` in full, `T["A"]`, as the

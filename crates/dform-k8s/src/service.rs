@@ -992,7 +992,29 @@ impl pb::provider_server::Provider for Service {
             None => k8s.derived.schema(),
         }
         .map_err(invalid)?;
-        let facts = wire::schema_facts(&schema, req.get_ref()).map_err(invalid)?;
+        let mut facts = wire::schema_facts(&schema, req.get_ref()).map_err(invalid)?;
+        // The settings that reach the cluster are its connection (R-193):
+        // while they wait, dform plans against the snapshot, provisionally.
+        // `namespace` says what an object is.
+        for &(name, sensitive) in crate::cluster::SETTINGS
+            .iter()
+            .filter(|(n, _)| *n != "namespace")
+        {
+            let flags = match sensitive {
+                true => vec!["sensitive", "connection"],
+                false => vec!["connection"],
+            };
+            let flags = Value::List(flags.into_iter().map(|f| Value::Str(f.into())).collect());
+            let args = [
+                Value::Str(openapi::PROVIDER.into()),
+                Value::Str(name.into()),
+                flags,
+            ];
+            facts.push(pb::Fact {
+                pred: dform_core::schema::PROVIDER_SETTING.into(),
+                args: args.iter().map(wire::value).collect(),
+            });
+        }
         Ok(Response::new(pb::SchemaResponse {
             facts,
             externs: Vec::new(),

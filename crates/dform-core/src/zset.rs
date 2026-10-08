@@ -1325,6 +1325,11 @@ pub mod file {
         /// The replacement's new identity updates them a tick later.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         pub dependents: Vec<String>,
+        /// Planned against its provider's offline schema while the
+        /// provider's connection waits (R-193): its re-plan against what
+        /// the connection reaches may differ.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        pub provisional: bool,
     }
 
     #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1441,12 +1446,14 @@ pub mod file {
             })
         };
         let name = a.addr.to_string();
+        let on = report::waits_on(a, sections).unwrap_or_default();
         Entry {
             typ: a.addr.typ.clone(),
             name: a.addr.name.clone(),
             action: action_name(&a.kind).into(),
             tick: tick_of.get(name.as_str()).copied(),
-            on: report::waits_on(a, sections).unwrap_or_default(),
+            provisional: !on.is_empty() && on.iter().all(|l| sections.provisional.contains(l)),
+            on,
             changes: a
                 .changes
                 .iter()
@@ -1682,14 +1689,20 @@ pub mod file {
                     out.push(format!("{} {at}: not in the plan file", c.action));
                     continue;
                 };
+                // What the file planned against the offline schema
+                // differs as the re-plan against the cluster says.
+                let provisional = |d: String| match s.provisional {
+                    true => format!("{d}  (planned provisionally, against the offline schema)"),
+                    false => d,
+                };
                 if s.action != c.action {
-                    out.push(format!(
+                    out.push(provisional(format!(
                         "{at}: the plan file has {}, re-evaluation has {}",
                         s.action, c.action
-                    ));
+                    )));
                     continue;
                 }
-                out.extend(leaf_differences(&addr, s, c));
+                out.extend(leaf_differences(&addr, s, c).into_iter().map(provisional));
             }
             for (k, s) in &saved {
                 if now.contains_key(k) {
@@ -2089,6 +2102,7 @@ mod tests {
                 })
                 .collect(),
             dependents: vec![],
+            provisional: false,
         };
         let null = serde_json::json!({"null": "t[\"b\"].id", "class": "fresh"});
         let shown = [entry(
@@ -2141,6 +2155,38 @@ mod tests {
                 "  - t a  create, no longer a change"
             ]
         );
+    }
+
+    /// A plan file's change planned against its provider's offline
+    /// schema (R-193) is marked so, and a re-plan against the cluster
+    /// that differs says it was.
+    #[test]
+    fn a_provisional_change_that_differs_says_it_was_provisional() {
+        let file: file::PlanFile = serde_json::from_value(serde_json::json!({
+            "version": 1, "stack": "apps", "world_digest": "",
+            "inputs": {"files": [], "set": [], "data": [], "providers": [],
+                       "world": null, "inventory": null},
+            "deformations": [{
+                "type": "k8s.namespace", "name": "apps", "action": "create", "tick": null,
+                "on": ["provider k8s  kubeconfig = platform[env].kubeconfig"],
+                "changes": [{"path": "metadata.name", "before": null, "after": "apps"}],
+                "provisional": true,
+            }],
+            "pending_groups": [], "nulls": {"resolved": [], "unresolved": []}, "ticks": [],
+        }))
+        .unwrap();
+        let mut now = file.deformations.clone();
+        now[0].changes[0].after = "web".into();
+        now[0].provisional = false;
+        assert_eq!(
+            file.stale(&now),
+            [
+                "k8s.namespace apps.metadata.name: the plan file sets \"apps\", re-evaluation \
+                 sets \"web\"  (planned provisionally, against the offline schema)"
+            ]
+        );
+        let json = serde_json::to_value(&now[0]).unwrap();
+        assert!(json.get("provisional").is_none(), "{json}");
     }
 
     /// The plan key's digest is HMAC-SHA256 (RFC 2104): the value Python's

@@ -1351,8 +1351,10 @@ impl Providers {
                 externs.entry(e.clone()).or_insert(i);
             }
             // The settings its handshake declares, under each name the
-            // program gives it.
+            // program gives it; so its connection (R-193), which its
+            // schema flags.
             let declared = &link.borrow().settings;
+            let connection: BTreeSet<String> = s.connection.values().flatten().cloned().collect();
             if !declared.is_empty() {
                 let names = self
                     .blocks
@@ -1362,9 +1364,13 @@ impl Providers {
                     .chain([self.names[i].clone()]);
                 for n in names {
                     s.settings
-                        .entry(n)
+                        .entry(n.clone())
                         .or_default()
                         .extend(declared.iter().cloned());
+                    s.connection
+                        .entry(n)
+                        .or_default()
+                        .extend(connection.iter().cloned());
                 }
             }
             schema = schema.merge(s)?;

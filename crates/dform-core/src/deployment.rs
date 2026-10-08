@@ -594,18 +594,35 @@ impl Evaluator {
     /// holds the resources of the types its schema gives it, whatever
     /// link serves them: one mock playing several schemas is configured
     /// by none of them, so [`Providers::waits`] cannot say.
+    ///
+    /// One whose settings not known are all its connection (`unset`'s
+    /// keys, [`Schema::connects`]) planned them against its offline
+    /// schema: its wait is provisional (R-193), `sections.provisional`.
     fn wait_on_providers(
         &self,
         plan: &mut provider::Plan,
         resources: &[ir::Resource],
         sections: &mut stuck::Sections,
         st: &State,
-        unset: &BTreeSet<String>,
+        unset: &BTreeMap<String, BTreeSet<String>>,
     ) -> Result<()> {
         let crds = crds_made(resources);
         let unset_of = |typ: &str| {
             let p = self.schema().provider_of.get(typ)?;
-            unset.contains(p).then(|| self.settings_label(p))
+            unset.contains_key(p).then(|| self.settings_label(p))
+        };
+        let provisional = |typ: &str| {
+            let p = match self.backend.waits(typ) {
+                Some(ProviderWait::Settings(p)) => p,
+                Some(ProviderWait::Schema(_)) => return false,
+                None => match self.schema().provider_of.get(typ) {
+                    Some(p) => p.clone(),
+                    None => return false,
+                },
+            };
+            unset
+                .get(&p)
+                .is_some_and(|keys| self.schema().connects(&p, keys))
         };
         for r in resources {
             let typ = &r.addr.typ;
@@ -637,6 +654,9 @@ impl Evaluator {
                 });
             } else if let Some(a) = plan.actions.iter_mut().find(|a| a.addr == r.addr) {
                 a.on.insert(label.clone());
+                if provisional(typ) {
+                    sections.provisional.insert(label.clone());
+                }
                 // An object state holds whose provider waits on its
                 // settings was not read (R-177): no diff, it is as state
                 // has it (`=`) until the boundary configures the provider
@@ -2024,12 +2044,15 @@ fn with_site(e: anyhow::Error, res: &EvalResult, violations: &[String]) -> anyho
 /// ([`Providers::waits`]), said of the program alone, so a link that
 /// plays several providers (one mock, several schemas) holds what each
 /// serves as a provider of its own would.
+///
+/// Each with the settings it does not know: those whose value holds what
+/// is not known, or every one the program writes when no row derives.
 fn unconfigured(
     program: &Program,
     facts: &BTreeSet<Atom>,
     resources: &[ir::Resource],
     st: &State,
-) -> BTreeSet<String> {
+) -> BTreeMap<String, BTreeSet<String>> {
     let made: BTreeSet<(&str, &str)> = resources
         .iter()
         .map(|r| (r.addr.typ.as_str(), r.addr.name.as_str()))
@@ -2041,19 +2064,64 @@ fn unconfigured(
         }),
         NullClass::Open | NullClass::Fresh => true,
     };
-    let known: BTreeSet<&str> = agreed(facts)
-        .filter(|a| a.pred == "provider_config")
-        .filter_map(|a| match a.args.as_slice() {
-            [Term::Val(Value::Str(n)), Term::Val(v)] => (!v.any_scalar(
-                &mut |x| matches!(x, Value::Null { label, class, .. } if unknown(label, *class)),
-            ))
-            .then_some(n.as_str()),
-            _ => None,
-        })
-        .collect();
+    let unknown_in = |v: &Value| {
+        v.any_scalar(
+            &mut |x| matches!(x, Value::Null { label, class, .. } if unknown(label, *class)),
+        )
+    };
+    // Each derived row's settings not known yet, by its provider; one
+    // whose row knows every setting is configured.
+    let mut rows: BTreeMap<&str, BTreeSet<String>> = BTreeMap::new();
+    let mut known: BTreeSet<&str> = BTreeSet::new();
+    for a in agreed(facts).filter(|a| a.pred == "provider_config") {
+        let [Term::Val(Value::Str(n)), Term::Val(v)] = a.args.as_slice() else {
+            continue;
+        };
+        let keys = match v {
+            Value::Obj(m) => m
+                .iter()
+                .filter(|(_, x)| unknown_in(x))
+                .map(|(k, _)| k.clone())
+                .collect(),
+            v if unknown_in(v) => setting_keys(program, n),
+            _ => BTreeSet::<String>::new(),
+        };
+        if keys.is_empty() {
+            known.insert(n.as_str());
+        } else {
+            rows.entry(n.as_str()).or_default().extend(keys);
+        }
+    }
     provider_configs(program)
         .into_iter()
         .filter(|p| !known.contains(p.as_str()))
+        .map(|p| {
+            let keys = rows
+                .get(p.as_str())
+                .cloned()
+                .unwrap_or_else(|| setting_keys(program, &p));
+            (p, keys)
+        })
+        .collect()
+}
+
+/// The settings the program's `provider_config` statements of provider
+/// `name` write (a `use` block's keys).
+fn setting_keys(program: &Program, name: &str) -> BTreeSet<String> {
+    crate::modules::reached(program)
+        .into_iter()
+        .filter_map(|st| match st {
+            Stmt::Fact(a) => Some(a),
+            Stmt::Rule(r) => Some(&r.head),
+            _ => None,
+        })
+        .filter(|a| a.pred == "provider_config")
+        .filter_map(|a| match a.args.as_slice() {
+            [Term::Val(Value::Str(n)), Term::Obj(settings)] if n == name => Some(settings.keys()),
+            _ => None,
+        })
+        .flatten()
+        .cloned()
         .collect()
 }
 
