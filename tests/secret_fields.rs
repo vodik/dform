@@ -278,7 +278,7 @@ fn another_stacks_output_with_a_secret_field() {
         "stacks/app.df",
         "\nuse fake\nuse stacks.prod\nresource leaky.oops leak { password = prod.conn.pass }\n",
     );
-    let r = dev(&["plan", "app"]).failure();
+    let r = dev(&["plan", "app", "--set", &set]).failure();
     assert!(
         r.stderr
             .contains("E0304: a secret reaches leaky.oops .password, not marked sensitive"),

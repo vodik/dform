@@ -1,5 +1,5 @@
-deployment: tour[env=prod]
-plan: 16 changes (16 create) over 2 ticks
+deployment: stacks.tour[env=prod]
+plan: 16 changes (16 create) over 2 ticks; policy: 1 hold
 
 tick 1  16 changes
   + network blue
@@ -129,3 +129,7 @@ tick 1  16 changes
 tick 2  ? changes
   waits on  orders.endpoint
   iam.policy "connect-${host}"             stacks/tour.df:323  waits on orders.endpoint
+
+policy  1 hold
+  holds  a database must not be public  stacks/tour.df:172  1 hold
+    db.postgres orders                  holds

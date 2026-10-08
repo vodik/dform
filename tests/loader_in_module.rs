@@ -43,8 +43,8 @@ fn a_loader_in_a_used_modules_clause() {
     let r = s.run(&["plan", "platform"]);
     let r = r.success();
     for want in [
-        "  + k8s.config_map traefik.a  traefik.df:1\n      = vendor/maps.yml:1  (42 B)\n",
-        "  + k8s.config_map traefik.b  traefik.df:1\n      = vendor/maps.yml:6  (42 B)\n",
+        "    + k8s.config_map traefik.a  traefik.df:1\n        = vendor/maps.yml:1  (42 B)\n",
+        "    + k8s.config_map traefik.b  traefik.df:1\n        = vendor/maps.yml:6  (42 B)\n",
     ] {
         assert!(r.stdout.contains(want), "{want}\n{}", r.stdout);
     }

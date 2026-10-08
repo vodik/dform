@@ -56,11 +56,12 @@ fn a_modules_resource_read_in_a_copy_is_the_modules() {
         let answer = why(&s, name);
         assert!(answer.starts_with(lead), "{name}\n{answer}");
     }
-    // From the stack, bare: the module's, and how to read it.
-    assert_eq!(
-        why(&s, "repository"),
-        "repository: no such name in the stack; module backups's resource is \
-         backups.repository (backups.df:3), read it as backups.repository\n"
+    // From the stack, bare: the one resource it is the short name of
+    // (R-200), the module's.
+    assert!(
+        why(&s, "repository").starts_with("k8s.secret backups.repository  backups.df:3\n"),
+        "{}",
+        why(&s, "repository")
     );
     assert_eq!(
         why(&s, "forgejo_backup.nothing"),

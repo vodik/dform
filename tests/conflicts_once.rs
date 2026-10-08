@@ -51,7 +51,7 @@ fn a_refused_plan_says_each_conflict_once() {
     let (s, at) = project();
     let r = dform(&s, &["plan"]);
     assert!(r.stdout.contains("\ntick 2 "), "{}", r.stdout);
-    assert!(r.stdout.contains("\nlater\n"), "{}", r.stdout);
+    assert!(r.stdout.contains("\npolicy  "), "{}", r.stdout);
     let all = format!("{}{}", r.stdout, r.stderr);
     for want in [
         "conflicts",

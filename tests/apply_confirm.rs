@@ -229,7 +229,11 @@ fn declining_a_dependency_stops_before_its_reader() {
     let mut cmd = common::dform();
     cmd.args(["apply", "apps"]).current_dir(s.path(""));
     let (said, code) = common::answering(&s.dir, cmd, &["n"]);
-    assert!(said[0].contains("== platform[env=lab]"), "{}", said[0]);
+    assert!(
+        said[0].contains("== stacks.platform[env=lab]"),
+        "{}",
+        said[0]
+    );
     assert_eq!(said[1].trim(), "", "{}", said[1]);
     assert_eq!(code, 3, "a decline exits 3 (R-147)");
     let dir = s.path("dform.state/platform/env=lab");

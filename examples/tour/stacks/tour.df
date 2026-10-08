@@ -41,7 +41,7 @@ use fake
 # its `net.vpc main` (section 10 is the pending one). `+` is a create: the fake cloud is empty, so
 # everything is new. As in Terraform, the program says what should exist
 # and the plan is the difference between that and the world. (The plan's
-# first line, `deployment: tour[env=dev]`, is section 4.)
+# first line, `deployment: stacks.tour[env=dev]`, is section 4.)
 
 resource net.vpc main { cidr = "10.0.0.0/16" }
 
@@ -123,7 +123,7 @@ resource net.subnet "private-${z}" {
 # all creates, with prod's settings:
 #
 #   $ dform plan tour env=prod
-#   deployment: tour[env=prod]
+#   deployment: stacks.tour[env=prod]
 #   + db.postgres orders
 #     backup_days = 14
 #     multi_az = true

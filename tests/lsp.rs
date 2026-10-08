@@ -313,7 +313,7 @@ fn diagnostics_follow_the_selected_environment() {
 
     let status = c.command("dform.selectEnvironment", json!(["env=prod"]));
     assert_eq!(status["label"], "env=prod");
-    assert_eq!(status["deployments"], json!(["dform[env=prod]"]));
+    assert_eq!(status["deployments"], json!(["stacks.dform[env=prod]"]));
     let note = c.wait("dform/environment", |_| true);
     assert_eq!(note["label"], "env=prod");
     let ds = c.diagnostics(&stack);
@@ -546,7 +546,11 @@ fn pngu_selects_its_deployment_by_environment() {
     c.open(&stack);
     c.diagnostics(&stack);
     let status = c.command("dform.selectEnvironment", json!(["env=prod"]));
-    assert_eq!(status["deployments"], json!(["pngu[env=prod]"]), "{status}");
+    assert_eq!(
+        status["deployments"],
+        json!(["stacks.pngu[env=prod]"]),
+        "{status}"
+    );
     let errors: Vec<Value> = c
         .diagnostics(&stack)
         .into_iter()

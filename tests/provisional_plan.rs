@@ -99,11 +99,19 @@ fn a_deny_under_later_always_says_what_it_waits_on() {
          { a: \"x\", b: \"y\", c: \"z\" }\n}\n",
     );
     let r = plan(&s).success();
-    let (_, later) = r.stdout.split_once("\nlater\n").expect(&r.stdout);
+    let (_, policy) = r.stdout.split_once("\npolicy  ").expect(&r.stdout);
+    assert!(
+        policy.starts_with(
+            "1 undetermined\n  undetermined  pod keeps the server's defaults  stacks/apps.df:20  \
+             2 undetermined\n"
+        ),
+        "{}",
+        r.stdout
+    );
     for w in ["api", "web"] {
         assert!(
-            later.contains(&format!(
-                "  deny \"pod keeps the server's defaults\"  stacks/apps.df:20  waits on {w}\n"
+            policy.contains(&format!(
+                "    k8s.deployment {w}\n        until spec.template.spec.dnsPolicy, "
             )),
             "{w}\n{}",
             r.stdout
@@ -125,8 +133,8 @@ fn the_summary_counts_what_later_holds_by_what_it_waits_on() {
     let r = plan(&s).success();
     assert_eq!(
         r.summary(),
-        "plan: 1 change (1 create); 3 creates after stacks.platform[env=lab] is applied; 2 denies \
-         undetermined until then",
+        "plan: 1 change (1 create); 3 creates after stacks.platform[env=lab] is applied; policy: 1 \
+         undetermined",
         "{}",
         r.stdout
     );
@@ -146,8 +154,7 @@ fn the_summary_counts_what_later_holds_by_what_it_waits_on() {
     assert_eq!(
         r.summary(),
         "plan: 2 changes (2 create); 3 creates after stacks.platform[env=lab] is applied; 1 \
-         create after stacks.dns[env=lab] is applied; 2 denies undetermined until \
-         stacks.platform[env=lab] is applied",
+         create after stacks.dns[env=lab] is applied; policy: 1 undetermined",
         "{}",
         r.stdout
     );

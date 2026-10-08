@@ -151,7 +151,7 @@ fn a_refinement_on_a_null_is_deferred_and_fires_after_the_boundary() {
     let r = gke(&s, &["plan"]).success();
     assert!(
         r.stdout
-            .contains("  check len_ge(3) of google.container_cluster pngu.zones  until tick 2\n"),
+            .contains("  undetermined  len_ge(3) of google.container_cluster pngu.zones  stacks/refine_gke.df:126"),
         "{}",
         r.stdout
     );

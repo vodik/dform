@@ -66,7 +66,7 @@ fn dform_df_plans_prod_after_staging_as_creates() {
     let prod = s.run(&["plan", file, "env=prod"]).success();
     let summary = prod.summary();
     assert!(
-        summary.starts_with("plan: ") && summary.ends_with(" create) over 1 tick"),
+        summary.starts_with("plan: ") && summary.ends_with(" create) over 1 tick; policy: 6 hold"),
         "{}",
         prod.stdout
     );

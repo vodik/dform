@@ -159,12 +159,20 @@ pub fn lines(
             ranges[i].insert(t);
         }
     }
-    // A check a value waits on is a policy of its own.
+    // A check a value waits on is a policy of its own, written where its
+    // type's check is.
+    let checks = check_sites(program, res);
     for p in undetermined.iter().filter(|p| p.refinement) {
         if !out.iter().any(|l| l.text == p.message) {
+            let at = p.on.iter().find_map(|n| {
+                let (typ, _, path) = crate::value::null_parts(n)?;
+                checks.get(&(typ, path)).cloned()
+            });
             out.push(Line {
                 text: p.message.clone(),
-                at: p.site.as_ref().map(|s| s.at.clone()).unwrap_or_default(),
+                at: at
+                    .or_else(|| p.site.as_ref().map(|s| s.at.clone()))
+                    .unwrap_or_default(),
                 holds: Vec::new(),
                 hold: 0,
                 fails: Vec::new(),
@@ -206,8 +214,7 @@ pub fn lines(
     for (l, types) in out.iter_mut().zip(&ranges) {
         l.fails.sort();
         l.fails.dedup();
-        l.undetermined.sort();
-        l.undetermined.dedup();
+        l.undetermined = by_subject(std::mem::take(&mut l.undetermined));
         let subjects: Vec<String> = types
             .iter()
             .flat_map(|t| {
@@ -237,6 +244,48 @@ pub fn lines(
         }
     }
     out.sort_by(|a, b| (a.mark(), &a.text).cmp(&(b.mark(), &b.text)));
+    out
+}
+
+/// Where each type's check on an attribute is written, `FILE:LINE`, by
+/// (type, path): the program's rules that refuse a value violating it.
+fn check_sites(program: &Program, res: &EvalResult) -> BTreeMap<(String, String), String> {
+    let mut out = BTreeMap::new();
+    // A checkable one: `type_refine(T, Path, C)`, `attr_refine(T, A,
+    // Path, C)`, where its `check` is written.
+    for a in res
+        .facts
+        .iter()
+        .filter(|a| a.pred == crate::refine::TYPE_REFINE || a.pred == crate::refine::ATTR_REFINE)
+    {
+        if let Some(Term::Val(Value::Str(typ))) = a.args.first()
+            && let Some(Term::Val(Value::Str(path))) = a.args.get(a.args.len().saturating_sub(2))
+            && let Some((f, l, _)) = crate::diag::location(a.span)
+        {
+            out.entry((typ.clone(), path.clone()))
+                .or_insert_with(|| format!("{f}:{l}"));
+        }
+    }
+    for s in &program.statements {
+        let Stmt::Rule(rule) = s else { continue };
+        let [Term::Val(Value::Str(m)), Term::Obj(ctx)] = rule.head.args.as_slice() else {
+            continue;
+        };
+        if rule.head.pred != "deny" || m != crate::refine::VIOLATED {
+            continue;
+        }
+        let field = |k: &str| match ctx.get(k) {
+            Some(Term::Val(Value::Str(s))) => Some(s.clone()),
+            _ => None,
+        };
+        let (Some(typ), Some(path), Some(at)) = (field("type"), field("path"), field("at")) else {
+            continue;
+        };
+        // `file:line:col`, then where it was lowered from: its line.
+        let at = at.split(", ").next().unwrap_or_default();
+        let at = at.rsplit_once(':').map_or(at, |(fl, _)| fl);
+        out.entry((typ, path)).or_insert_with(|| at.to_string());
+    }
     out
 }
 
@@ -292,11 +341,6 @@ fn waits(p: &Policy) -> Vec<(String, String)> {
             u => format!("({u})"),
         },
     };
-    let until = |cell: &str| {
-        format!("until {cell} is known {when}")
-            .trim_end()
-            .to_string()
-    };
     p.on.iter()
         .map(|n| match crate::value::null_parts(n) {
             Some((typ, name, path))
@@ -305,9 +349,34 @@ fn waits(p: &Policy) -> Vec<(String, String)> {
                     && typ != crate::transform::OUTPUT
                     && !path.is_empty() =>
             {
-                (address(&Address { typ, name }), until(&path))
+                (address(&Address { typ, name }), format!("{path}\t{when}"))
             }
-            _ => (label(n), until(&label(n))),
+            _ => (label(n), format!("{}\t{when}", label(n))),
+        })
+        .collect()
+}
+
+/// What `waits` found, one line per resource: `until A, B are known
+/// (tick 2)`.
+fn by_subject(waits: Vec<(String, String)>) -> Vec<(String, String)> {
+    let mut cells: BTreeMap<(String, String), BTreeSet<String>> = BTreeMap::new();
+    for (subject, at) in waits {
+        let (cell, when) = at.split_once('\t').unwrap_or((&at, ""));
+        cells
+            .entry((subject, when.to_string()))
+            .or_default()
+            .insert(cell.to_string());
+    }
+    cells
+        .into_iter()
+        .map(|((subject, when), cells)| {
+            let verb = match cells.len() {
+                1 => "is",
+                _ => "are",
+            };
+            let cells: Vec<String> = cells.into_iter().collect();
+            let until = format!("until {} {verb} known {when}", cells.join(", "));
+            (subject, until.trim_end().to_string())
         })
         .collect()
 }

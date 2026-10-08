@@ -39,16 +39,16 @@ fn gke_plan_has_the_summary_ticks_and_later() {
     let first = r.stdout.lines().next().unwrap();
     assert_eq!(
         first,
-        "plan: 6 changes (6 create) over 2 ticks, 1 undetermined"
+        "plan: 6 changes (6 create) over 2 ticks; policy: 1 hold · 1 undetermined"
     );
     for want in [
         "\ntick 1  3 changes\n  + google.compute_subnetwork gke_subnet  ",
         "\ntick 2  3+ changes\n  waits on  pngu.ca_certificate\n            pngu.endpoint\n            pngu.zones\n  + k8s.deployment api  ",
         // The rule tick 1 decides is tick 2's (R-156).
         "\n  google.container_node_pool \"np-${z}\"  ",
-        "  waits on pngu.zones\n\nlater\n",
-        "  deny \"cluster must be in at least two zones\"  ",
-        "  until tick 2\n",
+        "  waits on pngu.zones\n\npolicy  1 hold · 1 undetermined\n",
+        "  undetermined  cluster must be in at least two zones  ",
+        "  until zones is known (tick 2)\n",
     ] {
         assert!(r.stdout.contains(want), "{want}\n---\n{}", r.stdout);
     }
@@ -70,12 +70,13 @@ deny "no nodepool in zone z" {pool: n} where n in google.container_node_pool, ar
     let r = gke(&s, &["extra.df"], "plan").success();
     assert!(
         r.stdout.contains(
-            "  deny \"no nodepool in zone z\"                      p.df:113  maybe tick 2\n"
+            "  undetermined  no nodepool in zone z  p.df:113  1 undetermined\n    \
+             google.container_cluster pngu      until zones is known (tick 2)\n"
         ),
         "{}",
         r.stdout
     );
-    assert!(r.summary().ends_with(", 2 undetermined"), "{}", r.stdout);
+    assert!(r.summary().ends_with(" · 2 undetermined"), "{}", r.stdout);
 }
 
 const AWS: &str = "examples/aws/stacks/aws_demo.df";

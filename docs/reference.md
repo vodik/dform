@@ -137,9 +137,13 @@ the project has one (below); otherwise, and for every other command, no
 target is the one stack under the working directory, else the stacks
 are listed and dform exits non-zero. A key the
 target does not name is its input's default, for `plan` and `apply` alike;
-both print the deployment first, `deployment: shop[env=dev]`, `-v` adding
-which key values are defaults, `(env from its default)` (`plan --json`:
-`deployment` and `key_defaults`). `apply` also takes a plan file (`dform apply plan.json`).
+both print the deployment first by its full name, `deployment:
+stacks.shop[env=dev]`, `-v` adding which key values are defaults, `(env
+from its default)` (`plan --json`: `deployment` and `key_defaults`). A
+stack's full name is its module path from the project root (R-200:
+`stacks/shop.df` is `stacks.shop`, docs/grammar.md "Paths"); a target
+names it by that or by its short name, `shop`, where that is unique, and
+a short name two stacks share is an error naming each. `apply` also takes a plan file (`dform apply plan.json`).
 
 `apply` prints the plan and asks `Apply these N changes to
 shop[env=prod]? [y/N]` (`Apply this change to ..` for one); only `y` or
@@ -203,6 +207,42 @@ tick 1, by name. There is no strict mode, no resource-level target and no
 flag for how long to wait: a plan that needs a second tick applies tick
 by tick, and a program that wants to apply part of itself is two stacks.
 
+`plan X` in a project plans what `apply X` applies (R-200): the
+deployments X reads and theirs, in apply order, then X, one tree. Each
+is planned against the outputs of those planned before it as they will
+be once applied: a value its plan knows flows (`name = "10.0.0.0/16"`),
+one its apply computes waits on it, `waits on  stack
+stacks.platform[env=lab]` under `later`, counted in the headline as
+`1 create after stacks.platform[env=lab] is applied`. A dependency that
+is up to date is one line; one whose plan fails or is refused stops the
+chain there, what reads it `not planned`, and the run exits with its
+status. A stack that reads none plans alone, as before; so do `-q`,
+`--json`, `--out` and `--destroy`, which plan the one deployment named:
+
+```
+$ dform plan apps env=lab
+plan: 3 changes (3 create); 1 create after stacks.platform[env=lab] is applied
+
++ stacks.platform[env=lab]  stacks/platform.df  never applied, 2 changes (2 create) over 1 tick
+  tick 1  2 changes
+    + db.postgres db  stacks/platform.df:5
+        name = "db"
+    + net.vpc edge    stacks/platform.df:4
+        cidr = "10.0.0.0/16"
+
++ stacks.apps[env=lab]      stacks/apps.df  never applied, 1 change (1 create) over 1 tick; 1 create after stacks.platform[env=lab] is applied  after stacks.platform[env=lab]
+  tick 1  1 change
+    + net.vpc known  stacks/apps.df:5
+        cidr = "10.1.0.0/16"
+        name = "10.0.0.0/16"
+
+  later
+    waits on  stack stacks.platform[env=lab]
+    + net.vpc later  stacks/apps.df:6
+        cidr = "10.2.0.0/16"
+        name = stacks.platform[env=lab].endpoint
+```
+
 The stack is the unit of partial work. `apply X` in a project applies the
 deployments X reads (`use stacks.platform`, then `platform[env="prod"].x`,
 a key written out or X's own, `platform[env=env].x`) first,
@@ -240,20 +280,31 @@ envs/lab.df`), is one too. Each deployment it lists, and each one those
 read that it does not (said `(not listed: a listed deployment reads
 it)`), runs in dependency order as `apply X` runs X's (R-30): its own
 plan, question, state, lock and `[secrets]`, a `--set` going to each
-whose stack declares the input. `plan` says first the `stacks:` lines,
-one per deployment with its state, then each one's plan headed `== NAME`:
+whose stack declares the input. `plan` prints them as one tree, as `plan
+X` does (R-200): one headline across it, then a header line per
+deployment (its mark: `+` never applied, `~` changed, `=` up to date, `-`
+removed; its full name; where the module lists it; its state; what it is
+applied after), its plan nested under it, each planned against what
+those before it will publish:
 
 ```
-stacks: project.df's deployments, in apply order; each one's plan follows
-  platform[env=lab]   up to date
-  apps[env=lab]       1 change (1 update) over 1 tick
-  platform[env=prod]  never applied, 4 changes (4 create) over 1 tick
-  apps[env=prod]      never applied, 1 create after platform[env=prod] is applied
-  apps[env=old]       removed from project.df: the next apply destroys it, 2 changes (2 delete) over 1 tick
+plan: 5 changes (4 create, 1 update); policy: 6 hold
+
+= stacks.platform[env=lab]   project.df:1  up to date
+
+~ stacks.apps[env=lab]       project.df:3  1 change (1 update) over 1 tick  after stacks.platform[env=lab]
+  tick 1  1 change
+    ~ k8s.deployment synapse.server  synapse.df:52
+        spec.replicas = 1 → 2        stacks/apps.df:14
+
++ stacks.platform[env=prod]  project.df:2  never applied, 4 changes (4 create) over 1 tick
+  ..
+- stacks.apps[env=old]       stacks/apps.df  removed from project.df: the next apply destroys it, 2 changes (2 delete) over 1 tick
+  ..
 ```
 
 (`plan --json`, `--out` and `--destroy` plan one deployment: name it.)
-`apply` applies them in that order, each asked for on its own (`--yes`
+`apply` applies them in that order, each headed `== NAME` and asked for on its own (`--yes`
 answers every question); a dependency declined, stopped or failed ends
 the run before its readers, with its exit status, and a refused plan
 exits 4 as any. What the module's applies made is kept in
@@ -1259,7 +1310,7 @@ create, a delete, an update, or nothing. It is printed grouped by tick
 
 ```
 $ dform plan apps env=prod
-plan: 6 changes (3 create, 1 update, 1 replace, 1 delete) over 2 ticks, 1 approval, 1 undetermined
+plan: 6 changes (3 create, 1 update, 1 replace, 1 delete) over 2 ticks, 1 approval; policy: 12 hold · 1 undetermined
 
 tick 1  4 changes
   + k8s.namespace apps                         stacks/apps.df:26
@@ -1275,9 +1326,13 @@ tick 2  2 changes
       target = synapse.web.ip
   ± k8s.persistent_volume_claim synapse.media  synapse.df:70  storageClassName forces replace
 
+policy  12 hold · 1 undetermined
+  undetermined  prod keeps its data            stacks/apps.df:40  3 hold · 1 undetermined
+    k8s.persistent_volume_claim synapse.media  until spec.storageClassName is known (tick 2)
+    3 hold
+
 later
   k8s.job "migrate-v${schema}"                 one per release("crud_api", "schema", _)
-  deny "prod keeps its data"                   stacks/apps.df:40  until tick 2
 
 held for approval
   k8s.persistent_volume_claim synapse.media    replace of a volume in prod    baseline.df:38
@@ -1300,18 +1355,39 @@ answerable; it is planned again as ticks report and asked for then (see
 made; the plan itself says what it is.
 
 - The summary counts the changes the ticks hold, by kind, the ticks, and
-  then the denies, approvals, undetermined policies and conflicts. What
-  `later` holds is counted after it by kind and by what it waits on
-  outside the plan, followed through what that is made from (a
-  provider's settings, the CRD a resource waits on, a value of a held
-  object), one clause per wait in `later`'s order, then its
-  undetermined denies and checks the same way, `until then` when they
-  wait on what the clause before does (R-193): `plan: 21 creates after
-  platform[env=lab] is applied; 6 denies undetermined until then`, or
-  `plan: 3 changes (3 create) over 1 tick; 1 create waiting on
-  ssh://ubuntu@10.0.0.5/etc/rancher/k3s/k3s.yaml`. A plan whose every
-  change is `later`'s never says `0 changes`; objects `later` lists as
-  state has them are `N later` (`plan: 0 changes, 3 later`).
+  then the denies over the plan, approvals and conflicts. What `later`
+  holds is counted after it by kind and by what it waits on outside the
+  plan, followed through what that is made from (a provider's settings,
+  the CRD a resource waits on, a value of a held object), one clause per
+  wait in `later`'s order (R-193), then the policy block's count (R-200):
+  `plan: 21 creates after stacks.platform[env=lab] is applied; policy:
+  12 hold · 2 undetermined`, or `plan: 3 changes (3 create) over 1 tick;
+  1 create waiting on ssh://ubuntu@10.0.0.5/etc/rancher/k3s/k3s.yaml`. A
+  plan whose every change is `later`'s never says `0 changes`; objects
+  `later` lists as state has them are `N later` (`plan: 0 changes, 3
+  later`). A tree of deployments has one summary across it, its ticks
+  each deployment's own.
+- The policy block (R-200) follows the ticks, before `later`: each
+  policy (a `deny`, a check a value waits on) is one line, as a change
+  is: its mark in the first column, `holds` (green), `fails` (red) or
+  `undetermined` (dim), its text unquoted, its site and its tally over
+  what it ranges over (the resources of its first `x in T`, else the
+  deployment), `3 hold · 1 fails`, its mark the worst of them: one
+  failure makes a failing policy. Under it, what does not hold, each
+  with why: a failure's resource and context (`net.vpc c  vpc = "c"`),
+  an undetermined one's resource and the cell and tick that decide it
+  (`until spec.storageClassName is known (tick 2)`); the rest are one `N
+  hold` line. The block is headed by how many policies hold, fail and
+  are undetermined, `policy  12 hold · 1 fails · 2 undetermined`, and a
+  holding policy is only that count; `-v` lists every policy and what
+  each holds for. A plan a policy fails is still refused, its error
+  naming the policy on stderr (`constraint violations:`). `--json`
+  carries `policy`: each line's `mark`, `text`, `at`, `hold`, `holds`,
+  `fails` and `undetermined`.
+- Changes share their address's path: a copy's are nested under its
+  line (`+ k3s.node k3s.agent-0`), and those of a used module's instance
+  two or more of them are in under `+ module k3s` (R-200: the plan is the
+  path tree printed); every line keeps its full name.
 - `moved T["Old"] -> T["New"]` lines come first, one per `moved/3` rename
   of state.
 - Every other line is one of two shapes (R-111). A change: its mark, then

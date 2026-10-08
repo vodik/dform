@@ -33,7 +33,7 @@ fn editing_the_world_file_shows_drift_and_apply_writes_it_back() {
     let r = s.run(&["dev", "--world", &world, "plan", &prog]).success();
     assert_eq!(
         r.summary(),
-        "plan: 1 change (1 update) over 1 tick",
+        "plan: 1 change (1 update) over 1 tick; policy: 6 hold",
         "{}",
         r.stdout
     );

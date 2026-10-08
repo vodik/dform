@@ -4,7 +4,7 @@
 mod common;
 use common::{Scratch, repo};
 
-const GKE_PLAN: &str = r#"plan: 6 changes (6 create) over 2 ticks, 1 undetermined
+const GKE_PLAN: &str = r#"plan: 6 changes (6 create) over 2 ticks; policy: 1 hold · 1 undetermined
 
 tick 1  3 changes
   + google.compute_subnetwork gke_subnet            stacks/gke_two_phase.df:38
@@ -45,8 +45,9 @@ tick 2  3+ changes
       metadata.namespace = "pngu"
   google.container_node_pool "np-${z}"              stacks/gke_two_phase.df:91  waits on pngu.zones
 
-later
-  deny "cluster must be in at least two zones"      stacks/gke_two_phase.df:100  until tick 2
+policy  1 hold · 1 undetermined
+  undetermined  cluster must be in at least two zones  stacks/gke_two_phase.df:100  1 undetermined
+    google.container_cluster pngu  until zones is known (tick 2)
 "#;
 
 /// Three definite, three pending on the kubernetes provider's configuration,
@@ -133,14 +134,16 @@ fn gke_two_phase_applies_in_two_ticks() {
     let s = Scratch::new("gke-ticks");
     let r = gke(&s, "gke_two_phase.df", &["apply"]).success();
     assert!(
-        r.stdout
-            .starts_with("plan: 6 changes (6 create) over 2 ticks, 1 undetermined\n\ntick 1  "),
+        r.stdout.starts_with(
+            "plan: 6 changes (6 create) over 2 ticks; policy: 1 hold · 1 undetermined\n\ntick 1  "
+        ),
         "{}",
         r.stdout
     );
     assert!(
-        r.stdout
-            .contains("plan: 5 changes (5 create) over 1 tick\n\ntick 2  5 changes\n"),
+        r.stdout.contains(
+            "plan: 5 changes (5 create) over 1 tick; policy: 2 hold\n\ntick 2  5 changes\n"
+        ),
         "{}",
         r.stdout
     );

@@ -11,8 +11,25 @@ use common::{Scratch, repo};
 fn plan(s: &Scratch, example: &str, why: &[&str]) -> String {
     let dir = repo().join("examples").join(example);
     let mut args = vec!["-C", dir.to_str().unwrap(), "plan"];
+    // The demo's project module plans every environment (R-114): one.
+    if example == "demo" {
+        args.extend(["dform", "env=staging"]);
+    }
     args.extend_from_slice(why);
     s.run(&args).success().stdout
+}
+
+/// The plan without its policy block, which `-v` lists whole (R-200).
+fn without_policy(plan: &str) -> String {
+    let mut out = Vec::new();
+    let mut inside = false;
+    for l in plan.lines() {
+        inside = (inside || l.starts_with("policy  ")) && !l.is_empty();
+        if !inside {
+            out.push(l);
+        }
+    }
+    out.join("\n")
 }
 
 /// A line without its site column and its value (a secret's label and a
@@ -48,8 +65,8 @@ fn levels(example: &str) -> (String, String) {
     let how = plan(&s, example, &["-v"]);
     assert_eq!(plan(&s, example, &["--why=how"]), how);
     assert_eq!(
-        how.lines().map(left).collect::<Vec<_>>(),
-        line.lines().map(left).collect::<Vec<_>>(),
+        without_policy(&how).lines().map(left).collect::<Vec<_>>(),
+        without_policy(&line).lines().map(left).collect::<Vec<_>>(),
         "{how}"
     );
     assert_ne!(how, line);

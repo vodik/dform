@@ -593,8 +593,9 @@ fn a_secret_output_reaches_a_sensitive_field_in_another_stack() {
         r.stdout
     );
     assert_eq!(materialized(&s), PRODUCED);
-    let r = dev(&["plan", "app"]).success();
-    assert_eq!(r.summary(), "stack app is up to date", "{}", r.stdout);
+    // A plan of app plans prod first (R-200), with its input.
+    let r = dev(&["plan", "app", "--set", &set]).success();
+    assert_eq!(r.summary(), "plan: 0 changes", "{}", r.stdout);
 
     // The producer's secret changes: the reader's field is updated, in one
     // apply of the reader that applies the producer first.
@@ -609,7 +610,7 @@ fn a_secret_output_reaches_a_sensitive_field_in_another_stack() {
         "stacks/app.df",
         &s.read("stacks/app.df").replace("prod.pass", "prod.token"),
     );
-    let r = dev(&["plan", "app"]).success();
+    let r = dev(&["plan", "app", "--set", "pw=ROTATED-SECRET"]).success();
     assert!(r.stdout.contains("~ leaky.vault copy"), "{}", r.stdout);
     for out in [&r.stdout, &r.stderr] {
         assert!(!out.contains("ROTATED"), "{out}");

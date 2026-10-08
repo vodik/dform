@@ -39,16 +39,16 @@ fn apply_with_no_target_applies_every_stack_in_dependency_order() {
     let r = s.run(&["apply"]).success();
     assert!(
         r.stdout.starts_with(
-            "stacks: the project's 3, in apply order: net, then app, then solo; each is \
-             planned, confirmed and applied in turn\n== net\n"
+            "stacks: the project's 3, in apply order: stacks.net, then stacks.app, then \
+             stacks.solo; each is planned, confirmed and applied in turn\n== stacks.net\n"
         ),
         "{}",
         r.stdout
     );
     for (stack, at) in [
-        ("net", "== net\n"),
-        ("app", "== app\n"),
-        ("solo", "== solo\n"),
+        ("net", "== stacks.net\n"),
+        ("app", "== stacks.app\n"),
+        ("solo", "== stacks.solo\n"),
     ] {
         assert!(r.stdout.contains(at), "{stack}: {}", r.stdout);
         assert!(

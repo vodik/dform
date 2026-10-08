@@ -354,7 +354,12 @@ impl Tree<'_> {
                 }
                 (Ok(_), None) => ("planned".to_string(), None),
                 (Ok(_), Some(t)) => {
-                    let rest = t.text();
+                    // Its changes; the policies are the tree's headline's.
+                    let rest = report::Tally {
+                        policy: Default::default(),
+                        ..t.clone()
+                    }
+                    .text();
                     let rest = rest.strip_prefix("plan: ").unwrap_or(&rest).to_string();
                     let state = match (gone, t.is_quiet()) {
                         (true, true) => self.removed("nothing is left to destroy"),

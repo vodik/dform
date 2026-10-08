@@ -224,8 +224,15 @@ fn check(name: &str) {
                     r.stderr
                 );
                 let r = s.run(st.plan).success();
+                // A stack's, or a tree's every deployment (R-200).
+                let tree = r.summary().starts_with("plan: 0 changes")
+                    && r.stdout.lines().any(|l| l.starts_with("= "))
+                    && !r
+                        .stdout
+                        .lines()
+                        .any(|l| ["+ ", "~ ", "- "].iter().any(|m| l.starts_with(m)));
                 assert!(
-                    r.summary().ends_with(" is up to date"),
+                    r.summary().ends_with(" is up to date") || tree,
                     "{}: the plan after apply is not undeformed\n{}{}",
                     at(&st.plan.join(" ")),
                     r.stdout,
@@ -283,32 +290,17 @@ fn decl() {
     check("decl");
 }
 
-/// The demo's plan with no target is its project.df's: a `stacks:` line
-/// per environment, then each one's plan.
+/// The demo's plan with no target is its project.df's: one tree, a
+/// header line per environment with its plan nested under it (R-200).
 #[test]
 fn demo_plans_its_matrix() {
     let s = Scratch::in_target("examples", "demo-matrix");
     copy_dir(&repo().join("examples/demo"), &s.dir);
     let r = s.run(&["plan"]).success();
-    let states: Vec<&str> = r.stdout.lines().skip(1).take(3).collect();
-    assert_eq!(
-        states,
-        [
-            "  dform[env=dev]      never applied, 6 changes (6 create) over 1 tick",
-            "  dform[env=staging]  never applied, 13 changes (13 create) over 1 tick",
-            "  dform[env=prod]     never applied, 13 changes (13 create) over 1 tick",
-        ],
-        "{}",
-        r.stdout
-    );
-    let heads: Vec<&str> = r.stdout.lines().filter(|l| l.starts_with("== ")).collect();
-    assert_eq!(
-        heads,
-        [
-            "== dform[env=dev]",
-            "== dform[env=staging]",
-            "== dform[env=prod]"
-        ]
+    common::golden_file(
+        &repo().join("tests/golden/dform/matrix.plan.txt"),
+        &r.stdout,
+        "examples",
     );
 }
 
