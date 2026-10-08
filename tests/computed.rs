@@ -242,3 +242,24 @@ fn an_update_leaves_a_picked_optional_computed_value_to_the_provider() {
         steady.stdout
     );
 }
+
+/// A null's label is `T/A#P` and `A` may hold a `#`: a resource named
+/// `a#b` is read by its path, not by what follows its first `#`.
+#[test]
+fn a_computed_value_of_a_resource_named_with_a_hash_reaches_its_reader() {
+    let s = Scratch::new("computed-hash");
+    s.write(
+        "h.df",
+        "\nlet n = \"a#b\"\nresource db.postgres \"${n}\" {\n  size = 1\n}\n\
+         resource net.vpc v {\n  cidr = \"10.0.0.0/16\"\n  name = db.postgres[n].endpoint\n}\n\
+         use fake\n",
+    );
+    s.run(&["dev", "--world", "w.json", "apply", "h.df", "--yes"])
+        .success();
+    let w: serde_json::Value = serde_json::from_str(&s.read("w.json")).unwrap();
+    assert_eq!(
+        w["resources"]["net.vpc::v"]["attrs"]["name"],
+        w["resources"]["db.postgres::a#b"]["computed"]["endpoint"],
+        "{w}"
+    );
+}

@@ -1281,9 +1281,7 @@ pub fn outputs(
                 label,
                 class: crate::value::NullClass::Secret,
                 ..
-            } => crate::value::null_owner(label)
-                .zip(label.split_once('#').map(|(_, p)| p.to_string()))
-                .map(|((t, n), p)| (t, n, p)),
+            } => crate::value::null_parts(label),
             _ => None,
         };
         let held = at.and_then(|(typ, name, path)| {

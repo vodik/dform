@@ -2302,14 +2302,12 @@ impl Providers {
             });
         }
         let mut found = None;
-        if let (Some((_, path)), Some((typ, name))) =
-            (label.split_once('#'), crate::value::null_owner(label))
-        {
+        if let Some((typ, name, path)) = crate::value::null_parts(label) {
             let owner = Address { typ, name };
             if !ctx.retracted.contains(&owner)
                 && let Some(o) = ctx.existing(&owner)?
             {
-                found = get_path(&o.computed, path).cloned();
+                found = get_path(&o.computed, &path).cloned();
             }
         }
         match (found, ctx.strict) {
@@ -2692,13 +2690,12 @@ impl Providers {
     /// The class of the null labeled `T/A#P`: the schema's, else open (a
     /// ref to a configured attribute nobody set).
     fn null_class(&self, label: &str) -> NullClass {
-        let Some((ta, path)) = label.split_once('#') else {
+        let Some((typ, _, path)) = crate::value::null_parts(label) else {
             return NullClass::Open;
         };
-        let typ = ta.split_once('/').map(|x| x.0).unwrap_or(ta);
         self.schema()
-            .class_of(typ, path)
-            .or_else(|| self.schema().optional_computed_class(typ, path))
+            .class_of(&typ, &path)
+            .or_else(|| self.schema().optional_computed_class(&typ, &path))
             .unwrap_or(NullClass::Open)
     }
 

@@ -510,12 +510,12 @@ fn has_secret(v: &Json) -> bool {
 
 /// A null's class from the schema, by its label `type/addr#path`.
 fn null_class(label: &str, schema: &Schema) -> String {
-    let (Some((t, _)), Some((_, p))) = (null_owner(label), label.split_once('#')) else {
+    let Some((t, _, p)) = crate::value::null_parts(label) else {
         return "unknown".into();
     };
     schema
-        .class_of(&t, p)
-        .or_else(|| schema.optional_computed_class(&t, p))
+        .class_of(&t, &p)
+        .or_else(|| schema.optional_computed_class(&t, &p))
         .map(|c| c.name().to_string())
         .unwrap_or_else(|| "unknown".into())
 }
