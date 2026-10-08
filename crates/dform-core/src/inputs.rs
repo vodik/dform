@@ -149,15 +149,28 @@ pub fn type_text(t: &TypeExpr) -> String {
     }
 }
 
+/// The value type `t` names ([`crate::value::is_value_type`]): `inet`,
+/// `bytes`, `range(ip)`; none for any other type.
+pub fn value_type(t: &TypeExpr) -> Option<String> {
+    let n = match t {
+        TypeExpr::Name(n) => n.clone(),
+        TypeExpr::Apply(n, args) if n == "range" && args.len() == 1 => type_text(t),
+        _ => return None,
+    };
+    crate::value::is_value_type(&n).then_some(n)
+}
+
 /// The type names an input may have. `addr`, `ref(...)` and `any` are
 /// accepted unchecked; `secret(T)` is `T`, labeled secret (`secrets`).
 pub fn check_type(t: &TypeExpr) -> Result<(), String> {
+    if value_type(t).is_some() {
+        return Ok(());
+    }
     match t {
         TypeExpr::Name(n) => match n.as_str() {
             "int" | "float" | "number" | "string" | "bool" | "symbol" | "addr" | "any" => Ok(()),
             // R-134: a uri is RFC 3986's, not a browser's url.
             "url" => Err("unknown type url: the type is `uri` (RFC 3986's generic syntax)".into()),
-            n if crate::value::VALUE_TYPES.contains(&n) => Ok(()),
             _ => Err(format!("unknown type {n}")),
         },
         TypeExpr::Apply(n, args) => match (n.as_str(), args.as_slice()) {
@@ -183,6 +196,9 @@ pub fn has_type(t: &TypeExpr, v: &Value) -> bool {
     if matches!(v, Value::Null { .. }) {
         return true;
     }
+    if let Some(n) = value_type(t) {
+        return !matches!(v, Value::Str(_)) && crate::value::read_typed(&n, v).is_ok();
+    }
     match t {
         TypeExpr::Name(n) => match n.as_str() {
             "int" => matches!(v, Value::Int(_)),
@@ -190,9 +206,6 @@ pub fn has_type(t: &TypeExpr, v: &Value) -> bool {
             "number" => matches!(v, Value::Int(_) | Value::Float(_)),
             "string" | "symbol" | "addr" => matches!(v, Value::Str(_)),
             "bool" => matches!(v, Value::Bool(_)),
-            n if crate::value::VALUE_TYPES.contains(&n) => {
-                !matches!(v, Value::Str(_)) && crate::value::read_typed(n, v).is_ok()
-            }
             _ => true,
         },
         TypeExpr::Apply(n, args) => match (n.as_str(), args.as_slice()) {
@@ -227,6 +240,11 @@ pub fn has_type(t: &TypeExpr, v: &Value) -> bool {
 /// float it names), a `string` input takes the text of an int or a bool, and an
 /// object's fields and a list's elements are read as theirs.
 pub fn coerce(t: &TypeExpr, v: Value) -> Value {
+    // A value type from its text, as a literal reads (R-31, R-66);
+    // left as it is when it is not one, which the type check reports.
+    if let (Some(n), Value::Str(_) | Value::Int(_) | Value::Float(_)) = (value_type(t), &v) {
+        return crate::value::read_typed(&n, &v).unwrap_or(v);
+    }
     match (t, v) {
         (TypeExpr::Name(n), Value::Str(s)) if n == "float" || n == "number" => {
             match crate::value::Float::parse(&s) {
@@ -236,13 +254,6 @@ pub fn coerce(t: &TypeExpr, v: Value) -> Value {
         }
         (TypeExpr::Name(n), Value::Int(i)) if n == "float" => {
             crate::value::Float::new(i as f64).map_or(Value::Int(i), Value::Float)
-        }
-        // A value type from its text, as a literal reads (R-31, R-66);
-        // left as it is when it is not one, which the type check reports.
-        (TypeExpr::Name(n), v @ (Value::Str(_) | Value::Int(_) | Value::Float(_)))
-            if crate::value::VALUE_TYPES.contains(&n.as_str()) =>
-        {
-            crate::value::read_typed(n, &v).unwrap_or(v)
         }
         (TypeExpr::Name(n), Value::Int(i)) if n == "string" => Value::Str(i.to_string()),
         (TypeExpr::Name(n), Value::Float(f)) if n == "string" => Value::Str(f.to_string()),
@@ -604,8 +615,13 @@ pub fn set_facts(declared: &[Declared], set: &[(String, Value)]) -> Result<Vec<A
         {
             let v = coerce(&d.decl.ty, v.clone());
             if !has_type(&d.decl.ty, &v) {
+                // Why its text is not the value type (`A..=B`, not `A-B`).
+                let why = value_type(&d.decl.ty)
+                    .and_then(|n| crate::value::read_typed(&n, &v).err())
+                    .map(|e| format!(": {e}"))
+                    .unwrap_or_default();
                 anyhow::bail!(
-                    "--set {k}={}: input {k} is {}",
+                    "--set {k}={}: input {k} is {}{why}",
                     crate::partition::fmt_bare(&v),
                     type_text(&d.decl.ty)
                 );

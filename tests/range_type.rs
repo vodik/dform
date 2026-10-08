@@ -173,3 +173,35 @@ fn an_input_is_checked_against_a_range() {
         r.stderr
     );
 }
+
+/// `input pool: range(ip)`: a range input given by `--set` and by a
+/// document, its text read as the range a literal is.
+#[test]
+fn an_input_is_a_range() {
+    let s = common::Scratch::project("range-input");
+    s.write("pool.yaml", "pool: 10.0.0.2..=10.0.0.9\n");
+    s.write(
+        "p.df",
+        "\ninput pool: range(ip)\nset from yaml.decode(io.read(\"pool.yaml\"))\n\
+         resource net.vpc main {\n  pool = p\n  size = p.len\n} where pool(p)\nuse fake\n",
+    );
+    let plan = |extra: &[&str]| {
+        let mut a = vec!["plan", "--why=none"];
+        a.extend(extra);
+        s.run(&common::on("p.df", &["--world", "w.json"], &a))
+    };
+    let r = plan(&[]).success();
+    assert!(r.stdout.contains("pool = \"10.0.0.2..=10.0.0.9\""), "{}", r.stdout);
+    assert!(r.stdout.contains("size = 8"), "{}", r.stdout);
+    let r = plan(&["--set", "pool=10.0.0.2..=10.0.0.3"]).success();
+    assert!(r.stdout.contains("size = 2"), "{}", r.stdout);
+    let r = plan(&["--set", "pool=10.0.0.2-10.0.0.3"]).failure();
+    assert!(
+        r.stderr.contains(
+            "input pool is range(ip): \"10.0.0.2-10.0.0.3\" is not a range: a range of \
+             addresses is written `10.0.0.2..=10.0.0.3`"
+        ),
+        "{}",
+        r.stderr
+    );
+}

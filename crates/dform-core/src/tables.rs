@@ -1382,20 +1382,18 @@ pub fn expand_set_from(program: Program, declared: &mut [crate::inputs::Declared
 /// all text, as an int too. The variable it binds and the literal that
 /// binds it; none where the leaf is taken as it is.
 fn read_leaf(ty: &TypeExpr, v: &str, csv: bool) -> Option<(String, Lit)> {
-    let TypeExpr::Name(n) = ty else {
-        return None;
+    let n = match (crate::inputs::value_type(ty), ty) {
+        (Some(n), _) => n,
+        (None, TypeExpr::Name(n)) if n == "float" || (csv && n == "int") => n.clone(),
+        _ => return None,
     };
-    let value_type = crate::value::VALUE_TYPES.contains(&n.as_str());
-    let read = value_type || n == "float" || (csv && n == "int");
-    read.then(|| {
-        let parsed = format!("{v}__{n}");
-        let var = Term::Var(v.to_string());
-        let l = Lit::Eq(
-            Term::Var(parsed.clone()),
-            crate::types::at_run_time(&crate::types::Ty::parse(n), var),
-        );
-        (parsed, l)
-    })
+    let parsed = format!("{v}__{}", n.replace(|c: char| !c.is_alphanumeric(), "_"));
+    let var = Term::Var(v.to_string());
+    let l = Lit::Eq(
+        Term::Var(parsed.clone()),
+        crate::types::at_run_time(&crate::types::Ty::parse(&n), var),
+    );
+    Some((parsed, l))
 }
 
 /// `a` with variable `v` replaced by `t` in its arguments.
