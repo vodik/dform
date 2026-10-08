@@ -323,6 +323,30 @@ fn test_with_no_target_tests_each_deployment() {
     );
 }
 
+/// `dev effects` with no target prints each stack the module lists, once
+/// (its effects are its program's, whatever its key); `--json` needs one.
+#[test]
+fn dev_effects_with_no_target_prints_each_stack_once() {
+    let s = project("matrix-effects", MATRIX);
+    let r = s.run(&["dev", "effects"]).success();
+    let heads: Vec<&str> = r.stdout.lines().filter(|l| l.starts_with("== ")).collect();
+    assert_eq!(heads, ["== platform", "== apps"], "{}", r.stdout);
+    assert!(
+        r.stdout.contains("stack  offers  ingress_ip: any\n"),
+        "{}",
+        r.stdout
+    );
+    let r = s.run(&["dev", "effects", "--json"]).failure();
+    assert!(
+        r.stderr.contains(
+            "dev effects project.df: --json says one stack's effects; name it (`dform dev \
+             effects STACK --json`)"
+        ),
+        "{}",
+        r.stderr
+    );
+}
+
 #[test]
 fn destroy_takes_a_target() {
     let s = project("matrix-destroy", MATRIX);

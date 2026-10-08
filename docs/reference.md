@@ -265,7 +265,11 @@ question (`Destroy these N objects of apps[env=old]?`) that
 until its destroy is done. A deployment the module never listed (one
 applied by its target) is the target's, never destroyed by the
 project's apply. `test` tests each deployment it lists, its key pinned,
-headed `== NAME`, and fails naming those that failed. `stack list` says
+headed `== NAME`, and fails naming those that failed. `dev effects`
+prints each stack it lists once, headed `== STACK` (what a stack reads,
+writes and offers is its program's, whatever its key; `--json` needs the
+stack named), and `doc` the project's every file, project.df's
+too. `stack list` says
 which deployments the module lists (`listed project.df`, `removed from
 project.df`), one it lists that has no state yet as `never` applied. It
 replaces Terraform's workspaces and a directory tree per environment.
@@ -317,7 +321,7 @@ prints the same plan and applies nothing.
 | `state show`, `state forget-host`, `state mv` | a deployment's state |
 | `secrets list`, `secrets rotate`, `secrets cycle`, `secrets set`, `secrets unset` | a deployment's secrets |
 | `provider check`, `provider schema` | providers |
-| `dev strata`, `dev graph`, `dev effects`, `dev --world W --inventory I --provider P --chaos C COMMAND` | the mock and the evaluator |
+| `dev strata`, `dev graph`, `dev effects`, `dev --world W --inventory I --provider P --chaos C COMMAND` | the mock and the evaluator; `dev effects` with no target on project.df's stacks |
 | `doc [TARGET]` | the doc comments as Markdown, on stdout |
 | `init [NAME]` | make the working directory a project |
 | `completions zsh\|bash\|fish` | a completion script |

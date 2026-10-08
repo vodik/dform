@@ -1,10 +1,11 @@
 //! `plan`, `apply` and `test` on the project module (R-114): each
 //! deployment it lists, and those they read, in dependency order; a
 //! deployment the project's apply made that it no longer lists is
-//! destroyed.
+//! destroyed. `dev effects`: each stack it lists, once.
 
 use super::apply::Apply;
 use super::args::Target;
+use super::dev::Effects;
 use super::plan::Plan;
 use super::test::Test;
 use super::{Cli, Cmd, Dependency, Held, Outcome, Refused};
@@ -14,8 +15,9 @@ use anyhow::{Result, bail};
 use std::path::{Path, PathBuf};
 
 /// The project module a command runs on: with no target, the root's
-/// project.df for `plan`, `apply` and `test`; a target that is a project
-/// module. `destroy` takes a target always: it removes one deployment.
+/// project.df for `plan`, `apply`, `test` and `dev effects`; a target
+/// that is a project module. `destroy` takes a target always: it removes
+/// one deployment.
 pub(super) fn target(
     cmd: &Cmd,
     project: Option<&crate::project::Project>,
@@ -70,7 +72,8 @@ pub(super) fn target(
             destroy: false,
             ..
         })
-        | Cmd::Test(_) => Ok(Some(module)),
+        | Cmd::Test(_)
+        | Cmd::Effects(Effects { json: false }) => Ok(Some(module)),
         Cmd::Apply(Apply { destroy: true, .. }) => bail!(
             "destroy {shown}: a project module lists deployments; destroy removes one, named \
              (`dform destroy STACK K=V`)"
@@ -79,6 +82,10 @@ pub(super) fn target(
             "plan {shown}: --json, --out and --destroy plan one deployment; name it (`dform \
              plan STACK K=V --json`)"
         ),
+        Cmd::Effects(_) => bail!(
+            "dev effects {shown}: --json says one stack's effects; name it (`dform dev effects \
+             STACK --json`)"
+        ),
         // Another command with no target runs on the stack under the
         // working directory, as in a project with no project module.
         _ if t.target.is_none() => Ok(None),
@@ -86,7 +93,8 @@ pub(super) fn target(
     }
 }
 
-/// `plan`, `apply` or `test` on the project module `module`.
+/// `plan`, `apply`, `test` or `dev effects` on the project module
+/// `module`.
 pub(super) fn run(cli: Cli, module: &Path) -> Result<Outcome> {
     let project = crate::project::Project::require(Path::new("."), env!("CARGO_PKG_VERSION"))?;
     let matrix = Matrix::load(module)?;
@@ -186,7 +194,8 @@ pub(super) fn run(cli: Cli, module: &Path) -> Result<Outcome> {
         Cmd::Plan(_) => plan(&cli, &label, &order, &removed, &of),
         Cmd::Apply(_) => apply(&cli, &label, &order, &removed, &of),
         Cmd::Test(_) => test(&cli, &label, &order, &of),
-        _ => bail!("internal: a project module runs plan, apply and test"),
+        Cmd::Effects(_) => effects(&cli, &label, &order, &of),
+        _ => bail!("internal: a project module runs plan, apply, test and dev effects"),
     }
 }
 
@@ -411,6 +420,26 @@ fn test(cli: &Cli, label: &str, order: &[Dependency], of: &For) -> Result<Outcom
             listed.len(),
             failed.join(", ")
         );
+    }
+    Ok(Outcome::Done)
+}
+
+/// The project's `dev effects`: each stack it lists, once, as what a
+/// stack reads, writes and offers is its program's, whatever its key.
+fn effects(cli: &Cli, label: &str, order: &[Dependency], of: &For) -> Result<Outcome> {
+    let mut seen = std::collections::BTreeSet::new();
+    let stacks: Vec<&Dependency> = order
+        .iter()
+        .filter(|d| d.root && seen.insert(d.file.clone()))
+        .collect();
+    match stacks.is_empty() {
+        true => println!("stacks: {label} lists no deployment"),
+        false => println!("stacks: the stacks {label} lists, each once"),
+    }
+    for d in stacks {
+        let stack = d.name.split_once('[').map_or(d.name.as_str(), |(s, _)| s);
+        head(cli, stack, "");
+        super::run(of(d, cli.cmd.clone()), None)?;
     }
     Ok(Outcome::Done)
 }
