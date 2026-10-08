@@ -9,7 +9,6 @@
 
 mod common;
 use common::{Scratch, copy_dir, repo};
-use std::path::PathBuf;
 
 /// What the test adds to each README apply: apply asks for confirmation,
 /// and the README's commands stay interactive.
@@ -185,21 +184,19 @@ fn check(name: &str) {
         .find(|c| c.name == name)
         .unwrap_or_else(|| panic!("add examples/{name} to tests/examples.rs"));
     let from = repo().join("examples").join(name);
-    let copy = |n: usize| {
-        let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
-            .join(format!("examples-{}-{name}-{n}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        copy_dir(&from, &dir);
-        Scratch::adopt(dir)
+    let copy = || {
+        let s = Scratch::in_target("examples", name);
+        copy_dir(&from, &s.dir);
+        s
     };
-    let project = copy(0);
+    let project = copy();
     let readme = std::fs::read_to_string(from.join("README.md"))
         .unwrap_or_else(|e| panic!("examples/{name}/README.md: {e}"));
     let listed = commands(&readme);
-    for (i, st) in case.stacks.iter().enumerate() {
+    for st in case.stacks {
         let fresh;
         let s = if matches!(st.ends, Apply::Stops(_)) {
-            fresh = copy(i + 1);
+            fresh = copy();
             &fresh
         } else {
             &project
@@ -387,13 +384,8 @@ fn walkthrough(name: &str, file: &str) {
             "examples/{name}/README.md lists `{line}`, which {file} does not"
         );
     }
-    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!(
-        "examples-{}-{name}-walkthrough",
-        std::process::id()
-    ));
-    let _ = std::fs::remove_dir_all(&dir);
-    copy_dir(&from, &dir);
-    let s = Scratch::adopt(dir);
+    let s = Scratch::in_target("examples", &format!("{name}-walkthrough"));
+    copy_dir(&from, &s.dir);
     for step in &steps {
         let mut args = step.args.clone();
         // A reader answers each tick's question; `--yes` answers them all.

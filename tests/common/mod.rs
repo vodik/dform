@@ -43,10 +43,22 @@ impl Scratch {
     /// A scratch directory outside every project: plan runs, apply only
     /// with a world fixture (`dev --world`).
     pub fn new(name: &str) -> Self {
+        Scratch::empty(std::env::temp_dir(), "dform-test", name)
+    }
+
+    /// An empty scratch directory under the build's per-test directory,
+    /// `CARGO_TARGET_TMPDIR`, `KIND-PID-NAME-N` (a git fixture or a
+    /// linked executable stays out of /tmp, and the build's directory is
+    /// no project's).
+    pub fn in_target(kind: &str, name: &str) -> Self {
+        Scratch::empty(PathBuf::from(env!("CARGO_TARGET_TMPDIR")), kind, name)
+    }
+
+    /// A new empty directory under `root`, `KIND-PID-NAME-N`.
+    fn empty(root: PathBuf, kind: &str, name: &str) -> Self {
         static N: AtomicUsize = AtomicUsize::new(0);
         let n = N.fetch_add(1, Ordering::SeqCst);
-        let dir =
-            std::env::temp_dir().join(format!("dform-test-{}-{name}-{n}", std::process::id()));
+        let dir = root.join(format!("{kind}-{}-{name}-{n}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         Scratch::adopt(dir)

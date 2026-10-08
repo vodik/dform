@@ -4,21 +4,14 @@
 #![allow(dead_code)]
 
 use crate::common::Scratch;
-use std::path::Path;
 
 /// A scratch directory under `CARGO_TARGET_TMPDIR`, removed on drop.
 pub fn scratch(name: &str) -> Scratch {
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    static N: AtomicUsize = AtomicUsize::new(0);
-    let n = N.fetch_add(1, Ordering::SeqCst);
-    let dir = Path::new(env!("CARGO_TARGET_TMPDIR"))
-        .join(format!("tables-{}-{name}-{n}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let s = Scratch::in_target("tables", name);
     // Its own project: under the build's directory it would be the
     // repository's (the git root) otherwise.
-    std::fs::write(dir.join("dform.toml"), "[project]\nedition = \"2026\"\n").unwrap();
-    Scratch::adopt(dir)
+    s.write("dform.toml", "[project]\nedition = \"2026\"\n");
+    s
 }
 
 pub use crate::common::git;

@@ -59,11 +59,7 @@ fn a_provider_crash_mid_apply_fails_the_action_and_resume_finishes() {
 /// still names another executable to run instead.
 #[test]
 fn the_mock_is_dform_itself_not_the_executable_beside_it() {
-    let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR"))
-        .join(format!("selfspawn-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    let s = Scratch::adopt(dir);
+    let s = Scratch::in_target("selfspawn", "mock");
     // Linked, not copied: the same filesystem as the build, and nothing
     // written just before its exec (ETXTBSY).
     std::fs::hard_link(env!("CARGO_BIN_EXE_dform"), s.path("dform")).unwrap();

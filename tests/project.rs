@@ -598,11 +598,7 @@ fn fmt_with_no_path_formats_the_project() {
 /// repository (here, under the build's directory) is no project either.
 #[test]
 fn outside_a_project_only_what_writes_no_state_runs() {
-    let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR"))
-        .join(format!("outside-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    let s = Scratch::adopt(dir);
+    let s = Scratch::in_target("outside", "project");
     s.write("net.df", NET);
     let r = s.run(&["plan", "net.df"]).success();
     assert_eq!(r.summary(), "plan: 1 change (1 create) over 1 tick");
