@@ -152,8 +152,12 @@ pub enum SyntaxKind {
     SELECTOR,
     /// `where body` after a block: its clause.
     CLAUSE,
-    /// `let k = t [where B]`.
+    /// `let k = t [where B]`; `let f(a, b) = t`, a let with parameters.
     LET,
+    /// `(a, b: T, c = d)` after a let's name (R-187): its parameters.
+    PARAMS,
+    /// `name [: T] [= default]`: one parameter.
+    PARAM,
     /// `set chain (=|+=) t [rank] [where B]`: a contribution.
     SET,
     /// `deny|warn "msg" [object] [where body]`.

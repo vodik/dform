@@ -6,6 +6,7 @@ pub mod circuit;
 pub mod controller;
 pub mod crd;
 pub mod custody;
+pub mod demand;
 pub mod deployment;
 pub mod diag;
 pub mod diff;

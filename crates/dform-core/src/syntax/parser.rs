@@ -812,9 +812,14 @@ impl<'a> Parser<'a> {
                 }
                 p.opt_where_body()
             }),
-            // `let NAME [: T] = term [@rank] [where B]` (R-74).
+            // `let NAME [: T] = term [@rank] [where B]` (R-74); `let
+            // NAME(PARAM, ..) [: T] = term [where B]`, a let with
+            // parameters (R-187).
             LET_KW => self.simple(LET, |p| {
                 p.expect_word()?;
+                if p.at(L_PAREN) {
+                    p.params()?;
+                }
                 if p.eat(COLON) {
                     p.type_expr()?;
                 }
@@ -1127,6 +1132,31 @@ impl<'a> Parser<'a> {
             }
             p.expect(R_PAREN)
         })
+    }
+
+    /// `(name [: T] [= default], ..)`: a let's parameters (R-187).
+    fn params(&mut self) -> P {
+        self.start(PARAMS);
+        self.expect(L_PAREN)?;
+        self.with_nl(false, |p| {
+            while !p.at(R_PAREN) {
+                p.start(PARAM);
+                p.expect_word()?;
+                if p.eat(COLON) {
+                    p.type_expr()?;
+                }
+                if p.eat(EQ) {
+                    p.term()?;
+                }
+                p.finish();
+                if !p.eat(COMMA) {
+                    break;
+                }
+            }
+            p.expect(R_PAREN)
+        })?;
+        self.finish();
+        Ok(())
     }
 
     fn bind_arg(&mut self) -> P {

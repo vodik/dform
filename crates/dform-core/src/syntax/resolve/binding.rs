@@ -463,6 +463,8 @@ impl Lowerer<'_> {
         let by = format!("in this call of `{name}`");
         let function = crate::functions::callable(&name);
         let ext = self.decls.externs.get(&name).cloned();
+        // A let with parameters reads its parameters' columns (R-187).
+        let params = self.function_inputs(rc.scope, &name).unwrap_or(0);
         // `c[t].p(..)`, `platform[env=e].p(..)`: the index names a copy.
         if let Some(head) = call.children().find(|c| c.kind() == CHAIN) {
             for ix in head.children().filter(|c| c.kind() == INDEX) {
@@ -490,7 +492,7 @@ impl Lowerer<'_> {
             let input = ext
                 .as_ref()
                 .is_some_and(|cols| cols.get(i).is_some_and(|(input, _)| *input));
-            if function || input {
+            if function || input || i < params {
                 self.reads(rc, &t, offset, &by, mode, bodies);
             } else {
                 self.pattern_names(rc, &t, offset, mode, bodies);

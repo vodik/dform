@@ -41,6 +41,7 @@ mod alias;
 mod binding;
 mod columns;
 mod each;
+mod function;
 pub use each::each_var;
 mod heads;
 mod membership;
@@ -264,6 +265,8 @@ struct Scope {
     input_nodes: BTreeMap<String, SyntaxNode>,
     /// A `let`'s rows: the terms it is defined by.
     lets: BTreeMap<String, Vec<SyntaxNode>>,
+    /// The lets with parameters (R-187): name -> the first statement.
+    functions: BTreeMap<String, SyntaxNode>,
     /// Resources with a static name: name -> the types declaring it.
     resources: BTreeMap<String, Vec<String>>,
     /// Instances declared here: name -> its component's path as written,
@@ -1344,6 +1347,18 @@ impl<'u> Lowerer<'u> {
                     let name = word_text(&n, 1);
                     self.decls.scopes[decl].values.insert(name.clone());
                     self.decls.scopes[decl].input_nodes.insert(name, n.clone());
+                }
+                // A let with parameters is a relation (R-187): its
+                // parameters' columns, then its value's.
+                LET if node(&n, PARAMS).is_some() => {
+                    let name = word_text(&n, 1);
+                    let arity = function::params(&n).map_or(0, |p| p.len()) + 1;
+                    self.decls.relations.insert(name.clone());
+                    self.decls.heads.insert(name.clone());
+                    let s = &mut self.decls.scopes[decl];
+                    s.heads.insert(name.clone());
+                    s.arities.entry(name.clone()).or_default().insert(arity);
+                    s.functions.entry(name).or_insert(n.clone());
                 }
                 LET => {
                     let name = word_text(&n, 1);
@@ -2678,6 +2693,7 @@ impl<'u> Lowerer<'u> {
                 }))
             }
             USE => self.use_stmt(n, scope, outer),
+            LET if node(n, PARAMS).is_some() => self.function_stmt(n, scope, outer),
             LET => self.let_stmt(n, scope, outer),
             SET => self.set(n, scope, outer),
             RESOURCE if self.decls.project.contains(&self.file) => self.deployment(n, scope, outer),
@@ -5308,8 +5324,15 @@ impl<'u> Lowerer<'u> {
     /// binds what it reads, otherwise as written. A body nested in it is
     /// checked with it.
     fn lits(&mut self, rc: &mut Rc, lits: &[SyntaxNode]) -> L<Vec<Lit>> {
+        self.lits_after(rc, lits, Vec::new())
+    }
+
+    /// [`Self::lits`] after `seed`, literals the statement holds before
+    /// its clause: a let's parameters' binding (R-187), which a `not { }`
+    /// helper's body takes with the other positive literals before it.
+    fn lits_after(&mut self, rc: &mut Rc, lits: &[SyntaxNode], seed: Vec<Lit>) -> L<Vec<Lit>> {
         if self.nested > 0 {
-            return self.lits_as_written(rc, lits);
+            return self.lits_as_written(rc, lits, seed);
         }
         let saved = (
             rc.clone(),
@@ -5319,7 +5342,7 @@ impl<'u> Lowerer<'u> {
             self.agg_rules,
         );
         let outer = rc.outer.clone();
-        let out = self.lits_as_written(rc, lits)?;
+        let out = self.lits_as_written(rc, lits, seed.clone())?;
         let order = self.check_order(rc, lits, &outer_names(rc, &outer))?;
         if order.iter().enumerate().all(|(i, &j)| i == j) {
             return Ok(out);
@@ -5331,11 +5354,15 @@ impl<'u> Lowerer<'u> {
         self.aggs.truncate(aggs);
         self.agg_rules = agg_rules;
         let lits: Vec<SyntaxNode> = order.iter().map(|&i| lits[i].clone()).collect();
-        self.lits_as_written(rc, &lits)
+        self.lits_as_written(rc, &lits, seed)
     }
 
-    fn lits_as_written(&mut self, rc: &mut Rc, lits: &[SyntaxNode]) -> L<Vec<Lit>> {
-        let mut out = Vec::new();
+    fn lits_as_written(
+        &mut self,
+        rc: &mut Rc,
+        lits: &[SyntaxNode],
+        mut out: Vec<Lit>,
+    ) -> L<Vec<Lit>> {
         let mut failed = false;
         for l in lits {
             if self.lit(rc, l, &mut out).is_err() {
@@ -5807,6 +5834,15 @@ impl<'u> Lowerer<'u> {
         let lhs_node = ts.first().ok_or(Skip)?;
         let any_type = tokens(n).any(|t| t.kind() == RESOURCE_KW);
         let rhs = ts.get(1).and_then(Chain::of).map(|c| self.type_each(rc, c));
+        // `x in f`, `f` a let with parameters (R-187): nothing enumerates it.
+        if let Some(c) = rhs
+            .as_ref()
+            .filter(|c| c.is_bare() && !rc.vars.contains_key(&c.head))
+            && let Some((_, def)) = self.function_def(rc.scope, &c.head)
+        {
+            let at = self.span_of(c.range);
+            return self.in_function(at, &c.head.clone(), &def);
+        }
         // `v in PATH` with a `[_]` in it binds `v` to each value the path
         // reaches (R-162): the steps enumerate.
         if let (Some(c), Some(rhs_node)) = (&rhs, ts.get(1))
@@ -6748,6 +6784,10 @@ impl<'u> Lowerer<'u> {
         if let Some(t) = self.loader_call(rc, n, pre) {
             return t;
         }
+        // A let with parameters (R-187).
+        if let Some(t) = self.function_call(rc, n, pre) {
+            return t;
+        }
         let name = self.callee(n);
         let Some(name) = name else {
             return self.error(span, "a function is named by a plain name");
@@ -7204,6 +7244,12 @@ impl<'u> Lowerer<'u> {
         // `super.x`: the scope around this component (R-186).
         if h == "super" && !rc.vars.contains_key(h) {
             return self.super_read(rc, c, pre, span);
+        }
+        // A let with parameters has no value until called (R-187).
+        if !rc.vars.contains_key(h)
+            && let Some((_, def)) = self.function_def(rc.scope, h)
+        {
+            return self.not_called(span, h, &def);
         }
         // A copy whose `instance` is the error reads nothing, and says so
         // there.

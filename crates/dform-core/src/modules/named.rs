@@ -82,6 +82,10 @@ impl Named<'_> {
                 e.arity += 1;
                 Stmt::Mixed(e)
             }
+            Stmt::Mode(mut e) if self.owns(&e.pred) => {
+                e.arity += 1;
+                Stmt::Mode(e)
+            }
             other => other,
         }
     }

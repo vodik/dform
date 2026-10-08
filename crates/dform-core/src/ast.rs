@@ -222,6 +222,10 @@ pub enum Stmt {
     /// `extern p(+in, -out, ...)`: a predicate a provider answers
     /// on demand, once its `+` arguments are ground (`externs`).
     ExternFn(ExternFn),
+    /// `let f(a, b) = t` (R-187): the relation `f(a, b, v)` the program
+    /// answers on demand, its columns but the last bound by the literal
+    /// that reads it, as a provider's table's `+` columns are (`demand`).
+    Mode(Extern),
     /// A statement the grammar has and the evaluator does not yet: lowering
     /// rejects it naming the ticket that brings it.
     Pending(Pending),

@@ -74,6 +74,9 @@ pub fn lower(program: &Program) -> Result<Lowered> {
     let mut expanded = declassified(lower_contributions(&expanded)?);
     // `set from DOC` contributes per input path (R-38).
     expanded = crate::tables::expand_set_from(expanded, &mut inputs);
+    // A let with parameters is answered at each site that reads it (R-187).
+    let sources = extern_fns.iter().map(|f| f.name.clone()).collect();
+    expanded = crate::demand::answer(expanded, &sources)?;
     crate::externs::check(&expanded, &extern_fns)?;
     // The cells of secret inputs and outputs, for the Redactor.
     let secret_inputs = inputs
