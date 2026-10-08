@@ -79,6 +79,11 @@ impl Matrix {
             crate::loader::load_program_files_with(&[file.to_path_buf()], &|p| {
                 std::fs::read_to_string(p)
             })?;
+        // A module it uses is given its inputs as a stack's are (R-208).
+        if let Ok(lowered) = crate::transform::lower(&program) {
+            let given = crate::deployment::input_fact_keys(&program);
+            crate::inputs::check_required(&lowered.inputs, &given)?;
+        }
         let (res, violations) = crate::engine::eval(&program, &[])?;
         if !violations.is_empty() {
             bail!(

@@ -265,8 +265,8 @@ fn use_of_a_stack_reads_one_deployment() {
 #[test]
 fn rekey_lists_what_the_key_renames_and_moves_the_state() {
     let s = Scratch::project("keyed-rekey");
-    s.write("app.df", APP);
-    s.run(&["apply", "app.df", "env=staging"]).success();
+    s.write("stacks/app.df", APP);
+    s.run(&["apply", "stacks/app.df", "env=staging"]).success();
     let r = s
         .run(&["stack", "rekey", "app", "env=staging", "env=stg"])
         .success();
@@ -284,7 +284,7 @@ fn rekey_lists_what_the_key_renames_and_moves_the_state() {
     assert!(registry.contains("\"app[env=stg]\""), "{registry}");
     assert!(!registry.contains("env=staging"), "{registry}");
     let r = s
-        .run(&["plan", "--why=none", "app.df", "env=stg"])
+        .run(&["plan", "--why=none", "stacks/app.df", "env=stg"])
         .success();
     assert!(
         r.stdout
@@ -339,12 +339,12 @@ resource net.vpc main {
 fn rekey_moves_the_state_from_before_the_stack_was_keyed() {
     let s = Scratch::project("keyed-legacy");
     let unkeyed = APP.replace("key env:", "input env:");
-    s.write("app.df", &unkeyed);
-    s.run(&["apply", "app.df"]).success();
-    s.write("app.df", APP);
+    s.write("stacks/app.df", &unkeyed);
+    s.run(&["apply", "stacks/app.df"]).success();
+    s.write("stacks/app.df", APP);
     s.run(&["stack", "rekey", "app", "env=staging"]).success();
     assert!(!s.path("dform.state/app/state.json").exists());
-    let r = s.run(&["plan", "app.df"]).success();
+    let r = s.run(&["plan", "stacks/app.df"]).success();
     assert_eq!(r.summary(), "stack app is up to date", "{}", r.stdout);
 }
 
@@ -406,11 +406,11 @@ resource net.vpc peer {
 #[test]
 fn a_fixed_bucket_in_a_block_that_reads_the_key_is_a_warning() {
     let s = Scratch::project("keyed-lint-gated");
-    s.write("app.df", GATED);
-    let r = s.run(&["plan", "app.df"]).success();
+    s.write("stacks/app.df", GATED);
+    let r = s.run(&["plan", "stacks/app.df"]).success();
     assert!(
         r.stderr.contains(
-            "warning: app.df:5:3: net.vpc logs.bucket = \"company-logs\" does not depend on \
+            "warning: stacks/app.df:5:3: net.vpc logs.bucket = \"company-logs\" does not depend on \
              the stack's key (env)"
         ),
         "{}",
@@ -420,7 +420,7 @@ fn a_fixed_bucket_in_a_block_that_reads_the_key_is_a_warning() {
     // A ref's value is its attribute's.
     assert!(!r.stderr.contains("net.vpc peer"), "{}", r.stderr);
     // Rekey lists what the key renames: main's name, not the bucket.
-    s.run(&["apply", "app.df", "env=staging"]).success();
+    s.run(&["apply", "stacks/app.df", "env=staging"]).success();
     let r = s
         .run(&["stack", "rekey", "app", "env=staging", "env=stg"])
         .success();

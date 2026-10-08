@@ -206,12 +206,16 @@ impl Mounts {
                 .is_some_and(|m| crate::project::is_stack(&base, &found, &m.stacks)),
         };
         if project && stack {
-            let keys = fs::read_to_string(&found)
+            let tree = fs::read_to_string(&found)
                 .ok()
                 .map(|text| crate::syntax::parser::parse(&text))
                 .filter(|p| p.errors.is_empty())
-                .map(|p| crate::syntax::resolve::key_names(&p.syntax()))
+                .map(|p| p.syntax());
+            let keys = tree
+                .as_ref()
+                .map(crate::syntax::resolve::key_names)
                 .unwrap_or_default();
+            let outputs = tree.as_ref().map(crate::syntax::resolve::output_names);
             let stem = crate::state::stack_name(&found);
             return Target::Stack(crate::syntax::resolve::Deployed {
                 path: module,
@@ -220,6 +224,7 @@ impl Mounts {
                     None => stem,
                 },
                 keys,
+                outputs,
             });
         }
         Target::File(module, found)
@@ -230,7 +235,7 @@ fn load_units(
     entry_files: &[PathBuf],
     read: &dyn Fn(&Path) -> std::io::Result<String>,
 ) -> Result<Loaded> {
-    use crate::syntax::SyntaxKind::{COMPONENT, RESOURCE, TYPE_EXPR, USE};
+    use crate::syntax::SyntaxKind::{COMPONENT, LIT_IN, LIT_NOT_IN, RESOURCE, TYPE_EXPR, USE};
     let mut loaded = Loaded {
         units: Vec::new(),
         entries: Vec::new(),
@@ -288,7 +293,13 @@ fn load_units(
         // with no `use types`, is that module's: it is loaded, so the type
         // resolves in this file whatever else the program loads. Lexical:
         // a name the file binds is its own.
-        for n in root.descendants().filter(|n| n.kind() == TYPE_EXPR) {
+        // So is the type `x in T` ranges over.
+        let ranged = root
+            .descendants()
+            .filter(|n| matches!(n.kind(), LIT_IN | LIT_NOT_IN))
+            .filter_map(|n| n.children().nth(1));
+        let typed = root.descendants().filter(|n| n.kind() == TYPE_EXPR);
+        for n in typed.chain(ranged) {
             let Some(module) = crate::syntax::resolve::type_module(&n) else {
                 continue;
             };

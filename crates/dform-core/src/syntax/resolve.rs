@@ -42,6 +42,7 @@ mod binding;
 mod columns;
 mod each;
 mod function;
+mod give;
 pub use each::each_var;
 mod heads;
 mod membership;
@@ -77,6 +78,9 @@ pub struct Deployed {
     pub name: String,
     /// Its keys, in order.
     pub keys: Vec<String>,
+    /// Its outputs, what a keyed read may name (`None`: its file did not
+    /// parse, and the read is not checked).
+    pub outputs: Option<Vec<String>>,
 }
 
 /// How text is read.
@@ -670,6 +674,15 @@ pub fn type_module(n: &SyntaxNode) -> Option<String> {
     let path = dotted_text(n, 0);
     let (module, _) = path.rsplit_once('.')?;
     (!builtin_type(&path)).then(|| module.to_string())
+}
+
+/// A file's outputs, read from its tree without resolving it: the names
+/// of its top-level `output` statements (a stack's, for a keyed read).
+pub fn output_names(root: &SyntaxNode) -> Vec<String> {
+    root.children()
+        .filter(|n| n.kind() == OUTPUT_DECL)
+        .map(|n| word_text(&n, 1))
+        .collect()
 }
 
 /// Is an `INPUT` node a `key` (R-29)?
@@ -4265,6 +4278,7 @@ impl<'u> Lowerer<'u> {
         name: String,
     ) -> L<Stmt> {
         let span = self.span(n);
+        self.check_gives(n, scope, &module)?;
         let mut rc = self.rc(n, scope, outer);
         let mut body = self.clauses(&mut rc, n)?;
         // A name from the clause (R-191): each row a copy, named as a
@@ -7980,6 +7994,35 @@ impl<'u> Lowerer<'u> {
         sc.resources.get(k).cloned()
     }
 
+    /// `k` read of a deployment of `d` is one of its outputs (R-208): the
+    /// stack's file is at hand, so a name it does not output is an error
+    /// at the read, naming what it does; a key is the deployment's name.
+    fn deployed_output(&mut self, d: &Deployed, k: &str, span: Span) -> L<()> {
+        let Some(outputs) = &d.outputs else {
+            return Ok(());
+        };
+        if outputs.iter().any(|o| o == k) {
+            return Ok(());
+        }
+        let (m, short) = (&d.path, &d.name);
+        let d = match d.keys.iter().any(|x| x == k) {
+            true => Diagnostic::error(
+                span,
+                format!(
+                    "`{k}` is a key of {m}, not an output: it names the deployment, \
+                     `{short}[{k}=..]`, and what is read of it is an output"
+                ),
+            ),
+            false => Diagnostic::error(span, format!("{m} has no output `{k}`")),
+        };
+        let d = match outputs.as_slice() {
+            [] => d.with_note(format!("{m} declares no output")),
+            _ => d.with_note(format!("its outputs: {}", outputs.join(", "))),
+        };
+        self.diags.push(d);
+        Err(Skip)
+    }
+
     /// `NAME[k=v, ..].out.path`, or `NAME.out.path` unkeyed: an output of
     /// a stack's deployment (R-65), the instance `NAME[k=v,..]`, read from
     /// what it published. Each key is given once.
@@ -8089,6 +8132,7 @@ impl<'u> Lowerer<'u> {
                 ),
             );
         };
+        self.deployed_output(d, k, span)?;
         let path = self.segs(rc, &rest[1..], pre)?;
         // The keyed read of a copy's output (`network[t].k`), the
         // deployment the instance: `instance_of(PATH, "", NAME), output(NAME,

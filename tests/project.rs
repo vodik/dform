@@ -137,29 +137,40 @@ fn a_key_value_is_the_targets_never_set() {
     assert!(r.stderr.contains("stack net has no key"), "{}", r.stderr);
 }
 
-/// A stack is named after its file; with no stacks/ directory the root's
-/// files are the stacks, and a `[stacks.NAME]` no file is is an error.
+/// A stack is named after its file: a file under stacks/, or a root file
+/// a `[stacks.NAME]` names (R-208). Any other root file is a module, an
+/// entrypoint only when the tool is pointed at it, and `stack list` does
+/// not list it.
 #[test]
 fn a_stack_is_a_file_named_after_itself() {
     let s = Scratch::new("target-files");
     s.write("dform.toml", "[project]\nedition = \"2026\"\n");
     s.write("shop.df", NET);
     s.write("modules/m.df", "\n");
-    let r = s.run(&["plan", "shop"]).success();
-    assert_eq!(r.summary(), "plan: 1 change (1 create) over 1 tick");
-    let r = s.run(&["stack", "list"]).success();
-    assert_eq!(
-        r.stdout,
-        "stack  file     result\nshop   shop.df  no deployment has state\n",
-    );
-    // With a stacks/ directory, only its files are stacks.
-    s.write("stacks/net.df", NET);
     let r = s.run(&["plan", "shop"]).failure();
     assert!(
         r.stderr.contains("no stack shop in the project"),
         "{}",
         r.stderr
     );
+    let r = s.run(&["plan", "shop.df"]).success();
+    assert_eq!(r.summary(), "plan: 1 change (1 create) over 1 tick");
+    let r = s.run(&["stack", "list"]).success();
+    assert!(r.stdout.starts_with("no stacks in "), "{}", r.stdout);
+    // A `[stacks.NAME]` makes the root file a stack.
+    s.write(
+        "dform.toml",
+        "[project]\nedition = \"2026\"\n\n[stacks.shop]\nisolated = true\n",
+    );
+    s.run(&["plan", "shop"]).success();
+    let r = s.run(&["stack", "list"]).success();
+    assert_eq!(
+        r.stdout,
+        "stack  file     result\nshop   shop.df  no deployment has state\n",
+    );
+    s.write("dform.toml", "[project]\nedition = \"2026\"\n");
+    // A file under stacks/ is a stack.
+    s.write("stacks/net.df", NET);
     s.run(&["plan", "net"]).success();
     // A table for a stack no file is.
     s.write(
@@ -168,8 +179,9 @@ fn a_stack_is_a_file_named_after_itself() {
     );
     let r = s.run(&["plan", "net"]).failure();
     assert!(
-        r.stderr
-            .contains("dform.toml: [stacks.nope] names no stack: there is no stacks/nope.df"),
+        r.stderr.contains(
+            "dform.toml: [stacks.nope] names no stack: there is no stacks/nope.df and no nope.df"
+        ),
         "{}",
         r.stderr
     );
@@ -190,16 +202,10 @@ fn a_stack_is_a_file_named_after_itself() {
 #[test]
 fn the_layout_lints() {
     let s = project("target-lints");
-    // A module that is not a stack with a key is an error: a key is its
-    // stack's.
+    // A module with a key fails only the run that loads it: the resolver's
+    // error at its line (R-208), no lint of the project's.
     s.write("modules/m.df", "\nkey env: string\n");
-    let r = s.run(&["plan", "net"]).failure();
-    assert!(
-        r.stderr
-            .contains("modules/m.df: a file that is not a stack has a `key`"),
-        "{}",
-        r.stderr
-    );
+    s.run(&["plan", "net"]).success();
     std::fs::remove_file(s.path("modules/m.df")).unwrap();
     // Every other .df is a module, wherever it is (R-65).
     s.write("loose.df", "\n");

@@ -1239,8 +1239,8 @@ fn target_of(project: Option<&Project>, t: &Target) -> Result<(PathBuf, Vec<(Str
             match here.as_slice() {
                 [one] => one.file.clone(),
                 [] => bail!(
-                    "no stack under {}: a stack is a file under stacks/ (or at the root, in \
-                     a project with no stacks/); name a program file \
+                    "no stack under {}: a stack is a file under stacks/, or one a \
+                     `[stacks.NAME]` names; name a program file \
                      (`dform plan path/to/file.df`){}",
                     std::env::current_dir()
                         .map(|d| d.display().to_string())

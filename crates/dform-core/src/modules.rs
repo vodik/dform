@@ -460,6 +460,9 @@ struct Cx<'a> {
     /// The copies named by their clause so far: each one's variable for
     /// its name inside it is its own (R-191).
     named: usize,
+    /// The inputs each body being expanded declares, the stack's first:
+    /// what a `use` in it may give by the pun (R-208).
+    inputs_here: Vec<BTreeSet<String>>,
 }
 
 fn check_types(who: &str, inputs: &[InputDecl], diags: &mut Vec<Diagnostic>) {
@@ -488,6 +491,16 @@ pub fn expand(program: &Program) -> Result<Expanded> {
         checked: BTreeSet::new(),
         flat: BTreeSet::from([String::new()]),
         named: 0,
+        inputs_here: vec![
+            program
+                .statements
+                .iter()
+                .filter_map(|s| match s {
+                    Stmt::Input(i) => Some(i.name.clone()),
+                    _ => None,
+                })
+                .collect(),
+        ],
     };
     let mut out = exclusive_copies(&program.statements);
     for s in &program.statements {
@@ -804,6 +817,7 @@ impl Cx<'_> {
     /// where B`, a module's (`used`): one mechanism (R-65).
     fn instance(&mut self, u: &crate::ast::Instance, at: &str, used: bool) -> Vec<Stmt> {
         let site = self.expanding.last().cloned();
+        let user_inputs = self.inputs_here.last().cloned().unwrap_or_default();
         let Some(def) = self.enter(&u.module, u.span) else {
             return Vec::new();
         };
@@ -827,7 +841,10 @@ impl Cx<'_> {
             self.flat.insert(abs.clone());
         }
         instance_inputs(kind, u, scope, &iface, flat, &mut out, &mut self.diags);
+        self.inputs_here
+            .push(iface.inputs.iter().map(|i| i.name.clone()).collect());
         let body = self.body(&body, &abs);
+        self.inputs_here.pop();
         self.expanding.pop();
         // What the components inside read of this definition's items is
         // this instance's own (R-186).
@@ -919,8 +936,10 @@ impl Cx<'_> {
                 {
                     continue;
                 }
+                let pun = user_inputs.contains(&leaf.name);
                 let mut d = Declared::new(&abs, leaf, address, bound);
                 d.used_at = flat.then_some(u.span);
+                d.used_by = flat.then(|| (origin.clone(), pun));
                 self.declared.push(d);
             }
         }

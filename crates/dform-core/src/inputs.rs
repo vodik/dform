@@ -40,6 +40,10 @@ pub struct Declared {
     pub given: bool,
     /// The `use` that declares it, for a used module's input.
     pub used_at: Option<Span>,
+    /// That `use` as written up to its block, `use config` (`use m as
+    /// n`), and whether its scope declares a value of the input's name, so
+    /// the pun gives it: `use config { env }` (R-208).
+    pub used_by: Option<(String, bool)>,
 }
 
 impl Declared {
@@ -52,6 +56,7 @@ impl Declared {
             bound,
             given: false,
             used_at: None,
+            used_by: None,
         }
     }
 
@@ -598,6 +603,35 @@ fn set_path(v: &mut Value, rest: &str, x: Value) {
     *v = x;
 }
 
+/// A key's value from the target outside its type (R-208): the error at
+/// the key's declaration, its help the deployments its members name.
+fn key_outside(k: &str, v: &Value, decl: &InputDecl) -> Diagnostic {
+    let ty = type_text(&decl.ty);
+    let given = spell::bare(v);
+    let d = Diagnostic::error(
+        decl.span,
+        format!(
+            "`{k}={given}` in the target: key {k} is {ty}, and `{given}` is not one of its members"
+        ),
+    );
+    match &decl.ty {
+        TypeExpr::Apply(n, members) if n == "enum" => {
+            let each: Vec<String> = members
+                .iter()
+                .map(|m| match m {
+                    TypeExpr::Str(s) | TypeExpr::Name(s) => format!("`{k}={s}`"),
+                    other => format!("`{k}={}`", type_text(other)),
+                })
+                .collect();
+            d.with_help(format!(
+                "name a deployment of one of its members: {}",
+                each.join(", ")
+            ))
+        }
+        _ => d.with_help(format!("name a deployment by a value of {ty}: `{k}=..`")),
+    }
+}
+
 /// The stack's inputs given on the command line, `--set k=v`, as `input(k,
 /// v)` facts read as their declared types. `k` is an input's address: the
 /// stack's own `k`, a leaf of an object input `nodes.count`, the object
@@ -615,6 +649,9 @@ pub fn set_facts(declared: &[Declared], set: &[(String, Value)]) -> Result<Vec<A
             && d.address.as_deref() == Some(k.as_str())
         {
             let v = coerce(&d.decl.ty, v.clone());
+            if d.decl.key && !has_type(&d.decl.ty, &v) {
+                return Err(Diagnostics(vec![key_outside(k, &v, &d.decl)]).into());
+            }
             if !has_type(&d.decl.ty, &v) {
                 // Why its text is not the value type (`A..=B`, not `A-B`).
                 let why = value_type(&d.decl.ty)
@@ -804,15 +841,17 @@ pub fn check_required(declared: &[Declared], given: &BTreeSet<String>) -> Result
             if let Some(at) = d.used_at {
                 // A used module's: where the stack uses it (R-55).
                 let field = &d.decl.name;
+                let ty = type_text(&d.decl.ty);
+                let help = match &d.used_by {
+                    Some((by, true)) => format!("give it in the use: `{by} {{ {field} }}`"),
+                    Some((by, false)) => {
+                        format!("give it in the use: `{by} {{ {field} = .. }}`, a value of {ty}")
+                    }
+                    None => format!("give it in the use: `{{ {field} = .. }}`, a value of {ty}"),
+                };
                 return Diagnostic::error(at, msg)
-                    .with_label(
-                        d.decl.span,
-                        format!("{field}: {} declared here", type_text(&d.decl.ty)),
-                    )
-                    .with_help(format!(
-                        "give it in the block, `{{ {field} = ... }}`, with `--set {k}=...`, \
-                         or give it a default"
-                    ));
+                    .with_label(d.decl.span, format!("{field}: {ty} declared here"))
+                    .with_help(help);
             }
             let help = match d.decl.key {
                 true => format!("give it with the target, `STACK {k}=...`"),
