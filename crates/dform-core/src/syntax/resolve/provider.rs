@@ -177,7 +177,10 @@ impl Lowerer<'_> {
                         format!("provider {name}: each declaration names another source"),
                     )
                     .with_label(at, "the first declaration")
-                    .with_help("one provider is started by its source: give it in the first only");
+                    .with_help(format!(
+                        "provider {name} runs one executable: keep `source` in the first \
+                         declaration and drop it from this one"
+                    ));
                     self.diags.push(d);
                     return Err(Skip);
                 }

@@ -269,7 +269,11 @@ pub fn config(program: &Program) -> Result<Stack> {
                     format!("provider {}: two `use`s name another source", c.name),
                 )
                 .with_label(first.span, "the other `use`")
-                .with_help("one provider is started by its source: give it in one `use`"),
+                .with_help(format!(
+                    "provider {} runs one executable: give `source` in one `use` and none in \
+                     the others",
+                    c.name
+                )),
             ),
             Some(_) => {}
         }
