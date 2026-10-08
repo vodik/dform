@@ -74,7 +74,7 @@ fn run(s: &Scratch, args: &[&str]) -> String {
 #[test]
 fn a_value_one_write_made_is_one_laid_out_line() {
     let s = project("fold-traefik");
-    let plan = run(&s, &["plan", "main"]);
+    let plan = run(&s, &["plan", "main.df"]);
     let want = r#"  + kube.deployment traefik            main.df:5
       metadata = { name: "traefik", labels: { app: "traefik" } }
       metadata.labels.owner = "simon"  main.df:28
@@ -104,13 +104,13 @@ fn a_value_one_write_made_is_one_laid_out_line() {
         "{plan}"
     );
     // `-v` says the same lines.
-    let how = run(&s, &["plan", "-v", "main"]);
+    let how = run(&s, &["plan", "-v", "main.df"]);
     assert!(
         how.contains("      spec.template.spec.containers[name=traefik] = {\n"),
         "{how}"
     );
     // `-vv`: leaf by leaf, each with its chain.
-    let full = run(&s, &["plan", "-vv", "main"]);
+    let full = run(&s, &["plan", "-vv", "main.df"]);
     for l in [
         "      metadata.labels.app = \"traefik\"\n",
         "      spec.template.spec.containers[name=traefik].args[4] = \
@@ -127,7 +127,7 @@ fn a_value_one_write_made_is_one_laid_out_line() {
 #[test]
 fn why_and_query_fold_the_same_way() {
     let s = project("fold-why");
-    let why = run(&s, &["why", "kube.deployment traefik", "main"]);
+    let why = run(&s, &["why", "kube.deployment traefik", "main.df"]);
     assert!(
         why.contains(
             "  metadata = { name: \"traefik\", labels: { app: \"traefik\" } }\n    \
@@ -139,7 +139,7 @@ fn why_and_query_fold_the_same_way() {
     );
     let q = run(
         &s,
-        &["query", "kube.deployment[\"traefik\"].metadata", "main"],
+        &["query", "kube.deployment[\"traefik\"].metadata", "main.df"],
     );
     assert_eq!(
         q,
@@ -181,9 +181,9 @@ fn a_plain_leaf_of_a_secret_object_is_sensitive() {
         "use k8s\n\nresource k8s.secret creds {\n  metadata.name = \"creds\"\n  \
          stringData = { user: \"synapse\", password: random.password(\"db\") }\n}\n",
     );
-    let full = run(&s, &["plan", "-vv", "main"]);
-    let why = run(&s, &["why", "k8s.secret creds", "main"]);
-    let leaf = run(&s, &["why", "creds.stringData.user", "main"]);
+    let full = run(&s, &["plan", "-vv", "main.df"]);
+    let why = run(&s, &["why", "k8s.secret creds", "main.df"]);
+    let leaf = run(&s, &["why", "creds.stringData.user", "main.df"]);
     for out in [&full, &why, &leaf] {
         assert!(!out.contains("synapse"), "{out}");
     }

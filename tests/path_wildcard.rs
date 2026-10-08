@@ -41,7 +41,7 @@ fn project(name: &str, policy: &str) -> Scratch {
 }
 
 fn plan(s: &Scratch) -> Run {
-    s.run(&["dev", "--world", "w.json", "plan", "-vv", "main"])
+    s.run(&["dev", "--world", "w.json", "plan", "-vv", "main.df"])
 }
 
 fn has(r: &Run, lines: &[&str]) {
@@ -87,7 +87,7 @@ fn a_set_through_two_wildcards_writes_every_element() {
             "why",
             "--tree",
             "attr(k8s.stateful_set, \"cache\", \"spec\", V)",
-            "main",
+            "main.df",
         ])
         .success();
     assert!(

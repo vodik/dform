@@ -278,6 +278,10 @@ fn a_sink_gets_the_audit_entries_and_its_failure_is_a_warning() {
 #[test]
 fn a_handover_is_logged_where_the_state_goes() {
     let s = Scratch::project("audit-handover");
+    s.write(
+        "dform.toml",
+        "[project]\nedition = \"2026\"\n\n[stacks.p]\n",
+    );
     s.write("p.df", PROG);
     s.run(&["apply", "p.df"]).success();
     s.run(&["stack", "handover", "p", "--to", "local(\"moved\")"])
@@ -293,6 +297,10 @@ fn a_handover_is_logged_where_the_state_goes() {
 #[test]
 fn a_rekey_is_logged_where_the_state_goes() {
     let s = Scratch::project("audit-rekey");
+    s.write(
+        "dform.toml",
+        "[project]\nedition = \"2026\"\n\n[stacks.k]\n",
+    );
     s.write(
         "k.df",
         "\n\

@@ -14,7 +14,7 @@ fn plan(name: &str, program: &str) -> Run {
         "[project]\nedition = \"2026\"\n\n[providers]\nk8s = \"k8s\"\n",
     );
     s.write("main.df", program);
-    s.run(&["dev", "--world", "w.json", "plan", "main"])
+    s.run(&["dev", "--world", "w.json", "plan", "main.df"])
 }
 
 /// A conflict under `spec`, whose `spec.selector.matchLabels` is required:

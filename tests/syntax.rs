@@ -50,8 +50,13 @@ fn libraries(files: &[PathBuf]) -> Vec<PathBuf> {
         };
         let library = match dform::project::manifest_root(f) {
             Some(root) => {
-                !dform::project::is_stack_file(&root, &std::fs::canonicalize(f).unwrap())
-                    && !rel(f).contains("providers/")
+                let manifest = root.join(dform::project::MANIFEST);
+                let text = std::fs::read_to_string(&manifest).unwrap();
+                let stacks = dform::project::Manifest::parse(&manifest, &text)
+                    .unwrap()
+                    .stacks;
+                let file = std::fs::canonicalize(f).unwrap();
+                !dform::project::is_stack(&root, &file, &stacks) && !rel(f).contains("providers/")
             }
             None => files.iter().any(named),
         };

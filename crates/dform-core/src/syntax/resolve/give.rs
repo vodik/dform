@@ -36,7 +36,7 @@ impl Lowerer<'_> {
                 .into_iter()
                 .find(|s| self.decls.scopes[*s].values.contains(&given));
             let Some(declared) = declared else {
-                if pun && self.resource(scope, &given).is_none() {
+                if pun && self.resource(scope, &given).is_none() && !clause_binds(n, &given) {
                     self.pun_of_nothing(&a, &key, module, input.as_ref());
                     failed = true;
                 }
@@ -187,4 +187,14 @@ impl Lowerer<'_> {
         };
         Some((shown, members))
     }
+}
+
+/// Whether the clause of `n` (`.. } where run("blue", image, v)`) names
+/// `name`: a variable it binds, which the block may pun.
+fn clause_binds(n: &SyntaxNode, name: &str) -> bool {
+    n.children()
+        .filter(|c| c.kind() == CLAUSE)
+        .flat_map(|c| c.descendants_with_tokens().collect::<Vec<_>>())
+        .filter_map(|e| e.into_token())
+        .any(|t| t.kind() == IDENT && t.text() == name)
 }

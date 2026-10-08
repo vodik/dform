@@ -110,7 +110,7 @@ fn ovh_renames_an_instance_without_resending_its_user_data() {
     s.write(
         "dform.toml",
         &format!(
-            "[project]\nedition = \"2026\"\n\n[providers]\novh = {{ path = \"{}\" }}\n{SECRETS}",
+            "[project]\nedition = \"2026\"\n\n[providers]\novh = {{ path = \"{}\" }}\n{SECRETS}\n[stacks.main]\n",
             common::exe("dform-provider-ovh")
         ),
     );

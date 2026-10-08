@@ -391,13 +391,13 @@ fn a_changed_host_key_is_an_error_until_forget_host() {
         r.stderr
     );
 
-    let r = run(&s, &["state", "forget-host", "10.9.9.9", "p"]).failure();
+    let r = run(&s, &["state", "forget-host", "10.9.9.9", "p.df"]).failure();
     assert!(
         r.stderr.contains("records no key for 10.9.9.9"),
         "{}",
         r.stderr
     );
-    run(&s, &["state", "forget-host", &host, "p"]).success();
+    run(&s, &["state", "forget-host", &host, "p.df"]).success();
     assert!(state(&s)["known_hosts"].get(&host).is_none());
     run(&s, &["apply", "p.df"]).success();
     assert_eq!(

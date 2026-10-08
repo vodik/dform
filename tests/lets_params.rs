@@ -398,12 +398,12 @@ fn the_formatter_round_trips() {
 fn hover_and_signature_help_on_a_call() {
     let s = Scratch::project("lets-params-lsp");
     s.write(
-        "main.df",
+        "stacks/main.df",
         "use fake\n#| A network by its two octets.\nlet cidr(a, b: int = 7) = \"10.${a}.${b}.0/24\"\n\
          resource net.vpc v { cidr = cidr(1, 2) }\n",
     );
     let root = std::fs::canonicalize(&s.dir).unwrap();
-    let file = root.join("main.df");
+    let file = root.join("stacks/main.df");
     let mut c = lsp_client::Client::start(&root, serde_json::json!({}));
     c.open(&file);
     let hover = c.at(

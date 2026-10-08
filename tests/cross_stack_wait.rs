@@ -83,9 +83,10 @@ fn apply_applies_the_deployment_it_waits_on_first() {
 }
 
 /// A deployment that has published, without the output the reader reads
-/// (applied before the output was added), is not waited on: the read finds
-/// no row, and the reader is not planned, saying so; a plan of the reader
-/// reads what the deployment's next apply publishes (R-200).
+/// (applied before the output was added), is not waited on: a plan of the
+/// reader reads what the deployment's next apply publishes (R-200). An
+/// output the stack's file no longer declares is an error at the read,
+/// naming its outputs (R-208): the file is at hand.
 #[test]
 fn a_published_deployment_without_the_output_is_no_wait() {
     let s = project("cross-wait-published");
@@ -109,11 +110,11 @@ fn a_published_deployment_without_the_output_is_no_wait() {
             "output other = edge.cidr\n",
         ),
     );
-    let r = s.run(&["plan", "apps"]).success();
-    assert!(!r.stdout.contains("waits on  stack"), "{}", r.stdout);
+    let r = s.run(&["plan", "apps"]).failure();
     assert!(
-        r.stdout.contains("  not planned\n    net.vpc rec  "),
+        r.stderr
+            .contains("stacks.platform has no output `ingress_ip`"),
         "{}",
-        r.stdout
+        r.stderr
     );
 }

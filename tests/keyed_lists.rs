@@ -30,7 +30,7 @@ fn project(name: &str, policy: &str) -> Scratch {
 
 fn plan(s: &Scratch) -> Run {
     // Leaf by leaf (R-124: below `-vv` a value one write made is one line).
-    s.run(&["dev", "--world", "w.json", "plan", "-vv", "main"])
+    s.run(&["dev", "--world", "w.json", "plan", "-vv", "main.df"])
 }
 
 fn has(r: &Run, lines: &[&str]) {
@@ -69,7 +69,7 @@ fn an_indexed_default_writes_every_element_and_yields_to_its_own() {
             "why",
             "--tree",
             "attr(k8s.deployment, \"web\", \"spec\", V)",
-            "main",
+            "main.df",
         ])
         .success();
     for l in [
@@ -159,7 +159,7 @@ fn a_same_rank_disagreement_names_the_element() {
         "set w.spec.template.spec.containers[\"api\"].image = \"other\" where w in k8s.deployment",
     );
     let r = s
-        .run(&["dev", "--world", "w.json", "query", "deny(M, C)", "main"])
+        .run(&["dev", "--world", "w.json", "query", "deny(M, C)", "main.df"])
         .success();
     assert!(
         r.stdout.contains(
@@ -228,7 +228,7 @@ fn a_quantity_in_an_unranked_set_is_read_by_its_attribute() {
          { name: \"x\", image: \"x:1\", resources: { limits: { cpu: 500m } } }\n] where on\n",
     );
     let r = s
-        .run(&["dev", "--world", "w.json", "plan", "main"])
+        .run(&["dev", "--world", "w.json", "plan", "main.df"])
         .success();
     assert!(
         r.stdout

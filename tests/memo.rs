@@ -83,14 +83,14 @@ fn a_memo_survives_a_replan_and_is_gone_after_a_rotation() {
         r.stdout
     );
 
-    let r = run(&s, &[], &["secrets", "rotate", "p", "other"]).failure();
+    let r = run(&s, &[], &["secrets", "rotate", "p.df", "other"]).failure();
     assert!(
         r.stderr
             .contains("secrets rotate other: p has no secret other (its keys: none)"),
         "{}",
         r.stderr
     );
-    let r = run(&s, &[], &["secrets", "rotate", "p", "app-pw"]).success();
+    let r = run(&s, &[], &["secrets", "rotate", "p.df", "app-pw"]).success();
     assert!(
         r.stdout.starts_with(
             "rotating app-pw of p (memo): generation 1 -> 2\n  forgot what memo.first keeps: \
@@ -206,7 +206,7 @@ fn a_secret_memo_is_kept_sealed_never_in_the_clear() {
 
     // Rotated, the next apply keeps the new master's candidate, which no
     // output of the runs before showed either.
-    let r = run(&s, &[], &["secrets", "rotate", "p", "db-pw"]).success();
+    let r = run(&s, &[], &["secrets", "rotate", "p.df", "db-pw"]).success();
     assert!(!r.stdout.contains(&pw), "{}", r.stdout);
     let r = run(&s, &second, &["plan", "--new-master", "p.df"]).success();
     assert!(r.summary().contains("1 update"), "{}", r.stdout);
