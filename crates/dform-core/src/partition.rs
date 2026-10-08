@@ -98,8 +98,8 @@ impl Addr {
     /// literal text, an argument that is not a literal any text;
     /// `scoped(S, N)` with its scope. `None` when the text does not fix
     /// it, or fixes nothing (`str.format("%s", N)`).
-    pub fn of(t: &Term, body: &[Lit]) -> Option<Addr> {
-        let globs = addr_globs(t, body, 4)?;
+    pub fn of(t: &Term, body: &[Lit], copies: &Copies) -> Option<Addr> {
+        let globs = addr_globs(t, &Text { body, copies }, 4)?;
         let any = |g: &Vec<String>| g.len() > 1 && g.iter().all(String::is_empty);
         (!globs.iter().any(any)).then_some(Addr(globs))
     }
@@ -123,7 +123,50 @@ impl Addr {
     }
 }
 
-fn addr_globs(t: &Term, body: &[Lit], depth: usize) -> Option<Vec<Vec<String>>> {
+/// The program text an address is read in: the rule's body, and the
+/// copies the program makes.
+struct Text<'a> {
+    body: &'a [Lit],
+    copies: &'a Copies,
+}
+
+/// The names of the copies each scope makes of each component (R-209),
+/// `instance_of(C, User, Name)` by `(C, User)`: a fact's name, the
+/// patterns a rule's text fixes; `None` when some rule's text fixes none.
+#[derive(Debug, Clone, Default)]
+pub struct Copies(BTreeMap<(String, String), Option<Vec<Vec<String>>>>);
+
+impl Copies {
+    fn of(rules: &[RuleStmt], facts: &[Atom]) -> Copies {
+        let none = Copies::default();
+        let mut out = Copies::default();
+        let heads = facts
+            .iter()
+            .map(|a| (a, &[][..]))
+            .chain(rules.iter().map(|r| (&r.head, r.body.as_slice())));
+        for (a, body) in heads {
+            let [c, user, name] = a.args.as_slice() else {
+                continue;
+            };
+            if a.pred != crate::modules::INSTANCE_OF {
+                continue;
+            }
+            let (Some(c), Some(user)) = (const_str(c), const_str(user)) else {
+                continue;
+            };
+            let globs = addr_globs(name, &Text { body, copies: &none }, 4);
+            let entry = out.0.entry((c, user)).or_insert_with(|| Some(Vec::new()));
+            match (entry.as_mut(), globs) {
+                (Some(all), Some(gs)) => all.extend(gs),
+                _ => *entry = None,
+            }
+        }
+        out
+    }
+}
+
+fn addr_globs(t: &Term, text: &Text, depth: usize) -> Option<Vec<Vec<String>>> {
+    let body = text.body;
     match t {
         Term::Val(Value::Str(s)) => Some(vec![vec![s.clone()]]),
         Term::Var(x) if depth > 0 => body
@@ -132,11 +175,12 @@ fn addr_globs(t: &Term, body: &[Lit], depth: usize) -> Option<Vec<Vec<String>>> 
                 Lit::Eq(Term::Var(y), u) | Lit::Eq(u, Term::Var(y))
                     if y == x && !matches!(u, Term::Var(z) if z == x) =>
                 {
-                    addr_globs(u, body, depth - 1)
+                    addr_globs(u, text, depth - 1)
                 }
                 _ => None,
             })
-            .or_else(|| copy_named(x, body)),
+            .or_else(|| copy_named(x, body))
+            .or_else(|| text.copy_of(x)),
         // A template: its literal text, each argument the text fixes
         // spliced in, any other a gap.
         Term::Func { name, args } if name == crate::ir::FORMAT => {
@@ -148,7 +192,7 @@ fn addr_globs(t: &Term, body: &[Lit], depth: usize) -> Option<Vec<Vec<String>>> 
                         Term::Val(v @ (Value::Str(_) | Value::Int(_))) => {
                             vec![vec![crate::functions::value_to_string(v)]]
                         }
-                        t => addr_globs(t, body, depth)
+                        t => addr_globs(t, text, depth)
                             .unwrap_or_else(|| vec![vec![String::new(), String::new()]]),
                     };
                     globs = globs
@@ -164,13 +208,13 @@ fn addr_globs(t: &Term, body: &[Lit], depth: usize) -> Option<Vec<Vec<String>>> 
         }
         // A header name's segment (R-112).
         Term::Func { name, args } if name == crate::ir::NAME_SEGMENT && args.len() == 1 => {
-            Some(segment_globs(addr_globs(&args[0], body, depth)?))
+            Some(segment_globs(addr_globs(&args[0], text, depth)?))
         }
         Term::Func { name, args } if name == crate::ir::SCOPED && args.len() == 2 => {
             let scope = args[0].as_str()?;
             let prefix = crate::ir::scoped(scope, "");
             let mut out = Vec::new();
-            for g in addr_globs(&args[1], body, depth)? {
+            for g in addr_globs(&args[1], text, depth)? {
                 // A name that is already an address is itself (R-65).
                 let scoped = g.iter().any(|p| crate::ir::is_scoped(p));
                 if !scoped {
@@ -185,6 +229,24 @@ fn addr_globs(t: &Term, body: &[Lit], depth: usize) -> Option<Vec<Vec<String>>> 
             Some(out)
         }
         _ => None,
+    }
+}
+
+impl Text<'_> {
+    /// The name of a copy `x` ranges over (R-209): `instance_of(C, User,
+    /// x)` with `C` and `User` constant is a copy of `C` that `User`
+    /// makes, one of [`Copies`]'s names.
+    fn copy_of(&self, x: &str) -> Option<Vec<Vec<String>>> {
+        self.body.iter().find_map(|l| match l {
+            Lit::Pos(a) if a.pred == crate::modules::INSTANCE_OF => match a.args.as_slice() {
+                [c, user, Term::Var(y)] if y == x => {
+                    let key = (const_str(c)?, const_str(user)?);
+                    self.copies.0.get(&key)?.clone().filter(|gs| !gs.is_empty())
+                }
+                _ => None,
+            },
+            _ => None,
+        })
     }
 }
 
@@ -468,6 +530,8 @@ pub struct Options {
     /// reading its own. [`compile`] splits a type when the graph by path
     /// has a negative cycle through a rule that reads its own type.
     pub split: BTreeSet<String>,
+    /// The copies the program makes, what a copy's scope can be.
+    pub copies: Copies,
 }
 
 #[derive(Debug, Clone)]
@@ -687,7 +751,7 @@ fn body_pattern(atom: &Atom) -> Node {
 /// with the scopes the text fixes when it is not constant (R-209): the
 /// copies a clause names in the module `k3s` are `k3s.agent-*::k`, apart
 /// from the module's own `k3s::k`.
-fn addressed(mut n: Node, atom: &Atom, body: &[Lit], split: &BTreeSet<String>) -> Node {
+fn addressed(mut n: Node, atom: &Atom, body: &[Lit], opts: &Options) -> Node {
     let Some(a) = atom.args.get(1) else {
         return n;
     };
@@ -695,10 +759,10 @@ fn addressed(mut n: Node, atom: &Atom, body: &[Lit], split: &BTreeSet<String>) -
         return n;
     }
     match n.typ.as_deref() {
-        Some(t) if split.contains(t) => n.addr = Addr::of(a, body),
+        Some(t) if opts.split.contains(t) => n.addr = Addr::of(a, body, &opts.copies),
         Some(t) if scoped_cell(t) && const_str(a).is_none() => {
             if let (Some(scope), Some(k)) = (
-                Addr::of(a, body),
+                Addr::of(a, body, &opts.copies),
                 n.path.as_deref().and_then(|p| p.strip_prefix("*::")),
             ) {
                 n.path = Some(format!("{}::{k}", scope.pattern()));
@@ -827,6 +891,7 @@ fn stratified(
     let mut opts = Options {
         externs: externs.clone(),
         split: BTreeSet::new(),
+        copies: Copies::of(rules, facts),
     };
     let rules = rules.to_vec();
     let facts = facts.to_vec();
@@ -1129,9 +1194,9 @@ fn is_resource_node(n: &Node) -> bool {
 /// variable the text does not fix, and a positive literal reads a resource
 /// of the same type at that variable (`arg(T, A, P, ..) :- want(T, A)`).
 /// The rule then derives at every address that literal reads.
-fn address_source(r: &RuleStmt, split: &BTreeSet<String>) -> Option<usize> {
-    let head = addressed(head_of(r), &r.head, &r.body, split);
-    let typ = head.typ.as_ref().filter(|t| split.contains(*t))?;
+fn address_source(r: &RuleStmt, opts: &Options) -> Option<usize> {
+    let head = addressed(head_of(r), &r.head, &r.body, opts);
+    let typ = head.typ.as_ref().filter(|t| opts.split.contains(*t))?;
     if !is_resource_node(&head) || head.addr.is_some() || is_aggregate_head(&r.head) {
         return None;
     }
@@ -1151,11 +1216,11 @@ fn address_source(r: &RuleStmt, split: &BTreeSet<String>) -> Option<usize> {
 }
 
 /// The pattern of the literal a rule takes its head's address from.
-fn source_pattern(r: &RuleStmt, at: usize, split: &BTreeSet<String>) -> Node {
+fn source_pattern(r: &RuleStmt, at: usize, opts: &Options) -> Node {
     let (Lit::Pos(a) | Lit::Not(a)) = &r.body[at] else {
         unreachable!("an address source is a positive literal")
     };
-    addressed(body_pattern(a), a, &r.body, split)
+    addressed(body_pattern(a), a, &r.body, opts)
 }
 
 /// `has r.PATH` of a resource's attribute, as the resolver marks it:
@@ -1532,7 +1597,7 @@ fn build_lowered(
     let mut b = Builder {
         sources: rules
             .iter()
-            .map(|r| address_source(r, &opts.split))
+            .map(|r| address_source(r, opts))
             .collect(),
         heads: vec![Vec::new(); rules.len()],
         read: vec![Vec::new(); rules.len()],
@@ -1611,14 +1676,13 @@ impl Builder<'_> {
 
     /// The definition nodes of the facts.
     fn facts(&mut self, fact_atoms: &[Atom]) {
-        let split = &self.opts.split;
         for a in fact_atoms {
             if let Some((arg, _)) = contrib_node(a) {
-                let arg = addressed(arg, a, &[], split);
+                let arg = addressed(arg, a, &[], self.opts);
                 self.defs.insert(aggregate_of(&arg));
                 self.defs.insert(arg);
             } else {
-                self.defs.insert(addressed(head_node(a), a, &[], split));
+                self.defs.insert(addressed(head_node(a), a, &[], self.opts));
             }
         }
     }
@@ -1632,7 +1696,7 @@ impl Builder<'_> {
         let split = &self.opts.split;
         for (i, r) in self.rules.iter().enumerate() {
             if self.sources[i].is_none() {
-                let h = addressed(head_of(r), &r.head, &r.body, split);
+                let h = addressed(head_of(r), &r.head, &r.body, self.opts);
                 define(&mut self.defs, &h);
                 self.heads[i].push(h);
             }
@@ -1646,7 +1710,7 @@ impl Builder<'_> {
             }
             for (i, r) in self.rules.iter().enumerate() {
                 let Some(at) = self.sources[i] else { continue };
-                let pat = source_pattern(r, at, split);
+                let pat = source_pattern(r, at, self.opts);
                 let head = head_of(r);
                 let found: BTreeSet<Option<Addr>> =
                     unifying(&self.defs, &pat).map(|d| d.addr.clone()).collect();
@@ -1737,7 +1801,7 @@ impl Builder<'_> {
     /// Rule edges: from every definition node a body's literal unifies
     /// with, to every head of its rule.
     fn rule_edges(&mut self) {
-        let (opts, split) = (self.opts, &self.opts.split);
+        let opts = self.opts;
         for (i, r) in self.rules.iter().enumerate() {
             let agg_head = is_aggregate_head(&r.head);
             for (k, lit) in r.body.iter().enumerate() {
@@ -1749,7 +1813,7 @@ impl Builder<'_> {
                 if is_builtin_or_edb(&atom.pred) {
                     continue;
                 }
-                let pat = addressed(body_pattern(atom), atom, &r.body, split);
+                let pat = addressed(body_pattern(atom), atom, &r.body, opts);
                 let reads_aggregate = pat.pred == "attr" || pat.pred == transform::ATTR_BASE;
                 let is_extern = opts.externs.contains(&atom.pred);
                 let negative = negated || agg_head || reads_aggregate || is_extern;

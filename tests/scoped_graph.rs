@@ -185,3 +185,37 @@ resource node "agent-${i}" { hostname = n } where i in 0..agents, output(_, "nam
         r.stderr
     );
 }
+
+/// A scope that reads its copies' output `ip` (`node[_].ip`) and has an
+/// output `ip` of its own: the copies a variable ranges over are the
+/// copies the scope makes, by name or by a clause, never the scope
+/// itself. In the stack and in a module.
+#[test]
+fn a_scopes_output_read_from_its_copies_outputs_is_no_cycle() {
+    let s = Scratch::project("scoped-copies");
+    let node = "component node {\n  input n: string\n  output ip: string = \"ip-${n}\"\n}\n";
+    s.write(
+        "k3s.df",
+        &format!(
+            "{node}resource node \"agent-${{i}}\" {{ n = \"${{i}}\" }} where i in 0..2\n\
+             let ips = collect_list(x) where x = node[_].ip\n\
+             output ip: string = list.join(ips, \",\")\n"
+        ),
+    );
+    s.write(
+        "main.df",
+        &format!(
+            "use fake\nuse k3s\n{node}resource node a {{ n = \"a\" }}\n\
+             let ips = collect_list(x) where x = node[_].ip\n\
+             output ip: string = list.join(ips, \",\")\n\
+             resource net.vpc v {{ cidr = \"${{list.join(ips, \",\")}} ${{k3s.ip}}\" }}\n"
+        ),
+    );
+    let r = s.run(&["plan", "--why=none", "main.df"]).success();
+    assert_eq!(
+        values(&r.stdout, "cidr"),
+        ["\"ip-a ip-0,ip-1\""],
+        "{}",
+        r.stdout
+    );
+}
