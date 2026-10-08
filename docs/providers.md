@@ -202,6 +202,7 @@ on both; tests/host_wasm.rs keeps them from drifting.
 | provider | written with | hosted | page |
 |---|---|---|---|
 | `postgres` (`crates/dform-provider-postgres`) | the SDK's typed layer | native only: it dials the server itself | docs/providers/postgres.md |
+| `vault` (`crates/dform-provider-vault`) | the SDK's typed layer, a scheme and no resource | native: every request through the host's HTTP client | docs/providers/vault.md |
 
 ## Grants and credentials
 
@@ -224,12 +225,18 @@ matches it to [providers.k8s] reads in dform.toml`. A project's own file
 is never a provider's to read. A provider that reads a scheme of its own
 (`gs://`) declares it, `schemes = ["gs"]` in its manifest (the gRPC
 `Manifest`'s `schemes`; a `Handler`'s `schemes` and `read_location` in the
-SDK), and serves `io` for it (the gRPC `Io` service, and `Files`, its name
+SDK, or a typed provider's `Provider::SCHEMES` and `Provider::read`), and serves `io` for it (the gRPC `Io` service, and `Files`, its name
 before R-155; the WIT world
 `scheme-provider` exports it): dform routes a read of the scheme to it, the
 program's (`yaml.decode(io.read("gs://.."))`) and another provider's alike, through the
 host, never one provider to another; dform's own schemes are never a
-provider's.
+provider's. A source that keeps versions (a secret manager) answers the
+version with the bytes (`io.read-versioned`, gRPC `Io.ReadVersioned`, the
+SDK's `Document { bytes, version }`); dform records it in the plan file
+and refuses `apply PLAN` once it moved (R-172). The Vault provider is the
+reference (`vault://`); a 1Password provider would declare `op` and read
+`op://VAULT/ITEM/FIELD` over 1Password Connect's HTTP API, a fnox one
+`fnox`, running fnox itself if its author chooses: dform never does.
 
 The host's interfaces need no grant. A component that imports
 `wasi:sockets`, `wasi:http` or `wasi:filesystem` is refused unless
@@ -284,5 +291,9 @@ host  wasm: credentials: kubeconfig:prod
   converge, a provider's apply.
 - A wasm component cannot declare a scheme yet: the wasm host does not
   call a component's `io` export (a native provider's `Io` is called).
+- A native provider's own read through the host (`Host.Read`) answers no
+  version: the `Host` service has no `ReadVersioned` yet (a component's
+  `io.read-versioned` import has it). dform's reads of a declared scheme
+  do.
 - A component's calls have an epoch deadline of an hour, a backstop
   under the provider's `timeout`, which answers the engine first.
