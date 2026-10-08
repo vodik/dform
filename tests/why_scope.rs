@@ -1,6 +1,6 @@
 //! `why NAME` read in a scope (R-184): a copy's own names, then those of
-//! the module instance it was taken from, then the stack's (R-186); a
-//! module's; the stack's; and a name nothing in the scope declares, with
+//! the module instance it was taken from (R-186); a module's own, never
+//! its user's (R-205); the stack's; and a name nothing in the scope declares, with
 //! what reads it. On the mock, a module with a Secret and a component
 //! whose copy the stack makes.
 
@@ -70,8 +70,8 @@ fn a_modules_resource_read_in_a_copy_is_the_modules() {
 }
 
 /// A let, an input and a resource of the copy are its own, said as `why`
-/// says them; a key is the stack's, read outward from the copy and from
-/// the module, with its site.
+/// says them; the stack's key and resource are no name in the module or
+/// its copy (R-205).
 #[test]
 fn a_name_in_a_scope_is_what_the_scope_reads() {
     let s = project();
@@ -86,26 +86,18 @@ fn a_name_in_a_scope_is_what_the_scope_reads() {
         "{}",
         why(&s, "volume[\"forgejo_backup\"].name")
     );
-    let env = why(&s, "forgejo_backup.env");
-    assert!(
-        env.starts_with(
-            "env in volume forgejo_backup: the stack's key env  stacks/apps.df:1\n\
-             key env = \"lab\""
-        ),
-        "{env}"
+    // A module and its components read nothing of the stack's (R-205).
+    assert_eq!(
+        why(&s, "forgejo_backup.env"),
+        "env in volume forgejo_backup: no such name in this copy\n"
     );
-    let env = why(&s, "backups.env");
-    assert!(
-        env.starts_with("env in module backups: the stack's key env  stacks/apps.df:1\n"),
-        "{env}"
+    assert_eq!(
+        why(&s, "backups.env"),
+        "env in module backups: no such name in this module\n"
     );
-    let apps = why(&s, "forgejo_backup.apps.metadata.name");
-    assert!(
-        apps.starts_with(
-            "apps in volume forgejo_backup: the stack's k8s.namespace apps  \
-             stacks/apps.df:3\nk8s.namespace apps.metadata.name = \"apps-lab\""
-        ),
-        "{apps}"
+    assert_eq!(
+        why(&s, "forgejo_backup.apps.metadata.name"),
+        "apps in volume forgejo_backup: no such name in this copy\n"
     );
 }
 
@@ -188,5 +180,42 @@ fn hover_on_a_shadowed_name_names_both() {
         ),
         "{text}"
     );
+    c.shutdown();
+}
+
+/// A module's input given by the `use` (R-205): the hover on its read in
+/// the module's body says its value and where the user gives it, as
+/// `why` follows it into the `use`.
+#[test]
+fn hover_on_a_modules_input_follows_it_into_the_use() {
+    let s = project();
+    s.write(
+        "backups.df",
+        &format!("input env: enum(\"lab\", \"prod\")\n{BACKUPS}let label = \"b-${{env}}\"\n"),
+    );
+    s.write(
+        "stacks/apps.df",
+        &APPS.replace(
+            "use backups { namespace = apps }",
+            "use backups { namespace = apps, env }",
+        ),
+    );
+    assert!(
+        why(&s, "backups.env")
+            .starts_with("input backups.env = \"lab\"\n  = env  stacks/apps.df:4\n"),
+        "{}",
+        why(&s, "backups.env")
+    );
+    let root = std::fs::canonicalize(&s.dir).unwrap();
+    let file = root.join("backups.df");
+    let mut c = lsp_client::Client::start(&root, serde_json::json!({}));
+    c.open(&file);
+    let hover = c.at(
+        "textDocument/hover",
+        &file,
+        lsp_client::find(&file, "env}\"", 0),
+    );
+    let text = hover["contents"]["value"].as_str().unwrap_or_default();
+    assert!(text.contains("stacks/apps.df:4"), "{text}");
     c.shutdown();
 }

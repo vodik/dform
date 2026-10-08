@@ -1,12 +1,10 @@
-# A module of resources. `iam_need` is a relation it takes: the stack
-# gives its rows in the `use`.
+#| The permissions the stack's components need: rows its `use` gives.
 input iam_need
 decl iam_need(role: string, action: string, resource: string)
 
-#| The app's role, and one policy of every permission the stack's other
-#| components need. The role holds its policies: a relationship whose
-#| state lives on one side is that side's attribute, a set any module may
-#| add to (`set r.policies = [p] where ..`), not a resource of its own.
+#| The app's role, and one policy of every permission. The role holds its
+#| policies: a relationship whose state lives on one side is that side's
+#| attribute, a set any module may add to (`set r.policies = [p] where ..`).
 resource iam.role app_role {
   name = "app"
   assume = { principals: ["k8s.serviceaccount.app"] }

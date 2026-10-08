@@ -39,9 +39,7 @@ use fake
 #| The environments: an alias, the enum wherever it is written.
 type environment = enum("dev", "staging", "prod")
 
-# The modules every stack uses: the files baseline.df and stdlib_net.df,
-# by their paths from the project root. Their rules and denies run over
-# what this stack sees.
+# Modules every stack uses, given what they read: baseline.df, stdlib_net.df.
 use baseline { env }
 use stdlib_net {
   vpc_peer(a, b) where vpc_peer(a, b)
@@ -63,9 +61,7 @@ use database {
   subnet(s) where main.private_subnet(s)
 } where env != "dev"
 
-# So are the cluster's, `kubernetes.private_api` and its node pool's
-# bounds; dev has neither, which the `where` says and the `set`s need
-# not.
+# So are the cluster's; dev has neither, which the `where` says.
 use kubernetes {
   subnet(s) where main.private_subnet(s)
 } where env != "dev"

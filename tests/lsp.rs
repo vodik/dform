@@ -1957,7 +1957,7 @@ fn hover_gives_a_reads_value_and_its_provenance() {
             .unwrap_or_default()
             .to_string()
     };
-    let text = hover(&stack, "= cidrs.main }", 8);
+    let text = hover(&stack, "= cidrs.main, env }", 8);
     for want in [
         "**cidrs.main** = `\"10.50.0.0/16\"`",
         // In the formatter's layout, as plan, why and query print it.

@@ -303,6 +303,7 @@ fn dform_df_peers_each_edge_with_its_own_pair() {
     let third = r#"
 resource network.vpc third {
   vpc_net = "10.70.0.0/16"
+  env
 }
 vpc_peer_inst("main", "third")
 "#;
@@ -329,14 +330,17 @@ vpc_peer_inst("main", "third")
 /// A project of modules and components by path (R-65): `use config` reads
 /// its values and relations as `config.x`; `use modules.lan` brings its
 /// component item `vpc` and its alias `cidr`, read as `lan.vpc` and
-/// `lan.cidr`; a module with resources (`postgres.df`, its input has a
-/// default) is stamped once by `use`, under its name.
+/// `lan.cidr`, and lan.df's own `use config` is what its component reads
+/// (R-205: never its user's); a module with resources (`postgres.df`, its
+/// input has a default) is stamped once by `use`, under its name.
 fn modules_project() -> Scratch {
     let s = Scratch::project("lang-modules-paths");
     s.write("config.df", "\n\nlet region = \"us-1\"\ntier(\"gold\")\n");
     s.write(
         "modules/lan.df",
         r#"
+
+use config
 
 type cidr = inet
 
@@ -435,21 +439,24 @@ fn a_module_value_is_read_through_its_use() {
     );
 }
 
-/// A name a module does not define reads outward, its user's: the same
-/// module used by the stack and by a copy is two activations, each reading
-/// its own user's `name`.
+/// A module reads only what it declares (R-205): `naming` takes `name` as
+/// an input relation, and the same module used by the stack and by a copy
+/// is two activations, each given its own user's rows.
 #[test]
-fn a_used_module_reads_its_users_names() {
+fn a_used_module_takes_its_users_rows_as_an_input() {
     let s = Scratch::new("lang-modules-outward");
-    s.write("naming.df", "\n\nlabel(x) where name(x)\n");
+    s.write(
+        "naming.df",
+        "\n\ninput name\ndecl name(n: string)\nlabel(x) where name(x)\n",
+    );
     s.write(
         "p.df",
         r#"
-use naming
+use naming { name(x) where name(x) }
 name("stack")
 component c {
   name("inner")
-  use naming
+  use naming { name(x) where name(x) }
   output labels = [ x | naming.label(x) ]
 }
 resource c one {}
