@@ -23,22 +23,19 @@ fn decoded(s: &str) -> String {
 
 /// `?version=3`'s version.
 fn version_in(query: &str) -> Result<Option<u64>, String> {
+    let mut version = None;
     for pair in query.split('&').filter(|p| !p.is_empty()) {
-        match pair.split_once('=') {
-            Some(("version", v)) => {
-                return v
-                    .parse::<u64>()
-                    .map(Some)
-                    .map_err(|_| format!("version {v:?} is no number: write `?version=3`"));
-            }
-            _ => {
-                return Err(format!(
-                    "Vault reads no query {pair:?}: `?version=N` is the one it takes"
-                ));
-            }
-        }
+        let Some(("version", v)) = pair.split_once('=') else {
+            return Err(format!(
+                "Vault reads no query {pair:?}: `?version=N` is the one it takes"
+            ));
+        };
+        version = Some(
+            v.parse::<u64>()
+                .map_err(|_| format!("version {v:?} is no number: write `?version=3`"))?,
+        );
     }
-    Ok(None)
+    Ok(version)
 }
 
 impl Location {
@@ -65,10 +62,9 @@ impl Location {
         let (mount, path) = rest.split_once('/').unwrap_or((rest, ""));
         let path = path.trim_matches('/');
         if mount.is_empty() || path.is_empty() {
-            return Err(format!(
-                "no secret named: write `vault://MOUNT/PATH#KEY` \
+            return Err("no secret named: write `vault://MOUNT/PATH#KEY` \
                  (`vault://kv/synapse/signing#key`)"
-            ));
+                .to_string());
         }
         Ok(Location {
             mount: decoded(mount),

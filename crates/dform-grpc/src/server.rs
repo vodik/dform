@@ -231,6 +231,7 @@ type ReadStream = tonic::codegen::tokio_stream::Iter<
 impl Io {
     /// The read of `location`; its version in the first chunk when
     /// `versioned` (`ReadVersioned`), else none (`Read`).
+    #[allow(clippy::result_large_err)] // tonic's own error type
     async fn read_location(
         &self,
         location: String,
