@@ -1447,26 +1447,18 @@ fn module_stmts(scope: &str, iface: &Interface, body: Vec<Stmt>) -> Vec<Stmt> {
 }
 
 /// `output p` of a copy: its rows `__rows(p, [X1, ..]) :- p(X1, ..)`, the
-/// copy's scope put in front by scoping; a column of the copy's resources
-/// is their addresses, `scoped("", X)`, as an `addr` output's is.
+/// copy's scope put in front by scoping. A column of the copy's resources
+/// holds the references themselves (R-204), whose addresses scoping made
+/// the copy's: the reader has the resource, not its address.
 fn rows_of(o: &OutputDecl) -> Stmt {
-    let refs = o.relation.clone().unwrap_or_default();
-    let vars: Vec<Term> = (0..refs.len())
-        .map(|i| Term::Var(format!("X{i}")))
-        .collect();
-    let row = vars
-        .iter()
-        .zip(&refs)
-        .map(|(v, r)| match r {
-            true => Term::Func {
-                name: crate::ir::SCOPED.into(),
-                args: vec![str_term(""), v.clone()],
-            },
-            false => v.clone(),
-        })
-        .collect();
+    let arity = o.relation.as_ref().map_or(0, Vec::len);
+    let vars: Vec<Term> = (0..arity).map(|i| Term::Var(format!("X{i}"))).collect();
     Stmt::Rule(RuleStmt {
-        head: atom(ROWS, vec![str_term(&o.name), Term::List(row)], o.span),
+        head: atom(
+            ROWS,
+            vec![str_term(&o.name), Term::List(vars.clone())],
+            o.span,
+        ),
         body: vec![Lit::Pos(atom(&o.name, vars, o.span))],
     })
 }

@@ -78,17 +78,54 @@ impl Lowerer<'_> {
     }
 
     /// The reference columns of the relation an atom's callee `call`
-    /// names in `scope`, with `arity` arguments.
+    /// names in `rc`'s scope, with `arity` arguments: a program
+    /// relation's, or the one a copy exports.
     fn call_ref_columns(
         &self,
-        scope: usize,
+        rc: &Rc,
         call: &SyntaxNode,
         arity: usize,
     ) -> BTreeMap<usize, RefColumn> {
+        if let Some(cols) = self.exported_ref_columns(rc, call, arity) {
+            return cols;
+        }
         match self.callee(call) {
-            Some(pred) => self.ref_columns(scope, &self.written_relation(scope, pred), arity),
+            Some(pred) => self.ref_columns(rc.scope, &self.written_relation(rc.scope, pred), arity),
             None => BTreeMap::new(),
         }
+    }
+
+    /// The reference columns of the relation a copy exports that the atom
+    /// `call` reads, `blue.p(..)` or `c[t].p(..)`: the component's own
+    /// `p`'s, so its references cross the copy's boundary as references.
+    /// `None` for any other atom.
+    pub(super) fn exported_ref_columns(
+        &self,
+        rc: &Rc,
+        call: &SyntaxNode,
+        arity: usize,
+    ) -> Option<BTreeMap<usize, RefColumn>> {
+        let c = call.children().find_map(|c| Chain::of(&c))?;
+        let Some(Op::Field(p)) = c.ops.last() else {
+            return None;
+        };
+        if rc.vars.contains_key(&c.head) {
+            return None;
+        }
+        let path = match c.ops.as_slice() {
+            [_] => self.instance_in(rc.scope, &c.head)?.1,
+            [Op::Index(..), _] => self.component_in(rc.scope, &c.head)?,
+            _ => return None,
+        };
+        let scope = self.decls.modules.get(&path)?.scope;
+        let key = self.relation_key(scope, p)?;
+        Some(
+            self.decls
+                .refs
+                .get(&(key, arity))
+                .cloned()
+                .unwrap_or_default(),
+        )
     }
 
     /// The reference columns of the relation `pred` of arity `arity` in
@@ -99,10 +136,60 @@ impl Lowerer<'_> {
         pred: &str,
         arity: usize,
     ) -> BTreeMap<usize, RefColumn> {
+        // A row a block gives a module's relation writes the module's.
+        if let Some(m) = self.given
+            && self.decls.scopes[m].relation_inputs.contains(pred)
+        {
+            return self
+                .decls
+                .refs
+                .get(&((m, pred.to_string()), arity))
+                .cloned()
+                .unwrap_or_default();
+        }
         self.relation_key(scope, pred)
             .and_then(|k| self.decls.refs.get(&(k, arity)))
             .cloned()
             .unwrap_or_default()
+    }
+
+    /// Which columns of the relation `name` that `output name` in `scope`
+    /// exports hold references (R-204). A copy's carry them across its
+    /// boundary as references; a stack's would publish them to another
+    /// deployment, which has no such resource to read through or write:
+    /// the error at the output, naming the column.
+    pub(super) fn published_refs(
+        &mut self,
+        scope: usize,
+        name: &str,
+        arity: usize,
+        span: Span,
+    ) -> L<Vec<bool>> {
+        let cols = self.ref_columns(scope, name, arity);
+        if self.decl_scope(scope) == PROGRAM
+            && let Some((i, col)) = cols.first_key_value()
+        {
+            let column = match &col.name {
+                Some(n) => format!("column `{n}`"),
+                None => format!("column {}", i + 1),
+            };
+            let d = Diagnostic::error(
+                span,
+                format!(
+                    "`output {name}` publishes {name}'s {column}, {}: a reference cannot leave \
+                     a deployment",
+                    col.shown()
+                ),
+            )
+            .with_help(format!(
+                "publish what a reader needs of `{r}` as a value, such as `{r}.id`, in a \
+                 relation of values",
+                r = col.name.as_deref().unwrap_or("r"),
+            ));
+            self.diags.push(d);
+            return Err(Skip);
+        }
+        Ok((0..arity).map(|i| cols.contains_key(&i)).collect())
     }
 
     /// The type a variable a reference column binds takes: the column's
@@ -114,9 +201,14 @@ impl Lowerer<'_> {
         }
     }
 
-    /// Every program relation's reference columns, to a fixpoint over the
-    /// rules `collect` found.
+    /// Every program relation's reference columns: those its `decl` types
+    /// by a resource type, then to a fixpoint over the rules `collect`
+    /// found.
     pub(super) fn find_ref_columns(&mut self) {
+        for (rel, i, col) in self.decl_refs() {
+            let cols = self.decls.refs.entry(rel).or_default();
+            cols.entry(i).or_default().merge(col);
+        }
         let rules = self.decls.rules.clone();
         loop {
             let mut changed = false;
@@ -132,6 +224,41 @@ impl Lowerer<'_> {
         }
     }
 
+    /// The columns each `decl` types by a resource type, `decl subnet(s:
+    /// net.subnet)` or `ref(T)`: a relation a module takes from its user,
+    /// whose rows no rule of its own writes, holds references as one its
+    /// rules fill does.
+    fn decl_refs(&self) -> Vec<((RelKey, usize), usize, RefColumn)> {
+        let mut out = Vec::new();
+        for (scope, sc) in self.decls.scopes.iter().enumerate() {
+            for (pred, decl) in &sc.decl_nodes {
+                let binds: Vec<SyntaxNode> =
+                    decl.children().filter(|c| c.kind() == BIND_ARG).collect();
+                for (i, b) in binds.iter().enumerate() {
+                    let Some(t) = node(b, TYPE_EXPR) else {
+                        continue;
+                    };
+                    let types: BTreeSet<String> = match self.resource_type(&t) {
+                        Some(typ) => BTreeSet::from([typ]),
+                        None if dotted_text(&t, 0) == "ref" => t
+                            .descendants()
+                            .filter(|x| x.kind() == TYPE_EXPR)
+                            .filter_map(|x| self.resource_type(&x))
+                            .collect(),
+                        None => continue,
+                    };
+                    let col = RefColumn {
+                        any: types.is_empty(),
+                        types,
+                        name: Some(word_text(b, 0)),
+                    };
+                    out.push((((scope, pred.clone()), binds.len()), i, col));
+                }
+            }
+        }
+        out
+    }
+
     /// The reference columns the head of the rule or fact `n` in `scope`
     /// writes: each argument that is a variable the statement types as a
     /// resource, or a resource's name. By relation and arity, and index.
@@ -145,13 +272,6 @@ impl Lowerer<'_> {
         else {
             return Vec::new();
         };
-        // A relation a copy exports or its user gives crosses the module's
-        // boundary, where `modules` scopes its rows as addresses: it holds
-        // them as it did.
-        let boundary = &self.decls.scopes[key.0];
-        if boundary.relation_outputs.contains(&key.1) || boundary.relation_inputs.contains(&key.1) {
-            return Vec::new();
-        }
         let args: Vec<SyntaxNode> = node(&head, ARG_LIST)
             .map(|l| terms(&l).collect())
             .unwrap_or_default();
@@ -203,7 +323,7 @@ impl Lowerer<'_> {
             let args: Vec<SyntaxNode> = node(&call, ARG_LIST)
                 .map(|l| terms(&l).collect())
                 .unwrap_or_default();
-            for (i, col) in self.call_ref_columns(scope, &call, args.len()) {
+            for (i, col) in self.call_ref_columns(rc, &call, args.len()) {
                 let Some(c) = args.get(i).and_then(Chain::of).filter(Chain::is_bare) else {
                     continue;
                 };
@@ -215,7 +335,8 @@ impl Lowerer<'_> {
                     continue;
                 }
                 let typ = Self::ref_column_type(rc, &col);
-                rc.types.insert(c.head, typ);
+                rc.types.insert(c.head.clone(), typ);
+                rc.row_refs.insert(c.head);
             }
         }
     }
@@ -242,13 +363,27 @@ impl Lowerer<'_> {
     ) -> L<Vec<Term>> {
         let list: Vec<SyntaxNode> = list.map(|l| terms(l).collect()).unwrap_or_default();
         let cols = self.ref_columns(rc.scope, pred, list.len());
+        self.ref_args_by(rc, pred, &cols, &list, pos, pre)
+    }
+
+    /// The arguments `list` of an atom of `pred` whose reference columns
+    /// are `cols`, lowered as [`Self::ref_args`] does.
+    pub(super) fn ref_args_by(
+        &mut self,
+        rc: &mut Rc,
+        pred: &str,
+        cols: &BTreeMap<usize, RefColumn>,
+        list: &[SyntaxNode],
+        pos: Pos,
+        pre: &mut Vec<Lit>,
+    ) -> L<Vec<Term>> {
         let mut args = Vec::new();
         for (i, t) in list.iter().enumerate() {
             args.push(match cols.get(&i) {
                 Some(col) if t.kind() == LITERAL => {
                     return self.literal_in_ref_column(pred, i, col, t);
                 }
-                Some(col) if Self::typed(rc, t) => {
+                Some(col) if Self::typed(rc, t) || self.names_resource(rc, t) => {
                     let r = self.ref_term(rc, t, pos, pre)?;
                     if pos == Pos::Content {
                         Self::row_types(rc, t, col, pre);

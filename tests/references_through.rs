@@ -266,8 +266,6 @@ fn a_set_through_any_resource_reads_a_quantity_at_its_edge() {
 /// boundary: `blue.subnet(s, _)` has `s` as the resource, so `s.zone`
 /// reads it with no `s in net.subnet` to type it again.
 #[test]
-#[ignore = "needs the reader's side in syntax/resolve.rs (exported_relation, block_rows), \
-            held by R-186; see the hand-back of fanout/after-185"]
 fn an_exported_relation_carries_references() {
     let s = scratch(
         "refs-through-export",

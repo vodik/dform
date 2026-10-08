@@ -906,6 +906,10 @@ struct Rc {
     /// Source variable -> the resource list its `in` ranges over, `(T, A,
     /// path)`: `set c.p` writes that element (R-69).
     elems: BTreeMap<String, (Term, Term, String)>,
+    /// Source variables a reference column types and no `in` does
+    /// (R-204): the resource the row holds, its address its own, never a
+    /// copy's (`modules::ABSOLUTE`).
+    row_refs: BTreeSet<String>,
 }
 
 /// An error already recorded in `diags`.
@@ -954,6 +958,10 @@ pub struct Lowerer<'u> {
     /// What picks among the resources a bare name shares, in the value
     /// being lowered (R-74).
     want: Want,
+    /// The module whose relations the `use` or `instance` block being
+    /// lowered gives rows of (R-204): a row's reference columns are the
+    /// module's.
+    given: Option<usize>,
 }
 
 /// What a value's position says of the resource a bare name two types
@@ -1008,6 +1016,7 @@ impl<'u> Lowerer<'u> {
             after: Vec::new(),
             read_columns: BTreeMap::new(),
             want: Want::Nothing,
+            given: None,
         };
         l.decls.deployed = deployed.to_vec();
         l.decls.project = units.iter().filter(|u| u.project).map(|u| u.file).collect();
@@ -2414,6 +2423,7 @@ impl<'u> Lowerer<'u> {
             vars: outer.vars.clone(),
             types: outer.types.clone(),
             instances: outer.instances.clone(),
+            row_refs: outer.row_refs.clone(),
             outer: outer.vars.values().cloned().collect(),
             ..Rc::default()
         };
@@ -3573,20 +3583,9 @@ impl<'u> Lowerer<'u> {
                 .collect();
             match arities.iter().collect::<Vec<_>>().as_slice() {
                 [n] => {
-                    // A column the `decl` types by a resource type holds
-                    // the copy's resource.
-                    let refs = match self.relation_decl(scope, &name) {
-                        Some(d) => d
-                            .children()
-                            .filter(|c| c.kind() == BIND_ARG)
-                            .map(|b| {
-                                node(&b, TYPE_EXPR).is_some_and(|t| {
-                                    self.resource_type(&t).is_some() || dotted_text(&t, 0) == "ref"
-                                })
-                            })
-                            .collect(),
-                        None => vec![false; **n],
-                    };
+                    // A column of references holds the copy's resources,
+                    // and never leaves a deployment (R-204).
+                    let refs = self.published_refs(scope, &name, **n, span)?;
                     return Ok(vec![Stmt::Output(OutputDecl {
                         name,
                         ty: None,
@@ -4312,7 +4311,14 @@ impl<'u> Lowerer<'u> {
                     let body = self.opt_body(&mut rc, &n)?;
                     self.table(&mut rc, &pred, cols, &n, body, span)
                 })(),
-                _ => self.rule(&n, scope, outer),
+                // A row's references are the user's resources, the
+                // module's column typed as its `decl` says.
+                _ => {
+                    self.given = Some(inner);
+                    let r = self.rule(&n, scope, outer);
+                    self.given = None;
+                    r
+                }
             };
             match r {
                 Ok(stmts) => out.extend(stmts),
@@ -6259,7 +6265,16 @@ impl<'u> Lowerer<'u> {
         let Some(Res::Val(inst)) = self.scope_path(rc, &prefix, pre, span)? else {
             return Ok(None);
         };
-        let cols = self.args(rc, n, pos, pre)?;
+        // A column the component's relation holds references in is the
+        // reference here too (R-204): `s` in `blue.subnet(s)` is the
+        // subnet, its address what `s in net.subnet` reads.
+        let list: Vec<SyntaxNode> = node(n, ARG_LIST)
+            .map(|l| terms(&l).collect())
+            .unwrap_or_default();
+        let cols = match self.exported_ref_columns(rc, n, list.len()) {
+            Some(refs) if !refs.is_empty() => self.ref_args_by(rc, &p, &refs, &list, pos, pre)?,
+            _ => self.args(rc, n, pos, pre)?,
+        };
         Ok(Some(atom_at(
             crate::modules::ROWS,
             vec![inst, str_term(&p), Term::List(cols)],
@@ -7200,11 +7215,11 @@ impl<'u> Lowerer<'u> {
             }
             let v = self.var_named(rc, h, span);
             let path = self.segs(rc, &c.ops, pre)?;
-            return Ok(Res::Ref {
-                typ: t,
-                addr: var(&v),
-                path,
-            });
+            let addr = match rc.row_refs.contains(h) {
+                true => func(crate::modules::ABSOLUTE, vec![var(&v)]),
+                false => var(&v),
+            };
+            return Ok(Res::Ref { typ: t, addr, path });
         }
         // A name a resource shares, read as the other thing's (R-76); in a
         // module's or a component's body, the body's own (R-101).
@@ -8610,6 +8625,13 @@ fn bound_vars(body: &[Lit]) -> BTreeSet<String> {
             Term::Var(v) => {
                 out.insert(v.clone());
             }
+            // A relation's column takes a reference apart (R-42), in a
+            // row of a copy's relation too (`__rows(.., [ref(T, A, "")])`).
+            Term::Func { name, args }
+                if name == crate::ir::REF || name == crate::modules::ABSOLUTE =>
+            {
+                args.iter().for_each(|x| pattern(x, out))
+            }
             Term::List(xs) => xs.iter().for_each(|x| pattern(x, out)),
             Term::Obj(m) => m.values().for_each(|x| pattern(x, out)),
             Term::ListComp { body, .. } => out.extend(bound_vars(body)),
@@ -8632,14 +8654,6 @@ fn bound_vars(body: &[Lit]) -> BTreeSet<String> {
         match l {
             Lit::Pos(a) => {
                 a.args.iter().for_each(|t| pattern(t, &mut out));
-                // A relation's column takes a reference apart (R-42).
-                for t in &a.args {
-                    if let Term::Func { name, args } = t
-                        && name == crate::ir::REF
-                    {
-                        args.iter().for_each(|t| pattern(t, &mut out));
-                    }
-                }
                 if let Some(r) = &a.record {
                     r.values().for_each(|t| pattern(t, &mut out));
                 }
