@@ -9,14 +9,16 @@ use common::Scratch;
 use std::io::BufRead;
 
 const WORKLOAD: &str = include_str!("../examples/bootstrap/stacks/workload.df");
-const EVENTS: usize = 200;
+/// Enough events to see growth: the count is exact, so one source kept
+/// per event shows at the second.
+const EVENTS: usize = 10;
 
 fn release(s: &Scratch, image: &str) {
     s.write("data/releases.df", &format!("\n\nrelease(\"{image}\")\n"));
 }
 
 #[test]
-fn two_hundred_events_keep_the_source_registry_bounded() {
+fn events_keep_the_source_registry_bounded() {
     let s = Scratch::project("ctl-memory");
     s.write("stacks/workload.df", WORKLOAD);
     release(&s, "gcr.io/renfry/web:0");
@@ -50,7 +52,7 @@ fn two_hundred_events_keep_the_source_registry_bounded() {
         }
     });
     // Every event is a new release: a source whose text is new each time.
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(240);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
     let mut done = 0;
     let mut lines = Vec::new();
     loop {
@@ -92,8 +94,6 @@ fn two_hundred_events_keep_the_source_registry_bounded() {
     // later event adds nothing that outlives it.
     assert!(
         counts.iter().all(|&n| n == counts[0]),
-        "sources per event: first {:?}, last {:?}",
-        &counts[..5],
-        &counts[EVENTS - 5..]
+        "sources per event: {counts:?}"
     );
 }
