@@ -2,10 +2,11 @@
 //! each came from, grouped by `(T, A, P)` as they arrive, each group collapsed once the
 //! strata that can contribute to it have run; the lattices and refinements it reads.
 
+use super::LATTICE_DECLS;
 use super::builtins::eval_term;
 use super::collapse::collapse_group;
 use super::errors::with_place;
-use super::{LATTICE_DECLS, Prov};
+use super::provenance::Prov;
 use crate::ast::{Atom, Span, Term, str_term};
 use crate::circuit::NodeId;
 use crate::ir::ops;
