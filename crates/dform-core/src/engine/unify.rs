@@ -1,7 +1,8 @@
 //! Unification: a body atom's pattern matched against a fact, a term bound to a value,
 //! and an atom grounded or instantiated under a row's bindings.
 
-use super::{Rec, eval_term};
+use super::Rec;
+use super::builtins::eval_term;
 use crate::ast::{Atom, Term};
 use crate::value::Value;
 use anyhow::{Result, anyhow, bail};
