@@ -3,7 +3,7 @@
 //! as a relation's argument.
 //!
 //! ```text
-//! pattern := "_" | NAME | literal | "(" pattern ("," pattern)+ ")" | "{" field ("," field)* "}"
+//! pattern := "_" | NAME | literal | "(" pattern ("," pattern)+ ")" | "{" field ("," field)* ("," ".." NAME)? "}"
 //! field   := key (":" pattern)?
 //! ```
 //!
@@ -11,13 +11,16 @@
 //! literal compares. A tuple needs the exact arity: it unifies with a list
 //! of that many elements. An object pattern binds the fields it names and
 //! ignores the rest; it lowers to a fresh variable and one field read per
-//! field, after the literal that binds the variable:
+//! field, after the literal that binds the variable. Its last entry may
+//! be `..name`, which binds the rest (R-199): the object without the keys
+//! the pattern names, the notation a literal's spread is.
 //!
 //! | written                         | lowers to                                          |
 //! |---------------------------------|----------------------------------------------------|
 //! | `(k, v) in e`                   | `member(e', K, V)` (an object's keys, a list's indexes) |
 //! | `(a, b) = e`                    | `[A, B] = e'`                                      |
 //! | `{ host, port: p } = e`         | `Conn = e', Host = __path(Conn, "host"), P = __path(Conn, "port")` |
+//! | `{ metadata: m, ..body } = e`   | `Obj = e', M = __path(Obj, "metadata"), Body = __rest(Obj, "metadata")` |
 //! | `zone({ name, index })`         | `zone{name: Name, index: Index}`, a record pattern |
 
 use super::*;
@@ -41,6 +44,9 @@ impl Lowerer<'_> {
             TUPLE => {
                 let mut out = Vec::new();
                 for t in terms(n) {
+                    if t.kind() == SPREAD {
+                        return self.tuple_rest(&t);
+                    }
                     out.push(self.pattern1(rc, &t, pre)?);
                 }
                 Ok(Term::List(out))
@@ -49,7 +55,19 @@ impl Lowerer<'_> {
                 let at = self.span(n);
                 let whole = var(&fresh(rc, "Obj"));
                 let mut after = Vec::new();
-                for f in n.children().filter(|c| c.kind() == OBJECT_FIELD) {
+                let mut keys = vec![whole.clone()];
+                let mut rest = None;
+                for f in n
+                    .children()
+                    .filter(|c| matches!(c.kind(), OBJECT_FIELD | SPREAD))
+                {
+                    if rest.is_some() {
+                        return self.rest_not_last(n, &f);
+                    }
+                    if f.kind() == SPREAD {
+                        rest = Some(self.rest(rc, &f, pre)?);
+                        continue;
+                    }
                     let k = tokens(&f).next().ok_or(Skip)?;
                     let key = if k.kind() == STRING {
                         self.string(&k)?
@@ -74,6 +92,10 @@ impl Lowerer<'_> {
                         func("__path", vec![whole.clone(), str_term(&key)]),
                     ));
                     after.extend(nested);
+                    keys.push(str_term(&key));
+                }
+                if let Some(rest) = rest {
+                    after.push(Lit::Eq(rest, func(crate::functions::REST, keys)));
                 }
                 if after.is_empty() {
                     return self.error(at, "an object pattern names at least one field");
@@ -81,6 +103,7 @@ impl Lowerer<'_> {
                 self.after.extend(after);
                 Ok(whole)
             }
+            SPREAD => self.misplaced_spread(n),
             LIST => {
                 let d = Diagnostic::error(
                     self.span(n),
@@ -101,6 +124,69 @@ impl Lowerer<'_> {
             }
             _ => self.term(rc, n, Pos::Content, pre),
         }
+    }
+
+    /// `..name` ending an object pattern (R-199): the name the rest binds.
+    /// `..` alone is an error: an object pattern ignores what it does not
+    /// name already.
+    fn rest(&mut self, rc: &mut Rc, f: &SyntaxNode, pre: &mut Vec<Lit>) -> L<Term> {
+        let pattern = f.parent().map(|p| p.text().to_string()).unwrap_or_default();
+        let Some(name) = terms(f).next() else {
+            let without = pattern
+                .replace(", ..}", "}")
+                .replace(", .. }", " }")
+                .replace(",..}", "}");
+            return self.error_help(
+                self.span(f),
+                format!(
+                    "`..` in `{pattern}` ignores the rest, which an object pattern does already"
+                ),
+                format!("leave it out, `{without}`; to bind the rest, name it, `..rest`"),
+            );
+        };
+        if !Chain::of(&name).is_some_and(|c| c.is_bare()) {
+            return self.error_help(
+                self.span(f),
+                format!(
+                    "`{}` in an object pattern binds the rest to a name",
+                    f.text()
+                ),
+                "a name after the dots binds the rest, `..rest`; match what it holds with \
+                 another pattern, `{ a, ..rest } = x, { b } = rest`"
+                    .to_string(),
+            );
+        }
+        self.pattern1(rc, &name, pre)
+    }
+
+    /// An entry after an object pattern's rest.
+    fn rest_not_last<T>(&mut self, n: &SyntaxNode, f: &SyntaxNode) -> L<T> {
+        let rest = n
+            .children()
+            .find(|c| c.kind() == SPREAD)
+            .map(|c| c.text().to_string())
+            .unwrap_or_default();
+        self.error_help(
+            self.span(f),
+            format!(
+                "`{}` follows the rest `{rest}`: the rest is a pattern's last entry",
+                f.text()
+            ),
+            format!("move `{rest}` to the end of the pattern"),
+        )
+    }
+
+    /// `..` in a tuple pattern: a tuple has an exact arity, and a list is
+    /// walked with `in`.
+    fn tuple_rest<T>(&mut self, t: &SyntaxNode) -> L<T> {
+        self.error_help(
+            self.span(t),
+            format!(
+                "`{}` in a tuple pattern: a tuple matches a list of exactly as many elements as it names",
+                t.text()
+            ),
+            "a list's elements are each `(i, x) in xs`, its first `xs[0]`".to_string(),
+        )
     }
 
     /// Whether relation `pred` has several columns, each named: what a
