@@ -225,7 +225,7 @@ pub(super) fn matrix(
         let mut dep = of(d, cli.cmd.clone());
         dep.held = Held::new();
         let result = super::run(dep.clone(), None);
-        let (text, _) = dep.held.take();
+        let text = dep.held.take().text;
         if !s.json {
             super::matrix::head(cli, &d.name, "");
             print!("{text}");
