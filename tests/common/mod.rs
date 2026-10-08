@@ -143,31 +143,71 @@ impl Scratch {
     }
 
     /// `r`, after checking it says no compiler word its program did not
-    /// write (R-129): `extern` reaches a user only from a program that
-    /// declares one.
+    /// write (R-129, R-109): what the compiler calls its parts (`extern`,
+    /// `atom`, `stratum`, `lattice`, `null`, `scoped`, `head`, `body`,
+    /// `lowering`) reaches a user only from a program that writes the
+    /// word. Stderr only, the lines a diagnostic quotes from the source
+    /// left out: stdout is the plan and the queries, whose JSON says
+    /// `null`.
     #[track_caller]
     fn plain(&self, r: Run) -> Run {
-        let word = |t: &str| {
-            t.match_indices("extern").any(|(i, _)| {
-                let ident = |c: char| c.is_alphanumeric() || c == '_';
-                !t[..i].ends_with(ident) && !t[i + 6..].starts_with(ident)
-            })
-        };
-        if !word(&r.stdout) && !word(&r.stderr) {
+        let said: Vec<&str> = r
+            .stderr
+            .lines()
+            .filter(|l| !quotes_source(l))
+            .flat_map(|l| compiler_words(l))
+            .collect();
+        if said.is_empty() {
             return r;
         }
         let mut files = Vec::new();
         df_files(&self.dir, true, &mut files);
-        let written = files
+        let written: Vec<String> = files
             .iter()
-            .any(|f| std::fs::read_to_string(f).is_ok_and(|t| word(&t)));
+            .filter_map(|f| std::fs::read_to_string(f).ok())
+            .collect();
+        let unwritten: Vec<&&str> = said
+            .iter()
+            .filter(|w| {
+                !written
+                    .iter()
+                    .any(|t| !compiler_words(t).iter().all(|x| x != *w))
+            })
+            .collect();
         assert!(
-            written,
-            "a message names `extern`, which the program does not:\n{}{}",
-            r.stdout, r.stderr
+            unwritten.is_empty(),
+            "a message names {unwritten:?}, which the program does not:\n{}{}",
+            r.stdout,
+            r.stderr
         );
         r
     }
+}
+
+/// The words a compiler calls its parts, as `t` says them (a word on its
+/// own, not part of an identifier).
+pub fn compiler_words(t: &str) -> Vec<&'static str> {
+    const WORDS: &[&str] = &[
+        "extern", "externs", "atom", "atoms", "stratum", "strata", "lattice", "null", "nulls",
+        "scoped", "head", "heads", "body", "bodies", "lowering", "lowered",
+    ];
+    let ident = |c: char| c.is_alphanumeric() || c == '_';
+    WORDS
+        .iter()
+        .copied()
+        .filter(|w| {
+            t.match_indices(w)
+                .any(|(i, _)| !t[..i].ends_with(ident) && !t[i + w.len()..].starts_with(ident))
+        })
+        .collect()
+}
+
+/// A line of a diagnostic that quotes the program (`  3 │ resource ..`):
+/// its words are the user's.
+fn quotes_source(l: &str) -> bool {
+    l.trim_start()
+        .split_once('│')
+        .is_some_and(|(n, _)| n.trim().chars().all(|c| c.is_ascii_digit()) && !n.trim().is_empty())
 }
 
 impl Drop for Scratch {
