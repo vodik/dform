@@ -822,6 +822,32 @@ pub fn path_of(v: &Value, path: &str) -> Option<Value> {
     Some(v.into_owned())
 }
 
+/// Where [`path_of`] stops at a value that is not an object (R-185): the
+/// segments walked before it and that value. `None` where the walk ends
+/// at a field an object does not have, which is no value, or does not
+/// stop.
+pub fn not_an_object(v: &Value, path: &str) -> Option<(Vec<String>, Value)> {
+    let mut v = v.clone();
+    let mut walked = Vec::new();
+    for seg in crate::ir::path_keys(path) {
+        if let Value::Null { .. } = v {
+            return None;
+        }
+        if let Value::Oci(r) = &v {
+            v = crate::value::OciRef::parse(r).ok()?.parts();
+        }
+        if let Some(parts) = crate::value::parts(&v) {
+            v = parts;
+        }
+        let Value::Obj(mut m) = v else {
+            return Some((walked, v));
+        };
+        v = m.remove(&seg)?;
+        walked.push(seg);
+    }
+    None
+}
+
 /// The body of the function `name` declares in `std/*.df`, by its
 /// qualified name; a test keeps every declared function's body in step.
 pub fn body(name: &str) -> Option<Body> {

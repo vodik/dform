@@ -2793,7 +2793,7 @@ fn eval_body(body: &[Lit], src: &Src, rec: &Rec) -> Result<Vec<Row>> {
                     if atom.pred == "member" {
                         let holds = match atom.args.len() {
                             2 => eval_not_member2(atom, s, rec)?,
-                            3 => eval_not_member3(atom, s)?,
+                            3 => eval_not_member3(atom, s, rec)?,
                             _ => bail!("member/2 or member/3 expected"),
                         };
                         if holds {
@@ -3069,7 +3069,7 @@ fn eval_member2(
     out: &mut Vec<HashMap<String, Value>>,
     rec: &Rec,
 ) -> Result<()> {
-    if missing_walk(&atom.args[0], state) {
+    if missing_walk(&atom.args[0], state, rec)? {
         return Ok(());
     }
     let list_v = eval_term(&atom.args[0], state)
@@ -3233,8 +3233,8 @@ pub fn holds(coll: &Value, item: &Value) -> std::result::Result<bool, String> {
 
 /// `not (k, v) in e`: no entry matches; a `_` in either pattern matches
 /// anything.
-fn eval_not_member3(atom: &Atom, state: &HashMap<String, Value>) -> Result<bool> {
-    if missing_walk(&atom.args[0], state) {
+fn eval_not_member3(atom: &Atom, state: &HashMap<String, Value>, rec: &Rec) -> Result<bool> {
+    if missing_walk(&atom.args[0], state, rec)? {
         return Ok(true);
     }
     let list_v = eval_term(&atom.args[0], state)
@@ -3296,7 +3296,7 @@ fn eval_member3(
     out: &mut Vec<HashMap<String, Value>>,
     rec: &Rec,
 ) -> Result<()> {
-    if missing_walk(&atom.args[0], state) {
+    if missing_walk(&atom.args[0], state, rec)? {
         return Ok(());
     }
     let list_v = eval_term(&atom.args[0], state)
@@ -3590,6 +3590,7 @@ fn eval_eq(
         }
         .then_some(out)),
         (Some(av), None) => {
+            not_an_object(b, &out, rec)?;
             if bind_term(b, av, &mut out, rec)? {
                 Ok(Some(out))
             } else {
@@ -3597,6 +3598,7 @@ fn eval_eq(
             }
         }
         (None, Some(bv)) => {
+            not_an_object(a, &out, rec)?;
             if bind_term(a, bv, &mut out, rec)? {
                 Ok(Some(out))
             } else {
@@ -3605,7 +3607,7 @@ fn eval_eq(
         }
         (None, None) => {
             for t in [a, b] {
-                if missing_walk(t, &out) {
+                if missing_walk(t, &out, rec)? {
                     return Ok(None);
                 }
                 if let Some((name, args)) = failed_builtin(t, &out) {
@@ -3649,14 +3651,89 @@ fn unanswered(name: &str, args: &[Value], rec: &Rec) -> Result<()> {
 /// nothing fails the literal, or is an error ([`unanswered`]); `None`
 /// when no call did.
 fn side_unanswered(t: &Term, state: &HashMap<String, Value>, rec: &Rec) -> Option<Result<()>> {
+    if let Err(e) = not_an_object(t, state, rec) {
+        return Some(Err(e));
+    }
     let (name, args) = failed_builtin(t, state)?;
     Some(unanswered(&name, &args, rec))
 }
 
 /// A walk to a path the value does not have (`has x.f`, `x.f.g`, `some c
-/// in x.f`): no value, so the literal holding it does not hold.
-fn missing_walk(t: &Term, state: &HashMap<String, Value>) -> bool {
-    failed_builtin(t, state).is_some_and(|(name, _)| name == "__path")
+/// in x.f`): no value, so the literal holding it does not hold. A walk
+/// that reaches a value with no fields is an error ([`not_an_object`]).
+fn missing_walk(t: &Term, state: &HashMap<String, Value>, rec: &Rec) -> Result<bool> {
+    not_an_object(t, state, rec)?;
+    Ok(failed_builtin(t, state).is_some_and(|(name, _)| name == "__path"))
+}
+
+/// A field read of a value that is not an object (R-185: `w.spec` with
+/// `w` an address string, a number, a list): an error at the rule naming
+/// the read and the value, never a literal that does not hold, so a deny
+/// over it cannot pass without checking.
+fn not_an_object(t: &Term, state: &HashMap<String, Value>, rec: &Rec) -> Result<()> {
+    let Term::Func { name, args } = t else {
+        return Ok(());
+    };
+    for a in args {
+        not_an_object(a, state, rec)?;
+    }
+    let ([whole, path], "__path") = (args.as_slice(), name.as_str()) else {
+        return Ok(());
+    };
+    let (Some(v), Some(Value::Str(path))) = (eval_term(whole, state), eval_term(path, state))
+    else {
+        return Ok(());
+    };
+    let Some((walked, at)) = crate::functions::not_an_object(&v, &path) else {
+        return Ok(());
+    };
+    let base = match whole {
+        Term::Var(x) => crate::syntax::resolve::source_name(x),
+        t => spell::term(t),
+    };
+    let keys = crate::ir::path_keys(&path);
+    let reached = std::iter::once(base.clone())
+        .chain(walked.iter().cloned())
+        .collect::<Vec<_>>()
+        .join(".");
+    let field = &keys[walked.len()];
+    let read = format!("{base}.{}", keys.join("."));
+    let (what, help) = match &at {
+        Value::Ref { typ, name, attr } if attr.is_empty() => (
+            format!(
+                "a reference, {}",
+                crate::report::address(&crate::ir::Address {
+                    typ: typ.clone(),
+                    name: name.clone(),
+                })
+            ),
+            format!(
+                "a reference's attributes are read where its type is known: bind it, \
+                 `{reached} in {typ}`, or type the column it is read from"
+            ),
+        ),
+        Value::Str(s) if walked.is_empty() => (
+            format!("the string {s:?}"),
+            format!(
+                "a resource's attributes are read through a reference: bind `{reached}` to \
+                 its resource, `{reached} in T`, or type the column it is read from"
+            ),
+        ),
+        Value::Str(s) => (
+            format!("the string {s:?}"),
+            format!("read `{reached}` itself"),
+        ),
+        v => (
+            format!("`{}`", spell::value(v)),
+            format!("read `{reached}` itself"),
+        ),
+    };
+    let d = diag::Diagnostic::error(
+        rec.head.span,
+        format!("`{read}`: `{reached}` is {what}, which has no field `{field}`"),
+    )
+    .with_help(help);
+    Err(diag::Diagnostics(vec![d]).into())
 }
 
 /// The innermost function application in `t` whose arguments are all ground
