@@ -310,6 +310,65 @@ fn a_rename_and_a_ttl_change_in_place() {
     assert!(again.stdout.contains("is up to date"), "{}", again.stdout);
 }
 
+/// A record's target and subdomain change in place on its id (R-195): the
+/// plan is `~` naming the old and the new target, the apply one PUT and
+/// no POST, and a plan after it is clean. Its type is fixed: a change to
+/// it replaces the record.
+#[test]
+fn a_records_target_changes_in_place() {
+    let server = Server::start();
+    server.hosting(&["example.com"]);
+    let program = |subdomain: &str, typ: &str, target: &str| {
+        format!(
+            "use ovh {{ endpoint = \"{}\", project = \"lab\" }}\n\
+             resource ovh.domain_record k8s {{\n  zone = \"example.com\"\n  \
+             subdomain = \"{subdomain}\"\n  type = \"{typ}\"\n  target = \"{target}\"\n  \
+             ttl = 60\n}}\n",
+            server.endpoint
+        )
+    };
+    let s = project("ovh-record-target", "", &program("k8s", "A", "10.0.0.1"));
+    dform(&s, &server, &["apply", "main.df"]).success();
+    let was = server.records();
+    assert_eq!(posts(&server, "/record"), 1);
+
+    s.write("main.df", &program("k8s-lab", "A", "10.0.0.2"));
+    let plan = dform(&s, &server, &["plan", "main.df"]).success();
+    assert!(
+        plan.stdout.contains("~ ovh.domain_record k8s")
+            && plan.stdout.contains("\"10.0.0.1\"")
+            && plan.stdout.contains("\"10.0.0.2\"")
+            && !plan.stdout.contains("replace"),
+        "{}",
+        plan.stdout
+    );
+    dform(&s, &server, &["apply", "main.df"]).success();
+    let now = server.records();
+    assert_eq!(now.len(), 1, "{now:?}");
+    assert_eq!(now[0]["id"], was[0]["id"]);
+    assert_eq!(
+        (&now[0]["subDomain"], &now[0]["target"], &now[0]["ttl"]),
+        (&"k8s-lab".into(), &"10.0.0.2".into(), &60.into())
+    );
+    assert_eq!(posts(&server, "/record"), 1, "{:?}", server.calls());
+    let puts: Vec<_> = server
+        .seen()
+        .into_iter()
+        .filter(|c| c.method == "PUT" && c.path.contains("/record/"))
+        .collect();
+    assert_eq!(puts.len(), 1, "{:?}", server.calls());
+    assert_eq!(
+        puts[0].body,
+        serde_json::json!({"subDomain": "k8s-lab", "target": "10.0.0.2", "ttl": 60})
+    );
+    let again = dform(&s, &server, &["plan", "main.df"]).success();
+    assert!(again.stdout.contains("is up to date"), "{}", again.stdout);
+
+    s.write("main.df", &program("k8s-lab", "TXT", "10.0.0.2"));
+    let plan = dform(&s, &server, &["plan", "main.df"]).success();
+    assert!(plan.stdout.contains("replace"), "{}", plan.stdout);
+}
+
 #[test]
 fn a_flavor_the_region_does_not_offer_is_refused_at_plan() {
     let server = Server::start();

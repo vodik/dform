@@ -530,10 +530,32 @@ fn a_private_network_is_made_grown_and_deleted() {
         .apply(pb::Op::Create, NETWORK, "other", "", json!({"name": "lab"}))
         .unwrap_err();
     assert!(again.contains("already exists with this key"), "{again}");
+    // Renamed on its id: one PUT, the same network.
+    let puts = lab.calls("PUT", &grown.remote);
+    let named = lab.update(NETWORK, "lab", &grown.remote, renamed);
+    assert_eq!(named.remote, grown.remote);
+    assert_eq!(named.attrs["name"], "lab-2");
+    assert_eq!(lab.calls("PUT", &grown.remote), puts + 1);
 
     let gone = lab.delete(NETWORK, "lab", &n.remote);
     assert_eq!(gone.said, ["DELETING"]);
     assert!(lab.server.networks().is_empty());
+}
+
+const RECORD: &str = "ovh.domain_record";
+
+/// A record whose Create's answer was lost is found by its lookup, its
+/// content (R-195): `provider.created` answers its id for the key the
+/// Create carried, and a record of another target is not taken for it.
+#[test]
+fn a_records_lost_create_is_found_by_its_content() {
+    let lab = Lab::new();
+    lab.server.add_record("example.com", "www", "A", "10.0.0.9");
+    let doc = json!({"zone": "example.com", "subdomain": "www", "type": "A", "target": "10.0.0.1"});
+    let r = lab.create(RECORD, "www", doc);
+    let key = format!("{RECORD}/www//Create");
+    assert_eq!(lab.ovh.created(&key).unwrap(), Some(r.remote));
+    assert_eq!(lab.ovh.created("another key").unwrap(), None);
 }
 
 /// A project that is not on a vRack: a private network is refused at

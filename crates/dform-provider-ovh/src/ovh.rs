@@ -15,7 +15,8 @@
 //! beyond the instance, key and record are in the modules below
 //! (`storage`, `user`, `volume`, `network`). Plan diffs locally (`provider::diff`), and an
 //! instance's flavor and image are checked against what its region offers.
-//! A Create looks for an object of the same key first: one this process
+//! A Create looks for an object of the same lookup first (the content
+//! its schema's `type_lookup` names, R-195): one this process
 //! made under the same idempotency key is the answer (a Create sent again
 //! after a timeout, R-81), another is refused, to be adopted or renamed.
 //! `provider.created` answers by the same key, so a Create whose answer
@@ -89,44 +90,65 @@ fn poll_every(env: &dyn Fn(&str) -> Option<String>) -> Duration {
 /// Says the object's status as the API gives it, and a message.
 type Say<'a> = &'a dyn Fn(&str, Option<&str>);
 
-/// How to find what a Create made, by the object's key.
+/// What a Create that timed out is found by (R-195): its type and the
+/// value of each attribute its `type_lookup` names, in that order. Not
+/// its identity (the API's id, which state holds) and not what replaces
+/// it (`force_new`): content the API lets this provider list and match.
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum Made {
-    Instance {
-        name: String,
-        region: String,
-    },
-    SshKey {
-        name: String,
-    },
-    Record(RecordKey),
-    Container {
-        region: String,
-        name: String,
-    },
-    User {
-        description: String,
-    },
-    Volume {
-        name: String,
-        region: String,
-    },
-    Network {
-        name: String,
-    },
-    Subnet {
-        network: String,
-        region: String,
-        range: String,
-    },
+struct Made {
+    typ: String,
+    key: Vec<(String, String)>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct RecordKey {
-    zone: String,
-    subdomain: String,
-    typ: String,
-    target: String,
+impl Made {
+    /// The value of the lookup's attribute `attr`, `""` if it has none.
+    fn get(&self, attr: &str) -> &str {
+        self.key
+            .iter()
+            .find(|(a, _)| a == attr)
+            .map_or("", |(_, v)| v)
+    }
+}
+
+impl std::fmt::Display for Made {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for (i, (a, v)) in self.key.iter().enumerate() {
+            let sep = if i == 0 { "" } else { ", " };
+            write!(f, "{sep}{a} {v:?}")?;
+        }
+        Ok(())
+    }
+}
+
+/// The schema predicate naming what a Create that timed out is found by.
+pub const LOOKUP: &str = "type_lookup";
+
+/// The schema's `type_lookup(Type, [Attr, ..])` rows, by type: each
+/// attribute one of the type's.
+pub fn lookups(schema: &Schema) -> Result<BTreeMap<String, Vec<String>>> {
+    let mut out = BTreeMap::new();
+    for f in schema.facts.iter().filter(|f| f.pred == LOOKUP) {
+        let (Some(typ), Some(Value::List(attrs))) = (
+            f.args.first().and_then(|t| t.as_str()),
+            f.args.get(1).and_then(|t| t.ground()),
+        ) else {
+            bail!("{LOOKUP}: a type and a list of its attributes");
+        };
+        let attrs = attrs
+            .iter()
+            .map(|a| match a.as_str() {
+                Some(a) if schema.attr(typ, a).is_some() => Ok(a.to_string()),
+                Some(a) => Err(anyhow!("{LOOKUP}({typ}): {a} is not an attribute of {typ}")),
+                None => Err(anyhow!(
+                    "{LOOKUP}({typ}): an attribute is named by a string"
+                )),
+            })
+            .collect::<Result<Vec<_>>>()?;
+        if out.insert(typ.to_string(), attrs).is_some() {
+            bail!("{LOOKUP}({typ}) declared twice");
+        }
+    }
+    Ok(out)
 }
 
 /// The account a configured provider reaches.
@@ -152,6 +174,8 @@ struct Configured {
 pub struct Ovh {
     schema: Schema,
     state: RwLock<Option<Arc<Configured>>>,
+    /// Each type's `type_lookup`.
+    lookups: BTreeMap<String, Vec<String>>,
     /// The Creates this process was sent, by idempotency key.
     made: Mutex<BTreeMap<String, Made>>,
     /// Each region's flavors and images, as the API listed them.
@@ -243,8 +267,10 @@ impl Default for Ovh {
 
 impl Ovh {
     pub fn new() -> Ovh {
+        let schema = schema().expect("the provider's schema parses");
         Ovh {
-            schema: schema().expect("the provider's schema parses"),
+            lookups: lookups(&schema).expect("the provider's lookups are its types' attributes"),
+            schema,
             state: RwLock::new(None),
             made: Mutex::new(BTreeMap::new()),
             lists: Mutex::new(BTreeMap::new()),
@@ -833,46 +859,32 @@ impl Ovh {
         })
     }
 
-    /// What names an object of `typ` uniquely, from its document.
+    /// What a Create of `doc` is found by: each attribute of the type's
+    /// lookup, a required one's absence leaving it unknown, another's
+    /// (a record's subdomain at the apex) `""`.
     fn key_of(&self, typ: &str, doc: &Json) -> Option<Made> {
-        let st = |k: &str| s(doc, k).map(str::to_string);
-        Some(match typ {
-            INSTANCE => Made::Instance {
-                name: st("name")?,
-                region: st("region")?,
-            },
-            SSH_KEY => Made::SshKey { name: st("name")? },
-            RECORD => Made::Record(RecordKey {
-                zone: st("zone")?,
-                subdomain: st("subdomain").unwrap_or_default(),
-                typ: st("type")?,
-                target: st("target")?,
-            }),
-            CONTAINER => Made::Container {
-                region: st("region")?,
-                name: st("name")?,
-            },
-            USER => Made::User {
-                description: st("description")?,
-            },
-            VOLUME => Made::Volume {
-                name: st("name")?,
-                region: st("region")?,
-            },
-            NETWORK => Made::Network { name: st("name")? },
-            SUBNET => Made::Subnet {
-                network: st("network")?,
-                region: st("region")?,
-                range: st("range")?,
-            },
-            _ => return None,
+        let key = self
+            .lookups
+            .get(typ)?
+            .iter()
+            .map(|a| match s(doc, a) {
+                Some(v) => Some((a.clone(), v.to_string())),
+                None if self.schema.attr(typ, a)?.has("required") => None,
+                None => Some((a.clone(), String::new())),
+            })
+            .collect::<Option<_>>()?;
+        Some(Made {
+            typ: typ.to_string(),
+            key,
         })
     }
 
     /// The remote id of the object `made` names, if it exists.
     fn find(&self, made: &Made) -> Result<Option<String>> {
-        Ok(match made {
-            Made::Instance { name, region } => {
+        let k = |a: &str| made.get(a);
+        Ok(match made.typ.as_str() {
+            INSTANCE => {
+                let (name, region) = (k("name"), k("region"));
                 let (a, p) = self.project("find an instance")?;
                 let list = a.client.get(&format!(
                     "/cloud/project/{p}/instance?region={}",
@@ -886,7 +898,8 @@ impl Ovh {
                     .and_then(|o| s(o, "id"))
                     .map(str::to_string)
             }
-            Made::SshKey { name } => {
+            SSH_KEY => {
+                let name = k("name");
                 let (a, p) = self.project("find an SSH key")?;
                 let list = a.client.get(&format!("/cloud/project/{p}/sshkey"))?;
                 list.as_array()
@@ -896,17 +909,19 @@ impl Ovh {
                     .and_then(|o| s(o, "id"))
                     .map(str::to_string)
             }
-            Made::Record(k) => {
+            RECORD => {
+                let (zone_name, typ) = (k("zone"), k("type"));
+                let (subdomain, target) = (k("subdomain"), k("target"));
                 let a = self.account("find a DNS record")?;
-                let zone = escape(&k.zone);
+                let zone = escape(zone_name);
                 let ids = a
                     .client
                     .get(&format!(
                         "/domain/zone/{zone}/record?fieldType={}&subDomain={}",
-                        escape(&k.typ),
-                        escape(&k.subdomain)
+                        escape(typ),
+                        escape(subdomain)
                     ))
-                    .map_err(|e| match not_hosted(&a, &k.zone, &e) {
+                    .map_err(|e| match not_hosted(&a, zone_name, &e) {
                         Some(m) => anyhow!(m),
                         None => e.into(),
                     })?;
@@ -934,19 +949,21 @@ impl Ovh {
                 });
                 let mut found = None;
                 for (id, o) in ids.into_iter().zip(records) {
-                    if o?.is_some_and(|o| s(&o, "target") == Some(k.target.as_str())) {
-                        found = Some(map::record_remote(&k.zone, id));
+                    if o?.is_some_and(|o| s(&o, "target") == Some(target)) {
+                        found = Some(map::record_remote(zone_name, id));
                         break;
                     }
                 }
                 found
             }
-            Made::Container { region, name } => {
+            CONTAINER => {
+                let (region, name) = (k("region"), k("name"));
                 let (a, p) = self.project("find an S3 container")?;
                 self.read_container(&a, &p, &map::container_remote(region, name))?
                     .map(|_| map::container_remote(region, name))
             }
-            Made::User { description } => {
+            USER => {
+                let description = k("description");
                 let (a, p) = self.project("find a user")?;
                 let list = a.client.get(&format!("/cloud/project/{p}/user"))?;
                 list.as_array()
@@ -957,7 +974,8 @@ impl Ovh {
                     .and_then(|o| o.get("id").and_then(Json::as_i64))
                     .map(|id| id.to_string())
             }
-            Made::Volume { name, region } => {
+            VOLUME => {
+                let (name, region) = (k("name"), k("region"));
                 let (a, p) = self.project("find a volume")?;
                 let list = a.client.get(&format!(
                     "/cloud/project/{p}/volume?region={}",
@@ -971,7 +989,8 @@ impl Ovh {
                     .and_then(|o| s(o, "id"))
                     .map(str::to_string)
             }
-            Made::Network { name } => {
+            NETWORK => {
+                let name = k("name");
                 let (a, p) = self.project("find a private network")?;
                 let list = a
                     .client
@@ -984,11 +1003,8 @@ impl Ovh {
                     .and_then(|o| s(o, "id"))
                     .map(str::to_string)
             }
-            Made::Subnet {
-                network,
-                region,
-                range,
-            } => {
+            SUBNET => {
+                let (network, region, range) = (k("network"), k("region"), k("range"));
                 let (a, p) = self.project("find a subnet")?;
                 self.subnets(&a, &p, network)?
                     .iter()
@@ -998,6 +1014,7 @@ impl Ovh {
                     })
                     .and_then(|(_, computed)| s(&computed, "id").map(str::to_string))
             }
+            typ => bail!("the ovh provider has no lookup for {typ}"),
         })
     }
 
@@ -1044,7 +1061,7 @@ impl Ovh {
             return Err(refused(
                 at,
                 format!(
-                    "{typ} {remote} already exists with this key ({made:?}); adopt it or name another"
+                    "{typ} {remote} already exists with this key ({made}); adopt it or name another"
                 ),
             ));
         }
@@ -1238,15 +1255,22 @@ impl Ovh {
                 let a = self
                     .account(at)
                     .map_err(|e| refused(at, format!("{e:#}")))?;
+                // The API's update takes the subdomain, the target and
+                // the ttl (R-195); the zone and type are the record's.
+                // A ttl the program does not write is left as it is.
                 let (zone, id) = remote.rsplit_once('/').unwrap_or_default();
-                let ttl = config.get("ttl").and_then(Json::as_i64).unwrap_or(0);
                 let was = now.1.get("ttl").and_then(Json::as_i64).unwrap_or(0);
-                if ttl != was {
-                    let body = json!({
-                        "subDomain": s(config, "subdomain").unwrap_or_default(),
-                        "target": need(at, config, "target")?,
-                        "ttl": ttl,
-                    });
+                let body = json!({
+                    "subDomain": s(config, "subdomain").unwrap_or_default(),
+                    "target": need(at, config, "target")?,
+                    "ttl": config.get("ttl").and_then(Json::as_i64).unwrap_or(was),
+                });
+                let had = json!({
+                    "subDomain": s(&now.0, "subdomain").unwrap_or_default(),
+                    "target": s(&now.0, "target").unwrap_or_default(),
+                    "ttl": was,
+                });
+                if body != had {
                     a.client
                         .put(
                             &format!("/domain/zone/{}/record/{}", escape(zone), escape(id)),
@@ -1731,5 +1755,42 @@ impl Handler for Ovh {
             ),
             C::Reveal(r) => Reply::Reveal(self.reveal(r)?),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every type has a lookup, of its own attributes; a Create of a
+    /// record is found by its content, the apex's subdomain empty.
+    #[test]
+    fn each_type_is_found_by_its_lookup() {
+        let ovh = Ovh::new();
+        for typ in ovh.schema.provider_of.keys() {
+            assert!(ovh.lookups.contains_key(typ), "{typ} has no type_lookup");
+        }
+        let doc = json!({"zone": "example.com", "type": "A", "target": "10.0.0.1", "ttl": 60});
+        let made = ovh.key_of(RECORD, &doc).unwrap();
+        assert_eq!(
+            made.to_string(),
+            r#"zone "example.com", subdomain "", type "A", target "10.0.0.1""#
+        );
+        // A required attribute missing leaves it unknown.
+        assert_eq!(ovh.key_of(RECORD, &json!({"zone": "example.com"})), None);
+    }
+
+    #[test]
+    fn a_lookup_names_attributes_of_its_type() {
+        let s = Schema::parse(
+            "type_attr(\"t.a\", \"name\", \"string\", [\"required\"])\n\
+             type_lookup(\"t.a\", [\"name\", \"nmae\"])\n",
+            "test",
+        )
+        .unwrap();
+        assert_eq!(
+            lookups(&s).unwrap_err().to_string(),
+            "type_lookup(t.a): nmae is not an attribute of t.a"
+        );
     }
 }

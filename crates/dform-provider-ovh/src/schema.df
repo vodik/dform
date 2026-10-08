@@ -9,10 +9,16 @@
 #                                       nullable optional_computed force_new
 #   type_provider(Type, Provider).
 #   type_replace(Type, Order).          create_first, destroy_first or either
+#   type_lookup(Type, Attrs).           what a Create that timed out is found by
 #
-# An instance's key is its name within the project, an SSH key's too, so
-# a replacement deletes the old one first. A record's key is its zone,
-# subdomain, type and target: only its ttl changes in place.
+# An object's identity is its `id`: state holds it, and an update goes to
+# it. An attribute is `force_new` only where the API cannot change it on
+# the id (R-195). What a Create that timed out is found by, the content
+# its lookup matches, is `type_lookup`: neither identity nor `force_new`.
+# A record's lookup is its zone, subdomain, type and target, and its
+# subdomain, target and ttl change in place. An instance's lookup is its
+# name in its region, an SSH key's its name, so a replacement deletes
+# the old one first.
 
 # The data sources (R-106): a program reads them with no `extern` line.
 # `ovh.region` the project's regions, `ovh.flavor` a region's available
@@ -26,6 +32,11 @@ type_provider("ovh.instance", "ovh")
 type_provider("ovh.ssh_key", "ovh")
 type_provider("ovh.domain_record", "ovh")
 
+# The API's update of an instance (`PUT .../instance/{id}`) takes its
+# name alone. Its flavor (a resize), its networks (an interface attached
+# or detached) and its image (a reinstall, which erases its disk) change
+# by calls of their own that this provider does not make yet; its region,
+# SSH key and user data are fixed at its creation.
 type_attr("ovh.instance", "id", "string", ["computed", "id"])
 type_attr("ovh.instance", "name", "string", ["required"])
 type_attr("ovh.instance", "region", "string", ["required", "force_new"])
@@ -42,27 +53,33 @@ type_attr("ovh.instance", "private_ip", "ip", ["computed", "nullable"])
 type_attr("ovh.instance", "private_ips", "map(ip)", ["computed"])
 type_attr("ovh.instance", "status", "string", ["computed"])
 type_replace("ovh.instance", "destroy_first")
+type_lookup("ovh.instance", ["name", "region"])
 
+# The API has no update call for an SSH key.
 type_attr("ovh.ssh_key", "id", "string", ["computed", "id"])
 type_attr("ovh.ssh_key", "name", "string", ["required", "force_new"])
 type_attr("ovh.ssh_key", "public_key", "string", ["required", "force_new"])
 type_replace("ovh.ssh_key", "destroy_first")
+type_lookup("ovh.ssh_key", ["name"])
 
+# The API's update of a record (`PUT /domain/zone/{zone}/record/{id}`)
+# takes its subdomain, target and ttl; its zone and type are fixed.
 type_attr("ovh.domain_record", "id", "string", ["computed", "id"])
 type_attr("ovh.domain_record", "zone", "string", ["required", "force_new"])
-type_attr("ovh.domain_record", "subdomain", "string", ["force_new"])
+type_attr("ovh.domain_record", "subdomain", "string", [])
 type_attr(
   "ovh.domain_record",
   "type",
   "enum(A, AAAA, CNAME, TXT, SRV, MX)",
   ["required", "force_new"],
 )
-type_attr("ovh.domain_record", "target", "string", ["required", "force_new"])
+type_attr("ovh.domain_record", "target", "string", ["required"])
 type_attr("ovh.domain_record", "ttl", "int", ["optional_computed"])
 type_replace("ovh.domain_record", "either")
+type_lookup("ovh.domain_record", ["zone", "subdomain", "type", "target"])
 
-# An S3 container's key is its region and name; only its versioning
-# changes in place.
+# An S3 container is found by its region and name, which S3 never
+# changes; only its versioning changes in place.
 type_provider("ovh.storage_container", "ovh")
 type_attr("ovh.storage_container", "id", "string", ["computed", "id"])
 type_attr("ovh.storage_container", "region", "string", ["required", "force_new"])
@@ -76,9 +93,10 @@ type_attr(
 )
 type_attr("ovh.storage_container", "virtual_host", "string", ["computed"])
 type_replace("ovh.storage_container", "destroy_first")
+type_lookup("ovh.storage_container", ["region", "name"])
 
-# A user's key is its description (the API makes up its username); its
-# roles change in place. Its S3 secret is held: the API keeps it, and
+# A user is found by its description (the API makes up its username),
+# which the API has no call to change; its roles change in place. Its S3 secret is held: the API keeps it, and
 # Reveal reads it there.
 type_provider("ovh.cloud_project_user", "ovh")
 type_attr("ovh.cloud_project_user", "id", "string", ["computed", "id"])
@@ -94,8 +112,9 @@ type_attr("ovh.cloud_project_user", "status", "string", ["computed"])
 type_attr("ovh.cloud_project_user", "s3_access_key", "string", ["computed", "nullable"])
 type_attr("ovh.cloud_project_user", "s3_secret_key", "string", ["computed", "sensitive"])
 type_replace("ovh.cloud_project_user", "destroy_first")
+type_lookup("ovh.cloud_project_user", ["description"])
 
-# A volume's key is its name in its region; it grows in place (a smaller
+# A volume is found by its name in its region; it grows in place (a smaller
 # size replaces it, which Plan says), its name, description and instance
 # change in place. Its image and snapshot are write-only: the API never
 # answers them, and dform keeps their digests (R-106).
@@ -116,8 +135,9 @@ type_attr("ovh.volume", "snapshot", "string", ["force_new", "write_only"])
 type_attr("ovh.volume", "instance", "ref(ovh.instance)", [])
 type_attr("ovh.volume", "status", "string", ["computed"])
 type_replace("ovh.volume", "destroy_first")
+type_lookup("ovh.volume", ["name", "region"])
 
-# A private network's key is its name; it is added to regions in place,
+# A private network is found by its name; it is added to regions in place,
 # and leaves none (Plan replaces it). Its vRack is the account's.
 type_provider("ovh.network", "ovh")
 type_attr("ovh.network", "id", "string", ["computed", "id"])
@@ -127,9 +147,10 @@ type_attr("ovh.network", "regions", "set(string)", ["optional_computed"])
 type_attr("ovh.network", "status", "string", ["computed"])
 type_attr("ovh.network", "regions_status", "map(string)", ["computed"])
 type_replace("ovh.network", "destroy_first")
+type_lookup("ovh.network", ["name"])
 
-# A subnet's key is its network, region and range; nothing of it changes
-# in place. Its pool is the DHCP pool, its first and last address (the
+# A subnet is found by its network, region and range; nothing of it
+# changes in place (the API has no update call for one). Its pool is the DHCP pool, its first and last address (the
 # API's `start` and `end`); when not set, Plan gives it the range's usable
 # hosts, as the OVH console does.
 type_provider("ovh.subnet", "ovh")
@@ -142,6 +163,7 @@ type_attr("ovh.subnet", "dhcp", "bool", ["optional_computed", "force_new"])
 type_attr("ovh.subnet", "no_gateway", "bool", ["optional_computed", "force_new"])
 type_attr("ovh.subnet", "gateway_ip", "ip", ["computed", "nullable"])
 type_replace("ovh.subnet", "destroy_first")
+type_lookup("ovh.subnet", ["network", "region", "range"])
 
 type_doc("ovh.instance", "", "A Public Cloud instance of the project.")
 type_doc(
@@ -191,14 +213,18 @@ type_doc("ovh.ssh_key", "", "An SSH public key of the project, for its instances
 type_doc("ovh.ssh_key", "name", "The key's name, unique in the project.")
 type_doc("ovh.ssh_key", "public_key", "The OpenSSH public key (`ssh-ed25519 AAAA...`).")
 type_doc("ovh.domain_record", "", "A record of a DNS zone OVH hosts.")
-type_doc("ovh.domain_record", "zone", "The zone (`example.com`).")
+type_doc("ovh.domain_record", "zone", "The zone (`example.com`). Changing it replaces the record.")
 type_doc(
   "ovh.domain_record",
   "subdomain",
-  "The name under the zone (`www`); none for the zone's apex.",
+  "The name under the zone (`www`); none for the zone's apex. Changed in place.",
 )
-type_doc("ovh.domain_record", "type", "A, AAAA, CNAME, TXT, SRV or MX.")
-type_doc("ovh.domain_record", "target", "The record's value.")
+type_doc(
+  "ovh.domain_record",
+  "type",
+  "A, AAAA, CNAME, TXT, SRV or MX. Changing it replaces the record.",
+)
+type_doc("ovh.domain_record", "target", "The record's value. Changed in place.")
 type_doc(
   "ovh.domain_record",
   "ttl",

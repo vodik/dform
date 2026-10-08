@@ -877,8 +877,17 @@ impl World {
                     (_, None) => not_found("Record"),
                     (_, Some(r)) if r["zone"] != *z => not_found("Record"),
                     ("GET", Some(r)) => (200, r.clone()),
+                    // The update takes the subdomain, the target and the
+                    // ttl; a record's zone and type are fixed.
                     ("PUT", Some(r)) => {
-                        for (k, v) in body.as_object().into_iter().flatten() {
+                        let fields = body.as_object().into_iter().flatten();
+                        if let Some((k, _)) = fields
+                            .clone()
+                            .find(|(k, _)| !matches!(k.as_str(), "subDomain" | "target" | "ttl"))
+                        {
+                            return (400, json!({"message": format!("Invalid property {k}")}));
+                        }
+                        for (k, v) in fields {
                             r[k] = v.clone();
                         }
                         (200, Json::Null)

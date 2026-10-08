@@ -99,13 +99,18 @@ path adds its line:
 
 ## Resources
 
-Each type is an object the API gives an identity. A relationship whose
+Each type is an object the API gives an identity, its `id`: state holds
+it, and an update goes to it. An attribute replaces the object only
+where the API cannot change it on its id. A relationship whose
 state the API keeps on another object is an attribute of that object, not
 a type of its own: a volume's attachment is the volume's `instance`, an
 instance's private networks its `networks`, a user's S3 credential its
 `s3_access_key` and `s3_secret_key`.
 
-| type                        | the API's object                                        | key                     |
+The last column is what a Create that timed out is found by (the
+schema's `type_lookup`, see "What a Create that does not answer does").
+
+| type                        | the API's object                                        | found by                |
 |-----------------------------|---------------------------------------------------------|-------------------------|
 | `ovh.instance`              | `/cloud/project/{p}/instance/{id}`                      | name, region            |
 | `ovh.ssh_key`               | `/cloud/project/{p}/sshkey/{id}`                        | name                    |
@@ -133,7 +138,11 @@ instance's private networks its `networks`, a user's S3 credential its
 | `private_ips`| map(ip), computed | its address on each private network, by the network's id |
 | `status`     | string, computed  | `ACTIVE` once it runs               |
 
-A replacement deletes the old instance first (its name is its key). Plan
+The API changes an instance's name on its id and nothing else; its
+flavor (a resize), networks (an interface attached) and image (a
+reinstall) have calls of their own that the provider does not make yet,
+so each replaces it. A replacement deletes the old instance first (it is
+found by its name). Plan
 checks the flavor and the image against what the region offers, naming
 what it does offer. An instance on private networks is made with an
 interface on the public network and one on each of them, in its region
@@ -149,7 +158,7 @@ that reads the state. With nothing kept (an instance made elsewhere) the
 user data is taken as unchanged.
 
 `ovh.ssh_key`: `name` and `public_key`, both required, a change to either
-replaces it; `id` computed. Its name is its key.
+replaces it (the API has no update for a key); `id` computed.
 
 `ovh.volume`
 
@@ -215,7 +224,8 @@ plan. `start` and `end` are not attributes: Plan refuses them naming
 `pool`.
 
 `ovh.cloud_project_user`: an OpenStack user of the project. `description`
-(its key: the API makes up its username; replaces) and `roles` (a set of
+(what it is found by: the API makes up its username; the API has no call
+to change it, so it replaces) and `roles` (a set of
 the API's role names, `objectstore_operator`, `compute_operator`, ...;
 changes in place); computed `username`, `status` (`creating`, then `ok`),
 `s3_access_key` and `s3_secret_key`. Each user is given an S3 credential
@@ -229,7 +239,8 @@ made: the provider drops it, and it is not an attribute.
 
 `ovh.storage_container`: an S3 container of a region
 (`/region/{r}/storage`; the older Swift containers of `/storage` are not
-served). `region` and `name` (its key; both replace), `versioning` (on is
+served). `region` and `name` (what it is found by; S3 never renames a
+container, so both replace), `versioning` (on is
 `enabled`, off again `suspended`; in place), `owner = backup` (the user
 that owns it, the project's first S3 user when not set; replaces);
 computed `virtual_host`. The API refuses to delete a container that has
@@ -237,8 +248,10 @@ objects.
 
 `ovh.domain_record`: `zone`, `subdomain` (none for the apex), `type` (`A`,
 `AAAA`, `CNAME`, `TXT`, `SRV`, `MX`), `target`, `ttl` (0, the zone's
-default, when not set). Only `ttl` changes in place. The zone is refreshed
-after every change. Its remote id, and its `id`, is `ZONE/ID`. A zone the
+default, when not set). `subdomain`, `target` and `ttl` change in place,
+one `PUT` on the record's id, so a new address is a `~` and the name
+keeps resolving; a ttl the program does not write is left as it is.
+`zone` and `type` replace it. The zone is refreshed after every change. Its remote id, and its `id`, is `ZONE/ID`. A zone the
 account does not host (OVH answers 404 for `/domain/zone/{zone}`) is
 refused naming it, and where DNS says it is delegated, asked of the
 machine's resolver (the first `nameserver` of /etc/resolv.conf;
@@ -273,7 +286,9 @@ distribution being the first word of the image's name.
 ## What a Create that does not answer does
 
 OVH's create calls are not idempotent. A Create first looks for an object
-of its key (the table above): one this provider process made for the
+of its content, what the table above says it is found by (the schema's
+`type_lookup`, R-195; not its identity, and not what replaces it): one
+this provider process made for the
 same idempotency key is the answer, brought to the document (a user's S3
 credential made, a volume attached); another is refused, to be adopted
 (`adopt(r, ID)`) or renamed. `provider.created` answers by the same key,

@@ -123,6 +123,18 @@ fn main() -> std::process::ExitCode {
   An `optional_computed` one is answered as computed (dform compares it
   only where the program writes it), so leave it out of what Read
   answers when unset: `skip_serializing_if = "Option::is_none"`.
+- Identity, replacement and the lookup are three things (R-195). An
+  object's identity is its `id`: state holds it, and an update goes to
+  it. An attribute is `force_new` only if the API cannot change it on
+  the object's id; that it names the object to a person, or is what a
+  lookup matches, is no reason. What a Create that timed out is found
+  by (dform asks `provider.created` by the Create's idempotency key, and
+  how the provider finds what that key made is its own) is the content
+  key it lists and matches, declared in the schema as
+  `type_lookup(Type, [Attr, ..])`: the OVH provider finds a DNS record
+  by its zone, subdomain, type and target, and changes the subdomain,
+  target and ttl in place on the record's id. dform carries the fact
+  and does not read it; a provider reads its own.
 - `Lifecycle` is the four calls, and `check`, a refusal of a document
   the provider cannot apply as configured (Postgres refuses to manage the
   role it connects as), called by Plan once the provider is configured
