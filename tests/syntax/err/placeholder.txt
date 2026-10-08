@@ -1,13 +1,13 @@
 tests/syntax/err/placeholder.df:8:23: `_` is a placeholder and is never accessed: `_.p` and `_[k]` read nothing; name it (`env.p`)
 tests/syntax/err/placeholder.df:9:22: `_` is a placeholder and is never accessed: `_.p` and `_[k]` read nothing; name it (`env.p`)
 tests/syntax/err/placeholder.df:10:1: `_` as a value: a function's argument, an interpolation or a comparison reads it
-  help: `_` is a placeholder and is never accessed: name it (`env.p`, `x`)
+  help: `_` matches anything and holds nothing: name what it stands for (`x`, `env.p`)
 tests/syntax/err/placeholder.df:11:1: `_` as a value: a function's argument, an interpolation or a comparison reads it
-  help: `_` is a placeholder and is never accessed: name it (`env.p`, `x`)
-tests/syntax/err/placeholder.df:12:1: `_` in the head of `e`: column 1 has no finite set of values; bind a variable there in the body
-  help: `_` is a placeholder and is never accessed: name it (`env.p`, `x`)
+  help: `_` matches anything and holds nothing: name what it stands for (`x`, `env.p`)
+tests/syntax/err/placeholder.df:12:1: `_` is `e`'s column 1, which then has no value
+  help: name the column and give it a value after `where`: `e(x) where .., x in ..`
 tests/syntax/err/placeholder.df:13:18: a resource is written by its name: `_` names nothing; name it, or name it from the clause (`resource T "${n}" { .. } where p(n)`)
 tests/syntax/err/placeholder.df:14:1: a resource is written by its name: `resource m _` names nothing
 tests/syntax/err/placeholder.df:16:25: `cidr` is given `_`, which has no value
-  help: `_` is a placeholder and is never accessed: name it (`env.p`, `x`)
+  help: give `cidr` a value, or leave its line out
 tests/syntax/err/placeholder.df:19:1: `env` is a value in scope, but a resource's header name is literal: this is the resource env of m; name it otherwise

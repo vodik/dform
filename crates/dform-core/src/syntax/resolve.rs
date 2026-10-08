@@ -1951,10 +1951,8 @@ impl<'u> Lowerer<'u> {
                 }
             })
         }
-        let never = "`_` is a placeholder and is never accessed: name it (`env.p`, `x`)";
-        let bad = |l: &mut Self, at: Span, msg: String| {
-            l.diags
-                .push(Diagnostic::error(at, msg).with_help(never.to_string()));
+        let bad = |l: &mut Self, at: Span, msg: String, fix: String| {
+            l.diags.push(Diagnostic::error(at, msg).with_help(fix));
         };
         let before = self.diags.len();
         for st in stmts {
@@ -1967,6 +1965,7 @@ impl<'u> Lowerer<'u> {
                             self,
                             f.span,
                             format!("`{}` is given `_`, which has no value", f.key),
+                            format!("give `{}` a value, or leave its line out", f.key),
                         );
                     }
                     (None, r.body.as_deref().unwrap_or_default())
@@ -1977,6 +1976,7 @@ impl<'u> Lowerer<'u> {
                             self,
                             *at,
                             format!("input `{k}` is given `_`, which has no value"),
+                            format!("give `{k}` a value, or leave it out for its default"),
                         );
                     }
                     (None, i.body.as_deref().unwrap_or_default())
@@ -1987,6 +1987,7 @@ impl<'u> Lowerer<'u> {
                             self,
                             o.span,
                             format!("output `{}` is `_`, which has no value", o.name),
+                            format!("write its value, `output {} = ..`", o.name),
                         );
                     }
                     (None, &[])
@@ -2004,13 +2005,14 @@ impl<'u> Lowerer<'u> {
                         .collect(),
                 };
                 if let Some((c, _)) = columns.iter().find(|(_, v)| has(v)) {
+                    let p = h.pred.rsplit("::").next().unwrap_or(&h.pred);
                     bad(
                         self,
                         h.span,
+                        format!("`_` is `{p}`'s column {c}, which then has no value"),
                         format!(
-                            "`_` in the head of `{}`: column {c} has no finite set of values; \
-                             bind a variable there in the body",
-                            h.pred
+                            "name the column and give it a value after `where`: `{p}(x) \
+                             where .., x in ..`"
                         ),
                     );
                 }
@@ -2021,6 +2023,9 @@ impl<'u> Lowerer<'u> {
                     span,
                     "`_` as a value: a function's argument, an interpolation or a comparison \
                      reads it"
+                        .to_string(),
+                    "`_` matches anything and holds nothing: name what it stands for (`x`, \
+                     `env.p`)"
                         .to_string(),
                 );
             }
