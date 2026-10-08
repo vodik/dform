@@ -6,7 +6,6 @@
 
 mod common;
 use common::Scratch;
-use expectrl::{Eof, Expect, Session};
 
 const PROG: &str = r#"
 
@@ -63,26 +62,9 @@ fn answer(s: &Scratch, answer: &str) -> (String, String, i32) {
 /// prompt and after the last, and its exit code.
 fn answers(s: &Scratch, answers: &[&str]) -> (Vec<String>, i32) {
     let mut cmd = common::dform();
-    // A pty is a terminal, so `--color auto` would paint the plan; the
-    // assertions read it as text.
     cmd.args(["dev", "--world", "w.json", "apply", "p.df"])
-        .env("NO_COLOR", "1")
         .current_dir(s.path(""));
-    let mut p = Session::spawn(cmd).unwrap();
-    p.set_expect_timeout(Some(std::time::Duration::from_secs(60)));
-    let text = |b: &[u8]| String::from_utf8_lossy(b).replace('\r', "");
-    let all = |c: &expectrl::Captures| c.matches().fold(text(c.before()), |t, m| t + &text(m));
-    let mut said = Vec::new();
-    for a in answers {
-        said.push(all(&p.expect("[y/N] ").unwrap()));
-        p.send_line(a).unwrap();
-    }
-    said.push(all(&p.expect(Eof).unwrap()));
-    let code = match p.get_process().wait().unwrap() {
-        expectrl::process::unix::WaitStatus::Exited(_, code) => code,
-        other => panic!("{other:?}"),
-    };
-    (said, code)
+    common::answering(&s.dir, cmd, answers)
 }
 
 fn audit_kinds(s: &Scratch) -> Vec<(String, String)> {
@@ -245,20 +227,10 @@ fn declining_a_dependency_stops_before_its_reader() {
         "key env: enum(\"lab\") = \"lab\"\nuse fake\nuse stacks.platform\nresource net.vpc rec { cidr = \"10.1.0.0/16\", name = platform[env].ip }\n",
     );
     let mut cmd = common::dform();
-    cmd.args(["apply", "apps"])
-        .env("NO_COLOR", "1")
-        .current_dir(s.path(""));
-    let mut p = Session::spawn(cmd).unwrap();
-    p.set_expect_timeout(Some(std::time::Duration::from_secs(60)));
-    let before = String::from_utf8_lossy(p.expect("[y/N] ").unwrap().before()).replace('\r', "");
-    assert!(before.contains("== platform[env=lab]"), "{before}");
-    p.send_line("n").unwrap();
-    let after = String::from_utf8_lossy(p.expect(Eof).unwrap().before()).replace('\r', "");
-    assert_eq!(after.trim(), "", "{after}");
-    let code = match p.get_process().wait().unwrap() {
-        expectrl::process::unix::WaitStatus::Exited(_, code) => code,
-        other => panic!("{other:?}"),
-    };
+    cmd.args(["apply", "apps"]).current_dir(s.path(""));
+    let (said, code) = common::answering(&s.dir, cmd, &["n"]);
+    assert!(said[0].contains("== platform[env=lab]"), "{}", said[0]);
+    assert_eq!(said[1].trim(), "", "{}", said[1]);
     assert_eq!(code, 3, "a decline exits 3 (R-147)");
     let dir = s.path("dform.state/platform/env=lab");
     assert!(dir.join("state.audit.jsonl").exists(), "{}", dir.display());

@@ -8,7 +8,6 @@
 
 mod common;
 use common::{Run, Scratch};
-use expectrl::{Eof, Expect, Session};
 
 /// The k3s shape on the mock: a server, a provider configured from it,
 /// the cluster's object; a role and a policy, and (by a second apply) a
@@ -191,17 +190,13 @@ fn destroy_asks_first_and_a_no_keeps_everything() {
     let s = applied("destroy-asks");
     let before = objects(&s);
     let cmd = dform(&s, &["dev", "--world", "w.json", "destroy", "p.df"]);
-    let mut p = Session::spawn(cmd).unwrap();
-    p.set_expect_timeout(Some(std::time::Duration::from_secs(60)));
-    let said = p.expect("[y/N] ").unwrap();
-    let said = String::from_utf8_lossy(said.before()).replace('\r', "");
-    assert!(said.ends_with("Destroy these 5 objects of p? "), "{said}");
-    p.send_line("n").unwrap();
-    p.expect(Eof).unwrap();
-    match p.get_process().wait().unwrap() {
-        expectrl::process::unix::WaitStatus::Exited(_, code) => assert_eq!(code, 3),
-        other => panic!("{other:?}"),
-    }
+    let (said, code) = common::answering(&s.dir, cmd, &["n"]);
+    assert!(
+        said[0].ends_with("Destroy these 5 objects of p? [y/N] "),
+        "{}",
+        said[0]
+    );
+    assert_eq!(code, 3);
     assert_eq!(objects(&s), before);
 }
 

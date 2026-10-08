@@ -7,7 +7,6 @@
 
 mod common;
 use common::Scratch;
-use expectrl::{Eof, Expect, Session};
 
 /// Subnets joined through a table of active regions: one row of
 /// `data/active.csv` is the whole join.
@@ -183,23 +182,17 @@ fn the_ask_is_on_a_terminal_also_under_yes() {
     s.write("data/active.csv", "name\n");
     let mut cmd = common::dform();
     cmd.args(["apply", "net", "--yes", "--allow-empty", "active"])
-        .env("NO_COLOR", "1")
         .current_dir(s.path(""));
-    let mut p = Session::spawn(cmd).unwrap();
-    p.set_expect_timeout(Some(std::time::Duration::from_secs(60)));
-    let text = |b: &[u8]| String::from_utf8_lossy(b).replace('\r', "");
-    let all = |c: &expectrl::Captures| c.matches().fold(text(c.before()), |t, m| t + &text(m));
-    let before = text(p.expect("[y/N] ").unwrap().before());
+    let (said, _) = common::answering(&s.dir, cmd, &["n"]);
     assert!(
-        before.ends_with(
+        said[0].ends_with(
             "The plan deletes all 2 resources the rule at stacks/net.df:13 derived at the last \
-             apply. Apply it anyway? "
+             apply. Apply it anyway? [y/N] "
         ),
-        "{before}"
+        "{}",
+        said[0]
     );
-    p.send_line("n").unwrap();
-    let after = all(&p.expect(Eof).unwrap());
-    assert!(!after.contains("not confirmed"), "{after}");
+    assert!(!said[1].contains("not confirmed"), "{}", said[1]);
     assert_eq!(subnets(&s), 2);
 }
 

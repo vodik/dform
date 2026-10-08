@@ -18,13 +18,12 @@ pub(super) fn confirm(
     tick: usize,
     style: report::Style,
 ) -> Result<bool> {
-    use std::io::{IsTerminal, Write};
-    let stdin = std::io::stdin();
+    use std::io::Write;
     let verb = match destroy {
         true => "destroy",
         false => "apply",
     };
-    if !stdin.is_terminal() {
+    if !can_ask() {
         bail!(
             "{verb} {deployment}: nothing to ask on at tick {tick} (stdin is not a terminal); \
              pass --yes to {verb} without asking"
@@ -44,6 +43,14 @@ pub(super) fn confirm(
         answer.trim().to_ascii_lowercase().as_str(),
         "y" | "yes"
     ))
+}
+
+/// Whether a question can be asked: stdin is a terminal. A test gives its
+/// answers on stdin instead (`DFORM_TEST_ANSWERS`, as `DFORM_TEST_HOLD_LOCK`
+/// holds a lock), so what an answer does is checked without a pty.
+fn can_ask() -> bool {
+    use std::io::IsTerminal;
+    std::io::stdin().is_terminal() || std::env::var_os("DFORM_TEST_ANSWERS").is_some()
 }
 
 /// A line from the terminal, the answer to a question. A signal while it
@@ -85,9 +92,8 @@ pub(super) fn confirm_emptied(
     deployment: &str,
     style: report::Style,
 ) -> Result<bool> {
-    use std::io::{IsTerminal, Write};
-    let stdin = std::io::stdin();
-    if !stdin.is_terminal() {
+    use std::io::Write;
+    if !can_ask() {
         bail!(
             "apply {deployment}: {}; nothing to ask on (stdin is not a terminal): confirm it \
              on a terminal, or pass --allow-empty {} if it is meant",

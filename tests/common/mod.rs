@@ -4,7 +4,7 @@
 #![allow(dead_code)]
 
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// What an unattended apply says when it stops before a tick that adds
@@ -377,6 +377,50 @@ pub fn yes<S: AsRef<std::ffi::OsStr>>(args: &[S]) -> Vec<std::ffi::OsString> {
 /// fake`).
 pub fn dform() -> Command {
     Command::new(env!("CARGO_BIN_EXE_dform"))
+}
+
+/// `cmd` run answering each `[y/N]` question in turn, its answers on stdin
+/// (`DFORM_TEST_ANSWERS`): what it printed, stdout and stderr in order, up
+/// to and with each question and after the last, and its exit code. What
+/// a question reads off a terminal is exit_status.rs's (a pty).
+pub fn answering(dir: &Path, mut cmd: Command, answers: &[&str]) -> (Vec<String>, i32) {
+    use std::io::Write;
+    let out = dir.join(format!(
+        "answers-{}.out",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let file = std::fs::File::create(&out).unwrap();
+    let mut child = cmd
+        .env("DFORM_TEST_ANSWERS", "1")
+        .env("NO_COLOR", "1")
+        .stdin(Stdio::piped())
+        .stdout(file.try_clone().unwrap())
+        .stderr(file)
+        .spawn()
+        .unwrap();
+    let mut input = child.stdin.take().unwrap();
+    for a in answers {
+        writeln!(input, "{a}").unwrap();
+    }
+    drop(input);
+    let code = child.wait().unwrap().code().expect("dform exits");
+    let text = std::fs::read_to_string(&out).unwrap();
+    std::fs::remove_file(&out).unwrap();
+    let mut said: Vec<String> = text.split_inclusive("[y/N] ").map(str::to_string).collect();
+    if text.is_empty() || text.ends_with("[y/N] ") {
+        said.push(String::new());
+    }
+    assert_eq!(
+        said.len(),
+        answers.len() + 1,
+        "{} questions for {} answers:\n{text}",
+        said.len() - 1,
+        answers.len()
+    );
+    (said, code)
 }
 
 /// Copy the directory `from` (a project) to `to`, recursively, but for its

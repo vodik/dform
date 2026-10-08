@@ -8,7 +8,6 @@
 
 mod common;
 use common::Scratch;
-use expectrl::{Eof, Expect, Session};
 
 const PLATFORM: &str = r#"
 key env: enum("lab", "prod") = "lab"
@@ -141,28 +140,12 @@ fn apply_with_no_target_applies_each_in_dependency_order() {
     }
 }
 
-/// `dform apply` on a pty, answering each question in turn: what it said
-/// up to each and after the last, and its exit code.
+/// `dform apply`, answering each question in turn: what it said up to
+/// each and after the last, and its exit code.
 fn answers(s: &Scratch, answers: &[&str]) -> (Vec<String>, i32) {
     let mut cmd = common::dform();
-    cmd.args(["apply"])
-        .env("NO_COLOR", "1")
-        .current_dir(s.path(""));
-    let mut p = Session::spawn(cmd).unwrap();
-    p.set_expect_timeout(Some(std::time::Duration::from_secs(60)));
-    let text = |b: &[u8]| String::from_utf8_lossy(b).replace('\r', "");
-    let all = |c: &expectrl::Captures| c.matches().fold(text(c.before()), |t, m| t + &text(m));
-    let mut said = Vec::new();
-    for a in answers {
-        said.push(all(&p.expect("[y/N] ").unwrap()));
-        p.send_line(a).unwrap();
-    }
-    said.push(all(&p.expect(Eof).unwrap()));
-    let code = match p.get_process().wait().unwrap() {
-        expectrl::process::unix::WaitStatus::Exited(_, code) => code,
-        other => panic!("{other:?}"),
-    };
-    (said, code)
+    cmd.args(["apply"]).current_dir(s.path(""));
+    common::answering(&s.dir, cmd, answers)
 }
 
 #[test]

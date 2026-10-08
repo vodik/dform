@@ -114,4 +114,3 @@ fn a_stop_is_5() {
         r.stderr
     );
 }
-

@@ -12,7 +12,6 @@
 
 mod common;
 use common::Scratch;
-use expectrl::{Eof, Expect, Session};
 
 const BEFORE: &str = r#"use fake
 use k8s
@@ -56,30 +55,16 @@ fn command(s: &Scratch, args: &[&str]) -> std::process::Command {
     c
 }
 
-/// `dform dev --world w.json [--chaos MUTATE] apply p.df` on a pty,
-/// answering each prompt in turn: what it printed up to each prompt and
-/// after the last, and its exit code.
+/// `dform dev --world w.json [--chaos MUTATE] apply p.df`, answering each
+/// prompt in turn: what it printed up to each prompt and after the last,
+/// and its exit code.
 fn answers(s: &Scratch, mutate: bool, answers: &[&str]) -> (Vec<String>, i32) {
     let mut args = vec!["dev", "--world", "w.json"];
     if mutate {
         args.extend(["--chaos", MUTATE]);
     }
     args.extend(["apply", "p.df"]);
-    let mut p = Session::spawn(command(s, &args)).unwrap();
-    p.set_expect_timeout(Some(std::time::Duration::from_secs(60)));
-    let text = |b: &[u8]| String::from_utf8_lossy(b).replace('\r', "");
-    let all = |c: &expectrl::Captures| c.matches().fold(text(c.before()), |t, m| t + &text(m));
-    let mut said = Vec::new();
-    for a in answers {
-        said.push(all(&p.expect("[y/N] ").unwrap()));
-        p.send_line(a).unwrap();
-    }
-    said.push(all(&p.expect(Eof).unwrap()));
-    let code = match p.get_process().wait().unwrap() {
-        expectrl::process::unix::WaitStatus::Exited(_, code) => code,
-        other => panic!("{other:?}"),
-    };
-    (said, code)
+    common::answering(&s.dir, command(s, &args), answers)
 }
 
 fn vm(s: &Scratch) -> serde_json::Value {

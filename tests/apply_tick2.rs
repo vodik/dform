@@ -12,7 +12,6 @@
 
 mod common;
 use common::{Run, STOPPED, Scratch};
-use expectrl::{Eof, Expect, Session};
 
 const PROG: &str = r#"
 use env
@@ -60,25 +59,11 @@ fn audit(s: &Scratch, kind: &str) -> Vec<serde_json::Value> {
         .collect()
 }
 
-/// On a pty, answering each prompt in turn: what it printed up to each
-/// prompt and after the last, and its exit code.
+/// Answering each prompt in turn: what it printed up to each prompt and
+/// after the last, and its exit code.
 fn answers(s: &Scratch, answers: &[&str]) -> (Vec<String>, i32) {
     let cmd = dform(s, &["dev", "--world", "w.json", "apply", "p.df"]);
-    let mut p = Session::spawn(cmd).unwrap();
-    p.set_expect_timeout(Some(std::time::Duration::from_secs(60)));
-    let text = |b: &[u8]| String::from_utf8_lossy(b).replace('\r', "");
-    let all = |c: &expectrl::Captures| c.matches().fold(text(c.before()), |t, m| t + &text(m));
-    let mut said = Vec::new();
-    for a in answers {
-        said.push(all(&p.expect("[y/N] ").unwrap()));
-        p.send_line(a).unwrap();
-    }
-    said.push(all(&p.expect(Eof).unwrap()));
-    let code = match p.get_process().wait().unwrap() {
-        expectrl::process::unix::WaitStatus::Exited(_, code) => code,
-        other => panic!("{other:?}"),
-    };
-    (said, code)
+    common::answering(&s.dir, cmd, answers)
 }
 
 /// The plan schedules the namespace in tick 2, after the server its
