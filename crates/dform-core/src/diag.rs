@@ -354,3 +354,30 @@ pub fn shape(err: &anyhow::Error) -> String {
     }
     out
 }
+
+/// The edit distance between `a` and `b`, by characters (Levenshtein).
+pub fn edits(a: &str, b: &str) -> usize {
+    let b: Vec<char> = b.chars().collect();
+    let mut row: Vec<usize> = (0..=b.len()).collect();
+    for (i, ca) in a.chars().enumerate() {
+        let mut prev = row[0];
+        row[0] = i + 1;
+        for (j, cb) in b.iter().enumerate() {
+            let cur = row[j + 1];
+            row[j + 1] = (prev + usize::from(ca != *cb)).min(row[j] + 1).min(cur + 1);
+            prev = cur;
+        }
+    }
+    row[b.len()]
+}
+
+/// The one of `names` nearest `name` when one is near (a slip of the
+/// pen): within a third of its length in edits, not `name` itself.
+pub fn nearest<'a>(name: &str, names: impl IntoIterator<Item = &'a str>) -> Option<&'a str> {
+    names
+        .into_iter()
+        .map(|n| (edits(name, n), n))
+        .filter(|(d, _)| *d > 0 && *d <= name.chars().count() / 3)
+        .min()
+        .map(|(_, n)| n)
+}

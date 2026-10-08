@@ -1027,7 +1027,7 @@ fn check_defined(
                 let p = a.pred.rsplit("::").next().unwrap_or(&a.pred);
                 let decl = format!("decl {p}({})", crate::transform::columns(a.args.len()));
                 let named = defined.iter().filter(|d| !d.starts_with("__")).copied();
-                let help = match crate::whynot::nearest(&a.pred, named) {
+                let help = match crate::diag::nearest(&a.pred, named) {
                     Some(n) => format!(
                         "`{}` is a relation of the program; else define `{p}`, or declare one \
                          a provider feeds, `{decl}`",

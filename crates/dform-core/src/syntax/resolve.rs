@@ -8083,7 +8083,7 @@ fn unknown_name<'a>(
     fix: bool,
     near: impl IntoIterator<Item = &'a str>,
 ) -> Diagnostic {
-    let help = match crate::whynot::nearest(name, near) {
+    let help = match crate::diag::nearest(name, near) {
         Some(n) => format!("`{n}` is in scope; a string is quoted, {quoted}"),
         None => format!(
             "nothing in scope is named `{name}`: give it a value after `where` (`{name} in ..`, \

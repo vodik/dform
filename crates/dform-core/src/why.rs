@@ -431,7 +431,7 @@ fn deny(message: &str, how: As, cx: &Context) -> Result<String> {
     let near = messages
         .iter()
         .filter_map(|m| match m {
-            Term::Val(Value::Str(m)) => Some((crate::whynot::edits(message, m), m)),
+            Term::Val(Value::Str(m)) => Some((crate::diag::edits(message, m), m)),
             _ => None,
         })
         .min();

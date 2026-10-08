@@ -229,33 +229,6 @@ pub fn gone(
     Some((None, NOT_IN_PROGRAM.to_string()))
 }
 
-/// The edit distance between `a` and `b`, by characters (Levenshtein).
-pub fn edits(a: &str, b: &str) -> usize {
-    let b: Vec<char> = b.chars().collect();
-    let mut row: Vec<usize> = (0..=b.len()).collect();
-    for (i, ca) in a.chars().enumerate() {
-        let mut prev = row[0];
-        row[0] = i + 1;
-        for (j, cb) in b.iter().enumerate() {
-            let cur = row[j + 1];
-            row[j + 1] = (prev + usize::from(ca != *cb)).min(row[j] + 1).min(cur + 1);
-            prev = cur;
-        }
-    }
-    row[b.len()]
-}
-
-/// The one of `names` nearest `name` when one is near (a slip of the
-/// pen): within a third of its length in edits, not `name` itself.
-pub fn nearest<'a>(name: &str, names: impl IntoIterator<Item = &'a str>) -> Option<&'a str> {
-    names
-        .into_iter()
-        .map(|n| (edits(name, n), n))
-        .filter(|(d, _)| *d > 0 && *d <= name.chars().count() / 3)
-        .min()
-        .map(|(_, n)| n)
-}
-
 /// The deployments not applied yet (R-121) whose outputs the attributes
 /// of the resource `atom` names hold, as `later` names them: `stack
 /// platform[env=lab]`.
@@ -518,7 +491,7 @@ impl WhyNot<'_> {
             .filter(|f| f.pred == "want")
             .map(|f| self.name(f))
             .collect();
-        nearest(&name, names.iter().map(String::as_str)).map(str::to_string)
+        crate::diag::nearest(&name, names.iter().map(String::as_str)).map(str::to_string)
     }
 
     /// `nearest: ROW, ..`: the rows of `bound`'s relation that differ
