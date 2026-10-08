@@ -1,7 +1,7 @@
 exit: ok
 -- stdout --
 deployment: stacks.dform[env=staging]
-plan: 13 changes (13 create) over 1 tick; policy: 6 hold
+plan: 13 changes (13 create) over 1 tick; policy: 9 hold
 
 tick 1  13 changes
   + compute.vm bastion                    stacks/dform.df:93
@@ -76,5 +76,5 @@ tick 1  13 changes
         policies = [identity.app_policy]
         tags.team = "platform"            baseline.df:10
 
-policy  6 hold
+policy  9 hold
 -- stderr --
