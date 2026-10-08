@@ -46,8 +46,8 @@ else is the body, a provider's `use` included: its settings are a rule
 that may read values, in scope for the whole program wherever it is
 written.
 A header statement after the body's first statement is an error that says
-to move it ("`key env` is a header statement: move it above the body's
-first statement, line 5"); `dform fmt` moves it, and puts the header's
+to move it ("`key env` is a header statement: move it above the file's
+first other statement, line 5"); `dform fmt` moves it, and puts the header's
 kinds in order, keeping the author's order within a kind. The header
 reads names the body declares: `input env: environment` above `type
 environment = ..` resolves, as every name does, program-wide.

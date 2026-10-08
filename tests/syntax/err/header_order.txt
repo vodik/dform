@@ -1,6 +1,6 @@
-tests/syntax/err/header_order.df:4:1: `key env` is a header statement: move it above the body's first statement, line 3
-  help: a file is its header (`key`, `input`), then its body; `dform fmt` moves it
-tests/syntax/err/header_order.df:5:1: `input zones` is a header statement: move it above the body's first statement, line 3
-  help: a file is its header (`key`, `input`), then its body; `dform fmt` moves it
-tests/syntax/err/header_order.df:11:1: `input seen` is a header statement: move it above the body's first statement, line 3
-  help: a file is its header (`key`, `input`), then its body; `dform fmt` moves it
+tests/syntax/err/header_order.df:4:1: `key env` is a header statement: move it above the file's first other statement, line 3
+  help: a file's `key` and `input` lines come first; `dform fmt` moves `key env` above line 3
+tests/syntax/err/header_order.df:5:1: `input zones` is a header statement: move it above the file's first other statement, line 3
+  help: a file's `key` and `input` lines come first; `dform fmt` moves `input zones` above line 3
+tests/syntax/err/header_order.df:11:1: `input seen` is a header statement: move it above the file's first other statement, line 3
+  help: a file's `key` and `input` lines come first; `dform fmt` moves `input seen` above line 3

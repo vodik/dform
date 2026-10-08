@@ -611,13 +611,13 @@ impl<'a> Parser<'a> {
             start: self.toks[i].start,
             end: self.toks[i].end,
             message: format!(
-                "`{what}` is a header statement: move it above the body's first statement, \
+                "`{what}` is a header statement: move it above the file's first other \
+                 statement, line {line}"
+            ),
+            hint: Some(format!(
+                "a file's `key` and `input` lines come first; `dform fmt` moves `{what}` above \
                  line {line}"
-            ),
-            hint: Some(
-                "a file is its header (`key`, `input`), then its body; `dform fmt` moves it"
-                    .to_string(),
-            ),
+            )),
             misplaced: true,
         }
     }
@@ -2237,12 +2237,12 @@ mod tests {
             got,
             [
                 (
-                    "`key env` is a header statement: move it above the body's first statement, \
-                     line 2",
+                    "`key env` is a header statement: move it above the file's first other \
+                     statement, line 2",
                     true
                 ),
                 (
-                    "`input p` is a header statement: move it above the body's first \
+                    "`input p` is a header statement: move it above the file's first other \
                      statement, line 2",
                     true
                 ),
