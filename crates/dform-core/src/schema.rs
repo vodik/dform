@@ -224,7 +224,7 @@ impl Render {
         match (self, &v) {
             (Render::Text(d), Value::Quantity(x)) if x.dim() == d => Ok(Value::Str(x.to_string())),
             (Render::Bytes(u), Value::Quantity(x @ Quantity::Bytes(_))) => whole(
-                q::to_unit(x, u),
+                x.in_unit(u),
                 match u {
                     "Gi" => "GiB",
                     "Mi" => "MiB",
@@ -233,10 +233,10 @@ impl Render {
                 &v,
             ),
             (Render::Millicores, Value::Quantity(x @ Quantity::Cpu(_))) => {
-                whole(q::to_unit(x, "m"), "millicores", &v)
+                whole(x.in_unit("m"), "millicores", &v)
             }
             (Render::Seconds, Value::Quantity(x @ Quantity::Duration(_))) => {
-                whole(q::to_unit(x, "s"), "seconds", &v)
+                whole(x.in_unit("s"), "seconds", &v)
             }
             (Render::Iso, Value::Quantity(Quantity::Duration(s))) => s
                 .to_jiff()

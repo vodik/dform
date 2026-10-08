@@ -6561,7 +6561,7 @@ impl<'u> Lowerer<'u> {
             match self.bind(false, |l| l.term(rc, &inner, Pos::Content, pre))? {
                 Term::Val(Value::Int(i)) if inner.kind() == LITERAL => Term::Val(Value::Int(-i)),
                 Term::Val(Value::Quantity(q)) if inner.kind() == LITERAL => {
-                    match crate::quantity::scale(&q, -1) {
+                    match q.checked_mul(-1) {
                         Some(q) => Term::Val(Value::Quantity(q)),
                         None => return self.error(span, "quantity out of range"),
                     }

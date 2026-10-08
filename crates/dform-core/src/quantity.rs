@@ -70,6 +70,162 @@ impl Dim {
 }
 
 impl Quantity {
+    /// `self + b` of one dimension; none across dimensions.
+    pub fn checked_add(&self, b: &Quantity) -> Option<Quantity> {
+        self.sum(b, false)
+    }
+
+    /// `self - b` of one dimension; none across dimensions.
+    pub fn checked_sub(&self, b: &Quantity) -> Option<Quantity> {
+        self.sum(b, true)
+    }
+
+    fn sum(&self, b: &Quantity, sub: bool) -> Option<Quantity> {
+        let a = self;
+        let op = |x: i64, y: i64| {
+            if sub {
+                x.checked_sub(y)
+            } else {
+                x.checked_add(y)
+            }
+        };
+        Some(match (a, b) {
+            (Quantity::Bytes(x), Quantity::Bytes(y)) => Quantity::Bytes(op(*x, *y)?),
+            (Quantity::Cpu(x), Quantity::Cpu(y)) => Quantity::Cpu(op(*x, *y)?),
+            (Quantity::Duration(x), Quantity::Duration(y)) => Quantity::Duration(
+                Span {
+                    months: op(x.months, y.months)?,
+                    days: op(x.days, y.days)?,
+                    nanos: op(x.nanos, y.nanos)?,
+                }
+                .signed()?,
+            ),
+            _ => return None,
+        })
+    }
+
+    /// `self * n`: a quantity scaled.
+    pub fn checked_mul(&self, n: i64) -> Option<Quantity> {
+        Some(match self {
+            Quantity::Bytes(x) => Quantity::Bytes(x.checked_mul(n)?),
+            Quantity::Cpu(x) => Quantity::Cpu(x.checked_mul(n)?),
+            Quantity::Duration(s) => Quantity::Duration(Span {
+                months: s.months.checked_mul(n)?,
+                days: s.days.checked_mul(n)?,
+                nanos: s.nanos.checked_mul(n)?,
+            }),
+        })
+    }
+
+    /// `self / n`: whole base units, as integer division; a duration's calendar
+    /// parts must divide exactly.
+    pub fn checked_div(&self, n: i64) -> Option<Quantity> {
+        if n == 0 {
+            return None;
+        }
+        Some(match self {
+            Quantity::Bytes(x) => Quantity::Bytes(x.checked_div(n)?),
+            Quantity::Cpu(x) => Quantity::Cpu(x.checked_div(n)?),
+            Quantity::Duration(s) => {
+                if s.months % n != 0 || s.days % n != 0 {
+                    return None;
+                }
+                Quantity::Duration(Span {
+                    months: s.months / n,
+                    days: s.days / n,
+                    nanos: s.nanos.checked_div(n)?,
+                })
+            }
+        })
+    }
+
+    /// `self / b` of one dimension: a plain number, as integer division.
+    pub fn ratio(&self, b: &Quantity) -> Option<i64> {
+        let (x, y) = self.magnitudes(b)?;
+        if y == 0 {
+            return None;
+        }
+        i64::try_from(x / y).ok()
+    }
+
+    /// How `self` and `b`, of one dimension, order; none across dimensions,
+    /// or for durations whose months make them incomparable without a date.
+    pub fn compare(&self, b: &Quantity) -> Option<Ordering> {
+        let (x, y) = self.magnitudes(b)?;
+        Some(x.cmp(&y))
+    }
+
+    /// `self` and `b`, of one dimension, in one unit: base units; for
+    /// durations nanoseconds (a day as 24 hours), or months when both are
+    /// whole months.
+    fn magnitudes(&self, b: &Quantity) -> Option<(i128, i128)> {
+        match (self, b) {
+            (Quantity::Bytes(x), Quantity::Bytes(y)) | (Quantity::Cpu(x), Quantity::Cpu(y)) => {
+                Some((*x as i128, *y as i128))
+            }
+            (Quantity::Duration(x), Quantity::Duration(y)) => match (x.exact(), y.exact()) {
+                (Some(x), Some(y)) => Some((x, y)),
+                _ => {
+                    let months =
+                        |s: &Span| (s.days == 0 && s.nanos == 0).then_some(s.months as i128);
+                    Some((months(x)?, months(y)?))
+                }
+            },
+            _ => None,
+        }
+    }
+
+    /// The quantity in `unit`, spelled as its literals spell it (`"Mi"`,
+    /// `"m"`, `"h"`; `""` for bytes and cores), when it is a whole number of
+    /// them (R-134: one spelling per unit, `to(q, unit)`).
+    pub fn in_unit(&self, unit: &str) -> Option<i64> {
+        let (n, size): (i128, i128) = match self {
+            Quantity::Bytes(n) => {
+                let shift = match unit {
+                    "" => 0,
+                    u => BINARY.iter().find(|(x, _)| *x == u)?.1,
+                };
+                (*n as i128, 1i128 << shift)
+            }
+            Quantity::Cpu(n) => (
+                *n as i128,
+                match unit {
+                    "m" => 1,
+                    "" => 1000,
+                    _ => return None,
+                },
+            ),
+            Quantity::Duration(s) => {
+                if let Some(months) = match unit {
+                    "mo" => Some(1),
+                    "y" => Some(12),
+                    _ => None,
+                } {
+                    if s.days != 0 || s.nanos != 0 {
+                        return None;
+                    }
+                    (s.months as i128, months)
+                } else {
+                    let size = match unit {
+                        "w" => 7 * DAY,
+                        "d" => DAY,
+                        "h" => HOUR,
+                        "m" => MIN,
+                        "s" => SEC,
+                        "ms" => MS,
+                        "us" => US,
+                        "ns" => NS,
+                        _ => return None,
+                    };
+                    (s.exact()?, size as i128)
+                }
+            }
+        };
+        (n % size == 0)
+            .then(|| i64::try_from(n / size).ok())
+            .flatten()
+    }
+
     pub fn dim(&self) -> Dim {
         match self {
             Quantity::Bytes(_) => Dim::Bytes,
@@ -542,151 +698,6 @@ impl Span {
     }
 }
 
-/// `a + b` (`sub`: `a - b`) of one dimension; none across dimensions.
-pub fn add(a: &Quantity, b: &Quantity, sub: bool) -> Option<Quantity> {
-    let op = |x: i64, y: i64| {
-        if sub {
-            x.checked_sub(y)
-        } else {
-            x.checked_add(y)
-        }
-    };
-    Some(match (a, b) {
-        (Quantity::Bytes(x), Quantity::Bytes(y)) => Quantity::Bytes(op(*x, *y)?),
-        (Quantity::Cpu(x), Quantity::Cpu(y)) => Quantity::Cpu(op(*x, *y)?),
-        (Quantity::Duration(x), Quantity::Duration(y)) => Quantity::Duration(
-            Span {
-                months: op(x.months, y.months)?,
-                days: op(x.days, y.days)?,
-                nanos: op(x.nanos, y.nanos)?,
-            }
-            .signed()?,
-        ),
-        _ => return None,
-    })
-}
-
-/// `q * n`: a quantity scaled.
-pub fn scale(q: &Quantity, n: i64) -> Option<Quantity> {
-    Some(match q {
-        Quantity::Bytes(x) => Quantity::Bytes(x.checked_mul(n)?),
-        Quantity::Cpu(x) => Quantity::Cpu(x.checked_mul(n)?),
-        Quantity::Duration(s) => Quantity::Duration(Span {
-            months: s.months.checked_mul(n)?,
-            days: s.days.checked_mul(n)?,
-            nanos: s.nanos.checked_mul(n)?,
-        }),
-    })
-}
-
-/// `q / n`: whole base units, as integer division; a duration's calendar
-/// parts must divide exactly.
-pub fn divide(q: &Quantity, n: i64) -> Option<Quantity> {
-    if n == 0 {
-        return None;
-    }
-    Some(match q {
-        Quantity::Bytes(x) => Quantity::Bytes(x.checked_div(n)?),
-        Quantity::Cpu(x) => Quantity::Cpu(x.checked_div(n)?),
-        Quantity::Duration(s) => {
-            if s.months % n != 0 || s.days % n != 0 {
-                return None;
-            }
-            Quantity::Duration(Span {
-                months: s.months / n,
-                days: s.days / n,
-                nanos: s.nanos.checked_div(n)?,
-            })
-        }
-    })
-}
-
-/// `a / b` of one dimension: a plain number, as integer division.
-pub fn ratio(a: &Quantity, b: &Quantity) -> Option<i64> {
-    let (x, y) = magnitudes(a, b)?;
-    if y == 0 {
-        return None;
-    }
-    i64::try_from(x / y).ok()
-}
-
-/// How two quantities of one dimension order; none across dimensions,
-/// or for durations whose months make them incomparable without a date.
-pub fn compare(a: &Quantity, b: &Quantity) -> Option<Ordering> {
-    let (x, y) = magnitudes(a, b)?;
-    Some(x.cmp(&y))
-}
-
-/// Two quantities of one dimension in one unit: base units; for
-/// durations nanoseconds (a day as 24 hours), or months when both are
-/// whole months.
-fn magnitudes(a: &Quantity, b: &Quantity) -> Option<(i128, i128)> {
-    match (a, b) {
-        (Quantity::Bytes(x), Quantity::Bytes(y)) | (Quantity::Cpu(x), Quantity::Cpu(y)) => {
-            Some((*x as i128, *y as i128))
-        }
-        (Quantity::Duration(x), Quantity::Duration(y)) => match (x.exact(), y.exact()) {
-            (Some(x), Some(y)) => Some((x, y)),
-            _ => {
-                let months = |s: &Span| (s.days == 0 && s.nanos == 0).then_some(s.months as i128);
-                Some((months(x)?, months(y)?))
-            }
-        },
-        _ => None,
-    }
-}
-
-/// The quantity in `unit`, spelled as its literals spell it (`"Mi"`,
-/// `"m"`, `"h"`; `""` for bytes and cores), when it is a whole number of
-/// them (R-134: one spelling per unit, `to(q, unit)`).
-pub fn to_unit(q: &Quantity, unit: &str) -> Option<i64> {
-    let (n, size): (i128, i128) = match q {
-        Quantity::Bytes(n) => {
-            let shift = match unit {
-                "" => 0,
-                u => BINARY.iter().find(|(x, _)| *x == u)?.1,
-            };
-            (*n as i128, 1i128 << shift)
-        }
-        Quantity::Cpu(n) => (
-            *n as i128,
-            match unit {
-                "m" => 1,
-                "" => 1000,
-                _ => return None,
-            },
-        ),
-        Quantity::Duration(s) => {
-            if let Some(months) = match unit {
-                "mo" => Some(1),
-                "y" => Some(12),
-                _ => None,
-            } {
-                if s.days != 0 || s.nanos != 0 {
-                    return None;
-                }
-                (s.months as i128, months)
-            } else {
-                let size = match unit {
-                    "w" => 7 * DAY,
-                    "d" => DAY,
-                    "h" => HOUR,
-                    "m" => MIN,
-                    "s" => SEC,
-                    "ms" => MS,
-                    "us" => US,
-                    "ns" => NS,
-                    _ => return None,
-                };
-                (s.exact()?, size as i128)
-            }
-        }
-    };
-    (n % size == 0)
-        .then(|| i64::try_from(n / size).ok())
-        .flatten()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -761,11 +772,11 @@ mod tests {
     fn arithmetic_keeps_the_dimension() {
         let gi = Quantity::Bytes(1 << 30);
         let m = Quantity::Cpu(500);
-        assert_eq!(add(&gi, &m, false), None);
-        assert_eq!(scale(&gi, 2), Some(Quantity::Bytes(2 << 30)));
-        assert_eq!(ratio(&Quantity::Cpu(1000), &Quantity::Cpu(250)), Some(4));
+        assert_eq!(gi.checked_add(&m), None);
+        assert_eq!(gi.checked_mul(2), Some(Quantity::Bytes(2 << 30)));
+        assert_eq!(Quantity::Cpu(1000).ratio(&Quantity::Cpu(250)), Some(4));
         assert_eq!(
-            compare(&Quantity::Cpu(2000), &Quantity::Cpu(2000)),
+            Quantity::Cpu(2000).compare(&Quantity::Cpu(2000)),
             Some(Ordering::Equal)
         );
         let mo = Quantity::Duration(Span {
@@ -776,9 +787,9 @@ mod tests {
             days: 30,
             ..Span::default()
         });
-        assert_eq!(compare(&mo, &d30), None);
-        assert_eq!(add(&mo, &d30, true), None);
-        assert_eq!(to_unit(&Quantity::Bytes(1536 << 20), "Mi"), Some(1536));
-        assert_eq!(to_unit(&Quantity::Bytes(1536 << 20), "Gi"), None);
+        assert_eq!(mo.compare(&d30), None);
+        assert_eq!(mo.checked_sub(&d30), None);
+        assert_eq!(Quantity::Bytes(1536 << 20).in_unit("Mi"), Some(1536));
+        assert_eq!(Quantity::Bytes(1536 << 20).in_unit("Gi"), None);
     }
 }

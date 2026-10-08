@@ -839,19 +839,15 @@ pub const BODIES: &[(&str, Body)] = &[
     ("mul", |a| {
         num2(a, |x, y| Some(x * y), |x, y| x * y).or_else(|| match a {
             [Value::Quantity(q), Value::Int(n)] | [Value::Int(n), Value::Quantity(q)] => {
-                crate::quantity::scale(q, *n).map(Value::Quantity)
+                q.checked_mul(*n).map(Value::Quantity)
             }
             _ => None,
         })
     }),
     ("div", |a| {
         num2(a, |x, y| (y != 0).then(|| x / y), |x, y| x / y).or_else(|| match a {
-            [Value::Quantity(q), Value::Int(n)] => {
-                crate::quantity::divide(q, *n).map(Value::Quantity)
-            }
-            [Value::Quantity(p), Value::Quantity(q)] => {
-                crate::quantity::ratio(p, q).map(Value::Int)
-            }
+            [Value::Quantity(q), Value::Int(n)] => q.checked_div(*n).map(Value::Quantity),
+            [Value::Quantity(p), Value::Quantity(q)] => p.ratio(q).map(Value::Int),
             _ => None,
         })
     }),
@@ -1611,7 +1607,7 @@ pub(crate) fn len(v: &Value) -> Option<i64> {
 /// only.
 fn unit_of(a: &[Value]) -> Option<Value> {
     match a {
-        [Value::Quantity(q), Value::Str(unit)] => crate::quantity::to_unit(q, unit).map(Value::Int),
+        [Value::Quantity(q), Value::Str(unit)] => q.in_unit(unit).map(Value::Int),
         _ => None,
     }
 }
@@ -1620,7 +1616,7 @@ fn unit_of(a: &[Value]) -> Option<Value> {
 /// duration (R-66, R-62), and `b - a` of two times; none across
 /// dimensions.
 fn measured(a: &[Value], sub: bool) -> Option<Value> {
-    use crate::quantity::{Quantity, add};
+    use crate::quantity::Quantity;
     // A string beside a time or a duration is read as a time, as the
     // other side of an operator gives a literal its type (R-134:
     // `cert.not_after - now` over a string attribute).
@@ -1639,7 +1635,11 @@ fn measured(a: &[Value], sub: bool) -> Option<Value> {
         _ => {}
     }
     match a {
-        [Value::Quantity(x), Value::Quantity(y)] => add(x, y, sub).map(Value::Quantity),
+        [Value::Quantity(x), Value::Quantity(y)] => match sub {
+            true => x.checked_sub(y),
+            false => x.checked_add(y),
+        }
+        .map(Value::Quantity),
         [Value::Time(t), Value::Quantity(Quantity::Duration(d))] => {
             t.add(if sub { d.negate() } else { *d }).map(Value::Time)
         }

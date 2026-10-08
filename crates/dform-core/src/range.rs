@@ -81,7 +81,7 @@ impl Range {
             ));
         }
         if let (Value::Quantity(a), Value::Quantity(b)) = (&start, &end) {
-            crate::quantity::compare(a, b)
+            a.compare(b)
                 .ok_or_else(|| format!("{a} and {b} do not compare: a range's ends do"))?;
         }
         // A discrete range holds its end: `0..3` is `0..=2`.

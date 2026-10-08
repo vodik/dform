@@ -2547,7 +2547,7 @@ fn fold(name: &str, kind: AggKind, items: Vec<Value>) -> std::result::Result<Val
                 };
                 total = Some(match total {
                     None => *q,
-                    Some(t) => crate::quantity::add(&t, q, false).ok_or_else(|| {
+                    Some(t) => t.checked_add(q).ok_or_else(|| {
                         format!(
                             "{name}() over {t} and {q}, which do not add: {} and {}",
                             t.dim().name(),
@@ -4174,22 +4174,20 @@ pub(crate) fn order(a: &Value, b: &Value) -> std::result::Result<Ordering, Strin
         (Value::Time(x), Value::Time(y)) => Ok(x.instant().cmp(&y.instant())),
         (Value::Semver(x), Value::Semver(y)) => Ok(x.cmp(y)),
         (Value::Ip(x), Value::Ip(y)) => Ok(x.cmp(y)),
-        (Value::Quantity(x), Value::Quantity(y)) => {
-            crate::quantity::compare(x, y).ok_or_else(|| {
-                if x.dim() == y.dim() {
-                    format!(
-                        "{x} and {y} do not compare: a month's length depends on the date \
+        (Value::Quantity(x), Value::Quantity(y)) => x.compare(y).ok_or_else(|| {
+            if x.dim() == y.dim() {
+                format!(
+                    "{x} and {y} do not compare: a month's length depends on the date \
                      (add both to a time, `t + d`)"
-                    )
-                } else {
-                    format!(
-                        "{x} is {} and {y} {}: a quantity compares only within its dimension",
-                        x.dim().name(),
-                        y.dim().name()
-                    )
-                }
-            })
-        }
+                )
+            } else {
+                format!(
+                    "{x} is {} and {y} {}: a quantity compares only within its dimension",
+                    x.dim().name(),
+                    y.dim().name()
+                )
+            }
+        }),
         _ => Err(
             "comparison only supports numbers, quantities, times, versions and addresses"
                 .to_string(),
