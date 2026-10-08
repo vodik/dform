@@ -237,6 +237,14 @@ impl Calls for Imports {
         wh::io::read(location).map_err(failure)
     }
 
+    fn io_read_versioned(&self, location: &str) -> Result<dform_core::files::Document, Failure> {
+        let d = wh::io::read_versioned(location).map_err(failure)?;
+        Ok(dform_core::files::Document {
+            bytes: d.data,
+            version: d.version,
+        })
+    }
+
     fn exec(&self, on: &Target, argv: &[String], stdin: Option<&[u8]>) -> Result<Run, Failure> {
         let r = wh::ssh::exec(&target(on), argv, stdin).map_err(failure)?;
         Ok(Run {

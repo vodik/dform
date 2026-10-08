@@ -255,3 +255,39 @@ fn a_location_is_read_as_the_grants_allow() {
     };
     assert!(e.message.contains("the project's"), "{}", e.message);
 }
+
+/// A source that keeps versions answers its version.
+struct Kept;
+
+impl dform::files::Transport for Kept {
+    fn read(&self, at: &dform::uri::Uri, f: &dform::files::Files) -> Result<Vec<u8>, Failure> {
+        self.read_document(at, f).map(|d| d.bytes)
+    }
+
+    fn read_document(
+        &self,
+        _: &dform::uri::Uri,
+        _: &dform::files::Files,
+    ) -> Result<dform::files::Document, Failure> {
+        Ok(dform::files::Document {
+            bytes: b"s3cr3t".to_vec(),
+            version: Some("7".into()),
+        })
+    }
+}
+
+/// A native provider's own read of a location whose source keeps
+/// versions answers the version too (`Host.ReadVersioned`, R-172).
+#[test]
+fn a_location_s_version_crosses() {
+    let files = std::sync::Arc::new(dform::files::Files::default());
+    files.declare("kv", "vault", std::sync::Arc::new(Kept));
+    let mut g = grants(&[]);
+    g.reads = ["kv://app/*".to_string()].into();
+    g.files = dform::files::Shared(Some(files));
+    let (_h, c) = client(Services::new(g));
+    let d = c.io_read_versioned("kv://app/key").unwrap();
+    assert_eq!(d.bytes, b"s3cr3t");
+    assert_eq!(d.version.as_deref(), Some("7"));
+    assert_eq!(c.io_read("kv://app/key").unwrap(), b"s3cr3t");
+}

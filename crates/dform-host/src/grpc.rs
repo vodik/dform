@@ -74,6 +74,19 @@ impl h::host_server::Host for Service {
         )))
     }
 
+    type ReadVersionedStream = Self::ReadStream;
+
+    async fn read_versioned(&self, r: Request<h::ReadRequest>) -> R<Self::ReadVersionedStream> {
+        let location = r.into_inner().location;
+        let chunks = self
+            .with(move |s| conv::versioned_chunks(s.io_read_versioned(&location)))
+            .await?
+            .into_inner();
+        Ok(Response::new(tonic::codegen::tokio_stream::iter(
+            chunks.into_iter().map(Ok).collect::<Vec<_>>(),
+        )))
+    }
+
     async fn exec(&self, r: Request<h::ExecRequest>) -> R<h::ExecResponse> {
         let r = r.into_inner();
         let on = conv::target(r.on);

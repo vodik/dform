@@ -198,6 +198,30 @@ impl Calls for Grpc {
         conv::read(chunks)
     }
 
+    /// `Host.ReadVersioned` (R-172), else `Read` of a dform built before
+    /// it: unversioned.
+    fn io_read_versioned(&self, location: &str) -> Result<dform_core::files::Document, Failure> {
+        let req = h::ReadRequest {
+            location: location.into(),
+        };
+        let chunks = self.call(move |mut c| {
+            Box::pin(async move {
+                let mut s = match c.read_versioned(req.clone()).await {
+                    Err(e) if e.code() == tonic::Code::Unimplemented => {
+                        c.read(req).await?.into_inner()
+                    }
+                    r => r?.into_inner(),
+                };
+                let mut out = Vec::new();
+                while let Some(chunk) = s.message().await? {
+                    out.push(chunk);
+                }
+                Ok(tonic::Response::new(out))
+            })
+        })?;
+        conv::read_versioned(chunks)
+    }
+
     fn write(&self, on: &Target, path: &str, data: &[u8], mode: u32) -> Result<(), Error> {
         let r = rpc!(
             self,

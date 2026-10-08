@@ -40,6 +40,9 @@ service Host {
   rpc Send(SendRequest) returns (SendResponse);
   // io.read (R-153, R-155): the bytes at a location, in chunks.
   rpc Read(ReadRequest) returns (stream ReadChunk);
+  // io.read-versioned (R-172): as `Read`, the first chunk carrying the
+  // version the source names the bytes by, when it keeps versions.
+  rpc ReadVersioned(ReadRequest) returns (stream ReadChunk);
   // ssh.exec
   rpc Exec(ExecRequest) returns (ExecResponse);
   // ssh.read, folded into io.read (R-153): `Read` of
