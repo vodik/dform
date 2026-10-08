@@ -43,6 +43,7 @@ const CONTEXTUAL = [
 const TERM_NAMES = [...STATEMENT_KEYWORDS, ...CONTEXTUAL];
 
 const PREC = {
+  spread: -1,
   range: 0,
   add: 1,
   mul: 2,
@@ -558,7 +559,7 @@ export default grammar({
 
     // `(a, b, ..)`: a tuple pattern (R-58), after `in`, on the left of `=`
     // and as a relation's argument; the compiler refuses one as a value.
-    tuple: $ => seq('(', $._term, repeat1(seq(',', $._term)), optional(','), ')'),
+    tuple: $ => seq('(', $._item, repeat1(seq(',', $._item)), optional(','), ')'),
 
     // `name (.seg | [terms])*`: `.` is static, `[ ]` a key (H 5.1).
     _chain: $ => choice(
@@ -622,7 +623,16 @@ export default grammar({
     // `p(a: x)`: an argument by its column's name.
     named_argument: $ => seq(field('name', $._word), ':', field('value', $._term)),
 
-    list: $ => seq('[', commaSepTrailing($._term), ']'),
+    list: $ => seq('[', commaSepTrailing($._item), ']'),
+
+    // A list's or a tuple's element: a term, or a spread.
+    _item: $ => choice($._term, $.spread),
+
+    // `..x` leading an element or a field (R-199): a spread in a literal,
+    // an object pattern's rest; `..` alone is a pattern's, which the
+    // compiler refuses. A range sits between two terms, so `[..0..3]`
+    // spreads the range `0..3`.
+    spread: $ => prec(PREC.spread, seq('..', optional(field('value', $._term)))),
 
     comprehension: $ => seq(
       '[',
@@ -632,7 +642,7 @@ export default grammar({
       ']',
     ),
 
-    object: $ => seq('{', commaSepTrailing($.object_field), '}'),
+    object: $ => seq('{', commaSepTrailing(choice($.object_field, $.spread)), '}'),
 
     object_field: $ => seq(
       field('key', choice($._word, $.string)),

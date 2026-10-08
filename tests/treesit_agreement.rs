@@ -92,6 +92,7 @@ const SAME: &[(SyntaxKind, &[&str])] = &[
     (NAMED_ARG, &["named_argument"]),
     (LIST, &["list"]),
     (OBJECT, &["object"]),
+    (SPREAD, &["spread"]),
     (COMPREHENSION, &["comprehension"]),
     (PAREN, &["parenthesized"]),
     (BIN_EXPR, &["binary_expression"]),

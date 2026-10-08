@@ -1223,6 +1223,10 @@
         {
           "type": "_term",
           "named": true
+        },
+        {
+          "type": "spread",
+          "named": true
         }
       ]
     }
@@ -1381,6 +1385,10 @@
       "types": [
         {
           "type": "object_field",
+          "named": true
+        },
+        {
+          "type": "spread",
           "named": true
         }
       ]
@@ -1922,6 +1930,22 @@
     }
   },
   {
+    "type": "spread",
+    "named": true,
+    "fields": {
+      "value": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "_term",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
     "type": "statement_block",
     "named": true,
     "fields": {},
@@ -1997,6 +2021,10 @@
       "types": [
         {
           "type": "_term",
+          "named": true
+        },
+        {
+          "type": "spread",
           "named": true
         }
       ]

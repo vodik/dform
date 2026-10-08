@@ -31,6 +31,10 @@ host_of(h) where labels(l), { host: h } = l
 tagged(repo, tag) where images(i), (repo, tag) = str.split(i, ":", 1)
 untagged(i) where images(i), not (_, _) = str.split(i, ":", 1)
 ids(i) where project({ id: i })
+# Spread (R-199): a literal's fields or elements, and an object pattern's rest.
+spread(x) where labels(l), x = { ..l, team: "web", spec: { ..l.spec, replicas: 3 } }
+spread_list(x) where images(i), x = [..0..3, ..[i], 9]
+rest(h, body) where labels(l), { host: h, ..body } = l
 
 # A module, checks.df beside this file, by its path; and a component.
 use checks where env("prod")
@@ -387,6 +391,79 @@ x(i, a_) where vpc_inst(i), output(m[i], "vpc", a_)
               (object_field
                 (identifier)
                 (identifier))))))))
+  (comment)
+  (rule
+    (call
+      (identifier)
+      (arguments
+        (identifier)))
+    (body
+      (atom_literal
+        (call
+          (identifier)
+          (arguments
+            (identifier))))
+      (comparison
+        (identifier)
+        (object
+          (spread
+            (identifier))
+          (object_field
+            (identifier)
+            (string
+              (string_content)))
+          (object_field
+            (identifier)
+            (object
+              (spread
+                (member_expression
+                  (identifier)
+                  (identifier)))
+              (object_field
+                (identifier)
+                (integer))))))))
+  (rule
+    (call
+      (identifier)
+      (arguments
+        (identifier)))
+    (body
+      (atom_literal
+        (call
+          (identifier)
+          (arguments
+            (identifier))))
+      (comparison
+        (identifier)
+        (list
+          (spread
+            (range
+              (integer)
+              (integer)))
+          (spread
+            (list
+              (identifier)))
+          (integer)))))
+  (rule
+    (call
+      (identifier)
+      (arguments
+        (identifier)
+        (identifier)))
+    (body
+      (atom_literal
+        (call
+          (identifier)
+          (arguments
+            (identifier))))
+      (comparison
+        (object
+          (object_field
+            (identifier)
+            (identifier))
+          (spread
+            (identifier)))
+        (identifier))))
   (comment)
   (use
     (dotted_name

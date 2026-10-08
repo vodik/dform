@@ -3148,7 +3148,7 @@
         },
         {
           "type": "SYMBOL",
-          "name": "_term"
+          "name": "_item"
         },
         {
           "type": "REPEAT1",
@@ -3161,7 +3161,7 @@
               },
               {
                 "type": "SYMBOL",
-                "name": "_term"
+                "name": "_item"
               }
             ]
           }
@@ -3729,7 +3729,7 @@
                   "members": [
                     {
                       "type": "SYMBOL",
-                      "name": "_term"
+                      "name": "_item"
                     },
                     {
                       "type": "REPEAT",
@@ -3742,7 +3742,7 @@
                           },
                           {
                             "type": "SYMBOL",
-                            "name": "_term"
+                            "name": "_item"
                           }
                         ]
                       }
@@ -3773,6 +3773,48 @@
           "value": "]"
         }
       ]
+    },
+    "_item": {
+      "type": "CHOICE",
+      "members": [
+        {
+          "type": "SYMBOL",
+          "name": "_term"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "spread"
+        }
+      ]
+    },
+    "spread": {
+      "type": "PREC",
+      "value": -1,
+      "content": {
+        "type": "SEQ",
+        "members": [
+          {
+            "type": "STRING",
+            "value": ".."
+          },
+          {
+            "type": "CHOICE",
+            "members": [
+              {
+                "type": "FIELD",
+                "name": "value",
+                "content": {
+                  "type": "SYMBOL",
+                  "name": "_term"
+                }
+              },
+              {
+                "type": "BLANK"
+              }
+            ]
+          }
+        ]
+      }
     },
     "comprehension": {
       "type": "SEQ",
@@ -3829,8 +3871,17 @@
                   "type": "SEQ",
                   "members": [
                     {
-                      "type": "SYMBOL",
-                      "name": "object_field"
+                      "type": "CHOICE",
+                      "members": [
+                        {
+                          "type": "SYMBOL",
+                          "name": "object_field"
+                        },
+                        {
+                          "type": "SYMBOL",
+                          "name": "spread"
+                        }
+                      ]
                     },
                     {
                       "type": "REPEAT",
@@ -3842,8 +3893,17 @@
                             "value": ","
                           },
                           {
-                            "type": "SYMBOL",
-                            "name": "object_field"
+                            "type": "CHOICE",
+                            "members": [
+                              {
+                                "type": "SYMBOL",
+                                "name": "object_field"
+                              },
+                              {
+                                "type": "SYMBOL",
+                                "name": "spread"
+                              }
+                            ]
                           }
                         ]
                       }
