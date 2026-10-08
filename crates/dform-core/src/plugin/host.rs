@@ -209,7 +209,7 @@ pub trait Calls: Send + Sync {
     /// `io.read-versioned` (R-172): [`Calls::io_read`] with the version a
     /// source that keeps versions answers; by default unversioned.
     fn io_read_versioned(&self, location: &str) -> Result<crate::files::Document, Failure> {
-        self.io_read(location).map(crate::files::Document::new)
+        self.io_read(location).map(crate::files::Document::from)
     }
     /// `ssh.exec`.
     fn exec(&self, on: &Target, argv: &[String], stdin: Option<&[u8]>) -> Result<Run, Failure>;

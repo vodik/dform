@@ -222,6 +222,6 @@ pub trait Handler {
         location: &str,
     ) -> Result<crate::files::Document, super::host::Failure> {
         self.read_location(location)
-            .map(crate::files::Document::new)
+            .map(crate::files::Document::from)
     }
 }

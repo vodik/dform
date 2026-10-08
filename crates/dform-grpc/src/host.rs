@@ -207,7 +207,7 @@ const CHUNK: usize = 1 << 20;
 /// A read's answer as `ReadChunk`s: its bytes in order (one chunk when
 /// empty), or the one failure.
 pub fn chunks(r: Result<Vec<u8>, Failure>) -> Vec<h::ReadChunk> {
-    versioned_chunks(r.map(dform_core::files::Document::new))
+    versioned_chunks(r.map(dform_core::files::Document::from))
 }
 
 /// A versioned read's answer as `ReadChunk`s (`ReadVersioned`, R-172):

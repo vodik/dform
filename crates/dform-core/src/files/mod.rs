@@ -70,9 +70,9 @@ pub struct Document {
     pub version: Option<String>,
 }
 
-impl Document {
-    /// Bytes with no version.
-    pub fn new(bytes: Vec<u8>) -> Document {
+/// Bytes with no version.
+impl From<Vec<u8>> for Document {
+    fn from(bytes: Vec<u8>) -> Document {
         Document {
             bytes,
             version: None,
@@ -89,7 +89,7 @@ pub trait Transport: Send + Sync {
     /// The bytes at `at` and their version, when the source keeps
     /// versions; by default [`Transport::read`]'s, unversioned.
     fn read_document(&self, at: &Uri, files: &Files) -> Result<Document, Failure> {
-        self.read(at, files).map(Document::new)
+        self.read(at, files).map(Document::from)
     }
 }
 
@@ -471,7 +471,7 @@ impl Files {
             .into()),
             "git+https" | "git+ssh" => self
                 .git_read(&u, Path::new(""))
-                .map(|r| Document::new(r.bytes))
+                .map(|r| Document::from(r.bytes))
                 .map_err(|e| Error::fatal(format!("{e:#}")).into()),
             _ => self.transport(&u),
         }
@@ -481,16 +481,16 @@ impl Files {
     fn transport(&self, u: &Uri) -> Result<Document, Failure> {
         match u.scheme.as_str() {
             "data" => data(&u.path)
-                .map(Document::new)
+                .map(Document::from)
                 .map_err(|e| Error::fatal(e).into()),
             "http" => Err(Error::fatal(format!(
                 "{u}: `http:` is not read (no TLS): write `https:`"
             ))
             .into()),
             #[cfg(not(target_family = "wasm"))]
-            "ssh" => self.ssh(u).map(Document::new),
+            "ssh" => self.ssh(u).map(Document::from),
             #[cfg(not(target_family = "wasm"))]
-            "https" => self.https(u).map(Document::new),
+            "https" => self.https(u).map(Document::from),
             // dform's own transports first (the CLI's `s3`), then the one a
             // provider declares.
             s => {
