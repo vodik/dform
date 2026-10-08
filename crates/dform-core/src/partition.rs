@@ -612,6 +612,7 @@ pub fn compile(program: &Program, given: &[Atom]) -> Result<Compiled> {
     let schema = schema_of(given, &facts)?;
     let (rules, facts) = answer_has(rules, facts, &schema);
     let rules = answer_identity(rules, &schema);
+    let rules = crate::through::through(rules, &schema);
     transform::check_computed_writes(&rules, &facts, &schema)?;
     let (mut rules, facts) = transform::rewrite_computed_refs(rules, facts, &schema);
     rules.extend(transform::computed_prelude(&schema));

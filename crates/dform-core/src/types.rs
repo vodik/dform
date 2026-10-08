@@ -861,6 +861,14 @@ fn read_stmt(s: &mut Stmt, schema: &Schema, diags: &mut Vec<Diagnostic>) {
             let Term::Val(Value::Str(path)) = &r.head.args[2] else {
                 return;
             };
+            // `set x.spec..requests = { cpu: 100m } where x in resource`:
+            // the attribute's edge reads the quantity.
+            if types.is_empty() {
+                if let Some(v) = at_edge(schema, r, path) {
+                    r.head.args[3] = v;
+                }
+                return;
+            }
             let mut read: Option<Term> = None;
             for typ in &types {
                 let mut v = r.head.args[3].clone();
@@ -911,6 +919,60 @@ fn read_stmt(s: &mut Stmt, schema: &Schema, diags: &mut Vec<Diagnostic>) {
         }
         _ => {}
     }
+}
+
+/// The value of a `set` through a variable of any type (`x in resource`,
+/// `x in k8s`) with a quantity only a position's type reads (`100m`), read
+/// at the attribute's edge: as every type of the schema (of the namespace,
+/// where the rule names one) that declares the attribute reads it, when
+/// those that read it agree. `None` where no type reads it, or they read
+/// it differently: the literal stays the error that says so.
+fn at_edge(schema: &Schema, r: &crate::ast::RuleStmt, path: &str) -> Option<Term> {
+    let value = &r.head.args[3];
+    if !holds_ambiguous(value) {
+        return None;
+    }
+    let namespace = r.body.iter().find_map(|l| match l {
+        Lit::Pos(a) if a.pred == "__namespace" && a.args.get(1) == Some(&r.head.args[0]) => {
+            match a.args.first() {
+                Some(Term::Val(Value::Str(ns))) => Some(format!("{ns}.")),
+                _ => None,
+            }
+        }
+        _ => None,
+    });
+    let under = format!("{path}.");
+    let types: std::collections::BTreeSet<&str> = schema
+        .attrs
+        .keys()
+        .filter(|(_, p)| p == path || p.starts_with(&under))
+        .map(|(t, _)| t.as_str())
+        .filter(|t| {
+            namespace
+                .as_ref()
+                .is_none_or(|ns| t.starts_with(ns.as_str()))
+        })
+        .collect();
+    let mut read: Option<Term> = None;
+    for typ in types {
+        let mut v = value.clone();
+        if read_at(schema, typ, path, &mut v).is_err() || holds_ambiguous(&v) {
+            continue;
+        }
+        match &read {
+            Some(first) if *first != v => return None,
+            Some(_) => {}
+            None => read = Some(v),
+        }
+    }
+    read
+}
+
+/// Whether `t` holds a quantity only a position's type reads.
+fn holds_ambiguous(t: &Term) -> bool {
+    let mut found = false;
+    visit(t, &mut |x| found |= ambiguous(x).is_some());
+    found
 }
 
 /// The types a rule's type variable `typ` may be, by the `member([T1,

@@ -3131,7 +3131,13 @@ fn eval_member2(
         ),
         _ => bail!("member/2 first argument must be a list"),
     };
+    let given = eval_term(&atom.args[1], state);
     for item in &items {
+        if let Some(v) = &given
+            && let Some(e) = ref_and_string(&atom.args[1], v, "in", &atom.args[0], item, rec)
+        {
+            return Err(e);
+        }
         let mut s2 = state.clone();
         if unify_term(&atom.args[1], item, &mut s2, rec)? {
             out.push(s2);
@@ -3157,6 +3163,9 @@ fn eval_not_member2(atom: &Atom, state: &HashMap<String, Value>, rec: &Rec) -> R
         .ok_or_else(|| anyhow!("unsafe not member: item is not ground"))?;
     let mut unknown = BTreeSet::new();
     for x in &items {
+        if let Some(e) = ref_and_string(&atom.args[1], &item_v, "in", &atom.args[0], x, rec) {
+            return Err(e);
+        }
         match crate::lattice::eq3(x, &item_v) {
             Truth::True => return Ok(false),
             Truth::Unknown => {
@@ -3613,11 +3622,16 @@ fn eval_eq(
     match (eval_term(a, &out), eval_term(b, &out)) {
         // Two numbers compare by value, an int with a float (R-75); a
         // join matches a value as it is.
-        (Some(av), Some(bv)) => Ok(match crate::value::compare_numbers(&av, &bv) {
-            Some(o) => o.is_eq(),
-            None => rec.eq(&av, &bv, &out, "="),
+        (Some(av), Some(bv)) => {
+            if let Some(e) = ref_and_string(a, &av, "==", b, &bv, rec) {
+                return Err(e);
+            }
+            Ok(match crate::value::compare_numbers(&av, &bv) {
+                Some(o) => o.is_eq(),
+                None => rec.eq(&av, &bv, &out, "="),
+            }
+            .then_some(out))
         }
-        .then_some(out)),
         (Some(av), None) => {
             not_an_object(b, &out, rec)?;
             if bind_term(b, av, &mut out, rec)? {
@@ -3658,6 +3672,62 @@ fn eval_eq(
             bail!("unsafe equality: both sides unbound")
         }
     }
+}
+
+/// A reference compared with a string, `a OP b` (`==`, `!=`, `in` an
+/// element of `b`): never equal, so an error at the rule naming both,
+/// never a literal that silently does not hold. The compiler says so
+/// where it knows the types; this is where it did not (a document's
+/// field, a reference of no known type).
+fn ref_and_string(
+    a: &Term,
+    av: &Value,
+    op: &str,
+    b: &Term,
+    bv: &Value,
+    rec: &Rec,
+) -> Option<anyhow::Error> {
+    let ((typ, name), text) = match (av, bv) {
+        (Value::Ref { typ, name, attr }, Value::Str(s))
+        | (Value::Str(s), Value::Ref { typ, name, attr })
+            if attr.is_empty() =>
+        {
+            ((typ, name), s)
+        }
+        _ => return None,
+    };
+    fn shown(t: &Term) -> String {
+        match t {
+            Term::Var(x) => crate::syntax::resolve::source_name(x),
+            Term::List(xs) => format!("[{}]", xs.iter().map(shown).collect::<Vec<_>>().join(", ")),
+            t => spell::term(t),
+        }
+    }
+    let reference = crate::report::address(&crate::ir::Address {
+        typ: typ.clone(),
+        name: name.clone(),
+    });
+    let help = match text.is_empty() {
+        true => "`has r` tests whether a reference is set".to_string(),
+        false => format!(
+            "compare with the resource: `{}`, or its name in scope",
+            crate::ir::Address {
+                typ: typ.clone(),
+                name: text.clone(),
+            }
+        ),
+    };
+    let d = diag::Diagnostic::error(
+        rec.head.span,
+        format!(
+            "`{} {op} {}` compares a reference, {reference}, with the string {text:?}: a \
+             reference is never a string",
+            shown(a),
+            shown(b)
+        ),
+    )
+    .with_help(help);
+    Some(diag::Diagnostics(vec![d]).into())
 }
 
 /// A call that answered nothing (R-134): `Ok` when the function is
@@ -3890,19 +3960,24 @@ fn eval_neq(a: &Term, b: &Term, state: &HashMap<String, Value>, rec: &Rec) -> Re
         return Ok(false);
     }
     match (eval_term(a, state), eval_term(b, state)) {
-        (Some(av), Some(bv)) => Ok(match crate::value::compare_numbers(&av, &bv) {
-            Some(o) => !o.is_eq(),
-            None => match crate::lattice::eq3(&av, &bv) {
-                Truth::False => true,
-                Truth::True => false,
-                Truth::Unknown => {
-                    let mut nulls = nulls_in(&av);
-                    nulls.extend(nulls_in(&bv));
-                    rec.stuck(state, nulls, "!= against an open/secret null");
-                    false
-                }
-            },
-        }),
+        (Some(av), Some(bv)) => {
+            if let Some(e) = ref_and_string(a, &av, "!=", b, &bv, rec) {
+                return Err(e);
+            }
+            Ok(match crate::value::compare_numbers(&av, &bv) {
+                Some(o) => !o.is_eq(),
+                None => match crate::lattice::eq3(&av, &bv) {
+                    Truth::False => true,
+                    Truth::True => false,
+                    Truth::Unknown => {
+                        let mut nulls = nulls_in(&av);
+                        nulls.extend(nulls_in(&bv));
+                        rec.stuck(state, nulls, "!= against an open/secret null");
+                        false
+                    }
+                },
+            })
+        }
         (a_v, _) => {
             let t = if a_v.is_none() { a } else { b };
             if let Some(r) = side_unanswered(t, state, rec) {
@@ -3957,6 +4032,8 @@ fn eval_cmp(
 fn bind_term(t: &Term, v: Value, out: &mut HashMap<String, Value>, rec: &Rec) -> Result<bool> {
     match t {
         Term::List(_) => unify_term(t, &v, out, rec),
+        // `ref(T, A, "") = V` takes a reference apart (`through`).
+        Term::Func { name, .. } if name == crate::ir::REF => unify_term(t, &v, out, rec),
         Term::Var(name) => {
             if let Some(bound) = out.get(name) {
                 Ok(bound == &v)

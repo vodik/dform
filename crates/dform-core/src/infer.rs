@@ -329,6 +329,9 @@ struct Pass<'a> {
     vars: Vec<Vars>,
     /// A rule head's variable names per column, for the signature.
     head_names: BTreeMap<Col, String>,
+    /// Errors found while collecting: a reference attribute compared with
+    /// a string (`s.vpc == "main"`).
+    diags: Vec<Diagnostic>,
 }
 
 impl Pass<'_> {
@@ -547,6 +550,29 @@ impl Pass<'_> {
                 if let Some((ty, what)) = found {
                     let n = self.var(rule, v);
                     self.s.hard(n, ty, a.span, what);
+                }
+                return;
+            }
+            // `s.vpc == "main"`, the join `attr(net.subnet, S, "vpc",
+            // "main")`: a reference is never a string.
+            (
+                "attr",
+                [
+                    Term::Val(Value::Str(typ)),
+                    addr,
+                    Term::Val(Value::Str(p)),
+                    Term::Val(Value::Str(text)),
+                ],
+            ) => {
+                if let Some(Ty::Ref(want)) = self
+                    .schema
+                    .and_then(|s| s.attr(typ, p))
+                    .map(|a| Ty::parse(&a.ty))
+                {
+                    let read = format!("{}.{p}", shown_term(addr));
+                    let written = format!("`{read} == {text:?}`");
+                    self.diags
+                        .push(ref_and_string(&written, &read, &want, text, a.span));
                 }
                 return;
             }
@@ -826,6 +852,7 @@ pub fn infer(
         fields: Vec::new(),
         vars: Vec::new(),
         head_names: BTreeMap::new(),
+        diags: Vec::new(),
     };
     // The declarations: every relation the program has that a `decl`
     // types, and the externs' typed columns.
@@ -1005,6 +1032,10 @@ impl Pass<'_> {
                 continue;
             }
             match (&ta, &tb, &c.a, &c.b) {
+                (Some(Ty::Ref(want)), _, x, Term::Val(Value::Str(text)))
+                | (_, Some(Ty::Ref(want)), Term::Val(Value::Str(text)), x) => {
+                    diags.push(ref_and_string(&written, &shown_term(x), want, text, c.span));
+                }
                 (Some(t), _, x, Term::Val(v)) | (_, Some(t), Term::Val(v), x)
                     if matches!(v, Value::Str(_)) =>
                 {
@@ -1058,6 +1089,7 @@ impl Pass<'_> {
                 );
             }
         }
+        diags.append(&mut self.diags);
         let fields = std::mem::take(&mut self.fields);
         for f in &fields {
             if let Some(d) = self.field_of(f, &settled) {
@@ -1277,6 +1309,31 @@ impl Pass<'_> {
             (None, None) => None,
         }
     }
+}
+
+/// A reference compared with a string (`written`, `read` the reference):
+/// never equal, so an error, with the resource to write, or `has` where
+/// the string is empty.
+fn ref_and_string(written: &str, read: &str, want: &str, text: &str, span: Span) -> Diagnostic {
+    let help = match (text.is_empty(), Ty::ref_types(want).next()) {
+        (true, _) => format!("`has {read}` tests whether it is set"),
+        (false, Some(typ)) if !want.contains('|') => format!(
+            "compare with the resource: `{}`, or its name in scope",
+            crate::ir::Address {
+                typ: typ.to_string(),
+                name: text.to_string(),
+            }
+        ),
+        _ => "compare with the resource: its name in scope, or `T[\"a\"]`".to_string(),
+    };
+    Diagnostic::error(
+        span,
+        format!(
+            "{written} compares a reference, ref({want}), with the string {text:?}: a reference \
+             is never a string"
+        ),
+    )
+    .with_help(help)
 }
 
 fn shown(v: &Value) -> String {
