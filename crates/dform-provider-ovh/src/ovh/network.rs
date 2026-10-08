@@ -170,6 +170,43 @@ fn no_vrack(p: &str) -> String {
     )
 }
 
+/// The OpenStack id of `net` (a network as the API answers it, public or
+/// private) in `region`.
+fn openstack_id(net: &Json, region: &str) -> Option<String> {
+    net.get("regions")?
+        .as_array()?
+        .iter()
+        .find(|r| s(r, "region") == Some(region))
+        .and_then(|r| s(r, "openstackId"))
+        .map(str::to_string)
+}
+
+/// An instance document's private networks, by their ids: none when it
+/// names none.
+fn networks_of<'a>(at: &str, doc: &'a Json) -> std::result::Result<Vec<&'a str>, Failed> {
+    match doc.get("networks") {
+        None | Some(Json::Null) => Ok(Vec::new()),
+        Some(Json::Array(ns)) => ns
+            .iter()
+            .map(|n| {
+                n.as_str().ok_or_else(|| {
+                    refused(
+                        at,
+                        format!(
+                            "networks: {} is not a network's id",
+                            provider::fmt_value(Some(n))
+                        ),
+                    )
+                })
+            })
+            .collect(),
+        Some(v) => Err(refused(
+            at,
+            format!("networks is {}, not a list", provider::fmt_value(Some(v))),
+        )),
+    }
+}
+
 /// The program's regions, if it names them.
 fn regions(at: &str, config: &Json) -> std::result::Result<Option<Vec<String>>, Failed> {
     match config.get("regions") {
@@ -303,6 +340,9 @@ pub(super) fn check_subnet(at: &str, d: &Json) -> Result<Option<String>> {
 /// An instance's private networks (`networks = [lab]` on `ovh.instance`):
 /// made on them, its interfaces are the public network's and one on each,
 /// as the API takes them, by the networks' OpenStack ids in its region.
+/// A network added later is an interface attached (`POST
+/// /instance/{id}/interface`), one left an interface detached (`DELETE
+/// /instance/{id}/interface/{interface}`), on the instance's id.
 impl Ovh {
     /// The `networks` an instance's Create sends: none when the program
     /// sets none (the public network alone, as the API makes it); else the
@@ -316,38 +356,10 @@ impl Ovh {
         region: &str,
         config: &Json,
     ) -> std::result::Result<Option<Vec<Json>>, Failed> {
-        let ids: Vec<&str> = match config.get("networks") {
-            None | Some(Json::Null) => return Ok(None),
-            Some(Json::Array(ns)) if ns.is_empty() => return Ok(None),
-            Some(Json::Array(ns)) => ns
-                .iter()
-                .map(|n| {
-                    n.as_str().ok_or_else(|| {
-                        refused(
-                            at,
-                            format!(
-                                "networks: {} is not a network's id",
-                                provider::fmt_value(Some(n))
-                            ),
-                        )
-                    })
-                })
-                .collect::<std::result::Result<_, _>>()?,
-            Some(v) => {
-                return Err(refused(
-                    at,
-                    format!("networks is {}, not a list", provider::fmt_value(Some(v))),
-                ));
-            }
-        };
-        let in_region = |net: &Json| -> Option<String> {
-            net.get("regions")?
-                .as_array()?
-                .iter()
-                .find(|r| s(r, "region") == Some(region))
-                .and_then(|r| s(r, "openstackId"))
-                .map(str::to_string)
-        };
+        let ids = networks_of(at, config)?;
+        if ids.is_empty() {
+            return Ok(None);
+        }
         let public = a
             .client
             .get(&format!("/cloud/project/{p}/network/public"))
@@ -356,34 +368,103 @@ impl Ovh {
             .as_array()
             .into_iter()
             .flatten()
-            .find_map(in_region)
+            .find_map(|net| openstack_id(net, region))
             .ok_or_else(|| refused(at, format!("region {region} has no public network")))?;
         let mut out = vec![json!({"networkId": ext})];
         for id in ids {
-            let net = self
-                .read_network(a, p, id)
-                .map_err(|e| failed(at, e))?
-                .ok_or_else(|| refused(at, format!("network {id} is not there")))?;
-            let os = in_region(&net).ok_or_else(|| {
-                let (_, computed) = map::network(&net);
-                refused(
-                    at,
-                    format!(
-                        "network {} is not in region {region} (it is in {})",
-                        s(&net, "name").unwrap_or(id),
-                        computed["regions"]
-                            .as_array()
-                            .into_iter()
-                            .flatten()
-                            .filter_map(Json::as_str)
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    ),
-                )
-            })?;
-            out.push(json!({"networkId": os}));
+            out.push(json!({"networkId": self.private_network_in(a, p, at, region, id)?}));
         }
         Ok(Some(out))
+    }
+
+    /// The OpenStack id of private network `id` in `region`, as an
+    /// interface names it; a network not in the region is refused naming
+    /// the regions it is in.
+    fn private_network_in(
+        &self,
+        a: &Account,
+        p: &str,
+        at: &str,
+        region: &str,
+        id: &str,
+    ) -> std::result::Result<String, Failed> {
+        let net = self
+            .read_network(a, p, id)
+            .map_err(|e| failed(at, e))?
+            .ok_or_else(|| refused(at, format!("network {id} is not there")))?;
+        openstack_id(&net, region).ok_or_else(|| {
+            let (_, computed) = map::network(&net);
+            refused(
+                at,
+                format!(
+                    "network {} is not in region {region} (it is in {})",
+                    s(&net, "name").unwrap_or(id),
+                    computed["regions"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(Json::as_str)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            )
+        })
+    }
+
+    /// The instance `remote` brought onto the program's private networks
+    /// (`config`) from those it is on (`now`, as Read answered it): an
+    /// interface attached on each network added, and the one on each
+    /// network left detached, each said.
+    pub(super) fn update_instance_networks(
+        &self,
+        at: &str,
+        remote: &str,
+        now: &Json,
+        config: &Json,
+        notes: &mut Vec<String>,
+    ) -> std::result::Result<(), Failed> {
+        let want = networks_of(at, config)?;
+        let has = networks_of(at, now)?;
+        let (added, left): (Vec<&str>, Vec<&str>) = (
+            want.iter().copied().filter(|n| !has.contains(n)).collect(),
+            has.iter().copied().filter(|n| !want.contains(n)).collect(),
+        );
+        if added.is_empty() && left.is_empty() {
+            return Ok(());
+        }
+        let (a, p) = self.project_for(at)?;
+        let region = need(at, config, "region")?;
+        let path = format!("/cloud/project/{p}/instance/{}/interface", escape(remote));
+        for id in added {
+            let os = self.private_network_in(&a, &p, at, region, id)?;
+            a.client
+                .post(&path, &json!({"networkId": os}))
+                .map_err(|e| failed(at, e))?;
+            notes.push(format!("{at}: an interface on network {id} is attached"));
+        }
+        if left.is_empty() {
+            return Ok(());
+        }
+        let interfaces = a.client.get(&path).map_err(|e| failed(at, e))?;
+        for id in left {
+            let os = self.private_network_in(&a, &p, at, region, id)?;
+            let Some(nic) = interfaces
+                .as_array()
+                .into_iter()
+                .flatten()
+                .find(|i| s(i, "networkId") == Some(os.as_str()))
+                .and_then(|i| s(i, "id"))
+            else {
+                continue;
+            };
+            match a.client.delete(&format!("{path}/{}", escape(nic))) {
+                Ok(_) => {}
+                Err(e) if e.is_not_found() => {}
+                Err(e) => return Err(failed(at, e)),
+            }
+            notes.push(format!("{at}: its interface on network {id} is detached"));
+        }
+        Ok(())
     }
 
     /// The project's private networks by the OpenStack ids of their

@@ -33,21 +33,23 @@ type_provider("ovh.ssh_key", "ovh")
 type_provider("ovh.domain_record", "ovh")
 
 # The API's update of an instance (`PUT .../instance/{id}`) takes its
-# name alone. Its flavor (a resize), its networks (an interface attached
-# or detached) and its image (a reinstall, which erases its disk) change
-# by calls of their own that this provider does not make yet; its region,
-# SSH key and user data are fixed at its creation.
+# name alone; its flavor and its networks change on its id by calls of
+# their own: a resize (`POST .../resize`, to a flavor no smaller, and the
+# instance reboots; a smaller one Plan replaces), and an interface
+# attached or detached (`POST`/`DELETE .../interface`). Its image changes
+# by a reinstall, which erases its disk, so a new one replaces it; its
+# region, SSH key and user data are fixed at its creation.
 type_attr("ovh.instance", "id", "string", ["computed", "id"])
 type_attr("ovh.instance", "name", "string", ["required"])
 type_attr("ovh.instance", "region", "string", ["required", "force_new"])
-type_attr("ovh.instance", "flavor", "string", ["required", "force_new"])
+type_attr("ovh.instance", "flavor", "string", ["required"])
 type_attr("ovh.instance", "image", "string", ["required", "force_new"])
 type_attr("ovh.instance", "ssh_key", "ref(ovh.ssh_key)", ["force_new"])
 # Write-only: the API never answers it; state keeps the digest of what was
 # applied, and a different one replaces the instance (R-106).
 type_attr("ovh.instance", "user_data", "string", ["sensitive", "force_new", "write_only"])
 # Its private networks: made on them, it has an interface on each.
-type_attr("ovh.instance", "networks", "set(ref(ovh.network))", ["force_new"])
+type_attr("ovh.instance", "networks", "set(ref(ovh.network))", [])
 type_attr("ovh.instance", "public_ip", "ip", ["computed"])
 type_attr("ovh.instance", "private_ip", "ip", ["computed", "nullable"])
 type_attr("ovh.instance", "private_ips", "map(ip)", ["computed"])
@@ -79,7 +81,9 @@ type_replace("ovh.domain_record", "either")
 type_lookup("ovh.domain_record", ["zone", "subdomain", "type", "target"])
 
 # An S3 container is found by its region and name, which S3 never
-# changes; only its versioning changes in place.
+# changes; only its versioning changes in place. Its owner replaces it:
+# whether the API's update (`PUT .../storage/{name}`) takes an `ownerId`
+# is not verified.
 type_provider("ovh.storage_container", "ovh")
 type_attr("ovh.storage_container", "id", "string", ["computed", "id"])
 type_attr("ovh.storage_container", "region", "string", ["required", "force_new"])
@@ -96,8 +100,9 @@ type_replace("ovh.storage_container", "destroy_first")
 type_lookup("ovh.storage_container", ["region", "name"])
 
 # A user is found by its description (the API makes up its username),
-# which the API has no call to change; its roles change in place. Its S3 secret is held: the API keeps it, and
-# Reveal reads it there.
+# which no call this provider knows changes (not verified against the
+# API); its roles change in place. Its S3 secret is held: the API keeps
+# it, and Reveal reads it there.
 type_provider("ovh.cloud_project_user", "ovh")
 type_attr("ovh.cloud_project_user", "id", "string", ["computed", "id"])
 type_attr("ovh.cloud_project_user", "description", "string", ["required", "force_new"])
@@ -116,7 +121,7 @@ type_lookup("ovh.cloud_project_user", ["description"])
 
 # A volume is found by its name in its region; it grows in place (a smaller
 # size replaces it, which Plan says), its name, description and instance
-# change in place. Its image and snapshot are write-only: the API never
+# change in place. Its type replaces it: no retype call is verified. Its image and snapshot are write-only: the API never
 # answers them, and dform keeps their digests (R-106).
 type_provider("ovh.volume", "ovh")
 type_attr("ovh.volume", "id", "string", ["computed", "id"])
@@ -150,7 +155,7 @@ type_replace("ovh.network", "destroy_first")
 type_lookup("ovh.network", ["name"])
 
 # A subnet is found by its network, region and range; nothing of it
-# changes in place (the API has no update call for one). Its pool is the DHCP pool, its first and last address (the
+# changes in place (no update call for one is verified). Its pool is the DHCP pool, its first and last address (the
 # API's `start` and `end`); when not set, Plan gives it the range's usable
 # hosts, as the OVH console does.
 type_provider("ovh.subnet", "ovh")
@@ -179,7 +184,7 @@ type_doc(
 type_doc(
   "ovh.instance",
   "flavor",
-  "The flavor's name (`b2-7`, `d2-2`). Changing it replaces the instance.",
+  "The flavor's name (`b2-7`, `d2-2`). A larger one is a resize in place, and the instance reboots; a smaller one replaces it.",
 )
 type_doc(
   "ovh.instance",
@@ -200,7 +205,7 @@ type_doc("ovh.instance", "public_ip", "The instance's public IPv4 address, once 
 type_doc(
   "ovh.instance",
   "networks",
-  "The private networks it is on (`networks = [lab]`), each in its region and with a subnet there; the public network too. Changing them replaces the instance.",
+  "The private networks it is on (`networks = [lab]`), each in its region and with a subnet there; the public network too. Changed in place: an interface attached on a network added, detached from one left.",
 )
 type_doc("ovh.instance", "private_ip", "Its address on a private network, if it is on one.")
 type_doc(

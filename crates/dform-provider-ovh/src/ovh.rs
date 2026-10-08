@@ -15,6 +15,8 @@
 //! beyond the instance, key and record are in the modules below
 //! (`storage`, `user`, `volume`, `network`). Plan diffs locally (`provider::diff`), and an
 //! instance's flavor and image are checked against what its region offers.
+//! An instance is resized in place to a larger flavor and replaced for a
+//! smaller one; its networks are interfaces attached and detached.
 //! A Create looks for an object of the same lookup first (the content
 //! its schema's `type_lookup` names, R-195): one this process
 //! made under the same idempotency key is the answer (a Create sent again
@@ -314,8 +316,28 @@ impl Ovh {
         a: &Account,
         at: &str,
         path: &str,
-        mut last: Json,
+        last: Json,
         done: &[&str],
+        failed: &[&str],
+        limit: Duration,
+        notes: &mut Vec<String>,
+        say: Say,
+    ) -> std::result::Result<Json, Failed> {
+        let done = |o: &Json| done.contains(&status(o).as_str());
+        self.settle_until(a, at, path, last, &done, failed, limit, notes, say)
+    }
+
+    /// [`Ovh::settle`] until the object is `done`, which may ask more of
+    /// it than its status (a resized instance is ACTIVE again on its new
+    /// flavor).
+    #[allow(clippy::too_many_arguments)]
+    fn settle_until(
+        &self,
+        a: &Account,
+        at: &str,
+        path: &str,
+        mut last: Json,
+        done: &dyn Fn(&Json) -> bool,
         failed: &[&str],
         limit: Duration,
         notes: &mut Vec<String>,
@@ -324,7 +346,7 @@ impl Ovh {
         let start = Instant::now();
         let mut said = status(&last);
         say(&said, None);
-        while !done.contains(&said.as_str()) {
+        while !done(&last) {
             if failed.contains(&said.as_str()) {
                 notes.push(format!(
                     "{at}: it is {said}; it is kept in state, to be replaced or deleted"
@@ -745,13 +767,60 @@ impl Ovh {
             let now = regions(d);
             d.get("regions").is_some() && regions(p).iter().any(|r| !now.contains(r))
         };
+        // An instance resizes to a larger flavor in place (it reboots);
+        // a smaller one replaces it.
+        let smaller = |p: &Json| self.flavor_shrinks(&at, p, d);
         let replaces = replaces
             || (typ == VOLUME && prior.is_some_and(shrinks))
-            || (typ == NETWORK && prior.is_some_and(leaves));
+            || (typ == NETWORK && prior.is_some_and(leaves))
+            || (typ == INSTANCE && prior.is_some_and(smaller));
         if typ == NETWORK && prior.is_none() {
             self.check_vrack(&at)?;
         }
         Ok((changes, replaces))
+    }
+
+    /// Whether flavor `now` is smaller than `was` in `region` (fewer
+    /// vCPUs, less RAM or less disk): the API resizes an instance only to
+    /// a flavor no smaller. `None` when the region's flavors cannot be
+    /// listed or either is not among them.
+    fn smaller_flavor(
+        &self,
+        a: &Account,
+        p: &str,
+        region: &str,
+        was: &str,
+        now: &str,
+    ) -> Option<bool> {
+        let flavors = self.list(a, p, "flavor", region).ok()?;
+        let size = |name: &str| {
+            let f = flavors
+                .as_array()?
+                .iter()
+                .find(|f| s(f, "name") == Some(name))?;
+            let n = |k: &str| f.get(k).and_then(Json::as_i64).unwrap_or(0);
+            Some([n("vcpus"), n("ram"), n("disk")])
+        };
+        let (was, now) = (size(was)?, size(now)?);
+        Some(was.iter().zip(&now).any(|(w, n)| n < w))
+    }
+
+    /// Whether an instance's flavor changes from `prior`'s to a smaller
+    /// one in `d`, which the API cannot resize to. Not when the account
+    /// cannot be reached: Apply refuses it then.
+    fn flavor_shrinks(&self, at: &str, prior: &Json, d: &Json) -> bool {
+        let (Some(was), Some(now), Some(region)) =
+            (s(prior, "flavor"), s(d, "flavor"), s(d, "region"))
+        else {
+            return false;
+        };
+        if was == now {
+            return false;
+        }
+        let Ok((a, p)) = self.project(at) else {
+            return false;
+        };
+        self.smaller_flavor(&a, &p, region, was, now) == Some(true)
     }
 
     /// An instance's flavor and image are offered in its region, when the
@@ -839,6 +908,17 @@ impl Ovh {
                 if r.create_first && same {
                     notes.push(format!(
                         "{at}: the replacement has the old object's key, so the old one goes first"
+                    ));
+                }
+                if typ == INSTANCE
+                    && let Some((was, _)) = &old
+                    && self.flavor_shrinks(&at, was, &config)
+                {
+                    notes.push(format!(
+                        "{at}: flavor {} is smaller than {}, and the API resizes an instance \
+                         only to a larger one, so it is replaced",
+                        s(&config, "flavor").unwrap_or_default(),
+                        s(was, "flavor").unwrap_or_default()
                     ));
                 }
                 if !r.create_first || same {
@@ -1249,6 +1329,8 @@ impl Ovh {
                         )
                         .map_err(|e| failed(at, e))?;
                 }
+                self.resize(&a, &p, at, remote, &now.0, config, notes, say)?;
+                self.update_instance_networks(at, remote, &now.0, config, notes)?;
             }
             RECORD => {
                 let a = self
@@ -1288,6 +1370,68 @@ impl Ovh {
         }
         let (attrs, computed) = self.read_made(typ, at, remote)?;
         Ok((remote.to_string(), attrs, computed))
+    }
+
+    /// An instance's flavor changed in place to a larger one (`POST
+    /// /instance/{id}/resize`): the instance reboots into it, and is waited
+    /// for until it is ACTIVE on it. A smaller one is refused: the API
+    /// resizes only up, and Plan replaces the instance for one.
+    #[allow(clippy::too_many_arguments)]
+    fn resize(
+        &self,
+        a: &Account,
+        p: &str,
+        at: &str,
+        remote: &str,
+        now: &Json,
+        config: &Json,
+        notes: &mut Vec<String>,
+        say: Say,
+    ) -> std::result::Result<(), Failed> {
+        let flavor = need(at, config, "flavor")?;
+        let Some(was) = s(now, "flavor").filter(|w| *w != flavor) else {
+            return Ok(());
+        };
+        let region = need(at, config, "region")?;
+        if self.smaller_flavor(a, p, region, was, flavor) == Some(true) {
+            return Err(refused(
+                at,
+                format!(
+                    "flavor {flavor} is smaller than {was}, and the API resizes an instance only \
+                     to a larger one: plan with the account reachable, which replaces it"
+                ),
+            ));
+        }
+        let id = self
+            .flavor_id(a, p, region, flavor)
+            .map_err(|e| refused(at, format!("{e:#}")))?;
+        let path = format!("/cloud/project/{p}/instance/{}", escape(remote));
+        let o = a
+            .client
+            .post(&format!("{path}/resize"), &json!({"flavorId": id}))
+            .map_err(|e| failed(at, e))?;
+        // The instance's flavor is its `flavorId`, or its `flavor`'s id
+        // where the API embeds the flavor.
+        let on = |o: &Json| {
+            s(o, "flavorId").or_else(|| o.get("flavor").and_then(|f| s(f, "id")))
+                == Some(id.as_str())
+        };
+        let resized = |o: &Json| status(o) == "ACTIVE" && on(o);
+        self.settle_until(
+            a,
+            at,
+            &path,
+            o,
+            &resized,
+            &["ERROR"],
+            CREATE_WAIT,
+            notes,
+            say,
+        )?;
+        notes.push(format!(
+            "{at}: resized from {was} to {flavor}; the instance rebooted"
+        ));
+        Ok(())
     }
 
     fn delete(

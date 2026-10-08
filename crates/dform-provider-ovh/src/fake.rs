@@ -1,6 +1,6 @@
 //! A fake OVH API for tests, over HTTP/1.1 on 127.0.0.1: one project
 //! (`PROJECT`, described as `DESCRIPTION`), the regions `BHS5` and
-//! `ca-east-tor` with two flavors and two images each, and the instance,
+//! `ca-east-tor` with three flavors and two images each, and the instance,
 //! SSH key, DNS record, S3 container, user, volume and private network
 //! endpoints the provider calls, answering as the API's models are
 //! shaped. It checks every signed call's signature against
@@ -8,7 +8,8 @@
 //! token against those it minted at `/auth/oauth2/token` for `CLIENT_ID`
 //! and `CLIENT_SECRET`; `/auth/currentCredential` describes the consumer
 //! key ([`Server::key_expires`], [`Server::key_rules`]). A new instance is BUILD, with
-//! no address, for [`Server::build_polls`] reads, then ACTIVE; a volume,
+//! no address, for [`Server::build_polls`] reads, then ACTIVE; one resized
+//! (`POST /resize`, to a flavor no smaller) is RESIZE as long; a volume,
 //! a user and a private network change status the same way (`creating`
 //! then `available`, `attaching` then `in-use`, `BUILDING` then
 //! `ACTIVE`). The project is on a vRack until [`Server::no_vrack`]. Every DNS zone is the
@@ -49,8 +50,10 @@ pub struct World {
     nameservers: BTreeMap<String, Vec<String>>,
     /// Reads left before each BUILD instance is ACTIVE.
     building: BTreeMap<String, u32>,
-    /// Each instance's interfaces as it was made: the networks' OpenStack
-    /// ids, the public one's included; none for the public network alone.
+    /// Each instance's interfaces: the networks' OpenStack ids, the
+    /// public one's included; none for the public network alone. One is
+    /// attached (`POST /interface`) and detached (`DELETE
+    /// /interface/{id}`, its id `if-` and the network's).
     nics: BTreeMap<String, Vec<String>>,
     /// S3 containers by region and name.
     pub containers: BTreeMap<(String, String), Json>,
@@ -602,26 +605,66 @@ impl World {
                 out.extend(ips(n).as_array().cloned().unwrap_or_default());
                 continue;
             }
-            let pool = self
-                .networks
-                .values()
-                .find(|net| {
-                    net["regions"]
-                        .as_array()
-                        .into_iter()
-                        .flatten()
-                        .any(|r| r["openstackId"] == nic.as_str())
-                })
-                .and_then(|net| self.subnets.get(net["id"].as_str().unwrap_or_default()))
-                .and_then(|subs| subs.first())
-                .and_then(|sub| sub["ipPools"][0]["start"].as_str().map(str::to_string));
-            let ip = pool
-                .and_then(|start| host_of(&start, n as u32))
-                .unwrap_or_else(|| format!("10.0.0.{n}"));
-            out.push(json!({"ip": ip, "type": "private", "version": 4,
-                            "networkId": nic, "gatewayIp": null}));
+            out.push(self.private_address(nic, n));
         }
         json!(out)
+    }
+
+    /// An instance's address on the private network `nic` (its OpenStack
+    /// id), the `n`th of its subnet's pool.
+    fn private_address(&self, nic: &str, n: usize) -> Json {
+        let pool = self
+            .networks
+            .values()
+            .find(|net| {
+                net["regions"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .any(|r| r["openstackId"] == nic)
+            })
+            .and_then(|net| self.subnets.get(net["id"].as_str().unwrap_or_default()))
+            .and_then(|subs| subs.first())
+            .and_then(|sub| sub["ipPools"][0]["start"].as_str().map(str::to_string));
+        let ip = pool
+            .and_then(|start| host_of(&start, n as u32))
+            .unwrap_or_else(|| format!("10.0.0.{n}"));
+        json!({"ip": ip, "type": "private", "version": 4,
+               "networkId": nic, "gatewayIp": null})
+    }
+
+    /// Why `nic` (an OpenStack network id) cannot be an interface of an
+    /// instance in `region`: not a network there, or a private one with
+    /// no subnet there.
+    fn nic_refused(&self, region: &str, nic: &str) -> Option<String> {
+        let public = nic == format!("ext-{region}");
+        let private = self.networks.values().find(|net| {
+            net["regions"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .any(|r| r["openstackId"] == nic && r["region"] == region)
+        });
+        if !public && private.is_none() {
+            return Some(format!("Invalid networkId {nic}"));
+        }
+        if let Some(net) = private
+            && self
+                .subnets
+                .get(net["id"].as_str().unwrap_or_default())
+                .is_none_or(|s| !s.iter().any(|s| s["ipPools"][0]["region"] == region))
+        {
+            return Some(format!("Network {nic} has no subnet in {region}"));
+        }
+        None
+    }
+
+    /// A flavor of `region` by its id: its vCPUs, RAM and disk.
+    fn flavor_size(region: &str, id: &str) -> Option<[i64; 3]> {
+        let flavors = Self::flavors(region);
+        let f = flavors.as_array()?.iter().find(|f| f["id"] == id)?;
+        let n = |k: &str| f[k].as_i64().unwrap_or(0);
+        Some([n("vcpus"), n("ram"), n("disk")])
     }
 
     /// A status change `kind/id` makes after `build_polls` reads: at once
@@ -650,6 +693,7 @@ impl World {
     fn settled(&mut self, what: &str, then: Json) {
         let (kind, id) = what.split_once('/').unwrap_or_default();
         let slot = match kind {
+            "instance" => self.instances.get_mut(id),
             "volume" => self.volumes.get_mut(id),
             "network" => self.networks.get_mut(id),
             "user" => id.parse().ok().and_then(|i: i64| self.users.get_mut(&i)),
@@ -672,6 +716,7 @@ impl World {
     fn flavors(region: &str) -> Json {
         json!([
             flavor(region, "b2-7", 2, 7000, 50),
+            flavor(region, "b2-15", 4, 15000, 100),
             flavor(region, "d2-2", 1, 2000, 25)
         ])
     }
@@ -767,27 +812,8 @@ impl World {
                             .collect()
                     });
                 for nic in nics.iter().flatten() {
-                    let public = *nic == format!("ext-{region}");
-                    let private = self.networks.values().find(|net| {
-                        net["regions"]
-                            .as_array()
-                            .into_iter()
-                            .flatten()
-                            .any(|r| r["openstackId"] == nic.as_str() && r["region"] == region)
-                    });
-                    if !public && private.is_none() {
-                        return (400, json!({"message": format!("Invalid networkId {nic}")}));
-                    }
-                    if let Some(net) = private
-                        && self
-                            .subnets
-                            .get(net["id"].as_str().unwrap_or_default())
-                            .is_none_or(|s| !s.iter().any(|s| s["ipPools"][0]["region"] == region))
-                    {
-                        return (
-                            400,
-                            json!({"message": format!("Network {nic} has no subnet in {region}")}),
-                        );
+                    if let Some(why) = self.nic_refused(region, nic) {
+                        return (400, json!({"message": why}));
                     }
                 }
                 let id = self.id("instance");
@@ -804,6 +830,7 @@ impl World {
             }
             ("GET", ["cloud", "project", _, "instance", id]) => {
                 let id = id.to_string();
+                self.read_settling(&format!("instance/{id}"));
                 if let Some(left) = self.building.get_mut(&id) {
                     *left = left.saturating_sub(1);
                     if *left == 0 {
@@ -827,6 +854,103 @@ impl World {
                 }
                 None => not_found("Instance"),
             },
+            // A resize to a flavor of the region no smaller: RESIZE, then
+            // ACTIVE on it (OVH confirms it); the instance keeps its id
+            // and addresses.
+            ("POST", ["cloud", "project", _, "instance", id, "resize"]) => {
+                let id = id.to_string();
+                let Some(o) = self.instances.get(&id).cloned() else {
+                    return not_found("Instance");
+                };
+                let region = o["region"].as_str().unwrap_or_default();
+                let to = body["flavorId"].as_str().unwrap_or_default();
+                let (Some(was), Some(now)) = (
+                    Self::flavor_size(region, o["flavorId"].as_str().unwrap_or_default()),
+                    Self::flavor_size(region, to),
+                ) else {
+                    return (400, json!({"message": "Invalid flavorId"}));
+                };
+                if was.iter().zip(&now).any(|(w, n)| n < w) {
+                    return (
+                        400,
+                        json!({"message": "Instance can only be resized to a bigger flavor"}),
+                    );
+                }
+                let plan = format!(
+                    "{}.consumption",
+                    to.trim_start_matches("flavor-")
+                        .trim_end_matches(&format!("-{region}"))
+                );
+                let o = self.instances.get_mut(&id).expect("looked up");
+                o["status"] = json!("RESIZE");
+                let answer = o.clone();
+                self.settle(
+                    format!("instance/{id}"),
+                    json!({"status": "ACTIVE", "flavorId": to, "planCode": plan}),
+                );
+                (200, answer)
+            }
+            ("GET", ["cloud", "project", _, "instance", id, "interface"]) => {
+                let Some(o) = self.instances.get(*id) else {
+                    return not_found("Instance");
+                };
+                let region = o["region"].as_str().unwrap_or_default();
+                let nics = self
+                    .nics
+                    .get(*id)
+                    .cloned()
+                    .unwrap_or_else(|| vec![format!("ext-{region}")]);
+                let all: Vec<Json> = nics.iter().map(|nic| interface(nic)).collect();
+                (200, json!(all))
+            }
+            ("POST", ["cloud", "project", _, "instance", id, "interface"]) => {
+                let id = id.to_string();
+                let Some(region) = self.instances.get(&id).map(|o| o["region"].clone()) else {
+                    return not_found("Instance");
+                };
+                let region = region.as_str().unwrap_or_default();
+                let nic = body["networkId"].as_str().unwrap_or_default().to_string();
+                if let Some(why) = self.nic_refused(region, &nic) {
+                    return (400, json!({"message": why}));
+                }
+                let nics = self
+                    .nics
+                    .entry(id.clone())
+                    .or_insert_with(|| vec![format!("ext-{region}")]);
+                if nics.contains(&nic) {
+                    return (
+                        400,
+                        json!({"message": format!("Network {nic} is attached already")}),
+                    );
+                }
+                nics.push(nic.clone());
+                let ip = self.private_address(&nic, self.instances.len() + 10);
+                let o = self.instances.get_mut(&id).expect("looked up");
+                if let Some(ips) = o["ipAddresses"].as_array_mut() {
+                    ips.push(ip);
+                }
+                (200, interface(&nic))
+            }
+            ("DELETE", ["cloud", "project", _, "instance", id, "interface", nic]) => {
+                let Some(nic) = nic.strip_prefix("if-") else {
+                    return not_found("Interface");
+                };
+                let Some(nics) = self.nics.get_mut(*id) else {
+                    return not_found("Interface");
+                };
+                if nic.starts_with("ext-") || !nics.iter().any(|n| n == nic) {
+                    return not_found("Interface");
+                }
+                nics.retain(|n| n != nic);
+                if let Some(ips) = self
+                    .instances
+                    .get_mut(*id)
+                    .and_then(|o| o["ipAddresses"].as_array_mut())
+                {
+                    ips.retain(|a| a["networkId"] != nic);
+                }
+                (200, Json::Null)
+            }
             ("DELETE", ["cloud", "project", _, "instance", id]) => {
                 match self.instances.remove(*id) {
                     Some(_) => {
@@ -1446,6 +1570,18 @@ impl World {
             _ => (404, json!({"message": format!("no route {method} {path}")})),
         }
     }
+}
+
+/// An instance's interface on the network `nic` (an OpenStack id)
+/// (`cloud.instanceInterface.Interface`).
+fn interface(nic: &str) -> Json {
+    let typ = if nic.starts_with("ext-") {
+        "public"
+    } else {
+        "private"
+    };
+    json!({"id": format!("if-{nic}"), "networkId": nic, "type": typ, "state": "ACTIVE",
+           "macAddress": "fa:16:3e:00:00:01", "fixedIps": []})
 }
 
 /// A public IPv6 and IPv4 address, the `n`th.

@@ -31,6 +31,7 @@ struct Applied {
     attrs: Json,
     computed: Json,
     said: Vec<String>,
+    notes: Vec<String>,
 }
 
 impl Lab {
@@ -88,6 +89,7 @@ impl Lab {
                     .as_ref()
                     .map_or(Json::Null, |d| wire::from_doc(d).unwrap()),
                 said: said.into_inner().unwrap(),
+                notes: a.notes,
             }),
             Ok(_) => Err("not an Apply's reply".into()),
             Err(e) => Err(format!("{e:?}")),
@@ -831,6 +833,162 @@ fn an_instance_joins_a_private_network() {
     );
 }
 
+/// An instance's flavor changes on its id when the API can resize it
+/// (R-195's audit): a larger one plans in place, and the Apply resizes
+/// it (`POST /resize`), saying RESIZE then ACTIVE, and notes the reboot;
+/// a smaller one, which the API does not resize to, plans as a replace,
+/// and an Update to one (planned without the account) is refused naming
+/// both.
+#[test]
+fn an_instance_resizes_to_a_larger_flavor_and_is_replaced_for_a_smaller() {
+    let lab = Lab::new();
+    let doc = |flavor: &str| json!({"name": "vm", "region": "BHS5", "flavor": flavor, "image": "Debian 13"});
+    let vm = lab.create(INSTANCE, "vm", doc("b2-7"));
+    let prior = (&vm.attrs, &vm.computed);
+    assert_eq!(
+        lab.plan(INSTANCE, prior, &doc("b2-15")),
+        (vec!["flavor".into()], false)
+    );
+    assert_eq!(
+        lab.plan(INSTANCE, prior, &doc("d2-2")),
+        (vec!["flavor".into()], true)
+    );
+
+    let resized = lab.update(INSTANCE, "vm", &vm.remote, doc("b2-15"));
+    assert_eq!(resized.attrs["flavor"], "b2-15");
+    assert_eq!(resized.computed["id"], vm.computed["id"]);
+    assert_eq!(resized.computed["public_ip"], vm.computed["public_ip"]);
+    assert_eq!(resized.said, ["RESIZE", "ACTIVE"]);
+    assert!(
+        resized
+            .notes
+            .iter()
+            .any(|n| n.ends_with("resized from b2-7 to b2-15; the instance rebooted")),
+        "{:?}",
+        resized.notes
+    );
+    let sent: Vec<_> = lab
+        .server
+        .seen()
+        .into_iter()
+        .filter(|c| c.method == "POST" && c.path.ends_with("/resize"))
+        .collect();
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].body, json!({"flavorId": "flavor-b2-15-BHS5"}));
+    assert_eq!(lab.server.instances().len(), 1);
+    assert_eq!(lab.server.instances()[0]["flavorId"], "flavor-b2-15-BHS5");
+    let (attrs, computed) = lab.read(INSTANCE, "vm", &vm.remote).unwrap();
+    assert!(
+        lab.plan(INSTANCE, (&attrs, &computed), &doc("b2-15"))
+            .0
+            .is_empty()
+    );
+
+    let refused = lab
+        .apply(pb::Op::Update, INSTANCE, "vm", &vm.remote, doc("d2-2"))
+        .unwrap_err();
+    assert!(
+        refused.contains(
+            "flavor d2-2 is smaller than b2-15, and the API resizes an instance only to a \
+             larger one"
+        ),
+        "{refused}"
+    );
+    assert_eq!(lab.calls("POST", "/resize"), 1);
+    let replaced = lab
+        .apply(pb::Op::Replace, INSTANCE, "vm", &vm.remote, doc("d2-2"))
+        .unwrap();
+    assert!(
+        replaced
+            .notes
+            .iter()
+            .any(|n| n.contains("flavor d2-2 is smaller than b2-15")),
+        "{:?}",
+        replaced.notes
+    );
+    assert_ne!(replaced.remote, vm.remote);
+}
+
+/// An instance's private networks change on its id (R-195's audit): a
+/// network added plans in place and is an interface attached (`POST
+/// /interface`, by the network's OpenStack id in the instance's region),
+/// one left an interface detached (`DELETE /interface/{id}`); the
+/// instance keeps its id and public address, and Read answers the new
+/// networks.
+#[test]
+fn an_instance_joins_and_leaves_networks_in_place() {
+    let lab = Lab::new();
+    lab.server.build_polls(0);
+    let net = |name: &str, vlan: i64, range: &str| {
+        let n = lab.create(
+            NETWORK,
+            name,
+            json!({"name": name, "vlan_id": vlan, "regions": ["BHS5"]}),
+        );
+        lab.create(
+            SUBNET,
+            name,
+            json!({"network": n.remote, "region": "BHS5", "range": range}),
+        );
+        n.remote
+    };
+    let (a, b) = (net("a", 1, "10.1.0.0/24"), net("b", 2, "10.2.0.0/24"));
+    let doc = |nets: &[&str]| {
+        let mut d = json!({"name": "vm", "region": "BHS5", "flavor": "d2-2", "image": "Debian 13"});
+        if !nets.is_empty() {
+            d["networks"] = json!(nets);
+        }
+        d
+    };
+    let vm = lab.create(INSTANCE, "vm", doc(&[&a]));
+    let (changes, replaces) = lab.plan(INSTANCE, (&vm.attrs, &vm.computed), &doc(&[&a, &b]));
+    assert!(!changes.is_empty() && !replaces, "{changes:?}");
+
+    let both = lab.update(INSTANCE, "vm", &vm.remote, doc(&[&a, &b]));
+    assert_eq!(both.attrs["networks"], json!([a, b]));
+    assert!(
+        both.computed["private_ips"][&b]
+            .as_str()
+            .unwrap()
+            .starts_with("10.2.0.")
+    );
+    assert_eq!(both.computed["public_ip"], vm.computed["public_ip"]);
+    let attached: Vec<_> = lab
+        .server
+        .seen()
+        .into_iter()
+        .filter(|c| c.method == "POST" && c.path.ends_with("/interface"))
+        .collect();
+    assert_eq!(attached.len(), 1);
+    assert_eq!(attached[0].body, json!({"networkId": "net-2-BHS5"}));
+    assert!(
+        both.notes
+            .iter()
+            .any(|n| n.ends_with(&format!("an interface on network {b} is attached"))),
+        "{:?}",
+        both.notes
+    );
+
+    let (changes, replaces) = lab.plan(INSTANCE, (&both.attrs, &both.computed), &doc(&[&b]));
+    assert!(!changes.is_empty() && !replaces, "{changes:?}");
+    let left = lab.update(INSTANCE, "vm", &vm.remote, doc(&[&b]));
+    assert_eq!(left.attrs["networks"], json!([b]));
+    assert_eq!(lab.calls("DELETE", "/interface/if-net-1-BHS5"), 1);
+
+    let none = lab.update(INSTANCE, "vm", &vm.remote, doc(&[]));
+    assert!(none.attrs.get("networks").is_none(), "{}", none.attrs);
+    assert_eq!(lab.calls("DELETE", "/interface/if-net-2-BHS5"), 1);
+    assert_eq!(lab.server.instances().len(), 1);
+    assert_eq!(none.computed["id"], vm.computed["id"]);
+    assert!(
+        lab.plan(INSTANCE, (&none.attrs, &none.computed), &doc(&[]))
+            .0
+            .is_empty()
+    );
+}
+
+const INSTANCE: &str = "ovh.instance";
+
 /// Every file under `dir`.
 fn files(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
     let mut out = Vec::new();
@@ -1134,4 +1292,54 @@ fn a_run_is_given_the_lookups_of_the_types_it_names() {
         .filter_map(|f| f.args[0].as_str().map(str::to_string))
         .collect();
     assert_eq!(injected, named);
+}
+
+/// Through dform: a larger flavor and a network added plan as `~` on the
+/// instance, naming the old flavor and the new and the network added, and
+/// apply on its id; the plan after is clean; a smaller flavor plans as a
+/// replace.
+#[test]
+fn a_program_resizes_an_instance_and_adds_a_network_in_place() {
+    let server = Server::start();
+    let program = |flavor: &str, nets: &str| {
+        format!(
+            "use ovh {{ endpoint = \"{}\", project = \"{}\" }}\n\n\
+             resource ovh.network a {{ name = \"a\", vlan_id = 1, regions = [\"BHS5\"] }}\n\
+             resource ovh.network b {{ name = \"b\", vlan_id = 2, regions = [\"BHS5\"] }}\n\
+             resource ovh.subnet a {{ network = a, region = \"BHS5\", range = \"10.1.0.0/24\" }}\n\
+             resource ovh.subnet b {{ network = b, region = \"BHS5\", range = \"10.2.0.0/24\" }}\n\n\
+             resource ovh.instance server {{\n  name = \"server\"\n  region = \"BHS5\"\n  \
+             flavor = \"{flavor}\"\n  image = \"Debian 13\"\n  networks = [{nets}]\n}}\n",
+            server.endpoint,
+            fake::DESCRIPTION
+        )
+    };
+    let s = project("ovh-resize", &program("b2-7", "a"));
+    dform(&s, &server, &["apply", "main.df"]).success();
+    let was = server.instances()[0]["id"].clone();
+
+    s.write("main.df", &program("b2-15", "a, b"));
+    let plan = dform(&s, &server, &["plan", "main.df"]).success();
+    assert!(
+        plan.stdout.contains("~ ovh.instance server")
+            && plan.stdout.contains("\"b2-7\"")
+            && plan.stdout.contains("\"b2-15\"")
+            && !plan.stdout.contains("replace"),
+        "{}",
+        plan.stdout
+    );
+    dform(&s, &server, &["apply", "main.df"]).success();
+    let now = &server.instances()[0];
+    assert_eq!(now["id"], was);
+    assert_eq!(now["flavorId"], "flavor-b2-15-BHS5");
+    let again = dform(&s, &server, &["plan", "main.df"]).success();
+    assert!(again.stdout.contains("is up to date"), "{}", again.stdout);
+
+    s.write("main.df", &program("d2-2", "a, b"));
+    let smaller = dform(&s, &server, &["plan", "main.df"]).success();
+    assert!(
+        smaller.stdout.contains("ovh.instance server") && smaller.stdout.contains("replace"),
+        "{}",
+        smaller.stdout
+    );
 }

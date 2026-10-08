@@ -146,28 +146,36 @@ schema's `type_lookup`, see "What a Create that does not answer does").
 |--------------|-------------------|-------------------------------------|
 | `name`       | string, required  | unique in the project; changes in place |
 | `region`     | string, required  | `ca-east-tor`, `BHS5`, ...; replaces |
-| `flavor`     | string, required  | the flavor's name, `b2-7`; replaces  |
+| `flavor`     | string, required  | the flavor's name, `b2-7`; a larger one in place (a resize: the instance reboots), a smaller one replaces |
 | `image`      | string, required  | the image's name in the region, `Ubuntu 24.04`; replaces |
 | `ssh_key`    | ref(ovh.ssh_key)  | `ssh_key = admin`; replaces          |
 | `user_data`  | string, sensitive | cloud-init; replaces                 |
-| `networks`   | set(ref(ovh.network)) | `networks = [lab]`; replaces    |
+| `networks`   | set(ref(ovh.network)) | `networks = [lab]`; changes in place |
 | `id`         | computed          |                                     |
 | `public_ip`  | ip, computed      | once the instance has one           |
 | `private_ip` | ip, computed, nullable | its first private address      |
 | `private_ips`| map(ip), computed | its address on each private network, by the network's id |
 | `status`     | string, computed  | `ACTIVE` once it runs               |
 
-The API changes an instance's name on its id and nothing else; its
-flavor (a resize), networks (an interface attached) and image (a
-reinstall) have calls of their own that the provider does not make yet,
-so each replaces it. A replacement deletes the old instance first (it is
-found by its name). Plan
-checks the flavor and the image against what the region offers, naming
-what it does offer. An instance on private networks is made with an
-interface on the public network and one on each of them, in its region
-(each needs a subnet there); a network not in its region is refused
-naming the regions it is in. `server.private_ips[lab.id]` is its address
-on `lab`.
+The API changes an instance's name on its id (`PUT`), and its flavor
+and networks by calls of their own on the id. A flavor no smaller than
+the one it has (no fewer vCPUs, no less RAM or disk) is a resize
+(`POST /resize`): the plan is a `~` naming the old flavor and the new,
+and the Apply waits for the instance to be ACTIVE on it again, saying
+`RESIZE`, and notes that it rebooted. The API resizes only up, so a
+smaller flavor replaces the instance, and the Apply says why; planned
+without the account (offline), a flavor change is a `~`, and an Apply
+of a smaller one is refused naming both. A network added is an
+interface attached, one left an interface detached (`POST`/`DELETE
+/interface`), each a line of the plan (`+ networks[lab]`) and a note of
+the Apply. Its image changes only by a reinstall, which erases its
+disk, so a new one replaces it. A replacement deletes the old instance
+first (it is found by its name). Plan checks the flavor and the image
+against what the region offers, naming what it does offer. An instance
+on private networks is made with an interface on the public network and
+one on each of them, in its region (each needs a subnet there); a
+network not in its region is refused naming the regions it is in.
+`server.private_ips[lab.id]` is its address on `lab`.
 
 The API never answers an instance's user data: the schema marks it
 `write_only` (R-106), so dform keeps the digest of what it applied (never
@@ -220,7 +228,7 @@ always on it.
 instances are given, a `range(ip)`, both ends in it: the API's `start` and
 `end`), `dhcp` (off when not set), `no_gateway` (a gateway at the range's
 first address when not set); computed `gateway_ip`. Every change replaces
-it (the API has none in place). Its remote id is `NETWORK/ID`.
+it (no update call for a subnet is known). Its remote id is `NETWORK/ID`.
 
 ```
 resource ovh.subnet nodes {
@@ -243,8 +251,8 @@ plan. `start` and `end` are not attributes: Plan refuses them naming
 `pool`.
 
 `ovh.cloud_project_user`: an OpenStack user of the project. `description`
-(what it is found by: the API makes up its username; the API has no call
-to change it, so it replaces) and `roles` (a set of
+(what it is found by: the API makes up its username; no call to change
+it is known, so it replaces) and `roles` (a set of
 the API's role names, `objectstore_operator`, `compute_operator`, ...;
 changes in place); computed `username`, `status` (`creating`, then `ok`),
 `s3_access_key` and `s3_secret_key`. Each user is given an S3 credential
