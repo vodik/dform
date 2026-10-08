@@ -1250,3 +1250,60 @@ warn "${img}" where img in k8s.deployment[_].spec.template.spec.containers[_].im
               (identifier))
             (identifier))
           (identifier))))))
+
+================================================================================
+Lets with parameters
+================================================================================
+
+let cidr(a, b: int = 7) = "10.${a}.${b}.0/24"
+let restic(
+  tag,
+  source: string
+): object = { name: tag, path: source } where tag != ""
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (let
+    (identifier)
+    (parameters
+      (parameter
+        (identifier))
+      (parameter
+        (identifier)
+        (type
+          (dotted_name
+            (identifier)))
+        (integer)))
+    (string
+      (string_content)
+      (interpolation
+        (identifier))
+      (string_content)
+      (interpolation
+        (identifier))
+      (string_content)))
+  (let
+    (identifier)
+    (parameters
+      (parameter
+        (identifier))
+      (parameter
+        (identifier)
+        (type
+          (dotted_name
+            (identifier)))))
+    (type
+      (dotted_name
+        (identifier)))
+    (object
+      (object_field
+        (identifier)
+        (identifier))
+      (object_field
+        (identifier)
+        (identifier)))
+    (body
+      (comparison
+        (identifier)
+        (string)))))

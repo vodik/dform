@@ -214,10 +214,12 @@ export default grammar({
       ),
     ),
 
-    // `let k [: T] = t [where B]`: a value, typed or not (R-74).
+    // `let k [: T] = t [where B]`: a value, typed or not (R-74);
+    // `let f(a, b: T = d) = t`, a let with parameters (R-187).
     let: $ => seq(
       'let',
       field('name', $._word),
+      optional(field('parameters', $.parameters)),
       optional(seq(':', field('type', $._type))),
       '=',
       field('value', $._term),
@@ -264,6 +266,14 @@ export default grammar({
       seq(token.immediate('.'), choice($._word, $.string)),
       seq(token.immediate('['), '_', ']'),
     )),
+
+    parameters: $ => seq('(', commaSep1($.parameter), ')'),
+
+    parameter: $ => seq(
+      field('name', $._word),
+      optional(seq(':', field('type', $._type))),
+      optional(seq('=', field('default', $._term))),
+    ),
 
     extern: $ => seq(
       'extern',

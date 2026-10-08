@@ -55,6 +55,7 @@
 (output name: (identifier) @constant)
 (let name: (identifier) @constant)
 (bind_arg name: (identifier) @variable.parameter)
+(parameter name: (identifier) @variable.parameter)
 (field_declaration name: (identifier) @variable.parameter)
 
 (component name: (identifier) @module)

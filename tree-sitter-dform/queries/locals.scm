@@ -20,6 +20,7 @@
 (input name: (identifier) @local.definition.var)
 (output name: (identifier) @local.definition.var)
 (let name: (identifier) @local.definition.var)
+(parameter name: (identifier) @local.definition.parameter)
 (resource name: (identifier) @local.definition.var)
 (component name: (identifier) @local.definition.namespace)
 (use name: (identifier) @local.definition.namespace)

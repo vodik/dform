@@ -898,6 +898,10 @@ impl Decls {
             if !head && !self.predicates.contains(&name0) && crate::functions::callable(&name0) {
                 return What::Name(Symbol::Function(name0), false);
             }
+            // A call of a let with parameters, `f(x, y)` (R-187): the let.
+            if !head && let Some(s) = self.let_(at, &name0) {
+                return What::Name(s, false);
+            }
             return What::Name(self.predicate(at, &name0), head);
         }
         // `m.p(..)`, the relation `p` of the module `m` binds; `n.p(..)`,

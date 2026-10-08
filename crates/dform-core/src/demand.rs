@@ -310,11 +310,11 @@ impl Sites {
         };
         let mut scope = base.clone();
         let mut n = 1;
-        while self.used.contains(&scope) {
+        let name = program_name(f);
+        while !self.used.insert(format!("{scope}::{name}")) {
             n += 1;
             scope = format!("{base} #{n}");
         }
-        self.used.insert(scope.clone());
         self.by.insert(key, scope.clone());
         (scope, true)
     }

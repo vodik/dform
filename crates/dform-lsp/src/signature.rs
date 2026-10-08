@@ -1,6 +1,7 @@
 //! Signature help (`textDocument/signatureHelp`): inside the parentheses of
-//! a call of a builtin (`inet.subnet(`) or of an extern the project
-//! declares (`dns.lookup(`, or its lookup `dns.lookup[`), the call's
+//! a call of a builtin (`inet.subnet(`), of an extern the project
+//! declares (`dns.lookup(`, or its lookup `dns.lookup[`) or of a let with
+//! parameters (`restic(`, R-187), the call's
 //! signature and the argument the cursor is in. Builtins are
 //! `reference::references`'s; an extern's parameters are its declaration's,
 //! its documentation its doc comment. Read off the tokens, so a call being
@@ -115,11 +116,38 @@ fn extern_decl(trees: &[SyntaxNode], name: &str) -> Option<(String, Option<Strin
     Some((format!("{name}({})", args.join(", ")), description))
 }
 
+/// A let with parameters the trees declare (R-187), `name` or `m.name`:
+/// `name(a, b: t = d)` and its doc comment's description.
+fn let_decl(trees: &[SyntaxNode], name: &str) -> Option<(String, Option<String>)> {
+    let last = name.rsplit('.').next()?;
+    let n = trees
+        .iter()
+        .flat_map(|t| t.descendants())
+        .filter(|n| n.kind() == SyntaxKind::LET)
+        .find(|n| {
+            n.children().any(|c| c.kind() == SyntaxKind::PARAMS)
+                && dform_core::names::declared_name(n).is_some_and(|t| t.text() == last)
+        })?;
+    let params = n.children().find(|c| c.kind() == SyntaxKind::PARAMS)?;
+    let args: Vec<String> = params
+        .children()
+        .filter(|c| c.kind() == SyntaxKind::PARAM)
+        .map(|p| p.text().to_string())
+        .collect();
+    let description = doc::comment(&n).and_then(|(_, ps)| {
+        ps.into_iter()
+            .find(|(k, _)| k == "description")
+            .map(|(_, v)| v)
+    });
+    Some((format!("{last}({})", args.join(", ")), description))
+}
+
 /// The signature help at byte `at` of `text`; `trees` are the project's
 /// files, for its externs.
 pub fn help(text: &str, at: usize, trees: &[SyntaxNode]) -> Option<SignatureHelp> {
     let (name, _lookup, commas) = open_call(text, at)?;
-    let (label, documentation) = match extern_decl(trees, &name) {
+    let (label, documentation) = match extern_decl(trees, &name).or_else(|| let_decl(trees, &name))
+    {
         Some((label, description)) => (label, description.map(markdown)),
         None => {
             let r = reference::reference(&name, true).filter(|r| r.kind != RefKind::Keyword)?;
