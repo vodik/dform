@@ -245,6 +245,17 @@ pub fn edits(a: &str, b: &str) -> usize {
     row[b.len()]
 }
 
+/// The one of `names` nearest `name` when one is near (a slip of the
+/// pen): within a third of its length in edits, not `name` itself.
+pub fn nearest<'a>(name: &str, names: impl IntoIterator<Item = &'a str>) -> Option<&'a str> {
+    names
+        .into_iter()
+        .map(|n| (edits(name, n), n))
+        .filter(|(d, _)| *d > 0 && *d <= name.chars().count() / 3)
+        .min()
+        .map(|(_, n)| n)
+}
+
 /// The deployments not applied yet (R-121) whose outputs the attributes
 /// of the resource `atom` names hold, as `later` names them: `stack
 /// platform[env=lab]`.
@@ -500,15 +511,14 @@ impl WhyNot<'_> {
     /// third of its length in edits.
     fn nearest_address(&self, want: &Atom) -> Option<String> {
         let name = self.name(want);
-        self.res
+        let names: Vec<String> = self
+            .res
             .facts
             .iter()
             .filter(|f| f.pred == "want")
             .map(|f| self.name(f))
-            .map(|n| (edits(&name, &n), n))
-            .filter(|(d, _)| *d > 0 && *d <= name.chars().count() / 3)
-            .min()
-            .map(|(_, n)| n)
+            .collect();
+        nearest(&name, names.iter().map(String::as_str)).map(str::to_string)
     }
 
     /// `nearest: ROW, ..`: the rows of `bound`'s relation that differ

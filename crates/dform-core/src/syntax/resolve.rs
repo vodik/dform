@@ -1436,6 +1436,22 @@ impl<'u> Lowerer<'u> {
         }
     }
 
+    /// The names a rule at `rc` may read: its variables and what its
+    /// scopes declare (inputs, `let`s, resources, copies, components,
+    /// modules), for the name an unknown one is nearest.
+    fn scope_names(&self, rc: &Rc) -> Vec<String> {
+        let mut out: Vec<String> = rc.vars.keys().cloned().collect();
+        for s in self.chain_of(rc.scope) {
+            let s = &self.decls.scopes[s];
+            out.extend(s.values.iter().cloned());
+            out.extend(s.resources.keys().cloned());
+            out.extend(s.instances.keys().cloned());
+            out.extend(s.components.keys().cloned());
+            out.extend(s.uses.keys().cloned());
+        }
+        out
+    }
+
     fn chain_of(&self, scope: usize) -> Vec<usize> {
         let mut out = vec![scope];
         let mut s = scope;
@@ -4783,15 +4799,14 @@ impl<'u> Lowerer<'u> {
                 continue;
             };
             failed = true;
-            let d = Diagnostic::error(span, format!("unknown name `{src}`"))
-                .with_help(format!(
-                    "a variable is bound by a relation or an equality in the body; a string is \
-                     quoted: \"{src}\""
-                ))
-                .with_fix(
-                    format!("quote it: \"{src}\""),
-                    vec![(span, format!("\"{src}\""))],
-                );
+            let near = self.scope_names(rc);
+            let d = unknown_name(
+                span,
+                src,
+                &format!("\"{src}\""),
+                true,
+                near.iter().map(String::as_str),
+            );
             self.diags.push(d);
         }
         if failed {
@@ -6763,14 +6778,15 @@ impl<'u> Lowerer<'u> {
             );
         }
         let quoted = format!("\"{}\"", c.fields().join("."));
-        let mut d = Diagnostic::error(span, format!("unknown name `{h}`")).with_help(format!(
-            "no resource, module, copy, input, `let` or type in scope is named `{h}`; a \
-             string is quoted: {quoted}"
+        let fix = c.ops.iter().all(|o| matches!(o, Op::Field(..)));
+        let near = self.scope_names(rc);
+        self.diags.push(unknown_name(
+            span,
+            h,
+            &quoted,
+            fix,
+            near.iter().map(String::as_str),
         ));
-        if c.ops.iter().all(|o| matches!(o, Op::Field(..))) {
-            d = d.with_fix(format!("quote it: {quoted}"), vec![(span, quoted)]);
-        }
-        self.diags.push(d);
         Err(Skip)
     }
 
@@ -7909,6 +7925,33 @@ fn schema_types() -> &'static BTreeSet<String> {
         }
         out
     })
+}
+
+/// `unknown name `NAME``, its help the name in scope it is nearest (a
+/// slip of the pen), else how a name gets a value; `quoted` is the
+/// string it may have meant, a quick fix when `fix`.
+fn unknown_name<'a>(
+    span: Span,
+    name: &str,
+    quoted: &str,
+    fix: bool,
+    near: impl IntoIterator<Item = &'a str>,
+) -> Diagnostic {
+    let help = match crate::whynot::nearest(name, near) {
+        Some(n) => format!("`{n}` is in scope; a string is quoted, {quoted}"),
+        None => format!(
+            "nothing in scope is named `{name}`: give it a value after `where` (`{name} in ..`, \
+             `{name} = ..`), or quote a string, {quoted}"
+        ),
+    };
+    let d = Diagnostic::error(span, format!("unknown name `{name}`")).with_help(help);
+    match fix {
+        true => d.with_fix(
+            format!("quote it: {quoted}"),
+            vec![(span, quoted.to_string())],
+        ),
+        false => d,
+    }
 }
 
 /// A fresh lowered name starting with `base`, reserved.

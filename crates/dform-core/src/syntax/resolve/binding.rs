@@ -202,12 +202,7 @@ impl Lowerer<'_> {
                 "bind it with `{name} = ..`, `in`, or a relation; a string is quoted: {quoted}"
             ))
         } else if !known.contains(name) {
-            Diagnostic::error(span, format!("unknown name `{name}`"))
-                .with_help(format!(
-                    "a variable is bound by a relation or an equality in the body; a string is \
-                     quoted: {quoted}"
-                ))
-                .with_fix(format!("quote it: {quoted}"), vec![(span, quoted)])
+            super::unknown_name(span, name, &quoted, true, known.iter().map(String::as_str))
         } else {
             Diagnostic::error(
                 span,
