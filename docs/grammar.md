@@ -473,6 +473,28 @@ of nothing.
 The settled signature (`az(string, int)`, a `decl`'s or a rule head's
 column names where there are some) is what the editor's hover prints.
 
+**A value's type is the edge it reaches** (R-192). Every position that
+holds a value is an edge that types what flows into it: a resource's
+attribute (the schema's type at each path under it), a `set`'s target, a
+typed `let`, input or output, a declared column, a function's parameter,
+an attribute read through a reference, the other side of a comparison or
+of `+` and `-`. A literal is read at the type of the edges its value
+reaches, wherever it is written: in the attribute, a `let` the attribute
+reads, a let with parameters' value or argument, a relation's row, an
+input's default or a copy's value, a spread beside written fields.
+Inference unifies every edge a value flows through: a variable joins
+the columns it is written in, and a field read (`x.cpu`), an element (`x
+in l`, `l[i]`, a comprehension's), an entry (`(k, v) in o`) and a
+pattern's field link a value to the one it is part of, so `let limits =
+{ cpu: 100m }` read at `resources.requests` is millicores, and a field of
+it read at `requests.cpu` is too. Two edges that read one literal as two
+types are an error naming both (`100m` in `let t` is duration where it
+reaches output d and cpu where it reaches `..requests.cpu`); a `100m` no
+edge reaches is the error naming what would type it. The types read
+from a literal take part (a quantity, a time, a value type read from a
+string); a `string` position takes any of them as its text (R-133), so
+it joins none.
+
 **Sets** (R-158). A type is an API object with identity; a relationship
 whose state lives on one side is an attribute of that side, a reference or
 a set of them, and the order of applies comes from the reference: a role's
@@ -652,9 +674,11 @@ parameter, or the other side of an operator (`1h + 30m`, `c > 500m`
 where `c` is a cpu); a `set` through a resource of any type (`x in
 resource`, `x in k8s`) reads it as every type of the schema (of the
 namespace) that declares the attribute does, when they agree (`cpu:
-100m` under `resources.requests` is cpu). Where nothing gives it a type
-the literal is an error naming both readings, and a typed `let` says which, `let limit:
-cpu = 500m`. A bare
+100m` under `resources.requests` is cpu); written in a `let`, it is read where
+the let's value reaches (`let limits = { cpu: 100m }` given to
+`resources.requests`, R-192). Where nothing gives it a type the literal
+is an error naming both readings, and a typed `let` says which, `let
+limit: cpu = 500m`. A bare
 fraction, `0.5`, is a float ("Numbers"), read as cores where a `cpu`
 is wanted (`0.5` is `500m`, and so is `c > 0.5` where `c` is a cpu).
 
@@ -961,10 +985,21 @@ any typed position (R-31), a literal read as `T` (`let region:
 enum("eu", "us") = "ca"` is an error at `"ca"`, `let n: inet =
 "10.0.0.0/16"` a network); a reference is an error unless `T` is its
 resource type (`let v: net.vpc = main`, also written `ref(net.vpc)`),
-and a bare name two resources share is the one of type `T`. Every row of
-a typed `let` declares the same `T`. The type is the column of `k`'s
-reads (R-34), so hover and the inferred signatures show it; `let k = t`
-stays untyped.
+and a bare name two resources share is the one of type `T`. An object
+type reads each field as its type and a list type each element (`let
+hosts: { a: ip, b: uri } = { a: "10.0.0.1", b: "https://x" }`; `"10.0"`
+there is an error at `hosts.a`), as an input's and an attribute's do.
+Every row of a typed `let` declares the same `T`. The type is the column
+of `k`'s reads (R-34), so hover and the inferred signatures show it. An
+untyped `let k = t` is typed by its uses (R-192, "Types"): every place
+its value reaches (an attribute, a typed input, a parameter, another
+typed `let`) gives the paths it reaches their types, and its literal is
+read at them, `let limits = { cpu: 100m, memory: 128Mi }` given to
+`resources.requests`; uses that disagree are an error naming both, and
+a `100m` no use types is the error at the let, whose help is `give the
+let a type, `let limits: { cpu: cpu }`, or use it where a cpu or a
+duration is wanted`. A let with parameters is the same: its call's value
+flows to where the call is written.
 
 `let f(a, b) = t [where B]` is a let with parameters (R-187): the
 relation `f(a, b, v)` with the mode `(+, +, -)`, every column but the
@@ -1859,6 +1894,12 @@ entries and interpolated names together, a `not { }` body once) is an
 error, a typo or a placeholder that should say so (R-2); `_x` opts out.
 
 ## Literals and terms
+
+Numbers and quantities (a duration is one) have their own syntax; every
+other typed value (an `inet`, an `ip`, a `uri`, an `oci`, a `semver`, a
+`time`, a range of them) is a string read by the position its value
+reaches and checked at compile time ("Types"), which is why `inet` has
+no bare literal: `2001:db8::/32` cannot lex beside keys and annotations.
 
 ```
 lit        := "not" lit1 | "not" "{" body "}" | lit1
