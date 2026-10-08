@@ -657,6 +657,24 @@ pub fn capitalise(s: &str) -> String {
     out
 }
 
+/// A core variable by the name the source gave it: `AvailabilityZone` is
+/// `availability_zone` (`resolve::capitalise`, read backwards).
+pub(crate) fn source_name(v: &str) -> String {
+    let lead = v.len() - v.trim_start_matches('_').len();
+    let mut out = v[..lead].to_string();
+    for (i, c) in v[lead..].chars().enumerate() {
+        if c.is_uppercase() {
+            if i > 0 {
+                out.push('_');
+            }
+            out.extend(c.to_lowercase());
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
 /// A part of a chain after its head.
 #[derive(Clone)]
 enum Op {
@@ -8380,6 +8398,14 @@ pub fn unescape(lit: &str) -> Result<String, String> {
 mod tests {
     use crate::ast::{Lit, Stmt, Term};
     use crate::partition::{fmt_atom, fmt_lit, fmt_rule, fmt_term};
+
+    #[test]
+    fn a_core_variable_reads_as_the_source_name() {
+        use super::source_name;
+        assert_eq!(source_name("AvailabilityZone"), "availability_zone");
+        assert_eq!(source_name("Z"), "z");
+        assert_eq!(source_name("__v1"), "__v1");
+    }
 
     fn lits(ls: &[Lit]) -> String {
         ls.iter().map(fmt_lit).collect::<Vec<_>>().join(", ")

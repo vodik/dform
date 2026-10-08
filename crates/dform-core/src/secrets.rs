@@ -1452,7 +1452,7 @@ fn secret_var(t: &Term, vars: &Vars) -> Option<String> {
     let mut out = None;
     t.for_each_var(&mut |v| {
         if out.is_none() && vars.get(v).is_some_and(|l| !l.is_empty()) {
-            out = Some(crate::whynot::source_name(v));
+            out = Some(crate::syntax::resolve::source_name(v));
         }
     });
     out

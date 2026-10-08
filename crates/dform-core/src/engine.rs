@@ -2996,7 +2996,7 @@ fn eval_builtin_pred(
                 "`{}(..)`{}: `{}` is not bound here",
                 atom.pred,
                 at_suffix(atom.span),
-                crate::whynot::source_name(&v)
+                crate::syntax::resolve::source_name(&v)
             );
         }
         if let Some(r) = side_unanswered(t, state, rec) {

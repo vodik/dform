@@ -209,7 +209,7 @@ pub fn gone(
                 .filter(|(k, _)| !k.starts_with("__"))
                 .map(|(k, v)| {
                     let v = crate::report::elide(&redact.surface(v));
-                    format!("{} = {v}", source_name(k))
+                    format!("{} = {v}", crate::syntax::resolve::source_name(k))
                 })
                 .collect();
             let mut out = all.iter().take(2).cloned().collect::<Vec<_>>().join(", ");
@@ -651,7 +651,7 @@ impl WhyNot<'_> {
     fn term_text(&self, t: &Term) -> String {
         match t {
             Term::Val(v) => self.redact.surface(v),
-            Term::Var(v) => source_name(v),
+            Term::Var(v) => crate::syntax::resolve::source_name(v),
             Term::Wildcard => "_".into(),
             // An interpolated string as written.
             Term::Func { name, args } if name == crate::ir::FORMAT => match args.split_first() {
@@ -706,7 +706,13 @@ impl WhyNot<'_> {
     fn with(&self, env: &Env) -> String {
         env.iter()
             .filter(|(k, _)| !k.starts_with("__"))
-            .map(|(k, v)| format!("{} = {}", source_name(k), self.redact.surface(v)))
+            .map(|(k, v)| {
+                format!(
+                    "{} = {}",
+                    crate::syntax::resolve::source_name(k),
+                    self.redact.surface(v)
+                )
+            })
             .collect::<Vec<_>>()
             .join(", ")
     }
@@ -782,24 +788,6 @@ fn attribute_text(typ: String, name: String, p: &str) -> String {
         true => format!("input {name}.{p}"),
         false => crate::report::attribute(&crate::ir::Address { typ, name }, p),
     }
-}
-
-/// A core variable by the name the source gave it: `AvailabilityZone` is
-/// `availability_zone` (`resolve::capitalise`, read backwards).
-pub(crate) fn source_name(v: &str) -> String {
-    let lead = v.len() - v.trim_start_matches('_').len();
-    let mut out = v[..lead].to_string();
-    for (i, c) in v[lead..].chars().enumerate() {
-        if c.is_uppercase() {
-            if i > 0 {
-                out.push('_');
-            }
-            out.extend(c.to_lowercase());
-        } else {
-            out.push(c);
-        }
-    }
-    out
 }
 
 /// A head that may produce `atom`: the same relation and arity, and for a
@@ -1037,12 +1025,5 @@ mod tests {
             vec![vec!["a", "b-to-c"], vec!["a-to-b", "c"]]
         );
         assert!(splits("public-a", &["private-", ""]).is_empty());
-    }
-
-    #[test]
-    fn a_core_variable_reads_as_the_source_name() {
-        assert_eq!(source_name("AvailabilityZone"), "availability_zone");
-        assert_eq!(source_name("Z"), "z");
-        assert_eq!(source_name("__v1"), "__v1");
     }
 }
