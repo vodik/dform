@@ -231,3 +231,76 @@ fn a_secret_setting_is_configured_and_never_printed() {
     assert!(r.stdout.contains("{token: secret(7 B)}"), "{}", r.stdout);
     assert!(!r.stdout.contains("hunter2"), "{}", r.stdout);
 }
+
+/// R-109: each code's help is the fix at its site, and no help string
+/// serves two codes: a check where the secret is an input's, a
+/// declassify of what a function reads, the declaration an output
+/// needs, the attributes a type marks sensitive.
+#[test]
+fn each_code_has_its_own_help_computed_from_the_site() {
+    let cases = [
+        (
+            "E0301",
+            "deny \"short\" where pw(p), p.len < 12\n",
+            "check it where it is declared, `input pw: secret(string) check ..`",
+        ),
+        (
+            "E0301",
+            "copy(v) where vault.read(\"db\", v)\nn(l) where copy(p), l = p.len\n",
+            "`.len` reads the secret's value: give it `secret.declassify(p, \"why\")`",
+        ),
+        (
+            "E0302",
+            "known(\"a\")\nnew(p) where pw(p), not known(p)\n",
+            "whether `p` is there is a bit of it",
+        ),
+        (
+            "E0303",
+            "n(c) where c = count(p), pw(p)\n",
+            "`collect_list(p)` gathers the secrets",
+        ),
+        (
+            "E0304",
+            "output token: string = p where pw(p)\n",
+            "declare it secret: `output token: secret(string)`",
+        ),
+        (
+            "E0304",
+            "resource leaky.oops o {\n  password = p\n} where pw(p)\n",
+            "leaky.oops .password is printed in every plan; leaky.oops marks no attribute sensitive",
+        ),
+        (
+            "E0305",
+            "resource leaky.vault \"${n}\" {\n  password = \"x\"\n} where pw(n)\n",
+            "name the resource by a public value (a key, a label), not `n`",
+        ),
+        (
+            "E0306",
+            "n(v) where pw(p), vault.read(p, v)\n",
+            "vault.read is asked with `path` as it is",
+        ),
+    ];
+    let mut codes: std::collections::BTreeMap<String, String> = Default::default();
+    for (code, body, want) in cases {
+        let r = run(body).failure();
+        // `Error: p.df:L:C: E030N: ..`, then its `Help: ..` line.
+        let mut lines = r.stderr.lines();
+        let mut found = false;
+        while let Some(l) = lines.next() {
+            if !l.starts_with("Error: ") || !l.contains(&format!("{code}:")) {
+                continue;
+            }
+            let help = lines
+                .by_ref()
+                .find_map(|l| l.split_once("Help: ").map(|(_, h)| h.to_string()))
+                .unwrap_or_else(|| panic!("{code} has no help:\n{}", r.stderr));
+            if let Some(other) = codes.insert(help.clone(), code.to_string())
+                && other != code
+            {
+                panic!("`{help}` serves {other} and {code}");
+            }
+            found |= help.contains(want);
+        }
+        assert!(found, "{code}: want help {want}\n{}", r.stderr);
+    }
+}

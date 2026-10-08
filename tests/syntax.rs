@@ -164,3 +164,84 @@ fn three_independent_errors_are_three_diagnostics() {
     assert!(rendered.contains("three_errors.df:3:16"), "{rendered}");
     assert!(rendered.ends_with("3 errors\n"), "{rendered}");
 }
+
+/// R-109: a help is the fix for its error, so one help string never
+/// serves two kinds of error (an error's kind: its code, `E0301`, when
+/// it has one, else its message with the names, strings and numbers
+/// taken out). Read off every error file's diagnostics; a help no other
+/// kind shares is computed from its site or its own.
+#[test]
+fn no_help_serves_two_kinds_of_error() {
+    let mut files = Vec::new();
+    df_files(&repo().join("tests/syntax/err"), false, &mut files);
+    let mut kinds: std::collections::BTreeMap<String, std::collections::BTreeSet<String>> =
+        Default::default();
+    let mut txts: Vec<PathBuf> = files.iter().map(|f| f.with_extension("txt")).collect();
+    for e in std::fs::read_dir(repo().join("tests/syntax/err")).unwrap() {
+        let p = e.unwrap().path();
+        if p.is_dir() {
+            txts.push(
+                p.with_file_name(format!("{}.txt", p.file_name().unwrap().to_string_lossy())),
+            );
+        }
+    }
+    for txt in txts {
+        let mut kind: Option<String> = None;
+        for l in std::fs::read_to_string(&txt).unwrap().lines() {
+            if let Some(help) = l.strip_prefix("  help: ") {
+                if let Some(k) = &kind {
+                    kinds.entry(help.to_string()).or_default().insert(k.clone());
+                }
+            } else if !l.starts_with("  ") {
+                // `file:line:col: message`
+                kind = l.splitn(4, ':').nth(3).map(|m| kind_of(m.trim()));
+            }
+        }
+    }
+    let shared: Vec<String> = kinds
+        .iter()
+        .filter(|(_, k)| k.len() > 1)
+        .map(|(h, k)| format!("{h}\n  serves {k:?}"))
+        .collect();
+    assert!(shared.is_empty(), "{}", shared.join("\n"));
+}
+
+/// An error's kind: its code when it has one, else its message with what
+/// varies by site (a quoted name, a string, a dotted name, a number)
+/// taken out.
+fn kind_of(message: &str) -> String {
+    if let Some(code) = message
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .find(|w| w.len() == 5 && w.starts_with('E') && w[1..].bytes().all(|b| b.is_ascii_digit()))
+    {
+        return code.to_string();
+    }
+    let mut out = String::new();
+    let mut rest = message;
+    while let Some(c) = rest.chars().next() {
+        let close = match c {
+            '`' => Some('`'),
+            '"' => Some('"'),
+            _ => None,
+        };
+        match close.and_then(|q| rest[1..].find(q).map(|i| i + 2)) {
+            Some(end) => {
+                out.push('_');
+                rest = &rest[end..];
+            }
+            None => {
+                out.push(c);
+                rest = &rest[c.len_utf8()..];
+            }
+        }
+    }
+    out.split(' ')
+        .map(
+            |w| match w.contains('.') || w.chars().any(|c| c.is_ascii_digit()) {
+                true => "_",
+                false => w,
+            },
+        )
+        .collect::<Vec<_>>()
+        .join(" ")
+}
