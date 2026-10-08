@@ -103,59 +103,68 @@ impl Addr {
         let any = |g: &Vec<String>| g.len() > 1 && g.iter().all(String::is_empty);
         (!globs.iter().any(any)).then_some(Addr(globs))
     }
+
+    /// The patterns as a cell's scope is written in a node's path
+    /// (R-209): each pattern's pieces joined by `*`, the patterns by `|`;
+    /// `*` alone is any scope.
+    fn pattern(&self) -> String {
+        let alts: Vec<String> = self.0.iter().map(|g| g.join("*")).collect();
+        alts.join("|")
+    }
+
+    /// A scope [`Addr::pattern`] wrote. A scope that says `*` or `|`
+    /// itself reads as more scopes than it is, which only adds edges.
+    fn of_pattern(p: &str) -> Addr {
+        Addr(
+            p.split('|')
+                .map(|g| g.split('*').map(str::to_string).collect())
+                .collect(),
+        )
+    }
 }
 
 fn addr_globs(t: &Term, body: &[Lit], depth: usize) -> Option<Vec<Vec<String>>> {
     match t {
         Term::Val(Value::Str(s)) => Some(vec![vec![s.clone()]]),
-        Term::Var(x) if depth > 0 => body.iter().find_map(|l| match l {
-            Lit::Eq(Term::Var(y), u) | Lit::Eq(u, Term::Var(y))
-                if y == x && !matches!(u, Term::Var(z) if z == x) =>
-            {
-                addr_globs(u, body, depth - 1)
-            }
-            _ => None,
-        }),
+        Term::Var(x) if depth > 0 => body
+            .iter()
+            .find_map(|l| match l {
+                Lit::Eq(Term::Var(y), u) | Lit::Eq(u, Term::Var(y))
+                    if y == x && !matches!(u, Term::Var(z) if z == x) =>
+                {
+                    addr_globs(u, body, depth - 1)
+                }
+                _ => None,
+            })
+            .or_else(|| copy_named(x, body)),
+        // A template: its literal text, each argument the text fixes
+        // spliced in, any other a gap.
         Term::Func { name, args } if name == crate::ir::FORMAT => {
             let fmt = args.first()?.as_str()?;
-            let mut glob = vec![String::new()];
+            let mut globs = vec![vec![String::new()]];
             for (i, part) in fmt.split("%s").enumerate() {
                 if i > 0 {
-                    match args.get(i)? {
-                        Term::Val(v @ (Value::Str(_) | Value::Int(_))) => glob
-                            .last_mut()
-                            .unwrap()
-                            .push_str(&crate::functions::value_to_string(v)),
-                        _ => glob.push(String::new()),
-                    }
-                }
-                glob.last_mut().unwrap().push_str(part);
-            }
-            Some(vec![glob])
-        }
-        // A header name's segment (R-112): itself, or quoted when it
-        // holds a dot, which a literal piece may say and a gap may hold.
-        Term::Func { name, args } if name == crate::ir::NAME_SEGMENT && args.len() == 1 => {
-            let mut out = Vec::new();
-            for g in addr_globs(&args[0], body, depth)? {
-                let must = g.iter().any(|p| crate::ir::name_segment(p) != p.as_str());
-                if !must {
-                    out.push(g.clone());
-                }
-                if must || g.len() > 1 {
-                    let mut q: Vec<String> = g
+                    let arg = match args.get(i)? {
+                        Term::Val(v @ (Value::Str(_) | Value::Int(_))) => {
+                            vec![vec![crate::functions::value_to_string(v)]]
+                        }
+                        t => addr_globs(t, body, depth)
+                            .unwrap_or_else(|| vec![vec![String::new(), String::new()]]),
+                    };
+                    globs = globs
                         .iter()
-                        .map(|p| {
-                            let l = crate::ir::string_literal(p);
-                            l[1..l.len() - 1].to_string()
-                        })
+                        .flat_map(|g| arg.iter().map(move |a| splice(g, a)))
                         .collect();
-                    q[0].insert(0, '"');
-                    q.last_mut().unwrap().push('"');
-                    out.push(q);
+                }
+                for g in &mut globs {
+                    g.last_mut().unwrap().push_str(part);
                 }
             }
-            Some(out)
+            Some(globs)
+        }
+        // A header name's segment (R-112).
+        Term::Func { name, args } if name == crate::ir::NAME_SEGMENT && args.len() == 1 => {
+            Some(segment_globs(addr_globs(&args[0], body, depth)?))
         }
         Term::Func { name, args } if name == crate::ir::SCOPED && args.len() == 2 => {
             let scope = args[0].as_str()?;
@@ -177,6 +186,114 @@ fn addr_globs(t: &Term, body: &[Lit], depth: usize) -> Option<Vec<Vec<String>>> 
         }
         _ => None,
     }
+}
+
+/// `g` followed by `a`: `a`'s first piece joins `g`'s last.
+fn splice(g: &[String], a: &[String]) -> Vec<String> {
+    let mut out = g.to_vec();
+    out.last_mut().unwrap().push_str(&a[0]);
+    out.extend(a[1..].iter().cloned());
+    out
+}
+
+/// A header name's segment (R-112): itself, or quoted when it holds a
+/// dot, which a literal piece may say and a gap may hold.
+fn segment_globs(globs: Vec<Vec<String>>) -> Vec<Vec<String>> {
+    let mut out = Vec::new();
+    for g in globs {
+        let must = g.iter().any(|p| crate::ir::name_segment(p) != p.as_str());
+        if must || g.len() > 1 {
+            let mut q: Vec<String> = g
+                .iter()
+                .map(|p| {
+                    let l = crate::ir::string_literal(p);
+                    l[1..l.len() - 1].to_string()
+                })
+                .collect();
+            q[0].insert(0, '"');
+            q.last_mut().unwrap().push('"');
+            if !must {
+                out.push(g);
+            }
+            out.push(q);
+        } else {
+            out.push(g);
+        }
+    }
+    out
+}
+
+/// The name of a copy named by its clause (R-191) that `x` holds: a
+/// relation private to such a copy takes the copy's name as a column
+/// before its own, one per scope segment with holes, in order
+/// (`modules::named`), so `x` in the `j`th of them, as in its gate
+/// `k3s.agent-${i}::__instance(x, ..)`, is the `j`th such segment as
+/// written, each hole any text.
+fn copy_named(x: &str, body: &[Lit]) -> Option<Vec<Vec<String>>> {
+    body.iter().find_map(|l| {
+        let Lit::Pos(a) = l else { return None };
+        let (scope, _) = a.pred.split_once("::")?;
+        let j = a
+            .args
+            .iter()
+            .position(|t| matches!(t, Term::Var(y) if y == x))?;
+        let segment = template_segments(scope)
+            .into_iter()
+            .filter(|s| s.contains("${"))
+            .nth(j)?;
+        Some(segment_globs(vec![holes(segment)]))
+    })
+}
+
+/// A scope as written split at its dots, a dot inside a hole (`${a.b}`)
+/// or a quoted segment not one.
+fn template_segments(scope: &str) -> Vec<&str> {
+    let (mut out, mut start, mut depth, mut quoted) = (Vec::new(), 0, 0usize, false);
+    let mut chars = scope.char_indices().peekable();
+    while let Some((i, c)) = chars.next() {
+        match c {
+            '"' if depth == 0 => quoted = !quoted,
+            '$' if chars.peek().is_some_and(|(_, n)| *n == '{') => {
+                chars.next();
+                depth += 1;
+            }
+            '{' if depth > 0 => depth += 1,
+            '}' if depth > 0 => depth -= 1,
+            '.' if depth == 0 && !quoted => {
+                out.push(&scope[start..i]);
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    out.push(&scope[start..]);
+    out
+}
+
+/// A segment as written, `agent-${i}`, as a pattern: its text with each
+/// hole a gap, `["agent-", ""]`.
+fn holes(segment: &str) -> Vec<String> {
+    let mut out = vec![String::new()];
+    let mut depth = 0usize;
+    let mut chars = segment.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '$' if depth == 0 && chars.peek() == Some(&'{') => {
+                chars.next();
+                depth = 1;
+            }
+            '{' if depth > 0 => depth += 1,
+            '}' if depth > 0 => {
+                depth -= 1;
+                if depth == 0 {
+                    out.push(String::new());
+                }
+            }
+            _ if depth > 0 => {}
+            c => out.last_mut().unwrap().push(c),
+        }
+    }
+    out
 }
 
 /// Whether two patterns ([`Addr`]) match a common address: a search over
@@ -253,9 +370,11 @@ impl Node {
     }
 
     /// A scoped cell's path is `scope::k` ([`type_path_node`]), `k` in
-    /// the stack's own scope and `*::k` in a scope that is not constant,
-    /// which is `k` in every scope; so is a path whose type is not
-    /// constant, since its type may be a scoped cell's.
+    /// the stack's own scope; the scope a pattern when the rule's text
+    /// fixes it only in part (`k3s.agent-*::k`, `*::k` any scope), which
+    /// is `k` in every scope it matches. A path whose type is not
+    /// constant is `k` in every scope, since its type may be a scoped
+    /// cell's.
     fn paths_unify(&self, other: &Node) -> bool {
         let (Some(x), Some(y)) = (&self.path, &other.path) else {
             return true;
@@ -272,16 +391,47 @@ impl Node {
             (None, Some(ks)) => return !ks.contains(&top(x)),
             (None, None) => {}
         }
-        let split = |p: &str| match p.rsplit_once("::") {
-            Some((s, k)) => (Some(s.to_string()), k.to_string()),
-            None => (None, p.to_string()),
+        let ((sx, kx), (sy, ky)) = (self.scope(x), other.scope(y));
+        kx == ky
+            && match (sx, sy) {
+                (Some(a), Some(b)) => a.overlaps(&b),
+                _ => true,
+            }
+    }
+
+    /// A path's scope and key: the scope `None` (any) when the type is
+    /// not constant, `""` when the path names none.
+    fn scope<'p>(&self, path: &'p str) -> (Option<Addr>, &'p str) {
+        match path.rsplit_once("::") {
+            Some((s, k)) => (Some(Addr::of_pattern(s)), k),
+            None if self.typ.is_none() => (None, path),
+            None => (Some(Addr::exact("")), path),
+        }
+    }
+
+    /// The node as a message names it (R-109, R-209): an input's, a
+    /// `let`'s or an output's cell as the program names the value, by its
+    /// scope (`input k3s.name`, `input name` the stack's own), and what
+    /// writes it as `writes to input k3s.name`; any other node as the
+    /// graph prints it.
+    pub fn spelled(&self) -> String {
+        let (Some(typ), Some(path)) = (self.typ.as_deref(), self.path.as_deref()) else {
+            return self.to_string();
         };
-        let ((sx, kx), (sy, ky)) = (split(x), split(y));
-        let any = |n: &Node, s: &Option<String>| match s {
-            Some(s) => s == "*",
-            None => n.typ.is_none(),
+        if !scoped_cell(typ) {
+            return self.to_string();
+        }
+        let cell = match path.rsplit_once("::") {
+            Some((scope, k)) => {
+                let scope = scope.split('|').next().unwrap_or(scope);
+                format!("{typ} {scope}.{k}")
+            }
+            None => format!("{typ} {path}"),
         };
-        kx == ky && (any(self, &sx) || any(other, &sy))
+        match self.pred.as_str() {
+            "arg" => format!("writes to {cell}"),
+            _ => cell,
+        }
     }
 }
 
@@ -532,13 +682,29 @@ fn body_pattern(atom: &Atom) -> Node {
 
 /// `n` with the addresses its atom's column 1 fixes in a rule with
 /// `body`, when `n` is a resource's (`want`, a contribution, the
-/// aggregate) and its type is partitioned by address (R-107).
+/// aggregate) and its type is partitioned by address (R-107); and an
+/// input's, a `let`'s or an output's cell, whose column 1 is its scope,
+/// with the scopes the text fixes when it is not constant (R-209): the
+/// copies a clause names in the module `k3s` are `k3s.agent-*::k`, apart
+/// from the module's own `k3s::k`.
 fn addressed(mut n: Node, atom: &Atom, body: &[Lit], split: &BTreeSet<String>) -> Node {
-    if is_resource_node(&n)
-        && n.typ.as_ref().is_some_and(|t| split.contains(t))
-        && let Some(a) = atom.args.get(1)
-    {
-        n.addr = Addr::of(a, body);
+    let Some(a) = atom.args.get(1) else {
+        return n;
+    };
+    if !is_resource_node(&n) {
+        return n;
+    }
+    match n.typ.as_deref() {
+        Some(t) if split.contains(t) => n.addr = Addr::of(a, body),
+        Some(t) if scoped_cell(t) && const_str(a).is_none() => {
+            if let (Some(scope), Some(k)) = (
+                Addr::of(a, body),
+                n.path.as_deref().and_then(|p| p.strip_prefix("*::")),
+            ) {
+                n.path = Some(format!("{}::{k}", scope.pattern()));
+            }
+        }
+        _ => {}
     }
     n
 }
@@ -1895,7 +2061,7 @@ pub fn cycle_error(g: &Graph, scc: &BTreeSet<Node>, negative_edges: &[Edge]) -> 
     let mut out = format!(
         "program is not stratifiable: negative cycle through {}",
         scc.iter()
-            .map(|n| n.to_string())
+            .map(Node::spelled)
             .collect::<Vec<_>>()
             .join(", ")
     );
@@ -1910,7 +2076,13 @@ pub fn cycle_error(g: &Graph, scc: &BTreeSet<Node>, negative_edges: &[Edge]) -> 
             }
             None => "(compiler-generated)".into(),
         };
-        out.push_str(&format!("\n  {} -> {} [{}]: {}", e.from, e.to, e.why, rule));
+        out.push_str(&format!(
+            "\n  {} -> {} [{}]: {}",
+            e.from.spelled(),
+            e.to.spelled(),
+            e.why,
+            rule
+        ));
     }
     out
 }

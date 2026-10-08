@@ -2305,6 +2305,16 @@ addresses: a resource reading its own attribute (`(want, T["a"])` from
 `(attr, T["a"], ip)`), or two each reading the other's. An address the
 text does not fix (`where s in servers`) is every address of the type.
 
+An input, a `let` and an output are cells of the scope that declares
+them (R-209): module `k3s`'s `name`, a copy's `name` and the stack's
+`name` are three cells, never one, so a copy's `name` given from its
+module's (`resource node server { name = "${name}-s" }`) reads one cell
+to write another. The scope is as far as the text fixes it, as an
+address is: the copies a clause names (`resource node "agent-${i}"` in
+`k3s`) are every scope `k3s.agent-*`, apart from the module's own. A
+cycle error names a cell as the program does: `input k3s.name`, and
+what writes it `writes to input k3s.name`.
+
 A write whose type is a variable is grouped by each concrete type it can
 be (R-116): `set r.metadata.labels.owner = "simon" @default where r in
 k8s` beside `resource k8s.deployment server { metadata = { name:
