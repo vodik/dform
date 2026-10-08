@@ -199,6 +199,25 @@ pub fn null_owner(label: &str) -> Option<(String, String)> {
 }
 
 impl Value {
+    /// Whether `f` holds of a scalar inside `self` (anything but a list or
+    /// an object, at any depth): the one walk the questions about a
+    /// value's nulls and references ask.
+    pub fn any_scalar(&self, f: &mut impl FnMut(&Value) -> bool) -> bool {
+        match self {
+            Value::List(xs) => xs.iter().any(|x| x.any_scalar(f)),
+            Value::Obj(m) => m.values().any(|x| x.any_scalar(f)),
+            v => f(v),
+        }
+    }
+
+    /// `f` of every scalar inside `self`, depth first.
+    pub fn for_each_scalar(&self, f: &mut impl FnMut(&Value)) {
+        self.any_scalar(&mut |v| {
+            f(v);
+            false
+        });
+    }
+
     pub fn as_str(&self) -> Option<&str> {
         match self {
             Value::Str(s) => Some(s),
@@ -693,4 +712,36 @@ pub fn compare_numbers(a: &Value, b: &Value) -> Option<std::cmp::Ordering> {
         (Value::Float(x), Value::Int(y)) => int_float(*y, x.get()).reverse(),
         _ => return None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `any_scalar` looks through lists and objects at any depth and
+    /// stops at the first scalar that holds; `for_each_scalar` visits
+    /// every scalar in order.
+    #[test]
+    fn a_walk_reaches_every_scalar_inside_lists_and_objects() {
+        let null = Value::Null {
+            label: "t/a#p".into(),
+            class: NullClass::Open,
+            ty: String::new(),
+        };
+        let v = Value::List(vec![
+            Value::Int(1),
+            Value::Obj([("k".to_string(), Value::List(vec![null.clone()]))].into()),
+        ]);
+        assert!(v.any_scalar(&mut |x| matches!(x, Value::Null { .. })));
+        assert!(!v.any_scalar(&mut |x| matches!(x, Value::Str(_))));
+        let mut seen = Vec::new();
+        v.for_each_scalar(&mut |x| seen.push(x.clone()));
+        assert_eq!(seen, [Value::Int(1), null]);
+        let mut asked = 0;
+        assert!(v.any_scalar(&mut |_| {
+            asked += 1;
+            true
+        }));
+        assert_eq!(asked, 1, "the walk stops at the first that holds");
+    }
 }

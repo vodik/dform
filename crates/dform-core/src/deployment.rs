@@ -1996,24 +1996,13 @@ fn unconfigured(
         }),
         NullClass::Open | NullClass::Fresh => true,
     };
-    fn nulls(v: &Value, out: &mut Vec<(String, NullClass)>) {
-        match v {
-            Value::Null { label, class, .. } => out.push((label.clone(), *class)),
-            Value::List(xs) => xs.iter().for_each(|x| nulls(x, out)),
-            Value::Obj(m) => m.values().for_each(|x| nulls(x, out)),
-            _ => {}
-        }
-    }
     let known: BTreeSet<&str> = agreed(facts)
         .filter(|a| a.pred == "provider_config")
         .filter_map(|a| match a.args.as_slice() {
-            [Term::Val(Value::Str(n)), Term::Val(v)] => {
-                let mut out = Vec::new();
-                nulls(v, &mut out);
-                out.iter()
-                    .all(|(l, c)| !unknown(l, *c))
-                    .then_some(n.as_str())
-            }
+            [Term::Val(Value::Str(n)), Term::Val(v)] => (!v.any_scalar(
+                &mut |x| matches!(x, Value::Null { label, class, .. } if unknown(label, *class)),
+            ))
+            .then_some(n.as_str()),
             _ => None,
         })
         .collect();

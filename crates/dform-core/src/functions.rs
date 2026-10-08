@@ -1850,12 +1850,12 @@ fn rel_path(from: &str, to: &str) -> Option<String> {
 /// (`json.encode`, `yaml.encode`, `toml.encode`): what a document format
 /// can write.
 fn encodable(v: &Value) -> bool {
-    match v {
-        Value::Ref { .. } | Value::CloudRef { .. } | Value::Null { .. } => false,
-        Value::List(xs) => xs.iter().all(encodable),
-        Value::Obj(m) => m.values().all(encodable),
-        _ => true,
-    }
+    !v.any_scalar(&mut |x| {
+        matches!(
+            x,
+            Value::Ref { .. } | Value::CloudRef { .. } | Value::Null { .. }
+        )
+    })
 }
 
 #[cfg(test)]

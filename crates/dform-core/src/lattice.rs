@@ -92,27 +92,24 @@ pub fn eq3(a: &Value, b: &Value) -> Truth {
 /// Labels of every null inside a value.
 pub fn nulls_in(v: &Value) -> BTreeSet<String> {
     let mut out = BTreeSet::new();
-    fn go(v: &Value, out: &mut BTreeSet<String>) {
-        match v {
-            Value::Null { label, .. } => {
-                out.insert(label.clone());
-            }
-            Value::List(xs) => xs.iter().for_each(|x| go(x, out)),
-            Value::Obj(m) => m.values().for_each(|x| go(x, out)),
-            _ => {}
+    v.for_each_scalar(&mut |x| {
+        if let Value::Null { label, .. } = x {
+            out.insert(label.clone());
         }
-    }
-    go(v, &mut out);
+    });
     out
 }
 
 pub fn has_secret(v: &Value) -> bool {
-    match v {
-        Value::Null { class, .. } => *class == NullClass::Secret,
-        Value::List(xs) => xs.iter().any(has_secret),
-        Value::Obj(m) => m.values().any(has_secret),
-        _ => false,
-    }
+    v.any_scalar(&mut |x| {
+        matches!(
+            x,
+            Value::Null {
+                class: NullClass::Secret,
+                ..
+            }
+        )
+    })
 }
 
 /// Substitute one label by a constant everywhere inside a value.
@@ -649,12 +646,7 @@ impl Constraint {
 
 /// Whether a value holds a ref the engine cannot see through.
 fn has_ref(v: &Value) -> bool {
-    match v {
-        Value::Ref { .. } | Value::CloudRef { .. } => true,
-        Value::List(xs) => xs.iter().any(has_ref),
-        Value::Obj(m) => m.values().any(has_ref),
-        _ => false,
-    }
+    v.any_scalar(&mut |x| matches!(x, Value::Ref { .. } | Value::CloudRef { .. }))
 }
 
 /// A ranked cell: one element per rank (a "shelf") plus rank-blind

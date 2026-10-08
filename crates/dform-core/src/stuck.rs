@@ -181,23 +181,13 @@ pub fn can_stick(head: &Atom, body: &[Lit], aggregates: &BTreeSet<String>) -> bo
 
 /// Any null at all.
 pub fn has_null(v: &Value) -> bool {
-    match v {
-        Value::Null { .. } => true,
-        Value::List(xs) => xs.iter().any(has_null),
-        Value::Obj(m) => m.values().any(has_null),
-        _ => false,
-    }
+    v.any_scalar(&mut |x| matches!(x, Value::Null { .. }))
 }
 
 /// An open or secret null: content unknown even under the Unique Name
 /// Assumption.
 pub fn has_open_or_secret(v: &Value) -> bool {
-    match v {
-        Value::Null { class, .. } => *class != NullClass::Fresh,
-        Value::List(xs) => xs.iter().any(has_open_or_secret),
-        Value::Obj(m) => m.values().any(has_open_or_secret),
-        _ => false,
-    }
+    v.any_scalar(&mut |x| matches!(x, Value::Null { class, .. } if *class != NullClass::Fresh))
 }
 
 /// The head with its bindings applied: a bound, null-free term becomes its
@@ -559,15 +549,14 @@ pub fn sections(
 /// yet (`output/NAME#K`, not a secret, which its reader's provider reads
 /// where it is held): nothing in this run resolves one.
 fn other_stacks(v: &Value) -> BTreeSet<String> {
-    match v {
-        Value::Null { label, class, .. }
-            if *class != crate::value::NullClass::Secret
-                && crate::stack::deployment_output(label).is_some() =>
+    let mut out = BTreeSet::new();
+    v.for_each_scalar(&mut |x| {
+        if let Value::Null { label, class, .. } = x
+            && *class != NullClass::Secret
+            && crate::stack::deployment_output(label).is_some()
         {
-            BTreeSet::from([label.clone()])
+            out.insert(label.clone());
         }
-        Value::List(xs) => xs.iter().flat_map(other_stacks).collect(),
-        Value::Obj(m) => m.values().flat_map(other_stacks).collect(),
-        _ => BTreeSet::new(),
-    }
+    });
+    out
 }

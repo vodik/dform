@@ -325,12 +325,11 @@ fn term_vars<'t>(t: &'t Term, out: &mut BTreeSet<&'t str>) {
 
 /// The `(type, address, path)` of every ref in `v`.
 fn refs_in(v: &Value, out: &mut Vec<(String, String, String)>) {
-    match v {
-        Value::Ref { typ, name, attr } => out.push((typ.clone(), name.clone(), attr.clone())),
-        Value::List(xs) => xs.iter().for_each(|x| refs_in(x, out)),
-        Value::Obj(m) => m.values().for_each(|x| refs_in(x, out)),
-        _ => {}
-    }
+    v.for_each_scalar(&mut |x| {
+        if let Value::Ref { typ, name, attr } = x {
+            out.push((typ.clone(), name.clone(), attr.clone()));
+        }
+    });
 }
 
 /// Where the value of an `attr` fact is written: the place of the rule or

@@ -1967,21 +1967,11 @@ impl<'a> Refs<'a> {
 /// Whether a value holds a uri: its host is the program's spelling,
 /// the provider's its A-labels ([`Refs::shown`]).
 fn holds_uri(v: &Value) -> bool {
-    match v {
-        Value::Uri(u) => u.unicode_host(),
-        Value::List(xs) => xs.iter().any(holds_uri),
-        Value::Obj(m) => m.values().any(holds_uri),
-        _ => false,
-    }
+    v.any_scalar(&mut |x| matches!(x, Value::Uri(u) if u.unicode_host()))
 }
 
 fn holds_ref(v: &Value) -> bool {
-    match v {
-        Value::Ref { attr, .. } => attr.is_empty(),
-        Value::List(xs) => xs.iter().any(holds_ref),
-        Value::Obj(m) => m.values().any(holds_ref),
-        _ => false,
-    }
+    v.any_scalar(&mut |x| matches!(x, Value::Ref { attr, .. } if attr.is_empty()))
 }
 
 /// The value at `rest` (`.a.b`, `[2]`, as a change's path goes on) of `v`.
