@@ -28,6 +28,33 @@ exit: ok
   ],
   "moved": [],
   "outcome": "done",
+  "policy": [
+    {
+      "at": "stacks/gke_two_phase.df:100",
+      "fails": [],
+      "hold": 0,
+      "holds": [],
+      "mark": "undetermined",
+      "text": "cluster must be in at least two zones",
+      "undetermined": [
+        {
+          "of": "google.container_cluster pngu",
+          "until": "until zones is known (tick 2)"
+        }
+      ]
+    },
+    {
+      "at": "stacks/gke_two_phase.df:109",
+      "fails": [],
+      "hold": 1,
+      "holds": [
+        "google.container_cluster pngu"
+      ],
+      "mark": "holds",
+      "text": "cluster must not be deletable",
+      "undetermined": []
+    }
+  ],
   "shadowed": [],
   "stack": "gke_two_phase",
   "summary": {

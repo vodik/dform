@@ -1,7 +1,7 @@
 exit: ok
 -- stdout --
 deployment: stacks.dform[env=prod]
-plan: 13 changes (13 create) over 1 tick
+plan: 13 changes (13 create) over 1 tick; policy: 6 hold
 
 tick 1  13 changes
   + compute.vm bastion                    stacks/dform.df:93
@@ -51,27 +51,31 @@ tick 1  13 changes
       public = false
       subnets = [main.private-us-test-1a, main.private-us-test-1b]
       tags.team = "platform"              baseline.df:10
-  + k8s.cluster kubernetes.cluster        kubernetes.df:12
-      private_api = true                  stacks/dform.df:25
-      subnets = [main.private-us-test-1a, main.private-us-test-1b]
-      tags.team = "platform"              baseline.df:10
-      version = "1.29"
-  + k8s.nodepool kubernetes.default       kubernetes.df:18
-      cluster = kubernetes.cluster
-      max = 10                            stacks/dform.df:25
-      min = 3                             stacks/dform.df:25
-      tags.team = "platform"              baseline.df:10
-  + iam.policy identity.app_policy        identity.df:14
-      name = "app"
-      statements[0] = { action: "audit.write", resource: "audit-log" }
-      statements[1] = { action: "db.connect", resource: database.db }
-      statements[2] = { action: "k8s.describe_cluster", resource: kubernetes.cluster }
-      statements[3] = { action: "org.read", resource: "org" }  baseline.df:15
-      tags.team = "platform"              baseline.df:10
-  + iam.role identity.app_role            identity.df:8
-      assume.principals = ["k8s.serviceaccount.app"]
-      name = "app"
-      policies = [identity.app_policy]
-      tags.team = "platform"              baseline.df:10
+  + module kubernetes
+    + k8s.cluster kubernetes.cluster      kubernetes.df:12
+        private_api = true                stacks/dform.df:25
+        subnets = [main.private-us-test-1a, main.private-us-test-1b]
+        tags.team = "platform"            baseline.df:10
+        version = "1.29"
+    + k8s.nodepool kubernetes.default     kubernetes.df:18
+        cluster = kubernetes.cluster
+        max = 10                          stacks/dform.df:25
+        min = 3                           stacks/dform.df:25
+        tags.team = "platform"            baseline.df:10
+  + module identity
+    + iam.policy identity.app_policy      identity.df:14
+        name = "app"
+        statements[0] = { action: "audit.write", resource: "audit-log" }
+        statements[1] = { action: "db.connect", resource: database.db }
+        statements[2] = { action: "k8s.describe_cluster", resource: kubernetes.cluster }
+        statements[3] = { action: "org.read", resource: "org" }  baseline.df:15
+        tags.team = "platform"            baseline.df:10
+    + iam.role identity.app_role          identity.df:8
+        assume.principals = ["k8s.serviceaccount.app"]
+        name = "app"
+        policies = [identity.app_policy]
+        tags.team = "platform"            baseline.df:10
+
+policy  6 hold
 -- stderr --
 warning: prod should enable audit logging ctx={"env":"prod"}

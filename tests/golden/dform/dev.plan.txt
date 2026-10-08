@@ -1,20 +1,21 @@
 exit: ok
 -- stdout --
 deployment: stacks.dform[env=dev]
-plan: 6 changes (6 create) over 1 tick
+plan: 6 changes (6 create) over 1 tick; policy: 6 hold
 
 tick 1  6 changes
   + compute.vm bastion                    stacks/dform.df:93
       private_ip = "10.90.0.21"
       tags.team = "platform"              baseline.df:10
-  + iam.policy identity.app_policy        identity.df:14
-      name = "app"
-      tags.team = "platform"              baseline.df:10
-  + iam.role identity.app_role            identity.df:8
-      assume.principals = ["k8s.serviceaccount.app"]
-      name = "app"
-      policies = [identity.app_policy]
-      tags.team = "platform"              baseline.df:10
+  + module identity
+    + iam.policy identity.app_policy      identity.df:14
+        name = "app"
+        tags.team = "platform"            baseline.df:10
+    + iam.role identity.app_role          identity.df:8
+        assume.principals = ["k8s.serviceaccount.app"]
+        name = "app"
+        policies = [identity.app_policy]
+        tags.team = "platform"            baseline.df:10
   + network.vpc main
     + net.vpc main.vpc                    network.df:19
         cidr = "10.90.0.0/16"             stacks/dform.df:25
@@ -32,4 +33,6 @@ tick 1  6 changes
         visibility = "private"
         vpc = main.vpc
         zone = "us-test-1b"
+
+policy  6 hold
 -- stderr --

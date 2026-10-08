@@ -1,7 +1,7 @@
 exit: ok
 -- stdout --
 deployment: stacks.pngu[env=stg]
-plan: 7 changes (7 create) over 1 tick
+plan: 7 changes (7 create) over 1 tick; policy: 1 hold
 
 tick 1  7 changes
   + alert_metrics_pack pngu                     stacks/pngu.df:223
@@ -64,4 +64,6 @@ tick 1  7 changes
       project = "renfry-stg"                    stacks/pngu.df:71
       region = "us-east1"                       stacks/pngu.df:73
       subnetwork_id = gke_subnet
+
+policy  1 hold
 -- stderr --

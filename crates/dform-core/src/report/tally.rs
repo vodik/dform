@@ -17,8 +17,6 @@ pub struct Tally {
     pub noops: Option<usize>,
     pub denied: usize,
     pub approvals: usize,
-    /// Undetermined policies no clause of `later` names.
-    pub undetermined: usize,
     pub not_planned: usize,
     /// Held objects `later` lists, no change of theirs known yet (R-177).
     pub held: usize,
@@ -26,8 +24,9 @@ pub struct Tally {
     /// `later`'s changes by what they wait on outside the plan
     /// (`after stacks.platform[env=lab] is applied`), each by kind.
     pub later: Vec<(String, Vec<(&'static str, usize)>)>,
-    /// `later`'s undetermined denies and checks, by what they wait on.
-    pub policies: Vec<(String, usize, usize)>,
+    /// The policies that hold, fail and are undetermined (R-200's policy
+    /// block).
+    pub policy: (usize, usize, usize),
 }
 
 impl Tally {
@@ -64,7 +63,9 @@ impl Tally {
         };
         self.denied += other.denied;
         self.approvals += other.approvals;
-        self.undetermined += other.undetermined;
+        self.policy.0 += other.policy.0;
+        self.policy.1 += other.policy.1;
+        self.policy.2 += other.policy.2;
         self.not_planned += other.not_planned;
         self.held += other.held;
         self.conflicts += other.conflicts;
@@ -74,22 +75,13 @@ impl Tally {
                 None => self.later.push((until.clone(), kinds.clone())),
             }
         }
-        for (until, d, c) in &other.policies {
-            match self.policies.iter_mut().find(|(u, _, _)| u == until) {
-                Some((_, x, y)) => {
-                    *x += d;
-                    *y += c;
-                }
-                None => self.policies.push((until.clone(), *d, *c)),
-            }
-        }
     }
 
-    /// `plan: 5 changes (3 create, 2 update) over 2 ticks, 1 approval, 1
-    /// undetermined`; what `later` holds, by kind and by what it waits on
-    /// (R-193): `plan: 21 creates after stacks.platform[env=lab] is
-    /// applied; 6 denies undetermined until then`, never `0 changes` while
-    /// `later` holds a change.
+    /// `plan: 5 changes (3 create, 2 update) over 2 ticks, 1 approval`;
+    /// what `later` holds, by kind and by what it waits on (R-193); the
+    /// policies (R-200): `plan: 21 creates after stacks.platform[env=lab]
+    /// is applied; policy: 12 hold · 2 undetermined`, never `0 changes`
+    /// while `later` holds a change.
     pub fn text(&self) -> String {
         let later = self.later_clauses();
         let mut head = Vec::new();
@@ -109,9 +101,6 @@ impl Tally {
         if self.approvals > 0 {
             head.push(count(self.approvals, "approval"));
         }
-        if self.undetermined > 0 {
-            head.push(format!("{} undetermined", self.undetermined));
-        }
         if self.not_planned > 0 {
             head.push(format!("{} not planned", self.not_planned));
         }
@@ -130,17 +119,22 @@ impl Tally {
             parts.extend(later);
             parts.extend(held);
         }
+        let (hold, fails, undetermined) = self.policy;
+        if hold + fails + undetermined > 0 {
+            parts.push(format!(
+                "policy: {}",
+                super::policy::tally_text(hold, fails, undetermined)
+            ));
+        }
         format!("plan: {}", parts.join("; "))
     }
 
     /// The clauses for what `later` holds (R-193): its changes by kind and
     /// by what they wait on outside the plan, in `later`'s order (`21
-    /// creates after platform[env=lab] is applied`), then its undetermined
-    /// denies and checks by the same (`6 denies undetermined until then`,
-    /// `then` the clause before). None when `later` holds no change.
+    /// creates after platform[env=lab] is applied`). None when `later`
+    /// holds no change.
     fn later_clauses(&self) -> Vec<String> {
-        let mut out: Vec<String> = self
-            .later
+        self.later
             .iter()
             .map(|(until, kinds)| {
                 let kinds: Vec<String> = kinds
@@ -152,30 +146,7 @@ impl Tally {
                     .trim_end()
                     .to_string()
             })
-            .collect();
-        if out.is_empty() {
-            return out;
-        }
-        let last = self.later.last().map(|(u, _)| u.clone());
-        for (until, denies, checks) in &self.policies {
-            let when = match until.strip_prefix("after ") {
-                _ if Some(until) == last.as_ref() => " until then".to_string(),
-                Some(rest) => format!(" until {rest}"),
-                None if until.is_empty() => String::new(),
-                None => format!(", {until}"),
-            };
-            for (n, what) in [(*denies, "deny"), (*checks, "check")] {
-                if n > 0 {
-                    let what = match n {
-                        1 => what.to_string(),
-                        _ if what == "deny" => "denies".to_string(),
-                        _ => format!("{what}s"),
-                    };
-                    out.push(format!("{n} {what} undetermined{when}"));
-                }
-            }
-        }
-        out
+            .collect()
     }
 }
 
@@ -194,15 +165,6 @@ impl Report {
             })
             .count();
         let later = self.later_changes();
-        let policies = match later.is_empty() {
-            true => Vec::new(),
-            false => self.later_policies(),
-        };
-        // An undetermined policy `later` names in a clause is said there.
-        let undetermined = match later.is_empty() {
-            true => self.policies.len(),
-            false => self.policies.iter().filter(|p| p.after.is_some()).count(),
-        };
         // Held objects `later` lists as state has them, no change of
         // theirs known yet (R-177): after the clauses when there are.
         let held = self
@@ -218,12 +180,11 @@ impl Report {
             noops: self.show_noop.then_some(self.noops),
             denied: self.denies.len(),
             approvals: self.approvals.len(),
-            undetermined,
             not_planned: self.not_planned.len(),
             held,
             conflicts: self.conflicts.len(),
             later,
-            policies,
+            policy: super::policy::count(&self.policy),
         }
     }
 
@@ -258,25 +219,5 @@ impl Report {
                 (until, kinds)
             })
             .collect()
-    }
-
-    /// `later`'s undetermined denies and checks, by what they wait on.
-    fn later_policies(&self) -> Vec<(String, usize, usize)> {
-        let mut policies: Vec<(String, usize, usize)> = Vec::new();
-        for p in self.policies.iter().filter(|p| p.after.is_none()) {
-            let until = until_text(&p.until);
-            let i = match policies.iter().position(|(u, _, _)| *u == until) {
-                Some(i) => i,
-                None => {
-                    policies.push((until, 0, 0));
-                    policies.len() - 1
-                }
-            };
-            match p.refinement {
-                true => policies[i].2 += 1,
-                false => policies[i].1 += 1,
-            }
-        }
-        policies
     }
 }

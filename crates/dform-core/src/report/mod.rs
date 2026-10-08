@@ -39,6 +39,7 @@ use tree::Site;
 mod bare;
 pub mod deployments;
 pub mod fold;
+pub mod policy;
 pub mod progress;
 pub mod table;
 mod tally;
@@ -1091,10 +1092,39 @@ pub struct Report {
     /// their creation only that differs ([`Deformation::kept`], R-198):
     /// no change, each said under its address.
     pub kept: Vec<Deformation>,
+    /// The program's policies, each a tally of what it ranges over
+    /// (R-200's policy block).
+    pub policy: Vec<policy::Line>,
     /// The plan is one deployment's in a tree of them (R-200): the tree's
     /// headline and the deployment's header line say what its own
     /// headline and `up to date` line would.
     pub nested: bool,
+}
+
+/// The header of a used module's instance in the plan's tree, `module
+/// k3s` (R-200), as `why` names the scope.
+const MODULE: &str = "module";
+
+/// The scopes of `addrs` that are no copy (a used module's instance) and
+/// hold two or more of them: what the plan's tree groups under a header.
+fn shared_modules<'a>(
+    addrs: impl Iterator<Item = &'a Address>,
+    instances: &crate::zset::Instances,
+) -> BTreeSet<String> {
+    let mut n: BTreeMap<&str, usize> = BTreeMap::new();
+    for a in addrs {
+        let mut name = a.name.as_str();
+        while let Some((scope, _)) = crate::ir::scope_split(name) {
+            if instances.address(scope).is_none() {
+                *n.entry(scope).or_default() += 1;
+            }
+            name = scope;
+        }
+    }
+    n.into_iter()
+        .filter(|(_, n)| *n > 1)
+        .map(|(s, _)| s.to_string())
+        .collect()
 }
 
 /// A forget's note on its line (R-154).
@@ -1227,6 +1257,7 @@ pub fn report(i: &Input) -> Report {
     let not_planned = crate::zset::not_planned(i.res, &r);
     let mut policies = policies(i, &tick_of, &resolves);
     policies.extend(deferred(i.res, &tick_of, &resolves));
+    let policy = policy::lines(i.program, i.res, &policies, &r);
     for p in policies.iter_mut().filter(|p| p.after.is_none()) {
         p.until = follow.until(&p.on);
     }
@@ -1326,6 +1357,7 @@ pub fn report(i: &Input) -> Report {
             .filter(|a| matches!(a.kind, ActionKind::Noop) && !a.kept().is_empty())
             .map(|a| deformation(a, i.schema, &r, &refs))
             .collect(),
+        policy,
         nested: false,
     }
 }
@@ -2831,6 +2863,19 @@ impl Report {
         for x in &mut self.policies {
             x.site = x.rule.as_ref().and_then(|id| p.rule_site(rules, id, &[]));
         }
+        // A check's site is its rule's.
+        for l in self.policy.iter_mut().filter(|l| l.at.is_empty()) {
+            let site = self
+                .policies
+                .iter()
+                .find_map(|x| match x.message == l.text {
+                    true => x.site.as_ref(),
+                    false => None,
+                });
+            if let Some(site) = site {
+                l.at = site.at.clone();
+            }
+        }
         for n in &mut self.not_planned {
             n.site = n.rule.as_ref().and_then(|id| p.rule_site(rules, id, &[]));
         }
@@ -2902,6 +2947,11 @@ impl Report {
         self.kept.iter_mut().for_each(|d| fix(&mut d.site));
         self.groups.iter_mut().for_each(|g| fix(&mut g.site));
         self.policies.iter_mut().for_each(|p| fix(&mut p.site));
+        for l in &mut self.policy {
+            if let Some(at) = place(&l.at) {
+                l.at = at;
+            }
+        }
         self.approvals.iter_mut().for_each(|a| fix(&mut a.site));
         self.denied.iter_mut().for_each(|d| fix(&mut d.site));
         for d in self.conflicts.iter_mut().chain(self.shadowed.iter_mut()) {
@@ -2978,11 +3028,10 @@ impl Report {
     }
 
     /// What `later` holds: rules that may derive an unknown number of
-    /// resources, denies and checks undetermined until a tick, and held
-    /// changes whose nulls this plan does not resolve.
+    /// resources, and held changes whose nulls this plan does not resolve
+    /// (an undetermined deny or check is the policy block's).
     fn has_later(&self) -> bool {
         self.groups.iter().any(|g| g.resolves_after.is_none())
-            || !self.policies.is_empty()
             || self.pending.iter().any(|b| b.resolves_after.is_none())
     }
 
@@ -3156,6 +3205,16 @@ impl Report {
             rows.push(Row::plain(String::new()));
             self.write_kept(&mut rows, style);
         }
+        // The policy block (R-200): after the ticks, before what waits.
+        // Its columns are its own: laid out apart, it moves no column of
+        // the ticks'.
+        let policy = policy::rows(&self.policy, self.why, style);
+        if !policy.is_empty() {
+            rows.push(Row::plain(String::new()));
+            for line in layout(&policy, style).lines() {
+                rows.push(Row::plain(line.to_string()));
+            }
+        }
         if self.has_later() {
             rows.push(Row::plain(String::new()));
             let head = "later";
@@ -3271,9 +3330,8 @@ impl Report {
         }
     }
 
-    /// `later`'s rows: each group no tick of this plan decides, each
-    /// undetermined deny and check, each held change this plan does not
-    /// schedule (R-156).
+    /// `later`'s rows: each group no tick of this plan decides, each held
+    /// change this plan does not schedule (R-156).
     fn write_later(&self, rows: &mut Vec<Row>, style: Style) {
         let unscheduled: Vec<&Group> = self
             .groups
@@ -3281,31 +3339,6 @@ impl Report {
             .filter(|g| g.resolves_after.is_none())
             .collect();
         self.write_groups(rows, &unscheduled, style);
-        let site = |s: &Option<Site>| s.as_ref().map(|s| s.at.clone()).unwrap_or_default();
-        let full = self.why >= Why::How;
-        let both = |at: String, cond: String, reason: &str| both(full, at, cond, reason);
-        for p in &self.policies {
-            let on = waited(&p.on.iter().cloned().collect()).join(", ");
-            let cond = match (p.may_derive, p.after) {
-                (false, Some(t)) => format!("until tick {}", t + 1),
-                (true, Some(t)) => format!("maybe tick {}", t + 1),
-                (_, None) if on.is_empty() => "undetermined".to_string(),
-                (_, None) => format!("waits on {on}"),
-            };
-            let left = match p.refinement {
-                true => format!("  check {}", p.message),
-                false => format!("  deny \"{}\"", p.message),
-            };
-            let mut right = both(site(&p.site), cond, &p.reason);
-            // Too many values for the column: the resources they are of.
-            let owners = owners(&p.on.iter().cloned().collect()).join(", ");
-            if p.after.is_none() && !owners.is_empty() && owners != on {
-                right.extend(both(site(&p.site), format!("waits on {owners}"), &p.reason));
-            }
-            // What it waits on is what the line says (R-193): never folded
-            // away.
-            rows.push(Row::plain(left).with(right).kept());
-        }
         for b in self.pending.iter().filter(|b| b.resolves_after.is_none()) {
             let ds: Vec<&Deformation> = b.deformations.iter().collect();
             let on = waited(&b.on.iter().cloned().collect()).join(", ");
@@ -3371,6 +3404,26 @@ impl Report {
         }
     }
 
+    /// The scopes `addr` is in, innermost first, as the plan's tree
+    /// nests it: each copy, and each used module's instance of `shared`
+    /// (`module k3s`).
+    fn enclosing(&self, addr: &Address, shared: &BTreeSet<String>) -> Vec<Address> {
+        let mut out = Vec::new();
+        let mut name = addr.name.as_str();
+        while let Some((scope, _)) = crate::ir::scope_split(name) {
+            match self.instances.address(scope) {
+                Some(copy) => out.push(copy),
+                None if shared.contains(scope) => out.push(Address {
+                    typ: MODULE.to_string(),
+                    name: scope.to_string(),
+                }),
+                None => {}
+            }
+            name = scope;
+        }
+        out
+    }
+
     /// Changes in order, a copy's under it (R-67): `+ network blue` at
     /// the place of its first resource, the resources indented beneath, a
     /// copy inside it nested again. The copy's marker is its `deformation`
@@ -3384,9 +3437,14 @@ impl Report {
         indent: &str,
         style: Style,
     ) {
-        // The copy directly under `outer` a change is in, if any.
+        // The scopes the changes here share: each copy, and a used
+        // module's instance two or more of them are in (R-200: the plan
+        // is the path tree printed).
+        let shared = shared_modules(ds.iter().map(|d| &d.addr), &self.instances);
+        let enclosing = |a: &Address| self.enclosing(a, &shared);
+        // The copy or module directly under `outer` a change is in, if any.
         let under = |d: &Deformation| -> Option<Address> {
-            let chain = self.instances.enclosing(&d.addr);
+            let chain = enclosing(&d.addr);
             let at = match outer {
                 None => chain.len(),
                 Some(o) => chain.iter().position(|a| a == o)?,
@@ -3404,7 +3462,7 @@ impl Report {
             }
             let members: Vec<&Deformation> = ds
                 .iter()
-                .filter(|m| self.instances.enclosing(&m.addr).contains(&copy))
+                .filter(|m| enclosing(&m.addr).contains(&copy))
                 .copied()
                 .collect();
             let kinds: Vec<&str> = members
@@ -4640,6 +4698,7 @@ impl Report {
                 j
             }).collect::<Vec<_>>(),
             "later": later,
+            "policy": self.policy.iter().map(policy::Line::json).collect::<Vec<_>>(),
             "shadowed": self.shadowed.iter().map(diag_json).collect::<Vec<_>>(),
             "conflicts": self.conflicts.iter().map(diag_json).collect::<Vec<_>>(),
             "moved": self.moved.iter().map(|(old, new)| json!({

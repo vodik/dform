@@ -1,38 +1,38 @@
 exit: ok
 -- stdout --
-plan: 8 changes (8 create) over 2 ticks, 8 undetermined
+plan: 8 changes (8 create) over 2 ticks; policy: 4 hold · 8 undetermined
 
 tick 1  8 changes
-  + google.compute_network vpc                  stacks/crud_api.df:75
+  + google.compute_network vpc       stacks/crud_api.df:75
       auto_create_subnetworks = false
       name = "shop-dev"
-  + google.sql_database_instance db             stacks/crud_api.df:77
+  + google.sql_database_instance db  stacks/crud_api.df:77
       database_version = "POSTGRES_16"
       deletion_protection = true
       name = "crud-api-dev"
-      region = "us-east1"                       stacks/crud_api.df:22
+      region = "us-east1"            stacks/crud_api.df:22
       settings = {
         tier: "db-f1-micro",
         availability_type: "ZONAL",
         backup_configuration: { enabled: true, point_in_time_recovery_enabled: true },
         ip_configuration: { ipv4_enabled: false, private_network: vpc },
       }
-  + google.sql_user crud_user                   stacks/crud_api.df:92
+  + google.sql_user crud_user        stacks/crud_api.df:92
       instance = "crud-api-dev"
       name = "crud_api"
       password = (sensitive)
-  + k8s.namespace shop                          stacks/crud_api.df:102
+  + k8s.namespace shop               stacks/crud_api.df:102
       metadata.labels."pod-security.kubernetes.io/enforce" = "restricted"
       metadata.name = "shop"
-  + k8s.network_policy default_deny             stacks/crud_api.df:107
+  + k8s.network_policy default_deny  stacks/crud_api.df:107
       metadata.name = "default-deny"
       metadata.namespace = "shop"
       spec.podSelector = {}
       spec.policyTypes = ["Ingress", "Egress"]
-  + google.sql_database crud_db                 stacks/crud_api.df:90
+  + google.sql_database crud_db      stacks/crud_api.df:90
       instance = "crud-api-dev"
       name = "crud_api"
-  + k8s.secret db_conn                          stacks/crud_api.df:120
+  + k8s.secret db_conn               stacks/crud_api.df:120
       metadata = { name: "crud-api-db", namespace: "shop" }
       stringData = {
         PGHOST: db.private_ip_address,
@@ -40,7 +40,7 @@ tick 1  8 changes
         PGDATABASE: (sensitive),
         PGPASSWORD: (sensitive),
       }
-  + k8s.job migrate-v42                         stacks/crud_api.df:134
+  + k8s.job migrate-v42              stacks/crud_api.df:134
       metadata.labels = { app: "crud-api", schema: "42" }
       metadata.name = "crud-api-migrate-v42"
       metadata.namespace = "shop"
@@ -61,25 +61,33 @@ tick 1  8 changes
 
 tick 2  ? changes
   waits on  migrate-v42.status.succeeded
-  app blue                                      if app blue
+  app blue                           if app blue
     k8s.deployment blue.deploy
     k8s.horizontal_pod_autoscaler blue.hpa
     k8s.pod_disruption_budget blue.pdb
     k8s.network_policy blue.allow_http
-  app green                                     if app green
+  app green                          if app green
     k8s.deployment green.deploy
     k8s.horizontal_pod_autoscaler green.hpa
     k8s.pod_disruption_budget green.pdb
     k8s.network_policy green.allow_http
-  k8s.service api                               stacks/crud_api.df:190  if serving(_)
+  k8s.service api                    stacks/crud_api.df:190  if serving(_)
 
-later
-  deny "cutover to a color with unready pods"   stacks/crud_api.df:269  until tick 2
-  deny "migration failed; the rollout is held"  stacks/crud_api.df:257  until tick 2
-  deny "a rollout runs a schema the migration has not reached"  stacks/crud_api.df:263  maybe tick 2
-  deny "container memory limit above 2Gi"       stacks/crud_api.df:303  maybe tick 2
-  deny "container requests more memory than its limit"  stacks/crud_api.df:308  maybe tick 2
-  deny "container without resource limits"      stacks/crud_api.df:294  maybe tick 2
-  deny "image not pinned by digest"             stacks/crud_api.df:313  maybe tick 2
-  deny "plaintext secret in env"                stacks/crud_api.df:326  maybe tick 2
+policy  4 hold · 8 undetermined
+  undetermined  a rollout runs a schema the migration has not reached  stacks/crud_api.df:263
+    k8s.job migrate-v42                            until status.succeeded is known (tick 2)
+  undetermined  container memory limit above 2Gi   stacks/crud_api.df:303  1 undetermined
+    k8s.job migrate-v42                            until status.succeeded is known (tick 2)
+  undetermined  container requests more memory than its limit  stacks/crud_api.df:308
+    k8s.job migrate-v42                            until status.succeeded is known (tick 2)
+  undetermined  container without resource limits  stacks/crud_api.df:294  1 undetermined
+    k8s.job migrate-v42                            until status.succeeded is known (tick 2)
+  undetermined  cutover to a color with unready pods  stacks/crud_api.df:269  1 undetermined
+    k8s.job migrate-v42                            until status.succeeded is known (tick 2)
+  undetermined  image not pinned by digest         stacks/crud_api.df:313  1 undetermined
+    k8s.job migrate-v42                            until status.succeeded is known (tick 2)
+  undetermined  migration failed; the rollout is held  stacks/crud_api.df:257  1 undetermined
+    k8s.job migrate-v42                            until status.conditions is known (tick 2)
+  undetermined  plaintext secret in env            stacks/crud_api.df:326  1 undetermined
+    k8s.job migrate-v42                            until status.succeeded is known (tick 2)
 -- stderr --

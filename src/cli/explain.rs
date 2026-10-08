@@ -302,13 +302,74 @@ impl Why {
             core: self.core,
             whole: self.whole,
         };
+        let pattern = short_name(&self.pattern, &x.res)?;
         if self.json {
-            let j = crate::why::why_json(&self.pattern, how, &cx)?;
+            let j = crate::why::why_json(&pattern, how, &cx)?;
             println!("{}", serde_json::to_string_pretty(&j)?);
         } else {
-            print!("{}", crate::why::why(&self.pattern, how, &cx)?);
+            print!("{}", crate::why::why(&pattern, how, &cx)?);
         }
         Ok(Outcome::Done)
+    }
+}
+
+/// `why`'s pattern with a resource's short name (`sub`, `net.subnet sub`)
+/// as its full one (`net.subnet k3s.sub`, R-200): a name is legal where it
+/// is unique, and one several resources end in is an error naming each. A
+/// pattern that names a resource or a value as it is stays.
+fn short_name(pattern: &str, res: &crate::engine::EvalResult) -> Result<String> {
+    let (typ, name) = match pattern.split_once(' ') {
+        Some((t, n)) => (Some(t), n),
+        None => (None, pattern),
+    };
+    let plain = |c: char| c.is_alphanumeric() || matches!(c, '_' | '-' | '.');
+    if !name.chars().all(plain) || typ.is_some_and(|t| !t.chars().all(plain)) {
+        return Ok(pattern.to_string());
+    }
+    let mut wanted = Vec::new();
+    for a in res.facts.iter() {
+        match (a.pred.as_str(), a.args.as_slice()) {
+            ("want", [Term::Val(Value::Str(t)), Term::Val(Value::Str(n))]) => {
+                wanted.push(ir::Address {
+                    typ: t.clone(),
+                    name: n.clone(),
+                })
+            }
+            // A value the stack declares is what the name reads.
+            (
+                "attr",
+                [
+                    _,
+                    Term::Val(Value::Str(scope)),
+                    Term::Val(Value::Str(n)),
+                    ..,
+                ],
+            ) if scope.is_empty() && typ.is_none() && n.split('.').next() == Some(name) => {
+                return Ok(pattern.to_string());
+            }
+            _ => {}
+        }
+    }
+    let of_type = |a: &&ir::Address| typ.is_none_or(|t| a.typ == t);
+    if wanted.iter().filter(of_type).any(|a| a.name == name) {
+        return Ok(pattern.to_string());
+    }
+    let suffix = format!(".{name}");
+    let ends: Vec<&ir::Address> = wanted
+        .iter()
+        .filter(of_type)
+        .filter(|a| a.name.ends_with(&suffix))
+        .collect();
+    match ends.as_slice() {
+        [] => Ok(pattern.to_string()),
+        [one] => Ok(report::address(one)),
+        many => {
+            let each: Vec<String> = many.iter().map(|a| report::address(a)).collect();
+            anyhow::bail!(
+                "why {pattern}: {name} is the short name of {}; name one by its full name",
+                each.join(" and ")
+            )
+        }
     }
 }
 

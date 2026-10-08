@@ -1,6 +1,6 @@
 exit: ok
 -- stdout --
-plan: 13 changes (13 create) over 1 tick
+plan: 13 changes (13 create) over 1 tick; policy: 2 hold
 
 tick 1  13 changes
   + net.vpc core_a                           stacks/dform-advanced.df:112
@@ -45,6 +45,8 @@ tick 1  13 changes
   + net.route_table tenant_a                 stacks/dform-advanced.df:68
       routes = [{ destination: "10.200.0.0/16", target: shared }]  stacks/dform-advanced.df:70
       vpc = tenant_a
+
+policy  2 hold
 -- stderr --
 warning: mesh has direct route between non-adjacent nodes ctx={"from":"core_a","to":"core_c"}
 warning: mesh has direct route between non-adjacent nodes ctx={"from":"core_c","to":"core_a"}

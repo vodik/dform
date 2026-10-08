@@ -1,6 +1,6 @@
 exit: ok
 -- stdout --
-plan: 6 changes (6 create) over 2 ticks, 1 undetermined
+plan: 6 changes (6 create) over 2 ticks; policy: 1 hold · 1 undetermined
 
 tick 1  3 changes
   + google.compute_subnetwork gke_subnet            stacks/gke_two_phase.df:38
@@ -41,6 +41,7 @@ tick 2  3+ changes
       metadata.namespace = "pngu"
   google.container_node_pool "np-${z}"              stacks/gke_two_phase.df:91  waits on pngu.zones
 
-later
-  deny "cluster must be in at least two zones"      stacks/gke_two_phase.df:100  until tick 2
+policy  1 hold · 1 undetermined
+  undetermined  cluster must be in at least two zones  stacks/gke_two_phase.df:100  1 undetermined
+    google.container_cluster pngu  until zones is known (tick 2)
 -- stderr --

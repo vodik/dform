@@ -1,7 +1,7 @@
 exit: ok
 -- stdout --
 deployment: stacks.dform[env=staging]
-plan: 13 changes (13 create) over 1 tick
+plan: 13 changes (13 create) over 1 tick; policy: 6 hold
 
 tick 1  13 changes
   + compute.vm bastion                    stacks/dform.df:93
@@ -51,26 +51,30 @@ tick 1  13 changes
       public = false
       subnets = [main.private-us-test-1a, main.private-us-test-1b]
       tags.team = "platform"              baseline.df:10
-  + k8s.cluster kubernetes.cluster        kubernetes.df:12
-      private_api = false                 stacks/dform.df:29
-      subnets = [main.private-us-test-1a, main.private-us-test-1b]
-      tags.team = "platform"              baseline.df:10
-      version = "1.29"
-  + k8s.nodepool kubernetes.default       kubernetes.df:18
-      cluster = kubernetes.cluster
-      max = 3                             stacks/dform.df:31
-      min = 1                             stacks/dform.df:30
-      tags.team = "platform"              baseline.df:10
-  + iam.policy identity.app_policy        identity.df:14
-      name = "app"
-      statements = [
-        { action: "db.connect", resource: database.db },
-        { action: "k8s.describe_cluster", resource: kubernetes.cluster },
-      ]
-      tags.team = "platform"              baseline.df:10
-  + iam.role identity.app_role            identity.df:8
-      assume.principals = ["k8s.serviceaccount.app"]
-      name = "app"
-      policies = [identity.app_policy]
-      tags.team = "platform"              baseline.df:10
+  + module kubernetes
+    + k8s.cluster kubernetes.cluster      kubernetes.df:12
+        private_api = false               stacks/dform.df:29
+        subnets = [main.private-us-test-1a, main.private-us-test-1b]
+        tags.team = "platform"            baseline.df:10
+        version = "1.29"
+    + k8s.nodepool kubernetes.default     kubernetes.df:18
+        cluster = kubernetes.cluster
+        max = 3                           stacks/dform.df:31
+        min = 1                           stacks/dform.df:30
+        tags.team = "platform"            baseline.df:10
+  + module identity
+    + iam.policy identity.app_policy      identity.df:14
+        name = "app"
+        statements = [
+          { action: "db.connect", resource: database.db },
+          { action: "k8s.describe_cluster", resource: kubernetes.cluster },
+        ]
+        tags.team = "platform"            baseline.df:10
+    + iam.role identity.app_role          identity.df:8
+        assume.principals = ["k8s.serviceaccount.app"]
+        name = "app"
+        policies = [identity.app_policy]
+        tags.team = "platform"            baseline.df:10
+
+policy  6 hold
 -- stderr --
