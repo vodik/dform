@@ -2309,18 +2309,30 @@ fn run_with(
             Cmd::Apply { .. } => "this apply",
             _ => "the next apply",
         };
-        eprintln!(
-            "{deployment}: {when} {} (dform.toml's [secrets]){}",
-            r.describe(),
-            match r.removed.is_empty() {
-                true => "",
-                false => {
-                    "; sealing to a recipient no longer revokes what it opened before: \
-                     `dform secrets cycle` makes a master it never held, and each secret moves \
-                     to it as it is rotated"
+        let place = match &located.location {
+            store::Location::S3(_) => "in the bucket",
+            store::Location::Local(_) => "beside its state",
+        };
+        // Once per run, however often the deployment is opened in it.
+        static SAID: std::sync::Mutex<BTreeSet<String>> = std::sync::Mutex::new(BTreeSet::new());
+        if SAID
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(deployment.to_string())
+        {
+            eprintln!(
+                "{deployment}: {}{}  (dform.toml [secrets])",
+                r.describe(&mixing, when, place),
+                match r.removed.is_empty() {
+                    true => "",
+                    false => {
+                        "; sealing to a recipient no longer revokes what it opened before: \
+                         `dform secrets cycle` makes a master it never held, and each secret \
+                         moves to it as it is rotated"
+                    }
                 }
-            }
-        );
+            );
+        }
     }
     // A run that does not hold the master (R-164) plans in full, each
     // change that needs it marked, and an apply makes what needs it not.

@@ -149,8 +149,8 @@ fn a_recipient_removed_is_sealed_to_no_longer_and_listed() {
     let r = run(&s, Some(&alice), &[], &["plan"]).success();
     assert!(
         r.stderr.contains(
-            "crud_api: the next apply seals it to carol; no longer to bob (dform.toml's \
-             [secrets]); sealing to a recipient no longer revokes what it opened before"
+            "crud_api: the next apply seals it to carol and no longer to bob; sealing to a \
+             recipient no longer revokes what it opened before"
         ),
         "{}",
         r.stderr
@@ -231,8 +231,10 @@ fn a_passphrase_beside_recipients() {
     // apply cannot add it.
     let r = run(&s, Some(&alice), &[], &["plan"]).success();
     assert!(
-        r.stderr
-            .contains("the next apply seals it under the passphrase (a run that has it)"),
+        r.stderr.contains(
+            "crud_api: the next apply run with DFORM_TEST_PASSPHRASE set seals it under the \
+                 passphrase"
+        ),
         "{}",
         r.stderr
     );

@@ -182,10 +182,15 @@ fn the_first_apply_with_the_passphrase_seals_the_key_file() {
     let pw = password(&s);
     let id = s.json("dform.state/crud_api/state.json")["master"].clone();
     passphrase(&s);
-    // A plan reads the key file as it is.
+    // A plan reads the key file as it is, and says once what the next
+    // apply does with it (R-109).
     let r = run(&s, &[PASS], &["plan"]).success();
     assert_eq!(r.summary(), "stack crud_api is up to date", "{}", r.stdout);
     assert!(s.path("dform.state/crud_api/state.key").exists());
+    let said = "crud_api: its master is still a key file beside its state; the next apply run \
+                with DFORM_TEST_PASSPHRASE set seals it and removes the file  (dform.toml \
+                [secrets])\n";
+    assert_eq!(r.stderr.matches(said).count(), 1, "{}", r.stderr);
     run(&s, &[PASS], &["apply"]).success();
     assert!(!s.path("dform.state/crud_api/state.key").exists());
     let record = s.json("dform.state/crud_api/state.master");

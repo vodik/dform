@@ -2093,9 +2093,9 @@ earlier epoch's, sealed again; nothing derived changes), which writes a
 `recipients` audit entry; the plan says so first:
 
 ```text
-crud_api: the next apply seals it to carol; no longer to bob (dform.toml's [secrets]); sealing
-to a recipient no longer revokes what it opened before: `dform secrets cycle` makes a master it
-never held, and each secret moves to it as it is rotated
+crud_api: the next apply seals it to carol and no longer to bob; sealing to a recipient no longer
+revokes what it opened before: `dform secrets cycle` makes a master it never held, and each secret
+moves to it as it is rotated  (dform.toml [secrets])
 ```
 
 Sealing to someone no longer revokes nothing they opened before (SOPS's

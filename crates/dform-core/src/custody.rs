@@ -136,30 +136,59 @@ impl Reseal {
         (out != Reseal::default()).then_some(out)
     }
 
-    /// As the plan says it: `seals it to alice, ci; no longer to bob`.
-    pub fn describe(&self) -> String {
+    /// As a run says it, after the deployment's name: `its master is
+    /// still a key file in the bucket; the next apply run with
+    /// DFORM_PASSPHRASE set seals it and removes the file`, `the next
+    /// apply seals it to carol and no longer to bob`. `when` is the apply
+    /// (`this apply`, `the next apply`), `place` where the key file is
+    /// (`in the bucket`); a passphrase to add names where `mixing` reads it.
+    pub fn describe(&self, mixing: &Mixing, when: &str, place: &str) -> String {
         let names = |rs: &[Recipient]| {
             rs.iter()
                 .map(Recipient::describe)
                 .collect::<Vec<_>>()
                 .join(", ")
         };
-        let mut out = Vec::new();
-        if self.key_file {
-            out.push("seals the key file".to_string());
-        }
+        // Who seals it under a passphrase: a run that has it.
+        let who = match (self.passphrase, &mixing.passphrase) {
+            (Some(true), Some(Passphrase::Env(n))) => format!("{when} run with {n} set"),
+            (Some(true), Some(Passphrase::Prompt)) => {
+                format!("{when}, given the passphrase at its prompt,")
+            }
+            _ => when.to_string(),
+        };
+        let mut seal = Vec::new();
         if !self.added.is_empty() {
-            out.push(format!("seals it to {}", names(&self.added)));
+            seal.push(format!("to {}", names(&self.added)));
+        }
+        if self.passphrase == Some(true) && !self.key_file {
+            seal.push("under the passphrase".to_string());
+        }
+        let mut does = Vec::new();
+        if self.key_file || !seal.is_empty() {
+            does.push(match seal.is_empty() {
+                true => "seals it".to_string(),
+                false => format!("seals it {}", seal.join(" and ")),
+            });
         }
         if !self.removed.is_empty() {
-            out.push(format!("no longer to {}", names(&self.removed)));
+            does.push(format!("no longer to {}", names(&self.removed)));
         }
-        match self.passphrase {
-            Some(true) => out.push("seals it under the passphrase (a run that has it)".into()),
-            Some(false) => out.push("no longer under the passphrase".into()),
-            None => {}
+        if self.passphrase == Some(false) {
+            does.push("no longer under the passphrase".to_string());
         }
-        out.join("; ")
+        if self.key_file {
+            does.push("removes the file".to_string());
+        }
+        let does = match does.split_last() {
+            Some((last, [])) => last.clone(),
+            Some((last, init)) => format!("{} and {last}", init.join(", ")),
+            None => String::new(),
+        };
+        match self.key_file {
+            true => format!("its master is still a key file {place}; {who} {does}"),
+            false => format!("{who} {does}"),
+        }
     }
 }
 
