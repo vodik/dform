@@ -1,6 +1,6 @@
 exit: ok
 -- stdout --
-== examples/demo/stacks/dform.df: 159 nodes, 426 edges (154 negative), 13 strata
+== examples/demo/stacks/dform.df: 170 nodes, 444 edges (161 negative), 13 strata
 stratum  node
 0        (arg, iam.policy, name)
 0        (arg, iam.role, assume)
@@ -31,6 +31,7 @@ stratum  node
 1        (attr, input, env)
 1        (attr, output, main::vpc)
 2        (arg, input, baseline::audit)
+2        (arg, input, baseline::env)
 2        (arg, input, cidrs)
 2        (arg, input, database::backup_days)
 2        (arg, input, database::multi_az)
@@ -49,6 +50,7 @@ stratum  node
 2        peer::zone_index
 3        (arg, iam.role, policies)
 3        (attr, input, baseline::audit)
+3        (attr, input, baseline::env)
 3        (attr, input, cidrs)
 3        (attr, input, database::backup_days)
 3        (attr, input, database::multi_az)
@@ -63,7 +65,9 @@ stratum  node
 4        (arg, db.postgres, id)
 4        (arg, db.postgres, multi_az)
 4        (arg, db.postgres, public)
+4        (arg, input, main::env)
 4        (arg, input, main::vpc_net)
+4        (arg, input, peer::env)
 4        (arg, input, peer::vpc_net)
 4        (arg, k8s.cluster, api_endpoint)
 4        (arg, k8s.cluster, ca_cert)
@@ -80,12 +84,14 @@ stratum  node
 4        (want, k8s.nodepool)
 4        baseline::__neg_0
 4        baseline::audit
+4        baseline::env
 4        cidrs
 4        database::backup_days
 4        database::multi_az
 4        kubernetes::nodepool_max
 4        kubernetes::nodepool_min
 4        kubernetes::private_api
+4        stdlib_net::vpc_peer
 4        vpc_peer
 4        vpc_peer_pair
 5        (attr, compute.vm, id)
@@ -95,7 +101,9 @@ stratum  node
 5        (attr, db.postgres, id)
 5        (attr, db.postgres, multi_az)
 5        (attr, db.postgres, public)
+5        (attr, input, main::env)
 5        (attr, input, main::vpc_net)
+5        (attr, input, peer::env)
 5        (attr, input, peer::vpc_net)
 5        (attr, k8s.cluster, api_endpoint)
 5        (attr, k8s.cluster, ca_cert)
@@ -114,7 +122,9 @@ stratum  node
 6        (arg, output, kubernetes::iam_need)
 6        (want, net.vpc)
 6        (want, net.vpc_peering)
+6        main::env
 6        main::vpc_net
+6        peer::env
 6        peer::vpc_net
 7        (attr, k8s.nodepool, cluster)
 7        (attr, net.vpc, cidr)
@@ -136,6 +146,7 @@ stratum  node
 8        __unanswered
 8        deny
 8        iam_need
+8        identity::iam_need
 9        (arg, iam.policy, statements)
 9        (attr, *, tags)
 9        (attr, net.subnet, cidr)
@@ -161,5 +172,5 @@ stratum  node
 11       __lc_2
 12       (attr, db.postgres, subnets)
 12       (attr, k8s.cluster, subnets)
-(159 rows)
+(170 rows)
 -- stderr --
