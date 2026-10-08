@@ -326,26 +326,34 @@ fn a_host_or_a_file_not_there_yet_is_waited_on() {
         r.stdout
     );
     timeout("30s");
-    let apply = {
-        let s_dir = s.dir.clone();
-        let home = s.path("home");
-        std::thread::spawn(move || {
-            Run::from(
-                dform()
-                    .args(["apply", "--yes", "p.df"])
-                    .current_dir(&s_dir)
-                    .env("HOME", home)
-                    .env_remove("SSH_AUTH_SOCK")
-                    .env("DFORM_WAIT_POLL_MS", "50")
-                    .output()
-                    .unwrap(),
-            )
-        })
-    };
-    std::thread::sleep(Duration::from_millis(1500));
+    // The file is written once the apply says it waits on it.
+    let mut child = dform()
+        .args(["apply", "--yes", "p.df"])
+        .current_dir(&s.dir)
+        .env("HOME", s.path("home"))
+        .env_remove("SSH_AUTH_SOCK")
+        .env("DFORM_WAIT_POLL_MS", "50")
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut err = std::io::BufReader::new(child.stderr.take().unwrap());
+    let mut said = String::new();
+    while !said.contains("waiting on ssh://") {
+        let mut line = String::new();
+        let n = std::io::BufRead::read_line(&mut err, &mut line).unwrap();
+        assert!(n > 0, "the apply ended before it waited:\n{said}");
+        said.push_str(&line);
+    }
     s.write("remote/k3s.yaml", "token: KUBE-SECRET-LATE\n");
-    let r = apply.join().unwrap().success();
-    assert!(r.stderr.contains("waiting on ssh://"), "{}", r.stderr);
+    std::io::Read::read_to_string(&mut err, &mut said).unwrap();
+    let out = child.wait_with_output().unwrap();
+    let r = Run::from(std::process::Output {
+        status: out.status,
+        stdout: out.stdout,
+        stderr: said.into_bytes(),
+    })
+    .success();
     for out in [&r.stdout, &r.stderr] {
         assert!(!out.contains("KUBE-SECRET"), "{out}");
     }

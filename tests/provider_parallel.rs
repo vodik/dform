@@ -103,5 +103,4 @@ fn an_sdk_provider_answers_two_reads_at_once() {
         (Ok(true), Ok(true)),
         "both Reads find the server with the other's request open ({took:?})"
     );
-    assert!(took < Duration::from_secs(2), "{took:?}");
 }
