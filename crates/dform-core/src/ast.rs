@@ -513,6 +513,34 @@ pub enum Lit {
 }
 
 impl Lit {
+    /// `self` with its atom passed through `atom`, or each side of its
+    /// comparison through `term`.
+    pub fn map(self, atom: impl FnOnce(Atom) -> Atom, mut term: impl FnMut(Term) -> Term) -> Lit {
+        match self {
+            Lit::Pos(a) => Lit::Pos(atom(a)),
+            Lit::Not(a) => Lit::Not(atom(a)),
+            Lit::Eq(x, y) => Lit::Eq(term(x), term(y)),
+            Lit::Neq(x, y) => Lit::Neq(term(x), term(y)),
+            Lit::Gt(x, y) => Lit::Gt(term(x), term(y)),
+            Lit::Ge(x, y) => Lit::Ge(term(x), term(y)),
+            Lit::Lt(x, y) => Lit::Lt(term(x), term(y)),
+            Lit::Le(x, y) => Lit::Le(term(x), term(y)),
+        }
+    }
+
+    /// `self` with every term it reads (an atom's arguments, a
+    /// comparison's sides) passed through `term`.
+    pub fn map_terms(self, term: impl FnMut(Term) -> Term) -> Lit {
+        fn args(mut a: Atom, term: impl FnMut(Term) -> Term) -> Atom {
+            a.args = a.args.into_iter().map(term).collect();
+            a
+        }
+        match self {
+            Lit::Pos(a) => Lit::Pos(args(a, term)),
+            Lit::Not(a) => Lit::Not(args(a, term)),
+            l => l.map(|a| a, term),
+        }
+    }
     /// The terms a literal reads: an atom's arguments, a comparison's two
     /// sides.
     pub fn terms(&self) -> impl Iterator<Item = &Term> {
@@ -576,5 +604,29 @@ mod tests {
                 .for_each(|t| t.for_each_var(&mut |v| seen.push(v)));
         }
         assert_eq!(seen, ["A", "A", "A", "B"]);
+    }
+
+    /// `map` passes the atom to its first function and a comparison's
+    /// sides to its second; `map_terms` passes every term through one.
+    #[test]
+    fn a_literal_maps_its_atom_or_its_sides() {
+        let up = |t: Term| match t {
+            Term::Var(v) => Term::Var(v.to_uppercase()),
+            t => t,
+        };
+        let pos = Lit::Not(atom("p", vec![var("a")], Span::default()));
+        let renamed = pos.clone().map(
+            |a| Atom {
+                pred: "q".into(),
+                ..a
+            },
+            up,
+        );
+        assert!(matches!(&renamed, Lit::Not(a) if a.pred == "q" && a.args == [var("a")]));
+        assert!(matches!(pos.map_terms(up), Lit::Not(a) if a.pred == "p" && a.args == [var("A")]));
+        assert!(matches!(
+            Lit::Le(var("x"), var("y")).map_terms(up),
+            Lit::Le(Term::Var(x), Term::Var(y)) if x == "X" && y == "Y"
+        ));
     }
 }

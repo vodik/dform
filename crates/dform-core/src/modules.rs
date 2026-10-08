@@ -1364,21 +1364,7 @@ pub fn refinement(i: &InputDecl, scope: &str) -> Vec<Stmt> {
 
 /// `l` with the name `name` (a refinement's text) read as `v`.
 pub(crate) fn subst_lit(l: &Lit, name: &str, v: &Term) -> Lit {
-    let t = |x: &Term| subst_term(x, name, v);
-    let a = |x: &Atom| Atom {
-        args: x.args.iter().map(t).collect(),
-        ..x.clone()
-    };
-    match l {
-        Lit::Pos(x) => Lit::Pos(a(x)),
-        Lit::Not(x) => Lit::Not(a(x)),
-        Lit::Eq(x, y) => Lit::Eq(t(x), t(y)),
-        Lit::Neq(x, y) => Lit::Neq(t(x), t(y)),
-        Lit::Gt(x, y) => Lit::Gt(t(x), t(y)),
-        Lit::Ge(x, y) => Lit::Ge(t(x), t(y)),
-        Lit::Lt(x, y) => Lit::Lt(t(x), t(y)),
-        Lit::Le(x, y) => Lit::Le(t(x), t(y)),
-    }
+    l.clone().map_terms(|t| subst_term(&t, name, v))
 }
 
 fn subst_term(t: &Term, name: &str, v: &Term) -> Term {
@@ -1677,17 +1663,7 @@ fn rename_fields(fs: Vec<FieldAssign>, names: &Names) -> Vec<FieldAssign> {
 }
 
 fn rename_lit(l: Lit, names: &Names) -> Lit {
-    let t = |x| rename_term(x, names);
-    match l {
-        Lit::Pos(a) => Lit::Pos(rename_atom(a, names)),
-        Lit::Not(a) => Lit::Not(rename_atom(a, names)),
-        Lit::Eq(a, b) => Lit::Eq(t(a), t(b)),
-        Lit::Neq(a, b) => Lit::Neq(t(a), t(b)),
-        Lit::Gt(a, b) => Lit::Gt(t(a), t(b)),
-        Lit::Ge(a, b) => Lit::Ge(t(a), t(b)),
-        Lit::Lt(a, b) => Lit::Lt(t(a), t(b)),
-        Lit::Le(a, b) => Lit::Le(t(a), t(b)),
-    }
+    l.map(|a| rename_atom(a, names), |t| rename_term(t, names))
 }
 
 fn rename_atom(mut a: Atom, names: &Names) -> Atom {
@@ -1758,17 +1734,7 @@ fn rewrite_stmt(stmt: Stmt, sc: Sc) -> Stmt {
 }
 
 fn rewrite_lit(lit: Lit, sc: Sc) -> Lit {
-    let t = |x| rewrite_term(x, sc);
-    match lit {
-        Lit::Pos(a) => Lit::Pos(rewrite_atom(a, sc)),
-        Lit::Not(a) => Lit::Not(rewrite_atom(a, sc)),
-        Lit::Eq(a, b) => Lit::Eq(t(a), t(b)),
-        Lit::Neq(a, b) => Lit::Neq(t(a), t(b)),
-        Lit::Gt(a, b) => Lit::Gt(t(a), t(b)),
-        Lit::Ge(a, b) => Lit::Ge(t(a), t(b)),
-        Lit::Lt(a, b) => Lit::Lt(t(a), t(b)),
-        Lit::Le(a, b) => Lit::Le(t(a), t(b)),
-    }
+    lit.map(|a| rewrite_atom(a, sc), |t| rewrite_term(t, sc))
 }
 
 fn rewrite_atom(mut atom: Atom, sc: Sc) -> Atom {
@@ -1908,18 +1874,7 @@ fn unmark_stmt(s: Stmt) -> Stmt {
         a
     }
     fn lits(ls: Vec<Lit>) -> Vec<Lit> {
-        ls.into_iter()
-            .map(|l| match l {
-                Lit::Pos(a) => Lit::Pos(atom(a)),
-                Lit::Not(a) => Lit::Not(atom(a)),
-                Lit::Eq(a, b) => Lit::Eq(term(a), term(b)),
-                Lit::Neq(a, b) => Lit::Neq(term(a), term(b)),
-                Lit::Gt(a, b) => Lit::Gt(term(a), term(b)),
-                Lit::Ge(a, b) => Lit::Ge(term(a), term(b)),
-                Lit::Lt(a, b) => Lit::Lt(term(a), term(b)),
-                Lit::Le(a, b) => Lit::Le(term(a), term(b)),
-            })
-            .collect()
+        ls.into_iter().map(|l| l.map_terms(term)).collect()
     }
     let fields = |fs: Vec<FieldAssign>| {
         fs.into_iter()

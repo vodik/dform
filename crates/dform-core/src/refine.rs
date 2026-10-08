@@ -746,21 +746,7 @@ fn subst_term(t: &Term, s: &BTreeMap<String, Term>) -> Term {
 }
 
 fn subst_lit(l: &Lit, s: &BTreeMap<String, Term>) -> Lit {
-    let t = |x: &Term| subst_term(x, s);
-    let a = |x: &Atom| Atom {
-        args: x.args.iter().map(t).collect(),
-        ..x.clone()
-    };
-    match l {
-        Lit::Pos(x) => Lit::Pos(a(x)),
-        Lit::Not(x) => Lit::Not(a(x)),
-        Lit::Eq(x, y) => Lit::Eq(t(x), t(y)),
-        Lit::Neq(x, y) => Lit::Neq(t(x), t(y)),
-        Lit::Gt(x, y) => Lit::Gt(t(x), t(y)),
-        Lit::Ge(x, y) => Lit::Ge(t(x), t(y)),
-        Lit::Lt(x, y) => Lit::Lt(t(x), t(y)),
-        Lit::Le(x, y) => Lit::Le(t(x), t(y)),
-    }
+    l.clone().map_terms(|t| subst_term(&t, s))
 }
 
 /// One checkable refinement a program or schema states.

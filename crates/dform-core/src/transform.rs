@@ -1973,27 +1973,9 @@ fn rewrite_body_refs(body: Vec<Lit>, schema: &Schema, n: &mut usize) -> Vec<Lit>
     let mut out = Vec::new();
     for l in body {
         let mut reads = Vec::new();
-        let mut t = |x: &Term| rewrite_term_refs(x, schema, n, &mut reads);
-        let l = match &l {
-            Lit::Pos(a) => Lit::Pos(Atom {
-                pred: a.pred.clone(),
-                args: a.args.iter().map(&mut t).collect(),
-                record: None,
-                span: a.span,
-            }),
-            Lit::Not(a) => Lit::Not(Atom {
-                pred: a.pred.clone(),
-                args: a.args.iter().map(&mut t).collect(),
-                record: None,
-                span: a.span,
-            }),
-            Lit::Eq(a, b) => Lit::Eq(t(a), t(b)),
-            Lit::Neq(a, b) => Lit::Neq(t(a), t(b)),
-            Lit::Gt(a, b) => Lit::Gt(t(a), t(b)),
-            Lit::Ge(a, b) => Lit::Ge(t(a), t(b)),
-            Lit::Lt(a, b) => Lit::Lt(t(a), t(b)),
-            Lit::Le(a, b) => Lit::Le(t(a), t(b)),
-        };
+        let l = l
+            .map(|a| Atom { record: None, ..a }, |t| t)
+            .map_terms(|t| rewrite_term_refs(&t, schema, n, &mut reads));
         out.extend(reads.into_iter().map(|(read, _)| Lit::Pos(read)));
         out.push(l);
     }

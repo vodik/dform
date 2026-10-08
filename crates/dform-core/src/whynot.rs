@@ -1035,21 +1035,7 @@ fn attempt(rule: &RuleStmt, seed: Env, facts: &BTreeSet<Atom>) -> Attempt {
 }
 
 pub(crate) fn subst_lit(l: &Lit, env: &Env) -> Lit {
-    let t = |x: &Term| subst(x, env);
-    let a = |x: &Atom| Atom {
-        args: x.args.iter().map(t).collect(),
-        ..x.clone()
-    };
-    match l {
-        Lit::Pos(x) => Lit::Pos(a(x)),
-        Lit::Not(x) => Lit::Not(a(x)),
-        Lit::Eq(x, y) => Lit::Eq(t(x), t(y)),
-        Lit::Neq(x, y) => Lit::Neq(t(x), t(y)),
-        Lit::Gt(x, y) => Lit::Gt(t(x), t(y)),
-        Lit::Ge(x, y) => Lit::Ge(t(x), t(y)),
-        Lit::Lt(x, y) => Lit::Lt(t(x), t(y)),
-        Lit::Le(x, y) => Lit::Le(t(x), t(y)),
-    }
+    l.clone().map_terms(|t| subst(&t, env))
 }
 
 pub(crate) fn subst(t: &Term, env: &Env) -> Term {
