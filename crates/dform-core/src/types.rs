@@ -992,29 +992,9 @@ fn at_edge(schema: &Schema, r: &crate::ast::RuleStmt, path: &str) -> Option<Term
     if !holds_ambiguous(value) {
         return None;
     }
-    let namespace = r.body.iter().find_map(|l| match l {
-        Lit::Pos(a) if a.pred == "__namespace" && a.args.get(1) == Some(&r.head.args[0]) => {
-            match a.args.first() {
-                Some(Term::Val(Value::Str(ns))) => Some(format!("{ns}.")),
-                _ => None,
-            }
-        }
-        _ => None,
-    });
-    let under = format!("{path}.");
-    let types: std::collections::BTreeSet<&str> = schema
-        .attrs
-        .keys()
-        .filter(|(_, p)| p == path || p.starts_with(&under))
-        .map(|(t, _)| t.as_str())
-        .filter(|t| {
-            namespace
-                .as_ref()
-                .is_none_or(|ns| t.starts_with(ns.as_str()))
-        })
-        .collect();
+    let types = any_types(schema, r, path);
     let mut read: Option<Term> = None;
-    for typ in types {
+    for typ in &types {
         let mut v = value.clone();
         if read_at(schema, typ, path, &mut v).is_err() || holds_ambiguous(&v) {
             continue;
@@ -1026,6 +1006,49 @@ fn at_edge(schema: &Schema, r: &crate::ast::RuleStmt, path: &str) -> Option<Term
         }
     }
     read
+}
+
+/// The types a `set` through a variable (`r`, its head `arg(X, A, path,
+/// V)`) may write: those its body binds the variable to (R-185, `x in
+/// workload`), else every type of the schema (of the namespace, where the
+/// rule names one, `x in k8s`) that declares the attribute or a path
+/// under it.
+pub(crate) fn set_types(schema: &Schema, r: &crate::ast::RuleStmt, path: &str) -> Vec<String> {
+    let types = row_types(&r.head.args[0], &r.body);
+    match types.is_empty() {
+        true => any_types(schema, r, path).into_iter().collect(),
+        false => types,
+    }
+}
+
+/// The types of the schema (of the namespace a rule's `x in NS` names)
+/// that declare `path` or a path under it.
+fn any_types(
+    schema: &Schema,
+    r: &crate::ast::RuleStmt,
+    path: &str,
+) -> std::collections::BTreeSet<String> {
+    let namespace = r.body.iter().find_map(|l| match l {
+        Lit::Pos(a) if a.pred == "__namespace" && a.args.get(1) == Some(&r.head.args[0]) => {
+            match a.args.first() {
+                Some(Term::Val(Value::Str(ns))) => Some(format!("{ns}.")),
+                _ => None,
+            }
+        }
+        _ => None,
+    });
+    let under = format!("{path}.");
+    schema
+        .attrs
+        .keys()
+        .filter(|(_, p)| p == path || p.starts_with(&under))
+        .map(|(t, _)| t.clone())
+        .filter(|t| {
+            namespace
+                .as_ref()
+                .is_none_or(|ns| t.starts_with(ns.as_str()))
+        })
+        .collect()
 }
 
 /// Whether `t` holds a quantity only a position's type reads.

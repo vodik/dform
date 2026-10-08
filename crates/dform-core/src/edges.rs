@@ -455,6 +455,28 @@ impl<'a> Graph<'a> {
         };
         match s {
             Stmt::Fact(a) => self.head(a, &at(a.span)),
+            // `set x.p = v where x in resource`: `v` is the attribute of
+            // each type `x` may be.
+            Stmt::Rule(r)
+                if r.head.pred == "arg"
+                    && r.head.args.len() >= 4
+                    && matches!(r.head.args[0], Term::Var(_)) =>
+            {
+                let a = at(r.head.span);
+                if let Term::Val(Value::Str(path)) = &r.head.args[2] {
+                    let n = self.node();
+                    for typ in types::set_types(self.schema, r, path) {
+                        let what = format!("{typ}.{path}");
+                        self.edge(n, Shape::Attr(typ, keys(path)), what, r.head.span);
+                    }
+                    let at = At {
+                        sites: false,
+                        ..a.clone()
+                    };
+                    self.place(n, Vec::new(), &mut r.head.args[3], &at);
+                }
+                self.body(&mut r.body, &a);
+            }
             Stmt::Rule(r) => {
                 let a = at(r.head.span);
                 self.head(&mut r.head, &a);

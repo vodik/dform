@@ -209,6 +209,20 @@ fn a_typed_input_reads_what_its_instance_gives() {
     );
 }
 
+/// An object-typed input reads the fields its instance gives at their
+/// types.
+#[test]
+fn an_object_input_reads_its_fields() {
+    plans(
+        &format!(
+            "component box {{\n  input cfg: {{ cpu: cpu }}\n{}}}\n\
+             resource box b {{ cfg = {{ cpu: 100m }} }}\n",
+            requesting("cfg")
+        ),
+        &[CPU],
+    );
+}
+
 /// An input's default is read as its type, and flows on.
 #[test]
 fn an_input_default_reads_its_literal() {
@@ -278,6 +292,9 @@ fn a_set_reads_its_value_at_the_attribute() {
         &format!("let lim = {{ cpu: 100m }}\n{}", set("lim")),
         &[CPU],
     );
+    // Through a variable of any type: each type that declares the path.
+    let any = set("lim").replace("d in k8s.deployment", "d in resource");
+    plans(&format!("let lim = {{ cpu: 100m }}\n{any}"), &[CPU]);
 }
 
 /// A comparison: the other side's type reads the literal.
@@ -422,4 +439,40 @@ fn a_sums_sides_are_typed_by_each_other() {
         &format!("let c = 50m + 50m\n{}", requesting("{ cpu: c }")),
         &[CPU],
     );
+}
+
+/// The plan's `-vv` says where a literal's type came from: the edge it
+/// reached (the use site).
+#[test]
+#[ignore = "the plan's `why` does not carry a literal's edge yet; the report is another ticket's (report/**, R-200)"]
+fn the_plan_says_where_a_literals_type_came_from() {
+    let s = Scratch::project("typed-edges-why");
+    s.write(
+        "main.df",
+        &format!(
+            "use fake\nuse k8s\nlet limits = {{ cpu: 100m }}\n{}",
+            requesting("limits")
+        ),
+    );
+    let r = s.run(&["plan", "-vv", "main.df"]).success();
+    assert!(
+        r.stdout.contains("cpu, where it reaches k8s.job[\"j\"]"),
+        "{}",
+        r.stdout
+    );
+}
+
+/// Another deployment's typed output types the literal its reader
+/// compares it with.
+#[test]
+#[ignore = "a keyed read of another deployment's output is typed at run time; its declaration is not an edge of the reader's program"]
+fn another_deployments_output_types_its_readers_literal() {
+    let s = Scratch::project("typed-edges-stacks");
+    s.write("stacks/platform.df", "use fake\noutput limit: cpu = 100m\n");
+    s.write(
+        "stacks/apps.df",
+        "use fake\nuse stacks.platform\nwarn \"limit above 50m\" where platform.limit > 50m\n",
+    );
+    s.run(&["apply", "platform"]).success();
+    s.run(&["plan", "apps"]).success();
 }
