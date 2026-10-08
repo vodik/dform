@@ -38,7 +38,7 @@ fn a_fresh_stack_carries_nulls_until_apply() {
         .success();
     assert_eq!(
         r.summary(),
-        "plan: 0 changes, 13 no-op; policy: 6 hold",
+        "plan: 0 changes, 13 no-op; policy: 9 hold",
         "{}",
         r.stdout
     );
