@@ -65,6 +65,9 @@ service Manifest {
 service Io {
   // io.read, of a scheme the provider declares.
   rpc Read(ReadRequest) returns (stream ReadChunk);
+  // io.read-versioned (R-172): as `Read`, the first chunk carrying the
+  // version the source names the bytes by, when it keeps versions.
+  rpc ReadVersioned(ReadRequest) returns (stream ReadChunk);
 }
 
 // `Io` by its name before R-155.
@@ -139,6 +142,9 @@ message ReadRequest {
 message ReadChunk {
   optional Failure failure = 1;
   bytes data = 2;
+  // The version of what is read (`ReadVersioned`'s first chunk): a secret
+  // manager's version id.
+  optional string version = 3;
 }
 
 message ExecRequest {

@@ -140,8 +140,20 @@ interface http {
 interface io {
   use types.{not-yet-or-error};
 
+  // What a source answers of a location (R-172): the bytes, and the
+  // version it names them by when it keeps versions (a secret manager's
+  // version id, `3`), which `?version=` on the same location reads again.
+  // The host records the version in the plan file, so `apply PLAN` refuses
+  // a location that has moved since.
+  record document {
+    data: list<u8>,
+    version: option<string>,
+  }
+
   // The bytes at `location`.
   read: func(location: string) -> result<list<u8>, not-yet-or-error>;
+  // The bytes at `location` and their version.
+  read-versioned: func(location: string) -> result<document, not-yet-or-error>;
 }
 
 // SSH, with keys from the agent. Commands are argv, never a shell string:

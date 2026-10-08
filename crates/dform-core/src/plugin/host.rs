@@ -206,6 +206,11 @@ pub trait Calls: Send + Sync {
     /// `io.read` (R-153, R-155): the bytes at a location, refused unless
     /// granted; not there yet is `Failure::NotYet`.
     fn io_read(&self, location: &str) -> Result<Vec<u8>, Failure>;
+    /// `io.read-versioned` (R-172): [`Calls::io_read`] with the version a
+    /// source that keeps versions answers; by default unversioned.
+    fn io_read_versioned(&self, location: &str) -> Result<crate::files::Document, Failure> {
+        self.io_read(location).map(crate::files::Document::new)
+    }
     /// `ssh.exec`.
     fn exec(&self, on: &Target, argv: &[String], stdin: Option<&[u8]>) -> Result<Run, Failure>;
     /// `ssh.write`.

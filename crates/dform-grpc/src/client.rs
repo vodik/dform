@@ -49,8 +49,18 @@ impl dform_core::files::Transport for IoClient {
     fn read(
         &self,
         at: &dform_core::uri::Uri,
-        _: &dform_core::files::Files,
+        files: &dform_core::files::Files,
     ) -> std::result::Result<Vec<u8>, dform_core::plugin::host::Failure> {
+        self.read_document(at, files).map(|d| d.bytes)
+    }
+
+    /// `ReadVersioned` (R-172), else `Read` of a provider built before it,
+    /// else `Files` of one built before R-155.
+    fn read_document(
+        &self,
+        at: &dform_core::uri::Uri,
+        _: &dform_core::files::Files,
+    ) -> std::result::Result<dform_core::files::Document, dform_core::plugin::host::Failure> {
         use dform_core::plugin::host::Error;
         let fail =
             |e: String| Error::retryable(format!("provider {}: read {at}: {e}", self.program));
@@ -67,18 +77,20 @@ impl dform_core::files::Transport for IoClient {
                 let req = crate::host_pb::ReadRequest { location };
                 let mut io = crate::host_pb::io_client::IoClient::new(channel.clone())
                     .max_decoding_message_size(usize::MAX);
-                // A provider built before R-155 serves `Files` alone.
-                let mut s = match io.read(req.clone()).await {
-                    Err(e) if e.code() == tonic::Code::Unimplemented => {
-                        crate::host_pb::files_client::FilesClient::new(channel)
-                            .max_decoding_message_size(usize::MAX)
-                            .read(req)
-                            .await
-                    }
-                    r => r,
+                let unimplemented = |r: &std::result::Result<_, tonic::Status>| {
+                    matches!(r, Err(e) if e.code() == tonic::Code::Unimplemented)
+                };
+                let mut r = io.read_versioned(req.clone()).await;
+                if unimplemented(&r) {
+                    r = io.read(req.clone()).await;
                 }
-                .map_err(|e| e.message().to_string())?
-                .into_inner();
+                if unimplemented(&r) {
+                    r = crate::host_pb::files_client::FilesClient::new(channel)
+                        .max_decoding_message_size(usize::MAX)
+                        .read(req)
+                        .await;
+                }
+                let mut s = r.map_err(|e| e.message().to_string())?.into_inner();
                 let mut out = Vec::new();
                 while let Some(chunk) = s.message().await.map_err(|e| e.message().to_string())? {
                     out.push(chunk);
@@ -86,7 +98,7 @@ impl dform_core::files::Transport for IoClient {
                 Ok::<_, String>(out)
             })
             .map_err(fail)?;
-        crate::host::read(chunks)
+        crate::host::read_versioned(chunks)
     }
 }
 

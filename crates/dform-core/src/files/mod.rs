@@ -60,11 +60,69 @@ pub const SCHEMES: [&str; 7] = [
     "git+file",
 ];
 
+/// What a source answers of a location: its bytes, and the version it
+/// names them by when it keeps versions (a secret manager's version id,
+/// R-172), which `?version=` on the same location reads again.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Document {
+    pub bytes: Vec<u8>,
+    pub version: Option<String>,
+}
+
+impl Document {
+    /// Bytes with no version.
+    pub fn new(bytes: Vec<u8>) -> Document {
+        Document {
+            bytes,
+            version: None,
+        }
+    }
+}
+
 /// A transport a scheme selects, beside dform's own: the S3 client's,
 /// which the CLI registers ([`register`]), or a provider's.
 pub trait Transport: Send + Sync {
     /// The bytes at `at`; a thing not there yet is `Failure::NotYet`.
     fn read(&self, at: &Uri, files: &Files) -> Result<Vec<u8>, Failure>;
+
+    /// The bytes at `at` and their version, when the source keeps
+    /// versions; by default [`Transport::read`]'s, unversioned.
+    fn read_document(&self, at: &Uri, files: &Files) -> Result<Document, Failure> {
+        self.read(at, files).map(Document::new)
+    }
+}
+
+/// The version query a location pinned to a version carries
+/// (`vault://kv/app?version=3#key`): what [`pinned`] writes.
+pub const VERSION: &str = "version";
+
+/// `at` pinned to `version`: its `?version=` set, so a read of it reads
+/// that version again. How a versioned read's rows name where they are,
+/// as a repository's name the commit.
+pub fn pinned(at: &Uri, version: &str) -> String {
+    let mut u = at.clone();
+    let mut q: Vec<String> = u
+        .query
+        .as_deref()
+        .unwrap_or_default()
+        .split('&')
+        .filter(|p| !p.is_empty() && p.split('=').next() != Some(VERSION))
+        .map(str::to_string)
+        .collect();
+    q.push(format!(
+        "{VERSION}={}",
+        percent_encoding::utf8_percent_encode(version, percent_encoding::NON_ALPHANUMERIC)
+    ));
+    u.query = Some(q.join("&"));
+    u.to_string()
+}
+
+/// The version a pinned location names (`?version=`), if it does.
+pub fn version_of(at: &str) -> Option<String> {
+    match location(at).ok()? {
+        Location::Uri(u) => u.query_pairs().remove(VERSION),
+        Location::Path(_) => None,
+    }
 }
 
 /// Transports registered for the process, by scheme: `s3`.
@@ -135,6 +193,9 @@ pub struct Read {
     pub source: Source,
     /// The commit a repository was read at.
     pub commit: Option<String>,
+    /// The version a source that keeps versions answered (R-172); `shown`
+    /// is then the location pinned to it.
+    pub version: Option<String>,
 }
 
 /// What a read came to.
@@ -323,6 +384,7 @@ impl Files {
                     shown: p,
                     source: Source::File(path),
                     commit: None,
+                    version: None,
                 }));
             }
             Location::Uri(u) => u,
@@ -345,15 +407,20 @@ impl Files {
                     shown: p,
                     source: Source::File(path),
                     commit: None,
+                    version: None,
                 }))
             }
             "git+https" | "git+ssh" | "git+file" => self.git_read(&u, base).map(Outcome::Read),
             _ => match self.transport(&u) {
-                Ok(bytes) => Ok(Outcome::Read(Read {
+                Ok(Document { bytes, version }) => Ok(Outcome::Read(Read {
                     bytes,
                     source: Source::Location(u.to_string()),
-                    shown,
+                    shown: match &version {
+                        Some(v) => pinned(&u, v),
+                        None => shown,
+                    },
                     commit: None,
+                    version,
                 })),
                 Err(Failure::NotYet(why)) => Ok(Outcome::NotYet(why)),
                 Err(Failure::Error(e)) => Err(anyhow::anyhow!("read {shown}: {}", e.message)),
@@ -364,6 +431,12 @@ impl Files {
     /// A provider's read of `text` (`dform:host/io`): a uri its grants
     /// name by scheme and host pattern, through the same transports.
     pub fn read_for(&self, grants: &Grants, text: &str) -> Result<Vec<u8>, Failure> {
+        self.read_for_document(grants, text).map(|d| d.bytes)
+    }
+
+    /// [`Files::read_for`], with the version a source that keeps versions
+    /// answers (`dform:host/io`'s `read-versioned`).
+    pub fn read_for_document(&self, grants: &Grants, text: &str) -> Result<Document, Failure> {
         let u = match location(text) {
             Ok(Location::Uri(u)) => u,
             Ok(Location::Path(p)) => {
@@ -397,24 +470,26 @@ impl Files {
             .into()),
             "git+https" | "git+ssh" => self
                 .git_read(&u, Path::new(""))
-                .map(|r| r.bytes)
+                .map(|r| Document::new(r.bytes))
                 .map_err(|e| Error::fatal(format!("{e:#}")).into()),
             _ => self.transport(&u),
         }
     }
 
     /// `u` through the transport its scheme selects (not git's).
-    fn transport(&self, u: &Uri) -> Result<Vec<u8>, Failure> {
+    fn transport(&self, u: &Uri) -> Result<Document, Failure> {
         match u.scheme.as_str() {
-            "data" => data(&u.path).map_err(|e| Error::fatal(e).into()),
+            "data" => data(&u.path)
+                .map(Document::new)
+                .map_err(|e| Error::fatal(e).into()),
             "http" => Err(Error::fatal(format!(
                 "{u}: `http:` is not read (no TLS): write `https:`"
             ))
             .into()),
             #[cfg(not(target_family = "wasm"))]
-            "ssh" => self.ssh(u),
+            "ssh" => self.ssh(u).map(Document::new),
             #[cfg(not(target_family = "wasm"))]
-            "https" => self.https(u),
+            "https" => self.https(u).map(Document::new),
             // dform's own transports first (the CLI's `s3`), then the one a
             // provider declares.
             s => {
@@ -430,7 +505,7 @@ impl Files {
                     .get(s)
                     .map(|(_, t)| t.clone());
                 match registered.or(declared) {
-                    Some(t) => t.read(u, self),
+                    Some(t) => t.read_document(u, self),
                     None => Err(Error::fatal(format!(
                         "{u}: no transport reads `{s}:` (dform reads {}, and a scheme a \
                          provider declares)",
@@ -528,6 +603,7 @@ impl Files {
                 .read(&dir, &commit, &file)
                 .map_err(|e| anyhow::anyhow!(e.message))?;
             return Ok(Read {
+                version: None,
                 bytes,
                 shown: format!("{shown_repo}@{commit}:{file}"),
                 source: Source::Git {
@@ -569,6 +645,7 @@ impl Files {
             .mirror(&format!("https://{host}/{repo}"))
             .unwrap_or_default();
         Ok(Read {
+            version: None,
             bytes: data,
             shown: format!("{shown_repo}@{commit}:{file}"),
             source: Source::Git {

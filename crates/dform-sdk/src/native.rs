@@ -26,7 +26,7 @@ pub fn serve<H: Handler + Send + Sync + 'static>(handler: H, uses: &[&str]) -> R
     let declares = dform_grpc::server::Declares {
         imports: uses.iter().map(|s| s.to_string()).collect(),
         read: (!schemes.is_empty()).then(|| -> dform_grpc::server::Read {
-            std::sync::Arc::new(move |l: &str| reads.read_location(l))
+            std::sync::Arc::new(move |l: &str| reads.read_versioned(l))
         }),
         schemes,
     };

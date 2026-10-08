@@ -213,4 +213,15 @@ pub trait Handler {
                 .into(),
         )
     }
+
+    /// The document at `location` with its version, when the source keeps
+    /// versions (a secret manager's, R-172); by default
+    /// [`Handler::read_location`]'s bytes, unversioned.
+    fn read_versioned(
+        &self,
+        location: &str,
+    ) -> Result<crate::files::Document, super::host::Failure> {
+        self.read_location(location)
+            .map(crate::files::Document::new)
+    }
 }

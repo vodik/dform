@@ -207,28 +207,50 @@ const CHUNK: usize = 1 << 20;
 /// A read's answer as `ReadChunk`s: its bytes in order (one chunk when
 /// empty), or the one failure.
 pub fn chunks(r: Result<Vec<u8>, Failure>) -> Vec<h::ReadChunk> {
+    versioned_chunks(r.map(dform_core::files::Document::new))
+}
+
+/// A versioned read's answer as `ReadChunk`s (`ReadVersioned`, R-172):
+/// [`chunks`], the first carrying the version.
+pub fn versioned_chunks(r: Result<dform_core::files::Document, Failure>) -> Vec<h::ReadChunk> {
     match r {
-        Ok(data) if data.is_empty() => vec![h::ReadChunk::default()],
-        Ok(data) => data
-            .chunks(CHUNK)
-            .map(|c| h::ReadChunk {
-                failure: None,
-                data: c.to_vec(),
-            })
-            .collect(),
+        Ok(d) if d.bytes.is_empty() => vec![h::ReadChunk {
+            version: d.version,
+            ..h::ReadChunk::default()
+        }],
+        Ok(d) => {
+            let mut version = d.version;
+            d.bytes
+                .chunks(CHUNK)
+                .map(|c| h::ReadChunk {
+                    failure: None,
+                    data: c.to_vec(),
+                    version: version.take(),
+                })
+                .collect()
+        }
         Err(f) => vec![h::ReadChunk {
             failure: Some(from_failure(f)),
             data: Vec::new(),
+            version: None,
         }],
     }
 }
 
 /// `ReadChunk`s as the read's answer.
 pub fn read(chunks: Vec<h::ReadChunk>) -> Result<Vec<u8>, Failure> {
-    let mut out = Vec::new();
+    read_versioned(chunks).map(|d| d.bytes)
+}
+
+/// `ReadChunk`s as the read's answer, with the version the first gives.
+pub fn read_versioned(chunks: Vec<h::ReadChunk>) -> Result<dform_core::files::Document, Failure> {
+    let mut out = dform_core::files::Document::default();
     for c in chunks {
         to_failure(c.failure)?;
-        out.extend(c.data);
+        out.bytes.extend(c.data);
+        if out.version.is_none() {
+            out.version = c.version;
+        }
     }
     Ok(out)
 }

@@ -123,6 +123,11 @@ impl Calls for Services {
         files.read_for(&self.grants, location)
     }
 
+    fn io_read_versioned(&self, location: &str) -> Result<dform_core::files::Document, Failure> {
+        let files = self.grants.files.get();
+        files.read_for_document(&self.grants, location)
+    }
+
     fn exec(&self, on: &Target, argv: &[String], stdin: Option<&[u8]>) -> Result<Run, Failure> {
         self.ssh.exec(on, argv, stdin)
     }

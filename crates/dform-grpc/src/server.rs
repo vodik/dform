@@ -175,7 +175,7 @@ pub fn serve<H: Handler + Send + Sync + 'static>(handler: H) -> anyhow::Result<(
             Declares {
                 imports: Vec::new(),
                 schemes,
-                read: Some(Arc::new(move |l: &str| reads.read_location(l))),
+                read: Some(Arc::new(move |l: &str| reads.read_versioned(l))),
             },
         );
     }
@@ -188,9 +188,13 @@ pub fn serve<H: Handler + Send + Sync + 'static>(handler: H) -> anyhow::Result<(
     )
 }
 
-/// A provider's reader of the location schemes it declares (R-153).
-pub type Read =
-    Arc<dyn Fn(&str) -> Result<Vec<u8>, dform_core::plugin::host::Failure> + Send + Sync>;
+/// A provider's reader of the location schemes it declares (R-153): the
+/// document, with its version when the source keeps versions (R-172).
+pub type Read = Arc<
+    dyn Fn(&str) -> Result<dform_core::files::Document, dform_core::plugin::host::Failure>
+        + Send
+        + Sync,
+>;
 
 /// What a provider declares beside the protocol (`Manifest`, R-13b): the
 /// interfaces it imports, and the location schemes it reads, which it
@@ -225,11 +229,20 @@ type ReadStream = tonic::codegen::tokio_stream::Iter<
 >;
 
 impl Io {
-    async fn read_location(&self, location: String) -> Result<Response<ReadStream>, Status> {
+    /// The read of `location`; its version in the first chunk when
+    /// `versioned` (`ReadVersioned`), else none (`Read`).
+    async fn read_location(
+        &self,
+        location: String,
+        versioned: bool,
+    ) -> Result<Response<ReadStream>, Status> {
         let read = self.0.clone();
-        let chunks = tokio::task::spawn_blocking(move || crate::host::chunks(read(&location)))
-            .await
-            .map_err(|e| Status::internal(format!("the read failed: {e}")))?;
+        let chunks = tokio::task::spawn_blocking(move || match versioned {
+            true => crate::host::versioned_chunks(read(&location)),
+            false => crate::host::chunks(read(&location).map(|d| d.bytes)),
+        })
+        .await
+        .map_err(|e| Status::internal(format!("the read failed: {e}")))?;
         Ok(Response::new(tonic::codegen::tokio_stream::iter(
             chunks.into_iter().map(Ok).collect::<Vec<_>>(),
         )))
@@ -239,12 +252,20 @@ impl Io {
 #[tonic::async_trait]
 impl crate::host_pb::io_server::Io for Io {
     type ReadStream = ReadStream;
+    type ReadVersionedStream = ReadStream;
 
     async fn read(
         &self,
         r: Request<crate::host_pb::ReadRequest>,
     ) -> Result<Response<ReadStream>, Status> {
-        self.read_location(r.into_inner().location).await
+        self.read_location(r.into_inner().location, false).await
+    }
+
+    async fn read_versioned(
+        &self,
+        r: Request<crate::host_pb::ReadRequest>,
+    ) -> Result<Response<ReadStream>, Status> {
+        self.read_location(r.into_inner().location, true).await
     }
 }
 
@@ -256,7 +277,7 @@ impl crate::host_pb::files_server::Files for Io {
         &self,
         r: Request<crate::host_pb::ReadRequest>,
     ) -> Result<Response<ReadStream>, Status> {
-        self.read_location(r.into_inner().location).await
+        self.read_location(r.into_inner().location, false).await
     }
 }
 

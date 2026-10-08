@@ -310,6 +310,17 @@ impl wh::io::Host for State {
     fn read(&mut self, location: String) -> Result<Vec<u8>, wh::types::NotYetOrError> {
         self.host.io_read(&location).map_err(failure)
     }
+
+    fn read_versioned(
+        &mut self,
+        location: String,
+    ) -> Result<wh::io::Document, wh::types::NotYetOrError> {
+        let d = self.host.io_read_versioned(&location).map_err(failure)?;
+        Ok(wh::io::Document {
+            data: d.bytes,
+            version: d.version,
+        })
+    }
 }
 
 impl wh::git::Host for State {

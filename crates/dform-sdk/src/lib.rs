@@ -21,6 +21,7 @@
 //! for the schema, [`typed::Lifecycle`] for read, create, update and
 //! delete, plan derived from the schema. docs/providers.md is the guide.
 
+pub use dform_core::files::Document;
 pub use dform_core::plugin::backend::{CallError, Handler};
 pub use dform_core::plugin::host::{
     Class, Endpoint, Error, Failure, GitFile, HttpResponse as Response, Level, Run, Target,

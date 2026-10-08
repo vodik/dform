@@ -117,6 +117,22 @@ pub trait Provider: Sized + Send + 'static {
     /// among them): the provider, and the account its credentials reach
     /// when it can tell.
     fn configure(settings: &Json) -> Result<(Self, Option<String>)>;
+
+    /// The location schemes it reads (R-153), which its manifest declares
+    /// and dform routes to [`Provider::read`]: `&["vault"]`.
+    const SCHEMES: &'static [&'static str] = &[];
+
+    /// The document at `location`, of a scheme it declares, with the
+    /// version the source names it by when it keeps versions (R-172); not
+    /// there yet is `Failure::NotYet`. Called once the provider is
+    /// configured.
+    fn read(&self, location: &str) -> std::result::Result<crate::Document, crate::Failure> {
+        Err(crate::Error::fatal(format!(
+            "{location}: provider {} reads no location",
+            Self::NAME
+        ))
+        .into())
+    }
 }
 
 /// Where an Apply says how it goes (R-130), as its object's status
@@ -558,6 +574,30 @@ impl<P: Provider> Typed<P> {
 }
 
 impl<P: Provider> Handler for Typed<P> {
+    fn schemes(&self) -> Vec<String> {
+        P::SCHEMES.iter().map(|s| s.to_string()).collect()
+    }
+
+    fn read_location(&self, location: &str) -> std::result::Result<Vec<u8>, crate::Failure> {
+        self.read_versioned(location).map(|d| d.bytes)
+    }
+
+    /// A read before the program has configured the provider waits on it,
+    /// as a resource of it would.
+    fn read_versioned(
+        &self,
+        location: &str,
+    ) -> std::result::Result<crate::Document, crate::Failure> {
+        let p = self.provider.lock().unwrap_or_else(|e| e.into_inner());
+        match p.as_ref() {
+            Some(p) => p.read(location),
+            None => Err(crate::Failure::NotYet(format!(
+                "{location}: provider {} is not configured yet",
+                P::NAME
+            ))),
+        }
+    }
+
     fn handle(
         &self,
         call: Call,
