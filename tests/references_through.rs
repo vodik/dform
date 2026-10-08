@@ -292,6 +292,45 @@ fn a_set_through_any_resource_reads_a_quantity_at_its_edge() {
     );
 }
 
+/// The reviewer's baseline.df shape: a module's `set` of each container's
+/// requests through `x in resource`, guarded by `has` on the list it
+/// walks. The schema answers the guard in place of its read, and the walk
+/// read through that read: "unsafe member: list is not ground". The walk
+/// reads the list itself; a type without the list is untouched.
+#[test]
+fn a_set_through_any_resource_under_a_has_guard_walks_the_list() {
+    let s = Scratch::project("refs-through-has-walk");
+    s.write(
+        "baseline.df",
+        "\nset x.spec.template.spec.containers[_].resources.requests = {\n  \
+         cpu: 100m,\n  memory: 128Mi,\n} @default where x in resource, \
+         has x.spec.template.spec.containers\n",
+    );
+    s.write(
+        "p.df",
+        "\nuse fake\nuse k8s\nuse baseline\n\n\
+         resource k8s.deployment web {\n  metadata.name = \"web\"\n  \
+         spec.selector.matchLabels = { app: \"web\" }\n  \
+         spec.template.spec.containers = [{ name: \"web\", image: \"nginx:1\" }]\n}\n\
+         resource net.vpc main {\n  cidr = \"10.0.0.0/16\"\n}\n",
+    );
+    let r = mock(&s, &["plan", "--why=none"]).success();
+    assert!(
+        r.stdout.contains(
+            "  spec.template.spec.containers[name=web].resources.requests.cpu = \"100m\"\n  \
+             spec.template.spec.containers[name=web].resources.requests.memory = \"128Mi\"\n"
+        ),
+        "{}",
+        r.stdout
+    );
+    assert!(
+        r.stdout
+            .contains("+ net.vpc[\"main\"]\n  cidr = \"10.0.0.0/16\"\napply"),
+        "{}",
+        r.stdout
+    );
+}
+
 /// A relation a copy exports carries its references across the copy's
 /// boundary: `blue.subnet(s, _)` has `s` as the resource, so `s.zone`
 /// reads it with no `s in net.subnet` to type it again.

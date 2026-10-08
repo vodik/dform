@@ -5401,6 +5401,10 @@ impl<'u> Lowerer<'u> {
                 }
                 let start = out.len();
                 let marked = has_atom(&res, span);
+                // The reads the mark covers are the test's own: where the
+                // schema answers it they are gone (R-106), so nothing
+                // after it reads through them (R-204).
+                let reads = marked.as_ref().map(|_| rc.reads.clone());
                 match self.read_atom(rc, &res, Term::Wildcard, span) {
                     Some(a) => out.push(Lit::Pos(a)),
                     // A nested path, or a field of a value: it has a value
@@ -5424,6 +5428,9 @@ impl<'u> Lowerer<'u> {
                     }
                 }
                 mark_has(out, start, marked, false);
+                if let Some(reads) = reads {
+                    rc.reads = reads;
+                }
             }
             LIT_NOT => {
                 let inner = n.children().next().ok_or(Skip)?;
