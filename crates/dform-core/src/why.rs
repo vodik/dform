@@ -1,7 +1,7 @@
 //! `dform why X` (R-122, R-150): one command for what is and what is
 //! not. X decides: a resource, an attribute, a cell or a row the program
 //! derives gets its chain (a value's) or its derivation tree; one it does
-//! not derive gets why not (`whynot`: the rule that could have, the first
+//! not derive gets why not ([`not`]: the rule that could have, the first
 //! condition that failed, the nearest rows or name); a resource `later`
 //! holds gets its chain and what it waits on; `deny "MESSAGE"` says
 //! whether the deny holds, with its derivation, and if not which clause
@@ -19,6 +19,7 @@ use anyhow::{Result, bail};
 use std::collections::BTreeSet;
 use std::path::Path;
 
+pub(crate) mod not;
 mod scope;
 pub use scope::in_component;
 
@@ -76,7 +77,7 @@ pub fn why(pattern: &str, how: As, cx: &Context) -> Result<String> {
             }
             return Ok(out);
         }
-        let mut out = crate::whynot::why_not(pattern, cx.res, cx.redact)?;
+        let mut out = not::why_not(pattern, cx.res, cx.redact)?;
         if let Some(w) = cx.when.and_then(|when| when(pattern.trim())) {
             out.push_str(&cx.redact.text(&format!("{w}\n")));
         }
@@ -84,7 +85,7 @@ pub fn why(pattern: &str, how: As, cx: &Context) -> Result<String> {
     };
     let matched = match matches(pattern, &cx.res.facts) {
         Ok(m) => m,
-        // What `why` cannot read as a fact may be a row `whynot` reads;
+        // What `why` cannot read as a fact may be a row `not` reads;
         // else its error names every form.
         Err(_) => return why_not(),
     };
@@ -133,9 +134,7 @@ pub fn why(pattern: &str, how: As, cx: &Context) -> Result<String> {
     for (a, _) in &matched {
         let w = match cx.when {
             Some(when) => resource_of(a).and_then(|r| when(&r.to_string())),
-            None => {
-                crate::whynot::waiting(a, cx.res, cx.waits).map(|w| format!("later  waits on  {w}"))
-            }
+            None => not::waiting(a, cx.res, cx.waits).map(|w| format!("later  waits on  {w}")),
         };
         if let Some(w) = w
             && !on.contains(&w)
@@ -198,7 +197,7 @@ pub fn why_json(pattern: &str, how: As, cx: &Context) -> Result<serde_json::Valu
     let matched = match matches(pattern, &cx.res.facts) {
         Ok(m) if !m.is_empty() => m,
         _ => {
-            let text = crate::whynot::why_not(pattern, cx.res, cx.redact)?;
+            let text = not::why_not(pattern, cx.res, cx.redact)?;
             return Ok(serde_json::json!({ "why_not": text }));
         }
     };
@@ -421,7 +420,7 @@ fn deny(message: &str, how: As, cx: &Context) -> Result<String> {
     };
     // Said as the deny is written, then why not, as for any row; a
     // message no deny can say, the nearest one written.
-    let text = crate::whynot::why_not(&pattern, res, cx.redact)?;
+    let text = not::why_not(&pattern, res, cx.redact)?;
     if let Some((first, rest)) = text.split_once('\n')
         && first.ends_with(": no rule derives it")
     {

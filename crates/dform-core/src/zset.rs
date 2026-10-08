@@ -939,7 +939,7 @@ pub fn not_planned(
             let rule = report(true)
                 .or_else(|| report(false))
                 .map(|i| format!("r{i}"));
-            let reason = crate::whynot::reason(&addr.typ, &addr.name, res, redact)
+            let reason = crate::why::not::reason(&addr.typ, &addr.name, res, redact)
                 .unwrap_or_else(|| "no rule derives it".into());
             Some(NotPlanned {
                 addr,

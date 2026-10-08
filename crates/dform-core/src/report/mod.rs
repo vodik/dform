@@ -3656,7 +3656,7 @@ fn values(d: &Deformation, side: impl Fn(&Line) -> &Shown) -> BTreeSet<(String, 
 /// its type in the same plan with the same values is a rename guess
 /// (`renamed?  T b is created with the same values`, `state mv` the fix);
 /// a copy whose `use` the program no longer has (`use synapse removed`);
-/// else why the program no longer derives it ([`crate::whynot::gone`]),
+/// else why the program no longer derives it ([`crate::why::not::gone`]),
 /// `not in the program` with where the last apply derived it when that is
 /// known.
 fn gone(
@@ -3689,7 +3689,7 @@ fn gone(
     {
         return Some((None, format!("use {} removed", copy.name)));
     }
-    crate::whynot::gone(&d.addr.typ, &d.addr.name, res, r)
+    crate::why::not::gone(&d.addr.typ, &d.addr.name, res, r)
 }
 
 /// A delete's site column (After R-149): where the last apply derived
@@ -3720,7 +3720,9 @@ fn gone_column(d: &Deformation, how: Why) -> Vec<String> {
     }
     let why = d.because.clone().unwrap_or_else(|| why.clone());
     match at {
-        Some(at) if why == crate::whynot::NOT_IN_PROGRAM => vec![format!("{why}  (was {at})"), why],
+        Some(at) if why == crate::why::not::NOT_IN_PROGRAM => {
+            vec![format!("{why}  (was {at})"), why]
+        }
         Some(at) => vec![format!("{at}  {why}"), why, at],
         None => vec![why],
     }
