@@ -108,3 +108,40 @@ fn why_takes_a_short_name_where_it_is_unique() {
     let r = s.run(&["why", "env", "platform"]).success();
     assert!(r.stdout.starts_with("key env = \"lab\""), "{}", r.stdout);
 }
+
+/// Not yet (R-200): `moved` takes the old address as state has it; a
+/// short one (`moved(net.vpc, "vm", ..)` for `k3s.agent-0.vm`) is not
+/// resolved against state.
+#[test]
+#[ignore = "R-200: moved takes a full old address only"]
+fn moved_takes_a_short_old_name_where_it_is_unique() {
+    let s = project("tree-moved");
+    s.run(&["apply", "platform", "env=lab", "--yes"]).success();
+    s.write(
+        "stacks/platform.df",
+        &PLATFORM
+            .replace("resource net.vpc edge", "resource net.vpc border")
+            .replace(
+                "output cidr",
+                "moved(net.vpc, \"edge\", border)\noutput cidr",
+            ),
+    );
+    let r = s.run(&["plan", "platform", "env=lab"]).success();
+    assert!(r.stdout.contains("moved"), "{}", r.stdout);
+}
+
+/// Not yet (R-200): `why` resolves a resource's short name; a `let`'s, an
+/// input's or a relation's of a module (`why region` for `config.region`)
+/// is answered as the scope question it was.
+#[test]
+#[ignore = "R-200: why's short names reach resources only"]
+fn why_takes_a_module_value_s_short_name() {
+    let s = project("tree-why-value");
+    s.write("k3s.df", &format!("{K3S}let region = \"bhs5\"\n"));
+    let r = s.run(&["why", "region", "platform"]).success();
+    assert!(
+        r.stdout.starts_with("let k3s.region = \"bhs5\""),
+        "{}",
+        r.stdout
+    );
+}

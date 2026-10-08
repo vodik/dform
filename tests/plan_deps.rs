@@ -190,3 +190,39 @@ fn json_nests_each_deployment_s_plan() {
     );
     assert_eq!(j["outcome"], "done", "{j:#}");
 }
+
+/// Not yet (R-200): `plan X --out F` writes the target's plan file alone.
+/// The closure's file needs a design: the reader's plan was made against
+/// its dependency's *planned* outputs, which its file's outputs digest
+/// cannot match until that dependency is applied, so `apply F` would
+/// refuse it as stale. A decision for the ticket.
+#[test]
+#[ignore = "R-200: the plan file does not carry the closure; `apply PLAN` applies one deployment"]
+fn a_plan_file_carries_the_closure_and_apply_applies_it_in_order() {
+    let s = project("deps-plan-file");
+    s.run(&["plan", "apps", "env=lab", "--out", "p.json"])
+        .success();
+    let r = s.run(&["apply", "p.json", "--yes"]).success();
+    assert!(
+        r.stdout.contains("stacks.platform[env=lab]"),
+        "{}",
+        r.stdout
+    );
+    assert!(s.path("dform.state/platform/env=lab/state.json").exists());
+    assert!(s.path("dform.state/apps/env=lab/state.json").exists());
+}
+
+/// Not yet (R-200): state, the registry and outputs.json name a
+/// deployment by its short name (`dform.state/platform/env=lab`); moving
+/// them to the full name moves applied state, a migration of its own.
+#[test]
+#[ignore = "R-200: state keeps a deployment's short name"]
+fn state_names_a_deployment_by_its_full_name() {
+    let s = project("deps-state-name");
+    s.run(&["apply", "platform", "env=lab", "--yes"]).success();
+    let published = s.read("dform.state/platform/env=lab/outputs.json");
+    assert!(
+        published.contains("\"stacks.platform[env=lab]\""),
+        "{published}"
+    );
+}
