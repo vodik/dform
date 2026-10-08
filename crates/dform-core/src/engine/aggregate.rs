@@ -2,9 +2,10 @@
 //! `collect_list`): its body's rows grouped by the head's key, each group folded, Rule 2 and
 //! 3 for a group.
 
+use super::body::{Choice, Derived, Row, Src, cmp_order, eval_body, read_pattern};
 use super::builtins::{eval_term, order};
 use super::nulls::Rec;
-use super::{Choice, Derived, Row, Src, cmp_order, eval_body, obj, read_pattern};
+use super::obj;
 use crate::ast::{Atom, Lit, RuleStmt, Term};
 use crate::ir::ops::{self, AggKind};
 use crate::ir::store::TupleId;

@@ -1,7 +1,7 @@
 //! Negation as failure over the store, `not p(t)`: Rule 2 for a pattern holding a null,
 //! Rule 3 while a stuck head may derive it, a `not { .. }` helper's pattern matched as it is.
 
-use super::Src;
+use super::body::Src;
 use super::nulls::{Rec, Rule3Clause, planted};
 use crate::ast::{Atom, Term};
 use crate::ir::ops;
