@@ -476,3 +476,14 @@ fn another_deployments_output_types_its_readers_literal() {
     s.run(&["apply", "platform"]).success();
     s.run(&["plan", "apps"]).success();
 }
+
+/// A coeffect's argument (`oci.resolve`) is checked as its parameter's
+/// type at compile time, as a pure function's is.
+#[test]
+#[ignore = "a coeffect's row is keyed by its argument as written: read at compile time, the evaluated call's key differs from the one the host answered (files/oci.rs), so its arguments take no edge yet"]
+fn a_coeffects_argument_is_checked_at_compile_time() {
+    fails(
+        &job("{ name: \"a\", image: oci.resolve(\"Not An Image\") }"),
+        &["is an oci"],
+    );
+}

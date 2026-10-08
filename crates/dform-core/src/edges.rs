@@ -689,7 +689,7 @@ impl<'a> Graph<'a> {
     }
 
     /// A function's arguments: each its parameter's type (a `string`
-    /// parameter takes a value as its text, R-133).
+    /// parameter takes a value as its text, R-133); a coeffect's none.
     fn params(&mut self, f: &crate::functions::Function, args: &mut [Term], at: &At) {
         for (i, t) in args.iter_mut().enumerate() {
             let p = f
@@ -697,7 +697,9 @@ impl<'a> Graph<'a> {
                 .get(i)
                 .or_else(|| f.variadic.then(|| f.params.last()).flatten());
             let n = self.node();
-            if let Some(p) = p {
+            // A coeffect's argument is the host's to read (`oci.resolve`,
+            // `io.read`): its row is keyed by the value as written.
+            if let Some(p) = p.filter(|_| !f.coeffect) {
                 let ty = Ty::parse(&p.ty);
                 if readable(&ty) {
                     let what = format!("`{}`'s argument `{}`", f.name, p.name);
