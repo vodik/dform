@@ -1,0 +1,118 @@
+//! The program to the rules the engine runs (R-211): `lower` walks the
+//! items from `roots` and emits, for each, the statements the resolver
+//! has always emitted for it, the same relations (`arg`, `attr`, `want`,
+//! `__path`, ..) for `partition::compile` and the engine. It is the one
+//! consumer that combines the passes' tables, and the function the
+//! resolver calls once the migration ends.
+//!
+//! Day one an item is opaque (its statement, emitted as it is) or a
+//! module (`Stmt::Module` around its items' statements).
+
+use super::node::{ItemId, ItemKind};
+use super::{Origin, Program};
+use crate::ast::{self, Stmt};
+use crate::diag::Diagnostic;
+
+/// What the program lowers to: the resolver's output, and where each
+/// statement came from, one origin per statement in the order a walk
+/// meets them (a module's own, then its body's).
+#[derive(Debug)]
+pub struct LoweredStack {
+    pub rules: Result<ast::Program, Vec<Diagnostic>>,
+    pub origins: Vec<Origin>,
+}
+
+impl LoweredStack {
+    pub fn into_result(self) -> Result<ast::Program, Vec<Diagnostic>> {
+        self.rules
+    }
+}
+
+pub fn lower(program: &Program) -> LoweredStack {
+    if !program.diags.is_empty() {
+        return LoweredStack {
+            rules: Err(program.diags.clone()),
+            origins: Vec::new(),
+        };
+    }
+    let mut origins = Vec::new();
+    let statements = program
+        .roots
+        .iter()
+        .map(|&id| item(program, id, &mut origins))
+        .collect();
+    LoweredStack {
+        rules: Ok(ast::Program {
+            statements,
+            stack: program.stack.clone(),
+        }),
+        origins,
+    }
+}
+
+fn item(program: &Program, id: ItemId, origins: &mut Vec<Origin>) -> Stmt {
+    origins.push(Origin::of(id));
+    let it = &program.items[id];
+    match &it.kind {
+        ItemKind::Opaque(stmt) => (**stmt).clone(),
+        ItemKind::Module {
+            path,
+            component,
+            items,
+            ..
+        } => Stmt::Module(ast::Module {
+            name: path.clone(),
+            component: *component,
+            body: items.iter().map(|&i| item(program, i, origins)).collect(),
+            span: it.span,
+        }),
+        kind => unreachable!(
+            "no builder makes {} before R-211 step 3",
+            super::spell::kind(kind)
+        ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::program::check;
+
+    /// A program of opaque items lowers to the statements it was built
+    /// from, spans, origins and module bodies included, and one built from
+    /// diagnostics lowers to them.
+    #[test]
+    fn an_opaque_program_lowers_to_what_it_was_built_from() {
+        let src = "\nlet x = 1\np(a) where a = x\ndeny \"no\" where p(2)\n";
+        let lowered = crate::parser::parse_program(src).unwrap();
+        let program = Program::opaque(Ok(lowered.clone()), Default::default());
+        assert_eq!(program.roots.len(), lowered.statements.len());
+        let back = lower(&program);
+        assert_eq!(back.origins.len(), lowered.statements.len());
+        assert_eq!(check::dump(&back.rules), check::dump(&Ok(lowered.clone())));
+
+        let module = ast::Program {
+            statements: vec![Stmt::Module(ast::Module {
+                name: "m".into(),
+                component: false,
+                body: lowered.statements.clone(),
+                span: Default::default(),
+            })],
+            stack: None,
+        };
+        let program = Program::opaque(Ok(module.clone()), Default::default());
+        let ItemKind::Module { body, items, .. } = &program.items[program.roots[0]].kind else {
+            panic!("not a module item");
+        };
+        assert_eq!(items.len(), lowered.statements.len());
+        assert_eq!(program.scopes[*body].parent, Some(program.scope));
+        assert_eq!(
+            check::dump(&lower(&program).rules),
+            check::dump(&Ok(module))
+        );
+
+        let err = vec![Diagnostic::error(Default::default(), "bad")];
+        let program = Program::opaque(Err(err.clone()), Default::default());
+        assert_eq!(check::dump(&lower(&program).rules), check::dump(&Err(err)));
+    }
+}

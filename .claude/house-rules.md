@@ -31,3 +31,5 @@
 - Scope is lexical everywhere: a name resolves in the scope it is written in and the enclosing scopes of its own file, never through a `use`; a module or component takes what it needs as an input; `super` names the enclosing scope one level. Dynamic scope was an artifact of growth and is being removed (R-186, R-205); never add a read that reaches a user.
 
 - A feature is built in every position it applies to, not in the position it was asked for. Typing and inference, references, spread, scope: each holds everywhere or it holds nowhere, because a user cannot depend on a rule with exceptions. Before handing back, list the positions the feature does not yet reach, as ignored tests with reasons, never silently.
+
+- `DFORM_CHECK_LOWER=1` (R-211, `program::check`) makes every `lower_stack` compare the program's lowering with the resolver's own output and panic at the first difference; run the suite with it set at each step of the migration, and it is deleted with the old path at the migration's end.

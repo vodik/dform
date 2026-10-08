@@ -84,6 +84,12 @@ hkdf = "0.12"
 # The plan key's digests (`zset::file::Key::digest`): HMAC-SHA256, the
 # same `hmac` the `hkdf` crate is built on.
 hmac = "0.12"
+# The program between the parse tree and the rules (src/program/,
+# R-211): `slotmap` for its node arenas, a key type per node family and a
+# `SecondaryMap` per pass's table; `ena` (rustc's union-find) for type
+# variables.
+slotmap = "1.1"
+ena = "0.14"
 
 # The built-in `ssh` provider (src/plugin/ssh.rs): an SSH client in
 # process, never the `ssh` binary; exec and SFTP. `ring` for its crypto

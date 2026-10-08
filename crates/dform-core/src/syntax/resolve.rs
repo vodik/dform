@@ -164,14 +164,27 @@ pub fn lower_stack(
         }
     }
     let settings = stack.and_then(|st| l.stack_settings(st, entries));
-    if l.diags.is_empty() {
+    let lowered = if l.diags.is_empty() {
         Ok(Program {
             statements,
             stack: settings,
         })
     } else {
         Err(l.diags)
+    };
+    // The program (R-211) is built of what the resolver lowered, every
+    // statement opaque, and lowered back. `DFORM_CHECK_LOWER=1` compares
+    // the two; it is deleted with the old path at the migration's end.
+    let helpers = crate::program::Counters {
+        negs: l.negs,
+        aggs: l.agg_rules,
+    };
+    let old = crate::program::check::enabled().then(|| lowered.clone());
+    let new = crate::program::lower(&crate::program::Program::opaque(lowered, helpers));
+    if let Some(old) = old {
+        crate::program::check::compare(&old, &new.rules);
     }
+    new.into_result()
 }
 
 /// Remember the order `root` writes objects' fields in
