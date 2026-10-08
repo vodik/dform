@@ -284,22 +284,28 @@ impl Lets {
 /// a.df:3:9)`); the rules lowered from one statement are one site.
 #[derive(Default)]
 struct Sites {
-    by: BTreeMap<(String, u32, u32, u32, u32, Option<String>), String>,
+    by: BTreeMap<Site, String>,
     used: BTreeSet<String>,
+}
+
+/// A site: the let it calls, where (the source and the copy it was
+/// lowered out of), in which copy of another let.
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+struct Site {
+    f: String,
+    at: (u32, u32, u32, u32),
+    within: Option<String>,
 }
 
 impl Sites {
     /// The scope of `f`'s copy for the literal at `span` in the copy
     /// `within`, and whether it is new.
     fn scope(&mut self, f: &str, span: Span, within: Option<&str>) -> (String, bool) {
-        let key = (
-            f.to_string(),
-            span.file,
-            span.start,
-            span.end,
-            span.origin,
-            within.map(str::to_string),
-        );
+        let key = Site {
+            f: f.to_string(),
+            at: (span.file, span.start, span.end, span.origin),
+            within: within.map(str::to_string),
+        };
         if let Some(s) = self.by.get(&key) {
             return (s.clone(), false);
         }
