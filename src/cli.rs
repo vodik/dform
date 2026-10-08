@@ -30,6 +30,7 @@ mod secrets;
 mod source;
 mod stack;
 mod state_cmd;
+mod status;
 mod test;
 
 use self::args::{Args, Command, EXPERIMENTAL};

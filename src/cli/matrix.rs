@@ -73,6 +73,7 @@ pub(super) fn target(
             ..
         })
         | Cmd::Test(_)
+        | Cmd::Status(_)
         | Cmd::Effects(Effects { json: false }) => Ok(Some(module)),
         Cmd::Apply(Apply { destroy: true, .. }) => bail!(
             "destroy {shown}: a project module lists deployments; destroy removes one, named \
@@ -195,6 +196,7 @@ pub(super) fn run(cli: Cli, module: &Path) -> Result<Outcome> {
         Cmd::Apply(_) => apply(&cli, &label, &order, &removed, &of),
         Cmd::Test(_) => test(&cli, &label, &order, &of),
         Cmd::Effects(_) => effects(&cli, &label, &order, &of),
+        Cmd::Status(_) => super::status::matrix(&cli, &order, &of),
         _ => bail!("internal: a project module runs plan, apply, test and dev effects"),
     }
 }
@@ -202,7 +204,7 @@ pub(super) fn run(cli: Cli, module: &Path) -> Result<Outcome> {
 type For<'a> = dyn Fn(&Dependency, Cmd) -> Cli + 'a;
 
 /// The `== NAME` line a deployment's run is headed by.
-fn head(cli: &Cli, name: &str, note: &str) {
+pub(super) fn head(cli: &Cli, name: &str, note: &str) {
     let line = match note {
         "" => format!("== {name}"),
         n => format!("== {name}  {n}"),
@@ -211,7 +213,7 @@ fn head(cli: &Cli, name: &str, note: &str) {
 }
 
 /// Say `e`, a deployment's run's error, as `main` would.
-fn say(cli: &Cli, e: &anyhow::Error) {
+pub(super) fn say(cli: &Cli, e: &anyhow::Error) {
     use std::io::IsTerminal;
     match e.downcast_ref::<Refused>().filter(|r| r.footer) {
         Some(r) => eprintln!("{r}"),

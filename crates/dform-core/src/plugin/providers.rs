@@ -2280,17 +2280,30 @@ impl Providers {
     /// Health (R-203): each object state maps (deposed ones not) whose
     /// provider's handshake says it answers Health for its type, as that
     /// provider judges it now; one call to each provider. An object of a
-    /// type nobody answers for is not asked, and not in the answer. For
+    /// type nobody answers for is not asked, and not in the answer; one
+    /// whose provider waits on the program's settings is `unknown`. For
     /// `dform status`, and asked at no other time: nothing of it reaches
     /// the plan, the apply or state.
     pub fn health(&self, state: &State) -> Result<BTreeMap<Address, pb::Health>> {
+        let mut out = BTreeMap::new();
         let mut asked: BTreeMap<usize, Vec<Address>> = BTreeMap::new();
         let mut objects: BTreeMap<usize, Vec<pb::Identity>> = BTreeMap::new();
-        for (addr, e) in self.entries(&state.resources) {
-            let i = self
-                .link_serving(&addr.typ, &e.provider)
-                .expect("entries are served");
+        for (k, e) in &state.resources {
+            let Some(addr) = state::parse_key(k) else {
+                continue;
+            };
+            let Some(i) = self.link_serving(&addr.typ, &e.provider) else {
+                continue;
+            };
             if !self.links[i].borrow().answers_health(&addr.typ) {
+                continue;
+            }
+            if self.awaiting.borrow().contains(&i) {
+                let why = format!(
+                    "provider {} waits on the program's settings",
+                    self.block_name(i)
+                );
+                out.insert(addr, super::backend::health(pb::HealthState::Unknown, why));
                 continue;
             }
             objects.entry(i).or_default().push(pb::Identity {
@@ -2300,7 +2313,6 @@ impl Providers {
             });
             asked.entry(i).or_default().push(addr);
         }
-        let mut out = BTreeMap::new();
         for (i, objects) in objects {
             let n = objects.len();
             let r: pb::HealthResponse = self.links[i]

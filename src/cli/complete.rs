@@ -136,6 +136,7 @@ const COMMANDS: &[&str] = &[
     "doc",
     "log",
     "output",
+    "status",
     "stack",
     "state",
     "secrets",

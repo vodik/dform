@@ -12,6 +12,7 @@ use super::secrets::Secrets;
 use super::source::{Doc, Fmt, Init};
 use super::stack::{Handover, Rekey, StackList};
 use super::state_cmd::{ForgetHost, Log, Output, StateMv, StateShow, Unlock};
+use super::status::Status;
 use super::test::Test;
 use super::{Cli, Outcome, Refused};
 use crate::{query, report};
@@ -45,6 +46,7 @@ pub(super) enum Cmd {
     StateShow(StateShow),
     Output(Output),
     StateMv(StateMv),
+    Status(Status),
     ProviderCheck(ProviderCheck),
     ProviderSchema(ProviderSchema),
     Init(Init),
@@ -98,7 +100,8 @@ impl Cmd {
             | Cmd::Show(_)
             | Cmd::Graph(_)
             | Cmd::Secrets(_)
-            | Cmd::Rekey(_) => Stage::Evaluated,
+            | Cmd::Rekey(_)
+            | Cmd::Status(_) => Stage::Evaluated,
         }
     }
 
@@ -234,7 +237,7 @@ impl Cmd {
     pub(super) fn blocking(&self) -> bool {
         !matches!(
             self,
-            Cmd::Plan(_) | Cmd::Query(_) | Cmd::Why(_) | Cmd::Rekey(_)
+            Cmd::Plan(_) | Cmd::Query(_) | Cmd::Why(_) | Cmd::Rekey(_) | Cmd::Status(_)
         ) && !matches!(self, Cmd::Secrets(Secrets::Set { .. }))
     }
 
@@ -311,7 +314,8 @@ impl Cli {
             | Cmd::Output(_)
             | Cmd::StateMv(_)
             | Cmd::Secrets(_)
-            | Cmd::ForgetHost(_) => true,
+            | Cmd::ForgetHost(_)
+            | Cmd::Status(_) => true,
             _ => false,
         }
     }

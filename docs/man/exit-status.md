@@ -4,7 +4,7 @@ too):
 | Status | Meaning |
 |---|---|
 | 0 | done: the command did what it was asked (`plan` produced a plan, with or without changes) |
-| 1 | failed: an error, printed |
+| 1 | failed: an error, printed; or `status` found an object not healthy or suspended (its line says which) |
 | 2 | usage: the command line is wrong (the argument parser's own) |
 | 3 | declined: a question was answered no; nothing of that tick was applied, and nothing is printed as an error |
 | 4 | refused by the program: its conflicts and denies, printed (`plan` and `apply` alike) |

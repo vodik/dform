@@ -317,6 +317,7 @@ prints the same plan and applies nothing.
 |---|---|
 | `plan`, `apply`, `destroy`, `why`, `query`, `diff`, `test`, `fmt`, `log` | on a target; `plan`, `apply` and `test` with none on project.df's deployments |
 | `output TARGET [NAME]` | a deployment's outputs |
+| `status [TARGET]` | each object's health, as its provider judges it now; with no target on project.df's deployments |
 | `stack list`, `stack rekey`, `stack unlock` | the project's stacks |
 | `state show`, `state forget-host`, `state mv` | a deployment's state |
 | `secrets list`, `secrets rotate`, `secrets cycle`, `secrets set`, `secrets unset` | a deployment's secrets |
@@ -345,6 +346,39 @@ NAME` of one is an error.
 dform output app env=prod                 # url  "https://..", then each relation's table
 curl "$(dform output app env=prod url)"   # the bare value
 dform output app env=prod zone            # prod-a<TAB>0, a row per line
+```
+
+`dform status TARGET` asks each provider how the deployment's objects
+are doing now (R-203): one line per object in state, its health and the
+provider's reason, then a summary. A provider judges the types its
+handshake lists (docs/providers.md "Health"): the Kubernetes provider a
+Deployment, StatefulSet, DaemonSet, Job, CronJob, Service (a
+LoadBalancer's address), PersistentVolumeClaim and Pod; OVH an
+instance, a volume, a private network and a user; a type it does not
+judge prints `-`. The health is one of `healthy`, `progressing` (on its
+way: a rollout, a build), `degraded` (failing and not getting better by
+itself: the API gave up, or names a failure; or the object is gone),
+`suspended` (stopped on purpose) and `unknown` (the provider cannot
+tell). The status exits 0 when every object judged is healthy or
+suspended, 1 otherwise. `--json` is one object: `deployment`,
+`applied`, `settled` (what the exit status says), `objects` (each
+`{address, type, name, provider, health, reason}`, `health` null for a
+type not judged) and `summary`, the counts. With no target, in a
+project with project.df, each deployment it lists, headed `== NAME` in
+apply order (`--json`: an array of them), exit 1 when any is not
+settled. The program is evaluated so its providers are configured as
+for a plan, and nothing is planned: health is not in the plan, the
+apply, state or the language, and an apply never waits on it. There is
+no `--wait` or `--watch` yet: a status is one look, and a provider that
+must poll its API to answer does so inside its call.
+
+```bash
+dform status forgejo env=prod
+# k8s.deployment forgejo.server  degraded     ProgressDeadlineExceeded: 1 of 3 available
+# k8s.pod forgejo.migrate        degraded     CrashLoopBackOff: container migrate
+# k8s.service forgejo.lb         progressing  waiting for a load balancer address
+# k8s.config_map forgejo.conf    -
+# status: 9 healthy, 1 progressing, 2 degraded, 4 without health
 ```
 
 `dform stack list` is a result set, one row per deployment with state
@@ -410,7 +444,7 @@ too):
 | Status | Meaning |
 |---|---|
 | 0 | done: the command did what it was asked (`plan` produced a plan, with or without changes) |
-| 1 | failed: an error, printed |
+| 1 | failed: an error, printed; or `status` found an object not healthy or suspended (its line says which) |
 | 2 | usage: the command line is wrong (the argument parser's own) |
 | 3 | declined: a question was answered no; nothing of that tick was applied, and nothing is printed as an error |
 | 4 | refused by the program: its conflicts and denies, printed (`plan` and `apply` alike) |

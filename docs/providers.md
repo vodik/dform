@@ -119,7 +119,7 @@ fn main() -> std::process::ExitCode {
   password; dform keeps its digest in state and a changed one is a
   change, R-106), `name_like`; `list_key = "name"`. On the struct: `type`
   (required), `replace`, `retry`, `lookup = "name,region"` (its
-  `type_lookup`, below). A computed field is an `Option` with
+  `type_lookup`, below), `health` (it answers Health, below). A computed field is an `Option` with
   `#[serde(default)]`: the engine's desired document does not have it.
   An `optional_computed` one is answered as computed (dform compares it
   only where the program writes it), so leave it out of what Read
@@ -175,6 +175,29 @@ fn main() -> std::process::ExitCode {
   answers with no credentials as it would with them (from a schema it
   holds, or a fake of its API); one that does not is not asked under
   test, which says so.
+- Health (R-203) is a call of its own, beside Read, and `dform status`
+  is the only one that asks it: an object's state now, one of
+  `healthy`, `progressing`, `degraded`, `suspended` and `unknown`, and a
+  reason in one line, never a sensitive value. `#[dform(health)]` on
+  the struct lists the type in the handshake's `health`, and
+  `Lifecycle::health(p, remote)` answers it (`dform_sdk::health(state,
+  reason)`); the default answers none, which is `unknown`. Judge from
+  what the API says now and never measure time: `progressing` is on its
+  way and may get there by itself (a rollout, `BUILD`), `degraded` is
+  failing and will not get better without a change (the API gave up:
+  `ProgressDeadlineExceeded`, `BackoffLimitExceeded`, `ERROR`; or it
+  names a failure: `CrashLoopBackOff`; or the object is gone),
+  `suspended` is stopped on purpose (`spec.paused`, `SHUTOFF`). A
+  provider that must poll its API to answer polls inside the call;
+  dform never polls it. A type with nothing to judge (a key, a record, a
+  ConfigMap) declares none, and `status` prints `-` for it. Health is
+  not a value a program reads, not in the plan, the apply or state:
+  dform asks only which objects have it and prints the answer. A
+  provider of its own answers `Health` (gRPC `rpc Health`, the WIT's
+  `health`) with one answer per object asked, in order, and lists the
+  types in its handshake's `health`; the Kubernetes and OVH providers
+  do (docs/reference.md "Targets and commands"). Postgres and Vault
+  declare none.
 - `Typed::example::<R>(create, update, required)` gives `dform provider
   check` documents of the provider's own types to run its resource
   checks with.

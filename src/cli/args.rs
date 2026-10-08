@@ -12,6 +12,7 @@ use super::secrets::Secrets;
 use super::source::{Doc, Fmt, Init};
 use super::stack::{Handover, Rekey, StackList};
 use super::state_cmd::{ForgetHost, Log, Output, StateMv, StateShow, Unlock};
+use super::status::Status;
 use super::test::Test;
 use super::{Cli, Cmd, Held, matrix};
 use crate::project::Project;
@@ -166,6 +167,17 @@ pub(super) enum Command {
     Output {
         /// The stack (or deployment) and its key values, then the output's
         /// NAME: `dform output app env=prod url`.
+        #[command(flatten)]
+        target: Target,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Each of a deployment's objects whose provider judges its health,
+    /// as it judges it now (R-203): one line each (`-` for a type it does
+    /// not judge), then a summary. Exit 0 when each is healthy or
+    /// suspended, 1 otherwise. With no target, in a project with a
+    /// project module, each deployment it lists.
+    Status {
         #[command(flatten)]
         target: Target,
         #[arg(long)]
@@ -801,6 +813,9 @@ impl TryFrom<Command> for Typed {
                 }
                 let name = names.pop();
                 Typed::of(Cmd::Output(Output { name, json }), Some(target))
+            }
+            Command::Status { target, json } => {
+                Typed::of(Cmd::Status(Status { json }), Some(target))
             }
             Command::State { cmd } => match cmd {
                 StateCommand::Show {

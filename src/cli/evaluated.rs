@@ -334,6 +334,7 @@ impl<'h> Evaluated<'h> {
             Cmd::Show(c) => c.run(&self, &compiled),
             Cmd::Graph(c) => c.run(&self, &compiled),
             Cmd::Rekey(c) => c.run(&self),
+            Cmd::Status(c) => c.run(&self),
             Cmd::Plan(c) => c.run(self),
             Cmd::Apply(c) => c.run(self, compiled, session),
             c => unreachable!("{c:?} runs at another stage"),
