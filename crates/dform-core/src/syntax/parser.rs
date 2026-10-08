@@ -1709,12 +1709,12 @@ impl<'a> Parser<'a> {
                     }
                     p.start_at(cp, TUPLE);
                     p.bump();
-                    p.term()?;
+                    p.item()?;
                     while p.eat(COMMA) {
                         if p.at(R_PAREN) {
                             break;
                         }
-                        p.term()?;
+                        p.item()?;
                     }
                     p.expect(R_PAREN)?;
                     Ok(TUPLE)
@@ -1724,6 +1724,9 @@ impl<'a> Parser<'a> {
             }
             L_BRACKET => self.list(),
             L_BRACE => self.object(),
+            // `..x` leads a field or an element (R-199); anywhere else the
+            // resolver says where it goes.
+            DOT2 => self.spread(),
             _ if term_name(k) => self.chain_term(),
             _ => self.err_expected("a term"),
         }
@@ -1895,8 +1898,8 @@ impl<'a> Parser<'a> {
                 p.finish();
                 return Ok(LIST);
             }
-            p.term()?;
-            if p.at(PIPE) {
+            let first = p.item()?;
+            if p.at(PIPE) && first != SPREAD {
                 p.start_at(cp, COMPREHENSION);
                 p.bump();
                 p.comprehension_body()?;
@@ -1909,7 +1912,7 @@ impl<'a> Parser<'a> {
                 if p.at(R_BRACKET) {
                     break;
                 }
-                p.term()?;
+                p.item()?;
             }
             p.expect(R_BRACKET)?;
             p.finish();
@@ -1917,12 +1920,41 @@ impl<'a> Parser<'a> {
         })
     }
 
-    /// `{ key: term, name, ... }`: a name alone is `name: name`.
+    /// A list's element or a tuple's: a term, or a spread `..term`.
+    fn item(&mut self) -> P<SyntaxKind> {
+        if self.at(DOT2) {
+            return self.spread();
+        }
+        self.term()
+    }
+
+    /// `..term` (R-199): a spread leading a field or an element, or an
+    /// object pattern's rest; `..` alone (a pattern's) has no term, which
+    /// the resolver says. A range sits between two terms, so position
+    /// decides: `[..0..3]` spreads the range `0..3`.
+    fn spread(&mut self) -> P<SyntaxKind> {
+        self.start(SPREAD);
+        self.bump();
+        if !matches!(self.nth(0), COMMA | R_BRACE | R_BRACKET | R_PAREN) {
+            self.term()?;
+        }
+        self.finish();
+        Ok(SPREAD)
+    }
+
+    /// `{ key: term, name, ..term, ... }`: a name alone is `name: name`.
     fn object(&mut self) -> P<SyntaxKind> {
         self.start(OBJECT);
         self.bump();
         self.with_nl(false, |p| {
             while !p.at(R_BRACE) {
+                if p.at(DOT2) {
+                    p.spread()?;
+                    if !p.eat(COMMA) {
+                        break;
+                    }
+                    continue;
+                }
                 p.start(OBJECT_FIELD);
                 if p.nth(0).is_word() || p.at(STRING) {
                     p.bump();

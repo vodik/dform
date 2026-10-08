@@ -429,7 +429,11 @@ fn start(
             scc,
             negative_edges,
         } => {
-            bail!("{}", partition::cycle_error(&graph, &scc, &negative_edges))
+            let help = self_spread(&graph, &negative_edges).unwrap_or_default();
+            bail!(
+                "{}{help}",
+                partition::cycle_error(&graph, &scc, &negative_edges)
+            )
         }
     };
     // A rule runs at the stratum of each node it defines: one, or one per
@@ -2203,6 +2207,12 @@ impl Rec<'_> {
     }
 }
 
+/// A spread's lowering (R-199): it carries a null leaf in a part, and a
+/// part that is a null blocks it ([`blocked_by_null`]).
+fn spreads(name: &str) -> bool {
+    name == crate::functions::MERGE || name == crate::functions::CONCAT
+}
+
 /// Builtins that carry nulls instead of reading them: the aggregates (whose
 /// content positions `eval_rule_collect` decides) and the functions
 /// declared `forwards nulls`.
@@ -2219,6 +2229,18 @@ fn blocked_by_null(t: &Term, state: &HashMap<String, Value>) -> Option<(String, 
         Term::Func { name, args } => {
             if let Some(inner) = args.iter().find_map(|a| blocked_by_null(a, state)) {
                 return Some(inner);
+            }
+            if spreads(name) {
+                // A spread's part not known yet (R-199): the literal's
+                // fields are not known either, so it waits; a null leaf
+                // inside a part is carried (R-183).
+                let mut nulls = BTreeSet::new();
+                for a in args {
+                    if let v @ Value::Null { .. } = eval_term(a, state)? {
+                        nulls.extend(nulls_in(&v));
+                    }
+                }
+                return (!nulls.is_empty()).then(|| (name.clone(), nulls));
             }
             if forwards_nulls(name) {
                 return None;
@@ -3479,6 +3501,8 @@ fn head_error(head: &Atom, state: &HashMap<String, Value>) -> Option<String> {
         /// `__as(V, T)` (R-134): a typed position over a computed value
         /// that is not of the type.
         Typed(String, String),
+        /// A spread's part that is not what its literal takes (R-199).
+        Spread(String),
         Unbound(String),
     }
     fn no_value(t: &Term, state: &HashMap<String, Value>) -> Option<NoValue> {
@@ -3496,10 +3520,14 @@ fn head_error(head: &Atom, state: &HashMap<String, Value>) -> Option<String> {
                     Some(NoValue::Typed(ty, why))
                 }
                 None => {
-                    let shown: Vec<String> = args
+                    let vals: Vec<Value> =
+                        args.iter().filter_map(|a| eval_term(a, state)).collect();
+                    if let Some(why) = spread_error(name, &vals) {
+                        return Some(NoValue::Spread(why));
+                    }
+                    let shown: Vec<String> = vals
                         .iter()
-                        .filter_map(|a| eval_term(a, state))
-                        .map(|v| spell::term(&Term::Val(v)))
+                        .map(|v| spell::term(&Term::Val(v.clone())))
                         .collect();
                     let partial = crate::functions::get(name).is_none_or(|f| f.partial);
                     Some(NoValue::Call(
@@ -3542,6 +3570,7 @@ fn head_error(head: &Atom, state: &HashMap<String, Value>) -> Option<String> {
                 format!("{at}: {call} is not defined for these arguments, so {what} has no value")
             }
             NoValue::Typed(ty, why) => format!("{at}: {what} is {}: {why}", a_type(&ty)),
+            NoValue::Spread(why) => format!("{at}: {why}, so {what} has no value"),
             NoValue::Unbound(v) => format!(
                 "internal error: {at}: the head of the rule for {what} leaves `{v}` unbound \
                  (a compiler bug: please report it with the program)"
@@ -3636,6 +3665,9 @@ fn eval_eq(
 /// call fails; else an error at the rule, the arguments not ones the
 /// function takes (a bad unit, layout, template or port).
 fn unanswered(name: &str, args: &[Value], rec: &Rec) -> Result<()> {
+    if let Some(why) = spread_error(name, args) {
+        bail!("{why}{}", at_suffix(rec.head.span));
+    }
     if crate::functions::get(name).is_none_or(|f| f.partial) {
         return Ok(());
     }
@@ -3645,6 +3677,106 @@ fn unanswered(name: &str, args: &[Value], rec: &Rec) -> Result<()> {
         args.join(", "),
         at_suffix(rec.head.span)
     )
+}
+
+/// The help for a contribution that spreads the attribute it writes
+/// (R-199), `set r.spec = { ..r.spec, x: 1 }`: a value cannot be made from
+/// itself, and the fix is a write of each key it adds, `set r.spec.x = 1`.
+fn self_spread(graph: &partition::Graph, edges: &[partition::Edge]) -> Option<String> {
+    edges
+        .iter()
+        .filter_map(|e| graph.rules.get(e.rule?))
+        .find_map(|r| {
+            let ("arg", [Term::Val(typ), Term::Val(name), Term::Val(path), merge, ..]) =
+                (r.head.pred.as_str(), r.head.args.as_slice())
+            else {
+                return None;
+            };
+            let Term::Func {
+                name: f,
+                args: parts,
+            } = merge
+            else {
+                return None;
+            };
+            if f != crate::functions::MERGE {
+                return None;
+            }
+            let read = r.body.iter().find_map(|l| match l {
+                Lit::Pos(a) if a.pred == "attr" => match a.args.as_slice() {
+                    [Term::Val(t), Term::Val(n), Term::Val(p), Term::Var(v)]
+                        if (t, n, p) == (typ, name, path) =>
+                    {
+                        Some(v)
+                    }
+                    _ => None,
+                },
+                _ => None,
+            })?;
+            let at = parts
+                .iter()
+                .position(|p| matches!(p, Term::Var(v) if v == read))?;
+            let a = crate::ir::Address {
+                typ: typ.as_str()?.to_string(),
+                name: name.as_str()?.to_string(),
+            };
+            let path = path.as_str()?;
+            let sets: Vec<String> = parts[at + 1..]
+                .iter()
+                .filter_map(|p| match p {
+                    Term::Obj(m) => Some(m),
+                    _ => None,
+                })
+                .flatten()
+                .map(|(k, v)| {
+                    let v = match v {
+                        Term::Val(v) => spell::value(v),
+                        _ => "..".to_string(),
+                    };
+                    format!(
+                        "`set {} = {v}`",
+                        crate::report::reference(&a, &format!("{path}.{k}"))
+                    )
+                })
+                .collect();
+            let fix = match sets.as_slice() {
+                [] => "write the fields it adds, each its own `set`".to_string(),
+                _ => format!("write what it adds, {}", sets.join(", ")),
+            };
+            Some(format!(
+                "\n  help: {} spreads its own value, which it has only once it is given: {fix}",
+                crate::report::attribute(&a, path)
+            ))
+        })
+}
+
+/// Why a spread answered nothing (R-199): a part that is not what its
+/// literal takes, checked once it has a value, `{ ..x }` of a list or `[..x]`
+/// of an object or a dense range; `None` for any other call.
+fn spread_error(name: &str, args: &[Value]) -> Option<String> {
+    use crate::functions::{CONCAT, MERGE};
+    let object = match name {
+        MERGE => true,
+        CONCAT => false,
+        _ => return None,
+    };
+    let bad = args.iter().find(|v| match (object, v) {
+        (_, Value::Null { .. }) | (true, Value::Obj(_)) | (false, Value::List(_)) => false,
+        (false, Value::Range(r)) => r.members().is_err(),
+        _ => true,
+    })?;
+    if let Value::Range(r) = bad {
+        return Some(format!("a spread `..` in a list: {}", r.members().err()?));
+    }
+    let (into, takes) = match object {
+        true => ("an object", "an object's fields"),
+        false => ("a list", "a list's elements"),
+    };
+    Some(format!(
+        "a spread `..` in {into} gives {} `{}`, and {into} takes {takes}",
+        crate::value::article(crate::value::type_name(bad)),
+        spell::value(bad)
+    ))
 }
 
 /// A side of a comparison with no value: a call in it that answered
@@ -3879,6 +4011,9 @@ fn eval_func(name: &str, args: &[Term], state: &HashMap<String, Value>) -> Optio
     // Rule 2: every builtin argument is a content position. A builtin
     // over a null has no value; the literal that needs it is stuck.
     if !forwards_nulls(name) && vals.iter().any(stuck::has_null) {
+        return None;
+    }
+    if spreads(name) && vals.iter().any(|v| matches!(v, Value::Null { .. })) {
         return None;
     }
     body(&as_params(name, vals))

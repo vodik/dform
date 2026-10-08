@@ -94,6 +94,18 @@ internal fn __known(value: any) -> bool
 #| example: __object(str.format("%s-a", K), V)
 internal fn __object(key: string, value: any, ...) -> any? forwards, forwards nulls
 
+#| An object of the fields of each part in turn, a later key replacing an earlier (R-199): `{ ..base, replicas: 3 }` lowers to it, each spread's value and each run of written fields a part; it waits while a part is unknown, and carries an unknown inside one, and no value for a part that is not an object, an error naming it.
+#| example: __merge(Base, {replicas: 3})
+internal fn __merge(part: any, ...) -> any forwards, forwards nulls
+
+#| A list of the elements of each part in turn (R-199): `[..a, x, ..b]` lowers to it, each spread's value and each run of written elements a part, a discrete range its members; it waits while a part is unknown, and carries an unknown inside one, and no value for a part that is not a list, an error naming it.
+#| example: __concat(A, [X], B)
+internal fn __concat(part: any, ...) -> any forwards, forwards nulls
+
+#| An object without the keys given (R-199): an object pattern's rest, `{ metadata: m, ..body } = doc`, lowers to it; no value for a value that is not an object, so the pattern does not match.
+#| example: __rest(Obj, "metadata")
+internal fn __rest(value: any, key: string, ...) -> any? forwards, forwards nulls
+
 #| A range, `start..end` (`inclusive`: `start..=end`), of one ordered type (R-180); no value for ends of two types or of a type with no order. A range literal whose ends are computed lowers to it.
 #| example: __range(0, N, true)
 internal fn __range(start: any, end: any, inclusive: bool) -> any? forwards nulls

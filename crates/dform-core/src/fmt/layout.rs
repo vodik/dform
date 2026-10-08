@@ -536,6 +536,7 @@ impl Layout {
     fn object(&mut self, n: &SyntaxNode, elems: &[SyntaxElement]) -> Doc {
         let fields: Vec<SyntaxNode> = n.children().collect();
         if let [f] = fields.as_slice()
+            && f.kind() == OBJECT_FIELD
             && let Some(list) = f.children().next()
             && list.kind() == LIST
             && list.children().next().is_some()

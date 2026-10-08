@@ -279,3 +279,19 @@ fn fmt_writes_a_typed_literal_in_its_shortest_spelling() {
     s.write("app.df", src);
     s.run(&["fmt", "--check", "app.df"]).success();
 }
+
+/// A spread (R-199) hugs what it spreads and its literal breathes as any
+/// object does: `{ ..a, b: 1 }`, `[..xs, 1, ..0..3]`; an object pattern's
+/// rest is the same.
+#[test]
+fn a_spread_is_spaced_as_its_literal() {
+    let src = "let o = {..base,tier:\"back\", spec: { .. base.spec, replicas: 3 }}\n\
+               let l = [ .. xs ,1,  ..0..3]\n\
+               p(x) where doc(d), {metadata: m,  ..x} = d, m == 1\n";
+    let want = "let o = { ..base, tier: \"back\", spec: { ..base.spec, replicas: 3 } }\n\
+                let l = [..xs, 1, ..0..3]\n\
+                p(x) where doc(d), { metadata: m, ..x } = d, m == 1\n";
+    assert_eq!(fmt(src), want);
+    assert_eq!(fmt(want), want);
+    assert_eq!(fmt("let o = { ..[1] }\n"), "let o = { ..[1] }\n");
+}

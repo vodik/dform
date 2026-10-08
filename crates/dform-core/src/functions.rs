@@ -258,6 +258,18 @@ pub fn with_named(
 /// values in turn (lowering.df).
 pub const OBJECT: &str = "__object";
 
+/// `{ ..base, k: v }` (R-199): an object of its parts' fields in turn, a
+/// later key replacing an earlier (lowering.df).
+pub const MERGE: &str = "__merge";
+
+/// `[..a, x, ..b]` (R-199): a list of its parts' elements in turn, a
+/// discrete range's members (lowering.df).
+pub const CONCAT: &str = "__concat";
+
+/// `{ k: p, ..rest }` (R-199): an object pattern's rest, the value without
+/// the keys the pattern names (lowering.df).
+pub const REST: &str = "__rest";
+
 pub const FORMS: &[&str] = &["ref", "cloud_ref"];
 
 /// Whether a program may call `name`: declared and not internal, or one
@@ -272,6 +284,8 @@ pub fn shown_call(name: &str) -> String {
     match name {
         crate::ir::LEN => "`.len`".to_string(),
         OBJECT => "an object's key".to_string(),
+        MERGE | CONCAT => "a spread `..`".to_string(),
+        REST => "a pattern's rest `..`".to_string(),
         n => format!("{n}()"),
     }
 }
@@ -1027,6 +1041,38 @@ pub const BODIES: &[(&str, Body)] = &[
             }
         }
         Some(Value::Obj(m))
+    }),
+    (MERGE, |a| {
+        let mut m = BTreeMap::new();
+        for part in a {
+            match part {
+                Value::Obj(fields) => m.extend(fields.clone()),
+                _ => return None,
+            }
+        }
+        Some(Value::Obj(m))
+    }),
+    (CONCAT, |a| {
+        let mut out = Vec::new();
+        for part in a {
+            match part {
+                Value::List(xs) => out.extend(xs.iter().cloned()),
+                Value::Range(r) => out.extend(r.members().ok()?),
+                _ => return None,
+            }
+        }
+        Some(Value::List(out))
+    }),
+    (REST, |a| match a {
+        [n @ Value::Null { .. }, ..] => Some(n.clone()),
+        [Value::Obj(m), keys @ ..] => {
+            let mut m = m.clone();
+            for k in keys {
+                m.remove(k.as_str()?);
+            }
+            Some(Value::Obj(m))
+        }
+        _ => None,
     }),
     ("__known", |a| match a {
         [_] => Some(Value::Bool(true)),

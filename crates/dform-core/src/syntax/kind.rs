@@ -129,6 +129,9 @@ pub enum SyntaxKind {
     LIST,
     OBJECT,
     OBJECT_FIELD,
+    /// `..term` leading an object's field or a list's element (R-199): a
+    /// spread in a literal, the rest `..name` in an object pattern.
+    SPREAD,
     COMPREHENSION,
     PAREN,
     /// `(a, b, ..)`: a tuple pattern (R-58), after `in`, on the left of

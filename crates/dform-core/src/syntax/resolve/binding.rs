@@ -515,7 +515,11 @@ impl Lowerer<'_> {
                 }
             }
             OBJECT => {
-                for f in t.children().filter(|c| c.kind() == OBJECT_FIELD) {
+                // The rest `..name` binds as a name does (R-199).
+                for f in t
+                    .children()
+                    .filter(|c| matches!(c.kind(), OBJECT_FIELD | SPREAD))
+                {
                     match terms(&f).next() {
                         Some(v) => self.pattern_names(rc, &v, offset, mode, bodies),
                         None => {
@@ -617,7 +621,10 @@ impl Lowerer<'_> {
                 }
             }
             OBJECT => {
-                for f in t.children().filter(|c| c.kind() == OBJECT_FIELD) {
+                for f in t
+                    .children()
+                    .filter(|c| matches!(c.kind(), OBJECT_FIELD | SPREAD))
+                {
                     match terms(&f).next() {
                         Some(v) => self.reads(rc, &v, offset, by, out, bodies),
                         None => {

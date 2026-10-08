@@ -47,6 +47,7 @@ mod membership;
 mod pattern;
 mod provider;
 mod singleton;
+mod spread;
 pub use provider::ENV_VAR;
 
 /// One parsed file of a program.
@@ -397,6 +398,7 @@ fn is_term(k: SyntaxKind) -> bool {
             | BIN_EXPR
             | UNARY_EXPR
             | RANGE
+            | SPREAD
     )
 }
 
@@ -6327,14 +6329,9 @@ impl<'u> Lowerer<'u> {
             LITERAL => self.literal(rc, n, pre),
             CHAIN | CALL_CHAIN => self.chain_term(rc, n, pos, pre),
             CALL => self.call(rc, n, pos, pre),
-            LIST => {
-                let mut out = Vec::new();
-                for t in terms(n) {
-                    out.push(self.term(rc, &t, pos, pre)?);
-                }
-                Ok(Term::List(out))
-            }
+            LIST => self.list(rc, n, pos, pre),
             OBJECT => self.object(rc, n, pos, pre),
+            SPREAD => self.misplaced_spread(n),
             COMPREHENSION => self.comprehension(rc, n, pos),
             PAREN => {
                 let inner = terms(n).next().ok_or(Skip)?;
@@ -6480,21 +6477,37 @@ impl<'u> Lowerer<'u> {
         Ok(Term::Func { name, args })
     }
 
-    /// An object, its keys given or computed (`{ "${k}": v }`).
+    /// An object, its keys given or computed (`{ "${k}": v }`), its
+    /// fields written or spread (`{ ..base, k: v }`, R-199).
     fn object(&mut self, rc: &mut Rc, n: &SyntaxNode, pos: Pos, pre: &mut Vec<Lit>) -> L<Term> {
-        // A key with holes (`{ "${k}": v }`) is computed: the
-        // object is built at run time (`functions::OBJECT`).
-        let computed = n
-            .children()
-            .filter(|c| c.kind() == OBJECT_FIELD)
-            .filter_map(|f| tokens(&f).next())
+        self.written_twice(n)?;
+        if n.children().any(|c| c.kind() == SPREAD) {
+            return self.spread_object(rc, n, pos, pre);
+        }
+        let fields: Vec<SyntaxNode> = n.children().filter(|c| c.kind() == OBJECT_FIELD).collect();
+        self.object_fields(rc, &fields, pos, pre)
+    }
+
+    /// Written fields as an object: a key with holes (`{ "${k}": v }`)
+    /// is computed, so the object is built at run time
+    /// (`functions::OBJECT`).
+    fn object_fields(
+        &mut self,
+        rc: &mut Rc,
+        fields: &[SyntaxNode],
+        pos: Pos,
+        pre: &mut Vec<Lit>,
+    ) -> L<Term> {
+        let computed = fields
+            .iter()
+            .filter_map(|f| tokens(f).next())
             .any(|k| k.kind() == STRING && !self.text && has_hole(k.text()));
         if computed {
-            return self.computed_object(rc, n, pos, pre);
+            return self.computed_object(rc, fields, pos, pre);
         }
         let mut m = BTreeMap::new();
-        for f in n.children().filter(|c| c.kind() == OBJECT_FIELD) {
-            let k = tokens(&f).next().ok_or(Skip)?;
+        for f in fields {
+            let k = tokens(f).next().ok_or(Skip)?;
             let key = if k.kind() == STRING {
                 self.string(&k)?
             } else {
@@ -6515,9 +6528,7 @@ impl<'u> Lowerer<'u> {
                     self.realize(rc, res, pos, pre, self.span_of(k.text_range()))?
                 }
             };
-            if m.insert(key.clone(), v).is_some() {
-                return self.error(self.span(&f), format!("key `{key}` given twice"));
-            }
+            m.insert(key, v);
         }
         Ok(Term::Obj(m))
     }
@@ -6659,24 +6670,18 @@ impl<'u> Lowerer<'u> {
     fn computed_object(
         &mut self,
         rc: &mut Rc,
-        n: &SyntaxNode,
+        fields: &[SyntaxNode],
         pos: Pos,
         pre: &mut Vec<Lit>,
     ) -> L<Term> {
         let mut args = Vec::new();
-        let mut keys = BTreeSet::new();
-        for f in n.children().filter(|c| c.kind() == OBJECT_FIELD) {
-            let k = tokens(&f).next().ok_or(Skip)?;
+        for f in fields {
+            let k = tokens(f).next().ok_or(Skip)?;
             let key = match k.kind() {
                 STRING => self.string_term(rc, &k, pre)?,
                 _ => str_term(k.text()),
             };
-            if let Term::Val(Value::Str(name)) = &key
-                && !keys.insert(name.clone())
-            {
-                return self.error(self.span(&f), format!("key `{name}` given twice"));
-            }
-            let v = match terms(&f).next() {
+            let v = match terms(f).next() {
                 Some(t) => self.term(rc, &t, pos, pre)?,
                 // `{ a }` is `{ a: a }`.
                 None => {

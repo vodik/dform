@@ -3169,6 +3169,8 @@ impl Cx<'_> {
                     .collect::<Option<Vec<_>>>()?;
                 call(&name, &args)
             }
+            // A spread's value is the lowering's (R-199), not computed again.
+            LIST | OBJECT if n.children().any(|c| c.kind() == SPREAD) => None,
             LIST => n
                 .children()
                 .map(|x| self.eval(&x))
