@@ -313,6 +313,17 @@ struct Field {
     span: Span,
 }
 
+/// `x = r.p` with `r` a reference (`c = s.vpc.cidr`, `__path(Vpc,
+/// "cidr")`): `x` takes the type the schema gives the attribute of the
+/// resource `r` names, once `r`'s type is known.
+struct Through {
+    rule: usize,
+    var: String,
+    path: String,
+    into: usize,
+    span: Span,
+}
+
 /// One rule's variables.
 #[derive(Default)]
 struct Vars(BTreeMap<String, usize>);
@@ -325,6 +336,7 @@ struct Pass<'a> {
     checks: Vec<Check>,
     members: Vec<Member>,
     fields: Vec<Field>,
+    throughs: Vec<Through>,
     /// Each rule's (statement's) variables.
     vars: Vec<Vars>,
     /// A rule head's variable names per column, for the signature.
@@ -655,6 +667,18 @@ impl Pass<'_> {
                     }
                     (Term::Var(x), t) | (t, Term::Var(x)) => {
                         let n = self.var(rule, x);
+                        if let Term::Func { name, args } = t
+                            && let ("__path", [Term::Var(v), Term::Val(Value::Str(path))]) =
+                                (name.as_str(), args.as_slice())
+                        {
+                            self.throughs.push(Through {
+                                rule,
+                                var: v.clone(),
+                                path: path.clone(),
+                                into: n,
+                                span,
+                            });
+                        }
                         self.shape_of(n, t, span);
                         if let Some((ty, what)) = self.term_type(t) {
                             self.s.hard(n, ty, span, what);
@@ -850,6 +874,7 @@ pub fn infer(
         checks: Vec::new(),
         members: Vec::new(),
         fields: Vec::new(),
+        throughs: Vec::new(),
         vars: Vec::new(),
         head_names: BTreeMap::new(),
         diags: Vec::new(),
@@ -958,6 +983,10 @@ fn is_any(t: Option<&TypeExpr>) -> bool {
 fn shown_term(t: &Term) -> String {
     match t {
         Term::Var(v) => shown_var(v),
+        Term::Func { name, args } if name == "__path" => match args.as_slice() {
+            [Term::Var(v), Term::Val(Value::Str(path))] => format!("{}.{path}", shown_var(v)),
+            _ => spell::term(t),
+        },
         t => spell::term(t),
     }
 }
@@ -987,6 +1016,20 @@ impl Pass<'_> {
         arities: &BTreeMap<String, std::collections::BTreeSet<usize>>,
     ) -> Result<Inferred> {
         let mut diags = Vec::new();
+        for t in std::mem::take(&mut self.throughs) {
+            let Some(&n) = self.vars[t.rule].0.get(&t.var) else {
+                continue;
+            };
+            let r = self.s.find(n);
+            let ty = self.s.hard[r].iter().find_map(|h| match &h.ty {
+                Ty::Ref(u) => self.through(u, &t.path),
+                _ => None,
+            });
+            if let Some(ty) = ty {
+                let what = format!("{}.{}", shown_var(&t.var), t.path);
+                self.s.hard(t.into, ty, t.span, what);
+            }
+        }
         let mut settled: BTreeMap<usize, Option<Ty>> = BTreeMap::new();
         let n = self.s.parent.len();
         for i in 0..n {
@@ -1008,6 +1051,19 @@ impl Pass<'_> {
                         settled.get(&r).cloned().flatten()
                     }
                     Term::Val(v) => kind(v),
+                    // `s.vpc.cidr`: the attribute of the resource `s.vpc`
+                    // names.
+                    Term::Func { name, args } if name == "__path" => match args.as_slice() {
+                        [Term::Var(v), Term::Val(Value::Str(path))] => {
+                            let n = *p.vars[c.rule].0.get(v)?;
+                            let r = p.s.find(n);
+                            match settled.get(&r).cloned().flatten()? {
+                                Ty::Ref(u) => p.through(&u, path),
+                                _ => None,
+                            }
+                        }
+                        _ => None,
+                    },
                     t => p.term_type(t).map(|(t, _)| t),
                 }
             };
@@ -1146,6 +1202,27 @@ impl Pass<'_> {
         Ok(Inferred {
             signatures,
             settled: by_col,
+        })
+    }
+
+    /// The type the schema gives `path` read through a reference to a
+    /// `typ` (one type), hop by hop where the path passes another
+    /// reference: `cidr` of a `net.vpc`, `vpc.cidr` of a `net.subnet`.
+    fn through(&self, typ: &str, path: &str) -> Option<Ty> {
+        if typ.contains('|') {
+            return None;
+        }
+        let schema = self.schema?;
+        if let Some(a) = schema.attr(typ, path) {
+            return Some(Ty::parse(&a.ty));
+        }
+        let keys = crate::ir::path_keys(path);
+        (1..keys.len()).rev().find_map(|i| {
+            let head = keys[..i].join(".");
+            match Ty::parse(&schema.attr(typ, &head)?.ty) {
+                Ty::Ref(u) => self.through(&u, &keys[i..].join(".")),
+                _ => None,
+            }
         })
     }
 

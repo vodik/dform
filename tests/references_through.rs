@@ -101,6 +101,35 @@ fn a_reference_to_a_resource_not_wanted_is_located() {
     );
 }
 
+/// A read through a reference is typed by the attribute it reads: the
+/// network's `cidr` is a string, so comparing it with an int is an error
+/// as a direct read's is, where it was a deny that always held.
+#[test]
+fn a_read_through_a_reference_is_typed_by_the_schema() {
+    let s = scratch(
+        "refs-through-typed",
+        &format!("{NETS}\ndeny \"odd\" {{ subnet: s }} where s in net.subnet, s.vpc.cidr != 5\n"),
+    );
+    let r = mock(&s, &["plan"]).failure();
+    assert!(
+        r.stderr
+            .contains("`vpc.cidr != 5` compares string with int: they are never equal"),
+        "{}",
+        r.stderr
+    );
+    s.write(
+        "p.df",
+        &s.read("p.df")
+            .replace("s.vpc.cidr != 5", "c = s.vpc.cidr, c == 5"),
+    );
+    let r = mock(&s, &["plan"]).failure();
+    assert!(
+        r.stderr.contains("is string, not the int 5"),
+        "{}",
+        r.stderr
+    );
+}
+
 /// `s.vpc == v` with `v in net.vpc` holds for the same resource and `!=`
 /// for another, and `v in [s.vpc]` is membership of the reference, where
 /// a reference compared with an address string was never equal.
