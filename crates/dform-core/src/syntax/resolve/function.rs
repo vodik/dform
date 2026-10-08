@@ -158,7 +158,7 @@ impl Lowerer<'_> {
             span,
         };
         Ok(vec![
-            Stmt::Rule(RuleStmt { head, body }),
+            Stmt::Rule(RuleStmt::new(head, body)),
             Stmt::Extern(demand),
             Stmt::Mode(Extern {
                 pred: name,

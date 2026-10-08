@@ -1,4 +1,4 @@
-use crate::ast::{Atom, Lit, Program, RuleStmt, Span, Term, str_term};
+use crate::ast::{Atom, Helper, Lit, Program, RuleStmt, Span, Term, str_term};
 use crate::circuit::{self, Circuit, Leaf, NodeId};
 use crate::diag;
 use crate::ir::ops::{self, AggKind};
@@ -335,8 +335,21 @@ struct Compiled {
     sigma: NodeId,
     /// Predicates defined by an aggregate rule, and `attr`.
     aggregates: BTreeSet<String>,
+    /// Predicates a `not { .. }` helper defines, in whatever scope
+    /// (`__neg_0`, a module's `m::__neg_0`, a call site's `S::__neg_0`).
+    negations: BTreeSet<String>,
     /// The stratum `stuck/4` is derived at, when a rule reads it.
     stuck_at: Option<usize>,
+}
+
+impl Compiled {
+    /// Whether `s` is a helper's: the rule it was written for is stuck
+    /// when it is, and says so in the program's words.
+    fn is_helper(&self, s: &Stuck) -> bool {
+        s.rule
+            .and_then(|i| self.rules.get(i))
+            .is_some_and(|r| r.helper.is_some())
+    }
 }
 
 /// Everything an evaluation accumulates.
@@ -489,6 +502,7 @@ fn start(
         .map(|r| r.head.pred.clone())
         .chain(["attr".to_string(), transform::ATTR_BASE.to_string()])
         .collect();
+    let negations = Helper::Negation.heads(&rules);
     let attrs = AttrAggregate::new(&strata, &graph.split);
     let stuck_at = strata.get(&Node::plain(partition::STUCK)).copied();
     Ok((
@@ -502,6 +516,7 @@ fn start(
             rule_leaf,
             sigma,
             aggregates,
+            negations,
             stuck_at,
         },
         State {
@@ -583,6 +598,7 @@ fn run_strata(
                 text: &c.rule_text[i],
                 known,
                 aggregates: &c.aggregates,
+                negations: &c.negations,
                 found: RefCell::new(Vec::new()),
             })
             .collect();
@@ -723,9 +739,9 @@ fn finish(c: &Compiled, st: State) -> Result<(EvalResult, Vec<String>)> {
         }
     }
 
-    // A compiler-generated companion (`__ref_dep`) is stuck exactly when
-    // the contribution it shadows is.
-    stucks.retain(|s| !s.head.pred.starts_with("__"));
+    // A helper (a companion `__ref_dep`, a `not { .. }` body) is stuck
+    // exactly when the rule it was written for is.
+    stucks.retain(|s| !c.is_helper(s));
     stucks.sort();
     stucks.dedup();
     // Guard on the stratifier: stuck/4 was derived with every instance.
@@ -785,7 +801,7 @@ fn may_derive(
         .rules
         .iter()
         .enumerate()
-        .filter(|(_, r)| r.head.pred.starts_with("__"));
+        .filter(|(_, r)| r.helper.is_some());
     let skip: BTreeSet<usize> = (stucks.iter().filter_map(|s| s.rule))
         .chain(helpers.map(|(i, _)| i))
         .collect();
@@ -831,6 +847,7 @@ fn may_derive_over(
                     text: "",
                     known,
                     aggregates: &c.aggregates,
+                    negations: &c.negations,
                     found: RefCell::new(Vec::new()),
                 };
                 let src = Src {
@@ -929,6 +946,7 @@ fn derive_stuck(
             text: &c.rule_text[i],
             known,
             aggregates: &c.aggregates,
+            negations: &c.negations,
             found: RefCell::new(Vec::new()),
         };
         let src = Src {
@@ -940,7 +958,7 @@ fn derive_stuck(
         eval_rule(r, &c.plans[i], &src, &rec)?;
         found.extend(rec.found.into_inner());
     }
-    found.retain(|s| !s.head.pred.starts_with("__"));
+    found.retain(|s| !c.is_helper(s));
     found.sort();
     found.dedup();
     record_stucks(c, prov, &found);
@@ -984,13 +1002,14 @@ pub fn query(body: &[Lit], facts: &BTreeSet<Atom>) -> Result<Vec<Answer>> {
         span: Default::default(),
     };
     let known = RefCell::new(stuck::Known::default());
-    let aggregates = BTreeSet::new();
+    let (aggregates, negations) = (BTreeSet::new(), BTreeSet::new());
     let rec = Rec {
         rule: 0,
         head: &head,
         text: "query",
         known: &known,
         aggregates: &aggregates,
+        negations: &negations,
         found: RefCell::new(Vec::new()),
     };
     let all = Window::below(store.len());
@@ -2141,6 +2160,8 @@ struct Rec<'a> {
     /// Predicates defined by an aggregate rule (and `attr`): a positive read
     /// of one of their stuck groups is undetermined.
     aggregates: &'a BTreeSet<String>,
+    /// Predicates a `not { .. }` helper defines ([`Helper::Negation`]).
+    negations: &'a BTreeSet<String>,
     found: RefCell<Vec<Stuck>>,
 }
 
@@ -2904,14 +2925,15 @@ fn eval_body(body: &[Lit], src: &Src, rec: &Rec) -> Result<Vec<Row>> {
 /// the negation is undetermined while a stuck head of `p` unifies with
 /// `p(t)`. Fresh nulls are decided under the Unique Name Assumption.
 ///
-/// A helper the compiler wrote for a `not { .. }` body (`__neg_N`) is
+/// A helper the compiler wrote for a `not { .. }` body (`__neg_N`, in
+/// whatever scope: [`Helper::Negation`]) is
 /// derived from the very values the outer row binds, so its pattern is
 /// matched as it is, nulls and all: whether `__neg_N(v)` holds is its body
 /// over `v`, which is stuck itself when it reads a null of `v` (Rule 3
 /// then). A pod spec holding the server's computed `dnsPolicy` does not
 /// make `not p.securityContext.runAsNonRoot == true` wait on it (R-193).
 fn eval_not(grounded: &Atom, src: &Src, s: &HashMap<String, Value>, rec: &Rec) -> bool {
-    let helper = grounded.pred.starts_with("__neg_");
+    let helper = rec.negations.contains(&grounded.pred);
     let mut open = BTreeSet::new();
     for t in grounded.args.iter().filter(|_| !helper) {
         if let Term::Val(v) = t

@@ -163,9 +163,9 @@ fn an_unbound_argument_is_a_located_error() {
     let program = Program {
         statements: vec![
             Stmt::Fact(atom("q", vec![str_term("a")], span)),
-            Stmt::Rule(RuleStmt {
-                head: atom("p", vec![x()], span),
-                body: vec![
+            Stmt::Rule(RuleStmt::new(
+                atom("p", vec![x()], span),
+                vec![
                     Lit::Pos(atom("q", vec![x()], span)),
                     Lit::Pos(atom(
                         "str.starts_with",
@@ -173,7 +173,7 @@ fn an_unbound_argument_is_a_located_error() {
                         span,
                     )),
                 ],
-            }),
+            )),
         ],
         stack: None,
     };

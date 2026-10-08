@@ -1,5 +1,5 @@
 use crate::ast::{
-    Atom, Extern, Lit, Program, Rank, Resource, RuleStmt, Span, Stmt, Term, str_term, var,
+    Atom, Extern, Helper, Lit, Program, Rank, Resource, RuleStmt, Span, Stmt, Term, str_term, var,
 };
 use crate::diag::{self, Diagnostic, Diagnostics};
 use crate::schema::Schema;
@@ -385,6 +385,7 @@ fn lower_contributions(program: &Program) -> Result<Program> {
             Stmt::Rule(r) => Stmt::Rule(RuleStmt {
                 head: contribution_head(r.head)?,
                 body: attr_lits(r.body)?,
+                ..r
             }),
             other => other,
         });
@@ -498,10 +499,7 @@ fn declassified(mut program: Program) -> Program {
         for reason in found {
             let mut head = atom("declassified", vec![str_term(&site), reason]);
             head.span = r.head.span;
-            more.push(Stmt::Rule(RuleStmt {
-                head,
-                body: r.body.clone(),
-            }));
+            more.push(Stmt::Rule(RuleStmt::new(head, r.body.clone())));
         }
     }
     program.statements.extend(more);
@@ -565,7 +563,7 @@ fn rewrite_stmt_records(stmt: Stmt, schemas: &BTreeMap<String, Vec<String>>) -> 
         Stmt::Rule(r) => {
             let head = rewrite_atom_records(r.head, schemas, Ctx::Head)?;
             let body = rewrite_lits_records(r.body, schemas)?;
-            Stmt::Rule(RuleStmt { head, body })
+            Stmt::Rule(RuleStmt { head, body, ..r })
         }
         // A module's or component's own `decl`s name its relations'
         // fields inside it, over any outer one of the same name.
@@ -692,10 +690,7 @@ fn fact_or_rule(head: Atom, body: &[Lit]) -> Stmt {
     if body.is_empty() && head.args.iter().all(is_ground_term) {
         Stmt::Fact(head)
     } else {
-        Stmt::Rule(RuleStmt {
-            head,
-            body: body.to_vec(),
-        })
+        Stmt::Rule(RuleStmt::new(head, body.to_vec()))
     }
 }
 
@@ -910,15 +905,16 @@ fn rewrite_term_listcomps(
                 }))
                 .collect();
 
-            helpers.push(Stmt::Rule(RuleStmt {
-                head: Atom {
+            helpers.push(Stmt::Rule(RuleStmt::helper(
+                Helper::Comprehension,
+                Atom {
                     pred: lc_pred.clone(),
                     args: helper_head_args,
                     record: None,
                     span: Default::default(),
                 },
                 body,
-            }));
+            )));
 
             let mut join_args: Vec<Term> = key_vars.iter().cloned().map(Term::Var).collect();
             join_args.push(list_var.clone());
@@ -1323,20 +1319,21 @@ fn unread_field_reports(r: &Resource, n: &mut usize) -> Vec<Stmt> {
         }
         let mut with_read = rest.clone();
         with_read.push(Lit::Pos(read.clone()));
-        out.push(Stmt::Rule(RuleStmt {
-            head: helper.clone(),
-            body: with_read,
-        }));
+        out.push(Stmt::Rule(RuleStmt::helper(
+            Helper::FieldRead,
+            helper.clone(),
+            with_read,
+        )));
         let mut body = rest;
         body.push(Lit::Pos(exists));
         body.push(Lit::Not(helper));
-        out.push(Stmt::Rule(RuleStmt {
-            head: Atom {
+        out.push(Stmt::Rule(RuleStmt::new(
+            Atom {
                 span: read.span,
                 ..atom("warn", vec![str_term(UNREAD_FIELD), Term::Obj(ctx)])
             },
             body,
-        }));
+        )));
     }
     out
 }
@@ -1376,13 +1373,14 @@ fn not_planned_report(r: &Resource) -> Option<Stmt> {
     }
     let mut body = clause;
     body.push(Lit::Not(atom("want", vec![r.typ.clone(), r.name.clone()])));
-    Some(Stmt::Rule(RuleStmt {
-        head: Atom {
+    Some(Stmt::Rule(RuleStmt::helper(
+        Helper::Check,
+        Atom {
             span: r.span,
             ..atom(NOT_PLANNED, vec![r.typ.clone(), r.name.clone()])
         },
         body,
-    }))
+    )))
 }
 
 /// The relation of [`not_planned_report`].
@@ -1505,8 +1503,8 @@ pub fn computed_prelude(schema: &Schema) -> Vec<RuleStmt> {
         args: vec![t.clone(), var("__A"), p.clone()],
     };
     let mut out = vec![
-        RuleStmt {
-            head: atom(
+        RuleStmt::new(
+            atom(
                 "resolve",
                 vec![
                     Term::Func {
@@ -1516,18 +1514,18 @@ pub fn computed_prelude(schema: &Schema) -> Vec<RuleStmt> {
                     var("__V"),
                 ],
             ),
-            body: vec![
+            vec![
                 Lit::Pos(atom("identity", vec![var("__T"), var("__A"), var("__Rid")])),
                 Lit::Pos(atom(
                     "world_attr",
                     vec![var("__T"), var("__Rid"), var("__P"), var("__V")],
                 )),
             ],
-        },
-        RuleStmt {
-            head: atom("resolved", vec![var("__L")]),
-            body: vec![Lit::Pos(atom("resolve", vec![var("__L"), Term::Wildcard]))],
-        },
+        ),
+        RuleStmt::new(
+            atom("resolved", vec![var("__L")]),
+            vec![Lit::Pos(atom("resolve", vec![var("__L"), Term::Wildcard]))],
+        ),
     ];
     for (t, p, class, rank) in rows {
         let (tt, pt) = (str_term(&t), str_term(&p));
@@ -1546,13 +1544,13 @@ pub fn computed_prelude(schema: &Schema) -> Vec<RuleStmt> {
             )
         };
         if class != NullClass::Secret {
-            out.push(RuleStmt {
-                head: contribution(var("__V")),
-                body: vec![
+            out.push(RuleStmt::new(
+                contribution(var("__V")),
+                vec![
                     want.clone(),
                     Lit::Pos(atom("resolve", vec![label(&tt, &pt), var("__V")])),
                 ],
-            });
+            ));
         }
         let ty = schema
             .attr(&t, &p)
@@ -1572,10 +1570,7 @@ pub fn computed_prelude(schema: &Schema) -> Vec<RuleStmt> {
         if class != NullClass::Secret {
             body.push(Lit::Not(atom("resolved", vec![label(&tt, &pt)])));
         }
-        out.push(RuleStmt {
-            head: contribution(null),
-            body,
-        });
+        out.push(RuleStmt::new(contribution(null), body));
     }
     out
 }
@@ -1803,10 +1798,7 @@ pub fn rewrite_computed_refs(
     let mut unanswered = Vec::new();
     let rules = facts
         .into_iter()
-        .map(|f| RuleStmt {
-            head: f,
-            body: vec![],
-        })
+        .map(|f| RuleStmt::new(f, vec![]))
         .chain(rules);
     for r in rules {
         let mut head_reads = Vec::new();
@@ -1846,8 +1838,9 @@ pub fn rewrite_computed_refs(
         // depends on it (`ir::compile_resources` reads `__ref_dep`).
         if head.pred == "arg" && head.args.len() == 5 {
             for (read, _) in &head_reads {
-                out_rules.push(RuleStmt {
-                    head: atom(
+                out_rules.push(RuleStmt::helper(
+                    Helper::RefDep,
+                    atom(
                         REF_DEP,
                         vec![
                             head.args[0].clone(),
@@ -1856,11 +1849,15 @@ pub fn rewrite_computed_refs(
                             read.args[1].clone(),
                         ],
                     ),
-                    body: body.clone(),
-                });
+                    body.clone(),
+                ));
             }
         }
-        out_rules.push(RuleStmt { head, body });
+        out_rules.push(RuleStmt {
+            head,
+            body,
+            helper: r.helper,
+        });
     }
     out_rules.extend(unanswered);
     (out_rules, out_facts)
@@ -1962,13 +1959,14 @@ fn unanswered_read(head: &Atom, read: &Atom, path: &str, mut body: Vec<Lit>) -> 
     if let Some(at) = diag::place(head.span) {
         ctx.insert("at".to_string(), str_term(&at));
     }
-    RuleStmt {
-        head: Atom {
+    RuleStmt::helper(
+        Helper::Check,
+        Atom {
             span: head.span,
             ..atom(UNANSWERED, vec![Term::Obj(ctx)])
         },
         body,
-    }
+    )
 }
 
 /// Each reference `ref(T, A, "")` of a constant type in `t`: its type and

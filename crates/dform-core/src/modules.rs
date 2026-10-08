@@ -31,8 +31,8 @@
 //! path.
 
 use crate::ast::{
-    Atom, FieldAssign, InputDecl, Lit, OutputDecl, Program, Resource, RuleStmt, Span, Stmt, Term,
-    TypeExpr, atom, str_term,
+    Atom, FieldAssign, Helper, InputDecl, Lit, OutputDecl, Program, Resource, RuleStmt, Span, Stmt,
+    Term, TypeExpr, atom, str_term,
 };
 use crate::diag::{self, Diagnostic, Diagnostics};
 use crate::inputs::Declared;
@@ -61,7 +61,7 @@ fn fact_or_rule(head: Atom, body: Vec<Lit>) -> Stmt {
     if body.is_empty() && head.args.iter().all(is_ground) {
         Stmt::Fact(head)
     } else {
-        Stmt::Rule(RuleStmt { head, body })
+        Stmt::Rule(RuleStmt::new(head, body))
     }
 }
 
@@ -197,14 +197,14 @@ fn lets(stmts: Vec<Stmt>, scope: &str, names: Option<&Names>) -> Vec<Stmt> {
             .cloned()
             .unwrap_or_else(|| k.clone());
         let v = Term::Var("V".into());
-        out.push(Stmt::Rule(RuleStmt {
-            head: atom(&pred, vec![v.clone()], span),
-            body: vec![Lit::Pos(atom(
+        out.push(Stmt::Rule(RuleStmt::new(
+            atom(&pred, vec![v.clone()], span),
+            vec![Lit::Pos(atom(
                 "attr",
                 vec![str_term(LET), str_term(scope), str_term(&k), v],
                 span,
             ))],
-        }));
+        )));
     }
     out
 }
@@ -240,7 +240,10 @@ pub fn exclusive(name: &str, alts: &[Alternative]) -> Vec<Stmt> {
 /// The `i`th declaration of `name` holds while its clause does:
 /// `__declared(name, i) :- clause`.
 pub fn declared(name: &str, i: usize, clause: Vec<Lit>, span: Span) -> Stmt {
-    fact_or_rule(held(name, i, span), clause)
+    match clause.is_empty() {
+        true => Stmt::Fact(held(name, i, span)),
+        false => Stmt::Rule(RuleStmt::helper(Helper::Check, held(name, i, span), clause)),
+    }
 }
 
 fn held(name: &str, i: usize, span: Span) -> Atom {
@@ -266,10 +269,10 @@ pub fn denies(name: &str, sites: &[(String, Span)]) -> Vec<Stmt> {
                 site(a),
                 site(b)
             );
-            out.push(Stmt::Rule(RuleStmt {
-                head: atom("deny", vec![str_term(&msg)], b.1),
-                body: vec![Lit::Pos(held(name, i, a.1)), Lit::Pos(held(name, j, b.1))],
-            }));
+            out.push(Stmt::Rule(RuleStmt::new(
+                atom("deny", vec![str_term(&msg)], b.1),
+                vec![Lit::Pos(held(name, i, a.1)), Lit::Pos(held(name, j, b.1))],
+            )));
         }
     }
     out
@@ -1093,10 +1096,10 @@ impl Cx<'_> {
                     name: ABSOLUTE.into(),
                     args: vec![str_term(&format!("{abs}{rest}"))],
                 };
-                Stmt::Rule(RuleStmt {
-                    head: cell(str_term(&format!("{scope}{rest}"))),
-                    body: vec![Lit::Pos(cell(stated))],
-                })
+                Stmt::Rule(RuleStmt::new(
+                    cell(str_term(&format!("{scope}{rest}"))),
+                    vec![Lit::Pos(cell(stated))],
+                ))
             })
             .collect()
     }
@@ -1134,10 +1137,7 @@ fn gate(
     let mut out: Vec<Stmt> = stmts
         .into_iter()
         .map(|s| match s {
-            Stmt::Fact(a) => Stmt::Rule(RuleStmt {
-                head: a,
-                body: vec![on.clone()],
-            }),
+            Stmt::Fact(a) => Stmt::Rule(RuleStmt::new(a, vec![on.clone()])),
             Stmt::Rule(mut r) => {
                 r.body.insert(0, on.clone());
                 Stmt::Rule(r)
@@ -1150,15 +1150,9 @@ fn gate(
             other => other,
         })
         .collect();
-    out.push(Stmt::Rule(RuleStmt {
-        head: own,
-        body: b.to_vec(),
-    }));
+    out.push(Stmt::Rule(RuleStmt::new(own, b.to_vec())));
     if record {
-        out.push(Stmt::Rule(RuleStmt {
-            head: fact,
-            body: vec![on],
-        }));
+        out.push(Stmt::Rule(RuleStmt::new(fact, vec![on])));
     }
     out
 }
@@ -1472,14 +1466,15 @@ fn module_stmts(scope: &str, iface: &Interface, body: Vec<Stmt>) -> Vec<Stmt> {
 fn rows_of(o: &OutputDecl) -> Stmt {
     let arity = o.relation.as_ref().map_or(0, Vec::len);
     let vars: Vec<Term> = (0..arity).map(|i| Term::Var(format!("X{i}"))).collect();
-    Stmt::Rule(RuleStmt {
-        head: atom(
+    Stmt::Rule(RuleStmt::helper(
+        Helper::Check,
+        atom(
             ROWS,
             vec![str_term(&o.name), Term::List(vars.clone())],
             o.span,
         ),
-        body: vec![Lit::Pos(atom(&o.name, vars, o.span))],
-    })
+        vec![Lit::Pos(atom(&o.name, vars, o.span))],
+    ))
 }
 
 /// `output p` of a stack: the value it publishes, its rows as a list of
@@ -1566,14 +1561,11 @@ pub fn refinement(i: &InputDecl, scope: &str) -> Vec<Stmt> {
         i.span,
     );
     vec![
-        Stmt::Rule(RuleStmt {
-            head: ok.clone(),
-            body,
-        }),
-        Stmt::Rule(RuleStmt {
-            head: deny,
-            body: read.into_iter().chain([Lit::Not(ok)]).collect(),
-        }),
+        Stmt::Rule(RuleStmt::helper(Helper::Check, ok.clone(), body)),
+        Stmt::Rule(RuleStmt::new(
+            deny,
+            read.into_iter().chain([Lit::Not(ok)]).collect(),
+        )),
     ]
 }
 
@@ -1648,10 +1640,10 @@ fn input_reader(scope: &str, i: &InputDecl, pred: &dyn Fn(&str) -> String) -> Ve
         i.span,
     ))];
     body.extend(i.guard.iter().cloned());
-    let mut out = vec![Stmt::Rule(RuleStmt {
-        head: atom(&pred(&i.name), vec![v], i.span),
+    let mut out = vec![Stmt::Rule(RuleStmt::new(
+        atom(&pred(&i.name), vec![v], i.span),
         body,
-    })];
+    ))];
     if !i.guard.is_empty() && i.default.is_none() && i.fields.is_empty() {
         let who = match scope {
             "" => format!("input {}", i.name),
@@ -1659,8 +1651,8 @@ fn input_reader(scope: &str, i: &InputDecl, pred: &dyn Fn(&str) -> String) -> Ve
         };
         let mut body = i.guard.clone();
         body.push(Lit::Not(atom(&pred(&i.name), vec![Term::Wildcard], i.span)));
-        out.push(Stmt::Rule(RuleStmt {
-            head: atom(
+        out.push(Stmt::Rule(RuleStmt::new(
+            atom(
                 "deny",
                 vec![str_term(&format!(
                     "{who} is required and has no value: its clause holds in this deployment"
@@ -1668,7 +1660,7 @@ fn input_reader(scope: &str, i: &InputDecl, pred: &dyn Fn(&str) -> String) -> Ve
                 i.span,
             ),
             body,
-        }));
+        )));
     }
     for l in crate::inputs::leaves(i) {
         let (checkable, _) = crate::refine::split_input(&l);
@@ -1748,24 +1740,21 @@ fn given_rules(scope: &str, address: &str, i: &InputDecl) -> Vec<Stmt> {
                 span,
             )
         };
-        out.push(Stmt::Rule(RuleStmt {
-            head: head(v.clone()),
-            body: vec![Lit::Pos(atom(
+        out.push(Stmt::Rule(RuleStmt::new(
+            head(v.clone()),
+            vec![Lit::Pos(atom(
                 "input",
                 vec![str_term(&crate::types::dotted(address, &p)), v.clone()],
                 span,
             ))],
-        }));
+        )));
         // A map's key, `input("labels.team", V)`: the entry `{team: V}`.
         if leaf.is_some_and(|l| crate::inputs::is_map(&l.ty)) {
             let k = Term::Var("K".into());
             let mut body = vec![Lit::Pos(atom("input", vec![k.clone(), v.clone()], span))];
             let prefix = crate::types::dotted(address, &p);
             body.extend(crate::inputs::map_entry_lits(&k, &prefix, v, "E"));
-            out.push(Stmt::Rule(RuleStmt {
-                head: head(Term::Var("E".into())),
-                body,
-            }));
+            out.push(Stmt::Rule(RuleStmt::new(head(Term::Var("E".into())), body)));
         }
     }
     out
@@ -1846,6 +1835,7 @@ fn rename_stmt(stmt: Stmt, names: &Names) -> Stmt {
         Stmt::Rule(r) => Stmt::Rule(RuleStmt {
             head: rename_atom(r.head, names),
             body: lits(r.body),
+            ..r
         }),
         Stmt::Resource(r) => Stmt::Resource(Resource {
             fields: rename_fields(r.fields, names),
@@ -1942,6 +1932,7 @@ fn rewrite_stmt(stmt: Stmt, sc: Sc) -> Stmt {
         Stmt::Rule(r) => Stmt::Rule(RuleStmt {
             head: rewrite_atom(r.head, sc),
             body: lits(r.body),
+            ..r
         }),
         Stmt::Resource(r) => Stmt::Resource(Resource {
             typ: rewrite_term(r.typ, sc),
@@ -2120,6 +2111,7 @@ fn unmark_stmt(s: Stmt) -> Stmt {
         Stmt::Rule(r) => Stmt::Rule(RuleStmt {
             head: atom(r.head),
             body: lits(r.body),
+            ..r
         }),
         Stmt::Resource(r) => Stmt::Resource(Resource {
             typ: term(r.typ),

@@ -273,7 +273,7 @@ impl Lowerer<'_> {
             {
                 let mut head = r.head;
                 head.args[*i] = call.clone();
-                return vec![Stmt::Rule(RuleStmt { head, body: base })];
+                return vec![Stmt::Rule(RuleStmt::new(head, base))];
             }
         }
         // The groups: the head's other variables and what the literals
@@ -303,16 +303,17 @@ impl Lowerer<'_> {
             self.agg_rules += 1;
             let mut args = group.clone();
             args.push(call.clone());
-            out.push(Stmt::Rule(RuleStmt {
-                head: atom_at(&pred, args, span),
-                body: base.clone(),
-            }));
+            out.push(Stmt::Rule(RuleStmt::helper(
+                Helper::Aggregate,
+                atom_at(&pred, args, span),
+                base.clone(),
+            )));
             let mut args = group.clone();
             args.push(var(v));
             body.push(Lit::Pos(atom_at(&pred, args, span)));
         }
         body.extend(post);
-        out.insert(0, Stmt::Rule(RuleStmt { head: r.head, body }));
+        out.insert(0, Stmt::Rule(RuleStmt::new(r.head, body)));
         out
     }
 }

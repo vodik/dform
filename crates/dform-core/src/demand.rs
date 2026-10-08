@@ -209,15 +209,15 @@ impl Lets {
                 }
                 let (scope, new) = sites.scope(&f, a.span, within.as_deref());
                 let copied = format!("{scope}::{}", program_name(&f));
-                rules.push(RuleStmt {
-                    head: Atom {
+                rules.push(RuleStmt::new(
+                    Atom {
                         pred: of(&copied),
                         args: a.args[..a.args.len() - 1].to_vec(),
                         record: None,
                         span: a.span,
                     },
-                    body: r.body[..j].to_vec(),
-                });
+                    r.body[..j].to_vec(),
+                ));
                 if new {
                     unions.push(union(&f, &copied, a, self.columns(&f, a.args.len())));
                     let names = self.renames(&f, &scope);
@@ -329,20 +329,20 @@ impl Sites {
 /// `f(A, .., V) :- copy(A, .., V)`: the copy's rows are `f`'s, its
 /// columns named as the let's.
 fn union(f: &str, copy: &str, site: &Atom, columns: Vec<Term>) -> RuleStmt {
-    RuleStmt {
-        head: Atom {
+    RuleStmt::new(
+        Atom {
             pred: f.to_string(),
             args: columns.clone(),
             record: None,
             span: site.span,
         },
-        body: vec![Lit::Pos(Atom {
+        vec![Lit::Pos(Atom {
             pred: copy.to_string(),
             args: columns,
             record: None,
             span: site.span,
         })],
-    }
+    )
 }
 
 /// `r` with the relations `names` renames renamed, its head and body.
@@ -356,6 +356,7 @@ fn rename(r: &RuleStmt, names: &BTreeMap<String, String>) -> RuleStmt {
     RuleStmt {
         head: atom(r.head.clone()),
         body: r.body.iter().cloned().map(|l| l.map(atom, |t| t)).collect(),
+        helper: r.helper,
     }
 }
 

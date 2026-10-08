@@ -230,7 +230,7 @@ impl Lowerer<'_> {
         Ok(if body.is_empty() {
             Stmt::Fact(head)
         } else {
-            Stmt::Rule(RuleStmt { head, body })
+            Stmt::Rule(RuleStmt::new(head, body))
         })
     }
 

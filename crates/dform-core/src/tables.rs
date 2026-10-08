@@ -1261,10 +1261,10 @@ pub fn expand_set_from(program: Program, declared: &mut [crate::inputs::Declared
                     at.clone(),
                 ],
             };
-            out.push(Stmt::Rule(RuleStmt {
-                head: atom("deny", vec![message], r.head.span),
+            out.push(Stmt::Rule(RuleStmt::new(
+                atom("deny", vec![message], r.head.span),
                 body,
-            }));
+            )));
             known.insert((scope.clone(), path.clone()));
         }
         for (path, cell, d) in &inputs {
@@ -1292,7 +1292,7 @@ pub fn expand_set_from(program: Program, declared: &mut [crate::inputs::Declared
             );
             head.args[2] = s(&top);
             head.args[3] = value;
-            out.push(Stmt::Rule(RuleStmt { head, body }));
+            out.push(Stmt::Rule(RuleStmt::new(head, body)));
             known.insert((scope.clone(), path.to_string()));
             // A leaf under a map input (`labels.team`) is its key: the
             // entry `{team: V}` at the input's own path, so the input
@@ -1323,7 +1323,7 @@ pub fn expand_set_from(program: Program, declared: &mut [crate::inputs::Declared
                 );
                 head.args[2] = s(&top);
                 head.args[3] = value;
-                out.push(Stmt::Rule(RuleStmt { head, body }));
+                out.push(Stmt::Rule(RuleStmt::new(head, body)));
             }
         }
         let mut body = r.body.clone();
@@ -1362,10 +1362,10 @@ pub fn expand_set_from(program: Program, declared: &mut [crate::inputs::Declared
                 Term::Var(p.clone()),
             ],
         };
-        out.push(Stmt::Rule(RuleStmt {
-            head: atom("deny", vec![message], r.head.span),
+        out.push(Stmt::Rule(RuleStmt::new(
+            atom("deny", vec![message], r.head.span),
             body,
-        }));
+        )));
     }
     for (scope, path) in known {
         out.push(Stmt::Fact(atom(

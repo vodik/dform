@@ -27,9 +27,9 @@ use super::SyntaxKind::{self, *};
 use super::parser as parse;
 use super::{SyntaxNode, SyntaxToken, tokens};
 use crate::ast::{
-    Atom, AttrDecl, BindArg, Config, Decl, Extern, ExternFn, FieldAssign, FieldOp, InputDecl,
-    Instance, Lit, Module, OutputDecl, Pending, PendingKind, Program, Rank, Resource, RuleStmt,
-    Span, Stmt, Term, TypeExpr, Via, str_term, var,
+    Atom, AttrDecl, BindArg, Config, Decl, Extern, ExternFn, FieldAssign, FieldOp, Helper,
+    InputDecl, Instance, Lit, Module, OutputDecl, Pending, PendingKind, Program, Rank, Resource,
+    RuleStmt, Span, Stmt, Term, TypeExpr, Via, str_term, var,
 };
 use crate::diag::Diagnostic;
 use crate::spell;
@@ -3269,10 +3269,7 @@ impl<'u> Lowerer<'u> {
             .collect();
         let mut out = self.doc_source(rc, n, pred, cols, vars.clone(), &mut body)?;
         self.check_bound(rc, &body, &[])?;
-        out.push(Stmt::Rule(RuleStmt {
-            head: atom_at(pred, vars, span),
-            body,
-        }));
+        out.push(Stmt::Rule(RuleStmt::new(atom_at(pred, vars, span), body)));
         Ok(out)
     }
 
@@ -3744,7 +3741,7 @@ impl<'u> Lowerer<'u> {
             span,
         };
         self.check_bound(&rc, &pre, &head.args.iter().collect::<Vec<_>>())?;
-        out.push(Stmt::Rule(RuleStmt { head, body: pre }));
+        out.push(Stmt::Rule(RuleStmt::new(head, pre)));
         Ok(out)
     }
 
@@ -3778,7 +3775,7 @@ impl<'u> Lowerer<'u> {
                 span,
             })
         } else {
-            Stmt::Rule(RuleStmt { head, body: pre })
+            Stmt::Rule(RuleStmt::new(head, pre))
         });
         Ok(out)
     }
@@ -4586,8 +4583,8 @@ impl<'u> Lowerer<'u> {
             &mut body,
         )?;
         self.check_bound(&rc, &body, &[])?;
-        out.push(Stmt::Rule(RuleStmt {
-            head: atom_at(
+        out.push(Stmt::Rule(RuleStmt::new(
+            atom_at(
                 "arg",
                 vec![
                     str_term(crate::modules::INPUT),
@@ -4599,7 +4596,7 @@ impl<'u> Lowerer<'u> {
                 span,
             ),
             body,
-        }));
+        )));
         Ok(out)
     }
 
@@ -4656,7 +4653,7 @@ impl<'u> Lowerer<'u> {
         Ok(vec![if body.is_empty() && !has_body {
             Stmt::Fact(head)
         } else {
-            Stmt::Rule(RuleStmt { head, body })
+            Stmt::Rule(RuleStmt::new(head, body))
         }])
     }
 
@@ -4730,7 +4727,7 @@ impl<'u> Lowerer<'u> {
         let mut out = vec![if body.is_empty() && !has_body {
             Stmt::Fact(head)
         } else {
-            Stmt::Rule(RuleStmt { head, body })
+            Stmt::Rule(RuleStmt::new(head, body))
         }];
         // Declared secret (R-153): the cell is, each path of it that is
         // (`modules::lets` scopes it).
@@ -4938,7 +4935,7 @@ impl<'u> Lowerer<'u> {
                 return Ok(if body.is_empty() && !has_body {
                     Stmt::Fact(head)
                 } else {
-                    Stmt::Rule(RuleStmt { head, body })
+                    Stmt::Rule(RuleStmt::new(head, body))
                 });
             }
             Target::Input(k) => {
@@ -4976,7 +4973,7 @@ impl<'u> Lowerer<'u> {
                 return Ok(if body.is_empty() && !has_body {
                     Stmt::Fact(head)
                 } else {
-                    Stmt::Rule(RuleStmt { head, body })
+                    Stmt::Rule(RuleStmt::new(head, body))
                 });
             }
         };
@@ -5012,7 +5009,7 @@ impl<'u> Lowerer<'u> {
         Ok(if body.is_empty() && !has_body {
             Stmt::Fact(head)
         } else {
-            Stmt::Rule(RuleStmt { head, body })
+            Stmt::Rule(RuleStmt::new(head, body))
         })
     }
 
@@ -5330,7 +5327,7 @@ impl<'u> Lowerer<'u> {
         Ok(vec![if body.is_empty() && !has_body {
             Stmt::Fact(head)
         } else {
-            Stmt::Rule(RuleStmt { head, body })
+            Stmt::Rule(RuleStmt::new(head, body))
         }])
     }
 
@@ -5690,10 +5687,11 @@ impl<'u> Lowerer<'u> {
             .cloned()
             .collect();
         body.extend(inner);
-        self.helpers.push(Stmt::Rule(RuleStmt {
-            head: head.clone(),
+        self.helpers.push(Stmt::Rule(RuleStmt::helper(
+            Helper::Negation,
+            head.clone(),
             body,
-        }));
+        )));
         // The helper's own variables are bound in the helper.
         for v in used.difference(&outer_bound) {
             rc.outer.insert(v.clone());

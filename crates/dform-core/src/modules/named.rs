@@ -59,6 +59,7 @@ impl Named<'_> {
             Stmt::Rule(r) => Stmt::Rule(RuleStmt {
                 head: self.atom(r.head),
                 body: lits(r.body),
+                ..r
             }),
             Stmt::Resource(r) => Stmt::Resource(Resource {
                 typ: self.term(r.typ),

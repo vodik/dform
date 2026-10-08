@@ -29,7 +29,7 @@
 //! its name in its block (`backup_days`); an input by its name.
 
 use crate::ast::{
-    Atom, AttrDecl, Lit, Program, RuleStmt, Span, Stmt, Term, TypeExpr, atom, str_term,
+    Atom, AttrDecl, Helper, Lit, Program, RuleStmt, Span, Stmt, Term, TypeExpr, atom, str_term,
 };
 use crate::diag::{Diagnostic, Diagnostics};
 use crate::lattice::{Constraint, Truth};
@@ -682,14 +682,11 @@ fn deny_rules(
     let mut deny_body = reads;
     deny_body.push(Lit::Not(ok.clone()));
     vec![
-        Stmt::Rule(RuleStmt {
-            head: ok,
-            body: ok_body,
-        }),
-        Stmt::Rule(RuleStmt {
-            head: atom("deny", vec![str_term(VIOLATED), Term::Obj(ctx)], span),
-            body: deny_body,
-        }),
+        Stmt::Rule(RuleStmt::helper(Helper::Check, ok, ok_body)),
+        Stmt::Rule(RuleStmt::new(
+            atom("deny", vec![str_term(VIOLATED), Term::Obj(ctx)], span),
+            deny_body,
+        )),
     ]
 }
 

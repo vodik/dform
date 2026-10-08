@@ -30,7 +30,7 @@
 //! no spans (DESIGN.org "No source locations"), so a rule is identified by its
 //! index in the lowered program and its pretty-printed text.
 
-use crate::ast::{Atom, Extern, Lit, Program, RuleStmt, Stmt, Term};
+use crate::ast::{Atom, Extern, Helper, Lit, Program, RuleStmt, Stmt, Term};
 use crate::schema::Schema;
 use crate::spell;
 use crate::transform;
@@ -959,6 +959,7 @@ fn per_type(rules: &[RuleStmt], facts: &[Atom], graph: &Graph) -> Option<Vec<Rul
                     ..r.head.clone()
                 },
                 body: r.body.iter().map(|l| l.subst(&env)).collect(),
+                helper: r.helper,
             });
         }
     }
@@ -1081,7 +1082,11 @@ fn per_key(r: &RuleStmt, vb: &ValueBody, schema: &Schema) -> Option<Vec<RuleStmt
             .collect();
         let mut head = r.head.clone();
         head.args[2] = Term::Val(Value::Str(crate::ir::name_segment(key).into_owned()));
-        out.push(RuleStmt { head, body });
+        out.push(RuleStmt {
+            head,
+            body,
+            helper: r.helper,
+        });
     }
     if rest {
         let mut body = r.body.clone();
@@ -1100,6 +1105,7 @@ fn per_key(r: &RuleStmt, vb: &ValueBody, schema: &Schema) -> Option<Vec<RuleStmt
         out.push(RuleStmt {
             head: r.head.clone(),
             body,
+            helper: r.helper,
         });
     }
     Some(out)
@@ -1411,6 +1417,7 @@ fn answer_has(
     let mut fresh = 0usize;
     let mut helpers: Vec<RuleStmt> = Vec::new();
     let mut patch: BTreeSet<String> = BTreeSet::new();
+    let negations = Helper::Negation.heads(&rules);
     let mut asked: BTreeSet<String> = BTreeSet::new();
     let mut out: Vec<RuleStmt> = Vec::with_capacity(rules.len());
     for mut r in rules {
@@ -1430,7 +1437,13 @@ fn answer_has(
                     let read: Vec<Lit> = lits.by_ref().take(n).collect();
                     match l {
                         Lit::Pos(_) => body.extend(known(read, &mut fresh)),
-                        _ => body.extend(not_known(read, &mut fresh, &mut helpers, &mut patch)),
+                        _ => body.extend(not_known(
+                            read,
+                            &negations,
+                            &mut fresh,
+                            &mut helpers,
+                            &mut patch,
+                        )),
                     }
                 }
                 continue;
@@ -1515,17 +1528,19 @@ fn known(mut read: Vec<Lit>, fresh: &mut usize) -> Vec<Lit> {
 /// The literals of a `not has r.p` that test it by value, waiting while
 /// the value is unknown: `not attr(T, A, P, _)` becomes `not
 /// __has_known_N(..)` over a helper that reads the value and holds when
-/// it is known ([`known`]); a helper the resolver made (`not __neg_N(..)`)
-/// is named in `patch`, its read made to wait in place.
+/// it is known ([`known`]); a helper the resolver made (`not __neg_N(..)`,
+/// one of `negations` in whatever scope) is named in `patch`, its read
+/// made to wait in place.
 fn not_known(
     read: Vec<Lit>,
+    negations: &BTreeSet<String>,
     fresh: &mut usize,
     helpers: &mut Vec<RuleStmt>,
     patch: &mut BTreeSet<String>,
 ) -> Vec<Lit> {
     read.into_iter()
         .map(|l| match l {
-            Lit::Not(a) if a.pred.starts_with("__neg_") => {
+            Lit::Not(a) if negations.contains(&a.pred) => {
                 patch.insert(a.pred.clone());
                 Lit::Not(a)
             }
@@ -1543,10 +1558,11 @@ fn not_known(
                     record: None,
                     span: a.span,
                 };
-                helpers.push(RuleStmt {
-                    head: head.clone(),
-                    body: known(vec![Lit::Pos(a)], fresh),
-                });
+                helpers.push(RuleStmt::helper(
+                    Helper::Known,
+                    head.clone(),
+                    known(vec![Lit::Pos(a)], fresh),
+                ));
                 Lit::Not(head)
             }
             l => l,

@@ -1,7 +1,7 @@
 pub use crate::lattice::Rank;
 use crate::value::Value;
 use std::cmp::Ordering;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::hash::{Hash, Hasher};
 
 #[derive(Debug, Clone, Default)]
@@ -517,6 +517,69 @@ pub struct AttrDecl {
 pub struct RuleStmt {
     pub head: Atom,
     pub body: Vec<Lit>,
+    /// What the compiler wrote the rule for, when it is no statement of
+    /// the program. Later passes and the engine read this, never the head's
+    /// name: a module's copy is `m::__neg_0`, a call site's `S::__neg_0`
+    /// (R-212). A rule rewritten from another keeps it.
+    pub helper: Option<Helper>,
+}
+
+impl RuleStmt {
+    /// A rule of the program, or one the compiler writes in its place.
+    pub fn new(head: Atom, body: Vec<Lit>) -> Self {
+        RuleStmt {
+            head,
+            body,
+            helper: None,
+        }
+    }
+
+    /// A rule the compiler writes beside the program's, read by them.
+    pub fn helper(kind: Helper, head: Atom, body: Vec<Lit>) -> Self {
+        RuleStmt {
+            head,
+            body,
+            helper: Some(kind),
+        }
+    }
+}
+
+/// The rules the compiler writes that no statement is: each is read by
+/// the rule it was written for, which is stuck when it is, so the engine
+/// reports that rule and never the helper.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Helper {
+    /// `__neg_N(ȳ)`: the body of a `not { .. }` over the variables ȳ it
+    /// shares with its rule. Its pattern is matched as it is, nulls and
+    /// all (R-193).
+    Negation,
+    /// `__agg_N`: an aggregate's group and the term it folds.
+    Aggregate,
+    /// `__lc_N`: a list comprehension's elements.
+    Comprehension,
+    /// `__field_read_N`: a relation's row read by its fields.
+    FieldRead,
+    /// `__has_known_N`: a `not has` of a computed value, holding once the
+    /// value is known.
+    Known,
+    /// `__ref_dep`: the order a contribution that reads a reference
+    /// follows, stuck exactly when the contribution is.
+    RefDep,
+    /// The compiler's checks and records: `__not_planned`,
+    /// `__unanswered`, `__rows`, `__declared`, `__refine_*`.
+    Check,
+}
+
+impl Helper {
+    /// The relations the helpers of this kind among `rules` define, in
+    /// whatever scope their names were given.
+    pub fn heads(self, rules: &[RuleStmt]) -> BTreeSet<String> {
+        rules
+            .iter()
+            .filter(|r| r.helper == Some(self))
+            .map(|r| r.head.pred.clone())
+            .collect()
+    }
 }
 
 /// A predicate applied to terms. `span` is where it was written (or the
