@@ -383,7 +383,7 @@ impl Lowerer<'_> {
                 Some(col) if t.kind() == LITERAL => {
                     return self.literal_in_ref_column(pred, i, col, t);
                 }
-                Some(col) if Self::typed(rc, t) || self.names_resource(rc, t) => {
+                Some(col) if Self::typed(rc, t) || self.named_resource(rc, t) => {
                     let r = self.ref_term(rc, t, pos, pre)?;
                     if pos == Pos::Content {
                         Self::row_types(rc, t, col, pre);
@@ -395,6 +395,12 @@ impl Lowerer<'_> {
             });
         }
         Ok(args)
+    }
+
+    /// Whether `t` names a resource where a reference column takes it, by
+    /// its name in scope or `T[e]`: the reference. `_` is the placeholder.
+    fn named_resource(&mut self, rc: &Rc, t: &SyntaxNode) -> bool {
+        Chain::of(t).is_some_and(|c| c.head != "_") && self.names_resource(rc, t)
     }
 
     /// Whether `t` is a resource where a reference column takes it: a
