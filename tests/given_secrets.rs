@@ -187,6 +187,16 @@ fn a_given_secret_is_sealed_into_the_file_and_read_into_its_input() {
     );
     assert!(!r.stdout.contains("hunter2") && !r.stderr.contains("hunter2"));
     assert!(!s.read("plan.json").contains("hunter2"));
+    // Set again after the plan: its plan file is stale.
+    set(&s, "admin", "changed").success();
+    let r = run(&s, &["apply", "plan.json"]).failure();
+    assert!(
+        r.stderr
+            .contains("- secrets/p.json: a given secret changed since the plan\n"),
+        "{}",
+        r.stderr
+    );
+    set(&s, "admin", "hunter2").success();
     run(&s, &["apply", "plan.json"]).success();
     assert_eq!(world(&s)["admin"], "hunter2");
 
@@ -199,7 +209,7 @@ fn a_given_secret_is_sealed_into_the_file_and_read_into_its_input() {
         .unwrap_or_else(|| panic!("{}", r.stdout));
     assert_eq!(
         line.split_whitespace().collect::<Vec<_>>().join(" "),
-        "admin given 1 now db.secret app.admin update",
+        "admin given 3 now db.secret app.admin update",
         "{}",
         r.stdout
     );
@@ -220,7 +230,7 @@ fn a_given_secret_is_sealed_into_the_file_and_read_into_its_input() {
         r.stderr
     );
     let r = set(&s, "admin", "hunter3").success();
-    assert!(r.stdout.contains("(generation 2)"), "{}", r.stdout);
+    assert!(r.stdout.contains("(generation 4)"), "{}", r.stdout);
     let r = run(&s, &["plan", "p"]).success();
     assert_eq!(r.summary(), "plan: 1 change (1 update) over 1 tick");
     run(&s, &["apply", "p"]).success();

@@ -3038,7 +3038,17 @@ fn run_with(
                 continue;
             };
             if now.get(label).is_some_and(|d| *d != a["digest"]) {
-                diff.push(format!("{label}: changed since the plan"));
+                // A file of given secrets by its path (R-108), not its
+                // extern's label.
+                let file = label
+                    .split_once('/')
+                    .filter(|(pred, _)| crate::tables::is_sealed(pred))
+                    .and_then(|(_, rest)| rest.rsplit_once('#'))
+                    .map(|(location, _)| location);
+                diff.push(match file {
+                    Some(f) => format!("{f}: a given secret changed since the plan"),
+                    None => format!("{label}: changed since the plan"),
+                });
             }
         }
         if diff.is_empty() {

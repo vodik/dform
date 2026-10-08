@@ -455,6 +455,7 @@ pub fn sealed_to(f: &File, names: &dyn Fn(&str) -> String) -> String {
         .filter(|r| f.stack_key() != Some(r.as_str()))
         .map(|r| names(r))
         .collect();
+    to.sort();
     if f.stack_key().is_some() {
         to.push("the deployment's master".into());
     }
