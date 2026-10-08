@@ -3193,9 +3193,8 @@ nothing in volume forgejo_backup: no such name in this copy
 
 The language server's hover on a name read bare in a component's body
 says, per copy the deployment makes, what it reads there in the same
-words, and for a name the component's own declaration shadows, both:
-"`tag` here is component volume's input tag; it shadows module
-backups's input tag, read as `super.tag`".
+words: for a name the component's own declaration shadows, the
+component's own (`super.tag` reads the module's).
 
 `dform dev graph` prints Graphviz DOT, nodes and edges sorted:
 

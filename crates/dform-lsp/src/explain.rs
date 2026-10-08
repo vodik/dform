@@ -426,26 +426,20 @@ pub fn hover_at(p: &refs::Project, path: &Path, at: usize) -> Option<String> {
         .and_then(|c| names::declared_name(&c));
     let in_copies = || -> Option<String> {
         let c = component.as_ref()?;
-        // One the component's own declaration shadows names both (R-186).
-        let shadow = t.parent().and_then(|chain| d.shadowed(&chain, t.text()));
-        let lines: Vec<String> = shadow
-            .into_iter()
-            .map(|l| format!("{l}\n\n"))
-            .chain(
-                p.evaluated
-                    .iter()
-                    .flat_map(|e| {
-                        dform_core::why::in_component(
-                            c.text(),
-                            t.text(),
-                            &e.res,
-                            &e.redact,
-                            &e.keys,
-                            Some(&p.dir),
-                        )
-                    })
-                    .map(|l| format!("`{l}`\n\n")),
-            )
+        let lines: Vec<String> = p
+            .evaluated
+            .iter()
+            .flat_map(|e| {
+                dform_core::why::in_component(
+                    c.text(),
+                    t.text(),
+                    &e.res,
+                    &e.redact,
+                    &e.keys,
+                    Some(&p.dir),
+                )
+            })
+            .map(|l| format!("`{l}`\n\n"))
             .collect();
         (!lines.is_empty()).then(|| lines.concat())
     };

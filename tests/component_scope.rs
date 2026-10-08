@@ -120,7 +120,8 @@ fn a_copy_by_its_path_without_a_use_reads_no_instance() {
 }
 
 /// A component's own name shadows the module's: a bare read is the
-/// component's, `super.x` the module's, and the plan warns naming both.
+/// component's, `super.x` the module's, and nothing warns (R-209): the
+/// inner is the predictable answer, as in Rust.
 #[test]
 fn super_reads_what_the_components_own_name_shadows() {
     let s = Scratch::project("scope-shadow");
@@ -143,17 +144,7 @@ component volume {
         "{}",
         r.stdout
     );
-    assert!(
-        r.stderr.contains(
-            "warning: `tag` in component backups.volume (backups.df:4:3) shadows module \
-             backups's `tag` (backups.df:1:1): a bare read in the component is its own; read \
-             module backups's as super.tag\n"
-        ) && r
-            .stderr
-            .contains("warning: `repo` in component backups.volume (backups.df:5:3)"),
-        "{}",
-        r.stderr
-    );
+    assert!(!r.stderr.contains("warning"), "{}", r.stderr);
 }
 
 /// A component inside another reads the enclosing component's names,

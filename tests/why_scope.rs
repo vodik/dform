@@ -149,10 +149,11 @@ fn hover_on_a_name_in_a_component_says_what_each_copy_reads() {
     c.shutdown();
 }
 
-/// A name the component's own declaration shadows: the hover names both,
-/// and how to read the module's (R-186).
+/// A name the component's own declaration shadows: the hover says what
+/// it is here, the component's own, with no note on the module's it
+/// shadows (R-209: shadowing is ordinary, as in Rust).
 #[test]
-fn hover_on_a_shadowed_name_names_both() {
+fn hover_on_a_shadowed_name_says_what_it_is_here() {
     let s = project();
     s.write(
         "backups.df",
@@ -174,10 +175,8 @@ fn hover_on_a_shadowed_name_names_both() {
     );
     let text = hover["contents"]["value"].as_str().unwrap_or_default();
     assert!(
-        text.contains(
-            "`ns` here is component volume's let ns; it shadows module backups's let ns, read \
-             as `super.ns`"
-        ),
+        text.contains("`ns in volume forgejo_backup: let forgejo_backup.ns  backups.df:9`")
+            && !text.contains("shadows"),
         "{text}"
     );
     c.shutdown();

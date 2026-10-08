@@ -1323,12 +1323,14 @@ the one a `use` binds, so under `use backups as a` and `use backups as
 b`, `resource a.volume x` reads `a.repository` and never `b`'s. A copy
 by its path with no `use` of the module reads no instance, and a read
 of the module's items in its body is the error at the read naming the
-`use`. `super.x` is `x` as the scope around the component reads it, for
-a name the component's own shadows (`super.repository`, one scope out
-per `super`); a declaration that shadows one of its module or of the
-component around it is a warning naming both (the stack's are not: an
-input named like the stack's is how a stack passes it, `replicas =
-replicas`). A module's body has no scope around it: a module never
+`use`. Shadowing is ordinary: a component's own declaration of a name
+its module or the component around it declares too is what a bare read
+in its body reads, with no warning, as in Rust; `super.x` is `x` as the
+scope around the component reads it (`super.repository`, one scope out
+per `super`), and the module's path reads the module's
+(`backups.repository`). Each is its own value: a copy's `name` given
+from its module's `name` (`resource node server { name = "${name}-s" }`)
+is one value read to make another. A module's body has no scope around it: a module never
 reaches its user and takes what it needs as an input, so `super` there
 is an error saying so, and there is no root scope. In its own file a
 module reads itself by its name too (`backups.repository`), the instance

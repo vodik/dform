@@ -66,19 +66,6 @@ impl Symbol {
             _ => None,
         }
     }
-
-    /// `module backups's k8s.secret repository`, `the stack's input env`:
-    /// a let, an input or a resource as a line names it.
-    fn whose(&self) -> Option<String> {
-        let (scope, what, name) = match self {
-            Symbol::Let(s, n) => (s, "let".to_string(), n),
-            Symbol::Value(s, n) => (s, "input".to_string(), n),
-            Symbol::Resource(s, t, n) => (s, t.clone(), n),
-            _ => return None,
-        };
-        let scope = scope.as_deref().unwrap_or("the stack");
-        Some(format!("{scope}'s {what} {name}"))
-    }
 }
 
 /// What a name token is.
@@ -475,23 +462,6 @@ impl Decls {
             let t = self.resources.get(&key)?.first()?;
             Some(Symbol::Resource(s.clone(), t.clone(), name.to_string()))
         })
-    }
-
-    /// A bare `name` at `at` that the component's own declaration shadows
-    /// (R-186), both named: what it reads there, and what `super.name`
-    /// reads.
-    pub fn shadowed(&self, at: &SyntaxNode, name: &str) -> Option<String> {
-        let inner = component_scopes(at).into_iter().next()?;
-        let own = self.item_from(at, 0, name)?;
-        if own.scope() != Some(&Some(inner)) {
-            return None;
-        }
-        let outer = self.item_from(at, 1, name)?;
-        Some(format!(
-            "`{name}` here is {}; it shadows {}, read as `super.{name}`",
-            own.whose()?,
-            outer.whose()?
-        ))
     }
 
     /// The value, let or output `name` seen from `at`: the innermost
@@ -1987,26 +1957,6 @@ component outer {
         );
         assert_eq!(lines(&Symbol::Value(None, "tag".into())), vec![1, 6]);
         assert_eq!(lines(&Symbol::Let(outer, "x".into())), vec![4, 6]);
-        // A component's own `tag` shadows the stack's: the hover names
-        // both.
-        let outer_read = Parsed::new(
-            PathBuf::from("/c.df"),
-            "input tag: string = \"m\"\ncomponent c {\n  input tag: string\n  let y = tag\n}\n"
-                .into(),
-        );
-        let d = Decls::of_files(Path::new("/"), std::slice::from_ref(&outer_read));
-        let read = outer_read
-            .tree
-            .descendants()
-            .find(|n| n.kind() == SyntaxKind::CHAIN && n.text() == "tag")
-            .unwrap();
-        assert_eq!(
-            d.shadowed(&read, "tag").as_deref(),
-            Some(
-                "`tag` here is component c's input tag; it shadows the stack's input tag, read \
-                 as `super.tag`"
-            )
-        );
     }
 
     #[test]

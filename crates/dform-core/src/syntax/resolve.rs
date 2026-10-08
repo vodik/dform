@@ -1283,57 +1283,6 @@ impl<'u> Lowerer<'u> {
         }
     }
 
-    /// A `warn` for each name the component `n`, its body the scope
-    /// `inner`, declares that the module or the component around it
-    /// declares too (R-186): a bare read in the body is the component's,
-    /// `super.x` the other.
-    fn shadows(&self, n: &SyntaxNode, inner: usize) -> Vec<Stmt> {
-        let name_of = |s: &SyntaxNode| match s.kind() {
-            INPUT | LET => Some(word_text(s, 1)),
-            RESOURCE if !self.is_copy(s) => self.static_header(s),
-            _ => None,
-        };
-        let (Some(around), Some(body)) = (n.parent(), node(n, STMT_BLOCK)) else {
-            return Vec::new();
-        };
-        let theirs: Vec<(String, SyntaxNode)> = around
-            .children()
-            .filter_map(|s| Some((name_of(&s)?, s)))
-            .collect();
-        // The stack's names are not warned of: a component of the stack's
-        // file taking an input named like the stack's is how the stack
-        // passes it (`replicas = replicas`).
-        let outer = self.decls.scopes[inner].parent.unwrap_or(PROGRAM);
-        if self.decls.entries.contains(&outer) {
-            return Vec::new();
-        }
-        let (component, outer) = (self.scope_name(inner), self.scope_name(outer));
-        let at = |n: &SyntaxNode| crate::diag::at(self.span(n)).unwrap_or_default();
-        let mut seen = BTreeSet::new();
-        let mut out = Vec::new();
-        for s in body.children() {
-            let Some(x) = name_of(&s) else { continue };
-            let Some((_, o)) = theirs.iter().find(|(y, _)| *y == x) else {
-                continue;
-            };
-            if !seen.insert(x.clone()) {
-                continue;
-            }
-            let msg = format!(
-                "`{x}` in {component} ({}) shadows {outer}'s `{x}` ({}): a bare read in the \
-                 component is its own; read {outer}'s as super.{x}",
-                at(&s),
-                at(o)
-            );
-            out.push(Stmt::Fact(atom_at(
-                "warn",
-                vec![str_term(&msg)],
-                self.span(&s),
-            )));
-        }
-        out
-    }
-
     fn new_scope(&mut self, parent: usize) -> usize {
         self.decls.scopes.push(Scope {
             parent: Some(parent),
@@ -2710,8 +2659,7 @@ impl<'u> Lowerer<'u> {
                 if let Some(t) = node(n, TYPE_EXPR) {
                     self.check_signature(n, &t, scope);
                 }
-                let mut body = self.stmts(node(n, STMT_BLOCK), inner, outer);
-                body.extend(self.shadows(n, inner));
+                let body = self.stmts(node(n, STMT_BLOCK), inner, outer);
                 one(Stmt::Module(Module {
                     name: path,
                     component: true,
