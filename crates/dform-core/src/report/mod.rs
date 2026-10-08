@@ -2083,6 +2083,38 @@ pub fn relation_name(rel: &str) -> String {
     }
 }
 
+/// The kinds of change a summary counts, in its order.
+const KINDS: [&str; 7] = [
+    "create", "update", "replace", "drift", "delete", "adopt", "forget",
+];
+
+/// How many of `ds` are of each kind, in [`KINDS`] order.
+fn by_kind<'d>(ds: impl Iterator<Item = &'d Deformation>) -> Vec<(&'static str, usize)> {
+    let mut n: BTreeMap<&str, usize> = BTreeMap::new();
+    for d in ds {
+        *n.entry(kind_name(&d.kind)).or_default() += 1;
+    }
+    KINDS
+        .into_iter()
+        .map(|k| (k, n.get(k).copied().unwrap_or(0)))
+        .collect()
+}
+
+/// `plan: 3 changes (2 create, 1 update)`: `n` changes, and those of the
+/// `kinds` there are.
+fn changes_text(n: usize, kinds: &[(&str, usize)]) -> String {
+    let mut out = format!("plan: {}", count(n, "change"));
+    let ks: Vec<String> = kinds
+        .iter()
+        .filter(|(_, n)| *n > 0)
+        .map(|(k, n)| format!("{n} {k}"))
+        .collect();
+    if !ks.is_empty() {
+        out.push_str(&format!(" ({})", ks.join(", ")));
+    }
+    out
+}
+
 /// `n thing`, `n things`.
 fn count(n: usize, thing: &str) -> String {
     format!("{n} {thing}{}", if n == 1 { "" } else { "s" })
@@ -2511,17 +2543,7 @@ impl Report {
 
     /// The changes by kind, in summary order.
     fn kinds(&self) -> Vec<(&'static str, usize)> {
-        [
-            "create", "update", "replace", "drift", "delete", "adopt", "forget",
-        ]
-        .into_iter()
-        .map(|k| {
-            (
-                k,
-                self.counted().filter(|d| kind_name(&d.kind) == k).count(),
-            )
-        })
-        .collect()
+        by_kind(self.counted())
     }
 
     /// How many changes the plan has, in every tick (the summary's count).
@@ -2561,12 +2583,7 @@ impl Report {
 
     /// `plan: 5 changes (3 create, 2 update) over 2 ticks, 1 approval, 1 undetermined`
     pub fn summary(&self) -> String {
-        let kinds: Vec<(&str, usize)> = self.kinds().into_iter().filter(|(_, n)| *n > 0).collect();
-        let mut out = format!("plan: {}", count(self.changes(), "change"));
-        if !kinds.is_empty() {
-            let ks: Vec<String> = kinds.iter().map(|(k, n)| format!("{n} {k}")).collect();
-            out.push_str(&format!(" ({})", ks.join(", ")));
-        }
+        let mut out = changes_text(self.changes(), &self.kinds());
         let ticks = self
             .sections()
             .values()
@@ -4565,6 +4582,16 @@ mod tests {
 
     /// Past 60 characters a string elides its middle at the default
     /// level, and prints whole from `-v`.
+    #[test]
+    fn a_summary_counts_the_kinds_there_are_in_order() {
+        assert_eq!(changes_text(0, &[("create", 0)]), "plan: 0 changes");
+        assert_eq!(
+            changes_text(3, &[("create", 2), ("update", 0), ("delete", 1)]),
+            "plan: 3 changes (2 create, 1 delete)"
+        );
+        assert_eq!(by_kind(std::iter::empty()).len(), KINDS.len());
+    }
+
     #[test]
     fn an_id_prints_its_first_twelve_characters() {
         assert_eq!(short_id("3e58789c0ffee5150aa"), "3e58789c0ffe");

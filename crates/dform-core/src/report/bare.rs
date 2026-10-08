@@ -6,7 +6,8 @@
 //! deformations; up to date, not undeformed.
 
 use super::{
-    ActionKind, Deformation, Line, Op, Paint, Report, Shown, Style, kind_name, moved_text,
+    ActionKind, Deformation, Line, Op, Paint, Report, Shown, Style, by_kind, changes_text, count,
+    moved_text,
 };
 use crate::ir::Address;
 use std::collections::BTreeSet;
@@ -26,26 +27,8 @@ impl Report {
     /// `plan: 3 changes (2 create, 1 update), 5 pending, 2 undetermined`:
     /// the definite changes counted, the rest pending.
     fn bare_summary(&self) -> String {
-        let kinds: Vec<(&str, usize)> = [
-            "create", "update", "replace", "drift", "delete", "adopt", "forget",
-        ]
-        .into_iter()
-        .map(|k| {
-            let n = self
-                .definite
-                .iter()
-                .filter(|d| kind_name(&d.kind) == k)
-                .count();
-            (k, n)
-        })
-        .filter(|(_, n)| *n > 0)
-        .collect();
-        let n: usize = kinds.iter().map(|(_, n)| n).sum();
-        let mut out = format!("plan: {n} change{}", if n == 1 { "" } else { "s" });
-        if !kinds.is_empty() {
-            let ks: Vec<String> = kinds.iter().map(|(k, n)| format!("{n} {k}")).collect();
-            out.push_str(&format!(" ({})", ks.join(", ")));
-        }
+        let kinds = by_kind(self.definite.iter());
+        let mut out = changes_text(kinds.iter().map(|(_, n)| n).sum(), &kinds);
         if self.show_noop {
             out.push_str(&format!(", {} no-op", self.noops));
         }
@@ -58,8 +41,7 @@ impl Report {
             out.push_str(&format!(", {undetermined} undetermined"));
         }
         if !self.conflicts.is_empty() {
-            let n = self.conflicts.len();
-            out.push_str(&format!(", {n} conflict{}", if n == 1 { "" } else { "s" }));
+            out.push_str(&format!(", {}", count(self.conflicts.len(), "conflict")));
         }
         out
     }
