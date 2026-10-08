@@ -521,208 +521,7 @@ impl Manifest {
             toml::from_str(text).map_err(|e| anyhow!("{}: {}", path.display(), e.message()))?;
         m.root = path.parent().unwrap_or(Path::new("")).to_path_buf();
         m.text = text.to_string();
-        let at = |key: &str| format!("{}: {key}", path.display());
-        match m.project.edition.as_deref() {
-            Some(EDITION) => {}
-            Some(e) => bail!(
-                "{} = {e:?}: this dform reads edition {EDITION:?}",
-                at("[project] edition")
-            ),
-            None => bail!(
-                "{}: the project's language edition is not named: add `edition = {EDITION:?}` \
-                 under [project]",
-                path.display()
-            ),
-        }
-        if m.providers.contains_key("ssh") {
-            bail!(
-                "{}: the ssh provider is gone (R-153): dform reads a host's file itself, \
-                 `io.read(\"ssh://USER@HOST/PATH\")`; how long a read waits on a host still \
-                 booting is `[io] wait`, its key `[io] credentials = {{ \
-                 \"ssh://HOST/*\" = \"ssh:NAME\" }}`",
-                at("[providers] ssh")
-            );
-        }
-        if m.files.is_some() {
-            bail!(
-                "{}: `[files]` is `[io]` (R-155), its keys the same: `wait`, `credentials`",
-                at("[files]")
-            );
-        }
-        let secrets = std::iter::once(("[secrets]".to_string(), &m.secrets)).chain(
-            m.stacks
-                .iter()
-                .filter_map(|(n, t)| Some((format!("[stacks.{n}.secrets]"), t.secrets.as_ref()?))),
-        );
-        for (table, t) in secrets {
-            t.recipients()
-                .map_err(|e| anyhow!("{}: {e}", at(&format!("{table} recipients"))))?;
-            if let Some(p) = &t.passphrase {
-                crate::custody::Passphrase::parse(p)
-                    .map_err(|e| anyhow!("{} = {e}", at(&format!("{table} passphrase"))))?;
-            }
-        }
-        if let Some(v) = &m.io.wait
-            && crate::store::parse_duration(v).is_none_or(|d| d.is_zero())
-        {
-            bail!(
-                "{} = {v:?}: a duration, `500ms`, `30s` or `10m`",
-                at("[io] wait")
-            );
-        }
-        for (pattern, c) in &m.io.credentials {
-            if !pattern.contains("://") {
-                bail!(
-                    "{} {pattern:?}: a location pattern, `SCHEME://HOST/PATH` with `*` \
-                     (`\"ssh://10.0.0.*\"`, `\"https://git.example/*\"`)",
-                    at("[io] credentials")
-                );
-            }
-            // An agent's key may be named by its fingerprint (R-125).
-            if !c.starts_with("ssh:SHA256:") {
-                crate::plugin::credentials::parse_name(c)
-                    .map_err(|e| anyhow!("{} {pattern:?}: {e}", at("[io] credentials")))?;
-            }
-        }
-        for (name, p) in &m.providers {
-            if let ProviderEntry::Table(t) = p {
-                for r in t.reads.iter().flatten() {
-                    if !r.contains("://") {
-                        bail!(
-                            "{} {r:?}: a location pattern, `SCHEME://HOST/PATH` with `*` \
-                             (`\"https://github.com/*\"`)",
-                            at(&format!("[providers.{name}] reads"))
-                        );
-                    }
-                }
-                if t.source.is_some() && t.path.is_some() {
-                    bail!(
-                        "{}: a provider comes from its `source` or its `path`, not both",
-                        at(&format!("[providers.{name}]"))
-                    );
-                }
-                for (key, v) in [
-                    ("timeout", &t.timeout),
-                    ("backoff", &t.backoff),
-                    ("wait", &t.wait),
-                ] {
-                    if let Some(v) = v
-                        && crate::store::parse_duration(v).is_none_or(|d| d.is_zero())
-                    {
-                        bail!(
-                            "{} = {v:?}: a duration, `500ms`, `30s` or `2m`",
-                            at(&format!("[providers.{name}] {key}"))
-                        );
-                    }
-                }
-            }
-            if let ProviderEntry::Table(t) = p {
-                for a in t.allow.iter().flatten() {
-                    if !crate::plugin::host::GRANTABLE.contains(&a.as_str()) {
-                        bail!(
-                            "{} names {a:?}: a grant is one of {} (the host's own interfaces \
-                             need none)",
-                            at(&format!("[providers.{name}] allow")),
-                            crate::plugin::host::GRANTABLE.join(", ")
-                        );
-                    }
-                }
-                for c in t.credentials.iter().flatten() {
-                    crate::plugin::credentials::parse_name(c).map_err(|e| {
-                        anyhow!("{}: {e}", at(&format!("[providers.{name}] credentials")))
-                    })?;
-                }
-            }
-            if let Some(req) = p.version() {
-                semver::VersionReq::parse(req).map_err(|e| {
-                    anyhow!(
-                        "{} = {req:?}: {e} (Cargo's syntax: \"2.1\", \"~2.1\", \">=2.1, <3\")",
-                        at(&format!("[providers.{name}] version"))
-                    )
-                })?;
-            }
-        }
-        let tables = std::iter::once(("[defaults]".to_string(), m.defaults.table())).chain(
-            m.stacks
-                .iter()
-                .map(|(n, t)| (format!("[stacks.{n}]"), t.clone())),
-        );
-        for (table, t) in tables {
-            if let Some(c) = &t.config {
-                bail!(
-                    "{} = {:?}: a stack's config is gone (R-38): its settings are the program's \
-                     inputs, given from a document by `set from {}` in the stack's file, \
-                     `{{k}}` written `${{k}}`",
-                    at(&format!("{table} config")),
-                    c.get_ref(),
-                    read_written(&c.get_ref().replace('{', "${"))
-                );
-            }
-            if let Some(b) = &t.backend
-                && let Err(e) = b
-                    .get_ref()
-                    .replace("{stack}", "stack")
-                    .parse::<crate::stack::Backend>()
-            {
-                bail!(
-                    "{} = {:?}: {e}; the backends are `local(\"DIR\")`, DIR relative to \
-                     the project root, and `s3(\"BUCKET\", \"PREFIX\", {{endpoint: \"URL\", \
-                     region: \"R\"}})`; `{{stack}}` is the stack's name, `{{k}}` its key k's \
-                     value",
-                    at(&format!("{table} backend")),
-                    b.get_ref()
-                );
-            }
-        }
-        for (key, v) in [
-            ("lease_duration", &m.defaults.lease_duration),
-            ("lease_renewal", &m.defaults.lease_renewal),
-            ("audit_sink_timeout", &m.defaults.audit_sink_timeout),
-        ] {
-            if let Some(v) = v
-                && crate::store::parse_duration(v).is_none_or(|d| d.is_zero())
-            {
-                bail!(
-                    "{} = {v:?}: a duration, `500ms`, `30s` or `2m`",
-                    at(&format!("[defaults] {key}"))
-                );
-            }
-        }
-        if let Some(v) = &m.defaults.audit_sink_entries
-            && !matches!(v.as_str(), "audit" | "all")
-        {
-            bail!(
-                "{} = {v:?}: `audit` (every entry but the state's own, the default) or `all`",
-                at("[defaults] audit_sink_entries")
-            );
-        }
-        let t = m.lease_times();
-        if t.renewal >= t.duration {
-            bail!(
-                "{}: the lease is renewed every {:?} but lasts {:?}; renew it more often \
-                 than it lasts",
-                at("[defaults] lease_renewal"),
-                t.renewal,
-                t.duration
-            );
-        }
-        for name in m.packages.keys() {
-            if name.is_empty() || name.contains(['.', '[', ']']) {
-                bail!(
-                    "{}: a package's name is the first segment of the paths under it; it \
-                     has no `.`, `[` or `]`",
-                    at(&format!("[packages.{name:?}]"))
-                );
-            }
-        }
-        for g in &m.discovery.exclude {
-            if g.starts_with('/') {
-                bail!(
-                    "{} {g:?}: a glob relative to the project root",
-                    at("[discovery] exclude")
-                );
-            }
-        }
+        Checking { m: &m, path }.check()?;
         Ok(m)
     }
 
@@ -981,6 +780,290 @@ impl Manifest {
             duration: get(&self.defaults.lease_duration).unwrap_or(d.duration),
             renewal: get(&self.defaults.lease_renewal).unwrap_or(d.renewal),
         }
+    }
+}
+
+/// A manifest's settings checked as it is read: each named by its table and
+/// key, the fix its message.
+struct Checking<'a> {
+    m: &'a Manifest,
+    path: &'a Path,
+}
+
+impl Checking<'_> {
+    /// `dform.toml: [table] key`.
+    fn at(&self, key: &str) -> String {
+        format!("{}: {key}", self.path.display())
+    }
+
+    fn check(&self) -> Result<()> {
+        self.edition()?;
+        self.gone()?;
+        self.secrets()?;
+        self.io()?;
+        for (name, p) in &self.m.providers {
+            self.provider(name, p)?;
+        }
+        self.tables()?;
+        self.defaults()?;
+        self.names()
+    }
+
+    /// The language edition the project is written in: this dform's.
+    fn edition(&self) -> Result<()> {
+        let (m, path) = (self.m, self.path);
+        let at = |key: &str| self.at(key);
+        match m.project.edition.as_deref() {
+            Some(EDITION) => {}
+            Some(e) => bail!(
+                "{} = {e:?}: this dform reads edition {EDITION:?}",
+                at("[project] edition")
+            ),
+            None => bail!(
+                "{}: the project's language edition is not named: add `edition = {EDITION:?}` \
+             under [project]",
+                path.display()
+            ),
+        }
+        Ok(())
+    }
+
+    /// Settings that are gone, said with what replaced them.
+    fn gone(&self) -> Result<()> {
+        let m = self.m;
+        let at = |key: &str| self.at(key);
+        if m.providers.contains_key("ssh") {
+            bail!(
+                "{}: the ssh provider is gone (R-153): dform reads a host's file itself, \
+             `io.read(\"ssh://USER@HOST/PATH\")`; how long a read waits on a host still \
+             booting is `[io] wait`, its key `[io] credentials = {{ \
+             \"ssh://HOST/*\" = \"ssh:NAME\" }}`",
+                at("[providers] ssh")
+            );
+        }
+        if m.files.is_some() {
+            bail!(
+                "{}: `[files]` is `[io]` (R-155), its keys the same: `wait`, `credentials`",
+                at("[files]")
+            );
+        }
+        Ok(())
+    }
+
+    /// `[secrets]` and each stack's: recipients and a passphrase's source.
+    fn secrets(&self) -> Result<()> {
+        let m = self.m;
+        let at = |key: &str| self.at(key);
+        let secrets = std::iter::once(("[secrets]".to_string(), &m.secrets)).chain(
+            m.stacks
+                .iter()
+                .filter_map(|(n, t)| Some((format!("[stacks.{n}.secrets]"), t.secrets.as_ref()?))),
+        );
+        for (table, t) in secrets {
+            t.recipients()
+                .map_err(|e| anyhow!("{}: {e}", at(&format!("{table} recipients"))))?;
+            if let Some(p) = &t.passphrase {
+                crate::custody::Passphrase::parse(p)
+                    .map_err(|e| anyhow!("{} = {e}", at(&format!("{table} passphrase"))))?;
+            }
+        }
+        Ok(())
+    }
+
+    /// `[io]`: the wait, and each credential's pattern and name.
+    fn io(&self) -> Result<()> {
+        let m = self.m;
+        let at = |key: &str| self.at(key);
+        if let Some(v) = &m.io.wait
+            && crate::store::parse_duration(v).is_none_or(|d| d.is_zero())
+        {
+            bail!(
+                "{} = {v:?}: a duration, `500ms`, `30s` or `10m`",
+                at("[io] wait")
+            );
+        }
+        for (pattern, c) in &m.io.credentials {
+            if !pattern.contains("://") {
+                bail!(
+                    "{} {pattern:?}: a location pattern, `SCHEME://HOST/PATH` with `*` \
+                 (`\"ssh://10.0.0.*\"`, `\"https://git.example/*\"`)",
+                    at("[io] credentials")
+                );
+            }
+            // An agent's key may be named by its fingerprint (R-125).
+            if !c.starts_with("ssh:SHA256:") {
+                crate::plugin::credentials::parse_name(c)
+                    .map_err(|e| anyhow!("{} {pattern:?}: {e}", at("[io] credentials")))?;
+            }
+        }
+        Ok(())
+    }
+
+    /// `[providers.NAME]`: its reads, source, durations, grants,
+    /// credentials and version requirement.
+    fn provider(&self, name: &str, p: &ProviderEntry) -> Result<()> {
+        let at = |key: &str| self.at(key);
+        if let ProviderEntry::Table(t) = p {
+            for r in t.reads.iter().flatten() {
+                if !r.contains("://") {
+                    bail!(
+                        "{} {r:?}: a location pattern, `SCHEME://HOST/PATH` with `*` \
+                             (`\"https://github.com/*\"`)",
+                        at(&format!("[providers.{name}] reads"))
+                    );
+                }
+            }
+            if t.source.is_some() && t.path.is_some() {
+                bail!(
+                    "{}: a provider comes from its `source` or its `path`, not both",
+                    at(&format!("[providers.{name}]"))
+                );
+            }
+            for (key, v) in [
+                ("timeout", &t.timeout),
+                ("backoff", &t.backoff),
+                ("wait", &t.wait),
+            ] {
+                if let Some(v) = v
+                    && crate::store::parse_duration(v).is_none_or(|d| d.is_zero())
+                {
+                    bail!(
+                        "{} = {v:?}: a duration, `500ms`, `30s` or `2m`",
+                        at(&format!("[providers.{name}] {key}"))
+                    );
+                }
+            }
+        }
+        if let ProviderEntry::Table(t) = p {
+            for a in t.allow.iter().flatten() {
+                if !crate::plugin::host::GRANTABLE.contains(&a.as_str()) {
+                    bail!(
+                        "{} names {a:?}: a grant is one of {} (the host's own interfaces \
+                             need none)",
+                        at(&format!("[providers.{name}] allow")),
+                        crate::plugin::host::GRANTABLE.join(", ")
+                    );
+                }
+            }
+            for c in t.credentials.iter().flatten() {
+                crate::plugin::credentials::parse_name(c).map_err(|e| {
+                    anyhow!("{}: {e}", at(&format!("[providers.{name}] credentials")))
+                })?;
+            }
+        }
+        if let Some(req) = p.version() {
+            semver::VersionReq::parse(req).map_err(|e| {
+                anyhow!(
+                    "{} = {req:?}: {e} (Cargo's syntax: \"2.1\", \"~2.1\", \">=2.1, <3\")",
+                    at(&format!("[providers.{name}] version"))
+                )
+            })?;
+        }
+        Ok(())
+    }
+
+    /// `[defaults]` and each `[stacks.NAME]`: a config is gone; a backend
+    /// parses.
+    fn tables(&self) -> Result<()> {
+        let m = self.m;
+        let at = |key: &str| self.at(key);
+        let tables = std::iter::once(("[defaults]".to_string(), m.defaults.table())).chain(
+            m.stacks
+                .iter()
+                .map(|(n, t)| (format!("[stacks.{n}]"), t.clone())),
+        );
+        for (table, t) in tables {
+            if let Some(c) = &t.config {
+                bail!(
+                    "{} = {:?}: a stack's config is gone (R-38): its settings are the program's \
+                 inputs, given from a document by `set from {}` in the stack's file, \
+                 `{{k}}` written `${{k}}`",
+                    at(&format!("{table} config")),
+                    c.get_ref(),
+                    read_written(&c.get_ref().replace('{', "${"))
+                );
+            }
+            if let Some(b) = &t.backend
+                && let Err(e) = b
+                    .get_ref()
+                    .replace("{stack}", "stack")
+                    .parse::<crate::stack::Backend>()
+            {
+                bail!(
+                    "{} = {:?}: {e}; the backends are `local(\"DIR\")`, DIR relative to \
+                 the project root, and `s3(\"BUCKET\", \"PREFIX\", {{endpoint: \"URL\", \
+                 region: \"R\"}})`; `{{stack}}` is the stack's name, `{{k}}` its key k's \
+                 value",
+                    at(&format!("{table} backend")),
+                    b.get_ref()
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// `[defaults]`: durations, the audit sink's entries, and a lease
+    /// renewed more often than it lasts.
+    fn defaults(&self) -> Result<()> {
+        let m = self.m;
+        let at = |key: &str| self.at(key);
+        for (key, v) in [
+            ("lease_duration", &m.defaults.lease_duration),
+            ("lease_renewal", &m.defaults.lease_renewal),
+            ("audit_sink_timeout", &m.defaults.audit_sink_timeout),
+        ] {
+            if let Some(v) = v
+                && crate::store::parse_duration(v).is_none_or(|d| d.is_zero())
+            {
+                bail!(
+                    "{} = {v:?}: a duration, `500ms`, `30s` or `2m`",
+                    at(&format!("[defaults] {key}"))
+                );
+            }
+        }
+        if let Some(v) = &m.defaults.audit_sink_entries
+            && !matches!(v.as_str(), "audit" | "all")
+        {
+            bail!(
+                "{} = {v:?}: `audit` (every entry but the state's own, the default) or `all`",
+                at("[defaults] audit_sink_entries")
+            );
+        }
+        let t = m.lease_times();
+        if t.renewal >= t.duration {
+            bail!(
+                "{}: the lease is renewed every {:?} but lasts {:?}; renew it more often \
+             than it lasts",
+                at("[defaults] lease_renewal"),
+                t.renewal,
+                t.duration
+            );
+        }
+        Ok(())
+    }
+
+    /// Package names and discovery's globs.
+    fn names(&self) -> Result<()> {
+        let m = self.m;
+        let at = |key: &str| self.at(key);
+        for name in m.packages.keys() {
+            if name.is_empty() || name.contains(['.', '[', ']']) {
+                bail!(
+                    "{}: a package's name is the first segment of the paths under it; it \
+                 has no `.`, `[` or `]`",
+                    at(&format!("[packages.{name:?}]"))
+                );
+            }
+        }
+        for g in &m.discovery.exclude {
+            if g.starts_with('/') {
+                bail!(
+                    "{} {g:?}: a glob relative to the project root",
+                    at("[discovery] exclude")
+                );
+            }
+        }
+        Ok(())
     }
 }
 
