@@ -281,7 +281,7 @@ pub(super) fn check_subnet(at: &str, d: &Json) -> Result<Option<String>> {
         None => return Ok(map::default_pool(range, no_gateway)),
         Some(p) => p.as_str().unwrap_or_default(),
     };
-    let Some((a, b)) = dform_core::value::parse_iprange(pool) else {
+    let Some((a, b)) = dform_core::range::Range::ips(pool) else {
         return Ok(None);
     };
     let ip = dform_core::value::u32_to_ipv4;

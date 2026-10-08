@@ -678,7 +678,7 @@ fn kind(v: &Value) -> Option<Ty> {
         Value::Uri(_) => s("uri"),
         Value::Oci(_) => s("oci"),
         Value::Semver(_) => s("semver"),
-        Value::IpRange { .. } => s("iprange"),
+        Value::Range(r) => s(&format!("range({})", r.element()?)),
         _ => None,
     }
 }
@@ -708,8 +708,8 @@ fn compatible(a: &Ty, b: &Ty) -> bool {
 /// wanted: an `oci`, a `uri`, a network or an address, a time, a quantity.
 fn printed(ty: &Ty) -> bool {
     matches!(ty, Ty::Scalar(s) if matches!(s.as_str(),
-        "oci" | "uri" | "inet" | "ip" | "iprange" | "time" | "bytes" | "cpu" | "duration"
-        | "semver"))
+        "oci" | "uri" | "inet" | "ip" | "time" | "bytes" | "cpu" | "duration"
+        | "semver") || crate::range::element(s).is_some())
 }
 
 /// `int`, `float`, `number` (either).
@@ -720,7 +720,9 @@ fn number(ty: &str) -> bool {
 /// `narrow` is read from a string: an `inet`, an `ip`, an image
 /// reference (R-133: and is its text where a string is wanted).
 fn text_of(string: &str, narrow: &str) -> bool {
-    string == "string" && matches!(narrow, "inet" | "ip" | "iprange" | "oci" | "semver")
+    string == "string"
+        && (matches!(narrow, "inet" | "ip" | "oci" | "semver")
+            || crate::range::element(narrow).is_some())
 }
 
 /// The more telling of two compatible types: an enum over a string, a
@@ -1216,8 +1218,8 @@ impl Inferred {
         let read = |ty: Option<&Ty>, t: &mut Term| {
             let Some(ty) = ty else { return };
             let wanted = matches!(ty, Ty::Scalar(s) if matches!(s.as_str(),
-                "inet" | "ip" | "iprange" | "float" | "bytes" | "cpu" | "duration" | "time"
-                | "semver"));
+                "inet" | "ip" | "float" | "bytes" | "cpu" | "duration" | "time"
+                | "semver") || crate::range::element(s).is_some());
             if !wanted || !matches!(t, Term::Val(_)) {
                 return;
             }

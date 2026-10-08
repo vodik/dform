@@ -61,10 +61,15 @@ pub fn value(v: &Value) -> pb::Value {
             addr: *addr,
             prefix: u32::from(*prefix),
         }),
-        Value::IpRange { start, end } => Kind::IpRange(pb::IpRange {
-            start: *start,
-            end: *end,
-        }),
+        // A range of addresses is the wire's own; another range is its
+        // canonical text, which the provider's schema reads (R-180).
+        Value::Range(r) => match (&r.start, &r.end) {
+            (Value::Ip(start), Value::Ip(end)) if r.inclusive => Kind::IpRange(pb::IpRange {
+                start: *start,
+                end: *end,
+            }),
+            _ => Kind::Str(r.to_string()),
+        },
         Value::Ref { typ, name, attr } => Kind::Ref(pb_ref(typ, name, attr)),
         Value::CloudRef { typ, name, attr } => Kind::CloudRef(pb_ref(typ, name, attr)),
         // A provider reads a quantity, a time or a uri as its canonical
@@ -116,10 +121,12 @@ pub fn from_value(v: &pb::Value) -> Result<Value> {
                 .filter(|p| *p <= 32)
                 .ok_or_else(|| anyhow!("an ip_net with prefix {}", n.prefix))?,
         },
-        Kind::IpRange(r) => Value::IpRange {
-            start: r.start,
-            end: r.end,
-        },
+        Kind::IpRange(r) => crate::range::Range {
+            start: Value::Ip(r.start),
+            end: Value::Ip(r.end),
+            inclusive: true,
+        }
+        .into(),
         Kind::Ref(r) => Value::Ref {
             typ: r.r#type.clone(),
             name: r.name.clone(),
@@ -493,7 +500,12 @@ mod tests {
                         prefix: 16,
                     },
                 ),
-                ("r".to_string(), Value::IpRange { start: 1, end: 9 }),
+                (
+                    "r".to_string(),
+                    crate::range::Range::new(Value::Ip(1), Value::Ip(9), true)
+                        .unwrap()
+                        .into(),
+                ),
                 (
                     "null".to_string(),
                     Value::Null {

@@ -94,6 +94,10 @@ internal fn __known(value: any) -> bool
 #| example: __object(str.format("%s-a", K), V)
 internal fn __object(key: string, value: any, ...) -> any? forwards, forwards nulls
 
+#| A range, `start..end` (`inclusive`: `start..=end`), of one ordered type (R-180); no value for ends of two types or of a type with no order. A range literal whose ends are computed lowers to it.
+#| example: __range(0, N, true)
+internal fn __range(start: any, end: any, inclusive: bool) -> any? forwards nulls
+
 #| The number of elements of a list, keys of an object or characters of a string; `x.len` lowers to it (R-155).
 #| example: __len(Xs)
 internal fn __len(value: any) -> int

@@ -14,6 +14,87 @@
 
 use super::*;
 
+/// How a read under `in` over a dense range is marked, the range's
+/// element type after it.
+const DENSE: &str = "at this `in` over a range of";
+
+/// What a range literal is of when its type has no next member (a
+/// quantity, a float, a version, a time): `bytes`, `float`, with its ends'
+/// texts; none for an int's, an ip's, or what is computed.
+fn dense(r: &SyntaxNode) -> Option<String> {
+    if r.kind() != RANGE {
+        return None;
+    }
+    let ends: Vec<SyntaxToken> = terms(r)
+        .map(|t| match t.kind() {
+            LITERAL => tokens(&t)
+                .next()
+                .filter(|k| matches!(k.kind(), QUANTITY | STRING)),
+            _ => None,
+        })
+        .collect::<Option<_>>()?;
+    let of = |k: &SyntaxToken| -> Option<&'static str> {
+        match k.kind() {
+            QUANTITY => Some(match crate::quantity::literal(k.text()) {
+                Ok(crate::quantity::Literal::Known(q)) => q.dim().name(),
+                _ if k.text().contains('.') && !k.text().ends_with('m') => "float",
+                _ => "quantity",
+            }),
+            _ => {
+                let s = k.text().trim_matches('"');
+                if crate::value::ipv4_to_u32(s).is_some() {
+                    None
+                } else if crate::value::Version::parse(s).is_ok() {
+                    Some("semver")
+                } else if crate::time::Time::parse(s).is_ok() {
+                    Some("time")
+                } else {
+                    None
+                }
+            }
+        }
+    };
+    let kinds: Vec<&str> = ends.iter().map(of).collect::<Option<_>>()?;
+    let quantity = kinds.iter().find(|k| **k != "float").unwrap_or(&kinds[0]);
+    let texts: Vec<&str> = ends.iter().map(|k| k.text()).collect();
+    let op = tokens(r)
+        .find(|t| matches!(t.kind(), DOT2 | DOT2_EQ))
+        .map(|t| t.text().to_string())
+        .unwrap_or_default();
+    Some(format!("{quantity} {} {op} {}", texts[0], texts[1]))
+}
+
+/// `n in 1Gi..=500Gi` with `n` unbound (R-180): the error, and the fix at
+/// the site, ints scaled where the ends share a unit.
+fn dense_unbound(span: Span, name: &str, of: &str) -> Diagnostic {
+    let mut parts = of.split(' ');
+    let (ty, a, op, b) = (
+        parts.next().unwrap_or_default(),
+        parts.next().unwrap_or_default(),
+        parts.next().unwrap_or_default(),
+        parts.next().unwrap_or_default(),
+    );
+    let unit = |t: &str| -> Option<(i64, String)> {
+        let at = t.find(|c: char| !c.is_ascii_digit())?;
+        Some((t[..at].parse().ok()?, t[at..].to_string()))
+    };
+    let i = if name == "i" { "k" } else { "i" };
+    let help = match (unit(a), unit(b)) {
+        (Some((x, u)), Some((y, w))) if u == w && !a.starts_with('"') => {
+            format!("enumerate ints and scale them: `{i} in {x}{op}{y}, {name} = {i} * 1{u}`")
+        }
+        _ => format!("bind `{name}` first, and `{name} in {a}{op}{b}` tests it"),
+    };
+    Diagnostic::error(
+        span,
+        format!(
+            "`{name}` is unbound at this `in`: a range of {ty} has no next member to give it, \
+             so it tests a value and enumerates none"
+        ),
+    )
+    .with_help(help)
+}
+
 /// Where a variable is read: its name, where, and the operator that reads
 /// it (`<`, `has`, a call of `f`, ..).
 #[derive(Clone)]
@@ -204,7 +285,9 @@ impl Lowerer<'_> {
         let span = self.span_of(u.at + rowan::TextSize::from(u.offset));
         let name = &u.name;
         let quoted = format!("\"{name}\"");
-        let d = if u.by == "at this `==`" {
+        let d = if let Some(of) = u.by.strip_prefix(DENSE) {
+            dense_unbound(span, name, of.trim())
+        } else if u.by == "at this `==`" {
             // `x == t` meant as a binding (R-10), or a string unquoted.
             Diagnostic::error(
                 span,
@@ -271,8 +354,18 @@ impl Lowerer<'_> {
             }
             LIT_IN => {
                 let ts: Vec<SyntaxNode> = terms(n).collect();
-                if let Some(lhs) = ts.first() {
-                    self.pattern_names(rc, lhs, offset, &mut mode, &mut bodies);
+                // A range of a dense type (R-180) tests a bound value: it
+                // has no next member to enumerate.
+                let dense = ts.get(1).and_then(dense);
+                match (ts.first(), dense) {
+                    (Some(lhs), Some(of)) => {
+                        let by = format!("{DENSE} {of}");
+                        self.reads(rc, lhs, offset, &by, &mut mode, &mut bodies);
+                    }
+                    (Some(lhs), None) => {
+                        self.pattern_names(rc, lhs, offset, &mut mode, &mut bodies)
+                    }
+                    _ => {}
                 }
                 for t in ts.iter().skip(1) {
                     self.reads(rc, t, offset, "at this `in`", &mut mode, &mut bodies);

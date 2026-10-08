@@ -1986,11 +1986,7 @@ pub fn value_to_json(v: &Value) -> serde_json::Value {
         Value::IpNet { addr, prefix } => {
             serde_json::Value::String(crate::value::ipnet_to_string(*addr, *prefix))
         }
-        Value::IpRange { start, end } => serde_json::Value::String(format!(
-            "{}-{}",
-            crate::value::u32_to_ipv4(*start),
-            crate::value::u32_to_ipv4(*end)
-        )),
+        Value::Range(r) => serde_json::Value::String(r.to_string()),
         Value::Ref { typ, name, attr } => {
             serde_json::Value::String(format!("ref({typ},{name},{attr})"))
         }
@@ -3002,6 +2998,20 @@ fn eval_member2(
         rec.stuck(state, nulls_in(&list_v), "member/2 over a null list");
         return Ok(());
     }
+    // `n in r` with `n` unbound: each member of a discrete range, in
+    // order (R-180); a bound `n` is tested.
+    if let Value::Range(r) = &list_v
+        && eval_term(&atom.args[1], state).is_none()
+    {
+        let members = r.members().map_err(|e| anyhow!("`{}`: {e}", rec.text))?;
+        for item in &members {
+            let mut s2 = state.clone();
+            if unify_term(&atom.args[1], item, &mut s2, rec)? {
+                out.push(s2);
+            }
+        }
+        return Ok(());
+    }
     if let Some(held) = in_scalar(atom, &list_v, state, rec)? {
         if held {
             out.push(state.clone());
@@ -3062,7 +3072,7 @@ fn eval_not_member2(atom: &Atom, state: &HashMap<String, Value>, rec: &Rec) -> R
 
 /// `x in e` over a value that is no list (R-155: `in` is the one
 /// membership): a substring of a string (`":" in image`), an address of
-/// an `inet` or an `iprange` (`a in net`). `None` for a list or an
+/// an `inet`, a member of a range (`a in net`, `n in 1..=3`). `None` for a list or an
 /// object, which enumerate; `Some(false)` while the item waits on a null
 /// (Rule 2), the literal stuck. The item is a test's, never bound here.
 fn in_scalar(
@@ -3092,8 +3102,9 @@ fn in_scalar(
 }
 
 /// Whether `coll`, a value that is no list, holds `item` (`in`, R-155):
-/// a string a substring, an `inet` or an `iprange` an address (a string
-/// read as one); an error naming the types `in` takes for anything else.
+/// a string a substring, an `inet` an address (a string read as one), a
+/// range a value between its ends; an error naming the types `in` takes
+/// for anything else.
 pub fn holds(coll: &Value, item: &Value) -> std::result::Result<bool, String> {
     use crate::value::{Value as V, type_name};
     let ip = |v: &Value| match v {
@@ -3125,12 +3136,9 @@ pub fn holds(coll: &Value, item: &Value) -> std::result::Result<bool, String> {
             };
             Ok(n & mask == *base)
         }
-        V::IpRange { start, end } => {
-            let n = addr("a range")?;
-            Ok(*start <= n && n <= *end)
-        }
+        V::Range(r) => r.holds(item),
         v => Err(format!(
-            "`in` takes a list, a string, an `inet` or an `iprange`, and {} is {}{}",
+            "`in` takes a list, a string, an `inet` or a range, and {} is {}{}",
             partition::fmt_value(v),
             crate::value::article(type_name(v)),
             match v {
@@ -4041,12 +4049,13 @@ fn as_params(name: &str, vals: Vec<Value>) -> Vec<Value> {
                 | Value::Time(_)
                 | Value::Uri(_)
                 | Value::Oci(_)
-                | Value::Semver(_),
+                | Value::Semver(_)
+                | Value::Range(_),
             ) => v.typed_text().map_or(v, Value::Str),
-            (Some("string"), Value::Ip(_) | Value::IpNet { .. } | Value::IpRange { .. }) => {
+            (Some("string"), Value::Ip(_) | Value::IpNet { .. }) => {
                 Value::Str(partition::fmt_value(&v))
             }
-            (Some(ty), Value::Str(_)) if crate::value::VALUE_TYPES.contains(&ty) => {
+            (Some(ty), Value::Str(_)) if crate::value::is_value_type(ty) => {
                 crate::value::read_typed(ty, &v).unwrap_or(v)
             }
             _ => v,
@@ -4067,6 +4076,7 @@ pub(crate) fn order(a: &Value, b: &Value) -> std::result::Result<Ordering, Strin
     let typed = |v: &Value| match v {
         Value::Time(_) => Some("time"),
         Value::Semver(_) => Some("semver"),
+        Value::Ip(_) => Some("ip"),
         Value::Quantity(q) => Some(q.dim().name()),
         _ => None,
     };
@@ -4084,6 +4094,7 @@ pub(crate) fn order(a: &Value, b: &Value) -> std::result::Result<Ordering, Strin
     match (a, b) {
         (Value::Time(x), Value::Time(y)) => Ok(x.instant().cmp(&y.instant())),
         (Value::Semver(x), Value::Semver(y)) => Ok(x.cmp(y)),
+        (Value::Ip(x), Value::Ip(y)) => Ok(x.cmp(y)),
         (Value::Quantity(x), Value::Quantity(y)) => {
             crate::quantity::compare(x, y).ok_or_else(|| {
                 if x.dim() == y.dim() {
@@ -4100,7 +4111,10 @@ pub(crate) fn order(a: &Value, b: &Value) -> std::result::Result<Ordering, Strin
                 }
             })
         }
-        _ => Err("comparison only supports numbers, quantities, times and versions".to_string()),
+        _ => Err(
+            "comparison only supports numbers, quantities, times, versions and addresses"
+                .to_string(),
+        ),
     }
 }
 
@@ -5516,9 +5530,9 @@ mod tests {
                 read("inet", "10.1.0.0/16"),
             ),
             (
-                "iprange",
-                read("iprange", "10.0.0.1-10.0.0.9"),
-                read("iprange", "10.0.0.2-10.0.0.3"),
+                "range",
+                read("range(ip)", "10.0.0.1..=10.0.0.9"),
+                read("range(ip)", "10.0.0.2..=10.0.0.3"),
             ),
             (
                 "uri",

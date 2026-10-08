@@ -137,7 +137,7 @@ type_attr("ovh.subnet", "id", "string", ["computed", "id"])
 type_attr("ovh.subnet", "network", "ref(ovh.network)", ["required", "force_new"])
 type_attr("ovh.subnet", "region", "string", ["required", "force_new"])
 type_attr("ovh.subnet", "range", "inet", ["required", "force_new"])
-type_attr("ovh.subnet", "pool", "iprange", ["optional_computed", "force_new"])
+type_attr("ovh.subnet", "pool", "range(ip)", ["optional_computed", "force_new"])
 type_attr("ovh.subnet", "dhcp", "bool", ["optional_computed", "force_new"])
 type_attr("ovh.subnet", "no_gateway", "bool", ["optional_computed", "force_new"])
 type_attr("ovh.subnet", "gateway_ip", "ip", ["computed", "nullable"])
@@ -332,7 +332,7 @@ type_doc("ovh.subnet", "range", "The network's range (`10.0.0.0/24`), what the A
 type_doc(
   "ovh.subnet",
   "pool",
-  "The addresses instances are given, both ends in it (`10.42.0.2-10.42.0.254`); the range's hosts after its gateway when not set. Changing it replaces the subnet.",
+  "The addresses instances are given, both ends in it (`10.42.0.2..=10.42.0.254`); the range's hosts after its gateway when not set. Changing it replaces the subnet.",
 )
 type_doc("ovh.subnet", "dhcp", "Whether instances get their address by DHCP; not when not set.")
 type_doc(

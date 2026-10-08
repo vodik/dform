@@ -1,7 +1,7 @@
 # Addresses: functions about an `ip` (docs/grammar.md "Functions"). An
 # `ip` is an IPv4 address, `10.0.0.1`, read from a string where one is
-# wanted as an `inet` is. An `iprange` is the addresses between two,
-# `10.0.0.10-10.0.0.99`, read the same way.
+# wanted as an `inet` is. A `range(ip)` is the addresses between two,
+# `10.0.0.10..=10.0.0.99`, read the same way (R-180).
 package ip
 
 #| Whether the address is 0.0.0.0; also a predicate.

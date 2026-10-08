@@ -2027,3 +2027,40 @@ fn an_attribute_goes_to_its_schema_row() {
     );
     c.shutdown();
 }
+
+/// Ranges (R-180) in the editor: a range attribute plans clean and its
+/// hover prints its canonical form; a dense range enumerated is the
+/// compiler's error, with its fix, at the `in`.
+#[test]
+fn a_range_is_a_value_the_editor_reads() {
+    let (_s, root) = example("demo");
+    let stack = root.join("stacks/dform.df");
+    let original = std::fs::read_to_string(&stack).unwrap();
+    let ranged = format!(
+        "{original}\nresource compute.vm ranged {{\n  ports = \"10.0.0.2\"..=\"10.0.0.9\"\n}}\n"
+    );
+    std::fs::write(&stack, &ranged).unwrap();
+    let mut c = Client::start(&root, json!({}));
+    c.open(&stack);
+    let ds = c.diagnostics(&stack);
+    assert!(ds.iter().all(|d| d["severity"] != 1), "{ds:?}");
+    let at = find(&stack, "ports =", 1);
+    let hover = c.at("textDocument/hover", &stack, at);
+    let text = hover["contents"]["value"].as_str().unwrap_or_default();
+    assert!(text.contains("\"10.0.0.2\"..=\"10.0.0.9\""), "{text}");
+
+    let dense = format!("{original}\nbig(n) where n in 1Gi..=500Gi\n");
+    c.change(&stack, 3, &dense);
+    let ds = c.diagnostics(&stack);
+    let e = ds
+        .iter()
+        .find(|d| {
+            d["message"]
+                .as_str()
+                .is_some_and(|m| m.contains("a range of bytes has no next member"))
+        })
+        .unwrap_or_else(|| panic!("{ds:?}"));
+    let line = dense.lines().position(|l| l.starts_with("big(n)")).unwrap();
+    assert_eq!(e["range"]["start"]["line"], line, "{e}");
+    c.shutdown();
+}

@@ -18,10 +18,10 @@ pub enum Value {
         addr: u32,
         prefix: u8,
     },
-    IpRange {
-        start: u32,
-        end: u32,
-    },
+    /// A range (R-180): `range(T)` for an ordered `T`, `0..=3`,
+    /// `10.42.0.2..=10.42.0.254`, `1Gi..=500Gi`; `.start`, `.end` and a
+    /// discrete one's `.len` read it ([`crate::range::Range`]).
+    Range(Box<crate::range::Range>),
     /// A quantity (R-66): bytes, cpu or a duration, in its base unit;
     /// printed canonically (`1536Mi`, `500m`, `1h30m`).
     Quantity(crate::quantity::Quantity),
@@ -236,6 +236,7 @@ impl Value {
             Value::Uri(u) => Some(u.to_string()),
             Value::Oci(u) => Some(u.clone()),
             Value::Semver(v) => Some(v.to_string()),
+            Value::Range(r) => Some(r.to_string()),
             _ => None,
         }
     }
@@ -299,8 +300,14 @@ impl<'de> Deserialize<'de> for Version {
 /// The value types a string is read as where one is wanted (R-31, R-134):
 /// a typed `let`, a parameter, an attribute, an input.
 pub const VALUE_TYPES: &[&str] = &[
-    "inet", "ip", "iprange", "uri", "oci", "semver", "time", "bytes", "cpu", "duration",
+    "inet", "ip", "uri", "oci", "semver", "time", "bytes", "cpu", "duration",
 ];
+
+/// Whether `ty` is a value type: one of [`VALUE_TYPES`], or `range(T)`
+/// for an ordered `T` (R-180).
+pub fn is_value_type(ty: &str) -> bool {
+    VALUE_TYPES.contains(&ty) || crate::range::element(ty).is_some()
+}
 
 /// The type a value is of, as a program writes it: `string`, `inet`,
 /// `bytes` (a quantity by its dimension), `list`.
@@ -314,7 +321,7 @@ pub fn type_name(v: &Value) -> &'static str {
         Value::Obj(_) => "object",
         Value::Ip(_) => "ip",
         Value::IpNet { .. } => "inet",
-        Value::IpRange { .. } => "iprange",
+        Value::Range(_) => "range",
         Value::Quantity(q) => q.dim().name(),
         Value::Time(_) => "time",
         Value::Uri(_) => "uri",
@@ -333,7 +340,7 @@ pub fn article(ty: &str) -> String {
     }
 }
 
-/// `v` read as the value type `ty` (one of [`VALUE_TYPES`]): a string
+/// `v` read as the value type `ty` ([`is_value_type`]): a string
 /// parsed, a value of the type itself; or why it is not one. What a
 /// typed position does with a computed string at run time.
 pub fn read_typed(ty: &str, v: &Value) -> Result<Value, String> {
@@ -347,7 +354,6 @@ pub fn read_typed(ty: &str, v: &Value) -> Result<Value, String> {
     match (ty, v) {
         ("inet", Value::IpNet { .. })
         | ("ip", Value::Ip(_))
-        | ("iprange", Value::IpRange { .. })
         | ("uri", Value::Uri(_))
         | ("oci", Value::Oci(_))
         | ("semver", Value::Semver(_))
@@ -359,9 +365,14 @@ pub fn read_typed(ty: &str, v: &Value) -> Result<Value, String> {
         ("ip", Value::Str(s)) => ipv4_to_u32(s)
             .map(Value::Ip)
             .ok_or_else(|| format!("{s:?} is not an address (`a.b.c.d`)")),
-        ("iprange", Value::Str(s)) => parse_iprange(s)
-            .map(|(start, end)| Value::IpRange { start, end })
-            .ok_or_else(|| format!("{s:?} is not a range of addresses (`a.b.c.d-e.f.g.h`)")),
+        (ty, Value::Range(r)) if crate::range::element(ty).is_some() => {
+            let elem = crate::range::element(ty).unwrap_or_default();
+            r.read(elem).map(Value::from)
+        }
+        (ty, Value::Str(s)) if crate::range::element(ty).is_some() => {
+            crate::range::Range::parse(crate::range::element(ty).unwrap_or_default(), s)
+                .map(Value::from)
+        }
         ("uri", Value::Str(s)) => parse_uri(s),
         ("oci", Value::Str(s)) => parse_oci(s),
         ("semver", Value::Str(s)) => Version::parse(s).map(Value::Semver),
@@ -394,8 +405,9 @@ pub fn read_typed(ty: &str, v: &Value) -> Result<Value, String> {
     }
 }
 
-/// The parts of a network or a version as an object: what `.bits` on
-/// an `inet` and `.major` on a `semver` read (R-134).
+/// The parts of a network, a version or a range as an object: what
+/// `.bits` on an `inet`, `.major` on a `semver` and `.start` on a range
+/// read (R-134, R-180).
 pub fn parts(v: &Value) -> Option<Value> {
     match v {
         Value::IpNet { addr, prefix } => Some(Value::Obj(BTreeMap::from([
@@ -404,15 +416,9 @@ pub fn parts(v: &Value) -> Option<Value> {
         ]))),
         Value::Semver(s) => Some(s.parts()),
         Value::Uri(u) => Some(uri_parts(u)),
+        Value::Range(r) => Some(r.parts()),
         _ => None,
     }
-}
-
-/// `a.b.c.d-e.f.g.h`: a range of addresses, in either order.
-pub fn parse_iprange(s: &str) -> Option<(u32, u32)> {
-    let (a, b) = s.split_once('-')?;
-    let (a, b) = (ipv4_to_u32(a.trim())?, ipv4_to_u32(b.trim())?);
-    Some(if a <= b { (a, b) } else { (b, a) })
 }
 
 /// `text` read as a uri, or why it is not one.

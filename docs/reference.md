@@ -3472,8 +3472,8 @@ deployment (see "Keyed stacks"); `--set` of one is an error. `--input-file FILE.
 allowed_cidrs(["10.0.0.0/8"]).`, each a normal contribution stated
 where the file states it, like a `set`'s; the plan file records each input file's digest.
 
-Types are `int`, `string`, `bool`, `inet`, `ip`, `iprange`, `uri`, `oci`,
-`semver`, the quantities `bytes`, `cpu` and `duration`, `time`, `enum(a, b, ...)`, `list(T)`, `set(T)` and objects
+Types are `int`, `string`, `bool`, `inet`, `ip`, `uri`, `oci`,
+`semver`, `range(T)` of an ordered `T` (`range(ip)`, `range(bytes)`), the quantities `bytes`, `cpu` and `duration`, `time`, `enum(a, b, ...)`, `list(T)`, `set(T)` and objects
 `{ k: T }` (`addr`, `ref(...)` and `any` are unchecked). A `uri` is RFC
 3986's generic syntax (`postgres://user@db:5432/x`, `mailto:ops@example.com`),
 its host held as written and equal by its A-labels, sent to a provider

@@ -630,7 +630,7 @@ fn value_bytes(v: &Value) -> usize {
         | Value::Bool(_)
         | Value::Ip(_)
         | Value::IpNet { .. }
-        | Value::IpRange { .. } => 0,
+        | Value::Range(_) => 0,
     }
 }
 

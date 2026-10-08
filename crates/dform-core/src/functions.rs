@@ -65,19 +65,21 @@ pub const SOURCES: &[(&str, &str)] = &[
 /// operator table writes them; `==` is over every type. The std audit
 /// checks the table against this and this against what the engine does.
 pub const OPERATORS: &[(&str, &[&str])] = &[
-    ("in", &["list", "string", "inet", "iprange"]),
+    ("in", &["list", "string", "inet", "range"]),
     ("+ -", &["int", "float", "bytes", "cpu", "duration", "time"]),
     ("* /", &["int", "float", "bytes", "cpu", "duration"]),
     ("%", &["int", "float"]),
     (
         "< <= > >=",
-        &["int", "float", "bytes", "cpu", "duration", "time", "semver"],
+        &[
+            "int", "float", "bytes", "cpu", "duration", "time", "semver", "ip",
+        ],
     ),
     (
         "${..}",
         &[
             "string", "int", "float", "bool", "bytes", "cpu", "duration", "time", "semver", "ip",
-            "inet", "iprange", "uri", "oci",
+            "inet", "range", "uri", "oci",
         ],
     ),
 ];
@@ -358,7 +360,12 @@ fn gone(name: &str) -> Option<String> {
     Some(match name {
         "inet" => typed("inet", "n", "\"10.0.0.0/16\"", &["addr", "bits"]),
         "ip" => typed("ip", "a", "\"10.0.0.1\"", &[]),
-        "iprange" => typed("iprange", "r", "\"10.0.0.10-10.0.0.99\"", &[]),
+        "iprange" => typed(
+            "range(ip)",
+            "r",
+            "\"10.0.0.10..=10.0.0.99\"",
+            &["start", "end", "len"],
+        ),
         "time" | "time.parse" => typed("time", "t", "\"2026-10-02T09:00[Europe/Paris]\"", &[]),
         "duration" | "duration.parse" => typed("duration", "d", "30m", &[]),
         "bytes" => typed("bytes", "b", "\"512Mi\"", &[]),
@@ -859,6 +866,14 @@ pub const BODIES: &[(&str, Body)] = &[
     // An ambiguous quantity no position read has no value; the compiler
     // says so where the schema is known (`types::read`).
     (crate::types::AMBIGUOUS, |_| None),
+    (crate::range::LOWERED, |a| match a {
+        [start, end, Value::Bool(inclusive)] => {
+            crate::range::Range::new(start.clone(), end.clone(), *inclusive)
+                .ok()
+                .map(Value::from)
+        }
+        _ => None,
+    }),
     ("time.format", |a| match a {
         [Value::Time(t), Value::Str(layout)] => t.format(layout).map(Value::Str),
         _ => None,
@@ -1540,11 +1555,7 @@ pub(crate) fn value_to_string(v: &Value) -> String {
         Value::Obj(_) => "<obj>".to_string(),
         Value::Ip(n) => crate::value::u32_to_ipv4(*n),
         Value::IpNet { addr, prefix } => crate::value::ipnet_to_string(*addr, *prefix),
-        Value::IpRange { start, end } => format!(
-            "{}-{}",
-            crate::value::u32_to_ipv4(*start),
-            crate::value::u32_to_ipv4(*end)
-        ),
+        Value::Range(r) => r.to_string(),
         // H-16: a reference reads as the source names it, `T["A"].path`.
         Value::Ref { typ, name, attr } => crate::ir::Address {
             typ: typ.clone(),
@@ -1582,12 +1593,15 @@ fn len_of(a: &[Value]) -> Option<Value> {
 }
 
 /// `.len` of a value: a list's elements, an object's fields, a string's
-/// characters; none of anything else.
+/// characters, an int range's or an ip range's members; none of anything
+/// else.
 pub(crate) fn len(v: &Value) -> Option<i64> {
     match v {
         Value::List(xs) => Some(xs.len() as i64),
         Value::Obj(m) => Some(m.len() as i64),
         Value::Str(s) => Some(s.chars().count() as i64),
+        // A discrete range's members (R-180).
+        Value::Range(r) => r.count(),
         _ => None,
     }
 }
@@ -1731,12 +1745,13 @@ fn scalar_text(v: &Value) -> Option<String> {
         Value::Int(i) => Some(i.to_string()),
         Value::Float(f) => Some(f.to_string()),
         Value::Bool(b) => Some(b.to_string()),
-        Value::Quantity(_) | Value::Time(_) | Value::Uri(_) | Value::Oci(_) | Value::Semver(_) => {
-            v.typed_text()
-        }
-        Value::Ip(_) | Value::IpNet { .. } | Value::IpRange { .. } => {
-            Some(crate::partition::fmt_value(v))
-        }
+        Value::Quantity(_)
+        | Value::Time(_)
+        | Value::Uri(_)
+        | Value::Oci(_)
+        | Value::Semver(_)
+        | Value::Range(_) => v.typed_text(),
+        Value::Ip(_) | Value::IpNet { .. } => Some(crate::partition::fmt_value(v)),
         _ => None,
     }
 }

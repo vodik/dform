@@ -551,13 +551,13 @@ fn there_is_no_prelude() {
 }
 
 /// `in` is the one membership (R-155): an element of a list, a substring
-/// of a string, an address of an `inet` or an `iprange`, under `not`
+/// of a string, an address of an `inet`, a member of a range, under `not`
 /// too; `inet.contains`, `list.contains` and `str.contains` are gone, an
 /// error naming `in` as a call and as a predicate.
 #[test]
 fn in_is_the_one_membership() {
     let src = r#"let n: inet = "10.0.0.0/8"
-let r: iprange = "10.0.0.10-10.0.0.20"
+let r: range(ip) = "10.0.0.10..=10.0.0.20"
 net_in() where "10.1.2.3" in n
 net_out() where not "11.1.2.3" in n
 range_in() where "10.0.0.15" in r
@@ -582,7 +582,7 @@ list_in() where 2 in [1, 2, 3]
         parse_program("let v: oci = \"ghcr.io/o/app:1\"\np() where \":\" in v\n").unwrap();
     let e = format!("{:#}", engine::eval(&program, &[]).unwrap_err());
     assert!(
-        e.contains("`in` takes a list, a string, an `inet` or an `iprange`")
+        e.contains("`in` takes a list, a string, an `inet` or a range")
             && e.contains("its text is `\"${v}\"`"),
         "{e}"
     );

@@ -523,8 +523,7 @@ export default grammar({
       $._primary,
     ),
 
-    // `lo..hi`, `lo..=hi` (R-56): enumerated by `in`; the compiler refuses
-    // one anywhere else.
+    // `lo..hi`, `lo..=hi` (R-56, R-180): a range, a value anywhere.
     range: $ => prec.left(PREC.range, seq(
       field('low', $._term),
       field('operator', choice('..', '..=')),

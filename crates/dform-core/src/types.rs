@@ -52,7 +52,7 @@ pub enum Ty {
     /// `string`, `int`, `float`, `number` (an int or a float, R-75),
     /// `bool`, `inet`, `ip`, `uri`, `oci`, `regex` (a pattern, not a schema type:
     /// a function parameter only), the quantities `bytes`, `cpu`,
-    /// `duration`, and `time`.
+    /// `duration`, `time`, and `range(T)` of an ordered `T` (R-180).
     Scalar(String),
     /// Anything the check does not judge (an untyped `map`, `object`,
     /// `any`, an untyped `list`).
@@ -67,8 +67,8 @@ impl Ty {
         let s = s.trim();
         let Some((head, rest)) = s.split_once('(') else {
             return match s {
-                "string" | "int" | "float" | "number" | "bool" | "inet" | "ip" | "iprange"
-                | "bytes" | "cpu" | "duration" | "time" | "uri" | "oci" | "semver" | "regex" => {
+                "string" | "int" | "float" | "number" | "bool" | "inet" | "ip" | "bytes"
+                | "cpu" | "duration" | "time" | "uri" | "oci" | "semver" | "regex" => {
                     Ty::Scalar(s.to_string())
                 }
                 _ => Ty::Any,
@@ -81,6 +81,8 @@ impl Ty {
             "ref" => Ty::Ref(inner.trim().trim_matches('"').to_string()),
             "list" | "set" => Ty::List(Box::new(Ty::parse(inner))),
             "map" => Ty::Map(Box::new(Ty::parse(inner))),
+            // `range(T)` (R-180): a value type, held by its text.
+            "range" => range(inner.trim()),
             "secret" => Ty::Secret(Box::new(Ty::parse(inner))),
             "enum" => Ty::Enum(
                 inner
@@ -100,6 +102,14 @@ impl Ty {
             Ty::Secret(t) | Ty::List(t) | Ty::Map(t) => t.measured(),
             _ => false,
         }
+    }
+}
+
+/// `range(T)` for an ordered `T`; nothing the check judges otherwise.
+fn range(elem: &str) -> Ty {
+    match crate::range::ORDERED.contains(&elem) {
+        true => Ty::Scalar(format!("range({elem})")),
+        false => Ty::Any,
     }
 }
 
@@ -414,7 +424,10 @@ pub fn mismatch(ty: &Ty, t: &Term) -> Option<String> {
                 ("uri", Value::Str(x)) => crate::uri::Uri::parse(x).is_ok(),
                 ("oci", Value::Oci(_)) => true,
                 ("oci", Value::Str(x)) => crate::value::OciRef::parse(x).is_ok(),
-                ("iprange" | "semver", v) => crate::value::read_typed(s, v).is_ok(),
+                ("semver", v) => crate::value::read_typed(s, v).is_ok(),
+                (s, v) if crate::range::element(s).is_some() => {
+                    crate::value::read_typed(s, v).is_ok()
+                }
                 ("regex", Value::Str(x)) => regex::Regex::new(x).is_ok(),
                 // A null is not known yet; a computed value fits its type.
                 (_, Value::Null { .. }) => true,
@@ -431,15 +444,13 @@ pub fn mismatch(ty: &Ty, t: &Term) -> Option<String> {
                 ("oci", Value::Str(x)) => {
                     format!("is an oci: {}", crate::value::parse_oci(x).unwrap_err())
                 }
-                ("iprange" | "semver", Value::Str(_)) => format!(
-                    "is {}: {}",
-                    if s == "iprange" {
-                        "an iprange"
-                    } else {
-                        "a semver"
-                    },
+                ("semver", Value::Str(_)) => format!(
+                    "is a semver: {}",
                     crate::value::read_typed(s, v).unwrap_err()
                 ),
+                (s, Value::Str(_) | Value::Range(_)) if crate::range::element(s).is_some() => {
+                    format!("is a {s}: {}", crate::value::read_typed(s, v).unwrap_err())
+                }
                 ("regex", Value::Str(x)) => format!(
                     "is a regex: {x:?} is not a valid pattern ({})",
                     regex::Regex::new(x).unwrap_err()
@@ -463,6 +474,7 @@ pub fn of_expr(t: &TypeExpr) -> Ty {
             ("list" | "set", [x]) => Ty::List(Box::new(of_expr(x))),
             ("map", [x]) => Ty::Map(Box::new(of_expr(x))),
             ("secret", [x]) => Ty::Secret(Box::new(of_expr(x))),
+            ("range", [TypeExpr::Name(t)]) => range(t),
             ("enum", xs) => Ty::Enum(
                 xs.iter()
                     .filter_map(|x| match x {
@@ -561,7 +573,7 @@ pub fn at_run_time(ty: &Ty, t: Term) -> Term {
     // A number's text is read at an `int` or a `float` position too
     // (R-155: no `int(s)`), but for what is a number already.
     let number = s == "int" || s == "float";
-    if !crate::value::VALUE_TYPES.contains(&s.as_str()) && !number {
+    if !crate::value::is_value_type(s) && !number {
         return t;
     }
     // A call whose result is typed is checked as it is; what may be a
@@ -624,8 +636,19 @@ fn read_as(ty: &Ty, t: Term) -> Term {
         (Ty::Scalar(s), Term::Val(Value::Str(x))) if s == "oci" => {
             Term::Val(crate::value::parse_oci(&x).unwrap_or(Value::Str(x)))
         }
-        (Ty::Scalar(s), Term::Val(v @ Value::Str(_))) if s == "iprange" || s == "semver" => {
+        (Ty::Scalar(s), Term::Val(v @ Value::Str(_))) if s == "semver" => {
             Term::Val(crate::value::read_typed(s, &v).unwrap_or(v))
+        }
+        // A range's text, or a literal's ends, read as the range (R-180).
+        (Ty::Scalar(s), Term::Val(v @ (Value::Str(_) | Value::Range(_))))
+            if crate::range::element(s).is_some() =>
+        {
+            Term::Val(crate::value::read_typed(s, &v).unwrap_or(v))
+        }
+        (Ty::Scalar(s), Term::Func { name, args })
+            if name == crate::range::LOWERED && crate::range::element(s).is_some() =>
+        {
+            range_read(s, args)
         }
         (Ty::Secret(inner), t) => read_as(inner, t),
         (Ty::Scalar(_), t @ (Term::Var(_) | Term::Func { .. })) => at_run_time(ty, t),
@@ -637,6 +660,74 @@ fn read_as(ty: &Ty, t: Term) -> Term {
         }
         (_, t) => t,
     }
+}
+
+/// `__range(start, end, inclusive)` where a `range(T)` is wanted: its
+/// ends read as `T` (`100m..=1` a cpu's), the range when both are known,
+/// else read at run time.
+fn range_read(ty: &str, args: Vec<Term>) -> Term {
+    let elem = Ty::Scalar(crate::range::element(ty).unwrap_or_default().to_string());
+    let args: Vec<Term> = args
+        .into_iter()
+        .enumerate()
+        .map(|(i, a)| if i < 2 { read_as(&elem, a) } else { a })
+        .collect();
+    folded(args).unwrap_or_else(|args| at_run_time(&Ty::Scalar(ty.to_string()), args))
+}
+
+/// A range literal's ends as written, an ambiguous quantity (`500m`) read
+/// as the one dimension that reads both (`100m..=1` a cpu's, `1h..=90m`
+/// a duration's); left for the position to read when none or two do.
+pub fn range_ends(a: Term, b: Term) -> (Term, Term) {
+    if ambiguous(&a).is_none() && ambiguous(&b).is_none() {
+        return (a, b);
+    }
+    let text = |t: &Term| match t {
+        Term::Val(Value::Quantity(q)) => Some((Some(q.dim()), q.to_string())),
+        Term::Val(Value::Int(n)) => Some((None, n.to_string())),
+        Term::Val(Value::Float(f)) => Some((None, f.to_string())),
+        t => ambiguous(t).map(|s| (None, s.to_string())),
+    };
+    let (Some((da, ta)), Some((db, tb))) = (text(&a), text(&b)) else {
+        return (a, b);
+    };
+    let reads = |d: Dim| {
+        Some(d) == da.or(db).or(Some(d))
+            && quantity::read(d, &ta).is_ok()
+            && quantity::read(d, &tb).is_ok()
+    };
+    let dims: Vec<Dim> = [Dim::Bytes, Dim::Cpu, Dim::Duration]
+        .into_iter()
+        .filter(|d| reads(*d))
+        .collect();
+    match dims.as_slice() {
+        [d] => {
+            let q = |t: &str| quantity::read(*d, t).map(|q| Term::Val(Value::Quantity(q)));
+            match (q(&ta), q(&tb)) {
+                (Ok(x), Ok(y)) => (x, y),
+                _ => (a, b),
+            }
+        }
+        _ => (a, b),
+    }
+}
+
+/// A range literal's term: the range when its ends are known (`Err` with
+/// the `__range` call otherwise, or when they make none).
+pub fn folded(args: Vec<Term>) -> Result<Term, Term> {
+    if let [
+        Term::Val(a),
+        Term::Val(b),
+        Term::Val(Value::Bool(inclusive)),
+    ] = args.as_slice()
+        && let Ok(r) = crate::range::Range::new(a.clone(), b.clone(), *inclusive)
+    {
+        return Ok(Term::Val(r.into()));
+    }
+    Err(Term::Func {
+        name: crate::range::LOWERED.to_string(),
+        args,
+    })
 }
 
 /// Check every contribution to a schema-typed attribute; one error per
@@ -783,10 +874,11 @@ fn read_at(schema: &Schema, typ: &str, path: &str, t: &mut Term) -> Result<(), (
         // literal now (`check` says why one is not), a computed value at
         // run time.
         if let Ty::Scalar(s) = &ty
-            && crate::value::VALUE_TYPES.contains(&s.as_str())
+            && crate::value::is_value_type(s)
         {
             let v = std::mem::replace(t, Term::Wildcard);
             *t = match v {
+                Term::Func { ref name, .. } if name == crate::range::LOWERED => read_as(&ty, v),
                 Term::Var(_) | Term::Func { .. } => at_run_time(&ty, v),
                 v => read_as(&ty, v),
             };

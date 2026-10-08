@@ -280,16 +280,16 @@ pub fn subnet_parts(remote: &str) -> (&str, &str) {
     remote.split_once('/').unwrap_or((remote, ""))
 }
 
-/// A pool as an `iprange` is written (`10.0.0.2-10.0.0.254`): its first
+/// A pool as a `range(ip)` prints (`10.0.0.2..=10.0.0.254`): its first
 /// and last address.
 pub fn pool_text(start: &str, end: &str) -> String {
-    format!("{start}-{end}")
+    format!("{start}..={end}")
 }
 
-/// The ends of a pool the program writes (an `iprange`, `A-B`), first
+/// The ends of a pool the program writes (a `range(ip)`, `A..=B`), first
 /// and last.
 pub fn pool_ends(pool: &str) -> Option<(String, String)> {
-    let (a, b) = dform_core::value::parse_iprange(pool)?;
+    let (a, b) = dform_core::range::Range::ips(pool)?;
     Some((
         dform_core::value::u32_to_ipv4(a),
         dform_core::value::u32_to_ipv4(b),
@@ -608,7 +608,7 @@ mod tests {
             attrs,
             json!({"network": "pn-1000123_42", "region": "BHS5", "range": "10.0.0.0/24"})
         );
-        assert_eq!(computed["pool"], "10.0.0.10-10.0.0.200");
+        assert_eq!(computed["pool"], "10.0.0.10..=10.0.0.200");
         assert_eq!(
             (&computed["dhcp"], &computed["no_gateway"]),
             (&json!(true), &json!(false))
@@ -631,25 +631,25 @@ mod tests {
     fn a_subnets_default_pool() {
         assert_eq!(
             default_pool("10.42.0.0/24", false).as_deref(),
-            Some("10.42.0.2-10.42.0.254")
+            Some("10.42.0.2..=10.42.0.254")
         );
         assert_eq!(
             default_pool("10.42.0.0/24", true).as_deref(),
-            Some("10.42.0.1-10.42.0.254")
+            Some("10.42.0.1..=10.42.0.254")
         );
         assert_eq!(
             default_pool("10.0.0.0/16", false).as_deref(),
-            Some("10.0.0.2-10.0.255.254")
+            Some("10.0.0.2..=10.0.255.254")
         );
         assert_eq!(
             default_pool("10.0.0.0/30", false).as_deref(),
-            Some("10.0.0.2-10.0.0.2")
+            Some("10.0.0.2..=10.0.0.2")
         );
         assert_eq!(default_pool("10.0.0.0/31", true), None);
         assert_eq!(default_pool("10.0.0.0/32", true), None);
         assert_eq!(default_pool("not a range", false), None);
         assert_eq!(
-            pool_ends("10.0.0.9-10.0.0.3"),
+            pool_ends("10.0.0.3..10.0.0.10"),
             Some(("10.0.0.3".into(), "10.0.0.9".into()))
         );
     }

@@ -2407,11 +2407,7 @@ impl Providers {
             ),
             Value::Ip(n) => json!(crate::value::u32_to_ipv4(*n)),
             Value::IpNet { addr, prefix } => json!(crate::value::ipnet_to_string(*addr, *prefix)),
-            Value::IpRange { start, end } => json!(format!(
-                "{}-{}",
-                crate::value::u32_to_ipv4(*start),
-                crate::value::u32_to_ipv4(*end)
-            )),
+            Value::Range(r) => json!(r.to_string()),
             Value::Ref { typ, name, attr } => self.resolve_ref(ctx, typ, name, attr)?,
             Value::CloudRef { typ, name, attr } => self.resolve_cloud_ref(typ, name, attr)?,
             Value::Null { label, class, .. } => self.resolve_null(ctx, label, *class)?,
@@ -3468,11 +3464,7 @@ fn known_json(v: &Value) -> Option<Json> {
         ),
         Value::Ip(n) => json!(crate::value::u32_to_ipv4(*n)),
         Value::IpNet { addr, prefix } => json!(crate::value::ipnet_to_string(*addr, *prefix)),
-        Value::IpRange { start, end } => json!(format!(
-            "{}-{}",
-            crate::value::u32_to_ipv4(*start),
-            crate::value::u32_to_ipv4(*end)
-        )),
+        Value::Range(r) => json!(r.to_string()),
         Value::Quantity(_) | Value::Time(_) | Value::Uri(_) | Value::Oci(_) | Value::Semver(_) => {
             json!(v.wire_text())
         }

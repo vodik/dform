@@ -666,9 +666,26 @@ a string where one is wanted (`semver.satisfies`'s version, `let v:
 semver = cfg.version`), ordered by precedence (`v < "2.0.0"`), its parts
 `v.major`, `v.minor`, `v.patch` and `v.pre` (absent: none). An `inet`'s
 parts are `n.addr` (its base address, an `ip`) and `n.bits` (its prefix
-length); an `iprange` is written `10.0.0.10-10.0.0.99`. A `regex` is a
+length). A `regex` is a
 parameter type only (`regex.match`'s pattern): a string whose text is
 checked as a pattern at compile time.
+
+A `range(T)` (R-180) is the values of an ordered `T` (an `int`, a
+`float`, a quantity, a `time`, an `ip`, a `semver`) between two: `a..b`
+leaves its end out, `a..=b` takes it. Its ends are terms of `T`, a
+number or a quantity as written (`0..=3`, `100m..=1`, `1Gi..=500Gi`) and
+a type written as a string quoted (`"10.42.0.2"..="10.42.0.254"`,
+`"1.2.0".."2.0.0"`), or the whole range is one string where a `range(T)`
+is wanted (`pool = "10.42.0.2..=10.42.0.254"`), parsed there. It prints
+`a..=b`, and a discrete range (an int's, an ip's) is held with its end
+in it, so `0..3` is `0..=2`. `r.start` and `r.end` read its ends, and
+a discrete range's `r.len` its count. A range tests and enumerates by
+`in`: with `x` bound, `x in r` holds when `x` is between the ends, for
+every ordered type; with `n` unbound, `n in r` gives each member of a
+discrete range in order, and a dense one (a quantity's, a float's, a
+time's, a version's) is an error naming the fix, ints scaled (`i in
+1..=500, size = i * 1Gi`). There is no step syntax: an int range and
+arithmetic are the step. `iprange` is `range(ip)`.
 
 There are no constructors (R-134): a value of a type is made by writing
 a string where the type is wanted, and the type comes from the position
@@ -1613,16 +1630,15 @@ lit1       := atom
             | read                               ; a truth test: == true
             | term cmpop term (cmpop term)*      ; a <= b <= c is a <= b, b <= c
             | pattern "=" term                   ; a tuple or object pattern matches (R-58)
-            | term "in" ("resource" | term | range)
+            | term "in" ("resource" | term)
             | tuple "in" term                    ; `(k, v) in obj`, `(i, x) in list`
-            | term "not" "in" (term | range)
+            | term "not" "in" term
 cmpop      := "=" | "==" | "!=" | "<" | "<=" | ">" | ">="
 atom       := chain "(" args ")"
 args       := (arg ("," arg)* ","?)?
 arg        := term | tuple | NAME ":" term       ; a named argument: its column's name
 
-range      := add (".." | "..=") add          ; only after `in` (R-56)
-term       := add
+term       := add ((".." | "..=") add)?        ; a range (R-56, R-180)
 add        := mul (("+" | "-") mul)*
 mul        := unary (("*" | "/" | "%") unary)*
 unary      := "-" unary | primary
@@ -1720,13 +1736,14 @@ the integers from `lo` up to `hi` (half-open) and `i in lo..=hi` up to
 and including it (R-56); `(i, x) in e` gives each index and element of
 a list, `(k, v) in e` each key and value of an object (R-58,
 "Patterns"), and `x = e[i]` the element at an index. A
-range's ends are bound integers, and it is enumerated in order. A range
+range's ends are bound, and an int's or an ip's range is enumerated in
+order; with `x` bound, `x in r` tests it, for a range of any ordered
+type ("Types", R-180). A range
 is for "once per i", things that have a position and no identity: a
 replica, a shard, the n-th /24; anything with a name is a relation, a
-row per thing (R-55). A range anywhere but after `in` is an error, "a
-range is enumerated with `in`; `[lo..hi]` is not a list", so it never
-becomes a list by accident: `int.range(lo, hi, step)` is the function
-that gives one.
+row per thing (R-55). A range is a value, never a list: `[0..3]` is a
+list of one range, and `int.range(lo, hi, step)` is the function that
+gives a list.
 
 `x in E`, `E` an enum type alias (`type environment = enum("staging",
 "prod")`), binds `x` to each value in the order the type declares them,
@@ -2004,19 +2021,19 @@ one is `unknown function`, with the name meant (`len(x)` is `x.len`,
 
 | operator | types |
 |----------|-------|
-| `in`     | `list` (an element), `string` (a substring), `inet` and `iprange` (an address); a type: an enum (a value), a resource type (`r in T`) |
+| `in`     | `list` (an element), `string` (a substring), `inet` (an address), `range` (a value between its ends); a type: an enum (a value), a resource type (`r in T`) |
 | `+ -`    | `int`, `float`, `bytes`, `cpu`, `duration`; `time` and a `duration`, `-` of two `time` |
 | `* /`    | `int`, `float`; `bytes`, `cpu`, `duration` by an `int` |
 | `%`      | `int`, `float` |
-| `< <= > >=` | `int`, `float`, `bytes`, `cpu`, `duration`, `time`, `semver` |
+| `< <= > >=` | `int`, `float`, `bytes`, `cpu`, `duration`, `time`, `semver`, `ip` |
 | `==`     | every type |
-| `${..}`  | `string`, `int`, `float`, `bool`, `bytes`, `cpu`, `duration`, `time`, `semver`, `ip`, `inet`, `iprange`, `uri`, `oci` (every type with a text: not a `list`, not an `object`) |
+| `${..}`  | `string`, `int`, `float`, `bool`, `bytes`, `cpu`, `duration`, `time`, `semver`, `ip`, `inet`, `range`, `uri`, `oci` (every type with a text: not a `list`, not an `object`) |
 
 A type has an operator in the table or not at all: `+` or `<` on two
 strings is an error naming the types that have it (`"${a}${b}"` joins
 two strings). `x in s` with `s` a string holds when
 `x` occurs in it; `a in n` with `n` an `inet` when the network holds the
-address, and with `n` an `iprange` when the range does; the right side's
+address, and with `n` a range when `a` is between its ends (R-180); the right side's
 type decides, so a string read as a network is typed first (`let n:
 inet = cfg.net`). A field of a value is a part of it, never a
 computation over it but `len`: `xs.len` of a list, `s.len` of a string
@@ -2092,7 +2109,7 @@ implement.
 | package   | functions                                                                 |
 |-----------|---------------------------------------------------------------------------|
 | `inet`    | `inet.subnet(net, bits, n)`, `inet.host(net, n)`, `inet.overlaps(a, b)`; fields `n.addr`, `n.bits`; `a in n` |
-| `int`     | `int.range(lo, hi, step)` (what `i in lo..hi` enumerates); `int.trunc(f)`, `int.round(f)`, `int.floor(f)`, `int.ceil(f)` (an int from a float, named by how it rounds) |
+| `int`     | `int.range(lo, hi, step)` (a list; `i in lo..hi` enumerates a range); `int.trunc(f)`, `int.round(f)`, `int.floor(f)`, `int.ceil(f)` (an int from a float, named by how it rounds) |
 | `quantity` | `quantity.to(q, unit)` (a quantity as a whole number of a unit, written as its literals write it: `"Gi"`, `"m"`, `"h"`) |
 | `secret`  | `secret.declassify(v, why)` (the one way a secret leaves on purpose)      |
 | `ip`      | `ip.unspecified(a)`                                                       |
@@ -2217,7 +2234,7 @@ as it is.
 | `(a, b) = e`                              | `[A, B] = e'`: a list of exactly two                   |
 | `{ a, b: p } = e`                         | `O = e', A = __path(O, "a"), P = __path(O, "b")`       |
 | `zone({ name })` (columns `name, index`)  | `zone{name: Name}`, a record pattern                   |
-| `i in lo..hi`, `i in lo..=hi`             | `member(int.range(lo', hi', 1), i)`, `member(int.range(lo', add(hi', 1), 1), i)` |
+| `i in lo..hi`, `i in lo..=hi`             | `member(lo'..hi', i)`, `member(lo'..=hi', i)`, the range a value when its ends are known, else `__range(lo', hi', inclusive)` |
 | `x not in e`, `not x in T`                | `not member(e', x)`, `not want(T, x)`                  |
 | `not { B }` (or a `not` of a nested path) | `not __neg_N(ȳ)`, `__neg_N(ȳ) :- P, B'`: ȳ the variables the body so far binds, `P` its positive literals |
 | `a + b` (and `- * / %`)                   | `add(a, b)` (`sub mul div mod`)                        |

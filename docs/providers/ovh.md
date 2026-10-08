@@ -150,7 +150,7 @@ always on it.
 
 `ovh.subnet`: `network = lab`, `region` (one of the network's), `range`
 (inet, `10.0.0.0/24`; the API calls it `network`), `pool` (the addresses
-instances are given, an `iprange`, both ends in it: the API's `start` and
+instances are given, a `range(ip)`, both ends in it: the API's `start` and
 `end`), `dhcp` (off when not set), `no_gateway` (a gateway at the range's
 first address when not set); computed `gateway_ip`. Every change replaces
 it (the API has none in place). Its remote id is `NETWORK/ID`.
@@ -167,14 +167,13 @@ resource ovh.subnet nodes {
 A subnet without a pool is given its range's hosts, as the OVH console
 fills them in: from the first after the gateway (`.2`; `.1` with
 `no_gateway = true`) to the last before broadcast (`.254`). Plan says
-which (`pool = "10.42.0.2-10.42.0.254"` among the create's lines), and
+which (`pool = "10.42.0.2..=10.42.0.254"` among the create's lines), and
 Read answers the pool the API has as a computed value, so a program that
 leaves it out plans clean. A pool the program writes is
-`pool = "10.42.0.10-10.42.0.200"`; one outside the range's hosts, or
-holding the gateway, is refused at plan. `start` and `end` are not
-attributes: Plan refuses them naming `pool`. Both ends of an `iprange`
-are in it: when ranges become `range(T)` (R-180) the pool is the
-inclusive `"10.42.0.2..=10.42.0.254"`.
+`pool = "10.42.0.10..=10.42.0.200"` (or `"10.42.0.10"..="10.42.0.200"`);
+one outside the range's hosts, or holding the gateway, is refused at
+plan. `start` and `end` are not attributes: Plan refuses them naming
+`pool`.
 
 `ovh.cloud_project_user`: an OpenStack user of the project. `description`
 (its key: the API makes up its username; replaces) and `roles` (a set of

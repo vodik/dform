@@ -1,6 +1,6 @@
 //! Ranges (R-56): `lo..hi` and `lo..=hi` after `in` enumerate integers in
-//! order, for "once per i"; a range anywhere else is an error, so it never
-//! becomes a list by accident.
+//! order, for "once per i"; a range is a value (R-180, tests/range_type.rs),
+//! never a list.
 
 mod common;
 use common::{Scratch, error, facts};
@@ -35,28 +35,20 @@ fn a_range_end_must_be_bound() {
 }
 
 #[test]
-fn a_range_end_is_an_integer() {
+fn a_range_has_ends_of_one_type() {
     let e = error("p(i) where i in \"a\"..3\n");
     assert!(
-        e.contains("a range's ends are integers: `\"a\"..3` has \"a\""),
+        e.contains("`\"a\"..3` is no range: its ends are a string and an int"),
         "{e}"
     );
 }
 
+/// A range is a value, not a list: in a list it is one element, and a
+/// list-typed attribute does not take one.
 #[test]
-fn a_range_is_not_a_value() {
-    for src in [
-        "p(x) where x = [0..3]\n",
-        "resource net.vpc v { cidrs = 0..3 }\n",
-        "p(x) where x = 0..=3\n",
-    ] {
-        let e = error(src);
-        assert!(
-            e.contains("a range is enumerated with `in`; `["),
-            "{src}: {e}"
-        );
-        assert!(e.contains("is not a list"), "{src}: {e}");
-    }
+fn a_range_is_not_a_list() {
+    assert_eq!(facts("p(x) where x = [0..3]\n", "p"), ["p([0..=2])"]);
+    assert_eq!(facts("p(x) where x = 0..=3\n", "p"), ["p(0..=3)"]);
 }
 
 /// One resource per i, and `why` prints the statement with its range as

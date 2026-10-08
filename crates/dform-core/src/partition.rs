@@ -1866,11 +1866,7 @@ pub fn fmt_value(v: &Value) -> String {
         ),
         Value::Ip(n) => crate::value::u32_to_ipv4(*n),
         Value::IpNet { addr, prefix } => crate::value::ipnet_to_string(*addr, *prefix),
-        Value::IpRange { start, end } => format!(
-            "{}-{}",
-            crate::value::u32_to_ipv4(*start),
-            crate::value::u32_to_ipv4(*end)
-        ),
+        Value::Range(r) => r.to_string(),
         Value::Ref { typ, name, attr } => format!("ref({typ}, {name}, {attr})"),
         Value::CloudRef { typ, name, attr } => format!("cloud_ref({typ}, {name}, {attr})"),
         Value::Null { label, class, .. } => format!("?{label}:{class:?}"),

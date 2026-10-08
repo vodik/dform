@@ -2702,6 +2702,14 @@ impl<'u> Lowerer<'u> {
                         );
                         self.diags.push(d);
                     }
+                    // R-180: a range of addresses is a range of ips.
+                    if name == "iprange" && aliases && self.alias(n, &name).is_none() {
+                        let d = Diagnostic::error(self.span(n), "unknown type iprange").with_help(
+                            "a range of addresses is `range(ip)`: `let r: range(ip) = \
+                                 \"10.0.0.10..=10.0.0.99\"`",
+                        );
+                        self.diags.push(d);
+                    }
                     match aliases.then(|| self.alias(n, &name)).flatten() {
                         Some(t) => t,
                         None => TypeExpr::Name(name),
@@ -2718,6 +2726,21 @@ impl<'u> Lowerer<'u> {
                             .collect(),
                     )
                 } else {
+                    // `range(T)` for an ordered `T` (R-180).
+                    if name == "range"
+                        && !matches!(args.as_slice(), [TypeExpr::Name(t)]
+                            if crate::range::ORDERED.contains(&t.as_str()))
+                    {
+                        let d = Diagnostic::error(
+                            self.span(n),
+                            format!("`{}` is no range type", n.text()),
+                        )
+                        .with_help(format!(
+                            "a range is of one ordered type: `range(T)`, `T` one of {}",
+                            crate::range::ORDERED.join(", ")
+                        ));
+                        self.diags.push(d);
+                    }
                     TypeExpr::Apply(name, args)
                 }
             }
@@ -5478,11 +5501,7 @@ impl<'u> Lowerer<'u> {
         }
         let rhs = ts.get(1).ok_or(Skip)?;
         let of = self.resource_list(rc, rhs);
-        let list = if rhs.kind() == RANGE {
-            self.range(rc, rhs, out)?
-        } else {
-            self.bind(false, |l| l.term(rc, rhs, Pos::Content, out))?
-        };
+        let list = self.bind(false, |l| l.term(rc, rhs, Pos::Content, out))?;
         // The element's name, for `set c.p` (R-69): `c in L`, `(i, c) in L`.
         let elem = match lhs_node.kind() {
             TUPLE => terms(lhs_node).nth(1),
@@ -6396,61 +6415,36 @@ impl<'u> Lowerer<'u> {
                     },
                 )
             }
-            // A range is enumerated (R-56); it is never a value, so it
-            // never becomes a list by accident.
-            RANGE => {
-                let d = Diagnostic::error(
-                    span,
-                    format!(
-                        "a range is enumerated with `in`; `[{}]` is not a list",
-                        n.text()
-                    ),
-                )
-                .with_help(format!(
-                    "write `i in {}` after `where`, or `int.range(lo, hi, step)` for a list",
-                    n.text()
-                ));
-                self.diags.push(d);
-                Err(Skip)
-            }
+            RANGE => self.range(rc, n, pre),
             k => self.error(span, format!("unexpected {k:?} as a term")),
         }
     }
 
-    /// `lo..hi` (half-open) or `lo..=hi` (inclusive) after `in`: the list
-    /// `int.range(lo, hi, 1)` whose members `in` enumerates in order
-    /// (R-56). Both ends must be bound integers.
+    /// `lo..hi` (its end left out) or `lo..=hi` (its end in it): a range
+    /// (R-180), the value when its ends are known, else
+    /// `__range(lo, hi, inclusive)`. An ambiguous quantity end is read as
+    /// the other end's (`100m..=1` is a cpu's).
     fn range(&mut self, rc: &mut Rc, n: &SyntaxNode, out: &mut Vec<Lit>) -> L<Term> {
         let ends: Vec<SyntaxNode> = terms(n).collect();
         let [lo, hi] = ends.as_slice() else {
             return Err(Skip);
         };
-        let lo = self.bind(false, |l| l.term(rc, lo, Pos::Content, out))?;
-        let mut hi = self.bind(false, |l| l.term(rc, hi, Pos::Content, out))?;
-        // A literal end is checked as the `int` it must be (R-31).
-        for end in [&lo, &hi] {
-            if let Term::Val(v) = end
-                && !matches!(v, Value::Int(_))
-            {
-                let d = Diagnostic::error(
-                    self.span(n),
-                    format!(
-                        "a range's ends are integers: `{}` has {}",
-                        n.text(),
-                        crate::partition::fmt_value(v)
-                    ),
-                );
-                self.diags.push(d);
-                return Err(Skip);
-            }
+        let lo = self.term(rc, lo, Pos::Content, out)?;
+        let hi = self.term(rc, hi, Pos::Content, out)?;
+        let (lo, hi) = crate::types::range_ends(lo, hi);
+        let inclusive = Term::Val(Value::Bool(tokens(n).any(|t| t.kind() == DOT2_EQ)));
+        let call = match crate::types::folded(vec![lo, hi, inclusive]) {
+            Ok(t) => return Ok(t),
+            Err(call) => call,
+        };
+        // Known ends that make no range: why.
+        if let Term::Func { args, .. } = &call
+            && let [Term::Val(a), Term::Val(b), Term::Val(Value::Bool(i))] = args.as_slice()
+            && let Err(why) = crate::range::Range::new(a.clone(), b.clone(), *i)
+        {
+            return self.error(self.span(n), format!("`{}` is no range: {why}", n.text()));
         }
-        if tokens(n).any(|t| t.kind() == DOT2_EQ) {
-            hi = match hi {
-                Term::Val(Value::Int(i)) => Term::Val(Value::Int(i + 1)),
-                t => func("add", vec![t, Term::Val(Value::Int(1))]),
-            };
-        }
-        Ok(func("int.range", vec![lo, hi, Term::Val(Value::Int(1))]))
+        Ok(call)
     }
 
     /// A string literal: `"a${e}b"` is `str.format("a%sb", e)` (H-13), `$${`
