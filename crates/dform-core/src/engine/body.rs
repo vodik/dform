@@ -346,7 +346,7 @@ pub(super) fn eval_body(body: &[Lit], src: &Src, rec: &Rec) -> Result<Vec<Row>> 
 /// x.vpc == "main"`), its value a string the index looks up: the key that
 /// finds the cell without its value (R-204). Where the type is known the
 /// compiler says a reference is never a string; here only the cell can.
-pub(super) fn string_cell(atom: &Atom, read: &ops::Read) -> Option<ops::Key> {
+fn string_cell(atom: &Atom, read: &ops::Read) -> Option<ops::Key> {
     let [Term::Var(_), _, _, Term::Val(Value::Str(_))] = atom.args.as_slice() else {
         return None;
     };

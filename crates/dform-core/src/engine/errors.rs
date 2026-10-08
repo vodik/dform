@@ -188,7 +188,7 @@ pub(super) fn head_error(head: &Atom, state: &HashMap<String, Value>) -> Option<
 }
 
 /// `an inet`, `a time`: a type with its article.
-pub(super) fn a_type(ty: &str) -> String {
+fn a_type(ty: &str) -> String {
     match ty.chars().next() {
         Some('a' | 'e' | 'i' | 'o' | 'u') => format!("an {ty}"),
         _ => format!("a {ty}"),
@@ -266,7 +266,7 @@ pub(super) fn ref_and_string(
 }
 
 /// [`ref_and_string`] with both sides as the program wrote them.
-pub(super) fn ref_and_string_written(
+fn ref_and_string_written(
     a: &str,
     av: &Value,
     op: &str,
@@ -401,7 +401,7 @@ pub(super) fn self_spread(graph: &partition::Graph, edges: &[partition::Edge]) -
 /// Why a spread answered nothing (R-199): a part that is not what its
 /// literal takes, checked once it has a value, `{ ..x }` of a list or `[..x]`
 /// of an object or a dense range; `None` for any other call.
-pub(super) fn spread_error(name: &str, args: &[Value]) -> Option<String> {
+fn spread_error(name: &str, args: &[Value]) -> Option<String> {
     use crate::functions::{CONCAT, MERGE};
     let object = match name {
         MERGE => true,

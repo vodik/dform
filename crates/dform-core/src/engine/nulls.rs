@@ -54,7 +54,7 @@ impl Rec<'_> {
         self.stuck_as(self.head, state, nulls, reason);
     }
 
-    pub(super) fn stuck_as(
+    fn stuck_as(
         &self,
         head: &Atom,
         state: &HashMap<String, Value>,
@@ -81,7 +81,7 @@ impl Rec<'_> {
 
     /// Rule 2 for a term: if a builtin inside it cannot evaluate because an
     /// argument carries a null, record the instance and say so.
-    pub(super) fn blocked(&self, t: &Term, state: &HashMap<String, Value>) -> bool {
+    fn blocked(&self, t: &Term, state: &HashMap<String, Value>) -> bool {
         match blocked_by_null(t, state) {
             Some((name, nulls)) => {
                 let why = if name == crate::ir::SCOPED || name == crate::ir::REF {
@@ -145,7 +145,7 @@ pub(super) fn forwards_nulls(name: &str) -> bool {
 /// The innermost builtin application in `t` whose arguments are ground but
 /// carry a null, with those nulls: every builtin argument is a content
 /// position (Rule 2).
-pub(super) fn blocked_by_null(
+fn blocked_by_null(
     t: &Term,
     state: &HashMap<String, Value>,
 ) -> Option<(String, BTreeSet<String>)> {

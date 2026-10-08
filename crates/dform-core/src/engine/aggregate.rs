@@ -192,7 +192,7 @@ pub(super) fn eval_rule_collect(
 
 /// A group's aggregated value, from its items sorted; `Err` with what is
 /// wrong with them.
-pub(super) fn fold(
+fn fold(
     name: &str,
     kind: AggKind,
     items: Vec<Value>,

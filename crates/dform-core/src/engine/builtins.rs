@@ -296,7 +296,7 @@ pub(super) fn eval_func(
 /// is declared is read as one (R-134: `time.format(cert.not_after, ..)`
 /// over a string attribute), and left a string when it is not one, which
 /// the body answers nothing for.
-pub(super) fn as_params(name: &str, vals: Vec<Value>) -> Vec<Value> {
+fn as_params(name: &str, vals: Vec<Value>) -> Vec<Value> {
     let Some(f) = crate::functions::get(name) else {
         return vals;
     };

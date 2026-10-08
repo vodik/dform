@@ -39,7 +39,7 @@ pub(super) fn eval_member_like(
     }
 }
 
-pub(super) fn eval_member2(
+fn eval_member2(
     atom: &Atom,
     state: &HashMap<String, Value>,
     out: &mut Vec<HashMap<String, Value>>,
@@ -145,7 +145,7 @@ pub(super) fn eval_not_member2(
 /// an `inet`, a member of a range (`a in net`, `n in 1..=3`). `None` for a list or an
 /// object, which enumerate; `Some(false)` while the item waits on a null
 /// (Rule 2), the literal stuck. The item is a test's, never bound here.
-pub(super) fn in_scalar(
+fn in_scalar(
     atom: &Atom,
     coll: &Value,
     state: &HashMap<String, Value>,
@@ -244,7 +244,7 @@ pub(super) fn eval_not_member3(
 
 /// A list's indexes and elements, or an object's keys and values in key
 /// order: what `(k, v) in e` enumerates.
-pub(super) fn entries(v: Value) -> Option<Vec<(Value, Value)>> {
+fn entries(v: Value) -> Option<Vec<(Value, Value)>> {
     match v {
         Value::List(items) => Some(
             items
@@ -260,7 +260,7 @@ pub(super) fn entries(v: Value) -> Option<Vec<(Value, Value)>> {
 
 /// Whether a negated pattern matches `v`: `_` anything, a tuple element by
 /// element, anything else by its value.
-pub(super) fn matches_ground(t: &Term, v: &Value, state: &HashMap<String, Value>) -> Result<bool> {
+fn matches_ground(t: &Term, v: &Value, state: &HashMap<String, Value>) -> Result<bool> {
     match t {
         Term::Wildcard => Ok(true),
         Term::List(ts) => {
@@ -283,7 +283,7 @@ pub(super) fn matches_ground(t: &Term, v: &Value, state: &HashMap<String, Value>
     }
 }
 
-pub(super) fn eval_member3(
+fn eval_member3(
     atom: &Atom,
     state: &HashMap<String, Value>,
     out: &mut Vec<HashMap<String, Value>>,
