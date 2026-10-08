@@ -906,7 +906,11 @@ Schema returns: documents of its own types to plan, create, update, replace
 and delete. Every provider's Schema is checked to name each type under
 the provider its `type_provider` row gives it (`k8s.secret` is provider
 `k8s`'s), and one that serves its own schema to name its types under its
-handshake's name. The mock passes it:
+handshake's name. What a provider notes of its configuration (Configure's
+`notes`: which credentials it uses, when they expire, a right they lack)
+is a line of the check's, `note  Configure: provider ovh: the consumer key
+for ovh-ca lacks POST /domain/zone/*`; in a run, a line on stderr. The
+mock passes it:
 
 ```bash
 cargo run -- provider check crates/dform-mock/schemas/fake.df   # the mock

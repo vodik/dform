@@ -42,7 +42,7 @@ fn a_service_account_configures_the_provider() {
             &[],
         )
         .unwrap();
-    assert_eq!(account.as_deref(), Some(fake::PROJECT));
+    assert_eq!(account.account.as_deref(), Some(fake::PROJECT));
     assert_eq!(server.tokens_minted(), 1);
     assert!(server.calls().contains(&"GET /cloud/project".to_string()));
     // No consumer key to describe, and nothing signed.
@@ -214,7 +214,7 @@ fn an_access_token_is_used_as_it_is() {
             &[],
         )
         .unwrap();
-    assert_eq!(account.as_deref(), Some(fake::PROJECT));
+    assert_eq!(account.account.as_deref(), Some(fake::PROJECT));
     assert_eq!(
         (
             server.tokens_minted(),

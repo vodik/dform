@@ -1432,7 +1432,10 @@ impl Handler for Mock {
                     .pointer("/settings/account")
                     .and_then(Json::as_str)
                     .map(str::to_string);
-                Reply::Configure(pb::ConfigureResponse { account })
+                Reply::Configure(pb::ConfigureResponse {
+                    account,
+                    notes: Vec::new(),
+                })
             }
             C::Schema(req) => {
                 let cloud = self.cloud();

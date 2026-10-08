@@ -121,6 +121,18 @@ fn provider_check_conforms_against_the_fake_api() {
         assert!(r.stdout.contains(check), "{check}\n{}", r.stdout);
     }
     assert!(server.instances().is_empty(), "{:?}", server.instances());
+    // What the credentials are is a line of the check's, not stderr's.
+    let form = format!(
+        "note  Configure: provider ovh: credentials for {}: an application key and a consumer \
+         key; the consumer key ",
+        server.endpoint
+    );
+    assert!(r.stdout.contains(&form), "{}", r.stdout);
+    assert!(
+        !r.stderr.contains("provider ovh: credentials"),
+        "{}",
+        r.stderr
+    );
 }
 
 /// Planning reads the account and changes nothing: what is new is a

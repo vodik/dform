@@ -271,12 +271,14 @@ macro_rules! convert {
             pub fn to_configure_response(r: &pb::ConfigureResponse) -> w::ConfigureResponse {
                 w::ConfigureResponse {
                     account: r.account.clone(),
+                    notes: r.notes.clone(),
                 }
             }
 
             pub fn from_configure_response(r: &w::ConfigureResponse) -> R<pb::ConfigureResponse> {
                 Ok(pb::ConfigureResponse {
                     account: r.account.clone(),
+                    notes: r.notes.clone(),
                 })
             }
 

@@ -517,7 +517,10 @@ impl<P: Provider> Typed<P> {
                 let settings = config.get("settings").cloned().unwrap_or_else(|| json!({}));
                 let (p, account) = P::configure(&settings)?;
                 *self.provider.lock().unwrap_or_else(|e| e.into_inner()) = Some(p);
-                Reply::Configure(pb::ConfigureResponse { account })
+                Reply::Configure(pb::ConfigureResponse {
+                    account,
+                    notes: Vec::new(),
+                })
             }
             Call::Schema(r) => Reply::Schema(pb::SchemaResponse {
                 facts: wire::schema_facts(&self.schema, &r).map_err(Error::from)?,

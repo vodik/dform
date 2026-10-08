@@ -150,9 +150,14 @@ fn suite(start: impl FnOnce() -> Result<Link>, dir: &Path) -> Result<(Vec<String
             config: Some(wire::doc(&config)),
         },
     )
-    .map(|_| ());
+    .map(|c| c.notes);
     let ok = configured.is_ok();
-    r.check("Configure", configured);
+    // What it notes of its configuration (the credentials' form, their
+    // expiry, a right they lack), each a line under it.
+    let notes = configured.as_ref().cloned().unwrap_or_default();
+    r.check("Configure", configured.map(|_| ()));
+    r.lines
+        .extend(notes.into_iter().map(|n| format!("note  Configure: {n}")));
     if !ok {
         return Ok((r.lines, r.failed));
     }

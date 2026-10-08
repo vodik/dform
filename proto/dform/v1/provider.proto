@@ -189,6 +189,10 @@ message ConfigureResponse {
   // tell: a program's `expect_account` is checked against it, and a
   // mismatch refuses to plan. The mock reports its `settings.account`.
   optional string account = 1;
+  // What the provider wants the user to see of its configuration: the
+  // credentials' form, their expiry, a right they lack. `provider check`
+  // prints each as a line of its own; a run prints each on stderr.
+  repeated string notes = 2;
 }
 
 message SchemaRequest {

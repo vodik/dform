@@ -419,8 +419,9 @@ impl Ovh {
     }
 
     /// Configure from `config` (dform's, with the program's `settings` the
-    /// second time). The account's project id, for `expect_account`.
-    pub fn configure(&self, config: &Json) -> Result<Option<String>> {
+    /// second time): the account's project id, for `expect_account`, and
+    /// what the credentials are and lack, as notes.
+    pub fn configure(&self, config: &Json) -> Result<pb::ConfigureResponse> {
         let env = |k: &str| std::env::var(k).ok();
         self.configure_with(config, &env, &config::default_files())
     }
@@ -432,7 +433,7 @@ impl Ovh {
         config: &Json,
         env: &dyn Fn(&str) -> Option<String>,
         files: &[std::path::PathBuf],
-    ) -> Result<Option<String>> {
+    ) -> Result<pb::ConfigureResponse> {
         let settings = config.get("settings").filter(|v| v.is_object());
         let deferred = config.get("deferred") == Some(&Json::Bool(true));
         let set = |c: Configured| {
@@ -443,7 +444,7 @@ impl Ovh {
                 account: Err("the program configures it (`use ovh { .. }`) and has not yet".into()),
                 awaiting: true,
             });
-            return Ok(None);
+            return Ok(pb::ConfigureResponse::default());
         }
         let setting = |k: &str| -> Result<Option<String>> {
             match settings.and_then(|s| s.get(k)) {
@@ -465,7 +466,7 @@ impl Ovh {
                     account: Err(format!("{e:#}")),
                     awaiting: false,
                 });
-                return Ok(None);
+                return Ok(pb::ConfigureResponse::default());
             }
         };
         let project = setting("project")?
@@ -478,9 +479,7 @@ impl Ovh {
         // Run outside a program and a project, as `provider check` runs
         // it: which credentials, and what they may do.
         let full = settings.is_none() && cache.is_none();
-        for note in crate::credential::notes(&client, full, cache.as_deref(), unix_now()) {
-            eprintln!("{note}");
-        }
+        let notes = crate::credential::notes(&client, full, cache.as_deref(), unix_now());
         let project = match project {
             Some(p) => Some(resolve_project(&client, &p, cache.as_deref())?),
             None => None,
@@ -495,7 +494,7 @@ impl Ovh {
             })),
             awaiting: false,
         });
-        Ok(account)
+        Ok(pb::ConfigureResponse { account, notes })
     }
 
     /// A region's flavors or images (`what`), listed once.
@@ -1674,8 +1673,7 @@ impl Handler for Ovh {
             }
             C::Configure(req) => {
                 let config = doc_of(req.config.as_ref())?.unwrap_or(json!({}));
-                let account = self.configure(&config).map_err(invalid)?;
-                Reply::Configure(pb::ConfigureResponse { account })
+                Reply::Configure(self.configure(&config).map_err(invalid)?)
             }
             C::Schema(req) => Reply::Schema(pb::SchemaResponse {
                 facts: wire::schema_facts(&self.schema, &req).map_err(invalid)?,

@@ -94,8 +94,8 @@ was revoked", with where to make one. Configure reads the key's validity
 (`GET /auth/currentCredential`, kept in dform's cache for that key) and
 warns when it expires within a week. Outside a program (`dform provider
 check`) it also says which form is in use, when the key expires, and each
-right below the key lacks: `the consumer key for ovh-ca lacks POST
-/domain/zone/*`.
+right below the key lacks, each a line of the check's: `note  Configure:
+provider ovh: the consumer key for ovh-ca lacks POST /domain/zone/*`.
 
 A bearer token minted elsewhere (`OVH_ACCESS_TOKEN`), as go-ovh takes
 it: each call carries it as it is, and nothing mints another, so when it

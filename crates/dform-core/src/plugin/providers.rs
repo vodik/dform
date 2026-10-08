@@ -575,10 +575,15 @@ impl Generation {
     }
 }
 
-/// Configure a link: the account its credentials reach, if it tells.
+/// Configure a link: the account its credentials reach, if it tells;
+/// what it notes of its configuration (a credential about to expire) on
+/// stderr.
 fn configure(link: &mut Link, config: Json) -> Result<Option<String>> {
     let config = Some(wire::doc(&config));
     let r: pb::ConfigureResponse = link.call(pb::ConfigureRequest { config })?;
+    for n in &r.notes {
+        eprintln!("{n}");
+    }
     Ok(r.account)
 }
 
