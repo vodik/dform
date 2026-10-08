@@ -9,7 +9,6 @@
 
 mod common;
 use common::Scratch;
-use std::time::Duration;
 
 const PROG: &str = r#"
 use fake
