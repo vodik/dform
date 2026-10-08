@@ -38,6 +38,9 @@ pub struct As {
 /// (`report::Report::when`, After R-156).
 pub struct Context<'a> {
     pub res: &'a EvalResult,
+    /// The providers' schema, for what a resource leaves unset that it
+    /// requires (R-184).
+    pub schema: Option<&'a crate::schema::Schema>,
     pub redact: &'a Redactor,
     pub signatures: Option<&'a crate::infer::Signatures>,
     pub stack_keys: &'a BTreeSet<String>,
@@ -73,6 +76,21 @@ pub fn why(pattern: &str, how: As, cx: &Context) -> Result<String> {
         return why_not();
     }
     let mut out = derivations(&matched, how, cx)?;
+    // What a resource leaves unset that its schema requires: what the
+    // plan refuses it for, before its provider is asked (R-184).
+    for (a, _) in &matched {
+        if a.pred != "want" {
+            continue;
+        }
+        let Some(addr) = resource_of(a) else {
+            continue;
+        };
+        let unset = unset_required(&addr, cx);
+        if !unset.is_empty() {
+            out.push_str("unset, required by the schema:\n");
+            out.push_str(&unset.join(""));
+        }
+    }
     // A contribution of the resource that reads what nothing derives
     // answered nothing (R-183): say the read, as the plan's error does.
     let holders: BTreeSet<ir::Address> =
@@ -113,6 +131,29 @@ pub fn why(pattern: &str, how: As, cx: &Context) -> Result<String> {
         out.push_str(&format!("{w}\n"));
     }
     Ok(cx.redact.text(&out))
+}
+
+/// Each attribute the resource at `addr` leaves unset that its schema
+/// requires, a line `  PATH  (WHAT IT IS)`.
+fn unset_required(addr: &ir::Address, cx: &Context) -> Vec<String> {
+    let Some(schema) = cx.schema else {
+        return Vec::new();
+    };
+    let Ok(resources) = ir::compile_resources(cx.res.facts.iter().cloned(), schema) else {
+        return Vec::new();
+    };
+    let Some(r) = resources.iter().find(|r| r.addr == *addr) else {
+        return Vec::new();
+    };
+    let doc = engine::value_to_json(&r.attrs);
+    schema
+        .unset_required(&addr.typ, &doc)
+        .into_iter()
+        .map(|p| match schema.required_doc(&addr.typ, &p) {
+            Some(w) => format!("  {p}  ({w})\n"),
+            None => format!("  {p}\n"),
+        })
+        .collect()
 }
 
 /// The resource a `want` or an `attr` fact is of.

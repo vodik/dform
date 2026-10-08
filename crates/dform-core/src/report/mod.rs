@@ -63,6 +63,10 @@ pub struct Failure {
     pub site: Option<String>,
     /// The resource it is about, for its site.
     pub addr: Option<Address>,
+    /// The program's own error, found before any provider is asked
+    /// ([`Failure::located`]): said as the compiler says one, its site
+    /// first.
+    pub located: bool,
 }
 
 impl Failure {
@@ -81,6 +85,22 @@ impl Failure {
             message: said_of(addr, message),
             site: None,
             addr: Some(addr.clone()),
+            located: false,
+        }
+    }
+
+    /// What the program leaves wrong in the resource at `addr`, each line
+    /// of `message` one error said at the resource's site as the
+    /// compiler says one (R-184): `backups.df:53, k8s.cron_job
+    /// forgejo_backup.job: spec.jobTemplate.spec.template is unset
+    /// (required: ..)`.
+    pub fn located(addr: &Address, message: String) -> Failure {
+        Failure {
+            what: address(addr),
+            message,
+            site: None,
+            addr: Some(addr.clone()),
+            located: true,
         }
     }
 
@@ -94,6 +114,23 @@ impl Failure {
 
     /// Its lines, each after `lead` (the first) or indented under it.
     pub fn lines(&self, lead: &str) -> Vec<String> {
+        if self.located {
+            let at = self
+                .site
+                .as_ref()
+                .map(|s| format!("{s}, "))
+                .unwrap_or_default();
+            let pad = " ".repeat(lead.chars().count());
+            return self
+                .message
+                .lines()
+                .enumerate()
+                .map(|(i, l)| {
+                    let lead = if i == 0 { lead } else { &pad };
+                    format!("{lead}{at}{}: {l}", self.what)
+                })
+                .collect();
+        }
         let mut out = vec![format!("{lead}{}", self.what)];
         let pad = " ".repeat(lead.chars().count() + 2);
         out.extend(

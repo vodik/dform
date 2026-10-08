@@ -2378,6 +2378,17 @@ impl Providers {
         }
     }
 
+    /// The program leaves no attribute the schema requires unset (R-184):
+    /// an error at the resource's site, before its provider is asked
+    /// (`deployment::plan` adds the site); what the schema does not know
+    /// stays the provider's refusal.
+    fn check_required(&self, addr: &Address, doc: &Json) -> Result<()> {
+        match self.schema().unset_message(&addr.typ, doc) {
+            Some(m) => Err(crate::report::Failure::located(addr, m).into()),
+            None => Ok(()),
+        }
+    }
+
     /// A desired resource's document as its provider takes it: quantities
     /// and times in the schema's render form (R-66), references and nulls
     /// resolved.
@@ -2485,6 +2496,7 @@ impl Providers {
             };
             self.check_held("plan", &r.addr, "", &r.attrs)?;
             let doc = self.desired_doc(&ctx, &r)?;
+            self.check_required(&r.addr, &doc)?;
             order.push(r.addr.clone());
             resolved.insert(r.addr.clone(), doc);
         }

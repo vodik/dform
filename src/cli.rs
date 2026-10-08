@@ -2786,6 +2786,7 @@ fn run_with(
                 let top = site_root(&cli.files);
                 let cx = crate::why::Context {
                     res: &x.res,
+                    schema: Some(ev.schema()),
                     redact: &x.redact,
                     signatures: ev.located.loaded.lowered.as_ref().map(|l| &l.signatures),
                     stack_keys: &keys,
@@ -5404,6 +5405,20 @@ fn run_tests(
         // Quantity and time literals read as their attributes' types (R-66).
         crate::types::read(&mut p, backend.schema())?;
         let (res, mut violations) = externs.eval(&p, &extra)?;
+        // What the plan refuses before any provider is asked (R-184): a
+        // resource that leaves unset what its schema requires.
+        let schema = backend.schema();
+        let unset: Vec<String> = ir::compile_resources(res.facts.iter().cloned(), schema)?
+            .iter()
+            .filter_map(|r| {
+                let m = schema.unset_message(&r.addr.typ, &engine::value_to_json(&r.attrs))?;
+                let site = report::sites(&res, [&r.addr], None).into_values().next();
+                Some(report::Failure::located(&r.addr, m).at(site).to_string())
+            })
+            .collect();
+        if !unset.is_empty() {
+            bail!(unset.join("\n"));
+        }
         violations.extend(inputs::violations(&res.facts, &lowered.inputs));
         let redact = query::Redactor::new(&res.facts, backend.schema());
         Ok(violations.iter().map(|v| redact.text(v)).collect())

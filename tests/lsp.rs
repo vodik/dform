@@ -778,7 +778,7 @@ fn quick_fix_derives_a_colliding_name_from_the_key_or_isolates_the_stack() {
     );
 }
 
-/// A required attribute no contribution sets (the provider refuses the
+/// A required attribute no contribution sets (the plan refuses the
 /// plan, at the top of the stack's file): set, with a typed placeholder.
 #[test]
 fn quick_fix_sets_a_required_attribute() {
@@ -792,7 +792,7 @@ fn quick_fix_sets_a_required_attribute() {
         &root,
         &stack,
         &edited,
-        "spec.accessModes is required",
+        "spec.accessModes is unset",
         "set the required spec.accessModes, spec.resources.requests.storage",
     );
     assert!(

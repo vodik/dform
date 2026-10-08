@@ -12,7 +12,7 @@ use crate::analysis::{self, Evaluated, Outcome, Reader, Where};
 use dform_core::ast::Term;
 use dform_core::syntax::{SyntaxKind, SyntaxNode};
 use dform_core::value::Value;
-use dform_core::{engine, ir, provider, stack, transform};
+use dform_core::{engine, ir, stack, transform};
 use rowan::TextSize;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -346,8 +346,8 @@ fn placeholder(ty: &str) -> &'static str {
     }
 }
 
-/// A required attribute no contribution sets (what a provider's plan
-/// refuses, naming the first): each such path of the resource, with a
+/// A required attribute no contribution sets (what the plan refuses,
+/// R-184, `Schema::unset_required`): each such path of the resource, with a
 /// typed placeholder, at the end of its block. Paths inside a list element
 /// are the element's.
 fn required(e: &Evaluated, read: Reader) -> Vec<Action> {
@@ -358,17 +358,14 @@ fn required(e: &Evaluated, read: Reader) -> Vec<Action> {
     for r in &resources {
         let typ = r.addr.typ.as_str();
         let doc = engine::value_to_json(&r.attrs);
-        let missing: Vec<(&String, &str)> = e
+        let missing: Vec<(String, &str)> = e
             .schema
-            .attrs
-            .iter()
-            .filter(|((t, p), spec)| {
-                t == typ
-                    && spec.has("required")
-                    && !e.schema.in_list(typ, p)
-                    && provider::get_path(&doc, p).is_none()
+            .unset_required(typ, &doc)
+            .into_iter()
+            .filter_map(|p| {
+                let ty = &e.schema.attr(typ, &p)?.ty;
+                Some((p, placeholder(ty)))
             })
-            .map(|((_, p), spec)| (p, placeholder(&spec.ty)))
             .collect();
         let Some((first, _)) = missing.first() else {
             continue;
@@ -403,7 +400,7 @@ fn required(e: &Evaluated, read: Reader) -> Vec<Action> {
         out.push(
             Action::new(
                 format!("set the required {}", names.join(", ")),
-                format!("{first} is required"),
+                e.schema.unset(typ, first),
                 None,
             )
             .edit(&file, at, at, format!("{lead}{}\n", lines.join("\n"))),

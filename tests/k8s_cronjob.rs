@@ -3,7 +3,7 @@
 //! `spec.jobTemplate.spec.template` and a Job's `spec.template` are
 //! required) and against the mock, the template written leaf-wise, as
 //! its `spec` whole, and as one object with `spec` inside. A template
-//! left out is refused at Plan with the address as the plan prints it.
+//! left out is refused by the plan at its site (R-184).
 
 mod common;
 use common::{Run, Scratch};
@@ -105,8 +105,8 @@ fn a_jobs_pod_template_plans_however_it_is_written() {
     }
 }
 
-/// The template left out: the real provider refuses the CronJob, its
-/// head the address as the plan prints it, then what is required.
+/// The template left out: the plan refuses the CronJob at its site
+/// before the provider is asked (R-184), naming what is unset.
 #[test]
 fn a_cron_job_without_its_template_is_refused_naming_it() {
     let s = project(
@@ -118,11 +118,9 @@ fn a_cron_job_without_its_template_is_refused_naming_it() {
     let r = plan(&s);
     assert!(
         r.stderr.contains(
-            "Error: plan k8s.cron_job job: refused\n  \
-             spec.jobTemplate.spec.template is required: "
+            "Error: p.df:3, k8s.cron_job job: spec.jobTemplate.spec.template is unset (required: "
         ),
         "{}",
         r.stderr
     );
-    assert!(r.stderr.contains("\n  p.df:3"), "{}", r.stderr);
 }

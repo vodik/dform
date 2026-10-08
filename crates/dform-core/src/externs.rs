@@ -516,6 +516,7 @@ impl<'a> Externs<'a> {
                         message: format!("{e:#}"),
                         site,
                         addr: None,
+                        located: false,
                     }
                     .into()
                 })?;

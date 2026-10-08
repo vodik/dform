@@ -2937,6 +2937,25 @@ cargo run -- -C examples/demo why 'net.vpc["peer.vpc"]' dform env=dev
 #         env != "dev": false, with env = "dev"
 ```
 
+A resource that leaves unset an attribute its schema requires is
+refused by the plan at the resource's site, before its provider is
+asked (R-184), one line per attribute:
+
+```
+Error: backups.df:53, k8s.cron_job forgejo_backup.job: spec.jobTemplate.spec.template is unset (required: describes the pod that will be created when executing a job)
+```
+
+A required path binds where the nearest path above it the schema
+declares is written (the template where the job's `spec` is), at the top
+where it declares none; one inside a list element, or under a value a
+tick makes, is left to the provider, whose refusal says the rest. `why`
+of the resource lists them after its attributes:
+
+```
+unset, required by the schema:
+  spec.jobTemplate.spec.template  (describes the pod that will be created when executing a job)
+```
+
 `dform dev graph` prints Graphviz DOT, nodes and edges sorted:
 
 ```bash
@@ -3925,7 +3944,9 @@ deny "dev has no database" where env == "dev", _ in db.postgres
 ```
 
 It prints a result set, a row per combination: its inputs, then `ok` or
-`denied` (or `error`, for one that does not compile). Each that failed
+`denied` (or `error`, for one that does not compile, or whose plan would
+refuse a resource for an attribute its schema requires and the program
+leaves unset, said as the plan says it, R-184). Each that failed
 follows as the command that plans it with its denies (or its error),
 each with its doc comment (`#|` above the deny: the test's doc) beside
 it; it exits non-zero if any failed:

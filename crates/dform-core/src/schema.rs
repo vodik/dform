@@ -551,19 +551,95 @@ impl Schema {
             .map(|((_, path), _)| self.required(typ, path))
     }
 
+    /// The `required` attributes of `typ` that `doc` leaves unset, by
+    /// path (R-184): what dform knows of the provider's refusal before it
+    /// asks. A required path binds where the nearest path above it the
+    /// schema declares is set, an object (the top level when it declares
+    /// none): a CronJob's `spec.jobTemplate.spec.template` where its
+    /// `spec.jobTemplate.spec` is written. A path inside a list element,
+    /// and one under a value a tick makes, is the provider's to judge.
+    pub fn unset_required(&self, typ: &str, doc: &serde_json::Value) -> Vec<String> {
+        let plain = |v: &serde_json::Value| v.is_object() && crate::provider::marker(v).is_none();
+        let ancestors = |p: &str| -> Vec<String> {
+            std::iter::successors(p.rsplit_once('.').map(|x| x.0), |p| {
+                p.rsplit_once('.').map(|x| x.0)
+            })
+            .map(str::to_string)
+            .collect()
+        };
+        self.attrs
+            .range((typ.to_string(), String::new())..)
+            .take_while(|((t, _), _)| t == typ)
+            .filter(|((_, path), spec)| {
+                spec.has("required")
+                    && !self.in_list(typ, path)
+                    && crate::provider::get_path(doc, path).is_none()
+            })
+            .filter(|((_, path), _)| {
+                let above = ancestors(path);
+                let declared = above.iter().position(|a| self.attr(typ, a).is_some());
+                // What is written above the path, up to the declared one, is
+                // an object or nothing.
+                let up_to = declared.map_or(above.len(), |i| i + 1);
+                let written = above[..up_to]
+                    .iter()
+                    .filter_map(|a| crate::provider::get_path(doc, a))
+                    .all(plain);
+                written
+                    && match declared {
+                        Some(i) => crate::provider::get_path(doc, &above[i]).is_some_and(plain),
+                        None => true,
+                    }
+            })
+            .map(|((_, path), _)| path.clone())
+            .collect()
+    }
+
+    /// What a resource of `typ` whose document is `doc` leaves unset
+    /// that the schema requires, a line each ([`Schema::unset`]); `None`
+    /// when nothing.
+    pub fn unset_message(&self, typ: &str, doc: &serde_json::Value) -> Option<String> {
+        let unset = self.unset_required(typ, doc);
+        (!unset.is_empty()).then(|| {
+            unset
+                .iter()
+                .map(|p| self.unset(typ, p))
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+    }
+
+    /// What `path` of `typ` is, said after the rule that requires it: the
+    /// first sentence of its `type_doc`, lowercased.
+    pub fn required_doc(&self, typ: &str, path: &str) -> Option<String> {
+        self.docs()
+            .get(&(typ, path))
+            .map(|d| {
+                let d = d.trim();
+                let d = d.split_once(". ").map_or(d, |(first, _)| first);
+                let d = d.trim_end_matches('.');
+                let mut cs = d.chars();
+                cs.next()
+                    .map(|c| c.to_lowercase().chain(cs).collect::<String>())
+                    .unwrap_or_default()
+            })
+            .filter(|w| !w.is_empty())
+    }
+
+    /// That `path` of `typ` is unset and required, as the plan refuses it
+    /// (R-184): `spec.jobTemplate.spec.template is unset (required:
+    /// describes the pod ..)`.
+    pub fn unset(&self, typ: &str, path: &str) -> String {
+        match self.required_doc(typ, path) {
+            Some(w) => format!("{path} is unset (required: {w})"),
+            None => format!("{path} is unset (required)"),
+        }
+    }
+
     /// That `path` of `typ` is required, said with what it is: the first
     /// sentence of its `type_doc`, else where it is given.
     pub fn required(&self, typ: &str, path: &str) -> String {
-        let what = self.docs().get(&(typ, path)).map(|d| {
-            let d = d.trim();
-            let d = d.split_once(". ").map_or(d, |(first, _)| first);
-            let d = d.trim_end_matches('.');
-            let mut cs = d.chars();
-            cs.next()
-                .map(|c| c.to_lowercase().chain(cs).collect::<String>())
-                .unwrap_or_default()
-        });
-        match what.filter(|w| !w.is_empty()) {
+        match self.required_doc(typ, path) {
             Some(w) => format!("{path} is required: {w}"),
             None => format!("{path} is required: give it in the resource's block"),
         }
@@ -1186,5 +1262,39 @@ mod tests {
         );
         let whole = serde_json::json!({"name": "a", "end": "10.0.0.9"});
         assert_eq!(s.missing_required("t.r", &whole), None);
+    }
+
+    /// What the plan refuses before a provider is asked (R-184): a
+    /// required path binds where the nearest declared path above it is
+    /// written (a CronJob's template where its job spec is), at the top
+    /// where none is declared; under a value a tick makes, not at all.
+    #[test]
+    fn a_required_path_binds_where_its_declared_parent_is_written() {
+        let s = Schema::parse(
+            "type_attr(\"t.c\", \"spec\", \"object\", [\"required\"])\n\
+             type_attr(\"t.c\", \"spec.job\", \"object\", [])\n\
+             type_attr(\"t.c\", \"spec.job.template\", \"object\", [\"required\"])\n\
+             type_attr(\"t.c\", \"spec.job.template.containers\", \"list\", [\"required\"])\n\
+             type_attr(\"t.c\", \"run.image\", \"string\", [\"required\"])\n\
+             type_doc(\"t.c\", \"spec.job.template\", \"Describes the pod. More.\")\n",
+            "test",
+        )
+        .unwrap();
+        let unset = |doc: serde_json::Value| s.unset_required("t.c", &doc);
+        let image = serde_json::json!({"image": "x"});
+        assert_eq!(unset(serde_json::json!({"run": image})), ["spec"]);
+        assert_eq!(
+            unset(serde_json::json!({"spec": {}})),
+            ["run.image"],
+            "the job is not written: its template is not required"
+        );
+        let doc = serde_json::json!({"spec": {"job": {"backoff": 1}}, "run": image});
+        assert_eq!(unset(doc.clone()), ["spec.job.template"]);
+        assert_eq!(
+            s.unset_message("t.c", &doc).as_deref(),
+            Some("spec.job.template is unset (required: describes the pod)")
+        );
+        let held = serde_json::json!({"spec": {"job": {"$null": "t.c#x"}}, "run": image});
+        assert!(unset(held).is_empty());
     }
 }
