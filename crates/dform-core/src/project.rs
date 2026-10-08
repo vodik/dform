@@ -854,15 +854,6 @@ impl Manifest {
             .collect()
     }
 
-    /// `[providers.NAME] timeout`, if it says: how long one call to the
-    /// provider `name` may go unanswered (R-81).
-    pub fn provider_timeout(&self, name: &str) -> Option<std::time::Duration> {
-        match self.providers.get(name)? {
-            ProviderEntry::Table(t) => crate::store::parse_duration(t.timeout.as_deref()?),
-            ProviderEntry::Source(_) => None,
-        }
-    }
-
     /// How long a tick waits on what each provider answers "not yet"
     /// (`[providers.NAME] wait`), by its name, where dform.toml says;
     /// else [`WAIT`].
@@ -1356,8 +1347,6 @@ mod tests {
         };
         assert_eq!(m.policies(), BTreeMap::from([("fake".to_string(), fake)]));
         assert_eq!(m.provider_waits()["read"], Duration::from_secs(300));
-        assert_eq!(m.provider_timeout("fake"), Some(Duration::from_secs(120)));
-        assert_eq!(m.provider_timeout("k8s"), None);
         let e = manifest("[providers]\nfake = { source = \"fake\", timeout = \"soon\" }\n")
             .unwrap_err();
         assert!(e.to_string().contains("[providers.fake] timeout"), "{e}");

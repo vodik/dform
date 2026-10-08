@@ -641,7 +641,7 @@ pub const PROVIDER_PREDS: &[&str] = &[
     "project_stack",
 ];
 
-pub fn is_provider_pred(pred: &str) -> bool {
+fn is_provider_pred(pred: &str) -> bool {
     PROVIDER_PREDS.contains(&pred)
 }
 
@@ -649,7 +649,7 @@ pub fn is_provider_pred(pred: &str) -> bool {
 /// round-0 resolution and the stuck instances.
 pub const ENGINE_PREDS: &[&str] = &["resolve", "resolved", "stuck", "__ref_dep"];
 
-pub fn is_engine_pred(pred: &str) -> bool {
+fn is_engine_pred(pred: &str) -> bool {
     ENGINE_PREDS.contains(&pred)
 }
 

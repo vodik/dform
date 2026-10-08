@@ -1870,7 +1870,7 @@ impl Explained {
 
 /// A `deny` or `warn` fact as the evaluator words its violation (`engine`'s
 /// `format_policy_fact`).
-pub fn policy_text(a: &Atom) -> Option<String> {
+fn policy_text(a: &Atom) -> Option<String> {
     let Some(Term::Val(Value::Str(msg))) = a.args.first() else {
         return None;
     };
@@ -2004,7 +2004,7 @@ pub fn value_of(raw: &str) -> Value {
 
 /// The manifest under the program's own statements: a provider named
 /// without a `source` takes the manifest's entry of that name.
-pub fn with_manifest(cfg: &mut stack::Stack, m: &Manifest) {
+fn with_manifest(cfg: &mut stack::Stack, m: &Manifest) {
     let blocks = cfg.provider_blocks.iter_mut().map(|b| &mut b.spec);
     for p in cfg.providers.iter_mut().chain(blocks) {
         if !p.contains('/')

@@ -107,7 +107,7 @@ fn string(lx: &mut logos::Lexer<Tok>) -> bool {
 /// character after it, `$${` is a literal `${`, and a `${` opens a hole
 /// that runs to its matching `}` (`hole_end`). `None` when the string or
 /// a hole in it is never closed.
-pub fn string_end(src: &[u8]) -> Option<usize> {
+fn string_end(src: &[u8]) -> Option<usize> {
     let mut i = 1;
     while i < src.len() {
         match src[i] {

@@ -436,7 +436,7 @@ fn mac_of<'a>(values: impl IntoIterator<Item = &'a Plain>) -> String {
 /// The age identity a deployment's master derives (its digest key, the
 /// first epoch's, so a `secrets cycle` keeps it): the file's recipient for
 /// whoever opens the master by the passphrase or the key file.
-pub fn identity_of(digest: &Key) -> age::x25519::Identity {
+fn identity_of(digest: &Key) -> age::x25519::Identity {
     use bech32::ToBase32;
     let bytes = crate::secrets::derived(digest, "dform given secrets age identity");
     bech32::encode(

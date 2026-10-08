@@ -561,17 +561,6 @@ pub fn join(lat: &Lattice, path: &str, x: Elem, y: Elem) -> Elem {
     }
 }
 
-/// Least upper bound of a set of contributions.
-pub fn lub(
-    lat: &Lattice,
-    path: &str,
-    contribs: impl IntoIterator<Item = (Witness, Value)>,
-) -> Elem {
-    contribs.into_iter().fold(Elem::Bottom, |acc, (w, v)| {
-        join(lat, path, acc, Elem::Val(v, Witnesses::from([w])))
-    })
-}
-
 // ---------------------------------------------------------------------------
 // Ranked cells
 // ---------------------------------------------------------------------------
@@ -681,7 +670,7 @@ impl Ranked {
     pub fn join(&self, other: &Ranked, path: &str) -> Ranked {
         self.join_in(&Lattice::Flat, other, path)
     }
-    pub fn join_in(&self, lat: &Lattice, other: &Ranked, path: &str) -> Ranked {
+    fn join_in(&self, lat: &Lattice, other: &Ranked, path: &str) -> Ranked {
         let mut out = self.clone();
         for i in 0..3 {
             out.ranks[i] = join(lat, path, self.ranks[i].clone(), other.ranks[i].clone());
@@ -691,17 +680,6 @@ impl Ranked {
             *e = union(e, w);
         }
         out
-    }
-    /// Every witness in the cell, for `why`.
-    pub fn all_witnesses(&self) -> Witnesses {
-        let mut w = self
-            .ranks
-            .iter()
-            .fold(Witnesses::new(), |acc, e| union(&acc, &e.witnesses()));
-        for cw in self.constraints.values() {
-            w = union(&w, cw);
-        }
-        w
     }
 
     /// A phase boundary: substitute a resolved null and re-normalize every
@@ -757,6 +735,18 @@ fn rank_of(i: usize) -> Rank {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Least upper bound of a set of contributions: `join` folded, the
+    /// laws' subject.
+    pub(super) fn lub(
+        lat: &Lattice,
+        path: &str,
+        contribs: impl IntoIterator<Item = (Witness, Value)>,
+    ) -> Elem {
+        contribs.into_iter().fold(Elem::Bottom, |acc, (w, v)| {
+            join(lat, path, acc, Elem::Val(v, Witnesses::from([w])))
+        })
+    }
 
     pub(super) fn s(x: &str) -> Value {
         Value::Str(x.into())
@@ -1297,7 +1287,7 @@ mod tests {
 
         // Secret at a losing rank: the concrete wins and the collapsed witnesses
         // do not include the secret's contributor (no taint from a loser).
-        let (cell, c) = ranked_all_orders(&[
+        let (_, c) = ranked_all_orders(&[
             Ranked::at(Rank::Default, 1, secret("sm/db_pw#secret_data")),
             Ranked::at(Rank::Normal, 2, s("literal")),
         ]);
@@ -1305,7 +1295,6 @@ mod tests {
             panic!()
         };
         assert_eq!(*witnesses, Witnesses::from([2]));
-        assert_eq!(cell.all_witnesses(), Witnesses::from([1, 2])); // but `why` still sees it
     }
 
     // ---- seam 1, case 4: refinement on a null-carrying cell ----------------
@@ -1694,7 +1683,7 @@ impl Ranked {
 
     /// `collapse` of the cell at `path`, which names the path
     /// of a deferred or violated refinement.
-    pub fn collapse_at(&self, path: &str) -> Collapsed {
+    fn collapse_at(&self, path: &str) -> Collapsed {
         let Some(top) = self.ranks.iter().rposition(|e| !matches!(e, Elem::Bottom)) else {
             return Collapsed::Bottom;
         };
@@ -2344,7 +2333,7 @@ fn key_label(keys: &[String], k: &[Value]) -> String {
 
 #[cfg(test)]
 mod f_tests {
-    use super::tests::{open, s, secret};
+    use super::tests::{lub, open, s, secret};
     use super::*;
     fn joined(cells: &[Ranked]) -> Ranked {
         cells

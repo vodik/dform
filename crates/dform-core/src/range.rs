@@ -233,7 +233,7 @@ impl From<Range> for Value {
 /// How the fix for enumerating a dense range reads: ints scaled by the
 /// unit its ends share (`n in 1..=500, x = n * 1Gi`), else a bound value
 /// tested (`x in r` after what binds `x`).
-pub fn stepped(r: &Range) -> String {
+fn stepped(r: &Range) -> String {
     let unit = |v: &Value| -> Option<(i64, String)> {
         let text = v.typed_text()?;
         let digits = text.find(|c: char| !c.is_ascii_digit())?;

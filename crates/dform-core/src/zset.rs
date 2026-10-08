@@ -150,7 +150,7 @@ impl Instances {
     }
 
     /// Is `addr` a copy's address?
-    pub fn is_instance(&self, addr: &Address) -> bool {
+    fn is_instance(&self, addr: &Address) -> bool {
         self.by_scope.get(&addr.name) == Some(&addr.typ)
     }
 
@@ -558,7 +558,7 @@ pub fn with_policy_rules(mut program: crate::ast::Program) -> Result<crate::ast:
 }
 
 /// A world document's digest for `deformation/3` and `world_digest/2`.
-pub fn doc_digest(doc: Option<&serde_json::Value>) -> String {
+fn doc_digest(doc: Option<&serde_json::Value>) -> String {
     match doc {
         Some(d) => file::fnv64(&serde_json::to_vec(d).unwrap_or_default()),
         None => "absent".to_string(),

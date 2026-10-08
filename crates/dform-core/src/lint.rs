@@ -114,7 +114,7 @@ pub fn name_like(facts: &BTreeSet<Atom>, schema: &Schema) -> Vec<Named> {
 /// key selects its value). Between rules it follows the circuit: each such
 /// literal's matched fact, at the columns the flow reaches, and each ref's
 /// attribute.
-pub fn from_key(res: &EvalResult, n: &Named, keys: &[String]) -> bool {
+fn from_key(res: &EvalResult, n: &Named, keys: &[String]) -> bool {
     let Some(start) = res.circuit.fact_id(&n.fact) else {
         return false;
     };
@@ -441,12 +441,7 @@ pub fn key_collisions(
 /// of a resource, which the cloud gives each deployment's own object (`k8s
 /// { kubeconfig = k3s.kubeconfig }`, read back from a server the deployment
 /// creates). Its resources then live in a per-deployment account.
-pub fn configured_per_key(
-    rules: &[RuleStmt],
-    schema: &Schema,
-    name: &str,
-    keys: &[String],
-) -> bool {
+fn configured_per_key(rules: &[RuleStmt], schema: &Schema, name: &str, keys: &[String]) -> bool {
     fn text(t: &Term) -> Option<&str> {
         match t {
             Term::Val(Value::Str(s)) => Some(s.as_str()),

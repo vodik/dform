@@ -134,7 +134,7 @@ pub fn rule(r: &RuleStmt) -> String {
 }
 
 /// A short, cropped rule text for reports.
-pub fn rule_short(r: &RuleStmt) -> String {
+pub(crate) fn rule_short(r: &RuleStmt) -> String {
     let s = rule(r);
     if s.len() > 140 {
         format!("{}...", &s[..140])

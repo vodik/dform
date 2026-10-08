@@ -281,7 +281,7 @@ impl Manifest {
     }
 
     /// The host interfaces it uses, short (`http`, `ssh`).
-    pub fn host_interfaces(&self) -> Vec<&str> {
+    fn host_interfaces(&self) -> Vec<&str> {
         self.imports
             .iter()
             .filter(|i| HOST_INTERFACES.contains(&i.as_str()) && i.as_str() != "dform:host/types")

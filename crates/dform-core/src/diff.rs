@@ -283,7 +283,7 @@ fn documents_moved(apply: &Apply) -> Vec<String> {
 
 /// The program that explains `apply`, and a note when it is not exactly
 /// the program then. `files`: the program files now.
-pub fn program_of(apply: &Apply, files: &[PathBuf], top: &Path) -> (Program, Option<String>) {
+fn program_of(apply: &Apply, files: &[PathBuf], top: &Path) -> (Program, Option<String>) {
     let then: Option<Vec<String>> = apply.plan.as_ref().and_then(|p| {
         p["inputs"]["files"].as_array().map(|fs| {
             fs.iter()
@@ -375,12 +375,7 @@ impl Drop for Scratch {
 /// recorded: the project copied out of git and evaluated by `dform
 /// __explain` there. A secret input is recorded only as its digest, so the
 /// copy is evaluated without it.
-pub fn at_commit(
-    r: &Rerun,
-    commit: &str,
-    apply: &Apply,
-    addresses: &[Address],
-) -> Result<Snapshot> {
+fn at_commit(r: &Rerun, commit: &str, apply: &Apply, addresses: &[Address]) -> Result<Snapshot> {
     let dir = std::env::temp_dir().join(format!(
         "dform-diff-{}-{}",
         std::process::id(),

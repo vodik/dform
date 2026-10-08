@@ -262,7 +262,7 @@ pub fn matches(pattern: &str, text: &str) -> bool {
 
 /// A location as a pattern matches it: scheme, host (and port), path; no
 /// user, query or fragment.
-pub fn pattern_text(u: &Uri) -> String {
+fn pattern_text(u: &Uri) -> String {
     let host = u
         .host_ascii()
         .or_else(|| u.host.clone())
@@ -748,7 +748,7 @@ fn short_data(rest: &str) -> String {
 /// A remote repository's path and the file's in `path` (`/OWNER/REPO/..`):
 /// the repository ends at a segment ending `.git`, else at `//`, else
 /// after two segments (`OWNER/REPO`, the forges' shape).
-pub fn split_repo(path: &str) -> Option<(String, String)> {
+fn split_repo(path: &str) -> Option<(String, String)> {
     let path = path.trim_start_matches('/');
     if let Some((repo, file)) = path.split_once("//") {
         return Some((repo.to_string(), file.to_string()))

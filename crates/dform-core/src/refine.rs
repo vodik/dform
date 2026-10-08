@@ -184,7 +184,7 @@ fn compile(re: &str) -> Result<regex::Regex, regex::Error> {
     regex::Regex::new(&format!("^(?:{re})$"))
 }
 
-pub fn check_regex(re: &str) -> Result<(), String> {
+fn check_regex(re: &str) -> Result<(), String> {
     compile(re)
         .map(|_| ())
         .map_err(|e| format!("regex({re:?}): {e}"))

@@ -195,7 +195,7 @@ pub struct Decls {
 
 /// A file's dotted path from `root`: `stacks/platform.df` is
 /// `stacks.platform`.
-pub fn module_path(root: &Path, file: &Path) -> Option<String> {
+fn module_path(root: &Path, file: &Path) -> Option<String> {
     let rel = file.strip_prefix(root).ok()?.with_extension("");
     let segs: Vec<&str> = rel.iter().map(|s| s.to_str()).collect::<Option<_>>()?;
     (!segs.is_empty()).then(|| segs.join("."))
@@ -1339,7 +1339,7 @@ pub fn is_builtin_relation(name: &str) -> bool {
 }
 
 /// The signature line of a function or a package in `std/*.df`.
-pub fn std_site(sym: &Symbol) -> Option<Site<'static>> {
+fn std_site(sym: &Symbol) -> Option<Site<'static>> {
     let source = |file: &str| {
         crate::functions::SOURCES
             .iter()
@@ -1367,7 +1367,7 @@ pub fn std_site(sym: &Symbol) -> Option<Site<'static>> {
 }
 
 /// The token under byte `at`, preferring a name to what abuts it.
-pub fn token_at(root: &SyntaxNode, at: usize) -> Option<SyntaxToken> {
+fn token_at(root: &SyntaxNode, at: usize) -> Option<SyntaxToken> {
     let at = rowan::TextSize::from(u32::try_from(at).ok()?);
     if at > root.text_range().end() {
         return None;
@@ -1382,7 +1382,7 @@ pub fn token_at(root: &SyntaxNode, at: usize) -> Option<SyntaxToken> {
 }
 
 /// The innermost component `node` is in (itself included).
-pub fn component_scope(node: &SyntaxNode) -> Scope {
+fn component_scope(node: &SyntaxNode) -> Scope {
     node.ancestors().find_map(|a| {
         (a.kind() == SyntaxKind::COMPONENT)
             .then(|| Some(format!("component {}", declared_name(&a)?.text())))?

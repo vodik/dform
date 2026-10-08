@@ -2319,7 +2319,7 @@ pub mod random {
     }
 
     /// `key`'s current generation: 1 unless rotated.
-    pub fn generation_of(key: &str) -> u32 {
+    fn generation_of(key: &str) -> u32 {
         RECORDS.with(|r| r.borrow().get(key).map_or(1, |s| s.generation))
     }
 

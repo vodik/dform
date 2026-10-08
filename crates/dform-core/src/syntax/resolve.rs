@@ -584,7 +584,7 @@ pub fn copy_parts(n: &SyntaxNode) -> (String, String) {
 
 /// The name token of a resource header: the word or string after its
 /// dotted type.
-pub fn header_name(n: &SyntaxNode) -> Option<SyntaxToken> {
+fn header_name(n: &SyntaxNode) -> Option<SyntaxToken> {
     let mut seen_word = false;
     let mut after_dot = false;
     for t in tokens(n).skip(1) {

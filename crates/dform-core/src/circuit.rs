@@ -525,7 +525,8 @@ impl Circuit {
     /// fact left with no alternatives is retracted in turn. Returns everything
     /// retracted, in order. (DRed without the re-derivation pass; enough for
     /// the non-recursive strata this prototype models.)
-    pub fn retract(&mut self, f: &Fact) -> Vec<Fact> {
+    #[cfg(test)]
+    fn retract(&mut self, f: &Fact) -> Vec<Fact> {
         let mut out = Vec::new();
         let mut work = vec![f.clone()];
         while let Some(f) = work.pop() {
@@ -594,7 +595,7 @@ fn leaf_bytes(l: &Leaf) -> usize {
 }
 
 /// Heap bytes of a tuple, for `Stats` and for sizing the bare fact store.
-pub fn fact_bytes(f: &Fact) -> usize {
+fn fact_bytes(f: &Fact) -> usize {
     f.pred.len()
         + f.args.capacity() * std::mem::size_of::<Value>()
         + f.args.iter().map(value_bytes).sum::<usize>()

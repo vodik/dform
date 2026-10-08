@@ -1356,7 +1356,7 @@ fn schema_of(given: &[Atom], program_facts: &[Atom]) -> Result<Schema> {
 /// Build the graph over lowered rules and facts plus the schema's prelude.
 /// `Graph::rules` is `rules` in the given order, so a rule's index in the
 /// graph is its index in the caller's list.
-pub fn build_lowered(
+fn build_lowered(
     rules: Vec<RuleStmt>,
     fact_atoms: &[Atom],
     schema: &Schema,

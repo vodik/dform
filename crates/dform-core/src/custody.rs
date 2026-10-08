@@ -980,7 +980,7 @@ pub fn unseal(r: &Record, pass: &[u8]) -> Result<Option<Key>> {
 }
 
 /// The master id of a key: of what it derives for `random.*`.
-pub fn key_id(k: &Key) -> String {
+fn key_id(k: &Key) -> String {
     id(&crate::secrets::derived(k, "random master"))
 }
 
@@ -1637,7 +1637,7 @@ pub fn holders(
 
 /// The X25519 key pair a master derives to be sealed to (R-166): its
 /// secret and its public half.
-pub fn seal_pair(k: &Key) -> ([u8; 32], [u8; 32]) {
+fn seal_pair(k: &Key) -> ([u8; 32], [u8; 32]) {
     let secret = crate::secrets::derived(k, "dform seal key");
     let public = curve25519_dalek::montgomery::MontgomeryPoint::mul_base_clamped(secret).to_bytes();
     (secret, public)

@@ -1592,7 +1592,7 @@ fn outputs_digest(bytes: Option<&[u8]>) -> String {
 
 /// Read the outputs a deployment published at `loc`; `name` is the
 /// reader's name of it, `own` the project's (checked against the object).
-pub fn read_published(loc: &Location, s3: OpenS3, name: &str, own: &str) -> Result<Read> {
+fn read_published(loc: &Location, s3: OpenS3, name: &str, own: &str) -> Result<Read> {
     let store = loc.open(s3)?;
     let at = store.locate(crate::store::OUTPUTS);
     let Some(o) = store.get(crate::store::OUTPUTS)? else {

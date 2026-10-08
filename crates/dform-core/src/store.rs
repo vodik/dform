@@ -1721,7 +1721,7 @@ fn stall_at(var: &str, count: &AtomicUsize) {
 /// temporary written and synced, not yet renamed over the state. The
 /// process is killed (SIGKILL to itself): no destructor runs, nothing is
 /// flushed.
-pub fn abort_at(point: &str) {
+fn abort_at(point: &str) {
     static COUNTS: Mutex<BTreeMap<String, usize>> = Mutex::new(BTreeMap::new());
     let Some(spec) = std::env::var_os("DFORM_TEST_ABORT_AT") else {
         return;

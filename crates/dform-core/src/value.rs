@@ -432,7 +432,7 @@ pub fn parse_uri(text: &str) -> Result<Value, String> {
 /// unescaped), and `user`, `password`, `host`, `port` (absent: the
 /// scheme's default) and `fragment` where it has them. What `.host` on a
 /// uri reads (R-134).
-pub fn uri_parts(u: &crate::uri::Uri) -> Value {
+fn uri_parts(u: &crate::uri::Uri) -> Value {
     let mut m = BTreeMap::new();
     let mut put = |k: &str, v: Option<Value>| {
         if let Some(v) = v {

@@ -416,15 +416,6 @@ pub fn local_dir(root: &Path, dir: &Path) -> PathBuf {
     root.parent().unwrap_or(Path::new("")).join(dir)
 }
 
-/// A stack whose backend is `local(dir)`: its state and world in `dir`.
-pub fn backend_paths(root: &Path, dir: &Path) -> StackPaths {
-    StackPaths {
-        state: dir.join("state.json"),
-        world: dir.join(WORLD),
-        inventory: root.join("inventory.json"),
-    }
-}
-
 /// A stack whose world is the file `world` (`--world PATH`): its state sits
 /// beside it, `<dir>/<stem>.state.json`, so a world file and its identity
 /// mapping travel together as one fixture.

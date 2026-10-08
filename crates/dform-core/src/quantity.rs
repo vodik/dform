@@ -413,7 +413,7 @@ fn read_cpu(text: &str) -> Result<Quantity, String> {
 
 /// A duration: the friendly form (`1h30m`, `30d`), or ISO 8601 (`P1M`,
 /// `PT6H`), which jiff reads.
-pub fn read_duration(text: &str) -> Result<Span, String> {
+fn read_duration(text: &str) -> Result<Span, String> {
     let (neg, body) = match text.strip_prefix('-') {
         Some(b) => (true, b),
         None => (false, text),
@@ -509,7 +509,7 @@ impl Span {
         (self.months == 0).then(|| self.days as i128 * DAY as i128 + self.nanos as i128)
     }
 
-    pub fn of_jiff(s: &jiff::Span) -> Option<Span> {
+    fn of_jiff(s: &jiff::Span) -> Option<Span> {
         let months = i64::from(s.get_years()) * 12 + i64::from(s.get_months());
         let days = i64::from(s.get_weeks()) * 7 + i64::from(s.get_days());
         let nanos = i128::from(s.get_hours()) * HOUR as i128

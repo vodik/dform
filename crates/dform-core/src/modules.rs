@@ -1407,7 +1407,7 @@ fn input_readers(scope: &str, inputs: &[InputDecl], names: &Names) -> Vec<Stmt> 
 /// default and check is the leaf's (`arg(input, Scope, "nodes.count", 1,
 /// @default)`, which the aggregate merges into the object `nodes` leaf by
 /// leaf), and the object is read whole.
-pub fn input_reader(scope: &str, i: &InputDecl, pred: &dyn Fn(&str) -> String) -> Vec<Stmt> {
+fn input_reader(scope: &str, i: &InputDecl, pred: &dyn Fn(&str) -> String) -> Vec<Stmt> {
     let v = Term::Var("V".into());
     // A dependent input (R-104) is read, and defaults, where its clause
     // holds; where it holds with no value, it is required.
@@ -1477,7 +1477,7 @@ pub fn input_reader(scope: &str, i: &InputDecl, pred: &dyn Fn(&str) -> String) -
 
 /// The paths an input is given by: the input, each object an object
 /// input holds and each leaf (`nodes`, `nodes.pool`, `nodes.pool.size`).
-pub fn input_paths(i: &InputDecl) -> Vec<String> {
+fn input_paths(i: &InputDecl) -> Vec<String> {
     let mut out = vec![i.name.clone()];
     for l in crate::inputs::leaves(i) {
         let mut at = i.name.clone();
