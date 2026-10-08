@@ -151,11 +151,16 @@ impl Scratch {
     /// `null`.
     #[track_caller]
     fn plain(&self, r: Run) -> Run {
+        // A path under the repository or the scratch directory is the
+        // machine's words, not a message's: a worktree named for its
+        // ticket (`r209-scoped`) must not fail this check.
+        let repo = env!("CARGO_MANIFEST_DIR");
+        let scratch = self.dir.to_string_lossy();
         let said: Vec<&str> = r
             .stderr
             .lines()
             .filter(|l| !quotes_source(l))
-            .flat_map(|l| compiler_words(l))
+            .flat_map(|l| compiler_words(&l.replace(repo, "").replace(scratch.as_ref(), "")))
             .collect();
         if said.is_empty() {
             return r;
