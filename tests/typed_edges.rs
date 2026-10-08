@@ -443,6 +443,44 @@ fn a_sums_sides_are_typed_by_each_other() {
 
 /// The plan's `-vv` says where a literal's type came from: the edge it
 /// reached (the use site).
+/// A value given to a let, an output or an input flows into it one way
+/// (R-213): a network given to a string let by one rule leaves `""` in
+/// its other rule a string, typed or not; the same for an output.
+#[test]
+fn a_value_given_a_cell_does_not_type_its_other_values() {
+    let given = "input net: inet = \"10.0.0.0/8\"\ninput wide: bool = false\n";
+    let vpc = |v: &str| format!("resource net.vpc v {{ cidr = \"10.0.0.0/16\", name = {v} }}\n");
+    for ty in [": string", ""] {
+        plans(
+            &format!(
+                "{given}let apex{ty} = \"\" where wide\nlet apex{ty} = net where not wide\n{}",
+                vpc("apex")
+            ),
+            &["name = \"10.0.0.0/8\""],
+        );
+    }
+    plans(
+        &format!(
+            "{given}output o: string = \"\" where wide\noutput o: string = net where not wide\n"
+        ),
+        &[],
+    );
+}
+
+/// A component's string input with a default `""`, given a network by
+/// one instance: the default stays a string at compile time, but the
+/// run-time check of an input's value says a network is not a string.
+#[test]
+#[ignore = "inputs.rs's run-time check of an input's value (`has_type`) takes no network where a string is declared, which the compile-time check (infer.rs `compatible`, R-133) allows"]
+fn a_value_given_an_input_does_not_type_its_default() {
+    plans(
+        "input net: inet = \"10.0.0.0/8\"\ncomponent box {\n  input name: string = \"\"\n  \
+         resource net.vpc v { cidr = \"10.0.0.0/16\", name = name }\n}\n\
+         resource box b { name = net }\nresource box c { }\n",
+        &["name = \"10.0.0.0/8\"", "name = \"\""],
+    );
+}
+
 #[test]
 #[ignore = "the plan's `why` does not carry a literal's edge yet; the report is another ticket's (report/**, R-200)"]
 fn the_plan_says_where_a_literals_type_came_from() {

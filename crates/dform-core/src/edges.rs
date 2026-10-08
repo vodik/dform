@@ -8,8 +8,9 @@
 //! row, an argument, an input's default or an instance's input. Inference
 //! unifies every edge a value flows through: a variable joins the columns
 //! it is written in, a field read (`x.cpu`) and an element (`x in l`) link
-//! a value to the one they are part of, and a literal's type is what the
-//! edges its path reaches agree on.
+//! a value to the one they are part of, a variable given to a let, an
+//! output or an input flows into it one way (R-213), and a literal's type
+//! is what the edges its path reaches agree on.
 //!
 //! One pass over the program before it is evaluated, once the providers'
 //! schemas are known ([`crate::types::read`]):
@@ -324,6 +325,8 @@ fn let_key(a: &Atom) -> Option<&str> {
 struct Links {
     wholes: BTreeMap<usize, Vec<(usize, Path)>>,
     parts: BTreeMap<usize, Vec<(usize, Path)>>,
+    /// What each value flows into, by their roots.
+    flows: BTreeMap<usize, Vec<usize>>,
 }
 
 /// The cell of an output `k`, `output:k`: no relation's name.
@@ -339,6 +342,12 @@ struct Graph<'a> {
     edges: Vec<Vec<Edge>>,
     /// `(whole, path, part)`: the value of `part` is `whole`'s at `path`.
     links: Vec<(usize, Path, usize)>,
+    /// `(from, into)`: a variable's value given to a let, an output or an
+    /// input (`let apex = env where ..`). One way (R-213): a literal in
+    /// `from` reaches what `into` does, but one of `into`'s other values
+    /// does not take `from`'s type, so a string let given an enum or a
+    /// network in one rule keeps `""` in another a string.
+    flows: Vec<(usize, usize)>,
     columns: BTreeMap<Col, usize>,
     /// The statement's variables.
     vars: BTreeMap<String, usize>,
@@ -368,6 +377,7 @@ impl<'a> Graph<'a> {
             parent: Vec::new(),
             edges: Vec::new(),
             links: Vec::new(),
+            flows: Vec::new(),
             columns: BTreeMap::new(),
             vars: BTreeMap::new(),
             sites: Vec::new(),
@@ -531,7 +541,7 @@ impl<'a> Graph<'a> {
                     self.edge(n, Shape::Declared(ty.clone()), what, o.span);
                 }
                 if let Some(v) = &mut o.value {
-                    self.place(n, Vec::new(), v, &at(o.span));
+                    self.give(n, v, &at(o.span));
                 }
             }
             Stmt::Decl(d) => {
@@ -564,7 +574,11 @@ impl<'a> Graph<'a> {
                         holder: Some(holder),
                         ..a.clone()
                     };
-                    self.place(n, path, t, &at);
+                    if path.is_empty() {
+                        self.give(n, t, &at);
+                    } else {
+                        self.place(n, path, t, &at);
+                    }
                 }
             }
             _ => {}
@@ -580,13 +594,13 @@ impl<'a> Graph<'a> {
                 holder: Some(Holder::Let(k)),
                 ..at.clone()
             };
-            self.place(n, Vec::new(), &mut a.args[1], &at);
+            self.give(n, &mut a.args[1], &at);
             return;
         }
         // `output(k, V) :- B`: the value of `output k`.
         if let ("output", [Term::Val(Value::Str(k)), _]) = (a.pred.as_str(), a.args.as_slice()) {
             let n = self.column(&at.scope, &format!("{OUTPUT}{k}"), 1, 0);
-            self.place(n, Vec::new(), &mut a.args[1], at);
+            self.give(n, &mut a.args[1], at);
             return;
         }
         // `arg(T, A, P, V, ..)`: a `set` (R-38); its literals the
@@ -720,6 +734,27 @@ impl<'a> Graph<'a> {
                 self.place(n, Vec::new(), t, at);
                 n
             }
+        }
+    }
+
+    /// `t` is one of the values of the cell `n` (a let's, an output's,
+    /// an input's): a variable flows into it, one way; anything else is
+    /// placed in it.
+    fn give(&mut self, n: usize, t: &mut Term, at: &At) {
+        let var = match t {
+            Term::Var(v) => Some(v.clone()),
+            Term::Func { name, args } if name == types::AS => match args.as_slice() {
+                [Term::Var(v), _] => Some(v.clone()),
+                _ => None,
+            },
+            _ => None,
+        };
+        match var {
+            Some(v) => {
+                let x = self.var(&v);
+                self.flows.push((x, n));
+            }
+            None => self.place(n, Vec::new(), t, at),
         }
     }
 
@@ -902,6 +937,10 @@ impl<'a> Graph<'a> {
                     }
                 }
             }
+            // What a value flows into, it reaches; not what else flows in.
+            for into in by.flows.get(&r).into_iter().flatten() {
+                todo.push((*into, q.clone()));
+            }
             for (whole, path) in by.wholes.get(&r).into_iter().flatten() {
                 let mut p = path.clone();
                 p.extend(q.iter().cloned());
@@ -925,6 +964,12 @@ impl<'a> Graph<'a> {
                 .or_default()
                 .push((whole, path.clone()));
             by.parts.entry(whole).or_default().push((part, path));
+        }
+        for (from, into) in std::mem::take(&mut self.flows) {
+            let (from, into) = (self.find(from), self.find(into));
+            if from != into {
+                by.flows.entry(from).or_default().push(into);
+            }
         }
         (0..self.sites.len())
             .map(|i| {
