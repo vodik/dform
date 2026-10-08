@@ -1016,32 +1016,79 @@ pub fn resolve(
     mixing: &Mixing,
     want: Want,
 ) -> Result<Master> {
-    use crate::store::{Cond, KEY, MASTER};
     let env = std::env::var("RANDOM_MASTER")
         .ok()
         .filter(|m| !m.is_empty())
         .map(String::into_bytes);
-    let record = load_record(store)?;
+    let mut r = Resolving {
+        store,
+        deployment,
+        applied,
+        mixing,
+        want,
+        record: load_record(store)?,
+        out: Master {
+            accept: want.new_master,
+            ..Master::default()
+        },
+    };
     let plain = Key::load(store)?;
-    let missing = || {
+    let key = match mixing.key_file() {
+        true => r.key_file(plain)?,
+        false => r.sealed(plain)?,
+    };
+    if env.is_some() && (key.is_some() || r.out.id.is_some()) {
+        static SAID: std::sync::Once = std::sync::Once::new();
+        SAID.call_once(|| {
+            eprintln!(
+                "warning: RANDOM_MASTER is set: random.* derive from it, not from {deployment}'s \
+                 own master"
+            )
+        });
+    }
+    if let (true, Some(k)) = (want.make || want.new_master, &key) {
+        r.publish(k)?;
+    }
+    r.into_master(key, env)
+}
+
+/// A master being resolved: where it is kept, what the run wants of it,
+/// its record as read, and the master as far as it is known.
+struct Resolving<'a> {
+    store: &'a dyn crate::store::Store,
+    deployment: &'a str,
+    /// Whether the deployment was ever applied.
+    applied: &'a dyn Fn() -> Result<bool>,
+    mixing: &'a Mixing,
+    want: Want,
+    record: Option<(Record, String)>,
+    out: Master,
+}
+
+impl Resolving<'_> {
+    /// The master is missing, and the deployment was applied with it.
+    fn missing(&self) -> anyhow::Error {
+        use crate::store::{KEY, MASTER};
         anyhow::anyhow!(
-            "{deployment}: {} is missing, and the deployment was applied with it: every random.* \
-             value and every secret digest derives from it. Restore it from a backup of the state \
-             (state and key go together), or run with --new-master to make a new one and change \
-             every derived secret on purpose",
-            match mixing.key_file() {
-                true => store.locate(KEY),
-                false => store.locate(MASTER),
+            "{}: {} is missing, and the deployment was applied with it: every random.* value \
+             and every secret digest derives from it. Restore it from a backup of the state \
+             (state and key go together), or run with --new-master to make a new one and \
+             change every derived secret on purpose",
+            self.deployment,
+            match self.mixing.key_file() {
+                true => self.store.locate(KEY),
+                false => self.store.locate(MASTER),
             }
         )
-    };
-    let fresh = || -> Result<Key> { Ok(Key::from_bytes(random_bytes::<32>("the master")?)) };
-    let mut out = Master {
-        accept: want.new_master,
-        ..Master::default()
-    };
-    let key = if mixing.key_file() {
-        if let Some((r, _)) = record.as_ref().filter(|(r, _)| r.sealed()) {
+    }
+
+    /// A master the mixing keeps as a plain key file: read, or made for a
+    /// deployment never applied; one the bucket holds is said to be read
+    /// access to every derived secret.
+    fn key_file(&mut self, plain: Option<Key>) -> Result<Option<Key>> {
+        use crate::store::{Cond, KEY, MASTER};
+        let (store, deployment, want) = (self.store, self.deployment, self.want);
+        if let Some((r, _)) = self.record.as_ref().filter(|(r, _)| r.sealed()) {
             bail!(
                 "{deployment}: {} holds its master sealed (id {}), and dform.toml names neither \
                  a passphrase nor recipients: add `[secrets] passphrase = \"env:NAME\"` (or \
@@ -1050,8 +1097,8 @@ pub fn resolve(
                 crate::report::short_id(&r.id)
             );
         }
-        out.source = format!("the key file {}", store.locate(KEY));
-        match plain {
+        self.out.source = format!("the key file {}", store.locate(KEY));
+        Ok(match plain {
             Some(k) => {
                 if !store.local() {
                     static SAID: std::sync::Once = std::sync::Once::new();
@@ -1067,7 +1114,7 @@ pub fn resolve(
                 }
                 Some(k)
             }
-            None if applied()? && !want.new_master => return Err(missing()),
+            None if (self.applied)()? && !want.new_master => return Err(self.missing()),
             None if want.make || want.new_master => {
                 if !store.local() {
                     bail!(
@@ -1079,13 +1126,13 @@ pub fn resolve(
                         store.locate(KEY)
                     );
                 }
-                let key = fresh()?;
+                let key = fresh_key()?;
                 match store
                     .put(KEY, &key.bytes(), &Cond::IfAbsent)
                     .with_context(|| format!("write the key {}", store.locate(KEY)))?
                 {
                     Some(_) => {
-                        out.made = true;
+                        self.out.made = true;
                         Some(key)
                     }
                     // Made by another run meanwhile: that one is the key.
@@ -1097,20 +1144,29 @@ pub fn resolve(
                 }
             }
             None => None,
-        }
-    } else {
+        })
+    }
+
+    /// A master the mixing keeps sealed (to a passphrase, to recipients):
+    /// opened with each earlier epoch's (R-165); a key file a sealing left
+    /// behind goes with the next apply; one made for a deployment never
+    /// applied.
+    fn sealed(&mut self, plain: Option<Key>) -> Result<Option<Key>> {
+        use crate::store::{KEY, MASTER};
+        let (store, deployment, mixing, want) =
+            (self.store, self.deployment, self.mixing, self.want);
         let opener = Opener::new(deployment, mixing)?;
-        out.source = format!("{} sealed for {}", store.locate(MASTER), mixing.describe());
-        match (&record, plain) {
+        self.out.source = format!("{} sealed for {}", store.locate(MASTER), mixing.describe());
+        Ok(match (&self.record, plain) {
             (Some((r, _)), plain) if r.sealed() => {
-                out.id = Some(r.id.clone());
-                out.epoch = r.epoch;
+                self.out.id = Some(r.id.clone());
+                self.out.epoch = r.epoch;
                 // The earlier epochs (R-165): their ids, and their keys
                 // when the run opens them.
                 for e in &r.earlier {
                     let what = format!("{}'s epoch {}", store.locate(MASTER), e.epoch);
                     let key = opener.open(e.passphrase.as_ref(), e.age.as_ref(), &e.id, &what)?;
-                    out.earlier.push(Epoch {
+                    self.out.earlier.push(Epoch {
                         epoch: e.epoch,
                         id: e.id.clone(),
                         key,
@@ -1118,7 +1174,7 @@ pub fn resolve(
                 }
                 // A key file a sealing left behind goes with the next
                 // apply ([`reseal`]).
-                out.unsealed = plain.is_some();
+                self.out.unsealed = plain.is_some();
                 let key = opener.open(
                     r.passphrase.as_ref(),
                     r.age.as_ref(),
@@ -1126,81 +1182,79 @@ pub fn resolve(
                     &store.locate(MASTER),
                 )?;
                 if key.is_none() {
-                    out.without = Some(opener.why(Some(r))?);
+                    self.out.without = Some(opener.why(Some(r))?);
                 }
-                out.reseal = Reseal::of(Some(r), mixing, out.unsealed);
+                self.out.reseal = Reseal::of(Some(r), mixing, self.out.unsealed);
                 key
             }
             // Sealed by the next apply that can.
             (_, Some(k)) => {
-                out.source = format!("the key file {}", store.locate(KEY));
-                out.unsealed = true;
-                out.reseal = Reseal::of(None, mixing, true);
+                self.out.source = format!("the key file {}", store.locate(KEY));
+                self.out.unsealed = true;
+                self.out.reseal = Reseal::of(None, mixing, true);
                 Some(k)
             }
-            (_, None) if applied()? && !want.new_master => return Err(missing()),
-            (_, None) if want.make || want.new_master => {
-                // A new master, sealed as the mixing says: to the
-                // recipients needs only their public keys, under the
-                // passphrase needs it.
-                let key = fresh()?;
-                let id = key_id(&key);
-                let (passphrase, age) = seals(&key, &id, &opener, (None, None))?;
-                if passphrase.is_none() && age.is_none() {
-                    out.without = Some(opener.why(None)?);
-                    None
-                } else {
-                    let r = Record {
-                        version: 1,
-                        passphrase,
-                        age,
-                        public: hex(&seal_pair(&key).1),
-                        id,
-                        epoch: 1,
-                        earlier: Vec::new(),
-                        digest: String::new(),
-                    };
-                    let cond = match &record {
-                        Some((_, etag)) => Cond::IfMatch(etag.clone()),
-                        None => Cond::IfAbsent,
-                    };
-                    match store
-                        .put(MASTER, &record_bytes(&r), &cond)
-                        .with_context(|| format!("write {}", store.locate(MASTER)))?
-                    {
-                        Some(_) => {
-                            out.made = true;
-                            out.reseal = Reseal::of(Some(&r), mixing, false);
-                            Some(key)
-                        }
-                        None => bail!(
-                            "{deployment}: {} was written by another run meanwhile: run again",
-                            store.locate(MASTER)
-                        ),
-                    }
-                }
-            }
+            (_, None) if (self.applied)()? && !want.new_master => return Err(self.missing()),
+            (_, None) if want.make || want.new_master => self.make_sealed(&opener)?,
             (_, None) => {
                 if !opener.able()? {
-                    out.without = Some(opener.why(None)?);
+                    self.out.without = Some(opener.why(None)?);
                 }
                 None
             }
-        }
-    };
-    if env.is_some() && (key.is_some() || out.id.is_some()) {
-        static SAID: std::sync::Once = std::sync::Once::new();
-        SAID.call_once(|| {
-            eprintln!(
-                "warning: RANDOM_MASTER is set: random.* derive from it, not from {deployment}'s \
-                 own master"
-            )
-        });
+        })
     }
-    // The public key other stacks seal to (R-166), kept beside the master
-    // by a run that writes: a key file's deployment gets a record of its
-    // own, its id and public key only.
-    if let (true, Some(k)) = (want.make || want.new_master, &key) {
+
+    /// A new master, sealed as the mixing says: to the recipients needs
+    /// only their public keys, under the passphrase needs it. None, and
+    /// why, when it cannot be sealed.
+    fn make_sealed(&mut self, opener: &Opener) -> Result<Option<Key>> {
+        use crate::store::{Cond, MASTER};
+        let (store, deployment, mixing) = (self.store, self.deployment, self.mixing);
+        let key = fresh_key()?;
+        let id = key_id(&key);
+        let (passphrase, age) = seals(&key, &id, opener, (None, None))?;
+        if passphrase.is_none() && age.is_none() {
+            self.out.without = Some(opener.why(None)?);
+            return Ok(None);
+        }
+        let r = Record {
+            version: 1,
+            passphrase,
+            age,
+            public: hex(&seal_pair(&key).1),
+            id,
+            epoch: 1,
+            earlier: Vec::new(),
+            digest: String::new(),
+        };
+        let cond = match &self.record {
+            Some((_, etag)) => Cond::IfMatch(etag.clone()),
+            None => Cond::IfAbsent,
+        };
+        match store
+            .put(MASTER, &record_bytes(&r), &cond)
+            .with_context(|| format!("write {}", store.locate(MASTER)))?
+        {
+            Some(_) => {
+                self.out.made = true;
+                self.out.reseal = Reseal::of(Some(&r), mixing, false);
+                Ok(Some(key))
+            }
+            None => bail!(
+                "{deployment}: {} was written by another run meanwhile: run again",
+                store.locate(MASTER)
+            ),
+        }
+    }
+
+    /// The public key other stacks seal to (R-166), kept beside the master
+    /// by a run that writes: a key file's deployment gets a record of its
+    /// own, its id and public key only. Another run's write meanwhile is as
+    /// good.
+    fn publish(&self, k: &Key) -> Result<()> {
+        use crate::store::{Cond, MASTER};
+        let store = self.store;
         let public = hex(&seal_pair(k).1);
         let fresh = load_record(store)?;
         if fresh.as_ref().is_none_or(|(r, _)| r.public != public) {
@@ -1231,28 +1285,42 @@ pub fn resolve(
                 .put(MASTER, &record_bytes(&r), &cond)
                 .with_context(|| format!("write {}", store.locate(MASTER)))?;
         }
+        Ok(())
     }
-    let of = Master::of(key, out.source.clone(), env);
-    // After a cycle the digest key is the first epoch's, sealed under the
-    // current master.
-    let digest = match (&record, &of.key) {
-        (Some((r, _)), Some(k)) if !r.digest.is_empty() => {
-            let b: [u8; 32] = crate::secrets::open(k, DIGEST_ROOT, &r.digest)?
-                .try_into()
-                .map_err(|_| anyhow::anyhow!("{deployment}: the digest key is not 32 bytes"))?;
-            Some(Key::from_bytes(b))
-        }
-        _ => of.digest,
-    };
-    Ok(Master {
-        id: of.id.or(out.id),
-        key: of.key,
-        random: of.random,
-        source: of.source,
-        digest,
-        epoch: out.epoch.max(1),
-        ..out
-    })
+
+    /// The master resolved: its digest key, after a cycle the first
+    /// epoch's, sealed under the current master.
+    fn into_master(self, key: Option<Key>, env: Option<Vec<u8>>) -> Result<Master> {
+        let of = Master::of(key, self.out.source.clone(), env);
+        // After a cycle the digest key is the first epoch's, sealed under the
+        // current master.
+        let digest = match (&self.record, &of.key) {
+            (Some((r, _)), Some(k)) if !r.digest.is_empty() => {
+                let b: [u8; 32] = crate::secrets::open(k, DIGEST_ROOT, &r.digest)?
+                    .try_into()
+                    .map_err(|_| {
+                        anyhow::anyhow!("{}: the digest key is not 32 bytes", self.deployment)
+                    })?;
+                Some(Key::from_bytes(b))
+            }
+            _ => of.digest,
+        };
+        let out = self.out;
+        Ok(Master {
+            id: of.id.or(out.id),
+            key: of.key,
+            random: of.random,
+            source: of.source,
+            digest,
+            epoch: out.epoch.max(1),
+            ..out
+        })
+    }
+}
+
+/// A new key, 32 random bytes.
+fn fresh_key() -> Result<Key> {
+    Ok(Key::from_bytes(random_bytes::<32>("the master")?))
 }
 
 /// `dform secrets cycle` (R-165): a new master, epoch N+1, sealed as the
