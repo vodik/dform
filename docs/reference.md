@@ -1380,7 +1380,9 @@ made; the plan itself says what it is.
   `undetermined` (dim), its text unquoted, its site and its tally over
   what it ranges over (the resources of its first `x in T`, else the
   deployment), `3 hold · 1 fails`, its mark the worst of them: one
-  failure makes a failing policy. Under it, what does not hold, each
+  failure makes a failing policy. A used module's denies and a
+  component's are listed as the stack's own, each at its own file's
+  site; a copy's `x in T` ranges over that copy's resources. Under it, what does not hold, each
   with why: a failure's resource and context (`net.vpc c  vpc = "c"`),
   an undetermined one's resource and the cell and tick that decide it
   (`until spec.storageClassName is known (tick 2)`); the rest are one `N
