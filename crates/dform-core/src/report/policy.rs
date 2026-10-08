@@ -10,7 +10,7 @@
 use super::{
     Address, Paint, Policy, Row, Style, Why, address, label, layout, until_text, violation_parts,
 };
-use crate::ast::{Lit, Program, Stmt, Term};
+use crate::ast::{Lit, Program, RuleStmt, Stmt, Term};
 use crate::engine::EvalResult;
 use crate::query::Redactor;
 use crate::value::Value;
@@ -121,23 +121,17 @@ pub fn lines(
     undetermined: &[Policy],
     r: &Redactor,
 ) -> Vec<Line> {
-    // The resources of each type the program wants.
-    let mut wanted: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
-    for a in res.facts.iter().filter(|a| a.pred == "want") {
-        if let [Term::Val(Value::Str(t)), Term::Val(Value::Str(n))] = a.args.as_slice() {
-            wanted.entry(t).or_default().push(n);
-        }
-    }
-    // Each deny by its message: where it is first written, and the types
-    // it ranges over.
+    let wanted = Wanted::new(res);
+    // Each deny by its message: where it is first written, and what it
+    // ranges over. A module's the stack uses and a component's it copies
+    // are the stack's own: the plan carries what they deny.
     let mut out: Vec<Line> = Vec::new();
-    let mut ranges: Vec<BTreeSet<String>> = Vec::new();
-    for s in &program.statements {
-        let Stmt::Rule(rule) = s else { continue };
+    let mut ranges: Vec<BTreeSet<Range>> = Vec::new();
+    for (rule, component) in written(program) {
         let [Term::Val(Value::Str(message)), ..] = rule.head.args.as_slice() else {
             continue;
         };
-        if rule.head.pred != "deny" || rule.head.span.is_none() || conflict(message) {
+        if rule.head.span.is_none() || conflict(message) {
             continue;
         }
         let i = match out.iter().position(|l| l.text == *message) {
@@ -158,7 +152,7 @@ pub fn lines(
             }
         };
         if let Some(t) = ranged(&rule.body) {
-            ranges[i].insert(t);
+            ranges[i].insert((t, component.map(str::to_string)));
         }
     }
     // A check a value waits on is a policy of its own, written where its
@@ -197,7 +191,7 @@ pub fn lines(
         };
         let (_, bindings) = violation_parts(&text, r);
         let of = match a.args.get(1) {
-            Some(Term::Val(ctx)) => subject_in(ctx, &ranges[i], &wanted),
+            Some(Term::Val(ctx)) => subject_in(ctx, &wanted.subjects(&ranges[i])),
             _ => None,
         };
         l.fails.push((of, bindings.join(", ")));
@@ -217,17 +211,7 @@ pub fn lines(
         l.fails.sort();
         l.fails.dedup();
         l.undetermined = by_subject(std::mem::take(&mut l.undetermined));
-        let subjects: Vec<String> = types
-            .iter()
-            .flat_map(|t| {
-                wanted.get(t.as_str()).into_iter().flatten().map(|n| {
-                    address(&Address {
-                        typ: t.clone(),
-                        name: n.to_string(),
-                    })
-                })
-            })
-            .collect();
+        let subjects: Vec<String> = wanted.subjects(types).iter().map(address).collect();
         let undetermined: BTreeSet<&String> = l.undetermined.iter().map(|(s, _)| s).collect();
         let failed: BTreeSet<&String> = l.fails.iter().filter_map(|(s, _)| s.as_ref()).collect();
         let open = l.fails.len() + undetermined.len();
@@ -268,7 +252,7 @@ fn check_sites(program: &Program, res: &EvalResult) -> BTreeMap<(String, String)
                 .or_insert_with(|| format!("{f}:{l}"));
         }
     }
-    for s in &program.statements {
+    for s in crate::modules::reached(program) {
         let Stmt::Rule(rule) = s else { continue };
         let [Term::Val(Value::Str(m)), Term::Obj(ctx)] = rule.head.args.as_slice() else {
             continue;
@@ -297,27 +281,115 @@ fn conflict(message: &str) -> bool {
     message == super::CONFLICT || message == crate::refine::VIOLATED
 }
 
-/// The resource of `types` a failure's context names: a reference to it,
+/// The one of `subjects` a failure's context names: a reference to it,
 /// or its name.
-fn subject_in(
-    ctx: &Value,
-    types: &BTreeSet<String>,
-    wanted: &BTreeMap<&str, Vec<&str>>,
-) -> Option<String> {
-    let of = |typ: &str, name: &str| {
-        (types.contains(typ) && wanted.get(typ).is_some_and(|ns| ns.contains(&name))).then(|| {
-            address(&Address {
-                typ: typ.to_string(),
-                name: name.to_string(),
-            })
-        })
+fn subject_in(ctx: &Value, subjects: &[Address]) -> Option<String> {
+    let of = |typ: Option<&str>, name: &str| {
+        subjects
+            .iter()
+            .find(|a| a.name == name && typ.is_none_or(|t| a.typ == t))
+            .map(address)
     };
     match ctx {
-        Value::Ref { typ, name, .. } => of(typ, name),
-        Value::Str(name) => types.iter().find_map(|t| of(t, name)),
-        Value::Obj(m) => m.values().find_map(|v| subject_in(v, types, wanted)),
-        Value::List(xs) => xs.iter().find_map(|v| subject_in(v, types, wanted)),
+        Value::Ref { typ, name, .. } => of(Some(typ), name),
+        Value::Str(name) => of(None, name),
+        Value::Obj(m) => m.values().find_map(|v| subject_in(v, subjects)),
+        Value::List(xs) => xs.iter().find_map(|v| subject_in(v, subjects)),
         _ => None,
+    }
+}
+
+/// What a deny ranges over: the type of its first `x in T`, and the
+/// component it is written in, if any, for a copy's `x in T` is its own
+/// resources of `T` (a module's, like the stack's, is every one).
+type Range = (String, Option<String>);
+
+/// Each deny the program writes where the plan carries what it derives:
+/// the stack's own, those of each module a `use` reaches and each
+/// component a copy does ([`crate::modules::reached`]), each with the
+/// component whose body it is in.
+fn written(program: &Program) -> Vec<(&RuleStmt, Option<&str>)> {
+    let components: Vec<(&str, &[Stmt])> = crate::modules::definitions(&program.statements)
+        .into_iter()
+        .filter(|(_, m)| m.component)
+        .map(|(path, m)| (path, m.body.as_slice()))
+        .collect();
+    crate::modules::reached(program)
+        .into_iter()
+        .filter_map(|s| match s {
+            Stmt::Rule(rule) if rule.head.pred == "deny" => {
+                let component = components
+                    .iter()
+                    .find(|(_, body)| body.as_ptr_range().contains(&std::ptr::from_ref(s)))
+                    .map(|(path, _)| *path);
+                Some((rule, component))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// The resources the program wants, by type, and the scope of each copy
+/// of a component (`k3s.agent-0` of `k3s.node`).
+struct Wanted<'a> {
+    by_type: BTreeMap<&'a str, Vec<&'a str>>,
+    copies: BTreeMap<&'a str, Vec<String>>,
+}
+
+impl<'a> Wanted<'a> {
+    fn new(res: &'a EvalResult) -> Self {
+        let mut w = Wanted {
+            by_type: BTreeMap::new(),
+            copies: BTreeMap::new(),
+        };
+        for a in &res.facts {
+            match (a.pred.as_str(), a.args.as_slice()) {
+                ("want", [Term::Val(Value::Str(t)), Term::Val(Value::Str(n))]) => {
+                    w.by_type.entry(t).or_default().push(n)
+                }
+                (
+                    crate::modules::INSTANCE_OF,
+                    [
+                        Term::Val(Value::Str(path)),
+                        Term::Val(Value::Str(user)),
+                        Term::Val(Value::Str(name)),
+                    ],
+                ) => w
+                    .copies
+                    .entry(path)
+                    .or_default()
+                    .push(crate::types::dotted(user, name)),
+                _ => {}
+            }
+        }
+        w
+    }
+
+    /// The resources `ranges` take in: each of its type, a component's
+    /// only those inside one of its copies.
+    fn subjects(&self, ranges: &BTreeSet<Range>) -> Vec<Address> {
+        let mut out: Vec<Address> = Vec::new();
+        for (typ, component) in ranges {
+            let inside = |name: &str| match component {
+                None => true,
+                Some(c) => self.copies.get(c.as_str()).is_some_and(|scopes| {
+                    scopes.iter().any(|s| {
+                        name.strip_prefix(s.as_str())
+                            .is_some_and(|rest| rest.starts_with('.'))
+                    })
+                }),
+            };
+            for name in self.by_type.get(typ.as_str()).into_iter().flatten() {
+                let a = Address {
+                    typ: typ.clone(),
+                    name: name.to_string(),
+                };
+                if inside(name) && !out.contains(&a) {
+                    out.push(a);
+                }
+            }
+        }
+        out
     }
 }
 
