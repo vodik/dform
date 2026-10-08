@@ -306,4 +306,22 @@ mod tests {
         assert!(d.statement.contains("Rule"), "{d}");
         assert!(d.old.contains("@0") && d.new.contains("@7"), "{d}");
     }
+
+    /// A rule the compiler writes beside the program's carries its flag
+    /// (R-212) in the dump, so a builder that makes the rule and forgets
+    /// the flag is a difference (R-214).
+    #[test]
+    fn a_helpers_flag_alone_is_a_difference() {
+        let old = crate::parser::parse_program("q(2) where p(2)\n").unwrap();
+        let mut new = old.clone();
+        let Stmt::Rule(r) = &mut new.statements[0] else {
+            panic!("not a rule");
+        };
+        r.helper = Some(ast::Helper::Negation);
+        let d = differ(&dump(&Ok(old)), &dump(&Ok(new))).expect("a difference");
+        assert!(
+            d.old.contains("helper: None") && d.new.contains("helper: Some(Negation)"),
+            "{d}"
+        );
+    }
 }
