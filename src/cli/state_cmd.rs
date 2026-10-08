@@ -168,9 +168,7 @@ impl Output {
     /// spelling, a relation's rows tab-separated. `--json` is the same, as
     /// JSON. A secret output prints as `secret`: state keeps no bytes of it.
     pub(super) fn run(&self, cx: &Objects) -> Result<Outcome> {
-        let (dep, program, o) = (cx.dep(), &cx.located.loaded.program, &cx.cli.table);
-        let (name, json) = (self.name.as_deref(), self.json);
-        use report::table::{Cell, Table};
+        let dep = cx.dep();
         let deployment = dep.name();
         if !dep.has_state()? {
             bail!(
@@ -178,8 +176,27 @@ impl Output {
                 dep.locate(crate::store::STATE)
             );
         }
-        let st = dep.load_state()?;
-        let relations: BTreeSet<&str> = program
+        let outputs = Outputs::new(&cx.located.loaded.program, dep.load_state()?);
+        match self.name.as_deref() {
+            None => outputs.print_all(deployment, self.json, &cx.cli.table)?,
+            Some(name) => outputs.print_one(deployment, name, self.json)?,
+        }
+        Ok(Outcome::Done)
+    }
+}
+
+/// A deployment's outputs as of its last apply, as `output` prints them.
+struct Outputs<'a> {
+    program: &'a crate::ast::Program,
+    st: state::State,
+    /// The outputs that are relations (`output p`).
+    relations: BTreeSet<&'a str>,
+    redact: query::Redactor,
+}
+
+impl<'a> Outputs<'a> {
+    fn new(program: &'a crate::ast::Program, st: state::State) -> Outputs<'a> {
+        let relations = program
             .statements
             .iter()
             .filter_map(|s| match s {
@@ -187,69 +204,90 @@ impl Output {
                 _ => None,
             })
             .collect();
-        let redact = query::Redactor::default();
-        // A relation's rows as a table: one row per list of values.
-        let rows = |k: &str, v: &Value| -> Table {
-            let rows: Vec<&Vec<Value>> = match v {
-                Value::List(xs) => xs
+        Outputs {
+            program,
+            st,
+            relations,
+            redact: query::Redactor::default(),
+        }
+    }
+
+    /// A relation's rows as a table: one row per list of values.
+    fn rows(&self, k: &str, v: &Value) -> report::table::Table {
+        let rows: Vec<&Vec<Value>> = match v {
+            Value::List(xs) => xs
+                .iter()
+                .filter_map(|r| match r {
+                    Value::List(r) => Some(r),
+                    _ => None,
+                })
+                .collect(),
+            _ => Vec::new(),
+        };
+        let arity = rows.first().map_or_else(
+            || {
+                self.program
+                    .statements
                     .iter()
-                    .filter_map(|r| match r {
-                        Value::List(r) => Some(r),
+                    .find_map(|s| match s {
+                        crate::ast::Stmt::Decl(d) if d.pred == k => Some(d.fields.len()),
                         _ => None,
                     })
+                    .unwrap_or(0)
+            },
+            |r| r.len(),
+        );
+        let mut t = report::table::Table::new(query::columns(k, arity, self.program));
+        for r in rows {
+            t.push(
+                r.iter()
+                    .map(|v| report::table::Cell::value(v, &self.redact))
                     .collect(),
-                _ => Vec::new(),
-            };
-            let arity = rows.first().map_or_else(
-                || {
-                    program
-                        .statements
-                        .iter()
-                        .find_map(|s| match s {
-                            crate::ast::Stmt::Decl(d) if d.pred == k => Some(d.fields.len()),
-                            _ => None,
-                        })
-                        .unwrap_or(0)
-                },
-                |r| r.len(),
             );
-            let mut t = Table::new(query::columns(k, arity, program));
-            for r in rows {
-                t.push(r.iter().map(|v| Cell::value(v, &redact)).collect());
+        }
+        t
+    }
+
+    /// Every output: the scalars as a key/value table, each relation its
+    /// own table.
+    fn print_all(&self, deployment: &str, json: bool, o: &report::table::Options) -> Result<()> {
+        let mut scalars = output_table(&self.st);
+        scalars
+            .rows
+            .retain(|r| !self.relations.contains(r[0].text_of()));
+        let blocks: Vec<(String, report::table::Table)> = self
+            .st
+            .outputs
+            .iter()
+            .filter(|(k, _)| self.relations.contains(k.as_str()))
+            .map(|(k, v)| (k.clone(), self.rows(k, v)))
+            .collect();
+        if json {
+            let mut doc = serde_json::Map::new();
+            for r in &scalars.rows {
+                doc.insert(r[0].text_of().to_string(), r[1].json_of().clone());
             }
-            t
-        };
-        let Some(name) = name else {
-            let mut scalars = output_table(&st);
-            scalars.rows.retain(|r| !relations.contains(r[0].text_of()));
-            let blocks: Vec<(String, Table)> = st
-                .outputs
-                .iter()
-                .filter(|(k, _)| relations.contains(k.as_str()))
-                .map(|(k, v)| (k.clone(), rows(k, v)))
-                .collect();
-            if json {
-                let mut doc = serde_json::Map::new();
-                for r in &scalars.rows {
-                    doc.insert(r[0].text_of().to_string(), r[1].json_of().clone());
-                }
-                for (k, t) in &blocks {
-                    doc.insert(k.clone(), t.json());
-                }
-                println!("{}", serde_json::to_string_pretty(&doc)?);
-                return Ok(Outcome::Done);
+            for (k, t) in &blocks {
+                doc.insert(k.clone(), t.json());
             }
-            if scalars.rows.is_empty() && blocks.is_empty() {
-                println!("stack {deployment} has no outputs");
-                return Ok(Outcome::Done);
-            }
-            print!("{}", scalars.pairs(o));
-            if !scalars.rows.is_empty() && !blocks.is_empty() {
-                println!();
-            }
-            print!("{}", report::table::blocks(&blocks, o));
-            return Ok(Outcome::Done);
-        };
+            println!("{}", serde_json::to_string_pretty(&doc)?);
+            return Ok(());
+        }
+        if scalars.rows.is_empty() && blocks.is_empty() {
+            println!("stack {deployment} has no outputs");
+            return Ok(());
+        }
+        print!("{}", scalars.pairs(o));
+        if !scalars.rows.is_empty() && !blocks.is_empty() {
+            println!();
+        }
+        print!("{}", report::table::blocks(&blocks, o));
+        Ok(())
+    }
+
+    /// The output `name`'s value for the shell.
+    fn print_one(&self, deployment: &str, name: &str, json: bool) -> Result<()> {
+        let st = &self.st;
         if st.secret_outputs.contains_key(name) {
             bail!(
                 "output {name} of stack {deployment} is secret: its state keeps no bytes of it, \
@@ -272,13 +310,15 @@ impl Output {
         };
         let bare = |v: &Value| match v {
             Value::Str(s) => s.clone(),
-            v => redact.surface(v),
+            v => self.redact.surface(v),
         };
-        if relations.contains(name) {
-            let t = rows(name, v);
+        if self.relations.contains(name) {
             if json {
-                println!("{}", serde_json::to_string_pretty(&t.json())?);
-                return Ok(Outcome::Done);
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&self.rows(name, v).json())?
+                );
+                return Ok(());
             }
             if let Value::List(xs) = v {
                 for r in xs {
@@ -286,17 +326,17 @@ impl Output {
                     println!("{}", r.iter().map(bare).collect::<Vec<_>>().join("\t"));
                 }
             }
-            return Ok(Outcome::Done);
+            return Ok(());
         }
         if json {
-            println!("{}", serde_json::to_string_pretty(&redact.json(v))?);
+            println!("{}", serde_json::to_string_pretty(&self.redact.json(v))?);
         } else if let Value::Str(s) = v {
             use std::io::Write;
             std::io::stdout().write_all(s.as_bytes())?;
         } else {
             println!("{}", bare(v));
         }
-        Ok(Outcome::Done)
+        Ok(())
     }
 }
 

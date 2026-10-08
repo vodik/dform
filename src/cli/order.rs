@@ -1,8 +1,9 @@
 //! The stacks `apply X` applies first: the deployments X reads, each
 //! before its readers (R-30, R-73).
 
-use super::{Cli, Cmd};
+use super::{Cli, Cmd, Outcome, run};
 use crate::deployment;
+use crate::report;
 use anyhow::{Result, bail};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -68,12 +69,76 @@ pub(super) fn order_of(roots: &[(PathBuf, Vec<(String, String)>)]) -> Result<Vec
     else {
         return Ok(Vec::new());
     };
-    let found = crate::project::discover(&project);
-    // The stack in `file` keyed by `keys`: its name and the deployments it
-    // reads that are this project's.
-    let reads = |file: &Path,
-                 keys: &[(String, String)]|
-     -> Result<(crate::stack::Instance, BTreeSet<String>, Vec<Dependency>)> {
+    let mut order = Order {
+        found: crate::project::discover(&project),
+        project,
+        order: Vec::new(),
+        path: Vec::new(),
+    };
+    for (file, keys) in roots {
+        let (instance, inputs, _) = order.reads(file, keys)?;
+        let target = Dependency {
+            name: instance.name(),
+            file: file.clone(),
+            keys: keys.clone(),
+            inputs,
+            key: instance.key,
+            root: true,
+        };
+        // A root another root read first is a root still.
+        if let Some(d) = order.order.iter_mut().find(|d| d.name == target.name) {
+            d.root = true;
+            continue;
+        }
+        order.visit(target)?;
+    }
+    Ok(order.order)
+}
+
+/// The deployments of a project in apply order, as they are found: each
+/// visited after those it reads.
+struct Order {
+    project: crate::project::Project,
+    found: crate::project::Discovered,
+    /// The deployments in apply order so far.
+    order: Vec<Dependency>,
+    /// The reads being followed, for a cycle's message.
+    path: Vec<String>,
+}
+
+impl Order {
+    /// The deployment `d`, after the deployments it reads; a cycle is an
+    /// error naming it.
+    fn visit(&mut self, mut d: Dependency) -> Result<()> {
+        if self.order.iter().any(|o| o.name == d.name) {
+            return Ok(());
+        }
+        if let Some(i) = self.path.iter().position(|p| *p == d.name) {
+            bail!(
+                "apply {}: the stacks read each other's outputs in a cycle: {} -> {}",
+                self.path[0],
+                self.path[i..].join(" -> "),
+                d.name
+            );
+        }
+        let (_, inputs, deps) = self.reads(&d.file, &d.keys)?;
+        d.inputs = inputs;
+        self.path.push(d.name.clone());
+        for dep in deps {
+            self.visit(dep)?;
+        }
+        self.path.pop();
+        self.order.push(d);
+        Ok(())
+    }
+
+    /// The stack in `file` keyed by `keys`: its name, its inputs (not its
+    /// key), and the deployments it reads that are this project's.
+    fn reads(
+        &self,
+        file: &Path,
+        keys: &[(String, String)],
+    ) -> Result<(crate::stack::Instance, BTreeSet<String>, Vec<Dependency>)> {
         let t = deployment::Target {
             files: vec![file.to_path_buf()],
             input_files: Vec::new(),
@@ -107,7 +172,7 @@ pub(super) fn order_of(roots: &[(PathBuf, Vec<(String, String)>)]) -> Result<Vec
         // A deployment named by what the program computes: any of the
         // stack's may be read, so every one there is goes first.
         if !any.is_empty() {
-            for name in crate::stack::registry(&project.state_root())?.into_keys() {
+            for name in crate::stack::registry(&self.project.state_root())?.into_keys() {
                 let stack = name.split_once('[').map_or(name.as_str(), |(s, _)| s);
                 if any.contains(stack) {
                     names.insert(name);
@@ -116,31 +181,9 @@ pub(super) fn order_of(roots: &[(PathBuf, Vec<(String, String)>)]) -> Result<Vec
         }
         let mut deps = Vec::new();
         for name in names {
-            let (stack, key) = match name.strip_suffix(']').and_then(|n| n.split_once('[')) {
-                Some((s, k)) => (s.to_string(), k),
-                None => (name.clone(), ""),
-            };
-            // Another project's (`acme.platform`) is that project's to apply.
-            let [one] = found.named(&stack)[..] else {
-                continue;
-            };
-            let keys: Vec<(String, String)> = key
-                .split(',')
-                .filter(|kv| !kv.is_empty())
-                .map(|kv| {
-                    kv.split_once('=')
-                        .map(|(k, v)| (k.trim().to_string(), v.trim().to_string()))
-                        .ok_or_else(|| anyhow::anyhow!("a read of {name}: expected K=V in the key"))
-                })
-                .collect::<Result<_>>()?;
-            deps.push(Dependency {
-                name,
-                file: one.file.clone(),
-                key: keys.clone(),
-                keys,
-                inputs: BTreeSet::new(),
-                root: false,
-            });
+            if let Some(d) = self.dependency(name)? {
+                deps.push(d);
+            }
         }
         let inputs = loaded
             .program
@@ -152,57 +195,165 @@ pub(super) fn order_of(roots: &[(PathBuf, Vec<(String, String)>)]) -> Result<Vec
             })
             .collect();
         Ok((instance, inputs, deps))
-    };
-    let mut order: Vec<Dependency> = Vec::new();
-    let mut path: Vec<String> = Vec::new();
-    type Reads<'a> = dyn Fn(
-            &Path,
-            &[(String, String)],
-        ) -> Result<(crate::stack::Instance, BTreeSet<String>, Vec<Dependency>)>
-        + 'a;
-    fn visit(
-        mut d: Dependency,
-        reads: &Reads,
-        order: &mut Vec<Dependency>,
-        path: &mut Vec<String>,
-    ) -> Result<()> {
-        if order.iter().any(|o| o.name == d.name) {
-            return Ok(());
+    }
+
+    /// The deployment `name` (`app[env=prod]`) read, when it is of a stack
+    /// of this project; another project's (`acme.platform`) is that
+    /// project's to apply.
+    fn dependency(&self, name: String) -> Result<Option<Dependency>> {
+        let (stack, key) = match name.strip_suffix(']').and_then(|n| n.split_once('[')) {
+            Some((s, k)) => (s.to_string(), k),
+            None => (name.clone(), ""),
+        };
+        let [one] = self.found.named(&stack)[..] else {
+            return Ok(None);
+        };
+        let keys: Vec<(String, String)> = key
+            .split(',')
+            .filter(|kv| !kv.is_empty())
+            .map(|kv| {
+                kv.split_once('=')
+                    .map(|(k, v)| (k.trim().to_string(), v.trim().to_string()))
+                    .ok_or_else(|| anyhow::anyhow!("a read of {name}: expected K=V in the key"))
+            })
+            .collect::<Result<_>>()?;
+        Ok(Some(Dependency {
+            file: one.file.clone(),
+            key: keys.clone(),
+            keys,
+            name,
+            inputs: BTreeSet::new(),
+            root: false,
+        }))
+    }
+}
+
+/// `apply X` in a project: the deployments X reads, then X, each planned,
+/// confirmed and applied in turn, a run of its own; one declined or
+/// stopped ends the command there, before the stacks that read it.
+pub(super) struct InOrder {
+    cli: Cli,
+    order: Vec<Dependency>,
+}
+
+impl InOrder {
+    pub(super) fn new(cli: Cli, order: Vec<Dependency>) -> InOrder {
+        InOrder { cli, order }
+    }
+
+    pub(super) fn run(self) -> Result<Outcome> {
+        self.say();
+        self.check_sets()?;
+        let (last, deps) = self
+            .order
+            .split_last()
+            .ok_or_else(|| anyhow::anyhow!("internal: an apply order with no deployment"))?;
+        for d in deps {
+            self.header(&d.name);
+            let mut cli = self.of(d);
+            cli.input_files = Vec::new();
+            match run(cli, None)? {
+                Outcome::Done => {}
+                o => return Ok(o),
+            }
         }
-        if let Some(i) = path.iter().position(|p| *p == d.name) {
-            bail!(
-                "apply {}: the stacks read each other's outputs in a cycle: {} -> {}",
-                path[0],
-                path[i..].join(" -> "),
-                d.name
+        self.header(&last.name);
+        if !self.cli.every_stack.is_empty() {
+            // The project's last stack: run as a dependency is, by its file.
+            return run(self.of(last), None);
+        }
+        let own = last.inputs.clone();
+        let InOrder { mut cli, order } = self;
+        cli.user_set.retain(|kv| {
+            let k = named_input(kv);
+            own.contains(&k) || !order.iter().any(|d| d.inputs.contains(&k))
+        });
+        cli.set = cli.user_set.clone();
+        cli.set
+            .extend(cli.keys.iter().map(|(k, v)| format!("{k}={v}")));
+        run(cli, None)
+    }
+
+    /// The `stacks:` line (R-79): the deployments in apply order. Each is
+    /// planned, confirmed and applied in turn, so its ticks are its own
+    /// plan's, printed under its name.
+    fn say(&self) {
+        let named: Vec<String> = self.order.iter().map(|d| d.name.clone()).collect();
+        let target = named.last().cloned().unwrap_or_default();
+        let deps = &named[..named.len() - 1];
+        if self.cli.every_stack.is_empty() {
+            println!(
+                "stacks: {}, then {target} below, in apply order: {target} reads {}; each is \
+                 planned, confirmed and applied in turn",
+                deps.join(", then "),
+                if deps.len() == 1 {
+                    "its outputs"
+                } else {
+                    "their outputs"
+                }
+            );
+        } else {
+            println!(
+                "stacks: the project's {}, in apply order: {}; each is planned, confirmed and \
+                 applied in turn",
+                named.len(),
+                named.join(", then ")
             );
         }
-        let (_, inputs, deps) = reads(&d.file, &d.keys)?;
-        d.inputs = inputs;
-        path.push(d.name.clone());
-        for dep in deps {
-            visit(dep, reads, order, path)?;
+    }
+
+    /// The project has no target to name the error: a `--set` no stack
+    /// declares is one now.
+    fn check_sets(&self) -> Result<()> {
+        if self.cli.every_stack.is_empty() {
+            return Ok(());
         }
-        path.pop();
-        order.push(d);
+        if let Some(kv) = self.cli.user_set.iter().find(|kv| {
+            !self
+                .order
+                .iter()
+                .any(|d| d.inputs.contains(&named_input(kv)))
+        }) {
+            bail!(
+                "--set {kv}: no stack of the project declares input {}",
+                named_input(kv)
+            );
+        }
         Ok(())
     }
-    for (file, keys) in roots {
-        let (instance, inputs, _) = reads(file, keys)?;
-        let target = Dependency {
-            name: instance.name(),
-            file: file.clone(),
-            keys: keys.clone(),
-            inputs,
-            key: instance.key,
-            root: true,
-        };
-        // A root another root read first is a root still.
-        if let Some(d) = order.iter_mut().find(|d| d.name == target.name) {
-            d.root = true;
-            continue;
-        }
-        visit(target, &reads, &mut order, &mut path)?;
+
+    /// `== NAME` above a deployment's run.
+    fn header(&self, name: &str) {
+        println!(
+            "{}",
+            self.cli
+                .style
+                .paint(report::Paint::Bold, &format!("== {name}"))
+        );
     }
-    Ok(order)
+
+    /// The run of the deployment `d`, by its file and key: a `--set` goes
+    /// to each stack of the run that declares the input; one none declares
+    /// stays the target's, which names the error.
+    fn of(&self, d: &Dependency) -> Cli {
+        let mut cli = self.cli.clone();
+        cli.user_set = self
+            .cli
+            .user_set
+            .iter()
+            .filter(|kv| d.inputs.contains(&named_input(kv)))
+            .cloned()
+            .collect();
+        cli.set = cli.user_set.clone();
+        cli.set
+            .extend(d.keys.iter().map(|(k, v)| format!("{k}={v}")));
+        cli.keys = d.keys.clone();
+        cli.files = vec![d.file.clone()];
+        cli
+    }
+}
+
+/// The input a `--set K=V` names.
+fn named_input(kv: &str) -> String {
+    kv.split_once('=').map_or(kv, |(k, _)| k).to_string()
 }

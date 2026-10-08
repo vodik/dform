@@ -282,97 +282,9 @@ impl<'h> Evaluated<'h> {
             located,
             audit,
         } = objects;
-        let root = cli.root.clone();
-        let deployment = located.deployment.clone();
-        let dep = located.dep.clone();
-        let writes = saved.is_some()
-            || matches!(&cli.cmd, Cmd::Plan(p) if p.out.is_some())
-            || matches!(cli.cmd, Cmd::Apply(_));
-        // Who holds it: dform.toml's `[secrets]` (R-164).
-        let mixing =
-            crate::custody::Mixing::of(located.loaded.manifest.as_ref(), &located.instance.stack)?;
-        let master = master(&cli, &located, &mixing, writes)?;
-        say_master(&cli, &located, &mixing, &master);
-        // The key the run's digests are keyed with: a plan that writes a
-        // file, and an apply. A plan file is checked in its own form: one
-        // written without the master by digests anyone can compute (R-164).
-        // After a cycle it is the first epoch's master, carried (R-165).
-        let key = match writes {
-            true => master.digest.clone(),
-            false => None,
-        };
-        if let (Some((path, f)), None) = (&saved, &key)
-            && !f.unkeyed
-        {
-            bail!(
-                "plan file {}: its digests are keyed with {deployment}'s master, which this run \
-                 does not hold ({}): apply it with the passphrase, or plan again without it",
-                path.display(),
-                master.without.as_deref().unwrap_or("no master")
-            );
-        }
-        let secret_inputs: BTreeSet<String> = located
-            .loaded
-            .declared
-            .iter()
-            .filter(|d| d.scope.is_empty())
-            .filter(|d| matches!(&d.decl.ty, crate::ast::TypeExpr::Apply(n, _) if n == "secret"))
-            .map(|d| d.decl.name.clone())
-            .collect();
-        warn_secret_set(&cli, &located);
-        // Other stacks' published outputs, read once, as facts; a plan file
-        // records their digests, and an apply of it refuses when one moved.
-        let mut read_outputs = located.read_outputs(&open_s3(&root, false))?;
-        // A secret output sealed to this deployment (R-166): opened with its
-        // master, its value read as a secret input's is; the apply's log
-        // says which.
-        let (opened, unsealed) = open_sealed(&mut read_outputs, &deployment, &master);
-        // A reader the producer does not seal to yet is one from its apply:
-        // registered, its master's public key published (made above), so
-        // the producer's next apply seals to it.
-        if let (Cmd::Apply(_), false, None) = (&cli.cmd, unsealed.is_empty(), &cli.world) {
-            crate::stack::register(
-                &root,
-                &deployment,
-                &located.location,
-                located.loaded.cfg.bootstrap,
-            )?;
-        }
-        let outputs_read = read_outputs
-            .iter()
-            .map(|r| zset::file::OutputsDigest {
-                deployment: r.name.clone(),
-                digest: r.digest.clone(),
-            })
-            .collect();
-        // What providers and trust roots fetch is cached in the state root's
-        // cache/, a world fixture's beside it.
-        let cache = match &cli.world {
-            Some(w) => w.parent().unwrap_or(Path::new("")).to_path_buf(),
-            None => root.join("cache"),
-        };
-        let mut cx = Context {
-            root,
-            deployment,
-            dep,
-            entries: Entries::new(audit.clone()),
-            audit,
-            saved,
-            writes,
-            mixing,
-            master,
-            key,
-            inputs: None,
-            outputs_read,
-            secret_inputs,
-            opened,
-            chaos: Chaos::default(),
-            cache,
-            last_derived: None,
-            rekey,
-            cli,
-        };
-        if writes {
+        let mut cx = Context::new(cli, &located, audit, saved, rekey)?;
+        let read_outputs = cx.read_outputs(&located)?;
+        if cx.writes {
             cx.inputs = Some(cx.plan_inputs(cx.file_key())?);
         }
         cx.check_stale()?;
@@ -551,6 +463,111 @@ fn warn_secret_set(cli: &Cli, located: &deployment::Located) {
 }
 
 impl Context {
+    /// What the run of the deployment `located` holds before it reads
+    /// anything else: its master (R-163, R-164) and the key its digests are
+    /// keyed with, checked against the plan file it applies. A plan file is
+    /// checked in its own form: one written without the master by digests
+    /// anyone can compute (R-164). After a cycle the key is the first
+    /// epoch's master, carried (R-165).
+    fn new(
+        cli: Cli,
+        located: &deployment::Located,
+        audit: crate::audit::Log,
+        saved: Option<(PathBuf, zset::file::PlanFile)>,
+        rekey: Option<Rekeying>,
+    ) -> Result<Context> {
+        let deployment = located.deployment.clone();
+        let writes = saved.is_some()
+            || matches!(&cli.cmd, Cmd::Plan(p) if p.out.is_some())
+            || matches!(cli.cmd, Cmd::Apply(_));
+        // Who holds it: dform.toml's `[secrets]` (R-164).
+        let mixing =
+            crate::custody::Mixing::of(located.loaded.manifest.as_ref(), &located.instance.stack)?;
+        let master = master(&cli, located, &mixing, writes)?;
+        say_master(&cli, located, &mixing, &master);
+        let key = match writes {
+            true => master.digest.clone(),
+            false => None,
+        };
+        if let (Some((path, f)), None) = (&saved, &key)
+            && !f.unkeyed
+        {
+            bail!(
+                "plan file {}: its digests are keyed with {deployment}'s master, which this run \
+                 does not hold ({}): apply it with the passphrase, or plan again without it",
+                path.display(),
+                master.without.as_deref().unwrap_or("no master")
+            );
+        }
+        let secret_inputs = located
+            .loaded
+            .declared
+            .iter()
+            .filter(|d| d.scope.is_empty())
+            .filter(|d| matches!(&d.decl.ty, crate::ast::TypeExpr::Apply(n, _) if n == "secret"))
+            .map(|d| d.decl.name.clone())
+            .collect();
+        warn_secret_set(&cli, located);
+        let root = cli.root.clone();
+        // What providers and trust roots fetch is cached in the state root's
+        // cache/, a world fixture's beside it.
+        let cache = match &cli.world {
+            Some(w) => w.parent().unwrap_or(Path::new("")).to_path_buf(),
+            None => root.join("cache"),
+        };
+        Ok(Context {
+            dep: located.dep.clone(),
+            entries: Entries::new(audit.clone()),
+            audit,
+            deployment,
+            saved,
+            writes,
+            mixing,
+            master,
+            key,
+            inputs: None,
+            outputs_read: Vec::new(),
+            secret_inputs,
+            opened: Vec::new(),
+            chaos: Chaos::default(),
+            cache,
+            last_derived: None,
+            rekey,
+            root,
+            cli,
+        })
+    }
+
+    /// Other stacks' published outputs, read once, as facts; a plan file
+    /// records their digests, and an apply of it refuses when one moved. A
+    /// secret output sealed to this deployment (R-166) is opened with its
+    /// master, its value read as a secret input's is; the apply's log says
+    /// which. A reader the producer does not seal to yet is one from its
+    /// apply: registered, its master's public key published (made above),
+    /// so the producer's next apply seals to it.
+    fn read_outputs(&mut self, located: &deployment::Located) -> Result<Vec<crate::stack::Read>> {
+        let mut read = located.read_outputs(&open_s3(&self.root, false))?;
+        let (opened, unsealed) = open_sealed(&mut read, &self.deployment, &self.master);
+        if let (Cmd::Apply(_), false, None) = (&self.cli.cmd, unsealed.is_empty(), &self.cli.world)
+        {
+            crate::stack::register(
+                &self.root,
+                &self.deployment,
+                &located.location,
+                located.loaded.cfg.bootstrap,
+            )?;
+        }
+        self.opened = opened;
+        self.outputs_read = read
+            .iter()
+            .map(|r| zset::file::OutputsDigest {
+                deployment: r.name.clone(),
+                digest: r.digest.clone(),
+            })
+            .collect();
+        Ok(read)
+    }
+
     /// `apply PLAN`: the plan file's inputs are this run's, the environment
     /// variables it read as they are now; else it is stale.
     fn check_stale(&self) -> Result<()> {

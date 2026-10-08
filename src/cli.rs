@@ -35,7 +35,7 @@ mod test;
 use self::args::{Args, Command, EXPERIMENTAL};
 use self::cmd::{Cmd, Stage};
 use self::evaluated::{Evaluated, Objects};
-use self::order::{Dependency, apply_order};
+use self::order::{Dependency, InOrder, apply_order};
 
 /// How this run reaches its providers (`main`'s `launch`).
 static LAUNCH: std::sync::OnceLock<&'static (dyn plugin::Launch + Sync)> =
@@ -233,104 +233,7 @@ fn run_command(cli: Cli) -> Result<Outcome> {
     if order.is_empty() {
         return run(cli, None);
     }
-    let named: Vec<String> = order.iter().map(|d| d.name.clone()).collect();
-    let target = named.last().cloned().unwrap_or_default();
-    let deps = &named[..named.len() - 1];
-    // The `stacks:` line (R-79): the deployments in apply order. Each is
-    // planned, confirmed and applied in turn, so its ticks are its own
-    // plan's, printed under its name.
-    if cli.every_stack.is_empty() {
-        println!(
-            "stacks: {}, then {target} below, in apply order: {target} reads {}; each is \
-             planned, confirmed and applied in turn",
-            deps.join(", then "),
-            if deps.len() == 1 {
-                "its outputs"
-            } else {
-                "their outputs"
-            }
-        );
-    } else {
-        println!(
-            "stacks: the project's {}, in apply order: {}; each is planned, confirmed and \
-             applied in turn",
-            named.len(),
-            named.join(", then ")
-        );
-    }
-    // A `--set` goes to each stack of the run that declares the input; one
-    // none declares stays the target's, which names the error.
-    let named_input = |kv: &String| {
-        kv.split_once('=')
-            .map_or(kv.as_str(), |(k, _)| k)
-            .to_string()
-    };
-    let sets = |d: &Dependency| -> Vec<String> {
-        cli.user_set
-            .iter()
-            .filter(|kv| d.inputs.contains(&named_input(kv)))
-            .cloned()
-            .collect()
-    };
-    // The project has no target to name the error: a `--set` no stack
-    // declares is one now.
-    if !cli.every_stack.is_empty()
-        && let Some(kv) = cli
-            .user_set
-            .iter()
-            .find(|kv| !order.iter().any(|d| d.inputs.contains(&named_input(kv))))
-    {
-        bail!(
-            "--set {kv}: no stack of the project declares input {}",
-            named_input(kv)
-        );
-    }
-    for d in &order[..order.len() - 1] {
-        println!(
-            "{}",
-            cli.style
-                .paint(report::Paint::Bold, &format!("== {}", d.name))
-        );
-        let mut dep = cli.clone();
-        dep.user_set = sets(d);
-        dep.set = dep.user_set.clone();
-        dep.set
-            .extend(d.keys.iter().map(|(k, v)| format!("{k}={v}")));
-        dep.keys = d.keys.clone();
-        dep.input_files = Vec::new();
-        dep.files = vec![d.file.clone()];
-        match run(dep, None)? {
-            Outcome::Done => {}
-            o => return Ok(o),
-        }
-    }
-    println!(
-        "{}",
-        cli.style
-            .paint(report::Paint::Bold, &format!("== {target}"))
-    );
-    if let Some(last) = order.last().filter(|_| !cli.every_stack.is_empty()) {
-        // The project's last stack: run as a dependency is, by its file.
-        let user_set = sets(last);
-        let mut cli = cli;
-        cli.files = vec![last.file.clone()];
-        cli.keys = last.keys.clone();
-        cli.set = user_set.clone();
-        cli.set
-            .extend(last.keys.iter().map(|(k, v)| format!("{k}={v}")));
-        cli.user_set = user_set;
-        return run(cli, None);
-    }
-    let mut cli = cli;
-    let own = order.last().map(|d| &d.inputs);
-    cli.user_set.retain(|kv| {
-        let k = named_input(kv);
-        own.is_some_and(|i| i.contains(&k)) || !order.iter().any(|d| d.inputs.contains(&k))
-    });
-    cli.set = cli.user_set.clone();
-    cli.set
-        .extend(cli.keys.iter().map(|(k, v)| format!("{k}={v}")));
-    run(cli, None)
+    InOrder::new(cli, order).run()
 }
 
 /// An apply's audit session: its log, and the stack's lock, held until the

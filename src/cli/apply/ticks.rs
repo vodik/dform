@@ -1,12 +1,15 @@
-//! `dform apply` and `dform destroy`: a deployment's plan applied, tick by
-//! tick (E §2.7), asked for, approved and logged.
+//! An apply's ticks (E §2.7), each planned, shown, asked for, approved and
+//! applied.
 
-use super::evaluated::{Context, Evaluated};
-use super::outputs::{readers_of, sealed_label};
-use super::planning::{Reporter, unreachable_text};
-use super::secrets::recipients_json;
-use super::{Outcome, Refused, Session, open_s3};
-use crate::ast::{Atom, Term};
+use super::approvals::{Approvals, Asked};
+use super::prompt::{Stopped, confirm, confirm_emptied, declined};
+use super::{Apply, Next, Wanted};
+use crate::ast::Term;
+use crate::cli::evaluated::Context;
+use crate::cli::outputs::{readers_of, sealed_label};
+use crate::cli::planning::{Reporter, unreachable_text};
+use crate::cli::secrets::recipients_json;
+use crate::cli::{Outcome, Refused, Session, open_s3};
 use crate::deployment::{self, Planned};
 use crate::provider::ActionKind;
 use crate::report::waits_on;
@@ -14,123 +17,13 @@ use crate::value::Value;
 use crate::{controller, engine, executor, ir, query, report, state, store, stuck, zset};
 use anyhow::{Result, bail};
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Path, PathBuf};
-
-/// `dform apply TARGET`, `dform apply PLAN.json` and `dform destroy
-/// TARGET`.
-#[derive(Debug, Clone)]
-pub(super) struct Apply {
-    /// `apply PLAN.json`: the plan file applied.
-    pub(super) plan_file: Option<PathBuf>,
-    /// `dev --chaos`: failures injected into the fake provider.
-    pub(super) chaos: Vec<String>,
-    pub(super) max_ticks: usize,
-    pub(super) parallel: u64,
-    pub(super) approval: Option<PathBuf>,
-    /// `--yes`: no confirmation.
-    pub(super) yes: bool,
-    /// `--allow-empty`: what the plan may empty without asking (R-80).
-    pub(super) allow_empty: Vec<String>,
-    /// What each change of the printed plan says of why.
-    pub(super) why: report::Why,
-    /// `destroy`: the deployment is removed (R-149).
-    pub(super) destroy: bool,
-    /// `--new-master` (R-163).
-    pub(super) new_master: bool,
-}
-
-impl Apply {
-    /// The apply controller mode runs on each event: unattended, it never
-    /// asks.
-    pub(super) fn unattended(max_ticks: usize) -> Apply {
-        Apply {
-            plan_file: None,
-            chaos: Vec::new(),
-            max_ticks,
-            parallel: 1,
-            approval: None,
-            yes: true,
-            allow_empty: Vec::new(),
-            why: report::Why::None,
-            destroy: false,
-            new_master: false,
-        }
-    }
-
-    /// The apply: one apply at a time per deployment, the lock held until
-    /// its end is in the audit log (`session`); what an interrupted apply
-    /// left resumed; then ticks until the plan holds nothing.
-    pub(super) fn run(
-        &self,
-        run: Evaluated,
-        compiled: deployment::Compiled,
-        session: &mut Option<Session>,
-    ) -> Result<Outcome> {
-        let Evaluated { cx, ev, hook } = run;
-        let deployment::Evaluation {
-            located,
-            st,
-            moves,
-            res,
-            violations,
-            evaluator,
-            ..
-        } = ev;
-        let r = Reporter::new(&cx, &evaluator, &located, &st);
-        let mut ticks = Ticks::new(self, &cx, &r, &evaluator, &located, hook, session, st)?;
-        for addr in cx.chaos.addresses() {
-            if !compiled.resources.iter().any(|r| &r.addr == addr) && ticks.st.get(addr).is_none() {
-                bail!(
-                    "--chaos: {} is not a resource of this stack",
-                    report::address(addr)
-                );
-            }
-        }
-        ticks.begin()?;
-        if !moves.is_empty() {
-            print!("{}", report::moved_text(&moves));
-        }
-        ticks.resume(&violations)?;
-        let mut wanted = Wanted {
-            res,
-            violations,
-            resources: compiled.resources,
-            adopts: compiled.adopts,
-            lifecycle: compiled.lifecycle,
-        };
-        // The providers the plan's own evaluation configured.
-        evaluator.take_configured();
-        loop {
-            match ticks.tick(wanted)? {
-                Next::Tick(w) => wanted = *w,
-                Next::Done(outcome) => return Ok(outcome),
-            }
-        }
-    }
-}
-
-/// What a tick plans from: the program's evaluation over the world as the
-/// last boundary left it, its violations, and what it compiles to.
-struct Wanted {
-    res: engine::EvalResult,
-    violations: Vec<String>,
-    resources: Vec<ir::Resource>,
-    adopts: Vec<ir::Adopt>,
-    lifecycle: zset::Lifecycle,
-}
-
-/// What a tick ends in: the next tick, from what the boundary derived, or
-/// the apply's end.
-enum Next {
-    Tick(Box<Wanted>),
-    Done(Outcome),
-}
+use std::path::Path;
 
 /// An apply's ticks (E §2.7): each applies every definite deformation in
 /// dependency order; what waits on a null is held. At the boundary the
 /// results come back as world facts, round 0 resolves them, everything is
 /// re-derived and policy is checked again before the next tick.
-struct Ticks<'a, 'h> {
+pub(super) struct Ticks<'a, 'h> {
     args: &'a Apply,
     cx: &'a Context,
     r: &'a Reporter<'a>,
@@ -173,24 +66,37 @@ struct Ticks<'a, 'h> {
 }
 
 /// One tick's plan, and what the tick made of it.
-struct Tick {
-    planned: Planned,
+pub(super) struct Tick {
+    pub(super) planned: Planned,
     /// What the policy pass says needs an approval.
-    needs: Vec<(String, String)>,
+    pub(super) needs: Vec<(String, String)>,
     /// The digest of this plan: the file's, else of the plan as a file
     /// would record it.
-    digest: Option<String>,
+    pub(super) digest: Option<String>,
     /// What the tick holds: the nulls its held changes wait on.
-    held: Vec<String>,
+    pub(super) held: Vec<String>,
     /// The tick ends at a boundary: another tick follows.
-    boundary: bool,
+    pub(super) boundary: bool,
     /// Controller mode: the plan changes nothing.
-    undeformed: bool,
+    pub(super) undeformed: bool,
+}
+
+/// Each Apply call of a tick to the audit log: its result, its remote id,
+/// and a digest of its redacted diff; a forget (R-154) by the remote id it
+/// drops. The first entry that could not be written fails the tick.
+struct ActionLog<'a> {
+    tick: usize,
+    audit: &'a crate::audit::Log,
+    redact: &'a query::Redactor,
+    diffs: BTreeMap<ir::Address, String>,
+    /// What a forget drops from state: its remote id, which the log keeps.
+    forgotten: BTreeMap<ir::Address, String>,
+    failed: std::cell::RefCell<Option<anyhow::Error>>,
 }
 
 impl<'a, 'h> Ticks<'a, 'h> {
     #[allow(clippy::too_many_arguments)]
-    fn new(
+    pub(super) fn new(
         args: &'a Apply,
         cx: &'a Context,
         r: &'a Reporter<'a>,
@@ -244,6 +150,19 @@ impl<'a, 'h> Ticks<'a, 'h> {
         })
     }
 
+    /// Chaos names only resources of this stack.
+    pub(super) fn check_chaos(&self, resources: &[ir::Resource]) -> Result<()> {
+        for addr in self.cx.chaos.addresses() {
+            if !resources.iter().any(|r| &r.addr == addr) && self.st.get(addr).is_none() {
+                bail!(
+                    "--chaos: {} is not a resource of this stack",
+                    report::address(addr)
+                );
+            }
+        }
+        Ok(())
+    }
+
     fn backend(&self) -> &'a crate::plugin::Providers {
         &self.evaluator.backend
     }
@@ -280,7 +199,7 @@ impl<'a, 'h> Ticks<'a, 'h> {
     /// Nothing is written, to state or the world, until the apply is
     /// confirmed: the moves, the resolution of uncertain calls and the
     /// in-flight record taken here are written with the tick's first.
-    fn begin(&mut self) -> Result<()> {
+    pub(super) fn begin(&mut self) -> Result<()> {
         // One apply at a time per deployment; the lock is held until the
         // apply's end is in the audit log.
         *self.session = Some(Session {
@@ -311,7 +230,7 @@ impl<'a, 'h> Ticks<'a, 'h> {
     /// come back as facts with the documents they were planned against, as
     /// the held ones do at a boundary: the evaluator derives the deny when
     /// the world moved under one (`zset::POLICY_RULES`).
-    fn resume(&mut self, violations: &[String]) -> Result<()> {
+    pub(super) fn resume(&mut self, violations: &[String]) -> Result<()> {
         self.resumed = self.st.in_flight.take();
         self.r.resuming.set(self.resumed.is_some());
         let Some(f) = &self.resumed else {
@@ -366,7 +285,7 @@ impl<'a, 'h> Ticks<'a, 'h> {
 
     /// One tick: planned, shown, asked for, approved, its calls made; then
     /// the apply's end, or the boundary the next tick plans from.
-    fn tick(&mut self, wanted: Wanted) -> Result<Next> {
+    pub(super) fn tick(&mut self, wanted: Wanted) -> Result<Next> {
         // Between ticks, a signal stops the apply here.
         crate::interrupt::check()?;
         let Wanted {
@@ -497,34 +416,7 @@ impl<'a, 'h> Ticks<'a, 'h> {
             needs.sort();
             needs.dedup();
         }
-        let digest = match saved {
-            _ if tick > 1 && (self.hook.is_none() || needs.is_empty()) => None,
-            Some((path, f)) => {
-                let d = f.digest();
-                if f.digest.as_ref().is_some_and(|x| *x != d) {
-                    bail!(
-                        "plan file {}: its digest {} is not its content's ({d}): it was edited \
-                         after the plan",
-                        path.display(),
-                        f.digest.as_deref().unwrap_or_default()
-                    );
-                }
-                Some(d)
-            }
-            None => Some(
-                self.r
-                    .plan_file(
-                        &planned.plan,
-                        &planned.res,
-                        &planned.sections,
-                        &planned.resources,
-                        &self.st,
-                        self.key(),
-                        self.inputs.clone(),
-                    )?
-                    .digest(),
-            ),
-        };
+        let digest = self.digest(&planned, &needs)?;
         if tick == 1 {
             self.cx.audit.append(
                 "plan",
@@ -576,6 +468,40 @@ impl<'a, 'h> Ticks<'a, 'h> {
                 .any(|a| !matches!(a.kind, ActionKind::Noop) && waits_on(a, sections).is_none());
         }
         Ok(t)
+    }
+
+    /// The digest of the tick's plan: the plan file's, checked, else of the
+    /// plan as a file would record it; after tick 1 only for a controller
+    /// waiting on an approval.
+    fn digest(&self, planned: &Planned, needs: &[(String, String)]) -> Result<Option<String>> {
+        Ok(match &self.cx.saved {
+            _ if self.tick > 1 && (self.hook.is_none() || needs.is_empty()) => None,
+            Some((path, f)) => {
+                let d = f.digest();
+                if f.digest.as_ref().is_some_and(|x| *x != d) {
+                    bail!(
+                        "plan file {}: its digest {} is not its content's ({d}): it was edited \
+                         after the plan",
+                        path.display(),
+                        f.digest.as_deref().unwrap_or_default()
+                    );
+                }
+                Some(d)
+            }
+            None => Some(
+                self.r
+                    .plan_file(
+                        &planned.plan,
+                        &planned.res,
+                        &planned.sections,
+                        &planned.resources,
+                        &self.st,
+                        self.key(),
+                        self.inputs.clone(),
+                    )?
+                    .digest(),
+            ),
+        })
     }
 
     /// Controller mode: the report is one log line, and the policy pass
@@ -637,26 +563,8 @@ impl<'a, 'h> Ticks<'a, 'h> {
     fn show(&mut self, t: &Tick) -> Result<Option<Outcome>> {
         let tick = self.tick;
         let p = &t.planned;
-        let why = self.r.why();
         if self.hook.is_none() {
-            if why == report::Why::None && (tick > 1 || t.boundary) {
-                println!("tick {tick}:");
-            } else if why != report::Why::None && tick > 1 {
-                // A later tick that only waits has no section of its own
-                // in the report: its header says which tick the report is
-                // of.
-                let report = self
-                    .r
-                    .report(&p.plan, &p.res, &p.sections, tick, &[], &p.denies);
-                if !report.undeformed && report.changes() == 0 {
-                    println!("tick {tick}  0 changes");
-                }
-            }
-            self.r
-                .show(&p.plan, &p.res, &p.sections, tick, &[], &p.denies);
-            if tick == 1 {
-                print!("{}", unreachable_text(&p.unreachable));
-            }
+            self.print(t);
         }
         if !p.denies.is_empty() {
             let redact = query::Redactor::new(&p.res.facts, self.backend().schema());
@@ -730,6 +638,28 @@ impl<'a, 'h> Ticks<'a, 'h> {
                 .collect();
         }
         Ok(None)
+    }
+
+    /// A batch apply's tick printed: its plan, under `tick N:` at the bare
+    /// level; a later tick that only waits has no section of its own in the
+    /// report, so its header says which tick the report is of.
+    fn print(&self, t: &Tick) {
+        let (tick, p, why) = (self.tick, &t.planned, self.r.why());
+        if why == report::Why::None && (tick > 1 || t.boundary) {
+            println!("tick {tick}:");
+        } else if why != report::Why::None && tick > 1 {
+            let report = self
+                .r
+                .report(&p.plan, &p.res, &p.sections, tick, &[], &p.denies);
+            if !report.undeformed && report.changes() == 0 {
+                println!("tick {tick}  0 changes");
+            }
+        }
+        self.r
+            .show(&p.plan, &p.res, &p.sections, tick, &[], &p.denies);
+        if tick == 1 {
+            print!("{}", unreachable_text(&p.unreachable));
+        }
     }
 
     /// A batch apply asks before it changes anything, unless `--yes` or it
@@ -813,21 +743,8 @@ impl<'a, 'h> Ticks<'a, 'h> {
                 })
                 .map(Some);
         }
-        // The tick as its boundary re-plans it, against the tick as the
-        // plan shown had it (After R-156): the same changes and values, a
-        // value the plan did not know whatever it became. One that differs
-        // is printed below the tick with what differs, and asked for
-        // again; a plan file or an approval stops before it, naming what
-        // differs.
         let now = self.r.delta(&p.plan, &p.res, &p.sections, tick, self.key());
-        let differs =
-            zset::file::tick_differences(&self.shown_delta, &now, tick, &self.ran, self.key());
-        if !differs.is_empty() {
-            println!("tick {tick} differs from the plan shown:");
-            for d in &differs {
-                println!("{}", d.line());
-            }
-        }
+        let differs = self.differs(&now);
         // A change gone from the tick is said, not asked for: the tick does
         // less than was shown.
         let more = differs.iter().any(|d| d.mark != '-');
@@ -873,6 +790,24 @@ impl<'a, 'h> Ticks<'a, 'h> {
         Ok(None)
     }
 
+    /// The tick as its boundary re-plans it (`now`), against the tick as
+    /// the plan shown had it (After R-156): the same changes and values, a
+    /// value the plan did not know whatever it became. One that differs is
+    /// printed below the tick with what differs, and asked for again; a
+    /// plan file or an approval stops before it, naming what differs.
+    fn differs(&self, now: &[zset::file::Entry]) -> Vec<zset::file::Difference> {
+        let tick = self.tick;
+        let differs =
+            zset::file::tick_differences(&self.shown_delta, now, tick, &self.ran, self.key());
+        if !differs.is_empty() {
+            println!("tick {tick} differs from the plan shown:");
+            for d in &differs {
+                println!("{}", d.line());
+            }
+        }
+        differs
+    }
+
     /// The apply stopped before a tick, the state consistent.
     fn stop(&mut self, stopped: Stopped) -> Result<Outcome> {
         self.st.in_flight = None;
@@ -900,7 +835,6 @@ impl<'a, 'h> Ticks<'a, 'h> {
     /// master sealed again as dform.toml says (R-164).
     fn log_start(&mut self) -> Result<()> {
         let (cx, audit) = (self.cx, &self.cx.audit);
-        let master = &cx.master;
         let dir = cx.cli.files[0]
             .parent()
             .filter(|d| !d.as_os_str().is_empty())
@@ -936,8 +870,16 @@ impl<'a, 'h> Ticks<'a, 'h> {
                 }),
             )?;
         }
-        // The master this apply derives with, as state records it (R-163):
-        // a new one is said in the log, and where it came from.
+        self.log_master()
+    }
+
+    /// The master this apply derives with, as state records it (R-163): a
+    /// new one is said in the log, and where it came from; who could open a
+    /// new one sealed to recipients; a plain key file now sealed (R-164),
+    /// and the master sealed again to the recipients dform.toml names now.
+    fn log_master(&mut self) -> Result<()> {
+        let (cx, audit) = (self.cx, &self.cx.audit);
+        let master = &cx.master;
         if let Some(id) = master
             .id
             .as_ref()
@@ -1080,9 +1022,8 @@ impl<'a, 'h> Ticks<'a, 'h> {
         Ok((seen, pending, changed))
     }
 
-    /// The tick's Apply calls, each logged: its result, its remote id, and
-    /// a digest of its redacted diff; then the tick's checkpoint and its
-    /// `tick` entry, a digest of the world as the executor saw it.
+    /// The tick's Apply calls, each logged (`ActionLog`); then the tick's
+    /// checkpoint. What the executor saw of the world.
     fn run_calls(
         &mut self,
         p: &Planned,
@@ -1090,84 +1031,31 @@ impl<'a, 'h> Ticks<'a, 'h> {
         lifecycle: &zset::Lifecycle,
     ) -> Result<executor::Seen> {
         let tick = self.tick;
-        let (backend, audit, key) = (self.backend(), &self.cx.audit, self.key());
-        let (plan, res, sections) = (&p.plan, &p.res, &p.sections);
+        let (backend, audit) = (self.backend(), &self.cx.audit);
+        let (plan, res) = (&p.plan, &p.res);
         let redact = query::Redactor::new(&res.facts, backend.schema());
-        let diffs: BTreeMap<ir::Address, String> = self
-            .r
-            .delta(plan, res, sections, tick, key)
-            .into_iter()
-            .map(|e| {
-                let digest =
-                    crate::approval::digest_of(&serde_json::to_value(&e).unwrap_or_default());
-                (
-                    ir::Address {
-                        typ: e.typ,
-                        name: e.name,
-                    },
-                    digest,
-                )
-            })
-            .collect();
-        let audit_failed = std::cell::RefCell::new(None);
-        // What a forget drops from state (R-154): its remote id, which the
-        // log keeps.
-        let forgotten: BTreeMap<ir::Address, String> = plan
-            .actions
-            .iter()
-            .filter(|a| matches!(a.kind, ActionKind::Forget))
-            .filter_map(|a| Some((a.addr.clone(), self.st.get(&a.addr)?.remote.clone())))
-            .collect();
-        let on_action =
-            |a: &crate::provider::Action, err: Option<&anyhow::Error>, st: &state::State| {
-                if let Some(remote) = forgotten.get(&a.addr) {
-                    let e = serde_json::json!({
-                        "tick": tick,
-                        "address": a.addr.to_string(),
-                        "remote": remote,
-                        "why": "lifecycle retain",
-                    });
-                    if let Err(x) = audit.append("forgot", e) {
-                        audit_failed.borrow_mut().get_or_insert(x);
-                    }
-                    return;
-                }
-                let mut e = serde_json::json!({
-                    "tick": tick,
-                    "action": zset::deformation_kind(&a.kind, false).unwrap_or("no-op"),
-                    "address": a.addr.to_string(),
-                    "result": if err.is_some() { "failed" } else { "ok" },
-                    "remote": st.get(&a.addr).map(|e| e.remote.clone()),
-                    "diff": diffs.get(&a.addr),
-                });
-                if let Some(err) = err {
-                    crate::audit::error(&mut e, &redact.text(&crate::diag::shape(err)));
-                }
-                if let Err(x) = audit.append("action", e) {
-                    audit_failed.borrow_mut().get_or_insert(x);
-                }
-            };
+        let log = ActionLog {
+            tick,
+            audit,
+            redact: &redact,
+            diffs: self.diffs(p),
+            forgotten: plan
+                .actions
+                .iter()
+                .filter(|a| matches!(a.kind, ActionKind::Forget))
+                .filter_map(|a| Some((a.addr.clone(), self.st.get(&a.addr)?.remote.clone())))
+                .collect(),
+            failed: std::cell::RefCell::new(None),
+        };
+        let on_action = |a: &crate::provider::Action,
+                         err: Option<&anyhow::Error>,
+                         st: &state::State| { log.action(a, err, st) };
         let dep = &self.cx.dep;
         let fence = || dep.check_fence();
         let record = |st: &state::State| dep.record(st);
         // The tick's block on stderr, filling in (R-127); a controller's
         // log line is its report.
-        let mode = crate::progress::Mode::of_stderr(self.r.why() == report::Why::None);
-        let progress = self.hook.is_none().then(|| {
-            let actions: Vec<&crate::provider::Action> = plan.actions.iter().collect();
-            let mut block = report::progress::Block::new(tick, &actions);
-            // A failure's site, where its change is derived (R-109).
-            block.sites =
-                report::sites(res, actions.iter().map(|a| &a.addr), self.r.top.as_deref());
-            crate::progress::Progress::tick(
-                block,
-                mode,
-                match mode {
-                    crate::progress::Mode::Terminal => self.cx.cli.style,
-                    _ => report::Style::default(),
-                },
-            )
-        });
+        let progress = self.hook.is_none().then(|| self.progress(p));
         let on_event = |e: executor::Event| {
             if let Some(p) = &progress {
                 p.event(&e, &|t: &str| redact.text(t));
@@ -1208,7 +1096,7 @@ impl<'a, 'h> Ticks<'a, 'h> {
         for note in backend.take_notes() {
             println!("chaos: {note}");
         }
-        if let Some(e) = audit_failed.into_inner() {
+        if let Some(e) = log.failed.into_inner() {
             return Err(e);
         }
         // The tick's checkpoint, also of a tick that failed; not of one
@@ -1223,6 +1111,47 @@ impl<'a, 'h> Ticks<'a, 'h> {
         let seen = applied?;
         checkpoint?;
         Ok(seen)
+    }
+
+    /// A digest of each action's redacted diff, as the plan file records
+    /// it.
+    fn diffs(&self, p: &Planned) -> BTreeMap<ir::Address, String> {
+        self.r
+            .delta(&p.plan, &p.res, &p.sections, self.tick, self.key())
+            .into_iter()
+            .map(|e| {
+                let digest =
+                    crate::approval::digest_of(&serde_json::to_value(&e).unwrap_or_default());
+                (
+                    ir::Address {
+                        typ: e.typ,
+                        name: e.name,
+                    },
+                    digest,
+                )
+            })
+            .collect()
+    }
+
+    /// The tick's block on stderr (R-127): its actions, each failure's site
+    /// where its change is derived (R-109).
+    fn progress(&self, p: &Planned) -> crate::progress::Progress {
+        let mode = crate::progress::Mode::of_stderr(self.r.why() == report::Why::None);
+        let actions: Vec<&crate::provider::Action> = p.plan.actions.iter().collect();
+        let mut block = report::progress::Block::new(self.tick, &actions);
+        block.sites = report::sites(
+            &p.res,
+            actions.iter().map(|a| &a.addr),
+            self.r.top.as_deref(),
+        );
+        crate::progress::Progress::tick(
+            block,
+            mode,
+            match mode {
+                crate::progress::Mode::Terminal => self.cx.cli.style,
+                _ => report::Style::default(),
+            },
+        )
     }
 
     /// A destroy's last tick: what no Delete could reach stays in state,
@@ -1365,54 +1294,10 @@ impl<'a, 'h> Ticks<'a, 'h> {
     /// deployment registered. `Some`: a secret output this run cannot
     /// digest (R-164) stops the apply, its changes made.
     fn publish(&mut self, res: &engine::EvalResult) -> Result<Option<Outcome>> {
-        let (cx, audit, backend) = (self.cx, &self.cx.audit, self.backend());
+        let (cx, audit) = (self.cx, &self.cx.audit);
         let (deployment, master, root) = (self.deployment(), &cx.master, &cx.root);
         let secret_types = crate::stack::secret_output_types(&self.evaluator.program);
-        let readers = match secret_types.is_empty() || cx.cli.world.is_some() {
-            true => Vec::new(),
-            false => readers_of(root, deployment, &open_s3(root, false))?,
-        };
-        let sealing = std::cell::RefCell::new(None);
-        // The same value to the same reader seals the same: the published
-        // outputs move only when a value or a reader does.
-        let seed = master
-            .key
-            .as_ref()
-            .map(|k| crate::secrets::derived(k, "dform sealed output seed"));
-        let seal = |path: &str, v: &serde_json::Value| {
-            let mut out = BTreeMap::new();
-            let plain = crate::approval::canonical_json(v);
-            for (r, public) in &readers {
-                let Some(public) = public else { continue };
-                let label = sealed_label(deployment, path, r);
-                match crate::custody::seal_to(public, &label, plain.as_bytes(), seed.as_ref()) {
-                    Ok(b) => {
-                        out.insert(r.clone(), b);
-                    }
-                    Err(e) => {
-                        sealing.borrow_mut().get_or_insert(e);
-                    }
-                }
-            }
-            out
-        };
-        let key = self.key();
-        let outputs = if crate::stack::has_outputs(&res.facts) {
-            crate::stack::outputs(
-                &self.evaluator.evaluate(&self.st)?.0.facts,
-                &secret_types,
-                &backend.observe(&self.st)?,
-                &self.st,
-                deployment,
-                &|b| key.map(|k| k.digest(b)),
-                &seal,
-            )
-        } else {
-            Default::default()
-        };
-        if let Some(e) = sealing.into_inner() {
-            return Err(e);
-        }
+        let outputs = self.outputs(res, &secret_types)?;
         // A grant that changed is said in the log: who may now open which
         // output.
         let grants = |o: &BTreeMap<String, crate::stack::SecretOutput>| {
@@ -1472,6 +1357,66 @@ impl<'a, 'h> Ticks<'a, 'h> {
             )?;
         }
         Ok(None)
+    }
+
+    /// The stack's outputs as the world now is (evaluated again only when
+    /// it has any: the evaluation refreshes), a secret one no provider
+    /// holds sealed to each deployment of the project that reads it
+    /// (R-166). The same value to the same reader seals the same: the
+    /// published outputs move only when a value or a reader does.
+    fn outputs(
+        &self,
+        res: &engine::EvalResult,
+        secret_types: &BTreeMap<String, String>,
+    ) -> Result<crate::stack::Outputs> {
+        let (cx, backend) = (self.cx, self.backend());
+        let (deployment, master, root) = (self.deployment(), &cx.master, &cx.root);
+        let readers = match secret_types.is_empty() || cx.cli.world.is_some() {
+            true => Vec::new(),
+            false => readers_of(root, deployment, &open_s3(root, false))?,
+        };
+        let sealing = std::cell::RefCell::new(None);
+        // The same value to the same reader seals the same: the published
+        // outputs move only when a value or a reader does.
+        let seed = master
+            .key
+            .as_ref()
+            .map(|k| crate::secrets::derived(k, "dform sealed output seed"));
+        let seal = |path: &str, v: &serde_json::Value| {
+            let mut out = BTreeMap::new();
+            let plain = crate::approval::canonical_json(v);
+            for (r, public) in &readers {
+                let Some(public) = public else { continue };
+                let label = sealed_label(deployment, path, r);
+                match crate::custody::seal_to(public, &label, plain.as_bytes(), seed.as_ref()) {
+                    Ok(b) => {
+                        out.insert(r.clone(), b);
+                    }
+                    Err(e) => {
+                        sealing.borrow_mut().get_or_insert(e);
+                    }
+                }
+            }
+            out
+        };
+        let key = self.key();
+        let outputs = if crate::stack::has_outputs(&res.facts) {
+            crate::stack::outputs(
+                &self.evaluator.evaluate(&self.st)?.0.facts,
+                secret_types,
+                &backend.observe(&self.st)?,
+                &self.st,
+                deployment,
+                &|b| key.map(|k| k.digest(b)),
+                &seal,
+            )
+        } else {
+            Default::default()
+        };
+        if let Some(e) = sealing.into_inner() {
+            return Err(e);
+        }
+        Ok(outputs)
     }
 
     /// A tick with nothing definite to apply waits for what waiting can
@@ -1632,333 +1577,37 @@ impl<'a, 'h> Ticks<'a, 'h> {
     }
 }
 
-/// What an apply's approvals are verified against (docs/reference.md,
-/// "Approvals"): a token verifies against the stack's trust root (loaded
-/// once), for this plan's digest and this deployment, by an approver
-/// `approver_allowed` admits when the program restricts them.
-struct Approvals<'a> {
-    cx: &'a Context,
-    located: &'a deployment::Located,
-    roots: std::cell::OnceCell<crate::approval::Roots>,
-    /// The program restricts who may approve (`approver_allowed`).
-    restricts: bool,
-    /// The approval this apply was given, verified.
-    approved: Option<crate::approval::Verified>,
-}
-
-impl Approvals<'_> {
-    /// `token` verified for the plan of digest `digest`, which needs
-    /// `needs` approved.
-    fn verify(
-        &self,
-        token: &str,
-        needs: &[(String, String)],
-        digest: &str,
-        facts: &BTreeSet<Atom>,
-    ) -> Result<crate::approval::Verified> {
-        let stack_cfg = &self.located.loaded.cfg;
-        if stack_cfg.approvals.is_empty() {
-            bail!(
-                "stack {} has no approvals trust root (dform.toml: `[stacks.{}] approvals = \
-                 'jwks(\"https://...\")'`)",
-                self.cx.deployment,
-                self.located.loaded.stack
-            );
+impl ActionLog<'_> {
+    fn action(&self, a: &crate::provider::Action, err: Option<&anyhow::Error>, st: &state::State) {
+        let tick = self.tick;
+        if let Some(remote) = self.forgotten.get(&a.addr) {
+            let e = serde_json::json!({
+                "tick": tick,
+                "address": a.addr.to_string(),
+                "remote": remote,
+                "why": "lifecycle retain",
+            });
+            self.append("forgot", e);
+            return;
         }
-        let roots = match self.roots.get() {
-            Some(r) => r,
-            None => {
-                let r = crate::approval::load_roots(&stack_cfg.approvals, &self.cx.cache)?;
-                self.roots.get_or_init(|| r)
-            }
-        };
-        let instance = &self.located.instance;
-        let expect = crate::approval::Expect {
-            stack: &instance.stack,
-            key: &instance.key,
-            digest,
-            now: crate::approval::now(),
-        };
-        let allowed = |w: &str, d: &str| crate::approval::approver_allowed(facts, w, d);
-        let allowed: Option<executor::Allowed> = if self.restricts { Some(&allowed) } else { None };
-        executor::approve(token, needs, roots, &expect, allowed)
-    }
-
-    /// A batch apply's approval, before its Apply calls: at tick 1 the
-    /// token given (`--approval FILE`), verified, or, with none, a refusal
-    /// if anything needs one; at a later tick, a new deformation that needs
-    /// one must be one the approver may approve. Each verdict at tick 1
-    /// goes to the audit log.
-    fn entry(&mut self, tick: usize, t: &Tick, token: Option<&Path>, asked: Asked) -> Result<()> {
-        let (needs, facts, audit) = (&t.needs, &t.planned.res.facts, &self.cx.audit);
-        let allowed =
-            |w: &str, d: &str| !self.restricts || crate::approval::approver_allowed(facts, w, d);
-        let list = |needs: &[(String, String)]| {
-            let names: Vec<String> = needs.iter().map(|(d, r)| format!("{d} ({r})")).collect();
-            match names.len() {
-                1 => format!("{} needs", names[0]),
-                _ => format!("{} need", names.join(", ")),
-            }
-        };
-        if tick > 1 {
-            if needs.is_empty() {
-                return Ok(());
-            }
-            let Some(v) = &self.approved else {
-                bail!(
-                    "apply stopped at tick {tick}: {} an approval, and the apply has none",
-                    list(needs)
-                );
-            };
-            let who = &v.statement.approver;
-            let refused: Vec<(String, String)> = needs
-                .iter()
-                .filter(|(d, _)| !allowed(who, d))
-                .cloned()
-                .collect();
-            if !refused.is_empty() {
-                bail!(
-                    "apply stopped at tick {tick}: approver_allowed({who:?}, D) does not hold \
-                     for {}",
-                    refused
-                        .iter()
-                        .map(|(d, _)| d.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                );
-            }
-            return Ok(());
+        let mut e = serde_json::json!({
+            "tick": tick,
+            "action": zset::deformation_kind(&a.kind, false).unwrap_or("no-op"),
+            "address": a.addr.to_string(),
+            "result": if err.is_some() { "failed" } else { "ok" },
+            "remote": st.get(&a.addr).map(|e| e.remote.clone()),
+            "diff": self.diffs.get(&a.addr),
+        });
+        if let Some(err) = err {
+            crate::audit::error(&mut e, &self.redact.text(&crate::diag::shape(err)));
         }
-        let digest = t.digest.as_deref().unwrap_or_default();
-        let Some(path) = token else {
-            if needs.is_empty() {
-                return audit
-                    .append("approval", serde_json::json!({ "result": "not required" }))
-                    .map(drop);
-            }
-            let error = format!("{} an approval, and no --approval was given", list(needs));
-            let mut entry = serde_json::json!({ "result": "refused", "digest": digest });
-            crate::audit::error(&mut entry, &error);
-            audit.append("approval", entry)?;
-            let (verb, how) = match asked {
-                Asked::File => (
-                    "apply",
-                    "apply it with --approval FILE, a signed approval of that digest",
-                ),
-                Asked::Apply => (
-                    "apply",
-                    "write the plan with `plan --out PLAN`, have its digest approved, and \
-                     `apply PLAN --approval FILE`",
-                ),
-                Asked::Destroy => (
-                    "destroy",
-                    "have that digest approved (`plan --destroy` prints it) and \
-                     `destroy --approval FILE`",
-                ),
-            };
-            bail!("{verb} refused: {error}; the plan's digest is {digest}: {how}");
-        };
-        let text = std::fs::read_to_string(path)
-            .map_err(|e| anyhow::anyhow!("read --approval {}: {e}", path.display()))?;
-        match self.verify(&text, needs, digest, facts) {
-            Ok(v) => {
-                audit.append(
-                    "approval",
-                    serde_json::json!({ "result": "approved", "digest": digest, "attestation": v }),
-                )?;
-                println!("approved by {}: plan digest {digest}", v.statement.approver);
-                self.approved = Some(v);
-                Ok(())
-            }
-            Err(e) => {
-                let mut entry = serde_json::json!({ "result": "refused", "digest": digest });
-                crate::audit::error(&mut entry, &e.to_string());
-                audit.append("approval", entry)?;
-                let verb = match asked {
-                    Asked::Destroy => "destroy",
-                    _ => "apply",
-                };
-                bail!("{verb} refused: {e}")
-            }
+        self.append("action", e);
+    }
+
+    fn append(&self, kind: &str, e: serde_json::Value) {
+        if let Err(x) = self.audit.append(kind, e) {
+            self.failed.borrow_mut().get_or_insert(x);
         }
-    }
-}
-
-/// What an approval is of: a plan file, an apply's plan, a destroy's.
-#[derive(Clone, Copy, PartialEq)]
-enum Asked {
-    File,
-    Apply,
-    Destroy,
-}
-
-/// Ask on the terminal whether to apply `n` changes to `deployment`
-/// (`destroy`: to delete its `n` objects), or (`new`) tick `tick`, which
-/// adds what no plan listed: only `y` or `yes` proceeds.
-/// With no terminal to ask on, a refusal naming `--yes`, never a wait.
-/// Answered no, `false`: a decline, not an error.
-fn confirm(
-    n: usize,
-    new: bool,
-    destroy: bool,
-    deployment: &str,
-    tick: usize,
-    style: report::Style,
-) -> Result<bool> {
-    use std::io::{IsTerminal, Write};
-    let stdin = std::io::stdin();
-    let verb = match destroy {
-        true => "destroy",
-        false => "apply",
-    };
-    if !stdin.is_terminal() {
-        bail!(
-            "{verb} {deployment}: nothing to ask on at tick {tick} (stdin is not a terminal); \
-             pass --yes to {verb} without asking"
-        );
-    }
-    let ask = match (new, destroy, n) {
-        (true, _, _) => format!("Apply tick {tick} to {deployment}?"),
-        (false, true, 1) => format!("Destroy this object of {deployment}?"),
-        (false, true, _) => format!("Destroy these {n} objects of {deployment}?"),
-        (false, false, 1) => format!("Apply this change to {deployment}?"),
-        (false, false, _) => format!("Apply these {n} changes to {deployment}?"),
-    };
-    print!("{} [y/N] ", style.paint(report::Paint::Bold, &ask));
-    std::io::stdout().flush()?;
-    let answer = answer()?;
-    Ok(matches!(
-        answer.trim().to_ascii_lowercase().as_str(),
-        "y" | "yes"
-    ))
-}
-
-/// A line from the terminal, the answer to a question. A signal while it
-/// waits (Ctrl-C at the prompt) is the stop it asks for (`interrupt`):
-/// nothing was applied for the question. The line is read on a thread of
-/// its own, which a stop leaves blocked on stdin until the process exits.
-fn answer() -> Result<String> {
-    use std::io::BufRead;
-    let (tx, rx) = std::sync::mpsc::channel();
-    std::thread::Builder::new()
-        .name("dform-prompt".into())
-        .spawn(move || {
-            let mut line = String::new();
-            let r = std::io::stdin().lock().read_line(&mut line).map(|_| line);
-            let _ = tx.send(r);
-        })?;
-    loop {
-        match rx.recv_timeout(std::time::Duration::from_millis(50)) {
-            Ok(line) => return Ok(line?),
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                if crate::interrupt::requested().is_some() {
-                    // The prompt's line ends here, not the shell's.
-                    println!();
-                    crate::interrupt::check()?;
-                }
-            }
-            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                bail!("internal: the prompt's reader is gone")
-            }
-        }
-    }
-}
-
-/// Ask whether to apply a plan that empties `e` (R-80), on a terminal
-/// only: there is no `--yes` for it, only `--allow-empty`. Answered no,
-/// `false`.
-fn confirm_emptied(e: &zset::Emptied, deployment: &str, style: report::Style) -> Result<bool> {
-    use std::io::{IsTerminal, Write};
-    let stdin = std::io::stdin();
-    if !stdin.is_terminal() {
-        bail!(
-            "apply {deployment}: {}; nothing to ask on (stdin is not a terminal): confirm it \
-             on a terminal, or pass --allow-empty {} if it is meant",
-            e.what(),
-            e.flag()
-        );
-    }
-    let what = e.what();
-    let ask = format!("T{}. Apply it anyway?", &what[1..]);
-    print!("{} [y/N] ", style.paint(report::Paint::Warn, &ask));
-    std::io::stdout().flush()?;
-    let answer = answer()?;
-    Ok(matches!(
-        answer.trim().to_ascii_lowercase().as_str(),
-        "y" | "yes"
-    ))
-}
-
-/// An apply whose confirmation of `tick` was answered no: at tick 1
-/// nothing was applied, and nothing is said; later, what the earlier ticks
-/// did. The audit log's `apply_end` says `declined`, and at which tick.
-fn declined(deployment: &str, tick: usize) -> Outcome {
-    let why = (tick > 1).then(|| {
-        format!(
-            "apply {deployment}: not confirmed at tick {tick}; ticks 1 to {} were applied, \
-             and the next apply resumes from there",
-            tick - 1
-        )
-    });
-    Outcome::Declined { tick, why }
-}
-
-/// An apply of a plan file or an approval that stopped after `tick`: the
-/// next tick adds `new` changes no printed plan named (`unnamed`, the
-/// groups the last plan held them as). The audit log's `apply_end` says `stopped`.
-#[derive(Debug)]
-struct Stopped {
-    tick: usize,
-    new: usize,
-    unnamed: Vec<String>,
-    /// The changes are what `later` held waiting on a provider's settings,
-    /// named but planned only now (R-45): the plan file or approval did
-    /// not see their diff.
-    on_provider: bool,
-    /// The tick re-planned at its boundary differs from the tick the plan
-    /// file or approval showed (After R-156): what it differs in, each an
-    /// address or an attribute as the plan prints it.
-    differs: Vec<String>,
-}
-
-impl From<Stopped> for Outcome {
-    fn from(s: Stopped) -> Outcome {
-        Outcome::Stopped {
-            tick: s.tick,
-            why: s.to_string(),
-        }
-    }
-}
-
-impl std::fmt::Display for Stopped {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        let s = if self.new == 1 { "" } else { "s" };
-        let groups = match self.unnamed.as_slice() {
-            [] => String::new(),
-            gs => format!(" ({})", gs.join("; ")),
-        };
-        let what = match self.on_provider {
-            _ if !self.differs.is_empty() => format!(
-                "differs from the plan it applies: {}",
-                self.differs.join(", ")
-            ),
-            true => format!(
-                "plans {} change{s} `later` held for a provider's settings, which the \
-                 approved plan did not show",
-                self.new
-            ),
-            false => format!(
-                "adds {} change{s} the plan could not name{groups}",
-                self.new
-            ),
-        };
-        write!(
-            f,
-            "apply stopped after tick {}: tick {} {what}; run apply again to plan them \
-             against the world as it now is",
-            self.tick,
-            self.tick + 1,
-        )
     }
 }
 

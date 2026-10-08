@@ -15,7 +15,6 @@ impl StackList {
     /// state (a stack with none, one row saying so), its stack, file and
     /// where its state is, its last apply and a pending saved plan.
     pub(super) fn run(&self, cli: &Cli) -> Result<Outcome> {
-        use report::table::{Cell, Table};
         let project = crate::project::Project::require(Path::new("."), env!("CARGO_PKG_VERSION"))?;
         let d = crate::project::discover(&project);
         for w in &d.warnings {
@@ -26,11 +25,31 @@ impl StackList {
             println!("no stacks in {}", project.root.display());
             return Ok(Outcome::Done);
         }
+        let mut listing = Listing::new(cli, &project)?;
+        for s in &d.stacks {
+            listing.stack(s)?;
+        }
+        print!("{}", listing.into_table().render(&cli.table));
+        Ok(Outcome::Done)
+    }
+}
+
+/// `stack list`'s table, filled a stack at a time.
+struct Listing<'a> {
+    cli: &'a Cli,
+    registry: std::collections::BTreeMap<String, crate::stack::Entry>,
+    /// The project module's deployments (R-114): the matrix is the source
+    /// of which there are, the registry of where each one's state is.
+    listed: std::collections::BTreeMap<String, bool>,
+    label: String,
+    table: report::table::Table,
+}
+
+impl<'a> Listing<'a> {
+    fn new(cli: &'a Cli, project: &crate::project::Project) -> Result<Listing<'a>> {
         let registry = crate::stack::registry(&cli.root)?;
-        // The project module's deployments (R-114): the matrix is the source
-        // of which there are, the registry of where each one's state is.
-        let (listed, label) = super::matrix::listed(&project, &cli.root);
-        let mut t = Table::new([
+        let (listed, label) = super::matrix::listed(project, &cli.root);
+        let table = report::table::Table::new([
             "stack",
             "file",
             "deployment",
@@ -42,151 +61,186 @@ impl StackList {
             "result",
             "pending",
         ]);
-        for s in &d.stacks {
-            let key = if s.keys.is_empty() {
-                String::new()
-            } else {
-                format!("[{}]", s.keys.join(", "))
+        Ok(Listing {
+            cli,
+            registry,
+            listed,
+            label,
+            table,
+        })
+    }
+
+    /// The table, its empty columns left out.
+    fn into_table(self) -> report::table::Table {
+        self.table.without_empty_columns()
+    }
+
+    /// A row of the stack `s`.
+    fn row(&mut self, s: &crate::project::Found, deployment: &str, state: String, last: LastApply) {
+        let key = if s.keys.is_empty() {
+            String::new()
+        } else {
+            format!("[{}]", s.keys.join(", "))
+        };
+        let listed = match self.listed.get(deployment) {
+            Some(true) => self.label.clone(),
+            Some(false) => format!("removed from {}", self.label),
+            None => String::new(),
+        };
+        let row = [
+            format!("{}{key}", s.name),
+            s.file.display().to_string(),
+            deployment.to_string(),
+            listed,
+            state,
+            last.applied,
+            last.by,
+            last.commit,
+            last.result,
+            last.pending,
+        ]
+        .into_iter()
+        .map(report::table::Cell::text)
+        .collect();
+        self.table.push(row);
+    }
+
+    /// The rows of the stack `s`: each deployment with state, each the
+    /// project module lists that has none yet, else one row saying none
+    /// has.
+    fn stack(&mut self, s: &crate::project::Found) -> Result<()> {
+        let root = &self.cli.root;
+        // Where the stack's deployments are: its backend's, else the state
+        // root's.
+        let backend = stack_backend(s);
+        let base = deployment::stack_location(root, &s.name, backend.as_ref());
+        let opener = open_s3(root, false);
+        let keys = match base.open(&opener).and_then(|st| st.list("")) {
+            Ok(k) => k,
+            Err(e) => {
+                self.row(s, "", base.to_string(), LastApply::failed(&e));
+                return Ok(());
+            }
+        };
+        let deployments = self.deployments(s, backend.as_ref(), &base, &keys);
+        // A deployment the module lists that has no state yet.
+        let mut unapplied: Vec<String> = self
+            .listed
+            .iter()
+            .filter(|(n, l)| {
+                **l && n.split_once('[').map_or(n.as_str(), |(st, _)| st) == s.name
+                    && !deployments.iter().any(|(d, _)| d == *n)
+            })
+            .map(|(n, _)| n.clone())
+            .collect();
+        let mut any = false;
+        for (name, location) in deployments {
+            let store = match location.open(&opener) {
+                Ok(st) => st,
+                Err(e) => {
+                    any = true;
+                    self.row(s, &name, location.to_string(), LastApply::failed(&e));
+                    continue;
+                }
             };
-            let row = |deployment: &str, state: String, last: LastApply| {
-                let listed = match listed.get(deployment) {
-                    Some(true) => label.clone(),
-                    Some(false) => format!("removed from {label}"),
-                    None => String::new(),
-                };
-                [
-                    format!("{}{key}", s.name),
-                    s.file.display().to_string(),
-                    deployment.to_string(),
-                    listed,
-                    state,
-                    last.applied,
-                    last.by,
-                    last.commit,
-                    last.result,
-                    last.pending,
-                ]
-                .into_iter()
-                .map(Cell::text)
-                .collect::<Vec<_>>()
+            let entries = crate::audit::Log::new(store.clone(), None)
+                .entries()
+                .unwrap_or_default();
+            // A destroyed deployment is gone; its log stays (R-149).
+            if (entries.is_empty() && store.get(store::STATE)?.is_none()) || destroyed(&entries) {
+                if let Some(true) = self.listed.get(&name) {
+                    unapplied.push(name);
+                }
+                continue;
+            }
+            any = true;
+            let state = match self.registry.get(&name).and_then(|e| e.backend.clone()) {
+                Some(b) => format!("handed over to {b}"),
+                None => shown(&location),
             };
-            let failed = |e: &anyhow::Error| LastApply {
-                result: format!("{e:#}"),
+            self.row(s, &name, state, entries.as_slice().into());
+        }
+        unapplied.sort();
+        unapplied.dedup();
+        for name in unapplied {
+            any = true;
+            let never = LastApply {
+                applied: "never".into(),
                 ..Default::default()
             };
-            // Where the stack's deployments are: its backend's, else the state
-            // root's.
-            let backend = stack_backend(s);
-            let base = deployment::stack_location(&cli.root, &s.name, backend.as_ref());
-            let shown = |l: &store::Location| match l {
-                store::Location::S3(spec) => spec.to_string(),
-                store::Location::Local(_) => String::new(),
+            self.row(s, &name, String::new(), never);
+        }
+        if !any {
+            let none = LastApply {
+                result: "no deployment has state".into(),
+                ..Default::default()
             };
-            let opener = open_s3(&cli.root, false);
-            let keys = match base.open(&opener).and_then(|st| st.list("")) {
-                Ok(k) => k,
-                Err(e) => {
-                    t.push(row("", base.to_string(), failed(&e)));
-                    continue;
-                }
-            };
-            let mut deployments: Vec<(String, store::Location)> = Vec::new();
-            let keyed = backend.as_ref().and_then(crate::stack::keyed_parent);
-            if s.keys.is_empty() {
-                deployments.push((s.name.clone(), base.clone()));
-            } else if let (Some(b), Some((parent, rest))) = (&backend, keyed) {
-                // A backend that names the key (`local("state/app-{env}")`):
-                // each place under its directory the template matches.
-                let found = deployment::stack_location(&cli.root, &s.name, Some(&parent))
-                    .open(&opener)
-                    .and_then(|st| st.list(""))
-                    .unwrap_or_default();
-                let mut segs: Vec<String> = found
-                    .iter()
-                    .filter_map(|k| crate::stack::template_key(&rest, &s.keys, k))
-                    .collect();
-                segs.sort();
-                segs.dedup();
-                for seg in segs {
-                    deployments.push((
-                        format!("{}[{seg}]", s.name),
-                        deployment::deployment_location(&cli.root, &s.name, Some(b), Some(&seg)),
-                    ));
-                }
-            } else {
-                let mut segs: Vec<&str> = keys
-                    .iter()
-                    .filter_map(|k| k.split_once('/').map(|(seg, _)| seg))
-                    .filter(|seg| seg.contains('='))
-                    .collect();
-                segs.dedup();
-                for seg in segs {
-                    deployments.push((format!("{}[{seg}]", s.name), base.child(Some(seg))));
-                }
-            }
-            for (name, e) in &registry {
-                let ours = name == &s.name || name.starts_with(&format!("{}[", s.name));
-                if ours && !deployments.iter().any(|(n, _)| n == name) {
-                    deployments.push((name.clone(), e.state.clone()));
-                }
-            }
-            // A deployment the module lists that has no state yet.
-            let mut unapplied: Vec<&String> = listed
+            self.row(s, "", shown(&base), none);
+        }
+        Ok(())
+    }
+
+    /// The deployments of the stack `s` that have a place: the stack's own,
+    /// or each key value under its backend (`keys`, what `base` holds), and
+    /// each the registry has.
+    fn deployments(
+        &self,
+        s: &crate::project::Found,
+        backend: Option<&crate::stack::Backend>,
+        base: &store::Location,
+        keys: &[String],
+    ) -> Vec<(String, store::Location)> {
+        let root = &self.cli.root;
+        let mut deployments: Vec<(String, store::Location)> = Vec::new();
+        let keyed = backend.and_then(crate::stack::keyed_parent);
+        if s.keys.is_empty() {
+            deployments.push((s.name.clone(), base.clone()));
+        } else if let (Some(b), Some((parent, rest))) = (backend, keyed) {
+            // A backend that names the key (`local("state/app-{env}")`):
+            // each place under its directory the template matches.
+            let found = deployment::stack_location(root, &s.name, Some(&parent))
+                .open(&open_s3(root, false))
+                .and_then(|st| st.list(""))
+                .unwrap_or_default();
+            let mut segs: Vec<String> = found
                 .iter()
-                .filter(|(n, l)| {
-                    **l && n.split_once('[').map_or(n.as_str(), |(st, _)| st) == s.name
-                        && !deployments.iter().any(|(d, _)| d == *n)
-                })
-                .map(|(n, _)| n)
+                .filter_map(|k| crate::stack::template_key(&rest, &s.keys, k))
                 .collect();
-            let mut any = false;
-            for (name, location) in deployments {
-                let store = match location.open(&opener) {
-                    Ok(st) => st,
-                    Err(e) => {
-                        any = true;
-                        t.push(row(&name, location.to_string(), failed(&e)));
-                        continue;
-                    }
-                };
-                let entries = crate::audit::Log::new(store.clone(), None)
-                    .entries()
-                    .unwrap_or_default();
-                // A destroyed deployment is gone; its log stays (R-149).
-                if (entries.is_empty() && store.get(store::STATE)?.is_none()) || destroyed(&entries)
-                {
-                    if let Some((n, true)) = listed.get_key_value(&name) {
-                        unapplied.push(n);
-                    }
-                    continue;
-                }
-                any = true;
-                let state = match registry.get(&name).and_then(|e| e.backend.clone()) {
-                    Some(b) => format!("handed over to {b}"),
-                    None => shown(&location),
-                };
-                t.push(row(&name, state, last_apply(&entries)));
+            segs.sort();
+            segs.dedup();
+            for seg in segs {
+                deployments.push((
+                    format!("{}[{seg}]", s.name),
+                    deployment::deployment_location(root, &s.name, Some(b), Some(&seg)),
+                ));
             }
-            unapplied.sort();
-            unapplied.dedup();
-            for name in unapplied {
-                any = true;
-                let never = LastApply {
-                    applied: "never".into(),
-                    ..Default::default()
-                };
-                t.push(row(name, String::new(), never));
-            }
-            if !any {
-                let none = LastApply {
-                    result: "no deployment has state".into(),
-                    ..Default::default()
-                };
-                t.push(row("", shown(&base), none));
+        } else {
+            let mut segs: Vec<&str> = keys
+                .iter()
+                .filter_map(|k| k.split_once('/').map(|(seg, _)| seg))
+                .filter(|seg| seg.contains('='))
+                .collect();
+            segs.dedup();
+            for seg in segs {
+                deployments.push((format!("{}[{seg}]", s.name), base.child(Some(seg))));
             }
         }
-        print!("{}", t.without_empty_columns().render(&cli.table));
-        Ok(Outcome::Done)
+        for (name, e) in &self.registry {
+            let ours = name == &s.name || name.starts_with(&format!("{}[", s.name));
+            if ours && !deployments.iter().any(|(n, _)| n == name) {
+                deployments.push((name.clone(), e.state.clone()));
+            }
+        }
+        deployments
+    }
+}
+
+/// Where a deployment's state is, as `stack list` says it: a bucket's
+/// place; nothing for the state root's.
+fn shown(l: &store::Location) -> String {
+    match l {
+        store::Location::S3(spec) => spec.to_string(),
+        store::Location::Local(_) => String::new(),
     }
 }
 
@@ -503,55 +557,68 @@ pub(super) fn destroyed(entries: &[serde_json::Value]) -> bool {
 
 /// A deployment's last apply and pending saved plan, from its audit log.
 #[derive(Debug, Default)]
-pub(super) struct LastApply {
-    pub(super) applied: String,
-    pub(super) by: String,
-    pub(super) commit: String,
-    pub(super) result: String,
-    pub(super) pending: String,
+struct LastApply {
+    applied: String,
+    by: String,
+    commit: String,
+    result: String,
+    pending: String,
 }
 
-pub(super) fn last_apply(entries: &[serde_json::Value]) -> LastApply {
-    let field = |e: &serde_json::Value, k: &str| e[k].as_str().unwrap_or("").to_string();
-    let start = entries.iter().rposition(|e| e["kind"] == "apply_start");
-    let mut out = match start {
-        None => LastApply {
-            applied: "never".into(),
+impl LastApply {
+    /// A deployment whose state could not be read: the error, as its
+    /// result.
+    fn failed(e: &anyhow::Error) -> LastApply {
+        LastApply {
+            result: format!("{e:#}"),
             ..Default::default()
-        },
-        Some(i) => {
-            let e = &entries[i];
-            let end = entries[i..]
-                .iter()
-                .find(|e| e["kind"] == "apply_end")
-                .map(|e| field(e, "result"))
-                .filter(|r| !r.is_empty())
-                .unwrap_or_else(|| "running or interrupted".into());
-            LastApply {
-                applied: field(e, "time"),
-                by: field(e, "who"),
-                commit: e["commit"]
-                    .as_str()
-                    .map(|c| crate::report::short_id(c).to_string())
-                    .unwrap_or_default(),
-                result: end,
-                pending: String::new(),
-            }
         }
-    };
-    let plan = entries
-        .iter()
-        .rposition(|e| e["kind"] == "plan" && e["file"].is_string() && e["digest"].is_string());
-    if let Some(p) = plan
-        && start.is_none_or(|s| p > s)
-    {
-        out.pending = format!(
-            "{} ({})",
-            field(&entries[p], "file"),
-            field(&entries[p], "digest")
-        );
     }
-    out
+}
+
+impl From<&[serde_json::Value]> for LastApply {
+    fn from(entries: &[serde_json::Value]) -> LastApply {
+        let field = |e: &serde_json::Value, k: &str| e[k].as_str().unwrap_or("").to_string();
+        let start = entries.iter().rposition(|e| e["kind"] == "apply_start");
+        let mut out = match start {
+            None => LastApply {
+                applied: "never".into(),
+                ..Default::default()
+            },
+            Some(i) => {
+                let e = &entries[i];
+                let end = entries[i..]
+                    .iter()
+                    .find(|e| e["kind"] == "apply_end")
+                    .map(|e| field(e, "result"))
+                    .filter(|r| !r.is_empty())
+                    .unwrap_or_else(|| "running or interrupted".into());
+                LastApply {
+                    applied: field(e, "time"),
+                    by: field(e, "who"),
+                    commit: e["commit"]
+                        .as_str()
+                        .map(|c| crate::report::short_id(c).to_string())
+                        .unwrap_or_default(),
+                    result: end,
+                    pending: String::new(),
+                }
+            }
+        };
+        let plan = entries
+            .iter()
+            .rposition(|e| e["kind"] == "plan" && e["file"].is_string() && e["digest"].is_string());
+        if let Some(p) = plan
+            && start.is_none_or(|s| p > s)
+        {
+            out.pending = format!(
+                "{} ({})",
+                field(&entries[p], "file"),
+                field(&entries[p], "digest")
+            );
+        }
+        out
+    }
 }
 
 /// The backend of the project's stack `found`, as the manifest says;

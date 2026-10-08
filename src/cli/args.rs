@@ -14,20 +14,16 @@ use super::stack::{Handover, Rekey, StackList};
 use super::state_cmd::{ForgetHost, Log, Output, StateMv, StateShow, Unlock};
 use super::test::Test;
 use super::{Cli, Cmd, Held, matrix};
+use crate::project::Project;
 use crate::report;
 use anyhow::{Result, bail};
 use clap::{Parser, Subcommand};
 use std::path::{Path, PathBuf};
 
-/// The width of the terminal stdout is, if it is one.
-pub(super) fn terminal_width() -> Option<usize> {
-    use std::io::IsTerminal;
-    if !std::io::stdout().is_terminal() {
-        return None;
-    }
-    let (cols, _) = crossterm::terminal::size().ok()?;
-    (cols > 0).then_some(cols as usize)
-}
+/// The line an experimental command prints on every run.
+pub(super) const EXPERIMENTAL: &str = "warning: controller mode is experimental: its process model (where it \
+                            runs, how it is supervised, what an operator sees) is not decided; \
+                            see docs/experimental/controller.md";
 
 /// The command line as typed (docs/reference.md). `resolve` turns it into
 /// one run, [`Cli`]: the target's files, its key, the project's state.
@@ -90,21 +86,6 @@ pub(super) enum ColorWhen {
     Auto,
     Always,
     Never,
-}
-
-impl ColorWhen {
-    /// Colour output to a stream that is a terminal (`terminal`) or not:
-    /// `auto` colours a terminal unless NO_COLOR is set (non-empty).
-    pub(super) fn style(self, terminal: bool) -> report::Style {
-        let no_color = std::env::var_os("NO_COLOR").is_some_and(|v| !v.is_empty());
-        report::Style {
-            color: match self {
-                ColorWhen::Always => true,
-                ColorWhen::Never => false,
-                ColorWhen::Auto => terminal && !no_color,
-            },
-        }
-    }
 }
 
 /// The mock's flags: `dform dev [FLAGS] COMMAND`.
@@ -261,12 +242,6 @@ pub(super) struct Ladder {
     #[arg(long, value_name = "LEVEL", default_value = "line",
           num_args = 0..=1, require_equals = true, default_missing_value = "full")]
     pub(super) why: report::Why,
-}
-
-impl Ladder {
-    pub(super) fn level(&self) -> report::Why {
-        report::Why::of(self.quiet, self.verbose, self.why)
-    }
 }
 
 /// The commands that run on a target, at the top level and under `dev`.
@@ -700,71 +675,119 @@ pub(super) enum Shell {
     Fish,
 }
 
+/// Whether the experimental commands (R-41: `controller`, `stack
+/// handover`) are listed in `--help` and completions: `DFORM_EXPERIMENTAL=1`.
+/// They run either way, each run with [`EXPERIMENTAL`] on stderr.
+pub(super) fn experimental() -> bool {
+    std::env::var_os("DFORM_EXPERIMENTAL").is_some_and(|v| v == "1")
+}
+
+/// The width of the terminal stdout is, if it is one.
+fn terminal_width() -> Option<usize> {
+    use std::io::IsTerminal;
+    if !std::io::stdout().is_terminal() {
+        return None;
+    }
+    let (cols, _) = crossterm::terminal::size().ok()?;
+    (cols > 0).then_some(cols as usize)
+}
+
+impl ColorWhen {
+    /// Colour output to a stream that is a terminal (`terminal`) or not:
+    /// `auto` colours a terminal unless NO_COLOR is set (non-empty).
+    pub(super) fn style(self, terminal: bool) -> report::Style {
+        let no_color = std::env::var_os("NO_COLOR").is_some_and(|v| !v.is_empty());
+        report::Style {
+            color: match self {
+                ColorWhen::Always => true,
+                ColorWhen::Never => false,
+                ColorWhen::Auto => terminal && !no_color,
+            },
+        }
+    }
+}
+
+impl Ladder {
+    pub(super) fn level(&self) -> report::Why {
+        report::Why::of(self.quiet, self.verbose, self.why)
+    }
+}
+
 impl Args {
     /// The run the command line asks for: `-C` taken, the working project
     /// found, the target resolved to its program file and key.
     pub(super) fn resolve(self) -> Result<Cli> {
-        let args = self;
-        if let Some(dir) = &args.dir {
+        if let Some(dir) = &self.dir {
             std::env::set_current_dir(dir)
                 .map_err(|e| anyhow::anyhow!("-C {}: {e}", dir.display()))?;
         }
-        let version = env!("CARGO_PKG_VERSION");
-        let project = crate::project::Project::find(Path::new("."), version)?;
-        let mut mock = Mock::default();
-        let (cmd, target): (Cmd, Option<Target>) = match args.cmd {
+        let project = crate::project::Project::find(Path::new("."), env!("CARGO_PKG_VERSION"))?;
+        let Typed { cmd, target, mock } = self.cmd.try_into()?;
+        let mut cli = Cli::new(cmd, self.inputs, mock, project.is_some())?;
+        if let Some(root) = project.as_ref().map(|p| p.state_root()) {
+            cli.root = root;
+        }
+        cli.target(target, project.as_ref())?;
+        Ok(cli)
+    }
+}
+
+/// A command as typed: the command, its target, and the mock's flags
+/// `dev` gave.
+struct Typed {
+    cmd: Cmd,
+    target: Option<Target>,
+    mock: Mock,
+}
+
+impl Typed {
+    fn of(cmd: Cmd, target: Option<Target>) -> Typed {
+        Typed {
+            cmd,
+            target,
+            mock: Mock::default(),
+        }
+    }
+}
+
+impl TryFrom<Command> for Typed {
+    type Error = anyhow::Error;
+
+    fn try_from(c: Command) -> Result<Typed> {
+        Ok(match c {
             Command::Run(r) => {
                 let (cmd, target) = r.into();
-                (cmd, Some(target))
+                Typed::of(cmd, Some(target))
             }
-            Command::Dev { mock: m, cmd } => {
-                mock = m;
-                match cmd {
-                    DevCommand::Run(r) => {
-                        let (cmd, target) = r.into();
-                        (cmd, Some(target))
-                    }
-                    DevCommand::Strata { target } => (Cmd::Strata(Strata), Some(target)),
-                    DevCommand::Effects { target, json } => {
-                        (Cmd::Effects(Effects { json }), Some(target))
-                    }
-                    DevCommand::Graph {
-                        target,
-                        strata,
-                        relation,
-                    } => (
-                        Cmd::Graph(Graph {
-                            what: if strata {
-                                Some("strata".into())
-                            } else {
-                                relation
-                            },
-                        }),
-                        Some(target),
-                    ),
-                    DevCommand::Eval { target } => (Cmd::Eval(Eval), Some(target)),
-                    DevCommand::Show { addr, target } => (Cmd::Show(Show { addr }), Some(target)),
+            Command::Dev { mock, cmd } => {
+                let (cmd, target) = cmd.into();
+                Typed {
+                    cmd,
+                    target: Some(target),
+                    mock,
                 }
             }
-            Command::Fmt { paths, check } => (Cmd::Fmt(Fmt { paths, check }), None),
-            Command::Doc { target } => (Cmd::Doc(Doc), target.target.is_some().then_some(target)),
+            Command::Fmt { paths, check } => Typed::of(Cmd::Fmt(Fmt { paths, check }), None),
+            Command::Doc { target } => {
+                Typed::of(Cmd::Doc(Doc), target.target.is_some().then_some(target))
+            }
             Command::Stack { cmd } => match cmd {
-                StackCommand::List => (Cmd::StackList(StackList), None),
+                StackCommand::List => Typed::of(Cmd::StackList(StackList), None),
                 StackCommand::Rekey { stack, pairs } => {
                     let target = Target {
                         target: Some(stack.clone()),
                         keys: vec![],
                     };
-                    (Cmd::Rekey(Rekey { stack, pairs }), Some(target))
+                    Typed::of(Cmd::Rekey(Rekey { stack, pairs }), Some(target))
                 }
                 StackCommand::Handover { stack, to } => {
-                    (Cmd::Handover(Handover { stack, to }), None)
+                    Typed::of(Cmd::Handover(Handover { stack, to }), None)
                 }
-                StackCommand::Unlock { target } => (Cmd::Unlock(Unlock), Some(target)),
+                StackCommand::Unlock { target } => Typed::of(Cmd::Unlock(Unlock), Some(target)),
             },
             Command::Output { mut target, json } => {
-                // The output's NAME is the one word after the target that is
-                // not a key value.
+                // The output's NAME is the one word after the target that
+                // is not a key value.
                 let mut names: Vec<String> = Vec::new();
                 target.keys.retain(|k| {
                     let key = k.contains('=');
@@ -776,65 +799,105 @@ impl Args {
                 if names.len() > 1 {
                     bail!("output: one NAME at most, got {}", names.join(" "));
                 }
-                (
-                    Cmd::Output(Output {
-                        name: names.pop(),
-                        json,
-                    }),
-                    Some(target),
-                )
+                let name = names.pop();
+                Typed::of(Cmd::Output(Output { name, json }), Some(target))
             }
             Command::State { cmd } => match cmd {
                 StateCommand::Show {
                     addr,
                     from_log,
                     target,
-                } => (Cmd::StateShow(StateShow { addr, from_log }), Some(target)),
+                } => Typed::of(Cmd::StateShow(StateShow { addr, from_log }), Some(target)),
                 StateCommand::ForgetHost { host, target } => {
-                    (Cmd::ForgetHost(ForgetHost { host }), Some(target))
+                    Typed::of(Cmd::ForgetHost(ForgetHost { host }), Some(target))
                 }
                 StateCommand::Mv { from, to, target } => {
-                    (Cmd::StateMv(StateMv { from, to }), Some(target))
+                    Typed::of(Cmd::StateMv(StateMv { from, to }), Some(target))
                 }
             },
-            Command::Secrets { cmd } => match cmd {
-                SecretsCommand::List { target, json } => {
-                    (Cmd::Secrets(Secrets::List { json }), Some(target))
-                }
-                SecretsCommand::Rotate { words } => {
-                    let (target, key) = target_then(words);
-                    (Cmd::Secrets(Secrets::Rotate { key }), Some(target))
-                }
-                SecretsCommand::Cycle { target } => (Cmd::Secrets(Secrets::Cycle), Some(target)),
-                SecretsCommand::Set { words } => {
-                    let (target, name) = target_then(words);
-                    let remove = false;
-                    (Cmd::Secrets(Secrets::Set { name, remove }), Some(target))
-                }
-                SecretsCommand::Unset { words } => {
-                    let (target, name) = target_then(words);
-                    let remove = true;
-                    (Cmd::Secrets(Secrets::Set { name, remove }), Some(target))
-                }
-            },
+            Command::Secrets { cmd } => {
+                let (secrets, target) = cmd.into();
+                Typed::of(Cmd::Secrets(secrets), Some(target))
+            }
             Command::Provider { cmd } => match cmd {
                 ProviderCommand::Check { path } => {
-                    (Cmd::ProviderCheck(ProviderCheck { path }), None)
+                    Typed::of(Cmd::ProviderCheck(ProviderCheck { path }), None)
                 }
                 ProviderCommand::Schema { provider } => {
-                    (Cmd::ProviderSchema(ProviderSchema { provider }), None)
+                    Typed::of(Cmd::ProviderSchema(ProviderSchema { provider }), None)
                 }
             },
-            Command::Init { name } => (Cmd::Init(Init { name }), None),
-            Command::Completions { shell } => (Cmd::Completions(Completions { shell }), None),
-            Command::Complete { words } => (Cmd::Complete(Complete { words }), None),
+            Command::Init { name } => Typed::of(Cmd::Init(Init { name }), None),
+            Command::Completions { shell } => {
+                Typed::of(Cmd::Completions(Completions { shell }), None)
+            }
+            Command::Complete { words } => Typed::of(Cmd::Complete(Complete { words }), None),
             Command::ServeProvider { .. } => {
                 bail!("internal: `__provider` serves before a project")
             }
             Command::Lsp => bail!("internal: `lsp` serves before a project"),
             Command::Version => bail!("internal: `version` prints before a project"),
-        };
-        let inputs = args.inputs;
+        })
+    }
+}
+
+/// `dform secrets ..`, and its target: `rotate`, `set` and `unset` take the
+/// target's words before their own last one.
+impl From<SecretsCommand> for (Secrets, Target) {
+    fn from(c: SecretsCommand) -> (Secrets, Target) {
+        match c {
+            SecretsCommand::List { target, json } => (Secrets::List { json }, target),
+            SecretsCommand::Rotate { words } => {
+                let (target, key) = target_then(words);
+                (Secrets::Rotate { key }, target)
+            }
+            SecretsCommand::Cycle { target } => (Secrets::Cycle, target),
+            SecretsCommand::Set { words } => {
+                let (target, name) = target_then(words);
+                let remove = false;
+                (Secrets::Set { name, remove }, target)
+            }
+            SecretsCommand::Unset { words } => {
+                let (target, name) = target_then(words);
+                let remove = true;
+                (Secrets::Set { name, remove }, target)
+            }
+        }
+    }
+}
+
+/// A `dev` command, and its target.
+impl From<DevCommand> for (Cmd, Target) {
+    fn from(c: DevCommand) -> (Cmd, Target) {
+        match c {
+            DevCommand::Run(r) => r.into(),
+            DevCommand::Strata { target } => (Cmd::Strata(Strata), target),
+            DevCommand::Effects { target, json } => (Cmd::Effects(Effects { json }), target),
+            DevCommand::Graph {
+                target,
+                strata,
+                relation,
+            } => {
+                let what = if strata {
+                    Some("strata".into())
+                } else {
+                    relation
+                };
+                (Cmd::Graph(Graph { what }), target)
+            }
+            DevCommand::Eval { target } => (Cmd::Eval(Eval), target),
+            DevCommand::Show { addr, target } => (Cmd::Show(Show { addr }), target),
+        }
+    }
+}
+
+impl Cli {
+    /// The run of `cmd`, given `inputs` and the mock's flags, its target
+    /// not yet resolved. Outside a project nothing writes the state root
+    /// (`needs_project`).
+    fn new(cmd: Cmd, inputs: Inputs, mock: Mock, in_project: bool) -> Result<Cli> {
+        use std::io::IsTerminal;
+        let style = inputs.color.style(std::io::stdout().is_terminal());
         let mut cli = Cli {
             cmd,
             files: Vec::new(),
@@ -846,34 +909,32 @@ impl Args {
             show_noop: inputs.show_noop,
             providers: mock.providers,
             world: mock.world,
-            in_project: project.is_some(),
-            // Outside a project nothing writes the state root (`needs_project`).
-            root: project.as_ref().map_or_else(
-                || PathBuf::from(crate::project::STATE_DIR),
-                |p| p.state_root(),
-            ),
+            in_project,
+            root: PathBuf::from(crate::project::STATE_DIR),
             manifest: None,
             inventory: mock.inventory,
             audit_sink: inputs.audit_sink,
-            style: {
-                use std::io::IsTerminal;
-                inputs.color.style(std::io::stdout().is_terminal())
+            style,
+            table: report::table::Options {
+                width: terminal_width().unwrap_or(report::table::Options::PLAIN.width),
+                style,
             },
-            table: Default::default(),
             every_stack: Vec::new(),
             matrix: None,
             held: Held::default(),
-        };
-        cli.table = report::table::Options {
-            width: terminal_width().unwrap_or(report::table::Options::PLAIN.width),
-            style: cli.style,
         };
         if let Cmd::Apply(Apply { chaos, .. }) = &mut cli.cmd {
             *chaos = mock.chaos;
         } else if !mock.chaos.is_empty() {
             bail!("--chaos is for apply");
         }
-        // A plan file is `apply`'s target: its inputs name the program.
+        Ok(cli)
+    }
+
+    /// The run's target resolved: a plan file (`apply`'s, whose inputs
+    /// name the program), the project module (R-114), the project's every
+    /// stack (`apply` with no target), else a stack's program file and key.
+    fn target(&mut self, target: Option<Target>, project: Option<&Project>) -> Result<()> {
         if let (
             Cmd::Apply(Apply {
                 plan_file,
@@ -881,54 +942,59 @@ impl Args {
                 ..
             }),
             Some(t),
-        ) = (&mut cli.cmd, &target)
+        ) = (&mut self.cmd, &target)
             && let Some(f) = t.target.as_deref().filter(|f| f.ends_with(".json"))
         {
             if !t.keys.is_empty() {
                 bail!("apply {f}: a plan file names its deployment; give no key values");
             }
             *plan_file = Some(PathBuf::from(f));
-            return Ok(cli);
+            return Ok(());
         }
         let Some(target) = target else {
-            return Ok(cli);
+            return Ok(());
         };
-        // The project module (R-114): with no target, the root's project.df;
-        // a target that is one.
-        if let Some(module) = matrix::target(&cli.cmd, project.as_ref(), &target)? {
-            cli.matrix = Some(module);
-            return Ok(cli);
+        // The project module (R-114): with no target, the root's
+        // project.df; a target that is one.
+        if let Some(module) = matrix::target(&self.cmd, project, &target)? {
+            self.matrix = Some(module);
+            return Ok(());
         }
-        // `apply` with no target applies the project: every stack under the
-        // working directory, in dependency order, each confirmed on its own.
-        if let (Cmd::Apply(Apply { destroy: false, .. }), None, true, Some(p)) = (
-            &cli.cmd,
-            &target.target,
-            target.keys.is_empty(),
-            project.as_ref(),
-        ) {
-            let d = crate::project::discover(p);
-            d.check()?;
-            let here: Vec<PathBuf> = d
-                .stacks
-                .iter()
-                .filter(|s| s.file.is_relative() && !s.file.starts_with(".."))
-                .map(|s| s.file.clone())
-                .collect();
-            if here.len() > 1 {
-                for w in &d.warnings {
-                    eprintln!("warning: {w}");
-                }
-                cli.every_stack = here;
-                return Ok(cli);
-            }
+        if let (Cmd::Apply(Apply { destroy: false, .. }), None, true, Some(p)) =
+            (&self.cmd, &target.target, target.keys.is_empty(), project)
+            && let Some(here) = every_stack(p)?
+        {
+            self.every_stack = here;
+            return Ok(());
         }
-        let (file, keys) = target_of(project.as_ref(), &target)?;
-        cli.set.extend(keys.iter().map(|(k, v)| format!("{k}={v}")));
-        cli.keys = keys;
-        cli.files = vec![file];
-        Ok(cli)
+        let (file, keys) = target_of(project, &target)?;
+        self.set
+            .extend(keys.iter().map(|(k, v)| format!("{k}={v}")));
+        self.keys = keys;
+        self.files = vec![file];
+        Ok(())
     }
+}
+
+/// `apply` with no target applies the project: every stack under the
+/// working directory, in dependency order, each confirmed on its own;
+/// `None` when there is one.
+fn every_stack(p: &Project) -> Result<Option<Vec<PathBuf>>> {
+    let d = crate::project::discover(p);
+    d.check()?;
+    let here: Vec<PathBuf> = d
+        .stacks
+        .iter()
+        .filter(|s| s.file.is_relative() && !s.file.starts_with(".."))
+        .map(|s| s.file.clone())
+        .collect();
+    if here.len() <= 1 {
+        return Ok(None);
+    }
+    for w in &d.warnings {
+        eprintln!("warning: {w}");
+    }
+    Ok(Some(here))
 }
 
 /// A command that runs on a target, and the target.
@@ -1082,10 +1148,7 @@ impl From<Run> for (Cmd, Target) {
 /// program; a name is the project's stack of that name; `NAME[K=V,...]`
 /// and trailing `K=V`s are the key. No target: the one stack under the
 /// working directory, else the stacks there are listed.
-pub(super) fn target_of(
-    project: Option<&crate::project::Project>,
-    t: &Target,
-) -> Result<(PathBuf, Vec<(String, String)>)> {
+fn target_of(project: Option<&Project>, t: &Target) -> Result<(PathBuf, Vec<(String, String)>)> {
     let mut keys = Vec::new();
     let pair = |kv: &str| -> Result<(String, String)> {
         let (k, v) = kv
@@ -1180,7 +1243,7 @@ pub(super) fn target_of(
 }
 
 /// `\n  NAME[KEY]  FILE` per stack, for an error that lists them.
-pub(super) fn listing(stacks: &[crate::project::Found]) -> String {
+fn listing(stacks: &[crate::project::Found]) -> String {
     if stacks.is_empty() {
         return String::new();
     }
@@ -1198,7 +1261,7 @@ pub(super) fn listing(stacks: &[crate::project::Found]) -> String {
 
 /// `[TARGET] [K=V..] WORD`: the target, then the last word (a secret's
 /// key or name).
-pub(super) fn target_then(mut words: Vec<String>) -> (Target, String) {
+fn target_then(mut words: Vec<String>) -> (Target, String) {
     let last = words.pop().expect("clap: one word at least");
     let mut words = words.into_iter();
     let target = Target {
@@ -1207,15 +1270,3 @@ pub(super) fn target_then(mut words: Vec<String>) -> (Target, String) {
     };
     (target, last)
 }
-
-/// Whether the experimental commands (R-41: `controller`, `stack
-/// handover`) are listed in `--help` and completions: `DFORM_EXPERIMENTAL=1`.
-/// They run either way, each run with [`EXPERIMENTAL`] on stderr.
-pub(super) fn experimental() -> bool {
-    std::env::var_os("DFORM_EXPERIMENTAL").is_some_and(|v| v == "1")
-}
-
-/// The line an experimental command prints on every run.
-pub(super) const EXPERIMENTAL: &str = "warning: controller mode is experimental: its process model (where it \
-                            runs, how it is supervised, what an operator sees) is not decided; \
-                            see docs/experimental/controller.md";

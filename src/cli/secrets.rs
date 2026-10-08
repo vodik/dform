@@ -107,45 +107,15 @@ impl<'a, 'h> Inventory<'a, 'h> {
     /// or the terminal, sealed into the file of given secrets the program
     /// reads, every other value kept; a `given` entry in the audit log.
     fn set(&self, name: &str, remove: bool) -> Result<()> {
-        let cx = &self.run.cx;
-        let (deployment, files, mixing, master, audit) = (
-            &cx.deployment,
-            self.files.as_slice(),
-            &cx.mixing,
-            &cx.master,
-            &cx.audit,
-        );
-        let secret = &secret_inputs_of(&self.run.ev.located.loaded.declared);
         use crate::custody::given;
+        let cx = &self.run.cx;
+        let (deployment, mixing) = (&cx.deployment, &cx.mixing);
         let verb = match remove {
             true => "unset",
             false => "set",
         };
-        let holds = |r: &&given::Read| {
-            r.file
-                .as_ref()
-                .is_some_and(|f| f.leaves.iter().any(|l| l.name() == name))
-        };
-        let read = match files {
-            [] => bail!(
-                "secrets {verb} {name}: {deployment} reads no file of given secrets; read one into \
-                 its secret inputs, `set from secrets.decode(io.read(\"secrets/{}.json\"))`",
-                deployment.split('[').next().unwrap_or(deployment)
-            ),
-            [r] => r,
-            rs => match rs.iter().find(holds) {
-                Some(r) => r,
-                None => bail!(
-                    "secrets {verb} {name}: {deployment} reads {} files of given secrets ({}), and \
-                     none holds {name}; give it in one of them with sops, then set it here",
-                    rs.len(),
-                    rs.iter()
-                        .map(|r| r.shown.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ),
-            },
-        };
+        let read = self.given_file(name, verb)?;
+        let secret = secret_inputs_of(&self.run.ev.located.loaded.declared);
         let ty = secret.iter().find(|(a, _)| a == name).map(|(_, t)| t);
         if !remove && ty.is_none() {
             bail!(
@@ -171,22 +141,7 @@ impl<'a, 'h> Inventory<'a, 'h> {
                 read.shown
             );
         };
-        let stack_key = match given::to_master(mixing) {
-            false => None,
-            true => match &master.digest {
-                Some(k) => Some(given::stack_recipient(k)),
-                None => bail!(
-                    "secrets {verb} {name}: {} is sealed to {deployment}'s master, which this run \
-                     does not hold ({})",
-                    read.shown,
-                    master.without.as_deref().unwrap_or("no master")
-                ),
-            },
-        };
-        let to = given::To {
-            recipients: mixing.recipients.iter().map(|r| r.key.clone()).collect(),
-            stack_key,
-        };
+        let to = self.sealed_to(read, verb, name)?;
         // The file as it is, every value opened.
         let file = read.file.clone().unwrap_or_default();
         let (values, key) = match &read.file {
@@ -245,8 +200,85 @@ impl<'a, 'h> Inventory<'a, 'h> {
         std::fs::write(&tmp, given::text(&next)?)
             .and_then(|()| std::fs::rename(&tmp, path))
             .with_context(|| format!("write {}", read.shown))?;
+        self.log_given(name, read, &next, remove, who)
+    }
+
+    /// The file of given secrets `secrets set NAME` writes: the one the
+    /// program reads, or of several the one that holds NAME.
+    fn given_file(&self, name: &str, verb: &str) -> Result<&crate::custody::given::Read> {
+        let deployment = &self.run.cx.deployment;
+        let holds = |r: &&crate::custody::given::Read| {
+            r.file
+                .as_ref()
+                .is_some_and(|f| f.leaves.iter().any(|l| l.name() == name))
+        };
+        Ok(match self.files.as_slice() {
+            [] => bail!(
+                "secrets {verb} {name}: {deployment} reads no file of given secrets; read one into \
+                 its secret inputs, `set from secrets.decode(io.read(\"secrets/{}.json\"))`",
+                deployment.split('[').next().unwrap_or(deployment)
+            ),
+            [r] => r,
+            rs => match rs.iter().find(holds) {
+                Some(r) => r,
+                None => bail!(
+                    "secrets {verb} {name}: {deployment} reads {} files of given secrets ({}), and \
+                     none holds {name}; give it in one of them with sops, then set it here",
+                    rs.len(),
+                    rs.iter()
+                        .map(|r| r.shown.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            },
+        })
+    }
+
+    /// Who a file of given secrets is sealed to: the deployment's age
+    /// recipients, and its master's own key where dform.toml says so.
+    fn sealed_to(
+        &self,
+        read: &crate::custody::given::Read,
+        verb: &str,
+        name: &str,
+    ) -> Result<crate::custody::given::To> {
+        use crate::custody::given;
+        let (deployment, mixing, master) = (
+            &self.run.cx.deployment,
+            &self.run.cx.mixing,
+            &self.run.cx.master,
+        );
+        let stack_key = match given::to_master(mixing) {
+            false => None,
+            true => match &master.digest {
+                Some(k) => Some(given::stack_recipient(k)),
+                None => bail!(
+                    "secrets {verb} {name}: {} is sealed to {deployment}'s master, which this run \
+                     does not hold ({})",
+                    read.shown,
+                    master.without.as_deref().unwrap_or("no master")
+                ),
+            },
+        };
+        Ok(given::To {
+            recipients: mixing.recipients.iter().map(|r| r.key.clone()).collect(),
+            stack_key,
+        })
+    }
+
+    /// A given secret set (or removed): the audit log's `given` entry, and
+    /// what was done, said.
+    fn log_given(
+        &self,
+        name: &str,
+        read: &crate::custody::given::Read,
+        next: &crate::custody::given::File,
+        remove: bool,
+        who: String,
+    ) -> Result<()> {
+        let (deployment, mixing) = (&self.run.cx.deployment, &self.run.cx.mixing);
         let generation = next.given(name).map(|g| g.generation);
-        audit.append(
+        self.run.cx.audit.append(
             "given",
             serde_json::json!({
                 "key": name,
@@ -269,7 +301,7 @@ impl<'a, 'h> Inventory<'a, 'h> {
                 "sealed {name} of {deployment} into {} (generation {g}), {}; commit it: the next plan \
                  reads it",
                 read.shown,
-                given::sealed_to(&next, &|k| mixing.name_of(k))
+                crate::custody::given::sealed_to(next, &|k| mixing.name_of(k))
             ),
             None => println!(
                 "removed {name} of {deployment} from {}; commit it: the next plan reads it",
