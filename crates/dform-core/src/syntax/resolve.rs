@@ -6328,7 +6328,8 @@ impl<'u> Lowerer<'u> {
                         format!("`{}` is arithmetic, not a name", n.text()),
                     )
                     .with_help(format!(
-                        "`-` is always an operator; a name with one is a string: \"{}\"",
+                        "`-` subtracts here, a quantity from a name; a name with a `-` in it is \
+                         a string, \"{}\"",
                         n.text()
                     ));
                     self.diags.push(d);
@@ -6345,7 +6346,10 @@ impl<'u> Lowerer<'u> {
                         format!("`{}` is arithmetic on two names", n.text()),
                     )
                     .with_help(format!(
-                        "`-` is always an operator; a name with one is a string: \"{}\"",
+                        "`-` subtracts `{}` from `{}`; a name with a `-` in it is a string, \
+                         \"{}\"",
+                        ts[1].text(),
+                        ts[0].text(),
                         n.text()
                     ));
                     self.diags.push(d);
