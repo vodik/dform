@@ -2787,9 +2787,17 @@ fn eval_body(body: &[Lit], src: &Src, rec: &Rec) -> Result<Vec<Row>> {
 /// null, or a fact that equals it only Unknown-ly, needs content. Rule 3:
 /// the negation is undetermined while a stuck head of `p` unifies with
 /// `p(t)`. Fresh nulls are decided under the Unique Name Assumption.
+///
+/// A helper the compiler wrote for a `not { .. }` body (`__neg_N`) is
+/// derived from the very values the outer row binds, so its pattern is
+/// matched as it is, nulls and all: whether `__neg_N(v)` holds is its body
+/// over `v`, which is stuck itself when it reads a null of `v` (Rule 3
+/// then). A pod spec holding the server's computed `dnsPolicy` does not
+/// make `not p.securityContext.runAsNonRoot == true` wait on it (R-193).
 fn eval_not(grounded: &Atom, src: &Src, s: &HashMap<String, Value>, rec: &Rec) -> bool {
+    let helper = grounded.pred.starts_with("__neg_");
     let mut open = BTreeSet::new();
-    for t in &grounded.args {
+    for t in grounded.args.iter().filter(|_| !helper) {
         if let Term::Val(v) = t
             && stuck::has_open_or_secret(v)
         {
@@ -2841,6 +2849,9 @@ fn eval_not(grounded: &Atom, src: &Src, s: &HashMap<String, Value>, rec: &Rec) -
         }
         match t {
             Truth::True => return false,
+            // Another row's value: equal to this one only were their
+            // nulls the same, when the body would agree on both.
+            Truth::Unknown if helper => {}
             Truth::Unknown => {
                 for x in f.args.iter().chain(&grounded.args) {
                     if let Term::Val(v) = x {

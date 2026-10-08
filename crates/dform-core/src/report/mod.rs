@@ -2274,6 +2274,9 @@ struct Row {
     left: String,
     width: usize,
     right: Vec<String>,
+    /// The right column is what the line says (a deny's wait): when none
+    /// fits beside it, the shortest goes on the line below.
+    keep: bool,
 }
 
 impl Row {
@@ -2282,6 +2285,7 @@ impl Row {
             left: painted,
             width: plain.chars().count(),
             right: Vec::new(),
+            keep: false,
         }
     }
 
@@ -2290,6 +2294,7 @@ impl Row {
             width: s.chars().count(),
             left: s,
             right: Vec::new(),
+            keep: false,
         }
     }
 
@@ -2297,11 +2302,17 @@ impl Row {
         self.right = right.into_iter().filter(|r| !r.is_empty()).collect();
         self
     }
+
+    /// The right column is never folded to nothing.
+    fn kept(mut self) -> Row {
+        self.keep = true;
+        self
+    }
 }
 
 /// The rows, the right column aligned across them and dim (R-111); a
 /// right column that does not fit in [`WIDTH`] folds to a shorter one, or
-/// to nothing.
+/// to nothing; a kept one to the line below.
 fn layout(rows: &[Row], style: Style) -> String {
     let col = rows
         .iter()
@@ -2315,6 +2326,11 @@ fn layout(rows: &[Row], style: Style) -> String {
         let at = col.max(r.width + 2);
         if let Some(x) = r.right.iter().find(|x| at + x.chars().count() <= WIDTH) {
             out.push_str(&" ".repeat(at - r.width));
+            out.push_str(&style.paint(Paint::Dim, x));
+        } else if let Some(x) = r.right.last().filter(|_| r.keep) {
+            let indent = r.left.len() - r.left.trim_start().len() + 4;
+            out.push('\n');
+            out.push_str(&" ".repeat(indent));
             out.push_str(&style.paint(Paint::Dim, x));
         }
         out.push('\n');
@@ -3022,7 +3038,15 @@ impl Report {
                 true => format!("  check {}", p.message),
                 false => format!("  deny \"{}\"", p.message),
             };
-            rows.push(Row::plain(left).with(both(site(&p.site), cond, &p.reason)));
+            let mut right = both(site(&p.site), cond, &p.reason);
+            // Too many values for the column: the resources they are of.
+            let owners = owners(&p.on.iter().cloned().collect()).join(", ");
+            if p.after.is_none() && !owners.is_empty() && owners != on {
+                right.extend(both(site(&p.site), format!("waits on {owners}"), &p.reason));
+            }
+            // What it waits on is what the line says (R-193): never folded
+            // away.
+            rows.push(Row::plain(left).with(right).kept());
         }
         for b in self.pending.iter().filter(|b| b.resolves_after.is_none()) {
             let ds: Vec<&Deformation> = b.deformations.iter().collect();
@@ -4691,6 +4715,21 @@ mod tests {
             "plan: 3 changes (2 create, 1 delete)"
         );
         assert_eq!(by_kind(std::iter::empty()).len(), KINDS.len());
+    }
+
+    /// A right column too wide for the page folds to nothing, except one
+    /// the line is about (a deny's wait, R-193), which goes below it.
+    #[test]
+    fn a_kept_right_column_never_folds_away() {
+        let wide = format!("waits on {}", "x".repeat(WIDTH));
+        let rows = [
+            Row::plain("  deny \"a\"".into()).with(vec![wide.clone()]),
+            Row::plain("  deny \"b\"".into())
+                .with(vec![wide.clone()])
+                .kept(),
+        ];
+        let text = layout(&rows, Style::PLAIN);
+        assert_eq!(text, format!("  deny \"a\"\n  deny \"b\"\n      {wide}\n"));
     }
 
     #[test]
