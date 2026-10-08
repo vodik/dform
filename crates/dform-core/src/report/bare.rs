@@ -289,7 +289,7 @@ fn write_change(out: &mut String, d: &Deformation, indent: &str, style: Style) {
         out.push_str(&format!(
             "{inner}{} differs {}\n",
             l.path,
-            crate::report::KEPT
+            style.note(crate::report::KEPT)
         ));
     }
 }

@@ -74,7 +74,7 @@ impl Cell {
         Cell {
             text: r.cell(v),
             paint: if secret {
-                Some(Paint::Sensitive)
+                Some(Paint::Note)
             } else if matches!(v, Value::Null { .. }) {
                 Some(Paint::Null)
             } else {
@@ -98,7 +98,7 @@ impl Cell {
         };
         Cell {
             text,
-            paint: Some(Paint::Sensitive),
+            paint: Some(Paint::Note),
             json,
             string: None,
         }

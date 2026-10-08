@@ -1561,7 +1561,8 @@ auto|always|never` (global; `auto`, the default, colours when stdout is a
 terminal and `NO_COLOR` is unset; errors on stderr likewise) paints the
 plan in the eight basic colours: `+`, `~`, `±`, `-` with the address
 bold in green, yellow, magenta and red; the site column, `later`'s notes
-and `(sensitive)` dim; `because` cyan; `held for approval` magenta,
+and a note printed where a value would be (`(sensitive)`, inside an
+object's value too, and `(bootstrap): kept`) dim; `because` cyan; `held for approval` magenta,
 `denied` and conflicts red, `warning` and a rule in `later` yellow; tick
 headers and a copy's header bold. `--json` and the plan file are never
 coloured.

@@ -625,15 +625,16 @@ pub enum Paint {
     Replace,
     /// A `?` null: cyan.
     Null,
-    /// `(sensitive)`: dim.
-    Sensitive,
+    /// A note about a value where a value would be, `(sensitive)`,
+    /// `(bootstrap): kept`: dim, colour being for the marks.
+    Note,
     /// Conflicts and denies: red.
     Error,
     /// The pending-group line: the warning colour, bold yellow.
     Warn,
     /// Addresses, section headers, witness names: bold.
     Bold,
-    /// The site column, `(sensitive)`: dim (R-111).
+    /// The site column: dim (R-111).
     Dim,
     /// `because`: cyan.
     Because,
@@ -655,7 +656,7 @@ impl Style {
             Paint::Delete | Paint::Error => "31",
             Paint::Replace => "35",
             Paint::Null => "36",
-            Paint::Sensitive => "2",
+            Paint::Note => "2",
             Paint::Warn => "33",
             Paint::Bold => "1",
             Paint::Dim => "2",
@@ -688,19 +689,57 @@ impl Style {
         format!("\x1b[{sgr}m{s}\x1b[0m")
     }
 
-    /// A value as the plan prints it at `why`: `(sensitive)` dim.
+    /// A note about a value, printed where a value would be
+    /// (`(sensitive)`, [`KEPT`]): dim, so it does not read as one.
+    pub fn note(&self, s: &str) -> String {
+        self.paint(Paint::Note, s)
+    }
+
+    /// A value laid out as text (`{ "k": (sensitive), .. }`) with each
+    /// `(sensitive..)` outside a string painted as a [`Style::note`].
+    fn notes_in(&self, text: &str) -> String {
+        if !self.color {
+            return text.to_string();
+        }
+        let mut out = String::new();
+        let (mut quoted, mut escaped) = (false, false);
+        let mut rest = text;
+        while let Some(c) = rest.chars().next() {
+            if !quoted
+                && rest.starts_with("(sensitive")
+                && let Some(end) = rest.find(')')
+            {
+                out.push_str(&self.note(&rest[..=end]));
+                rest = &rest[end + 1..];
+                continue;
+            }
+            match c {
+                '\\' if quoted && !escaped => escaped = true,
+                '"' if !escaped => {
+                    quoted = !quoted;
+                    escaped = false
+                }
+                _ => escaped = false,
+            }
+            out.push(c);
+            rest = &rest[c.len_utf8()..];
+        }
+        out
+    }
+
+    /// A value as the plan prints it at `why`: `(sensitive)` a note.
     fn said(&self, v: &Shown, why: Why) -> String {
         match v {
-            Shown::Sensitive(_) => self.paint(Paint::Dim, &v.said(why)),
+            Shown::Sensitive(_) => self.note(&v.said(why)),
             _ => v.said(why),
         }
     }
 
-    /// One side of a change: a null cyan, a sensitive value dim.
+    /// One side of a change: a null cyan, a sensitive value a note.
     fn shown(&self, v: &Shown) -> String {
         match v {
             Shown::Null { .. } => self.paint(Paint::Null, &v.text()),
-            Shown::Sensitive(_) => self.paint(Paint::Sensitive, &v.text()),
+            Shown::Sensitive(_) => self.note(&v.text()),
             _ => v.text(),
         }
     }
@@ -4912,16 +4951,17 @@ fn write_kept(rows: &mut Vec<Row>, l: &Line, indent: &str, style: Style, why: Wh
                 l.after.said(why)
             ),
             format!(
-                "{indent}{} = {} → {}  {KEPT}",
+                "{indent}{} = {} → {}  {}",
                 l.path,
                 style.said(&l.before, why),
-                style.said(&l.after, why)
+                style.said(&l.after, why),
+                style.note(KEPT)
             ),
         ),
-        false => {
-            let text = format!("{indent}{} differs {KEPT}", l.path);
-            (text.clone(), text)
-        }
+        false => (
+            format!("{indent}{} differs {KEPT}", l.path),
+            format!("{indent}{} differs {}", l.path, style.note(KEPT)),
+        ),
     };
     rows.push(Row::new(&plain, painted));
 }
@@ -5009,9 +5049,10 @@ fn write_line(
                 .enumerate()
             {
                 let row = format!("{indent}{text}");
+                let painted = style.notes_in(&row);
                 match i {
-                    0 => push(row.clone(), row, right.clone()),
-                    _ => push(row.clone(), row, vec![]),
+                    0 => push(row, painted, right.clone()),
+                    _ => push(row, painted, vec![]),
                 }
             }
         }
@@ -5254,5 +5295,24 @@ mod tests {
         assert_eq!(c.paint(Paint::Dim, "p.df:3"), "\x1b[2mp.df:3\x1b[0m");
         assert_eq!(c.paint(Paint::Because, "because"), "\x1b[36mbecause\x1b[0m");
         assert_eq!(Style::PLAIN.address(&ActionKind::Create, "x"), "x");
+    }
+
+    /// A note about a value is dim where a value would be, inside a value
+    /// too but never inside a string; plain, nothing.
+    #[test]
+    fn notes_are_dim() {
+        let c = Style { color: true };
+        let row =
+            r#"  stringData = { "a": (sensitive), "b": "(sensitive)", "c": (sensitive, rotated) }"#;
+        assert_eq!(
+            c.notes_in(row),
+            "  stringData = { \"a\": \x1b[2m(sensitive)\x1b[0m, \"b\": \"(sensitive)\", \
+             \"c\": \x1b[2m(sensitive, rotated)\x1b[0m }"
+        );
+        assert_eq!(Style::PLAIN.notes_in(row), row);
+        assert_eq!(c.note(KEPT), "\x1b[2m(bootstrap): kept\x1b[0m");
+        assert_eq!(Style::PLAIN.note(KEPT), KEPT);
+        let secret = Shown::Sensitive(None);
+        assert_eq!(c.said(&secret, Why::Line), "\x1b[2m(sensitive)\x1b[0m");
     }
 }
