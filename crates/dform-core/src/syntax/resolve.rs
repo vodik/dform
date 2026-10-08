@@ -6813,6 +6813,13 @@ impl<'u> Lowerer<'u> {
                 ),
             );
         }
+        if !self.lenient && self.calls != Calls::Data && !crate::functions::callable(&name) {
+            let at = n
+                .children()
+                .find_map(|c| Chain::of(&c))
+                .map_or(span, |c| self.span_of(c.range));
+            self.near_function(rc.scope, &name, at)?;
+        }
         self.check_function(&name, span);
         let mut args = self.bind(false, |l| l.args(rc, n, Pos::Content, pre))?;
         if let (false, Some(f)) = (named.is_empty(), declared) {

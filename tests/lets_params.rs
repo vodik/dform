@@ -229,6 +229,25 @@ resource net.vpc u { cidr = cidr }
     );
 }
 
+/// A call of a name near a let with parameters in scope names the let.
+#[test]
+fn a_misspelt_call_names_the_let() {
+    let r = plan(
+        r#"use fake
+let restic(tag) = "10.${tag}.0.0/16"
+resource net.vpc u { cidr = resti(1) }
+"#,
+    )
+    .failure();
+    assert!(
+        r.stderr.contains("p.df:3:29: unknown function resti")
+            && r.stderr
+                .contains("the let with parameters in scope is `restic`"),
+        "{}",
+        r.stderr
+    );
+}
+
 /// A read of a data source inside a let with parameters is an error at
 /// the read naming the let: a document, the environment.
 #[test]

@@ -333,6 +333,24 @@ impl Lowerer<'_> {
         Ok(v)
     }
 
+    /// A call of an unknown function whose name is nearest a let with
+    /// parameters in `scope`: the error, naming the let.
+    pub(super) fn near_function(&mut self, scope: usize, name: &str, span: Span) -> L<()> {
+        let lets: Vec<String> = self
+            .chain_of(scope)
+            .into_iter()
+            .flat_map(|s| self.decls.scopes[s].functions.keys().cloned())
+            .collect();
+        let Some(near) = crate::diag::nearest(name, lets.iter().map(String::as_str)) else {
+            return Ok(());
+        };
+        let d = Diagnostic::error(span, format!("unknown function {name}"))
+            .with_help(format!("the let with parameters in scope is `{near}`"))
+            .with_fix(format!("call `{near}`"), vec![(span, near.to_string())]);
+        self.diags.push(d);
+        Err(Skip)
+    }
+
     /// `f` named and not called: a let with parameters is a relation whose
     /// arguments its reader binds, so it has no value alone and `in`
     /// enumerates nothing of it.
