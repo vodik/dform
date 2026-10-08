@@ -164,3 +164,41 @@ fn a_copys_denies_range_over_its_own_resources() {
         r.stdout
     );
 }
+
+/// A copy whose clause waits is in `stuck/4` as the program writes the
+/// copy, `resource pair g`, never by its gate's compiler name
+/// (`g::__instance("pair")`).
+#[test]
+fn a_copys_gate_is_stuck_in_the_programs_words() {
+    let s = Scratch::new("policy-module-gate");
+    s.write(
+        "s.df",
+        "type_provider(x.box, \"boxcloud\")\n\
+         type_attr(x.box, \"id\", \"string\", [\"computed\", \"id\"])\n\
+         type_attr(x.box, \"status\", \"object\", [\"computed\"])\n",
+    );
+    s.write("w.json", "{}");
+    s.write(
+        "p.df",
+        "component pair {\n  input n: int\n  resource x.box inner { size = n }\n}\n\
+         resource x.box b { size = 1 }\n\
+         resource pair g { n = 2 } where b.status.ready == true\n",
+    );
+    let r = s
+        .run(&[
+            "dev",
+            "--world",
+            "w.json",
+            "--provider",
+            "s.df",
+            "query",
+            "stuck",
+            "p.df",
+        ])
+        .success();
+    assert!(
+        r.stdout.contains("\"resource pair g\"") && !r.stdout.contains("__instance"),
+        "{}",
+        r.stdout
+    );
+}

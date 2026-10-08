@@ -57,7 +57,7 @@ impl Stuck {
                     .rule
                     .map(|r| Value::Int(r as i64))
                     .unwrap_or(Value::Int(-1))),
-                v(Value::Str(spell::atom(&self.head))),
+                v(Value::Str(head_text(&self.head))),
                 v(Value::Obj(self.bindings.clone().into_iter().collect())),
                 v(Value::List(
                     self.nulls.iter().cloned().map(Value::Str).collect(),
@@ -67,6 +67,17 @@ impl Stuck {
             span: Default::default(),
         }
     }
+}
+
+/// A head as `stuck/4` and `may_derive/3` say it: as written, but a
+/// copy's gate (`g::__instance("pair")`, the relation its clause lowers
+/// to) as the program writes the copy, `resource pair g`.
+fn head_text(head: &Atom) -> String {
+    match head.pred.rsplit_once("::") {
+        Some((_, crate::modules::GATE)) => crate::modules::private_text(head, &spell::atom, " "),
+        _ => None,
+    }
+    .unwrap_or_else(|| spell::atom(head))
 }
 
 /// The nulls a stuck instance waits on, as the plan prints them: `?T.a.p`
@@ -128,7 +139,7 @@ impl MayDerive {
             pred: MAY_DERIVE.into(),
             args: vec![
                 v(Value::Int(self.rule as i64)),
-                v(Value::Str(spell::atom(&self.head))),
+                v(Value::Str(head_text(&self.head))),
                 v(Value::List(
                     self.nulls.iter().cloned().map(Value::Str).collect(),
                 )),
