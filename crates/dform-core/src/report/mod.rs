@@ -4107,7 +4107,50 @@ fn folded(
     why: Why,
     site: &mut dyn FnMut(&Line) -> Option<Site>,
 ) -> Vec<Line> {
-    // The lines in the order the program gave a list's elements.
+    let lines = written_order(d, facts);
+    let paths: Vec<String> = lines.iter().map(|l| l.path.clone()).collect();
+    let writers = leaf_writers(p, facts, &lines, &paths);
+    // A document value (R-131), at the default level: the leaves a
+    // contribution read whole from a loader's document are its row, said
+    // once (below), so their values are not laid out.
+    let mut rows: BTreeMap<crate::circuit::NodeId, Option<tree::DocRow>> = BTreeMap::new();
+    if why == Why::Line {
+        for w in writers.iter().flatten() {
+            rows.entry(*w).or_insert_with(|| p.document_row(rules, *w));
+        }
+    }
+    let f = Folding {
+        p,
+        rules,
+        why,
+        defaults: type_defaults(all, &d.addr.typ),
+        sets: keyless_sets(&d.addr.typ, all),
+        lines,
+        paths,
+        writers,
+        rows,
+    };
+    let values: Vec<crate::fmt::value::Tree> = f
+        .lines
+        .iter()
+        .zip(&f.writers)
+        .map(|(l, w)| match f.in_row(*w) {
+            true => crate::fmt::value::Tree::Leaf(String::new()),
+            false => crate::fmt::value::Tree::Leaf(whole(&l.after, why)),
+        })
+        .collect();
+    let out: Vec<(Option<crate::circuit::NodeId>, Line)> = fold::fold(&f.paths, &f.writers)
+        .into_iter()
+        .flat_map(|g| f.group(&g, &values, site))
+        .collect();
+    if why != Why::Line {
+        return out.into_iter().map(|(_, l)| l).collect();
+    }
+    f.with_rows(out)
+}
+
+/// A deformation's lines in the order the program gave a list's elements.
+fn written_order<'d>(d: &'d Deformation, facts: &[&Atom]) -> Vec<&'d Line> {
     let mut lines: Vec<&Line> = d.lines.iter().collect();
     lines.sort_by_cached_key(|l| {
         let Some((a, _, _)) = attr_holding(facts, &l.path) else {
@@ -4124,10 +4167,19 @@ fn folded(
         key.extend(fold::position(v, &toks[skip..]));
         key
     });
-    let paths: Vec<String> = lines.iter().map(|l| l.path.clone()).collect();
+    lines
+}
+
+/// The contribution that wrote each leaf line (`None` for another line),
+/// by the fact's address: an attribute fact compared as a key is its whole
+/// value compared, once per leaf.
+fn leaf_writers(
+    p: &tree::Printer,
+    facts: &[&Atom],
+    lines: &[&Line],
+    paths: &[String],
+) -> Vec<Option<crate::circuit::NodeId>> {
     let mut writers: Vec<Option<crate::circuit::NodeId>> = vec![None; paths.len()];
-    // By the fact's address: an attribute fact compared as a key is its
-    // whole value compared, once per leaf.
     let mut by_attr: BTreeMap<*const Atom, (&Atom, Vec<usize>)> = BTreeMap::new();
     for (i, l) in lines.iter().enumerate() {
         if l.op == Op::Leaf
@@ -4146,46 +4198,60 @@ fn folded(
             writers[i] = w;
         }
     }
-    let defaults: BTreeSet<String> = all
-        .iter()
+    writers
+}
+
+/// The paths of type `typ` whose value is its schema's default.
+fn type_defaults(all: &BTreeSet<Atom>, typ: &str) -> BTreeSet<String> {
+    all.iter()
         .filter(|f| f.pred == "type_default")
         .filter_map(|f| match f.args.as_slice() {
-            [Term::Val(Value::Str(t)), Term::Val(Value::Str(p)), _] if *t == d.addr.typ => {
-                Some(p.clone())
-            }
+            [Term::Val(Value::Str(t)), Term::Val(Value::Str(p)), _] if *t == typ => Some(p.clone()),
             _ => None,
         })
-        .collect();
-    let sets = keyless_sets(&d.addr.typ, all);
-    // A document value (R-131), at the default level: the leaves a
-    // contribution read whole from a loader's document are its row, said
-    // once (below), so their values are not laid out.
-    let mut rows: BTreeMap<crate::circuit::NodeId, Option<tree::DocRow>> = BTreeMap::new();
-    if why == Why::Line {
-        for w in writers.iter().flatten() {
-            rows.entry(*w).or_insert_with(|| p.document_row(rules, *w));
-        }
+        .collect()
+}
+
+/// A deformation's lines being folded: their paths and writers, the
+/// type's defaults and keyless sets, and each contribution's document row.
+struct Folding<'a> {
+    p: &'a tree::Printer<'a>,
+    rules: &'a [RuleStmt],
+    why: Why,
+    defaults: BTreeSet<String>,
+    sets: BTreeSet<String>,
+    lines: Vec<&'a Line>,
+    paths: Vec<String>,
+    writers: Vec<Option<crate::circuit::NodeId>>,
+    rows: BTreeMap<crate::circuit::NodeId, Option<tree::DocRow>>,
+}
+
+impl Folding<'_> {
+    /// The contribution `w` is said as its document's row.
+    fn in_row(&self, w: Option<crate::circuit::NodeId>) -> bool {
+        w.and_then(|w| self.rows.get(&w))
+            .is_some_and(Option::is_some)
     }
-    let in_row = |w: Option<crate::circuit::NodeId>| {
-        w.and_then(|w| rows.get(&w)).is_some_and(Option::is_some)
-    };
-    let values: Vec<crate::fmt::value::Tree> = lines
-        .iter()
-        .zip(&writers)
-        .map(|(l, w)| match in_row(*w) {
-            true => crate::fmt::value::Tree::Leaf(String::new()),
-            false => crate::fmt::value::Tree::Leaf(whole(&l.after, why)),
-        })
-        .collect();
-    // A line as printed: its site found when it is (a leaf of its own).
-    let mut own = |l: &Line| Line {
-        site: site(l),
-        ..l.clone()
-    };
-    // A leaf naming a host with a label that is not ASCII keeps its own
-    // line, so its A-labels print beside it (R-134).
-    let host = |l: &Line| matches!(&l.after, Shown::Value(Json::String(s)) if crate::uri::ascii_form(s).is_some());
-    let out = fold::fold(&paths, &writers).into_iter().flat_map(|g| {
+
+    /// A fold group's lines: a leaf of its own with its site found (a
+    /// host with a label that is not ASCII keeps its own line, so its
+    /// A-labels print beside it, R-134), a schema default, an element of a
+    /// set several writers add to named by itself (R-158), or the group's
+    /// value laid out under its path.
+    fn group(
+        &self,
+        g: &fold::Group,
+        values: &[crate::fmt::value::Tree],
+        site: &mut dyn FnMut(&Line) -> Option<Site>,
+    ) -> Vec<(Option<crate::circuit::NodeId>, Line)> {
+        let (p, rules, why) = (self.p, self.rules, self.why);
+        let (lines, paths, writers) = (&self.lines, &self.paths, &self.writers);
+        let (defaults, sets) = (&self.defaults, &self.sets);
+        let mut own = |l: &Line| Line {
+            site: site(l),
+            ..l.clone()
+        };
+        let host = |l: &Line| matches!(&l.after, Shown::Value(Json::String(s)) if crate::uri::ascii_form(s).is_some());
         if g.leaves.len() > 1 && g.leaves.iter().any(|&i| host(lines[i])) {
             return g
                 .leaves
@@ -4213,7 +4279,7 @@ fn folded(
                     Some(s) => Some(s),
                     None => p.contribution_site(rules, w, &paths[*i]),
                 };
-                let path = match set_element(&paths[*i], &sets) {
+                let path = match set_element(&paths[*i], sets) {
                     Some(list) if scalar(&first.after) => {
                         format!("{list}[{}]", first.after.said(why))
                     }
@@ -4225,7 +4291,7 @@ fn folded(
                     ..first
                 }
             }
-            ([i], _) if g.path == paths[*i] => match set_element(&paths[*i], &sets) {
+            ([i], _) if g.path == paths[*i] => match set_element(&paths[*i], sets) {
                 Some(list) if scalar(&first.after) => Line {
                     path: format!("{list}[{}]", first.after.said(why)),
                     ..own(first)
@@ -4240,62 +4306,63 @@ fn folded(
                 leaves: Vec::new(),
                 site: w.and_then(|w| p.contribution_site(rules, w, &g.path)),
                 chain: Vec::new(),
-                value: (!in_row(w)).then(|| fold::assemble(&g, &paths, &values)),
+                value: (!self.in_row(w)).then(|| fold::assemble(g, paths, values)),
                 row: None,
             },
         };
         vec![(w, line)]
-    });
-    if why != Why::Line {
-        return out.map(|(_, l)| l).collect();
     }
-    // A document value (R-131): the leaves a contribution read whole from
-    // a loader's document are its row, said once; a value body's first,
-    // as the resource's. A leaf another write made stays its own line.
-    let mut said = BTreeSet::new();
-    let mut body = Vec::new();
-    let mut rest = Vec::new();
-    for (w, l) in out {
-        let row = w.and_then(|w| rows.get(&w).cloned().flatten());
-        let Some(row) = row else {
-            rest.push(l);
-            continue;
-        };
-        let at = match row.body {
-            true => String::new(),
-            false => path(&row.path),
-        };
-        if !said.insert((at.clone(), row.at.clone())) {
-            continue;
+
+    /// A document value (R-131): the leaves a contribution read whole from
+    /// a loader's document are its row, said once; a value body's first,
+    /// as the resource's. A leaf another write made stays its own line.
+    fn with_rows(&self, out: Vec<(Option<crate::circuit::NodeId>, Line)>) -> Vec<Line> {
+        let rows = &self.rows;
+        let mut said = BTreeSet::new();
+        let mut body = Vec::new();
+        let mut rest = Vec::new();
+        for (w, l) in out {
+            let row = w.and_then(|w| rows.get(&w).cloned().flatten());
+            let Some(row) = row else {
+                rest.push(l);
+                continue;
+            };
+            let at = match row.body {
+                true => String::new(),
+                false => path(&row.path),
+            };
+            if !said.insert((at.clone(), row.at.clone())) {
+                continue;
+            }
+            let line = Line {
+                op: Op::Leaf,
+                path: at,
+                before: Shown::Absent,
+                after: Shown::Absent,
+                leaves: Vec::new(),
+                site: l.site,
+                chain: Vec::new(),
+                value: None,
+                row: Some(row.text()),
+            };
+            if row.body {
+                body.push(line);
+                continue;
+            }
+            // Before a leaf another write made inside it.
+            let under = |x: &Line| {
+                x.path
+                    .strip_prefix(line.path.as_str())
+                    .is_some_and(|r| r.starts_with(['.', '[']))
+            };
+            match rest.iter().position(under) {
+                Some(i) => rest.insert(i, line),
+                None => rest.push(line),
+            }
         }
-        let line = Line {
-            op: Op::Leaf,
-            path: at,
-            before: Shown::Absent,
-            after: Shown::Absent,
-            leaves: Vec::new(),
-            site: l.site,
-            chain: Vec::new(),
-            value: None,
-            row: Some(row.text()),
-        };
-        if row.body {
-            body.push(line);
-            continue;
-        }
-        // Before a leaf another write made inside it.
-        let under = |x: &Line| {
-            x.path
-                .strip_prefix(line.path.as_str())
-                .is_some_and(|r| r.starts_with(['.', '[']))
-        };
-        match rest.iter().position(under) {
-            Some(i) => rest.insert(i, line),
-            None => rest.push(line),
-        }
+        body.extend(rest);
+        body
     }
-    body.extend(rest);
-    body
 }
 
 /// A leaf's value inside a folded one: as the line says it, a string
