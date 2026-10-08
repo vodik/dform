@@ -69,6 +69,16 @@ pub struct K8s {
     pub stack: Option<String>,
 }
 
+/// Say `line` on stderr, one sentence of dform's; the client's own chain
+/// of errors behind it (`e`) only under `DFORM_LOG=debug`, the provider
+/// being told nothing of the run's `-v`.
+fn say(line: &str, e: &anyhow::Error) {
+    eprintln!("{line}");
+    if dform_core::timing::enabled() {
+        eprintln!("k8s: {e:#}");
+    }
+}
+
 impl K8s {
     /// Configure: the cluster the environment names and its schema, else
     /// offline on the snapshot. `cache` is the directory the OpenAPI
@@ -77,8 +87,8 @@ impl K8s {
         let why = if std::env::var_os("DFORM_K8S_OFFLINE").is_some_and(|v| !v.is_empty()) {
             "DFORM_K8S_OFFLINE is set".to_string()
         } else {
-            match Cluster::infer().await {
-                Err(e) => format!("{e:#}"),
+            let (why, e) = match Cluster::infer().await {
+                Err(e) => (Cluster::not_found(), e),
                 Ok(c) => match c
                     .openapi(cache.as_deref().map(|d| d.join(OPENAPI_CACHE)).as_deref())
                     .await
@@ -93,16 +103,18 @@ impl K8s {
                             stack: None,
                         });
                     }
-                    Err(e) => format!("{}: {e:#}", c.url),
+                    Err(e) => (format!("the cluster at {} did not answer", c.url), e),
                 },
-            }
-        };
-        if std::env::var_os("DFORM_K8S_OFFLINE").is_none() {
-            eprintln!(
-                "dform-provider-k8s: offline ({why}): the schema is the snapshot's \
-                 (crates/dform-k8s/openapi-snapshot.json); Read, Apply and Import need a cluster"
+            };
+            say(
+                &format!(
+                    "k8s: offline, {why}; planning against the snapshot schema \
+                     (crates/dform-k8s/openapi-snapshot.json)"
+                ),
+                &e,
             );
-        }
+            why
+        };
         Ok(K8s {
             derived: Arc::new(openapi::snapshot_cached(cache.as_deref())?),
             cluster: Err(why),
@@ -939,7 +951,10 @@ impl pb::provider_server::Provider for Service {
             let deadline = std::time::Instant::now() + KIND_WAIT;
             loop {
                 if let Err(e) = K8s::extend(c, dir, s).await {
-                    eprintln!("dform-provider-k8s: the cluster's schema is not cached: {e:#}");
+                    say(
+                        &format!("k8s: the schema of the cluster at {} is not cached", c.url),
+                        &e,
+                    );
                 }
                 let served = || -> Result<bool> {
                     let k = K8s::deferred(cache.clone(), Some(s))?;

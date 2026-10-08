@@ -185,6 +185,47 @@ fn offline_apply_fails_naming_why() {
     );
 }
 
+/// With no kubeconfig and no cluster, the provider says so in one sentence
+/// of dform's, and the client's chain of errors only under `DFORM_LOG=debug`.
+#[test]
+fn offline_is_said_in_one_sentence() {
+    let s = Scratch::project("k8s-offline-line");
+    real_demo(&s);
+    let run = |debug: bool| {
+        let mut c = common::dform();
+        c.args(["plan", "k8s_demo.df"])
+            .current_dir(&s.dir)
+            .env("HOME", &s.dir)
+            .env_remove("KUBECONFIG")
+            .env_remove("DFORM_K8S_OFFLINE")
+            .env_remove("KUBERNETES_SERVICE_HOST")
+            .env_remove("KUBERNETES_SERVICE_PORT");
+        match debug {
+            true => c.env("DFORM_LOG", "debug"),
+            false => c.env_remove("DFORM_LOG"),
+        };
+        Run::from(c.output().unwrap()).success()
+    };
+    let r = run(false);
+    let said: Vec<&str> = r.stderr.lines().filter(|l| l.contains("k8s")).collect();
+    assert_eq!(
+        said,
+        [
+            "k8s: offline, no kubeconfig at ~/.kube/config and not in a cluster; planning \
+          against the snapshot schema (crates/dform-k8s/openapi-snapshot.json)"
+        ],
+        "{}",
+        r.stderr
+    );
+    let r = run(true);
+    assert!(
+        r.stderr
+            .contains("k8s: no kubeconfig and not in a cluster: "),
+        "{}",
+        r.stderr
+    );
+}
+
 // --- a fake API server ------------------------------------------------------
 
 /// Objects by URL path, and the requests seen.

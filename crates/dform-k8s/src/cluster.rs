@@ -203,6 +203,37 @@ impl Cluster {
         Cluster::connect(config)
     }
 
+    /// Why [`Cluster::infer`] found no cluster, as the user would look:
+    /// the kubeconfig kube reads (`KUBECONFIG`'s files, else
+    /// `~/.kube/config`) is missing or does not load, or in a pod, its
+    /// service account does not.
+    pub fn not_found() -> String {
+        let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+        let paths: Vec<std::path::PathBuf> = match std::env::var_os("KUBECONFIG") {
+            Some(v) if !v.is_empty() => std::env::split_paths(&v).collect(),
+            _ => home.iter().map(|h| h.join(".kube/config")).collect(),
+        };
+        let shown = |p: &Path| match home.as_deref().and_then(|h| p.strip_prefix(h).ok()) {
+            Some(rest) => format!("~/{}", rest.display()),
+            None => p.display().to_string(),
+        };
+        match paths.iter().find(|p| p.exists()) {
+            Some(p) => format!("the kubeconfig at {} does not load", shown(p)),
+            None if std::env::var_os("KUBERNETES_SERVICE_HOST").is_some() => {
+                "the pod's service account does not load".into()
+            }
+            None if paths.is_empty() => "no kubeconfig and not in a cluster".into(),
+            None => format!(
+                "no kubeconfig at {} and not in a cluster",
+                paths
+                    .iter()
+                    .map(|p| shown(p))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        }
+    }
+
     /// The cluster the program's `provider_config("k8s", ...)`
     /// names, if it names one: `kubeconfig` (the text of a kubeconfig, its
     /// current context), or `host` with `ca` and a `token` or a

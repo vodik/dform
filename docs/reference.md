@@ -1131,7 +1131,12 @@ use k8s { source = "bin/dform-provider-k8s" }        # an executable
   rbac, storage, scheduling, coordination, discovery, node,
   admissionregistration, apiextensions and certificates, trimmed by
   `crates/dform-k8s/trim_openapi.py`), the provider's static schema; Plan
-  diffs locally, and Read, Apply and Import fail naming why.
+  diffs locally, and Read, Apply and Import fail naming why. It says so
+  once, `k8s: offline, no kubeconfig at ~/.kube/config and not in a
+  cluster; planning against the snapshot schema
+  (crates/dform-k8s/openapi-snapshot.json)` (or `the kubeconfig at P does
+  not load`, `the cluster at URL did not answer`); the client's own errors
+  behind it print under `DFORM_LOG=debug`.
 
 ```bash
 cargo build
