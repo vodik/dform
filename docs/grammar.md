@@ -88,7 +88,8 @@ COMMENT  := "#" to end of line
 
 Punctuation: `( ) { } [ ] , . .. ..= : = == += != < <= > >= + - * / % |`.
 
-`.` is always member access, `..` and `..=` a range's (R-56), and `/`
+`.` is always member access, `..` and `..=` between two terms a range's
+(R-56), `..` leading a field or an element a spread's (R-199), and `/`
 always division. A number with a letter adjacent is one QUANTITY token
 (`1Gi`, `us-test-1a`'s `1a`), so it never splits into a number and a
 name; what its unit means is the literal's ("Quantities and times").
@@ -1736,8 +1737,10 @@ primary    := INT | QUANTITY | STRING | "true" | "false"
 chain      := NAME ("." SEG | "[" term ("," term)* "]")*
 call       := chain "(" args ")"
 read       := chain | call ("." SEG | "[" term "]")+   ; a call's result, read (R-71)
-list       := "[" (term ("," term)* ","?)? "]"
-object     := "{" (key (":" term)? ("," key (":" term)?)* ","?)? "}"  ; `{ a }` is `{ a: a }`
+list       := "[" (item ("," item)* ","?)? "]"
+item       := term | ".." term                    ; a spread (R-199)
+object     := "{" (field ("," field)* ","?)? "}"
+field      := key (":" term)? | ".." term          ; `{ a }` is `{ a: a }`; a spread
 key        := NAME | STRING
 comprehension := "[" term "|" body1 ","? "]"
 type       := DOTTED ("(" type ("," type)* ")")? | "{" NAME ":" type ("," NAME ":" type)* "}" | STRING
@@ -1745,6 +1748,35 @@ type       := DOTTED ("(" type ("," type)* ")")? | "{" NAME ":" type ("," NAME "
 
 In a literal position a chain applied to arguments is an atom, unless an
 operator follows it (`f(x) == 3` compares a call).
+
+A spread `..x` (R-199) leads a field of an object or an element of a
+list and gives what `x` holds there, in order with what is written: `{
+..base, replicas: 3 }` is base's fields then `replicas`, a key written
+after a spread replacing the spread's and one written before it a default
+the spread replaces; `[..a, x, ..b]` is a's elements, `x`, then b's; and
+`[..0..3]` is `[0, 1, 2]`, a discrete range's members (a dense range's is
+R-180's error). A range sits between two terms and a spread leads an
+entry, so position decides. There is no deep merge: an object written
+after a spread replaces the spread's whole, and depth is written where it
+is wanted, `{ ..base, spec: { ..base.spec, replicas: 3 } }`. A spread of
+what is not the literal's kind (a list in an object, an object or a
+string in a list) is an error at the spread where its kind is known (a
+literal, a list, a call's declared result) and at the statement once it
+has a value otherwise; a source not known yet leaves the literal's fields
+unknown, so the resource waits for the tick that gives it (an unknown
+inside the source is carried, as one inside a literal is). A key one
+literal writes twice is an error naming both. A contribution that
+spreads the attribute it writes, `set r.spec = { ..r.spec, x: 1 }`, makes
+a value from itself: the cycle error, whose help is `set r.spec.x = 1`.
+
+The same `..` is an object pattern's rest ("Patterns"). It is not
+extended to calls (`f(..xs)`: a function's parameters are named and
+typed one by one, and a relation's columns are matched by position or by
+name, `p(a: x)`), to `set` (`set r.spec = { ..r.spec, .. }` is the
+cycle above, and `set r.spec.x = 1` already writes one key), to tuple and
+list patterns (a tuple has an exact arity, and a list is walked with
+`(i, x) in xs`, never split head and tail), nor to types (an object
+type is written whole).
 
 ### Definedness
 
@@ -1937,7 +1969,7 @@ statement and the rows of its group.
 ### Patterns
 
 ```
-pattern    := "_" | NAME | literal | tuple | "{" pfield ("," pfield)* ","? "}"
+pattern    := "_" | NAME | literal | tuple | "{" pfield ("," pfield)* ("," ".." NAME)? ","? "}"
 tuple      := "(" pattern "," pattern ("," pattern)* ","? ")"
 pfield     := key (":" pattern)?                ; `{ a }` is `{ a: a }`
 ```
@@ -1949,8 +1981,14 @@ already; `_` matches anything; a literal compares. A tuple needs the
 exact arity: `(a, b) = pair` matches a list of two elements and fails
 the match otherwise. An object pattern binds the fields it names and
 ignores the rest: `{ host, port } = conn` matches `{host: "db", port:
-5432, user: "app"}`, and an object without `port` does not match.
-Patterns nest: `(i, (n, x)) in pairs`, `(env, { cidr: c }) in nets`.
+5432, user: "app"}`, and an object without `port` does not match. Its
+last entry may be `..name`, which binds the rest (R-199): the object
+without the keys the pattern names, `{ metadata: m, ..body } = doc`, and
+`{ ..body, metadata: m2 }` puts it back together, the spread and the rest
+being one notation. `..` alone is an error, since a pattern ignores what
+it does not name already, and so is `..` in a tuple: a tuple matches a
+list of exactly its arity. Patterns nest: `(i, (n, x)) in pairs`, `(env,
+{ cidr: c }) in nets`.
 
 - After `in`, a tuple is `(key, value)` of an object or `(index,
   element)` of a list: `(k, v) in labels` once per label, `(i, x) in xs`
@@ -2331,6 +2369,8 @@ as it is.
 | `(k, v) in e`                             | `member(e', K, V)`: an object's keys, a list's indexes |
 | `(a, b) = e`                              | `[A, B] = e'`: a list of exactly two                   |
 | `{ a, b: p } = e`                         | `O = e', A = __path(O, "a"), P = __path(O, "b")`       |
+| `{ a, ..r } = e`                          | `O = e', A = __path(O, "a"), R = __rest(O, "a")`       |
+| `{ ..b, k: t }`, `[..xs, t]`              | `__merge(b', {k: t'})`, `__concat(xs', [t'])`; folded when every part is written, a discrete range's members when its ends are known |
 | `zone({ name })` (columns `name, index`)  | `zone{name: Name}`, a record pattern                   |
 | `i in lo..hi`, `i in lo..=hi`             | `member(lo'..hi', i)`, `member(lo'..=hi', i)`, the range a value when its ends are known, else `__range(lo', hi', inclusive)` |
 | `x not in e`, `not x in T`                | `not member(e', x)`, `not want(T, x)`                  |
