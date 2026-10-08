@@ -1370,34 +1370,20 @@ pub fn build_lowered(
     schema: &Schema,
     opts: &Options,
 ) -> Graph {
-    let mut nodes: BTreeSet<Node> = BTreeSet::new();
-    let mut edges: Vec<Edge> = Vec::new();
-
-    // Definition nodes: every head, every fact's predicate, every aggregate
-    // node behind a contribution, and the prelude's computed contributions.
-    let split = &opts.split;
-    let mut defs: BTreeSet<Node> = BTreeSet::new();
-    for a in fact_atoms {
-        if let Some((arg, _)) = contrib_node(a) {
-            let arg = addressed(arg, a, &[], split);
-            defs.insert(aggregate_of(&arg));
-            defs.insert(arg);
-        } else {
-            defs.insert(addressed(head_node(a), a, &[], split));
-        }
-    }
-    // A rule's head node; a rule that takes its head's address from a read
-    // of its own type, split by address (`arg(T, A, ..) :- want(T, A)`),
-    // has one per address it reads, and runs at each ([`address_source`]).
-    let sources: Vec<Option<usize>> = rules.iter().map(|r| address_source(r, split)).collect();
-    let mut heads: Vec<Vec<Node>> = vec![Vec::new(); rules.len()];
-    for (i, r) in rules.iter().enumerate() {
-        if sources[i].is_none() {
-            let h = addressed(head_of(r), &r.head, &r.body, split);
-            define(&mut defs, &h);
-            heads[i].push(h);
-        }
-    }
+    let mut b = Builder {
+        sources: rules
+            .iter()
+            .map(|r| address_source(r, &opts.split))
+            .collect(),
+        heads: vec![Vec::new(); rules.len()],
+        read: vec![Vec::new(); rules.len()],
+        rules,
+        opts,
+        defs: BTreeSet::new(),
+        nodes: BTreeSet::new(),
+        edges: Vec::new(),
+    };
+    b.facts(fact_atoms);
     // The prelude's and the copies' nodes, to a fixpoint: a copy may read
     // what another copy or the prelude defines.
     let minted: Vec<(String, String)> = transform::minted_paths(schema)
@@ -1407,101 +1393,18 @@ pub fn build_lowered(
             (t, p)
         })
         .collect();
-    loop {
-        let before = defs.len();
-        for (t, p) in minted.iter().filter(|(t, _)| split.contains(t)) {
-            for addr in want_addrs(&defs, t) {
-                define(&mut defs, &prelude_arg(t, p, addr));
-            }
-        }
-        for (i, r) in rules.iter().enumerate() {
-            let Some(at) = sources[i] else { continue };
-            let pat = source_pattern(r, at, split);
-            let head = head_of(r);
-            let found: BTreeSet<Option<Addr>> =
-                unifying(&defs, &pat).map(|d| d.addr.clone()).collect();
-            for addr in found {
-                let h = Node {
-                    addr,
-                    ..head.clone()
-                };
-                if !heads[i].contains(&h) {
-                    define(&mut defs, &h);
-                    heads[i].push(h);
-                }
-            }
-        }
-        if defs.len() == before {
-            break;
-        }
-    }
-    for (i, r) in rules.iter().enumerate() {
-        if heads[i].is_empty() {
-            let h = head_of(r);
-            define(&mut defs, &h);
-            heads[i].push(h);
-        }
-    }
-    // Prelude: (arg, T, P) :- (want, T) per minted schema row (computed and
-    // optional_computed, E §2.5); expanded per row, P normalized. A type
-    // partitioned by address has it per address its `want` is defined at.
-    let mut prelude: Vec<(Node, Node)> = Vec::new();
-    for (t, p) in &minted {
-        let addrs = match split.contains(t) {
-            true => want_addrs(&defs, t),
-            false => vec![None],
-        };
-        for addr in addrs {
-            let arg = prelude_arg(t, p, addr.clone());
-            let want = Node {
-                pred: "want".into(),
-                typ: Some(t.clone()),
-                path: None,
-                addr,
-            };
-            define(&mut defs, &arg);
-            defs.insert(want.clone());
-            prelude.push((want, arg));
-        }
-    }
+    b.heads(&minted);
+    let prelude = b.prelude(&minted);
     // stuck/4 is a relation when a rule reads it: a node the evaluator
     // defines.
-    let stuck_read = rules.iter().any(reads_stuck);
+    let stuck_read = b.rules.iter().any(reads_stuck);
     if stuck_read {
-        defs.insert(Node::plain(STUCK));
+        b.defs.insert(Node::plain(STUCK));
     }
-    nodes.extend(defs.iter().cloned());
-
-    // Aggregate edges: every (arg, T, P) definition feeds every (attr, T', P')
-    // definition it unifies with, negatively.
-    let args: Vec<Node> = unifying(&defs, &Node::plain("arg")).cloned().collect();
-    for a in &args {
-        let a_as_attr = aggregate_of(a);
-        // The base is every contribution but the element writes.
-        let base = (!a
-            .path
-            .as_ref()
-            .is_some_and(|p| p.ends_with(transform::ELEM)))
-        .then(|| Node {
-            pred: transform::ATTR_BASE.into(),
-            ..a_as_attr.clone()
-        });
-        let targets: Vec<Node> = unifying(&defs, &a_as_attr)
-            .chain(base.iter().flat_map(|b| unifying(&defs, b)))
-            .cloned()
-            .collect();
-        for t in &targets {
-            edges.push(Edge {
-                from: a.clone(),
-                to: t.clone(),
-                negative: true,
-                rule: None,
-                why: "attribute aggregate (lub_ranked)".into(),
-            });
-        }
-    }
+    b.nodes.extend(b.defs.iter().cloned());
+    let args = b.aggregate_edges();
     for (want, arg) in prelude {
-        edges.push(Edge {
+        b.edges.push(Edge {
             from: want,
             to: arg,
             negative: false,
@@ -1509,95 +1412,262 @@ pub fn build_lowered(
             why: "prelude: computed attribute null".into(),
         });
     }
+    b.rule_edges();
+    if stuck_read {
+        b.stuck_edges(args);
+    }
+    b.into_graph()
+}
 
-    // Rule edges. `read`: the nodes each rule's body reads.
-    let mut read: Vec<Vec<Node>> = vec![Vec::new(); rules.len()];
-    for (i, r) in rules.iter().enumerate() {
-        let agg_head = is_aggregate_head(&r.head);
-        for (k, lit) in r.body.iter().enumerate() {
-            let (atom, negated) = match lit {
-                Lit::Pos(a) => (a, false),
-                Lit::Not(a) => (a, true),
-                _ => continue,
-            };
-            if is_builtin_or_edb(&atom.pred) {
-                continue;
-            }
-            let pat = addressed(body_pattern(atom), atom, &r.body, split);
-            let reads_aggregate = pat.pred == "attr" || pat.pred == transform::ATTR_BASE;
-            let is_extern = opts.externs.contains(&atom.pred);
-            let negative = negated || agg_head || reads_aggregate || is_extern;
-            let why = if negated {
-                "not"
-            } else if agg_head {
-                "aggregate head"
-            } else if reads_aggregate {
-                "reads attr (aggregate)"
-            } else if is_extern {
-                "extern"
+/// A partition graph as it is built: its definition nodes, its edges, and
+/// each rule's heads, read sources and the nodes its body reads.
+struct Builder<'a> {
+    rules: Vec<RuleStmt>,
+    opts: &'a Options,
+    /// Definition nodes: every head, every fact's predicate, every
+    /// aggregate node behind a contribution, and the prelude's computed
+    /// contributions.
+    defs: BTreeSet<Node>,
+    nodes: BTreeSet<Node>,
+    edges: Vec<Edge>,
+    /// The nodes each rule defines.
+    heads: Vec<Vec<Node>>,
+    /// The read each rule takes its head's address from, by its index in
+    /// the body ([`address_source`]).
+    sources: Vec<Option<usize>>,
+    /// The nodes each rule's body reads.
+    read: Vec<Vec<Node>>,
+}
+
+impl Builder<'_> {
+    fn into_graph(self) -> Graph {
+        Graph {
+            nodes: self.nodes,
+            edges: self.edges,
+            rules: self.rules,
+            heads: self.heads,
+            split: self.opts.split.clone(),
+        }
+    }
+
+    /// The definition nodes of the facts.
+    fn facts(&mut self, fact_atoms: &[Atom]) {
+        let split = &self.opts.split;
+        for a in fact_atoms {
+            if let Some((arg, _)) = contrib_node(a) {
+                let arg = addressed(arg, a, &[], split);
+                self.defs.insert(aggregate_of(&arg));
+                self.defs.insert(arg);
             } else {
-                "positive"
-            };
-            // Connect from every definition node the pattern unifies with,
-            // to every head; the read a head takes its address from, to
-            // the head at that address.
-            let mut matched = false;
-            for d in unifying(&defs, &pat) {
-                matched = true;
-                read[i].push(d.clone());
-                for head in &heads[i] {
-                    if sources[i] == Some(k) && head.addr != d.addr {
-                        continue;
-                    }
-                    edges.push(Edge {
-                        from: d.clone(),
-                        to: head.clone(),
-                        negative,
-                        rule: Some(i),
-                        why: why.into(),
-                    });
+                self.defs.insert(addressed(head_node(a), a, &[], split));
+            }
+        }
+    }
+
+    /// Each rule's head nodes; a rule that takes its head's address from a
+    /// read of its own type, split by address (`arg(T, A, ..) :- want(T,
+    /// A)`), has one per address it reads, and runs at each
+    /// ([`address_source`]). The copies to a fixpoint, with the prelude's
+    /// `minted` nodes.
+    fn heads(&mut self, minted: &[(String, String)]) {
+        let split = &self.opts.split;
+        for (i, r) in self.rules.iter().enumerate() {
+            if self.sources[i].is_none() {
+                let h = addressed(head_of(r), &r.head, &r.body, split);
+                define(&mut self.defs, &h);
+                self.heads[i].push(h);
+            }
+        }
+        loop {
+            let before = self.defs.len();
+            for (t, p) in minted.iter().filter(|(t, _)| split.contains(t)) {
+                for addr in want_addrs(&self.defs, t) {
+                    define(&mut self.defs, &prelude_arg(t, p, addr));
                 }
             }
-            if !matched {
-                // Undefined predicate (or EDB with no facts): a node with no
-                // definition. E makes this a compile error; we record it as a
-                // plain node so the graph still stratifies.
-                nodes.insert(pat.clone());
-                read[i].push(pat.clone());
-                for head in &heads[i] {
-                    edges.push(Edge {
-                        from: pat.clone(),
-                        to: head.clone(),
-                        negative,
-                        rule: Some(i),
-                        why: format!("{why} (undefined)"),
-                    });
+            for (i, r) in self.rules.iter().enumerate() {
+                let Some(at) = self.sources[i] else { continue };
+                let pat = source_pattern(r, at, split);
+                let head = head_of(r);
+                let found: BTreeSet<Option<Addr>> =
+                    unifying(&self.defs, &pat).map(|d| d.addr.clone()).collect();
+                for addr in found {
+                    let h = Node {
+                        addr,
+                        ..head.clone()
+                    };
+                    if !self.heads[i].contains(&h) {
+                        define(&mut self.defs, &h);
+                        self.heads[i].push(h);
+                    }
+                }
+            }
+            if self.defs.len() == before {
+                break;
+            }
+        }
+        for (i, r) in self.rules.iter().enumerate() {
+            if self.heads[i].is_empty() {
+                let h = head_of(r);
+                define(&mut self.defs, &h);
+                self.heads[i].push(h);
+            }
+        }
+    }
+
+    /// Prelude: (arg, T, P) :- (want, T) per minted schema row (computed
+    /// and optional_computed, E §2.5); expanded per row, P normalized. A
+    /// type partitioned by address has it per address its `want` is
+    /// defined at. Each (want, arg) pair.
+    fn prelude(&mut self, minted: &[(String, String)]) -> Vec<(Node, Node)> {
+        let split = &self.opts.split;
+        let mut prelude: Vec<(Node, Node)> = Vec::new();
+        for (t, p) in minted {
+            let addrs = match split.contains(t) {
+                true => want_addrs(&self.defs, t),
+                false => vec![None],
+            };
+            for addr in addrs {
+                let arg = prelude_arg(t, p, addr.clone());
+                let want = Node {
+                    pred: "want".into(),
+                    typ: Some(t.clone()),
+                    path: None,
+                    addr,
+                };
+                define(&mut self.defs, &arg);
+                self.defs.insert(want.clone());
+                prelude.push((want, arg));
+            }
+        }
+        prelude
+    }
+
+    /// Aggregate edges: every (arg, T, P) definition feeds every (attr, T',
+    /// P') definition it unifies with, negatively. The arg nodes.
+    fn aggregate_edges(&mut self) -> Vec<Node> {
+        let args: Vec<Node> = unifying(&self.defs, &Node::plain("arg")).cloned().collect();
+        for a in &args {
+            let a_as_attr = aggregate_of(a);
+            // The base is every contribution but the element writes.
+            let base = (!a
+                .path
+                .as_ref()
+                .is_some_and(|p| p.ends_with(transform::ELEM)))
+            .then(|| Node {
+                pred: transform::ATTR_BASE.into(),
+                ..a_as_attr.clone()
+            });
+            let targets: Vec<Node> = unifying(&self.defs, &a_as_attr)
+                .chain(base.iter().flat_map(|b| unifying(&self.defs, b)))
+                .cloned()
+                .collect();
+            for t in &targets {
+                self.edges.push(Edge {
+                    from: a.clone(),
+                    to: t.clone(),
+                    negative: true,
+                    rule: None,
+                    why: "attribute aggregate (lub_ranked)".into(),
+                });
+            }
+        }
+        args
+    }
+
+    /// Rule edges: from every definition node a body's literal unifies
+    /// with, to every head of its rule.
+    fn rule_edges(&mut self) {
+        let (opts, split) = (self.opts, &self.opts.split);
+        for (i, r) in self.rules.iter().enumerate() {
+            let agg_head = is_aggregate_head(&r.head);
+            for (k, lit) in r.body.iter().enumerate() {
+                let (atom, negated) = match lit {
+                    Lit::Pos(a) => (a, false),
+                    Lit::Not(a) => (a, true),
+                    _ => continue,
+                };
+                if is_builtin_or_edb(&atom.pred) {
+                    continue;
+                }
+                let pat = addressed(body_pattern(atom), atom, &r.body, split);
+                let reads_aggregate = pat.pred == "attr" || pat.pred == transform::ATTR_BASE;
+                let is_extern = opts.externs.contains(&atom.pred);
+                let negative = negated || agg_head || reads_aggregate || is_extern;
+                let why = if negated {
+                    "not"
+                } else if agg_head {
+                    "aggregate head"
+                } else if reads_aggregate {
+                    "reads attr (aggregate)"
+                } else if is_extern {
+                    "extern"
+                } else {
+                    "positive"
+                };
+                // Connect from every definition node the pattern unifies with,
+                // to every head; the read a head takes its address from, to
+                // the head at that address.
+                let mut matched = false;
+                for d in unifying(&self.defs, &pat) {
+                    matched = true;
+                    self.read[i].push(d.clone());
+                    for head in &self.heads[i] {
+                        if self.sources[i] == Some(k) && head.addr != d.addr {
+                            continue;
+                        }
+                        self.edges.push(Edge {
+                            from: d.clone(),
+                            to: head.clone(),
+                            negative,
+                            rule: Some(i),
+                            why: why.into(),
+                        });
+                    }
+                }
+                if !matched {
+                    // Undefined predicate (or EDB with no facts): a node with no
+                    // definition. E makes this a compile error; we record it as a
+                    // plain node so the graph still stratifies.
+                    self.nodes.insert(pat.clone());
+                    self.read[i].push(pat.clone());
+                    for head in &self.heads[i] {
+                        self.edges.push(Edge {
+                            from: pat.clone(),
+                            to: head.clone(),
+                            negative,
+                            rule: Some(i),
+                            why: format!("{why} (undefined)"),
+                        });
+                    }
                 }
             }
         }
     }
 
-    // stuck/4 is derived above every rule that can stick: its instances
-    // are those of the rule's stuck companion, which reads the rule's body
-    // (E §2.7), so an edge from every node such a body reads; and above
-    // every contribution partition, whose groups the aggregate can leave
-    // stuck. Negative: a reader sees every instance. A reader whose head
-    // feeds a rule that can stick is on a negative cycle, an error.
-    if stuck_read {
+    /// stuck/4 is derived above every rule that can stick: its instances
+    /// are those of the rule's stuck companion, which reads the rule's body
+    /// (E §2.7), so an edge from every node such a body reads; and above
+    /// every contribution partition (`args`), whose groups the aggregate
+    /// can leave stuck. Negative: a reader sees every instance. A reader
+    /// whose head feeds a rule that can stick is on a negative cycle, an
+    /// error.
+    fn stuck_edges(&mut self, args: Vec<Node>) {
         let stuck = Node::plain(STUCK);
-        let aggregates: BTreeSet<String> = rules
+        let aggregates: BTreeSet<String> = self
+            .rules
             .iter()
             .filter(|r| is_aggregate_head(&r.head))
             .map(|r| r.head.pred.clone())
             .chain(["attr".to_string(), transform::ATTR_BASE.to_string()])
             .collect();
-        for (i, r) in rules.iter().enumerate() {
+        for (i, r) in self.rules.iter().enumerate() {
             if !crate::stuck::can_stick(&r.head, &r.body, &aggregates) {
                 continue;
             }
-            let from: BTreeSet<&Node> = read[i].iter().collect();
+            let from: BTreeSet<&Node> = self.read[i].iter().collect();
             for d in from {
-                edges.push(Edge {
+                self.edges.push(Edge {
                     from: d.clone(),
                     to: stuck.clone(),
                     negative: true,
@@ -1607,7 +1677,7 @@ pub fn build_lowered(
             }
         }
         for a in args {
-            edges.push(Edge {
+            self.edges.push(Edge {
                 from: a,
                 to: stuck.clone(),
                 negative: true,
@@ -1615,14 +1685,6 @@ pub fn build_lowered(
                 why: "attribute aggregate can stick (stuck/4)".into(),
             });
         }
-    }
-
-    Graph {
-        nodes,
-        edges,
-        rules,
-        heads,
-        split: split.clone(),
     }
 }
 
