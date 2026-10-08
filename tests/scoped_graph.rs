@@ -219,3 +219,31 @@ fn a_scopes_output_read_from_its_copies_outputs_is_no_cycle() {
         r.stdout
     );
 }
+
+/// A copy by name given an output of a copy a clause names: inside the
+/// clause's copies their own input is theirs (`k3s.agent-*`, read off
+/// the copy's gate), never the named copy's, so the server's `hostname`
+/// from `agent-0`'s `ip` is no cycle through its own.
+#[test]
+fn a_named_copy_given_a_clause_copys_output_is_no_cycle() {
+    let s = Scratch::project("scoped-gate");
+    s.write(
+        "k3s.df",
+        r#"component node {
+  input hostname: string
+  output ip: string = "ip-${hostname}"
+  resource db.postgres db { name = hostname }
+}
+resource node "agent-${i}" { hostname = "a${i}" } where i in 0..2
+resource node server { hostname = "s-${node["agent-0"].ip}" }
+"#,
+    );
+    s.write("main.df", "use fake\nuse k3s\n");
+    let r = s.run(&["plan", "--why=none", "main.df"]).success();
+    assert_eq!(
+        values(&r.stdout, "name"),
+        ["\"a0\"", "\"a1\"", "\"s-ip-a0\""],
+        "{}",
+        r.stdout
+    );
+}
