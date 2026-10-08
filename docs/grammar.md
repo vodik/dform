@@ -808,7 +808,9 @@ output     := "output" NAME (":" type)? ("=" term)? ("where" body)?
             | "output" NAME                        ; a relation exported (R-55)
 ofields    := "{" (ofield SEP)* "}"
 ofield     := NAME (":" type)? "=" term | NAME ":" ofields
-let        := "let" NAME (":" type)? "=" term RANK? ("where" body)?
+let        := "let" NAME params? (":" type)? "=" term RANK? ("where" body)?
+params     := "(" param ("," param)* ")"          ; a let with parameters (R-187)
+param      := NAME (":" type)? ("=" term)?
 set        := "set" chain ("=" | "+=") term RANK? ("where" body)?
             | "set" "{" (chain ("=" | "+=") term RANK? SEP)* "}" RANK? ("where" body)?
             | "set" "from" term selector? RANK? ("where" body)?   ; a document's leaves (R-38)
@@ -931,6 +933,41 @@ and a bare name two resources share is the one of type `T`. Every row of
 a typed `let` declares the same `T`. The type is the column of `k`'s
 reads (R-34), so hover and the inferred signatures show it; `let k = t`
 stays untyped.
+
+`let f(a, b) = t [where B]` is a let with parameters (R-187): the
+relation `f(a, b, v)` with the mode `(+, +, -)`, every column but the
+last bound by whoever reads it, as a provider's table's `+` columns are
+("Functions"). It lowers to the rule `f(A, B, V) :- B, V = t`; a call
+`f(x, y)` in a term is a variable bound through the relation where the
+call stands, as `f(x).p` reads a call's result (R-71); `f(x, y, v)` after
+`where` is the same read. Its arguments must be bound: one the body does
+not bind is R-10's error ("`q` is unbound in this call of `f`"), and `in`
+over `f` is an error, as is `f` uncalled, since nothing enumerates a
+relation whose inputs are its reader's. It is pure: a read of a data
+source in it (`io.read`, a provider's table, `env.var`, the clock) is an
+error at the read naming the let. A parameter's type is inferred from
+its uses as a relation's column is (R-34), or written, `let
+restic(tag: string, mounts: list(object)) = ..`, its argument read as
+that type; a parameter may have a default, a constant, and a call names
+its arguments as a std function's call does (R-155): `cidr(1)`,
+`cidr(b: 3, a: 2)`. Each call is answered where it is written, its rows
+its own (`why 'f(a, b, v)'` prints them `(in call at FILE:LINE:COL)`,
+under the let's rule), so a call stratifies where its site does. A let
+with parameters takes no rank: its rows are a relation's, not a cell's.
+Several declarations of one take the same parameters, and are its rules.
+
+It generalizes the let, the std function and the provider's table to
+one kind of relation with a mode. It was not extended to:
+
+- `fn`: a second keyword would be a second kind of thing; it is a let.
+- Recursion: a let that calls itself, directly or through another, is
+  refused naming the calls. A call is answered once its arguments are
+  known, and a call of itself waits on its own answer; what recursion
+  computes over data is a rule over a relation's rows.
+- Effects: a let is the program's answer, which is pure; a read is the
+  host's or a provider's, a coeffect the plan file records.
+- Pattern parameters (`let f((a, b)) = ..`): a parameter is a column, and
+  a pattern in a column is the body's to write, `where (a, b) = p`.
 
 `output k: T = t [where B]` is one statement (H-7): the type is optional (an
 untyped output is `any`), the value is not ("Inputs and outputs").
@@ -2226,14 +2263,27 @@ file records what each resolved to (a commit, a digest, a row), so
 capability list a review reads. `random.*` are pure: a value is derived
 from its key, not drawn.
 
+Every relation has a mode and an answerer, and there are three
+answerers: the program (its facts, rules and lets, a let with parameters
+among them), the host (the std functions, `io.read`), and a provider (its
+tables, `ovh.zone(+name, -id, -nameservers)`, and a type's objects). A
+relation's `+` columns are bound by the literal that reads it and its
+`-` columns are its answer, whoever answers: the same syntax, the same
+binding order (R-10), the same `why` and the same strata. The host's and
+a provider's answers are coeffects, recorded in the plan file and stood
+in for under `dform test`; the program's are pure, so a let with
+parameters (`let f(a, b) = t`, "Statements") is a function written in
+the program.
+
 Polymorphism lives in operators and fields, never in functions. An
 operator is a fixed piece of syntax over every type that has it; a
 type's parts are its fields (`u.host`, `n.bits`, `r.tag`, `xs.len`);
 and a function is monomorphic, named by its package, the type it is
 about, its subject first (`str.split(s, ",")`, `inet.subnet(n, 4,
-i)`). No bare name is a function: there is no prelude, and a call of
-one is `unknown function`, with the name meant (`len(x)` is `x.len`,
-`format` is `str.format`, `split` is `str.split`).
+i)`). No bare name is a std function: there is no prelude, and a call
+of one no let with parameters in scope declares is `unknown function`,
+with the name meant (`len(x)` is `x.len`, `format` is `str.format`,
+`split` is `str.split`).
 
 | operator | types |
 |----------|-------|
@@ -2386,6 +2436,8 @@ as it is.
 | `p(a: x)` (columns `a, b`)                | `p{a: x}`, a record pattern                            |
 | `let k = t [@r] [where B]`                | `arg("let", S, "k", t', r) :- B, reads` (`r` normal by default, `S` the scope); `k(V) :- attr("let", S, "k", V)` once per `k` |
 | `let k = R` (`R` a reference)             | the cell holds `R`'s key; `k.p` reads through it       |
+| `let f(a, b) = t where B`                 | `f(A, B, t') :- f?(A, B), B, reads`, the mode `(+, +, -)` |
+| `f(x, y)` (`f` a let with parameters)     | `V`, reading `f(x', y', V)`: per call site `S`, `S::f?(x', y') :- the body before it` and `S::f`, the rule's copy, read there |
 | `type a = T`                              | nothing: each use of `a` is `T`                        |
 | `#\| k: v` above an item (Doc comments)  | `doc(Kind, Name, "k", "v")`                            |
 | `use p { k = t, expect_account = a }` | `provider_config("p", {k: t'}) :- reads`, `provider_expect_account("p", a') :- reads` ("Providers") |
