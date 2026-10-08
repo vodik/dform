@@ -2058,7 +2058,7 @@ mod tests {
     /// (and a bare name of one resolves to none); every function in a
     /// package named by its subject's type (or the format of the text a
     /// decoder reads), its subject first; each function `pure` (a body)
-    /// or a `coeffect` (a read, no body), `io.read` the one coeffect of
+    /// or a `coeffect` (a read, no body), `io.read` and `oci.resolve` the coeffects of
     /// std, `random.*` pure given their key.
     #[test]
     fn std_has_no_bare_function_and_a_package_per_subject() {
@@ -2140,7 +2140,7 @@ mod tests {
             .filter(|f| f.coeffect)
             .map(|f| f.name.as_str())
             .collect();
-        assert_eq!(coeffects, ["io.read"]);
+        assert_eq!(coeffects, ["io.read", "oci.resolve"]);
         assert!(
             r.functions()
                 .filter(|f| f.package == "random")

@@ -1362,6 +1362,7 @@ impl Located {
         let externs = {
             let (no_program, no_fns) = (Program::default(), vec![]);
             let (tables, backend) = (tables.clone(), backend.clone());
+            let files = files.clone();
             Externs::new(
                 lowered.map_or(&no_program, |l| &l.program),
                 lowered.map_or(&no_fns, |l| &l.extern_fns),
@@ -1373,6 +1374,9 @@ impl Located {
                         return r;
                     }
                     if let Some(r) = externs::time(f) {
+                        return r;
+                    }
+                    if let Some(r) = crate::files::oci::answer(f, inputs, &files) {
                         return r;
                     }
                     if let Some(r) = memos.answer(f, inputs) {

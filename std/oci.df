@@ -22,3 +22,7 @@ fn with_digest(reference: oci, digest: string) -> oci forwards
 #| The reference with its registry set (`docker.io`, the default, is left out of its text); an error for a `registry` that is not `host[:port]`.
 #| example: let mirrored = oci.with_registry(image, "registry.internal:5000")
 fn with_registry(reference: oci, registry: string) -> oci forwards
+
+#| The reference with its tag pinned to the digest its registry names now: a read of the registry at plan (a coeffect), recorded in the plan file so the apply applies what the plan resolved; the next plan resolves again, and a tag that moved is an update; a reference with a digest is itself. Offline, the digest last resolved on this machine, else "not yet".
+#| example: image: oci.resolve(oci.with_tag("ghcr.io/element-hq/synapse", release))
+fn resolve(reference: oci) -> oci reads

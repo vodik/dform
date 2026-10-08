@@ -32,6 +32,7 @@
 //! `https://` or `s3://` object that is not there yet. The program's own
 //! (`file:`, `data:`, a repository's file) is there or is an error.
 
+pub mod oci;
 #[cfg(not(target_family = "wasm"))]
 pub mod ssh;
 

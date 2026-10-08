@@ -776,6 +776,17 @@ pub const BUILTINS: &[Builtin] = &[
         in_process: true,
         always: false,
     },
+    // An image reference's tag pinned to its digest at plan (R-132): a
+    // read of the registry, recorded in the plan file, never a function.
+    Builtin {
+        name: "oci",
+        externs: &[(
+            crate::files::oci::RESOLVE,
+            &[(true, "reference", "oci"), (false, "resolved", "oci")],
+        )],
+        in_process: true,
+        always: true,
+    },
     Builtin {
         name: "memo",
         externs: &[(

@@ -658,7 +658,9 @@ was. `oci.with_tag` sets the tag and drops a digest (it pinned the old
 tag's content), `oci.with_digest` sets the digest and keeps the tag,
 `oci.with_registry` moves it to another registry; each gives an `oci`,
 and none for a tag, digest or registry that is not one. `oci.pinned(r)`
-is `has r.digest`. Where a string is wanted, an attribute typed
+is `has r.digest`. `oci.resolve(r)` is a coeffect, a read of the registry:
+`r` with its tag pinned to the digest the registry names now, recorded in
+the plan file (docs/reference.md "Locations and transports"). Where a string is wanted, an attribute typed
 `string` (Kubernetes's `image`) or an interpolation, an `oci` is its
 text: `image: oci.with_tag(base, release)`. A `semver` is a value the
 same way (R-134): a version in Cargo's syntax, `1.2.3-rc.1`, written as
@@ -2122,7 +2124,7 @@ implement.
 | `random`  | `random.password(key[, length[, alphabet]])`, `random.base64(key, length)`, `random.signing_key(key)` (secrets); `random.id(key[, length])`, `random.uuid(key)` |
 | `regex`   | `regex.match(s, re)`, `regex.capture(s, re, n)`, `regex.replace(s, re, with)` (`re` a `regex`-typed pattern, checked at compile time, R-31) |
 | `semver`  | `semver.satisfies(v, range)`; `a < b`; fields `v.major`, `v.minor`, `v.patch`, `v.pre` |
-| `oci`     | `oci.pinned(r)`, `oci.with_tag(r, t)`, `oci.with_digest(r, d)`, `oci.with_registry(r, host)` (`r` an `oci`, the OCI distribution reference `[registry/]repository[:tag][@digest]`, a string read as one; its parts are fields, `r.digest`; "Types") |
+| `oci`     | `oci.pinned(r)`, `oci.with_tag(r, t)`, `oci.with_digest(r, d)`, `oci.with_registry(r, host)`, `oci.resolve(r)` (a coeffect: the tag pinned to its digest at plan) (`r` an `oci`, the OCI distribution reference `[registry/]repository[:tag][@digest]`, a string read as one; its parts are fields, `r.digest`; "Types") |
 | `hash`    | `hash.sha256(s)` (a short one is `str.slice(hash.sha256(s), 0, 8)`)       |
 | `base64`  | `base64.encode(s)`, `base64.decode(s)`                                    |
 | `uri`     | `uri.join(u, segment)`, `uri.with_scheme(u, s)`, `uri.with_user(u, n)`, `uri.with_password(u, p)`, `uri.with_host(u, h)`, `uri.with_port(u, p)`, `uri.with_path(u, p)`, `uri.with_query(u, q)`, `uri.with_fragment(u, f)`, `uri.escape(s)`; fields `u.scheme`, `u.user`, `u.password`, `u.host`, `u.port`, `u.path`, `u.query`, `u.fragment` |

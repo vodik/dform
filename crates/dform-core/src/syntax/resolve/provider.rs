@@ -28,8 +28,13 @@ use super::*;
 pub const ENV_VAR: &str = "env.var";
 
 /// The term calls of a built-in extern, its last column read: `env.var(N)`,
-/// `time.now()`, `memo.first(K, C)`.
-const TERM_CALLS: [&str; 3] = [ENV_VAR, crate::externs::TIME_NOW, crate::memo::FIRST];
+/// `time.now()`, `memo.first(K, C)`, `oci.resolve(R)`.
+const TERM_CALLS: [&str; 4] = [
+    ENV_VAR,
+    crate::externs::TIME_NOW,
+    crate::memo::FIRST,
+    crate::files::oci::RESOLVE,
+];
 
 /// A provider's `use` block's setting that is checked, not sent.
 const EXPECT_ACCOUNT: &str = "expect_account";
@@ -302,6 +307,7 @@ impl Lowerer<'_> {
         let want = match name {
             ENV_VAR => "one argument: the variable's name",
             crate::externs::TIME_NOW => "no argument",
+            crate::files::oci::RESOLVE => "one argument: the image reference",
             _ => "two arguments: the key and the candidate",
         };
         let ins = self.decls.externs[name].len() - 1;

@@ -3278,6 +3278,27 @@ wait = "20m"
 credentials = { "ssh://51.79.*" = "ssh:k3s-admin", "https://git.example.com/*" = "bearer:git" }
 ```
 
+An image's tag is pinned the same way (R-132): `oci.resolve(r)` asks the
+registry for the digest the tag names now (a registry v2 `HEAD` of its
+manifest, `Docker-Content-Digest`, an index's for a multi-platform
+image), through dform's HTTP client, at plan: `image:
+oci.resolve(oci.with_tag("ghcr.io/element-hq/synapse", release))` is
+`ghcr.io/element-hq/synapse:v1.139.0@sha256:..` in the plan, and the plan
+file records the answer, so `apply PLAN` applies what plan resolved; the
+next plan resolves again, and a tag that moved is an update of what reads
+it, so a bump is one edit to `release`. A public image's registry token
+is fetched anonymously (ghcr.io, docker.io, quay.io, codeberg.org); a
+private one's with the credential `[io] credentials` names for
+`oci://REGISTRY/REPOSITORY` (`"oci://ghcr.io/acme/*" = "basic:ghcr"`). A
+registry on the loopback (`localhost:5000`) is spoken to in the clear, as
+Docker does. A tag the registry does not have yet is "not yet", and so is
+a registry that cannot be reached, unless this machine resolved the tag
+before: the digest it last resolved (kept in
+`$XDG_CACHE_HOME/dform/oci/`) stands in. A reference with a digest is
+itself; `oci.with_digest` stays for a digest in hand. A policy that asks
+for a digest (`deny .. where not oci.pinned(c.image)`) holds on the
+resolved value.
+
 So a location never holds a secret: one built from it (`io.read(
 "https://x.example/${pw}")`) is E0306 at compile time, because its host
 and path go to DNS and the server at plan, before any review, and print
@@ -4211,7 +4232,7 @@ share: the time spent in the mock's calls.
 This is an MVP:
 
 - semi-naive evaluator with hash indexes (see Performance)
-- functions declared in `std/*.df` (docs/grammar.md "Functions"): none bare (R-155); `inet.subnet`, `inet.host`, `inet.overlaps`, `int.range`, `int.trunc`, `int.round`, `int.floor`, `int.ceil`, `quantity.to`, `secret.declassify`, `ip.unspecified`, `str.format`, `str.split`, `str.lower`, `str.upper`, `str.dedent`, `str.trim`, `str.replace`, `str.starts_with`, `str.ends_with`, `str.pad_left`, `str.pad_right`, `str.slice`, `list.join`, `list.sort`, `list.sort_by`, `list.unique`, `list.flatten`, `list.zip`, `list.min`, `list.max`, `list.sum`, `list.first`, `list.last`, `time.format`, `time.in_zone`, `random.password`, `random.base64`, `random.id`, `random.uuid`, `random.signing_key`, `regex.match`, `regex.capture`, `regex.replace`, `semver.satisfies`, `oci.pinned`, `oci.with_tag`, `oci.with_digest`, `oci.with_registry`, `hash.sha256`, `base64.encode`, `base64.decode`, `uri.join`, `uri.with_scheme`, `uri.with_user`, `uri.with_password`, `uri.with_host`, `uri.with_port`, `uri.with_path`, `uri.with_query`, `uri.with_fragment`, `uri.escape`, `path.join`, `path.dir`, `path.base`, `path.ext`, `path.rel`, `path.clean`, `json.decode`, `json.encode`, `yaml.decode`, `yaml.encode`, `toml.decode`, `toml.encode`, `csv.decode`, `csv.encode`; the one read, `io.read` (a coeffect); operators `in`, `+ - * / %`, `< <= > >=`, `==` and the field `x.len` (docs/grammar.md "Functions"); aggregates `collect_*`, `count`, `sum`, `min`, `max`, `any`, `all`, bound in a body (`n = count(x)`)
+- functions declared in `std/*.df` (docs/grammar.md "Functions"): none bare (R-155); `inet.subnet`, `inet.host`, `inet.overlaps`, `int.range`, `int.trunc`, `int.round`, `int.floor`, `int.ceil`, `quantity.to`, `secret.declassify`, `ip.unspecified`, `str.format`, `str.split`, `str.lower`, `str.upper`, `str.dedent`, `str.trim`, `str.replace`, `str.starts_with`, `str.ends_with`, `str.pad_left`, `str.pad_right`, `str.slice`, `list.join`, `list.sort`, `list.sort_by`, `list.unique`, `list.flatten`, `list.zip`, `list.min`, `list.max`, `list.sum`, `list.first`, `list.last`, `time.format`, `time.in_zone`, `random.password`, `random.base64`, `random.id`, `random.uuid`, `random.signing_key`, `regex.match`, `regex.capture`, `regex.replace`, `semver.satisfies`, `oci.pinned`, `oci.with_tag`, `oci.with_digest`, `oci.with_registry`, `hash.sha256`, `base64.encode`, `base64.decode`, `uri.join`, `uri.with_scheme`, `uri.with_user`, `uri.with_password`, `uri.with_host`, `uri.with_port`, `uri.with_path`, `uri.with_query`, `uri.with_fragment`, `uri.escape`, `path.join`, `path.dir`, `path.base`, `path.ext`, `path.rel`, `path.clean`, `json.decode`, `json.encode`, `yaml.decode`, `yaml.encode`, `toml.decode`, `toml.encode`, `csv.decode`, `csv.encode`; the one read, `io.read`, and `oci.resolve`, a tag pinned to its digest (the coeffects); operators `in`, `+ - * / %`, `< <= > >=`, `==` and the field `x.len` (docs/grammar.md "Functions"); aggregates `collect_*`, `count`, `sum`, `min`, `max`, `any`, `all`, bound in a body (`n = count(x)`)
 - list helper predicate: `member(List, Item)` and `member(List, Index, Item)` (Index starts at 0)
 - safe(ish) negation: `not` requires the atom be ground at evaluation time
 
