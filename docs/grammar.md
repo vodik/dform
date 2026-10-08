@@ -1868,6 +1868,16 @@ any provider is asked (R-194, R-119's form), while a read of a value
 not known yet (a computed attribute, or a resource whose clause waits on
 one) is an unknown the plan carries until the tick that makes it.
 
+An unknown is the top of what a value could be, and the ticks refine it
+downward: a value not known yet unifies with anything, so a clause over
+it neither holds nor fails, and the tick that reads the world replaces
+it with what the world answered (CUE's top, `_`, refined). That is
+why `later` lists what waits and what on, why `has` over it is
+undetermined rather than false, and why `not { .. }` waits only on what
+its body reads: a negation over what the program wrote is decided now,
+though the object it reads holds an unknown elsewhere (R-193), and `why`
+says a comparison over the unknown is not known yet, never false.
+
 A call of a function whose result is optional (`T?`: `regex.capture`
 of a text the pattern does not match, `list.first` of an empty list)
 has no value where it answers none: in a clause the literal fails, as
