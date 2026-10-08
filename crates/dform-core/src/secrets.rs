@@ -962,7 +962,7 @@ impl<'a> Checker<'a> {
                                 "{} is asked with `{}` as it is: pass a public value, {}",
                                 f.name,
                                 b.name,
-                                declassified(&secret_var(t, &vars))
+                                declassified(&secret_var(t, vars))
                             ),
                         ),
                     };
@@ -1018,14 +1018,14 @@ impl<'a> Checker<'a> {
             Lit::Neq(x, y) | Lit::Gt(x, y) | Lit::Ge(x, y) | Lit::Lt(x, y) | Lit::Le(x, y)
                 if !refinement && (secret(x) || secret(y)) =>
             {
-                let fix = pass.inspect_fix(lowered, body, &vars, &[x, y]);
+                let fix = pass.inspect_fix(lowered, body, vars, &[x, y]);
                 diags.push(e0301(*span, "a comparison", fix));
             }
             Lit::Eq(x, y) if !refinement => {
                 // `X = f(Secret)`: a function that inspects it.
                 for t in [x, y] {
                     if let Some(f) = inspecting(t, &|t| secret(t)) {
-                        diags.push(call_e0301(*span, &f, t, &vars));
+                        diags.push(call_e0301(*span, &f, t, vars));
                     }
                 }
                 if secret(x) || secret(y) {
@@ -1035,7 +1035,7 @@ impl<'a> Checker<'a> {
                     let mut both = BTreeSet::new();
                     term_vars(x, &mut both);
                     term_vars(y, &mut both);
-                    let fix = || pass.inspect_fix(lowered, body, &vars, &[x, y]);
+                    let fix = || pass.inspect_fix(lowered, body, vars, &[x, y]);
                     if both.is_subset(&bound) {
                         diags.push(e0301(*span, "an equality test", fix()));
                     } else if definedness(x, y) {
@@ -1048,7 +1048,7 @@ impl<'a> Checker<'a> {
             Lit::Pos(a) if !refinement && is_builtin_pred(&a.pred) => {
                 if a.args.iter().any(&secret) {
                     let args: Vec<&Term> = a.args.iter().collect();
-                    let fix = pass.inspect_fix(lowered, body, &vars, &args);
+                    let fix = pass.inspect_fix(lowered, body, vars, &args);
                     diags.push(e0301(a.span, &format!("{}/{}", a.pred, a.args.len()), fix));
                 }
             }
@@ -1095,7 +1095,7 @@ impl<'a> Checker<'a> {
         if !bound_secret {
             return None;
         }
-        let x = a.args.iter().find_map(|t| secret_var(t, &vars));
+        let x = a.args.iter().find_map(|t| secret_var(t, vars));
         let fix = match (&x, input_of(lowered, a)) {
             (_, Some(d)) => format!(
                 "whether input `{k}` is given is a bit of it: give it a \
@@ -1143,7 +1143,7 @@ impl<'a> Checker<'a> {
             {
                 let x = args
                     .iter()
-                    .find_map(|t| secret_var(t, &vars))
+                    .find_map(|t| secret_var(t, vars))
                     .unwrap_or_else(|| "x".into());
                 diags.push(
                     Diagnostic::error(
@@ -1159,7 +1159,7 @@ impl<'a> Checker<'a> {
             if let Some(f) = inspecting(t, &|t| secret(t))
                 && !COLLECT.contains(&f.as_str())
             {
-                diags.push(call_e0301(h.span, &f, t, &vars));
+                diags.push(call_e0301(h.span, &f, t, vars));
             }
         }
         self.diags.extend(diags);
@@ -1175,7 +1175,7 @@ impl<'a> Checker<'a> {
         if addr.is_some_and(named) || h.args.iter().any(|t| names_secret(t, &|t| secret(t))) {
             // The secret as a relation of the body gives it, by its name.
             let x = body.iter().find_map(|l| match l {
-                Lit::Pos(a) => a.args.iter().find_map(|t| secret_var(t, &vars)),
+                Lit::Pos(a) => a.args.iter().find_map(|t| secret_var(t, vars)),
                 _ => None,
             });
             diags.push(
@@ -1204,7 +1204,7 @@ impl<'a> Checker<'a> {
         match (h.pred.as_str(), h.args.len()) {
             ("arg", 5)
                 if let Some(leak) =
-                    pass.public_leaf(&h.args[0], &h.args[1], &h.args[2], &h.args[3], &vars) =>
+                    pass.public_leaf(&h.args[0], &h.args[1], &h.args[2], &h.args[3], vars) =>
             {
                 diags.push(self.public_arg(h, &leak));
             }
@@ -1244,7 +1244,7 @@ impl<'a> Checker<'a> {
                 }
             }
             ("deny" | "warn", _) if !refinement && h.args.iter().any(secret) => {
-                let x = h.args.iter().find_map(|t| secret_var(t, &vars));
+                let x = h.args.iter().find_map(|t| secret_var(t, vars));
                 diags.push(
                     Diagnostic::error(
                         h.span,

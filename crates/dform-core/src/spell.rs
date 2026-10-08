@@ -193,7 +193,7 @@ impl<'a> Written<'a> {
             let addr = Written::attribute(t.clone(), n.clone(), p);
             return match v {
                 Term::Val(v) => format!("{addr} = {}", self.redact.surface(v)),
-                _ => addr.to_string(),
+                _ => addr,
             };
         }
         let args: Vec<String> = a.args.iter().map(|t| self.term(t)).collect();

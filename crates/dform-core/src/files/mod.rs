@@ -591,7 +591,7 @@ impl Files {
         let r = crate::http::send(
             crate::plugin::host::HttpRequest {
                 method: "GET".into(),
-                url: url.clone(),
+                url,
                 ..Default::default()
             },
             cred.as_ref(),

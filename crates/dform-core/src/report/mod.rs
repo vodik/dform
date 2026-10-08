@@ -3575,12 +3575,9 @@ impl Report {
 /// condition, and (at `full`) the reason; the condition alone last.
 fn both(full: bool, at: String, cond: String, reason: &str) -> Vec<String> {
     let mut out = Vec::new();
-    for cond in [
-        full.then(|| format!("{cond}  ({reason})")),
-        Some(cond.clone()),
-    ]
-    .into_iter()
-    .flatten()
+    for cond in [full.then(|| format!("{cond}  ({reason})")), Some(cond)]
+        .into_iter()
+        .flatten()
     {
         if !at.is_empty() {
             out.push(format!("{at}  {cond}"));

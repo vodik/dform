@@ -85,7 +85,7 @@ impl Target {
         let port = u.port.unwrap_or(22);
         let label = match u.port {
             Some(p) => format!("{host}:{p}"),
-            None => host.clone(),
+            None => host,
         };
         let user = u
             .user

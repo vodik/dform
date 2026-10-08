@@ -105,7 +105,7 @@ fn bracketed(open: &str, close: &str, pad: &'static str, items: Vec<Doc>) -> Doc
 static ORDERS: std::sync::Mutex<Vec<Vec<String>>> = std::sync::Mutex::new(Vec::new());
 
 /// Remember that a program writes the fields `keys` in this order.
-pub fn remember(keys: Vec<String>) {
+pub fn remember(keys: &[String]) {
     if keys.len() < 2 {
         return;
     }
@@ -295,7 +295,7 @@ mod tests {
     /// by key.
     #[test]
     fn fields_print_in_the_order_written() {
-        remember(vec!["zz_labels".into(), "zz_name".into()]);
+        remember(&["zz_labels".into(), "zz_name".into()]);
         let t = Tree::Obj(vec![
             ("zz_name".into(), leaf("\"a\"")),
             ("zz_labels".into(), Tree::Obj(vec![])),

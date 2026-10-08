@@ -1259,18 +1259,12 @@ impl Resolving<'_> {
         let fresh = load_record(store)?;
         if fresh.as_ref().is_none_or(|(r, _)| r.public != public) {
             let (r, cond) = match fresh {
-                Some((r, etag)) => (
-                    Record {
-                        public: public.clone(),
-                        ..r
-                    },
-                    Cond::IfMatch(etag),
-                ),
+                Some((r, etag)) => (Record { public, ..r }, Cond::IfMatch(etag)),
                 None => (
                     Record {
                         version: 1,
                         id: key_id(k),
-                        public: public.clone(),
+                        public,
                         passphrase: None,
                         age: None,
                         epoch: 1,

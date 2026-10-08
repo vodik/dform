@@ -1114,13 +1114,13 @@ impl Decls {
         let s = Some(s.to_string());
         let key = (s.clone(), x.to_string());
         let found = if self.defined.contains(&key) || call {
-            Some(Symbol::Predicate(s.clone(), x.to_string()))
+            Some(Symbol::Predicate(s, x.to_string()))
         } else if self.outputs.contains(&key) {
-            Some(Symbol::Output(s.clone(), x.to_string()))
+            Some(Symbol::Output(s, x.to_string()))
         } else if self.lets.contains(&key) {
-            Some(Symbol::Let(s.clone(), x.to_string()))
+            Some(Symbol::Let(s, x.to_string()))
         } else if self.values.contains(&key) {
-            Some(Symbol::Value(s.clone(), x.to_string()))
+            Some(Symbol::Value(s, x.to_string()))
         } else if let Some(ts) = self.resources.get(&key) {
             return self.pick_first(
                 ts.iter()

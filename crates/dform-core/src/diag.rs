@@ -249,7 +249,7 @@ impl Diagnostic {
                 self.message
             ))
             .with_label(Label::new((name.clone(), range(self.span))).with_message(&self.message));
-        let mut sources = vec![(name.clone(), text.clone())];
+        let mut sources = vec![(name, text.clone())];
         for (s, m) in &self.labels {
             if let Some((n, t)) = source(s.file) {
                 if !sources.iter().any(|(x, _)| *x == n) {

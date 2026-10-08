@@ -496,7 +496,7 @@ fn stack_source(
                 let file = diag::add_source(&name, &text);
                 let sources = diag::pin_since(mark);
                 if let Some((_, _, _, old)) =
-                    cache.insert(path.clone(), (name.clone(), text.clone(), file, sources))
+                    cache.insert(path.clone(), (name, text.clone(), file, sources))
                 {
                     diag::remove(&old);
                 }
@@ -585,8 +585,8 @@ fn load_unit(
                 if let Some(old) = cache.insert(
                     abs.to_path_buf(),
                     Parsed {
-                        name: name.clone(),
-                        text: text.clone(),
+                        name,
+                        text,
                         green: parse.green.clone(),
                         file,
                         sources,

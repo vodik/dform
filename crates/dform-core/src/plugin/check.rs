@@ -785,13 +785,13 @@ impl Suite<'_> {
         // Apply UPDATE keeps the identity.
         r.check(
             "Apply UPDATE changes the object in place",
-            apply(conn, pb::Op::Update, typ, &remote, Some(renamed), vec![])
+            apply(conn, pb::Op::Update, typ, remote, Some(renamed), vec![])
                 .map_err(anyhow::Error::new)
                 .and_then(|resp| {
                     ensure(resp.remote == remote, || {
                         format!("remote {} is not {remote}", resp.remote)
                     })?;
-                    let (attrs, computed) = read(conn, typ, &remote)?
+                    let (attrs, computed) = read(conn, typ, remote)?
                         .ok_or_else(|| anyhow::anyhow!("gone after update"))?;
                     self.seen(&attrs, &computed, renamed)
                 }),
@@ -811,12 +811,12 @@ impl Suite<'_> {
                     conn,
                     pb::Op::Update,
                     typ,
-                    &remote,
+                    remote,
                     Some(doc),
                     vec![assertion("len_ge", json!(64))],
                 ) {
                     Ok(_) => Err(anyhow::anyhow!("applied despite a failing assertion")),
-                    Err(CallError::Refused(_)) => read(conn, typ, &remote).and_then(|o| {
+                    Err(CallError::Refused(_)) => read(conn, typ, remote).and_then(|o| {
                         let (attrs, _) = o.ok_or_else(|| anyhow::anyhow!("gone"))?;
                         ensure(&attrs == renamed, || format!("attrs changed to {attrs}"))
                     }),
@@ -829,7 +829,7 @@ impl Suite<'_> {
                     conn,
                     pb::Op::Update,
                     typ,
-                    &remote,
+                    remote,
                     Some(renamed),
                     vec![
                         assertion("len_ge", json!(4)),

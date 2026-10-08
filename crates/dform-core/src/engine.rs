@@ -1763,7 +1763,7 @@ fn collapse_group(
             refinement,
             shadowed,
         } => {
-            cell.violated(at, constraint, value, &ws, &refinement);
+            cell.violated(at, &constraint, value, &ws, &refinement);
             shadowed
         }
         Collapsed::Stuck {
@@ -1922,7 +1922,7 @@ impl Collapse<'_> {
     fn violated(
         &mut self,
         at: String,
-        constraint: crate::lattice::Constraint,
+        constraint: &crate::lattice::Constraint,
         value: Value,
         ws: &Witnesses,
         refinement: &Witnesses,

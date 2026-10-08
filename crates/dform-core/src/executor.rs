@@ -601,7 +601,7 @@ pub fn resolve_uncertain(
                         state.depose(&addr);
                     }
                     let provider = cloud.provider_of(&addr.typ).to_string();
-                    state.set(addr.clone(), provider, remote.clone());
+                    state.set(&addr, provider, remote.clone());
                     done(state, &k);
                     out.push(format!(
                         "{at}: the {} whose answer was lost made {remote}; state maps it",

@@ -1638,7 +1638,7 @@ fn log_retries(
     for r in backend.take_retries() {
         audit.append(
             "retry",
-            crate::audit::retry(tick, &r, redact.text(&r.error)),
+            crate::audit::retry(tick, &r, &redact.text(&r.error)),
         )?;
     }
     Ok(())

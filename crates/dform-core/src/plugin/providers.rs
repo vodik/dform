@@ -3246,7 +3246,7 @@ impl Tick<'_> {
                     key(&addr.typ, &resp.remote),
                     Providers::object(resp.attrs.as_ref(), resp.computed.as_ref())?,
                 );
-                state.set(addr.clone(), provider.clone(), resp.remote.clone());
+                state.set(addr, provider.clone(), resp.remote.clone());
                 self.record_written(addr, state);
             }
             ActionKind::Update | ActionKind::Drift => {

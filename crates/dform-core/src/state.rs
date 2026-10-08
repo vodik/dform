@@ -296,10 +296,10 @@ impl State {
         self.resources.get(&key(addr))
     }
 
-    pub fn set(&mut self, addr: Address, provider: String, remote: String) {
-        let deps = self.get(&addr).map(|e| e.deps.clone()).unwrap_or_default();
+    pub fn set(&mut self, addr: &Address, provider: String, remote: String) {
+        let deps = self.get(addr).map(|e| e.deps.clone()).unwrap_or_default();
         self.resources.insert(
-            key(&addr),
+            key(addr),
             StateEntry {
                 provider,
                 remote,

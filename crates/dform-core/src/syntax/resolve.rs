@@ -178,7 +178,7 @@ fn field_orders(root: &SyntaxNode) {
     for n in root.descendants() {
         match n.kind() {
             OBJECT => {
-                let keys = n
+                let keys: Vec<String> = n
                     .children()
                     .filter(|c| c.kind() == OBJECT_FIELD)
                     .filter_map(|f| tokens(&f).next())
@@ -187,7 +187,7 @@ fn field_orders(root: &SyntaxNode) {
                         _ => k.text().to_string(),
                     })
                     .collect();
-                crate::fmt::value::remember(keys);
+                crate::fmt::value::remember(&keys);
             }
             BLOCK => {
                 let mut under: Vec<(Vec<String>, Vec<String>)> = Vec::new();
@@ -210,7 +210,7 @@ fn field_orders(root: &SyntaxNode) {
                     }
                 }
                 for (_, ks) in under {
-                    crate::fmt::value::remember(ks);
+                    crate::fmt::value::remember(&ks);
                 }
             }
             _ => {}
@@ -4780,7 +4780,7 @@ impl<'u> Lowerer<'u> {
                 let op = if head.pred == "arg" { "=" } else { "+=" };
                 let (t, p) = (s(0).unwrap(), s(2).unwrap());
                 let target = match t.as_str() {
-                    crate::modules::INPUT if s(1).as_deref() == Some("") => p.clone(),
+                    crate::modules::INPUT if s(1).as_deref() == Some("") => p,
                     crate::modules::INPUT => format!("{}.{p}", s(1).unwrap_or_default()),
                     _ => format!("{t}[{}]{}", a[1], crate::ir::path_suffix(&p)),
                 };
@@ -7406,15 +7406,7 @@ impl<'u> Lowerer<'u> {
                     && !segs.is_empty()
                 {
                     // A typed output: the address it holds, then a reference.
-                    let v = self.read_var(
-                        rc,
-                        "output",
-                        vec![inst.clone(), str_term(k)],
-                        2,
-                        k,
-                        pre,
-                        span,
-                    );
+                    let v = self.read_var(rc, "output", vec![inst, str_term(k)], 2, k, pre, span);
                     return Ok(Res::Ref {
                         typ: str_term(t),
                         addr: v,

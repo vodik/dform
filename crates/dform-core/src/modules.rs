@@ -1423,7 +1423,7 @@ fn input_reader(scope: &str, i: &InputDecl, pred: &dyn Fn(&str) -> String) -> Ve
     ))];
     body.extend(i.guard.iter().cloned());
     let mut out = vec![Stmt::Rule(RuleStmt {
-        head: atom(&pred(&i.name), vec![v.clone()], i.span),
+        head: atom(&pred(&i.name), vec![v], i.span),
         body,
     })];
     if !i.guard.is_empty() && i.default.is_none() && i.fields.is_empty() {

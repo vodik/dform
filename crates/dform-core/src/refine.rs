@@ -661,7 +661,7 @@ fn deny_rules(
     );
     let ctx = BTreeMap::from([
         ("type".to_string(), str_term(typ)),
-        ("addr".to_string(), addr.clone()),
+        ("addr".to_string(), addr),
         ("path".to_string(), str_term(path)),
         ("constraint".to_string(), str_term(&text)),
         ("value".to_string(), v.clone()),
@@ -669,7 +669,7 @@ fn deny_rules(
             "reason".to_string(),
             Term::Func {
                 name: crate::ir::FORMAT.into(),
-                args: vec![str_term(&format!("%s does not satisfy {text}")), v.clone()],
+                args: vec![str_term(&format!("%s does not satisfy {text}")), v],
             },
         ),
         (

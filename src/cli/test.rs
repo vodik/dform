@@ -58,7 +58,7 @@ impl Test {
             let mut pairs = pinned.clone();
             pairs.extend(combination.iter().cloned());
             let (result, lines) = space.result(&pairs);
-            matrix.push(&pairs, result, space.reproduce(&pairs), lines);
+            matrix.push(&pairs, result, &space.reproduce(&pairs), lines);
         }
         space.notes();
         let failed = matrix.print(&cli.table);
@@ -333,13 +333,7 @@ impl Matrix {
     }
 
     /// A combination's row, `command` the one that plans it.
-    fn push(
-        &mut self,
-        pairs: &[(String, Value)],
-        result: &str,
-        command: String,
-        lines: Vec<String>,
-    ) {
+    fn push(&mut self, pairs: &[(String, Value)], result: &str, command: &str, lines: Vec<String>) {
         let mut row: Vec<report::table::Cell> = self
             .columns
             .iter()

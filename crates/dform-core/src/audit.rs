@@ -430,7 +430,7 @@ pub fn error(entry: &mut Json, text: &str) {
 /// A `retry` entry's fields: a provider call that failed in a way worth
 /// trying again, sent again after `delay` (R-81). `error` is why the last
 /// attempt failed, as the caller redacts it.
-pub fn retry(tick: usize, r: &crate::plugin::link::Retry, error: String) -> Json {
+pub fn retry(tick: usize, r: &crate::plugin::link::Retry, error: &str) -> Json {
     let mut entry = serde_json::json!({
         "tick": tick,
         "provider": r.provider,
@@ -439,7 +439,7 @@ pub fn retry(tick: usize, r: &crate::plugin::link::Retry, error: String) -> Json
         "of": r.of,
         "delay_ms": r.delay.as_millis() as u64,
     });
-    self::error(&mut entry, &error);
+    self::error(&mut entry, error);
     entry
 }
 

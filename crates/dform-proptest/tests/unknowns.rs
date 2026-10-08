@@ -824,7 +824,7 @@ fn resolve(planned: &Planned, choices: &[u8]) -> (Json, State, BTreeMap<String, 
             format!("{}::{remote}", addr.typ),
             json!({"typ": addr.typ, "name": remote, "attrs": {}, "computed": doc}),
         );
-        state.set(addr, "fakecloud".into(), remote);
+        state.set(&addr, "fakecloud".into(), remote);
     }
     (json!({ "resources": world }), state, by_label)
 }

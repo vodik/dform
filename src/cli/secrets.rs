@@ -200,7 +200,7 @@ impl<'a, 'h> Inventory<'a, 'h> {
         std::fs::write(&tmp, given::text(&next)?)
             .and_then(|()| std::fs::rename(&tmp, path))
             .with_context(|| format!("write {}", read.shown))?;
-        self.log_given(name, read, &next, remove, who)
+        self.log_given(name, read, &next, remove, &who)
     }
 
     /// The file of given secrets `secrets set NAME` writes: the one the
@@ -274,7 +274,7 @@ impl<'a, 'h> Inventory<'a, 'h> {
         read: &crate::custody::given::Read,
         next: &crate::custody::given::File,
         remove: bool,
-        who: String,
+        who: &str,
     ) -> Result<()> {
         let (deployment, mixing) = (&self.run.cx.deployment, &self.run.cx.mixing);
         let generation = next.given(name).map(|g| g.generation);

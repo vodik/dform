@@ -151,7 +151,7 @@ impl Lowerer<'_> {
         if !clause.is_empty() {
             let i = others.iter().position(|o| o == n).unwrap_or_default();
             let group = format!("use {name}");
-            out.push(crate::modules::declared(&group, i, clause.clone(), span));
+            out.push(crate::modules::declared(&group, i, clause, span));
         }
         match others.first() {
             Some(first) if first != n => {
