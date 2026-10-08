@@ -154,7 +154,11 @@ impl Copies {
             let (Some(c), Some(user)) = (const_str(c), const_str(user)) else {
                 continue;
             };
-            let globs = addr_globs(name, &Text { body, copies: &none }, 4);
+            let text = Text {
+                body,
+                copies: &none,
+            };
+            let globs = addr_globs(name, &text, 4);
             let entry = out.0.entry((c, user)).or_insert_with(|| Some(Vec::new()));
             match (entry.as_mut(), globs) {
                 (Some(all), Some(gs)) => all.extend(gs),
@@ -1595,10 +1599,7 @@ fn build_lowered(
     opts: &Options,
 ) -> Graph {
     let mut b = Builder {
-        sources: rules
-            .iter()
-            .map(|r| address_source(r, opts))
-            .collect(),
+        sources: rules.iter().map(|r| address_source(r, opts)).collect(),
         heads: vec![Vec::new(); rules.len()],
         read: vec![Vec::new(); rules.len()],
         rules,
@@ -2124,10 +2125,7 @@ pub fn report(name: &str, g: &Graph, v: &Verdict) -> String {
 pub fn cycle_error(g: &Graph, scc: &BTreeSet<Node>, negative_edges: &[Edge]) -> String {
     let mut out = format!(
         "program is not stratifiable: negative cycle through {}",
-        scc.iter()
-            .map(Node::spelled)
-            .collect::<Vec<_>>()
-            .join(", ")
+        scc.iter().map(Node::spelled).collect::<Vec<_>>().join(", ")
     );
     for e in negative_edges {
         let rule = match e.rule {

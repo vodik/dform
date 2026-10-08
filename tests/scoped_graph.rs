@@ -43,7 +43,11 @@ resource node "agent-${i}" { name = "${name}-${i}" } where i in 0..agents
     let r = s.run(&["plan", "--why=none", "main.df"]).success();
     assert_eq!(
         values(&r.stdout, "name"),
-        ["\"outer-0-server\"", "\"outer-1-server\"", "\"outer-s-server\""],
+        [
+            "\"outer-0-server\"",
+            "\"outer-1-server\"",
+            "\"outer-s-server\""
+        ],
         "{}",
         r.stdout
     );
@@ -155,7 +159,8 @@ use m { env, vpc }
     );
     let r = s.run(&["plan", "--why=none", "stacks/app.df"]).success();
     assert!(
-        r.stdout.contains("pending on ?provider fake  zone = platform[env].zone"),
+        r.stdout
+            .contains("pending on ?provider fake  zone = platform[env].zone"),
         "{}",
         r.stdout
     );
