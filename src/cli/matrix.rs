@@ -3,7 +3,11 @@
 //! deployment the project's apply made that it no longer lists is
 //! destroyed.
 
-use super::{Cli, Cmd, Dependency, Held, Outcome, Refused, Target};
+use super::apply::Apply;
+use super::args::Target;
+use super::plan::Plan;
+use super::test::Test;
+use super::{Cli, Cmd, Dependency, Held, Outcome, Refused};
 use crate::matrix::{Kept, Made, Matrix};
 use crate::report;
 use anyhow::{Result, bail};
@@ -20,7 +24,7 @@ pub(super) fn target(
     let module = match (&t.target, t.keys.is_empty()) {
         (None, true) => {
             let module = project.and_then(|p| crate::matrix::module_at(&p.root));
-            if let Cmd::Apply { destroy: true, .. } = cmd {
+            if cmd.destroys() && matches!(cmd, Cmd::Apply(_)) {
                 let listed = match &module {
                     Some(m) => match Matrix::load(m) {
                         Ok(m) if !m.listed.is_empty() => {
@@ -55,23 +59,23 @@ pub(super) fn target(
         None => crate::project::PROJECT_MODULE.to_string(),
     };
     match cmd {
-        Cmd::Plan {
+        Cmd::Plan(Plan {
             json: false,
             out: None,
             destroy: false,
             ..
-        }
-        | Cmd::Apply {
+        })
+        | Cmd::Apply(Apply {
             plan_file: None,
             destroy: false,
             ..
-        }
-        | Cmd::Test => Ok(Some(module)),
-        Cmd::Apply { destroy: true, .. } => bail!(
+        })
+        | Cmd::Test(_) => Ok(Some(module)),
+        Cmd::Apply(Apply { destroy: true, .. }) => bail!(
             "destroy {shown}: a project module lists deployments; destroy removes one, named \
              (`dform destroy STACK K=V`)"
         ),
-        Cmd::Plan { .. } => bail!(
+        Cmd::Plan(_) => bail!(
             "plan {shown}: --json, --out and --destroy plan one deployment; name it (`dform \
              plan STACK K=V --json`)"
         ),
@@ -113,7 +117,7 @@ pub(super) fn run(cli: Cli, module: &Path) -> Result<Outcome> {
         };
         roots.push((file, l.key.clone()));
     }
-    let order = super::order_of(&roots)?;
+    let order = super::order::order_of(&roots)?;
     // What an apply of the module made that it lists no more: destroyed,
     // readers first.
     let mut gone = Vec::new();
@@ -135,7 +139,7 @@ pub(super) fn run(cli: Cli, module: &Path) -> Result<Outcome> {
             .iter()
             .map(|(_, f, k)| (f.clone(), k.clone()))
             .collect();
-        let mut order = super::order_of(&roots)?;
+        let mut order = super::order::order_of(&roots)?;
         order.retain(|d| gone.iter().any(|(n, _, _)| *n == d.name));
         order.reverse();
         order
@@ -179,9 +183,9 @@ pub(super) fn run(cli: Cli, module: &Path) -> Result<Outcome> {
         dep
     };
     match &cli.cmd {
-        Cmd::Plan { .. } => plan(&cli, &label, &order, &removed, &of),
-        Cmd::Apply { .. } => apply(&cli, &label, &order, &removed, &of),
-        Cmd::Test => test(&cli, &label, &order, &of),
+        Cmd::Plan(_) => plan(&cli, &label, &order, &removed, &of),
+        Cmd::Apply(_) => apply(&cli, &label, &order, &removed, &of),
+        Cmd::Test(_) => test(&cli, &label, &order, &of),
         _ => bail!("internal: a project module runs plan, apply and test"),
     }
 }
@@ -224,7 +228,7 @@ fn applied(cli: &Cli, name: &str) -> bool {
     let entries = crate::audit::Log::new(store, None)
         .entries()
         .unwrap_or_default();
-    !super::destroyed(&entries)
+    !super::stack::destroyed(&entries)
 }
 
 /// The project's plan: a `stacks:` line per deployment with its state,
@@ -236,23 +240,13 @@ fn plan(
     removed: &[Dependency],
     of: &For,
 ) -> Result<Outcome> {
-    let Cmd::Plan {
-        out,
-        json,
-        why,
-        new_master,
-        ..
-    } = &cli.cmd
-    else {
+    let Cmd::Plan(p) = &cli.cmd else {
         bail!("internal: a plan");
     };
-    let destroy = Cmd::Plan {
-        out: out.clone(),
-        json: *json,
+    let destroy = Cmd::Plan(Plan {
         destroy: true,
-        why: *why,
-        new_master: *new_master,
-    };
+        ..p.clone()
+    });
     struct Planned {
         name: String,
         state: String,
@@ -338,30 +332,16 @@ fn apply(
     removed: &[Dependency],
     of: &For,
 ) -> Result<Outcome> {
-    let Cmd::Apply {
-        chaos,
-        max_ticks,
-        parallel,
-        approval,
-        yes,
-        why,
-        ..
-    } = &cli.cmd
-    else {
+    let Cmd::Apply(a) = &cli.cmd else {
         bail!("internal: an apply");
     };
-    let destroy = Cmd::Apply {
+    let destroy = Cmd::Apply(Apply {
         plan_file: None,
-        chaos: chaos.clone(),
-        max_ticks: *max_ticks,
-        parallel: *parallel,
-        approval: approval.clone(),
-        yes: *yes,
         allow_empty: Vec::new(),
-        why: *why,
         destroy: true,
         new_master: false,
-    };
+        ..a.clone()
+    });
     let named: Vec<String> = order
         .iter()
         .map(|d| match d.root {
@@ -419,7 +399,7 @@ fn test(cli: &Cli, label: &str, order: &[Dependency], of: &For) -> Result<Outcom
     let mut failed = Vec::new();
     for d in &listed {
         head(cli, &d.name, "");
-        if let Err(e) = super::run(of(d, Cmd::Test), None) {
+        if let Err(e) = super::run(of(d, Cmd::Test(Test)), None) {
             say(cli, &e);
             failed.push(d.name.as_str());
         }
@@ -458,7 +438,7 @@ pub(super) fn listed(
                 _ => None,
             })
             .collect();
-        super::order_of(&roots)
+        super::order::order_of(&roots)
     });
     match listed {
         Ok(order) => out.extend(order.into_iter().filter(|d| d.root).map(|d| (d.name, true))),

@@ -289,14 +289,15 @@ pub fn parse_rfc3339(s: &str) -> Option<u64> {
     u64::try_from(days * 86_400 + hh * 3600 + mm * 60 + ss).ok()
 }
 
+/// A stack's approvals trust roots, loaded: each key set, and the issuer
+/// it is for.
+pub type Roots = Vec<(jsonwebtoken::jwk::JwkSet, Option<String>)>;
+
 /// The JWKS documents of `roots`, each with the issuer its JWTs must name.
 /// A URL's document is cached in `cache_dir` and fetched again (with
 /// `curl`) only when the cache is older than [`JWKS_MAX_AGE_SECS`]; a fetch
 /// that fails falls back to a stale cache with a warning.
-pub fn load_roots(
-    roots: &[TrustRoot],
-    cache_dir: &Path,
-) -> Result<Vec<(jsonwebtoken::jwk::JwkSet, Option<String>)>> {
+pub fn load_roots(roots: &[TrustRoot], cache_dir: &Path) -> Result<Roots> {
     let mut out = Vec::new();
     for r in roots {
         let text = match &r.jwks {

@@ -1,4 +1,13 @@
-use super::*;
+//! What a run is given besides its program: `--set` and `--data` read,
+//! a key input checked, and what a plan file records of them.
+
+use super::Cli;
+use crate::ast::{Atom, Term};
+use crate::value::Value;
+use crate::{deployment, zset};
+use anyhow::{Context, Result, bail};
+use std::collections::BTreeSet;
+use std::path::{Path, PathBuf};
 
 /// The environment variables `env_var` reads, by label (`env.var/NAME`),
 /// as a plan file records them: the label and the value's digest keyed

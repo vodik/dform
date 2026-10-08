@@ -1,4 +1,11 @@
-use super::*;
+//! The stacks `apply X` applies first: the deployments X reads, each
+//! before its readers (R-30, R-73).
+
+use super::{Cli, Cmd};
+use crate::deployment;
+use anyhow::{Result, bail};
+use std::collections::BTreeSet;
+use std::path::{Path, PathBuf};
 
 /// One deployment `apply` applies, of the stack in `file`, and the
 /// stack's inputs (not its key).
@@ -21,11 +28,11 @@ pub(super) struct Dependency {
 /// Empty when X reads none, and for a plan file, a world fixture or a
 /// program outside a project. A cycle is an error naming it.
 pub(super) fn apply_order(cli: &Cli) -> Result<Vec<Dependency>> {
-    let Cmd::Apply {
+    let Cmd::Apply(super::apply::Apply {
         plan_file: None,
         destroy: false,
         ..
-    } = &cli.cmd
+    }) = &cli.cmd
     else {
         return Ok(Vec::new());
     };

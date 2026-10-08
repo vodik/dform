@@ -1,4 +1,10 @@
-use super::*;
+//! Secret outputs sealed to the deployments that read them (R-166).
+
+use crate::ast::Atom;
+use crate::value::Value;
+use crate::{deployment, store};
+use anyhow::Result;
+use std::path::{Path, PathBuf};
 
 /// The deployments of the project that read `own`'s outputs (R-166): each
 /// registered one whose program reads it (by name, or by one it computes,

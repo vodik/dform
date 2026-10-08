@@ -1,4 +1,23 @@
-use super::*;
+//! The command line as typed (clap's definitions) and what `resolve` makes
+//! of it: one run, [`Cli`].
+
+use super::apply::Apply;
+use super::complete::{Complete, Completions};
+use super::controller_cmd::Controller;
+use super::dev::{Effects, Eval, Graph, Show, Strata};
+use super::explain::{Diff, Explain, Query, Why};
+use super::plan::Plan;
+use super::provider_cmd::{ProviderCheck, ProviderSchema};
+use super::secrets::Secrets;
+use super::source::{Doc, Fmt, Init};
+use super::stack::{Handover, Rekey, StackList};
+use super::state_cmd::{ForgetHost, Log, Output, StateMv, StateShow, Unlock};
+use super::test::Test;
+use super::{Cli, Cmd, Held, matrix};
+use crate::report;
+use anyhow::{Result, bail};
+use clap::{Parser, Subcommand};
+use std::path::{Path, PathBuf};
 
 /// The width of the terminal stdout is, if it is one.
 pub(super) fn terminal_width() -> Option<usize> {
@@ -681,353 +700,381 @@ pub(super) enum Shell {
     Fish,
 }
 
-/// The run the command line asks for: `-C` taken, the working project
-/// found, the target resolved to its program file and key.
-pub(super) fn resolve(args: Args) -> Result<Cli> {
-    if let Some(dir) = &args.dir {
-        std::env::set_current_dir(dir).map_err(|e| anyhow::anyhow!("-C {}: {e}", dir.display()))?;
-    }
-    let version = env!("CARGO_PKG_VERSION");
-    let project = crate::project::Project::find(Path::new("."), version)?;
-    let mut mock = Mock::default();
-    let (cmd, target): (Cmd, Option<Target>) = match args.cmd {
-        Command::Run(r) => run_cmd(r),
-        Command::Dev { mock: m, cmd } => {
-            mock = m;
-            match cmd {
-                DevCommand::Run(r) => run_cmd(r),
-                DevCommand::Strata { target } => (Cmd::Strata, Some(target)),
-                DevCommand::Effects { target, json } => (Cmd::Effects { json }, Some(target)),
-                DevCommand::Graph {
-                    target,
-                    strata,
-                    relation,
-                } => (
-                    Cmd::Graph {
-                        what: if strata {
-                            Some("strata".into())
-                        } else {
-                            relation
-                        },
-                    },
-                    Some(target),
-                ),
-                DevCommand::Eval { target } => (Cmd::Eval, Some(target)),
-                DevCommand::Show { addr, target } => (Cmd::Show { addr }, Some(target)),
-            }
+impl Args {
+    /// The run the command line asks for: `-C` taken, the working project
+    /// found, the target resolved to its program file and key.
+    pub(super) fn resolve(self) -> Result<Cli> {
+        let args = self;
+        if let Some(dir) = &args.dir {
+            std::env::set_current_dir(dir)
+                .map_err(|e| anyhow::anyhow!("-C {}: {e}", dir.display()))?;
         }
-        Command::Fmt { paths, check } => (Cmd::Fmt { paths, check }, None),
-        Command::Doc { target } => (Cmd::Doc, target.target.is_some().then_some(target)),
-        Command::Stack { cmd } => match cmd {
-            StackCommand::List => (Cmd::StackList, None),
-            StackCommand::Rekey { stack, pairs } => {
-                let target = Target {
-                    target: Some(stack.clone()),
-                    keys: vec![],
-                };
-                (Cmd::Rekey { stack, pairs }, Some(target))
+        let version = env!("CARGO_PKG_VERSION");
+        let project = crate::project::Project::find(Path::new("."), version)?;
+        let mut mock = Mock::default();
+        let (cmd, target): (Cmd, Option<Target>) = match args.cmd {
+            Command::Run(r) => {
+                let (cmd, target) = r.into();
+                (cmd, Some(target))
             }
-            StackCommand::Handover { stack, to } => (Cmd::Handover { stack, to }, None),
-            StackCommand::Unlock { target } => (Cmd::Unlock, Some(target)),
-        },
-        Command::Output { mut target, json } => {
-            // The output's NAME is the one word after the target that is
-            // not a key value.
-            let mut names: Vec<String> = Vec::new();
-            target.keys.retain(|k| {
-                let key = k.contains('=');
-                if !key {
-                    names.push(k.clone());
+            Command::Dev { mock: m, cmd } => {
+                mock = m;
+                match cmd {
+                    DevCommand::Run(r) => {
+                        let (cmd, target) = r.into();
+                        (cmd, Some(target))
+                    }
+                    DevCommand::Strata { target } => (Cmd::Strata(Strata), Some(target)),
+                    DevCommand::Effects { target, json } => {
+                        (Cmd::Effects(Effects { json }), Some(target))
+                    }
+                    DevCommand::Graph {
+                        target,
+                        strata,
+                        relation,
+                    } => (
+                        Cmd::Graph(Graph {
+                            what: if strata {
+                                Some("strata".into())
+                            } else {
+                                relation
+                            },
+                        }),
+                        Some(target),
+                    ),
+                    DevCommand::Eval { target } => (Cmd::Eval(Eval), Some(target)),
+                    DevCommand::Show { addr, target } => (Cmd::Show(Show { addr }), Some(target)),
                 }
-                key
-            });
-            if names.len() > 1 {
-                bail!("output: one NAME at most, got {}", names.join(" "));
             }
-            (
-                Cmd::Output {
-                    name: names.pop(),
-                    json,
-                },
-                Some(target),
-            )
+            Command::Fmt { paths, check } => (Cmd::Fmt(Fmt { paths, check }), None),
+            Command::Doc { target } => (Cmd::Doc(Doc), target.target.is_some().then_some(target)),
+            Command::Stack { cmd } => match cmd {
+                StackCommand::List => (Cmd::StackList(StackList), None),
+                StackCommand::Rekey { stack, pairs } => {
+                    let target = Target {
+                        target: Some(stack.clone()),
+                        keys: vec![],
+                    };
+                    (Cmd::Rekey(Rekey { stack, pairs }), Some(target))
+                }
+                StackCommand::Handover { stack, to } => {
+                    (Cmd::Handover(Handover { stack, to }), None)
+                }
+                StackCommand::Unlock { target } => (Cmd::Unlock(Unlock), Some(target)),
+            },
+            Command::Output { mut target, json } => {
+                // The output's NAME is the one word after the target that is
+                // not a key value.
+                let mut names: Vec<String> = Vec::new();
+                target.keys.retain(|k| {
+                    let key = k.contains('=');
+                    if !key {
+                        names.push(k.clone());
+                    }
+                    key
+                });
+                if names.len() > 1 {
+                    bail!("output: one NAME at most, got {}", names.join(" "));
+                }
+                (
+                    Cmd::Output(Output {
+                        name: names.pop(),
+                        json,
+                    }),
+                    Some(target),
+                )
+            }
+            Command::State { cmd } => match cmd {
+                StateCommand::Show {
+                    addr,
+                    from_log,
+                    target,
+                } => (Cmd::StateShow(StateShow { addr, from_log }), Some(target)),
+                StateCommand::ForgetHost { host, target } => {
+                    (Cmd::ForgetHost(ForgetHost { host }), Some(target))
+                }
+                StateCommand::Mv { from, to, target } => {
+                    (Cmd::StateMv(StateMv { from, to }), Some(target))
+                }
+            },
+            Command::Secrets { cmd } => match cmd {
+                SecretsCommand::List { target, json } => {
+                    (Cmd::Secrets(Secrets::List { json }), Some(target))
+                }
+                SecretsCommand::Rotate { words } => {
+                    let (target, key) = target_then(words);
+                    (Cmd::Secrets(Secrets::Rotate { key }), Some(target))
+                }
+                SecretsCommand::Cycle { target } => (Cmd::Secrets(Secrets::Cycle), Some(target)),
+                SecretsCommand::Set { words } => {
+                    let (target, name) = target_then(words);
+                    let remove = false;
+                    (Cmd::Secrets(Secrets::Set { name, remove }), Some(target))
+                }
+                SecretsCommand::Unset { words } => {
+                    let (target, name) = target_then(words);
+                    let remove = true;
+                    (Cmd::Secrets(Secrets::Set { name, remove }), Some(target))
+                }
+            },
+            Command::Provider { cmd } => match cmd {
+                ProviderCommand::Check { path } => {
+                    (Cmd::ProviderCheck(ProviderCheck { path }), None)
+                }
+                ProviderCommand::Schema { provider } => {
+                    (Cmd::ProviderSchema(ProviderSchema { provider }), None)
+                }
+            },
+            Command::Init { name } => (Cmd::Init(Init { name }), None),
+            Command::Completions { shell } => (Cmd::Completions(Completions { shell }), None),
+            Command::Complete { words } => (Cmd::Complete(Complete { words }), None),
+            Command::ServeProvider { .. } => {
+                bail!("internal: `__provider` serves before a project")
+            }
+            Command::Lsp => bail!("internal: `lsp` serves before a project"),
+            Command::Version => bail!("internal: `version` prints before a project"),
+        };
+        let inputs = args.inputs;
+        let mut cli = Cli {
+            cmd,
+            files: Vec::new(),
+            keys: Vec::new(),
+            user_set: inputs.set.clone(),
+            set: inputs.set,
+            input_files: inputs.input_files,
+            data: inputs.data,
+            show_noop: inputs.show_noop,
+            providers: mock.providers,
+            world: mock.world,
+            in_project: project.is_some(),
+            // Outside a project nothing writes the state root (`needs_project`).
+            root: project.as_ref().map_or_else(
+                || PathBuf::from(crate::project::STATE_DIR),
+                |p| p.state_root(),
+            ),
+            manifest: None,
+            inventory: mock.inventory,
+            audit_sink: inputs.audit_sink,
+            style: {
+                use std::io::IsTerminal;
+                inputs.color.style(std::io::stdout().is_terminal())
+            },
+            table: Default::default(),
+            every_stack: Vec::new(),
+            matrix: None,
+            held: Held::default(),
+        };
+        cli.table = report::table::Options {
+            width: terminal_width().unwrap_or(report::table::Options::PLAIN.width),
+            style: cli.style,
+        };
+        if let Cmd::Apply(Apply { chaos, .. }) = &mut cli.cmd {
+            *chaos = mock.chaos;
+        } else if !mock.chaos.is_empty() {
+            bail!("--chaos is for apply");
         }
-        Command::State { cmd } => match cmd {
-            StateCommand::Show {
-                addr,
-                from_log,
-                target,
-            } => (Cmd::StateShow { addr, from_log }, Some(target)),
-            StateCommand::ForgetHost { host, target } => (Cmd::ForgetHost { host }, Some(target)),
-            StateCommand::Mv { from, to, target } => (Cmd::StateMv { from, to }, Some(target)),
-        },
-        Command::Secrets { cmd } => match cmd {
-            SecretsCommand::List { target, json } => (Cmd::SecretsList { json }, Some(target)),
-            SecretsCommand::Rotate { words } => {
-                let (target, key) = target_then(words);
-                (Cmd::SecretsRotate { key }, Some(target))
+        // A plan file is `apply`'s target: its inputs name the program.
+        if let (
+            Cmd::Apply(Apply {
+                plan_file,
+                destroy: false,
+                ..
+            }),
+            Some(t),
+        ) = (&mut cli.cmd, &target)
+            && let Some(f) = t.target.as_deref().filter(|f| f.ends_with(".json"))
+        {
+            if !t.keys.is_empty() {
+                bail!("apply {f}: a plan file names its deployment; give no key values");
             }
-            SecretsCommand::Cycle { target } => (Cmd::SecretsCycle, Some(target)),
-            SecretsCommand::Set { words } => {
-                let (target, name) = target_then(words);
-                let remove = false;
-                (Cmd::SecretsSet { name, remove }, Some(target))
-            }
-            SecretsCommand::Unset { words } => {
-                let (target, name) = target_then(words);
-                let remove = true;
-                (Cmd::SecretsSet { name, remove }, Some(target))
-            }
-        },
-        Command::Provider { cmd } => match cmd {
-            ProviderCommand::Check { path } => (Cmd::ProviderCheck { path }, None),
-            ProviderCommand::Schema { provider } => (Cmd::ProviderSchema { provider }, None),
-        },
-        Command::Init { name } => (Cmd::Init { name }, None),
-        Command::Completions { shell } => (Cmd::Completions { shell }, None),
-        Command::Complete { words } => (Cmd::Complete { words }, None),
-        Command::ServeProvider { .. } => bail!("internal: `__provider` serves before a project"),
-        Command::Lsp => bail!("internal: `lsp` serves before a project"),
-        Command::Version => bail!("internal: `version` prints before a project"),
-    };
-    let inputs = args.inputs;
-    let mut cli = Cli {
-        cmd,
-        files: Vec::new(),
-        keys: Vec::new(),
-        user_set: inputs.set.clone(),
-        set: inputs.set,
-        input_files: inputs.input_files,
-        data: inputs.data,
-        show_noop: inputs.show_noop,
-        providers: mock.providers,
-        world: mock.world,
-        in_project: project.is_some(),
-        // Outside a project nothing writes the state root (`needs_project`).
-        root: project.as_ref().map_or_else(
-            || PathBuf::from(crate::project::STATE_DIR),
-            |p| p.state_root(),
-        ),
-        manifest: None,
-        inventory: mock.inventory,
-        audit_sink: inputs.audit_sink,
-        style: {
-            use std::io::IsTerminal;
-            inputs.color.style(std::io::stdout().is_terminal())
-        },
-        table: Default::default(),
-        every_stack: Vec::new(),
-        matrix: None,
-        held: Held::default(),
-    };
-    cli.table = report::table::Options {
-        width: terminal_width().unwrap_or(report::table::Options::PLAIN.width),
-        style: cli.style,
-    };
-    if let Cmd::Apply { chaos, .. } = &mut cli.cmd {
-        *chaos = mock.chaos;
-    } else if !mock.chaos.is_empty() {
-        bail!("--chaos is for apply");
-    }
-    // A plan file is `apply`'s target: its inputs name the program.
-    if let (
-        Cmd::Apply {
-            plan_file,
-            destroy: false,
-            ..
-        },
-        Some(t),
-    ) = (&mut cli.cmd, &target)
-        && let Some(f) = t.target.as_deref().filter(|f| f.ends_with(".json"))
-    {
-        if !t.keys.is_empty() {
-            bail!("apply {f}: a plan file names its deployment; give no key values");
-        }
-        *plan_file = Some(PathBuf::from(f));
-        return Ok(cli);
-    }
-    let Some(target) = target else {
-        return Ok(cli);
-    };
-    // The project module (R-114): with no target, the root's project.df;
-    // a target that is one.
-    if let Some(module) = matrix::target(&cli.cmd, project.as_ref(), &target)? {
-        cli.matrix = Some(module);
-        return Ok(cli);
-    }
-    // `apply` with no target applies the project: every stack under the
-    // working directory, in dependency order, each confirmed on its own.
-    if let (Cmd::Apply { destroy: false, .. }, None, true, Some(p)) = (
-        &cli.cmd,
-        &target.target,
-        target.keys.is_empty(),
-        project.as_ref(),
-    ) {
-        let d = crate::project::discover(p);
-        d.check()?;
-        let here: Vec<PathBuf> = d
-            .stacks
-            .iter()
-            .filter(|s| s.file.is_relative() && !s.file.starts_with(".."))
-            .map(|s| s.file.clone())
-            .collect();
-        if here.len() > 1 {
-            for w in &d.warnings {
-                eprintln!("warning: {w}");
-            }
-            cli.every_stack = here;
+            *plan_file = Some(PathBuf::from(f));
             return Ok(cli);
         }
+        let Some(target) = target else {
+            return Ok(cli);
+        };
+        // The project module (R-114): with no target, the root's project.df;
+        // a target that is one.
+        if let Some(module) = matrix::target(&cli.cmd, project.as_ref(), &target)? {
+            cli.matrix = Some(module);
+            return Ok(cli);
+        }
+        // `apply` with no target applies the project: every stack under the
+        // working directory, in dependency order, each confirmed on its own.
+        if let (Cmd::Apply(Apply { destroy: false, .. }), None, true, Some(p)) = (
+            &cli.cmd,
+            &target.target,
+            target.keys.is_empty(),
+            project.as_ref(),
+        ) {
+            let d = crate::project::discover(p);
+            d.check()?;
+            let here: Vec<PathBuf> = d
+                .stacks
+                .iter()
+                .filter(|s| s.file.is_relative() && !s.file.starts_with(".."))
+                .map(|s| s.file.clone())
+                .collect();
+            if here.len() > 1 {
+                for w in &d.warnings {
+                    eprintln!("warning: {w}");
+                }
+                cli.every_stack = here;
+                return Ok(cli);
+            }
+        }
+        let (file, keys) = target_of(project.as_ref(), &target)?;
+        cli.set.extend(keys.iter().map(|(k, v)| format!("{k}={v}")));
+        cli.keys = keys;
+        cli.files = vec![file];
+        Ok(cli)
     }
-    let (file, keys) = target_of(project.as_ref(), &target)?;
-    cli.set.extend(keys.iter().map(|(k, v)| format!("{k}={v}")));
-    cli.keys = keys;
-    cli.files = vec![file];
-    Ok(cli)
 }
 
 /// A command that runs on a target, and the target.
-pub(super) fn run_cmd(r: Run) -> (Cmd, Option<Target>) {
-    match r {
-        Run::Plan {
-            target,
-            out,
-            json,
-            destroy,
-            new_master,
-            why,
-        } => (
-            Cmd::Plan {
+impl From<Run> for (Cmd, Target) {
+    fn from(r: Run) -> (Cmd, Target) {
+        match r {
+            Run::Plan {
+                target,
                 out,
                 json,
                 destroy,
-                why: why.level(),
                 new_master,
-            },
-            Some(target),
-        ),
-        Run::Apply {
-            target,
-            max_ticks,
-            parallel,
-            approval,
-            yes,
-            allow_empty,
-            new_master,
-            why,
-        } => (
-            Cmd::Apply {
-                plan_file: None,
-                chaos: Vec::new(),
+                why,
+            } => (
+                Cmd::Plan(Plan {
+                    out,
+                    json,
+                    destroy,
+                    why: why.level(),
+                    new_master,
+                }),
+                target,
+            ),
+            Run::Apply {
+                target,
                 max_ticks,
                 parallel,
                 approval,
                 yes,
                 allow_empty,
-                why: why.level(),
-                destroy: false,
                 new_master,
-            },
-            Some(target),
-        ),
-        Run::Destroy {
-            target,
-            max_ticks,
-            parallel,
-            approval,
-            yes,
-            why,
-        } => (
-            Cmd::Apply {
-                plan_file: None,
-                chaos: Vec::new(),
+                why,
+            } => (
+                Cmd::Apply(Apply {
+                    plan_file: None,
+                    chaos: Vec::new(),
+                    max_ticks,
+                    parallel,
+                    approval,
+                    yes,
+                    allow_empty,
+                    why: why.level(),
+                    destroy: false,
+                    new_master,
+                }),
+                target,
+            ),
+            Run::Destroy {
+                target,
                 max_ticks,
                 parallel,
                 approval,
                 yes,
-                allow_empty: Vec::new(),
-                why: why.level(),
-                destroy: true,
-                new_master: false,
-            },
-            Some(target),
-        ),
-        Run::Why {
-            pattern,
-            target,
-            tree,
-            all,
-            core,
-            verbose,
-            json,
-        } => (
-            Cmd::Why {
+                why,
+            } => (
+                Cmd::Apply(Apply {
+                    plan_file: None,
+                    chaos: Vec::new(),
+                    max_ticks,
+                    parallel,
+                    approval,
+                    yes,
+                    allow_empty: Vec::new(),
+                    why: why.level(),
+                    destroy: true,
+                    new_master: false,
+                }),
+                target,
+            ),
+            Run::Why {
                 pattern,
+                target,
                 tree,
                 all,
                 core,
-                whole: verbose >= 2,
+                verbose,
                 json,
-            },
-            Some(target),
-        ),
-        Run::Query {
-            pattern,
-            target,
-            json,
-        } => (Cmd::Query { pattern, json }, Some(target)),
-        Run::Diff {
-            target,
-            since,
-            json,
-            why,
-        } => (
-            Cmd::Diff {
+            } => (
+                Cmd::Why(Why {
+                    pattern,
+                    tree,
+                    all,
+                    core,
+                    whole: verbose >= 2,
+                    json,
+                }),
+                target,
+            ),
+            Run::Query {
+                pattern,
+                target,
+                json,
+            } => (Cmd::Query(Query { pattern, json }), target),
+            Run::Diff {
+                target,
                 since,
                 json,
-                why: why.level(),
-            },
-            Some(target),
-        ),
-        Run::Explain { target, addresses } => (Cmd::Explain { addresses }, Some(target)),
-        Run::Test { target } => (Cmd::Test, Some(target)),
-        Run::Log {
-            cmd,
-            target,
-            since,
-            json,
-        } => {
-            let (verify, target) = match cmd {
-                Some(LogCommand::Verify { target }) => (true, target),
-                None => (false, target),
-            };
-            (
-                Cmd::Log {
-                    verify,
+                why,
+            } => (
+                Cmd::Diff(Diff {
                     since,
                     json,
-                },
-                Some(target),
-            )
-        }
-        Run::Controller {
-            cmd:
-                ControllerCommand::Run {
+                    why: why.level(),
+                }),
+                target,
+            ),
+            Run::Explain { target, addresses } => (Cmd::Explain(Explain { addresses }), target),
+            Run::Test { target } => (Cmd::Test(Test), target),
+            Run::Log {
+                cmd,
+                target,
+                since,
+                json,
+            } => {
+                let (verify, target) = match cmd {
+                    Some(LogCommand::Verify { target }) => (true, target),
+                    None => (false, target),
+                };
+                (
+                    Cmd::Log(Log {
+                        verify,
+                        since,
+                        json,
+                    }),
                     target,
+                )
+            }
+            Run::Controller {
+                cmd:
+                    ControllerCommand::Run {
+                        target,
+                        poll,
+                        once,
+                        max_events,
+                        max_ticks,
+                    },
+            } => (
+                Cmd::Controller(Controller {
                     poll,
                     once,
                     max_events,
                     max_ticks,
-                },
-        } => (
-            Cmd::Controller {
-                poll,
-                once,
-                max_events,
-                max_ticks,
-            },
-            Some(target),
-        ),
+                }),
+                target,
+            ),
+        }
     }
 }
 
