@@ -246,6 +246,15 @@ impl Server {
         self.world().build_polls = n;
     }
 
+    /// Every instance still BUILD is ACTIVE at its next read: a test
+    /// moves the world at a point it chose, not after so many reads.
+    pub fn finish_builds(&self) {
+        self.world()
+            .building
+            .values_mut()
+            .for_each(|left| *left = 1);
+    }
+
     /// Answer the next calls whose `METHOD /path` starts with `call`
     /// (`POST /cloud/project`) with these statuses, one each.
     pub fn fail(&self, call: &str, statuses: &[u16]) {

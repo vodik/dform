@@ -494,18 +494,46 @@ fn an_instance_create_says_build_then_active() {
 
 /// A Create whose answer does not come within dform's timeout (R-81) is
 /// found by its key and adopted, not made twice; the record that reads
-/// the instance's address waits for it.
+/// the instance's address waits for it. The instance stays BUILD until
+/// dform has given up on the Create: its lookup by key, queued behind the
+/// Create's late answer, has timed out once. Then it is ACTIVE.
 #[test]
 fn a_create_that_times_out_is_adopted() {
+    use std::io::BufRead;
     let server = Server::start();
-    server.build_polls(4000);
+    server.build_polls(u32::MAX);
     let s = project(
         "ovh-timeout",
         ", timeout = \"1s\", backoff = \"10ms\"",
         &program(&server, "x", "b2-7"),
     );
-    let r = dform(&s, &server, &["apply", "main.df"]);
-    assert!(r.ok, "{}\n{}", r.stdout, r.stderr);
+    let mut c = common::dform();
+    c.args(common::yes(&["apply", "main.df"]))
+        .current_dir(&s.dir)
+        .env("HOME", &s.dir)
+        .env("XDG_CONFIG_HOME", s.path("config"))
+        .env_remove("OVH_CLOUD_PROJECT_SERVICE")
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    for (k, v) in server.env() {
+        c.env(k, v);
+    }
+    let mut child = c.spawn().unwrap();
+    let mut stderr = Vec::new();
+    for l in std::io::BufReader::new(child.stderr.take().unwrap()).lines() {
+        let l = l.unwrap();
+        if l.starts_with("retrying the ") && l.contains("provider.created") {
+            server.finish_builds();
+        }
+        stderr.push(l);
+    }
+    let out = child.wait_with_output().unwrap();
+    let stderr = stderr.join("\n");
+    assert!(out.status.success(), "{stderr}");
+    assert!(
+        stderr.contains("apply ovh.instance server: the Create that timed out made"),
+        "{stderr}"
+    );
     assert_eq!(posts(&server, "/instance"), 1, "{:?}", server.calls());
     assert_eq!(names(&server.instances()), ["lab-server"]);
     assert_eq!(server.records().len(), 1);
