@@ -765,8 +765,8 @@ fn finish(c: &Compiled, st: State) -> Result<(EvalResult, Vec<String>)> {
 /// instantiated with what that binds; the literals after it are not asked
 /// (the answer over-approximates). A head found this way is read the same
 /// way in turn, so a helper of a helper is found. A rule with a stuck
-/// instance is already reported as one, and a ground head already derived
-/// adds nothing.
+/// instance is already reported as one, a helper by the rule it was written
+/// for, and a ground head already derived adds nothing.
 fn may_derive(
     c: &Compiled,
     prov: &Prov,
@@ -781,7 +781,14 @@ fn may_derive(
         heads.add(s);
     }
     let heads = RefCell::new(heads);
-    let skip: BTreeSet<usize> = stucks.iter().filter_map(|s| s.rule).collect();
+    let helpers = c
+        .rules
+        .iter()
+        .enumerate()
+        .filter(|(_, r)| r.head.pred.starts_with("__"));
+    let skip: BTreeSet<usize> = (stucks.iter().filter_map(|s| s.rule))
+        .chain(helpers.map(|(i, _)| i))
+        .collect();
     let over: Vec<usize> = (0..c.rules.len()).collect();
     let mut out = may_derive_over(c, &prov.store, known, &heads, &over, &skip)?;
     out.sort();
@@ -809,7 +816,7 @@ fn may_derive_over(
         let before = out.len();
         for &i in over {
             let (r, body) = rule_of(i);
-            if skip.contains(&i) || r.head.pred.starts_with("__") {
+            if skip.contains(&i) {
                 continue;
             }
             for (j, lit) in r.body.iter().enumerate() {
