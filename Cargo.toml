@@ -107,8 +107,13 @@ tokio = { version = "1", features = ["rt", "net", "macros", "io-util", "time"] }
 russh = { version = "=0.64.1", default-features = false, features = ["ring", "rsa"] }
 # tests/ssh_provider.rs serves russh's agent on a unix socket.
 tokio-stream = { version = "0.1", default-features = false, features = ["net"] }
-# tests/recipients.rs makes the team's age identities.
-age = { version = "0.11", default-features = false }
+# tests/recipients.rs makes the team's age identities; tests/given_secrets.rs
+# opens and writes a file of given secrets as SOPS does (armored age, AES-256-GCM
+# with a 32-byte IV, a SHA-512 MAC), the versions dform-core links.
+age = { version = "0.11", default-features = false, features = ["armor"] }
+aes-gcm = { version = "0.11", default-features = false, features = ["aes", "alloc"] }
+sha2 = "0.10"
+base64 = "0.22"
 # tests/provider_ovh.rs: the OVH provider against a fake OVH API.
 dform-provider-ovh = { path = "crates/dform-provider-ovh", features = ["fake"] }
 # tests/provider_postgres.rs: the Postgres provider against a fake server.

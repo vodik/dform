@@ -1029,7 +1029,10 @@ A leaf at a path that is no input is a deny naming the file and line and
 the inputs there are. The document is the table `set(path, value)` read
 by the file provider, one rule per input the scope gives
 (`tables::expand_set_from`). This replaces dform.toml's `config`, and
-needs no clause.
+needs no clause. `set from secrets.decode(io.read("secrets/${env}.json"))`
+reads a file of given secrets, SOPS's JSON sealed to the deployment's
+recipients (R-108; docs/reference.md "Given secrets"): each value a
+`secret(T)` input's, and only through `set from`.
 
 An input a `set` gives with no default is required only in the
 deployments none of them holds in: there it is a violation, `input k is

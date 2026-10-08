@@ -29,7 +29,11 @@
 //!
 //! `set from FORMAT.decode(io.read(SOURCE))` (R-38) is the table `set(path,
 //! value)`: every leaf of a mapping (a `path,value` CSV) is a contribution
-//! to the input at its path ([`expand_set_from`]).
+//! to the input at its path ([`expand_set_from`]). `set from
+//! secrets.decode(io.read(SOURCE))` reads a file of given secrets
+//! (R-108, `custody::given`): each value opened, a contribution to the
+//! secret input at its path, its column a secret's (the plan file records
+//! none of it).
 
 use crate::ast::{Atom, ExternFn, Lit, Program, RuleStmt, Span, Stmt, Term, TypeExpr, atom};
 use crate::externs::{self, Answer};
@@ -44,7 +48,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-pub const FORMATS: &[&str] = &["csv", "json", "yaml", "toml", "text"];
+pub const FORMATS: &[&str] = &["csv", "json", "yaml", "toml", "text", SECRETS];
+
+/// The format of a file of given secrets (R-108): read by `set from` alone.
+pub const SECRETS: &str = "secrets";
 
 /// The formats a read decodes (R-155): `yaml.decode(io.read(LOCATION))`.
 pub const DECODERS: &[&str] = &["csv", "json", "yaml", "toml"];
@@ -167,6 +174,25 @@ fn parse_name(name: &str) -> Option<(&str, &str)> {
     name.strip_prefix(PREFIX)?.split_once('.')
 }
 
+/// Whether `pred` reads a file of given secrets (R-108).
+pub fn is_sealed(pred: &str) -> bool {
+    parse_name(pred).is_some_and(|(f, _)| f == SECRETS)
+}
+
+/// The value column of each extern that reads a file of given secrets,
+/// typed a secret's: the plan file records its answers by their digest
+/// alone (`Externs::recorded`, `Externs::secret_answers`).
+pub fn seal_columns(fns: &mut [ExternFn]) {
+    for f in fns.iter_mut().filter(|f| is_sealed(&f.name)) {
+        if let Some(v) = f.args.last_mut() {
+            v.ty = Some(TypeExpr::Apply(
+                "secret".into(),
+                vec![v.ty.take().unwrap_or(TypeExpr::Name("any".into()))],
+            ));
+        }
+    }
+}
+
 /// Whether `pred` is a read's extern, a whole document as a value
 /// (`table.FORMAT.document`).
 pub fn is_document(pred: &str) -> bool {
@@ -193,7 +219,7 @@ pub fn describe(name: &str) -> Option<String> {
 /// a path (`path:line`) or a repository, commit and path
 /// (`repo@commit:path:line`).
 pub fn at(a: &Atom) -> Option<String> {
-    let ("csv" | "json" | "yaml" | "toml" | "text", _) = parse_name(&a.pred)? else {
+    let ("csv" | "json" | "yaml" | "toml" | "text" | SECRETS, _) = parse_name(&a.pred)? else {
         return None;
     };
     // A row's line (`net.toml:7`, `teams.yaml:row 2`), or a repository's
@@ -276,6 +302,11 @@ impl Tables {
                 )));
             }
         };
+        if format == SECRETS
+            && let Some(no) = self.given_first(table, &location, &base)
+        {
+            return Some(no);
+        }
         let read = match self.files.read(&location, &base) {
             Ok(r) => r,
             Err(e) => {
@@ -336,6 +367,10 @@ impl Tables {
             Source::Location(_) => watch::REMOTE.to_string(),
         };
         let (name, selector) = table.split_once('|').unwrap_or((table, ""));
+        let on_disk = match &source {
+            Source::File(p) => Some(p.clone()),
+            _ => None,
+        };
         self.read
             .borrow_mut()
             .insert((name.to_string(), source), stamp);
@@ -356,6 +391,20 @@ impl Tables {
             let outs = vec![Value::Str(shown.clone()), doc];
             return Ok(vec![externs::row(f, inputs, outs)]);
         }
+        if format == SECRETS {
+            let file = crate::custody::given::parse(&text, &shown)?;
+            let rows = crate::custody::given::rows(&file, &shown);
+            crate::custody::given::note(crate::custody::given::Read {
+                location: inputs
+                    .first()
+                    .map(crate::partition::fmt_bare)
+                    .unwrap_or_default(),
+                shown: shown.clone(),
+                path: on_disk,
+                file: Some(file),
+            });
+            return Ok(leaf_rows(f, inputs, &shown, rows?));
+        }
         if name == SET_DOC {
             let leaves = match selector {
                 "" => leaves(format, &text).with_context(|| shown.clone())?,
@@ -374,6 +423,38 @@ impl Tables {
             }
         };
         typed_rows(f, inputs, name, rows, at)
+    }
+
+    /// A file of given secrets read by anything but `set from` is an error;
+    /// a project file not there yet is no secret given yet (`dform secrets
+    /// set` writes it): no rows. `None` to read it.
+    fn given_first(
+        &self,
+        table: &str,
+        location: &str,
+        base: &Path,
+    ) -> Option<Result<Vec<Vec<Value>>>> {
+        let (name, selector) = table.split_once('|').unwrap_or((table, ""));
+        if name != SET_DOC || !selector.is_empty() {
+            return Some(Err(anyhow!(
+                "{location}: a file of given secrets is read whole by `set from \
+                 secrets.decode(io.read(..))`: its values are the deployment's secret inputs"
+            )));
+        }
+        let Ok(crate::files::Location::Path(p)) = crate::files::location(location) else {
+            return None;
+        };
+        let path = base.join(&p);
+        if path.exists() {
+            return None;
+        }
+        crate::custody::given::note(crate::custody::given::Read {
+            location: location.to_string(),
+            shown: p,
+            path: Some(path),
+            file: None,
+        });
+        Some(Ok(Vec::new()))
     }
 
     /// A table read from a value, `table.value.p(+doc, -at, ..)`: the rows
@@ -1119,8 +1200,11 @@ pub fn expand_set_from(program: Program, declared: &mut [crate::inputs::Declared
         else {
             continue;
         };
+        // A file of given secrets gives secret inputs alone (R-108).
+        let sealed = is_sealed(&ext.pred);
+        let secret = |d: &crate::inputs::Declared| matches!(&d.decl.ty, TypeExpr::Apply(n, _) if n == "secret");
         // (the path the document gives it by, the cell's scope, its leaf).
-        let given = |d: &crate::inputs::Declared| {
+        let addressed = |d: &crate::inputs::Declared| {
             !d.decl.key
                 && if scope.is_empty() {
                     d.address.is_some()
@@ -1128,6 +1212,7 @@ pub fn expand_set_from(program: Program, declared: &mut [crate::inputs::Declared
                     &d.scope == scope
                 }
         };
+        let given = |d: &crate::inputs::Declared| addressed(d) && (!sealed || secret(d));
         for d in declared.iter_mut().filter(|d| given(d)) {
             d.given = true;
         }
@@ -1141,6 +1226,43 @@ pub fn expand_set_from(program: Program, declared: &mut [crate::inputs::Declared
             .collect();
         let at = ext.args[ext.args.len() - 3].clone();
         let s = |x: &str| Term::Val(Value::Str(x.to_string()));
+        // An input that is not secret, at a path a sealed file gives: a
+        // deny naming it and the declaration that takes it.
+        let plain: Vec<(String, &crate::inputs::Declared)> = declared
+            .iter()
+            .filter(|d| sealed && addressed(d) && !secret(d))
+            .filter_map(|d| match scope.is_empty() {
+                true => Some((d.address.clone()?, d)),
+                false => Some((d.decl.name.clone(), d)),
+            })
+            .collect();
+        for (path, d) in &plain {
+            let body: Vec<Lit> = r
+                .body
+                .iter()
+                .map(|l| match l {
+                    Lit::Pos(a) => Lit::Pos(subst(a, p, &s(path))),
+                    l => l.clone(),
+                })
+                .collect();
+            let message = Term::Func {
+                name: crate::ir::FORMAT.into(),
+                args: vec![
+                    s(&format!(
+                        "%s: {path} is not a secret input: a file of given secrets gives only \
+                         `secret(T)` inputs; declare it `input {}: secret({})`",
+                        d.decl.name,
+                        type_text(&d.decl.ty)
+                    )),
+                    at.clone(),
+                ],
+            };
+            out.push(Stmt::Rule(RuleStmt {
+                head: atom("deny", vec![message], r.head.span),
+                body,
+            }));
+            known.insert((scope.clone(), path.clone()));
+        }
         for (path, cell, d) in &inputs {
             let mut head = subst(&r.head, p, &s(path));
             head.args[1] = s(cell);

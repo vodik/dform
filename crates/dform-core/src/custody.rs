@@ -24,6 +24,8 @@ use crate::zset::file::Key;
 use anyhow::{Context, Result, bail};
 use std::collections::BTreeMap;
 
+pub mod given;
+
 /// The master id of the `random.*` input key material `ikm`: an HMAC of
 /// it, hex. Public.
 pub fn id(ikm: &[u8]) -> String {

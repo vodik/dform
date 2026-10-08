@@ -1297,6 +1297,9 @@ impl Located {
         // `random.*` derive from the deployment's master (R-60); a run that
         // does not hold it derives stand-ins (R-164, `secrets::standin`).
         crate::secrets::standin::set_active(opts.master.random.is_none());
+        // A file of given secrets opens with the master's own identity too
+        // (R-108).
+        crate::custody::given::set_key(opts.master.digest.clone());
         // Each key at its generation (R-161).
         crate::functions::random::set_secrets(&st.secrets);
         if lowered.is_some_and(|l| crate::functions::random::called(&l.program)) {

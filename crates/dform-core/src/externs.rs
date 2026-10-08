@@ -617,6 +617,16 @@ impl<'a> Externs<'a> {
         let mut out = Vec::new();
         for c in self.demanded.borrow().iter() {
             let mut cols = secret_columns(&c.pred);
+            // A file of given secrets' values (R-108): its secret column.
+            if cols.is_empty() && crate::tables::is_sealed(&c.pred) {
+                cols = self
+                    .fns
+                    .get(&c.pred)
+                    .map(|f| f.args.iter().position(is_secret))
+                    .into_iter()
+                    .flatten()
+                    .collect();
+            }
             // A document read into a secret `let` (R-153): its value.
             if cols.is_empty() && crate::tables::is_document(&c.pred) && secret.contains(c) {
                 cols = self

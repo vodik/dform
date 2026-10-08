@@ -214,7 +214,8 @@ enum Command {
         #[command(subcommand)]
         cmd: StateCommand,
     },
-    /// A deployment's secrets: list them, rotate one (R-161).
+    /// A deployment's secrets: list them, rotate one (R-161), give one
+    /// (R-108).
     Secrets {
         #[command(subcommand)]
         cmd: SecretsCommand,
@@ -632,6 +633,26 @@ enum SecretsCommand {
         #[command(flatten)]
         target: Target,
     },
+    /// Give a secret, NAME after the deployment (`set apps env=lab
+    /// admin-pw`): the value is read from stdin, else asked on the
+    /// terminal, never an argument; sealed (SOPS's format) to the
+    /// deployment's age recipients, and its master's own key where a
+    /// passphrase or the key file opens it, into the file of given secrets
+    /// its program reads (`set from secrets.decode(io.read(..))`); NAME is
+    /// one of its `secret(T)` inputs. Every other value is kept as it is.
+    /// The audit log has a `given` entry. Commit the file; the next plan
+    /// reads it.
+    Set {
+        /// [TARGET] [K=V..] NAME
+        #[arg(value_name = "TARGET K=V.. NAME", required = true, num_args = 1..)]
+        words: Vec<String>,
+    },
+    /// Remove a given secret, NAME after the deployment, from its file.
+    Unset {
+        /// [TARGET] [K=V..] NAME
+        #[arg(value_name = "TARGET K=V.. NAME", required = true, num_args = 1..)]
+        words: Vec<String>,
+    },
 }
 
 #[derive(Subcommand, Debug, Clone)]
@@ -812,6 +833,10 @@ enum Cmd {
         key: String,
     },
     SecretsCycle,
+    SecretsSet {
+        name: String,
+        remove: bool,
+    },
     ForgetHost {
         host: String,
     },
@@ -1313,16 +1338,21 @@ fn resolve(args: Args) -> Result<Cli> {
         },
         Command::Secrets { cmd } => match cmd {
             SecretsCommand::List { target, json } => (Cmd::SecretsList { json }, Some(target)),
-            SecretsCommand::Rotate { mut words } => {
-                let key = words.pop().expect("clap: one word at least");
-                let mut words = words.into_iter();
-                let target = Target {
-                    target: words.next(),
-                    keys: words.collect(),
-                };
+            SecretsCommand::Rotate { words } => {
+                let (target, key) = target_then(words);
                 (Cmd::SecretsRotate { key }, Some(target))
             }
             SecretsCommand::Cycle { target } => (Cmd::SecretsCycle, Some(target)),
+            SecretsCommand::Set { words } => {
+                let (target, name) = target_then(words);
+                let remove = false;
+                (Cmd::SecretsSet { name, remove }, Some(target))
+            }
+            SecretsCommand::Unset { words } => {
+                let (target, name) = target_then(words);
+                let remove = true;
+                (Cmd::SecretsSet { name, remove }, Some(target))
+            }
         },
         Command::Provider { cmd } => match cmd {
             ProviderCommand::Check { path } => (Cmd::ProviderCheck { path }, None),
@@ -2061,6 +2091,7 @@ fn run_with(
             | Cmd::SecretsList { .. }
             | Cmd::SecretsRotate { .. }
             | Cmd::SecretsCycle
+            | Cmd::SecretsSet { .. }
     ) {
         loaded.require_provider()?;
     }
@@ -2259,6 +2290,7 @@ fn run_with(
             | Cmd::SecretsList { .. }
             | Cmd::SecretsRotate { .. }
             | Cmd::SecretsCycle
+            | Cmd::SecretsSet { .. }
     );
     let master = match &cli.cmd {
         Cmd::Plan { .. }
@@ -2267,11 +2299,16 @@ fn run_with(
         | Cmd::Why { .. }
         | Cmd::SecretsList { .. }
         | Cmd::SecretsRotate { .. }
-        | Cmd::SecretsCycle => {
+        | Cmd::SecretsCycle
+        | Cmd::SecretsSet { .. } => {
+            // A given secret sealed to the master's own key makes one
+            // (R-108).
+            let gives = matches!(cli.cmd, Cmd::SecretsSet { remove: false, .. })
+                && crate::custody::given::to_master(&mixing);
             // The key may be made now: a bucket is checked first, as for
             // any run that writes.
             if let (true, None, store::Location::S3(spec)) = (
-                writes || derives || new_master,
+                writes || derives || gives || new_master,
                 &cli.world,
                 &located.location,
             ) {
@@ -2280,7 +2317,7 @@ fn run_with(
             let mut m = dep.master(
                 &mixing,
                 crate::custody::Want {
-                    make: writes || derives,
+                    make: writes || derives || gives,
                     new_master,
                 },
             )?;
@@ -2372,6 +2409,18 @@ fn run_with(
         .filter(|d| matches!(&d.decl.ty, crate::ast::TypeExpr::Apply(n, _) if n == "secret"))
         .map(|d| d.decl.name.clone())
         .collect();
+    // A secret input's value inline in argv (R-108): said, not refused, as
+    // CI passes a masked variable so.
+    let secret_named = secret_inputs_of(&located.loaded.declared);
+    for (k, v) in cli.user_set.iter().filter_map(|kv| kv.split_once('=')) {
+        if !v.starts_with('@') && secret_named.iter().any(|(a, _)| a == k) {
+            eprintln!(
+                "warning: --set {k}: argv is readable by every user on this host through /proc \
+                 and lands in shell history; use --set {k}=@FILE or `dform secrets set {} {k}`",
+                written(&located.instance)
+            );
+        }
+    }
     // Other stacks' published outputs, read once, as facts; a plan file
     // records their digests, and an apply of it refuses when one moved.
     let mut read_outputs = located.read_outputs(&open_s3(&root, false))?;
@@ -2474,6 +2523,7 @@ fn run_with(
             | Cmd::SecretsList { .. }
             | Cmd::SecretsRotate { .. }
             | Cmd::SecretsCycle
+            | Cmd::SecretsSet { .. }
     );
     // The audit log as the run began, read once: the guardrail and why
     // since the last apply both read it.
@@ -2517,14 +2567,22 @@ fn run_with(
             cli.cmd,
             Cmd::Plan { .. } | Cmd::Apply { .. } | Cmd::Query { .. } | Cmd::Why { .. }
         ),
+        // `secrets set` gives what a violation may say is missing.
         blocking: !matches!(
             cli.cmd,
-            Cmd::Plan { .. } | Cmd::Query { .. } | Cmd::Why { .. } | Cmd::Rekey { .. }
+            Cmd::Plan { .. }
+                | Cmd::Query { .. }
+                | Cmd::Why { .. }
+                | Cmd::Rekey { .. }
+                | Cmd::SecretsSet { .. }
         ),
         policy: (explains
             && !matches!(
                 cli.cmd,
-                Cmd::SecretsList { .. } | Cmd::SecretsRotate { .. } | Cmd::SecretsCycle
+                Cmd::SecretsList { .. }
+                    | Cmd::SecretsRotate { .. }
+                    | Cmd::SecretsCycle
+                    | Cmd::SecretsSet { .. }
             ))
             || matches!(cli.cmd, Cmd::Plan { .. }),
         last_apply: last_derived
@@ -2686,9 +2744,12 @@ fn run_with(
                     print!("{}", d.text(*why));
                 }
             }
-            Cmd::SecretsList { .. } | Cmd::SecretsRotate { .. } | Cmd::SecretsCycle => {
+            Cmd::SecretsList { .. }
+            | Cmd::SecretsRotate { .. }
+            | Cmd::SecretsCycle
+            | Cmd::SecretsSet { .. } => {
                 let born = born(entries());
-                let list = crate::secrets::inventory::of(
+                let mut list = crate::secrets::inventory::of(
                     &x.res.facts,
                     &x.redact,
                     &ev.st,
@@ -2697,17 +2758,47 @@ fn run_with(
                     master.epoch,
                 );
                 let dep = &ev.located.dep;
+                // A given secret from its file (R-108): where it lives, its
+                // generation and when it was set.
+                let files = crate::custody::given::reads();
+                given_rows(&mut list, &files, &mixing);
                 match &cli.cmd {
                     Cmd::SecretsList { json } => {
                         secrets_list(&deployment, &list, master.epoch, *json, &cli.table)?;
                         if !*json {
+                            for r in &files {
+                                print_given_file(r, &mixing);
+                            }
                             let log = entries().cloned().unwrap_or_default();
                             for h in crate::custody::holders(dep.store().as_ref(), &mixing, &log)? {
                                 print_holders(&h);
                             }
                         }
                     }
+                    Cmd::SecretsSet { name, remove } => secrets_set(
+                        &deployment,
+                        &secret_inputs_of(&ev.located.loaded.declared),
+                        name,
+                        *remove,
+                        &files,
+                        (&mixing, &master),
+                        &audit,
+                    )?,
                     Cmd::SecretsRotate { key } => {
+                        let sealed = files.iter().find(|r| {
+                            r.file
+                                .as_ref()
+                                .is_some_and(|f| f.leaves.iter().any(|l| l.name() == *key))
+                        });
+                        if let Some(r) = sealed {
+                            bail!(
+                                "secrets rotate {key}: {key} is given in {deployment}, sealed in \
+                                 {}: give it its new value with `dform secrets set {} {key}`, \
+                                 then plan",
+                                r.shown,
+                                written(&ev.located.instance)
+                            );
+                        }
                         secrets_rotate(dep, &list, &ev.st.memo, key, &audit)?
                     }
                     _ => secrets_cycle(dep, &list, &master, &mixing, &audit)?,
@@ -3138,6 +3229,7 @@ fn run_with(
         | Cmd::SecretsList { .. }
         | Cmd::SecretsRotate { .. }
         | Cmd::SecretsCycle
+        | Cmd::SecretsSet { .. }
         | Cmd::ForgetHost { .. } => {
             unreachable!("handled before evaluation")
         }
@@ -5327,6 +5419,261 @@ fn born(entries: Option<&Vec<serde_json::Value>>) -> Option<String> {
 }
 
 /// `dform secrets list` (R-161): each secret by key, never a value.
+/// A deployment as a command names it: `apps env=lab`.
+fn written(i: &crate::stack::Instance) -> String {
+    let mut out = i.stack.clone();
+    for (k, v) in &i.key {
+        out.push_str(&format!(" {k}={v}"));
+    }
+    out
+}
+
+/// The program's secret inputs, each by its address (`admin_pw`,
+/// `db.password`) and the type inside `secret(..)`.
+fn secret_inputs_of(declared: &[crate::inputs::Declared]) -> Vec<(String, crate::ast::TypeExpr)> {
+    declared
+        .iter()
+        .filter_map(|d| match &d.decl.ty {
+            crate::ast::TypeExpr::Apply(n, xs) if n == "secret" && xs.len() == 1 => {
+                Some((d.address.clone()?, xs[0].clone()))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// Each given secret a file of them holds (R-108): where it lives, its
+/// generation and when it was set.
+fn given_rows(
+    list: &mut [crate::secrets::inventory::Secret],
+    files: &[crate::custody::given::Read],
+    mixing: &crate::custody::Mixing,
+) {
+    for r in files {
+        let Some(f) = &r.file else { continue };
+        for l in &f.leaves {
+            let name = l.name();
+            let Some(s) = list.iter_mut().find(|s| s.key == name) else {
+                continue;
+            };
+            s.lives = Some(format!(
+                "{}, {}",
+                r.shown,
+                crate::custody::given::sealed_to(f, &|k| mixing.name_of(k))
+            ));
+            if let Some(g) = f.given(&name) {
+                s.generation = g.generation;
+                s.since = Some(g.at.clone());
+            }
+        }
+    }
+}
+
+/// A file of given secrets, as `secrets list` ends: its values and who
+/// opens it.
+fn print_given_file(r: &crate::custody::given::Read, mixing: &crate::custody::Mixing) {
+    match &r.file {
+        None => println!(
+            "{}: not written yet: `dform secrets set` writes it",
+            r.shown
+        ),
+        Some(f) => println!(
+            "{}: {} given secret{}, {}",
+            r.shown,
+            f.leaves.len(),
+            if f.leaves.len() == 1 { "" } else { "s" },
+            crate::custody::given::sealed_to(f, &|k| mixing.name_of(k))
+        ),
+    }
+}
+
+/// `dform secrets set NAME` and `unset` (R-108): the value read from stdin
+/// or the terminal, sealed into the file of given secrets the program
+/// reads, every other value kept; a `given` entry in the audit log.
+fn secrets_set(
+    deployment: &str,
+    secret: &[(String, crate::ast::TypeExpr)],
+    name: &str,
+    remove: bool,
+    files: &[crate::custody::given::Read],
+    (mixing, master): (&crate::custody::Mixing, &crate::custody::Master),
+    audit: &crate::audit::Log,
+) -> Result<()> {
+    use crate::custody::given;
+    let verb = match remove {
+        true => "unset",
+        false => "set",
+    };
+    let holds = |r: &&given::Read| {
+        r.file
+            .as_ref()
+            .is_some_and(|f| f.leaves.iter().any(|l| l.name() == name))
+    };
+    let read = match files {
+        [] => bail!(
+            "secrets {verb} {name}: {deployment} reads no file of given secrets; read one into \
+             its secret inputs, `set from secrets.decode(io.read(\"secrets/{}.json\"))`",
+            deployment.split('[').next().unwrap_or(deployment)
+        ),
+        [r] => r,
+        rs => match rs.iter().find(holds) {
+            Some(r) => r,
+            None => bail!(
+                "secrets {verb} {name}: {deployment} reads {} files of given secrets ({}), and \
+                 none holds {name}; give it in one of them with sops, then set it here",
+                rs.len(),
+                rs.iter()
+                    .map(|r| r.shown.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        },
+    };
+    let ty = secret.iter().find(|(a, _)| a == name).map(|(_, t)| t);
+    if !remove && ty.is_none() {
+        bail!(
+            "secrets set {name}: {name} is not a secret input of {deployment} ({}); declare it \
+             `input {name}: secret(string)`",
+            match secret.is_empty() {
+                true => "it declares none".to_string(),
+                false => format!(
+                    "its secret inputs: {}",
+                    secret
+                        .iter()
+                        .map(|(a, _)| a.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            }
+        );
+    }
+    let Some(path) = &read.path else {
+        bail!(
+            "secrets {verb} {name}: {} is not a file of the project, and `secrets {verb}` writes \
+             one; read a project file, `io.read(\"secrets/..\")`",
+            read.shown
+        );
+    };
+    let stack_key = match given::to_master(mixing) {
+        false => None,
+        true => match &master.digest {
+            Some(k) => Some(given::stack_recipient(k)),
+            None => bail!(
+                "secrets {verb} {name}: {} is sealed to {deployment}'s master, which this run \
+                 does not hold ({})",
+                read.shown,
+                master.without.as_deref().unwrap_or("no master")
+            ),
+        },
+    };
+    let to = given::To {
+        recipients: mixing.recipients.iter().map(|r| r.key.clone()).collect(),
+        stack_key,
+    };
+    // The file as it is, every value opened.
+    let file = read.file.clone().unwrap_or_default();
+    let (values, key) = match &read.file {
+        None => (Vec::new(), None),
+        Some(f) => {
+            let ids = given::identities()?;
+            let Some(k) = given::data_key(f, &ids)? else {
+                bail!(
+                    "secrets {verb} {name}: {}: {}",
+                    read.shown,
+                    given::why_not(f, &ids, &|r| mixing.name_of(r))
+                );
+            };
+            (given::open(f, &k, &read.shown)?, Some(k))
+        }
+    };
+    if remove && !values.iter().any(|(l, _)| l.name() == name) {
+        bail!(
+            "secrets unset {name}: {} gives no {name} ({})",
+            read.shown,
+            match values.is_empty() {
+                true => "it gives none".to_string(),
+                false => format!(
+                    "it gives {}",
+                    values
+                        .iter()
+                        .map(|(l, _)| l.name())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            }
+        );
+    }
+    let plain = match (remove, ty) {
+        (false, Some(ty)) => Some(given::typed(
+            name,
+            ty,
+            given::ask(&format!("{name} of {deployment}"))?,
+        )?),
+        _ => None,
+    };
+    let who = crate::audit::who();
+    let next = given::with(
+        &file,
+        (&values, key),
+        name,
+        plain,
+        &to,
+        (&who, &crate::memo::now()),
+    )?;
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)
+            .with_context(|| format!("make the directory of {}", read.shown))?;
+    }
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, given::text(&next)?)
+        .and_then(|()| std::fs::rename(&tmp, path))
+        .with_context(|| format!("write {}", read.shown))?;
+    let generation = next.given(name).map(|g| g.generation);
+    audit.append(
+        "given",
+        serde_json::json!({
+            "key": name,
+            "file": read.shown,
+            "generation": generation,
+            "removed": remove,
+            "recipients": next
+                .recipients()
+                .iter()
+                .map(|k| match next.stack_key() == Some(k.as_str()) {
+                    true => "the deployment's master".to_string(),
+                    false => mixing.name_of(k),
+                })
+                .collect::<Vec<_>>(),
+            "who": who,
+        }),
+    )?;
+    match generation {
+        Some(g) => println!(
+            "sealed {name} of {deployment} into {} (generation {g}), {}; commit it: the next plan \
+             reads it",
+            read.shown,
+            given::sealed_to(&next, &|k| mixing.name_of(k))
+        ),
+        None => println!(
+            "removed {name} of {deployment} from {}; commit it: the next plan reads it",
+            read.shown
+        ),
+    }
+    Ok(())
+}
+
+/// `[TARGET] [K=V..] WORD`: the target, then the last word (a secret's
+/// key or name).
+fn target_then(mut words: Vec<String>) -> (Target, String) {
+    let last = words.pop().expect("clap: one word at least");
+    let mut words = words.into_iter();
+    let target = Target {
+        target: words.next(),
+        keys: words.collect(),
+    };
+    (target, last)
+}
+
 fn secrets_list(
     deployment: &str,
     list: &[crate::secrets::inventory::Secret],
@@ -5345,10 +5692,13 @@ fn secrets_list(
         "lands",
     ]);
     for s in list {
+        // A given secret's from its file (R-108), which says when it was
+        // set.
         let generation = match s.kind {
             crate::secrets::inventory::Kind::Random | crate::secrets::inventory::Kind::Memo => {
                 s.generation.to_string()
             }
+            crate::secrets::inventory::Kind::Given if s.since.is_some() => s.generation.to_string(),
             _ => String::new(),
         };
         let cells: Vec<String> = s.cells.iter().map(|c| c.to_string()).collect();
@@ -6731,6 +7081,7 @@ fn needs_project(cli: &Cli) -> bool {
         | Cmd::SecretsList { .. }
         | Cmd::SecretsRotate { .. }
         | Cmd::SecretsCycle
+        | Cmd::SecretsSet { .. }
         | Cmd::ForgetHost { .. } => true,
         _ => false,
     }

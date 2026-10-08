@@ -72,7 +72,14 @@ scrypt = { version = "0.12", default-features = false }
 curve25519-dalek = { version = "4", default-features = false }
 # A master sealed to a team's age recipients (src/custody.rs, After
 # R-164): X25519 recipients, the identities the operators hold.
-age = { version = "0.11", default-features = false }
+age = { version = "0.11", default-features = false, features = ["armor"] }
+# Given secrets (src/custody/given.rs, R-108): a file in SOPS's shape,
+# each value AES-256-GCM under a data key sealed (armored age) to each
+# recipient, as SOPS reads it; `aes-gcm` already in the tree through
+# russh's key formats. `bech32` (already age's) spells the age identity
+# a deployment's master derives.
+aes-gcm = { version = "0.11", default-features = false, features = ["aes", "alloc"] }
+bech32 = "0.9"
 hkdf = "0.12"
 # The plan key's digests (`zset::file::Key::digest`): HMAC-SHA256, the
 # same `hmac` the `hkdf` crate is built on.

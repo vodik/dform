@@ -264,7 +264,7 @@ prints the same plan and applies nothing.
 | `output TARGET [NAME]` | a deployment's outputs |
 | `stack list`, `stack rekey`, `stack unlock` | the project's stacks |
 | `state show`, `state forget-host`, `state mv` | a deployment's state |
-| `secrets list`, `secrets rotate`, `secrets cycle` | a deployment's secrets |
+| `secrets list`, `secrets rotate`, `secrets cycle`, `secrets set`, `secrets unset` | a deployment's secrets |
 | `provider check`, `provider schema` | providers |
 | `dev strata`, `dev graph`, `dev effects`, `dev --world W --inventory I --provider P --chaos C COMMAND` | the mock and the evaluator |
 | `doc [TARGET]` | the doc comments as Markdown, on stdout |
@@ -2164,6 +2164,71 @@ passphrase = "env:DFORM_PROD_PASSPHRASE"     # CI's on main only
   `dform secrets list` names, per epoch, who could still open it and the
   secrets to rotate off it.
 
+### Given secrets
+
+A secret a human types for a deployment (an admin password, a token
+another team issued, a licence key) is given in a file in the
+repository, one per deployment, sealed, and read into the deployment's
+`secret(T)` inputs:
+
+```dform
+input forgejo_admin: secret(string)
+set from secrets.decode(io.read("secrets/${env}.json"))
+```
+
+```text
+$ dform secrets set platform env=lab forgejo_admin
+forgejo_admin of platform[env=lab]: ********
+sealed forgejo_admin of platform[env=lab] into secrets/lab.json (generation 1), sealed to alice, bob and the deployment's master; commit it: the next plan reads it
+```
+
+The file is SOPS's JSON: each value `ENC[AES256_GCM,data:..,iv:..,
+tag:..,type:str]` under a data key, sealed at its path (`db:password:`),
+a MAC over the values in order, and the data key sealed, an armored age
+file, to each recipient in the `sops` block's `age` list. The recipients
+are the deployment's `[secrets] recipients`, and, where a passphrase or
+the key file opens its master, an age identity the master derives (the
+block's `dform.stack_key`): whoever opens the master opens the file, and
+no one else. `sops -d secrets/lab.json` (and fnox through it) opens it
+with a member's own identity; a run opens it with the identities it
+opens the master with ("Custody"). A value is read as its input's type,
+at its line (`why forgejo_admin` and the plan say `secrets/lab.json:2`);
+the plan file records its digest, never the value. A value in the
+clear, a value at an input that is not `secret(T)`, a value altered or
+moved (the MAC, the path), each is an error naming it; the file is read
+by `set from` alone (a value of it is no document). A file not there yet
+gives nothing: the input is missing, and says so, until `secrets set`
+writes it.
+
+`dform secrets set TARGET NAME` reads the value from stdin (its one last
+line break dropped), else asks on the terminal, not echoed: never an
+argument. `NAME` is a secret input of the deployment (a used module's
+by its path, `pg.password`), and the file is the one its program reads.
+Every other value keeps its ciphertext and the data key is kept, so a
+plan without the master sees exactly the value set; a recipient removed
+from dform.toml is a new data key at the next `secrets set`, every value
+sealed again and the removed one's stanza gone (SOPS's `updatekeys` and
+`rotate`: what they opened before stays theirs, so set what they knew
+again). The block's `dform.given` records each value's generation, when
+and by whom; the audit log a `given` entry. `dform secrets unset TARGET
+NAME` removes one. A given secret is rotated by setting it again:
+`secrets rotate` of one says so. `secrets list` shows each as `given`,
+its generation and age, and ends with the file and who opens it:
+
+```text
+secrets/lab.json: 2 given secrets, sealed to alice, bob and the deployment's master
+```
+
+A run without the master reads each value as a stand-in, a function of
+the file, the path and the value's generation, as it derives a `random.*`
+one ("Planning and applying without the master"): a value not set again
+is proven unchanged, one set again is `secret changed, needs the key`.
+
+`--set` of a secret input with its value inline is said, not refused (CI
+passes a masked variable so): `warning: --set token: argv is readable by
+every user on this host through /proc and lands in shell history; use
+--set token=@FILE or `dform secrets set apps env=lab token``.
+
 ### Planning and applying without the master
 
 A run that does not hold the master (the passphrase not given: a second
@@ -2321,8 +2386,9 @@ generation 2, ..)`.) The rotation is then reviewed and applied like any
 change: the apply that completes it clears it from the plan's policy
 facts. A memo is rotated by forgetting what `memo.first` keeps: the next
 apply keeps its candidate (a `random.*` candidate of the same key moves
-with the generation; one of another key does not). A secret the
-operator gives (an input, an environment variable) or that something
+with the generation; one of another key does not). A given secret is
+set again, `dform secrets set` ("Given secrets"). A secret the operator
+gives otherwise (an input, an environment variable) or that something
 else holds (a provider's computed attribute, another stack's output) is
 rotated where it lives: `rotate` says where and exits 1. Changing a key
 in the program (`"db-pw"` to `"db-pw-2"`) is a different secret, not a
@@ -2340,10 +2406,12 @@ platform[env=lab]: 3 secrets
 key        kind    generation  age  read by                                           lands
 k3s-token  random  1           41d  ovh.instance lab-server.user_data, ..             forces replace
 synapse    random  2           3d   k8s.secret synapse.stringData.signing_key         update
-admin-pw   given                    k8s.secret forgejo.stringData.password            update
+admin-pw   given   1           12d  k8s.secret forgejo.stringData.password            update
+secrets/lab.json: 1 given secret, sealed to alice, bob and the deployment's master
 ```
 
-A kind is `random`, `memo`, `given` or `held`; the age of a key never
+A kind is `random`, `memo`, `given` or `held` (a given secret's
+generation and age are its file's); the age of a key never
 rotated is its master's, from the audit log's first `master` entry;
 `--json` gives the same rows. Policy reads them as `secrets(Key, Kind,
 Generation, RotatedAt)`, a key's `random` or `memo` row with the time it
@@ -2399,7 +2467,7 @@ Where a secret comes from decides who rotates it:
 | generated by the tool | `random.*`, a `memo.first` of one | `secrets rotate`: a generation, or a memo forgotten |
 | issued by a cloud or a system | a provider's computed sensitive attribute (`held`), a location's read | the issuer: a new resource (create before destroy), or the system's own command |
 | held by a manager | an input or an environment variable a manager fills (fnox, `op run`) | the manager |
-| typed by a human | an input (`--set`, an input file) | the human, into the manager |
+| typed by a human | a given secret: `secrets set` into the deployment's sealed file ("Given secrets"); an input (`--set k=@FILE`, an input file) | the human, `secrets set` again |
 
 Where it rests, and what a compromise of each place yields: the backend
 holds state, the audit log and the outputs, which hold names, ids and
@@ -2510,6 +2578,9 @@ The kinds:
 - `rotated`: `dform secrets rotate`: the `key`, its `kind` (`random`,
   `memo`), its new `generation`, whether a `memo` was forgotten, and
   `who`;
+- `given`: `dform secrets set` or `unset`: the `key`, the `file`, its
+  new `generation` (null when `removed`), the `recipients` it is sealed
+  to, and `who`;
 - `cycled`: `dform secrets cycle`: the master ids `from` and `to`, the
   new `epoch`, the keys `pinned` to the earlier one, and `who`;
 - `retired`: the apply that moved an earlier master epoch's last secret:

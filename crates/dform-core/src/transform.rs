@@ -99,6 +99,9 @@ pub fn lower(program: &Program) -> Result<Lowered> {
     inferred.read(&mut expanded);
     let mut extern_fns = extern_fns;
     inferred.type_tables(&mut extern_fns);
+    // A file of given secrets' values are secrets from the first byte
+    // (R-108): never recorded in the clear.
+    crate::tables::seal_columns(&mut extern_fns);
     Ok(Lowered {
         program: expanded,
         externs,
