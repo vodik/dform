@@ -5325,13 +5325,32 @@ fn run_tests(
     files: &[PathBuf],
 ) -> Result<()> {
     use std::io::IsTerminal;
+    // The run's reader of locations, as plan's (R-153): a provider's
+    // scheme is read through it, with what dform.toml grants.
+    let reader = std::sync::Arc::new(crate::files::Files::new(
+        crate::files::Settings::of(cli.manifest.as_ref()),
+        Default::default(),
+    ));
     let backend = match none {
         true => {
             let p = Providers::none();
             p.load_schema(None)?;
             p
         }
-        false => Providers::start(launch(), providers, &plugin::Config::default())?,
+        false => {
+            let grants = cli.manifest.iter().flat_map(|m| m.grants());
+            let config = plugin::Config {
+                grants: grants
+                    .map(|(k, mut g)| {
+                        g.files = crate::files::Shared(Some(reader.clone()));
+                        (k, g)
+                    })
+                    .collect(),
+                files: reader.clone(),
+                ..Default::default()
+            };
+            Providers::start(launch(), providers, &config)?
+        }
     };
     let lowered = crate::transform::lower(program)?;
     crate::secrets::check(&lowered, backend.schema(), &Default::default())?;
@@ -5382,7 +5401,7 @@ fn run_tests(
         extra.extend(cli.manifest.iter().flat_map(|m| m.facts()));
         extra.extend(build_extra_facts(&cli.data)?);
         extra.extend(backend.catalog(schema::named_types(&lowered.program, &extra).as_ref())?);
-        let tables = crate::tables::Tables::default();
+        let tables = crate::tables::Tables::with_files(reader.clone());
         // Nothing is kept and nothing applied: a memo answers its
         // candidate, `random.*` derive from a master of the test's own.
         let memos =
@@ -5394,6 +5413,9 @@ fn run_tests(
                     return r;
                 }
                 if let Some(r) = crate::externs::time(f) {
+                    return r;
+                }
+                if let Some(r) = crate::files::oci::answer(f, ins, &reader) {
                     return r;
                 }
                 if let Some(r) = memos.answer(f, ins) {

@@ -3956,6 +3956,10 @@ deployment of the stack was applied with; any other input takes its
 default, and one with none is an error naming it (pin it, or give it an
 enum type). An input a `set` gives is the program's to decide in
 the deployments it holds in, and no axis (R-38). More than 4096 combinations is an error asking to pin some.
+Its data sources answer as plan's do: `io.read` of any location (a
+scheme a provider declares too, with what dform.toml grants it) and
+`oci.resolve`; a provider is configured from its environment, not from
+the program's `use` block.
 
 ```dform
 deny "prod keeps 14 days of db backups" where env == "prod", not db.postgres["database.main.db"].backup_days == 14

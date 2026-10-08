@@ -314,3 +314,35 @@ fn vault_refusals_are_said_at_the_read() {
         r.stderr
     );
 }
+
+/// `dform test` reads a location through the provider that declares its
+/// scheme, as plan does: the policy runs over what Vault holds. (Its
+/// address from the environment: `dform test` does not configure a
+/// provider from the program's `use` block.)
+#[test]
+fn dform_test_reads_through_the_provider() {
+    let server = Server::start();
+    server.put("kv", "app/config", json!({"region": "eu"}));
+    let s = project("vault-test", &server, "", "");
+    s.write(
+        "p.df",
+        "use vault
+use fake
+let region = io.read(\"vault://kv/app/config#region\")\n\
+         deny \"the region is eu\" where region != \"eu\"\n",
+    );
+    let test = |s: &Scratch| {
+        let mut c = common::dform();
+        c.args(["test", "p.df"])
+            .current_dir(&s.dir)
+            .env("DFORM_CREDENTIALS", s.path("credentials"))
+            .env("VAULT_ADDR", server.address())
+            .env_remove("VAULT_TOKEN");
+        Run::from(c.output().unwrap())
+    };
+    let r = test(&s);
+    assert!(r.ok, "{}\n{}", r.stdout, r.stderr);
+    server.put("kv", "app/config", json!({"region": "us"}));
+    let r = test(&s).failure();
+    assert!(r.stdout.contains("- the region is eu"), "{}", r.stdout);
+}

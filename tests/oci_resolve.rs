@@ -375,3 +375,25 @@ fn offline_the_last_digest_stands_in() {
     let r = run(&s, &["plan", "p.df"]).success();
     assert!(r.stdout.contains("waits on  oci.resolve("), "{}", r.stdout);
 }
+
+/// `dform test` answers `oci.resolve` as plan does: the Deployment is
+/// there, its image pinned, so the policy holds on the resolved value and
+/// not because nothing was planned.
+#[test]
+fn dform_test_resolves_a_tag() {
+    let reg = Registry::start();
+    reg.tag("acme/app", "v1.2", &digest('a'));
+    let image = format!(
+        "oci.resolve(oci.with_tag(\"{}/acme/app\", release))",
+        reg.host()
+    );
+    let s = project("oci-test", &image);
+    s.write(
+        "p.df",
+        &(program(&image) + "deny \"the app is planned\" where not app in k8s.deployment\n"),
+    );
+    let r = run(&s, &["test", "p.df"]);
+    assert!(r.ok, "{}\n{}", r.stdout, r.stderr);
+    assert!(r.stdout.contains("1 combination, 0 failed"), "{}", r.stdout);
+    assert_eq!(reg.seen().len(), 3, "{:?}", reg.seen());
+}
