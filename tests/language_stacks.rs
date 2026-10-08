@@ -193,15 +193,21 @@ resource net.subnet a {
 }
 "#,
     );
-    // Before net is applied, what reads it waits on it (R-121).
+    // Before net is applied, a plan of app plans net first (R-200): the
+    // output its plan knows flows, its computed one waits on its apply
+    // (R-121).
     let r = s.run(&["plan", "app.df"]).success();
     assert_eq!(
         r.summary(),
-        "plan: 1 create after net is applied; 1 check undetermined until then",
+        "plan: 1 change (1 create); 1 create after stacks.net is applied",
         "{}",
         r.stdout
     );
-    assert!(r.stdout.contains("  waits on  stack net\n"), "{}", r.stdout);
+    assert!(
+        r.stdout.contains("    waits on  stack stacks.net\n"),
+        "{}",
+        r.stdout
+    );
     s.run(&["apply", "net"]).success();
     let r = s.run(&["plan", "--why=none", "app.df"]).success();
     assert!(
@@ -252,7 +258,7 @@ resource net.subnet a {
     let r = s.run_in("elsewhere", &["plan", "app.df"]).success();
     assert_eq!(
         r.summary(),
-        "plan: 1 create after net is applied; 1 check undetermined until then",
+        "plan: 1 change (1 create); 1 create after stacks.net is applied",
         "{}",
         r.stdout
     );
@@ -315,7 +321,7 @@ fn a_type_the_provider_does_not_declare_is_a_plan_error() {
     // The provider block is labeled; nothing was planned.
     assert!(r.stderr.contains("use fake {"), "{}", r.stderr);
     assert!(r.stderr.contains("─ provider fake\n"), "{}", r.stderr);
-    assert_eq!(r.stdout, "deployment: pngu[env=dev]\n");
+    assert_eq!(r.stdout, "deployment: stacks.pngu[env=dev]\n");
     // A type no known schema declares says so.
     s.write(
         "stacks/pngu.df",

@@ -43,65 +43,55 @@ fn project(name: &str, matrix: &str) -> Scratch {
     s
 }
 
-/// The `stacks:` lines: each deployment and its state, in apply order.
+/// The plan tree's header lines (R-200): each deployment by its full
+/// name, where it is listed and its state, in apply order.
 fn states(stdout: &str) -> Vec<String> {
     stdout
         .lines()
-        .skip_while(|l| !l.starts_with("stacks:"))
-        .skip(1)
-        .take_while(|l| l.starts_with("  "))
+        .filter(|l| ["+ ", "~ ", "= ", "- "].iter().any(|m| l.starts_with(m)))
         .map(|l| l.split_whitespace().collect::<Vec<_>>().join(" "))
         .collect()
 }
 
 #[test]
-fn plan_with_no_target_says_each_deployments_state_then_plans_each() {
+fn plan_with_no_target_is_one_tree_of_the_deployments_in_apply_order() {
     let s = project("matrix-plan", MATRIX);
     let r = s.run(&["plan"]).success();
+    // One headline across the tree; each deployment a header line, its
+    // plan nested under it; a reader planned against what its dependency
+    // will publish (R-200).
     assert!(
-        r.stdout.starts_with(
-            "stacks: project.df's deployments, in apply order; each one's plan follows\n"
-        ),
+        r.stdout.starts_with("plan: 4 changes (4 create)\n\n"),
         "{}",
         r.stdout
     );
     assert_eq!(
         states(&r.stdout),
         [
-            "platform[env=lab] never applied, 1 change (1 create) over 1 tick",
-            "apps[env=lab] never applied, 1 create after platform[env=lab] is applied",
-            "platform[env=prod] never applied, 1 change (1 create) over 1 tick",
-            "apps[env=prod] never applied, 1 create after platform[env=prod] is applied",
+            "+ stacks.platform[env=lab] project.df:4 never applied, 1 change (1 create) over 1 tick",
+            "+ stacks.apps[env=lab] project.df:2 never applied, 1 change (1 create) over 1 tick after stacks.platform[env=lab]",
+            "+ stacks.platform[env=prod] project.df:5 never applied, 1 change (1 create) over 1 tick",
+            "+ stacks.apps[env=prod] project.df:3 never applied, 1 change (1 create) over 1 tick after stacks.platform[env=prod]",
         ],
         "{}",
         r.stdout
     );
-    let heads: Vec<&str> = r.stdout.lines().filter(|l| l.starts_with("== ")).collect();
-    assert_eq!(
-        heads,
-        [
-            "== platform[env=lab]",
-            "== apps[env=lab]",
-            "== platform[env=prod]",
-            "== apps[env=prod]"
-        ]
-    );
     assert!(
         r.stdout.contains(
-            "== apps[env=lab]\ndeployment: apps[env=lab]\nplan: 1 create after \
-                 platform[env=lab] is applied"
+            "  tick 1  1 change\n    + net.vpc rec  stacks/apps.df:5\n        cidr = \"10.1.0.0/16\"\n        name = \"10.0.0.0/16\""
         ),
         "{}",
         r.stdout
     );
+    assert!(!r.stdout.contains("== "), "{}", r.stdout);
 
     s.run(&["apply", "platform", "env=lab"]).success();
     let r = s.run(&["plan"]).success();
     assert_eq!(
         states(&r.stdout)[..2],
         [
-            "platform[env=lab] up to date",
-            "apps[env=lab] never applied, 1 change (1 create) over 1 tick",
+            "= stacks.platform[env=lab] project.df:4 up to date",
+            "+ stacks.apps[env=lab] project.df:2 never applied, 1 change (1 create) over 1 tick after stacks.platform[env=lab]",
         ],
         "{}",
         r.stdout
@@ -116,7 +106,7 @@ fn apply_with_no_target_applies_each_in_dependency_order() {
         r.stdout.starts_with(
             "stacks: project.df's deployments, in apply order: platform[env=lab], then \
              apps[env=lab], then platform[env=prod], then apps[env=prod]; each is planned, \
-             confirmed and applied in turn\n== platform[env=lab]\n"
+             confirmed and applied in turn\n== stacks.platform[env=lab]\n"
         ),
         "{}",
         r.stdout
@@ -161,7 +151,7 @@ fn each_deployment_is_confirmed_on_its_own() {
         said[0]
     );
     assert!(
-        said[1].contains("== apps[env=lab]")
+        said[1].contains("== stacks.apps[env=lab]")
             && said[1].ends_with("Apply this change to apps[env=lab]? [y/N] "),
         "{}",
         said[1]
@@ -176,8 +166,8 @@ fn each_deployment_is_confirmed_on_its_own() {
     assert_eq!(
         states(&r.stdout),
         [
-            "platform[env=lab] up to date",
-            "apps[env=lab] never applied, 1 change (1 create) over 1 tick"
+            "= stacks.platform[env=lab] project.df:2 up to date",
+            "+ stacks.apps[env=lab] project.df:1 never applied, 1 change (1 create) over 1 tick after stacks.platform[env=lab]"
         ],
         "{}",
         r.stdout
@@ -204,10 +194,10 @@ fn a_deployment_removed_from_the_matrix_is_destroyed_by_the_next_apply() {
     assert_eq!(
         states(&r.stdout),
         [
-            "platform[env=lab] up to date",
-            "apps[env=lab] up to date",
-            "apps[env=prod] removed from project.df: the next apply destroys it, 1 change (1 delete) over 1 tick",
-            "platform[env=prod] removed from project.df: the next apply destroys it, 1 change (1 delete) over 1 tick",
+            "= stacks.platform[env=lab] project.df:3 up to date",
+            "= stacks.apps[env=lab] project.df:2 up to date",
+            "- stacks.apps[env=prod] stacks/apps.df removed from project.df: the next apply destroys it, 1 change (1 delete) over 1 tick",
+            "- stacks.platform[env=prod] stacks/platform.df removed from project.df: the next apply destroys it, 1 change (1 delete) over 1 tick",
         ],
         "{}",
         r.stdout
@@ -218,7 +208,7 @@ fn a_deployment_removed_from_the_matrix_is_destroyed_by_the_next_apply() {
             "; then, removed from it, destroyed: apps[env=prod], then platform[env=prod]; each"
         ) && r
             .stdout
-            .contains("== apps[env=prod]  removed from project.df\n"),
+            .contains("== stacks.apps[env=prod]  removed from project.df\n"),
         "{}",
         r.stdout
     );
@@ -276,8 +266,8 @@ fn a_deployment_the_matrix_does_not_list_is_a_target_of_its_own() {
     assert_eq!(
         states(&r.stdout),
         [
-            "platform[env=lab] never applied, 1 change (1 create) over 1 tick (not listed: a listed deployment reads it)",
-            "apps[env=lab] never applied, 1 create after platform[env=lab] is applied",
+            "+ stacks.platform[env=lab] stacks/platform.df never applied, 1 change (1 create) over 1 tick (not listed: a listed deployment reads it)",
+            "+ stacks.apps[env=lab] project.df:1 never applied, 1 change (1 create) over 1 tick after stacks.platform[env=lab]",
         ],
         "{}",
         r.stdout
@@ -307,10 +297,10 @@ fn test_with_no_target_tests_each_deployment() {
     assert_eq!(
         heads,
         [
-            "== platform[env=lab]",
-            "== apps[env=lab]",
-            "== platform[env=prod]",
-            "== apps[env=prod]"
+            "== stacks.platform[env=lab]",
+            "== stacks.apps[env=lab]",
+            "== stacks.platform[env=prod]",
+            "== stacks.apps[env=prod]"
         ],
         "{}",
         r.stdout
@@ -375,8 +365,8 @@ resource stacks.platform "${e}" { env = e } where e in environment
     assert_eq!(
         states(&r.stdout),
         [
-            "platform[env=lab] never applied, 1 change (1 create) over 1 tick",
-            "platform[env=prod] never applied, 1 change (1 create) over 1 tick",
+            "+ stacks.platform[env=lab] project.df:3 never applied, 1 change (1 create) over 1 tick",
+            "+ stacks.platform[env=prod] project.df:3 never applied, 1 change (1 create) over 1 tick",
         ],
         "{}",
         r.stdout
@@ -445,7 +435,7 @@ fn a_project_module_named_as_the_target() {
     let r = s.run(&["plan", "envs/lab.df"]).success();
     assert_eq!(
         states(&r.stdout),
-        ["platform[env=lab] never applied, 1 change (1 create) over 1 tick"],
+        ["+ stacks.platform[env=lab] envs/lab.df:1 never applied, 1 change (1 create) over 1 tick"],
         "{}",
         r.stdout
     );

@@ -1,6 +1,6 @@
 exit: ok
 -- stdout --
-deployment: dform[env=staging]
+deployment: stacks.dform[env=staging]
 plan: 13 changes (13 create)
 definite:
 + compute.vm["bastion"]

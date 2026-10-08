@@ -165,6 +165,24 @@ pub fn manifest_root(path: &Path) -> Option<PathBuf> {
         .map(Path::to_path_buf)
 }
 
+/// A file's module path from the project root `root` (R-200): its path
+/// with `/` as `.` and no `.df`, `stacks/platform.df` the module
+/// `stacks.platform`, which is a stack's full name and the namespace of
+/// what it declares. `None` for a file outside `root`.
+pub fn module_path(root: &Path, file: &Path) -> Option<String> {
+    let root = absolute(root).ok()?;
+    let rel = absolute(file)
+        .ok()?
+        .strip_prefix(&root)
+        .ok()?
+        .with_extension("");
+    let segs: Vec<String> = rel
+        .components()
+        .map(|c| c.as_os_str().to_string_lossy().into_owned())
+        .collect();
+    (!segs.is_empty()).then(|| segs.join("."))
+}
+
 fn absolute(p: &Path) -> Result<PathBuf> {
     let p = if p.is_absolute() {
         p.to_path_buf()
@@ -1076,10 +1094,15 @@ fn atom(pred: &str, args: Vec<Term>) -> Atom {
     }
 }
 
-/// A stack discovery found: its name, its key's inputs, and its file.
+/// A stack discovery found: its name, its full name, its key's inputs,
+/// and its file.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Found {
+    /// Its short name, the file's stem: `platform`.
     pub name: String,
+    /// Its full name, its module path from the root (R-200):
+    /// `stacks.platform`.
+    pub path: String,
     pub keys: Vec<String>,
     pub file: PathBuf,
 }
@@ -1093,9 +1116,33 @@ pub struct Discovered {
 }
 
 impl Discovered {
-    /// The stacks named `name`.
+    /// The stacks `name` names: by its full name (`stacks.platform`), or
+    /// by its short name (`platform`), which may name several (R-200).
     pub fn named(&self, name: &str) -> Vec<&Found> {
-        self.stacks.iter().filter(|s| s.name == name).collect()
+        match self.stacks.iter().find(|s| s.path == name) {
+            Some(one) => vec![one],
+            None => self.stacks.iter().filter(|s| s.name == name).collect(),
+        }
+    }
+
+    /// The one stack `name` names, else an error: none (`None`), or a
+    /// short name several share, naming each by its full name (R-200).
+    pub fn one(&self, name: &str) -> Result<Option<&Found>> {
+        match self.named(name).as_slice() {
+            [] => Ok(None),
+            [one] => Ok(Some(one)),
+            many => {
+                let each: Vec<String> = many
+                    .iter()
+                    .map(|s| format!("{} ({})", s.path, s.file.display()))
+                    .collect();
+                bail!(
+                    "stack {name} is ambiguous: it is the short name of {}; name one by its \
+                     full name",
+                    each.join(" and ")
+                )
+            }
+        }
     }
 
     /// Fails listing the errors (a module file with a `key`, a
@@ -1159,6 +1206,8 @@ pub fn discover(project: &Project) -> Discovered {
         if stack {
             out.stacks.push(Found {
                 name: crate::state::stack_name(&f),
+                path: module_path(&project.root, &f)
+                    .unwrap_or_else(|| crate::state::stack_name(&f)),
                 keys,
                 file: PathBuf::from(display(&f)),
             });
@@ -1594,5 +1643,38 @@ mod tests {
         assert!(e.to_string().contains("unknown field `unknowns`"), "{e}");
         let e = manifest("[inputs]\nenv = \"prod\"\n").unwrap_err();
         assert!(e.to_string().contains("unknown field `inputs`"), "{e}");
+    }
+
+    /// A stack is named by its full name, its module path, or by its
+    /// short one where that is unique; a short name two share is an error
+    /// naming each (R-200).
+    #[test]
+    fn a_short_stack_name_two_share_is_ambiguous() {
+        let found = |name: &str, path: &str| Found {
+            name: name.into(),
+            path: path.into(),
+            keys: Vec::new(),
+            file: PathBuf::from(format!("{}.df", path.replace('.', "/"))),
+        };
+        let d = Discovered {
+            stacks: vec![
+                found("platform", "stacks.platform"),
+                found("platform", "infra.platform"),
+                found("apps", "stacks.apps"),
+            ],
+            ..Discovered::default()
+        };
+        assert_eq!(d.one("apps").unwrap().unwrap().path, "stacks.apps");
+        assert_eq!(
+            d.one("infra.platform").unwrap().unwrap().file,
+            PathBuf::from("infra/platform.df")
+        );
+        assert!(d.one("web").unwrap().is_none());
+        let e = d.one("platform").unwrap_err().to_string();
+        assert_eq!(
+            e,
+            "stack platform is ambiguous: it is the short name of stacks.platform \
+             (stacks/platform.df) and infra.platform (infra/platform.df); name one by its full name"
+        );
     }
 }

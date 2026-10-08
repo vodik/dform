@@ -37,10 +37,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use tree::Site;
 
 mod bare;
+pub mod deployments;
 pub mod fold;
 pub mod progress;
 pub mod table;
+mod tally;
 pub mod tree;
+pub use tally::Tally;
 
 /// A resource's address as the plan, `why`, `query` and the editor print
 /// it (R-111): its type, then its path the way the source names it,
@@ -1088,6 +1091,10 @@ pub struct Report {
     /// their creation only that differs ([`Deformation::kept`], R-198):
     /// no change, each said under its address.
     pub kept: Vec<Deformation>,
+    /// The plan is one deployment's in a tree of them (R-200): the tree's
+    /// headline and the deployment's header line say what its own
+    /// headline and `up to date` line would.
+    pub nested: bool,
 }
 
 /// A forget's note on its line (R-154).
@@ -1319,6 +1326,7 @@ pub fn report(i: &Input) -> Report {
             .filter(|a| matches!(a.kind, ActionKind::Noop) && !a.kept().is_empty())
             .map(|a| deformation(a, i.schema, &r, &refs))
             .collect(),
+        nested: false,
     }
 }
 
@@ -2969,151 +2977,6 @@ impl Report {
         out
     }
 
-    /// `plan: 5 changes (3 create, 2 update) over 2 ticks, 1 approval, 1 undetermined`;
-    /// what `later` holds, by kind and by what it waits on (R-193): `plan:
-    /// 21 creates after platform[env=lab] is applied; 6 denies undetermined
-    /// until then`, never `0 changes` while `later` holds a change.
-    pub fn summary(&self) -> String {
-        let later = self.later_clauses();
-        let mut head = Vec::new();
-        if self.changes() > 0 || later.is_empty() {
-            let mut out = changes_text(self.changes(), &self.kinds());
-            let ticks = self
-                .sections()
-                .values()
-                .filter(|s| {
-                    !s.deposed.is_empty()
-                        || !s.groups.is_empty()
-                        || s.changes
-                            .iter()
-                            .any(|d| !matches!(d.kind, ActionKind::Noop))
-                })
-                .count();
-            if ticks > 0 {
-                out.push_str(&format!(" over {}", count(ticks, "tick")));
-            }
-            head.push(out.trim_start_matches("plan: ").to_string());
-        }
-        if self.show_noop {
-            head.push(format!("{} no-op", self.noops));
-        }
-        if !self.denies.is_empty() {
-            head.push(format!("{} denied", self.denies.len()));
-        }
-        if !self.approvals.is_empty() {
-            head.push(count(self.approvals.len(), "approval"));
-        }
-        // An undetermined policy `later` names in a clause is said there.
-        let undetermined = match later.is_empty() {
-            true => self.policies.len(),
-            false => self.policies.iter().filter(|p| p.after.is_some()).count(),
-        };
-        if undetermined > 0 {
-            head.push(format!("{undetermined} undetermined"));
-        }
-        if !self.not_planned.is_empty() {
-            head.push(format!("{} not planned", self.not_planned.len()));
-        }
-        // Held objects `later` lists as state has them, no change of
-        // theirs known yet (R-177): after the clauses when there are.
-        let held = self
-            .pending
-            .iter()
-            .filter(|b| b.resolves_after.is_none())
-            .flat_map(|b| b.deformations.iter())
-            .filter(|d| later.is_empty() || matches!(d.kind, ActionKind::Noop))
-            .count();
-        let held = (held > 0).then(|| format!("{held} later"));
-        if later.is_empty() {
-            head.extend(held.clone());
-        }
-        if !self.conflicts.is_empty() {
-            head.push(count(self.conflicts.len(), "conflict"));
-        }
-        let mut parts = Vec::new();
-        if !head.is_empty() {
-            parts.push(head.join(", "));
-        }
-        if !later.is_empty() {
-            parts.extend(later);
-            parts.extend(held);
-        }
-        format!("plan: {}", parts.join("; "))
-    }
-
-    /// The summary's clauses for what `later` holds (R-193): its changes
-    /// by kind and by what they wait on outside the plan, in `later`'s
-    /// order (`21 creates after platform[env=lab] is applied`), then its
-    /// undetermined denies and checks by the same (`6 denies undetermined
-    /// until then`, `then` the clause before). None when `later` holds no
-    /// change.
-    fn later_clauses(&self) -> Vec<String> {
-        let mut changes: Vec<(String, Vec<&Deformation>)> = Vec::new();
-        for b in self.pending.iter().filter(|b| b.resolves_after.is_none()) {
-            let ds = b
-                .deformations
-                .iter()
-                .filter(|d| !matches!(d.kind, ActionKind::Noop));
-            let until = until_text(&b.until);
-            match changes.iter_mut().find(|(u, _)| *u == until) {
-                Some((_, x)) => x.extend(ds),
-                None => changes.push((until, ds.collect())),
-            }
-        }
-        changes.retain(|(_, ds)| !ds.is_empty());
-        let mut out: Vec<String> = changes
-            .iter()
-            .map(|(until, ds)| {
-                let kinds: Vec<String> = by_kind(ds.iter().copied())
-                    .into_iter()
-                    .filter(|(_, n)| *n > 0)
-                    .map(|(k, n)| count(n, k))
-                    .collect();
-                format!("{} {until}", kinds.join(", "))
-                    .trim_end()
-                    .to_string()
-            })
-            .collect();
-        if out.is_empty() {
-            return out;
-        }
-        let mut policies: Vec<(String, usize, usize)> = Vec::new();
-        for p in self.policies.iter().filter(|p| p.after.is_none()) {
-            let until = until_text(&p.until);
-            let i = match policies.iter().position(|(u, _, _)| *u == until) {
-                Some(i) => i,
-                None => {
-                    policies.push((until, 0, 0));
-                    policies.len() - 1
-                }
-            };
-            match p.refinement {
-                true => policies[i].2 += 1,
-                false => policies[i].1 += 1,
-            }
-        }
-        let last = changes.last().map(|(u, _)| u.clone());
-        for (until, denies, checks) in policies {
-            let when = match until.strip_prefix("after ") {
-                _ if Some(&until) == last.as_ref() => " until then".to_string(),
-                Some(rest) => format!(" until {rest}"),
-                None if until.is_empty() => String::new(),
-                None => format!(", {until}"),
-            };
-            for (n, what) in [(denies, "deny"), (checks, "check")] {
-                if n > 0 {
-                    let what = match n {
-                        1 => what.to_string(),
-                        _ if what == "deny" => "denies".to_string(),
-                        _ => format!("{what}s"),
-                    };
-                    out.push(format!("{n} {what} undetermined{when}"));
-                }
-            }
-        }
-        out
-    }
-
     /// What `later` holds: rules that may derive an unknown number of
     /// resources, denies and checks undetermined until a tick, and held
     /// changes whose nulls this plan does not resolve.
@@ -3235,10 +3098,15 @@ impl Report {
             let mut rows = Vec::new();
             self.write_kept(&mut rows, style);
             out.push_str(&layout(&rows, style));
-            out.push_str(&format!("stack {} is up to date\n", self.stack));
+            if !self.nested {
+                out.push_str(&format!("stack {} is up to date\n", self.stack));
+            }
             return out;
         }
-        let mut rows: Vec<Row> = vec![Row::plain(self.summary())];
+        let mut rows: Vec<Row> = match self.nested {
+            true => Vec::new(),
+            false => vec![Row::plain(self.summary())],
+        };
         for (t, s) in self.sections() {
             rows.push(Row::plain(String::new()));
             // A held object state has, unread until the boundary
@@ -3382,7 +3250,9 @@ impl Report {
             }
         }
         if self.undeformed {
-            out.push_str(&format!("\nstack {} is up to date\n", self.stack));
+            if !self.nested {
+                out.push_str(&format!("\nstack {} is up to date\n", self.stack));
+            }
             return out;
         }
         if let Some(line) = self.apply_line() {

@@ -45,7 +45,24 @@ fn project(name: &str, rules: &str) -> Scratch {
 }
 
 fn plan(s: &Scratch) -> Run {
-    s.run(&["plan", "apps"])
+    unnested(s.run(&["plan", "apps"]))
+}
+
+/// A plan of apps plans platform first, one tree (R-200): the tree's
+/// headline, then apps's plan as it prints alone, its lines taken from
+/// under its header.
+fn unnested(mut r: Run) -> Run {
+    let head = r.stdout.lines().next().unwrap_or_default().to_string();
+    let body: Vec<String> = r
+        .stdout
+        .lines()
+        .skip_while(|l| !l.starts_with("+ stacks.apps["))
+        .skip(1)
+        .take_while(|l| l.is_empty() || l.starts_with("  "))
+        .map(|l| l.strip_prefix("  ").unwrap_or(l).to_string())
+        .collect();
+    r.stdout = format!("{head}\n\n{}\n", body.join("\n"));
+    r
 }
 
 /// The private project's deny: a pod spec holding what the server
@@ -108,14 +125,15 @@ fn the_summary_counts_what_later_holds_by_what_it_waits_on() {
     let r = plan(&s).success();
     assert_eq!(
         r.summary(),
-        "plan: 3 creates after platform[env=lab] is applied; 2 denies undetermined until then",
+        "plan: 1 change (1 create); 3 creates after stacks.platform[env=lab] is applied; 2 denies \
+         undetermined until then",
         "{}",
         r.stdout
     );
     s.write(
         "stacks/dns.df",
         "key env: enum(\"lab\", \"prod\") = \"lab\"\nuse fake\n\
-         resource net.vpc zone { cidr = \"10.0.0.0/16\" }\noutput zone = zone.id\n",
+         resource db.postgres zone { name = \"zone\" }\noutput zone = zone.endpoint\n",
     );
     let apps = s.read("stacks/apps.df");
     s.write(
@@ -127,8 +145,9 @@ fn the_summary_counts_what_later_holds_by_what_it_waits_on() {
     let r = plan(&s).success();
     assert_eq!(
         r.summary(),
-        "plan: 3 creates after platform[env=lab] is applied; 1 create after dns[env=lab] is \
-         applied; 2 denies undetermined until platform[env=lab] is applied",
+        "plan: 2 changes (2 create); 3 creates after stacks.platform[env=lab] is applied; 1 \
+         create after stacks.dns[env=lab] is applied; 2 denies undetermined until \
+         stacks.platform[env=lab] is applied",
         "{}",
         r.stdout
     );
@@ -176,7 +195,7 @@ fn a_provider_held_by_its_connection_plans_provisionally() {
     let r = plan(&s).success();
     assert_eq!(
         r.summary(),
-        "plan: 4 creates after platform[env=lab] is applied",
+        "plan: 1 change (1 create); 4 creates after stacks.platform[env=lab] is applied",
         "{}",
         r.stdout
     );
@@ -278,7 +297,7 @@ fn the_k8s_provider_plans_provisionally_against_its_snapshot() {
         .env_remove("KUBERNETES_SERVICE_HOST")
         .env_remove("KUBERNETES_SERVICE_PORT")
         .env("DFORM_K8S_OFFLINE", "1");
-    let r = Run::from(c.output().unwrap()).success();
+    let r = unnested(Run::from(c.output().unwrap()).success());
     let (_, later) = r.stdout.split_once("\nlater\n").expect(&r.stdout);
     assert!(
         later.starts_with(PROVISIONAL)

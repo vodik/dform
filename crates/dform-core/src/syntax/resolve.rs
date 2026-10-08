@@ -1882,6 +1882,29 @@ impl<'u> Lowerer<'u> {
         })
     }
 
+    /// The stack a `use` in scope binds that `head.f1.f2..` names by its
+    /// module path (`stacks.platform`), and how many of `ops` the path
+    /// takes.
+    fn stack_by_path(&self, scope: usize, head: &str, ops: &[Op]) -> Option<(Deployed, usize)> {
+        let mut at = head.to_string();
+        for (i, op) in ops.iter().enumerate() {
+            let Op::Field(f) = op else { return None };
+            at = format!("{at}.{f}");
+            let found = self.chain_of(scope).into_iter().find_map(|s| {
+                self.decls.scopes[s]
+                    .stacks
+                    .values()
+                    .map(|&i| &self.decls.deployed[i])
+                    .find(|d| d.path == at)
+                    .cloned()
+            });
+            if let Some(d) = found {
+                return Some((d, i + 1));
+            }
+        }
+        None
+    }
+
     /// The module `name` a `use` in scope binds: its path.
     fn use_in(&self, scope: usize, name: &str) -> Option<String> {
         self.chain_of(scope)
@@ -7647,6 +7670,18 @@ impl<'u> Lowerer<'u> {
         }
         if let Some(d) = self.stack_in(rc.scope, h) {
             return self.deployed_path(rc, c, &d, pre, span).map(Some);
+        }
+        // A used stack by its full name, its module path (R-200):
+        // `stacks.platform[env].out`, as `platform[env].out` reads it.
+        if let Some((d, n)) = self.stack_by_path(rc.scope, h, &c.ops) {
+            let short = Chain {
+                head: d.name.clone(),
+                head_kind: IDENT,
+                call: None,
+                range: c.range,
+                ops: c.ops[n..].to_vec(),
+            };
+            return self.deployed_path(rc, &short, &d, pre, span).map(Some);
         }
         // A component by a name in scope (`network`), a used module's
         // (`net.vpc`), or by its path from the root (`modules.net.vpc`).

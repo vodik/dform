@@ -68,7 +68,8 @@ fn a_target_is_a_name_a_file_or_a_deployment() {
     assert!(!s.path("dform.state/app/env=staging").exists());
     let r = s.run(&["apply", "app"]).success();
     assert!(
-        r.stdout.starts_with("deployment: app[env=staging]\n"),
+        r.stdout
+            .starts_with("deployment: stacks.app[env=staging]\n"),
         "{}",
         r.stdout
     );
@@ -452,7 +453,7 @@ fn stack_list_shows_deployments_and_their_last_apply() {
     let app = cells(lines[1]);
     assert_eq!(
         app[..3],
-        ["app[env]", "stacks/app.df", "app[env=prod]"],
+        ["stacks.app[env]", "stacks/app.df", "stacks.app[env=prod]"],
         "{}",
         r.stdout
     );
@@ -460,7 +461,7 @@ fn stack_list_shows_deployments_and_their_last_apply() {
     let net = cells(lines[2]);
     assert_eq!(
         net[..4],
-        ["net", "stacks/net.df", "net", "never"],
+        ["stacks.net", "stacks/net.df", "stacks.net", "never"],
         "{}",
         r.stdout
     );

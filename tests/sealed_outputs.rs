@@ -170,7 +170,7 @@ fn a_location_read_secret_output_configures_the_reading_stacks_provider() {
         }
     }
     let r = run(&s, &[PASS], &["plan", "apps", "env=lab"]).success();
-    assert_eq!(r.summary(), "stack apps is up to date", "{}", r.stdout);
+    assert_eq!(r.summary(), "plan: 0 changes", "{}", r.stdout);
     // Another apply of the platform, of a change that is no output's,
     // publishes the same seals: outputs.json does not move, so a reader's
     // plan file of it stays fresh.

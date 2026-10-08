@@ -50,6 +50,13 @@ impl Listed {
     }
 }
 
+impl Listed {
+    /// The line of the module that lists it.
+    pub fn line(&self) -> Option<usize> {
+        crate::diag::location(self.span).map(|(_, line, _)| line)
+    }
+}
+
 /// A project module's deployments, in the order it lists them.
 #[derive(Debug, Clone)]
 pub struct Matrix {

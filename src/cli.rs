@@ -8,6 +8,7 @@ use crate::report;
 use crate::store;
 use anyhow::{Result, bail};
 use clap::Parser;
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -84,6 +85,10 @@ struct Cli {
     matrix: Option<PathBuf>,
     /// Where a plan's text goes.
     held: Held,
+    /// The outputs of the deployments planned earlier in this run (R-200),
+    /// by the name a reader gives each (`platform[env=lab]`): a plan reads
+    /// them over what each published.
+    planned: BTreeMap<String, crate::stack::Planned>,
 }
 
 /// Where a plan's text goes: stdout, or held for the project's plan
@@ -91,11 +96,13 @@ struct Cli {
 #[derive(Debug, Clone, Default)]
 struct Held(Option<Arc<std::sync::Mutex<HeldPlan>>>);
 
-/// A plan held: its text, and its summary line (`plan: 3 changes ..`).
+/// A plan held: its text (no headline: the tree's says it), what its
+/// headline counts, and its outputs as planned (R-200).
 #[derive(Debug, Default)]
 struct HeldPlan {
     text: String,
-    summary: Option<String>,
+    tally: Option<report::Tally>,
+    outputs: Option<crate::stack::Outputs>,
 }
 
 impl Held {
@@ -115,22 +122,32 @@ impl Held {
         }
     }
 
-    /// The plan's summary line.
-    fn summary(&self, summary: String) {
+    /// The plan is held for a tree of deployments (R-200).
+    fn is_held(&self) -> bool {
+        self.0.is_some()
+    }
+
+    fn with(&self, f: impl FnOnce(&mut HeldPlan)) {
         if let Some(h) = &self.0 {
-            h.lock().unwrap_or_else(|e| e.into_inner()).summary = Some(summary);
+            f(&mut h.lock().unwrap_or_else(|e| e.into_inner()));
         }
     }
 
-    /// What was held: the text and the summary, if a plan was made.
-    fn take(&self) -> (String, Option<String>) {
-        match &self.0 {
-            Some(h) => {
-                let mut h = h.lock().unwrap_or_else(|e| e.into_inner());
-                (std::mem::take(&mut h.text), h.summary.take())
-            }
-            None => (String::new(), None),
-        }
+    /// What the plan's headline counts.
+    fn tally(&self, tally: report::Tally) {
+        self.with(|h| h.tally = Some(tally));
+    }
+
+    /// The plan's outputs, for the plans that read them (R-200).
+    fn outputs(&self, outputs: crate::stack::Outputs) {
+        self.with(|h| h.outputs = Some(outputs));
+    }
+
+    /// What was held, if a plan was made.
+    fn take(&self) -> HeldPlan {
+        let mut out = HeldPlan::default();
+        self.with(|h| out = std::mem::take(h));
+        out
     }
 }
 
@@ -229,6 +246,10 @@ pub fn run_in_process(
 fn run_command(cli: Cli) -> Result<Outcome> {
     if let Some(module) = cli.matrix.clone() {
         return matrix::run(cli, &module);
+    }
+    let order = cli.plan_order()?;
+    if !order.is_empty() {
+        return InOrder::new(cli, order).plan();
     }
     let order = cli.apply_order()?;
     if order.is_empty() {

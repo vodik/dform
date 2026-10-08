@@ -937,6 +937,7 @@ impl Cli {
             every_stack: Vec::new(),
             matrix: None,
             held: Held::default(),
+            planned: Default::default(),
         };
         if let Cmd::Apply(Apply { chaos, .. }) = &mut cli.cmd {
             *chaos = mock.chaos;
@@ -1217,9 +1218,9 @@ fn target_of(project: Option<&Project>, t: &Target) -> Result<(PathBuf, Vec<(Str
             let project = project_or(&format!("stack {n}"))?;
             let d = found(project);
             d.check()?;
-            match d.named(&n).as_slice() {
-                [one] => one.file.clone(),
-                _ => bail!(
+            match d.one(&n)? {
+                Some(one) => one.file.clone(),
+                None => bail!(
                     "no stack {n} in the project at {}{}",
                     project.root.display(),
                     listing(&d.stacks)

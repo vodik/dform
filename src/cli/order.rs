@@ -11,7 +11,12 @@ use std::path::{Path, PathBuf};
 /// One deployment `apply` applies, of the stack in `file`, and the
 /// stack's inputs (not its key).
 pub(super) struct Dependency {
+    /// As a reader names it, `platform[env=lab]`.
     pub(super) name: String,
+    /// Its full name, `stacks.platform[env=lab]` (R-200).
+    pub(super) full: String,
+    /// The deployments it reads, by name.
+    pub(super) reads: Vec<String>,
     pub(super) file: PathBuf,
     pub(super) keys: Vec<(String, String)>,
     pub(super) inputs: BTreeSet<String>,
@@ -29,6 +34,39 @@ impl Cli {
     /// partial work).
     /// Empty when X reads none, and for a plan file, a world fixture or a
     /// program outside a project. A cycle is an error naming it.
+    /// `plan X` in a project: the deployments X reads and theirs, each
+    /// before its readers, then X (R-200), what `apply X` applies. Empty
+    /// when X reads none, and for a plan written out (`--out`, `--json`),
+    /// the bare diff, a destroy, a world fixture or a program outside a
+    /// project.
+    pub(super) fn plan_order(&self) -> Result<Vec<Dependency>> {
+        // The bare diff (`-q`) is a script's: one deployment's, as it was.
+        let Cmd::Plan(super::plan::Plan {
+            out: None,
+            json: false,
+            destroy: false,
+            why,
+            ..
+        }) = &self.cmd
+        else {
+            return Ok(Vec::new());
+        };
+        if *why == crate::report::Why::None {
+            return Ok(Vec::new());
+        }
+        if !self.in_project || self.world.is_some() {
+            return Ok(Vec::new());
+        }
+        let [one] = self.files.as_slice() else {
+            return Ok(Vec::new());
+        };
+        let mut order = order_of(&[(one.clone(), self.keys.clone())])?;
+        if order.len() == 1 {
+            order.clear();
+        }
+        Ok(order)
+    }
+
     pub(super) fn apply_order(&self) -> Result<Vec<Dependency>> {
         let Cmd::Apply(super::apply::Apply {
             plan_file: None,
@@ -81,6 +119,8 @@ pub(super) fn order_of(roots: &[(PathBuf, Vec<(String, String)>)]) -> Result<Vec
         let (instance, inputs, _) = order.reads(file, keys)?;
         let target = Dependency {
             name: instance.name(),
+            full: instance.full_name(),
+            reads: Vec::new(),
             file: file.clone(),
             keys: keys.clone(),
             inputs,
@@ -125,6 +165,7 @@ impl Order {
         }
         let (_, inputs, deps) = self.reads(&d.file, &d.keys)?;
         d.inputs = inputs;
+        d.reads = deps.iter().map(|x| x.name.clone()).collect();
         self.path.push(d.name.clone());
         for dep in deps {
             self.visit(dep)?;
@@ -163,9 +204,11 @@ impl Order {
                 )
             })
             .collect();
-        let instance = crate::stack::instance(&loaded.cfg, &loaded.stack, &loaded.program, &given)
+        let named = (loaded.stack.as_str(), loaded.path.as_str());
+        let instance = crate::stack::instance(&loaded.cfg, named, &loaded.program, &given)
             .unwrap_or_else(|_| crate::stack::Instance {
                 stack: loaded.stack.clone(),
+                path: loaded.path.clone(),
                 key: keys.to_vec(),
                 defaulted: Vec::new(),
             });
@@ -220,6 +263,8 @@ impl Order {
             })
             .collect::<Result<_>>()?;
         Ok(Some(Dependency {
+            full: format!("{}{}", one.path, &name[stack.len()..]),
+            reads: Vec::new(),
             file: one.file.clone(),
             key: keys.clone(),
             keys,
@@ -251,7 +296,7 @@ impl InOrder {
             .split_last()
             .ok_or_else(|| anyhow::anyhow!("internal: an apply order with no deployment"))?;
         for d in deps {
-            self.header(&d.name);
+            self.header(&d.full);
             let mut cli = self.of(d);
             cli.input_files = Vec::new();
             match run(cli, None)? {
@@ -259,28 +304,56 @@ impl InOrder {
                 o => return Ok(o),
             }
         }
-        self.header(&last.name);
+        self.header(&last.full);
         if !self.cli.every_stack.is_empty() {
             // The project's last stack: run as a dependency is, by its file.
             return run(self.of(last), None);
         }
-        let own = last.inputs.clone();
-        let InOrder { mut cli, order } = self;
+        run(self.target(last), None)
+    }
+
+    /// The target's plan of what it reads, then its own (R-200): one
+    /// tree, each planned against the outputs of those before it.
+    pub(super) fn plan(self) -> Result<Outcome> {
+        let of = |d: &Dependency, cmd: Cmd| {
+            let mut cli = match d.root {
+                true => self.target(d),
+                false => {
+                    let mut cli = self.of(d);
+                    cli.input_files = Vec::new();
+                    cli
+                }
+            };
+            cli.cmd = cmd;
+            cli
+        };
+        super::matrix::Tree {
+            cli: &self.cli,
+            label: None,
+            sites: Default::default(),
+        }
+        .plan(&self.order, &[], &of)
+    }
+
+    /// The run of the target `last`: a `--set` of an input it declares,
+    /// or one no stack of the run declares, which names the error, is its.
+    fn target(&self, last: &Dependency) -> Cli {
+        let mut cli = self.cli.clone();
         cli.user_set.retain(|kv| {
             let k = named_input(kv);
-            own.contains(&k) || !order.iter().any(|d| d.inputs.contains(&k))
+            last.inputs.contains(&k) || !self.order.iter().any(|d| d.inputs.contains(&k))
         });
         cli.set = cli.user_set.clone();
         cli.set
             .extend(cli.keys.iter().map(|(k, v)| format!("{k}={v}")));
-        run(cli, None)
+        cli
     }
 
     /// The `stacks:` line (R-79): the deployments in apply order. Each is
     /// planned, confirmed and applied in turn, so its ticks are its own
     /// plan's, printed under its name.
     fn say(&self) {
-        let named: Vec<String> = self.order.iter().map(|d| d.name.clone()).collect();
+        let named: Vec<String> = self.order.iter().map(|d| d.full.clone()).collect();
         let target = named.last().cloned().unwrap_or_default();
         let deps = &named[..named.len() - 1];
         if self.cli.every_stack.is_empty() {

@@ -64,7 +64,8 @@ pub(super) fn readers_of(
                 )
             })
             .collect();
-        let Ok(instance) = crate::stack::instance(&l.cfg, &l.stack, &l.program, &given) else {
+        let Ok(instance) = crate::stack::instance(&l.cfg, (&l.stack, &l.path), &l.program, &given)
+        else {
             continue;
         };
         let (names, any) = crate::stack::reads(&l.program, &l.deployed, &instance.key);

@@ -4,7 +4,7 @@ exit: ok
   "apply": null,
   "conflicts": [],
   "denied": [],
-  "deployment": "gke_two_phase",
+  "deployment": "stacks.gke_two_phase",
   "held_for_approval": [],
   "key_defaults": [],
   "later": [

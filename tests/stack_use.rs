@@ -48,16 +48,21 @@ fn a_used_stacks_reads_run_in_it_not_in_its_user() {
     // Where it belongs, the read runs (and fails: there is no file).
     let r = s.run(&["plan", "platform"]).failure();
     assert!(r.stderr.contains("vendor/kubeconfig.yml"), "{}", r.stderr);
-    // The user reads the deployment's output, and runs none of it.
-    let r = s.run(&["plan", "apps"]).success();
-    assert_eq!(
-        r.summary(),
-        "plan: 1 create after platform[env=lab] is applied",
+    // A plan of the user plans the stack first, as its apply would
+    // (R-200): its failure stops the chain there.
+    let r = s.run(&["plan", "apps"]).failure();
+    assert!(
+        r.stdout.contains(
+            "stacks.apps[env=lab]      stacks/apps.df  not planned: stacks.platform[env=lab] failed"
+        ),
         "{}",
         r.stdout
     );
+    // The user reads the deployment's output, and runs none of it.
+    let r = s.run(&["why", "net.vpc rec", "apps"]).success();
     assert!(
-        r.stdout.contains("waits on  stack platform[env=lab]"),
+        r.stdout
+            .contains("waits on  stack stacks.platform[env=lab]"),
         "{}",
         r.stdout
     );

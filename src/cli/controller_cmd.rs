@@ -98,8 +98,13 @@ impl Controller {
             .iter()
             .map(|kv| split_kv(kv).map(|(k, v)| (k.to_string(), v)))
             .collect::<Result<Vec<_>>>()?;
-        let own =
-            crate::stack::instance(&cfg, &name, &program, &inputs::set_facts(&[], &set)?)?.name();
+        let own = crate::stack::instance(
+            &cfg,
+            (&name, &name),
+            &program,
+            &inputs::set_facts(&[], &set)?,
+        )?
+        .name();
         let registered = crate::stack::registry(&cli.root)?
             .get(&own)
             .is_some_and(|e| e.bootstrap);

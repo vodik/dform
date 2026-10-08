@@ -314,6 +314,9 @@ pub fn config(program: &Program) -> Result<Stack> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Instance {
     pub stack: String,
+    /// The stack's module path from the project root, `stacks.app`: the
+    /// namespace of its full name (R-200).
+    pub path: String,
     pub key: Vec<(String, String)>,
     /// The key inputs whose value is the input's default: the run named
     /// none.
@@ -346,13 +349,27 @@ impl Instance {
         }
     }
 
-    /// What `plan` and `apply` print first: the name, and which key values
-    /// are defaults, `pngu[env=dev] (env from its default)`.
+    /// `stacks.app[env=prod]`: the deployment's full name, its stack's
+    /// module path and its key (R-200), what the plan, `--json` and `stack
+    /// list` print.
+    pub fn full_name(&self) -> String {
+        match self.segment() {
+            Some(seg) => format!("{}[{seg}]", self.path),
+            None => self.path.clone(),
+        }
+    }
+
+    /// What `plan` and `apply` print first: the full name, and which key
+    /// values are defaults, `stacks.pngu[env=dev] (env from its default)`.
     pub fn describe(&self) -> String {
         match self.defaulted.as_slice() {
-            [] => self.name(),
-            [k] => format!("{} ({k} from its default)", self.name()),
-            ks => format!("{} ({} from their defaults)", self.name(), ks.join(", ")),
+            [] => self.full_name(),
+            [k] => format!("{} ({k} from its default)", self.full_name()),
+            ks => format!(
+                "{} ({} from their defaults)",
+                self.full_name(),
+                ks.join(", ")
+            ),
         }
     }
 
@@ -396,7 +413,12 @@ pub fn instance_dir(root: &Path, name: &str) -> PathBuf {
 /// input fact or an `--input-file` contribution of the program, else the
 /// input's default (named in [`Instance::defaulted`]). A key with none is
 /// an error naming the input.
-pub fn instance(cfg: &Stack, stack: &str, program: &Program, set: &[Atom]) -> Result<Instance> {
+pub fn instance(
+    cfg: &Stack,
+    (stack, path): (&str, &str),
+    program: &Program,
+    set: &[Atom],
+) -> Result<Instance> {
     let (mut key, mut defaulted) = (Vec::new(), Vec::new());
     let mut diags = Vec::new();
     for (k, span) in &cfg.keys {
@@ -454,6 +476,7 @@ pub fn instance(cfg: &Stack, stack: &str, program: &Program, set: &[Atom]) -> Re
     }
     Ok(Instance {
         stack: stack.to_string(),
+        path: path.to_string(),
         key,
         defaulted,
     })
@@ -1110,7 +1133,15 @@ impl Published {
     /// copy's; `Name` as the reader names the deployment. A secret
     /// output's value is a secret null, a pending one's an open null, each
     /// labeled `output/Name#k` ([`deployment_output`]).
-    fn facts(&self, path: &str, name: &str, opened: &BTreeMap<String, Value>) -> Vec<Atom> {
+    /// `planned`: the outputs are a plan's of the deployment `planned`
+    /// (its full name), and one not known waits on its apply.
+    fn facts(
+        &self,
+        path: &str,
+        name: &str,
+        opened: &BTreeMap<String, Value>,
+        planned: Option<&str>,
+    ) -> Vec<Atom> {
         let s = |x: &str| Term::Val(Value::Str(x.to_string()));
         let fact = |k: &str, v: Value| {
             atom(
@@ -1126,7 +1157,12 @@ impl Published {
             )
         };
         let null = |k: &str, class, ty: &str| Value::Null {
-            label: output_label(name, k),
+            label: match (planned, class) {
+                (Some(full), crate::value::NullClass::Open) => {
+                    crate::value::null_label(UNAPPLIED, full, k)
+                }
+                _ => output_label(name, k),
+            },
             class,
             ty: ty.to_string(),
         };
@@ -1239,6 +1275,56 @@ pub struct Outputs {
 impl Outputs {
     pub fn is_empty(&self) -> bool {
         self.known.is_empty() && self.pending.is_empty() && self.secret.is_empty()
+    }
+}
+
+/// A deployment's outputs as its plan has them (R-200): what the plans of
+/// the deployments that read it, later in the same run, read in place of
+/// what it published, so a value the plan knows flows and one known only
+/// after its apply waits on that apply.
+#[derive(Debug, Clone)]
+pub struct Planned {
+    /// The deployment's full name, `stacks.platform[env=lab]`.
+    pub full: String,
+    pub outputs: Outputs,
+}
+
+impl Planned {
+    /// What a reader reads of the deployment it names `name`: `read`,
+    /// what it published if anything, with the plan's outputs over it. A
+    /// public output the plan knows is its planned value; one it does not
+    /// waits on the apply; a secret output is as published (its value is
+    /// never shown), else it waits too.
+    pub fn over(&self, name: &str, read: Option<Read>) -> Read {
+        let mut read = read.unwrap_or_else(|| Read {
+            name: name.to_string(),
+            digest: outputs_digest(None),
+            published: None,
+            world: None,
+            opened: BTreeMap::new(),
+            planned: None,
+        });
+        let was = read.published.take().unwrap_or_default();
+        let mut secret = BTreeMap::new();
+        let mut pending = self.outputs.pending.clone();
+        for k in self.outputs.secret.keys() {
+            match was.secret.get(k) {
+                Some(o) => {
+                    secret.insert(k.clone(), o.clone());
+                }
+                None => {
+                    pending.insert(k.clone());
+                }
+            }
+        }
+        read.published = Some(Published {
+            deployment: name.to_string(),
+            outputs: self.outputs.known.clone(),
+            pending,
+            secret,
+        });
+        read.planned = Some(self.full.clone());
+        read
     }
 }
 
@@ -1580,6 +1666,11 @@ pub struct Read {
     /// Each secret output sealed to the reader, opened with its master
     /// (R-166): its value, as an input's secret is.
     pub opened: BTreeMap<String, Value>,
+    /// What a plan of the deployment earlier in this run has of its
+    /// outputs, over what it published (R-200): its full name, which an
+    /// output the plan does not know waits on, `after
+    /// stacks.platform[env=lab] is applied`.
+    pub planned: Option<String>,
 }
 
 /// The digest of an outputs object as a plan records it.
@@ -1602,6 +1693,7 @@ fn read_published(loc: &Location, s3: OpenS3, name: &str, own: &str) -> Result<R
             published: None,
             world: None,
             opened: BTreeMap::new(),
+            planned: None,
         });
     };
     let p: Published =
@@ -1622,6 +1714,7 @@ fn read_published(loc: &Location, s3: OpenS3, name: &str, own: &str) -> Result<R
             Location::S3(_) => None,
         },
         opened: BTreeMap::new(),
+        planned: None,
     })
 }
 
@@ -1846,9 +1939,12 @@ pub fn unapplied_facts(
             vec![s(&d.path), s(""), s(&name)],
             Span::default(),
         ));
+        // The label names the deployment by its full name (R-200): what
+        // `later` and the headline say it waits on.
+        let full = format!("{}{}", d.path, &name[base.len()..]);
         for k in keys.get(&d.path).into_iter().flatten() {
             let null = Value::Null {
-                label: crate::value::null_label(UNAPPLIED, &name, k),
+                label: crate::value::null_label(UNAPPLIED, &full, k),
                 class: crate::value::NullClass::Open,
                 ty: String::new(),
             };
@@ -1926,7 +2022,12 @@ pub fn output_facts(read: &[Read], deployed: &[Deployed]) -> Vec<Atom> {
                 .iter()
                 .find(|d| d.name == base)
                 .map_or(base, |d| d.path.as_str());
-            Some(r.published.as_ref()?.facts(path, &r.name, &r.opened))
+            let planned = r.planned.as_deref();
+            Some(
+                r.published
+                    .as_ref()?
+                    .facts(path, &r.name, &r.opened, planned),
+            )
         })
         .flatten()
         .collect()

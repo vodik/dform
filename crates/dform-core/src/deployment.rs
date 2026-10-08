@@ -110,6 +110,9 @@ pub struct Loaded {
     pub cfg: stack::Stack,
     /// The stack's name.
     pub stack: String,
+    /// The stack's full name, its module path from the project root
+    /// (`stacks.platform`, R-200); its name outside a project.
+    pub path: String,
     pub providers: Vec<String>,
     /// The program lowered, when it lowers (when it does not, evaluation
     /// reports why).
@@ -145,6 +148,9 @@ pub fn load(t: &Target, version: &str, read: Reader, obs: &mut dyn Observer) -> 
         with_manifest(&mut cfg, m);
     }
     let stack = cfg.name.clone().unwrap_or_else(|| state::stack_name(first));
+    let path = project::manifest_root(first)
+        .and_then(|root| project::module_path(&root, first))
+        .unwrap_or_else(|| stack.clone());
     let providers = if t.providers.is_empty() {
         cfg.providers.clone()
     } else {
@@ -174,6 +180,7 @@ pub fn load(t: &Target, version: &str, read: Reader, obs: &mut dyn Observer) -> 
         relations,
         cfg,
         stack,
+        path,
         providers,
         lowered,
         declared,
@@ -273,7 +280,7 @@ impl Loaded {
         let set_facts = inputs::set_facts(&self.declared, &sel.set)?;
         let instance = match &sel.instance {
             Some(i) => i.clone(),
-            None => stack::instance(&self.cfg, &self.stack, &program, &set_facts)?,
+            None => stack::instance(&self.cfg, (&self.stack, &self.path), &program, &set_facts)?,
         };
         let deployment = instance.name();
         if !sel.objects_only {

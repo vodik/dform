@@ -1,6 +1,6 @@
 exit: ok
 -- stdout --
-deployment: pngu[env=stg]
+deployment: stacks.pngu[env=stg]
 plan: 7 changes (7 create) over 1 tick
 
 tick 1  7 changes

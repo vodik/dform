@@ -45,16 +45,16 @@ fn apply_applies_what_the_stack_reads_first() {
     let r = s.run(&["apply", "app", "env=prod"]).success();
     assert!(
         r.stdout.starts_with(
-            "stacks: net[env=prod], then app[env=prod] below, in apply order: app[env=prod] \
+            "stacks: stacks.net[env=prod], then stacks.app[env=prod] below, in apply order: stacks.app[env=prod] \
              reads its outputs; each is planned, confirmed and applied in turn\n\
-             == net[env=prod]\ndeployment: net[env=prod]\n"
+             == stacks.net[env=prod]\ndeployment: stacks.net[env=prod]\n"
         ),
         "{}",
         r.stdout
     );
     let app = r
         .stdout
-        .split("== app[env=prod]\n")
+        .split("== stacks.app[env=prod]\n")
         .nth(1)
         .unwrap_or_default();
     assert!(
@@ -72,8 +72,9 @@ fn apply_applies_what_the_stack_reads_first() {
     let s = project("order-web");
     let r = s.run(&["apply", "web"]).success();
     assert!(
-        r.stdout
-            .starts_with("stacks: net[env=prod], then app[env=prod], then web below"),
+        r.stdout.starts_with(
+            "stacks: stacks.net[env=prod], then stacks.app[env=prod], then stacks.web below"
+        ),
         "{}",
         r.stdout
     );
@@ -91,7 +92,11 @@ fn a_failed_dependency_stops_the_apply() {
     );
     let r = s.run(&["apply", "app", "env=prod"]).failure();
     assert!(r.stderr.contains("no net in prod"), "{}", r.stderr);
-    assert!(!r.stdout.contains("== app[env=prod]"), "{}", r.stdout);
+    assert!(
+        !r.stdout.contains("== stacks.app[env=prod]"),
+        "{}",
+        r.stdout
+    );
     assert!(!s.path("dform.state/app").exists());
 }
 
@@ -127,7 +132,7 @@ fn a_set_goes_to_the_stack_that_declares_it() {
         .success();
     let app = r
         .stdout
-        .split("== app[env=prod]\n")
+        .split("== stacks.app[env=prod]\n")
         .nth(1)
         .unwrap_or_default();
     assert!(app.contains("  cidr = \"10.9.0.0/16\"\n"), "{}", r.stdout);
@@ -184,7 +189,7 @@ fn a_keyed_read_takes_the_pun() {
     let r = s.run(&["apply", "app", "env=dev"]).success();
     assert!(
         r.stdout
-            .starts_with("stacks: net[env=dev], then app[env=dev] below"),
+            .starts_with("stacks: stacks.net[env=dev], then stacks.app[env=dev] below"),
         "{}",
         r.stdout
     );
@@ -198,7 +203,7 @@ fn a_defaulted_key_orders_the_deployment_it_names() {
     let r = s.run(&["apply", "app"]).success();
     assert!(
         r.stdout
-            .starts_with("stacks: net[env=dev], then app[env=dev] below"),
+            .starts_with("stacks: stacks.net[env=dev], then stacks.app[env=dev] below"),
         "{}",
         r.stdout
     );
@@ -221,7 +226,7 @@ fn a_computed_key_orders_every_deployment_of_the_stack() {
     let r = s.run(&["apply", "app", "env=prod"]).success();
     assert!(
         r.stdout
-            .starts_with("stacks: net[env=stg], then app[env=prod] below"),
+            .starts_with("stacks: stacks.net[env=stg], then stacks.app[env=prod] below"),
         "{}",
         r.stdout
     );

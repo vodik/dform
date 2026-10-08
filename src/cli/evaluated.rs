@@ -144,13 +144,15 @@ impl Objects {
         )?;
         drop(locating);
         let text_plan = matches!(&cli.cmd, Cmd::Plan(p) if !p.json);
+        // A tree's header line names the deployment (R-200).
         if !located.instance.key.is_empty()
             && hook.is_none()
+            && !cli.held.is_held()
             && (text_plan || matches!(cli.cmd, Cmd::Apply(_)))
         {
             cli.held.print(&match cli.cmd.why() >= report::Why::How {
                 true => format!("deployment: {}\n", located.instance.describe()),
-                false => format!("deployment: {}\n", located.instance.name()),
+                false => format!("deployment: {}\n", located.instance.full_name()),
             });
         }
         let manifest = located.loaded.manifest.as_ref();
@@ -550,6 +552,17 @@ impl Context {
     /// so the producer's next apply seals to it.
     fn read_outputs(&mut self, located: &deployment::Located) -> Result<Vec<crate::stack::Read>> {
         let mut read = located.read_outputs(&open_s3(&self.root, false))?;
+        // A plan reads what the deployments planned before it in this run
+        // will publish (R-200), over what they have.
+        if let Cmd::Plan(_) = &self.cli.cmd {
+            for (name, p) in &self.cli.planned {
+                let was = read
+                    .iter()
+                    .position(|r| r.name == *name)
+                    .map(|i| read.remove(i));
+                read.push(p.over(name, was));
+            }
+        }
         let (opened, unsealed) = open_sealed(&mut read, &self.deployment, &self.master);
         if let (Cmd::Apply(_), false, None) = (&self.cli.cmd, unsealed.is_empty(), &self.cli.world)
         {

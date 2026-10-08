@@ -1572,8 +1572,9 @@ fn a_held_secret_is_read_from_the_cluster() {
             Some(String::from_utf8(dform_k8s_base64(d)).unwrap())
         });
     assert_eq!(got.as_deref(), Some(PW), "{copy}");
-    let r = dform(&s, Some(&kc), &["plan", "b.df"]).success();
-    assert_eq!(r.summary(), "stack b is up to date", "{}", r.stdout);
+    // A plan of b plans a first (R-200), with its input.
+    let r = dform(&s, Some(&kc), &["plan", "b.df", "--set", &set]).success();
+    assert_eq!(r.summary(), "plan: 0 changes", "{}", r.stdout);
     out += &(r.stdout + &r.stderr);
     assert!(!out.contains(PW), "{out}");
     let mut files = Vec::new();

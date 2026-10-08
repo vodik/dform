@@ -137,13 +137,13 @@ fn a_remote_backend_takes_the_stack_name() {
     let r = app.run(&["plan", "app"]).success();
     assert_eq!(
         r.summary(),
-        "plan: 1 create after platform.cluster[env=staging] is applied",
+        "plan: 1 create after platform.stacks.cluster[env=staging] is applied",
         "{}",
         r.stdout
     );
     assert!(
         r.stdout
-            .contains("  waits on  stack platform.cluster[env=staging]\n"),
+            .contains("  waits on  stack platform.stacks.cluster[env=staging]\n"),
         "{}",
         r.stdout
     );

@@ -56,10 +56,16 @@ impl Plan {
             &planned.denies,
         );
         report.every_site = self.json;
+        report.nested = cx.cli.held.is_held();
         r.explain(&mut report, &planned.plan, &planned.res, 1);
+        if cx.cli.held.is_held() {
+            cx.cli
+                .held
+                .outputs(planned_outputs(&cx, &planned, &st, &evaluator)?);
+        }
         let file = self.file(&cx, &located, &r, &planned, &st)?;
         if self.json {
-            self.print_json(&cx, &located, &report, &planned, &violations, file.as_ref())?;
+            self.print_json(&located, &report, &planned, &violations, file.as_ref())?;
         } else {
             self.print_text(&cx, &r, &report, &planned, file.as_ref(), &evaluator)?;
         }
@@ -165,7 +171,6 @@ impl Plan {
     /// (R-147).
     fn print_json(
         &self,
-        cx: &Context,
         located: &deployment::Located,
         report: &report::Report,
         planned: &Planned,
@@ -173,7 +178,7 @@ impl Plan {
         file: Option<&zset::file::PlanFile>,
     ) -> Result<()> {
         let mut j = report.json();
-        j["deployment"] = serde_json::json!(cx.deployment);
+        j["deployment"] = serde_json::json!(located.instance.full_name());
         j["outcome"] = match violations.is_empty() && planned.denies.is_empty() {
             true => Outcome::Done.word(),
             false => "refused",
@@ -214,7 +219,7 @@ impl Plan {
         evaluator: &deployment::Evaluator,
     ) -> Result<()> {
         let held = &cx.cli.held;
-        held.summary(report.summary());
+        held.tally(report.tally());
         held.print(&r.rendered(report));
         held.print(&unreachable_text(&planned.unreachable));
         // Who each secret output no provider holds is sealed to: the grant
@@ -241,4 +246,27 @@ impl Plan {
         }
         Ok(())
     }
+}
+
+/// The deployment's outputs as its plan has them (R-200), for the plans of
+/// the deployments that read it in the same run: a value the plan knows,
+/// else pending until the apply.
+fn planned_outputs(
+    cx: &Context,
+    planned: &Planned,
+    st: &crate::state::State,
+    evaluator: &deployment::Evaluator,
+) -> Result<crate::stack::Outputs> {
+    if !crate::stack::has_outputs(&planned.res.facts) {
+        return Ok(Default::default());
+    }
+    Ok(crate::stack::outputs(
+        &planned.res.facts,
+        &crate::stack::secret_output_types(&evaluator.program),
+        &evaluator.backend.observe(st)?,
+        st,
+        &cx.deployment,
+        &|_| None,
+        &|_, _| Default::default(),
+    ))
 }

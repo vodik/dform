@@ -93,7 +93,7 @@ fn apply_then_replan_is_undeformed() {
     let again = run("plan");
     assert_eq!(
         again.stdout,
-        "deployment: dform[env=staging]\nstack dform is up to date\n"
+        "deployment: stacks.dform[env=staging]\nstack dform is up to date\n"
     );
 }
 

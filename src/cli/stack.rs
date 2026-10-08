@@ -87,10 +87,15 @@ impl<'a> Listing<'a> {
             Some(false) => format!("removed from {}", self.label),
             None => String::new(),
         };
+        // Each by its full name, its stack's module path (R-200).
+        let full = match deployment.strip_prefix(s.name.as_str()) {
+            Some(rest) if rest.is_empty() || rest.starts_with('[') => format!("{}{rest}", s.path),
+            _ => deployment.to_string(),
+        };
         let row = [
-            format!("{}{key}", s.name),
+            format!("{}{key}", s.path),
             s.file.display().to_string(),
-            deployment.to_string(),
+            full,
             listed,
             state,
             last.applied,
@@ -334,8 +339,12 @@ impl Rekey {
             .retain(|kv| !kv.split_once('=').is_some_and(|(x, _)| keys.contains(&x)));
         cli.set
             .extend(run_as.iter().map(|(k, v)| format!("{k}={v}")));
+        let path = crate::project::manifest_root(&files[0])
+            .and_then(|root| crate::project::module_path(&root, &files[0]))
+            .unwrap_or_else(|| own.clone());
         let instance = |key| crate::stack::Instance {
             stack: own.clone(),
+            path: path.clone(),
             key,
             defaulted: Vec::new(),
         };

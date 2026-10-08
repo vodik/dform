@@ -1,6 +1,6 @@
 //! A read of another stack's output before that deployment is applied
 //! (`platform[env].ingress_ip`) waits on it (R-121): the reader lists under
-//! `later` as `waits on  stack platform[env=lab]`, its attributes as
+//! `later` as `waits on  stack stacks.platform[env=lab]`, its attributes as
 //! written, and `why` says the deployment has not been applied. Once it
 //! is, the reader plans with the value; a deployment that has published
 //! and lacks the output is no wait.
@@ -35,38 +35,33 @@ fn project(name: &str) -> Scratch {
 #[test]
 fn a_read_of_a_deployment_not_applied_waits_on_it() {
     let s = project("cross-wait");
-    let r = s.run(&["plan", "apps"]).success();
-    assert_eq!(
-        r.summary(),
-        "plan: 1 create after platform[env=lab] is applied",
-        "{}",
-        r.stdout
-    );
-    assert!(
-        r.stdout.contains(
-            "later\n  \
-             waits on  stack platform[env=lab]\n  \
-             + net.vpc rec  "
-        ) && r
-            .stdout
-            .contains("      cidr = \"10.1.0.0/16\"\n      name = platform[env=lab].ingress_ip\n"),
-        "{}",
-        r.stdout
-    );
+    // `why` reads what was published: nothing yet, so the read waits.
     let r = s.run(&["why", "net.vpc rec", "apps"]).success();
     assert!(
         r.stdout
-            .ends_with("\nlater  waits on  stack platform[env=lab]\n"),
+            .ends_with("\nlater  waits on  stack stacks.platform[env=lab]\n"),
+        "{}",
+        r.stdout
+    );
+    // A plan of the reader plans what it reads first and reads what that
+    // will publish (R-200): a value its plan knows flows.
+    let r = s.run(&["plan", "apps"]).success();
+    assert_eq!(r.summary(), "plan: 2 changes (2 create)", "{}", r.stdout);
+    assert!(
+        r.stdout
+            .contains("      cidr = \"10.1.0.0/16\"\n        name = \"10.0.0.0/16\"\n"),
         "{}",
         r.stdout
     );
 
-    // Applied, the reader plans with its value.
+    // Applied, its dependency is one line and the reader plans with the
+    // value.
     s.run(&["apply", "platform"]).success();
     let r = s.run(&["plan", "apps"]).success();
-    assert_eq!(
-        r.summary(),
-        "plan: 1 change (1 create) over 1 tick",
+    assert_eq!(r.summary(), "plan: 1 change (1 create)", "{}", r.stdout);
+    assert!(
+        r.stdout
+            .contains("\n= stacks.platform[env=lab]  stacks/platform.df  up to date\n\n+ "),
         "{}",
         r.stdout
     );
@@ -80,7 +75,8 @@ fn apply_applies_the_deployment_it_waits_on_first() {
     let s = project("cross-wait-apply");
     let r = s.run(&["apply", "apps"]).success();
     assert!(
-        r.stdout.contains("== platform[env=lab]") && r.stdout.contains("name = \"10.0.0.0/16\""),
+        r.stdout.contains("== stacks.platform[env=lab]")
+            && r.stdout.contains("name = \"10.0.0.0/16\""),
         "{}",
         r.stdout
     );
@@ -88,7 +84,8 @@ fn apply_applies_the_deployment_it_waits_on_first() {
 
 /// A deployment that has published, without the output the reader reads
 /// (applied before the output was added), is not waited on: the read finds
-/// no row, and the reader is not planned, saying so.
+/// no row, and the reader is not planned, saying so; a plan of the reader
+/// reads what the deployment's next apply publishes (R-200).
 #[test]
 fn a_published_deployment_without_the_output_is_no_wait() {
     let s = project("cross-wait-published");
@@ -101,10 +98,21 @@ fn a_published_deployment_without_the_output_is_no_wait() {
     );
     s.run(&["apply", "platform"]).success();
     s.write("stacks/platform.df", PLATFORM);
+    let r = s.run(&["why", "net.vpc rec", "apps"]);
+    assert!(!r.stdout.contains("waits on  stack"), "{}", r.stdout);
+    let r = s.run(&["plan", "apps"]).success();
+    assert!(r.stdout.contains("name = \"10.0.0.0/16\""), "{}", r.stdout);
+    s.write(
+        "stacks/platform.df",
+        &PLATFORM.replace(
+            "output ingress_ip = edge.cidr\n",
+            "output other = edge.cidr\n",
+        ),
+    );
     let r = s.run(&["plan", "apps"]).success();
     assert!(!r.stdout.contains("waits on  stack"), "{}", r.stdout);
     assert!(
-        r.stdout.contains("not planned\n  net.vpc rec  "),
+        r.stdout.contains("  not planned\n    net.vpc rec  "),
         "{}",
         r.stdout
     );

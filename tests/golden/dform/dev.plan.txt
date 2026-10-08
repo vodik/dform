@@ -1,6 +1,6 @@
 exit: ok
 -- stdout --
-deployment: dform[env=dev]
+deployment: stacks.dform[env=dev]
 plan: 6 changes (6 create) over 1 tick
 
 tick 1  6 changes
