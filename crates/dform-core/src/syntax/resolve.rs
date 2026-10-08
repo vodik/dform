@@ -3104,14 +3104,24 @@ impl<'u> Lowerer<'u> {
             "text" => read,
             f => format!("{f}.decode({read})"),
         };
-        let d = Diagnostic::error(
-            self.span(n),
-            format!("`{name}(..)` is gone (R-155): a location is read by `io.read`"),
-        )
-        .with_help(format!(
-            "`{new}`: `io.read` reads the text, a format's `decode` the document in it, its \
-             rows at their lines"
-        ));
+        // `secrets(..)` never was a loader: the given secrets' file is
+        // read as every document is (R-108).
+        let (headline, help) = match name.as_str() {
+            "secrets" => (
+                "a file of given secrets is read by `secrets.decode(io.read(..))`".into(),
+                format!(
+                    "`{new}`: the file `dform secrets set` writes, opened with the deployment's key"
+                ),
+            ),
+            _ => (
+                format!("`{name}(..)` is gone (R-155): a location is read by `io.read`"),
+                format!(
+                    "`{new}`: `io.read` reads the text, a format's `decode` the document in it, \
+                     its rows at their lines"
+                ),
+            ),
+        };
+        let d = Diagnostic::error(self.span(n), headline).with_help(help);
         self.diags.push(d);
         Some(Err(Skip))
     }

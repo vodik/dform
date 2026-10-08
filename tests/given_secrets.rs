@@ -646,3 +646,25 @@ fn a_file_sops_wrote_is_read_into_the_inputs() {
         r.stderr
     );
 }
+
+/// `secrets("..")` was never a loader: the error says how the file is
+/// read, not that the form is gone.
+#[test]
+fn secrets_as_a_loader_names_the_form() {
+    let s = Scratch::project("given-loader");
+    s.write(
+        "p.df",
+        "\ninput admin: secret(string)\nset from secrets(\"secrets/p.json\")\nuse fake\n",
+    );
+    let r = s.run(&["plan", "p.df"]).failure();
+    assert!(
+        r.stderr.contains(
+            "Error: p.df:3:10: a file of given secrets is read by `secrets.decode(io.read(..))`"
+        ) && r.stderr.contains(
+            "Help: `secrets.decode(io.read(\"secrets/p.json\"))`: the file `dform secrets set` \
+                 writes, opened with the deployment's key"
+        ) && !r.stderr.contains("gone"),
+        "{}",
+        r.stderr
+    );
+}
