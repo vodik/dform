@@ -258,3 +258,60 @@ fn the_plan_file_and_json_carry_the_kept_difference() {
     run(&s, NOW, &["apply", "plan.json"]).success();
     assert_eq!(world(&s)["note"], "n1");
 }
+
+/// Rotating the token reaches new servers only: `rotate` and `secrets
+/// list` say so, the plan keeps the server's user data, and `secrets
+/// list` names the server made with the older generation until a replace
+/// makes it again with the current one.
+#[test]
+fn a_rotation_reaches_new_objects_and_the_list_names_older_ones() {
+    let s = project("bootstrap-rotate");
+    run(&s, NOW, &["apply", "p"]).success();
+    let r = run(&s, NOW, &["secrets", "rotate", "p", "k3s"]).success();
+    assert!(
+        r.stdout.contains(
+            "  compute.vm vm.user_data  new objects only (bootstrap)\nrotated k3s of p: generation \
+             2, by alice; the objects that read it keep what they were made with; a new one is \
+             made with it\n"
+        ),
+        "{}",
+        r.stdout
+    );
+    let r = run(&s, NOW, &["plan", "p"]).success();
+    assert_eq!(
+        r.stdout,
+        "= compute.vm vm  stacks/p.df:3\n    user_data differs (bootstrap): kept\nstack p is \
+         up to date\n"
+    );
+    run(&s, NOW, &["apply", "p"]).success();
+    let r = run(&s, NOW, &["secrets", "list", "p"]).success();
+    assert!(
+        r.stdout.contains("new objects only (bootstrap)"),
+        "{}",
+        r.stdout
+    );
+    assert!(
+        r.stdout
+            .contains("\nk3s: made with generation 1 (current 2): compute.vm vm user_data\n"),
+        "{}",
+        r.stdout
+    );
+    let j = run(&s, NOW, &["secrets", "list", "--json", "p"]).success();
+    let j: serde_json::Value = serde_json::from_str(&j.stdout).unwrap();
+    assert_eq!(
+        j[0]["made with"],
+        serde_json::json!([{"address": "compute.vm[\"vm\"]", "path": "user_data", "generation": 1}]),
+        "{j}"
+    );
+    program(
+        &s,
+        Server {
+            zone: "z2",
+            ..Server::default()
+        },
+        BOTH,
+    );
+    run(&s, NOW, &["apply", "p"]).success();
+    let r = run(&s, NOW, &["secrets", "list", "p"]).success();
+    assert!(!r.stdout.contains("made with"), "{}", r.stdout);
+}

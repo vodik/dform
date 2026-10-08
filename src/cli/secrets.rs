@@ -327,6 +327,7 @@ impl<'a, 'h> Inventory<'a, 'h> {
             "age",
             "read by",
             "lands",
+            "made with",
         ]);
         for s in list {
             // A given secret's from its file (R-108), which says when it was
@@ -376,6 +377,17 @@ impl<'a, 'h> Inventory<'a, 'h> {
                 .with_json(s.since.clone().into()),
                 Cell::text(read).with_json(cells.into()),
                 Cell::text(s.lands().map(|l| l.words()).unwrap_or_default()),
+                // The objects made with an older generation (R-198): said
+                // under the table.
+                Cell::text("").with_json(
+                    s.older
+                        .iter()
+                        .map(|(a, path, g)| {
+                            serde_json::json!({"address": a.to_string(), "path": path, "generation": g})
+                        })
+                        .collect::<Vec<_>>()
+                        .into(),
+                ),
             ]);
         }
         if json {
@@ -388,6 +400,9 @@ impl<'a, 'h> Inventory<'a, 'h> {
             if list.len() == 1 { "" } else { "s" }
         );
         print!("{}", t.without_empty_columns().render(o));
+        for line in older_lines(list) {
+            println!("{line}");
+        }
         let earlier = list
             .iter()
             .filter(|s| s.epoch.is_some_and(|e| e < current))
@@ -484,8 +499,15 @@ impl<'a, 'h> Inventory<'a, 'h> {
                 "who": who,
             }),
         )?;
+        // Read only where it is given at creation (R-198): no plan changes it.
+        let next = match s.lands() {
+            Some(crate::secrets::inventory::Lands::Kept) => {
+                "the objects that read it keep what they were made with; a new one is made with it"
+            }
+            _ => "the next plan changes it",
+        };
         println!(
-            "rotated {key} of {deployment}: generation {}, by {who}; the next plan changes it",
+            "rotated {key} of {deployment}: generation {}, by {who}; {next}",
             r.generation
         );
         lock.release()
@@ -657,4 +679,28 @@ pub(super) fn recipients_json(rs: &[crate::custody::Recipient]) -> serde_json::V
     rs.iter()
         .map(|r| serde_json::json!({ "key": r.key, "name": r.name }))
         .collect()
+}
+
+/// Of each secret, the objects made with an older generation of it at an
+/// attribute given at their creation only (R-198), by generation:
+/// `k3s: made with generation 1 (current 2): compute.vm lab user_data`.
+fn older_lines(list: &[crate::secrets::inventory::Secret]) -> Vec<String> {
+    let mut out = Vec::new();
+    for s in list {
+        let mut by: std::collections::BTreeMap<u32, Vec<String>> = Default::default();
+        for (a, path, g) in &s.older {
+            by.entry(*g)
+                .or_default()
+                .push(format!("{} {path}", report::address(a)));
+        }
+        for (g, objects) in by {
+            out.push(format!(
+                "{}: made with generation {g} (current {}): {}",
+                s.key,
+                s.generation,
+                objects.join(", ")
+            ));
+        }
+    }
+    out
 }

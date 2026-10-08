@@ -1872,6 +1872,9 @@ pub mod inventory {
     /// How a new value lands in a cell.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
     pub enum Lands {
+        /// The attribute is given at creation only (R-198): an object that
+        /// exists keeps what it was made with.
+        Kept,
         Update,
         /// The attribute is `force_new`: the object is replaced.
         Replace,
@@ -1882,6 +1885,7 @@ pub mod inventory {
     impl Lands {
         pub fn words(self) -> &'static str {
             match self {
+                Lands::Kept => "new objects only (bootstrap)",
                 Lands::Update => "update",
                 Lands::Replace => "forces replace",
                 Lands::Refused => "refused by prevent_destroy",
@@ -1921,6 +1925,10 @@ pub mod inventory {
         /// A managed secret's version, as its manager names it.
         pub version: Option<String>,
         pub cells: Vec<Cell>,
+        /// The objects made with an older generation of it, at an
+        /// attribute given at their creation only (R-198): each address,
+        /// path and the generation it was made with.
+        pub older: Vec<(crate::ir::Address, String, u32)>,
         /// The values: matched, never printed.
         values: BTreeSet<Value>,
     }
@@ -1937,6 +1945,7 @@ pub mod inventory {
                 lives: None,
                 version: None,
                 cells: Vec::new(),
+                older: Vec::new(),
                 values: BTreeSet::new(),
             }
         }
@@ -2045,6 +2054,7 @@ pub mod inventory {
                 lives: None,
                 version: None,
                 cells: Vec::new(),
+                older: Vec::new(),
                 values: BTreeSet::new(),
             });
             if (e.kind, kind) == (Kind::Random, Kind::Memo) {
@@ -2206,6 +2216,25 @@ pub mod inventory {
                     _ => None,
                 })
                 .collect();
+            // `lifecycle(r, "bootstrap", P)` (R-198).
+            let bootstrap: BTreeSet<(crate::ir::Address, &str)> = facts
+                .iter()
+                .filter(|a| a.pred == "lifecycle")
+                .filter_map(|a| match a.args.as_slice() {
+                    [r, w, p] if text(w) == Some("bootstrap") => {
+                        Some((crate::zset::referenced(r)?, text(p)?))
+                    }
+                    _ => None,
+                })
+                .collect();
+            let given = |addr: &crate::ir::Address, path: &str| {
+                bootstrap.iter().any(|(a, p)| {
+                    a == addr
+                        && path
+                            .strip_prefix(p)
+                            .is_some_and(|r| r.is_empty() || r.starts_with(['.', '[']))
+                })
+            };
             // Each resource attribute a secret reaches.
             for a in facts.iter().filter(|a| a.pred == "attr") {
                 let [
@@ -2244,6 +2273,7 @@ pub mod inventory {
                             };
                             let lands =
                                 match schema.forces_new(t, &crate::provider::norm_path(&path)) {
+                                    _ if given(&addr, &path) => Lands::Kept,
                                     false => Lands::Update,
                                     true if prevent.contains(&addr) => Lands::Refused,
                                     true => Lands::Replace,
@@ -2288,6 +2318,18 @@ pub mod inventory {
                         Kind::Random => born.map(str::to_string),
                         _ => None,
                     };
+                }
+            }
+            for s in self.out.values_mut().filter(|s| s.kind == Kind::Random) {
+                for (k, e) in &st.resources {
+                    let Some(addr) = crate::state::parse_key(k) else {
+                        continue;
+                    };
+                    for (path, gens) in &e.made_with {
+                        if let Some(&g) = gens.get(&s.key).filter(|g| **g < s.generation) {
+                            s.older.push((addr.clone(), path.clone(), g));
+                        }
+                    }
                 }
             }
             let mut v: Vec<Secret> = self.out.into_values().collect();
