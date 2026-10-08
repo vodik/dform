@@ -40,6 +40,21 @@ pub fn answer(
     inputs: &[Value],
     files: &super::Files,
 ) -> Option<Result<Vec<Vec<Value>>>> {
+    answer_by(f, inputs, |r| resolve(r, files))
+}
+
+/// `oci.resolve`'s answer where no registry is asked (`dform test`): the
+/// digest this machine last resolved, else a stand-in derived from the
+/// reference, so a policy that wants a digest holds offline.
+pub fn stand_in(f: &ExternFn, inputs: &[Value]) -> Option<Result<Vec<Vec<Value>>>> {
+    answer_by(f, inputs, |r| Ok(standing(r)))
+}
+
+fn answer_by(
+    f: &ExternFn,
+    inputs: &[Value],
+    resolve: impl FnOnce(&OciRef) -> Result<OciRef, Missing>,
+) -> Option<Result<Vec<Vec<Value>>>> {
     if f.name != RESOLVE {
         return None;
     }
@@ -57,7 +72,7 @@ pub fn answer(
         }
     };
     let row = |v: Value| vec![crate::externs::row(f, inputs, vec![v])];
-    Some(match resolve(&r, files) {
+    Some(match resolve(&r) {
         Ok(pinned) => Ok(row(pinned.value())),
         Err(Missing::NotYet(_)) => Ok(row(Value::Null {
             label: crate::value::null_label(RESOLVE, &text, "2"),
@@ -66,6 +81,22 @@ pub fn answer(
         })),
         Err(Missing::Error(e)) => Err(anyhow!("oci.resolve({text:?}): {e}")),
     })
+}
+
+/// `r` pinned without asking its registry: as last resolved here, else to
+/// a digest derived from the reference.
+fn standing(r: &OciRef) -> OciRef {
+    let mut r = r.clone();
+    if r.digest.is_none() {
+        r.tag.get_or_insert_with(|| "latest".to_string());
+        let key = r.to_string();
+        let derived = || {
+            let text = format!("dform stand-in\0{key}");
+            digest_of("sha256", text.as_bytes()).unwrap_or_default()
+        };
+        r.digest = Some(recalled(&key).unwrap_or_else(derived));
+    }
+    r
 }
 
 /// Why a reference has no digest now.

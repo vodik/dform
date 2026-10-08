@@ -2059,7 +2059,7 @@ fn unconfigured(
 
 /// The providers the program configures itself: the constant names of
 /// its `provider_config(Name, Settings)` facts and rules.
-fn provider_configs(program: &Program) -> BTreeSet<String> {
+pub fn provider_configs(program: &Program) -> BTreeSet<String> {
     crate::modules::reached(program)
         .into_iter()
         .filter_map(|st| match st {

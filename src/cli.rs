@@ -5325,12 +5325,18 @@ fn run_tests(
     files: &[PathBuf],
 ) -> Result<()> {
     use std::io::IsTerminal;
-    // The run's reader of locations, as plan's (R-153): a provider's
-    // scheme is read through it, with what dform.toml grants.
-    let reader = std::sync::Arc::new(crate::files::Files::new(
-        crate::files::Settings::of(cli.manifest.as_ref()),
-        Default::default(),
-    ));
+    // The run's reader of locations, as plan's (R-153), except that a
+    // test reads nothing through a provider: what reads a provider's
+    // location is undetermined.
+    let reader = std::sync::Arc::new(
+        crate::files::Files::new(
+            crate::files::Settings::of(cli.manifest.as_ref()),
+            Default::default(),
+        )
+        .standing_in(),
+    );
+    // Whether an image's digest was stood in (no registry is asked).
+    let images = std::cell::Cell::new(false);
     let backend = match none {
         true => {
             let p = Providers::none();
@@ -5340,6 +5346,9 @@ fn run_tests(
         false => {
             let grants = cli.manifest.iter().flat_map(|m| m.grants());
             let config = plugin::Config {
+                // What the program configures is left unconfigured: a
+                // test configures no provider, so what it serves waits.
+                configured: deployment::provider_configs(program),
                 grants: grants
                     .map(|(k, mut g)| {
                         g.files = crate::files::Shared(Some(reader.clone()));
@@ -5415,7 +5424,8 @@ fn run_tests(
                 if let Some(r) = crate::externs::time(f) {
                     return r;
                 }
-                if let Some(r) = crate::files::oci::answer(f, ins, &reader) {
+                if let Some(r) = crate::files::oci::stand_in(f, ins) {
+                    images.set(true);
                     return r;
                 }
                 if let Some(r) = memos.answer(f, ins) {
@@ -5539,6 +5549,20 @@ fn run_tests(
         if result != "ok" {
             failures.push((format!("{result}  {command}"), lines));
         }
+    }
+    // What the test did not ask the world, said once.
+    if images.get() {
+        println!(
+            "note: no registry is asked: an image's digest is the one this machine last \
+             resolved, else a stand-in"
+        );
+    }
+    let stood = reader.stood_in();
+    if !stood.is_empty() {
+        println!(
+            "note: a provider's location is not read, so what reads it is undetermined: {}",
+            stood.join(", ")
+        );
     }
     if let Some(t) = matrix {
         print!("{}", t.render(&cli.table));

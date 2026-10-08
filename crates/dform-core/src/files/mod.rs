@@ -313,6 +313,9 @@ pub struct Files {
     git: Git,
     /// The schemes the run's providers declare.
     declared: Mutex<BTreeMap<String, Declared>>,
+    /// Where a provider's scheme is not read (`dform test`): each
+    /// location it was asked for, read as "not yet".
+    standing_in: Option<Mutex<std::collections::BTreeSet<String>>>,
 }
 
 impl Default for Files {
@@ -334,7 +337,26 @@ impl Files {
             known: Mutex::new(known),
             git: Git::cache(),
             declared: Mutex::new(BTreeMap::new()),
+            standing_in: None,
         }
+    }
+
+    /// The reader, a provider's scheme not read: what reads such a
+    /// location is undetermined, as a read not there yet (`dform test`).
+    pub fn standing_in(self) -> Files {
+        Files {
+            standing_in: Some(Mutex::new(Default::default())),
+            ..self
+        }
+    }
+
+    /// The locations a provider would have read, not read
+    /// ([`Files::standing_in`]).
+    pub fn stood_in(&self) -> Vec<String> {
+        self.standing_in.as_ref().map_or_else(Vec::new, |m| {
+            let m = m.lock().unwrap_or_else(|e| e.into_inner());
+            m.iter().cloned().collect()
+        })
     }
 
     /// The host keys state knows, read once state is.
@@ -508,6 +530,11 @@ impl Files {
                     .unwrap_or_else(|e| e.into_inner())
                     .get(s)
                     .map(|(_, t)| t.clone());
+                if let (None, Some(_), Some(stood)) = (&registered, &declared, &self.standing_in) {
+                    let mut stood = stood.lock().unwrap_or_else(|e| e.into_inner());
+                    stood.insert(u.to_string());
+                    return Err(Failure::NotYet(format!("{u}: not read under `dform test`")));
+                }
                 match registered.or(declared) {
                     Some(t) => t.read_document(u, self),
                     None => Err(Error::fatal(format!(

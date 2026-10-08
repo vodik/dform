@@ -394,11 +394,12 @@ fn offline_the_last_digest_stands_in() {
     assert!(r.stdout.contains("waits on  oci.resolve("), "{}", r.stdout);
 }
 
-/// `dform test` answers `oci.resolve` as plan does: the Deployment is
-/// there, its image pinned, so the policy holds on the resolved value and
-/// not because nothing was planned.
+/// `dform test` answers `oci.resolve` itself, never through a provider,
+/// and asks no registry: the image's digest is a stand-in, so the policy
+/// that wants a digest holds offline (and holds over a planned
+/// Deployment, not because nothing was planned); it says so once.
 #[test]
-fn dform_test_resolves_a_tag() {
+fn dform_test_stands_in_for_a_digest() {
     let reg = Registry::start();
     reg.tag("acme/app", "v1.2", &digest('a'));
     let image = format!(
@@ -412,8 +413,17 @@ fn dform_test_resolves_a_tag() {
     );
     let r = run(&s, &["test", "p.df"]);
     assert!(r.ok, "{}\n{}", r.stdout, r.stderr);
+    assert!(
+        r.stdout.contains(
+            "note: no registry is asked: an image's digest is the one this machine last \
+             resolved, else a stand-in\n"
+        ),
+        "{}",
+        r.stdout
+    );
+    assert_eq!(r.stdout.matches("note:").count(), 1, "{}", r.stdout);
     assert!(r.stdout.contains("1 combination, 0 failed"), "{}", r.stdout);
-    assert_eq!(reg.seen().len(), 3, "{:?}", reg.seen());
+    assert!(reg.seen().is_empty(), "{:?}", reg.seen());
 }
 
 /// `io.read("oci://REGISTRY/REPO@sha256:..")` reads the manifest the
