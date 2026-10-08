@@ -160,7 +160,7 @@ fn a_stack_is_a_file_named_after_itself() {
     // A `[stacks.NAME]` makes the root file a stack.
     s.write(
         "dform.toml",
-        "[project]\nedition = \"2026\"\n\n[stacks.shop]\nisolated = true\n",
+        "[project]\nedition = \"2026\"\n\n[stacks.shop]\n",
     );
     s.run(&["plan", "shop"]).success();
     let r = s.run(&["stack", "list"]).success();
