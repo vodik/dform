@@ -419,6 +419,23 @@ fn deny(message: &str, how: As, cx: &Context) -> Result<String> {
         out.push_str(&derivations(&held, how, cx)?);
         return Ok(cx.redact.text(&out));
     }
+    // A deny that waits is said as the plan says it under `later`
+    // (R-193): undetermined, and on what; never "does not hold".
+    let says =
+        |head: &Atom| matches!(head.args.first(), Some(Term::Val(Value::Str(m))) if m == message);
+    let stuck = res
+        .stuck
+        .iter()
+        .filter(|s| s.head.pred == "deny" && says(&s.head));
+    let may = res
+        .may_derive
+        .iter()
+        .filter(|m| m.head.pred == "deny" && says(&m.head));
+    let waits: Vec<&BTreeSet<String>> = stuck
+        .map(|s| &s.nulls)
+        .chain(may.map(|m| &m.nulls))
+        .collect();
+    let undetermined = !waits.is_empty();
     let messages: Vec<&Term> = res
         .rules
         .iter()
@@ -443,7 +460,13 @@ fn deny(message: &str, how: As, cx: &Context) -> Result<String> {
     if let Some((first, rest)) = text.split_once('\n')
         && first.ends_with(": no rule derives it")
     {
-        return Ok(format!("deny {quoted}: does not hold\n{rest}"));
+        let on: BTreeSet<String> = waits.into_iter().flatten().cloned().collect();
+        let head = match (undetermined, report::waited(&on).join(", ")) {
+            (false, _) => "does not hold".to_string(),
+            (true, on) if on.is_empty() => "undetermined".to_string(),
+            (true, on) => format!("undetermined, waits on {on}"),
+        };
+        return Ok(format!("deny {quoted}: {head}\n{rest}"));
     }
     let mut out = format!("deny {quoted}: no deny says it\n");
     let near = messages

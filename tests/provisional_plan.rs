@@ -134,6 +134,30 @@ fn the_summary_counts_what_later_holds_by_what_it_waits_on() {
     );
 }
 
+/// `why DENY` agrees with the plan for a deny that waits: undetermined,
+/// on what, and the comparison over the value not known yet is not
+/// "false".
+#[test]
+fn why_a_deny_that_waits_says_what_it_waits_on() {
+    let s = project(
+        "provisional-why-deny",
+        "deny \"pod without cluster dns\" { workload: w } where pod(w, p), \
+         p.dnsPolicy == \"None\"\n",
+    );
+    let r = s
+        .run(&["why", "deny \"pod without cluster dns\"", "apps"])
+        .success();
+    assert!(
+        r.stdout.starts_with(
+            "deny \"pod without cluster dns\": undetermined, waits on \
+             api.spec.template.spec.dnsPolicy, web.spec.template.spec.dnsPolicy\n"
+        ) && r.stdout.contains(" == \"None\": not known yet\n")
+            && !r.stdout.contains("false"),
+        "{}",
+        r.stdout
+    );
+}
+
 const MIDDLEWARE: &str = "resource k8s.traefik.middleware mw {\n  metadata = { name: \"mw\", \
                           namespace: apps.metadata.name }\n  spec.headers.stsSeconds = 3\n}\n";
 

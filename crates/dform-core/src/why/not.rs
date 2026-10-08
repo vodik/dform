@@ -461,8 +461,21 @@ impl<'a> WhyNot<'a> {
                     true => String::new(),
                     false => format!(", with {}", self.written.bindings(&shown)),
                 };
+                // A comparison over a value not known yet is not false:
+                // it waits, as the plan says under `later` (R-193).
+                let waits = shown.values().any(crate::stuck::has_null)
+                    || self.res.stuck.iter().any(|s| {
+                        s.rule == Some(i)
+                            && a.known
+                                .iter()
+                                .all(|(k, v)| s.bindings.get(k).is_none_or(|b| b == v))
+                    });
+                let said = match waits {
+                    true => "not known yet",
+                    false => "false",
+                };
                 self.out
-                    .push_str(&format!("{inner}{}: false{with}\n", self.written.lit(lit)));
+                    .push_str(&format!("{inner}{}: {said}{with}\n", self.written.lit(lit)));
             }
         }
         Ok(())

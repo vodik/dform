@@ -2468,7 +2468,7 @@ fn count(n: usize, thing: &str) -> String {
 
 /// The values a tick waits on, as the references they are,
 /// `k3s.server.public_ip` (R-111).
-fn waited(on: &BTreeSet<String>) -> Vec<String> {
+pub(crate) fn waited(on: &BTreeSet<String>) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     for n in on {
         let w = match extern_label(n) {
