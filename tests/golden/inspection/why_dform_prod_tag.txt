@@ -8,26 +8,33 @@ net.vpc main.vpc.tags = {component: "network", env: "prod", team: "platform"}
   │         ├─ input main.vpc_net = 10.20.0.0/16
   │         │    merged from 1 contribution
   │         │    └─ 10.20.0.0/16
-  │         │         examples/demo/stacks/dform.df:51  resource network.vpc main { vpc_net = cidrs.main }
+  │         │         examples/demo/stacks/dform.df:51  resource network.vpc main { vpc_net = cidrs.main .. }
   │         │         with cidrs.main = 10.20.0.0/16
-  │         │         └─ input cidrs = {main: 10.20.0.0/16, peer: 10.21.0.0/16}
-  │         │              merged from 4 contributions
-  │         │              ├─ {main: 10.50.0.0/16} @default   examples/demo/stacks/dform.df:10
-  │         │              ├─ {peer: 10.60.0.0/16} @default   examples/demo/stacks/dform.df:10
-  │         │              ├─ {main: 10.20.0.0/16}
-  │         │              │    examples/demo/stacks/dform.df:25  set from yaml.decode(io.read("config/dform/${env}.yaml"))
-  │         │              │    with "config/dform/${env}.yaml" = "config/dform/prod.yaml"
-  │         │              │    ├─ input env = "prod"
-  │         │              │    │    merged from 2 contributions
-  │         │              │    │    ├─ "staging" @default   examples/demo/stacks/dform.df:9
-  │         │              │    │    └─ "prod"
-  │         │              │    │         examples/demo/stacks/dform.df:9  key env: environment = "staging"
-  │         │              │    │         └─ --set env=prod
-  │         │              │    └─ table.yaml.set("config/dform/prod.yaml", "config/dform/prod.yaml:5", "cidrs.main", "10.20.0.0/16")   config/dform/prod.yaml:5
-  │         │              └─ {peer: 10.21.0.0/16}
-  │         │                   examples/demo/stacks/dform.df:25  set from yaml.decode(io.read("config/dform/${env}.yaml"))
-  │         │                   with "config/dform/${env}.yaml" = "config/dform/prod.yaml"
-  │         │                   ├─ input env = "prod"   (see above)
-  │         │                   └─ table.yaml.set("config/dform/prod.yaml", "config/dform/prod.yaml:6", "cidrs.peer", "10.21.0.0/16")   config/dform/prod.yaml:6
-  │         └─ input env = "prod"   (see above)
+  │         │         ├─ input cidrs = {main: 10.20.0.0/16, peer: 10.21.0.0/16}
+  │         │         │    merged from 4 contributions
+  │         │         │    ├─ {main: 10.50.0.0/16} @default   examples/demo/stacks/dform.df:10
+  │         │         │    ├─ {peer: 10.60.0.0/16} @default   examples/demo/stacks/dform.df:10
+  │         │         │    ├─ {main: 10.20.0.0/16}
+  │         │         │    │    examples/demo/stacks/dform.df:25  set from yaml.decode(io.read("config/dform/${env}.yaml"))
+  │         │         │    │    with "config/dform/${env}.yaml" = "config/dform/prod.yaml"
+  │         │         │    │    ├─ input env = "prod"
+  │         │         │    │    │    merged from 2 contributions
+  │         │         │    │    │    ├─ "staging" @default   examples/demo/stacks/dform.df:9
+  │         │         │    │    │    └─ "prod"
+  │         │         │    │    │         examples/demo/stacks/dform.df:9  key env: environment = "staging"
+  │         │         │    │    │         └─ --set env=prod
+  │         │         │    │    └─ table.yaml.set("config/dform/prod.yaml", "config/dform/prod.yaml:5", "cidrs.main", "10.20.0.0/16")   config/dform/prod.yaml:5
+  │         │         │    └─ {peer: 10.21.0.0/16}
+  │         │         │         examples/demo/stacks/dform.df:25  set from yaml.decode(io.read("config/dform/${env}.yaml"))
+  │         │         │         with "config/dform/${env}.yaml" = "config/dform/prod.yaml"
+  │         │         │         ├─ input env = "prod"   (see above)
+  │         │         │         └─ table.yaml.set("config/dform/prod.yaml", "config/dform/prod.yaml:6", "cidrs.peer", "10.21.0.0/16")   config/dform/prod.yaml:6
+  │         │         └─ input env = "prod"   (see above)
+  │         └─ input main.env = "prod"
+  │              merged from 1 contribution
+  │              └─ "prod"
+  │                   examples/demo/stacks/dform.df:51  resource network.vpc main { .. env }
+  │                   with env = "prod"
+  │                   ├─ input cidrs = {main: 10.20.0.0/16, peer: 10.21.0.0/16}   (see above)
+  │                   └─ input env = "prod"   (see above)
   └─ ... 1 other contribution (--all)

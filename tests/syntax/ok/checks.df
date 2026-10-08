@@ -1,4 +1,9 @@
 # A module of checks, `use checks` in constructs.df: a relation the user
-# reads as `checks.listed(i)`, and a deny over the user's relations.
+# reads as `checks.listed(i)`, and a deny over the relations it takes,
+# their rows the user's `use` gives (R-205).
+input vpc_inst
+input q
+decl vpc_inst(i: string)
+decl q(n: int)
 listed(i) where vpc_inst(i)
 deny "a listed vpc has its query row" where listed(_), not q(1)

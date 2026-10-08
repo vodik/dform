@@ -1,6 +1,7 @@
 scope       effect  what
 baseline    reads   db.postgres.public
 baseline    reads   iam.policy.name
+baseline    reads   input env
 baseline    writes  (*, tags)
 baseline    writes  (iam.policy, statements)
 database    reads   db.postgres.id
@@ -13,6 +14,7 @@ database    writes  (db.postgres, public)
 database    writes  (db.postgres, subnets)
 database    offers  iam_need: any
 identity    reads   iam.policy.id
+identity    reads   input iam_need
 identity    writes  (iam.policy, name)
 identity    writes  (iam.policy, statements)
 identity    writes  (iam.role, assume)
@@ -30,6 +32,7 @@ kubernetes  writes  (k8s.nodepool, cluster)
 kubernetes  writes  (k8s.nodepool, max)
 kubernetes  writes  (k8s.nodepool, min)
 kubernetes  offers  iam_need: any
+main        reads   input env
 main        reads   input vpc_net
 main        reads   net.subnet.visibility
 main        reads   net.vpc.cidr
@@ -42,6 +45,7 @@ main        writes  (net.vpc, cidr)
 main        writes  (net.vpc, tags)
 main        offers  private_subnet: relation/1
 main        offers  vpc: addr
+peer        reads   input env
 peer        reads   input vpc_net
 peer        reads   net.subnet.visibility
 peer        reads   net.vpc.cidr
@@ -82,17 +86,23 @@ stack       writes  (net.vpc_peering, accepter_vpc)
 stack       writes  (net.vpc_peering, id)
 stack       writes  (net.vpc_peering, requester_vpc)
 stack       writes  input baseline.audit
+stack       writes  input baseline.env
 stack       writes  input database.backup_days
 stack       writes  input database.multi_az
 stack       writes  input kubernetes.nodepool_max
 stack       writes  input kubernetes.nodepool_min
 stack       writes  input kubernetes.private_api
+stack       writes  input main.env
 stack       writes  input main.vpc_net
+stack       writes  input peer.env
 stack       writes  input peer.vpc_net
 stack       writes  input stack.cidrs
 stack       writes  input stack.env
 stack       writes  rows database.subnet
+stack       writes  rows identity.iam_need
 stack       writes  rows kubernetes.subnet
+stack       writes  rows stdlib_net.vpc_peer
 stdlib_net  reads   compute.vm.private_ip
+stdlib_net  reads   input vpc_peer
 stdlib_net  reads   net.vpc.cidr
-(96 rows)
+(106 rows)

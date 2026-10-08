@@ -139,9 +139,13 @@ impl Lowerer<'_> {
     }
 
     /// Whether `h` names anything in scope: a value, a resource, a used
-    /// module or stack, a copy, a component.
+    /// module or stack, a copy, a component, the module itself in its
+    /// file, or a path from the root (`modules.net.vpc[t]`).
     fn declares(&self, scope: usize, h: &str) -> bool {
-        self.is_value(scope, h)
+        let root = |p: &String| p == h || p.strip_prefix(h).is_some_and(|r| r.starts_with('.'));
+        self.self_module(scope, h).is_some()
+            || self.decls.modules.keys().any(root)
+            || self.is_value(scope, h)
             || self.resource(scope, h).is_some()
             || self.use_in(scope, h).is_some()
             || self.stack_in(scope, h).is_some()

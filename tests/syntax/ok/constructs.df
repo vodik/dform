@@ -33,7 +33,10 @@ spread_list(x) where images(i), x = [..0..3, ..[i], 9]
 rest(h, body) where labels(l), { host: h, ..body } = l
 
 # A module, checks.df beside this file, by its path; and a component.
-use checks where env("prod")
+use checks {
+  vpc_inst(i) where vpc_inst(i)
+  q(n) where q(n)
+} where env("prod")
 
 component m {
   input on: bool

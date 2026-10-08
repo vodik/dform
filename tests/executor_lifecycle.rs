@@ -187,11 +187,15 @@ use fake
         "{}",
         r.stderr
     );
-    s.write("lib.df", "\nlifecycle(main, \"prevent_destroy\")\n");
+    // The module takes the database it protects (R-205).
+    s.write(
+        "lib.df",
+        "\ninput main: ref(db.postgres)\nlifecycle(main, \"prevent_destroy\")\n",
+    );
     s.write(
         "p.df",
         &s.read("p.df")
-            .replacen("use fake\n", "use fake\nuse lib\n", 1),
+            .replacen("use fake\n", "use fake\nuse lib { main }\n", 1),
     );
     mock(&s, &["plan"]).success();
 }

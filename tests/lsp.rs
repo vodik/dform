@@ -59,7 +59,8 @@ fn hover_shows_every_contribution_and_why_prints_the_derivation() {
     assert!(
         text.contains(
             "net.vpc main.vpc.tags = { env: \"staging\", component: \"network\" }\n  \
-             = { env, component: \"network\" }        network.df:19\n\
+             = { env, component: \"network\" }        network.df:19\n  \
+             = env                                  stacks/dform.df:51\n\
              net.vpc main.vpc.tags.team = \"platform\"  baseline.df:10\n"
         ),
         "{text}"
@@ -884,17 +885,19 @@ fn references_of_every_kind_of_name() {
     let found = references(&mut c, &root, &stack, find(&stack, "vpc_peer_pair(ia", 2));
     assert_eq!(found, at_places("stacks/dform.df", &[78, 83, 90]));
 
-    // An input: the stack's own reads, a component's and a module's.
+    // An input: the stack's own reads; a component's and a module's
+    // `env` are their own inputs, given by the stack (R-205).
     let found = references(&mut c, &root, &stack, find(&stack, "key env:", 4));
     for want in [
         ("stacks/dform.df".to_string(), 9),
         ("stacks/dform.df".into(), 15),
         ("stacks/dform.df".into(), 54),
         ("stacks/dform.df".into(), 96),
-        ("network.df".into(), 19),
-        ("baseline.df".into(), 16),
     ] {
         assert!(found.contains(&want), "{want:?} in {found:?}");
+    }
+    for not in [("network.df".to_string(), 19), ("baseline.df".into(), 16)] {
+        assert!(!found.contains(&not), "{not:?} in {found:?}");
     }
 
     // A component's input: declared in the component, read there, given
@@ -903,7 +906,7 @@ fn references_of_every_kind_of_name() {
     assert_eq!(
         found,
         vec![
-            ("network.df".into(), 11),
+            ("network.df".into(), 10),
             ("network.df".into(), 19),
             ("stacks/dform.df".into(), 51),
             ("stacks/dform.df".into(), 54),
@@ -922,7 +925,7 @@ fn references_of_every_kind_of_name() {
     assert_eq!(
         found,
         vec![
-            ("network.df".into(), 9),
+            ("network.df".into(), 8),
             ("stacks/dform.df".into(), 51),
             ("stacks/dform.df".into(), 54),
             ("stacks/dform.df".into(), 80),
@@ -935,7 +938,7 @@ fn references_of_every_kind_of_name() {
     // Its inputs given by the stack's `set` block are its too (R-38).
     assert_eq!(found, at_places("stacks/dform.df", &[17, 27, 28, 60]));
     let found = references(&mut c, &root, &stack, find(&stack, "use baseline", 6));
-    assert_eq!(found, at_places("stacks/dform.df", &[45]));
+    assert_eq!(found, at_places("stacks/dform.df", &[43]));
 
     // A resource by its name in its component, and from outside by its
     // address as a string (`"peer.vpc" in net.vpc`, H-16).

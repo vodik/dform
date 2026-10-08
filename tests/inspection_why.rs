@@ -203,8 +203,10 @@ fn why_an_attribute_shows_every_contribution() {
     assert!(out.contains("└─ --set env=prod\n"), "{out}");
     assert!(out.contains("(see above)"), "{out}");
     // The cells merged on the way: the tags, the stack input --set gives,
-    // the instance's input, and the stack input the settings give (R-38).
-    assert_eq!(out.matches("merged from").count(), 4, "{out}");
+    // the instance's inputs (its range, and its `env` the stack gives,
+    // R-205), and the stack input the settings give (R-38).
+    assert!(out.contains("└─ input main.env = \"prod\"\n"), "{out}");
+    assert_eq!(out.matches("merged from").count(), 5, "{out}");
 }
 
 /// The tour's route to green: an element of blue's route table's
