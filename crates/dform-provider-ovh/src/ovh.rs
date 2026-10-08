@@ -449,6 +449,12 @@ impl Ovh {
             .and_then(Json::as_str)
             .map(std::path::PathBuf::from);
         let client = Client::new(creds).with_cache(cache.as_deref());
+        // Run outside a program and a project, as `provider check` runs
+        // it: which credentials, and what they may do.
+        let full = settings.is_none() && cache.is_none();
+        for note in crate::credential::notes(&client, full, cache.as_deref(), unix_now()) {
+            eprintln!("{note}");
+        }
         let project = match project {
             Some(p) => Some(resolve_project(&client, &p, cache.as_deref())?),
             None => None,
@@ -1507,6 +1513,13 @@ impl Ovh {
             ex(with_data.clone(), with_data, ""),
         ]
     }
+}
+
+fn unix_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }
 
 /// The project `given` names: its id (`serviceName`), or the description

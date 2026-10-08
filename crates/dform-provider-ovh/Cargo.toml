@@ -20,6 +20,9 @@ tokio = { version = "1", features = ["rt"] }
 tonic = "0.13"
 # Blocking HTTP over rustls, as dform-s3 has it.
 ureq = { version = "3", default-features = false, features = ["rustls"] }
+# A service account's client id and secret as Basic auth, to mint its
+# bearer token (`api.rs`).
+base64 = "0.22"
 # The request signature: SHA-1 over the signed request (`sign.rs`).
 sha1 = "0.10"
 # The user data's digest the provider keeps (`record.rs`).

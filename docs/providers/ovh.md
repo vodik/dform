@@ -38,25 +38,64 @@ use ovh { endpoint = "ovh-ca", project = "vodik" }
   `OVH_CLOUD_PROJECT_SERVICE`. The provider reports the project's id as its
   account, so `expect_account = "0123..."` holds a deployment to it.
 
+### Credentials
+
 The credentials are the provider's own, read as OVH's SDKs read them:
-`OVH_APPLICATION_KEY`, `OVH_APPLICATION_SECRET` and `OVH_CONSUMER_KEY` in
-the environment, else the endpoint's section of `ovh.conf`:
+from the environment, else from the section of `ovh.conf` named by the
+endpoint, read from `/etc/ovh.conf`, `~/.ovh.conf` and
+`~/.config/ovh/ovh.conf` (`$XDG_CONFIG_HOME/ovh/ovh.conf`), a later file
+overriding an earlier one key by key. A section holds one of two forms;
+both in one is an error naming each key given.
+
+A service account's client id and secret (`OVH_CLIENT_ID`,
+`OVH_CLIENT_SECRET`). The provider mints a bearer token from them with
+OAuth2's client-credentials grant (scope `all`) at the endpoint's token
+URL (`https://ca.ovh.com/auth/oauth2/token` for `ovh-ca`, `www.ovh.com`
+for `ovh-eu`, `us.ovhcloud.com` for `ovh-us`, `/auth/oauth2/token` at a
+URL endpoint's host), keeps it until a minute
+before it expires, and mints another when a call is refused with a 401.
+The token does not outlive the run. Make the account in the OVH manager
+under API > Service accounts; its rights are the IAM policies that name
+it, and the kimsufi and soyoustart endpoints do not take one:
 
 ```ini
 [default]
 endpoint=ovh-ca
 
 [ovh-ca]
+client_id=...
+client_secret=...
+```
+
+An application key and secret and a consumer key
+(`OVH_APPLICATION_KEY`, `OVH_APPLICATION_SECRET`, `OVH_CONSUMER_KEY`),
+each call signed with them:
+
+```ini
+[ovh-ca]
 application_key=...
 application_secret=...
 consumer_key=...
 ```
 
-read from `/etc/ovh.conf`, `~/.ovh.conf` and `~/.config/ovh/ovh.conf`
-(`$XDG_CONFIG_HOME/ovh/ovh.conf`), a later file overriding an earlier one.
-Make the keys at https://ca.api.ovh.com/createToken/ (or the `eu`/`us`
-host), with GET, POST, PUT and DELETE on `/cloud/project/*` and, for DNS
-records, `/domain/zone/*`.
+Make them at https://ca.api.ovh.com/createToken/ (or the `eu`/`us`
+host), with unlimited validity and the rights below. A consumer key the
+API no longer takes is said as "the consumer key for ovh-ca expired or
+was revoked", with where to make one. Configure reads the key's validity
+(`GET /auth/currentCredential`, kept in dform's cache for that key) and
+warns when it expires within a week. Outside a program (`dform provider
+check`) it also says which form is in use, when the key expires, and each
+right below the key lacks: `the consumer key for ovh-ca lacks POST
+/domain/zone/*`.
+
+The rights the provider needs, and no others; a type that calls another
+path adds its line:
+
+| method                  | path                |
+|-------------------------|---------------------|
+| GET                     | `/cloud/project`    |
+| GET, POST, PUT, DELETE  | `/cloud/project/*`  |
+| GET, POST, PUT, DELETE  | `/domain/zone/*`    |
 
 ## Resources
 

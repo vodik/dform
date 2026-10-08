@@ -4,7 +4,10 @@
 //! SSH key, DNS record, S3 container, user, volume and private network
 //! endpoints the provider calls, answering as the API's models are
 //! shaped. It checks every signed call's signature against
-//! `APPLICATION_SECRET` and `CONSUMER_KEY`. A new instance is BUILD, with
+//! `APPLICATION_SECRET` and `CONSUMER_KEY`, and every other call's bearer
+//! token against those it minted at `/auth/oauth2/token` for `CLIENT_ID`
+//! and `CLIENT_SECRET`; `/auth/currentCredential` describes the consumer
+//! key ([`Server::key_expires`], [`Server::key_rules`]). A new instance is BUILD, with
 //! no address, for [`Server::build_polls`] reads, then ACTIVE; a volume,
 //! a user and a private network change status the same way (`creating`
 //! then `available`, `attaching` then `in-use`, `BUILDING` then
@@ -22,6 +25,8 @@ use std::sync::{Arc, Mutex};
 pub const APPLICATION_KEY: &str = "fake-application-key";
 pub const APPLICATION_SECRET: &str = "fake-application-secret";
 pub const CONSUMER_KEY: &str = "fake-consumer-key";
+pub const CLIENT_ID: &str = "fake-client-id";
+pub const CLIENT_SECRET: &str = "fake-client-secret";
 pub const PROJECT: &str = "0123456789abcdef0123456789abcdef";
 pub const DESCRIPTION: &str = "lab";
 
@@ -80,6 +85,19 @@ pub struct World {
     skew: i64,
     /// How many times `/auth/time` was asked.
     times_asked: usize,
+    /// The bearer tokens minted and still good, and how many were minted.
+    tokens: BTreeSet<String>,
+    minted: usize,
+    /// How long a minted token is good for, in seconds (`expires_in`).
+    token_life: u64,
+    /// The consumer key's expiry as the API gives it (`None`: never),
+    /// its rights (`None`: every method on `/*`), and whether it is
+    /// revoked.
+    key_expires: Option<String>,
+    key_rules: Option<Vec<(String, String)>>,
+    key_revoked: bool,
+    /// How many times `/auth/currentCredential` was asked.
+    key_asked: usize,
 }
 
 /// How far a signed call's timestamp may be from the fake's clock.
@@ -175,6 +193,7 @@ impl Server {
         let world = Arc::new(Mutex::new(World {
             build_polls: 1,
             next: 1,
+            token_life: 3600,
             ..World::default()
         }));
         let w = world.clone();
@@ -239,6 +258,50 @@ impl Server {
     /// The connections it has accepted.
     pub fn connections(&self) -> usize {
         self.world().connections
+    }
+
+    /// How many bearer tokens it has minted.
+    pub fn tokens_minted(&self) -> usize {
+        self.world().minted
+    }
+
+    /// The tokens minted so far are no longer good: a call with one is
+    /// refused with a 401.
+    pub fn revoke_tokens(&self) {
+        self.world().tokens.clear();
+    }
+
+    /// A token it mints is good for `secs`, as its `expires_in` says.
+    pub fn token_life(&self, secs: u64) {
+        self.world().token_life = secs;
+    }
+
+    /// The consumer key expires at `when` (as the API gives it,
+    /// `2026-10-09T08:00:00+02:00`), or never.
+    pub fn key_expires(&self, when: Option<&str>) {
+        self.world().key_expires = when.map(str::to_string);
+    }
+
+    /// The consumer key's rights: method and path pattern.
+    pub fn key_rules(&self, rules: &[(&str, &str)]) {
+        self.world().key_rules = Some(
+            rules
+                .iter()
+                .map(|(m, p)| (m.to_string(), p.to_string()))
+                .collect(),
+        );
+    }
+
+    /// The consumer key expired or was revoked: a signed call is refused
+    /// as the API refuses it.
+    pub fn revoke_key(&self) {
+        self.world().key_revoked = true;
+    }
+
+    /// How many times `/auth/currentCredential` was asked, which `calls`
+    /// does not list.
+    pub fn key_asked(&self) -> usize {
+        self.world().key_asked
     }
 
     /// How many reads a new instance stays BUILD for.
@@ -384,9 +447,90 @@ impl Server {
             ("DFORM_OVH_RESOLVER", self.resolver.clone()),
         ]
     }
+
+    /// The environment that points the provider at this server with a
+    /// service account's client credentials.
+    pub fn oauth_env(&self) -> Vec<(&'static str, String)> {
+        vec![
+            ("OVH_ENDPOINT", self.endpoint.clone()),
+            ("OVH_CLIENT_ID", CLIENT_ID.into()),
+            ("OVH_CLIENT_SECRET", CLIENT_SECRET.into()),
+            ("DFORM_OVH_POLL_MS", "1".into()),
+            ("DFORM_OVH_RESOLVER", self.resolver.clone()),
+        ]
+    }
 }
 
 impl World {
+    /// An authenticated call: a failure `fail` asked for, the key's
+    /// description, or the answer, the call kept in `seen`.
+    fn answer_seen(
+        &mut self,
+        method: &str,
+        path: &str,
+        target: &str,
+        query: &BTreeMap<String, String>,
+        body: Json,
+    ) -> (u16, Json) {
+        if let Some(s) = self.fail_next(&format!("{method} {path}")) {
+            return (s, json!({"message": "Service Unavailable"}));
+        }
+        if (method, path) == ("GET", "/auth/currentCredential") {
+            self.key_asked += 1;
+            let rules = match &self.key_rules {
+                Some(r) => r
+                    .iter()
+                    .map(|(m, p)| json!({"method": m, "path": p}))
+                    .collect(),
+                None => ["GET", "POST", "PUT", "DELETE"]
+                    .map(|m| json!({"method": m, "path": "/*"}))
+                    .to_vec(),
+            };
+            return (
+                200,
+                json!({"credentialId": 1, "applicationId": 1, "status": "validated",
+                       "creation": "2026-10-01T00:00:00Z", "expiration": self.key_expires,
+                       "lastUse": null, "ovhSupport": false, "allowedIPs": null,
+                       "rules": rules}),
+            );
+        }
+        self.seen.push(Seen {
+            method: method.to_string(),
+            path: target.strip_prefix("/1.0").unwrap_or(target).to_string(),
+            body: body.clone(),
+        });
+        self.answer(method, path, query, &body)
+    }
+
+    /// `POST /auth/oauth2/token`: a bearer token for the client id and
+    /// secret given as Basic auth, with the client-credentials grant.
+    fn mint(&mut self, headers: &BTreeMap<String, String>, body: &str) -> (u16, Json) {
+        use base64::Engine;
+        let given = headers
+            .get("authorization")
+            .and_then(|a| a.strip_prefix("Basic "))
+            .and_then(|b| base64::engine::general_purpose::STANDARD.decode(b).ok());
+        if given.as_deref() != Some(format!("{CLIENT_ID}:{CLIENT_SECRET}").as_bytes()) {
+            return (
+                401,
+                json!({"error": "invalid_client",
+                       "error_description": "client authentication failed"}),
+            );
+        }
+        let form: BTreeSet<&str> = body.split('&').collect();
+        if !form.contains("grant_type=client_credentials") || !form.contains("scope=all") {
+            return (400, json!({"error": "invalid_request"}));
+        }
+        self.minted += 1;
+        let token = format!("fake-token-{}", self.minted);
+        self.tokens.insert(token.clone());
+        (
+            200,
+            json!({"access_token": token, "token_type": "Bearer",
+                   "expires_in": self.token_life, "scope": "all"}),
+        )
+    }
+
     fn fail_next(&mut self, call: &str) -> Option<u16> {
         let (_, left) = self
             .failing
@@ -1378,31 +1522,45 @@ fn serve(conn: TcpStream, world: &Mutex<World>, base: &str) {
                 .map(|d| d.as_secs() as i64)
                 .unwrap_or(0)
                 + w.skew;
+            let bearer = headers
+                .get("authorization")
+                .and_then(|a| a.strip_prefix("Bearer "));
             if path == "/auth/time" {
                 w.times_asked += 1;
                 (200, json!(now))
-            } else if let Some(why) = bad_signature(
+            } else if path == "/auth/oauth2/token" {
+                w.mint(&headers, &body)
+            } else if let Some(token) = bearer {
+                if w.tokens.contains(token) {
+                    w.answer_seen(&method, &path, &target, &query, json_body)
+                } else {
+                    (401, json!({"message": "Invalid token"}))
+                }
+            } else if let Some((status, why)) = bad_signature(
                 &headers,
                 &method,
                 &format!("{base}{}", target.strip_prefix("/1.0").unwrap_or(&target)),
                 &body,
-            ) {
-                (403, json!({"message": why}))
+            )
+            .map(|why| (403, json!({"message": why})))
+            .or_else(|| {
+                w.key_revoked.then(|| {
+                    (
+                        403,
+                        json!({"errorCode": "INVALID_CREDENTIAL", "httpCode": "403 Forbidden",
+                               "message": "This credential is not valid"}),
+                    )
+                })
+            }) {
+                (status, why)
             } else if headers
                 .get("x-ovh-timestamp")
                 .and_then(|t| t.parse::<i64>().ok())
                 .is_some_and(|t| (t - now).abs() > TIME_WINDOW)
             {
                 (400, json!({"message": "Query out of time"}))
-            } else if let Some(s) = w.fail_next(&format!("{method} {path}")) {
-                (s, json!({"message": "Service Unavailable"}))
             } else {
-                w.seen.push(Seen {
-                    method: method.clone(),
-                    path: target.strip_prefix("/1.0").unwrap_or(&target).to_string(),
-                    body: json_body.clone(),
-                });
-                w.answer(&method, &path, &query, &json_body)
+                w.answer_seen(&method, &path, &target, &query, json_body)
             }
         };
         world.lock().unwrap_or_else(|e| e.into_inner()).answering -= 1;

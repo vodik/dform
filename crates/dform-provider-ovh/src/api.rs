@@ -1,6 +1,14 @@
-//! A signed client of the OVH API (`sign`), blocking, over `ureq`.
+//! A client of the OVH API, blocking, over `ureq`: each call signed
+//! (`sign`) with the three keys, or carrying a bearer token minted from a
+//! service account's client credentials (R-179).
 //!
-//! Every call is signed with the server's clock: the difference to the
+//! A bearer token is minted with OAuth2's client-credentials grant
+//! (`grant_type=client_credentials`, `scope=all`, the client id and
+//! secret as Basic auth) at the endpoint's token URL, kept until a minute
+//! before its `expires_in`, and minted afresh once when a call is refused
+//! with a 401.
+//!
+//! A signed call is signed with the server's clock: the difference to the
 //! local one is asked once (`GET /auth/time`) and kept in dform's cache
 //! beside the project ids (`ovh-projects.json`), so a run after the first
 //! asks it again only when a signed call is refused (After R-123): the
@@ -11,16 +19,20 @@
 //! from a refusal; a call that reached no answer is `Unreachable`, which
 //! may have taken effect.
 
-use crate::config::Credentials;
+use crate::config::{Auth, Credentials};
 use crate::sign::signature;
+use base64::Engine;
 use serde_json::Value as Json;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// How long one HTTP request may take.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// How long before its expiry a bearer token is minted afresh.
+const TOKEN_MARGIN: Duration = Duration::from_secs(60);
 
 /// How a call failed.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -88,6 +100,19 @@ pub struct Client {
     delta: Mutex<Option<(i64, bool)>>,
     /// The cache file the offset is kept in (`ovh-projects.json`).
     cache: Option<PathBuf>,
+    /// The bearer token minted from a service account's credentials, and
+    /// when it is to be minted afresh.
+    token: Mutex<Option<(String, Instant)>>,
+}
+
+/// How one call is authenticated.
+#[derive(Clone, Copy)]
+enum By<'a> {
+    /// Not at all (`/auth/time`).
+    Nothing,
+    /// Signed with the three keys.
+    Signature,
+    Bearer(&'a str),
 }
 
 /// The file in dform's cache directory the project ids and the clock
@@ -128,6 +153,7 @@ impl Client {
             agent,
             delta: Mutex::new(None),
             cache: None,
+            token: Mutex::new(None),
         }
     }
 
@@ -221,76 +247,141 @@ impl Client {
         self.send("DELETE", path, None, true)
     }
 
-    /// One call: `path` under the endpoint's URL (it carries its query).
-    /// A signed call the server refuses while its timestamp rests on an
-    /// offset read from the cache asks the server's time again, and is
-    /// sent once more when the offset moved.
-    fn send(&self, method: &str, path: &str, body: Option<&Json>, signed: bool) -> Result<Json> {
-        let out = self.send_once(method, path, body, signed);
+    /// One call: `path` under the endpoint's URL (it carries its query),
+    /// `authed` unless it is `/auth/time`. A bearer token refused (a 401)
+    /// is minted afresh and the call sent once more. A signed call the
+    /// server refuses while its timestamp rests on an offset read from
+    /// the cache asks the server's time again, and is sent once more when
+    /// the offset moved.
+    fn send(&self, method: &str, path: &str, body: Option<&Json>, authed: bool) -> Result<Json> {
+        if authed && matches!(self.creds.auth, Auth::OAuth2 { .. }) {
+            let token = self.bearer()?;
+            let out = self.send_once(method, path, body, By::Bearer(&token));
+            if !matches!(&out, Err(e) if e.status() == Some(401)) {
+                return out;
+            }
+            self.forget(&token);
+            return self.send_once(method, path, body, By::Bearer(&self.bearer()?));
+        }
+        let by = if authed { By::Signature } else { By::Nothing };
+        let out = self.send_once(method, path, body, by);
         let refused = matches!(&out, Err(e) if matches!(e.status(), Some(400 | 401 | 403)));
         let cached = *self.delta.lock().unwrap_or_else(|e| e.into_inner());
         match cached {
-            Some((was, true)) if signed && refused => {
+            Some((was, true)) if authed && refused => {
                 if self.ask_time()? == was {
                     return out;
                 }
-                self.send_once(method, path, body, signed)
+                self.send_once(method, path, body, by)
             }
             _ => out,
         }
     }
 
-    fn send_once(
+    /// The bearer token: the one held while it is good, else one minted.
+    fn bearer(&self) -> Result<String> {
+        let mut held = self.token.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((token, until)) = &*held
+            && Instant::now() < *until
+        {
+            return Ok(token.clone());
+        }
+        let (token, life) = self.mint()?;
+        *held = Some((
+            token.clone(),
+            Instant::now() + life.saturating_sub(TOKEN_MARGIN),
+        ));
+        Ok(token)
+    }
+
+    /// Drop `token`, refused, unless another call has minted its
+    /// successor already.
+    fn forget(&self, token: &str) {
+        let mut held = self.token.lock().unwrap_or_else(|e| e.into_inner());
+        if held.as_ref().is_some_and(|(t, _)| t == token) {
+            *held = None;
+        }
+    }
+
+    /// A bearer token from the service account's client credentials,
+    /// and how long it is good for.
+    fn mint(&self) -> Result<(String, Duration)> {
+        let Auth::OAuth2 {
+            client_id,
+            client_secret,
+            token_url,
+        } = &self.creds.auth
+        else {
+            unreachable!("a token is minted for a service account only");
+        };
+        let basic = base64::engine::general_purpose::STANDARD
+            .encode(format!("{client_id}:{client_secret}"));
+        let headers = [
+            ("Authorization", format!("Basic {basic}")),
+            (
+                "Content-Type",
+                "application/x-www-form-urlencoded".to_string(),
+            ),
+            ("Accept", "application/json".to_string()),
+        ];
+        let body = "grant_type=client_credentials&scope=all";
+        let (status, text) = self.exchange("POST", token_url, token_url, &headers, body)?;
+        let answer = serde_json::from_str::<Json>(&text).unwrap_or(Json::Null);
+        let refused = |message: String| Error::Status {
+            method: "POST".into(),
+            path: token_url.clone(),
+            status,
+            message,
+        };
+        if !(200..300).contains(&status) {
+            let why = ["error_description", "error", "message"]
+                .iter()
+                .find_map(|k| answer.get(*k).and_then(Json::as_str))
+                .unwrap_or("no reason given");
+            return Err(refused(format!(
+                "the service account {client_id} was refused a token for {}: {why}",
+                self.creds.endpoint
+            )));
+        }
+        let Some(token) = answer.get("access_token").and_then(Json::as_str) else {
+            return Err(refused("the answer holds no access_token".into()));
+        };
+        let life = answer.get("expires_in").and_then(Json::as_u64).unwrap_or(0);
+        Ok((token.to_string(), Duration::from_secs(life)))
+    }
+
+    /// One HTTP request to `url` (`path` names it in an error): its
+    /// status and its answer's text.
+    fn exchange(
         &self,
         method: &str,
         path: &str,
-        body: Option<&Json>,
-        signed: bool,
-    ) -> Result<Json> {
-        let url = format!("{}{path}", self.creds.url);
-        let body = body.map(Json::to_string).unwrap_or_default();
+        url: &str,
+        headers: &[(&str, String)],
+        body: &str,
+    ) -> Result<(u16, String)> {
         let unreachable = |why: String| Error::Unreachable {
             method: method.into(),
             path: path.into(),
             why,
         };
-        let mut headers = vec![
-            ("Content-Type", "application/json".to_string()),
-            ("X-Ovh-Application", self.creds.application_key.clone()),
-        ];
-        if signed {
-            let ts = self.timestamp()?;
-            headers.push(("X-Ovh-Timestamp", ts.to_string()));
-            headers.push(("X-Ovh-Consumer", self.creds.consumer_key.clone()));
-            headers.push((
-                "X-Ovh-Signature",
-                signature(
-                    &self.creds.application_secret,
-                    &self.creds.consumer_key,
-                    method,
-                    &url,
-                    &body,
-                    ts,
-                ),
-            ));
-        }
         let resp = match method {
             "GET" | "DELETE" => {
                 let mut req = match method {
-                    "GET" => self.agent.get(&url),
-                    _ => self.agent.delete(&url),
+                    "GET" => self.agent.get(url),
+                    _ => self.agent.delete(url),
                 };
-                for (k, v) in &headers {
+                for (k, v) in headers {
                     req = req.header(*k, v);
                 }
                 req.call()
             }
             _ => {
                 let mut req = match method {
-                    "POST" => self.agent.post(&url),
-                    _ => self.agent.put(&url),
+                    "POST" => self.agent.post(url),
+                    _ => self.agent.put(url),
                 };
-                for (k, v) in &headers {
+                for (k, v) in headers {
                     req = req.header(*k, v);
                 }
                 req.send(body.as_bytes())
@@ -302,30 +393,43 @@ impl Client {
             .body_mut()
             .read_to_string()
             .map_err(|e| unreachable(format!("reading the answer: {e}")))?;
+        Ok((status, text))
+    }
+
+    fn send_once(&self, method: &str, path: &str, body: Option<&Json>, by: By) -> Result<Json> {
+        let url = format!("{}{path}", self.creds.url);
+        let body = body.map(Json::to_string).unwrap_or_default();
+        let mut headers = vec![("Content-Type", "application/json".to_string())];
+        match (&self.creds.auth, by) {
+            (_, By::Bearer(token)) => headers.push(("Authorization", format!("Bearer {token}"))),
+            (
+                Auth::Keys {
+                    application_key,
+                    application_secret,
+                    consumer_key,
+                },
+                by,
+            ) => {
+                headers.push(("X-Ovh-Application", application_key.clone()));
+                if let By::Signature = by {
+                    let ts = self.timestamp()?;
+                    headers.push(("X-Ovh-Timestamp", ts.to_string()));
+                    headers.push(("X-Ovh-Consumer", consumer_key.clone()));
+                    headers.push((
+                        "X-Ovh-Signature",
+                        signature(application_secret, consumer_key, method, &url, &body, ts),
+                    ));
+                }
+            }
+            (Auth::OAuth2 { .. }, _) => {}
+        }
+        let (status, text) = self.exchange(method, path, &url, &headers, &body)?;
         if !(200..300).contains(&status) {
-            // `{"class": "Client::NotFound", "message": "..."}`
-            // OVH's `errorCode` says which kind of refusal: INVALID_CREDENTIAL
-            // (the consumer key), NOT_GRANTED_CALL (its rights), ...
-            let message = serde_json::from_str::<Json>(&text)
-                .ok()
-                .map(|j| {
-                    let msg = j
-                        .get("message")
-                        .and_then(Json::as_str)
-                        .unwrap_or("")
-                        .to_string();
-                    match j.get("errorCode").and_then(Json::as_str) {
-                        Some(code) if !code.is_empty() => format!("{msg} ({code})"),
-                        _ => msg,
-                    }
-                })
-                .filter(|m| !m.is_empty())
-                .unwrap_or_else(|| text.trim().chars().take(200).collect());
             return Err(Error::Status {
                 method: method.into(),
                 path: path.into(),
                 status,
-                message,
+                message: self.refusal(status, &text),
             });
         }
         if text.trim().is_empty() {
@@ -337,6 +441,30 @@ impl Client {
             status,
             message: format!("the answer is not JSON: {e}"),
         })
+    }
+
+    /// What a refusal (`status`, the answer `text`) says. OVH's
+    /// `errorCode` says which kind: INVALID_CREDENTIAL (the consumer key,
+    /// expired or revoked: said as such, with the fix), NOT_GRANTED_CALL
+    /// (its rights), ...
+    fn refusal(&self, status: u16, text: &str) -> String {
+        // `{"class": "Client::NotFound", "message": "..."}`
+        let Ok(j) = serde_json::from_str::<Json>(text) else {
+            return text.trim().chars().take(200).collect();
+        };
+        let msg = j.get("message").and_then(Json::as_str).unwrap_or("");
+        let code = j.get("errorCode").and_then(Json::as_str).unwrap_or("");
+        let invalid = code == "INVALID_CREDENTIAL"
+            || msg.contains("credential is not valid")
+            || msg.contains("credential does not exist");
+        if status == 403 && invalid && matches!(self.creds.auth, Auth::Keys { .. }) {
+            return self.creds.expired_key();
+        }
+        match (msg, code) {
+            ("", _) => text.trim().chars().take(200).collect(),
+            (msg, "") => msg.to_string(),
+            (msg, code) => format!("{msg} ({code})"),
+        }
     }
 }
 

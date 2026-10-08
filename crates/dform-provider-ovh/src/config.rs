@@ -13,6 +13,11 @@
 //! consumer_key=...
 //! ```
 //!
+//! or, for a service account (R-179), `client_id` and `client_secret`
+//! (`OVH_CLIENT_ID`, `OVH_CLIENT_SECRET`) in place of the three keys: the
+//! client mints a bearer token from them (`api`). A section holds one
+//! form or the other.
+//!
 //! read from `/etc/ovh.conf`, `~/.ovh.conf` and
 //! `$XDG_CONFIG_HOME/ovh/ovh.conf` (`~/.config/ovh/ovh.conf`), a later file
 //! overriding an earlier one key by key. The program's `use ovh {
@@ -34,26 +39,96 @@ pub const ENDPOINTS: [(&str, &str); 7] = [
     ("soyoustart-ca", "https://ca.api.soyoustart.com/1.0"),
 ];
 
-/// What a signed call needs.
-#[derive(Clone, PartialEq, Eq)]
+/// OAuth2's token endpoint of each API endpoint that offers it, as OVH's
+/// own SDKs know them.
+pub const TOKEN_URLS: [(&str, &str); 3] = [
+    ("ovh-eu", "https://www.ovh.com/auth/oauth2/token"),
+    ("ovh-ca", "https://ca.ovh.com/auth/oauth2/token"),
+    ("ovh-us", "https://us.ovhcloud.com/auth/oauth2/token"),
+];
+
+/// What an authenticated call needs.
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Credentials {
     /// The endpoint as named (`ovh-ca`, or a URL).
     pub endpoint: String,
     /// Its base URL, no trailing slash: `https://ca.api.ovh.com/1.0`.
     pub url: String,
-    pub application_key: String,
-    pub application_secret: String,
-    pub consumer_key: String,
+    pub auth: Auth,
 }
 
-impl std::fmt::Debug for Credentials {
+/// How calls are authenticated.
+#[derive(Clone, PartialEq, Eq)]
+pub enum Auth {
+    /// An application's key and secret and a consumer key: each call is
+    /// signed (`sign`).
+    Keys {
+        application_key: String,
+        application_secret: String,
+        consumer_key: String,
+    },
+    /// A service account's OAuth2 client credentials: each call carries
+    /// a bearer token minted from them at `token_url`.
+    OAuth2 {
+        client_id: String,
+        client_secret: String,
+        token_url: String,
+    },
+}
+
+impl std::fmt::Debug for Auth {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Credentials")
-            .field("endpoint", &self.endpoint)
-            .field("url", &self.url)
-            .field("application_key", &self.application_key)
-            .finish_non_exhaustive()
+        match self {
+            Auth::Keys {
+                application_key, ..
+            } => f
+                .debug_struct("Keys")
+                .field("application_key", application_key)
+                .finish_non_exhaustive(),
+            Auth::OAuth2 {
+                client_id,
+                token_url,
+                ..
+            } => f
+                .debug_struct("OAuth2")
+                .field("client_id", client_id)
+                .field("token_url", token_url)
+                .finish_non_exhaustive(),
+        }
     }
+}
+
+impl Credentials {
+    /// Where a consumer key is made for this endpoint:
+    /// `https://ca.api.ovh.com/createToken/`.
+    pub fn create_token_url(&self) -> String {
+        let base = self.url.strip_suffix("/1.0").unwrap_or(&self.url);
+        format!("{base}/createToken/")
+    }
+
+    /// What a refused consumer key means, and the fix.
+    pub fn expired_key(&self) -> String {
+        format!(
+            "the consumer key for {} expired or was revoked; make one with unlimited validity at \
+             {} or use a service account (docs/providers/ovh.md)",
+            self.endpoint,
+            self.create_token_url()
+        )
+    }
+}
+
+/// The OAuth2 token endpoint of `endpoint` (its base URL `url`): a known
+/// name's, or, for a URL, `/auth/oauth2/token` at its origin.
+fn token_url(endpoint: &str, url: &str) -> Option<String> {
+    if let Some((_, t)) = TOKEN_URLS.iter().find(|(n, _)| *n == endpoint) {
+        return Some(t.to_string());
+    }
+    if !endpoint.contains("://") {
+        return None;
+    }
+    let (scheme, rest) = url.split_once("://")?;
+    let host = rest.split('/').next()?;
+    Some(format!("{scheme}://{host}/auth/oauth2/token"))
 }
 
 /// An endpoint's base URL: a known name's, or the URL itself.
@@ -160,14 +235,64 @@ pub fn resolve(
             ),
         }
     };
+    // Each key of each form that is set, by where it was set.
+    let set = |keys: &[(&str, &str)]| -> Vec<String> {
+        keys.iter()
+            .filter_map(|(var, name)| match env(var) {
+                Some(_) => Some(var.to_string()),
+                None => section.and_then(|s| s.get(*name)).map(|_| name.to_string()),
+            })
+            .collect()
+    };
+    let three = set(&KEYS);
+    let client = set(&CLIENT);
+    if !three.is_empty() && !client.is_empty() {
+        bail!(
+            "the credentials for the endpoint {endpoint} give both a consumer key's ({}) and \
+             a service account's ({}): they are one or the other; remove the ones you do not use \
+             from [{endpoint}] in ovh.conf or the environment",
+            three.join(", "),
+            client.join(", ")
+        );
+    }
+    let auth = if client.is_empty() {
+        Auth::Keys {
+            application_key: key("OVH_APPLICATION_KEY", "application_key")?,
+            application_secret: key("OVH_APPLICATION_SECRET", "application_secret")?,
+            consumer_key: key("OVH_CONSUMER_KEY", "consumer_key")?,
+        }
+    } else {
+        let Some(token_url) = token_url(&endpoint, &url) else {
+            bail!(
+                "the OVH endpoint {endpoint} takes no service account: give it application_key, \
+                 application_secret and consumer_key under [{endpoint}] in ovh.conf"
+            );
+        };
+        Auth::OAuth2 {
+            client_id: key("OVH_CLIENT_ID", "client_id")?,
+            client_secret: key("OVH_CLIENT_SECRET", "client_secret")?,
+            token_url,
+        }
+    };
     Ok(Credentials {
-        application_key: key("OVH_APPLICATION_KEY", "application_key")?,
-        application_secret: key("OVH_APPLICATION_SECRET", "application_secret")?,
-        consumer_key: key("OVH_CONSUMER_KEY", "consumer_key")?,
         endpoint,
         url,
+        auth,
     })
 }
+
+/// The three keys' variables and names in ovh.conf.
+const KEYS: [(&str, &str); 3] = [
+    ("OVH_APPLICATION_KEY", "application_key"),
+    ("OVH_APPLICATION_SECRET", "application_secret"),
+    ("OVH_CONSUMER_KEY", "consumer_key"),
+];
+
+/// A service account's.
+const CLIENT: [(&str, &str); 2] = [
+    ("OVH_CLIENT_ID", "client_id"),
+    ("OVH_CLIENT_SECRET", "client_secret"),
+];
 
 #[cfg(test)]
 mod tests {
@@ -179,6 +304,18 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         d
+    }
+
+    /// The three keys of the keys form.
+    fn keys(c: &Credentials) -> (&str, &str, &str) {
+        match &c.auth {
+            Auth::Keys {
+                application_key,
+                application_secret,
+                consumer_key,
+            } => (application_key, application_secret, consumer_key),
+            a => panic!("not the keys form: {a:?}"),
+        }
     }
 
     const CONF: &str = "\
@@ -213,17 +350,10 @@ consumer_key=ck-eu
         let c = resolve(None, &none, &[d.join("ovh.conf")]).unwrap();
         assert_eq!(c.endpoint, "ovh-ca");
         assert_eq!(c.url, "https://ca.api.ovh.com/1.0");
-        assert_eq!(
-            (
-                c.application_key.as_str(),
-                c.application_secret.as_str(),
-                c.consumer_key.as_str()
-            ),
-            ("ak-ca", "as-ca", "ck-ca")
-        );
+        assert_eq!(keys(&c), ("ak-ca", "as-ca", "ck-ca"));
         // The program's endpoint picks the section.
         let c = resolve(Some("ovh-eu"), &none, &[d.join("ovh.conf")]).unwrap();
-        assert_eq!(c.application_key, "ak-eu");
+        assert_eq!(keys(&c).0, "ak-eu");
         assert_eq!(c.url, "https://eu.api.ovh.com/1.0");
     }
 
@@ -238,8 +368,7 @@ consumer_key=ck-eu
         };
         let c = resolve(None, &env, &[d.join("ovh.conf")]).unwrap();
         assert_eq!(c.endpoint, "ovh-eu");
-        assert_eq!(c.application_key, "ak-eu");
-        assert_eq!(c.consumer_key, "ck-env");
+        assert_eq!((keys(&c).0, keys(&c).2), ("ak-eu", "ck-env"));
     }
 
     #[test]
@@ -249,8 +378,7 @@ consumer_key=ck-eu
         std::fs::write(d.join("home.conf"), "[ovh-ca]\nconsumer_key=ck-home\n").unwrap();
         let none = |_: &str| None;
         let c = resolve(None, &none, &[d.join("etc.conf"), d.join("home.conf")]).unwrap();
-        assert_eq!(c.consumer_key, "ck-home");
-        assert_eq!(c.application_key, "ak-ca");
+        assert_eq!((keys(&c).0, keys(&c).2), ("ak-ca", "ck-home"));
     }
 
     #[test]
@@ -288,14 +416,98 @@ consumer_key=ck-eu
     }
 
     #[test]
-    fn the_secret_is_not_debug_printed() {
+    fn the_secrets_are_not_debug_printed() {
         let c = Credentials {
             endpoint: "ovh-ca".into(),
             url: "u".into(),
-            application_key: "ak".into(),
-            application_secret: "hunter2".into(),
-            consumer_key: "ck".into(),
+            auth: Auth::Keys {
+                application_key: "ak".into(),
+                application_secret: "hunter2".into(),
+                consumer_key: "ck".into(),
+            },
         };
         assert!(!format!("{c:?}").contains("hunter2"));
+        let c = Credentials {
+            auth: Auth::OAuth2 {
+                client_id: "id".into(),
+                client_secret: "hunter3".into(),
+                token_url: "t".into(),
+            },
+            ..c
+        };
+        assert!(!format!("{c:?}").contains("hunter3"));
+    }
+
+    /// A section with a service account's client id and secret is the
+    /// OAuth2 form, its token endpoint the endpoint's own.
+    #[test]
+    fn a_service_account_in_place_of_the_keys() {
+        let d = scratch("oauth");
+        std::fs::write(
+            d.join("ovh.conf"),
+            "[ovh-ca]\nclient_id=sa-id\nclient_secret=sa-secret\n",
+        )
+        .unwrap();
+        let none = |_: &str| None;
+        let c = resolve(Some("ovh-ca"), &none, &[d.join("ovh.conf")]).unwrap();
+        assert_eq!(
+            c.auth,
+            Auth::OAuth2 {
+                client_id: "sa-id".into(),
+                client_secret: "sa-secret".into(),
+                token_url: "https://ca.ovh.com/auth/oauth2/token".into(),
+            }
+        );
+        assert_eq!(c.create_token_url(), "https://ca.api.ovh.com/createToken/");
+        // A URL's token endpoint is at its origin; the environment's
+        // client id serves as the file's does.
+        let env = |k: &str| match k {
+            "OVH_CLIENT_ID" => Some("env-id".to_string()),
+            "OVH_CLIENT_SECRET" => Some("env-secret".to_string()),
+            _ => None,
+        };
+        let c = resolve(Some("http://127.0.0.1:9/1.0"), &env, &[]).unwrap();
+        assert!(
+            matches!(&c.auth, Auth::OAuth2 { client_id, token_url, .. }
+                if client_id == "env-id" && token_url == "http://127.0.0.1:9/auth/oauth2/token"),
+            "{c:?}"
+        );
+        // Half a service account names the other half.
+        std::fs::write(d.join("ovh.conf"), "[ovh-ca]\nclient_id=sa-id\n").unwrap();
+        let e = resolve(Some("ovh-ca"), &none, &[d.join("ovh.conf")])
+            .unwrap_err()
+            .to_string();
+        assert!(
+            e.contains("no OVH client_secret for the endpoint ovh-ca"),
+            "{e}"
+        );
+        // An endpoint without OAuth2 says so.
+        let e = resolve(Some("kimsufi-eu"), &env, &[])
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("kimsufi-eu takes no service account"), "{e}");
+    }
+
+    /// Both forms in one section is an error naming each key and where
+    /// it was given.
+    #[test]
+    fn both_forms_is_an_error_naming_the_two() {
+        let d = scratch("both");
+        std::fs::write(
+            d.join("ovh.conf"),
+            "[ovh-ca]\napplication_key=a\napplication_secret=s\nconsumer_key=c\nclient_id=i\n",
+        )
+        .unwrap();
+        let env = |k: &str| (k == "OVH_CLIENT_SECRET").then(|| "x".to_string());
+        let e = resolve(Some("ovh-ca"), &env, &[d.join("ovh.conf")])
+            .unwrap_err()
+            .to_string();
+        assert_eq!(
+            e,
+            "the credentials for the endpoint ovh-ca give both a consumer key's \
+             (application_key, application_secret, consumer_key) and a service account's \
+             (client_id, OVH_CLIENT_SECRET): they are one or the other; remove the ones you do \
+             not use from [ovh-ca] in ovh.conf or the environment"
+        );
     }
 }
