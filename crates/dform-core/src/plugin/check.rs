@@ -554,284 +554,334 @@ fn secret_is_label(computed: &Json, path: &str) -> Result<()> {
 }
 
 fn resources(conn: &Conn, r: &mut Report, schema: &Schema, f: &Fixture) {
-    let typ = f.typ.as_str();
-    let doc = &f.doc;
-    // The object as Read or Apply returns it, compared as the engine does.
-    let seen = |attrs: &Json, computed: &Json, want: &Json| {
-        let got = world_doc(schema, typ, attrs, computed, want);
-        ensure(&got == want, || format!("attrs {got} are not {want}"))
+    let suite = Suite {
+        conn,
+        schema,
+        f,
+        typ: f.typ.as_str(),
+        doc: &f.doc,
     };
-    let secret = |computed: &Json| match &f.secret {
-        Some(p) => secret_is_label(computed, p),
-        None => Ok(()),
-    };
-    r.check(
-        "Read of an id nothing has answers not found",
-        read(conn, typ, "no-such-object")
-            .and_then(|o| ensure(o.is_none(), || format!("got {o:?}"))),
-    );
-
-    // Plan: validation, the diff, requires_replace.
-    match &f.missing {
-        Some((t, d, path)) => r.check(
-            "Plan refuses a document without a required attribute",
-            match plan(conn, t, None, Some(d)) {
-                Ok(_) => Err(anyhow::anyhow!("a document without `{path}` was planned")),
-                Err(e) => ensure(format!("{e:#}").contains(path.as_str()), || {
-                    format!("the refusal does not name the attribute: {e:#}")
-                }),
-            },
-        ),
-        None => r.skip(
-            "Plan refuses a document without a required attribute",
-            "no example names a required attribute",
-        ),
-    }
-    r.check(
-        "Plan of a create is every leaf, not a replace",
-        plan(conn, typ, None, Some(doc)).and_then(|p| {
-            ensure(!p.requires_replace, || "a create requires replace".into())?;
-            let want: Vec<String> = diff(schema, typ, None, Some(doc))
-                .into_iter()
-                .map(|c| c.path)
-                .collect();
-            let paths: Vec<&str> = p.changes.iter().map(|c| c.path.as_str()).collect();
-            ensure(want.iter().all(|w| paths.contains(&w.as_str())), || {
-                format!("changes {paths:?} are not every leaf {want:?}")
-            })
-        }),
-    );
-    match &f.keyed {
-        Some((t, d, prefix)) => r.check(
-            "Plan spells a keyed list by key",
-            plan(conn, t, None, Some(d)).and_then(|p| {
-                let paths: Vec<&str> = p.changes.iter().map(|c| c.path.as_str()).collect();
-                let by_key = |x: &&str| {
-                    x.starts_with(prefix.as_str())
-                        && x[prefix.len()..]
-                            .split(']')
-                            .next()
-                            .is_some_and(|k| k.contains('='))
-                };
-                ensure(paths.iter().any(by_key), || {
-                    format!("a keyed list is not spelled by key: {paths:?}")
-                })
-            }),
-        ),
-        None => r.skip(
-            "Plan spells a keyed list by key",
-            "no example sets a keyed list",
-        ),
-    }
-    match &f.sensitive {
-        Some((t, d, path)) => r.check(
-            "Plan marks a sensitive attribute sensitive",
-            plan(conn, t, None, Some(d)).and_then(|p| {
-                ensure(
-                    p.changes.iter().any(|c| &c.path == path && c.sensitive),
-                    || format!("the sensitive {path} is not marked sensitive"),
-                )
-            }),
-        ),
-        None => r.skip(
-            "Plan marks a sensitive attribute sensitive",
-            "no example sets a sensitive attribute",
-        ),
-    }
-    match &f.moved {
-        Some(moved) => r.check(
-            "Plan of a force_new change requires replace",
-            plan(conn, typ, Some(doc), Some(moved))
-                .and_then(|p| ensure(p.requires_replace, || "zone is force_new".into())),
-        ),
-        None => r.skip(
-            "Plan of a force_new change requires replace",
-            "the examples change no force_new path",
-        ),
-    }
-    let renamed = &f.renamed;
-    r.check(
-        "Plan of an in-place change does not replace",
-        plan(conn, typ, Some(doc), Some(renamed)).and_then(|p| {
-            ensure(!p.requires_replace, || {
-                "an in-place change requires replace".into()
-            })?;
-            let want: Vec<String> = diff(schema, typ, Some(doc), Some(renamed))
-                .into_iter()
-                .map(|c| c.path)
-                .collect();
-            let got: Vec<&str> = p.changes.iter().map(|c| c.path.as_str()).collect();
-            ensure(!want.is_empty() && got == want, || {
-                format!("changes {got:?}, not {want:?}")
-            })
-        }),
-    );
-
-    // Apply: a create mints computed values and hides the secret.
-    let created = apply_keyed(conn, pb::Op::Create, typ, "", Some(doc), vec![], KEY);
-    let remote = match &created {
-        Ok(resp) => resp.remote.clone(),
-        Err(_) => String::new(),
-    };
-    r.check(
-        "Apply CREATE returns the object with its computed values",
-        created.map_err(anyhow::Error::new).and_then(|resp| {
-            ensure(!resp.remote.is_empty(), || "no remote id".into())?;
-            let computed = wire::from_doc_or_empty(resp.computed.as_ref())?;
-            ensure(
-                get_path(&computed, &f.id).is_some_and(Json::is_string),
-                || format!("no computed {}: {computed}", f.id),
-            )?;
-            secret(&computed)?;
-            let attrs = wire::from_doc_or_empty(resp.attrs.as_ref())?;
-            seen(&attrs, &computed, doc)
-        }),
-    );
-    if remote.is_empty() {
+    suite.plans(r);
+    let Some(remote) = suite.creates(r) else {
         return;
+    };
+    suite.updates(r, &remote);
+    suite.replaces(r, remote);
+}
+
+/// The resource checks of one provider against its fixture: Plan, then an
+/// object's life through Apply.
+struct Suite<'a> {
+    conn: &'a Conn,
+    schema: &'a Schema,
+    f: &'a Fixture,
+    typ: &'a str,
+    doc: &'a Json,
+}
+
+impl Suite<'_> {
+    /// The object as Read or Apply returns it, compared as the engine does.
+    fn seen(&self, attrs: &Json, computed: &Json, want: &Json) -> Result<()> {
+        let got = world_doc(self.schema, self.typ, attrs, computed, want);
+        ensure(&got == want, || format!("attrs {got} are not {want}"))
     }
-    r.check(
-        "Read returns what Apply created",
-        read(conn, typ, &remote).and_then(|o| {
-            let (attrs, computed) = o.ok_or_else(|| anyhow::anyhow!("not found"))?;
-            seen(&attrs, &computed, doc)?;
-            secret(&computed)
-        }),
-    );
-    r.check(
-        "Apply CREATE again with the same idempotency key answers the object it made",
-        apply_keyed(conn, pb::Op::Create, typ, "", Some(doc), vec![], KEY)
-            .map_err(anyhow::Error::new)
-            .and_then(|resp| {
-                ensure(resp.remote == remote, || {
-                    format!("remote {} is not {remote}", resp.remote)
+
+    /// The fixture's secret, a label in what the provider answered.
+    fn secret(&self, computed: &Json) -> Result<()> {
+        match &self.f.secret {
+            Some(p) => secret_is_label(computed, p),
+            None => Ok(()),
+        }
+    }
+
+    /// Read of nothing; Plan: validation, the diff, requires_replace.
+    fn plans(&self, r: &mut Report) {
+        let (conn, schema, f, typ, doc) = (self.conn, self.schema, self.f, self.typ, self.doc);
+        r.check(
+            "Read of an id nothing has answers not found",
+            read(conn, typ, "no-such-object")
+                .and_then(|o| ensure(o.is_none(), || format!("got {o:?}"))),
+        );
+
+        // Plan: validation, the diff, requires_replace.
+        match &f.missing {
+            Some((t, d, path)) => r.check(
+                "Plan refuses a document without a required attribute",
+                match plan(conn, t, None, Some(d)) {
+                    Ok(_) => Err(anyhow::anyhow!("a document without `{path}` was planned")),
+                    Err(e) => ensure(format!("{e:#}").contains(path.as_str()), || {
+                        format!("the refusal does not name the attribute: {e:#}")
+                    }),
+                },
+            ),
+            None => r.skip(
+                "Plan refuses a document without a required attribute",
+                "no example names a required attribute",
+            ),
+        }
+        r.check(
+            "Plan of a create is every leaf, not a replace",
+            plan(conn, typ, None, Some(doc)).and_then(|p| {
+                ensure(!p.requires_replace, || "a create requires replace".into())?;
+                let want: Vec<String> = diff(schema, typ, None, Some(doc))
+                    .into_iter()
+                    .map(|c| c.path)
+                    .collect();
+                let paths: Vec<&str> = p.changes.iter().map(|c| c.path.as_str()).collect();
+                ensure(want.iter().all(|w| paths.contains(&w.as_str())), || {
+                    format!("changes {paths:?} are not every leaf {want:?}")
                 })
             }),
-    );
-    if conn.borrow().has("managed") {
-        r.check(
-            "Query provider.created answers what an idempotency key made",
-            made_by(conn, typ, KEY)
-                .and_then(|rows| ensure(rows == [remote.clone()], || format!("got {rows:?}"))),
         );
+        match &f.keyed {
+            Some((t, d, prefix)) => r.check(
+                "Plan spells a keyed list by key",
+                plan(conn, t, None, Some(d)).and_then(|p| {
+                    let paths: Vec<&str> = p.changes.iter().map(|c| c.path.as_str()).collect();
+                    let by_key = |x: &&str| {
+                        x.starts_with(prefix.as_str())
+                            && x[prefix.len()..]
+                                .split(']')
+                                .next()
+                                .is_some_and(|k| k.contains('='))
+                    };
+                    ensure(paths.iter().any(by_key), || {
+                        format!("a keyed list is not spelled by key: {paths:?}")
+                    })
+                }),
+            ),
+            None => r.skip(
+                "Plan spells a keyed list by key",
+                "no example sets a keyed list",
+            ),
+        }
+        match &f.sensitive {
+            Some((t, d, path)) => r.check(
+                "Plan marks a sensitive attribute sensitive",
+                plan(conn, t, None, Some(d)).and_then(|p| {
+                    ensure(
+                        p.changes.iter().any(|c| &c.path == path && c.sensitive),
+                        || format!("the sensitive {path} is not marked sensitive"),
+                    )
+                }),
+            ),
+            None => r.skip(
+                "Plan marks a sensitive attribute sensitive",
+                "no example sets a sensitive attribute",
+            ),
+        }
+        match &f.moved {
+            Some(moved) => r.check(
+                "Plan of a force_new change requires replace",
+                plan(conn, typ, Some(doc), Some(moved))
+                    .and_then(|p| ensure(p.requires_replace, || "zone is force_new".into())),
+            ),
+            None => r.skip(
+                "Plan of a force_new change requires replace",
+                "the examples change no force_new path",
+            ),
+        }
+        let renamed = &f.renamed;
         r.check(
-            "Query provider.created answers nothing for a key that made nothing",
-            made_by(conn, typ, "dform-check-nothing")
-                .and_then(|rows| ensure(rows.is_empty(), || format!("got {rows:?}"))),
-        );
-    } else {
-        r.skip("Query provider.created", "no `managed` capability");
-    }
-    r.check(
-        "Import answers a managed object by remote id",
-        import(conn, typ, &remote).and_then(|o| ensure(o.is_some(), || "not found".into())),
-    );
-    if f.synthetic && conn.borrow().has("inventory") {
-        r.check(
-            "Import answers an inventory object",
-            import(conn, typ, "found").and_then(|o| {
-                let (attrs, computed) = o.ok_or_else(|| anyhow::anyhow!("not found"))?;
-                ensure(attrs["zone"] == "z1", || format!("attrs {attrs}"))?;
-                secret(&computed)
-            }),
-        );
-    }
-
-    // Apply UPDATE keeps the identity.
-    r.check(
-        "Apply UPDATE changes the object in place",
-        apply(conn, pb::Op::Update, typ, &remote, Some(renamed), vec![])
-            .map_err(anyhow::Error::new)
-            .and_then(|resp| {
-                ensure(resp.remote == remote, || {
-                    format!("remote {} is not {remote}", resp.remote)
+            "Plan of an in-place change does not replace",
+            plan(conn, typ, Some(doc), Some(renamed)).and_then(|p| {
+                ensure(!p.requires_replace, || {
+                    "an in-place change requires replace".into()
                 })?;
-                let (attrs, computed) = read(conn, typ, &remote)?
-                    .ok_or_else(|| anyhow::anyhow!("gone after update"))?;
-                seen(&attrs, &computed, renamed)
+                let want: Vec<String> = diff(schema, typ, Some(doc), Some(renamed))
+                    .into_iter()
+                    .map(|c| c.path)
+                    .collect();
+                let got: Vec<&str> = p.changes.iter().map(|c| c.path.as_str()).collect();
+                ensure(!want.is_empty() && got == want, || {
+                    format!("changes {got:?}, not {want:?}")
+                })
             }),
-    );
+        );
+    }
 
-    // Assertions (F DR-13): a failing one refuses the action.
-    let schema_resp = call::<pb::SchemaResponse>(conn, pb::SchemaRequest::default());
-    if f.synthetic && schema_resp.is_ok_and(|s| s.checks_refinements) {
-        let assertion = |op: &str, v: Json| pb::Assertion {
-            path: "password".into(),
-            op: op.into(),
-            value: Some(wire::doc(&v)),
-            message: format!("password {op} {v}"),
+    /// Apply CREATE mints computed values and hides the secret; Read,
+    /// idempotency, `provider.created` and Import answer what it made. The
+    /// object's remote id, once made.
+    fn creates(&self, r: &mut Report) -> Option<String> {
+        let (conn, f, typ, doc) = (self.conn, self.f, self.typ, self.doc);
+        // Apply: a create mints computed values and hides the secret.
+        let created = apply_keyed(conn, pb::Op::Create, typ, "", Some(doc), vec![], KEY);
+        let remote = match &created {
+            Ok(resp) => resp.remote.clone(),
+            Err(_) => String::new(),
         };
         r.check(
-            "Apply refuses an action whose assertion fails, and changes nothing",
-            match apply(
-                conn,
-                pb::Op::Update,
-                typ,
-                &remote,
-                Some(doc),
-                vec![assertion("len_ge", json!(64))],
-            ) {
-                Ok(_) => Err(anyhow::anyhow!("applied despite a failing assertion")),
-                Err(CallError::Refused(_)) => read(conn, typ, &remote).and_then(|o| {
-                    let (attrs, _) = o.ok_or_else(|| anyhow::anyhow!("gone"))?;
-                    ensure(&attrs == renamed, || format!("attrs changed to {attrs}"))
-                }),
-                Err(e) => Err(anyhow::anyhow!("not a refusal: {e}")),
-            },
+            "Apply CREATE returns the object with its computed values",
+            created.map_err(anyhow::Error::new).and_then(|resp| {
+                ensure(!resp.remote.is_empty(), || "no remote id".into())?;
+                let computed = wire::from_doc_or_empty(resp.computed.as_ref())?;
+                ensure(
+                    get_path(&computed, &f.id).is_some_and(Json::is_string),
+                    || format!("no computed {}: {computed}", f.id),
+                )?;
+                self.secret(&computed)?;
+                let attrs = wire::from_doc_or_empty(resp.attrs.as_ref())?;
+                self.seen(&attrs, &computed, doc)
+            }),
+        );
+        if remote.is_empty() {
+            return None;
+        }
+        r.check(
+            "Read returns what Apply created",
+            read(conn, typ, &remote).and_then(|o| {
+                let (attrs, computed) = o.ok_or_else(|| anyhow::anyhow!("not found"))?;
+                self.seen(&attrs, &computed, doc)?;
+                self.secret(&computed)
+            }),
         );
         r.check(
-            "Apply applies an action whose assertions hold",
-            apply(
-                conn,
-                pb::Op::Update,
-                typ,
-                &remote,
-                Some(renamed),
-                vec![
-                    assertion("len_ge", json!(4)),
-                    assertion("prefix", json!("hun")),
-                ],
-            )
-            .map(|_| ())
-            .map_err(anyhow::Error::new),
+            "Apply CREATE again with the same idempotency key answers the object it made",
+            apply_keyed(conn, pb::Op::Create, typ, "", Some(doc), vec![], KEY)
+                .map_err(anyhow::Error::new)
+                .and_then(|resp| {
+                    ensure(resp.remote == remote, || {
+                        format!("remote {} is not {remote}", resp.remote)
+                    })
+                }),
         );
-    } else {
-        r.skip("Apply assertions", "the schema does not check refinements");
+        if conn.borrow().has("managed") {
+            r.check(
+                "Query provider.created answers what an idempotency key made",
+                made_by(conn, typ, KEY)
+                    .and_then(|rows| ensure(rows == [remote.clone()], || format!("got {rows:?}"))),
+            );
+            r.check(
+                "Query provider.created answers nothing for a key that made nothing",
+                made_by(conn, typ, "dform-check-nothing")
+                    .and_then(|rows| ensure(rows.is_empty(), || format!("got {rows:?}"))),
+            );
+        } else {
+            r.skip("Query provider.created", "no `managed` capability");
+        }
+        r.check(
+            "Import answers a managed object by remote id",
+            import(conn, typ, &remote).and_then(|o| ensure(o.is_some(), || "not found".into())),
+        );
+        if f.synthetic && conn.borrow().has("inventory") {
+            r.check(
+                "Import answers an inventory object",
+                import(conn, typ, "found").and_then(|o| {
+                    let (attrs, computed) = o.ok_or_else(|| anyhow::anyhow!("not found"))?;
+                    ensure(attrs["zone"] == "z1", || format!("attrs {attrs}"))?;
+                    self.secret(&computed)
+                }),
+            );
+        }
+        Some(remote)
     }
 
-    // REPLACE, destroy first: a new object, the old one gone.
-    let moved = f.moved.as_ref().unwrap_or(doc);
-    let replaced = apply(conn, pb::Op::Replace, typ, &remote, Some(moved), vec![]);
-    let new_remote = replaced.as_ref().map(|x| x.remote.clone()).ok();
-    r.check(
-        "Apply REPLACE makes a new object",
-        replaced.map_err(anyhow::Error::new).and_then(|resp| {
-            let (attrs, computed) = read(conn, typ, &resp.remote)?
-                .ok_or_else(|| anyhow::anyhow!("the new object is not there"))?;
-            seen(&attrs, &computed, moved)
-        }),
-    );
-    let remote = new_remote.unwrap_or(remote);
-    r.check(
-        "Apply DELETE removes the object",
-        apply(conn, pb::Op::Delete, typ, &remote, None, vec![])
-            .map_err(anyhow::Error::new)
-            .and_then(|_| {
-                let o = read(conn, typ, &remote)?;
-                ensure(o.is_none(), || format!("still there: {o:?}"))
+    /// Apply UPDATE keeps the identity; assertions (F DR-13) refuse an
+    /// action whose assertion fails.
+    fn updates(&self, r: &mut Report, remote: &str) {
+        let (conn, f, typ, doc) = (self.conn, self.f, self.typ, self.doc);
+        let renamed = &f.renamed;
+        // Apply UPDATE keeps the identity.
+        r.check(
+            "Apply UPDATE changes the object in place",
+            apply(conn, pb::Op::Update, typ, &remote, Some(renamed), vec![])
+                .map_err(anyhow::Error::new)
+                .and_then(|resp| {
+                    ensure(resp.remote == remote, || {
+                        format!("remote {} is not {remote}", resp.remote)
+                    })?;
+                    let (attrs, computed) = read(conn, typ, &remote)?
+                        .ok_or_else(|| anyhow::anyhow!("gone after update"))?;
+                    self.seen(&attrs, &computed, renamed)
+                }),
+        );
+        // Assertions (F DR-13): a failing one refuses the action.
+        let schema_resp = call::<pb::SchemaResponse>(conn, pb::SchemaRequest::default());
+        if f.synthetic && schema_resp.is_ok_and(|s| s.checks_refinements) {
+            let assertion = |op: &str, v: Json| pb::Assertion {
+                path: "password".into(),
+                op: op.into(),
+                value: Some(wire::doc(&v)),
+                message: format!("password {op} {v}"),
+            };
+            r.check(
+                "Apply refuses an action whose assertion fails, and changes nothing",
+                match apply(
+                    conn,
+                    pb::Op::Update,
+                    typ,
+                    &remote,
+                    Some(doc),
+                    vec![assertion("len_ge", json!(64))],
+                ) {
+                    Ok(_) => Err(anyhow::anyhow!("applied despite a failing assertion")),
+                    Err(CallError::Refused(_)) => read(conn, typ, &remote).and_then(|o| {
+                        let (attrs, _) = o.ok_or_else(|| anyhow::anyhow!("gone"))?;
+                        ensure(&attrs == renamed, || format!("attrs changed to {attrs}"))
+                    }),
+                    Err(e) => Err(anyhow::anyhow!("not a refusal: {e}")),
+                },
+            );
+            r.check(
+                "Apply applies an action whose assertions hold",
+                apply(
+                    conn,
+                    pb::Op::Update,
+                    typ,
+                    &remote,
+                    Some(renamed),
+                    vec![
+                        assertion("len_ge", json!(4)),
+                        assertion("prefix", json!("hun")),
+                    ],
+                )
+                .map(|_| ())
+                .map_err(anyhow::Error::new),
+            );
+        } else {
+            r.skip("Apply assertions", "the schema does not check refinements");
+        }
+    }
+
+    /// REPLACE, destroy first: a new object, the old one gone; DELETE; the
+    /// tick's end.
+    fn replaces(&self, r: &mut Report, remote: String) {
+        let (conn, f, typ, doc) = (self.conn, self.f, self.typ, self.doc);
+        // REPLACE, destroy first: a new object, the old one gone.
+        let moved = f.moved.as_ref().unwrap_or(doc);
+        let replaced = apply(conn, pb::Op::Replace, typ, &remote, Some(moved), vec![]);
+        let new_remote = replaced.as_ref().map(|x| x.remote.clone()).ok();
+        r.check(
+            "Apply REPLACE makes a new object",
+            replaced.map_err(anyhow::Error::new).and_then(|resp| {
+                let (attrs, computed) = read(conn, typ, &resp.remote)?
+                    .ok_or_else(|| anyhow::anyhow!("the new object is not there"))?;
+                self.seen(&attrs, &computed, moved)
             }),
-    );
-    r.check(
-        "Apply END_TICK ends the tick",
-        call::<pb::ApplyResponse>(
-            conn,
-            pb::ApplyRequest {
-                op: pb::Op::EndTick as i32,
-                ..Default::default()
-            },
-        )
-        .map(|_| ()),
-    );
+        );
+        let remote = new_remote.unwrap_or(remote);
+        r.check(
+            "Apply DELETE removes the object",
+            apply(conn, pb::Op::Delete, typ, &remote, None, vec![])
+                .map_err(anyhow::Error::new)
+                .and_then(|_| {
+                    let o = read(conn, typ, &remote)?;
+                    ensure(o.is_none(), || format!("still there: {o:?}"))
+                }),
+        );
+        r.check(
+            "Apply END_TICK ends the tick",
+            call::<pb::ApplyResponse>(
+                conn,
+                pb::ApplyRequest {
+                    op: pb::Op::EndTick as i32,
+                    ..Default::default()
+                },
+            )
+            .map(|_| ()),
+        );
+    }
 }
 
 fn import(conn: &Conn, typ: &str, remote: &str) -> Result<Option<(Json, Json)>> {
