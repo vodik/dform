@@ -368,15 +368,8 @@ impl<P: Provider> Typed<P> {
         };
         let k = self.kind(&addr.typ)?;
         if let Some(d) = &desired {
-            for ((t, path), spec) in &self.schema.attrs {
-                if t == &addr.typ
-                    && spec.has("required")
-                    && dform_core::provider::get_path(d, path).is_none()
-                {
-                    return Err(Error::Refused(format!(
-                        "plan {addr}: required attribute {path} is not set"
-                    )));
-                }
+            if let Some(why) = self.schema.missing_required(&addr.typ, d) {
+                return Err(Error::Refused(format!("plan {addr}: {why}")));
             }
             // A provider configured later (from a tick's output) checks at
             // its Apply.

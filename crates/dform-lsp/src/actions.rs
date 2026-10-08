@@ -403,7 +403,7 @@ fn required(e: &Evaluated, read: Reader) -> Vec<Action> {
         out.push(
             Action::new(
                 format!("set the required {}", names.join(", ")),
-                format!("{}: required attribute {first} is not set", r.addr),
+                format!("{first} is required"),
                 None,
             )
             .edit(&file, at, at, format!("{lead}{}\n", lines.join("\n"))),

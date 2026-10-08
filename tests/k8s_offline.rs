@@ -165,7 +165,7 @@ fn offline_plan_validates_and_hides_secrets() {
     let r = dform(&s, None, &["plan", "p.df"]).failure();
     assert!(
         r.stderr
-            .contains("plan k8s.deployment[\"api\"]: required attribute spec.selector is not set"),
+            .contains("Error: plan k8s.deployment api: refused\n  spec.selector is required: "),
         "{}",
         r.stderr
     );

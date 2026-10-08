@@ -792,7 +792,7 @@ fn quick_fix_sets_a_required_attribute() {
         &root,
         &stack,
         &edited,
-        "k8s.persistent_volume_claim[\"data\"]: required attribute spec.accessModes is not set",
+        "spec.accessModes is required",
         "set the required spec.accessModes, spec.resources.requests.storage",
     );
     assert!(

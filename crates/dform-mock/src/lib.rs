@@ -569,16 +569,10 @@ impl FakeCloud {
     /// Every `required` attribute is set. Paths inside a list element are not
     /// checked.
     fn check_required(&self, addr: &Address, doc: &Json) -> Result<()> {
-        let typ = addr.typ.as_str();
-        for ((t, path), spec) in &self.schema.attrs {
-            if t != typ || !spec.has("required") {
-                continue;
-            }
-            if !self.schema.in_list(typ, path) && get_path(doc, path).is_none() {
-                bail!("plan {addr}: required attribute {path} is not set");
-            }
+        match self.schema.missing_required(&addr.typ, doc) {
+            Some(why) => bail!("plan {addr}: {why}"),
+            None => Ok(()),
         }
-        Ok(())
     }
 
     /// Plan one resource: the desired document is valid, its diff against

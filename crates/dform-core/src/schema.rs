@@ -535,6 +535,40 @@ impl Schema {
         }
     }
 
+    /// The first `required` attribute of `typ` that `doc` does not set (a
+    /// path inside a list element is its element's), as a provider's Plan
+    /// refuses it: `end is required: the last address of the pool`, its
+    /// description the schema's `type_doc`, else where it is written.
+    pub fn missing_required(&self, typ: &str, doc: &serde_json::Value) -> Option<String> {
+        self.attrs
+            .iter()
+            .find(|((t, path), spec)| {
+                t == typ
+                    && spec.has("required")
+                    && !self.in_list(typ, path)
+                    && crate::provider::get_path(doc, path).is_none()
+            })
+            .map(|((_, path), _)| self.required(typ, path))
+    }
+
+    /// That `path` of `typ` is required, said with what it is: the first
+    /// sentence of its `type_doc`, else where it is given.
+    pub fn required(&self, typ: &str, path: &str) -> String {
+        let what = self.docs().get(&(typ, path)).map(|d| {
+            let d = d.trim();
+            let d = d.split_once(". ").map_or(d, |(first, _)| first);
+            let d = d.trim_end_matches('.');
+            let mut cs = d.chars();
+            cs.next()
+                .map(|c| c.to_lowercase().chain(cs).collect::<String>())
+                .unwrap_or_default()
+        });
+        match what.filter(|w| !w.is_empty()) {
+            Some(w) => format!("{path} is required: {w}"),
+            None => format!("{path} is required: give it in the resource's block"),
+        }
+    }
+
     /// Each `type_doc(T, Path, Text)`: a type's (path `""`) and its
     /// attributes' descriptions, by type and path.
     pub fn docs(&self) -> BTreeMap<(&str, &str), &str> {
@@ -1127,5 +1161,30 @@ mod tests {
         .unwrap_err();
         assert!(format!("{e:#}").contains("unknown flag 'computd'"), "{e:#}");
         assert!(Schema::parse("type_attr(\"t\", x, \"string\", []) where foo(x)", "test").is_err());
+    }
+
+    /// A provider's Plan refuses a document without a required attribute
+    /// by what the attribute is: its description's first sentence, else
+    /// where it is given; a path inside a list element is the element's.
+    #[test]
+    fn a_missing_required_attribute_says_what_it_is() {
+        let s = Schema::parse(
+            "type_attr(\"t.r\", \"end\", \"ip\", [\"required\"])\n\
+             type_attr(\"t.r\", \"name\", \"string\", [\"required\"])\n\
+             type_doc(\"t.r\", \"end\", \"The last address of the pool. Inclusive.\")\n",
+            "test",
+        )
+        .unwrap();
+        let doc = serde_json::json!({"name": "a"});
+        assert_eq!(
+            s.missing_required("t.r", &doc).as_deref(),
+            Some("end is required: the last address of the pool")
+        );
+        assert_eq!(
+            s.required("t.r", "name"),
+            "name is required: give it in the resource's block"
+        );
+        let whole = serde_json::json!({"name": "a", "end": "10.0.0.9"});
+        assert_eq!(s.missing_required("t.r", &whole), None);
     }
 }

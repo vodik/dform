@@ -142,7 +142,8 @@ fn plan_comes_from_the_schema_and_apply_from_the_lifecycle() {
         )
         .unwrap_err();
     assert!(
-        e.to_string().contains("required attribute name is not set"),
+        e.to_string()
+            .contains("plan acme.bucket[\"logs\"]: name is required: "),
         "{e}"
     );
     // Create: the id is computed.

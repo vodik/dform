@@ -286,7 +286,7 @@ impl K8s {
             return Ok((diff(schema, typ, prior, None), false));
         };
         if let Some(p) = missing_required(schema, typ, d) {
-            bail!("{at}: required attribute {p} is not set");
+            bail!("{at}: {}", schema.required(typ, &p));
         }
         if get_path(d, "metadata.name").is_none() && get_path(d, "metadata.generateName").is_none()
         {
