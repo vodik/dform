@@ -99,6 +99,38 @@ enum Target {
     Missing(Vec<PathBuf>),
 }
 
+/// The file the path `segs` names under `base` (R-65): `a.b` is `a/b.df`,
+/// else the item `b` of `a.df`, with that item's name; the files it
+/// could have been when it is neither.
+pub fn path_file<'s>(
+    base: &Path,
+    segs: &[&'s str],
+) -> std::result::Result<(PathBuf, Option<&'s str>), Vec<PathBuf>> {
+    let file = |segs: &[&str]| {
+        let mut f = base.to_path_buf();
+        for s in segs {
+            f.push(s);
+        }
+        f.set_extension("df");
+        f
+    };
+    let whole = file(segs);
+    if whole.is_file() {
+        return Ok((whole, None));
+    }
+    let mut tried = vec![whole];
+    if let Some((last, init)) = segs.split_last()
+        && !init.is_empty()
+    {
+        let f = file(init);
+        if f.is_file() {
+            return Ok((f, Some(last)));
+        }
+        tried.push(f);
+    }
+    Err(tried)
+}
+
 impl Mounts {
     fn of(entry: &Path, read: &dyn Fn(&Path) -> std::io::Result<String>) -> Result<Mounts> {
         let Some(root) = crate::project::manifest_root(entry) else {
@@ -145,25 +177,10 @@ impl Mounts {
             Some(root) if segs.len() > 1 => (root.clone(), &segs[1..], Some(segs[0]), true),
             _ => (self.root.clone(), &segs[..], None, self.project),
         };
-        let file = |segs: &[&str]| {
-            let mut f = base.clone();
-            for s in segs {
-                f.push(s);
-            }
-            f.set_extension("df");
-            f
-        };
-        let mut tried = vec![file(rest)];
-        let (found, module) = if tried[0].is_file() {
-            (tried[0].clone(), path.to_string())
-        } else if rest.len() > 1 && file(&rest[..rest.len() - 1]).is_file() {
-            let m = segs[..segs.len() - 1].join(".");
-            (file(&rest[..rest.len() - 1]), m)
-        } else {
-            if rest.len() > 1 {
-                tried.push(file(&rest[..rest.len() - 1]));
-            }
-            return Target::Missing(tried);
+        let (found, module) = match path_file(&base, rest) {
+            Ok((f, None)) => (f, path.to_string()),
+            Ok((f, Some(_))) => (f, segs[..segs.len() - 1].join(".")),
+            Err(tried) => return Target::Missing(tried),
         };
         let found = fs::canonicalize(&found).unwrap_or(found);
         let base = fs::canonicalize(&base).unwrap_or(base);
@@ -766,6 +783,27 @@ mod tests {
             .collect();
         assert!(facts.contains(&"q(2)".to_string()), "{facts:?}");
         assert!(!facts.contains(&"q(1)".to_string()), "{facts:?}");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// A path is a file, else an item of the file its init names; else
+    /// the files it could have been.
+    #[test]
+    fn a_path_names_a_file_or_an_item_of_one() {
+        let dir = std::env::temp_dir().join(format!("dform-loader-path-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("modules")).unwrap();
+        fs::write(dir.join("modules/net.df"), "").unwrap();
+        let net = dir.join("modules/net.df");
+        assert_eq!(
+            path_file(&dir, &["modules", "net"]),
+            Ok((net.clone(), None))
+        );
+        assert_eq!(
+            path_file(&dir, &["modules", "net", "vpc"]),
+            Ok((net, Some("vpc")))
+        );
+        assert_eq!(path_file(&dir, &["nope"]), Err(vec![dir.join("nope.df")]));
         let _ = fs::remove_dir_all(&dir);
     }
 }

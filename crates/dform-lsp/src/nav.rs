@@ -39,21 +39,8 @@ pub fn path_file(
     path: &str,
 ) -> Option<(std::path::PathBuf, Option<String>)> {
     let segs: Vec<&str> = path.split('.').collect();
-    let file = |segs: &[&str]| {
-        let mut f = root.to_path_buf();
-        for s in segs {
-            f.push(s);
-        }
-        f.set_extension("df");
-        f
-    };
-    let whole = file(&segs);
-    if whole.is_file() {
-        return Some((whole, None));
-    }
-    let (last, init) = segs.split_last()?;
-    let f = file(init);
-    (!init.is_empty() && f.is_file()).then(|| (f, Some(last.to_string())))
+    let (f, item) = dform_core::loader::path_file(root, &segs).ok()?;
+    Some((f, item.map(str::to_string)))
 }
 
 /// A module's declared inputs and outputs, each `(name, type text)`.
