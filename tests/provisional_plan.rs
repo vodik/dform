@@ -288,3 +288,31 @@ fn the_k8s_provider_plans_provisionally_against_its_snapshot() {
         r.stdout
     );
 }
+
+/// A tick whose provider's connection an earlier tick makes is planned
+/// against the offline schema too, and says so as `later` does.
+#[test]
+fn a_tick_whose_connection_an_earlier_tick_makes_is_provisional() {
+    let s = Scratch::project("provisional-tick");
+    s.write(
+        "p.df",
+        "use fake\nresource db.postgres server { name = \"server\" }\n\
+         use k8s { kubeconfig = server.endpoint }\n\
+         resource k8s.namespace apps { metadata.name = \"apps\" }\n",
+    );
+    let r = s.run(&["plan", "p.df"]).success();
+    assert!(
+        r.stdout.contains(
+            "tick 2  1 change\n  waits on  provider k8s  kubeconfig = server.endpoint\n  \
+             provisional: planned against the offline schema; planned again once kubeconfig \
+             is known\n  + k8s.namespace apps"
+        ),
+        "{}",
+        r.stdout
+    );
+    let r = s.run(&["plan", "p.df", "--json"]).success();
+    let j: serde_json::Value = serde_json::from_str(&r.stdout).unwrap();
+    let ticks = j["ticks"].as_array().unwrap();
+    assert_eq!(ticks[0].get("provisional"), None, "{}", r.stdout);
+    assert_eq!(ticks[1]["provisional"], true, "{}", r.stdout);
+}

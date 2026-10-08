@@ -2946,6 +2946,11 @@ impl Report {
             let s = out.entry(t + 1).or_default();
             s.changes.extend(b.deformations.iter());
             s.waits.extend(b.on.iter().cloned());
+            for k in b.provisional.iter().flatten() {
+                if !s.provisional.contains(k) {
+                    s.provisional.push(k.clone());
+                }
+            }
         }
         for d in &self.definite {
             if matches!(d.kind, ActionKind::Replace { create_first: true }) {
@@ -3256,6 +3261,12 @@ impl Report {
                     "            "
                 };
                 rows.push(Row::plain(format!("{lead}{w}")));
+            }
+            if !s.provisional.is_empty() {
+                rows.push(Row::plain(format!(
+                    "  {}",
+                    provisional_text(&s.provisional)
+                )));
             }
             self.write_level(&mut rows, &s.changes, None, "  ", style);
             for a in &s.deposed {
@@ -4633,6 +4644,10 @@ struct Section<'a> {
     /// The rules that may derive an unknown number of resources once
     /// the tick before has run (R-156).
     groups: Vec<&'a Group>,
+    /// The settings of the providers whose connection an earlier tick
+    /// makes, which planned its changes against their offline schemas
+    /// (R-193), as `later`'s provisional block says them.
+    provisional: Vec<String>,
 }
 
 /// `moved OLD -> NEW`, one line per rename `moved/3` applied to state.
@@ -4736,14 +4751,21 @@ impl Report {
             "stack": self.stack,
             "up_to_date": self.undeformed,
             "summary": summary,
-            "ticks": self.sections().iter().map(|(t, s)| json!({
-                "tick": t,
-                "after": (*t != self.tick).then(|| t - 1),
-                "waits_on": nulls(&mut s.waits.iter()),
-                "changes": changes(&s.changes),
-                "deposed": s.deposed.iter().map(|a| a.to_string()).collect::<Vec<_>>(),
-                "groups": s.groups.iter().map(|g| group(g)).collect::<Vec<_>>(),
-            })).collect::<Vec<_>>(),
+            "ticks": self.sections().iter().map(|(t, s)| {
+                let mut j = json!({
+                    "tick": t,
+                    "after": (*t != self.tick).then(|| t - 1),
+                    "waits_on": nulls(&mut s.waits.iter()),
+                    "changes": changes(&s.changes),
+                    "deposed": s.deposed.iter().map(|a| a.to_string()).collect::<Vec<_>>(),
+                    "groups": s.groups.iter().map(|g| group(g)).collect::<Vec<_>>(),
+                });
+                // Only a tick planned against an offline schema says so.
+                if !s.provisional.is_empty() {
+                    j["provisional"] = json!(true);
+                }
+                j
+            }).collect::<Vec<_>>(),
             "later": later,
             "shadowed": self.shadowed.iter().map(diag_json).collect::<Vec<_>>(),
             "conflicts": self.conflicts.iter().map(diag_json).collect::<Vec<_>>(),

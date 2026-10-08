@@ -1401,8 +1401,11 @@ made; the plan itself says what it is.
         metadata.name = "apps"
   ```
 
-  `plan --json` says it of the group (`"provisional": true`), the plan
-  file of each change, and `apply PLAN` names it beside a change the
+  A tick whose provider's connection an earlier tick of the plan makes
+  (`use k8s { kubeconfig = server.endpoint }`) was planned the same way,
+  and the line under its `waits on` says so.
+  `plan --json` says it of the group and of such a tick
+  (`"provisional": true`), the plan file of each change, and `apply PLAN` names it beside a change the
   re-plan against the cluster no longer reproduces. One whose settings wait on what dform's own read has not
   answered names the location too, `provider k8s  kubeconfig = raw,
   ssh://ubuntu@10.0.0.5/etc/rancher/k3s/k3s.yaml`; one of a kind no
@@ -1570,7 +1573,9 @@ coloured.
 `plan --json` prints the same report as one JSON document, the thing CI and
 editors consume: `stack`, `up_to_date`, a `summary` of counts (`changes`,
 each kind, `ticks`, `approvals`, `undetermined`, `conflicts`), `ticks`
-(each `{tick, after, waits_on, changes, deposed, groups}`, `groups` the
+(each `{tick, after, waits_on, changes, deposed, groups}`, and
+`provisional: true` when the tick was planned against an offline
+schema; `groups` the
 resource rules the tick before decides, each as `later` has one),
 `later` (each with a
 `kind`: `group` with its `address`, `reads`, `instance`; `deny`,

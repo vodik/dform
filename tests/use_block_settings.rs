@@ -40,6 +40,7 @@ resource k8s.namespace ns { metadata.name = "app" }
 const TICK2_USE: &str = "\
 tick 2  1 change
   waits on  provider k8s  kubeconfig = server.endpoint
+  provisional: planned against the offline schema; planned again once kubeconfig is known
   + k8s.namespace ns    p.df:5
 ";
 
