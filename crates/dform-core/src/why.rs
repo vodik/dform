@@ -73,6 +73,26 @@ pub fn why(pattern: &str, how: As, cx: &Context) -> Result<String> {
         return why_not();
     }
     let mut out = derivations(&matched, how, cx)?;
+    // A contribution of the resource that reads what nothing derives
+    // answered nothing (R-183): say the read, as the plan's error does.
+    let holders: BTreeSet<ir::Address> =
+        matched.iter().filter_map(|(a, _)| resource_of(a)).collect();
+    let mut unset: Vec<String> = Vec::new();
+    for d in cx.res.facts.iter().filter(|a| a.pred == "deny") {
+        let Some(d) = engine::format_policy_fact(d)
+            .ok()
+            .and_then(|v| report::Dangling::of(&v))
+        else {
+            continue;
+        };
+        let line = format!("no value  {}", d.unanswered());
+        if d.holder.is_some_and(|h| holders.contains(&h)) && !unset.contains(&line) {
+            unset.push(line);
+        }
+    }
+    for l in unset {
+        out.push_str(&format!("{l}\n"));
+    }
     // A change the plan holds: the tick it runs in and what it waits on,
     // or `later` for what no tick of the plan makes (R-110, R-121, R-156).
     let mut on: Vec<String> = Vec::new();

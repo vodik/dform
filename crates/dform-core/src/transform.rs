@@ -1939,6 +1939,20 @@ fn dangling_ref_deny(head: &Atom, read: &Atom, path: &str, mut body: Vec<Lit>) -
     if head.pred == "arg" && head.args.len() == 5 {
         ctx.insert("from_type".to_string(), head.args[0].clone());
         ctx.insert("from_name".to_string(), head.args[1].clone());
+        // The attribute as the program writes it: `spec.jobTemplate.spec
+        // .template.spec = {..}` is one object under `spec` per segment.
+        if let Term::Val(Value::Str(top)) = &head.args[2] {
+            let mut attr = top.clone();
+            let mut v = &head.args[3];
+            while let Term::Obj(m) = v
+                && m.len() == 1
+            {
+                let (k, x) = m.iter().next().unwrap();
+                attr = format!("{attr}.{k}");
+                v = x;
+            }
+            ctx.insert("attr".to_string(), str_term(&attr));
+        }
     }
     if let Some(at) = diag::place(head.span) {
         ctx.insert("at".to_string(), str_term(&at));

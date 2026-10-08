@@ -904,7 +904,7 @@ impl Evaluator {
         );
         let mut plan = backend
             .plan(&asked(&res, &resources), adopts, lifecycle, st)
-            .map_err(|e| with_site(e, &res))?;
+            .map_err(|e| with_site(e, &res, violations))?;
         let replaced = executor::replaced(&plan);
         let (res, violations, resources) = if replaced.is_empty() {
             (res, violations.to_vec(), resources)
@@ -1977,10 +1977,23 @@ fn disagreements(facts: &BTreeSet<Atom>) -> BTreeMap<String, String> {
 }
 
 /// A provider's refusal of a change (`report::Failure`), its third line
-/// where the program derives the change (R-109).
-fn with_site(e: anyhow::Error, res: &EvalResult) -> anyhow::Error {
+/// where the program derives the change (R-109). A contribution of the
+/// resource that reads what nothing derives answered nothing, so the
+/// document the provider refused lacks what it gives (the deny
+/// `violations` holds, R-183): that read is the error, at its site, in
+/// R-119's form, not the provider's word on what it found missing.
+fn with_site(e: anyhow::Error, res: &EvalResult, violations: &[String]) -> anyhow::Error {
     match e.downcast::<report::Failure>() {
         Ok(f) => {
+            let unanswered: BTreeSet<String> = violations
+                .iter()
+                .filter_map(|v| report::Dangling::of(v))
+                .filter(|d| d.holder.is_some() && d.holder == f.addr)
+                .map(|d| d.unanswered())
+                .collect();
+            if !unanswered.is_empty() {
+                return anyhow::anyhow!(unanswered.into_iter().collect::<Vec<_>>().join("\n"));
+            }
             let site = f
                 .addr
                 .as_ref()

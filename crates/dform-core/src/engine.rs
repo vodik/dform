@@ -1948,7 +1948,7 @@ fn collapse_group(
     out
 }
 
-fn format_policy_fact(a: &Atom) -> Result<String> {
+pub(crate) fn format_policy_fact(a: &Atom) -> Result<String> {
     if a.args.is_empty() {
         bail!("policy fact must have at least a message argument");
     }

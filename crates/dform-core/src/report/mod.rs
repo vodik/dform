@@ -1664,29 +1664,88 @@ pub fn violation_line(v: &str, r: &Redactor) -> String {
 
 /// A dangling reference's violation as [`violation_line`] says it.
 fn dangling(v: &str) -> Option<String> {
-    let (msg, ctx) = v.split_once(" ctx=")?;
-    if msg != crate::transform::DANGLING_REF {
-        return None;
-    }
-    let ctx: Json = serde_json::from_str(ctx).ok()?;
-    let s = |k: &str| ctx.get(k)?.as_str().map(str::to_string);
-    let to = Address {
-        typ: s("type")?,
-        name: s("addr")?,
+    let d = Dangling::of(v)?;
+    let from = match &d.holder {
+        Some(a) => address(a),
+        None => d.from.clone(),
     };
-    let from = match (s("from_type"), s("from_name")) {
-        (Some(typ), Some(name)) => address(&Address { typ, name }),
-        _ => s("from")?,
-    };
-    let read = match s("path").filter(|p| !p.is_empty()) {
-        Some(p) => attribute(&to, &p),
-        None => address(&to),
-    };
-    let at = s("at").map(|a| format!(" ({a})")).unwrap_or_default();
     Some(format!(
-        "{msg}: {from} reads {read}, and nothing derives {}{at}",
-        address(&to)
+        "{}: {from} reads {}, and nothing derives {}{}",
+        crate::transform::DANGLING_REF,
+        d.read(),
+        address(&d.to),
+        d.at.as_ref().map(|a| format!(" ({a})")).unwrap_or_default()
     ))
+}
+
+/// A dangling reference's violation taken apart: the resource whose
+/// contribution holds it and the attribute it writes (else what holds
+/// it, as words), what it reads, and where it is written.
+pub struct Dangling {
+    pub holder: Option<Address>,
+    attr: Option<String>,
+    from: String,
+    to: Address,
+    path: Option<String>,
+    at: Option<String>,
+}
+
+impl Dangling {
+    pub fn of(v: &str) -> Option<Dangling> {
+        let (msg, ctx) = v.split_once(" ctx=")?;
+        if msg != crate::transform::DANGLING_REF {
+            return None;
+        }
+        let ctx: Json = serde_json::from_str(ctx).ok()?;
+        let s = |k: &str| ctx.get(k)?.as_str().map(str::to_string);
+        let holder = match (s("from_type"), s("from_name")) {
+            (Some(typ), Some(name)) => Some(Address { typ, name }),
+            _ => None,
+        };
+        let from = match &holder {
+            Some(_) => String::new(),
+            None => s("from")?,
+        };
+        Some(Dangling {
+            holder,
+            attr: s("attr"),
+            from,
+            to: Address {
+                typ: s("type")?,
+                name: s("addr")?,
+            },
+            path: s("path").filter(|p| !p.is_empty()),
+            at: s("at"),
+        })
+    }
+
+    /// What the reference reads: the attribute, else the resource.
+    fn read(&self) -> String {
+        match &self.path {
+            Some(p) => attribute(&self.to, p),
+            None => address(&self.to),
+        }
+    }
+
+    /// The read as an error at its site (R-119's form): it answered
+    /// nothing, so the holder's attribute has no value.
+    pub fn unanswered(&self) -> String {
+        let what = match (&self.holder, &self.attr) {
+            (Some(h), Some(a)) => attribute(h, a),
+            (Some(h), None) => address(h),
+            (None, _) => self.from.clone(),
+        };
+        let at = self
+            .at
+            .as_ref()
+            .map(|a| format!("{a}: "))
+            .unwrap_or_default();
+        format!(
+            "{at}{} answered nothing, so {what} has no value: nothing derives {}",
+            self.read(),
+            address(&self.to)
+        )
+    }
 }
 
 /// Whether the violation `v` is a conflict the plan's `conflicts`
