@@ -648,6 +648,33 @@ impl<'a> Externs<'a> {
         out
     }
 
+    /// The version each document read into a secret `let` was answered at,
+    /// by its label ([`Externs::secret_answers`]'): a source that keeps
+    /// versions (a secret manager's scheme, R-172) pins where its row is
+    /// to the version (`files::pinned`), which the plan file records
+    /// beside the digest.
+    pub fn secret_versions(&self) -> BTreeMap<String, String> {
+        let known = self.known.borrow();
+        let secret = self.secret_calls.borrow();
+        let mut out = BTreeMap::new();
+        for c in self.demanded.borrow().iter() {
+            if !crate::tables::is_document(&c.pred) || !secret.contains(c) {
+                continue;
+            }
+            let Some(col) = self.fns.get(&c.pred).map(|f| f.args.len() - 1) else {
+                continue;
+            };
+            for row in known.get(c).into_iter().flatten() {
+                if let Some(Value::Str(at)) = row.get(1)
+                    && let Some(v) = crate::files::version_of(at)
+                {
+                    out.insert(secret_label(&c.pred, &c.inputs, col), v);
+                }
+            }
+        }
+        out
+    }
+
     /// The `memo.first` calls the last evaluation read: each key, the value
     /// it answered, and whether it is a secret (a secret site demanded
     /// it), for state to keep ([`crate::memo::keep`]).

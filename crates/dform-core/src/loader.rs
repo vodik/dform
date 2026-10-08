@@ -648,6 +648,10 @@ pub fn is_core_pred(pred: &str) -> bool {
             | "data"
             | "setting"
             | "setting_add"
+            // A provider's `use` block: a fact when its settings are
+            // literals, a rule when one is derived (a secret read from
+            // Vault configuring another provider).
+            | "provider_config"
             | "output"
             | "merge_rule"
             | "warn"

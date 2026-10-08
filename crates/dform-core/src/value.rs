@@ -184,16 +184,17 @@ pub fn null_label(typ: &str, addr: &str, path: &str) -> String {
     format!("{typ}/{addr}#{path}")
 }
 
-/// The parts `(T, A, P)` of a null label `T/A#P`.
+/// The parts `(T, A, P)` of a null label `T/A#P`. `A` may hold a `#` (a
+/// location's fragment, `vault://kv/app#key`); `P` never does.
 pub fn null_parts(label: &str) -> Option<(String, String, String)> {
-    let (ta, p) = label.split_once('#')?;
+    let (ta, p) = label.rsplit_once('#')?;
     let (t, a) = ta.split_once('/')?;
     Some((t.to_string(), a.to_string(), p.to_string()))
 }
 
 /// The owner `(T, A)` of a null label `T/A#P`.
 pub fn null_owner(label: &str) -> Option<(String, String)> {
-    let (ta, _) = label.split_once('#')?;
+    let (ta, _) = label.rsplit_once('#')?;
     let (t, a) = ta.split_once('/')?;
     Some((t.to_string(), a.to_string()))
 }

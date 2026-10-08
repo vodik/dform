@@ -1729,6 +1729,9 @@ pub mod inventory {
         Given,
         /// A provider, another stack or a location holds it.
         Held,
+        /// A secret manager keeps it, versioned (R-172): a location read
+        /// into a secret cell, at the version the manager answered.
+        Managed,
     }
 
     impl Kind {
@@ -1738,6 +1741,7 @@ pub mod inventory {
                 Kind::Memo => "memo",
                 Kind::Given => "given",
                 Kind::Held => "held",
+                Kind::Managed => "managed",
             }
         }
     }
@@ -1791,6 +1795,8 @@ pub mod inventory {
         pub since: Option<String>,
         /// A given or held secret: where it lives, as `rotate` says it.
         pub lives: Option<String>,
+        /// A managed secret's version, as its manager names it.
+        pub version: Option<String>,
         pub cells: Vec<Cell>,
         /// The values: matched, never printed.
         values: BTreeSet<Value>,
@@ -1806,6 +1812,7 @@ pub mod inventory {
                 epoch: None,
                 since: None,
                 lives: None,
+                version: None,
                 cells: Vec::new(),
                 values: BTreeSet::new(),
             }
@@ -1887,6 +1894,7 @@ pub mod inventory {
                 epoch: None,
                 since: None,
                 lives: None,
+                version: None,
                 cells: Vec::new(),
                 values: BTreeSet::new(),
             });
@@ -1959,6 +1967,25 @@ pub mod inventory {
                 let s = row(&mut out, name, Kind::Given);
                 s.lives
                     .get_or_insert_with(|| format!("the environment variable {name}"));
+                s.values.insert(v.clone());
+            }
+        }
+        // What a secret manager keeps (R-172): a location read into a
+        // secret cell at the version its manager answered, which pins
+        // where the read's row is (`files::pinned`).
+        for a in facts.iter().filter(|a| crate::tables::is_document(&a.pred)) {
+            if let [Term::Val(loc), Term::Val(Value::Str(at)), Term::Val(v)] = a.args.as_slice()
+                && secret(v)
+                && let Some(version) = crate::files::version_of(at)
+            {
+                let loc = loc
+                    .as_str()
+                    .map(str::to_string)
+                    .unwrap_or_else(|| crate::partition::fmt_bare(loc));
+                let s = row(&mut out, &loc, Kind::Managed);
+                s.lives
+                    .get_or_insert_with(|| format!("{loc}, its secret manager"));
+                s.version = Some(version);
                 s.values.insert(v.clone());
             }
         }

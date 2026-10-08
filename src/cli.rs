@@ -3021,34 +3021,40 @@ fn run_with(
         let key = file_key;
         let now = zset::file::delta(plan, sections, &report, schema, &redact, key);
         let mut diff = saved.stale(&now);
-        // A secret answer the plan read (`ssh.read`), read again: by its
+        // A secret answer the plan read (a location's), read again: by its
+        // version when its source keeps versions (R-172), else by its
         // digest. One that is "not yet" now is waited on, not compared.
         let now: std::collections::BTreeMap<String, serde_json::Value> =
             answer_inputs(externs, key)
                 .into_iter()
-                .filter_map(|a| {
-                    Some((
-                        a.get("sensitive")?.as_str()?.to_string(),
-                        a["digest"].clone(),
-                    ))
-                })
+                .filter_map(|a| Some((a.get("sensitive")?.as_str()?.to_string(), a)))
                 .collect();
         for a in &saved.inputs.answers {
             let Some(label) = a.get("sensitive").and_then(|l| l.as_str()) else {
                 continue;
             };
-            if now.get(label).is_some_and(|d| *d != a["digest"]) {
-                // A file of given secrets by its path (R-108), not its
-                // extern's label.
-                let file = label
-                    .split_once('/')
-                    .filter(|(pred, _)| crate::tables::is_sealed(pred))
-                    .and_then(|(_, rest)| rest.rsplit_once('#'))
-                    .map(|(location, _)| location);
-                diff.push(match file {
+            let Some(n) = now.get(label) else { continue };
+            // A file of given secrets by its path (R-108), not its
+            // extern's label.
+            let file = label
+                .split_once('/')
+                .filter(|(pred, _)| crate::tables::is_sealed(pred))
+                .and_then(|(_, rest)| rest.rsplit_once('#'))
+                .map(|(location, _)| location);
+            match (a.get("version"), n.get("version")) {
+                // A secret manager's (R-172), by its version.
+                (Some(was), Some(is)) if was != is => diff.push(format!(
+                    "{}: version {} in the plan, {} now: it moved in its secret manager since \
+                     the plan",
+                    answer_text(label),
+                    was.as_str().unwrap_or_default(),
+                    is.as_str().unwrap_or_default()
+                )),
+                _ if n["digest"] != a["digest"] => diff.push(match file {
                     Some(f) => format!("{f}: a given secret changed since the plan"),
-                    None => format!("{label}: changed since the plan"),
-                });
+                    None => format!("{}: changed since the plan", answer_text(label)),
+                }),
+                _ => {}
             }
         }
         if diff.is_empty() {
@@ -5703,12 +5709,13 @@ fn secrets_list(
     ]);
     for s in list {
         // A given secret's from its file (R-108), which says when it was
-        // set.
+        // set; a managed secret's is its version in its manager (R-172).
         let generation = match s.kind {
             crate::secrets::inventory::Kind::Random | crate::secrets::inventory::Kind::Memo => {
                 s.generation.to_string()
             }
             crate::secrets::inventory::Kind::Given if s.since.is_some() => s.generation.to_string(),
+            crate::secrets::inventory::Kind::Managed => s.version.clone().unwrap_or_default(),
             _ => String::new(),
         };
         let cells: Vec<String> = s.cells.iter().map(|c| c.to_string()).collect();
@@ -5725,6 +5732,9 @@ fn secrets_list(
             Cell::text(s.kind.word()),
             Cell::text(generation.clone()).with_json(match s.generation {
                 _ if generation.is_empty() => serde_json::Value::Null,
+                _ if s.kind == crate::secrets::inventory::Kind::Managed => {
+                    generation.clone().into()
+                }
                 g => g.into(),
             }),
             // The master epoch (R-165), once there is more than one.
@@ -5843,7 +5853,7 @@ fn secrets_rotate(
             }
         );
     };
-    if let (Kind::Given | Kind::Held, lives) = (s.kind, &s.lives) {
+    if let (Kind::Given | Kind::Held | Kind::Managed, lives) = (s.kind, &s.lives) {
         bail!(
             "secrets rotate {key}: {key} is {} in {deployment}, and lives in {}: rotate it \
              there, then plan",
@@ -6848,12 +6858,23 @@ fn keyed(label: &str, key: Option<&zset::file::Key>, bytes: &[u8]) -> serde_json
     }
 }
 
-/// The secret answers of dform's own externs (`ssh.read`) as a plan file
-/// records them: each label and its value's digest with the plan key.
+/// A secret answer's label (`table.text.@document/LOCATION#3`) as the
+/// program writes its call: `io.read("vault://kv/app#key")`.
+fn answer_text(label: &str) -> String {
+    crate::value::null_parts(label)
+        .map(|(pred, inputs, _)| crate::externs::call_text(&pred, &inputs))
+        .unwrap_or_else(|| label.to_string())
+}
+
+/// The secret answers of dform's own externs (a location's read into a
+/// secret `let`) as a plan file records them: each label and its value's
+/// digest with the plan key, and the version a secret manager answered it
+/// at (R-172).
 fn answer_inputs(
     externs: &crate::externs::Externs,
     key: Option<&zset::file::Key>,
 ) -> Vec<serde_json::Value> {
+    let versions = externs.secret_versions();
     externs
         .secret_answers()
         .into_iter()
@@ -6862,7 +6883,11 @@ fn answer_inputs(
                 Value::Str(s) => s.clone().into_bytes(),
                 v => serde_json::to_vec(v).unwrap_or_default(),
             };
-            keyed(&label, key, &bytes)
+            let mut a = keyed(&label, key, &bytes);
+            if let Some(v) = versions.get(&label) {
+                a["version"] = serde_json::json!(v);
+            }
+            a
         })
         .collect()
 }

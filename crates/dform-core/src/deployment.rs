@@ -501,10 +501,16 @@ impl Evaluator {
             )?;
             // A provider the program configures, its settings now known,
             // is configured, and what it serves read again.
-            let configured = backend.configure_from(agreed(&res.facts))?;
+            let mut configured = backend.configure_from(agreed(&res.facts))?;
             // A kind a CRD the program made defines, served now (R-126).
-            let learned = self.learn_made_kinds(&res, st)?;
-            if !configured.is_empty() || learned {
+            let mut learned = self.learn_made_kinds(&res, st)?;
+            // Again while that configures another: a provider whose
+            // settings one configured just now reads (a password Vault
+            // keeps configuring Postgres, R-172), a round per link of the
+            // chain at most.
+            let mut rounds = 0;
+            while (!configured.is_empty() || learned) && rounds <= backend.names().len() {
+                rounds += 1;
                 self.configured.borrow_mut().extend(configured);
                 // An extern of a provider that was waiting on its settings
                 // answered "not yet": ask it again.
@@ -516,6 +522,8 @@ impl Evaluator {
                     || "evaluated".into(),
                     || externs.eval_resumable(program, &extra, zset::POLICY_INPUTS),
                 )?;
+                configured = backend.configure_from(agreed(&res.facts))?;
+                learned = false;
             }
             // Each provider reaches the account the program expects of it
             // (`expect_account`), or nothing is planned.
