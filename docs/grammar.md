@@ -505,9 +505,11 @@ w.spec.template.spec.containers[_].resources.requests = {..} @default
 where workload(w)` writes each row's resource: one statement for every
 type the relation holds, where `k8s.deployment[_]` takes one. A literal
 in such a column (`workload("web")`) is an error naming the column and
-its type. A relation a copy exports or its user gives (`output p`,
-`input p`) keeps its rows as addresses: the module's boundary scopes
-them.
+its type. A column a `decl` types by a resource type (`decl subnet(s:
+net.subnet)`, or `ref(T)`) holds references too. A relation a copy
+exports or a module takes from its user (`output p`, `input p`) carries
+its references across the module's boundary as references (R-204,
+"Inputs and outputs").
 
 A read through an attribute the provider's schema types `ref(T)` reads
 the resource it names: `s.vpc.cidr` (`vpc: ref(net.vpc)`) is `v.cidr
@@ -527,7 +529,9 @@ never a string: `s.vpc == "main"` is an error naming both (the fix is
 the resource, `net.vpc["main"]` or its name in scope; `has s.vpc` tests
 whether one is set), at compile time where the schema types the
 attribute and at the rule at run time otherwise, for `==`, `!=` and
-`in` alike.
+`in` alike, and for `x.vpc == "main"` of `x in resource`, which reads
+the cell by the string. `not x.vpc == "main"` still holds where no cell
+equals the string.
 
 A field is read of an object. `x.p` where `x`'s column is a type with no
 fields (a string, a number, a bool, a list, a reference read through a
@@ -1034,14 +1038,22 @@ columns:
   az(z, n)` (a row with a clause ends its line), or a table `zone from
   csv.decode(io.read("zones.csv")) [where B]` with the module's columns. The rows are the
   copy's own relation, written in the user's scope, and exist while the
-  copy does. A relation the module does not take is an error naming
-  those it does.
+  copy does. A column the module's `decl` types by a resource type takes
+  the user's resource, by its name (`subnet(a)`) or a reference column's
+  variable (`subnet(s) where main.private_subnet(s)`), and the copy reads
+  it as that resource: no copy's scope goes in front of it. A relation
+  the module does not take is an error naming those it does.
 - `output p` exports the relation `p` the scope declares or defines: a
   copy's rows are read `blue.p(x, y)` and every copy's `network[t].p(x,
   y)`, one fact per row, and a stack's `output p` publishes its rows,
-  read `platform[env=e].p(x, y)`. A column the `decl` types by a
-  resource type (`decl subnet(s: net.subnet)`) holds the copy's
-  resource and leaves it as its address. A copy's relation it does not
+  read `platform[env=e].p(x, y)`. A reference crosses the copy's
+  boundary as a reference (R-204): in `blue.subnet(s)` over `decl
+  subnet(s: net.subnet)`, or a column a rule fills with `s in
+  net.subnet`, `s` is the copy's subnet, so `s.zone` reads it with no
+  `s in net.subnet` to type it again. A stack's `output p` of a column
+  of references is an error naming the column: another deployment has no
+  such resource to read through or write, so the stack publishes what a
+  reader needs of it as values (`s.id`). A copy's relation it does not
   export is its own: reading it is an error that names `output p`, and
   another copy's relation is never a head. A used module's relations are
   public, `m.p(..)`.
