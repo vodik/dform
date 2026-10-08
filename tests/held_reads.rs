@@ -6,7 +6,7 @@
 //! of the held Secret is the program's value; a computed one is carried
 //! inside the literal as what it waits on; a read of a Secret nothing
 //! derives is an error at its site, and the module's Secret read bare in
-//! its component is private to the module.
+//! its component is the module's (R-186).
 
 mod common;
 use common::{Run, Scratch};
@@ -192,20 +192,22 @@ fn a_read_of_what_nothing_derives_is_an_error_at_its_site() {
     }
 }
 
-/// The module's Secret read bare inside its component is private to the
-/// module, as a `let` of it is: an error saying to read it through the
-/// module, never the copy's user's resource of that name.
+/// The reviewer's shape (R-186): the module's Secret read bare inside
+/// its component's CronJob literal is the module's, of the instance the
+/// copy was taken from, as `backups.repository` reads it.
 #[test]
-fn a_modules_resource_read_bare_in_its_component_is_private_to_it() {
-    let s = project("held-reads-bare", false, "repository.metadata.name");
-    let r = run(&s, &["plan", "apps"]).failure();
-    assert!(
-        r.stderr
-            .contains("backups.df:18:40: repository is private to module backups")
-            && r.stderr.contains("Help: read it as backups.repository\n"),
-        "{}",
-        r.stderr
-    );
+fn a_modules_resource_read_bare_in_its_component_is_the_modules() {
+    for real in [true, false] {
+        let s = project("held-reads-bare", real, "repository.metadata.name");
+        let r = run(&s, &["plan", "apps"]).success();
+        assert!(
+            r.stdout.contains("+ k8s.cron_job forgejo_backup.job")
+                && r.stdout
+                    .contains("envFrom: [{ secretRef: { name: \"restic\" } }]"),
+            "real: {real}\n{}",
+            r.stdout
+        );
+    }
 }
 
 /// Inside the module's own file a component reads the module by its own

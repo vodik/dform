@@ -1702,7 +1702,7 @@ impl<'u> Lowerer<'u> {
                 };
                 let d = Diagnostic::error(
                     span,
-                    format!("`super` in module {path}: a module's body has no enclosing scope"),
+                    format!("`super` in module {path}: a module has no scope around it"),
                 )
                 .with_help(help);
                 self.diags.push(d);

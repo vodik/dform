@@ -1,8 +1,8 @@
-//! `why NAME` read in a scope (R-184): a copy's own names, its module's,
-//! private to the module, and its user's read outward; a module's; the
-//! stack's; and a name nothing in the scope declares, with what reads it.
-//! On the mock, a module with a Secret and a component whose copy the
-//! stack makes.
+//! `why NAME` read in a scope (R-184): a copy's own names, then those of
+//! the module instance it was taken from, then the stack's (R-186); a
+//! module's; the stack's; and a name nothing in the scope declares, with
+//! what reads it. On the mock, a module with a Secret and a component
+//! whose copy the stack makes.
 
 mod common;
 mod lsp_client;
@@ -41,17 +41,21 @@ fn why(s: &Scratch, name: &str) -> String {
     s.run(&["why", name, "apps"]).success().stdout
 }
 
-/// The reviewer's shape: the module's Secret read bare in the copy is no
-/// name of the copy's; the answer is the module's resource and how to
-/// read it, however the copy is named.
+/// The reviewer's shape: the module's Secret read bare in the copy is the
+/// module's (R-186), said whose before its chain, however the copy is
+/// named.
 #[test]
-fn a_modules_resource_read_in_a_copy_is_no_name_of_the_copy() {
+fn a_modules_resource_read_in_a_copy_is_the_modules() {
     let s = project();
-    let answer = "repository in volume forgejo_backup: no such name in this copy; the \
-                  module's resource is backups.repository (backups.df:3), read it as \
-                  backups.repository\n";
-    assert_eq!(why(&s, "forgejo_backup.repository"), answer);
-    assert_eq!(why(&s, "volume[\"forgejo_backup\"].repository"), answer);
+    let lead = "repository in volume forgejo_backup: module backups's k8s.secret \
+                backups.repository  backups.df:3\nk8s.secret backups.repository  backups.df:3\n";
+    for name in [
+        "forgejo_backup.repository",
+        "volume[\"forgejo_backup\"].repository",
+    ] {
+        let answer = why(&s, name);
+        assert!(answer.starts_with(lead), "{name}\n{answer}");
+    }
     // From the stack, bare: the module's, and how to read it.
     assert_eq!(
         why(&s, "repository"),
@@ -104,6 +108,32 @@ fn a_name_in_a_scope_is_what_the_scope_reads() {
     );
 }
 
+/// Under two `use`s of the module each copy reads the instance it was
+/// taken from: `why` names that instance's.
+#[test]
+fn a_copy_reads_the_instance_it_was_taken_from() {
+    let s = project();
+    s.write(
+        "stacks/apps.df",
+        &format!(
+            "{}use backups as b {{ namespace = apps }}\nresource b.volume two {{ name = \"two\" }}\n",
+            APPS.replace("use backups {", "use backups as a {")
+                .replace("resource backups.volume forgejo_backup", "resource a.volume one")
+        ),
+    );
+    assert!(
+        why(&s, "one.repository")
+            .starts_with("repository in volume one: module a's k8s.secret a.repository"),
+        "{}",
+        why(&s, "one.repository")
+    );
+    assert!(
+        why(&s, "two.ns").starts_with("ns in volume two: module b's let b.ns"),
+        "{}",
+        why(&s, "two.ns")
+    );
+}
+
 /// The language server's hover on a name read bare in the component's
 /// body says what it denotes in each copy, as `why COPY.NAME` does.
 #[test]
@@ -121,6 +151,40 @@ fn hover_on_a_name_in_a_component_says_what_each_copy_reads() {
     let text = hover["contents"]["value"].as_str().unwrap_or_default();
     assert!(
         text.contains("`tag in volume forgejo_backup: let forgejo_backup.tag  backups.df:8`"),
+        "{text}"
+    );
+    c.shutdown();
+}
+
+/// A name the component's own declaration shadows: the hover names both,
+/// and how to read the module's (R-186).
+#[test]
+fn hover_on_a_shadowed_name_names_both() {
+    let s = project();
+    s.write(
+        "backups.df",
+        &BACKUPS
+            .replace(
+                "  let tag = \"backup-${name}\"\n",
+                "  let tag = \"backup-${name}\"\n  let ns = \"own\"\n",
+            )
+            .replace("namespace: backups.ns }", "namespace: ns }"),
+    );
+    let root = std::fs::canonicalize(&s.dir).unwrap();
+    let file = root.join("backups.df");
+    let mut c = lsp_client::Client::start(&root, serde_json::json!({}));
+    c.open(&file);
+    let hover = c.at(
+        "textDocument/hover",
+        &file,
+        lsp_client::find(&file, "tag, namespace: ns", 17),
+    );
+    let text = hover["contents"]["value"].as_str().unwrap_or_default();
+    assert!(
+        text.contains(
+            "`ns` here is component volume's let ns; it shadows module backups's let ns, read \
+             as `super.ns`"
+        ),
         "{text}"
     );
     c.shutdown();
