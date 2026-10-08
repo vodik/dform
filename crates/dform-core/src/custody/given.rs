@@ -58,6 +58,20 @@ impl Leaf {
     pub fn name(&self) -> String {
         self.path.join(".")
     }
+
+    /// Its [`standin`] in the file `f` read at `shown`.
+    fn standin(&self, f: &File, shown: &str) -> String {
+        let name = self.name();
+        let sealed = match &self.raw {
+            Raw::Sealed(s) | Raw::Plain(s) => s,
+        };
+        standin(
+            shown,
+            &name,
+            f.given(&name).map_or(1, |g| g.generation),
+            sealed,
+        )
+    }
 }
 
 /// A value as the file holds it.
@@ -772,12 +786,15 @@ pub fn text(f: &File) -> Result<String> {
 
 /// What a run without the master reads in place of the value at `path`
 /// of the file `shown` (and a run with it registers as the value's
-/// stand-in, `secrets::standin`): a function of the file, the path and the
-/// value's generation, public, so a leaf that holds it has the digest an
-/// apply with the master recorded until `secrets set` sets it again.
-pub fn standin(shown: &str, path: &str, generation: u32) -> String {
+/// stand-in, `secrets::standin`): a function of the file, the path, the
+/// value's generation and its ciphertext, public, so a leaf that holds it
+/// has the digest an apply with the master recorded until the value is
+/// sealed again: by `secrets set`, or by sops, which keeps the generation.
+pub fn standin(shown: &str, path: &str, generation: u32, sealed: &str) -> String {
     use sha2::Digest;
-    let d = sha2::Sha256::digest(format!("dform given secret\0{shown}\0{path}\0{generation}"));
+    let d = sha2::Sha256::digest(format!(
+        "dform given secret\0{shown}\0{path}\0{generation}\0{sealed}"
+    ));
     let hex: String = d.iter().take(16).map(|b| format!("{b:02x}")).collect();
     format!("given-{hex}")
 }
@@ -891,7 +908,7 @@ pub fn rows(f: &File, shown: &str) -> Result<Vec<(Option<usize>, String, crate::
         // No master: each value by its stand-in, as any secret it derives.
         for l in &f.leaves {
             let name = l.name();
-            let s = standin(shown, &name, f.given(&name).map_or(1, |g| g.generation));
+            let s = l.standin(f, shown);
             crate::secrets::standin::register(&s, &label(shown, &name), &s);
             out.push((l.line, name, Value::Str(s)));
         }
@@ -903,7 +920,7 @@ pub fn rows(f: &File, shown: &str) -> Result<Vec<(Option<usize>, String, crate::
         for (l, p) in open(f, &key, shown)? {
             let name = l.name();
             if let Plain::Str(v) = &p {
-                let s = standin(shown, &name, f.given(&name).map_or(1, |g| g.generation));
+                let s = l.standin(f, shown);
                 crate::secrets::standin::register(v, &label(shown, &name), &s);
             }
             out.push((l.line, name, (&p).into()));

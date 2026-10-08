@@ -270,6 +270,21 @@ fn a_plan_without_the_master_reads_a_given_secret_by_its_stand_in() {
         r.stdout
     );
     assert!(!r.stdout.contains("admin ="), "{}", r.stdout);
+    // Edited with sops, not `secrets set`: its generation is the same and
+    // its ciphertext is not, which is a change too. (Another value's
+    // ciphertext stands in for sops's here: same data key, other value.)
+    run(&s, &["apply", "p"]).success();
+    assert_eq!(nokey(&s).summary(), "stack p is up to date");
+    let mut f: serde_json::Value = s.json("secrets/p.json");
+    f["token"] = f["admin"].clone();
+    s.write("secrets/p.json", &serde_json::to_string_pretty(&f).unwrap());
+    let r = nokey(&s);
+    assert!(
+        r.stdout.contains("secret changed, needs the key")
+            && r.stdout.contains("token = (sensitive) → (sensitive)"),
+        "{}",
+        r.stdout
+    );
 }
 
 #[test]

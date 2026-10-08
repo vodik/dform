@@ -2271,9 +2271,10 @@ secrets/lab.json: 2 given secrets, sealed to alice, bob and the deployment's mas
 ```
 
 A run without the master reads each value as a stand-in, a function of
-the file, the path and the value's generation, as it derives a `random.*`
-one ("Planning and applying without the master"): a value not set again
-is proven unchanged, one set again is `secret changed, needs the key`.
+the file, the path, the value's generation and its ciphertext, as it
+derives a `random.*` one ("Planning and applying without the master"): a
+value not sealed again is proven unchanged, one set again (or edited with
+sops, which keeps its generation) is `secret changed, needs the key`.
 
 `--set` of a secret input with its value inline is said, not refused (CI
 passes a masked variable so): `warning: --set token: argv is readable by
