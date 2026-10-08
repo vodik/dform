@@ -1,9 +1,9 @@
 //! The lease under faults (R-135), on the memory store with a fault
-//! injected into its writes of the lease object: a renewal that fails to
-//! reach the store is tried again and the lease kept; one whose answer was
-//! lost after it landed is still this holder's; a takeover stops the
+//! injected into its writes of the lease object: a takeover stops the
 //! renewer and refuses the next write; a renewer that died is the lost
 //! lease at the next use; a panic releases; a release that fails says so.
+//! A renewal that fails, or whose answer was lost, is store.rs's, its
+//! renewer stepped by hand.
 
 use anyhow::{Result, bail};
 use dform::state::State;
@@ -19,8 +19,6 @@ use std::time::Duration;
 enum Fault {
     /// The write does not reach the store (a timeout, a 503).
     Fails,
-    /// The write lands, and its answer is lost.
-    LandsUnanswered,
     /// The store panics (a bug in a client library).
     Panics,
     /// The write takes 2s, and lands.
@@ -82,10 +80,6 @@ impl Store for Chaos {
         self.faulted.fetch_add(1, Ordering::SeqCst);
         match fault {
             Fault::Fails => bail!("PUT {key}: timed out"),
-            Fault::LandsUnanswered => {
-                self.objects.put(key, bytes, cond)?;
-                bail!("PUT {key}: timed out")
-            }
             Fault::Panics => panic!("the store's client panicked"),
             Fault::Slow => {
                 std::thread::sleep(Duration::from_secs(2));
@@ -119,46 +113,6 @@ fn until(what: &str, f: impl Fn() -> bool) {
         assert!(start.elapsed() < Duration::from_secs(10), "never: {what}");
         std::thread::sleep(Duration::from_millis(5));
     }
-}
-
-#[test]
-fn a_renewal_that_fails_is_tried_again_and_the_lease_kept() {
-    let store = Chaos::new();
-    let a = deployment(&store, 400);
-    a.load_state().unwrap();
-    let g = a.lock().unwrap();
-    store.inject(Fault::Fails, 2);
-    until("two renewals failed", || {
-        store.faulted.load(Ordering::SeqCst) == 2
-    });
-    // Past the lease's whole life since the failures began: renewed since.
-    std::thread::sleep(Duration::from_millis(500));
-    g.check().unwrap();
-    let b = deployment(&store, 400);
-    b.load_state().unwrap();
-    assert!(b.lock().is_err(), "the lease lapsed: B took it");
-    a.save_state(&State::default()).unwrap();
-    g.release().unwrap();
-    assert_eq!(store.record().holder, "");
-}
-
-#[test]
-fn a_renewal_whose_answer_was_lost_is_still_this_holders() {
-    let store = Chaos::new();
-    let a = deployment(&store, 400);
-    a.load_state().unwrap();
-    let g = a.lock().unwrap();
-    store.inject(Fault::LandsUnanswered, 1);
-    until("a renewal landed unanswered", || {
-        store.faulted.load(Ordering::SeqCst) == 1
-    });
-    // The next renewal is refused over the ETag this holder last wrote,
-    // and finds the lease still names it.
-    std::thread::sleep(Duration::from_millis(500));
-    g.check().unwrap();
-    a.save_state(&State::default()).unwrap();
-    g.release().unwrap();
-    assert_eq!(store.record().holder, "");
 }
 
 /// The renewer holds no lock across the store's call: a state write

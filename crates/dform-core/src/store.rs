@@ -1855,58 +1855,85 @@ impl Guard {
 
     fn renew_every(&mut self, times: LeaseTimes) {
         let (tx, rx) = mpsc::channel::<()>();
-        let inner = self.inner.clone();
-        let renewer = std::thread::Builder::new()
+        let mut renewer = Renewer::new(self.inner.clone(), times);
+        let thread = std::thread::Builder::new()
             .name("dform-lease".into())
             .spawn(move || {
-                // A renewal that fails to reach the store says nothing of
-                // who holds the lease: it is tried again sooner, backing
-                // off to `lease_renewal`, and one past the expiry still
-                // renews it if no one took it over. Only a lease found
-                // another's (or gone) stops the renewer.
-                let mut wait = times.renewal;
-                let mut failing = false;
-                while let Err(mpsc::RecvTimeoutError::Timeout) = rx.recv_timeout(wait) {
-                    // The lease is copied out and its renewal written
-                    // back: the lock is not held across the store's call.
-                    let Some(mut l) = inner.lease().clone() else {
+                while let Err(mpsc::RecvTimeoutError::Timeout) = rx.recv_timeout(renewer.wait) {
+                    if !renewer.step() {
                         return;
-                    };
-                    match inner.store.renew(&mut l, times.duration) {
-                        Ok(()) => {
-                            inner.renewed(&l);
-                            if failing {
-                                eprintln!("note: stack {}: the lease is renewed again", inner.name);
-                            }
-                            failing = false;
-                            wait = times.renewal;
-                        }
-                        Err(e) if e.is::<Lost>() => {
-                            eprintln!("warning: stack {}: {e:#}", inner.name);
-                            *inner.lost.lock().expect("lost") = Some(format!("{e:#}"));
-                            return;
-                        }
-                        Err(e) => {
-                            if !failing {
-                                eprintln!(
-                                    "warning: stack {}: the lease {} was not renewed ({e:#}); \
-                                     trying again ({}s of it left)",
-                                    inner.name,
-                                    inner.store.locate(LOCK),
-                                    l.expires_ms.saturating_sub(now_ms()) / 1000
-                                );
-                                wait = times.renewal / 8;
-                            } else {
-                                wait = (wait * 2).min(times.renewal);
-                            }
-                            failing = true;
-                        }
                     }
                 }
             })
             .expect("spawn the lease renewer");
         self.stop = Some(tx);
-        *self.inner.renewer.lock().expect("renewer") = Some(renewer);
+        *self.inner.renewer.lock().expect("renewer") = Some(thread);
+    }
+}
+
+/// What renews a lease, a step at a time, its thread waiting `wait` between
+/// steps. A renewal that fails to reach the store says nothing of who holds
+/// the lease: it is tried again sooner, backing off to `lease_renewal`, and
+/// one past the expiry still renews it if no one took it over. Only a lease
+/// found another's (or gone) stops the renewer.
+struct Renewer {
+    inner: Arc<Inner>,
+    times: LeaseTimes,
+    /// How long until the next step.
+    wait: Duration,
+    /// The last renewal failed.
+    failing: bool,
+}
+
+impl Renewer {
+    fn new(inner: Arc<Inner>, times: LeaseTimes) -> Renewer {
+        Renewer {
+            inner,
+            times,
+            wait: times.renewal,
+            failing: false,
+        }
+    }
+
+    /// One renewal: whether the renewer goes on. The lease is copied out
+    /// and its renewal written back: the lock is not held across the
+    /// store's call.
+    fn step(&mut self) -> bool {
+        let inner = &self.inner;
+        let Some(mut l) = inner.lease().clone() else {
+            return false;
+        };
+        match inner.store.renew(&mut l, self.times.duration) {
+            Ok(()) => {
+                inner.renewed(&l);
+                if self.failing {
+                    eprintln!("note: stack {}: the lease is renewed again", inner.name);
+                }
+                self.failing = false;
+                self.wait = self.times.renewal;
+            }
+            Err(e) if e.is::<Lost>() => {
+                eprintln!("warning: stack {}: {e:#}", inner.name);
+                *inner.lost.lock().expect("lost") = Some(format!("{e:#}"));
+                return false;
+            }
+            Err(e) => {
+                if !self.failing {
+                    eprintln!(
+                        "warning: stack {}: the lease {} was not renewed ({e:#}); trying again \
+                         ({}s of it left)",
+                        inner.name,
+                        inner.store.locate(LOCK),
+                        l.expires_ms.saturating_sub(now_ms()) / 1000
+                    );
+                    self.wait = self.times.renewal / 8;
+                } else {
+                    self.wait = (self.wait * 2).min(self.times.renewal);
+                }
+                self.failing = true;
+            }
+        }
+        true
     }
 }
 
@@ -1921,6 +1948,99 @@ impl Drop for Guard {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The memory store, its next writes of the lease object that renew it
+    /// (over the ETag its holder last wrote) failing (`landed`: after the
+    /// write landed, its answer lost).
+    struct Faulty {
+        objects: MemoryStore,
+        faults: Mutex<usize>,
+        landed: bool,
+    }
+
+    impl Store for Faulty {
+        fn locate(&self, key: &str) -> String {
+            self.objects.locate(key)
+        }
+
+        fn get(&self, key: &str) -> Result<Option<Object>> {
+            self.objects.get(key)
+        }
+
+        fn put(&self, key: &str, bytes: &[u8], cond: &Cond) -> Result<Option<String>> {
+            let mut faults = self.faults.lock().unwrap();
+            if key != LOCK || !matches!(cond, Cond::IfMatch(_)) || *faults == 0 {
+                return self.objects.put(key, bytes, cond);
+            }
+            *faults -= 1;
+            if self.landed {
+                self.objects.put(key, bytes, cond)?;
+            }
+            bail!("PUT {key}: timed out")
+        }
+
+        fn list(&self, prefix: &str) -> Result<Vec<String>> {
+            self.objects.list(prefix)
+        }
+
+        fn delete(&self, key: &str) -> Result<()> {
+            self.objects.delete(key)
+        }
+    }
+
+    /// A lease taken over a store whose next `faults` renewals fail, and
+    /// a renewer of it stepped by hand (the guard's own renews every
+    /// minute: never, in a test).
+    fn renewing(faults: usize, landed: bool) -> (Deployment, Guard, Renewer) {
+        let store = Arc::new(Faulty {
+            objects: MemoryStore::new(),
+            faults: Mutex::new(0),
+            landed,
+        });
+        let times = LeaseTimes {
+            duration: Duration::from_secs(240),
+            renewal: Duration::from_secs(60),
+        };
+        let dep = Deployment::new(store.clone(), "app", times);
+        dep.load_state().unwrap();
+        let guard = dep.lock().unwrap();
+        *store.faults.lock().unwrap() = faults;
+        let renewer = Renewer::new(dep.inner.clone(), times);
+        (dep, guard, renewer)
+    }
+
+    /// A renewal that fails to reach the store is tried again sooner,
+    /// backing off to `lease_renewal`, and the next that reaches it keeps
+    /// the lease (R-135).
+    #[test]
+    fn a_renewal_that_fails_is_tried_again_and_the_lease_kept() {
+        let (dep, guard, mut r) = renewing(2, false);
+        let renewal = Duration::from_secs(60);
+        let before = dep.inner.lease().as_ref().unwrap().expires_ms;
+        assert!(r.step(), "a failed renewal stops the renewer");
+        assert_eq!(r.wait, renewal / 8);
+        assert!(r.step());
+        assert_eq!(r.wait, renewal / 4);
+        assert!(r.step());
+        assert_eq!(r.wait, renewal, "renewed: back to `lease_renewal`");
+        assert!(dep.inner.lease().as_ref().unwrap().expires_ms >= before);
+        guard.check().unwrap();
+        guard.release().unwrap();
+    }
+
+    /// A renewal whose answer was lost after it landed is still this
+    /// holder's: the next is refused over the ETag it last wrote, finds the
+    /// lease naming it, and writes over what is there.
+    #[test]
+    fn a_renewal_whose_answer_was_lost_is_still_this_holders() {
+        let (_dep, guard, mut r) = renewing(1, true);
+        assert!(r.step());
+        assert!(r.failing);
+        assert!(r.step());
+        assert!(!r.failing, "the lease is this holder's still");
+        guard.check().unwrap();
+        guard.release().unwrap();
+    }
 
     /// An append in place is given the file's last lines, never the
     /// whole of it (R-146): from memory when the file is as this store
