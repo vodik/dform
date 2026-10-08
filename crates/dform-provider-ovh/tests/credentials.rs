@@ -199,3 +199,48 @@ fn a_short_validity_is_warned_of_and_the_rights_named() {
         )]
     );
 }
+
+/// An access token minted elsewhere is carried as it is: the provider
+/// configures with it, mints nothing and signs nothing; refused, it is
+/// said as expired, with the fix.
+#[test]
+fn an_access_token_is_used_as_it_is() {
+    let server = Server::start();
+    let ovh = Ovh::new();
+    let account = ovh
+        .configure_with(
+            &json!({"settings": {"endpoint": server.endpoint, "project": fake::DESCRIPTION}}),
+            &lookup(server.token_env()),
+            &[],
+        )
+        .unwrap();
+    assert_eq!(account.as_deref(), Some(fake::PROJECT));
+    assert_eq!(
+        (
+            server.tokens_minted(),
+            server.times_asked(),
+            server.key_asked()
+        ),
+        (0, 0, 0)
+    );
+    let c = client(&server, server.token_env());
+    let e = &server.endpoint;
+    assert_eq!(
+        notes(&c, true, None, 0),
+        [format!(
+            "provider ovh: credentials for {e}: an access token, used as it is; its rights are \
+             its own"
+        )]
+    );
+    server.revoke_tokens();
+    let err = c.get("/cloud/project").unwrap_err().to_string();
+    assert!(
+        err.ends_with(&format!(
+            "HTTP 401: the access token for {e} expired or was revoked: one given as \
+             access_token (OVH_ACCESS_TOKEN) is used as it is and never minted again; give a new \
+             one, or a service account's client_id and client_secret (docs/providers/ovh.md)"
+        )),
+        "{err}"
+    );
+    assert_eq!(server.tokens_minted(), 0);
+}

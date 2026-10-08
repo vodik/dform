@@ -40,12 +40,21 @@ use ovh { endpoint = "ovh-ca", project = "vodik" }
 
 ### Credentials
 
-The credentials are the provider's own, read as OVH's SDKs read them:
-from the environment, else from the section of `ovh.conf` named by the
-endpoint, read from `/etc/ovh.conf`, `~/.ovh.conf` and
-`~/.config/ovh/ovh.conf` (`$XDG_CONFIG_HOME/ovh/ovh.conf`), a later file
-overriding an earlier one key by key. A section holds one of two forms;
-both in one is an error naming each key given.
+The credentials are the provider's own, read as OVH's SDKs
+(python-ovh, go-ovh) read them: each key from the environment
+(`OVH_` and the key's name in capitals), else from the section of
+`ovh.conf` named by the endpoint, read from these files, a later one
+overriding an earlier one key by key:
+
+1. `/etc/ovh.conf`
+2. `~/.ovh.conf`
+3. `./ovh.conf`, in the working directory: the directory dform runs in,
+   or its `-C` directory.
+
+A working directory's `ovh.conf` holds secrets: never commit it (name it
+in the repository's `.gitignore`). A section holds one of three forms;
+two in one, the environment's keys counted with the file's, is an error
+naming each key given.
 
 A service account's client id and secret (`OVH_CLIENT_ID`,
 `OVH_CLIENT_SECRET`). The provider mints a bearer token from them with
@@ -87,6 +96,16 @@ warns when it expires within a week. Outside a program (`dform provider
 check`) it also says which form is in use, when the key expires, and each
 right below the key lacks: `the consumer key for ovh-ca lacks POST
 /domain/zone/*`.
+
+A bearer token minted elsewhere (`OVH_ACCESS_TOKEN`), as go-ovh takes
+it: each call carries it as it is, and nothing mints another, so when it
+expires the call is refused saying so. For a run, not for a machine's
+configuration:
+
+```ini
+[ovh-ca]
+access_token=...
+```
 
 The rights the provider needs, and no others; a type that calls another
 path adds its line:

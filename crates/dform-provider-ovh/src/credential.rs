@@ -90,6 +90,16 @@ pub fn notes(client: &Client, full: bool, cache: Option<&Path>, now: u64) -> Vec
     let endpoint = &creds.endpoint;
     let consumer_key = match &creds.auth {
         Auth::Keys { consumer_key, .. } => consumer_key,
+        Auth::Token { .. } => {
+            return if full {
+                vec![format!(
+                    "provider ovh: credentials for {endpoint}: an access token, used as it is; \
+                     its rights are its own"
+                )]
+            } else {
+                Vec::new()
+            };
+        }
         Auth::OAuth2 { client_id, .. } => {
             return if full {
                 vec![format!(

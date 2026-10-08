@@ -15,12 +15,14 @@
 //!
 //! or, for a service account (R-179), `client_id` and `client_secret`
 //! (`OVH_CLIENT_ID`, `OVH_CLIENT_SECRET`) in place of the three keys: the
-//! client mints a bearer token from them (`api`). A section holds one
-//! form or the other.
+//! client mints a bearer token from them (`api`); or `access_token`
+//! (`OVH_ACCESS_TOKEN`), a bearer token minted elsewhere, used as it is.
+//! A section holds one form of the three.
 //!
-//! read from `/etc/ovh.conf`, `~/.ovh.conf` and
-//! `$XDG_CONFIG_HOME/ovh/ovh.conf` (`~/.config/ovh/ovh.conf`), a later file
-//! overriding an earlier one key by key. The program's `use ovh {
+//! read, as OVH's SDKs read them (python-ovh's `config.py`, go-ovh's
+//! `configuration.go`), from `/etc/ovh.conf`, `~/.ovh.conf` and
+//! `./ovh.conf` (the working directory: dform's `-C` directory), a later
+//! file overriding an earlier one key by key. The program's `use ovh {
 //! endpoint }` names the account's endpoint and wins over both; its keys
 //! come from the section of that name.
 
@@ -74,6 +76,9 @@ pub enum Auth {
         client_secret: String,
         token_url: String,
     },
+    /// A bearer token minted elsewhere, which each call carries as it
+    /// is: nothing mints another when it expires.
+    Token { access_token: String },
 }
 
 impl std::fmt::Debug for Auth {
@@ -94,6 +99,7 @@ impl std::fmt::Debug for Auth {
                 .field("client_id", client_id)
                 .field("token_url", token_url)
                 .finish_non_exhaustive(),
+            Auth::Token { .. } => f.debug_struct("Token").finish_non_exhaustive(),
         }
     }
 }
@@ -104,6 +110,16 @@ impl Credentials {
     pub fn create_token_url(&self) -> String {
         let base = self.url.strip_suffix("/1.0").unwrap_or(&self.url);
         format!("{base}/createToken/")
+    }
+
+    /// What a refused access token means, and the fix.
+    pub fn expired_token(&self) -> String {
+        format!(
+            "the access token for {} expired or was revoked: one given as access_token \
+             (OVH_ACCESS_TOKEN) is used as it is and never minted again; give a new one, or a \
+             service account's client_id and client_secret (docs/providers/ovh.md)",
+            self.endpoint
+        )
     }
 
     /// What a refused consumer key means, and the fix.
@@ -166,16 +182,21 @@ pub fn parse_ini(text: &str) -> BTreeMap<String, BTreeMap<String, String>> {
     out
 }
 
-/// The configuration files, lowest precedence first.
+/// The configuration files, lowest precedence first: the machine's,
+/// the user's, the working directory's.
 pub fn default_files() -> Vec<PathBuf> {
-    let home = std::env::var_os("HOME").map(PathBuf::from);
-    let xdg = std::env::var_os("XDG_CONFIG_HOME")
-        .filter(|v| !v.is_empty())
-        .map(PathBuf::from)
-        .or_else(|| home.as_ref().map(|h| h.join(".config")));
+    files_in(
+        std::env::var_os("HOME").map(PathBuf::from),
+        std::env::current_dir().ok(),
+    )
+}
+
+/// The configuration files for the home directory `home` and the working
+/// directory `cwd`, as OVH's SDKs list them.
+pub fn files_in(home: Option<PathBuf>, cwd: Option<PathBuf>) -> Vec<PathBuf> {
     let mut out = vec![PathBuf::from("/etc/ovh.conf")];
     out.extend(home.map(|h| h.join(".ovh.conf")));
-    out.extend(xdg.map(|x| x.join("ovh").join("ovh.conf")));
+    out.extend(cwd.map(|d| d.join("ovh.conf")));
     out
 }
 
@@ -246,16 +267,35 @@ pub fn resolve(
     };
     let three = set(&KEYS);
     let client = set(&CLIENT);
-    if !three.is_empty() && !client.is_empty() {
+    let token = set(&TOKEN);
+    let given: Vec<String> = [
+        ("a consumer key's", &three),
+        ("a service account's", &client),
+        ("an access token's", &token),
+    ]
+    .into_iter()
+    .filter(|(_, keys)| !keys.is_empty())
+    .map(|(form, keys)| format!("{form} ({})", keys.join(", ")))
+    .collect();
+    if let [first @ .., last] = given.as_slice()
+        && !first.is_empty()
+    {
+        let (both, which) = match first.len() {
+            1 => ("both ", "one or the other"),
+            _ => ("", "one of them"),
+        };
         bail!(
-            "the credentials for the endpoint {endpoint} give both a consumer key's ({}) and \
-             a service account's ({}): they are one or the other; remove the ones you do not use \
-             from [{endpoint}] in ovh.conf or the environment",
-            three.join(", "),
-            client.join(", ")
+            "the credentials for the endpoint {endpoint} give {both}{} and {last}: they are \
+             {which}; remove the ones you do not use from [{endpoint}] in ovh.conf or the \
+             environment",
+            first.join(", ")
         );
     }
-    let auth = if client.is_empty() {
+    let auth = if !token.is_empty() {
+        Auth::Token {
+            access_token: key("OVH_ACCESS_TOKEN", "access_token")?,
+        }
+    } else if client.is_empty() {
         Auth::Keys {
             application_key: key("OVH_APPLICATION_KEY", "application_key")?,
             application_secret: key("OVH_APPLICATION_SECRET", "application_secret")?,
@@ -293,6 +333,9 @@ const CLIENT: [(&str, &str); 2] = [
     ("OVH_CLIENT_ID", "client_id"),
     ("OVH_CLIENT_SECRET", "client_secret"),
 ];
+
+/// A bearer token minted elsewhere.
+const TOKEN: [(&str, &str); 1] = [("OVH_ACCESS_TOKEN", "access_token")];
 
 #[cfg(test)]
 mod tests {
@@ -486,6 +529,61 @@ consumer_key=ck-eu
             .unwrap_err()
             .to_string();
         assert!(e.contains("kimsufi-eu takes no service account"), "{e}");
+    }
+
+    /// The files OVH's SDKs read, lowest precedence first: the machine's,
+    /// the user's, the working directory's; no other.
+    #[test]
+    fn the_files_are_the_vendors() {
+        assert_eq!(
+            files_in(Some("/home/u".into()), Some("/work/infra".into())),
+            [
+                PathBuf::from("/etc/ovh.conf"),
+                PathBuf::from("/home/u/.ovh.conf"),
+                PathBuf::from("/work/infra/ovh.conf"),
+            ]
+        );
+    }
+
+    /// An access token minted elsewhere is a form of its own, from the
+    /// file or `OVH_ACCESS_TOKEN`, for any endpoint; given with another
+    /// form it is the error, each form named.
+    #[test]
+    fn an_access_token_in_place_of_the_keys() {
+        let d = scratch("token");
+        std::fs::write(d.join("ovh.conf"), "[kimsufi-eu]\naccess_token=tok\n").unwrap();
+        let none = |_: &str| None;
+        let c = resolve(Some("kimsufi-eu"), &none, &[d.join("ovh.conf")]).unwrap();
+        assert_eq!(
+            c.auth,
+            Auth::Token {
+                access_token: "tok".into()
+            }
+        );
+        assert!(!format!("{c:?}").contains("tok\""), "{c:?}");
+        let env = |k: &str| (k == "OVH_ACCESS_TOKEN").then(|| "env-tok".to_string());
+        let c = resolve(Some("ovh-ca"), &env, &[]).unwrap();
+        assert_eq!(
+            c.auth,
+            Auth::Token {
+                access_token: "env-tok".into()
+            }
+        );
+        std::fs::write(
+            d.join("ovh.conf"),
+            "[ovh-ca]\nconsumer_key=c\nclient_id=i\nclient_secret=s\n",
+        )
+        .unwrap();
+        let e = resolve(Some("ovh-ca"), &env, &[d.join("ovh.conf")])
+            .unwrap_err()
+            .to_string();
+        assert_eq!(
+            e,
+            "the credentials for the endpoint ovh-ca give a consumer key's (consumer_key), a \
+             service account's (client_id, client_secret) and an access token's \
+             (OVH_ACCESS_TOKEN): they are one of them; remove the ones you do not use from \
+             [ovh-ca] in ovh.conf or the environment"
+        );
     }
 
     /// Both forms in one section is an error naming each key and where

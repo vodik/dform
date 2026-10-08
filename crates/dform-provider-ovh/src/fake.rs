@@ -265,6 +265,14 @@ impl Server {
         self.world().minted
     }
 
+    /// A bearer token good for its calls, as one minted elsewhere (the
+    /// OVH console, `ovhcloud` login) is: not counted as minted.
+    pub fn access_token(&self) -> String {
+        let token = "fake-access-token".to_string();
+        self.world().tokens.insert(token.clone());
+        token
+    }
+
     /// The tokens minted so far are no longer good: a call with one is
     /// refused with a 401.
     pub fn revoke_tokens(&self) {
@@ -443,6 +451,17 @@ impl Server {
             ("OVH_APPLICATION_KEY", APPLICATION_KEY.into()),
             ("OVH_APPLICATION_SECRET", APPLICATION_SECRET.into()),
             ("OVH_CONSUMER_KEY", CONSUMER_KEY.into()),
+            ("DFORM_OVH_POLL_MS", "1".into()),
+            ("DFORM_OVH_RESOLVER", self.resolver.clone()),
+        ]
+    }
+
+    /// The environment that points the provider at this server with an
+    /// access token ([`Server::access_token`]).
+    pub fn token_env(&self) -> Vec<(&'static str, String)> {
+        vec![
+            ("OVH_ENDPOINT", self.endpoint.clone()),
+            ("OVH_ACCESS_TOKEN", self.access_token()),
             ("DFORM_OVH_POLL_MS", "1".into()),
             ("DFORM_OVH_RESOLVER", self.resolver.clone()),
         ]

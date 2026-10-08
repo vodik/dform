@@ -1,6 +1,7 @@
 //! A client of the OVH API, blocking, over `ureq`: each call signed
 //! (`sign`) with the three keys, or carrying a bearer token minted from a
-//! service account's client credentials (R-179).
+//! service account's client credentials (R-179), or one given as it is
+//! (`access_token`).
 //!
 //! A bearer token is minted with OAuth2's client-credentials grant
 //! (`grant_type=client_credentials`, `scope=all`, the client id and
@@ -254,6 +255,9 @@ impl Client {
     /// the cache asks the server's time again, and is sent once more when
     /// the offset moved.
     fn send(&self, method: &str, path: &str, body: Option<&Json>, authed: bool) -> Result<Json> {
+        if let (true, Auth::Token { access_token }) = (authed, &self.creds.auth) {
+            return self.send_once(method, path, body, By::Bearer(access_token));
+        }
         if authed && matches!(self.creds.auth, Auth::OAuth2 { .. }) {
             let token = self.bearer()?;
             let out = self.send_once(method, path, body, By::Bearer(&token));
@@ -421,7 +425,7 @@ impl Client {
                     ));
                 }
             }
-            (Auth::OAuth2 { .. }, _) => {}
+            (Auth::OAuth2 { .. } | Auth::Token { .. }, _) => {}
         }
         let (status, text) = self.exchange(method, path, &url, &headers, &body)?;
         if !(200..300).contains(&status) {
@@ -459,6 +463,9 @@ impl Client {
             || msg.contains("credential does not exist");
         if status == 403 && invalid && matches!(self.creds.auth, Auth::Keys { .. }) {
             return self.creds.expired_key();
+        }
+        if status == 401 && matches!(self.creds.auth, Auth::Token { .. }) {
+            return self.creds.expired_token();
         }
         match (msg, code) {
             ("", _) => text.trim().chars().take(200).collect(),

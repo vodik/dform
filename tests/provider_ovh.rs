@@ -369,6 +369,72 @@ fn a_records_target_changes_in_place() {
     assert!(plan.stdout.contains("replace"), "{}", plan.stdout);
 }
 
+/// The credentials come from ovh.conf where OVH's SDKs look: `~/.ovh.conf`,
+/// then `./ovh.conf` in the working directory (dform's `-C`), a later one
+/// overriding an earlier one key by key. `$XDG_CONFIG_HOME/ovh/ovh.conf`
+/// is not read.
+#[test]
+fn ovh_conf_is_read_where_ovhs_sdks_read_it() {
+    let server = Server::start();
+    let e = &server.endpoint;
+    let s = project(
+        "ovh-conf",
+        "",
+        &format!(
+            "use ovh {{ endpoint = \"{e}\", project = \"lab\" }}\n\
+             resource ovh.ssh_key k {{ name = \"k\", public_key = \"ssh-ed25519 A\" }}\n"
+        ),
+    );
+    let conf = |consumer_key: &str| {
+        format!(
+            "[{e}]\napplication_key={}\napplication_secret={}\nconsumer_key={consumer_key}\n",
+            fake::APPLICATION_KEY,
+            fake::APPLICATION_SECRET
+        )
+    };
+    // The environment without the credentials: the files are all there is.
+    let apply = |s: &Scratch| {
+        let mut c = common::dform();
+        c.args(common::yes(&["apply", "main.df"]))
+            .current_dir(&s.dir)
+            .env("HOME", s.path("home"))
+            .env("XDG_CONFIG_HOME", s.path("config"))
+            .env_remove("OVH_CLOUD_PROJECT_SERVICE");
+        for (k, v) in server.env() {
+            match k.starts_with("OVH_") {
+                true => c.env_remove(k),
+                false => c.env(k, v),
+            };
+        }
+        for k in ["OVH_CLIENT_ID", "OVH_CLIENT_SECRET", "OVH_ACCESS_TOKEN"] {
+            c.env_remove(k);
+        }
+        Run::from(c.output().unwrap())
+    };
+    s.write("config/ovh/ovh.conf", &conf(fake::CONSUMER_KEY));
+    let r = apply(&s).failure();
+    assert!(
+        r.stderr.contains("no OVH application_key") && !r.stderr.contains("config/ovh"),
+        "{}",
+        r.stderr
+    );
+    s.write("home/.ovh.conf", &conf(fake::CONSUMER_KEY));
+    apply(&s).success();
+    assert_eq!(names(&server.keys()), ["k"]);
+    // The working directory's overrides the user's.
+    s.write("home/.ovh.conf", &conf("not-the-key"));
+    s.write(
+        "ovh.conf",
+        &format!("[{e}]\nconsumer_key={}\n", fake::CONSUMER_KEY),
+    );
+    s.write(
+        "main.df",
+        &format!("use ovh {{ endpoint = \"{e}\", project = \"lab\" }}\n"),
+    );
+    apply(&s).success();
+    assert!(server.keys().is_empty(), "{:?}", server.keys());
+}
+
 #[test]
 fn a_flavor_the_region_does_not_offer_is_refused_at_plan() {
     let server = Server::start();
@@ -426,7 +492,10 @@ fn a_project_is_found_by_its_description_and_credentials_are_named() {
     assert!(
         r.stderr
             .contains("no OVH application_key for the endpoint ovh-ca")
-            && r.stderr.contains("ovh/ovh.conf"),
+            && r.stderr.contains(&format!(
+                "/etc/ovh.conf, {0}/.ovh.conf, {0}/ovh.conf",
+                s.dir.display()
+            )),
         "{}",
         r.stderr
     );
