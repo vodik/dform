@@ -1500,6 +1500,38 @@ impl<'u> Lowerer<'u> {
         self.scope_term(scope, declared, str_term(&crate::ir::name_segment(name)))
     }
 
+    /// A resource `name` read in a component's body that the module file
+    /// around the component declares (R-183): private to the module, as
+    /// its `let`s are, so the read is an error saying to read it through
+    /// the module (`backups.repository`). Read bare, it would name the
+    /// copy's user's resource of that name.
+    fn module_private(&mut self, scope: usize, name: &str, span: Span) -> L<()> {
+        let Some(declared) = self
+            .chain_of(scope)
+            .into_iter()
+            .find(|s| self.decls.scopes[*s].resources.contains_key(name))
+        else {
+            return Ok(());
+        };
+        if self.own_scopes(scope).contains(&declared) {
+            return Ok(());
+        }
+        let Some(module) = self
+            .decls
+            .modules
+            .iter()
+            .find(|(_, m)| m.scope == declared && !m.component)
+            .map(|(p, _)| p.clone())
+        else {
+            return Ok(());
+        };
+        let n = module.rsplit('.').next().unwrap_or(&module);
+        let d = Diagnostic::error(span, format!("{name} is private to module {module}"))
+            .with_help(format!("read it as {n}.{name}, after `use {module}`"));
+        self.diags.push(d);
+        Err(Skip)
+    }
+
     /// The instance `name` in scope: the scope that declares it and its
     /// component's path.
     fn instance_in(&self, scope: usize, name: &str) -> Option<(usize, String)> {
@@ -5554,7 +5586,9 @@ impl<'u> Lowerer<'u> {
                 Want::Type(t) if types.contains(t) => t,
                 _ => return self.ambiguous(&c.head, &types, span),
             };
-            return Ok((str_term(typ), self.resource_addr(rc.scope, &c.head)));
+            let typ = typ.clone();
+            self.module_private(rc.scope, &c.head, span)?;
+            return Ok((str_term(&typ), self.resource_addr(rc.scope, &c.head)));
         }
         match self.resolve(rc, c, out)? {
             Res::Ref { typ, addr, path } if path.is_empty() => Ok((typ, addr)),
@@ -6732,6 +6766,7 @@ impl<'u> Lowerer<'u> {
                 if types.len() > 1 {
                     return self.ambiguous(h, &types, span);
                 }
+                self.module_private(rc.scope, h, span)?;
                 let path = self.segs(rc, &c.ops, pre)?;
                 return Ok(Res::Ref {
                     typ: str_term(&types[0]),

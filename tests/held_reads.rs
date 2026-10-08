@@ -5,7 +5,8 @@
 //! template one literal reading the Secret's name. A written attribute
 //! of the held Secret is the program's value; a computed one is carried
 //! inside the literal as what it waits on; a read of a Secret nothing
-//! derives is an error at its site.
+//! derives is an error at its site, and the module's Secret read bare in
+//! its component is private to the module.
 
 mod common;
 use common::{Run, Scratch};
@@ -189,4 +190,21 @@ fn a_read_of_what_nothing_derives_is_an_error_at_its_site() {
             r.stderr
         );
     }
+}
+
+/// The module's Secret read bare inside its component is private to the
+/// module, as a `let` of it is: an error saying to read it through the
+/// module, never the copy's user's resource of that name.
+#[test]
+fn a_modules_resource_read_bare_in_its_component_is_private_to_it() {
+    let s = project("held-reads-bare", false, "repository.metadata.name");
+    let r = run(&s, &["plan", "apps"]).failure();
+    assert!(
+        r.stderr
+            .contains("backups.df:18:40: repository is private to module backups")
+            && r.stderr
+                .contains("Help: read it as backups.repository, after `use backups`"),
+        "{}",
+        r.stderr
+    );
 }
