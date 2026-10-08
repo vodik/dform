@@ -6251,126 +6251,10 @@ impl<'u> Lowerer<'u> {
     // --- terms ------------------------------------------------------------
 
     fn term(&mut self, rc: &mut Rc, n: &SyntaxNode, pos: Pos, pre: &mut Vec<Lit>) -> L<Term> {
-        let span = self.span(n);
-        let first = || tokens(n).next().unwrap();
         match n.kind() {
-            LITERAL => {
-                let t = first();
-                match t.kind() {
-                    INT => match t.text().parse::<i64>() {
-                        Ok(i) => Ok(Term::Val(Value::Int(i))),
-                        Err(_) => self.error(span, "integer out of range"),
-                    },
-                    // A quantity (R-66): `500m` and `0.5` wait for the
-                    // type of their position (`types::literal`, the
-                    // schema's in `types::read`).
-                    QUANTITY => match crate::quantity::literal(t.text()) {
-                        Ok(crate::quantity::Literal::Known(q)) => Ok(Term::Val(Value::Quantity(q))),
-                        Ok(crate::quantity::Literal::Ambiguous) => {
-                            Ok(crate::types::ambiguous_literal(t.text(), span))
-                        }
-                        Err(why) => self.error(span, why),
-                    },
-                    STRING => self.string_term(rc, &t, pre),
-                    TRUE_KW => Ok(Term::Val(Value::Bool(true))),
-                    _ => Ok(Term::Val(Value::Bool(false))),
-                }
-            }
-            CHAIN | CALL_CHAIN => {
-                let mut c = Chain::read(n).ok_or(Skip)?;
-                // `x.len` (R-155): the length of a list, a string or an
-                // object, the one field that is a computation; `x."len"`
-                // is an object's key.
-                let len = matches!(c.ops.last(), Some(Op::Field(f)) if f == "len")
-                    && tokens(n)
-                        .filter(|t| !t.kind().is_trivia())
-                        .last()
-                        .is_some_and(|t| t.kind() == IDENT);
-                if len {
-                    c.ops.pop();
-                    let res = self.resolve(rc, &c, pre)?;
-                    let t = self.realize(rc, res, Pos::Content, pre, span)?;
-                    return Ok(func(crate::ir::LEN, vec![t]));
-                }
-                // A resource by its bare name, given as a value: the
-                // reference, in its module or out of it (R-43).
-                if pos == Pos::Value
-                    && c.is_bare()
-                    && c.head != "_"
-                    && !rc.vars.contains_key(&c.head)
-                    && !rc.types.contains_key(&c.head)
-                    && !self.is_value(rc.scope, &c.head)
-                    && self.resource(rc.scope, &c.head).is_some()
-                {
-                    if let Some(t) = self.deferred_ref(rc, &c.head, span) {
-                        return Ok(t);
-                    }
-                    let (typ, addr) = self.reference(rc, &c, pre, span)?;
-                    return Ok(func(crate::ir::REF, vec![typ, addr, str_term("")]));
-                }
-                let res = self.resolve(rc, &c, pre)?;
-                if let Res::Ref { path, .. } = &res
-                    && matches!(path.first(), Some(Seg::F(f)) if f == crate::schema::IDENTITY)
-                {
-                    return self.identity_read(n, span);
-                }
-                self.realize(rc, res, pos, pre, span)
-            }
-            CALL => {
-                if let Some(t) = self.env_var_call(rc, n, pos, pre) {
-                    return t;
-                }
-                if let Some(t) = self.loader_call(rc, n, pre) {
-                    return t;
-                }
-                let name = self.callee(n);
-                let Some(name) = name else {
-                    return self.error(span, "a function is named by a plain name");
-                };
-                if name == "ref"
-                    && let Some(list) = node(n, ARG_LIST)
-                    && terms(&list).count() == 1
-                {
-                    return self.ref_call(rc, &list, pre, span);
-                }
-                let named: Vec<(String, SyntaxNode)> = node(n, ARG_LIST)
-                    .into_iter()
-                    .flat_map(|l| l.children().filter(|c| c.kind() == NAMED_ARG))
-                    .filter_map(|a| Some((word_text(&a, 0), terms(&a).next()?)))
-                    .collect();
-                let declared = crate::functions::get(&name).filter(|f| !f.internal);
-                if !named.is_empty() && declared.is_none() {
-                    return self.error(
-                        span,
-                        format!(
-                            "`{name}` is a function here: named arguments name a relation's \
-                             columns in an atom"
-                        ),
-                    );
-                }
-                self.check_function(&name, span);
-                let mut args = self.bind(false, |l| l.args(rc, n, Pos::Content, pre))?;
-                if let (false, Some(f)) = (named.is_empty(), declared) {
-                    let mut given = Vec::new();
-                    for (k, t) in named {
-                        given.push((k, self.bind(false, |l| l.term(rc, &t, Pos::Content, pre))?));
-                    }
-                    args = match crate::functions::with_named(f, args, given) {
-                        Ok(a) => a,
-                        Err(why) => return self.error(span, why),
-                    };
-                }
-                self.check_aggregated(&name, &args, span);
-                // `cloud_ref(T, name, path)`, a form of the language, is
-                // the lowering's `__cloud_ref` (R-155).
-                let name = match name.as_str() {
-                    "cloud_ref" => crate::ir::CLOUD_REF.to_string(),
-                    "ref" => crate::ir::REF.to_string(),
-                    _ => name,
-                };
-                let args = self.typed_args(&name, args, span)?;
-                Ok(Term::Func { name, args })
-            }
+            LITERAL => self.literal(rc, n, pre),
+            CHAIN | CALL_CHAIN => self.chain_term(rc, n, pos, pre),
+            CALL => self.call(rc, n, pos, pre),
             LIST => {
                 let mut out = Vec::new();
                 for t in terms(n) {
@@ -6378,156 +6262,294 @@ impl<'u> Lowerer<'u> {
                 }
                 Ok(Term::List(out))
             }
-            OBJECT => {
-                // A key with holes (`{ "${k}": v }`) is computed: the
-                // object is built at run time (`functions::OBJECT`).
-                let computed = n
-                    .children()
-                    .filter(|c| c.kind() == OBJECT_FIELD)
-                    .filter_map(|f| tokens(&f).next())
-                    .any(|k| k.kind() == STRING && !self.text && has_hole(k.text()));
-                if computed {
-                    return self.computed_object(rc, n, pos, pre);
-                }
-                let mut m = BTreeMap::new();
-                for f in n.children().filter(|c| c.kind() == OBJECT_FIELD) {
-                    let k = tokens(&f).next().ok_or(Skip)?;
-                    let key = if k.kind() == STRING {
-                        self.string(&k)?
-                    } else {
-                        k.text().to_string()
-                    };
-                    let v = match terms(&f).next() {
-                        Some(t) => self.term(rc, &t, pos, pre)?,
-                        // `{ a }` is `{ a: a }`.
-                        None => {
-                            let c = Chain {
-                                head: key.clone(),
-                                head_kind: k.kind(),
-                                call: None,
-                                range: k.text_range(),
-                                ops: Vec::new(),
-                            };
-                            let res = self.resolve(rc, &c, pre)?;
-                            self.realize(rc, res, pos, pre, self.span_of(k.text_range()))?
-                        }
-                    };
-                    if m.insert(key.clone(), v).is_some() {
-                        return self.error(self.span(&f), format!("key `{key}` given twice"));
-                    }
-                }
-                Ok(Term::Obj(m))
-            }
-            COMPREHENSION => {
-                let saved = (
-                    std::mem::take(&mut rc.reads),
-                    std::mem::take(&mut rc.values),
-                );
-                self.nested += 1;
-                let body = self.body(rc, &node(n, BODY).ok_or(Skip)?);
-                self.nested -= 1;
-                let mut body = body?;
-                let item_node = terms(n).next().ok_or(Skip)?;
-                // A resource collected into a value is its reference.
-                let item_pos = if pos == Pos::Value {
-                    Pos::Value
-                } else {
-                    Pos::Whole
-                };
-                let item = self.bind(false, |l| l.term(rc, &item_node, item_pos, &mut body))?;
-                (rc.reads, rc.values) = saved;
-                Ok(Term::ListComp {
-                    item: Box::new(item),
-                    body,
-                })
-            }
+            OBJECT => self.object(rc, n, pos, pre),
+            COMPREHENSION => self.comprehension(rc, n, pos),
             PAREN => {
                 let inner = terms(n).next().ok_or(Skip)?;
                 self.bind(false, |l| l.term(rc, &inner, Pos::Content, pre))
             }
             TUPLE => self.tuple_value(n),
-            BIN_EXPR => {
-                let ts: Vec<SyntaxNode> = terms(n).collect();
-                let op = tokens(n).next().ok_or(Skip)?;
-                // `us-test-1a`, names and a quantity with no spaces (R-66
-                // lexes `1a` as one token): meant as a string.
-                let word =
-                    |k: SyntaxKind| matches!(k, IDENT | QUANTITY | INT | MINUS) || k.is_keyword();
-                let toks: Vec<_> = n
-                    .descendants_with_tokens()
-                    .filter_map(|e| e.into_token())
-                    .collect();
-                if op.kind() == MINUS
-                    && toks.iter().all(|t| word(t.kind()))
-                    && toks.iter().any(|t| t.kind() == QUANTITY)
-                    && toks.iter().any(|t| t.kind() == IDENT)
-                {
-                    let d = Diagnostic::error(
-                        span,
-                        format!("`{}` is arithmetic, not a name", n.text()),
-                    )
-                    .with_help(format!(
-                        "`-` subtracts here, a quantity from a name; a name with a `-` in it is \
-                         a string, \"{}\"",
-                        n.text()
-                    ));
-                    self.diags.push(d);
-                    return Err(Skip);
-                }
-                // `us-east` with no spaces: meant as a string.
-                if op.kind() == MINUS
-                    && ts.iter().all(|t| t.kind() == CHAIN)
-                    && ts[0].text_range().end() == op.text_range().start()
-                    && op.text_range().end() == ts[1].text_range().start()
-                {
-                    let d = Diagnostic::error(
-                        span,
-                        format!("`{}` is arithmetic on two names", n.text()),
-                    )
-                    .with_help(format!(
-                        "`-` subtracts `{}` from `{}`; a name with a `-` in it is a string, \
-                         \"{}\"",
-                        ts[1].text(),
-                        ts[0].text(),
-                        n.text()
-                    ));
-                    self.diags.push(d);
-                    return Err(Skip);
-                }
-                let name = match op.kind() {
-                    PLUS => "add",
-                    MINUS => "sub",
-                    STAR => "mul",
-                    SLASH => "div",
-                    _ => "mod",
-                };
-                let a = self.bind(false, |l| l.term(rc, &ts[0], Pos::Content, pre))?;
-                let b = self.bind(false, |l| l.term(rc, &ts[1], Pos::Content, pre))?;
-                match crate::types::operands(op.text(), a, b) {
-                    Ok((a, b)) => Ok(func(name, vec![a, b])),
-                    Err(why) => self.error(span, why),
-                }
-            }
-            UNARY_EXPR => {
-                let inner = terms(n).next().ok_or(Skip)?;
-                Ok(
-                    match self.bind(false, |l| l.term(rc, &inner, Pos::Content, pre))? {
-                        Term::Val(Value::Int(i)) if inner.kind() == LITERAL => {
-                            Term::Val(Value::Int(-i))
-                        }
-                        Term::Val(Value::Quantity(q)) if inner.kind() == LITERAL => {
-                            match crate::quantity::scale(&q, -1) {
-                                Some(q) => Term::Val(Value::Quantity(q)),
-                                None => return self.error(span, "quantity out of range"),
-                            }
-                        }
-                        t => func("sub", vec![Term::Val(Value::Int(0)), t]),
-                    },
-                )
-            }
+            BIN_EXPR => self.binary(rc, n, pre),
+            UNARY_EXPR => self.unary(rc, n, pre),
             RANGE => self.range(rc, n, pre),
-            k => self.error(span, format!("unexpected {k:?} as a term")),
+            k => {
+                let span = self.span(n);
+                self.error(span, format!("unexpected {k:?} as a term"))
+            }
         }
+    }
+
+    /// A literal: an int, a quantity (R-66), a string, a bool.
+    fn literal(&mut self, rc: &mut Rc, n: &SyntaxNode, pre: &mut Vec<Lit>) -> L<Term> {
+        let span = self.span(n);
+        let first = || tokens(n).next().unwrap();
+        let t = first();
+        match t.kind() {
+            INT => match t.text().parse::<i64>() {
+                Ok(i) => Ok(Term::Val(Value::Int(i))),
+                Err(_) => self.error(span, "integer out of range"),
+            },
+            // A quantity (R-66): `500m` and `0.5` wait for the
+            // type of their position (`types::literal`, the
+            // schema's in `types::read`).
+            QUANTITY => match crate::quantity::literal(t.text()) {
+                Ok(crate::quantity::Literal::Known(q)) => Ok(Term::Val(Value::Quantity(q))),
+                Ok(crate::quantity::Literal::Ambiguous) => {
+                    Ok(crate::types::ambiguous_literal(t.text(), span))
+                }
+                Err(why) => self.error(span, why),
+            },
+            STRING => self.string_term(rc, &t, pre),
+            TRUE_KW => Ok(Term::Val(Value::Bool(true))),
+            _ => Ok(Term::Val(Value::Bool(false))),
+        }
+    }
+
+    /// A chain: `x.len` (R-155), a resource by its bare name given as a
+    /// value (R-43), a read.
+    fn chain_term(&mut self, rc: &mut Rc, n: &SyntaxNode, pos: Pos, pre: &mut Vec<Lit>) -> L<Term> {
+        let span = self.span(n);
+        let mut c = Chain::read(n).ok_or(Skip)?;
+        // `x.len` (R-155): the length of a list, a string or an
+        // object, the one field that is a computation; `x."len"`
+        // is an object's key.
+        let len = matches!(c.ops.last(), Some(Op::Field(f)) if f == "len")
+            && tokens(n)
+                .filter(|t| !t.kind().is_trivia())
+                .last()
+                .is_some_and(|t| t.kind() == IDENT);
+        if len {
+            c.ops.pop();
+            let res = self.resolve(rc, &c, pre)?;
+            let t = self.realize(rc, res, Pos::Content, pre, span)?;
+            return Ok(func(crate::ir::LEN, vec![t]));
+        }
+        // A resource by its bare name, given as a value: the
+        // reference, in its module or out of it (R-43).
+        if pos == Pos::Value
+            && c.is_bare()
+            && c.head != "_"
+            && !rc.vars.contains_key(&c.head)
+            && !rc.types.contains_key(&c.head)
+            && !self.is_value(rc.scope, &c.head)
+            && self.resource(rc.scope, &c.head).is_some()
+        {
+            if let Some(t) = self.deferred_ref(rc, &c.head, span) {
+                return Ok(t);
+            }
+            let (typ, addr) = self.reference(rc, &c, pre, span)?;
+            return Ok(func(crate::ir::REF, vec![typ, addr, str_term("")]));
+        }
+        let res = self.resolve(rc, &c, pre)?;
+        if let Res::Ref { path, .. } = &res
+            && matches!(path.first(), Some(Seg::F(f)) if f == crate::schema::IDENTITY)
+        {
+            return self.identity_read(n, span);
+        }
+        self.realize(rc, res, pos, pre, span)
+    }
+
+    /// A call of a function, with its named arguments; `env.var`, a
+    /// loader, `ref`.
+    fn call(&mut self, rc: &mut Rc, n: &SyntaxNode, pos: Pos, pre: &mut Vec<Lit>) -> L<Term> {
+        let span = self.span(n);
+        if let Some(t) = self.env_var_call(rc, n, pos, pre) {
+            return t;
+        }
+        if let Some(t) = self.loader_call(rc, n, pre) {
+            return t;
+        }
+        let name = self.callee(n);
+        let Some(name) = name else {
+            return self.error(span, "a function is named by a plain name");
+        };
+        if name == "ref"
+            && let Some(list) = node(n, ARG_LIST)
+            && terms(&list).count() == 1
+        {
+            return self.ref_call(rc, &list, pre, span);
+        }
+        let named: Vec<(String, SyntaxNode)> = node(n, ARG_LIST)
+            .into_iter()
+            .flat_map(|l| l.children().filter(|c| c.kind() == NAMED_ARG))
+            .filter_map(|a| Some((word_text(&a, 0), terms(&a).next()?)))
+            .collect();
+        let declared = crate::functions::get(&name).filter(|f| !f.internal);
+        if !named.is_empty() && declared.is_none() {
+            return self.error(
+                span,
+                format!(
+                    "`{name}` is a function here: named arguments name a relation's \
+                     columns in an atom"
+                ),
+            );
+        }
+        self.check_function(&name, span);
+        let mut args = self.bind(false, |l| l.args(rc, n, Pos::Content, pre))?;
+        if let (false, Some(f)) = (named.is_empty(), declared) {
+            let mut given = Vec::new();
+            for (k, t) in named {
+                given.push((k, self.bind(false, |l| l.term(rc, &t, Pos::Content, pre))?));
+            }
+            args = match crate::functions::with_named(f, args, given) {
+                Ok(a) => a,
+                Err(why) => return self.error(span, why),
+            };
+        }
+        self.check_aggregated(&name, &args, span);
+        // `cloud_ref(T, name, path)`, a form of the language, is
+        // the lowering's `__cloud_ref` (R-155).
+        let name = match name.as_str() {
+            "cloud_ref" => crate::ir::CLOUD_REF.to_string(),
+            "ref" => crate::ir::REF.to_string(),
+            _ => name,
+        };
+        let args = self.typed_args(&name, args, span)?;
+        Ok(Term::Func { name, args })
+    }
+
+    /// An object, its keys given or computed (`{ "${k}": v }`).
+    fn object(&mut self, rc: &mut Rc, n: &SyntaxNode, pos: Pos, pre: &mut Vec<Lit>) -> L<Term> {
+        // A key with holes (`{ "${k}": v }`) is computed: the
+        // object is built at run time (`functions::OBJECT`).
+        let computed = n
+            .children()
+            .filter(|c| c.kind() == OBJECT_FIELD)
+            .filter_map(|f| tokens(&f).next())
+            .any(|k| k.kind() == STRING && !self.text && has_hole(k.text()));
+        if computed {
+            return self.computed_object(rc, n, pos, pre);
+        }
+        let mut m = BTreeMap::new();
+        for f in n.children().filter(|c| c.kind() == OBJECT_FIELD) {
+            let k = tokens(&f).next().ok_or(Skip)?;
+            let key = if k.kind() == STRING {
+                self.string(&k)?
+            } else {
+                k.text().to_string()
+            };
+            let v = match terms(&f).next() {
+                Some(t) => self.term(rc, &t, pos, pre)?,
+                // `{ a }` is `{ a: a }`.
+                None => {
+                    let c = Chain {
+                        head: key.clone(),
+                        head_kind: k.kind(),
+                        call: None,
+                        range: k.text_range(),
+                        ops: Vec::new(),
+                    };
+                    let res = self.resolve(rc, &c, pre)?;
+                    self.realize(rc, res, pos, pre, self.span_of(k.text_range()))?
+                }
+            };
+            if m.insert(key.clone(), v).is_some() {
+                return self.error(self.span(&f), format!("key `{key}` given twice"));
+            }
+        }
+        Ok(Term::Obj(m))
+    }
+
+    /// A list comprehension: its body resolved nested, its item over it.
+    fn comprehension(&mut self, rc: &mut Rc, n: &SyntaxNode, pos: Pos) -> L<Term> {
+        let saved = (
+            std::mem::take(&mut rc.reads),
+            std::mem::take(&mut rc.values),
+        );
+        self.nested += 1;
+        let body = self.body(rc, &node(n, BODY).ok_or(Skip)?);
+        self.nested -= 1;
+        let mut body = body?;
+        let item_node = terms(n).next().ok_or(Skip)?;
+        // A resource collected into a value is its reference.
+        let item_pos = if pos == Pos::Value {
+            Pos::Value
+        } else {
+            Pos::Whole
+        };
+        let item = self.bind(false, |l| l.term(rc, &item_node, item_pos, &mut body))?;
+        (rc.reads, rc.values) = saved;
+        Ok(Term::ListComp {
+            item: Box::new(item),
+            body,
+        })
+    }
+
+    /// Arithmetic; `us-east` and `us-test-1a`, meant as strings, are
+    /// errors that say so.
+    fn binary(&mut self, rc: &mut Rc, n: &SyntaxNode, pre: &mut Vec<Lit>) -> L<Term> {
+        let span = self.span(n);
+        let ts: Vec<SyntaxNode> = terms(n).collect();
+        let op = tokens(n).next().ok_or(Skip)?;
+        // `us-test-1a`, names and a quantity with no spaces (R-66
+        // lexes `1a` as one token): meant as a string.
+        let word = |k: SyntaxKind| matches!(k, IDENT | QUANTITY | INT | MINUS) || k.is_keyword();
+        let toks: Vec<_> = n
+            .descendants_with_tokens()
+            .filter_map(|e| e.into_token())
+            .collect();
+        if op.kind() == MINUS
+            && toks.iter().all(|t| word(t.kind()))
+            && toks.iter().any(|t| t.kind() == QUANTITY)
+            && toks.iter().any(|t| t.kind() == IDENT)
+        {
+            let d = Diagnostic::error(span, format!("`{}` is arithmetic, not a name", n.text()))
+                .with_help(format!(
+                    "`-` subtracts here, a quantity from a name; a name with a `-` in it is \
+                 a string, \"{}\"",
+                    n.text()
+                ));
+            self.diags.push(d);
+            return Err(Skip);
+        }
+        // `us-east` with no spaces: meant as a string.
+        if op.kind() == MINUS
+            && ts.iter().all(|t| t.kind() == CHAIN)
+            && ts[0].text_range().end() == op.text_range().start()
+            && op.text_range().end() == ts[1].text_range().start()
+        {
+            let d = Diagnostic::error(span, format!("`{}` is arithmetic on two names", n.text()))
+                .with_help(format!(
+                    "`-` subtracts `{}` from `{}`; a name with a `-` in it is a string, \
+                 \"{}\"",
+                    ts[1].text(),
+                    ts[0].text(),
+                    n.text()
+                ));
+            self.diags.push(d);
+            return Err(Skip);
+        }
+        let name = match op.kind() {
+            PLUS => "add",
+            MINUS => "sub",
+            STAR => "mul",
+            SLASH => "div",
+            _ => "mod",
+        };
+        let a = self.bind(false, |l| l.term(rc, &ts[0], Pos::Content, pre))?;
+        let b = self.bind(false, |l| l.term(rc, &ts[1], Pos::Content, pre))?;
+        match crate::types::operands(op.text(), a, b) {
+            Ok((a, b)) => Ok(func(name, vec![a, b])),
+            Err(why) => self.error(span, why),
+        }
+    }
+
+    /// A negation: of a literal, its value.
+    fn unary(&mut self, rc: &mut Rc, n: &SyntaxNode, pre: &mut Vec<Lit>) -> L<Term> {
+        let span = self.span(n);
+        let inner = terms(n).next().ok_or(Skip)?;
+        Ok(
+            match self.bind(false, |l| l.term(rc, &inner, Pos::Content, pre))? {
+                Term::Val(Value::Int(i)) if inner.kind() == LITERAL => Term::Val(Value::Int(-i)),
+                Term::Val(Value::Quantity(q)) if inner.kind() == LITERAL => {
+                    match crate::quantity::scale(&q, -1) {
+                        Some(q) => Term::Val(Value::Quantity(q)),
+                        None => return self.error(span, "quantity out of range"),
+                    }
+                }
+                t => func("sub", vec![Term::Val(Value::Int(0)), t]),
+            },
+        )
     }
 
     /// `lo..hi` (its end left out) or `lo..=hi` (its end in it): a range
