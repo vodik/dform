@@ -4,6 +4,7 @@
 //! it (`quote`). One renderer for every message and report.
 
 use crate::ast::{Atom, Lit, RuleStmt, Term};
+use crate::query::Redactor;
 use crate::value::Value;
 
 pub fn term(t: &Term) -> String {
@@ -139,6 +140,131 @@ pub fn rule_short(r: &RuleStmt) -> String {
         format!("{}...", &s[..140])
     } else {
         s
+    }
+}
+
+/// The program's atoms, terms and literals as it wrote them, for a
+/// message about what it does: a variable by its source name, an
+/// interpolated string with its holes, an attribute read by its address, a
+/// copy's guard as the copy, a value as [`Redactor::surface`] spells it
+/// (a secret redacted).
+pub struct Written<'a> {
+    redact: &'a Redactor,
+}
+
+impl<'a> Written<'a> {
+    pub fn new(redact: &'a Redactor) -> Written<'a> {
+        Written { redact }
+    }
+
+    /// An attribute by its address and path; an input's cell as the program
+    /// names the input, `input one.namespace` of the copy `one` (R-120).
+    pub fn attribute(typ: String, name: String, p: &str) -> String {
+        match typ == crate::modules::INPUT {
+            true if name.is_empty() => format!("input {p}"),
+            true => format!("input {name}.{p}"),
+            false => crate::report::attribute(&crate::ir::Address { typ, name }, p),
+        }
+    }
+
+    pub fn pred(&self, pred: &str) -> String {
+        pred.to_string()
+    }
+
+    /// A body atom as the program would write it: a copy's guard as the
+    /// copy, an attribute read by its address, a row with its variables by
+    /// the source's names.
+    pub fn atom(&self, a: &Atom) -> String {
+        if let Some(scope) = a.pred.strip_suffix("::__instance")
+            && let [Term::Val(Value::Str(c))] = a.args.as_slice()
+        {
+            return format!("resource {c} {}", scope.replace("::", "."));
+        }
+        if let (
+            "attr",
+            [
+                Term::Val(Value::Str(t)),
+                Term::Val(Value::Str(n)),
+                Term::Val(Value::Str(p)),
+                v,
+            ],
+        ) = (a.pred.as_str(), a.args.as_slice())
+        {
+            let addr = Written::attribute(t.clone(), n.clone(), p);
+            return match v {
+                Term::Val(v) => format!("{addr} = {}", self.redact.surface(v)),
+                _ => addr.to_string(),
+            };
+        }
+        let args: Vec<String> = a.args.iter().map(|t| self.term(t)).collect();
+        format!("{}({})", self.pred(&a.pred), args.join(", "))
+    }
+
+    pub fn term(&self, t: &Term) -> String {
+        match t {
+            Term::Val(v) => self.redact.surface(v),
+            Term::Var(v) => crate::syntax::resolve::source_name(v),
+            Term::Wildcard => "_".into(),
+            // An interpolated string as written.
+            Term::Func { name, args } if name == crate::ir::FORMAT => match args.split_first() {
+                Some((Term::Val(Value::Str(f)), rest)) => {
+                    let mut out = String::from("\"");
+                    let mut parts = f.split("%s");
+                    out.push_str(parts.next().unwrap_or(""));
+                    for (p, a) in parts.zip(rest) {
+                        out.push_str(&format!("${{{}}}", self.term(a)));
+                        out.push_str(p);
+                    }
+                    out.push('"');
+                    out
+                }
+                _ => term(t),
+            },
+            Term::Func { name, args } => format!(
+                "{name}({})",
+                args.iter()
+                    .map(|a| self.term(a))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            Term::List(xs) => format!(
+                "[{}]",
+                xs.iter()
+                    .map(|a| self.term(a))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            t => term(t),
+        }
+    }
+
+    pub fn lit(&self, l: &Lit) -> String {
+        let bin = |a: &Term, op: &str, b: &Term| format!("{} {op} {}", self.term(a), self.term(b));
+        match l {
+            Lit::Pos(a) => self.atom(a),
+            Lit::Not(a) => format!("not {}", self.atom(a)),
+            Lit::Eq(a, b) => bin(a, "==", b),
+            Lit::Neq(a, b) => bin(a, "!=", b),
+            Lit::Gt(a, b) => bin(a, ">", b),
+            Lit::Ge(a, b) => bin(a, ">=", b),
+            Lit::Lt(a, b) => bin(a, "<", b),
+            Lit::Le(a, b) => bin(a, "<=", b),
+        }
+    }
+
+    /// `x = v, y = w`, by the source's names.
+    pub fn bindings(&self, env: &std::collections::BTreeMap<String, Value>) -> String {
+        env.iter()
+            .filter(|(k, _)| !k.starts_with("__"))
+            .map(|(k, v)| {
+                format!(
+                    "{} = {}",
+                    crate::syntax::resolve::source_name(k),
+                    self.redact.surface(v)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
     }
 }
 

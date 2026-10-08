@@ -195,10 +195,10 @@ pub fn gone(
             out
         };
         let why = match (lit, shown.is_empty()) {
-            (Lit::Pos(_), _) => format!("{}: no row", w.lit_text(lit)),
-            (Lit::Not(_), _) => format!("{}: the row exists", w.lit_text(lit)),
-            (_, true) => w.lit_text(lit),
-            (_, false) => format!("{}: {}", w.lit_text(lit), terse(&shown)),
+            (Lit::Pos(_), _) => format!("{}: no row", w.written.lit(lit)),
+            (Lit::Not(_), _) => format!("{}: the row exists", w.written.lit(lit)),
+            (_, true) => w.written.lit(lit),
+            (_, false) => format!("{}: {}", w.written.lit(lit), terse(&shown)),
         };
         return Some(((!at.is_empty()).then_some(at), redact.text(&why)));
     }
@@ -236,6 +236,7 @@ fn unapplied(atom: &Atom, res: &EvalResult) -> Option<String> {
 struct WhyNot<'a> {
     res: &'a EvalResult,
     redact: &'a Redactor,
+    written: crate::spell::Written<'a>,
     printer: Printer<'a>,
     seen: BTreeSet<String>,
     out: String,
@@ -255,6 +256,7 @@ impl<'a> WhyNot<'a> {
         WhyNot {
             res,
             redact,
+            written: crate::spell::Written::new(redact),
             printer: Printer {
                 circuit: &res.circuit,
                 redact,
@@ -383,7 +385,7 @@ impl<'a> WhyNot<'a> {
             }
             let with = match a.seed.is_empty() || atom.pred == "attr" {
                 true => String::new(),
-                false => format!(" with {}", self.with(&a.seed)),
+                false => format!(" with {}", self.written.bindings(&a.seed)),
             };
             let what = match (atom.args.get(2), rule.head.args.get(2)) {
                 (Some(Term::Val(Value::Str(p))), Some(Term::Val(Value::Str(h))))
@@ -404,7 +406,7 @@ impl<'a> WhyNot<'a> {
             Lit::Pos(b) if b.pred == "__known" => {
                 let line = match known_text(rule, lit, &a.known) {
                     Some(t) => t,
-                    None => format!("{}: not known yet", self.atom_text(b)),
+                    None => format!("{}: not known yet", self.written.atom(b)),
                 };
                 self.out
                     .push_str(&format!("{inner}{}\n", self.redact.text(&line)));
@@ -422,7 +424,7 @@ impl<'a> WhyNot<'a> {
                     (false, _) => "no row",
                 };
                 self.out
-                    .push_str(&format!("{inner}{}: {none}\n", self.atom_text(b)));
+                    .push_str(&format!("{inner}{}: {none}\n", self.written.atom(b)));
                 let rows = self.rows(&b.pred, b.args.len());
                 if !rows.is_empty() || !derived {
                     self.nearest(b, written, &inner);
@@ -436,11 +438,11 @@ impl<'a> WhyNot<'a> {
                 let row = held
                     .first()
                     .and_then(|(_, used)| used.first())
-                    .map(|r| format!(": {}", self.atom_text(r)))
+                    .map(|r| format!(": {}", self.written.atom(r)))
                     .unwrap_or_default();
                 self.out.push_str(&format!(
                     "{inner}not {}: the row exists{row}\n",
-                    self.atom_text(b)
+                    self.written.atom(b)
                 ));
             }
             _ => {
@@ -454,10 +456,10 @@ impl<'a> WhyNot<'a> {
                     .collect();
                 let with = match shown.is_empty() {
                     true => String::new(),
-                    false => format!(", with {}", self.with(&shown)),
+                    false => format!(", with {}", self.written.bindings(&shown)),
                 };
                 self.out
-                    .push_str(&format!("{inner}{}: false{with}\n", self.lit_text(lit)));
+                    .push_str(&format!("{inner}{}: false{with}\n", self.written.lit(lit)));
             }
         }
         Ok(())
@@ -527,7 +529,7 @@ impl<'a> WhyNot<'a> {
         if rows.is_empty() {
             self.out.push_str(&format!(
                 "{pad}{} has no rows\n",
-                self.pred_text(&bound.pred)
+                self.written.pred(&bound.pred)
             ));
             return;
         }
@@ -598,14 +600,14 @@ impl<'a> WhyNot<'a> {
             .take(NEAREST)
             .map(|(_, _, row)| {
                 if attr {
-                    return self.atom_text(row);
+                    return self.written.atom(row);
                 }
                 let cols: Vec<String> = row
                     .args
                     .iter()
                     .zip(&hide)
                     .filter(|(_, h)| !**h)
-                    .map(|(t, _)| self.term_text(t))
+                    .map(|(t, _)| self.written.term(t))
                     .collect();
                 format!("({})", cols.join(", "))
             })
@@ -631,116 +633,14 @@ impl<'a> WhyNot<'a> {
                 (Some(t), Some(n)) => {
                     crate::report::address(&crate::ir::Address { typ: t, name: n })
                 }
-                _ => self.atom_text(a),
+                _ => self.written.atom(a),
             },
             ("attr", [t, n, p, _]) => match (s(t), s(n), s(p)) {
-                (Some(t), Some(n), Some(p)) => attribute_text(t, n, &p),
-                _ => self.atom_text(a),
+                (Some(t), Some(n), Some(p)) => crate::spell::Written::attribute(t, n, &p),
+                _ => self.written.atom(a),
             },
-            _ => self.atom_text(a),
+            _ => self.written.atom(a),
         }
-    }
-
-    fn pred_text(&self, pred: &str) -> String {
-        pred.to_string()
-    }
-
-    /// A body atom as the program would write it: a copy's guard as the
-    /// copy, an attribute read by its address, a row with its variables by
-    /// the source's names.
-    fn atom_text(&self, a: &Atom) -> String {
-        if let Some(scope) = a.pred.strip_suffix("::__instance")
-            && let [Term::Val(Value::Str(c))] = a.args.as_slice()
-        {
-            return format!("resource {c} {}", scope.replace("::", "."));
-        }
-        if let (
-            "attr",
-            [
-                Term::Val(Value::Str(t)),
-                Term::Val(Value::Str(n)),
-                Term::Val(Value::Str(p)),
-                v,
-            ],
-        ) = (a.pred.as_str(), a.args.as_slice())
-        {
-            let addr = attribute_text(t.clone(), n.clone(), p);
-            return match v {
-                Term::Val(v) => format!("{addr} = {}", self.redact.surface(v)),
-                _ => addr.to_string(),
-            };
-        }
-        let args: Vec<String> = a.args.iter().map(|t| self.term_text(t)).collect();
-        format!("{}({})", self.pred_text(&a.pred), args.join(", "))
-    }
-
-    fn term_text(&self, t: &Term) -> String {
-        match t {
-            Term::Val(v) => self.redact.surface(v),
-            Term::Var(v) => crate::syntax::resolve::source_name(v),
-            Term::Wildcard => "_".into(),
-            // An interpolated string as written.
-            Term::Func { name, args } if name == crate::ir::FORMAT => match args.split_first() {
-                Some((Term::Val(Value::Str(f)), rest)) => {
-                    let mut out = String::from("\"");
-                    let mut parts = f.split("%s");
-                    out.push_str(parts.next().unwrap_or(""));
-                    for (p, a) in parts.zip(rest) {
-                        out.push_str(&format!("${{{}}}", self.term_text(a)));
-                        out.push_str(p);
-                    }
-                    out.push('"');
-                    out
-                }
-                _ => spell::term(t),
-            },
-            Term::Func { name, args } => format!(
-                "{name}({})",
-                args.iter()
-                    .map(|a| self.term_text(a))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ),
-            Term::List(xs) => format!(
-                "[{}]",
-                xs.iter()
-                    .map(|a| self.term_text(a))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ),
-            t => spell::term(t),
-        }
-    }
-
-    fn lit_text(&self, l: &Lit) -> String {
-        let bin = |a: &Term, op: &str, b: &Term| {
-            format!("{} {op} {}", self.term_text(a), self.term_text(b))
-        };
-        match l {
-            Lit::Pos(a) => self.atom_text(a),
-            Lit::Not(a) => format!("not {}", self.atom_text(a)),
-            Lit::Eq(a, b) => bin(a, "==", b),
-            Lit::Neq(a, b) => bin(a, "!=", b),
-            Lit::Gt(a, b) => bin(a, ">", b),
-            Lit::Ge(a, b) => bin(a, ">=", b),
-            Lit::Lt(a, b) => bin(a, "<", b),
-            Lit::Le(a, b) => bin(a, "<=", b),
-        }
-    }
-
-    /// `x = v, y = w`, by the source's names.
-    fn with(&self, env: &Env) -> String {
-        env.iter()
-            .filter(|(k, _)| !k.starts_with("__"))
-            .map(|(k, v)| {
-                format!(
-                    "{} = {}",
-                    crate::syntax::resolve::source_name(k),
-                    self.redact.surface(v)
-                )
-            })
-            .collect::<Vec<_>>()
-            .join(", ")
     }
 }
 
@@ -803,16 +703,6 @@ fn known_text(rule: &RuleStmt, lit: &Lit, known: &Env) -> Option<String> {
                 v = from;
             }
         }
-    }
-}
-
-/// An attribute by its address and path; an input's cell as the program
-/// names the input, `input one.namespace` of the copy `one` (R-120).
-fn attribute_text(typ: String, name: String, p: &str) -> String {
-    match typ == crate::modules::INPUT {
-        true if name.is_empty() => format!("input {p}"),
-        true => format!("input {name}.{p}"),
-        false => crate::report::attribute(&crate::ir::Address { typ, name }, p),
     }
 }
 

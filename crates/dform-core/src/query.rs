@@ -654,25 +654,22 @@ impl Redactor {
         }
     }
 
+    /// `spell::atom`, its values as `fmt` spells them.
     pub fn fmt_atom(&self, a: &Atom) -> String {
-        let args: Vec<String> = a
-            .args
-            .iter()
-            .map(|t| match t {
-                Term::Val(v) => self.fmt(v),
-                t => spell::term(t),
-            })
-            .collect();
-        format!("{}({})", a.pred, args.join(", "))
+        self.spell_atom(a, Spelling::Core)
     }
 
     /// `fmt_atom` with values as the program would write them (`surface`).
     pub fn surface_atom(&self, a: &Atom) -> String {
+        self.spell_atom(a, Spelling::Surface)
+    }
+
+    fn spell_atom(&self, a: &Atom, how: Spelling) -> String {
         let args: Vec<String> = a
             .args
             .iter()
             .map(|t| match t {
-                Term::Val(v) => self.surface(v),
+                Term::Val(v) => self.spell(v, how),
                 t => spell::term(t),
             })
             .collect();
