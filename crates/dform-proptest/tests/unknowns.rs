@@ -111,11 +111,12 @@ enum Gen {
     Base,
     /// `x in sS.zones`: member over an open list (Rule 2).
     Zones(u8),
-    /// `x in pt.mid`: a want read (a stuck group makes it may-derive).
+    /// `r in pt.mid, x in ["${r}"]`: a want read (a stuck group makes it
+    /// may-derive), its address as text.
     Mid,
     /// `pJ(x)`: an earlier predicate.
     Pred(u8),
-    /// `x in pt.dst` (a deny's), else as `Mid`.
+    /// `r in pt.dst, x in ["${r}"]` (a deny's), else as `Mid`.
     Dst,
 }
 
@@ -301,8 +302,11 @@ impl Printer<'_> {
     fn bind(&self, g: Gen, sc: Scope) -> String {
         match g {
             Gen::Zones(s) => format!("x in {}.zones", self.src(s)),
-            Gen::Dst if sc.dst => "x in pt.dst".into(),
-            Gen::Mid | Gen::Dst if sc.mid => "x in pt.mid".into(),
+            // `x` is the address's text, as a base fact's string is: a
+            // column `x in T` fills is the reference itself (R-185), and
+            // the predicates mix the two sources.
+            Gen::Dst if sc.dst => "r in pt.dst, x in [\"${r}\"]".into(),
+            Gen::Mid | Gen::Dst if sc.mid => "r in pt.mid, x in [\"${r}\"]".into(),
             Gen::Pred(j) => match self.pred(j, sc) {
                 Some(p) => format!("{p}(x)"),
                 None => "b(x)".into(),
