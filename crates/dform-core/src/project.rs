@@ -659,8 +659,10 @@ impl Manifest {
                 );
             }
             if let Some(b) = &t.backend
-                && let Err(e) =
-                    crate::stack::parse_backend(&b.get_ref().replace("{stack}", "stack"))
+                && let Err(e) = b
+                    .get_ref()
+                    .replace("{stack}", "stack")
+                    .parse::<crate::stack::Backend>()
             {
                 bail!(
                     "{} = {:?}: {e}; the backends are `local(\"DIR\")`, DIR relative to \
@@ -905,7 +907,7 @@ impl Manifest {
             std::iter::once(&self.defaults.backend).chain(self.stacks.values().map(|t| &t.backend));
         for b in all.flatten() {
             let text = b.get_ref().replace("{stack}", "stack");
-            if let Ok(crate::stack::Backend::S3(spec)) = crate::stack::parse_backend(&text)
+            if let Ok(crate::stack::Backend::S3(spec)) = text.parse::<crate::stack::Backend>()
                 && !spec.bucket.contains('{')
             {
                 out.entry(spec.bucket.clone()).or_insert(spec);
@@ -923,7 +925,7 @@ impl Manifest {
             .as_ref()?
             .get_ref()
             .replace("{stack}", stack);
-        crate::stack::parse_backend(&text).ok()
+        text.parse::<crate::stack::Backend>().ok()
     }
 
     /// `[packages]`: each package's root, absolute.
@@ -953,7 +955,7 @@ impl Manifest {
                 .and_then(|m| m.defaults.backend.map(|b| b.into_inner()));
             let local = |d: &Path| format!("local({:?})", dir.join(d).display().to_string());
             let term = match theirs {
-                Some(t) => match crate::stack::parse_backend(&t) {
+                Some(t) => match t.parse::<crate::stack::Backend>() {
                     Ok(crate::stack::Backend::Local(d)) => local(&d),
                     _ => t,
                 },

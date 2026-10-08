@@ -703,7 +703,7 @@ fn open_age(s: &AgeSealed, identities: &[(age::x25519::Identity, String)]) -> Re
         .as_slice()
         .try_into()
         .map_err(|_| anyhow::anyhow!("the master sealed to age recipients is not 32 bytes"))?;
-    Ok(Some(Key::from_bytes(bytes)))
+    Ok(Some(Key::from(bytes)))
 }
 
 /// The seals of a master `key` (id `id`) as `mixing` says, `kept` the
@@ -966,7 +966,7 @@ fn open(s: &Sealed, id: &str, pass: &[u8]) -> Result<Option<Key>> {
         .as_slice()
         .try_into()
         .map_err(|_| anyhow::anyhow!("the sealed master is not 32 bytes"))?;
-    Ok(Some(Key::from_bytes(bytes)))
+    Ok(Some(Key::from(bytes)))
 }
 
 /// The master `r` keeps sealed, opened with `pass`: `None` when it is not
@@ -1301,7 +1301,7 @@ impl Resolving<'_> {
                     .map_err(|_| {
                         anyhow::anyhow!("{}: the digest key is not 32 bytes", self.deployment)
                     })?;
-                Some(Key::from_bytes(b))
+                Some(Key::from(b))
             }
             _ => of.digest,
         };
@@ -1320,7 +1320,7 @@ impl Resolving<'_> {
 
 /// A new key, 32 random bytes.
 fn fresh_key() -> Result<Key> {
-    Ok(Key::from_bytes(random_bytes::<32>("the master")?))
+    Ok(Key::from(random_bytes::<32>("the master")?))
 }
 
 /// `dform secrets cycle` (R-165): a new master, epoch N+1, sealed as the
@@ -1360,7 +1360,7 @@ pub fn cycle(
     if let Some(Err(why)) = opener.pass()? {
         bail!("{deployment}: cycling needs the passphrase: {why}");
     }
-    let new = Key::from_bytes(random_bytes::<32>("the master")?);
+    let new = Key::from(random_bytes::<32>("the master")?);
     let id = key_id(&new);
     let (passphrase, age) = seals(&new, &id, &opener, (None, None))?;
     let mut earlier = r.earlier.clone();
@@ -1755,8 +1755,8 @@ mod tests {
 
     #[test]
     fn a_seal_opens_with_its_readers_master_and_label_only() {
-        let a = Key::from_bytes([1; 32]);
-        let b = Key::from_bytes([2; 32]);
+        let a = Key::from([1; 32]);
+        let b = Key::from([2; 32]);
         let sealed = seal_to(&seal_pair(&a).1, "p#kc to a", b"kubeconfig", None).unwrap();
         assert_eq!(
             open_sealed(&a, "p#kc to a", &sealed).unwrap(),
@@ -1781,7 +1781,7 @@ mod tests {
 
     #[test]
     fn a_passphrase_opens_its_seal_only() {
-        let k = Key::from_bytes([3; 32]);
+        let k = Key::from([3; 32]);
         let id = key_id(&k);
         // `seal`'s, at a small cost for a unit test.
         let s = Sealed {

@@ -1110,10 +1110,6 @@ pub mod file {
             Ok(Some(Key(key)))
         }
 
-        pub fn from_bytes(bytes: [u8; 32]) -> Key {
-            Key(bytes)
-        }
-
         /// Its 32 bytes.
         pub fn bytes(&self) -> [u8; 32] {
             self.0
@@ -1155,6 +1151,12 @@ pub mod file {
                 .iter()
                 .map(|b| format!("{b:02x}"))
                 .collect()
+        }
+    }
+
+    impl From<[u8; 32]> for Key {
+        fn from(bytes: [u8; 32]) -> Key {
+            Key(bytes)
         }
     }
 
@@ -2085,7 +2087,7 @@ mod tests {
     #[test]
     fn a_tick_differs_where_a_known_value_does() {
         use file::{Entry, Leaf, tick_differences};
-        let key = file::Key::from_bytes([7; 32]);
+        let key = file::Key::from([7; 32]);
         let digest = |v: &serde_json::Value| key.digest(&serde_json::to_vec(v).unwrap());
         let entry = |tick, leaves: &[(&str, serde_json::Value)]| Entry {
             typ: "t".into(),

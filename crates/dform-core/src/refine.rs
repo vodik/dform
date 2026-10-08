@@ -72,95 +72,99 @@ impl fmt::Display for Constraint {
     }
 }
 
-/// A constraint term as a schema file or a `type_refine` fact writes it:
-/// `range(1, 35)`, `enum([a, b])`, `regex("^[a-z]+$")`, or its text.
-pub fn from_term(t: &Term) -> Result<Constraint, String> {
-    let (name, args) = match t {
-        Term::Func { name, args } => (name.as_str(), args.as_slice()),
-        Term::Val(Value::Str(s)) => return parse(s),
-        _ => return Err(format!("not a refinement: {t:?}")),
-    };
-    let int = |i: usize| match args.get(i).and_then(Term::ground) {
-        Some(Value::Int(n)) => Ok(n),
-        _ => Err(format!("{name}: argument {} must be an integer", i + 1)),
-    };
-    let prefix = |i: usize| {
-        let n = int(i)?;
-        u8::try_from(n)
-            .ok()
-            .filter(|n| *n <= 32)
-            .ok_or_else(|| format!("{name}({n}): a prefix length is 0 to 32"))
-    };
-    let arity = |n: usize| {
-        if args.len() == n {
-            Ok(())
-        } else {
-            Err(format!(
-                "{name} takes {n} argument{}",
-                if n == 1 { "" } else { "s" }
-            ))
-        }
-    };
-    Ok(match name {
-        "range" => {
-            arity(2)?;
-            let (lo, hi) = (int(0)?, int(1)?);
-            if lo > hi {
-                return Err(format!("range({lo}, {hi}) is empty"));
+impl TryFrom<&Term> for Constraint {
+    type Error = String;
+
+    /// A constraint term as a schema file or a `type_refine` fact writes it:
+    /// `range(1, 35)`, `enum([a, b])`, `regex("^[a-z]+$")`, or its text.
+    fn try_from(t: &Term) -> Result<Constraint, String> {
+        let (name, args) = match t {
+            Term::Func { name, args } => (name.as_str(), args.as_slice()),
+            Term::Val(Value::Str(s)) => return parse(s),
+            _ => return Err(format!("not a refinement: {t:?}")),
+        };
+        let int = |i: usize| match args.get(i).and_then(Term::ground) {
+            Some(Value::Int(n)) => Ok(n),
+            _ => Err(format!("{name}: argument {} must be an integer", i + 1)),
+        };
+        let prefix = |i: usize| {
+            let n = int(i)?;
+            u8::try_from(n)
+                .ok()
+                .filter(|n| *n <= 32)
+                .ok_or_else(|| format!("{name}({n}): a prefix length is 0 to 32"))
+        };
+        let arity = |n: usize| {
+            if args.len() == n {
+                Ok(())
+            } else {
+                Err(format!(
+                    "{name} takes {n} argument{}",
+                    if n == 1 { "" } else { "s" }
+                ))
             }
-            Constraint::Range(lo, hi)
-        }
-        "prefix_len_le" => {
-            arity(1)?;
-            Constraint::PrefixLenLe(prefix(0)?)
-        }
-        "prefix_len_ge" => {
-            arity(1)?;
-            Constraint::PrefixLenGe(prefix(0)?)
-        }
-        "len_le" => {
-            arity(1)?;
-            Constraint::LenLe(int(0)?)
-        }
-        "len_ge" => {
-            arity(1)?;
-            Constraint::LenGe(int(0)?)
-        }
-        "regex" => {
-            arity(1)?;
-            let Some(Value::Str(re)) = args.first().and_then(Term::ground) else {
-                return Err("regex takes a string".into());
-            };
-            check_regex(&re)?;
-            Constraint::Regex(re)
-        }
-        "enum" => {
-            arity(1)?;
-            let Some(Value::List(vs)) = args.first().and_then(Term::ground) else {
-                return Err("enum takes a list of values".into());
-            };
-            if vs.is_empty() {
-                return Err("enum([]) admits nothing".into());
+        };
+        Ok(match name {
+            "range" => {
+                arity(2)?;
+                let (lo, hi) = (int(0)?, int(1)?);
+                if lo > hi {
+                    return Err(format!("range({lo}, {hi}) is empty"));
+                }
+                Constraint::Range(lo, hi)
             }
-            Constraint::OneOf(vs.into_iter().collect())
-        }
-        "type" => {
-            arity(1)?;
-            match args.first().and_then(Term::ground) {
-                Some(Value::Str(t)) if t == "int" => Constraint::IsInt,
-                Some(Value::Str(t)) if t == "string" => Constraint::IsStr,
-                Some(Value::Str(t)) if t == "bool" => Constraint::IsBool,
-                Some(Value::Str(t)) if t == "inet" => Constraint::IsInet,
-                _ => return Err("type takes int, string, bool or inet".into()),
+            "prefix_len_le" => {
+                arity(1)?;
+                Constraint::PrefixLenLe(prefix(0)?)
             }
-        }
-        other => {
-            return Err(format!(
-                "unknown refinement {other} (expected range, prefix_len_le, prefix_len_ge, \
-                 enum, regex, len_le, len_ge)"
-            ));
-        }
-    })
+            "prefix_len_ge" => {
+                arity(1)?;
+                Constraint::PrefixLenGe(prefix(0)?)
+            }
+            "len_le" => {
+                arity(1)?;
+                Constraint::LenLe(int(0)?)
+            }
+            "len_ge" => {
+                arity(1)?;
+                Constraint::LenGe(int(0)?)
+            }
+            "regex" => {
+                arity(1)?;
+                let Some(Value::Str(re)) = args.first().and_then(Term::ground) else {
+                    return Err("regex takes a string".into());
+                };
+                check_regex(&re)?;
+                Constraint::Regex(re)
+            }
+            "enum" => {
+                arity(1)?;
+                let Some(Value::List(vs)) = args.first().and_then(Term::ground) else {
+                    return Err("enum takes a list of values".into());
+                };
+                if vs.is_empty() {
+                    return Err("enum([]) admits nothing".into());
+                }
+                Constraint::OneOf(vs.into_iter().collect())
+            }
+            "type" => {
+                arity(1)?;
+                match args.first().and_then(Term::ground) {
+                    Some(Value::Str(t)) if t == "int" => Constraint::IsInt,
+                    Some(Value::Str(t)) if t == "string" => Constraint::IsStr,
+                    Some(Value::Str(t)) if t == "bool" => Constraint::IsBool,
+                    Some(Value::Str(t)) if t == "inet" => Constraint::IsInet,
+                    _ => return Err("type takes int, string, bool or inet".into()),
+                }
+            }
+            other => {
+                return Err(format!(
+                    "unknown refinement {other} (expected range, prefix_len_le, prefix_len_ge, \
+                     enum, regex, len_le, len_ge)"
+                ));
+            }
+        })
+    }
 }
 
 /// A constraint from its text (`Constraint`'s `Display`), as a
@@ -170,7 +174,7 @@ pub fn parse(text: &str) -> Result<Constraint, String> {
         .map_err(|_| format!("not a refinement: {text}"))?;
     match prog.statements.as_slice() {
         [Stmt::Fact(a)] if a.args.len() == 1 && !matches!(a.args[0], Term::Val(_)) => {
-            from_term(&a.args[0])
+            Constraint::try_from(&a.args[0])
         }
         _ => Err(format!("not a refinement: {text}")),
     }
@@ -387,7 +391,7 @@ pub fn from_assertion(op: &str, v: &serde_json::Value) -> Option<Constraint> {
         )],
         x => vec![Term::Val(crate::provider::json_to_value(x))],
     };
-    from_term(&Term::Func {
+    Constraint::try_from(&Term::Func {
         name: op.to_string(),
         args,
     })
@@ -774,7 +778,7 @@ impl Stated {
         let (Value::Str(typ), Value::Str(path)) = (typ, path) else {
             return Some(Err(format!("{}: type and path must be symbols", a.pred)));
         };
-        Some(from_term(c).map(|constraint| Stated {
+        Some(Constraint::try_from(c).map(|constraint| Stated {
             typ,
             addr,
             path: path.trim_start_matches('.').to_string(),

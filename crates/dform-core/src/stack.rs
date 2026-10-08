@@ -89,68 +89,76 @@ pub enum Backend {
     S3(crate::store::S3Spec),
 }
 
-/// A `backend = ...` term.
-fn backend(v: &Term) -> Result<Backend, String> {
-    let Term::Func { name, args } = v else {
-        return Err("unknown backend".into());
-    };
-    match (name.as_str(), args.as_slice()) {
-        ("local", [dir]) => match dir.as_str() {
-            Some(dir) => Ok(Backend::Local(PathBuf::from(dir))),
-            None => Err("backend local(DIR) takes a directory string".into()),
-        },
-        ("s3", [bucket, prefix, rest @ ..]) if rest.len() <= 1 => {
-            let usage = "backend s3(\"BUCKET\", \"PREFIX\", {endpoint: \"URL\", region: \"R\"}) \
-                         takes a bucket and a prefix string, and optionally a record of \
-                         endpoint and region strings";
-            let (Some(bucket), Some(prefix)) = (bucket.as_str(), prefix.as_str()) else {
-                return Err(usage.into());
-            };
-            if bucket.is_empty() {
-                return Err("backend s3: the bucket is empty".into());
-            }
-            let mut spec = crate::store::S3Spec {
-                bucket: bucket.to_string(),
-                prefix: prefix.trim_matches('/').to_string(),
-                endpoint: None,
-                region: None,
-            };
-            if let Some(opts) = rest.first() {
-                let Term::Obj(m) = opts else {
+impl TryFrom<&Term> for Backend {
+    type Error = String;
+
+    /// A `backend = ...` term.
+    fn try_from(v: &Term) -> Result<Backend, String> {
+        let Term::Func { name, args } = v else {
+            return Err("unknown backend".into());
+        };
+        match (name.as_str(), args.as_slice()) {
+            ("local", [dir]) => match dir.as_str() {
+                Some(dir) => Ok(Backend::Local(PathBuf::from(dir))),
+                None => Err("backend local(DIR) takes a directory string".into()),
+            },
+            ("s3", [bucket, prefix, rest @ ..]) if rest.len() <= 1 => {
+                let usage = "backend s3(\"BUCKET\", \"PREFIX\", {endpoint: \"URL\", region: \"R\"}) \
+                             takes a bucket and a prefix string, and optionally a record of \
+                             endpoint and region strings";
+                let (Some(bucket), Some(prefix)) = (bucket.as_str(), prefix.as_str()) else {
                     return Err(usage.into());
                 };
-                for (k, v) in m {
-                    let v = v
-                        .as_str()
-                        .ok_or_else(|| format!("backend s3: {k} is a string"))?;
-                    match k.as_str() {
-                        "endpoint" => spec.endpoint = Some(v.trim_end_matches('/').to_string()),
-                        "region" => spec.region = Some(v.to_string()),
-                        other => {
-                            return Err(format!(
-                                "backend s3 has no option {other}; its options: endpoint, region"
-                            ));
+                if bucket.is_empty() {
+                    return Err("backend s3: the bucket is empty".into());
+                }
+                let mut spec = crate::store::S3Spec {
+                    bucket: bucket.to_string(),
+                    prefix: prefix.trim_matches('/').to_string(),
+                    endpoint: None,
+                    region: None,
+                };
+                if let Some(opts) = rest.first() {
+                    let Term::Obj(m) = opts else {
+                        return Err(usage.into());
+                    };
+                    for (k, v) in m {
+                        let v = v
+                            .as_str()
+                            .ok_or_else(|| format!("backend s3: {k} is a string"))?;
+                        match k.as_str() {
+                            "endpoint" => spec.endpoint = Some(v.trim_end_matches('/').to_string()),
+                            "region" => spec.region = Some(v.to_string()),
+                            other => {
+                                return Err(format!(
+                                    "backend s3 has no option {other}; its options: endpoint, region"
+                                ));
+                            }
                         }
                     }
                 }
+                Ok(Backend::S3(spec))
             }
-            Ok(Backend::S3(spec))
+            ("s3", _) => Err(
+                "backend s3(\"BUCKET\", \"PREFIX\", {endpoint: \"URL\", region: \"R\"}) takes a \
+                 bucket, a prefix and optionally a record of options"
+                    .into(),
+            ),
+            _ => Err("unknown backend".into()),
         }
-        ("s3", _) => Err(
-            "backend s3(\"BUCKET\", \"PREFIX\", {endpoint: \"URL\", region: \"R\"}) takes a \
-             bucket, a prefix and optionally a record of options"
-                .into(),
-        ),
-        _ => Err("unknown backend".into()),
     }
 }
 
-/// A backend as the manifest writes it, a term of the language in a
-/// string.
-pub fn parse_backend(text: &str) -> Result<Backend> {
-    let t = crate::syntax::resolve::data_term(text)
-        .map_err(|e| anyhow::anyhow!("not a backend term: {e}"))?;
-    backend(&t).map_err(|e| anyhow::anyhow!(e))
+impl std::str::FromStr for Backend {
+    type Err = anyhow::Error;
+
+    /// A backend as the manifest writes it, a term of the language in a
+    /// string.
+    fn from_str(text: &str) -> Result<Backend> {
+        let t = crate::syntax::resolve::data_term(text)
+            .map_err(|e| anyhow::anyhow!("not a backend term: {e}"))?;
+        Backend::try_from(&t).map_err(|e| anyhow::anyhow!(e))
+    }
 }
 
 /// The backend with each key's `{k}` its value in `key` (escaped, as
@@ -454,7 +462,7 @@ pub fn instance(cfg: &Stack, stack: &str, program: &Program, set: &[Atom]) -> Re
 fn stack_config(c: &Config, out: &mut Stack, diags: &mut Vec<Diagnostic>) {
     for (k, v, span) in &c.config {
         match k.as_str() {
-            "backend" => match backend(v) {
+            "backend" => match Backend::try_from(v) {
                 Ok(b) => out.backend = Some(b),
                 Err(e) if e == "unknown backend" => {
                     diags.push(Diagnostic::error(*span, e).with_help(
@@ -984,7 +992,7 @@ fn parse_target(to: &str) -> Result<Target> {
     };
     let (kind, rest) = to.split_once('(').ok_or_else(bad)?;
     if kind.trim() == "s3" {
-        return match parse_backend(to) {
+        return match to.parse::<Backend>() {
             Ok(Backend::S3(spec)) => Ok(Target::S3(spec)),
             Ok(_) => Err(bad()),
             Err(_) => match backend_term(to) {
@@ -1019,7 +1027,7 @@ fn parse_target(to: &str) -> Result<Target> {
 /// What a backend term that parses says is wrong with it, if anything.
 fn backend_term(text: &str) -> Option<String> {
     let t = crate::syntax::resolve::data_term(text).ok()?;
-    backend(&t).err()
+    Backend::try_from(&t).err()
 }
 
 /// A deployment's published outputs (`store::OUTPUTS`, beside its state and
@@ -1639,7 +1647,9 @@ pub fn remote_location(
         return Ok(None);
     };
     let templated = term.contains("{stack}");
-    let b = parse_backend(&term.replace("{stack}", stack))
+    let b = term
+        .replace("{stack}", stack)
+        .parse::<Backend>()
         .with_context(|| format!("[remotes] {remote}: backend {term}"))?;
     let loc = match b {
         Backend::Local(dir) => Location::Local(project.join(dir)),

@@ -1043,7 +1043,8 @@ fn refine_args(f: &Atom) -> Result<Vec<Value>> {
     let (Value::Str(t), Value::Str(p)) = (ground(t)?, ground(p)?) else {
         bail!("type_refine: type and path must be symbols");
     };
-    let c = crate::refine::from_term(c).map_err(|e| anyhow!("type_refine({t}, {p}, ...): {e}"))?;
+    let c = crate::lattice::Constraint::try_from(c)
+        .map_err(|e| anyhow!("type_refine({t}, {p}, ...): {e}"))?;
     Ok(vec![
         Value::Str(t),
         Value::Str(p),

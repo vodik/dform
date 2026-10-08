@@ -173,7 +173,7 @@ pub fn main(
         _ => args.resolve().and_then(run_command),
     };
     crate::timing::finish();
-    // Every exit goes through `exit_code`: a signal's 128 + its number
+    // Every exit goes through `Outcome::code`: a signal's 128 + its number
     // once every destructor of the run has run; a decline or a stop said
     // what it had to (`run`).
     let outcome = match result {
@@ -188,7 +188,7 @@ pub fn main(
             Outcome::of_error(&e)
         }
     };
-    std::process::ExitCode::from(exit_code(&outcome))
+    std::process::ExitCode::from(outcome.code())
 }
 
 /// The command line's definitions, for the manual (`man`).
@@ -243,7 +243,7 @@ struct Session {
     lock: crate::store::Guard,
 }
 
-/// How a run ended: what the exit status says ([`exit_code`], R-147;
+/// How a run ended: what the exit status says ([`Outcome::code`], R-147;
 /// docs/reference.md "Exit status"). A decline and a stop are outcomes a
 /// person chose or a plan file bounds, not errors: nothing is said as an
 /// error, and each has its own status.
@@ -287,6 +287,20 @@ impl Outcome {
         Outcome::Failed
     }
 
+    /// The exit status of a run that ended so (docs/reference.md "Exit
+    /// status"); 2, a usage error, is the argument parser's own.
+    pub fn code(&self) -> u8 {
+        match self {
+            Outcome::Done => 0,
+            Outcome::Failed => 1,
+            Outcome::Declined { .. } => 3,
+            Outcome::Refused { .. } => 4,
+            Outcome::Stopped { .. } => 5,
+            Outcome::Locked => 6,
+            Outcome::Interrupted { signal } => 128u8.saturating_add(*signal as u8),
+        }
+    }
+
     /// The word `--json` says it with (`outcome`).
     pub fn word(&self) -> &'static str {
         match self {
@@ -298,20 +312,6 @@ impl Outcome {
             Outcome::Locked => "locked",
             Outcome::Failed => "failed",
         }
-    }
-}
-
-/// The exit status of a run that ended in `o` (docs/reference.md "Exit
-/// status"); 2, a usage error, is the argument parser's own.
-pub fn exit_code(o: &Outcome) -> u8 {
-    match o {
-        Outcome::Done => 0,
-        Outcome::Failed => 1,
-        Outcome::Declined { .. } => 3,
-        Outcome::Refused { .. } => 4,
-        Outcome::Stopped { .. } => 5,
-        Outcome::Locked => 6,
-        Outcome::Interrupted { signal } => 128u8.saturating_add(*signal as u8),
     }
 }
 
@@ -568,7 +568,7 @@ mod tests {
                 | Outcome::Interrupted { .. } => {}
             }
         }
-        let codes: Vec<u8> = all.iter().map(exit_code).collect();
+        let codes: Vec<u8> = all.iter().map(Outcome::code).collect();
         assert_eq!(codes, [0, 1, 3, 4, 5, 6, 130, 143]);
         let words: Vec<&str> = all.iter().map(Outcome::word).collect();
         assert_eq!(
