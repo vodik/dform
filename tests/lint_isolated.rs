@@ -34,8 +34,8 @@ fn a_constant_provider_warns_once_listing_its_names() {
     let w = warnings(&r);
     assert_eq!(w.len(), 1, "{}", r.stderr);
     for name in [
-        "net.vpc[\"main\"].name = \"main\"",
-        "net.vpc[\"other\"].name = \"other\"",
+        "net.vpc main.name = \"main\"",
+        "net.vpc other.name = \"other\"",
         "2 names do not depend on the stack's key (env)",
     ] {
         assert!(w[0].contains(name), "{name}: {}", w[0]);
@@ -60,5 +60,5 @@ fn a_provider_configured_from_a_computed_attribute_is_isolated() {
     let w = warnings(&r);
     assert_eq!(w.len(), 1, "{}", r.stderr);
     assert!(!w[0].contains("k8s.namespace"), "{}", w[0]);
-    assert!(w[0].contains("net.vpc[\"main\"]"), "{}", w[0]);
+    assert!(w[0].contains("net.vpc main.name"), "{}", w[0]);
 }

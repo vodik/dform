@@ -38,7 +38,7 @@ impl Named {
     fn text(&self) -> String {
         format!(
             "{} = {}",
-            self.addr.attr(&self.path),
+            crate::report::attribute(&self.addr, &self.path),
             spell::value(&self.value)
         )
     }
