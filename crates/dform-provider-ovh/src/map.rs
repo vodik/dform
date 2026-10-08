@@ -305,7 +305,7 @@ pub fn pool_hosts(range: &str, no_gateway: bool) -> Option<(u32, u32)> {
     let size = 1u64 << (32 - u32::from(prefix));
     let first = u64::from(net) + if no_gateway { 1 } else { 2 };
     let last = u64::from(net) + size - 2;
-    (size >= 4 && first <= last).then(|| (first as u32, last as u32))
+    (size >= 4 && first <= last).then_some((first as u32, last as u32))
 }
 
 /// The pool a subnet of `range` is given when the program sets none, as
