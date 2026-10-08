@@ -35,7 +35,7 @@ mod test;
 use self::args::{Args, Command, EXPERIMENTAL};
 use self::cmd::{Cmd, Stage};
 use self::evaluated::{Evaluated, Objects};
-use self::order::{Dependency, InOrder, apply_order};
+use self::order::{Dependency, InOrder};
 
 /// How this run reaches its providers (`main`'s `launch`).
 static LAUNCH: std::sync::OnceLock<&'static (dyn plugin::Launch + Sync)> =
@@ -229,7 +229,7 @@ fn run_command(cli: Cli) -> Result<Outcome> {
     if let Some(module) = cli.matrix.clone() {
         return matrix::run(cli, &module);
     }
-    let order = apply_order(&cli)?;
+    let order = cli.apply_order()?;
     if order.is_empty() {
         return run(cli, None);
     }
@@ -473,7 +473,7 @@ fn run_with(
         _ => None,
     };
     let saved = match saved {
-        Some(p) => Some((p.clone(), run_inputs::with_plan_inputs(&mut cli, &p)?)),
+        Some(p) => Some((p.clone(), cli.with_plan_inputs(&p)?)),
         None => None,
     };
     if !cli.in_project && cli.needs_project() {

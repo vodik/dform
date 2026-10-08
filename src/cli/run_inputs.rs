@@ -70,124 +70,131 @@ pub(super) fn answer_inputs(
         .collect()
 }
 
-/// This run's inputs as a plan file records them: each `--input-file` and
-/// a `--set` of a secret input by their digest with the stack's key (the
-/// latter with its label).
-pub(super) fn plan_inputs(
-    cli: &Cli,
-    files: &[PathBuf],
-    secret: &BTreeSet<String>,
-    key: Option<&zset::file::Key>,
-) -> Result<zset::file::Inputs> {
-    let read =
-        |f: &PathBuf| std::fs::read(f).map_err(|e| anyhow::anyhow!("read {}: {e}", f.display()));
-    let show = |p: &Option<PathBuf>| p.as_ref().map(|p| p.display().to_string());
-    Ok(zset::file::Inputs {
-        files: files
-            .iter()
-            .map(|f| {
-                Ok(zset::file::FileDigest {
-                    path: f.display().to_string(),
-                    fnv64: zset::file::fnv64(&read(f)?),
+impl Cli {
+    /// This run's inputs as a plan file records them: each `--input-file` and
+    /// a `--set` of a secret input by their digest with the stack's key (the
+    /// latter with its label).
+    pub(super) fn plan_inputs(
+        &self,
+        secret: &BTreeSet<String>,
+        key: Option<&zset::file::Key>,
+    ) -> Result<zset::file::Inputs> {
+        let files = &self.files;
+        let read = |f: &PathBuf| {
+            std::fs::read(f).map_err(|e| anyhow::anyhow!("read {}: {e}", f.display()))
+        };
+        let show = |p: &Option<PathBuf>| p.as_ref().map(|p| p.display().to_string());
+        Ok(zset::file::Inputs {
+            files: files
+                .iter()
+                .map(|f| {
+                    Ok(zset::file::FileDigest {
+                        path: f.display().to_string(),
+                        fnv64: zset::file::fnv64(&read(f)?),
+                    })
                 })
-            })
-            .collect::<Result<_>>()?,
-        input_files: cli
-            .input_files
-            .iter()
-            .map(|f| {
-                Ok(zset::file::KeyedDigest {
-                    path: f.display().to_string(),
-                    digest: match key {
-                        Some(k) => k.digest(&read(f)?),
-                        None => String::new(),
-                    },
+                .collect::<Result<_>>()?,
+            input_files: self
+                .input_files
+                .iter()
+                .map(|f| {
+                    Ok(zset::file::KeyedDigest {
+                        path: f.display().to_string(),
+                        digest: match key {
+                            Some(k) => k.digest(&read(f)?),
+                            None => String::new(),
+                        },
+                    })
                 })
-            })
-            .collect::<Result<_>>()?,
-        set: cli
-            .set
-            .iter()
-            .map(|kv| {
-                Ok(match kv.split_once('=') {
-                    Some((k, v)) if secret.contains(k) => {
-                        let label = crate::value::null_label(crate::modules::INPUT, "", k);
-                        let bytes = match v.strip_prefix('@') {
-                            Some(f) => read(&PathBuf::from(f))?,
-                            None => v.as_bytes().to_vec(),
-                        };
-                        keyed(&label, key, &bytes)
-                    }
-                    // `k=@FILE`: the file's digest, keyed, as an
-                    // `--input-file`'s.
-                    Some((_, v)) if v.starts_with('@') => {
-                        let bytes = read(&PathBuf::from(&v[1..]))?;
-                        match key {
-                            Some(k) => serde_json::json!({ "set": kv, "digest": k.digest(&bytes) }),
-                            None => serde_json::json!({ "set": kv }),
+                .collect::<Result<_>>()?,
+            set: self
+                .set
+                .iter()
+                .map(|kv| {
+                    Ok(match kv.split_once('=') {
+                        Some((k, v)) if secret.contains(k) => {
+                            let label = crate::value::null_label(crate::modules::INPUT, "", k);
+                            let bytes = match v.strip_prefix('@') {
+                                Some(f) => read(&PathBuf::from(f))?,
+                                None => v.as_bytes().to_vec(),
+                            };
+                            keyed(&label, key, &bytes)
                         }
-                    }
-                    _ => serde_json::Value::String(kv.clone()),
+                        // `k=@FILE`: the file's digest, keyed, as an
+                        // `--input-file`'s.
+                        Some((_, v)) if v.starts_with('@') => {
+                            let bytes = read(&PathBuf::from(&v[1..]))?;
+                            match key {
+                                Some(k) => {
+                                    serde_json::json!({ "set": kv, "digest": k.digest(&bytes) })
+                                }
+                                None => serde_json::json!({ "set": kv }),
+                            }
+                        }
+                        _ => serde_json::Value::String(kv.clone()),
+                    })
                 })
-            })
-            .collect::<Result<_>>()?,
-        data: cli.data.clone(),
-        providers: cli.providers.clone(),
-        world: show(&cli.world),
-        inventory: show(&cli.inventory),
-        env: Vec::new(),
-        answers: Vec::new(),
-        stack_outputs: Vec::new(),
-    })
+                .collect::<Result<_>>()?,
+            data: self.data.clone(),
+            providers: self.providers.clone(),
+            world: show(&self.world),
+            inventory: show(&self.inventory),
+            env: Vec::new(),
+            answers: Vec::new(),
+            stack_outputs: Vec::new(),
+        })
+    }
 }
 
-/// Load a plan file for `apply PLAN`; its inputs fill every input flag the
-/// command line leaves out.
-pub(super) fn with_plan_inputs(cli: &mut Cli, path: &Path) -> Result<zset::file::PlanFile> {
-    let saved = zset::file::PlanFile::load(path)?;
-    let i = &saved.inputs;
-    if cli.files.is_empty() {
-        cli.files = i.files.iter().map(|f| PathBuf::from(&f.path)).collect();
-    }
-    if cli.set.is_empty() {
-        for s in &i.set {
-            match s {
-                serde_json::Value::String(kv) => cli.set.push(kv.clone()),
-                file if file["set"].is_string() => cli
-                    .set
-                    .push(file["set"].as_str().unwrap_or_default().to_string()),
-                secret => {
-                    let label = secret["sensitive"].as_str().unwrap_or_default();
-                    let k = label.rsplit_once('#').map_or(label, |(_, k)| k);
-                    bail!(
-                        "plan file {}: input {k} is secret and the file holds only its digest; \
-                         give every --set again (--set {k}=...)",
-                        path.display()
-                    );
+impl Cli {
+    /// Load a plan file for `apply PLAN`; its inputs fill every input flag the
+    /// command line leaves out.
+    pub(super) fn with_plan_inputs(&mut self, path: &Path) -> Result<zset::file::PlanFile> {
+        let saved = zset::file::PlanFile::load(path)?;
+        let i = &saved.inputs;
+        if self.files.is_empty() {
+            self.files = i.files.iter().map(|f| PathBuf::from(&f.path)).collect();
+        }
+        if self.set.is_empty() {
+            for s in &i.set {
+                match s {
+                    serde_json::Value::String(kv) => self.set.push(kv.clone()),
+                    file if file["set"].is_string() => self
+                        .set
+                        .push(file["set"].as_str().unwrap_or_default().to_string()),
+                    secret => {
+                        let label = secret["sensitive"].as_str().unwrap_or_default();
+                        let k = label.rsplit_once('#').map_or(label, |(_, k)| k);
+                        bail!(
+                            "plan file {}: input {k} is secret and the file holds only its digest; \
+                             give every --set again (--set {k}=...)",
+                            path.display()
+                        );
+                    }
                 }
             }
         }
+        if self.input_files.is_empty() {
+            self.input_files = i
+                .input_files
+                .iter()
+                .map(|f| PathBuf::from(&f.path))
+                .collect();
+        }
+        if self.data.is_empty() {
+            self.data = i.data.clone();
+        }
+        if self.providers.is_empty() {
+            self.providers = i.providers.clone();
+        }
+        if self.world.is_none() {
+            self.world = i.world.as_ref().map(PathBuf::from);
+        }
+        if self.inventory.is_none() {
+            self.inventory = i.inventory.as_ref().map(PathBuf::from);
+        }
+        Ok(saved)
     }
-    if cli.input_files.is_empty() {
-        cli.input_files = i
-            .input_files
-            .iter()
-            .map(|f| PathBuf::from(&f.path))
-            .collect();
-    }
-    if cli.data.is_empty() {
-        cli.data = i.data.clone();
-    }
-    if cli.providers.is_empty() {
-        cli.providers = i.providers.clone();
-    }
-    if cli.world.is_none() {
-        cli.world = i.world.as_ref().map(PathBuf::from);
-    }
-    if cli.inventory.is_none() {
-        cli.inventory = i.inventory.as_ref().map(PathBuf::from);
-    }
-    Ok(saved)
 }
 
 pub(super) fn build_extra_facts(data: &[String]) -> Result<Vec<Atom>> {
@@ -264,32 +271,34 @@ pub(super) fn secret_inputs_of(
         .collect()
 }
 
-/// A key input's value is the target's: `--set` of one is an error, as is
-/// a target key the stack does not have. A key the target does not name is
-/// its input's default, for `plan` and `apply` alike (the controller names
-/// every one: `run_controller`).
-pub(super) fn check_keys(cli: &Cli, cfg: &crate::stack::Stack, stack: &str) -> Result<()> {
-    let keys: Vec<&str> = cfg.keys.iter().map(|(k, _)| k.as_str()).collect();
-    for kv in &cli.user_set {
-        if let Some((k, _)) = kv.split_once('=')
-            && keys.contains(&k)
-        {
-            bail!(
-                "--set {kv}: {k} is stack {stack}'s key; name the deployment in the target: \
-                 `dform plan {stack} {kv}`"
-            );
-        }
-    }
-    for (k, _) in &cli.keys {
-        if !keys.contains(&k.as_str()) {
-            if keys.is_empty() {
-                bail!("{k}=...: stack {stack} has no key; give an input with `--set {k}=...`");
+impl Cli {
+    /// A key input's value is the target's: `--set` of one is an error, as is
+    /// a target key the stack does not have. A key the target does not name is
+    /// its input's default, for `plan` and `apply` alike (the controller names
+    /// every one: `run_controller`).
+    pub(super) fn check_keys(&self, cfg: &crate::stack::Stack, stack: &str) -> Result<()> {
+        let keys: Vec<&str> = cfg.keys.iter().map(|(k, _)| k.as_str()).collect();
+        for kv in &self.user_set {
+            if let Some((k, _)) = kv.split_once('=')
+                && keys.contains(&k)
+            {
+                bail!(
+                    "--set {kv}: {k} is stack {stack}'s key; name the deployment in the target: \
+                     `dform plan {stack} {kv}`"
+                );
             }
-            bail!(
-                "{k} is not a key of stack {stack} (its key: {}); give an input with `--set {k}=...`",
-                keys.join(", ")
-            );
         }
+        for (k, _) in &self.keys {
+            if !keys.contains(&k.as_str()) {
+                if keys.is_empty() {
+                    bail!("{k}=...: stack {stack} has no key; give an input with `--set {k}=...`");
+                }
+                bail!(
+                    "{k} is not a key of stack {stack} (its key: {}); give an input with `--set {k}=...`",
+                    keys.join(", ")
+                );
+            }
+        }
+        Ok(())
     }
-    Ok(())
 }

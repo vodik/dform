@@ -4,7 +4,7 @@
 
 use super::cmd::{Cmd, Stage};
 use super::outputs::open_sealed;
-use super::run_inputs::{check_keys, env_inputs, plan_inputs, secret_inputs_of, split_kv};
+use super::run_inputs::{env_inputs, secret_inputs_of, split_kv};
 use super::secrets::{born, written};
 use super::stack::Rekeying;
 use super::{Cli, Outcome, Session, launch, open_s3};
@@ -98,7 +98,7 @@ impl Cli {
             },
         )?;
         self.manifest = loaded.manifest.clone();
-        check_keys(self, &loaded.cfg, &loaded.stack)?;
+        self.check_keys(&loaded.cfg, &loaded.stack)?;
         Ok(loaded)
     }
 }
@@ -253,7 +253,7 @@ impl Context {
     pub(super) fn plan_inputs(&self, key: Option<&zset::file::Key>) -> Result<zset::file::Inputs> {
         Ok(zset::file::Inputs {
             stack_outputs: self.outputs_read.clone(),
-            ..plan_inputs(&self.cli, &self.cli.files, &self.secret_inputs, key)?
+            ..self.cli.plan_inputs(&self.secret_inputs, key)?
         })
     }
 }

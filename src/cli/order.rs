@@ -22,40 +22,42 @@ pub(super) struct Dependency {
     pub(super) root: bool,
 }
 
-/// `apply X` in a project: the deployments of the project's stacks X
-/// reads (a keyed read of a deployment, R-73), and theirs, each before its
-/// readers, then X; nothing that reads X (R-30: the stack is the unit of
-/// partial work).
-/// Empty when X reads none, and for a plan file, a world fixture or a
-/// program outside a project. A cycle is an error naming it.
-pub(super) fn apply_order(cli: &Cli) -> Result<Vec<Dependency>> {
-    let Cmd::Apply(super::apply::Apply {
-        plan_file: None,
-        destroy: false,
-        ..
-    }) = &cli.cmd
-    else {
-        return Ok(Vec::new());
-    };
-    if !cli.in_project || cli.world.is_some() {
-        return Ok(Vec::new());
+impl Cli {
+    /// `apply X` in a project: the deployments of the project's stacks X
+    /// reads (a keyed read of a deployment, R-73), and theirs, each before its
+    /// readers, then X; nothing that reads X (R-30: the stack is the unit of
+    /// partial work).
+    /// Empty when X reads none, and for a plan file, a world fixture or a
+    /// program outside a project. A cycle is an error naming it.
+    pub(super) fn apply_order(&self) -> Result<Vec<Dependency>> {
+        let Cmd::Apply(super::apply::Apply {
+            plan_file: None,
+            destroy: false,
+            ..
+        }) = &self.cmd
+        else {
+            return Ok(Vec::new());
+        };
+        if !self.in_project || self.world.is_some() {
+            return Ok(Vec::new());
+        }
+        // The project (`apply` with no target): every stack, each with its
+        // default key; else the target.
+        let roots: Vec<(PathBuf, Vec<(String, String)>)> = match self.files.as_slice() {
+            [] => self
+                .every_stack
+                .iter()
+                .map(|f| (f.clone(), Vec::new()))
+                .collect(),
+            [one] => vec![(one.clone(), self.keys.clone())],
+            _ => return Ok(Vec::new()),
+        };
+        let mut order = order_of(&roots)?;
+        if order.len() == 1 && self.every_stack.is_empty() {
+            order.clear();
+        }
+        Ok(order)
     }
-    // The project (`apply` with no target): every stack, each with its
-    // default key; else the target.
-    let roots: Vec<(PathBuf, Vec<(String, String)>)> = match cli.files.as_slice() {
-        [] => cli
-            .every_stack
-            .iter()
-            .map(|f| (f.clone(), Vec::new()))
-            .collect(),
-        [one] => vec![(one.clone(), cli.keys.clone())],
-        _ => return Ok(Vec::new()),
-    };
-    let mut order = order_of(&roots)?;
-    if order.len() == 1 && cli.every_stack.is_empty() {
-        order.clear();
-    }
-    Ok(order)
 }
 
 /// The deployments of `roots`, each a stack's file and the key values a
