@@ -1056,7 +1056,15 @@ impl<'a, 'h> Ticks<'a, 'h> {
         // The tick's block on stderr, filling in (R-127); a controller's
         // log line is its report.
         let progress = self.hook.is_none().then(|| self.progress(p));
+        let interrupt = &self.cx.chaos.interrupt;
         let on_event = |e: executor::Event| {
+            // Chaos `interrupt`: the stop a Ctrl-C asks for, once the call
+            // is sent.
+            if let executor::Event::Started(a) = e
+                && interrupt.contains(a)
+            {
+                crate::interrupt::request(libc::SIGINT);
+            }
             if let Some(p) = &progress {
                 p.event(&e, &|t: &str| redact.text(t));
             }

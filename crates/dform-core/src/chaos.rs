@@ -23,6 +23,8 @@
 //! |                                | 137 as a process, gone from then on when linked in      |
 //! | `stop-after=N`                 | dform stops as if killed once N Apply calls returned,   |
 //! |                                | each persisted: nothing in flight is waited for         |
+//! | `interrupt=T["N"]`             | dform is asked to stop, as by Ctrl-C, once the Apply of |
+//! |                                | T["N"] is sent: what is in flight is awaited (R-137)    |
 //! | `fresh-ids`                    | every Create mints new ids, as a real cloud does: a     |
 //! |                                | replacement's id is not its predecessor's               |
 //! | `delay=T["N"]:MS`              | the first Apply of T["N"] takes effect, then answers MS |
@@ -57,6 +59,8 @@ pub struct Chaos {
     pub crash: BTreeSet<Address>,
     /// The executor stops once this many Apply calls have returned.
     pub stop_after: Option<usize>,
+    /// A stop is asked for, as by Ctrl-C, once the Apply of each is sent.
+    pub interrupt: BTreeSet<Address>,
     /// Every Create salts its minted values with a serial the world keeps,
     /// so a destroy-first replacement under the same name gets a new id.
     pub fresh_ids: bool,
@@ -89,7 +93,7 @@ impl Chaos {
         let (knob, arg) = spec.split_once('=').ok_or_else(|| {
             anyhow!(
                 "expected KNOB=ARG (fail, timeout, crash, read-lag, mutate, latency, \
-                 delay, flaky, not-ready, not-yet, stop-after) or fresh-ids"
+                 delay, flaky, not-ready, not-yet, stop-after, interrupt) or fresh-ids"
             )
         })?;
         match knob {
@@ -101,6 +105,9 @@ impl Chaos {
             }
             "crash" => {
                 self.crash.insert(parse_addr(arg)?);
+            }
+            "interrupt" => {
+                self.interrupt.insert(parse_addr(arg)?);
             }
             "stop-after" => {
                 let n: usize = arg.parse().context("a number of Apply calls")?;

@@ -140,35 +140,17 @@ fn a_running_change_beats_and_quiet_says_only_the_end() {
     assert_eq!(block(&r.stderr), ["tick 1  done  T"], "{}", r.stderr);
 }
 
-/// Ctrl-C while a create runs: said, the create awaited, what never
+/// Ctrl-C while a create runs (chaos `interrupt`, the stop a signal asks
+/// for, sent with the create): said, the create awaited, what never
 /// started `interrupted`, the tick's end, what to do; the next apply
-/// resumes the tick.
+/// resumes the tick. That a signal is what asks is interrupt.rs's.
 #[test]
 fn an_interrupt_says_what_ran_and_the_next_apply_resumes() {
     let s = project("progress-int");
-    let child = apply(&s, &["delay=net.subnet[\"a\"]:3000"], &["--yes"])
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .unwrap();
-    // Wait for the slow create to start.
-    let started = std::time::Instant::now();
-    loop {
-        std::thread::sleep(Duration::from_millis(100));
-        // The vpc's answer is in the log (R-146): the subnet's create runs.
-        let log = std::fs::read_to_string(s.path("w.state.audit.jsonl")).unwrap_or_default();
-        if log.contains("\"address\":\"net.vpc[\\\"main\\\"]\"")
-            || started.elapsed() > Duration::from_secs(20)
-        {
-            break;
-        }
-    }
-    std::thread::sleep(Duration::from_millis(400));
-    // SAFETY: a signal to the child this test spawned.
-    unsafe {
-        libc::kill(child.id() as i32, libc::SIGINT);
-    }
-    let out = child.wait_with_output().unwrap();
+    // `delay`: the create is made and answers late, its status `made`
+    // while it is awaited.
+    let chaos = ["delay=net.subnet[\"a\"]:200", "interrupt=net.subnet[\"a\"]"];
+    let out = apply(&s, &chaos, &["--yes"]).output().unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert_eq!(out.status.code(), Some(130), "{stderr}");
     let lines = block(&stderr);

@@ -261,6 +261,14 @@ impl Progress {
         self.halt();
         let mut inner = self.inner.lock().expect("progress");
         let (mode, style) = (inner.mode, inner.style);
+        // A stop asked for since the clock last looked: said before the
+        // block ends.
+        if let Some(sig) = interrupt::requested()
+            && !inner.stopping
+        {
+            inner.stopping = true;
+            stopping(&mut inner, sig);
+        }
         if interrupt::requested().is_some()
             && let Board::Tick(b) = &mut inner.board
         {

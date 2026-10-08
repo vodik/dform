@@ -3137,6 +3137,7 @@ file keeps a `tick` counter; every `apply` is one tick.
 | `timeout=T["N"]` | Apply of `T["N"]` takes effect, then times out: the world has it, state does not, until the next run finds it (see below) |
 | `crash=T["N"]` | the provider process dies (exit 137) as it is called to Apply `T["N"]`: the action fails, nothing after it runs, and the next `apply` resumes (the mock linked in, `dform-direct`, is gone from that call on instead) |
 | `stop-after=N` | dform itself stops, as if killed, once `N` Apply calls have returned (counted across the run's ticks), each persisted: nothing still in flight is waited for, the tick never ends, and the next `apply` resumes. The executor's knob, so it works with any provider |
+| `interrupt=T["N"]` | dform is asked to stop, as by Ctrl-C, once the Apply call of `T["N"]` is sent: the calls in flight are awaited and no new one starts, as a signal does (`Interrupted`, exit 130). The executor's knob, for a test of the stop that does not race a signal |
 | `read-lag=T["N"]:K` | the first `K` Reads of `T["N"]` after it is created return nothing (eventual consistency) |
 | `mutate=T["N"].PATH=JSON` | once per run, after the first tick `T["N"]` exists at, the world sets its `PATH` to `JSON` (drift); a computed `PATH` is what the provider reports from then on (a `resourceVersion` a cluster bumped) |
 | `latency=T["N"]:MS` | Apply of `T["N"]` takes `MS` on a simulated clock, reported, never slept; the world's `timeline` records each call's start and end |
