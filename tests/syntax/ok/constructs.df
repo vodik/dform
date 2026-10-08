@@ -34,8 +34,8 @@ rest(h, body) where labels(l), { host: h, ..body } = l
 
 # A module, checks.df beside this file, by its path; and a component.
 use checks {
+  q(1)
   vpc_inst(i) where vpc_inst(i)
-  q(n) where q(n)
 } where env("prod")
 
 component m {
