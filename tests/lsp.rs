@@ -13,7 +13,6 @@ use common::{Scratch, repo};
 use lsp_client::{Client, example, find, uri};
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
 
 fn labels(items: &Value) -> Vec<String> {
     items
@@ -538,11 +537,9 @@ fn definition_and_formatting() {
 }
 
 /// examples/pngu: keyed by env, one deployment per value; selecting
-/// env=prod evaluates pngu[env=prod]. And the latency of an edit: each
-/// keystroke's re-evaluation, timed by the server (`dform/stats`) and as
-/// the client waits for the hover after it.
+/// env=prod evaluates pngu[env=prod].
 #[test]
-fn pngu_by_environment_and_latency_per_keystroke() {
+fn pngu_selects_its_deployment_by_environment() {
     let (_s, root) = example("pngu");
     let stack = root.join("stacks/pngu.df");
     let mut c = Client::start(&root, json!({}));
@@ -557,7 +554,13 @@ fn pngu_by_environment_and_latency_per_keystroke() {
         .collect();
     assert!(errors.is_empty(), "pngu env=prod plans: {errors:?}");
     c.shutdown();
+}
 
+/// Each keystroke re-evaluates the program, and a hover after it answers
+/// over the new evaluation (how long it takes is `dform/stats`', for a
+/// person to read, not a test's to time).
+#[test]
+fn a_hover_answers_after_each_keystroke() {
     let (_s, root) = example("demo");
     let stack = root.join("stacks/dform.df");
     let network = root.join("network.df");
@@ -569,36 +572,17 @@ fn pngu_by_environment_and_latency_per_keystroke() {
     let text = std::fs::read_to_string(&stack).unwrap();
     let mut typed = text.clone();
     typed.push_str("\n# ");
-    let mut waits = Vec::new();
     for (i, ch) in "keystroke".chars().enumerate() {
         typed.push(ch);
         c.change(&stack, i as i32 + 2, &typed);
-        let start = Instant::now();
         let hover = c.at("textDocument/hover", &network, at);
-        waits.push(start.elapsed());
-        assert!(hover.is_object());
+        assert!(hover.is_object(), "{hover}");
     }
     let stats = c.request("dform/stats", Value::Null);
-    let ms: Vec<f64> = stats["ms"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|v| v.as_f64().unwrap())
-        .collect();
-    let per_key = &ms[ms.len() - waits.len()..];
-    let load = std::fs::read_to_string("/proc/loadavg").unwrap_or_default();
-    eprintln!(
-        "lsp latency per keystroke on examples/demo ({} build): evaluation {:?} ms; hover round trip {:?} ms; loadavg {}",
-        if cfg!(debug_assertions) {
-            "debug"
-        } else {
-            "release"
-        },
-        per_key.iter().map(|m| m.round() as u64).collect::<Vec<_>>(),
-        waits.iter().map(|d| d.as_millis()).collect::<Vec<_>>(),
-        load.trim()
+    assert!(
+        stats["ms"].as_array().unwrap().len() >= "keystroke".len(),
+        "an evaluation per keystroke: {stats}"
     );
-    assert!(waits.iter().all(|d| *d < Duration::from_secs(30)));
     c.shutdown();
 }
 
