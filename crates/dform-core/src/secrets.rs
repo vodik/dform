@@ -1076,49 +1076,55 @@ impl<'a> Checker<'a> {
                     }
                 }
             }
-            Lit::Not(a) if !refinement => {
-                // `not has pw` too: `_` at a secret position asks
-                // whether it is set.
-                let bound_secret = a.args.iter().enumerate().any(|(i, t)| {
-                    let l = pass.position_label(a, i);
-                    secret(t) || (!l.is_empty() && (!matches!(t, Term::Wildcard) || l.contains("")))
-                });
-                if bound_secret {
-                    let x = a.args.iter().find_map(|t| secret_var(t, &vars));
-                    let fix = match (&x, input_of(lowered, a)) {
-                        (_, Some(d)) => format!(
-                            "whether input `{k}` is given is a bit of it: give it a \
-                                 default, `input {k}: {t} = ..`, and leave the test out",
-                            k = d.decl.name,
-                            t = crate::inputs::type_text(&d.decl.ty),
-                        ),
-                        (Some(x), None) => format!(
-                            "whether `{x}` is there is a bit of it: test `{p}` of a public \
-                                 value, or of `secret.declassify({x}, \"why\")` if that bit \
-                                 may be known",
-                            p = a.pred.rsplit("::").next().unwrap_or(&a.pred),
-                        ),
-                        (None, None) => format!(
-                            "whether a secret is there is a bit of it: test `{}` of a \
-                                 public value",
-                            a.pred.rsplit("::").next().unwrap_or(&a.pred),
-                        ),
-                    };
-                    diags.push(
-                        Diagnostic::error(
-                            a.span,
-                            format!(
-                                "E0302: `not {}(...)` over a secret: its absence leaks a bit",
-                                a.pred
-                            ),
-                        )
-                        .with_help(fix),
-                    );
-                }
-            }
+            Lit::Not(a) if !refinement => diags.extend(self.negation(r, a)),
             _ => {}
         }
         self.diags.extend(diags);
+    }
+
+    /// E0302: a negation over a secret: its absence leaks a bit.
+    fn negation(&self, r: &Rule, a: &Atom) -> Option<Diagnostic> {
+        let (lowered, vars, pass) = (self.lowered, &r.vars, &self.pass);
+        let secret = |t: &Term| self.secret(r, t);
+        // `not has pw` too: `_` at a secret position asks
+        // whether it is set.
+        let bound_secret = a.args.iter().enumerate().any(|(i, t)| {
+            let l = pass.position_label(a, i);
+            secret(t) || (!l.is_empty() && (!matches!(t, Term::Wildcard) || l.contains("")))
+        });
+        if !bound_secret {
+            return None;
+        }
+        let x = a.args.iter().find_map(|t| secret_var(t, &vars));
+        let fix = match (&x, input_of(lowered, a)) {
+            (_, Some(d)) => format!(
+                "whether input `{k}` is given is a bit of it: give it a \
+                     default, `input {k}: {t} = ..`, and leave the test out",
+                k = d.decl.name,
+                t = crate::inputs::type_text(&d.decl.ty),
+            ),
+            (Some(x), None) => format!(
+                "whether `{x}` is there is a bit of it: test `{p}` of a public \
+                     value, or of `secret.declassify({x}, \"why\")` if that bit \
+                     may be known",
+                p = a.pred.rsplit("::").next().unwrap_or(&a.pred),
+            ),
+            (None, None) => format!(
+                "whether a secret is there is a bit of it: test `{}` of a \
+                     public value",
+                a.pred.rsplit("::").next().unwrap_or(&a.pred),
+            ),
+        };
+        Some(
+            Diagnostic::error(
+                a.span,
+                format!(
+                    "E0302: `not {}(...)` over a secret: its absence leaks a bit",
+                    a.pred
+                ),
+            )
+            .with_help(fix),
+        )
     }
 
     /// E0303: an aggregate that is not a collect; a function of the head
@@ -1191,8 +1197,7 @@ impl<'a> Checker<'a> {
     /// attribute not declared secret, a provider's setting not declared
     /// sensitive, a deny's message.
     fn public_place(&mut self, r: &Rule, h: &Atom) {
-        let (lowered, schema, vars, refinement) =
-            (self.lowered, self.schema, &r.vars, r.refinement);
+        let (schema, vars, refinement) = (self.schema, &r.vars, r.refinement);
         let pass = &self.pass;
         let secret = |t: &Term| self.secret(r, t);
         let mut diags = Vec::new();
@@ -1201,74 +1206,7 @@ impl<'a> Checker<'a> {
                 if let Some(leak) =
                     pass.public_leaf(&h.args[0], &h.args[1], &h.args[2], &h.args[3], &vars) =>
             {
-                // The type the program declares at the place, if any.
-                let its = |ty: Option<&crate::ast::TypeExpr>| {
-                    ty.map(|t| format!(": its type is {}", crate::inputs::type_text(t)))
-                        .unwrap_or_default()
-                };
-                let scope = s(&h.args[1]).unwrap_or_default();
-                // A cell the program declares: say to declare it secret,
-                // the whole of it or the field.
-                let declare = |what: &str, p: &str, ty: Option<&crate::ast::TypeExpr>| {
-                    let t = ty.map_or("T".to_string(), crate::inputs::type_text);
-                    match p.split_once('.') {
-                        None => format!("declare it secret: `{what} {p}: secret({t})`"),
-                        Some((k, f)) => format!(
-                            "declare the field secret in `{what} {k}`'s type: `{f}: secret({t})`"
-                        ),
-                    }
-                };
-                let (place, fix) = match (s(&h.args[0]), Some(leak.as_str())) {
-                    (Some(crate::transform::OUTPUT), Some(p)) => {
-                        let (k, rest) = p.split_once('.').unwrap_or((p, ""));
-                        let ty = lowered
-                            .output_types
-                            .get(&(scope.to_string(), k.to_string()))
-                            .and_then(|t| crate::types::field(t, rest));
-                        (
-                            format!("output {p}, not declared secret(T){}", its(ty)),
-                            declare("output", p, ty),
-                        )
-                    }
-                    (Some(crate::modules::INPUT), Some(p)) => {
-                        let ty = lowered.inputs.iter().find_map(|d| {
-                            let rest = match p.strip_prefix(d.decl.name.as_str())? {
-                                "" => "",
-                                r => r.strip_prefix('.')?,
-                            };
-                            (d.scope == scope)
-                                .then(|| crate::types::field(&d.decl.ty, rest))
-                                .flatten()
-                        });
-                        (
-                            format!("input {p}, not declared secret(T){}", its(ty)),
-                            declare("input", p, ty),
-                        )
-                    }
-                    (Some(t), Some("?")) => (
-                        format!("{t} at a path the program computes"),
-                        format!(
-                            "a computed path may be any of {t}'s: name the path; {}",
-                            pass.sensitive_attrs(t)
-                        ),
-                    ),
-                    (Some(t), Some(p)) => (
-                        format!("{t} .{p}, not marked sensitive in the schema"),
-                        format!(
-                            "{t} .{p} is printed in every plan; {}",
-                            pass.sensitive_attrs(t)
-                        ),
-                    ),
-                    _ => (
-                        "an attribute path the program computes".to_string(),
-                        "write it at a path the program names, one the schema marks sensitive"
-                            .to_string(),
-                    ),
-                };
-                diags.push(
-                    Diagnostic::error(h.span, format!("E0304: a secret reaches {place}"))
-                        .with_help(fix),
-                );
+                diags.push(self.public_arg(h, &leak));
             }
             // A setting the provider declares, not sensitive, or one it
             // does not declare: the provider may print or keep it.
@@ -1328,6 +1266,78 @@ impl<'a> Checker<'a> {
             _ => {}
         }
         self.diags.extend(diags);
+    }
+
+    /// E0304 of an `arg` that writes a secret at `leak`, a public path: an
+    /// output or an input not declared secret, an attribute not marked
+    /// sensitive, a path the program computes; the fix declares it secret
+    /// where the program declares the cell.
+    fn public_arg(&self, h: &Atom, leak: &str) -> Diagnostic {
+        let (lowered, pass) = (self.lowered, &self.pass);
+        // The type the program declares at the place, if any.
+        let its = |ty: Option<&crate::ast::TypeExpr>| {
+            ty.map(|t| format!(": its type is {}", crate::inputs::type_text(t)))
+                .unwrap_or_default()
+        };
+        let scope = s(&h.args[1]).unwrap_or_default();
+        // A cell the program declares: say to declare it secret,
+        // the whole of it or the field.
+        let declare = |what: &str, p: &str, ty: Option<&crate::ast::TypeExpr>| {
+            let t = ty.map_or("T".to_string(), crate::inputs::type_text);
+            match p.split_once('.') {
+                None => format!("declare it secret: `{what} {p}: secret({t})`"),
+                Some((k, f)) => {
+                    format!("declare the field secret in `{what} {k}`'s type: `{f}: secret({t})`")
+                }
+            }
+        };
+        let (place, fix) = match (s(&h.args[0]), Some(leak)) {
+            (Some(crate::transform::OUTPUT), Some(p)) => {
+                let (k, rest) = p.split_once('.').unwrap_or((p, ""));
+                let ty = lowered
+                    .output_types
+                    .get(&(scope.to_string(), k.to_string()))
+                    .and_then(|t| crate::types::field(t, rest));
+                (
+                    format!("output {p}, not declared secret(T){}", its(ty)),
+                    declare("output", p, ty),
+                )
+            }
+            (Some(crate::modules::INPUT), Some(p)) => {
+                let ty = lowered.inputs.iter().find_map(|d| {
+                    let rest = match p.strip_prefix(d.decl.name.as_str())? {
+                        "" => "",
+                        r => r.strip_prefix('.')?,
+                    };
+                    (d.scope == scope)
+                        .then(|| crate::types::field(&d.decl.ty, rest))
+                        .flatten()
+                });
+                (
+                    format!("input {p}, not declared secret(T){}", its(ty)),
+                    declare("input", p, ty),
+                )
+            }
+            (Some(t), Some("?")) => (
+                format!("{t} at a path the program computes"),
+                format!(
+                    "a computed path may be any of {t}'s: name the path; {}",
+                    pass.sensitive_attrs(t)
+                ),
+            ),
+            (Some(t), Some(p)) => (
+                format!("{t} .{p}, not marked sensitive in the schema"),
+                format!(
+                    "{t} .{p} is printed in every plan; {}",
+                    pass.sensitive_attrs(t)
+                ),
+            ),
+            _ => (
+                "an attribute path the program computes".to_string(),
+                "write it at a path the program names, one the schema marks sensitive".to_string(),
+            ),
+        };
+        Diagnostic::error(h.span, format!("E0304: a secret reaches {place}")).with_help(fix)
     }
 }
 
@@ -1997,9 +2007,35 @@ pub mod inventory {
         born: Option<&str>,
         current: u32,
     ) -> Vec<Secret> {
-        let mut out: BTreeMap<String, Secret> = BTreeMap::new();
-        fn row<'a>(out: &'a mut BTreeMap<String, Secret>, key: &str, kind: Kind) -> &'a mut Secret {
-            let e = out.entry(key.to_string()).or_insert_with(|| Secret {
+        let mut inv = Inventory {
+            facts,
+            redact,
+            st,
+            schema,
+            out: BTreeMap::new(),
+        };
+        inv.derived();
+        inv.given();
+        inv.managed();
+        let held_at = inv.held();
+        inv.cells(&held_at);
+        inv.into_secrets(born, current)
+    }
+
+    /// The secrets of a run, by key, as they are found.
+    struct Inventory<'a> {
+        facts: &'a BTreeSet<Atom>,
+        redact: &'a crate::query::Redactor,
+        st: &'a crate::state::State,
+        schema: &'a crate::schema::Schema,
+        out: BTreeMap<String, Secret>,
+    }
+
+    impl Inventory<'_> {
+        /// The secret `key`, a row of `kind` until something says more. A
+        /// memo of a random candidate is the memo: its value is kept.
+        fn row(&mut self, key: &str, kind: Kind) -> &mut Secret {
+            let e = self.out.entry(key.to_string()).or_insert_with(|| Secret {
                 key: key.to_string(),
                 kind,
                 generation: 1,
@@ -2010,216 +2046,252 @@ pub mod inventory {
                 cells: Vec::new(),
                 values: BTreeSet::new(),
             });
-            // A memo of a random candidate is the memo: its value is kept.
             if (e.kind, kind) == (Kind::Random, Kind::Memo) {
                 e.kind = Kind::Memo;
             }
             e
         }
-        for (k, c) in crate::functions::random::calls() {
-            if c.secret {
-                row(&mut out, &k, Kind::Random).values.extend(c.values);
+
+        /// Whether `v` is a secret of the run, by its label.
+        fn secret(&self, v: &Value) -> bool {
+            self.redact.labelled().any(|(x, _)| x == v)
+        }
+
+        /// What dform derives: each `random.*` key and each memo.
+        fn derived(&mut self) {
+            let (facts, st) = (self.facts, self.st);
+            for (k, c) in crate::functions::random::calls() {
+                if c.secret {
+                    self.row(&k, Kind::Random).values.extend(c.values);
+                }
             }
-        }
-        let secret = |v: &Value| redact.labelled().any(|(x, _)| x == v);
-        for a in facts.iter().filter(|a| a.pred == crate::memo::FIRST) {
-            if let [k, _, Term::Val(v)] = a.args.as_slice()
-                && let Some(k) = text(k)
-                && (secret(v) || st.memo.get(k).is_some_and(|m| !m.sealed.is_empty()))
-            {
-                row(&mut out, k, Kind::Memo).values.insert(v.clone());
-            }
-        }
-        for (k, m) in &st.memo {
-            if !m.sealed.is_empty() {
-                row(&mut out, k, Kind::Memo);
-            }
-        }
-        for k in st.secrets.keys() {
-            row(&mut out, k, Kind::Random);
-        }
-        // What the operator gives: a secret input (`secret_cell(input, ..)`)
-        // and a secret environment variable.
-        let inputs: BTreeSet<(&Value, &Value)> = facts
-            .iter()
-            .filter(|a| a.pred == crate::transform::SECRET_CELL)
-            .filter_map(|a| match a.args.as_slice() {
-                [Term::Val(t), Term::Val(s), Term::Val(k)]
-                    if t.as_str() == Some(crate::modules::INPUT) =>
+            for a in facts.iter().filter(|a| a.pred == crate::memo::FIRST) {
+                if let [k, _, Term::Val(v)] = a.args.as_slice()
+                    && let Some(k) = text(k)
+                    && (self.secret(v) || st.memo.get(k).is_some_and(|m| !m.sealed.is_empty()))
                 {
-                    Some((s, k))
+                    self.row(k, Kind::Memo).values.insert(v.clone());
                 }
-                _ => None,
-            })
-            .collect();
-        for a in facts.iter().filter(|a| a.pred == "attr") {
-            if let [
-                Term::Val(t),
-                Term::Val(scope),
-                Term::Val(k),
-                Term::Val(v),
-                ..,
-            ] = a.args.as_slice()
-                && t.as_str() == Some(crate::modules::INPUT)
-                && inputs.contains(&(scope, k))
-                && let Some(name) = k.as_str()
-            {
-                let s = row(&mut out, name, Kind::Given);
-                s.lives.get_or_insert_with(|| {
-                    format!("the input {name}: --set, an input file or a settings block")
-                });
-                s.values.insert(v.clone());
+            }
+            for (k, m) in &st.memo {
+                if !m.sealed.is_empty() {
+                    self.row(k, Kind::Memo);
+                }
+            }
+            for k in st.secrets.keys() {
+                self.row(k, Kind::Random);
             }
         }
-        for a in facts
-            .iter()
-            .filter(|a| a.pred == crate::syntax::resolve::ENV_VAR)
-        {
-            if let [Term::Val(Value::Str(name)), Term::Val(v)] = a.args.as_slice() {
-                let s = row(&mut out, name, Kind::Given);
-                s.lives
-                    .get_or_insert_with(|| format!("the environment variable {name}"));
-                s.values.insert(v.clone());
-            }
-        }
-        // What a secret manager keeps (R-172): a location read into a
-        // secret cell at the version its manager answered, which pins
-        // where the read's row is (`files::pinned`).
-        for a in facts.iter().filter(|a| crate::tables::is_document(&a.pred)) {
-            if let [Term::Val(loc), Term::Val(Value::Str(at)), Term::Val(v)] = a.args.as_slice()
-                && secret(v)
-                && let Some(version) = crate::files::version_of(at)
-            {
-                let loc = loc
-                    .as_str()
-                    .map(str::to_string)
-                    .unwrap_or_else(|| crate::partition::fmt_bare(loc));
-                let s = row(&mut out, &loc, Kind::Managed);
-                s.lives
-                    .get_or_insert_with(|| format!("{loc}, its secret manager"));
-                s.version = Some(version);
-                s.values.insert(v.clone());
-            }
-        }
-        let known: BTreeSet<Value> = out.values().flat_map(|s| s.values.clone()).collect();
-        // The rest of the run's secrets, by their labels.
-        let mut held_at: BTreeSet<(String, String, String)> = BTreeSet::new();
-        for (v, label) in redact.labelled() {
-            if known.contains(v) {
-                continue;
-            }
-            let (kind, key, lives) = if let Some((t, a, p)) = crate::value::null_parts(label) {
-                match t.as_str() {
-                    crate::modules::LET | crate::modules::INPUT => continue,
-                    t if schema
-                        .attr(t, &crate::provider::norm_path(&p))
-                        .is_some_and(|x| x.has("computed") || x.has("optional_computed")) =>
+
+        fn given(&mut self) {
+            let facts = self.facts;
+            // What the operator gives: a secret input (`secret_cell(input, ..)`)
+            // and a secret environment variable.
+            let inputs: BTreeSet<(&Value, &Value)> = facts
+                .iter()
+                .filter(|a| a.pred == crate::transform::SECRET_CELL)
+                .filter_map(|a| match a.args.as_slice() {
+                    [Term::Val(t), Term::Val(s), Term::Val(k)]
+                        if t.as_str() == Some(crate::modules::INPUT) =>
                     {
-                        held_at.insert((t.to_string(), a.clone(), p.clone()));
-                        (
-                            Kind::Held,
-                            label.to_string(),
-                            format!("{t} {a}, its provider"),
-                        )
+                        Some((s, k))
                     }
-                    t if schema.attr(t, &crate::provider::norm_path(&p)).is_some() => continue,
-                    _ => (Kind::Held, label.to_string(), format!("{t} {a}")),
+                    _ => None,
+                })
+                .collect();
+            for a in facts.iter().filter(|a| a.pred == "attr") {
+                if let [
+                    Term::Val(t),
+                    Term::Val(scope),
+                    Term::Val(k),
+                    Term::Val(v),
+                    ..,
+                ] = a.args.as_slice()
+                    && t.as_str() == Some(crate::modules::INPUT)
+                    && inputs.contains(&(scope, k))
+                    && let Some(name) = k.as_str()
+                {
+                    let s = self.row(name, Kind::Given);
+                    s.lives.get_or_insert_with(|| {
+                        format!("the input {name}: --set, an input file or a settings block")
+                    });
+                    s.values.insert(v.clone());
                 }
-            } else {
-                (Kind::Held, label.to_string(), label.to_string())
-            };
-            let s = row(&mut out, &key, kind);
-            s.lives.get_or_insert(lives);
-            s.values.insert(v.clone());
+            }
+            for a in facts
+                .iter()
+                .filter(|a| a.pred == crate::syntax::resolve::ENV_VAR)
+            {
+                if let [Term::Val(Value::Str(name)), Term::Val(v)] = a.args.as_slice() {
+                    let s = self.row(name, Kind::Given);
+                    s.lives
+                        .get_or_insert_with(|| format!("the environment variable {name}"));
+                    s.values.insert(v.clone());
+                }
+            }
         }
-        // `lifecycle(r, "prevent_destroy")`.
-        let prevent: BTreeSet<crate::ir::Address> = facts
-            .iter()
-            .filter(|a| a.pred == "lifecycle")
-            .filter_map(|a| match a.args.as_slice() {
-                [r, w] if text(w) == Some("prevent_destroy") => crate::zset::referenced(r),
-                _ => None,
-            })
-            .collect();
-        // Each resource attribute a secret reaches.
-        for a in facts.iter().filter(|a| a.pred == "attr") {
-            let [
-                Term::Val(tv),
-                Term::Val(addr),
-                Term::Val(pv),
-                Term::Val(v),
-                ..,
-            ] = a.args.as_slice()
-            else {
-                continue;
-            };
-            let (Some(t), Some(p)) = (tv.as_str(), pv.as_str()) else {
-                continue;
-            };
-            if [crate::modules::LET, crate::modules::INPUT].contains(&t) {
-                continue;
+
+        fn managed(&mut self) {
+            let facts = self.facts;
+            // What a secret manager keeps (R-172): a location read into a
+            // secret cell at the version its manager answered, which pins
+            // where the read's row is (`files::pinned`).
+            for a in facts.iter().filter(|a| crate::tables::is_document(&a.pred)) {
+                if let [Term::Val(loc), Term::Val(Value::Str(at)), Term::Val(v)] = a.args.as_slice()
+                    && self.secret(v)
+                    && let Some(version) = crate::files::version_of(at)
+                {
+                    let loc = loc
+                        .as_str()
+                        .map(str::to_string)
+                        .unwrap_or_else(|| crate::partition::fmt_bare(loc));
+                    let s = self.row(&loc, Kind::Managed);
+                    s.lives
+                        .get_or_insert_with(|| format!("{loc}, its secret manager"));
+                    s.version = Some(version);
+                    s.values.insert(v.clone());
+                }
             }
-            let name = crate::partition::fmt_bare(addr);
-            if held_at.contains(&(t.to_string(), name.clone(), p.to_string())) {
-                continue;
+        }
+
+        /// The rest of the run's secrets, by their labels; what a provider
+        /// holds at a computed attribute, by (type, name, path).
+        fn held(&mut self) -> BTreeSet<(String, String, String)> {
+            let (redact, schema) = (self.redact, self.schema);
+            let known: BTreeSet<Value> = self.out.values().flat_map(|s| s.values.clone()).collect();
+            // The rest of the run's secrets, by their labels.
+            let mut held_at: BTreeSet<(String, String, String)> = BTreeSet::new();
+            for (v, label) in redact.labelled() {
+                if known.contains(v) {
+                    continue;
+                }
+                let (kind, key, lives) = if let Some((t, a, p)) = crate::value::null_parts(label) {
+                    match t.as_str() {
+                        crate::modules::LET | crate::modules::INPUT => continue,
+                        t if schema
+                            .attr(t, &crate::provider::norm_path(&p))
+                            .is_some_and(|x| x.has("computed") || x.has("optional_computed")) =>
+                        {
+                            held_at.insert((t.to_string(), a.clone(), p.clone()));
+                            (
+                                Kind::Held,
+                                label.to_string(),
+                                format!("{t} {a}, its provider"),
+                            )
+                        }
+                        t if schema.attr(t, &crate::provider::norm_path(&p)).is_some() => continue,
+                        _ => (Kind::Held, label.to_string(), format!("{t} {a}")),
+                    }
+                } else {
+                    (Kind::Held, label.to_string(), label.to_string())
+                };
+                let s = self.row(&key, kind);
+                s.lives.get_or_insert(lives);
+                s.values.insert(v.clone());
             }
-            for s in out.values_mut() {
-                for x in &s.values {
-                    let mut at = Vec::new();
-                    reaches(v, x, String::new(), &mut at);
-                    for sub in at {
-                        let path = match sub.as_str() {
-                            "" => p.to_string(),
-                            s if s.starts_with('[') => format!("{p}{s}"),
-                            s => crate::types::dotted(p, s),
-                        };
-                        let addr = crate::ir::Address {
-                            typ: t.to_string(),
-                            name: name.clone(),
-                        };
-                        let lands = match schema.forces_new(t, &crate::provider::norm_path(&path)) {
-                            false => Lands::Update,
-                            true if prevent.contains(&addr) => Lands::Refused,
-                            true => Lands::Replace,
-                        };
-                        let c = Cell {
-                            typ: t.to_string(),
-                            name: name.clone(),
-                            path,
-                            lands,
-                        };
-                        if !s.cells.contains(&c) {
-                            s.cells.push(c);
+            held_at
+        }
+
+        /// Each resource attribute a secret reaches, and how a new value lands
+        /// there; what a provider holds is its own.
+        fn cells(&mut self, held_at: &BTreeSet<(String, String, String)>) {
+            let (facts, schema) = (self.facts, self.schema);
+            // `lifecycle(r, "prevent_destroy")`.
+            let prevent: BTreeSet<crate::ir::Address> = facts
+                .iter()
+                .filter(|a| a.pred == "lifecycle")
+                .filter_map(|a| match a.args.as_slice() {
+                    [r, w] if text(w) == Some("prevent_destroy") => crate::zset::referenced(r),
+                    _ => None,
+                })
+                .collect();
+            // Each resource attribute a secret reaches.
+            for a in facts.iter().filter(|a| a.pred == "attr") {
+                let [
+                    Term::Val(tv),
+                    Term::Val(addr),
+                    Term::Val(pv),
+                    Term::Val(v),
+                    ..,
+                ] = a.args.as_slice()
+                else {
+                    continue;
+                };
+                let (Some(t), Some(p)) = (tv.as_str(), pv.as_str()) else {
+                    continue;
+                };
+                if [crate::modules::LET, crate::modules::INPUT].contains(&t) {
+                    continue;
+                }
+                let name = crate::partition::fmt_bare(addr);
+                if held_at.contains(&(t.to_string(), name.clone(), p.to_string())) {
+                    continue;
+                }
+                for s in self.out.values_mut() {
+                    for x in &s.values {
+                        let mut at = Vec::new();
+                        reaches(v, x, String::new(), &mut at);
+                        for sub in at {
+                            let path = match sub.as_str() {
+                                "" => p.to_string(),
+                                s if s.starts_with('[') => format!("{p}{s}"),
+                                s => crate::types::dotted(p, s),
+                            };
+                            let addr = crate::ir::Address {
+                                typ: t.to_string(),
+                                name: name.clone(),
+                            };
+                            let lands =
+                                match schema.forces_new(t, &crate::provider::norm_path(&path)) {
+                                    false => Lands::Update,
+                                    true if prevent.contains(&addr) => Lands::Refused,
+                                    true => Lands::Replace,
+                                };
+                            let c = Cell {
+                                typ: t.to_string(),
+                                name: name.clone(),
+                                path,
+                                lands,
+                            };
+                            if !s.cells.contains(&c) {
+                                s.cells.push(c);
+                            }
                         }
                     }
                 }
             }
         }
-        for s in out.values_mut() {
-            s.cells.sort();
-            s.epoch = match s.kind {
-                Kind::Random => Some(
-                    st.secrets
-                        .get(&s.key)
-                        .and_then(|r| r.epoch)
-                        .unwrap_or(current),
-                ),
-                Kind::Memo => st.memo.get(&s.key).map(|m| m.epoch.unwrap_or(1)),
-                _ => None,
-            };
-            if let Some(r) = st.secrets.get(&s.key).filter(|r| !r.rotated_at.is_empty()) {
-                s.generation = r.generation;
-                s.since = Some(r.rotated_at.clone());
-            } else {
-                s.since = match s.kind {
-                    Kind::Memo => st.memo.get(&s.key).map(|m| m.kept.clone()),
-                    Kind::Random => born.map(str::to_string),
+
+        /// The secrets, each with its epoch, generation and age, by kind and
+        /// key.
+        fn into_secrets(mut self, born: Option<&str>, current: u32) -> Vec<Secret> {
+            let st = self.st;
+            for s in self.out.values_mut() {
+                s.cells.sort();
+                s.epoch = match s.kind {
+                    Kind::Random => Some(
+                        st.secrets
+                            .get(&s.key)
+                            .and_then(|r| r.epoch)
+                            .unwrap_or(current),
+                    ),
+                    Kind::Memo => st.memo.get(&s.key).map(|m| m.epoch.unwrap_or(1)),
                     _ => None,
                 };
+                if let Some(r) = st.secrets.get(&s.key).filter(|r| !r.rotated_at.is_empty()) {
+                    s.generation = r.generation;
+                    s.since = Some(r.rotated_at.clone());
+                } else {
+                    s.since = match s.kind {
+                        Kind::Memo => st.memo.get(&s.key).map(|m| m.kept.clone()),
+                        Kind::Random => born.map(str::to_string),
+                        _ => None,
+                    };
+                }
             }
+            let mut v: Vec<Secret> = self.out.into_values().collect();
+            v.sort_by(|a, b| (a.kind, &a.key).cmp(&(b.kind, &b.key)));
+            v
         }
-        let mut v: Vec<Secret> = out.into_values().collect();
-        v.sort_by(|a, b| (a.kind, &a.key).cmp(&(b.kind, &b.key)));
-        v
     }
 }
