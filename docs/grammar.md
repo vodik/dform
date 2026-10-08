@@ -1121,11 +1121,35 @@ name)` joined to their outputs, and `x in c` binds them ("Membership");
 another is scoped under it (`edge.left.vpc`). The names a scope's `use`s
 and its components' resources bind are one namespace, a name in it
 declared once or under a clause each ("Guarded declarations"). Such a
-resource's name is literal, a word or a string with no holes (a name
-from the clause, which repeats a provider's type's resource, is not
-read for a component's yet), and it takes no rank; a provider's type's
-resource takes no rows. A resource of a module is an error naming
-`use`.
+resource takes no rank, and a provider's type's resource takes no
+rows. A resource of a module is an error naming `use`.
+
+A component's resource takes its name from its clause as a provider
+type's does (R-191): a header with holes is a term per row of the
+clause, so each row is one copy, its resources under its name, as a
+stack's deployments are its rows (`resource stacks.apps "${e}" { env =
+e } where e in environment`). The name binds nothing in the scope; the
+copies are read `c[t]` and `c[_]`, their resources `c["agent-0"].vm`
+and `c[_].vm` (a copy's resource reads through it as an output does,
+named or not, `server.vm`), and `has c[_].vm.cidr` tests a path
+through them:
+
+```dform
+component node {
+  input index: int
+  resource ovh.instance vm { name = "agent-${index}" }
+  resource ovh.volume data { name = "agent-${index}-data", instance = vm }
+}
+
+resource node "agent-${i}" { index = i } where i in 0..agents
+```
+
+is `node agent-0` with `agent-0.vm` and `agent-0.data`, and so on to
+`agents`; a row that goes is a delete of its copy, its resources in
+dependency order. `why agent-1.data` names the copy and the row of its
+clause (`in node agent-1  k3s.df:7  with i = 1`), and a copy named so
+inside another composes (`main.agent-1.d0.vm`). Each copy reads its own
+inputs (`agent-1.index`) and holds its own secrets.
 
 An input typed by a resource type (`input namespace: k8s.namespace`) is
 given a reference, `namespace = apps`, and binds from it as from any

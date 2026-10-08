@@ -290,15 +290,16 @@ impl Pass<'_> {
                         return l;
                     }
                 }
+                // A scope the program computes (a copy named by its
+                // clause, R-191): secret where any scope's cell is.
                 if crate::transform::is_pseudo_type(t) {
-                    return s(addr).map_or_else(Label::new, |a| {
-                        let keys = self
-                            .cells
-                            .iter()
-                            .filter(|(ct, ca, _)| ct == t && ca == a)
-                            .map(|(_, _, k)| k.as_str());
-                        label_at(keys, p)
-                    });
+                    let scope = s(addr);
+                    let keys = self
+                        .cells
+                        .iter()
+                        .filter(|(ct, ca, _)| ct == t && scope.is_none_or(|a| ca == a))
+                        .map(|(_, _, k)| k.as_str());
+                    return label_at(keys, p);
                 }
                 // A read of an object holding a sensitive leaf is secret too.
                 all(self.schema.is_sensitive(t, p)

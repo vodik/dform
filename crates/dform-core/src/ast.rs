@@ -342,6 +342,11 @@ pub struct Module {
 pub struct Instance {
     pub module: String,
     pub name: String,
+    /// A copy named by its clause (R-191), `resource C "a-${i}" { .. }
+    /// where B`: the variable the clause binds to each copy's name.
+    /// `name` is then the header as written, the scope the component is
+    /// expanded under before each row takes its own.
+    pub named: Option<Term>,
     pub inputs: Vec<(String, Term, Span)>,
     /// The rows the block gives the module's relation inputs (R-55): its
     /// `p(..) [where B]` and `p from TERM` entries, lowered in the user's

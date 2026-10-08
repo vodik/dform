@@ -97,7 +97,7 @@ fn a_component_of_another_file_is_named_by_its_path() {
 }
 
 /// What a provider's type's resource does not take: rows; and what a
-/// component's does not: a rank, or a name from the clause.
+/// component's does not: a rank.
 #[test]
 fn what_each_kind_of_resource_refuses() {
     let s = Scratch::project("component-resource-errors");
@@ -120,19 +120,6 @@ fn what_each_kind_of_resource_refuses() {
     assert!(
         r.stderr
             .contains("a resource of the component vpc takes no rank"),
-        "{}",
-        r.stderr
-    );
-    s.write(
-        "hole.df",
-        &format!(
-            "{NET}zone(\"a\")\nresource vpc \"z-${{z}}\" {{ vpc_net = \"10.3.0.0/16\" }} where zone(z)\n"
-        ),
-    );
-    let r = s.run(&["plan", "hole.df"]).failure();
-    assert!(
-        r.stderr
-            .contains("a resource of the component vpc is named statically"),
         "{}",
         r.stderr
     );

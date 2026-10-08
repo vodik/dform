@@ -571,15 +571,28 @@ pub fn maybe_provider_use(n: &SyntaxNode) -> Option<String> {
 
 /// A resource's type path as written and its name, a word or a string:
 /// for `resource PATH NAME { .. }` whose type is a component (R-113), the
-/// component's path and the copy's name.
+/// component's path and the copy's name. A name from the clause
+/// (`"agent-${i}"`, R-191) is its text as written, one segment: the scope
+/// every copy it names is expanded under before each takes its own.
 pub fn copy_parts(n: &SyntaxNode) -> (String, String) {
     let name = header_name(n)
         .map(|t| match t.kind() {
+            STRING if has_hole(t.text()) => {
+                let text = string_value(t.text()).unwrap_or_else(|_| t.text().to_string());
+                crate::ir::name_segment(&text).into_owned()
+            }
             STRING => string_value(t.text()).unwrap_or_else(|_| t.text().to_string()),
             _ => t.text().to_string(),
         })
         .unwrap_or_default();
     (dotted_text(n, 1), name)
+}
+
+/// Whether `n`, a copy's `resource`, takes its name from its clause
+/// (`resource node "agent-${i}" { .. } where i in 0..agents`, R-191):
+/// it binds no name in its scope; each row of the clause is a copy.
+pub fn named_by_clause(n: &SyntaxNode) -> bool {
+    n.kind() == RESOURCE && header_name(n).is_some_and(|t| t.kind() == STRING && has_hole(t.text()))
 }
 
 /// The name token of a resource header: the word or string after its
@@ -1133,10 +1146,15 @@ impl<'u> Lowerer<'u> {
                     .copies
                     .insert((file, n.text_range().start().into()));
                 let sc = &mut self.decls.scopes[decl];
-                sc.bound
-                    .entry(name.clone())
-                    .or_default()
-                    .push((path.clone(), false, n.clone()));
+                // A copy named by its clause binds no name (R-191): its
+                // copies are read `C[t]`, as a provider type's are `T[t]`.
+                if !named_by_clause(&n) {
+                    sc.bound.entry(name.clone()).or_default().push((
+                        path.clone(),
+                        false,
+                        n.clone(),
+                    ));
+                }
                 sc.instances_written.entry(name).or_insert(path);
                 continue;
             }
@@ -3703,7 +3721,7 @@ impl<'u> Lowerer<'u> {
         // two uses are.
         let same: Vec<SyntaxNode> = parent
             .children()
-            .filter(|c| c.kind() == USE || self.is_copy(c))
+            .filter(|c| c.kind() == USE || (self.is_copy(c) && !named_by_clause(c)))
             .filter(|c| {
                 let other = match c.kind() {
                     USE => use_parts(c).1,
@@ -3860,16 +3878,8 @@ impl<'u> Lowerer<'u> {
                 return Err(Skip);
             }
         };
-        self.redeclared(n, &name)?;
-        if let Some(t) = header_name(n).filter(|t| t.kind() == STRING && has_hole(t.text())) {
-            return self.error(
-                self.span_of(t.text_range()),
-                format!(
-                    "a resource of the component {written} is named statically: {} takes its \
-                     name from the clause, which a copy cannot yet",
-                    t.text()
-                ),
-            );
+        if !named_by_clause(n) {
+            self.redeclared(n, &name)?;
         }
         if tokens(n).any(|t| t.kind() == RANK) {
             return self.error(
@@ -3910,6 +3920,12 @@ impl<'u> Lowerer<'u> {
         let span = self.span(n);
         let mut rc = self.rc(n, scope, outer);
         let mut body = self.clauses(&mut rc, n)?;
+        // A name from the clause (R-191): each row a copy, named as a
+        // provider type's resource is.
+        let named = match header_name(n).filter(|_| named_by_clause(n)) {
+            Some(t) => Some(self.name_from_clause(&mut rc, &t, &mut body)?),
+            None => None,
+        };
         let clause = body.clone();
         let mut reads = Vec::new();
         let fields = match node(n, BLOCK) {
@@ -3927,7 +3943,11 @@ impl<'u> Lowerer<'u> {
             }
             inputs.push((f.key, f.value, f.span));
         }
-        let values: Vec<&Term> = inputs.iter().map(|(_, v, _)| v).collect();
+        let values: Vec<&Term> = inputs
+            .iter()
+            .map(|(_, v, _)| v)
+            .chain(named.as_ref())
+            .collect();
         self.check_bound(&rc, &body, &values)?;
         let rows = match node(n, BLOCK) {
             Some(block) => self.block_rows(&block, &module, scope, outer)?,
@@ -3936,6 +3956,7 @@ impl<'u> Lowerer<'u> {
         Ok(Stmt::Instance(Instance {
             module,
             name,
+            named,
             inputs,
             rows,
             body: (!body.is_empty()).then_some(body),
@@ -4015,6 +4036,24 @@ impl<'u> Lowerer<'u> {
         if failed { Err(Skip) } else { Ok(out) }
     }
 
+    /// A header name with holes, `"agent-${i}"`, of a resource of any
+    /// type, a provider's, a stack's or a component's (R-112, R-191): a
+    /// term per row of the clause, bound last by `format`, one segment of
+    /// the address (quoted when it holds a dot). Its variable.
+    fn name_from_clause(
+        &mut self,
+        rc: &mut Rc,
+        header: &SyntaxToken,
+        body: &mut Vec<Lit>,
+    ) -> L<Term> {
+        let mut pre = Vec::new();
+        let t = self.string_term(rc, header, &mut pre)?;
+        body.extend(pre);
+        let v = fresh(rc, "Addr");
+        body.push(Lit::Eq(var(&v), func(crate::ir::NAME_SEGMENT, vec![t])));
+        Ok(var(&v))
+    }
+
     /// `resource T n { f = t ... } where B`, `T` a provider's type or one
     /// the program declares.
     fn block_stmt(&mut self, n: &SyntaxNode, scope: usize, outer: &Rc) -> L<Vec<Stmt>> {
@@ -4050,12 +4089,7 @@ impl<'u> Lowerer<'u> {
         // bare name is the literal name, always (R-76). The name is one
         // segment of the address, quoted when it holds a dot (R-112).
         let name = if header.kind() == STRING && has_hole(header.text()) {
-            let mut pre = Vec::new();
-            let t = self.string_term(&mut rc, &header, &mut pre)?;
-            body.extend(pre);
-            let v = fresh(&mut rc, "Addr");
-            body.push(Lit::Eq(var(&v), func(crate::ir::NAME_SEGMENT, vec![t])));
-            var(&v)
+            self.name_from_clause(&mut rc, &header, &mut body)?
         } else if header.kind() == STRING {
             str_term(&crate::ir::name_segment(&self.string(&header)?))
         } else {
@@ -7223,7 +7257,12 @@ impl<'u> Lowerer<'u> {
         let component = self.decls.modules.get(&at).is_some_and(|m| m.component);
         match ops.first() {
             Some(Op::Index(ts, _)) if component && ts.len() == 1 => {
-                let t = self.bind(true, |l| l.term(rc, &ts[0], Pos::Content, pre))?;
+                let mut t = self.bind(true, |l| l.term(rc, &ts[0], Pos::Content, pre))?;
+                // `c[_]` binds each copy (R-162): a name its resources'
+                // addresses are made of (`c[_].vm`, R-191).
+                if matches!(t, Term::Wildcard) {
+                    t = var(&fresh(rc, "Copy"));
+                }
                 // The copies of `at` this body makes, or its user's.
                 let own = self
                     .own_scopes(rc.scope)
@@ -7396,6 +7435,22 @@ impl<'u> Lowerer<'u> {
             None => Ok(Res::Val(inst)),
             Some(Op::Field(k)) => {
                 let segs = self.segs(rc, &ops[1..], pre)?;
+                // A resource of the copy (R-191), `c[t].vm`: its address
+                // under the copy's, `__scoped(t, "vm")`, as a used
+                // module's `k3s.admin` is.
+                if let Some(types) = self.copy_resource(path, k) {
+                    if types.len() > 1 {
+                        return self.ambiguous(k, &types, span);
+                    }
+                    return Ok(Res::Ref {
+                        typ: str_term(&types[0]),
+                        addr: func(
+                            crate::ir::SCOPED,
+                            vec![inst, str_term(&crate::ir::name_segment(k))],
+                        ),
+                        path: segs,
+                    });
+                }
                 let typed = self
                     .decls
                     .modules
@@ -7422,6 +7477,17 @@ impl<'u> Lowerer<'u> {
             }
             Some(_) => self.error(span, "after a component's resource: `.output`"),
         }
+    }
+
+    /// The types of the resource `k` the component at `path` makes, when
+    /// `k` names one of them and no output of it.
+    fn copy_resource(&self, path: &str, k: &str) -> Option<Vec<String>> {
+        let m = self.decls.modules.get(path).filter(|m| m.component)?;
+        let sc = &self.decls.scopes[m.scope];
+        if sc.outputs.contains_key(k) {
+            return None;
+        }
+        sc.resources.get(k).cloned()
     }
 
     /// `NAME[k=v, ..].out.path`, or `NAME.out.path` unkeyed: an output of

@@ -41,6 +41,8 @@ use crate::value::Value;
 use anyhow::Result;
 use std::collections::{BTreeMap, BTreeSet};
 
+mod named;
+
 /// The attribute aggregate's pseudo-type for inputs: `(input, Scope, key)`,
 /// scope `""` for the stack's own.
 pub const INPUT: &str = "input";
@@ -280,6 +282,8 @@ fn exclusive_copies(stmts: &[Stmt]) -> Vec<Stmt> {
                 (u, format!("use {}", u.module))
             }
             Stmt::Use(u) => (u, format!("use {} as {}", u.module, u.name)),
+            // A copy named by its clause binds no name (R-191).
+            Stmt::Instance(u) if u.named.is_some() => continue,
             Stmt::Instance(u) => (u, format!("resource {} {}", u.module, u.name)),
             _ => continue,
         };
@@ -444,6 +448,9 @@ struct Cx<'a> {
     /// The scopes the stack reaches by `use` alone, `""` first: their
     /// inputs are the stack's to give (R-55).
     flat: BTreeSet<String>,
+    /// The copies named by their clause so far: each one's variable for
+    /// its name inside it is its own (R-191).
+    named: usize,
 }
 
 fn check_types(who: &str, inputs: &[InputDecl], diags: &mut Vec<Diagnostic>) {
@@ -471,6 +478,7 @@ pub fn expand(program: &Program) -> Result<Expanded> {
         expanding: Vec::new(),
         checked: BTreeSet::new(),
         flat: BTreeSet::from([String::new()]),
+        named: 0,
     };
     let mut out = exclusive_copies(&program.statements);
     for s in &program.statements {
@@ -515,13 +523,19 @@ pub fn expand(program: &Program) -> Result<Expanded> {
     // The program's own `let`s.
     let mut expanded = lets(out, "", None);
     // `instance_of` (and a copy's private one) is a fact for a copy with
-    // no clause and a rule for one with: both, by design.
+    // no clause and a rule for one with, and `secret_cell` a fact of a
+    // secret `let` and a rule of a copy named by its clause (R-191),
+    // which takes its scope's: both, by design.
     let mut mixed = BTreeMap::new();
     for s in &expanded {
-        if let Stmt::Fact(a) | Stmt::Rule(RuleStmt { head: a, .. }) = s
-            && a.pred == INSTANCE_OF
-        {
-            mixed.entry(a.pred.clone()).or_insert(a.span);
+        match s {
+            Stmt::Fact(a) | Stmt::Rule(RuleStmt { head: a, .. }) if a.pred == INSTANCE_OF => {
+                mixed.entry(a.pred.clone()).or_insert(a.span);
+            }
+            Stmt::Rule(RuleStmt { head: a, .. }) if a.pred == crate::transform::SECRET_CELL => {
+                mixed.entry(a.pred.clone()).or_insert(a.span);
+            }
+            _ => {}
         }
     }
     expanded.extend(mixed.into_iter().map(|(pred, span)| {
@@ -660,19 +674,23 @@ pub fn expand(program: &Program) -> Result<Expanded> {
 /// the input `k` of `scope`, or of the fields of `V` the inputs under `k`
 /// declare (`gke = { subnet_cidr: "10.0.0.0/22" }`).
 fn read_input(h: &mut Atom, declared: &[Declared]) {
-    if h.pred != "arg" || h.args.len() < 4 {
-        return;
-    }
-    let (Term::Val(Value::Str(t)), Term::Val(Value::Str(scope)), Term::Val(Value::Str(k))) =
-        (&h.args[0], &h.args[1], &h.args[2])
-    else {
+    let Some(Term::Val(Value::Str(scope))) = h.args.get(1) else {
         return;
     };
-    if t != INPUT {
+    let scope = scope.clone();
+    read_input_of(h, declared.iter().filter(|d| d.scope == scope));
+}
+
+/// [`read_input`] by the declarations `declared` of its scope.
+fn read_input_of<'d>(h: &mut Atom, declared: impl Iterator<Item = &'d Declared>) {
+    if h.pred != "arg" || h.args.len() < 4 || h.args[0] != str_term(INPUT) {
         return;
     }
-    let (scope, k) = (scope.clone(), k.clone());
-    for d in declared.iter().filter(|d| d.scope == scope) {
+    let Term::Val(Value::Str(k)) = &h.args[2] else {
+        return;
+    };
+    let k = k.clone();
+    for d in declared {
         let rest = match d.decl.name.strip_prefix(k.as_str()) {
             Some("") => "",
             Some(r) if r.starts_with('.') => &r[1..],
@@ -824,6 +842,9 @@ impl Cx<'_> {
         let origin = match used {
             true if u.module.rsplit('.').next() == Some(scope) => format!("use {}", u.module),
             true => format!("use {} as {scope}", u.module),
+            false if u.named.is_some() && !u.name.starts_with('"') => {
+                format!("resource {} \"{}\"", u.module, u.name)
+            }
             false => format!("resource {} {}", u.module, u.name),
         };
         set_origin(&mut stmts, diag::origin_id(&origin));
@@ -875,15 +896,100 @@ impl Cx<'_> {
                 self.declared.push(d);
             }
         }
-        out.extend(gate(
-            copy,
-            &u.module,
+        let Some(name) = &u.named else {
+            out.extend(gate(
+                copy,
+                &u.module,
+                scope,
+                u.clause.as_deref(),
+                !used,
+                u.span,
+            ));
+            return out;
+        };
+        copy.extend(self.secret_cells(scope, &abs, u.span));
+        let copy = gate(copy, &u.module, scope, u.clause.as_deref(), true, u.span);
+        self.by_clause(scope, &abs, name, out, copy)
+    }
+
+    /// A copy named by its clause (R-191), expanded under the scope its
+    /// header writes, given its name per row: on the user's side (its
+    /// inputs, its rows and its gate) the clause's variable, inside it
+    /// the gate's, `scope::__instance(Name, path)`.
+    fn by_clause(
+        &mut self,
+        scope: &str,
+        abs: &str,
+        name: &Term,
+        user: Vec<Stmt>,
+        copy: Vec<Stmt>,
+    ) -> Vec<Stmt> {
+        self.named += 1;
+        let by_row = named::Named {
             scope,
-            u.clause.as_deref(),
-            !used,
-            u.span,
-        ));
+            copy: name.clone(),
+        };
+        let inside = named::Named {
+            scope,
+            copy: Term::Var(format!("__copy{}", self.named)),
+        };
+        let gate = format!("{scope}::{GATE}");
+        let mut out = Vec::with_capacity(user.len() + copy.len());
+        for mut s in user {
+            // Its inputs' values are read as their types here, by the
+            // scope's declarations, before the scope is a term.
+            if let Stmt::Fact(h) | Stmt::Rule(RuleStmt { head: h, .. }) = &mut s {
+                read_input_of(h, self.declared.iter().filter(|d| d.scope == abs));
+            }
+            out.push(by_row.stmt(s));
+        }
+        for s in copy {
+            out.push(match &s {
+                Stmt::Rule(r) if r.head.pred == gate => by_row.stmt(s),
+                _ => inside.stmt(s),
+            });
+        }
         out
+    }
+
+    /// The secret cells of a copy named by its clause (R-191): those its
+    /// scope and the scopes inside it declare (its secret inputs and
+    /// outputs, stated by the scope as written) are each copy's,
+    /// `secret_cell(T, scope, K) :- secret_cell(T, __scope(abs), K)`.
+    fn secret_cells(&self, scope: &str, abs: &str, span: Span) -> Vec<Stmt> {
+        let under = |s: &str| {
+            s.strip_prefix(abs)
+                .filter(|r| r.is_empty() || r.starts_with('.'))
+                .map(str::to_string)
+        };
+        let scopes: BTreeSet<String> = self
+            .declared
+            .iter()
+            .map(|d| d.scope.as_str())
+            .chain(self.secret_outputs.iter().map(|(s, _)| s.as_str()))
+            .filter_map(under)
+            .collect();
+        let (t, k) = (Term::Var("T".into()), Term::Var("K".into()));
+        scopes
+            .into_iter()
+            .map(|rest| {
+                let cell = |at: Term| {
+                    atom(
+                        crate::transform::SECRET_CELL,
+                        vec![t.clone(), at, k.clone()],
+                        span,
+                    )
+                };
+                let stated = Term::Func {
+                    name: ABSOLUTE.into(),
+                    args: vec![str_term(&format!("{abs}{rest}"))],
+                };
+                Stmt::Rule(RuleStmt {
+                    head: cell(str_term(&format!("{scope}{rest}"))),
+                    body: vec![Lit::Pos(cell(stated))],
+                })
+            })
+            .collect()
     }
 }
 
@@ -952,6 +1058,22 @@ fn gate(
 /// copy `n` of the component at `path` exists.
 pub const GATE: &str = "__instance";
 
+/// The copy a fact of a gate names, when the copy is named by its clause
+/// (R-191): its address (its component's path and its scope, `node
+/// agent-1`, `node main.agent-1` inside the copy `main`). Each row of the
+/// clause holds one such fact.
+pub fn copy_by_clause(a: &Atom) -> Option<crate::ir::Address> {
+    let (scope, p) = a.pred.rsplit_once("::")?;
+    let (name, args) = named::runtime_scope(scope, &a.args);
+    let [Term::Val(Value::Str(path))] = args else {
+        return None;
+    };
+    (p == GATE && args.len() < a.args.len()).then(|| crate::ir::Address {
+        typ: path.clone(),
+        name,
+    })
+}
+
 /// A fact of a predicate private to a copy or an activation (`n::p`,
 /// `n.inner::p`, a name no source can spell) as the program names it: a
 /// gated copy's own relation as the statement that makes it, `resource
@@ -960,16 +1082,19 @@ pub const GATE: &str = "__instance";
 /// before the parenthesis. `None` for a predicate of the program's.
 pub fn private_text(a: &Atom, fmt: &dyn Fn(&Atom) -> String, gap: &str) -> Option<String> {
     let (scope, p) = a.pred.rsplit_once("::")?;
+    // A copy named by its clause (R-191) is the one its columns name.
+    let (scope, args) = named::runtime_scope(scope, &a.args);
     if p == GATE
-        && let Some(Term::Val(Value::Str(path))) = a.args.first()
+        && let Some(Term::Val(Value::Str(path))) = args.first()
     {
-        return Some(match scope.rsplit_once('.') {
+        return Some(match crate::ir::scope_split(&scope) {
             None => format!("resource {path} {scope}"),
             Some((user, name)) => format!("resource {path} {name}{gap}(in {user})"),
         });
     }
     let own = Atom {
         pred: p.to_string(),
+        args: args.to_vec(),
         ..a.clone()
     };
     Some(format!("{}{gap}(in {scope})", fmt(&own)))
@@ -1754,8 +1879,9 @@ fn rewrite_atom(mut atom: Atom, sc: Sc) -> Atom {
             let (k, v) = (args.next().unwrap(), args.next().unwrap());
             atom.args = vec![str_term(sc.name), k, v];
         }
-        // A copy inside this one's record: its user's scope is relative.
-        (INSTANCE_OF, 3) => {
+        // A copy inside this one's record, or a secret cell of its scope:
+        // its user's scope is relative.
+        (INSTANCE_OF, 3) | (crate::transform::SECRET_CELL, 3) => {
             let mut args: Vec<Term> = atom.args.into_iter().map(t).collect();
             args[1] = prefix_scope(sc.name, args[1].clone());
             atom.args = args;
@@ -1954,6 +2080,7 @@ mod tests {
             Stmt::Use(crate::ast::Instance {
                 module: module.into(),
                 name: module.into(),
+                named: None,
                 inputs: vec![],
                 rows: vec![],
                 body: None,
