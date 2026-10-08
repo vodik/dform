@@ -141,8 +141,8 @@ impl Lowerer<'_> {
         let t = terms(n).next().ok_or(Skip)?;
         let declared = node(n, TYPE_EXPR).map(|t| self.type_expr(&t));
         let value = self.let_value(&mut rc, &t, &mut body)?;
-        let value = match declared.as_ref().map(crate::types::of_expr) {
-            Some(ty) => self.let_typed(scope, &name, &ty, &t, value)?,
+        let value = match &declared {
+            Some(d) => self.let_typed(scope, &name, (&crate::types::of_expr(d), d), &t, value)?,
             None => value,
         };
         let mut args = vars;

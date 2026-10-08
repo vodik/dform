@@ -17,8 +17,7 @@ use common::{Run, Scratch};
 /// a scratch project.
 fn plan(src: &str) -> Run {
     let s = Scratch::project("typed-edges");
-    let (inputs, rest): (Vec<&str>, Vec<&str>) =
-        src.lines().partition(|l| l.starts_with("input "));
+    let (inputs, rest): (Vec<&str>, Vec<&str>) = src.lines().partition(|l| l.starts_with("input "));
     let (inputs, rest) = (inputs.join("\n"), rest.join("\n"));
     s.write("main.df", &format!("{inputs}\nuse fake\nuse k8s\n{rest}\n"));
     s.run(&["plan", "--why=none", "main.df"])
@@ -63,10 +62,7 @@ fn fails(src: &str, parts: &[&str]) {
 /// The attribute itself: the schema's type reads the literal (R-66).
 #[test]
 fn an_attribute_reads_its_literal() {
-    plans(
-        &requesting("{ cpu: 100m, memory: 128Mi }"),
-        &[CPU, MEMORY],
-    );
+    plans(&requesting("{ cpu: 100m, memory: 128Mi }"), &[CPU, MEMORY]);
 }
 
 /// A let with a declared scalar type (R-74).
@@ -80,7 +76,6 @@ fn a_typed_let_reads_its_literal() {
 
 /// A let with a declared object type reads each field at its type.
 #[test]
-#[ignore = "no edge reaches the literal yet (R-192)"]
 fn a_typed_object_let_reads_its_fields() {
     plans(
         &format!(
@@ -94,7 +89,6 @@ fn a_typed_object_let_reads_its_fields() {
 /// A field of a declared object type that is not its type is an error at
 /// the let, for a value type read from a string too.
 #[test]
-#[ignore = "no edge reaches the literal yet (R-192)"]
 fn a_typed_object_let_checks_its_fields() {
     let e = common::error("let hosts: { a: ip, b: uri } = { a: \"10.0.0\", b: \"https://x\" }\n");
     assert!(
@@ -105,7 +99,6 @@ fn a_typed_object_let_checks_its_fields() {
 
 /// A list of a declared element type reads each element.
 #[test]
-#[ignore = "no edge reaches the literal yet (R-192)"]
 fn a_typed_list_let_reads_its_elements() {
     let e = common::error("let nets: list(inet) = [\"10.0.0.0/8\", \"10.1\"]\n");
     assert!(e.contains("\"10.1\" is not a network"), "{e}");
@@ -120,7 +113,6 @@ fn a_typed_list_let_reads_its_elements() {
 
 /// An untyped let is typed by the attribute it reaches.
 #[test]
-#[ignore = "no edge reaches the literal yet (R-192)"]
 fn an_untyped_let_is_typed_by_its_use() {
     plans(
         &format!(
@@ -133,7 +125,6 @@ fn an_untyped_let_is_typed_by_its_use() {
 
 /// A scalar let, and a field of an object let read where it is used.
 #[test]
-#[ignore = "no edge reaches the literal yet (R-192)"]
 fn a_let_read_by_a_field_is_typed_by_its_use() {
     plans(
         &format!("let c = 100m\n{}", requesting("{ cpu: c }")),
@@ -150,7 +141,6 @@ fn a_let_read_by_a_field_is_typed_by_its_use() {
 
 /// A let that reads a let: the edge reaches through both.
 #[test]
-#[ignore = "no edge reaches the literal yet (R-192)"]
 fn a_let_through_a_let_is_typed_by_its_use() {
     plans(
         &format!(
@@ -164,7 +154,6 @@ fn a_let_through_a_let_is_typed_by_its_use() {
 /// The reviewer's shape (backups.df): the container's resources written
 /// in a let with parameters, its call's result in the attribute.
 #[test]
-#[ignore = "no edge reaches the literal yet (R-192)"]
 fn a_let_with_parameters_is_typed_by_its_call() {
     plans(
         &format!(
@@ -180,7 +169,6 @@ fn a_let_with_parameters_is_typed_by_its_call() {
 /// A literal argument of a let with parameters: the parameter's use types
 /// it.
 #[test]
-#[ignore = "no edge reaches the literal yet (R-192)"]
 fn an_argument_is_typed_by_its_parameters_use() {
     plans(
         &format!("let box(c) = {{ cpu: c }}\n{}", requesting("box(100m)")),
@@ -191,7 +179,6 @@ fn an_argument_is_typed_by_its_parameters_use() {
 /// A let in a component, read by the component's resource, and the
 /// stack's let read by a component (R-186).
 #[test]
-#[ignore = "no edge reaches the literal yet (R-192)"]
 fn a_let_in_a_component_is_typed_by_its_use() {
     let src = |lets: &str, body: &str| {
         format!(
@@ -207,13 +194,15 @@ fn a_let_in_a_component_is_typed_by_its_use() {
 /// A component's typed input takes the literal its instance gives it, and
 /// a let the instance gives it.
 #[test]
-#[ignore = "no edge reaches the literal yet (R-192)"]
 fn a_typed_input_reads_what_its_instance_gives() {
     let component = format!(
         "component box {{\n  input c: cpu\n{}}}\n",
         requesting("{ cpu: c }")
     );
-    plans(&format!("{component}resource box b {{ c = 100m }}\n"), &[CPU]);
+    plans(
+        &format!("{component}resource box b {{ c = 100m }}\n"),
+        &[CPU],
+    );
     plans(
         &format!("{component}let lim = 100m\nresource box b {{ c = lim }}\n"),
         &[CPU],
@@ -222,7 +211,6 @@ fn a_typed_input_reads_what_its_instance_gives() {
 
 /// An input's default is read as its type, and flows on.
 #[test]
-#[ignore = "no edge reaches the literal yet (R-192)"]
 fn an_input_default_reads_its_literal() {
     plans(
         &format!("input c: cpu = 100m\n{}", requesting("{ cpu: c }")),
@@ -232,14 +220,12 @@ fn an_input_default_reads_its_literal() {
 
 /// A typed output reads its literal.
 #[test]
-#[ignore = "no edge reaches the literal yet (R-192)"]
 fn a_typed_output_reads_its_literal() {
     plans("output c: cpu = 100m\n", &[]);
 }
 
 /// A let a typed let reads: the typed let's type is the edge.
 #[test]
-#[ignore = "no edge reaches the literal yet (R-192)"]
 fn a_let_read_by_a_typed_let_is_typed_by_it() {
     plans(
         &format!(
@@ -252,7 +238,6 @@ fn a_let_read_by_a_typed_let_is_typed_by_it() {
 
 /// A relation's row: the column's use types its literal.
 #[test]
-#[ignore = "no edge reaches the literal yet (R-192)"]
 fn a_relations_row_is_typed_by_its_columns_use() {
     plans(
         &format!(
@@ -265,7 +250,6 @@ fn a_relations_row_is_typed_by_its_columns_use() {
 
 /// A declared relation's column reads its rows' literals.
 #[test]
-#[ignore = "no edge reaches the literal yet (R-192)"]
 fn a_declared_column_reads_its_rows() {
     plans(
         &format!(
@@ -279,7 +263,6 @@ fn a_declared_column_reads_its_rows() {
 
 /// A `set` through a variable, of a literal and of a let.
 #[test]
-#[ignore = "no edge reaches the literal yet (R-192)"]
 fn a_set_reads_its_value_at_the_attribute() {
     let deployment = "resource k8s.deployment web {\n  metadata.name = \"web\"\n  \
                       spec.selector.matchLabels = { app: \"web\" }\n  \
@@ -291,12 +274,14 @@ fn a_set_reads_its_value_at_the_attribute() {
         )
     };
     plans(&set("{ cpu: 100m }"), &[CPU]);
-    plans(&format!("let lim = {{ cpu: 100m }}\n{}", set("lim")), &[CPU]);
+    plans(
+        &format!("let lim = {{ cpu: 100m }}\n{}", set("lim")),
+        &[CPU],
+    );
 }
 
 /// A comparison: the other side's type reads the literal.
 #[test]
-#[ignore = "no edge reaches the literal yet (R-192)"]
 fn a_comparison_reads_its_literal_as_the_other_side() {
     let r = plan(&format!(
         "{}deny \"cpu above 50m\" where {{\n  j in k8s.job\n  \
@@ -323,7 +308,6 @@ fn a_function_parameter_reads_its_argument() {
 /// A string in a let read as the inet the attribute it reaches is, and
 /// checked as one before anything is planned.
 #[test]
-#[ignore = "no edge reaches the literal yet (R-192)"]
 fn a_string_in_a_let_is_read_at_its_edge() {
     let src = |cidr: &str| {
         format!(
@@ -332,16 +316,15 @@ fn a_string_in_a_let_is_read_at_its_edge() {
              resource net.route_table t {{\n  vpc = v\n  routes = [route]\n}}\n"
         )
     };
-    plans(&src("10.1.0.0/16"), &["routes[0].destination = \"10.1.0.0/16\""]);
-    fails(
-        &src("10.1"),
-        &["let route", "\"10.1\" is not a network"],
+    plans(
+        &src("10.1.0.0/16"),
+        &["routes[0].destination = \"10.1.0.0/16\""],
     );
+    fails(&src("10.1"), &["let route", "\"10.1\" is not a network"]);
 }
 
 /// Two uses that read a literal differently are an error naming both.
 #[test]
-#[ignore = "no edge reaches the literal yet (R-192)"]
 fn uses_that_disagree_are_an_error_naming_both() {
     fails(
         &format!(
@@ -355,7 +338,6 @@ fn uses_that_disagree_are_an_error_naming_both() {
 /// A literal no use types is the error naming the let and what would type
 /// it.
 #[test]
-#[ignore = "no edge reaches the literal yet (R-192)"]
 fn a_literal_no_use_types_names_the_let() {
     fails(
         "let limits = { cpu: 100m }\n",
@@ -365,7 +347,6 @@ fn a_literal_no_use_types_names_the_let() {
 
 /// An unambiguous literal needs no edge.
 #[test]
-#[ignore = "no edge reaches the literal yet (R-192)"]
 fn an_unambiguous_literal_needs_no_edge() {
     plans("let m = { memory: 128Mi, name: \"x\" }\n", &[]);
 }
@@ -374,13 +355,14 @@ fn an_unambiguous_literal_needs_no_edge() {
 /// type, and a let spread there is typed by it too (the reviewer's
 /// `{ ..restic(..), resources: { cpu: 100m } }`).
 #[test]
-#[ignore = "no edge reaches the literal yet (R-192)"]
 fn a_spread_keeps_the_edges_type() {
     plans(
         &format!(
             "let base = {{ cpu: 100m }}\n\
              let restic(tag) = {{ name: \"a\", image: \"x\", env: [{{ name: \"TAG\", value: tag }}] }}\n{}",
-            job("{ ..restic(\"t\"), resources: { requests: { ..base, memory: 128Mi }, limits: { cpu: 100m } } }")
+            job(
+                "{ ..restic(\"t\"), resources: { requests: { ..base, memory: 128Mi }, limits: { cpu: 100m } } }"
+            )
         ),
         &[
             CPU,
@@ -393,7 +375,6 @@ fn a_spread_keeps_the_edges_type() {
 /// An element of a literal list (`x in [..]`), an element by index, and
 /// a comprehension's: each is the list's element.
 #[test]
-#[ignore = "no edge reaches the literal yet (R-192)"]
 fn an_element_is_typed_by_its_use() {
     plans(
         &format!("let c = x where x in [100m]\n{}", requesting("{ cpu: c }")),
@@ -410,7 +391,6 @@ fn an_element_is_typed_by_its_use() {
 
 /// An object's entry (`(k, v) in o`) and an object pattern's field.
 #[test]
-#[ignore = "no edge reaches the literal yet (R-192)"]
 fn an_entry_and_a_pattern_are_typed_by_their_use() {
     plans(
         &format!(
@@ -430,7 +410,6 @@ fn an_entry_and_a_pattern_are_typed_by_their_use() {
 
 /// `a + b`: each side takes the other's type, and the result's.
 #[test]
-#[ignore = "no edge reaches the literal yet (R-192)"]
 fn a_sums_sides_are_typed_by_each_other() {
     plans(
         &format!(

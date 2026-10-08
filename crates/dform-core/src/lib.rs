@@ -10,6 +10,7 @@ pub mod demand;
 pub mod deployment;
 pub mod diag;
 pub mod diff;
+pub mod edges;
 pub mod effects;
 pub mod engine;
 pub mod executor;

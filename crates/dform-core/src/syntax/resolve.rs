@@ -4681,9 +4681,9 @@ impl<'u> Lowerer<'u> {
         } else {
             self.wanting(want, |l| l.let_value(&mut rc, &t, &mut body))?
         };
-        let value = match &ty {
-            Some(ty) => self.let_typed(scope, &name, ty, &t, value)?,
-            None => value,
+        let value = match (&ty, &declared) {
+            (Some(ty), Some(d)) => self.let_typed(scope, &name, (ty, d), &t, value)?,
+            _ => value,
         };
         let rank = self.rank_tok(n)?.unwrap_or(Rank::Normal);
         let head = Atom {
@@ -4726,12 +4726,13 @@ impl<'u> Lowerer<'u> {
     }
 
     /// A typed `let`'s value `value` (lowered from `t`) checked against
-    /// its type `ty`, a literal read as one (R-31, R-74).
+    /// its type `ty` (declared `d`), a literal read as one (R-31, R-74),
+    /// an object type's fields each as theirs (R-192).
     fn let_typed(
         &mut self,
         scope: usize,
         name: &str,
-        ty: &crate::types::Ty,
+        (ty, d): (&crate::types::Ty, &crate::ast::TypeExpr),
         t: &SyntaxNode,
         value: Term,
     ) -> L<Term> {
@@ -4761,8 +4762,10 @@ impl<'u> Lowerer<'u> {
                     None => Ok(value),
                 }
             }
-            None => crate::types::literal(ty, value)
-                .or_else(|why| self.error(span, format!("let {name} {why}"))),
+            None => crate::types::declared(d, value).or_else(|(path, why)| {
+                let name = crate::types::dotted(name, &path);
+                self.error(span, format!("let {name} {why}"))
+            }),
         }
     }
 

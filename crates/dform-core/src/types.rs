@@ -572,6 +572,64 @@ pub fn literal(ty: &Ty, t: Term) -> Result<Term, String> {
     Ok(read_as(ty, t))
 }
 
+/// A literal where the declared type `t` is expected: an object type's
+/// fields each read as theirs, a list's elements as its element type,
+/// anything else as [`literal`] (R-192). `Err((path, why))` at the first
+/// that cannot be its type, `path` inside the value (`a`, `""` for all
+/// of it). What is not a literal is left as it is.
+pub fn declared(t: &TypeExpr, v: Term) -> Result<Term, (String, String)> {
+    let field = |k: &str| match t {
+        TypeExpr::Object(fs) => fs.iter().find(|(f, _)| f == k).map(|(_, t)| t),
+        _ => None,
+    };
+    let elem = match t {
+        TypeExpr::Apply(n, args) if n == "list" || n == "set" => args.first(),
+        _ => None,
+    };
+    match v {
+        Term::Obj(m) if matches!(t, TypeExpr::Object(_)) => m
+            .into_iter()
+            .map(|(k, x)| match field(&k) {
+                Some(ft) => declared(ft, x)
+                    .map(|x| (k.clone(), x))
+                    .map_err(|(p, why)| (dotted(&k, &p), why)),
+                None => Ok((k, x)),
+            })
+            .collect::<Result<_, _>>()
+            .map(Term::Obj),
+        Term::List(xs) if elem.is_some() => xs
+            .into_iter()
+            .map(|x| declared(elem.expect("matched"), x))
+            .collect::<Result<_, _>>()
+            .map(Term::List),
+        Term::Val(v @ (Value::Obj(_) | Value::List(_)))
+            if matches!(t, TypeExpr::Object(_)) || elem.is_some() =>
+        {
+            let terms = match v {
+                Value::Obj(m) => Term::Obj(m.into_iter().map(|(k, x)| (k, Term::Val(x))).collect()),
+                Value::List(xs) => Term::List(xs.into_iter().map(Term::Val).collect()),
+                _ => unreachable!("matched"),
+            };
+            Ok(match declared(t, terms)? {
+                Term::Obj(m) => match m
+                    .into_iter()
+                    .map(|(k, x)| match x {
+                        Term::Val(x) => Ok((k, x)),
+                        x => Err((k, x)),
+                    })
+                    .collect::<Result<_, _>>()
+                {
+                    Ok(m) => Term::Val(Value::Obj(m)),
+                    Err(_) => unreachable!("a constant read is a constant"),
+                },
+                Term::List(xs) => Term::Val(Value::List(xs.into_iter().map(constant).collect())),
+                x => x,
+            })
+        }
+        v => literal(&of_expr(t), v).map_err(|why| (String::new(), why)),
+    }
+}
+
 /// A computed term (a variable, a call) where a value type is wanted,
 /// read as one when it has a value (R-134: there are no constructors, so
 /// `let n: inet = cfg.net` is how a computed string becomes a network):
@@ -797,6 +855,8 @@ pub fn read(program: &mut Program, schema: &Schema) -> Result<()> {
     for s in &mut program.statements {
         read_stmt(s, schema, &mut diags);
     }
+    // Every other literal at the edges its value reaches (R-192).
+    diags.extend(crate::edges::read(program, schema));
     for s in &program.statements {
         stmt_terms(s, &mut |t, span| {
             visit(t, &mut |t| {
@@ -1028,6 +1088,15 @@ fn read_at(schema: &Schema, typ: &str, path: &str, t: &mut Term) -> Result<(), (
         Term::Obj(m) => {
             for (k, v) in m {
                 read_at(schema, typ, &format!("{path}.{k}"), v)?;
+            }
+        }
+        // `{ ..a, k: v }`, `[..a, x]`: what is written beside a spread
+        // is the value's (R-192).
+        Term::Func { name, args }
+            if name == crate::functions::MERGE || name == crate::functions::CONCAT =>
+        {
+            for a in args {
+                read_at(schema, typ, path, a)?;
             }
         }
         Term::List(xs) => {
