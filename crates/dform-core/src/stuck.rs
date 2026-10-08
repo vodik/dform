@@ -44,11 +44,7 @@ pub struct Stuck {
 
 impl Stuck {
     pub fn nulls_text(&self) -> String {
-        self.nulls
-            .iter()
-            .map(|n| format!("?{}", crate::ir::label(n)))
-            .collect::<Vec<_>>()
-            .join(" ")
+        nulls_text(&self.nulls, crate::report::Style::PLAIN)
     }
 
     /// `stuck(RuleId, HeadPattern, Bindings, Nulls)`: the derived relation.
@@ -71,6 +67,24 @@ impl Stuck {
             span: Default::default(),
         }
     }
+}
+
+/// The nulls a stuck instance waits on, as the plan prints them: `?T.a.p`
+/// each, `?` in the null colour.
+pub fn nulls_text<'a>(
+    nulls: impl IntoIterator<Item = &'a String>,
+    style: crate::report::Style,
+) -> String {
+    nulls
+        .into_iter()
+        .map(|n| {
+            style.paint(
+                crate::report::Paint::Null,
+                &format!("?{}", crate::ir::label(n)),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// `may_derive(RuleId, HeadPattern, Nulls)`: the [`MayDerive`] instances of
@@ -125,11 +139,7 @@ impl MayDerive {
     }
 
     pub fn nulls_text(&self) -> String {
-        self.nulls
-            .iter()
-            .map(|n| format!("?{}", crate::ir::label(n)))
-            .collect::<Vec<_>>()
-            .join(" ")
+        nulls_text(&self.nulls, crate::report::Style::PLAIN)
     }
 }
 
@@ -559,4 +569,22 @@ fn other_stacks(v: &Value) -> BTreeSet<String> {
         }
     });
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::report::Style;
+
+    /// One text for the nulls a stuck instance waits on, plain or painted.
+    #[test]
+    fn nulls_print_as_their_labels() {
+        let on = ["net.vpc/main#id".to_string(), "net.vpc/b#cidr".to_string()];
+        assert_eq!(
+            nulls_text(&on, Style::PLAIN),
+            "?net.vpc[\"main\"] ?net.vpc[\"b\"].cidr"
+        );
+        let painted = nulls_text(&on[..1], Style { color: true });
+        assert!(painted.starts_with("\x1b[36m?") && painted.ends_with("\x1b[0m"));
+    }
 }

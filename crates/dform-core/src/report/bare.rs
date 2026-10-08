@@ -11,12 +11,7 @@ use super::{
 use crate::ir::Address;
 use std::collections::BTreeSet;
 
-fn nulls_text(on: &[String], style: Style) -> String {
-    on.iter()
-        .map(|n| style.paint(Paint::Null, &format!("?{}", crate::ir::label(n))))
-        .collect::<Vec<_>>()
-        .join(" ")
-}
+use crate::stuck::nulls_text;
 
 impl Report {
     /// The held changes and the pending groups: what `pending` counts.
