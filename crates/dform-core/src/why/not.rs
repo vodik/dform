@@ -58,16 +58,7 @@ pub fn why_not(pattern: &str, res: &EvalResult, redact: &Redactor) -> Result<Str
             ),
         },
     };
-    let w = WhyNot {
-        res,
-        redact,
-        printer: Printer {
-            circuit: &res.circuit,
-            redact,
-            all: false,
-        },
-    };
-    let mut out = String::new();
+    let mut w = WhyNot::new(res, redact);
     let name = w.name(&atom);
     if !engine::query(&[Lit::Pos(atom.clone())], &res.facts)?.is_empty() {
         return Ok(redact.text(&format!("{name}: it is derived\n")));
@@ -83,13 +74,14 @@ pub fn why_not(pattern: &str, res: &EvalResult, redact: &Redactor) -> Result<Str
             span: Default::default(),
         };
         if engine::query(&[Lit::Pos(want.clone())], &res.facts)?.is_empty() {
-            out.push_str(&format!("{name}: {} is not derived\n", w.name(&want)));
-            w.explain(&want, "", 0, &mut BTreeSet::new(), &mut out)?;
-            return Ok(redact.text(&out));
+            let line = format!("{name}: {} is not derived\n", w.name(&want));
+            w.out.push_str(&line);
+            w.explain(&want, "", 0)?;
+            return Ok(w.into_text());
         }
     }
-    w.explain(&atom, "", 0, &mut BTreeSet::new(), &mut out)?;
-    Ok(redact.text(&out))
+    w.explain(&atom, "", 0)?;
+    Ok(w.into_text())
 }
 
 /// What the resource of fact `a` (its `want`, or an attribute of it)
@@ -120,19 +112,10 @@ pub fn reason(typ: &str, name: &str, res: &EvalResult, redact: &Redactor) -> Opt
         record: None,
         span: Default::default(),
     };
-    let w = WhyNot {
-        res,
-        redact,
-        printer: Printer {
-            circuit: &res.circuit,
-            redact,
-            all: false,
-        },
-    };
-    let mut out = String::new();
-    w.explain(&want, "", 0, &mut BTreeSet::new(), &mut out)
-        .ok()?;
-    let line = out
+    let mut w = WhyNot::new(res, redact);
+    w.explain(&want, "", 0).ok()?;
+    let line = w
+        .out
         .lines()
         .map(str::trim)
         .rfind(|l| !l.starts_with("nearest: ") && !l.ends_with(" has no rows"))?;
@@ -164,15 +147,7 @@ pub fn gone(
         record: None,
         span: Default::default(),
     };
-    let w = WhyNot {
-        res,
-        redact,
-        printer: Printer {
-            circuit: &res.circuit,
-            redact,
-            all: false,
-        },
-    };
+    let w = WhyNot::new(res, redact);
     let rules = &res.rules;
     for (i, rule) in rules.iter().enumerate() {
         if !head_matches(&rule.head, &want) {
@@ -255,10 +230,14 @@ fn unapplied(atom: &Atom, res: &EvalResult) -> Option<String> {
     (!on.is_empty()).then(|| on.join(", "))
 }
 
+/// Why not, explained into `out`: each rule tried once per pattern
+/// (`seen`).
 struct WhyNot<'a> {
     res: &'a EvalResult,
     redact: &'a Redactor,
     printer: Printer<'a>,
+    seen: BTreeSet<String>,
+    out: String,
 }
 
 /// One rule's attempt: the seed the head bound, the index of the first
@@ -270,17 +249,29 @@ struct Attempt {
     known: Env,
 }
 
-impl WhyNot<'_> {
+impl<'a> WhyNot<'a> {
+    fn new(res: &'a EvalResult, redact: &'a Redactor) -> WhyNot<'a> {
+        WhyNot {
+            res,
+            redact,
+            printer: Printer {
+                circuit: &res.circuit,
+                redact,
+                all: false,
+            },
+            seen: BTreeSet::new(),
+            out: String::new(),
+        }
+    }
+
+    /// What was explained, redacted.
+    fn into_text(self) -> String {
+        self.redact.text(&self.out)
+    }
+
     /// Explain why `atom` (ground where the pattern fixed it) is not
     /// derived, into `out` at `pad`.
-    fn explain(
-        &self,
-        atom: &Atom,
-        pad: &str,
-        depth: usize,
-        seen: &mut BTreeSet<String>,
-        out: &mut String,
-    ) -> Result<()> {
+    fn explain(&mut self, atom: &Atom, pad: &str, depth: usize) -> Result<()> {
         let rules = &self.res.rules;
         let candidates: Vec<(usize, &RuleStmt, Vec<Env>)> = rules
             .iter()
@@ -292,148 +283,183 @@ impl WhyNot<'_> {
             })
             .collect();
         if depth == 0 && !candidates.is_empty() {
-            out.push_str(&format!("{}: no rule derives it\n", self.name(atom)));
+            self.out
+                .push_str(&format!("{}: no rule derives it\n", self.name(atom)));
         }
         if candidates.is_empty() {
-            let line = match atom.pred.as_str() {
-                "want" => match atom.args.first() {
-                    Some(Term::Val(Value::Str(t))) => format!(
-                        "no rule derives {}: no resource {t} is named like it",
-                        self.name(atom)
-                    ),
-                    _ => format!("no rule derives {}", self.name(atom)),
-                },
-                "attr" => format!("no rule derives {}: no statement sets it", self.name(atom)),
-                p => match self.rows(p, atom.args.len()).is_empty() {
-                    true => format!("no rule derives {}: nothing states {p}", self.name(atom)),
-                    false => format!("no rule derives {}: no row of {p} is it", self.name(atom)),
-                },
-            };
-            out.push_str(&format!("{pad}{line}\n"));
-            if depth == 0 && !matches!(atom.pred.as_str(), "want" | "attr") {
-                self.nearest(atom, atom, &format!("{pad}  "), out);
-            }
-            if depth == 0
-                && atom.pred == "want"
-                && let Some(near) = self.nearest_address(atom)
-            {
-                out.push_str(&format!("{pad}  nearest: {near}\n"));
-            }
+            self.no_rule(atom, pad, depth);
             return Ok(());
         }
         for (i, rule, seeds) in candidates {
-            let id = format!("r{i}");
-            if !seen.insert(format!("{id} {}", crate::partition::fmt_atom(atom))) {
-                continue;
+            self.tried(atom, i, rule, seeds, pad, depth)?;
+        }
+        Ok(())
+    }
+
+    /// What no rule could derive: no resource named like it, no statement
+    /// setting it, no row of its relation; at the top, the nearest rows or
+    /// address.
+    fn no_rule(&mut self, atom: &Atom, pad: &str, depth: usize) {
+        let line = match atom.pred.as_str() {
+            "want" => match atom.args.first() {
+                Some(Term::Val(Value::Str(t))) => format!(
+                    "no rule derives {}: no resource {t} is named like it",
+                    self.name(atom)
+                ),
+                _ => format!("no rule derives {}", self.name(atom)),
+            },
+            "attr" => format!("no rule derives {}: no statement sets it", self.name(atom)),
+            p => match self.rows(p, atom.args.len()).is_empty() {
+                true => format!("no rule derives {}: nothing states {p}", self.name(atom)),
+                false => format!("no rule derives {}: no row of {p} is it", self.name(atom)),
+            },
+        };
+        self.out.push_str(&format!("{pad}{line}\n"));
+        if depth == 0 && !matches!(atom.pred.as_str(), "want" | "attr") {
+            self.nearest(atom, atom, &format!("{pad}  "));
+        }
+        if depth == 0
+            && atom.pred == "want"
+            && let Some(near) = self.nearest_address(atom)
+        {
+            self.out.push_str(&format!("{pad}  nearest: {near}\n"));
+        }
+    }
+
+    /// The rule `i` tried against `atom` from each of its head's `seeds`:
+    /// its site, then the first literal of its body that failed, from the
+    /// seed that got furthest, explained in turn.
+    fn tried(
+        &mut self,
+        atom: &Atom,
+        i: usize,
+        rule: &RuleStmt,
+        seeds: Vec<Env>,
+        pad: &str,
+        depth: usize,
+    ) -> Result<()> {
+        let rules = &self.res.rules;
+        let id = format!("r{i}");
+        if !self
+            .seen
+            .insert(format!("{id} {}", crate::partition::fmt_atom(atom)))
+        {
+            return Ok(());
+        }
+        let mut best: Option<Attempt> = None;
+        for seed in seeds {
+            let a = attempt(rule, seed, &self.res.facts);
+            let further = |a: &Attempt| a.failed.unwrap_or(usize::MAX);
+            if best.as_ref().is_none_or(|b| further(&a) > further(b)) {
+                best = Some(a);
             }
-            let mut best: Option<Attempt> = None;
-            for seed in seeds {
-                let a = attempt(rule, seed, &self.res.facts);
-                let further = |a: &Attempt| a.failed.unwrap_or(usize::MAX);
-                if best.as_ref().is_none_or(|b| further(&a) > further(b)) {
-                    best = Some(a);
-                }
+        }
+        let Some(a) = best else { return Ok(()) };
+        let bindings: Vec<(String, Value)> =
+            a.seed.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+        let site = match self.printer.rule_site(rules, &id, &bindings) {
+            Some(s) => {
+                let origin = s
+                    .origin
+                    .as_ref()
+                    .map(|o| format!("   ({o})"))
+                    .unwrap_or_default();
+                format!("{}  {}{origin}", s.at, s.statement)
             }
-            let Some(a) = best else { continue };
-            let bindings: Vec<(String, Value)> =
-                a.seed.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
-            let site = match self.printer.rule_site(rules, &id, &bindings) {
-                Some(s) => {
-                    let origin = s
-                        .origin
-                        .as_ref()
-                        .map(|o| format!("   ({o})"))
-                        .unwrap_or_default();
-                    format!("{}  {}{origin}", s.at, s.statement)
-                }
-                None => self
-                    .res
-                    .circuit
-                    .rule_text(&id)
-                    .unwrap_or(id.as_str())
-                    .to_string(),
+            None => self
+                .res
+                .circuit
+                .rule_text(&id)
+                .unwrap_or(id.as_str())
+                .to_string(),
+        };
+        self.out.push_str(&format!("{pad}  {site}\n"));
+        let inner = format!("{pad}    ");
+        let Some(k) = a.failed else {
+            // A `not has` waiting on a value: its helper is stuck, so
+            // the negation is undetermined though no row holds.
+            if let Some(t) = self.undetermined(rule, &a.known) {
+                self.out
+                    .push_str(&format!("{inner}{}\n", self.redact.text(&t)));
+                return Ok(());
+            }
+            let with = match a.seed.is_empty() || atom.pred == "attr" {
+                true => String::new(),
+                false => format!(" with {}", self.with(&a.seed)),
             };
-            out.push_str(&format!("{pad}  {site}\n"));
-            let inner = format!("{pad}    ");
-            let Some(k) = a.failed else {
-                // A `not has` waiting on a value: its helper is stuck, so
-                // the negation is undetermined though no row holds.
-                if let Some(t) = self.undetermined(rule, &a.known) {
-                    out.push_str(&format!("{inner}{}\n", self.redact.text(&t)));
-                    continue;
+            let what = match (atom.args.get(2), rule.head.args.get(2)) {
+                (Some(Term::Val(Value::Str(p))), Some(Term::Val(Value::Str(h))))
+                    if atom.pred == "attr" && p != h =>
+                {
+                    format!("what it writes to {h} has no {}", &p[h.len() + 1..])
                 }
-                let with = match a.seed.is_empty() || atom.pred == "attr" {
+                _ if atom.pred == "attr" => "it writes another value".to_string(),
+                _ => "it derives another one".to_string(),
+            };
+            self.out
+                .push_str(&format!("{inner}every condition holds{with}: {what}\n"));
+            return Ok(());
+        };
+        let lit = &rule.body[k];
+        let bound = lit.subst(&a.known);
+        match &bound {
+            Lit::Pos(b) if b.pred == "__known" => {
+                let line = match known_text(rule, lit, &a.known) {
+                    Some(t) => t,
+                    None => format!("{}: not known yet", self.atom_text(b)),
+                };
+                self.out
+                    .push_str(&format!("{inner}{}\n", self.redact.text(&line)));
+            }
+            Lit::Pos(b) => {
+                let Lit::Pos(written) = lit else {
+                    return Ok(());
+                };
+                let derived = rules
+                    .iter()
+                    .any(|r| r.head.pred == b.pred && r.head.args.len() == b.args.len());
+                let none = match (derived, b.pred.ends_with("::__instance")) {
+                    (true, true) => "not made",
+                    (true, false) => "not derived",
+                    (false, _) => "no row",
+                };
+                self.out
+                    .push_str(&format!("{inner}{}: {none}\n", self.atom_text(b)));
+                let rows = self.rows(&b.pred, b.args.len());
+                if !rows.is_empty() || !derived {
+                    self.nearest(b, written, &inner);
+                }
+                if derived && depth + 1 < DEPTH {
+                    self.explain(b, &inner, depth + 1)?;
+                }
+            }
+            Lit::Not(b) => {
+                let held = engine::query(&[Lit::Pos(b.clone())], &self.res.facts)?;
+                let row = held
+                    .first()
+                    .and_then(|(_, used)| used.first())
+                    .map(|r| format!(": {}", self.atom_text(r)))
+                    .unwrap_or_default();
+                self.out.push_str(&format!(
+                    "{inner}not {}: the row exists{row}\n",
+                    self.atom_text(b)
+                ));
+            }
+            _ => {
+                let mut vars = BTreeSet::new();
+                lit_vars(lit, &mut vars);
+                let shown: Env = a
+                    .known
+                    .iter()
+                    .filter(|(k, _)| vars.contains(*k))
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect();
+                let with = match shown.is_empty() {
                     true => String::new(),
-                    false => format!(" with {}", self.with(&a.seed)),
+                    false => format!(", with {}", self.with(&shown)),
                 };
-                let what = match (atom.args.get(2), rule.head.args.get(2)) {
-                    (Some(Term::Val(Value::Str(p))), Some(Term::Val(Value::Str(h))))
-                        if atom.pred == "attr" && p != h =>
-                    {
-                        format!("what it writes to {h} has no {}", &p[h.len() + 1..])
-                    }
-                    _ if atom.pred == "attr" => "it writes another value".to_string(),
-                    _ => "it derives another one".to_string(),
-                };
-                out.push_str(&format!("{inner}every condition holds{with}: {what}\n"));
-                continue;
-            };
-            let lit = &rule.body[k];
-            let bound = lit.subst(&a.known);
-            match &bound {
-                Lit::Pos(b) if b.pred == "__known" => {
-                    let line = match known_text(rule, lit, &a.known) {
-                        Some(t) => t,
-                        None => format!("{}: not known yet", self.atom_text(b)),
-                    };
-                    out.push_str(&format!("{inner}{}\n", self.redact.text(&line)));
-                }
-                Lit::Pos(b) => {
-                    let Lit::Pos(written) = lit else { continue };
-                    let derived = rules
-                        .iter()
-                        .any(|r| r.head.pred == b.pred && r.head.args.len() == b.args.len());
-                    let none = match (derived, b.pred.ends_with("::__instance")) {
-                        (true, true) => "not made",
-                        (true, false) => "not derived",
-                        (false, _) => "no row",
-                    };
-                    out.push_str(&format!("{inner}{}: {none}\n", self.atom_text(b)));
-                    let rows = self.rows(&b.pred, b.args.len());
-                    if !rows.is_empty() || !derived {
-                        self.nearest(b, written, &inner, out);
-                    }
-                    if derived && depth + 1 < DEPTH {
-                        self.explain(b, &inner, depth + 1, seen, out)?;
-                    }
-                }
-                Lit::Not(b) => {
-                    let held = engine::query(&[Lit::Pos(b.clone())], &self.res.facts)?;
-                    let row = held
-                        .first()
-                        .and_then(|(_, used)| used.first())
-                        .map(|r| format!(": {}", self.atom_text(r)))
-                        .unwrap_or_default();
-                    out.push_str(&format!(
-                        "{inner}not {}: the row exists{row}\n",
-                        self.atom_text(b)
-                    ));
-                }
-                _ => {
-                    let mut vars = BTreeSet::new();
-                    lit_vars(lit, &mut vars);
-                    let shown: Env = a
-                        .known
-                        .iter()
-                        .filter(|(k, _)| vars.contains(*k))
-                        .map(|(k, v)| (k.clone(), v.clone()))
-                        .collect();
-                    let with = match shown.is_empty() {
-                        true => String::new(),
-                        false => format!(", with {}", self.with(&shown)),
-                    };
-                    out.push_str(&format!("{inner}{}: false{with}\n", self.lit_text(lit)));
-                }
+                self.out
+                    .push_str(&format!("{inner}{}: false{with}\n", self.lit_text(lit)));
             }
         }
         Ok(())
@@ -498,10 +524,10 @@ impl WhyNot<'_> {
     /// from it in the fewest columns it fixes; the columns the literal as
     /// `written` fixes must match, and are not printed. With no such row,
     /// the nearest of all rows, whole.
-    fn nearest(&self, bound: &Atom, written: &Atom, pad: &str, out: &mut String) {
+    fn nearest(&mut self, bound: &Atom, written: &Atom, pad: &str) {
         let rows = self.rows(&bound.pred, bound.args.len());
         if rows.is_empty() {
-            out.push_str(&format!(
+            self.out.push_str(&format!(
                 "{pad}{} has no rows\n",
                 self.pred_text(&bound.pred)
             ));
@@ -555,7 +581,8 @@ impl WhyNot<'_> {
             })
             .collect();
         if attr && agree.is_empty() {
-            out.push_str(&format!("{pad}{} is not set\n", self.name(bound)));
+            self.out
+                .push_str(&format!("{pad}{} is not set\n", self.name(bound)));
             return;
         }
         let (pool, hide) = match agree.is_empty() {
@@ -590,7 +617,8 @@ impl WhyNot<'_> {
             0 => String::new(),
             n => format!(" (and {n} more)"),
         };
-        out.push_str(&format!("{pad}nearest: {}{more}\n", shown.join(", ")));
+        self.out
+            .push_str(&format!("{pad}nearest: {}{more}\n", shown.join(", ")));
     }
 
     /// A pattern as the program names it: a resource by its address, an
