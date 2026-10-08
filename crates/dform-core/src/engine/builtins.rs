@@ -1,11 +1,12 @@
 //! Builtins: a term's value under a row's bindings (a function applied to its parameters),
 //! and the builtin literals: `=`, `!=`, an ordering comparison, a builtin predicate.
 
-use super::unify::bind_term;
-use super::{
-    Rec, at_suffix, failed_builtin, forwards_nulls, missing_walk, not_an_object, ref_and_string,
-    side_unanswered, spreads, unanswered,
+use super::errors::{
+    at_suffix, failed_builtin, missing_walk, not_an_object, ref_and_string, side_unanswered,
+    unanswered,
 };
+use super::unify::bind_term;
+use super::{Rec, forwards_nulls, spreads};
 use crate::ast::{Atom, Lit, Term};
 use crate::lattice::{Truth, nulls_in};
 use crate::spell;
