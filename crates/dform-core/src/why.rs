@@ -19,6 +19,9 @@ use anyhow::{Result, bail};
 use std::collections::BTreeSet;
 use std::path::Path;
 
+mod scope;
+pub use scope::in_component;
+
 /// How `why` prints: a value's chain, or the derivation `tree`, with
 /// `all` its alternatives, in the `core`'s spelling; a long value
 /// elided, or `whole` (`-vv`, R-176).
@@ -57,9 +60,22 @@ pub fn why(pattern: &str, how: As, cx: &Context) -> Result<String> {
     if let Some(message) = deny_message(pattern)? {
         return deny(&message, how, cx);
     }
+    // A copy as `c[t]` names it, `volume["forgejo_backup"].tag`: its scope.
+    if let Some(p) = scope::normal(pattern.trim(), cx.res) {
+        return why(&p, how, cx);
+    }
     // What the program does not derive yet, a resource rule the plan
-    // holds as a group: why not, and the tick it waits for.
+    // holds as a group: why not, and the tick it waits for. A name read
+    // in a scope that declares nothing so named: what it denotes there,
+    // else what reads it (R-184).
     let why_not = || -> Result<String> {
+        if let Some((line, outward)) = scope::why_name(pattern.trim(), cx) {
+            let mut out = cx.redact.text(&line);
+            if let Some(q) = outward {
+                out.push_str(&why(&q, how, cx)?);
+            }
+            return Ok(out);
+        }
         let mut out = crate::whynot::why_not(pattern, cx.res, cx.redact)?;
         if let Some(w) = cx.when.and_then(|when| when(pattern.trim())) {
             out.push_str(&cx.redact.text(&format!("{w}\n")));

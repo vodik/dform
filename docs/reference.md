@@ -2956,6 +2956,24 @@ unset, required by the schema:
   spec.jobTemplate.spec.template  (describes the pod that will be created when executing a job)
 ```
 
+A name is read in the scope it names (R-184): `why NAME` the stack's,
+`why COPY.NAME` a copy's (as `c[t]` names it too,
+`why 'volume["forgejo_backup"].tag'`), `why MODULE.NAME` a used
+module's. What the scope declares, a resource, an input, a `let`, an
+output, prints as above. A copy reads what its component does not
+declare from its user, a module from the stack, and `why` says so before
+the chain: `env in volume forgejo_backup: the stack's key env
+stacks/apps.df:1`. What the copy's module declares is private to the
+module, and nothing is one line saying what reads it:
+
+```
+repository in volume forgejo_backup: no such name in this copy; the module's resource is backups.repository (backups.df:25), read it as backups.repository
+```
+
+The language server's hover on a name read bare in a component's body
+says, per copy the deployment makes, what it reads there in the same
+words.
+
 `dform dev graph` prints Graphviz DOT, nodes and edges sorted:
 
 ```bash

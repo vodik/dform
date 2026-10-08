@@ -415,6 +415,33 @@ pub fn hover_at(p: &refs::Project, path: &Path, at: usize) -> Option<String> {
         }
         Some(out)
     };
+    // A name read bare in a component's body: what it denotes in each
+    // copy the deployment makes, as `why COPY.NAME` says it (R-184).
+    let component = t
+        .parent()
+        .filter(|c| c.kind() == SyntaxKind::CHAIN && c.first_token().as_ref() == Some(&t))
+        .filter(|_| !declaration && !in_hole)
+        .and_then(|c| c.ancestors().find(|a| a.kind() == SyntaxKind::COMPONENT))
+        .and_then(|c| names::declared_name(&c));
+    let in_copies = || -> Option<String> {
+        let c = component.as_ref()?;
+        let lines: Vec<String> = p
+            .evaluated
+            .iter()
+            .flat_map(|e| {
+                dform_core::why::in_component(
+                    c.text(),
+                    t.text(),
+                    &e.res,
+                    &e.redact,
+                    &e.keys,
+                    Some(&p.dir),
+                )
+            })
+            .map(|l| format!("`{l}`\n\n"))
+            .collect();
+        (!lines.is_empty()).then(|| lines.concat())
+    };
     let what = match named.what {
         // Of a name several resources share, the first's.
         What::Names(syms) => syms
@@ -423,7 +450,7 @@ pub fn hover_at(p: &refs::Project, path: &Path, at: usize) -> Option<String> {
             .map_or(What::Other, |s| What::Name(s, false)),
         w => w,
     };
-    match what {
+    let out = match what {
         What::Name(sym, _) => {
             let decls: Vec<SyntaxNode> = d
                 .occurrences(&files, &sym)
@@ -467,7 +494,8 @@ pub fn hover_at(p: &refs::Project, path: &Path, at: usize) -> Option<String> {
         What::Names(_) | What::Provider | What::Variable | What::Key | What::Other => builtin(&t)
             .map(reference_md)
             .or_else(|| output_md(&files, &t)),
-    }
+    };
+    joined(in_copies(), out)
 }
 
 /// A relation's columns as declared or inferred (R-34): `az(name:
