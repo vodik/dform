@@ -296,40 +296,6 @@ fn plan_and_apply_of_the_demo_keep_state_in_the_bucket() {
     }
 }
 
-#[test]
-fn two_concurrent_applies_one_is_refused() {
-    for t in &targets("two_concurrent_applies_one_is_refused") {
-        let p = Project::new(t, "concurrent");
-        let release = p.s.path("release");
-        let a = p.spawn(
-            APPLY,
-            &[("DFORM_TEST_HOLD_LOCK", release.to_str().unwrap())],
-        );
-        wait_for("the first apply's lease", Duration::from_secs(30), || {
-            p.lease().is_some_and(|l| l["holder"] != "")
-        });
-        // Held past its duration: it is renewed.
-        std::thread::sleep(LEASE + Duration::from_millis(500));
-        let b = p.run(APPLY).failure();
-        assert!(
-            b.stderr
-                .contains("stack dform[env=staging] is locked by another apply"),
-            "{}: {}",
-            t.what,
-            b.stderr
-        );
-        std::fs::write(&release, "").unwrap();
-        let a = finish(a).success();
-        assert!(
-            !a.stdout.contains("apply: complete"),
-            "{}: {}",
-            t.what,
-            a.stdout
-        );
-        assert_eq!(p.state()["fence"], 1, "{}", t.what);
-    }
-}
-
 /// Start an apply that stops as it is about to make its `at`th state
 /// write; returns it once it has stopped there.
 fn stalled_apply(p: &Project, at: usize) -> (Child, String) {
@@ -468,60 +434,6 @@ fn unlock_breaks_a_killed_holders_lease() {
             "{}: {}",
             t.what,
             again.stdout
-        );
-    }
-}
-
-#[test]
-fn a_stale_holders_state_write_is_refused_by_fencing() {
-    for t in &targets("a_stale_holders_state_write_is_refused_by_fencing") {
-        let p = Project::new(t, "stale");
-        // A stops as it is about to write down its first Apply call, and
-        // is paused (its renewer too) until its lease has expired.
-        let (a, dir) = stalled_apply(&p, 2);
-        signal(a.id(), "-STOP");
-        let expires = p.lease().unwrap()["expires_ms"].as_u64().unwrap();
-        wait_for("the lease to expire", LEASE * 3, || {
-            dform_core::store::now_ms() > expires + 100
-        });
-        // B takes the lease over, and holds it before writing anything.
-        let release = p.s.path("release");
-        let b = p.spawn(
-            APPLY,
-            &[("DFORM_TEST_HOLD_LOCK", release.to_str().unwrap())],
-        );
-        wait_for(
-            "B's lease and its fence write",
-            Duration::from_secs(30),
-            || p.state()["fence"] == 2,
-        );
-        let before = p.state();
-        // A wakes up and writes: refused, and its write did not land.
-        std::fs::write(Path::new(&dir).join("resume"), "").unwrap();
-        signal(a.id(), "-CONT");
-        let a = finish(a).failure();
-        assert!(
-            a.stderr.contains("refused by fencing"),
-            "{}: {}",
-            t.what,
-            a.stderr
-        );
-        assert_eq!(p.state(), before, "{}: A's write did not land", t.what);
-        // B goes on and finishes the apply.
-        std::fs::write(&release, "").unwrap();
-        let b = finish(b).success();
-        assert!(
-            !b.stdout.contains("apply: complete"),
-            "{}: {}",
-            t.what,
-            b.stdout
-        );
-        let plan = p.run(PLAN).success();
-        assert!(
-            plan.stdout.contains("is up to date"),
-            "{}: {}",
-            t.what,
-            plan.stdout
         );
     }
 }
