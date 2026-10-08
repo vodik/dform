@@ -15,6 +15,9 @@ enum UserDecl {
     Value(String),
     /// A relation, of this many columns: `input p` and its `decl`.
     Relation(usize),
+    /// A copy, a used module or a stack: what the module reads of it is
+    /// a value the user gives (`NAME = blue.x`).
+    Scope,
 }
 
 impl UserDecl {
@@ -26,6 +29,7 @@ impl UserDecl {
                 let cols: Vec<String> = (1..=*n).map(|i| format!("c{i}: T")).collect();
                 format!("`decl {h}({})` and `input {h}`", cols.join(", "))
             }
+            UserDecl::Scope => format!("what it reads of `{h}`, `input NAME: TYPE`,"),
         }
     }
 
@@ -39,6 +43,7 @@ impl UserDecl {
                 let vs = vs.join(", ");
                 format!("{h}({vs}) where {h}({vs})")
             }
+            UserDecl::Scope => format!("NAME = {h}.x"),
         }
     }
 }
@@ -195,6 +200,12 @@ impl Lowerer<'_> {
                 }
                 if let Some(types) = sc.resources.get(h) {
                     return Some(UserDecl::Value(format!("ref({})", types[0])));
+                }
+                if sc.instances.contains_key(h)
+                    || sc.uses.contains_key(h)
+                    || sc.stacks.contains_key(h)
+                {
+                    return Some(UserDecl::Scope);
                 }
             }
         }

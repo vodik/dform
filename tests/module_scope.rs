@@ -211,3 +211,75 @@ fn a_module_used_by_a_module_reads_neither_user() {
     );
     assert!(r.stderr.contains("`use inner { tier }`"), "{}", r.stderr);
 }
+
+/// A resource of the user's is no more the module's than a value: the
+/// module takes a reference, `input main: ref(net.vpc)`.
+#[test]
+fn a_users_resource_is_taken_as_a_reference() {
+    let stack = format!("{STACK}resource net.vpc main {{ cidr = \"10.0.0.0/16\" }}\n");
+    let pack = "warn \"wide\" where main.cidr == \"10.0.0.0/16\"\n";
+    let s = project("scope-resource", pack, &stack);
+    let r = s.run(&["plan", "--why=none", "main.df"]).failure();
+    assert!(
+        r.stderr.contains(
+            "Help: take it as an input: `input main: ref(net.vpc)` in baseline.df, and give it \
+             in the use: `use baseline { main }`"
+        ),
+        "{}",
+        r.stderr
+    );
+    let pack = format!("input main: ref(net.vpc)\n{pack}");
+    let stack = stack.replace("use baseline", "use baseline { main }");
+    let s = project("scope-resource", &pack, &stack);
+    let r = s.run(&["plan", "--why=none", "main.df"]).success();
+    assert!(r.stderr.contains("warning: wide\n"), "{}", r.stderr);
+}
+
+/// Not reached by R-205: a provider's `use` is the stack's, and a
+/// module's resource of its type is made by the provider its user
+/// configures (`use fake` in the stack, none in the module). Lexically the
+/// module would name the provider it makes resources with, or take it as
+/// an input; that is a design of its own (a provider is configured per
+/// deployment, one account per stack).
+#[test]
+#[ignore = "R-205 leaves providers: a module's resources use its user's provider `use`"]
+fn a_modules_provider_is_its_own() {
+    let s = Scratch::project("scope-provider");
+    s.write("net.df", "resource net.vpc v { cidr = \"10.0.0.0/16\" }\n");
+    s.write("main.df", "use fake\nuse net\n");
+    let r = s.run(&["plan", "--why=none", "main.df"]).failure();
+    assert!(r.stderr.contains("net.vpc"), "{}", r.stderr);
+}
+
+/// A copy of the user's is read through what the module takes of it.
+#[test]
+fn a_users_copy_is_read_through_an_input() {
+    let s = Scratch::project("scope-copy");
+    s.write(
+        "lib.df",
+        "component c {\n  resource net.vpc v { cidr = \"10.0.0.0/16\" }\n  output vpc: net.vpc = v\n}\n",
+    );
+    s.write(
+        "pack.df",
+        "warn \"w\" where blue.vpc.cidr == \"10.0.0.0/16\"\n",
+    );
+    s.write("main.df", "use fake\nresource lib.c blue {}\nuse pack\n");
+    let r = s.run(&["plan", "--why=none", "main.df"]).failure();
+    assert!(
+        r.stderr.contains(
+            "`blue` is not declared in module pack: a module reads only what it declares"
+        ),
+        "{}",
+        r.stderr
+    );
+    s.write(
+        "pack.df",
+        "input vpc: ref(net.vpc)\nwarn \"w\" where vpc.cidr == \"10.0.0.0/16\"\n",
+    );
+    s.write(
+        "main.df",
+        "use fake\nresource lib.c blue {}\nuse pack { vpc = blue.vpc }\n",
+    );
+    let r = s.run(&["plan", "--why=none", "main.df"]).success();
+    assert!(r.stderr.contains("warning: w\n"), "{}", r.stderr);
+}
