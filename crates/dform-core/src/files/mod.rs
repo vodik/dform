@@ -17,6 +17,7 @@
 //! | `git+https://`, `git+ssh://` | a remote repository's mirror (`crate::git`), `?ref=`    |
 //! | `git+file:`               | a local repository, in place, `?ref=`                      |
 //! | `s3://BUCKET/KEY`         | the S3 client (crates/dform-s3, [`register`]ed by the CLI) |
+//! | `oci://REPO@sha256:..`    | a registry's manifest by its digest ([`oci`])              |
 //! | a provider's (`gs`, ..)   | the provider that declares it, through the host            |
 //!
 //! [`Files`] is one run's reader: the program's loaders call it, and so
@@ -51,11 +52,12 @@ use std::sync::{Arc, Mutex, OnceLock};
 pub const READ: &str = "read.location";
 
 /// The schemes dform reads itself.
-pub const SCHEMES: [&str; 7] = [
+pub const SCHEMES: [&str; 8] = [
     "file",
     "data",
     "ssh",
     "https",
+    "oci",
     "git+https",
     "git+ssh",
     "git+file",
@@ -491,6 +493,7 @@ impl Files {
             "ssh" => self.ssh(u).map(Document::from),
             #[cfg(not(target_family = "wasm"))]
             "https" => self.https(u).map(Document::from),
+            "oci" => oci::read(u, self).map(Document::from),
             // dform's own transports first (the CLI's `s3`), then the one a
             // provider declares.
             s => {

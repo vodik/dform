@@ -3318,6 +3318,7 @@ it; any other is an error naming the schemes there are.
 | `git+https://HOST/OWNER/REPO/PATH?ref=REF`, `git+ssh://USER@HOST/..` | the repository's mirror, at the commit the ref names |
 | `git+file:REPO/PATH?ref=REF` | a repository of the project, in place |
 | `s3://BUCKET/KEY` | the S3 client, the bucket's endpoint and region as dform.toml's backend naming it says (AWS's otherwise), the s3 backend's credentials |
+| `oci://REGISTRY/REPOSITORY@sha256:..` | the registry's manifest the digest names, over dform's HTTP client as `oci.resolve` asks (below) |
 | a provider's (`gs://..`, `vault://..`) | the provider whose manifest declares it, through the host |
 
 A repository's path ends at a segment ending in `.git`, else at `//`, else
@@ -3387,6 +3388,13 @@ before: the digest it last resolved (kept in
 itself; `oci.with_digest` stays for a digest in hand. A policy that asks
 for a digest (`deny .. where not oci.pinned(c.image)`) holds on the
 resolved value.
+
+A pinned reference is also a location: `io.read("oci://ghcr.io/acme/app@sha256:..")`
+is the manifest the digest names (an index's, or an image's), asked as
+`oci.resolve` asks, its bytes checked against the digest and kept in
+`$XDG_CACHE_HOME/dform/oci/manifests/`, so a machine that read it once
+reads it offline; `json.decode` gives its `config` and `layers`. A tag
+is no location (what it names moves): pin it with `oci.resolve`.
 
 So a location never holds a secret: one built from it (`io.read(
 "https://x.example/${pw}")`) is E0306 at compile time, because its host

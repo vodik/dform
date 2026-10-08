@@ -32,6 +32,8 @@ struct World {
     seen: Vec<String>,
     /// Every connection is closed unanswered: the registry is gone.
     down: bool,
+    /// Manifests by their digest.
+    manifests: BTreeMap<String, String>,
 }
 
 /// A registry v2 API: `HEAD /v2/REPO/manifests/TAG` answers the tag's
@@ -76,6 +78,19 @@ impl Registry {
 
     fn seen(&self) -> Vec<String> {
         self.world.lock().unwrap().seen.clone()
+    }
+
+    /// A manifest pushed: its digest.
+    fn push(&self, body: &str) -> String {
+        use sha2::Digest;
+        let sum = sha2::Sha256::digest(body.as_bytes());
+        let d = format!(
+            "sha256:{}",
+            sum.iter().map(|b| format!("{b:02x}")).collect::<String>()
+        );
+        let mut w = self.world.lock().unwrap();
+        w.manifests.insert(d.clone(), body.to_string());
+        d
     }
 
     fn down(&self) {
@@ -185,6 +200,9 @@ fn answer(
         );
     }
     let _ = method;
+    if let Some(m) = w.manifests.get(tag) {
+        return (200, format!("docker-content-digest: {tag}\r\n"), m.clone());
+    }
     match w.tags.get(&(repo.to_string(), tag.to_string())) {
         Some(d) => (200, format!("docker-content-digest: {d}\r\n"), "{}".into()),
         None => (404, String::new(), String::new()),
@@ -396,4 +414,51 @@ fn dform_test_resolves_a_tag() {
     assert!(r.ok, "{}\n{}", r.stdout, r.stderr);
     assert!(r.stdout.contains("1 combination, 0 failed"), "{}", r.stdout);
     assert_eq!(reg.seen().len(), 3, "{:?}", reg.seen());
+}
+
+/// `io.read("oci://REGISTRY/REPO@sha256:..")` reads the manifest the
+/// digest names, through the same token flow, checked against the digest
+/// and kept, so a run that cannot reach the registry reads it too; a tag
+/// is not a location.
+#[test]
+fn a_manifest_is_read_by_its_digest() {
+    let reg = Registry::start();
+    let d = reg.push(
+        r#"{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json","config":{"digest":"sha256:cfg"}}"#,
+    );
+    let s = Scratch::project("oci-read");
+    s.write(
+        "p.df",
+        &format!(
+            "use fake\nlet m = json.decode(io.read(\"oci://{}/acme/app@{d}\"))\n\
+             config(c) where c = m.config.digest\n",
+            reg.host()
+        ),
+    );
+    let r = run(&s, &["query", "config(C)", "p.df"]).success();
+    assert!(r.stdout.ends_with("\n\"sha256:cfg\"\n"), "{}", r.stdout);
+    assert_eq!(
+        reg.seen()[2],
+        format!("GET /v2/acme/app/manifests/{d}"),
+        "{:?}",
+        reg.seen()
+    );
+    // Offline: what was read by its digest is read again.
+    reg.down();
+    let r = run(&s, &["query", "config(C)", "p.df"]).success();
+    assert!(r.stdout.ends_with("\n\"sha256:cfg\"\n"), "{}", r.stdout);
+    s.write(
+        "p.df",
+        &format!(
+            "let m = io.read(\"oci://{}/acme/app:v1\")\nuse fake\n",
+            reg.host()
+        ),
+    );
+    let r = run(&s, &["plan", "p.df"]).failure();
+    assert!(
+        r.stderr
+            .contains("an `oci://` location names a manifest by its digest"),
+        "{}",
+        r.stderr
+    );
 }

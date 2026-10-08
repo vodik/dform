@@ -19,7 +19,7 @@
 //! yet", as a tag the registry does not have yet is.
 
 use crate::ast::ExternFn;
-use crate::plugin::host::{Class, Error, HttpRequest};
+use crate::plugin::host::{Class, Error, Failure, HttpRequest};
 use crate::value::{OciRef, Value};
 use anyhow::{Result, anyhow};
 use std::path::PathBuf;
@@ -133,10 +133,44 @@ fn loopback(host: &str) -> bool {
 /// `HEAD` of the tag's manifest: its digest.
 #[cfg(not(target_family = "wasm"))]
 fn head(r: &OciRef, tag: &str, files: &super::Files) -> Result<String, Missing> {
+    let resp = manifest(r, tag, "HEAD", files)?;
+    let registry = r.registry.as_deref().unwrap_or("docker.io");
+    if let Some(d) = header(&resp.headers, "docker-content-digest") {
+        return crate::value::OciRef::parse(&format!("x@{d}"))
+            .map(|_| d.to_string())
+            .map_err(|why| {
+                Missing::Error(format!(
+                    "{registry} named {}:{tag}'s digest {d:?}: {why}",
+                    r.repository
+                ))
+            });
+    }
+    // A registry that names no digest on HEAD: the manifest's bytes are
+    // what the digest is of.
+    let body = manifest(r, tag, "GET", files)?;
+    Ok(digest_of("sha256", &body.body).unwrap_or_default())
+}
+
+/// The manifest `reference` (a tag, or a digest) of `r`'s repository,
+/// asked with `method`: the registry's answer once it is 200, a token
+/// asked for first where it challenges for one.
+#[cfg(not(target_family = "wasm"))]
+fn manifest(
+    r: &OciRef,
+    reference: &str,
+    method: &str,
+    files: &super::Files,
+) -> Result<crate::plugin::host::HttpResponse, Missing> {
     let host = api_host(r);
     let scheme = if loopback(&host) { "http" } else { "https" };
-    let url = format!("{scheme}://{host}/v2/{}/manifests/{tag}", r.repository);
-    let shown = format!("{}:{tag}", r.repository);
+    let url = format!(
+        "{scheme}://{host}/v2/{}/manifests/{reference}",
+        r.repository
+    );
+    let shown = match reference.contains(':') {
+        true => format!("{}@{reference}", r.repository),
+        false => format!("{}:{reference}", r.repository),
+    };
     let registry = r.registry.as_deref().unwrap_or("docker.io");
     let cred = credential(registry, &r.repository, files)?;
     let send = |method: &str,
@@ -160,71 +194,111 @@ fn head(r: &OciRef, tag: &str, files: &super::Files) -> Result<String, Missing> 
         )
         .map_err(|e| failed(registry, e))
     };
-    // How the manifest was let in: a token, or the credential itself.
-    let (mut bearer, mut basic) = (None, None);
-    let mut resp = send("HEAD", &url, None, None)?;
+    let mut resp = send(method, &url, None, None)?;
     if resp.status == 401 {
         let challenge = header(&resp.headers, "www-authenticate").unwrap_or_default();
         match challenge.split_once(' ') {
             Some((s, params)) if s.eq_ignore_ascii_case("bearer") => {
                 let t = token(registry, params, cred.as_ref(), &send)?;
-                resp = send("HEAD", &url, Some(&t), None)?;
-                bearer = Some(t);
+                resp = send(method, &url, Some(&t), None)?;
             }
             // A registry that takes the credential itself.
             Some((s, _)) if s.eq_ignore_ascii_case("basic") && cred.is_some() => {
-                resp = send("HEAD", &url, None, cred.as_ref())?;
-                basic = cred.as_ref();
+                resp = send(method, &url, None, cred.as_ref())?;
             }
             _ => {}
         }
     }
     match resp.status {
-        200 => {}
-        401 | 403 => {
-            return Err(Missing::Error(format!(
-                "{registry} refused the pull of {} ({}): a private image's credential is named in \
-                 dform.toml, `[io] credentials = {{ \"oci://{registry}/{}\" = \"basic:NAME\" }}`",
-                r.repository, resp.status, r.repository
-            )));
-        }
-        404 => {
-            return Err(Missing::NotYet(format!("{registry} has no {shown} yet")));
-        }
-        429 | 500..=599 => {
-            return Err(Missing::NotYet(format!(
-                "{registry} answered {} for {shown}",
-                resp.status
-            )));
-        }
-        s => {
-            return Err(Missing::Error(format!(
-                "{registry} answered {s} for the manifest of {shown}"
-            )));
-        }
+        200 => Ok(resp),
+        401 | 403 => Err(Missing::Error(format!(
+            "{registry} refused the pull of {} ({}): a private image's credential is named in \
+             dform.toml, `[io] credentials = {{ \"oci://{registry}/{}\" = \"basic:NAME\" }}`",
+            r.repository, resp.status, r.repository
+        ))),
+        404 => Err(Missing::NotYet(format!("{registry} has no {shown} yet"))),
+        429 | 500..=599 => Err(Missing::NotYet(format!(
+            "{registry} answered {} for {shown}",
+            resp.status
+        ))),
+        s => Err(Missing::Error(format!(
+            "{registry} answered {s} for the manifest of {shown}"
+        ))),
     }
-    if let Some(d) = header(&resp.headers, "docker-content-digest") {
-        return crate::value::OciRef::parse(&format!("x@{d}"))
-            .map(|_| d.to_string())
-            .map_err(|why| {
-                Missing::Error(format!("{registry} named {shown}'s digest {d:?}: {why}"))
-            });
-    }
-    // A registry that names no digest on HEAD: the manifest's bytes are
-    // what the digest is of.
-    let body = send("GET", &url, bearer.as_deref(), basic)?;
-    if body.status != 200 {
-        return Err(Missing::Error(format!(
-            "{registry} answered {} for the manifest of {shown}",
-            body.status
-        )));
-    }
+}
+
+/// `ALGORITHM:HEX` of `bytes`, for a digest's algorithm dform computes
+/// (`sha256`, `sha512`).
+fn digest_of(algorithm: &str, bytes: &[u8]) -> Option<String> {
     use sha2::Digest;
-    let sum = sha2::Sha256::digest(&body.body);
-    Ok(format!(
-        "sha256:{}",
-        sum.iter().map(|b| format!("{b:02x}")).collect::<String>()
-    ))
+    let hex = |sum: &[u8]| sum.iter().map(|b| format!("{b:02x}")).collect::<String>();
+    match algorithm {
+        "sha256" => Some(format!("sha256:{}", hex(&sha2::Sha256::digest(bytes)))),
+        "sha512" => Some(format!("sha512:{}", hex(&sha2::Sha512::digest(bytes)))),
+        _ => None,
+    }
+}
+
+/// `io.read("oci://REGISTRY/REPOSITORY@sha256:..")` (R-153): the manifest
+/// the digest names (an index's, or an image's), its bytes checked against
+/// the digest and kept in the cache, so a run that cannot reach the
+/// registry reads it too. A location names what it reads, so a tag is
+/// not read: `oci.resolve` pins one.
+pub fn read(u: &crate::uri::Uri, files: &super::Files) -> Result<Vec<u8>, Failure> {
+    let port = u.port.map(|p| format!(":{p}")).unwrap_or_default();
+    let text = format!("{}{port}{}", u.host.as_deref().unwrap_or_default(), u.path);
+    let r = OciRef::parse(&text).map_err(|why| {
+        Error::fatal(format!(
+            "{u}: not an image reference {}: {why}",
+            crate::value::OCI_GRAMMAR
+        ))
+    })?;
+    let Some(digest) = r.digest.clone() else {
+        return Err(Error::fatal(format!(
+            "{u}: an `oci://` location names a manifest by its digest, `{u}@sha256:..`; a tag \
+             is pinned to one by `oci.resolve`"
+        ))
+        .into());
+    };
+    let algorithm = digest.split(':').next().unwrap_or_default();
+    if digest_of(algorithm, b"").is_none() {
+        return Err(Error::fatal(format!(
+            "{u}: dform checks a manifest by sha256 or sha512, not {algorithm}"
+        ))
+        .into());
+    }
+    let kept = cache().join("manifests").join(digest.replace(':', "-"));
+    if let Ok(b) = std::fs::read(&kept)
+        && digest_of(algorithm, &b).as_deref() == Some(digest.as_str())
+    {
+        return Ok(b);
+    }
+    #[cfg(not(target_family = "wasm"))]
+    let asked = manifest(&r, &digest, "GET", files);
+    #[cfg(target_family = "wasm")]
+    let asked: Result<crate::plugin::host::HttpResponse, Missing> = {
+        let _ = files;
+        Err(Missing::NotYet("no HTTP client in a wasm build".into()))
+    };
+    let body = match asked {
+        Ok(resp) => resp.body,
+        Err(Missing::NotYet(why)) => return Err(Failure::NotYet(format!("{u}: {why}"))),
+        Err(Missing::Error(e)) => return Err(Error::fatal(format!("{u}: {e}")).into()),
+    };
+    match digest_of(algorithm, &body) {
+        Some(d) if d == digest => {
+            if let Some(dir) = kept.parent() {
+                let _ = std::fs::create_dir_all(dir);
+            }
+            let _ = crate::store::write_atomic(&kept, &body);
+            Ok(body)
+        }
+        d => Err(Error::fatal(format!(
+            "{u}: the registry answered a manifest whose digest is {}, not the one named",
+            d.unwrap_or_default()
+        ))
+        .into()),
+    }
 }
 
 /// The credential `[io] credentials` names for `oci://REGISTRY/REPO`.
