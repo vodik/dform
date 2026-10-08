@@ -1257,14 +1257,11 @@ impl Located {
         obs: &mut dyn Observer,
     ) -> Result<Evaluation> {
         let l = &self.loaded;
-        let lowered = l.lowered.as_ref();
         let secret_outputs = stack::secret_outputs(&outputs);
-        let held = stack::held(&outputs);
         // State is read while the providers start: one is a round trip to
         // the backend, the other processes coming up (and a schema read).
         let dep = self.dep.clone();
         let reading = std::thread::spawn(move || dep.load_state());
-        let started = crate::timing::span(|| "providers started and configured".into());
         // The run's reader of locations (R-153): the program's loaders and
         // the providers' host read through it, one mirror cache and one
         // known-hosts store (state's, once read).
@@ -1272,140 +1269,30 @@ impl Located {
             crate::files::Settings::of(l.manifest.as_ref()),
             Default::default(),
         ));
-        let backend = Rc::new(if l.starts_none() {
-            Providers::none()
-        } else {
-            Providers::start_deferred(
-                opts.launch,
-                &l.providers,
-                &plugin::Config {
-                    world: self.paths.world.clone(),
-                    inventory: self.paths.inventory.clone(),
-                    chaos: opts.chaos.clone(),
-                    cache: opts.cache.clone(),
-                    configured: provider_configs(&self.program),
-                    stack: self.deployment.clone(),
-                    blocks: l.cfg.provider_blocks.clone(),
-                    digest_key: opts.digest_key.clone(),
-                    policies: l
-                        .manifest
-                        .as_ref()
-                        .map(|m| m.policies())
-                        .unwrap_or_default(),
-                    // What dform.toml grants each provider, for the
-                    // launcher (R-13b, R-143).
-                    grants: l
-                        .manifest
-                        .iter()
-                        .flat_map(|m| m.grants())
-                        .map(|(k, mut g)| {
-                            g.files = crate::files::Shared(Some(files.clone()));
-                            (k, g)
-                        })
-                        .collect(),
-                    files: files.clone(),
-                    held: held.clone(),
-                    worlds: outputs
-                        .iter()
-                        .filter(|r| held.values().any(|h| h.deployment == r.name))
-                        .filter_map(|r| Some((r.name.clone(), r.world.clone()?)))
-                        .collect(),
-                },
-            )?
-        });
-        drop(started);
+        let backend = Rc::new(self.start_providers(&outputs, opts, &files)?);
         // Externs are asked on demand: a table's of its file, else of the
         // file provider, else of the providers.
         let tables = Rc::new(tables::Tables::with_files(files.clone()));
         let mut st = reading
             .join()
             .map_err(|_| anyhow::anyhow!("internal: the state read panicked"))??;
-        // The master state was applied with, or `--new-master` (R-163).
-        opts.master.check(&self.deployment, st.master.as_deref())?;
-        // `random.*` derive from the deployment's master (R-60); a run that
-        // does not hold it derives stand-ins (R-164, `secrets::standin`).
-        crate::secrets::standin::set_active(opts.master.random.is_none());
-        // A file of given secrets opens with the master's own identity too
-        // (R-108).
-        crate::custody::given::set_key(opts.master.digest.clone());
-        // Each key at its generation (R-161).
-        crate::functions::random::set_secrets(&st.secrets);
-        if lowered.is_some_and(|l| crate::functions::random::called(&l.program)) {
-            crate::functions::random::set_master(
-                opts.master.random.clone(),
-                opts.master.id.as_deref(),
-                &self.deployment,
-            );
-            // Each key from its epoch's master (R-165).
-            crate::functions::random::set_epochs(&opts.master.epochs());
-        }
+        self.derive_with(opts, &st)?;
         // `memo.first`: what state keeps, a sealed one opened with the
         // deployment's key.
         let memos = Rc::new(crate::memo::Memos::new(&st, &opts.master));
         // The SSH host keys state knows.
         files.know(&st.known_hosts);
-        let mut base_extra = self.set_facts.clone();
-        base_extra.extend(opts.data.iter().cloned());
-        base_extra.extend(stack::output_facts(&outputs, &l.deployed));
-        // A deployment it reads that has not been applied: what reads it
-        // waits on it (R-121).
-        if let Some(lw) = lowered {
-            base_extra.extend(stack::unapplied_facts(
-                &lw.program,
-                &l.deployed,
-                &self.instance.key,
-                &outputs,
-            ));
-        }
-        // The manifest, as facts policy may read.
-        if let Some(m) = &l.manifest {
-            base_extra.extend(m.facts());
-        }
-        // The schema is asked for once the run knows the types it names.
-        let types = match opts.discover_all {
-            true => None,
-            false => world_types(lowered),
-        };
-        let schema = crate::timing::span(|| "providers' schema loaded".into());
-        let discovered = backend.discover(types.as_ref())?;
-        let scope = match opts.whole_schema {
-            true => None,
-            false => catalog_scope(&self.program, &base_extra, &discovered, &st),
-        };
-        backend.load_schema(scope.as_ref())?;
-        drop(schema);
+        let mut base_extra = self.base_facts(&outputs, opts);
+        let (discovered, scope) = self.load_schema(&backend, &base_extra, &st, opts)?;
         // The data sources the providers' schemas declare that the program
         // reads with no `extern` line of its own (R-106): declared as if it
         // had one.
-        let with_externs = lowered.map(|l| with_schema_externs(l, backend.schema()));
+        let with_externs = l
+            .lowered
+            .as_ref()
+            .map(|l| with_schema_externs(l, backend.schema()));
         let lowered = with_externs.as_ref();
-        let externs = {
-            let (no_program, no_fns) = (Program::default(), vec![]);
-            let (tables, backend) = (tables.clone(), backend.clone());
-            let files = files.clone();
-            Externs::new(
-                lowered.map_or(&no_program, |l| &l.program),
-                lowered.map_or(&no_fns, |l| &l.extern_fns),
-                move |f, inputs| {
-                    if let Some(r) = tables.answer(f, inputs) {
-                        return r;
-                    }
-                    if let Some(r) = externs::env(f, inputs) {
-                        return r;
-                    }
-                    if let Some(r) = externs::time(f) {
-                        return r;
-                    }
-                    if let Some(r) = crate::files::oci::answer(f, inputs, &files) {
-                        return r;
-                    }
-                    if let Some(r) = memos.answer(f, inputs) {
-                        return r;
-                    }
-                    backend.query_extern(f, inputs)
-                },
-            )
-        };
+        let externs = run_externs(lowered, &tables, &files, memos, &backend);
         // What the plan file read, before asking.
         externs.preload(opts.recorded.clone());
         // What a run plans, its providers declare: a type none does would
@@ -1427,41 +1314,11 @@ impl Located {
         for line in executor::resolve_uncertain(&backend, &mut st, |_| true)? {
             obs.note(Note::Resolved(line));
         }
-        // The static secret pass and the refinement checks (a literal that
-        // violates one, E0306), against the provider's schema.
-        let checks = crate::timing::span(|| "checked against the schema".into());
         if let Some(l) = lowered {
-            crate::secrets::check(l, backend.schema(), &secret_outputs)?;
+            check(l, backend.schema(), &secret_outputs, &externs, obs)?;
             // Where the pass found secrets, for the redactor (R-128).
             base_extra.extend(crate::secrets::taint(l, backend.schema(), &secret_outputs));
-            // A memo of a secret is kept sealed and recorded nowhere.
-            externs.mark_secret(&crate::secrets::secret_memos(
-                l,
-                backend.schema(),
-                &secret_outputs,
-            ));
-            // A document read into a secret `let` (R-153): its digest only.
-            externs.mark_secret(&crate::secrets::secret_reads(
-                l,
-                backend.schema(),
-                &secret_outputs,
-            ));
-            crate::refine::check(&l.program, backend.schema())?;
-            crate::types::check(&l.program, backend.schema())?;
-            // Column types again, the attributes read into a column typed
-            // by the schema (R-34).
-            crate::infer::infer(
-                &l.program,
-                &l.extern_fns,
-                &l.inputs,
-                &l.declared,
-                Some(backend.schema()),
-            )?;
-            for (at, n) in transform::computed_reads(&l.program.statements, backend.schema()) {
-                obs.note(Note::Computed(at, n));
-            }
         }
-        drop(checks);
         // An `expect_account` a secret reaches is named by its label.
         let secret_accounts = lowered
             .map(|l| crate::secrets::secret_expected_accounts(l, backend.schema(), &secret_outputs))
@@ -1472,8 +1329,188 @@ impl Located {
         base_extra.extend(backend.catalog(scope.as_ref())?);
         base_extra.extend(discovered);
         base_extra.extend(obs.facts(&backend, &st)?);
-        // Quantity and time literals read as their attributes' types
-        // (R-66, R-62), now the schema is known.
+        let program = self.typed_program(lowered, backend.schema())?;
+        let evaluator = Evaluator {
+            backend: backend.clone(),
+            externs,
+            files,
+            tables: tables.clone(),
+            program,
+            base_extra,
+            declared: l.declared.clone(),
+            secret_accounts,
+            deployment: self.deployment.clone(),
+            last_apply: opts.last_apply.clone(),
+            last: RefCell::new(None),
+            configured: RefCell::new(Vec::new()),
+            secret_settings,
+            destroy: opts.destroy,
+        };
+        let (res, violations, moves) = evaluator.settle(&mut st, &waiting, obs)?;
+        // The tables' sources; a git table whose ref has moved since the
+        // deployment was last applied says so.
+        obs.tables(&tables.sources());
+        for m in tables::moved(&st.externs, &evaluator.externs.recorded()) {
+            obs.note(Note::TableMoved(m));
+        }
+        let collisions = match opts.collisions {
+            true => self.collisions(&res, &backend),
+            false => Vec::new(),
+        };
+        for c in &collisions {
+            obs.note(Note::Collision(c.text.clone()));
+        }
+        // Policy messages quote values and rule text: redacted.
+        let redact = Redactor::new(&res.facts, backend.schema());
+        for w in &res.warnings {
+            obs.note(Note::Policy(redact.text(w)));
+        }
+        let (compiled, policy) = evaluator.compile(&res, &violations, &st, opts);
+        Ok(Evaluation {
+            located: self,
+            outputs,
+            st,
+            moves,
+            res,
+            violations,
+            collisions,
+            redact,
+            compiled,
+            policy,
+            evaluator,
+        })
+    }
+
+    /// The schema, asked for once the run knows the types it names: what
+    /// discovery answers, and the catalog's scope (`None`: the whole one).
+    fn load_schema(
+        &self,
+        backend: &Providers,
+        base_extra: &[Atom],
+        st: &State,
+        opts: &Options,
+    ) -> Result<(Vec<Atom>, Option<BTreeSet<String>>)> {
+        let types = match opts.discover_all {
+            true => None,
+            false => world_types(self.loaded.lowered.as_ref()),
+        };
+        let _schema = crate::timing::span(|| "providers' schema loaded".into());
+        let discovered = backend.discover(types.as_ref())?;
+        let scope = match opts.whole_schema {
+            true => None,
+            false => catalog_scope(&self.program, base_extra, &discovered, st),
+        };
+        backend.load_schema(scope.as_ref())?;
+        Ok((discovered, scope))
+    }
+
+    /// The program's providers started, each configured as far as the run
+    /// knows its settings (`Providers::start_deferred`); none when the
+    /// program names only built-in ones.
+    fn start_providers(
+        &self,
+        outputs: &[stack::Read],
+        opts: &Options,
+        files: &std::sync::Arc<crate::files::Files>,
+    ) -> Result<Providers> {
+        let l = &self.loaded;
+        let _started = crate::timing::span(|| "providers started and configured".into());
+        if l.starts_none() {
+            return Ok(Providers::none());
+        }
+        let held = stack::held(outputs);
+        Providers::start_deferred(
+            opts.launch,
+            &l.providers,
+            &plugin::Config {
+                world: self.paths.world.clone(),
+                inventory: self.paths.inventory.clone(),
+                chaos: opts.chaos.clone(),
+                cache: opts.cache.clone(),
+                configured: provider_configs(&self.program),
+                stack: self.deployment.clone(),
+                blocks: l.cfg.provider_blocks.clone(),
+                digest_key: opts.digest_key.clone(),
+                policies: l
+                    .manifest
+                    .as_ref()
+                    .map(|m| m.policies())
+                    .unwrap_or_default(),
+                // What dform.toml grants each provider, for the launcher
+                // (R-13b, R-143).
+                grants: l
+                    .manifest
+                    .iter()
+                    .flat_map(|m| m.grants())
+                    .map(|(k, mut g)| {
+                        g.files = crate::files::Shared(Some(files.clone()));
+                        (k, g)
+                    })
+                    .collect(),
+                files: files.clone(),
+                worlds: outputs
+                    .iter()
+                    .filter(|r| held.values().any(|h| h.deployment == r.name))
+                    .filter_map(|r| Some((r.name.clone(), r.world.clone()?)))
+                    .collect(),
+                held,
+            },
+        )
+    }
+
+    /// What derives from the deployment's master, set for the run: the
+    /// master state was applied with, or `--new-master` (R-163); `random.*`
+    /// from it (R-60), stand-ins for a run that does not hold it (R-164,
+    /// `secrets::standin`); a file of given secrets opened with its own
+    /// identity too (R-108); each key at its generation (R-161) and from
+    /// its epoch's master (R-165).
+    fn derive_with(&self, opts: &Options, st: &State) -> Result<()> {
+        opts.master.check(&self.deployment, st.master.as_deref())?;
+        crate::secrets::standin::set_active(opts.master.random.is_none());
+        crate::custody::given::set_key(opts.master.digest.clone());
+        crate::functions::random::set_secrets(&st.secrets);
+        let lowered = self.loaded.lowered.as_ref();
+        if lowered.is_some_and(|l| crate::functions::random::called(&l.program)) {
+            crate::functions::random::set_master(
+                opts.master.random.clone(),
+                opts.master.id.as_deref(),
+                &self.deployment,
+            );
+            crate::functions::random::set_epochs(&opts.master.epochs());
+        }
+        Ok(())
+    }
+
+    /// The facts the run adds to the program: the key and `--set`, the
+    /// data, the outputs it reads (a deployment not applied yet, waited on,
+    /// R-121), and the manifest, as facts policy may read.
+    fn base_facts(&self, outputs: &[stack::Read], opts: &Options) -> Vec<Atom> {
+        let l = &self.loaded;
+        let mut base_extra = self.set_facts.clone();
+        base_extra.extend(opts.data.iter().cloned());
+        base_extra.extend(stack::output_facts(outputs, &l.deployed));
+        if let Some(lw) = &l.lowered {
+            base_extra.extend(stack::unapplied_facts(
+                &lw.program,
+                &l.deployed,
+                &self.instance.key,
+                outputs,
+            ));
+        }
+        if let Some(m) = &l.manifest {
+            base_extra.extend(m.facts());
+        }
+        base_extra
+    }
+
+    /// The program evaluated: its externs declared, its quantity and time
+    /// literals read as their attributes' types (R-66, R-62), now the
+    /// schema is known.
+    fn typed_program(
+        &self,
+        lowered: Option<&transform::Lowered>,
+        schema: &crate::schema::Schema,
+    ) -> Result<Program> {
         let mut program = self.program.clone();
         if let Some(l) = lowered {
             let own: BTreeSet<&str> = program
@@ -1492,114 +1529,163 @@ impl Located {
                 .collect();
             program.statements.extend(more);
         }
-        crate::types::read(&mut program, backend.schema())?;
-        let evaluator = Evaluator {
-            backend: backend.clone(),
-            externs,
-            files,
-            tables: tables.clone(),
-            program,
-            base_extra,
-            declared: l.declared.clone(),
-            secret_accounts,
-            deployment: self.deployment.clone(),
-            last_apply: opts.last_apply.clone(),
-            last: RefCell::new(None),
-            configured: RefCell::new(Vec::new()),
-            secret_settings,
-            destroy: opts.destroy,
-        };
-        let (mut res, mut violations) = evaluator.evaluate(&st)?;
-        // moved/3 rewrites state's identity before the diff (E §3.4); round
-        // 0 must see the new addresses, so the program is evaluated again.
-        let moves =
-            st.apply_moves(&zset::Lifecycle::from_facts(&res.facts, backend.schema())?.moved);
-        if !moves.is_empty() {
-            (res, violations) = evaluator.evaluate(&st)?;
+        crate::types::read(&mut program, schema)?;
+        Ok(program)
+    }
+
+    /// The collision lint of a keyed stack: a name every deployment writes
+    /// the same. A type's provider is named by the `use` block that
+    /// configures it (its namespace's, R-36).
+    fn collisions(&self, res: &EvalResult, backend: &Providers) -> Vec<lint::Collision> {
+        let cfg = &self.loaded.cfg;
+        if cfg.keys.is_empty() || cfg.isolated {
+            return Vec::new();
         }
-        // The lost answers of a provider the evaluation has configured
-        // (R-177): what they did is the world round 0 reads, so the program
-        // is evaluated again over it.
+        let keys: Vec<String> = cfg.keys.iter().map(|(k, _)| k.clone()).collect();
+        let configured = provider_configs(&self.program);
+        let provider = |t: &str| {
+            configured
+                .iter()
+                .find(|n| backend.serves(n, t) || t.starts_with(&format!("{n}.")))
+                .cloned()
+                .unwrap_or_else(|| backend.provider_of(t).to_string())
+        };
+        lint::key_collisions(res, backend.schema(), &keys, &self.deployment, provider)
+    }
+}
+
+/// The run's externs: a table's of its file, an environment variable, the
+/// time, an image's digest, a memo, else the providers'.
+fn run_externs(
+    lowered: Option<&transform::Lowered>,
+    tables: &Rc<tables::Tables>,
+    files: &std::sync::Arc<crate::files::Files>,
+    memos: Rc<crate::memo::Memos>,
+    backend: &Rc<Providers>,
+) -> Externs<'static> {
+    let (no_program, no_fns) = (Program::default(), vec![]);
+    let (tables, backend, files) = (tables.clone(), backend.clone(), files.clone());
+    Externs::new(
+        lowered.map_or(&no_program, |l| &l.program),
+        lowered.map_or(&no_fns, |l| &l.extern_fns),
+        move |f, inputs| {
+            if let Some(r) = tables.answer(f, inputs) {
+                return r;
+            }
+            if let Some(r) = externs::env(f, inputs) {
+                return r;
+            }
+            if let Some(r) = externs::time(f) {
+                return r;
+            }
+            if let Some(r) = crate::files::oci::answer(f, inputs, &files) {
+                return r;
+            }
+            if let Some(r) = memos.answer(f, inputs) {
+                return r;
+            }
+            backend.query_extern(f, inputs)
+        },
+    )
+}
+
+/// The static secret pass and the refinement checks (a literal that
+/// violates one, E0306), against the provider's schema; a memo of a secret
+/// is kept sealed and recorded nowhere, and of a document read into a
+/// secret `let` (R-153) only its digest.
+fn check(
+    l: &transform::Lowered,
+    schema: &crate::schema::Schema,
+    secret_outputs: &BTreeSet<(String, String)>,
+    externs: &Externs,
+    obs: &mut dyn Observer,
+) -> Result<()> {
+    let _checks = crate::timing::span(|| "checked against the schema".into());
+    crate::secrets::check(l, schema, secret_outputs)?;
+    externs.mark_secret(&crate::secrets::secret_memos(l, schema, secret_outputs));
+    externs.mark_secret(&crate::secrets::secret_reads(l, schema, secret_outputs));
+    crate::refine::check(&l.program, schema)?;
+    crate::types::check(&l.program, schema)?;
+    // Column types again, the attributes read into a column typed by the
+    // schema (R-34).
+    crate::infer::infer(
+        &l.program,
+        &l.extern_fns,
+        &l.inputs,
+        &l.declared,
+        Some(schema),
+    )?;
+    for (at, n) in transform::computed_reads(&l.program.statements, schema) {
+        obs.note(Note::Computed(at, n));
+    }
+    Ok(())
+}
+
+impl Evaluator {
+    /// The program over the world as `st` has it, settled: moved/3
+    /// rewrites state's identity before the diff (E §3.4), and round 0
+    /// must see the new addresses, so the program is evaluated again; the
+    /// lost answers of a provider the evaluation has configured (R-177,
+    /// `waiting`) are what round 0 reads, so it is evaluated again over
+    /// them. The moves made.
+    #[allow(clippy::type_complexity)]
+    fn settle(
+        &self,
+        st: &mut State,
+        waiting: &BTreeSet<String>,
+        obs: &mut dyn Observer,
+    ) -> Result<(EvalResult, Vec<String>, Vec<(Address, Address)>)> {
+        let (mut res, mut violations) = self.evaluate(st)?;
+        let moves = st.apply_moves(&zset::Lifecycle::from_facts(&res.facts, self.schema())?.moved);
+        if !moves.is_empty() {
+            (res, violations) = self.evaluate(st)?;
+        }
         if !waiting.is_empty() {
-            let resolved = executor::resolve_uncertain(&backend, &mut st, |k| waiting.contains(k))?;
+            let resolved = executor::resolve_uncertain(&self.backend, st, |k| waiting.contains(k))?;
             if !resolved.is_empty() {
-                (res, violations) = evaluator.evaluate(&st)?;
+                (res, violations) = self.evaluate(st)?;
             }
             for line in resolved {
                 obs.note(Note::Resolved(line));
             }
         }
-        // The tables' sources; a git table whose ref has moved since the
-        // deployment was last applied says so.
-        obs.tables(&tables.sources());
-        for m in tables::moved(&st.externs, &evaluator.externs.recorded()) {
-            obs.note(Note::TableMoved(m));
+        Ok((res, violations, moves))
+    }
+
+    /// The resources of `res` and the plan and its policy pass, when asked
+    /// for. A destroy wants nothing, so a deny over the program's resources
+    /// has nothing to refuse; the denies over its plan (its deletes) still
+    /// refuse it. No plan when the resources do not compile: that is why.
+    #[allow(clippy::type_complexity)]
+    fn compile(
+        &self,
+        res: &EvalResult,
+        violations: &[String],
+        st: &State,
+        opts: &Options,
+    ) -> (Result<Compiled>, Option<Result<Planned>>) {
+        if opts.blocking && !opts.destroy && !violations.is_empty() {
+            return (Err(anyhow::anyhow!("blocked by constraints")), None);
         }
-        // The collision lint of a keyed stack: a name every deployment
-        // writes the same.
-        let collisions = if opts.collisions && !l.cfg.keys.is_empty() && !l.cfg.isolated {
-            let keys: Vec<String> = l.cfg.keys.iter().map(|(k, _)| k.clone()).collect();
-            // A type's provider, by the name a provider's `use` block that
-            // configures it gives it (its namespace's, R-36).
-            let configured = provider_configs(&self.program);
-            let provider = |t: &str| {
-                configured
-                    .iter()
-                    .find(|n| backend.serves(n, t) || t.starts_with(&format!("{n}.")))
-                    .cloned()
-                    .unwrap_or_else(|| backend.provider_of(t).to_string())
-            };
-            lint::key_collisions(&res, backend.schema(), &keys, &self.deployment, provider)
-        } else {
-            Vec::new()
+        let schema = self.backend.schema();
+        let compiled = Compiled::of(res, schema);
+        let plan = |c: &Compiled| {
+            let _t = crate::timing::span(|| "planned (refresh, Plan calls, policy)".into());
+            self.plan(
+                res.clone(),
+                violations,
+                c.resources.clone(),
+                &c.adopts,
+                &c.lifecycle,
+                st,
+            )
         };
-        for c in &collisions {
-            obs.note(Note::Collision(c.text.clone()));
-        }
-        // Policy messages quote values and rule text: redacted.
-        let redact = Redactor::new(&res.facts, backend.schema());
-        for w in &res.warnings {
-            obs.note(Note::Policy(redact.text(w)));
-        }
-        // A destroy wants nothing, so a deny over the program's resources
-        // has nothing to refuse; the denies over its plan (its deletes)
-        // still refuse it.
-        let (compiled, policy) = if opts.blocking && !opts.destroy && !violations.is_empty() {
-            (Err(anyhow::anyhow!("blocked by constraints")), None)
-        } else {
-            let compiled = Compiled::of(&res, backend.schema());
-            // No plan when the resources do not compile: that is why.
-            let plan = |c: &Compiled| {
-                let _t = crate::timing::span(|| "planned (refresh, Plan calls, policy)".into());
-                evaluator.plan(
-                    res.clone(),
-                    &violations,
-                    c.resources.clone(),
-                    &c.adopts,
-                    &c.lifecycle,
-                    &st,
-                )
-            };
-            let policy = match (&compiled, opts.policy) {
-                (Ok(c), true) => Some(plan(c)),
-                (Err(_), true) => Some(Compiled::of(&res, backend.schema()).and_then(|c| plan(&c))),
-                (_, false) => None,
-            };
-            (compiled, policy)
+        let policy = match (&compiled, opts.policy) {
+            (Ok(c), true) => Some(plan(c)),
+            (Err(_), true) => Some(Compiled::of(res, schema).and_then(|c| plan(&c))),
+            (_, false) => None,
         };
-        Ok(Evaluation {
-            located: self,
-            outputs,
-            st,
-            moves,
-            res,
-            violations,
-            collisions,
-            redact,
-            compiled,
-            policy,
-            evaluator,
-        })
+        (compiled, policy)
     }
 }
 
