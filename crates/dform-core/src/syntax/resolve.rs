@@ -6513,7 +6513,7 @@ impl<'u> Lowerer<'u> {
             } else {
                 k.text().to_string()
             };
-            let v = match terms(&f).next() {
+            let v = match terms(f).next() {
                 Some(t) => self.term(rc, &t, pos, pre)?,
                 // `{ a }` is `{ a: a }`.
                 None => {
