@@ -1007,10 +1007,11 @@ fn check_defined(
             || matches!(p, "member" | "enumerate")
             || crate::loader::is_core_pred(p)
     };
-    let text = |k: usize| partition::fmt_rule(&rules[k]);
-    let bodies = rules.iter().map(|r| &r.body);
     let mut errors = Vec::new();
-    for (k, body) in bodies.enumerate() {
+    // A literal several rules share (a resource's, lowered to each of its
+    // attributes) is one error.
+    let mut said = BTreeSet::new();
+    for body in rules.iter().map(|r| &r.body) {
         for lit in body {
             let (Lit::Pos(a) | Lit::Not(a)) = lit else {
                 continue;
@@ -1020,18 +1021,29 @@ fn check_defined(
             // replaces it (R-155: `a in n`).
             if !is_defined(&a.pred) && crate::functions::is_function_name(&a.pred) {
                 errors.push(crate::functions::unknown(a.span, &a.pred));
-            } else if !is_defined(&a.pred) {
+            } else if !is_defined(&a.pred) && said.insert((a.span, a.pred.as_str())) {
+                // The relation of the program it is nearest (a slip of
+                // the pen), else how one is defined.
+                let p = a.pred.rsplit("::").next().unwrap_or(&a.pred);
+                let decl = format!("decl {p}({})", crate::transform::columns(a.args.len()));
+                let named = defined.iter().filter(|d| !d.starts_with("__")).copied();
+                let help = match crate::whynot::nearest(&a.pred, named) {
+                    Some(n) => format!(
+                        "`{}` is a relation of the program; else define `{p}`, or declare one \
+                         a provider feeds, `{decl}`",
+                        n.rsplit("::").next().unwrap_or(n)
+                    ),
+                    None => format!(
+                        "define `{p}` with a fact or a rule, or declare one a provider feeds, \
+                         `{decl}`"
+                    ),
+                };
                 errors.push(
                     diag::Diagnostic::error(
                         a.span,
                         format!("undefined predicate {}/{}", a.pred, a.args.len()),
                     )
-                    .with_note(format!("in rule: {}", text(k)))
-                    .with_help(format!(
-                        "define it, or declare a predicate a provider feeds with `decl {}({})`",
-                        a.pred,
-                        crate::transform::columns(a.args.len())
-                    )),
+                    .with_help(help),
                 );
             }
         }
@@ -4656,10 +4668,14 @@ mod tests {
         .unwrap_err()
         .to_string();
         assert!(err.contains("undefined predicate envv/1"), "{err}");
+        // The relation it is nearest; said once though the resource
+        // lowers to several rules that read it; no rule in core form.
         assert!(
-            err.contains("want(\"net.vpc\", \"main\") :- envv(\"prod\")"),
+            err.contains("help: `env` is a relation of the program; else define `envv`"),
             "{err}"
         );
+        assert_eq!(err.matches("undefined predicate").count(), 1, "{err}");
+        assert!(!err.contains(":-"), "{err}");
     }
 
     /// `decl p/N` declares a provider-fed predicate; provider-injected

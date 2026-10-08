@@ -38,11 +38,14 @@ fn an_undefined_predicate_names_its_literal() {
         "{}",
         r.stderr
     );
+    // The relation it is nearest, and no rule in the compiler's form.
     assert!(
-        r.stderr.contains("in rule: q(X) :- envv(X)"),
+        r.stderr
+            .contains("Help: `env` is a relation of the program; else define `envv`"),
         "{}",
         r.stderr
     );
+    assert!(!r.stderr.contains(":-"), "{}", r.stderr);
 }
 
 /// A call to a function the evaluator does not have would have no value
