@@ -348,6 +348,31 @@ pub fn violations(facts: &BTreeSet<Atom>, declared: &[Declared]) -> Vec<String> 
             }
         }
         if leaves.iter().any(|d| d.decl.name != *k) {
+            let who = match leaves[0].address.as_deref() {
+                Some(a) => format!(
+                    "input {}",
+                    &a[..a.len() - (leaves[0].decl.name.len() - k.len())]
+                ),
+                None if scope.is_empty() => format!("input {k}"),
+                None => format!("input {k} of {scope}"),
+            };
+            // The object given whole (R-181): a value not known yet (another
+            // stack's output before it is applied) has every type; any other
+            // value but an object is none of this one's.
+            if !matches!(v, Value::Obj(_) | Value::Null { .. }) {
+                let mut fields: Vec<&str> = leaves
+                    .iter()
+                    .filter_map(|d| field_of(k, &d.decl.name))
+                    .map(|f| f.split('.').next().unwrap_or(f))
+                    .collect();
+                fields.dedup();
+                out.push(format!(
+                    "{who}: {} is not an object (its fields: {})",
+                    crate::partition::fmt_bare(v),
+                    fields.join(", ")
+                ));
+                continue;
+            }
             let mut paths = Vec::new();
             value_leaves(v, k, &mut paths);
             for p in paths {
@@ -356,16 +381,11 @@ pub fn violations(facts: &BTreeSet<Atom>, declared: &[Declared]) -> Vec<String> 
                         || p.strip_prefix(d.decl.name.as_str())
                             .is_some_and(|r| r.starts_with('.'))
                 });
-                if !known {
-                    let who = match leaves[0].address.as_deref() {
-                        Some(a) => format!(
-                            "input {}",
-                            &a[..a.len() - (leaves[0].decl.name.len() - k.len())]
-                        ),
-                        None if scope.is_empty() => format!("input {k}"),
-                        None => format!("input {k} of {scope}"),
-                    };
-                    out.push(format!("{who} has no field {}", &p[k.len() + 1..]));
+                // `k` itself is the object with no field given (`{}`, a null).
+                if let Some(field) = field_of(k, &p)
+                    && !known
+                {
+                    out.push(format!("{who} has no field {field}"));
                 }
             }
         }
@@ -478,6 +498,14 @@ fn map_value<'t>(t: &'t TypeExpr, rest: &str) -> Option<Option<&'t TypeExpr>> {
         }),
         _ => None,
     }
+}
+
+/// The field the path `p` names under the object `k`: `pool.sz` for
+/// `nodes.pool.sz` under `nodes`; none for `k` itself or a path outside it.
+fn field_of<'p>(k: &str, p: &'p str) -> Option<&'p str> {
+    p.strip_prefix(k)?
+        .strip_prefix('.')
+        .filter(|f| !f.is_empty())
 }
 
 /// `v` at the path `rest` (`a.b`) of an object, if it has it.
@@ -696,14 +724,15 @@ pub fn file_stmts(program: &Program, declared: &[Declared]) -> Result<Vec<Stmt>>
             let mut paths = Vec::new();
             term_leaves(&a.args[0], &a.pred, &mut paths);
             for p in paths {
-                if !given.contains(&p) {
+                if let Some(field) = field_of(&a.pred, &p)
+                    && !given.contains(&p)
+                {
                     let names: Vec<&str> = leaves.iter().map(|d| d.decl.name.as_str()).collect();
                     diags.push(Diagnostic::error(
                         span,
                         format!(
-                            "input {} has no field {} (its fields: {})",
+                            "input {} has no field {field} (its fields: {})",
                             a.pred,
-                            &p[a.pred.len() + 1..],
                             names.join(", ")
                         ),
                     ));
