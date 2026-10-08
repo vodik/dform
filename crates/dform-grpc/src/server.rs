@@ -159,6 +159,10 @@ impl<H: Handler + Send + Sync + 'static> pb::provider_server::Provider for Adapt
     async fn reveal(&self, req: Request<pb::RevealRequest>) -> Reply_<pb::RevealResponse> {
         self.call(req.into_inner()).await
     }
+
+    async fn health(&self, req: Request<pb::HealthRequest>) -> Reply_<pb::HealthResponse> {
+        self.call(req.into_inner()).await
+    }
 }
 
 /// Serve `handler` as a provider: listen, print the handshake line, serve

@@ -51,6 +51,9 @@ service Provider {
   // A secret this provider holds, for the engine to configure another
   // provider with (R-45): refused without the deployment's lease.
   rpc Reveal(RevealRequest) returns (RevealResponse);
+  // Each object's health as of now (R-203), for `dform status`. A
+  // provider that must poll its API to answer does so inside the call.
+  rpc Health(HealthRequest) returns (HealthResponse);
 }
 
 // A value, as src/value.rs has it. A float is finite: NaN and the infinities
@@ -169,6 +172,10 @@ message HandshakeResponse {
   // Empty: the provider declares none, and any setting is passed as
   // written.
   repeated SettingDecl settings = 5;
+  // The types the provider answers Health for (R-203): `dform status`
+  // asks it of the objects of these types and of no other. Empty: it
+  // answers for none.
+  repeated string health = 6;
 }
 
 message SettingDecl {
@@ -417,6 +424,49 @@ message RevealRequest {
 message RevealResponse {
   // The secret's bytes, for the Configure call they are revealed into.
   bytes value = 1;
+}
+
+// An object a provider manages, as state holds it.
+message Identity {
+  string type = 1;
+  // The address state maps to it, for messages.
+  string name = 2;
+  // Its remote id.
+  string remote = 3;
+}
+
+message HealthRequest {
+  // Objects of the types the handshake's `health` lists.
+  repeated Identity objects = 1;
+}
+
+message HealthResponse {
+  // One per object asked, in the order asked.
+  repeated Health answers = 1;
+}
+
+// An object's health as its provider judges it now (R-203): what `dform
+// status` prints, never a value a program reads, never in state, never
+// waited on by an apply. DEGRADED means the API itself gave up; a state
+// that may recover by itself is PROGRESSING.
+message Health {
+  HealthState state = 1;
+  // One line, as the provider's API says it; never a sensitive value.
+  string reason = 2;
+}
+
+enum HealthState {
+  HEALTH_STATE_UNSPECIFIED = 0;
+  // Doing what it is for.
+  HEALTHY = 1;
+  // Getting there: a rollout, a build, a pod waiting on its image.
+  PROGRESSING = 2;
+  // The API gave up on it, or it is gone.
+  DEGRADED = 3;
+  // Stopped on purpose: paused, suspended, shut off.
+  SUSPENDED = 4;
+  // The provider cannot tell.
+  UNKNOWN = 5;
 }
 
 message ImportRequest {

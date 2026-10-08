@@ -279,6 +279,27 @@ impl K8s {
         Ok(Some((attrs(&o), self.computed(typ, &o)?)))
     }
 
+    /// Health (R-203): each object GET and judged from its status now
+    /// (`crate::health`); one of a kind not judged is `unknown`.
+    pub async fn health(&self, objects: &[pb::Identity]) -> Result<Vec<pb::Health>> {
+        let mut out = Vec::with_capacity(objects.len());
+        for o in objects {
+            let kind = self.derived.kind(&o.r#type)?;
+            if !crate::health::judged(kind) {
+                out.push(dform_core::plugin::backend::health(
+                    pb::HealthState::Unknown,
+                    format!("the provider judges no {}", kind.kind),
+                ));
+                continue;
+            }
+            let c = self.cluster(&format!("health {}", address(&o.r#type, &o.name)))?;
+            let (ns, n) = parse_remote(kind, &o.remote, &c.namespace);
+            let got = c.get(kind, ns, n).await?;
+            out.push(crate::health::judge(kind, got.as_ref()));
+        }
+        Ok(out)
+    }
+
     /// Plan one resource: validate, diff, and whether it replaces. The dry
     /// run names the object by the document, else by `remote` (a generated
     /// name, or a namespace the program leaves to the kubeconfig, is not in
@@ -909,6 +930,7 @@ impl pb::provider_server::Provider for Service {
                     sensitive,
                 })
                 .collect(),
+            health: crate::health::types(),
         }))
     }
 
@@ -1172,6 +1194,15 @@ impl pb::provider_server::Provider for Service {
             "reveal {} {}#{}: the k8s provider holds no secret",
             h.r#type, h.remote, h.path
         )))
+    }
+
+    async fn health(&self, req: Request<pb::HealthRequest>) -> Reply<pb::HealthResponse> {
+        let k8s = self.k8s()?;
+        let answers = k8s
+            .health(&req.into_inner().objects)
+            .await
+            .map_err(|e| Status::unavailable(format!("{e:#}")))?;
+        Ok(Response::new(pb::HealthResponse { answers }))
     }
 
     async fn import(&self, req: Request<pb::ImportRequest>) -> Reply<pb::ImportResponse> {

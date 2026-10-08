@@ -430,6 +430,10 @@ impl Rename {
                     h.r#type = self.name(&h.r#type);
                 }
             }
+            Call::Health(r) => r
+                .objects
+                .iter_mut()
+                .for_each(|o| o.r#type = self.name(&o.r#type)),
             Call::Handshake(_) | Call::Configure(_) => {}
         }
         c
@@ -472,7 +476,7 @@ impl Rename {
                 self.some(&mut x.attrs);
                 self.some(&mut x.computed);
             }
-            Reply::Handshake(_) | Reply::Configure(_) | Reply::Reveal(_) => {}
+            Reply::Handshake(_) | Reply::Configure(_) | Reply::Reveal(_) | Reply::Health(_) => {}
         }
         r
     }

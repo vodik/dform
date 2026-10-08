@@ -2277,6 +2277,54 @@ impl Providers {
         Ok(world)
     }
 
+    /// Health (R-203): each object state maps (deposed ones not) whose
+    /// provider's handshake says it answers Health for its type, as that
+    /// provider judges it now; one call to each provider. An object of a
+    /// type nobody answers for is not asked, and not in the answer. For
+    /// `dform status`, and asked at no other time: nothing of it reaches
+    /// the plan, the apply or state.
+    pub fn health(&self, state: &State) -> Result<BTreeMap<Address, pb::Health>> {
+        let mut asked: BTreeMap<usize, Vec<Address>> = BTreeMap::new();
+        let mut objects: BTreeMap<usize, Vec<pb::Identity>> = BTreeMap::new();
+        for (addr, e) in self.entries(&state.resources) {
+            let i = self
+                .link_serving(&addr.typ, &e.provider)
+                .expect("entries are served");
+            if !self.links[i].borrow().answers_health(&addr.typ) {
+                continue;
+            }
+            objects.entry(i).or_default().push(pb::Identity {
+                r#type: addr.typ.clone(),
+                name: addr.name.clone(),
+                remote: e.remote.clone(),
+            });
+            asked.entry(i).or_default().push(addr);
+        }
+        let mut out = BTreeMap::new();
+        for (i, objects) in objects {
+            let n = objects.len();
+            let r: pb::HealthResponse = self.links[i]
+                .borrow_mut()
+                .call(pb::HealthRequest { objects })
+                .with_context(|| format!("provider {}: Health", self.block_name(i)))?;
+            if r.answers.len() != n {
+                bail!(
+                    "provider {}: Health answered {} objects of the {n} asked",
+                    self.block_name(i),
+                    r.answers.len()
+                );
+            }
+            out.extend(
+                asked
+                    .remove(&i)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .zip(r.answers),
+            );
+        }
+        Ok(out)
+    }
+
     /// Refresh as facts, for round-0 resolution (E Rule 4, F DR-11 revised):
     /// `identity(T, A, Rid)` for every address state maps to an object Read
     /// returns, and `world_attr(T, Rid, P, V)` for every schema-computed or

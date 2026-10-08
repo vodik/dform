@@ -87,6 +87,10 @@ impl pb::provider_server::Provider for Service {
     async fn reveal(&self, req: Request<pb::RevealRequest>) -> Answer<pb::RevealResponse> {
         self.call(req.into_inner()).await
     }
+
+    async fn health(&self, req: Request<pb::HealthRequest>) -> Answer<pb::HealthResponse> {
+        self.call(req.into_inner()).await
+    }
 }
 
 /// Serve as a provider (`dform_grpc::transport`), and exit when stdin

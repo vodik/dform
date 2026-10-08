@@ -133,7 +133,25 @@ pub struct RemoteResource {
     /// inside Apply from the object that holds it, by path.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub materialized: BTreeMap<String, Json>,
+    /// Its health, as a test writes it into the world (R-203): `state`
+    /// (healthy, progressing, degraded, suspended, unknown) and
+    /// `reason`. Absent: healthy. Health answers it for a type in
+    /// [`HEALTH`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub health: Option<WorldHealth>,
 }
+
+/// An object's health in the mock's world.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorldHealth {
+    pub state: String,
+    #[serde(default)]
+    pub reason: String,
+}
+
+/// The types the mock answers Health for (R-203), but in a test of a
+/// provider that answers none (`DFORM_TEST_FAKE_NO_HEALTH`).
+pub const HEALTH: [&str; 3] = ["compute.vm", "db.postgres", "k8s.deployment"];
 
 fn key(typ: &str, name: &str) -> String {
     format!("{typ}::{name}")
@@ -551,6 +569,38 @@ impl FakeCloud {
             self.answered(&rr.typ, &rr.attrs),
             self.outward(&rr.typ, remote, &computed),
         )))
+    }
+
+    /// Health (R-203): each object's as the world has it, healthy where it
+    /// says none; one the world does not have is degraded.
+    pub fn health(&mut self, objects: &[pb::Identity]) -> Result<Vec<pb::Health>> {
+        use pb::HealthState as S;
+        if self.awaiting {
+            bail!("health: no cloud (the program configures it and has not yet)");
+        }
+        let world = self.world()?;
+        objects
+            .iter()
+            .map(|o| {
+                let Some(rr) = world.resources.get(&key(&o.r#type, &o.remote)) else {
+                    return Ok(backend::health(S::Degraded, "not found"));
+                };
+                let Some(h) = &rr.health else {
+                    return Ok(backend::health(S::Healthy, ""));
+                };
+                let state = S::from_str_name(&h.state.to_ascii_uppercase())
+                    .filter(|s| *s != S::Unspecified)
+                    .ok_or_else(|| {
+                        anyhow!(
+                            "{}: the world's health state {:?} is none of healthy, \
+                             progressing, degraded, suspended, unknown",
+                            o.name,
+                            h.state
+                        )
+                    })?;
+                Ok(backend::health(state, h.reason.clone()))
+            })
+            .collect()
     }
 
     /// Import: an object by remote id, from the world, else the inventory.
@@ -981,6 +1031,7 @@ impl FakeCloud {
                         not_ready: BTreeMap::new(),
                         key: String::new(),
                         materialized: BTreeMap::new(),
+                        health: None,
                     },
                 );
                 Some(c.remote.clone())
@@ -1005,6 +1056,7 @@ impl FakeCloud {
                         not_ready: BTreeMap::new(),
                         key: made_by,
                         materialized: BTreeMap::new(),
+                        health: None,
                     },
                 );
                 Some(c.remote.clone())
@@ -1129,6 +1181,7 @@ impl FakeCloud {
                 not_ready,
                 key: idempotency_key.to_string(),
                 materialized: BTreeMap::new(),
+                health: None,
             },
         );
     }
@@ -1421,6 +1474,10 @@ impl Handler for Mock {
                     // Each schema it plays declares its own
                     // (`provider_setting`).
                     settings: Vec::new(),
+                    health: match std::env::var_os("DFORM_TEST_FAKE_NO_HEALTH") {
+                        Some(_) => Vec::new(),
+                        None => HEALTH.map(String::from).to_vec(),
+                    },
                 })
             }
             C::Configure(req) => {
@@ -1525,6 +1582,9 @@ impl Handler for Mock {
                 })
             }
             C::Reveal(r) => Reply::Reveal(self.reveal(r)?),
+            C::Health(r) => Reply::Health(pb::HealthResponse {
+                answers: self.cloud().health(&r.objects).map_err(invalid)?,
+            }),
         })
     }
 

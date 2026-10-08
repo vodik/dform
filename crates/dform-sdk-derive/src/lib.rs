@@ -21,7 +21,9 @@
 //! it; state keeps its digest), `name_like`. `list_key = "a,b"` is a `type_list_key`; the struct's
 //! `replace` a `type_replace`, its `retry` a `type_retry`, its `lookup =
 //! "a,b"` a `type_lookup` (R-195: what a Create that timed out is found
-//! by, each one of the struct's fields).
+//! by, each one of the struct's fields). `health` says the provider answers
+//! Health for the type (R-203): the handshake lists it, and `dform status`
+//! asks its `Lifecycle::health`.
 
 use proc_macro::TokenStream;
 use quote::quote;
@@ -83,6 +85,7 @@ fn expand(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
     let ident = &input.ident;
     let (mut typ, mut replace, mut retry) = (None::<String>, None::<String>, None::<u32>);
     let mut lookup = None::<LitStr>;
+    let mut health = false;
     for a in input.attrs.iter().filter(|a| a.path().is_ident("dform")) {
         a.parse_nested_meta(|m| {
             if m.path.is_ident("type") {
@@ -97,8 +100,10 @@ fn expand(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
                 retry = Some(m.value()?.parse::<LitInt>()?.base10_parse()?);
             } else if m.path.is_ident("lookup") {
                 lookup = Some(m.value()?.parse::<LitStr>()?);
+            } else if m.path.is_ident("health") {
+                health = true;
             } else {
-                return Err(m.error("expected type, replace, retry or lookup"));
+                return Err(m.error("expected type, replace, retry, lookup or health"));
             }
             Ok(())
         })?;
@@ -185,6 +190,7 @@ fn expand(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
         impl #impl_generics ::dform_sdk::Resource for #ident #ty_generics #where_clause {
             const TYPE: &'static str = #typ;
             const FACTS: &'static str = #facts;
+            const HEALTH: bool = #health;
         }
     })
 }

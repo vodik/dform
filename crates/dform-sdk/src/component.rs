@@ -94,6 +94,7 @@ export! {
     plan(t::PlanRequest => from_plan_request) -> t::PlanResponse: Plan => conv::to_plan_response;
     import(t::ImportRequest => from_import_request) -> t::ImportResponse: Import => conv::to_import_response;
     reveal(t::RevealRequest => from_reveal_request) -> t::RevealResponse: Reveal => conv::to_reveal_response;
+    health(t::HealthRequest => from_health_request) -> t::HealthResponse: Health => conv::to_health_response;
 }
 
 /// What an Apply answers: its events, and its result.

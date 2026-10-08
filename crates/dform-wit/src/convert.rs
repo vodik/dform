@@ -236,6 +236,7 @@ macro_rules! convert {
                             sensitive: s.sensitive,
                         })
                         .collect(),
+                    health: r.health.clone(),
                 }
             }
 
@@ -253,6 +254,7 @@ macro_rules! convert {
                             sensitive: s.sensitive,
                         })
                         .collect(),
+                    health: r.health.clone(),
                 })
             }
 
@@ -679,6 +681,76 @@ macro_rules! convert {
             pub fn from_reveal_response(r: &w::RevealResponse) -> R<pb::RevealResponse> {
                 Ok(pb::RevealResponse {
                     value: r.value.clone(),
+                })
+            }
+
+            pub fn to_health_request(r: &pb::HealthRequest) -> w::HealthRequest {
+                w::HealthRequest {
+                    objects: r
+                        .objects
+                        .iter()
+                        .map(|o| w::Identity {
+                            type_: o.r#type.clone(),
+                            name: o.name.clone(),
+                            remote: o.remote.clone(),
+                        })
+                        .collect(),
+                }
+            }
+
+            pub fn from_health_request(r: &w::HealthRequest) -> R<pb::HealthRequest> {
+                Ok(pb::HealthRequest {
+                    objects: r
+                        .objects
+                        .iter()
+                        .map(|o| pb::Identity {
+                            r#type: o.type_.clone(),
+                            name: o.name.clone(),
+                            remote: o.remote.clone(),
+                        })
+                        .collect(),
+                })
+            }
+
+            /// A state the proto leaves unspecified is `unknown`: the
+            /// provider did not say.
+            pub fn to_health_response(r: &pb::HealthResponse) -> w::HealthResponse {
+                use pb::HealthState as S;
+                w::HealthResponse {
+                    answers: r
+                        .answers
+                        .iter()
+                        .map(|h| w::Health {
+                            state: match S::try_from(h.state) {
+                                Ok(S::Healthy) => w::HealthState::Healthy,
+                                Ok(S::Progressing) => w::HealthState::Progressing,
+                                Ok(S::Degraded) => w::HealthState::Degraded,
+                                Ok(S::Suspended) => w::HealthState::Suspended,
+                                _ => w::HealthState::Unknown,
+                            },
+                            reason: h.reason.clone(),
+                        })
+                        .collect(),
+                }
+            }
+
+            pub fn from_health_response(r: &w::HealthResponse) -> R<pb::HealthResponse> {
+                use pb::HealthState as S;
+                Ok(pb::HealthResponse {
+                    answers: r
+                        .answers
+                        .iter()
+                        .map(|h| pb::Health {
+                            state: match h.state {
+                                w::HealthState::Healthy => S::Healthy,
+                                w::HealthState::Progressing => S::Progressing,
+                                w::HealthState::Degraded => S::Degraded,
+                                w::HealthState::Suspended => S::Suspended,
+                                w::HealthState::Unknown => S::Unknown,
+                            } as i32,
+                            reason: h.reason.clone(),
+                        })
+                        .collect(),
                 })
             }
         }

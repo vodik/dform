@@ -33,6 +33,10 @@ pub trait Resource: Serialize + DeserializeOwned {
     /// Its `type_attr` (and `type_list_key`, `type_replace`, `type_retry`,
     /// `type_lookup`) facts, as `.df` text.
     const FACTS: &'static str;
+    /// Whether the provider answers Health for it (`#[dform(health)]`,
+    /// R-203): the handshake lists it, and `dform status` asks
+    /// [`Lifecycle::health`].
+    const HEALTH: bool = false;
 }
 
 /// How a call failed, as a lifecycle function says it.
@@ -185,6 +189,16 @@ pub trait Lifecycle<P: Provider>: Resource {
         let _ = (p, desired);
         Ok(())
     }
+    /// The object `remote`'s health as of now (R-203), for `dform status`
+    /// and nothing else: asked only of a type that declares it
+    /// (`#[dform(health)]`). Judge it from what the API says now (a
+    /// provider that must poll to answer polls here); never measure time:
+    /// degraded is the API having given up, and what may recover by itself
+    /// is progressing. `None` answers `unknown`.
+    fn health(p: &P, remote: &str) -> Result<Option<pb::Health>> {
+        let _ = (p, remote);
+        Ok(None)
+    }
 }
 
 /// An object as the protocol has it: configured and computed.
@@ -210,6 +224,8 @@ trait Kind<P>: Send + Sync {
     ) -> Result<Json>;
     fn delete(&self, p: &P, remote: &str, progress: &Progress) -> Result<()>;
     fn check(&self, p: &P, desired: &Json) -> Result<()>;
+    fn answers_health(&self) -> bool;
+    fn health(&self, p: &P, remote: &str) -> Result<Option<pb::Health>>;
 }
 
 struct K<R>(std::marker::PhantomData<fn() -> R>);
@@ -262,6 +278,14 @@ impl<P: Provider, R: Lifecycle<P> + 'static> Kind<P> for K<R> {
 
     fn check(&self, p: &P, desired: &Json) -> Result<()> {
         R::check(p, desired)
+    }
+
+    fn answers_health(&self) -> bool {
+        R::HEALTH
+    }
+
+    fn health(&self, p: &P, remote: &str) -> Result<Option<pb::Health>> {
+        R::health(p, remote)
     }
 }
 
@@ -506,6 +530,12 @@ impl<P: Provider> Typed<P> {
                 .collect(),
                 version: P::VERSION.to_string(),
                 settings: Vec::new(),
+                health: self
+                    .kinds
+                    .iter()
+                    .filter(|(_, k)| k.answers_health())
+                    .map(|(t, _)| t.to_string())
+                    .collect(),
             }),
             Call::Configure(r) => {
                 let config = wire::from_doc_or_empty(r.config.as_ref()).map_err(Error::from)?;
@@ -577,7 +607,28 @@ impl<P: Provider> Typed<P> {
                     P::NAME
                 )));
             }
+            Call::Health(r) => Reply::Health(self.health(r)?),
         })
+    }
+
+    /// Each object's health, as its type's [`Lifecycle::health`] judges
+    /// it; `unknown` for one it judges none of.
+    fn health(&self, r: pb::HealthRequest) -> Result<pb::HealthResponse> {
+        let answers = r
+            .objects
+            .iter()
+            .map(|o| {
+                let k = self.kind(&o.r#type)?;
+                let judged = match k.answers_health() {
+                    true => self.with(|p| k.health(p, &o.remote))?,
+                    false => None,
+                };
+                Ok(judged.unwrap_or_else(|| {
+                    backend::health(pb::HealthState::Unknown, "the provider judges none")
+                }))
+            })
+            .collect::<Result<_>>()?;
+        Ok(pb::HealthResponse { answers })
     }
 }
 

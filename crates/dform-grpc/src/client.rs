@@ -324,6 +324,7 @@ async fn send(mut c: ProviderClient<Channel>, call: Call, event: impl Fn(pb::Eve
         }
         Call::Import(r) => Reply::Import(c.import(r).await?.into_inner()),
         Call::Reveal(r) => Reply::Reveal(c.reveal(r).await?.into_inner()),
+        Call::Health(r) => Reply::Health(c.health(r).await?.into_inner()),
     })
 }
 

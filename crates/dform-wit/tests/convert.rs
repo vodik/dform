@@ -77,10 +77,11 @@ fn an_event_and_a_reveal_round_trip() {
     );
 }
 
-/// A handshake's declared settings, each with its sensitive flag, cross
-/// the WIT as the proto has them (a component provider declares them too).
+/// A handshake's declared settings, each with its sensitive flag, and the
+/// types it answers Health for, cross the WIT as the proto has them (a
+/// component provider declares them too).
 #[test]
-fn a_handshake_carries_its_settings() {
+fn a_handshake_carries_its_settings_and_health_types() {
     let hs = pb::HandshakeResponse {
         protocol_version: 1,
         name: "kubernetes".into(),
@@ -96,9 +97,47 @@ fn a_handshake_carries_its_settings() {
                 sensitive: false,
             },
         ],
+        health: vec!["k8s.deployment".into(), "k8s.apps.v1.deployment".into()],
     };
     assert_eq!(
         c::from_handshake_response(&c::to_handshake_response(&hs)).unwrap(),
         hs
+    );
+}
+
+/// A Health call's objects and answers cross the WIT in order, each state
+/// as it was (R-203).
+#[test]
+fn health_crosses_the_wit() {
+    let req = pb::HealthRequest {
+        objects: vec![pb::Identity {
+            r#type: "ovh.instance".into(),
+            name: "web".into(),
+            remote: "i-1".into(),
+        }],
+    };
+    assert_eq!(
+        c::from_health_request(&c::to_health_request(&req)).unwrap(),
+        req
+    );
+    use pb::HealthState as S;
+    let resp = pb::HealthResponse {
+        answers: [
+            S::Healthy,
+            S::Progressing,
+            S::Degraded,
+            S::Suspended,
+            S::Unknown,
+        ]
+        .into_iter()
+        .map(|s| pb::Health {
+            state: s as i32,
+            reason: format!("{s:?}"),
+        })
+        .collect(),
+    };
+    assert_eq!(
+        c::from_health_response(&c::to_health_response(&resp)).unwrap(),
+        resp
     );
 }

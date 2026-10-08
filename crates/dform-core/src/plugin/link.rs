@@ -22,6 +22,9 @@ pub struct Link {
     /// The settings its handshake declares, each with whether its value is
     /// sensitive ([`crate::schema::Schema::settings`]).
     pub settings: Vec<(String, bool)>,
+    /// The types its handshake says it answers Health for (R-203), as
+    /// the provider names them.
+    pub health: Vec<String>,
     /// What was started, for messages.
     pub program: String,
     /// How the launcher hosted it, for `provider check` (R-13b).
@@ -106,6 +109,7 @@ impl Link {
             name: String::new(),
             capabilities: Vec::new(),
             settings: Vec::new(),
+            health: Vec::new(),
             backend: Timed::new(program.clone(), backend, policy.timeout),
             program,
             hosting: None,
@@ -132,6 +136,7 @@ impl Link {
         link.backend.set_name(&hs.name);
         link.name = hs.name;
         link.capabilities = hs.capabilities;
+        link.health = hs.health;
         link.settings = hs
             .settings
             .into_iter()
@@ -163,6 +168,16 @@ impl Link {
 
     pub fn has(&self, capability: &str) -> bool {
         self.capabilities.iter().any(|c| c == capability)
+    }
+
+    /// Whether it answers Health for `typ`, as the program names the type
+    /// (R-203).
+    pub fn answers_health(&self, typ: &str) -> bool {
+        let typ = match &self.rename {
+            Some((_, out)) => out.name(typ),
+            None => typ.to_string(),
+        };
+        self.health.contains(&typ)
     }
 
     /// The provider's name, else what was started.
@@ -363,6 +378,7 @@ mod tests {
                 capabilities: vec!["resource".into()],
                 version: self.1.into(),
                 settings: Vec::new(),
+                health: Vec::new(),
             }))
         }
     }

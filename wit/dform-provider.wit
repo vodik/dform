@@ -195,6 +195,10 @@ interface types {
     // Empty: the provider declares none, and any setting is passed as
     // written.
     settings: list<setting-decl>,
+    // The types the provider answers Health for (R-203): `dform status`
+    // asks it of the objects of these types and of no other. Empty: it
+    // answers for none.
+    health: list<string>,
   }
 
   record setting-decl {
@@ -443,6 +447,53 @@ interface types {
     value: list<u8>,
   }
 
+  // An object a provider manages, as state holds it.
+  record identity {
+    %type: string,
+    // The address state maps to it, for messages.
+    name: string,
+    // Its remote id.
+    remote: string,
+  }
+
+  record health-request {
+    // Objects of the types the handshake's `health` lists.
+    objects: list<identity>,
+  }
+
+  record health-response {
+    // One per object asked, in the order asked.
+    answers: list<health>,
+  }
+
+  // An object's health as its provider judges it now (R-203): what `dform
+  // status` prints, never a value a program reads, never in state, never
+  // waited on by an apply. The provider never measures time: degraded
+  // means the API itself gave up (a deadline it keeps exceeded, a terminal
+  // error), and a state that may recover by itself is progressing.
+  record health {
+    state: health-state,
+    // One line, as the provider's API says it (`1 of 3 available`,
+    // `BackoffLimitExceeded`); empty when there is nothing to add. Never
+    // a sensitive value.
+    reason: string,
+  }
+
+  // The proto's HEALTH_STATE_UNSPECIFIED has no case: WIT enums need no
+  // zero.
+  enum health-state {
+    // Doing what it is for.
+    healthy,
+    // Getting there: a rollout, a build, a pod waiting on its image.
+    progressing,
+    // The API gave up on it, or it is gone.
+    degraded,
+    // Stopped on purpose: paused, suspended, shut off.
+    suspended,
+    // The provider cannot tell (a status word it does not know).
+    unknown,
+  }
+
   record import-request {
     %type: string,
     remote: string,
@@ -468,7 +519,7 @@ interface provider {
     configure-response, schema-request, schema-response, query-request, row,
     read-request, read-response, plan-request, plan-response, apply-request,
     apply-response, import-request, import-response, event, reveal-request,
-    reveal-response,
+    reveal-response, health-request, health-response,
   };
 
   // Protocol version and capabilities. The first call.
@@ -504,6 +555,10 @@ interface provider {
   // without the deployment's lease, and by a provider that is not the
   // holder or cannot reach the object, naming it and the path.
   reveal: async func(request: reveal-request) -> result<reveal-response, call-error>;
+  // Each object's health as of now (R-203), for `dform status`: a
+  // separate question from Read, asked at no other time. A provider that
+  // must poll its API to answer does so inside the call.
+  health: async func(request: health-request) -> result<health-response, call-error>;
 }
 
 // What a provider component is (not `world provider`: a world and an

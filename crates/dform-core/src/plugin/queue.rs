@@ -169,6 +169,7 @@ fn across_call(c: &Call) -> Result<Call, CallError> {
         Call::Apply(r) => Call::Apply(across(r)?),
         Call::Import(r) => Call::Import(across(r)?),
         Call::Reveal(r) => Call::Reveal(across(r)?),
+        Call::Health(r) => Call::Health(across(r)?),
     })
 }
 
@@ -185,6 +186,7 @@ fn across_reply(r: &Reply) -> Result<Reply, CallError> {
         Reply::Apply(r) => Reply::Apply(across(r)?),
         Reply::Import(r) => Reply::Import(across(r)?),
         Reply::Reveal(r) => Reply::Reveal(across(r)?),
+        Reply::Health(r) => Reply::Health(across(r)?),
     })
 }
 

@@ -42,6 +42,7 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
+mod health;
 mod network;
 mod storage;
 mod user;
@@ -1804,6 +1805,8 @@ impl Handler for Ovh {
                     capabilities: ["resource", "managed", "keep", "offline"]
                         .map(String::from)
                         .to_vec(),
+                    // R-203: each judged from its status word.
+                    health: health::TYPES.map(String::from).to_vec(),
                     version: backend::BUILD.into(),
                     // What names the account; the keys are the OVH SDK's
                     // configuration's, never a setting (R-44).
@@ -1901,6 +1904,9 @@ impl Handler for Ovh {
                 },
             ),
             C::Reveal(r) => Reply::Reveal(self.reveal(r)?),
+            C::Health(r) => Reply::Health(pb::HealthResponse {
+                answers: self.health(&r.objects).map_err(invalid)?,
+            }),
         })
     }
 }

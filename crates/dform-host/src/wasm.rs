@@ -712,6 +712,11 @@ impl Instance {
                     .await?
                     .map_err(conv::from_call_error)
                     .and_then(|r| decode(conv::from_reveal_response(&r)).map(Reply::Reveal)),
+                Call::Health(r) => p
+                    .call_health(a, conv::to_health_request(r))
+                    .await?
+                    .map_err(conv::from_call_error)
+                    .and_then(|r| decode(conv::from_health_response(&r)).map(Reply::Health)),
             })
         };
         match answered.await {

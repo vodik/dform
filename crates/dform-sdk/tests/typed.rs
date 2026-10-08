@@ -542,3 +542,89 @@ fn keep_is_the_providers_promise() {
         "b"
     );
 }
+
+/// A queue that says how deep it is: its health (R-203).
+#[derive(Resource, Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[dform(type = "acme.queue", health)]
+struct Queue {
+    #[dform(required)]
+    name: String,
+}
+
+impl Lifecycle<Acme> for Queue {
+    fn read(_: &Acme, remote: &str) -> Result<Option<Queue>> {
+        Ok(Some(Queue {
+            name: remote.into(),
+        }))
+    }
+    fn create(_: &Acme, d: Queue, _: &str, _: &Progress) -> Result<(String, Queue)> {
+        Ok((d.name.clone(), d))
+    }
+    fn update(_: &Acme, _: &str, _: Queue, d: Queue, _: &Progress) -> Result<Queue> {
+        Ok(d)
+    }
+    fn delete(_: &Acme, _: &str, _: &Progress) -> Result<()> {
+        Ok(())
+    }
+    fn health(_: &Acme, remote: &str) -> Result<Option<pb::Health>> {
+        Ok(Some(dform_sdk::health(
+            pb::HealthState::Degraded,
+            format!("{remote}: 9000 messages behind"),
+        )))
+    }
+}
+
+/// `#[dform(health)]` lists a type in the handshake and Health asks its
+/// `Lifecycle::health`; a type without it is listed nowhere (postgres
+/// and vault declare none).
+#[test]
+fn a_type_that_declares_health_answers_it() {
+    let h = Typed::<Acme>::new()
+        .resource::<Bucket>()
+        .resource::<Queue>();
+    let hs: pb::HandshakeResponse = call(
+        &h,
+        pb::HandshakeRequest {
+            protocol_version: 1,
+        },
+    );
+    assert_eq!(hs.health, ["acme.queue"]);
+    assert_eq!(
+        provider()
+            .handle(
+                pb::HandshakeRequest {
+                    protocol_version: 1
+                }
+                .into(),
+                &silent
+            )
+            .map(|r| match r {
+                Reply::Handshake(hs) => hs.health.len(),
+                _ => 9,
+            }),
+        Ok(0)
+    );
+    let _: pb::ConfigureResponse = call(
+        &h,
+        pb::ConfigureRequest {
+            config: Some(wire::doc(&json!({"settings": {}}))),
+        },
+    );
+    let r: pb::HealthResponse = call(
+        &h,
+        pb::HealthRequest {
+            objects: vec![pb::Identity {
+                r#type: "acme.queue".into(),
+                name: "jobs".into(),
+                remote: "jobs".into(),
+            }],
+        },
+    );
+    assert_eq!(
+        r.answers,
+        [dform_sdk::health(
+            pb::HealthState::Degraded,
+            "jobs: 9000 messages behind"
+        )]
+    );
+}

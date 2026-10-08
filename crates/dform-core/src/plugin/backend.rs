@@ -132,6 +132,7 @@ methods! {
     Apply(pb::ApplyRequest) -> pb::ApplyResponse,
     Import(pb::ImportRequest) -> pb::ImportResponse,
     Reveal(pb::RevealRequest) -> pb::RevealResponse,
+    Health(pb::HealthRequest) -> pb::HealthResponse,
 }
 
 /// Where a call says how it is going (R-130): an Apply's provider sends an
@@ -150,6 +151,15 @@ pub fn event(address: impl Into<String>, status: Option<&str>, message: Option<&
         address: address.into(),
         status: status.map(str::to_string),
         message: message.map(str::to_string),
+    }
+}
+
+/// An object's health as its provider judges it now (R-203): `state`, and
+/// a reason in one line, as the API says it.
+pub fn health(state: pb::HealthState, reason: impl Into<String>) -> pb::Health {
+    pb::Health {
+        state: state as i32,
+        reason: reason.into(),
     }
 }
 
