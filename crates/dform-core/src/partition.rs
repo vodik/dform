@@ -1899,6 +1899,18 @@ pub fn fmt_lit(l: &Lit) -> String {
     }
 }
 
+/// A clause as the program writes it, for a message: membership is
+/// `x in r` and `x not in r`, not the relation it lowers to.
+pub fn fmt_written(l: &Lit) -> String {
+    match l {
+        Lit::Pos(a) | Lit::Not(a) if a.pred == "member" && a.args.len() == 2 => {
+            let not = if matches!(l, Lit::Not(_)) { " not" } else { "" };
+            format!("{}{not} in {}", fmt_term(&a.args[1]), fmt_term(&a.args[0]))
+        }
+        l => fmt_lit(l),
+    }
+}
+
 pub fn fmt_rule(r: &RuleStmt) -> String {
     let body = r.body.iter().map(fmt_lit).collect::<Vec<_>>().join(", ");
     if body.is_empty() {

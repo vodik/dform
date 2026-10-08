@@ -649,7 +649,7 @@ fn deny_rules(
         .collect();
     let text = rest
         .iter()
-        .map(|l| crate::partition::fmt_lit(&subst_lit(l, &named)))
+        .map(|l| crate::partition::fmt_written(&subst_lit(l, &named)))
         .collect::<Vec<_>>()
         .join(", ");
     let ok = atom(

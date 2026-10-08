@@ -1319,7 +1319,7 @@ pub fn refinement(i: &InputDecl, scope: &str) -> Vec<Stmt> {
     let named = Term::Var(i.name.clone());
     let text = rest
         .iter()
-        .map(|l| crate::partition::fmt_lit(&subst_lit(l, &i.name, &named)))
+        .map(|l| crate::partition::fmt_written(&subst_lit(l, &i.name, &named)))
         .collect::<Vec<_>>()
         .join(", ");
     let who = if scope.is_empty() {

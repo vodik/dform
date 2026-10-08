@@ -168,7 +168,7 @@ fn an_input_is_checked_against_a_range() {
     let r = plan(&["--set", "storage=600Gi"]).failure();
     assert!(
         r.stderr
-            .contains("input storage fails its refinement: member(1Gi..=500Gi, storage)"),
+            .contains("input storage fails its refinement: storage in 1Gi..=500Gi"),
         "{}",
         r.stderr
     );
@@ -191,7 +191,11 @@ fn an_input_is_a_range() {
         s.run(&common::on("p.df", &["--world", "w.json"], &a))
     };
     let r = plan(&[]).success();
-    assert!(r.stdout.contains("pool = \"10.0.0.2..=10.0.0.9\""), "{}", r.stdout);
+    assert!(
+        r.stdout.contains("pool = \"10.0.0.2..=10.0.0.9\""),
+        "{}",
+        r.stdout
+    );
     assert!(r.stdout.contains("size = 8"), "{}", r.stdout);
     let r = plan(&["--set", "pool=10.0.0.2..=10.0.0.3"]).success();
     assert!(r.stdout.contains("size = 2"), "{}", r.stdout);
