@@ -497,7 +497,8 @@ pub fn secret_fields(t: &TypeExpr) -> Vec<(String, Option<&TypeExpr>)> {
     }
 }
 
-/// `a.b`, or `a` when `b` is empty.
+/// `a.b`, or `a` when `b` is empty and `b` when `a` is (a scope `""`
+/// is the program's).
 pub fn dotted(a: &str, b: &str) -> String {
     match (a.is_empty(), b.is_empty()) {
         (true, _) => b.to_string(),
@@ -1054,5 +1055,12 @@ mod tests {
             assert!(measured(t) && Ty::parse(t).measured(), "{t}");
         }
         assert!(!measured("int") && !Ty::parse("inet").measured());
+    }
+
+    #[test]
+    fn dotted_joins_a_scope_and_a_name_either_empty() {
+        assert_eq!(dotted("net", "vpc"), "net.vpc");
+        assert_eq!(dotted("", "vpc"), "vpc");
+        assert_eq!(dotted("net", ""), "net");
     }
 }

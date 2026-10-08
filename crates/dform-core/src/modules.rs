@@ -459,15 +459,6 @@ fn check_types(who: &str, inputs: &[InputDecl], diags: &mut Vec<Diagnostic>) {
     }
 }
 
-/// `scope.rest`, the scope `""` being the program's.
-fn join_scope(scope: &str, rest: &str) -> String {
-    match (scope.is_empty(), rest.is_empty()) {
-        (true, _) => rest.to_string(),
-        (_, true) => scope.to_string(),
-        _ => format!("{scope}.{rest}"),
-    }
-}
-
 pub fn expand(program: &Program) -> Result<Expanded> {
     let mut cx = Cx {
         defs: definitions(&program.statements),
@@ -606,7 +597,7 @@ pub fn expand(program: &Program) -> Result<Expanded> {
         if matches!(body, [Lit::Pos(a)] if a.pred == INPUT) {
             continue;
         }
-        let address = join_scope(scope, k);
+        let address = crate::types::dotted(scope, k);
         let what = format!("`set {address}`");
         if !paths.is_empty() && !paths.contains(&address) {
             let msg = match address.rsplit_once('.').filter(|(o, _)| paths.contains(*o)) {
@@ -793,7 +784,7 @@ impl Cx<'_> {
             );
         }
         let scope = u.name.as_str();
-        let abs = join_scope(at, scope);
+        let abs = crate::types::dotted(at, scope);
         let mut out = Vec::new();
         // A used module's inputs are the stack's to give, `m.k` (R-55); a
         // copy's are its instance block's.
@@ -865,7 +856,7 @@ impl Cx<'_> {
         }
         for i in &iface.inputs {
             for leaf in crate::inputs::leaves(i) {
-                let address = flat.then(|| join_scope(&abs, &leaf.name));
+                let address = flat.then(|| crate::types::dotted(&abs, &leaf.name));
                 let bound = u.inputs.iter().any(|(k, _, _)| {
                     *k == leaf.name
                         || leaf
@@ -1100,7 +1091,7 @@ fn instance_inputs(
                     u.span,
                     format!(
                         "input {} is required and has no value",
-                        join_scope(scope, &i.name)
+                        crate::types::dotted(scope, &i.name)
                     ),
                 )
                 .with_label(
@@ -1537,7 +1528,7 @@ fn given_rules(scope: &str, address: &str, i: &InputDecl) -> Vec<Stmt> {
             head: head(v.clone()),
             body: vec![Lit::Pos(atom(
                 "input",
-                vec![str_term(&join_scope(address, &p)), v.clone()],
+                vec![str_term(&crate::types::dotted(address, &p)), v.clone()],
                 span,
             ))],
         }));
@@ -1545,7 +1536,7 @@ fn given_rules(scope: &str, address: &str, i: &InputDecl) -> Vec<Stmt> {
         if leaf.is_some_and(|l| crate::inputs::is_map(&l.ty)) {
             let k = Term::Var("K".into());
             let mut body = vec![Lit::Pos(atom("input", vec![k.clone(), v.clone()], span))];
-            let prefix = join_scope(address, &p);
+            let prefix = crate::types::dotted(address, &p);
             body.extend(crate::inputs::map_entry_lits(&k, &prefix, v, "E"));
             out.push(Stmt::Rule(RuleStmt {
                 head: head(Term::Var("E".into())),
@@ -1786,7 +1777,7 @@ fn rewrite_atom(mut atom: Atom, sc: Sc) -> Atom {
 /// copy's own `""`.
 fn prefix_scope(scope: &str, inner: Term) -> Term {
     match inner {
-        Term::Val(Value::Str(s)) => str_term(&join_scope(scope, &s)),
+        Term::Val(Value::Str(s)) => str_term(&crate::types::dotted(scope, &s)),
         Term::Func { ref name, .. } if name == ABSOLUTE => inner,
         t => Term::Func {
             name: crate::ir::FORMAT.into(),

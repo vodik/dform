@@ -73,18 +73,18 @@ pub fn cells<'e>(
     sym: &Symbol,
     path: &str,
 ) -> Vec<Cell<'e>> {
-    let join = |a: &str, b: &str| match (a.is_empty(), b.is_empty()) {
-        (true, _) => b.to_string(),
-        (_, true) => a.to_string(),
-        _ => format!("{a}.{b}"),
-    };
     // Which attribute facts: (type, scopes or addresses, key, the path
     // into the value).
     let (typ, names, key, inner): (String, Vec<String>, String, String) = match sym {
         Symbol::Value(s, k) => ("input".into(), d.cell_scopes(s), k.clone(), path.into()),
         Symbol::Let(s, k) => ("let".into(), d.cell_scopes(s), k.clone(), path.into()),
         Symbol::Output(s, k) => ("output".into(), d.cell_scopes(s), k.clone(), path.into()),
-        Symbol::Field(s, i, f) => ("input".into(), d.cell_scopes(s), i.clone(), join(f, path)),
+        Symbol::Field(s, i, f) => (
+            "input".into(),
+            d.cell_scopes(s),
+            i.clone(),
+            dform_core::types::dotted(f, path),
+        ),
         Symbol::Resource(..) if !path.is_empty() => {
             let addrs = d.addresses_of(sym);
             let Some((t, _)) = addrs.first() else {
