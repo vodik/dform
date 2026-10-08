@@ -250,7 +250,11 @@ type_doc(
   "Its OpenStack roles (`objectstore_operator`, `compute_operator`, ...). Changed in place.",
 )
 type_doc("ovh.cloud_project_user", "username", "The name the API made for it (`user-Xk3pQ9`).")
-type_doc("ovh.cloud_project_user", "status", "`ok` once it can be used; `creating` while it is made.")
+type_doc(
+  "ovh.cloud_project_user",
+  "status",
+  "`ok` once it can be used; `creating` while it is made.",
+)
 type_doc(
   "ovh.cloud_project_user",
   "s3_access_key",
@@ -328,7 +332,11 @@ type_doc(
 )
 type_doc("ovh.subnet", "network", "The private network it is of (`network = lab`).")
 type_doc("ovh.subnet", "region", "The region it is in, one of its network's.")
-type_doc("ovh.subnet", "range", "The network's range (`10.0.0.0/24`), what the API calls `network`.")
+type_doc(
+  "ovh.subnet",
+  "range",
+  "The network's range (`10.0.0.0/24`), what the API calls `network`.",
+)
 type_doc(
   "ovh.subnet",
   "pool",
