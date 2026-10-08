@@ -150,8 +150,16 @@ impl Lowerer<'_> {
         let head = atom_at(&name, args, span);
         self.check_bound(&rc, &body, &atom_terms(&head))?;
         let arity = head.args.len();
+        // The demand is a relation the readers feed, declared so that a
+        // module's copy names it its own with the let.
+        let demand = Extern {
+            pred: crate::demand::of(&name),
+            arity: arity - 1,
+            span,
+        };
         Ok(vec![
             Stmt::Rule(RuleStmt { head, body }),
+            Stmt::Extern(demand),
             Stmt::Mode(Extern {
                 pred: name,
                 arity,

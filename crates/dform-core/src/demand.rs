@@ -101,7 +101,7 @@ impl Lets {
     /// A read of a data source in a let's rules: an error at the read.
     fn impure(&self, externs: &BTreeSet<String>) -> Vec<Diagnostic> {
         let mut out = Vec::new();
-        for (f, at) in &self.modes {
+        for f in self.modes.keys() {
             for r in self.rules(f) {
                 for l in &r.body {
                     let (Lit::Pos(a) | Lit::Not(a)) = l else {
@@ -123,7 +123,6 @@ impl Lets {
                                  value its arguments' alone"
                             ),
                         )
-                        .with_label(*at, format!("let {name} is declared here"))
                         .with_help(format!(
                             "read it in a `let` of its own and pass the value to {name} as a \
                              parameter"

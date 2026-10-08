@@ -255,12 +255,12 @@ fn space(prev: &SyntaxToken, cur: &SyntaxToken) -> &'static str {
     if matches!(c, COMMA | R_PAREN | COLON) {
         return "";
     }
-    // Calls, atoms, type applications, declarations and records hug their
-    // name.
+    // Calls, atoms, type applications, declarations, a let's parameters
+    // and records hug their name.
     if c == L_PAREN
         && matches!(
             cp,
-            Some(ARG_LIST | TYPE_EXPR | DECL | EXTERN | INPUT_RELATION)
+            Some(ARG_LIST | TYPE_EXPR | DECL | EXTERN | INPUT_RELATION | PARAMS)
         )
     {
         return "";
@@ -485,7 +485,7 @@ impl Layout {
                     self.bracketed(elems, i, Shape::term(" ", Commas::Trailing))
                 }
                 (DECL, L_PAREN) => self.bracketed(elems, i, Shape::term("", Commas::Trailing)),
-                (EXTERN | TYPE_EXPR, L_PAREN) => {
+                (EXTERN | TYPE_EXPR | PARAMS, L_PAREN) => {
                     self.bracketed(elems, i, Shape::term("", Commas::Between))
                 }
                 _ => {
