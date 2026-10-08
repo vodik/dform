@@ -63,10 +63,12 @@ sources and trust roots. Outside a project, `plan` and the `dev`
 views run on a program file with no state; `apply`, `stack`,
 `state` and `log` refuse (a `dev --world` run keeps its state beside the
 world file, and runs anywhere). A stack is a file, named after itself:
-`stacks/shop.df` is the stack `shop`. With no `stacks/` directory the
-root's `.df` files are the stacks (but `project.df`), so `dform.toml` beside `shop.df` is a
-project with one stack; any file runs by path, named after itself. A
-file that is not a stack with a `key` is an error, and so is a
+`stacks/shop.df` is the stack `shop`, and so is a root file a
+`[stacks.NAME]` names (`dform.toml` beside `shop.df` with `[stacks.shop]`
+is a project with one stack); any other root file is a module, not
+listed. Any file runs by path, named after itself: it is then an
+entrypoint and may have a `key` (R-208). A `key` in a file a program
+uses as a module is an error at its line, and so is a
 resource of a stack anywhere but in the project module, `project.df`,
 which lists the deployments (below). `docs/layout.md` has the convention; every
 example under `examples/` follows it, and test-only programs are under
@@ -435,7 +437,9 @@ dform status forgejo env=prod
 # status: 9 healthy, 1 progressing, 2 degraded, 4 without health
 ```
 
-`dform stack list` is a result set, one row per deployment with state
+`dform stack list` is a result set over the project's stacks (files
+under `stacks/` and root files a `[stacks.NAME]` names; a module run by
+path is no stack of the project), one row per deployment with state
 (not one `destroy` removed) and per deployment project.df lists:
 its stack (with its key) and file, whether project.df lists it, where its state is when that is a
 bucket, its last apply (time, actor and the project's commit, from the

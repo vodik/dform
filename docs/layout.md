@@ -42,10 +42,11 @@ dform.state/                state: per deployment, audit logs, masters,
   Never inputs or key values: a deployment is named by its target. Policy
   reads it as `project_provider(Name, Constraint)`, `project_default(Key,
   Value)` and `project_stack(Name, Key, Value)`.
-- A stack is a file, named after itself: discovery takes `stacks/*.df`,
-  or, in a project with no `stacks/`, the root's `.df` files but
-  `project.df` (a one-file project is `dform.toml` beside `shop.df`). Any file runs by path, named
-  after itself. A `[stacks.NAME]` no file is is an error. A directory
+- A stack is a file, named after itself: discovery takes `stacks/*.df`
+  and the root files a `[stacks.NAME]` names (a one-file project is
+  `dform.toml` beside `shop.df` with `[stacks.shop]`); any other root
+  file is a module. Any file runs by path, named after itself, as an
+  entrypoint (R-208). A `[stacks.NAME]` no file is is an error. A directory
   holding its own `dform.toml` is another project, not walked.
 - A stack's keys are its `key` statements: `key env: environment` makes
   each value of `env` a deployment, given by the target (`dform plan shop
@@ -88,8 +89,9 @@ dform.state/                state: per deployment, audit logs, masters,
   `state.key` without `[secrets]`; sealed in `state.master` with it) is
   its secrets' root (docs/reference.md "Secrets").
 
-The lints: a file that is not a stack with a `key` is an error, and so is
-a resource of a stack anywhere but in the project module.
+The lints: a `key` in a file a program uses as a module is an error at
+its line (R-208), and so is a resource of a stack anywhere but in the
+project module.
 
 ## This repository
 

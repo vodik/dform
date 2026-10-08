@@ -48,9 +48,12 @@ written.
 A header statement after the body's first statement is an error that says
 to move it ("`key env` is a header statement: move it above the file's
 first other statement, line 5"); `dform fmt` moves it, and puts the header's
-kinds in order, keeping the author's order within a kind. The header
-reads names the body declares: `input env: environment` above `type
-environment = ..` resolves, as every name does, program-wide.
+kinds in order, keeping the author's order within a kind. A type alias,
+`type NAME = ..`, may stand among the header's lines (R-208), so the type
+an input names can come first (`type environment = enum("lab", "prod")`,
+then `input env: environment`); it neither begins the body nor moves. The
+header reads names the body declares: `input env: environment` above
+`type environment = ..` resolves too.
 
 What a file or a component offers, not only what it takes, comes first
 too (R-11a): `decl`, then `output`, after `input` and before the rest.
@@ -1265,7 +1268,7 @@ statement that closes it.
   resource` ranges over every resource, the user's too); its names are
   its file's alone, so a name its body does not declare is no read of
   its user's: a policy pack keyed by the stack's `env` declares `input
-  env: enum("lab", "prod")` and the stack gives it, `use baseline { env
+  env: config.environment` and the stack gives it, `use baseline { env
   }` (the pun for `env = env`); a relation of the user's it takes as
   `input p` with its `decl`, given rows in the block (`use stdlib_net {
   vpc_peer(a, b) where vpc_peer(a, b) }`); its components' bodies read
@@ -1482,8 +1485,53 @@ plan shop env=prod`), never `--set` (an error naming the target form), it
 may not be `secret`, and its value names the deployment, with its own
 state. Several `key` lines make a composite key in source order
 (`shop[env=prod,region=eu]`). A key is declared at the top of the stack's
-file; one in any other module is an error. `stack`, the statement of an
-earlier surface, is an error that says so.
+file. `stack`, the statement of an earlier surface, is an error that says
+so.
+
+**Entrypoints** (R-208). A file the tool runs is an entrypoint: a file
+under `stacks/`, a root file a `[stacks.NAME]` names, or the one file the
+tool is pointed at (`dform plan envs/one.df env=lab`), which then acts as
+a stack named by its path (`envs.one[env=lab]`). The first two are the
+project's stacks, which discovery, `stack list`, `project.df` and `use
+stacks.NAME` see; any other file, a root file included, is a module, and
+runs as an entrypoint only when named on the command line. Only an
+entrypoint is deployed, so a `key` anywhere else is an error at its line:
+"`key env` in a file that is not an entrypoint: a key is a deployment's
+identity; a module takes `input env` instead", its help the input to
+declare and the `use` to give it in, labelled where the module is used.
+A key in a component or a block is an error too: a component is
+evaluated inside one deployment, many times or not at all, so it cannot
+name the deployment it is in.
+
+**Keys versus inputs.** A stack has identity, a module does not. A key
+is a deployment's identity, written only in the file the tool runs; a
+module learns its deployment by being told: it declares `input env:
+config.environment`, and its user gives it, `use k3s { env }` (the pun
+for `env = env`). The same module serves a stack keyed by env, one keyed
+by region (`use k3s { env = "prod" }`) and one with no key, and does not
+care which. Inputs and outputs are the module's signature, the cost of
+being a function: neither is imported, a key is not one, and an output is
+read through the instance that made it (`k3s.kubeconfig`,
+`platform[env].kubeconfig`), by whoever holds that instance in scope.
+What is shared by name is the type, not the declaration: `type
+environment = enum("lab", "prod")` once in a module every file can name,
+`key env: config.environment` in the stacks, `input env:
+config.environment` in the modules, `e in config.environment` in
+`project.df` ("Type aliases": read by its path, it needs no instance of
+the module). A type declared in a stack cannot be shared: a stack is
+never imported. The declaration is repeated, once per signature; that is
+the point. What a `use` gives is checked where it is written: a key or
+input whose enum has a member the module input's enum has not is an
+error naming both types (`` key env, enum(lab, prod), is given to input
+mod.env, enum(dev, prod): `lab` is not one of its members ``), and the pun
+with nothing of its name in scope says so (`` `env` in the block of `use
+k3s` is `env = env`, and nothing here declares `env` ``). A module input
+nothing gives is the error at the `use`, its help the pun when the scope
+declares the name. A key's value from the target outside its type is an
+error at the key's line, naming the deployments its members name. A
+keyed read of a name the dependency does not output (`platform[env].nosuch`)
+is an error at the read naming its outputs; a key read as an output
+(`platform[env].env`) says the key names the deployment.
 
 `use stacks.platform` binds the stack's deployments, which the tool made:
 `platform[env=e].out` (or by its full name, `stacks.platform[env=e].out`)
@@ -1723,8 +1771,20 @@ not take a built-in type's name (`int`, `string`, `bool`, `inet`,
 
 Where an alias is in scope: in its file, an alias in a component in the
 component. Another module's aliases are public, read through the name
-its `use` binds or its path (`config.environment`, `network.node_pool`).
-Two aliases of one name in one scope are an error listing both.
+its `use` binds or its path from the root (`config.environment`,
+`network.node_pool`). Two aliases of one name in one scope are an error
+listing both.
+
+An alias read by a module's path is the type in every type position
+(R-208): a `key`'s, an input's, a typed `let`'s (read as a value, not a
+reference), a `decl` column's, an output's (read by the module's user as
+the value), `x in config.environment`, and a comparison of its members.
+It is lexical: the module is the one the file's own `use` binds, or the
+one its path from the root names, which the loader loads for that
+purpose; never one some other file of the program happens to load. Such
+a read needs no instance of the module, so `config`'s required inputs are
+no one's to give where only its type is named. A dotted name that is no
+alias is a resource type (`ref(T)`).
 
 ### Documents
 
@@ -2732,8 +2792,9 @@ A formatted file prints back byte for byte.
   `output(k, t') :- B, reads`, in a module or a component too.
 - A module reads only its own file's names (R-205), but it lowers through
   the programs that use it (R-65): its inputs are given there.
-- (R-65) A stack is a file under `stacks/` or one `[stacks.NAME]` names,
-  for `use`; discovery keeps its fallback (with no `stacks/`, the root's
-  files are the stacks).
+- (R-65, R-208) A stack is a file under `stacks/` or a root file one
+  `[stacks.NAME]` names, for `use`, discovery and the language server
+  alike (`project::is_stack`); a root file is otherwise a module, an
+  entrypoint only when the tool is pointed at it.
 - (R-65, R-113) `use` of a component item is an error naming `resource`:
   a module is imported, a component is a type.
