@@ -1281,7 +1281,7 @@ impl Printer<'_> {
             out: Vec::new(),
             sizes: BTreeMap::new(),
         };
-        site_of(&mut s, &mut c, id, 0)
+        s.site_of(&mut c, id, 0)
     }
 
     /// Where the winning value of attribute fact `attr` (an `attr/4`),
@@ -1324,7 +1324,7 @@ impl Printer<'_> {
                     keys: keys.clone(),
                     value: None,
                 });
-                winner_site(&mut s, &mut c, id, focus.as_ref(), !whole, 0)
+                s.winner_site(&mut c, id, focus.as_ref(), !whole, 0)
             })
             .collect()
     }
@@ -1405,7 +1405,7 @@ impl Printer<'_> {
             sizes: BTreeMap::new(),
         };
         let focus = contribution_focus(fact, path);
-        let mut site = value_site(&mut s, &mut c, id, focus.as_ref(), 0)?;
+        let mut site = s.value_site(&mut c, id, focus.as_ref(), 0)?;
         let rank = rank_of(fact).1;
         if fact.pred == "arg" && site.rank.is_none() && rank != "normal" {
             site.rank = Some(rank.to_string());
@@ -1719,135 +1719,6 @@ fn rank_of(f: &Fact) -> (u8, &str) {
     }
 }
 
-/// The site of aggregate fact `id`'s winning contribution (holding the
-/// focused part), the value followed to where it was written.
-fn winner_site(
-    s: &mut Surface,
-    c: &mut Compress,
-    id: NodeId,
-    focus: Option<&Focus>,
-    single: bool,
-    depth: usize,
-) -> Option<Site> {
-    let circuit = s.p.circuit;
-    let View::Fact { alts, .. } = circuit.view(id) else {
-        return None;
-    };
-    let alt = *alts.iter().min_by_key(|a| c.size(circuit, **a))?;
-    let View::Times { children, .. } = circuit.view(alt) else {
-        return None;
-    };
-    let aggregate = children.iter().any(
-        |ch| matches!(circuit.view(*ch), View::Leaf(Leaf::Rule { id }) if id.starts_with('Σ')),
-    );
-    if !aggregate {
-        return value_site(s, c, id, focus, depth);
-    }
-    let mut contributions: Vec<(NodeId, &Fact)> = children
-        .iter()
-        .filter_map(|ch| match circuit.view(*ch) {
-            View::Fact { fact, .. } if fact.pred == "arg" && !is_check(fact) => Some((*ch, fact)),
-            _ => None,
-        })
-        .filter(|(_, f)| match focus {
-            Some(focus) => f.args.get(3).is_some_and(|v| focus.holds(v)),
-            None => true,
-        })
-        .collect();
-    contributions.sort_by_key(|(_, f)| std::cmp::Reverse(rank_of(f).0));
-    let (win, fact) = *contributions.first()?;
-    let (top, rank) = rank_of(fact);
-    // Part of the value, not reached by the focus: one writer, or none.
-    if single
-        && contributions
-            .iter()
-            .filter(|(_, f)| rank_of(f).0 == top)
-            .count()
-            > 1
-    {
-        return None;
-    }
-    // The rank of a contribution the program wrote that the winner beat;
-    // a provider's default is beaten by every value.
-    let lower: Vec<(NodeId, &Fact)> = contributions
-        .iter()
-        .filter(|(_, f)| rank_of(f).0 < top && !placeholder(f, f.args.get(3)))
-        .copied()
-        .collect();
-    let beat = lower.into_iter().find_map(|(id, f)| {
-        site_of(s, c, id, depth + 1)
-            .filter(|w| !w.at.is_empty() && !w.at.starts_with('<'))
-            .map(|w| (rank_of(f).1.to_string(), w.at))
-    });
-    let mut site = value_site(s, c, win, focus, depth)?;
-    if site.rank.is_none() && rank != "normal" {
-        site.rank = Some(rank.to_string());
-    }
-    if site.beat.is_none()
-        && let Some((rank, at)) = beat
-    {
-        site.beat = Some(rank);
-        site.beat_at = Some(at);
-    }
-    Some(site)
-}
-
-/// The site of fact `id`, a contribution or a cell's value: where its
-/// firing's statement is, unless the firing only passes on the value of
-/// an input or a `let` it reads, whose winning site it is then.
-fn value_site(
-    s: &mut Surface,
-    c: &mut Compress,
-    id: NodeId,
-    focus: Option<&Focus>,
-    depth: usize,
-) -> Option<Site> {
-    let circuit = s.p.circuit;
-    let own = site_of(s, c, id, depth);
-    let View::Fact { fact, alts, .. } = circuit.view(id) else {
-        return own;
-    };
-    let mut value = match fact.pred.as_str() {
-        "arg" | "attr" => fact.args.get(3),
-        _ => None,
-    };
-    let entry = own.as_ref().and_then(|o| o.entry.as_deref());
-    let mut rhs = entry.map(|e| e.split_once(" = ").map_or(e, |(_, r)| r).to_string());
-    // The focused field of an object the entry writes, `{ d: config.d }`,
-    // and its part of the value.
-    if let (Some(f), Some(e)) = (focus.filter(|f| !f.keys.is_empty()), rhs.as_deref())
-        && let Some(field) = field_of(e, &f.keys)
-    {
-        rhs = Some(field);
-        value = f
-            .keys
-            .iter()
-            .try_fold(value, |v, k| match v {
-                Some(Value::Obj(m)) => Some(m.get(k)),
-                _ => None,
-            })
-            .flatten();
-    }
-    // What the entry reads, when it is a path (`gcp.project_id`).
-    let read: Option<Vec<String>> = rhs.as_deref().and_then(|rhs| {
-        let plain =
-            !rhs.is_empty() && !rhs.contains(|c: char| c.is_whitespace() || "()[]{}$,".contains(c));
-        plain.then(|| crate::ir::path_keys(rhs))
-    });
-    if depth < FOLLOW
-        && let Some(v) = value
-        && let Some(&alt) = alts.iter().min_by_key(|a| c.size(circuit, **a))
-        && let View::Times { children, .. } = circuit.view(alt)
-        && let Some((p, keys)) = passed_cell(c, circuit, children, v, read.as_deref())
-    {
-        let focus = (!keys.is_empty()).then_some(Focus { keys, value: None });
-        if let Some(site) = winner_site(s, c, p, focus.as_ref(), false, depth + 1) {
-            return Some(site);
-        }
-    }
-    own
-}
-
 /// One step of a value's provenance chain (R-122), `= EXPR   SITE`: the
 /// expression that wrote the value as the source writes it, where, the
 /// clause's bindings and the rank it won at; or a contribution it beat
@@ -1910,7 +1781,7 @@ impl Printer<'_> {
             lost: &mut lost,
             keys: stack_keys,
         };
-        winner_chain(&mut s, &mut c, id, focus, 0, &mut w);
+        s.winner_chain(&mut c, id, focus, 0, &mut w);
         // A binding is a step's when its expression reads it and no next
         // step names its value (`= zone_index[z]  with z = "a"`); a key's
         // value is the deployment line's.
@@ -1939,88 +1810,6 @@ struct Chain<'a> {
     out: &'a mut Vec<Step>,
     lost: &'a mut Vec<Step>,
     keys: &'a BTreeSet<String>,
-}
-
-/// [`winner_site`], each step kept: the winning contribution's chain,
-/// and each one it beat into `lost`.
-fn winner_chain(
-    s: &mut Surface,
-    c: &mut Compress,
-    id: NodeId,
-    focus: Option<&Focus>,
-    depth: usize,
-    w: &mut Chain,
-) {
-    let circuit = s.p.circuit;
-    let View::Fact { alts, .. } = circuit.view(id) else {
-        return;
-    };
-    let Some(&alt) = alts.iter().min_by_key(|a| c.size(circuit, **a)) else {
-        return;
-    };
-    let View::Times { children, .. } = circuit.view(alt) else {
-        return;
-    };
-    let aggregate = children.iter().any(
-        |ch| matches!(circuit.view(*ch), View::Leaf(Leaf::Rule { id }) if id.starts_with('Σ')),
-    );
-    if !aggregate {
-        return value_chain(s, c, id, focus, None, depth, w);
-    }
-    let part = |v: &Value| -> Option<Value> {
-        let mut at = v;
-        for k in focus.map(|f| f.keys.as_slice()).unwrap_or_default() {
-            let Value::Obj(m) = at else { return None };
-            at = m.get(k)?;
-        }
-        Some(at.clone())
-    };
-    let mut contributions: Vec<(NodeId, &Fact)> = children
-        .iter()
-        .filter_map(|ch| match circuit.view(*ch) {
-            View::Fact { fact, .. } if fact.pred == "arg" && !is_check(fact) => Some((*ch, fact)),
-            _ => None,
-        })
-        .filter(|(_, f)| f.args.get(3).and_then(part).is_some())
-        .collect();
-    contributions.sort_by_key(|(_, f)| std::cmp::Reverse(rank_of(f).0));
-    let Some(&(win, fact)) = contributions.first() else {
-        return;
-    };
-    let (top, rank) = rank_of(fact);
-    let won = fact.args.get(3).and_then(part);
-    // What it beat: a lower rank's value, where it differs. An object's
-    // contributions at the winning rank merge; none of them lost.
-    for &(l, f) in &contributions[1..] {
-        let v = f.args.get(3).and_then(part);
-        if rank_of(f).0 == top
-            || v == won
-            || matches!(v, Some(Value::Obj(_)))
-            || placeholder(f, v.as_ref())
-        {
-            continue;
-        }
-        if let (Some(site), Some(v)) = (site_of(s, c, l, depth + 1), v) {
-            let r = rank_of(f).1;
-            w.lost.push(Step {
-                expr: match f.args.get(3) {
-                    Some(whole) => super::surface_in(
-                        s.p.redact,
-                        whole,
-                        focus.map(|f| f.keys.as_slice()).unwrap_or_default(),
-                        &v,
-                    ),
-                    None => s.p.redact.surface(&v),
-                },
-                at: place(&site),
-                with: Vec::new(),
-                rank: (r != "normal").then(|| r.to_string()),
-                lost: true,
-            });
-        }
-    }
-    let rank = (rank != "normal").then_some(rank);
-    value_chain(s, c, win, focus, rank, depth, w);
 }
 
 /// Whether `v`, contribution `f`'s value (or the part of it asked
@@ -2053,123 +1842,6 @@ fn place(site: &Site) -> String {
     match site.at.is_empty() {
         true => site.statement.clone(),
         false => site.at.clone(),
-    }
-}
-
-/// [`value_site`], each step kept: the expression that wrote fact `id`,
-/// then the chain of the input or `let` it reads.
-fn value_chain(
-    s: &mut Surface,
-    c: &mut Compress,
-    id: NodeId,
-    focus: Option<&Focus>,
-    rank: Option<&str>,
-    depth: usize,
-    w: &mut Chain,
-) {
-    let circuit = s.p.circuit;
-    let Some(own) = site_of(s, c, id, depth) else {
-        return;
-    };
-    let View::Fact { fact, alts, .. } = circuit.view(id) else {
-        return;
-    };
-    let mut value = match fact.pred.as_str() {
-        "arg" | "attr" => fact.args.get(3),
-        _ => None,
-    };
-    let mut rhs = own
-        .entry
-        .as_deref()
-        .map(|e| e.split_once(" = ").map_or(e, |(_, r)| r).to_string());
-    if let (Some(f), Some(e)) = (focus.filter(|f| !f.keys.is_empty()), rhs.as_deref()) {
-        rhs = field_of(e, &f.keys).or_else(|| shorthand(e, &f.keys));
-    }
-    if let Some(f) = focus.filter(|f| !f.keys.is_empty()) {
-        value = f
-            .keys
-            .iter()
-            .try_fold(value, |v, k| match v {
-                Some(Value::Obj(m)) => Some(m.get(k)),
-                _ => None,
-            })
-            .flatten();
-    }
-    // The value is a secret's, or a part of one: its expression says no
-    // literal (R-124 amendment 2).
-    let secret = match (value, fact.pred.as_str(), fact.args.get(3)) {
-        (Some(v), "arg" | "attr", Some(whole)) => {
-            s.p.redact.is_secret(v)
-                || super::surface_in(
-                    s.p.redact,
-                    whole,
-                    focus.map(|f| f.keys.as_slice()).unwrap_or_default(),
-                    v,
-                ) == "(sensitive)"
-        }
-        (Some(v), ..) => s.p.redact.is_secret(v),
-        _ => false,
-    };
-    let expr = match (&rhs, value) {
-        (Some(r), _) if secret => super::masked(r),
-        (Some(r), _) => r.clone(),
-        // A plain leaf of a secret object is `(sensitive)` too.
-        (None, Some(v)) => match (fact.pred.as_str(), fact.args.get(3)) {
-            ("arg" | "attr", Some(whole)) => super::surface_in(
-                s.p.redact,
-                whole,
-                focus.map(|f| f.keys.as_slice()).unwrap_or_default(),
-                v,
-            ),
-            _ => s.p.redact.surface(v),
-        },
-        (None, None) => own.statement.clone(),
-    };
-    w.out.push(Step {
-        expr,
-        at: place(&own),
-        with: own.with.clone(),
-        rank: rank.map(str::to_string),
-        lost: false,
-    });
-    if depth >= FOLLOW {
-        return;
-    }
-    let Some(&alt) = alts.iter().min_by_key(|a| c.size(circuit, **a)) else {
-        return;
-    };
-    let View::Times { children, .. } = circuit.view(alt) else {
-        return;
-    };
-    // What the entry reads, when it is a path (`config.region`), and the
-    // cell that passes the value on.
-    let read: Option<Vec<String>> = rhs.as_deref().and_then(|rhs| {
-        let plain = !rhs.is_empty()
-            && !rhs.contains(|c: char| c.is_whitespace() || "()[]{}$,\"".contains(c));
-        plain.then(|| crate::ir::path_keys(rhs))
-    });
-    let next = match value {
-        Some(v) => passed_cell(c, circuit, children, v, read.as_deref()),
-        None => None,
-    };
-    // An expression of one cell (`str.lower(cidrs.main)`): that cell's value.
-    let next = next.or_else(|| read_cell(c, circuit, children, rhs.as_deref()?));
-    // A stack key ends it: the deployment line says its value.
-    let key = |p: NodeId| match circuit.view(p) {
-        View::Fact { fact, .. } => {
-            fact.args.first().and_then(Value::as_str) == Some("input")
-                && fact.args.get(1).and_then(Value::as_str) == Some("")
-                && fact
-                    .args
-                    .get(2)
-                    .and_then(Value::as_str)
-                    .is_some_and(|n| w.keys.contains(n))
-        }
-        _ => false,
-    };
-    if let Some((p, keys)) = next.filter(|(p, _)| !key(*p)) {
-        let focus = (!keys.is_empty()).then_some(Focus { keys, value: None });
-        winner_chain(s, c, p, focus.as_ref(), depth + 1, w);
     }
 }
 
@@ -2404,112 +2076,444 @@ fn passed_cell(
     })
 }
 
-/// Where fact node `id` is derived: its stated place, or the statement of
-/// its shortest firing; through a firing of a rule the compiler wrote, the
-/// first fact it read that has one.
-fn site_of(s: &mut Surface, c: &mut Compress, id: NodeId, depth: usize) -> Option<Site> {
-    if let Some(site) = s.sites.get(&(id, depth)) {
-        return site.clone();
-    }
-    let site = site_found(s, c, id, depth);
-    s.sites.insert((id, depth), site.clone());
-    site
-}
-
-/// [`site_of`], found.
-fn site_found(s: &mut Surface, c: &mut Compress, id: NodeId, depth: usize) -> Option<Site> {
-    let circuit = s.p.circuit;
-    let View::Fact { fact, alts, .. } = circuit.view(id) else {
-        return None;
-    };
-    if let [a] = alts
-        && let View::Times { children: [l], .. } = circuit.view(*a)
-        && let View::Leaf(l) = circuit.view(*l)
-    {
-        return match l {
-            Leaf::Base { span } => {
-                let (at, origin) = base_parts(span);
-                let stmt = at
-                    .rsplit_once(':')
-                    .and_then(|(f, l)| Some((f.to_string(), l.parse().ok()?)));
-                let mut site = Site {
-                    at: at.to_string(),
-                    statement: s.fact_text(fact),
-                    origin: origin.map(str::to_string),
-                    stmt,
-                    // A resource's own attribute; an input's value given
-                    // in a `use` says which input.
-                    stated: !matches!(
-                        fact.args.first().and_then(Value::as_str),
-                        Some("input" | "let")
-                    ),
-                    ..Site::default()
-                };
-                // Stated in a block: the statement's lines, and the entry.
-                if let Some((file, first, last, entry)) = s.stated_in(span) {
-                    site.stmt = Some((file, first));
-                    site.last = last;
-                    site.entry = entry;
+impl Surface<'_, '_> {
+    /// The site of aggregate fact `id`'s winning contribution (holding the
+    /// focused part), the value followed to where it was written.
+    fn winner_site(
+        &mut self,
+        c: &mut Compress,
+        id: NodeId,
+        focus: Option<&Focus>,
+        single: bool,
+        depth: usize,
+    ) -> Option<Site> {
+        let circuit = self.p.circuit;
+        let View::Fact { alts, .. } = circuit.view(id) else {
+            return None;
+        };
+        let alt = *alts.iter().min_by_key(|a| c.size(circuit, **a))?;
+        let View::Times { children, .. } = circuit.view(alt) else {
+            return None;
+        };
+        let aggregate = children.iter().any(
+            |ch| matches!(circuit.view(*ch), View::Leaf(Leaf::Rule { id }) if id.starts_with('Σ')),
+        );
+        if !aggregate {
+            return self.value_site(c, id, focus, depth);
+        }
+        let mut contributions: Vec<(NodeId, &Fact)> = children
+            .iter()
+            .filter_map(|ch| match circuit.view(*ch) {
+                View::Fact { fact, .. } if fact.pred == "arg" && !is_check(fact) => {
+                    Some((*ch, fact))
                 }
-                Some(site)
-            }
-            Leaf::Input { source } => Some(Site {
-                statement: s.p.redact.text(source),
-                ..Site::default()
-            }),
+                _ => None,
+            })
+            .filter(|(_, f)| match focus {
+                Some(focus) => f.args.get(3).is_some_and(|v| focus.holds(v)),
+                None => true,
+            })
+            .collect();
+        contributions.sort_by_key(|(_, f)| std::cmp::Reverse(rank_of(f).0));
+        let (win, fact) = *contributions.first()?;
+        let (top, rank) = rank_of(fact);
+        // Part of the value, not reached by the focus: one writer, or none.
+        if single
+            && contributions
+                .iter()
+                .filter(|(_, f)| rank_of(f).0 == top)
+                .count()
+                > 1
+        {
+            return None;
+        }
+        // The rank of a contribution the program wrote that the winner beat;
+        // a provider's default is beaten by every value.
+        let lower: Vec<(NodeId, &Fact)> = contributions
+            .iter()
+            .filter(|(_, f)| rank_of(f).0 < top && !placeholder(f, f.args.get(3)))
+            .copied()
+            .collect();
+        let beat = lower.into_iter().find_map(|(id, f)| {
+            self.site_of(c, id, depth + 1)
+                .filter(|w| !w.at.is_empty() && !w.at.starts_with('<'))
+                .map(|w| (rank_of(f).1.to_string(), w.at))
+        });
+        let mut site = self.value_site(c, win, focus, depth)?;
+        if site.rank.is_none() && rank != "normal" {
+            site.rank = Some(rank.to_string());
+        }
+        if site.beat.is_none()
+            && let Some((rank, at)) = beat
+        {
+            site.beat = Some(rank);
+            site.beat_at = Some(at);
+        }
+        Some(site)
+    }
+
+    /// The site of fact `id`, a contribution or a cell's value: where its
+    /// firing's statement is, unless the firing only passes on the value of
+    /// an input or a `let` it reads, whose winning site it is then.
+    fn value_site(
+        &mut self,
+        c: &mut Compress,
+        id: NodeId,
+        focus: Option<&Focus>,
+        depth: usize,
+    ) -> Option<Site> {
+        let circuit = self.p.circuit;
+        let own = self.site_of(c, id, depth);
+        let View::Fact { fact, alts, .. } = circuit.view(id) else {
+            return own;
+        };
+        let mut value = match fact.pred.as_str() {
+            "arg" | "attr" => fact.args.get(3),
             _ => None,
         };
-    }
-    if let Some(at) = table_row(circuit, alts) {
-        return Some(Site {
-            at,
-            statement: s.fact_text(fact),
-            ..Site::default()
+        let entry = own.as_ref().and_then(|o| o.entry.as_deref());
+        let mut rhs = entry.map(|e| e.split_once(" = ").map_or(e, |(_, r)| r).to_string());
+        // The focused field of an object the entry writes, `{ d: config.d }`,
+        // and its part of the value.
+        if let (Some(f), Some(e)) = (focus.filter(|f| !f.keys.is_empty()), rhs.as_deref())
+            && let Some(field) = field_of(e, &f.keys)
+        {
+            rhs = Some(field);
+            value = f
+                .keys
+                .iter()
+                .try_fold(value, |v, k| match v {
+                    Some(Value::Obj(m)) => Some(m.get(k)),
+                    _ => None,
+                })
+                .flatten();
+        }
+        // What the entry reads, when it is a path (`gcp.project_id`).
+        let read: Option<Vec<String>> = rhs.as_deref().and_then(|rhs| {
+            let plain = !rhs.is_empty()
+                && !rhs.contains(|c: char| c.is_whitespace() || "()[]{}$,".contains(c));
+            plain.then(|| crate::ir::path_keys(rhs))
         });
+        if depth < FOLLOW
+            && let Some(v) = value
+            && let Some(&alt) = alts.iter().min_by_key(|a| c.size(circuit, **a))
+            && let View::Times { children, .. } = circuit.view(alt)
+            && let Some((p, keys)) = passed_cell(c, circuit, children, v, read.as_deref())
+        {
+            let focus = (!keys.is_empty()).then_some(Focus { keys, value: None });
+            if let Some(site) = self.winner_site(c, p, focus.as_ref(), false, depth + 1) {
+                return Some(site);
+            }
+        }
+        own
     }
-    let alt = *alts.iter().min_by_key(|a| c.size(circuit, **a))?;
-    let View::Times { children, bindings } = circuit.view(alt) else {
-        return None;
-    };
-    let rule = children.iter().find_map(|ch| match circuit.view(*ch) {
-        View::Leaf(Leaf::Rule { id }) => Some(id.as_str()),
-        _ => None,
-    });
-    // A value given on the command line is the flag that gave it, not the
-    // declaration that reads it.
-    let given = |id: NodeId| match circuit.view(id) {
-        View::Leaf(Leaf::Input { source }) => Some(source),
-        View::Fact { alts: [a], .. } => match circuit.view(*a) {
-            View::Times { children: [l], .. } => match circuit.view(*l) {
-                View::Leaf(Leaf::Input { source }) => Some(source),
+
+    /// [`winner_site`], each step kept: the winning contribution's chain,
+    /// and each one it beat into `lost`.
+    fn winner_chain(
+        &mut self,
+        c: &mut Compress,
+        id: NodeId,
+        focus: Option<&Focus>,
+        depth: usize,
+        w: &mut Chain,
+    ) {
+        let circuit = self.p.circuit;
+        let View::Fact { alts, .. } = circuit.view(id) else {
+            return;
+        };
+        let Some(&alt) = alts.iter().min_by_key(|a| c.size(circuit, **a)) else {
+            return;
+        };
+        let View::Times { children, .. } = circuit.view(alt) else {
+            return;
+        };
+        let aggregate = children.iter().any(
+            |ch| matches!(circuit.view(*ch), View::Leaf(Leaf::Rule { id }) if id.starts_with('Σ')),
+        );
+        if !aggregate {
+            return self.value_chain(c, id, focus, None, depth, w);
+        }
+        let part = |v: &Value| -> Option<Value> {
+            let mut at = v;
+            for k in focus.map(|f| f.keys.as_slice()).unwrap_or_default() {
+                let Value::Obj(m) = at else { return None };
+                at = m.get(k)?;
+            }
+            Some(at.clone())
+        };
+        let mut contributions: Vec<(NodeId, &Fact)> = children
+            .iter()
+            .filter_map(|ch| match circuit.view(*ch) {
+                View::Fact { fact, .. } if fact.pred == "arg" && !is_check(fact) => {
+                    Some((*ch, fact))
+                }
+                _ => None,
+            })
+            .filter(|(_, f)| f.args.get(3).and_then(part).is_some())
+            .collect();
+        contributions.sort_by_key(|(_, f)| std::cmp::Reverse(rank_of(f).0));
+        let Some(&(win, fact)) = contributions.first() else {
+            return;
+        };
+        let (top, rank) = rank_of(fact);
+        let won = fact.args.get(3).and_then(part);
+        // What it beat: a lower rank's value, where it differs. An object's
+        // contributions at the winning rank merge; none of them lost.
+        for &(l, f) in &contributions[1..] {
+            let v = f.args.get(3).and_then(part);
+            if rank_of(f).0 == top
+                || v == won
+                || matches!(v, Some(Value::Obj(_)))
+                || placeholder(f, v.as_ref())
+            {
+                continue;
+            }
+            if let (Some(site), Some(v)) = (self.site_of(c, l, depth + 1), v) {
+                let r = rank_of(f).1;
+                w.lost.push(Step {
+                    expr: match f.args.get(3) {
+                        Some(whole) => super::surface_in(
+                            self.p.redact,
+                            whole,
+                            focus.map(|f| f.keys.as_slice()).unwrap_or_default(),
+                            &v,
+                        ),
+                        None => self.p.redact.surface(&v),
+                    },
+                    at: place(&site),
+                    with: Vec::new(),
+                    rank: (r != "normal").then(|| r.to_string()),
+                    lost: true,
+                });
+            }
+        }
+        let rank = (rank != "normal").then_some(rank);
+        self.value_chain(c, win, focus, rank, depth, w);
+    }
+
+    /// [`value_site`], each step kept: the expression that wrote fact `id`,
+    /// then the chain of the input or `let` it reads.
+    fn value_chain(
+        &mut self,
+        c: &mut Compress,
+        id: NodeId,
+        focus: Option<&Focus>,
+        rank: Option<&str>,
+        depth: usize,
+        w: &mut Chain,
+    ) {
+        let circuit = self.p.circuit;
+        let Some(own) = self.site_of(c, id, depth) else {
+            return;
+        };
+        let View::Fact { fact, alts, .. } = circuit.view(id) else {
+            return;
+        };
+        let mut value = match fact.pred.as_str() {
+            "arg" | "attr" => fact.args.get(3),
+            _ => None,
+        };
+        let mut rhs = own
+            .entry
+            .as_deref()
+            .map(|e| e.split_once(" = ").map_or(e, |(_, r)| r).to_string());
+        if let (Some(f), Some(e)) = (focus.filter(|f| !f.keys.is_empty()), rhs.as_deref()) {
+            rhs = field_of(e, &f.keys).or_else(|| shorthand(e, &f.keys));
+        }
+        if let Some(f) = focus.filter(|f| !f.keys.is_empty()) {
+            value = f
+                .keys
+                .iter()
+                .try_fold(value, |v, k| match v {
+                    Some(Value::Obj(m)) => Some(m.get(k)),
+                    _ => None,
+                })
+                .flatten();
+        }
+        // The value is a secret's, or a part of one: its expression says no
+        // literal (R-124 amendment 2).
+        let secret = match (value, fact.pred.as_str(), fact.args.get(3)) {
+            (Some(v), "arg" | "attr", Some(whole)) => {
+                self.p.redact.is_secret(v)
+                    || super::surface_in(
+                        self.p.redact,
+                        whole,
+                        focus.map(|f| f.keys.as_slice()).unwrap_or_default(),
+                        v,
+                    ) == "(sensitive)"
+            }
+            (Some(v), ..) => self.p.redact.is_secret(v),
+            _ => false,
+        };
+        let expr = match (&rhs, value) {
+            (Some(r), _) if secret => super::masked(r),
+            (Some(r), _) => r.clone(),
+            // A plain leaf of a secret object is `(sensitive)` too.
+            (None, Some(v)) => match (fact.pred.as_str(), fact.args.get(3)) {
+                ("arg" | "attr", Some(whole)) => super::surface_in(
+                    self.p.redact,
+                    whole,
+                    focus.map(|f| f.keys.as_slice()).unwrap_or_default(),
+                    v,
+                ),
+                _ => self.p.redact.surface(v),
+            },
+            (None, None) => own.statement.clone(),
+        };
+        w.out.push(Step {
+            expr,
+            at: place(&own),
+            with: own.with.clone(),
+            rank: rank.map(str::to_string),
+            lost: false,
+        });
+        if depth >= FOLLOW {
+            return;
+        }
+        let Some(&alt) = alts.iter().min_by_key(|a| c.size(circuit, **a)) else {
+            return;
+        };
+        let View::Times { children, .. } = circuit.view(alt) else {
+            return;
+        };
+        // What the entry reads, when it is a path (`config.region`), and the
+        // cell that passes the value on.
+        let read: Option<Vec<String>> = rhs.as_deref().and_then(|rhs| {
+            let plain = !rhs.is_empty()
+                && !rhs.contains(|c: char| c.is_whitespace() || "()[]{}$,\"".contains(c));
+            plain.then(|| crate::ir::path_keys(rhs))
+        });
+        let next = match value {
+            Some(v) => passed_cell(c, circuit, children, v, read.as_deref()),
+            None => None,
+        };
+        // An expression of one cell (`str.lower(cidrs.main)`): that cell's value.
+        let next = next.or_else(|| read_cell(c, circuit, children, rhs.as_deref()?));
+        // A stack key ends it: the deployment line says its value.
+        let key = |p: NodeId| match circuit.view(p) {
+            View::Fact { fact, .. } => {
+                fact.args.first().and_then(Value::as_str) == Some("input")
+                    && fact.args.get(1).and_then(Value::as_str) == Some("")
+                    && fact
+                        .args
+                        .get(2)
+                        .and_then(Value::as_str)
+                        .is_some_and(|n| w.keys.contains(n))
+            }
+            _ => false,
+        };
+        if let Some((p, keys)) = next.filter(|(p, _)| !key(*p)) {
+            let focus = (!keys.is_empty()).then_some(Focus { keys, value: None });
+            self.winner_chain(c, p, focus.as_ref(), depth + 1, w);
+        }
+    }
+
+    /// Where fact node `id` is derived: its stated place, or the statement of
+    /// its shortest firing; through a firing of a rule the compiler wrote, the
+    /// first fact it read that has one.
+    fn site_of(&mut self, c: &mut Compress, id: NodeId, depth: usize) -> Option<Site> {
+        if let Some(site) = self.sites.get(&(id, depth)) {
+            return site.clone();
+        }
+        let site = self.site_found(c, id, depth);
+        self.sites.insert((id, depth), site.clone());
+        site
+    }
+
+    /// [`site_of`], found.
+    fn site_found(&mut self, c: &mut Compress, id: NodeId, depth: usize) -> Option<Site> {
+        let circuit = self.p.circuit;
+        let View::Fact { fact, alts, .. } = circuit.view(id) else {
+            return None;
+        };
+        if let [a] = alts
+            && let View::Times { children: [l], .. } = circuit.view(*a)
+            && let View::Leaf(l) = circuit.view(*l)
+        {
+            return match l {
+                Leaf::Base { span } => {
+                    let (at, origin) = base_parts(span);
+                    let stmt = at
+                        .rsplit_once(':')
+                        .and_then(|(f, l)| Some((f.to_string(), l.parse().ok()?)));
+                    let mut site = Site {
+                        at: at.to_string(),
+                        statement: self.fact_text(fact),
+                        origin: origin.map(str::to_string),
+                        stmt,
+                        // A resource's own attribute; an input's value given
+                        // in a `use` says which input.
+                        stated: !matches!(
+                            fact.args.first().and_then(Value::as_str),
+                            Some("input" | "let")
+                        ),
+                        ..Site::default()
+                    };
+                    // Stated in a block: the statement's lines, and the entry.
+                    if let Some((file, first, last, entry)) = self.stated_in(span) {
+                        site.stmt = Some((file, first));
+                        site.last = last;
+                        site.entry = entry;
+                    }
+                    Some(site)
+                }
+                Leaf::Input { source } => Some(Site {
+                    statement: self.p.redact.text(source),
+                    ..Site::default()
+                }),
+                _ => None,
+            };
+        }
+        if let Some(at) = table_row(circuit, alts) {
+            return Some(Site {
+                at,
+                statement: self.fact_text(fact),
+                ..Site::default()
+            });
+        }
+        let alt = *alts.iter().min_by_key(|a| c.size(circuit, **a))?;
+        let View::Times { children, bindings } = circuit.view(alt) else {
+            return None;
+        };
+        let rule = children.iter().find_map(|ch| match circuit.view(*ch) {
+            View::Leaf(Leaf::Rule { id }) => Some(id.as_str()),
+            _ => None,
+        });
+        // A value given on the command line is the flag that gave it, not the
+        // declaration that reads it.
+        let given = |id: NodeId| match circuit.view(id) {
+            View::Leaf(Leaf::Input { source }) => Some(source),
+            View::Fact { alts: [a], .. } => match circuit.view(*a) {
+                View::Times { children: [l], .. } => match circuit.view(*l) {
+                    View::Leaf(Leaf::Input { source }) => Some(source),
+                    _ => None,
+                },
                 _ => None,
             },
             _ => None,
-        },
-        _ => None,
-    };
-    if let Some(source) = children.iter().find_map(|ch| given(*ch)) {
-        return Some(Site {
-            statement: s.p.redact.text(source),
-            ..Site::default()
-        });
+        };
+        if let Some(source) = children.iter().find_map(|ch| given(*ch)) {
+            return Some(Site {
+                statement: self.p.redact.text(source),
+                ..Site::default()
+            });
+        }
+        if let Some(r) = rule
+            && !r.starts_with('Σ')
+            && let Some(site) = self.site(r, bindings)
+        {
+            return Some(site);
+        }
+        if depth >= FOLLOW {
+            return None;
+        }
+        children.iter().find_map(|ch| match circuit.view(*ch) {
+            View::Fact { .. } => self.site_of(c, *ch, depth + 1),
+            _ => None,
+        })
     }
-    if let Some(r) = rule
-        && !r.starts_with('Σ')
-        && let Some(site) = s.site(r, bindings)
-    {
-        return Some(site);
-    }
-    if depth >= FOLLOW {
-        return None;
-    }
-    children.iter().find_map(|ch| match circuit.view(*ch) {
-        View::Fact { .. } => site_of(s, c, *ch, depth + 1),
-        _ => None,
-    })
-}
 
-impl Surface<'_, '_> {
     /// The statement a stated fact at `span` (`FILE:LINE:COL (..)`) is
     /// written in: its file, first and last lines, and the block entry.
     fn stated_in(&mut self, span: &str) -> Option<(String, usize, usize, Option<String>)> {
