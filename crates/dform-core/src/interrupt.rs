@@ -108,6 +108,13 @@ pub fn requested() -> Option<i32> {
     }
 }
 
+/// Record a stop as the handler does for signal `sig` (0 withdraws it):
+/// how a test drives the unwind in its own process, with no signal.
+#[doc(hidden)]
+pub fn request(sig: i32) {
+    SIGNALLED.store(sig, Ordering::SeqCst);
+}
+
 /// The signal's name, as messages say it.
 pub fn name(sig: i32) -> &'static str {
     match sig {
