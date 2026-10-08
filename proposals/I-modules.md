@@ -91,7 +91,7 @@ Layout: `dform.toml`, `config.df`, `baseline.df`, `postgres.df`,
 edition 2026
 
 #| What every stack shares. `use config`, then `config.base_domain`.
-#| Credentials are the ovh provider's own (~/.config/ovh/ovh.conf).
+#| Credentials are the ovh provider's own (~/.ovh.conf).
 let base_domain = "vodik.xyz"
 let admin_email = "admin@vodik.xyz"
 # Toronto; BHS5 is the Quebec fallback if Managed Kubernetes is not there yet.
