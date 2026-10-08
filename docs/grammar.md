@@ -508,6 +508,26 @@ its type. A relation a copy exports or its user gives (`output p`,
 `input p`) keeps its rows as addresses: the module's boundary scopes
 them.
 
+A read through an attribute the provider's schema types `ref(T)` reads
+the resource it names: `s.vpc.cidr` (`vpc: ref(net.vpc)`) is `v.cidr
+where v = s.vpc`, a read of that network's attribute, one hop per
+reference on the path (`p.cluster.subnets[0].vpc.cidr` through a
+`ref(k8s.cluster)`, a `list(ref(net.subnet))` and a `ref(net.vpc)`), and
+`why` shows each read. A reference to a resource no rule wants is the
+error at the attribute that holds it ("Definedness"). A reference whose
+type the program does not fix (an attribute of `x in resource`) is not
+read through: the field read is an error at the rule naming the type to
+bind it with.
+
+References compare as references: `s.vpc == v` with `v in net.vpc` holds
+for the same resource, `s.vpc != v` for another, and `v in [s.vpc]` or
+`v in role.policies` is membership of the reference. A reference is
+never a string: `s.vpc == "main"` is an error naming both (the fix is
+the resource, `net.vpc["main"]` or its name in scope; `has s.vpc` tests
+whether one is set), at compile time where the schema types the
+attribute and at the rule at run time otherwise, for `==`, `!=` and
+`in` alike.
+
 A field is read of an object. `x.p` where `x`'s column is a type with no
 fields (a string, a number, a bool, a list, a reference read through a
 value) is an error naming the column, its type and the fix; at run time,
@@ -592,8 +612,11 @@ exactly, so equal values print alike; `"${q}"` gives that.
 `m` is millicores in a `cpu` position and minutes in a `duration` one, so
 `500m` is read by its position: an attribute, an input, a function's
 parameter, or the other side of an operator (`1h + 30m`, `c > 500m`
-where `c` is a cpu). Where nothing gives it a type the literal is an
-error naming both readings, and a typed `let` says which, `let limit:
+where `c` is a cpu); a `set` through a resource of any type (`x in
+resource`, `x in k8s`) reads it as every type of the schema (of the
+namespace) that declares the attribute does, when they agree (`cpu:
+100m` under `resources.requests` is cpu). Where nothing gives it a type
+the literal is an error naming both readings, and a typed `let` says which, `let limit:
 cpu = 500m`. A bare
 fraction, `0.5`, is a float ("Numbers"), read as cores where a `cpu`
 is wanted (`0.5` is `500m`, and so is `c > 0.5` where `c` is a cpu).
