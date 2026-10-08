@@ -1,7 +1,8 @@
 //! How dform spells the program's values, terms, atoms, literals and rules
 //! back, in its core form (`value`, `term`, `atom`, `lit`, `rule`) and as
 //! the program wrote them (`written`); a string literal as `fmt` writes
-//! it (`quote`). One renderer for every message and report.
+//! it (`quote`); a value as JSON (`value_to_json`). One renderer for every
+//! message and report.
 
 use crate::ast::{Atom, Lit, RuleStmt, Term};
 use crate::query::Redactor;
@@ -265,6 +266,41 @@ impl<'a> Written<'a> {
             })
             .collect::<Vec<_>>()
             .join(", ")
+    }
+}
+
+/// A value as JSON: a string, number, bool, list or object as itself, every
+/// other value as its text (`--json`, a policy's context, a document).
+pub fn value_to_json(v: &Value) -> serde_json::Value {
+    match v {
+        Value::Str(s) => serde_json::Value::String(s.clone()),
+        Value::Int(i) => serde_json::Value::Number((*i).into()),
+        Value::Float(f) => serde_json::Number::from_f64(f.get())
+            .map_or(serde_json::Value::Null, serde_json::Value::Number),
+        Value::Bool(b) => serde_json::Value::Bool(*b),
+        Value::List(xs) => serde_json::Value::Array(xs.iter().map(value_to_json).collect()),
+        Value::Obj(m) => serde_json::Value::Object(
+            m.iter()
+                .map(|(k, v)| (k.clone(), value_to_json(v)))
+                .collect(),
+        ),
+        Value::Ip(n) => serde_json::Value::String(crate::value::u32_to_ipv4(*n)),
+        Value::IpNet { addr, prefix } => {
+            serde_json::Value::String(crate::value::ipnet_to_string(*addr, *prefix))
+        }
+        Value::Range(r) => serde_json::Value::String(r.to_string()),
+        Value::Ref { typ, name, attr } => {
+            serde_json::Value::String(format!("ref({typ},{name},{attr})"))
+        }
+        Value::CloudRef { typ, name, attr } => {
+            serde_json::Value::String(format!("cloud_ref({typ},{name},{attr})"))
+        }
+        Value::Null { label, .. } => serde_json::Value::String(format!("?{label}")),
+        Value::Quantity(q) => serde_json::Value::String(q.to_string()),
+        Value::Time(t) => serde_json::Value::String(t.to_string()),
+        Value::Uri(u) => serde_json::Value::String(u.to_string()),
+        Value::Oci(u) => serde_json::Value::String(u.clone()),
+        Value::Semver(v) => serde_json::Value::String(v.to_string()),
     }
 }
 

@@ -1,8 +1,8 @@
 //! Policy facts: `deny(msg, ctx)` and `warn(msg, ctx)` as the evaluator writes them, and as
 //! an evaluation's result reads them back (`msg ctx=JSON`).
 
-use super::value_to_json;
 use crate::ast::{Atom, Term, str_term};
+use crate::spell::value_to_json;
 use crate::value::Value;
 use anyhow::{Result, bail};
 
