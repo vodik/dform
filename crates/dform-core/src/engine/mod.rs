@@ -7,11 +7,12 @@ mod errors;
 mod membership;
 mod negation;
 mod nulls;
+mod policy;
 mod provenance;
 mod undetermined;
 mod unify;
 
-use crate::ast::{Atom, Helper, Lit, Program, RuleStmt, Span, Term, str_term};
+use crate::ast::{Atom, Helper, Lit, Program, RuleStmt, Span, Term};
 use crate::circuit::{Circuit, Leaf, NodeId};
 use crate::diag;
 use crate::ir::ops;
@@ -29,6 +30,7 @@ use contributions::{AttrAggregate, Origin, Origins, is_contribution};
 use errors::{at_suffix, check_defined, self_spread, with_place};
 pub use membership::holds;
 use nulls::Rec;
+use policy::format_policy_fact;
 pub use provenance::circuit_fact;
 use provenance::{Prov, given_leaf};
 use std::cell::RefCell;
@@ -728,37 +730,6 @@ pub fn query(body: &[Lit], facts: &BTreeSet<Atom>) -> Result<Vec<Answer>> {
             (b.collect(), used)
         })
         .collect())
-}
-
-/// A policy fact: `deny(msg, ctx)` or `warn(msg, ctx)`.
-fn policy_fact(pred: &str, msg: &str, ctx: Value) -> Atom {
-    Atom {
-        pred: pred.into(),
-        args: vec![str_term(msg), Term::Val(ctx)],
-        record: None,
-        span: Default::default(),
-    }
-}
-
-fn format_policy_fact(a: &Atom) -> Result<String> {
-    if a.args.is_empty() {
-        bail!("policy fact must have at least a message argument");
-    }
-    let msg = match &a.args[0] {
-        Term::Val(Value::Str(s)) => s.clone(),
-        _ => bail!("policy message must be a string"),
-    };
-    if a.args.len() == 1 {
-        return Ok(msg);
-    }
-    let Term::Val(ctx) = &a.args[1] else {
-        bail!("policy context must be ground");
-    };
-    Ok(format!("{msg} ctx={}", value_to_json_string(ctx)?))
-}
-
-fn value_to_json_string(v: &Value) -> Result<String> {
-    Ok(serde_json::to_string(&value_to_json(v))?)
 }
 
 pub fn value_to_json(v: &Value) -> serde_json::Value {

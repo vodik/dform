@@ -1,5 +1,5 @@
 use super::*;
-use crate::ast::Stmt;
+use crate::ast::{Stmt, str_term};
 
 fn run(src: &str) -> Result<(EvalResult, Vec<String>)> {
     let program = crate::parser::parse_program(src)?;

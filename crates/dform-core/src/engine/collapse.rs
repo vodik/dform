@@ -4,7 +4,7 @@
 
 use super::contributions::{Contribution, ElemContribution, GroupKey, Origins, rank_name};
 use super::errors::with_place;
-use super::policy_fact;
+use super::policy::policy_fact;
 use crate::ast::{Atom, Term, str_term};
 use crate::diag;
 use crate::ir::store::{Store, TupleId};
