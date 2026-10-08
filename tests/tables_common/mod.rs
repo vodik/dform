@@ -5,7 +5,6 @@
 
 use crate::common::Scratch;
 use std::path::Path;
-use std::process::Command;
 
 /// A scratch directory under `CARGO_TARGET_TMPDIR`, removed on drop.
 pub fn scratch(name: &str) -> Scratch {
@@ -22,23 +21,7 @@ pub fn scratch(name: &str) -> Scratch {
     Scratch::adopt(dir)
 }
 
-pub fn git(dir: &Path, args: &[&str]) -> String {
-    let out = Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .env("GIT_AUTHOR_NAME", "t")
-        .env("GIT_AUTHOR_EMAIL", "t@t")
-        .env("GIT_COMMITTER_NAME", "t")
-        .env("GIT_COMMITTER_EMAIL", "t@t")
-        .output()
-        .unwrap();
-    assert!(
-        out.status.success(),
-        "git {args:?}: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    String::from_utf8_lossy(&out.stdout).trim().to_string()
-}
+pub use crate::common::git;
 
 /// A bare repository `name` in `s`, and a clone of it, `work`.
 pub fn repo(s: &Scratch, name: &str) {

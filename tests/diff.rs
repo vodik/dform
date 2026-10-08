@@ -24,33 +24,17 @@ resource net.subnet "private-${z}" {
 } where zone(z, n)
 "#;
 
-/// `git ARGS` in the scratch project; its output. Hermetic: no global or
-/// system configuration, and a fixed date, so a commit's hash is the same
-/// on every run.
+/// `git ARGS` in the scratch project; its output. A fixed date, so a
+/// commit's hash is the same on every run.
 fn git(s: &Scratch, args: &[&str]) -> String {
-    let out = std::process::Command::new("git")
-        .args([
-            "-c",
-            "user.name=dform",
-            "-c",
-            "user.email=dform@example.com",
-        ])
-        .args(args)
-        .current_dir(&s.dir)
-        .env_remove("GIT_DIR")
-        .env_remove("GIT_WORK_TREE")
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_NOSYSTEM", "1")
-        .env("GIT_AUTHOR_DATE", "2026-01-01T00:00:00Z")
-        .env("GIT_COMMITTER_DATE", "2026-01-01T00:00:00Z")
-        .output()
-        .unwrap();
-    assert!(
-        out.status.success(),
-        "git {args:?}: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    String::from_utf8_lossy(&out.stdout).trim().to_string()
+    common::git_with(
+        &s.dir,
+        args,
+        &[
+            ("GIT_AUTHOR_DATE", "2026-01-01T00:00:00Z"),
+            ("GIT_COMMITTER_DATE", "2026-01-01T00:00:00Z"),
+        ],
+    )
 }
 
 /// The seq of each `apply_start` in the log.

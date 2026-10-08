@@ -502,6 +502,53 @@ pub fn controller_log(stdout: &str) -> Vec<String> {
         .collect()
 }
 
+/// `git ARGS` in `dir`, hermetic: no global or system configuration, no
+/// inherited repository, a fixed identity, and `env` (a fixed date makes
+/// a commit's hash the same on every run).
+fn git_run(dir: &Path, args: &[&str], env: &[(&str, &str)]) -> std::io::Result<Output> {
+    Command::new("git")
+        .args([
+            "-c",
+            "user.name=dform",
+            "-c",
+            "user.email=dform@example.com",
+        ])
+        .args(args)
+        .current_dir(dir)
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .envs(env.iter().copied())
+        .output()
+}
+
+/// `git ARGS` in `dir` ([`git_run`]), which must succeed; its output,
+/// trimmed.
+pub fn git_with(dir: &Path, args: &[&str], env: &[(&str, &str)]) -> String {
+    let out = git_run(dir, args, env).unwrap();
+    assert!(
+        out.status.success(),
+        "git {args:?}: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8_lossy(&out.stdout).trim().to_string()
+}
+
+/// [`git_with`] and no more environment.
+pub fn git(dir: &Path, args: &[&str]) -> String {
+    git_with(dir, args, &[])
+}
+
+/// `git ARGS` in `dir` when git is there and succeeds: a test that needs
+/// it skips without.
+pub fn try_git(dir: &Path, args: &[&str]) -> Option<String> {
+    git_run(dir, args, &[])
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+}
+
 /// The repository root, for programs and fixtures the tests read.
 pub fn repo() -> &'static Path {
     Path::new(env!("CARGO_MANIFEST_DIR"))

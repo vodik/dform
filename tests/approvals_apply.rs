@@ -290,16 +290,7 @@ fn an_edited_plan_file_is_refused() {
 fn a_git_table_is_read_at_the_planned_commit() {
     let s = Scratch::project("approvals-git");
     let git = |dir: &std::path::Path, args: &[&str]| {
-        let out = Command::new("git")
-            .args(args)
-            .current_dir(dir)
-            .env("GIT_AUTHOR_NAME", "t")
-            .env("GIT_AUTHOR_EMAIL", "t@t")
-            .env("GIT_COMMITTER_NAME", "t")
-            .env("GIT_COMMITTER_EMAIL", "t@t")
-            .output()
-            .unwrap();
-        assert!(out.status.success(), "git {args:?}");
+        common::git(dir, args);
     };
     git(&s.dir, &["init", "-q", "--bare", "ops.git"]);
     git(&s.dir, &["clone", "-q", "ops.git", "work"]);

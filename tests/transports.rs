@@ -11,7 +11,6 @@ mod common;
 use common::{Run, Scratch, dform, yes};
 use dform_core::store::{Cond, S3Spec, Store};
 use std::path::Path;
-use std::process::Command;
 
 /// `dform ARGS` in `s`, its cache (the git mirrors) its own, the fake S3
 /// credentials set.
@@ -25,20 +24,6 @@ fn run(s: &Scratch, args: &[&str]) -> Run {
         .output()
         .unwrap();
     Run::from(out)
-}
-
-fn git(dir: &Path, args: &[&str]) -> Option<String> {
-    Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .env("GIT_AUTHOR_NAME", "t")
-        .env("GIT_AUTHOR_EMAIL", "t@t")
-        .env("GIT_COMMITTER_NAME", "t")
-        .env("GIT_COMMITTER_EMAIL", "t@t")
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
 }
 
 /// A resource per document of the stream `loader` reads.
@@ -109,12 +94,12 @@ fn a_tag_is_read_from_the_mirror() {
     let s = Scratch::project("transport-git");
     let mirror = s.path("cache/dform/git/github.com-traefik");
     std::fs::create_dir_all(&mirror).unwrap();
-    if git(&mirror, &["init", "-q", "--bare", "traefik.git"]).is_none() {
+    if common::try_git(&mirror, &["init", "-q", "--bare", "traefik.git"]).is_none() {
         eprintln!("skipped: no git to make the fixture with");
         return;
     }
     let w = s.path("work");
-    git(
+    common::git(
         &s.dir,
         &[
             "clone",
@@ -122,8 +107,7 @@ fn a_tag_is_read_from_the_mirror() {
             &mirror.join("traefik.git").display().to_string(),
             "work",
         ],
-    )
-    .unwrap();
+    );
     let crds = "docs/content/reference/dynamic-configuration/kubernetes-crd-definition-v1.yml";
     std::fs::create_dir_all(w.join(Path::new(crds).parent().unwrap())).unwrap();
     std::fs::write(
@@ -131,11 +115,11 @@ fn a_tag_is_read_from_the_mirror() {
         "---\nname: ingressroutes\n---\nname: middlewares\n",
     )
     .unwrap();
-    git(&w, &["add", "."]).unwrap();
-    git(&w, &["commit", "-q", "-m", "crds"]).unwrap();
-    git(&w, &["tag", "v3.7.14"]).unwrap();
-    git(&w, &["push", "-q", "origin", "v3.7.14"]).unwrap();
-    let commit = git(&w, &["rev-parse", "HEAD"]).unwrap();
+    common::git(&w, &["add", "."]);
+    common::git(&w, &["commit", "-q", "-m", "crds"]);
+    common::git(&w, &["tag", "v3.7.14"]);
+    common::git(&w, &["push", "-q", "origin", "v3.7.14"]);
+    let commit = common::git(&w, &["rev-parse", "HEAD"]);
     s.write(
         "p.df",
         &vpcs(&format!(

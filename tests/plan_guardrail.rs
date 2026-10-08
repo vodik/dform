@@ -42,28 +42,8 @@ fn project(name: &str) -> Scratch {
     s
 }
 
-/// `git ARGS` in the scratch project, hermetic (as tests/plan_because.rs).
 fn git(s: &Scratch, args: &[&str]) {
-    let out = std::process::Command::new("git")
-        .args([
-            "-c",
-            "user.name=dform",
-            "-c",
-            "user.email=dform@example.com",
-        ])
-        .args(args)
-        .current_dir(&s.dir)
-        .env_remove("GIT_DIR")
-        .env_remove("GIT_WORK_TREE")
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_NOSYSTEM", "1")
-        .output()
-        .unwrap();
-    assert!(
-        out.status.success(),
-        "git {args:?}: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
+    common::git(&s.dir, args);
 }
 
 fn subnets(s: &Scratch) -> usize {

@@ -710,19 +710,7 @@ fn a_named_key_is_the_agents_or_the_credentials() {
 #[test]
 fn a_repository_is_read_over_ssh() {
     let Some(bin) = sshd_binary() else { return };
-    let git = |dir: &Path, args: &[&str]| {
-        Command::new("git")
-            .args(args)
-            .current_dir(dir)
-            .env("GIT_AUTHOR_NAME", "t")
-            .env("GIT_AUTHOR_EMAIL", "t@t")
-            .env("GIT_COMMITTER_NAME", "t")
-            .env("GIT_COMMITTER_EMAIL", "t@t")
-            .output()
-            .ok()
-            .filter(|o| o.status.success())
-            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-    };
+    let git = |dir: &Path, args: &[&str]| common::try_git(dir, args);
     let port = free_port();
     let s = project("ssh-git", port);
     std::fs::create_dir_all(s.path("served")).unwrap();
