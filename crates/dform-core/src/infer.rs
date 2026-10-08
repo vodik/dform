@@ -12,7 +12,10 @@
 //!    into it. Literals: a non-string literal is its kind; a string
 //!    literal is unknown (Postgres's unknown literal) until the column is
 //!    settled. A variable in two columns makes them one (a join, or a
-//!    head taking a body's column).
+//!    head taking a body's column), but a variable given to a let or an
+//!    output flows into its cell one way (R-213): a declared type is the
+//!    cell's and what flows in is checked assignable to it, an untyped
+//!    cell is the wider of what flows in (an enum and a string a string).
 //! 2. Unify. Two hard constraints that disagree are an error naming both
 //!    sites; a column declared `any` takes anything and joins nothing.
 //! 3. A column with a hard type checks every literal against it, a string
@@ -324,6 +327,28 @@ struct Through {
     span: Span,
 }
 
+/// A rule giving a let or an output its value from a variable (`let
+/// apex = env where ..`): the value flows into the cell, one way. A cell
+/// with a declared type keeps it, and what flows in is checked
+/// assignable to it (an enum to a string); an untyped one is the wider of
+/// what flows in and its literals (R-213).
+#[derive(Clone)]
+struct Flow {
+    rule: usize,
+    var: String,
+    /// The cell's node.
+    cell: usize,
+    span: Span,
+}
+
+/// What flowed into a cell: its type, the variable as written, the rule.
+struct Given {
+    ty: Ty,
+    var: String,
+    what: String,
+    span: Span,
+}
+
 /// One rule's variables.
 #[derive(Default)]
 struct Vars(BTreeMap<String, usize>);
@@ -337,6 +362,9 @@ struct Pass<'a> {
     members: Vec<Member>,
     fields: Vec<Field>,
     throughs: Vec<Through>,
+    flows: Vec<Flow>,
+    /// The flows into each cell, by its node once the nodes are joined.
+    into: BTreeMap<usize, Vec<Flow>>,
     /// Each rule's (statement's) variables.
     vars: Vec<Vars>,
     /// A rule head's variable names per column, for the signature.
@@ -530,8 +558,19 @@ impl Pass<'_> {
                     self.s.hard(n, types::of_expr(t), a.span, cell);
                 }
                 // A variable or a literal; a computed value (an attribute
-                // read, `ref(T, A, path)`) is typed where it is read.
+                // read, `ref(T, A, path)`) is typed where it is read. A
+                // rule's variable flows into the cell (`Flow`).
                 match v {
+                    Term::Var(x) if a.pred == "arg" => {
+                        let node = self.s.column(&c);
+                        self.var(rule, x);
+                        self.flows.push(Flow {
+                            rule,
+                            var: x.clone(),
+                            cell: node,
+                            span: a.span,
+                        });
+                    }
                     Term::Var(_) | Term::Val(_) => self.arg(rule, c, v, a.span),
                     t => self.calls(rule, t, a.span),
                 }
@@ -875,6 +914,8 @@ pub fn infer(
         members: Vec::new(),
         fields: Vec::new(),
         throughs: Vec::new(),
+        flows: Vec::new(),
+        into: BTreeMap::new(),
         vars: Vec::new(),
         head_names: BTreeMap::new(),
         diags: Vec::new(),
@@ -1030,15 +1071,12 @@ impl Pass<'_> {
                 self.s.hard(t.into, ty, t.span, what);
             }
         }
+        self.own_values();
         let mut settled: BTreeMap<usize, Option<Ty>> = BTreeMap::new();
         let n = self.s.parent.len();
         for i in 0..n {
             let r = self.s.find(i);
-            if settled.contains_key(&r) {
-                continue;
-            }
-            let s = self.settle(r, &mut diags);
-            settled.insert(r, s);
+            self.settled(r, &mut settled, &mut diags);
         }
         // Comparisons and arithmetic.
         let checks = std::mem::take(&mut self.checks);
@@ -1264,9 +1302,85 @@ impl Pass<'_> {
         )
     }
 
-    /// Settle the node `r`: its type, or the errors that say why it has
-    /// none.
-    fn settle(&mut self, r: usize, diags: &mut Vec<Diagnostic>) -> Option<Ty> {
+    /// A flow from a variable nothing types, and that nothing flows into,
+    /// is the cell's own value: one node with it, its literals read at
+    /// the cell's type (`let c: inet = x where x = "10.0.0.0/8"`).
+    fn own_values(&mut self) {
+        let flows = std::mem::take(&mut self.flows);
+        let mut kept: Vec<Flow> = Vec::new();
+        for (i, f) in flows.iter().enumerate() {
+            let n = self.vars[f.rule].0[&f.var];
+            let (src, cell) = (self.s.find(n), self.s.find(f.cell));
+            if src == cell {
+                continue;
+            }
+            let given = flows[i + 1..]
+                .iter()
+                .chain(&kept)
+                .any(|g| self.s.find(g.cell) == src);
+            if self.s.hard[src].is_empty() && !given {
+                self.s.union(n, f.cell);
+            } else {
+                kept.push(f.clone());
+            }
+        }
+        for f in kept {
+            let cell = self.s.find(f.cell);
+            self.into.entry(cell).or_default().push(f);
+        }
+    }
+
+    /// The type of the node `r`, settled once, after what flows into it.
+    fn settled(
+        &mut self,
+        r: usize,
+        settled: &mut BTreeMap<usize, Option<Ty>>,
+        diags: &mut Vec<Diagnostic>,
+    ) -> Option<Ty> {
+        if let Some(t) = settled.get(&r) {
+            return t.clone();
+        }
+        // A cycle of flows reads nothing from itself.
+        settled.insert(r, None);
+        let mut given = Vec::new();
+        for f in self.into.get(&r).cloned().unwrap_or_default() {
+            let (var, span) = (shown_var(&f.var), f.span);
+            let src = self.s.find(self.vars[f.rule].0[&f.var]);
+            let Some(ty) = self.settled(src, settled, diags) else {
+                continue;
+            };
+            let what = self.s.hard[src]
+                .iter()
+                .find(|h| h.ty == ty)
+                .or(self.s.hard[src].first())
+                .map(|h| h.what.clone())
+                .or_else(|| self.cell_name(src))
+                .unwrap_or_else(|| "given it".into());
+            given.push(Given {
+                ty,
+                var,
+                what,
+                span,
+            });
+        }
+        let t = self.settle(r, &given, diags);
+        settled.insert(r, t.clone());
+        t
+    }
+
+    /// The let or the output a node is the cell of, as the program names
+    /// it: `let apex`, `output ip`.
+    fn cell_name(&self, r: usize) -> Option<String> {
+        let output = format!("{} ", crate::transform::OUTPUT);
+        self.s.cols[r]
+            .iter()
+            .find(|c| c.0.starts_with("let ") || c.0.starts_with(&output))
+            .map(|c| c.0.clone())
+    }
+
+    /// Settle the node `r`, given `given` by the rules that flow into it:
+    /// its type, or the errors that say why it has none.
+    fn settle(&mut self, r: usize, given: &[Given], diags: &mut Vec<Diagnostic>) -> Option<Ty> {
         let mut hard = self.s.hard[r].clone();
         // A value type given to a builtin's `string` parameter is its print
         // there (R-133: `str.starts_with(c.image, "ghcr.io/")` over an `oci`).
@@ -1274,12 +1388,14 @@ impl Pass<'_> {
             hard.retain(|h| !h.prints);
         }
         let lits = self.s.lits[r].clone();
-        let col = self.s.cols[r]
-            .iter()
-            .filter(|c| !c.0.contains("__"))
-            .min_by_key(|c| (self.declared.get(&c.0).is_none(), c.0.contains("::")))
-            .or_else(|| self.s.cols[r].first())
-            .map(|c| shown_col(c, self.declared, &self.head_names));
+        let col = self.cell_name(r).or_else(|| {
+            self.s.cols[r]
+                .iter()
+                .filter(|c| !c.0.contains("__"))
+                .min_by_key(|c| (self.declared.get(&c.0).is_none(), c.0.contains("::")))
+                .or_else(|| self.s.cols[r].first())
+                .map(|c| shown_col(c, self.declared, &self.head_names))
+        });
         let col = col.unwrap_or_else(|| "this value".into());
         let mut from: Option<Hard> = None;
         let mut bad = false;
@@ -1327,6 +1443,26 @@ impl Pass<'_> {
             return None;
         }
         if let Some(f) = from {
+            // A declared type is the cell's: what flows in is checked
+            // assignable to it, and never narrows it (R-213).
+            if let Some(g) = given.iter().find(|g| !compatible(&g.ty, &f.ty)) {
+                let msg = if f.what.starts_with("decl ") || f.what == col {
+                    format!("{col}: {} takes {}: {}", f.ty, g.var, not_a(&g.ty, &f.ty))
+                } else {
+                    format!(
+                        "{col} is {} ({}) and takes {}: {}",
+                        f.ty,
+                        f.what,
+                        g.var,
+                        not_a(&g.ty, &f.ty)
+                    )
+                };
+                diags.push(Diagnostic::error(f.span, msg).with_label(
+                    g.span,
+                    format!("{} is {} here ({})", g.var, a(&g.ty), g.what),
+                ));
+                return None;
+            }
             let map = matches!(&f.ty, Ty::Map(_));
             for l in lits
                 .iter()
@@ -1340,6 +1476,9 @@ impl Pass<'_> {
                 }
             }
             return Some(f.ty);
+        }
+        if let Some(g) = given.first() {
+            return self.widened(&col, g, &given[1..], &lits, diags);
         }
         // Literals only: their kind; a string where nothing says otherwise.
         let mut first: Option<(&Literal, Ty)> = None;
@@ -1386,6 +1525,128 @@ impl Pass<'_> {
             (None, None) => None,
         }
     }
+
+    /// An untyped cell's type: the wider of what flows into it (`g` and
+    /// `rest`) and its literals, an enum and a string a string (R-213).
+    fn widened(
+        &self,
+        col: &str,
+        g: &Given,
+        rest: &[Given],
+        lits: &[Literal],
+        diags: &mut Vec<Diagnostic>,
+    ) -> Option<Ty> {
+        let mut ty = g.ty.clone();
+        for h in rest {
+            match wider(&ty, &h.ty) {
+                Some(t) => ty = t,
+                None => {
+                    diags.push(
+                        Diagnostic::error(
+                            h.span,
+                            format!(
+                                "{col} takes {} here, {}, and {} elsewhere, {}: one value has \
+                                 one type",
+                                h.var,
+                                a(&h.ty),
+                                g.var,
+                                a(&g.ty)
+                            ),
+                        )
+                        .with_label(
+                            g.span,
+                            format!("{} is {} here ({})", g.var, a(&g.ty), g.what),
+                        ),
+                    );
+                    return None;
+                }
+            }
+        }
+        let map = matches!(&ty, Ty::Map(_));
+        for l in lits
+            .iter()
+            .filter(|l| map || !matches!(l.value, Value::Obj(_)))
+        {
+            let wide = match (&l.value, kind(&l.value)) {
+                (Value::Str(_), _)
+                    if types::mismatch(&ty, &Term::Val(l.value.clone())).is_none() =>
+                {
+                    continue;
+                }
+                (Value::Str(_), _) => to_string(&ty).then(|| Ty::Scalar("string".into())),
+                (_, Some(k)) => wider(&ty, &k),
+                _ => continue,
+            };
+            match wide {
+                Some(t) => ty = t,
+                None => {
+                    diags.push(
+                        Diagnostic::error(
+                            l.span,
+                            format!(
+                                "{col} takes {} here, and {} elsewhere, {}: one value has one type",
+                                shown(&l.value),
+                                g.var,
+                                a(&g.ty)
+                            ),
+                        )
+                        .with_label(
+                            g.span,
+                            format!("{} is {} here ({})", g.var, a(&g.ty), g.what),
+                        ),
+                    );
+                    return None;
+                }
+            }
+        }
+        Some(ty)
+    }
+}
+
+/// The type two values of `a` and `b` given to one untyped cell are both
+/// of: an enum and a string a string, two enums their members together,
+/// an int and a float a number; `None` where they never meet.
+fn wider(a: &Ty, b: &Ty) -> Option<Ty> {
+    let string = || Some(Ty::Scalar("string".into()));
+    match (a, b) {
+        _ if a == b => Some(a.clone()),
+        (Ty::Enum(x), Ty::Enum(y)) => {
+            let mut m = x.clone();
+            m.extend(y.iter().filter(|v| !x.contains(v)).cloned());
+            Some(Ty::Enum(m))
+        }
+        (Ty::Scalar(s), t) | (t, Ty::Scalar(s)) if s == "string" && to_string(t) => string(),
+        (Ty::Scalar(x), Ty::Scalar(y)) if number(x) && number(y) => {
+            Some(Ty::Scalar("number".into()))
+        }
+        (Ty::Ref(x), Ty::Ref(y)) => Some(Ty::ref_union(x, y)),
+        _ if compatible(a, b) => Some(narrower(a.clone(), b)),
+        _ => None,
+    }
+}
+
+/// A type whose values are text a string holds as they are: an enum's
+/// members, a network, an address, an image reference, a version.
+fn to_string(ty: &Ty) -> bool {
+    match ty {
+        Ty::Enum(_) => true,
+        Ty::Scalar(s) => text_of("string", s),
+        _ => false,
+    }
+}
+
+/// `ty` with its article: `an int`, `a string`; an enum as it is written.
+fn a(ty: &Ty) -> String {
+    match ty {
+        Ty::Scalar(s) if s.starts_with(['a', 'e', 'i', 'o']) => format!("an {ty}"),
+        Ty::Scalar(_) | Ty::List(_) | Ty::Map(_) | Ty::Ref(_) | Ty::Secret(_) => format!("a {ty}"),
+        _ => ty.to_string(),
+    }
+}
+
+/// Why a value of `got` is not one of `want`: `an int is not a string`.
+fn not_a(got: &Ty, want: &Ty) -> String {
+    format!("{} is not {}", a(got), a(want))
 }
 
 /// A reference compared with a string (`written`, `read` the reference):
