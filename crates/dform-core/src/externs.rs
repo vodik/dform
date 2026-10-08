@@ -515,6 +515,7 @@ impl<'a> Externs<'a> {
                         what: format!("{what} failed"),
                         message: format!("{e:#}"),
                         site,
+                        addr: None,
                     }
                     .into()
                 })?;

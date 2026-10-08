@@ -902,7 +902,9 @@ impl Evaluator {
         crate::secrets::standin::set_sources(
             crate::query::Redactor::new(&res.facts, schema).sources(),
         );
-        let mut plan = backend.plan(&asked(&res, &resources), adopts, lifecycle, st)?;
+        let mut plan = backend
+            .plan(&asked(&res, &resources), adopts, lifecycle, st)
+            .map_err(|e| with_site(e, &res))?;
         let replaced = executor::replaced(&plan);
         let (res, violations, resources) = if replaced.is_empty() {
             (res, violations.to_vec(), resources)
@@ -1969,6 +1971,21 @@ fn disagreements(facts: &BTreeSet<Atom>) -> BTreeMap<String, String> {
         );
     }
     out
+}
+
+/// A provider's refusal of a change (`report::Failure`), its third line
+/// where the program derives the change (R-109).
+fn with_site(e: anyhow::Error, res: &EvalResult) -> anyhow::Error {
+    match e.downcast::<report::Failure>() {
+        Ok(f) => {
+            let site = f
+                .addr
+                .as_ref()
+                .and_then(|a| report::sites(res, [a], None).into_values().next());
+            anyhow::Error::new(f.at(site))
+        }
+        Err(e) => e,
+    }
 }
 
 /// The providers the program configures whose settings this evaluation

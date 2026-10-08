@@ -316,7 +316,7 @@ fn a_flavor_the_region_does_not_offer_is_refused_at_plan() {
     let s = project("ovh-flavor", "", &program(&server, "x", "b9-999"));
     let r = dform(&s, &server, &["plan", "main.df"]).failure();
     assert!(
-        r.stderr.contains("ovh.instance[\"server\"]")
+        r.stderr.contains("plan ovh.instance server: refused")
             && r.stderr
                 .contains("flavor \"b9-999\" is not offered in region ca-east-tor")
             && r.stderr.contains("b2-7"),

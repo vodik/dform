@@ -61,6 +61,8 @@ pub struct Failure {
     pub what: String,
     pub message: String,
     pub site: Option<String>,
+    /// The resource it is about, for its site.
+    pub addr: Option<Address>,
 }
 
 impl Failure {
@@ -78,6 +80,7 @@ impl Failure {
             what,
             message: said_of(addr, message),
             site: None,
+            addr: Some(addr.clone()),
         }
     }
 
@@ -146,6 +149,8 @@ pub fn said_of(addr: &Address, message: &str) -> String {
     for front in [
         format!("apply {full}: "),
         format!("apply {at}: "),
+        format!("plan {full}: "),
+        format!("plan {at}: "),
         format!("{full}: "),
     ] {
         if let Some(rest) = m.strip_prefix(&front) {

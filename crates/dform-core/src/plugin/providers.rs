@@ -2200,7 +2200,7 @@ impl Providers {
     /// the first failure, in order, is the error.
     fn plan_many(&self, asks: Vec<Ask>) -> Result<Vec<Planned>> {
         let mut out: Vec<Option<Result<Planned>>> = Vec::new();
-        let mut submitted: Vec<(usize, usize, Ticket)> = Vec::new();
+        let mut submitted: Vec<(usize, usize, Ticket, Address)> = Vec::new();
         for (i, (addr, remote, prior, desired)) in asks.into_iter().enumerate() {
             if prior.is_none() && desired.is_none() {
                 out.push(Some(Ok((Vec::new(), false))));
@@ -2215,17 +2215,32 @@ impl Providers {
                 remote,
             };
             let l = self.route(&addr.typ);
-            submitted.push((i, l, self.link(l)?.borrow_mut().submit(req)));
+            submitted.push((i, l, self.link(l)?.borrow_mut().submit(req), addr));
         }
         for l in &self.links {
             l.borrow_mut().flush();
         }
-        for (i, l, t) in submitted {
+        for (i, l, t, addr) in submitted {
             let mut link = self.links[l].borrow_mut();
             let r = link
                 .wait(t)
                 .and_then(|r| link.expect::<pb::PlanResponse>("Plan", r));
-            out[i] = Some(r.map_err(anyhow::Error::new).and_then(|r| {
+            // A refusal in R-109's shape: the change as the plan prints it,
+            // then the provider's message (`deployment::plan` adds the site).
+            let r = r.map_err(|e| {
+                let happened = match &e {
+                    CallError::Refused(_) => "refused",
+                    CallError::MaybeApplied(_) => "no answer",
+                    CallError::Crashed(_) => "the provider died",
+                };
+                anyhow::Error::new(crate::report::Failure::of(
+                    "plan",
+                    &addr,
+                    happened,
+                    &e.to_string(),
+                ))
+            });
+            out[i] = Some(r.and_then(|r| {
                 let side = |v: &Option<pb::Value>| v.as_ref().map(wire::from_doc).transpose();
                 let changes = r
                     .changes

@@ -324,6 +324,7 @@ fn failure(
         what: redact(&f.what),
         message: redact(&f.message),
         site: f.site,
+        addr: f.addr,
     }
 }
 
