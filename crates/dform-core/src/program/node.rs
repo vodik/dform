@@ -526,13 +526,16 @@ pub enum ItemKind {
         items: Vec<ItemId>,
         signature: Option<TypeExpr>,
     },
-    /// `let k[: T] = v [@rank] [where B]` (step 3).
+    /// `let k[: T] = v [@rank] [where B]` (steps 3, 5). `declares`: the
+    /// first typed row, whose type is the cell's (a resource type's is the
+    /// reference's own).
     Let {
         name: Name,
         ty: Option<TypeExpr>,
         value: ExprId,
         clause: Option<ClauseId>,
         rank: Option<Rank>,
+        declares: bool,
     },
     /// `let f(a, b: T = d) = v [where B]` (R-187, step 5).
     LetFn {

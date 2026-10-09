@@ -117,6 +117,18 @@ impl Gather {
         self.clause.take()
     }
 
+    /// The clause of the statement's body just lowered, at `span`: as
+    /// gathered, or empty when no literal is written in it.
+    pub fn body_clause(&mut self, program: &mut Program, span: Span) -> ClauseId {
+        if let Some(c) = self.clause.take() {
+            return c;
+        }
+        let mut b = self.builder(program, span, &|_| true);
+        let c = b.clause_of(Vec::new());
+        self.done(b);
+        c
+    }
+
     /// A builder into `program` of the statement's nodes, its variables
     /// the statement's: [`Gather::done`] gives them back.
     pub fn builder<'p>(

@@ -195,8 +195,7 @@ pub fn lower_stack(
     program.diags = std::mem::take(&mut l.diags);
     let new = crate::program::lower(&program);
     if crate::program::check::enabled() {
-        let old = crate::program::check::resolved(&program, &l.resolved);
-        crate::program::check::compare(&old, &new.rules);
+        crate::program::check::program(&program, &l.resolved, &new.rules);
     }
     new.into_result()
 }
@@ -2124,6 +2123,9 @@ impl<'u> Lowerer<'u> {
         if let Some(value) = self.literal_let(n) {
             return self.let_literal(n, scope, outer, &value);
         }
+        if n.kind() == LET && node(n, PARAMS).is_none() {
+            return self.ported(n, |l| l.let_stmt(n, scope, outer));
+        }
         let saved = std::mem::take(&mut self.helpers);
         let aggs = std::mem::take(&mut self.aggs);
         let mut out = self.stmt1(n, scope, outer).unwrap_or_default();
@@ -2141,6 +2143,34 @@ impl<'u> Lowerer<'u> {
             return None;
         }
         self.program.opaque(out, span, self.item_scope)
+    }
+
+    /// A ported statement's item (R-211 step 5), built while its body's
+    /// goals are gathered, with the helper rules and aggregates of its
+    /// own; checked for `_` as what it lowers to.
+    fn ported(
+        &mut self,
+        n: &SyntaxNode,
+        build: impl FnOnce(&mut Self) -> L<ItemId>,
+    ) -> Option<ItemId> {
+        let saved = std::mem::take(&mut self.helpers);
+        let aggs = std::mem::take(&mut self.aggs);
+        let own = self.gather.is_none();
+        if own {
+            self.gather = Some(Box::new(crate::program::build::Gather::new(false)));
+        }
+        let item = build(self);
+        if own {
+            self.gather = None;
+        }
+        self.aggs = aggs;
+        self.helpers = saved;
+        let item = item.ok()?;
+        if !(self.core || self.lenient || self.text || self.any_type) {
+            let stmts = crate::program::lower_item(&self.program, item);
+            self.placeholders(&stmts, self.span(n)).ok()?;
+        }
+        Some(item)
     }
 
     /// `component NAME [: S] { .. }`: its statements' items in a scope of
@@ -2606,7 +2636,6 @@ impl<'u> Lowerer<'u> {
             DECL => Ok(self.decl(n, scope, span)),
             USE => self.use_stmt(n, scope, outer),
             LET if node(n, PARAMS).is_some() => self.function_stmt(n, scope, outer),
-            LET => self.let_stmt(n, scope, outer),
             SET => self.set(n, scope, outer),
             RESOURCE if self.decls.project.contains(&self.file) => self.deployment(n, scope, outer),
             RESOURCE if self.is_copy(n) => self.instance(n, scope, outer),
@@ -4513,7 +4542,9 @@ impl<'u> Lowerer<'u> {
     /// `k`, written `let(k, t, rank)` for `modules` to scope (the cell is
     /// `(let, SCOPE, k)`, read by name as `k(V)`). When `t` is a reference,
     /// `k`'s value is that reference and a dot on `k` reads through it.
-    fn let_stmt(&mut self, n: &SyntaxNode, scope: usize, outer: &Rc) -> L<Vec<Stmt>> {
+    /// Built as a `let` item (R-211 step 5): its clause B's goals, its
+    /// value the term's node; `lower` writes it.
+    fn let_stmt(&mut self, n: &SyntaxNode, scope: usize, outer: &Rc) -> L<ItemId> {
         let span = self.span(n);
         let name = word_text(n, 1);
         if let Err(e) = self.value_type(scope, &name) {
@@ -4548,9 +4579,18 @@ impl<'u> Lowerer<'u> {
         };
         let mut rc = self.rc(n, scope, outer);
         let mut body = self.opt_body(&mut rc, n)?;
-        let has_body = node(n, BODY).is_some();
+        let clause = node(n, BODY).map(|b| {
+            let span = self.span(&b);
+            let gather = self
+                .gather
+                .as_mut()
+                .expect("a ported statement is gathered");
+            gather.body_clause(&mut self.program, span)
+        });
+        let (seed, made) = (body.len(), self.helpers.len());
         let t = terms(n).next().ok_or(Skip)?;
-        let value = if t.kind() == CALL && self.aggregate_name(&t).is_some() {
+        let aggregate = t.kind() == CALL && self.aggregate_name(&t).is_some();
+        let value = if aggregate {
             // `let n = count(x) where B`: one group (R-59).
             let call = self.aggregate_call(&mut rc, &t, &mut body)?;
             let v = fresh(&mut rc, &capitalise(&name));
@@ -4568,44 +4608,101 @@ impl<'u> Lowerer<'u> {
             (Some(ty), Some(d)) => self.let_typed(scope, &name, (ty, d), &t, value)?,
             _ => value,
         };
-        let rank = self.rank_tok(n)?.unwrap_or(Rank::Normal);
+        let rank = self.rank_tok(n)?;
         let head = Atom {
             pred: crate::modules::LET.to_string(),
-            args: vec![str_term(&name), value, str_term(rank.name())],
+            args: vec![
+                str_term(&name),
+                value.clone(),
+                str_term(rank.unwrap_or(Rank::Normal).name()),
+            ],
             record: None,
             span,
         };
         self.check_bound(&rc, &body, &atom_terms(&head))?;
+        // The cell's type is its reader's column, `decl NAME(NAME: T)`, as
+        // R-34 types a relation: once, at the first typed row. A resource
+        // type is the reference's own (`value_type`).
+        let declares = matches!(&ty, Some(t) if !matches!(t, crate::types::Ty::Ref(_)))
+            && typed_rows.first().and_then(|t| t.parent()).as_ref() == Some(n);
+        let resolved = crate::program::check::enabled().then(|| {
+            let has_body = node(n, BODY).is_some();
+            let declared = (&name[..], declared.clone());
+            self.let_resolved(head.clone(), body.clone(), has_body, declared, declares)
+        });
+        let results: Vec<String> = self.aggs.iter().map(|a| a.var.clone()).collect();
+        let l = crate::program::build::LetLowered {
+            name,
+            ty: declared,
+            rank,
+            declares,
+            span,
+            scope: self.item_scope,
+            clause,
+            head: &head,
+            body: &body,
+            seed,
+            aggregate,
+            made: &self.helpers[made..],
+            results: &results,
+        };
+        let written: BTreeSet<&str> = rc.vars.values().map(String::as_str).collect();
+        let written = |v: &str| written.contains(v);
+        let at = self.span(&t);
+        let gather = self
+            .gather
+            .as_mut()
+            .expect("a ported statement is gathered");
+        let mut b = gather.builder(&mut self.program, at, &written);
+        let item = b.let_item(l);
+        gather.done(b);
+        let item = item.ok_or(Skip)?;
+        if let Some(stmts) = resolved {
+            self.resolved.insert(item, stmts);
+        }
+        Ok(item)
+    }
+
+    /// What the resolver lowered a `let` to, for `DFORM_CHECK_LOWER=1`
+    /// (`program::check`): the rule (folded over its aggregates, the
+    /// numbers they take given back for the item's), its secret paths,
+    /// its `decl`, then the statement's helpers. Deleted with the switch.
+    fn let_resolved(
+        &mut self,
+        head: Atom,
+        body: Vec<Lit>,
+        has_body: bool,
+        (name, declared): (&str, Option<TypeExpr>),
+        declares: bool,
+    ) -> Vec<Stmt> {
+        let span = head.span;
         let mut out = vec![if body.is_empty() && !has_body {
             Stmt::Fact(head)
         } else {
             Stmt::Rule(RuleStmt::new(head, body))
         }];
-        // Declared secret (R-153): the cell is, each path of it that is
-        // (`modules::lets` scopes it).
         for (q, _) in declared.iter().flat_map(crate::types::secret_fields) {
-            out.push(Stmt::Fact(Atom {
-                pred: crate::modules::SECRET_LET.into(),
-                args: vec![str_term(&name), str_term(&q)],
-                record: None,
+            out.push(Stmt::Fact(atom_at(
+                crate::modules::SECRET_LET,
+                vec![str_term(name), str_term(&q)],
                 span,
-            }));
+            )));
         }
-        // The cell's type is its reader's column, `decl NAME(NAME: T)`, as
-        // R-34 types a relation: once, at the first typed row. A resource
-        // type is the reference's own (`value_type`).
-        if let (Some(d), Some(ty)) = (declared, &ty)
-            && !matches!(ty, crate::types::Ty::Ref(_))
-            && typed_rows.first().and_then(|t| t.parent()).as_ref() == Some(n)
-        {
+        if let (true, Some(d)) = (declares, declared) {
             out.push(Stmt::Decl(Decl {
-                pred: name.clone(),
-                fields: vec![name],
+                pred: name.to_string(),
+                fields: vec![name.to_string()],
                 types: vec![Some(d)],
                 span,
             }));
         }
-        Ok(out)
+        if !self.aggs.is_empty() {
+            let counters = self.program.helpers;
+            out = self.fold_aggregates(out, span).unwrap_or_default();
+            self.program.helpers = counters;
+        }
+        out.extend(self.helpers.iter().cloned());
+        out
     }
 
     /// The literal of `let NAME = LITERAL [@rank]` (R-211's first port): no
@@ -4625,9 +4722,10 @@ impl<'u> Lowerer<'u> {
     }
 
     /// `let NAME = LITERAL [@rank]` built as a `let` item of the literal's
-    /// node; `lower` writes it `let("NAME", v, "rank")`, as the resolver
-    /// did. Under `DFORM_CHECK_LOWER=1` the resolver lowers it too
-    /// (`let_stmt`), kept for `program::check`.
+    /// node, read from the tree; `lower` writes it `let("NAME", v,
+    /// "rank")`. Under `DFORM_CHECK_LOWER=1` it is also built as any `let`
+    /// is (`let_stmt`), from what the resolver lowered it to, and that
+    /// kept for `program::check`.
     fn let_literal(
         &mut self,
         n: &SyntaxNode,
@@ -4637,7 +4735,10 @@ impl<'u> Lowerer<'u> {
     ) -> Option<ItemId> {
         let resolved = crate::program::check::enabled().then(|| {
             let before = self.diags.len();
-            let out = self.stmt1(n, scope, outer).unwrap_or_default();
+            let out = match self.ported(n, |l| l.let_stmt(n, scope, outer)) {
+                Some(id) => self.resolved.remove(id).unwrap_or_default(),
+                None => Vec::new(),
+            };
             (out, self.diags.split_off(before))
         });
         let before = self.diags.len();
@@ -4669,6 +4770,7 @@ impl<'u> Lowerer<'u> {
                 value,
                 clause: None,
                 rank,
+                declares: false,
             },
         }))
     }
@@ -9098,6 +9200,35 @@ mod tests {
             let (e, seen) = crate::program::check::collect(|| error(src));
             assert!(seen.differences.is_empty(), "{src}: {:?}", seen.differences);
             assert!(e.contains(msg), "{src}: {e}");
+        }
+    }
+
+    /// Every form of `let` is built as a `let` item (R-211 step 5) and
+    /// lowers as the resolver lowers it: typed (its `decl`), secret (its
+    /// `__secret_let` paths), reading, with a clause, a `not { }` in it, a
+    /// comprehension's helper in its value, an aggregate folded by its
+    /// head or through a helper.
+    #[test]
+    fn every_let_is_built_as_a_let_item() {
+        let src = "p(1)\nq(2)\np(2)\n\
+             let a: int = 1\n\
+             let b = x + 1 where p(x), x > 1\n\
+             let c = a * 2\n\
+             let s: secret(string) = \"pw\"\n\
+             let o: { host: string, password: secret(string) } = { host: \"h\", password: \"p\" }\n\
+             let r = x where p(x), not { q(x) }\n\
+             let l = [y | p(y), not { q(y) }]\n\
+             let n = count(x) where p(x)\n\
+             let m = k where k = count(x), p(x), k > 1\n";
+        let (lowered, seen) = crate::program::check::collect(|| lower(src));
+        assert!(seen.differences.is_empty(), "{:#?}", seen.differences);
+        assert_eq!(seen.items.get("a let"), Some(&9), "{:?}", seen.items);
+        for s in [
+            "let(\"n\", count(X), \"normal\") :- p(X)",
+            "__secret_let(\"o\", \"password\")",
+            "__agg_0(count(X)) :- p(X)",
+        ] {
+            assert!(lowered.iter().any(|l| l.contains(s)), "{s}: {lowered:#?}");
         }
     }
 

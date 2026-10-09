@@ -6,17 +6,18 @@
 //! resolver calls once the migration ends.
 //!
 //! An item is opaque (its statements, emitted as they are), a module
-//! (`Stmt::Module` around its items' statements), or a ported statement:
-//! `let k = LITERAL [@rank]` (step 3).
+//! (`Stmt::Module` around its items' statements), or a ported statement
+//! (`items.rs`).
 
 mod clause;
 mod expr;
+mod items;
 pub use clause::{lower_clause, lower_folded_rule, lower_goal};
 pub use expr::lower_expr;
+pub use items::lower_item;
 
-use super::node::{ExprId, ItemId, ItemKind};
 use super::{Origin, Program};
-use crate::ast::{self, Atom, Rank, Span, Stmt, str_term};
+use crate::ast;
 use crate::diag::Diagnostic;
 
 /// What the program lowers to: the resolver's output, and where each
@@ -44,7 +45,7 @@ pub fn lower(program: &Program) -> LoweredStack {
     let mut origins = Vec::new();
     let mut statements = Vec::new();
     for &id in &program.roots {
-        item(program, id, &mut statements, &mut origins);
+        items::item(program, id, &mut statements, &mut origins);
     }
     LoweredStack {
         rules: Ok(ast::Program {
@@ -55,65 +56,11 @@ pub fn lower(program: &Program) -> LoweredStack {
     }
 }
 
-/// The statements of the item `id`, onto `out`.
-fn item(program: &Program, id: ItemId, out: &mut Vec<Stmt>, origins: &mut Vec<Origin>) {
-    let it = &program.items[id];
-    match &it.kind {
-        ItemKind::Opaque(stmts) => {
-            origins.extend(stmts.iter().map(|_| Origin::of(id)));
-            out.extend(stmts.iter().cloned());
-        }
-        ItemKind::Module {
-            path,
-            component,
-            items,
-            ..
-        } => {
-            origins.push(Origin::of(id));
-            let mut body = Vec::new();
-            for &i in items {
-                item(program, i, &mut body, origins);
-            }
-            out.push(Stmt::Module(ast::Module {
-                name: path.clone(),
-                component: *component,
-                body,
-                span: it.span,
-            }));
-        }
-        ItemKind::Let {
-            name,
-            value,
-            ty: None,
-            clause: None,
-            rank,
-        } => {
-            origins.push(Origin::of(id));
-            out.push(Stmt::Fact(let_fact(program, name, *value, *rank, it.span)));
-        }
-        kind => unreachable!(
-            "no builder makes {} with a type or a clause before step 5",
-            super::spell::kind(kind)
-        ),
-    }
-}
-
-/// `let k = v [@rank]`: the contribution `let("k", v, "rank")` to the
-/// cell `k`, which `modules` scopes.
-fn let_fact(program: &Program, name: &str, value: ExprId, rank: Option<Rank>, span: Span) -> Atom {
-    let (value, reads) = lower_expr(program, value);
-    debug_assert!(reads.is_empty(), "a let of a literal reads nothing");
-    let rank = rank.unwrap_or(Rank::Normal);
-    ast::atom(
-        crate::modules::LET,
-        vec![str_term(name), value, str_term(rank.name())],
-        span,
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ast::Stmt;
+    use crate::program::ItemKind;
     use crate::program::check;
 
     /// A program of opaque items lowers to the statements it was built

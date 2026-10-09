@@ -9,7 +9,7 @@
 //! `neg_helper` does.
 
 use super::expr::Lowering;
-use crate::ast::{Atom, Helper, Lit, RuleStmt, Stmt, Term, str_term};
+use crate::ast::{Atom, Helper, Lit, RuleStmt, Span, Stmt, Term, str_term};
 use crate::program::node::*;
 use crate::program::{NodeId, Program};
 use crate::value::Value;
@@ -37,11 +37,7 @@ pub fn lower_goal(program: &Program, id: GoalId, context: &[Lit]) -> (Vec<Lit>, 
 }
 
 /// The rule item `id` with its body's aggregate bindings folded, as the
-/// resolver's `fold_rule` writes it: a fold with no helper number applied
-/// by the head (`p(K, count(X)) :- B`); else the rule over each fold's
-/// `__agg_N(group, agg(x)) :- B`, joined by the group (the head's other
-/// variables and what the literals after the fold read, as B binds them),
-/// the literals that read a fold's value after it, then each helper.
+/// resolver's `fold_rule` writes it ([`Lowering::folded`]).
 pub fn lower_folded_rule(program: &Program, id: ItemId) -> Vec<Stmt> {
     let item = &program.items[id];
     let ItemKind::Rule {
@@ -53,20 +49,25 @@ pub fn lower_folded_rule(program: &Program, id: ItemId) -> Vec<Stmt> {
         unreachable!("a folded rule has a body")
     };
     let mut l = Lowering::new(program);
-    let mut head = l.atom(&head.rel, &head.args);
-    // The body's literals but each fold's binding, and the folds.
-    let mut lits = Vec::new();
-    let mut folds = Vec::new();
-    for &g in &program.clauses[*clause].goals {
-        match &program.goals[g].kind {
-            GoalKind::Fold { var, agg, helper } => {
-                let call = l.expr(*agg);
-                lits.append(&mut l.reads);
-                folds.push((l.var(*var), call, *helper));
-            }
-            _ => l.goal(g, &mut lits),
-        }
-    }
+    let head = l.atom(&head.rel, &head.args);
+    let (lits, folds) = l.unfolded(*clause);
+    let mut out = folded(head, lits, folds, item.span);
+    out.append(&mut l.helpers);
+    out
+}
+
+/// One aggregate binding of a clause: the variable, the call, and its
+/// `__agg_N` when it folds through one.
+pub(super) type Fold = (Term, Term, Option<u32>);
+
+/// The rule `head :- lits` with the aggregate bindings `folds` folded, as
+/// the resolver's `fold_rule` writes it: a fold with no helper number
+/// applied by the head (`p(K, count(X)) :- B`); else the rule over each
+/// fold's `__agg_N(group, agg(x)) :- B`, joined by the group (the head's
+/// other variables and what the literals after the fold read, as B binds
+/// them), the literals that read a fold's value after it, then each
+/// helper.
+pub(super) fn folded(mut head: Atom, lits: Vec<Lit>, folds: Vec<Fold>, span: Span) -> Vec<Stmt> {
     let results: BTreeSet<&str> = folds
         .iter()
         .filter_map(|(v, ..)| match v {
@@ -107,15 +108,11 @@ pub fn lower_folded_rule(program: &Program, id: ItemId) -> Vec<Stmt> {
         let pred = format!("__agg_{}", n.expect("a grouped fold's helper number"));
         let mut args = group.clone();
         args.push(call);
-        let rule = RuleStmt::helper(
-            Helper::Aggregate,
-            atom_at(&pred, args, item.span),
-            base.clone(),
-        );
+        let rule = RuleStmt::helper(Helper::Aggregate, atom_at(&pred, args, span), base.clone());
         helpers.push(Stmt::Rule(rule));
         let mut args = group.clone();
         args.push(v);
-        body.push(Lit::Pos(atom_at(&pred, args, item.span)));
+        body.push(Lit::Pos(atom_at(&pred, args, span)));
     }
     body.extend(post);
     let mut out = vec![Stmt::Rule(RuleStmt::new(head, body))];
@@ -124,6 +121,45 @@ pub fn lower_folded_rule(program: &Program, id: ItemId) -> Vec<Stmt> {
 }
 
 impl Lowering<'_> {
+    /// Clause `id`'s literals but its aggregate bindings, and those
+    /// bindings: each fold's call (its reads hoisted with the literals).
+    pub(super) fn unfolded(&mut self, id: ClauseId) -> (Vec<Lit>, Vec<Fold>) {
+        let mut lits = Vec::new();
+        let mut folds = Vec::new();
+        for &g in &self.program.clauses[id].goals {
+            let (reads, fold, after) = match &self.program.goals[g].kind {
+                GoalKind::Fold { .. } => (&[][..], g, &[][..]),
+                GoalKind::Hoisted {
+                    reads,
+                    goals,
+                    after,
+                } if let [f] = goals.as_slice()
+                    && matches!(self.program.goals[*f].kind, GoalKind::Fold { .. }) =>
+                {
+                    (reads.as_slice(), *f, after.as_slice())
+                }
+                _ => {
+                    self.goal(g, &mut lits);
+                    continue;
+                }
+            };
+            self.terms_made(NodeId::Goal(g));
+            for &r in reads {
+                self.goal(r, &mut lits);
+            }
+            let GoalKind::Fold { var, agg, helper } = &self.program.goals[fold].kind else {
+                unreachable!("a fold")
+            };
+            let call = self.expr(*agg);
+            lits.append(&mut self.reads);
+            folds.push((self.var(*var), call, *helper));
+            for &a in after {
+                self.goal(a, &mut lits);
+            }
+        }
+        (lits, folds)
+    }
+
     /// Clause `id`'s literals onto `out`.
     pub(super) fn clause(&mut self, id: ClauseId, out: &mut Vec<Lit>) {
         for &g in &self.program.clauses[id].goals {

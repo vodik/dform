@@ -4,7 +4,8 @@
 //! every span with its origin and every diagnostic included
 //! (`program::check::dump`), and every term, written literal and clause
 //! in them as well, built as nodes and lowered back
-//! (`program::check::term`, `program::check::Shadow`). The same comparison runs in every
+//! (`program::check::{term, literal, clause}`), and the items counted by
+//! kind. The same comparison runs in every
 //! `lower_stack` of the suite under `DFORM_CHECK_LOWER=1`; both are deleted
 //! with the old path at the migration's end.
 
@@ -32,21 +33,12 @@ fn the_program_lowers_as_the_resolver_does() {
     df_files(&repo().join("tests/syntax/err"), true, &mut files);
     assert!(files.len() > 60, "{files:?}");
     let mut failures = Vec::new();
-    let (mut compared, mut terms, mut literals, mut clauses, mut folds) = (0, 0, 0, 0, 0);
-    let mut built = std::collections::BTreeSet::new();
+    let mut total = check::Collected::default();
     for f in &files {
-        let ((), seen) = check::collect(|| lower(f));
-        compared += seen.compared;
-        terms += seen.terms;
-        literals += seen.literals;
-        clauses += seen.clauses;
-        folds += seen.folds;
-        built.extend(seen.built);
-        failures.extend(
-            seen.differences
-                .into_iter()
-                .map(|d| format!("{}: {d}", rel(f))),
-        );
+        let ((), mut seen) = check::collect(|| lower(f));
+        let differences = std::mem::take(&mut seen.differences);
+        failures.extend(differences.into_iter().map(|d| format!("{}: {d}", rel(f))));
+        total.add(seen);
     }
     // A query's pattern and the text a refinement prints are read by the
     // same resolver, in modes of their own.
@@ -59,15 +51,21 @@ fn the_program_lowers_as_the_resolver_does() {
         }),
     ];
     for (what, read) in modes {
-        let ((), seen) = check::collect(read);
-        compared += seen.compared;
-        terms += seen.terms;
-        literals += seen.literals;
-        clauses += seen.clauses;
-        folds += seen.folds;
-        built.extend(seen.built);
-        failures.extend(seen.differences.into_iter().map(|d| format!("{what}: {d}")));
+        let ((), mut seen) = check::collect(read);
+        let differences = std::mem::take(&mut seen.differences);
+        failures.extend(differences.into_iter().map(|d| format!("{what}: {d}")));
+        total.add(seen);
     }
+    let check::Collected {
+        compared,
+        terms,
+        literals,
+        clauses,
+        folds,
+        built,
+        items,
+        ..
+    } = total;
     assert!(
         failures.is_empty(),
         "{} of {compared} lowerings differ:\n{}",
@@ -88,4 +86,8 @@ fn the_program_lowers_as_the_resolver_does() {
     assert!(clauses >= 2 * compared, "only {clauses} clauses compared");
     assert!(folds > 0, "no rule folded over its aggregates");
     eprintln!("goals built: {built:?}");
+    // How far the port has come: the items by kind (`a statement`, one
+    // not yet ported).
+    eprintln!("items: {items:?}");
+    assert!(items.get("a let").is_some_and(|n| *n > 0), "{items:?}");
 }

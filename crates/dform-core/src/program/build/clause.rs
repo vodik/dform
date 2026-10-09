@@ -284,6 +284,17 @@ impl Builder<'_> {
         self.clause_of(goals)
     }
 
+    /// `clause` (a new one when none) with `goal` its last.
+    pub fn ending(&mut self, clause: Option<ClauseId>, goal: GoalId) -> ClauseId {
+        match clause {
+            Some(c) => {
+                self.program.clauses[c].goals.push(goal);
+                c
+            }
+            None => self.clause_of(vec![goal]),
+        }
+    }
+
     /// The clause of `goals`.
     pub fn clause_of(&mut self, goals: Vec<GoalId>) -> ClauseId {
         self.program.clauses.insert(Clause {

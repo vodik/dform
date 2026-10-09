@@ -96,6 +96,7 @@ impl Speller<'_> {
                 value,
                 clause,
                 rank: r,
+                ..
             } => format!(
                 "let {name}{} = {}{}{}",
                 typed(ty),

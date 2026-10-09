@@ -42,7 +42,26 @@ pub struct Collected {
     /// The kinds of goal built (`Member/Enum`, `Not/helper`, ..): which
     /// forms a corpus reaches.
     pub built: std::collections::BTreeSet<String>,
+    /// The items of the programs compared, by kind (`a statement` is an
+    /// opaque one): how far the port has come.
+    pub items: std::collections::BTreeMap<&'static str, usize>,
     pub differences: Vec<Difference>,
+}
+
+impl Collected {
+    /// What `other` saw added to this.
+    pub fn add(&mut self, other: Collected) {
+        self.compared += other.compared;
+        self.terms += other.terms;
+        self.literals += other.literals;
+        self.clauses += other.clauses;
+        self.folds += other.folds;
+        self.built.extend(other.built);
+        for (k, n) in other.items {
+            *self.items.entry(k).or_default() += n;
+        }
+        self.differences.extend(other.differences);
+    }
 }
 
 /// The first line two dumps differ at, under the statement it belongs to.
@@ -75,6 +94,27 @@ pub fn enabled() -> bool {
 pub fn compare(old: &Lowered, new: &Lowered) {
     let difference = differ(&dump(old), &dump(new));
     record(difference, |c| c.compared += 1);
+}
+
+/// The program `program` lowered to `new`: compared with what the
+/// resolver lowered it to (its opaque items, `ported` for the rest), its
+/// items counted by kind.
+pub fn program(program: &Program, ported: &Resolved, new: &Lowered) {
+    compare(&resolved(program, ported), new);
+    let mut kinds = Vec::new();
+    let mut walk = program.roots.clone();
+    while let Some(id) = walk.pop() {
+        let kind = &program.items[id].kind;
+        if let ItemKind::Module { items, .. } = kind {
+            walk.extend(items.iter().copied());
+        }
+        kinds.push(super::spell::kind(kind));
+    }
+    record(None, |c| {
+        for k in kinds {
+            *c.items.entry(k).or_default() += 1;
+        }
+    });
 }
 
 /// The diagnostics a ported statement's builder gave (`new`) and the

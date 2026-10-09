@@ -15,13 +15,16 @@ mod clause;
 mod each;
 mod expr;
 mod gather;
+mod lets;
 mod membership;
 mod negation;
 mod pattern;
 mod spread;
 
+pub use aggregate::{grouped, number_folds};
 pub use clause::{Form, Written};
 pub use gather::{Gather, Statement};
+pub use lets::LetLowered;
 
 use super::Program;
 use super::node::{Expr, ExprId, ExprKind, ItemId, Var, VarId};

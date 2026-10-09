@@ -11,8 +11,8 @@
 
 use super::Builder;
 use crate::ast::{Atom, Lit, Span, Term};
-use crate::program::Counters;
 use crate::program::node::*;
+use crate::program::{Counters, Program};
 use std::collections::BTreeSet;
 
 impl Builder<'_> {
@@ -51,16 +51,7 @@ impl Builder<'_> {
             matches!(l, Lit::Eq(Term::Var(v), Term::Func { name, .. })
             if results.contains(v) && aggregate_kind(name).is_some())
         };
-        let folds = body.iter().filter(|l| found(l)).count();
-        let grouped = !(folds == 1 && head.record.is_none() && {
-            let reads: BTreeSet<&str> = results.iter().map(String::as_str).collect();
-            let post = body.iter().any(|l| !found(l) && reads_any(l, &reads));
-            let v = body.iter().find(|l| found(l)).and_then(|l| match l {
-                Lit::Eq(Term::Var(v), _) => Some(v),
-                _ => None,
-            });
-            !post && v.is_some_and(|v| in_head_once(head, v))
-        });
+        let grouped = grouped(head, body, results);
         let goals = body
             .iter()
             .map(|l| match found(l) {
@@ -98,6 +89,48 @@ impl Builder<'_> {
                 rank: None,
             },
         })
+    }
+}
+
+/// Whether the aggregate bindings of `body` (those binding `results`)
+/// fold through a helper each: not one alone whose value is a column of
+/// `head` that nothing else reads, which the head applies.
+pub fn grouped(head: &Atom, body: &[Lit], results: &[String]) -> bool {
+    let found = |l: &Lit| {
+        matches!(l, Lit::Eq(Term::Var(v), Term::Func { name, .. })
+        if results.contains(v) && aggregate_kind(name).is_some())
+    };
+    let folds = body.iter().filter(|l| found(l)).count();
+    !(folds == 1 && head.record.is_none() && {
+        let reads: BTreeSet<&str> = results.iter().map(String::as_str).collect();
+        let post = body.iter().any(|l| !found(l) && reads_any(l, &reads));
+        let v = body.iter().find(|l| found(l)).and_then(|l| match l {
+            Lit::Eq(Term::Var(v), _) => Some(v),
+            _ => None,
+        });
+        !post && v.is_some_and(|v| in_head_once(head, v))
+    })
+}
+
+/// Each aggregate binding of `clause`, in order, folds through the next
+/// `__agg_N` of the program's counter.
+pub fn number_folds(program: &mut Program, clause: ClauseId) {
+    let goals = program.clauses[clause].goals.clone();
+    for g in goals {
+        let fold = match &program.goals[g].kind {
+            GoalKind::Fold { .. } => g,
+            GoalKind::Hoisted { goals, .. }
+                if let [f] = goals.as_slice()
+                    && matches!(program.goals[*f].kind, GoalKind::Fold { .. }) =>
+            {
+                *f
+            }
+            _ => continue,
+        };
+        let n = u32::try_from(program.helpers.agg()).expect("a helper number");
+        if let GoalKind::Fold { helper, .. } = &mut program.goals[fold].kind {
+            *helper = Some(n);
+        }
     }
 }
 
