@@ -828,7 +828,8 @@ impl Providers {
     ) -> Result<String> {
         let (i, held) = self.holder(label, identity).ok_or_else(|| {
             anyhow!(
-                "no provider holds the secret {}: its object is not made",
+                "no object of this deployment holds the secret {} (it is not made, or it is \
+                 another deployment's)",
                 crate::ir::label(label)
             )
         })?;

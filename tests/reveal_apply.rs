@@ -295,3 +295,54 @@ fn a_template_over_a_held_secret_configures_a_provider() {
     let r = dform(&s, &["plan", "p"]).success();
     assert_eq!(r.summary(), "stack p is up to date", "{}", r.stdout);
 }
+
+/// A template over a held secret, published as another stack's output
+/// and written by the reader: the reader's Apply would get the bytes.
+#[test]
+#[ignore = "a template's held secret is revealed from an object of the deployment that writes \
+            it: the reader's run finds no object of its own holding the platform's token and \
+            the Apply is refused (`no object of this deployment holds the secret ..`); a reveal \
+            from another deployment's object needs its identity (`Held.deployment`, as a whole \
+            held output carries) inside the template"]
+fn a_template_in_another_stacks_output_is_revealed_into_the_readers_apply() {
+    let s = project("reveal-output", "");
+    s.write(
+        "dform.toml",
+        "[project]\nedition = \"2026\"\n\n[providers]\nvault = \"./vault\"\n\n\
+         [secrets]\npassphrase = \"env:DFORM_TEST_PASSPHRASE\"\n",
+    );
+    s.write(
+        "stacks/platform.df",
+        "use vault\nresource vault.token t { name = \"t\" }\n\
+         output join: secret(string) = \"token: ${t.value}\"\n",
+    );
+    s.write(
+        "stacks/apps.df",
+        "use stacks.platform\nuse fake { source = \"prov\" }\n\
+         resource compute.vm vm {\n  name = \"vm\"\n  user_data = platform.join\n}\n",
+    );
+    let run = |args: &[&str]| {
+        Run::from(
+            common::dform()
+                .args(common::yes(args))
+                .current_dir(&s.dir)
+                .env("DFORM_TEST_PASSPHRASE", "reveal")
+                .output()
+                .unwrap(),
+        )
+    };
+    // The reader is one from its first apply, which the second seals to.
+    run(&["apply", "platform"]).success();
+    run(&["apply", "apps"]).failure();
+    run(&["apply", "platform"]).success();
+    run(&["apply", "apps"]).success();
+    let value = s.json("dform.state/stacks.platform/remote.json")["resources"]["vault.token::t"]
+        ["computed"]["value"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let vm = s.json("dform.state/stacks.apps/remote.fakecloud.json")["resources"]["compute.vm::vm"]
+        ["attrs"]
+        .clone();
+    assert_eq!(vm["user_data"], format!("token: {value}"), "{vm}");
+}
