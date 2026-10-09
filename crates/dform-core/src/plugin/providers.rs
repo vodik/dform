@@ -2126,13 +2126,30 @@ impl Providers {
     fn written_text(&self, v: &Json, identity: &BTreeMap<(String, String), String>) -> String {
         let mut text = crate::approval::canonical_json(v);
         for label in held_in(v) {
-            let remote = self
-                .holder(&label, identity)
-                .map(|(_, h)| h.remote)
-                .unwrap_or_default();
+            let remote = match self.held.borrow().get(&label) {
+                Some(h) => h.remote.clone(),
+                None => crate::value::null_owner(&label)
+                    .and_then(|owner| identity.get(&owner).cloned())
+                    .unwrap_or_default(),
+            };
             text.push_str(&format!("\n{label} held by {remote}"));
         }
         text
+    }
+
+    /// The remote id of each object `state` has, by its address: what a
+    /// write a held secret was revealed into is digested with
+    /// ([`Providers::written_text`]), whether or not its provider is
+    /// configured in this run.
+    fn remotes(state: &State) -> BTreeMap<(String, String), String> {
+        state
+            .resources
+            .iter()
+            .filter_map(|(k, e)| {
+                let a = state::parse_key(k)?;
+                Some(((a.typ, a.name), e.remote.clone()))
+            })
+            .collect()
     }
 
     /// The digests of `doc`'s write-only attributes, by path; one this run
@@ -2939,7 +2956,7 @@ impl Providers {
         self.proven.borrow_mut().clear();
         // The objects a held secret is read from; a replaced one is made
         // anew, so what was sent with its secret differs.
-        let mut identity = self.identities(state);
+        let mut identity = Providers::remotes(state);
         identity.retain(|(typ, name), _| {
             !retracted.contains(&Address {
                 typ: typ.clone(),
@@ -3892,7 +3909,7 @@ impl Tick<'_> {
         };
         let was = state.get(addr).cloned();
         let before = was.as_ref().map(|e| e.written.clone()).unwrap_or_default();
-        let identity = self.cloud.identities(state);
+        let identity = Providers::remotes(state);
         let mut written = self.cloud.written(&addr.typ, doc, &before, &identity);
         let mut derived = self.cloud.derivations(doc);
         let given: Vec<&String> = self.lifecycle.at_create_of(addr).map(|(p, _)| p).collect();
