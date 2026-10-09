@@ -34,15 +34,7 @@ impl Show {
         let Some(r) = compiled.resources.iter().find(|r| r.addr == addr) else {
             bail!("no resource {} in this deployment", report::address(&addr));
         };
-        // A kind no schema has yet: no path of it is known not to be
-        // sensitive (R-215).
-        let masked = run.ev.evaluator.unclassified(&addr.typ).then(|| {
-            run.ev
-                .redact
-                .unclassified(&run.ev.res.facts, |t| t == addr.typ)
-        });
-        let redact = masked.as_ref().unwrap_or(&run.ev.redact);
-        let json = serde_json::to_string_pretty(&redact.json(&r.attrs))?;
+        let json = serde_json::to_string_pretty(&run.ev.redact.json(&r.attrs))?;
         println!("{}", json);
         Ok(Outcome::Done)
     }

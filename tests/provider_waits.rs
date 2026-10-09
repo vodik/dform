@@ -81,10 +81,9 @@ fn a_providers_resources_are_the_tick_after_its_settings() {
         "      provisioner = \"rancher.io/local-path\"",
         "  + k8s.deployment traefik.web",
         // A kind only the cluster serves, planned as written: its schema
-        // arrives at the boundary that configures the provider, so no
-        // string of it is known not to be sensitive until then (R-215).
+        // arrives at the boundary that configures the provider.
         "  + k8s.traefik.io.v1alpha1.middleware traefik.strip",
-        "      spec.stripPrefix.prefixes = [(sensitive)]",
+        "      spec.stripPrefix.prefixes = [\"/a\"]",
     ] {
         assert!(tick2.contains(line), "{line}\n{}", r.stdout);
     }

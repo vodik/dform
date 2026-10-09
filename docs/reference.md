@@ -1908,11 +1908,10 @@ it: the question before tick 1 counted it, and a plan file holds it
 plan showed in the clear that the provider's schema makes a secret is
 the same value when its digest is; it prints as `(sensitive)` from then
 on. A kind no schema has before the boundary (a CRD the program makes, a
-kind its provider's cluster serves once reached) has no path known not
-to be sensitive: each string it is given prints as `(sensitive)` in
-every printer (the plan at every level, `--json`, `why`, `query`,
-`show`) until its schema is learned, and is the same value at the
-boundary when its digest is. What the plan
+kind its provider's cluster serves once reached) has no path marked
+sensitive until then: what it is given prints as written, since no
+secret can reach it (E0304), and a path its learned schema marks
+sensitive is `(sensitive)` from the boundary on. What the plan
 had under `later` for a provider's settings, or listed as state has it
 (below), it prints and asks before as it asked before tick 1; `--yes`
 applies it. A plan file or an approval did not see that diff, so applying

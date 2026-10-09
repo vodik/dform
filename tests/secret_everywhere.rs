@@ -4,10 +4,11 @@
 //! show`, the apply's output, its audit log and its state. Each test
 //! drives every printer over one program and looks for the bytes.
 //!
-//! Two ways a value is sensitive that taint does not see, the program
-//! writing a literal: a path below the attribute the program sets
-//! (`spec.value` of `spec`), and a kind no schema has until its provider
-//! learns it at a tick's boundary, where no path is known not to be.
+//! A value is sensitive by its path or by what reached it (the taint): a
+//! path below the attribute the program sets (`spec.value` of `spec`) is
+//! one; a kind no schema has until its provider learns it at a tick's
+//! boundary marks no path, so only the taint could, and a secret never
+//! reaches it.
 
 mod common;
 use common::{Run, Scratch};
@@ -52,6 +53,7 @@ fn run(s: &Scratch, args: &[&str]) -> Run {
         common::dform()
             .args(args)
             .env("R45_KUBECONFIG", "kc")
+            .env("TOKEN", TOKEN)
             .env("DFORM_WAIT_POLL_MS", "50")
             .env("NO_COLOR", "1")
             .current_dir(&s.dir)
@@ -94,58 +96,138 @@ fn never_stored(s: &Scratch, secret: &str) {
 
 const TOKEN: &str = "TOKEN-VALUE";
 
-/// A kind the provider serves only once the program configures it (the
-/// mock's `schemas` setting plays the cluster's CRD) is planned in tick 2
-/// before any schema says which of its paths are sensitive: each is said
-/// `(sensitive)` until the boundary learns the schema, and the tick
-/// re-planned there is the plan shown (the digests agree), so nothing is
-/// asked again. Before the fix, every printer showed `spec.value =
-/// "TOKEN-VALUE"`.
-#[test]
-fn a_kind_learned_at_the_boundary_never_prints_its_values() {
-    let s = Scratch::new("everywhere-learned");
+/// The mock's `schemas` setting plays a cluster's CRDs: kinds the
+/// provider serves only once the program configures it, so a resource of
+/// one is planned in tick 2 before any schema says which of its paths are
+/// sensitive. `k8s.example.io.v1.token`'s `spec.value` is, once learned.
+const CRDS: &str = "type_provider(k8s.example.io.v1.token, \"k8s\")\n\
+     type_attr(k8s.example.io.v1.token, \"metadata.name\", \"string\", [\"id\"])\n\
+     type_attr(k8s.example.io.v1.token, \"metadata.namespace\", \"string\", [])\n\
+     type_attr(k8s.example.io.v1.token, \"metadata.uid\", \"string\", [\"computed\", \"id\"])\n\
+     type_mint(k8s.example.io.v1.token, \"metadata.uid\", \"uid-{name}\")\n\
+     type_attr(k8s.example.io.v1.token, \"spec.value\", \"string\", [\"sensitive\"])\n\
+     type_provider(k8s.traefik.middleware, \"k8s\")\n\
+     type_attr(k8s.traefik.middleware, \"metadata.name\", \"string\", [\"id\"])\n\
+     type_attr(k8s.traefik.middleware, \"metadata.namespace\", \"string\", [])\n\
+     type_attr(k8s.traefik.middleware, \"metadata.uid\", \"string\", [\"computed\", \"id\"])\n\
+     type_mint(k8s.traefik.middleware, \"metadata.uid\", \"uid-{name}\")\n\
+     type_attr(k8s.traefik.middleware, \"spec\", \"object\", [])\n";
+
+/// A project whose k8s provider is configured from what tick 1 makes,
+/// serving [`CRDS`], with `resources` below.
+fn learned(name: &str, resources: &str) -> Scratch {
+    let s = Scratch::new(name);
     std::fs::create_dir_all(s.path("prov")).unwrap();
     std::os::unix::fs::symlink(
         common::exe("dform-provider-fake"),
         s.path("prov/dform-provider-fake"),
     )
     .unwrap();
-    s.write(
-        "crd.df",
-        "type_provider(k8s.example.io.v1.token, \"k8s\")\n\
-         type_attr(k8s.example.io.v1.token, \"metadata.name\", \"string\", [\"id\"])\n\
-         type_attr(k8s.example.io.v1.token, \"metadata.namespace\", \"string\", [])\n\
-         type_attr(k8s.example.io.v1.token, \"metadata.uid\", \"string\", [\"computed\", \"id\"])\n\
-         type_mint(k8s.example.io.v1.token, \"metadata.uid\", \"uid-{name}\")\n\
-         type_attr(k8s.example.io.v1.token, \"spec.value\", \"string\", [\"sensitive\"])\n",
-    );
+    s.write("crd.df", CRDS);
     s.write(
         "p.df",
-        r#"
-use env
-use fake { source = "prov" }
-resource db.postgres server { name = "server" }
-let kc = str.format("%s@%s", env.var("R45_KUBECONFIG"), server.endpoint)
-use k8s { kubeconfig = kc, schemas = ["crd.df"] }
-resource k8s.namespace ns { metadata.name = "app" }
-resource k8s.example.io.v1.token t {
-  metadata.name = "t"
-  metadata.namespace = ns.metadata.name
-  spec.value = "TOKEN-VALUE"
+        &format!(
+            "use env\n\
+             use fake {{ source = \"prov\" }}\n\
+             resource db.postgres server {{ name = \"server\" }}\n\
+             let kc = str.format(\"kc@%s\", server.endpoint)\n\
+             use k8s {{ kubeconfig = kc, schemas = [\"crd.df\"] }}\n\
+             resource k8s.namespace apps {{ metadata.name = \"apps\" }}\n\
+             {resources}"
+        ),
+    );
+    s
 }
-"#,
+
+/// A secret given to a kind no schema has yet is refused before anything
+/// prints it (E0304: no path of the kind is marked sensitive), by every
+/// printer: the taint is what masks a value of such a kind, and it never
+/// reaches one.
+#[test]
+fn a_secret_never_reaches_a_kind_no_schema_has() {
+    let s = learned(
+        "everywhere-learned-secret",
+        "resource k8s.example.io.v1.token t {\n\
+           metadata.name = \"t\"\n\
+           metadata.namespace = apps.metadata.name\n\
+           spec.value = env.var(\"TOKEN\")\n\
+         }\n",
     );
     let flags = ["--world", "w.json"];
-    let before = printers(&s, &flags, "t.spec.value", "k8s.example.io.v1.token t");
-    never_says(&before, TOKEN);
-    // A string equal to one of its values elsewhere prints as it is.
-    let plan = &before[1].1.stdout;
-    assert!(
-        plan.contains("      spec.value = (sensitive)\n")
-            && plan.contains("  + k8s.namespace ns  ")
-            && plan.contains("      metadata.name = \"app\"\n"),
-        "{plan}"
+    for (cmd, r) in printers(&s, &flags, "t.spec.value", "k8s.example.io.v1.token t") {
+        assert!(
+            !r.ok
+                && r.stderr.contains(
+                    "E0304: a secret reaches k8s.example.io.v1.token .spec.value, not marked \
+                     sensitive in the schema"
+                )
+                && !r.stdout.contains(TOKEN)
+                && !r.stderr.contains(TOKEN),
+            "{cmd}:\n{}{}",
+            r.stdout,
+            r.stderr
+        );
+    }
+    never_stored(&s, TOKEN);
+}
+
+/// A kind no schema has yet prints what no secret reached, in every
+/// printer and in a `warn` that quotes it (the user's two Traefik
+/// middlewares printed `metadata = { name: (sensitive), namespace:
+/// (sensitive) }` under R-215's every-string rule). A literal at a path
+/// its learned schema marks sensitive prints until the boundary and is
+/// `(sensitive)` from it on; the tick re-planned there is the plan shown
+/// (the digests agree), so nothing is asked again.
+#[test]
+fn a_kind_no_schema_has_prints_what_no_secret_reached() {
+    let s = learned(
+        "everywhere-learned",
+        "resource k8s.traefik.middleware security_headers {\n\
+           metadata = { name: \"security-headers\", namespace: apps.metadata.name }\n\
+           spec.headers = {\n\
+             stsSeconds: 31536000,\n\
+             contentTypeNosniff: true,\n\
+             referrerPolicy: \"strict-origin-when-cross-origin\",\n\
+           }\n\
+         }\n\
+         resource k8s.traefik.middleware large_upload {\n\
+           metadata = { name: \"large-upload\", namespace: apps.metadata.name }\n\
+           spec.buffering.maxRequestBodyBytes = 536870912\n\
+         }\n\
+         warn \"headers: ${security_headers.spec.headers.referrerPolicy}\"\n\
+         resource k8s.example.io.v1.token t {\n\
+           metadata.name = \"t\"\n\
+           metadata.namespace = apps.metadata.name\n\
+           spec.value = \"TOKEN-VALUE\"\n\
+         }\n",
     );
+    let flags = ["--world", "w.json"];
+    let middleware = "k8s.traefik.middleware security_headers";
+    let before = printers(&s, &flags, "security_headers.metadata", middleware);
+    for (cmd, r) in &before {
+        assert!(r.ok, "{cmd}:\n{}{}", r.stdout, r.stderr);
+        // `secret(?)` is a value not known yet; none of these is masked.
+        for masked in ["(sensitive", "secret("] {
+            assert!(!r.stdout.contains(masked), "{cmd}:\n{}", r.stdout);
+        }
+        assert!(
+            r.stderr
+                .contains("warning: headers: strict-origin-when-cross-origin\n"),
+            "{cmd}:\n{}",
+            r.stderr
+        );
+    }
+    let plan = &before[1].1.stdout;
+    for line in [
+        "  + k8s.traefik.middleware large_upload      p.df:",
+        "      metadata = { name: \"large-upload\", namespace: \"apps\" }\n",
+        "      spec.buffering.maxRequestBodyBytes = 536870912\n",
+        "      metadata = { name: \"security-headers\", namespace: \"apps\" }\n",
+        "        referrerPolicy: \"strict-origin-when-cross-origin\",\n",
+        "      spec.value = \"TOKEN-VALUE\"\n",
+    ] {
+        assert!(plan.contains(line), "{line}\n{plan}");
+    }
     let applied = run(
         &s,
         &[
@@ -159,17 +241,16 @@ resource k8s.example.io.v1.token t {
         ],
     );
     assert!(
-        !applied.stdout.contains("differs from the plan shown"),
-        "{}",
-        applied.stdout
+        applied.ok && !applied.stdout.contains("differs from the plan shown"),
+        "{}{}",
+        applied.stdout,
+        applied.stderr
     );
-    never_says(&[("apply plan.json".into(), applied)], TOKEN);
     // Its schema learned: `spec.value` is sensitive by it.
     never_says(
         &printers(&s, &flags, "t.spec.value", "k8s.example.io.v1.token t"),
         TOKEN,
     );
-    never_stored(&s, TOKEN);
 }
 
 const NESTED: &str = "NESTED-SECRET";

@@ -539,24 +539,6 @@ impl Redactor {
         r
     }
 
-    /// This redactor, saying each string of the attributes of a resource
-    /// of a type `unclassified` picks as a secret's (R-215): a kind no
-    /// schema has yet, which its provider learns at a tick's boundary, has
-    /// no path known not to be sensitive. For one subject (`why`, `show`):
-    /// its strings hide every equal one the run prints.
-    pub fn unclassified(
-        &self,
-        facts: &BTreeSet<Atom>,
-        unclassified: impl Fn(&str) -> bool,
-    ) -> Redactor {
-        let mut r = self.clone();
-        for (t, addr, p, v) in unclassified_attrs(facts, &unclassified) {
-            let label = |path: &str| crate::value::null_label(t, &spell::bare(addr), path);
-            string_leaves(v, p, &mut |path, leaf| r.add(leaf, &label(path)));
-        }
-        r
-    }
-
     /// Each secret value the run holds, with its label (`dform secrets
     /// list`, R-161): never printed, only matched.
     pub fn labelled(&self) -> impl Iterator<Item = (&Value, &str)> {
@@ -799,87 +781,6 @@ fn part<'v>(v: &'v Value, path: &str) -> Option<&'v Value> {
             "" => Some(x),
             rest => part(x, rest.strip_prefix('.')?),
         })
-}
-
-/// The attribute values of resources of the types `unclassified` picks,
-/// as `(type, address, path, value)` (R-215).
-fn unclassified_attrs<'f>(
-    facts: &'f BTreeSet<Atom>,
-    unclassified: &'f impl Fn(&str) -> bool,
-) -> impl Iterator<Item = (&'f str, &'f Value, &'f str, &'f Value)> {
-    facts
-        .iter()
-        .filter(|a| VALUE_PREDS.contains(&a.pred.as_str()))
-        .filter_map(move |a| match a.args.as_slice() {
-            [
-                Term::Val(Value::Str(t)),
-                Term::Val(addr),
-                Term::Val(Value::Str(p)),
-                Term::Val(v),
-                ..,
-            ] if unclassified(t) => Some((t.as_str(), addr, p.as_str(), v)),
-            _ => None,
-        })
-}
-
-/// Each string inside `v`, the value at `path`, with its path: a
-/// reference names what it reads, and a number or a flag is no secret's.
-fn string_leaves<'v>(v: &'v Value, path: &str, f: &mut impl FnMut(&str, &'v Value)) {
-    match v {
-        Value::Obj(m) => {
-            for (k, x) in m {
-                string_leaves(x, &crate::types::dotted(path, k), f);
-            }
-        }
-        Value::List(xs) => xs.iter().for_each(|x| string_leaves(x, path, f)),
-        Value::Str(_) => f(path, v),
-        _ => {}
-    }
-}
-
-/// `facts` with each string of an attribute value of a resource of a type
-/// `unclassified` picks a secret by its path (R-215): a query over every
-/// resource at once says them `(sensitive)` and matches none by its
-/// bytes, and an equal string elsewhere prints as it is.
-pub fn unclassified_facts(
-    facts: &BTreeSet<Atom>,
-    unclassified: impl Fn(&str) -> bool,
-) -> BTreeSet<Atom> {
-    fn mask(v: &Value, label: &dyn Fn(&str) -> String, path: &str) -> Value {
-        match v {
-            Value::Obj(m) => Value::Obj(
-                m.iter()
-                    .map(|(k, x)| (k.clone(), mask(x, label, &crate::types::dotted(path, k))))
-                    .collect(),
-            ),
-            Value::List(xs) => Value::List(xs.iter().map(|x| mask(x, label, path)).collect()),
-            Value::Str(_) => Value::Null {
-                label: label(path),
-                class: NullClass::Secret,
-                ty: "string".into(),
-            },
-            v => v.clone(),
-        }
-    }
-    facts
-        .iter()
-        .map(|a| match a.args.as_slice() {
-            [
-                Term::Val(Value::Str(t)),
-                Term::Val(addr),
-                Term::Val(Value::Str(p)),
-                Term::Val(v),
-                rest @ ..,
-            ] if VALUE_PREDS.contains(&a.pred.as_str()) && unclassified(t) => {
-                let label = |path: &str| crate::value::null_label(t, &spell::bare(addr), path);
-                let mut args = a.args[..3].to_vec();
-                args.push(Term::Val(mask(v, &label, p)));
-                args.extend(rest.iter().cloned());
-                Atom { args, ..a.clone() }
-            }
-            _ => a.clone(),
-        })
-        .collect()
 }
 
 /// A secret in text, by its label: `(sensitive T.a.p)`.
