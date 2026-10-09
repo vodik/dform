@@ -593,6 +593,7 @@ fn object_value(k: &str, v: Value, leaves: &[&Declared]) -> Result<Value> {
                 type_text(&d.decl.ty)
             );
         }
+        fails_check(k, a, &x, &d.decl)?;
         set_path(&mut out, rest, x);
     }
     Ok(out)
@@ -606,6 +607,35 @@ fn set_path(v: &mut Value, rest: &str, x: Value) {
         v = next;
     }
     *v = x;
+}
+
+/// A value `--set` gives input `name` (at `k`, the flag's key: an
+/// object's when it gives the object whole) that the input's own check
+/// does not hold of: refused before evaluation, as a value outside its
+/// type is, `--set agents=4: input agents is int check 0 <= agents,
+/// agents <= 3`. A check the engine reads as the input's
+/// cell's (`crate::refine::split_input`); the rest is its deny's.
+fn fails_check(k: &str, name: &str, v: &Value, decl: &InputDecl) -> Result<()> {
+    let (checks, _) = crate::refine::split_input(decl);
+    if !checks
+        .iter()
+        .any(|c| c.check(v) == crate::lattice::Truth::False)
+    {
+        return Ok(());
+    }
+    let named = BTreeMap::from([(decl.name.clone(), Term::Var(decl.name.clone()))]);
+    let check = decl
+        .refinement
+        .iter()
+        .map(|l| spell::written(&l.replace_names(&named)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let (v, ty) = (spell::bare(v), type_text(&decl.ty));
+    match k == name {
+        true => anyhow::bail!("--set {k}={v}: input {k} is {ty} check {check}"),
+        // A field of an object given whole, as its type is checked.
+        false => anyhow::bail!("--set {k}: {name} = {v} is not {ty} check {check}"),
+    }
 }
 
 /// A key's value from the target outside its type (R-208): the error at
@@ -669,6 +699,7 @@ pub fn set_facts(declared: &[Declared], set: &[(String, Value)]) -> Result<Vec<A
                     type_text(&d.decl.ty)
                 );
             }
+            fails_check(k, k, &v, &d.decl)?;
             v
         } else if !leaves.is_empty() {
             object_value(k, v.clone(), &leaves)?

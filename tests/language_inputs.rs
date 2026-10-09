@@ -78,17 +78,18 @@ fn set_is_checked_against_the_declaration() {
 }
 
 /// `1 <= replicas <= 5` fits the checkable table: a refinement of the
-/// input's cell, violated by the winning value (E DR-13).
+/// input's cell (E DR-13). A `--set` value it does not hold of is refused
+/// at the flag, before evaluation, as one outside its type is; a value
+/// the program computes is a deny of the cell (tests/refine_types.rs).
 #[test]
 fn a_refinement_on_an_input_is_a_deny() {
     let s = scratch();
     let r = plan(&s, &["--set", "owner=ops", "--set", "replicas=9"]).failure();
-    // The plan's conflict (the bare layout), said once (R-111).
     assert!(
-        r.stdout
-            .contains("conflicts:\n! input[\"\"].replicas: 9 violates range(1, 5)\n"),
+        r.stderr
+            .contains("--set replicas=9: input replicas is int check 1 <= replicas, replicas <= 5"),
         "{}",
-        r.stdout
+        r.stderr
     );
     assert!(!r.stderr.contains("ctx="), "{}", r.stderr);
 }
@@ -340,10 +341,10 @@ fn an_object_input_is_a_block_of_fields() {
     // The field's check is the leaf's refinement.
     let r = object_plan(&s, &["--set", "nodes.count=9"]).failure();
     assert!(
-        r.stdout
-            .contains("\n! input[\"\"].nodes.count: 9 violates range(1, 3)\n"),
+        r.stderr
+            .contains("--set nodes.count=9: input nodes.count is int check "),
         "{}",
-        r.stdout
+        r.stderr
     );
     // `why` shows the leaf's chain: the `--set`, over the default
     // (R-122).

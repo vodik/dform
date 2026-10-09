@@ -230,6 +230,10 @@ fn statement_place(from: &str) -> Option<String> {
         .then(|| file_line.to_string())
 }
 
+/// The rank a conflict's witness has when it is the check the value
+/// violates (`engine::collapse`).
+const REFINEMENT: &str = "refinement";
+
 /// The deny that names an attribute whose contributions conflict.
 pub const CONFLICT: &str = "conflicting attribute contributions";
 
@@ -551,9 +555,11 @@ pub(super) fn diag_lines(d: &Diag, why: Why, style: Style, conflict: bool) -> St
     out.push('\n');
     for w in &d.witnesses {
         // The cell's rank is the `!` line's; a witness says its own
-        // only when it is another (a refinement, a losing rank).
+        // only when it is another (a losing rank); the check a value
+        // violates says it is one, by its constraint.
         let rank = match w.rank.as_str() {
             "normal" | "" => String::new(),
+            REFINEMENT => "check ".into(),
             r => format!("{r} "),
         };
         let from = match why {
@@ -567,10 +573,11 @@ pub(super) fn diag_lines(d: &Diag, why: Why, style: Style, conflict: bool) -> St
             _ => String::new(),
         };
         let Some(laid) = &w.laid else {
-            out.push_str(&format!(
-                "      {rank}{}{from}\n",
-                style.said(&w.value, why)
-            ));
+            let value = match (w.rank.as_str(), &w.value) {
+                (REFINEMENT, Shown::Value(Json::String(c))) => c.clone(),
+                (_, v) => style.said(v, why),
+            };
+            out.push_str(&format!("      {rank}{value}{from}\n"));
             continue;
         };
         // An object or a list laid out as the plan's change lines lay

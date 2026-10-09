@@ -40,7 +40,7 @@ fn an_override_that_violates_a_refinement_is_a_deny() {
     // Each witness by where it was written (R-111), and said once.
     assert!(
         r.stdout.contains(
-            "\n      override {\"backup_days\":40}  p.df:9\n      refinement \"range(1, 35)\"  p.df:3\n"
+            "\n      override { backup_days: 40 }  p.df:9\n      check range(1, 35)  p.df:3\n"
         ),
         "{}",
         r.stdout
@@ -163,7 +163,7 @@ fn a_refinement_on_a_null_is_deferred_and_fires_after_the_boundary() {
         r.stderr.contains(
             "constraint violations after tick 1:\n- ! google.container_cluster pngu.zones: \
                        [\"us-east1-b\", \"us-east1-c\"] violates len_ge(3)\n"
-        ) && r.stderr.contains("refinement \"len_ge(3)\"  ")
+        ) && r.stderr.contains("check len_ge(3)  ")
             && r.stderr
                 .contains("examples/refine/stacks/refine_gke.df:126\n")
             && !r.stderr.contains("ctx=")

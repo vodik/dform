@@ -4282,7 +4282,8 @@ another module's alias is read through its name, `network.subnets`
 (docs/grammar.md "Type aliases"). A `--set` value is read as its input's type (an `inet` parses,
 a `string` takes the text) and checked before evaluation: `--set
 replicas=two` is an error naming the input and its type, and so is `--set` of an input
-the program does not declare. A value the program computes (an input of
+the program does not declare, and a value its own check does not hold of (`--set
+agents=4: input agents is int check 0 <= agents, agents <= 3`). A value the program computes (an input of
 a used module or a copy, a `set`'s) is checked after evaluation and a wrong type blocks the
 plan. A required input with no value is an error at its declaration; one
 a `set` gives, in the deployments none holds in. `check
