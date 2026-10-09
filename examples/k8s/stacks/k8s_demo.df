@@ -20,7 +20,7 @@ resource k8s.config_map web_config {
 
 resource k8s.deployment "${name}" {
   metadata = { name, namespace: shop.metadata.name }
-  spec.replicas
+  spec.replicas = replicas
   spec.selector.matchLabels = { app: name }
   spec.template.metadata.labels = { app: name }
   spec.template.spec.containers = [{
