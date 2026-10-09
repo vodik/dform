@@ -582,16 +582,22 @@ pub enum ItemKind {
         rank: Option<Rank>,
         clause: Option<ClauseId>,
     },
-    /// `use m [as n] { .. }`, `resource C n { .. }`, a project module's
-    /// deployment: a copy of a definition (step 5).
+    /// `use m [as n] { k = v, p(..) .. } [where B]`, `resource C n { .. }`
+    /// (R-113, step 5): a copy of the module or component `module` (its
+    /// path, as resolved), named `name`, or by its clause (R-191) the
+    /// variable `named` binds after the reads its holes hoisted; its
+    /// inputs' values; the rows its block gives the relations the module
+    /// takes (R-55), items of their own; its clause B's goals; `via`, the
+    /// module instance its component was named through (R-186).
     Copy {
         kind: CopyKind,
-        def: DeclRef,
-        name: Header,
+        module: Name,
+        name: Name,
+        named: Option<ExprId>,
         inputs: Vec<(Name, Span, ExprId)>,
         rows: Vec<ItemId>,
         clause: Option<ClauseId>,
-        via: Option<DeclRef>,
+        via: Option<ast::Via>,
     },
     /// `input k: T [= d] [check B] [where G]`, `key k: T`, `input k { .. }`
     /// (step 5).
@@ -610,10 +616,13 @@ pub enum ItemKind {
     /// `input p`, a module's relation its user gives (R-55), or `input p
     /// from src [where B]`, a stack's relation the rows of a document
     /// (R-39), each the variables `columns` (step 5); `arity` its
-    /// declaration's columns.
+    /// declaration's columns. `mixed`: a stack's own relation, which rules
+    /// give rows too; not `p from src` in a copy's block, a row of the
+    /// module's relation.
     RelationInput {
         rel: RelRef,
         arity: usize,
+        mixed: bool,
         source: Option<Source>,
         columns: Vec<VarId>,
         clause: Option<ClauseId>,
@@ -800,9 +809,11 @@ pub struct Source {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CopyKind {
+    /// `use m`: a module's one copy under its name.
     Use,
+    /// `resource C n`: a copy of a component (a project module's
+    /// deployment of a stack is a `Resource`).
     Component,
-    Deployment,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

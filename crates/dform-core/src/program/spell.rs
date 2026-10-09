@@ -213,8 +213,9 @@ impl Speller<'_> {
             ),
             ItemKind::Copy {
                 kind,
-                def,
+                module,
                 name,
+                named,
                 inputs,
                 clause,
                 ..
@@ -231,11 +232,13 @@ impl Speller<'_> {
                         )
                     ),
                 };
+                let name = match named {
+                    Some(_) => crate::spell::quote(name),
+                    None => name.clone(),
+                };
                 let head = match kind {
-                    CopyKind::Use => format!("use {} as {}", def.name, self.header(name)),
-                    CopyKind::Component | CopyKind::Deployment => {
-                        format!("resource {} {}", def.name, self.header(name))
-                    }
+                    CopyKind::Use => format!("use {module} as {name}"),
+                    CopyKind::Component => format!("resource {module} {name}"),
                 };
                 format!("{head}{block}{}", self.where_(*clause))
             }

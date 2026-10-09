@@ -11,7 +11,8 @@
 //! | `input k: T [= d] [check B] [where G]` | itself, its fields', refinement's and clause's literals; under several clauses (R-104) where each holds and the deny where two do |
 //! | `output k[: T] = v [where B]`  | its declaration at its first row; the value, or `output("k", v') :- B', reads` |
 //! | `output p`                     | itself, its reference columns marked             |
-//! | `input p`, `input p from src [where B]` | itself; the document's externs, `p(cols) :- B', reads`, `mixed p/n` |
+//! | `input p`, `input p from src [where B]` | itself; the document's externs, `p(cols) :- B', reads`, `mixed p/n` (a stack's own) |
+//! | `use m { k = v, p(..) } [where B]`, `resource C n { .. }` | `use`/the copy: its inputs, its rows' own statements, its clause and body |
 //! | `resource T n [@r] { p = v .. } [where B]`, `= v` | itself: its entries (a value's the object's keys), its body B's literals then the entries' reads (`reads`), then a name from the clause's binding |
 //! | `set t = v [@r] [where B]`, `set { .. }` | per line `arg(T, A, "p", v'[, "r"])` (`arg_add` for `+=`), an element `arg(T, A, "l", [k, {..}], "r")`, an input `arg("input", "", "k", v', "r")`, a fact or a rule over B's literals and the line's reads, folded over B's aggregates |
 //! | `set from doc [@r] [where B]`  | the document's externs, then `arg("input", "", P, V, "r") :- B', reads` |
@@ -28,8 +29,8 @@ use super::clause::folded;
 use super::expr::Lowering;
 use crate::ast::{self, Atom, Decl, Rank, RuleStmt, Span, Stmt, TypeExpr, str_term};
 use crate::program::node::{
-    CheckKind, ClauseId, ExprId, Head, Header, ItemId, ItemKind, Param, RelRef, ResourceBody,
-    Setting, Source, Target, TypeRef, VarId, Write,
+    CheckKind, ClauseId, CopyKind, ExprId, Head, Header, ItemId, ItemKind, Param, RelRef,
+    ResourceBody, Setting, Source, Target, TypeRef, VarId, Write,
 };
 use crate::program::{NodeId, Origin, Program};
 use crate::value::Value;
@@ -83,7 +84,13 @@ pub(super) fn item(program: &Program, id: ItemId, out: &mut Vec<Stmt>, origins: 
             value,
             clause,
         } => let_fn(program, name, params, *value, *clause, it.span),
-        ItemKind::Rule { head, clause, rank } => rule(program, id, (head, *rank), *clause, it.span),
+        ItemKind::Rule { .. } | ItemKind::RelationInput { .. } => {
+            let mut l = Lowering::new(program);
+            let mut out = own(&mut l, id);
+            out.append(&mut l.helpers);
+            out
+        }
+        ItemKind::Copy { .. } => copy(program, id),
         ItemKind::Check {
             kind,
             message,
@@ -107,13 +114,6 @@ pub(super) fn item(program: &Program, id: ItemId, out: &mut Vec<Stmt>, origins: 
             out.extend(helpers);
             out
         }
-        ItemKind::RelationInput {
-            rel,
-            arity,
-            source,
-            columns,
-            clause,
-        } => relation_input(program, (rel, *arity), source.as_ref(), columns, *clause),
         ItemKind::Output {
             name,
             ty,
@@ -179,10 +179,6 @@ pub(super) fn item(program: &Program, id: ItemId, out: &mut Vec<Stmt>, origins: 
                 })
             })
             .collect(),
-        kind => unreachable!(
-            "no builder makes {} before its step",
-            super::super::spell::kind(kind)
-        ),
     };
     origins.extend(stmts.iter().map(|_| Origin::of(id)));
     out.extend(stmts);
@@ -199,13 +195,12 @@ pub fn lower_item(program: &Program, id: ItemId) -> Vec<Stmt> {
 /// the reads the head hoisted, its aggregates folded; a rank the head's
 /// last argument (`arg(T, A, p, v, rank)`).
 fn rule(
-    program: &Program,
+    l: &mut Lowering,
     id: ItemId,
     (head, rank): (&Head, Option<Rank>),
     clause: Option<ClauseId>,
     span: Span,
 ) -> Vec<Stmt> {
-    let mut l = Lowering::new(program);
     let mut atom = l.atom(&head.rel, &head.args);
     atom.args.extend(rank.map(|r| str_term(r.name())));
     let (mut body, folds) = match clause {
@@ -216,7 +211,84 @@ fn rule(
         l.goal(g, &mut body);
     }
     l.terms_made(NodeId::Item(id));
-    let mut out = clause_rule(atom, body, folds, clause.is_some(), span);
+    clause_rule(atom, body, folds, clause.is_some(), span)
+}
+
+/// A rule's or a relation input's own statements, the helpers they make
+/// left in `l`: a copy's rows are written inside it, their helpers after
+/// it.
+fn own(l: &mut Lowering, id: ItemId) -> Vec<Stmt> {
+    let program = l.program;
+    let it = &program.items[id];
+    match &it.kind {
+        ItemKind::Rule { head, clause, rank } => rule(l, id, (head, *rank), *clause, it.span),
+        ItemKind::RelationInput {
+            rel,
+            arity,
+            mixed,
+            source,
+            columns,
+            clause,
+        } => relation_input(l, (rel, *arity, *mixed), source.as_ref(), columns, *clause),
+        k => unreachable!("{} is no row", super::super::spell::kind(k)),
+    }
+}
+
+/// `use m { k = v, p(..) .. } [where B]`, `resource C n { .. } [where
+/// B]`: the copy, its clause B's literals and a name from the clause's
+/// binding (`clause`), those and the inputs' reads (`body`), its rows'
+/// own statements; then the helpers, in the order its parts made them.
+fn copy(program: &Program, id: ItemId) -> Vec<Stmt> {
+    let it = &program.items[id];
+    let ItemKind::Copy {
+        kind,
+        module,
+        name,
+        named,
+        inputs,
+        rows,
+        clause,
+        via,
+    } = &it.kind
+    else {
+        unreachable!("a copy")
+    };
+    let mut l = Lowering::new(program);
+    let mut lits = Vec::new();
+    if let Some(c) = clause {
+        l.clause(*c, &mut lits);
+    }
+    let named = named.map(|e| {
+        let t = l.expr(e);
+        lits.append(&mut l.reads);
+        t
+    });
+    let clause = (!lits.is_empty()).then(|| lits.clone());
+    let mut body = lits;
+    let inputs = inputs
+        .iter()
+        .map(|(k, span, e)| {
+            let v = l.expr(*e);
+            body.append(&mut l.reads);
+            (k.clone(), v, *span)
+        })
+        .collect();
+    let rows = rows.iter().flat_map(|&r| own(&mut l, r)).collect();
+    let copy = ast::Instance {
+        module: module.clone(),
+        name: name.clone(),
+        named,
+        inputs,
+        rows,
+        body: (!body.is_empty()).then_some(body),
+        clause,
+        via: via.clone(),
+        span: it.span,
+    };
+    let mut out = vec![match kind {
+        CopyKind::Use => Stmt::Use(copy),
+        CopyKind::Component => Stmt::Instance(copy),
+    }];
     out.append(&mut l.helpers);
     out
 }
@@ -399,11 +471,11 @@ pub fn value_entries(value: ast::Term, span: Span) -> Option<Vec<ast::FieldAssig
 
 /// `input p` (a module's relation, its user gives the rows): itself; `input
 /// p from src [where B]`: the externs reading the document, the rule
-/// `p(columns) :- B', reads` folded over B's aggregates, and `mixed p/n`
-/// (rows from the document and from rules); then the helpers.
+/// `p(columns) :- B', reads` folded over B's aggregates, and, a stack's
+/// own, `mixed p/n` (rows from the document and from rules).
 fn relation_input(
-    program: &Program,
-    (rel, arity): (&RelRef, usize),
+    l: &mut Lowering,
+    (rel, arity, mixed): (&RelRef, usize, bool),
     source: Option<&Source>,
     columns: &[VarId],
     clause: Option<ClauseId>,
@@ -416,7 +488,6 @@ fn relation_input(
     let Some(source) = source else {
         return vec![Stmt::RelationInput(e)];
     };
-    let mut l = Lowering::new(program);
     let (mut body, folds) = match clause {
         Some(c) => l.unfolded(c),
         None => Default::default(),
@@ -432,8 +503,9 @@ fn relation_input(
     };
     let mut out = source.externs.clone();
     out.extend(clause_rule(head, body, folds, true, rel.span));
-    out.push(Stmt::Mixed(e));
-    out.append(&mut l.helpers);
+    if mixed {
+        out.push(Stmt::Mixed(e));
+    }
     out
 }
 

@@ -33,6 +33,7 @@ use crate::ast::{
 };
 use crate::diag::Diagnostic;
 use crate::program::ItemId;
+use crate::program::node::CopyKind;
 use crate::spell;
 use crate::value::Value;
 use std::collections::{BTreeMap, BTreeSet};
@@ -2143,50 +2144,36 @@ impl<'u> Lowerer<'u> {
             return self.let_literal(n, scope, outer, &value);
         }
         match n.kind() {
-            LET if node(n, PARAMS).is_none() => {
-                return self.ported(n, |l| l.let_stmt(n, scope, outer));
-            }
-            LET => return self.ported(n, |l| l.function_stmt(n, scope, outer)),
-            RULE | FACT => return self.ported(n, |l| l.rule(n, scope, outer)),
-            CHECK => return self.ported(n, |l| l.check(n, scope, outer)),
-            OUTPUT_DECL => return self.ported(n, |l| l.output(n, scope, outer)),
-            INPUT => return self.ported(n, |l| l.input(n, scope, outer)),
-            DECL => return Some(self.decl(n, scope)),
-            EXTERN => return self.extern_item(n).ok(),
-            TYPE_DECL => return self.ported(n, |l| l.type_block(n, scope)),
+            LET if node(n, PARAMS).is_none() => self.ported(n, |l| l.let_stmt(n, scope, outer)),
+            LET => self.ported(n, |l| l.function_stmt(n, scope, outer)),
+            RULE | FACT => self.ported(n, |l| l.rule(n, scope, outer)),
+            CHECK => self.ported(n, |l| l.check(n, scope, outer)),
+            OUTPUT_DECL => self.ported(n, |l| l.output(n, scope, outer)),
+            INPUT => self.ported(n, |l| l.input(n, scope, outer)),
+            DECL => Some(self.decl(n, scope)),
+            EXTERN => self.extern_item(n).ok(),
+            TYPE_DECL => self.ported(n, |l| l.type_block(n, scope)),
             USE if provider_use(n, self.units, &self.decls.deployed).is_some() => {
-                return self.ported(n, |l| {
+                self.ported(n, |l| {
                     l.redeclared(n, &use_parts(n).1)?;
                     l.provider(n, scope, outer)
-                });
+                })
             }
-            SET => return self.ported(n, |l| l.set(n, scope, outer)),
-            INPUT_RELATION => return self.ported(n, |l| l.relation_input(n, scope, outer)),
+            SET => self.ported(n, |l| l.set(n, scope, outer)),
+            INPUT_RELATION => self.ported(n, |l| l.relation_input(n, scope, outer)),
             RESOURCE if self.decls.project.contains(&self.file) => {
-                return self.ported(n, |l| l.deployment(n, scope, outer));
+                self.ported(n, |l| l.deployment(n, scope, outer))
             }
-            RESOURCE if !self.is_copy(n) => {
-                return self.ported(n, |l| l.block_stmt(n, scope, outer));
+            RESOURCE if !self.is_copy(n) => self.ported(n, |l| l.block_stmt(n, scope, outer)),
+            RESOURCE => self.ported(n, |l| l.instance(n, scope, outer)),
+            USE => self.ported_maybe(n, |l| l.use_stmt(n, scope, outer)),
+            // An alias lowers to nothing: each use is its type.
+            TYPE_ALIAS => None,
+            k => {
+                let _: L<()> = self.error(self.span(n), format!("unexpected {k:?}"));
+                None
             }
-            _ => {}
         }
-        let saved = std::mem::take(&mut self.helpers);
-        let aggs = std::mem::take(&mut self.aggs);
-        let mut out = self.stmt1(n, scope, outer).unwrap_or_default();
-        if !self.aggs.is_empty() {
-            let span = self.span(n);
-            out = self.fold_aggregates(out, span).unwrap_or_default();
-        }
-        self.aggs = aggs;
-        out.append(&mut self.helpers);
-        self.helpers = saved;
-        let span = self.span(n);
-        if !(self.core || self.lenient || self.text || self.any_type)
-            && self.placeholders(&out, span).is_err()
-        {
-            return None;
-        }
-        self.program.opaque(out, span, self.item_scope)
     }
 
     /// A ported statement's item (R-211 step 5), built while its body's
@@ -2196,6 +2183,16 @@ impl<'u> Lowerer<'u> {
         &mut self,
         n: &SyntaxNode,
         build: impl FnOnce(&mut Self) -> L<ItemId>,
+    ) -> Option<ItemId> {
+        self.ported_maybe(n, |l| build(l).map(Some))
+    }
+
+    /// [`Self::ported`] of a statement that may lower to nothing (`use std.x`,
+    /// `use` of a stack's deployments).
+    fn ported_maybe(
+        &mut self,
+        n: &SyntaxNode,
+        build: impl FnOnce(&mut Self) -> L<Option<ItemId>>,
     ) -> Option<ItemId> {
         let saved = std::mem::take(&mut self.helpers);
         let aggs = std::mem::take(&mut self.aggs);
@@ -2209,7 +2206,7 @@ impl<'u> Lowerer<'u> {
         }
         self.aggs = aggs;
         self.helpers = saved;
-        let item = item.ok()?;
+        let item = item.ok()??;
         if !(self.core || self.lenient || self.text || self.any_type) {
             let stmts = crate::program::lower_item(&self.program, item);
             self.placeholders(&stmts, self.span(n)).ok()?;
@@ -2536,17 +2533,6 @@ impl<'u> Lowerer<'u> {
     fn file_of_node(&self, n: &SyntaxNode) -> Option<u32> {
         let root = n.ancestors().last()?;
         self.units.iter().find(|u| u.root == root).map(|u| u.file)
-    }
-
-    fn stmt1(&mut self, n: &SyntaxNode, scope: usize, outer: &Rc) -> L<Vec<Stmt>> {
-        let span = self.span(n);
-        match n.kind() {
-            // An alias lowers to nothing: each use is its type.
-            TYPE_ALIAS => Ok(Vec::new()),
-            USE => self.use_stmt(n, scope, outer),
-            RESOURCE if self.is_copy(n) => self.instance(n, scope, outer),
-            k => self.error(span, format!("unexpected {k:?}")),
-        }
     }
 
     /// `input k: T [= d] [check B] [where G]`, `key k: T`, `input k { f:
@@ -2911,6 +2897,7 @@ impl<'u> Lowerer<'u> {
                 scope: self.item_scope,
                 rel: pred,
                 arity,
+                mixed: false,
                 from: None,
             };
             let mut b = crate::program::Builder::new(&mut self.program, span, &|_| true);
@@ -2953,17 +2940,34 @@ impl<'u> Lowerer<'u> {
                 )
             }
         };
+        self.table_item(n, scope, outer, (pred, arity, true), cols)
+    }
+
+    /// `p from DOC [where B]`'s rows (R-39), its columns `cols`, as a
+    /// `RelationInput` item: a stack's own relation (`mixed`), or the rows
+    /// a copy's block gives its module's relation.
+    fn table_item(
+        &mut self,
+        n: &SyntaxNode,
+        scope: usize,
+        outer: &Rc,
+        (pred, arity, mixed): (String, usize, bool),
+        cols: Vec<BindArg>,
+    ) -> L<ItemId> {
+        let span = self.span(n);
         let mut rc = self.rc(n, scope, outer);
         let body = self.opt_body(&mut rc, n)?;
         let clause = self.body_clause(n);
         let rows = self.table(&mut rc, &pred, cols, n, body, span)?;
         let resolved = crate::program::check::enabled().then(|| {
             let mut out = rows.stmts();
-            out.push(Stmt::Mixed(Extern {
-                pred: pred.clone(),
-                arity,
-                span,
-            }));
+            if mixed {
+                out.push(Stmt::Mixed(Extern {
+                    pred: pred.clone(),
+                    arity,
+                    span,
+                }));
+            }
             self.resolved_with(out, span)
         });
         let results: Vec<String> = self.aggs.iter().map(|a| a.var.clone()).collect();
@@ -2972,6 +2976,7 @@ impl<'u> Lowerer<'u> {
             scope: self.item_scope,
             rel: pred,
             arity,
+            mixed,
             from: Some(crate::program::build::RelationRows {
                 clause,
                 externs: rows.externs.clone(),
@@ -4178,7 +4183,7 @@ impl<'u> Lowerer<'u> {
     /// once under NAME, its inputs the block's, its rules and denies run
     /// over what this scope sees, its items read as `NAME.x`; or a stack's
     /// deployments, read as `NAME[k=v].out`.
-    fn use_stmt(&mut self, n: &SyntaxNode, scope: usize, outer: &Rc) -> L<Vec<Stmt>> {
+    fn use_stmt(&mut self, n: &SyntaxNode, scope: usize, outer: &Rc) -> L<Option<ItemId>> {
         let span = self.span(n);
         let (written, name) = use_parts(n);
         self.redeclared(n, &name)?;
@@ -4194,7 +4199,7 @@ impl<'u> Lowerer<'u> {
                 );
             }
             // `std` is used everywhere already.
-            return Ok(Vec::new());
+            return Ok(None);
         }
         if self.decls.deployed.iter().any(|d| d.path == written) {
             if node(n, CLAUSE).is_some() || node(n, BLOCK).is_some() {
@@ -4206,7 +4211,7 @@ impl<'u> Lowerer<'u> {
                     ),
                 );
             }
-            return Ok(Vec::new());
+            return Ok(None);
         }
         let path = self.module_path_of(scope, &written);
         match self.decls.modules.get(&path) {
@@ -4230,10 +4235,8 @@ impl<'u> Lowerer<'u> {
         }
         // A module is stamped once under the name the `use` gives it, its
         // inputs the block's, else their defaults.
-        match self.copy(n, scope, outer, path, name)? {
-            Stmt::Instance(u) => Ok(vec![Stmt::Use(u)]),
-            _ => unreachable!("a copy"),
-        }
+        let copy = (CopyKind::Use, path, name, None);
+        self.copy(n, scope, outer, copy).map(Some)
     }
 
     /// `resource stacks.S NAME { k = v } [where B]` in a project module
@@ -4275,7 +4278,7 @@ impl<'u> Lowerer<'u> {
 
     /// `resource PATH NAME { k = v } [where B]` of a component (R-113,
     /// R-65): one copy of the component, named NAME.
-    fn instance(&mut self, n: &SyntaxNode, scope: usize, outer: &Rc) -> L<Vec<Stmt>> {
+    fn instance(&mut self, n: &SyntaxNode, scope: usize, outer: &Rc) -> L<ItemId> {
         let span = self.span(n);
         let (written, name) = copy_parts(n);
         let module = match self.component_path(scope, &written) {
@@ -4324,11 +4327,7 @@ impl<'u> Lowerer<'u> {
             );
         }
         let via = self.via(scope, &written, &module);
-        let mut copy = self.copy(n, scope, outer, module, name)?;
-        if let Stmt::Instance(u) = &mut copy {
-            u.via = via;
-        }
-        Ok(vec![copy])
+        self.copy(n, scope, outer, (CopyKind::Component, module, name, via))
     }
 
     /// The module instance the component `component`, written `written`
@@ -4353,19 +4352,23 @@ impl<'u> Lowerer<'u> {
     }
 
     /// One copy of the component `module`, named `name`, its inputs the
-    /// block of `n` (an `instance` or a `use`) and its clause `n`'s.
+    /// block of `n` (an `instance` or a `use`) and its clause `n`'s. Built
+    /// as a `Copy` item (R-211 step 5): a name from the clause, its
+    /// inputs' values and the reads they hoisted, its rows items of their
+    /// own, its clause B's goals; `lower` writes it.
     fn copy(
         &mut self,
         n: &SyntaxNode,
         scope: usize,
         outer: &Rc,
-        module: String,
-        name: String,
-    ) -> L<Stmt> {
+        (kind, module, name, via): (CopyKind, String, String, Option<Via>),
+    ) -> L<ItemId> {
         let span = self.span(n);
         self.check_gives(n, scope, &module)?;
         let mut rc = self.rc(n, scope, outer);
         let mut body = self.clauses(&mut rc, n)?;
+        let gathered = self.gather.as_mut().and_then(|g| g.take_clause());
+        let named_at = (body.len(), self.helpers.len());
         // A name from the clause (R-191): each row a copy, named as a
         // provider type's resource is.
         let named = match header_name(n).filter(|_| named_by_clause(n)) {
@@ -4373,60 +4376,116 @@ impl<'u> Lowerer<'u> {
             None => None,
         };
         let clause = body.clone();
+        let made = self.helpers.len();
         let mut reads = Vec::new();
         let fields = match node(n, BLOCK) {
             Some(block) => self.fields(&mut rc, &block, &mut reads)?,
             None => Vec::new(),
         };
-        let fields = fields.into_iter().map(|(f, _)| f);
+        let base = body.len();
         body.extend(reads);
         let mut inputs = Vec::new();
-        for f in fields {
+        let mut from = (base, made);
+        for (f, (r, h)) in fields {
             if matches!(f.op, FieldOp::Add) {
                 return self.error(f.span, "an input of a copy is set with `=`, not `+=`");
             }
             if f.rank.is_some() {
                 return self.error(f.span, "an input of a copy takes no rank");
             }
-            inputs.push((f.key, f.value, f.span));
+            let to = (base + r, h);
+            inputs.push((f.key, f.value, f.span, (from.0..to.0, from.1..to.1)));
+            from = to;
         }
         let values: Vec<&Term> = inputs
             .iter()
-            .map(|(_, v, _)| v)
+            .map(|(_, v, _, _)| v)
             .chain(named.as_ref())
             .collect();
         self.check_bound(&rc, &body, &values)?;
-        let rows = match node(n, BLOCK) {
+        let (rows, written_rows) = match node(n, BLOCK) {
             Some(block) => self.block_rows(&block, &module, scope, outer)?,
-            None => Vec::new(),
+            None => Default::default(),
         };
-        Ok(Stmt::Instance(Instance {
+        // A copy binds no aggregate: its rows do, each folding its own.
+        self.aggregate_in(&body, span)?;
+        let resolved = crate::program::check::enabled().then(|| {
+            let copy = Instance {
+                module: module.clone(),
+                name: name.clone(),
+                named: named.clone(),
+                inputs: inputs
+                    .iter()
+                    .map(|(k, v, at, _)| (k.clone(), v.clone(), *at))
+                    .collect(),
+                rows: written_rows,
+                body: (!body.is_empty()).then(|| body.clone()),
+                clause: (!clause.is_empty()).then(|| clause.clone()),
+                via: via.clone(),
+                span,
+            };
+            let st = match kind {
+                CopyKind::Use => Stmt::Use(copy),
+                CopyKind::Component => Stmt::Instance(copy),
+            };
+            self.resolved_with(vec![st], span)
+        });
+        let c = crate::program::build::CopyLowered {
+            span,
+            scope: self.item_scope,
+            kind,
             module,
             name,
-            named,
-            inputs,
+            named: named.as_ref().map(|t| {
+                let (r, h) = named_at;
+                (t, &body[r..base], &self.helpers[h..made])
+            }),
+            inputs: inputs
+                .iter()
+                .map(
+                    |(key, value, at, (r, h))| crate::program::build::InputGiven {
+                        key: key.clone(),
+                        span: *at,
+                        value,
+                        reads: &body[r.clone()],
+                        made: &self.helpers[h.clone()],
+                    },
+                )
+                .collect(),
             rows,
-            body: (!body.is_empty()).then_some(body),
-            clause: (!clause.is_empty()).then_some(clause),
-            via: None,
-            span,
-        }))
+            clause: gathered,
+            via,
+        };
+        let written: BTreeSet<&str> = rc.vars.values().map(String::as_str).collect();
+        let written = |v: &str| written.contains(v);
+        let gather = self
+            .gather
+            .as_mut()
+            .expect("a ported statement is gathered");
+        let mut b = gather.builder(&mut self.program, span, &written);
+        let item = b.copy_item(c);
+        gather.done(b);
+        if let Some(stmts) = resolved {
+            self.resolved.insert(item, stmts);
+        }
+        Ok(item)
     }
 
     /// The rows a `use` or `instance` block gives the relations its
     /// module takes, `input p` (R-55): `p(t, ..) [where B]`, a rule in
     /// this scope, and `p from FORMAT(..) [where B]`, a table, its columns
     /// the module's `decl p`. Each head is the module's own `p`, made the
-    /// copy's by `modules`.
+    /// copy's by `modules`. Their items, and under `DFORM_CHECK_LOWER=1`
+    /// what the resolver wrote of them.
     fn block_rows(
         &mut self,
         block: &SyntaxNode,
         module: &str,
         scope: usize,
         outer: &Rc,
-    ) -> L<Vec<Stmt>> {
+    ) -> L<(Vec<ItemId>, Vec<Stmt>)> {
         let Some(inner) = self.decls.modules.get(module).map(|m| m.scope) else {
-            return Ok(Vec::new());
+            return Ok(Default::default());
         };
         let takes = self.decls.scopes[inner].relation_inputs.clone();
         let mut out = Vec::new();
@@ -4470,29 +4529,40 @@ impl<'u> Lowerer<'u> {
                         );
                     };
                     let cols = self.table_columns(&pred, &decl)?;
-                    let mut rc = self.rc(&n, scope, outer);
-                    let body = self.opt_body(&mut rc, &n)?;
-                    let rows = self.table(&mut rc, &pred, cols, &n, body, span)?.stmts();
-                    match rows.iter().any(|s| self.agg_lits_in(s)) {
-                        true => self.fold_aggregates(rows, span),
-                        false => Ok(rows),
-                    }
+                    let arity = cols.len();
+                    self.table_item(&n, scope, outer, (pred, arity, false), cols)
                 })(),
                 // A row's references are the user's resources, the
                 // module's column typed as its `decl` says.
                 _ => {
                     self.given = Some(inner);
-                    let r = self.row(&n, scope, outer);
+                    let r = self.rule(&n, scope, outer);
                     self.given = None;
                     r
                 }
             };
             match r {
-                Ok(stmts) => out.extend(stmts),
+                Ok(item) => out.push(item),
                 Err(Skip) => failed = true,
             }
         }
-        if failed { Err(Skip) } else { Ok(out) }
+        if failed {
+            return Err(Skip);
+        }
+        // What the resolver wrote of each, the statement's helpers so far
+        // after it (`resolved_with`) dropped. Deleted with the switch.
+        let written = match crate::program::check::enabled() {
+            true => out
+                .iter()
+                .flat_map(|&r| {
+                    let mut v = self.resolved.remove(r).unwrap_or_default();
+                    v.truncate(v.len().saturating_sub(self.helpers.len()));
+                    v
+                })
+                .collect(),
+            false => Vec::new(),
+        };
+        Ok((out, written))
     }
 
     /// A header name with holes, `"agent-${i}"`, of a resource of any
@@ -4831,22 +4901,6 @@ impl<'u> Lowerer<'u> {
             self.resolved.insert(item, stmts);
         }
         Ok(item)
-    }
-
-    /// A row of a copy's relation input, `p(a, b) [where B]` in a `use` or
-    /// copy block (R-55), as it is written: a fact or a rule, folded over
-    /// its aggregates as a rule is (the block's statement is not ported
-    /// yet).
-    fn row(&mut self, n: &SyntaxNode, scope: usize, outer: &Rc) -> L<Vec<Stmt>> {
-        let r = self.rule_parts(n, scope, outer)?;
-        let row = match r.has_body || !r.body.is_empty() {
-            false => Stmt::Fact(r.ranked),
-            true => Stmt::Rule(RuleStmt::new(r.ranked, r.body)),
-        };
-        match self.agg_lits_in(&row) {
-            true => self.fold_aggregates(vec![row], self.span(n)),
-            false => Ok(vec![row]),
-        }
     }
 
     /// A rule lowered: its head, its body and what binds it.
@@ -10014,6 +10068,38 @@ mod tests {
                 "__agg_0(A, count(X)) :- z(X), Path = \"t.csv\", table.csv.t(Path, At, A)",
             ]
         );
+    }
+
+    /// Every form of copy is built as a `Copy` item (R-211 step 5) and
+    /// lowers as the resolver lowers it: inputs that read, a name from
+    /// the clause (R-191) bound before the inputs' reads, rows its block
+    /// gives (a rule whose `not { }` helper follows the copy, a table),
+    /// under a clause.
+    #[test]
+    fn every_copy_is_an_item() {
+        let src = "let k = 1\nz(1)\nz(2)\nq(3)\n\
+             component c {\n  input size: int\n  input p\n  input t\n  decl p(a: int)\n  decl t(a: int)\n  r(x) where p(x), t(x)\n}\n\
+             resource c one {\n  size = k\n  p(x) where z(x), not { q(x) }\n\
+               t from csv.decode(io.read(\"t.csv\"))\n}\n\
+             resource c \"n-${i}\" { size = i } where z(i)\n";
+        let (lowered, seen) = crate::program::check::collect(|| parse_as(src, true));
+        let lowered = lowered
+            .map(|p| show(&p.statements))
+            .unwrap_or_else(|e| panic!("{e:#}"));
+        assert!(seen.differences.is_empty(), "{:#?}", seen.differences);
+        assert_eq!(seen.items.get("a copy"), Some(&2), "{:?}", seen.items);
+        assert!(
+            !seen.items.keys().any(|k| k.starts_with("a statement")),
+            "{:?}",
+            seen.items
+        );
+        for s in [
+            "instance c one { size = K } :- k(K)",
+            "__neg_0(X) :- z(X), q(X)",
+            "instance c n-${i} { size = I } :- z(I), Addr = __segment(str.format(\"n-%s\", I))",
+        ] {
+            assert!(lowered.iter().any(|l| l.contains(s)), "{s}: {lowered:#?}");
+        }
     }
 
     /// Every form a written literal takes is built as a goal (R-211 step

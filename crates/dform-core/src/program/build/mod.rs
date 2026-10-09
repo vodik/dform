@@ -20,6 +20,7 @@ mod gather;
 mod inputs;
 mod lets;
 mod membership;
+mod modules;
 mod negation;
 mod outputs;
 mod pattern;
@@ -35,6 +36,7 @@ pub use contributions::{SetFromLowered, SetLowered, TargetLowered, WriteLowered}
 pub use gather::{Gather, Statement};
 pub use inputs::{InputLowered, RelationInputLowered, RelationRows};
 pub use lets::{LetFnLowered, LetLowered};
+pub use modules::{CopyLowered, InputGiven};
 pub use outputs::OutputLowered;
 pub use providers::{ProviderLowered, SettingKind, SettingLowered};
 pub use resources::{BodyLowered, EntryLowered, HeaderLowered, ResourceLowered};

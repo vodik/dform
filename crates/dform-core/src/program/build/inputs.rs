@@ -55,6 +55,8 @@ pub struct RelationInputLowered<'a> {
     pub scope: ScopeId,
     pub rel: String,
     pub arity: usize,
+    /// A stack's own relation (not a copy's row of its module's).
+    pub mixed: bool,
     pub from: Option<RelationRows<'a>>,
 }
 
@@ -103,6 +105,7 @@ impl Builder<'_> {
                 span: r.span,
             },
             arity: r.arity,
+            mixed: r.mixed,
             source,
             columns,
             clause,
