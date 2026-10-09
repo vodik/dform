@@ -5,15 +5,16 @@
 //! consumer that combines the passes' tables, and the function the
 //! resolver calls once the migration ends.
 //!
-//! Day one an item is opaque (its statement, emitted as it is) or a
-//! module (`Stmt::Module` around its items' statements).
+//! An item is opaque (its statements, emitted as they are), a module
+//! (`Stmt::Module` around its items' statements), or a ported statement:
+//! `let k = LITERAL [@rank]` (step 3).
 
 mod expr;
 pub use expr::lower_expr;
 
-use super::node::{ItemId, ItemKind};
+use super::node::{ExprId, ItemId, ItemKind};
 use super::{Origin, Program};
-use crate::ast::{self, Stmt};
+use crate::ast::{self, Atom, Rank, Span, Stmt, str_term};
 use crate::diag::Diagnostic;
 
 /// What the program lowers to: the resolver's output, and where each
@@ -78,11 +79,34 @@ fn item(program: &Program, id: ItemId, out: &mut Vec<Stmt>, origins: &mut Vec<Or
                 span: it.span,
             }));
         }
+        ItemKind::Let {
+            name,
+            value,
+            ty: None,
+            clause: None,
+            rank,
+        } => {
+            origins.push(Origin::of(id));
+            out.push(Stmt::Fact(let_fact(program, name, *value, *rank, it.span)));
+        }
         kind => unreachable!(
-            "no builder makes {} before R-211 step 3",
+            "no builder makes {} with a type or a clause before step 5",
             super::spell::kind(kind)
         ),
     }
+}
+
+/// `let k = v [@rank]`: the contribution `let("k", v, "rank")` to the
+/// cell `k`, which `modules` scopes.
+fn let_fact(program: &Program, name: &str, value: ExprId, rank: Option<Rank>, span: Span) -> Atom {
+    let (value, reads) = lower_expr(program, value);
+    debug_assert!(reads.is_empty(), "a let of a literal reads nothing");
+    let rank = rank.unwrap_or(Rank::Normal);
+    ast::atom(
+        crate::modules::LET,
+        vec![str_term(name), value, str_term(rank.name())],
+        span,
+    )
 }
 
 #[cfg(test)]

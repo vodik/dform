@@ -2103,6 +2103,9 @@ impl<'u> Lowerer<'u> {
         if n.kind() == COMPONENT {
             return Some(self.component(n, scope, outer));
         }
+        if let Some(value) = self.literal_let(n) {
+            return self.let_literal(n, scope, outer, &value);
+        }
         let saved = std::mem::take(&mut self.helpers);
         let aggs = std::mem::take(&mut self.aggs);
         let mut out = self.stmt1(n, scope, outer).unwrap_or_default();
@@ -4564,6 +4567,71 @@ impl<'u> Lowerer<'u> {
         Ok(out)
     }
 
+    /// The literal of `let NAME = LITERAL [@rank]` (R-211's first port): no
+    /// type, no clause, a literal not interpolated.
+    fn literal_let(&self, n: &SyntaxNode) -> Option<SyntaxNode> {
+        if n.kind() != LET
+            || [TYPE_EXPR, BODY, PARAMS]
+                .iter()
+                .any(|&k| node(n, k).is_some())
+        {
+            return None;
+        }
+        let t = terms(n).next().filter(|t| t.kind() == LITERAL)?;
+        let tok = tokens(&t).next()?;
+        let interpolated = tok.kind() == STRING && !self.text && tok.text().contains("${");
+        (!interpolated).then_some(t)
+    }
+
+    /// `let NAME = LITERAL [@rank]` built as a `let` item of the literal's
+    /// node; `lower` writes it `let("NAME", v, "rank")`, as the resolver
+    /// did. Under `DFORM_CHECK_LOWER=1` the resolver lowers it too
+    /// (`let_stmt`), kept for `program::check`.
+    fn let_literal(
+        &mut self,
+        n: &SyntaxNode,
+        scope: usize,
+        outer: &Rc,
+        t: &SyntaxNode,
+    ) -> Option<ItemId> {
+        let resolved = crate::program::check::enabled().then(|| {
+            let before = self.diags.len();
+            let out = self.stmt1(n, scope, outer).unwrap_or_default();
+            (out, self.diags.split_off(before))
+        });
+        let before = self.diags.len();
+        let item = self.let_item(n, scope, t).ok();
+        if let Some((out, diags)) = resolved {
+            let ours = self.diags[before..].to_vec();
+            crate::program::check::same_diagnostics(&diags, &ours, self.span(n));
+            if let Some(id) = item {
+                self.resolved.insert(id, out);
+            }
+        }
+        item
+    }
+
+    fn let_item(&mut self, n: &SyntaxNode, scope: usize, t: &SyntaxNode) -> L<ItemId> {
+        let span = self.span(n);
+        let name = word_text(n, 1);
+        if let Err(e) = self.value_type(scope, &name) {
+            return self.error(span, e);
+        }
+        let value = self.literal_expr(t)?;
+        let rank = self.rank_tok(n)?;
+        Ok(self.program.items.insert(crate::program::Item {
+            span,
+            scope: self.item_scope,
+            kind: crate::program::ItemKind::Let {
+                name,
+                ty: None,
+                value,
+                clause: None,
+                rank,
+            },
+        }))
+    }
+
     /// A typed `let`'s value `value` (lowered from `t`) checked against
     /// its type `ty` (declared `d`), a literal read as one (R-31, R-74),
     /// an object type's fields each as theirs (R-192).
@@ -6615,6 +6683,35 @@ impl<'u> Lowerer<'u> {
             TRUE_KW => Ok(Term::Val(Value::Bool(true))),
             _ => Ok(Term::Val(Value::Bool(false))),
         }
+    }
+
+    /// A literal's node, as [`Lowerer::literal`] reads it: an int, a
+    /// quantity (one whose dimension its position decides kept as written),
+    /// a string with no interpolation, a bool.
+    fn literal_expr(&mut self, n: &SyntaxNode) -> L<crate::program::ExprId> {
+        use crate::program::node::ExprKind;
+        let span = self.span(n);
+        let t = tokens(n).next().ok_or(Skip)?;
+        let kind = match t.kind() {
+            INT => match t.text().parse::<i64>() {
+                Ok(i) => ExprKind::Lit(Value::Int(i)),
+                Err(_) => return self.error(span, "integer out of range"),
+            },
+            QUANTITY => match crate::quantity::literal(t.text()) {
+                Ok(crate::quantity::Literal::Known(q)) => ExprKind::Lit(Value::Quantity(q)),
+                Ok(crate::quantity::Literal::Ambiguous) => ExprKind::Quantity {
+                    text: t.text().to_string(),
+                },
+                Err(why) => return self.error(span, why),
+            },
+            STRING => ExprKind::Lit(Value::Str(self.string(&t)?)),
+            TRUE_KW => ExprKind::Lit(Value::Bool(true)),
+            _ => ExprKind::Lit(Value::Bool(false)),
+        };
+        Ok(self
+            .program
+            .exprs
+            .insert(crate::program::Expr { span, kind }))
     }
 
     /// A chain: `x.len` (R-155), a resource by its bare name given as a
@@ -8759,6 +8856,29 @@ mod tests {
         match parse_as(src, true) {
             Ok(p) => panic!("lowered: {:?}", show(&p.statements)),
             Err(e) => format!("{e:#}"),
+        }
+    }
+
+    /// `let NAME = LITERAL [@rank]` is built as a `let` item (R-211): it
+    /// lowers as the resolver lowers it, its errors the resolver's, each
+    /// compared under `program::check`.
+    #[test]
+    fn a_literal_let_is_built_as_the_resolver_lowers_it() {
+        let (lowered, seen) = crate::program::check::collect(|| {
+            lower("let a = 1\nlet b = \"x\" @default\nlet c = 500m\nlet d = true\np(v) where v = a")
+        });
+        assert!(seen.differences.is_empty(), "{:?}", seen.differences);
+        assert!(
+            lowered.contains(&"let(\"b\", \"x\", \"default\")".to_string()),
+            "{lowered:?}"
+        );
+        for (src, msg) in [
+            ("let a = 99999999999999999999", "integer out of range"),
+            ("let a = 1 @later", "unknown rank `@later`"),
+        ] {
+            let (e, seen) = crate::program::check::collect(|| error(src));
+            assert!(seen.differences.is_empty(), "{src}: {:?}", seen.differences);
+            assert!(e.contains(msg), "{src}: {e}");
         }
     }
 

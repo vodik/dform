@@ -62,9 +62,29 @@ pub fn enabled() -> bool {
 /// records the difference, else it is a panic.
 pub fn compare(old: &Lowered, new: &Lowered) {
     let difference = differ(&dump(old), &dump(new));
+    record(difference, |c| c.compared += 1);
+}
+
+/// The diagnostics a ported statement's builder gave (`new`) and the
+/// resolver's (`old`), for the statement at `span`: compared as a
+/// lowering's are.
+pub fn same_diagnostics(old: &[Diagnostic], new: &[Diagnostic], span: Span) {
+    if old.is_empty() && new.is_empty() {
+        return;
+    }
+    let difference =
+        differ(&dump(&Err(old.to_vec())), &dump(&Err(new.to_vec()))).map(|d| Difference {
+            statement: format!("the diagnostics of the statement at {}", place(span)),
+            ..d
+        });
+    record(difference, |c| c.compared += 1);
+}
+
+/// A difference found: a test that collects records it, else a panic.
+fn record(difference: Option<Difference>, count: impl FnOnce(&mut Collected)) {
     let unseen = COLLECTING.with(|c| match c.borrow_mut().as_mut() {
         Some(c) => {
-            c.compared += 1;
+            count(c);
             c.differences.extend(difference);
             None
         }
@@ -87,17 +107,7 @@ pub fn term(term: &Term, reads: &[Lit], span: Span, written: &dyn Fn(&str) -> bo
         statement: format!("the term at {}: {term:?}", place(span)),
         ..d
     });
-    let unseen = COLLECTING.with(|c| match c.borrow_mut().as_mut() {
-        Some(c) => {
-            c.terms += 1;
-            c.differences.extend(difference);
-            None
-        }
-        None => difference,
-    });
-    if let Some(d) = unseen {
-        panic!("{d}\n({SWITCH}=1)");
-    }
+    record(difference, |c| c.terms += 1);
 }
 
 /// A term and its reads as one text: the term, then each read and the
