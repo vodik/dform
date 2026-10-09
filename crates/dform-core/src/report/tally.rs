@@ -1,7 +1,12 @@
 //! The plan's headline (R-193, R-200): what one deployment's plan counts,
 //! or a tree of them summed, said once at the top.
 
-use super::{ActionKind, Deformation, KINDS, Report, by_kind, changes_text, count, until_text};
+use super::Report;
+use super::deformation::Deformation;
+use super::labels::kind_name;
+use super::waits::until_text;
+use crate::provider::ActionKind;
+use std::collections::BTreeMap;
 
 /// What a plan's headline counts: its changes by kind, what `later`
 /// holds by what it waits on, and the rest by kind. One deployment's
@@ -220,4 +225,41 @@ impl Report {
             })
             .collect()
     }
+}
+
+/// The kinds of change a summary counts, in its order.
+pub(super) const KINDS: [&str; 7] = [
+    "create", "update", "replace", "drift", "delete", "adopt", "forget",
+];
+
+/// How many of `ds` are of each kind, in [`KINDS`] order.
+pub(super) fn by_kind<'d>(ds: impl Iterator<Item = &'d Deformation>) -> Vec<(&'static str, usize)> {
+    let mut n: BTreeMap<&str, usize> = BTreeMap::new();
+    for d in ds {
+        *n.entry(kind_name(&d.kind)).or_default() += 1;
+    }
+    KINDS
+        .into_iter()
+        .map(|k| (k, n.get(k).copied().unwrap_or(0)))
+        .collect()
+}
+
+/// `plan: 3 changes (2 create, 1 update)`: `n` changes, and those of the
+/// `kinds` there are.
+pub(super) fn changes_text(n: usize, kinds: &[(&str, usize)]) -> String {
+    let mut out = format!("plan: {}", count(n, "change"));
+    let ks: Vec<String> = kinds
+        .iter()
+        .filter(|(_, n)| *n > 0)
+        .map(|(k, n)| format!("{n} {k}"))
+        .collect();
+    if !ks.is_empty() {
+        out.push_str(&format!(" ({})", ks.join(", ")));
+    }
+    out
+}
+
+/// `n thing`, `n things`.
+pub(super) fn count(n: usize, thing: &str) -> String {
+    format!("{n} {thing}{}", if n == 1 { "" } else { "s" })
 }

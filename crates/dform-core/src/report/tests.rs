@@ -1,5 +1,6 @@
 use super::labels::printed_label;
 use super::mask::LONG;
+use super::tally::KINDS;
 use super::*;
 
 /// After R-23: a binding is left out when its value is a whole

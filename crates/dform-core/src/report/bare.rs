@@ -5,8 +5,9 @@
 //! provenance. Only its words follow the tool's (R-88): changes, not
 //! deformations; up to date, not undeformed.
 
+use super::tally::count;
 use super::{
-    ActionKind, Deformation, Line, Op, Paint, Report, Shown, Style, by_kind, changes_text, count,
+    ActionKind, Deformation, Line, Op, Paint, Report, Shown, Style, by_kind, changes_text,
     moved_text,
 };
 use crate::ir::Address;

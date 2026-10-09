@@ -42,8 +42,9 @@ use policy::{Denied, deferred, denied, policies};
 use serde_json::{Value as Json, json};
 use std::collections::{BTreeMap, BTreeSet};
 use style::kind_paint;
+use tally::{by_kind, changes_text, count};
 use tree::Site;
-use waits::{Follow, boundary_owners, owners, provisional, provisional_text, until_text};
+use waits::{Follow, boundary_owners, owners, provisional, provisional_text};
 
 mod bare;
 mod chains;
@@ -463,43 +464,6 @@ pub fn report(i: &Input) -> Report {
         policy,
         nested: false,
     }
-}
-
-/// The kinds of change a summary counts, in its order.
-const KINDS: [&str; 7] = [
-    "create", "update", "replace", "drift", "delete", "adopt", "forget",
-];
-
-/// How many of `ds` are of each kind, in [`KINDS`] order.
-fn by_kind<'d>(ds: impl Iterator<Item = &'d Deformation>) -> Vec<(&'static str, usize)> {
-    let mut n: BTreeMap<&str, usize> = BTreeMap::new();
-    for d in ds {
-        *n.entry(kind_name(&d.kind)).or_default() += 1;
-    }
-    KINDS
-        .into_iter()
-        .map(|k| (k, n.get(k).copied().unwrap_or(0)))
-        .collect()
-}
-
-/// `plan: 3 changes (2 create, 1 update)`: `n` changes, and those of the
-/// `kinds` there are.
-fn changes_text(n: usize, kinds: &[(&str, usize)]) -> String {
-    let mut out = format!("plan: {}", count(n, "change"));
-    let ks: Vec<String> = kinds
-        .iter()
-        .filter(|(_, n)| *n > 0)
-        .map(|(k, n)| format!("{n} {k}"))
-        .collect();
-    if !ks.is_empty() {
-        out.push_str(&format!(" ({})", ks.join(", ")));
-    }
-    out
-}
-
-/// `n thing`, `n things`.
-fn count(n: usize, thing: &str) -> String {
-    format!("{n} {thing}{}", if n == 1 { "" } else { "s" })
 }
 
 /// Where a change is derived, as its line's site column says it at `why`
