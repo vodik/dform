@@ -2877,7 +2877,7 @@ impl Providers {
     /// `force_new` path changes) for each deformation. Actions come in
     /// dependency order; deletes last, in reverse dependency order (from
     /// the dependencies state recorded), with the objects deposed by a
-    /// `create_before_destroy` replacement among them.
+    /// create-first replacement among them.
     pub fn plan(
         &self,
         desired: &[Resource],

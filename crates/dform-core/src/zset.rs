@@ -2032,7 +2032,7 @@ pub mod file {
         };
         for (k, c) in now.iter().filter(|(_, c)| c.tick == Some(tick)) {
             let s = shown.get(k);
-            // The object a create_before_destroy replacement deposed is
+            // The object a create-first replacement deposed is
             // deleted the tick after; the plan showed it so.
             if c.action == "delete_deposed" && s.is_some_and(|s| s.action == "replace_create_first")
             {
