@@ -105,6 +105,9 @@ google = { source = "providers/gcp" }            # a path under the root
 k8s = { source = "k8s", timeout = "2m" }         # each call's timeout (60s by default); `wait`, a tick's on "not yet" (10m)
 ovh = { path = "~/src/dform/target/debug/dform-provider-ovh" }  # the executable itself
 
+[apply]
+wait = "10m"                         # how long a tick waits on a value not reached yet (the default)
+
 [defaults]
 backend = 'local("state/{stack}")'   # or 's3("bucket", "dform/{stack}", {...})'
 lease_duration = "60s"               # an s3 backend's lease (the default)
@@ -168,8 +171,8 @@ apply reads (refresh, the lookups that resolve uncertain calls), plans and
 asks, and only a `y` writes state (`moved` renames included) or calls
 Apply. How many ticks a plan takes is not known up front, and need not
 be: `later` is planned when the tick before reports. Apply applies a
-tick, waits for the values it unblocks (within the provider's `wait`,
-see "Timeouts, retries and waiting"), plans the next, and asks before a
+tick, waits for the values it unblocks (within its `wait`, 10m, or
+`--wait-timeout DURATION`; see "Timeouts, retries and waiting"), plans the next, and asks before a
 tick whose plan holds what no earlier plan showed (a pending group's
 member: `iam.policy[?]` at tick 1, named once the endpoint it is built
 from exists; what `later` held for a provider's settings), or that
@@ -484,6 +487,8 @@ isolated = true                   # a keyed stack's deployments do not share nam
 allow_empty = ["net.subnet"]      # optional: what a plan may empty without the
                                   # guardrail's warning; see "Computed values come
                                   # from Apply"
+wait = "30m"                      # optional: how long its apply waits on a value not
+                                  # reached yet; see "Timeouts, retries and waiting"
 ```
 
 Two programs never see each other's resources. `apply` holds the
@@ -505,7 +510,7 @@ too):
 | Status | Meaning |
 |---|---|
 | 0 | done: the command did what it was asked (`plan` produced a plan, with or without changes) |
-| 1 | failed: an error, printed; or `status` found an object not healthy or suspended (its line says which) |
+| 1 | failed: an error, printed; or an apply's wait on a value the world has not reached ran past its deadline (`not reached in 10m`, R-201: state is consistent, and the next apply waits again); or `status` found an object not healthy or suspended (its line says which) |
 | 2 | usage: the command line is wrong (the argument parser's own) |
 | 3 | declined: a question was answered no; nothing of that tick was applied, and nothing is printed as an error |
 | 4 | refused by the program: its conflicts and denies, printed (`plan` and `apply` alike) |
@@ -1764,8 +1769,8 @@ order and holds what is pending. At the boundary the results come back as
 world facts, round 0 resolves the nulls they answer, the program is
 re-evaluated and policy is checked again; a deny there stops the run with the
 reason printed. A tick with nothing definite to apply, held on values the
-world has not reached yet, waits for them within the provider's `wait`
-(see "Timeouts, retries and waiting"). `--max-ticks N` (default 8) is a safety valve for a loop
+world has not reached yet, waits for them within its `wait`, 10m by
+default (`--wait-timeout DURATION`; see "Timeouts, retries and waiting"). `--max-ticks N` (default 8) is a safety valve for a loop
 that never settles, not a way to stop early:
 
 ```bash
@@ -3379,16 +3384,32 @@ waiting on k8s.job["migrate-v42"].status.succeeded since 02:14 (3m)
 
 Once one changes the run goes on, the wait counted as a boundary: the next
 tick is planned and asked for as at any boundary (see `apply` above). The
-wait is the tick's own retry, bounded by the `wait` of the provider that
-answers what it waits on (the longest, for several), 10m unless dform.toml
-says: not the `timeout` that bounds each call, since a host that boots or
-a job that runs takes minutes while a call that hangs is wrong after one.
-A location's read that is not there yet (a host that boots, R-153) waits
-under `[io] wait`. Past it the apply
-stops, the state consistent and nothing of the tick in flight: `apply
-stopped at tick 2: waited 2m on k8s.job["migrate-v42"].status.succeeded,
-still unknown (the provider's `wait` in dform.toml); state is
-consistent: run apply again to wait again`. A null waiting cannot bring
+wait is the tick's own retry, bounded by its deadline (R-201): not the
+`timeout` that bounds each call, since a host that boots or a rollout
+takes minutes while a call that hangs is wrong after one. The deadline is
+the first of these that says:
+
+1. `apply --wait-timeout DURATION` (and `destroy`'s): this run's;
+2. the stack's `[stacks.NAME] wait`: a deployment whose rollouts are slow;
+3. the `wait` of the provider that answers what it waits on (the longest,
+   for several): `[providers.NAME] wait`, and `[io] wait` for a
+   location's read that is not there yet (a host that boots, R-153);
+4. the project's `[apply] wait`;
+5. 10m.
+
+Past it the apply stops, exit 1, naming each value it waited on and the
+setting that set the deadline:
+
+```
+Error: apply stopped at tick 2: k8s.job migrate-v42.status.succeeded not reached in 10m (`[apply] wait` in dform.toml); state is consistent: run apply again to wait again
+```
+
+What ticks before applied stays applied and nothing of the waiting tick
+is in flight: the wait is the next apply's, which plans the tick again
+and waits again. Under CI (`--yes`) a rollout that never comes fails the
+job at the deadline instead of hanging. The value waited on is absent, so
+the line says nothing of how near it got: how a rollout is doing is
+`dform status` (R-203). A null waiting cannot bring
 (another stack's output not published yet, a value of an object no tick
 makes) stops the tick at once, as `nothing definite to apply, still
 waiting on ...`. Every wait is a `wait` entry in the audit log.
@@ -3399,6 +3420,12 @@ aws = { source = "aws", timeout = "2m", retries = 8, backoff = "500ms" }
 
 [io]
 wait = "20m"      # how long a tick waits on a location not there yet (a host that boots; 10m by default)
+
+[apply]
+wait = "15m"      # how long a tick waits on any other value not reached yet (10m by default)
+
+[stacks.web]
+wait = "30m"      # this stack's waits, over the providers' and the project's
 ```
 
 A provider's table also grants it what it may use beyond the host's own
