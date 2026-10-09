@@ -163,7 +163,7 @@ impl Speller<'_> {
                         join(
                             es.iter().map(|e| format!(
                                 "{} {} {}{}",
-                                self.steps(&e.path).trim_start_matches('.'),
+                                e.path,
                                 op(e.op),
                                 self.expr(e.value),
                                 rank(e.rank)

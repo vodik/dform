@@ -14,7 +14,7 @@ mod expr;
 mod items;
 pub use clause::{lower_clause, lower_goal};
 pub use expr::lower_expr;
-pub use items::{element_write, lower_item};
+pub use items::{element_write, lower_item, value_entries};
 
 use super::{Origin, Program};
 use crate::ast;

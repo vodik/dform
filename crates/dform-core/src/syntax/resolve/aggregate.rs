@@ -203,17 +203,28 @@ impl Lowerer<'_> {
         for s in stmts {
             match s {
                 Stmt::Rule(r) => out.extend(self.fold_rule(r, span)),
-                s if self.has_aggregate(&s) => {
-                    return self.error(
-                        span,
-                        "an aggregate is bound in the body of a rule, a check or a `let`; bind \
-                         it in a `let` and read that here",
-                    );
-                }
+                s if self.has_aggregate(&s) => return self.aggregate_outside(span),
                 s => out.push(s),
             }
         }
         Ok(out)
+    }
+
+    /// An aggregate bound in `body`, a statement's that is no rule's: an
+    /// error at `span`.
+    pub(super) fn aggregate_in(&mut self, body: &[Lit], span: Span) -> L<()> {
+        match self.aggs.is_empty() || self.agg_lits(body).is_empty() {
+            true => Ok(()),
+            false => self.aggregate_outside(span),
+        }
+    }
+
+    fn aggregate_outside<T>(&mut self, span: Span) -> L<T> {
+        self.error(
+            span,
+            "an aggregate is bound in the body of a rule, a check or a `let`; bind it in a \
+             `let` and read that here",
+        )
     }
 
     fn has_aggregate(&self, s: &Stmt) -> bool {

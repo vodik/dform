@@ -674,7 +674,10 @@ pub struct Head {
     pub reads: Vec<GoalId>,
 }
 
-/// A block's name: `n`, `"n"`, `"a-${i}"` (bound last).
+/// A block's name: `n` (the name, R-76), `"n"` (one segment of the
+/// address, quoted when it holds a dot, R-112), `"a-${i}"` (bound last,
+/// from the clause: the reads its holes hoisted and its segment's
+/// binding, its value the variable bound).
 #[derive(Debug, Clone)]
 pub enum Header {
     Bare(Name),
@@ -682,17 +685,20 @@ pub enum Header {
     Interp(ExprId),
 }
 
-/// A resource's body: a block of entries, or a value (R-126).
+/// A resource's body: a block of entries, or a value (R-126), its
+/// entries the object's keys when it is one, else one at the root.
 #[derive(Debug, Clone)]
 pub enum ResourceBody {
     Block(Vec<Entry>),
     Value(ExprId),
 }
 
-/// `p.q = v [@rank]`, `p += v`: one entry of a block.
+/// `p.q = v [@rank]`, `p += v`, a pun `p`: one entry of a block, `path`
+/// its stored path (`containers["api"].image`, R-158) as the resolver
+/// reads it, until paths are built from the tree.
 #[derive(Debug, Clone)]
 pub struct Entry {
-    pub path: Vec<Step>,
+    pub path: String,
     pub op: FieldOp,
     pub value: ExprId,
     pub rank: Option<Rank>,

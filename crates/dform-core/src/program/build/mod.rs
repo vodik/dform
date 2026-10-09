@@ -23,6 +23,7 @@ mod membership;
 mod negation;
 mod outputs;
 mod pattern;
+mod resources;
 mod rules;
 mod spread;
 
@@ -34,6 +35,7 @@ pub use gather::{Gather, Statement};
 pub use inputs::InputLowered;
 pub use lets::LetLowered;
 pub use outputs::OutputLowered;
+pub use resources::{BodyLowered, EntryLowered, HeaderLowered, ResourceLowered};
 pub use rules::RuleLowered;
 
 use super::Program;

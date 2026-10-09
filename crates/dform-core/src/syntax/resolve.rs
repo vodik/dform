@@ -2154,6 +2154,12 @@ impl<'u> Lowerer<'u> {
             EXTERN => return self.extern_item(n).ok(),
             TYPE_DECL => return self.ported(n, |l| l.type_block(n, scope)),
             SET => return self.ported(n, |l| l.set(n, scope, outer)),
+            RESOURCE if self.decls.project.contains(&self.file) => {
+                return self.ported(n, |l| l.deployment(n, scope, outer));
+            }
+            RESOURCE if !self.is_copy(n) => {
+                return self.ported(n, |l| l.block_stmt(n, scope, outer));
+            }
             _ => {}
         }
         let saved = std::mem::take(&mut self.helpers);
@@ -2532,9 +2538,7 @@ impl<'u> Lowerer<'u> {
             TYPE_ALIAS => Ok(Vec::new()),
             USE => self.use_stmt(n, scope, outer),
             LET if node(n, PARAMS).is_some() => self.function_stmt(n, scope, outer),
-            RESOURCE if self.decls.project.contains(&self.file) => self.deployment(n, scope, outer),
             RESOURCE if self.is_copy(n) => self.instance(n, scope, outer),
-            RESOURCE => self.block_stmt(n, scope, outer),
             k => self.error(span, format!("unexpected {k:?}")),
         }
     }
@@ -3848,13 +3852,14 @@ impl<'u> Lowerer<'u> {
         self.lits(rc, &lits)
     }
 
-    /// The assignments of a block, their reads appended to `reads`.
+    /// The assignments of a block, their reads appended to `reads`; with
+    /// each, where its reads and the statement's helpers it made end.
     fn fields(
         &mut self,
         rc: &mut Rc,
         block: &SyntaxNode,
         reads: &mut Vec<Lit>,
-    ) -> L<Vec<FieldAssign>> {
+    ) -> L<Vec<(FieldAssign, (usize, usize))>> {
         let mut out = Vec::new();
         let mut failed = false;
         for a in block.children().filter(|c| c.kind() == ASSIGN) {
@@ -3866,13 +3871,14 @@ impl<'u> Lowerer<'u> {
                     FieldOp::Assign
                 };
                 let value = self.entry_value(rc, &a, Pos::Value, reads)?;
-                Ok(FieldAssign {
+                let f = FieldAssign {
                     key,
                     op,
                     value,
                     rank: self.rank_tok(&a)?,
                     span: self.span(&a),
-                })
+                };
+                Ok((f, (reads.len(), self.helpers.len())))
             })();
             match r {
                 Ok(f) => out.push(f),
@@ -4169,8 +4175,8 @@ impl<'u> Lowerer<'u> {
     /// `resource stacks.S NAME { k = v } [where B]` in a project module
     /// (R-114): a deployment of the stack S, a resource of its type whose
     /// attributes are its key's values. A project module makes nothing
-    /// else.
-    fn deployment(&mut self, n: &SyntaxNode, scope: usize, outer: &Rc) -> L<Vec<Stmt>> {
+    /// else. Built as the `Resource` item it is.
+    fn deployment(&mut self, n: &SyntaxNode, scope: usize, outer: &Rc) -> L<ItemId> {
         let written = dotted_text(n, 1);
         if self.decls.deployed.iter().any(|d| d.path == written) {
             return self.block_stmt(n, scope, outer);
@@ -4308,6 +4314,7 @@ impl<'u> Lowerer<'u> {
             Some(block) => self.fields(&mut rc, &block, &mut reads)?,
             None => Vec::new(),
         };
+        let fields = fields.into_iter().map(|(f, _)| f);
         body.extend(reads);
         let mut inputs = Vec::new();
         for f in fields {
@@ -4439,8 +4446,11 @@ impl<'u> Lowerer<'u> {
     }
 
     /// `resource T n { f = t ... } where B`, `T` a provider's type or one
-    /// the program declares.
-    fn block_stmt(&mut self, n: &SyntaxNode, scope: usize, outer: &Rc) -> L<Vec<Stmt>> {
+    /// the program declares. Built as a `Resource` item (R-211 step 5):
+    /// its header, each entry's value and the reads it hoisted, the clause
+    /// B's goals; `lower` writes the statement.
+    fn block_stmt(&mut self, n: &SyntaxNode, scope: usize, outer: &Rc) -> L<ItemId> {
+        use crate::program::build::{BodyLowered, EntryLowered, HeaderLowered};
         let span = self.span(n);
         let block = node(n, BLOCK);
         let header = self.header_token(n).ok_or(Skip)?;
@@ -4462,17 +4472,30 @@ impl<'u> Lowerer<'u> {
         }
         let mut rc = self.rc(n, scope, outer);
         let mut body = self.clauses(&mut rc, n)?;
+        let clause = self.gather.as_mut().and_then(|g| g.take_clause());
+        let made = self.helpers.len();
         let mut reads = Vec::new();
-        let fields = match &block {
-            Some(block) => self.wanting(Want::Schema, |l| l.fields(&mut rc, block, &mut reads))?,
-            None => self.value_body(&mut rc, n, &mut reads)?,
+        let (fields, ends, value) = match &block {
+            Some(block) => {
+                let fields =
+                    self.wanting(Want::Schema, |l| l.fields(&mut rc, block, &mut reads))?;
+                let (fields, ends) = fields.into_iter().unzip();
+                (fields, ends, None)
+            }
+            None => {
+                let (value, fields) = self.value_body(&mut rc, n, &mut reads)?;
+                let end = (reads.len(), self.helpers.len());
+                (fields, vec![end], Some(value))
+            }
         };
         let reads_at = body.len()..body.len() + reads.len();
         body.extend(reads);
+        let named_at = (body.len(), self.helpers.len());
         // The header: a string with holes is bound last, by `format`; a
         // bare name is the literal name, always (R-76). The name is one
         // segment of the address, quoted when it holds a dot (R-112).
-        let name = if header.kind() == STRING && has_hole(header.text()) {
+        let interp = header.kind() == STRING && has_hole(header.text());
+        let name = if interp {
             self.name_from_clause(&mut rc, &header, &mut body)?
         } else if header.kind() == STRING {
             str_term(&crate::ir::name_segment(&self.string(&header)?))
@@ -4514,62 +4537,112 @@ impl<'u> Lowerer<'u> {
             .collect();
         self.check_bound(&rc, &body, &values)?;
         let rank = self.rank_tok(n)?;
-        let body = (!body.is_empty()).then_some(body);
-        Ok(vec![Stmt::Resource(Resource {
-            typ: str_term(&dotted_text(n, 1)),
-            name,
-            rank,
-            fields,
-            body,
-            reads: reads_at,
+        self.aggregate_in(&body, span)?;
+        let typ = dotted_text(n, 1);
+        let resolved = crate::program::check::enabled().then(|| {
+            let st = Stmt::Resource(Resource {
+                typ: str_term(&typ),
+                name: name.clone(),
+                rank,
+                fields: fields.clone(),
+                body: (!body.is_empty()).then(|| body.clone()),
+                reads: reads_at.clone(),
+                span,
+            });
+            self.resolved_with(vec![st], span)
+        });
+        let literal =
+            (header.kind() == STRING && !interp).then(|| self.string(&header).unwrap_or_default());
+        // Each entry's reads and helpers, from where the one before ended.
+        let starts = std::iter::once((reads_at.start, made))
+            .chain(ends.iter().map(|&(r, h)| (reads_at.start + r, h)));
+        let spans: Vec<(std::ops::Range<usize>, std::ops::Range<usize>)> = starts
+            .zip(&ends)
+            .map(|((r0, h0), &(r1, h1))| (r0..reads_at.start + r1, h0..h1))
+            .collect();
+        let body_lowered = match &value {
+            Some(v) => BodyLowered::Value {
+                span: fields.first().map_or(span, |f| f.span),
+                value: v,
+                reads: &body[spans[0].0.clone()],
+                made: &self.helpers[spans[0].1.clone()],
+            },
+            None => BodyLowered::Block(
+                fields
+                    .iter()
+                    .zip(&spans)
+                    .map(|(f, (r, h))| EntryLowered {
+                        path: &f.key,
+                        op: f.op,
+                        value: &f.value,
+                        rank: f.rank,
+                        span: f.span,
+                        reads: &body[r.clone()],
+                        made: &self.helpers[h.clone()],
+                    })
+                    .collect(),
+            ),
+        };
+        let header_lowered = if interp {
+            HeaderLowered::Interp {
+                value: &name,
+                reads: &body[named_at.0..],
+                made: &self.helpers[named_at.1..],
+            }
+        } else if let Some(text) = literal {
+            HeaderLowered::Literal(text)
+        } else {
+            HeaderLowered::Bare(header.text())
+        };
+        let r = crate::program::build::ResourceLowered {
             span,
-        })])
+            scope: self.item_scope,
+            typ: crate::program::node::TypeRef { name: typ, span },
+            name: header_lowered,
+            rank,
+            clause,
+            body: body_lowered,
+        };
+        let written: BTreeSet<&str> = rc.vars.values().map(String::as_str).collect();
+        let written = |v: &str| written.contains(v);
+        let gather = self
+            .gather
+            .as_mut()
+            .expect("a ported statement is gathered");
+        let mut b = gather.builder(&mut self.program, span, &written);
+        let item = b.resource_item(r);
+        gather.done(b);
+        if let Some(stmts) = resolved {
+            self.resolved.insert(item, stmts);
+        }
+        Ok(item)
     }
 
     /// `resource T N = VALUE` (R-126): the body is a value of the type, a
     /// document. An object written out is the block of its entries, one
     /// per key, checked as a block's are; any other value is one
     /// contribution at the root, an entry per key of the object it is when
-    /// the rule runs (`transform::resource_to_stmts`).
+    /// the rule runs (`transform::resource_to_stmts`). The value, and its
+    /// entries.
     fn value_body(
         &mut self,
         rc: &mut Rc,
         n: &SyntaxNode,
         reads: &mut Vec<Lit>,
-    ) -> L<Vec<FieldAssign>> {
+    ) -> L<(Term, Vec<FieldAssign>)> {
         let t = terms(n).next().ok_or(Skip)?;
         let span = self.span(&t);
         let value = self.wanting(Want::Schema, |l| l.term(rc, &t, Pos::Value, reads))?;
-        let entry = |key: &str, value: Term| FieldAssign {
-            key: crate::ir::path_join("", key),
-            op: FieldOp::Assign,
-            value,
-            rank: None,
-            span,
-        };
-        Ok(match value {
-            Term::Obj(m) => m.into_iter().map(|(k, v)| entry(&k, v)).collect(),
-            Term::Val(Value::Obj(m)) => m
-                .into_iter()
-                .map(|(k, v)| entry(&k, Term::Val(v)))
-                .collect(),
-            Term::Val(_) | Term::List(_) => {
-                return self.error(
-                    span,
-                    format!(
-                        "`resource T NAME = VALUE` takes an object, a value of the type: not `{}`",
-                        t.text().to_string().trim()
-                    ),
-                );
-            }
-            value => vec![FieldAssign {
-                key: String::new(),
-                op: FieldOp::Assign,
-                value,
-                rank: None,
+        match crate::program::lower::value_entries(value.clone(), span) {
+            Some(entries) => Ok((value, entries)),
+            None => self.error(
                 span,
-            }],
-        })
+                format!(
+                    "`resource T NAME = VALUE` takes an object, a value of the type: not `{}`",
+                    t.text().to_string().trim()
+                ),
+            ),
+        }
     }
 
     /// `set from DOC [@rank] [where B]` (R-38): every leaf of the document
@@ -9688,6 +9761,47 @@ mod tests {
         ] {
             assert!(lowered.iter().any(|l| l.contains(s)), "{s}: {lowered:#?}");
         }
+    }
+
+    /// Every form of resource block is built as a `Resource` item (R-211
+    /// step 5) and lowers as the resolver lowers it: entries that read
+    /// (`+=`, ranked, an indexed path, a comprehension's helper), a
+    /// bare, a quoted and a dotted header, a name from the clause bound
+    /// after the entries' reads, a value body written out and one read.
+    #[test]
+    fn every_resource_is_built_as_a_resource_item() {
+        let src = "let o = { public: true }\n\
+             let k = 1\n\
+             p(1)\np(2)\nq(2)\n\
+             resource db.postgres a @default { public = false, tags += { a: k } @override }\n\
+             resource db.postgres \"b.c\" { tags = { l: [x | p(x), not { q(x) }] } }\n\
+             resource db.postgres \"d-${n}\" { tags = { n: k } } where p(n)\n\
+             resource db.postgres e = { public: true }\n\
+             resource db.postgres f = o\n\
+             resource db.postgres g { databases[0].owner = \"o\" }\n";
+        let (lowered, seen) = crate::program::check::collect(|| lower(src));
+        assert!(seen.differences.is_empty(), "{:#?}", seen.differences);
+        assert_eq!(seen.items.get("a resource"), Some(&6), "{:?}", seen.items);
+        assert!(
+            !seen.items.keys().any(|k| k.contains("(Resource)")),
+            "{:?}",
+            seen.items
+        );
+        for s in [
+            "resource \"db.postgres\" Addr { tags = {n: K} } :- p(N), k(K), Addr = __segment(str.format(\"d-%s\", N))",
+            "resource \"db.postgres\" \"\\\"b.c\\\"\"",
+            "__neg_0(X) :- p(X), q(X)",
+            "resource \"db.postgres\" \"f\" {  = O } :- o(O)",
+        ] {
+            assert!(lowered.iter().any(|l| l.contains(s)), "{s}: {lowered:#?}");
+        }
+        // A block binds no aggregate: a `let` does.
+        let e =
+            error("p(1)\nresource db.postgres h { tags = { n: n } } where n = count(x), p(x)\n");
+        assert!(
+            e.contains("an aggregate is bound in the body of a rule"),
+            "{e}"
+        );
     }
 
     /// Every form a written literal takes is built as a goal (R-211 step

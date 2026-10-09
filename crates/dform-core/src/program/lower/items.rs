@@ -10,6 +10,7 @@
 //! | `input k: T [= d] [check B] [where G]` | itself, its fields', refinement's and clause's literals; under several clauses (R-104) where each holds and the deny where two do |
 //! | `output k[: T] = v [where B]`  | its declaration at its first row; the value, or `output("k", v') :- B', reads` |
 //! | `output p`                     | itself, its reference columns marked             |
+//! | `resource T n [@r] { p = v .. } [where B]`, `= v` | itself: its entries (a value's the object's keys), its body B's literals then the entries' reads (`reads`), then a name from the clause's binding |
 //! | `set t = v [@r] [where B]`, `set { .. }` | per line `arg(T, A, "p", v'[, "r"])` (`arg_add` for `+=`), an element `arg(T, A, "l", [k, {..}], "r")`, an input `arg("input", "", "k", v', "r")`, a fact or a rule over B's literals and the line's reads, folded over B's aggregates |
 //! | `set from doc [@r] [where B]`  | the document's externs, then `arg("input", "", P, V, "r") :- B', reads` |
 //! | `decl p(a: T) [mixed]`         | `mixed p/1` or (fed from outside) `extern p/1`, then `decl p(a: T)` |
@@ -24,7 +25,8 @@ use super::clause::folded;
 use super::expr::Lowering;
 use crate::ast::{self, Atom, Decl, Rank, RuleStmt, Span, Stmt, TypeExpr, str_term};
 use crate::program::node::{
-    CheckKind, ClauseId, ExprId, Head, ItemId, ItemKind, RelRef, Source, Target, VarId, Write,
+    CheckKind, ClauseId, ExprId, Head, Header, ItemId, ItemKind, RelRef, ResourceBody, Source,
+    Target, TypeRef, VarId, Write,
 };
 use crate::program::{NodeId, Origin, Program};
 use crate::value::Value;
@@ -133,6 +135,13 @@ pub(super) fn item(program: &Program, id: ItemId, out: &mut Vec<Stmt>, origins: 
                 .chain(made.into_iter().flatten().cloned())
                 .collect()
         }
+        ItemKind::Resource {
+            typ,
+            name,
+            rank,
+            body,
+            clause,
+        } => resource(program, (typ, name, *rank), body, *clause, it.span),
         ItemKind::Set { writes, clause } => set(program, writes, *clause, it.span),
         ItemKind::SetFrom {
             source,
@@ -277,6 +286,98 @@ fn output(
     }
     out.append(&mut l.helpers);
     out
+}
+
+/// `resource T n [@rank] { .. } [where B]`: the statement, its body B's
+/// literals, then the entries' reads (its `reads`), then the binding of a
+/// name from the clause (none when nothing is read or written after
+/// `where`); then the helpers.
+fn resource(
+    program: &Program,
+    (typ, name, rank): (&TypeRef, &Header, Option<Rank>),
+    body: &ResourceBody,
+    clause: Option<ClauseId>,
+    span: Span,
+) -> Vec<Stmt> {
+    let mut l = Lowering::new(program);
+    let mut lits = Vec::new();
+    if let Some(c) = clause {
+        l.clause(c, &mut lits);
+    }
+    let start = lits.len();
+    let fields = match body {
+        ResourceBody::Block(entries) => entries
+            .iter()
+            .map(|e| {
+                let value = l.expr(e.value);
+                lits.append(&mut l.reads);
+                ast::FieldAssign {
+                    key: e.path.clone(),
+                    op: e.op,
+                    value,
+                    rank: e.rank,
+                    span: e.span,
+                }
+            })
+            .collect(),
+        ResourceBody::Value(v) => {
+            let value = l.expr(*v);
+            lits.append(&mut l.reads);
+            value_entries(value, program.exprs[*v].span).expect("a value body is an object")
+        }
+    };
+    let reads = start..lits.len();
+    let name = match name {
+        Header::Bare(n) => str_term(n),
+        Header::Literal(s) => str_term(&crate::ir::name_segment(s)),
+        Header::Interp(e) => {
+            let t = l.expr(*e);
+            lits.append(&mut l.reads);
+            t
+        }
+    };
+    let mut out = vec![Stmt::Resource(ast::Resource {
+        typ: str_term(&typ.name),
+        name,
+        rank,
+        fields,
+        body: (!lits.is_empty()).then_some(lits),
+        reads,
+        span,
+    })];
+    out.append(&mut l.helpers);
+    out
+}
+
+/// The entries of `resource T N = value` (R-126), each at `span`: an
+/// object's keys (written out, or a literal), or any other value whole at
+/// the root, an entry per key of the object it is when the rule runs
+/// (`transform::resource_to_stmts`); none for a scalar or a list, which
+/// is no value of a type.
+pub fn value_entries(value: ast::Term, span: Span) -> Option<Vec<ast::FieldAssign>> {
+    use ast::Term;
+    let entry = |key: &str, value: Term| ast::FieldAssign {
+        key: crate::ir::path_join("", key),
+        op: ast::FieldOp::Assign,
+        value,
+        rank: None,
+        span,
+    };
+    Some(match value {
+        Term::Obj(m) => m.into_iter().map(|(k, v)| entry(&k, v)).collect(),
+        Term::Val(Value::Obj(m)) => m
+            .into_iter()
+            .map(|(k, v)| entry(&k, Term::Val(v)))
+            .collect(),
+        Term::Val(_) | Term::List(_) => return None,
+        value => vec![ast::FieldAssign {
+            key: String::new(),
+            op: ast::FieldOp::Assign,
+            value,
+            rank: None,
+            span,
+        }],
+    })
 }
 
 /// `set ..`: each line's write, a fact or a rule over B's literals (B
