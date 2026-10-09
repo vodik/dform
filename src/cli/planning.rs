@@ -375,7 +375,6 @@ impl<'a> Reporter<'a> {
             }
         }
         Ok(zset::file::PlanFile {
-            version: zset::file::VERSION,
             stack: self.located.loaded.stack.clone(),
             inputs: zset::file::Inputs {
                 env: env_inputs(externs.env_labels().into_iter(), key),

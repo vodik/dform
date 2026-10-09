@@ -177,7 +177,7 @@ fn a_plan_file_without_the_master_stops_the_same_way() {
     namespace(&s);
     rotate(&s);
     run(&s, &[], &["plan", "--out", "plan.json"]).success();
-    let file = s.json("plan.json");
+    let file = s.json("plan.json")["deployments"][0].clone();
     assert_eq!(file["unkeyed"], true, "{file}");
     let text = s.read("plan.json");
     assert!(

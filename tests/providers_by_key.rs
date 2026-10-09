@@ -157,7 +157,7 @@ fn an_env_var_is_in_the_plan_file_only_as_its_label() {
     run_with_env(&s, &env, &["plan", "--out", "plan.json", "stacks/app.df"]).success();
     let f = s.read("plan.json");
     let j: serde_json::Value = serde_json::from_str(&f).unwrap();
-    let env_in = &j["inputs"]["env"];
+    let env_in = &j["deployments"][0]["inputs"]["env"];
     assert_eq!(env_in[0]["sensitive"], "env.var/FAKE_TOKEN", "{f}");
     assert!(env_in[0]["digest"].is_string(), "{f}");
     assert!(!f.contains("tok-5ecret"), "{f}");

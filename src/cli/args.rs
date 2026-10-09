@@ -938,6 +938,7 @@ impl Cli {
             matrix: None,
             held: Held::default(),
             planned: Default::default(),
+            sequence: None,
         };
         if let Cmd::Apply(Apply { chaos, .. }) = &mut cli.cmd {
             *chaos = mock.chaos;

@@ -205,14 +205,20 @@ fn the_plan_file_digests_input_files_with_the_stack_key() {
             "p.df",
         ];
         s.run(&args).success();
-        let f: serde_json::Value = serde_json::from_str(&s.read("plan.json")).unwrap();
+        let f =
+            serde_json::from_str::<serde_json::Value>(&s.read("plan.json")).unwrap()["deployments"]
+                [0]
+            .clone();
         let files = f["inputs"]["input_files"].as_array().unwrap().clone();
         assert_eq!(files.len(), 1, "{f}");
         assert_eq!(files[0]["path"], "prod.df");
         let d = files[0]["digest"].as_str().unwrap_or_default().to_string();
         assert!(!s.read("plan.json").contains(&fnv), "{f}");
         s.run(&args).success();
-        let again: serde_json::Value = serde_json::from_str(&s.read("plan.json")).unwrap();
+        let again =
+            serde_json::from_str::<serde_json::Value>(&s.read("plan.json")).unwrap()["deployments"]
+                [0]
+            .clone();
         assert_eq!(
             again["inputs"]["input_files"][0]["digest"],
             d.as_str(),

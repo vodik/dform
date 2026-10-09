@@ -6,6 +6,7 @@
 use crate::plugin;
 use crate::report;
 use crate::store;
+use crate::zset;
 use anyhow::{Result, bail};
 use clap::Parser;
 use std::collections::BTreeMap;
@@ -89,6 +90,9 @@ struct Cli {
     /// by the name a reader gives each (`platform[env=lab]`): a plan reads
     /// them over what each published.
     planned: BTreeMap<String, crate::stack::Planned>,
+    /// `apply PLAN` of a plan file of several deployments: which this run
+    /// is, and what the earlier ones published.
+    sequence: Option<order::InSequence>,
 }
 
 /// Where a plan's text goes: stdout, or held for the project's plan
@@ -105,6 +109,8 @@ struct HeldPlan {
     outputs: Option<crate::stack::Outputs>,
     /// `plan --json`'s document.
     json: Option<serde_json::Value>,
+    /// Its plan file's (`plan --out`), written once for the tree.
+    file: Option<zset::file::PlanFile>,
 }
 
 impl Held {
@@ -148,6 +154,11 @@ impl Held {
     /// The plan's outputs, for the plans that read them (R-200).
     fn outputs(&self, outputs: crate::stack::Outputs) {
         self.with(|h| h.outputs = Some(outputs));
+    }
+
+    /// The plan's file, for the tree's plan file.
+    fn file(&self, file: zset::file::PlanFile) {
+        self.with(|h| h.file = Some(file));
     }
 
     /// What was held, if a plan was made.
@@ -257,6 +268,19 @@ fn run_command(cli: Cli) -> Result<Outcome> {
     let order = cli.plan_order()?;
     if !order.is_empty() {
         return InOrder::new(cli, order).plan();
+    }
+    // A plan file of several deployments: each applied in turn.
+    if let Cmd::Apply(apply::Apply {
+        plan_file: Some(path),
+        ..
+    }) = &cli.cmd
+        && cli.sequence.is_none()
+    {
+        let file = zset::file::Sequence::load(path)?;
+        if file.deployments.len() > 1 {
+            let path = path.clone();
+            return order::Sequenced::new(cli, path, file).run();
+        }
     }
     let order = cli.apply_order()?;
     if order.is_empty() {

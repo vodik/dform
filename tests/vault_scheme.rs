@@ -72,7 +72,7 @@ fn apply_refuses_a_plan_whose_secret_moved_in_vault() {
     run(&s, &["plan", "--out", "plan.json", "p.df"]).success();
     let plan = s.read("plan.json");
     assert!(!plan.contains("a_first"), "{plan}");
-    let answers = &s.json("plan.json")["inputs"]["answers"];
+    let answers = &s.json("plan.json")["deployments"][0]["inputs"]["answers"];
     assert_eq!(answers[0]["version"], json!("1"), "{plan}");
     assert!(answers[0]["digest"].is_string(), "{plan}");
     // The token went as the host applied it; the provider never had it.
@@ -100,7 +100,7 @@ fn apply_refuses_a_plan_whose_secret_moved_in_vault() {
 
     run(&s, &["plan", "--out", "plan2.json", "p.df"]).success();
     assert_eq!(
-        s.json("plan2.json")["inputs"]["answers"][0]["version"],
+        s.json("plan2.json")["deployments"][0]["inputs"]["answers"][0]["version"],
         json!("2")
     );
     run(&s, &["apply", "plan2.json"]).success();

@@ -260,7 +260,9 @@ fn reads_a_file() {
     let file = s.read("plan.json");
     assert!(!file.contains("KUBE-SECRET"), "{file}");
     let plan: serde_json::Value = serde_json::from_str(&file).unwrap();
-    let answers = plan["inputs"]["answers"].as_array().unwrap();
+    let answers = plan["deployments"][0]["inputs"]["answers"]
+        .as_array()
+        .unwrap();
     assert_eq!(answers.len(), 1, "{file}");
     assert!(
         answers[0]["sensitive"]

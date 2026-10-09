@@ -250,7 +250,7 @@ fn the_plan_file_and_json_carry_the_kept_difference() {
     );
     run(&s, NOW, &["plan", "--out", "plan.json", "p"]).success();
     assert_eq!(
-        s.json("plan.json")["kept"],
+        s.json("plan.json")["deployments"][0]["kept"],
         serde_json::json!([{
             "type": "compute.vm", "name": "vm", "path": "note", "before": "n1", "after": "n2",
         }])

@@ -48,7 +48,9 @@ fn setup(name: &str) -> (Scratch, String) {
             .concat(),
         )
         .success();
-    let file: serde_json::Value = serde_json::from_str(&s.read("plan.json")).unwrap();
+    let file =
+        serde_json::from_str::<serde_json::Value>(&s.read("plan.json")).unwrap()["deployments"][0]
+            .clone();
     let digest = file["digest"].as_str().unwrap().to_string();
     assert!(
         r.stdout.contains(&format!("plan digest: {digest}\n")),

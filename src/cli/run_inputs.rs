@@ -147,10 +147,23 @@ impl Cli {
 }
 
 impl Cli {
-    /// Load a plan file for `apply PLAN`; its inputs fill every input flag the
-    /// command line leaves out.
+    /// Load a plan file for `apply PLAN`, its deployment's plan (the one
+    /// of a sequence this run is, `Cli::sequence`); its inputs fill every
+    /// input flag the command line leaves out.
     pub(super) fn with_plan_inputs(&mut self, path: &Path) -> Result<zset::file::PlanFile> {
-        let saved = zset::file::PlanFile::load(path)?;
+        let saved = match &self.sequence {
+            Some(s) => {
+                zset::file::Sequence::load(path)?
+                    .deployments
+                    .into_iter()
+                    .nth(s.step)
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("internal: no step {} in {}", s.step, path.display())
+                    })?
+                    .plan
+            }
+            None => zset::file::PlanFile::load(path)?,
+        };
         let i = &saved.inputs;
         if self.files.is_empty() {
             self.files = i.files.iter().map(|f| PathBuf::from(&f.path)).collect();

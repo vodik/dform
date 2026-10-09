@@ -237,7 +237,7 @@ fn a_provider_held_by_its_connection_plans_provisionally() {
             .collect()
     };
     assert_eq!(
-        marked(&s.json("p.json")["deformations"]),
+        marked(&s.json("p.json")["deployments"][1]["deformations"]),
         [
             ("apps".to_string(), true),
             ("api".to_string(), true),

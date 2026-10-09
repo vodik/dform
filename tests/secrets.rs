@@ -316,7 +316,7 @@ fn a_secret_input_never_prints_in_query_why_or_the_plan_file() {
     let file = s.read("plan.json");
     assert!(!file.contains("HUNTER-TWO"), "{file}");
     let f: serde_json::Value = serde_json::from_str(&file).unwrap();
-    let entry = &f["inputs"]["set"][0];
+    let entry = &f["deployments"][0]["inputs"]["set"][0];
     assert_eq!(entry["sensitive"], "input/#pw", "{file}");
     assert_eq!(entry["digest"].as_str().map(str::len), Some(64), "{file}");
 

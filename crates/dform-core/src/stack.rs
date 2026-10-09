@@ -1771,6 +1771,20 @@ fn outputs_digest(bytes: Option<&[u8]>) -> String {
     }
 }
 
+/// The digest of the outputs the project's deployment `full` (by its full
+/// name, else its short one) published, as a reader's plan records it;
+/// `None` when it is not registered or published none.
+pub fn published_digest(root: &Path, full: &str, s3: OpenS3) -> Result<Option<String>> {
+    let reg = registry(root)?;
+    let Some((_, e)) = registered(&reg, full, &short_of(full)) else {
+        return Ok(None);
+    };
+    let store = e.state.open(s3)?;
+    Ok(store
+        .get(crate::store::OUTPUTS)?
+        .map(|o| outputs_digest(Some(&o.bytes))))
+}
+
 /// Read the outputs a deployment published at `loc`; `name` is the
 /// reader's name of it, `own` the names its project gives it (checked
 /// against the object): its full name, and its short one, which an

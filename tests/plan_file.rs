@@ -32,8 +32,10 @@ fn two_ticks(name: &str) -> Scratch {
 #[test]
 fn the_file_records_inputs_delta_nulls_and_ticks() {
     let s = two_ticks("planfile-record");
-    let f: serde_json::Value = serde_json::from_str(&s.read("plan.json")).unwrap();
-    assert_eq!(f["version"], 4);
+    let f = serde_json::from_str::<serde_json::Value>(&s.read("plan.json")).unwrap()["deployments"]
+        [0]
+    .clone();
+    assert_eq!(f["deployment"], "p");
     assert_eq!(f["inputs"]["files"][0]["path"], "p.df");
     assert_eq!(f["inputs"]["world"], "w.json");
     assert!(f["world_digest"].is_string());
@@ -82,7 +84,9 @@ fn a_quoted_path_segment_round_trips_through_the_plan_file() {
         "p.df",
     ])
     .success();
-    let f: serde_json::Value = serde_json::from_str(&s.read("plan.json")).unwrap();
+    let f = serde_json::from_str::<serde_json::Value>(&s.read("plan.json")).unwrap()["deployments"]
+        [0]
+    .clone();
     let changes = f["deformations"][0]["changes"].as_array().unwrap();
     assert!(
         changes
@@ -124,7 +128,9 @@ fn a_nested_copys_address_round_trips_through_the_plan_file() {
         "p.df",
     ])
     .success();
-    let f: serde_json::Value = serde_json::from_str(&s.read("plan.json")).unwrap();
+    let f = serde_json::from_str::<serde_json::Value>(&s.read("plan.json")).unwrap()["deployments"]
+        [0]
+    .clone();
     assert_eq!(
         f["ticks"][0]["addresses"][0], "net.vpc[\"edge.left.vpc\"]",
         "{f}"
@@ -341,7 +347,9 @@ fn a_create_before_destroy_plan_file_applies_in_two_ticks() {
         &["plan", "--out", "plan.json"],
     ))
     .success();
-    let f: serde_json::Value = serde_json::from_str(&s.read("plan.json")).unwrap();
+    let f = serde_json::from_str::<serde_json::Value>(&s.read("plan.json")).unwrap()["deployments"]
+        [0]
+    .clone();
     assert_eq!(f["deformations"][0]["action"], "replace_create_first");
     assert_eq!(f["deformations"][0]["dependents"][0], "net.subnet[\"a\"]");
     let r = s.run(&["apply", "plan.json"]).success();
@@ -379,7 +387,9 @@ fn a_tick_2_address_the_file_does_not_list_stops_the_apply() {
         "p.df",
     ])
     .success();
-    let mut f: serde_json::Value = serde_json::from_str(&s.read("plan.json")).unwrap();
+    let mut f =
+        serde_json::from_str::<serde_json::Value>(&s.read("plan.json")).unwrap()["deployments"][0]
+            .clone();
     let g = &f["pending_groups"][0];
     assert_eq!(g["pattern"], "iam.policy[?]", "{f}");
     assert_eq!(g["head"], "want(\"iam.policy\", _)", "{f}");
@@ -424,8 +434,9 @@ fn a_tick_2_address_the_file_does_not_list_stops_the_apply() {
     // Unsigned: the digest is what an approval checks, not this.
     f.as_object_mut().unwrap().remove("digest");
     let mut now: serde_json::Value = serde_json::from_str(&s.read("plan.json")).unwrap();
-    now["pending_groups"] = f["pending_groups"].clone();
-    now.as_object_mut().unwrap().remove("digest");
+    let step = &mut now["deployments"][0];
+    step["pending_groups"] = f["pending_groups"].clone();
+    step.as_object_mut().unwrap().remove("digest");
     s.write("plan.json", &now.to_string());
     let r = s.run(&["apply", "plan.json"]).stopped();
     assert!(

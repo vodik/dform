@@ -750,7 +750,9 @@ impl<'a, 'h> Ticks<'a, 'h> {
             "{}",
             executor::carried_over(self.resumed.as_ref(), &self.st, &p.plan)
         );
-        if !self.args.yes && self.cx.saved.is_none() {
+        // A plan file of several deployments asks before each (R-200).
+        let asks = self.cx.saved.is_none() || self.cx.cli.sequence.is_some();
+        if !self.args.yes && asks {
             let report = self
                 .r
                 .report(&p.plan, &p.res, &p.sections, tick, &[], &p.denies);

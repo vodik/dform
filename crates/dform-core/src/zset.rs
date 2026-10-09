@@ -1192,7 +1192,9 @@ pub mod file {
     use std::collections::BTreeMap;
     use std::path::Path;
 
-    pub const VERSION: u32 = 4;
+    /// The plan file's format (R-200 after: a sequence of deployments,
+    /// one for a deployment that reads none).
+    pub const VERSION: u32 = 5;
 
     /// The deployment's master (`custody`): 32 random bytes, the key of
     /// every digest of a secret dform keeps and the root of `random.*`
@@ -1288,9 +1290,61 @@ pub mod file {
         }
     }
 
+    /// A plan file (`plan TARGET --out FILE`): the deployments of the
+    /// target's closure in apply order, the target last, each its own
+    /// plan; one deployment's file is the sequence of one. `apply FILE`
+    /// applies them in turn, each checked against its plan at its turn.
+    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+    pub struct Sequence {
+        pub version: u32,
+        pub deployments: Vec<Step>,
+    }
+
+    /// One deployment of a [`Sequence`]: its full name (R-200), those of
+    /// the sequence it is applied after (what it reads), and its plan.
+    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+    pub struct Step {
+        pub deployment: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        pub after: Vec<String>,
+        #[serde(flatten)]
+        pub plan: PlanFile,
+    }
+
+    impl Sequence {
+        /// The file at `path`, of this dform's format.
+        pub fn load(path: &Path) -> Result<Sequence> {
+            let text = std::fs::read_to_string(path)
+                .with_context(|| format!("read plan file {}", path.display()))?;
+            let v: Json = serde_json::from_str(&text)
+                .with_context(|| format!("parse plan file {}", path.display()))?;
+            let version = v["version"].as_u64().unwrap_or_default();
+            if version != VERSION as u64 {
+                anyhow::bail!(
+                    "plan file {}: version {version} (this dform writes {VERSION}): plan again",
+                    path.display(),
+                );
+            }
+            let f: Sequence = serde_json::from_value(v)
+                .with_context(|| format!("parse plan file {}", path.display()))?;
+            if f.deployments.is_empty() {
+                anyhow::bail!("plan file {}: it plans no deployment", path.display());
+            }
+            Ok(f)
+        }
+
+        pub fn save(&self, path: &Path) -> Result<()> {
+            crate::store::write_atomic(
+                path,
+                (serde_json::to_string_pretty(self)? + "\n").as_bytes(),
+            )
+            .with_context(|| format!("write plan file {}", path.display()))
+        }
+    }
+
+    /// One deployment's plan in a plan file ([`Step`]).
     #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
     pub struct PlanFile {
-        pub version: u32,
         pub stack: String,
         pub inputs: Inputs,
         /// FNV-1a over the refreshed world facts: what the plan saw.
@@ -1685,19 +1739,23 @@ pub mod file {
     }
 
     impl PlanFile {
+        /// The plan of the one deployment the file at `path` plans; a
+        /// file of several is an error naming them.
         pub fn load(path: &Path) -> Result<PlanFile> {
-            let text = std::fs::read_to_string(path)
-                .with_context(|| format!("read plan file {}", path.display()))?;
-            let f: PlanFile = serde_json::from_str(&text)
-                .with_context(|| format!("parse plan file {}", path.display()))?;
-            if f.version != VERSION {
+            let mut f = Sequence::load(path)?;
+            if f.deployments.len() > 1 {
+                let names: Vec<&str> = f
+                    .deployments
+                    .iter()
+                    .map(|s| s.deployment.as_str())
+                    .collect();
                 anyhow::bail!(
-                    "plan file {}: version {} (this dform writes {VERSION})",
+                    "plan file {}: it plans {}, not one deployment",
                     path.display(),
-                    f.version
+                    names.join(", then ")
                 );
             }
-            Ok(f)
+            Ok(f.deployments.remove(0).plan)
         }
 
         /// What differs between the inputs the file records and `now`.
@@ -1805,14 +1863,6 @@ pub mod file {
                 m.remove("digest");
             }
             crate::approval::digest_of(&v)
-        }
-
-        pub fn save(&self, path: &Path) -> Result<()> {
-            crate::store::write_atomic(
-                path,
-                (serde_json::to_string_pretty(self)? + "\n").as_bytes(),
-            )
-            .with_context(|| format!("write plan file {}", path.display()))
         }
 
         /// The differences between this file's delta and `current`, the
@@ -2315,7 +2365,7 @@ mod tests {
     #[test]
     fn a_provisional_change_that_differs_says_it_was_provisional() {
         let file: file::PlanFile = serde_json::from_value(serde_json::json!({
-            "version": 1, "stack": "apps", "world_digest": "",
+            "stack": "apps", "world_digest": "",
             "inputs": {"files": [], "set": [], "data": [], "providers": [],
                        "world": null, "inventory": null},
             "deformations": [{

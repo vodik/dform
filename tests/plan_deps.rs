@@ -212,20 +212,66 @@ fn json_nests_each_deployment_s_plan() {
     assert_eq!(j["outcome"], "done", "{j:#}");
 }
 
-/// Not yet (R-200): `plan X --out F` writes the target's plan file alone.
-/// The closure's file needs a design: the reader's plan was made against
-/// its dependency's *planned* outputs, which its file's outputs digest
-/// cannot match until that dependency is applied, so `apply F` would
-/// refuse it as stale. A decision for the ticket.
+/// `plan X --out F` writes the closure in apply order (R-200 after, the
+/// user's decision of 2026-10-09): each deployment by its full name, its
+/// plan and digest, what it is applied after and what it read; `apply F`
+/// applies them in turn, the reader's plan, made against its dependency's
+/// planned outputs, valid once that dependency's apply produced them.
 #[test]
-#[ignore = "R-200: the plan file does not carry the closure; `apply PLAN` applies one deployment"]
 fn a_plan_file_carries_the_closure_and_apply_applies_it_in_order() {
     let s = project("deps-plan-file");
-    s.run(&["plan", "apps", "env=lab", "--out", "p.json"])
+    let r = s
+        .run(&["plan", "apps", "env=lab", "--out", "p.json"])
         .success();
+    assert!(
+        r.stderr
+            .contains("plan file: p.json (plan digests: stacks.platform[env=lab] sha256:"),
+        "{}",
+        r.stderr
+    );
+    let f = s.json("p.json");
+    assert_eq!(f["version"], 5, "{f:#}");
+    let steps = f["deployments"].as_array().unwrap();
+    let names: Vec<&str> = steps
+        .iter()
+        .map(|d| d["deployment"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["stacks.platform[env=lab]", "stacks.apps[env=lab]"]);
+    assert_eq!(
+        steps[1]["after"],
+        serde_json::json!(["stacks.platform[env=lab]"])
+    );
+    assert!(steps.iter().all(|d| d["digest"].is_string()), "{f:#}");
+    assert_eq!(
+        steps[1]["inputs"]["stack_outputs"],
+        serde_json::json!([{"deployment": "platform[env=lab]", "digest": "absent"}]),
+        "{f:#}"
+    );
+    // `--json` of the closure is one document of both.
+    let j: serde_json::Value = serde_json::from_str(
+        &s.run(&["plan", "apps", "env=lab", "--json", "--out", "q.json"])
+            .success()
+            .stdout,
+    )
+    .unwrap();
+    assert_eq!(j["deployments"].as_array().unwrap().len(), 2, "{j:#}");
+    assert_eq!(
+        j["deployments"][1]["plan"]["digest"], steps[1]["digest"],
+        "{j:#}"
+    );
+
     let r = s.run(&["apply", "p.json", "--yes"]).success();
     assert!(
-        r.stdout.contains("stacks.platform[env=lab]"),
+        r.stdout.starts_with(
+            "stacks: stacks.platform[env=lab], then stacks.apps[env=lab], in apply order as \
+             p.json planned them; each is confirmed and applied in turn\n== \
+             stacks.platform[env=lab]\n"
+        ),
+        "{}",
+        r.stdout
+    );
+    assert!(
+        r.stdout.contains("== stacks.apps[env=lab]\n"),
         "{}",
         r.stdout
     );
@@ -233,8 +279,84 @@ fn a_plan_file_carries_the_closure_and_apply_applies_it_in_order() {
         s.path("dform.state/stacks.platform/env=lab/state.json")
             .exists()
     );
+    let world = s.read("dform.state/stacks.apps/env=lab/remote.json");
+    assert!(world.contains("db.db.fake"), "{world}");
+    let r = s.run(&["plan", "apps", "env=lab"]).success();
+    assert_eq!(r.summary(), "plan: 0 changes", "{}", r.stdout);
+}
+
+/// One confirmation per deployment: answered no for the reader, the
+/// dependency is applied and the reader is not, exit 3; a deployment
+/// that reads none writes a file of one, applied as before, unasked.
+#[test]
+fn a_plan_file_s_deployments_are_each_confirmed() {
+    let s = project("deps-plan-file-ask");
+    s.run(&["plan", "apps", "env=lab", "--out", "p.json"])
+        .success();
+    let mut cmd = common::dform();
+    cmd.args(["apply", "p.json"]).current_dir(s.path(""));
+    let (said, code) = common::answering(&s.dir, cmd, &["y", "n"]);
+    assert_eq!(code, 3, "{}", said[0]);
     assert!(
-        s.path("dform.state/stacks.apps/env=lab/state.json")
+        said[0].contains("Apply these 2 changes to platform[env=lab]?"),
+        "{}",
+        said[0]
+    );
+    assert!(
+        said[1].contains("Apply these 2 changes to apps[env=lab]?"),
+        "{}",
+        said[1]
+    );
+    assert!(
+        s.path("dform.state/stacks.platform/env=lab/state.json")
+            .exists()
+    );
+    assert!(
+        !s.path("dform.state/stacks.apps/env=lab/state.json")
+            .exists()
+    );
+
+    let s = project("deps-plan-file-one");
+    s.run(&["plan", "platform", "env=lab", "--out", "p.json"])
+        .success();
+    let f = s.json("p.json");
+    assert_eq!(f["deployments"].as_array().unwrap().len(), 1, "{f:#}");
+    assert_eq!(
+        f["deployments"][0]["deployment"],
+        "stacks.platform[env=lab]"
+    );
+    s.run(&["apply", "p.json"]).success();
+}
+
+/// Each deployment is checked against its plan at its turn: one whose
+/// state moved since the plan stops the sequence there, its status the
+/// command's, and nothing after it is applied.
+#[test]
+fn a_plan_file_stops_at_the_first_stale_deployment() {
+    let s = project("deps-plan-file-stale");
+    s.run(&["plan", "apps", "env=lab", "--out", "p.json"])
+        .success();
+    // Someone applies the platform with another cidr in between.
+    s.write(
+        "stacks/platform.df",
+        &PLATFORM.replace("10.0.0.0/16", "10.9.0.0/16"),
+    );
+    s.run(&["apply", "platform", "env=lab", "--yes"]).success();
+    s.write("stacks/platform.df", PLATFORM);
+    let r = s.run(&["apply", "p.json", "--yes"]);
+    assert_eq!(r.code, Some(1), "{}\n{}", r.stdout, r.stderr);
+    assert!(
+        r.stderr.contains("plan file p.json is stale"),
+        "{}",
+        r.stderr
+    );
+    assert!(
+        !r.stdout.contains("== stacks.apps[env=lab]"),
+        "{}",
+        r.stdout
+    );
+    assert!(
+        !s.path("dform.state/stacks.apps/env=lab/state.json")
             .exists()
     );
 }

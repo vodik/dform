@@ -314,7 +314,7 @@ fn the_plan_file_lists_the_guarded_groups() {
         "p.df",
     ])
     .success();
-    let f = s.json("plan.json");
+    let f = s.json("plan.json")["deployments"][0].clone();
     assert_eq!(
         f["guarded"],
         serde_json::json!([{"name": "store", "declarations": 2}]),

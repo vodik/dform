@@ -100,12 +100,27 @@ impl Plan {
             .into());
         }
         if let (Some(out), Some(file)) = (&self.out, &file) {
-            file.save(out)?;
-            eprintln!(
-                "plan file: {} (plan digest: {})",
-                out.display(),
-                file.digest.as_deref().unwrap_or_default()
-            );
+            // A tree's file is written once, with each deployment's plan
+            // in apply order (`matrix::Tree`).
+            match cx.cli.held.is_held() {
+                true => cx.cli.held.file(file.clone()),
+                false => {
+                    zset::file::Sequence {
+                        version: zset::file::VERSION,
+                        deployments: vec![zset::file::Step {
+                            deployment: located.stored.clone(),
+                            after: Vec::new(),
+                            plan: file.clone(),
+                        }],
+                    }
+                    .save(out)?;
+                    eprintln!(
+                        "plan file: {} (plan digest: {})",
+                        out.display(),
+                        file.digest.as_deref().unwrap_or_default()
+                    );
+                }
+            }
             cx.audit.append(
                 "plan",
                 serde_json::json!({

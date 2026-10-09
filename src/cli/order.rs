@@ -2,10 +2,10 @@
 //! before its readers (R-30, R-73).
 
 use super::{Cli, Cmd, Outcome, run};
-use crate::deployment;
 use crate::report;
+use crate::{deployment, zset};
 use anyhow::{Result, bail};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 /// One deployment `apply` applies, of the stack in `file`, and the
@@ -35,13 +35,13 @@ impl Cli {
     /// Empty when X reads none, and for a plan file, a world fixture or a
     /// program outside a project. A cycle is an error naming it.
     /// `plan X` in a project: the deployments X reads and theirs, each
-    /// before its readers, then X (R-200), what `apply X` applies. Empty
-    /// when X reads none, and for a plan file (`--out`), the bare diff, a
-    /// destroy, a world fixture or a program outside a project.
+    /// before its readers, then X (R-200), what `apply X` applies; `--out`
+    /// writes them all to the plan file, in that order. Empty when X reads
+    /// none, and for the bare diff, a destroy, a world fixture or a program
+    /// outside a project.
     pub(super) fn plan_order(&self) -> Result<Vec<Dependency>> {
         // The bare diff (`-q`) is a script's: one deployment's, as it was.
         let Cmd::Plan(super::plan::Plan {
-            out: None,
             destroy: false,
             why,
             ..
@@ -431,4 +431,99 @@ impl InOrder {
 /// The input a `--set K=V` names.
 fn named_input(kv: &str) -> String {
     kv.split_once('=').map_or(kv, |(k, _)| k).to_string()
+}
+
+/// `apply PLAN` of a plan file of several deployments (R-200): which one
+/// this run is, and the digest of what each earlier one published once
+/// applied, by the name a reader gives it: what a reader was planned
+/// against is valid once its dependency's apply produced it.
+#[derive(Debug, Clone, Default)]
+pub(super) struct InSequence {
+    pub(super) step: usize,
+    pub(super) applied: BTreeMap<String, String>,
+}
+
+/// `apply PLAN` of a plan file of several deployments: each applied in
+/// the file's order, a run of its own asking before it (or `--yes`) and
+/// checked against its plan at its turn; the first that does not end
+/// done ends the command there, with its status.
+pub(super) struct Sequenced {
+    cli: Cli,
+    path: PathBuf,
+    file: zset::file::Sequence,
+}
+
+impl Sequenced {
+    pub(super) fn new(cli: Cli, path: PathBuf, file: zset::file::Sequence) -> Sequenced {
+        Sequenced { cli, path, file }
+    }
+
+    pub(super) fn run(self) -> Result<Outcome> {
+        let named: Vec<&str> = self
+            .file
+            .deployments
+            .iter()
+            .map(|s| s.deployment.as_str())
+            .collect();
+        println!(
+            "stacks: {}, in apply order as {} planned them; each is confirmed and applied in turn",
+            named.join(", then "),
+            self.path.display()
+        );
+        let mut applied = BTreeMap::new();
+        for (i, step) in self.file.deployments.iter().enumerate() {
+            println!(
+                "{}",
+                self.cli
+                    .style
+                    .paint(report::Paint::Bold, &format!("== {}", step.deployment))
+            );
+            match run(self.of(i, step, &applied), None)? {
+                Outcome::Done => {}
+                o => return Ok(o),
+            }
+            // What it published, for those after it that read it.
+            let reader = crate::stack::short_of(&step.deployment);
+            let s3 = super::open_s3(&self.cli.root, false);
+            if let Some(d) = crate::stack::published_digest(&self.cli.root, &step.deployment, &s3)?
+            {
+                applied.insert(reader, d);
+            }
+        }
+        Ok(Outcome::Done)
+    }
+
+    /// The run of the file's deployment `i`: its program and inputs the
+    /// file's, a `--set` it records; an approval only where it needs one.
+    fn of(&self, i: usize, step: &zset::file::Step, applied: &BTreeMap<String, String>) -> Cli {
+        let mut cli = self.cli.clone();
+        let recorded: BTreeSet<String> = step
+            .plan
+            .inputs
+            .set
+            .iter()
+            .filter_map(|s| match s {
+                serde_json::Value::String(kv) => Some(named_input(kv)),
+                s => {
+                    let label = s["sensitive"].as_str()?;
+                    Some(label.rsplit_once('#').map_or(label, |(_, k)| k).to_string())
+                }
+            })
+            .collect();
+        cli.user_set
+            .retain(|kv| recorded.contains(&named_input(kv)));
+        cli.set = cli.user_set.clone();
+        cli.files = Vec::new();
+        cli.keys = Vec::new();
+        if step.plan.needs_approval.is_empty()
+            && let Cmd::Apply(a) = &mut cli.cmd
+        {
+            a.approval = None;
+        }
+        cli.sequence = Some(InSequence {
+            step: i,
+            applied: applied.clone(),
+        });
+        cli
+    }
 }

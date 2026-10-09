@@ -11,7 +11,7 @@ use super::test::Test;
 use super::{Cli, Cmd, Dependency, Held, Outcome, Refused};
 use crate::matrix::{Kept, Made, Matrix};
 use crate::provider::ActionKind;
-use crate::report;
+use crate::{report, zset};
 use anyhow::{Result, bail};
 use std::path::{Path, PathBuf};
 
@@ -307,6 +307,8 @@ impl Tree<'_> {
             ..p.clone()
         });
         let mut planned_outputs = std::collections::BTreeMap::new();
+        // The plan file's deployments (`--out`), in apply order.
+        let mut steps = Vec::new();
         // The deployments not planned, and why: their plan failed, or one
         // they read did.
         let mut stopped: std::collections::BTreeMap<String, String> = Default::default();
@@ -344,7 +346,20 @@ impl Tree<'_> {
             dep.held = Held::new();
             dep.planned = planned_outputs.clone();
             let result = super::run(dep.clone(), None);
-            let held = dep.held.take();
+            let mut held = dep.held.take();
+            // Its plan file's part (`--out`): after what it reads.
+            if let Some(plan) = held.file.take() {
+                let after = order
+                    .iter()
+                    .filter(|o| d.reads.contains(&o.name))
+                    .map(|o| o.full.clone())
+                    .collect();
+                steps.push(zset::file::Step {
+                    deployment: d.full.clone(),
+                    after,
+                    plan,
+                });
+            }
             let (state, error) = match (result, &held.tally) {
                 (Err(e), _) => {
                     let word = match Outcome::of_error(&e) {
@@ -422,6 +437,32 @@ impl Tree<'_> {
             }
         }
         let nodes: Vec<_> = planned.iter().map(|p| p.node.clone()).collect();
+        // The plan file: every deployment's plan, once each planned.
+        if let Some(out) = &p.out
+            && steps.len() == order.len()
+            && planned.iter().all(|p| p.error.is_none())
+        {
+            let digests: Vec<String> = steps
+                .iter()
+                .map(|s| {
+                    format!(
+                        "{} {}",
+                        s.deployment,
+                        s.plan.digest.as_deref().unwrap_or_default()
+                    )
+                })
+                .collect();
+            zset::file::Sequence {
+                version: zset::file::VERSION,
+                deployments: steps,
+            }
+            .save(out)?;
+            eprintln!(
+                "plan file: {} (plan digests: {})",
+                out.display(),
+                digests.join(", ")
+            );
+        }
         if p.json {
             return self.print_json(&tally, planned);
         }

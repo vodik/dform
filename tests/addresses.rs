@@ -56,7 +56,9 @@ fn a_quoted_segment_round_trips_through_the_plan_file_and_the_world() {
         "main",
     ])
     .success();
-    let f: serde_json::Value = serde_json::from_str(&s.read("plan.json")).unwrap();
+    let f = serde_json::from_str::<serde_json::Value>(&s.read("plan.json")).unwrap()["deployments"]
+        [0]
+    .clone();
     let names: Vec<&str> = f["deformations"]
         .as_array()
         .unwrap()

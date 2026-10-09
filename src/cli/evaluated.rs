@@ -614,6 +614,23 @@ impl Context {
             env: env_inputs(labels, self.file_key()),
             ..inputs.clone()
         };
+        // A deployment applied earlier in this plan file's sequence
+        // published what this one was planned against (R-200): its outputs
+        // now are those, else they moved since.
+        let mut saved = saved.clone();
+        if let Some(seq) = &self.cli.sequence {
+            for o in saved.inputs.stack_outputs.iter_mut() {
+                let published = now
+                    .stack_outputs
+                    .iter()
+                    .find(|n| n.deployment == o.deployment);
+                if let (Some(applied), Some(n)) = (seq.applied.get(&o.deployment), published)
+                    && *applied == n.digest
+                {
+                    o.digest = n.digest.clone();
+                }
+            }
+        }
         let diff = saved.input_differences(&now);
         if diff.is_empty() {
             return Ok(());
