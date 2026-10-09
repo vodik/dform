@@ -1347,10 +1347,9 @@ fn unrevealable(backend: &Providers, res: &EvalResult) -> Result<()> {
         };
         let secret = ir::label(label);
         let through = s
-            .reason
-            .strip_prefix("builtin ")
-            .and_then(|r| r.strip_suffix(" over a null"))
-            .map(|f| format!(" through {f}"))
+            .func
+            .as_deref()
+            .map(|f| format!(" through {}", crate::functions::shown_call(f)))
             .unwrap_or_default();
         let why = format!(
             "reads the secret {secret}{through}, which dform cannot compute: a provider holds \

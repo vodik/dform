@@ -38,6 +38,9 @@ pub struct Stuck {
     pub bindings: BTreeMap<String, Value>,
     pub nulls: BTreeSet<String>,
     pub reason: String,
+    /// The builtin function the instance needs a null's content for
+    /// (`json.encode`), when one is what stuck it.
+    pub func: Option<String>,
     /// The rule's text, for the plan.
     pub text: String,
 }

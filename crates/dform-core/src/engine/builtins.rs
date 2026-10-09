@@ -49,14 +49,7 @@ pub(super) fn eval_builtin_pred(
     }
     if !forwards_nulls(&atom.pred) && vals.iter().any(stuck::has_null) {
         let nulls = vals.iter().flat_map(nulls_in).collect();
-        rec.stuck(
-            state,
-            nulls,
-            format!(
-                "builtin {} over a null",
-                crate::functions::shown_call(&atom.pred)
-            ),
-        );
+        rec.stuck_in(state, nulls, &atom.pred);
         return Ok(None);
     }
     let body = crate::functions::body(&atom.pred)

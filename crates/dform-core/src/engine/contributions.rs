@@ -494,6 +494,7 @@ impl Ready {
             bindings: BTreeMap::new(),
             nulls,
             reason: reason.into(),
+            func: None,
             text: format!("attr({typ}, {}, {path}, _)", spell::value(addr)),
         }
     }

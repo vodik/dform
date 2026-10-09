@@ -51,7 +51,18 @@ impl Rec<'_> {
         nulls: BTreeSet<String>,
         reason: impl Into<String>,
     ) {
-        self.stuck_as(self.head, state, nulls, reason);
+        self.stuck_as(self.head, state, nulls, reason, None);
+    }
+
+    /// Stuck because the builtin `func` reads a null's content.
+    pub(super) fn stuck_in(
+        &self,
+        state: &HashMap<String, Value>,
+        nulls: BTreeSet<String>,
+        func: &str,
+    ) {
+        let why = format!("builtin {} over a null", crate::functions::shown_call(func));
+        self.stuck_as(self.head, state, nulls, why, Some(func.to_string()));
     }
 
     fn stuck_as(
@@ -60,6 +71,7 @@ impl Rec<'_> {
         state: &HashMap<String, Value>,
         nulls: BTreeSet<String>,
         reason: impl Into<String>,
+        func: Option<String>,
     ) {
         let s = Stuck {
             rule: Some(self.rule),
@@ -71,6 +83,7 @@ impl Rec<'_> {
                 .collect(),
             nulls,
             reason: reason.into(),
+            func,
             text: self.text.to_string(),
         };
         let mut found = self.found.borrow_mut();
@@ -84,15 +97,10 @@ impl Rec<'_> {
     fn blocked(&self, t: &Term, state: &HashMap<String, Value>) -> bool {
         match blocked_by_null(t, state) {
             Some((name, nulls)) => {
-                let why = if name == crate::ir::SCOPED || name == crate::ir::REF {
-                    "resource address carries a null".to_string()
-                } else {
-                    format!(
-                        "builtin {} over a null",
-                        crate::functions::shown_call(&name)
-                    )
-                };
-                self.stuck(state, nulls, why);
+                match name == crate::ir::SCOPED || name == crate::ir::REF {
+                    true => self.stuck(state, nulls, "resource address carries a null"),
+                    false => self.stuck_in(state, nulls, &name),
+                }
                 true
             }
             None => false,
