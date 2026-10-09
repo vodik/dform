@@ -105,7 +105,8 @@ impl Builder<'_> {
             }
             Form::In { each } => return self.membership(w, *each, false),
             Form::NotIn { each } => return self.membership(w, *each, true),
-            _ => return None,
+            Form::Not(inner) => return self.negation(w, Some(inner)),
+            Form::NotBlock => return self.negation(w, None),
         };
         Some(self.hoisted_goal(reads, vec![main], w.after))
     }

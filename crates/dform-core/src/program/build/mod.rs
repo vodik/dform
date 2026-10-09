@@ -13,6 +13,7 @@
 mod clause;
 mod expr;
 mod membership;
+mod negation;
 mod pattern;
 mod spread;
 

@@ -5410,6 +5410,8 @@ impl<'u> Lowerer<'u> {
                     _ => Form::NotIn { each },
                 }
             }
+            LIT_NOT => Form::Not(Box::new(self.written_form(rc, &n.children().next()?)?)),
+            LIT_NOT_BLOCK => Form::NotBlock,
             _ => return None,
         })
     }
@@ -5605,6 +5607,7 @@ impl<'u> Lowerer<'u> {
     /// `__neg_N(ȳ) :- P, B` over the variables ȳ the body so far binds,
     /// and `not __neg_N(ȳ)`.
     fn neg_helper(&mut self, rc: &mut Rc, n: &SyntaxNode, out: &mut Vec<Lit>, span: Span) -> L<()> {
+        let body_from = self.shadow.as_ref().map(|s| s.goals());
         let mut inner = Vec::new();
         let mut rc2 = rc.clone();
         rc2.reads.clear();
@@ -5637,7 +5640,8 @@ impl<'u> Lowerer<'u> {
             lit_vars(l, &mut used);
         }
         let shared: Vec<String> = used.intersection(&outer_bound).cloned().collect();
-        let pred = format!("__neg_{}", self.program.helpers.neg());
+        let number = self.program.helpers.neg();
+        let pred = format!("__neg_{number}");
         let head = atom_at(&pred, shared.iter().map(|v| var(v)).collect(), span);
         // An aggregate's value is not the helper's: it is folded after.
         let results: BTreeSet<&String> = self.aggs.iter().map(|a| &a.var).collect();
@@ -5663,6 +5667,13 @@ impl<'u> Lowerer<'u> {
             head.clone(),
             body,
         )));
+        if let (Some(s), Some(from)) = (&mut self.shadow, body_from) {
+            s.negation(
+                number,
+                results.iter().map(|v| v.to_string()).collect(),
+                from,
+            );
+        }
         // The helper's own variables are bound in the helper.
         for v in used.difference(&outer_bound) {
             rc.outer.insert(v.clone());
