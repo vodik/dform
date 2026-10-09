@@ -1,3 +1,20 @@
+//! The evaluator: a program's rules stratified over the partition graph and
+//! run, stratum by stratum, to a semi-naive fixpoint over the fact store,
+//! with the attribute aggregate collapsed as its groups complete, and every
+//! fact's provenance in a circuit (E §2, §3.1). This file is the driver:
+//! the entry points (`eval`, `eval_resumable`, `query`), the program compiled
+//! for evaluation, and the strata's loop. The rest, by idea:
+//!
+//! - `body`: a rule's body joined over the store, and the heads it derives
+//! - `unify`, `builtins`, `membership`, `negation`: a literal of each kind
+//! - `aggregate`: an aggregate rule's groups and their folds
+//! - `nulls`: Rule 2 and 3's recorder of the instances that wait
+//! - `contributions`, `collapse`: the attribute aggregate and one group's cell
+//! - `undetermined`: `stuck/4` and what may derive after a boundary
+//! - `provenance`: the store with its circuit
+//! - `policy`: `deny`/`warn` facts
+//! - `errors`: the errors an evaluation stops at
+
 mod aggregate;
 mod body;
 mod builtins;
