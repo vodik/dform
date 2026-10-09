@@ -209,10 +209,10 @@ component app {
 
   resource k8s.deployment deploy {
     metadata.name = "crud-api-${color}"
-    metadata.namespace
+    metadata.namespace = namespace
     metadata.labels = { app: "crud-api", color, schema: "${schema}" }
     spec.selector.matchLabels = labels
-    spec.template.metadata.labels
+    spec.template.metadata.labels = labels
     spec.template.spec.containers = [{
       name: "api",
       image,
