@@ -73,6 +73,7 @@ pub(super) fn target(
             ..
         })
         | Cmd::Test(_)
+        | Cmd::Render(_)
         | Cmd::Status(_)
         | Cmd::Effects(Effects { json: false }) => Ok(Some(module)),
         Cmd::Apply(Apply { destroy: true, .. }) => bail!(
@@ -197,6 +198,7 @@ pub(super) fn run(cli: Cli, module: &Path) -> Result<Outcome> {
         Cmd::Test(_) => test(&cli, &label, &order, &of),
         Cmd::Effects(_) => effects(&cli, &label, &order, &of),
         Cmd::Status(_) => super::status::matrix(&cli, &order, &of),
+        Cmd::Render(_) => super::render::matrix(&cli, &order, &of),
         _ => bail!("internal: a project module runs plan, apply, test and dev effects"),
     }
 }

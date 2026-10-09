@@ -8,6 +8,7 @@ use super::dev::{Effects, Eval, Graph, Show, Strata};
 use super::explain::{Diff, Explain, Query, Why};
 use super::plan::Plan;
 use super::provider_cmd::{ProviderCheck, ProviderSchema};
+use super::render::Render;
 use super::secrets::Secrets;
 use super::source::{Doc, Fmt, Init};
 use super::stack::{Handover, Rekey, StackList};
@@ -24,6 +25,7 @@ pub(super) enum Cmd {
     Eval(Eval),
     Plan(Plan),
     Test(Test),
+    Render(Render),
     Apply(Apply),
     Query(Query),
     Why(Why),
@@ -82,7 +84,7 @@ impl Cmd {
             | Cmd::ProviderSchema(_)
             | Cmd::Fmt(_)
             | Cmd::Doc(_) => Stage::Alone,
-            Cmd::Test(_) | Cmd::Strata(_) | Cmd::Effects(_) => Stage::Program,
+            Cmd::Test(_) | Cmd::Render(_) | Cmd::Strata(_) | Cmd::Effects(_) => Stage::Program,
             Cmd::Graph(g) if g.strata() => Stage::Program,
             Cmd::Log(_)
             | Cmd::Unlock(_)
@@ -165,6 +167,7 @@ impl Cmd {
             Cmd::Eval(_)
                 | Cmd::Plan(_)
                 | Cmd::Test(_)
+                | Cmd::Render(_)
                 | Cmd::Apply(_)
                 | Cmd::Query(_)
                 | Cmd::Why(_)

@@ -1262,6 +1262,7 @@ dependencies = [
  "dform-core",
  "dform-grpc",
  "dform-host",
+ "dform-k8s",
  "dform-lsp",
  "dform-mock",
  "dform-provider-ovh",

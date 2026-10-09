@@ -379,6 +379,7 @@ prints the same plan and applies nothing.
 | `plan`, `apply`, `destroy`, `why`, `query`, `diff`, `test`, `fmt`, `log` | on a target; `plan`, `apply` and `test` with none on project.df's deployments |
 | `output TARGET [NAME]` | a deployment's outputs |
 | `status [TARGET]` | each object's health, as its provider judges it now; with no target on project.df's deployments |
+| `render [TARGET]` | the planned documents as their provider's objects, a YAML stream for another tool to apply ("Rendering for another tool"); with no target on project.df's deployments |
 | `stack list`, `stack rekey`, `stack unlock` | the project's stacks |
 | `state show`, `state forget-host`, `state mv` | a deployment's state |
 | `secrets list`, `secrets rotate`, `secrets cycle`, `secrets set`, `secrets unset` | a deployment's secrets |
@@ -510,10 +511,10 @@ too):
 | Status | Meaning |
 |---|---|
 | 0 | done: the command did what it was asked (`plan` produced a plan, with or without changes) |
-| 1 | failed: an error, printed; or an apply's wait on a value the world has not reached ran past its deadline (`not reached in 10m`, R-201: state is consistent, and the next apply waits again); or `status` found an object not healthy or suspended (its line says which) |
+| 1 | failed: an error, printed; or an apply's wait on a value the world has not reached ran past its deadline (`not reached in 10m`, R-201: state is consistent, and the next apply waits again); or `status` found an object not healthy or suspended (its line says which); or `render` met a value it cannot print (each named) |
 | 2 | usage: the command line is wrong (the argument parser's own) |
 | 3 | declined: a question was answered no; nothing of that tick was applied, and nothing is printed as an error |
-| 4 | refused by the program: its conflicts and denies, printed (`plan` and `apply` alike) |
+| 4 | refused by the program: its conflicts and denies, printed (`plan`, `apply` and `render` alike) |
 | 5 | stopped: a plan file or an approval applied what it showed and stopped before what it did not (a tick that adds a change, or whose re-plan differs from the one it showed), or a destroy deleted what it could reach and left what it could not (listed under `unreachable`), or an apply without the deployment's master made what it could and not what needs the master (listed); state is consistent, and the next run resumes |
 | 6 | locked: another run holds the stack (named, one line) |
 | 128 + N | stopped by signal N after the run unwound (130 for SIGINT, 143 for SIGTERM) |
@@ -4368,6 +4369,75 @@ run. A what-if plan is `plan --set k=v`.
 cargo run -- -C examples/demo test dform
 cargo run -- -C examples/demo test dform env=prod
 ```
+
+## Rendering for another tool
+
+`dform render [TARGET] [K=V..]` prints a deployment's planned documents
+as the objects their provider sends its API, so a tool that applies
+manifests itself takes dform as a generator: Argo CD's config
+management plugin, kustomize, `kubectl apply -f -`. The program is
+evaluated as `test` evaluates a combination (no credentials, no
+provider configured, the offline schemas, an image's digest and a
+provider's location stood in; "Testing"), with the inputs the target
+and `--set` give and every other its default; no provider's Plan is
+asked and nothing is read from the world or written. Its policy holds,
+or the render is refused as the plan is: its denies printed, exit 4.
+
+A provider has a document form when the object it sends is the
+document: the Kubernetes provider's, with `apiVersion` and `kind` from
+the type (as its snapshot serves the kind, or as a CRD the program makes
+defines it), and nothing of dform's (no `dform.io/stack` label, no
+annotation), so the stream applies as it is. It prints as a YAML stream,
+a `---` line before each object, in the order the plan applies them:
+what a document references first, a CRD before the objects of its
+kinds, a Namespace before the objects in it; `--json` prints the same
+objects as one JSON array. A resource of a provider with no document
+form (OVH, Postgres, Vault: an API of calls, not objects) is said once
+on stderr, `not rendered: ovh.instance k3s.server.vm (ovh has no
+document form)`, and does not fail the render.
+
+A rendered document has no holes. A value only an apply makes (a name
+the API server picks, another object's computed value), a deny that
+reads one and a resource whether it is made does are each a hole; so is
+a secret, which a render never prints (it holds no master, and a
+manifest is read by whatever applies it: give the cluster a secret
+another way, an operator that reads a secret store). The render refuses
+naming each, exit 1:
+
+```
+$ dform -C examples/k8s render k8s_demo
+Error: render stacks.k8s_demo: 1 of what its documents need is not known to a render, and a rendered document has no holes:
+  hole: k8s.deployment web spec.template.spec.containers[0].envFrom[0].configMapRef.name = k8s.config_map web_config.metadata.name, known after apply
+  help: apply the deployment first, so a value an apply makes is known; or render the documents with none with `--partial`
+```
+
+`--partial` prints the documents that hold no hole and says each hole on
+stderr (`hole: ..`), exit 0: what bootstraps a cluster before the values
+an apply makes exist. With no target, in a project with a project
+module, each deployment it lists is rendered after a `# NAME` line
+(`# stacks.apps[env=lab]`; `--json`: an array of `{deployment,
+objects}`), and the status is the first's that was not rendered.
+
+```bash
+dform render apps env=lab | kubectl apply -f -
+dform render apps env=lab --json | jq '.[].kind'
+```
+
+### CI/CD with dform
+
+`dform test` is the pull request's gate: every combination of the
+inputs, its denies and its providers' offline Plan, with no
+credentials. On merge, `dform plan TARGET --out plan.json` is the
+artifact a reviewer (or an approval, "Approvals") signs off, and `dform
+apply plan.json` applies what it showed and nothing else (it asks
+nothing, and stops, exit 5, before what the plan could not show).
+Rollback is the previous commit's program: check it out, plan and
+apply; an old plan file is no rollback, as it applies only while the
+world is as it was planned against. Argo CD reaches dform either way:
+`render` as its config management plugin's generate command (dform's
+policy holds over what it renders; Argo applies it, and dform keeps no
+state of it), or dform's own controller (`controller run`,
+experimental), which applies as `apply` does and keeps dform's state.
 
 ## Editors: the tree-sitter grammar
 

@@ -53,6 +53,7 @@ pub mod query;
 pub mod range;
 pub mod reference;
 pub mod refine;
+pub mod render;
 pub mod report;
 pub mod schema;
 pub mod secrets;

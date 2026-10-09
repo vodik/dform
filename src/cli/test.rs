@@ -61,7 +61,9 @@ impl Test {
             let (result, lines) = space.result(&pairs);
             matrix.push(&pairs, result, &space.reproduce(&pairs), lines);
         }
-        space.notes();
+        for n in space.notes() {
+            println!("{n}");
+        }
         let failed = matrix.print(&cli.table);
         println!("test {stack}: {n} combination{s}, {failed} failed");
         if failed > 0 {
@@ -74,13 +76,14 @@ impl Test {
 /// What every combination of a test is evaluated with: the program
 /// lowered, its providers' schemas (none when it names only built-in
 /// ones), a reader of locations that reads no provider's, and what the
-/// test stood in for the world.
-struct Space<'a> {
+/// test stood in for the world. `render` evaluates its one combination
+/// with it too.
+pub(super) struct Space<'a> {
     cli: &'a Cli,
     program: &'a crate::ast::Program,
     stack: &'a str,
     lowered: crate::transform::Lowered,
-    backend: Providers,
+    pub(super) backend: Providers,
     reader: std::sync::Arc<crate::files::Files>,
     /// Whether an image's digest was stood in (no registry is asked).
     images: std::cell::Cell<bool>,
@@ -93,7 +96,7 @@ struct Space<'a> {
 }
 
 impl<'a> Space<'a> {
-    fn new(cli: &'a Cli, loaded: &'a deployment::Loaded) -> Result<Space<'a>> {
+    pub(super) fn new(cli: &'a Cli, loaded: &'a deployment::Loaded) -> Result<Space<'a>> {
         let program = &loaded.program;
         // The run's reader of locations, as plan's (R-153), except that a
         // test reads nothing through a provider: what reads a provider's
@@ -215,6 +218,15 @@ impl<'a> Space<'a> {
 
     /// The program evaluated with the inputs `pairs`: what it denies.
     fn evaluate(&self, pairs: &[(String, Value)]) -> Result<Vec<String>> {
+        let e = self.evaluated(pairs)?;
+        self.plan(&e.res, &e.resources)?;
+        let redact = query::Redactor::new(&e.res.facts, self.backend.schema());
+        Ok(e.violations.iter().map(|v| redact.text(v)).collect())
+    }
+
+    /// The program evaluated with the inputs `pairs`, short of its
+    /// providers' Plan: its resources, and its violations unredacted.
+    pub(super) fn evaluated(&self, pairs: &[(String, Value)]) -> Result<Evaluation> {
         let (program, lowered, backend) = (self.program, &self.lowered, &self.backend);
         let mut given = deployment::input_fact_keys(program);
         given.extend(pairs.iter().map(|(k, _)| k.clone()));
@@ -268,10 +280,12 @@ impl<'a> Space<'a> {
         if !unset.is_empty() {
             bail!(unset.join("\n"));
         }
-        self.plan(&res, &resources)?;
         violations.extend(inputs::violations(&res.facts, &lowered.inputs));
-        let redact = query::Redactor::new(&res.facts, backend.schema());
-        Ok(violations.iter().map(|v| redact.text(v)).collect())
+        Ok(Evaluation {
+            res,
+            resources,
+            violations,
+        })
     }
 
     /// Each provider's Plan of what the combination makes, asked with no
@@ -319,24 +333,37 @@ impl<'a> Space<'a> {
     }
 
     /// What the test did not ask the world, said once.
-    fn notes(&self) {
+    pub(super) fn notes(&self) -> Vec<String> {
+        let mut out = Vec::new();
         if self.images.get() {
-            println!(
+            out.push(
                 "note: no registry is asked: an image's digest is the one this machine last \
                  resolved, else a stand-in"
+                    .to_string(),
             );
         }
         for p in self.unplanned.borrow().iter() {
-            println!("note: {p}'s Plan not run: no offline schema and no fake");
+            out.push(format!(
+                "note: {p}'s Plan not run: no offline schema and no fake"
+            ));
         }
         let stood = self.reader.stood_in();
         if !stood.is_empty() {
-            println!(
+            out.push(format!(
                 "note: a provider's location is not read, so what reads it is undetermined: {}",
                 stood.join(", ")
-            );
+            ));
         }
+        out
     }
+}
+
+/// One combination evaluated ([`Space::evaluated`]).
+pub(super) struct Evaluation {
+    pub(super) res: engine::EvalResult,
+    pub(super) resources: Vec<ir::Resource>,
+    /// What it denies, and its conflicts, unredacted.
+    pub(super) violations: Vec<String>,
 }
 
 /// A deny's doc comment (`#|` above it) is its test's doc, printed beside

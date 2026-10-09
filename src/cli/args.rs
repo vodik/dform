@@ -8,6 +8,7 @@ use super::dev::{Effects, Eval, Graph, Show, Strata};
 use super::explain::{Diff, Explain, Query, Why};
 use super::plan::Plan;
 use super::provider_cmd::{ProviderCheck, ProviderSchema};
+use super::render::Render;
 use super::secrets::Secrets;
 use super::source::{Doc, Fmt, Init};
 use super::stack::{Handover, Rekey, StackList};
@@ -444,6 +445,24 @@ pub(super) enum Run {
     Test {
         #[command(flatten)]
         target: Target,
+    },
+    /// The deployment's planned documents as the objects their provider
+    /// sends (Kubernetes's, with `apiVersion` and `kind`), a YAML stream
+    /// in the plan's order, for a tool that applies them (`kubectl apply
+    /// -f -`, Argo CD). Evaluated as `test` does, with no credentials;
+    /// its policy holds or it is refused (exit 4). A resource of a
+    /// provider with no document form is said on stderr. With no target,
+    /// in a project with a project module, each deployment it lists.
+    Render {
+        #[command(flatten)]
+        target: Target,
+        /// Print the objects as one JSON array.
+        #[arg(long)]
+        json: bool,
+        /// Print the documents that hold no value only an apply makes,
+        /// and say the rest on stderr, instead of refusing.
+        #[arg(long)]
+        partial: bool,
     },
     /// The deployment's audit log (`state.audit.jsonl` beside its state),
     /// one line per entry; `log verify` checks its hash chain and names the
@@ -1142,6 +1161,11 @@ impl From<Run> for (Cmd, Target) {
             ),
             Run::Explain { target, addresses } => (Cmd::Explain(Explain { addresses }), target),
             Run::Test { target } => (Cmd::Test(Test), target),
+            Run::Render {
+                target,
+                json,
+                partial,
+            } => (Cmd::Render(Render { json, partial }), target),
             Run::Log {
                 cmd,
                 target,

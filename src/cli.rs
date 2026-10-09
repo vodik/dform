@@ -27,6 +27,7 @@ mod outputs;
 mod plan;
 mod planning;
 mod provider_cmd;
+mod render;
 mod run_inputs;
 mod secrets;
 mod source;
@@ -545,6 +546,7 @@ fn run_with(
     if cli.cmd.stage() == Stage::Program {
         return match &cli.cmd {
             Cmd::Test(c) => c.run(&cli, &loaded),
+            Cmd::Render(c) => c.run(&cli, &loaded),
             Cmd::Strata(c) => c.run(&cli, &loaded),
             Cmd::Effects(c) => c.run(&cli, &loaded),
             Cmd::Graph(c) => c.run_strata(&loaded),
