@@ -129,9 +129,10 @@ pub fn compile_resources(
     }
     for (addr, path, value) in attrs {
         let Some(root) = by_addr.get_mut(&addr) else {
+            let at = crate::report::address(&addr);
             bail!(
-                "attribute {} for resource not declared by want",
-                addr.attr(&path),
+                "{at}{} is written, but no resource {at} is declared",
+                path_suffix(&path),
             );
         };
         root.insert(segment_key(&path).into_owned(), value);

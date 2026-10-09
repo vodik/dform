@@ -314,6 +314,9 @@ struct Decls {
     /// `ovh` -> `ca`, `eu`. `x in ovh.instance` ranges over `ca.instance`
     /// and `eu.instance` too.
     renamed: BTreeMap<String, BTreeSet<String>>,
+    /// The name each provider `use` gives (`use ovh as ca`: `ca`): a
+    /// namespace whose types a schema the compiler does not read may name.
+    providers: BTreeSet<String>,
 }
 
 /// The built-in schemas' namespaces they do not close: a mock of part of a
@@ -387,17 +390,23 @@ pub fn provider_use(n: &SyntaxNode, units: &[Unit], deployed: &[Deployed]) -> Op
     .then_some(written)
 }
 
+/// Each provider `use` of the program, as written and by the name it
+/// gives (`use P as A`: `P`, `A`).
+fn provider_uses(units: &[Unit], deployed: &[Deployed]) -> Vec<(String, String)> {
+    units
+        .iter()
+        .flat_map(|u| u.root.descendants().filter(|n| n.kind() == USE))
+        .filter(|n| provider_use(n, units, deployed).is_some())
+        .map(|n| use_parts(&n))
+        .collect()
+}
+
 /// Each provider a `use P as A` of the program renames, and its names
 /// (R-115).
-fn renamed(units: &[Unit], deployed: &[Deployed]) -> BTreeMap<String, BTreeSet<String>> {
+fn renamed(uses: &[(String, String)]) -> BTreeMap<String, BTreeSet<String>> {
     let mut out: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-    for u in units {
-        for n in u.root.descendants().filter(|n| n.kind() == USE) {
-            let (of, name) = use_parts(&n);
-            if of != name && provider_use(&n, units, deployed).is_some() {
-                out.entry(of).or_default().insert(name);
-            }
-        }
+    for (of, name) in uses.iter().filter(|(of, name)| of != name) {
+        out.entry(of.clone()).or_default().insert(name.clone());
     }
     out
 }
@@ -818,7 +827,9 @@ impl<'u> Lowerer<'u> {
             .collect();
         l.collect_aliases();
         l.unalias_outputs();
-        l.decls.renamed = renamed(units, deployed);
+        let uses = provider_uses(units, deployed);
+        l.decls.renamed = renamed(&uses);
+        l.decls.providers = uses.into_iter().map(|(_, name)| name).collect();
         l.find_ref_columns();
         l
     }
@@ -5453,6 +5464,7 @@ impl<'u> Lowerer<'u> {
                 own.then(|| format!("resource {path} {}", c.head)),
             ));
         }
+        self.target_named(rc, c)?;
         let mut pre = Vec::new();
         let res = self.resolve(rc, c, &mut pre)?;
         body.extend(pre);
@@ -5504,6 +5516,46 @@ impl<'u> Lowerer<'u> {
         };
         let block = self.owning_block(scope, &typ, &addr);
         Ok(Target::Cell(typ, addr, path, block))
+    }
+
+    /// A `set`'s path starts with what it writes: a name in scope (a
+    /// resource, an input, a copy, a variable of the clause) or a type,
+    /// `T[k]`. One that starts with no name is the error at the target,
+    /// whatever follows it (`web.spec`, `web.containers["web"]`).
+    fn target_named(&mut self, rc: &Rc, c: &Chain) -> L<()> {
+        let h = c.head.as_str();
+        let named = c.is_bare()
+            || c.call.is_some()
+            || rc.vars.contains_key(h)
+            || rc.types.contains_key(h)
+            || rc.instances.contains_key(h)
+            || self.declares(rc.scope, h)
+            || self.decls.namespaces.contains(h)
+            || self.decls.providers.contains(h)
+            || self.decls.types.contains(h)
+            || matches!(h, "world" | "settings" | "super" | "_")
+            || self.lenient
+            || self.any_type;
+        if named {
+            return Ok(());
+        }
+        let near = self.scope_names(rc);
+        let help = match crate::diag::nearest(h, near.iter().map(String::as_str)) {
+            Some(n) => format!("`{n}` is in scope"),
+            None => format!(
+                "a resource is named as its block declares it (`resource T {h}`), or by its \
+                 type and key, `T[\"{h}\"]`"
+            ),
+        };
+        let d = Diagnostic::error(
+            self.span_of(c.range),
+            format!(
+                "`set` writes a resource's attribute or an input: nothing in scope is named `{h}`"
+            ),
+        )
+        .with_help(help);
+        self.diags.push(d);
+        Err(Skip)
     }
 
     /// The block that owns the cells of `(T, A)` when it is declared in
@@ -8884,7 +8936,16 @@ impl<'u> Lowerer<'u> {
                 path,
             }));
         }
-        // `T[e]` in a namespace no declaration or builtin schema names: a
+        // A dotted name in no namespace a type or a provider `use` names
+        // is no type: `web.spec.containers["web"]` reads the name `web`,
+        // as `web.spec` does.
+        let namespace = [&self.decls.namespaces, &self.decls.providers]
+            .iter()
+            .any(|ns| ns.contains(&c.head));
+        if k > 1 && !namespace && !self.any_type {
+            return Ok(None);
+        }
+        // `T[e]` in a namespace no declaration or builtin schema closes: a
         // provider schema's type the compiler does not read.
         let foreign = !self.decls.closed.contains(&c.head);
         if self.decls.types.contains(&name) || (k > 1 && (self.any_type || foreign)) {

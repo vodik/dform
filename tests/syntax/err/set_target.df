@@ -1,0 +1,6 @@
+# A `set` target starts with a name in scope or a type and its key.
+use k8s
+on(1)
+resource k8s.deployment "${n}" { metadata.name = n } where n in ["api"]
+set api.spec.template.spec.containers["api"].image = "api:2" where on(1)
+let img = api.spec.template.spec.containers["api"].image

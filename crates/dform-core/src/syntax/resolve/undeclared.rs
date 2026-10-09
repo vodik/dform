@@ -136,7 +136,7 @@ impl Lowerer<'_> {
     /// Whether `h` names anything in scope: a value, a resource, a used
     /// module or stack, a copy, a component, the module itself in its
     /// file, or a path from the root (`modules.net.vpc[t]`).
-    fn declares(&self, scope: ScopeId, h: &str) -> bool {
+    pub(super) fn declares(&self, scope: ScopeId, h: &str) -> bool {
         let root = |p: &String| p == h || p.strip_prefix(h).is_some_and(|r| r.starts_with('.'));
         self.self_module(scope, h).is_some()
             || self.program.scopes.paths().any(|(p, _)| root(p))
