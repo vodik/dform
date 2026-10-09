@@ -33,3 +33,5 @@
 - A feature is built in every position it applies to, not in the position it was asked for. Typing and inference, references, spread, scope: each holds everywhere or it holds nowhere, because a user cannot depend on a rule with exceptions. Before handing back, list the positions the feature does not yet reach, as ignored tests with reasons, never silently.
 
 - `DFORM_CHECK_LOWER=1` (R-211, `program::check`) makes every `lower_stack` compare the program's lowering with the resolver's own output and panic at the first difference; run the suite with it set at each step of the migration, and it is deleted with the old path at the migration's end.
+
+- A test that parses the binary's stdout or stderr is a hack where a testable architecture and a unit test would do: output is a printer over events, so test the events and the printer separately. A process test is kept only for what only a process can prove: an exit code, a signal, a pty, a provider launched.
