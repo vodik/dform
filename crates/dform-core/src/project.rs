@@ -373,7 +373,7 @@ pub struct Waits {
     /// `[stacks.NAME] wait`, with the stack's name.
     pub stack: Option<(String, std::time::Duration)>,
     /// `[providers.NAME] wait` by the provider's name, `[io] wait` as
-    /// `io` (`Manifest::provider_waits`).
+    /// `read` (`Manifest::provider_waits`).
     pub providers: BTreeMap<String, std::time::Duration>,
     /// `[apply] wait`.
     pub apply: Option<std::time::Duration>,
@@ -1647,8 +1647,12 @@ mod tests {
         let e = manifest("[providers]\nfake = { source = \"fake\", timeout = \"soon\" }\n")
             .unwrap_err();
         assert!(e.to_string().contains("[providers.fake] timeout"), "{e}");
-        let e = manifest("[stacks.app]\nwait = \"30m\"\n").unwrap_err();
-        assert!(e.to_string().contains("wait"), "{e}");
+        // A stack's `wait` is over the project's `[apply] wait` (R-201).
+        let m = manifest("[apply]\nwait = \"5m\"\n\n[stacks.app]\nwait = \"30m\"\n").unwrap();
+        let app = (Duration::from_secs(1800), WaitSetting::Stack("app".into()));
+        assert_eq!(m.waits("app").budget(None), app);
+        let other = (Duration::from_secs(300), WaitSetting::Apply);
+        assert_eq!(m.waits("other").budget(None), other);
         // The ssh provider is gone (R-153): its wait is `[io] wait`.
         let e = manifest("[providers]\nssh = { wait = \"10m\" }\n").unwrap_err();
         assert!(e.to_string().contains("[io] wait"), "{e}");
