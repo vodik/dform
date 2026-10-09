@@ -2,7 +2,10 @@
 //! tailnet's policy file (`tailscale.acl`), its auth keys
 //! (`tailscale.auth_key`), its DNS settings (`tailscale.dns`) and the
 //! devices on it (`tailscale.device`), and its users as a data source
-//! (`tailscale.user`), over the Tailscale API v2. Written with the SDK
+//! (`tailscale.user`), over the Tailscale API v2. The devices are also a
+//! data source under the type's name (`tailscale.device(tailnet, ..)`,
+//! R-196): every device the tailnet lists, adopted or not, where `d in
+//! tailscale.device` is the program's own. Written with the SDK
 //! (`dform-sdk`): the schema is the types' derives, Plan the SDK's, every
 //! request the host's.
 //!
@@ -57,6 +60,23 @@ impl Tailscale {
             .insert(id.to_string(), key);
     }
 
+    /// The tailnet a data source `pred` is asked of, its one input: the
+    /// one the provider is configured for.
+    fn asked<'a>(&self, pred: &str, inputs: &'a [Json]) -> Result<&'a str> {
+        let [Json::String(tailnet)] = inputs else {
+            return Err(Error::Refused(format!(
+                "{pred} is asked with its tailnet, a string, bound"
+            )));
+        };
+        if tailnet != self.client.tailnet() {
+            return Err(Error::Refused(format!(
+                "{pred}({tailnet:?}, ..): the provider is configured for the tailnet {:?}",
+                self.client.tailnet()
+            )));
+        }
+        Ok(tailnet)
+    }
+
     fn held(&self, id: &str) -> Option<String> {
         self.keys
             .lock()
@@ -84,6 +104,7 @@ impl Provider for Tailscale {
     fn query(&self, pred: &str, inputs: &[Json]) -> Result<Vec<Vec<Json>>> {
         match pred {
             user::USER => user::rows(self, inputs),
+            device::TYPE => device::rows(self, inputs),
             _ => Err(Error::Refused(format!(
                 "provider tailscale answers no extern {pred}"
             ))),
@@ -112,8 +133,10 @@ pub fn provider() -> Typed<Tailscale> {
         .resource::<dns::Dns>()
         .resource::<device::Device>()
         .facts_text(&format!(
-            "extern_decl({:?}, \"+tailnet, -login, -role\")\n{}",
+            "extern_decl({:?}, \"+tailnet, -login, -role\")\nextern_decl({:?}, {:?})\n{}",
             user::USER,
+            device::TYPE,
+            device::LISTING,
             config::SETTINGS
                 .iter()
                 .map(|s| format!("provider_setting(\"tailscale\", {s:?}, [\"connection\"])"))
@@ -143,6 +166,7 @@ mod tests {
             r#"type_attr("tailscale.device", "addresses", "list(ip)", ["computed"])"#,
             r#"type_attr("tailscale.device", "last_seen", "time", ["computed"])"#,
             r#"extern_decl("tailscale.user", "+tailnet, -login, -role")"#,
+            r#"extern_decl("tailscale.device", "+tailnet, -hostname, -id, -addresses, -tags, -os, -authorized, -last_seen")"#,
         ] {
             assert!(facts.contains(line), "{line}\n{facts}");
         }

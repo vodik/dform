@@ -13,6 +13,11 @@
 //! `os`, `last_seen`). A delete removes the device from the tailnet.
 //! Health is the device's own: on the tailnet and connected, waiting for
 //! approval, or not connected.
+//!
+//! The tailnet's devices are also a data source under the type's name
+//! (R-196), [`LISTING`]: every device listed, adopted or not, as a row a
+//! deny reads (`not { tailscale.device(_, "k3s-2", ..) }`), where `d in
+//! tailscale.device` ranges over the devices the program adopts.
 
 use crate::client::Body;
 use crate::{Tailscale, at};
@@ -22,6 +27,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value as Json, json};
 
 pub const TYPE: &str = "tailscale.device";
+
+/// The data source's columns, the tailnet asked of.
+pub const LISTING: &str =
+    "+tailnet, -hostname, -id, -addresses, -tags, -os, -authorized, -last_seen";
 
 /// A device.
 #[derive(Resource, Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
@@ -103,6 +112,28 @@ pub fn list(p: &Tailscale) -> Result<Vec<Json>> {
         .client
         .call("GET", &p.client.tailnet_path("/devices"), Body::None)?;
     Ok(a.body["devices"].as_array().cloned().unwrap_or_default())
+}
+
+/// `tailscale.device(+tailnet, -hostname, -id, -addresses, -tags, -os,
+/// -authorized, -last_seen)`: a row of every device the tailnet lists.
+pub fn rows(p: &Tailscale, inputs: &[Json]) -> Result<Vec<Vec<Json>>> {
+    let tailnet = p.asked(TYPE, inputs)?;
+    Ok(list(p)?
+        .iter()
+        .map(|d| {
+            let d = from_api(d, Vec::new());
+            vec![
+                json!(tailnet),
+                json!(d.hostname),
+                json!(d.id.unwrap_or_default()),
+                json!(d.addresses),
+                json!(d.tags.unwrap_or_default()),
+                json!(d.os.unwrap_or_default()),
+                json!(d.authorized.unwrap_or(false)),
+                json!(d.last_seen.unwrap_or_default()),
+            ]
+        })
+        .collect())
 }
 
 /// The one device whose hostname is `hostname`: none is `None`, two are

@@ -5,23 +5,13 @@
 
 use crate::Tailscale;
 use crate::client::Body;
-use dform_sdk::typed::{Error, Result};
+use dform_sdk::typed::Result;
 use serde_json::{Value as Json, json};
 
 pub const USER: &str = "tailscale.user";
 
 pub fn rows(p: &Tailscale, inputs: &[Json]) -> Result<Vec<Vec<Json>>> {
-    let [Json::String(tailnet)] = inputs else {
-        return Err(Error::Refused(format!(
-            "{USER} is asked with its tailnet, a string, bound"
-        )));
-    };
-    if tailnet != p.client.tailnet() {
-        return Err(Error::Refused(format!(
-            "{USER}({tailnet:?}, ..): the provider is configured for the tailnet {:?}",
-            p.client.tailnet()
-        )));
-    }
+    let tailnet = p.asked(USER, inputs)?;
     let a = p
         .client
         .call("GET", &p.client.tailnet_path("/users"), Body::None)?;

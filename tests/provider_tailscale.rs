@@ -606,26 +606,51 @@ fn the_users_are_a_data_source() {
     assert!(!r.stderr.contains("alice@example.com"), "{}", r.stderr);
 }
 
-/// The devices the tailnet lists, adopted or not, as rows a policy reads:
-/// a node that did not join is a deny.
+/// The devices the tailnet lists, adopted or not, as rows a policy reads
+/// (R-196, the data source under the type's name): a node that did not
+/// join is a deny. `d in tailscale.device` is still the program's own
+/// devices: none here, though the tailnet lists one.
 #[test]
-#[ignore = "R-196 is open: whether `d in tailscale.device` lists what the provider sees, managed \
-            or not (the reviewer's recommendation), or a table under another name; the provider \
-            lists devices (`device::list`) and answers no inventory yet"]
 fn a_node_not_on_the_tailnet_is_a_deny() {
     let server = Server::start(TAILNET);
     server.add_device("k3s-1");
     let s = project(
         "ts-listing",
         &server,
-        "deny \"k3s-2 is not on the tailnet\" where not any(d.hostname == \"k3s-2\" for d in tailscale.device)\n",
+        &format!(
+            "deny \"k3s-2 is not on the tailnet\" where not {{ tailscale.device(\"{TAILNET}\", \"k3s-2\", _, _, _, _, _, _) }}\n\
+             deny \"${{d}} is adopted\" where d in tailscale.device\n"
+        ),
     );
     let r = dform(&s, &["plan", "main.df"]).failure();
     assert!(
-        r.stderr.contains("k3s-2 is not on the tailnet"),
+        r.stderr.contains("- k3s-2 is not on the tailnet\n") && !r.stderr.contains("is adopted"),
         "{}",
         r.stderr
     );
     server.add_device("k3s-2");
     dform(&s, &["plan", "main.df"]).success();
+}
+
+/// The listing read with the rest of its columns left out, as a pattern's
+/// rest elsewhere is written.
+#[test]
+#[ignore = "R-196: `..` in a relation's arguments is not a rest yet (\"`..` is a spread\"): \
+            each column is written, `_` for the ones not read; the resolver's to lift"]
+fn the_listing_reads_with_a_rest() {
+    let server = Server::start(TAILNET);
+    server.add_device("k3s-1");
+    let s = project(
+        "ts-listing-rest",
+        &server,
+        &format!(
+            "deny \"k3s-2 is not on the tailnet\" where not {{ tailscale.device(\"{TAILNET}\", \"k3s-2\", ..) }}\n"
+        ),
+    );
+    let r = dform(&s, &["plan", "main.df"]).failure();
+    assert!(
+        r.stderr.contains("- k3s-2 is not on the tailnet\n"),
+        "{}",
+        r.stderr
+    );
 }
