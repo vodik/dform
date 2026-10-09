@@ -73,7 +73,9 @@ struct World {
     split: BTreeMap<String, Vec<String>>,
     users: Vec<Json>,
     seen: Vec<Seen>,
-    next: u64,
+    /// The last key's and the last device's number.
+    keys_made: u64,
+    devices_made: u64,
 }
 
 pub struct Server {
@@ -125,7 +127,8 @@ impl Server {
                 json!({"id": "u2", "loginName": "alice@example.com", "role": "member"}),
             ],
             seen: Vec::new(),
-            next: 0,
+            keys_made: 0,
+            devices_made: 0,
         }));
         let w = world.clone();
         std::thread::spawn(move || {
@@ -241,8 +244,8 @@ impl Server {
 
 impl World {
     fn add_device(&mut self, hostname: &str, tags: Json, authorized: bool) -> String {
-        self.next += 1;
-        let n = self.next;
+        self.devices_made += 1;
+        let n = self.devices_made;
         let id = format!("n{n}FakeDevCNTRL");
         let suffix = match n {
             1 => String::new(),
@@ -543,9 +546,9 @@ fn tailnet(
             if expiry > 90 * 86400 {
                 return refuse(400, "expirySeconds is greater than 90 days");
             }
-            w.next += 1;
-            let id = format!("k{}FakeKeyCNTRL", w.next);
-            let key = format!("tskey-auth-{id}-fakesecret{}", w.next * 7919);
+            w.keys_made += 1;
+            let id = format!("k{}FakeKeyCNTRL", w.keys_made);
+            let key = format!("tskey-auth-{id}-fakesecret{}", w.keys_made * 7919);
             let meta = json!({
                 "id": id,
                 "description": b["description"],
