@@ -314,8 +314,12 @@ fn a_host_or_a_file_not_there_yet_is_waited_on() {
     assert!(r.stderr.contains("waiting on "), "{}", r.stderr);
     // The location as the program reads it (R-153).
     assert!(r.stderr.contains("ssh://"), "{}", r.stderr);
-    assert!(r.stderr.contains("waited 1s on "), "{}", r.stderr);
-    assert!(r.stderr.contains("still unknown"), "{}", r.stderr);
+    assert!(
+        r.stderr
+            .contains(" not reached in 1s (`[io] wait` in dform.toml)"),
+        "{}",
+        r.stderr
+    );
 
     // The host answers; the kubeconfig is not written yet.
     let _sshd = Sshd::start(&bin, &s, port, HOST_A);

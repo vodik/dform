@@ -28,6 +28,9 @@ pub(super) struct Apply {
     pub(super) yes: bool,
     /// `--allow-empty`: what the plan may empty without asking (R-80).
     pub(super) allow_empty: Vec<String>,
+    /// `--wait-timeout`: how long a tick waits on a value not reached
+    /// yet, over dform.toml's (R-201).
+    pub(super) wait_timeout: Option<std::time::Duration>,
     /// What each change of the printed plan says of why.
     pub(super) why: report::Why,
     /// `destroy`: the deployment is removed (R-149).
@@ -65,6 +68,7 @@ impl Apply {
             approval: None,
             yes: true,
             allow_empty: Vec::new(),
+            wait_timeout: None,
             why: report::Why::None,
             destroy: false,
             new_master: false,

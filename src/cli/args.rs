@@ -321,6 +321,13 @@ pub(super) enum Run {
         /// `[stacks.NAME] allow_empty` names them for every apply.
         #[arg(long = "allow-empty", value_name = "RULE")]
         allow_empty: Vec<String>,
+        /// How long a tick waits on a value the world has not reached yet
+        /// (a rollout's `status.availableReplicas`, a Job's, an extern's
+        /// "not yet") before the apply stops, exit 1 (R-201): `90s`, `10m`.
+        /// Over dform.toml's `[stacks.NAME] wait`, each provider's and
+        /// `[apply] wait` (10m by default).
+        #[arg(long = "wait-timeout", value_name = "DURATION", value_parser = wait_timeout)]
+        wait_timeout: Option<std::time::Duration>,
         /// Take the master this run has (`RANDOM_MASTER`, a restored or a
         /// new key file) though state was applied with another, or make
         /// one where the key file is missing: every `random.*` value and
@@ -351,6 +358,10 @@ pub(super) enum Run {
         /// Destroy without asking.
         #[arg(long = "yes", short = 'y')]
         yes: bool,
+        /// How long a tick waits on a value not reached yet before the
+        /// destroy stops, as `apply --wait-timeout` (R-201).
+        #[arg(long = "wait-timeout", value_name = "DURATION", value_parser = wait_timeout)]
+        wait_timeout: Option<std::time::Duration>,
         #[command(flatten)]
         why: Ladder,
     },
@@ -993,6 +1004,13 @@ impl Cli {
     }
 }
 
+/// `--wait-timeout DURATION` (R-201): as dform.toml writes a wait.
+fn wait_timeout(s: &str) -> std::result::Result<std::time::Duration, String> {
+    crate::store::parse_duration(s)
+        .filter(|d| !d.is_zero())
+        .ok_or_else(|| format!("{s:?} is not a duration: `500ms`, `30s` or `10m`"))
+}
+
 /// `apply` with no target applies the project: every stack under the
 /// working directory, in dependency order, each confirmed on its own;
 /// `None` when there is one.
@@ -1042,6 +1060,7 @@ impl From<Run> for (Cmd, Target) {
                 approval,
                 yes,
                 allow_empty,
+                wait_timeout,
                 new_master,
                 why,
             } => (
@@ -1053,6 +1072,7 @@ impl From<Run> for (Cmd, Target) {
                     approval,
                     yes,
                     allow_empty,
+                    wait_timeout,
                     why: why.level(),
                     destroy: false,
                     new_master,
@@ -1065,6 +1085,7 @@ impl From<Run> for (Cmd, Target) {
                 parallel,
                 approval,
                 yes,
+                wait_timeout,
                 why,
             } => (
                 Cmd::Apply(Apply {
@@ -1075,6 +1096,7 @@ impl From<Run> for (Cmd, Target) {
                     approval,
                     yes,
                     allow_empty: Vec::new(),
+                    wait_timeout,
                     why: why.level(),
                     destroy: true,
                     new_master: false,

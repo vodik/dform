@@ -41,8 +41,9 @@ pub(super) struct Ticks<'a, 'h> {
     resumed: Option<state::InFlight>,
     /// Chaos `stop-after`: the executor's, counted across the run's ticks.
     stop_after: Option<std::cell::Cell<usize>>,
-    /// How long a tick waits on an open null (R-122), by provider.
-    waits: BTreeMap<String, std::time::Duration>,
+    /// How long a tick waits on an open null (R-122, R-201): the flag's,
+    /// the stack's, by provider, the project's.
+    waits: crate::project::Waits,
     /// A plan file or an approval applies only the ticks whose addresses
     /// the plan it approves named (R-30); `--yes` answers every question
     /// (R-122).
@@ -114,16 +115,17 @@ impl<'a, 'h> Ticks<'a, 'h> {
         session: &'a mut Option<Session>,
         st: state::State,
     ) -> Result<Ticks<'a, 'h>> {
-        // How long a tick waits on an open null (R-122): the `wait` of the
-        // provider that answers it, as dform.toml sets it (a built-in
-        // extern's by its `[providers.NAME]` table), else 10m; not its
-        // calls' `timeout`.
-        let waits = located
-            .loaded
-            .manifest
-            .as_ref()
-            .map(|m| m.provider_waits())
-            .unwrap_or_default();
+        // How long a tick waits on an open null (R-122, R-201): as the
+        // command line and dform.toml set it; not its calls' `timeout`.
+        let waits = crate::project::Waits {
+            flag: args.wait_timeout,
+            ..located
+                .loaded
+                .manifest
+                .as_ref()
+                .map(|m| m.waits(&located.loaded.stack))
+                .unwrap_or_default()
+        };
         Ok(Ticks {
             args,
             cx,
@@ -1549,7 +1551,7 @@ impl<'a, 'h> Ticks<'a, 'h> {
         // Said as printed (R-111); the audit log keeps the labels.
         let names: Vec<String> = on.iter().map(|l| report::attribute_label(l)).collect();
         let labels: Vec<String> = on.iter().map(|l| ir::label(l)).collect();
-        let budget = self.wait_budget(&on);
+        let (budget, setting) = self.wait_budget(&on);
         let mut w = crate::progress::Wait::new();
         // On a terminal, the wait is one line counting up (R-127);
         // elsewhere its lines say it every 10s.
@@ -1601,33 +1603,35 @@ impl<'a, 'h> Ticks<'a, 'h> {
         self.persist()?;
         crate::interrupt::check()?;
         bail!(
-            "apply stopped at tick {tick}: waited {} on {}, still unknown (the provider's \
-             `wait` in dform.toml); state is consistent: run apply again to wait again",
+            "apply stopped at tick {tick}: {} not reached in {} ({setting}); state is \
+             consistent: run apply again to wait again",
+            names.join(", "),
             crate::plugin::policy::show(budget),
-            names.join(", ")
         );
     }
 
-    /// How long a tick waits on the nulls `on` (R-122): the longest `wait`
-    /// of the providers that answer them, as dform.toml sets it (a
-    /// built-in extern's by its `[providers.NAME]` table), else 10m; not
-    /// its calls' `timeout`.
-    fn wait_budget(&self, on: &[String]) -> std::time::Duration {
-        let backend = self.backend();
+    /// How long a tick waits on the nulls `on` (R-122, R-201), and the
+    /// setting that says so: `--wait-timeout`, else the stack's `wait`,
+    /// else the longest `wait` of the providers that answer them (a
+    /// built-in extern's by its `[providers.NAME]` table), else `[apply]
+    /// wait`, else 10m; not its calls' `timeout`.
+    fn wait_budget(&self, on: &[String]) -> (std::time::Duration, crate::project::WaitSetting) {
+        let (backend, providers) = (self.backend(), &self.waits.providers);
+        let provider = |l: &String| {
+            let (t, _) = crate::value::null_owner(l)?;
+            let serving = providers.keys().find(|n| backend.serves(n, &t));
+            serving
+                .or_else(|| {
+                    providers
+                        .get_key_value(t.split_once('.')?.0)
+                        .map(|(n, _)| n)
+                })
+                .map(String::as_str)
+        };
         on.iter()
-            .map(|l| {
-                let set = || {
-                    let (t, _) = crate::value::null_owner(l)?;
-                    let serving = self.waits.iter().find(|(n, _)| backend.serves(n, &t));
-                    match serving {
-                        Some((_, d)) => Some(*d),
-                        None => self.waits.get(t.split_once('.')?.0).copied(),
-                    }
-                };
-                set().unwrap_or(crate::project::WAIT)
-            })
+            .map(|l| self.waits.budget(provider(l)))
             .max()
-            .unwrap_or_default()
+            .unwrap_or_else(|| self.waits.budget(None))
     }
 
     /// The boundary. The held deformations come back as facts with the

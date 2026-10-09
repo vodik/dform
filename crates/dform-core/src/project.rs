@@ -216,6 +216,9 @@ pub struct Manifest {
     /// `[secrets]`: who holds each deployment's master (R-164).
     #[serde(default)]
     pub secrets: SecretsTable,
+    /// `[apply]`: how an apply runs, for every stack (R-201).
+    #[serde(default)]
+    pub apply: ApplyTable,
     /// `[files]`, `[io]`'s name before R-155: an error naming `[io]`.
     #[serde(default)]
     files: Option<toml::Value>,
@@ -283,6 +286,16 @@ pub struct IoTable {
     pub credentials: BTreeMap<String, String>,
 }
 
+/// `[apply]`: how an apply runs, for every stack of the project (R-201).
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ApplyTable {
+    /// How long a tick waits on a value not reached yet whose provider's
+    /// table says no `wait` (`10m`, [`WAIT`]): a rollout, a Job, a host
+    /// booting. Past it the apply stops, exit 1.
+    pub wait: Option<String>,
+}
+
 /// `[secrets]`: how each deployment's master is kept (R-164,
 /// `crate::custody`, docs/reference.md "Secrets"). Without it the master
 /// is a key file beside the state, which only a local backend may hold.
@@ -347,6 +360,73 @@ pub enum ProviderEntry {
 /// How long a tick waits on a value its provider answers "not yet"
 /// unless dform.toml says (`[providers.NAME] wait`, R-122).
 pub const WAIT: std::time::Duration = std::time::Duration::from_secs(600);
+
+/// How long a stack's apply waits on a value not reached yet (R-122,
+/// R-201), each setting as dform.toml and the command line give it. The
+/// run's flag wins, then the stack's, then the `wait` of the provider
+/// that answers the value, then the project's `[apply] wait`, then
+/// [`WAIT`].
+#[derive(Debug, Clone, Default)]
+pub struct Waits {
+    /// `--wait-timeout`.
+    pub flag: Option<std::time::Duration>,
+    /// `[stacks.NAME] wait`, with the stack's name.
+    pub stack: Option<(String, std::time::Duration)>,
+    /// `[providers.NAME] wait` by the provider's name, `[io] wait` as
+    /// `io` (`Manifest::provider_waits`).
+    pub providers: BTreeMap<String, std::time::Duration>,
+    /// `[apply] wait`.
+    pub apply: Option<std::time::Duration>,
+}
+
+/// The setting a wait's budget comes from: what the stop names, so the
+/// operator knows what to change.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum WaitSetting {
+    Flag,
+    Stack(String),
+    Provider(String),
+    Apply,
+    Default,
+}
+
+impl std::fmt::Display for WaitSetting {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let io = crate::files::READ.split('.').next().unwrap_or_default();
+        match self {
+            WaitSetting::Flag => write!(f, "`--wait-timeout`"),
+            WaitSetting::Stack(n) => write!(f, "`[stacks.{n}] wait` in dform.toml"),
+            WaitSetting::Provider(n) if n == io => write!(f, "`[io] wait` in dform.toml"),
+            WaitSetting::Provider(n) => write!(f, "`[providers.{n}] wait` in dform.toml"),
+            WaitSetting::Apply => write!(f, "`[apply] wait` in dform.toml"),
+            WaitSetting::Default => write!(
+                f,
+                "the default; `[apply] wait` in dform.toml or `--wait-timeout` sets it"
+            ),
+        }
+    }
+}
+
+impl Waits {
+    /// The budget of a value the provider `provider` answers (by its key
+    /// in [`Waits::providers`], `None` when no table of it says), and the
+    /// setting it comes from.
+    pub fn budget(&self, provider: Option<&str>) -> (std::time::Duration, WaitSetting) {
+        if let Some(d) = self.flag {
+            return (d, WaitSetting::Flag);
+        }
+        if let Some((n, d)) = &self.stack {
+            return (*d, WaitSetting::Stack(n.clone()));
+        }
+        if let Some((n, d)) = provider.and_then(|p| self.providers.get_key_value(p)) {
+            return (*d, WaitSetting::Provider(n.clone()));
+        }
+        match self.apply {
+            Some(d) => (d, WaitSetting::Apply),
+            None => (WAIT, WaitSetting::Default),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -480,6 +560,9 @@ pub struct StackTable {
     /// the project's `[secrets]` (the stack is the unit of custody: its
     /// team).
     pub secrets: Option<SecretsTable>,
+    /// How long its apply's tick waits on a value not reached yet, over
+    /// every provider's `wait` and `[apply] wait` (R-201).
+    pub wait: Option<String>,
 }
 
 /// The settings a stack table holds, as text: a term's (`backend`,
@@ -521,6 +604,7 @@ impl Defaults {
             config: self.config.clone(),
             allow_empty: Vec::new(),
             secrets: None,
+            wait: None,
         }
     }
 }
@@ -731,6 +815,21 @@ impl Manifest {
             .collect()
     }
 
+    /// What dform.toml says of how long the stack `stack`'s apply waits
+    /// (R-201): its own `wait`, each provider's, the project's.
+    pub fn waits(&self, stack: &str) -> Waits {
+        let d = |v: &Option<String>| v.as_deref().and_then(crate::store::parse_duration);
+        Waits {
+            flag: None,
+            stack: self
+                .stacks
+                .get(stack)
+                .and_then(|t| Some((stack.to_string(), d(&t.wait)?))),
+            providers: self.provider_waits(),
+            apply: d(&self.apply.wait),
+        }
+    }
+
     /// The s3 buckets the backends name (`[defaults]`'s and each
     /// stack's), with their endpoint and region: what an `s3://BUCKET/KEY`
     /// location is read with (R-153). A bucket named by a key's value
@@ -874,6 +973,7 @@ impl Checking<'_> {
             self.provider(name, p)?;
         }
         self.tables()?;
+        self.waits()?;
         self.defaults()?;
         self.names()
     }
@@ -1065,6 +1165,26 @@ impl Checking<'_> {
                  value",
                     at(&format!("{table} backend")),
                     b.get_ref()
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// `[apply] wait` and each `[stacks.NAME] wait`: a duration.
+    fn waits(&self) -> Result<()> {
+        let m = self.m;
+        let stacks = m
+            .stacks
+            .iter()
+            .map(|(n, t)| (format!("[stacks.{n}] wait"), &t.wait));
+        for (key, v) in std::iter::once(("[apply] wait".to_string(), &m.apply.wait)).chain(stacks) {
+            if let Some(v) = v
+                && crate::store::parse_duration(v).is_none_or(|d| d.is_zero())
+            {
+                bail!(
+                    "{} = {v:?}: a duration, `500ms`, `30s` or `10m`",
+                    self.at(&key)
                 );
             }
         }
