@@ -5,8 +5,10 @@
 use super::chains::{
     FOLLOW, contribution_focus, field_of, holds, passed_cell, placeholder, rank_of,
 };
+use super::compress::Compress;
 use super::statement::{Cx, collapse, is_check, statement_at};
-use super::{Compress, Focus, Printer, Surface, Walk};
+use super::surface::Surface;
+use super::{Focus, Printer};
 use crate::ast::{Atom, RuleStmt, Term};
 use crate::circuit::{Circuit, Fact, Leaf, NodeId, View};
 use crate::engine;
@@ -149,17 +151,6 @@ pub(super) fn base_parts(span: &str) -> (&str, Option<&str>) {
 }
 
 impl Printer<'_> {
-    pub(super) fn surface<'a>(&'a self, rules: &'a [RuleStmt]) -> Surface<'a, 'a> {
-        Surface {
-            p: self,
-            rules,
-            w: Walk::default(),
-            files: BTreeMap::new(),
-            list_keys: Default::default(),
-            sites: Default::default(),
-        }
-    }
-
     /// Where resource `addr` is derived: the site of its `want`. `None`
     /// when the program does not want it.
     pub fn want_site(&self, rules: &[RuleStmt], addr: &Address) -> Option<Site> {
