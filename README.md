@@ -392,8 +392,10 @@ its items read as `config.x`. A module with resources is stamped once by
 its `use`, with its inputs in the block, `use k3s { name = "k8s-${env}",
 agents }`. A component is a type with inputs and outputs, made by
 `resource network blue { cidr = "10.1.0.0/16" }`, and its resources
-stay visible to policy. Scope is lexical. A module reads only what its
-file declares and takes what it needs from its user as an input, `use
+stay visible to policy. Names are lexical and types are global: a
+module reads only what its file declares, while `r in aws.subnet`
+ranges over every subnet in the deployment, whichever file made it. A
+module takes what it needs from its user as an input, `use
 baseline { env }`. In a component, `super.region` is the name one scope
 out. A declaration with a clause exists only where it holds, `use
 backups { .. } where backup`.
