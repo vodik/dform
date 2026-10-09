@@ -1,7 +1,7 @@
-# Externs are asked once their + arguments are ground: never negated, never
-# in a recursive rule, never stated by the program. What binds a + argument
-# may be written after the extern (R-10): `reach(a, b)` below is asked once
-# `start(a)` binds `a`.
+# Externs are asked once their + arguments are ground: never in a recursive
+# rule, never stated by the program; under `not` (`missing`) as elsewhere.
+# What binds a + argument may be written after the extern (R-10):
+# `reach(a, b)` below is asked once `start(a)` binds `a`.
 extern next.hop(+from, -to)
 
 paths("a.txt")

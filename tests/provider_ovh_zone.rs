@@ -134,11 +134,10 @@ fn the_plan_file_records_the_zone() {
     assert_eq!(server.records().len(), 1);
 }
 
-/// The deny as the ticket writes it, `not` before the table itself.
+/// The deny as the ticket writes it, `not` before the table itself: the
+/// absence `not { ovh.zone(..) }` reads, and the form `dform fmt` writes
+/// the block in.
 #[test]
-#[ignore = "R-196: a data source under a bare `not` is refused (externs::check: `ovh.zone \
-            under not`, \"its absence is not known\") though `not { ovh.zone(..) }` reads the \
-            same absence; lifting it is a decision, handed back"]
 fn a_bare_not_over_the_table_is_the_deny() {
     let server = Server::start();
     server.hosting(&["example.com"]);
@@ -155,4 +154,13 @@ fn a_bare_not_over_the_table_is_the_deny() {
         "{}",
         r.stderr
     );
+
+    let s = project(
+        "ovh-zone-bare-held",
+        &server,
+        "example.com",
+        "deny \"the zone ${zone} is not hosted on this account\" where not ovh.zone(zone, _, _)\n",
+    );
+    let r = dform(&s, &server, &["plan", "main.df"]).success();
+    assert!(!r.stderr.contains("not hosted"), "{}", r.stderr);
 }

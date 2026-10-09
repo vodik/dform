@@ -4,15 +4,18 @@
 //! An extern is a predicate its provider answers on demand: a body literal
 //! `p(t1, ..., tn)` asks once its `+` arguments are ground, and the
 //! answers are facts of `p` with those inputs. The literals before it in
-//! the body bind the inputs; an extern under `not`, in a recursive rule, or
-//! defined by a rule is a compile error.
+//! the body bind the inputs; an extern in a recursive rule or defined by a
+//! rule is a compile error. Under `not` it is asked as it is read
+//! positively and binds nothing: `not T(..)` holds when the answer has no
+//! row that matches, as `not { T(..) }` does.
 //!
 //! Evaluation is by rounds: evaluate with the answers known so far; find
 //! every call the rules demand (the body before each extern literal, over
 //! the facts); ask the new ones; evaluate again until no call is new. An
-//! extern is not in a cycle and not negated, so an answer never retracts
-//! another round's demand: the last round is the fixpoint with every answer
-//! it reads. Answers are recorded in the plan file (apply asks nothing the
+//! extern is not in a cycle, so the last round is the fixpoint with every
+//! answer it reads; a call an earlier round demanded before a negated
+//! answer came is asked, but only the last round's demand is read or
+//! recorded. Answers are recorded in the plan file (apply asks nothing the
 //! plan already asked); nothing else keeps them. What must stay the same
 //! across runs is kept by `memo.first` (R-60, [`crate::memo`]), which the
 //! program writes where the value is read.
@@ -109,9 +112,10 @@ fn node(a: &Atom) -> String {
     }
 }
 
-/// The compile-time rules: an extern is not defined by a rule, not negated,
-/// not in a recursive rule, called with its arity, and its `+` arguments
-/// are bound by the literals before it.
+/// The compile-time rules: an extern is not defined by a rule, not in a
+/// recursive rule, called with its arity, and its `+` arguments are bound
+/// by the literals before it, under `not` as elsewhere (where it binds
+/// nothing).
 pub fn check(program: &Program, fns: &[ExternFn]) -> Result<()> {
     if fns.is_empty() {
         return Ok(());
@@ -160,15 +164,7 @@ pub fn check(program: &Program, fns: &[ExternFn]) -> Result<()> {
         let mut bound: BTreeSet<String> = BTreeSet::new();
         for l in body {
             match l {
-                Lit::Not(a) if by.contains_key(a.pred.as_str()) => diags.push(
-                    Diagnostic::error(a.span, format!("{} under `not`", called(&a.pred)))
-                        .with_note(format!(
-                            "{} answers what exists; its absence is not known, so it cannot be \
-                             negated",
-                            called(&a.pred)
-                        )),
-                ),
-                Lit::Pos(a) if by.contains_key(a.pred.as_str()) => {
+                Lit::Pos(a) | Lit::Not(a) if by.contains_key(a.pred.as_str()) => {
                     let f = by[a.pred.as_str()];
                     if a.args.len() != f.args.len() {
                         diags.push(Diagnostic::error(
@@ -230,7 +226,10 @@ pub fn check(program: &Program, fns: &[ExternFn]) -> Result<()> {
                             program_name(p)
                         )));
                     }
-                    a.args.iter().for_each(|t| vars(t, &mut bound));
+                    // Under `not` it binds nothing.
+                    if let Lit::Pos(_) = l {
+                        a.args.iter().for_each(|t| vars(t, &mut bound));
+                    }
                 }
                 Lit::Pos(a) => a.args.iter().for_each(|t| vars(t, &mut bound)),
                 Lit::Eq(x, y) => {
@@ -315,7 +314,7 @@ impl<'a> Externs<'a> {
         let mut sites = Vec::new();
         for (_, body, _) in bodies(lowered) {
             for (i, l) in body.iter().enumerate() {
-                if let Lit::Pos(a) = l
+                if let Lit::Pos(a) | Lit::Not(a) = l
                     && names.contains(a.pred.as_str())
                 {
                     sites.push((body[..i].to_vec(), a.clone()));
