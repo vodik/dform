@@ -137,6 +137,30 @@ pub trait Provider: Sized + Send + 'static {
         ))
         .into())
     }
+
+    /// The rows of the data source `pred` (declared with
+    /// [`Typed::facts_text`]'s `extern_decl`) for its `+` columns'
+    /// `inputs`, in order: each a full row, every column.
+    fn query(&self, pred: &str, inputs: &[Json]) -> Result<Vec<Vec<Json>>> {
+        let _ = inputs;
+        Err(Error::Refused(format!(
+            "provider {} answers no extern {pred}",
+            Self::NAME
+        )))
+    }
+
+    /// The bytes of a sensitive computed value it holds (`held`: its type,
+    /// remote id and path), for the engine to reveal into the one call
+    /// that takes it (R-45). Asked only with the deployment's lease.
+    fn reveal(&self, held: &pb::Held) -> Result<Vec<u8>> {
+        Err(Error::Refused(format!(
+            "reveal {} {}#{}: provider {} holds no secret",
+            held.r#type,
+            held.remote,
+            held.path,
+            Self::NAME
+        )))
+    }
 }
 
 /// Where an Apply says how it goes (R-130), as its object's status
@@ -145,6 +169,7 @@ pub trait Provider: Sized + Send + 'static {
 pub struct Progress<'a> {
     address: String,
     sink: backend::Progress<'a>,
+    notes: Mutex<Vec<String>>,
 }
 
 impl<'a> Progress<'a> {
@@ -154,7 +179,22 @@ impl<'a> Progress<'a> {
         Progress {
             address: address.into(),
             sink,
+            notes: Mutex::new(Vec::new()),
         }
+    }
+
+    /// What the user should see of the call once it is done (a delete
+    /// that wrote a default rather than removing anything): the Apply's
+    /// `notes`, printed under the change.
+    pub fn note(&self, note: &str) {
+        self.notes
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(note.to_string());
+    }
+
+    fn into_notes(self) -> Vec<String> {
+        self.notes.into_inner().unwrap_or_else(|e| e.into_inner())
     }
 
     /// The object's status, as the API says it (`BUILD`): dform prints it
@@ -171,8 +211,21 @@ impl<'a> Progress<'a> {
 
 /// One resource type's lifecycle.
 pub trait Lifecycle<P: Provider>: Resource {
+    /// Why a program cannot create one, when the API makes them itself (a
+    /// device joins a tailnet; it is not posted): Plan refuses a create
+    /// with it, naming the address, and a program adopts them instead.
+    const NOT_CREATED: Option<&'static str> = None;
     /// The object `remote`, if it exists.
     fn read(p: &P, remote: &str) -> Result<Option<Self>>;
+    /// The remote id of the object a program adopts by `given`
+    /// (`adopt(r, "web-1")`): what state keeps and every later call is
+    /// sent. By default `given` is the id; a type adopted by a name that
+    /// is not its id finds the one object of that name here, and refuses
+    /// a name two objects have.
+    fn adopt(p: &P, given: &str) -> Result<String> {
+        let _ = p;
+        Ok(given.to_string())
+    }
     /// Create it; `key` is unique to this intended creation (pass it to
     /// an API that takes a client token). Its remote id and what it is.
     fn create(p: &P, desired: Self, key: &str, progress: &Progress) -> Result<(String, Self)>;
@@ -206,7 +259,9 @@ type Object = (Json, Json);
 
 /// One resource type, its type erased.
 trait Kind<P>: Send + Sync {
+    fn not_created(&self) -> Option<&'static str>;
     fn read(&self, p: &P, remote: &str) -> Result<Option<Json>>;
+    fn adopt(&self, p: &P, given: &str) -> Result<String>;
     fn create(
         &self,
         p: &P,
@@ -239,8 +294,16 @@ fn from_json<R: DeserializeOwned>(typ: &str, j: Json) -> Result<R> {
 }
 
 impl<P: Provider, R: Lifecycle<P> + 'static> Kind<P> for K<R> {
+    fn not_created(&self) -> Option<&'static str> {
+        R::NOT_CREATED
+    }
+
     fn read(&self, p: &P, remote: &str) -> Result<Option<Json>> {
         R::read(p, remote)?.map(|r| to_json(&r)).transpose()
+    }
+
+    fn adopt(&self, p: &P, given: &str) -> Result<String> {
+        R::adopt(p, given)
     }
 
     fn create(
@@ -330,6 +393,17 @@ impl<P: Provider> Typed<P> {
         self
     }
 
+    /// Schema facts beside the derives', as `.df` text: a data source's
+    /// `extern_decl(Pred, "+in, -out")` ([`Provider::query`] answers it)
+    /// and the settings a `use` block gives (`provider_setting`).
+    pub fn facts_text(mut self, facts: &str) -> Typed<P> {
+        self.facts.push_str(facts);
+        self.facts.push('\n');
+        self.schema = Schema::parse(&self.facts, P::NAME)
+            .unwrap_or_else(|e| panic!("the schema facts of {} do not parse: {e:#}", P::NAME));
+        self
+    }
+
     /// A document of `R` for `dform provider check` (its Schema's
     /// `examples`): `create` makes one, `update` is it changed in place,
     /// and `required` a path `create` sets that Plan refuses it without
@@ -371,8 +445,11 @@ impl<P: Provider> Typed<P> {
 
     /// `j`'s attributes split by the schema: computed (an Optional+Computed
     /// one too: the engine compares it only where the program sets it),
-    /// else configured. An absent (`null`) one is neither.
-    fn split(&self, typ: &str, j: Json) -> Object {
+    /// else configured. An absent (`null`) one is neither. A sensitive
+    /// computed value leaves as its label (`{"$secret": "T/NAME#P"}`), the
+    /// object at `name` holding it: the provider keeps the bytes, and
+    /// [`Provider::reveal`] answers them (R-45).
+    fn split(&self, typ: &str, name: &str, j: Json) -> Object {
         let computed: Vec<String> = self
             .schema
             .attrs
@@ -387,6 +464,12 @@ impl<P: Provider> Typed<P> {
                     continue;
                 }
                 if computed.contains(&k) {
+                    let v = match self.schema.is_sensitive(typ, &k) {
+                        true => dform_core::provider::secret_json(&dform_core::value::null_label(
+                            typ, name, &k,
+                        )),
+                        false => v,
+                    };
                     comp.insert(k, v);
                 } else {
                     attrs.insert(k, v);
@@ -407,6 +490,9 @@ impl<P: Provider> Typed<P> {
             name: r.name.clone(),
         };
         let k = self.kind(&addr.typ)?;
+        if let (None, Some(_), Some(why)) = (&prior, &desired, k.not_created()) {
+            return Err(Error::Refused(format!("plan {addr}: {why}")));
+        }
         if let Some(d) = &desired {
             if let Some(why) = self.schema.missing_required(&addr.typ, d) {
                 return Err(Error::Refused(format!("plan {addr}: {why}")));
@@ -459,50 +545,59 @@ impl<P: Provider> Typed<P> {
             .to_string(),
             sink,
         );
-        let progress = &progress;
         let found = |p: &P, remote: &str| -> Result<Json> {
             k.read(p, remote)?
                 .ok_or_else(|| Error::Refused(format!("{} {remote:?} does not exist", r.r#type)))
         };
+        let refuse_create = || match k.not_created() {
+            Some(why) => Err(Error::Refused(format!("apply {}: {why}", progress.address))),
+            None => Ok(()),
+        };
         let (remote, obj) = self.with(|p| match op {
             pb::Op::Create => {
+                refuse_create()?;
                 k.check(p, &desired)?;
-                k.create(p, desired, &r.idempotency_key, progress)
+                k.create(p, desired, &r.idempotency_key, &progress)
             }
             pb::Op::Update | pb::Op::Adopt => {
                 k.check(p, &desired)?;
-                let prior = found(p, &r.remote)?;
+                let remote = match op {
+                    pb::Op::Adopt => k.adopt(p, &r.remote)?,
+                    _ => r.remote.clone(),
+                };
+                let prior = found(p, &remote)?;
                 // `keep`: as Read answers it, else absent (`Provider::KEEP`).
                 for path in &r.keep {
                     if let Some(v) = dform_core::provider::get_path(&prior, path) {
                         dform_core::provider::set_path(&mut desired, path, v.clone());
                     }
                 }
-                let obj = k.update(p, &r.remote, prior, desired, progress)?;
-                Ok((r.remote.clone(), obj))
+                let obj = k.update(p, &remote, prior, desired, &progress)?;
+                Ok((remote, obj))
             }
             pb::Op::Delete => {
-                k.delete(p, &r.remote, progress)?;
+                k.delete(p, &r.remote, &progress)?;
                 Ok((String::new(), Json::Null))
             }
             pb::Op::Replace => {
+                refuse_create()?;
                 k.check(p, &desired)?;
                 if !r.create_first {
-                    k.delete(p, &r.remote, progress)?;
+                    k.delete(p, &r.remote, &progress)?;
                 }
-                k.create(p, desired, &r.idempotency_key, progress)
+                k.create(p, desired, &r.idempotency_key, &progress)
             }
             pb::Op::Unspecified | pb::Op::EndTick => {
                 Err(Error::Refused("an Apply call with no op".into()))
             }
         })?;
-        let (attrs, computed) = self.split(&r.r#type, obj);
+        let (attrs, computed) = self.split(&r.r#type, &r.name, obj);
         Ok(pb::ApplyResponse {
             remote,
             attrs: Some(wire::doc(&attrs)),
             computed: Some(wire::doc(&computed)),
             elapsed_ms: 0,
-            notes: Vec::new(),
+            notes: progress.into_notes(),
         })
     }
 
@@ -546,21 +641,25 @@ impl<P: Provider> Typed<P> {
             }
             Call::Schema(r) => Reply::Schema(pb::SchemaResponse {
                 facts: wire::schema_facts(&self.schema, &r).map_err(Error::from)?,
+                externs: self
+                    .schema
+                    .externs
+                    .values()
+                    .map(|e| pb::ExternDecl {
+                        pred: e.name.clone(),
+                        arity: e.args.len() as u32,
+                        input: e.args.iter().map(|a| a.input).collect(),
+                    })
+                    .collect(),
                 examples: self.examples.clone(),
                 ..pb::SchemaResponse::default()
             }),
-            Call::Query(r) => {
-                return Err(Error::Refused(format!(
-                    "provider {} answers no extern {}",
-                    P::NAME,
-                    r.pred
-                )));
-            }
+            Call::Query(r) => Reply::Query(self.query(r)?),
             Call::Read(r) => {
                 let k = self.kind(&r.r#type)?;
                 Reply::Read(match self.with(|p| k.read(p, &r.remote))? {
                     Some(j) => {
-                        let (attrs, computed) = self.split(&r.r#type, j);
+                        let (attrs, computed) = self.split(&r.r#type, &r.name, j);
                         pb::ReadResponse {
                             found: true,
                             attrs: Some(wire::doc(&attrs)),
@@ -576,7 +675,7 @@ impl<P: Provider> Typed<P> {
                 let k = self.kind(&r.r#type)?;
                 Reply::Import(match self.with(|p| k.read(p, &r.remote))? {
                     Some(j) => {
-                        let (attrs, computed) = self.split(&r.r#type, j);
+                        let (attrs, computed) = self.split(&r.r#type, &r.remote, j);
                         pb::ImportResponse {
                             found: true,
                             r#type: r.r#type,
@@ -588,19 +687,41 @@ impl<P: Provider> Typed<P> {
                     None => pb::ImportResponse::default(),
                 })
             }
-            // A typed provider keeps no secret for another to read.
+            // The engine's call alone, under the deployment's lease.
             Call::Reveal(r) => {
                 let h = r.held.unwrap_or_default();
-                return Err(Error::Refused(format!(
-                    "reveal {} {}#{}: provider {} holds no secret",
-                    h.r#type,
-                    h.remote,
-                    h.path,
-                    P::NAME
-                )));
+                if r.lease.is_empty() {
+                    return Err(Error::Refused(format!(
+                        "reveal {} {}#{}: refused without the deployment's lease (a reveal \
+                         is the engine's call)",
+                        h.r#type, h.remote, h.path
+                    )));
+                }
+                Reply::Reveal(pb::RevealResponse {
+                    value: self.with(|p| p.reveal(&h))?,
+                })
             }
             Call::Health(r) => Reply::Health(self.health(r)?),
         })
+    }
+
+    /// The rows of an extern, each value as the protocol has it.
+    fn query(&self, r: pb::QueryRequest) -> Result<Vec<pb::Row>> {
+        let inputs = r
+            .inputs
+            .iter()
+            .map(wire::from_doc)
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        let rows = self.with(|p| p.query(&r.pred, &inputs))?;
+        Ok(rows
+            .iter()
+            .map(|row| pb::Row {
+                values: row
+                    .iter()
+                    .map(|v| pb::Value::from(&dform_core::provider::json_to_value(v)))
+                    .collect(),
+            })
+            .collect())
     }
 
     /// Each object's health, as its type's [`Lifecycle::health`] judges
