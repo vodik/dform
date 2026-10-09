@@ -111,6 +111,8 @@ impl Lowerer<'_> {
         // A guarded provider (R-104): its settings, its account and its
         // start hold only while the clause does.
         let clause = self.clauses(&mut rc, n)?;
+        // A `use` binds no aggregate, as a copy's does not.
+        self.aggregate_in(&clause, self.span(n))?;
         let gathered = self.gather.as_mut().and_then(|g| g.take_clause());
         let mut body = clause.clone();
         let others = self.providers_named(n, &name)?;

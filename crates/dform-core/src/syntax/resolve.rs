@@ -2497,6 +2497,10 @@ impl<'u> Lowerer<'u> {
             return Err(Skip);
         }
         let guard = self.clauses(&mut rc, n)?;
+        // An input is declared where its clause holds, which every read of
+        // it repeats: a clause binds no aggregate there, as a resource's
+        // does not; a `let` binds it, read here.
+        self.aggregate_in(&guard, span)?;
         let guarded = self.clause_at(node(n, CLAUSE));
         if key && !guard.is_empty() {
             return self.error(
@@ -9974,6 +9978,29 @@ mod tests {
                 "__agg_0(A, count(X)) :- z(X), Path = \"t.csv\", table.csv.t(Path, At, A)",
             ]
         );
+    }
+
+    /// An aggregate is bound in the body of a rule, a check or a `let`
+    /// (R-59): an input's clause, which every read of the input repeats,
+    /// and a provider's `use` bind none, as a resource's and a copy's do
+    /// not; the help says where it is bound instead.
+    #[test]
+    fn an_inputs_and_a_providers_clause_bind_no_aggregate() {
+        let want = "an aggregate is bound in the body of a rule, a check or a `let`; bind it in \
+                    a `let` and read that here";
+        for src in [
+            "input region: string = \"eu\" where n = count(x), z(x), n > 1\nz(1)\n",
+            "input region: string = \"eu\" where n = count(x), z(x), n > 1\n\
+             input region: string = \"us\" where n = count(x), z(x), n <= 1\nz(1)\n",
+            "z(1)\nuse fake where n = count(x), z(x), n > 1\n",
+        ] {
+            let e = file_error(src);
+            assert!(e.contains(want), "{src}: {e}");
+        }
+        // Bound in a `let` and read there, the clause holds where it does.
+        let ok = "input region: string = \"eu\" where many\n\
+                  let many = true where n = count(x), z(x), n > 1\nz(1)\n";
+        parse_as(ok, true).unwrap_or_else(|e| panic!("{e:#}"));
     }
 
     /// Every form of copy is built as a `Copy` item (R-211 step 5) and
