@@ -4,8 +4,8 @@
 //! back what the resolver's `term` gave for the same term, byte for byte.
 
 use crate::ast::{Lit, Stmt, Term, TypeExpr, str_term};
-use crate::program::Program;
 use crate::program::node::*;
+use crate::program::{NodeId, Program};
 use std::collections::BTreeMap;
 
 /// The term `id` is, and the reads it hoists, in order.
@@ -34,6 +34,7 @@ impl<'p> Lowering<'p> {
     }
 
     pub(super) fn expr(&mut self, id: ExprId) -> Term {
+        self.terms_made(NodeId::Expr(id));
         let e = &self.program.exprs[id];
         match &e.kind {
             ExprKind::Lit(v) => Term::Val(v.clone()),
@@ -96,6 +97,14 @@ impl<'p> Lowering<'p> {
                 vec![self.expr(*item)],
             ),
             k => unreachable!("no builder makes {k:?} as a term before step 5"),
+        }
+    }
+
+    /// The helper statements the terms under `node` made, written before
+    /// its own.
+    pub(super) fn terms_made(&mut self, node: NodeId) {
+        if let Some(made) = self.program.terms_made.get(&node) {
+            self.helpers.extend(made.iter().cloned());
         }
     }
 

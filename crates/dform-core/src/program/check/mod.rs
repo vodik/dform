@@ -8,7 +8,7 @@
 //! the old path at the migration's end.
 
 mod clauses;
-pub use clauses::Shadow;
+pub use clauses::{clause, fold, literal};
 
 use super::{ItemId, ItemKind, Program};
 use crate::ast::{self, Atom, AttrDecl, Config, InputDecl, Lit, Span, Stmt, Term};
@@ -270,7 +270,8 @@ fn stmt(out: &mut String, s: &Stmt, depth: usize) {
     }
 }
 
-fn place(span: Span) -> String {
+/// Where `span` is, for a difference's statement.
+pub fn place(span: Span) -> String {
     diag::place(span).unwrap_or_else(|| "(compiler)".into())
 }
 

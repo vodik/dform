@@ -14,12 +14,14 @@ mod aggregate;
 mod clause;
 mod each;
 mod expr;
+mod gather;
 mod membership;
 mod negation;
 mod pattern;
 mod spread;
 
 pub use clause::{Form, Written};
+pub use gather::{Gather, Statement};
 
 use super::Program;
 use super::node::{Expr, ExprId, ExprKind, ItemId, Var, VarId};
@@ -52,6 +54,18 @@ impl<'p> Builder<'p> {
             vars: BTreeMap::new(),
             written,
         }
+    }
+
+    /// The builder of a statement whose variables built so far are
+    /// `vars`.
+    pub fn with_vars(mut self, vars: BTreeMap<String, VarId>) -> Self {
+        self.vars = vars;
+        self
+    }
+
+    /// The variables built, by the name each lowers to.
+    pub fn into_vars(self) -> BTreeMap<String, VarId> {
+        self.vars
     }
 
     /// The variables built belong to `item`.

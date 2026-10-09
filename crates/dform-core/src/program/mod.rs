@@ -56,6 +56,11 @@ pub struct Program {
     pub helpers: Counters,
     /// What the build found wrong; a program with any lowers to them.
     pub diags: Vec<Diagnostic>,
+    /// The helper statements the terms under a node made, which no node
+    /// of the terms lowers to yet (a comprehension's `not { }` rule, a
+    /// loader's extern): lowered before the node's own (step 5; gone when
+    /// terms are built from the tree).
+    pub terms_made: std::collections::BTreeMap<NodeId, Vec<Stmt>>,
 }
 
 /// How many of each numbered helper the build has taken: the one counter

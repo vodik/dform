@@ -10,8 +10,8 @@
 
 use super::expr::Lowering;
 use crate::ast::{Atom, Helper, Lit, RuleStmt, Stmt, Term, str_term};
-use crate::program::Program;
 use crate::program::node::*;
+use crate::program::{NodeId, Program};
 use crate::value::Value;
 use std::collections::BTreeSet;
 
@@ -134,6 +134,7 @@ impl Lowering<'_> {
     /// Goal `id`'s literals onto `out`, its clause's so far: the reads its
     /// terms hoist, then its own.
     pub(super) fn goal(&mut self, id: GoalId, out: &mut Vec<Lit>) {
+        self.terms_made(NodeId::Goal(id));
         let g = &self.program.goals[id];
         match &g.kind {
             GoalKind::Hoisted {

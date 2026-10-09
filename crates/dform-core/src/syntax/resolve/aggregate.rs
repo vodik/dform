@@ -229,7 +229,7 @@ impl Lowerer<'_> {
     /// rule item, its folds numbered from the same counter, lowered and
     /// compared (R-211 step 4).
     fn fold_rule(&mut self, r: RuleStmt, span: Span) -> Vec<Stmt> {
-        if self.shadow.is_none() {
+        if !crate::program::check::enabled() {
             return self.fold_rule1(r, span);
         }
         let results: Vec<String> = self
@@ -239,9 +239,7 @@ impl Lowerer<'_> {
             .collect();
         let (written, counters) = (r.clone(), self.program.helpers);
         let out = self.fold_rule1(r, span);
-        if let Some(s) = &mut self.shadow {
-            s.fold(&written, &results, counters, span, &out);
-        }
+        crate::program::check::fold(&written, &results, counters, span, &out);
         out
     }
 

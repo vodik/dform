@@ -763,10 +763,11 @@ pub struct Lowerer<'u> {
     /// What the resolver lowers each ported statement to, kept for
     /// `DFORM_CHECK_LOWER=1` (`program::check`).
     resolved: crate::program::check::Resolved,
-    /// Each written literal and clause also built as goals and lowered
-    /// back, under `DFORM_CHECK_LOWER=1` (R-211 step 4,
-    /// `program::check::Shadow`).
-    shadow: Option<Box<crate::program::check::Shadow>>,
+    /// Each written literal and clause built as goals (R-211 steps 4-5,
+    /// `program::build::Gather`): while a ported statement is lowered,
+    /// and, lowered back and compared, for every statement under
+    /// `DFORM_CHECK_LOWER=1`.
+    gather: Option<Box<crate::program::build::Gather>>,
     /// Helper rules of the statement being lowered.
     helpers: Vec<Stmt>,
     /// Whether the term being lowered is in a binding position.
@@ -843,7 +844,8 @@ impl<'u> Lowerer<'u> {
             program: crate::program::Program::new(),
             item_scope: Default::default(),
             resolved: Default::default(),
-            shadow: crate::program::check::enabled().then(Default::default),
+            gather: crate::program::check::enabled()
+                .then(|| Box::new(crate::program::build::Gather::new(true))),
             helpers: Vec::new(),
             binding: false,
             text: false,
@@ -2108,6 +2110,17 @@ impl<'u> Lowerer<'u> {
         if n.kind() == COMPONENT {
             return Some(self.component(n, scope, outer));
         }
+        let gathered = self.gather.as_mut().map(|g| g.begin());
+        let item = self.stmt_item(n, scope, outer);
+        if let (Some(g), Some(outer)) = (&mut self.gather, gathered) {
+            g.resume(outer);
+        }
+        item
+    }
+
+    /// [`Self::stmt`], the statement's variables and clause gathered on
+    /// their own.
+    fn stmt_item(&mut self, n: &SyntaxNode, scope: usize, outer: &Rc) -> Option<ItemId> {
         if let Some(value) = self.literal_let(n) {
             return self.let_literal(n, scope, outer, &value);
         }
@@ -5329,8 +5342,8 @@ impl<'u> Lowerer<'u> {
         // A statement's clause is compared whole (R-211 step 4); a body
         // nested in a literal, with the literal.
         let (seed, made) = (out.len(), self.helpers.len());
-        let whole = self.nested == 0 && self.shadow.is_some() && !lits.is_empty();
-        if whole && let Some(s) = &mut self.shadow {
+        let whole = self.nested == 0 && self.gather.is_some() && !lits.is_empty();
+        if whole && let Some(s) = &mut self.gather {
             s.open();
         }
         let mut failed = false;
@@ -5341,10 +5354,10 @@ impl<'u> Lowerer<'u> {
         }
         if whole {
             let span = self.span(&lits[0]);
-            if let Some(s) = &mut self.shadow {
+            if let Some(s) = &mut self.gather {
                 match failed {
                     true => s.failed(),
-                    false => s.clause(span, &out, seed, (&self.helpers, made)),
+                    false => s.clause(&mut self.program, span, &out, seed, (&self.helpers, made)),
                 }
             }
         }
@@ -5353,12 +5366,12 @@ impl<'u> Lowerer<'u> {
 
     /// One literal, with the reads it hoists before it, into `out`.
     fn lit(&mut self, rc: &mut Rc, n: &SyntaxNode, out: &mut Vec<Lit>) -> L<()> {
-        let form = self.shadow.is_some().then(|| self.written_form(rc, n));
+        let form = self.gather.is_some().then(|| self.written_form(rc, n));
         self.lit_as(rc, n, out, form, Self::lit1)
     }
 
-    /// [`Self::lit`] of `n` lowered by `lower`: under the switch, built as
-    /// the literal of `form`.
+    /// [`Self::lit`] of `n` lowered by `lower`: gathered, built as the
+    /// literal of `form`.
     fn lit_as(
         &mut self,
         rc: &mut Rc,
@@ -5369,14 +5382,14 @@ impl<'u> Lowerer<'u> {
     ) -> L<()> {
         let saved = std::mem::take(&mut self.after);
         let (start, made) = (out.len(), self.helpers.len());
-        if let Some(s) = &mut self.shadow {
+        if let Some(s) = &mut self.gather {
             s.open();
         }
         let r = self.bind(true, |l| lower(l, rc, n, out));
         let mid = out.len();
         out.append(&mut self.after);
         self.after = saved;
-        match (form, &mut self.shadow) {
+        match (form, &mut self.gather) {
             (Some(form), _) if r.is_ok() => {
                 self.built_literal(rc, n, form, out, (start, mid, made))
             }
@@ -5388,7 +5401,7 @@ impl<'u> Lowerer<'u> {
 
     /// The written literal `n` lowered to `out[start..]` (`out[mid..]`
     /// the field reads after it), making `self.helpers[made..]`, also
-    /// built as a goal, lowered back and compared (R-211 step 4).
+    /// built as a goal (R-211 step 4).
     fn built_literal(
         &mut self,
         rc: &Rc,
@@ -5398,9 +5411,10 @@ impl<'u> Lowerer<'u> {
         (start, mid, made): (usize, usize, usize),
     ) {
         let span = self.span(n);
-        let Some(s) = &mut self.shadow else { return };
+        let Some(s) = &mut self.gather else { return };
         let written: BTreeSet<&str> = rc.vars.values().map(String::as_str).collect();
         s.literal(
+            &mut self.program,
             form.as_ref(),
             span,
             out,
@@ -5659,7 +5673,7 @@ impl<'u> Lowerer<'u> {
     /// `__neg_N(ȳ) :- P, B` over the variables ȳ the body so far binds,
     /// and `not __neg_N(ȳ)`.
     fn neg_helper(&mut self, rc: &mut Rc, n: &SyntaxNode, out: &mut Vec<Lit>, span: Span) -> L<()> {
-        let body_from = self.shadow.as_ref().map(|s| s.goals());
+        let body_from = self.gather.as_ref().map(|s| s.goals());
         let mut inner = Vec::new();
         let mut rc2 = rc.clone();
         rc2.reads.clear();
@@ -5670,7 +5684,7 @@ impl<'u> Lowerer<'u> {
             // `v not in PATH[_]`: the helper's body is the membership.
             LIT_NOT_IN => {
                 let each = crate::program::build::Form::In { each: true };
-                let form = self.shadow.is_some().then_some(Some(each));
+                let form = self.gather.is_some().then_some(Some(each));
                 self.lit_as(&mut rc2, n, &mut inner, form, Self::member_lit)
             }
             _ => self.lit(&mut rc2, n, &mut inner),
@@ -5724,7 +5738,7 @@ impl<'u> Lowerer<'u> {
             head.clone(),
             body,
         )));
-        if let (Some(s), Some(from)) = (&mut self.shadow, body_from) {
+        if let (Some(s), Some(from)) = (&mut self.gather, body_from) {
             s.negation(
                 number,
                 results.iter().map(|v| v.to_string()).collect(),
@@ -6789,7 +6803,7 @@ impl<'u> Lowerer<'u> {
     fn term(&mut self, rc: &mut Rc, n: &SyntaxNode, pos: Pos, pre: &mut Vec<Lit>) -> L<Term> {
         let (before, made) = (pre.len(), self.helpers.len());
         let t = self.term_of(rc, n, pos, pre);
-        if let Some(s) = &mut self.shadow {
+        if let Some(s) = &mut self.gather {
             s.term(made..self.helpers.len());
         }
         let t = t?;
@@ -8621,7 +8635,7 @@ impl<'u> Lowerer<'u> {
     fn read_atom(&mut self, rc: &mut Rc, res: &Res, value: Term, span: Span) -> Option<Atom> {
         let _ = rc;
         let (a, column) = Self::read_with(res, value, span)?;
-        if let Some(s) = &mut self.shadow {
+        if let Some(s) = &mut self.gather {
             s.read(column);
         }
         Some(a)

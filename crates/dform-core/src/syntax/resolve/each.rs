@@ -64,14 +64,14 @@ impl Lowerer<'_> {
             };
             let r = *r;
             let (start, made) = (body.len(), self.helpers.len());
-            if let Some(s) = &mut self.shadow {
+            if let Some(s) = &mut self.gather {
                 s.open();
             }
             let src = self.each_binding(rc, &c, k, body, span);
             let at = self.span_of(r);
-            if let Some(s) = &mut self.shadow {
+            if let Some(s) = &mut self.gather {
                 match &src {
-                    Ok(_) => s.each(at, body, start, (&self.helpers, made)),
+                    Ok(_) => s.each(&mut self.program, at, body, start, (&self.helpers, made)),
                     Err(_) => s.failed(),
                 }
             }
